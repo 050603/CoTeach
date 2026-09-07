@@ -100,4 +100,34 @@ describe("AI collaboration teacher monitor", () => {
     const earlier = screen.getByText("较早的对话");
     expect(latest.compareDocumentPosition(earlier) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  it("shows locally uploaded artifact versions in the default document mode", () => {
+    render(<AiCollaborationTeacherMonitor course={{
+      ...course,
+      id: "course-1",
+      pblConfig: { makeArtifactMode: "document" },
+      projectPdfVersions: [{
+        id: "local-version-1",
+        courseId: "course-1",
+        studentId: "student-1",
+        stageKey: "make",
+        sequence: 1,
+        title: "项目展示.pptx",
+        uploadId: "upload-1",
+        kind: "file",
+        mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        size: 2048,
+        status: "submitted",
+        submittedAt: "2026-09-05T10:00:00.000Z",
+        createdAt: "2026-09-05T10:00:00.000Z",
+      }],
+    } as Course} />);
+
+    expect(screen.getByText("项目展示.pptx")).toBeTruthy();
+    expect(screen.getByText("学生上传的本地成果版本")).toBeTruthy();
+    expect(screen.getByText("第 1 版 · 项目展示.pptx")).toBeTruthy();
+    expect(screen.getByText("本地成果 1 版")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "下载" }).getAttribute("href"))
+      .toBe("/api/uploads/upload-1?download=1");
+  });
 });

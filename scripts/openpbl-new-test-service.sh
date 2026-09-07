@@ -108,7 +108,10 @@ run_app() {
   # Keep durable generation owned by the server lifecycle so navigation or a
   # completed route response cannot terminate the task that started it.
   export COURSE_GENERATION_BACKGROUND_ENABLED="true"
-  export ENABLE_WEBSOCKET="false"
+  # Resource/page/media controls use the dedicated realtime channel. Durable
+  # course-event polling remains enabled as a one-second outage fallback.
+  export ENABLE_WEBSOCKET="true"
+  export WEBSOCKET_PORT="${OPENPBL_NEW_WEBSOCKET_PORT:-3202}"
   export UPLOAD_DIR="$PROJECT_ROOT/.openpbl-data/uploads"
   export WHITEBOARD_DATA_DIR="$PROJECT_ROOT/.openpbl-data/whiteboards"
   export CLASSROOM_DATA_DIR="$PROJECT_ROOT/.openpbl-data/classrooms"

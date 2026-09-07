@@ -190,10 +190,10 @@ export async function buildTeacherInterventionSignals(
 }
 
 export async function buildTeacherDashboardAdvice(
-  course: Course,
+  courseId: string,
   stageKey: string,
 ): Promise<TeacherDashboardAdvice> {
-  return callSupport("buildTeacherDashboardAdvice", { course, stageKey });
+  return callSupport("buildTeacherDashboardAdvice", { courseId, stageKey });
 }
 
 export async function generateProjectSkeleton(input: {

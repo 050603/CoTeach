@@ -9,6 +9,7 @@ import {
 
 describe("realtime synchronization policy", () => {
   it("keeps durable cursor reconciliation enabled with WebSocket connected", () => {
+    expect(COURSE_EVENT_POLL_INTERVAL_MS.polling).toBe(1_000);
     expect(COURSE_EVENT_POLL_INTERVAL_MS.websocket).toBeGreaterThan(0);
     expect(COURSE_EVENT_POLL_INTERVAL_MS.websocket).toBeGreaterThanOrEqual(
       COURSE_EVENT_POLL_INTERVAL_MS.polling,

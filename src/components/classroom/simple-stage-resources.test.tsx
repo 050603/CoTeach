@@ -94,6 +94,22 @@ describe("simplified stage resources", () => {
     });
   });
 
+  it("uses the shared immersive classroom chrome for video playback", () => {
+    const videoCourse = {
+      ...course,
+      resources: [
+        { id: "lesson-video", title: "课堂示范.mp4", type: "MP4", size: "58 MB", stageKey: "launch", url: "/api/uploads/lesson-video", downloadedBy: [] },
+      ],
+    } as Course;
+    render(<SimplifiedTeacherStageView course={videoCourse} stageKey="launch" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "全屏预览" }));
+    const dialog = screen.getByRole("dialog", { name: "学习资料预览" });
+    expect(within(dialog).getByText("全屏播放")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "投屏" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "退出全屏播放" })).toBeTruthy();
+  });
+
   it("asks whether an uploaded PDF is a slide deck and submits slide mode", async () => {
     const fetchMock = vi.fn().mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => (
       init?.method === "POST"

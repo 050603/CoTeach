@@ -60,6 +60,7 @@ import type {
   TeacherAgentDirective,
   OfflineInterventionRecord,
   DynamicFacilitationScaffold,
+  ShowcasePresentationSnapshot,
 } from "@/lib/session/types";
 import type {
   SessionAction,
@@ -253,6 +254,7 @@ type CourseWithRelations = Prisma.CourseGetPayload<{
     projectDocumentVersions: true;
     projectPdfVersions: true;
     aiInteractionEvents: true;
+    showcasePresentations: true;
     feedback: true;
     rubricScores: true;
     reflections: true;
@@ -327,6 +329,9 @@ function rowToCourse(row: CourseWithRelations): Course {
     aiInteractionEvents: row.aiInteractionEvents
       .map(rowToAiInteractionEvent)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)),
+    showcasePresentations: row.showcasePresentations
+      .map(rowToShowcasePresentation)
+      .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt) || left.id.localeCompare(right.id)),
     feedback: row.feedback.map(rowToFeedback),
     rubricScores: row.rubricScores.map(rowToRubricScore),
     reflections: row.reflections.map(rowToReflection),
@@ -456,6 +461,8 @@ function rowToProjectPdfVersion(
     sequence: row.sequence,
     title: row.title,
     uploadId: row.uploadId,
+    kind: row.kind as ProjectPdfVersion["kind"],
+    mimeType: row.mimeType,
     sha256: row.sha256 ?? undefined,
     size: row.size ?? undefined,
     status: row.status as ProjectPdfVersion["status"],
@@ -482,6 +489,34 @@ function rowToAiInteractionEvent(
     payload: (row.payload as Record<string, unknown>) ?? undefined,
     requestId: row.requestId ?? undefined,
     createdAt: row.createdAt.toISOString(),
+  };
+}
+
+function rowToShowcasePresentation(
+  row: Prisma.ShowcasePresentationGetPayload<Record<string, never>>,
+): ShowcasePresentationSnapshot {
+  return {
+    id: row.id,
+    courseId: row.courseId,
+    groupId: row.groupId,
+    studentId: row.studentId,
+    artifactKind: row.artifactKind as ShowcasePresentationSnapshot["artifactKind"],
+    artifactVersionId: row.artifactVersionId,
+    artifactTitle: row.artifactTitle,
+    displayMode: row.displayMode as ShowcasePresentationSnapshot["displayMode"],
+    status: row.status as ShowcasePresentationSnapshot["status"],
+    revision: row.revision,
+    viewState: (row.viewState as ShowcasePresentationSnapshot["viewState"]) ?? undefined,
+    rejectionReason: row.rejectionReason ?? undefined,
+    requestedAt: row.requestedAt.toISOString(),
+    reviewedAt: row.reviewedAt?.toISOString(),
+    reviewedBy: row.reviewedBy ?? undefined,
+    startedAt: row.startedAt?.toISOString(),
+    endedAt: row.endedAt?.toISOString(),
+    evaluationNote: row.evaluationNote ?? undefined,
+    evaluatedAt: row.evaluatedAt?.toISOString(),
+    evaluatedBy: row.evaluatedBy ?? undefined,
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
@@ -1150,6 +1185,7 @@ const FULL_INCLUDE = {
   projectDocumentVersions: true,
   projectPdfVersions: true,
   aiInteractionEvents: true,
+  showcasePresentations: true,
   feedback: true,
   rubricScores: true,
   reflections: true,

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui";
 import type { Course } from "@/lib/session/types";
 import type { ShowcaseData } from "@/lib/showcase/types";
 import { ReflectionSummarySidebar } from "@/components/views/teacher/reflection-summary-sidebar";
@@ -91,7 +92,7 @@ function StageProgress({ course, onSelectStage }: { course: Course; onSelectStag
                 type="button"
               >
                 <span className={cn("grid size-5 place-items-center rounded-full text-[9px] font-black", current ? "bg-blue-700 text-white" : done ? "bg-emerald-500 text-white" : "bg-stone-200 text-stone-500")}>{index + 1}</span>
-                <span className="truncate text-[9px] font-bold">{shortLabels[stage.key] ?? stage.label}</span>
+                <span className="text-[9px] font-bold leading-3">{shortLabels[stage.key] ?? stage.label}</span>
               </button>
             </li>
           );
@@ -106,8 +107,8 @@ function DashboardMetricStrip({ metrics }: { metrics: TeacherDashboardMetric[] }
     <div className={cn("grid gap-2 px-3 py-2.5", metrics.length === 2 ? "grid-cols-2" : "grid-cols-3")}>
       {metrics.map((metric) => (
         <div className={cn("min-w-0 rounded-lg border px-2 py-2", toneBorder(metric.tone))} key={metric.metricId} title={metric.helper}>
-          <div className={cn("truncate text-base font-black tabular-nums", toneText(metric.tone))}>{metricValue(metric)}</div>
-          <div className="mt-0.5 line-clamp-2 text-[9px] font-bold leading-3 text-stone-500">{metric.label}</div>
+          <div className={cn("break-words text-base font-black tabular-nums", toneText(metric.tone))}>{metricValue(metric)}</div>
+          <div className="mt-0.5 text-[9px] font-bold leading-3 text-stone-500">{metric.label}</div>
         </div>
       ))}
     </div>
@@ -147,7 +148,7 @@ function SegmentedBar({ segments, total, label }: { segments: Array<{ label: str
         {segments.map((segment) => <div className={segment.className} key={segment.label} style={{ width: `${segment.count / Math.max(1, total) * 100}%` }} />)}
       </div>
       <div className={cn("mt-2 grid gap-1", segments.length === 3 ? "grid-cols-3" : "grid-cols-2")}>
-        {segments.map((segment) => <div className="flex items-center gap-1 text-[9px] text-stone-500" key={segment.label}><span className={cn("size-1.5 shrink-0 rounded-full", segment.className)} /><span className="truncate">{segment.label}</span><strong className="ml-auto text-stone-700">{segment.count}</strong></div>)}
+        {segments.map((segment) => <div className="flex items-center gap-1 text-[9px] text-stone-500" key={segment.label}><span className={cn("size-1.5 shrink-0 rounded-full", segment.className)} /><span>{segment.label}</span><strong className="ml-auto text-stone-700">{segment.count}</strong></div>)}
       </div>
     </>
   );
@@ -182,6 +183,7 @@ function RealtimeTeachingActions({ course, stageKey }: { course: Course; stageKe
   const requestSequence = useRef(0);
   const [advice, setAdvice] = useState<TeacherDashboardAdvice>();
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const revision = dashboardAdviceRevision(course, stageKey);
   useEffect(() => {
     courseRef.current = course;
@@ -190,7 +192,7 @@ function RealtimeTeachingActions({ course, stageKey }: { course: Course; stageKe
     const sequence = ++requestSequence.current;
     setStatus("loading");
     try {
-      const result = await buildTeacherDashboardAdvice(courseRef.current, stageKey);
+      const result = await buildTeacherDashboardAdvice(courseRef.current.id, stageKey);
       if (sequence !== requestSequence.current) return;
       setAdvice(result);
       setStatus("ready");
@@ -207,18 +209,58 @@ function RealtimeTeachingActions({ course, stageKey }: { course: Course; stageKe
   }, [refresh, revision]);
 
   const statusText = status === "loading" ? "正在分析本阶段数据" : status === "error" ? "生成暂不可用" : advice ? `${new Date(advice.generatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 更新` : "";
+  const visibleActions = advice?.actions.slice(0, 2) ?? [];
+  const hiddenActionCount = Math.max(0, (advice?.actions.length ?? 0) - visibleActions.length);
+  const stageLabel = course.stages.find((stage) => stage.key === stageKey)?.label ?? "当前阶段";
+  const actionKindLabel = (kind: TeacherDashboardAdvice["actions"][number]["kind"]) => kind === "patrol" ? "巡场" : kind === "offline-task" ? "线下" : "下一步";
+  const renderAction = (action: TeacherDashboardAdvice["actions"][number], index: number, inDialog = false) => {
+    const studentNames = action.studentIds.map((id) => course.students.find((student) => student.id === id)?.name).filter((name): name is string => Boolean(name));
+    const shownNames = inDialog ? studentNames : studentNames.slice(0, 4);
+    const hiddenNameCount = studentNames.length - shownNames.length;
+    return (
+      <div className={cn("flex items-start gap-2 rounded-lg border", inDialog ? "px-3 py-3" : "px-2.5 py-2", action.kind === "patrol" ? "border-amber-200 bg-amber-50/65" : "border-blue-100 bg-blue-50/45")} key={`${action.title}:${index}`}>
+        <span className={cn("mt-0.5 grid h-4 shrink-0 place-items-center rounded px-1 text-[8px] font-black", action.kind === "patrol" ? "bg-amber-500 text-white" : "bg-blue-600 text-white")}>{actionKindLabel(action.kind)}</span>
+        <div className="min-w-0 flex-1 break-words">
+          <strong className={cn("block text-stone-800", inDialog ? "text-sm" : "text-[10px]")}>{action.title}</strong>
+          <p className={cn("whitespace-pre-wrap text-stone-600", inDialog ? "mt-1 text-xs leading-5" : "text-[9px] leading-3.5")}>{action.detail}</p>
+          {shownNames.length ? <p className={cn("mt-1 break-words font-semibold text-amber-700", inDialog ? "text-[11px]" : "text-[8px]")}>涉及同学：{shownNames.join("、")}{hiddenNameCount ? `；另有 ${hiddenNameCount} 人，请在完整分析中查看` : ""}</p> : null}
+        </div>
+      </div>
+    );
+  };
   return (
     <section className="border-t border-stone-100 bg-white/75 px-3 py-2.5">
       <header className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2"><span className="grid size-6 shrink-0 place-items-center rounded-md bg-violet-50 text-violet-700"><Sparkles size={13} /></span><div className="min-w-0"><h3 className="text-xs font-black text-stone-900">AI 实时教学建议</h3><p className="truncate text-[9px] text-stone-400">{statusText}</p></div></div>
+        <div className="flex min-w-0 items-center gap-2"><span className="grid size-6 shrink-0 place-items-center rounded-md bg-violet-50 text-violet-700"><Sparkles size={13} /></span><div className="min-w-0"><h3 className="text-xs font-black text-stone-900">AI 实时教学建议</h3><p className="text-[9px] leading-3 text-stone-400">{statusText}</p></div></div>
         <button aria-label="刷新 AI 实时教学建议" className="grid size-6 shrink-0 place-items-center rounded-md border border-stone-200 text-stone-500 hover:border-violet-300 hover:text-violet-700 disabled:cursor-wait disabled:opacity-50" disabled={status === "loading"} onClick={() => void refresh()} type="button"><RefreshCw className={status === "loading" ? "animate-spin" : undefined} size={12} /></button>
       </header>
       {status === "loading" && !advice ? <div className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-violet-100 bg-violet-50/40 px-3 py-3 text-[10px] text-violet-700"><Loader2 className="animate-spin" size={13} />正在读取本课程实时学情</div> : null}
       {status === "error" ? <EmptyState text="AI 实时建议暂不可用，可稍后刷新" /> : null}
-      {advice ? <div className="space-y-1.5"><p className="line-clamp-2 rounded-lg bg-violet-50/70 px-2.5 py-2 text-[9px] font-semibold leading-4 text-violet-900">{advice.summary}</p>{advice.actions.length ? advice.actions.map((action, index) => {
-        const names = action.studentIds.map((id) => course.students.find((student) => student.id === id)?.name).filter(Boolean).join("、");
-        return <div className={cn("flex gap-2 rounded-lg border px-2.5 py-2", action.kind === "patrol" ? "border-amber-200 bg-amber-50/65" : "border-blue-100 bg-blue-50/45", index === 2 && "max-xl:hidden [@media(max-height:700px)]:hidden")} key={`${action.title}:${index}`}><span className={cn("mt-0.5 grid h-4 shrink-0 place-items-center rounded px-1 text-[8px] font-black", action.kind === "patrol" ? "bg-amber-500 text-white" : "bg-blue-600 text-white")}>{action.kind === "patrol" ? "巡场" : action.kind === "offline-task" ? "线下" : "下一步"}</span><div className="min-w-0"><strong className="block truncate text-[10px] text-stone-800">{action.title}</strong><p className="line-clamp-2 text-[9px] leading-3.5 text-stone-500">{action.detail}</p>{names ? <p className="mt-0.5 truncate text-[8px] font-semibold text-amber-700">关注：{names}</p> : null}</div></div>;
-      }) : <EmptyState text="当前证据不足，AI 未生成教学建议" />}</div> : null}
+      {advice ? <div className="space-y-1.5">
+        {visibleActions.length ? visibleActions.map((action, index) => renderAction(action, index)) : <EmptyState text="暂无建议" />}
+        <button className="flex w-full items-center justify-center gap-1 rounded-lg border border-violet-100 bg-violet-50/50 px-2.5 py-1.5 text-[9px] font-bold leading-4 text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600" onClick={() => setDetailsOpen(true)} type="button">
+          {hiddenActionCount ? `还有 ${hiddenActionCount} 条建议，查看全部` : "查看完整分析"}<ChevronRight size={11} />
+        </button>
+      </div> : null}
+      <Dialog onOpenChange={setDetailsOpen} open={detailsOpen}>
+        <DialogContent className="max-h-[88vh] w-[min(720px,calc(100vw-24px))] max-w-none overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>AI 实时教学建议 · {stageLabel}</DialogTitle>
+            <DialogDescription>基于“{course.name}”当前课堂记录生成，建议会随本阶段数据更新。</DialogDescription>
+          </DialogHeader>
+          {advice ? <div className="space-y-4">
+            <div className="rounded-xl border border-violet-100 bg-violet-50/65 px-4 py-3">
+              <h4 className="text-xs font-black text-violet-900">实时分析摘要</h4>
+              <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-violet-950">{advice.summary}</p>
+              <p className="mt-2 text-[11px] text-violet-700">生成时间：{new Date(advice.generatedAt).toLocaleString("zh-CN")}</p>
+            </div>
+            <div className="space-y-2">
+              <h4 className="text-xs font-black text-stone-900">全部建议（{advice.actions.length}）</h4>
+              {advice.actions.length ? advice.actions.map((action, index) => renderAction(action, index, true)) : <EmptyState text="暂无建议" />}
+            </div>
+          </div> : <EmptyState text="建议内容正在生成，请稍后重试" />}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
@@ -228,12 +270,12 @@ function PatrolQueue({ students, emptyText = "当前无须优先巡场的学生"
     <CompactSection icon={<Footprints size={13} />} title={title}>
       {students.length ? (
         <div className="grid gap-1.5">
-          {students.slice(0, 3).map((student, index) => {
-            const content = <><span className="min-w-0 flex-1 truncate text-[10px] font-bold text-stone-800">{student.name}</span><span className="max-w-[9rem] truncate text-[9px] text-amber-700">{student.reason}</span>{student.onClick ? <ChevronRight className="shrink-0 text-stone-300" size={12} /> : null}</>;
-            const className = cn("flex items-center gap-2 rounded-lg border border-amber-100 bg-amber-50/55 px-2.5 py-1.5 text-left", index === 2 && "max-xl:hidden [@media(max-height:700px)]:hidden");
+          {students.slice(0, 2).map((student) => {
+            const content = <><span className="min-w-0 flex-1 break-words"><span className="block text-[10px] font-bold text-stone-800">{student.name}</span><span className="mt-0.5 block text-[9px] leading-3.5 text-amber-700">{student.reason}</span></span>{student.onClick ? <ChevronRight className="shrink-0 text-stone-300" size={12} /> : null}</>;
+            const className = "flex items-start gap-2 rounded-lg border border-amber-100 bg-amber-50/55 px-2.5 py-1.5 text-left";
             return student.onClick ? <button aria-label={`查看${student.name}的关注证据`} className={className} key={student.id} onClick={student.onClick} type="button">{content}</button> : <div className={className} key={student.id}>{content}</div>;
           })}
-          {students.length > 3 ? <p className="text-center text-[9px] text-stone-400">另有 {students.length - 3} 人，请在主区域查看</p> : null}
+          {students.length > 2 ? <p className="text-center text-[9px] leading-4 text-stone-500">还有 {students.length - 2} 名学生需要关注，请在主区域查看</p> : null}
         </div>
       ) : <AlertBanner tone="success">{emptyText}</AlertBanner>}
     </CompactSection>
@@ -245,7 +287,7 @@ function ProjectionBanner({ active, title }: { active: boolean; title?: string }
     <div className={cn("mx-3 mt-2.5 rounded-lg border px-2.5 py-2", active ? "border-emerald-200 bg-emerald-50" : "border-stone-200 bg-stone-50")}>
       <div className="flex items-center gap-2">
         <span className={cn("grid size-7 shrink-0 place-items-center rounded-md", active ? "bg-emerald-600 text-white" : "bg-stone-200 text-stone-500")}><MonitorUp size={14} /></span>
-        <div className="min-w-0"><p className={cn("text-[11px] font-black", active ? "text-emerald-900" : "text-stone-700")}>{active ? "正在投屏" : "尚未投屏"}</p><p className="truncate text-[9px] text-stone-500">{title ?? (active ? "资料正在同步给学生" : "当前没有同步投屏资料")}</p></div>
+        <div className="min-w-0"><p className={cn("text-[11px] font-black", active ? "text-emerald-900" : "text-stone-700")}>{active ? "正在投屏" : "尚未投屏"}</p><p className="break-words text-[9px] leading-3.5 text-stone-500">{title ?? (active ? "资料正在同步给学生" : "当前没有同步投屏资料")}</p></div>
       </div>
     </div>
   );
@@ -349,7 +391,7 @@ function ShowcaseDashboard({ course, data, onFocus }: { course: Course; data?: S
   return (
     <div className="flex h-full flex-col">
       <section className="mx-3 mt-2.5 rounded-lg border border-indigo-100 bg-indigo-50/75 px-2.5 py-2.5">
-        <div className="flex items-center gap-2"><span className="grid size-8 shrink-0 place-items-center rounded-md bg-indigo-600 text-white"><Clock3 size={15} /></span><div className="min-w-0"><p className="text-[9px] font-bold uppercase tracking-[0.12em] text-indigo-700">预计剩余</p><p className="text-xl font-black tabular-nums text-indigo-950">{eta === "—" ? "暂无" : eta}</p><p className="truncate text-[9px] text-indigo-700">{metrics.expectedEndAt ? `约 ${new Date(metrics.expectedEndAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 结束` : "等待可汇报队列"}</p></div></div>
+        <div className="flex items-center gap-2"><span className="grid size-8 shrink-0 place-items-center rounded-md bg-indigo-600 text-white"><Clock3 size={15} /></span><div className="min-w-0"><p className="text-[9px] font-bold uppercase tracking-[0.12em] text-indigo-700">预计剩余</p><p className="text-xl font-black tabular-nums text-indigo-950">{eta === "—" ? "暂无" : eta}</p><p className="text-[9px] leading-3.5 text-indigo-700">{metrics.expectedEndAt ? `约 ${new Date(metrics.expectedEndAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 结束` : "等待可汇报队列"}</p></div></div>
       </section>
       <DashboardMetricStrip metrics={metrics.headlines.filter((item) => item.metricId !== "showcase-eta")} />
       <CompactSection icon={<Clock3 size={13} />} title="汇报提醒">
@@ -415,7 +457,7 @@ export function TeacherStageDashboard({ course, stageKey, degraded, showcaseData
         <div className="relative flex items-start justify-between gap-2">
           <div className="flex min-w-0 items-start gap-2">
             <button aria-label="收起班级概览" aria-expanded="true" className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border border-blue-200 bg-white/85 text-blue-600 shadow-sm transition hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600" onClick={onCollapse} type="button"><ChevronRight size={15} strokeWidth={2.4} /></button>
-            <div className="min-w-0"><div className="text-[9px] font-bold uppercase tracking-[0.16em] text-blue-600">课堂实时监控</div><h2 className="mt-0.5 truncate text-sm font-black text-stone-950">{currentStage?.label ?? "当前阶段"}</h2></div>
+            <div className="min-w-0"><div className="text-[9px] font-bold uppercase tracking-[0.16em] text-blue-600">课堂实时监控</div><h2 className="mt-0.5 break-words text-sm font-black leading-5 text-stone-950">{currentStage?.label ?? "当前阶段"}</h2></div>
           </div>
           {degraded ? <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50/90 px-2 py-1 text-[9px] font-bold text-amber-700" title="课堂数据同步延迟"><AlertTriangle size={10} />同步延迟</span> : null}
         </div>

@@ -10,7 +10,10 @@ export const COURSE_EVENT_POLL_INTERVAL_MS: Record<RealtimeTransportMode, number
   // only a safety net here, so polling every few seconds creates unnecessary
   // database fan-out for a full classroom.
   websocket: 5_000,
-  polling: 3_000,
+  // Keep the outage/development fallback inside the classroom's acceptable
+  // control window. Projection events are tiny and are applied locally, so
+  // this does not fan out full course snapshots once per second.
+  polling: 1_000,
 };
 
 export const SESSION_REFRESH_INTERVAL_MS = 15_000;

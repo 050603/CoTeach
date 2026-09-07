@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileTypeFromBuffer } from "file-type";
 import { z } from "zod";
@@ -24,6 +24,8 @@ export const dynamic = "force-dynamic";
 const dataDir = process.env.UPLOAD_DIR?.trim() || path.resolve(".openpbl-data", "uploads");
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 256 * 1024;
+const MAX_VIDEO_UPLOAD_BYTES = 500 * 1024 * 1024;
+const STREAM_SIGNATURE_BYTES = 8 * 1024;
 
 const UploadFieldsSchema = z.object({
   title: z.string().trim().max(200).optional(),
@@ -111,6 +113,9 @@ export async function POST(request: Request) {
   if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
 
   const contentLength = Number(request.headers.get("content-length") ?? "");
+  if (request.headers.get("x-openpbl-upload-mode") === "stream") {
+    return uploadStreamedVideo(request, auth.claims, requestId, contentLength);
+  }
   if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BYTES) {
     return apiError(requestId, "FILE_TOO_LARGE", "单个文件不能超过 50 MiB。", 413);
   }
@@ -364,6 +369,7 @@ export async function POST(request: Request) {
         fileName: originalName,
         fileType,
         size: formattedSize,
+        sizeBytes: info.size,
         url,
         previewUrl: previewUrl ?? undefined,
         previewType: previewType ?? undefined,
@@ -388,6 +394,214 @@ export async function POST(request: Request) {
     const detail = serializeUploadError(error);
     console.error(`[uploads] Unexpected upload failure ${JSON.stringify({ requestId, failureStage, ...detail })}`);
     return apiError(requestId, "UPLOAD_SERVICE_ERROR", "上传服务暂时不可用，请稍后重试。", 500);
+  }
+}
+
+async function uploadStreamedVideo(
+  request: Request,
+  claims: { sub?: string; role: string; courseId?: string },
+  requestId: string,
+  contentLength: number,
+): Promise<Response> {
+  if (claims.role !== "teacher") {
+    return apiError(requestId, "FORBIDDEN", "只有教师可以发布课堂视频。", 403);
+  }
+  if (Number.isFinite(contentLength) && contentLength > MAX_VIDEO_UPLOAD_BYTES) {
+    return apiError(requestId, "FILE_TOO_LARGE", "单个视频不能超过 500 MiB。", 413);
+  }
+
+  const originalName = decodeUploadHeader(request.headers.get("x-upload-file-name"));
+  const rawFields = {
+    title: decodeUploadHeader(request.headers.get("x-upload-title")),
+    courseId: request.headers.get("x-upload-course-id") || undefined,
+    bindAsCourseResource: request.headers.get("x-upload-bind-course-resource") || undefined,
+    stageKey: request.headers.get("x-upload-stage-key") || undefined,
+  };
+  const fields = UploadFieldsSchema.safeParse(rawFields);
+  if (!originalName || path.basename(originalName) !== originalName || !fields.success) {
+    return apiError(requestId, "INVALID_METADATA", "课程或文件信息无效，请刷新页面后重试。", 400);
+  }
+  if (fields.data.bindAsCourseResource !== "true" || !fields.data.courseId) {
+    return apiError(requestId, "COURSE_REQUIRED", "发布课堂视频时必须指定课程。", 400);
+  }
+  const extension = path.extname(originalName).toLowerCase();
+  const expected = ALLOWED_TYPES[extension];
+  if (!expected || ![".mp4", ".mov", ".webm"].includes(extension)) {
+    return apiError(requestId, "UNSUPPORTED_FILE", "课堂视频支持 MP4、MOV 和 WebM 格式。", 415);
+  }
+  const courseExists = await prisma.course.count({ where: { id: fields.data.courseId } });
+  if (courseExists !== 1) {
+    return apiError(requestId, "COURSE_NOT_FOUND", "课程不存在或已被删除。", 404);
+  }
+  if (!request.body) {
+    return apiError(requestId, "FILE_REQUIRED", "请选择一个视频上传。", 400);
+  }
+
+  const id = randomUUID();
+  const storedName = `${id}${extension}`;
+  const targetPath = path.join(dataDir, storedName);
+  let fileHandle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    await mkdir(/* turbopackIgnore: true */ dataDir, { recursive: true });
+    fileHandle = await open(/* turbopackIgnore: true */ targetPath, "wx", 0o600);
+    const reader = request.body.getReader();
+    let size = 0;
+    let signature = Buffer.alloc(0);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_VIDEO_UPLOAD_BYTES) {
+        await reader.cancel("video-too-large").catch(() => undefined);
+        throw new UploadHttpError("FILE_TOO_LARGE", "单个视频不能超过 500 MiB。", 413);
+      }
+      if (signature.length < STREAM_SIGNATURE_BYTES) {
+        const remaining = STREAM_SIGNATURE_BYTES - signature.length;
+        signature = Buffer.concat([signature, Buffer.from(value.subarray(0, remaining))]);
+      }
+      const chunk = Buffer.from(value);
+      let offset = 0;
+      while (offset < chunk.length) {
+        const { bytesWritten } = await fileHandle.write(
+          chunk,
+          offset,
+          chunk.length - offset,
+          null,
+        );
+        if (bytesWritten <= 0) {
+          throw new Error("Video upload stopped while writing to disk");
+        }
+        offset += bytesWritten;
+      }
+    }
+    await fileHandle.close();
+    fileHandle = undefined;
+    if (size <= 0) throw new UploadHttpError("EMPTY_FILE", "不能上传空视频。", 400);
+    if (Number.isFinite(contentLength) && contentLength > 0 && size !== contentLength) {
+      throw new UploadHttpError(
+        "UPLOAD_INCOMPLETE",
+        `视频上传不完整（应收到 ${formatSize(contentLength)}，实际收到 ${formatSize(size)}），请重新上传。`,
+        400,
+      );
+    }
+    const storedInfo = await stat(/* turbopackIgnore: true */ targetPath);
+    if (storedInfo.size !== size) {
+      throw new UploadHttpError("UPLOAD_INCOMPLETE", "视频写入不完整，请重新上传。", 500);
+    }
+
+    const detected = await fileTypeFromBuffer(signature).catch(() => null);
+    if (!detected || !expected.detected?.includes(detected.ext)) {
+      throw new UploadHttpError(
+        "FILE_SIGNATURE_MISMATCH",
+        "视频内容与扩展名不匹配，可能是文件已损坏或仅修改了后缀名。",
+        415,
+      );
+    }
+
+    const title = fields.data.title || originalName;
+    const fileType = extension.slice(1).toUpperCase();
+    const url = `/api/uploads/${id}`;
+    const courseId = fields.data.courseId;
+    const durableEvent = await prisma.$transaction(async (tx) => {
+      await tx.uploadFile.create({
+        data: {
+          id,
+          fileName: originalName,
+          storedName,
+          courseId,
+          uploadedById: claims.sub!,
+          uploadedByRole: claims.role,
+          size,
+          mimeType: expected.mime,
+          referencedBy: [id],
+          refCount: 1,
+        },
+      });
+      await tx.courseResource.create({
+        data: {
+          id,
+          courseId,
+          title,
+          type: fileType,
+          size: formatSize(size),
+          description: fields.data.stageKey
+            ? "教师为当前课堂阶段补充的授课视频"
+            : "教师补充的课程视频",
+          stageKey: fields.data.stageKey ?? null,
+          url,
+          downloadedBy: [],
+        },
+      });
+      const updatedCourse = await tx.course.update({
+        where: { id: courseId },
+        data: { version: { increment: 1 } },
+        select: { version: true },
+      });
+      return tx.courseEvent.create({
+        data: {
+          courseId,
+          requestId: randomUUID(),
+          type: "UPDATE_COURSE",
+          actorId: claims.sub!,
+          actorRole: claims.role,
+          courseVersion: updatedCourse.version,
+          payload: { source: "course-resource-video-upload", scope: "course" },
+        },
+        select: { cursor: true, courseVersion: true },
+      });
+    });
+
+    try {
+      await publishCourseEvent(courseId, {
+        type: "course-updated",
+        courseId,
+        at: new Date().toISOString(),
+        payload: {
+          actionType: "UPDATE_COURSE",
+          courseVersion: durableEvent.courseVersion,
+          eventCursor: durableEvent.cursor.toString(),
+        },
+      });
+    } catch (error) {
+      console.error("[uploads] video saved; realtime publish failed, clients will reconcile", {
+        courseId,
+        eventCursor: durableEvent.cursor.toString(),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return Response.json({
+      id,
+      title,
+      fileName: originalName,
+      fileType,
+      size: formatSize(size),
+      sizeBytes: size,
+      url,
+      stageKey: fields.data.stageKey,
+      boundToCourse: true,
+    }, { status: 201, headers: { "x-request-id": requestId } });
+  } catch (error) {
+    await fileHandle?.close().catch(() => undefined);
+    await unlink(/* turbopackIgnore: true */ targetPath).catch(() => undefined);
+    if (error instanceof UploadHttpError) {
+      return apiError(requestId, error.code, error.message, error.status);
+    }
+    console.error("[uploads] Unexpected streaming video upload failure", {
+      requestId,
+      ...serializeUploadError(error),
+    });
+    return apiError(requestId, "UPLOAD_SERVICE_ERROR", "视频上传服务暂时不可用，请稍后重试。", 500);
+  }
+}
+
+function decodeUploadHeader(value: string | null): string | undefined {
+  if (!value) return undefined;
+  try {
+    const decoded = decodeURIComponent(value).normalize("NFC");
+    return decoded.length <= 500 ? decoded : undefined;
+  } catch {
+    return undefined;
   }
 }
 

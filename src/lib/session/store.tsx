@@ -763,7 +763,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     );
     if (!response.ok) throw new Error(`COURSE_EVENTS_FAILED_${response.status}`);
     const body = (await response.json()) as {
-      events: unknown[];
+      events: Array<{
+        cursor?: string;
+        type?: string;
+        courseVersion?: number;
+        payload?: Record<string, unknown> | null;
+      }>;
       nextCursor: string;
       hasMore: boolean;
       requiresReconciliation?: boolean;
@@ -775,7 +780,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const versionGap = body.requiresReconciliation === true
       && typeof body.courseVersion === "number"
       && body.courseVersion > localVersion;
-    if (body.events.length > 0 || versionGap) {
+    const projectionsApplied = body.events.length > 0
+      && body.events.every((event) => applyProjectionEvent(courseId, {
+        type: event.type,
+        courseVersion: event.courseVersion,
+        cursor: event.cursor,
+        payload: event.payload ?? undefined,
+      }));
+    if ((body.events.length > 0 && !projectionsApplied) || versionGap) {
       const refreshed = await refreshCourse(courseId, body.nextCursor);
       if (!refreshed) return;
     } else {
@@ -785,6 +797,59 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       );
     }
     if (body.hasMore) await catchUpCourseEvents(courseId);
+  }
+
+  function applyProjectionEvent(
+    courseId: string,
+    event: {
+      type?: string;
+      courseVersion?: number;
+      cursor?: string;
+      payload?: Record<string, unknown>;
+    },
+  ): boolean {
+    const payload = event.payload;
+    if (
+      !payload
+      || (event.type !== "projection-changed" && event.type !== "SET_UI_STATE")
+    ) return false;
+    const hasResourceProjection = Object.prototype.hasOwnProperty.call(
+      payload,
+      "resourceProjection",
+    );
+    const hasTeacherProjection = Object.prototype.hasOwnProperty.call(
+      payload,
+      "teacherResourceProjection",
+    );
+    if (!hasResourceProjection && !hasTeacherProjection) return false;
+    const patch: Partial<CourseUiState> = {};
+    if (hasResourceProjection) {
+      patch.resourceProjection = payload.resourceProjection as CourseUiState["resourceProjection"];
+    }
+    if (hasTeacherProjection) {
+      patch.teacherResourceProjection = payload.teacherResourceProjection as CourseUiState["teacherResourceProjection"];
+    }
+    const current = stateRef.current;
+    let next = applySessionAction(current, {
+      type: "SET_UI_STATE",
+      payload: { courseId, patch },
+    });
+    if (typeof event.courseVersion === "number") {
+      next = {
+        ...next,
+        courses: next.courses.map((course) => course.id === courseId
+          ? { ...course, version: Math.max(course.version ?? 0, event.courseVersion!) }
+          : course),
+      };
+    }
+    eventCursorRef.current[courseId] = latestEventCursor(
+      eventCursorRef.current[courseId],
+      event.cursor,
+      typeof payload.eventCursor === "string" ? payload.eventCursor : undefined,
+    );
+    stateRef.current = next;
+    dispatch({ type: "HYDRATE", payload: next });
+    return true;
   }
 
   function connectWebSocket(courseId: string | undefined) {
@@ -891,6 +956,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 courseId,
                 (parsed.event.payload ?? {}) as ShowcaseEventPayload,
               );
+              return;
+            }
+            if (applyProjectionEvent(courseId, {
+              type: parsed.event?.type,
+              courseVersion: typeof parsed.event?.payload?.courseVersion === "number"
+                ? parsed.event.payload.courseVersion
+                : undefined,
+              cursor: parsed.event?.payload?.eventCursor,
+              payload: parsed.event?.payload,
+            })) {
+              recordCourseSyncSuccess();
               return;
             }
             scheduleCourseRefresh(

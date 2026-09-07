@@ -88,6 +88,16 @@ export async function GET(
   }
   const start = range?.start ?? 0;
   const end = range?.end ?? info.size - 1;
+  const etag = `\"${file.id}-${classroomVariant ? "classroom" : "source"}-${info.size}-${Math.floor(info.mtimeMs)}\"`;
+  if (!range && request.headers.get("if-none-match") === etag) {
+    return new Response(null, {
+      status: 304,
+      headers: {
+        ETag: etag,
+        "Cache-Control": "private, max-age=3600, immutable",
+      },
+    });
+  }
   const stream = createReadStream(/* turbopackIgnore: true */ target, { start, end });
   return new Response(Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>, {
     status: range ? 206 : 200,
@@ -99,7 +109,9 @@ export async function GET(
       "Content-Disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(
         classroomVariant ? classroomPreviewName(file.fileName) : file.fileName,
       )}`,
-      "Cache-Control": "private, no-store",
+      ETag: etag,
+      "Last-Modified": info.mtime.toUTCString(),
+      "Cache-Control": "private, max-age=3600, immutable",
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "default-src 'none'; sandbox",
     },

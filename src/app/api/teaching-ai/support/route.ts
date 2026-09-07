@@ -3,6 +3,8 @@
 // 等服务端模块拉入客户端 bundle。
 
 import { NextRequest } from "next/server";
+import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
+import { getCourse } from "@/lib/session/server-store";
 import {
   buildReflectionEvidencePrompts,
   buildShowcaseCoach,
@@ -45,13 +47,6 @@ const HANDLERS: Record<
     };
     return buildTeacherInterventionSignals(course, stageKey, { abortSignal: signal });
   },
-  buildTeacherDashboardAdvice: (input, signal) => {
-    const { course, stageKey } = input as {
-      course: Parameters<typeof buildTeacherDashboardAdvice>[0];
-      stageKey: string;
-    };
-    return buildTeacherDashboardAdvice(course, stageKey, { abortSignal: signal });
-  },
   generateProjectSkeleton: (input, signal) =>
     generateProjectSkeleton(input as Parameters<typeof generateProjectSkeleton>[0], { abortSignal: signal }),
   diagnoseAllProposals: (input, signal) =>
@@ -74,6 +69,35 @@ export async function POST(req: NextRequest) {
 
   if (!body?.action || !body.input) {
     return Response.json({ error: "MISSING_FIELDS" }, { status: 400 });
+  }
+
+  if (body.action === "buildTeacherDashboardAdvice") {
+    const csrfError = requireSameOrigin(req);
+    if (csrfError) return csrfError;
+    const auth = await authenticateRequest(req, "teacher");
+    if ("response" in auth) return auth.response;
+    const input = body.input && typeof body.input === "object" && !Array.isArray(body.input)
+      ? body.input as { courseId?: unknown; stageKey?: unknown }
+      : {};
+    if (typeof input.courseId !== "string" || typeof input.stageKey !== "string") {
+      return Response.json({ error: "INVALID_DASHBOARD_INPUT" }, { status: 400 });
+    }
+    const course = await getCourse(input.courseId);
+    if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
+    if (!course.stages.some((stage) => stage.key === input.stageKey)) {
+      return Response.json({ error: "STAGE_NOT_FOUND" }, { status: 404 });
+    }
+    try {
+      const result = await buildTeacherDashboardAdvice(course, input.stageKey, { abortSignal: req.signal });
+      return Response.json({ result }, { headers: { "Cache-Control": "private, no-store" } });
+    } catch (e) {
+      if (req.signal.aborted || (e instanceof Error && e.name === "AbortError")) {
+        return new Response(null, { status: 499 });
+      }
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("[api/teaching-ai/support] dashboard advice failed:", message);
+      return Response.json({ error: "SUPPORT_CALL_FAILED", detail: message }, { status: 500 });
+    }
   }
 
   const handler = HANDLERS[body.action];

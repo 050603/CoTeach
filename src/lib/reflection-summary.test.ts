@@ -57,6 +57,18 @@ function makeCourse(studentCount = 5, submittedCount = 0): Course {
 }
 
 describe("reflection class summary helpers", () => {
+  it("accepts an evidence-based summary without forcing teaching recommendations", () => {
+    const draft = normalizeReflectionSummaryDraft({
+      courseSummary: "当前样本只支持确认学生已完成反思，尚未形成可行动的共同问题。",
+      teachingRecommendations: [],
+      categories: [],
+      studentSummaries: [],
+    }, new Set());
+
+    expect(draft?.teachingRecommendations).toEqual([]);
+    expect(draft?.courseSummary).toContain("尚未形成可行动的共同问题");
+  });
+
   it("uses the current highest threshold and the minimum sample gate", () => {
     expect(reflectionSummaryMinimumSampleSize(1)).toBe(1);
     expect(reflectionSummaryMinimumSampleSize(2)).toBe(2);

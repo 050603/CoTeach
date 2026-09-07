@@ -282,6 +282,7 @@ describe("teaching AI support engine", () => {
     expect(draft.targetType).toBe("course");
     expect(draft.structuredPayload).toMatchObject({ responseCount: 3, coverageBucket: 100 });
     expect(JSON.stringify(llmMock.callLLM.mock.calls[0])).not.toContain("小红");
+    expect(JSON.stringify(llmMock.callLLM.mock.calls[0])).toContain("禁止凑数或逐生罗列");
     expect(draft.structuredPayload).toMatchObject({
       categories: expect.arrayContaining([
         expect.objectContaining({ key: "learning-gains", terms: [{ label: "证据", sources: [{ studentId: "s1", fields: ["learningReflection"] }] }] }),
@@ -421,9 +422,11 @@ describe("teaching AI support engine", () => {
       summary: "小明当前阶段进度为 10%，需要教师核对实际卡点。",
       actions: [{
         title: "巡视小明",
-        detail: "依据当前 10% 的阶段进度，当面确认卡点后再决定是否提供支架。",
+        detail: "该学生（ID: s1）当前阶段进度为 10%，当面确认卡点后再决定是否提供支架。",
         kind: "patrol",
+        scope: "individual",
         studentIds: ["s1", "not-a-student"],
+        evidenceKey: "progress-summary",
       }],
     }));
 
@@ -431,9 +434,128 @@ describe("teaching AI support engine", () => {
 
     expect(advice.source).toBe("llm");
     expect(advice.actions[0]?.studentIds).toEqual(["s1"]);
+    expect(advice.actions[0]?.detail).toContain("小明当前阶段进度为 10%");
+    expect(advice.actions[0]?.detail).not.toContain("ID:");
     const messages = llmMock.callLLM.mock.calls[0]?.[0] as Array<{ content: string }>;
     expect(messages[1]?.content).toContain("校园低碳生活");
     expect(messages[1]?.content).toContain("证据不足时 actions 返回空数组");
+  });
+
+  it("uses persisted quiz, submission, interaction, and showcase facts for dashboard advice", async () => {
+    const evidenceCourse = {
+      ...course,
+      id: "course-real-evidence",
+      stages: [
+        { key: "ai-learning", label: "知识讲授", view: "ai-learning", description: "" },
+        { key: "make", label: "项目实践", view: "make", description: "" },
+        { key: "showcase", label: "成果汇报", view: "showcase", description: "" },
+      ],
+      students: [{ ...course.students[0], stageProgress: {} }],
+      aiLearningProgress: {
+        s1: {
+          classroomId: "class-1",
+          studentId: "s1",
+          currentSceneIndex: 2,
+          totalScenes: 4,
+          completedScenes: ["scene-1", "scene-2"],
+          lastActiveAt: "2026-01-01T00:30:00.000Z",
+          masteryLevel: "in-progress",
+          knowledgeLectureAttempts: [{
+            id: "attempt-1",
+            sectionId: "section-1",
+            quizOutlineId: "quiz-1",
+            runtimeSceneId: "runtime-1",
+            submittedAt: "2026-01-01T00:20:00.000Z",
+            score: 1,
+            maxScore: 2,
+            knowledgePointIds: [],
+            questions: [{ questionId: "q1", prompt: "说明原因", answer: "测试回答", points: 2, earned: 1, correct: false, feedback: "证据不足", knowledgePointIds: [] }],
+          }],
+        },
+      },
+      submissions: [{
+        id: "submission-1", courseId: "course-real-evidence", studentId: "s1", studentName: "小明", stageKey: "make", type: "document", title: "真实成果", content: "成果正文", status: "submitted", submittedAt: "2026-01-01T00:40:00.000Z", version: 1, createdAt: "2026-01-01T00:35:00.000Z", updatedAt: "2026-01-01T00:40:00.000Z",
+      }],
+      aiInteractionEvents: [{
+        id: "interaction-1", courseId: "course-real-evidence", studentId: "s1", stageKey: "make", source: "submission", eventType: "submit", actorRole: "student", createdAt: "2026-01-01T00:40:00.000Z",
+      }],
+      showcasePresentations: [{
+        id: "presentation-1", courseId: "course-real-evidence", groupId: "g1", studentId: "s1", artifactKind: "document", artifactVersionId: "version-1", artifactTitle: "真实成果", displayMode: "continuous", status: "ended", revision: 3, requestedAt: "2026-01-01T00:45:00.000Z", startedAt: "2026-01-01T00:50:00.000Z", endedAt: "2026-01-01T00:55:00.000Z", updatedAt: "2026-01-01T00:55:00.000Z",
+      }],
+      updatedAt: "2026-01-01T01:00:00.000Z",
+    } as Course;
+
+    llmMock.callLLM.mockResolvedValueOnce(JSON.stringify({ actions: [] }));
+    const knowledgeAdvice = await buildTeacherDashboardAdvice(evidenceCourse, "ai-learning");
+    expect(knowledgeAdvice.summary).toContain("1/1 名学生已提交小测");
+    let messages = llmMock.callLLM.mock.calls.at(-1)?.[0] as Array<{ content: string }>;
+    expect(messages[1]?.content).toContain('"averageQuizScore":50');
+    expect(messages[1]?.content).toContain('"incorrectAnswerCount":1');
+
+    llmMock.callLLM.mockResolvedValueOnce(JSON.stringify({ actions: [] }));
+    const makeAdvice = await buildTeacherDashboardAdvice(evidenceCourse, "make");
+    expect(makeAdvice.summary).toContain("1/1 名学生已有成果记录");
+    expect(makeAdvice.summary).toContain("1 条 AI 协作事件");
+    messages = llmMock.callLLM.mock.calls.at(-1)?.[0] as Array<{ content: string }>;
+    expect(messages[1]?.content).toContain("真实成果");
+    expect(messages[1]?.content).toContain('"eventType":"submit"');
+
+    llmMock.callLLM.mockResolvedValueOnce(JSON.stringify({ actions: [] }));
+    const showcaseAdvice = await buildTeacherDashboardAdvice(evidenceCourse, "showcase");
+    expect(showcaseAdvice.summary).toContain("1 份已结束");
+    messages = llmMock.callLLM.mock.calls.at(-1)?.[0] as Array<{ content: string }>;
+    expect(messages[1]?.content).toContain('"status":"ended"');
+  });
+
+  it("aggregates similar large-class issues while retaining every distinct evidence-backed action", async () => {
+    const students = Array.from({ length: 30 }, (_, index) => ({
+      id: `student-${index + 1}`,
+      name: `学生${index + 1}`,
+      joinedAt: "2026-01-01T00:00:00.000Z",
+      stageProgress: { group: 10 },
+    }));
+    const largeCourse = {
+      ...course,
+      id: "course-large-class",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      students,
+      learningSignals: students.map((student, index) => ({
+        id: `signal-${index + 1}`,
+        courseId: "course-large-class",
+        studentId: student.id,
+        stageKey: "group",
+        kind: "goal-stalled" as const,
+        severity: index < 25 ? "high" as const : "warning" as const,
+        status: "open" as const,
+        title: index < 25 ? (index % 2 === 0 ? "任务理解停滞" : "没有理解当前任务") : "缺少关键证据",
+        summary: index < 25 ? "学生尚未明确当前任务要求。" : "学生的方案缺少可核查证据。",
+        normalizedIssueKey: index < 25 ? "task-stalled" : "evidence-missing",
+        evidenceEventIds: [],
+        aiInterventionAttempts: 0,
+        firstDetectedAt: "2026-01-02T00:00:00.000Z",
+        lastDetectedAt: "2026-01-02T00:10:00.000Z",
+      })),
+    } as Course;
+    llmMock.callLLM.mockResolvedValueOnce(JSON.stringify({
+      summary: "多数学生集中出现任务理解停滞，应优先做一次统一澄清。",
+      actions: [
+        { title: "逐一提醒第一位学生", detail: "单独重复任务要求。", kind: "patrol", scope: "individual", studentIds: ["student-1"], evidenceKey: "issue-1" },
+        { title: "合并澄清任务要求", detail: "面向出现相同卡点的学生统一澄清，并用一个复述问题确认理解。", kind: "offline-task", scope: "group", studentIds: students.slice(0, 20).map((student) => student.id), evidenceKey: "issue-1" },
+        { title: "补查证据来源", detail: "集中检查缺少关键证据的学生，要求先提交一个可核查来源。", kind: "patrol", scope: "group", studentIds: students.slice(25).map((student) => student.id), evidenceKey: "issue-2" },
+        { title: "再做一次进度提醒", detail: "提醒全班继续推进。", kind: "next-step", scope: "class", studentIds: [], evidenceKey: "progress-summary" },
+      ],
+    }));
+
+    const advice = await buildTeacherDashboardAdvice(largeCourse, "group");
+
+    expect(advice.actions).toHaveLength(3);
+    expect(advice.actions.map((action) => action.title)).toEqual(["合并澄清任务要求", "补查证据来源", "再做一次进度提醒"]);
+    expect(advice.actions[0]?.studentIds).toEqual(students.slice(0, 25).map((student) => student.id));
+    const messages = llmMock.callLLM.mock.calls[0]?.[0] as Array<{ content: string }>;
+    expect(messages[1]?.content).toContain('"affectedStudentCount":25');
+    expect(messages[1]?.content).toContain("相同或相近问题必须继续合并成一条");
+    expect(messages[1]?.content).toContain("禁止为了达到数量而凑数");
+    expect(messages[1]?.content).toContain('"name":"学生1"');
   });
 
   it("creates showcase coaching from real LLM JSON", async () => {

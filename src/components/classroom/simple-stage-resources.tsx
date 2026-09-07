@@ -15,7 +15,6 @@ import {
   Maximize2,
   MonitorOff,
   MonitorUp,
-  Minimize2,
   Pause,
   Play,
   Search,
@@ -46,11 +45,66 @@ const UPLOAD_ACCEPT = [
   ".mp3", ".wav", ".m4a", ".ogg", ".png", ".jpg", ".jpeg",
   ".webp", ".gif", ".txt", ".md", ".csv",
 ].join(",");
+const STREAMED_VIDEO_EXTENSIONS = [".mp4", ".mov", ".webm"];
+
+type UploadResponse = {
+  id?: string;
+  message?: string;
+  requestId?: string;
+  sizeBytes?: number;
+  title?: string;
+  convertedToPdf?: boolean;
+};
+
+function isStreamedVideo(file: File): boolean {
+  const lowerName = file.name.toLowerCase();
+  return STREAMED_VIDEO_EXTENSIONS.some((extension) => lowerName.endsWith(extension));
+}
+
+function uploadVideoWithProgress(
+  file: File,
+  metadata: { courseId: string; stageKey: string },
+  onProgress: (percent: number) => void,
+): Promise<UploadResponse> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/uploads");
+    xhr.responseType = "json";
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.setRequestHeader("X-OpenPBL-Upload-Mode", "stream");
+    xhr.setRequestHeader("X-Upload-File-Name", encodeURIComponent(file.name));
+    xhr.setRequestHeader("X-Upload-Title", encodeURIComponent(file.name));
+    xhr.setRequestHeader("X-Upload-Course-Id", metadata.courseId);
+    xhr.setRequestHeader("X-Upload-Stage-Key", metadata.stageKey);
+    xhr.setRequestHeader("X-Upload-Bind-Course-Resource", "true");
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress(Math.min(99, Math.round(event.loaded / event.total * 100)));
+      }
+    };
+    xhr.onerror = () => reject(new Error("视频上传中断，请检查网络后重试。"));
+    xhr.onabort = () => reject(new Error("视频上传已取消。"));
+    xhr.onload = () => {
+      const payload = (xhr.response && typeof xhr.response === "object"
+        ? xhr.response
+        : {}) as UploadResponse;
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const requestId = payload.requestId || xhr.getResponseHeader("x-request-id");
+        reject(new Error(`${payload.message || `上传失败（${xhr.status}）`}${requestId ? `（请求编号：${requestId}）` : ""}`));
+        return;
+      }
+      onProgress(100);
+      resolve(payload);
+    };
+    xhr.send(file);
+  });
+}
 
 type ViewerMode = "self" | "controller" | "follower";
 type ResourceKind = "image" | "video" | "audio" | "text" | "pdf" | "download";
 type ViewStatePatch = Partial<Omit<ClassroomResourceViewState, "updatedAt" | "revision">>;
-type PdfReadingProgress = { page: number; scrollRatio: number; zoom: number; fitWidth?: boolean; updatedAt: string };
+type PdfZoomMode = "scale" | "fit-page" | "fit-width";
+type PdfReadingProgress = { page: number; scrollRatio: number; progressRatio?: number; zoom: number; fitWidth?: boolean; zoomMode?: PdfZoomMode; updatedAt: string };
 
 function savedPdfReadingProgress(storageKey?: string): PdfReadingProgress | undefined {
   if (!storageKey || typeof window === "undefined") return undefined;
@@ -64,6 +118,7 @@ function savedPdfReadingProgress(storageKey?: string): PdfReadingProgress | unde
       ...saved,
       page: Math.max(1, saved.page),
       scrollRatio: Math.min(1, Math.max(0, saved.scrollRatio)),
+      progressRatio: saved.progressRatio === undefined ? undefined : Math.min(1, Math.max(0, saved.progressRatio)),
       zoom: Number.isFinite(saved.zoom) ? Math.min(1.75, Math.max(0.25, saved.zoom)) : 1,
     };
   } catch {
@@ -174,6 +229,7 @@ export function SimplifiedTeacherStageView({
   const session = useSession();
   const resources = resourcesForStage(course.resources, stageKey);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number>();
   const [pendingPdf, setPendingPdf] = useState<File>();
   const [deletingId, setDeletingId] = useState<string>();
   const [updatingDisplayMode, setUpdatingDisplayMode] = useState(false);
@@ -200,25 +256,28 @@ export function SimplifiedTeacherStageView({
     pdfDisplayMode?: "document" | "slides",
   ) {
     setUploading(true);
+    setUploadProgress(isStreamedVideo(file) ? 0 : undefined);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("title", file.name);
-      form.append("courseId", course.id);
-      form.append("stageKey", stageKey);
-      form.append("bindAsCourseResource", "true");
-      if (pdfDisplayMode) form.append("pdfDisplayMode", pdfDisplayMode);
-      const response = await fetch("/api/uploads", { method: "POST", body: form });
-      const payload = await response.json().catch(() => null) as {
-        id?: string;
-        message?: string;
-        requestId?: string;
-        title?: string;
-        convertedToPdf?: boolean;
-      } | null;
-      if (!response.ok) {
-        const requestHint = payload?.requestId ? `（请求编号：${payload.requestId}）` : "";
-        throw new Error(`${payload?.message || `上传失败（${response.status}）`}${requestHint}`);
+      let payload: UploadResponse | null;
+      if (isStreamedVideo(file)) {
+        payload = await uploadVideoWithProgress(file, { courseId: course.id, stageKey }, setUploadProgress);
+        if (payload.sizeBytes !== file.size) {
+          throw new Error(`视频上传不完整（原文件 ${Math.round(file.size / 1024 / 1024)} MiB，服务器收到 ${Math.round((payload.sizeBytes ?? 0) / 1024 / 1024)} MiB），请重新上传。`);
+        }
+      } else {
+        const form = new FormData();
+        form.append("file", file);
+        form.append("title", file.name);
+        form.append("courseId", course.id);
+        form.append("stageKey", stageKey);
+        form.append("bindAsCourseResource", "true");
+        if (pdfDisplayMode) form.append("pdfDisplayMode", pdfDisplayMode);
+        const response = await fetch("/api/uploads", { method: "POST", body: form });
+        payload = await response.json().catch(() => null) as UploadResponse | null;
+        if (!response.ok) {
+          const requestHint = payload?.requestId ? `（请求编号：${payload.requestId}）` : "";
+          throw new Error(`${payload?.message || `上传失败（${response.status}）`}${requestHint}`);
+        }
       }
       await session.refresh("teacher");
       if (payload?.id) setSelectedId(payload.id);
@@ -233,6 +292,7 @@ export function SimplifiedTeacherStageView({
       });
     } finally {
       setUploading(false);
+      setUploadProgress(undefined);
     }
   }
 
@@ -355,7 +415,7 @@ export function SimplifiedTeacherStageView({
   const uploadControl = (
     <label className="inline-flex h-10 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-sm)] bg-[var(--pbl-teacher)] px-4 text-sm font-semibold text-white transition hover:bg-[var(--pbl-teacher-hover)] has-[:disabled]:cursor-wait has-[:disabled]:opacity-60">
       {uploading ? <LoaderCircle className="animate-spin" size={16} /> : <Upload size={16} />}
-      {uploading ? "上传中…" : "上传资料"}
+      {uploading ? (uploadProgress === undefined ? "上传中…" : `上传 ${uploadProgress}%`) : "上传资料"}
       <input
         accept={UPLOAD_ACCEPT}
         className="sr-only"
@@ -507,7 +567,7 @@ export function SimplifiedTeacherStageView({
     <div className="classroom-stage space-y-4">
       <StagePageHeader
         action={uploadControl}
-        description="整理可讲授、可投屏的学习资料；PPT 请先导出为 PDF。"
+        description="整理可讲授、可投屏的学习资料；视频支持 MP4、MOV、WebM（最大 500 MiB）并显示上传进度，PPT 请先导出为 PDF。"
         title="学习资料"
       />
 
@@ -761,7 +821,7 @@ export function SimplifiedStudentStageView({
                       initialReadingProgress={readingProgressByResource[selected.id]}
                       key={`${selected.id}:${viewerRevision}`}
                       mode="self"
-                      onReadingProgressChange={(progress) => { setReadingProgressByResource((current) => ({ ...current, [selected.id]: progress })); recordResourceProgress(selected, progress.scrollRatio * 100); }}
+                      onReadingProgressChange={(progress) => { setReadingProgressByResource((current) => ({ ...current, [selected.id]: progress })); recordResourceProgress(selected, (progress.progressRatio ?? progress.scrollRatio) * 100); }}
                       onResourceProgress={(progress) => recordResourceProgress(selected, progress)}
                       progressKey={`student:${session.studentId ?? "guest"}:${course.id}:${selected.id}`}
                       resource={selected}
@@ -790,7 +850,7 @@ export function SimplifiedStudentStageView({
             setDialogResource(undefined);
             setViewerRevision((value) => value + 1);
           }}
-          onReadingProgressChange={(progress) => { setReadingProgressByResource((current) => ({ ...current, [dialogResource.id]: progress })); recordResourceProgress(dialogResource, progress.scrollRatio * 100); }}
+          onReadingProgressChange={(progress) => { setReadingProgressByResource((current) => ({ ...current, [dialogResource.id]: progress })); recordResourceProgress(dialogResource, (progress.progressRatio ?? progress.scrollRatio) * 100); }}
           onResourceProgress={(progress) => recordResourceProgress(dialogResource, progress)}
           progressKey={`student:${session.studentId ?? "guest"}:${course.id}:${dialogResource.id}`}
           resource={dialogResource}
@@ -880,7 +940,7 @@ function ResourceDialog({
   onReadingProgressChange?: (progress: PdfReadingProgress) => void;
   onResourceProgress?: (progressPercent: number) => void;
 }) {
-  const immersive = resourceKind(resource) === "pdf";
+  const immersive = ["pdf", "video"].includes(resourceKind(resource));
   useEffect(() => {
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -903,8 +963,8 @@ function ResourceDialog({
           <div className="flex items-center gap-2">{action}<button aria-label="关闭资源预览" className="grid size-10 place-items-center rounded-full border border-[var(--pbl-border)] text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)]" onClick={onClose} type="button"><X size={18} /></button></div>
         </header> : (
           <div className="pointer-events-none absolute inset-x-0 top-3 z-30 flex items-center justify-between px-4">
-            <div className="pointer-events-auto max-w-[55vw] rounded-full bg-slate-950/65 px-3 py-1.5 text-xs font-semibold text-white/90 shadow-lg backdrop-blur"><span className="mr-2 text-white/55">{title}</span>{resource.title}</div>
-            <div className="pointer-events-auto flex items-center gap-2">{action}<button aria-label="退出全屏阅读" className="grid size-10 place-items-center rounded-full border border-white/20 bg-slate-950/65 text-white shadow-lg backdrop-blur transition hover:bg-slate-950/80" onClick={onClose} type="button"><X size={18} /></button></div>
+            <div className="pointer-events-auto max-w-[55vw] rounded-full bg-slate-950/65 px-3 py-1.5 text-xs font-semibold text-white/90 shadow-lg backdrop-blur"><span className="mr-2 text-white/55">{resourceKind(resource) === "video" ? "全屏播放" : title}</span>{resource.title}</div>
+            <div className="pointer-events-auto flex items-center gap-2">{action}<button aria-label={resourceKind(resource) === "video" ? "退出全屏播放" : "退出全屏阅读"} className="grid size-10 place-items-center rounded-full border border-white/20 bg-slate-950/65 text-white shadow-lg backdrop-blur transition hover:bg-slate-950/80" onClick={onClose} type="button"><X size={18} /></button></div>
           </div>
         )}
         <div className={cn("min-h-0 flex-1", !immersive && "p-2 sm:p-3")}><ResourceViewer fullscreen={immersive} initialReadingProgress={initialReadingProgress} key={`${resource.id}:${mode}`} mode={mode} onReadingProgressChange={onReadingProgressChange} onResourceProgress={onResourceProgress} onViewStateChange={onViewStateChange} progressKey={progressKey} projection={projection} resource={resource} /></div>
@@ -995,7 +1055,7 @@ function ResourceViewer({
     );
   }
   if (kind === "pdf") return <PdfViewer fullscreen={fullscreen} initialReadingProgress={initialReadingProgress} mode={mode} onReadingProgressChange={onReadingProgressChange} onResourceProgress={onResourceProgress} onViewStateChange={onViewStateChange} progressKey={progressKey} projection={projection} resource={resource} />;
-  if (kind === "video") return <VideoViewer mode={mode} onResourceProgress={onResourceProgress} onViewStateChange={onViewStateChange} projection={projection} resource={resource} />;
+  if (kind === "video") return <VideoViewer fullscreen={fullscreen} mode={mode} onResourceProgress={onResourceProgress} onViewStateChange={onViewStateChange} projection={projection} resource={resource} />;
   if (kind === "text") return <TextViewer resource={resource} />;
   if (kind === "image") return <div className="relative h-full min-h-72 overflow-hidden rounded-[var(--radius-sm)] bg-stone-950 p-3"><Image alt={resource.title} className="object-contain p-3" fill src={previewUrl} unoptimized /></div>;
   if (kind === "audio") return <div className="grid h-full min-h-72 place-items-center rounded-[var(--radius-sm)] bg-white"><audio className="w-[min(640px,90%)]" controls onEnded={() => onResourceProgress?.(100)} onTimeUpdate={(event) => { const audio = event.currentTarget; if (audio.duration > 0) onResourceProgress?.(audio.currentTime / audio.duration * 100); }} src={previewUrl} /></div>;
@@ -1027,11 +1087,13 @@ function PdfViewer({
   const [pdf, setPdf] = useState<PdfDocument>();
   const [error, setError] = useState<string>();
   const [currentPage, setCurrentPage] = useState(1);
-  const [scrollRatio, setScrollRatio] = useState(0);
+  const [readingProgress, setReadingProgress] = useState(0);
   const [zoom, setZoom] = useState(1);
+  const [zoomMode, setZoomMode] = useState<PdfZoomMode>("scale");
   const [savedProgress, setSavedProgress] = useState<PdfReadingProgress | undefined>(() => initialReadingProgress ?? savedPdfReadingProgress(storageKey));
   const { visible: controlsVisible, reveal: revealControls } = useAutoHidingControls(fullscreen);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const furthestReadRatioRef = useRef(0);
   const syncTimerRef = useRef<number | undefined>(undefined);
   const previewUrl = resourcePreviewUrl(resource);
 
@@ -1070,7 +1132,8 @@ function PdfViewer({
       if (!container) return;
       const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
       container.scrollTop = maxScroll * Math.min(1, Math.max(0, ratio));
-      setScrollRatio(ratio);
+      setReadingProgress((current) => Math.max(current, ratio));
+      furthestReadRatioRef.current = Math.max(furthestReadRatioRef.current, ratio);
       setCurrentPage(Math.min(pdf.numPages, Math.max(1, projection?.viewState?.page ?? 1)));
     });
     return () => window.cancelAnimationFrame(frame);
@@ -1089,7 +1152,13 @@ function PdfViewer({
   useEffect(() => {
     if ((!fullscreen && !initialReadingProgress) || !pdf || !savedProgress || mode === "follower") return;
     const target = savedProgress;
-    const frame = window.requestAnimationFrame(() => setZoom(target.zoom));
+    const frame = window.requestAnimationFrame(() => {
+      setZoom(target.zoom);
+      setZoomMode(target.zoomMode ?? (target.fitWidth ? "fit-width" : "scale"));
+      const restoredProgress = target.progressRatio ?? target.scrollRatio;
+      setReadingProgress(restoredProgress);
+      furthestReadRatioRef.current = Math.max(furthestReadRatioRef.current, restoredProgress);
+    });
     const firstAttempt = window.setTimeout(() => scrollToPage(target.page, target.scrollRatio, "auto"), 120);
     const settledAttempt = window.setTimeout(() => {
       scrollToPage(target.page, target.scrollRatio, "auto");
@@ -1104,25 +1173,33 @@ function PdfViewer({
 
   function readingPosition() {
     const container = scrollRef.current;
-    if (!container || !pdf) return { ratio: 0, page: 1 };
-    const maxScroll = Math.max(1, container.scrollHeight - container.clientHeight);
-    const ratio = Math.min(1, Math.max(0, container.scrollTop / maxScroll));
+    if (!container || !pdf) return { ratio: 0, progressRatio: 0, page: 1 };
+    const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
+    const remaining = Math.max(0, maxScroll - container.scrollTop);
+    const reachedEnd = maxScroll === 0 || remaining <= 2;
+    const ratio = reachedEnd ? 1 : Math.min(1, Math.max(0, container.scrollTop / Math.max(1, maxScroll)));
+    const visibleEndRatio = reachedEnd ? 1 : Math.min(1, Math.max(0, (container.scrollTop + container.clientHeight) / Math.max(1, container.scrollHeight)));
+    const progressRatio = Math.max(furthestReadRatioRef.current, visibleEndRatio);
+    furthestReadRatioRef.current = progressRatio;
     const page = Math.min(pdf.numPages, Math.max(1, Math.round(ratio * Math.max(0, pdf.numPages - 1)) + 1));
-    return { ratio, page };
+    return { ratio, progressRatio, page };
   }
 
   function handleScroll() {
     const position = readingPosition();
-    setScrollRatio(position.ratio);
+    setReadingProgress(position.progressRatio);
     setCurrentPage(position.page);
     if (fullscreen) revealControls();
     onReadingProgressChange?.({
       page: position.page,
       scrollRatio: position.ratio,
+      progressRatio: position.progressRatio,
       zoom,
+      fitWidth: zoomMode === "fit-width",
+      zoomMode,
       updatedAt: new Date().toISOString(),
     });
-    onResourceProgress?.(position.ratio * 100);
+    onResourceProgress?.(position.progressRatio * 100);
     if (syncTimerRef.current !== undefined) return;
     syncTimerRef.current = window.setTimeout(() => {
       syncTimerRef.current = undefined;
@@ -1132,7 +1209,10 @@ function PdfViewer({
         const value: PdfReadingProgress = {
           page: latest.page,
           scrollRatio: latest.ratio,
+          progressRatio: latest.progressRatio,
           zoom,
+          fitWidth: zoomMode === "fit-width",
+          zoomMode,
           updatedAt: new Date().toISOString(),
         };
         try {
@@ -1147,6 +1227,10 @@ function PdfViewer({
   function resumeReading() {
     if (!savedProgress) return;
     setZoom(savedProgress.zoom);
+    setZoomMode(savedProgress.zoomMode ?? (savedProgress.fitWidth ? "fit-width" : "scale"));
+    const restoredProgress = savedProgress.progressRatio ?? savedProgress.scrollRatio;
+    setReadingProgress(restoredProgress);
+    furthestReadRatioRef.current = Math.max(furthestReadRatioRef.current, restoredProgress);
     window.requestAnimationFrame(() => scrollToPage(savedProgress.page, savedProgress.scrollRatio));
     setSavedProgress(undefined);
   }
@@ -1155,11 +1239,14 @@ function PdfViewer({
     const next = Math.min(1.75, Math.max(0.25, nextZoom));
     const position = readingPosition();
     setZoom(next);
+    setZoomMode("scale");
     const progress: PdfReadingProgress = {
       page: position.page,
       scrollRatio: position.ratio,
+      progressRatio: position.progressRatio,
       zoom: next,
       fitWidth: false,
+      zoomMode: "scale",
       updatedAt: new Date().toISOString(),
     };
     onReadingProgressChange?.(progress);
@@ -1170,11 +1257,14 @@ function PdfViewer({
   function fitToWidth() {
     const position = readingPosition();
     setZoom(1);
+    setZoomMode("fit-width");
     const progress: PdfReadingProgress = {
       page: position.page,
       scrollRatio: position.ratio,
+      progressRatio: position.progressRatio,
       zoom: 1,
       fitWidth: true,
+      zoomMode: "fit-width",
       updatedAt: new Date().toISOString(),
     };
     onReadingProgressChange?.(progress);
@@ -1183,7 +1273,11 @@ function PdfViewer({
   }
 
   useEffect(() => {
-    if (pdf?.numPages === 1) onResourceProgress?.(100);
+    if (pdf?.numPages !== 1) return;
+    furthestReadRatioRef.current = 1;
+    const frame = window.requestAnimationFrame(() => setReadingProgress(1));
+    onResourceProgress?.(100);
+    return () => window.cancelAnimationFrame(frame);
   }, [onResourceProgress, pdf]);
 
   async function fitToPage() {
@@ -1197,11 +1291,14 @@ function PdfViewer({
     const pageAspect = viewport.height / Math.max(1, viewport.width);
     const next = Math.min(1.75, Math.max(0.25, availableHeight / (availableWidth * pageAspect)));
     setZoom(next);
+    setZoomMode("fit-page");
     const progress: PdfReadingProgress = {
       page: position.page,
       scrollRatio: position.ratio,
+      progressRatio: position.progressRatio,
       zoom: next,
       fitWidth: false,
+      zoomMode: "fit-page",
       updatedAt: new Date().toISOString(),
     };
     onReadingProgressChange?.(progress);
@@ -1230,14 +1327,14 @@ function PdfViewer({
   }
   return (
     <div className="relative flex h-full min-h-72 flex-col overflow-hidden rounded-[var(--radius-sm)] bg-slate-100" onPointerMove={fullscreen ? revealControls : undefined}>
-      {fullscreen ? <div aria-label={`阅读进度 ${Math.round(scrollRatio * 100)}%`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={Math.round(scrollRatio * 100)} className="absolute inset-x-0 top-0 z-40 h-1 bg-slate-200/70" role="progressbar"><div className="h-full bg-[var(--pbl-student)] transition-[width] duration-150" style={{ width: `${Math.round(scrollRatio * 100)}%` }} /></div> : null}
+      {fullscreen ? <div aria-label={`阅读进度 ${Math.round(readingProgress * 100)}%`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={Math.round(readingProgress * 100)} className="absolute inset-x-0 top-0 z-40 h-1 bg-slate-200/70" role="progressbar"><div className="h-full bg-[var(--pbl-student)] transition-[width] duration-150" style={{ width: `${Math.round(readingProgress * 100)}%` }} /></div> : null}
       <div className={cn("shrink-0 border-b border-[var(--pbl-border)] bg-white px-3 py-2.5 shadow-sm sm:px-4", fullscreen && "absolute bottom-5 left-1/2 z-20 w-fit max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full border bg-white/[0.92] px-3 py-2 shadow-2xl backdrop-blur transition duration-200", fullscreen && !controlsVisible && "pointer-events-none translate-y-3 opacity-0")}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className={cn("flex items-center gap-2", fullscreen && "hidden")}>
             <span className="grid size-8 place-items-center rounded-[var(--radius-xs)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]"><BookOpen size={16} /></span>
             <div>
               <p className="text-xs font-bold text-[var(--pbl-text-strong)]">沉浸阅读</p>
-              <p className="text-[11px] text-[var(--pbl-text-muted)]">已阅读 {Math.round(scrollRatio * 100)}%</p>
+              <p className="text-[11px] text-[var(--pbl-text-muted)]">已阅读 {Math.round(readingProgress * 100)}%</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-1.5">
@@ -1255,19 +1352,23 @@ function PdfViewer({
                 <button aria-label="下一页" className="grid size-8 place-items-center rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)] disabled:opacity-35" disabled={currentPage >= pdf.numPages} onClick={() => scrollToPage(currentPage + 1)} type="button"><ChevronRight size={16} /></button>
                 <span className="mx-1 h-5 w-px bg-[var(--pbl-border)]" />
                 <button aria-label="缩小" className="grid size-8 place-items-center rounded-[var(--radius-xs)] text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)] disabled:opacity-35" disabled={zoom <= 0.25} onClick={() => changeZoom(zoom - 0.25)} type="button"><ZoomOut size={16} /></button>
-                <select aria-label="显示比例" className="h-8 rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white px-1.5 text-xs font-bold text-[var(--pbl-text-muted)] outline-none" onChange={(event) => changeZoom(Number(event.target.value))} value={zoom}>
-                  {![0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75].includes(zoom) ? <option value={zoom}>{Math.round(zoom * 100)}%</option> : null}
-                  {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75].map((value) => <option key={value} value={value}>{Math.round(value * 100)}%</option>)}
+                <select aria-label="显示比例" className="h-8 rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white px-1.5 text-xs font-bold text-[var(--pbl-text-muted)] outline-none" onChange={(event) => { const value = event.target.value; if (value === "fit-page") void fitToPage(); else if (value === "fit-width") fitToWidth(); else changeZoom(Number(value)); }} value={zoomMode === "scale" ? String(zoom) : zoomMode}>
+                  <optgroup label="页面适配">
+                    <option value="fit-page">适应整页</option>
+                    <option value="fit-width">适应宽度</option>
+                  </optgroup>
+                  <optgroup label="显示比例">
+                    {zoomMode === "scale" && ![0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75].includes(zoom) ? <option value={zoom}>{Math.round(zoom * 100)}%</option> : null}
+                    {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75].map((value) => <option key={value} value={value}>{Math.round(value * 100)}%</option>)}
+                  </optgroup>
                 </select>
                 <button aria-label="放大" className="grid size-8 place-items-center rounded-[var(--radius-xs)] text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)] disabled:opacity-35" disabled={zoom >= 1.75} onClick={() => changeZoom(zoom + 0.25)} type="button"><ZoomIn size={16} /></button>
-                <button aria-label="适应整个页面" className="inline-flex h-8 items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white px-2 text-xs font-bold text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)]" onClick={() => void fitToPage()} title="完整显示当前页面" type="button"><Minimize2 size={14} /><span className="hidden sm:inline">适应整页</span></button>
-                <button aria-label="适应屏幕宽度" className="inline-flex h-8 items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white px-2 text-xs font-bold text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)]" onClick={fitToWidth} title="适应屏幕宽度" type="button"><Maximize2 size={14} /><span className="hidden sm:inline">适应宽度</span></button>
               </>
             ) : <Pill tone="green">第 {currentPage} / {pdf.numPages} 页 · 跟随教师</Pill>}
           </div>
         </div>
-        <div aria-label={`阅读进度 ${Math.round(scrollRatio * 100)}%`} className={cn("mt-2 h-1 overflow-hidden rounded-full bg-slate-100", fullscreen && "hidden")} role="progressbar" aria-valuemax={100} aria-valuemin={0} aria-valuenow={Math.round(scrollRatio * 100)}>
-          <div className="h-full rounded-full bg-[var(--pbl-student)] transition-[width] duration-150" style={{ width: `${Math.round(scrollRatio * 100)}%` }} />
+        <div aria-label={`阅读进度 ${Math.round(readingProgress * 100)}%`} className={cn("mt-2 h-1 overflow-hidden rounded-full bg-slate-100", fullscreen && "hidden")} role="progressbar" aria-valuemax={100} aria-valuemin={0} aria-valuenow={Math.round(readingProgress * 100)}>
+          <div className="h-full rounded-full bg-[var(--pbl-student)] transition-[width] duration-150" style={{ width: `${Math.round(readingProgress * 100)}%` }} />
         </div>
       </div>
       <div className={cn("min-h-0 flex-1 overflow-auto overscroll-contain p-3 sm:p-5", fullscreen && "px-4 pb-20 pt-14 sm:px-8 sm:pb-24 sm:pt-16")} onScroll={handleScroll} ref={scrollRef}>
@@ -1306,7 +1407,8 @@ function PdfPresentationViewer({
 }) {
   const [localPage, setLocalPage] = useState(() => restoreImmediately ? savedProgress?.page ?? 1 : 1);
   const [zoom, setZoom] = useState(() => restoreImmediately ? savedProgress?.zoom ?? 1 : 1);
-  const [fitWidth, setFitWidth] = useState(() => restoreImmediately ? savedProgress?.fitWidth ?? false : false);
+  const [zoomMode, setZoomMode] = useState<PdfZoomMode>(() => restoreImmediately ? savedProgress?.zoomMode ?? (savedProgress?.fitWidth ? "fit-width" : "scale") : "scale");
+  const fitWidth = zoomMode === "fit-width";
   const { visible: controlsVisible, reveal: revealControls } = useAutoHidingControls(fullscreen);
   const projectedPage = projection?.viewState?.page ?? 1;
   const page = mode === "self" ? localPage : projectedPage;
@@ -1324,8 +1426,10 @@ function PdfPresentationViewer({
     const progress: PdfReadingProgress = {
       page: value,
       scrollRatio: pdf.numPages > 1 ? (value - 1) / (pdf.numPages - 1) : 1,
+      progressRatio: value / pdf.numPages,
       zoom,
       fitWidth,
+      zoomMode,
       updatedAt: new Date().toISOString(),
     };
     onReadingProgressChange?.(progress);
@@ -1338,12 +1442,14 @@ function PdfPresentationViewer({
   function changeZoom(nextZoom: number) {
     const value = Math.min(1.75, Math.max(0.25, nextZoom));
     setZoom(value);
-    setFitWidth(false);
+    setZoomMode("scale");
     const progress: PdfReadingProgress = {
       page: safePage,
       scrollRatio: pdf.numPages > 1 ? (safePage - 1) / (pdf.numPages - 1) : 1,
+      progressRatio: safePage / pdf.numPages,
       zoom: value,
       fitWidth: false,
+      zoomMode: "scale",
       updatedAt: new Date().toISOString(),
     };
     onReadingProgressChange?.(progress);
@@ -1354,12 +1460,14 @@ function PdfPresentationViewer({
 
   function fitToWidth() {
     setZoom(1);
-    setFitWidth(true);
+    setZoomMode("fit-width");
     const progress: PdfReadingProgress = {
       page: safePage,
       scrollRatio: pdf.numPages > 1 ? (safePage - 1) / (pdf.numPages - 1) : 1,
+      progressRatio: safePage / pdf.numPages,
       zoom: 1,
       fitWidth: true,
+      zoomMode: "fit-width",
       updatedAt: new Date().toISOString(),
     };
     onReadingProgressChange?.(progress);
@@ -1368,12 +1476,14 @@ function PdfPresentationViewer({
 
   function fitToPage() {
     setZoom(1);
-    setFitWidth(false);
+    setZoomMode("fit-page");
     const progress: PdfReadingProgress = {
       page: safePage,
       scrollRatio: pdf.numPages > 1 ? (safePage - 1) / (pdf.numPages - 1) : 1,
+      progressRatio: safePage / pdf.numPages,
       zoom: 1,
       fitWidth: false,
+      zoomMode: "fit-page",
       updatedAt: new Date().toISOString(),
     };
     onReadingProgressChange?.(progress);
@@ -1383,7 +1493,7 @@ function PdfPresentationViewer({
   function resumeReading() {
     if (!savedProgress) return;
     setZoom(savedProgress.zoom);
-    setFitWidth(savedProgress.fitWidth ?? false);
+    setZoomMode(savedProgress.zoomMode ?? (savedProgress.fitWidth ? "fit-width" : "scale"));
     changePage(savedProgress.page);
     setSavedProgress(undefined);
   }
@@ -1415,12 +1525,16 @@ function PdfPresentationViewer({
                 <button aria-label="下一页" className="grid size-8 place-items-center rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)] disabled:opacity-35" disabled={safePage >= pdf.numPages} onClick={() => changePage(safePage + 1)} type="button"><ChevronRight size={16} /></button>
                 <span className="mx-1 h-5 w-px bg-[var(--pbl-border)]" />
                 <button aria-label="缩小" className="grid size-8 place-items-center rounded-[var(--radius-xs)] text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)] disabled:opacity-35" disabled={zoom <= 0.25} onClick={() => changeZoom(zoom - 0.25)} type="button"><ZoomOut size={16} /></button>
-                <select aria-label="显示比例" className="h-8 rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white px-1.5 text-xs font-bold text-[var(--pbl-text-muted)] outline-none" onChange={(event) => changeZoom(Number(event.target.value))} value={zoom}>
-                  {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75].map((value) => <option key={value} value={value}>{Math.round(value * 100)}%</option>)}
+                <select aria-label="显示比例" className="h-8 rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white px-1.5 text-xs font-bold text-[var(--pbl-text-muted)] outline-none" onChange={(event) => { const value = event.target.value; if (value === "fit-page") fitToPage(); else if (value === "fit-width") fitToWidth(); else changeZoom(Number(value)); }} value={zoomMode === "scale" ? String(zoom) : zoomMode}>
+                  <optgroup label="页面适配">
+                    <option value="fit-page">适应整页</option>
+                    <option value="fit-width">适应宽度</option>
+                  </optgroup>
+                  <optgroup label="显示比例">
+                    {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75].map((value) => <option key={value} value={value}>{Math.round(value * 100)}%</option>)}
+                  </optgroup>
                 </select>
                 <button aria-label="放大" className="grid size-8 place-items-center rounded-[var(--radius-xs)] text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)] disabled:opacity-35" disabled={zoom >= 1.75} onClick={() => changeZoom(zoom + 0.25)} type="button"><ZoomIn size={16} /></button>
-                <button aria-label="适应整个页面" className="inline-flex h-8 items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white px-2 text-xs font-bold text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)]" onClick={fitToPage} title="完整显示当前页面" type="button"><Minimize2 size={14} /><span className="hidden sm:inline">适应整页</span></button>
-                <button aria-label="适应屏幕宽度" className={cn("inline-flex h-8 items-center gap-1 rounded-[var(--radius-xs)] border px-2 text-xs font-bold hover:bg-[var(--pbl-surface-soft)]", fitWidth ? "border-[var(--pbl-student-border)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]" : "border-[var(--pbl-border)] bg-white text-[var(--pbl-text-muted)]")} onClick={fitToWidth} title="适应屏幕宽度" type="button"><Maximize2 size={14} /><span className="hidden sm:inline">适应宽度</span></button>
               </>
             ) : <Pill tone="green">第 {safePage} / {pdf.numPages} 页 · 跟随教师</Pill>}
           </div>
@@ -1524,12 +1638,14 @@ function PdfPageCanvas({ pdf, pageNumber, zoom }: { pdf: PdfDocument; pageNumber
 function VideoViewer({
   resource,
   mode,
+  fullscreen,
   projection,
   onViewStateChange,
   onResourceProgress,
 }: {
   resource: CourseResource;
   mode: ViewerMode;
+  fullscreen: boolean;
   projection?: ClassroomResourceProjection;
   onViewStateChange?: (patch: ViewStatePatch) => void;
   onResourceProgress?: (progressPercent: number) => void;
@@ -1537,6 +1653,10 @@ function VideoViewer({
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastTimeSyncRef = useRef(0);
   const [playBlocked, setPlayBlocked] = useState(false);
+  const [playbackAuthorized, setPlaybackAuthorized] = useState(mode !== "follower");
+  const [mediaReady, setMediaReady] = useState(false);
+  const [buffering, setBuffering] = useState(false);
+  const [mediaError, setMediaError] = useState(false);
   const viewState = projection?.viewState;
   const mediaPlaying = viewState?.mediaPlaying;
   const mediaTime = viewState?.mediaTime;
@@ -1544,9 +1664,8 @@ function VideoViewer({
   const mediaUpdatedAt = viewState?.updatedAt;
   const mediaRevision = viewState?.revision;
 
-  useEffect(() => {
-    if (mode !== "follower" || !videoRef.current || !mediaUpdatedAt) return;
-    const video = videoRef.current;
+  const applyFollowerState = useCallback((video: HTMLVideoElement) => {
+    if (mode !== "follower" || !mediaUpdatedAt || video.readyState < 1) return;
     const elapsed = mediaPlaying
       ? Math.max(0, (Date.now() - Date.parse(mediaUpdatedAt)) / 1000)
       : 0;
@@ -1560,7 +1679,12 @@ function VideoViewer({
     } else {
       video.pause();
     }
-  }, [mediaPlaybackRate, mediaPlaying, mediaRevision, mediaTime, mediaUpdatedAt, mode]);
+  }, [mediaPlaybackRate, mediaPlaying, mediaTime, mediaUpdatedAt, mode]);
+
+  useEffect(() => {
+    if (!videoRef.current) return;
+    applyFollowerState(videoRef.current);
+  }, [applyFollowerState, mediaRevision]);
 
   function emit(playing = !videoRef.current?.paused) {
     const video = videoRef.current;
@@ -1572,13 +1696,48 @@ function VideoViewer({
     });
   }
 
+  async function authorizeFollowerPlayback() {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      await video.play();
+      setPlaybackAuthorized(true);
+      setPlayBlocked(false);
+      if (!mediaPlaying) video.pause();
+      applyFollowerState(video);
+    } catch {
+      setPlayBlocked(true);
+    }
+  }
+
   return (
-    <div className="relative grid h-full min-h-72 place-items-center overflow-hidden rounded-[var(--radius-sm)] bg-black">
+    <div className={cn("relative grid h-full min-h-72 place-items-center overflow-hidden bg-black", !fullscreen && "rounded-[var(--radius-sm)]")}>
       <video
-        className="max-h-full max-w-full"
+        className="h-full w-full object-contain"
         controls={mode !== "follower"}
+        onCanPlay={() => {
+          setMediaReady(true);
+          setBuffering(false);
+          if (videoRef.current) applyFollowerState(videoRef.current);
+        }}
+        onError={() => {
+          setMediaError(true);
+          setBuffering(false);
+        }}
+        onLoadStart={() => {
+          setMediaReady(false);
+          setMediaError(false);
+        }}
+        onLoadedMetadata={() => {
+          setMediaReady(true);
+          if (videoRef.current) applyFollowerState(videoRef.current);
+        }}
         onPause={() => emit(false)}
-        onPlay={() => emit(true)}
+        onPlay={() => {
+          setBuffering(false);
+          emit(true);
+        }}
+        onPlaying={() => setBuffering(false)}
         onRateChange={() => emit()}
         onSeeked={() => emit()}
         onTimeUpdate={() => {
@@ -1589,18 +1748,31 @@ function VideoViewer({
           emit();
         }}
         onEnded={() => onResourceProgress?.(100)}
+        onWaiting={() => setBuffering(true)}
         playsInline
-        preload="metadata"
+        preload={mode === "follower" ? "auto" : "metadata"}
         ref={videoRef}
         src={resource.url}
       />
+      {!mediaReady && !mediaError ? (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/45 text-sm font-semibold text-white"><span className="inline-flex items-center gap-2"><LoaderCircle className="animate-spin" size={18} />正在加载视频…</span></div>
+      ) : null}
+      {buffering && !mediaError ? (
+        <div className="pointer-events-none absolute right-3 top-3 inline-flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs font-semibold text-white"><LoaderCircle className="animate-spin" size={14} />缓冲中</div>
+      ) : null}
+      {mediaError ? (
+        <div className="absolute inset-0 grid place-items-center bg-stone-950/90 p-6 text-center text-white"><div><FileText className="mx-auto text-white/45" size={40} /><p className="mt-3 text-sm font-semibold">视频文件无法读取</p><p className="mt-1 text-xs text-white/65">文件可能上传不完整，或编码不受浏览器支持。请先重新上传原文件；若仍失败，建议转换为 H.264/AAC 编码的 MP4。</p><a className="mt-4 inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] bg-white px-4 text-xs font-bold text-stone-950" download href={`${resource.url}?download=1`}><ExternalLink size={14} />下载原文件</a></div></div>
+      ) : null}
       {mode === "follower" ? (
-        <div className="pointer-events-none absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-stone-950/75 px-4 py-2 text-xs font-semibold text-white backdrop-blur">
+        <div className="pointer-events-none absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full bg-stone-950/75 px-4 py-2 text-xs font-semibold text-white backdrop-blur">
           {viewState?.mediaPlaying ? <Play size={14} /> : <Pause size={14} />}跟随教师播放
         </div>
       ) : null}
-      {playBlocked && mediaPlaying ? (
-        <button className="absolute inset-0 flex flex-col items-center justify-center bg-black/55 text-white" onClick={() => void videoRef.current?.play().then(() => setPlayBlocked(false))} type="button"><span className="grid size-14 place-items-center rounded-full bg-white text-stone-950"><Play className="ml-1" size={25} /></span><span className="mt-3 text-sm font-semibold">点击继续同步播放</span></button>
+      {mode === "controller" && projection ? (
+        <div className="pointer-events-none absolute left-3 top-3 rounded-full bg-emerald-500/90 px-3 py-1.5 text-xs font-bold text-white shadow-lg backdrop-blur">实时投屏控制</div>
+      ) : null}
+      {mode === "follower" && (!playbackAuthorized || (playBlocked && mediaPlaying)) ? (
+        <button className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 px-6 text-center text-white backdrop-blur-[2px]" onClick={() => void authorizeFollowerPlayback()} type="button"><span className="grid size-16 place-items-center rounded-full bg-white text-stone-950 shadow-xl"><Play className="ml-1" size={28} /></span><span className="mt-4 text-base font-bold">点击启用同步播放</span><span className="mt-1 max-w-md text-xs leading-5 text-white/70">浏览器需要你授权一次声音播放；之后将自动跟随教师的播放、暂停、跳转和倍速。</span></button>
       ) : null}
     </div>
   );

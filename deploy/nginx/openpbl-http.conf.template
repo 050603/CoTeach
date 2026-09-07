@@ -24,6 +24,11 @@ upstream openpbl_new_app {
     keepalive 64;
 }
 
+upstream openpbl_new_ws {
+    server 127.0.0.1:3202;
+    keepalive 32;
+}
+
 # A whole classroom commonly shares one campus NAT address. Application-level
 # limits key authenticated writes by user and course; this edge limit is only
 # a broad abuse ceiling and must leave room for normal class-wide bursts.
@@ -44,9 +49,9 @@ gzip_min_length 1024;
 gzip_types text/plain text/css application/json application/javascript application/xml image/svg+xml application/wasm;
 
 client_body_buffer_size 1m;
-client_max_body_size 51m;
+client_max_body_size 501m;
 client_header_timeout 15s;
-client_body_timeout 60s;
+client_body_timeout 600s;
 send_timeout 60s;
 server_tokens off;
 
@@ -89,6 +94,20 @@ server {
         proxy_pass http://openpbl_new_app;
     }
 
+    location /ws {
+        proxy_pass http://openpbl_new_ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+        proxy_read_timeout 90s;
+        proxy_send_timeout 90s;
+        proxy_buffering off;
+    }
+
     location ~ ^/api/courses/[^/]+/actions$ {
         limit_req zone=general burst=240 nodelay;
         proxy_pass http://openpbl_new_app;
@@ -106,8 +125,11 @@ server {
 
     location = /api/uploads {
         limit_req zone=uploads burst=20 nodelay;
-        client_max_body_size 51m;
+        client_max_body_size 501m;
+        client_body_timeout 600s;
         proxy_request_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
         proxy_pass http://openpbl_new_app;
     }
 
@@ -215,8 +237,11 @@ server {
 
     location = /api/uploads {
         limit_req zone=uploads burst=20 nodelay;
-        client_max_body_size 51m;
+        client_max_body_size 501m;
+        client_body_timeout 600s;
         proxy_request_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
         proxy_pass http://openpbl_app;
     }
 

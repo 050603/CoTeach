@@ -24,11 +24,12 @@ export const config = {
     // /student 裸路径是公开入口页（输入邀请码），不经过 middleware；
     // 仅 /student/* 子路径（classroom、ai-learning）需要认证。
     "/student/:path*",
-    "/api/:path*",
+    // Upload route handlers perform their own same-origin and role checks.
+    // Keep them out of Proxy: Next.js buffers matched request bodies and
+    // truncates them at 10 MiB by default, which corrupts streamed videos.
+    "/api/((?!uploads).*)",
     "/api/courses",
     "/api/courses/:path*",
-    "/api/uploads",
-    "/api/uploads/:path*",
     "/api/teacher-directives",
     "/api/teacher-directives/:path*",
     "/api/chat/companion",

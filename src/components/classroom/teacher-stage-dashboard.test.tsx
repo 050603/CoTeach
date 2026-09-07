@@ -1,7 +1,17 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
 import { TeacherStageDashboard } from "./teacher-stage-dashboard";
+
+const supportMocks = vi.hoisted(() => ({
+  dashboardAdvice: vi.fn(),
+  reflectionSummary: vi.fn(),
+}));
+
+vi.mock("@/lib/teaching-ai/client-api", () => ({
+  buildTeacherDashboardAdvice: supportMocks.dashboardAdvice,
+  buildReflectionClassSummary: supportMocks.reflectionSummary,
+}));
 
 function makeCourse(): Course {
   return {
@@ -28,6 +38,17 @@ function makeCourse(): Course {
 }
 
 describe("TeacherStageDashboard", () => {
+  beforeEach(() => {
+    supportMocks.dashboardAdvice.mockReset();
+    supportMocks.reflectionSummary.mockReset();
+    supportMocks.dashboardAdvice.mockResolvedValue({
+      summary: "当前没有足够证据形成课堂判断。",
+      actions: [],
+      generatedAt: "2026-09-06T08:30:00.000Z",
+      source: "llm",
+    });
+  });
+
   it("keeps a compact stage indicator and launch-level follow-up", () => {
     const onFocus = vi.fn();
     const onSelectStage = vi.fn();
@@ -70,5 +91,40 @@ describe("TeacherStageDashboard", () => {
     render(<TeacherStageDashboard course={makeCourse()} degraded={false} onCollapse={vi.fn()} onFocus={vi.fn()} onSelectStage={vi.fn()} stageKey={stageKey} />);
     expect(screen.getByText("AI 实时教学建议")).toBeTruthy();
     expect(screen.getByText(attentionTitle)).toBeTruthy();
+  });
+
+  it("shows whole priority advice and opens the complete set in a centered dialog", async () => {
+    supportMocks.dashboardAdvice.mockResolvedValue({
+      summary: "三名学生在资料阅读与问题理解上出现不同程度的停滞，建议先巡视明确卡点，再组织一次短讨论。",
+      actions: [
+        { title: "先巡视小明并确认卡点", detail: "小明已经停留较长时间，请当面询问他是未理解任务要求，还是缺少继续阅读所需的资料。", kind: "patrol", studentIds: ["s1"] },
+        { title: "组织两分钟同伴交流", detail: "请让已经完成阅读的学生分享一个关键发现，并邀请仍在浏览的学生提出一个具体问题。", kind: "offline-task", studentIds: [] },
+        { title: "核对下一阶段入口", detail: "确认大多数学生完成当前资料后，再开放下一阶段，避免尚未完成的学生失去必要背景。", kind: "next-step", studentIds: [] },
+      ],
+      generatedAt: "2026-09-06T08:30:00.000Z",
+      source: "llm",
+    });
+
+    render(<TeacherStageDashboard course={makeCourse()} degraded={false} onCollapse={vi.fn()} onFocus={vi.fn()} onSelectStage={vi.fn()} stageKey="launch" />);
+
+    expect(await screen.findByText("小明已经停留较长时间，请当面询问他是未理解任务要求，还是缺少继续阅读所需的资料。")).toBeTruthy();
+    expect(screen.getByText("涉及同学：小明")).toBeTruthy();
+    expect(screen.getByText("请让已经完成阅读的学生分享一个关键发现，并邀请仍在浏览的学生提出一个具体问题。")).toBeTruthy();
+    expect(screen.queryByText("核对下一阶段入口")).toBeNull();
+    expect(screen.queryByText("三名学生在资料阅读与问题理解上出现不同程度的停滞，建议先巡视明确卡点，再组织一次短讨论。")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /还有 1 条建议，查看全部/ }));
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    expect(screen.getByText("AI 实时教学建议 · 项目启动")).toBeTruthy();
+    expect(screen.getByText("三名学生在资料阅读与问题理解上出现不同程度的停滞，建议先巡视明确卡点，再组织一次短讨论。")).toBeTruthy();
+    expect(screen.getByText("核对下一阶段入口")).toBeTruthy();
+    expect(screen.getByText("确认大多数学生完成当前资料后，再开放下一阶段，避免尚未完成的学生失去必要背景。")).toBeTruthy();
+  });
+
+  it("uses the concise empty label when no action is necessary", async () => {
+    render(<TeacherStageDashboard course={makeCourse()} degraded={false} onCollapse={vi.fn()} onFocus={vi.fn()} onSelectStage={vi.fn()} stageKey="launch" />);
+
+    expect(await screen.findByText("暂无建议")).toBeTruthy();
   });
 });

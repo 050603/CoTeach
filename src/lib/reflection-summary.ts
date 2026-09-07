@@ -205,8 +205,8 @@ export function normalizeReflectionSummaryDraft(
     (Array.isArray(candidate.teachingRecommendations) ? candidate.teachingRecommendations : [])
       .map((item) => text(item, MAX_RECOMMENDATION_LENGTH))
       .filter(Boolean),
-  ).slice(0, 3);
-  if (!courseSummary || teachingRecommendations.length < 2) return undefined;
+  ).slice(0, 20);
+  if (!courseSummary) return undefined;
 
   const studentSummaries = uniqueStrings(
     (Array.isArray(candidate.studentSummaries) ? candidate.studentSummaries : [])
@@ -273,8 +273,8 @@ export function normalizeReflectionClassSummary(
     (Array.isArray(candidate.teachingRecommendations) ? candidate.teachingRecommendations : [])
       .map((item) => text(item, MAX_RECOMMENDATION_LENGTH))
       .filter(Boolean),
-  ).slice(0, 3);
-  if (!courseSummary || !generatedAt || teachingRecommendations.length < 2) return undefined;
+  ).slice(0, 20);
+  if (!courseSummary || !generatedAt) return undefined;
 
   return {
     schemaVersion: 1,

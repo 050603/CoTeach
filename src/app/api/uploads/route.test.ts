@@ -170,6 +170,56 @@ describe("teacher course resource upload", () => {
     );
   });
 
+  it("streams classroom video uploads without multipart parsing", async () => {
+    mocks.fileTypeFromBuffer.mockResolvedValueOnce({ ext: "mp4", mime: "video/mp4" });
+    const response = await POST(new Request("http://localhost:3000/api/uploads", {
+      method: "POST",
+      headers: {
+        Origin: "http://localhost:3000",
+        "Content-Type": "video/mp4",
+        "Content-Length": "12",
+        "X-OpenPBL-Upload-Mode": "stream",
+        "X-Upload-File-Name": encodeURIComponent("课堂实验.mp4"),
+        "X-Upload-Title": encodeURIComponent("课堂实验.mp4"),
+        "X-Upload-Course-Id": courseId,
+        "X-Upload-Stage-Key": "launch",
+        "X-Upload-Bind-Course-Resource": "true",
+      },
+      body: Uint8Array.from([0, 0, 0, 20, 102, 116, 121, 112, 105, 115, 111, 109]),
+    }));
+    const payload = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(payload).toMatchObject({ fileName: "课堂实验.mp4", fileType: "MP4", sizeBytes: 12, boundToCourse: true });
+    expect(mocks.uploadFileCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ mimeType: "video/mp4", size: 12 }),
+    });
+    expect(mocks.courseResourceCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ courseId, stageKey: "launch", type: "MP4" }),
+    });
+  });
+
+  it("rejects and removes a video when an upstream truncates its body", async () => {
+    const response = await POST(new Request("http://localhost:3000/api/uploads", {
+      method: "POST",
+      headers: {
+        Origin: "http://localhost:3000",
+        "Content-Type": "video/mp4",
+        "Content-Length": "60",
+        "X-OpenPBL-Upload-Mode": "stream",
+        "X-Upload-File-Name": "lesson.mp4",
+        "X-Upload-Course-Id": courseId,
+        "X-Upload-Stage-Key": "launch",
+        "X-Upload-Bind-Course-Resource": "true",
+      },
+      body: Uint8Array.from([0, 0, 0, 20, 102, 116, 121, 112, 105, 115, 111, 109]),
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "UPLOAD_INCOMPLETE" });
+    expect(mocks.uploadFileCreate).not.toHaveBeenCalled();
+  });
+
   it("preserves a PPTX source and binds its generated PDF classroom preview", async () => {
     mocks.fileTypeFromBuffer.mockResolvedValueOnce({
       ext: "pptx",

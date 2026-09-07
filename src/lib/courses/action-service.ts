@@ -20,6 +20,7 @@ const DIRECT_ACTIONS = new Set<SessionAction["type"]>([
   "JOIN_GROUP",
   "LEAVE_GROUP",
   "REVIEW_LEARNING_EVIDENCE",
+  "SET_UI_STATE",
 ]);
 
 export class CourseActionError extends Error {
@@ -154,8 +155,8 @@ async function executeDirect(
             actorId: claims.sub!,
             actorRole: claims.role,
             courseVersion: updated.version,
-            ...(envelope.action.type === "UPDATE_STUDENT_PROGRESS"
-              ? { payload: { studentId: envelope.action.payload.studentId } }
+            ...(durableEventPayload(envelope.action)
+              ? { payload: toJson(durableEventPayload(envelope.action)) }
               : {}),
           },
           select: { cursor: true },
@@ -186,6 +187,64 @@ async function applyDirectMutation(
   courseId: string,
   action: SessionAction,
 ): Promise<void> {
+  if (action.type === "SET_UI_STATE") {
+    const course = await tx.course.findUnique({
+      where: { id: courseId },
+      select: {
+        uiState: true,
+        status: true,
+        currentStageIndex: true,
+        stages: true,
+      },
+    });
+    if (!course) {
+      throw new CourseActionError("COURSE_NOT_FOUND", "Course not found.", 404);
+    }
+    const currentUiState = course.uiState
+      && typeof course.uiState === "object"
+      && !Array.isArray(course.uiState)
+      ? course.uiState as Record<string, unknown>
+      : {};
+    await tx.course.update({
+      where: { id: courseId },
+      data: {
+        uiState: toJson({ ...currentUiState, ...action.payload.patch }),
+      },
+    });
+
+    // Resource projection and student showcase share the classroom viewport.
+    // Preserve the legacy lifecycle while keeping high-frequency media state
+    // updates on this small, single-row mutation path.
+    const startsProjection = Boolean(
+      action.payload.patch.resourceProjection
+      || action.payload.patch.teacherResourceProjection,
+    );
+    const stages = Array.isArray(course.stages)
+      ? course.stages.filter((stage): stage is { key: string } => Boolean(
+          stage
+          && typeof stage === "object"
+          && !Array.isArray(stage)
+          && typeof (stage as { key?: unknown }).key === "string",
+        ))
+      : [];
+    if (
+      startsProjection
+      && course.status === "teaching"
+      && stages[course.currentStageIndex]?.key === "showcase"
+      && inferStageCollectionMode(stages) === "new"
+    ) {
+      const endedAt = new Date();
+      await tx.showcasePresentation.updateMany({
+        where: { courseId, status: "pending" },
+        data: { status: "cancelled", endedAt, revision: { increment: 1 } },
+      });
+      await tx.showcasePresentation.updateMany({
+        where: { courseId, status: { in: ["active", "evaluating"] } },
+        data: { status: "ended", endedAt, revision: { increment: 1 } },
+      });
+    }
+    return;
+  }
   if (action.type === "REVIEW_LEARNING_EVIDENCE") {
     const course = await tx.course.findUnique({
       where: { id: courseId },
@@ -644,6 +703,9 @@ async function executeLegacyWithReservation(
           actorId: claims.sub!,
           actorRole: claims.role,
           courseVersion: resultingVersion,
+          ...(durableEventPayload(envelope.action)
+            ? { payload: toJson(durableEventPayload(envelope.action)) }
+            : {}),
         },
         select: { cursor: true },
       });
@@ -708,21 +770,34 @@ async function publishAckEvent(
   action: SessionAction,
   ack: ActionAck,
 ): Promise<void> {
-  const targetStudentId = action.type === "UPDATE_STUDENT_PROGRESS"
-    ? action.payload.studentId
-    : undefined;
+  const eventPayload = durableEventPayload(action);
   try {
     await publishCourseEvent(courseId, {
-      type: action.type === "ADVANCE_STAGE" || action.type === "SET_STAGE" ? "stage-changed" : "course-updated",
+      type: action.type === "ADVANCE_STAGE" || action.type === "SET_STAGE"
+        ? "stage-changed"
+        : action.type === "SET_UI_STATE" && eventPayload
+          ? "projection-changed"
+          : "course-updated",
       courseId,
       at: new Date().toISOString(),
       payload: {
         actionType: action.type,
         courseVersion: ack.courseVersion,
         eventCursor: ack.eventCursor,
-        ...(targetStudentId ? { studentId: targetStudentId } : {}),
+        ...eventPayload,
       },
     });
+    if (
+      action.type === "SET_UI_STATE"
+      && (action.payload.patch.resourceProjection || action.payload.patch.teacherResourceProjection)
+    ) {
+      await publishCourseEvent(courseId, {
+        type: "showcase-presentation",
+        courseId,
+        at: new Date().toISOString(),
+        payload: { scope: "course" },
+      });
+    }
   } catch (error) {
     // The database event cursor is the durable source of truth. A Redis or
     // WebSocket publish failure must not turn an already-committed classroom
@@ -734,6 +809,22 @@ async function publishAckEvent(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function durableEventPayload(action: SessionAction): Record<string, unknown> | undefined {
+  if (action.type === "UPDATE_STUDENT_PROGRESS") {
+    return { studentId: action.payload.studentId };
+  }
+  if (action.type !== "SET_UI_STATE") return undefined;
+  const patch = action.payload.patch;
+  const payload: Record<string, unknown> = {};
+  if (Object.prototype.hasOwnProperty.call(patch, "resourceProjection")) {
+    payload.resourceProjection = patch.resourceProjection ?? null;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "teacherResourceProjection")) {
+    payload.teacherResourceProjection = patch.teacherResourceProjection ?? null;
+  }
+  return Object.keys(payload).length > 0 ? payload : undefined;
 }
 
 function toJson(value: unknown): Prisma.InputJsonValue {

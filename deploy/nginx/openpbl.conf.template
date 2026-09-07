@@ -33,9 +33,9 @@ gzip_min_length 1024;
 gzip_types text/plain text/css application/json application/javascript application/xml image/svg+xml application/wasm;
 
 client_body_buffer_size 1m;
-client_max_body_size 51m;
+client_max_body_size 501m;
 client_header_timeout 15s;
-client_body_timeout 60s;
+client_body_timeout 600s;
 keepalive_timeout 65s;
 send_timeout 60s;
 server_tokens off;
@@ -169,8 +169,11 @@ server {
 
     location = /api/uploads {
         limit_req zone=uploads burst=20 nodelay;
-        client_max_body_size 51m;
+        client_max_body_size 501m;
+        client_body_timeout 600s;
         proxy_request_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
         proxy_pass http://openpbl_app;
     }
 

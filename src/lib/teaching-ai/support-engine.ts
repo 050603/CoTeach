@@ -35,6 +35,10 @@ import {
   type ReflectionSummaryTrigger,
 } from "@/lib/reflection-summary";
 import type { ReflectionClassSummaryV1 } from "@/lib/session/types";
+import {
+  aggregateKnowledgePointMastery,
+  firstKnowledgeLectureAttempts,
+} from "@/lib/knowledge-lecture";
 
 export type AiSupportDraft = Omit<
   AiSupportRecord,
@@ -584,7 +588,7 @@ export async function buildReflectionClassSummary(
 3. 每个主题词必须给出来源 studentId 和原文字段 fields；fields 只能是 learningReflection 或 systemReflection。
 4. 主题词最多 16 个，去掉重复词。不要生成或保存引文，来源映射足够。
 5. studentSummaries 为每位有效反思各写一句不超过 140 字的摘要，不得添加回答中不存在的事实。
-6. teachingRecommendations 返回 2–3 条可执行的课程改进建议。
+6. teachingRecommendations 返回所有当前重要且能由教师执行的课程改进建议，不设固定条数；每条必须对应一个彼此独立的共性问题，相近问题合并处理，没有充分共性证据时返回空数组，禁止凑数或逐生罗列。
 
 固定四类 categories key：learning-gains、common-difficulties、ai-collaboration、course-improvements。
 
@@ -784,18 +788,83 @@ export async function buildTeacherDashboardAdvice(
 ): Promise<TeacherDashboardAdvice> {
   throwIfAborted(opts.abortSignal);
   const studentIds = new Set(course.students.map((student) => student.id));
-  const studentName = new Map(course.students.map((student) => [student.id, student.name]));
-  const stageSignals = (course.learningSignals ?? [])
+  const studentNameById = new Map(course.students.map((student) => [student.id, student.name]));
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const humanizeStudentReferences = (value: string) => {
+    let result = value;
+    for (const [studentId, studentName] of studentNameById) {
+      const escapedId = escapeRegExp(studentId);
+      result = result
+        .replace(new RegExp(`(?:该?学生|同学)?\\s*[（(]\\s*ID\\s*[：:]\\s*${escapedId}\\s*[）)]`, "gi"), studentName)
+        .replace(new RegExp(`ID\\s*[：:]\\s*${escapedId}`, "gi"), studentName)
+        .replace(new RegExp(escapedId, "g"), studentName);
+    }
+    return result.replace(/\s{2,}/g, " ").trim();
+  };
+  const containsInternalStudentId = (value: string) => /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i.test(value);
+  const severityRank = { high: 3, warning: 2, notice: 1 } as const;
+  const normalizeIssue = (value: string) => value.trim().toLocaleLowerCase("zh-CN").replace(/[\s，。；：、,.!！?？()（）【】\[\]_-]+/g, "");
+  type IssueGroup = {
+    title: string;
+    summary: string;
+    severity: keyof typeof severityRank;
+    studentIds: Set<string>;
+    lastDetectedAt?: string;
+    sources: Set<"class-common-issue" | "learning-signal">;
+  };
+  const issueGroupMap = new Map<string, IssueGroup>();
+  const addIssue = (input: Omit<IssueGroup, "studentIds" | "sources"> & { studentIds: string[]; source: "class-common-issue" | "learning-signal"; normalizedIssueKey?: string }) => {
+    const key = normalizeIssue(input.normalizedIssueKey ?? "") || normalizeIssue(input.title) || normalizeIssue(input.summary);
+    if (!key) return;
+    const current = issueGroupMap.get(key);
+    if (!current) {
+      issueGroupMap.set(key, { ...input, studentIds: new Set(input.studentIds.filter((id) => studentIds.has(id))), sources: new Set([input.source]) });
+      return;
+    }
+    input.studentIds.forEach((id) => {
+      if (studentIds.has(id)) current.studentIds.add(id);
+    });
+    current.sources.add(input.source);
+    if (severityRank[input.severity] > severityRank[current.severity]) current.severity = input.severity;
+    if (input.summary.length > current.summary.length) current.summary = input.summary;
+    if (Date.parse(input.lastDetectedAt ?? "") > Date.parse(current.lastDetectedAt ?? "")) current.lastDetectedAt = input.lastDetectedAt;
+  };
+  (course.classCommonIssues ?? [])
+    .filter((issue) => issue.stageKey === stageKey && issue.status === "open")
+    .forEach((issue) => addIssue({
+      title: issue.title,
+      summary: issue.summary,
+      normalizedIssueKey: issue.normalizedIssueKey,
+      severity: issue.severity,
+      studentIds: issue.studentIds,
+      lastDetectedAt: issue.lastDetectedAt,
+      source: "class-common-issue",
+    }));
+  (course.learningSignals ?? [])
     .filter((signal) => signal.stageKey === stageKey && signal.status === "open")
-    .sort((left, right) => Date.parse(right.lastDetectedAt) - Date.parse(left.lastDetectedAt))
-    .slice(0, 12)
-    .map((signal) => ({
-      studentId: signal.studentId,
-      studentName: studentName.get(signal.studentId),
-      severity: signal.severity,
+    .forEach((signal) => addIssue({
       title: signal.title,
       summary: signal.summary,
-      detectedAt: signal.lastDetectedAt,
+      normalizedIssueKey: signal.normalizedIssueKey,
+      severity: signal.severity,
+      studentIds: [signal.studentId],
+      lastDetectedAt: signal.lastDetectedAt,
+      source: "learning-signal",
+    }));
+  const sortedIssueGroups = [...issueGroupMap.values()]
+    .sort((left, right) => severityRank[right.severity] - severityRank[left.severity]
+      || right.studentIds.size - left.studentIds.size
+      || Date.parse(right.lastDetectedAt ?? "") - Date.parse(left.lastDetectedAt ?? ""))
+    .slice(0, 20);
+  const issueGroups = sortedIssueGroups.map((issue, index) => ({
+      evidenceKey: `issue-${index + 1}`,
+      title: issue.title,
+      summary: issue.summary,
+      severity: issue.severity,
+      affectedStudentCount: issue.studentIds.size,
+      affectedStudentIds: [...issue.studentIds].slice(0, 12),
+      lastDetectedAt: issue.lastDetectedAt,
+      sources: [...issue.sources],
     }));
   const stageEvents = (course.learningEvents ?? [])
     .filter((event) => event.stageKey === stageKey)
@@ -805,12 +874,118 @@ export async function buildTeacherDashboardAdvice(
     counts[event.type] = (counts[event.type] ?? 0) + 1;
     return counts;
   }, {});
-  const progress = course.students.map((student) => ({
-    studentId: student.id,
-    studentName: student.name,
-    stageProgress: student.stageProgress?.[stageKey],
-    aiLearning: stageKey === "ai-learning" ? formatAiLearningProgress(course.aiLearningProgress?.[student.id]) : undefined,
+  const progressRows = course.students.map((student) => ({ studentId: student.id, progress: student.stageProgress?.[stageKey] }));
+  const progressSummary = {
+    evidenceKey: "progress-summary",
+    totalStudentCount: course.students.length,
+    noRecordCount: progressRows.filter((row) => row.progress === undefined).length,
+    notStartedCount: progressRows.filter((row) => row.progress !== undefined && row.progress <= 0).length,
+    learningCount: progressRows.filter((row) => row.progress !== undefined && row.progress > 0 && row.progress < 100).length,
+    completedCount: progressRows.filter((row) => row.progress !== undefined && row.progress >= 100).length,
+    lowProgressStudentCount: progressRows.filter((row) => row.progress !== undefined && row.progress <= 25).length,
+    lowProgressStudentIds: progressRows.filter((row) => row.progress !== undefined && row.progress <= 25).map((row) => row.studentId).slice(0, 12),
+  };
+  const launchResources = (course.resources ?? [])
+    .filter((resource) => resource.stageKey === "launch" || !resource.stageKey)
+    .filter((resource, index, all) => all.findIndex((candidate) => candidate.id === resource.id) === index);
+  const launchRows = course.students.map((student) => {
+    const states = launchResources.map((resource) => {
+      const events = (course.learningEvents ?? [])
+        .filter((event) => event.stageKey === "launch" && event.studentId === student.id)
+        .filter((event) => (typeof event.metadata?.resourceId === "string" ? event.metadata.resourceId : event.sceneId) === resource.id)
+        .filter((event) => event.metadata?.source !== "teacher-projection")
+        .filter((event, index, all) => all.findIndex((candidate) => (candidate.idempotencyKey || candidate.id) === (event.idempotencyKey || event.id)) === index);
+      const opened = events.some((event) => ["resource-open", "resource-progress", "resource-complete"].includes(event.type))
+        || (resource.downloadedBy ?? []).includes(student.id);
+      const completed = events.some((event) => event.type === "resource-complete"
+        || event.progressMarker === "completed"
+        || (typeof event.metadata?.progressPercent === "number" && event.metadata.progressPercent >= 90));
+      return { opened, completed };
+    });
+    return {
+      studentId: student.id,
+      openedCount: states.filter((state) => state.opened).length,
+      completedCount: states.filter((state) => state.completed).length,
+    };
+  });
+  const knowledgeRows = course.students.map((student) => {
+    const progress = course.aiLearningProgress?.[student.id];
+    const attempts = firstKnowledgeLectureAttempts(progress);
+    const total = Math.max(0, progress?.totalScenes ?? 0);
+    const completed = Math.max(progress?.completedScenes?.length ?? 0, progress?.currentSceneIndex ?? 0);
+    const progressPercent = total > 0 ? Math.min(100, Math.round(completed / total * 100)) : student.stageProgress?.[stageKey];
+    return {
+      studentId: student.id,
+      progressPercent,
+      quizCount: attempts.length,
+      averageQuizScore: attempts.length
+        ? Math.round(attempts.reduce((sum, attempt) => sum + (attempt.maxScore > 0 ? attempt.score / attempt.maxScore * 100 : 0), 0) / attempts.length)
+        : undefined,
+      incorrectAnswerCount: attempts.flatMap((attempt) => attempt.questions).filter((question) => question.correct === false || (question.points > 0 && question.earned / question.points < 0.8)).length,
+    };
+  });
+  const knowledgeMastery = stageKey === "ai-learning" ? aggregateKnowledgePointMastery(course) : [];
+  const makeArtifactStudentIds = new Set([
+    ...(course.submissions ?? []).flatMap((submission) => submission.stageKey === "make" && submission.status !== "failed" && submission.studentId ? [submission.studentId] : []),
+    ...(course.projectDocumentVersions ?? []).filter((version) => version.stageKey === "make" && version.status !== "failed").map((version) => version.studentId),
+    ...(course.projectPdfVersions ?? []).filter((version) => version.stageKey === "make" && version.status !== "failed").map((version) => version.studentId),
+  ]);
+  const makeSubmittedStudentIds = new Set([
+    ...(course.submissions ?? []).flatMap((submission) => submission.stageKey === "make" && submission.status !== "failed" && submission.studentId && (submission.submittedAt || submission.files?.length) ? [submission.studentId] : []),
+    ...(course.projectDocumentVersions ?? []).filter((version) => version.stageKey === "make" && version.status === "submitted").map((version) => version.studentId),
+    ...(course.projectPdfVersions ?? []).filter((version) => version.stageKey === "make" && version.status === "submitted").map((version) => version.studentId),
+  ]);
+  const makeInteractions = (course.aiInteractionEvents ?? []).filter((event) => event.stageKey === "make");
+  const makeMissingStudentIds = course.students.filter((student) => !makeArtifactStudentIds.has(student.id)).map((student) => student.id);
+  const showcaseRows = (course.showcasePresentations ?? []).slice(-50);
+  const reflectionStudentIds = new Set((course.reflections ?? []).map((reflection) => reflection.studentId));
+  const evidenceByKey = new Map<string, { priority: number; studentIds: Set<string> }>();
+  issueGroups.forEach((issue, index) => evidenceByKey.set(issue.evidenceKey, {
+    priority: severityRank[issue.severity] * 100 + Math.min(issue.affectedStudentCount, 50),
+    studentIds: new Set(sortedIssueGroups[index]?.studentIds ?? []),
   }));
+  if (course.students.length) evidenceByKey.set("progress-summary", { priority: 100 + Math.min(progressSummary.lowProgressStudentCount, 50), studentIds: new Set(progressSummary.lowProgressStudentIds) });
+  if (stageKey === "launch" && launchResources.length && course.students.length) evidenceByKey.set("launch-reading", { priority: 130, studentIds: new Set(launchRows.filter((row) => row.completedCount < launchResources.length).map((row) => row.studentId)) });
+  if (stageKey === "ai-learning" && course.students.length) {
+    evidenceByKey.set("knowledge-learning", { priority: 140, studentIds: new Set(knowledgeRows.filter((row) => row.progressPercent === undefined || row.progressPercent < 100).map((row) => row.studentId)) });
+    evidenceByKey.set("knowledge-quiz", { priority: 190, studentIds: new Set(knowledgeRows.filter((row) => row.quizCount === 0 || row.incorrectAnswerCount > 0).map((row) => row.studentId)) });
+  }
+  if (stageKey === "make" && course.students.length) {
+    evidenceByKey.set("make-artifacts", { priority: 180, studentIds: new Set(makeMissingStudentIds) });
+    evidenceByKey.set("make-collaboration", { priority: 120, studentIds: new Set(makeInteractions.map((event) => event.studentId)) });
+  }
+  if (stageKey === "showcase" && showcaseRows.length) evidenceByKey.set("showcase-status", { priority: 180, studentIds: new Set(showcaseRows.filter((presentation) => presentation.status !== "ended").map((presentation) => presentation.studentId)) });
+  if (stageKey === "reflection" && course.students.length) evidenceByKey.set("reflection-status", { priority: 150, studentIds: new Set(course.students.filter((student) => !reflectionStudentIds.has(student.id)).map((student) => student.id)) });
+  const median = (values: number[]) => {
+    const sorted = [...values].sort((left, right) => left - right);
+    if (!sorted.length) return undefined;
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1]! + sorted[middle]!) / 2);
+  };
+  const knowledgeProgressValues = knowledgeRows.flatMap((row) => typeof row.progressPercent === "number" ? [row.progressPercent] : []);
+  const factualSummary = course.students.length === 0
+    ? "本课程暂无学生，尚未形成可分析的课堂数据。"
+    : stageKey === "launch"
+    ? !launchResources.length
+      ? "本阶段尚未发布启动资料。"
+      : !launchRows.some((row) => row.openedCount > 0)
+        ? `已发布 ${launchResources.length} 份启动资料，尚未收到学生浏览记录。`
+        : `${launchRows.filter((row) => row.openedCount > 0).length}/${course.students.length} 名学生已开始浏览，${launchRows.filter((row) => row.completedCount === launchResources.length).length}/${course.students.length} 名已完成全部资料。`
+    : stageKey === "ai-learning"
+      ? !knowledgeProgressValues.length && !knowledgeRows.some((row) => row.quizCount > 0)
+        ? "本阶段尚未收到可靠的学习进度或小测记录。"
+        : `班级学习进度中位数为 ${median(knowledgeProgressValues) ?? 0}%，${knowledgeRows.filter((row) => row.quizCount > 0).length}/${course.students.length} 名学生已提交小测。`
+      : stageKey === "make"
+        ? `${makeArtifactStudentIds.size}/${course.students.length} 名学生已有成果记录，${makeSubmittedStudentIds.size}/${course.students.length} 名已有提交记录，当前记录到 ${makeInteractions.length} 条 AI 协作事件。`
+        : stageKey === "showcase"
+          ? showcaseRows.length
+            ? `当前有 ${showcaseRows.length} 份汇报申请，其中 ${showcaseRows.filter((item) => item.status === "ended").length} 份已结束、${showcaseRows.filter((item) => item.status === "active").length} 份正在汇报。`
+            : "本阶段尚未收到汇报申请。"
+          : stageKey === "reflection"
+            ? `${reflectionStudentIds.size}/${course.students.length} 名学生已提交学习反思。`
+            : progressRows.some((row) => row.progress !== undefined)
+              ? `${progressSummary.completedCount}/${course.students.length} 名学生已完成本阶段。`
+              : "本阶段尚未收到可靠的课堂记录。";
   const evidenceSnapshot = {
     course: {
       id: course.id,
@@ -820,27 +995,29 @@ export async function buildTeacherDashboardAdvice(
       drivingQuestion: course.drivingQuestion,
       stage: learningStageLabel(stageKey, course.stages),
       studentCount: course.students.length,
+      students: course.students.map((student) => ({ id: student.id, name: student.name })),
     },
-    progress,
-    openSignals: stageSignals,
-    commonIssues: (course.classCommonIssues ?? [])
-      .filter((issue) => issue.stageKey === stageKey && issue.status === "open")
-      .slice(0, 6)
-      .map((issue) => ({ title: issue.title, summary: issue.summary, severity: issue.severity, affectedStudentCount: issue.studentIds.length })),
-    recentEventCounts: eventCounts,
-    resources: stageKey === "launch" ? (course.resources ?? []).filter((resource) => resource.stageKey === "launch" || !resource.stageKey).slice(0, 12).map((resource) => ({ id: resource.id, title: resource.title, type: resource.type })) : undefined,
+    progressSummary,
+    priorityIssueGroups: issueGroups,
+    recentEventSummary: { evidenceKey: "recent-events", counts: eventCounts },
+    launchReading: stageKey === "launch" ? { evidenceKey: "launch-reading", resourceCount: launchResources.length, students: launchRows } : undefined,
+    knowledgeLearning: stageKey === "ai-learning" ? { evidenceKey: "knowledge-learning", students: knowledgeRows.map(({ incorrectAnswerCount: _, ...row }) => row) } : undefined,
+    knowledgeQuiz: stageKey === "ai-learning" ? { evidenceKey: "knowledge-quiz", students: knowledgeRows.map(({ progressPercent: _, ...row }) => row), knowledgePoints: knowledgeMastery.map((row) => ({ name: row.name, answeredStudents: row.answeredStudents, incorrectStudents: row.incorrectStudents, unmetRate: row.unmetRate, status: row.status })) } : undefined,
     artifacts: stageKey === "make" ? {
-      documentVersions: (course.projectDocumentVersions ?? []).filter((version) => version.stageKey === "make").length,
-      pdfVersions: (course.projectPdfVersions ?? []).filter((version) => version.stageKey === "make").length,
-      submittedDocuments: (course.projectDocumentVersions ?? []).filter((version) => version.stageKey === "make" && version.status === "submitted").length,
-      submittedPdfs: (course.projectPdfVersions ?? []).filter((version) => version.stageKey === "make" && version.status === "submitted").length,
-      aiDecisions: (course.studentAiDecisions ?? []).filter((decision) => decision.stageKey === "make").slice(-20).map((decision) => ({ studentId: decision.studentId, decision: decision.decision })),
+      evidenceKey: "make-artifacts",
+      artifactStudentIds: [...makeArtifactStudentIds],
+      submittedStudentIds: [...makeSubmittedStudentIds],
+      missingStudentIds: makeMissingStudentIds,
+      submissions: (course.submissions ?? []).filter((submission) => submission.stageKey === "make").slice(-30).map((submission) => ({ studentId: submission.studentId, type: submission.type, title: submission.title, status: submission.status, submittedAt: submission.submittedAt, updatedAt: submission.updatedAt })),
     } : undefined,
-    showcase: stageKey === "showcase" ? (course.showcasePresentations ?? []).slice(-20).map((presentation) => ({ studentId: presentation.studentId, studentName: presentation.studentName, status: presentation.status, startedAt: presentation.startedAt, endedAt: presentation.endedAt })) : undefined,
-    reflections: stageKey === "reflection" ? (course.reflections ?? []).slice(-30).map((reflection) => ({ studentId: reflection.studentId, studentName: reflection.studentName, submittedAt: reflection.updatedAt, hasStructuredSurvey: Boolean(reflection.survey) })) : undefined,
-    recentOfflineInterventions: (course.offlineInterventions ?? []).filter((item) => item.stageKey === stageKey).slice(-8).map((item) => ({ kind: item.kind, studentIds: item.targetStudentIds, note: item.note, createdAt: item.createdAt })),
+    makeCollaboration: stageKey === "make" ? { evidenceKey: "make-collaboration", eventCount: makeInteractions.length, events: makeInteractions.slice(-30).map((event) => ({ studentId: event.studentId, eventType: event.eventType, actorRole: event.actorRole, createdAt: event.createdAt })), aiDecisions: (course.studentAiDecisions ?? []).filter((decision) => decision.stageKey === "make").slice(-20).map((decision) => ({ studentId: decision.studentId, decision: decision.decision })) } : undefined,
+    showcase: stageKey === "showcase" ? { evidenceKey: "showcase-status", presentations: showcaseRows.map((presentation) => ({ studentId: presentation.studentId, artifactTitle: presentation.artifactTitle, status: presentation.status, requestedAt: presentation.requestedAt, startedAt: presentation.startedAt, endedAt: presentation.endedAt, evaluatedAt: presentation.evaluatedAt })) } : undefined,
+    reflections: stageKey === "reflection" ? { evidenceKey: "reflection-status", responses: (course.reflections ?? []).slice(-30).map((reflection) => ({ studentId: reflection.studentId, submittedAt: reflection.updatedAt, hasStructuredSurvey: Boolean(reflection.survey) })) } : undefined,
+    recentOfflineInterventions: { evidenceKey: "recent-interventions", items: (course.offlineInterventions ?? []).filter((item) => item.stageKey === stageKey).slice(-8).map((item) => ({ kind: item.kind, studentIds: item.targetStudentIds, note: item.note, createdAt: item.createdAt })) },
   };
-  const cacheKey = `${course.id}:${stageKey}:${course.updatedAt}:${stageEvents[0]?.occurredAt ?? "none"}:${stageSignals[0]?.detectedAt ?? "none"}`;
+  const issueRevision = issueGroups.map((issue) => `${issue.title}:${issue.severity}:${issue.affectedStudentCount}:${issue.lastDetectedAt ?? "none"}`).join("|");
+  const sourceRevision = [stageEvents[0]?.occurredAt, showcaseRows.at(-1)?.updatedAt, makeInteractions.at(-1)?.createdAt, (course.submissions ?? []).at(-1)?.updatedAt, Object.values(course.aiLearningProgress ?? {}).map((item) => item.lastActiveAt).sort().at(-1), (course.reflections ?? []).at(-1)?.updatedAt].join(":");
+  const cacheKey = `${course.id}:${stageKey}:${course.updatedAt}:${sourceRevision}:${issueRevision || "none"}`;
   const cached = teacherDashboardAdviceCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     if (cached.value) return cached.value;
@@ -848,8 +1025,7 @@ export async function buildTeacherDashboardAdvice(
   }
 
   const promise: Promise<TeacherDashboardAdvice> = callLLMForJson<{
-    summary?: unknown;
-    actions?: Array<{ title?: unknown; detail?: unknown; kind?: unknown; studentIds?: unknown }>;
+    actions?: Array<{ title?: unknown; detail?: unknown; kind?: unknown; studentIds?: unknown; evidenceKey?: unknown; scope?: unknown }>;
   }>(
     stageSystemPrompt(stageKey),
     `请仅依据下面这节课当前阶段的实时证据，为教师生成侧栏教学建议。
@@ -859,27 +1035,40 @@ ${JSON.stringify(evidenceSnapshot)}
 
 要求：
 1. 不得输出通用课堂常识、固定流程或未被证据支持的提醒。
-2. 最多 3 条，每条必须对应上方具体数据；证据不足时 actions 返回空数组。
-3. 建议必须是教师现在可执行的线下任务、巡场动作或阶段下一步。
-4. 只有证据明确指向某名学生时才填写 studentIds，且只能使用证据中的真实 studentId。
-5. summary 用一句话概括当前最值得教师关注的事实，不作无依据推断。
+2. 目标不是覆盖每位学生。只挑选当前紧迫、影响教学决策且教师现在能够处理的独立问题；不设置固定条数，但每条都必须必要且不可被其他建议合并。证据不足时 actions 返回空数组，没有必要干预时也返回空数组，禁止为了达到数量而凑数。
+3. priorityIssueGroups 已将同标题问题合并。相同或相近问题必须继续合并成一条班级/小组建议，detail 同时说明受影响范围与一个统一处理动作；不得为多名学生逐人重复生成相似建议。
+4. 每条建议只能解决一个最重要的问题，并填写唯一 evidenceKey；evidenceKey 必须原样取自实时证据。不要把一个问题拆成“先巡场、再讲解”等多条建议。
+5. 建议必须是教师现在可执行且能观察结果的线下任务、巡场动作或阶段下一步。已经记录在 recentOfflineInterventions 中且尚无新证据的动作不要重复建议。
+6. scope 必须为 class、group 或 individual。涉及具体学生时必须使用 group/individual，并填写该证据中的真实 studentId；title 和 detail 必须使用 course.students 中对应的学生姓名，绝对不得向教师展示 studentId、UUID、“ID：...”或只写“该同学”“一些同学”等无法识别对象的说法。群体共性问题应在同一条建议中合并这些学生。只有面向全班且不针对具体学生时才使用 class 并返回空 studentIds。
+7. 事实摘要由系统根据原始记录计算，你只生成 actions，不得自行判断是否有人提交、是否完成或是否缺少数据。
 
-仅返回 JSON：{ "summary": "string", "actions": [{ "title": "string", "detail": "string", "kind": "offline-task"|"patrol"|"next-step", "studentIds": ["string"] }] }`,
+仅返回 JSON：{ "actions": [{ "title": "string", "detail": "string", "kind": "offline-task"|"patrol"|"next-step", "scope": "class"|"group"|"individual", "studentIds": ["string"], "evidenceKey": "issue-1" }] }`,
     { abortSignal: opts.abortSignal },
   ).then((result) => {
-    const summary = typeof result?.summary === "string" ? result.summary.trim() : "";
-    if (!summary || !Array.isArray(result.actions)) return invalidAiResult("教师侧栏实时建议");
-    const actions = result.actions.flatMap((action) => {
-      const title = typeof action.title === "string" ? action.title.trim() : "";
-      const detail = typeof action.detail === "string" ? action.detail.trim() : "";
+    if (!Array.isArray(result?.actions)) return invalidAiResult("教师侧栏实时建议");
+    const actions = result.actions.flatMap((action, sourceIndex) => {
+      const title = typeof action.title === "string" ? humanizeStudentReferences(action.title) : "";
+      const detail = typeof action.detail === "string" ? humanizeStudentReferences(action.detail) : "";
+      const evidenceKey = typeof action.evidenceKey === "string" ? action.evidenceKey.trim() : "";
+      const evidence = evidenceByKey.get(evidenceKey);
+      const scope = action.scope === "class" || action.scope === "group" || action.scope === "individual" ? action.scope : undefined;
       const kind: TeacherDashboardAdvice["actions"][number]["kind"] | undefined = action.kind === "offline-task" || action.kind === "patrol" || action.kind === "next-step" ? action.kind : undefined;
-      if (!title || !detail || !kind) return [];
-      const validStudentIds = Array.isArray(action.studentIds)
-        ? action.studentIds.filter((id): id is string => typeof id === "string" && studentIds.has(id)).slice(0, 3)
+      if (!title || !detail || containsInternalStudentId(title) || containsInternalStudentId(detail) || !kind || !evidence || !scope) return [];
+      const suppliedStudentIds = Array.isArray(action.studentIds)
+        ? [...new Set(action.studentIds.filter((id): id is string => typeof id === "string" && studentIds.has(id) && evidence.studentIds.has(id)))]
         : [];
-      return [{ title, detail, kind, studentIds: validStudentIds }];
-    }).slice(0, 3);
-    return { summary, actions, generatedAt: new Date().toISOString(), source: "llm" as const };
+      const validStudentIds = scope === "class"
+        ? []
+        : scope === "individual"
+          ? suppliedStudentIds.slice(0, 1)
+          : [...evidence.studentIds];
+      if (scope !== "class" && validStudentIds.length === 0) return [];
+      return [{ title, detail, kind, studentIds: validStudentIds, evidenceKey, priority: evidence.priority, breadth: validStudentIds.length, sourceIndex }];
+    })
+      .sort((left, right) => right.priority - left.priority || right.breadth - left.breadth || left.sourceIndex - right.sourceIndex)
+      .filter((action, index, items) => items.findIndex((candidate) => candidate.evidenceKey === action.evidenceKey) === index)
+      .map(({ title, detail, kind, studentIds: validStudentIds }) => ({ title, detail, kind, studentIds: validStudentIds }));
+    return { summary: factualSummary, actions, generatedAt: new Date().toISOString(), source: "llm" as const };
   });
   teacherDashboardAdviceCache.set(cacheKey, { expiresAt: Date.now() + TEACHER_SIGNAL_CACHE_TTL_MS, promise });
   const advice = await promise;

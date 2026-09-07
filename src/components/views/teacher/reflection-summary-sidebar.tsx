@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, RefreshCw, Sparkles } from "lucide-react";
 import { buildReflectionClassSummary } from "@/lib/teaching-ai/client-api";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui";
 import type { AiSupportRecord, Course } from "@/lib/session/types";
 import {
   normalizeReflectionClassSummary,
@@ -27,6 +28,7 @@ export function ReflectionSummarySidebar({ course, compact = false }: Props) {
   const [localSupport, setLocalSupport] = useState<AiSupportRecord>();
   const [status, setStatus] = useState<"idle" | "generating" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string>();
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const attemptedKey = useRef<string | undefined>(undefined);
   const support = useMemo(
     () => [localSupport, storedSupport]
@@ -91,7 +93,7 @@ export function ReflectionSummarySidebar({ course, compact = false }: Props) {
           <span className={cn("grid size-7 place-items-center rounded-lg", status === "error" ? "bg-amber-100 text-amber-700" : "bg-violet-100 text-violet-700")}><Bot size={14} /></span>
           <div>
             <h3 className={cn("font-black text-stone-900", compact ? "text-xs" : "text-[13px]")}>{compact ? "AI 实时教学建议" : "AI 课程总结"}</h3>
-            <p className={cn("mt-0.5 font-semibold text-stone-400", compact ? "line-clamp-1 text-[9px]" : "text-[10px]")}>{statusText}</p>
+            <p className={cn("mt-0.5 font-semibold leading-4 text-stone-400", compact ? "text-[9px]" : "text-[10px]")}>{statusText}</p>
           </div>
         </div>
         <button
@@ -107,16 +109,27 @@ export function ReflectionSummarySidebar({ course, compact = false }: Props) {
       </header>
 
       {summary ? (
-        <>
+        compact ? <>
+          {summary.teachingRecommendations[0] ? (
+            <div className="flex items-start gap-2 rounded-lg border border-violet-100 bg-violet-50/60 px-2.5 py-2 text-[9px] leading-4 text-stone-700">
+              <span className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full bg-violet-600 text-[8px] font-black text-white">1</span>
+              <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{summary.teachingRecommendations[0]}</span>
+            </div>
+          ) : <div className="rounded-lg border border-dashed border-stone-200 bg-stone-50/70 px-2.5 py-2 text-center text-[9px] leading-4 text-stone-500">暂无建议</div>}
+          <button className="mt-2 flex w-full items-center justify-center rounded-lg border border-violet-100 bg-violet-50/50 px-2.5 py-1.5 text-[9px] font-bold leading-4 text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600" onClick={() => setDetailsOpen(true)} type="button">
+            {summary.teachingRecommendations.length > 1 ? `还有 ${summary.teachingRecommendations.length - 1} 条建议，查看完整总结` : "查看完整课程总结"}
+          </button>
+          {errorMessage ? <p className="mt-2 text-[9px] leading-4 text-amber-700">{errorMessage}</p> : null}
+        </> : <>
           <div className={cn("rounded-xl border border-violet-100 bg-violet-50/60 text-violet-950", compact ? "px-2.5 py-2 text-[10px] leading-4" : "px-3 py-3 text-xs leading-5")}>
-            <div className="mb-1 flex items-start gap-1.5 font-bold"><Sparkles className="mt-0.5 shrink-0" size={13} /><span className={cn(compact && "line-clamp-2")}>{summary.courseSummary}</span></div>
+            <div className="mb-1 flex items-start gap-1.5 font-bold"><Sparkles className="mt-0.5 shrink-0" size={13} /><span>{summary.courseSummary}</span></div>
             <p className={cn("text-violet-700/80", compact ? "text-[9px]" : "text-[10px]")}>覆盖 {summary.responseCount}/{summary.totalStudentCount} 人 · {new Date(summary.generatedAt).toLocaleString("zh-CN")}</p>
           </div>
           <div className={cn("space-y-2", compact ? "mt-2" : "mt-3")}>
             {summary.teachingRecommendations.slice(0, compact ? 1 : 3).map((recommendation, index) => (
               <div className={cn("flex gap-2 text-stone-600", compact ? "text-[9px] leading-4" : "text-[11px] leading-5")} key={`${recommendation}-${index}`}>
                 <span className="grid size-4 shrink-0 place-items-center rounded-full bg-violet-100 text-[9px] font-bold text-violet-700">{index + 1}</span>
-                <span className={cn(compact && "line-clamp-2")}>{recommendation}</span>
+                <span>{recommendation}</span>
               </div>
             ))}
           </div>
@@ -127,6 +140,24 @@ export function ReflectionSummarySidebar({ course, compact = false }: Props) {
           {errorMessage ?? "提交率达到档位并满足样本要求后，这里会自动生成全班课程总结与教学改进建议。"}
         </div>
       )}
+      <Dialog onOpenChange={setDetailsOpen} open={detailsOpen}>
+        <DialogContent className="max-h-[88vh] w-[min(720px,calc(100vw-24px))] max-w-none overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>AI 课程总结与教学建议</DialogTitle>
+            <DialogDescription>基于“{course.name}”当前已提交的有效学习反思生成。</DialogDescription>
+          </DialogHeader>
+          {summary ? <div className="space-y-4">
+            <div className="rounded-xl border border-violet-100 bg-violet-50/65 px-4 py-3 text-violet-950">
+              <div className="flex items-start gap-2"><Sparkles className="mt-1 shrink-0 text-violet-700" size={15} /><p className="whitespace-pre-wrap break-words text-sm font-semibold leading-6">{summary.courseSummary}</p></div>
+              <p className="mt-2 text-[11px] text-violet-700">覆盖 {summary.responseCount}/{summary.totalStudentCount} 人 · {new Date(summary.generatedAt).toLocaleString("zh-CN")}</p>
+            </div>
+            <div className="space-y-2">
+              <h4 className="text-xs font-black text-stone-900">全部教学建议（{summary.teachingRecommendations.length}）</h4>
+              {summary.teachingRecommendations.length ? summary.teachingRecommendations.map((recommendation, index) => <div className="flex items-start gap-2 rounded-lg border border-stone-200 bg-white px-3 py-3" key={`${recommendation}-${index}`}><span className="grid size-5 shrink-0 place-items-center rounded-full bg-violet-100 text-[10px] font-black text-violet-700">{index + 1}</span><p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-5 text-stone-700">{recommendation}</p></div>) : <div className="rounded-lg border border-dashed border-stone-200 bg-stone-50/70 px-3 py-3 text-center text-xs text-stone-500">暂无建议</div>}
+            </div>
+          </div> : null}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

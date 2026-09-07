@@ -84,6 +84,61 @@ describe("realtime WebSocket authorization", () => {
       code: "COURSE_FORBIDDEN",
     });
   });
+
+  it("fans one projection control event out to more than 30 students within two seconds", async () => {
+    const server = startWebSocketServer(0);
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing WebSocket port");
+
+    const sockets = await Promise.all(Array.from({ length: 36 }, async (_, index) => {
+      const { token, cookieName } = await signStudentToken({
+        courseId: "course-large-class",
+        studentId: `student-${index + 1}`,
+        studentName: `Student ${index + 1}`,
+        sessionVersion: 1,
+      });
+      const socket = new WebSocket(
+        `ws://127.0.0.1:${address.port}/ws?role=student`,
+        { headers: { Cookie: `${cookieName}=${encodeURIComponent(token)}` } },
+      );
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+      const subscribed = waitForMessage(socket, "subscribed");
+      socket.send(JSON.stringify({ type: "subscribe", courseId: "course-large-class" }));
+      await subscribed;
+      return socket;
+    }));
+
+    const deliveries = sockets.map((socket) => waitForMessage(socket, "course-event"));
+    const startedAt = performance.now();
+    await publishCourseEvent("course-large-class", {
+      type: "projection-changed",
+      courseId: "course-large-class",
+      at: "2026-09-07T08:00:00.000Z",
+      payload: {
+        actionType: "SET_UI_STATE",
+        resourceProjection: {
+          resourceId: "video-1",
+          stageKey: "launch",
+          title: "Video",
+          startedAt: "2026-09-07T08:00:00.000Z",
+          viewState: { mediaTime: 12, mediaPlaying: true, revision: 2 },
+        },
+      },
+    });
+    const received = await Promise.all(deliveries);
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(received).toHaveLength(36);
+    expect(received.every((message) => (
+      message.event as { type?: string } | undefined
+    )?.type === "projection-changed")).toBe(true);
+    expect(elapsedMs).toBeLessThan(2_000);
+    for (const socket of sockets) socket.close();
+  }, 10_000);
 });
 
 function waitForMessage(

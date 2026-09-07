@@ -114,6 +114,14 @@ function latestTimestamp(values: Array<string | undefined>): string {
   return values.filter((value): value is string => Boolean(value)).sort().at(-1) ?? "";
 }
 
+function latestExternalVersion(versions: ProjectPdfVersion[]): ProjectPdfVersion | undefined {
+  return versions.reduce<ProjectPdfVersion | undefined>((latest, version) => {
+    if (!latest) return version;
+    if (version.sequence !== latest.sequence) return version.sequence > latest.sequence ? version : latest;
+    return version.createdAt > latest.createdAt ? version : latest;
+  }, undefined);
+}
+
 export function AiCollaborationTeacherMonitor({ course, focus }: { course: Course; focus?: Extract<TeacherStageFocus, { stageKey: "make" }> }) {
   const artifactMode = normalizePblCourseConfig(course.pblConfig).makeArtifactMode;
   const isNewSystem = inferStageCollectionMode(course.stages) === "new";
@@ -234,7 +242,7 @@ export function AiCollaborationTeacherMonitor({ course, focus }: { course: Cours
                 >
                   <div className="flex items-center justify-between gap-2"><span className="truncate font-semibold text-stone-900">{row.student.name}</span><span className="text-[11px] font-black tabular-nums text-stone-500">{row.completion}%</span></div>
                   <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-stone-100"><span className={cn("block h-full rounded-full", row.completion === 100 ? "bg-emerald-500" : row.signals.length ? "bg-amber-500" : "bg-blue-500")} style={{ width: `${row.completion}%` }} /></div>
-                  <div className="mt-2 flex min-w-0 items-center justify-between gap-2"><p className="truncate text-[11px] text-[var(--pbl-text-muted)]">{row.artifact?.title ?? "尚未形成成果"}</p>{row.signals.length ? <Pill size="sm" tone="red">需关注</Pill> : <Pill size="sm" tone={row.submitted ? "green" : "gray"}>{row.submitted ? "已提交" : "未提交"}</Pill>}</div>
+                  <div className="mt-2 flex min-w-0 items-center justify-between gap-2"><p className="truncate text-[11px] text-[var(--pbl-text-muted)]">{row.artifact?.title ?? latestExternalVersion(row.externalVersions)?.title ?? "尚未形成成果"}</p>{row.signals.length ? <Pill size="sm" tone="red">需关注</Pill> : <Pill size="sm" tone={row.submitted ? "green" : "gray"}>{row.submitted ? "已提交" : "未提交"}</Pill>}</div>
                   {isNewSystem ? <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-stone-400"><span>AI 对话 {row.dialogueRounds} 轮</span><span>{row.updatedAt ? `更新 ${new Date(row.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "暂无更新"}</span></div> : null}
                 </button>
               ))}
@@ -300,7 +308,8 @@ function ArtifactPreview({
           <Pill tone="blue"><Bot size={13} />AI 主动建议 {metrics.proactiveSuggestions}</Pill>
           <Pill tone="gray"><MessageSquareText size={13} />学生对话 {metrics.dialogueRounds} 轮</Pill>
           <Pill tone={metrics.boundaryTriggers ? "red" : "green"}><ShieldAlert size={13} />边界触发 {metrics.boundaryTriggers} 次</Pill>
-          {artifactMode === "other" ? <Pill tone={externalVersions.some((version) => version.status === "submitted") ? "green" : "gray"}>已上传 {externalVersions.length} 版</Pill> : documentVersions?.length ? <Pill tone="green">已提交 {documentVersions.filter((version) => version.status === "submitted").length} 版</Pill> : null}
+          {externalVersions.length ? <Pill tone={externalVersions.some((version) => version.status === "submitted") ? "green" : "gray"}>本地成果 {externalVersions.filter((version) => version.status === "submitted").length} 版</Pill> : null}
+          {documentVersions?.length ? <Pill tone="green">Word 成果 {documentVersions.filter((version) => version.status === "submitted").length} 版</Pill> : null}
           <a className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:border-blue-300 hover:text-blue-700" download href={`/api/project-practice/export?courseId=${encodeURIComponent(courseId)}&studentId=${encodeURIComponent(studentId)}`}><Download size={13} />导出该生 JSON</a>
         </div>
       </div>
@@ -332,7 +341,7 @@ function ArtifactPreview({
           })}</ul>
         </section>
       ) : null}
-      {artifactMode === "other" && externalVersions.length ? (
+      {externalVersions.length ? (
         <section className="mt-4 rounded-xl border border-[var(--pbl-student-border)] bg-[color-mix(in_srgb,var(--pbl-student-soft)_28%,white)] p-4" id={`practice-upload-${studentId}`}>
           <div className="flex items-center justify-between gap-3"><h4 className="flex items-center gap-2 text-sm font-bold text-[var(--pbl-text-strong)]"><FolderDown size={16} />学生上传的本地成果版本</h4><span className="text-[10px] text-[var(--pbl-text-muted)]">只收集文件信息，不解析内容</span></div>
           <ul className="mt-3 space-y-2">{[...externalVersions].sort((left, right) => right.sequence - left.sequence).map((version) => { const name = version.title; const lower = name.toLocaleLowerCase(); const openable = lower.endsWith(".pdf") || lower.endsWith(".doc") || lower.endsWith(".docx"); const url = `/api/uploads/${encodeURIComponent(version.uploadId)}`; return <li className="flex flex-col gap-2 rounded-lg border border-[var(--pbl-student-border)]/70 bg-white px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between" key={version.id}><div className="min-w-0"><strong className="block truncate text-xs text-stone-900">第 {version.sequence} 版 · {name}</strong><span className="mt-0.5 block text-[10px] text-stone-500">{version.mimeType || "成果文件"}{version.size ? ` · ${(version.size / (1024 * 1024)).toFixed(1)} MB` : ""} · {new Date(version.submittedAt).toLocaleString("zh-CN")} · {openable ? "可打开查看" : "暂不支持在线预览"}</span></div><div className="flex shrink-0 items-center gap-2">{openable ? <a className="rounded-lg border border-[var(--pbl-student-border)] px-3 py-1.5 text-xs font-semibold text-[var(--pbl-student)] hover:bg-[var(--pbl-student-soft)]" href={url} rel="noreferrer" target="_blank">打开</a> : null}<a className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--pbl-student)] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[var(--pbl-student-hover)]" download href={`${url}?download=1`}><Download size={13} />下载</a></div></li>; })}</ul>
