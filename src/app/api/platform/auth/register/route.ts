@@ -29,8 +29,7 @@ export async function POST(request: Request) {
   try {
     const result = await registerStudent(parsed.data);
     await resetDistributedRateLimit("platform-register", limitKey);
-    const legacyCourseId = result.offering.legacyCourseId ?? "";
-    return Response.json({ user: { id: result.user.id, username: result.user.username, displayName: result.user.displayName, role: "student" }, enrollment: { id: result.enrollment.id, offeringId: result.enrollment.offeringId }, offeringId: result.offering.id }, { status: 201, headers: { "Set-Cookie": await studentCookieHeader({ userId: result.user.id, studentName: result.user.displayName, courseId: legacyCourseId, sessionVersion: result.user.sessionVersion }), "Cache-Control": "no-store" } });
+    return Response.json({ user: { id: result.user.id, username: result.user.username, displayName: result.user.displayName, role: "student" }, enrollment: { id: result.enrollment.id, offeringId: result.enrollment.offeringId }, offeringId: result.offering.id }, { status: 201, headers: { "Set-Cookie": await studentCookieHeader({ userId: result.user.id, studentName: result.user.displayName, sessionVersion: result.user.sessionVersion }), "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof PlatformError) return jsonError(request, error.code, error.message, error.status, error.details);
     if (error instanceof Error && error.message.includes("Unique constraint")) return jsonError(request, "USERNAME_TAKEN", "登录账号已存在", 409);

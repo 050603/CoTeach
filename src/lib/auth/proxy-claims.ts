@@ -28,10 +28,5 @@ export function hasValidProxyAuthClaims(
       typeof payload.displayName === "string"
     );
   }
-  return (
-    typeof payload.courseId === "string" &&
-    typeof payload.studentId === "string" &&
-    payload.studentId === payload.sub &&
-    typeof payload.studentName === "string"
-  );
+  return typeof payload.userId === "string" && payload.userId === payload.sub && typeof payload.studentName === "string";
 }

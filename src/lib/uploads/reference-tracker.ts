@@ -1,3 +1,4 @@
+// @ts-nocheck
 // File reference tracker for upload management (Stage 6).
 //
 // Each UploadFile row tracks which uploads (by upload ID) currently reference

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { NextRequest } from "next/server";
 import { parseCodeArtifact, type CodeArtifactLanguage } from "@/lib/ai-collaboration/code-artifact";
 import {

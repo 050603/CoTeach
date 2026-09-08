@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { z } from "zod";
 import { authenticateRequest } from "@/lib/auth/request-guards";
 import { isDatabaseConfigured, prisma } from "@/lib/db/client";

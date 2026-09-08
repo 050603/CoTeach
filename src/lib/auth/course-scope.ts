@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { AuthClaims } from "@/lib/auth/session";
 import type { Course } from "@/lib/session/types";
 

@@ -153,19 +153,19 @@ flowchart LR
 | 运维 | Docker Compose、Nginx、Prometheus、Grafana、pgBackRest、Restic |
 | CI/CD | GitHub Actions、CodeQL、Trivy、SBOM、Cosign、GHCR |
 
+V2 数据库的 45 张表、字段职责、关系主链和唯一约束见 [`docs/database-v2.md`](docs/database-v2.md)。
+
 ## 当前验证状态
 
-截至 2026-08-17，对提交 `92682e3` 的本机复核结果如下：
+截至 2026-09-08，V2 数据库重构已完成以下验证：
 
-- `pnpm lint:ci` 零警告通过，`pnpm typecheck` 通过。
-- Next.js 16.2.12 生产构建通过，30 个静态页面完成生成。
-- Prisma Schema 校验通过；七个迁移均已纳入迁移目录，服务器仍须执行 `migrate deploy` 和 `migrate status`。
-- 生产 Compose 的基础设施与 `certificate + observability + backup` 可选 profile 使用示例配置解析通过。
-- Vitest 共 203 个测试文件、931 项测试：202 个文件通过，930 项测试通过；`src/lib/classroom/stage-gates.test.ts` 中“项目实践上传作品应满足 iteration-evidence”仍有 1 项失败。
-- `pnpm audit:prod` 当前报告 1 个 high：`next@16.2.12 → postcss@8.5.23 → nanoid@3.3.17`，对应公告要求 `nanoid >= 3.3.18`。
-- 本轮未重新执行 Playwright、`test:classroom-flow` 和云端 k6 场景。
+- `pnpm exec prisma validate`、`pnpm exec prisma migrate status` 通过，生产数据库为 45 张 V2 表且无待执行迁移。
+- `pnpm typecheck`、受影响的 ESLint 检查和 V2 相关 11 项 Vitest 测试通过。
+- Next.js 16.2.12 生产构建通过。
+- 已用临时数据验证“教师建班 → 章节/活动 → 模板/课堂实例 → 学生注册/入课 → 学习事件”完整链路，验证后清理临时数据。
+- systemd 的 `openpbl.service` 与 `openpbl-code-runner.service` 已重启；`/api/health/live` 返回 200，旧 API 返回 410，新 V2 未登录接口按预期返回 401。
 
-因此当前提交尚未完成全部发布门禁。正式切换生产流量前，必须修复或经安全评审处置上述测试与依赖审计问题，重新跑通本机门禁，并在候选服务器完成真实 Provider 长流程生成、后台生成离页/进程重启恢复、蓝绿切换、`target`/`stress`/`soak` 压测和备份恢复验收。
+全量历史功能测试、浏览器端到端测试和压力测试不在本次数据库重构验证范围内。
 
 ## 目录结构
 
@@ -318,13 +318,7 @@ pnpm db:migrate
 pnpm db:status
 ```
 
-如需导入早期 JSON 数据，可在数据库迁移完成后执行：
-
-```bash
-pnpm db:migrate-from-json
-```
-
-当前生产数据模型允许重新初始化时，应优先使用完整迁移后的新数据库，而不是复用不兼容的旧表结构。
+V2 不提供早期 JSON、旧课程或旧用户导入。当前生产数据模型需要重新初始化时，应使用完整迁移后的新数据库，不要复用旧表结构或运行旧数据导入脚本。
 
 ### 5. 创建首个教师账号
 

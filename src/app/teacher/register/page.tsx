@@ -41,7 +41,7 @@ export default function TeacherRegisterPage() {
 
   useEffect(() => {
     let cancelled = false;
-    void fetch("/api/auth/register", { cache: "no-store" })
+    void fetch("/api/platform/auth/teacher-register", { cache: "no-store" })
       .then(async (response) => {
         const body = (await response.json().catch(() => null)) as
           | {
@@ -83,7 +83,7 @@ export default function TeacherRegisterPage() {
     }
     setSubmitting(true);
     try {
-      const response = await fetch("/api/auth/register", {
+      const response = await fetch("/api/platform/auth/teacher-register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

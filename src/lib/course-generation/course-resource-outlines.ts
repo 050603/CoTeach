@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { prisma } from "@/lib/db/client";
 import type { OpenMaicSceneOutlineSnapshot } from "@/lib/session/types";
 

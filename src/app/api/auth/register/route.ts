@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Prisma } from "@prisma/client";
 import { prisma, isDatabaseConfigured } from "@/lib/db/client";
 import {

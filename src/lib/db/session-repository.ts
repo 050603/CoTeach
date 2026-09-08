@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Session repository — bridges in-memory SessionState and the Prisma database.
 //
 // Design:

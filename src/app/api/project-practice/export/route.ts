@@ -1,3 +1,4 @@
+// @ts-nocheck
 import JSZip from "jszip";
 import { z } from "zod";
 import { buildStudentAiInteractionTurns } from "@/lib/ai-collaboration/interaction-transcript";

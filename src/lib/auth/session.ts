@@ -1,7 +1,7 @@
 // JWT-based session management (httpOnly cookie).
 // Uses `jose` library for Edge-compatible JWT sign/verify.
 // Teacher JWT: 7-day expiry, payload { sub, role: "teacher", username, displayName }
-// Student JWT: 1-day expiry, payload { sub, role: "student", courseId, studentId, studentName }
+// Student JWT: 1-day expiry, payload { sub, role: "student", userId, studentName }
 
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
 
@@ -25,11 +25,13 @@ export interface TeacherClaims extends JWTPayload {
 
 export interface StudentClaims extends JWTPayload {
   role: "student";
-  /** Unified platform user id. Legacy sessions omit it and use sub. */
+  /** Unified V2 user id. The subject is the canonical identity. */
   userId?: string;
-  courseId: string;
-  studentId: string;
   studentName: string;
+  /** @deprecated Retained only so retired modules can be type-checked; V2 tokens never emit it. */
+  studentId?: string;
+  /** @deprecated Retained only so retired modules can be type-checked; V2 tokens never emit it. */
+  courseId?: string;
   sv: number;
 }
 
@@ -74,22 +76,23 @@ export async function signTeacherToken(payload: {
 
 export async function signStudentToken(payload: {
   userId?: string;
-  courseId: string;
-  studentId: string;
+  /** @deprecated input-only compatibility for tests; never persisted in the token. */
+  studentId?: string;
+  /** @deprecated input-only compatibility for old callers; never persisted in the token. */
+  courseId?: string;
   studentName: string;
   sessionVersion: number;
 }): Promise<{ token: string; cookieName: string; maxAge: number }> {
-  const unifiedIdentity = payload.userId ? { userId: payload.userId } : {};
+  const userId = payload.userId ?? payload.studentId;
+  if (!userId) throw new Error("Student token requires userId");
   const token = await new SignJWT({
     role: "student",
-    ...unifiedIdentity,
-    courseId: payload.courseId,
-    studentId: payload.studentId,
+    userId,
     studentName: payload.studentName,
     [SESSION_VERSION_CLAIM]: payload.sessionVersion,
   })
     .setProtectedHeader({ alg: ALGORITHM, typ: "JWT" })
-    .setSubject(payload.studentId)
+    .setSubject(userId)
     .setIssuedAt()
     .setIssuer(ISSUER)
     .setAudience(AUDIENCE)
@@ -120,16 +123,7 @@ export async function verifyToken(token: string): Promise<AuthClaims | null> {
     ) {
       return null;
     }
-    if (
-      payload.role === "student" &&
-      (typeof payload.courseId !== "string" ||
-        typeof payload.studentId !== "string" ||
-        payload.studentId !== payload.sub ||
-        typeof payload.studentName !== "string")
-    ) {
-      return null;
-    }
-    if (payload.role === "student" && payload.userId !== undefined && typeof payload.userId !== "string") {
+    if (payload.role === "student" && (typeof payload.userId !== "string" || payload.userId !== payload.sub || typeof payload.studentName !== "string")) {
       return null;
     }
     return payload as AuthClaims;

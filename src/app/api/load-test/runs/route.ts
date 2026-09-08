@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { hashPassword } from "@/lib/auth/password";

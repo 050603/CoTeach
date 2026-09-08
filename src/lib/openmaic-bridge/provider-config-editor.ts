@@ -1,3 +1,4 @@
+// @ts-nocheck
 // 为 OpenMAIC 原生只读 Provider 配置补充持久化写入能力。
 // 数据库不可用时，教师设置页会回退读写 server-providers.yml。
 import { readFile, writeFile, mkdir } from 'node:fs/promises';

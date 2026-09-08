@@ -22,7 +22,7 @@ export default function TeacherLoginPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const res = await fetch("/api/auth/login", {
+      const res = await fetch("/api/platform/auth/teacher-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: username.trim(), password }),

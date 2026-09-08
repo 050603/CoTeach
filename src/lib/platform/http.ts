@@ -6,16 +6,12 @@ import {
 
 export function studentCookieHeader(input: {
   userId: string;
-  studentId?: string;
   studentName: string;
-  courseId?: string;
   sessionVersion: number;
 }): Promise<string> {
   return signStudentToken({
     userId: input.userId,
-    studentId: input.studentId ?? input.userId,
     studentName: input.studentName,
-    courseId: input.courseId ?? "",
     sessionVersion: input.sessionVersion,
   }).then(({ token, maxAge }) => {
     const cookie = getAuthCookieOptions(maxAge);
@@ -26,4 +22,3 @@ export function studentCookieHeader(input: {
 export function jsonError(request: Request, code: string, message: string, status: number, details?: unknown): Response {
   return Response.json({ code, message, requestId: request.headers.get("x-request-id") ?? "unknown", ...(details === undefined ? {} : { details }) }, { status });
 }
-

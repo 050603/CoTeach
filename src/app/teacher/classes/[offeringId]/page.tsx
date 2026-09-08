@@ -11,7 +11,7 @@ type Instance = {
   id: string;
   status: string;
   templateVersionId: string;
-  legacyCourseId: string | null;
+  templateId?: string | null;
   startedAt: string | null;
   endedAt: string | null;
 };
@@ -168,7 +168,7 @@ export default function TeacherClassEditorPage() {
   }
 
   const readyTemplates = useMemo(
-    () => templates.filter((template) => template.versions.some((version) => version.status === "ready")),
+    () => templates.filter((template) => template.versions.some((version) => ["ready", "published", "PUBLISHED", "active", "ACTIVE"].includes(version.status))),
     [templates],
   );
 

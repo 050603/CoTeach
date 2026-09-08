@@ -14,7 +14,6 @@ import {
 import { DashboardShell } from "@/components/dashboard-shell";
 import { JoinClassForm } from "@/components/join-class-form";
 import { useSession, useHydrated } from "@/lib/session/store";
-import { clientUUID } from "@/lib/uuid";
 
 type PlatformCourse = {
   id: string;
@@ -27,12 +26,13 @@ type PlatformCourse = {
 
 export default function StudentEntryPage() {
   const router = useRouter();
-  const { joinClass, rejoinClass, user, studentName, joinedCourseId, courses, getLeftClassHistory, refresh } = useSession();
+  const { rejoinClass, user, studentName, joinedCourseId, courses, getLeftClassHistory } = useSession();
   const hydrated = useHydrated();
   const [error, setError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [platformCourses, setPlatformCourses] = useState<PlatformCourse[]>([]);
   const [platformReady, setPlatformReady] = useState(false);
+  const [platformAuthenticated, setPlatformAuthenticated] = useState(false);
   const [platformInvite, setPlatformInvite] = useState("");
   const [platformInviteError, setPlatformInviteError] = useState<string | null>(null);
   const [platformInviteBusy, setPlatformInviteBusy] = useState(false);
@@ -42,18 +42,14 @@ export default function StudentEntryPage() {
     let active = true;
     fetch("/api/platform/courses", { cache: "no-store" })
       .then(async (response) => {
-        if (!response.ok) return;
-        const data = (await response.json()) as { courses?: PlatformCourse[] };
+        const data = response.ok ? (await response.json()) as { courses?: PlatformCourse[] } : {};
         if (active) {
           setPlatformCourses(data.courses ?? []);
-          // An authenticated account with zero enrollments still belongs on
-          // the long-lived "我的课程" page so it can join another class. The
-          // legacy join form is only the fallback when this platform API is
-          // unavailable or the visitor is not signed in.
+          setPlatformAuthenticated(response.ok);
           setPlatformReady(true);
         }
       })
-      .catch(() => undefined);
+      .catch(() => { if (active) setPlatformReady(true); });
     return () => { active = false; };
   }, [hydrated]);
 
@@ -63,44 +59,20 @@ export default function StudentEntryPage() {
 
   const leftHistory = hydrated ? getLeftClassHistory() : [];
 
-  async function handleJoin(code: string, name: string) {
+  async function handleJoin(code: string) {
     setError(undefined);
     setBusy(true);
     try {
-      const response = await fetch("/api/auth/join", {
+      const response = await fetch("/api/platform/auth/invite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          requestId: clientUUID(),
-          inviteCode: code,
-          studentName: name,
-        }),
+        body: JSON.stringify({ code }),
       });
       const data = (await response.json().catch(() => ({}))) as {
-        error?: string;
         message?: string;
-        user?: { courseId?: string };
       };
-      if (response.ok && data.user?.courseId) {
-        await refresh("student");
-        router.replace(`/student/classroom/${data.user.courseId}`);
-        return;
-      }
-      if (data.error !== "AUTH_NOT_CONFIGURED") {
-        setError(
-          data.error === "INVITE_CODE_INVALID"
-            ? "邀请码无效，或教师尚未开始授课"
-            : data.message ?? "加入失败，请稍后重试",
-        );
-        return;
-      }
-
-      const result = joinClass(code, name);
-      if (!result.ok) {
-        setError(result.reason);
-        return;
-      }
-      router.replace(`/student/classroom/${result.course.id}`);
+      if (!response.ok) { setError(data.message ?? "邀请码无效，或教学班尚未开放"); return; }
+      router.push(`/student/register?code=${encodeURIComponent(code.trim().toUpperCase())}`);
     } catch (error) {
       console.error("[student] join failed:", error);
       setError("网络异常，请稍后重试");
@@ -125,9 +97,10 @@ export default function StudentEntryPage() {
     if (!platformInvite.trim() || platformInviteBusy) return;
     setPlatformInviteBusy(true); setPlatformInviteError(null);
     try {
-      const response = await fetch("/api/platform/auth/join", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ invitationCode: platformInvite }) });
+      const response = await fetch(platformAuthenticated ? "/api/platform/auth/join" : "/api/platform/auth/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(platformAuthenticated ? { invitationCode: platformInvite } : { code: platformInvite }) });
       const data = await response.json();
       if (!response.ok) { setPlatformInviteError(data.message ?? "邀请码无效"); return; }
+      if (!platformAuthenticated) { router.push(`/student/register?code=${encodeURIComponent(platformInvite.trim().toUpperCase())}`); return; }
       const refreshed = await fetch("/api/platform/courses", { cache: "no-store" });
       if (refreshed.ok) setPlatformCourses((await refreshed.json()).courses ?? []);
       setPlatformInvite("");
@@ -287,7 +260,7 @@ export default function StudentEntryPage() {
 }
 
 function PlatformCourseHome({ courses, inviteCode, inviteError, inviteBusy, onInviteCodeChange, onJoin }: { courses: PlatformCourse[]; inviteCode: string; inviteError: string | null; inviteBusy: boolean; onInviteCodeChange: (value: string) => void; onJoin: () => void }) {
-  return <main className="min-h-screen bg-[var(--pbl-bg)] px-5 py-10 text-[var(--pbl-text)]"><div className="mx-auto max-w-4xl"><div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">学生学习空间</p><h1 className="mt-2 text-3xl font-bold">我的课程</h1><p className="mt-2 text-sm text-[var(--pbl-text-muted)]">登录后继续跨章节、跨课堂的学习进度。</p></div><Link className="text-sm text-[var(--pbl-text-muted)]" href="/student">返回学生入口</Link></div>{courses.length ? <div className="mt-8 grid gap-4 md:grid-cols-2">{courses.map((course) => { const activities = course.chapters.flatMap((chapter) => chapter.activities).filter((activity) => activity.type === "Classroom"); const completed = activities.filter((activity) => activity.progress.status === "completed").length; return <Link className="rounded-xl border border-[var(--pbl-border)] bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-300" href={`/student/courses/${course.id}`} key={course.id}><div className="flex items-start justify-between gap-3"><h2 className="font-bold">{course.name}</h2><span className="text-xs font-semibold text-emerald-600">{course.status === "finished" ? "已结课" : "进行中"}</span></div><p className="mt-2 text-xs text-[var(--pbl-text-muted)]">{course.term ?? "教学班"} · {course.teacher.displayName}</p><div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-indigo-500" style={{ width: `${activities.length ? completed / activities.length * 100 : 0}%` }} /></div><p className="mt-2 text-xs text-[var(--pbl-text-muted)]">{activities.length ? `${completed}/${activities.length} 个课堂活动已完成` : "暂无可统计课堂活动"}</p></Link>; })}</div> : <p className="mt-8 rounded-xl border border-dashed border-[var(--pbl-border)] bg-white p-8 text-sm text-[var(--pbl-text-muted)]">你还没有加入教学班，请输入教师提供的邀请码。</p>}<section className="mt-8 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/60 p-5"><h2 className="font-bold">加入另一个教学班</h2><div className="mt-3 flex flex-wrap gap-2"><input className="min-h-10 min-w-60 flex-1 rounded-lg border border-indigo-200 bg-white px-3 text-sm uppercase" value={inviteCode} onChange={(event) => onInviteCodeChange(event.target.value.toUpperCase())} placeholder="输入课程邀请码" /><button className="min-h-10 rounded-lg bg-indigo-600 px-4 text-sm font-bold text-white disabled:opacity-50" disabled={inviteBusy} onClick={onJoin} type="button">{inviteBusy ? "加入中…" : "加入课程"}</button></div>{inviteError ? <p className="mt-2 text-sm text-rose-700">{inviteError}</p> : null}</section></div></main>;
+  return <main className="min-h-screen bg-[var(--pbl-bg)] px-5 py-10 text-[var(--pbl-text)]"><div className="mx-auto max-w-4xl"><div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">学生学习空间</p><h1 className="mt-2 text-3xl font-bold">我的课程</h1><p className="mt-2 text-sm text-[var(--pbl-text-muted)]">登录后继续跨章节、跨课堂的学习进度。</p></div><div className="flex gap-3 text-sm"><Link className="text-indigo-600" href="/student/login">学生登录</Link><Link className="text-indigo-600" href="/student/register">使用邀请码注册</Link></div></div>{courses.length ? <div className="mt-8 grid gap-4 md:grid-cols-2">{courses.map((course) => { const activities = course.chapters.flatMap((chapter) => chapter.activities).filter((activity) => activity.type === "Classroom"); const completed = activities.filter((activity) => activity.progress.status === "completed").length; return <Link className="rounded-xl border border-[var(--pbl-border)] bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-300" href={`/student/courses/${course.id}`} key={course.id}><div className="flex items-start justify-between gap-3"><h2 className="font-bold">{course.name}</h2><span className="text-xs font-semibold text-emerald-600">{course.status === "finished" ? "已结课" : "进行中"}</span></div><p className="mt-2 text-xs text-[var(--pbl-text-muted)]">{course.term ?? "教学班"} · {course.teacher.displayName}</p><div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-indigo-500" style={{ width: `${activities.length ? completed / activities.length * 100 : 0}%` }} /></div><p className="mt-2 text-xs text-[var(--pbl-text-muted)]">{activities.length ? `${completed}/${activities.length} 个课堂活动已完成` : "暂无可统计课堂活动"}</p></Link>; })}</div> : <p className="mt-8 rounded-xl border border-dashed border-[var(--pbl-border)] bg-white p-8 text-sm text-[var(--pbl-text-muted)]">你还没有加入教学班，请输入教师提供的邀请码。</p>}<section className="mt-8 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/60 p-5"><h2 className="font-bold">加入另一个教学班</h2><div className="mt-3 flex flex-wrap gap-2"><input className="min-h-10 min-w-60 flex-1 rounded-lg border border-indigo-200 bg-white px-3 text-sm uppercase" value={inviteCode} onChange={(event) => onInviteCodeChange(event.target.value.toUpperCase())} placeholder="输入课程邀请码" /><button className="min-h-10 rounded-lg bg-indigo-600 px-4 text-sm font-bold text-white disabled:opacity-50" disabled={inviteBusy} onClick={onJoin} type="button">{inviteBusy ? "加入中…" : "加入课程"}</button></div>{inviteError ? <p className="mt-2 text-sm text-rose-700">{inviteError}</p> : null}</section></div></main>;
 }
 
 /* ===== 子组件 ===== */

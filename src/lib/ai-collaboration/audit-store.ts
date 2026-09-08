@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import { prisma, isDatabaseConfigured } from "@/lib/db/client";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";

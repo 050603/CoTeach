@@ -73,6 +73,30 @@ function readCookie(req: NextRequest, name: string): string | undefined {
 }
 
 export async function proxy(req: NextRequest) {
+  // V2 is a clean API boundary. Legacy routes are intentionally retired so
+  // they cannot accidentally write to the new canonical tables.
+  const retiredApi = [
+    "/api/auth",
+    "/api/adaptive-learning",
+    "/api/ai-collaboration",
+    "/api/ai",
+    "/api/chat",
+    "/api/courses",
+    "/api/knowledge-lecture",
+    "/api/llm",
+    "/api/load-test",
+    "/api/openmaic",
+    "/api/uploads",
+    "/api/project-practice",
+    "/api/server-providers",
+    "/api/teaching-ai",
+    "/api/learning-events",
+    "/api/teacher-directives",
+  ];
+  const isInteractiveRuntime = req.nextUrl.pathname.startsWith("/api/openmaic/interactive-runtime/");
+  if (!isInteractiveRuntime && retiredApi.some((prefix) => req.nextUrl.pathname === prefix || req.nextUrl.pathname.startsWith(`${prefix}/`))) {
+    return NextResponse.json({ code: "V2_ROUTE_REQUIRED", message: "该接口已停用，请使用 V2 接口" }, { status: 410 });
+  }
   const secret = getSecret();
   // Demo mode: skip auth
   if (!secret) return NextResponse.next();
@@ -135,6 +159,8 @@ export async function proxy(req: NextRequest) {
       pathname === "/api/platform/auth/invite" ||
       pathname === "/api/platform/auth/register" ||
       pathname === "/api/platform/auth/login" ||
+      pathname === "/api/platform/auth/teacher-login" ||
+      pathname === "/api/platform/auth/teacher-register" ||
       pathname === "/api/platform/auth/reset-password" ||
       pathname === "/api/health/live" ||
       // Sandboxed srcdoc iframes have an opaque origin and cannot reliably

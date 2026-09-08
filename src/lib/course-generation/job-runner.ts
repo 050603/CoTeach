@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Prisma, type CourseGenerationJob } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";

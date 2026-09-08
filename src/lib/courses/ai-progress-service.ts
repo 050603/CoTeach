@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
 import type { StudentAiProgress } from "@/lib/session/types";

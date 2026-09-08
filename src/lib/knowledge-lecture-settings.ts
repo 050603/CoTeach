@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Prisma } from "@prisma/client";

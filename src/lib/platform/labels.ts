@@ -3,6 +3,10 @@ const OFFERING_STATUS_LABELS: Record<string, string> = {
   open: "开放",
   finished: "已结课",
   archived: "已归档",
+  DRAFT: "草稿",
+  OPEN: "开放",
+  FINISHED: "已结课",
+  ARCHIVED: "已归档",
 };
 
 const ACTIVITY_TYPE_LABELS: Record<string, string> = {
@@ -11,6 +15,11 @@ const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   Quiz: "测验",
   Form: "表单",
   Resource: "资源",
+  CLASSROOM: "课堂",
+  ASSIGNMENT: "作业",
+  QUIZ: "测验",
+  FORM: "表单",
+  RESOURCE: "资源",
 };
 
 const INSTANCE_STATUS_LABELS: Record<string, string> = {
@@ -18,18 +27,29 @@ const INSTANCE_STATUS_LABELS: Record<string, string> = {
   teaching: "进行中",
   finished: "已结束",
   archived: "已归档",
+  SCHEDULED: "待开始",
+  TEACHING: "进行中",
+  FINISHED: "已结束",
+  ARCHIVED: "已归档",
 };
 
 const TEMPLATE_VERSION_STATUS_LABELS: Record<string, string> = {
   draft: "草稿",
   ready: "已就绪",
   archived: "已归档",
+  DRAFT: "草稿",
+  PUBLISHED: "已发布",
+  ACTIVE: "使用中",
+  ARCHIVED: "已归档",
 };
 
 const PROGRESS_STATUS_LABELS: Record<string, string> = {
   not_started: "未开始",
   in_progress: "进行中",
   completed: "已完成",
+  NOT_STARTED: "未开始",
+  IN_PROGRESS: "进行中",
+  COMPLETED: "已完成",
 };
 
 export function offeringStatusLabel(status: string): string {

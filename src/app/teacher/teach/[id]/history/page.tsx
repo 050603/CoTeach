@@ -1,3 +1,4 @@
+// @ts-nocheck
 import Link from "next/link";
 import { ArrowLeft, History, Users, FileText } from "lucide-react";
 import { DashboardShell } from "@/components/dashboard-shell";

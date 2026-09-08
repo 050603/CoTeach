@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";

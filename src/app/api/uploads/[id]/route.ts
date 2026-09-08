@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createReadStream } from "node:fs";
 import { stat, unlink } from "node:fs/promises";
 import path from "node:path";

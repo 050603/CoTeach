@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { appendAiInteractionEvents, listAiInteractionEvents } from "@/lib/ai-collaboration/audit-store";

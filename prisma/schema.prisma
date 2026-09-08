@@ -1,17 +1,10 @@
-// OpenPBL Prisma schema
-// Replaces the single JSON file (.openpbl-data/session.json) with PostgreSQL.
-//
-// Design strategy (hybrid relational + JSONB):
-// - Top-level frequently-queried entities get their own tables (Student, ClassroomSubmission,
-//   LearningEvent, CompanionThread, CourseUpload, CourseSession, etc.) for indexing & queries.
-// - Complex nested structures use JSONB columns on the parent table to avoid over-normalisation
-//   (e.g. Course.content, Course.pblConfig, Course.uiState, CompanionThread.messages, GroupBoard.snapshot).
-// - Every table has a `version` column for optimistic locking (compare-and-swap on update).
+// openPBL V2 database schema.
+// This schema intentionally has no Legacy/compatibility models. The V2 data
+// model is rebuilt from scratch around CourseOffering, Activity, ClassroomInstance,
+// ClassroomParticipation and LearningEvent.
 
 generator client {
   provider   = "prisma-client-js"
-  // OpenPBL connects directly to PostgreSQL. Keep a local Node-API engine even
-  // when the parent shell happens to define PRISMA_GENERATE_NO_ENGINE.
   engineType = "library"
 }
 
@@ -20,1276 +13,163 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ============================================================================
-// Course — main aggregate root
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Identity and authentication
+// ---------------------------------------------------------------------------
 
-model Course {
-  id                            String  @id @default(uuid())
-  name                          String
-  subject                       String
-  grade                         String
-  hours                         Int
-  summary                       String  @db.Text
-  drivingQuestion               String  @db.Text
-  learningObjectives            Json?
-  expectedOutcome               String? @db.Text
-  learnerProfile                Json?
-  status                        String  @default("draft") // draft | preparing | ready | teaching | finished
-  currentStageIndex             Int     @default(0)
-  inviteCode                    String? @unique
-  coverImageUrl                 String?
-  presentingGroupId             String?
-  presentingStudentId           String?
-  classConfig                   Json?
-  pblConfig                     Json?
-  stageWorkspacePolicies        Json?
-  // Canonical evidence workspace. Kept as bounded JSONB arrays because the
-  // course aggregate is replaced atomically and these contracts evolve
-  // together with the classroom workflow.
-  learningEvidence              Json?
-  artifactSnapshots             Json?
-  aiContributions               Json?
-  studentAiDecisions            Json?
-  aiAssessmentSuggestions       Json?
-  // Course content (single nested object) — kept as JSONB for flexibility.
-  content                       Json?
-  // Stages array — small bounded list, JSONB is sufficient.
-  stages                        Json?
-  // UI state — single nested object per course.
-  uiState                       Json?
-  // AI learning progress per student (keyed by studentId) — JSONB map.
-  aiLearningProgress            Json?
-  aiLearningClassroomId         String?
-  teacherClassroomId            String?
-  // Resolved intervention signal IDs — bounded set, JSONB.
-  resolvedInterventionSignalIds Json?
-
-  // Timestamps
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  version   Int      @default(1)
-
-  // Relations — one-to-many. Cascading deletes keep data consistent when a course is removed.
-  students                     Student[]
-  submissions                  ClassroomSubmission[]
-  projectDocumentVersions      ProjectDocumentVersion[]
-  projectPdfVersions           ProjectPdfVersion[]
-  showcasePresentations        ShowcasePresentation[]
-  aiInteractionEvents          AiInteractionEvent[]
-  feedback                     TeacherFeedback[]
-  rubricScores                 RubricScore[]
-  reflections                  ReflectionRecord[]
-  activityLog                  ActivityRecord[]
-  announcements                CourseAnnouncement[]
-  todos                        CourseTodo[]
-  resources                    CourseResource[]
-  groups                       ProjectGroup[]
-  groupAnnouncements           GroupAnnouncement[]
-  workPlan                     WorkPlanItem[]
-  whiteboard                   WhiteboardNode[]
-  boards                       GroupBoard[]
-  uploads                      CourseUpload[]
-  teamContributions            TeamContribution[]
-  aiSupports                   AiSupportRecord[]
-  teacherInterventions         TeacherIntervention[]
-  stageTransitions             StageTransitionRecord[]
-  evaluations                  EvaluationRecord[]
-  learningEvents               LearningEvent[]
-  companionThreads             CompanionThread[]
-  companionTasks               CompanionTask[]
-  companionConfirmations       CompanionConfirmation[]
-  companionProcessRecords      CompanionProcessRecord[]
-  learningSignals              LearningSignal[]
-  classCommonIssues            ClassCommonIssue[]
-  teacherAgentDirectives       TeacherAgentDirective[]
-  offlineInterventions         OfflineInterventionRecord[]
-  dynamicFacilitationScaffolds DynamicFacilitationScaffold[]
-  sessions                     CourseSession[]
-  groupMembers                 GroupMember[]
-  todoCompletions              TodoCompletion[]
-  announcementReplies          AnnouncementReply[]
-  resourceDownloads            ResourceDownload[]
-  generationJob                CourseGenerationJob?
-  designGenerationJob          CourseDesignGenerationJob?
-  offerings                    CourseOffering[]
-  classroomTemplates           ClassroomTemplate[]
-  classroomInstances           ClassroomInstance[]
-  classroomSourceInstances     ClassroomInstance[]           @relation("ClassroomInstanceLegacySourceCourse")
-
-  @@index([status])
-  @@index([updatedAt])
-}
-
-// Durable, idempotent course-generation state. There is intentionally only
-// one row per course so revisiting the page resumes the existing job.
-model CourseGenerationJob {
-  id                        String                           @id @default(uuid())
-  courseId                  String                           @unique
-  course                    Course                           @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  requestedBy               String?
-  status                    String                           @default("queued") // queued | running | cancelling | cancelled | completed | failed
-  step                      String                           @default("queued")
-  progress                  Int                              @default(0)
-  message                   String                           @default("课程生成任务已创建") @db.Text
-  scenesGenerated           Int                              @default(0)
-  totalScenes               Int                              @default(0)
-  estimatedRemainingSeconds Int?
-  request                   Json
-  preparedOutlines          Json?
-  result                    Json?
-  events                    Json                             @default("[]")
-  error                     String?                          @db.Text
-  attempt                   Int                              @default(0)
-  startedAt                 DateTime?
-  completedAt               DateTime?
-  lastHeartbeatAt           DateTime?
-  createdAt                 DateTime                         @default(now())
-  updatedAt                 DateTime                         @updatedAt
-  version                   Int                              @default(1)
-  pageCheckpoints           CourseGenerationPageCheckpoint[]
-
-  @@index([status, createdAt])
-  @@index([lastHeartbeatAt])
-}
-
-// Durable page-level checkpoints. A page is reusable only when its canonical
-// outline fingerprint still matches; restored pages still pass the whole-course
-// audit before the classroom is persisted.
-model CourseGenerationPageCheckpoint {
-  id                 String              @id @default(uuid())
-  jobId              String
-  job                CourseGenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  pageKey            String
-  outlineFingerprint String
-  outlineOrder       Int
-  scene              Json
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-
-  @@unique([jobId, pageKey])
-  @@index([jobId, outlineOrder])
-}
-
-// Durable quick-design pipeline. It produces the same CourseContent fields as
-// the detailed editor and then hands the course to CourseGenerationJob.
-model CourseDesignGenerationJob {
-  id                        String    @id @default(uuid())
-  courseId                  String    @unique
-  course                    Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  requestedBy               String?
-  status                    String    @default("queued") // queued | running | review_available | paused | cancelling | cancelled | completed | failed
-  step                      String    @default("queued")
-  reviewStatus              String    @default("unavailable") // unavailable | available | paused | approved | auto-continued
-  reviewAvailableUntil      DateTime?
-  stepIndex                 Int       @default(0)
-  progress                  Int       @default(0)
-  message                   String    @default("快速生成任务已创建") @db.Text
-  estimatedRemainingSeconds Int?
-  request                   Json
-  trace                     Json      @default("[]")
-  qualityReport             Json?
-  error                     String?   @db.Text
-  attempt                   Int       @default(0)
-  startedAt                 DateTime?
-  completedAt               DateTime?
-  lastHeartbeatAt           DateTime?
-  retryAt                   DateTime?
-  createdAt                 DateTime  @default(now())
-  updatedAt                 DateTime  @updatedAt
-  version                   Int       @default(1)
-
-  @@index([status, createdAt])
-  @@index([status, retryAt])
-  @@index([lastHeartbeatAt])
-}
-
-// ============================================================================
-// CourseSession — archived historical teaching session (for restart teaching feature)
-// ============================================================================
-
-model CourseSession {
-  id              String   @id @default(uuid())
-  courseId        String
-  course          Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  inviteCode      String
-  startedAt       DateTime
-  endedAt         DateTime
-  archivedData    Json // Full snapshot of classroom data at archive time (JSONB)
-  studentCount    Int      @default(0)
-  submissionCount Int      @default(0)
-  createdAt       DateTime @default(now())
-
-  @@index([courseId, startedAt])
-}
-
-// ============================================================================
-// Student — course enrolment
-// ============================================================================
-
-model Student {
-  id         String   @id // matches Student.id in domain types (student-generated UUID)
-  courseId   String
-  course     Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  name       String
-  lastSeenAt String?
-  // Snapshot of student-specific progress data (per-stage progress map).
-  progress   Json?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  version    Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId])
-}
-
-// ============================================================================
-// Classroom submissions, feedback, rubric scores, reflections, activity log
-// ============================================================================
-
-model ClassroomSubmission {
-  id              String   @id
-  courseId        String
-  course          Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId       String
-  studentName     String
-  participationId String?
-  stageKey        String
-  groupId         String?
-  payload         Json // Flexible submission payload
-  status          String   @default("draft")
-  submittedAt     String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  version         Int      @default(1)
-
-  documentVersions ProjectDocumentVersion[]
-  participation    ClassroomParticipation?  @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId])
-  @@index([courseId, stageKey])
-  @@index([participationId, createdAt])
-}
-
-// Immutable snapshots created when a student explicitly submits the project
-// practice document. The mutable ClassroomSubmission remains the live draft.
-model ProjectDocumentVersion {
-  id              String              @id @default(uuid())
-  courseId        String
-  course          Course              @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  submissionId    String
-  submission      ClassroomSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  studentId       String
-  participationId String?
-  stageKey        String
-  sequence        Int
-  sourceVersion   Int
-  title           String
-  sourceHtml      String              @db.Text
-  docxUploadId    String?
-  docxSha256      String?
-  docxSize        Int?
-  status          String              @default("processing") // processing | submitted | failed
-  error           String?             @db.Text
-  requestId       String?
-  submittedAt     DateTime?
-  createdAt       DateTime            @default(now())
-
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([submissionId, sequence])
-  @@unique([submissionId, requestId])
-  @@index([courseId, studentId, stageKey, createdAt])
-  @@index([submissionId, status])
-  @@index([participationId, createdAt])
-}
-
-// Immutable snapshots created when a student explicitly submits an additional
-// project outcome. Historical rows are PDFs; `kind` and `mimeType` allow the
-// same durable collection to hold code, archives, and other supporting files.
-model ProjectPdfVersion {
-  id              String   @id @default(uuid())
-  courseId        String
-  course          Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId       String
-  participationId String?
-  groupId         String?
-  stageKey        String
-  sequence        Int
-  title           String
-  uploadId        String
-  kind            String   @default("pdf") // pdf | file
-  mimeType        String   @default("application/pdf")
-  sha256          String?
-  size            Int?
-  status          String   @default("submitted") // submitted | failed
-  requestId       String?
-  submittedAt     DateTime @default(now())
-  createdAt       DateTime @default(now())
-
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([courseId, studentId, sequence])
-  @@unique([courseId, requestId])
-  @@index([courseId, studentId, stageKey, createdAt])
-  @@index([uploadId])
-  @@index([participationId, createdAt])
-}
-
-// One row is created for each student presentation request. Keeping this
-// separate from Course.uiState prevents high-frequency scroll updates from
-// rewriting the whole course aggregate and preserves an auditable lifecycle.
-model ShowcasePresentation {
-  id                String    @id @default(uuid())
-  courseId          String
-  course            Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  groupId           String
-  studentId         String
-  participationId   String?
-  artifactKind      String // document | pdf (generic files are download-only)
-  artifactVersionId String
-  artifactTitle     String
-  displayMode       String    @default("continuous") // continuous | slides
-  status            String    @default("pending") // pending | active | rejected | evaluating | ended | cancelled
-  viewState         Json?
-  revision          Int       @default(0)
-  requestId         String?
-  rejectionReason   String?   @db.Text
-  requestedAt       DateTime  @default(now())
-  reviewedAt        DateTime?
-  reviewedBy        String?
-  startedAt         DateTime?
-  endedAt           DateTime?
-  evaluationNote    String?   @db.Text
-  evaluatedAt       DateTime?
-  evaluatedBy       String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([courseId, requestId])
-  @@index([courseId, status, updatedAt])
-  @@index([courseId, studentId, status])
-  @@index([participationId, updatedAt])
-}
-
-model TeacherFeedback {
-  id         String   @id
-  courseId   String
-  course     Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId  String?
-  groupId    String?
-  stageKey   String?
-  content    String   @db.Text
-  authorName String
-  payload    Json? // Domain-specific fields (targetType, targetId, kind, sourceRole, etc.)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  version    Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId])
-}
-
-model RubricScore {
-  id        String   @id
-  courseId  String
-  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId String
-  groupId   String?
-  stageKey  String?
-  criteria  Json
-  total     Float
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  version   Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId])
-}
-
-model ReflectionRecord {
-  id              String   @id
-  courseId        String
-  course          Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId       String
-  participationId String?
-  studentName     String
-  stageKey        String
-  content         Json
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  version         Int      @default(1)
-
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId])
-  @@index([participationId, createdAt])
-}
-
-model ActivityRecord {
-  id         String   @id
-  courseId   String
-  course     Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  actor      String
-  action     String
-  detail     String?  @db.Text
-  stageKey   String?
-  occurredAt DateTime @default(now())
-  payload    Json? // Extra domain metadata
-  version    Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, occurredAt])
-}
-
-// ============================================================================
-// Announcements, todos, resources
-// ============================================================================
-
-model CourseAnnouncement {
-  id                String              @id
-  courseId          String
-  course            Course              @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  title             String
-  content           String              @db.Text
-  pinned            Boolean             @default(false)
-  replies           Json                @default("[]") // AnnouncementReply[]
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
-  version           Int                 @default(1)
-  normalizedReplies AnnouncementReply[]
-
-  @@unique([courseId, id])
-  @@index([courseId, createdAt])
-}
-
-model CourseTodo {
-  id          String           @id
-  courseId    String
-  course      Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  title       String
-  description String?          @db.Text
-  stageKey    String?
-  completedBy Json             @default("[]") // string[] of studentIds
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-  version     Int              @default(1)
-  completions TodoCompletion[]
-
-  @@unique([courseId, id])
-  @@index([courseId])
-}
-
-model CourseResource {
-  id           String             @id
-  courseId     String
-  course       Course             @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  title        String
-  type         String
-  size         String
-  description  String?            @db.Text
-  stageKey     String?
-  url          String?
-  previewUrl   String?
-  previewType  String?
-  displayMode  String? // document | slides
-  downloadedBy Json               @default("[]") // string[] of studentIds
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
-  version      Int                @default(1)
-  downloads    ResourceDownload[]
-
-  @@unique([courseId, id])
-  @@index([courseId])
-  @@index([courseId, stageKey])
-}
-
-// ============================================================================
-// Project groups, group announcements, work plan, whiteboard, group boards
-// ============================================================================
-
-model ProjectGroup {
-  id                String        @id
-  courseId          String
-  course            Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  name              String
-  topic             String
-  goal              String?       @db.Text
-  keywords          Json          @default("[]") // string[]
-  selectedForms     Json          @default("[]") // string[]
-  members           Json          @default("[]") // GroupMemberRole[]
-  proposal          Json? // ProjectProposal
-  teacherApproval   Json? // { status, teacherName?, note?, updatedAt }
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
-  version           Int           @default(1)
-  normalizedMembers GroupMember[]
-
-  @@unique([courseId, id])
-  @@index([courseId])
-}
-
-model GroupMember {
-  id          String       @id @default(uuid())
-  courseId    String
-  course      Course       @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  groupId     String
-  group       ProjectGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  studentId   String
-  studentName String
-  role        String?
-  joinedAt    DateTime     @default(now())
-
-  @@unique([courseId, groupId, studentId])
-  @@index([courseId, studentId])
-}
-
-model TodoCompletion {
-  id          String     @id @default(uuid())
-  courseId    String
-  course      Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  todoId      String
-  todo        CourseTodo @relation(fields: [todoId], references: [id], onDelete: Cascade)
-  studentId   String
-  completedAt DateTime   @default(now())
-
-  @@unique([courseId, todoId, studentId])
-  @@index([courseId, studentId])
-}
-
-model AnnouncementReply {
-  id             String             @id
-  courseId       String
-  course         Course             @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  announcementId String
-  announcement   CourseAnnouncement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
-  authorId       String
-  authorName     String
-  content        String             @db.Text
-  createdAt      DateTime           @default(now())
-
-  @@unique([courseId, announcementId, id])
-  @@index([courseId, announcementId, createdAt])
-}
-
-model ResourceDownload {
-  id           String         @id @default(uuid())
-  courseId     String
-  course       Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  resourceId   String
-  resource     CourseResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
-  studentId    String
-  studentName  String
-  downloadedAt DateTime       @default(now())
-
-  @@unique([courseId, resourceId, studentId])
-  @@index([courseId, studentId])
-}
-
-model CourseEvent {
-  cursor        BigInt   @id @default(autoincrement())
-  courseId      String
-  requestId     String   @unique
-  type          String
-  actorId       String
-  actorRole     String
-  courseVersion Int
-  payload       Json?
-  createdAt     DateTime @default(now())
-
-  @@index([courseId, cursor])
-  @@index([courseId, createdAt])
-}
-
-model CourseMutationReceipt {
-  requestId     String    @id
-  courseId      String
-  status        String    @default("processing")
-  courseVersion Int?
-  eventCursor   BigInt?
-  actorId       String
-  createdAt     DateTime  @default(now())
-  completedAt   DateTime?
-
-  @@index([courseId, createdAt])
-}
-
-model GroupAnnouncement {
-  id        String   @id
-  courseId  String
-  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  groupId   String
-  title     String
-  content   String   @db.Text
-  actor     String
-  createdAt DateTime @default(now())
-  version   Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, groupId])
-}
-
-model WorkPlanItem {
-  id         String   @id
-  courseId   String
-  course     Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  groupId    String
-  role       String
-  memberName String
-  task       String   @db.Text
-  progress   Int      @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  version    Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, groupId])
-}
-
-model WhiteboardNode {
-  id        String   @id
-  courseId  String
-  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  groupId   String
-  label     String
-  note      String?  @db.Text
-  x         Float
-  y         Float
-  color     String   @default("slate")
-  parentId  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  version   Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, groupId])
-}
-
-model GroupBoard {
-  groupId   String
-  courseId  String
-  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  snapshot  Json // Opaque tldraw TLSnapshot
-  mode      String   @default("mindmap") // mindmap | whiteboard
-  updatedAt DateTime @updatedAt
-  version   Int      @default(1)
-
-  @@id([courseId, groupId])
-  @@index([courseId])
-}
-
-model CourseUpload {
-  id              String   @id
-  courseId        String
-  course          Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  groupId         String?
-  studentId       String?
-  participationId String?
-  studentName     String?
-  stageKey        String
-  category        String // artifact | evidence | presentation | resource
-  title           String
-  fileName        String
-  fileType        String
-  size            String
-  url             String
-  createdAt       DateTime @default(now())
-  version         Int      @default(1)
-
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId])
-  @@index([courseId, stageKey])
-  @@index([participationId, createdAt])
-}
-
-model TeamContribution {
-  id          String   @id
-  courseId    String
-  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  groupId     String
-  studentId   String?
-  studentName String
-  percent     Int
-  note        String?  @db.Text
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  version     Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, groupId])
-}
-
-// ============================================================================
-// AI support records, teacher interventions, learning signals, common issues
-// ============================================================================
-
-model AiSupportRecord {
-  id                String   @id
-  courseId          String
-  course            Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  stageKey          String
-  targetType        String // student | group | course
-  targetId          String
-  groupId           String?
-  studentId         String?
-  participationId   String?
-  studentName       String?
-  kind              String
-  trigger           String   @db.Text
-  inputSummary      String   @db.Text
-  diagnosis         String   @db.Text
-  suggestions       Json     @default("[]") // string[]
-  evidence          Json     @default("[]") // string[]
-  status            String   @default("draft")
-  source            String? // llm | local
-  editedContent     String?  @db.Text
-  structuredPayload Json?
-  adoption          Json? // { decision, reason?, before?, after?, handledBy, handledAt }
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  version           Int      @default(1)
-
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([courseId, id])
-  @@index([courseId, targetId])
-  @@index([courseId, stageKey])
-  @@index([participationId, createdAt])
-}
-
-model TeacherIntervention {
-  id        String   @id
-  courseId  String
-  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId String?
-  groupId   String?
-  stageKey  String?
-  kind      String
-  content   String   @db.Text
-  createdBy String
-  payload   Json? // Domain-specific fields (scope, targetIds, reason, evidence, action, instruction, severity, status, signalId, resolvedAt)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  version   Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId])
-}
-
-model LearningSignal {
-  id                     String    @id
-  courseId               String
-  course                 Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId              String
-  stageKey               String
-  sceneId                String?
-  kind                   String
-  severity               String // notice | warning | high
-  status                 String    @default("open") // open | handled | resolved | dismissed
-  title                  String
-  summary                String    @db.Text
-  content                Json?
-  normalizedIssueKey     String
-  evidenceEventIds       Json      @default("[]") // string[]
-  aiInterventionAttempts Int       @default(0)
-  firstDetectedAt        DateTime
-  lastDetectedAt         DateTime
-  handledAt              DateTime?
-  resolvedAt             DateTime?
-  createdAt              DateTime  @default(now())
-  updatedAt              DateTime  @updatedAt
-  version                Int       @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId, status])
-}
-
-model ClassCommonIssue {
-  id                 String    @id
-  courseId           String
-  course             Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  stageKey           String
-  kind               String
-  title              String
-  summary            String    @db.Text
-  affectedStudentIds Json      @default("[]") // string[]
-  thresholdMetAt     DateTime
-  resolvedAt         DateTime?
-  payload            Json? // Domain-specific fields (normalizedIssueKey, content, severity, signalIds, affectedStudents, status, lastDetectedAt, handledAt)
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-  version            Int       @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, stageKey])
-}
-
-model TeacherAgentDirective {
-  id          String   @id
-  courseId    String
-  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  scope       String // student | group | class
-  targetId    String?
-  stageKey    String?
-  goal        String   @db.Text
-  content     String?  @db.Text // Domain `instruction` field
-  constraints Json?
-  issuedBy    String
-  payload     Json? // Domain-specific fields (targetStudentIds, targetScope, instruction, successCriteria, status, completedAt, revokedAt)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  version     Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, scope, targetId])
-}
-
-model OfflineInterventionRecord {
-  id          String   @id
-  courseId    String
-  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId   String?
-  stageKey    String?
-  kind        String // patrol | tutoring | whole-class
-  content     String   @db.Text
-  teacherName String
-  occurredAt  DateTime
-  payload     Json? // Domain-specific fields (targetStudentIds, signalIds, note)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  version     Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, occurredAt])
-}
-
-model DynamicFacilitationScaffold {
-  id        String   @id
-  courseId  String
-  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  stageKey  String
-  framework Json // Scaffold framework data
-  evidence  Json     @default("[]") // supporting evidence references
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  version   Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, stageKey])
-}
-
-// ============================================================================
-// Stage transitions, evaluations, learning events
-// ============================================================================
-
-model StageTransitionRecord {
-  id             String   @id
-  courseId       String
-  course         Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  fromStageKey   String
-  toStageKey     String
-  gateStatus     String // passed | overridden
-  blockers       Json     @default("[]") // string[]
-  warnings       Json     @default("[]") // string[]
-  overrideReason String?  @db.Text
-  actor          String
-  createdAt      DateTime @default(now())
-  version        Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, createdAt])
-}
-
-model EvaluationRecord {
-  id        String   @id
-  courseId  String
-  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId String?
-  groupId   String?
-  stageKey  String?
-  kind      String
-  result    Json
-  content   String?  @db.Text
-  payload   Json? // Domain-specific fields (sourceRole, targetType, targetId, score, evidence, status)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  version   Int      @default(1)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId])
-}
-
-model LearningEvent {
-  id                        String   @id
-  idempotencyKey            String
-  courseId                  String
-  course                    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId                 String
-  stageKey                  String
-  sceneId                   String?
-  type                      String
-  occurredAt                DateTime
-  durationMs                Int?
-  expectedDurationSec       Int?
-  ttsDurationSec            Int?
-  plannedStudentActivitySec Int?
-  visible                   Boolean?
-  progressMarker            String?
-  content                   Json? // LearningContentReference
-  metadata                  Json?
-  createdAt                 DateTime @default(now())
-  version                   Int      @default(1)
-  // Long-lived course-platform context. These fields are optional so the
-  // existing classroom event writer remains backwards compatible while new
-  // events are attached to an offering/activity instance.
-  offeringId                String?
-  enrollmentId              String?
-  chapterId                 String?
-  activityId                String?
-  classroomInstanceId       String?
-  participationId           String?
-  eventVersion              Int      @default(1)
-  receivedAt                DateTime @default(now())
-  source                    String   @default("classroom")
-
-  offering          CourseOffering?         @relation(fields: [offeringId], references: [id], onDelete: Restrict)
-  enrollment        Enrollment?             @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
-  chapter           Chapter?                @relation(fields: [chapterId], references: [id], onDelete: Restrict)
-  activity          Activity?               @relation(fields: [activityId], references: [id], onDelete: Restrict)
-  classroomInstance ClassroomInstance?      @relation(fields: [classroomInstanceId], references: [id], onDelete: Restrict)
-  participation     ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([courseId, id])
-  @@unique([courseId, idempotencyKey])
-  @@index([courseId, studentId, occurredAt])
-  @@index([courseId, type])
-  @@index([offeringId, enrollmentId, occurredAt])
-  @@index([offeringId, activityId, occurredAt])
-}
-
-// ============================================================================
-// Companion threads, tasks, confirmations, process records
-// ============================================================================
-
-model CompanionThread {
-  id              String   @id
-  courseId        String
-  course          Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId       String
-  participationId String?
-  stageKey        String
-  messages        Json     @default("[]") // CompanionMessage[]
-  openingSentAt   String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  version         Int      @default(1)
-
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId, stageKey])
-  @@index([participationId, createdAt])
-}
-
-model CompanionTask {
-  id              String   @id
-  courseId        String
-  course          Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId       String
-  participationId String?
-  stageKey        String
-  companionId     String?
-  kind            String
-  title           String
-  request         String   @db.Text
-  status          String   @default("queued")
-  result          String?  @db.Text
-  error           String?  @db.Text
-  confirmationId  String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  version         Int      @default(1)
-
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId, status])
-  @@index([participationId, createdAt])
-}
-
-model CompanionConfirmation {
-  id              String    @id
-  courseId        String
-  course          Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId       String
-  participationId String?
-  stageKey        String
-  action          String
-  title           String
-  summary         String    @db.Text
-  taskId          String?
-  payload         Json?
-  status          String    @default("pending") // pending | confirmed | rejected
-  createdAt       DateTime  @default(now())
-  resolvedAt      DateTime?
-  version         Int       @default(1)
-
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId, status])
-  @@index([participationId, createdAt])
-}
-
-model CompanionProcessRecord {
-  id              String   @id
-  courseId        String
-  course          Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId       String
-  participationId String?
-  stageKey        String
-  title           String
-  summary         String   @db.Text
-  source          String // student | agent | system
-  companionId     String?
-  taskId          String?
-  evidenceIds     Json     @default("[]") // string[]
-  createdAt       DateTime @default(now())
-  version         Int      @default(1)
-
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@unique([courseId, id])
-  @@index([courseId, studentId, createdAt])
-  @@index([participationId, createdAt])
-}
-
-// Append-only audit trail for every student ↔ AI collaboration event. The
-// existing CompanionThread JSON remains the model/UI context; this table is
-// the canonical source for teacher monitoring and analysis exports.
-model AiInteractionEvent {
-  id              String   @id @default(uuid())
-  courseId        String
-  course          Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  studentId       String
-  participationId String?
-  stageKey        String
-  conversationId  String?
-  source          String // sidebar | selection | proactive-comment | submission | system
-  eventType       String // request | response | policy | proposal | decision | undo | comment | submit | error
-  actorRole       String // student | ai | system | teacher
-  actorId         String?
-  content         String?  @db.Text
-  payload         Json     @default("{}")
-  requestId       String?
-  createdAt       DateTime @default(now())
-
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@index([courseId, studentId, stageKey, createdAt])
-  @@index([courseId, requestId])
-  @@index([courseId, source, createdAt])
-  @@index([participationId, createdAt])
-}
-
-// ============================================================================
-// SessionMeta — global session state (joinedCourseId etc.)
-// ============================================================================
-
-model SessionMeta {
-  id             String   @id @default("singleton")
-  joinedCourseId String?
-  userRole       String?
-  userName       String?
-  studentId      String?
-  studentName    String?
-  updatedAt      DateTime @updatedAt
-  version        Int      @default(1)
-}
-
-// ============================================================================
-// UploadFile — file metadata for upload management & cleanup (Stage 6)
-// ============================================================================
-
-model UploadFile {
-  id                String    @id @default(uuid())
-  fileName          String
-  storedName        String
-  courseId          String?
-  uploadedById      String
-  uploadedByRole    String
-  size              Int
-  mimeType          String
-  previewStoredName String?   @unique
-  previewMimeType   String?
-  previewSize       Int?
-  referencedBy      Json      @default("[]") // string[] of upload IDs referencing this file
-  refCount          Int       @default(0)
-  createdAt         DateTime  @default(now())
-  deletedAt         DateTime?
-
-  @@unique([storedName])
-  @@index([courseId])
-  @@index([uploadedById])
-  @@index([refCount])
-}
-
-// ============================================================================
-// Teacher & StudentAccount — authentication (Stage 2)
-// ============================================================================
-
-model Teacher {
-  id             String    @id @default(uuid())
-  username       String    @unique
-  passwordHash   String
-  displayName    String
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  lastLoginAt    DateTime?
-  sessionVersion Int       @default(1)
-
-  @@index([username])
-}
-
-model StudentAccount {
-  id             String    @id @default(uuid())
-  courseId       String
-  studentId      String // matches Student.id in domain types
-  studentName    String
-  nameKey        String
-  inviteCode     String // invite code used to join (for re-join detection)
-  createdAt      DateTime  @default(now())
-  lastLoginAt    DateTime?
-  sessionVersion Int       @default(1)
-
-  @@unique([courseId, studentId])
-  @@unique([courseId, nameKey])
-  @@index([courseId])
-  @@index([inviteCode])
-}
-
-// ============================================================================
-// Long-lived course platform
-// ============================================================================
-
-/// Unified identity used by the course platform. Legacy Teacher and
-/// StudentAccount rows remain during the transition; platform routes create a
-/// matching User row for existing teachers when they first use the new APIs.
 model User {
   id             String    @id @default(uuid())
-  username       String    @unique
+  username       String
   usernameKey    String    @unique
   displayName    String
   passwordHash   String
-  role           String // student | teacher
-  status         String    @default("active") // active | suspended | disabled
+  role           String    @default("STUDENT")
+  status         String    @default("ACTIVE")
   sessionVersion Int       @default(1)
+  lastLoginAt    DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
-  lastLoginAt    DateTime?
 
-  offerings             CourseOffering[]      @relation("OfferingTeacher")
-  classroomTemplates    ClassroomTemplate[]
-  enrollments           Enrollment[]
-  passwordResetTargets  PasswordResetToken[]  @relation("PasswordResetTarget")
-  passwordResetRequests PasswordResetToken[]  @relation("PasswordResetIssuer")
-  learningEventRecords  LearningEventRecord[]
-
-  @@index([role, status])
+  passwordResetTokens    PasswordResetToken[]
+  courseTeachers         CourseTeacher[]
+  invitationsCreated     CourseInvitation[]      @relation("InvitationCreator")
+  enrollments            Enrollment[]
+  templateOwners         ClassroomTemplate[]
+  groupMemberships       GroupMember[]
+  workPlanItems          WorkPlanItem[]
+  announcementReplies    AnnouncementReply[]
+  todoCompletions        TodoCompletion[]
+  uploadedFiles          FileAsset[]             @relation("FileUploader")
+  aiConversations        AiConversation[]
+  aiMessages             AiMessage[]
+  aiTasks                AiTask[]
+  confirmationsRequested AiActionConfirmation[]  @relation("ConfirmationRequester")
+  confirmationsDecided   AiActionConfirmation[]  @relation("ConfirmationDecider")
+  supportRecords         AiSupportRecord[]       @relation("SupportCreator")
+  learningSignals        LearningSignal[]
+  interventions          Intervention[]          @relation("InterventionCreator")
+  agentDirectives        TeacherAgentDirective[] @relation("DirectiveCreator")
+  learningEvents         LearningEvent[]
+  aiInteractionEvents    AiInteractionEvent[]
+  domainEvents           DomainEvent[]           @relation("DomainEventActor")
+  announcementsCreated   Announcement[]          @relation("AnnouncementCreator")
+  evaluationTargets      Evaluation[]            @relation("EvaluationStudent")
+  evaluationsGiven       Evaluation[]            @relation("EvaluationEvaluator")
+  resourcesCreated       Resource[]              @relation("ResourceCreator")
+  todosCreated           Todo[]                  @relation("TodoCreator")
+  reflections            Reflection[]            @relation("ReflectionAuthor")
+  providerCredentials    ProviderCredential[]    @relation("CredentialOwner")
+  loadTestRuns           LoadTestRun[]           @relation("LoadTestInitiator")
 }
 
 model PasswordResetToken {
-  id            String    @id @default(uuid())
-  targetUserId  String
-  requestedById String
-  tokenHash     String    @unique
-  expiresAt     DateTime
-  usedAt        DateTime?
-  createdAt     DateTime  @default(now())
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 
-  targetUser  User @relation("PasswordResetTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
-  requestedBy User @relation("PasswordResetIssuer", fields: [requestedById], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([targetUserId, expiresAt])
-  @@index([requestedById, createdAt])
+  @@index([userId, expiresAt])
 }
 
+// ---------------------------------------------------------------------------
+// Long-lived course structure
+// ---------------------------------------------------------------------------
+
 model CourseOffering {
-  id             String    @id @default(uuid())
-  teacherId      String
-  legacyCourseId String?
-  name           String
-  description    String?   @db.Text
-  term           String?
-  startsAt       DateTime?
-  endsAt         DateTime?
-  status         String    @default("draft") // draft | open | finished | archived
-  coverImageUrl  String?
-  plan           Json?
-  settings       Json?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  version        Int       @default(1)
+  id            String    @id @default(uuid())
+  name          String
+  description   String?   @db.Text
+  term          String?
+  startsAt      DateTime?
+  endsAt        DateTime?
+  coverImageUrl String?
+  status        String    @default("DRAFT")
+  settings      Json?
+  version       Int       @default(1)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  archivedAt    DateTime?
 
-  teacher              User                     @relation("OfferingTeacher", fields: [teacherId], references: [id], onDelete: Restrict)
-  legacyCourse         Course?                  @relation(fields: [legacyCourseId], references: [id], onDelete: SetNull)
-  invitation           CourseInvitation?
-  enrollments          Enrollment[]
-  chapters             Chapter[]
-  activities           Activity[]
-  instances            ClassroomInstance[]
-  participations       ClassroomParticipation[]
-  activityProgress     ActivityProgress[]
-  events               LearningEvent[]
-  learningEventRecords LearningEventRecord[]
+  teachers            CourseTeacher[]
+  invitations         CourseInvitation[]
+  enrollments         Enrollment[]
+  chapters            Chapter[]
+  // ClassroomInstance resolves its offering through Activity -> Chapter.
+  groups              ProjectGroup[]
+  announcements       Announcement[]
+  resources           Resource[]
+  todos               Todo[]
+  conversations       AiConversation[]
+  aiTasks             AiTask[]
+  confirmations       AiActionConfirmation[]
+  supportRecords      AiSupportRecord[]
+  learningSignals     LearningSignal[]
+  interventions       Intervention[]
+  agentDirectives     TeacherAgentDirective[]
+  learningEvents      LearningEvent[]
+  aiInteractionEvents AiInteractionEvent[]
+  domainEvents        DomainEvent[]
+  fileAssets          FileAsset[]
 
-  @@index([teacherId, status, updatedAt])
   @@index([status, startsAt])
 }
 
-model CourseInvitation {
-  id         String    @id @default(uuid())
-  offeringId String    @unique
-  code       String    @unique
-  expiresAt  DateTime?
-  disabledAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+model CourseTeacher {
+  id         String   @id @default(uuid())
+  userId     String
+  offeringId String
+  role       String   @default("TEACHER")
+  createdAt  DateTime @default(now())
 
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   offering CourseOffering @relation(fields: [offeringId], references: [id], onDelete: Cascade)
 
-  @@index([code, disabledAt, expiresAt])
+  @@unique([userId, offeringId])
+  @@index([offeringId, role])
+}
+
+model CourseInvitation {
+  id          String    @id @default(uuid())
+  offeringId  String
+  code        String    @unique
+  status      String    @default("ACTIVE")
+  expiresAt   DateTime?
+  maxUses     Int?
+  useCount    Int       @default(0)
+  createdById String?
+  createdAt   DateTime  @default(now())
+  disabledAt  DateTime?
+
+  offering  CourseOffering @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  createdBy User?          @relation("InvitationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([offeringId, status])
 }
 
 model Enrollment {
-  id                String    @id @default(uuid())
-  userId            String
-  offeringId        String
-  status            String    @default("active") // active | withdrawn | completed
-  joinedAt          DateTime  @default(now())
-  withdrawnAt       DateTime?
-  currentChapterId  String?
-  currentActivityId String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  version           Int       @default(1)
+  id          String    @id @default(uuid())
+  userId      String
+  offeringId  String
+  status      String    @default("ACTIVE")
+  joinedAt    DateTime  @default(now())
+  withdrawnAt DateTime?
+  completedAt DateTime?
+  researchKey String    @unique @default(uuid())
 
-  user                 User                     @relation(fields: [userId], references: [id], onDelete: Restrict)
-  offering             CourseOffering           @relation(fields: [offeringId], references: [id], onDelete: Restrict)
-  progress             ActivityProgress[]
-  participations       ClassroomParticipation[]
-  events               LearningEvent[]
-  learningEventRecords LearningEventRecord[]
+  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offering         CourseOffering           @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  activityProgress ActivityProgress[]
+  participations   ClassroomParticipation[]
+  learningEvents   LearningEvent[]
+  learningSignals  LearningSignal[]
+  interventions    Intervention[]
 
   @@unique([userId, offeringId])
-  @@unique([id, offeringId])
-  @@index([offeringId, status, joinedAt])
+  @@index([offeringId, status])
 }
 
 model Chapter {
@@ -1301,25 +181,22 @@ model Chapter {
   isOpen      Boolean   @default(false)
   opensAt     DateTime?
   archivedAt  DateTime?
+  version     Int       @default(1)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
-  version     Int       @default(1)
 
-  offering             CourseOffering        @relation(fields: [offeringId], references: [id], onDelete: Restrict)
-  activities           Activity[]
-  events               LearningEvent[]
-  learningEventRecords LearningEventRecord[]
+  offering       CourseOffering  @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  activities     Activity[]
+  learningEvents LearningEvent[]
 
   @@unique([offeringId, position])
-  @@unique([id, offeringId])
-  @@index([offeringId, archivedAt, position])
+  @@index([offeringId, isOpen])
 }
 
 model Activity {
   id          String    @id @default(uuid())
-  offeringId  String
   chapterId   String
-  type        String // Classroom | Assignment | Quiz | Form | Resource
+  type        String
   title       String
   description String?   @db.Text
   position    Int
@@ -1327,57 +204,71 @@ model Activity {
   opensAt     DateTime?
   config      Json?
   archivedAt  DateTime?
-  templateId  String?
+  version     Int       @default(1)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
-  version     Int       @default(1)
 
-  // The chapter and activity must come from the same offering. The composite
-  // relation keeps a caller from attaching an activity to a chapter in a
-  // different teaching class even when both records have valid IDs.
-  chapter              Chapter               @relation(fields: [chapterId, offeringId], references: [id, offeringId], onDelete: Restrict)
-  offering             CourseOffering        @relation(fields: [offeringId], references: [id], onDelete: Restrict)
-  progress             ActivityProgress[]
-  template             ClassroomTemplate?    @relation(fields: [templateId], references: [id], onDelete: Restrict)
-  instances            ClassroomInstance[]
-  events               LearningEvent[]
-  learningEventRecords LearningEventRecord[]
+  chapter            Chapter             @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  progress           ActivityProgress[]
+  classroomInstances ClassroomInstance[]
+  evaluations        Evaluation[]
+  reflections        Reflection[]
+  todos              Todo[]
+  resources          Resource[]
+  workPlanItems      WorkPlanItem[]
+  learningEvents     LearningEvent[]
 
   @@unique([chapterId, position])
-  @@unique([id, offeringId])
-  @@index([offeringId, chapterId, archivedAt, position])
+  @@index([chapterId, type, isOpen])
 }
 
+model ActivityProgress {
+  id             String    @id @default(uuid())
+  enrollmentId   String
+  activityId     String
+  status         String    @default("NOT_STARTED")
+  startedAt      DateTime?
+  completedAt    DateTime?
+  lastAccessedAt DateTime?
+  progressData   Json?
+  updatedAt      DateTime  @updatedAt
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  activity   Activity   @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  @@unique([enrollmentId, activityId])
+  @@index([enrollmentId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Reusable classroom content and classroom runs
+// ---------------------------------------------------------------------------
+
 model ClassroomTemplate {
-  id             String   @id @default(uuid())
-  teacherId      String
-  legacyCourseId String?
-  title          String
-  description    String?  @db.Text
-  status         String   @default("draft") // draft | ready | archived
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  version        Int      @default(1)
+  id          String   @id @default(uuid())
+  ownerId     String
+  title       String
+  description String?  @db.Text
+  status      String   @default("DRAFT")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  teacher       User                       @relation(fields: [teacherId], references: [id], onDelete: Restrict)
-  legacyCourse  Course?                    @relation(fields: [legacyCourseId], references: [id], onDelete: SetNull)
-  activityLinks Activity[]
-  versions      ClassroomTemplateVersion[]
+  owner    User                       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  versions ClassroomTemplateVersion[]
 
-  @@index([teacherId, status, updatedAt])
-  @@index([legacyCourseId])
+  @@index([ownerId, status])
 }
 
 model ClassroomTemplateVersion {
   id         String   @id @default(uuid())
   templateId String
   version    Int
-  status     String   @default("ready") // draft | ready | archived
+  status     String   @default("DRAFT")
   snapshot   Json
   mediaRefs  Json?
   createdAt  DateTime @default(now())
 
-  template  ClassroomTemplate   @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  template  ClassroomTemplate   @relation(fields: [templateId], references: [id], onDelete: Cascade)
   instances ClassroomInstance[]
 
   @@unique([templateId, version])
@@ -1385,168 +276,711 @@ model ClassroomTemplateVersion {
 }
 
 model ClassroomInstance {
-  id                   String    @id @default(uuid())
-  offeringId           String
-  activityId           String
-  templateVersionId    String
-  legacyCourseId       String?
-  legacySourceCourseId String?
-  status               String    @default("scheduled") // scheduled | teaching | finished | archived
-  snapshot             Json
-  startedAt            DateTime?
-  endedAt              DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-  version              Int       @default(1)
+  id                String    @id @default(uuid())
+  activityId        String
+  templateVersionId String
+  status            String    @default("SCHEDULED")
+  runNo             Int       @default(1)
+  runtimeConfig     Json?
+  startedAt         DateTime?
+  endedAt           DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  offering             CourseOffering           @relation(fields: [offeringId], references: [id], onDelete: Restrict)
-  activity             Activity                 @relation(fields: [activityId, offeringId], references: [id, offeringId], onDelete: Restrict)
-  templateVersion      ClassroomTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
-  legacyCourse         Course?                  @relation(fields: [legacyCourseId], references: [id], onDelete: SetNull)
-  legacySourceCourse   Course?                  @relation("ClassroomInstanceLegacySourceCourse", fields: [legacySourceCourseId], references: [id], onDelete: SetNull)
-  participations       ClassroomParticipation[]
-  events               LearningEvent[]
-  learningEventRecords LearningEventRecord[]
+  activity        Activity                 @relation(fields: [activityId], references: [id], onDelete: Restrict)
+  templateVersion ClassroomTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  participations  ClassroomParticipation[]
+  announcements   Announcement[]
+  learningEvents  LearningEvent[]
+  domainEvents    DomainEvent[]
 
-  @@unique([id, offeringId])
-  @@index([offeringId, activityId, status])
-  @@index([templateVersionId])
-  @@index([legacyCourseId])
-  @@index([legacySourceCourseId])
+  @@unique([activityId, runNo])
+  @@index([status, startedAt])
 }
 
 model ClassroomParticipation {
   id             String    @id @default(uuid())
-  offeringId     String
   instanceId     String
   enrollmentId   String
-  firstEnteredAt DateTime  @default(now())
-  lastEnteredAt  DateTime  @default(now())
-  stageProgress  Json?
+  firstEnteredAt DateTime?
+  lastEnteredAt  DateTime?
   completedAt    DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  version        Int       @default(1)
+  stageProgress  Json?
 
-  instance                ClassroomInstance        @relation(fields: [instanceId, offeringId], references: [id, offeringId], onDelete: Restrict)
-  enrollment              Enrollment               @relation(fields: [enrollmentId, offeringId], references: [id, offeringId], onDelete: Restrict)
-  offering                CourseOffering           @relation(fields: [offeringId], references: [id], onDelete: Restrict)
-  events                  LearningEvent[]
-  learningEventRecords    LearningEventRecord[]
-  projectWorkspace        StudentProjectWorkspace?
-  submissions             ClassroomSubmission[]
-  documentVersions        ProjectDocumentVersion[]
-  pdfVersions             ProjectPdfVersion[]
-  reflections             ReflectionRecord[]
-  uploads                 CourseUpload[]
-  aiSupports              AiSupportRecord[]
-  companionThreads        CompanionThread[]
-  companionTasks          CompanionTask[]
-  companionConfirmations  CompanionConfirmation[]
-  companionProcessRecords CompanionProcessRecord[]
-  aiInteractionEvents     AiInteractionEvent[]
-  showcasePresentations   ShowcasePresentation[]
+  instance            ClassroomInstance        @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  enrollment          Enrollment               @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  workspace           StudentProjectWorkspace?
+  submissions         ClassroomSubmission[]
+  artifacts           Artifact[]
+  showcases           ShowcasePresentation[]
+  reflections         Reflection[]
+  evaluations         Evaluation[]
+  groups              GroupMember[]
+  conversations       AiConversation[]
+  supportRecords      AiSupportRecord[]
+  learningSignals     LearningSignal[]
+  interventions       Intervention[]
+  agentDirectives     TeacherAgentDirective[]
+  learningEvents      LearningEvent[]
+  aiInteractionEvents AiInteractionEvent[]
+  domainEvents        DomainEvent[]
 
   @@unique([instanceId, enrollmentId])
-  @@index([offeringId, enrollmentId, completedAt])
+  @@index([enrollmentId, lastEnteredAt])
 }
 
-/// A student's project workspace belongs to one concrete classroom
-/// participation. It intentionally does not use ProjectGroup, which is a
-/// legacy collaborative structure and cannot represent an individual's
-/// long-lived project safely across repeated classroom runs.
 model StudentProjectWorkspace {
   id              String   @id @default(uuid())
   participationId String   @unique
-  status          String   @default("active") // active | read_only | archived
+  status          String   @default("ACTIVE")
   projectState    Json?
   aiMembers       Json?
+  version         Int      @default(1)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
-  version         Int      @default(1)
 
-  participation ClassroomParticipation @relation(fields: [participationId], references: [id], onDelete: Restrict)
-
-  @@index([status, updatedAt])
+  participation ClassroomParticipation @relation(fields: [participationId], references: [id], onDelete: Cascade)
 }
 
-model ActivityProgress {
+model GenerationJob {
+  id            String    @id @default(uuid())
+  targetType    String
+  targetId      String
+  jobType       String
+  status        String    @default("PENDING")
+  step          String?
+  progress      Int       @default(0)
+  request       Json?
+  result        Json?
+  trace         Json?
+  qualityReport Json?
+  error         String?   @db.Text
+  attempt       Int       @default(0)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  heartbeatAt   DateTime?
+  retryAt       DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  checkpoints GenerationCheckpoint[]
+
+  @@index([targetType, targetId, status])
+  @@index([status, heartbeatAt])
+}
+
+model GenerationCheckpoint {
+  id        String   @id @default(uuid())
+  jobId     String
+  step      String
+  state     Json
+  createdAt DateTime @default(now())
+
+  job GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, step])
+}
+
+// ---------------------------------------------------------------------------
+// Learning outcomes and evaluation
+// ---------------------------------------------------------------------------
+
+model ClassroomSubmission {
+  id              String    @id @default(uuid())
+  participationId String
+  stageKey        String
+  status          String    @default("DRAFT")
+  payload         Json?
+  submittedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  participation ClassroomParticipation @relation(fields: [participationId], references: [id], onDelete: Cascade)
+
+  @@unique([participationId, stageKey])
+  @@index([participationId, status])
+}
+
+model Artifact {
+  id              String   @id @default(uuid())
+  participationId String
+  groupId         String?
+  title           String
+  type            String
+  status          String   @default("DRAFT")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  participation ClassroomParticipation @relation(fields: [participationId], references: [id], onDelete: Cascade)
+  group         ProjectGroup?          @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  versions      ArtifactVersion[]
+  showcases     ShowcasePresentation[]
+
+  @@index([participationId, status])
+  @@index([groupId, createdAt])
+}
+
+model ArtifactVersion {
+  id          String    @id @default(uuid())
+  artifactId  String
+  sequence    Int
+  sourceHtml  String?   @db.Text
+  fileAssetId String?
+  mimeType    String?
+  sha256      String?
+  size        BigInt?
+  status      String    @default("DRAFT")
+  submittedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  artifact  Artifact               @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  fileAsset FileAsset?             @relation(fields: [fileAssetId], references: [id], onDelete: SetNull)
+  showcases ShowcasePresentation[]
+
+  @@unique([artifactId, sequence])
+  @@index([fileAssetId])
+}
+
+model ShowcasePresentation {
+  id                String    @id @default(uuid())
+  artifactId        String
+  artifactVersionId String?
+  participationId   String
+  groupId           String?
+  status            String    @default("PENDING")
+  scheduledAt       DateTime?
+  presentedAt       DateTime?
+  content           Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  artifact        Artifact               @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  artifactVersion ArtifactVersion?       @relation(fields: [artifactVersionId], references: [id], onDelete: SetNull)
+  participation   ClassroomParticipation @relation(fields: [participationId], references: [id], onDelete: Cascade)
+  group           ProjectGroup?          @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@index([participationId, status])
+  @@index([groupId, scheduledAt])
+}
+
+model Reflection {
+  id              String   @id @default(uuid())
+  participationId String
+  activityId      String?
+  authorId        String?
+  content         String   @db.Text
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  participation ClassroomParticipation @relation(fields: [participationId], references: [id], onDelete: Cascade)
+  activity      Activity?              @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  author        User?                  @relation("ReflectionAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([participationId, createdAt])
+}
+
+model Evaluation {
+  id              String   @id @default(uuid())
+  participationId String
+  studentId       String?
+  groupId         String?
+  activityId      String?
+  type            String
+  evaluatorType   String
+  evaluatorId     String?
+  score           Decimal? @db.Decimal(10, 2)
+  rubric          Json?
+  result          Json?
+  content         String?  @db.Text
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  participation ClassroomParticipation @relation(fields: [participationId], references: [id], onDelete: Cascade)
+  student       User?                  @relation("EvaluationStudent", fields: [studentId], references: [id], onDelete: SetNull)
+  group         ProjectGroup?          @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  activity      Activity?              @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  evaluator     User?                  @relation("EvaluationEvaluator", fields: [evaluatorId], references: [id], onDelete: SetNull)
+
+  @@index([participationId, createdAt])
+  @@index([activityId, type])
+  @@index([studentId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Collaboration and course content
+// ---------------------------------------------------------------------------
+
+model ProjectGroup {
+  id         String   @id @default(uuid())
+  offeringId String
+  name       String
+  status     String   @default("ACTIVE")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  offering      CourseOffering         @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  members       GroupMember[]
+  workPlanItems WorkPlanItem[]
+  board         GroupBoard?
+  artifacts     Artifact[]
+  showcases     ShowcasePresentation[]
+  evaluations   Evaluation[]
+  announcements Announcement[]
+  todos         Todo[]
+  interventions Intervention[]
+
+  @@index([offeringId, status])
+}
+
+model GroupMember {
+  id              String    @id @default(uuid())
+  groupId         String
+  userId          String
+  participationId String?
+  role            String    @default("MEMBER")
+  joinedAt        DateTime  @default(now())
+  leftAt          DateTime?
+
+  group         ProjectGroup            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user          User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: SetNull)
+
+  @@unique([groupId, userId])
+  @@index([participationId])
+}
+
+model WorkPlanItem {
+  id          String    @id @default(uuid())
+  groupId     String
+  activityId  String?
+  assigneeId  String?
+  title       String
+  description String?   @db.Text
+  status      String    @default("TODO")
+  dueAt       DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  group    ProjectGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  activity Activity?    @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  assignee User?        @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([groupId, status, dueAt])
+}
+
+model GroupBoard {
+  id        String   @id @default(uuid())
+  groupId   String   @unique
+  snapshot  Json
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  group ProjectGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+}
+
+model Announcement {
+  id                  String    @id @default(uuid())
+  offeringId          String
+  groupId             String?
+  classroomInstanceId String?
+  createdById         String
+  scope               String
+  title               String
+  content             String    @db.Text
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  archivedAt          DateTime?
+
+  offering          CourseOffering      @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  group             ProjectGroup?       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  classroomInstance ClassroomInstance?  @relation(fields: [classroomInstanceId], references: [id], onDelete: Cascade)
+  createdBy         User                @relation("AnnouncementCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  replies           AnnouncementReply[]
+
+  @@index([offeringId, scope, createdAt])
+  @@index([groupId, createdAt])
+}
+
+model AnnouncementReply {
+  id             String   @id @default(uuid())
+  announcementId String
+  authorId       String
+  content        String   @db.Text
+  createdAt      DateTime @default(now())
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  author       User         @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([announcementId, createdAt])
+}
+
+model Todo {
+  id          String    @id @default(uuid())
+  offeringId  String
+  groupId     String?
+  activityId  String?
+  createdById String
+  title       String
+  description String?   @db.Text
+  status      String    @default("ACTIVE")
+  dueAt       DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  offering    CourseOffering   @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  group       ProjectGroup?    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  activity    Activity?        @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  createdBy   User             @relation("TodoCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  completions TodoCompletion[]
+
+  @@index([offeringId, status, dueAt])
+}
+
+model TodoCompletion {
+  id          String   @id @default(uuid())
+  todoId      String
+  userId      String
+  completedAt DateTime @default(now())
+
+  todo Todo @relation(fields: [todoId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([todoId, userId])
+}
+
+model Resource {
+  id          String   @id @default(uuid())
+  offeringId  String
+  activityId  String?
+  fileAssetId String?  @unique
+  createdById String
+  title       String
+  description String?  @db.Text
+  type        String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  offering  CourseOffering @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  activity  Activity?      @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  fileAsset FileAsset?     @relation("ResourceAsset", fields: [fileAssetId], references: [id], onDelete: SetNull)
+  createdBy User           @relation("ResourceCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([offeringId, type])
+}
+
+model FileAsset {
+  id           String    @id @default(uuid())
+  storageKey   String    @unique
+  originalName String
+  mimeType     String
+  size         BigInt
+  sha256       String?
+  uploadedById String
+  offeringId   String?
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  uploadedBy       User              @relation("FileUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  offering         CourseOffering?   @relation(fields: [offeringId], references: [id], onDelete: SetNull)
+  resource         Resource?         @relation("ResourceAsset")
+  artifactVersions ArtifactVersion[]
+
+  @@index([offeringId, createdAt])
+  @@index([sha256])
+}
+
+// ---------------------------------------------------------------------------
+// AI assistance and teaching support
+// ---------------------------------------------------------------------------
+
+model AiConversation {
+  id              String    @id @default(uuid())
+  userId          String
+  offeringId      String?
+  participationId String?
+  title           String?
+  status          String    @default("OPEN")
+  metadata        Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  closedAt        DateTime?
+
+  user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offering          CourseOffering?         @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  participation     ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Cascade)
+  messages          AiMessage[]
+  tasks             AiTask[]
+  interactionEvents AiInteractionEvent[]
+
+  @@index([userId, updatedAt])
+  @@index([participationId, updatedAt])
+}
+
+model AiMessage {
+  id             String   @id @default(uuid())
+  conversationId String
+  userId         String?
+  role           String
+  content        String   @db.Text
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+}
+
+model AiTask {
   id             String    @id @default(uuid())
-  offeringId     String
-  enrollmentId   String
-  activityId     String
-  status         String    @default("not_started") // not_started | in_progress | completed
+  conversationId String?
+  offeringId     String?
+  createdById    String
+  taskType       String
+  status         String    @default("PENDING")
+  input          Json?
+  output         Json?
+  error          String?   @db.Text
   startedAt      DateTime?
   completedAt    DateTime?
-  lastAccessedAt DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
-  version        Int       @default(1)
 
-  enrollment Enrollment     @relation(fields: [enrollmentId, offeringId], references: [id, offeringId], onDelete: Restrict)
-  activity   Activity       @relation(fields: [activityId, offeringId], references: [id, offeringId], onDelete: Restrict)
-  offering   CourseOffering @relation(fields: [offeringId], references: [id], onDelete: Restrict)
+  conversation      AiConversation?       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  offering          CourseOffering?       @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  createdBy         User                  @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  confirmation      AiActionConfirmation?
+  interactionEvents AiInteractionEvent[]
 
-  @@unique([enrollmentId, activityId])
-  @@index([offeringId, enrollmentId, status])
+  @@index([createdById, status, createdAt])
+  @@index([offeringId, status])
 }
 
-/// Append-only event log for the long-lived course platform. It deliberately
-/// does not reuse the legacy Course aggregate's event array, so event history
-/// remains complete when classroom state is updated or a class is taught again.
-model LearningEventRecord {
+model AiActionConfirmation {
+  id            String    @id @default(uuid())
+  taskId        String?   @unique
+  offeringId    String?
+  requestedById String
+  decidedById   String?
+  actionType    String
+  payload       Json?
+  status        String    @default("PENDING")
+  expiresAt     DateTime?
+  decidedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  task        AiTask?         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  offering    CourseOffering? @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  requestedBy User            @relation("ConfirmationRequester", fields: [requestedById], references: [id], onDelete: Cascade)
+  decidedBy   User?           @relation("ConfirmationDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([requestedById, status, createdAt])
+}
+
+model AiSupportRecord {
+  id                String    @id @default(uuid())
+  offeringId        String
+  participationId   String?
+  createdById       String
+  type              String
+  status            String    @default("OPEN")
+  summary           String?   @db.Text
+  structuredPayload Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  resolvedAt        DateTime?
+
+  offering      CourseOffering          @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Cascade)
+  createdBy     User                    @relation("SupportCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([offeringId, type, status])
+  @@index([participationId, createdAt])
+}
+
+model LearningSignal {
+  id              String   @id @default(uuid())
+  userId          String
+  offeringId      String
+  enrollmentId    String?
+  participationId String?
+  type            String
+  status          String   @default("OPEN")
+  severity        String?
+  payload         Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user          User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offering      CourseOffering          @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  enrollment    Enrollment?             @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Cascade)
+
+  @@index([enrollmentId, status, updatedAt])
+  @@index([offeringId, type, updatedAt])
+}
+
+model Intervention {
+  id              String   @id @default(uuid())
+  offeringId      String
+  enrollmentId    String?
+  participationId String?
+  groupId         String?
+  channel         String
+  type            String
+  content         String?  @db.Text
+  createdById     String
+  occurredAt      DateTime @default(now())
+  metadata        Json?
+
+  offering      CourseOffering          @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  enrollment    Enrollment?             @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Cascade)
+  group         ProjectGroup?           @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdBy     User                    @relation("InterventionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([offeringId, occurredAt])
+  @@index([participationId, occurredAt])
+}
+
+model TeacherAgentDirective {
+  id              String    @id @default(uuid())
+  offeringId      String
+  participationId String?
+  createdById     String
+  directiveType   String
+  payload         Json
+  status          String    @default("ACTIVE")
+  createdAt       DateTime  @default(now())
+  expiresAt       DateTime?
+
+  offering      CourseOffering          @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Cascade)
+  createdBy     User                    @relation("DirectiveCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([offeringId, status, createdAt])
+  @@index([participationId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Append-only learning, AI and domain events
+// ---------------------------------------------------------------------------
+
+model LearningEvent {
   id                  String   @id @default(uuid())
-  idempotencyKey      String
+  idempotencyKey      String   @unique
   userId              String
-  offeringId          String
+  offeringId          String?
   enrollmentId        String?
   chapterId           String?
   activityId          String?
   classroomInstanceId String?
   participationId     String?
-  type                String
+  eventType           String
   occurredAt          DateTime
   receivedAt          DateTime @default(now())
-  source              String   @default("platform")
+  source              String?
+  durationMs          Int?
   metadata            Json?
   eventVersion        Int      @default(1)
 
-  user              User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
-  offering          CourseOffering          @relation(fields: [offeringId], references: [id], onDelete: Restrict)
-  enrollment        Enrollment?             @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
-  chapter           Chapter?                @relation(fields: [chapterId], references: [id], onDelete: Restrict)
-  activity          Activity?               @relation(fields: [activityId], references: [id], onDelete: Restrict)
-  classroomInstance ClassroomInstance?      @relation(fields: [classroomInstanceId], references: [id], onDelete: Restrict)
-  participation     ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
+  user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offering          CourseOffering?         @relation(fields: [offeringId], references: [id], onDelete: SetNull)
+  enrollment        Enrollment?             @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
+  chapter           Chapter?                @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  activity          Activity?               @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  classroomInstance ClassroomInstance?      @relation(fields: [classroomInstanceId], references: [id], onDelete: SetNull)
+  participation     ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: SetNull)
 
-  @@unique([userId, offeringId, idempotencyKey])
-  @@index([userId, occurredAt])
-  @@index([offeringId, activityId, occurredAt])
   @@index([offeringId, enrollmentId, occurredAt])
+  @@index([offeringId, activityId, occurredAt])
+  @@index([eventType, occurredAt])
 }
 
-model ProviderCredential {
-  section         String
-  providerId      String
-  encryptedApiKey Bytes?
-  iv              Bytes?
-  authTag         Bytes?
-  config          Json
+model AiInteractionEvent {
+  id              String   @id @default(uuid())
+  idempotencyKey  String   @unique
+  userId          String
+  offeringId      String?
+  conversationId  String?
+  taskId          String?
+  participationId String?
+  requestId       String?
+  eventType       String
+  actor           String
+  content         String?  @db.Text
+  payload         Json?
   createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  version         Int      @default(1)
 
-  @@id([section, providerId])
-  @@index([updatedAt])
+  user          User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offering      CourseOffering?         @relation(fields: [offeringId], references: [id], onDelete: SetNull)
+  conversation  AiConversation?         @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  task          AiTask?                 @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: SetNull)
+
+  @@index([participationId, createdAt])
+  @@index([userId, createdAt])
+  @@index([requestId])
+}
+
+model DomainEvent {
+  id                  String   @id @default(uuid())
+  idempotencyKey      String   @unique
+  actorId             String?
+  offeringId          String?
+  classroomInstanceId String?
+  participationId     String?
+  eventType           String
+  payload             Json?
+  createdAt           DateTime @default(now())
+
+  actor             User?                   @relation("DomainEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  offering          CourseOffering?         @relation(fields: [offeringId], references: [id], onDelete: SetNull)
+  classroomInstance ClassroomInstance?      @relation(fields: [classroomInstanceId], references: [id], onDelete: SetNull)
+  participation     ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: SetNull)
+
+  @@index([offeringId, createdAt])
+  @@index([eventType, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Infrastructure
+// ---------------------------------------------------------------------------
+
+model ProviderCredential {
+  id        String    @id @default(uuid())
+  ownerId   String?
+  provider  String
+  name      String
+  secret    String
+  config    Json?
+  status    String    @default("ACTIVE")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  rotatedAt DateTime?
+
+  owner User? @relation("CredentialOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@unique([ownerId, provider, name])
+  @@index([provider, status])
 }
 
 model LoadTestRun {
-  runId        String   @id
-  teacherId    String   @unique
-  courseId     String   @unique
-  studentCount Int
-  createdAt    DateTime @default(now())
-  expiresAt    DateTime
+  id            String    @id @default(uuid())
+  initiatedById String?
+  name          String
+  status        String    @default("PENDING")
+  config        Json
+  result        Json?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
 
-  @@index([expiresAt])
+  initiatedBy User? @relation("LoadTestInitiator", fields: [initiatedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
 }

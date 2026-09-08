@@ -1,8 +1,6 @@
 import { authenticateRequest } from "@/lib/auth/request-guards";
 import { requireSameOrigin } from "@/lib/auth/request-guards";
-import { archiveActivity, getStudentActivity, legacyStudentIdFor, updateActivity, PlatformError } from "@/lib/platform/repository";
-import { getPlatformUser } from "@/lib/platform/access";
-import { studentCookieHeader } from "@/lib/platform/http";
+import { archiveActivity, getStudentActivity, updateActivity, PlatformError } from "@/lib/platform/repository";
 import { jsonError } from "@/lib/platform/http";
 import { z } from "zod";
 export const runtime = "nodejs"; export const dynamic = "force-dynamic";
@@ -10,13 +8,7 @@ export async function GET(request: Request, context: { params: Promise<{ activit
   const auth = await authenticateRequest(request, "student"); if ("response" in auth) return auth.response;
   try {
     const activity = await getStudentActivity(auth.claims, (await context.params).activityId);
-    const headers = new Headers({ "Cache-Control": "private, no-store" });
-    const legacyCourseId = activity.instance?.legacyCourseId ?? activity.offering.legacyCourseId;
-    if (legacyCourseId && auth.claims.userId) {
-      const user = await getPlatformUser(auth.claims);
-      if (user) headers.set("Set-Cookie", await studentCookieHeader({ userId: user.id, studentId: legacyStudentIdFor(legacyCourseId, user.id), studentName: user.displayName, courseId: legacyCourseId, sessionVersion: user.sessionVersion }));
-    }
-    return Response.json({ activity }, { headers });
+    return Response.json({ activity }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { if (error instanceof PlatformError) return jsonError(request, error.code, error.message, error.status); return jsonError(request, "ACTIVITY_UNAVAILABLE", "无法加载活动", 503); }
 }
 

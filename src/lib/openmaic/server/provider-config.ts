@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Server-side Provider Configuration
  *

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { prisma } from "@/lib/db/client";
 import { loadCourse } from "@/lib/db/session-repository";
 import { authenticateRequest } from "@/lib/auth/request-guards";

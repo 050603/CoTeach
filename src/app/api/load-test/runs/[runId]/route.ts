@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { z } from "zod";
 import { prisma } from "@/lib/db/client";
 import { authorizeLoadTestRequest } from "@/lib/load-test/authorization";

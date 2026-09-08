@@ -28,22 +28,9 @@ export async function register(): Promise<void> {
   // Side-effect import: triggers collectDefaultMetrics() exactly once.
   await import("@/lib/observability/metrics");
 
-  const { isBackgroundCourseGenerationEnabled } = await import(
-    "@/lib/course-generation/capability"
-  );
-  if (isBackgroundCourseGenerationEnabled()) {
-    const { startCourseGenerationWorker, stopCourseGenerationWorker } = await import(
-      "@/lib/course-generation/job-runner"
-    );
-    const { startCourseDesignWorker, stopCourseDesignWorker } = await import(
-      "@/lib/course-design/job-runner"
-    );
-    const { registerShutdownHook } = await import("@/lib/runtime/lifecycle");
-    await startCourseGenerationWorker();
-    await startCourseDesignWorker();
-    registerShutdownHook("course-generation-worker", stopCourseGenerationWorker);
-    registerShutdownHook("course-design-worker", stopCourseDesignWorker);
-  }
+  // Legacy CourseGenerationJob/CourseDesignGenerationJob workers were
+  // intentionally removed in V2. GenerationJob is persisted by the V2 API;
+  // no process may start a worker against the retired tables.
 
   if (process.env.ENABLE_WEBSOCKET === "true") {
     const { initializeEventBus } = await import("@/lib/realtime/event-bus");

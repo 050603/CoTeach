@@ -26,32 +26,21 @@ async function main() {
         "pnpm admin:init-teacher --username <name> --display-name <name>",
     );
   }
-  const count = await prisma.teacher.count();
+  const count = await prisma.user.count({ where: { role: { in: ["TEACHER", "teacher"] } } });
   if (count > 0) {
     throw new Error("Teacher initialization refused: at least one teacher already exists.");
   }
   const passwordHash = await hashPassword(parsed.data.password);
-  const teacher = await prisma.$transaction(async (tx) => {
-    const created = await tx.teacher.create({
-      data: {
-        username: parsed.data.username,
-        displayName: parsed.data.displayName,
-        passwordHash,
-      },
-      select: { id: true, username: true, displayName: true, sessionVersion: true },
-    });
-    await tx.user.create({
-      data: {
-        id: created.id,
-        username: created.username,
-        usernameKey: created.username.normalize("NFKC").trim().toLocaleLowerCase("en-US"),
-        displayName: created.displayName,
-        passwordHash,
-        role: "teacher",
-        sessionVersion: created.sessionVersion,
-      },
-    });
-    return created;
+  const teacher = await prisma.user.create({
+    data: {
+      username: parsed.data.username,
+      usernameKey: parsed.data.username.normalize("NFKC").trim().toLocaleLowerCase("en-US"),
+      displayName: parsed.data.displayName,
+      passwordHash,
+      role: "TEACHER",
+      status: "ACTIVE",
+    },
+    select: { id: true, username: true, displayName: true, sessionVersion: true },
   });
   process.stdout.write(
     `Created initial teacher ${teacher.username} (${teacher.id}) for ${teacher.displayName}.\n`,

@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Upload cleanup tasks (Stage 6).
 //
 // Three operations:

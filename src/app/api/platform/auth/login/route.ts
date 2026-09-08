@@ -24,8 +24,7 @@ export async function POST(request: Request) {
   try {
     const account = await loginStudent(parsed.data.username, parsed.data.password);
     await resetDistributedRateLimit("platform-login", limitKey);
-    const firstLegacyCourseId = account.enrollments.find((item) => item.offering.legacyCourseId)?.offering.legacyCourseId ?? "";
-    return Response.json({ user: { id: account.id, username: account.username, displayName: account.displayName, role: account.role }, enrollments: account.enrollments.map((item) => ({ id: item.id, offeringId: item.offeringId })) }, { headers: { "Set-Cookie": await studentCookieHeader({ userId: account.id, studentName: account.displayName, courseId: firstLegacyCourseId, sessionVersion: account.sessionVersion }), "Cache-Control": "no-store" } });
+    return Response.json({ user: { id: account.id, username: account.username, displayName: account.displayName, role: account.role.toLowerCase() }, enrollments: account.enrollments.map((item) => ({ id: item.id, offeringId: item.offeringId })) }, { headers: { "Set-Cookie": await studentCookieHeader({ userId: account.id, studentName: account.displayName, sessionVersion: account.sessionVersion }), "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof PlatformError) return jsonError(request, error.code, error.message, error.status);
     console.error("[platform/student-login] failed", error);

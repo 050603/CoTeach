@@ -5,28 +5,14 @@ export async function hasCurrentSessionVersion(
   claims: AuthClaims,
 ): Promise<boolean> {
   if (!claims.sub) return false;
-  if (claims.role === "teacher") {
-    const teacher = await prisma.teacher.findUnique({
-      where: { id: claims.sub },
-      select: { sessionVersion: true },
-    });
-    return teacher?.sessionVersion === claims.sv;
-  }
-  if (claims.role === "student" && "userId" in claims && typeof claims.userId === "string") {
-    const user = await prisma.user.findUnique({
-      where: { id: claims.userId },
-      select: { sessionVersion: true, status: true, role: true },
-    });
-    if (user) return user.role === "student" && user.status === "active" && user.sessionVersion === claims.sv;
-  }
-  const account = await prisma.studentAccount.findUnique({
-    where: {
-      courseId_studentId: {
-        courseId: claims.courseId,
-        studentId: claims.studentId,
-      },
-    },
-    select: { sessionVersion: true },
+  const user = await prisma.user.findUnique({
+    where: { id: claims.sub },
+    select: { sessionVersion: true, status: true, role: true },
   });
-  return account?.sessionVersion === claims.sv;
+  return Boolean(
+    user
+      && user.role.toLowerCase() === claims.role
+      && user.status.toLowerCase() === "active"
+      && user.sessionVersion === claims.sv,
+  );
 }

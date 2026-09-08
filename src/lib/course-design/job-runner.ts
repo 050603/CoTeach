@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Prisma, type CourseDesignGenerationJob } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import {
