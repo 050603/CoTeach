@@ -2,6 +2,7 @@
 
 import type {
   ExtendConfig,
+  SlateEditor,
   TElement,
   TInlineSuggestionData,
   TSuggestionData,
@@ -41,7 +42,7 @@ const INLINE_SUGGESTION_TARGET_PLUGINS = [
   KEYS.mention,
 ];
 
-function getInlineSuggestionData(editor: any, element: TElement) {
+function getInlineSuggestionData(editor: SlateEditor, element: TElement) {
   const suggestionApi = editor.getApi(BaseSuggestionPlugin).suggestion;
   const data = suggestionApi.suggestionData(element) as
     | TSuggestionData
@@ -122,8 +123,8 @@ export const suggestionPlugin = toTPlatePlugin<SuggestionConfig>(
     targetPlugins: INLINE_SUGGESTION_TARGET_PLUGINS,
   },
   render: {
-    belowNodes: SuggestionLineBreak as any,
-    belowRootNodes: VoidRemoveSuggestionOverlay as any,
+    belowNodes: SuggestionLineBreak,
+    belowRootNodes: VoidRemoveSuggestionOverlay,
     node: SuggestionLeaf,
   },
 });

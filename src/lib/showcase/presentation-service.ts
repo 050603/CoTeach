@@ -6,6 +6,7 @@ import type { AuthClaims } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/client";
 import { lockCourseMutation } from "@/lib/db/course-mutation-lock";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
+import { findLegacyParticipation } from "@/lib/platform/access";
 import type {
   FinalArtifactKind,
   FinalArtifactSummary,
@@ -748,6 +749,7 @@ async function requestPresentation(courseId: string, action: Extract<ShowcaseAct
         requestId,
         status: "pending",
         viewState: { scrollRatio: 0, page: 1, updatedAt: new Date().toISOString() },
+        participationId: (await findLegacyParticipation(tx, courseId, claims.studentId))?.id,
       },
     });
     snapshot = rowToSnapshot(row, studentName);

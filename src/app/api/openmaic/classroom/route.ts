@@ -5,12 +5,18 @@ import {
   readClassroom,
 } from '@openmaic/lib/server/classroom-storage';
 import { createLogger } from '@openmaic/lib/logger';
+import { authorizeLegacyClassroomRead } from '@/lib/platform/access';
 
 const log = createLogger('Classroom API');
 
 export async function GET(request: NextRequest) {
   try {
     const id = request.nextUrl.searchParams.get('id');
+
+    if (id) {
+      const authorization = await authorizeLegacyClassroomRead(request, id);
+      if (authorization) return authorization;
+    }
 
     if (!id) {
       return apiError(

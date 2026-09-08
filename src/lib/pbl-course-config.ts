@@ -138,7 +138,7 @@ export const DEFAULT_PBL_COURSE_CONFIG: PblCourseConfig = {
   makeArtifactMode: "document",
   inquiryQuestions: [],
   evaluationModel: "tri-party",
-  generationTemplate: "pbl-six-stage",
+  generationTemplate: "new-ai-learning-only",
 };
 
 function cloneEvidenceRequirement(item: PblEvidenceRequirement): PblEvidenceRequirement {
@@ -224,10 +224,7 @@ export function normalizePblCourseConfig(
         : "document",
     inquiryQuestions,
     evaluationModel: "tri-party",
-    generationTemplate:
-      input?.generationTemplate === "new-ai-learning-only"
-        ? "new-ai-learning-only"
-        : "pbl-six-stage",
+    generationTemplate: "new-ai-learning-only",
   };
 }
 

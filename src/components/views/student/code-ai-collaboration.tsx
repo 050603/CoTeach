@@ -30,13 +30,11 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { PrimaryButton } from "@/components/ui";
-import { ArtifactTypeSelector } from "@/components/views/student/artifact-type-selector";
 import {
   CodeAiMemberWorkspace,
   type CodeAiWorkspaceMessage,
 } from "@/components/views/student/code-ai-member-workspace";
 import { CodeAiCommentThreadPanel } from "@/components/views/student/code-ai-comment-thread";
-import type { CollaborationArtifactType } from "@/lib/ai-collaboration/artifact-types";
 import {
   createCodeArtifact,
   normalizeCodeFileName,
@@ -56,7 +54,7 @@ import type { CodeAiCommentThread } from "@/lib/ai-collaboration/code-comment-ty
 import type { CodeRunnerResult } from "@/lib/code-runner/client";
 import { useCourse, useHydrated, useSession } from "@/lib/session/store";
 import { cn } from "@/lib/utils";
-import { collaborationBackHref, isNewOpenPblSystem } from "@/lib/system-mode";
+import { collaborationBackHref } from "@/lib/system-mode";
 import { DashboardTopBar } from "@/components/dashboard-shell";
 import { StudentClassroomHeaderStatus } from "@/components/classroom/student-classroom-header-status";
 import { useCoursePresence } from "@/hooks/use-course-presence";
@@ -170,11 +168,9 @@ function threadMatchesArtifact(thread: CodeAiCommentThread, artifact: CodeArtifa
 export function CodeAiCollaboration({
   courseId,
   language,
-  onArtifactTypeChange,
 }: {
   courseId: string;
   language: CodeArtifactLanguage;
-  onArtifactTypeChange: (value: CollaborationArtifactType) => void;
 }) {
   const router = useRouter();
   const hydrated = useHydrated();
@@ -189,9 +185,7 @@ export function CodeAiCollaboration({
     heartbeat: true,
   });
   const stageKey = stage?.key ?? "";
-  const newSystem = isNewOpenPblSystem();
-  const supportedStage = (stageKey === "proposal" || stageKey === "make")
-    && (!newSystem || course?.status === "teaching");
+  const supportedStage = stageKey === "make" && course?.status === "teaching";
   const onlineCount = course
     ? course.students.filter((student) => presence.onlineStudentIds.has(student.id)).length
     : 0;
@@ -741,11 +735,6 @@ export function CodeAiCollaboration({
     setUndoArtifact(null);
   }
 
-  function changeArtifactType(value: CollaborationArtifactType) {
-    persistArtifact(serializedArtifact);
-    onArtifactTypeChange(value);
-  }
-
   async function runCode() {
     if (running || pendingChangeSet) return;
     persistArtifact(serializedArtifact);
@@ -1004,11 +993,9 @@ export function CodeAiCollaboration({
           <Code2 className="mx-auto text-stone-400" size={28} />
           <p className="mt-3 text-sm text-stone-600">{!studentId
             ? "学生身份尚未初始化，请重新进入课堂。"
-            : newSystem
-              ? course.status === "finished"
-                ? "课堂已经结束，协作成果现已只读保存。"
-                : "代码协作目前仅在项目实践阶段开放。"
-              : "代码协作实验目前在方案构思与项目实践阶段开放。"}</p>
+            : course.status === "finished"
+              ? "课堂已经结束，协作成果现已只读保存。"
+              : "代码协作目前仅在项目实践阶段开放。"}</p>
           <PrimaryButton className="mt-4" onClick={() => router.replace(collaborationBackHref(course.id))} tone="slate" variant="outline">返回课堂</PrimaryButton>
         </div>
       </div>
@@ -1034,7 +1021,6 @@ export function CodeAiCollaboration({
             <h1 className="mt-1 truncate text-base font-bold leading-tight text-stone-950 sm:text-lg">{projectTitle}</h1>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            {!newSystem ? <ArtifactTypeSelector onValueChange={changeArtifactType} value={language} /> : null}
             <span className={cn("hidden items-center gap-1.5 text-xs sm:inline-flex", saveStatus === "error" ? "text-red-600" : "text-stone-500")}>{saveStatus === "saved" ? <Check size={13} /> : null}{saveStateLabel(saveStatus)}</span>
             <PrimaryButton disabled={saveStatus === "saving"} onClick={() => persistArtifact(serializedArtifact)} size="sm" tone="slate" variant="outline"><Save size={14} />保存</PrimaryButton>
           </div>

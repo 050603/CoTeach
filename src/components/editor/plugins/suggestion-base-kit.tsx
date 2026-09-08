@@ -1,4 +1,5 @@
 import type {
+  SlateEditor,
   TElement,
   TInlineSuggestionData,
   TSuggestionData,
@@ -20,7 +21,7 @@ const INLINE_SUGGESTION_TARGET_PLUGINS = [
   KEYS.mention,
 ];
 
-function getInlineSuggestionData(editor: any, element: TElement) {
+function getInlineSuggestionData(editor: SlateEditor, element: TElement) {
   const suggestionApi = editor.getApi(BaseSuggestionPlugin).suggestion;
   const data = suggestionApi.suggestionData(element) as
     | TSuggestionData
@@ -63,8 +64,8 @@ export const BaseSuggestionKit = [
       targetPlugins: INLINE_SUGGESTION_TARGET_PLUGINS,
     },
     render: {
-      belowRootNodes: VoidRemoveSuggestionOverlayStatic as any,
-      node: SuggestionLeafStatic as any,
+      belowRootNodes: VoidRemoveSuggestionOverlayStatic,
+      node: SuggestionLeafStatic,
     },
   }),
 ];

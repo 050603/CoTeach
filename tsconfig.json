@@ -50,15 +50,7 @@
     ".next-visual-review/types/**/*.ts",
     ".next-visual-review/dev/types/**/*.ts",
     ".next-build-codex/types/**/*.ts",
-    ".next-build-codex/dev/types/**/*.ts",
-    ".next-new/types/**/*.ts",
-    ".next-new/dev/types/**/*.ts",
-    ".next-legacy/types/**/*.ts",
-    ".next-legacy/dev/types/**/*.ts",
-    ".next-new-dev/types/**/*.ts",
-    ".next-new-dev/dev/types/**/*.ts",
-    ".next-legacy-dev/types/**/*.ts",
-    ".next-legacy-dev/dev/types/**/*.ts"
+    ".next-build-codex/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

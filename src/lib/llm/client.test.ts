@@ -74,53 +74,6 @@ const input: GenerateInput = {
 };
 
 describe("normalizeTeachingOutlineResponse", () => {
-  it("accepts common module envelopes, aliases, and nested role fields", () => {
-    const result = normalizeTeachingOutlineResponse(
-      {
-        modules: [
-          {
-            id: "module-1",
-            phase: "项目启动",
-            name: "启动与驱动问题",
-            duration: "5分钟",
-            objective: "理解项目任务与成果要求",
-            roles: {
-              teacher: "教师发布任务并说明评价边界",
-              platform: "平台展示项目资料",
-              ai: "AI 提供澄清问题，不直接给出答案",
-              student: ["分析驱动问题", "提交任务理解"],
-            },
-            knowledgePoints: [{ id: "kp-1" }],
-          },
-        ],
-      },
-      { ...input, pblConfig: DEFAULT_PBL_COURSE_CONFIG },
-      { knowledgePoints: [{ id: "kp-1", name: "证据", description: "用于验证方案的事实" }] },
-    );
-
-    expect(result).toHaveLength(6);
-    expect(result[0]).toMatchObject({
-      id: "module-1",
-      stageKey: "launch",
-      title: "启动与驱动问题",
-      teachingGoal: "理解项目任务与成果要求",
-      teacherRole: "教师发布任务并说明评价边界",
-      platformRole: "平台展示项目资料",
-      aiRole: "AI 提供澄清问题，不直接给出答案",
-      studentActivity: "分析驱动问题；提交任务理解",
-      knowledgePointIds: ["kp-1"],
-    });
-    expect(result[0]?.durationMin).toBeGreaterThan(0);
-    expect(result.every((item) =>
-      item.title &&
-      item.teachingGoal &&
-      item.teacherRole &&
-      item.platformRole &&
-      item.aiRole &&
-      item.studentActivity,
-    )).toBe(true);
-  });
-
   it("fills editable defaults when a model omits operational role fields", () => {
     // Provide 4 of the 6 role fields so the section stays under the
     // MISSING_FIELDS_THRESHOLD (>3) and exercises the transparent
@@ -206,43 +159,6 @@ describe("normalizeTeachingOutlineResponse", () => {
     expect(() => normalizeTeachingOutlineResponse({ modules: [null, "not-a-module"] }, input)).toThrow(
       "授课大纲生成失败：AI 未返回可用课程模块。",
     );
-  });
-
-  it("merges duplicate top-level stages and preserves teacher-confirmed durations", () => {
-    const pblInput = { ...input, pblConfig: DEFAULT_PBL_COURSE_CONFIG };
-    const skeleton = createPblTimingSkeleton({ totalMinutes: 60 });
-    const confirmedDurations = [5, 12, 8, 25, 7, 3];
-    const timedSkeleton = skeleton.map((module, index) => ({
-      ...module,
-      durationMin: confirmedDurations[index]!,
-    }));
-    const moduleTimingPlan = buildPblModuleTimingPlan(60, timedSkeleton, undefined, {
-      status: "confirmed",
-      preserveCurrentDurations: true,
-    });
-    const result = normalizeTeachingOutlineResponse(
-      {
-        modules: [
-          ...timedSkeleton,
-          { ...timedSkeleton[1]!, id: "duplicate-knowledge", title: "第二知识点讲解" },
-          { ...timedSkeleton[3]!, id: "duplicate-practice", title: "第二知识点实践" },
-        ],
-      },
-      pblInput,
-      { moduleTimingPlan },
-    );
-
-    expect(result).toHaveLength(6);
-    expect(result.map((module) => module.stageKey)).toEqual([
-      "launch",
-      "ai-learning",
-      "proposal",
-      "make",
-      "showcase",
-      "reflection",
-    ]);
-    expect(result.map((module) => module.durationMin)).toEqual(confirmedDurations);
-    expect(result[1]?.teachingGoal).toContain(timedSkeleton[1]!.teachingGoal);
   });
 });
 

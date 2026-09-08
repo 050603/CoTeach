@@ -11,6 +11,7 @@ import {
   ProjectDocumentArchiveError,
 } from "@/lib/project-practice/document-archive";
 import { persistCourseUpdateInvalidation } from "@/lib/realtime/course-update-invalidation";
+import { findLegacyParticipation } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -91,6 +92,7 @@ async function reserveVersion(input: {
         sourceHtml: input.sourceHtml,
         requestId: input.requestId,
         status: "processing",
+        participationId: (await findLegacyParticipation(tx, input.courseId, input.studentId))?.id,
       },
     });
     return { row, reused: false };
@@ -203,6 +205,7 @@ export async function POST(request: Request) {
           });
         }
       }
+      const participationId = (await findLegacyParticipation(tx, body.courseId, studentId))?.id;
       await tx.projectDocumentVersion.update({
         where: { id: reservation.row.id },
         data: {
@@ -213,11 +216,12 @@ export async function POST(request: Request) {
           docxSize: archive.bytes.length,
           submittedAt,
           error: null,
+          participationId,
         },
       });
       await tx.classroomSubmission.update({
         where: { id: submission.id },
-        data: { status: "submitted", submittedAt: submittedAt.toISOString() },
+        data: { status: "submitted", submittedAt: submittedAt.toISOString(), participationId },
       });
       const course = await tx.course.update({
         where: { id: body.courseId },

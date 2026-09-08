@@ -32,10 +32,6 @@ export const config = {
     "/api/courses/:path*",
     "/api/teacher-directives",
     "/api/teacher-directives/:path*",
-    "/api/chat/companion",
-    "/api/chat/companion/:path*",
-    "/api/companion",
-    "/api/companion/:path*",
     "/api/learning-events",
     "/api/learning-events/:path*",
     "/api/openmaic/provider-config",
@@ -104,6 +100,13 @@ export async function proxy(req: NextRequest) {
   // /student 裸路径是学生入口页（输入邀请码），公开访问；
   // 仅 /student/* 子路径（classroom、ai-learning）需要学生身份。
   if (pathname.startsWith("/student/")) {
+    if (
+      pathname === "/student/register" ||
+      pathname === "/student/login" ||
+      pathname === "/student/reset-password"
+    ) {
+      return NextResponse.next();
+    }
     const token = readCookie(req, STUDENT_COOKIE);
     const claims = await verifyCookie(token ?? "", secret);
     if (!claims || claims.role !== "student") {
@@ -129,6 +132,10 @@ export async function proxy(req: NextRequest) {
       pathname === "/api/auth/logout" ||
       pathname === "/api/auth/me" ||
       pathname === "/api/auth/register" ||
+      pathname === "/api/platform/auth/invite" ||
+      pathname === "/api/platform/auth/register" ||
+      pathname === "/api/platform/auth/login" ||
+      pathname === "/api/platform/auth/reset-password" ||
       pathname === "/api/health/live" ||
       // Sandboxed srcdoc iframes have an opaque origin and cannot reliably
       // attach the teacher/student cookie to runtime subresource requests.
@@ -169,13 +176,8 @@ export async function proxy(req: NextRequest) {
       }
     }
 
-    // Companion + learning-events: require known identity (student for chat,
-    // teacher for oversight)
-    if (
-      pathname.startsWith("/api/chat/companion") ||
-      pathname.startsWith("/api/companion") ||
-      pathname.startsWith("/api/learning-events")
-    ) {
+    // Learning events require a known teacher or student identity.
+    if (pathname.startsWith("/api/learning-events")) {
       if (!isTeacher && !isStudent) {
         return NextResponse.json(
           { error: "UNAUTHORIZED", message: "请先登录" },

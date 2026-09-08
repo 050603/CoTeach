@@ -48,36 +48,14 @@ function stateWithCourses(...courses: Course[]): SessionState {
   return { ...initialSessionState(), courses, hydrated: true };
 }
 
-describe("normalizeCourse — selectable system modes", () => {
-  it("projects five new stages without losing the remembered legacy position", () => {
-    const previousMode = process.env.NEXT_PUBLIC_OPENPBL_SYSTEM_MODE;
-    try {
-      const legacyAtProposal = makeCourse({
-        currentStageIndex: 2,
-        stages: DEFAULT_STAGES.map((stage) =>
-          stage.key === "proposal" ? { ...stage, description: "教师定制的旧版方案阶段" } : stage),
-      });
-      process.env.NEXT_PUBLIC_OPENPBL_SYSTEM_MODE = "new";
-      const projectedNew = normalizeCourse(legacyAtProposal);
-      expect(projectedNew.stages.map((stage) => stage.key)).toEqual([
-        "launch", "ai-learning", "make", "showcase", "reflection",
-      ]);
-      expect(projectedNew.stages[projectedNew.currentStageIndex]?.key).toBe("make");
-
-      const newAtShowcase = normalizeCourse({ ...projectedNew, currentStageIndex: 3 });
-      process.env.NEXT_PUBLIC_OPENPBL_SYSTEM_MODE = "legacy";
-      const restoredLegacy = normalizeCourse(newAtShowcase);
-      expect(restoredLegacy.stages).toHaveLength(6);
-      expect(restoredLegacy.stages[restoredLegacy.currentStageIndex]?.key).toBe("proposal");
-      expect(restoredLegacy.stages[2]?.description).toBe("教师定制的旧版方案阶段");
-      expect(restoredLegacy.uiState?.systemStageKeyByMode).toEqual({
-        legacy: "proposal",
-        new: "showcase",
-      });
-    } finally {
-      if (previousMode === undefined) delete process.env.NEXT_PUBLIC_OPENPBL_SYSTEM_MODE;
-      else process.env.NEXT_PUBLIC_OPENPBL_SYSTEM_MODE = previousMode;
-    }
+describe("normalizeCourse — current five-stage system", () => {
+  it("normalizes persisted courses into the supported stages", () => {
+    const normalized = normalizeCourse(makeCourse({ currentStageIndex: 2 }));
+    expect(normalized.stages.map((stage) => stage.key)).toEqual([
+      "launch", "ai-learning", "make", "showcase", "reflection",
+    ]);
+    expect(normalized.stages[normalized.currentStageIndex]?.key).toBe("make");
+    expect(normalized.pblConfig?.generationTemplate).toBe("new-ai-learning-only");
   });
 });
 
@@ -869,7 +847,7 @@ describe("applySessionAction — evidence-driven classroom records", () => {
 });
 
 describe("normalizeCourse — evidence-driven full upgrade", () => {
-  it("starts invalid legacy stage/task structures on the new model without mapping old work", () => {
+  it("normalizes pre-upgrade stage structures onto the current five-stage model", () => {
     const legacyStages = [
       ...DEFAULT_STAGES.slice(0, 2),
       { key: "group", label: "小组构思", view: "group" as const, description: "组队" },
@@ -896,8 +874,8 @@ describe("normalizeCourse — evidence-driven full upgrade", () => {
       feedback: [{ id: "f1", courseId: "course-1", targetType: "group", targetId: "g1", stageKey: "review", kind: "comment", content: "请补充证据", createdAt: "2024-01-01T00:00:00.000Z" }],
     });
     const result = normalizeCourse(legacy);
-    expect(result.stages.map((stage) => stage.key)).toEqual(["launch", "ai-learning", "proposal", "make", "showcase", "reflection"]);
-    expect(result.stages[result.currentStageIndex].key).toBe("launch");
+    expect(result.stages.map((stage) => stage.key)).toEqual(["launch", "ai-learning", "make", "showcase", "reflection"]);
+    expect(result.stages[result.currentStageIndex].key).toBe("make");
     expect(result.classConfig).toMatchObject({ groupMode: "solo", perGroup: 1, crossClass: false });
     expect(result.feedback?.[0]).toMatchObject({ sourceRole: "teacher", status: "open", evidence: [] });
     expect(result.content.evaluationPlan.flows).toEqual([

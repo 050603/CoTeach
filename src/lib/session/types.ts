@@ -396,19 +396,8 @@ export type CourseUiState = {
   aiAnalysisRefreshedAt?: string;
   /** 教师当前投屏的 OpenMAIC 授课资源；null 表示已停止投屏。 */
   teacherResourceProjection?: TeacherResourceProjection | null;
-  /** 新旧启动模式分别保存课堂位置，切换模式时互不覆盖。 */
-  systemStageKeyByMode?: Partial<Record<"legacy" | "new", string>>;
-  /** 切换模式时保留另一套系统的完整阶段定义，避免覆盖旧课堂配置。 */
-  systemStagesByMode?: Partial<Record<"legacy" | "new", Stage[]>>;
-  /** 当前课程内容属于哪一套生成契约，不能仅凭运行时环境推断。 */
-  activeGenerationMode?: "legacy" | "new";
-  /**
-   * 新旧系统各自的备课产物快照。新版重新生成 AI 授知时不会覆盖旧版
-   * 六阶段大纲、教师资源和课堂 ID，之后用旧命令启动仍可恢复原内容。
-   */
-  systemGenerationByMode?: Partial<
-    Record<"legacy" | "new", CourseGenerationModeSnapshot>
-  >;
+  /** 当前课程内容使用唯一的五阶段生成契约。 */
+  activeGenerationMode?: "new";
   /** 教师选择并向当前阶段全班投屏的上传资源。 */
   resourceProjection?: ClassroomResourceProjection | null;
   /** 第四阶段个人汇报队列配置。 */
@@ -1360,13 +1349,6 @@ export type CourseContent = {
   designGenerationTrace?: CourseDesignGenerationTrace;
 };
 
-export type CourseGenerationModeSnapshot = {
-  aiLearningClassroomId?: string;
-  teacherClassroomId?: string;
-  dynamicFacilitationScaffolds?: DynamicFacilitationScaffold[];
-  content: CourseContent;
-};
-
 export type CourseDesignGenerationTraceEntry = {
   step: string;
   label: string;
@@ -1889,8 +1871,8 @@ export const DEFAULT_STAGES: Stage[] = [
   {
     key: "launch",
     label: "项目启动",
-    view: "project-launch",
-    description: "项目导入，明确驱动问题与目标",
+    view: "simple-resource",
+    description: "查看教师发布的项目说明与授课资源",
   },
   {
     key: "ai-learning",
@@ -1899,28 +1881,22 @@ export const DEFAULT_STAGES: Stage[] = [
     description: "分节学习核心知识，并通过节末小测与 AI 助教讲解及时巩固",
   },
   {
-    key: "proposal",
-    label: "方案构思与校准",
-    view: "proposal-review",
-    description: "独立形成项目方案，在 AI 伴学与教师指导下校准方向",
-  },
-  {
     key: "make",
     label: "项目实践",
-    view: "project-making",
-    description: "独立完成核心作品，在 AI 伴学支持下持续迭代",
+    view: "ai-collaboration",
+    description: "在文档或代码工作台中与 AI 组员协作完成项目成果",
   },
   {
     key: "showcase",
     label: "成果汇报与评价",
-    view: "showcase",
-    description: "公开呈现个人项目成果，由教师评价作品与表达",
+    view: "showcase-reporting",
+    description: "查看最终成果、申请汇报并跟随课堂同步展示",
   },
   {
     key: "reflection",
     label: "学习反思",
-    view: "reflection",
-    description: "回顾个人项目过程，反思 AI 使用并形成迁移计划",
+    view: "reflection-survey",
+    description: "用约 3–5 分钟回顾课程收获与系统使用体验",
   },
 ];
 

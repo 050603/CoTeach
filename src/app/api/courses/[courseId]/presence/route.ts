@@ -4,6 +4,7 @@ import { getRedisClient } from "@/lib/redis/client";
 import { prisma } from "@/lib/db/client";
 import type { AuthClaims } from "@/lib/auth/session";
 import type { PresenceMember, PresenceSnapshot } from "@/lib/presence";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,6 +41,9 @@ export async function PUT(
   if (!parsed.success) return new Response(null, { status: 404 });
   if (auth.claims.role === "student" && auth.claims.courseId !== parsed.data.courseId) {
     return new Response(null, { status: 404 });
+  }
+  if (!(await canAccessLegacyCourse(auth.claims, parsed.data.courseId, "write"))) {
+    return new Response(null, { status: 403 });
   }
   const redis = await redisOrDatabase();
   if (!redis) {
@@ -90,6 +94,9 @@ export async function DELETE(
   if (auth.claims.role === "student" && auth.claims.courseId !== parsed.data.courseId) {
     return new Response(null, { status: 404 });
   }
+  if (!(await canAccessLegacyCourse(auth.claims, parsed.data.courseId, "write"))) {
+    return new Response(null, { status: 403 });
+  }
   const redis = await redisOrDatabase();
   if (!redis && auth.claims.role === "student") {
     await prisma.student.updateMany({
@@ -120,6 +127,9 @@ export async function GET(
   if (!parsed.success) return new Response(null, { status: 404 });
   if (auth.claims.role === "student" && auth.claims.courseId !== parsed.data.courseId) {
     return new Response(null, { status: 404 });
+  }
+  if (!(await canAccessLegacyCourse(auth.claims, parsed.data.courseId, "read"))) {
+    return new Response(null, { status: 403 });
   }
   const redis = await redisOrDatabase();
   if (!redis) {

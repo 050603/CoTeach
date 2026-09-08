@@ -42,4 +42,4 @@ else
 fi
 
 compose --profile certificate-bootstrap stop nginx-bootstrap
-echo "Certificate created. Start the selected blue/green profile and nginx next."
+echo "Certificate created. Start the current application service and nginx next."

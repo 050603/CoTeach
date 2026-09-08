@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { authenticateRequest } from "@/lib/auth/request-guards";
 import { isDatabaseConfigured, prisma } from "@/lib/db/client";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +21,9 @@ export async function GET(request: Request) {
   if (!parsed.success) return Response.json({ error: "INVALID_REQUEST", message: "查询参数无效。" }, { status: 400 });
   const query = parsed.data;
   if (auth.claims.role === "student" && auth.claims.courseId !== query.courseId) {
+    return Response.json({ error: "FORBIDDEN" }, { status: 403 });
+  }
+  if (!(await canAccessLegacyCourse(auth.claims, query.courseId, "read"))) {
     return Response.json({ error: "FORBIDDEN" }, { status: 403 });
   }
   const studentId = auth.claims.role === "student" ? auth.claims.studentId : query.studentId;

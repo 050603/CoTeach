@@ -23,6 +23,7 @@ import {
   requireSameOrigin,
 } from '@/lib/auth/request-guards';
 import { isAuthConfigured } from '@/lib/auth/session';
+import { canAccessLegacyCourse } from '@/lib/platform/access';
 
 const log = createLogger('ProgressAPI');
 
@@ -93,6 +94,9 @@ export async function GET(request: NextRequest) {
     ) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Progress is outside the signed-in student scope');
     }
+    if (auth && !('response' in auth) && !(await canAccessLegacyCourse(auth.claims, courseId, 'read'))) {
+      return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Course is not accessible');
+    }
 
     const progress = course.aiLearningProgress ?? {};
     return apiSuccess({
@@ -158,6 +162,9 @@ export async function POST(request: NextRequest) {
       )
     ) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Progress updates require the matching student identity');
+    }
+    if (auth && !('response' in auth) && !(await canAccessLegacyCourse(auth.claims, courseId, 'write'))) {
+      return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Course is locked');
     }
     if (!classroomId || typeof classroomId !== 'string') {
       return apiError(

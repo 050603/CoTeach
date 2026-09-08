@@ -1,0 +1,7 @@
+import { z } from "zod";
+import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
+import { updateActivity, PlatformError } from "@/lib/platform/repository";
+import { jsonError } from "@/lib/platform/http";
+export const runtime = "nodejs"; export const dynamic = "force-dynamic";
+const schema = z.object({ title: z.string().trim().min(1).max(160).optional(), description: z.string().max(20_000).optional(), isOpen: z.boolean().optional(), opensAt: z.string().datetime().nullable().optional(), position: z.number().int().min(0).optional(), config: z.unknown().optional(), templateId: z.string().trim().min(1).nullable().optional(), version: z.number().int().positive().optional() });
+export async function PATCH(request: Request, context: { params: Promise<{ activityId: string }> }) { const csrf = requireSameOrigin(request); if (csrf) return csrf; const auth = await authenticateRequest(request, "teacher"); if ("response" in auth) return auth.response; const parsed = schema.safeParse(await request.json().catch(() => null)); if (!parsed.success) return jsonError(request, "INVALID_INPUT", "活动信息无效", 400); try { return Response.json({ activity: await updateActivity(auth.claims, (await context.params).activityId, parsed.data) }); } catch (error) { if (error instanceof PlatformError) return jsonError(request, error.code, error.message, error.status); return jsonError(request, "ACTIVITY_UPDATE_FAILED", "无法更新活动", 503); } }

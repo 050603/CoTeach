@@ -53,6 +53,7 @@ import {
 } from "@/lib/llm/errors";
 import { getCourse } from "@/lib/session/server-store";
 import type { CompanionMessage, Course, Student } from "@/lib/session/types";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -264,6 +265,9 @@ async function authenticateStudent(
   }
   if (claims.courseId !== courseId) {
     return Response.json({ error: "STUDENT_SCOPE_MISMATCH" }, { status: 403 });
+  }
+  if (!(await canAccessLegacyCourse(claims, courseId, "write"))) {
+    return Response.json({ error: "COURSE_LOCKED" }, { status: 403 });
   }
   return { claims, studentId: claims.studentId };
 }

@@ -30,13 +30,28 @@ async function main() {
   if (count > 0) {
     throw new Error("Teacher initialization refused: at least one teacher already exists.");
   }
-  const teacher = await prisma.teacher.create({
-    data: {
-      username: parsed.data.username,
-      displayName: parsed.data.displayName,
-      passwordHash: await hashPassword(parsed.data.password),
-    },
-    select: { id: true, username: true, displayName: true },
+  const passwordHash = await hashPassword(parsed.data.password);
+  const teacher = await prisma.$transaction(async (tx) => {
+    const created = await tx.teacher.create({
+      data: {
+        username: parsed.data.username,
+        displayName: parsed.data.displayName,
+        passwordHash,
+      },
+      select: { id: true, username: true, displayName: true, sessionVersion: true },
+    });
+    await tx.user.create({
+      data: {
+        id: created.id,
+        username: created.username,
+        usernameKey: created.username.normalize("NFKC").trim().toLocaleLowerCase("en-US"),
+        displayName: created.displayName,
+        passwordHash,
+        role: "teacher",
+        sessionVersion: created.sessionVersion,
+      },
+    });
+    return created;
   });
   process.stdout.write(
     `Created initial teacher ${teacher.username} (${teacher.id}) for ${teacher.displayName}.\n`,

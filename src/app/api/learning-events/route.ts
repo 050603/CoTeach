@@ -6,6 +6,9 @@ import {
   requireSameOrigin,
 } from "@/lib/auth/request-guards";
 import { isAuthConfigured } from "@/lib/auth/session";
+import { isDatabaseConfigured, prisma } from "@/lib/db/client";
+import { mirrorLegacyLearningEvents } from "@/lib/platform/repository";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,15 +72,35 @@ export async function POST(request: Request) {
   if (!courseId || !studentId || !Array.isArray(body.events) || body.events.length === 0) {
     return Response.json({ error: "INVALID_REQUEST" }, { status: 400 });
   }
-  if (
-    auth
-    && !("response" in auth)
-    && (
-      auth.claims.courseId !== courseId
-      || auth.claims.studentId !== studentId
-    )
-  ) {
-    return Response.json({ error: "STUDENT_SCOPE_MISMATCH" }, { status: 403 });
+  if (auth && !("response" in auth)) {
+    if (auth.claims.role !== "student") return Response.json({ error: "STUDENT_SCOPE_MISMATCH" }, { status: 403 });
+    if (!(await canAccessLegacyCourse(auth.claims, courseId, "write"))) {
+      return Response.json({ error: "COURSE_LOCKED" }, { status: 403 });
+    }
+    if (auth.claims.userId) {
+      // Platform sessions are intentionally course-independent. Resolve the
+      // requested legacy classroom through Enrollment instead of trusting the
+      // compatibility courseId claim.
+      const enrollment = await prisma.enrollment.findFirst({
+        where: {
+          userId: auth.claims.userId,
+          status: "active",
+          offering: {
+            status: "open",
+            OR: [
+              { legacyCourseId: courseId },
+              { instances: { some: { OR: [{ legacyCourseId: courseId }, { legacySourceCourseId: courseId }] } } },
+            ],
+          },
+        },
+        select: { id: true },
+      });
+      if (!enrollment || (studentId !== auth.claims.studentId && studentId !== auth.claims.userId)) {
+        return Response.json({ error: "STUDENT_SCOPE_MISMATCH" }, { status: 403 });
+      }
+    } else if (auth.claims.courseId !== courseId || auth.claims.studentId !== studentId) {
+      return Response.json({ error: "STUDENT_SCOPE_MISMATCH" }, { status: 403 });
+    }
   }
 
   const course = await getCourse(courseId);
@@ -154,6 +177,18 @@ export async function POST(request: Request) {
         classCommonIssues: commonIssues,
       };
     }, { targetStudentId: studentId });
+  }
+
+  // Mirror the complete batch, including events already present in the legacy
+  // store. The platform writer is idempotent, so retrying duplicates is safe
+  // and lets a transient mirror failure recover on the client's next retry
+  // instead of losing the research record permanently.
+  if (isDatabaseConfigured() && auth && !('response' in auth)) {
+    try {
+      await mirrorLegacyLearningEvents(auth.claims, courseId, incoming);
+    } catch (error) {
+      console.error("[learning-events] unable to mirror platform event", error);
+    }
   }
 
   return Response.json({

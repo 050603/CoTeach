@@ -13,6 +13,7 @@ import type {
   StudentAiProgress,
 } from "@/lib/session/types";
 import { getKnowledgeLectureTutorSettings } from "@/lib/knowledge-lecture-settings";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,8 +68,10 @@ async function authorized(request: Request, courseId: string, studentId: string)
   if (!isAuthConfigured()) return true;
   const claims = await readAuthFromRequest(request, "student");
   if (!claims) return false;
-  if (claims.role === "teacher") return true;
-  return claims.courseId === courseId && claims.studentId === studentId;
+  if (claims.role === "teacher") return canAccessLegacyCourse(claims, courseId, "read");
+  return claims.courseId === courseId
+    && claims.studentId === studentId
+    && canAccessLegacyCourse(claims, courseId, "write");
 }
 
 function sanitizeAttemptQuestions(

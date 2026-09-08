@@ -4,6 +4,8 @@
 import { NextRequest } from "next/server";
 import { callLLM } from "@/lib/llm/client";
 import { STUDENT_CONVERSATION_PROMPT_CONTRACT } from "@/lib/prompt-quality/policy";
+import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
+import { isAuthConfigured } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +16,12 @@ type StudentChatRequest = {
 };
 
 export async function POST(req: NextRequest) {
+  const csrfError = requireSameOrigin(req);
+  if (csrfError) return csrfError;
+  if (isAuthConfigured()) {
+    const auth = await authenticateRequest(req, "student");
+    if ("response" in auth) return auth.response;
+  }
   let body: StudentChatRequest;
   try {
     body = (await req.json()) as StudentChatRequest;

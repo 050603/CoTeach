@@ -89,70 +89,7 @@ describe("evaluateStageGate", () => {
       else process.env.NEXT_PUBLIC_OPENPBL_SYSTEM_MODE = previousMode;
     }
   });
-
-  it("blocks launch without a participant", () => expect(evaluateStageGate(course({ students: [] }), 0).blockers.map((item) => item.code)).toContain("participants"));
-  it("requires every student to select a teacher-provided research direction during launch", () => {
-    expect(evaluateStageGate(course(), 0).blockers.map((item) => item.code)).toContain("launch-selection");
-    const personalProject = {
-      id: "g1", name: "小林的个人项目", topic: "怎样减少校园用水浪费？",
-      keywords: [], selectedForms: [], members: [{ studentId: "s1", name: "小林" }],
-      createdAt: now, updatedAt: now,
-    };
-    expect(evaluateStageGate(course({ groups: [personalProject] }), 0).canAdvance).toBe(true);
-  });
-  it("blocks AI learning without generated content", () => expect(evaluateStageGate(course(), 1).blockers.map((item) => item.code)).toContain("ai-content"));
-  it("requires one complete project plan before teacher approval", () => {
-    const proposalEvidence = [
-      evidence("knowledge-transfer", "proposal", { concept: "变量", ownExplanation: "一次只改变一个因素", projectConstraint: "只改提示位置", application: "固定文案" }),
-      evidence("key-decision", "proposal", {
-        alternatives: [
-          { id: "a", title: "海报", description: "视觉提示", comparison: { 可测试: "高" } },
-          { id: "b", title: "装置", description: "实体提醒", comparison: { 可测试: "中" } },
-        ],
-        successCriteria: ["可测试"], selectedAlternativeId: "a", reason: "可在课内验证",
-      }),
-      evidence("plan-version", "proposal", {
-        versionLabel: "V1", changeSummary: "制作节水提示并应用变量控制知识", nextActions: ["制作"], validationMethod: "用户测试",
-        risks: ["隐私"], aiBoundary: "AI 只检查遗漏",
-      }),
-    ];
-    expect(evaluateStageGate(course({ learningEvidence: proposalEvidence.slice(0, 2) }), 2).blockers.map((item) => item.code))
-      .toContain("proposal-evidence");
-    expect(evaluateStageGate(course({ learningEvidence: proposalEvidence }), 2).blockers.map((item) => item.code))
-      .toContain("teacher-approval");
-  });
-  it("recognizes a submitted work file while still requiring real iteration evidence", () => {
-    const result = evaluateStageGate(course({
-      uploads: [{ id: "u1", courseId: "course-1", studentId: "s1", stageKey: "make", category: "artifact", title: "初稿", fileName: "a.pdf", fileType: "PDF", size: "1MB", url: "/a", createdAt: now }],
-    }), 3);
-    expect(result.blockers.map((item) => item.code)).toContain("iteration-evidence");
-    expect(result.blockers.find((item) => item.code === "iteration-evidence")?.targetIds)
-      .toEqual(["s1"]);
-    expect(result.completed).not.toContain("所有学生均已提交作品");
-  });
-  it("also blocks making while a high-risk intervention is open", () => {
-    const result = evaluateStageGate(course({
-      teacherInterventions: [{ id: "i1", stageKey: "make", scope: "student", targetIds: ["s1"], reason: "伦理风险", evidence: ["作品内容"], action: "guidance", instruction: "重新判断", severity: "high", status: "open", teacherName: "教师", createdAt: now }],
-    }), 3);
-    expect(result.blockers.map((item) => item.code)).toContain("high-risk");
-  });
-  it("requires a showcase workstation submission and teacher live evaluation", () => {
-    const project = { id: "g1", name: "小林的个人项目", topic: "节水", keywords: [], selectedForms: [], members: [{ studentId: "s1", name: "小林" }], createdAt: now, updatedAt: now };
-    const base = {
-      groups: [project],
-      uploads: [{ id: "upload-1", courseId: "course-1", studentId: "s1", groupId: "g1", stageKey: "showcase", category: "presentation" as const, title: "节水海报", fileName: "showcase.pdf", fileType: "PDF", size: "1 MB", url: "/showcase.pdf", createdAt: now }],
-    };
-    const withoutEvaluation = evaluateStageGate(course(base), 4);
-    expect(withoutEvaluation.blockers.map((item) => item.code)).toContain("showcase-evaluation");
-    const withEvaluation = evaluateStageGate(course({
-      ...base,
-      rubricScores: [{ id: "score-1", courseId: "course-1", groupId: "g1", stageKey: "showcase", dimensionScores: {}, teacherTotal: 82, comment: "已完成现场评价", total: 82, status: "submitted", createdAt: now, updatedAt: now }],
-    }), 4);
-    expect(withEvaluation.canAdvance).toBe(true);
-  });
-  it("treats reflection as terminal with warnings, not a forward blocker", () => expect(evaluateStageGate(course(), 5).canAdvance).toBe(true));
 });
-
 describe("detectInterventionSignals", () => {
   it("returns evidence, targets and action for shared misconceptions", () => {
     const result = detectInterventionSignals(course({ aiLearningProgress: {
@@ -164,7 +101,7 @@ describe("detectInterventionSignals", () => {
     expect(result[0].suggestedAction.length).toBeGreaterThan(0);
   });
 
-  it("covers the six teacher-attention signals from canonical evidence and operational records", () => {
+  it("covers teacher-attention signals from canonical evidence and operational records", () => {
     const old = new Date(Date.now() - 40 * 60 * 1000).toISOString();
     const offTarget = {
       ...evidence("artifact-version", "make", {
@@ -189,7 +126,7 @@ describe("detectInterventionSignals", () => {
       teacherFeedback: "测试涉及学生隐私与数据安全，请先调整方法。",
     };
     const result = detectInterventionSignals(course({
-      currentStageIndex: 3,
+      currentStageIndex: 2,
       students: [
         { id: "s1", name: "小林", joinedAt: old, stageProgress: {} },
         { id: "s2", name: "小周", joinedAt: old, stageProgress: {} },

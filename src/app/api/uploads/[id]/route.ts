@@ -8,6 +8,7 @@ import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guard
 import type { AuthClaims } from "@/lib/auth/session";
 import { randomUUID } from "node:crypto";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,7 +33,8 @@ export async function GET(
   const file = await prisma.uploadFile.findFirst({
     where: { id: parsed.data.id, deletedAt: null },
   });
-  if (!file || !canAccess(auth.claims, file.courseId, file.uploadedById)) {
+  if (!file || !canAccess(auth.claims, file.courseId, file.uploadedById)
+    || (file.courseId && !(await canAccessLegacyCourse(auth.claims, file.courseId, "read")))) {
     return new Response(null, { status: 404 });
   }
   if (auth.claims.role === "student" && isFinalArtifactUpload(file.referencedBy)) {
@@ -151,6 +153,9 @@ export async function PATCH(
   if (!resource || !isPdf) {
     return Response.json({ message: "只有 PDF 资源可以切换展示方式。" }, { status: 404 });
   }
+  if (!(await canAccessLegacyCourse(auth.claims, resource.courseId, "write"))) {
+    return Response.json({ message: "课程当前不允许修改资源。" }, { status: 403 });
+  }
 
   const durableEvent = await prisma.$transaction(async (tx) => {
     await tx.courseResource.update({
@@ -214,6 +219,9 @@ export async function DELETE(
   });
   if (!file || (auth.claims.role !== "teacher" && file.uploadedById !== auth.claims.sub)) {
     return new Response(null, { status: 404 });
+  }
+  if (file.courseId && !(await canAccessLegacyCourse(auth.claims, file.courseId, "write"))) {
+    return new Response(null, { status: 403 });
   }
   if (isFinalArtifactUpload(file.referencedBy)) {
     return Response.json({ code: "IMMUTABLE_ARTIFACT", message: "最终成果版本不可删除。" }, { status: 409 });

@@ -1,16 +1,9 @@
 import { normalizePblCourseConfig } from "@/lib/pbl-course-config";
-import type { CourseGenerationTemplate } from "@/lib/pbl-course-config";
-import type {
-  Course,
-  CourseContent,
-  CourseGenerationModeSnapshot,
-  Stage,
-} from "@/lib/session/types";
-import { DEFAULT_STAGES } from "@/lib/session/types";
+import type { Course, CourseContent, Stage } from "@/lib/session/types";
 
-export type OpenPblSystemMode = "legacy" | "new";
+export type OpenPblSystemMode = "new";
 
-const NEW_SYSTEM_STAGES: readonly Stage[] = [
+const SYSTEM_STAGES: readonly Stage[] = [
   {
     key: "launch",
     label: "项目启动",
@@ -43,29 +36,24 @@ const NEW_SYSTEM_STAGES: readonly Stage[] = [
   },
 ];
 
+/** The application now has one production mode. Kept as a tiny API boundary while callers migrate. */
 export function resolveOpenPblSystemMode(value?: string | null): OpenPblSystemMode {
-  return value?.trim().toLowerCase() === "new" ? "new" : "legacy";
+  void value;
+  return "new";
 }
 
 export function getOpenPblSystemMode(): OpenPblSystemMode {
-  return resolveOpenPblSystemMode(process.env.NEXT_PUBLIC_OPENPBL_SYSTEM_MODE);
+  return "new";
 }
 
-export function isNewOpenPblSystem(): boolean {
-  return getOpenPblSystemMode() === "new";
+export function getStagesForSystemMode(mode?: string): Stage[] {
+  void mode;
+  return SYSTEM_STAGES.map((stage) => ({ ...stage }));
 }
 
-export function getStagesForSystemMode(
-  mode: OpenPblSystemMode = getOpenPblSystemMode(),
-): Stage[] {
-  const source = mode === "new" ? NEW_SYSTEM_STAGES : DEFAULT_STAGES;
-  return source.map((stage) => ({ ...stage }));
-}
-
-export function generationTemplateForSystemMode(
-  mode: OpenPblSystemMode = getOpenPblSystemMode(),
-): CourseGenerationTemplate {
-  return mode === "new" ? "new-ai-learning-only" : "pbl-six-stage";
+export function generationTemplateForSystemMode(mode?: string): "new-ai-learning-only" {
+  void mode;
+  return "new-ai-learning-only";
 }
 
 function cloneCourseContent(content: CourseContent): CourseContent {
@@ -73,107 +61,61 @@ function cloneCourseContent(content: CourseContent): CourseContent {
     ...content,
     knowledgePoints: [...(content.knowledgePoints ?? [])],
     lessonOutline: [...(content.lessonOutline ?? [])],
-    teachingOutline: content.teachingOutline
-      ? [...content.teachingOutline]
-      : undefined,
+    teachingOutline: content.teachingOutline ? [...content.teachingOutline] : undefined,
     _openmaicSceneOutlines: content._openmaicSceneOutlines
       ? [...content._openmaicSceneOutlines]
       : undefined,
   };
 }
 
-function snapshotCourseGeneration(course: Course): CourseGenerationModeSnapshot {
-  return {
-    aiLearningClassroomId: course.aiLearningClassroomId,
-    teacherClassroomId: course.teacherClassroomId,
-    dynamicFacilitationScaffolds: course.dynamicFacilitationScaffolds
-      ? [...course.dynamicFacilitationScaffolds]
-      : undefined,
-    content: cloneCourseContent(course.content),
-  };
-}
-
-function deriveNewSystemSnapshot(
-  source: CourseGenerationModeSnapshot,
-): CourseGenerationModeSnapshot {
-  const sceneOutlines = (source.content._openmaicSceneOutlines ?? []).filter(
-    (outline) =>
-      outline.stageKey === "ai-learning"
-      && outline.audience !== "teacher",
+function deriveCurrentSystemContent(content: CourseContent): CourseContent {
+  const sceneOutlines = (content._openmaicSceneOutlines ?? []).filter(
+    (outline) => outline.stageKey === "ai-learning" && outline.audience !== "teacher",
   );
   return {
-    aiLearningClassroomId:
-      source.aiLearningClassroomId ?? source.content._openmaicClassroomId,
+    ...cloneCourseContent(content),
+    pblOutline: "",
+    projectMainline: undefined,
+    teachingOutline: (content.teachingOutline ?? []).filter(
+      (section) => section.stageKey === "ai-learning",
+    ),
+    lessonOutline: (content.lessonOutline ?? []).filter(
+      (section) => section.stageKey === "ai-learning",
+    ),
+    _openmaicSceneOutlines: sceneOutlines,
+    _openmaicScenesCount: sceneOutlines.length,
+    moduleTimingPlan: undefined,
+    teacherResources: undefined,
     teacherClassroomId: undefined,
-    dynamicFacilitationScaffolds: [],
-    content: {
-      ...cloneCourseContent(source.content),
-      pblOutline: "",
-      projectMainline: undefined,
-      teachingOutline: (source.content.teachingOutline ?? []).filter(
-        (section) => section.stageKey === "ai-learning",
-      ),
-      lessonOutline: (source.content.lessonOutline ?? []).filter(
-        (section) => section.stageKey === "ai-learning",
-      ),
-      _openmaicSceneOutlines: sceneOutlines,
-      _openmaicScenesCount: sceneOutlines.length,
-      moduleTimingPlan: undefined,
-      teacherResources: undefined,
-      teacherClassroomId: undefined,
-      adaptiveLearningPlan: undefined,
-      designGenerationTrace: undefined,
-    },
+    adaptiveLearningPlan: undefined,
+    designGenerationTrace: undefined,
   };
 }
 
-function inferGenerationMode(course: Course): OpenPblSystemMode {
-  if (course.uiState?.activeGenerationMode) {
-    return course.uiState.activeGenerationMode;
-  }
-  return course.pblConfig?.generationTemplate === "new-ai-learning-only"
-    ? "new"
-    : "legacy";
-}
-
-/**
- * Select the content snapshot that belongs to the active launch mode. Saving
- * both snapshots keeps a new-system regeneration from destroying an existing
- * six-stage course prepared with the legacy command.
- */
-export function reconcileCourseGenerationMode(
-  course: Course,
-  targetMode: OpenPblSystemMode = getOpenPblSystemMode(),
-): Course {
-  const sourceMode = inferGenerationMode(course);
-  const currentSnapshot = snapshotCourseGeneration(course);
-  const snapshots: Partial<
-    Record<OpenPblSystemMode, CourseGenerationModeSnapshot>
-  > = {
-    ...(course.uiState?.systemGenerationByMode ?? {}),
-    [sourceMode]: currentSnapshot,
+/** Normalize persisted pre-upgrade courses into the only supported generation contract. */
+export function reconcileCourseGenerationMode(course: Course, mode?: string): Course {
+  void mode;
+  const isCurrent = course.pblConfig?.generationTemplate === "new-ai-learning-only";
+  const uiState = { ...(course.uiState ?? {}) } as NonNullable<Course["uiState"]> & {
+    systemGenerationByMode?: unknown;
+    systemStageKeyByMode?: unknown;
+    systemStagesByMode?: unknown;
   };
-  const selected = snapshots[targetMode]
-    ?? (targetMode === "new"
-      ? deriveNewSystemSnapshot(currentSnapshot)
-      : currentSnapshot);
-  snapshots[targetMode] = selected;
-
+  delete uiState.systemGenerationByMode;
+  delete uiState.systemStageKeyByMode;
+  delete uiState.systemStagesByMode;
   return {
     ...course,
-    aiLearningClassroomId: selected.aiLearningClassroomId,
-    teacherClassroomId: selected.teacherClassroomId,
-    dynamicFacilitationScaffolds:
-      selected.dynamicFacilitationScaffolds ?? [],
-    content: cloneCourseContent(selected.content),
+    teacherClassroomId: undefined,
+    dynamicFacilitationScaffolds: [],
+    content: isCurrent ? cloneCourseContent(course.content) : deriveCurrentSystemContent(course.content),
     pblConfig: normalizePblCourseConfig({
       ...course.pblConfig,
-      generationTemplate: generationTemplateForSystemMode(targetMode),
+      generationTemplate: "new-ai-learning-only",
     }),
     uiState: {
-      ...(course.uiState ?? {}),
-      activeGenerationMode: targetMode,
-      systemGenerationByMode: snapshots,
+      ...uiState,
+      activeGenerationMode: "new",
     },
   };
 }
@@ -181,36 +123,17 @@ export function reconcileCourseGenerationMode(
 export function inferStageCollectionMode(
   stages: readonly Pick<Stage, "key">[] | undefined,
 ): OpenPblSystemMode | undefined {
-  if (!stages?.length) return undefined;
-  const keys = stages.map((stage) => stage.key);
-  if (
-    keys.length === NEW_SYSTEM_STAGES.length
-    && keys.every((key, index) => key === NEW_SYSTEM_STAGES[index]?.key)
-  ) {
-    return "new";
-  }
-  if (keys.includes("proposal") || keys.length === DEFAULT_STAGES.length) {
-    return "legacy";
-  }
-  return undefined;
+  return stages?.length ? "new" : undefined;
 }
 
-export function mapStageKeyToSystemMode(
-  stageKey: string | undefined,
-  mode: OpenPblSystemMode,
-): string {
-  if (mode === "legacy") {
-    return DEFAULT_STAGES.some((stage) => stage.key === stageKey)
-      ? stageKey!
-      : "launch";
-  }
+export function mapStageKeyToSystemMode(stageKey: string | undefined, mode?: string): string {
+  void mode;
   if (stageKey === "launch" || stageKey === "ai-learning") return stageKey;
   if (stageKey === "showcase" || stageKey === "reflection") return stageKey;
   return "make";
 }
 
-export function collaborationBackHref(courseId: string): string {
-  return isNewOpenPblSystem()
-    ? "/student"
-    : `/student/classroom/${courseId}`;
+export function collaborationBackHref(courseId?: string): string {
+  void courseId;
+  return "/student";
 }

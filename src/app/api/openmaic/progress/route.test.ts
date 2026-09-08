@@ -48,6 +48,7 @@ function request(body: Record<string, unknown>) {
 describe('progress route integrity', () => {
   beforeEach(() => {
     courseStore.persistStudentAiProgress.mockReset();
+    courseStore.persistStudentAiProgress.mockImplementation(async (_courseId, _studentId, progress) => progress);
     courseStore.course = {
       id: 'course-1',
       aiLearningClassroomId: 'classroom-1',

@@ -83,9 +83,9 @@ function responseJob(job: Awaited<ReturnType<typeof prisma.courseDesignGeneratio
 
 function persistedJobMode(
   job: NonNullable<Awaited<ReturnType<typeof prisma.courseDesignGenerationJob.findUnique>>>,
-): "legacy" | "new" {
-  const persisted = job.request as unknown as Partial<QuickDesignRequest>;
-  return persisted.systemMode === "new" ? "new" : "legacy";
+): "new" {
+  void job;
+  return "new";
 }
 
 async function structuredResponse(work: () => Promise<Response>): Promise<Response> {

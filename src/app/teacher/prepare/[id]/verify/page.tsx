@@ -3,7 +3,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import Link from "next/link";
-import { useParams, usePathname, useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
@@ -68,7 +68,6 @@ import {
   type PblTimeActivity,
 } from "@/lib/pbl-time-model";
 import { validatePblKnowledgeAlignment } from "@/lib/pbl-outline-validation";
-import { resolvePreparationGenerationMode } from "@/lib/courses/preparation-navigation";
 import {
   assessKnowledgeGraphQuality,
   normalizeKnowledgePointName,
@@ -106,7 +105,6 @@ import {
 import { confirmAdaptiveLearningPlan, evaluateAdaptiveLearningPlanQuality } from "@/lib/adaptive-learning";
 import { FastCourseGenerator } from "@/components/teacher/fast-course-generator";
 import type { StageGenerationCardData } from "@/components/teacher/stage-generation-card-stack";
-import { isNewOpenPblSystem } from "@/lib/system-mode";
 
 // ===== SceneOutline ↔ LessonOutlineSection 转换 =====
 function sceneOutlineToLessonSection(
@@ -322,7 +320,6 @@ const SECTION_LABEL: Record<Section, string> = {
 
 export default function VerifyCoursePage() {
   const params = useParams<{ id: string }>();
-  const pathname = usePathname();
   const router = useRouter();
   const { user, updateCourse } = useSession();
   const course = useCourse(params?.id);
@@ -464,10 +461,7 @@ export default function VerifyCoursePage() {
   }
 
   const [flowStepKey, setFlowStepKey] = useState<PreparationStepKey>("base");
-  const newSystem = isNewOpenPblSystem();
-  const [generationMode, setGenerationMode] = useState<"quick" | "detailed">(
-    newSystem ? "quick" : resolvePreparationGenerationMode(pathname),
-  );
+  const [generationMode, setGenerationMode] = useState<"quick" | "detailed">("quick");
   // 知识图谱视图状态
   const [kgViewMode, setKgViewMode] = useState<"graph" | "list">("graph");
   const [kgSelectedNode, setKgSelectedNode] = useState<string | null>(null);
@@ -2760,7 +2754,7 @@ export default function VerifyCoursePage() {
         <FastCourseGenerator
           course={course}
           onOpenDetailed={openDetailedMode}
-          simplified={newSystem}
+          simplified
         />
       ) : (
       <>

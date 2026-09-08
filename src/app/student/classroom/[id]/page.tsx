@@ -15,16 +15,11 @@ import { Pill, PrimaryButton } from "@/components/ui";
 import { useCourse, useHydrated, useSession } from "@/lib/session/store";
 import { StudentProjectedTeacherResource } from "@/components/openmaic-bridge/teacher-stage-resources";
 import { StudentStageView } from "@/components/views/student/stage-dispatcher";
-import { CompanionRuntimeProvider } from "@/components/views/student/companion-runtime";
-import { CompanionStudioWorkspace } from "@/components/views/student/companion-studio-workspace";
-import { getStageWorkspacePolicy } from "@/lib/classroom/stage-workspace-policy";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
-import type { TeacherResourceProjection } from "@/lib/session/types";
 import { useCoursePresence } from "@/hooks/use-course-presence";
 import { StudentResourceProjection } from "@/components/classroom/simple-stage-resources";
 import { StageEmptyState } from "@/components/classroom/classroom-ui";
 import { StudentClassroomHeaderStatus } from "@/components/classroom/student-classroom-header-status";
-import { isNewOpenPblSystem } from "@/lib/system-mode";
 import { normalizePblCourseConfig, type MakeArtifactMode } from "@/lib/pbl-course-config";
 
 export default function StudentClassroomPage() {
@@ -41,22 +36,13 @@ export default function StudentClassroomPage() {
     heartbeat: true,
   });
   const [optionalProjectionOpen, setOptionalProjectionOpen] = useState(false);
-  const newSystem = isNewOpenPblSystem();
   const activeStageKey = course?.stages[course.currentStageIndex]?.key;
   const makeArtifactMode = normalizePblCourseConfig(course?.pblConfig).makeArtifactMode;
-  const workspacePolicy = getStageWorkspacePolicy(
-    course?.stageWorkspacePolicies,
-    activeStageKey,
-  );
-  const workspaceMode = activeStageKey === "ai-learning"
-    || workspacePolicy.access === "task-only"
-    ? "task"
-    : "companions";
 
   useEffect(() => {
-    if (workspaceMode !== "task" || typeof window === "undefined") return;
+    if (typeof window === "undefined") return;
     window.speechSynthesis?.cancel();
-  }, [activeStageKey, workspaceMode]);
+  }, [activeStageKey]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -65,13 +51,12 @@ export default function StudentClassroomPage() {
 
   useEffect(() => {
     if (
-      !newSystem
-      || !hydrated
+      !hydrated
       || course?.status !== "teaching"
       || course.stages[course.currentStageIndex]?.view !== "ai-collaboration"
     ) return;
     router.replace(`/student/ai-collaboration/${course.id}`);
-  }, [course, hydrated, makeArtifactMode, newSystem, router]);
+  }, [course, hydrated, makeArtifactMode, router]);
 
   const displayName = studentName || (user.name && user.name !== "教师" ? user.name : "学生");
 
@@ -120,7 +105,7 @@ export default function StudentClassroomPage() {
     ? course.resources?.find((resource) => resource.id === uploadedProjection.resourceId)
     : undefined;
 
-  if (newSystem && isTeaching && currentStage?.view === "ai-collaboration") {
+  if (isTeaching && currentStage?.view === "ai-collaboration") {
     return (
       <DashboardShell
         role="student"
@@ -143,7 +128,6 @@ export default function StudentClassroomPage() {
       userName={displayName}
       variant="bare"
       wide={currentStage?.key === "ai-learning"}
-      immersive={isTeaching && workspaceMode === "companions"}
       viewportLocked={isTeaching && activeStageKey === "ai-learning"}
       hideCourseSwitcher
       currentCourse={{ id: course.id, name: course.name, status: course.status }}
@@ -171,8 +155,7 @@ export default function StudentClassroomPage() {
         <WaitingState status={course.status} />
       ) : currentStage ? (
         <>
-          {workspaceMode === "task" ? (
-            <div className={activeStageKey === "ai-learning" ? "flex h-full min-h-0 flex-col gap-3" : "space-y-3"}>
+          <div className={activeStageKey === "ai-learning" ? "flex h-full min-h-0 flex-col gap-3" : "space-y-3"}>
               {forcedProjection ? <StudentProjectedTeacherResource projection={forcedProjection} /> : null}
               {optionalProjection ? (
                 <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)]/80">
@@ -199,37 +182,7 @@ export default function StudentClassroomPage() {
                   view={currentStage.view}
                 />
               </section>
-            </div>
-          ) : (
-            <CompanionRuntimeProvider
-              contextLabel={currentStage.label}
-              course={course}
-              stageKey={currentStage.key}
-            >
-              <CompanionStudioWorkspace
-                contextLabel={currentStage.label}
-                course={course}
-                onOpenTeacherProjection={optionalProjection
-                  ? () => setOptionalProjectionOpen(true)
-                  : undefined}
-                onOpenAiCollaboration={activeStageKey === "proposal" || (activeStageKey === "make" && makeArtifactMode !== "other")
-                  ? () => router.push(`/student/ai-collaboration/${course.id}${activeStageKey === "make" && (makeArtifactMode === "python" || makeArtifactMode === "c") ? `?artifact=${makeArtifactMode}` : ""}`)
-                  : undefined}
-                stageKey={currentStage.key}
-                teacherProjection={optionalProjection
-                  ? { title: optionalProjection.title }
-                  : undefined}
-              />
-              {forcedProjection ? (
-                <ProjectedResourceOverlay projection={forcedProjection} />
-              ) : optionalProjection && optionalProjectionOpen ? (
-                <ProjectedResourceOverlay
-                  onClose={() => setOptionalProjectionOpen(false)}
-                  projection={optionalProjection}
-                />
-              ) : null}
-            </CompanionRuntimeProvider>
-          )}
+          </div>
         </>
       ) : null}
       {uploadedProjectionResource ? (
@@ -269,67 +222,6 @@ function AiCollaborationExperimentEntry({
         <FilePenLine size={16} />进入 AI 协作
       </PrimaryButton> : <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">AI 组员已在当前工作台</span>}
     </section>
-  );
-}
-
-function ProjectedResourceOverlay({
-  projection,
-  onClose,
-}: {
-  projection: TeacherResourceProjection;
-  onClose?: () => void;
-}) {
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose?.();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [onClose]);
-
-  return (
-    <div className="fixed inset-0 z-[140] bg-stone-50" role="presentation">
-      {onClose ? (
-        <button
-          aria-label="关闭教师演示"
-          className="absolute inset-0 cursor-default"
-          onClick={onClose}
-          type="button"
-        />
-      ) : null}
-      <section
-        aria-labelledby="student-projection-title"
-        aria-modal="true"
-        className="relative z-10 h-full w-full overflow-hidden bg-stone-50"
-        role="dialog"
-      >
-        <header className="pointer-events-none absolute inset-x-0 top-3 z-30 flex items-center justify-between gap-4 px-4">
-          <div className="max-w-[70vw] truncate rounded-full bg-slate-950/65 px-3 py-1.5 text-xs font-semibold text-white/90 shadow-lg backdrop-blur" id="student-projection-title"><span className="mr-2 text-white/55">{onClose ? "可选课堂演示" : "教师投屏"}</span>{projection.title}</div>
-          {onClose ? (
-            <button
-              aria-label="关闭教师演示"
-              className="pointer-events-auto grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/20 bg-slate-950/65 text-white shadow-lg backdrop-blur transition hover:bg-slate-950/80"
-              onClick={onClose}
-              type="button"
-            >
-              <X size={18} />
-            </button>
-          ) : (
-            <span className="rounded-full bg-white/90 px-3 py-1.5 text-xs font-bold text-[var(--pbl-success)] shadow-lg">
-              课堂同步中
-            </span>
-          )}
-        </header>
-        <div className="h-full min-h-0 overflow-hidden">
-          <StudentProjectedTeacherResource fullscreen projection={projection} />
-        </div>
-      </section>
-    </div>
   );
 }
 

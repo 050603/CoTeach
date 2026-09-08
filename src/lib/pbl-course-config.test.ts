@@ -17,7 +17,7 @@ describe("PBL course configuration", () => {
 
     expect(config.projectMode).toBe("personal");
     expect(config.makeArtifactMode).toBe("document");
-    expect(config.generationTemplate).toBe("pbl-six-stage");
+    expect(config.generationTemplate).toBe("new-ai-learning-only");
     expect(config.evaluationModel).toBe("tri-party");
     expect(config.companionIds).toContain("recorder");
     expect(config.evidenceRequirements.map((item) => item.label)).toEqual(

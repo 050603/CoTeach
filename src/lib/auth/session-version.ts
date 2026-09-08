@@ -12,6 +12,13 @@ export async function hasCurrentSessionVersion(
     });
     return teacher?.sessionVersion === claims.sv;
   }
+  if (claims.role === "student" && "userId" in claims && typeof claims.userId === "string") {
+    const user = await prisma.user.findUnique({
+      where: { id: claims.userId },
+      select: { sessionVersion: true, status: true, role: true },
+    });
+    if (user) return user.role === "student" && user.status === "active" && user.sessionVersion === claims.sv;
+  }
   const account = await prisma.studentAccount.findUnique({
     where: {
       courseId_studentId: {

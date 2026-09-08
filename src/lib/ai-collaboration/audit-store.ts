@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import { prisma, isDatabaseConfigured } from "@/lib/db/client";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
 import type { AiInteractionEvent } from "@/lib/session/types";
+import { findLegacyParticipation } from "@/lib/platform/access";
 
 export type AiInteractionEventInput = Omit<AiInteractionEvent, "id" | "createdAt"> & {
   id?: string;
   createdAt?: string;
+  participationId?: string;
 };
 
 function toJson(value: Record<string, unknown> | undefined): object {
@@ -24,6 +26,8 @@ export async function appendAiInteractionEvents(
   const created = await prisma.$transaction(async (tx) => {
     const rows: AiInteractionEvent[] = [];
     for (const event of events) {
+      const participationId = event.participationId
+        ?? (await findLegacyParticipation(tx, event.courseId, event.studentId))?.id;
       const row = await tx.aiInteractionEvent.create({
         data: {
           id: event.id ?? randomUUID(),
@@ -38,6 +42,7 @@ export async function appendAiInteractionEvents(
           content: event.content ?? null,
           payload: toJson(event.payload),
           requestId: event.requestId ?? null,
+          participationId: participationId ?? null,
           createdAt: event.createdAt ? new Date(event.createdAt) : undefined,
         },
       });
@@ -79,6 +84,7 @@ export async function appendAiInteractionEvents(
   }
   return created;
 }
+
 
 function decodeCursor(cursor: string | null): { createdAt: Date; id: string } | null {
   if (!cursor) return null;

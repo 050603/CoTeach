@@ -17,7 +17,7 @@ export interface ClassroomLinkInfo {
   teacherResourceScenes?: TeacherResourceScene[];
   /** Canonical, media-planned outlines used to generate the persisted scenes. */
   sceneOutlines?: SceneOutline[];
-  systemMode?: "legacy" | "new";
+  systemMode?: "new";
 }
 
 export async function linkClassroomToCourse(

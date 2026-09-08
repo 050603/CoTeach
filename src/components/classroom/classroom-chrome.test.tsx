@@ -48,7 +48,7 @@ describe("StageGateDialog", () => {
 
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.getByRole("heading", { name: "结束“项目启动”并进入“知识讲授”？" })).toBeTruthy();
-    const confirm = screen.getByRole("button", { name: "仍要进入“知识讲授”" });
+    const confirm = screen.getByRole("button", { name: "进入“知识讲授”" });
     expect(confirm).not.toHaveProperty("disabled", true);
     fireEvent.click(confirm);
     expect(onConfirm).toHaveBeenCalledOnce();

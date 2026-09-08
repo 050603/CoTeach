@@ -1,0 +1,63 @@
+name: Validate application
+description: Shared locked setup and application checks for CI and deployment verification.
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 10.4.1
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+
+    - name: Install locked dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    - name: Validate Prisma schema
+      shell: bash
+      env:
+        DATABASE_URL: postgresql://openpbl:validation-only@127.0.0.1:5432/openpbl
+      run: pnpm exec prisma validate
+
+    - name: Check Prisma formatting
+      shell: bash
+      run: |
+        # Prisma 6 has no format --check; compare a formatted temporary copy.
+        schema_check_dir=$(mktemp -d)
+        trap 'rm -rf "$schema_check_dir"' EXIT
+        cp prisma/schema.prisma "$schema_check_dir/schema.prisma"
+        pnpm exec prisma format --schema "$schema_check_dir/schema.prisma"
+        diff -u prisma/schema.prisma "$schema_check_dir/schema.prisma"
+
+    - name: Type check application
+      shell: bash
+      run: pnpm typecheck
+
+    - name: Lint without warnings
+      shell: bash
+      run: pnpm lint:ci
+
+    - name: Application unit and integration tests
+      shell: bash
+      run: pnpm test:ci
+
+    - name: OpenMAIC package tests and types
+      shell: bash
+      run: |
+        pnpm --filter @openmaic/dsl test
+        pnpm --filter @openmaic/dsl typecheck
+        pnpm --filter @openmaic/importer test
+        pnpm --dir packages/@openmaic/importer exec tsc --noEmit
+        pnpm --dir packages/@openmaic/renderer exec vitest run
+        pnpm --filter @openmaic/renderer typecheck
+
+    - name: Deployment failure boundaries
+      shell: bash
+      run: python3 tests/deploy/test_systemd_deploy.py
+
+    - name: Production dependency audit
+      shell: bash
+      run: pnpm audit:prod

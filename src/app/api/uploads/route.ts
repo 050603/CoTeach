@@ -8,7 +8,8 @@ import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guard
 import { checkDistributedRateLimit } from "@/lib/auth/distributed-rate-limit";
 import { rateLimitedResponse } from "@/lib/auth/rate-limit";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
-import { isNewOpenPblSystem } from "@/lib/system-mode";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
+import type { AuthClaims } from "@/lib/auth/session";
 import {
   convertPresentationToPdf,
   PresentationConversionError,
@@ -189,6 +190,9 @@ export async function POST(request: Request) {
     if (auth.claims.role === "student" && (!courseId || courseId !== auth.claims.courseId)) {
       throw new UploadHttpError("FORBIDDEN", "学生只能向当前课程上传文件。", 403);
     }
+    if (courseId && !(await canAccessLegacyCourse(auth.claims, courseId, "write"))) {
+      throw new UploadHttpError("FORBIDDEN", "课程当前不允许上传文件。", 403);
+    }
     if (courseId) {
       const courseExists = await prisma.course.count({ where: { id: courseId } });
       if (courseExists !== 1) {
@@ -197,8 +201,7 @@ export async function POST(request: Request) {
     }
     const isNewClassroomPptx = extension === ".pptx"
       && bindAsCourseResource
-      && Boolean(parsedFields.data.stageKey)
-      && isNewOpenPblSystem();
+      && Boolean(parsedFields.data.stageKey);
     if (isNewClassroomPptx && !isPresentationConversionEnabled()) {
       throw new UploadHttpError(
         "PPTX_CLASSROOM_REQUIRES_PDF",
@@ -399,7 +402,7 @@ export async function POST(request: Request) {
 
 async function uploadStreamedVideo(
   request: Request,
-  claims: { sub?: string; role: string; courseId?: string },
+  claims: AuthClaims,
   requestId: string,
   contentLength: number,
 ): Promise<Response> {
@@ -423,6 +426,9 @@ async function uploadStreamedVideo(
   }
   if (fields.data.bindAsCourseResource !== "true" || !fields.data.courseId) {
     return apiError(requestId, "COURSE_REQUIRED", "发布课堂视频时必须指定课程。", 400);
+  }
+  if (!(await canAccessLegacyCourse(claims, fields.data.courseId, "write"))) {
+    return apiError(requestId, "FORBIDDEN", "课程当前不允许上传文件。", 403);
   }
   const extension = path.extname(originalName).toLowerCase();
   const expected = ALLOWED_TYPES[extension];

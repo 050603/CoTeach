@@ -1,7 +1,7 @@
 # IP 直访(HTTP)+ host 网络部署覆盖 —— 与 docker-compose.prod.yml 叠加使用:
 #   docker compose --env-file deploy/.deploy.env \
 #     -f docker-compose.prod.yml -f docker-compose.ip.yml \
-#     --profile blue up -d
+#     up -d
 #
 # 本机网络背景:
 #   - 校园网屏蔽 IPv4 出站,仅 IPv6 出站可用;Docker 默认桥接网络为 IPv4-only,
@@ -21,26 +21,6 @@
 #   - postgres 使用官方镜像并关闭 WAL 归档(未启用 S3 备份 profile,
 #     归档命令持续失败会导致 pg_wal 无限堆积)
 services:
-  app-blue:
-    network_mode: host
-    environment:
-      PUBLIC_BASE_URL: http://${PUBLIC_HOST:?Set PUBLIC_HOST to the server IP or hostname}
-      REDIS_URL: redis://127.0.0.1:16379
-      HOSTNAME: 127.0.0.1
-      HTTP_PROXY: ${HTTP_PROXY:-}
-      HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
-
-  app-green:
-    network_mode: host
-    environment:
-      PUBLIC_BASE_URL: http://${PUBLIC_HOST:?Set PUBLIC_HOST to the server IP or hostname}
-      REDIS_URL: redis://127.0.0.1:16379
-      HOSTNAME: 127.0.0.1
-      HTTP_PROXY: ${HTTP_PROXY:-}
-      HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
-
   nginx:
     network_mode: host
     volumes:

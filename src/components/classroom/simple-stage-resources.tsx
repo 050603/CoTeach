@@ -245,11 +245,15 @@ export function SimplifiedTeacherStageView({
     ?? activeResource
     ?? resources[0];
 
-  useEffect(() => {
-    if (stageKey !== "launch" || !focus) return;
-    setTeacherTab("follow-up");
-    if (focus.resourceId) setSelectedId(focus.resourceId);
-  }, [focus?.resourceId, focus?.status, stageKey]);
+  const focusKey = JSON.stringify([stageKey, Boolean(focus), focus?.resourceId, focus?.status]);
+  const [appliedFocusKey, setAppliedFocusKey] = useState("");
+  if (focusKey !== appliedFocusKey) {
+    setAppliedFocusKey(focusKey);
+    if (stageKey === "launch" && focus) {
+      setTeacherTab("follow-up");
+      if (focus.resourceId) setSelectedId(focus.resourceId);
+    }
+  }
 
   async function uploadResource(
     file: File,
@@ -654,18 +658,17 @@ function LaunchReadingFollowUp({
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | LaunchResourceStatus>("all");
   const [resourceFilter, setResourceFilter] = useState("all");
-  useEffect(() => {
+  const focusedStudent = course.students.find((student) => student.id === focus?.studentId);
+  const focusKey = JSON.stringify([focus?.resourceId, focus?.status, focus?.studentId, focusedStudent?.name]);
+  const [appliedFocusKey, setAppliedFocusKey] = useState("");
+  if (focusKey !== appliedFocusKey) {
+    setAppliedFocusKey(focusKey);
     if (focus?.resourceId) setResourceFilter(focus.resourceId);
-  }, [focus?.resourceId]);
-
-  useEffect(() => {
-    if (!focus?.status) return;
-    setStatusFilter(focus.status === "opened" ? "in-progress" : focus.status);
-    if (focus.studentId) {
-      const focusedStudent = course.students.find((student) => student.id === focus.studentId);
+    if (focus?.status) {
+      setStatusFilter(focus.status === "opened" ? "in-progress" : focus.status);
       if (focusedStudent) setQuery(focusedStudent.name);
     }
-  }, [course.students, focus?.status, focus?.studentId]);
+  }
   const stateByKey = useMemo(() => new Map(metrics.states.map((state) => [`${state.studentId}:${state.resourceId}`, state])), [metrics.states]);
   const visibleResources = metrics.resourceCoverage.filter((item) => resourceFilter === "all" || item.resource.id === resourceFilter);
   const rows = metrics.studentRows.filter((row) => row.student.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).filter((row) => {
@@ -708,7 +711,7 @@ export function SimplifiedStudentStageView({
   const reportedProgressByResource = useRef<Record<string, number>>({});
   const selected = resources.find((resource) => resource.id === selectedId) ?? resources[0];
 
-  function sendResourceEvent(resource: CourseResource, type: "open" | "progress" | "complete", progressPercent?: number, milestone?: number, source: "student" | "teacher-projection" = "student") {
+  const sendResourceEvent = useCallback((resource: CourseResource, type: "open" | "progress" | "complete", progressPercent?: number, milestone?: number, source: "student" | "teacher-projection" = "student") => {
     const studentId = session.studentId;
     if (!studentId) return;
     const idempotencyKey = resourceEventIdempotencyKey(course.id, studentId, resource.id, type, milestone, source);
@@ -732,7 +735,7 @@ export function SimplifiedStudentStageView({
       // Telemetry must never interrupt reading. The next coarse milestone can retry.
       sentResourceEventKeys.current.delete(idempotencyKey);
     });
-  }
+  }, [course.id, session.studentId, stageKey]);
 
   function recordResourceProgress(resource: CourseResource, progressPercent: number) {
     const current = Math.max(0, Math.min(100, progressPercent));
@@ -753,7 +756,7 @@ export function SimplifiedStudentStageView({
     sendResourceEvent(selected, "open");
     if (selected.downloadedBy.includes(session.studentId)) return;
     session.markResourceDownloaded(course.id, selected.id);
-  }, [course.id, selected, session]);
+  }, [course.id, selected, session, sendResourceEvent]);
 
   function openResource(resource: CourseResource) {
     sendResourceEvent(resource, "open");
@@ -901,7 +904,7 @@ export function StudentResourceProjection({
       emit("progress", threshold, threshold);
     }
     if ((percent ?? 0) >= 90) emit("complete", percent, 90);
-  }, [course, projection.stageKey, projection.viewState?.page, projection.viewState?.revision, projection.viewState?.scrollRatio, resource.id, session.studentId]);
+  }, [course, projection.stageKey, projection.viewState, resource.id, session.studentId]);
   return (
     <div className="fixed inset-0 z-[150] bg-slate-100" role="presentation">
       <section aria-label={`教师投屏：${resource.title}`} aria-modal="true" className="relative h-full w-full overflow-hidden bg-[var(--pbl-surface)]" role="dialog">

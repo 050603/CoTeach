@@ -178,7 +178,7 @@ export async function resetCourseGenerationCheckpoints(jobId: string): Promise<v
 
 export type PersistedCourseGenerationRequest = GenerateClassroomInput & {
   courseId: string;
-  systemMode?: "legacy" | "new";
+  systemMode?: "new";
   courseTitle?: string;
   moduleTimingPlan?: unknown;
   adaptiveBranchCount?: number;
@@ -786,14 +786,12 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
 
   try {
     const checkpointState = await loadCheckpointState(job.id);
-    if (request.systemMode === "new" || request.pblProfile?.generationTemplate === "new-ai-learning-only") {
-      const course = await getCourse(courseId);
-      const timing = course?.content.moduleTimingPlan;
-      const outlines = checkpointState.preparedOutlines.length ? checkpointState.preparedOutlines : generationInput.sceneOutlines ?? [];
-      if (!course || !isNewSystemAiTimingPlan(timing, course.hours)
-        || !hasExactKnowledgeLecturePageBudget(outlines, timing.totalMinutes)) {
-        throw new Error("知识讲授时长必须占整课 20%–40%，且讲解与小测合计必须等于已确定预算。请重新规划知识讲授后生成，不可继续使用旧的超长页面或检查点。");
-      }
+    const course = await getCourse(courseId);
+    const timing = course?.content.moduleTimingPlan;
+    const outlines = checkpointState.preparedOutlines.length ? checkpointState.preparedOutlines : generationInput.sceneOutlines ?? [];
+    if (!course || !isNewSystemAiTimingPlan(timing, course.hours)
+      || !hasExactKnowledgeLecturePageBudget(outlines, timing.totalMinutes)) {
+      throw new Error("知识讲授时长必须占整课 20%–40%，且讲解与小测合计必须等于已确定预算。请重新规划知识讲授后生成，不可继续使用旧的超长页面或检查点。");
     }
     const generated = await generateClassroom(generationInput, {
       signal: controller.signal,
@@ -825,9 +823,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       stage: generated.stage,
       scenes: generated.scenes,
       courseName: request.courseTitle,
-      pblMode:
-        request.pblProfile?.generationTemplate === "pbl-six-stage" ||
-        Boolean(request.pblTeachingActivities?.length),
+      pblMode: false,
       signal: controller.signal,
     });
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
@@ -842,7 +838,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       teacherClassroomId: split.teacherClassroomId,
       teacherResourceScenes: split.teacherResourceScenes,
       sceneOutlines: generated.assetContext.outlines,
-      systemMode: request.systemMode,
+      systemMode: "new",
     }, { signal: controller.signal });
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
       step: "checking_adaptive_resources",

@@ -20,6 +20,18 @@ const course: Course = {
 };
 
 describe("AiLearningTeacherView", () => {
+  it("applies a new dashboard focus without overriding subsequent local navigation", () => {
+    const onSelectStudent = vi.fn();
+    const { rerender } = render(<AiLearningTeacherView course={course} onSelectStudent={onSelectStudent} />);
+    const focus = { stageKey: "ai-learning", target: "student", studentId: "student-1", tab: "answers" } as const;
+    rerender(<AiLearningTeacherView course={course} focus={focus} onSelectStudent={onSelectStudent} />);
+    expect(screen.getByRole("tab", { name: "答题详情" }).getAttribute("aria-selected")).toBe("true");
+    expect(onSelectStudent).toHaveBeenCalledWith("student-1");
+    fireEvent.click(screen.getByRole("tab", { name: "学习轨迹" }));
+    rerender(<AiLearningTeacherView course={{ ...course }} focus={{ ...focus }} onSelectStudent={onSelectStudent} />);
+    expect(screen.getByRole("tab", { name: "学习轨迹" }).getAttribute("aria-selected")).toBe("true");
+  });
+
   it("uses completed scenes for visible in-stage progress", () => {
     expect(computeAiLearningProgress({
       classroomId: "classroom-1",

@@ -7,7 +7,6 @@ export function OtherArtifactCollaboration({ courseId }: { courseId: string }) {
   return (
     <DocumentAiCollaboration
       courseId={courseId}
-      onArtifactTypeChange={() => undefined}
       workspaceKind="external-artifact"
     />
   );

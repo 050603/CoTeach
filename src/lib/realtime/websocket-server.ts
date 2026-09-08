@@ -19,6 +19,7 @@ import { hasCurrentSessionVersion } from "@/lib/auth/session-version";
 import { websocketConnectionsActive } from "@/lib/observability/metrics";
 import { shouldDeliverMutationToStudent } from "./event-visibility";
 import { isAllowedBrowserOrigin } from "@/lib/network/request-origin";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 const PING_INTERVAL_MS = 30_000;
 const CONNECTION_TIMEOUT_MS = 90_000;
@@ -101,8 +102,11 @@ function parseCourseId(raw: WebSocket.RawData): string | null {
   }
 }
 
-function canSubscribe(claims: AuthClaims, courseId: string): boolean {
-  return claims.role === "teacher" || claims.courseId === courseId;
+async function canSubscribe(claims: AuthClaims, courseId: string): Promise<boolean> {
+  // Use the same offering, chapter and activity gate as HTTP/SSE. This also
+  // lets the ping loop revoke an already subscribed socket when a teacher
+  // locks an activity, removes an enrollment, or ends the teaching class.
+  return canAccessLegacyCourse(claims, courseId, "read");
 }
 
 function unsubscribe(state: ClientState): void {
@@ -122,13 +126,13 @@ function attachClient(ws: WebSocket, claims: AuthClaims, ip: string): void {
     (identityConnectionCounts.get(claims.sub!) ?? 0) + 1,
   );
 
-  ws.on("message", (raw) => {
+  ws.on("message", async (raw) => {
     const courseId = parseCourseId(raw);
     if (!courseId) {
       sendJson(ws, { type: "error", code: "INVALID_MESSAGE" });
       return;
     }
-    if (!canSubscribe(state.claims, courseId)) {
+    if (!(await canSubscribe(state.claims, courseId))) {
       sendJson(ws, { type: "error", code: "COURSE_FORBIDDEN" });
       ws.close(4003, "COURSE_FORBIDDEN");
       return;
@@ -179,6 +183,16 @@ function attachClient(ws: WebSocket, claims: AuthClaims, ip: string): void {
 
   const pingTimer = setInterval(() => {
     if (ws.readyState !== WebSocket.OPEN) return;
+    void Promise.all([
+      hasCurrentSessionVersion(state.claims),
+      state.courseId ? canSubscribe(state.claims, state.courseId) : Promise.resolve(true),
+    ]).then(([validSession, allowedCourse]) => {
+      if (!validSession && ws.readyState === WebSocket.OPEN) {
+        ws.close(4001, "SESSION_REVOKED");
+      } else if (!allowedCourse && ws.readyState === WebSocket.OPEN) {
+        ws.close(4003, "COURSE_FORBIDDEN");
+      }
+    });
     if (Date.now() - state.lastPongAt > CONNECTION_TIMEOUT_MS) {
       ws.terminate();
       return;

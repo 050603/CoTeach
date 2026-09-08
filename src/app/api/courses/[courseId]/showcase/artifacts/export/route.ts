@@ -4,6 +4,7 @@ import JSZip from "jszip";
 import { z } from "zod";
 import { authenticateRequest } from "@/lib/auth/request-guards";
 import { isDatabaseConfigured, prisma } from "@/lib/db/client";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,6 +27,7 @@ export async function GET(
   const parsed = ParamsSchema.safeParse(await context.params);
   if (!parsed.success) return new Response(null, { status: 404 });
   const { courseId } = parsed.data;
+  if (!(await canAccessLegacyCourse(auth.claims, courseId, "read"))) return new Response(null, { status: 403 });
 
   const [course, students, documents, outcomes] = await Promise.all([
     prisma.course.findUnique({ where: { id: courseId }, select: { id: true, name: true } }),

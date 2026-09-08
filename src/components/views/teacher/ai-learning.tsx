@@ -197,12 +197,21 @@ export function AiLearningTeacherView({
     onSelectStudent?.(studentId);
   }
 
+  const focusedStudentId = focus?.studentId;
+  const focusedTab = focus?.tab;
+  const focusKey = JSON.stringify([focusedStudentId, focusedTab]);
+  const [appliedFocusKey, setAppliedFocusKey] = useState("");
+  // Reset local navigation only when the dashboard requests a different target.
+  if (focusKey !== appliedFocusKey) {
+    setAppliedFocusKey(focusKey);
+    if (focusedStudentId && focusedTab) {
+      setStudentDetailTab(focusedTab);
+      setSelectedStudentId(focusedStudentId);
+    }
+  }
   useEffect(() => {
-    if (!focus) return;
-    setStudentDetailTab(focus.tab);
-    setSelectedStudentId(focus.studentId);
-    onSelectStudent?.(focus.studentId);
-  }, [focus?.studentId, focus?.tab, onSelectStudent]);
+    if (focusedStudentId) onSelectStudent?.(focusedStudentId);
+  }, [focusedStudentId, focusedTab, onSelectStudent]);
 
   return (
     <div className="classroom-stage space-y-5">

@@ -1,0 +1,24 @@
+[Unit]
+Description=OpenPBL production server (port 3000)
+Wants=network-online.target openpbl-code-runner.service
+After=network-online.target openpbl-code-runner.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/lkj/OpenPBL/openPBL
+Environment=OPENPBL_PORT=3000
+Environment=OPENPBL_WEBSOCKET_PORT=3001
+Environment=OPENPBL_CODE_RUNNER_PORT=3002
+Environment=OPENPBL_PUBLIC_BASE_URL=http://praixis.cc.cd
+ExecStart=/home/lkj/OpenPBL/openPBL/scripts/openpbl-production-service.sh run-app
+Restart=always
+RestartSec=5s
+TimeoutStartSec=180s
+TimeoutStopSec=30s
+KillMode=control-group
+SuccessExitStatus=143
+LimitNOFILE=65535
+
+[Install]
+WantedBy=default.target

@@ -58,7 +58,7 @@ export function canResumeAfterValidatedTeachingOutline(input: {
 
 function normalizedRequest(value: unknown): {
   courseId: string;
-  systemMode: "legacy" | "new";
+  systemMode: "new";
   generationMode: "standard" | "deep-interaction";
   teacherBrief: string;
   enableImageGeneration: boolean;
@@ -74,7 +74,7 @@ function normalizedRequest(value: unknown): {
   if (typeof request.courseId !== "string" || typeof request.teacherBrief !== "string") return null;
   return {
     courseId: request.courseId,
-    systemMode: request.systemMode === "new" ? "new" : "legacy",
+    systemMode: "new",
     generationMode: request.generationMode === "deep-interaction"
       ? "deep-interaction"
       : "standard",

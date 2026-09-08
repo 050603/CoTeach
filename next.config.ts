@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // Turbopack chunk names can remain stable across releases. Stamp asset URLs
   // with the build's deployment id so immutable browser caches cannot keep an
-  // older companion runtime after a server update.
+  // older application bundle after a server update.
   deploymentId: process.env.NEXT_DEPLOYMENT_ID?.trim() || undefined,
   // Local production commands set NEXT_DIST_DIR=.next-build so `next build`
   // cannot remove chunks owned by a concurrently running `.next/dev` server.
@@ -62,8 +62,7 @@ const nextConfig: NextConfig = {
     "/**": [
       "./node_modules/@img/**",
       // PromptLoader reads the Markdown prompt templates with fs at runtime.
-      // Keep them in every standalone build, including the isolated new-system
-      // build whose process.cwd() points at `.next-new/standalone`.
+      // Keep them in every standalone production build.
       "./src/lib/openmaic/prompts/**/*",
     ],
   },
@@ -71,10 +70,7 @@ const nextConfig: NextConfig = {
   // Produces `.next/standalone` with only the files needed to run the
   // production server (no `node_modules` install required at runtime).
   output: "standalone",
-  // dev 模式下关闭 React Strict Mode。PixiStage 的 useEffect 会加载 PIXI
-  // v8 的 Assets.load（模块级单例 cache），StrictMode 的双 mount 会污染
-  // cache 状态导致 Promise.all 永久挂起，伴学工作室卡在 0%。
-  // 生产环境本来就只 mount 一次，关闭 StrictMode 不影响生产行为。
+  // Keep React lifecycle checks enabled in development.
   reactStrictMode: true,
   transpilePackages: [
     "@openmaic/dsl",
@@ -169,11 +165,8 @@ const nextConfig: NextConfig = {
           // Content Security Policy. Allows same-origin scripts/styles,
           // inline styles (Tailwind / styled-components need this), data:
           // images, and https: media. `connect-src` includes ws:/wss: so the
-          // realtime WebSocket (Stage 4) can connect. `data:` in connect-src
-          // lets PIXI's image worker fetch its 1px data-URL capability probe.
-          // `worker-src` 允许 blob: —— PIXI v8 的 WorkerManager 用
-          // URL.createObjectURL(new Blob(...)) 创建图片解码 worker，
-          // 禁止 blob: worker 会导致 Assets.load 永久挂起。
+          // realtime WebSocket can connect. `data:` and `blob:` support
+          // generated media and interactive classroom workers.
           {
             key: "Content-Security-Policy",
             value: [

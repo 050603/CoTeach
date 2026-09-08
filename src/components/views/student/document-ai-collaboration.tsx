@@ -18,8 +18,7 @@ import {
   type PlateDocumentSelection,
 } from "@/components/plate-document-editor";
 import { PrimaryButton } from "@/components/ui";
-import { ArtifactTypeSelector } from "@/components/views/student/artifact-type-selector";
-import { FinalPdfSubmission } from "@/components/views/student/project-making";
+import { FinalArtifactSubmission } from "@/components/views/student/final-artifact-submission";
 import { ExternalArtifactSubmission } from "@/components/views/student/external-artifact-submission";
 import {
   AiMemberWorkspace,
@@ -31,7 +30,6 @@ import type {
   DocumentCollaborationResponse,
   DocumentCollaborationSuggestion,
 } from "@/lib/ai-collaboration/document-policy";
-import type { CollaborationArtifactType } from "@/lib/ai-collaboration/artifact-types";
 import type {
   DocumentAiCommentReplyResult,
   DocumentAiCommentThread,
@@ -43,7 +41,7 @@ import {
 import type { AiContribution } from "@/lib/learning-evidence/types";
 import { useCourse, useHydrated, useSession } from "@/lib/session/store";
 import { cn } from "@/lib/utils";
-import { collaborationBackHref, inferStageCollectionMode, isNewOpenPblSystem } from "@/lib/system-mode";
+import { collaborationBackHref, inferStageCollectionMode } from "@/lib/system-mode";
 import { DashboardTopBar } from "@/components/dashboard-shell";
 import { StudentClassroomHeaderStatus } from "@/components/classroom/student-classroom-header-status";
 import { useCoursePresence } from "@/hooks/use-course-presence";
@@ -123,11 +121,9 @@ function inferMemberIntent(request: string, selectedText?: string): DocumentColl
 
 export function DocumentAiCollaboration({
   courseId,
-  onArtifactTypeChange,
   workspaceKind = "document",
 }: {
   courseId: string;
-  onArtifactTypeChange: (value: CollaborationArtifactType) => void;
   workspaceKind?: CollaborationWorkspaceKind;
 }) {
   const router = useRouter();
@@ -144,11 +140,9 @@ export function DocumentAiCollaboration({
     heartbeat: true,
   });
   const stageKey = stage?.key ?? "";
-  const newSystem = isNewOpenPblSystem();
   const isExternalArtifact = workspaceKind === "external-artifact";
   const workspaceNoun = isExternalArtifact ? "成果协作稿" : "文档";
-  const supportedStage = (isExternalArtifact ? stageKey === "make" : (stageKey === "proposal" || stageKey === "make"))
-    && (!newSystem || course?.status === "teaching");
+  const supportedStage = stageKey === "make" && course?.status === "teaching";
   const editorRef = useRef<PlateDocumentEditorHandle>(null);
   const submissionIdRef = useRef<string | undefined>(undefined);
   const submissionVersionRef = useRef(1);
@@ -1301,11 +1295,6 @@ export function DocumentAiCollaboration({
     }
   }
 
-  function changeArtifactType(value: CollaborationArtifactType) {
-    if (documentHtml !== savedContentRef.current) void persistDocument(documentHtml, "auto");
-    onArtifactTypeChange(value);
-  }
-
   if (!hydrated || !course) {
     return (
       <div className="grid min-h-screen place-items-center bg-[var(--pbl-bg)] text-sm text-stone-500">
@@ -1321,11 +1310,9 @@ export function DocumentAiCollaboration({
   if (!supportedStage) {
     return (
       <UnavailableState
-        message={newSystem
-          ? course.status === "finished"
-            ? "课堂已经结束，协作成果现已只读保存。"
-            : `${workspaceNoun}协作目前仅在项目实践阶段开放。`
-          : `${workspaceNoun}协作实验目前在方案构思与项目实践阶段开放。`}
+        message={course.status === "finished"
+          ? "课堂已经结束，协作成果现已只读保存。"
+          : `${workspaceNoun}协作目前仅在项目实践阶段开放。`}
         onBack={() => router.replace(collaborationBackHref(course.id))}
       />
     );
@@ -1350,7 +1337,6 @@ export function DocumentAiCollaboration({
             <h1 className="mt-1 truncate text-base font-bold leading-tight text-stone-950 sm:text-lg">{projectTitle}</h1>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            {!newSystem ? <ArtifactTypeSelector onValueChange={changeArtifactType} value="document" /> : null}
             <span className="hidden sm:inline-flex"><SaveState status={session.saveState === "error" ? "error" : saveStatus} /></span>
             <PrimaryButton
               disabled={saveStatus === "saving"}
@@ -1442,7 +1428,7 @@ export function DocumentAiCollaboration({
           </div>
         ) : stageKey === "make" && inferStageCollectionMode(course.stages) === "new" ? (
           <div className="mt-4">
-            <FinalPdfSubmission course={course} />
+      <FinalArtifactSubmission course={course} />
           </div>
         ) : null}
 

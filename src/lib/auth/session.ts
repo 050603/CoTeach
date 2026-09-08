@@ -25,6 +25,8 @@ export interface TeacherClaims extends JWTPayload {
 
 export interface StudentClaims extends JWTPayload {
   role: "student";
+  /** Unified platform user id. Legacy sessions omit it and use sub. */
+  userId?: string;
   courseId: string;
   studentId: string;
   studentName: string;
@@ -71,13 +73,16 @@ export async function signTeacherToken(payload: {
 }
 
 export async function signStudentToken(payload: {
+  userId?: string;
   courseId: string;
   studentId: string;
   studentName: string;
   sessionVersion: number;
 }): Promise<{ token: string; cookieName: string; maxAge: number }> {
+  const unifiedIdentity = payload.userId ? { userId: payload.userId } : {};
   const token = await new SignJWT({
     role: "student",
+    ...unifiedIdentity,
     courseId: payload.courseId,
     studentId: payload.studentId,
     studentName: payload.studentName,
@@ -122,6 +127,9 @@ export async function verifyToken(token: string): Promise<AuthClaims | null> {
         payload.studentId !== payload.sub ||
         typeof payload.studentName !== "string")
     ) {
+      return null;
+    }
+    if (payload.role === "student" && payload.userId !== undefined && typeof payload.userId !== "string") {
       return null;
     }
     return payload as AuthClaims;

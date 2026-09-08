@@ -12,7 +12,8 @@ import {
   evaluateAiWorkPolicy,
   type DocumentCollaborationIntent,
 } from '@/lib/ai-collaboration/document-policy';
-import { readAuthFromRequest } from '@/lib/auth/session';
+import { isAuthConfigured, readAuthFromRequest } from '@/lib/auth/session';
+import { canAccessLegacyCourse } from '@/lib/platform/access';
 import { callLLMStream } from '@/lib/llm/client';
 import { getCourse } from '@/lib/session/server-store';
 
@@ -56,8 +57,14 @@ export async function POST(request: NextRequest) {
   }
 
   const claims = await readAuthFromRequest(request, 'student');
+  if (isAuthConfigured() && !claims) {
+    return Response.json({ error: 'UNAUTHENTICATED' }, { status: 401 });
+  }
   if (claims && (claims.courseId !== courseId || claims.studentId !== studentId)) {
     return Response.json({ error: 'STUDENT_SCOPE_MISMATCH' }, { status: 403 });
+  }
+  if (claims && !(await canAccessLegacyCourse(claims, courseId, 'write'))) {
+    return Response.json({ error: 'COURSE_LOCKED' }, { status: 403 });
   }
 
   const course = await getCourse(courseId);

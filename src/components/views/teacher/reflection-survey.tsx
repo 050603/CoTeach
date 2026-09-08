@@ -156,17 +156,26 @@ export function NewReflectionTeacherView({ course, focus }: { course: Course; fo
       return true;
     }), [course.students, latest, studentFilter, studentQuery]);
 
-  useEffect(() => {
-    if (!focus) return;
-    setStudentFilter(focus.filter);
-    if (focus.studentId) {
-      const focusedStudent = course.students.find((student) => student.id === focus.studentId);
-      const survey = surveyFor(latest.get(focus.studentId));
-      if (focusedStudent) setStudentQuery(focusedStudent.name);
-      setSelectedStudentId(survey ? focus.studentId : undefined);
-      window.setTimeout(() => document.getElementById(`reflection-student-${focus.studentId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 60);
+  const focusedStudentId = focus?.studentId;
+  const focusedStudent = course.students.find((student) => student.id === focusedStudentId);
+  const focusedSurvey = focusedStudentId ? surveyFor(latest.get(focusedStudentId)) : undefined;
+  const focusKey = JSON.stringify([focus?.filter, focusedStudentId, focusedStudent?.name, Boolean(focusedSurvey)]);
+  const [appliedFocusKey, setAppliedFocusKey] = useState("");
+  if (focusKey !== appliedFocusKey) {
+    setAppliedFocusKey(focusKey);
+    if (focus) {
+      setStudentFilter(focus.filter);
+      if (focusedStudentId) {
+        if (focusedStudent) setStudentQuery(focusedStudent.name);
+        setSelectedStudentId(focusedSurvey ? focusedStudentId : undefined);
+      }
     }
-  }, [course.students, focus?.filter, focus?.studentId, latest]);
+  }
+  useEffect(() => {
+    if (!focusedStudentId) return;
+    const timer = window.setTimeout(() => document.getElementById(`reflection-student-${focusedStudentId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 60);
+    return () => window.clearTimeout(timer);
+  }, [focusedStudentId]);
   useEffect(() => {
     const onSummaryUpdated = (event: Event) => {
       const detail = (event as CustomEvent<{ courseId?: string; support?: AiSupportRecord }>).detail;

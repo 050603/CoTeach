@@ -21,38 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.4.1
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install locked dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Validate Prisma schema and migrations
-        run: |
-          pnpm exec prisma validate
-          pnpm exec prisma format --check
-        env:
-          DATABASE_URL: postgresql://openpbl:validation-only@127.0.0.1:5432/openpbl
-
-      - name: Type check all workspaces
-        run: pnpm typecheck
-
-      - name: Lint
-        # The imported OpenMAIC code currently carries a reviewed warning
-        # baseline. Any newly introduced warning fails CI.
-        run: pnpm lint:ci
-
-      - name: Unit and integration tests
-        run: pnpm test:ci
-
-      - name: Production dependency audit
-        run: pnpm audit:prod
+      - uses: ./.github/actions/validate
 
       - name: Production build
         run: pnpm build

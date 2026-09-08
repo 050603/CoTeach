@@ -112,7 +112,7 @@ export default function TeacherHomePage() {
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--pbl-teacher)] opacity-75" />
                   <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[var(--pbl-teacher)]" />
                 </span>
-                Teacher Workspace · 教师工作台
+                教师工作台
               </div>
               <h1 className="mt-4 text-[length:clamp(1.75rem,3.6vw,2.5rem)] font-extrabold leading-[1.1] tracking-tight text-[var(--pbl-text-strong)]">
                 欢迎回来，<span className="pbl-display-gradient">{session.user.name}</span>
@@ -133,6 +133,12 @@ export default function TeacherHomePage() {
                   href="/teacher/settings"
                 >
                   <Sparkles size={15} /> AI 设置
+                </Link>
+                <Link
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-xs)] border border-indigo-200 bg-indigo-50 px-4 text-sm font-semibold text-indigo-700 transition hover:-translate-y-0.5 hover:bg-indigo-100"
+                  href="/teacher/classes"
+                >
+                  教学班编排
                 </Link>
               </div>
             </div>

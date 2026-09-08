@@ -1,31 +1,13 @@
-# OpenPBL HTTP-only Nginx 模板 —— IP 直访部署(无域名/无 HTTPS 证书)
-# 由 docker-compose.ip.yml 挂载替换默认模板(默认模板强制 308 跳转 HTTPS)。
+# OpenPBL HTTP gateway for the single current host service.
 
-upstream openpbl_app {
-    server ${OPENPBL_UPSTREAM}:3000;
-    keepalive 64;
-}
-
-upstream openpbl_ws {
-    server ${OPENPBL_UPSTREAM}:3001;
-    keepalive 32;
-}
-
-upstream openpbl_tldraw {
-    server ${OPENPBL_UPSTREAM}:3002;
-    keepalive 32;
-}
-
-# The new platform runs as a host systemd user service rather than as part of
-# the blue/green Docker stack. Route only its dedicated hostname here so IP
-# access and any other hostnames continue to reach the current production app.
+# The application and realtime server run as systemd user services on the host.
 upstream openpbl_new_app {
-    server 127.0.0.1:3200;
+    server 127.0.0.1:3000;
     keepalive 64;
 }
 
 upstream openpbl_new_ws {
-    server 127.0.0.1:3202;
+    server 127.0.0.1:3001;
     keepalive 32;
 }
 
@@ -59,8 +41,8 @@ server_tokens off;
 # 宿主机其他服务占用;监控指标通过 Docker 内部网络获取的方案不适用于本机。
 
 server {
-    listen 80;
-    server_name praixis.cc.cd;
+    listen 80 default_server;
+    server_name ${PUBLIC_HOST} praixis.cc.cd _;
 
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;
@@ -152,114 +134,5 @@ server {
         proxy_buffering off;
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;
-    }
-}
-
-server {
-    listen 80 default_server;
-    server_name ${PUBLIC_HOST} _;
-
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "camera=(), microphone=(self), geolocation=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' data: ws: wss:; frame-src 'self' blob: data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
-
-    proxy_hide_header X-Powered-By;
-    # Keep one authoritative, deployment-specific CSP at the edge. Combining
-    # the upstream production CSP would remove ws: support on this HTTP setup.
-    proxy_hide_header Content-Security-Policy;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_set_header X-Forwarded-Proto http;
-    proxy_set_header X-Forwarded-Host $host;
-    proxy_set_header X-Request-Id $request_id;
-    proxy_connect_timeout 10s;
-    # One classroom can share a campus NAT address. Keep a bounded ceiling,
-    # but do not reject normal HTTP/1.1 connection pools from 30 students.
-    limit_conn per_ip 200;
-
-    location = /healthz {
-        access_log off;
-        add_header Content-Type text/plain;
-        return 200 "ok\n";
-    }
-
-    location = /api/metrics { return 404; }
-    location = /api/health/ready { return 404; }
-    location ^~ /api/load-test/ {
-        allow ${LOAD_TEST_CLIENT_IP};
-        deny all;
-        proxy_pass http://openpbl_app;
-    }
-
-    location = /api/health/live {
-        access_log off;
-        proxy_pass http://openpbl_app;
-    }
-
-    location /ws {
-        limit_conn per_ip 150;
-        proxy_pass http://openpbl_ws;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-        proxy_buffering off;
-    }
-
-    location /tldraw-sync {
-        limit_conn per_ip 150;
-        proxy_pass http://openpbl_tldraw;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-        proxy_buffering off;
-    }
-
-    location ~ ^/api/courses/[^/]+/actions$ {
-        limit_req zone=general burst=240 nodelay;
-        proxy_pass http://openpbl_app;
-    }
-
-    location ~* ^/api/(.*/stream|openmaic/chat|chat/.*)$ {
-        limit_req zone=general burst=240 nodelay;
-        proxy_pass http://openpbl_app;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 300s;
-        proxy_send_timeout 300s;
-        gzip off;
-    }
-
-    location = /api/uploads {
-        limit_req zone=uploads burst=20 nodelay;
-        client_max_body_size 501m;
-        client_body_timeout 600s;
-        proxy_request_buffering off;
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-        proxy_pass http://openpbl_app;
-    }
-
-    location /_next/static/ {
-        proxy_pass http://openpbl_app;
-        add_header Cache-Control "public, max-age=31536000, immutable" always;
-        access_log off;
-    }
-
-    location /_next/image {
-        proxy_pass http://openpbl_app;
-        add_header Cache-Control "public, max-age=86400" always;
-        access_log off;
-    }
-
-    location / {
-        limit_req zone=general burst=240 nodelay;
-        proxy_pass http://openpbl_app;
-        proxy_read_timeout 60s;
     }
 }

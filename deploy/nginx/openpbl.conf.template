@@ -1,15 +1,10 @@
 upstream openpbl_app {
-    server ${OPENPBL_UPSTREAM}:3000;
+    server host.docker.internal:3000;
     keepalive 64;
 }
 
 upstream openpbl_ws {
-    server ${OPENPBL_UPSTREAM}:3001;
-    keepalive 32;
-}
-
-upstream openpbl_tldraw {
-    server ${OPENPBL_UPSTREAM}:3002;
+    server host.docker.internal:3001;
     keepalive 32;
 }
 
@@ -135,16 +130,6 @@ server {
     location /ws {
         limit_conn per_ip 150;
         proxy_pass http://openpbl_ws;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-        proxy_buffering off;
-    }
-
-    location /tldraw-sync {
-        limit_conn per_ip 150;
-        proxy_pass http://openpbl_tldraw;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_read_timeout 3600s;

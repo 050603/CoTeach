@@ -3,6 +3,7 @@ import { loadCourse } from "@/lib/db/session-repository";
 import { authenticateRequest } from "@/lib/auth/request-guards";
 import { scopeCourseForClaims } from "@/lib/auth/course-scope";
 import { withHttpMetrics } from "@/lib/observability/http";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +17,9 @@ async function getCourseState(
   const { courseId } = await context.params;
   if (auth.claims.role === "student" && auth.claims.courseId !== courseId) {
     return new Response(null, { status: 404 });
+  }
+  if (!(await canAccessLegacyCourse(auth.claims, courseId, "read"))) {
+    return new Response(null, { status: 403 });
   }
   const course = await loadCourse(courseId);
   if (!course) return new Response(null, { status: 404 });

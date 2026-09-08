@@ -4,6 +4,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { authenticateRequest } from "@/lib/auth/request-guards";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { isDatabaseConfigured, prisma } from "@/lib/db/client";
 
 export const runtime = "nodejs";
@@ -25,6 +26,7 @@ export async function GET(
   if (!parsed.success) return new Response(null, { status: 404 });
   const { courseId, versionId } = parsed.data;
   if (auth.claims.role === "student" && auth.claims.courseId !== courseId) return new Response(null, { status: 404 });
+  if (!(await canAccessLegacyCourse(auth.claims, courseId, "read"))) return new Response(null, { status: 403 });
   if (auth.claims.role === "student") {
     const member = await prisma.student.findFirst({ where: { courseId, id: auth.claims.studentId }, select: { id: true } });
     if (!member) return new Response(null, { status: 404 });

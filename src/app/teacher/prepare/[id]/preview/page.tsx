@@ -34,13 +34,10 @@ import type {
   Course,
   OpenMaicSceneOutlineSnapshot,
 } from "@/lib/session/types";
-import { hasBothScoredRoles } from "@/lib/evaluation/responsibility";
-import { checkPblStageCoverage } from "@/lib/openmaic/pbl/course-template";
 import { normalizeTeachingToolPlan } from "@/lib/openmaic/generation/teaching-tool-plan";
 import { courseDetailedEditHref } from "@/lib/courses/preparation-navigation";
 import { cn } from "@/lib/utils";
 import { getNewSystemCourseReadiness } from "@/lib/classroom/new-system-course";
-import { isNewOpenPblSystem } from "@/lib/system-mode";
 
 const STEPS = [
   { key: "verify", label: "备课阶段" },
@@ -87,98 +84,11 @@ function pageTypeClass(type?: string): string {
 }
 
 function buildPublishChecks(course: Course): PublishCheck[] {
-  if (isNewOpenPblSystem()) {
-    return getNewSystemCourseReadiness(course).map((check) => ({
-      label: check.label,
-      done: check.ok,
-      detail: check.ok ? "已完成。" : check.message,
-    }));
-  }
-  const evaluationWeight = course.content.evaluationPlan.flows
-    ?.filter((item) => item.enabled && item.scored !== false)
-    .reduce((sum, item) => sum + item.weight, 0) ?? 0;
-  const requiredOrdinaryActivities = (course.content.teachingOutline ?? [])
-    .filter((item) => item.stageKey !== "ai-learning");
-  const generatedTeacherResources = course.content.teacherResources?.scenes ?? [];
-  const missingTeacherResources = requiredOrdinaryActivities.flatMap((activity) => {
-    const candidates = generatedTeacherResources.filter(
-      (resource) => !resource.stageKey || resource.stageKey === activity.stageKey,
-    );
-    const missing: string[] = [];
-    if (!candidates.some((resource) => resource.type === "slide" || resource.type === "pbl")) {
-      missing.push(`${activity.title}的演示资源`);
-    }
-    if (!candidates.some((resource) => Boolean(resource.script?.trim()))) {
-      missing.push(`${activity.title}的讲稿`);
-    }
-    return missing;
-  });
-  const adaptivePlan = course.content.adaptiveLearningPlan;
-  const activeAdaptiveBranches = adaptivePlan?.branches.filter((branch) => branch.enabled !== false) ?? [];
-  const missingAdaptiveResources = adaptivePlan?.enabled
-    ? activeAdaptiveBranches.filter((branch) =>
-        branch.status !== "teacher-confirmed"
-        || branch.preparedResource?.status !== "ready"
-        || !branch.preparedResource.classroomId,
-      )
-    : [];
-  const savedOutlines = course.content._openmaicSceneOutlines ?? [];
-  const pblCoverage = savedOutlines.length ? checkPblStageCoverage(savedOutlines) : null;
-  const classroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;
-
-  return [
-    {
-      label: "学生 AI 课堂已生成",
-      done: Boolean(classroomId),
-      detail: classroomId ? "可以直接进入学生课堂实景播放。" : "尚无可播放课堂，请返回生成阶段。",
-    },
-    {
-      label: "教学目标与知识页面完整",
-      done: Boolean(course.learningObjectives?.length || course.content.lessonOutline.some((item) => item.objectives.length)),
-      detail: `${savedOutlines.filter((item) => item.audience !== "teacher").length} 个学生学习页面已纳入编排。`,
-    },
-    {
-      label: "PBL 阶段与内容分流正确",
-      done: !pblCoverage || pblCoverage.ok,
-      detail: pblCoverage?.ok
-        ? "六阶段支撑与学生/教师资源边界已通过校验。"
-        : pblCoverage
-          ? "仍有 PBL 阶段支撑不足，请返回备课阶段检查。"
-          : "生成大纲后将自动校验阶段覆盖。",
-    },
-    {
-      label: "普通课堂主持资源就绪",
-      done: missingTeacherResources.length === 0,
-      detail: missingTeacherResources.length
-        ? `缺少：${missingTeacherResources.join("、")}`
-        : "教师演示资源和主持讲稿均已生成。",
-    },
-    {
-      label: "个性化资源池可运行",
-      done: !adaptivePlan?.enabled || (
-        activeAdaptiveBranches.length > 0
-        && adaptivePlan.status === "teacher-confirmed"
-        && missingAdaptiveResources.length === 0
-      ),
-      detail: adaptivePlan?.enabled
-        ? missingAdaptiveResources.length
-          ? `仍有 ${missingAdaptiveResources.length} 项资源未确认或未生成。`
-          : `${activeAdaptiveBranches.length} 项先修回顾/达标拓展可按学习证据插入。`
-        : "本课程未启用个性化分支。",
-    },
-    {
-      label: "评价责任与权重有效",
-      done: evaluationWeight === 100 && hasBothScoredRoles(course.content.evaluationPlan.dimensions),
-      detail: `AI 与教师计分权重合计 ${evaluationWeight}%，需同时保留两类评价责任。`,
-    },
-    {
-      label: "没有待处理的高风险提醒",
-      done: !(course.teacherInterventions ?? []).some(
-        (item) => item.severity === "high" && item.status === "open",
-      ),
-      detail: "高风险教学提醒必须在发布前由老师确认。",
-    },
-  ];
+  return getNewSystemCourseReadiness(course).map((check) => ({
+    label: check.label,
+    done: check.ok,
+    detail: check.ok ? "已完成。" : check.message,
+  }));
 }
 
 export default function PreviewCoursePage() {
@@ -198,7 +108,6 @@ export default function PreviewCoursePage() {
   const [resourceAuditLoaded, setResourceAuditLoaded] = useState(false);
   const [repairingResources, setRepairingResources] = useState(false);
   const [resourceRepairVersion, setResourceRepairVersion] = useState(0);
-  const newSystem = isNewOpenPblSystem();
 
   useEffect(() => {
     if (!params?.id) return;
@@ -341,9 +250,7 @@ export default function PreviewCoursePage() {
               </div>
               <h1 className="mt-1 truncate font-editorial text-[26px] font-semibold tracking-[-0.02em] text-stone-950 sm:text-[30px]">{course.name}</h1>
               <p className="mt-1 max-w-3xl text-sm leading-6 text-stone-500">
-                {course.subject} · {course.grade} · {newSystem
-                  ? `核对知识讲授内容与时长（${course.content.moduleTimingPlan?.totalMinutes ?? 0} 分钟，须占整课 20%–40%）及发布条件`
-                  : "核对课程内容、学习路径与发布条件"}
+                {course.subject} · {course.grade} · 核对知识讲授内容与时长（{course.content.moduleTimingPlan?.totalMinutes ?? 0} 分钟，须占整课 20%–40%）及发布条件
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -459,7 +366,7 @@ export default function PreviewCoursePage() {
 
       <FlowActionBar
         persistent
-        back={<Link className="inline-flex min-h-11 items-center text-sm font-semibold text-[var(--pbl-text-muted)]" href={newSystem ? `/teacher/prepare/${course.id}/verify` : `/teacher/prepare/${course.id}/generate`}>上一步</Link>}
+        back={<Link className="inline-flex min-h-11 items-center text-sm font-semibold text-[var(--pbl-text-muted)]" href={`/teacher/prepare/${course.id}/verify`}>上一步</Link>}
         saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} state={session.saveState} onRetry={() => void session.retrySave()} />}
       >
         {!isPublished ? (

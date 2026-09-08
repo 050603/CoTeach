@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { IncomingMessage } from "node:http";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import {
   NodeSqliteWrapper,
   SQLiteSyncStorage,
@@ -25,6 +25,7 @@ import { checkDistributedRateLimit } from "@/lib/auth/distributed-rate-limit";
 import { hasCurrentSessionVersion } from "@/lib/auth/session-version";
 import { websocketConnectionsActive } from "@/lib/observability/metrics";
 import { isAllowedBrowserOrigin } from "@/lib/network/request-origin";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 type SessionMeta = { userId: string; role: AuthRole; roomKey: string };
 type RoomEntry = {
@@ -82,6 +83,22 @@ export function startTldrawSyncServer(port = 3002): WebSocketServer {
       },
     });
     websocketConnectionsActive.inc();
+    // Re-check the course gate for an already established whiteboard socket.
+    // A lock, enrollment removal, or class completion must stop writes even
+    // when the browser keeps the WebSocket open.
+    const accessTimer = setInterval(() => {
+      void canAccessLegacyCourse(
+        authorized.claims,
+        authorized.courseId,
+        authorized.claims.role === "student" ? "write" : "read",
+      ).then((allowed) => {
+        if (!allowed && socket.readyState === WebSocket.OPEN) socket.close(4003, "COURSE_FORBIDDEN");
+      }).catch(() => {
+        if (socket.readyState === WebSocket.OPEN) socket.close(1011, "ACCESS_CHECK_FAILED");
+      });
+    }, 30_000);
+    accessTimer.unref?.();
+    socket.once("close", () => clearInterval(accessTimer));
   });
   instance.on("error", (error) =>
     console.error("[tldraw-sync] WebSocket server error:", error),
@@ -125,6 +142,9 @@ async function authorizeUpgrade(
     select: { id: true },
   });
   if (!group) return null;
+  if (!(await canAccessLegacyCourse(claims, courseId, claims.role === "student" ? "write" : "read"))) {
+    return null;
+  }
 
   if (claims.role === "student") {
     if (claims.courseId !== courseId || !claims.studentId) return null;

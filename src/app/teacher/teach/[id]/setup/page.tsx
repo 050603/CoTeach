@@ -7,12 +7,9 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   ArrowLeft,
-  Bot,
-  Globe2,
   History,
   PlayCircle,
   RefreshCw,
-  Sparkles,
   Users,
 } from "lucide-react";
 import { DashboardShell } from "@/components/dashboard-shell";
@@ -20,15 +17,13 @@ import { InviteCodeCard } from "@/components/invite-code-card";
 import { Card, Pill, PrimaryButton } from "@/components/ui";
 import { useSession, useCourse, useHydrated } from "@/lib/session/store";
 import { useCoursePresence } from "@/hooks/use-course-presence";
-import { normalizePblCourseConfig, type ResourceInquiryMode } from "@/lib/pbl-course-config";
-import { isNewOpenPblSystem } from "@/lib/system-mode";
 import { getNewSystemCourseReadiness } from "@/lib/classroom/new-system-course";
 import { MakeArtifactModeSetting } from "@/components/teacher/make-artifact-mode-setting";
 
 export default function TeachSetupPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
-  const { user, startTeaching, generateNewInviteCode, restartTeaching, updateCourse } = useSession();
+  const { user, startTeaching, generateNewInviteCode, restartTeaching } = useSession();
   const course = useCourse(params?.id);
   const hydrated = useHydrated();
   const presence = useCoursePresence({
@@ -50,19 +45,8 @@ export default function TeachSetupPage() {
 
   const inviteCode = course?.inviteCode;
   const isTeaching = course?.status === "teaching";
-  const newSystem = isNewOpenPblSystem();
-  const readinessChecks = course && newSystem
-    ? getNewSystemCourseReadiness(course)
-    : [];
+  const readinessChecks = course ? getNewSystemCourseReadiness(course) : [];
   const readinessBlockers = readinessChecks.filter((check) => !check.ok);
-  const resourceInquiryMode = normalizePblCourseConfig(course?.pblConfig).resourceInquiryMode;
-
-  function setResourceInquiryMode(mode: ResourceInquiryMode) {
-    if (!course) return;
-    updateCourse(course.id, {
-      pblConfig: normalizePblCourseConfig({ ...course.pblConfig, resourceInquiryMode: mode }),
-    });
-  }
 
   if (!hydrated) {
     return (
@@ -144,7 +128,7 @@ export default function TeachSetupPage() {
 
       <div className="grid grid-cols-[1fr_400px] gap-5">
         <div className="space-y-5">
-          {newSystem && readinessBlockers.length > 0 ? (
+          {readinessBlockers.length > 0 ? (
             <Card className="border-amber-200 bg-amber-50/70">
               <h2 className="text-lg font-bold text-amber-950">开课前还需完成 {readinessBlockers.length} 项</h2>
               <ul className="mt-3 space-y-2 text-sm leading-6 text-amber-900">
@@ -162,22 +146,15 @@ export default function TeachSetupPage() {
           ) : null}
           <Card>
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <h2 className="text-xl font-bold">{newSystem ? "新版五阶段课堂" : "课堂协作方式"}</h2>
-              {newSystem ? <MakeArtifactModeSetting course={course} /> : null}
+              <h2 className="text-xl font-bold">五阶段课堂</h2>
+              <MakeArtifactModeSetting course={course} />
             </div>
-            {newSystem ? (
-              <div className="mt-4 space-y-3">
-                <p className="text-sm leading-6 text-stone-600">项目启动、成果汇报与评价、学习反思采用轻量资源授课；知识讲授采用分节学习、小测与助教讲解；项目实践的成果形式由教师在右上角统一设置。</p>
-                <div className="grid gap-2 sm:grid-cols-5">
-                  {course.stages.map((stage, index) => <div className="rounded-[8px] border border-blue-100 bg-blue-50/70 p-3" key={stage.key}><span className="text-xs font-black text-blue-700">阶段 {index + 1}</span><p className="mt-1 text-sm font-bold text-stone-900">{stage.label}</p></div>)}
-                </div>
+            <div className="mt-4 space-y-3">
+              <p className="text-sm leading-6 text-stone-600">项目启动、成果汇报与评价、学习反思采用轻量资源授课；知识讲授采用分节学习、小测与助教讲解；项目实践的成果形式由教师在右上角统一设置。</p>
+              <div className="grid gap-2 sm:grid-cols-5">
+                {course.stages.map((stage, index) => <div className="rounded-[8px] border border-blue-100 bg-blue-50/70 p-3" key={stage.key}><span className="text-xs font-black text-blue-700">阶段 {index + 1}</span><p className="mt-1 text-sm font-bold text-stone-900">{stage.label}</p></div>)}
               </div>
-            ) : (
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <div className="rounded-[8px] border border-blue-300 bg-blue-50 p-4"><div className="flex items-center gap-2 font-bold text-blue-800"><Users size={19} />每名学生独立完成项目</div><p className="mt-2 text-sm leading-6 text-stone-600">学生承担构思、决策、制作、汇报与反思，不再进行真实学生分组。</p></div>
-                <div className="rounded-[8px] border border-violet-200 bg-violet-50 p-4"><div className="flex items-center gap-2 font-bold text-violet-800"><Sparkles size={19} />方案与实践支持</div><p className="mt-2 text-sm leading-6 text-stone-600">方案构思和项目实践阶段会自动提供适合当前任务的伴学支持，无需教师额外配置。</p></div>
-              </div>
-            )}
+            </div>
           </Card>
 
           <Card>
@@ -206,31 +183,6 @@ export default function TeachSetupPage() {
             </div>
             <p className="mt-4 text-sm leading-6 text-stone-500">每位加入课堂的学生都会自动获得一个私有项目空间。</p>
           </Card>
-
-          {!newSystem ? <Card>
-            <h2 className="text-xl font-bold">资料查询方式</h2>
-            <p className="mt-2 text-sm leading-6 text-stone-500">设置学生在 AI 伴学“资料角”输入问题后的回答方式。</p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <button
-                aria-pressed={resourceInquiryMode === "llm"}
-                className={`rounded-[8px] border p-4 text-left transition ${resourceInquiryMode === "llm" ? "border-violet-400 bg-violet-50 ring-2 ring-violet-100" : "border-stone-200 bg-white hover:border-stone-300"}`}
-                onClick={() => setResourceInquiryMode("llm")}
-                type="button"
-              >
-                <span className="flex items-center gap-2 font-bold text-violet-800"><Bot size={19} />LLM 问答模式</span>
-                <span className="mt-2 block text-sm leading-6 text-stone-600">由大语言模型结合课程主题解释问题，不依赖 Tavily；回答不代表已联网核验。</span>
-              </button>
-              <button
-                aria-pressed={resourceInquiryMode === "web-search"}
-                className={`rounded-[8px] border p-4 text-left transition ${resourceInquiryMode === "web-search" ? "border-blue-400 bg-blue-50 ring-2 ring-blue-100" : "border-stone-200 bg-white hover:border-stone-300"}`}
-                onClick={() => setResourceInquiryMode("web-search")}
-                type="button"
-              >
-                <span className="flex items-center gap-2 font-bold text-blue-800"><Globe2 size={19} />联网搜索模式</span>
-                <span className="mt-2 block text-sm leading-6 text-stone-600">搜索网络并展示来源链接；需先在教师设置的“联网搜索”中配置 Tavily API Key。</span>
-              </button>
-            </div>
-          </Card> : null}
 
           <Card>
             <h2 className="text-xl font-bold">课程信息确认</h2>
@@ -330,7 +282,7 @@ export default function TeachSetupPage() {
             ) : (
               <PrimaryButton
                 className="h-12 w-full text-base"
-                disabled={newSystem && readinessBlockers.length > 0}
+                disabled={readinessBlockers.length > 0}
                 onClick={start}
                 type="button"
               >

@@ -21,12 +21,14 @@ export function ImageElementStatic(
           style={{ textAlign: align }}
         >
           <div>
+            {/* Static HTML is also consumed by DOCX export, outside Next image routing. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               className={cn(
                 'w-full max-w-full cursor-default object-cover px-0',
                 'rounded-sm'
               )}
-              alt={(props.attributes as any).alt}
+              alt={(props.attributes as React.ImgHTMLAttributes<HTMLImageElement>).alt ?? ''}
               src={url}
             />
           </div>

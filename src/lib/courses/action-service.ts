@@ -9,6 +9,7 @@ import { runMutationTransaction } from "@/lib/db/transaction-retry";
 import { lockCourseMutation } from "@/lib/db/course-mutation-lock";
 import { reconcileUploadReferences } from "@/lib/uploads/reference-tracker";
 import { inferStageCollectionMode } from "@/lib/system-mode";
+import { canAccessLegacyCourse, findLegacyParticipation } from "@/lib/platform/access";
 import type { ActionAck, ActionEnvelope } from "./contracts";
 
 const DIRECT_ACTIONS = new Set<SessionAction["type"]>([
@@ -65,6 +66,9 @@ async function executeCourseActionOnce(
   const action = envelope.action;
   if (!isActionAllowed(claims.role, action.type)) {
     throw new CourseActionError("FORBIDDEN_ACTION", "Action is not allowed for this role.", 403);
+  }
+  if (!(await canAccessLegacyCourse(claims, courseId, claims.role === "student" ? "write" : "read"))) {
+    throw new CourseActionError("FORBIDDEN", "课程不属于当前会话，或当前课程已锁定。", 403);
   }
   if (
     claims.role === "student" &&
@@ -142,6 +146,7 @@ async function executeDirect(
         }
 
         await applyDirectMutation(tx, courseId, envelope.action);
+        await attachLegacyRecordsToParticipation(tx, courseId, claims);
         const updated = await tx.course.update({
           where: { id: courseId },
           data: { version: { increment: 1 } },
@@ -587,6 +592,36 @@ function parseGroupMembers(value: Prisma.JsonValue): Array<{
   );
 }
 
+/** Attach records written by compatibility classroom services to the platform
+ * participation that owns this runtime course. */
+async function attachLegacyRecordsToParticipation(
+  tx: Prisma.TransactionClient,
+  courseId: string,
+  claims: AuthClaims,
+): Promise<void> {
+  if (claims.role !== "student") return;
+  const userId = claims.userId ?? claims.studentId;
+  const participation = await findLegacyParticipation(tx, courseId, claims.studentId);
+  if (!participation) return;
+  const studentIds = [...new Set([claims.studentId, userId])];
+  const where = { courseId, studentId: { in: studentIds }, participationId: null };
+  await Promise.all([
+    tx.classroomSubmission.updateMany({ where, data: { participationId: participation.id } }),
+    tx.projectDocumentVersion.updateMany({ where, data: { participationId: participation.id } }),
+    tx.projectPdfVersion.updateMany({ where, data: { participationId: participation.id } }),
+    tx.reflectionRecord.updateMany({ where, data: { participationId: participation.id } }),
+    tx.courseUpload.updateMany({ where, data: { participationId: participation.id } }),
+    tx.aiSupportRecord.updateMany({ where, data: { participationId: participation.id } }),
+    tx.companionThread.updateMany({ where, data: { participationId: participation.id } }),
+    tx.companionTask.updateMany({ where, data: { participationId: participation.id } }),
+    tx.companionConfirmation.updateMany({ where, data: { participationId: participation.id } }),
+    tx.companionProcessRecord.updateMany({ where, data: { participationId: participation.id } }),
+    tx.aiInteractionEvent.updateMany({ where, data: { participationId: participation.id } }),
+    tx.learningEvent.updateMany({ where, data: { participationId: participation.id } }),
+    tx.showcasePresentation.updateMany({ where, data: { participationId: participation.id } }),
+  ]);
+}
+
 async function executeLegacyWithReservation(
   courseId: string,
   envelope: ActionEnvelope,
@@ -709,6 +744,7 @@ async function executeLegacyWithReservation(
         },
         select: { cursor: true },
       });
+      await attachLegacyRecordsToParticipation(tx, courseId, claims);
       await tx.courseMutationReceipt.update({
         where: { requestId: envelope.requestId },
         data: {

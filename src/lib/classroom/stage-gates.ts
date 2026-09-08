@@ -1,8 +1,6 @@
 import type { Course, Stage } from "@/lib/session/types";
 import { isReliableAiProgress } from "@openmaic/lib/progress/completion-model";
-import { deriveStageReadiness } from "@/lib/learning-evidence/readiness";
 import { isReadyMadeDeliverableRequest } from "@/lib/learning-evidence/ai-policy";
-import { isNewOpenPblSystem } from "@/lib/system-mode";
 import { normalizePblCourseConfig } from "@/lib/pbl-course-config";
 
 export type StageGateItem = {
@@ -39,175 +37,79 @@ export function evaluateStageGate(course: Course, stageIndex = course.currentSta
   const warnings: StageGateItem[] = [];
   const completed: string[] = [];
 
-  if (isNewOpenPblSystem()) {
-    if (stage.key === "make") {
-      const makeArtifactMode = normalizePblCourseConfig(course.pblConfig).makeArtifactMode;
-      const studentsWithoutArtifact = course.students
-        .filter((student) => makeArtifactMode === "other"
-          ? !(course.projectPdfVersions ?? []).some((version) =>
-              version.stageKey === "make"
-              && version.studentId === student.id
-              && version.status === "submitted")
-          : !(course.submissions ?? []).some((submission) =>
-              submission.stageKey === "make"
-              && submission.studentId === student.id
-              && (submission.type === "document" || submission.type === "code")
-              && submission.content.trim().length > 0))
-        .map((student) => student.id);
-      if (studentsWithoutArtifact.length) {
-        blockers.push({
-          code: "collaboration-artifact",
-          message: makeArtifactMode === "other"
-            ? `${studentsWithoutArtifact.length} 名学生尚未上传本地成果文件`
-            : `${studentsWithoutArtifact.length} 名学生尚未保存文档或代码项目产物`,
-          targetIds: studentsWithoutArtifact,
-        });
-      } else if (course.students.length) {
-        completed.push(makeArtifactMode === "other" ? "所有学生均已上传本地成果文件" : "所有学生均已保存项目实践产物");
-      } else {
-        warnings.push({
-          code: "participants",
-          message: "当前尚无学生进入课堂",
-          targetIds: [],
-        });
-      }
-      return { canAdvance: blockers.length === 0, stage, blockers, warnings, completed };
-    }
-
-    if (stage.key !== "ai-learning") {
-      const resourceCount = (course.resources ?? []).filter((resource) =>
-        resource.stageKey === stage.key
-        || (stage.key === "launch" && !resource.stageKey)).length;
-      if (resourceCount) completed.push(`本阶段已准备 ${resourceCount} 份授课资源`);
-      else warnings.push({
-        code: "stage-resources",
-        message: "本阶段尚未上传授课资源，可继续切换阶段",
-        targetIds: [course.id],
-      });
-      return { canAdvance: true, stage, blockers, warnings, completed };
-    }
-  }
-
-  if (stage.key === "launch") {
-    if (!course.summary.trim() || !course.drivingQuestion.trim()) blockers.push({ code: "project-brief", message: "项目说明和驱动问题需要完整", targetIds: [course.id] });
-    else completed.push("项目说明与驱动问题已完整");
-    if (!course.students.length) blockers.push({ code: "participants", message: "至少需要一名学生进入课堂", targetIds: [] });
-    else completed.push(`${course.students.length} 名学生已进入课堂`);
-    const readiness = course.students.map((student) =>
-      deriveStageReadiness(course, student.id, stage.key));
-    const missingIntent = readiness
-      .filter((item) => item.status === "not-started" || item.status === "working")
-      .map((item) => item.studentId);
-    const waitingCalibration = readiness
-      .filter((item) => item.status === "awaiting-calibration")
-      .map((item) => item.studentId);
-    const needsRevision = readiness
-      .filter((item) => item.status === "needs-revision")
-      .map((item) => item.studentId);
-    if (missingIntent.length) blockers.push({ code: "launch-selection", message: `${missingIntent.length} 名学生尚未完成资料查阅或选择研究方向`, targetIds: missingIntent });
-    if (waitingCalibration.length) blockers.push({ code: "launch-selection", message: `${waitingCalibration.length} 名学生尚未完成研究方向选择`, targetIds: waitingCalibration });
-    if (needsRevision.length) blockers.push({ code: "launch-selection", message: `${needsRevision.length} 名学生需要重新选择研究方向`, targetIds: needsRevision });
-    if (readiness.length && readiness.every((item) => item.status === "ready")) completed.push("所有学生均已了解课程并选定研究方向");
-  }
-
-  if (stage.key === "ai-learning") {
-    const hasAiContent = Boolean(course.aiLearningClassroomId || course.content._openmaicClassroomId || course.content._openmaicSceneOutlines?.length);
-    if (!hasAiContent) blockers.push({ code: "ai-content", message: "知识讲授内容尚未生成或关联", targetIds: [course.id] });
-    else completed.push("知识讲授内容可用");
-    const unmet = Object.entries(course.aiLearningProgress ?? {})
-      .filter(([, progress]) =>
-        !isReliableAiProgress(progress) ||
-        progress.unmetGoals?.length ||
-        progress.masteryLevel === "not-started",
-      )
-      .map(([studentId]) => studentId);
-    if (unmet.length) warnings.push({ code: "unmet-goals", message: `${unmet.length} 名学生仍有未达成目标，需要教师处理或说明覆盖`, targetIds: unmet });
-  }
-
-  if (stage.key === "proposal") {
-    const readiness = course.students.map((student) =>
-      deriveStageReadiness(course, student.id, stage.key));
-    const incomplete = readiness
-      .filter((item) => item.status === "not-started" || item.status === "working")
-      .map((item) => item.studentId);
-    const pending = readiness
-      .filter((item) => item.status === "awaiting-calibration")
-      .map((item) => item.studentId);
-    const revision = readiness
-      .filter((item) => item.status === "needs-revision")
-      .map((item) => item.studentId);
-    if (incomplete.length) blockers.push({ code: "proposal-evidence", message: `${incomplete.length} 名学生尚未形成可实施、可验证的项目方案`, targetIds: incomplete });
-    if (pending.length) blockers.push({ code: "teacher-approval", message: `${pending.length} 名学生的方案等待教师校准`, targetIds: pending });
-    if (revision.length) blockers.push({ code: "proposal-revision", message: `${revision.length} 名学生的方案需要修订`, targetIds: revision });
-    if (readiness.length && readiness.every((item) => item.status === "ready")) completed.push("所有个人项目方案均已由教师确认");
-    const openFeedback = (course.feedback ?? []).filter((item) => ["proposal", "review"].includes(item.stageKey) && item.status !== "resolved").map((item) => item.targetId);
-    if (openFeedback.length) warnings.push({ code: "open-feedback", message: "仍有反馈尚未回应", targetIds: [...new Set(openFeedback)] });
-  }
-
   if (stage.key === "make") {
-    const readiness = course.students.map((student) =>
-      deriveStageReadiness(course, student.id, stage.key));
-    const incompleteReadiness = readiness.filter((item) => item.status !== "ready");
-    const incomplete = incompleteReadiness.map((item) => item.studentId);
-    if (incomplete.length) {
-      const missingArtifact = incompleteReadiness.filter((item) =>
-        item.checks.some((check) => check.id === "make-artifact-version" && !check.satisfied)
-      ).length;
-      const missingProcessDraft = incompleteReadiness.filter((item) =>
-        item.checks.some((check) => check.id === "make-process-draft" && !check.satisfied)
-      ).length;
-      const details = [
-        ...(missingArtifact ? [`${missingArtifact} 名尚未提交可查看作品`] : []),
-        ...(missingProcessDraft ? [`${missingProcessDraft} 名尚未保存作品制作进展`] : []),
-      ];
+    const makeArtifactMode = normalizePblCourseConfig(course.pblConfig).makeArtifactMode;
+    const studentsWithoutArtifact = course.students
+      .filter((student) => makeArtifactMode === "other"
+        ? !(course.projectPdfVersions ?? []).some((version) =>
+            version.stageKey === "make"
+            && version.studentId === student.id
+            && version.status === "submitted")
+        : !(course.submissions ?? []).some((submission) =>
+            submission.stageKey === "make"
+            && submission.studentId === student.id
+            && (submission.type === "document" || submission.type === "code")
+            && submission.content.trim().length > 0))
+      .map((student) => student.id);
+    if (studentsWithoutArtifact.length) {
       blockers.push({
-        code: "iteration-evidence",
-        message: details.join("；") || `${incomplete.length} 名学生的制作证据尚未完成`,
-        targetIds: incomplete,
+        code: "collaboration-artifact",
+        message: makeArtifactMode === "other"
+          ? `${studentsWithoutArtifact.length} 名学生尚未上传本地成果文件`
+          : `${studentsWithoutArtifact.length} 名学生尚未保存文档或代码项目产物`,
+        targetIds: studentsWithoutArtifact,
+      });
+    } else if (course.students.length) {
+      completed.push(makeArtifactMode === "other" ? "所有学生均已上传本地成果文件" : "所有学生均已保存项目实践产物");
+    } else {
+      warnings.push({
+        code: "participants",
+        message: "当前尚无学生进入课堂",
+        targetIds: [],
       });
     }
-    const highRisk = (course.teacherInterventions ?? []).filter((item) => item.stageKey === "make" && item.severity === "high" && item.status === "open");
-    if (highRisk.length) blockers.push({ code: "high-risk", message: `${highRisk.length} 个高风险问题尚未处理`, targetIds: highRisk.flatMap((item) => item.targetIds) });
-    if (!incomplete.length && !highRisk.length && readiness.length) completed.push("所有学生均已提交作品");
+    return { canAdvance: blockers.length === 0, stage, blockers, warnings, completed };
   }
 
-  if (stage.key === "showcase") {
-    const readiness = course.students.map((student) =>
-      deriveStageReadiness(course, student.id, stage.key));
-    const incomplete = readiness
-      .filter((item) => item.status === "not-started" || item.status === "working")
-      .map((item) => item.studentId);
-    const waitingTeacher = readiness
-      .filter((item) => item.status === "awaiting-calibration")
-      .map((item) => item.studentId);
-    const revision = readiness
-      .filter((item) => item.status === "needs-revision")
-      .map((item) => item.studentId);
-    if (incomplete.length) blockers.push({ code: "showcase-evidence", message: `${incomplete.length} 名学生尚未在成果工作台提交展示材料`, targetIds: incomplete });
-    if (waitingTeacher.length) blockers.push({ code: "showcase-evaluation", message: `${waitingTeacher.length} 名学生等待教师现场评价`, targetIds: waitingTeacher });
-    if (revision.length) blockers.push({ code: "showcase-revision", message: `${revision.length} 名学生的展示材料需要修订`, targetIds: revision });
-    const pendingAi = course.students.filter((student) => {
-      const suggestions = (course.aiAssessmentSuggestions ?? []).filter(
-        (item) => item.studentId === student.id && item.stageKey === "showcase",
-      );
-      return suggestions.some((item) =>
-        item.status === "pending-teacher-confirmation");
-    }).map((student) => student.id);
-    if (pendingAi.length) warnings.push({ code: "ai-assessment-pending", message: `${pendingAi.length} 名学生有 AI 评价建议等待教师确认；未确认建议不计分`, targetIds: pendingAi });
-    if (readiness.length && readiness.every((item) => item.status === "ready")) completed.push("所有学生均已提交成果并完成教师现场评价");
+  if (stage.key !== "ai-learning") {
+    const resourceCount = (course.resources ?? []).filter((resource) =>
+      resource.stageKey === stage.key
+      || (stage.key === "launch" && !resource.stageKey)).length;
+    if (resourceCount) completed.push(`本阶段已准备 ${resourceCount} 份授课资源`);
+    else warnings.push({
+      code: "stage-resources",
+      message: "本阶段尚未上传授课资源，可继续切换阶段",
+      targetIds: [course.id],
+    });
+    return { canAdvance: true, stage, blockers, warnings, completed };
   }
 
-  if (stage.key === "reflection") {
-    const missingReflections = course.students
-      .map((student) => deriveStageReadiness(course, student.id, stage.key))
-      .filter((item) => item.status !== "ready")
-      .map((item) => item.studentId);
-    const unconfirmed = (course.aiAssessmentSuggestions ?? [])
-      .filter((item) => item.status === "pending-teacher-confirmation")
-      .map((item) => item.studentId);
-    if (missingReflections.length) warnings.push({ code: "reflection", message: `${missingReflections.length} 名学生尚未完成反思`, targetIds: missingReflections });
-    if (unconfirmed.length) warnings.push({ code: "evaluation", message: "仍有多元评价等待教师确认", targetIds: [...new Set(unconfirmed)] });
-    completed.push("这是课程终态，结束前请检查评价与反思");
+  const hasAiContent = Boolean(
+    course.aiLearningClassroomId
+    || course.content._openmaicClassroomId
+    || course.content._openmaicSceneOutlines?.length,
+  );
+  if (!hasAiContent) {
+    blockers.push({
+      code: "ai-content",
+      message: "知识讲授内容尚未生成或关联",
+      targetIds: [course.id],
+    });
+  } else {
+    completed.push("知识讲授内容可用");
+  }
+  const unmet = Object.entries(course.aiLearningProgress ?? {})
+    .filter(([, progress]) =>
+      !isReliableAiProgress(progress)
+      || progress.unmetGoals?.length
+      || progress.masteryLevel === "not-started")
+    .map(([studentId]) => studentId);
+  if (unmet.length) {
+    warnings.push({
+      code: "unmet-goals",
+      message: `${unmet.length} 名学生仍有未达成目标，需要教师处理或说明覆盖`,
+      targetIds: unmet,
+    });
   }
 
   return { canAdvance: blockers.length === 0, stage, blockers, warnings, completed };

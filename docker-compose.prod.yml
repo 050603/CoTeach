@@ -1,65 +1,10 @@
 name: openpbl
 
-x-app: &app
-  image: ${OPENPBL_IMAGE:?Set OPENPBL_IMAGE to an immutable GHCR digest or Git SHA tag}
-  env_file:
-    - ./deploy/.deploy.env
-  environment:
-    NODE_ENV: production
-    PUBLIC_BASE_URL: https://${PUBLIC_HOST:?Set PUBLIC_HOST to the certificate IP or hostname}
-    REDIS_URL: redis://redis:6379
-    ENABLE_WEBSOCKET: "true"
-    WEBSOCKET_PORT: "3001"
-    ENABLE_TLDRAW_SYNC: "true"
-    # The legacy production image shares PostgreSQL with the separately
-    # deployed new-platform worker. It must not claim new-platform durable jobs
-    # with its stale provider routing/configuration.
-    COURSE_GENERATION_BACKGROUND_ENABLED: "false"
-    TLDRAW_SYNC_PORT: "3002"
-    TRUST_PROXY_HEADERS: "true"
-    UPLOAD_DIR: /app/.openpbl-data/uploads
-    WHITEBOARD_DATA_DIR: /app/.openpbl-data/whiteboards
-    ENABLE_LOAD_TEST_API: ${ENABLE_LOAD_TEST_API:-false}
-  secrets:
-    - database_url
-    - jwt_secret
-    - provider_encryption_key
-    - monitor_token
-    - load_test_admin_token
-  volumes:
-    - uploads:/app/.openpbl-data/uploads
-    - whiteboards:/app/.openpbl-data/whiteboards
-    - interactive-runtime-cache:/app/.openpbl-data/interactive-runtime-cache
-    - classrooms:/app/data/classrooms
-  expose:
-    - "3000"
-    - "3001"
-    - "3002"
-  depends_on:
-    migrate:
-      condition: service_completed_successfully
-    redis:
-      condition: service_healthy
-  healthcheck:
-    test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health/live"]
-    interval: 15s
-    timeout: 5s
-    retries: 5
-    start_period: 30s
-  stop_grace_period: 30s
-  restart: unless-stopped
-  deploy:
-    resources:
-      limits:
-        cpus: "2.0"
-        memory: 2500m
-      reservations:
-        memory: 512m
-  logging: &logging
-    driver: json-file
-    options:
-      max-size: "50m"
-      max-file: "5"
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
 
 services:
   postgres:
@@ -166,18 +111,11 @@ services:
     restart: "no"
     logging: *logging
 
-  app-blue:
-    <<: *app
-    profiles: ["blue"]
-
-  app-green:
-    <<: *app
-    profiles: ["green"]
-
   nginx:
     image: nginx:1.28.0-alpine
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      OPENPBL_UPSTREAM: ${OPENPBL_UPSTREAM:-app-blue}
       PUBLIC_HOST: ${PUBLIC_HOST:?Set PUBLIC_HOST}
       LOAD_TEST_CLIENT_IP: ${LOAD_TEST_CLIENT_IP:-127.0.0.1}
     volumes:

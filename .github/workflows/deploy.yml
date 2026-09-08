@@ -1,4 +1,4 @@
-name: Build, sign, and deploy
+name: Verify and deploy systemd services
 
 on:
   workflow_dispatch:
@@ -12,19 +12,10 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
-  security-events: write
 
 concurrency:
   group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
-
-env:
-  REGISTRY: ghcr.io
-  APP_IMAGE: ghcr.io/${{ github.repository }}
-  MIGRATOR_IMAGE: ghcr.io/${{ github.repository }}-migrator
-  IMAGE_TAG: sha-${{ github.sha }}
 
 jobs:
   verify:
@@ -32,108 +23,14 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.4.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec prisma validate
-        env:
-          DATABASE_URL: postgresql://openpbl:validation-only@127.0.0.1:5432/openpbl
-      - run: pnpm typecheck
-      - run: pnpm lint:ci
-      - run: pnpm test:ci
-      - run: pnpm audit:prod
+      - uses: ./.github/actions/validate
 
-  publish:
+  deploy:
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    outputs:
-      app-ref: ${{ steps.refs.outputs.app }}
-      migrator-ref: ${{ steps.refs.outputs.migrator }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: sigstore/cosign-installer@v3.10.0
-
-      - name: Build and push application
-        id: app
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: runner
-          push: true
-          tags: ${{ env.APP_IMAGE }}:${{ env.IMAGE_TAG }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
-
-      - name: Build and push migration image
-        id: migrator
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: migrator
-          push: true
-          tags: ${{ env.MIGRATOR_IMAGE }}:${{ env.IMAGE_TAG }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
-
-      - name: Scan application image
-        uses: aquasecurity/trivy-action@0.33.1
-        with:
-          image-ref: ${{ env.APP_IMAGE }}@${{ steps.app.outputs.digest }}
-          format: sarif
-          output: trivy.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-
-      - name: Upload Trivy findings
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy.sarif
-
-      - name: Keyless-sign immutable image digests
-        env:
-          APP_DIGEST: ${{ steps.app.outputs.digest }}
-          MIGRATOR_DIGEST: ${{ steps.migrator.outputs.digest }}
-        run: |
-          cosign sign --yes "${APP_IMAGE}@${APP_DIGEST}"
-          cosign sign --yes "${MIGRATOR_IMAGE}@${MIGRATOR_DIGEST}"
-
-      - name: Export immutable references
-        id: refs
-        env:
-          APP_DIGEST: ${{ steps.app.outputs.digest }}
-          MIGRATOR_DIGEST: ${{ steps.migrator.outputs.digest }}
-        run: |
-          echo "app=${APP_IMAGE}@${APP_DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "migrator=${MIGRATOR_IMAGE}@${MIGRATOR_DIGEST}" >> "$GITHUB_OUTPUT"
-
-  deploy:
-    needs: publish
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
     environment:
       name: ${{ inputs.environment }}
-      url: https://${{ secrets.DEPLOY_HOST }}
     steps:
       - uses: actions/checkout@v4
 
@@ -147,26 +44,24 @@ jobs:
           chmod 0600 ~/.ssh/id_ed25519
           printf '%s\n' "$DEPLOY_HOST_KEY" > ~/.ssh/known_hosts
 
-      - name: Upload deployment definitions
+      - name: Deploy verified commit
         env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '3000' }}
+          DEPLOY_SHA: ${{ github.sha }}
         run: |
-          tar --exclude='deploy/secrets' \
-            --exclude='deploy/.deploy.env' \
-            -czf - docker-compose.prod.yml deploy \
-            | ssh "${USER}@${HOST}" "install -d -m 0750 /opt/openpbl && tar -xzf - -C /opt/openpbl"
+          # SSH invokes a remote shell; restrict arguments before interpolation.
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
+          [[ "$DEPLOY_PATH" =~ ^/[a-zA-Z0-9_./-]+$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "bash -s -- '$DEPLOY_SHA' '$DEPLOY_PATH' '$DEPLOY_PORT'" < deploy/deploy-systemd.sh
 
-      - name: Pull and blue-green deploy
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-          GHCR_USER: ${{ secrets.GHCR_PULL_USER }}
-          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
-          APP_REF: ${{ needs.publish.outputs.app-ref }}
-          MIGRATOR_REF: ${{ needs.publish.outputs.migrator-ref }}
-        run: |
-          printf '%s' "$GHCR_TOKEN" \
-            | ssh "${USER}@${HOST}" "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
-          ssh "${USER}@${HOST}" \
-            "cd /opt/openpbl && sh deploy/blue-green-deploy.sh '$APP_REF' '$MIGRATOR_REF'"
+      - name: Remove SSH credentials
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519

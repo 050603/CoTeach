@@ -12,24 +12,24 @@ PrAIxis（Praxis + AI）是面向项目式学习课堂的 AI 教学与伴学平�
 
 - **先基础、后深互动**：自适应先修学习成为进入主课程的严格边界，课程末端增加掌握度检查；只有基础知识达标后才进入深度交互课堂。
 - **角色化知识结构**：教师端保留课程设计与审校信息，学生端展示适合学习的知识路径，避免把专家级内部字段直接暴露给学生。
-- **AI 直接协作工作台**：伴学 AI 可围绕当前项目任务直接协助编辑、整理资源和沉淀过程证据；项目工作区、资源库与过程档案形成连续链路。
+- **AI 直接协作工作台**：AI 组员可围绕当前项目任务协助编辑文档或代码，并沉淀过程证据；项目工作区、资源库与过程档案形成连续链路。
 - **页面级白板与资源就绪检查**：白板状态按课堂页面保留，生成流程在发布前审计图片、视频、语音和教学工具资源，减少切页丢失与不完整课程进入课堂。
 - **可管理的生成恢复**：快速设计和最终课堂生成统一采用可恢复任务、失败策略与检查点，进程重启或蓝绿切换后继续未完成工作。
 
 - **证据驱动课堂**：课程新增学习证据、作品快照、AI 贡献、学生 AI 决策和 AI 评价建议等数据契约；启动、方案、实践、汇报和反思阶段统一为可追踪的证据任务。
-- **课堂运行体验**：教师授课控制台、学生任务界面、AI 授知播放器和字幕系统重新设计；增加课程时间预算、语音时长校准、页面切换恢复和沉浸式伴学角色动作。
+- **课堂运行体验**：教师授课控制台、学生任务界面、AI 授知播放器和字幕系统重新设计；增加课程时间预算、语音时长校准和页面切换恢复。
 - **原生课堂工具**：AI 授课现在可以通过与课堂动作一致的 OpenMAIC Action DSL 调用白板、随堂检测、证据看板更新和嵌入式组件；同一套动作进入校验、播放和状态持久化链路，可通过 `OPENMAIC_NATIVE_CLASSROOM_TOOLS=false` 临时回退。
-- **备课与生成质量**：重构课程大纲、知识图谱、教学活动与六模块时间分配；加强中文生成契约、提示词质量检查、知识点覆盖和内容去重。
+- **备课与生成质量**：重构课程大纲、知识图谱与五阶段教学活动；加强中文生成契约、提示词质量检查、知识点覆盖和内容去重。
 - **持久后台生成与自动存档**：生产环境中课程生成使用 PostgreSQL 持久任务。教师离开页面后任务继续运行，重新进入时续接同一个任务，避免重复生成。学生课堂和教师资源在任务标记完成前就关联并保存到课程，不依赖“发布课程”操作。
 - **逐页检查点恢复**：最终课堂生成会持久化规范化大纲和每个页面的完成检查点；进程重启、蓝绿切换或瞬态故障后只重做尚未完成或大纲指纹已变化的页面，不再整课从头生成。
-- **双模式课程设计**：新建课程后直接进入极简的“快速生成”输入页；教师也可以单向进入高级分步设计。快速模式不是另一套简化生成器，而是依次调用与分步模式相同的课程定位、知识图谱、项目成果、评价、六阶段架构、OpenMAIC 主课脚本和个性化路径能力，每阶段通过结构检查与 AI 审校后才继续。
+- **统一课程设计**：新建课程后进入快速生成输入页，后台依次完成课程定位、知识图谱、知识讲授大纲与 OpenMAIC 学生课堂页面，并在结构检查和 AI 审校通过后继续。
 - **代理式自动修订**：快速模式中的 AI 审校意见不会直接作为教师端报错。代理会读取完整阶段结果，自动协调课程目标、驱动问题、成果和固定课时，或按意见重新调用该阶段生成能力；普通内容质量问题经过多轮修订后继续流程，只有必填结构缺失、模型或持久化等不可恢复故障才终止。
 - **快速模式内大纲审阅**：主课脚本生成后，快速页面提供独立审阅弹窗并暂停后台流程，不跳转高级分步页面；教师保存后以最新 scene outlines 继续，未打开则在等待窗口结束后自动继续。丰富互动和教师资源均由共享 OpenMAIC 约束生成，学生 PPT 单页最长 6 分钟。
-- **端到端真实产物画布**：快速生成从课程定位一直连续展示到最终课堂页面、媒体资源和自动保存，不再跳转普通生成页。画布遵循系统暖白表面、教师蓝主色、14px 圆角和细边框规范；主卡自身持续轻微悬浮，左右侧卡通过缩放、透明度、错位和独立运动形成景深，不在主卡正后方增加垫片卡。新旧主卡切换时短暂交叠并连续翻页，避免先消失再出现的空白断帧。知识数据转换为“基础—核心—应用—拓展”的学习逻辑；评价卡使用两层实体嵌套圆环：后方更宽的淡色背景环只按实际权重分成教师评与 AI 评两部分，前方更细的彩色规则环按每条真实评价规则及权重分段，旁侧同步展示规则标题和可观察判据；六阶段时间、成果契约、教学协作、课程大纲、逐页制作、个性化路径、图片/视频、TTS 和存档分别使用不同的高密度构图。侧卡长标题会自动截断，主卡至少停留一段可读时间，但后台生成持续推进；总进度和预计时间覆盖课程设计、最终课堂制作及全部资源后处理。
+- **端到端真实产物画布**：快速生成连续展示课程定位、知识图谱、知识讲授大纲、逐页课堂制作、媒体资源与自动保存；总进度和预计时间覆盖课程设计、课堂制作及资源后处理。
 - **后台写入并发安全**：快速生成工作器禁止用启动时捕获的完整课程快照覆盖数据库，只把本阶段课程设计字段合并到最新课程版本，保留教师编辑、学生、课堂运行和会话数据。出现乐观并发冲突时会重新读取最新聚合再执行合并。
 - **统一生成动效**：知识图谱、阶段架构、主课脚本和个性化路径统一使用任务专属的翻卡片弹窗。主课脚本在首条流式内容出现前显示弹窗，随后自动回到页面内逐页生成。
 - **准确进度与剩余时间**：进度按已完成课堂页面持续推进，不再长时间停留在固定百分比；初始时间按页面和分层资源数量估算，随后按实际吞吐速度校准。
-- **分阶段模型请求策略**：普通结构化调用与知识图谱、六阶段方案、页面大纲、整课等长输出任务使用不同的超时预算；瞬态超时、限流、网络错误和服务端错误按策略重试，鉴权或结构错误不会盲目重试。
+- **分阶段模型请求策略**：普通结构化调用与知识图谱、知识讲授大纲、逐页课堂等长输出任务使用不同的超时预算；瞬态超时、限流、网络错误和服务端错误按策略重试，鉴权或结构错误不会盲目重试。
 - **分层学习资源**：教师确认的先决知识和额外学习资源与主课程一并生成、保存，并接入同一播放器。
 - **可靠性与安全**：增强课程版本冲突重试、在线状态、上传权限、教师注册、代码分块加载恢复和生产构建隔离。
 
@@ -54,16 +54,15 @@ PrAIxis（Praxis + AI）是面向项目式学习课堂的 AI 教学与伴学平�
 
 ## 最新版能力
 
-### 六阶段项目式课堂
+### 五阶段项目式课堂
 
-系统默认提供六个连续阶段：
+系统默认提供五个连续阶段：
 
 1. **项目启动**：项目导入，明确驱动问题、目标和启动任务。
 2. **AI 授知**：通过 AI 课件、问答和检测完成基础知识建构。
-3. **方案构思与校准**：学生形成项目方案，由 AI 与教师提供校准反馈。
-4. **项目实践**：围绕任务、过程证据和作品持续迭代。
-5. **成果汇报与评价**：提交并展示成果，完成教师评价。
-6. **学习反思**：回顾学习过程、AI 使用方式和后续迁移计划。
+3. **项目实践**：在文档、代码或外部成果工作台中与 AI 组员协作，持续迭代作品。
+4. **成果汇报与评价**：提交并展示成果，完成教师评价。
+5. **学习反思**：回顾学习过程、AI 使用方式和后续迁移计划。
 
 学生提交的任务进度、方案、作品、回复、反思和 AI 学习进度会同步到教师端。教师可查看个人或全班完成情况、干预信号、在线状态和阶段门槛，并向学生发送课堂指令。
 
@@ -76,14 +75,14 @@ PrAIxis（Praxis + AI）是面向项目式学习课堂的 AI 教学与伴学平�
 - 预览、校验和编辑课程内容后发布课堂。
 - 管理项目启动、阶段推进、工作区开放策略和教师指令。
 - 实时查看学生在线状态、任务完成度、学习证据和异常信号。
-- 查看学生 AI 学习、方案校准、项目实践、汇报评价及反思结果。
+- 查看学生 AI 学习、项目实践、汇报评价及反思结果。
 - 在设置页管理模型、搜索、语音和媒体 Provider。
 
 ### 学生端
 
 - 使用课程码和姓名加入课程，无需自行注册账号。
-- 在统一课堂工作台完成任务、学习、方案、作品、汇报和反思。
-- 使用多角色 AI 伴学助手获取提问、审阅、记录和表达支持。
+- 在统一课堂工作台完成项目启动、AI 学习、项目实践、成果汇报和反思。
+- 在项目实践阶段与 AI 组员协作完成文档或代码成果。
 - AI 授课采用专注式主播放器；自适应拓展内容直接插入主课程流程，不再跳转到独立学习窗口。
 - AI 可在受控动作链路中调用白板、随堂检测、证据看板和课堂组件，所有工具调用均经过 DSL 校验和播放状态同步。
 - 支持上传过程证据、查看教师反馈、接收课堂指令和断线恢复。
@@ -161,7 +160,7 @@ flowchart LR
 - `pnpm lint:ci` 零警告通过，`pnpm typecheck` 通过。
 - Next.js 16.2.12 生产构建通过，30 个静态页面完成生成。
 - Prisma Schema 校验通过；七个迁移均已纳入迁移目录，服务器仍须执行 `migrate deploy` 和 `migrate status`。
-- 生产 Compose 的 `blue + certificate + observability + backup` 完整 profile 使用示例配置解析通过。
+- 生产 Compose 的基础设施与 `certificate + observability + backup` 可选 profile 使用示例配置解析通过。
 - Vitest 共 203 个测试文件、931 项测试：202 个文件通过，930 项测试通过；`src/lib/classroom/stage-gates.test.ts` 中“项目实践上传作品应满足 iteration-evidence”仍有 1 项失败。
 - `pnpm audit:prod` 当前报告 1 个 high：`next@16.2.12 → postcss@8.5.23 → nanoid@3.3.17`，对应公告要求 `nanoid >= 3.3.18`。
 - 本轮未重新执行 Playwright、`test:classroom-flow` 和云端 k6 场景。
@@ -287,7 +286,7 @@ OPENPBL_LLM_LONG_REQUEST_TIMEOUT_MS=600000
 
 未配置 LLM 时可以使用示例内容继续验证非 AI 流程，但真实课程生成、AI 对话、联网搜索或 TTS 需要相应 Provider。
 
-普通结构化模型调用默认超时为 180 秒；独立质量审校默认 300 秒；知识图谱、六阶段架构、逐页主课脚本和整课生成属于长输出任务，默认超时为 600 秒。三个值均可按 Provider 能力调整，系统会限制在 30 秒至 30 分钟之间。课程生成中的瞬态超时、限流、网络错误或 5xx 会自动重试一次，鉴权或结构错误不会盲目重试。
+普通结构化模型调用默认超时为 180 秒；独立质量审校默认 300 秒；知识图谱、知识讲授大纲、逐页课堂和整课生成属于长输出任务，默认超时为 600 秒。三个值均可按 Provider 能力调整，系统会限制在 30 秒至 30 分钟之间。课程生成中的瞬态超时、限流、网络错误或 5xx 会自动重试一次，鉴权或结构错误不会盲目重试。
 
 `PARALLEL_SCENE_CONCURRENCY` 支持 `1–5`，默认 `4`。提高并发会缩短课程生成时间，但会同时增加模型请求、限流压力和失败重试量；迁移到新服务器后应先保持默认值，再根据 Provider 配额和实际监控调整。
 
@@ -356,16 +355,8 @@ OPENPBL_INITIAL_TEACHER_PASSWORD='replace-with-a-strong-password' \
 
 ### 6. 启动系统
 
-原始系统（保留六阶段完整流程）：
-
 ```bash
-pnpm dev:legacy
-```
-
-新系统（五阶段轻量流程，默认端口 3100）：
-
-```bash
-pnpm dev:new
+pnpm dev
 ```
 
 打开：
@@ -375,7 +366,7 @@ pnpm dev:new
 - 首次教师注册：<http://localhost:3000/teacher/register>
 - 学生入口：<http://localhost:3000/student>
 
-`pnpm dev` 仍等价于启动原始系统，便于回退。新旧模式使用独立构建目录，可以同时运行；生产构建与启动命令见 [VERSIONING.md](VERSIONING.md)。
+生产构建和启动统一使用 `pnpm build` 与 `pnpm start`，不再保留旧版并行运行和回退命令。
 
 ## 基本使用方法
 
@@ -393,7 +384,7 @@ pnpm dev:new
 
 1. 访问 `/student`，输入课程码和姓名加入课程。
 2. 按当前阶段完成启动任务和 AI 学习内容。
-3. 在方案与实践阶段使用任务区、证据上传和 AI 伴学工作区。
+3. 在项目实践阶段使用文档或代码工作台与 AI 组员协作。
 4. 查看教师指令与反馈；断线重连后系统会补发遗漏事件。
 5. 上传最终成果，完成汇报、评价确认和个人反思。
 
@@ -418,320 +409,31 @@ pnpm dev:new
 
 写入成功会返回请求 ID、课程版本和事件游标。业务调用应使用这些接口，不要重新引入整份会话覆盖式写入。
 
-## 生产服务器完整配置
+## 生产服务器部署
 
-推荐且受仓库配置支持的拓扑是：一台 Ubuntu 24.04 服务器运行 Docker Compose，Nginx 独占公网 `80/443`，应用、PostgreSQL、Redis、实时服务和 Prometheus 仅在 Docker 内网通信，Grafana 只绑定 `127.0.0.1:3002`。不要把开发用 [docker-compose.yml](docker-compose.yml) 与生产用 [docker-compose.prod.yml](docker-compose.prod.yml) 叠加。
+当前生产形态只有一套应用：Next.js 独立运行包由 systemd 用户服务托管，Docker 只保留 PostgreSQL、Redis、Nginx、迁移与可选监控/备份基础设施。旧版 blue/green 应用容器和并行版本命令已移除。
 
-以下步骤覆盖一台空白服务器的首次上线。命令默认以具有 `sudo` 权限的普通用户执行，项目目录为 `/opt/openpbl`。
+1. 复制 `deploy/.deploy.env.example` 为 `deploy/.deploy.env`，并按 `deploy/secrets.example/README.md` 准备 Secret。迁移现有数据时必须保留原 `PROVIDER_ENCRYPTION_KEY`。
+2. 安装依赖并构建当前版本：
 
-### 0. 上线前确定域名、容量和备份
+   ```bash
+   corepack enable
+   pnpm install --frozen-lockfile
+   pnpm build
+   ```
 
-1. 准备 Ubuntu 24.04、至少 4 vCPU、8 GB 内存和 100 GB SSD；生产数据库与生成媒体增长较快，应启用磁盘空间告警。
-2. 将域名的 `A`/`AAAA` 记录指向服务器公网地址，等待解析生效。推荐使用域名；若使用公网 IP，须确认当前 Let’s Encrypt 客户端和 CA 策略支持 IP 证书。
-3. 安全组和防火墙只开放 SSH、TCP `80`、TCP `443`。不要开放 `3000`、`3001`、`3002`、`5432`、`6379`、`9090` 等内部端口。
-4. 准备一个 S3 兼容对象存储桶和只对该桶有读写权限的访问密钥。完整生产配置依赖它保存 pgBackRest、WAL 和 Restic 异地备份。
-5. 若从旧版本迁移，先暂停新课程生成，并备份 PostgreSQL、`uploads`、`whiteboards`、`classrooms`、`deploy/.deploy.env` 和全部 Secret。必须保留原 `PROVIDER_ENCRYPTION_KEY`，否则数据库中的 Provider 凭据无法解密；保留 `JWT_SECRET` 可避免强制所有用户重新登录。
+3. 启动基础设施：
 
-禁止把真实 Secret、Provider 配置、`.deploy.env` 或备份文件提交到 Git。发布与升级期间也不要执行 `docker compose down -v`。
+   ```bash
+   docker compose --env-file deploy/.deploy.env \
+     -f docker-compose.prod.yml -f docker-compose.ip.yml \
+     up -d postgres redis nginx
+   ```
 
-### 1. 安装基础软件与 Docker
+4. 执行数据库迁移，并安装 `deploy/systemd/` 中的应用与代码运行器服务。应用服务会从 `.next-build` 复制不可变运行版本到 `.openpbl-runtime/releases/<BUILD_ID>` 后启动。
+5. 验证 `/api/health/live`、教师登录、学生加入、AI 学习、项目实践、成果提交与反思全流程。
 
-```bash
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl git openssl ufw
-
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-  -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-. /etc/os-release
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME:-$VERSION_CODENAME} stable" \
-  | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
-  docker-buildx-plugin docker-compose-plugin
-sudo systemctl enable --now docker
-sudo usermod -aG docker "$USER"
-```
-
-重新登录 SSH 使 Docker 用户组生效，然后检查：
-
-```bash
-docker version
-docker compose version
-sudo ufw allow OpenSSH
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-sudo ufw --force enable
-sudo ufw status
-```
-
-云厂商安全组必须同步放行相同端口。启用 UFW 前确认当前 SSH 端口规则正确，避免锁死远程连接。
-
-### 2. 获取并冻结同一版本源码
-
-```bash
-sudo mkdir -p /opt/openpbl
-sudo chown "$USER":"$USER" /opt/openpbl
-git clone <repository-url> /opt/openpbl
-cd /opt/openpbl
-git fetch --tags --prune
-git checkout <release-tag-or-commit>
-git status --short
-git rev-parse HEAD
-```
-
-`git status --short` 应为空。记录完整 Git SHA；应用镜像和 migrator 镜像必须由同一个 SHA 构建，禁止混用版本或使用 `latest`。
-
-### 3. 构建镜像，或从 GHCR 拉取镜像
-
-在服务器本机构建时执行：
-
-```bash
-cd /opt/openpbl
-GIT_SHA="$(git rev-parse HEAD)"
-docker build --target runner \
-  --tag "openpbl-app:sha-${GIT_SHA}" .
-docker build --target migrator \
-  --tag "openpbl-migrator:sha-${GIT_SHA}" .
-docker image inspect \
-  "openpbl-app:sha-${GIT_SHA}" \
-  "openpbl-migrator:sha-${GIT_SHA}" >/dev/null
-```
-
-如果 CI 已发布 GHCR 镜像，则不要重复构建；登录仓库后使用工作流输出的两个不可变 digest：
-
-```bash
-echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
-docker pull ghcr.io/<owner>/<repository>@sha256:<app-digest>
-docker pull ghcr.io/<owner>/<repository>-migrator@sha256:<migrator-digest>
-unset GHCR_TOKEN
-```
-
-### 4. 创建生产环境文件
-
-```bash
-cd /opt/openpbl
-cp deploy/.deploy.env.example deploy/.deploy.env
-chmod 600 deploy/.deploy.env
-```
-
-编辑 `deploy/.deploy.env`。本机构建示例：
-
-```dotenv
-PUBLIC_HOST=openpbl.example.com
-OPENPBL_UPSTREAM=app-blue
-OPENPBL_IMAGE=openpbl-app:sha-<40-character-git-sha>
-OPENPBL_MIGRATOR_IMAGE=openpbl-migrator:sha-<same-40-character-git-sha>
-OPENPBL_POSTGRES_IMAGE=openpbl-postgres:16.9-pgbackrest
-BACKUP_S3_ENDPOINT=https://s3.example.com
-BACKUP_S3_BUCKET=openpbl-backups
-BACKUP_S3_REGION=us-east-1
-ENABLE_LOAD_TEST_API=false
-LOAD_TEST_CLIENT_IP=127.0.0.1
-```
-
-若使用 GHCR，将两个镜像值替换为上一步的完整 `@sha256:...` 引用。`PUBLIC_BASE_URL`、Redis、WebSocket、tldraw、持久后台生成、代理信任和三个文件卷已由生产 Compose 设置，无需在此重复配置。
-
-### 5. 生成全部 Docker Secret
-
-以下命令使用 URL 安全的十六进制 PostgreSQL 密码，因此可以直接写入连接串：
-
-```bash
-cd /opt/openpbl
-umask 077
-mkdir -p deploy/secrets
-
-openssl rand -hex 32 > deploy/secrets/postgres_password.txt
-POSTGRES_PASSWORD="$(tr -d '\r\n' < deploy/secrets/postgres_password.txt)"
-printf '%s' "postgresql://openpbl:${POSTGRES_PASSWORD}@postgres:5432/openpbl?connection_limit=30&pool_timeout=10" \
-  > deploy/secrets/database_url.txt
-openssl rand -base64 48 | tr -d '\n' > deploy/secrets/jwt_secret.txt
-openssl rand -base64 32 | tr -d '\n' > deploy/secrets/provider_encryption_key.txt
-openssl rand -base64 32 | tr -d '\n' > deploy/secrets/monitor_token.txt
-openssl rand -base64 32 | tr -d '\n' > deploy/secrets/grafana_admin_password.txt
-openssl rand -base64 32 | tr -d '\n' > deploy/secrets/restic_password.txt
-openssl rand -base64 32 | tr -d '\n' > deploy/secrets/load_test_admin_token.txt
-unset POSTGRES_PASSWORD
-
-read -r -p 'S3 access key: ' S3_ACCESS_KEY
-read -r -s -p 'S3 secret key: ' S3_SECRET_KEY; echo
-printf '%s' "$S3_ACCESS_KEY" > deploy/secrets/s3_access_key.txt
-printf '%s' "$S3_SECRET_KEY" > deploy/secrets/s3_secret_key.txt
-unset S3_ACCESS_KEY S3_SECRET_KEY
-
-chmod 700 deploy/secrets
-chmod 600 deploy/secrets/*.txt
-```
-
-全新安装使用上述随机值；迁移安装应把 `jwt_secret.txt`、`provider_encryption_key.txt` 和数据库凭据替换为旧环境的原值。Secret 的完整定义见 [deploy/secrets.example/README.md](deploy/secrets.example/README.md)。只检查文件存在且非空，不要把内容打印到终端或日志：
-
-```bash
-for file in postgres_password database_url jwt_secret provider_encryption_key \
-  monitor_token grafana_admin_password s3_access_key s3_secret_key \
-  restic_password load_test_admin_token; do
-  test -s "deploy/secrets/${file}.txt" || { echo "missing: $file"; exit 1; }
-done
-```
-
-### 6. 执行配置预检
-
-```bash
-cd /opt/openpbl
-chmod +x deploy/*.sh deploy/backup/*.sh
-docker compose \
-  --env-file deploy/.deploy.env \
-  -f docker-compose.prod.yml \
-  --profile blue \
-  --profile certificate \
-  --profile observability \
-  --profile backup \
-  config --quiet
-```
-
-预检必须无输出且退出码为 `0`。同时再次确认 `PUBLIC_HOST` 已解析到本机，TCP `80/443` 未被其他进程占用。
-
-### 7. 申请 HTTPS 证书
-
-```bash
-cd /opt/openpbl
-export LETSENCRYPT_EMAIL=admin@example.com
-./deploy/bootstrap-certificate.sh
-unset LETSENCRYPT_EMAIL
-```
-
-脚本临时启动 HTTP Nginx 完成 ACME 验证，再停止引导容器。证书续期容器每 12 小时检查一次，生产 Nginx 每 6 小时无中断重载。申请失败时先检查 DNS、系统时间、云安全组和 UFW，不要在没有证书的情况下直接启动 HTTPS Nginx。
-
-### 8. 首次启动、迁移数据库并检查容器
-
-```bash
-cd /opt/openpbl
-docker compose \
-  --env-file deploy/.deploy.env \
-  -f docker-compose.prod.yml \
-  --profile blue \
-  --profile certificate \
-  --profile observability \
-  --profile backup \
-  up -d
-
-docker compose \
-  --env-file deploy/.deploy.env \
-  -f docker-compose.prod.yml ps -a
-docker compose \
-  --env-file deploy/.deploy.env \
-  -f docker-compose.prod.yml logs --tail=200 migrate app-blue nginx
-```
-
-`migrate` 必须以退出码 `0` 完成，`postgres`、`redis`、`app-blue` 和 `nginx` 应为健康状态。应用启动依赖迁移成功；不要手工改表或跳过迁移。再确认迁移状态：
-
-```bash
-docker compose \
-  --env-file deploy/.deploy.env \
-  -f docker-compose.prod.yml \
-  run --rm migrate pnpm exec prisma migrate status
-```
-
-输出应显示数据库 schema 已是最新，并包含 `prisma/migrations/` 中的全部迁移。检查持久卷：
-
-```bash
-docker volume ls --filter name=openpbl
-docker compose \
-  --env-file deploy/.deploy.env \
-  -f docker-compose.prod.yml \
-  exec -T app-blue sh -c \
-  'test -w /app/.openpbl-data/uploads && test -w /app/.openpbl-data/whiteboards && test -w /app/data/classrooms'
-```
-
-`postgres-data`、`uploads`、`whiteboards`、`classrooms`、证书、监控和备份状态都必须使用 named volume；蓝绿实例共享三个文件卷。
-
-### 9. 初始化首个教师并配置 AI Provider
-
-初始化命令只允许在数据库尚无教师时执行，密码至少 10 个字符：
-
-```bash
-cd /opt/openpbl
-read -r -s -p 'Initial teacher password: ' OPENPBL_INITIAL_TEACHER_PASSWORD; echo
-export OPENPBL_INITIAL_TEACHER_PASSWORD
-docker compose \
-  --env-file deploy/.deploy.env \
-  -f docker-compose.prod.yml \
-  run --rm \
-  -e OPENPBL_INITIAL_TEACHER_PASSWORD \
-  migrate pnpm exec tsx scripts/init-teacher.ts \
-  --username teacher \
-  --display-name "教师"
-unset OPENPBL_INITIAL_TEACHER_PASSWORD
-```
-
-访问 `https://<PUBLIC_HOST>/teacher/login` 登录，在教师端“设置”中填写并测试模型、搜索、图片、视频和 TTS Provider。Provider 凭据会使用 `provider_encryption_key.txt` 加密后保存到 PostgreSQL。没有配置真实 Provider 时只能用示例内容验证非 AI 流程，不能完成真实课程生成。
-
-### 10. 完成上线验收
-
-```bash
-PUBLIC_HOST="$(sed -n 's/^PUBLIC_HOST=//p' deploy/.deploy.env | tail -n 1)"
-curl --fail --show-error "https://${PUBLIC_HOST}/api/health/live"
-docker compose \
-  --env-file deploy/.deploy.env \
-  -f docker-compose.prod.yml \
-  exec -T app-blue sh -c \
-  'token=$(cat /run/secrets/monitor_token); wget -qO- --header="Authorization: Bearer $token" http://127.0.0.1:3000/api/health/ready'
-unset PUBLIC_HOST
-```
-
-随后人工完成一条真实链路：教师登录 → 新建课程 → 生成并发布 → 学生用课程码加入 → 学生提交任务 → 教师看到实时进度 → 刷新页面确认数据仍在。还应验证上传、AI 对话、语音/媒体、WebSocket 和白板同步。对于后台生成，教师离开生成页后任务仍应继续；重启应用后应从数据库任务和页面检查点恢复。
-
-### 11. 监控、日志与备份
-
-| 地址或命令 | 可见性 | 用途 |
-| --- | --- | --- |
-| `/api/health/live` | 最小公开 | 进程存活检查 |
-| `/api/health/ready` | 内部令牌保护 | PostgreSQL、Redis、文件系统等就绪检查 |
-| `/api/metrics` | 内部令牌保护 | Prometheus 指标 |
-| `docker compose ... logs -f app-blue nginx` | 服务器 | 查看结构化应用与网关日志 |
-| Grafana `127.0.0.1:3002` | 仅服务器本机 | 通过 SSH 隧道访问 |
-
-从管理员电脑建立 Grafana 隧道：
-
-```bash
-ssh -L 3002:127.0.0.1:3002 <server-user>@<server-host>
-```
-
-然后访问 `http://127.0.0.1:3002`，密码来自 `grafana_admin_password.txt`。监控应覆盖 HTTP 延迟/错误率、WebSocket、事件积压、数据库连接、Redis、CPU/内存/磁盘、证书和备份时间。
-
-数据库由 pgBackRest 执行每周全量、每日差异和持续 WAL 归档；Restic 每日备份 `uploads`、`whiteboards`、`classrooms`。生成任务状态在 PostgreSQL，课堂 JSON 与媒体在 `classrooms` 卷，恢复时两者必须来自一致时间点。首次上线后立即确认对象存储中已经出现备份，并按 [deploy/backup/README.md](deploy/backup/README.md) 执行隔离恢复演练：
-
-```bash
-cd /opt/openpbl
-CONFIRM_RESTORE_DRILL=openpbl-restore-drill-data \
-  sh deploy/backup/restore-drill.sh
-```
-
-恢复演练只允许使用明确命名的 `openpbl-restore-drill-data` 卷，不得挂载生产 PostgreSQL 卷。目标为数据库 RPO 不超过 5 分钟、RTO 不超过 60 分钟，并至少每月演练一次。
-
-### 12. 后续蓝绿升级与回退
-
-先完成新提交的测试和镜像发布，再在 `/opt/openpbl` 执行：
-
-```bash
-./deploy/blue-green-deploy.sh \
-  <app-image-ref> \
-  <matching-migrator-image-ref>
-```
-
-镜像引用必须是 `repository@sha256:<64位摘要>` 或 `repository:sha-<40位Git SHA>`。脚本会拉取匹配镜像、执行迁移、启动另一颜色、检查健康、切换 Nginx，并在失败时恢复原上游。数据库迁移必须保持向后兼容，因为切换窗口内新旧应用可能短暂共存。切换后人工验证正在生成的课程可续接、没有重复任务、两个颜色读取相同 `classrooms` 卷，再停止旧实例。
-
-发生应用层故障时，可把 `deploy/.deploy.env` 的 `OPENPBL_UPSTREAM` 改回原颜色并重建 Nginx；不要通过删除卷回退数据库：
-
-```bash
-docker compose \
-  --env-file deploy/.deploy.env \
-  -f docker-compose.prod.yml \
-  up -d --no-deps --force-recreate nginx
-```
-
-生产流水线位于 `.github/workflows/`，包含类型检查、测试、构建、依赖审计、CodeQL、Trivy、SBOM、镜像签名和人工批准部署。详细脚本说明见 [deploy/README.md](deploy/README.md)。
-
+不要执行 `docker compose down -v`；该命令会删除持久化数据卷。数据库、上传文件和课堂数据必须在升级前备份。具体运维约束见 `deploy/README.md`。
 ## 测试与质量检查
 
 ### 本机轻量验证
@@ -905,7 +607,6 @@ pnpm dev:next
 - [生产部署](deploy/README.md)
 - [备份与恢复](deploy/backup/README.md)
 - [云端压测](tests/load/README.md)
-- [本地双版本运行](VERSIONING.md)
 - [设计系统](DESIGN-SYSTEM.md)
 - [架构决策记录](docs/adr)
 - [持久课程生成设计](docs/plans/2026-08-09-durable-course-generation.md)

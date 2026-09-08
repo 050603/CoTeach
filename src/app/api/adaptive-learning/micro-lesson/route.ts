@@ -6,6 +6,7 @@ import {
 import { isAuthConfigured, readAuthFromRequest } from "@/lib/auth/session";
 import { callLLM, parseLLMJson } from "@/lib/llm/client";
 import { getCourse } from "@/lib/session/server-store";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import {
   JSON_STUDENT_PROMPT_CONTRACT,
   promptStageLabel,
@@ -44,6 +45,9 @@ export async function POST(request: Request) {
         (claims.courseId !== body.courseId || claims.studentId !== body.studentId))
     ) {
       return Response.json({ error: "FORBIDDEN" }, { status: 403 });
+    }
+    if (!(await canAccessLegacyCourse(claims, body.courseId, "write"))) {
+      return Response.json({ error: "COURSE_LOCKED" }, { status: 403 });
     }
   }
   const course = await getCourse(body.courseId);

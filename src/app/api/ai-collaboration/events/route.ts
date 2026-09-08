@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { appendAiInteractionEvents, listAiInteractionEvents } from "@/lib/ai-collaboration/audit-store";
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +38,9 @@ export async function GET(request: Request) {
   if (auth.claims.role === "student" && auth.claims.courseId !== query.courseId) {
     return Response.json({ error: "FORBIDDEN" }, { status: 403 });
   }
+  if (!(await canAccessLegacyCourse(auth.claims, query.courseId, "read"))) {
+    return Response.json({ error: "FORBIDDEN" }, { status: 403 });
+  }
   const result = await listAiInteractionEvents({
     courseId: query.courseId,
     studentId: auth.claims.role === "student" ? auth.claims.studentId : query.studentId,
@@ -58,6 +62,9 @@ export async function POST(request: Request) {
   const event = parsed.data;
   if (event.courseId !== auth.claims.courseId || (event.studentId && event.studentId !== auth.claims.studentId)) {
     return Response.json({ error: "FORBIDDEN" }, { status: 403 });
+  }
+  if (!(await canAccessLegacyCourse(auth.claims, event.courseId, "write"))) {
+    return Response.json({ error: "COURSE_LOCKED" }, { status: 403 });
   }
   const { workspaceKind, ...eventData } = event;
   const [created] = await appendAiInteractionEvents([{

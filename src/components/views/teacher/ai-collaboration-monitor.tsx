@@ -182,12 +182,15 @@ export function AiCollaborationTeacherMonitor({ course, focus }: { course: Cours
     ?? rows.find((row) => row.artifact || row.externalVersions.length)
     ?? rows[0];
 
-  useEffect(() => {
+  const focusKey = JSON.stringify([focus?.studentId, focus?.section]);
+  const [appliedFocusKey, setAppliedFocusKey] = useState("");
+  if (focusKey !== appliedFocusKey) {
+    setAppliedFocusKey(focusKey);
     if (focus) {
       setSelectedStudentId(focus.studentId);
       setFocusTarget(focus.section);
     }
-  }, [focus?.studentId, focus?.section]);
+  }
 
   useEffect(() => {
     if (!selected || !focusTarget) return;

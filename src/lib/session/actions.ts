@@ -36,7 +36,6 @@ import type {
 import { DEFAULT_EVALUATION_FLOWS } from "./types";
 import { getStageWorkspacePolicy } from "@/lib/classroom/stage-workspace-policy";
 import {
-  getOpenPblSystemMode,
   getStagesForSystemMode,
   inferStageCollectionMode,
   mapStageKeyToSystemMode,
@@ -972,36 +971,11 @@ function activity(actor: string, action: string, detail: string | undefined, cre
 }
 
 export function normalizeCourse(course: Course): Course {
-  const systemMode = getOpenPblSystemMode();
-  const sourceMode = inferStageCollectionMode(course.stages);
   const observedStageKey = course.stages?.[course.currentStageIndex]?.key;
-  const rememberedStageKeys = {
-    legacy:
-      course.uiState?.systemStageKeyByMode?.legacy
-      ?? mapStageKeyToSystemMode(observedStageKey, "legacy"),
-    new:
-      course.uiState?.systemStageKeyByMode?.new
-      ?? mapStageKeyToSystemMode(observedStageKey, "new"),
-  };
-  if (sourceMode === systemMode && observedStageKey) {
-    rememberedStageKeys[systemMode] = mapStageKeyToSystemMode(
-      observedStageKey,
-      systemMode,
-    );
-  }
-  const rememberedStageCollections = {
-    ...(course.uiState?.systemStagesByMode ?? {}),
-    ...(sourceMode ? {
-      [sourceMode]: course.stages.map((stage) => ({ ...stage })),
-    } : {}),
-  };
-  const stages = systemMode === "legacy" && rememberedStageCollections.legacy?.length
-    ? rememberedStageCollections.legacy.map((stage) => ({ ...stage }))
-    : getStagesForSystemMode(systemMode);
-  rememberedStageCollections[systemMode] = stages.map((stage) => ({ ...stage }));
+  const stages = getStagesForSystemMode();
   const currentStageIndex = Math.max(
     0,
-    stages.findIndex((stage) => stage.key === rememberedStageKeys[systemMode]),
+    stages.findIndex((stage) => stage.key === mapStageKeyToSystemMode(observedStageKey)),
   );
   const existingPersonalProjects = course.groups ?? [];
   const personalProjects = (course.students ?? []).map((student) => {
@@ -1106,8 +1080,6 @@ export function normalizeCourse(course: Course): Course {
       ...(course.uiState ?? {}),
       teacherResourceProjection: course.uiState?.teacherResourceProjection ?? null,
       resourceProjection: course.uiState?.resourceProjection ?? null,
-      systemStageKeyByMode: rememberedStageKeys,
-      systemStagesByMode: rememberedStageCollections,
     },
     content: {
       ...course.content,
@@ -1122,7 +1094,7 @@ export function normalizeCourse(course: Course): Course {
       },
     },
   };
-  const selected = reconcileCourseGenerationMode(normalized, systemMode);
+  const selected = reconcileCourseGenerationMode(normalized);
   const classroomTiming = selected.uiState?.classroomTiming;
   if (!classroomTiming) return selected;
   const stageKeysMatch = classroomTiming.stages.length === selected.stages.length

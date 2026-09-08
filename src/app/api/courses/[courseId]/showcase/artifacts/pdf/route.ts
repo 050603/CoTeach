@@ -10,6 +10,7 @@ import { isDatabaseConfigured, prisma } from "@/lib/db/client";
 import { lockCourseMutation } from "@/lib/db/course-mutation-lock";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
 import { ShowcasePresentationError } from "@/lib/showcase/presentation-service";
+import { canAccessLegacyCourse, findLegacyParticipation } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -79,6 +80,7 @@ export async function POST(
   if (!isDatabaseConfigured()) return errorResponse("DATABASE_REQUIRED", "本地成果提交需要连接数据库。", 503);
   const { courseId } = await context.params;
   if (auth.claims.courseId !== courseId) return errorResponse("FORBIDDEN", "学生身份与课程不匹配。", 403);
+  if (!(await canAccessLegacyCourse(auth.claims, courseId, "write"))) return errorResponse("COURSE_LOCKED", "课程当前不允许提交成果。", 403);
   const limit = await checkDistributedRateLimit({
     namespace: "showcase-artifact-submit",
     key: `${auth.claims.sub}:${courseId}`,
@@ -227,6 +229,7 @@ export async function POST(
           sha256,
           size: info.size,
           requestId,
+          participationId: (await findLegacyParticipation(tx, courseId, studentId))?.id,
         },
       });
       const updatedCourse = await tx.course.update({

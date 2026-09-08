@@ -5,6 +5,7 @@ import {
   scoreAdaptiveAssessment,
 } from "@/lib/adaptive-learning";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import type {
   AdaptiveAssessmentEvidence,
   AdaptiveAssessmentAnswer,
@@ -77,8 +78,10 @@ async function authorize(request: Request, courseId: string, studentId: string) 
   if (!isAuthConfigured()) return true;
   const claims = await readAuthFromRequest(request, "student");
   if (!claims) return false;
-  if (claims.role === "teacher") return true;
-  return claims.courseId === courseId && claims.studentId === studentId;
+  if (claims.role === "teacher") return canAccessLegacyCourse(claims, courseId, "read");
+  return claims.courseId === courseId
+    && claims.studentId === studentId
+    && canAccessLegacyCourse(claims, courseId, "write");
 }
 
 export async function GET(request: Request) {

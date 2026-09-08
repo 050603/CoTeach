@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { type NextRequest } from 'next/server';
 import { CLASSROOMS_DIR, isValidClassroomId } from '@openmaic/lib/server/classroom-storage';
+import { authorizeLegacyClassroomRead } from '@/lib/platform/access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -68,6 +69,8 @@ export async function GET(
   context: { params: Promise<{ classroomId: string; path: string[] }> },
 ) {
   const { classroomId, path: pathParts } = await context.params;
+  const authorization = await authorizeLegacyClassroomRead(_request, classroomId);
+  if (authorization) return authorization;
   if (!isValidClassroomId(classroomId) || !Array.isArray(pathParts) || pathParts.length === 0) {
     return new Response('Invalid classroom media path', { status: 400 });
   }
@@ -86,7 +89,10 @@ export async function GET(
 
     return new Response(toArrayBuffer(bytes), {
       headers: {
-        'Cache-Control': 'public, max-age=31536000, immutable',
+        // Authorization is evaluated for every request. Do not let a shared
+        // cache replay a student's classroom media to another account after
+        // a membership is removed or the activity is locked.
+        'Cache-Control': 'private, no-store',
         'Content-Length': String(bytes.byteLength),
         'Content-Type': contentType,
       },

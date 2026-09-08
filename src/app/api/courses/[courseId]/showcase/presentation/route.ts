@@ -9,6 +9,7 @@ import {
   ShowcasePresentationError,
 } from "@/lib/showcase/presentation-service";
 import type { ShowcaseAction } from "@/lib/showcase/types";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,6 +72,7 @@ export async function GET(
   if ("response" in auth) return auth.response;
   if (!isDatabaseConfigured()) return Response.json({ code: "DATABASE_REQUIRED", message: "成果汇报需要连接数据库。" }, { status: 503 });
   const { courseId } = await context.params;
+  if (!(await canAccessLegacyCourse(auth.claims, courseId, "read"))) return Response.json({ code: "FORBIDDEN", message: "课程当前不可访问。" }, { status: 403 });
   try {
     return Response.json(await getShowcaseData(courseId, auth.claims), {
       headers: { "Cache-Control": "private, no-store" },
@@ -90,6 +92,7 @@ export async function POST(
   if ("response" in auth) return auth.response;
   if (!isDatabaseConfigured()) return Response.json({ code: "DATABASE_REQUIRED", message: "成果汇报需要连接数据库。" }, { status: 503 });
   const { courseId } = await context.params;
+  if (!(await canAccessLegacyCourse(auth.claims, courseId, "write"))) return Response.json({ code: "COURSE_LOCKED", message: "课程当前不允许进行汇报操作。" }, { status: 403 });
   const parsed = ActionSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return Response.json({

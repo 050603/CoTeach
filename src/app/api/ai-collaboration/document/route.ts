@@ -70,6 +70,7 @@ import {
   LlmTimeoutError,
 } from "@/lib/llm/errors";
 import { getCourse } from "@/lib/session/server-store";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import type { AiCompanionId } from "@/lib/ai-companions";
 import { normalizePblCourseConfig } from "@/lib/pbl-course-config";
 import type { CompanionMessage, Course, Student } from "@/lib/session/types";
@@ -599,6 +600,9 @@ async function authenticateStudent(
   }
   if (claims.courseId !== courseId) {
     return Response.json({ error: "STUDENT_SCOPE_MISMATCH" }, { status: 403 });
+  }
+  if (!(await canAccessLegacyCourse(claims, courseId, "write"))) {
+    return Response.json({ error: "COURSE_LOCKED" }, { status: 403 });
   }
   return { claims, studentId: claims.studentId };
 }

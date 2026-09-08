@@ -1001,8 +1001,8 @@ export async function buildTeacherDashboardAdvice(
     priorityIssueGroups: issueGroups,
     recentEventSummary: { evidenceKey: "recent-events", counts: eventCounts },
     launchReading: stageKey === "launch" ? { evidenceKey: "launch-reading", resourceCount: launchResources.length, students: launchRows } : undefined,
-    knowledgeLearning: stageKey === "ai-learning" ? { evidenceKey: "knowledge-learning", students: knowledgeRows.map(({ incorrectAnswerCount: _, ...row }) => row) } : undefined,
-    knowledgeQuiz: stageKey === "ai-learning" ? { evidenceKey: "knowledge-quiz", students: knowledgeRows.map(({ progressPercent: _, ...row }) => row), knowledgePoints: knowledgeMastery.map((row) => ({ name: row.name, answeredStudents: row.answeredStudents, incorrectStudents: row.incorrectStudents, unmetRate: row.unmetRate, status: row.status })) } : undefined,
+    knowledgeLearning: stageKey === "ai-learning" ? { evidenceKey: "knowledge-learning", students: knowledgeRows.map((source) => { const { incorrectAnswerCount, ...row } = source; void incorrectAnswerCount; return row; }) } : undefined,
+    knowledgeQuiz: stageKey === "ai-learning" ? { evidenceKey: "knowledge-quiz", students: knowledgeRows.map((source) => { const { progressPercent, ...row } = source; void progressPercent; return row; }), knowledgePoints: knowledgeMastery.map((row) => ({ name: row.name, answeredStudents: row.answeredStudents, incorrectStudents: row.incorrectStudents, unmetRate: row.unmetRate, status: row.status })) } : undefined,
     artifacts: stageKey === "make" ? {
       evidenceKey: "make-artifacts",
       artifactStudentIds: [...makeArtifactStudentIds],
