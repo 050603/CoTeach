@@ -5,6 +5,7 @@ const navigation = vi.hoisted(() => ({ replace: vi.fn(), push: vi.fn() }));
 const query = vi.hoisted(() => ({ all: false }));
 vi.mock("next/navigation", () => ({
   useRouter: () => navigation,
+  usePathname: () => "/student",
   useSearchParams: () => ({ get: () => (query.all ? "1" : null) }),
 }));
 const course = {

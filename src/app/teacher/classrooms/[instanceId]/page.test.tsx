@@ -4,7 +4,7 @@ import ClassroomMonitor from "./page";
 vi.mock("next/navigation", () => ({ useParams: () => ({ instanceId: "instance-1" }), usePathname: () => "/teacher/classrooms/instance-1" }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function classroom(status: string, kind = "pbl-course") {
-  return { instance: { id: "instance-1", title: "城市探索", offeringId: "course-1", status, snapshot: { kind } }, participants: [] };
+  return { instance: { id: "instance-1", title: "城市探索", offeringId: "course-1", status, snapshot: { kind }, coverImageUrl: "/generated/city-cover.png" }, participants: [] };
 }
 describe("课堂学习记录入口", () => {
   it.each([
@@ -15,6 +15,7 @@ describe("课堂学习记录入口", () => {
   ])("routes %s %s to its supported workspace", async (status, kind, label, href) => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => classroom(status, kind) }));
     render(<ClassroomMonitor/>);
+    expect(await screen.findByRole("img", { name: "城市探索课堂封面" })).toBeTruthy();
     expect((await screen.findByRole("link", { name: label })).getAttribute("href")).toBe(href);
     expect(screen.queryByRole("button", { name: "开始课堂" })).toBeNull();
     expect(screen.queryByRole("button", { name: "结束课堂" })).toBeNull();

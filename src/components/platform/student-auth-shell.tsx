@@ -8,7 +8,7 @@ export function StudentAuthShell({ title, description, children, mode }: {
   title: string; description: string; children: ReactNode; mode?: "login" | "register";
 }) {
   return <main className="pbl-platform-page pbl-platform-page-student min-h-screen text-[var(--pbl-text)]">
-    <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5"><Link href="/" className="inline-flex min-h-11 items-center gap-2 text-sm text-[var(--pbl-text-muted)]"><ArrowLeft size={16}/>返回首页</Link><span className="text-xs text-[var(--pbl-text-muted)]">PrAIxis · 学生学习空间</span></div>
+    <div className="mx-auto flex max-w-6xl items-center px-6 py-5"><Link href="/" className="inline-flex min-h-11 items-center gap-2 text-sm text-[var(--pbl-text-muted)]"><ArrowLeft size={16}/>返回首页</Link></div>
     <div className="pbl-auth-layout">
       <aside className="pbl-auth-story"><LearningArt />
         <PraixisLogo variant="horizontalSolid" height={34}/>

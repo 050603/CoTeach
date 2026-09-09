@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
+import Image from "next/image";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { BookOpen, FolderOpen, MessagesSquare, Award, ArrowLeft } from "lucide-react";
+import { BookOpen, FolderOpen, MessagesSquare, Award } from "lucide-react";
 import { TeacherPlatformHeader, TeacherPlatformPage } from "./teacher-shell";
 import { StudentShell } from "./student-shell";
 import { readTemplateContent } from "@/lib/platform/template-content";
@@ -10,7 +10,7 @@ import { readTemplateContent } from "@/lib/platform/template-content";
 type Classroom = {
   participation: { id: string; completedAt: string | null };
   student: { displayName: string };
-  instance: { id: string; status: string; activityId: string; offeringId: string; offeringName: string; title: string; runNo: number; templateVersion: number; snapshot: unknown };
+  instance: { id: string; status: string; activityId: string; offeringId: string; offeringName: string; title: string; runNo: number; templateVersion: number; snapshot: unknown; coverImageUrl?: string | null };
   workspace: { version: number; projectState: { document?: string; code?: string; stageKey?: string } | null };
   isTeacher: boolean; canWrite: boolean;
 };
@@ -35,8 +35,8 @@ async function request<T>(url: string, method = "GET", body?: unknown): Promise<
   return data as T;
 }
 
-function WorkspaceShell({ role, children }: { role: "teacher" | "student"; children: ReactNode }) {
-  return role === "teacher" ? <TeacherPlatformPage><TeacherPlatformHeader active="classes"/><div className="pbl-workspace-content">{children}</div></TeacherPlatformPage> : <StudentShell>{children}</StudentShell>;
+function WorkspaceShell({ role, children, backHref, backLabel }: { role: "teacher" | "student"; children: ReactNode; backHref?: string; backLabel?: string }) {
+  return role === "teacher" ? <TeacherPlatformPage><TeacherPlatformHeader active="classes" backHref={backHref} backLabel={backLabel}/><div className="pbl-workspace-content">{children}</div></TeacherPlatformPage> : <StudentShell backHref={backHref} backLabel={backLabel}>{children}</StudentShell>;
 }
 
 export function ClassroomWorkspace({ participationId, role = "student" }: { participationId: string; role?: "teacher" | "student" }) {
@@ -95,9 +95,8 @@ export function ClassroomWorkspace({ participationId, role = "student" }: { part
   const canWrite = classroom.canWrite && !busy;
   const sections = content?.outline ?? [];
   const back = teacher ? `/teacher/classrooms/${classroom.instance.id}` : `/student/activities/${classroom.instance.activityId}`;
-  return <WorkspaceShell role={teacher ? "teacher" : "student"}>
-    <Link className="mb-5 inline-flex min-h-11 items-center gap-2 text-sm text-[var(--pbl-text-muted)]" href={back}><ArrowLeft size={16}/>返回{teacher ? "课堂学习记录" : "课程活动"}</Link>
-    <header className="rounded-2xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-6 shadow-sm md:p-8"><div className="flex flex-wrap items-start justify-between gap-5"><div className="min-w-0"><p className="text-xs font-medium text-[var(--pbl-text-muted)]">{classroom.instance.offeringName} · 第 {classroom.instance.runNo} 次课堂</p><h1 className="mt-3 break-words font-serif text-3xl font-semibold">{teacher ? `${classroom.student.displayName}的学习档案` : classroom.instance.title}</h1><p className="mt-3 text-sm text-[var(--pbl-text-muted)]">{teacher ? classroom.instance.title : `${classroom.student.displayName} · 记录探索，积累成长`}</p></div><span className="rounded-full bg-[var(--pbl-bg)] px-4 py-2 text-xs font-medium">{classroom.instance.status === "teaching" ? "授课中" : "只读回顾"}</span></div><dl className="mt-6 grid grid-cols-3 gap-3 border-t border-[var(--pbl-border)] pt-5">{[["项目成果", outcomes?.artifacts.length ?? 0], ["学习反思", outcomes?.reflections.length ?? 0], ["成长评价", outcomes?.evaluations.length ?? 0]].map(([label, value]) => <div key={label}><dt className="text-xs text-[var(--pbl-text-muted)]">{label}</dt><dd className="mt-2 text-2xl font-semibold tabular-nums">{value}</dd></div>)}</dl></header>
+  return <WorkspaceShell role={teacher ? "teacher" : "student"} backHref={back} backLabel={teacher ? "返回课堂学习记录" : "返回课程活动"}>
+    <header className="overflow-hidden rounded-2xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] shadow-sm"><div className="flex items-stretch"><div className="min-w-0 flex-1 p-6 md:p-8"><div className="flex flex-wrap items-start justify-between gap-5"><div className="min-w-0"><p className="text-xs font-medium text-[var(--pbl-text-muted)]">{classroom.instance.offeringName} · 第 {classroom.instance.runNo} 次课堂</p><h1 className="mt-3 break-words font-serif text-3xl font-semibold">{teacher ? `${classroom.student.displayName}的学习档案` : classroom.instance.title}</h1><p className="mt-3 text-sm text-[var(--pbl-text-muted)]">{teacher ? classroom.instance.title : `${classroom.student.displayName} · 记录探索，积累成长`}</p></div><span className="rounded-full bg-[var(--pbl-bg)] px-4 py-2 text-xs font-medium">{classroom.instance.status === "teaching" ? "授课中" : "只读回顾"}</span></div><dl className="mt-6 grid grid-cols-3 gap-3 border-t border-[var(--pbl-border)] pt-5">{[["项目成果", outcomes?.artifacts.length ?? 0], ["学习反思", outcomes?.reflections.length ?? 0], ["成长评价", outcomes?.evaluations.length ?? 0]].map(([label, value]) => <div key={label}><dt className="text-xs text-[var(--pbl-text-muted)]">{label}</dt><dd className="mt-2 text-2xl font-semibold tabular-nums">{value}</dd></div>)}</dl></div>{classroom.instance.coverImageUrl ? <div className="relative w-[34%] max-w-[420px] shrink-0"><Image src={classroom.instance.coverImageUrl} alt={`${classroom.instance.title}课堂封面`} fill unoptimized className="object-cover" /></div> : null}</div></header>
     <nav aria-label="课堂工具" className="my-6 grid grid-cols-2 gap-2 rounded-2xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-2 md:grid-cols-4">{[{key: "lesson", label: "课堂任务", icon: BookOpen}, {key: "workspace", label: "项目工作区", icon: FolderOpen}, {key: "ai", label: "AI 协作", icon: MessagesSquare}, {key: "outcomes", label: "成果与评价", icon: Award}].map(({key, label, icon: Icon}) => <button key={key} className={`flex min-h-12 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${activeTab === key ? teacher ? "bg-[var(--pbl-teacher)] text-white shadow-sm" : "bg-[var(--pbl-student)] text-white shadow-sm" : "text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-bg)]"}`} aria-pressed={activeTab === key} onClick={() => setTab(key)}><Icon size={17}/>{label}</button>)}</nav>
     {error && <p role="alert" className="my-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-[var(--pbl-danger)]">{error}</p>}{notice && <p role="status" className="my-4 rounded-xl bg-[var(--pbl-student-soft)] p-4 text-sm">{notice}</p>}
     {activeTab === "lesson" && <section className="space-y-6 rounded-2xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-5 shadow-sm md:p-8"><h2 className="text-xl font-semibold">学习目标</h2>{content ? <><p className="whitespace-pre-wrap leading-8">{content.summary}</p><ul className="list-disc space-y-2 pl-6">{content.learningObjectives.map((objective, index) => <li key={index}>{objective}</li>)}</ul>{sections.map((section, index) => <article key={index} className="border-t border-[var(--pbl-border)] pt-5"><h3 className="font-semibold">{index + 1}. {section.title} · {section.durationMinutes} 分钟</h3><p className="mt-3 whitespace-pre-wrap leading-8">{section.description}</p><p className="mt-2 text-sm text-[var(--pbl-text-muted)]">{outcomes?.submissions.some((item) => item.stageKey === String(index)) ? "已提交本环节记录" : "待完成"}</p></article>)}{content.resources.map((resource, index) => <p key={index}>{/^https?:\/\//i.test(resource.url) ? <a href={resource.url} target="_blank" rel="noreferrer" className="underline">{resource.title}</a> : resource.title}</p>)}</> : <p>本次课堂的学习过程与作品可在成果与评价中回顾。</p>}

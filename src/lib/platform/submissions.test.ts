@@ -64,9 +64,10 @@ describe("learning task submission", () => {
     await expect(submitActivity(claims, "task", { answer: "answer" })).rejects.toMatchObject({ code: "ACTIVITY_LOCKED" });
   });
   it("requires answers to required questions", async () => {
-    mocks.activity.mockResolvedValue({ ...activity, type: "FORM", config: { questions: [{ id: "q1", required: true }, { id: "q2", required: false }] } });
+    mocks.activity.mockResolvedValue({ ...activity, type: "FORM", config: { schemaVersion: 1, content: "", questions: [{ id: "q1", title: "核心选择", type: "single-choice", required: true, options: [{ id: "a", label: "A" }, { id: "b", label: "B" }] }, { id: "q2", title: "补充", type: "short-text", required: false, options: [] }] } });
     await expect(submitActivity(claims, "task", { answers: {} })).rejects.toMatchObject({ code: "ANSWER_REQUIRED" });
-    await submitActivity(claims, "task", { answers: { q1: "Response" } });
+    await expect(submitActivity(claims, "task", { answers: { q1: "unknown" } })).rejects.toMatchObject({ code: "INVALID_ANSWER" });
+    await submitActivity(claims, "task", { answers: { q1: "a" } });
     expect(mocks.save).toHaveBeenCalledOnce();
   });
   it("does not let clients complete classrooms using task submissions", async () => {

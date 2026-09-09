@@ -24,8 +24,7 @@ export default async function TeachingSetupPage({ params, searchParams }: { para
   const template = await prisma.classroomTemplate.findUnique({ where: { id }, select: { title: true, versions: { where: { status: "PUBLISHED" }, select: { id: true }, take: 1 } } });
   if (!template) notFound();
   const offerings = await prisma.courseOffering.findMany({ where: { teachers: { some: { userId: auth.claims.sub } }, status: "OPEN" }, select: { id: true, name: true }, orderBy: { updatedAt: "desc" } });
-  return <div className="pbl-platform-theme"><TeacherPlatformPage><TeacherPlatformHeader active="templates" /><div className="pbl-workspace-content"><div className="mx-auto max-w-4xl space-y-6">
-    <Link className="underline" href="/teacher/templates">← 返回课程库</Link>
+  return <div className="pbl-platform-theme"><TeacherPlatformPage><TeacherPlatformHeader active="templates" backHref="/teacher/templates" backLabel="返回课程库" /><div className="pbl-workspace-content"><div className="mx-auto max-w-4xl space-y-6">
     <header className="pbl-page-heading"><LearningArt /><div><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">从课程设计到课堂实践</p><h1 className="mt-3 font-semibold">为《{template.title}》安排课堂</h1></div></header><section className="pbl-content-card space-y-6 p-8 text-sm leading-7">
     {template.versions.length ? <>
       <p>选择教学班，在课堂活动中选用这份教案的已发布版本。学生沿用教学班邀请码加入，再次授课会创建新的场次并保留历史记录。</p>

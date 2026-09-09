@@ -7,6 +7,8 @@ import { runMutationTransaction } from "@/lib/db/transaction-retry";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { generateInviteCode, normalizeInviteCode } from "@/lib/session/invite-code";
 import { ActivityConfigSchema, type ActivityType } from "./activity";
+import { buildSurveyAnalytics, SurveyConfigSchema } from "./survey";
+import { classroomCoverImageUrl } from "./classroom-cover";
 import { normalizeUsername, requireStudentUser, requireTeacherUser, type PlatformDb, type PlatformUser } from "./access";
 
 const ACTIVE_ENROLLMENT_STATUSES = ["ACTIVE", "active", "COMPLETED", "completed"];
@@ -40,6 +42,15 @@ function dateOrNull(value?: string | Date | null): Date | null | undefined {
 
 function newToken(): string {
   return randomBytes(32).toString("hex");
+}
+
+function parsedActivityConfig(type: string, input: unknown) {
+  try {
+    const config = ActivityConfigSchema.parse(input);
+    return type.toUpperCase() === "FORM" ? SurveyConfigSchema.parse(config) : config;
+  } catch {
+    throw new PlatformError("INVALID_ACTIVITY_CONFIG", type.toUpperCase() === "FORM" ? "请完善问卷题目与单选选项" : "活动配置无效", 400);
+  }
 }
 
 
@@ -222,8 +233,8 @@ export async function getStudentActivity(claims: AuthClaims, activityId: string)
     offering: { id: offering.id, name: offering.name, status: normalizedStatus(offering.status) },
     enrollment: { id: enrollment.id },
     progress: progress ? { status: normalizedStatus(progress.status), startedAt: progress.startedAt, completedAt: progress.completedAt, lastAccessedAt: progress.lastAccessedAt, progressData: progress.progressData } : { status: "not_started", startedAt: null, completedAt: null, lastAccessedAt: null },
-    instances: activity.classroomInstances.map((instance) => ({ id: instance.id, status: normalizedStatus(instance.status), startedAt: instance.startedAt, endedAt: instance.endedAt })),
-    instance: activity.classroomInstances[0] ? { ...activity.classroomInstances[0], status: normalizedStatus(activity.classroomInstances[0].status), canWrite: open && normalizedStatus(offering.status) === "open" && normalizedStatus(enrollment.status) === "active" && normalizedStatus(activity.classroomInstances[0].status) === "teaching" } : null,
+    instances: activity.classroomInstances.map((instance) => ({ id: instance.id, status: normalizedStatus(instance.status), startedAt: instance.startedAt, endedAt: instance.endedAt, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) })),
+    instance: activity.classroomInstances[0] ? { ...activity.classroomInstances[0], status: normalizedStatus(activity.classroomInstances[0].status), coverImageUrl: classroomCoverImageUrl(activity.classroomInstances[0].templateVersion.snapshot), canWrite: open && normalizedStatus(offering.status) === "open" && normalizedStatus(enrollment.status) === "active" && normalizedStatus(activity.classroomInstances[0].status) === "teaching" } : null,
   };
 }
 
@@ -252,10 +263,10 @@ export async function listTeacherOfferings(claims: AuthClaims) {
   const teacher = await requireTeacherUser(claims);
   const offerings = await prisma.courseOffering.findMany({
     where: { teachers: { some: { userId: teacher.id } } },
-    include: { invitations: { where: { status: { in: ["ACTIVE", "active"] } }, orderBy: { createdAt: "desc" }, take: 1 }, chapters: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { activities: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { classroomInstances: { orderBy: { createdAt: "desc" }, take: 1, include: { templateVersion: { select: { id: true, templateId: true, version: true, status: true } } } } } } } }, _count: { select: { enrollments: true } } },
+    include: { invitations: { where: { status: { in: ["ACTIVE", "active"] } }, orderBy: { createdAt: "desc" }, take: 1 }, chapters: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { activities: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { classroomInstances: { orderBy: { createdAt: "desc" }, take: 1, include: { templateVersion: { select: { id: true, templateId: true, version: true, status: true, snapshot: true } } } } } } } }, _count: { select: { enrollments: true } } },
     orderBy: { updatedAt: "desc" },
   });
-  return offerings.map((offering) => ({ ...offering, ...courseDetails(offering.settings), status: normalizedStatus(offering.status), invitation: offering.invitations[0] ?? null, invitations: undefined, studentCount: offering._count.enrollments, _count: undefined, chapters: offering.chapters.map((chapter) => ({ ...chapter, activities: chapter.activities.map((activity) => ({ ...activity, type: activityTypeForApi(activity.type), templateId: activity.classroomInstances[0]?.templateVersion.templateId ?? null, instances: activity.classroomInstances.map((instance) => ({ ...instance, status: normalizedStatus(instance.status), templateId: instance.templateVersion.templateId })) })) })) }));
+  return offerings.map((offering) => ({ ...offering, ...courseDetails(offering.settings), status: normalizedStatus(offering.status), invitation: offering.invitations[0] ?? null, invitations: undefined, studentCount: offering._count.enrollments, _count: undefined, chapters: offering.chapters.map((chapter) => ({ ...chapter, activities: chapter.activities.map((activity) => ({ ...activity, type: activityTypeForApi(activity.type), templateId: activity.classroomInstances[0]?.templateVersion.templateId ?? null, instances: activity.classroomInstances.map((instance) => ({ ...instance, status: normalizedStatus(instance.status), templateId: instance.templateVersion.templateId, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) })) })) })) }));
 }
 
 export async function createOffering(claims: AuthClaims, input: { name: string; description?: string; term?: string; startsAt?: string; endsAt?: string; coverImageUrl?: string | null; outline?: string; referenceMaterials?: string }) {
@@ -311,7 +322,7 @@ export async function createActivity(claims: AuthClaims, offeringId: string, cha
     const chapter = await tx.chapter.findFirst({ where: { id: chapterId, offeringId, archivedAt: null } });
     if (!chapter) throw new PlatformError("NOT_FOUND", "章节不存在", 404);
     const position = input.position ?? ((await tx.activity.aggregate({ where: { chapterId }, _max: { position: true } }))._max.position ?? -1) + 1;
-    const config = input.config === undefined ? undefined : ActivityConfigSchema.parse(input.config);
+    const config = input.config === undefined ? undefined : parsedActivityConfig(input.type, input.config);
     const selectedVersion = input.templateId ? await readyTemplateVersion(claims, input.templateId, tx) : null;
     const created = await tx.activity.create({ data: { chapterId, type: input.type.toUpperCase(), title: input.title, description: input.description, position, isOpen: false, config: config === undefined ? undefined : jsonValue(config) } });
     if (input.type.toUpperCase() === "CLASSROOM" && input.templateId) {
@@ -337,7 +348,7 @@ export async function updateActivity(claims: AuthClaims, activityId: string, dat
     await tx.$queryRaw`SELECT "id" FROM "Activity" WHERE "id" = ${activityId} FOR UPDATE`;
     const activity = await activityForTeacher(claims, activityId, tx);
     if (data.version !== undefined && data.version !== activity.version) throw new PlatformError("VERSION_CONFLICT", "活动已被其他操作更新", 409);
-    const config = data.config === undefined ? undefined : ActivityConfigSchema.parse(data.config);
+    const config = data.config === undefined ? undefined : parsedActivityConfig(activity.type, data.config);
     const selectedVersion = data.templateId ? await readyTemplateVersion(claims, data.templateId, tx) : null;
     const updated = await tx.activity.update({ where: { id: activityId }, data: { title: data.title, description: data.description, isOpen: data.isOpen, opensAt: dateOrNull(data.opensAt), position: data.position, config: config === undefined ? undefined : jsonValue(config), version: { increment: 1 } } });
     if (data.templateId) {
@@ -369,6 +380,35 @@ export async function listOfferingStudents(claims: AuthClaims, offeringId: strin
   await teacherForOffering(claims, offeringId);
   const rows = await prisma.enrollment.findMany({ where: { offeringId }, include: { user: { select: { id: true, username: true, displayName: true, status: true } }, activityProgress: { select: { activityId: true, status: true, completedAt: true, lastAccessedAt: true, progressData: true, activity: { select: { title: true, type: true, config: true } } } } }, orderBy: { joinedAt: "asc" } });
   return rows.map((row) => ({ id: row.user.id, enrollmentId: row.id, username: row.user.username, displayName: row.user.displayName, status: normalizedStatus(row.status), joinedAt: row.joinedAt, progress: row.activityProgress.map((item) => ({ ...item, status: normalizedStatus(item.status) })) }));
+}
+
+export async function getSurveyAnalytics(claims: AuthClaims, activityId: string) {
+  const activity = await activityForTeacher(claims, activityId);
+  if (activity.type.toUpperCase() !== "FORM") throw new PlatformError("INVALID_ACTIVITY", "该活动不是问卷", 400);
+  const config = SurveyConfigSchema.safeParse(activity.config);
+  if (!config.success) throw new PlatformError("INVALID_ACTIVITY_CONFIG", "问卷配置不完整，请先编辑问卷", 400);
+  const [totalStudents, rows] = await Promise.all([
+    prisma.enrollment.count({
+      where: { offeringId: activity.chapter.offeringId, status: { in: ACTIVE_ENROLLMENT_STATUSES } },
+    }),
+    prisma.activityProgress.findMany({
+      where: { activityId, status: { in: ["COMPLETED", "completed"] }, enrollment: { status: { in: ACTIVE_ENROLLMENT_STATUSES } } },
+      select: { progressData: true, completedAt: true },
+      orderBy: { completedAt: "desc" },
+    }),
+  ]);
+  return {
+    activity: {
+      id: activity.id,
+      title: activity.title,
+      description: activity.description,
+      isOpen: activity.isOpen,
+      chapter: { id: activity.chapter.id, title: activity.chapter.title },
+      offering: { id: activity.chapter.offering.id, name: activity.chapter.offering.name },
+    },
+    analytics: buildSurveyAnalytics(config.data, rows, totalStudents),
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export async function listPrivateTemplates(claims: AuthClaims) {
@@ -443,7 +483,7 @@ export async function enterClassroom(claims: AuthClaims, instanceId: string) {
   if (normalizedStatus(instance.status) === "finished") {
     const participation = await prisma.classroomParticipation.findUnique({ where: { instanceId_enrollmentId: { instanceId, enrollmentId: enrollment.id } } });
     if (!participation) throw new PlatformError("PARTICIPATION_NOT_FOUND", "没有本次课堂的参与记录", 404);
-    return { instance, participation, student };
+    return { instance: { ...instance, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) }, participation, student };
   }
   const participation = await prisma.classroomParticipation.upsert({
     where: { instanceId_enrollmentId: { instanceId, enrollmentId: enrollment.id } },
@@ -451,7 +491,7 @@ export async function enterClassroom(claims: AuthClaims, instanceId: string) {
     update: { lastEnteredAt: new Date() },
   });
   await appendLearningEvents(claims, [{ idempotencyKey: `classroom-entered:${participation.id}:${Math.floor(Date.now() / 60_000)}`, type: "classroom_entered", offeringId: offering.id, activityId: instance.activityId, chapterId: instance.activity.chapterId, classroomInstanceId: instanceId, participationId: participation.id, source: "platform" }]);
-  return { instance, participation, student };
+  return { instance: { ...instance, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) }, participation, student };
 }
 
 export async function appendLearningEvents(claims: AuthClaims, events: unknown) {

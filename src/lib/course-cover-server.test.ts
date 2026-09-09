@@ -98,4 +98,26 @@ describe("server course cover generation", () => {
 
     expect(resolveServerCourseCoverProvider().providerId).toBe("lemonade");
   });
+
+  it("supports a versioned filename for offering covers", async () => {
+    mocks.generateImage.mockResolvedValue({
+      url: "https://cdn.example.test/cover.png",
+      width: 1024,
+      height: 576,
+    });
+
+    await generateCourseCoverImageOnServer(
+      { name: "自然语言处理" },
+      "offering-offering-1",
+      undefined,
+      "course-cover-v5",
+    );
+
+    expect(mocks.persistGeneratedClassroomImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classroomId: "offering-offering-1",
+        elementId: "course-cover-v5",
+      }),
+    );
+  });
 });

@@ -6,7 +6,7 @@ export type CourseCoverContext = Pick<Course, "name"> &
       Course,
       "subject" | "grade" | "summary" | "drivingQuestion" | "expectedOutcome"
     >
-  >;
+  > & { term?: string; outline?: string };
 
 const COVER_STYLE = "warm educational narrative illustration";
 
@@ -41,6 +41,8 @@ export function buildCourseCoverPrompt(
   const drivingQuestion = cleanContext(course.drivingQuestion, 180);
   const summary = cleanContext(course.summary, 180);
   const expectedOutcome = cleanContext(course.expectedOutcome, 120);
+  const term = cleanContext(course.term, 80);
+  const outline = cleanContext(course.outline, 240);
   const roleContext = `${name} ${subject} ${grade} ${summary}`;
   const isTeacherEducationCourse = /(教学|教法|教育|pedagog|instructional)/i.test(roleContext)
     && /(大[一二三四]|大学|本科|师范|教师|college|university)/i.test(roleContext);
@@ -52,7 +54,9 @@ export function buildCourseCoverPrompt(
       : "CORE DRIVING QUESTION: Not provided. Keep the scene provisional and grounded in the course name instead of inventing an unrelated challenge.",
     subject ? `Subject: ${subject}` : null,
     grade ? `Learners: ${grade}` : null,
+    term ? `Course term: ${term}` : null,
     summary ? `Course context: ${summary}` : null,
+    outline ? `Course outline: ${outline}` : null,
     expectedOutcome ? `Expected project outcome: ${expectedOutcome}` : null,
   ].filter(Boolean);
 

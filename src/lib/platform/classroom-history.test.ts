@@ -6,9 +6,10 @@ vi.mock("@/lib/db/client", () => ({ prisma: { classroomParticipation: { findUniq
 import { readClassroom, saveWorkspace } from "./classroom";
 const claims = { role: "student", sub: "student" } as AuthClaims;
 function participation(status = "FINISHED") {
+  const snapshot = { schemaVersion: 2, kind: "pbl-course", design: { coverImageUrl: "/history-cover.webp" } };
   return { id: "p", instanceId: "i", firstEnteredAt: null, lastEnteredAt: null, completedAt: new Date(), stageProgress: {},
     enrollment: { userId: "student", offeringId: "o", status: "COMPLETED", user: { displayName: "小林" } },
-    instance: { id: "i", status, activityId: "a", runNo: 1, runtimeConfig: {}, templateVersion: { version: 1, snapshot: { kind: "pbl-course" } }, activity: { title: "历史课堂", chapter: { offeringId: "o", offering: { status: "FINISHED", name: "课程" } } } },
+    instance: { id: "i", status, activityId: "a", runNo: 1, runtimeConfig: {}, templateVersion: { version: 1, snapshot }, activity: { title: "历史课堂", chapter: { offeringId: "o", offering: { status: "FINISHED", name: "课程" } } } },
   };
 }
 beforeEach(() => {
@@ -20,7 +21,8 @@ describe("student historical classroom access", () => {
   it("reads the student's finished PBL participation after course completion without writing", async () => {
     const record = await readClassroom(claims, "p");
     expect(record.canWrite).toBe(false);
-    expect(record.instance.snapshot).toEqual({ kind: "pbl-course" });
+    expect(record.instance.snapshot).toMatchObject({ kind: "pbl-course" });
+    expect(record.instance.coverImageUrl).toBe("/history-cover.webp");
     expect(record.workspace.projectState).toEqual({ document: "已保存的历史文档" });
     expect(mocks.transaction).not.toHaveBeenCalled();
   });

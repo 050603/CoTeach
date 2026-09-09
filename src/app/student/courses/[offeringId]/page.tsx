@@ -102,7 +102,7 @@ export default function StudentCoursePage() {
   }, [params.offeringId, router, retry]);
   if (error)
     return (
-      <StudentShell>
+      <StudentShell backHref="/student?all=1" backLabel="返回我的课程">
         <p role="alert">{error}</p>
         <button
           className="mt-4 min-h-11 underline"
@@ -110,14 +110,11 @@ export default function StudentCoursePage() {
         >
           重新加载
         </button>
-        <Link className="ml-6 text-sm underline" href="/student?all=1">
-          返回我的课程
-        </Link>
       </StudentShell>
     );
   if (!course)
     return (
-      <StudentShell>
+      <StudentShell backHref="/student?all=1" backLabel="返回我的课程">
         <p
           role="status"
           className="py-20 text-center text-sm text-[var(--pbl-text-muted)]"
@@ -186,14 +183,8 @@ export default function StudentCoursePage() {
     );
   }
   return (
-    <StudentShell>
-      <Link
-        href="/student?all=1"
-        className="inline-flex min-h-11 items-center text-sm text-[var(--pbl-text-muted)]"
-      >
-        ← 我的课程
-      </Link>
-      <section className="pbl-student-course-hero mt-5 grid overflow-hidden md:grid-cols-[0.7fr_1.3fr]">
+    <StudentShell backHref="/student?all=1" backLabel="返回我的课程">
+      <section className="pbl-student-course-hero grid overflow-hidden md:grid-cols-[0.7fr_1.3fr]">
         <CourseCover
           url={course.coverImageUrl}
           name={course.name}

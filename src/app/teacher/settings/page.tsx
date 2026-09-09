@@ -3,10 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import Image from "next/image";
-import Link from "next/link";
 import {
   AlertCircle,
-  ArrowLeft,
   Bot,
   CheckCircle2,
   Circle,
@@ -1100,18 +1098,10 @@ export default function TeacherSettingsPage() {
   }
 
   return (
-    <TeacherPlatformPage><TeacherPlatformHeader active="settings" /><div className="pbl-workspace-content pbl-settings-layout">
+    <TeacherPlatformPage><TeacherPlatformHeader active="settings" backHref="/teacher/classes" backLabel="返回课程系列" /><div className="pbl-workspace-content pbl-settings-layout">
       <div className="pbl-page-heading"><div><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">工作空间 / 服务连接</p><h1 className="mt-3 font-semibold">AI 服务设置</h1><p className="mt-3 text-sm leading-7 text-[var(--pbl-text-muted)]">连接教学所需的模型与音视频服务，管理配置并验证可用性。</p></div></div>
       <div className="mb-5 overflow-hidden rounded-[14px] border border-stone-200 bg-white">
         <div className="flex items-center gap-3 border-b border-stone-200 px-3 py-3 sm:px-4">
-          <Link
-            href="/teacher"
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] text-stone-500 transition hover:bg-stone-100 hover:text-stone-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pbl-teacher)]"
-            title="返回教师首页"
-            aria-label="返回教师首页"
-          >
-            <ArrowLeft size={18} />
-          </Link>
           <h2 className="min-w-0 truncate text-lg font-bold text-stone-900 sm:text-xl">模型与服务</h2>
         </div>
 

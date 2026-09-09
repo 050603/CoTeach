@@ -7,6 +7,7 @@ import { runMutationTransaction } from "@/lib/db/transaction-retry";
 import { requireTeacherUser } from "./access";
 import { PlatformError } from "./repository";
 import { requireParticipation, requireParticipationWrite } from "./participation";
+import { classroomCoverImageUrl } from "./classroom-cover";
 
 export const workspaceSchema = z.object({
   version: z.number().int().min(0),
@@ -24,7 +25,7 @@ export async function readClassroom(claims: AuthClaims, participationId: string)
   return {
     participation: { id: participation.id, firstEnteredAt: participation.firstEnteredAt, lastEnteredAt: participation.lastEnteredAt, completedAt: participation.completedAt, stageProgress: participation.stageProgress },
     student: { displayName: enrollment.user.displayName },
-    instance: { id: instance.id, status: instance.status.toLowerCase(), activityId: instance.activityId, runNo: instance.runNo, title: instance.activity.title, offeringId: instance.activity.chapter.offeringId, offeringName: instance.activity.chapter.offering.name, templateVersion: instance.templateVersion.version, snapshot: instance.templateVersion.snapshot, runtimeConfig: instance.runtimeConfig },
+    instance: { id: instance.id, status: instance.status.toLowerCase(), activityId: instance.activityId, runNo: instance.runNo, title: instance.activity.title, offeringId: instance.activity.chapter.offeringId, offeringName: instance.activity.chapter.offering.name, templateVersion: instance.templateVersion.version, snapshot: instance.templateVersion.snapshot, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot), runtimeConfig: instance.runtimeConfig },
     workspace: workspace ? { version: workspace.version, projectState: workspace.projectState, updatedAt: workspace.updatedAt } : { version: 0, projectState: null, updatedAt: null },
     isTeacher,
     canWrite: !isTeacher && enrollment.status.toUpperCase() === "ACTIVE" && instance.status.toUpperCase() === "TEACHING" && instance.activity.chapter.offering.status.toUpperCase() === "OPEN",
@@ -66,7 +67,7 @@ export async function listClassroomParticipants(claims: AuthClaims, instanceId: 
   if (!instance) throw new PlatformError("NOT_FOUND", "课堂不存在", 404);
   if (!await prisma.courseTeacher.findFirst({ where: { userId: teacher.id, offeringId: instance.activity.chapter.offeringId } })) throw new PlatformError("FORBIDDEN", "无权查看该课堂", 403);
   const participants = await prisma.classroomParticipation.findMany({ where: { instanceId }, orderBy: { firstEnteredAt: "asc" }, select: { id: true, firstEnteredAt: true, lastEnteredAt: true, completedAt: true, stageProgress: true, enrollment: { select: { user: { select: { displayName: true } } } }, workspace: { select: { updatedAt: true, version: true } }, _count: { select: { artifacts: true, reflections: true, evaluations: true } } } });
-  return { instance: { id: instance.id, status: instance.status.toLowerCase(), title: instance.activity.title, offeringId: instance.activity.chapter.offeringId, snapshot: instance.templateVersion.snapshot }, participants: participants.map(({ enrollment, ...row }) => ({ ...row, displayName: enrollment.user.displayName })) };
+  return { instance: { id: instance.id, status: instance.status.toLowerCase(), title: instance.activity.title, offeringId: instance.activity.chapter.offeringId, snapshot: instance.templateVersion.snapshot, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) }, participants: participants.map(({ enrollment, ...row }) => ({ ...row, displayName: enrollment.user.displayName })) };
 }
 
 export async function changeClassroomState(claims: AuthClaims, instanceId: string, action: "start" | "finish") {

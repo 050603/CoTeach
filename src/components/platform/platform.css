@@ -42,10 +42,12 @@
 .pbl-platform-theme :where(input,textarea)::placeholder { color: #77869b; }
 .pbl-platform-theme :where(input:not([type=checkbox]):not([type=radio]),textarea,select):focus { border-color: var(--pbl-accent); }
 .pbl-platform-theme .pbl-workspace { padding-left: 240px; }
-.pbl-platform-theme .pbl-workspace-nav { position: fixed; inset: 0 auto 0 0; z-index: 45; display: flex; flex-direction: column; width: 240px; padding: 34px 18px 22px; background: radial-gradient(ellipse at 0 100%,#284b64 0,transparent 52%), #172a43; color: #f3f7fc; border-right: 1px solid #14243b; }
-.pbl-platform-theme .pbl-workspace-brand { display: flex; min-height: 44px; align-items: center; padding-left: 14px; }
+.pbl-platform-theme .pbl-workspace-nav { position: fixed; inset: 0 auto 0 0; z-index: 45; display: flex; flex-direction: column; width: 240px; padding: 30px 18px 22px; background: radial-gradient(ellipse at 0 100%,#284b64 0,transparent 52%), #172a43; color: #f3f7fc; border-right: 1px solid #14243b; }
+.pbl-platform-theme .pbl-workspace-brand { display: flex; min-height: 58px; align-items: center; padding-left: 14px; }
 .pbl-platform-theme .pbl-workspace-brand img { filter: brightness(0) invert(1); }
-.pbl-platform-theme .pbl-workspace-role { display: flex; align-items: center; gap: 8px; margin: 19px 14px 42px; color: #b2c3d8; font-size: 12px; }
+.pbl-platform-theme .pbl-workspace-back { display: flex; align-items: center; gap: 10px; min-height: 44px; margin: 18px 2px 36px; padding: 10px 12px; border: 1px solid #b5d0ed20; border-radius: 12px; color: #c5d3e4; font-size: 12px; font-weight: 500; }
+.pbl-platform-theme .pbl-workspace-back:hover { border-color: #b5d0ed3d; background: #ffffff0b; color: #fff; }
+.pbl-platform-theme .pbl-workspace-back svg { flex-shrink: 0; }
 .pbl-platform-theme .pbl-nav-caption { padding: 0 14px; margin-bottom: 12px; color: #8fa7c3; font-size: 10px; letter-spacing: .16em; }
 .pbl-platform-theme .pbl-workspace-nav nav { display: grid; gap: 8px; }
 .pbl-platform-theme .pbl-workspace-nav-link { position: relative; display: flex; align-items: center; gap: 12px; min-height: 48px; border: 1px solid transparent; border-radius: 12px; padding: 14px; font-size: 13px; font-weight: 500; color: #c5d3e4; }
@@ -61,10 +63,8 @@
 .pbl-platform-theme .pbl-workspace-note::after { content: ''; position: absolute; width: 70px; height: 70px; border: 1px solid #b5d0ed26; border-radius: 50%; right: -27px; top: -27px; }
 .pbl-platform-theme .pbl-workspace-note span { font-size: 12px; font-weight: 600; color: #e9f1fc; }
 .pbl-platform-theme .pbl-workspace-note p { margin-top: 10px; font-size: 11px; line-height: 1.9; color: #a9bfd7; }
-.pbl-platform-theme .pbl-platform-topbar { background: #ffffffed; border-bottom: 1px solid #dfe7f0b3; box-shadow: none; backdrop-filter: blur(16px); }
-.pbl-platform-theme .pbl-workspace-topbar { position: sticky; top: 0; z-index: 35; }
-.pbl-platform-theme .pbl-workspace-topbar a { min-height: 44px; display: inline-flex; align-items: center; }
 .pbl-platform-theme .pbl-workspace-content { width: 100%; min-width: 0; max-width: 1480px; margin-inline: auto; padding: 34px 40px 64px; animation: pbl-platform-enter .32s ease both; }
+.pbl-platform-theme .pbl-workspace-content > a:first-child[href^="/teacher/classes/"] { display: none; }
 .pbl-platform-theme .pbl-page-heading { position: relative; isolation: isolate; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px; padding: 34px 36px; margin-bottom: 28px; border: 1px solid #d5e1ef; border-radius: 22px; background: linear-gradient(115deg,#fdfefe 0%,#f0f5fd 60%,#e3ecf9 100%); box-shadow: 0 8px 30px #29466605; }
 .pbl-platform-theme .pbl-page-heading > div:first-of-type { max-width: 580px; }
 .pbl-platform-theme .pbl-page-heading h1 { font-size: clamp(28px,3vw,38px); letter-spacing: -.04em; color: var(--pbl-text-strong); line-height: 1.35; }

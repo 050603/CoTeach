@@ -1,5 +1,4 @@
 "use client";
-import Link from "next/link";
 import { LearningArt } from "@/components/platform/learning-art";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -21,9 +20,8 @@ export default function NewPblTemplatePage() {
       router.push(`/teacher/prepare/${data.templateId}/verify`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "创建失败，请重试"); setBusy(false); }
   }
-  return <TeacherPlatformPage><TeacherPlatformHeader active="templates" /><div className="pbl-workspace-content"><div className="mx-auto max-w-4xl">
-    <Link href="/teacher/templates" className="inline-flex min-h-11 items-center text-sm text-[var(--pbl-teacher)]">返回课程库</Link>
-    <div className="pbl-page-heading mt-5"><LearningArt /><div><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">从想法出发 / 新建课程</p><h1 className="mt-5 font-serif text-3xl font-semibold">完整五阶段备课</h1>
+  return <TeacherPlatformPage><TeacherPlatformHeader active="templates" backHref="/teacher/templates" backLabel="返回课程库" /><div className="pbl-workspace-content"><div className="mx-auto max-w-4xl">
+    <div className="pbl-page-heading"><LearningArt /><div><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">从想法出发 / 新建课程</p><h1 className="mt-5 font-serif text-3xl font-semibold">完整五阶段备课</h1>
     <p className="mt-4 text-sm leading-7 text-[var(--pbl-text-muted)]">设计项目启动、知识讲授、项目实践、成果汇报与评价、学习反思，继续编辑知识图谱、生成课堂资源并预览发布。</p></div></div>
     <form onSubmit={submit} className="pbl-create-form space-y-6"><fieldset disabled={busy} className="space-y-5">
       <label className="block text-sm font-medium">课程名称<input className={field} required maxLength={160} value={name} onChange={(e) => setName(e.target.value)} /></label>

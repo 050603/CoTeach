@@ -37,6 +37,17 @@ describe("course cover generation", () => {
     expect(prompt).not.toContain("abstract or representational");
   });
 
+  it("includes offering details when a course-series cover is generated", () => {
+    const prompt = buildCourseCoverPrompt({
+      name: "校园雨水花园",
+      summary: "调查校园积水问题",
+      term: "2026 秋季",
+      outline: "现场调查、测量汇水面积、制作模型并展示方案",
+    });
+    expect(prompt).toContain("Course term: 2026 秋季");
+    expect(prompt).toContain("Course outline: 现场调查、测量汇水面积、制作模型并展示方案");
+  });
+
   it("keeps one art direction, composition and output size for every course", () => {
     const first = buildCourseCoverPrompt(course);
     const second = buildCourseCoverPrompt({

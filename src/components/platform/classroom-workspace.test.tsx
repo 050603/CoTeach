@@ -10,7 +10,7 @@ let fetcher: ReturnType<typeof vi.fn>;
 function mockClassroom(status = "finished", teacher = false) {
   fetcher.mockImplementation(async (url: string) => new Response(JSON.stringify(url.endsWith("/outcomes") ? results : url.endsWith("/ai") ? { conversations: [], supportRecords: [] } : {
     participation: { id: "p", completedAt: "2026-09-09T00:00:00Z" }, student: { displayName: "小林" },
-    instance: { id: "i", status, activityId: "a", offeringId: "o", offeringName: "科学探索", title: "河流调查", runNo: 1, templateVersion: 2, snapshot: { kind: "pbl-course" } },
+    instance: { id: "i", status, activityId: "a", offeringId: "o", offeringName: "科学探索", title: "河流调查", runNo: 1, templateVersion: 2, snapshot: { kind: "pbl-course" }, coverImageUrl: "/generated/river-cover.png" },
     workspace: { version: 4, projectState: { document: "保留的调查文档", code: "<p>历史作品</p>" } }, isTeacher: teacher, canWrite: status === "teaching" && !teacher,
   })));
 }
@@ -20,6 +20,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("finished classroom records", () => {
   it("opens PBL history on actual artifacts, reflections and evaluations without student authoring forms", async () => {
     mockClassroom(); render(<ClassroomWorkspace participationId="p" />);
+    expect(await screen.findByRole("img", { name: "河流调查课堂封面" })).toBeVisible();
     expect(await screen.findByText("水质调查成果")).toBeVisible();
     expect(screen.getByText("下次我们会扩大采样范围。")).toBeVisible();
     expect(screen.getByText("论据充分，建议增加样本。")).toBeVisible();

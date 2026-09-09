@@ -2,7 +2,6 @@
 
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -171,10 +170,9 @@ export default function NewTeacherTemplatePage() {
   }
 
   return <TeacherPlatformPage>
-    <TeacherPlatformHeader active="templates" />
+    <TeacherPlatformHeader active="templates" backHref="/teacher/templates" backLabel="返回课程库" />
 
     <div className="pbl-workspace-content">
-      <Link href="/teacher/templates" className="mb-6 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-[var(--pbl-text-muted)] hover:text-[var(--pbl-teacher)]"><ArrowLeft size={17}/>返回课程库</Link>
       <div className="grid gap-8 lg:grid-cols-[250px_minmax(0,1fr)]">
         <aside className="pbl-create-intro">
           <p className="text-xs font-semibold tracking-[0.18em] text-[var(--pbl-teacher)]">课程创建流程</p>

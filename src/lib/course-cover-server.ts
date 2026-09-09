@@ -50,6 +50,7 @@ export async function generateCourseCoverImageOnServer(
   course: CourseCoverContext,
   classroomId: string,
   signal?: AbortSignal,
+  elementId = "course-cover",
 ): Promise<string> {
   if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
   const config = resolveServerCourseCoverProvider();
@@ -63,7 +64,7 @@ export async function generateCourseCoverImageOnServer(
     return persistGeneratedClassroomImage({
       result,
       classroomId,
-      elementId: "course-cover",
+      elementId,
       aspectRatio: COURSE_COVER_GENERATION_SPEC.aspectRatio,
       baseUrl: "",
       signal,

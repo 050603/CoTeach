@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPblTemplateCourse, encodePblTemplate } from "@/lib/platform/pbl-template";
 import TeacherTemplatesPage from "./page";
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
+vi.mock("next/navigation", () => ({ useRouter: () => navigation, usePathname: () => "/teacher/templates" }));
 const content = { schemaVersion: 1, title: "雨水收集", subject: "科学", grade: "七年级", durationMinutes: 45, summary: "设计校园雨水收集装置。", learningObjectives: ["计算集水面积"], outline: [{ title: "调查与设计", durationMinutes: 45, description: "测量集水区并提出方案。" }], resources: [] };
 const template = { id: "template-1", title: content.title, description: content.summary, status: "ACTIVE", versions: [{ id: "version-1", version: 1, snapshot: content }] };
 const fetchMock = vi.fn();

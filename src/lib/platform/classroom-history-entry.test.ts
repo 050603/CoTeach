@@ -9,12 +9,14 @@ const claims = { sub: "s", role: "student" } as AuthClaims;
 const saved = { id: "p", completedAt: new Date("2026-09-08T00:00:00Z") };
 beforeEach(() => {
   vi.resetAllMocks(); mocks.student.mockResolvedValue({ id: "s" });
-  mocks.instance.mockResolvedValue({ id: "i", status: "FINISHED", templateVersion: { snapshot: { kind: "pbl-course" } }, activity: { isOpen: true, chapter: { isOpen: true, offering: { id: "o", status: "FINISHED" } } } });
+  mocks.instance.mockResolvedValue({ id: "i", status: "FINISHED", templateVersion: { snapshot: { schemaVersion: 2, kind: "pbl-course", design: { coverImageUrl: "/finished-cover.webp" } } }, activity: { isOpen: true, chapter: { isOpen: true, offering: { id: "o", status: "FINISHED" } } } });
   mocks.enrollment.mockResolvedValue({ id: "e", status: "COMPLETED" }); mocks.participation.mockResolvedValue(saved);
 });
 describe("finished classroom entry", () => {
   it("returns the existing historical participation on repeated access without changing timestamps or events", async () => {
-    expect((await enterClassroom(claims, "i")).participation).toEqual(saved);
+    const first = await enterClassroom(claims, "i");
+    expect(first.participation).toEqual(saved);
+    expect(first.instance.coverImageUrl).toBe("/finished-cover.webp");
     expect((await enterClassroom(claims, "i")).participation).toEqual(saved);
     expect(mocks.participation).toHaveBeenCalledWith({ where: { instanceId_enrollmentId: { instanceId: "i", enrollmentId: "e" } } });
     expect(mocks.upsert).not.toHaveBeenCalled();

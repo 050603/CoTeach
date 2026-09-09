@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Page from "./page";
 
 const push = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push }), useParams: () => ({ offeringId: "course-1" }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }), useParams: () => ({ offeringId: "course-1" }), usePathname: () => "/teacher/classes/course-1" }));
 const offering = { id: "course-1", name: "设计思维", status: "open", chapters: [{ id: "chapter-1", title: "发现问题", isOpen: true, version: 2, activities: [] }] };
 let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
@@ -29,9 +29,20 @@ describe("课程章节管理", () => {
     fireEvent.click(await screen.findByRole("button", { name: "添加学习内容" }));
     fireEvent.change(screen.getByLabelText("内容类型"), { target: { value: "Form" } });
     fireEvent.change(screen.getByLabelText("标题"), { target: { value: "学习前调查" } });
-    fireEvent.change(screen.getByLabelText("题目（每行一题，学生填写文字回答）"), { target: { value: "你关注什么问题？\n你有哪些经验？" } });
+    fireEvent.click(screen.getByRole("button", { name: "单选题" }));
+    fireEvent.change(screen.getByLabelText("第 1 题题目内容"), { target: { value: "你最关注什么问题？" } });
+    fireEvent.change(screen.getByLabelText("第 1 题选项 1"), { target: { value: "校园环境" } });
+    fireEvent.change(screen.getByLabelText("第 1 题选项 2"), { target: { value: "公共交通" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加题目" }));
+    fireEvent.change(screen.getByLabelText("第 2 题题目内容"), { target: { value: "你有哪些相关经验？" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/offerings/course-1/chapters/chapter-1/activities", expect.objectContaining({ method: "POST", body: expect.stringContaining('"questions":[{"id":"q1","title":"你关注什么问题？","required":true},{"id":"q2","title":"你有哪些经验？","required":true}]') })));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/offerings/course-1/chapters/chapter-1/activities", expect.objectContaining({ method: "POST" })));
+    const request = fetcher.mock.calls.find(([url, options]) => url === "/api/platform/offerings/course-1/chapters/chapter-1/activities" && options?.method === "POST");
+    const body = JSON.parse(String(request?.[1]?.body));
+    expect(body.config.questions).toEqual([
+      expect.objectContaining({ title: "你最关注什么问题？", type: "single-choice", required: true, options: [expect.objectContaining({ label: "校园环境" }), expect.objectContaining({ label: "公共交通" })] }),
+      expect.objectContaining({ title: "你有哪些相关经验？", type: "short-text", required: true, options: [] }),
+    ]);
   });
   it("keeps the editor open and explains a failed activity save", async () => {
     render(<Page />);
@@ -42,6 +53,13 @@ describe("课程章节管理", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("课程已被其他教师更新");
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+  it("generates the course cover from the course homepage", async () => {
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("tab", { name: "课程主页" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI 生成课程封面" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/offerings/course-1/cover", expect.objectContaining({ method: "POST" })));
+    expect(await screen.findByText("课程封面已生成")).toBeInTheDocument();
   });
 });
 

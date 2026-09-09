@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, ArrowUpRight, ClipboardCheck, RefreshCw, Users } from "lucide-react";
+import { ArrowUpRight, ClipboardCheck, RefreshCw, Users } from "lucide-react";
 import { teacherClassroomEntry } from "@/lib/platform/classroom-entry";
 import { TeacherPlatformHeader, TeacherPlatformPage } from "@/components/platform/teacher-shell";
 
-type Classroom = { instance: { id: string; title: string; offeringId: string; status: string; snapshot: unknown }; participants: Array<{ id: string; displayName: string; lastEnteredAt: string | null; completedAt: string | null; _count: { artifacts: number; reflections: number; evaluations: number } }> };
+type Classroom = { instance: { id: string; title: string; offeringId: string; status: string; snapshot: unknown; coverImageUrl?: string | null }; participants: Array<{ id: string; displayName: string; lastEnteredAt: string | null; completedAt: string | null; _count: { artifacts: number; reflections: number; evaluations: number } }> };
 const button = "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] px-4 text-sm font-medium disabled:opacity-50";
 
 export default function ClassroomMonitor() {
@@ -38,9 +39,9 @@ export default function ClassroomMonitor() {
     ["已有评价", data?.participants.filter(participant => participant._count.evaluations > 0).length ?? 0, "已收到评价的学生"],
   ];
   return <TeacherPlatformPage>
-    <TeacherPlatformHeader active="classes" leading={<Link href={back} className="inline-flex min-h-11 items-center gap-2"><ArrowLeft size={16}/>返回课程</Link>} />
+    <TeacherPlatformHeader active="classes" backHref={back} backLabel="返回课程" />
     <div className="pbl-workspace-content">
-      <header className="pbl-page-heading"><div><p className="text-xs font-semibold tracking-widest text-[var(--pbl-teacher)]">学习过程 · 成长证据</p><h1 className="mt-3 font-serif text-3xl font-semibold md:text-4xl">课堂学习记录</h1><p className="mt-4 break-words text-base text-[var(--pbl-text-muted)]">{data?.instance.title ?? "查看学生的参与、成果与评价"}</p></div>{data && <span className="rounded-full bg-[var(--pbl-teacher-soft)] px-4 py-2 text-sm text-[var(--pbl-teacher)]">{status === "teaching" ? "授课中" : status === "finished" ? "已结束 · 记录留存" : "待授课"}</span>}</header>
+      <header className="pbl-page-heading"><div><p className="text-xs font-semibold tracking-widest text-[var(--pbl-teacher)]">学习过程 · 成长证据</p><h1 className="mt-3 font-serif text-3xl font-semibold md:text-4xl">课堂学习记录</h1><p className="mt-4 break-words text-base text-[var(--pbl-text-muted)]">{data?.instance.title ?? "查看学生的参与、成果与评价"}</p>{data && <span className="mt-5 inline-flex rounded-full bg-[var(--pbl-teacher-soft)] px-4 py-2 text-sm text-[var(--pbl-teacher)]">{status === "teaching" ? "授课中" : status === "finished" ? "已结束 · 记录留存" : "待授课"}</span>}</div>{data?.instance.coverImageUrl ? <div className="relative aspect-video w-[360px] max-w-[38%] shrink-0 overflow-hidden rounded-[14px] border border-white/70 shadow-lg"><Image src={data.instance.coverImageUrl} alt={`${data.instance.title}课堂封面`} fill unoptimized className="object-cover" /></div> : null}</header>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="课堂概况">{metrics.map(([label, value, detail]) => <div className="pbl-stat-card" key={label}><p className="text-xs text-[var(--pbl-text-muted)]">{label}</p><strong className="mt-3 block text-3xl font-semibold tabular-nums">{data ? value : "—"}</strong><p className="mt-2 text-xs text-[var(--pbl-text-muted)]">{detail}</p></div>)}</div>
       <section className="mt-7 overflow-hidden rounded-2xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--pbl-border)] p-5 md:p-6"><div><h2 className="flex items-center gap-2 text-lg font-semibold"><Users size={20} className="text-[var(--pbl-teacher)]"/>学生学习档案</h2><p className="mt-2 text-sm text-[var(--pbl-text-muted)]">查看每位学生的作品与反思，留下具体的成长反馈。</p></div><div className="flex flex-wrap gap-2"><button className={button} disabled={loading} onClick={() => void load()}><RefreshCw size={15} className={loading ? "motion-safe:animate-spin" : ""}/>{loading ? "正在刷新" : "刷新记录"}</button>{entry && <Link className={button} href={status === "finished" ? `/teacher/teach/${instanceId}/setup` : entry.href}>{status === "finished" ? "返回教学工作台" : entry.label}<ArrowUpRight size={16}/></Link>}</div></div>

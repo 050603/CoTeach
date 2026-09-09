@@ -4,14 +4,14 @@ import type { AuthClaims } from "@/lib/auth/session";
 const mocks = vi.hoisted(() => {
   const model = () => ({ findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), findFirst: vi.fn(), aggregate: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), upsert: vi.fn() });
   const tx = { $queryRaw: vi.fn(), courseTeacher: model(), courseOffering: model(), chapter: model(), activity: model(), classroomTemplate: model(), classroomTemplateVersion: model(), classroomInstance: model(), activityProgress: model(), courseInvitation: model() };
-  return { tx, transaction: vi.fn(), teacher: vi.fn(), student: vi.fn(), activity: vi.fn(), enrollment: vi.fn() };
+  return { tx, transaction: vi.fn(), teacher: vi.fn(), student: vi.fn(), activity: vi.fn(), enrollment: vi.fn(), offerings: vi.fn() };
 });
-vi.mock("@/lib/db/client", () => ({ prisma: { activity: { findUnique: mocks.activity }, enrollment: { findUnique: mocks.enrollment } } }));
+vi.mock("@/lib/db/client", () => ({ prisma: { activity: { findUnique: mocks.activity }, enrollment: { findUnique: mocks.enrollment }, courseOffering: { findMany: mocks.offerings } } }));
 vi.mock("@/lib/db/transaction-retry", () => ({ runMutationTransaction: mocks.transaction }));
 vi.mock("./learning-events", () => ({ appendValidatedLearningEvents: vi.fn().mockResolvedValue([]) }));
 vi.mock("./access", () => ({ requireTeacherUser: mocks.teacher, requireStudentUser: mocks.student, normalizeUsername: (value: string) => value }));
 
-import { createActivity, createChapter, createClassroomInstance, createTemplateVersion, getStudentActivity, resetOfferingInvitation, updateActivity, updateChapter, updateOffering } from "./repository";
+import { createActivity, createChapter, createClassroomInstance, createTemplateVersion, getStudentActivity, listTeacherOfferings, resetOfferingInvitation, updateActivity, updateChapter, updateOffering } from "./repository";
 const teacherClaims = { sub: "teacher", role: "teacher" } as AuthClaims;
 const studentClaims = { sub: "student", role: "student" } as AuthClaims;
 const release = { isOpen: true, opensAt: null, archivedAt: null };
@@ -110,5 +110,63 @@ describe("activity access concurrent with completion", () => {
     expect(mocks.tx.activityProgress.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { enrollmentId: "enrollment", activityId: "activity", status: { in: ["NOT_STARTED", "not_started"] } } }));
     expect(result.progress.status).toBe("completed");
     expect(result.progress.progressData).toEqual({ answer: "saved" });
+  });
+
+  it("projects the preparation cover onto student classroom instances", async () => {
+    const snapshot = { schemaVersion: 2, kind: "pbl-course", design: { coverImageUrl: "/classroom-cover.webp" } };
+    mocks.activity.mockResolvedValue({
+      id: "activity",
+      type: "CLASSROOM",
+      ...release,
+      chapterId: "chapter",
+      chapter: { id: "chapter", title: "第一章", position: 0, ...release, offering: { id: "offering", name: "课程", status: "FINISHED" } },
+      classroomInstances: [{ id: "instance", status: "FINISHED", startedAt: new Date(), endedAt: new Date(), templateVersion: { id: "version", version: 1, snapshot, mediaRefs: null } }],
+    });
+    mocks.enrollment.mockResolvedValue({ id: "enrollment", status: "COMPLETED", activityProgress: [] });
+    const result = await getStudentActivity(studentClaims, "activity");
+    expect(result.instances[0]).toMatchObject({ id: "instance", coverImageUrl: "/classroom-cover.webp" });
+    expect(result.instance).toMatchObject({ id: "instance", coverImageUrl: "/classroom-cover.webp" });
+  });
+});
+
+describe("teacher offering classroom covers", () => {
+  it("projects each latest template snapshot cover onto the chapter activity instance", async () => {
+    const snapshot = { schemaVersion: 2, kind: "pbl-course", design: { coverImageUrl: "https://cdn.example.test/classroom.webp" } };
+    mocks.offerings.mockResolvedValue([{
+      id: "offering",
+      name: "课程",
+      status: "OPEN",
+      settings: null,
+      invitations: [],
+      _count: { enrollments: 2 },
+      chapters: [{
+        id: "chapter",
+        activities: [{
+          id: "activity",
+          type: "CLASSROOM",
+          classroomInstances: [{ id: "instance", status: "SCHEDULED", templateVersion: { id: "version", templateId: "template", version: 1, status: "PUBLISHED", snapshot } }],
+        }],
+      }],
+    }]);
+    const result = await listTeacherOfferings(teacherClaims);
+    expect(result[0].chapters[0].activities[0].instances[0]).toMatchObject({
+      id: "instance",
+      coverImageUrl: "https://cdn.example.test/classroom.webp",
+    });
+    expect(mocks.offerings).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({
+        chapters: expect.objectContaining({
+          include: expect.objectContaining({
+            activities: expect.objectContaining({
+              include: expect.objectContaining({
+                classroomInstances: expect.objectContaining({
+                  include: { templateVersion: { select: expect.objectContaining({ snapshot: true }) } },
+                }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    }));
   });
 });

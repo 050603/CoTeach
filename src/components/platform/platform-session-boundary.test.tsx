@@ -17,6 +17,12 @@ describe("platform session boundary", () => {
     expect(screen.getByTestId("classroom-session")).toBeInTheDocument();
     expect(container.querySelector(".pbl-platform-theme")).toBeInTheDocument();
   });
+  it("keeps survey dashboards inside the teacher platform theme", () => {
+    route.pathname = "/teacher/surveys/activity";
+    const { container } = render(<PlatformSessionBoundary>问卷看板</PlatformSessionBoundary>);
+    expect(container.querySelector(".pbl-platform-theme")).toBeInTheDocument();
+    expect(screen.queryByTestId("classroom-session")).not.toBeInTheDocument();
+  });
   it("keeps teaching and preparation outside the platform theme", () => {
     route.pathname = "/teacher/teach/demo/classroom";
     const { container } = render(<PlatformSessionBoundary>授课</PlatformSessionBoundary>);

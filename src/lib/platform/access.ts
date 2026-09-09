@@ -1,7 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { AuthClaims } from "@/lib/auth/session";
 import { authenticateRequest } from "@/lib/auth/request-guards";
-import { isAuthConfigured } from "@/lib/auth/session";
+import { getRequestedAuthRole, isAuthConfigured, type AuthRole } from "@/lib/auth/session";
+import { OFFERING_COVER_MEDIA_PREFIX } from "./classroom-cover";
 
 export type PlatformDb = PrismaClient | Prisma.TransactionClient;
 
@@ -88,10 +89,54 @@ export async function canAccessLegacyCourse(claims: AuthClaims, courseId: string
   return mode === "read" || (instance.status.toUpperCase() === "TEACHING" && participation.enrollment.status.toUpperCase() === "ACTIVE" && instance.activity.chapter.offering.status.toUpperCase() === "OPEN");
 }
 
+export async function canReadOfferingCover(
+  claims: AuthClaims,
+  offeringId: string,
+  db?: PlatformDb,
+): Promise<boolean> {
+  const database = db ?? (await import("@/lib/db/client")).prisma;
+  const user = await getPlatformUser(claims, database);
+  if (!user) return false;
+  if (user.role === "teacher") {
+    return Boolean(await database.courseTeacher.findFirst({
+      where: { offeringId, userId: user.id },
+      select: { id: true },
+    }));
+  }
+  return Boolean(await database.enrollment.findFirst({
+    where: {
+      offeringId,
+      userId: user.id,
+      status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] },
+    },
+    select: { id: true },
+  }));
+}
+
+export function preferredMediaAuthRole(request: Request): AuthRole | undefined {
+  const requested = getRequestedAuthRole(request);
+  if (requested) return requested;
+  const referer = request.headers.get("referer");
+  if (!referer) return undefined;
+  try {
+    const pathname = new URL(referer).pathname;
+    if (pathname === "/student" || pathname.startsWith("/student/")) return "student";
+    if (pathname === "/teacher" || pathname.startsWith("/teacher/")) return "teacher";
+  } catch {
+    // Invalid referrers fall back to the standard cookie lookup order.
+  }
+  return undefined;
+}
+
 /** OpenMAIC classrooms are content references of owned templates or enrolled runs. */
 export async function authorizeLegacyClassroomRead(request: Request, classroomId: string): Promise<Response | null> {
   if (!isAuthConfigured()) return null;
-  const auth = await authenticateRequest(request); if ("response" in auth) return auth.response;
+  const auth = await authenticateRequest(request, preferredMediaAuthRole(request)); if ("response" in auth) return auth.response;
+  if (classroomId.startsWith(OFFERING_COVER_MEDIA_PREFIX)) {
+    const offeringId = classroomId.slice(OFFERING_COVER_MEDIA_PREFIX.length);
+    if (offeringId && await canReadOfferingCover(auth.claims, offeringId)) return null;
+    return Response.json({ code: "FORBIDDEN", message: "无权读取此课程封面" }, { status: 403 });
+  }
   const { prisma } = await import("@/lib/db/client");
   const references = await prisma.classroomTemplateVersion.findMany({ where: { OR: [
     { snapshot: { path: ["design", "aiLearningClassroomId"], equals: classroomId } },
