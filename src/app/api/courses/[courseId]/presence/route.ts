@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { z } from "zod";
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
 import { getRedisClient } from "@/lib/redis/client";
@@ -40,23 +39,19 @@ export async function PUT(
   if ("response" in auth) return auth.response;
   const parsed = ParamsSchema.safeParse(await context.params);
   if (!parsed.success) return new Response(null, { status: 404 });
-  if (auth.claims.role === "student" && auth.claims.courseId !== parsed.data.courseId) {
-    return new Response(null, { status: 404 });
-  }
   if (!(await canAccessLegacyCourse(auth.claims, parsed.data.courseId, "write"))) {
     return new Response(null, { status: 403 });
   }
   const redis = await redisOrDatabase();
   if (!redis) {
     if (auth.claims.role === "student") {
-      await prisma.student.updateMany({
+      await prisma.classroomParticipation.updateMany({
         where: {
-          courseId: parsed.data.courseId,
-          id: auth.claims.studentId,
+          instanceId: parsed.data.courseId,
+          enrollment: { userId: auth.claims.sub },
         },
         data: {
-          lastSeenAt: new Date().toISOString(),
-          version: { increment: 1 },
+          lastEnteredAt: new Date(),
         },
       });
     }
@@ -92,20 +87,17 @@ export async function DELETE(
   if ("response" in auth) return auth.response;
   const parsed = ParamsSchema.safeParse(await context.params);
   if (!parsed.success) return new Response(null, { status: 404 });
-  if (auth.claims.role === "student" && auth.claims.courseId !== parsed.data.courseId) {
-    return new Response(null, { status: 404 });
-  }
   if (!(await canAccessLegacyCourse(auth.claims, parsed.data.courseId, "write"))) {
     return new Response(null, { status: 403 });
   }
   const redis = await redisOrDatabase();
   if (!redis && auth.claims.role === "student") {
-    await prisma.student.updateMany({
+    await prisma.classroomParticipation.updateMany({
       where: {
-        courseId: parsed.data.courseId,
-        id: auth.claims.studentId,
+        instanceId: parsed.data.courseId,
+        enrollment: { userId: auth.claims.sub },
       },
-      data: { lastSeenAt: null, version: { increment: 1 } },
+      data: { lastEnteredAt: new Date(Date.now() - PRESENCE_TTL_MS - 1) },
     });
   } else if (redis) {
     const member = `${auth.claims.role}:${auth.claims.sub}`;
@@ -126,25 +118,16 @@ export async function GET(
   if ("response" in auth) return auth.response;
   const parsed = ParamsSchema.safeParse(await context.params);
   if (!parsed.success) return new Response(null, { status: 404 });
-  if (auth.claims.role === "student" && auth.claims.courseId !== parsed.data.courseId) {
-    return new Response(null, { status: 404 });
-  }
   if (!(await canAccessLegacyCourse(auth.claims, parsed.data.courseId, "read"))) {
     return new Response(null, { status: 403 });
   }
   const redis = await redisOrDatabase();
   if (!redis) {
-    const students = await prisma.student.findMany({
-      where: { courseId: parsed.data.courseId, lastSeenAt: { not: null } },
-      select: { id: true, name: true, lastSeenAt: true },
+    const participations = await prisma.classroomParticipation.findMany({
+      where: { instanceId: parsed.data.courseId, lastEnteredAt: { gte: new Date(Date.now() - PRESENCE_TTL_MS) }, enrollment: { status: { in: ['ACTIVE', 'COMPLETED'] } } },
+      select: { enrollment: { select: { user: { select: { id: true, displayName: true } } } } },
     });
-    const cutoff = Date.now() - PRESENCE_TTL_MS;
-    const members: PresenceMember[] = students.flatMap((student) => {
-      const seenAt = student.lastSeenAt ? Date.parse(student.lastSeenAt) : Number.NaN;
-      return Number.isFinite(seenAt) && seenAt >= cutoff
-        ? [{ id: student.id, role: "student" as const, name: student.name }]
-        : [];
-    });
+    const members: PresenceMember[] = participations.map((row) => ({ id: row.enrollment.user.id, role: 'student', name: row.enrollment.user.displayName }));
     const snapshot: PresenceSnapshot = {
       members,
       degraded: true,
@@ -176,7 +159,7 @@ export async function GET(
 function publicPresence(claims: AuthClaims) {
   return claims.role === "teacher"
     ? { id: claims.sub, role: claims.role, name: claims.displayName }
-    : { id: claims.studentId, role: claims.role, name: claims.studentName };
+    : { id: claims.sub, role: claims.role, name: claims.studentName };
 }
 
 function presenceKey(courseId: string): string {

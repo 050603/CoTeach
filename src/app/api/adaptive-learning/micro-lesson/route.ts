@@ -42,7 +42,7 @@ export async function POST(request: Request) {
     if (
       !claims ||
       (claims.role === "student" &&
-        (claims.courseId !== body.courseId || claims.studentId !== body.studentId))
+        claims.sub !== body.studentId)
     ) {
       return Response.json({ error: "FORBIDDEN" }, { status: 403 });
     }

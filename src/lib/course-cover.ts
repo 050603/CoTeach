@@ -41,6 +41,9 @@ export function buildCourseCoverPrompt(
   const drivingQuestion = cleanContext(course.drivingQuestion, 180);
   const summary = cleanContext(course.summary, 180);
   const expectedOutcome = cleanContext(course.expectedOutcome, 120);
+  const roleContext = `${name} ${subject} ${grade} ${summary}`;
+  const isTeacherEducationCourse = /(教学|教法|教育|pedagog|instructional)/i.test(roleContext)
+    && /(大[一二三四]|大学|本科|师范|教师|college|university)/i.test(roleContext);
 
   const context = [
     `COURSE NAME: "${name}"`,
@@ -56,11 +59,15 @@ export function buildCourseCoverPrompt(
   return [
     "SCENE BRIEF: Treat the COURSE NAME and CORE DRIVING QUESTION as two equally binding inputs. The course name defines the project subject; the driving question turns it into people, place, concrete challenge, visible action and intended change. Build one specific, believable situation that satisfies both inputs. Never illustrate the title alone and never replace the project situation with generic books, classrooms, light bulbs, graduation symbols or abstract technology imagery.",
     context.join("\n"),
+    "ROLE ACCURACY: Distinguish the actual course learners from any younger learners, clients or communities they are preparing to serve. For teacher-education, pedagogy or instructional-design courses, show the stated learners planning, rehearsing, observing or evaluating teaching—not the target school pupils merely using subject technology. Never turn a course about how to teach into a generic scene of students learning the subject.",
+    isTeacherEducationCourse
+      ? "MANDATORY TEACHER-EDUCATION SCENE: Depict adult university teacher candidates collaboratively designing and rehearsing an age-appropriate lesson. Make a lesson-plan storyboard, teaching-strategy cards, classroom-observation rubric and peer feedback the visible focus. Represent every document only through blank color blocks, simple lines and iconographic shapes—absolutely no writing, pseudo-writing or characters on paper, cards or boards. One adult may practice a micro-teaching gesture while peers evaluate the instructional design. NO children as the main learners, NO robot-building activity, NO coding screen as the focal point, and NO generic pupils merely using technology."
+      : null,
     "STORY MOMENT: Silently infer who is affected, where the project takes place, what learners are trying to understand or improve, and what observable evidence or artifact would show progress. Depict one moment of age-appropriate learners, stakeholders or the project environment in action. Prefer learners investigating, making, testing or presenting a tangible response when that follows from the driving question. Every prominent object must help explain the project situation.",
     `ART DIRECTION: ${COVER_STYLE}; consistent PrAIxis course-cover visual system; suitable for display in a real school classroom—warm, calm, credible and inviting rather than commercial or spectacular; contemporary editorial gouache with clean shapes, lightly visible paper grain and natural human gestures; mature enough for the stated grade; restrained shared palette of chalkboard green, lake blue, terracotta and sunlit cream with small subject-specific accents; clear visual hierarchy and gentle daylight.`,
     "COMPOSITION: one believable project moment with a clear focal action, medium-low visual density, strong subject separation and generous breathing room; no montage, no split panels and no decorative icon cloud. Keep important subjects inside the central 80% so course-card crops remain legible. Reserve quieter negative space near the edges for interface overlays without drawing a fake title area.",
     "OUTPUT: 16:9 landscape composition at 1024x576. Pure image only. NO TEXT, NO WORDS, NO LETTERS, NO NUMBERS, NO TYPOGRAPHY, NO LABELS, NO CAPTIONS, NO LOGOS, NO WATERMARKS, NO UI.",
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
 }
 
 export async function requestCourseCoverImage(

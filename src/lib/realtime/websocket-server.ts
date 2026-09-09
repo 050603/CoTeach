@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
 import { isIP } from "node:net";
@@ -133,7 +132,15 @@ function attachClient(ws: WebSocket, claims: AuthClaims, ip: string): void {
       sendJson(ws, { type: "error", code: "INVALID_MESSAGE" });
       return;
     }
-    if (!(await canSubscribe(state.claims, courseId))) {
+    let allowed: boolean;
+    try { allowed = await canSubscribe(state.claims, courseId); }
+    catch {
+      sendJson(ws, { type: "error", code: "SERVICE_UNAVAILABLE" });
+      ws.close(1011, "SERVICE_UNAVAILABLE");
+      return;
+    }
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (!allowed) {
       sendJson(ws, { type: "error", code: "COURSE_FORBIDDEN" });
       ws.close(4003, "COURSE_FORBIDDEN");
       return;
@@ -150,7 +157,7 @@ function attachClient(ws: WebSocket, claims: AuthClaims, ip: string): void {
           targetStudentId: typeof event.payload?.studentId === "string"
             ? event.payload.studentId
             : undefined,
-        }, state.claims.studentId)
+        }, state.claims.sub ?? "")
       ) {
         return;
       }
@@ -193,6 +200,8 @@ function attachClient(ws: WebSocket, claims: AuthClaims, ip: string): void {
       } else if (!allowedCourse && ws.readyState === WebSocket.OPEN) {
         ws.close(4003, "COURSE_FORBIDDEN");
       }
+    }).catch(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.close(1011, "SERVICE_UNAVAILABLE");
     });
     if (Date.now() - state.lastPongAt > CONNECTION_TIMEOUT_MS) {
       ws.terminate();

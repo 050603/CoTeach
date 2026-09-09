@@ -1,4 +1,4 @@
-// @ts-nocheck
+import { showcaseStore } from "@/lib/showcase/persistence";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
@@ -31,14 +31,14 @@ export async function GET(
   if (!(await canAccessLegacyCourse(auth.claims, courseId, "read"))) return new Response(null, { status: 403 });
 
   const [course, students, documents, outcomes] = await Promise.all([
-    prisma.course.findUnique({ where: { id: courseId }, select: { id: true, name: true } }),
-    prisma.student.findMany({ where: { courseId }, select: { id: true, name: true }, orderBy: [{ name: "asc" }, { id: "asc" }] }),
-    prisma.projectDocumentVersion.findMany({
+    showcaseStore.loadCourse({ where: { id: courseId }, select: { id: true, name: true } }),
+    showcaseStore.listStudents({ where: { courseId }, select: { id: true, name: true }, orderBy: [{ name: "asc" }, { id: "asc" }] }),
+    showcaseStore.listDocuments({
       where: { courseId, stageKey: "make", status: "submitted", docxUploadId: { not: null } },
       select: { studentId: true, sequence: true, title: true, docxUploadId: true, submittedAt: true, createdAt: true },
       orderBy: [{ studentId: "asc" }, { submittedAt: "desc" }, { createdAt: "desc" }, { sequence: "desc" }],
     }),
-    prisma.projectPdfVersion.findMany({
+    showcaseStore.listFiles({
       where: { courseId, stageKey: "make", status: "submitted" },
       select: { studentId: true, sequence: true, title: true, uploadId: true, kind: true },
       orderBy: [{ studentId: "asc" }, { sequence: "asc" }],
@@ -54,9 +54,9 @@ export async function GET(
     ...Array.from(latestDocumentByStudent.values()).flatMap((document) => document.docxUploadId ? [document.docxUploadId] : []),
     ...outcomes.map((outcome) => outcome.uploadId),
   ];
-  const uploads = uploadIds.length ? await prisma.uploadFile.findMany({
-    where: { id: { in: uploadIds }, courseId, deletedAt: null },
-    select: { id: true, fileName: true, storedName: true },
+  const uploads = uploadIds.length ? await prisma.fileAsset.findMany({
+    where: { id: { in: uploadIds }, deletedAt: null },
+    select: { id: true, originalName: true, storageKey: true },
   }) : [];
   const uploadById = new Map(uploads.map((upload) => [upload.id, upload]));
   const dataDir = process.env.UPLOAD_DIR?.trim() || path.resolve(".openpbl-data", "uploads");
@@ -65,10 +65,10 @@ export async function GET(
 
   async function addUpload(folderName: string, prefix: string, uploadId: string) {
     const upload = uploadById.get(uploadId);
-    if (!upload || path.basename(upload.storedName) !== upload.storedName) return;
+    if (!upload || path.basename(upload.storageKey) !== upload.storageKey) return;
     try {
-      const bytes = await readFile(/* turbopackIgnore: true */ path.join(dataDir, upload.storedName));
-      zip.file(`${folderName}/${safeFilePart(prefix)}-${safeFilePart(upload.fileName)}`, bytes);
+      const bytes = await readFile(/* turbopackIgnore: true */ path.join(dataDir, upload.storageKey));
+      zip.file(`${folderName}/${safeFilePart(prefix)}-${safeFilePart(upload.originalName)}`, bytes);
       included += 1;
     } catch {
       // A missing physical upload is omitted while the remaining class archive is still delivered.

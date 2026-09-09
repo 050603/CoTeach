@@ -2,14 +2,14 @@
 //
 // Usage:
 //   pnpm tsx scripts/cleanup-uploads.ts orphans
-//       Scan .openpbl-data/uploads/ and delete files with no UploadFile row.
+//       Scan .openpbl-data/uploads/ and delete files with no FileAsset row (after a 24-hour grace period).
 //
 //   pnpm tsx scripts/cleanup-uploads.ts course <courseId>
-//       Delete every upload file (disk + DB row) belonging to a course.
+//       Remove only explicitly soft-deleted, unreferenced files for an offering; retain database tombstones.
 //
 //   pnpm tsx scripts/cleanup-uploads.ts expired <days>
-//       For courses whose status is "finished", remove upload files older
-//       than <days> days.
+//       Remove explicitly soft-deleted files whose tombstones are older
+//       than <days> days; active/research assets are retained.
 
 import {
   cleanupCourseFiles,

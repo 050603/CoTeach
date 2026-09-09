@@ -13,13 +13,13 @@ const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   Classroom: "课堂",
   Assignment: "作业",
   Quiz: "测验",
-  Form: "表单",
-  Resource: "资源",
+  Form: "问卷",
+  Resource: "参考资料",
   CLASSROOM: "课堂",
   ASSIGNMENT: "作业",
   QUIZ: "测验",
-  FORM: "表单",
-  RESOURCE: "资源",
+  FORM: "问卷",
+  RESOURCE: "参考资料",
 };
 
 const INSTANCE_STATUS_LABELS: Record<string, string> = {

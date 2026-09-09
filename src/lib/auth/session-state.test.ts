@@ -4,8 +4,8 @@ import type { Course } from "@/lib/session/types";
 import { scopeSessionStateForAuth } from "./session-state";
 
 const courses = [
-  { id: "course-1", name: "课程一" },
-  { id: "course-2", name: "课程二" },
+  { id: "course-1", name: "课程一", students: [] },
+  { id: "course-2", name: "课程二", students: [{ id: "student-1", name: "张三" }] },
 ] as Course[];
 
 describe("scopeSessionStateForAuth", () => {
@@ -33,15 +33,13 @@ describe("scopeSessionStateForAuth", () => {
     expect(scoped.studentId).toBeUndefined();
   });
 
-  it("returns only the JWT-bound course and student identity", () => {
+  it("uses V2 participation membership and the account subject", () => {
     const state = { ...initialSessionState(), courses };
 
     const scoped = scopeSessionStateForAuth(state, {
       role: "student",
       sub: "student-1",
       sv: 1,
-      courseId: "course-2",
-      studentId: "student-1",
       studentName: "张三",
     });
 

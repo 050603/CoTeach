@@ -21,6 +21,8 @@ vi.mock("@/lib/showcase/presentation-service", () => ({
   ShowcasePresentationError: class ShowcasePresentationError extends Error {},
 }));
 
+vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: async () => true }));
+
 import { POST } from "./route";
 
 const courseId = "course-1";

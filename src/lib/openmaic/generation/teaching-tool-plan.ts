@@ -53,6 +53,12 @@ export function ensureTeachingToolPlans(
   outlines: ReadonlyArray<SceneOutline>,
 ): SceneOutline[] {
   return outlines.map((outline) => {
+    // The action generators only implement planned tools for student-facing
+    // teaching pages. In particular, quiz and PBL pages must not inherit a
+    // whiteboard contract from a source slide during outline normalization.
+    if (outline.audience === 'teacher' || (outline.type !== 'slide' && outline.type !== 'interactive')) {
+      return { ...outline, teachingToolPlan: undefined };
+    }
     const normalized = normalizeTeachingToolPlan(outline.teachingToolPlan);
     if (normalized.length > 0) return { ...outline, teachingToolPlan: normalized };
 
@@ -147,6 +153,11 @@ export function findMissingRequiredTeachingTools(
   outline: Pick<SceneOutline, 'teachingToolPlan'>,
   evidence: TeachingToolEvidence,
 ): TeachingToolKind[] {
+  // Persisted outlines created before normalization may still contain an
+  // inapplicable plan. Treat it as legacy metadata instead of making the
+  // whole classroom generation fail at the final quiz/PBL page.
+  if (evidence.sceneType !== 'slide' && evidence.sceneType !== 'interactive') return [];
+
   const actions = evidence.actions ?? [];
   const actual = new Set<TeachingToolKind>();
   if (actions.some((action) => WHITEBOARD_VISIBLE_ACTIONS.has(action.type))) {

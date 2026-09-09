@@ -90,7 +90,7 @@ export async function GET(request: NextRequest) {
       auth
       && !('response' in auth)
       && auth.claims.role === 'student'
-      && (auth.claims.courseId !== courseId || auth.claims.studentId !== studentId)
+      && auth.claims.sub !== studentId
     ) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Progress is outside the signed-in student scope');
     }
@@ -157,8 +157,7 @@ export async function POST(request: NextRequest) {
       && !('response' in auth)
       && (
         auth.claims.role !== 'student'
-        || auth.claims.courseId !== courseId
-        || auth.claims.studentId !== studentId
+        || auth.claims.sub !== studentId
       )
     ) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Progress updates require the matching student identity');

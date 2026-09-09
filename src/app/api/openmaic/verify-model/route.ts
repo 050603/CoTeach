@@ -4,10 +4,13 @@ import { apiError, apiSuccess } from '@openmaic/lib/server/api-response';
 import { resolveModel } from '@openmaic/lib/server/resolve-model';
 import { callLLM } from '@openmaic/lib/ai/llm';
 import { isAbortError } from '@openmaic/lib/generation/generation-retry';
+import { getProviderCredentialError } from '@/lib/teacher/ai-service-settings';
 const log = createLogger('Verify Model');
 
 export async function POST(req: NextRequest) {
   let model: string | undefined;
+  let resolvedProviderId: string | undefined;
+  let resolvedBaseUrl: string | undefined;
   try {
     if (req.signal.aborted) return new Response(null, { status: 499 });
     const body = await req.json();
@@ -28,6 +31,8 @@ export async function POST(req: NextRequest) {
         providerType,
       });
       languageModel = result.model;
+      resolvedProviderId = result.providerId;
+      resolvedBaseUrl = result.baseUrl;
     } catch (error) {
       return apiError(
         'INVALID_REQUEST',
@@ -62,6 +67,14 @@ export async function POST(req: NextRequest) {
 
     let errorMessage = 'Connection failed';
     if (error instanceof Error) {
+      const credentialError = getProviderCredentialError({
+        providerId: resolvedProviderId,
+        baseUrl: resolvedBaseUrl,
+        errorMessage: error.message,
+      });
+      if (credentialError) {
+        return apiError('INVALID_REQUEST', 401, credentialError.message, credentialError.details);
+      }
       // Parse common error messages
       if (error.message.includes('401') || error.message.includes('Unauthorized')) {
         errorMessage = 'API key is invalid or expired';

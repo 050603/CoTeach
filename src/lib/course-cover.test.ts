@@ -29,6 +29,8 @@ describe("course cover generation", () => {
     expect(prompt).toContain("people, place, concrete challenge, visible action and intended change");
     expect(prompt).toContain("Subject: 科学与地理");
     expect(prompt).toContain("Learners: 八年级");
+    expect(prompt).toContain("Distinguish the actual course learners");
+    expect(prompt).toContain("Never turn a course about how to teach");
     expect(prompt.indexOf(course.name)).toBeLessThan(prompt.indexOf(course.summary));
     expect(prompt.indexOf(course.drivingQuestion)).toBeLessThan(prompt.indexOf(course.summary));
     expect(prompt).not.toContain("The course title controls the image");
@@ -57,6 +59,19 @@ describe("course cover generation", () => {
       expect(first).toContain(fixedInstruction);
       expect(second).toContain(fixedInstruction);
     }
+  });
+
+  it("keeps teacher-education learners distinct from the school pupils they will teach", () => {
+    const prompt = buildCourseCoverPrompt({
+      name: "中小学人工智能教育的教学理论与方法",
+      subject: "教育学",
+      grade: "大一",
+      summary: "师范生学习如何设计中小学人工智能课程",
+    });
+
+    expect(prompt).toContain("MANDATORY TEACHER-EDUCATION SCENE");
+    expect(prompt).toContain("adult university teacher candidates");
+    expect(prompt).toContain("NO robot-building activity");
   });
 
   it("sends the fixed 16:9 generation contract to the image API", async () => {

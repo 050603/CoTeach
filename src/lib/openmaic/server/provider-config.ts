@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Server-side Provider Configuration
  *
@@ -16,7 +15,7 @@ import {
   type TtsVoiceTimingCalibration,
 } from '@openmaic/lib/audio/tts-timing';
 import { prisma, isDatabaseConfigured } from '@/lib/db/client';
-import { decryptCredential } from '@/lib/security/credential-encryption';
+import { decodeProviderSecret } from '@/lib/security/provider-secret';
 
 const log = createLogger('ServerProviderConfig');
 const DEFAULT_FILENAME = 'server-providers.yml';
@@ -37,7 +36,7 @@ interface ServerProviderEntry {
   /**
    * Admin/operator force-off switch. `false` disables the provider for ALL
    * clients regardless of the user's per-provider toggle (server precedence).
-   * Currently honored for TTS only (#665).
+   * TTS additionally supports provider-specific environment overrides (#665).
    */
   enabled?: boolean;
   /**
@@ -67,6 +66,8 @@ interface ServerConfig {
 
 const LLM_ENV_MAP: Record<string, string> = {
   OPENAI: 'openai',
+  AZURE_OPENAI: 'azure',
+  ATLASCLOUD: 'atlascloud',
   ANTHROPIC: 'anthropic',
   GOOGLE: 'google',
   DEEPSEEK: 'deepseek',
@@ -84,6 +85,7 @@ const LLM_ENV_MAP: Record<string, string> = {
   MIMO: 'xiaomi',
   OLLAMA: 'ollama',
   LEMONADE: 'lemonade',
+  BEDROCK: 'bedrock',
 };
 
 const TTS_ENV_MAP: Record<string, string> = {
@@ -201,6 +203,7 @@ function loadEnvSection(
   // First, add everything from YAML as defaults
   if (yamlSection) {
     for (const [id, entry] of Object.entries(yamlSection)) {
+      if (entry?.enabled === false) continue;
       if (
         requiresBaseUrlForProvider(id)
           ? !!entry?.baseUrl
@@ -293,6 +296,7 @@ function collectDisabledTTS(
 // ---------------------------------------------------------------------------
 
 const OPENAI_IMAGE_PROVIDER_ID = 'openai-image';
+const BEDROCK_PROVIDER_ID = 'bedrock';
 
 /**
  * Provider configuration is initialized by Next.js instrumentation, which is
@@ -330,10 +334,10 @@ export async function initializeServerProviderConfig(): Promise<void> {
       state.configs.clear();
       return;
     }
-    const rows = await prisma.providerCredential.findMany();
+    const rows = await prisma.providerCredential.findMany({ where: { ownerId: null, status: 'ACTIVE' }, orderBy: { updatedAt: 'asc' } });
     const data: YamlData = {};
     for (const row of rows) {
-      const section = row.section as keyof YamlData;
+      const section = row.name as keyof YamlData;
       if (!['providers', 'tts', 'asr', 'pdf', 'image', 'video', 'web-search'].includes(section)) {
         continue;
       }
@@ -342,14 +346,9 @@ export async function initializeServerProviderConfig(): Promise<void> {
           ? (row.config as Record<string, unknown>)
           : {};
       const target = (data[section] ??= {});
-      target[row.providerId] = {
+      target[row.provider] = {
         ...config,
-        apiKey: decryptCredential(
-          row.encryptedApiKey,
-          row.iv,
-          row.authTag,
-          `${row.section}:${row.providerId}`,
-        ),
+        apiKey: decodeProviderSecret(row.secret, `${row.name}:${row.provider}`),
       } as Partial<ServerProviderEntry>;
     }
     state.databaseYamlData = data;
@@ -382,6 +381,38 @@ function applyOpenAIImageFallback(
   return imageConfig;
 }
 
+function splitModels(models: string | undefined): string[] | undefined {
+  const parsed = models?.split(',').map((model) => model.trim()).filter(Boolean);
+  return parsed?.length ? parsed : undefined;
+}
+
+function applyBedrockProviderConfig(
+  providers: Record<string, ServerProviderEntry>,
+  configuredProviders: Record<string, Partial<ServerProviderEntry>> | undefined,
+): Record<string, ServerProviderEntry> {
+  const configured = configuredProviders?.[BEDROCK_PROVIDER_ID];
+  const envApiKey = process.env.BEDROCK_API_KEY || undefined;
+  const envBaseUrl = process.env.BEDROCK_BASE_URL || undefined;
+  const envModels = splitModels(process.env.BEDROCK_MODELS);
+  const hasEnvironmentConfig = Boolean(
+    process.env.BEDROCK_REGION || envModels || envApiKey || envBaseUrl || process.env.AWS_BEARER_TOKEN_BEDROCK,
+  );
+  const hasSavedConfig = Object.prototype.hasOwnProperty.call(
+    configuredProviders ?? {},
+    BEDROCK_PROVIDER_ID,
+  );
+  if (!providers[BEDROCK_PROVIDER_ID] && !hasEnvironmentConfig && !hasSavedConfig) return providers;
+  providers[BEDROCK_PROVIDER_ID] = {
+    apiKey: envApiKey || configured?.apiKey || providers[BEDROCK_PROVIDER_ID]?.apiKey || '',
+    baseUrl: envBaseUrl || configured?.baseUrl || providers[BEDROCK_PROVIDER_ID]?.baseUrl,
+    models: envModels || configured?.models || providers[BEDROCK_PROVIDER_ID]?.models,
+    proxy: configured?.proxy || providers[BEDROCK_PROVIDER_ID]?.proxy,
+    defaultModel: configured?.defaultModel || providers[BEDROCK_PROVIDER_ID]?.defaultModel,
+    priority: configured?.priority ?? providers[BEDROCK_PROVIDER_ID]?.priority,
+  };
+  return providers;
+}
+
 function buildConfig(yamlData: YamlData): ServerConfig {
   const image = applyOpenAIImageFallback(
     loadEnvSection(IMAGE_ENV_MAP, yamlData.image, {
@@ -390,10 +421,15 @@ function buildConfig(yamlData: YamlData): ServerConfig {
     yamlData.image,
   );
 
-  return {
-    providers: loadEnvSection(LLM_ENV_MAP, yamlData.providers, {
-      keylessProviders: new Set(['ollama', 'lemonade']),
+  const providers = applyBedrockProviderConfig(
+    loadEnvSection(LLM_ENV_MAP, yamlData.providers, {
+      keylessProviders: new Set(['ollama', 'lemonade', BEDROCK_PROVIDER_ID]),
     }),
+    yamlData.providers,
+  );
+
+  return {
+    providers,
     tts: loadEnvSection(TTS_ENV_MAP, yamlData.tts, {
       keylessProviders: new Set(['voxcpm-tts', 'lemonade-tts']),
     }),

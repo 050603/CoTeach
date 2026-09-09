@@ -1,4 +1,7 @@
-// @ts-nocheck
+import { headers } from "next/headers";
+import { notFound } from "next/navigation";
+import { authenticateRequest } from "@/lib/auth/request-guards";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import Link from "next/link";
 import { ArrowLeft, History, Users, FileText } from "lucide-react";
 import { DashboardShell } from "@/components/dashboard-shell";
@@ -93,6 +96,8 @@ export default async function CourseHistoryPage({
   const { id: courseId } = await params;
   const { session: selectedSessionId } = await searchParams;
 
+  const auth = await authenticateRequest(new Request("http://localhost/teacher/history", { headers: await headers() }), "teacher");
+  if ("response" in auth || !await canAccessLegacyCourse(auth.claims, courseId)) notFound();
   const course = await getCourse(courseId);
 
   if (!course) {
@@ -142,7 +147,7 @@ export default async function CourseHistoryPage({
   let selectedSession: Awaited<ReturnType<typeof getCourseSession>> = null;
   let selectedArchived: ArchivedData | null = null;
   if (selectedSessionId) {
-    selectedSession = await getCourseSession(selectedSessionId);
+    selectedSession = await getCourseSession(selectedSessionId, courseId);
     if (selectedSession && selectedSession.courseId === courseId) {
       selectedArchived = (selectedSession.archivedData as unknown as ArchivedData) ?? null;
     } else {
@@ -167,7 +172,7 @@ export default async function CourseHistoryPage({
             <History className="mx-auto text-stone-300" size={48} />
             <p className="mt-4 text-stone-600">该课程暂无历史开课记录。</p>
             <p className="mt-2 text-xs text-stone-400">
-              教师对课程执行&ldquo;重开课&rdquo;后，当前课堂数据会自动归档到这里。
+              每次结束课堂都会保留独立场次；再次开课请在教学班创建新场次。
             </p>
           </div>
         </Card>

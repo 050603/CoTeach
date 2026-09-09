@@ -1,4 +1,5 @@
-// @ts-nocheck
+import { encodeEventCursor } from "./event-cursor";
+import { resolveCourseEventScope } from "./course-event-scope";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
@@ -14,23 +15,24 @@ export async function persistCourseUpdateInvalidation(input: {
   updatedAt: string;
   targetStudentId?: string;
 }): Promise<string> {
-  const event = await prisma.courseEvent.create({
+  const scope = await resolveCourseEventScope(input.courseId);
+  if (!scope) throw new Error('CLASSROOM_NOT_FOUND');
+  const event = await prisma.domainEvent.create({
     data: {
-      courseId: input.courseId,
-      requestId: randomUUID(),
-      type: "UPDATE_COURSE",
-      actorId: "server",
-      actorRole: "system",
-      courseVersion: input.courseVersion,
+      classroomInstanceId: scope.classroomInstanceId,
+      offeringId: scope.offeringId,
+      idempotencyKey: randomUUID(), eventType: 'UPDATE_COURSE',
       payload: {
-        source: "server-course-update",
-        scope: input.targetStudentId ? "student" : "course",
+        courseVersion: input.courseVersion,
+        source: 'server-course-update',
+        scope: input.targetStudentId ? 'student' : 'course',
+        ...(scope.templateId ? { templateId: scope.templateId } : {}),
         ...(input.targetStudentId ? { studentId: input.targetStudentId } : {}),
       },
     },
-    select: { cursor: true },
+    select: { id: true, createdAt: true },
   });
-  const cursor = event.cursor.toString();
+  const cursor = encodeEventCursor(event);
   try {
     await publishCourseEvent(input.courseId, {
       type: "course-updated",

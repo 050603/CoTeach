@@ -1,15 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { generateCourseEntryPackage, getCourse, updateCourse } = vi.hoisted(() => ({
+const { generateCourseEntryPackage, getCourse, updateCourse, authorizeTemplateRequest } = vi.hoisted(() => ({
   generateCourseEntryPackage: vi.fn(),
+  authorizeTemplateRequest: vi.fn(),
   getCourse: vi.fn(),
   updateCourse: vi.fn(),
 }));
 
-vi.mock("@/lib/auth/session", () => ({
-  isAuthConfigured: () => false,
-  readAuthFromRequest: vi.fn(),
-}));
+vi.mock("@/lib/platform/template-access", () => ({ authorizeTemplateRequest }));
 
 vi.mock("@/lib/course-entry-generation", () => ({
   generateCourseEntryPackage,
@@ -49,6 +47,7 @@ const knowledgeGraph = {
 describe("POST /api/adaptive-learning/outline", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authorizeTemplateRequest.mockResolvedValue("teacher");
     getCourse.mockResolvedValue({
       id: "course-1",
       name: "计算机视觉",
@@ -101,5 +100,13 @@ describe("POST /api/adaptive-learning/outline", () => {
     expect(response.status).toBe(503);
     expect(updateCourse).not.toHaveBeenCalled();
     expect(payload.error).toContain("独立审校没有返回完整 finalBlueprint");
+  });
+  it.each([403, 404, 409])("rejects inaccessible or non-template targets (%s) before paid generation", async status => {
+    authorizeTemplateRequest.mockResolvedValue(Response.json({ error: "Template access denied" }, { status }));
+    const response = await POST(new Request("http://localhost/api/adaptive-learning/outline", { method: "POST", body: JSON.stringify({ courseId: "foreign-or-instance" }) }));
+    expect(response.status).toBe(status);
+    expect(generateCourseEntryPackage).not.toHaveBeenCalled();
+    expect(getCourse).not.toHaveBeenCalled();
+    expect(updateCourse).not.toHaveBeenCalled();
   });
 });

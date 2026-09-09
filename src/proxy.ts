@@ -73,29 +73,10 @@ function readCookie(req: NextRequest, name: string): string | undefined {
 }
 
 export async function proxy(req: NextRequest) {
-  // V2 is a clean API boundary. Legacy routes are intentionally retired so
-  // they cannot accidentally write to the new canonical tables.
-  const retiredApi = [
-    "/api/auth",
-    "/api/adaptive-learning",
-    "/api/ai-collaboration",
-    "/api/ai",
-    "/api/chat",
-    "/api/courses",
-    "/api/knowledge-lecture",
-    "/api/llm",
-    "/api/load-test",
-    "/api/openmaic",
-    "/api/uploads",
-    "/api/project-practice",
-    "/api/server-providers",
-    "/api/teaching-ai",
-    "/api/learning-events",
-    "/api/teacher-directives",
-  ];
-  const isInteractiveRuntime = req.nextUrl.pathname.startsWith("/api/openmaic/interactive-runtime/");
-  if (!isInteractiveRuntime && retiredApi.some((prefix) => req.nextUrl.pathname === prefix || req.nextUrl.pathname.startsWith(`${prefix}/`))) {
-    return NextResponse.json({ code: "V2_ROUTE_REQUIRED", message: "该接口已停用，请使用 V2 接口" }, { status: 410 });
+  // Authentication moved to V2. Teaching APIs retain their URLs with V2 persistence.
+  const retiredAuth = ["/api/auth/login", "/api/auth/register", "/api/auth/join"];
+  if (retiredAuth.includes(req.nextUrl.pathname)) {
+    return NextResponse.json({ code: "V2_AUTH_REQUIRED", message: "请使用课程平台登录与注册入口" }, { status: 410 });
   }
   const secret = getSecret();
   // Demo mode: skip auth
@@ -135,7 +116,7 @@ export async function proxy(req: NextRequest) {
     const claims = await verifyCookie(token ?? "", secret);
     if (!claims || claims.role !== "student") {
       const url = req.nextUrl.clone();
-      url.pathname = "/student";
+      url.pathname = "/student/login";
       url.searchParams.set("redirect", pathname);
       return NextResponse.redirect(url);
     }

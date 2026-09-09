@@ -1208,6 +1208,8 @@ export type StageTransitionRecord = {
 };
 
 export type Course = {
+  /** Navigation context of a projected platform classroom; never part of a template snapshot. */
+  platformContext?: { offeringId: string; activityId: string; templateId: string; templateVersionId: string };
   id: string;
   version?: number;
   name: string;

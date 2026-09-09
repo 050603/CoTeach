@@ -184,6 +184,7 @@ function RealtimeTeachingActions({ course, stageKey }: { course: Course; stageKe
   const [advice, setAdvice] = useState<TeacherDashboardAdvice>();
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [adviceError, setAdviceError] = useState("生成暂不可用");
   const revision = dashboardAdviceRevision(course, stageKey);
   useEffect(() => {
     courseRef.current = course;
@@ -196,8 +197,9 @@ function RealtimeTeachingActions({ course, stageKey }: { course: Course; stageKe
       if (sequence !== requestSequence.current) return;
       setAdvice(result);
       setStatus("ready");
-    } catch {
+    } catch (error) {
       if (sequence !== requestSequence.current) return;
+      setAdviceError(error && typeof error === "object" && "code" in error && error.code === "AI_NOT_CONFIGURED" ? "请先在 AI 设置中配置模型服务" : "生成暂不可用");
       setAdvice(undefined);
       setStatus("error");
     }
@@ -208,7 +210,7 @@ function RealtimeTeachingActions({ course, stageKey }: { course: Course; stageKe
     return () => window.clearTimeout(timer);
   }, [refresh, revision]);
 
-  const statusText = status === "loading" ? "正在分析本阶段数据" : status === "error" ? "生成暂不可用" : advice ? `${new Date(advice.generatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 更新` : "";
+  const statusText = status === "loading" ? "正在分析本阶段数据" : status === "error" ? adviceError : advice ? `${new Date(advice.generatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 更新` : "";
   const visibleActions = advice?.actions.slice(0, 2) ?? [];
   const hiddenActionCount = Math.max(0, (advice?.actions.length ?? 0) - visibleActions.length);
   const stageLabel = course.stages.find((stage) => stage.key === stageKey)?.label ?? "当前阶段";

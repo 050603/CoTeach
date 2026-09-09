@@ -6,7 +6,7 @@ import { jsonError } from "@/lib/platform/http";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const schema = z.object({ name: z.string().trim().min(1).max(160), description: z.string().max(20_000).optional(), term: z.string().max(80).optional(), startsAt: z.string().datetime().optional(), endsAt: z.string().datetime().optional() });
+const schema = z.object({ outline: z.string().max(20000).optional(), referenceMaterials: z.string().max(20000).optional(), coverImageUrl: z.string().url().nullable().optional(), name: z.string().trim().min(1).max(160), description: z.string().max(20_000).optional(), term: z.string().max(80).optional(), startsAt: z.string().datetime().optional(), endsAt: z.string().datetime().optional() });
 
 export async function GET(request: Request) {
   const auth = await authenticateRequest(request, "teacher");

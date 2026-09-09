@@ -42,3 +42,9 @@ describe("realtime synchronization policy", () => {
     expect(latestEventCursor("7", undefined, "invalid")).toBe("7");
   });
 });
+
+it('compares V2 timestamp/UUID cursors without numeric conversion', () => {
+  const first = '2026-09-08T00:00:00.000Z~11111111-1111-4111-8111-111111111111';
+  const next = '2026-09-08T00:00:00.000Z~21111111-1111-4111-8111-111111111111';
+  expect(latestEventCursor('9999999999999999999', first, next, first)).toBe(next);
+});

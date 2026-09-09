@@ -1,3 +1,5 @@
+import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { callLLM } from "@/lib/llm/client";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import { TEACHER_FACING_PROMPT_CONTRACT } from "@/lib/prompt-quality/policy";
@@ -6,9 +8,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  const csrf = requireSameOrigin(request); if (csrf) return csrf;
+  const auth = await authenticateRequest(request, "teacher"); if ("response" in auth) return auth.response;
   const body = await request.json().catch(() => null) as { courseId?: string; scaffoldId?: string } | null;
   if (!body?.courseId || !body.scaffoldId) return Response.json({ error: "INVALID_REQUEST" }, { status: 400 });
   if (request.signal.aborted) return new Response(null, { status: 499 });
+  if (!await canAccessLegacyCourse(auth.claims, body.courseId)) return Response.json({ error: "FORBIDDEN" }, { status: 403 });
   const course = await getCourse(body.courseId);
   if (request.signal.aborted) return new Response(null, { status: 499 });
   const scaffold = course?.dynamicFacilitationScaffolds?.find((item) => item.id === body.scaffoldId);
@@ -40,22 +45,26 @@ ${TEACHER_FACING_PROMPT_CONTRACT}` },
     throw error;
   }
   if (request.signal.aborted) return new Response(null, { status: 499 });
+  if (!await canAccessLegacyCourse(auth.claims, body.courseId)) return Response.json({ error: "FORBIDDEN" }, { status: 403 });
   const now = new Date().toISOString();
   await updateCourse(course.id, (current) => ({
     ...current,
     dynamicFacilitationScaffolds: (current.dynamicFacilitationScaffolds ?? []).map((item) => item.id === scaffold.id ? { ...item, status: "draft", filledContent: content, evidenceIds: [...submissions.map((item) => item.id), ...messages.map((item) => item.id), ...issues.map((item) => item.id)], updatedAt: now } : item),
-  }));
+  }), { actor: { id: auth.claims.sub!, role: "teacher" } });
   return Response.json({ content, evidenceIds: evidence.map((_, index) => index) });
 }
 
 export async function PATCH(request: Request) {
+  const csrf = requireSameOrigin(request); if (csrf) return csrf;
+  const auth = await authenticateRequest(request, "teacher"); if ("response" in auth) return auth.response;
   const body = await request.json().catch(() => null) as { courseId?: string; scaffoldId?: string } | null;
   if (!body?.courseId || !body.scaffoldId) return Response.json({ error: "INVALID_REQUEST" }, { status: 400 });
   if (request.signal.aborted) return new Response(null, { status: 499 });
+  if (!await canAccessLegacyCourse(auth.claims, body.courseId)) return Response.json({ error: "FORBIDDEN" }, { status: 403 });
   const now = new Date().toISOString();
   await updateCourse(body.courseId, (course) => ({
     ...course,
     dynamicFacilitationScaffolds: (course.dynamicFacilitationScaffolds ?? []).map((item) => item.id === body.scaffoldId && item.status === "draft" ? { ...item, status: "teacher-confirmed", confirmedAt: now, updatedAt: now } : item),
-  }));
+  }), { actor: { id: auth.claims.sub!, role: "teacher" } });
   return Response.json({ ok: true });
 }

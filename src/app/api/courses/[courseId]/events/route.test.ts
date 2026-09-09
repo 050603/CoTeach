@@ -1,92 +1,35 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const mocks = vi.hoisted(() => ({
-  authenticateRequest: vi.fn(),
-  findMany: vi.fn(),
-  findFirst: vi.fn(),
-  findUnique: vi.fn(),
-}));
-
-vi.mock("@/lib/auth/request-guards", () => ({
-  authenticateRequest: mocks.authenticateRequest,
-}));
-vi.mock("@/lib/db/client", () => ({
-  prisma: {
-    course: { findUnique: mocks.findUnique },
-    courseEvent: { findMany: mocks.findMany, findFirst: mocks.findFirst },
-  },
-}));
-vi.mock("@/lib/observability/http", () => ({
-  withHttpMetrics: (_method: string, _route: string, handler: unknown) => handler,
-}));
-
-import { GET } from "./route";
-
-describe("course event synchronization feed", () => {
-  beforeEach(() => {
-    mocks.authenticateRequest.mockResolvedValue({
-      claims: {
-        sub: "student-2",
-        role: "student",
-        courseId: "course-1",
-        studentId: "student-2",
-        studentName: "学生2",
-        sv: 1,
-      },
-    });
-    mocks.findMany.mockResolvedValue([
-      {
-        cursor: BigInt(11),
-        type: "UPDATE_STUDENT_PROGRESS",
-        actorId: "student-1",
-        actorRole: "student",
-        courseVersion: 11,
-        payload: { studentId: "student-1" },
-        createdAt: new Date("2026-08-18T00:00:00.000Z"),
-      },
-      {
-        cursor: BigInt(12),
-        type: "UPSERT_ANNOUNCEMENT",
-        actorId: "teacher-1",
-        actorRole: "teacher",
-        courseVersion: 12,
-        payload: null,
-        createdAt: new Date("2026-08-18T00:00:01.000Z"),
-      },
-    ]);
-    mocks.findUnique.mockResolvedValue({ version: 12 });
-    mocks.findFirst.mockResolvedValue({ courseVersion: 12 });
-  });
-
-  it("keeps shared teacher changes and advances over filtered peer progress", async () => {
-    const response = await GET(
-      new Request("http://localhost/api/courses/course-1/events?after=10"),
-      { params: Promise.resolve({ courseId: "course-1" }) },
-    );
-    const body = await response.json() as {
-      events: Array<{ type: string }>;
-      nextCursor: string;
-    };
-
-    expect(body.events.map((event) => event.type)).toEqual(["UPSERT_ANNOUNCEMENT"]);
-    expect(body.nextCursor).toBe("12");
-  });
-
-  it("requests canonical reconciliation when a course write has no durable event", async () => {
-    mocks.findMany.mockResolvedValue([]);
-    mocks.findUnique.mockResolvedValue({ version: 14 });
-    mocks.findFirst.mockResolvedValue({ courseVersion: 12 });
-
-    const response = await GET(
-      new Request("http://localhost/api/courses/course-1/events?after=12"),
-      { params: Promise.resolve({ courseId: "course-1" }) },
-    );
-    const body = await response.json() as {
-      requiresReconciliation: boolean;
-      courseVersion: number;
-    };
-
-    expect(body.requiresReconciliation).toBe(true);
-    expect(body.courseVersion).toBe(14);
-  });
+import { beforeEach, expect, it, vi } from 'vitest';
+const mocks = vi.hoisted(() => ({ findMany: vi.fn(), access: vi.fn(), scope: vi.fn() }));
+vi.mock('@/lib/auth/request-guards', () => ({ authenticateRequest: async () => ({ claims: { role: 'student', sub: 'student-2', studentId: 'stale' } }) }));
+vi.mock('@/lib/platform/access', () => ({ canAccessLegacyCourse: mocks.access }));
+vi.mock('@/lib/realtime/course-event-scope', () => ({ resolveCourseEventScope: mocks.scope }));
+vi.mock('@/lib/db/client', () => ({ prisma: { domainEvent: { findMany: mocks.findMany } } }));
+vi.mock('@/lib/observability/http', () => ({ withHttpMetrics: (_a: string, _b: string, handler: unknown) => handler }));
+import { GET } from './route';
+const id = '11111111-1111-4111-8111-111111111111';
+const timestamp = '2026-09-08T00:00:00.000Z';
+const context = { params: Promise.resolve({ courseId: 'instance' }) };
+beforeEach(() => { vi.clearAllMocks(); mocks.access.mockResolvedValue(true); mocks.scope.mockResolvedValue({ where: { classroomInstanceId: 'instance' }, version: 2 }); });
+it('advances across filtered peer events while delivering only scoped invalidations', async () => {
+  mocks.findMany.mockResolvedValue([
+    { id, createdAt: new Date(timestamp), eventType: 'UPDATE_STUDENT_PROGRESS', actorId: 'student-1', participation: { enrollment: { userId: 'student-1' } }, payload: { answer: 'private' } },
+    { id: id.replace(/^1/, '2'), createdAt: new Date(timestamp), eventType: 'SET_STAGE', actorId: 'teacher', participation: null, payload: { stage: 2, secretTeacherNote: 'private' } },
+  ]);
+  const response = await GET(new Request('http://localhost/api/courses/instance/events?after=0'), context);
+  const body = await response.json();
+  expect(body.events).toHaveLength(1); expect(body.events[0].type).toBe('SET_STAGE');
+  expect(JSON.stringify(body)).not.toContain('private'); expect(body.nextCursor).toBe(`${timestamp}~${id.replace(/^1/, '2')}`);
+});
+it('uses a timestamp and ID seek predicate for equal-time events', async () => {
+  mocks.findMany.mockResolvedValue([]);
+  const cursor = `${timestamp}~${id}`;
+  const response = await GET(new Request(`http://localhost/api/courses/instance/events?after=${encodeURIComponent(cursor)}`), context);
+  expect(response.status).toBe(200);
+  expect(mocks.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { AND: [{ classroomInstanceId: 'instance' }, { OR: [{ createdAt: { gt: new Date(timestamp) } }, { createdAt: new Date(timestamp), id: { gt: id } }] }] } }));
+});
+it('rejects malformed legacy numeric cursors and denied access before data reads', async () => {
+  expect((await GET(new Request('http://localhost/api/courses/instance/events?after=99'), context)).status).toBe(400);
+  mocks.access.mockResolvedValue(false);
+  expect((await GET(new Request('http://localhost/api/courses/instance/events'), context)).status).toBe(403);
+  expect(mocks.findMany).not.toHaveBeenCalled();
 });

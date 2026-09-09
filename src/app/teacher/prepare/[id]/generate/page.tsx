@@ -30,7 +30,7 @@ export default function GenerateCourseRedirectPage() {
         {hydrated && !course ? (
           <>
             未找到课程。
-            <Link className="mt-4 text-blue-700 hover:underline" href="/teacher">
+            <Link className="mt-4 text-blue-700 hover:underline" href="/teacher/templates">
               返回课程列表
             </Link>
           </>

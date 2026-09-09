@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { findUnique } = vi.hoisted(() => ({ findUnique: vi.fn() }));
-vi.mock("@/lib/db/client", () => ({
-  prisma: { courseGenerationJob: { findUnique } },
-}));
+vi.mock("./job-storage", () => ({ contentGenerationJobs: { findUnique: vi.fn(async () => ({ id: "job" })) } }));
+vi.mock("./checkpoint-storage", () => ({ loadGenerationCheckpoints: findUnique }));
 
 import { resolveDurableCourseSceneOutlines } from "./course-resource-outlines";
 

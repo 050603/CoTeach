@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import { mkdir, open, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -9,6 +8,8 @@ import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guard
 import { checkDistributedRateLimit } from "@/lib/auth/distributed-rate-limit";
 import { rateLimitedResponse } from "@/lib/auth/rate-limit";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
+import { resolveUploadScope } from "@/lib/uploads/scope";
+import { persistUpload } from "@/lib/uploads/assets";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
 import type { AuthClaims } from "@/lib/auth/session";
 import {
@@ -17,7 +18,6 @@ import {
 } from "@/lib/uploads/presentation-converter";
 import {
   GENERATION_REFERENCE_ACCEPT,
-  generationReferenceMarker,
 } from "@/lib/course-design/generation-references";
 
 export const runtime = "nodejs";
@@ -188,17 +188,15 @@ export async function POST(request: Request) {
         415,
       );
     }
-    if (auth.claims.role === "student" && (!courseId || courseId !== auth.claims.courseId)) {
+    if (auth.claims.role === "student" && !courseId) {
       throw new UploadHttpError("FORBIDDEN", "学生只能向当前课程上传文件。", 403);
     }
     if (courseId && !(await canAccessLegacyCourse(auth.claims, courseId, "write"))) {
       throw new UploadHttpError("FORBIDDEN", "课程当前不允许上传文件。", 403);
     }
-    if (courseId) {
-      const courseExists = await prisma.course.count({ where: { id: courseId } });
-      if (courseExists !== 1) {
-        throw new UploadHttpError("COURSE_NOT_FOUND", "课程不存在或已被删除。", 404);
-      }
+    const storageScope = courseId ? await resolveUploadScope(courseId) : null;
+    if (courseId && (!storageScope || (storageScope.templateOwnerId && storageScope.templateOwnerId !== auth.claims.sub))) {
+      throw new UploadHttpError('COURSE_NOT_FOUND', '课程不存在或无权上传。', 404);
     }
     const isNewClassroomPptx = extension === ".pptx"
       && bindAsCourseResource
@@ -284,66 +282,11 @@ export async function POST(request: Request) {
         ? parsedFields.data.pdfDisplayMode ?? null
         : null;
     failureStage = "bind-database";
-    const durableEvent = await prisma.$transaction(async (tx) => {
-      const generationReference = isGenerationReference && courseId
-        ? generationReferenceMarker(courseId)
-        : null;
-      await tx.uploadFile.create({
-        data: {
-          id,
-          fileName: originalName,
-          storedName,
-          courseId,
-          uploadedById: auth.claims.sub!,
-          uploadedByRole: auth.claims.role,
-          size: info.size,
-          mimeType: expected.mime,
-          previewStoredName,
-          previewMimeType,
-          previewSize,
-          referencedBy: bindAsCourseResource ? [id] : generationReference ? [generationReference] : [],
-          refCount: bindAsCourseResource || generationReference ? 1 : 0,
-        },
-      });
-      if (bindAsCourseResource && courseId) {
-        await tx.courseResource.create({
-          data: {
-            id,
-            courseId,
-            title,
-            type: fileType,
-            size: formattedSize,
-            description: parsedFields.data.stageKey
-              ? "教师为当前课堂阶段补充的授课资源"
-              : "教师补充的课程资源",
-            stageKey: parsedFields.data.stageKey ?? null,
-            url,
-            previewUrl,
-            previewType,
-            displayMode,
-            downloadedBy: [],
-          },
-        });
-        const updatedCourse = await tx.course.update({
-          where: { id: courseId },
-          data: { version: { increment: 1 } },
-          select: { version: true },
-        });
-        return tx.courseEvent.create({
-          data: {
-            courseId,
-            requestId: randomUUID(),
-            type: "UPDATE_COURSE",
-            actorId: auth.claims.sub!,
-            actorRole: auth.claims.role,
-            courseVersion: updatedCourse.version,
-            payload: { source: "course-resource-upload", scope: "course" },
-          },
-          select: { cursor: true, courseVersion: true },
-        });
-      }
-      return null;
-    });
+    const durableEvent = await prisma.$transaction((tx) => persistUpload(tx, {
+      id, originalName, storageKey: storedName, offeringId: storageScope?.offeringId ?? null, uploadedById: auth.claims.sub!,
+      size: info.size, mimeType: expected.mime, title, type: fileType, bind: bindAsCourseResource,
+      stageKey: parsedFields.data.stageKey, displayMode, previewStorageKey: previewStoredName, previewMimeType, previewSize,
+    }));
 
     if (durableEvent && courseId) {
       try {
@@ -380,7 +323,7 @@ export async function POST(request: Request) {
         convertedToPdf: Boolean(previewUrl),
         displayMode: displayMode ?? undefined,
         stageKey: parsedFields.data.stageKey,
-        boundToCourse: bindAsCourseResource,
+        boundToCourse: bindAsCourseResource && Boolean(storageScope?.offeringId),
         purpose: parsedFields.data.purpose,
       },
       { status: 201, headers: { "x-request-id": requestId } },
@@ -436,9 +379,9 @@ async function uploadStreamedVideo(
   if (!expected || ![".mp4", ".mov", ".webm"].includes(extension)) {
     return apiError(requestId, "UNSUPPORTED_FILE", "课堂视频支持 MP4、MOV 和 WebM 格式。", 415);
   }
-  const courseExists = await prisma.course.count({ where: { id: fields.data.courseId } });
-  if (courseExists !== 1) {
-    return apiError(requestId, "COURSE_NOT_FOUND", "课程不存在或已被删除。", 404);
+  const storageScope = await resolveUploadScope(fields.data.courseId);
+  if (!storageScope || (storageScope.templateOwnerId && storageScope.templateOwnerId !== claims.sub)) {
+    return apiError(requestId, 'COURSE_NOT_FOUND', '课程不存在或无权上传。', 404);
   }
   if (!request.body) {
     return apiError(requestId, "FILE_REQUIRED", "请选择一个视频上传。", 400);
@@ -509,56 +452,13 @@ async function uploadStreamedVideo(
     const fileType = extension.slice(1).toUpperCase();
     const url = `/api/uploads/${id}`;
     const courseId = fields.data.courseId;
-    const durableEvent = await prisma.$transaction(async (tx) => {
-      await tx.uploadFile.create({
-        data: {
-          id,
-          fileName: originalName,
-          storedName,
-          courseId,
-          uploadedById: claims.sub!,
-          uploadedByRole: claims.role,
-          size,
-          mimeType: expected.mime,
-          referencedBy: [id],
-          refCount: 1,
-        },
-      });
-      await tx.courseResource.create({
-        data: {
-          id,
-          courseId,
-          title,
-          type: fileType,
-          size: formatSize(size),
-          description: fields.data.stageKey
-            ? "教师为当前课堂阶段补充的授课视频"
-            : "教师补充的课程视频",
-          stageKey: fields.data.stageKey ?? null,
-          url,
-          downloadedBy: [],
-        },
-      });
-      const updatedCourse = await tx.course.update({
-        where: { id: courseId },
-        data: { version: { increment: 1 } },
-        select: { version: true },
-      });
-      return tx.courseEvent.create({
-        data: {
-          courseId,
-          requestId: randomUUID(),
-          type: "UPDATE_COURSE",
-          actorId: claims.sub!,
-          actorRole: claims.role,
-          courseVersion: updatedCourse.version,
-          payload: { source: "course-resource-video-upload", scope: "course" },
-        },
-        select: { cursor: true, courseVersion: true },
-      });
-    });
+    const durableEvent = await prisma.$transaction((tx) => persistUpload(tx, {
+      id, originalName, storageKey: storedName, offeringId: storageScope.offeringId, uploadedById: claims.sub!,
+      size, mimeType: expected.mime, title, type: fileType, bind: true, stageKey: fields.data.stageKey,
+    }));
 
-    try {
+
+    if (durableEvent) try {
       await publishCourseEvent(courseId, {
         type: "course-updated",
         courseId,
@@ -586,7 +486,7 @@ async function uploadStreamedVideo(
       sizeBytes: size,
       url,
       stageKey: fields.data.stageKey,
-      boundToCourse: true,
+      boundToCourse: Boolean(storageScope.offeringId),
     }, { status: 201, headers: { "x-request-id": requestId } });
   } catch (error) {
     await fileHandle?.close().catch(() => undefined);

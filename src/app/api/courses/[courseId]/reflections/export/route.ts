@@ -1,3 +1,4 @@
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { authenticateRequest } from "@/lib/auth/request-guards";
 import { getCourse } from "@/lib/session/server-store";
 import {
@@ -40,6 +41,7 @@ export async function GET(
   if (auth.claims.role !== "teacher") return Response.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const { courseId } = await context.params;
+  if (!await canAccessLegacyCourse(auth.claims, courseId, "read")) return Response.json({ code: "FORBIDDEN", message: "无权访问该课堂的反思数据" }, { status: 403 });
   const course = await getCourse(courseId);
   if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
 

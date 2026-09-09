@@ -1,14 +1,12 @@
-// @ts-nocheck
 import { createReadStream } from "node:fs";
-import { stat, unlink } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { prisma } from "@/lib/db/client";
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
-import type { AuthClaims } from "@/lib/auth/session";
-import { randomUUID } from "node:crypto";
-import { publishCourseEvent } from "@/lib/realtime/event-bus";
+import { assetMetadata, hasSnapshotReference, recordOfferingMutation } from "@/lib/uploads/assets";
+import { canReadTemplateAsset } from "@/lib/uploads/scope";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
@@ -31,41 +29,26 @@ export async function GET(
   const parsed = ParamsSchema.safeParse(await context.params);
   if (!parsed.success) return new Response(null, { status: 404 });
 
-  const file = await prisma.uploadFile.findFirst({
-    where: { id: parsed.data.id, deletedAt: null },
+  const file = await prisma.fileAsset.findFirst({
+    where: { id: parsed.data.id, deletedAt: null }, include: { resource: true, artifactVersions: { select: { artifact: { select: { participation: { select: { enrollment: { select: { userId: true } } } } } } } } },
   });
-  if (!file || !canAccess(auth.claims, file.courseId, file.uploadedById)
-    || (file.courseId && !(await canAccessLegacyCourse(auth.claims, file.courseId, "read")))) {
-    return new Response(null, { status: 404 });
-  }
-  if (auth.claims.role === "student" && isFinalArtifactUpload(file.referencedBy)) {
-    const courseId = file.courseId;
-    const references = finalArtifactReferences(file.referencedBy);
-    const [ownDocument, ownPdf, activePresentation] = await Promise.all([
-      courseId
-        ? prisma.projectDocumentVersion.findFirst({
-            where: { courseId, studentId: auth.claims.studentId, docxUploadId: file.id, status: "submitted" },
-            select: { id: true },
-          })
-        : null,
-      courseId
-        ? prisma.projectPdfVersion.findFirst({
-            where: { courseId, studentId: auth.claims.studentId, uploadId: file.id, status: "submitted" },
-            select: { id: true },
-          })
-        : null,
-      courseId
-        ? prisma.showcasePresentation.findFirst({
-            where: { courseId, status: "active", artifactVersionId: { in: references } },
-            select: { id: true },
-          })
-        : null,
-    ]);
-    if (!ownDocument && !ownPdf && !activePresentation) return new Response(null, { status: 404 });
-  }
-  const classroomVariant = new URL(request.url).searchParams.get("variant") === "classroom";
-  const selectedStoredName = classroomVariant ? file.previewStoredName : file.storedName;
-  const selectedMimeType = classroomVariant ? file.previewMimeType : file.mimeType;
+  if (!file) return new Response(null, { status: 404 });
+  const owns = file.uploadedById === auth.claims.sub;
+  const courseAccess = file.offeringId && await canAccessLegacyCourse(auth.claims, file.offeringId, 'read');
+  const templateAccess = !file.offeringId && !owns && auth.claims.role === 'student' && auth.claims.sub
+    && await canReadTemplateAsset(auth.claims.sub, file.id);
+  if (!owns && !templateAccess && (!courseAccess || (!file.resource && auth.claims.role !== 'teacher'))) return new Response(null, { status: 404 });
+  if (file.offeringId && !courseAccess) return new Response(null, { status: 404 });
+  // Student outcomes remain private; teachers with offering access may review them.
+  if (auth.claims.role === 'student' && file.artifactVersions.some((version) => version.artifact.participation.enrollment.userId !== auth.claims.sub)) return new Response(null, { status: 404 });
+  const classroomVariant = new URL(request.url).searchParams.get('variant') === 'classroom';
+  const metadata = assetMetadata(file.resource?.metadata);
+  const preview = classroomVariant
+    ? await prisma.fileAsset.findFirst({ where: { ...(typeof metadata.previewAssetId === 'string'
+      ? { id: metadata.previewAssetId } : { storageKey: `${file.id}.classroom.pdf`, uploadedById: file.uploadedById }),
+      offeringId: file.offeringId, deletedAt: null } }) : null;
+  const selectedStoredName = classroomVariant ? preview?.storageKey : file.storageKey;
+  const selectedMimeType = classroomVariant ? preview?.mimeType : file.mimeType;
   const download = new URL(request.url).searchParams.get("download") === "1";
   if (
     !selectedStoredName
@@ -110,7 +93,7 @@ export async function GET(
       ...(range ? { "Content-Range": `bytes ${start}-${end}/${info.size}` } : {}),
       "Accept-Ranges": "bytes",
       "Content-Disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(
-        classroomVariant ? classroomPreviewName(file.fileName) : file.fileName,
+        classroomVariant ? classroomPreviewName(file.originalName) : file.originalName,
       )}`,
       ETag: etag,
       "Last-Modified": info.mtime.toUTCString(),
@@ -140,191 +123,56 @@ export async function PATCH(
   if (!parsedBody.success) {
     return Response.json({ message: "资源展示方式无效。" }, { status: 400 });
   }
-  const resource = await prisma.courseResource.findFirst({
-    where: { id: parsedParams.data.id },
-    select: {
-      id: true,
-      courseId: true,
-      type: true,
-      previewType: true,
-    },
-  });
-  const isPdf = resource?.type.toUpperCase() === "PDF"
-    || resource?.previewType?.toUpperCase() === "PDF";
-  if (!resource || !isPdf) {
-    return Response.json({ message: "只有 PDF 资源可以切换展示方式。" }, { status: 404 });
+  const resource = await prisma.resource.findFirst({ where: { fileAssetId: parsedParams.data.id }, include: { fileAsset: true } });
+  const metadata = assetMetadata(resource?.metadata);
+  if (!resource || resource.fileAsset?.deletedAt || !(resource.type.toUpperCase() === 'PDF' || metadata.previewType === 'PDF')) {
+    return Response.json({ message: '只有 PDF 资源可以切换展示方式。' }, { status: 404 });
   }
-  if (!(await canAccessLegacyCourse(auth.claims, resource.courseId, "write"))) {
-    return Response.json({ message: "课程当前不允许修改资源。" }, { status: 403 });
-  }
-
-  const durableEvent = await prisma.$transaction(async (tx) => {
-    await tx.courseResource.update({
-      where: { id: resource.id },
-      data: { displayMode: parsedBody.data.displayMode },
-    });
-    const updatedCourse = await tx.course.update({
-      where: { id: resource.courseId },
-      data: { version: { increment: 1 } },
-      select: { version: true },
-    });
-    return tx.courseEvent.create({
-      data: {
-        courseId: resource.courseId,
-        requestId: randomUUID(),
-        type: "UPDATE_COURSE",
-        actorId: auth.claims.sub!,
-        actorRole: auth.claims.role,
-        courseVersion: updatedCourse.version,
-        payload: { source: "course-resource-display-mode", scope: "course" },
-      },
-      select: { cursor: true, courseVersion: true },
-    });
+  if (!(await canAccessLegacyCourse(auth.claims, resource.offeringId, 'write'))) return new Response(null, { status: 403 });
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "Resource" WHERE "id" = ${resource.id} FOR UPDATE`;
+    const current = await tx.resource.findUniqueOrThrow({ where: { id: resource.id } });
+    await tx.resource.update({ where: { id: resource.id }, data: { metadata: { ...assetMetadata(current.metadata), displayMode: parsedBody.data.displayMode } } });
+    await recordOfferingMutation(tx, resource.offeringId, auth.claims.sub!, 'resource-display-mode');
   });
-  try {
-    await publishCourseEvent(resource.courseId, {
-      type: "course-updated",
-      courseId: resource.courseId,
-      at: new Date().toISOString(),
-      payload: {
-        actionType: "UPDATE_COURSE",
-        courseVersion: durableEvent.courseVersion,
-        eventCursor: durableEvent.cursor.toString(),
-      },
-    });
-  } catch (error) {
-    console.error("[uploads] display mode saved; realtime publish failed", {
-      courseId: resource.courseId,
-      eventCursor: durableEvent.cursor.toString(),
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-  return Response.json({
-    id: resource.id,
-    displayMode: parsedBody.data.displayMode,
-  });
+  return Response.json({ id: resource.id, displayMode: parsedBody.data.displayMode });
 }
 
-export async function DELETE(
-  request: Request,
-  context: { params: Promise<{ id: string }> },
-) {
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   const csrfError = requireSameOrigin(request);
   if (csrfError) return csrfError;
   const auth = await authenticateRequest(request);
-  if ("response" in auth) return auth.response;
+  if ('response' in auth) return auth.response;
   const parsed = ParamsSchema.safeParse(await context.params);
   if (!parsed.success) return new Response(null, { status: 404 });
-  const file = await prisma.uploadFile.findFirst({
-    where: { id: parsed.data.id, deletedAt: null },
-  });
-  if (!file || (auth.claims.role !== "teacher" && file.uploadedById !== auth.claims.sub)) {
-    return new Response(null, { status: 404 });
-  }
-  if (file.courseId && !(await canAccessLegacyCourse(auth.claims, file.courseId, "write"))) {
-    return new Response(null, { status: 403 });
-  }
-  if (isFinalArtifactUpload(file.referencedBy)) {
-    return Response.json({ code: "IMMUTABLE_ARTIFACT", message: "最终成果版本不可删除。" }, { status: 409 });
-  }
-  if (path.basename(file.storedName) !== file.storedName) {
-    return new Response(null, { status: 404 });
-  }
-
-  const durableEvent = await prisma.$transaction(async (tx) => {
-    const removedResource = await tx.courseResource.deleteMany({
-      where: { id: file.id, ...(file.courseId ? { courseId: file.courseId } : {}) },
-    });
-    await tx.uploadFile.update({
-      where: { id: file.id },
-      data: { deletedAt: new Date(), referencedBy: [], refCount: 0 },
-    });
-    if (file.courseId && removedResource.count > 0) {
-      const updatedCourse = await tx.course.update({
-        where: { id: file.courseId },
-        data: { version: { increment: 1 } },
-        select: { version: true },
-      });
-      return tx.courseEvent.create({
-        data: {
-          courseId: file.courseId,
-          requestId: randomUUID(),
-          type: "UPDATE_COURSE",
-          actorId: auth.claims.sub!,
-          actorRole: auth.claims.role,
-          courseVersion: updatedCourse.version,
-          payload: { source: "course-resource-delete", scope: "course" },
-        },
-        select: { cursor: true, courseVersion: true },
-      });
+  const file = await prisma.fileAsset.findFirst({ where: { id: parsed.data.id, deletedAt: null }, include: { resource: true } });
+  if (!file || (!file.offeringId && file.uploadedById !== auth.claims.sub)
+    || (auth.claims.role === 'student' && file.uploadedById !== auth.claims.sub)) return new Response(null, { status: 404 });
+  if (file.offeringId && !(await canAccessLegacyCourse(auth.claims, file.offeringId, 'write'))) return new Response(null, { status: 403 });
+  if (file.resource && auth.claims.role !== 'teacher') return new Response(null, { status: 403 });
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "FileAsset" WHERE "id" = ${file.id} FOR UPDATE`;
+    if (await tx.artifactVersion.count({ where: { fileAssetId: file.id } }) || await hasSnapshotReference(tx, file.id)) return false;
+    // Logical deletion preserves metadata; disk removal is deferred to cleanup.
+    await tx.fileAsset.update({ where: { id: file.id }, data: { deletedAt: new Date() } });
+    if (file.resource && file.offeringId) {
+      const previewId = assetMetadata(file.resource.metadata).previewAssetId;
+      if (typeof previewId === 'string' && !await tx.artifactVersion.count({ where: { fileAssetId: previewId } })
+        && !await hasSnapshotReference(tx, previewId)) {
+        await tx.fileAsset.updateMany({ where: { id: previewId, offeringId: file.offeringId, resource: null }, data: { deletedAt: new Date() } });
+      }
+      await tx.resource.delete({ where: { id: file.resource.id } });
+      await recordOfferingMutation(tx, file.offeringId, auth.claims.sub!, 'resource-delete');
     }
-    return null;
+    return true;
   });
-  if (durableEvent && file.courseId) {
-    try {
-      await publishCourseEvent(file.courseId, {
-        type: "course-updated",
-        courseId: file.courseId,
-        at: new Date().toISOString(),
-        payload: {
-          actionType: "UPDATE_COURSE",
-          courseVersion: durableEvent.courseVersion,
-          eventCursor: durableEvent.cursor.toString(),
-        },
-      });
-    } catch (error) {
-      console.error("[uploads] resource deletion publish failed; clients will reconcile by cursor", {
-        courseId: file.courseId,
-        eventCursor: durableEvent.cursor.toString(),
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  await unlink(
-    /* turbopackIgnore: true */ path.join(dataDir, file.storedName),
-  ).catch((error) => {
-    console.warn("[uploads] Resource metadata deleted but disk cleanup failed", {
-      uploadId: file.id,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
-  if (file.previewStoredName && path.basename(file.previewStoredName) === file.previewStoredName) {
-    await unlink(
-      /* turbopackIgnore: true */ path.join(dataDir, file.previewStoredName),
-    ).catch((error) => {
-      console.warn("[uploads] Resource preview metadata deleted but disk cleanup failed", {
-        uploadId: file.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }
+  if (!result) return Response.json({ code: 'IMMUTABLE_ARTIFACT', message: '成果版本引用的文件不可删除。' }, { status: 409 });
   return new Response(null, { status: 204 });
 }
 
 function classroomPreviewName(fileName: string): string {
   const parsed = path.parse(fileName);
   return `${parsed.name}-课堂版.pdf`;
-}
-
-function finalArtifactReferences(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string =>
-    typeof item === "string" && /^(?:project-pdf-version|project-version):/.test(item),
-  ).map((item) => item.slice(item.indexOf(":") + 1)).filter(Boolean);
-}
-
-function isFinalArtifactUpload(value: unknown): boolean {
-  return finalArtifactReferences(value).length > 0;
-}
-
-function canAccess(
-  claims: AuthClaims,
-  courseId: string | null,
-  uploadedById: string,
-): boolean {
-  if (claims.role === "teacher") return true;
-  if (claims.sub === uploadedById) return true;
-  return !!courseId && claims.courseId === courseId;
 }
 
 function parseRange(

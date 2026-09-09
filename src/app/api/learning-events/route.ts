@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { aggregateCommonIssues, analyzeStudentLearning } from "@/lib/learning-analytics/analyzer";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import type { Course, LearningEvent, LearningSignal } from "@/lib/session/types";
@@ -6,10 +5,9 @@ import {
   authenticateRequest,
   requireSameOrigin,
 } from "@/lib/auth/request-guards";
-import { isAuthConfigured } from "@/lib/auth/session";
-import { isDatabaseConfigured, prisma } from "@/lib/db/client";
-import { mirrorLegacyLearningEvents } from "@/lib/platform/repository";
-import { canAccessLegacyCourse } from "@/lib/platform/access";
+import { createHash } from "node:crypto";
+import { authorizeLegacyAiScope, legacyAiError } from "@/lib/ai-collaboration/legacy-scope";
+import { appendValidatedLearningEvents } from "@/lib/platform/learning-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,10 +54,8 @@ function enrichContentReference(event: LearningEvent, course: Course): LearningE
 export async function POST(request: Request) {
   const csrfError = requireSameOrigin(request);
   if (csrfError) return csrfError;
-  const auth = isAuthConfigured()
-    ? await authenticateRequest(request, "student")
-    : null;
-  if (auth && "response" in auth) return auth.response;
+  const auth = await authenticateRequest(request, "student");
+  if ("response" in auth) return auth.response;
 
   let body: LearningEventsRequest;
   try {
@@ -70,39 +66,14 @@ export async function POST(request: Request) {
 
   const courseId = body.courseId?.trim();
   const studentId = body.studentId?.trim();
-  if (!courseId || !studentId || !Array.isArray(body.events) || body.events.length === 0) {
+  if (!courseId || !studentId || !Array.isArray(body.events) || body.events.length === 0 || body.events.length > 100) {
     return Response.json({ error: "INVALID_REQUEST" }, { status: 400 });
   }
-  if (auth && !("response" in auth)) {
-    if (auth.claims.role !== "student") return Response.json({ error: "STUDENT_SCOPE_MISMATCH" }, { status: 403 });
-    if (!(await canAccessLegacyCourse(auth.claims, courseId, "write"))) {
-      return Response.json({ error: "COURSE_LOCKED" }, { status: 403 });
-    }
-    if (auth.claims.userId) {
-      // Platform sessions are intentionally course-independent. Resolve the
-      // requested legacy classroom through Enrollment instead of trusting the
-      // compatibility courseId claim.
-      const enrollment = await prisma.enrollment.findFirst({
-        where: {
-          userId: auth.claims.userId,
-          status: "active",
-          offering: {
-            status: "open",
-            OR: [
-              { legacyCourseId: courseId },
-              { instances: { some: { OR: [{ legacyCourseId: courseId }, { legacySourceCourseId: courseId }] } } },
-            ],
-          },
-        },
-        select: { id: true },
-      });
-      if (!enrollment || (studentId !== auth.claims.studentId && studentId !== auth.claims.userId)) {
-        return Response.json({ error: "STUDENT_SCOPE_MISMATCH" }, { status: 403 });
-      }
-    } else if (auth.claims.courseId !== courseId || auth.claims.studentId !== studentId) {
-      return Response.json({ error: "STUDENT_SCOPE_MISMATCH" }, { status: 403 });
-    }
-  }
+  let participationId: string;
+  try {
+    const scope = await authorizeLegacyAiScope(auth.claims, courseId, studentId, true);
+    participationId = scope.participation!.id;
+  } catch (error) { return legacyAiError(error); }
 
   const course = await getCourse(courseId);
   if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
@@ -110,9 +81,8 @@ export async function POST(request: Request) {
     return Response.json({ error: "STUDENT_NOT_IN_COURSE" }, { status: 403 });
   }
 
-  const incoming = body.events
-    .filter((event) => isValidEvent(event, courseId, studentId))
-    .map((event) => enrichContentReference(event, course));
+  if (body.events.some(event => !isValidEvent(event, courseId, studentId))) return Response.json({ error: "INVALID_EVENTS" }, { status: 400 });
+  const incoming = body.events.map(event => enrichContentReference(event, course));
   if (!incoming.length) return Response.json({ error: "NO_VALID_EVENTS" }, { status: 400 });
 
   const existingKeys = new Set((course.learningEvents ?? []).map((event) => event.idempotencyKey));
@@ -122,15 +92,24 @@ export async function POST(request: Request) {
     return true;
   });
 
+  try {
+    await appendValidatedLearningEvents(auth.claims, incoming.map(event => ({
+      idempotencyKey: `legacy:${createHash("sha256").update(JSON.stringify([courseId, event.idempotencyKey])).digest("hex")}`,
+      type: event.type, occurredAt: event.occurredAt, durationMs: event.durationMs,
+      participationId, source: "legacy-classroom", metadata: { legacy: event },
+    })));
+  } catch (error) { return legacyAiError(error); }
+
   let derivedSignals: LearningSignal[] = course.learningSignals ?? [];
   let commonIssues = course.classCommonIssues ?? [];
-  if (accepted.length) {
+  if (incoming.length) {
     await updateCourse(courseId, (current) => {
-      const learningEvents = [...(current.learningEvents ?? []), ...accepted].slice(-10_000);
+      const currentKeys = new Set((current.learningEvents ?? []).map(event => event.idempotencyKey));
+      const learningEvents = [...(current.learningEvents ?? []), ...incoming.filter(event => !currentKeys.has(event.idempotencyKey))].slice(-10_000);
       const affectedScopes = new Set(
-        accepted.map((event) => [event.studentId, event.stageKey, event.sceneId ?? ""].join("|")),
+        incoming.map((event) => [event.studentId, event.stageKey, event.sceneId ?? ""].join("|")),
       );
-      for (const event of accepted) {
+      for (const event of incoming) {
         if (event.type !== "stage-goal-complete") continue;
         for (const existingEvent of learningEvents) {
           if (existingEvent.studentId === event.studentId && existingEvent.stageKey === event.stageKey) {
@@ -178,18 +157,6 @@ export async function POST(request: Request) {
         classCommonIssues: commonIssues,
       };
     }, { targetStudentId: studentId });
-  }
-
-  // Mirror the complete batch, including events already present in the legacy
-  // store. The platform writer is idempotent, so retrying duplicates is safe
-  // and lets a transient mirror failure recover on the client's next retry
-  // instead of losing the research record permanently.
-  if (isDatabaseConfigured() && auth && !('response' in auth)) {
-    try {
-      await mirrorLegacyLearningEvents(auth.claims, courseId, incoming);
-    } catch (error) {
-      console.error("[learning-events] unable to mirror platform event", error);
-    }
   }
 
   return Response.json({

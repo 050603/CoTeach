@@ -1,355 +1,228 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { LearningArt } from "@/components/platform/learning-art";
+import { PlatformLoading, PlatformEmpty } from "@/components/platform/platform-feedback";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { ArrowRight, Plus } from "lucide-react";
 import {
-  ArrowLeft,
-  ArrowRight,
-  BookOpen,
-  KeyRound,
-  Play,
-  RotateCcw,
-} from "lucide-react";
-import { DashboardShell } from "@/components/dashboard-shell";
-import { JoinClassForm } from "@/components/join-class-form";
-import { useSession, useHydrated } from "@/lib/session/store";
+  CourseCover,
+  StudentShell,
+  courseDate,
+  studentInput,
+  studentPrimary,
+} from "@/components/platform/student-shell";
 
 type PlatformCourse = {
   id: string;
   name: string;
+  description: string | null;
+  coverImageUrl: string | null;
+  startsAt: string | null;
   term: string | null;
-  status: string;
-  teacher: { displayName: string };
-  chapters: Array<{ activities: Array<{ type: string; progress: { status: string } }> }>;
+  status?: string;
+  teacher: { displayName: string } | null;
+  chapters: Array<{ isOpen?: boolean; activities: Array<{ id?: string; title?: string; isOpen?: boolean; progress: { status: string; lastAccessedAt?: string | null } }> }>;
 };
 
-export default function StudentEntryPage() {
+function StudentEntryPageContent() {
   const router = useRouter();
-  const { rejoinClass, user, studentName, joinedCourseId, courses, getLeftClassHistory } = useSession();
-  const hydrated = useHydrated();
-  const [error, setError] = useState<string | undefined>();
-  const [busy, setBusy] = useState(false);
-  const [platformCourses, setPlatformCourses] = useState<PlatformCourse[]>([]);
-  const [platformReady, setPlatformReady] = useState(false);
-  const [platformAuthenticated, setPlatformAuthenticated] = useState(false);
-  const [platformInvite, setPlatformInvite] = useState("");
-  const [platformInviteError, setPlatformInviteError] = useState<string | null>(null);
-  const [platformInviteBusy, setPlatformInviteBusy] = useState(false);
-
+  const search = useSearchParams();
+  const showAll = search.get("all") === "1";
+  const [courses, setCourses] = useState<PlatformCourse[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+  const [invite, setInvite] = useState("");
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
+  const [showJoin, setShowJoin] = useState(false);
   useEffect(() => {
-    if (!hydrated) return;
     let active = true;
     fetch("/api/platform/courses", { cache: "no-store" })
       .then(async (response) => {
-        const data = response.ok ? (await response.json()) as { courses?: PlatformCourse[] } : {};
-        if (active) {
-          setPlatformCourses(data.courses ?? []);
-          setPlatformAuthenticated(response.ok);
-          setPlatformReady(true);
+        if (response.status === 401 || response.status === 403) {
+          router.replace("/student/login");
+          return;
         }
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message ?? "课程加载失败");
+        if (!active) return;
+        if (data.courses.length === 1 && !showAll) {
+          router.replace(`/student/courses/${data.courses[0].id}`);
+          return;
+        }
+        setCourses(data.courses);
+        setError(null);
       })
-      .catch(() => { if (active) setPlatformReady(true); });
-    return () => { active = false; };
-  }, [hydrated]);
-
-  const joinedCourse = joinedCourseId
-    ? courses.find((c) => c.id === joinedCourseId)
-    : undefined;
-
-  const leftHistory = hydrated ? getLeftClassHistory() : [];
-
-  async function handleJoin(code: string) {
-    setError(undefined);
-    setBusy(true);
+      .catch(() => {
+        if (active) setError("暂时无法加载课程，请重试。");
+      });
+    return () => {
+      active = false;
+    };
+  }, [router, showAll, retry]);
+  async function join(event: React.FormEvent) {
+    event.preventDefault();
+    if (joining) return;
+    setJoining(true);
+    setJoinError(null);
     try {
-      const response = await fetch("/api/platform/auth/invite", {
+      const response = await fetch("/api/platform/auth/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ invitationCode: invite }),
       });
-      const data = (await response.json().catch(() => ({}))) as {
-        message?: string;
-      };
-      if (!response.ok) { setError(data.message ?? "邀请码无效，或教学班尚未开放"); return; }
-      router.push(`/student/register?code=${encodeURIComponent(code.trim().toUpperCase())}`);
-    } catch (error) {
-      console.error("[student] join failed:", error);
-      setError("网络异常，请稍后重试");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function handleRejoin(record: { courseId: string; courseName: string; studentId: string; studentName: string; leftAt: string }) {
-    setError(undefined);
-    setBusy(true);
-    const result = rejoinClass(record);
-    setBusy(false);
-    if (!result.ok) {
-      setError(result.reason);
-      return;
-    }
-    router.replace(`/student/classroom/${result.course.id}`);
-  }
-
-  async function joinPlatformCourse() {
-    if (!platformInvite.trim() || platformInviteBusy) return;
-    setPlatformInviteBusy(true); setPlatformInviteError(null);
-    try {
-      const response = await fetch(platformAuthenticated ? "/api/platform/auth/join" : "/api/platform/auth/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(platformAuthenticated ? { invitationCode: platformInvite } : { code: platformInvite }) });
       const data = await response.json();
-      if (!response.ok) { setPlatformInviteError(data.message ?? "邀请码无效"); return; }
-      if (!platformAuthenticated) { router.push(`/student/register?code=${encodeURIComponent(platformInvite.trim().toUpperCase())}`); return; }
-      const refreshed = await fetch("/api/platform/courses", { cache: "no-store" });
-      if (refreshed.ok) setPlatformCourses((await refreshed.json()).courses ?? []);
-      setPlatformInvite("");
-    } catch { setPlatformInviteError("网络错误，请稍后重试"); } finally { setPlatformInviteBusy(false); }
+      if (!response.ok) throw new Error(data.message ?? "加入失败");
+      router.push(
+        `/student/courses/${data.offeringId ?? data.enrollment?.offeringId}`,
+      );
+    } catch (reason) {
+      setJoinError(
+        reason instanceof Error ? reason.message : "网络错误，请重试",
+      );
+    } finally {
+      setJoining(false);
+    }
   }
-
-  if (hydrated && platformReady) {
-    return <PlatformCourseHome courses={platformCourses} inviteCode={platformInvite} inviteError={platformInviteError} inviteBusy={platformInviteBusy} onInviteCodeChange={setPlatformInvite} onJoin={() => void joinPlatformCourse()} />;
-  }
-
+  const availableTasks = (courses ?? []).filter(course => course.status === "open").flatMap(course =>
+    course.chapters.filter(chapter => chapter.isOpen).flatMap(chapter => chapter.activities
+      .filter(task => task.id && task.isOpen && !["completed", "submitted"].includes(task.progress.status))
+      .map(task => ({ ...task, courseName: course.name }))));
+  const continuing = availableTasks.filter(task => task.progress.status === "in_progress")
+    .sort((a, b) => (Date.parse(b.progress.lastAccessedAt ?? "") || 0) - (Date.parse(a.progress.lastAccessedAt ?? "") || 0))[0] ?? availableTasks[0];
   return (
-    <DashboardShell
-      role="student"
-      userName={joinedCourse ? (studentName ?? user.name) : undefined}
-      variant="bare"
-    >
-      <div className="pbl-content-container px-4 pb-12 pt-6 md:px-6 md:pt-10">
-        {/* 页面标题 */}
-        <header className="mb-6 text-center">
-          <h1 className="text-[length:clamp(1.625rem,3.4vw,2.25rem)] font-extrabold leading-tight tracking-tight text-[var(--pbl-text-strong)]">
-            <span className="pbl-display-gradient">加入项目式课堂</span>
-          </h1>
-          <p className="mt-2 text-[14px] text-[var(--pbl-text-muted)]">
-            输入教师提供的邀请码，开始你的项目学习
+    <StudentShell>
+      <header className="pbl-page-heading"><LearningArt />
+        <div>
+          <p className="text-xs tracking-widest text-[var(--pbl-student)]">
+            我的学习
           </p>
-          <div className="mt-3 flex justify-center gap-3 text-xs">
-            <Link className="font-semibold text-indigo-600 hover:underline" href="/student/login">学生登录</Link>
-            <span className="text-[var(--pbl-border-strong)]">·</span>
-            <Link className="font-semibold text-indigo-600 hover:underline" href="/student/register">注册长期账号</Link>
-          </div>
-        </header>
-
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,27.5rem)_minmax(0,1fr)] lg:gap-8">
-            {/* 左：邀请码加入卡片 */}
-            <section className="space-y-4">
-              {joinedCourse?.status === "teaching" ? (
-                <AvailableClassCard
-                  course={joinedCourse}
-                  onReturn={() => router.replace(`/student/classroom/${joinedCourse.id}`)}
-                  studentName={studentName ?? user.name}
-                />
-              ) : null}
-
-              {/* 快速重新加入 */}
-              {leftHistory.length > 0 ? (
-                <div className="rounded-[var(--radius-lg)] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-4 shadow-[var(--shadow-soft)]">
-                  <div className="mb-3 flex items-center gap-2">
-                    <span className="grid h-6 w-6 place-items-center rounded-[var(--radius-xs)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]">
-                      <RotateCcw size={12} />
-                    </span>
-                    <span className="text-[13px] font-bold text-[var(--pbl-text-strong)]">快速重新加入</span>
-                  </div>
-                  <div className="space-y-1.5">
-                    {leftHistory.map((record) => (
-                      <button
-                        key={record.courseId}
-                        className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-white p-3 text-left transition hover:-translate-y-0.5 hover:border-[var(--pbl-student-border)] hover:bg-[var(--pbl-student-soft)]/40 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={busy}
-                        onClick={() => handleRejoin(record)}
-                        type="button"
-                      >
-                        <div className="min-w-0">
-                          <div className="truncate text-[13px] font-bold text-[var(--pbl-text-strong)]">{record.courseName}</div>
-                          <div className="mt-0.5 truncate text-[11px] text-[var(--pbl-text-muted)]">
-                            以 <span className="font-semibold text-[var(--pbl-text)]">{record.studentName}</span> 身份重新加入
-                          </div>
-                        </div>
-                        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--pbl-student)] text-white">
-                          <ArrowRight size={13} />
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="mt-3 border-t border-[var(--pbl-border)] pt-2.5 text-center text-[11px] text-[var(--pbl-text-subtle)]">
-                    或使用邀请码加入新课堂 ↓
-                  </div>
-                </div>
-              ) : null}
-
-              {/* 邀请码表单 */}
-              <div className="relative overflow-hidden rounded-[var(--radius-lg)] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] shadow-[var(--shadow-floating)]">
-                {/* 顶部装饰条 */}
-                <div className="h-1 w-full bg-gradient-to-r from-[var(--pbl-teacher)] via-[var(--pbl-ai)] to-[var(--pbl-student)]" />
-                <div className="p-5 md:p-7">
-                  <JoinClassForm
-                    busy={busy}
-                    errorMessage={error}
-                    onSubmit={handleJoin}
-                    variant="bare"
-                  />
-                </div>
-              </div>
-
-              {/* 底部辅助链接 */}
-              <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-[11px] text-[var(--pbl-text-muted)]">
-                <Link
-                  className="inline-flex items-center gap-1 transition hover:text-[var(--pbl-student)]"
-                  href="/"
-                >
-                  <ArrowLeft size={12} /> 返回首页
-                </Link>
-                <span className="text-[var(--pbl-border-strong)]">|</span>
-                <span className="inline-flex items-center gap-1">
-                  <KeyRound size={12} /> 没有邀请码？请向任课教师索取
-                </span>
-              </div>
-            </section>
-
-            {/* 右：使用说明（粉色信息条） */}
-            <aside>
-              <div className="rounded-[var(--radius-lg)] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-5 shadow-[var(--shadow-soft)] md:p-6">
-                <div className="mb-4 flex items-center gap-2">
-                  <span className="h-3 w-0.5 rounded-full bg-[var(--pbl-student)]" />
-                  <h2 className="text-[13px] font-bold uppercase tracking-[0.14em] text-[var(--pbl-text-strong)]">
-                    使用说明
-                  </h2>
-                </div>
-                <p className="mb-4 text-[12px] leading-5 text-[var(--pbl-text-muted)]">
-                  第一次使用本系统？按下面 4 步即可开始你的项目学习之旅。
-                </p>
-
-                <ol className="space-y-2.5 2xl:grid 2xl:grid-cols-2 2xl:gap-3 2xl:space-y-0">
-                  <InstructionStep
-                    step={1}
-                    title="向教师索取邀请码"
-                    desc="任课教师会提供 6 位字母数字组合的邀请码，例如 A2K9QP。"
-                  />
-                  <InstructionStep
-                    step={2}
-                    title="填写邀请码和姓名"
-                    desc="在左侧表单中输入邀请码（不区分大小写）和你自己的姓名。"
-                  />
-                  <InstructionStep
-                    step={3}
-                    title="点击进入课堂"
-                    desc="提交后即加入教师正在授课的项目课堂，开始本轮学习。"
-                  />
-                  <InstructionStep
-                    step={4}
-                    title="跟随 AI 老师完成项目"
-                    desc="跟随教师完成五阶段课堂，在知识讲授中分节学习、完成小测，并在项目实践工作台完成自己的文档或代码成果。"
-                  />
-                </ol>
-
-                <div className="mt-5 rounded-[var(--radius-sm)] border border-dashed border-[var(--pbl-border-strong)] bg-[var(--pbl-surface-soft)]/60 p-3.5">
-                  <p className="text-[11px] font-semibold text-[var(--pbl-text-strong)]">提示</p>
-                  <p className="mt-1 text-[11px] leading-5 text-[var(--pbl-text-muted)]">
-                    课堂进行中如意外退出，可使用“快速重新加入”功能回到上次离开的课堂，无需重新输入邀请码。
-                  </p>
-                </div>
-              </div>
-            </aside>
-        </div>
-      </div>
-    </DashboardShell>
-  );
-}
-
-function PlatformCourseHome({ courses, inviteCode, inviteError, inviteBusy, onInviteCodeChange, onJoin }: { courses: PlatformCourse[]; inviteCode: string; inviteError: string | null; inviteBusy: boolean; onInviteCodeChange: (value: string) => void; onJoin: () => void }) {
-  return <main className="min-h-screen bg-[var(--pbl-bg)] px-5 py-10 text-[var(--pbl-text)]"><div className="mx-auto max-w-4xl"><div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">学生学习空间</p><h1 className="mt-2 text-3xl font-bold">我的课程</h1><p className="mt-2 text-sm text-[var(--pbl-text-muted)]">登录后继续跨章节、跨课堂的学习进度。</p></div><div className="flex gap-3 text-sm"><Link className="text-indigo-600" href="/student/login">学生登录</Link><Link className="text-indigo-600" href="/student/register">使用邀请码注册</Link></div></div>{courses.length ? <div className="mt-8 grid gap-4 md:grid-cols-2">{courses.map((course) => { const activities = course.chapters.flatMap((chapter) => chapter.activities).filter((activity) => activity.type === "Classroom"); const completed = activities.filter((activity) => activity.progress.status === "completed").length; return <Link className="rounded-xl border border-[var(--pbl-border)] bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-300" href={`/student/courses/${course.id}`} key={course.id}><div className="flex items-start justify-between gap-3"><h2 className="font-bold">{course.name}</h2><span className="text-xs font-semibold text-emerald-600">{course.status === "finished" ? "已结课" : "进行中"}</span></div><p className="mt-2 text-xs text-[var(--pbl-text-muted)]">{course.term ?? "教学班"} · {course.teacher.displayName}</p><div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-indigo-500" style={{ width: `${activities.length ? completed / activities.length * 100 : 0}%` }} /></div><p className="mt-2 text-xs text-[var(--pbl-text-muted)]">{activities.length ? `${completed}/${activities.length} 个课堂活动已完成` : "暂无可统计课堂活动"}</p></Link>; })}</div> : <p className="mt-8 rounded-xl border border-dashed border-[var(--pbl-border)] bg-white p-8 text-sm text-[var(--pbl-text-muted)]">你还没有加入教学班，请输入教师提供的邀请码。</p>}<section className="mt-8 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/60 p-5"><h2 className="font-bold">加入另一个教学班</h2><div className="mt-3 flex flex-wrap gap-2"><input className="min-h-10 min-w-60 flex-1 rounded-lg border border-indigo-200 bg-white px-3 text-sm uppercase" value={inviteCode} onChange={(event) => onInviteCodeChange(event.target.value.toUpperCase())} placeholder="输入课程邀请码" /><button className="min-h-10 rounded-lg bg-indigo-600 px-4 text-sm font-bold text-white disabled:opacity-50" disabled={inviteBusy} onClick={onJoin} type="button">{inviteBusy ? "加入中…" : "加入课程"}</button></div>{inviteError ? <p className="mt-2 text-sm text-rose-700">{inviteError}</p> : null}</section></div></main>;
-}
-
-/* ===== 子组件 ===== */
-
-function InstructionStep({
-  step,
-  title,
-  desc,
-}: {
-  step: number;
-  title: string;
-  desc: string;
-}) {
-  return (
-    <li
-      className="flex items-start gap-3 rounded-[var(--radius-sm)] border border-[#fce7f3] bg-[#fdf2f8] p-3 transition hover:border-[#f9a8d4] hover:bg-[#fce7f3]"
-    >
-      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[#ec4899] text-[12px] font-extrabold text-white">
-        {step}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-bold text-[var(--pbl-text-strong)]">{title}</p>
-        <p className="mt-0.5 text-[11px] leading-5 text-[var(--pbl-text-muted)]">{desc}</p>
-      </div>
-    </li>
-  );
-}
-
-function AvailableClassCard({
-  course,
-  studentName,
-  onReturn,
-}: {
-  course: {
-    id: string;
-    name: string;
-    subject?: string;
-    grade?: string;
-    currentStageIndex?: number;
-    stages?: Array<{ label: string }>;
-  };
-  studentName: string;
-  onReturn: () => void;
-}) {
-  const stage = course.stages?.[course.currentStageIndex ?? 0]?.label;
-  return (
-    <article className="relative overflow-hidden rounded-[var(--radius-lg)] border border-[var(--pbl-student-border)] bg-[linear-gradient(135deg,var(--pbl-student-soft),var(--pbl-surface)_62%)] p-4 shadow-[var(--shadow-soft)]">
-      <div className="absolute right-0 top-0 h-24 w-24 translate-x-8 -translate-y-8 rounded-full bg-[var(--pbl-student)]/10" />
-      <div className="relative">
-        <div className="flex items-start gap-3">
-          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-sm)] bg-[var(--pbl-student)] text-white shadow-sm">
-            <BookOpen size={18} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--pbl-student)]">
-                可返回的课堂
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-[var(--pbl-success)] ring-1 ring-[var(--pbl-success-border)]">
-                <span className="h-1.5 w-1.5 rounded-full bg-[var(--pbl-success)]" />
-                授课中
-              </span>
-            </div>
-            <h2 className="mt-1 truncate text-[17px] font-bold text-[var(--pbl-text-strong)]">
-              {course.name}
-            </h2>
-            <p className="mt-1 text-[11px] text-[var(--pbl-text-muted)]">
-              {[
-                course.subject,
-                course.grade,
-                stage ? `当前：${stage}` : undefined,
-              ].filter(Boolean).join(" · ") || "项目式学习课堂"}
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-4 flex items-center justify-between gap-3 border-t border-[var(--pbl-student-border)]/70 pt-3">
-          <p className="min-w-0 truncate text-[11px] text-[var(--pbl-text-muted)]">
-            以 <strong className="text-[var(--pbl-text)]">{studentName}</strong> 身份继续学习
+          <h1 className="mt-3 font-serif text-3xl font-semibold">我的课程</h1>
+          <p className="mt-3 text-sm text-[var(--pbl-text-muted)]">
+            选择课程，查看章节安排并继续学习。
           </p>
-          <button
-          className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-xs)] bg-[var(--pbl-student)] px-3.5 text-[12px] font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-[var(--pbl-student-hover)] hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[var(--pbl-student-border)] focus:ring-offset-2"
-          onClick={onReturn}
-          type="button"
+        </div>
+        <button
+          className="inline-flex min-h-11 items-center gap-2 rounded-[6px] border border-[var(--pbl-border)] px-4 text-sm"
+          onClick={() => setShowJoin(!showJoin)}
+          aria-expanded={showJoin}
         >
-            <Play size={13} fill="currentColor" /> 返回课堂
+          <Plus size={16} />
+          加入课程
+        </button>
+      </header>
+      {courses && courses.length > 0 && <section className="pbl-learning-overview" aria-label="学习概况"><div><p className="text-xs font-semibold text-[var(--pbl-student)]">每一步，都在积累</p><h2 className="mt-2 text-xl font-semibold">{continuing?.title ?? "今天，也向前一步"}</h2><p className="mt-3 text-sm leading-7 text-[var(--pbl-text-muted)]">{continuing ? `${continuing.courseName} · 接续你的学习任务` : "从课程目录找到下一项任务，继续你的探索。"}</p>{continuing && <Link className={`${studentPrimary} mt-4`} href={`/student/activities/${continuing.id}`}>{continuing.progress.status === "in_progress" ? "继续学习" : "开始下一项任务"}<ArrowRight size={16}/></Link>}</div><dl className="flex gap-8"><div><dt className="text-xs text-[var(--pbl-text-muted)]">已加入课程</dt><dd className="mt-3 text-3xl font-semibold tabular-nums">{courses.length}</dd></div><div><dt className="text-xs text-[var(--pbl-text-muted)]">已完成任务</dt><dd className="mt-3 text-3xl font-semibold tabular-nums">{courses.reduce((sum, course) => sum + course.chapters.flatMap(chapter => chapter.activities).filter(task => task.progress.status === "completed").length, 0)}</dd></div></dl></section>}
+      {showJoin || courses?.length === 0 ? (
+        <form
+          onSubmit={join}
+          className="mt-7 rounded-[10px] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-5"
+        >
+          <h2 className="font-semibold">使用邀请码加入课程</h2>
+          <div className="mt-3 flex flex-col items-start gap-3 sm:flex-row sm:items-end">
+            <label className="w-full max-w-sm text-sm">
+              课程邀请码
+              <input
+                required
+                value={invite}
+                onChange={(event) =>
+                  setInvite(event.target.value.toUpperCase())
+                }
+                className={studentInput}
+                placeholder="输入教师提供的邀请码"
+              />
+            </label>
+            <button
+              disabled={joining || !invite.trim()}
+              className={studentPrimary}
+            >
+              {joining ? "加入中…" : "加入并查看课程"}
+            </button>
+          </div>
+          {joinError ? (
+            <p role="alert" className="mt-3 text-sm text-[var(--pbl-danger)]">
+              {joinError}
+            </p>
+          ) : null}
+        </form>
+      ) : null}
+      {error ? (
+        <div role="alert" className="mt-10">
+          <p>{error}</p>
+          <button
+            className="mt-3 min-h-11 underline"
+            onClick={() => setRetry(retry + 1)}
+          >
+            重新加载
           </button>
         </div>
-      </div>
-    </article>
+      ) : courses === null ? (
+        <PlatformLoading label="正在打开学习空间…" />
+      ) : courses.length === 0 ? (
+        <PlatformEmpty title="学习旅程，即将开始" description="你还没有加入课程。加入后，课程大纲、课堂与作业将在这里呈现。" />
+      ) : (
+        <div className="mt-9 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {courses.map((course) => {
+            const tasks = course.chapters.flatMap(
+              (chapter) => chapter.activities,
+            );
+            const completed = tasks.filter(
+              (task) => task.progress.status === "completed",
+            ).length;
+            return (
+              <Link
+                key={course.id}
+                href={`/student/courses/${course.id}`}
+                className="pbl-course-card group transition-colors hover:border-[var(--pbl-student)]"
+              >
+                <CourseCover
+                  url={course.coverImageUrl}
+                  name={course.name}
+                  className="h-48"
+                />
+                <div className="p-5">
+                  <p className="text-xs text-[var(--pbl-text-muted)]">
+                    {course.term ?? "课程系列"} ·{" "}
+                    {course.teacher?.displayName ?? "任课教师待定"}
+                  </p>
+                  <h2 className="mt-3 font-serif text-xl font-semibold">
+                    {course.name}
+                  </h2>
+                  <p className="mt-3 text-xs text-[var(--pbl-text-muted)]">
+                    开课时间：{courseDate(course.startsAt)}
+                  </p>
+                  <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-[var(--pbl-student-soft)]" role="progressbar" aria-label={`${course.name}完成进度`} aria-valuenow={completed} aria-valuemin={0} aria-valuemax={Math.max(tasks.length, 1)}><div className="h-full rounded-full bg-[var(--pbl-student)]" style={{ width: `${tasks.length ? completed / tasks.length * 100 : 0}%` }} /></div>
+                  <div className="mt-5 flex items-center justify-between border-t border-[var(--pbl-border)] pt-4 text-sm">
+                    <span className="text-[var(--pbl-text-muted)]">
+                      {course.chapters.length} 章 · 已完成 {completed}/
+                      {tasks.length} 项
+                    </span>
+                    <ArrowRight
+                      size={18}
+                      className="text-[var(--pbl-student)]"
+                    />
+                  </div>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </StudentShell>
+  );
+}
+
+export default function StudentEntryPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="grid min-h-screen place-items-center bg-[var(--pbl-bg)] text-sm text-[var(--pbl-text-muted)]">
+          <p role="status">正在打开学习空间…</p>
+        </main>
+      }
+    >
+      <StudentEntryPageContent />
+    </Suspense>
   );
 }

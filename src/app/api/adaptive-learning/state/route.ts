@@ -79,8 +79,7 @@ async function authorize(request: Request, courseId: string, studentId: string) 
   const claims = await readAuthFromRequest(request, "student");
   if (!claims) return false;
   if (claims.role === "teacher") return canAccessLegacyCourse(claims, courseId, "read");
-  return claims.courseId === courseId
-    && claims.studentId === studentId
+  return claims.sub === studentId
     && canAccessLegacyCourse(claims, courseId, "write");
 }
 

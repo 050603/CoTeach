@@ -110,7 +110,7 @@ async function callSupport<T>(action: string, input: unknown): Promise<T> {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "UNKNOWN" }));
     const detail = err.detail ? `：${err.detail}` : "";
-    throw new Error(`${err.error ?? `API error ${res.status}`}${detail}`);
+    throw Object.assign(new Error(err.message ?? `${err.error ?? `API error ${res.status}`}${detail}`), { code: err.error });
   }
   const data = await res.json();
   return data.result as T;
@@ -254,7 +254,7 @@ export async function callStudentChat(
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "UNKNOWN" }));
     const detail = err.detail ? `：${err.detail}` : "";
-    throw new Error(`${err.error ?? `API error ${res.status}`}${detail}`);
+    throw Object.assign(new Error(err.message ?? `${err.error ?? `API error ${res.status}`}${detail}`), { code: err.error });
   }
   const data = await res.json();
   return data.reply as string;

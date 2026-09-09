@@ -27,7 +27,7 @@ describe("final course resource audit", () => {
         _openmaicSceneOutlines: [{
           id: "quiz-1",
           title: "主课达标测",
-          type: "quiz",
+          type: "slide",
           teachingToolPlan: [{
             id: "plan-1",
             tool: "whiteboard",
@@ -57,7 +57,7 @@ describe("final course resource audit", () => {
         id: "scene-1",
         outlineId: "quiz-1",
         title: "主课达标测",
-        type: "quiz",
+        type: "slide",
         order: 0,
         ttsPolicy: "target-duration",
         actions: [{ id: "speech-1", type: "speech", text: "开始测验" }],

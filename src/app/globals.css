@@ -21,7 +21,7 @@
   /* —— 背景与表面（暖白基调）—— */
   --background: #faf9f7;
   --foreground: #1c1917;
-  --pbl-bg: #faf9f7;
+  --pbl-bg: #f7f9fc;
   --pbl-surface: #ffffff;
   --pbl-surface-soft: #f5f4f1;
   --pbl-surface-raised: #ffffff;
@@ -486,6 +486,51 @@ body.plate-default-theme [data-slot="popover-content"] {
 
 .pbl-app-bg-role-student {
   background: var(--background);
+}
+
+/* Platform pages use the same role-led workspace atmosphere as the original
+   teacher and student dashboards. Keep these backgrounds outside the generic
+   surface token so dialogs and classroom canvases remain plain white. */
+.pbl-platform-page {
+  background-color: #f7f9fc;
+  background-image:
+    linear-gradient(rgba(29, 78, 216, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(29, 78, 216, 0.025) 1px, transparent 1px),
+    radial-gradient(circle at 8% 0%, rgba(59, 130, 246, 0.13), transparent 32rem),
+    radial-gradient(circle at 94% 8%, rgba(124, 58, 237, 0.08), transparent 28rem);
+  background-size: 64px 64px, 64px 64px, auto, auto;
+}
+
+.pbl-platform-page-student {
+  background-color: #f6faf8;
+  background-image:
+    linear-gradient(rgba(22, 101, 52, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(22, 101, 52, 0.022) 1px, transparent 1px),
+    radial-gradient(circle at 8% 0%, rgba(34, 197, 94, 0.12), transparent 32rem),
+    radial-gradient(circle at 94% 8%, rgba(59, 130, 246, 0.08), transparent 28rem);
+  background-size: 64px 64px, 64px 64px, auto, auto;
+}
+
+.pbl-platform-page :where(.font-serif) {
+  font-family: var(--font-sans);
+  letter-spacing: -0.025em;
+}
+
+.pbl-platform-topbar {
+  border-bottom: 1px solid var(--pbl-border);
+  background: color-mix(in srgb, white 94%, transparent);
+  box-shadow: 0 1px 10px rgba(30, 41, 59, 0.04);
+  backdrop-filter: blur(14px);
+}
+
+.pbl-platform-panel {
+  border: 1px solid var(--pbl-border);
+  background: color-mix(in srgb, white 97%, transparent);
+  box-shadow: var(--shadow-soft);
+}
+
+.pbl-platform-page .bg-\[\#E7E5DE\] {
+  background: linear-gradient(145deg, var(--pbl-teacher-soft), #eef2ff);
 }
 
 /* 玻璃顶栏：更克制，去除过度模糊 */
@@ -1805,27 +1850,41 @@ body.plate-default-theme [data-slot="popover-content"] {
 .praixis-origin__meaning {
   position: relative;
   z-index: 1;
-  min-height: 265px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 16px;
   margin-top: 30px;
+  text-align: left;
 }
 
 .praixis-origin__praxis-copy,
 .praixis-origin__praixis-copy {
-  position: absolute;
-  inset: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
+  padding: 22px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 14px 38px rgba(15, 23, 42, 0.055);
 }
 
 .praixis-origin__praxis-copy {
-  animation: praixis-origin-old-copy 12s ease-in-out infinite;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(240, 253, 250, 0.72));
 }
 
 .praixis-origin__praixis-copy {
-  opacity: 0;
-  transform: translateY(18px);
-  animation: praixis-origin-new-copy 12s ease-in-out infinite;
+  border-color: rgba(99, 102, 241, 0.16);
+  background: linear-gradient(145deg, rgba(238, 242, 255, 0.72), rgba(236, 254, 255, 0.72));
+}
+
+.praixis-origin__step {
+  margin-bottom: 14px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.18em;
 }
 
 .praixis-origin__greek {
@@ -1841,10 +1900,11 @@ body.plate-default-theme [data-slot="popover-content"] {
 }
 
 .praixis-origin__praxis-copy > p {
-  margin-top: 16px;
+  margin-top: 14px;
   color: var(--pbl-text-strong);
-  font-size: clamp(1rem, 2vw, 1.2rem);
+  font-size: 15px;
   font-weight: 650;
+  line-height: 1.65;
 }
 
 .praixis-origin__praxis-copy > p strong {
@@ -1853,34 +1913,8 @@ body.plate-default-theme [data-slot="popover-content"] {
 }
 
 .praixis-origin__taxonomy-group {
-  position: relative;
-  width: min(100%, 720px);
-  margin-top: 18px;
-  padding-bottom: 44px;
-}
-
-.praixis-origin__taxonomy-group::before {
-  position: absolute;
-  right: 10px;
-  bottom: 32px;
-  left: 10px;
-  height: 13px;
-  content: "";
-  border-right: 1.5px solid rgba(13, 148, 136, 0.48);
-  border-bottom: 1.5px solid rgba(13, 148, 136, 0.48);
-  border-left: 1.5px solid rgba(13, 148, 136, 0.48);
-  border-radius: 0 0 12px 12px;
-}
-
-.praixis-origin__taxonomy-group::after {
-  position: absolute;
-  bottom: 17px;
-  left: 50%;
-  width: 1.5px;
-  height: 16px;
-  content: "";
-  transform: translateX(-50%);
-  background: rgba(13, 148, 136, 0.48);
+  width: 100%;
+  margin-top: 16px;
 }
 
 .praixis-origin__taxonomy {
@@ -1896,7 +1930,7 @@ body.plate-default-theme [data-slot="popover-content"] {
   flex-direction: column;
   justify-content: center;
   gap: 6px;
-  padding: 12px;
+  padding: 10px 8px;
   border: 1px solid var(--pbl-border);
   border-radius: 14px;
   background: rgba(248, 250, 252, 0.88);
@@ -1906,7 +1940,7 @@ body.plate-default-theme [data-slot="popover-content"] {
 .praixis-origin__taxonomy strong {
   color: #334155;
   font-family: var(--font-editorial, serif);
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .praixis-origin__taxonomy small {
@@ -1925,46 +1959,104 @@ body.plate-default-theme [data-slot="popover-content"] {
   color: #0f766e;
 }
 
-.praixis-origin__praxis-copy .praixis-origin__aristotle {
-  position: absolute;
-  bottom: -1px;
-  left: 50%;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  padding: 8px 15px;
-  transform: translateX(-50%);
-  border: 1.5px solid rgba(13, 148, 136, 0.38);
-  border-radius: 999px;
-  background: linear-gradient(135deg, #f0fdfa, #ecfeff);
-  color: #0f766e;
-  font-size: 13px;
-  font-weight: 800;
-  white-space: nowrap;
-  box-shadow: 0 10px 28px rgba(13, 148, 136, 0.15);
+.praixis-origin__aristotle {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(13, 148, 136, 0.2);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .praixis-origin__aristotle span {
-  padding-right: 8px;
-  border-right: 1px solid rgba(13, 148, 136, 0.2);
+  grid-row: 1 / 3;
+  align-self: center;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: #e6fffb;
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.praixis-origin__aristotle strong {
   color: #0f4c81;
   font-family: var(--font-editorial, serif);
   font-size: 13px;
   font-weight: 850;
 }
 
+.praixis-origin__aristotle small {
+  color: var(--pbl-text-muted);
+  font-size: 11px;
+}
+
+.praixis-origin__bridge {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: #4f46e5;
+}
+
+.praixis-origin__bridge::before {
+  position: absolute;
+  inset-block: 14px;
+  left: 50%;
+  width: 1px;
+  content: "";
+  transform: translateX(-50%);
+  background: linear-gradient(transparent, rgba(99, 102, 241, 0.35), transparent);
+}
+
+.praixis-origin__bridge span,
+.praixis-origin__bridge small {
+  position: relative;
+  z-index: 1;
+  background: #fff;
+}
+
+.praixis-origin__bridge span {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  border-radius: 50%;
+  font-size: 18px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.12);
+}
+
+.praixis-origin__bridge small {
+  padding-block: 4px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  line-height: 1.45;
+  text-align: center;
+}
+
 .praixis-origin__thesis {
+  margin-top: 0;
   color: var(--pbl-text-strong);
-  font-size: clamp(1.4rem, 3vw, 2.1rem);
+  font-size: clamp(1.25rem, 2.1vw, 1.75rem);
   font-weight: 850;
+  line-height: 1.3;
   letter-spacing: -0.03em;
 }
 
 .praixis-origin__roles {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 8px;
   margin-top: 22px;
 }
@@ -1982,7 +2074,8 @@ body.plate-default-theme [data-slot="popover-content"] {
 .praixis-origin__praixis-copy > p:last-child {
   margin-top: 22px;
   color: var(--pbl-text-muted);
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 1.8;
 }
 
 .praixis-origin__praixis-copy strong {
@@ -2042,12 +2135,19 @@ body.plate-default-theme [data-slot="popover-content"] {
 
 @media (max-width: 640px) {
   .praixis-origin__stage {
-    min-height: 590px;
-    padding-inline: 16px;
+    min-height: 0;
+    padding: 44px 16px 18px;
   }
 
   .praixis-origin__meaning {
-    min-height: 345px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    margin-top: 24px;
+  }
+
+  .praixis-origin__praxis-copy,
+  .praixis-origin__praixis-copy {
+    padding: 18px;
   }
 
   .praixis-origin__taxonomy {
@@ -2058,22 +2158,34 @@ body.plate-default-theme [data-slot="popover-content"] {
     min-height: 58px;
   }
 
-  .praixis-origin__taxonomy-group {
-    padding-bottom: 54px;
+  .praixis-origin__bridge {
+    min-height: 58px;
+    flex-direction: row;
+    gap: 10px;
   }
 
-  .praixis-origin__praxis-copy .praixis-origin__aristotle {
-    max-width: calc(100vw - 80px);
-    white-space: normal;
+  .praixis-origin__bridge::before {
+    inset: 50% 16px auto;
+    width: auto;
+    height: 1px;
+    transform: translateY(-50%);
+    background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.35), transparent);
+  }
+
+  .praixis-origin__bridge small {
+    padding: 5px 8px;
+    background: #fff;
+  }
+
+  .praixis-origin__roles {
+    gap: 6px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .praixis-origin__mutable { width: 1.22em; }
-  .praixis-origin__a,
-  .praixis-origin__praxis-copy { display: none; }
-  .praixis-origin__ai,
-  .praixis-origin__praixis-copy {
+  .praixis-origin__a { display: none; }
+  .praixis-origin__ai {
     opacity: 1;
     transform: none;
   }

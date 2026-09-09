@@ -1,22 +1,19 @@
-// @ts-nocheck
 import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import type { AuthClaims } from "@/lib/auth/session";
-import { prisma } from "@/lib/db/client";
-import { lockCourseMutation } from "@/lib/db/course-mutation-lock";
+import { showcaseStore as store } from "./persistence";
+import { rowToSnapshot } from "./state";
+export { loadShowcaseState } from "./state";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
-import { findLegacyParticipation } from "@/lib/platform/access";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import type {
   FinalArtifactKind,
   FinalArtifactSummary,
   ProjectDocumentVersion,
   ProjectPdfVersion,
-  ShowcaseDisplayMode,
   ShowcasePresentationSnapshot,
-  ShowcasePresentationStatus,
-  ShowcaseViewState,
 } from "@/lib/session/types";
 import type {
   ShowcaseAction,
@@ -76,7 +73,8 @@ function assertCourseExists(course: CourseGate | null): asserts course is Course
 }
 
 function assertStudentCourse(claims: AuthClaims, courseId: string): asserts claims is Extract<AuthClaims, { role: "student" }> {
-  if (claims.role !== "student" || claims.courseId !== courseId) {
+  void courseId;
+  if (claims.role !== "student" || !claims.sub!) {
     throw new ShowcasePresentationError("FORBIDDEN", "学生身份与课程不匹配。", 403);
   }
 }
@@ -94,77 +92,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-}
-
-function asShowcaseStatus(value: string): ShowcasePresentationStatus {
-  return ["pending", "active", "rejected", "evaluating", "ended", "cancelled"].includes(value)
-    ? value as ShowcasePresentationStatus
-    : "ended";
-}
-
-function asDisplayMode(value: string): ShowcaseDisplayMode {
-  return value === "slides" ? "slides" : "continuous";
-}
-
-function rowToSnapshot(
-  row: {
-    id: string;
-    courseId: string;
-    groupId: string;
-    studentId: string;
-    artifactKind: string;
-    artifactVersionId: string;
-    artifactTitle: string;
-    displayMode: string;
-    status: string;
-    viewState: Prisma.JsonValue | null;
-    revision: number;
-    rejectionReason: string | null;
-    requestedAt: Date;
-    reviewedAt: Date | null;
-    reviewedBy: string | null;
-    startedAt: Date | null;
-    endedAt: Date | null;
-    evaluationNote?: string | null;
-    evaluatedAt?: Date | null;
-    evaluatedBy?: string | null;
-    updatedAt: Date;
-  },
-  studentName?: string,
-): ShowcasePresentationSnapshot {
-  const rawViewState = asRecord(row.viewState);
-  const viewState: ShowcaseViewState | undefined = row.viewState
-    ? {
-        page: typeof rawViewState.page === "number" ? rawViewState.page : undefined,
-        scrollRatio: typeof rawViewState.scrollRatio === "number" ? rawViewState.scrollRatio : undefined,
-        updatedAt: typeof rawViewState.updatedAt === "string" ? rawViewState.updatedAt : row.updatedAt.toISOString(),
-        revision: row.revision,
-      }
-    : undefined;
-  return {
-    id: row.id,
-    courseId: row.courseId,
-    groupId: row.groupId,
-    studentId: row.studentId,
-    studentName,
-    artifactKind: row.artifactKind === "pdf" ? "pdf" : "document",
-    artifactVersionId: row.artifactVersionId,
-    artifactTitle: row.artifactTitle,
-    displayMode: asDisplayMode(row.displayMode),
-    status: asShowcaseStatus(row.status),
-    revision: row.revision,
-    viewState,
-    rejectionReason: row.rejectionReason ?? undefined,
-    requestedAt: row.requestedAt.toISOString(),
-    reviewedAt: row.reviewedAt?.toISOString(),
-    reviewedBy: row.reviewedBy ?? undefined,
-    startedAt: row.startedAt?.toISOString(),
-    endedAt: row.endedAt?.toISOString(),
-    evaluationNote: row.evaluationNote ?? undefined,
-    evaluatedAt: row.evaluatedAt?.toISOString(),
-    evaluatedBy: row.evaluatedBy ?? undefined,
-    updatedAt: row.updatedAt.toISOString(),
-  };
 }
 
 function documentSummary(version: ProjectDocumentVersion): FinalArtifactSummary {
@@ -241,7 +168,7 @@ function isNewerVersion(leftDate: string, rightDate: string, leftSequence: numbe
 }
 
 async function loadCourseGate(courseId: string): Promise<CourseGate | null> {
-  return prisma.course.findUnique({
+  return store.loadCourse({
     where: { id: courseId },
     select: {
       id: true,
@@ -274,8 +201,8 @@ function parseShowcaseQueueConfig(value: unknown): Partial<ShowcaseQueueConfig> 
 
 async function loadStudentAndGroupRows(courseId: string) {
   const [students, members] = await Promise.all([
-    prisma.student.findMany({ where: { courseId }, orderBy: { createdAt: "asc" }, select: { id: true, name: true } }),
-    prisma.groupMember.findMany({ where: { courseId }, orderBy: { joinedAt: "asc" }, select: { groupId: true, studentId: true, studentName: true, joinedAt: true } }),
+    store.listStudents({ where: { courseId }, orderBy: { createdAt: "asc" }, select: { id: true, name: true } }),
+    store.listMembers({ where: { courseId }, orderBy: { joinedAt: "asc" }, select: { groupId: true, studentId: true, studentName: true, joinedAt: true } }),
   ]);
   return { students: students as StudentRow[], members: members as GroupMemberRow[] };
 }
@@ -283,8 +210,8 @@ async function loadStudentAndGroupRows(courseId: string) {
 async function loadFinalVersions(courseId: string, studentId?: string) {
   const where = studentId ? { courseId, studentId } : { courseId };
   const [documents, pdfs] = await Promise.all([
-    prisma.projectDocumentVersion.findMany({ where: { ...where, stageKey: "make" }, orderBy: { sequence: "desc" } }),
-    prisma.projectPdfVersion.findMany({ where: { ...where, stageKey: "make" }, orderBy: { sequence: "desc" } }),
+    store.listDocuments({ where: { ...where, stageKey: "make" }, orderBy: { sequence: "desc" } }),
+    store.listFiles({ where: { ...where, stageKey: "make" }, orderBy: { sequence: "desc" } }),
   ]);
   return {
     documents: documents.map((version) => ({
@@ -344,7 +271,7 @@ async function publishShowcaseEvent(
 }
 
 async function latestSnapshot(courseId: string, id: string) {
-  return prisma.showcasePresentation.findFirst({ where: { courseId, id } });
+  return store.findPresentation({ where: { courseId, id } });
 }
 
 async function assertAssignedStudent(
@@ -356,7 +283,7 @@ async function assertAssignedStudent(
     throw new ShowcasePresentationError("PRESENTER_NOT_ASSIGNED", "教师尚未设置汇报学生。", 409);
   }
   const effectivePresentingStudentId = course.presentingStudentId
-    ?? (await prisma.groupMember.findFirst({
+    ?? (await store.findMember({
       where: { courseId, groupId: course.presentingGroupId },
       orderBy: { joinedAt: "asc" },
       select: { studentId: true },
@@ -364,7 +291,7 @@ async function assertAssignedStudent(
   if (effectivePresentingStudentId && effectivePresentingStudentId !== studentId) {
     throw new ShowcasePresentationError("PRESENTER_NOT_ASSIGNED", "当前学生不是教师指定的汇报学生。", 403);
   }
-  const member = await prisma.groupMember.findFirst({
+  const member = await store.findMember({
     where: { courseId, groupId: course.presentingGroupId, studentId },
     select: { groupId: true, studentName: true },
   });
@@ -382,19 +309,19 @@ async function findLatestArtifact(
 ) {
   if (artifactKind === "file") return null;
   if (artifactKind === "document") {
-    const version = await prisma.projectDocumentVersion.findFirst({
+    const version = await store.findDocument({
       where: { id: artifactVersionId, courseId, studentId, stageKey: "make", status: "submitted" },
       orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }, { sequence: "desc" }],
     });
     if (!version) return null;
-    const latest = await prisma.projectDocumentVersion.findFirst({
+    const latest = await store.findDocument({
       where: { courseId, studentId, stageKey: "make", status: "submitted" },
       orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }, { sequence: "desc" }],
       select: { id: true },
     });
     return latest?.id === version.id ? { kind: "document" as const, version, title: version.title } : null;
   }
-  const version = await prisma.projectPdfVersion.findFirst({
+  const version = await store.findFile({
     where: { id: artifactVersionId, courseId, studentId, stageKey: "make", status: "submitted", kind: "pdf" },
   });
   return version ? { kind: "pdf" as const, version, title: version.title } : null;
@@ -404,13 +331,14 @@ export async function getShowcaseData(
   courseId: string,
   claims: AuthClaims,
 ): Promise<ShowcaseData> {
+  if (!(await canAccessLegacyCourse(claims, courseId, "read"))) throw new ShowcasePresentationError("FORBIDDEN", "无权访问该课堂。", 403);
   const course = await loadCourseGate(courseId);
   assertCourseExists(course);
   if (claims.role === "student") assertStudentCourse(claims, courseId);
   assertShowcaseStage(course);
 
   const { students, members } = await loadStudentAndGroupRows(courseId);
-  if (claims.role === "student" && !students.some((student) => student.id === claims.studentId)) {
+  if (claims.role === "student" && !students.some((student) => student.id === claims.sub!)) {
     throw new ShowcasePresentationError("FORBIDDEN", "学生尚未加入该课程。", 403);
   }
   const memberByStudent = new Map<string, GroupMemberRow>();
@@ -437,7 +365,7 @@ export async function getShowcaseData(
     };
   });
   const presentingStudent = studentSummaries.find((student) => student.isAssigned);
-  const allPresentationRows = await prisma.showcasePresentation.findMany({
+  const allPresentationRows = await store.listPresentations({
     where: {
       courseId,
       status: { in: ["pending", "active", "rejected", "evaluating", "ended"] },
@@ -449,11 +377,11 @@ export async function getShowcaseData(
   const presentations = claims.role === "teacher"
     ? allPresentations
     : allPresentations
-      .filter((presentation) => presentation.studentId === claims.studentId || ["active", "evaluating"].includes(presentation.status))
+      .filter((presentation) => presentation.studentId === claims.sub! || ["active", "evaluating"].includes(presentation.status))
       .map((presentation) => ({ ...presentation, evaluationNote: undefined, evaluatedBy: undefined }));
   const activePresentation = presentations.find((presentation) => presentation.status === "active");
   const ownArtifacts = claims.role === "student"
-    ? artifactsByStudent.get(claims.studentId) ?? []
+    ? artifactsByStudent.get(claims.sub!) ?? []
     : [];
   const queueStudents = studentSummaries.length > 0
     ? studentSummaries
@@ -479,7 +407,7 @@ export async function getShowcaseData(
   const queue = claims.role === "teacher"
     ? queueResult.items
     : queueResult.items.map((item) => {
-        if (item.studentId === claims.studentId) return { ...item, evaluationNote: undefined };
+        if (item.studentId === claims.sub!) return { ...item, evaluationNote: undefined };
         return {
           ...item,
           artifacts: [],
@@ -516,15 +444,15 @@ async function assignPresenter(courseId: string, groupId: string | null, request
   let payload: ShowcaseEventPayload;
   let cancelledSnapshots: ShowcasePresentationSnapshot[] = [];
   let cancelledActiveIds = new Set<string>();
-  await prisma.$transaction(async (tx) => {
-    await lockCourseMutation(tx, courseId);
-    const course = await tx.course.findUnique({
+  await store.transaction(async (tx) => {
+    await tx.lock(courseId);
+    const course = await tx.loadCourse({
       where: { id: courseId },
       select: { status: true, currentStageIndex: true, stages: true },
     });
     if (!course) throw new ShowcasePresentationError("COURSE_NOT_FOUND", "课程不存在。", 404);
     assertShowcaseStage({ ...course, id: courseId, presentingGroupId: null, presentingStudentId: null, uiState: null });
-    const inProgress = await tx.showcasePresentation.findFirst({
+    const inProgress = await tx.findPresentation({
       where: { courseId, status: { in: ["active", "evaluating"] } },
       select: { id: true, status: true },
     });
@@ -537,9 +465,9 @@ async function assignPresenter(courseId: string, groupId: string | null, request
     }
     let presentingStudent: { studentId: string; studentName: string } | null = null;
     if (groupId) {
-      const group = await tx.projectGroup.findFirst({ where: { courseId, id: groupId }, select: { id: true } });
+      const group = await tx.findGroup({ where: { courseId, id: groupId }, select: { id: true } });
       if (!group) throw new ShowcasePresentationError("GROUP_NOT_FOUND", "汇报组不存在。", 404);
-      presentingStudent = await tx.groupMember.findFirst({
+      presentingStudent = await tx.findMember({
         where: { courseId, groupId, ...(requestedStudentId ? { studentId: requestedStudentId } : {}) },
         select: { studentId: true, studentName: true },
         orderBy: { joinedAt: "asc" },
@@ -551,7 +479,7 @@ async function assignPresenter(courseId: string, groupId: string | null, request
         throw new ShowcasePresentationError("GROUP_EMPTY", "汇报组中没有可汇报的学生。", 409);
       }
     }
-    const interrupted = await tx.showcasePresentation.findMany({
+    const interrupted = await tx.listPresentations({
       where: { courseId, status: { in: ["pending", "active"] } },
     });
     cancelledActiveIds = new Set(interrupted.filter((row) => row.status === "active").map((row) => row.id));
@@ -566,15 +494,15 @@ async function assignPresenter(courseId: string, groupId: string | null, request
       endedAt,
       updatedAt: endedAt,
     }));
-    await tx.showcasePresentation.updateMany({
+    await tx.updatePresentations({
       where: { courseId, status: "pending" },
       data: { status: "cancelled", endedAt, revision: { increment: 1 } },
     });
-    await tx.showcasePresentation.updateMany({
+    await tx.updatePresentations({
       where: { courseId, status: "active" },
       data: { status: "ended", endedAt, revision: { increment: 1 } },
     });
-    await tx.course.update({ where: { id: courseId }, data: { presentingGroupId: groupId, presentingStudentId: presentingStudent?.studentId ?? null, version: { increment: 1 } } });
+    await tx.updateCourse({ where: { id: courseId }, data: { presentingGroupId: groupId, presentingStudentId: presentingStudent?.studentId ?? null, version: { increment: 1 } } });
     payload = {
       scope: "course",
       presentingGroupId: groupId,
@@ -628,13 +556,13 @@ async function saveShowcaseQueue(
   }
   const baseOrder = action.orderedStudentIds.length > 0 ? requestedKnownOrder : defaultOrder;
   const mergedOrder = [...baseOrder, ...students.map((student) => student.id).filter((studentId) => !baseOrder.includes(studentId))];
-  await prisma.$transaction(async (tx) => {
-    await lockCourseMutation(tx, courseId);
-    const locked = await tx.course.findUnique({ where: { id: courseId }, select: { status: true, currentStageIndex: true, stages: true, uiState: true, presentingGroupId: true, presentingStudentId: true } });
+  await store.transaction(async (tx) => {
+    await tx.lock(courseId);
+    const locked = await tx.loadCourse({ where: { id: courseId }, select: { status: true, currentStageIndex: true, stages: true, uiState: true, presentingGroupId: true, presentingStudentId: true } });
     if (!locked) throw new ShowcasePresentationError("COURSE_NOT_FOUND", "课程不存在。", 404);
     assertShowcaseStage({ ...locked, id: courseId, uiState: locked.uiState });
     const previousOrder = normalizeShowcaseQueueOrder(queueStudents, parseShowcaseQueueConfig(locked.uiState)?.orderedStudentIds);
-    const activeRows = await tx.showcasePresentation.findMany({
+    const activeRows = await tx.listPresentations({
       where: { courseId, status: { in: ["pending", "active", "rejected", "evaluating", "ended"] } },
       select: { studentId: true },
     });
@@ -657,7 +585,7 @@ async function saveShowcaseQueue(
       updatedAt: new Date().toISOString(),
     } satisfies ShowcaseQueueConfig;
     const uiState = asRecord(locked.uiState);
-    await tx.course.update({
+    await tx.updateCourse({
       where: { id: courseId },
       data: {
         uiState: { ...uiState, showcaseReporting: nextConfig } as Prisma.InputJsonValue,
@@ -687,23 +615,23 @@ async function requestPresentation(courseId: string, action: Extract<ShowcaseAct
   const course = await loadCourseGate(courseId);
   assertCourseExists(course);
   assertShowcaseStage(course);
-  const { groupId, studentName } = await assertAssignedStudent(course, courseId, claims.studentId);
+  const { groupId, studentName } = await assertAssignedStudent(course, courseId, claims.sub!);
   if (action.artifactKind === "document" && action.displayMode !== "continuous") {
     throw new ShowcasePresentationError("INVALID_DISPLAY_MODE", "富文档只支持连续阅读。", 400);
   }
-  const artifact = await findLatestArtifact(courseId, claims.studentId, action.artifactKind, action.artifactVersionId);
+  const artifact = await findLatestArtifact(courseId, claims.sub!, action.artifactKind, action.artifactVersionId);
   if (!artifact) throw new ShowcasePresentationError("ARTIFACT_NOT_LATEST", "只能展示最新的已提交成果。", 409);
   const requestId = action.requestId ?? randomUUID();
   let snapshot: ShowcasePresentationSnapshot | undefined;
-  await prisma.$transaction(async (tx) => {
-    await lockCourseMutation(tx, courseId);
-    const duplicate = await tx.showcasePresentation.findFirst({ where: { courseId, requestId } });
+  await store.transaction(async (tx) => {
+    await tx.lock(courseId);
+    const duplicate = await tx.findPresentation({ where: { courseId, requestId } });
     if (duplicate) {
-      if (duplicate.studentId !== claims.studentId) throw new ShowcasePresentationError("REQUEST_ID_CONFLICT", "请求编号已被其他学生使用。", 409);
+      if (duplicate.studentId !== claims.sub!) throw new ShowcasePresentationError("REQUEST_ID_CONFLICT", "请求编号已被其他学生使用。", 409);
       snapshot = rowToSnapshot(duplicate, studentName);
       return;
     }
-    const lockedCourse = await tx.course.findUnique({
+    const lockedCourse = await tx.loadCourse({
       where: { id: courseId },
       select: { id: true, status: true, currentStageIndex: true, stages: true, presentingGroupId: true, presentingStudentId: true, uiState: true },
     });
@@ -711,38 +639,38 @@ async function requestPresentation(courseId: string, action: Extract<ShowcaseAct
     assertShowcaseStage(lockedCourse);
     const lockedAssignedStudentId = lockedCourse.presentingStudentId
       ?? (lockedCourse.presentingGroupId
-        ? (await tx.groupMember.findFirst({
+        ? (await tx.findMember({
             where: { courseId, groupId: lockedCourse.presentingGroupId },
             orderBy: { joinedAt: "asc" },
             select: { studentId: true },
           }))?.studentId
         : undefined);
-    if (lockedCourse.presentingGroupId !== groupId || lockedAssignedStudentId !== claims.studentId) {
+    if (lockedCourse.presentingGroupId !== groupId || lockedAssignedStudentId !== claims.sub!) {
       throw new ShowcasePresentationError("PRESENTER_NOT_ASSIGNED", "当前学生不是教师指定的汇报学生。", 403);
     }
-    const lockedMember = await tx.groupMember.findFirst({
-      where: { courseId, groupId, studentId: claims.studentId },
+    const lockedMember = await tx.findMember({
+      where: { courseId, groupId, studentId: claims.sub! },
       select: { id: true },
     });
     if (!lockedMember) throw new ShowcasePresentationError("PRESENTER_NOT_ASSIGNED", "当前学生不是教师指定的汇报学生。", 403);
     const latestLocked = action.artifactKind === "pdf"
-      ? await tx.projectPdfVersion.findFirst({ where: { id: action.artifactVersionId, courseId, studentId: claims.studentId, stageKey: "make", status: "submitted", kind: "pdf" }, select: { id: true } })
-      : await tx.projectDocumentVersion.findFirst({ where: { id: action.artifactVersionId, courseId, studentId: claims.studentId, stageKey: "make", status: "submitted" }, select: { id: true } });
+      ? await tx.findFile({ where: { id: action.artifactVersionId, courseId, studentId: claims.sub!, stageKey: "make", status: "submitted", kind: "pdf" }, select: { id: true } })
+      : await tx.findDocument({ where: { id: action.artifactVersionId, courseId, studentId: claims.sub!, stageKey: "make", status: "submitted" }, select: { id: true } });
     if (!latestLocked) throw new ShowcasePresentationError("ARTIFACT_NOT_LATEST", "只能展示最新的已提交成果。", 409);
     const latestForStudent = action.artifactKind === "pdf"
       ? latestLocked
-      : await tx.projectDocumentVersion.findFirst({ where: { courseId, studentId: claims.studentId, stageKey: "make", status: "submitted" }, orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }, { sequence: "desc" }], select: { id: true } });
+      : await tx.findDocument({ where: { courseId, studentId: claims.sub!, stageKey: "make", status: "submitted" }, orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }, { sequence: "desc" }], select: { id: true } });
     if (latestForStudent?.id !== action.artifactVersionId) throw new ShowcasePresentationError("ARTIFACT_NOT_LATEST", "只能展示最新的已提交成果。", 409);
-    const active = await tx.showcasePresentation.findFirst({ where: { courseId, status: "active" }, select: { id: true } });
+    const active = await tx.findPresentation({ where: { courseId, status: "active" }, select: { id: true } });
     if (active) throw new ShowcasePresentationError("PRESENTATION_ACTIVE", "当前已有学生在汇报，请等待教师结束后再申请。", 409);
-    const pending = await tx.showcasePresentation.findFirst({ where: { courseId, status: "pending" }, select: { id: true } });
+    const pending = await tx.findPresentation({ where: { courseId, status: "pending" }, select: { id: true } });
     if (pending) throw new ShowcasePresentationError("PRESENTATION_PENDING", "已有一个汇报申请等待教师处理。", 409);
-    const row = await tx.showcasePresentation.create({
+    const row = await tx.createPresentation({
       data: {
         id: randomUUID(),
         courseId,
         groupId,
-        studentId: claims.studentId,
+        studentId: claims.sub!,
         artifactKind: artifact.kind,
         artifactVersionId: action.artifactVersionId,
         artifactTitle: artifact.title,
@@ -750,14 +678,14 @@ async function requestPresentation(courseId: string, action: Extract<ShowcaseAct
         requestId,
         status: "pending",
         viewState: { scrollRatio: 0, page: 1, updatedAt: new Date().toISOString() },
-        participationId: (await findLegacyParticipation(tx, courseId, claims.studentId))?.id,
+        participationId: (await tx.findParticipation(courseId, claims.sub!))?.id,
       },
     });
     snapshot = rowToSnapshot(row, studentName);
   });
   await publishShowcaseEvent(courseId, {
     scope: "student",
-    studentId: claims.studentId,
+    studentId: claims.sub!,
     snapshot,
   });
   if (!snapshot) throw new ShowcasePresentationError("PRESENTATION_FAILED", "汇报申请未能创建。", 500);
@@ -770,20 +698,20 @@ async function reviewPresentation(courseId: string, action: Extract<ShowcaseActi
   assertCourseExists(course);
   assertShowcaseStage(course);
   let snapshot: ShowcasePresentationSnapshot | undefined;
-  await prisma.$transaction(async (tx) => {
-    await lockCourseMutation(tx, courseId);
-    const currentCourse = await tx.course.findUnique({
+  await store.transaction(async (tx) => {
+    await tx.lock(courseId);
+    const currentCourse = await tx.loadCourse({
       where: { id: courseId },
       select: { id: true, status: true, currentStageIndex: true, stages: true, presentingGroupId: true, presentingStudentId: true, uiState: true },
     });
     if (!currentCourse) throw new ShowcasePresentationError("COURSE_NOT_FOUND", "课程不存在。", 404);
     assertShowcaseStage(currentCourse);
-    const row = await tx.showcasePresentation.findFirst({ where: { courseId, id: action.presentationId } });
+    const row = await tx.findPresentation({ where: { courseId, id: action.presentationId } });
     if (!row) throw new ShowcasePresentationError("PRESENTATION_NOT_FOUND", "汇报申请不存在。", 404);
     if (row.status !== "pending") throw new ShowcasePresentationError("PRESENTATION_NOT_PENDING", "该申请已经处理过。", 409);
     const currentAssignedStudentId = currentCourse.presentingStudentId
       ?? (currentCourse.presentingGroupId
-        ? (await tx.groupMember.findFirst({
+        ? (await tx.findMember({
             where: { courseId, groupId: currentCourse.presentingGroupId },
             orderBy: { joinedAt: "asc" },
             select: { studentId: true },
@@ -792,18 +720,18 @@ async function reviewPresentation(courseId: string, action: Extract<ShowcaseActi
     if (row.groupId !== currentCourse.presentingGroupId || row.studentId !== currentAssignedStudentId) {
       throw new ShowcasePresentationError("PRESENTER_CHANGED", "汇报学生已被教师更换。", 409);
     }
-    const student = await tx.student.findFirst({ where: { courseId, id: row.studentId }, select: { name: true } });
+    const student = await tx.findStudent({ where: { courseId, id: row.studentId }, select: { name: true } });
     if (!student) throw new ShowcasePresentationError("STUDENT_NOT_FOUND", "汇报学生不存在。", 404);
     if (action.decision === "approve") {
       const latest = row.artifactKind === "pdf"
-        ? await tx.projectPdfVersion.findFirst({ where: { id: row.artifactVersionId, courseId, studentId: row.studentId, stageKey: "make", status: "submitted", kind: "pdf" }, select: { id: true } })
-        : await tx.projectDocumentVersion.findFirst({ where: { courseId, studentId: row.studentId, stageKey: "make", status: "submitted" }, orderBy: { sequence: "desc" }, select: { id: true } });
+        ? await tx.findFile({ where: { id: row.artifactVersionId, courseId, studentId: row.studentId, stageKey: "make", status: "submitted", kind: "pdf" }, select: { id: true } })
+        : await tx.findDocument({ where: { courseId, studentId: row.studentId, stageKey: "make", status: "submitted" }, orderBy: { sequence: "desc" }, select: { id: true } });
       if (!latest || latest.id !== row.artifactVersionId) throw new ShowcasePresentationError("ARTIFACT_NOT_LATEST", "该成果已不是学生最新的提交版本，请让学生重新申请。", 409);
-      const active = await tx.showcasePresentation.findFirst({ where: { courseId, status: "active" }, select: { id: true } });
+      const active = await tx.findPresentation({ where: { courseId, status: "active" }, select: { id: true } });
       if (active) throw new ShowcasePresentationError("PRESENTATION_ACTIVE", "当前已有活动投屏。", 409);
-      const courseRow = await tx.course.findUnique({ where: { id: courseId }, select: { uiState: true } });
+      const courseRow = await tx.loadCourse({ where: { id: courseId }, select: { uiState: true } });
       const uiState = asRecord(courseRow?.uiState);
-      await tx.course.update({
+      await tx.updateCourse({
         where: { id: courseId },
         data: {
           uiState: {
@@ -815,11 +743,11 @@ async function reviewPresentation(courseId: string, action: Extract<ShowcaseActi
         },
       });
     }
-    const updated = await tx.showcasePresentation.update({
+    const updated = await tx.updatePresentation({
       where: { id: row.id },
       data: action.decision === "approve"
-        ? { status: "active", reviewedAt: new Date(), reviewedBy: claims.sub, startedAt: new Date(), revision: { increment: 1 } }
-        : { status: "rejected", reviewedAt: new Date(), reviewedBy: claims.sub, rejectionReason: action.reason?.trim() || null, revision: { increment: 1 } },
+        ? { status: "active", reviewedAt: new Date(), reviewedBy: claims.sub!, startedAt: new Date(), revision: { increment: 1 } }
+        : { status: "rejected", reviewedAt: new Date(), reviewedBy: claims.sub!, rejectionReason: action.reason?.trim() || null, revision: { increment: 1 } },
     });
     snapshot = rowToSnapshot(updated, student.name);
   });
@@ -853,11 +781,11 @@ async function reviewPresentation(courseId: string, action: Extract<ShowcaseActi
 async function updateViewState(courseId: string, action: Extract<ShowcaseAction, { action: "update" }>, claims: AuthClaims) {
   assertStudentCourse(claims, courseId);
   let snapshot: ShowcasePresentationSnapshot | undefined;
-  await prisma.$transaction(async (tx) => {
-    await lockCourseMutation(tx, courseId);
-    const row = await tx.showcasePresentation.findFirst({ where: { courseId, id: action.presentationId, status: "active" } });
+  await store.transaction(async (tx) => {
+    await tx.lock(courseId);
+    const row = await tx.findPresentation({ where: { courseId, id: action.presentationId, status: "active" } });
     if (!row) throw new ShowcasePresentationError("PRESENTATION_NOT_ACTIVE", "汇报投屏已结束。", 409);
-    if (row.studentId !== claims.studentId) throw new ShowcasePresentationError("FORBIDDEN", "只有汇报学生可以同步展示位置。", 403);
+    if (row.studentId !== claims.sub!) throw new ShowcasePresentationError("FORBIDDEN", "只有汇报学生可以同步展示位置。", 403);
     const previous = asRecord(row.viewState);
     const next: Record<string, unknown> = {
       ...previous,
@@ -872,7 +800,7 @@ async function updateViewState(courseId: string, action: Extract<ShowcaseAction,
       if (typeof ratio !== "number" || !Number.isFinite(ratio)) throw new ShowcasePresentationError("INVALID_VIEW_STATE", "滚动位置无效。", 400);
       next.scrollRatio = Math.min(1, Math.max(0, ratio));
     }
-    const updated = await tx.showcasePresentation.update({
+    const updated = await tx.updatePresentation({
       where: { id: row.id },
       data: { viewState: next as Prisma.InputJsonValue, revision: { increment: 1 } },
     });
@@ -888,18 +816,18 @@ async function endPresentation(courseId: string, action: Extract<ShowcaseAction,
   if (!row) throw new ShowcasePresentationError("PRESENTATION_NOT_FOUND", "汇报投屏不存在。", 404);
   if (claims.role === "student") {
     assertStudentCourse(claims, courseId);
-    if (row.studentId !== claims.studentId) throw new ShowcasePresentationError("FORBIDDEN", "不能结束其他学生的投屏。", 403);
+    if (row.studentId !== claims.sub!) throw new ShowcasePresentationError("FORBIDDEN", "不能结束其他学生的投屏。", 403);
   }
   let snapshot: ShowcasePresentationSnapshot | undefined;
-  await prisma.$transaction(async (tx) => {
-    await lockCourseMutation(tx, courseId);
-    const current = await tx.showcasePresentation.findFirst({ where: { courseId, id: action.presentationId } });
+  await store.transaction(async (tx) => {
+    await tx.lock(courseId);
+    const current = await tx.findPresentation({ where: { courseId, id: action.presentationId } });
     if (!current) throw new ShowcasePresentationError("PRESENTATION_NOT_FOUND", "汇报投屏不存在。", 404);
     if (!["pending", "active"].includes(current.status)) {
       snapshot = rowToSnapshot(current);
       return;
     }
-    const updated = await tx.showcasePresentation.update({
+    const updated = await tx.updatePresentation({
       where: { id: current.id },
       data: current.status === "pending"
         ? { status: "cancelled", endedAt: new Date(), revision: { increment: 1 } }
@@ -930,15 +858,15 @@ async function finishEvaluation(
   let snapshot: ShowcasePresentationSnapshot | undefined;
   const nextPresenterRef: { value: { groupId: string; studentId: string; studentName: string } | null } = { value: null };
   let alreadyCompleted = false;
-  await prisma.$transaction(async (tx) => {
-    await lockCourseMutation(tx, courseId);
-    const lockedCourse = await tx.course.findUnique({
+  await store.transaction(async (tx) => {
+    await tx.lock(courseId);
+    const lockedCourse = await tx.loadCourse({
       where: { id: courseId },
       select: { id: true, status: true, currentStageIndex: true, stages: true, presentingGroupId: true, presentingStudentId: true, uiState: true },
     });
     if (!lockedCourse) throw new ShowcasePresentationError("COURSE_NOT_FOUND", "课程不存在。", 404);
     assertShowcaseStage(lockedCourse);
-    const current = await tx.showcasePresentation.findFirst({ where: { courseId, id: action.presentationId } });
+    const current = await tx.findPresentation({ where: { courseId, id: action.presentationId } });
     if (!current) throw new ShowcasePresentationError("PRESENTATION_NOT_FOUND", "汇报记录不存在。", 404);
     if (current.status === "ended") {
       snapshot = rowToSnapshot(current);
@@ -947,22 +875,22 @@ async function finishEvaluation(
     }
     if (current.status !== "evaluating") throw new ShowcasePresentationError("EVALUATION_NOT_PENDING", "当前汇报尚未进入教师点评阶段。", 409);
     const evaluatedAt = new Date();
-    const updated = await tx.showcasePresentation.update({
+    const updated = await tx.updatePresentation({
       where: { id: current.id },
       data: {
         status: "ended",
         evaluationNote: action.note?.trim() || null,
         evaluatedAt,
-        evaluatedBy: claims.sub,
+        evaluatedBy: claims.sub!,
         revision: { increment: 1 },
       },
     });
     const [students, members, documents, pdfs, rows] = await Promise.all([
-      tx.student.findMany({ where: { courseId }, orderBy: { createdAt: "asc" }, select: { id: true, name: true } }),
-      tx.groupMember.findMany({ where: { courseId }, orderBy: { joinedAt: "asc" }, select: { groupId: true, studentId: true, studentName: true, joinedAt: true } }),
-      tx.projectDocumentVersion.findMany({ where: { courseId, stageKey: "make", status: "submitted" }, orderBy: { sequence: "desc" }, select: { id: true, studentId: true, title: true, sequence: true, submittedAt: true, createdAt: true } }),
-      tx.projectPdfVersion.findMany({ where: { courseId, stageKey: "make", status: "submitted", kind: "pdf" }, orderBy: { sequence: "desc" }, select: { id: true, studentId: true, title: true, sequence: true, submittedAt: true, createdAt: true } }),
-      tx.showcasePresentation.findMany({ where: { courseId, status: { in: ["pending", "active", "rejected", "evaluating", "ended"] } } }),
+      tx.listStudents({ where: { courseId }, orderBy: { createdAt: "asc" }, select: { id: true, name: true } }),
+      tx.listMembers({ where: { courseId }, orderBy: { joinedAt: "asc" }, select: { groupId: true, studentId: true, studentName: true, joinedAt: true } }),
+      tx.listDocuments({ where: { courseId, stageKey: "make", status: "submitted" }, orderBy: { sequence: "desc" }, select: { id: true, studentId: true, title: true, sequence: true, submittedAt: true, createdAt: true } }),
+      tx.listFiles({ where: { courseId, stageKey: "make", status: "submitted", kind: "pdf" }, orderBy: { sequence: "desc" }, select: { id: true, studentId: true, title: true, sequence: true, submittedAt: true, createdAt: true } }),
+      tx.listPresentations({ where: { courseId, status: { in: ["pending", "active", "rejected", "evaluating", "ended"] } } }),
     ]);
     const updatedIndex = rows.findIndex((row) => row.id === updated.id);
     if (updatedIndex >= 0) rows.splice(updatedIndex, 1, updated);
@@ -1016,7 +944,7 @@ async function finishEvaluation(
     if (candidate?.groupId) {
       nextPresenterRef.value = { groupId: candidate.groupId, studentId: candidate.studentId, studentName: candidate.studentName };
     }
-    await tx.course.update({
+    await tx.updateCourse({
       where: { id: courseId },
       data: {
         presentingGroupId: nextPresenterRef.value?.groupId ?? null,
@@ -1054,6 +982,7 @@ export async function executeShowcaseAction(
   action: ShowcaseAction,
   claims: AuthClaims,
 ): Promise<ShowcaseData | ShowcasePresentationSnapshot> {
+  if (!(await canAccessLegacyCourse(claims, courseId, "write"))) throw new ShowcasePresentationError("FORBIDDEN", "无权操作该课堂。", 403);
   switch (action.action) {
     case "assign":
       return assignPresenter(courseId, action.groupId, action.studentId, claims);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createCourseMediaGenerationIncompleteError,
   createManagedCourseGenerationRecoveryRequest,
   deserializeCourseGenerationFailure,
   formatCourseGenerationErrorForTeacher,
@@ -52,6 +53,16 @@ describe("managed classroom-generation recovery", () => {
     });
   });
 
+  it("upgrades persisted teaching-tool omissions into checkpoint recovery", () => {
+    const persisted = serializeCourseGenerationFailure(new Error(
+      'Scene "节末小测" is missing required teaching tools after correction: whiteboard',
+    ));
+
+    expect(deserializeCourseGenerationFailure(persisted)).toMatchObject({
+      isRetryable: true,
+    });
+  });
+
   it("redacts common credentials from persisted diagnostics", () => {
     const persisted = serializeCourseGenerationFailure(new Error(
       "Authorization: Bearer live-token-123; api_key=sk-example-secret; password=hunter2",
@@ -67,5 +78,26 @@ describe("managed classroom-generation recovery", () => {
     const message = formatCourseGenerationErrorForTeacher(inferenceAbort);
     expect(message).toContain("已经生成的页面均已保留");
     expect(message).not.toContain("Inference engine");
+  });
+
+  it("keeps enabled course media incomplete instead of reporting a lower-quality completion", () => {
+    const error = createCourseMediaGenerationIncompleteError({ imageCount: 3, videoCount: 0 });
+    const persisted = serializeCourseGenerationFailure(error);
+
+    expect(deserializeCourseGenerationFailure(persisted)).toMatchObject({
+      code: "COURSE_MEDIA_GENERATION_INCOMPLETE",
+      isRetryable: true,
+    });
+    expect(formatPersistedCourseGenerationErrorForTeacher(persisted)).toContain("3 张课程图片");
+  });
+
+  it("shows an actionable configuration error when image generation was enabled without a provider", () => {
+    const error = Object.assign(new Error(
+      "课程已开启图片生成，但服务器没有可用的图片生成服务。请先完成图像生成配置。",
+    ), { code: "IMAGE_PROVIDER_NOT_CONFIGURED", isRetryable: false });
+
+    expect(formatPersistedCourseGenerationErrorForTeacher(
+      serializeCourseGenerationFailure(error),
+    )).toContain("请先完成图像生成配置");
   });
 });

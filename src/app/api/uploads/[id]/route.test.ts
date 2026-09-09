@@ -1,160 +1,68 @@
 // @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
-
-const mocks = vi.hoisted(() => ({
-  findFirst: vi.fn(),
-  transaction: vi.fn(),
-  resourceDeleteMany: vi.fn(),
-  resourceFindFirst: vi.fn(),
-  resourceUpdate: vi.fn(),
-  uploadUpdate: vi.fn(),
-  courseUpdate: vi.fn(),
-  courseEventCreate: vi.fn(),
-  publishCourseEvent: vi.fn(),
-  unlink: vi.fn(),
-}));
-
-vi.mock("@/lib/auth/request-guards", () => ({
-  authenticateRequest: vi.fn(async () => ({ claims: { sub: "teacher-1", role: "teacher", sv: 1 } })),
-  requireSameOrigin: vi.fn(() => null),
-}));
-
-vi.mock("@/lib/db/client", () => ({
-  prisma: {
-    uploadFile: { findFirst: mocks.findFirst },
-    courseResource: { findFirst: mocks.resourceFindFirst },
-    $transaction: mocks.transaction,
-  },
-}));
-vi.mock("@/lib/realtime/event-bus", () => ({
-  publishCourseEvent: mocks.publishCourseEvent,
-}));
-
-vi.mock("node:fs/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs/promises")>()),
-  unlink: mocks.unlink,
-}));
-
-import { DELETE, GET, PATCH } from "./route";
-
-const uploadId = "11111111-1111-4111-8111-111111111111";
-const courseId = "course-1";
-
-describe("DELETE /api/uploads/[id]", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.findFirst.mockResolvedValue({
-      id: uploadId,
-      courseId,
-      uploadedById: "teacher-1",
-      fileName: "课堂演示.pptx",
-      storedName: `${uploadId}.pdf`,
-      previewStoredName: `${uploadId}.classroom.pdf`,
-      mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-      previewMimeType: "application/pdf",
-    });
-    mocks.resourceDeleteMany.mockResolvedValue({ count: 1 });
-    mocks.resourceUpdate.mockResolvedValue({});
-    mocks.uploadUpdate.mockResolvedValue({});
-    mocks.courseUpdate.mockResolvedValue({ version: 8 });
-    mocks.courseEventCreate.mockResolvedValue({ cursor: BigInt(42), courseVersion: 8 });
-    mocks.publishCourseEvent.mockResolvedValue(undefined);
-    mocks.unlink.mockResolvedValue(undefined);
-    mocks.transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback({
-      courseResource: { deleteMany: mocks.resourceDeleteMany },
-      uploadFile: { update: mocks.uploadUpdate },
-      course: { update: mocks.courseUpdate },
-      courseEvent: { create: mocks.courseEventCreate },
-    }));
+const mocks = vi.hoisted(() => ({ file: vi.fn(), resource: vi.fn(), update: vi.fn(), remove: vi.fn(), count: vi.fn(),
+  access: vi.fn(), query: vi.fn(), claims: { sub: 'teacher-1', role: 'teacher' }, event: vi.fn(), resourceUpdate: vi.fn() }));
+vi.mock('@/lib/auth/request-guards', () => ({ authenticateRequest: async () => ({ claims: mocks.claims }), requireSameOrigin: () => null }));
+vi.mock('@/lib/platform/access', () => ({ canAccessLegacyCourse: mocks.access }));
+vi.mock('@/lib/db/client', () => {
+  const tx = { $queryRaw: mocks.query, fileAsset: { findFirst: mocks.file, update: mocks.update }, resource: { findFirst: mocks.resource, findUniqueOrThrow: mocks.resource, update: mocks.resourceUpdate, delete: mocks.remove },
+    artifactVersion: { count: mocks.count }, courseOffering: { update: async () => ({ version: 2 }) }, domainEvent: { create: mocks.event } };
+  return { prisma: { ...tx, $transaction: async (fn: (db: typeof tx) => unknown) => fn(tx) } };
+});
+vi.mock("@/lib/uploads/scope", () => ({ canReadTemplateAsset: async () => false }));
+import { DELETE, GET, PATCH } from './route';
+const id = '11111111-1111-4111-8111-111111111111';
+const context = { params: Promise.resolve({ id }) };
+const resource = { id, offeringId: 'offering-1', type: 'PDF', metadata: { stageKey: 'practice' }, fileAsset: { deletedAt: null } };
+const file = { id, offeringId: 'offering-1', uploadedById: 'teacher-1', originalName: 'lesson.pdf', storageKey: `${id}.pdf`, mimeType: 'application/pdf', resource, artifactVersions: [] };
+const target = path.resolve('.openpbl-data/uploads', file.storageKey);
+beforeEach(() => { vi.clearAllMocks(); mocks.claims = { sub: 'teacher-1', role: 'teacher' }; mocks.access.mockResolvedValue(true); mocks.file.mockResolvedValue(file); mocks.resource.mockResolvedValue(resource); mocks.count.mockResolvedValue(0); mocks.event.mockResolvedValue({ id: 'event' }); mocks.query.mockResolvedValue([{ referenced: false }]); });
+afterEach(async () => { await rm(target, { force: true }); });
+describe('V2 FileAsset routes', () => {
+  it('serves offering resources with byte ranges to enrolled students without legacy course claims', async () => {
+    mocks.claims = { sub: 'student-1', role: 'student' };
+    await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, '%PDF-1.7 content');
+    const response = await GET(new Request(`http://localhost/api/uploads/${id}`, { headers: { Range: 'bytes=0-3' } }), context);
+    expect(response.status).toBe(206); expect(await response.text()).toBe('%PDF'); expect(mocks.access).toHaveBeenCalledWith(mocks.claims, 'offering-1', 'read');
   });
-
-  afterEach(async () => {
-    await rm(path.resolve(".openpbl-data", "uploads", `${uploadId}.classroom.pdf`), {
-      force: true,
-    });
+  it('denies teachers outside the offering and unowned private assets', async () => {
+    mocks.access.mockResolvedValue(false);
+    expect((await GET(new Request(`http://localhost/api/uploads/${id}`), context)).status).toBe(404);
+    mocks.file.mockResolvedValue({ ...file, offeringId: null, uploadedById: 'other', resource: null });
+    expect((await DELETE(new Request(`http://localhost/api/uploads/${id}`, { method: 'DELETE' }), context)).status).toBe(404);
   });
-
-  it("serves the generated PDF for the authenticated classroom variant", async () => {
-    const previewPath = path.resolve(".openpbl-data", "uploads", `${uploadId}.classroom.pdf`);
-    await mkdir(path.dirname(previewPath), { recursive: true });
-    await writeFile(previewPath, "%PDF-1.7\nclassroom-preview", { mode: 0o600 });
-
-    const response = await GET(
-      new Request(`http://localhost:3000/api/uploads/${uploadId}?variant=classroom`),
-      { params: Promise.resolve({ id: uploadId }) },
-    );
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("application/pdf");
-    expect(response.headers.get("content-disposition")).toContain(encodeURIComponent("课堂演示-课堂版.pdf"));
-    expect(Buffer.from(await response.arrayBuffer()).toString()).toContain("%PDF-1.7");
+  it('resolves a classroom preview through the V2 Resource metadata and FileAsset', async () => {
+    await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, '%PDF preview');
+    mocks.file.mockResolvedValueOnce({ ...file, originalName: 'lesson.pptx', resource: { ...resource, metadata: { previewAssetId: 'preview-asset' } } });
+    mocks.file.mockResolvedValueOnce({ storageKey: file.storageKey, mimeType: 'application/pdf' });
+    const response = await GET(new Request(`http://localhost/api/uploads/${id}?variant=classroom`), context);
+    expect(response.status).toBe(200); expect(await response.text()).toBe('%PDF preview');
+    expect(mocks.file).toHaveBeenLastCalledWith({ where: { id: 'preview-asset', offeringId: 'offering-1', deletedAt: null } });
   });
-
-  it("removes the course binding, retires the upload record and deletes the disk file", async () => {
-    const response = await DELETE(
-      new Request(`http://localhost:3000/api/uploads/${uploadId}`, {
-        method: "DELETE",
-        headers: { Origin: "http://localhost:3000" },
-      }),
-      { params: Promise.resolve({ id: uploadId }) },
-    );
-
-    expect(response.status).toBe(204);
-    expect(mocks.resourceDeleteMany).toHaveBeenCalledWith({ where: { id: uploadId, courseId } });
-    expect(mocks.uploadUpdate).toHaveBeenCalledWith({
-      where: { id: uploadId },
-      data: { deletedAt: expect.any(Date), referencedBy: [], refCount: 0 },
-    });
-    expect(mocks.courseUpdate).toHaveBeenCalledWith({
-      where: { id: courseId },
-      data: { version: { increment: 1 } },
-      select: { version: true },
-    });
-    expect(mocks.courseEventCreate).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ courseId, courseVersion: 8 }),
-    }));
-    expect(mocks.publishCourseEvent).toHaveBeenCalledWith(
-      courseId,
-      expect.objectContaining({ payload: expect.objectContaining({ eventCursor: "42" }) }),
-    );
-    expect(mocks.unlink).toHaveBeenCalledWith(expect.stringContaining(`${uploadId}.pdf`));
-    expect(mocks.unlink).toHaveBeenCalledWith(expect.stringContaining(`${uploadId}.classroom.pdf`));
+  it('denies students access to another student private upload', async () => {
+    mocks.claims = { sub: 'student-1', role: 'student' }; mocks.file.mockResolvedValue({ ...file, resource: null, uploadedById: 'student-2' });
+    expect((await GET(new Request(`http://localhost/api/uploads/${id}`), context)).status).toBe(404);
   });
-
-  it("changes an existing PDF between continuous reading and slide playback", async () => {
-    mocks.resourceFindFirst.mockResolvedValue({
-      id: uploadId,
-      courseId,
-      type: "PDF",
-      previewType: null,
-    });
-    mocks.transaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => callback({
-      courseResource: { update: mocks.resourceUpdate },
-      course: { update: mocks.courseUpdate },
-      courseEvent: { create: mocks.courseEventCreate },
-    }));
-
-    const response = await PATCH(
-      new Request(`http://localhost:3000/api/uploads/${uploadId}`, {
-        method: "PATCH",
-        headers: { Origin: "http://localhost:3000", "Content-Type": "application/json" },
-        body: JSON.stringify({ displayMode: "slides" }),
-      }),
-      { params: Promise.resolve({ id: uploadId }) },
-    );
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ id: uploadId, displayMode: "slides" });
-    expect(mocks.resourceUpdate).toHaveBeenCalledWith({
-      where: { id: uploadId },
-      data: { displayMode: "slides" },
-    });
-    expect(mocks.publishCourseEvent).toHaveBeenCalledWith(
-      courseId,
-      expect.objectContaining({ payload: expect.objectContaining({ eventCursor: "42" }) }),
-    );
+  it('preserves artifact files and their references', async () => {
+    mocks.count.mockResolvedValue(1);
+    const response = await DELETE(new Request(`http://localhost/api/uploads/${id}`, { method: 'DELETE' }), context);
+    expect(response.status).toBe(409); expect(mocks.update).not.toHaveBeenCalled(); expect(mocks.remove).not.toHaveBeenCalled();
+  });
+  it('preserves files embedded in immutable JSON or HTML research snapshots', async () => {
+    mocks.query.mockResolvedValue([{ referenced: true }]);
+    expect((await DELETE(new Request(`http://localhost/api/uploads/${id}`, { method: 'DELETE' }), context)).status).toBe(409);
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it('soft-deletes unreferenced files and records a durable V2 resource event', async () => {
+    const response = await DELETE(new Request(`http://localhost/api/uploads/${id}`, { method: 'DELETE' }), context);
+    expect(response.status).toBe(204); expect(mocks.update).toHaveBeenCalledWith({ where: { id }, data: { deletedAt: expect.any(Date) } });
+    expect(mocks.event).toHaveBeenCalledWith({ data: expect.objectContaining({ offeringId: 'offering-1', eventType: 'resource_updated' }) });
+  });
+  it('updates PDF metadata while preserving stage information', async () => {
+    const response = await PATCH(new Request(`http://localhost/api/uploads/${id}`, { method: 'PATCH', body: JSON.stringify({ displayMode: 'slides' }) }), context);
+    expect(response.status).toBe(200); expect(mocks.resourceUpdate).toHaveBeenCalledWith({ where: { id }, data: { metadata: { stageKey: 'practice', displayMode: 'slides' } } });
   });
 });

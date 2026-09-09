@@ -1,4 +1,5 @@
-// @ts-nocheck
+import { createShowcaseStore, showcaseStore } from "@/lib/showcase/persistence";
+import { encodeEventCursor } from "@/lib/realtime/event-cursor";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -11,7 +12,8 @@ import { isDatabaseConfigured, prisma } from "@/lib/db/client";
 import { lockCourseMutation } from "@/lib/db/course-mutation-lock";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
 import { ShowcasePresentationError } from "@/lib/showcase/presentation-service";
-import { canAccessLegacyCourse, findLegacyParticipation } from "@/lib/platform/access";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
+import { resolveProjectGroupId } from "@/lib/platform/group-identity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,10 +79,9 @@ export async function POST(
   const auth = await authenticateRequest(request, "student");
   if ("response" in auth) return auth.response;
   if (auth.claims.role !== "student") return errorResponse("FORBIDDEN", "只有学生可以提交本地成果。", 403);
-  const studentId = auth.claims.studentId;
+  const studentId = auth.claims.sub!;
   if (!isDatabaseConfigured()) return errorResponse("DATABASE_REQUIRED", "本地成果提交需要连接数据库。", 503);
   const { courseId } = await context.params;
-  if (auth.claims.courseId !== courseId) return errorResponse("FORBIDDEN", "学生身份与课程不匹配。", 403);
   if (!(await canAccessLegacyCourse(auth.claims, courseId, "write"))) return errorResponse("COURSE_LOCKED", "课程当前不允许提交成果。", 403);
   const limit = await checkDistributedRateLimit({
     namespace: "showcase-artifact-submit",
@@ -90,7 +91,7 @@ export async function POST(
   });
   if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
 
-  const course = await prisma.course.findUnique({
+  const course = await showcaseStore.loadCourse({
     where: { id: courseId },
     select: { status: true, currentStageIndex: true, stages: true },
   });
@@ -105,7 +106,7 @@ export async function POST(
   if (course.status !== "teaching" || !newFiveStageCourse || !stage || typeof stage !== "object" || (stage as { key?: unknown }).key !== "make") {
     return errorResponse("MAKE_INACTIVE", "只能在第三阶段项目实践中提交本地成果。", 409);
   }
-  const member = await prisma.groupMember.findFirst({
+  const member = await showcaseStore.findMember({
     where: { courseId, studentId },
     select: { groupId: true },
   });
@@ -141,21 +142,6 @@ export async function POST(
     const requestId = metadata.data.requestId
       ?? (headerRequestId && headerRequestId.length <= 160 ? headerRequestId : undefined)
       ?? randomUUID();
-    const existing = await prisma.projectPdfVersion.findFirst({ where: { courseId, requestId } });
-    if (existing) {
-      if (existing.studentId !== studentId) return errorResponse("REQUEST_ID_CONFLICT", "请求编号已被其他学生使用。", 409);
-      return Response.json({
-        ok: true,
-        versionId: existing.id,
-        sequence: existing.sequence,
-        submittedAt: existing.submittedAt.toISOString(),
-        uploadId: existing.uploadId,
-        kind: existing.kind,
-        mimeType: existing.mimeType,
-        requestId,
-      });
-    }
-
     const uploadId = randomUUID();
     const versionId = randomUUID();
     const storedName = `${uploadId}${extension}`;
@@ -166,91 +152,37 @@ export async function POST(
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     const durable = await prisma.$transaction(async (tx) => {
       await lockCourseMutation(tx, courseId);
-      const duplicate = await tx.projectPdfVersion.findFirst({ where: { courseId, requestId } });
-      if (duplicate) {
-        if (duplicate.studentId !== studentId) {
-          throw new ShowcasePresentationError("REQUEST_ID_CONFLICT", "请求编号已被其他学生使用。", 409);
-        }
-        return { duplicate };
+      const idempotencyKey = `file-artifact:${courseId}:${studentId}:${requestId}`;
+      const receipt = await tx.domainEvent.findUnique({ where: { idempotencyKey } });
+      if (receipt) {
+        const detail = receipt.payload && typeof receipt.payload === 'object' && !Array.isArray(receipt.payload) ? receipt.payload : {};
+        const duplicate = await tx.artifactVersion.findUniqueOrThrow({ where: { id: String(detail.versionId) } });
+        return { duplicate: { id: duplicate.id, sequence: duplicate.sequence, submittedAt: duplicate.submittedAt ?? duplicate.createdAt, uploadId: duplicate.fileAssetId } };
       }
-      const lockedCourse = await tx.course.findUnique({
-        where: { id: courseId },
-        select: { status: true, currentStageIndex: true, stages: true },
-      });
+      const view = createShowcaseStore(tx);
+      const lockedCourse = await view.loadCourse({ where: { id: courseId } });
       const lockedStages = Array.isArray(lockedCourse?.stages) ? lockedCourse.stages : [];
-      const lockedStage = lockedStages[lockedCourse?.currentStageIndex ?? -1];
-      const lockedNewFiveStageCourse = lockedStages.length === 5
-        && ["launch", "ai-learning", "make", "showcase", "reflection"].every((key, index) => {
-          const candidate = lockedStages[index];
-          return Boolean(candidate && typeof candidate === "object" && (candidate as { key?: unknown }).key === key);
-        });
-      if (lockedCourse?.status !== "teaching"
-        || !lockedNewFiveStageCourse
-        || !lockedStage
-        || typeof lockedStage !== "object"
-        || (lockedStage as { key?: unknown }).key !== "make") {
-        throw new ShowcasePresentationError("MAKE_INACTIVE", "只能在第三阶段项目实践中提交本地成果。", 409);
+      if (lockedCourse?.status !== 'teaching' || lockedStages[lockedCourse.currentStageIndex]?.key !== 'make') {
+        throw new ShowcasePresentationError('MAKE_INACTIVE', '只能在第三阶段项目实践中提交本地成果。', 409);
       }
-      const lockedMember = await tx.groupMember.findFirst({
-        where: { courseId, studentId },
-        select: { groupId: true },
-      });
-      if (!lockedMember) throw new ShowcasePresentationError("STUDENT_NOT_FOUND", "学生尚未加入项目空间。", 404);
-      const latest = await tx.projectPdfVersion.findFirst({
-        where: { courseId, studentId, stageKey: "make" },
-        orderBy: { sequence: "desc" },
-        select: { sequence: true },
-      });
-      await tx.uploadFile.create({
-        data: {
-          id: uploadId,
-          fileName: originalName,
-          storedName,
-          courseId,
-          uploadedById: studentId,
-          uploadedByRole: "student",
-          size: info.size,
-          mimeType: allowed.mimeType,
-          referencedBy: [`project-pdf-version:${versionId}`],
-          refCount: 1,
-        },
-      });
-      const version = await tx.projectPdfVersion.create({
-        data: {
-          id: versionId,
-          courseId,
-          studentId,
-          groupId: lockedMember.groupId,
-          stageKey: "make",
-          sequence: (latest?.sequence ?? 0) + 1,
-          title,
-          uploadId,
-          kind: allowed.kind,
-          mimeType: allowed.mimeType,
-          sha256,
-          size: info.size,
-          requestId,
-          participationId: (await findLegacyParticipation(tx, courseId, studentId))?.id,
-        },
-      });
-      const updatedCourse = await tx.course.update({
-        where: { id: courseId },
-        data: { version: { increment: 1 } },
-        select: { version: true },
-      });
-      const event = await tx.courseEvent.create({
-        data: {
-          courseId,
-          requestId: randomUUID(),
-          type: "UPDATE_COURSE",
-          actorId: studentId,
-          actorRole: "student",
-          courseVersion: updatedCourse.version,
-          payload: { source: "showcase-artifact-submission", scope: "student", studentId },
-        },
-        select: { cursor: true },
-      });
-      return { version, courseVersion: updatedCourse.version, eventCursor: event.cursor.toString() };
+      const participation = await tx.classroomParticipation.findFirst({ where: { instanceId: courseId, enrollment: { userId: studentId } }, include: { enrollment: true } });
+      const lockedMember = await view.findMember({ where: { courseId, studentId } });
+      if (!participation || !lockedMember) throw new ShowcasePresentationError('STUDENT_NOT_FOUND', '学生尚未加入项目空间。', 404);
+      const groupId = await resolveProjectGroupId(tx, participation.enrollment.offeringId, lockedMember.groupId);
+      if (!groupId) throw new ShowcasePresentationError('GROUP_NOT_FOUND', '项目空间所属小组不存在。', 409);
+      const latest = await tx.artifactVersion.aggregate({ where: { artifact: { participationId: participation.id, type: { in: ['PDF_ARCHIVE', 'FILE_ARCHIVE'] } } }, _max: { sequence: true } });
+      await tx.fileAsset.create({ data: { id: uploadId, originalName, storageKey: storedName, offeringId: participation.enrollment.offeringId,
+        uploadedById: studentId, size: BigInt(info.size), mimeType: allowed.mimeType, sha256 } });
+      const artifact = await tx.artifact.create({ data: { participationId: participation.id, groupId, title,
+        type: allowed.kind === 'pdf' ? 'PDF_ARCHIVE' : 'FILE_ARCHIVE', status: 'SUBMITTED' } });
+      const submittedAt = new Date();
+      const saved = await tx.artifactVersion.create({ data: { id: versionId, artifactId: artifact.id, sequence: (latest._max.sequence ?? 0) + 1,
+        fileAssetId: uploadId, mimeType: allowed.mimeType, sha256, size: BigInt(info.size), status: 'SUBMITTED', submittedAt } });
+      const updatedCourse = await view.updateCourse({ where: { id: courseId }, data: { version: { increment: 1 } } });
+      const event = await tx.domainEvent.create({ data: { classroomInstanceId: courseId, offeringId: participation.enrollment.offeringId,
+        participationId: participation.id, actorId: studentId, researchKey: participation.enrollment.researchKey, idempotencyKey,
+        eventType: 'file_artifact_submitted', payload: { versionId, requestId, studentId, scope: 'student', kind: allowed.kind, title, courseVersion: updatedCourse?.version ?? 1 } } });
+      return { version: { ...saved, submittedAt, kind: allowed.kind }, courseVersion: updatedCourse?.version ?? 1, eventCursor: encodeEventCursor(event) };
     });
     if ("duplicate" in durable && durable.duplicate) {
       await unlink(targetPath).catch(() => undefined);
@@ -270,12 +202,12 @@ export async function POST(
     }).catch(() => undefined);
     return Response.json({
       ok: true,
-      versionId: durable.version.id,
-      sequence: durable.version.sequence,
-      submittedAt: durable.version.submittedAt.toISOString(),
+      versionId: durable.version!.id,
+      sequence: durable.version!.sequence,
+      submittedAt: durable.version!.submittedAt.toISOString(),
       uploadId,
-      kind: durable.version.kind,
-      mimeType: durable.version.mimeType,
+      kind: durable.version!.kind,
+      mimeType: durable.version!.mimeType,
       requestId,
     }, { status: 201 });
   } catch (error) {

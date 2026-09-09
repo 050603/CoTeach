@@ -1,166 +1,53 @@
-// @ts-nocheck
-// Upload cleanup tasks (Stage 6).
-//
-// Three operations:
-//   - cleanupOrphanFiles(): scan the uploads directory and remove any files
-//     that have no UploadFile row in the database.
-//   - cleanupCourseFiles(courseId): bulk-delete every upload belonging to a
-//     course — disk files + DB rows. Used when a course is deleted.
-//   - cleanupExpiredFiles(retentionDays): for courses whose status is
-//     "finished", remove upload files older than `retentionDays` days.
+// V2 cleanup never expires active assets or experimental evidence based on age alone.
+import { readdir, lstat, unlink } from 'node:fs/promises';
+import path from 'node:path';
+import { prisma } from '@/lib/db/client';
 
-import { readdir, stat, unlink } from "node:fs/promises";
-import path from "node:path";
-import { prisma } from "@/lib/db/client";
-
-const dataDir = process.env.UPLOAD_DIR?.trim()
-  || path.join(process.cwd(), ".openpbl-data", "uploads");
-
+const dataDir = process.env.UPLOAD_DIR?.trim() || path.join(process.cwd(), '.openpbl-data', 'uploads');
+const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 export type CleanupResult = { deleted: string[]; failed: string[] };
 
-async function safeUnlink(storedName: string): Promise<void> {
-  try {
-    await unlink(path.join(dataDir, storedName));
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") throw err;
-  }
-}
-
-/**
- * Scan `.openpbl-data/uploads/` and delete every regular file that has no
- * corresponding UploadFile row. Subdirectories are skipped. Missing files
- * inside an UploadFile row are NOT touched here — that is the
- * reference-tracker's responsibility.
- */
 export async function cleanupOrphanFiles(): Promise<CleanupResult> {
-  const deleted: string[] = [];
-  const failed: string[] = [];
-
+  const result: CleanupResult = { deleted: [], failed: [] };
   let entries: string[];
-  try {
-    entries = await readdir(dataDir);
-  } catch {
-    // Directory does not exist yet — nothing to clean.
-    return { deleted, failed };
+  try { entries = await readdir(dataDir); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return result;
+    throw error;
   }
-
-  const records = await prisma.uploadFile.findMany({
-    select: { storedName: true, previewStoredName: true },
-  });
-  const known = new Set(records.flatMap(storedNamesFor));
-
+  const assets = await prisma.fileAsset.findMany({ select: { storageKey: true } });
+  const known = new Set(assets.map((asset) => asset.storageKey));
   for (const entry of entries) {
-    const full = path.join(dataDir, entry);
-    try {
-      const info = await stat(full);
-      if (info.isDirectory()) continue;
-    } catch {
-      // stat failed (race / permission) — skip rather than risk deleting
-      // something we cannot inspect.
-      continue;
-    }
     if (known.has(entry)) continue;
     try {
-      await unlink(full);
-      deleted.push(entry);
-    } catch {
-      failed.push(entry);
-    }
+      const info = await lstat(path.join(dataDir, entry));
+      if (!info.isFile() || Date.now() - info.mtimeMs < ORPHAN_GRACE_MS) continue;
+      // Recheck after filesystem inspection in case an upload committed meanwhile.
+      if (await prisma.fileAsset.count({ where: { storageKey: entry } })) continue;
+      await unlink(path.join(dataDir, entry));
+      result.deleted.push(entry);
+    } catch { result.failed.push(entry); }
   }
-
-  return { deleted, failed };
+  return result;
 }
 
-/**
- * Delete every UploadFile (disk + DB row) associated with a course. Used by
- * the DELETE_COURSE action handler so that course deletion cascades to
- * uploaded artifacts. Idempotent — returns empty arrays when no files exist.
- */
-export async function cleanupCourseFiles(courseId: string): Promise<CleanupResult> {
-  const deleted: string[] = [];
-  const failed: string[] = [];
-
-  const records = await prisma.uploadFile.findMany({
-    where: { courseId },
-    select: { id: true, storedName: true, previewStoredName: true },
-  });
-
+async function cleanupDeletedFiles(offeringId?: string, cutoff?: Date): Promise<CleanupResult> {
+  const result: CleanupResult = { deleted: [], failed: [] };
+  const records = await prisma.fileAsset.findMany({ where: { offeringId, deletedAt: cutoff ? { lt: cutoff } : { not: null },
+    resource: null, artifactVersions: { none: {} } } });
   for (const record of records) {
-    for (const storedName of storedNamesFor(record)) {
-      try {
-        await safeUnlink(storedName);
-        deleted.push(storedName);
-      } catch {
-        failed.push(storedName);
-      }
-    }
+    if (path.basename(record.storageKey) !== record.storageKey) { result.failed.push(record.id); continue; }
+    try {
+      await unlink(path.join(dataDir, record.storageKey)).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; });
+      // Keep the tombstone and file identity for audit/research exports.
+      result.deleted.push(record.storageKey);
+    } catch { result.failed.push(record.storageKey); }
   }
-
-  if (records.length > 0) {
-    await prisma.uploadFile.deleteMany({
-      where: { id: { in: records.map((r) => r.id) } },
-    });
-  }
-
-  return { deleted, failed };
+  return result;
 }
 
-/**
- * Remove uploads for courses whose status is "finished" and whose files are
- * older than `retentionDays` days (based on UploadFile.createdAt). Disk files
- * and DB rows are both deleted.
- */
+/** A course cleanup processes only assets explicitly soft-deleted by an authorized user. */
+export async function cleanupCourseFiles(courseId: string): Promise<CleanupResult> { return cleanupDeletedFiles(courseId); }
 export async function cleanupExpiredFiles(retentionDays: number): Promise<CleanupResult> {
-  const deleted: string[] = [];
-  const failed: string[] = [];
-
-  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
-    return { deleted, failed };
-  }
-
-  const finishedCourses = await prisma.course.findMany({
-    where: { status: "finished" },
-    select: { id: true },
-  });
-  if (finishedCourses.length === 0) return { deleted, failed };
-
-  const courseIds = finishedCourses.map((c) => c.id);
-  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
-
-  const records = await prisma.uploadFile.findMany({
-    where: {
-      courseId: { in: courseIds },
-      createdAt: { lt: cutoff },
-    },
-    select: { id: true, storedName: true, previewStoredName: true },
-  });
-
-  for (const record of records) {
-    for (const storedName of storedNamesFor(record)) {
-      try {
-        await safeUnlink(storedName);
-        deleted.push(storedName);
-      } catch {
-        failed.push(storedName);
-      }
-    }
-  }
-
-  if (records.length > 0) {
-    await prisma.uploadFile.deleteMany({
-      where: { id: { in: records.map((r) => r.id) } },
-    });
-  }
-
-  return { deleted, failed };
-}
-
-function storedNamesFor(record: {
-  storedName: string;
-  previewStoredName?: string | null;
-}): string[] {
-  return record.previewStoredName
-    ? [record.storedName, record.previewStoredName]
-    : [record.storedName];
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) return { deleted: [], failed: [] };
+  return cleanupDeletedFiles(undefined, new Date(Date.now() - retentionDays * ORPHAN_GRACE_MS));
 }

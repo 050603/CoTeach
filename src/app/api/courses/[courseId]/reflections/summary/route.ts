@@ -1,3 +1,4 @@
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { randomUUID } from "node:crypto";
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
 import { checkDistributedRateLimit } from "@/lib/auth/distributed-rate-limit";
@@ -6,7 +7,7 @@ import {
   buildReflectionClassSummary,
 } from "@/lib/teaching-ai/support-engine";
 import {
-  dispatchSessionAction,
+  updateCourse,
   getCourse,
 } from "@/lib/session/server-store";
 import type {
@@ -39,6 +40,7 @@ export async function POST(
   if (auth.claims.role !== "teacher") return Response.json({ code: "FORBIDDEN" }, { status: 403 });
 
   const { courseId } = await context.params;
+  if (!await canAccessLegacyCourse(auth.claims, courseId, "read")) return Response.json({ code: "FORBIDDEN", message: "无权访问该课堂的反思数据" }, { status: 403 });
   const parsedBody = await request.json().catch(() => ({}));
   const body = parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody)
     ? parsedBody as SummaryRequest
@@ -83,10 +85,7 @@ export async function POST(
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
-    await dispatchSessionAction({
-      type: "UPSERT_AI_SUPPORT",
-      payload: { courseId: course.id, support },
-    });
+    await updateCourse(course.id, current => ({ ...current, aiSupports: [...(current.aiSupports ?? []).filter(item => item.id !== support.id), support] }), { actor: { id: auth.claims.sub!, role: auth.claims.role } });
     return Response.json({ support }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     console.error("[reflection-summary] generation failed", {

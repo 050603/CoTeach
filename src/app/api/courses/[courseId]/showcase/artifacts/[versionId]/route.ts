@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
@@ -26,46 +25,21 @@ export async function GET(
   const parsed = ParamsSchema.safeParse(await context.params);
   if (!parsed.success) return new Response(null, { status: 404 });
   const { courseId, versionId } = parsed.data;
-  if (auth.claims.role === "student" && auth.claims.courseId !== courseId) return new Response(null, { status: 404 });
-  if (!(await canAccessLegacyCourse(auth.claims, courseId, "read"))) return new Response(null, { status: 403 });
-  if (auth.claims.role === "student") {
-    const member = await prisma.student.findFirst({ where: { courseId, id: auth.claims.studentId }, select: { id: true } });
-    if (!member) return new Response(null, { status: 404 });
-  }
-
-  const [document, pdf] = await Promise.all([
-    prisma.projectDocumentVersion.findFirst({ where: { id: versionId, courseId, stageKey: "make", status: "submitted" } }),
-    prisma.projectPdfVersion.findFirst({ where: { id: versionId, courseId, stageKey: "make", status: "submitted" } }),
-  ]);
-  const artifact = document ?? pdf;
-  if (!artifact) return new Response(null, { status: 404 });
-
-  if (auth.claims.role === "student" && artifact.studentId !== auth.claims.studentId) {
-    const active = await prisma.showcasePresentation.findFirst({
-      where: { courseId, status: "active", artifactVersionId: versionId },
-      select: { id: true },
-    });
+  if (!(await canAccessLegacyCourse(auth.claims, courseId, 'read'))) return new Response(null, { status: 403 });
+  const version = await prisma.artifactVersion.findFirst({ where: { id: versionId, status: 'SUBMITTED', artifact: { participation: { instanceId: courseId } } },
+    include: { artifact: { include: { participation: { include: { enrollment: true } } } }, fileAsset: true } });
+  if (!version) return new Response(null, { status: 404 });
+  if (auth.claims.role === 'student' && version.artifact.participation.enrollment.userId !== auth.claims.sub) {
+    const active = await prisma.showcasePresentation.findFirst({ where: { status: 'ACTIVE', artifactVersionId: versionId, participation: { instanceId: courseId } } });
     if (!active) return new Response(null, { status: 404 });
   }
-
-  if (document) {
-    return Response.json({
-      kind: "document",
-      versionId: document.id,
-      title: document.title,
-      sequence: document.sequence,
-      submittedAt: document.submittedAt?.toISOString(),
-      html: document.sourceHtml,
-    }, { headers: { "Cache-Control": "private, no-store" } });
-  }
-
-  const file = await prisma.uploadFile.findFirst({
-    where: { id: pdf!.uploadId, courseId, deletedAt: null },
-    select: { storedName: true, mimeType: true, fileName: true, size: true },
-  });
-  if (!file || path.basename(file.storedName) !== file.storedName) return new Response(null, { status: 404 });
+  if (version.artifact.type === 'DOCUMENT_ARCHIVE') return Response.json({ kind: 'document', versionId: version.id,
+    title: version.artifact.title, sequence: version.sequence, submittedAt: version.submittedAt?.toISOString(), html: version.sourceHtml ?? '' },
+    { headers: { 'Cache-Control': 'private, no-store' } });
+  const file = version.fileAsset;
+  if (!file || file.deletedAt || path.basename(file.storageKey) !== file.storageKey) return new Response(null, { status: 404 });
   const dataDir = process.env.UPLOAD_DIR?.trim() || path.resolve(".openpbl-data", "uploads");
-  const target = path.join(dataDir, file.storedName);
+  const target = path.join(dataDir, file.storageKey);
   let info;
   try {
     info = await stat(target);
@@ -80,7 +54,7 @@ export async function GET(
   const end = range?.end ?? info.size - 1;
   const stream = createReadStream(target, { start, end });
   const download = new URL(request.url).searchParams.get("download") === "1";
-  const disposition = download || pdf!.kind === "file" ? "attachment" : "inline";
+  const disposition = download || version.artifact.type === "FILE_ARCHIVE" ? "attachment" : "inline";
   return new Response(Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>, {
     status: range ? 206 : 200,
     headers: {
@@ -88,7 +62,7 @@ export async function GET(
       "Content-Length": String(end - start + 1),
       ...(range ? { "Content-Range": `bytes ${start}-${end}/${info.size}` } : {}),
       "Accept-Ranges": "bytes",
-      "Content-Disposition": `${disposition}; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+      "Content-Disposition": `${disposition}; filename*=UTF-8''${encodeURIComponent(file.originalName)}`,
       "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "default-src 'none'; sandbox",

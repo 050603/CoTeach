@@ -27,12 +27,14 @@ vi.mock("@/lib/redis/client", () => ({
 
 vi.mock("@/lib/db/client", () => ({
   prisma: {
-    student: {
+    classroomParticipation: {
       updateMany: mocks.updateMany,
       findMany: mocks.findMany,
     },
   },
 }));
+
+vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: async () => true }));
 
 import { DELETE, GET, PUT } from "./route";
 
@@ -60,8 +62,8 @@ describe("course presence database fallback", () => {
     expect(response.status).toBe(200);
     expect(payload).toMatchObject({ online: true, degraded: true, source: "database" });
     expect(mocks.updateMany).toHaveBeenCalledWith({
-      where: { courseId, id: "student-1" },
-      data: { lastSeenAt: expect.any(String), version: { increment: 1 } },
+      where: { instanceId: courseId, enrollment: { userId: "student-1" } },
+      data: { lastEnteredAt: expect.any(Date) },
     });
   });
 
@@ -77,10 +79,8 @@ describe("course presence database fallback", () => {
   });
 
   it("returns only database heartbeats that have not expired", async () => {
-    const now = Date.now();
     mocks.findMany.mockResolvedValue([
-      { id: "student-1", name: "在线学生", lastSeenAt: new Date(now - 5_000).toISOString() },
-      { id: "student-2", name: "离线学生", lastSeenAt: new Date(now - 90_000).toISOString() },
+      { enrollment: { user: { id: "student-1", displayName: "在线学生" } } },
     ]);
 
     const response = await GET(request("GET"), context);
@@ -97,8 +97,8 @@ describe("course presence database fallback", () => {
 
     expect(response.status).toBe(204);
     expect(mocks.updateMany).toHaveBeenCalledWith({
-      where: { courseId, id: "student-1" },
-      data: { lastSeenAt: null, version: { increment: 1 } },
+      where: { instanceId: courseId, enrollment: { userId: "student-1" } },
+      data: { lastEnteredAt: expect.any(Date) },
     });
   });
 });

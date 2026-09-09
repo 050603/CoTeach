@@ -11,9 +11,10 @@ import {
 import {
   buildCourseCoverPrompt,
   COURSE_COVER_GENERATION_SPEC,
-  courseCoverResultUrl,
   type CourseCoverContext,
 } from "@/lib/course-cover";
+import { persistGeneratedClassroomImage } from "@openmaic/lib/server/classroom-media-generation";
+import { withGenerationRetry } from "@openmaic/lib/generation/generation-retry";
 
 function isImageProviderId(value: string): value is ImageProviderId {
   return Object.prototype.hasOwnProperty.call(IMAGE_PROVIDERS, value);
@@ -47,16 +48,37 @@ export function resolveServerCourseCoverProvider(): {
  */
 export async function generateCourseCoverImageOnServer(
   course: CourseCoverContext,
+  classroomId: string,
   signal?: AbortSignal,
 ): Promise<string> {
   if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
   const config = resolveServerCourseCoverProvider();
-  const result = await generateImage(config, {
-    prompt: buildCourseCoverPrompt(course),
-    ...COURSE_COVER_GENERATION_SPEC,
+  const prompt = buildCourseCoverPrompt(course);
+  return withGenerationRetry(async () => {
+    const result = await generateImage(config, {
+      prompt,
+      ...COURSE_COVER_GENERATION_SPEC,
+    });
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    return persistGeneratedClassroomImage({
+      result,
+      classroomId,
+      elementId: "course-cover",
+      aspectRatio: COURSE_COVER_GENERATION_SPEC.aspectRatio,
+      baseUrl: "",
+      signal,
+      qualityReview: {
+        providerId: config.providerId,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        requirement: prompt,
+      },
+    });
+  }, {
+    label: `course cover ${classroomId}`,
+    signal,
+    maxRetries: 2,
+    baseDelayMs: 5_000,
+    maxDelayMs: 20_000,
   });
-  if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
-  const imageUrl = courseCoverResultUrl(result);
-  if (!imageUrl) throw new Error("图片提供方未返回封面地址或图片数据");
-  return imageUrl;
 }

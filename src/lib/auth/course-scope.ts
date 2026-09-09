@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { AuthClaims } from "@/lib/auth/session";
 import type { Course } from "@/lib/session/types";
 
@@ -9,7 +8,7 @@ export function scopeCourseForClaims(course: Course, claims: AuthClaims): Course
       : stage,
   );
   if (claims.role === "teacher") return { ...course, stages };
-  const studentId = claims.studentId;
+  const studentId = claims.sub ?? "";
   const groupIds = new Set(
     (course.groups ?? [])
       .filter((group) => group.members.some((member) => member.studentId === studentId))

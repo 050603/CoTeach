@@ -23,6 +23,7 @@ import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { Scene } from '@openmaic/lib/types/stage';
 import type { MediaGenerationRequest } from '@openmaic/lib/media/types';
 import { throwIfAborted } from '@openmaic/lib/generation/generation-retry';
+import { assertRequestedClassroomMediaProviders } from '@openmaic/lib/server/classroom-media-readiness';
 
 const log = createLogger('ClassroomAssets');
 
@@ -166,6 +167,7 @@ async function persistSceneGroups(
 export async function generateClassroomAssets(
   input: ClassroomAssetGenerationInput,
 ): Promise<void> {
+  assertRequestedClassroomMediaProviders(input);
   const groups = classroomGroups(input);
   const allScenes = groups.flatMap((group) => group.scenes);
   const hasMediaGeneration = input.enableImageGeneration || input.enableVideoGeneration;

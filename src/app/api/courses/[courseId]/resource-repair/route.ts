@@ -1,5 +1,5 @@
 import { type NextRequest } from "next/server";
-import { isAuthConfigured, readAuthFromRequest } from "@/lib/auth/session";
+import { authorizeTemplateRequest } from "@/lib/platform/template-access";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import { readClassroom, updatePersistedClassroomScenes } from "@/lib/openmaic/server/classroom-storage";
 import {
@@ -23,18 +23,14 @@ import { resolveDurableCourseSceneOutlines } from "@/lib/course-generation/cours
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function authorize(request: NextRequest): Promise<boolean> {
-  if (!isAuthConfigured()) return true;
-  const claims = await readAuthFromRequest(request, "teacher");
-  return claims?.role === "teacher";
-}
 
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ courseId: string }> },
 ) {
-  if (!await authorize(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
   const { courseId } = await context.params;
+  const auth = await authorizeTemplateRequest(request, courseId);
+  if (auth instanceof Response) return auth;
   return Response.json(await auditCourseGeneratedResources(courseId));
 }
 
@@ -42,8 +38,9 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ courseId: string }> },
 ) {
-  if (!await authorize(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
   const { courseId } = await context.params;
+  const auth = await authorizeTemplateRequest(request, courseId);
+  if (auth instanceof Response) return auth;
   const course = await getCourse(courseId);
   if (!course) return Response.json({ error: "Course not found" }, { status: 404 });
   const classroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;

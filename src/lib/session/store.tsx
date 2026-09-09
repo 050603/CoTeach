@@ -243,7 +243,10 @@ async function fetchSession(
   preferredRole?: "teacher" | "student",
 ): Promise<SessionState> {
   const role = preferredRole ?? getClientRole();
-  const res = await fetch("/api/courses", {
+  const classroomId = typeof window !== "undefined" ? window.location.pathname.match(role === "student"
+    ? /^\/student\/(?:classroom|ai-learning|ai-collaboration|micro-lesson)\/([^/]+)/
+    : /^\/teacher\/(?:teach|prepare)\/([^/]+)/)?.[1] : undefined;
+  const res = await fetch(classroomId ? `/api/courses?courseId=${encodeURIComponent(classroomId)}` : "/api/courses", {
     cache: "no-store",
     headers: role ? { "X-OpenPBL-Role": role } : undefined,
   });
@@ -457,6 +460,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
 
   async function refresh(preferredRole?: "teacher" | "student") {
+    if (getSessionRouteMode(pathname) === "identity") {
+      const role = preferredRole ?? (pathname.startsWith("/teacher") ? "teacher" : "student");
+      const response = await fetch("/api/auth/me", { cache: "no-store", headers: { "X-OpenPBL-Role": role } });
+      const body = response.ok ? await response.json() as { user?: { role?: string; displayName?: string; studentName?: string } } : null;
+      const next = makeEmptyHydratedState();
+      if (body?.user?.role === role) next.user = { ...next.user, role, name: body.user.displayName || body.user.studentName || (role === "teacher" ? "教师" : "学生") };
+      dispatch({ type: "HYDRATE", payload: next });
+      return;
+    }
     // Skip polling refresh while commits are in-flight — the server file
     // may not yet reflect those actions (they're queued), and HYDRATEing
     // would overwrite local optimistic state, causing the same
@@ -1027,6 +1039,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
 
     async function startSessionRefresh() {
+      if (mode === "identity") {
+        // AI settings need the signed-in name but have no legacy classroom data.
+        await refresh(role).catch(() => {
+          if (!cancelled) dispatch({ type: "HYDRATE", payload: makeEmptyHydratedState() });
+        });
+        return;
+      }
       if (mode === "none") {
         if (!stateRef.current.hydrated) {
           dispatch({ type: "HYDRATE", payload: makeEmptyHydratedState() });
@@ -1273,7 +1292,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             blockers[0]?.message ?? "课程不存在，无法开始授课。",
           );
         }
-        const code = generateInviteCode(6);
+        const code = course.platformContext ? (course.inviteCode ?? "") : generateInviteCode(6);
         commit({
           type: "START_TEACHING",
           payload: { id, classConfig, inviteCode: code },

@@ -1,8 +1,7 @@
-// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
 import type { StudentAiProgress } from "@/lib/session/types";
-import { lockCourseMutation } from "@/lib/db/course-mutation-lock";
+import { lockProjectedCourse } from "@/lib/db/session-repository";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
 
 export async function persistStudentAiProgress(
@@ -12,23 +11,11 @@ export async function persistStudentAiProgress(
   stageProgress: number,
 ): Promise<StudentAiProgress> {
   const result = await runMutationTransaction(async (tx) => {
-    await lockCourseMutation(tx, courseId);
-    const [courseRow, studentRow] = await Promise.all([
-      tx.course.findUnique({
-        where: { id: courseId },
-        select: { aiLearningProgress: true },
-      }),
-      tx.student.findUnique({
-        where: { courseId_id: { courseId, id: studentId } },
-        select: { progress: true },
-      }),
-    ]);
-    if (!courseRow) throw new Error("COURSE_NOT_FOUND");
-    if (!studentRow) throw new Error("STUDENT_NOT_FOUND");
-
-    const progressByStudent =
-      (courseRow.aiLearningProgress as Record<string, StudentAiProgress> | null) ?? {};
-    const previous = progressByStudent[studentId];
+    await lockProjectedCourse(tx, courseId);
+    const participation = await tx.classroomParticipation.findFirst({ where: { instanceId: courseId, enrollment: { userId: studentId, status: "ACTIVE" } }, include: { workspace: true, enrollment: true } });
+    if (!participation) throw new Error("STUDENT_NOT_FOUND");
+    const projectState = (participation.workspace?.projectState ?? {}) as Record<string, unknown>;
+    const previous = projectState.aiLearningProgress as StudentAiProgress | undefined;
     const completedScenes = Array.from(new Set([
       ...(previous?.completedScenes ?? []),
       ...progress.completedScenes,
@@ -53,50 +40,16 @@ export async function persistStudentAiProgress(
           ? previous.masteryLevel
           : progress.masteryLevel,
     };
-    const updatedCourse = await tx.$executeRaw`
-      UPDATE "Course"
-      SET "aiLearningProgress" = jsonb_set(
-            COALESCE("aiLearningProgress", '{}'::jsonb),
-            ARRAY[${studentId}]::text[],
-            ${JSON.stringify(mergedProgress)}::jsonb,
-            true
-          ),
-          "version" = "version" + 1,
-          "updatedAt" = NOW()
-      WHERE "id" = ${courseId}
-    `;
-    if (updatedCourse !== 1) throw new Error("COURSE_NOT_FOUND");
-
-    const studentProgress =
-      (studentRow.progress as Record<string, number> | null) ?? {};
-    await tx.student.update({
-      where: { courseId_id: { courseId, id: studentId } },
-      data: {
-        progress: {
-          ...studentProgress,
-          "ai-learning": Math.max(studentProgress["ai-learning"] ?? 0, stageProgress),
-        },
-        version: { increment: 1 },
-      },
-    });
-
-    const course = await tx.course.findUniqueOrThrow({
-      where: { id: courseId },
-      select: { version: true },
-    });
-    const event = await tx.courseEvent.create({
-      data: {
-        courseId,
-        requestId: randomUUID(),
-        type: "UPDATE_STUDENT_PROGRESS",
-        actorId: studentId,
-        actorRole: "student",
-        courseVersion: course.version,
-        payload: { studentId, stageKey: "ai-learning", progress: stageProgress },
-      },
-      select: { cursor: true, courseVersion: true },
-    });
-    return { event, progress: mergedProgress };
+    await tx.studentProjectWorkspace.upsert({ where: { participationId: participation.id }, create: { participationId: participation.id, projectState: JSON.parse(JSON.stringify({ aiLearningProgress: mergedProgress })) }, update: { projectState: JSON.parse(JSON.stringify({ ...projectState, aiLearningProgress: mergedProgress })), version: { increment: 1 } } });
+    const stageState = (participation.stageProgress ?? {}) as Record<string, unknown>;
+    const values = (stageState.progress ?? {}) as Record<string, number>;
+    await tx.classroomParticipation.update({ where: { id: participation.id }, data: { stageProgress: JSON.parse(JSON.stringify({ ...stageState, progress: { ...values, "ai-learning": Math.max(values["ai-learning"] ?? 0, stageProgress) } })) } });
+    const instance = await tx.classroomInstance.findUniqueOrThrow({ where: { id: courseId } });
+    const runtime = (instance.runtimeConfig ?? {}) as Record<string, unknown>;
+    const version = Number(runtime.version ?? 1) + 1;
+    await tx.classroomInstance.update({ where: { id: courseId }, data: { runtimeConfig: JSON.parse(JSON.stringify({ ...runtime, version })) } });
+    const row = await tx.domainEvent.create({ data: { idempotencyKey: randomUUID(), actorId: studentId, offeringId: participation.enrollment.offeringId, classroomInstanceId: courseId, participationId: participation.id, researchKey: participation.enrollment.researchKey, eventType: "UPDATE_STUDENT_PROGRESS", payload: { studentId, stageKey: "ai-learning", progress: stageProgress, scope: "student", courseVersion: version } } });
+    return { event: { courseVersion: version, cursor: `${row.createdAt.toISOString()}~${row.id}` }, progress: mergedProgress };
   });
 
   try {

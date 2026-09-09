@@ -1,9 +1,7 @@
-// @ts-nocheck
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { appendAiInteractionEvents, listAiInteractionEvents } from "@/lib/ai-collaboration/audit-store";
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
-import { canAccessLegacyCourse } from "@/lib/platform/access";
+import { authorizeLegacyAiScope, legacyAiError } from "@/lib/ai-collaboration/legacy-scope";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +23,7 @@ const EventSchema = z.object({
   eventType: z.enum(["request", "response", "policy", "proposal", "decision", "undo", "comment", "submit", "error"]),
   actorRole: z.literal("student"),
   content: z.string().max(12_000).optional(),
-  payload: z.record(z.string(), z.unknown()).optional(),
+  payload: z.record(z.string(), z.unknown()).refine(value => JSON.stringify(value).length <= 32768).optional(),
   workspaceKind: z.enum(["document", "external-artifact"]).optional(),
   requestId: z.string().max(160).optional(),
 }).strict();
@@ -36,20 +34,19 @@ export async function GET(request: Request) {
   const parsed = QuerySchema.safeParse(Object.fromEntries(new URL(request.url).searchParams));
   if (!parsed.success) return Response.json({ error: "INVALID_REQUEST", message: "查询参数无效。" }, { status: 400 });
   const query = parsed.data;
-  if (auth.claims.role === "student" && auth.claims.courseId !== query.courseId) {
-    return Response.json({ error: "FORBIDDEN" }, { status: 403 });
-  }
-  if (!(await canAccessLegacyCourse(auth.claims, query.courseId, "read"))) {
-    return Response.json({ error: "FORBIDDEN" }, { status: 403 });
-  }
+  try { await authorizeLegacyAiScope(auth.claims, query.courseId, query.studentId); }
+  catch (error) { return legacyAiError(error); }
+  try {
   const result = await listAiInteractionEvents({
     courseId: query.courseId,
-    studentId: auth.claims.role === "student" ? auth.claims.studentId : query.studentId,
+    studentId: auth.claims.role === "student" ? auth.claims.sub : query.studentId,
     stageKey: query.stageKey,
     limit: query.limit,
     cursor: query.cursor,
   });
+  if (auth.claims.role === "student") result.events = result.events.filter(event => event.payload?.visibility !== "teacher-only");
   return Response.json(result, { headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) { return legacyAiError(error); }
 }
 
 export async function POST(request: Request) {
@@ -61,20 +58,17 @@ export async function POST(request: Request) {
   const parsed = EventSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "INVALID_REQUEST", message: "事件参数无效。" }, { status: 400 });
   const event = parsed.data;
-  if (event.courseId !== auth.claims.courseId || (event.studentId && event.studentId !== auth.claims.studentId)) {
-    return Response.json({ error: "FORBIDDEN" }, { status: 403 });
-  }
-  if (!(await canAccessLegacyCourse(auth.claims, event.courseId, "write"))) {
-    return Response.json({ error: "COURSE_LOCKED" }, { status: 403 });
-  }
+  try { await authorizeLegacyAiScope(auth.claims, event.courseId, event.studentId, true); }
+  catch (error) { return legacyAiError(error); }
   const { workspaceKind, ...eventData } = event;
+  try {
   const [created] = await appendAiInteractionEvents([{
     ...eventData,
-    studentId: auth.claims.studentId,
-    actorId: auth.claims.studentId,
+    studentId: auth.claims.sub!,
+    actorId: auth.claims.sub!,
     payload: { ...(event.payload ?? {}), workspaceKind: workspaceKind ?? "document" },
-    id: randomUUID(),
     requestId: event.requestId ?? request.headers.get("x-request-id") ?? undefined,
   }]);
   return Response.json({ ok: true, event: created });
+  } catch (error) { return legacyAiError(error); }
 }

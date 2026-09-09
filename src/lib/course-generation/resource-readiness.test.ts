@@ -8,9 +8,9 @@ import {
 } from "./resource-readiness";
 
 const outline = {
-  id: "quiz-1",
-  title: "主课达标测",
-  type: "quiz",
+  id: "slide-1",
+  title: "概念关系讲解",
+  type: "slide",
   order: 0,
   teachingToolPlan: [{
     id: "plan-1",
@@ -24,10 +24,10 @@ const outline = {
 
 const scene = {
   id: "scene-1",
-  outlineId: "quiz-1",
-  title: "主课达标测",
+  outlineId: "slide-1",
+  title: "概念关系讲解",
   order: 0,
-  type: "quiz",
+  type: "slide",
   ttsPolicy: "target-duration",
   actions: [{ id: "speech-1", type: "speech", text: "开始测验" }],
 } as Scene;
@@ -35,7 +35,7 @@ const scene = {
 describe("course resource readiness", () => {
   it("reports a required planned action that is absent from the generated scene", () => {
     expect(findMissingTeachingToolResources([outline], [scene])).toMatchObject([{
-      title: "主课达标测",
+      title: "概念关系讲解",
       tool: "whiteboard",
     }]);
   });
@@ -53,7 +53,7 @@ describe("course resource readiness", () => {
       kind: "tts",
       sceneId: "scene-1",
       actionId: "speech-1",
-      title: "主课达标测",
+      title: "概念关系讲解",
     }]);
   });
 

@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   deleteProviderEntry,
+  getProviderEntry,
+  type ProviderEntry,
   listProviders,
   saveProviderEntry,
 } from "@/lib/openmaic-bridge/provider-config-editor";
@@ -48,19 +50,10 @@ export async function GET(request: Request) {
     providers: Object.fromEntries(
       Object.entries(providers).map(([id, entry]) => [
         id,
-        {
-          baseUrl: entry.baseUrl,
-          models: entry.models,
-          enabled: entry.enabled,
-          hasApiKey: Boolean(entry.apiKey),
-          defaultModel: entry.defaultModel,
-          priority: entry.priority,
-          defaultVoice: entry.defaultVoice,
-          timingCalibrations: entry.timingCalibrations,
-        },
+        publicEntry(entry),
       ]),
     ),
-  });
+  }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function POST(request: Request) {
@@ -79,7 +72,15 @@ export async function POST(request: Request) {
     timingCalibrations: parsed.data.timingCalibrations as never,
     apiKey: parsed.data.apiKey ?? "",
   });
-  return Response.json({ ok: true });
+  const saved = await getProviderEntry(parsed.data.section, parsed.data.providerId);
+  if (!saved) return apiError(request, "PROVIDER_SAVE_UNCONFIRMED", "配置保存后未能读取，请重试。", 503);
+  return Response.json({ ok: true, section: parsed.data.section, providerId: parsed.data.providerId, provider: publicEntry(saved) }, { headers: { "Cache-Control": "private, no-store" } });
+}
+
+function publicEntry(entry: ProviderEntry) {
+  return { hasApiKey: Boolean(entry.apiKey), baseUrl: entry.baseUrl, models: entry.models,
+    enabled: entry.enabled, defaultModel: entry.defaultModel, priority: entry.priority,
+    defaultVoice: entry.defaultVoice, timingCalibrations: entry.timingCalibrations };
 }
 
 export async function DELETE(request: Request) {

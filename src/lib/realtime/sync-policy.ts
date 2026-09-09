@@ -1,3 +1,5 @@
+import { decodeEventCursor } from "./event-cursor";
+
 export type RealtimeTransportMode = "websocket" | "polling";
 
 /**
@@ -65,7 +67,11 @@ export function latestEventCursor(
 ): string {
   let latest = "0";
   for (const value of values) {
-    if (!value || !/^\d+$/.test(value)) continue;
+    if (value && decodeEventCursor(value)) {
+      if (!decodeEventCursor(latest) || value > latest) latest = value;
+      continue;
+    }
+    if (decodeEventCursor(latest) || !value || !/^\d+$/.test(value)) continue;
     const cursor = value.replace(/^0+(?=\d)/, "");
     if (
       cursor.length > latest.length

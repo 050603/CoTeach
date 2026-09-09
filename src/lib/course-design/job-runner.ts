@@ -1,6 +1,6 @@
-// @ts-nocheck
-import { Prisma, type CourseDesignGenerationJob } from "@prisma/client";
-import { prisma } from "@/lib/db/client";
+import { Prisma } from "@prisma/client";
+import type { CourseDesignGenerationJob } from "@/lib/course-generation/job-storage";
+import { contentGenerationJobs, designGenerationJobs } from "@/lib/course-generation/job-storage";
 import {
   callLLM,
   parseLLMJson,
@@ -185,7 +185,7 @@ async function awaitTeacherReviewCheckpoint(
   },
 ): Promise<void> {
   const reviewAvailableUntil = new Date(Date.now() + checkpoint.windowMs);
-  const updated = await prisma.courseDesignGenerationJob.update({
+  const updated = await designGenerationJobs.update({
     where: { id: job.id },
     data: {
       status: "review_available",
@@ -204,7 +204,7 @@ async function awaitTeacherReviewCheckpoint(
 
   while (true) {
     if (controller.signal.aborted) throw controller.signal.reason ?? new CourseDesignCancelledError();
-    const current = await prisma.courseDesignGenerationJob.findUnique({
+    const current = await designGenerationJobs.findUnique({
       where: { id: job.id },
       select: { status: true, reviewStatus: true, reviewAvailableUntil: true },
     });
@@ -216,7 +216,7 @@ async function awaitTeacherReviewCheckpoint(
     }
     if (current.status === "paused") {
       if (Date.now() - heartbeatAt >= 2_000) {
-        await prisma.courseDesignGenerationJob.updateMany({
+        await designGenerationJobs.updateMany({
           where: { id: job.id, status: "paused" },
           data: { lastHeartbeatAt: new Date() },
         });
@@ -227,7 +227,7 @@ async function awaitTeacherReviewCheckpoint(
     }
     const deadline = current.reviewAvailableUntil?.getTime() ?? reviewAvailableUntil.getTime();
     if (current.status === "review_available" && Date.now() >= deadline) {
-      const resumed = await prisma.courseDesignGenerationJob.updateMany({
+      const resumed = await designGenerationJobs.updateMany({
         where: { id: job.id, status: "review_available", reviewStatus: "available" },
         data: {
           status: "running",
@@ -239,7 +239,7 @@ async function awaitTeacherReviewCheckpoint(
         },
       });
       if (resumed.count === 1) {
-        const latest = await prisma.courseDesignGenerationJob.findUnique({ where: { id: job.id } });
+        const latest = await designGenerationJobs.findUnique({ where: { id: job.id } });
         if (latest) Object.assign(job, latest);
         return;
       }
@@ -256,10 +256,10 @@ function reviewKindForStep(step: string): QuickDesignReviewKind {
 export async function pauseCourseDesignForOutlineReview(
   courseId: string,
 ): Promise<CourseDesignGenerationJob | null> {
-  const job = await prisma.courseDesignGenerationJob.findUnique({ where: { courseId } });
+  const job = await designGenerationJobs.findUnique({ where: { courseId } });
   if (!job || job.status !== "review_available") return job;
   const reviewKind = reviewKindForStep(job.step);
-  const paused = await prisma.courseDesignGenerationJob.updateMany({
+  const paused = await designGenerationJobs.updateMany({
     where: { id: job.id, status: "review_available" },
     data: {
       status: "paused",
@@ -273,8 +273,8 @@ export async function pauseCourseDesignForOutlineReview(
     },
   });
   return paused.count === 1
-    ? prisma.courseDesignGenerationJob.findUnique({ where: { id: job.id } })
-    : prisma.courseDesignGenerationJob.findUnique({ where: { id: job.id } });
+    ? designGenerationJobs.findUnique({ where: { id: job.id } })
+    : designGenerationJobs.findUnique({ where: { id: job.id } });
 }
 
 export async function resumeCourseDesignAfterOutlineReview(
@@ -287,7 +287,7 @@ export async function resumeCourseDesignAfterOutlineReview(
     sceneOutlines?: OpenMaicSceneOutlineSnapshot[];
   },
 ): Promise<CourseDesignGenerationJob | null> {
-  const job = await prisma.courseDesignGenerationJob.findUnique({ where: { courseId } });
+  const job = await designGenerationJobs.findUnique({ where: { courseId } });
   if (!job || (job.status !== "paused" && job.status !== "review_available")) return job;
   const reviewKind = reviewKindForStep(job.step);
   if (review?.reviewKind && review.reviewKind !== reviewKind) {
@@ -324,7 +324,7 @@ export async function resumeCourseDesignAfterOutlineReview(
   const hasLiveRunner = Boolean(
     job.lastHeartbeatAt && Date.now() - job.lastHeartbeatAt.getTime() < 5_000,
   );
-  return prisma.courseDesignGenerationJob.update({
+  return designGenerationJobs.update({
     where: { id: job.id },
     data: {
       status: hasLiveRunner ? "running" : "queued",
@@ -348,7 +348,7 @@ async function recordStep(
   job: CourseDesignGenerationJob,
   input: Omit<QuickDesignTraceEvent, "completedAt">,
 ): Promise<QuickDesignTraceEvent> {
-  const status = await prisma.courseDesignGenerationJob.findUnique({
+  const status = await designGenerationJobs.findUnique({
     where: { id: job.id },
     select: { status: true },
   });
@@ -357,7 +357,7 @@ async function recordStep(
   }
   const event: QuickDesignTraceEvent = { ...input, completedAt: new Date().toISOString() };
   const trace = [...traceEvents(job.trace), event].slice(-MAX_TRACE_ENTRIES);
-  const updated = await prisma.courseDesignGenerationJob.update({
+  const updated = await designGenerationJobs.update({
     where: { id: job.id },
     data: {
       step: event.step,
@@ -385,7 +385,7 @@ async function beginStep(
   progress: number,
   message: string,
 ): Promise<void> {
-  const updated = await prisma.courseDesignGenerationJob.update({
+  const updated = await designGenerationJobs.update({
     where: { id: job.id },
     data: {
       step,
@@ -1196,14 +1196,14 @@ async function enqueueClassroomGeneration(
     enableVideoGeneration: request.enableVideoGeneration,
     enableTTS: request.enableTTS,
   });
-  const existingGenerationJob = await prisma.courseGenerationJob.findUnique({
+  const existingGenerationJob = await contentGenerationJobs.findUnique({
     where: { courseId: course.id },
     select: { id: true },
   });
   if (existingGenerationJob) {
     await resetCourseGenerationCheckpoints(existingGenerationJob.id);
   }
-  await prisma.courseGenerationJob.upsert({
+  await contentGenerationJobs.upsert({
     where: { courseId: course.id },
     create: {
       courseId: course.id,
@@ -1252,7 +1252,7 @@ function scheduleManagedCourseDesignRetry(jobId: string): void {
   const retryTimer = setTimeout(() => {
     void (async () => {
       const now = new Date();
-      const claimed = await prisma.courseDesignGenerationJob.updateMany({
+      const claimed = await designGenerationJobs.updateMany({
         where: { id: jobId, status: "queued" },
         data: {
           status: "running",
@@ -1265,7 +1265,7 @@ function scheduleManagedCourseDesignRetry(jobId: string): void {
         },
       });
       if (claimed.count !== 1) return;
-      const retryJob = await prisma.courseDesignGenerationJob.findUnique({ where: { id: jobId } });
+      const retryJob = await designGenerationJobs.findUnique({ where: { id: jobId } });
       if (retryJob) await runCourseDesignJob(retryJob);
     })().catch((error) => log.error("Failed to schedule managed course-design recovery", error));
   }, 150);
@@ -1284,7 +1284,7 @@ export async function runCourseDesignJob(job: CourseDesignGenerationJob): Promis
 export async function resumeRecoverableCourseDesignJob(
   courseId: string,
 ): Promise<CourseDesignGenerationJob | null> {
-  const job = await prisma.courseDesignGenerationJob.findUnique({ where: { courseId } });
+  const job = await designGenerationJobs.findUnique({ where: { courseId } });
   if (!job || job.status !== "failed" || !job.error) return job;
   const request = job.request as unknown as QuickDesignRequest;
   const managedRecoveryRequest = createManagedRecoveryRequest(request, new Error(job.error));
@@ -1298,7 +1298,7 @@ export async function resumeRecoverableCourseDesignJob(
   const recoveryCount = isTransientRecovery
     ? transientRecoveryRequest?.transientRecoveryCount ?? 1
     : managedRecoveryRequest?.managedRecoveryCount ?? 1;
-  const updated = await prisma.courseDesignGenerationJob.updateMany({
+  const updated = await designGenerationJobs.updateMany({
     where: { id: job.id, status: "failed" },
     data: {
       status: "queued",
@@ -1320,7 +1320,7 @@ export async function resumeRecoverableCourseDesignJob(
     },
   });
   if (updated.count === 1 && !isTransientRecovery) scheduleManagedCourseDesignRetry(job.id);
-  return prisma.courseDesignGenerationJob.findUnique({ where: { id: job.id } });
+  return designGenerationJobs.findUnique({ where: { id: job.id } });
 }
 
 async function runNewSystemCourseDesign(
@@ -1702,7 +1702,7 @@ async function runNewSystemCourseDesign(
     request.generationMode ?? "standard",
     request.referenceMaterials,
   );
-  await prisma.courseDesignGenerationJob.update({
+  await designGenerationJobs.update({
     where: { id: job.id },
     data: {
       status: "completed",
@@ -1732,7 +1732,7 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
     await runNewSystemCourseDesign(job, { ...request, systemMode: "new" }, controller);
   } catch (error) {
     if (stopping && controller.signal.aborted) {
-      await prisma.courseDesignGenerationJob.updateMany({
+      await designGenerationJobs.updateMany({
         where: { id: job.id, status: { in: ["running", "review_available"] } },
         data: {
           status: "queued",
@@ -1745,7 +1745,7 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
       });
       return;
     }
-    const currentStatus = await prisma.courseDesignGenerationJob.findUnique({
+    const currentStatus = await designGenerationJobs.findUnique({
       where: { id: job.id },
       select: { status: true },
     });
@@ -1755,7 +1755,7 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
       || currentStatus?.status === "cancelled"
       || (controller.signal.aborted && !stopping)
     ) {
-      await prisma.courseDesignGenerationJob.updateMany({
+      await designGenerationJobs.updateMany({
         where: { id: job.id, status: { in: ["running", "review_available", "paused", "cancelling"] } },
         data: {
           status: "cancelled",
@@ -1778,7 +1778,7 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
         `Transient infrastructure recovery ${recoveryCount} queued for ${request.courseId} in ${delayMs}ms`,
         error,
       );
-      await prisma.courseDesignGenerationJob.update({
+      await designGenerationJobs.update({
         where: { id: job.id },
         data: {
           status: "queued",
@@ -1805,7 +1805,7 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
         `Managed course-design recovery ${recoveryCount} queued for ${request.courseId}`,
         error,
       );
-      await prisma.courseDesignGenerationJob.update({
+      await designGenerationJobs.update({
         where: { id: job.id },
         data: {
           status: "queued",
@@ -1828,7 +1828,7 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
       return;
     }
     log.error(`Course design failed for ${request.courseId}`, error);
-    await prisma.courseDesignGenerationJob.update({
+    await designGenerationJobs.update({
       where: { id: job.id },
       data: {
         status: "failed",
@@ -1849,10 +1849,10 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
 }
 
 export async function cancelCourseDesignJob(courseId: string): Promise<CourseDesignGenerationJob | null> {
-  const job = await prisma.courseDesignGenerationJob.findUnique({ where: { courseId } });
+  const job = await designGenerationJobs.findUnique({ where: { courseId } });
   if (!job) return null;
   if (job.status === "queued") {
-    return prisma.courseDesignGenerationJob.update({
+    return designGenerationJobs.update({
       where: { id: job.id },
       data: {
         status: "cancelled",
@@ -1866,7 +1866,7 @@ export async function cancelCourseDesignJob(courseId: string): Promise<CourseDes
     });
   }
   if (["running", "review_available", "paused", "cancelling"].includes(job.status)) {
-    const updated = await prisma.courseDesignGenerationJob.update({
+    const updated = await designGenerationJobs.update({
       where: { id: job.id },
       data: {
         status: "cancelling",
@@ -1884,7 +1884,7 @@ export async function cancelCourseDesignJob(courseId: string): Promise<CourseDes
 
 async function claimNextJob(): Promise<CourseDesignGenerationJob | null> {
   const now = new Date();
-  const candidate = await prisma.courseDesignGenerationJob.findFirst({
+  const candidate = await designGenerationJobs.findFirst({
     where: {
       status: "queued",
       OR: [{ retryAt: null }, { retryAt: { lte: now } }],
@@ -1893,7 +1893,7 @@ async function claimNextJob(): Promise<CourseDesignGenerationJob | null> {
   });
   if (!candidate) return null;
   const isInfrastructureRecovery = candidate.step === "infrastructure_retry";
-  const claimed = await prisma.courseDesignGenerationJob.updateMany({
+  const claimed = await designGenerationJobs.updateMany({
     where: {
       id: candidate.id,
       status: "queued",
@@ -1911,7 +1911,7 @@ async function claimNextJob(): Promise<CourseDesignGenerationJob | null> {
       version: { increment: 1 },
     },
   });
-  return claimed.count === 1 ? prisma.courseDesignGenerationJob.findUnique({ where: { id: candidate.id } }) : null;
+  return claimed.count === 1 ? designGenerationJobs.findUnique({ where: { id: candidate.id } }) : null;
 }
 
 async function tick(): Promise<void> {
@@ -1919,6 +1919,8 @@ async function tick(): Promise<void> {
   try {
     const job = await claimNextJob();
     if (job) await runCourseDesignJob(job);
+  } catch (error) {
+    log.error("Generation queue polling failed; retrying on the next tick", error);
   } finally {
     if (!stopping) {
       timer = setTimeout(() => void tick(), POLL_INTERVAL_MS);
@@ -1931,7 +1933,7 @@ export async function startCourseDesignWorker(): Promise<void> {
   if (workerStarted) return;
   workerStarted = true;
   stopping = false;
-  await prisma.courseDesignGenerationJob.updateMany({
+  await designGenerationJobs.updateMany({
     where: {
       status: "running",
       OR: [
@@ -1941,8 +1943,8 @@ export async function startCourseDesignWorker(): Promise<void> {
     },
     data: { status: "queued", step: "queued", message: "等待服务器继续生成" },
   });
-  await prisma.courseDesignGenerationJob.updateMany({
-    where: { status: "review_available" },
+  await designGenerationJobs.updateMany({
+    where: { status: "review_available", OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: new Date(Date.now() - STALE_AFTER_MS) } }] },
     data: {
       status: "queued",
       reviewStatus: "auto-continued",

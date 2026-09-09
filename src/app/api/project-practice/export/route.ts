@@ -1,9 +1,11 @@
-// @ts-nocheck
 import JSZip from "jszip";
 import { z } from "zod";
 import { buildStudentAiInteractionTurns } from "@/lib/ai-collaboration/interaction-transcript";
 import { authenticateRequest } from "@/lib/auth/request-guards";
-import { isDatabaseConfigured, prisma } from "@/lib/db/client";
+import { prisma } from "@/lib/db/client";
+import { authorizeLegacyAiScope, legacyAiError } from "@/lib/ai-collaboration/legacy-scope";
+import { listAiInteractionEvents } from "@/lib/ai-collaboration/audit-store";
+import { listProjectDocumentVersions } from "@/lib/project-practice/versions";
 import type { AiInteractionEvent } from "@/lib/session/types";
 
 export const runtime = "nodejs";
@@ -19,67 +21,30 @@ function safeFilePart(value: string): string {
   return value.replace(/[\\/:*?"<>|\u0000-\u001F]/g, "-").replace(/\s+/g, " ").trim().slice(0, 80) || "student";
 }
 
-function toEvent(row: {
-  id: string;
-  courseId: string;
-  studentId: string;
-  stageKey: string;
-  conversationId: string | null;
-  source: string;
-  eventType: string;
-  actorRole: string;
-  actorId: string | null;
-  content: string | null;
-  payload: unknown;
-  requestId: string | null;
-  createdAt: Date;
-}): AiInteractionEvent {
-  return {
-    id: row.id,
-    courseId: row.courseId,
-    studentId: row.studentId,
-    stageKey: row.stageKey,
-    conversationId: row.conversationId ?? undefined,
-    source: row.source as AiInteractionEvent["source"],
-    eventType: row.eventType as AiInteractionEvent["eventType"],
-    actorRole: row.actorRole as AiInteractionEvent["actorRole"],
-    actorId: row.actorId ?? undefined,
-    content: row.content ?? undefined,
-    payload: (row.payload as Record<string, unknown>) ?? undefined,
-    requestId: row.requestId ?? undefined,
-    createdAt: row.createdAt.toISOString(),
-  };
-}
-
 export async function GET(request: Request) {
   const auth = await authenticateRequest(request, "teacher");
   if ("response" in auth) return auth.response;
   if (auth.claims.role !== "teacher") return Response.json({ error: "FORBIDDEN" }, { status: 403 });
-  if (!isDatabaseConfigured()) return Response.json({ error: "DATABASE_REQUIRED" }, { status: 503 });
   const parsed = QuerySchema.safeParse(Object.fromEntries(new URL(request.url).searchParams));
   if (!parsed.success) return Response.json({ error: "INVALID_REQUEST", message: "导出参数无效。" }, { status: 400 });
   const query = parsed.data;
-  const [course, students, events, versions] = await Promise.all([
-    prisma.course.findUnique({ where: { id: query.courseId }, select: { id: true, name: true } }),
-    prisma.student.findMany({
-      where: { courseId: query.courseId, ...(query.studentId ? { id: query.studentId } : {}) },
-      select: { id: true, name: true },
-      orderBy: [{ name: "asc" }, { id: "asc" }],
-    }),
-    prisma.aiInteractionEvent.findMany({
-      where: { courseId: query.courseId, stageKey: "make", ...(query.studentId ? { studentId: query.studentId } : {}) },
-      orderBy: [{ studentId: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-    }),
-    prisma.projectDocumentVersion.findMany({
-      where: { courseId: query.courseId, stageKey: "make", ...(query.studentId ? { studentId: query.studentId } : {}) },
-      select: { id: true, studentId: true, sequence: true, title: true, status: true, submittedAt: true, createdAt: true },
-      orderBy: [{ studentId: "asc" }, { sequence: "asc" }],
-    }),
+  let scope: Awaited<ReturnType<typeof authorizeLegacyAiScope>>;
+  try { scope = await authorizeLegacyAiScope(auth.claims, query.courseId, query.studentId); }
+  catch (error) { return legacyAiError(error); }
+  const course = { id: query.courseId, name: scope.instance.activity.title };
+  const [participations, versions] = await Promise.all([
+    prisma.classroomParticipation.findMany({ where: { instanceId: query.courseId, ...(query.studentId ? { enrollment: { userId: query.studentId } } : {}) }, include: { enrollment: { include: { user: { select: { id: true, displayName: true } } } } } }),
+    listProjectDocumentVersions({ ...query, stageKey: "make" }),
   ]);
-  if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
-  if (query.studentId && !students.length) return Response.json({ error: "STUDENT_NOT_FOUND" }, { status: 404 });
+  const students = participations.map(p => ({ id: p.enrollment.user.id, name: p.enrollment.user.displayName, researchKey: p.enrollment.researchKey }));
+  const eventRows: AiInteractionEvent[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await listAiInteractionEvents({ ...query, stageKey: "make", limit: 500, cursor });
+    eventRows.push(...page.events); cursor = page.nextCursor;
+  } while (cursor);
+  eventRows.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   const exportedAt = new Date().toISOString();
-  const eventRows = events.map(toEvent);
   const createStudentArchive = (student: typeof students[number]) => {
     const interactions = buildStudentAiInteractionTurns(eventRows.filter((event) => event.studentId === student.id));
     const modifications = interactions.flatMap((turn) =>
@@ -91,13 +56,13 @@ export async function GET(request: Request) {
         version: version.sequence,
         title: version.title,
         status: version.status,
-        submittedAt: (version.submittedAt ?? version.createdAt).toISOString(),
+        submittedAt: (version.submittedAt ?? version.createdAt),
       }));
     return {
       schemaVersion: 2,
       exportedAt,
       course: { id: course.id, name: course.name, stageKey: "make", stageName: "项目实践" },
-      student: { id: student.id, name: student.name },
+      student: { id: student.id, name: student.name, researchKey: student.researchKey },
       summary: {
         conversationCount: interactions.length,
         interactionTurnCount: interactions.length,

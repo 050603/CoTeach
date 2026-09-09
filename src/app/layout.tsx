@@ -6,7 +6,7 @@ import "@fontsource/noto-sans-sc/chinese-simplified-700.css";
 import "@fontsource/noto-serif-sc/chinese-simplified-600.css";
 import "@fontsource/noto-serif-sc/chinese-simplified-700.css";
 import "./globals.css";
-import { SessionProvider } from "@/lib/session/store";
+import { PlatformSessionBoundary } from "@/components/platform/platform-session-boundary";
 import { AppToaster } from "@/components/ui/feedback";
 import { ChunkLoadRecovery } from "@/lib/runtime/chunk-load-recovery";
 import { DesktopAccessGuard } from "@/components/desktop-access-guard";
@@ -27,7 +27,7 @@ export default function RootLayout({
       <body className="min-h-full">
         <DesktopAccessGuard>
           <ChunkLoadRecovery />
-          <SessionProvider>{children}</SessionProvider>
+          <PlatformSessionBoundary>{children}</PlatformSessionBoundary>
           <AppToaster />
         </DesktopAccessGuard>
       </body>

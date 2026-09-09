@@ -2,8 +2,10 @@
 // 客户端组件必须通过此路由调用，避免将 callLLM → settings → node:fs/promises
 // 等服务端模块拉入客户端 bundle。
 
+import { LlmNotConfiguredError } from "@/lib/llm/errors";
 import { NextRequest } from "next/server";
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { getCourse } from "@/lib/session/server-store";
 import {
   buildReflectionEvidencePrompts,
@@ -60,6 +62,8 @@ const HANDLERS: Record<
 };
 
 export async function POST(req: NextRequest) {
+  const csrf = requireSameOrigin(req); if (csrf) return csrf;
+  const caller = await authenticateRequest(req); if ("response" in caller) return caller.response;
   let body: SupportRequest;
   try {
     body = (await req.json()) as SupportRequest;
@@ -82,6 +86,7 @@ export async function POST(req: NextRequest) {
     if (typeof input.courseId !== "string" || typeof input.stageKey !== "string") {
       return Response.json({ error: "INVALID_DASHBOARD_INPUT" }, { status: 400 });
     }
+    if (!await canAccessLegacyCourse(auth.claims, input.courseId)) return Response.json({ error: "FORBIDDEN" }, { status: 403 });
     const course = await getCourse(input.courseId);
     if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
     if (!course.stages.some((stage) => stage.key === input.stageKey)) {
@@ -94,6 +99,7 @@ export async function POST(req: NextRequest) {
       if (req.signal.aborted || (e instanceof Error && e.name === "AbortError")) {
         return new Response(null, { status: 499 });
       }
+      if (e instanceof LlmNotConfiguredError) return Response.json({ error: "AI_NOT_CONFIGURED", message: "请先在 AI 设置中配置模型服务" }, { status: 503 });
       const message = e instanceof Error ? e.message : String(e);
       console.error("[api/teaching-ai/support] dashboard advice failed:", message);
       return Response.json({ error: "SUPPORT_CALL_FAILED", detail: message }, { status: 500 });
@@ -114,6 +120,7 @@ export async function POST(req: NextRequest) {
     if (req.signal.aborted || (e instanceof Error && e.name === "AbortError")) {
       return new Response(null, { status: 499 });
     }
+    if (e instanceof LlmNotConfiguredError) return Response.json({ error: "AI_NOT_CONFIGURED", message: "请先在 AI 设置中配置模型服务" }, { status: 503 });
     const message = e instanceof Error ? e.message : String(e);
     console.error(`[api/teaching-ai/support] action=${body.action} failed:`, message);
     return Response.json({ error: "SUPPORT_CALL_FAILED", detail: message }, { status: 500 });

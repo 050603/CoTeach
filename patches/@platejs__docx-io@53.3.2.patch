@@ -1,0 +1,24 @@
+diff --git a/dist/index.js b/dist/index.js
+index 469e35e4fd23efde5c211bd69bfadd4bdccf74a4..51e34e8489374b0901d5a0623a64fd1f97a78d08 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -4,13 +4,14 @@ import juice from "juice";
+ import JSZip from "jszip";
+ import { decode } from "html-entities";
+ import HTMLToVDOM from "html-to-vdom";
+-import VNode from "virtual-dom/vnode/vnode";
+-import VText from "virtual-dom/vnode/vtext";
++import VNode from "virtual-dom/vnode/vnode.js";
++import VText from "virtual-dom/vnode/vtext.js";
+ import { create, fragment } from "xmlbuilder2";
+-import { cloneDeep } from "lodash";
++import lodash from "lodash";
++const { cloneDeep } = lodash;
+ import { nanoid } from "nanoid";
+-import isVNode from "virtual-dom/vnode/is-vnode";
+-import isVText from "virtual-dom/vnode/is-vtext";
++import isVNode from "virtual-dom/vnode/is-vnode.js";
++import isVText from "virtual-dom/vnode/is-vtext.js";
+ import mimeTypes from "mime-types";
+ import colorNames from "color-name";
+ import { cleanDocx } from "@platejs/docx";

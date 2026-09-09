@@ -69,39 +69,38 @@ export function platformUserIdFromLegacyStudentId(_offeringId: string, studentId
   return studentId;
 }
 
-export async function findLegacyParticipation(db: PlatformDb, offeringId: string, studentId: string): Promise<{ id: string } | null> {
-  return db.classroomParticipation.findFirst({
-    where: {
-      instance: { activity: { chapter: { offeringId } } },
-      enrollment: { userId: studentId, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } },
-    },
-    orderBy: { firstEnteredAt: "desc" },
-    select: { id: true },
-  });
+export async function findLegacyParticipation(db: PlatformDb, instanceId: string, studentId: string): Promise<{ id: string } | null> {
+  return db.classroomParticipation.findFirst({ where: { instanceId, enrollment: { userId: studentId, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } }, select: { id: true } });
 }
 
-/** Resolve a V2 offering for callers that still use the old authorization hook. */
-export async function canAccessLegacyCourse(claims: AuthClaims, offeringId: string, mode: "read" | "write" = "read"): Promise<boolean> {
+/** Resolve the teaching view to its existing V2 template or classroom run. */
+export async function canAccessLegacyCourse(claims: AuthClaims, courseId: string, mode: "read" | "write" = "read"): Promise<boolean> {
   const { prisma } = await import("@/lib/db/client");
-  const userId = claimsUserId(claims);
-  if (!userId) return false;
-  const offering = await prisma.courseOffering.findUnique({
-    where: { id: offeringId },
-    select: { status: true, teachers: { select: { userId: true } }, enrollments: { where: { userId }, select: { status: true } } },
-  });
-  if (!offering) return false;
-  if (claims.role === "teacher") return offering.teachers.some((row) => row.userId === userId);
-  const status = offering.status.toLowerCase();
-  const enrollment = offering.enrollments[0];
-  const enrolled = enrollment && ["active", "completed"].includes(enrollment.status.toLowerCase());
-  return Boolean(enrolled && (mode === "write" ? status === "open" : ["open", "finished", "archived"].includes(status)));
+  const user = await getPlatformUser(claims, prisma); if (!user) return false;
+  const template = await prisma.classroomTemplate.findUnique({ where: { id: courseId }, select: { ownerId: true, status: true } });
+  if (template) return user.role === "teacher" && template.ownerId === user.id && template.status !== "ARCHIVED";
+  const instance = await prisma.classroomInstance.findUnique({ where: { id: courseId }, include: { activity: { include: { chapter: { include: { offering: true } } } } } });
+  if (!instance) return false;
+  const offeringId = instance.activity.chapter.offeringId;
+  if (user.role === "teacher") return Boolean(await prisma.courseTeacher.findFirst({ where: { offeringId, userId: user.id } }));
+  const participation = await prisma.classroomParticipation.findFirst({ where: { instanceId: courseId, enrollment: { userId: user.id, offeringId, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } }, include: { enrollment: true } });
+  if (!participation) return false;
+  return mode === "read" || (instance.status.toUpperCase() === "TEACHING" && participation.enrollment.status.toUpperCase() === "ACTIVE" && instance.activity.chapter.offering.status.toUpperCase() === "OPEN");
 }
 
-/** Legacy classroom URLs have no V2 data source and are intentionally closed. */
-export async function authorizeLegacyClassroomRead(request: Request, _classroomId: string): Promise<Response | null> {
-  void _classroomId;
+/** OpenMAIC classrooms are content references of owned templates or enrolled runs. */
+export async function authorizeLegacyClassroomRead(request: Request, classroomId: string): Promise<Response | null> {
   if (!isAuthConfigured()) return null;
-  const auth = await authenticateRequest(request);
-  if ("response" in auth) return auth.response;
-  return Response.json({ code: "V2_ROUTE_REQUIRED", message: "请使用 V2 课堂入口" }, { status: 410 });
+  const auth = await authenticateRequest(request); if ("response" in auth) return auth.response;
+  const { prisma } = await import("@/lib/db/client");
+  const references = await prisma.classroomTemplateVersion.findMany({ where: { OR: [
+    { snapshot: { path: ["design", "aiLearningClassroomId"], equals: classroomId } },
+    { snapshot: { path: ["design", "teacherClassroomId"], equals: classroomId } },
+    { snapshot: { path: ["design", "content", "_openmaicClassroomId"], equals: classroomId } },
+  ] }, select: { template: { select: { ownerId: true } }, instances: { select: { id: true } } } });
+  for (const reference of references) {
+    if (auth.claims.role === "teacher" && reference.template.ownerId === auth.claims.sub) return null;
+    for (const instance of reference.instances) if (await canAccessLegacyCourse(auth.claims, instance.id)) return null;
+  }
+  return Response.json({ code: "FORBIDDEN", message: "无权读取此课堂内容" }, { status: 403 });
 }

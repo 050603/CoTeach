@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { NextRequest } from "next/server";
 import { parseCodeArtifact, type CodeArtifactLanguage } from "@/lib/ai-collaboration/code-artifact";
 import {
@@ -6,13 +5,12 @@ import {
   rateLimitKey,
   rateLimitedResponse,
 } from "@/lib/auth/rate-limit";
-import { isAuthConfigured, readAuthFromRequest } from "@/lib/auth/session";
+import { authenticateLegacyAiStudent } from "@/lib/ai-collaboration/legacy-scope";
 import {
   CodeRunnerUnavailableError,
   executeCodeArtifact,
 } from "@/lib/code-runner/client";
 import { getCourse } from "@/lib/session/server-store";
-import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,21 +42,9 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "INVALID_REQUEST" }, { status: 400 });
   }
 
-  let studentId = requestedStudentId;
-  if (isAuthConfigured()) {
-    const claims = await readAuthFromRequest(request, "student");
-    if (!claims || claims.role !== "student") {
-      return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 });
-    }
-    if (claims.courseId !== courseId) {
-      return Response.json({ error: "STUDENT_SCOPE_MISMATCH" }, { status: 403 });
-    }
-    if (!(await canAccessLegacyCourse(claims, courseId, "write"))) {
-      return Response.json({ error: "COURSE_LOCKED" }, { status: 403 });
-    }
-    studentId = claims.studentId;
-  }
-  if (!studentId) return Response.json({ error: "MISSING_STUDENT_ID" }, { status: 400 });
+  const auth = await authenticateLegacyAiStudent(request, courseId, requestedStudentId);
+  if (auth instanceof Response) return auth;
+  const studentId = auth.studentId;
   const course = await getCourse(courseId);
   if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
   if (!course.students.some((item) => item.id === studentId)) {

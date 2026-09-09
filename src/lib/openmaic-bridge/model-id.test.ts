@@ -12,6 +12,12 @@ describe("model-id helpers", () => {
     expect(qualifyModelForProvider("qwen:qwen3.7-plus", "deepseek")).toBe("qwen:qwen3.7-plus");
   });
 
+  it("prefixes Bedrock model IDs whose native identifier contains a colon", () => {
+    expect(qualifyModelForProvider("us.amazon.nova-pro-v1:0", "bedrock")).toBe(
+      "bedrock:us.amazon.nova-pro-v1:0",
+    );
+  });
+
   it("splits comma, Chinese comma, and newline separated model lists", () => {
     expect(splitModelIds("gpt-5.4-mini，gpt-5.4\n gpt-5.5")).toEqual([
       "gpt-5.4-mini",

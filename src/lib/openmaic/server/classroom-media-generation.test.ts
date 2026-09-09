@@ -1,11 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { Scene } from '@openmaic/lib/types/stage';
 import {
+  buildInstructionalImagePrompt,
   findUnresolvedClassroomMedia,
   mediaServingUrl,
   replaceMediaPlaceholders,
+  reviewGeneratedCourseImage,
+  resolveCourseImageDimensions,
+  validateGeneratedCourseImage,
 } from './classroom-media-generation';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('classroom media URL and placeholder backfill', () => {
   it('always builds migration-safe same-origin URLs', () => {
@@ -91,4 +100,103 @@ describe('classroom media URL and placeholder backfill', () => {
       error: '媒体生成计划缺失，无法生成真实资源',
     }]);
   });
+
+  it('adds accuracy constraints and uses classroom-ready image dimensions', () => {
+    const prompt = buildInstructionalImagePrompt({
+      type: 'image',
+      elementId: 'gen_img_1',
+      prompt: '带有中文标签的教学流程图',
+      style: 'infographic',
+      aspectRatio: '16:9',
+    });
+
+    expect(prompt).toContain('中文必须逐字准确');
+    expect(prompt).toContain('不得擅自增加事实');
+    expect(resolveCourseImageDimensions('16:9')).toEqual({ width: 1280, height: 720 });
+  });
+
+  it('validates generated image integrity, resolution, and aspect ratio', async () => {
+    const valid = await sharp({
+      create: {
+        width: 1280,
+        height: 720,
+        channels: 3,
+        background: '#f5f5f4',
+      },
+    }).png().toBuffer();
+    await expect(validateGeneratedCourseImage(valid, '16:9')).resolves.toMatchObject({
+      extension: 'png',
+      width: 1280,
+      height: 720,
+    });
+
+    const tooSmall = await sharp({
+      create: {
+        width: 320,
+        height: 180,
+        channels: 3,
+        background: '#f5f5f4',
+      },
+    }).png().toBuffer();
+    await expect(validateGeneratedCourseImage(tooSmall, '16:9')).rejects.toThrow('分辨率不足');
+
+    const wrongRatio = await sharp({
+      create: {
+        width: 1024,
+        height: 1024,
+        channels: 3,
+        background: '#f5f5f4',
+      },
+    }).png().toBuffer();
+    await expect(validateGeneratedCourseImage(wrongRatio, '16:9')).rejects.toThrow('比例不符合');
+  });
+
+  it('uses Qwen vision review as a semantic quality gate', async () => {
+    const image = await sharp({
+      create: {
+        width: 1280,
+        height: 720,
+        channels: 3,
+        background: '#f5f5f4',
+      },
+    }).png().toBuffer();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: '{"pass":true,"issues":[]}' } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(reviewGeneratedCourseImage({
+      buffer: image,
+      providerId: 'qwen-image',
+      apiKey: 'test-key',
+      requirement: '准确展示三个教学步骤，中文清晰',
+    })).resolves.toBeUndefined();
+
+    const request = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string) as {
+      messages: Array<{ content: Array<{ image_url?: { url?: string } }> }>;
+    };
+    expect(request.messages[1]?.content[0]?.image_url?.url).toMatch(/^data:image\/jpeg;base64,/);
+  });
+
+  it('rejects an image when semantic review finds garbled teaching text', async () => {
+    const image = await sharp({
+      create: {
+        width: 1280,
+        height: 720,
+        channels: 3,
+        background: '#f5f5f4',
+      },
+    }).png().toBuffer();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: '{"pass":false,"issues":["中文标签存在乱码"]}' } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    await expect(reviewGeneratedCourseImage({
+      buffer: image,
+      providerId: 'qwen-image',
+      apiKey: 'test-key',
+      requirement: '中文教学流程图',
+    })).rejects.toThrow('中文标签存在乱码');
+  });
+
 });

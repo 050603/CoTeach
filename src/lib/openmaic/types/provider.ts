@@ -7,7 +7,10 @@
  */
 export type BuiltInProviderId =
   | 'openai'
+  | 'azure'
+  | 'atlascloud'
   | 'anthropic'
+  | 'bedrock'
   | 'google'
   | 'deepseek'
   | 'qwen'
@@ -32,7 +35,7 @@ export type ProviderId = BuiltInProviderId | `custom-${string}`;
 /**
  * Provider API types
  */
-export type ProviderType = 'openai' | 'anthropic' | 'google';
+export type ProviderType = 'openai' | 'azure' | 'anthropic' | 'bedrock' | 'google';
 
 export type ThinkingControlType =
   | 'none'
@@ -146,6 +149,7 @@ export interface ModelInfo {
     vision?: boolean;
     thinking?: ThinkingCapability;
   };
+  source?: 'probed' | 'manual';
 }
 
 /**
@@ -156,6 +160,10 @@ export interface ProviderConfig {
   name: string;
   type: ProviderType;
   defaultBaseUrl?: string;
+  /** Example shown when a provider has no safe universal default. */
+  baseUrlPlaceholder?: string;
+  /** Whether the provider exposes an OpenAI-compatible model discovery endpoint. */
+  supportsModelDiscovery?: boolean;
   /**
    * Known alternate base URLs for this provider (e.g. regional endpoints).
    * Rendered in the settings UI as quick-select chips under the base URL input.
@@ -176,4 +184,6 @@ export interface ModelConfig {
   baseUrl?: string;
   proxy?: string; // Optional: HTTP proxy URL for this provider
   providerType?: ProviderType; // Optional: for custom providers on server-side
+  /** Optional server-side transport used to validate redirects and custom routing. */
+  fetchImpl?: typeof fetch;
 }

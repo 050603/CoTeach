@@ -1551,7 +1551,7 @@ export default function VerifyCoursePage() {
       <DashboardShell role="teacher" userName={user.name} variant="bare">
         <div className="grid place-items-center py-20 text-stone-500">
           未找到课程。
-          <Link className="mt-4 text-[var(--pbl-teacher)] hover:underline" href="/teacher">
+          <Link className="mt-4 text-[var(--pbl-teacher)] hover:underline" href="/teacher/templates">
             返回课程列表
           </Link>
         </div>
@@ -2759,7 +2759,7 @@ export default function VerifyCoursePage() {
       ) : (
       <>
       <PreparationJourney
-        backHref="/teacher"
+        backHref="/teacher/templates"
         completedKeys={completedPreparationKeys}
         currentKey={flowStepKey}
         onSelect={navigateToFlowStep}

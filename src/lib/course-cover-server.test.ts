@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getServerImageProviders: vi.fn(),
   resolveImageApiKey: vi.fn(),
   resolveImageBaseUrl: vi.fn(),
+  persistGeneratedClassroomImage: vi.fn(),
 }));
 
 vi.mock("@openmaic/lib/media/image-providers", () => ({
@@ -27,6 +28,9 @@ vi.mock("@openmaic/lib/server/provider-config", () => ({
   resolveImageApiKey: mocks.resolveImageApiKey,
   resolveImageBaseUrl: mocks.resolveImageBaseUrl,
 }));
+vi.mock("@openmaic/lib/server/classroom-media-generation", () => ({
+  persistGeneratedClassroomImage: mocks.persistGeneratedClassroomImage,
+}));
 
 import {
   generateCourseCoverImageOnServer,
@@ -40,6 +44,9 @@ beforeEach(() => {
   });
   mocks.resolveImageApiKey.mockReturnValue("server-key");
   mocks.resolveImageBaseUrl.mockReturnValue("https://images.example.test/v1");
+  mocks.persistGeneratedClassroomImage.mockResolvedValue(
+    "/api/openmaic/classroom-media/classroom-1/media/course-cover.png",
+  );
 });
 
 describe("server course cover generation", () => {
@@ -54,7 +61,9 @@ describe("server course cover generation", () => {
       name: "自然语言处理",
       subject: "人工智能",
       grade: "高中",
-    })).resolves.toBe("https://cdn.example.test/cover.png");
+    }, "classroom-1")).resolves.toBe(
+      "/api/openmaic/classroom-media/classroom-1/media/course-cover.png",
+    );
 
     expect(mocks.generateImage).toHaveBeenCalledWith(
       {
@@ -70,6 +79,12 @@ describe("server course cover generation", () => {
         prompt: expect.stringContaining("自然语言处理"),
       }),
     );
+    expect(mocks.persistGeneratedClassroomImage).toHaveBeenCalledWith(expect.objectContaining({
+      classroomId: "classroom-1",
+      elementId: "course-cover",
+      aspectRatio: "16:9",
+      result: expect.objectContaining({ url: "https://cdn.example.test/cover.png" }),
+    }));
   });
 
   it("skips configured providers that require a missing key", () => {

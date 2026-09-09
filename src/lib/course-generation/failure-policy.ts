@@ -1,6 +1,7 @@
 import { isRetryableGenerationError } from "@openmaic/lib/generation/generation-retry";
 
 export const MAX_MANAGED_COURSE_GENERATION_RECOVERIES = 2;
+export const COURSE_MEDIA_GENERATION_INCOMPLETE = "COURSE_MEDIA_GENERATION_INCOMPLETE";
 const PERSISTED_FAILURE_PREFIX = "OPENPBL_COURSE_GENERATION_FAILURE_V1:";
 const MAX_PERSISTED_ERROR_MESSAGE_LENGTH = 4_000;
 
@@ -16,6 +17,22 @@ type PersistedCourseGenerationFailure = {
 export type ManagedCourseGenerationRequest = {
   managedRecoveryCount?: number;
 };
+
+export function createCourseMediaGenerationIncompleteError(input: {
+  imageCount: number;
+  videoCount: number;
+}): Error {
+  const parts = [
+    input.imageCount > 0 ? `${input.imageCount} 张课程图片` : null,
+    input.videoCount > 0 ? `${input.videoCount} 个课程视频` : null,
+  ].filter(Boolean);
+  return Object.assign(new Error(
+    `${parts.join("、") || "课程媒体"}在多次自动重试后仍未完成；已生成的课程页面均已保留，请稍后继续生成。`,
+  ), {
+    code: COURSE_MEDIA_GENERATION_INCOMPLETE,
+    isRetryable: true,
+  });
+}
 
 export function createManagedCourseGenerationRecoveryRequest<T extends object>(
   request: T & ManagedCourseGenerationRequest,
@@ -66,6 +83,10 @@ function redactPersistedErrorMessage(message: string): string {
     .slice(0, MAX_PERSISTED_ERROR_MESSAGE_LENGTH);
 }
 
+function isRecoverableTeachingToolFailure(message: string): boolean {
+  return /missing required teaching tools(?: after correction)?:/i.test(message);
+}
+
 /**
  * Persist enough internal failure metadata to classify a later recovery after
  * a process restart. Route responses must format this value before returning
@@ -111,7 +132,10 @@ export function deserializeCourseGenerationFailure(value: string): Error {
     const legacy = new Error(value);
     // Older rows stored the already-formatted transient teacher message. Keep
     // those jobs recoverable after deploying the structured format.
-    if (value.includes("AI 页面生成服务连续多次未能完成")) {
+    if (
+      value.includes("AI 页面生成服务连续多次未能完成")
+      || isRecoverableTeachingToolFailure(value)
+    ) {
       Object.assign(legacy, { isRetryable: true });
     }
     return legacy;
@@ -119,7 +143,11 @@ export function deserializeCourseGenerationFailure(value: string): Error {
   const error = new Error(persisted.message);
   error.name = persisted.name;
   Object.assign(error, {
-    isRetryable: persisted.retryable,
+    // Older builds persisted model-omitted teaching tools as a terminal
+    // validation error. New builds can safely regenerate only that page from
+    // checkpoints, so upgrade those existing rows into the managed recovery
+    // path as well.
+    isRetryable: persisted.retryable || isRecoverableTeachingToolFailure(persisted.message),
     ...(persisted.code !== undefined ? { code: persisted.code } : {}),
     ...(persisted.status !== undefined ? { status: persisted.status } : {}),
   });
@@ -127,6 +155,15 @@ export function deserializeCourseGenerationFailure(value: string): Error {
 }
 
 export function formatCourseGenerationErrorForTeacher(error: unknown): string {
+  const record = errorRecord(error);
+  const code = stringValue(record?.code);
+  if (
+    code === "IMAGE_PROVIDER_NOT_CONFIGURED"
+    || code === "VIDEO_PROVIDER_NOT_CONFIGURED"
+    || code === COURSE_MEDIA_GENERATION_INCOMPLETE
+  ) {
+    return errorMessage(error);
+  }
   if (isRetryableGenerationError(error)) {
     return "AI 页面生成服务连续多次未能完成最后的课堂页面；已经生成的页面均已保留，请稍后继续。";
   }

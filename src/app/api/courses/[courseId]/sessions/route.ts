@@ -1,3 +1,5 @@
+import { authenticateRequest } from "@/lib/auth/request-guards";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { NextRequest, NextResponse } from "next/server";
 import { listCourseSessions } from "@/lib/db/session-repository";
 import { isDatabaseConfigured } from "@/lib/db/client";
@@ -12,6 +14,9 @@ export async function GET(
 ) {
   const { courseId } = await params;
 
+  const auth = await authenticateRequest(_req, "teacher"); if ("response" in auth) return auth.response;
+  if (!await canAccessLegacyCourse(auth.claims, courseId)) return Response.json({ code: "FORBIDDEN" }, { status: 403 });
+
   if (!isDatabaseConfigured()) {
     return NextResponse.json(
       {
@@ -24,7 +29,7 @@ export async function GET(
 
   try {
     const sessions = await listCourseSessions(courseId);
-    return NextResponse.json({ sessions });
+    return NextResponse.json({ sessions }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (err) {
     console.error("[api/courses/sessions] list error:", err);
     return NextResponse.json(

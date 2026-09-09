@@ -86,7 +86,7 @@ function warnIfDemoMode() {
     console.warn(
       "[server-store] DATABASE_URL not configured — falling back to JSON file store. " +
         "This is fine for local development but not for production. " +
-        "Run `pnpm db:migrate-from-json` to migrate to PostgreSQL.",
+        "Configure the V2 PostgreSQL database before using platform accounts or collecting classroom evidence.",
     );
     databaseModeWarned = true;
   }
@@ -251,10 +251,10 @@ export async function getCourse(courseId: string): Promise<Course | undefined> {
 export async function updateCourse(
   courseId: string,
   updater: (course: Course) => Course,
-  invalidation: { targetStudentId?: string } = {},
+  invalidation: { targetStudentId?: string; actor?: { id: string; role: string } } = {},
 ): Promise<SessionState> {
   if (isDatabaseConfigured()) {
-    const after = await dbUpdateCourse(courseId, updater);
+    const after = await dbUpdateCourse(courseId, updater, invalidation.actor);
     const course = after.courses.find((candidate) => candidate.id === courseId);
     if (!course) throw new Error(`Course not found after update: ${courseId}`);
     await persistCourseUpdateInvalidation({

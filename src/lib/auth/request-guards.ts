@@ -1,5 +1,6 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import {
+  clearAuthCookies,
   readAuthFromRequest,
   getRequestedAuthRole,
   type AuthClaims,
@@ -12,15 +13,25 @@ export async function authenticateRequest(
   request: Request,
   role?: AuthRole,
 ): Promise<{ claims: AuthClaims } | { response: Response }> {
+  const requestedRole = role ?? getRequestedAuthRole(request);
   const claims = await readAuthFromRequest(
     request,
-    role ?? getRequestedAuthRole(request),
+    requestedRole,
   );
   if (!claims || !(await hasCurrentSessionVersion(claims))) {
+    const headers = new Headers({ "Cache-Control": "no-store" });
+    if (requestedRole) {
+      for (const cookie of clearAuthCookies(requestedRole)) {
+        headers.append(
+          "Set-Cookie",
+          `${cookie.name}=; Path=${cookie.path}; Max-Age=0; HttpOnly; SameSite=${cookie.sameSite}${cookie.secure ? "; Secure" : ""}`,
+        );
+      }
+    }
     return {
       response: Response.json(
-        { code: "UNAUTHORIZED", message: "Authentication required.", requestId: requestId(request) },
-        { status: 401 },
+        { code: "UNAUTHORIZED", message: "登录状态已失效，请重新登录。", requestId: requestId(request) },
+        { status: 401, headers },
       ),
     };
   }

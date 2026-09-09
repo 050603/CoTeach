@@ -1,37 +1,14 @@
-// @ts-nocheck
-import { z } from "zod";
-import { prisma } from "@/lib/db/client";
 import { authorizeLoadTestRequest } from "@/lib/load-test/authorization";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
-const RunIdSchema = z.string().uuid();
-
-export async function DELETE(
-  request: Request,
-  context: { params: Promise<{ runId: string }> },
-) {
+// V1 fixtures and cascade teardown cannot safely operate on V2 research records.
+// Use the disposable-database V2 verification runner until load fixtures migrate.
+export async function DELETE(request: Request) {
   const denied = authorizeLoadTestRequest(request);
   if (denied) return denied;
-  const parsed = RunIdSchema.safeParse((await context.params).runId);
-  if (!parsed.success) {
-    return Response.json({ code: "INVALID_RUN_ID", message: "Invalid runId." }, { status: 400 });
-  }
-  const run = await prisma.loadTestRun.findUnique({ where: { runId: parsed.data } });
-  if (!run) return new Response(null, { status: 204 });
-  const teacherUsernamePrefix = `load_${parsed.data.replaceAll("-", "").slice(0, 20)}`;
-
-  await prisma.$transaction(async (tx) => {
-    await tx.uploadFile.deleteMany({ where: { courseId: run.courseId } });
-    await tx.studentAccount.deleteMany({ where: { courseId: run.courseId } });
-    await tx.course.delete({ where: { id: run.courseId } });
-    await tx.teacher.deleteMany({
-      where: { username: { startsWith: teacherUsernamePrefix } },
-    });
-    await tx.courseEvent.deleteMany({ where: { courseId: run.courseId } });
-    await tx.courseMutationReceipt.deleteMany({ where: { courseId: run.courseId } });
-    await tx.loadTestRun.delete({ where: { runId: parsed.data } });
-  });
-  return new Response(null, { status: 204 });
+  return Response.json({
+    code: "V1_LOAD_TEST_RETIRED",
+    message: "旧版压测数据接口已停用；请使用隔离数据库 V2 验证脚本。",
+  }, { status: 410 });
 }

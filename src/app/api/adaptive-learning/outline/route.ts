@@ -1,6 +1,6 @@
 import { generateCourseEntryPackage } from "@/lib/course-entry-generation";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
-import { isAuthConfigured, readAuthFromRequest } from "@/lib/auth/session";
+import { authorizeTemplateRequest } from "@/lib/platform/template-access";
 import type { KnowledgePoint, OpenMaicSceneOutlineSnapshot } from "@/lib/session/types";
 
 export const runtime = "nodejs";
@@ -15,12 +15,8 @@ export async function POST(request: Request) {
   if (!body?.courseId) {
     return Response.json({ error: "INVALID_REQUEST" }, { status: 400 });
   }
-  if (isAuthConfigured()) {
-    const claims = await readAuthFromRequest(request, "teacher");
-    if (claims?.role !== "teacher") {
-      return Response.json({ error: "FORBIDDEN" }, { status: 403 });
-    }
-  }
+  const authorized = await authorizeTemplateRequest(request, body.courseId);
+  if (authorized instanceof Response) return authorized;
   const course = await getCourse(body.courseId);
   if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
 
@@ -73,7 +69,7 @@ export async function POST(request: Request) {
         knowledgeGraph: result.knowledgeGraph,
         adaptiveLearningPlan: result.plan,
       },
-    }));
+    }), { actor: { id: authorized, role: "teacher" } });
     const savedCourse = persisted.courses.find((item) => item.id === course.id);
     if (!savedCourse?.content.adaptiveLearningPlan || !savedCourse.content.knowledgeGraph) {
       throw new Error("课程入口学习包已生成，但原子保存校验失败");

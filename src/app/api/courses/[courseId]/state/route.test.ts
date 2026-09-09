@@ -1,0 +1,20 @@
+import { expect, it, vi } from 'vitest';
+const mocks = vi.hoisted(() => ({ load: vi.fn(), latest: vi.fn(), scope: vi.fn() }));
+vi.mock('@/lib/db/client', () => ({ prisma: { domainEvent: { findFirst: mocks.latest } } }));
+vi.mock('@/lib/db/session-repository', () => ({ loadCourse: mocks.load }));
+vi.mock('@/lib/auth/request-guards', () => ({ authenticateRequest: async () => ({ claims: { sub: 'user', role: 'student' } }) }));
+vi.mock('@/lib/auth/course-scope', () => ({ scopeCourseForClaims: (course: unknown) => course }));
+vi.mock('@/lib/platform/access', () => ({ canAccessLegacyCourse: async () => true }));
+vi.mock('@/lib/realtime/course-event-scope', () => ({ resolveCourseEventScope: mocks.scope }));
+vi.mock('@/lib/observability/http', () => ({ withHttpMetrics: (_a: string, _b: string, handler: unknown) => handler }));
+import { GET } from './route';
+it('captures the event watermark before the canonical snapshot and uses V2 string cursors', async () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  mocks.scope.mockResolvedValue({ where: { classroomInstanceId: 'instance' } });
+  mocks.latest.mockResolvedValue({ id, createdAt: new Date('2026-09-08T00:00:00.000Z') });
+  mocks.load.mockResolvedValue({ id: 'instance', version: 5 });
+  const response = await GET(new Request('http://localhost/api/courses/instance/state'), { params: Promise.resolve({ courseId: 'instance' }) });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ courseVersion: 5, eventCursor: `2026-09-08T00:00:00.000Z~${id}` });
+  expect(mocks.latest.mock.invocationCallOrder[0]).toBeLessThan(mocks.load.mock.invocationCallOrder[0]);
+});

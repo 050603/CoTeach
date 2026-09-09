@@ -94,10 +94,10 @@ export async function planMediaForConfirmedOutlines(
     knowledgePointIds: outline.knowledgePointIds,
   }));
   if (candidates.length === 0) return [...outlines];
-  const system = `You are a conservative instructional media planner. Decide whether a static generated image or a short generated video materially improves understanding. Permission to use a capability does not mean every page needs media. Never add decorative filler. Video is only justified when motion or temporal change is essential. Return JSON only.`;
+  const system = `You are a conservative instructional media planner. Decide whether a static generated image or a short generated video materially improves understanding. Permission to use a capability does not mean every page needs media. Never add decorative filler. Every requested asset must carry an explicit instructional purpose and remain accurate to the confirmed course content. Video is only justified when motion or temporal change is essential. Return JSON only.`;
   const user = `Available capabilities: image=${options.imageEnabled}, video=${options.videoEnabled}.
 
-Choose media only for these existing slide IDs. Do not create, reorder, delete, or rename slides. Use at most one request per slide, images on no more than roughly one third of slides, and at most two videos for the entire course. Prompts must stay within the listed knowledge and grade scope, use 16:9 unless another ratio is pedagogically necessary, and request Chinese labels when text is needed.
+Choose media only for these existing slide IDs. Do not create, reorder, delete, or rename slides. Use at most one request per slide, images on no more than roughly one third of slides, and at most two videos for the entire course. Prompts must stay within the listed knowledge and grade scope, use 16:9 unless another ratio is pedagogically necessary, and request Chinese labels when text is needed. For comparisons, processes, or other factual diagrams, enumerate the exact labels, ordering, and relationships in the prompt and explicitly forbid invented facts. Never request a dense table or matrix with many text cells from an image model; keep exact tables as native editable slide content and use at most a sparse relationship illustration as supporting media. Do not make generated raster text the sole carrier of essential teaching content; the slide's editable text remains authoritative.
 
 Slides:
 ${JSON.stringify(candidates)}

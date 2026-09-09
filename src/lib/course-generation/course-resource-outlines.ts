@@ -1,5 +1,5 @@
-// @ts-nocheck
-import { prisma } from "@/lib/db/client";
+import { loadGenerationCheckpoints } from "./checkpoint-storage";
+import { contentGenerationJobs } from "@/lib/course-generation/job-storage";
 import type { OpenMaicSceneOutlineSnapshot } from "@/lib/session/types";
 
 function hasMediaPlan(outline: OpenMaicSceneOutlineSnapshot): boolean {
@@ -17,12 +17,13 @@ export async function resolveDurableCourseSceneOutlines(
   courseId: string,
   current: OpenMaicSceneOutlineSnapshot[],
 ): Promise<OpenMaicSceneOutlineSnapshot[]> {
-  const job = await prisma.courseGenerationJob.findUnique({
+  const job = await contentGenerationJobs.findUnique({
     where: { courseId },
     select: { preparedOutlines: true },
   });
-  const prepared = Array.isArray(job?.preparedOutlines)
-    ? job.preparedOutlines as unknown as OpenMaicSceneOutlineSnapshot[]
+  const checkpoint = job ? await loadGenerationCheckpoints(job.id) : null;
+  const prepared = Array.isArray(checkpoint?.preparedOutlines)
+    ? checkpoint.preparedOutlines as unknown as OpenMaicSceneOutlineSnapshot[]
     : [];
   if (prepared.length === 0) return current;
   if (current.length === 0) return prepared;

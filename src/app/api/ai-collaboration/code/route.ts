@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import {
@@ -34,8 +33,6 @@ import {
   rateLimitedResponse,
 } from "@/lib/auth/rate-limit";
 import {
-  isAuthConfigured,
-  readAuthFromRequest,
   type StudentClaims,
 } from "@/lib/auth/session";
 import {
@@ -54,7 +51,7 @@ import {
 } from "@/lib/llm/errors";
 import { getCourse } from "@/lib/session/server-store";
 import type { CompanionMessage, Course, Student } from "@/lib/session/types";
-import { canAccessLegacyCourse } from "@/lib/platform/access";
+import { authenticateLegacyAiStudent } from "@/lib/ai-collaboration/legacy-scope";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -256,21 +253,7 @@ async function authenticateStudent(
   courseId: string,
   requestedStudentId: string,
 ): Promise<{ claims: StudentClaims | null; studentId: string } | Response> {
-  if (!isAuthConfigured()) {
-    if (!requestedStudentId) return Response.json({ error: "MISSING_STUDENT_ID" }, { status: 400 });
-    return { claims: null, studentId: requestedStudentId };
-  }
-  const claims = await readAuthFromRequest(request, "student");
-  if (!claims || claims.role !== "student") {
-    return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 });
-  }
-  if (claims.courseId !== courseId) {
-    return Response.json({ error: "STUDENT_SCOPE_MISMATCH" }, { status: 403 });
-  }
-  if (!(await canAccessLegacyCourse(claims, courseId, "write"))) {
-    return Response.json({ error: "COURSE_LOCKED" }, { status: 403 });
-  }
-  return { claims, studentId: claims.studentId };
+  return authenticateLegacyAiStudent(request, courseId, requestedStudentId);
 }
 
 async function loadScope(input: {

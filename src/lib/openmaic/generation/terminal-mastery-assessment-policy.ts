@@ -44,6 +44,10 @@ function normalizeSectionQuiz(
     interactiveConfig: undefined,
     mediaGenerations: undefined,
     suggestedImageIds: undefined,
+    // A generated quiz may inherit from the preceding teaching page when the
+    // model omitted an assessment. Page-level teaching tools belong to that
+    // source page and cannot be fulfilled by quiz action generation.
+    teachingToolPlan: undefined,
   };
 }
 

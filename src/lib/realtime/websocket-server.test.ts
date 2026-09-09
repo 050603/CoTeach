@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import WebSocket from "ws";
+import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signStudentToken } from "@/lib/auth/session";
 import {
@@ -14,6 +15,10 @@ import {
 
 vi.mock("@/lib/auth/session-version", () => ({
   hasCurrentSessionVersion: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock("@/lib/platform/access", () => ({
+  canAccessLegacyCourse: vi.fn(async (_claims: unknown, courseId: string) => ["course-allowed", "course-large-class"].includes(courseId)),
 }));
 
 const JWT_SECRET = "test-secret-that-is-longer-than-thirty-two-characters";
@@ -83,6 +88,22 @@ describe("realtime WebSocket authorization", () => {
     expect(await forbiddenError).toMatchObject({
       code: "COURSE_FORBIDDEN",
     });
+  });
+
+  it("closes cleanly when the V2 permission database is unavailable", async () => {
+    const server = startWebSocketServer(0);
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing WebSocket port");
+    const { token, cookieName } = await signStudentToken({ userId: "student-1", studentName: "Student", sessionVersion: 1 });
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/ws?role=student`, { headers: { Cookie: `${cookieName}=${encodeURIComponent(token)}` } });
+    await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
+    vi.mocked(canAccessLegacyCourse).mockRejectedValueOnce(new Error("database unavailable"));
+    const response = waitForMessage(socket, "error");
+    const closed = new Promise<number>((resolve) => socket.once("close", resolve));
+    socket.send(JSON.stringify({ type: "subscribe", courseId: "course-allowed" }));
+    expect(await response).toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    expect(await closed).toBe(1011);
   });
 
   it("fans one projection control event out to more than 30 students within two seconds", async () => {

@@ -7,6 +7,7 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
+import sharp from 'sharp';
 import { createLogger } from '@openmaic/lib/logger';
 import { CLASSROOMS_DIR } from '@openmaic/lib/server/classroom-storage';
 import { generateImage } from '@openmaic/lib/media/image-providers';
@@ -34,8 +35,11 @@ import {
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { Scene } from '@openmaic/lib/types/stage';
 import type { SpeechAction } from '@openmaic/lib/types/action';
-import type { ImageProviderId } from '@openmaic/lib/media/types';
-import type { MediaGenerationRequest } from '@openmaic/lib/media/types';
+import type {
+  ImageGenerationResult,
+  ImageProviderId,
+  MediaGenerationRequest,
+} from '@openmaic/lib/media/types';
 import type { VideoProviderId } from '@openmaic/lib/media/types';
 import type { TTSProviderId } from '@openmaic/lib/audio/types';
 import { splitLongSpeechActions } from '@openmaic/lib/audio/tts-utils';
@@ -47,6 +51,7 @@ import { throwIfAborted, withGenerationRetry } from '@openmaic/lib/generation/ge
 import { mapWithConcurrency } from '@openmaic/lib/utils/concurrency';
 import { runWithGlobalTtsProviderSlot } from '@openmaic/lib/server/tts-provider-limiter';
 import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
+import { parseJsonResponse } from '@openmaic/lib/generation/json-repair';
 import {
   hasPblRoutingMetadata,
   isStudentAiLearningScene,
@@ -220,6 +225,217 @@ export function mediaServingUrl(_baseUrl: string, classroomId: string, subPath: 
   return `/api/openmaic/classroom-media/${classroomId}/${subPath}`;
 }
 
+const COURSE_IMAGE_DIMENSIONS: Record<string, { width: number; height: number }> = {
+  '16:9': { width: 1280, height: 720 },
+  '4:3': { width: 1024, height: 768 },
+  '1:1': { width: 1024, height: 1024 },
+  '9:16': { width: 720, height: 1280 },
+};
+
+export function resolveCourseImageDimensions(aspectRatio = '16:9'): {
+  width: number;
+  height: number;
+} {
+  return COURSE_IMAGE_DIMENSIONS[aspectRatio] ?? COURSE_IMAGE_DIMENSIONS['16:9']!;
+}
+
+export function buildInstructionalImagePrompt(request: MediaGenerationRequest): string {
+  const includesStructuredText = /中文|文字|标签|标题|流程图|矩阵|表格|信息图/.test(request.prompt);
+  return [
+    '生成一张直接服务于课程讲解的高质量教学配图，不得使用无关的装饰性素材。',
+    `教学内容与构图要求：${request.prompt}`,
+    request.style ? `视觉形式：${request.style}。` : undefined,
+    '内容必须准确、层级清楚、主体完整，严格遵守给定概念、关系、步骤和学习者年龄范围；不得擅自增加事实、标签或结论。',
+    includesStructuredText
+      ? '图片中的中文必须逐字准确、清晰可读；若空间不足，应减少装饰或次要说明，不得生成错别字、乱码或含义不明的标签。'
+      : '除非教学内容明确要求，否则不要在图片中添加文字、字母、数字、标志或水印。',
+    '画面应适合真实课堂投影，具有明确视觉焦点、充足留白和清晰对比。',
+  ].filter(Boolean).join('\n');
+}
+
+export async function validateGeneratedCourseImage(
+  buffer: Buffer,
+  aspectRatio = '16:9',
+): Promise<{ extension: 'png' | 'jpg' | 'webp'; width: number; height: number }> {
+  let metadata: Awaited<ReturnType<ReturnType<typeof sharp>['metadata']>>;
+  try {
+    metadata = await sharp(buffer).metadata();
+  } catch (error) {
+    throw Object.assign(new Error('图片生成结果不是可解析的有效图片', { cause: error }), {
+      code: 'GENERATED_IMAGE_INVALID',
+      isRetryable: true,
+    });
+  }
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+  if (width < 1 || height < 1 || Math.min(width, height) < 512) {
+    throw Object.assign(new Error(`图片生成结果分辨率不足：${width}×${height}`), {
+      code: 'GENERATED_IMAGE_TOO_SMALL',
+      isRetryable: true,
+    });
+  }
+  const expected = resolveCourseImageDimensions(aspectRatio);
+  const expectedRatio = expected.width / expected.height;
+  const actualRatio = width / height;
+  if (Math.abs(actualRatio - expectedRatio) / expectedRatio > 0.08) {
+    throw Object.assign(new Error(
+      `图片生成结果比例不符合 ${aspectRatio} 要求：${width}×${height}`,
+    ), {
+      code: 'GENERATED_IMAGE_ASPECT_RATIO_MISMATCH',
+      isRetryable: true,
+    });
+  }
+  const extension = metadata.format === 'jpeg'
+    ? 'jpg'
+    : metadata.format === 'webp'
+      ? 'webp'
+      : metadata.format === 'png'
+        ? 'png'
+        : undefined;
+  if (!extension) {
+    throw Object.assign(new Error(`图片生成结果格式不受支持：${metadata.format || 'unknown'}`), {
+      code: 'GENERATED_IMAGE_FORMAT_UNSUPPORTED',
+      isRetryable: true,
+    });
+  }
+  return { extension, width, height };
+}
+
+type GeneratedImageQualityReview = {
+  pass?: boolean;
+  issues?: unknown;
+};
+
+function qwenImageReviewEndpoint(baseUrl?: string): string {
+  const normalized = !baseUrl || baseUrl.includes('/compatible-mode') || baseUrl.includes('maas.aliyuncs')
+    ? 'https://dashscope.aliyuncs.com'
+    : baseUrl.replace(/\/$/, '');
+  return `${normalized}/compatible-mode/v1/chat/completions`;
+}
+
+/**
+ * Qwen Image shares its credential with DashScope's vision model. Use that
+ * model as a second, independent gate for Chinese text, factual relationships,
+ * and instructional relevance before the generated file is accepted.
+ */
+export async function reviewGeneratedCourseImage(input: {
+  buffer: Buffer;
+  providerId: ImageProviderId;
+  apiKey: string;
+  baseUrl?: string;
+  requirement: string;
+  signal?: AbortSignal;
+}): Promise<void> {
+  if (input.providerId !== 'qwen-image') return;
+  const reviewImage = await sharp(input.buffer)
+    .resize({ width: 960, withoutEnlargement: true })
+    .jpeg({ quality: 82 })
+    .toBuffer();
+  const timeoutSignal = AbortSignal.timeout(60_000);
+  const signal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal;
+  const response = await fetch(qwenImageReviewEndpoint(input.baseUrl), {
+    method: 'POST',
+    signal,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${input.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: process.env.OPENPBL_QWEN_IMAGE_REVIEW_MODEL || 'qwen3-vl-plus',
+      messages: [
+        {
+          role: 'system',
+          content: '你是严格但遵循给定教学意图的中文课程图片审校员。只根据明确要求检查，不自行添加未要求的对应关系。',
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image_url',
+              image_url: { url: `data:image/jpeg;base64,${reviewImage.toString('base64')}` },
+            },
+            {
+              type: 'text',
+              text: [
+                `原始教学配图要求：${input.requirement}`,
+                '请检查：一、所有可见文字是否有错别字、乱码或截断；若要求明确禁止文字，则出现任何可辨认字符、伪文字或标签都必须判定不通过；二、核心概念、步骤、顺序和关系是否与要求一致；三、是否出现要求之外且会误导学习者的事实；四、构图是否清晰并适合课堂投影。',
+                '仅输出 JSON：{"pass":boolean,"issues":["具体问题"]}。只有全部合格时 pass 才能为 true。',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+      max_tokens: 500,
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => response.statusText);
+    throw Object.assign(new Error(`教学图片质量审校服务失败（${response.status}）：${detail}`), {
+      code: 'GENERATED_IMAGE_REVIEW_FAILED',
+      statusCode: response.status,
+      isRetryable: response.status === 429 || response.status >= 500,
+    });
+  }
+  const payload = await response.json() as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const content = payload.choices?.[0]?.message?.content;
+  const review = content ? parseJsonResponse<GeneratedImageQualityReview>(content) : null;
+  const issues = Array.isArray(review?.issues)
+    ? review.issues.filter((issue): issue is string => typeof issue === 'string' && issue.trim().length > 0)
+    : [];
+  if (review?.pass !== true) {
+    throw Object.assign(new Error(
+      `教学图片质量审校未通过${issues.length > 0 ? `：${issues.join('；')}` : ''}`,
+    ), {
+      code: 'GENERATED_IMAGE_QUALITY_REJECTED',
+      isRetryable: true,
+    });
+  }
+}
+
+export async function persistGeneratedClassroomImage(input: {
+  result: ImageGenerationResult;
+  classroomId: string;
+  elementId: string;
+  aspectRatio?: string;
+  baseUrl: string;
+  signal?: AbortSignal;
+  qualityReview?: {
+    providerId: ImageProviderId;
+    apiKey: string;
+    baseUrl?: string;
+    requirement: string;
+  };
+}): Promise<string> {
+  throwIfAborted(input.signal);
+  const buffer = input.result.base64
+    ? Buffer.from(input.result.base64, 'base64')
+    : input.result.url
+      ? await downloadToBuffer(input.result.url, input.signal)
+      : null;
+  if (!buffer?.length) {
+    throw Object.assign(new Error('图片生成服务未返回可用的图片文件'), {
+      code: 'GENERATED_IMAGE_EMPTY',
+      isRetryable: true,
+    });
+  }
+  const validated = await validateGeneratedCourseImage(buffer, input.aspectRatio);
+  if (input.qualityReview) {
+    await reviewGeneratedCourseImage({
+      buffer,
+      signal: input.signal,
+      ...input.qualityReview,
+    });
+  }
+  throwIfAborted(input.signal);
+  const mediaDir = path.join(CLASSROOMS_DIR, input.classroomId, 'media');
+  await ensureDir(mediaDir);
+  const filename = `${input.elementId}.${validated.extension}`;
+  await fs.writeFile(path.join(mediaDir, filename), buffer);
+  return mediaServingUrl(input.baseUrl, input.classroomId, `media/${filename}`);
+}
+
 // ---------------------------------------------------------------------------
 // Image / Video generation
 // ---------------------------------------------------------------------------
@@ -287,28 +503,35 @@ export async function generateMediaForClassroom(
         }
         const model = imageProviders[providerId]?.defaultModel || providerConfig?.models?.[0]?.id;
 
+        const aspectRatio = req.aspectRatio || '16:9';
+        const dimensions = resolveCourseImageDimensions(aspectRatio);
         await withGenerationRetry(async () => {
           const result = await waitForProviderSlot(providerId, signal, () => generateImage(
             { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
-            { prompt: req.prompt, aspectRatio: req.aspectRatio || '16:9' },
+            {
+              prompt: buildInstructionalImagePrompt(req),
+              aspectRatio,
+              ...dimensions,
+              style: req.style,
+              negativePrompt: 'watermark, logo, irrelevant decoration, illegible text, garbled Chinese characters, factual errors, cropped content, cluttered layout',
+            },
           ));
           throwIfAborted(signal);
-          let buf: Buffer;
-          let ext: string;
-          if (result.base64) {
-            buf = Buffer.from(result.base64, 'base64');
-            ext = 'png';
-          } else if (result.url) {
-            buf = await downloadToBuffer(result.url, signal);
-            const urlExt = path.extname(new URL(result.url).pathname).replace('.', '');
-            ext = ['png', 'jpg', 'jpeg', 'webp'].includes(urlExt) ? urlExt : 'png';
-          } else {
-            throw new Error('Image provider returned neither base64 data nor a URL');
-          }
-          const filename = `${req.elementId}.${ext}`;
-          await fs.writeFile(path.join(mediaDir, filename), buf);
-          mediaMap[req.elementId] = mediaServingUrl(baseUrl, classroomId, `media/${filename}`);
-          log.info(`Generated image: ${filename}`);
+          mediaMap[req.elementId] = await persistGeneratedClassroomImage({
+            result,
+            classroomId,
+            elementId: req.elementId,
+            aspectRatio,
+            baseUrl,
+            signal,
+            qualityReview: {
+              providerId,
+              apiKey,
+              baseUrl: resolveImageBaseUrl(providerId),
+              requirement: req.prompt,
+            },
+          });
+          log.info(`Generated and validated image: ${req.elementId}`);
         }, {
           label: `image ${req.elementId}`,
           signal,

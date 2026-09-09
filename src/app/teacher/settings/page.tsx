@@ -32,7 +32,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { DashboardShell } from "@/components/dashboard-shell";
+import { TeacherPlatformPage, TeacherPlatformHeader } from "@/components/platform/teacher-shell";
 import {
   Pill,
   PrimaryButton,
@@ -40,7 +40,10 @@ import {
   TextInput,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { getProviderStatePresentation } from "@/lib/teacher/ai-service-settings";
+import {
+  getProviderConnectionPresentation,
+  getProviderStatePresentation,
+} from "@/lib/teacher/ai-service-settings";
 import type { ProviderSection } from "@/lib/openmaic-bridge/provider-config-editor";
 import { qualifyModelForProvider, splitModelIds } from "@/lib/openmaic-bridge/model-id";
 
@@ -65,8 +68,11 @@ type TabKey = "llm" | "tts" | "asr" | "image" | "video" | "web-search" | "pdf" |
 type ProviderMeta = {
   id: string;
   name: string;
+  type?: string;
   requiresApiKey: boolean;
   defaultBaseUrl?: string;
+  baseUrlPlaceholder?: string;
+  alternateBaseUrls?: Array<{ label: string; url: string }>;
   icon?: string;
   models: Array<{ id: string; name: string }>;
   defaultModelId?: string;
@@ -83,6 +89,24 @@ type SavedConfig = {
   defaultVoice?: string;
   timingCalibrations?: TtsVoiceTimingCalibration[];
 };
+
+function getProviderRequestPreview(provider: ProviderMeta, baseUrl: string): string {
+  if (provider.type === "bedrock") return "AWS SDK · Converse API";
+
+  const endpoint = (baseUrl.trim() || provider.defaultBaseUrl || "").replace(/\/+$/, "");
+  if (!endpoint) return "保存服务地址后显示";
+
+  switch (provider.type) {
+    case "anthropic":
+      return `${endpoint}/messages`;
+    case "google":
+      return `${endpoint}/models/{model}:generateContent`;
+    case "azure":
+      return `${endpoint}/deployments/{deployment}`;
+    default:
+      return `${endpoint}/chat/completions`;
+  }
+}
 
 const TTS_CALIBRATION_TEXT =
   "在项目学习中，我们先观察现象，再提出可以验证的问题。接着收集证据、比较不同解释，并用清楚的语言说明判断依据。遇到复杂概念时，可以借助一个贴近生活的例子，逐步连接已有经验与新知识。最后，请停下来检查结论是否符合证据，并思考还有哪些条件可能影响结果。";
@@ -172,8 +196,11 @@ function getProvidersForTab(tab: TabKey): ProviderMeta[] {
       return Object.values(PROVIDERS).map((provider) => ({
         id: provider.id,
         name: provider.name,
+        type: provider.type,
         requiresApiKey: provider.requiresApiKey,
         defaultBaseUrl: provider.defaultBaseUrl,
+        baseUrlPlaceholder: provider.baseUrlPlaceholder,
+        alternateBaseUrls: provider.alternateBaseUrls,
         icon: provider.icon,
         models: provider.models.map((model) => ({ id: model.id, name: model.name })),
         defaultModelId: provider.models[0]?.id,
@@ -246,8 +273,10 @@ function configKey(section: ProviderSection, providerId: string) {
 }
 
 function modelsToText(models: string[] | undefined, provider: ProviderMeta) {
-  const source = models?.length ? models : provider.models.map((model) => model.id);
-  return source.join("\n");
+  return [...new Set([
+    ...provider.models.map((model) => model.id),
+    ...(models ?? []),
+  ])].join("\n");
 }
 
 function getInitialDefaultModel(provider: ProviderMeta, saved?: SavedConfig) {
@@ -686,13 +715,14 @@ export default function TeacherSettingsPage() {
   const fetchConfigs = useCallback(async (section: ProviderSection) => {
     setConfigLoading(true);
     try {
-      const response = await fetch(`/api/openmaic/provider-config?section=${section}`);
+      const response = await fetch(`/api/openmaic/provider-config?section=${section}`, { cache: "no-store" });
       const data = await response.json().catch(() => null);
       const providersData =
         (data?.providers as Record<string, SavedConfig> | undefined) ??
         (data?.data?.providers as Record<string, SavedConfig> | undefined);
 
-      if (response.ok && providersData) {
+      if (!response.ok || !providersData) throw new Error(getReadableError(data, "读取已保存配置失败，请重试。"));
+      if (providersData) {
         setSavedConfigs((current) => ({
           ...current,
           ...Object.fromEntries(
@@ -710,7 +740,7 @@ export default function TeacherSettingsPage() {
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchConfigs(currentTab.section);
+    void fetchConfigs(currentTab.section).catch((error: Error) => setSaveResult({ ok: false, message: error.message }));
   }, [currentTab.section, fetchConfigs]);
 
   useEffect(() => {
@@ -748,12 +778,12 @@ export default function TeacherSettingsPage() {
 
     if (provider.requiresApiKey && !saved?.hasApiKey && !editApiKey.trim()) {
       setSaveResult({ ok: false, message: "请先填写密钥。" });
-      return;
+      return false;
     }
 
     if (activeTab === "llm" && modelIds.length === 0) {
       setSaveResult({ ok: false, message: "请至少保留一个模型。" });
-      return;
+      return false;
     }
 
     setSavingProviderId(provider.id);
@@ -779,6 +809,12 @@ export default function TeacherSettingsPage() {
       if (!response.ok || data?.success === false) {
         throw new Error(getReadableError(data, "保存失败，请检查配置。"));
       }
+
+      // The save receipt is authoritative; a later failed refresh must not forget the key.
+      if (!data?.provider || typeof data.provider.hasApiKey !== "boolean") {
+        throw new Error("配置已提交，但未收到保存状态，请刷新页面确认后再修改密钥。");
+      }
+      setSavedConfigs((current) => ({ ...current, [configKey(currentTab.section, provider.id)]: data.provider }));
 
       if (makeDefault) {
         await Promise.all(
@@ -828,12 +864,15 @@ export default function TeacherSettingsPage() {
             : "配置已保存。",
       });
       setEditApiKey("");
-      await fetchConfigs(currentTab.section);
+      try { await fetchConfigs(currentTab.section); }
+      catch { setSaveResult({ ok: true, message: "配置已保存；列表刷新失败，请稍后刷新页面。" }); }
+      return true;
     } catch (error) {
       setSaveResult({
         ok: false,
         message: error instanceof Error ? error.message : "保存失败，请稍后重试。",
       });
+      return false;
     } finally {
       setSavingProviderId(null);
     }
@@ -951,6 +990,11 @@ export default function TeacherSettingsPage() {
       return;
     }
 
+    if (activeTab === "llm") {
+      const savedSuccessfully = await handleSave(provider, false);
+      if (!savedSuccessfully) return;
+    }
+
     const qualifiedModel = qualifyModelForProvider(modelId, provider.id);
     const isCapabilityTest = activeTab === "asr"
       || activeTab === "image"
@@ -970,6 +1014,7 @@ export default function TeacherSettingsPage() {
           providerId: provider.id,
           apiKey: editApiKey.trim() || undefined,
           baseUrl: editBaseUrl.trim() || undefined,
+          providerType: provider.type,
         }),
       });
       const data = await response.json().catch(() => null);
@@ -1055,17 +1100,19 @@ export default function TeacherSettingsPage() {
   }
 
   return (
-    <DashboardShell role="teacher">
+    <TeacherPlatformPage><TeacherPlatformHeader active="settings" /><div className="pbl-workspace-content pbl-settings-layout">
+      <div className="pbl-page-heading"><div><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">工作空间 / 服务连接</p><h1 className="mt-3 font-semibold">AI 服务设置</h1><p className="mt-3 text-sm leading-7 text-[var(--pbl-text-muted)]">连接教学所需的模型与音视频服务，管理配置并验证可用性。</p></div></div>
       <div className="mb-5 overflow-hidden rounded-[14px] border border-stone-200 bg-white">
         <div className="flex items-center gap-3 border-b border-stone-200 px-3 py-3 sm:px-4">
           <Link
             href="/teacher"
             className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] text-stone-500 transition hover:bg-stone-100 hover:text-stone-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pbl-teacher)]"
             title="返回教师首页"
+            aria-label="返回教师首页"
           >
             <ArrowLeft size={18} />
           </Link>
-          <h1 className="min-w-0 truncate text-lg font-bold text-stone-900 sm:text-xl">AI 服务设置</h1>
+          <h2 className="min-w-0 truncate text-lg font-bold text-stone-900 sm:text-xl">模型与服务</h2>
         </div>
 
         <nav aria-label="AI 服务类型" className="overflow-x-auto p-2">
@@ -1116,7 +1163,7 @@ export default function TeacherSettingsPage() {
           <ServerProvidersInit />
 
           <div className="min-w-0">
-            <main className="min-w-0">
+            <section className="min-w-0">
               <div className="mb-4 flex min-h-8 items-center justify-between gap-3">
                 <h2 className="truncate text-lg font-bold text-stone-900 sm:text-xl">{tabCopy.title}</h2>
                 {activeTab !== "agent-voice" && activeTab !== "knowledge-tutor" ? (
@@ -1229,7 +1276,7 @@ export default function TeacherSettingsPage() {
                   )}
                 </div>
               )}
-            </main>
+            </section>
           </div>
         </I18nProvider>
       </ThemeProvider>
@@ -1265,7 +1312,7 @@ export default function TeacherSettingsPage() {
           </div>
         </div>
       ) : null}
-    </DashboardShell>
+    </div></TeacherPlatformPage>
   );
 }
 
@@ -1447,9 +1494,30 @@ function LlmConfigForm({
 }) {
   const modelIds = splitModelIds(editModels);
   const testModel = editDefaultModel || modelIds[0] || "";
+  const connection = getProviderConnectionPresentation({
+    providerId: provider.id,
+    providerType: provider.type,
+    baseUrl: editBaseUrl,
+    defaultBaseUrl: provider.defaultBaseUrl,
+  });
 
   return (
     <div className="space-y-5">
+      <div
+        className={cn(
+          "rounded-[8px] border px-3 py-3 text-sm",
+          connection.tone === "success" && "border-emerald-200 bg-emerald-50 text-emerald-800",
+          connection.tone === "warning" && "border-amber-300 bg-amber-50 text-amber-900",
+          connection.tone === "info" && "border-blue-200 bg-blue-50 text-blue-800",
+        )}
+      >
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-bold">
+          <span>接入方式：{connection.label}</span>
+          <span>接口协议：{connection.protocol}</span>
+        </div>
+        <p className="mt-1.5 leading-5 opacity-90">{connection.credentialHint}</p>
+      </div>
+
       <div className="grid items-start gap-4 md:grid-cols-2">
         <SecretField
           label="密钥"
@@ -1457,7 +1525,7 @@ function LlmConfigForm({
           show={showApiKey}
           required={provider.requiresApiKey}
           saved={saved?.hasApiKey}
-          placeholder={saved?.hasApiKey ? "留空则保留已保存的密钥" : "输入密钥"}
+          placeholder={saved?.hasApiKey ? "密钥已保存（留空表示不修改）" : "输入密钥"}
           onChange={onApiKeyChange}
           onToggleShow={() => onShowApiKeyChange(!showApiKey)}
         />
@@ -1466,7 +1534,7 @@ function LlmConfigForm({
           <TextInput
             value={editBaseUrl}
             onChange={(event) => onBaseUrlChange(event.target.value)}
-            placeholder={provider.defaultBaseUrl || "输入兼容服务地址"}
+            placeholder={provider.baseUrlPlaceholder || provider.defaultBaseUrl || "输入兼容服务地址"}
           />
           {provider.defaultBaseUrl ? (
             <button
@@ -1475,9 +1543,12 @@ function LlmConfigForm({
               className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[var(--pbl-teacher)] hover:text-[var(--pbl-teacher)]"
             >
               <RefreshCw size={13} />
-              恢复默认地址
+              {provider.id === "deepseek" ? "切换到 DeepSeek 官方地址" : "恢复官方默认地址"}
             </button>
           ) : null}
+          <span className="mt-2 block break-all text-xs leading-5 text-stone-500">
+            调用目标：{getProviderRequestPreview(provider, editBaseUrl)}
+          </span>
         </Field>
       </div>
 
@@ -1607,7 +1678,7 @@ function ModalityConfigForm({
             show={showApiKey}
             required
             saved={saved?.hasApiKey}
-            placeholder={saved?.hasApiKey ? "留空则保留已保存的密钥" : "输入密钥"}
+            placeholder={saved?.hasApiKey ? "密钥已保存（留空表示不修改）" : "输入密钥"}
             onChange={onApiKeyChange}
             onToggleShow={() => onShowApiKeyChange(!showApiKey)}
           />
@@ -1758,7 +1829,7 @@ function ActionRow({
           className="h-10 px-4 text-sm"
         >
           {testing ? <Loader2 size={15} className="animate-spin" /> : <Plug size={15} />}
-          测试连接
+          {testing ? "正在测试" : "保存并测试连接"}
         </PrimaryButton>
         {onCalibrate ? (
           <PrimaryButton
@@ -1832,6 +1903,7 @@ function SecretField({
       }
       icon={KeyRound}
     >
+      {saved && <span className="mb-2 inline-flex items-center gap-1 text-xs font-semibold text-emerald-700"><CheckCircle2 size={13} />密钥已保存</span>}
       <div className="relative">
         <TextInput
           type={show ? "text" : "password"}
@@ -1907,17 +1979,20 @@ function ProviderStateBadge({ provider, saved }: { provider: ProviderMeta; saved
 }
 
 function ProviderLogo({ icon, name }: { icon?: string; name: string }) {
-  if (icon) {
-    const src = icon.startsWith("/logos/") ? `/openmaic${icon}` : icon;
+  const src = icon?.startsWith("/logos/") ? `/openmaic${icon}` : icon;
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+
+  if (src && failedSrc !== src) {
     return (
       <span className="grid h-10 w-10 shrink-0 place-items-center rounded-[8px] border border-stone-200 bg-white">
         <Image
           src={src}
           alt={name}
-          width={28}
-          height={28}
-          className="object-contain"
-          style={{ width: 28, height: 28 }}
+          width={name === "DeepSeek" ? 36 : 28}
+          height={name === "DeepSeek" ? 36 : 28}
+          unoptimized
+          onError={() => setFailedSrc(src)}
+          className={cn("object-contain", name === "DeepSeek" ? "h-9 w-9" : "h-7 w-7")}
         />
       </span>
     );

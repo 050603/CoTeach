@@ -40,13 +40,17 @@ vi.mock("@/lib/uploads/presentation-converter", async (importOriginal) => ({
 vi.mock("@/lib/db/client", () => ({
   isDatabaseConfigured: () => true,
   prisma: {
-    course: { count: mocks.courseCount },
+    courseOffering: { count: mocks.courseCount },
     $transaction: mocks.transaction,
   },
 }));
 vi.mock("@/lib/realtime/event-bus", () => ({
   publishCourseEvent: mocks.publishCourseEvent,
 }));
+
+vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: vi.fn(async () => true) }));
+
+vi.mock("@/lib/uploads/scope", () => ({ resolveUploadScope: async () => ({ offeringId: "course-1", templateOwnerId: null }) }));
 
 import { POST } from "./route";
 
@@ -60,19 +64,19 @@ describe("teacher course resource upload", () => {
     process.env.NEXT_PUBLIC_OPENPBL_SYSTEM_MODE = "new";
     process.env.OPENPBL_PPTX_CLASSROOM_CONVERSION_ENABLED = "true";
     mocks.fileTypeFromBuffer.mockResolvedValue({ ext: "png", mime: "image/png" });
-    mocks.uploadFileCreate.mockImplementation(async ({ data }: { data: { storedName: string } }) => {
-      mocks.storedNames.push(data.storedName);
-      return data;
+    mocks.uploadFileCreate.mockImplementation(async ({ data }: { data: { storageKey: string } }) => {
+      mocks.storedNames.push(data.storageKey);
+      return { id: data.storageKey, ...data };
     });
     mocks.courseResourceCreate.mockResolvedValue({});
     mocks.courseUpdate.mockResolvedValue({ version: 7 });
-    mocks.courseEventCreate.mockResolvedValue({ cursor: BigInt(41), courseVersion: 7 });
+    mocks.courseEventCreate.mockResolvedValue({ id: "event-41" });
     mocks.publishCourseEvent.mockResolvedValue(undefined);
     mocks.transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback({
-      uploadFile: { create: mocks.uploadFileCreate },
-      courseResource: { create: mocks.courseResourceCreate },
-      course: { update: mocks.courseUpdate },
-      courseEvent: { create: mocks.courseEventCreate },
+      fileAsset: { create: mocks.uploadFileCreate },
+      resource: { create: mocks.courseResourceCreate },
+      courseOffering: { update: mocks.courseUpdate },
+      domainEvent: { create: mocks.courseEventCreate },
     }));
   });
 
@@ -118,9 +122,7 @@ describe("teacher course resource upload", () => {
     });
     expect(mocks.uploadFileCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        courseId,
-        referencedBy: [`course-design-reference:${courseId}`],
-        refCount: 1,
+        offeringId: courseId,
       }),
     });
     expect(mocks.courseResourceCreate).not.toHaveBeenCalled();
@@ -151,10 +153,10 @@ describe("teacher course resource upload", () => {
     expect(response.status).toBe(201);
     expect(payload).toMatchObject({ title: "项目图片", fileType: "PNG", boundToCourse: true });
     expect(mocks.uploadFileCreate).toHaveBeenCalledWith({
-      data: expect.objectContaining({ courseId, refCount: 1, referencedBy: [payload.id] }),
+      data: expect.objectContaining({ offeringId: courseId }),
     });
     expect(mocks.courseResourceCreate).toHaveBeenCalledWith({
-      data: expect.objectContaining({ id: payload.id, courseId, title: "项目图片", stageKey: "showcase", url: `/api/uploads/${payload.id}` }),
+      data: expect.objectContaining({ id: payload.id, offeringId: courseId, title: "项目图片", metadata: { stageKey: "showcase" } }),
     });
     expect(mocks.courseUpdate).toHaveBeenCalledWith({
       where: { id: courseId },
@@ -162,11 +164,11 @@ describe("teacher course resource upload", () => {
       select: { version: true },
     });
     expect(mocks.courseEventCreate).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ courseId, courseVersion: 7 }),
+      data: expect.objectContaining({ offeringId: courseId, payload: { source: "resource-upload", offeringVersion: 7 } }),
     }));
     expect(mocks.publishCourseEvent).toHaveBeenCalledWith(
       courseId,
-      expect.objectContaining({ payload: expect.objectContaining({ eventCursor: "41" }) }),
+      expect.objectContaining({ payload: expect.objectContaining({ eventCursor: "event-41" }) }),
     );
   });
 
@@ -192,10 +194,10 @@ describe("teacher course resource upload", () => {
     expect(response.status).toBe(201);
     expect(payload).toMatchObject({ fileName: "课堂实验.mp4", fileType: "MP4", sizeBytes: 12, boundToCourse: true });
     expect(mocks.uploadFileCreate).toHaveBeenCalledWith({
-      data: expect.objectContaining({ mimeType: "video/mp4", size: 12 }),
+      data: expect.objectContaining({ mimeType: "video/mp4", size: BigInt(12) }),
     });
     expect(mocks.courseResourceCreate).toHaveBeenCalledWith({
-      data: expect.objectContaining({ courseId, stageKey: "launch", type: "MP4" }),
+      data: expect.objectContaining({ offeringId: courseId, metadata: { stageKey: "launch" }, type: "MP4" }),
     });
   });
 
@@ -253,18 +255,17 @@ describe("teacher course resource upload", () => {
     });
     expect(mocks.uploadFileCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        fileName: "课堂演示.pptx",
-        previewStoredName: expect.stringMatching(/\.classroom\.pdf$/),
-        previewMimeType: "application/pdf",
-        previewSize: 4096,
+        originalName: "课堂演示.pptx.pdf",
+        storageKey: expect.stringMatching(/\.classroom\.pdf$/),
+        mimeType: "application/pdf",
+        size: BigInt(4096),
       }),
     });
     expect(mocks.courseResourceCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
         type: "PPTX",
-        url: `/api/uploads/${payload.id}`,
-        previewType: "PDF",
-        previewUrl: `/api/uploads/${payload.id}?variant=classroom`,
+        fileAssetId: payload.id,
+        metadata: expect.objectContaining({ previewType: "PDF", previewAssetId: expect.any(String), previewUrl: `/api/uploads/${payload.id}?variant=classroom` }),
       }),
     });
   });
@@ -292,8 +293,7 @@ describe("teacher course resource upload", () => {
     expect(mocks.courseResourceCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
         type: "PDF",
-        displayMode: "slides",
-        previewUrl: null,
+        metadata: { stageKey: "launch", displayMode: "slides" },
       }),
     });
   });

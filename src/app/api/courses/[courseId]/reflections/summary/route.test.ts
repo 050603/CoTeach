@@ -5,11 +5,13 @@ import type { Course } from "@/lib/session/types";
 
 const mocks = vi.hoisted(() => ({
   getCourse: vi.fn(),
-  dispatchSessionAction: vi.fn(),
+  canAccessLegacyCourse: vi.fn(),
+  updateCourse: vi.fn(),
   buildReflectionClassSummary: vi.fn(),
   checkDistributedRateLimit: vi.fn(),
 }));
 
+vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: mocks.canAccessLegacyCourse }));
 vi.mock("@/lib/auth/request-guards", () => ({
   authenticateRequest: vi.fn(async () => ({ claims: { sub: "teacher-1", role: "teacher" as const } })),
   requireSameOrigin: vi.fn(() => null),
@@ -17,7 +19,7 @@ vi.mock("@/lib/auth/request-guards", () => ({
 vi.mock("@/lib/auth/distributed-rate-limit", () => ({ checkDistributedRateLimit: mocks.checkDistributedRateLimit }));
 vi.mock("@/lib/session/server-store", () => ({
   getCourse: mocks.getCourse,
-  dispatchSessionAction: mocks.dispatchSessionAction,
+  updateCourse: mocks.updateCourse,
 }));
 vi.mock("@/lib/teaching-ai/support-engine", () => ({ buildReflectionClassSummary: mocks.buildReflectionClassSummary }));
 
@@ -67,9 +69,10 @@ function request(body: unknown) {
 describe("reflection summary route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.canAccessLegacyCourse.mockResolvedValue(true);
     mocks.checkDistributedRateLimit.mockResolvedValue({ allowed: true, retryAfterMs: 0 });
     mocks.getCourse.mockResolvedValue(makeCourse());
-    mocks.dispatchSessionAction.mockResolvedValue({});
+    mocks.updateCourse.mockResolvedValue({});
     mocks.buildReflectionClassSummary.mockResolvedValue({
       stageKey: "reflection",
       targetType: "course",
@@ -92,10 +95,7 @@ describe("reflection summary route", () => {
     expect(response.status).toBe(200);
     expect(mocks.checkDistributedRateLimit).toHaveBeenCalledWith(expect.objectContaining({ namespace: "reflection-summary", limit: 12, windowSeconds: 3600 }));
     expect(mocks.buildReflectionClassSummary).toHaveBeenCalledWith(expect.objectContaining({ course: expect.any(Object), trigger: "manual" }));
-    expect(mocks.dispatchSessionAction).toHaveBeenCalledWith(expect.objectContaining({
-      type: "UPSERT_AI_SUPPORT",
-      payload: { courseId, support: expect.objectContaining({ kind: "reflection-class-summary", targetType: "course" }) },
-    }));
+    expect(mocks.updateCourse).toHaveBeenCalledWith(courseId, expect.any(Function), { actor: { id: "teacher-1", role: "teacher" } });
     expect(payload.support).toMatchObject({ kind: "reflection-class-summary", courseId });
   });
 
@@ -112,7 +112,13 @@ describe("reflection summary route", () => {
     mocks.buildReflectionClassSummary.mockRejectedValueOnce(new Error("provider unavailable"));
     const response = await POST(request({ trigger: "manual" }), context);
     expect(response.status).toBe(502);
-    expect(mocks.dispatchSessionAction).not.toHaveBeenCalled();
+    expect(mocks.updateCourse).not.toHaveBeenCalled();
     expect((await response.json()).message).toContain("上一版内容仍然保留");
+  });
+  it("rejects another teacher before reading reflections or calling the model", async () => {
+    mocks.canAccessLegacyCourse.mockResolvedValue(false);
+    expect((await POST(request({}), context)).status).toBe(403);
+    expect(mocks.getCourse).not.toHaveBeenCalled();
+    expect(mocks.buildReflectionClassSummary).not.toHaveBeenCalled();
   });
 });

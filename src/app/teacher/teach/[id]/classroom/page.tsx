@@ -11,7 +11,6 @@ import {
   Copy,
   Eye,
   QrCode,
-  RefreshCw,
   UserRoundCheck,
   Users,
   X,
@@ -20,7 +19,7 @@ import { DashboardShell, Avatar } from "@/components/dashboard-shell";
 import { StageGateDialog } from "@/components/classroom/classroom-chrome";
 import { TeacherStageView } from "@/components/views/teacher/stage-dispatcher";
 import { TeacherStageDashboard } from "@/components/classroom/teacher-stage-dashboard";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogTitle, Button, FlowActionBar, SaveStatus } from "@/components/ui";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogTitle, Button, FlowActionBar, SaveStatus } from "@/components/ui";
 import { useSession, useCourse, useHydrated } from "@/lib/session/store";
 import { cn } from "@/lib/utils";
 import { evaluateStageGate } from "@/lib/classroom/stage-gates";
@@ -56,7 +55,7 @@ export default function TeachClassroomPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const session = useSession();
-  const { user, endTeaching, generateNewInviteCode, updateCourse } = session;
+  const { user, endTeaching, updateCourse, flushSaves, retrySave, saveState } = session;
   const course = useCourse(params?.id);
   useRealtimeSync(params?.id);
   const presence = useCoursePresence({
@@ -68,6 +67,8 @@ export default function TeachClassroomPage() {
   const [nowTick, setNowTick] = useState(0);
   const [toolPanel, setToolPanel] = useState<ToolPanel>(null);
   const [targetStageIndex, setTargetStageIndex] = useState<number | null>(null);
+  const [ending, setEnding] = useState(false);
+  const [endError, setEndError] = useState<string>();
   const [endDialogOpen, setEndDialogOpen] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [dashboardFocus, setDashboardFocus] = useState<TeacherStageFocus>();
@@ -77,8 +78,8 @@ export default function TeachClassroomPage() {
 
   useEffect(() => {
     if (!hydrated) return;
-    if (course && course.status !== "teaching") router.replace(`/teacher/teach/${course.id}/setup`);
-  }, [course, hydrated, router]);
+    if (course && course.status !== "teaching" && !ending && (course.status !== "finished" || (saveState !== "saving" && saveState !== "error"))) router.replace(course.status === "finished" ? `/teacher/classrooms/${course.id}` : `/teacher/teach/${course.id}/setup`);
+  }, [course, hydrated, router, ending, saveState]);
 
   useEffect(() => {
     if (!course || course.status !== "teaching") return;
@@ -155,10 +156,19 @@ export default function TeachClassroomPage() {
       : formatClock(timingSnapshot.activeStage.remainingSec)
     : "--:--";
 
-  function endClass() {
-    if (!course) return;
-    endTeaching(course.id);
-    setEndDialogOpen(false);
+  async function endClass() {
+    if (!course || ending) return;
+    setEnding(true);
+    setEndError(undefined);
+    try {
+      if (saveState === "error") await retrySave();
+      if (!await flushSaves()) throw new Error("课堂数据尚未保存，请重试");
+      if (course.status !== "finished") endTeaching(course.id);
+      if (!await flushSaves()) throw new Error("结束课堂未保存，请重试");
+      setEndDialogOpen(false);
+      router.replace(`/teacher/classrooms/${course.id}`);
+    } catch (error) { setEndError(error instanceof Error ? error.message : "结束课堂失败"); }
+    finally { setEnding(false); }
   }
 
   function persistClassroomTiming(classroomTiming: ClassroomTimingState) {
@@ -253,7 +263,7 @@ export default function TeachClassroomPage() {
             () => false,
           )
         : Promise.resolve(false)}
-      onRefresh={() => generateNewInviteCode(course.id)}
+      accessHref={`/teacher/classes/${course.platformContext?.offeringId ?? ""}/access`}
     />
   ) : toolPanel === "students" ? (
     <StudentsPanel course={course} currentStageKey={currentStage?.key} onlineStudentIds={presence.onlineStudentIds} />
@@ -314,7 +324,7 @@ export default function TeachClassroomPage() {
           {/* 查看课程 */}
           <Link
             className="grid h-8 w-8 place-items-center rounded-[var(--radius-xs)] border border-stone-200 bg-white/80 text-stone-600 transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)]"
-            href={`/teacher/prepare/${course.id}/preview`}
+            href={`/teacher/prepare/${course.platformContext?.templateId ?? course.id}/preview`}
             aria-label="查看课程"
           >
             <Eye size={14} />
@@ -361,7 +371,7 @@ export default function TeachClassroomPage() {
         <div className="ml-auto flex items-center gap-2">
           <Link
             className="grid h-9 w-9 place-items-center rounded-[var(--radius-sm)] border border-stone-200 bg-white text-stone-600"
-            href={`/teacher/prepare/${course.id}/preview`}
+            href={`/teacher/prepare/${course.platformContext?.templateId ?? course.id}/preview`}
             aria-label="查看课程"
           >
             <Eye size={15} />
@@ -449,13 +459,14 @@ export default function TeachClassroomPage() {
 
       {targetStageIndex !== null ? <StageGateDialog course={course} onConfirm={confirmStage} onOpenChange={(open) => { if (!open) setTargetStageIndex(null); }} open targetIndex={targetStageIndex} /> : null}
 
+      {endError ? <p role="alert" className="text-sm text-red-700">{endError}</p> : null}
       <AlertDialog onOpenChange={setEndDialogOpen} open={endDialogOpen}>
         <AlertDialogContent>
           <AlertDialogTitle>结束本次课堂？</AlertDialogTitle>
-          <AlertDialogDescription>课堂结束后学生将进入只读回看。结束前请确认授课资源和项目实践产物已经保存；系统不会自动跳转离开当前页面。</AlertDialogDescription>
+          <AlertDialogDescription>课堂结束后学生将进入只读回看。结束前请确认授课资源和项目实践产物已经保存；保存成功后将进入课堂学习记录。</AlertDialogDescription>
           <AlertDialogFooter>
             <AlertDialogCancel>继续授课</AlertDialogCancel>
-            <AlertDialogAction onClick={endClass}>结束课堂</AlertDialogAction>
+            <Button disabled={ending} onClick={() => void endClass()}>{ending ? "正在结束…" : "结束课堂"}</Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -485,11 +496,11 @@ export default function TeachClassroomPage() {
 function InvitePanel({
   code,
   onCopy,
-  onRefresh,
+  accessHref,
 }: {
   code?: string;
   onCopy: () => Promise<boolean>;
-  onRefresh: () => void;
+  accessHref: string;
 }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
@@ -502,7 +513,7 @@ function InvitePanel({
     <div>
       <div className="mb-2.5 pr-8">
         <div className="text-base font-bold text-stone-900">学生邀请码</div>
-        <p className="mt-0.5 text-[13px] text-stone-500">学生输入此码加入课堂</p>
+        <p className="mt-0.5 text-[13px] text-stone-500">学生凭教学班邀请码加入课程，再进入本课堂</p>
       </div>
       {code ? (
         <>
@@ -520,13 +531,7 @@ function InvitePanel({
               {copyState === "copied" ? <CheckCircle2 size={13} /> : <Copy size={13} />}
               {copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制"}
             </button>
-            <button
-              className="inline-flex h-9 items-center justify-center gap-1 rounded-[var(--radius-xs)] border border-stone-200 bg-white text-xs font-semibold text-stone-600 transition hover:bg-stone-50"
-              onClick={onRefresh}
-              type="button"
-            >
-              <RefreshCw size={13} /> 刷新
-            </button>
+            <Link className="inline-flex h-9 items-center justify-center gap-1 rounded-[var(--radius-xs)] border border-stone-200 bg-white text-xs font-semibold text-stone-600" href={accessHref}>邀请设置</Link>
           </div>
         </>
       ) : (

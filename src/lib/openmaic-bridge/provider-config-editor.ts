@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 为 OpenMAIC 原生只读 Provider 配置补充持久化写入能力。
 // 数据库不可用时，教师设置页会回退读写 server-providers.yml。
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -10,9 +9,9 @@ import {
 } from '@openmaic/lib/server/provider-config';
 import { prisma, isDatabaseConfigured } from '@/lib/db/client';
 import {
-  decryptCredential,
-  encryptCredential,
-} from '@/lib/security/credential-encryption';
+  decodeProviderSecret,
+  encodeProviderSecret,
+} from '@/lib/security/provider-secret';
 import { Prisma } from '@prisma/client';
 import {
   getTtsCalibrationKey,
@@ -85,20 +84,22 @@ export async function mergeProviderTtsTimingCalibration(
   sample: TtsVoiceTimingCalibration,
 ): Promise<TtsVoiceTimingCalibration> {
   if (isDatabaseConfigured()) {
-    const existingEntry = (await getProviderEntry('tts', providerId)) ?? { apiKey: '' };
-    const calibrations = existingEntry.timingCalibrations ?? [];
-    const key = getTtsCalibrationKey(sample);
-    const existing = calibrations.find((item) => getTtsCalibrationKey(item) === key);
-    const aggregate = mergeTtsVoiceTimingCalibrations(existing, sample);
-    await saveProviderEntry('tts', providerId, {
-      ...existingEntry,
-      timingCalibrations: [
-        ...calibrations.filter((item) => getTtsCalibrationKey(item) !== key),
-        aggregate,
-      ],
+    const aggregate = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`provider:tts:${providerId}`}))::text`;
+      const row = await tx.providerCredential.findFirst({ where: { ownerId: null, name: 'tts', provider: providerId } });
+      const entry = row ? providerRowToEntry(row) : { apiKey: '' };
+      const calibrations = entry.timingCalibrations ?? [];
+      const key = getTtsCalibrationKey(sample);
+      const merged = mergeTtsVoiceTimingCalibrations(calibrations.find((item) => getTtsCalibrationKey(item) === key), sample);
+      const config = providerConfigJson({ ...entry, timingCalibrations: [...calibrations.filter((item) => getTtsCalibrationKey(item) !== key), merged] }, row?.config);
+      if (row) await tx.providerCredential.update({ where: { id: row.id }, data: { config } });
+      else await tx.providerCredential.create({ data: { ownerId: null, name: 'tts', provider: providerId, secret: '', config, status: 'ACTIVE' } });
+      return merged;
     });
+    await initializeServerProviderConfig();
     return aggregate;
   }
+
   return withProviderConfigWrite(async () => {
     const data = await readYaml();
     data.tts ??= {};
@@ -131,37 +132,15 @@ export async function saveProviderEntry(
   entry: ProviderEntry,
 ): Promise<void> {
   if (isDatabaseConfigured()) {
-    const existing = await prisma.providerCredential.findUnique({
-      where: { section_providerId: { section, providerId } },
-    });
-    const apiKey = entry.apiKey ||
-      (existing
-        ? decryptCredential(
-            existing.encryptedApiKey,
-            existing.iv,
-            existing.authTag,
-            `${section}:${providerId}`,
-          )
-        : '');
-    const encrypted = encryptCredential(apiKey, `${section}:${providerId}`);
-    const config = providerConfigJson(entry, existing?.config);
-    await prisma.providerCredential.upsert({
-      where: { section_providerId: { section, providerId } },
-      create: {
-        section,
-        providerId,
-        encryptedApiKey: encrypted?.ciphertext,
-        iv: encrypted?.iv,
-        authTag: encrypted?.authTag,
-        config,
-      },
-      update: {
-        encryptedApiKey: encrypted?.ciphertext,
-        iv: encrypted?.iv,
-        authTag: encrypted?.authTag,
-        config,
-        version: { increment: 1 },
-      },
+    await prisma.$transaction(async (tx) => {
+      // NULL ownerId is not covered by PostgreSQL's composite uniqueness.
+      // Serialize global settings across processes, including first insertion.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`provider:${section}:${providerId}`}))::text`;
+      const existing = await tx.providerCredential.findFirst({ where: { ownerId: null, name: section, provider: providerId } });
+      const apiKey = entry.apiKey || (existing ? decodeProviderSecret(existing.secret, `${section}:${providerId}`) : '');
+      const data = { secret: encodeProviderSecret(apiKey, `${section}:${providerId}`), config: providerConfigJson(entry, existing?.config), status: 'ACTIVE' };
+      if (existing) await tx.providerCredential.update({ where: { id: existing.id }, data });
+      else await tx.providerCredential.create({ data: { ownerId: null, name: section, provider: providerId, ...data } });
     });
     await initializeServerProviderConfig();
     return;
@@ -212,7 +191,7 @@ export async function deleteProviderEntry(
   providerId: string,
 ): Promise<void> {
   if (isDatabaseConfigured()) {
-    await prisma.providerCredential.deleteMany({ where: { section, providerId } });
+    await prisma.providerCredential.deleteMany({ where: { ownerId: null, name: section, provider: providerId } });
     await initializeServerProviderConfig();
     return;
   }
@@ -234,8 +213,8 @@ export async function getProviderEntry(
   providerId: string,
 ): Promise<ProviderEntry | null> {
   if (isDatabaseConfigured()) {
-    const row = await prisma.providerCredential.findUnique({
-      where: { section_providerId: { section, providerId } },
+    const row = await prisma.providerCredential.findFirst({
+      where: { ownerId: null, name: section, provider: providerId, status: 'ACTIVE' },
     });
     return row ? providerRowToEntry(row) : null;
   }
@@ -261,10 +240,10 @@ export async function listProviders(
 ): Promise<Record<string, ProviderEntry>> {
   if (isDatabaseConfigured()) {
     const rows = await prisma.providerCredential.findMany({
-      where: { section },
-      orderBy: { providerId: 'asc' },
+      where: { ownerId: null, name: section, status: 'ACTIVE' },
+      orderBy: { provider: 'asc' },
     });
-    return Object.fromEntries(rows.map((row) => [row.providerId, providerRowToEntry(row)]));
+    return Object.fromEntries(rows.map((row) => [row.provider, providerRowToEntry(row)]));
   }
   await ensureMigratedInternal();
   const data = await readYaml();
@@ -308,26 +287,13 @@ function providerConfigJson(
 }
 
 function providerRowToEntry(row: {
-  section: string;
-  providerId: string;
-  encryptedApiKey: Uint8Array | null;
-  iv: Uint8Array | null;
-  authTag: Uint8Array | null;
-  config: Prisma.JsonValue;
+  name: string;
+  provider: string;
+  secret: string;
+  config: Prisma.JsonValue | null;
 }): ProviderEntry {
-  const config =
-    row.config && typeof row.config === 'object' && !Array.isArray(row.config)
-      ? (row.config as Record<string, unknown>)
-      : {};
-  return {
-    ...(config as Omit<ProviderEntry, 'apiKey'>),
-    apiKey: decryptCredential(
-      row.encryptedApiKey,
-      row.iv,
-      row.authTag,
-      `${row.section}:${row.providerId}`,
-    ),
-  };
+  const config = row.config && typeof row.config === 'object' && !Array.isArray(row.config) ? row.config : {};
+  return { ...(config as Omit<ProviderEntry, 'apiKey'>), apiKey: decodeProviderSecret(row.secret, `${row.name}:${row.provider}`) };
 }
 
 /**

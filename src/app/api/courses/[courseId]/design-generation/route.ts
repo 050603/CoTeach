@@ -1,7 +1,6 @@
-// @ts-nocheck
 import { Prisma } from "@prisma/client";
-import type { NextRequest } from "next/server";
-import { prisma } from "@/lib/db/client";
+import { after, type NextRequest } from "next/server";
+import { designGenerationJobs } from "@/lib/course-generation/job-storage";
 import { isBackgroundCourseGenerationEnabled } from "@/lib/course-generation/capability";
 import {
   cancelCourseDesignJob,
@@ -12,7 +11,8 @@ import {
   initialQuickGenerationEstimateSeconds,
   type QuickDesignRequest,
 } from "@/lib/course-design/job-runner";
-import { isAuthConfigured, readAuthFromRequest } from "@/lib/auth/session";
+import { authorizeTemplateRequest } from "@/lib/platform/template-access";
+import { loadPblTemplateCourse } from "@/lib/platform/pbl-template-repository";
 import { isSameCourseDesignRequest } from "@/lib/course-design/resume-policy";
 import { formatFatalCourseDesignError } from "@/lib/course-design/failure-policy";
 import type {
@@ -27,17 +27,16 @@ import {
   GenerationReferenceError,
   resolveGenerationReferenceMaterials,
 } from "@/lib/course-design/generation-references";
+import {
+  assertRequestedClassroomMediaProviders,
+  classroomMediaConfigurationErrorResponse,
+} from "@openmaic/lib/server/classroom-media-readiness";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function authorize(request: NextRequest): Promise<string | null> {
-  if (!isAuthConfigured()) return null;
-  const claims = await readAuthFromRequest(request, "teacher");
-  return claims?.role === "teacher" ? (claims.sub ?? "") : "";
-}
 
-function responseJob(job: Awaited<ReturnType<typeof prisma.courseDesignGenerationJob.findUnique>>) {
+function responseJob(job: Awaited<ReturnType<typeof designGenerationJobs.findUnique>>) {
   if (!job) return null;
   const request = job.request as unknown as Partial<QuickDesignRequest>;
   return {
@@ -83,7 +82,7 @@ function responseJob(job: Awaited<ReturnType<typeof prisma.courseDesignGeneratio
 }
 
 function persistedJobMode(
-  job: NonNullable<Awaited<ReturnType<typeof prisma.courseDesignGenerationJob.findUnique>>>,
+  job: NonNullable<Awaited<ReturnType<typeof designGenerationJobs.findUnique>>>,
 ): "new" {
   void job;
   return "new";
@@ -106,10 +105,10 @@ async function structuredResponse(work: () => Promise<Response>): Promise<Respon
 
 export async function GET(request: NextRequest, context: { params: Promise<{ courseId: string }> }) {
   return structuredResponse(async () => {
-    const requestedBy = await authorize(request);
-    if (requestedBy === "") return Response.json({ error: "Unauthorized" }, { status: 401 });
     const { courseId } = await context.params;
-    let job = await prisma.courseDesignGenerationJob.findUnique({ where: { courseId } });
+  const requestedBy = await authorizeTemplateRequest(request, courseId);
+    if (requestedBy instanceof Response) return requestedBy;
+    let job = await designGenerationJobs.findUnique({ where: { courseId } });
     const systemMode = getOpenPblSystemMode();
     if (job && persistedJobMode(job) !== systemMode) {
       return Response.json({
@@ -140,10 +139,10 @@ export async function GET(request: NextRequest, context: { params: Promise<{ cou
 
 export async function POST(request: NextRequest, context: { params: Promise<{ courseId: string }> }) {
   return structuredResponse(async () => {
-    const requestedBy = await authorize(request);
-    if (requestedBy === "") return Response.json({ error: "Unauthorized" }, { status: 401 });
     const { courseId } = await context.params;
-    const course = await prisma.course.findUnique({ where: { id: courseId }, select: { id: true } });
+  const requestedBy = await authorizeTemplateRequest(request, courseId);
+    if (requestedBy instanceof Response) return requestedBy;
+    const course = await loadPblTemplateCourse(courseId);
     if (!course) return Response.json({ error: "Course not found" }, { status: 404 });
     const body = await request.json().catch(() => null) as {
       teacherBrief?: unknown;
@@ -183,12 +182,22 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
         enableVideoGeneration: body?.options?.enableVideoGeneration === true,
       },
     };
+    try {
+      assertRequestedClassroomMediaProviders(quickRequest.options ?? {});
+    } catch (error) {
+      const configurationError = classroomMediaConfigurationErrorResponse(error);
+      if (!configurationError) throw error;
+      return Response.json({
+        error: configurationError.code,
+        detail: configurationError.message,
+      }, { status: 409 });
+    }
     const requestJson = quickRequest as unknown as Prisma.InputJsonValue;
     const estimate = initialQuickGenerationEstimateSeconds(
       quickRequest.options,
       quickRequest.systemMode,
     );
-    let job = await prisma.courseDesignGenerationJob.findUnique({ where: { courseId } });
+    let job = await designGenerationJobs.findUnique({ where: { courseId } });
 
     if (
       job
@@ -202,7 +211,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
     }
 
     if (!job) {
-      job = await prisma.courseDesignGenerationJob.create({
+      job = await designGenerationJobs.create({
         data: { courseId, requestedBy: requestedBy || null, request: requestJson, estimatedRemainingSeconds: estimate },
       });
     } else if (
@@ -211,7 +220,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       || (job.status === "completed" && !isSameCourseDesignRequest(job.request, quickRequest))
     ) {
       const preserveValidatedStages = isSameCourseDesignRequest(job.request, quickRequest);
-      job = await prisma.courseDesignGenerationJob.update({
+      job = await designGenerationJobs.update({
         where: { id: job.id },
         data: {
           status: "queued",
@@ -240,7 +249,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
     const backgroundEnabled = isBackgroundCourseGenerationEnabled();
     if (!backgroundEnabled && job.status === "queued") {
       const startedAt = new Date();
-      const claimed = await prisma.courseDesignGenerationJob.update({
+      const claimed = await designGenerationJobs.update({
         where: { id: job.id },
         data: {
           status: "running",
@@ -253,7 +262,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
         },
       });
       job = claimed;
-      void runCourseDesignJob(claimed);
+      after(() => runCourseDesignJob(claimed));
     }
 
     return Response.json({ backgroundEnabled, job: responseJob(job) }, { status: 202 });
@@ -262,9 +271,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
 
 export async function PATCH(request: NextRequest, context: { params: Promise<{ courseId: string }> }) {
   return structuredResponse(async () => {
-    const requestedBy = await authorize(request);
-    if (requestedBy === "") return Response.json({ error: "Unauthorized" }, { status: 401 });
     const { courseId } = await context.params;
+  const requestedBy = await authorizeTemplateRequest(request, courseId);
+    if (requestedBy instanceof Response) return requestedBy;
     const body = await request.json().catch(() => null) as {
       action?: unknown;
       reviewKind?: unknown;
@@ -299,7 +308,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
     const backgroundEnabled = isBackgroundCourseGenerationEnabled();
     if (body.action === "resume" && !backgroundEnabled && job.status === "queued") {
       const startedAt = new Date();
-      job = await prisma.courseDesignGenerationJob.update({
+      job = await designGenerationJobs.update({
         where: { id: job.id },
         data: {
           status: "running",
@@ -310,7 +319,8 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
           version: { increment: 1 },
         },
       });
-      void runCourseDesignJob(job);
+      const retainedJob = job;
+      after(() => runCourseDesignJob(retainedJob));
     }
 
     const course = ["review_available", "paused"].includes(job.status)
@@ -332,9 +342,9 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
 
 export async function DELETE(request: NextRequest, context: { params: Promise<{ courseId: string }> }) {
   return structuredResponse(async () => {
-    const requestedBy = await authorize(request);
-    if (requestedBy === "") return Response.json({ error: "Unauthorized" }, { status: 401 });
     const { courseId } = await context.params;
+  const requestedBy = await authorizeTemplateRequest(request, courseId);
+    if (requestedBy instanceof Response) return requestedBy;
     const job = await cancelCourseDesignJob(courseId);
     return Response.json({
       backgroundEnabled: isBackgroundCourseGenerationEnabled(),

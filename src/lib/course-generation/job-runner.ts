@@ -1,7 +1,7 @@
-// @ts-nocheck
-import { Prisma, type CourseGenerationJob } from "@prisma/client";
-import { randomUUID } from "node:crypto";
-import { prisma } from "@/lib/db/client";
+import { Prisma } from "@prisma/client";
+import type { CourseGenerationJob } from "@/lib/course-generation/job-storage";
+import { loadGenerationCheckpoints, saveGenerationCheckpoint, resetGenerationCheckpoints, countGenerationPageCheckpoints } from "./checkpoint-storage";
+import { contentGenerationJobs } from "@/lib/course-generation/job-storage";
 import { createLogger } from "@openmaic/lib/logger";
 import {
   generateClassroom,
@@ -45,6 +45,7 @@ import {
 } from "@/lib/course-cover";
 import { generateCourseCoverImageOnServer } from "@/lib/course-cover-server";
 import {
+  createCourseMediaGenerationIncompleteError,
   createManagedCourseGenerationRecoveryRequest,
   deserializeCourseGenerationFailure,
   serializeCourseGenerationFailure,
@@ -98,23 +99,9 @@ type StoredCheckpointState = {
 };
 
 async function loadCheckpointState(jobId: string): Promise<StoredCheckpointState> {
-  const [jobRows, checkpointRows] = await Promise.all([
-    prisma.$queryRaw<Array<{ preparedOutlines: Prisma.JsonValue | null }>>`
-      SELECT "preparedOutlines"
-      FROM "CourseGenerationJob"
-      WHERE "id" = ${jobId}
-    `,
-    prisma.$queryRaw<Array<{
-      pageKey: string;
-      outlineFingerprint: string;
-      scene: Prisma.JsonValue;
-    }>>`
-      SELECT "pageKey", "outlineFingerprint", "scene"
-      FROM "CourseGenerationPageCheckpoint"
-      WHERE "jobId" = ${jobId}
-    `,
-  ]);
-  const rawOutlines = jobRows[0]?.preparedOutlines;
+  const stored = await loadGenerationCheckpoints(jobId);
+  const rawOutlines = stored.preparedOutlines;
+  const checkpointRows = stored.pages as unknown as PageCheckpointSnapshot[];
   const preparedOutlines = Array.isArray(rawOutlines)
     ? rawOutlines as unknown as SceneOutline[]
     : [];
@@ -130,12 +117,7 @@ async function loadCheckpointState(jobId: string): Promise<StoredCheckpointState
 }
 
 async function persistPreparedOutlines(jobId: string, outlines: SceneOutline[]): Promise<void> {
-  const value = JSON.stringify(outlines);
-  await prisma.$executeRaw`
-    UPDATE "CourseGenerationJob"
-    SET "preparedOutlines" = CAST(${value} AS JSONB)
-    WHERE "id" = ${jobId}
-  `;
+  await saveGenerationCheckpoint(jobId, "prepared-outlines", outlines);
 }
 
 async function persistSceneCheckpoint(
@@ -148,33 +130,12 @@ async function persistSceneCheckpoint(
     outlineFingerprint: fingerprintSceneOutline(outline),
     scene,
   };
-  const sceneJson = JSON.stringify(scene);
-  await prisma.$executeRaw`
-    INSERT INTO "CourseGenerationPageCheckpoint"
-      ("id", "jobId", "pageKey", "outlineFingerprint", "outlineOrder", "scene", "createdAt", "updatedAt")
-    VALUES
-      (${randomUUID()}, ${jobId}, ${checkpoint.pageKey}, ${checkpoint.outlineFingerprint}, ${outline.order}, CAST(${sceneJson} AS JSONB), NOW(), NOW())
-    ON CONFLICT ("jobId", "pageKey") DO UPDATE SET
-      "outlineFingerprint" = EXCLUDED."outlineFingerprint",
-      "outlineOrder" = EXCLUDED."outlineOrder",
-      "scene" = EXCLUDED."scene",
-      "updatedAt" = NOW()
-  `;
+  await saveGenerationCheckpoint(jobId, `page:${checkpoint.pageKey}`, checkpoint);
   return checkpoint;
 }
 
 export async function resetCourseGenerationCheckpoints(jobId: string): Promise<void> {
-  await prisma.$transaction([
-    prisma.$executeRaw`
-      UPDATE "CourseGenerationJob"
-      SET "preparedOutlines" = NULL
-      WHERE "id" = ${jobId}
-    `,
-    prisma.$executeRaw`
-      DELETE FROM "CourseGenerationPageCheckpoint"
-      WHERE "jobId" = ${jobId}
-    `,
-  ]);
+  await resetGenerationCheckpoints(jobId);
 }
 
 export type PersistedCourseGenerationRequest = GenerateClassroomInput & {
@@ -298,7 +259,7 @@ async function persistProgress(
       enableTTS: (job.request as unknown as Partial<PersistedCourseGenerationRequest>).enableTTS,
     }),
   });
-  const updated = await prisma.courseGenerationJob.update({
+  const updated = await contentGenerationJobs.update({
     where: { id: job.id },
     data: {
       step: event.step,
@@ -331,7 +292,7 @@ async function persistAdaptiveProgress(
     ts: Date.now(),
   };
   const events = [...asEvents(job.events), event].slice(-MAX_STORED_EVENTS);
-  const updated = await prisma.courseGenerationJob.update({
+  const updated = await contentGenerationJobs.update({
     where: { id: job.id },
     data: {
       step: event.step,
@@ -366,7 +327,7 @@ async function persistWorkerPhase(
     totalScenes: job.totalScenes,
     ts: Date.now(),
   };
-  const updated = await prisma.courseGenerationJob.update({
+  const updated = await contentGenerationJobs.update({
     where: { id: job.id },
     data: {
       step: input.step,
@@ -403,7 +364,9 @@ async function generateAndPersistCourseCover(
     estimatedRemainingSeconds: 45,
   }));
   try {
-    const coverImageUrl = await generateCourseCoverImageOnServer(course, signal);
+    const classroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;
+    if (!classroomId) throw new Error("课程课堂尚未持久化，无法保存课程封面");
+    const coverImageUrl = await generateCourseCoverImageOnServer(course, classroomId, signal);
     await updateCourse(courseId, (current) => ({ ...current, coverImageUrl }));
     await serializeWrite(() => persistWorkerPhase(job, {
       step: "course_cover_ready",
@@ -593,13 +556,13 @@ async function prepareAdaptiveResources(
 }
 
 async function claimNextJob(): Promise<CourseGenerationJob | null> {
-  const candidate = await prisma.courseGenerationJob.findFirst({
+  const candidate = await contentGenerationJobs.findFirst({
     where: { status: "queued" },
     orderBy: { createdAt: "asc" },
   });
   if (!candidate) return null;
   const now = new Date();
-  const claimed = await prisma.courseGenerationJob.updateMany({
+  const claimed = await contentGenerationJobs.updateMany({
     where: { id: candidate.id, status: "queued" },
     data: {
       status: "running",
@@ -613,7 +576,7 @@ async function claimNextJob(): Promise<CourseGenerationJob | null> {
     },
   });
   return claimed.count === 1
-    ? prisma.courseGenerationJob.findUnique({ where: { id: candidate.id } })
+    ? contentGenerationJobs.findUnique({ where: { id: candidate.id } })
     : null;
 }
 
@@ -623,10 +586,10 @@ async function claimNextJob(): Promise<CourseGenerationJob | null> {
  * generator and the detailed generator still execute the exact same job.
  */
 export async function startQueuedCourseGeneration(courseId: string): Promise<CourseGenerationJob | null> {
-  const candidate = await prisma.courseGenerationJob.findUnique({ where: { courseId } });
+  const candidate = await contentGenerationJobs.findUnique({ where: { courseId } });
   if (!candidate || candidate.status !== "queued") return candidate;
   const now = new Date();
-  const claimed = await prisma.courseGenerationJob.updateMany({
+  const claimed = await contentGenerationJobs.updateMany({
     where: { id: candidate.id, status: "queued" },
     data: {
       status: "running",
@@ -639,7 +602,7 @@ export async function startQueuedCourseGeneration(courseId: string): Promise<Cou
       version: { increment: 1 },
     },
   });
-  const job = await prisma.courseGenerationJob.findUnique({ where: { id: candidate.id } });
+  const job = await contentGenerationJobs.findUnique({ where: { id: candidate.id } });
   if (claimed.count === 1 && job) void runJob(job);
   return job;
 }
@@ -653,10 +616,10 @@ export async function startQueuedCourseGeneration(courseId: string): Promise<Cou
 export async function runQueuedCourseGenerationToCompletion(
   courseId: string,
 ): Promise<CourseGenerationJob | null> {
-  const candidate = await prisma.courseGenerationJob.findUnique({ where: { courseId } });
+  const candidate = await contentGenerationJobs.findUnique({ where: { courseId } });
   if (!candidate || candidate.status !== "queued") return candidate;
   const now = new Date();
-  const claimed = await prisma.courseGenerationJob.updateMany({
+  const claimed = await contentGenerationJobs.updateMany({
     where: { id: candidate.id, status: "queued" },
     data: {
       status: "running",
@@ -669,9 +632,9 @@ export async function runQueuedCourseGenerationToCompletion(
       version: { increment: 1 },
     },
   });
-  const job = await prisma.courseGenerationJob.findUnique({ where: { id: candidate.id } });
+  const job = await contentGenerationJobs.findUnique({ where: { id: candidate.id } });
   if (claimed.count === 1 && job) await runJob(job);
-  return prisma.courseGenerationJob.findUnique({ where: { id: candidate.id } });
+  return contentGenerationJobs.findUnique({ where: { id: candidate.id } });
 }
 
 export function managedCourseGenerationRetryDelayMs(recoveryCount: number): number {
@@ -690,11 +653,9 @@ function scheduleManagedCourseGenerationRetry(courseId: string, recoveryCount: n
 export async function resumeRecoverableCourseGenerationJob(
   courseId: string,
 ): Promise<CourseGenerationJob | null> {
-  const job = await prisma.courseGenerationJob.findUnique({ where: { courseId } });
+  const job = await contentGenerationJobs.findUnique({ where: { courseId } });
   if (!job || job.status !== "failed" || !job.error) return job;
-  const completedPageCount = await prisma.courseGenerationPageCheckpoint.count({
-    where: { jobId: job.id },
-  });
+  const completedPageCount = await countGenerationPageCheckpoints(job.id);
   const request = job.request as unknown as PersistedCourseGenerationRequest;
   const recoveryRequest = createManagedCourseGenerationRecoveryRequest(
     request,
@@ -702,7 +663,7 @@ export async function resumeRecoverableCourseGenerationJob(
   );
   if (!recoveryRequest) return job;
   const recoveryCount = recoveryRequest.managedRecoveryCount ?? 1;
-  const updated = await prisma.courseGenerationJob.updateMany({
+  const updated = await contentGenerationJobs.updateMany({
     where: { id: job.id, status: "failed" },
     data: {
       status: "queued",
@@ -717,7 +678,7 @@ export async function resumeRecoverableCourseGenerationJob(
     },
   });
   if (updated.count === 1) scheduleManagedCourseGenerationRetry(courseId, recoveryCount);
-  return prisma.courseGenerationJob.findUnique({ where: { id: job.id } });
+  return contentGenerationJobs.findUnique({ where: { id: job.id } });
 }
 
 /**
@@ -730,10 +691,9 @@ export async function resumeRecoverableCourseGenerationJob(
 export async function requeueCourseGenerationFromCheckpoints(
   courseId: string,
 ): Promise<CourseGenerationJob | null> {
-  const job = await prisma.courseGenerationJob.findUnique({ where: { courseId } });
+  const job = await contentGenerationJobs.findUnique({ where: { courseId } });
   if (!job || job.status !== "failed") return job;
-  const completedPageCount = await prisma.courseGenerationPageCheckpoint.count({
-    where: { jobId: job.id } });
+  const completedPageCount = await countGenerationPageCheckpoints(job.id);
   // 早期失败(如大纲校验)可能没有任何已完成页面或 checkpoint;此时仍需
   // 重新入队并保留原请求,否则"从已完成页面继续"会静默无效果。
   // 若之前已持久化过大纲(preparedOutlines),续跑会自动复用它们。
@@ -741,7 +701,7 @@ export async function requeueCourseGenerationFromCheckpoints(
     ? `正在从 ${completedPageCount} 个已完成页面继续生成`
     : "正在重新开始课程内容生成（此前尚无已完成的页面）";
   const request = job.request as unknown as PersistedCourseGenerationRequest;
-  await prisma.courseGenerationJob.updateMany({
+  await contentGenerationJobs.updateMany({
     where: { id: job.id, status: "failed" },
     data: {
       status: "queued",
@@ -758,7 +718,7 @@ export async function requeueCourseGenerationFromCheckpoints(
       version: { increment: 1 },
     },
   });
-  return prisma.courseGenerationJob.findUnique({ where: { id: job.id } });
+  return contentGenerationJobs.findUnique({ where: { id: job.id } });
 }
 
 async function runJob(job: CourseGenerationJob): Promise<void> {
@@ -938,6 +898,25 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       });
       resourceAudit = await auditCourseGeneratedResources(courseId);
     }
+    const requiredMediaFailures = mediaFailuresFromAudit(resourceAudit.issues).filter((failure) =>
+      failure.type === "image"
+        ? generationInput.enableImageGeneration !== false
+        : generationInput.enableVideoGeneration === true,
+    );
+    const missingRequiredImageCount = requiredMediaFailures.filter(
+      (failure) => failure.type === "image",
+    ).length + (
+      generationInput.enableImageGeneration !== false && coverStatus !== "ready" ? 1 : 0
+    );
+    const missingRequiredVideoCount = requiredMediaFailures.filter(
+      (failure) => failure.type === "video",
+    ).length;
+    if (missingRequiredImageCount > 0 || missingRequiredVideoCount > 0) {
+      throw createCourseMediaGenerationIncompleteError({
+        imageCount: missingRequiredImageCount,
+        videoCount: missingRequiredVideoCount,
+      });
+    }
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
       step: "generation_resources_ready",
       progress: 99,
@@ -959,7 +938,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       totalScenes: Math.max(job.totalScenes, split.studentSceneCount),
       ts: Date.now(),
     };
-    await prisma.courseGenerationJob.update({
+    await contentGenerationJobs.update({
       where: { id: job.id },
       data: {
         status: "completed",
@@ -982,7 +961,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
 
   } catch (error) {
     if (cancellationRequested.has(courseId)) {
-      await prisma.courseGenerationJob.update({
+      await contentGenerationJobs.update({
         where: { id: job.id },
         data: {
           status: "cancelled",
@@ -998,15 +977,13 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       return;
     }
     if (stopping && (controller.signal.aborted || isAbortError(error))) {
-      await prisma.courseGenerationJob.updateMany({
+      await contentGenerationJobs.updateMany({
         where: { id: job.id, status: "running" },
         data: { status: "queued", step: "queued", message: "等待服务器继续生成", lastHeartbeatAt: new Date() },
       });
       return;
     }
-    const completedPageCount = await prisma.courseGenerationPageCheckpoint.count({
-      where: { jobId: job.id },
-    });
+    const completedPageCount = await countGenerationPageCheckpoints(job.id);
     const recoveryRequest = createManagedCourseGenerationRecoveryRequest(
       request,
       error,
@@ -1017,7 +994,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         `Managed classroom-generation recovery ${recoveryCount} queued for ${courseId} from ${completedPageCount} checkpoints`,
         error,
       );
-      await prisma.courseGenerationJob.update({
+      await contentGenerationJobs.update({
         where: { id: job.id },
         data: {
           status: "queued",
@@ -1035,7 +1012,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       return;
     }
     log.error(`Course generation job ${job.id} failed`, error);
-    await prisma.courseGenerationJob.update({
+    await contentGenerationJobs.update({
       where: { id: job.id },
       data: {
         status: "failed",
@@ -1056,10 +1033,10 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
 }
 
 export async function cancelCourseGeneration(courseId: string): Promise<CourseGenerationJob | null> {
-  const job = await prisma.courseGenerationJob.findUnique({ where: { courseId } });
+  const job = await contentGenerationJobs.findUnique({ where: { courseId } });
   if (!job || ["completed", "failed", "cancelled"].includes(job.status)) return job;
   if (job.status === "queued") {
-    return prisma.courseGenerationJob.update({
+    return contentGenerationJobs.update({
       where: { id: job.id },
       data: {
         status: "cancelled",
@@ -1072,7 +1049,7 @@ export async function cancelCourseGeneration(courseId: string): Promise<CourseGe
     });
   }
   cancellationRequested.add(courseId);
-  const cancelling = await prisma.courseGenerationJob.update({
+  const cancelling = await contentGenerationJobs.update({
     where: { id: job.id },
     data: {
       status: "cancelling",
@@ -1103,7 +1080,7 @@ export async function startCourseGenerationWorker(): Promise<void> {
   if (workerStarted) return;
   workerStarted = true;
   stopping = false;
-  await prisma.courseGenerationJob.updateMany({
+  await contentGenerationJobs.updateMany({
     where: {
       status: "running",
       OR: [

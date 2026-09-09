@@ -10,6 +10,7 @@ import { createLogger } from '@openmaic/lib/logger';
 import { PROVIDERS } from './providers';
 import { thinkingContext } from './thinking-context';
 import { getModelMetadataKey } from './model-metadata';
+import { getCanonicalModelId } from './model-aliases';
 import type { ThinkingCapability, ThinkingConfig } from '@openmaic/lib/types/provider';
 import {
   getThinkingMode,
@@ -124,6 +125,7 @@ function normalizeProviderId(
 ): string | undefined {
   if (!provider) return undefined;
   if (provider === 'anthropic.messages' && modelId?.startsWith('MiniMax-')) return 'minimax';
+  if (provider === 'amazon-bedrock') return 'bedrock';
   if (provider in PROVIDERS) return provider;
   const prefix = provider.split('.')[0];
   return prefix in PROVIDERS ? prefix : undefined;
@@ -145,9 +147,10 @@ function buildThinkingProviderOptions(
   modelId: string,
   config: ThinkingConfig,
 ): ProviderOptions | undefined {
+  const lookupModelId = providerId ? getCanonicalModelId(providerId, modelId) : modelId;
   const info = providerId
-    ? MODEL_THINKING_MAP.get(getModelMetadataKey(providerId, modelId))
-    : UNIQUE_MODEL_THINKING_MAP.get(modelId);
+    ? MODEL_THINKING_MAP.get(getModelMetadataKey(providerId, lookupModelId))
+    : UNIQUE_MODEL_THINKING_MAP.get(lookupModelId);
   if (!info?.thinking) return undefined; // model has no thinking capability
   const thinking = info.thinking;
   if (thinking.control === 'none') return undefined;
@@ -167,7 +170,9 @@ function buildThinkingProviderOptions(
         anthropic: options,
       });
 
-      if (mode === 'disabled') return buildAnthropicOptions({ thinking: { type: 'disabled' } });
+      if (mode === 'disabled' && thinking.toggleable !== false) {
+        return buildAnthropicOptions({ thinking: { type: 'disabled' } });
+      }
 
       if (thinking.control === 'toggle-budget' || thinking.control === 'budget-only') {
         const budget = pickThinkingBudget(thinking, config);
@@ -180,9 +185,6 @@ function buildThinkingProviderOptions(
       if (!effort) return undefined;
 
       if (thinking.anthropicThinking?.type === 'adaptive') {
-        // Some newly released Anthropic effort values can lag the local SDK
-        // schema. OpenAI-compatible transports still inject those at fetch time.
-        if (effort === 'xhigh') return undefined;
         return buildAnthropicOptions({
           thinking: { type: 'adaptive' },
           effort,

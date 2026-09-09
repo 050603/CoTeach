@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -81,18 +80,19 @@ async function imageAsDataUri(input: {
   let bytes: Buffer;
   let mimeType = "image/png";
   if (uploadId) {
-    const file = await prisma.uploadFile.findFirst({
-      where: { id: uploadId, courseId: input.courseId, deletedAt: null },
-      select: { id: true, storedName: true, mimeType: true, uploadedById: true, uploadedByRole: true, size: true },
-    });
-    if (!file || (file.uploadedByRole === "student" && file.uploadedById !== input.studentId)) {
+    const participation = await prisma.classroomParticipation.findFirst({ where: { instanceId: input.courseId, enrollment: { userId: input.studentId } }, include: { enrollment: true } });
+    const file = participation ? await prisma.fileAsset.findFirst({
+      where: { id: uploadId, offeringId: participation.enrollment.offeringId, deletedAt: null },
+      include: { uploadedBy: { select: { role: true } } },
+    }) : null;
+    if (!file || (file.uploadedBy.role.toLowerCase() === "student" && file.uploadedById !== input.studentId)) {
       throw new ProjectDocumentArchiveError("MISSING_IMAGE", "文档中有图片已失效或无权访问，请重新上传后再提交。" );
     }
-    if (path.basename(file.storedName) !== file.storedName) {
+    if (path.basename(file.storageKey) !== file.storageKey) {
       throw new ProjectDocumentArchiveError("MISSING_IMAGE", "文档图片路径无效，请重新上传后再提交。" );
     }
     try {
-      bytes = await readFile(path.join(DATA_DIR, file.storedName));
+      bytes = await readFile(path.join(DATA_DIR, file.storageKey));
     } catch {
       throw new ProjectDocumentArchiveError("MISSING_IMAGE", "文档图片文件已丢失，请重新上传后再提交。");
     }

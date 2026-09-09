@@ -1,3 +1,4 @@
+import { scopeCourseForClaims } from "./course-scope";
 import type { AuthClaims } from "./session";
 import type { SessionState } from "@/lib/session/actions";
 
@@ -18,12 +19,14 @@ export function scopeSessionStateForAuth(
     };
   }
 
+  // Input must already be authorized by the V2 participation query.
+  const courses = state.courses.filter(course => course.students?.some(student => student.id === claims.sub)).map(course => scopeCourseForClaims(course, claims));
   return {
     ...state,
-    courses: state.courses.filter((course) => course.id === claims.courseId),
+    courses,
     user: { role: "student", name: claims.studentName },
-    joinedCourseId: claims.courseId,
-    studentId: claims.studentId,
+    joinedCourseId: courses.some(course => course.id === state.joinedCourseId) ? state.joinedCourseId : courses[0]?.id,
+    studentId: claims.sub,
     studentName: claims.studentName,
   };
 }

@@ -48,7 +48,10 @@ import {
   withGenerationRetry,
 } from '@openmaic/lib/generation/generation-retry';
 import { mapWithConcurrencySettledOnError } from '@openmaic/lib/utils/concurrency';
-import { getClassroomSceneConcurrency } from '@openmaic/lib/server/provider-config';
+import {
+  getClassroomSceneConcurrency,
+} from '@openmaic/lib/server/provider-config';
+import { assertRequestedClassroomMediaProviders } from '@openmaic/lib/server/classroom-media-readiness';
 import { resolveLlmRequestTimeoutMs } from '@/lib/llm/request-policy';
 import { buildVideoManifestFromOutlines } from '@openmaic/lib/media/video-manifest';
 import { planMediaForConfirmedOutlines } from '@openmaic/lib/generation/media-planner';
@@ -515,6 +518,7 @@ export async function generateClassroom(
   options: GenerateClassroomOptions,
 ): Promise<GenerateClassroomResult> {
   const { requirement, pdfContent } = input;
+  assertRequestedClassroomMediaProviders(input);
 
   const reportProgress = async (progress: ClassroomGenerationProgress) => {
     throwIfAborted(options.signal);
@@ -1004,9 +1008,11 @@ export async function generateClassroom(
           actions,
         });
         if (missingRequiredTools.length > 0) {
-          throw new Error(
+          const error = new Error(
             `Scene "${safeOutline.title}" is missing required teaching tools after correction: ${missingRequiredTools.join(', ')}`,
           );
+          Object.assign(error, { isRetryable: true });
+          throw error;
         }
       }
 
@@ -1104,9 +1110,11 @@ export async function generateClassroom(
         actions: scene.actions,
       });
       if (assembledMissingTools.length > 0) {
-        throw new Error(
+        const error = new Error(
           `Assembled scene "${safeOutline.title}" is missing required teaching tools: ${assembledMissingTools.join(', ')}`,
         );
+        Object.assign(error, { isRetryable: true });
+        throw error;
       }
       await options.onSceneCompleted?.(safeOutline, scene, index);
       throwIfAborted(options.signal);

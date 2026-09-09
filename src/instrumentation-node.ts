@@ -28,9 +28,13 @@ export async function register(): Promise<void> {
   // Side-effect import: triggers collectDefaultMetrics() exactly once.
   await import("@/lib/observability/metrics");
 
-  // Legacy CourseGenerationJob/CourseDesignGenerationJob workers were
-  // intentionally removed in V2. GenerationJob is persisted by the V2 API;
-  // no process may start a worker against the retired tables.
+  const { isBackgroundCourseGenerationEnabled } = await import("@/lib/course-generation/capability");
+  if (isBackgroundCourseGenerationEnabled()) {
+    const { startCourseGenerationWorker } = await import("@/lib/course-generation/job-runner");
+    const { startCourseDesignWorker } = await import("@/lib/course-design/job-runner");
+    await startCourseGenerationWorker();
+    await startCourseDesignWorker();
+  }
 
   if (process.env.ENABLE_WEBSOCKET === "true") {
     const { initializeEventBus } = await import("@/lib/realtime/event-bus");
@@ -92,6 +96,11 @@ async function installShutdownHandlers(): Promise<void> {
           );
           await closeTldrawSyncServer();
         }
+
+        const { stopCourseGenerationWorker } = await import("@/lib/course-generation/job-runner");
+        const { stopCourseDesignWorker } = await import("@/lib/course-design/job-runner");
+        await stopCourseGenerationWorker();
+        await stopCourseDesignWorker();
 
         // 4) Close the database connection. Prisma is always instantiated
         //    (singleton), but if DATABASE_URL is unset (Demo mode) calling

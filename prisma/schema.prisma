@@ -162,6 +162,7 @@ model Enrollment {
 
   user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
   offering         CourseOffering           @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  submissions      ActivitySubmission[]
   activityProgress ActivityProgress[]
   participations   ClassroomParticipation[]
   learningEvents   LearningEvent[]
@@ -209,6 +210,7 @@ model Activity {
   updatedAt   DateTime  @updatedAt
 
   chapter            Chapter             @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  submissions        ActivitySubmission[]
   progress           ActivityProgress[]
   classroomInstances ClassroomInstance[]
   evaluations        Evaluation[]
@@ -243,6 +245,24 @@ model ActivityProgress {
 // ---------------------------------------------------------------------------
 // Reusable classroom content and classroom runs
 // ---------------------------------------------------------------------------
+
+// Immutable attempts; ActivityProgress remains the latest-state projection.
+model ActivitySubmission {
+  id               String   @id @default(uuid())
+  enrollmentId     String
+  activityId       String
+  researchKey      String
+  activityVersion  Int
+  activitySnapshot Json
+  payload          Json
+  submittedAt      DateTime @default(now())
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  activity   Activity   @relation(fields: [activityId], references: [id], onDelete: Restrict)
+
+  @@index([enrollmentId, activityId, submittedAt])
+  @@index([activityId, submittedAt, id])
+}
 
 model ClassroomTemplate {
   id          String   @id @default(uuid())
@@ -433,8 +453,8 @@ model ArtifactVersion {
   submittedAt DateTime?
   createdAt   DateTime  @default(now())
 
-  artifact  Artifact               @relation(fields: [artifactId], references: [id], onDelete: Cascade)
-  fileAsset FileAsset?             @relation(fields: [fileAssetId], references: [id], onDelete: SetNull)
+  artifact  Artifact               @relation(fields: [artifactId], references: [id], onDelete: Restrict)
+  fileAsset FileAsset?             @relation(fields: [fileAssetId], references: [id], onDelete: Restrict)
   showcases ShowcasePresentation[]
 
   @@unique([artifactId, sequence])
@@ -872,7 +892,9 @@ model TeacherAgentDirective {
 
 model LearningEvent {
   id                  String   @id @default(uuid())
-  idempotencyKey      String   @unique
+  idempotencyKey      String
+  // Snapshot survives context removal; historical rows are backfilled only when ownership matches.
+  researchKey         String?
   userId              String
   offeringId          String?
   enrollmentId        String?
@@ -888,14 +910,17 @@ model LearningEvent {
   metadata            Json?
   eventVersion        Int      @default(1)
 
-  user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  offering          CourseOffering?         @relation(fields: [offeringId], references: [id], onDelete: SetNull)
-  enrollment        Enrollment?             @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
-  chapter           Chapter?                @relation(fields: [chapterId], references: [id], onDelete: SetNull)
-  activity          Activity?               @relation(fields: [activityId], references: [id], onDelete: SetNull)
-  classroomInstance ClassroomInstance?      @relation(fields: [classroomInstanceId], references: [id], onDelete: SetNull)
-  participation     ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: SetNull)
+  user              User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  offering          CourseOffering?         @relation(fields: [offeringId], references: [id], onDelete: Restrict)
+  enrollment        Enrollment?             @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  chapter           Chapter?                @relation(fields: [chapterId], references: [id], onDelete: Restrict)
+  activity          Activity?               @relation(fields: [activityId], references: [id], onDelete: Restrict)
+  classroomInstance ClassroomInstance?      @relation(fields: [classroomInstanceId], references: [id], onDelete: Restrict)
+  participation     ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
 
+  @@unique([userId, idempotencyKey])
+  @@index([offeringId, receivedAt, id])
+  @@index([researchKey, occurredAt])
   @@index([offeringId, enrollmentId, occurredAt])
   @@index([offeringId, activityId, occurredAt])
   @@index([eventType, occurredAt])
@@ -903,6 +928,7 @@ model LearningEvent {
 
 model AiInteractionEvent {
   id              String   @id @default(uuid())
+  researchKey     String?
   idempotencyKey  String   @unique
   userId          String
   offeringId      String?
@@ -916,12 +942,14 @@ model AiInteractionEvent {
   payload         Json?
   createdAt       DateTime @default(now())
 
-  user          User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  offering      CourseOffering?         @relation(fields: [offeringId], references: [id], onDelete: SetNull)
-  conversation  AiConversation?         @relation(fields: [conversationId], references: [id], onDelete: SetNull)
-  task          AiTask?                 @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: SetNull)
+  user          User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  offering      CourseOffering?         @relation(fields: [offeringId], references: [id], onDelete: Restrict)
+  conversation  AiConversation?         @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  task          AiTask?                 @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  participation ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
 
+  @@index([researchKey, createdAt])
+  @@index([offeringId, createdAt, id])
   @@index([participationId, createdAt])
   @@index([userId, createdAt])
   @@index([requestId])
@@ -929,6 +957,7 @@ model AiInteractionEvent {
 
 model DomainEvent {
   id                  String   @id @default(uuid())
+  researchKey     String?
   idempotencyKey      String   @unique
   actorId             String?
   offeringId          String?
@@ -938,11 +967,13 @@ model DomainEvent {
   payload             Json?
   createdAt           DateTime @default(now())
 
-  actor             User?                   @relation("DomainEventActor", fields: [actorId], references: [id], onDelete: SetNull)
-  offering          CourseOffering?         @relation(fields: [offeringId], references: [id], onDelete: SetNull)
-  classroomInstance ClassroomInstance?      @relation(fields: [classroomInstanceId], references: [id], onDelete: SetNull)
-  participation     ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: SetNull)
+  actor             User?                   @relation("DomainEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+  offering          CourseOffering?         @relation(fields: [offeringId], references: [id], onDelete: Restrict)
+  classroomInstance ClassroomInstance?      @relation(fields: [classroomInstanceId], references: [id], onDelete: Restrict)
+  participation     ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
 
+  @@index([researchKey, createdAt])
+  @@index([offeringId, createdAt, id])
   @@index([offeringId, createdAt])
   @@index([eventType, createdAt])
 }

@@ -1,6 +1,6 @@
-// @ts-nocheck
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { runMutationTransaction } from "@/lib/db/transaction-retry";
 import { Prisma } from "@prisma/client";
 import { isDatabaseConfigured, prisma } from "@/lib/db/client";
 
@@ -32,8 +32,8 @@ function sanitize(value: unknown): KnowledgeLectureTutorSettings {
 
 export async function getKnowledgeLectureTutorSettings(): Promise<KnowledgeLectureTutorSettings> {
   if (isDatabaseConfigured()) {
-    const row = await prisma.providerCredential.findUnique({
-      where: { section_providerId: { section: SECTION, providerId: PROVIDER_ID } },
+    const row = await prisma.providerCredential.findFirst({
+      where: { ownerId: null, name: SECTION, provider: PROVIDER_ID },
       select: { config: true },
     });
     return sanitize(row?.config);
@@ -50,10 +50,11 @@ export async function saveKnowledgeLectureTutorSettings(
 ): Promise<KnowledgeLectureTutorSettings> {
   const settings = sanitize(input);
   if (isDatabaseConfigured()) {
-    await prisma.providerCredential.upsert({
-      where: { section_providerId: { section: SECTION, providerId: PROVIDER_ID } },
-      create: { section: SECTION, providerId: PROVIDER_ID, config: settings as Prisma.InputJsonValue },
-      update: { config: settings as Prisma.InputJsonValue, version: { increment: 1 } },
+    await runMutationTransaction(async tx => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`provider:${SECTION}:${PROVIDER_ID}`}, 0))::text`;
+      const existing = await tx.providerCredential.findFirst({ where: { ownerId: null, name: SECTION, provider: PROVIDER_ID } });
+      if (existing) await tx.providerCredential.update({ where: { id: existing.id }, data: { config: settings as Prisma.InputJsonValue } });
+      else await tx.providerCredential.create({ data: { ownerId: null, name: SECTION, provider: PROVIDER_ID, secret: "", config: settings as Prisma.InputJsonValue } });
     });
   } else {
     await writeFile(FALLBACK_PATH, `${JSON.stringify(settings, null, 2)}\n`, "utf8");

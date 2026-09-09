@@ -41,11 +41,21 @@ describe("ensureTerminalMasteryAssessment", () => {
 
   it("adds one terminal assessment when the model omitted it", () => {
     const result = ensureTerminalMasteryAssessment([
-      scene("explain", "slide", ["kp-1"]),
-      scene("practice", "interactive", ["kp-1"]),
+      {
+        ...scene("explain", "slide", ["kp-1"]),
+        teachingToolPlan: [{
+          id: "explanation-board",
+          tool: "whiteboard",
+          trigger: "讲解概念关系时",
+          purpose: "展示概念关系",
+          content: ["概念 A → 概念 B"],
+          required: true,
+        }],
+      },
     ]);
     expect(result.filter((item) => item.type === "quiz")).toHaveLength(1);
     expect(result.at(-1)?.type).toBe("quiz");
+    expect(result.at(-1)?.teachingToolPlan).toBeUndefined();
   });
 
   it("does not alter teacher-only resources", () => {

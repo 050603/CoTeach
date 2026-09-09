@@ -1,20 +1,33 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Lock, User } from "lucide-react";
-import { PraixisLogo } from "@/components/brand/praixis-logo";
+import { TeacherAuthShell } from "@/components/platform/teacher-auth-shell";
 
-export default function TeacherLoginPage() {
+function TeacherLoginPageContent() {
   const router = useRouter();
   const search = useSearchParams();
   const redirect = search.get("redirect") ?? "/teacher";
+  const sessionExpired = search.get("reason") === "session-expired";
+  const [bootstrapAvailable, setBootstrapAvailable] = useState(false);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/platform/auth/teacher-register", { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (active) setBootstrapAvailable(response.ok && data.mode === "bootstrap" && data.available === true);
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -42,31 +55,18 @@ export default function TeacherLoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--pbl-bg)] text-[var(--pbl-text)]">
-      <header className="border-b border-[var(--pbl-border)] bg-[var(--pbl-surface)]">
-        <div className="mx-auto flex min-h-16 max-w-5xl items-center gap-3 px-5">
-          <PraixisLogo variant="horizontalSolid" height={28} />
-          <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--pbl-text-subtle)]">
-            · 教师登录
-          </span>
-          <Link
-            className="ml-auto text-sm text-[var(--pbl-text-muted)] transition hover:text-[var(--pbl-text)]"
-            href="/"
-          >
-            返回首页
-          </Link>
-        </div>
-      </header>
-
-      <main className="mx-auto flex max-w-md flex-col gap-6 px-5 py-12 md:py-20">
+    <TeacherAuthShell>
+      <div className="pbl-platform-panel pbl-auth-form flex flex-col gap-6">
         <div>
-          <h1 className="font-editorial text-3xl font-semibold">教师登录</h1>
+          <h1 className="text-2xl font-semibold">教师登录</h1>
           <p className="mt-2 text-sm leading-6 text-[var(--pbl-text-muted)]">
-            请输入账号与密码。若服务端尚未配置鉴权，请联系系统管理员完成初始化。
+            登录工作空间，继续编排课程、管理学生与开展教学。
           </p>
+          {sessionExpired ? <p role="status" className="mt-4 rounded-[var(--radius-xs)] border border-[var(--pbl-warning)]/30 bg-[var(--pbl-warning-soft)] px-3 py-2 text-sm text-[var(--pbl-warning)]">原登录状态已失效，请重新登录。</p> : null}
+          {bootstrapAvailable ? <p role="status" className="mt-4 rounded-[var(--radius-xs)] border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)] px-3 py-3 text-sm leading-6 text-[var(--pbl-teacher)]">当前数据库还没有教师账号。<Link className="ml-1 font-semibold underline" href="/teacher/register">创建首个教师账号</Link> 后即可保存课程数据。</p> : null}
         </div>
 
-        <form className="flex flex-col gap-4" onSubmit={onSubmit}>
+        <form className="flex flex-col gap-5" onSubmit={onSubmit}>
           <label className="flex flex-col gap-2">
             <span className="text-sm font-semibold">账号</span>
             <div className="relative">
@@ -76,7 +76,7 @@ export default function TeacherLoginPage() {
                 size={16}
               />
               <input
-                autoFocus
+                autoComplete="username"
                 className="min-h-11 w-full rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white pl-9 pr-3 text-sm transition focus:border-[var(--pbl-teacher)] focus:outline-none"
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="教师账号"
@@ -98,6 +98,7 @@ export default function TeacherLoginPage() {
               <input
                 className="min-h-11 w-full rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white pl-9 pr-3 text-sm transition focus:border-[var(--pbl-teacher)] focus:outline-none"
                 onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
                 placeholder="密码"
                 required
                 type="password"
@@ -131,13 +132,15 @@ export default function TeacherLoginPage() {
           </Link>
         </div>
 
-        <div className="rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-4 text-xs leading-5 text-[var(--pbl-text-muted)]">
-          <p className="font-semibold text-[var(--pbl-text)]">首次部署提示</p>
-          <p className="mt-1">
-            首次部署请在服务器执行 <code className="font-mono">pnpm admin:init-teacher</code> 创建教师账号。
-          </p>
-        </div>
-      </main>
-    </div>
+      </div>
+    </TeacherAuthShell>
+  );
+}
+
+export default function TeacherLoginPage() {
+  return (
+    <Suspense fallback={<main className="pbl-platform-page grid min-h-screen place-items-center text-sm text-[var(--pbl-text-muted)]">正在打开教师登录…</main>}>
+      <TeacherLoginPageContent />
+    </Suspense>
   );
 }

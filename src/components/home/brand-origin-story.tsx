@@ -25,7 +25,8 @@ export function BrandOriginStory() {
             </div>
 
             <div className="praixis-origin__meaning">
-              <div className="praixis-origin__praxis-copy">
+              <article className="praixis-origin__praxis-copy">
+                <span className="praixis-origin__step">01 · PRAXIS</span>
                 <span className="praixis-origin__greek">πρᾶξις · praxis</span>
                 <p>
                   源自古希腊语 <strong>prassein</strong>，意为“做、行动”
@@ -45,14 +46,21 @@ export function BrandOriginStory() {
                       <small>实践 · 具体行动</small>
                     </span>
                   </div>
-                  <p className="praixis-origin__aristotle">
-                    <span>Aristotle</span>
-                    亚里士多德 · 人类活动的三种基本方式
-                  </p>
+                  <div className="praixis-origin__aristotle">
+                    <span>思想来源</span>
+                    <strong>Aristotle · 亚里士多德</strong>
+                    <small>人类活动的三种基本方式</small>
+                  </div>
                 </div>
+              </article>
+
+              <div className="praixis-origin__bridge" aria-hidden="true">
+                <span>+</span>
+                <small>AI 参与其中</small>
               </div>
 
-              <div className="praixis-origin__praixis-copy">
+              <article className="praixis-origin__praixis-copy">
+                <span className="praixis-origin__step">02 · PRAIXIS</span>
                 <p className="praixis-origin__thesis">AI 进入实践，不替代实践</p>
                 <div className="praixis-origin__roles" aria-label="PrAIxis 的角色关系">
                   <span>AI · 参与者</span>
@@ -63,7 +71,7 @@ export function BrandOriginStory() {
                   学生始终拥有
                   <strong>判断、行动、证据与反思</strong>
                 </p>
-              </div>
+              </article>
             </div>
           </div>
 

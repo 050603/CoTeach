@@ -139,7 +139,7 @@ export default function PreviewCoursePage() {
         <div className="grid min-h-72 place-items-center text-sm text-stone-500">
           <div className="text-center">
             <p>未找到课程。</p>
-            <Link className="mt-3 inline-block font-semibold text-blue-700 hover:underline" href="/teacher">返回课程列表</Link>
+            <Link className="mt-3 inline-block font-semibold text-blue-700 hover:underline" href="/teacher/templates">返回课程列表</Link>
           </div>
         </div>
       </DashboardShell>

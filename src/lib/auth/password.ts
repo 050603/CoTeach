@@ -1,3 +1,4 @@
+import { isValidNewPasswordLength, PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH } from "./password-policy";
 import { scrypt, timingSafeEqual } from "node:crypto";
 import { hash, verify } from "@node-rs/argon2";
 
@@ -13,8 +14,8 @@ const ARGON2_OPTIONS = {
 } as const;
 
 export async function hashPassword(password: string): Promise<string> {
-  if (password.length < 10 || password.length > 256) {
-    throw new Error("Password must contain between 10 and 256 characters.");
+  if (!isValidNewPasswordLength(password)) {
+    throw new Error(`Password must contain between ${PASSWORD_MIN_LENGTH} and ${PASSWORD_MAX_LENGTH} characters.`);
   }
   return hash(password, ARGON2_OPTIONS);
 }

@@ -31,6 +31,27 @@ describe('teaching tool plan', () => {
     expect(planned.teachingToolPlan).toBeUndefined();
   });
 
+  it('removes inherited tool contracts from non-teaching scenes', () => {
+    const quiz = slide({
+      type: 'quiz',
+      teachingToolPlan: [{
+        id: 'inherited-board',
+        tool: 'whiteboard',
+        trigger: '作答前',
+        purpose: '展示提示',
+        content: ['提示内容'],
+        required: true,
+      }],
+    });
+
+    expect(ensureTeachingToolPlans([quiz])[0].teachingToolPlan).toBeUndefined();
+    expect(findMissingRequiredTeachingTools(quiz, {
+      sceneType: 'quiz',
+      content: { type: 'quiz', questions: [] },
+      actions: [{ id: 'speech', type: 'speech', text: '请开始作答。' }],
+    })).toEqual([]);
+  });
+
   it('preserves and sanitizes a model-authored tool plan', () => {
     const plan = normalizeTeachingToolPlan([{
       tool: 'whiteboard',

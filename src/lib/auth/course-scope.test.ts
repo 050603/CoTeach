@@ -17,7 +17,7 @@ describe("scopeCourseForClaims", () => {
     const claims = {
       role: "student",
       courseId: "course-1",
-      studentId: "student-1",
+      studentId: "stale-legacy-id",
       studentName: "甲",
       sub: "student-1",
       sv: 1,

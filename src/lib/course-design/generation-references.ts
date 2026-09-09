@@ -1,8 +1,8 @@
-// @ts-nocheck
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import JSZip from "jszip";
 import { extractText, getDocumentProxy } from "unpdf";
+import { resolveUploadScope } from "@/lib/uploads/scope";
 import { prisma } from "@/lib/db/client";
 import {
   GENERATION_REFERENCE_ACCEPT,
@@ -52,30 +52,14 @@ export async function resolveGenerationReferenceMaterials(input: {
     );
   }
 
-  const records = await prisma.uploadFile.findMany({
-    where: {
-      id: { in: uploadIds },
-      courseId: input.courseId,
-      deletedAt: null,
-      ...(input.uploadedById ? { uploadedById: input.uploadedById } : {}),
-    },
-    select: {
-      id: true,
-      fileName: true,
-      storedName: true,
-      mimeType: true,
-      referencedBy: true,
-    },
-  });
+  const scope = await resolveUploadScope(input.courseId);
+  if (!scope || !input.uploadedById || (scope.templateOwnerId && scope.templateOwnerId !== input.uploadedById)) {
+    throw new GenerationReferenceError('无权读取这些备课资料。', 'GENERATION_REFERENCE_NOT_FOUND', 404);
+  }
+  const records = await prisma.fileAsset.findMany({ where: { id: { in: uploadIds }, offeringId: scope.offeringId,
+    uploadedById: input.uploadedById, deletedAt: null }, select: { id: true, originalName: true, storageKey: true, mimeType: true } });
   const recordById = new Map(records.map((record) => [record.id, record]));
-  const marker = generationReferenceMarker(input.courseId);
-  const orderedRecords = uploadIds.flatMap((id) => {
-    const record = recordById.get(id);
-    if (!record) return [];
-    return Array.isArray(record.referencedBy) && record.referencedBy.includes(marker)
-      ? [record]
-      : [];
-  });
+  const orderedRecords = uploadIds.flatMap((id) => { const record = recordById.get(id); return record ? [record] : []; });
   if (orderedRecords.length !== uploadIds.length) {
     throw new GenerationReferenceError(
       "部分知识资料不存在、已被删除或不属于当前课程，请重新上传。",
@@ -90,22 +74,22 @@ export async function resolveGenerationReferenceMaterials(input: {
   );
   const materials: GenerationReferenceMaterial[] = [];
   for (const record of orderedRecords) {
-    if (path.basename(record.storedName) !== record.storedName) {
+    if (path.basename(record.storageKey) !== record.storageKey) {
       throw new GenerationReferenceError("知识资料的存储路径无效。", "INVALID_GENERATION_REFERENCE");
     }
-    const buffer = await readFile(/* turbopackIgnore: true */ path.join(dataDir, record.storedName));
-    const extracted = await extractGenerationReferenceText(record.fileName, record.mimeType, buffer);
+    const buffer = await readFile(/* turbopackIgnore: true */ path.join(dataDir, record.storageKey));
+    const extracted = await extractGenerationReferenceText(record.originalName, record.mimeType, buffer);
     const content = compactReferenceText(extracted, perFileLimit);
     if (!content) {
       throw new GenerationReferenceError(
-        `无法从“${record.fileName}”中读取文字，请上传包含可选择文本的 PDF、Word、PPT、TXT 或 Markdown 文件。`,
+        `无法从“${record.originalName}”中读取文字，请上传包含可选择文本的 PDF、Word、PPT、TXT 或 Markdown 文件。`,
         "GENERATION_REFERENCE_HAS_NO_TEXT",
         422,
       );
     }
     materials.push({
       id: record.id,
-      fileName: record.fileName,
+      fileName: record.originalName,
       mimeType: record.mimeType,
       content,
     });

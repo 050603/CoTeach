@@ -1,4 +1,4 @@
-// @ts-nocheck
+import { projectGroupStorageId } from "@/lib/platform/group-identity";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
@@ -138,8 +138,11 @@ async function authorizeUpgrade(
   });
   if (!limit.allowed) return null;
 
+  const instance = await prisma.classroomInstance.findUnique({ where: { id: courseId }, select: { activity: { select: { chapter: { select: { offeringId: true } } } } } });
+  if (!instance) return null;
+  const storedGroupId = projectGroupStorageId(instance.activity.chapter.offeringId, groupId);
   const group = await prisma.projectGroup.findFirst({
-    where: { id: groupId, courseId },
+    where: { id: storedGroupId, offering: { chapters: { some: { activities: { some: { classroomInstances: { some: { id: courseId } } } } } } } },
     select: { id: true },
   });
   if (!group) return null;
@@ -148,17 +151,8 @@ async function authorizeUpgrade(
   }
 
   if (claims.role === "student") {
-    if (claims.courseId !== courseId || !claims.studentId) return null;
-    const member = await prisma.groupMember.findUnique({
-      where: {
-        courseId_groupId_studentId: {
-          courseId,
-          groupId,
-          studentId: claims.studentId,
-        },
-      },
-      select: { id: true },
-    });
+    if (!claims.sub) return null;
+    const member = await prisma.groupMember.findFirst({ where: { groupId: storedGroupId, userId: claims.sub, leftAt: null }, select: { id: true } });
     if (!member) return null;
   }
 

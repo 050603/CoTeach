@@ -6,6 +6,7 @@ import type {
   ThinkingLevel,
   ThinkingRequestAdapter,
 } from '@openmaic/lib/types/provider';
+import { getCanonicalModelId } from './model-aliases';
 
 export function getModelMetadataKey(providerId: string, modelId: string): string {
   return `${providerId}:${modelId}`;
@@ -141,6 +142,26 @@ const anthropicOpus47Effort: ThinkingCapability = {
   effortValues: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
 };
 
+const anthropicClaude5Effort: ThinkingCapability = {
+  ...anthropicOpus47Effort,
+  defaultEffort: 'high',
+  defaultMode: 'enabled',
+  defaultEnabled: true,
+};
+
+const anthropicFable5Effort: ThinkingCapability = {
+  ...anthropicOpus47Effort,
+  effortValues: ['low', 'medium', 'high', 'xhigh', 'max'],
+  defaultEffort: 'high',
+  toggleable: false,
+  budgetAdjustable: false,
+};
+
+const kimiK3Effort = effortCapability('openai', ['low', 'high', 'max'], 'max');
+const grok46Effort = effortCapability('openai', ['low', 'medium', 'high', 'xhigh'], 'high');
+const grok45Effort = effortCapability('openai', ['low', 'medium', 'high'], 'high');
+const grok43Effort = effortCapability('openai', ['none', 'low', 'medium', 'high'], 'none');
+
 const deepseekEffort: ThinkingCapability = {
   control: 'effort',
   requestAdapter: 'deepseek',
@@ -227,7 +248,21 @@ const doubaoSeed20Effort: ThinkingCapability = {
 
 const minimaxM3Thinking = toggleCapability('anthropic', false);
 
+const openaiGpt56Effort: ThinkingCapability = {
+  control: 'effort',
+  requestAdapter: 'openai',
+  effortValues: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+  defaultEffort: 'medium',
+  defaultMode: 'enabled',
+  toggleable: true,
+  budgetAdjustable: true,
+  defaultEnabled: true,
+};
+
 const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
+  [getModelMetadataKey('openai', 'gpt-5.6')]: openaiGpt56Effort,
+  [getModelMetadataKey('openai', 'gpt-5.6-terra')]: openaiGpt56Effort,
+  [getModelMetadataKey('openai', 'gpt-5.6-luna')]: openaiGpt56Effort,
   [getModelMetadataKey('openai', 'gpt-5.5')]: effortCapability(
     'openai',
     ['low', 'medium', 'high', 'xhigh'],
@@ -254,6 +289,9 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
     'none',
   ),
 
+  [getModelMetadataKey('anthropic', 'claude-fable-5')]: anthropicFable5Effort,
+  [getModelMetadataKey('anthropic', 'claude-opus-5')]: anthropicClaude5Effort,
+  [getModelMetadataKey('anthropic', 'claude-sonnet-5')]: anthropicClaude5Effort,
   [getModelMetadataKey('anthropic', 'claude-opus-4-8')]: anthropicOpus47Effort,
   [getModelMetadataKey('anthropic', 'claude-opus-4-7')]: anthropicOpus47Effort,
   [getModelMetadataKey('anthropic', 'claude-opus-4-6')]: anthropicAdaptiveEffort,
@@ -261,6 +299,14 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
   [getModelMetadataKey('anthropic', 'claude-sonnet-4-5')]: anthropicManualEffort,
   [getModelMetadataKey('anthropic', 'claude-haiku-4-5')]: anthropicBudget,
 
+  [getModelMetadataKey('google', 'gemini-3.6-flash')]: levelCapability(
+    ['minimal', 'low', 'medium', 'high'],
+    'medium',
+  ),
+  [getModelMetadataKey('google', 'gemini-3.5-flash-lite')]: levelCapability(
+    ['minimal', 'low', 'medium', 'high'],
+    'minimal',
+  ),
   [getModelMetadataKey('google', 'gemini-3.5-flash')]: levelCapability(
     ['minimal', 'low', 'medium', 'high'],
     'medium',
@@ -317,7 +363,10 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
 
   [getModelMetadataKey('deepseek', 'deepseek-v4-pro')]: deepseekEffort,
   [getModelMetadataKey('deepseek', 'deepseek-v4-flash')]: deepseekEffort,
+  [getModelMetadataKey('deepseek', 'deepseek-v4-flash-vision-exp')]: deepseekEffort,
+  [getModelMetadataKey('atlascloud', 'deepseek-ai/deepseek-v4-pro')]: deepseekEffort,
 
+  [getModelMetadataKey('kimi', 'kimi-k3')]: kimiK3Effort,
   [getModelMetadataKey('kimi', 'kimi-k2.7-code')]: fixedThinkingCapability,
   [getModelMetadataKey('kimi', 'kimi-k2.7-code-highspeed')]: fixedThinkingCapability,
   [getModelMetadataKey('kimi', 'kimi-k2.6')]: toggleCapability('kimi'),
@@ -340,6 +389,21 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
   [getModelMetadataKey('doubao', 'doubao-seed-2-0-lite-260215')]: doubaoSeed20Effort,
   [getModelMetadataKey('doubao', 'doubao-seed-2-0-mini-260215')]: doubaoSeed20Effort,
   [getModelMetadataKey('doubao', 'doubao-seed-1-8-251228')]: doubaoMode,
+  // Ark Agent Plan exposes native Doubao and cross-vendor models through one
+  // OpenAI-compatible endpoint. The gateway accepts the same unified
+  // reasoning_effort field for all of these aliases.
+  [getModelMetadataKey('doubao', 'doubao-seed-2.0-pro')]: doubaoSeed20Effort,
+  [getModelMetadataKey('doubao', 'doubao-seed-2.0-code')]: doubaoSeed20Effort,
+  [getModelMetadataKey('doubao', 'doubao-seed-2.0-lite')]: doubaoSeed20Effort,
+  [getModelMetadataKey('doubao', 'doubao-seed-2.0-mini')]: doubaoSeed20Effort,
+  [getModelMetadataKey('doubao', 'deepseek-v4-pro')]: doubaoSeed20Effort,
+  [getModelMetadataKey('doubao', 'deepseek-v4-flash')]: doubaoSeed20Effort,
+  [getModelMetadataKey('doubao', 'glm-5.2')]: doubaoSeed20Effort,
+  [getModelMetadataKey('doubao', 'kimi-k2.7-code')]: doubaoSeed20Effort,
+  [getModelMetadataKey('doubao', 'kimi-k2.6')]: doubaoSeed20Effort,
+  [getModelMetadataKey('doubao', 'minimax-m3')]: doubaoSeed20Effort,
+  [getModelMetadataKey('doubao', 'minimax-m2.7')]: doubaoSeed20Effort,
+  [getModelMetadataKey('doubao', 'ark-code-latest')]: doubaoSeed20Effort,
 
   [getModelMetadataKey('openrouter', 'deepseek/deepseek-v4-pro')]: effortCapability(
     'openrouter',
@@ -352,6 +416,10 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
     'medium',
   ),
 
+  [getModelMetadataKey('grok', 'grok-4.6')]: grok46Effort,
+  [getModelMetadataKey('grok', 'grok-4.5')]: grok45Effort,
+  [getModelMetadataKey('grok', 'grok-4.3')]: grok43Effort,
+  [getModelMetadataKey('grok', 'grok-build-0.1')]: fixedThinkingCapability,
   [getModelMetadataKey('grok', 'grok-4.20-reasoning')]: fixedThinkingCapability,
   [getModelMetadataKey('grok', 'grok-4.20-multi-agent')]: fixedThinkingCapability,
   [getModelMetadataKey('grok', 'grok-4-1-fast-reasoning')]: fixedThinkingCapability,
@@ -378,7 +446,8 @@ export function getCatalogThinkingCapability(
   providerId: string,
   modelId: string,
 ): ThinkingCapability | undefined {
-  const exact = THINKING_CAPABILITIES[getModelMetadataKey(providerId, modelId)];
+  const canonicalModelId = getCanonicalModelId(providerId, modelId);
+  const exact = THINKING_CAPABILITIES[getModelMetadataKey(providerId, canonicalModelId)];
   if (exact) return exact;
 
   if (providerId === 'lemonade') {

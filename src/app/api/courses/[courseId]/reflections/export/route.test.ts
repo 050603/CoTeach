@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   authenticateRequest: vi.fn(),
   getCourse: vi.fn(),
+  canAccessLegacyCourse: vi.fn(),
 }));
 
+vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: mocks.canAccessLegacyCourse }));
 vi.mock("@/lib/auth/request-guards", () => ({
   authenticateRequest: mocks.authenticateRequest,
 }));
@@ -54,6 +56,7 @@ const course = {
 describe("GET /api/courses/:courseId/reflections/export", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.canAccessLegacyCourse.mockResolvedValue(true);
     mocks.authenticateRequest.mockResolvedValue({
       claims: { sub: "teacher-1", role: "teacher", sv: 1 },
     });
@@ -95,5 +98,10 @@ describe("GET /api/courses/:courseId/reflections/export", () => {
       { params: Promise.resolve({ courseId: "missing" }) },
     );
     expect(response.status).toBe(404);
+  });
+  it("rejects an unrelated teacher before exporting student responses", async () => {
+    mocks.canAccessLegacyCourse.mockResolvedValue(false);
+    expect((await GET(new Request("http://localhost/api/export"), { params: Promise.resolve({ courseId: "course-1" }) })).status).toBe(403);
+    expect(mocks.getCourse).not.toHaveBeenCalled();
   });
 });

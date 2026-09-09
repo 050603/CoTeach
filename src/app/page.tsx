@@ -142,7 +142,7 @@ function SiteHeader() {
             教师端
           </Link>
           <Link
-            href="/student"
+            href="/student/login"
             className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-[13px] font-semibold text-white shadow-md shadow-indigo-500/25 transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-indigo-500/40"
           >
             <UsersRound size={14} />
@@ -183,12 +183,21 @@ function Hero() {
 
         {/* 巨型横版 Logo —— 不使用 pbl-hero-text（初始 opacity:0），避免动画卡住导致 logo 不可见 */}
         <div className="mb-10 pbl-float-soft">
-          <PraixisLogo
-            variant="horizontal"
-            height={130}
-            priority
-            style={{ filter: "drop-shadow(0 16px 48px rgba(99, 102, 241, 0.25))" }}
-          />
+          <div className="relative inline-flex scale-[0.82] items-center justify-center sm:scale-100">
+            <PraixisLogo
+              variant="horizontal"
+              height={130}
+              priority
+              style={{ filter: "drop-shadow(0 16px 48px rgba(99, 102, 241, 0.25))" }}
+            />
+            <span
+              aria-label="系统版本 2.0"
+              className="absolute -right-3 top-1 inline-flex items-center gap-1.5 rounded-full border border-indigo-200/80 bg-white/75 px-2.5 py-1 text-[10px] font-bold tracking-[0.12em] text-indigo-600 shadow-[0_6px_20px_rgba(99,102,241,0.14)] backdrop-blur-md sm:-right-14 sm:top-3"
+            >
+              <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-gradient-to-br from-cyan-400 to-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.55)]" />
+              v2.0
+            </span>
+          </div>
         </div>
 
         {/* 一句话定位 —— 渐变文字 */}
@@ -217,7 +226,7 @@ function Hero() {
             进入教师端
             <ArrowRight size={14} />
           </Link>
-          <Link href="/student" className="pbl-cosmic-btn-ghost">
+          <Link href="/student/login" className="pbl-cosmic-btn-ghost">
             <UsersRound size={16} />
             学生加入课堂
           </Link>
@@ -491,7 +500,7 @@ function Entry() {
           {/* 学生端 */}
           <CosmicReveal delay={100}>
             <Link
-              href="/student"
+              href="/student/login"
               className="pbl-shine-card group relative block overflow-hidden rounded-3xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-8 transition-all duration-300 hover:-translate-y-1 hover:border-emerald-300 hover:shadow-2xl hover:shadow-emerald-100/60"
             >
               {/* 背景渐变 */}
