@@ -33,6 +33,7 @@ import {
 } from "@/lib/classroom/teacher-dashboard-metrics";
 
 type TeacherStageDashboardProps = {
+  active?: boolean;
   course: Course;
   stageKey: string;
   degraded?: boolean;
@@ -441,7 +442,8 @@ function ReflectionDashboard({ course, onFocus }: { course: Course; onFocus: (fo
   );
 }
 
-export function TeacherStageDashboard({ course, stageKey, degraded, showcaseData, onFocus, onSelectStage, onCollapse }: TeacherStageDashboardProps) {
+export function TeacherStageDashboard({ active = true, course, stageKey, degraded, showcaseData, onFocus, onSelectStage, onCollapse }: TeacherStageDashboardProps) {
+  if (!active) return null;
   const currentStage = course.stages[course.currentStageIndex];
   const body = stageKey === "launch"
     ? <LaunchDashboard course={course} onFocus={onFocus} />

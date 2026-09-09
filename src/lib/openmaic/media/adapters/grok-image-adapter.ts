@@ -65,6 +65,7 @@ export async function generateWithGrokImage(
 
   const response = await fetch(`${baseUrl}/images/generations`, {
     method: 'POST',
+    signal: options.signal,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`,
@@ -79,7 +80,10 @@ export async function generateWithGrokImage(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Grok image generation failed (${response.status}): ${text}`);
+    throw Object.assign(
+      new Error(`Grok image generation failed (${response.status}): ${text}`),
+      { statusCode: response.status },
+    );
   }
 
   const data = await response.json();

@@ -232,7 +232,7 @@ export default function PreviewCoursePage() {
       currentCourse={{ id: course.id, name: course.name, status: course.status }}
       headerSlot={<div className="ml-4"><WizardStepper current={2} steps={STEPS} /></div>}
     >
-      <main className="pb-28">
+      <main>
         <header className="relative overflow-hidden rounded-[16px] border border-stone-200 bg-[radial-gradient(circle_at_92%_0%,rgba(254,215,170,0.34),transparent_34%),linear-gradient(120deg,#ffffff_0%,#fffdf8_100%)] px-5 py-5 shadow-[0_10px_32px_rgba(87,74,58,0.06)] sm:px-6">
           <div aria-hidden className="absolute bottom-0 left-16 right-0 h-px bg-gradient-to-r from-transparent via-amber-200 to-transparent" />
           <div className="relative flex flex-wrap items-start gap-4">
@@ -250,7 +250,7 @@ export default function PreviewCoursePage() {
               </div>
               <h1 className="mt-1 truncate font-editorial text-[26px] font-semibold tracking-[-0.02em] text-stone-950 sm:text-[30px]">{course.name}</h1>
               <p className="mt-1 max-w-3xl text-sm leading-6 text-stone-500">
-                {course.subject} · {course.grade} · 核对知识讲授内容与时长（{course.content.moduleTimingPlan?.totalMinutes ?? 0} 分钟，须占整课 20%–40%）及发布条件
+                {[course.subject, course.grade].filter(Boolean).join(" · ")}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -366,7 +366,7 @@ export default function PreviewCoursePage() {
 
       <FlowActionBar
         persistent
-        back={<Link className="inline-flex min-h-11 items-center text-sm font-semibold text-[var(--pbl-text-muted)]" href={`/teacher/prepare/${course.id}/verify`}>上一步</Link>}
+        back={<Link className="inline-flex min-h-11 items-center text-sm font-semibold text-[var(--pbl-text-muted)]" href={courseDetailedEditHref(course.id)}>上一步</Link>}
         saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} state={session.saveState} onRetry={() => void session.retrySave()} />}
       >
         {!isPublished ? (

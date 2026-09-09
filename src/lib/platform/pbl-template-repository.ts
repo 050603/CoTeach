@@ -9,7 +9,7 @@ import { createPblTemplateCourse, decodePblTemplate, encodePblTemplate } from ".
 
 export async function loadPblTemplateCourse(id: string, db: PlatformDb = prisma): Promise<Course | null> {
   const template = await db.classroomTemplate.findUnique({ where: { id }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
-  if (!template) return null;
+  if (!template || template.status.toUpperCase() === "DELETED") return null;
   const version = template.versions[0];
   const design = decodePblTemplate(version?.snapshot);
   if (!design) return null;
@@ -22,7 +22,8 @@ export async function savePblTemplateCourse(course: Course, ownerId?: string, db
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pbl-template:${course.id}`}, 0))`;
     const template = await tx.classroomTemplate.findUnique({ where: { id: course.id }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
     if (!template && !ownerId) throw new PlatformError("NOT_FOUND", "备课模板不存在", 404);
-    if (template?.status === "ARCHIVED") throw new PlatformError("TEMPLATE_ARCHIVED", "归档模板不可修改", 409);
+    if (template?.status.toUpperCase() === "ARCHIVED") throw new PlatformError("TEMPLATE_ARCHIVED", "归档模板不可修改", 409);
+    if (template?.status.toUpperCase() === "DELETED") throw new PlatformError("NOT_FOUND", "备课模板不存在", 404);
     if (template && ownerId && template.ownerId !== ownerId) throw new PlatformError("FORBIDDEN", "无权修改此备课模板", 403);
     if (template && course.version !== undefined && course.version !== template.updatedAt.getTime()) throw new PlatformError("VERSION_CONFLICT", "备课内容已更新，请刷新后重试", 409);
     const resourceIds = [...new Set((course.resources ?? []).map((resource) => resource.id))];

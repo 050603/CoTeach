@@ -2,23 +2,41 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  ArrowLeft,
   ArrowRight,
+  Bell,
   BookOpen,
+  Check,
   CheckCircle2,
+  ChevronDown,
   ClipboardList,
   FileText,
   LockKeyhole,
+  LoaderCircle,
   Play,
+  Sparkles,
 } from "lucide-react";
-import { activityTypeLabel } from "@/lib/platform/labels";
+import { PraixisLogo } from "@/components/brand/praixis-logo";
 import {
   CourseCover,
-  StudentShell,
   courseDate,
   studentPrimary,
 } from "@/components/platform/student-shell";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { activityTypeLabel } from "@/lib/platform/labels";
+
+type ActivityProgress = {
+  status: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  lastAccessedAt?: string | null;
+};
 
 type Activity = {
   id: string;
@@ -26,53 +44,234 @@ type Activity = {
   title: string;
   description: string | null;
   isOpen: boolean;
-  progress: { status: string };
+  progress: ActivityProgress;
 };
+
+type Chapter = {
+  id: string;
+  title: string;
+  description: string | null;
+  isOpen: boolean;
+  opensAt: string | null;
+  activities: Activity[];
+};
+
 type Course = {
   id: string;
   name: string;
   description: string | null;
   outline?: string | null;
   referenceMaterials?: string | null;
+  courseReferences?: Array<{
+    id: string;
+    kind: "link" | "file";
+    title: string;
+    url: string;
+    fileName?: string;
+    fileSize?: string;
+  }>;
   coverImageUrl?: string | null;
   term: string | null;
   startsAt: string | null;
   endsAt: string | null;
   status: string;
   teacher: { displayName: string } | null;
-  chapters: Array<{
-    id: string;
-    title: string;
-    description: string | null;
-    isOpen: boolean;
-    opensAt: string | null;
-    activities: Activity[];
-  }>;
+  chapters: Chapter[];
 };
-const tabs = [
-  { id: "chapters", label: "章节目录" },
-  { id: "details", label: "课程详情" },
-  { id: "outline", label: "课程大纲" },
-  { id: "resources", label: "参考资料" },
-] as const;
-type Tab = (typeof tabs)[number]["id"];
+
+type CourseTask = {
+  chapter: Chapter;
+  chapterIndex: number;
+  activity: Activity;
+  taskIndex: number;
+};
+
+type Tab = "learning" | "intro" | "resources";
+
+const tabs: Array<{ id: Tab; label: string }> = [
+  { id: "learning", label: "课程学习" },
+  { id: "intro", label: "课程介绍" },
+  { id: "resources", label: "课程资料" },
+];
+
+function normalized(value?: string | null) {
+  return value?.toLowerCase() ?? "";
+}
+
+function isCompleted(activity: Activity) {
+  return normalized(activity.progress.status) === "completed";
+}
+
+function isInProgress(activity: Activity) {
+  return normalized(activity.progress.status) === "in_progress";
+}
+
+function flattenTasks(course: Course): CourseTask[] {
+  return course.chapters.flatMap((chapter, chapterIndex) =>
+    chapter.activities.map((activity, taskIndex) => ({
+      chapter,
+      chapterIndex,
+      activity,
+      taskIndex,
+    })),
+  );
+}
+
+function findNextTask(course: Course) {
+  const accessible = flattenTasks(course).filter(
+    ({ chapter, activity }) => chapter.isOpen && activity.isOpen,
+  );
+  return (
+    accessible.find(({ activity }) => isInProgress(activity)) ??
+    accessible.find(({ activity }) => !isCompleted(activity))
+  );
+}
+
 function ActivityIcon({ type }: { type: string }) {
+  const value = normalized(type);
   const Icon =
-    type.toLowerCase() === "classroom"
+    value === "classroom"
       ? Play
-      : ["form", "quiz", "assignment"].includes(type.toLowerCase())
+      : ["form", "quiz", "assignment"].includes(value)
         ? ClipboardList
         : FileText;
-  return <Icon size={17} />;
+  return <Icon aria-hidden="true" size={16} />;
+}
+
+function CourseTopbar({
+  viewerName,
+  reminders,
+}: {
+  viewerName: string;
+  reminders: string[];
+}) {
+  const initial = viewerName.trim().charAt(0) || "同";
+  return (
+    <header className="pbl-student-course-topbar">
+      <div className="pbl-student-course-topbar-inner">
+        <div className="flex min-w-0 items-center gap-5">
+          <Link href="/student" aria-label="PrAIxis 学生首页">
+            <PraixisLogo variant="horizontalSolid" height={38} priority />
+          </Link>
+          <span className="h-5 w-px bg-[var(--pbl-border)]" aria-hidden="true" />
+          <Link
+            href="/student?all=1"
+            className="inline-flex min-h-10 items-center gap-2 rounded-[10px] px-2 text-sm font-medium text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)] hover:text-[var(--pbl-text-strong)]"
+          >
+            <ArrowLeft size={17} />
+            返回我的课程
+          </Link>
+        </div>
+        <div className="flex items-center gap-3">
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="pbl-course-reminder-trigger"
+                aria-label={`课程提醒，共 ${reminders.length} 条`}
+              >
+                <Bell size={18} />
+                {reminders.length ? (
+                  <span aria-hidden="true">{reminders.length}</span>
+                ) : null}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              sideOffset={10}
+              className="pbl-platform-theme pbl-course-reminder-popover"
+            >
+              <div className="flex items-center gap-2">
+                <Sparkles size={16} className="text-[var(--pbl-student)]" />
+                <h2 className="font-semibold text-[var(--pbl-text-strong)]">
+                  课程提醒
+                </h2>
+              </div>
+              <p className="mt-1.5 text-xs leading-5 text-[var(--pbl-text-muted)]">
+                根据当前课程进度实时生成
+              </p>
+              {reminders.length ? (
+                <ul className="mt-3 grid gap-2">
+                  {reminders.map((reminder) => (
+                    <li key={reminder} className="pbl-course-reminder-item">
+                      {reminder}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-4 rounded-[10px] bg-[var(--pbl-student-soft)] p-3 text-sm text-[var(--pbl-student)]">
+                  当前没有待处理的课程任务。
+                </p>
+              )}
+            </PopoverContent>
+          </Popover>
+          <div className="pbl-student-viewer" aria-label={`当前学生：${viewerName}`}>
+            <span aria-hidden="true">{initial}</span>
+            <strong>{viewerName}</strong>
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function WorkspaceFrame({
+  viewerName,
+  reminders = [],
+  children,
+}: {
+  viewerName: string;
+  reminders?: string[];
+  children: ReactNode;
+}) {
+  return (
+    <main className="pbl-platform-theme pbl-platform-page-student pbl-student-course-workspace min-h-screen">
+      <CourseTopbar viewerName={viewerName} reminders={reminders} />
+      {children}
+    </main>
+  );
+}
+
+function CourseProgress({ completed, total }: { completed: number; total: number }) {
+  const percentage = total ? Math.round((completed / total) * 100) : 0;
+  return (
+    <div>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <span className="text-[13px] text-[var(--pbl-text-muted)]">学习进度</span>
+          <p className="mt-1 text-[15px] font-medium text-[var(--pbl-text-strong)]">
+            已完成 {completed} / {total} 项任务
+          </p>
+        </div>
+        <strong className="text-xl text-[var(--pbl-student)]">{percentage}%</strong>
+      </div>
+      <div
+        className="mt-3 h-2 overflow-hidden rounded-full bg-[var(--pbl-border)]"
+        role="progressbar"
+        aria-label="课程学习进度"
+        aria-valuemin={0}
+        aria-valuemax={total || 1}
+        aria-valuenow={completed}
+      >
+        <div
+          className="h-full rounded-full bg-[var(--pbl-student)] transition-[width]"
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 export default function StudentCoursePage() {
   const params = useParams<{ offeringId: string }>();
   const router = useRouter();
   const [course, setCourse] = useState<Course | null>(null);
+  const [viewerName, setViewerName] = useState("同学");
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("chapters");
+  const [tab, setTab] = useState<Tab>("learning");
   const [retry, setRetry] = useState(0);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     let active = true;
     fetch("/api/platform/courses", { cache: "no-store" })
@@ -85,351 +284,385 @@ export default function StudentCoursePage() {
         if (!response.ok) throw new Error(data.message ?? "无法加载课程");
         const found = data.courses.find(
           (item: Course) => item.id === params.offeringId,
-        );
+        ) as Course | undefined;
         if (!found) throw new Error("你尚未加入该课程，或课程尚未开放。");
-        if (active) {
-          setCourse(found);
-          setError(null);
-        }
+        if (!active) return;
+
+        const next = findNextTask(found);
+        const initiallyOpen =
+          next?.chapter.id ??
+          found.chapters.find((chapter) => chapter.isOpen)?.id ??
+          found.chapters[0]?.id;
+        setCourse(found);
+        setViewerName(data.viewer?.displayName?.trim() || "同学");
+        setExpanded(initiallyOpen ? new Set([initiallyOpen]) : new Set());
+        setError(null);
       })
       .catch((reason) => {
-        if (active)
+        if (active) {
           setError(reason instanceof Error ? reason.message : "加载失败");
+        }
       });
     return () => {
       active = false;
     };
   }, [params.offeringId, router, retry]);
-  if (error)
+
+  const tasks = useMemo(() => (course ? flattenTasks(course) : []), [course]);
+  const completed = tasks.filter(({ activity }) => isCompleted(activity)).length;
+  const nextTask = course ? findNextTask(course) : undefined;
+  const courseFinished = course
+    ? ["finished", "archived"].includes(normalized(course.status))
+    : false;
+  const allCompleted = tasks.length > 0 && completed === tasks.length;
+  const lockedChapters = course?.chapters.filter((chapter) => !chapter.isOpen).length ?? 0;
+  const reminders = useMemo(() => {
+    if (!course) return [];
+    if (allCompleted) return ["你已完成全部学习任务，可以查看学习记录。"];
+    const items: string[] = [];
+    if (nextTask) {
+      items.push(
+        `${isInProgress(nextTask.activity) ? "继续" : "下一项"}：${nextTask.activity.title}`,
+      );
+    } else if (courseFinished) {
+      items.push("课程已经结束，当前可以查看已完成的学习记录。");
+    } else {
+      items.push("当前没有已开放且未完成的任务。");
+    }
+    if (lockedChapters) {
+      items.push(`${lockedChapters} 个章节尚待教师解锁。`);
+    }
+    return items;
+  }, [allCompleted, course, courseFinished, lockedChapters, nextTask]);
+
+  if (error) {
     return (
-      <StudentShell backHref="/student?all=1" backLabel="返回我的课程">
-        <p role="alert">{error}</p>
-        <button
-          className="mt-4 min-h-11 underline"
-          onClick={() => setRetry(retry + 1)}
-        >
-          重新加载
-        </button>
-      </StudentShell>
-    );
-  if (!course)
-    return (
-      <StudentShell backHref="/student?all=1" backLabel="返回我的课程">
-        <p
-          role="status"
-          className="py-20 text-center text-sm text-[var(--pbl-text-muted)]"
-        >
-          正在加载课程…
-        </p>
-      </StudentShell>
-    );
-  const activities = course.chapters.flatMap((chapter) => chapter.activities);
-  const completed = activities.filter(
-    (activity) => activity.progress.status === "completed",
-  ).length;
-  const accessible = course.chapters
-    .filter((chapter) => chapter.isOpen)
-    .flatMap((chapter) =>
-      chapter.activities.filter((activity) => activity.isOpen),
-    );
-  const next =
-    accessible.find((activity) => activity.progress.status === "in_progress") ??
-    accessible.find((activity) => activity.progress.status !== "completed");
-  const resources = course.chapters.flatMap((chapter) =>
-    chapter.activities
-      .filter((activity) => activity.type.toLowerCase() === "resource")
-      .map((activity) => ({ chapter, activity })),
-  );
-  function taskRow(activity: Activity, open: boolean, index?: string) {
-    return (
-      <div className="flex min-h-16 items-center gap-3 border-t border-[var(--pbl-border)] px-4 py-3 md:px-6">
-        <span className="text-[var(--pbl-text-muted)]">
-          <ActivityIcon type={activity.type} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium">
-            {index ? (
-              <span className="mr-2 text-xs text-[var(--pbl-text-muted)]">
-                {index}
-              </span>
-            ) : null}
-            {activity.title}
-          </p>
-          <p className="mt-1 text-xs text-[var(--pbl-text-muted)]">
-            {activityTypeLabel(activity.type)}
-          </p>
+      <WorkspaceFrame viewerName={viewerName}>
+        <div className="pbl-student-course-state" role="alert">
+          <div className="pbl-student-course-state-icon">
+            <BookOpen size={24} />
+          </div>
+          <h1>课程加载失败</h1>
+          <p>{error}</p>
+          <button
+            type="button"
+            className={`${studentPrimary} mt-5`}
+            onClick={() => setRetry((value) => value + 1)}
+          >
+            重新加载
+          </button>
         </div>
-        <span className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--pbl-text-muted)]">
-          {!open ? (
-            <>
-              <LockKeyhole size={14} />
-              未解锁
-            </>
-          ) : activity.progress.status === "completed" ? (
-            <>
-              <CheckCircle2 size={15} className="text-[var(--pbl-student)]" />
-              已完成
-            </>
-          ) : activity.progress.status === "in_progress" ? (
-            "继续学习"
-          ) : (
-            "未开始"
-          )}
-        </span>
-        {open ? (
-          <ArrowRight size={16} className="text-[var(--pbl-student)]" />
-        ) : null}
-      </div>
+      </WorkspaceFrame>
     );
   }
+
+  if (!course) {
+    return (
+      <WorkspaceFrame viewerName={viewerName}>
+        <div className="pbl-student-course-loading" role="status" aria-label="正在加载课程">
+          <div className="pbl-student-course-summary-skeleton" />
+          <div className="pbl-student-course-content-skeleton">
+            <span />
+            <span />
+            <div />
+            <div />
+            <div />
+          </div>
+        </div>
+      </WorkspaceFrame>
+    );
+  }
+
+  const resources = tasks.filter(
+    ({ activity }) => normalized(activity.type) === "resource",
+  );
+
+  function toggleChapter(chapterId: string) {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(chapterId)) next.delete(chapterId);
+      else next.add(chapterId);
+      return next;
+    });
+  }
+
   return (
-    <StudentShell backHref="/student?all=1" backLabel="返回我的课程">
-      <section className="pbl-student-course-hero grid overflow-hidden md:grid-cols-[0.7fr_1.3fr]">
-        <CourseCover
-          url={course.coverImageUrl}
-          name={course.name}
-          className="min-h-60 md:min-h-80"
-        />
-        <div className="p-6 md:p-8">
-          <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--pbl-text-muted)]">
-            <span>{course.term ?? "课程系列"}</span>
-            <span className="rounded-[6px] border border-[var(--pbl-border)] px-2 py-1">
-              {course.status === "draft"
-                ? "等待开课"
-                : course.status === "finished"
-                  ? "已结课"
-                  : "开放学习"}
-            </span>
-          </div>
-          <h1 className="mt-4 font-serif text-3xl font-semibold leading-snug">
-            {course.name}
-          </h1>
-          <p className="mt-4 line-clamp-2 text-sm leading-7 text-[var(--pbl-text-muted)]">
-            {course.description ||
-              "围绕真实问题，按章节完成课堂学习与实践任务。"}
-          </p>
-          <dl className="mt-5 grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <dt className="text-xs text-[var(--pbl-text-muted)]">授课教师</dt>
-              <dd className="mt-1.5">
-                {course.teacher?.displayName ?? "待公布"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-[var(--pbl-text-muted)]">开课时间</dt>
-              <dd className="mt-1.5">{courseDate(course.startsAt)}</dd>
-            </div>
-          </dl>
-          {next ? (
-            <Link
-              href={`/student/activities/${next.id}`}
-              className={`${studentPrimary} mt-6`}
-            >
-              {completed || next.progress.status === "in_progress"
-                ? "继续学习"
-                : "开始学习"}
-              <ArrowRight size={16} />
-            </Link>
-          ) : (
-            <p className="mt-6 text-sm text-[var(--pbl-student)]">
-              {activities.length && completed === activities.length
-                ? "已完成全部学习任务"
-                : "下一项学习任务尚未开放"}
-            </p>
-          )}
-        </div>
-      </section>
-      <div className="pbl-progress-strip mt-6 flex flex-wrap items-center gap-4 text-sm">
-        <BookOpen size={19} className="text-[var(--pbl-student)]" />
-        <span>{course.chapters.length} 个章节</span>
-        <span className="text-[var(--pbl-text-muted)]">
-          已完成 {completed} / {activities.length} 项学习任务
-        </span>
-        <div
-          className="h-1.5 min-w-24 flex-1 overflow-hidden rounded-[6px] bg-[var(--pbl-border)]"
-          role="progressbar"
-          aria-label="课程学习进度"
-          aria-valuemin={0}
-          aria-valuemax={activities.length || 1}
-          aria-valuenow={completed}
-        >
-          <div
-            className="h-full bg-[var(--pbl-student)]"
-            style={{
-              width: `${activities.length ? (completed / activities.length) * 100 : 0}%`,
-            }}
-          />
-        </div>
-      </div>
-      <nav
-        aria-label="课程内容"
-        className="mt-6 flex gap-5 overflow-x-auto border-b border-[var(--pbl-border)] md:gap-8"
-      >
-        {tabs.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => setTab(item.id)}
-            aria-pressed={tab === item.id}
-            className={`min-h-12 shrink-0 border-b-2 px-1 text-sm ${tab === item.id ? "border-[var(--pbl-student)] font-semibold text-[var(--pbl-student)]" : "border-transparent text-[var(--pbl-text-muted)]"}`}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
-      <section
-        aria-label={tabs.find((item) => item.id === tab)?.label}
-        className="py-7"
-      >
-        {tab === "chapters" ? (
-          <div className="space-y-5">
-            {course.chapters.length === 0 ? (
-              <p className="py-8 text-sm text-[var(--pbl-text-muted)]">
-                教师正在安排章节，课程内容将在发布后显示。
+    <WorkspaceFrame viewerName={viewerName} reminders={reminders}>
+      <div className="pbl-student-course-layout">
+        <aside className="pbl-student-course-summary-wrap" aria-label="课程概览">
+          <div className="pbl-student-course-summary">
+            <CourseCover
+              url={course.coverImageUrl}
+              name={course.name}
+              className="pbl-student-course-cover"
+            />
+            <div className="pbl-student-course-summary-body">
+              <div className="flex items-center gap-2 text-[13px] text-[var(--pbl-text-muted)]">
+                <span>{course.term || "当前学期"}</span>
+                <span aria-hidden="true">·</span>
+                <span>{course.teacher?.displayName || "教师待公布"}</span>
+              </div>
+              <h1>{course.name}</h1>
+              <p className="pbl-student-course-summary-description">
+                {course.description || "围绕真实问题，按章节完成课堂学习与实践任务。"}
               </p>
-            ) : (
-              course.chapters.map((chapter, index) => (
-                <details
-                  open
-                  key={chapter.id}
-                  className="overflow-hidden rounded-[10px] border border-[var(--pbl-border)] bg-[var(--pbl-surface)]"
+              <CourseProgress completed={completed} total={tasks.length} />
+
+              {allCompleted ? (
+                <div className="pbl-course-complete-state">
+                  <CheckCircle2 size={20} />
+                  <div>
+                    <strong>课程学习已完成</strong>
+                    <p>所有任务均已完成，可继续查看学习记录。</p>
+                  </div>
+                </div>
+              ) : nextTask ? (
+                <Link
+                  href={`/student/activities/${nextTask.activity.id}`}
+                  className={`${studentPrimary} mt-5 w-full`}
                 >
-                  <summary className="cursor-pointer px-5 py-5 marker:text-[var(--pbl-text-muted)]">
-                    <span className="ml-1 text-xs text-[var(--pbl-text-muted)]">
-                      第 {String(index + 1).padStart(2, "0")} 章
-                    </span>
-                    <span className="ml-4 font-serif text-lg font-semibold">
-                      {chapter.title}
-                    </span>
-                    <span className="ml-4 text-xs text-[var(--pbl-text-muted)]">
-                      {chapter.isOpen
-                        ? `${chapter.activities.length} 项任务`
-                        : chapter.opensAt
-                          ? `${courseDate(chapter.opensAt)} 开放`
-                          : "待教师解锁"}
-                    </span>
-                  </summary>
-                  {chapter.description ? (
-                    <p className="px-6 pb-4 text-sm leading-6 text-[var(--pbl-text-muted)]">
-                      {chapter.description}
-                    </p>
-                  ) : null}
-                  {chapter.activities.length ? (
-                    chapter.activities.map((activity, taskIndex) =>
-                      chapter.isOpen && activity.isOpen ? (
-                        <Link
-                          className="block transition-colors hover:bg-[var(--pbl-bg)]"
-                          key={activity.id}
-                          href={`/student/activities/${activity.id}`}
-                        >
-                          {taskRow(
-                            activity,
-                            true,
-                            `${index + 1}.${taskIndex + 1}`,
-                          )}
-                        </Link>
-                      ) : (
-                        <div key={activity.id} aria-disabled="true">
-                          {taskRow(
-                            activity,
-                            false,
-                            `${index + 1}.${taskIndex + 1}`,
-                          )}
-                        </div>
-                      ),
-                    )
-                  ) : (
-                    <p className="border-t border-[var(--pbl-border)] px-6 py-5 text-sm text-[var(--pbl-text-muted)]">
-                      本章节的任务尚未发布。
-                    </p>
-                  )}
-                </details>
-              ))
-            )}
-          </div>
-        ) : tab === "details" ? (
-          <div className="max-w-3xl">
-            <h2 className="font-serif text-xl font-semibold">关于这门课程</h2>
-            <p className="mt-4 whitespace-pre-wrap text-sm leading-8 text-[var(--pbl-text-muted)]">
-              {course.description || "教师尚未填写课程介绍。"}
-            </p>
-            <dl className="mt-8 grid gap-5 border-t border-[var(--pbl-border)] pt-6 text-sm sm:grid-cols-2">
-              <div>
-                <dt className="text-[var(--pbl-text-muted)]">开课时间</dt>
-                <dd className="mt-2">{courseDate(course.startsAt)}</dd>
-              </div>
-              <div>
-                <dt className="text-[var(--pbl-text-muted)]">结课时间</dt>
-                <dd className="mt-2">{courseDate(course.endsAt)}</dd>
-              </div>
-            </dl>
-          </div>
-        ) : tab === "outline" ? (
-          <div className="max-w-3xl">
-            <h2 className="font-serif text-xl font-semibold">课程大纲</h2>
-            {course.outline ? (
-              <p className="mt-4 whitespace-pre-wrap text-sm leading-8 text-[var(--pbl-text-muted)]">
-                {course.outline}
-              </p>
-            ) : null}
-            <ol className="mt-6 divide-y divide-[var(--pbl-border)]">
-              {course.chapters.map((chapter, index) => (
-                <li key={chapter.id} className="py-5">
-                  <h3 className="font-semibold">
-                    {index + 1}. {chapter.title}
-                  </h3>
-                  {chapter.description ? (
-                    <p className="mt-2 text-sm leading-7 text-[var(--pbl-text-muted)]">
-                      {chapter.description}
-                    </p>
-                  ) : null}
-                  <p className="mt-2 text-xs text-[var(--pbl-text-muted)]">
-                    {chapter.activities
-                      .map((activity) => activityTypeLabel(activity.type))
-                      .join(" · ") || "学习任务待发布"}
+                  {courseFinished
+                    ? "查看学习记录"
+                    : completed || isInProgress(nextTask.activity)
+                      ? "继续学习"
+                      : "开始学习"}
+                  <ArrowRight size={16} />
+                </Link>
+              ) : (
+                <div className="pbl-course-waiting-state">
+                  <LockKeyhole size={17} />
+                  {courseFinished ? "课程已结束" : "下一项学习任务尚未开放"}
+                </div>
+              )}
+
+              {nextTask ? (
+                <div className="pbl-student-next-task">
+                  <span>{courseFinished ? "最近学习任务" : "下一项学习任务"}</span>
+                  <strong title={nextTask.activity.title}>{nextTask.activity.title}</strong>
+                  <p>
+                    {activityTypeLabel(nextTask.activity.type)} · 第 {nextTask.chapterIndex + 1} 章 {nextTask.chapter.title}
                   </p>
-                </li>
-              ))}
-            </ol>
-            {!course.outline && !course.chapters.length ? (
-              <p className="mt-4 text-sm text-[var(--pbl-text-muted)]">
-                课程大纲将在教师发布后显示。
-              </p>
-            ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
-        ) : (
-          <div>
-            <h2 className="font-serif text-xl font-semibold">参考资料</h2>
-            {course.referenceMaterials ? (
-              <p className="mt-4 max-w-3xl whitespace-pre-wrap text-sm leading-8 text-[var(--pbl-text-muted)]">
-                {course.referenceMaterials}
-              </p>
-            ) : null}
-            {resources.length ? (
-              <div className="mt-6 overflow-hidden rounded-[10px] border border-[var(--pbl-border)] bg-[var(--pbl-surface)]">
-                {resources.map(({ chapter, activity }) =>
-                  chapter.isOpen && activity.isOpen ? (
-                    <Link
-                      key={activity.id}
-                      href={`/student/activities/${activity.id}`}
-                      className="block hover:bg-[var(--pbl-bg)]"
-                    >
-                      {taskRow(activity, true)}
-                    </Link>
-                  ) : (
-                    <div key={activity.id} aria-disabled="true">
-                      {taskRow(activity, false)}
-                    </div>
-                  ),
-                )}
+        </aside>
+
+        <section className="pbl-student-course-main" aria-label="课程内容">
+          <nav className="pbl-student-course-tabs" aria-label="课程内容导航">
+            {tabs.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                onClick={() => setTab(item.id)}
+                aria-pressed={tab === item.id}
+                className={tab === item.id ? "is-active" : undefined}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+
+          {tab === "learning" ? (
+            <div className="pbl-student-learning-panel">
+              <header className="pbl-student-learning-heading">
+                <div>
+                  <h2>课程学习</h2>
+                </div>
+                <p>{course.chapters.length} 个章节 · {tasks.length} 项学习任务</p>
+              </header>
+
+              {course.chapters.length ? (
+                <div className="pbl-student-chapter-list" role="list" aria-label="课程章节">
+                  {course.chapters.map((chapter, chapterIndex) => {
+                    const chapterCompleted = chapter.activities.filter(isCompleted).length;
+                    const chapterPercentage = chapter.activities.length
+                      ? Math.round((chapterCompleted / chapter.activities.length) * 100)
+                      : 0;
+                    const isExpanded = expanded.has(chapter.id);
+                    return (
+                      <article
+                        key={chapter.id}
+                        role="listitem"
+                        className={`pbl-student-chapter${isExpanded ? " is-expanded" : ""}`}
+                      >
+                        <button
+                          type="button"
+                          className="pbl-student-chapter-heading"
+                          onClick={() => toggleChapter(chapter.id)}
+                          aria-expanded={isExpanded}
+                          aria-controls={`chapter-${chapter.id}`}
+                        >
+                          <span className="pbl-student-chapter-index" aria-hidden="true">
+                            <small>CHAPTER</small>
+                            {String(chapterIndex + 1).padStart(2, "0")}
+                          </span>
+                          <span className="pbl-student-chapter-copy">
+                            <strong title={chapter.title}>{chapter.title}</strong>
+                            <small>{chapter.description || `${chapter.activities.length} 项学习任务`}</small>
+                          </span>
+                          <span className="pbl-student-chapter-overview">
+                            <span className={chapter.isOpen ? "is-open" : "is-locked"}>
+                              {!chapter.isOpen ? <LockKeyhole size={12} /> : null}
+                              {chapter.isOpen ? "开放学习" : "尚未开放"}
+                            </span>
+                            <span className="pbl-student-chapter-progress-row">
+                              <span>{chapterCompleted} / {chapter.activities.length}</span>
+                              <span className="pbl-student-mini-progress" aria-hidden="true">
+                                <i style={{ width: `${chapterPercentage}%` }} />
+                              </span>
+                              <span>{chapterPercentage}%</span>
+                            </span>
+                          </span>
+                          <ChevronDown className="pbl-student-chapter-chevron" size={18} />
+                        </button>
+
+                        {isExpanded ? (
+                          <div id={`chapter-${chapter.id}`} className="pbl-student-chapter-content">
+                            {chapter.activities.length ? (
+                              <div className="pbl-student-task-list" role="list" aria-label={`${chapter.title}学习任务`}>
+                                {chapter.activities.map((activity, taskIndex) => {
+                                  const isOpen = chapter.isOpen && activity.isOpen;
+                                  const current = nextTask?.activity.id === activity.id;
+                                  const row = (
+                                    <div
+                                      role="listitem"
+                                      className={`pbl-student-task-row${current ? " is-current" : ""}${!isOpen ? " is-locked" : ""}`}
+                                    >
+                                      <span className="pbl-student-task-icon">
+                                        <ActivityIcon type={activity.type} />
+                                      </span>
+                                      <span className="pbl-student-task-copy">
+                                        <span>
+                                          {chapterIndex + 1}.{taskIndex + 1} · {activityTypeLabel(activity.type)}
+                                        </span>
+                                        <strong title={activity.title}>{activity.title}</strong>
+                                      </span>
+                                      <span className={`pbl-student-task-state${isOpen && isInProgress(activity) ? " is-progress" : ""}`}>
+                                        {!isOpen ? (
+                                          <><LockKeyhole size={14} /> 未解锁</>
+                                        ) : isCompleted(activity) ? (
+                                          <><Check size={15} /> 已完成</>
+                                        ) : isInProgress(activity) ? (
+                                          <><LoaderCircle size={15} /> 进行中</>
+                                        ) : (
+                                          "未开始"
+                                        )}
+                                      </span>
+                                      {isOpen ? <ArrowRight size={15} aria-hidden="true" /> : null}
+                                    </div>
+                                  );
+                                  return isOpen ? (
+                                    <Link key={activity.id} href={`/student/activities/${activity.id}`}>
+                                      {row}
+                                    </Link>
+                                  ) : (
+                                    <div key={activity.id} aria-disabled="true">{row}</div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <p className="pbl-student-chapter-empty">本章节的任务尚未发布。</p>
+                            )}
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="pbl-student-course-empty">
+                  <BookOpen size={25} />
+                  <h3>课程章节正在准备中</h3>
+                  <p>教师发布章节后，完整学习路径会显示在这里。</p>
+                </div>
+              )}
+            </div>
+          ) : tab === "intro" ? (
+            <div className="pbl-student-secondary-panel">
+              <div className="pbl-student-secondary-copy">
+                <span>ABOUT THE COURSE</span>
+                <h2>课程介绍</h2>
+                <p>{course.description || "教师尚未填写课程介绍。"}</p>
               </div>
-            ) : !course.referenceMaterials ? (
-              <p className="mt-4 text-sm text-[var(--pbl-text-muted)]">
-                教师尚未添加参考资料。
-              </p>
-            ) : null}
-          </div>
-        )}
-      </section>
-    </StudentShell>
+              <dl className="pbl-student-course-meta">
+                <div><dt>授课教师</dt><dd>{course.teacher?.displayName || "待公布"}</dd></div>
+                <div><dt>课程学期</dt><dd>{course.term || "待公布"}</dd></div>
+                <div><dt>开课时间</dt><dd>{courseDate(course.startsAt)}</dd></div>
+                <div><dt>结课时间</dt><dd>{courseDate(course.endsAt)}</dd></div>
+              </dl>
+              <div className="pbl-student-outline">
+                <h3>课程大纲</h3>
+                {course.outline ? <p>{course.outline}</p> : null}
+                <ol>
+                  {course.chapters.map((chapter, index) => (
+                    <li key={chapter.id}>
+                      <span>{String(index + 1).padStart(2, "0")}</span>
+                      <div>
+                        <strong>{chapter.title}</strong>
+                        {chapter.description ? <p>{chapter.description}</p> : null}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+                {!course.outline && !course.chapters.length ? (
+                  <p className="text-sm text-[var(--pbl-text-muted)]">课程大纲将在教师发布后显示。</p>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="pbl-student-secondary-panel">
+              <div className="pbl-student-secondary-copy">
+                <span>COURSE MATERIALS</span>
+                <h2>课程资料</h2>
+                <p>{course.referenceMaterials || "课程参考资料与章节资料统一展示在这里。"}</p>
+              </div>
+              {course.courseReferences?.length || resources.length ? (
+                <div className="pbl-student-resource-list">
+                  {course.courseReferences?.map((reference) => (
+                    <a key={reference.id} href={reference.url} target="_blank" rel="noreferrer">
+                      <div className="pbl-student-resource-row">
+                        <span className="pbl-student-task-icon"><FileText size={16} /></span>
+                        <div className="min-w-0 flex-1">
+                          <strong title={reference.title}>{reference.title}</strong>
+                          <p>{reference.kind === "file" ? `${reference.fileName || "PDF 文档"}${reference.fileSize ? ` · ${reference.fileSize}` : ""}` : "课程参考链接"}</p>
+                        </div>
+                        <span>{reference.kind === "file" ? "查看 PDF" : "打开链接"}</span>
+                        <ArrowRight size={15} />
+                      </div>
+                    </a>
+                  ))}
+                  {resources.map(({ chapter, chapterIndex, activity }) => {
+                    const open = chapter.isOpen && activity.isOpen;
+                    const item = (
+                      <div className={`pbl-student-resource-row${open ? "" : " is-locked"}`}>
+                        <span className="pbl-student-task-icon"><FileText size={16} /></span>
+                        <div className="min-w-0 flex-1">
+                          <strong title={activity.title}>{activity.title}</strong>
+                          <p>第 {chapterIndex + 1} 章 · {chapter.title}</p>
+                        </div>
+                        <span>{open ? (isCompleted(activity) ? "已完成" : "查看资料") : "未解锁"}</span>
+                        {open ? <ArrowRight size={15} /> : <LockKeyhole size={15} />}
+                      </div>
+                    );
+                    return open ? (
+                      <Link key={activity.id} href={`/student/activities/${activity.id}`}>{item}</Link>
+                    ) : (
+                      <div key={activity.id} aria-disabled="true">{item}</div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="pbl-student-course-empty pbl-student-course-empty-compact">
+                  <FileText size={23} />
+                  <h3>暂无课程资料</h3>
+                  <p>教师添加的课程参考资料和资料类活动会显示在这里。</p>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
+    </WorkspaceFrame>
   );
 }

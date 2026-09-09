@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   ClassroomToolPopover,
+  DEFAULT_CLASSROOM_DATA_SIDEBAR_COLLAPSED,
   deriveMakeStageLearningMetrics,
   formatAverageInteractionCount,
   shouldShowClassroomDataSidebar,
@@ -82,6 +83,13 @@ describe("TimerPanel", () => {
 });
 
 describe("classroom data sidebar", () => {
+  it("stays collapsed by default in all five teaching stages", () => {
+    expect(DEFAULT_CLASSROOM_DATA_SIDEBAR_COLLAPSED).toBe(true);
+    for (const stageKey of ["launch", "ai-learning", "make", "showcase", "reflection"]) {
+      expect(shouldShowClassroomDataSidebar(stageKey, DEFAULT_CLASSROOM_DATA_SIDEBAR_COLLAPSED)).toBe(false);
+    }
+  });
+
   it("can expand in every teaching stage except showcase", () => {
     expect(shouldShowClassroomDataSidebar("showcase", false)).toBe(true);
     expect(shouldShowClassroomDataSidebar("launch", false)).toBe(true);

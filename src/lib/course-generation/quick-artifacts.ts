@@ -8,6 +8,7 @@ export type QuickClassroomGenerationEvent = {
   scenesGenerated: number;
   totalScenes: number;
   ts: number;
+  assetPhaseStatus?: "running" | "completed" | "partial-failure";
 };
 
 export type QuickClassroomScenePreview = {
@@ -164,25 +165,29 @@ export function buildQuickClassroomArtifacts(
   }
 
   if (hasAnyStep(job, ["generating_course_cover", "course_cover_ready", "course_cover_failed"])) {
-    const failed = hasAnyStep(job, ["course_cover_failed"]);
+    const coverStatus = latestStep(job, ["generating_course_cover", "course_cover_ready", "course_cover_failed"]);
+    const failed = coverStatus === "course_cover_failed";
+    const ready = coverStatus === "course_cover_ready";
     artifacts.push({
       id: "classroom-course-cover",
       kind: failed ? "facts" : "audit",
       eyebrow: "课程视觉 · 封面图片",
-      title: failed ? "课程封面需要稍后补充" : "正在生成课程专属封面",
+      title: failed ? "课程封面需要稍后补充" : ready ? "课程专属封面已经生成" : "正在生成课程专属封面",
       summary: latestMessage(job, ["generating_course_cover", "course_cover_ready", "course_cover_failed"]),
       accent: failed ? "orange" : "green",
       items: [
         { label: "课程主题", value: options?.courseTitle || "本次项目课程" },
-        { label: "图片规格", value: "16:9 · 1024×576", meta: "无文字、无标识的主题插画" },
-        { label: "保存状态", value: failed ? "可在设计稿中重新生成" : hasAnyStep(job, ["course_cover_ready"]) ? "已写入课程" : "正在生成" },
+        { label: "图片规格", value: "16:9 · 1280×720", meta: "无文字、无标识的主题插画" },
+        { label: "保存状态", value: failed ? "可在设计稿中重新生成" : ready ? "已写入课程" : "正在生成" },
       ],
     });
   }
 
   if (hasAnyStep(job, ["generation_resources_ready"])) {
-    const coverNeedsAttention = hasAnyStep(job, ["course_cover_failed"])
-      && !hasAnyStep(job, ["course_cover_ready"]);
+    const coverNeedsAttention = latestStep(
+      job,
+      ["course_cover_ready", "course_cover_failed"],
+    ) === "course_cover_failed";
     artifacts.push({
       id: "classroom-resources-ready",
       kind: "audit",
@@ -237,8 +242,9 @@ export function resolveQuickClassroomActiveArtifactId(
   if (job.step === "persisting_assets") return "classroom-persisting";
   if (job.step === "generation_resources_ready") return "classroom-resources-ready";
   if (["generating_course_cover", "course_cover_ready", "course_cover_failed"].includes(job.step)) return "classroom-course-cover";
-  if (job.step === "generating_tts_assets") return "classroom-tts-assets";
-  if (job.step === "generating_media_assets") return "classroom-media-assets";
+  if (["generating_media_assets", "generating_tts_assets"].includes(job.step)) {
+    return resolveActiveClassroomAssetId(job);
+  }
   if (["checking_adaptive_resources", "generating_adaptive_resources", "adaptive_resources_ready"].includes(job.step)) {
     return "classroom-adaptive-resources";
   }
@@ -266,6 +272,27 @@ function hasAnyStep(job: QuickClassroomGenerationSnapshot, steps: string[]): boo
 
 function latestMessage(job: QuickClassroomGenerationSnapshot, steps: string[]): string {
   return [...job.events].reverse().find((event) => steps.includes(event.step))?.message ?? job.message;
+}
+
+function latestStep(job: QuickClassroomGenerationSnapshot, steps: string[]): string | undefined {
+  if (steps.includes(job.step)) return job.step;
+  return [...job.events].reverse().find((event) => steps.includes(event.step))?.step;
+}
+
+function resolveActiveClassroomAssetId(job: QuickClassroomGenerationSnapshot): string {
+  const latestMedia = [...job.events].reverse().find((event) => event.step === "generating_media_assets");
+  const latestTts = [...job.events].reverse().find((event) => event.step === "generating_tts_assets");
+  const mediaFinished = latestMedia?.assetPhaseStatus === "completed"
+    || latestMedia?.assetPhaseStatus === "partial-failure";
+
+  // Image/video and TTS generation overlap in the worker. Keep the visual
+  // sequence stable: show media until that lane finishes, then move to TTS.
+  // This prevents media → TTS → media → TTS card animations from concurrent
+  // progress callbacks. Older stored events have no status and retain the
+  // previous current-step behavior.
+  if (latestMedia?.assetPhaseStatus === "running") return "classroom-media-assets";
+  if (mediaFinished && latestTts) return "classroom-tts-assets";
+  return job.step === "generating_tts_assets" ? "classroom-tts-assets" : "classroom-media-assets";
 }
 
 function parseAdaptiveMessage(message: string): { title?: string; progress?: string } {

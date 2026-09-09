@@ -148,6 +148,8 @@ export interface ImageGenerationConfig {
 export interface ImageGenerationOptions {
   /** Text prompt describing the desired image */
   prompt: string;
+  /** Cancel the provider request when the caller no longer needs the image. */
+  signal?: AbortSignal;
   /** Optional negative prompt to exclude undesired elements */
   negativePrompt?: string;
   /** Desired output width in pixels */
@@ -158,6 +160,10 @@ export interface ImageGenerationOptions {
   aspectRatio?: '16:9' | '4:3' | '1:1' | '9:16';
   /** Optional artistic style (must be supported by the chosen provider) */
   style?: string;
+  /** Allow providers to rewrite short prompts. Disable for tightly specified instructional art. */
+  promptExtend?: boolean;
+  /** Optional provider seed used to request a distinct, reproducible variation. */
+  seed?: number;
 }
 
 /**

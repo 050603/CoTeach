@@ -3,7 +3,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
@@ -51,6 +51,7 @@ import {
   DEFAULT_PBL_OUTCOME,
   normalizePblCourseConfig,
 } from "@/lib/pbl-course-config";
+import { resolvePreparationGenerationMode } from "@/lib/courses/preparation-navigation";
 import {
   buildPblCourseRequirement,
   buildCourseTeachingConstraints,
@@ -320,6 +321,7 @@ const SECTION_LABEL: Record<Section, string> = {
 
 export default function VerifyCoursePage() {
   const params = useParams<{ id: string }>();
+  const pathname = usePathname();
   const router = useRouter();
   const { user, updateCourse } = useSession();
   const course = useCourse(params?.id);
@@ -461,7 +463,11 @@ export default function VerifyCoursePage() {
   }
 
   const [flowStepKey, setFlowStepKey] = useState<PreparationStepKey>("base");
-  const [generationMode, setGenerationMode] = useState<"quick" | "detailed">("quick");
+  const [detailedModeRequested, setDetailedModeRequested] = useState(false);
+  const generationMode = resolvePreparationGenerationMode(pathname) === "detailed"
+    || detailedModeRequested
+    ? "detailed"
+    : "quick";
   // 知识图谱视图状态
   const [kgViewMode, setKgViewMode] = useState<"graph" | "list">("graph");
   const [kgSelectedNode, setKgSelectedNode] = useState<string | null>(null);
@@ -2735,7 +2741,7 @@ export default function VerifyCoursePage() {
     : undefined;
 
   function openDetailedMode() {
-    setGenerationMode("detailed");
+    setDetailedModeRequested(true);
   }
 
   return (
@@ -2826,7 +2832,7 @@ export default function VerifyCoursePage() {
                 </div>
                 <div className="border-t border-stone-200 bg-stone-100/70 p-4 lg:border-l lg:border-t-0 sm:p-5">
                   <div className="mb-2 flex items-center justify-between gap-3">
-                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-stone-500">课程封面</p>
+                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-stone-500">课堂封面</p>
                     <span className="text-xs text-stone-400">16:9</span>
                   </div>
                   <div className="overflow-hidden rounded-[10px] border border-stone-200 bg-white p-2 shadow-sm">

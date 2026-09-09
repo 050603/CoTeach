@@ -8,11 +8,13 @@ import type { Course } from "@/lib/session/types";
 import { userFacingStageLabel } from "@/lib/user-facing-labels";
 import { cn } from "@/lib/utils";
 
+export const DEFAULT_CLASSROOM_DATA_SIDEBAR_COLLAPSED = true;
+
 export function shouldShowClassroomDataSidebar(
   _stageKey: string | undefined,
-  focusMode: boolean,
+  collapsed: boolean,
 ): boolean {
-  return !focusMode;
+  return !collapsed;
 }
 
 export function deriveMakeStageLearningMetrics(course: Course) {

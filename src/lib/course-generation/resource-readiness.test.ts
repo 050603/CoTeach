@@ -5,6 +5,7 @@ import {
   findMissingTeachingToolResources,
   findMissingTtsResources,
   repairMissingTeachingToolResources,
+  summarizeGeneratedMediaReadiness,
 } from "./resource-readiness";
 
 const outline = {
@@ -33,6 +34,32 @@ const scene = {
 } as Scene;
 
 describe("course resource readiness", () => {
+  it("keeps an independently failed cover out of classroom media recovery", () => {
+    expect(summarizeGeneratedMediaReadiness({
+      failures: [],
+      enableImageGeneration: true,
+      enableVideoGeneration: false,
+      coverStatus: "failed",
+    })).toEqual({
+      missingRequiredImageCount: 0,
+      missingRequiredVideoCount: 0,
+      coverNeedsAttention: true,
+    });
+  });
+
+  it("still reports missing requested classroom media", () => {
+    expect(summarizeGeneratedMediaReadiness({
+      failures: [{ type: "image" }, { type: "video" }],
+      enableImageGeneration: true,
+      enableVideoGeneration: true,
+      coverStatus: "ready",
+    })).toEqual({
+      missingRequiredImageCount: 1,
+      missingRequiredVideoCount: 1,
+      coverNeedsAttention: false,
+    });
+  });
+
   it("reports a required planned action that is absent from the generated scene", () => {
     expect(findMissingTeachingToolResources([outline], [scene])).toMatchObject([{
       title: "概念关系讲解",

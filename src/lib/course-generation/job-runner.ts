@@ -54,6 +54,7 @@ import {
   auditCourseGeneratedResources,
   type CourseResourceIssue,
 } from "@/lib/course-generation/resource-audit-server";
+import { summarizeGeneratedMediaReadiness } from "@/lib/course-generation/resource-readiness";
 
 const log = createLogger("CourseGenerationWorker");
 const POLL_INTERVAL_MS = 1_500;
@@ -155,6 +156,7 @@ export type CourseGenerationJobEvent = {
   scenesGenerated: number;
   totalScenes: number;
   ts: number;
+  assetPhaseStatus?: ClassroomAssetGenerationProgress["status"];
 };
 
 let workerStarted = false;
@@ -317,6 +319,7 @@ async function persistWorkerPhase(
     progress: number;
     message: string;
     estimatedRemainingSeconds?: number;
+    assetPhaseStatus?: ClassroomAssetGenerationProgress["status"];
   },
 ): Promise<void> {
   const event: CourseGenerationJobEvent = {
@@ -326,6 +329,7 @@ async function persistWorkerPhase(
     scenesGenerated: job.scenesGenerated,
     totalScenes: job.totalScenes,
     ts: Date.now(),
+    assetPhaseStatus: input.assetPhaseStatus,
   };
   const updated = await contentGenerationJobs.update({
     where: { id: job.id },
@@ -836,10 +840,11 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           teacherScenes: split.teacherScenes,
           signal: controller.signal,
           onProgress: (progress) => serializeWorkerWrite(() => persistWorkerPhase(job, {
-              step: assetPhaseStep(progress),
-              progress: progress.status === "completed" ? 99 : 98,
-              message: progress.message,
-              estimatedRemainingSeconds: progress.phase === "persisting" ? 20 : 60,
+            step: assetPhaseStep(progress),
+            progress: progress.status === "completed" ? 99 : 98,
+            message: progress.message,
+            estimatedRemainingSeconds: progress.phase === "persisting" ? 20 : 60,
+            assetPhaseStatus: progress.status,
           })),
         });
       } catch (assetError) {
@@ -894,6 +899,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           progress: 99,
           message: progress.message,
           estimatedRemainingSeconds: 90,
+          assetPhaseStatus: progress.status,
         })),
       });
       resourceAudit = await auditCourseGeneratedResources(courseId);
@@ -903,14 +909,16 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         ? generationInput.enableImageGeneration !== false
         : generationInput.enableVideoGeneration === true,
     );
-    const missingRequiredImageCount = requiredMediaFailures.filter(
-      (failure) => failure.type === "image",
-    ).length + (
-      generationInput.enableImageGeneration !== false && coverStatus !== "ready" ? 1 : 0
-    );
-    const missingRequiredVideoCount = requiredMediaFailures.filter(
-      (failure) => failure.type === "video",
-    ).length;
+    const {
+      missingRequiredImageCount,
+      missingRequiredVideoCount,
+      coverNeedsAttention,
+    } = summarizeGeneratedMediaReadiness({
+      failures: requiredMediaFailures,
+      enableImageGeneration: generationInput.enableImageGeneration !== false,
+      enableVideoGeneration: generationInput.enableVideoGeneration === true,
+      coverStatus,
+    });
     if (missingRequiredImageCount > 0 || missingRequiredVideoCount > 0) {
       throw createCourseMediaGenerationIncompleteError({
         imageCount: missingRequiredImageCount,
@@ -922,9 +930,9 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       progress: 99,
       message: resourceAudit.issues.length > 0
         ? `课程主体已经完成，仍有 ${resourceAudit.issues.length} 项资源在自动重试后未就绪`
-        : coverStatus === "ready"
-          ? "课程封面、个性化学习资源与课堂素材已经就绪"
-          : "课堂资源已经就绪，课程封面需要稍后补充",
+        : coverNeedsAttention
+          ? "课堂资源已经就绪，课程封面需要稍后补充"
+          : "课程封面、个性化学习资源与课堂素材已经就绪",
       estimatedRemainingSeconds: 20,
     }));
 
@@ -933,7 +941,9 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       progress: 100,
       message: resourceAudit.issues.length > 0
         ? `课程主体已生成，${resourceAudit.issues.length} 项配套资源需要在预览页继续处理`
-        : "课程内容与配套资源已完整生成",
+        : coverNeedsAttention
+          ? "课程内容已完整生成，课程封面可稍后补充"
+          : "课程内容与配套资源已完整生成",
       scenesGenerated: split.studentSceneCount,
       totalScenes: Math.max(job.totalScenes, split.studentSceneCount),
       ts: Date.now(),

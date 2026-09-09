@@ -3,13 +3,14 @@
 
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, ChevronLeft, ChevronRight, Clock3, ClipboardList, Maximize2, Minimize2, Pause, Play, RefreshCw, UsersRound } from "lucide-react";
+import { BarChart3, ChevronLeft, ChevronRight, Clock3, ClipboardList, Maximize2, Minimize2, Pause, Play, Quote, RefreshCw, UserRound, UsersRound } from "lucide-react";
 import { SurveyWordCloud } from "@/components/platform/survey-word-cloud";
 import { teacherPlatformFetch } from "@/lib/platform/client";
 import { TeacherPlatformHeader, TeacherPlatformPage } from "@/components/platform/teacher-shell";
 
-type ChoiceQuestion = { id: string; title: string; type: "single-choice"; required: boolean; responseCount: number; options: Array<{ id: string; label: string; count: number; percentage: number }> };
-type TextQuestion = { id: string; title: string; type: "short-text"; required: boolean; responseCount: number; responses: string[]; terms: Array<{ label: string; value: number }> };
+type Respondent = { studentId: string; displayName: string };
+type ChoiceQuestion = { id: string; title: string; type: "single-choice" | "multiple-choice"; chartType: "donut" | "bar" | "column"; required: boolean; responseCount: number; options: Array<{ id: string; label: string; count: number; percentage: number; respondents: Respondent[] }> };
+type TextQuestion = { id: string; title: string; type: "short-text"; required: boolean; responseCount: number; responses: Array<Respondent & { content: string }>; terms: Array<{ label: string; value: number }> };
 type SurveyResult = {
   activity: { id: string; title: string; description?: string | null; isOpen: boolean; chapter: { id: string; title: string }; offering: { id: string; name: string } };
   analytics: { submittedCount: number; totalStudents: number; completionRate: number; questions: Array<ChoiceQuestion | TextQuestion> };
@@ -29,6 +30,21 @@ function choiceGradient(options: ChoiceQuestion["options"]) {
   return `conic-gradient(${stops.join(",")})`;
 }
 
+function ChoiceChart({ question, selectedOptionId, onSelect }: { question: ChoiceQuestion; selectedOptionId: string | null; onSelect: (optionId: string) => void }) {
+  if (question.chartType === "bar") return <div aria-label="选项比例条形图" className="survey-bar-chart" role="group">
+    {question.options.map((option, index) => <button aria-label={`${option.label}，${option.percentage}%，${option.count} 人`} aria-pressed={selectedOptionId === option.id} className={selectedOptionId === option.id ? "is-selected" : ""} onClick={() => onSelect(option.id)} type="button" key={option.id}>
+      <span><strong>{option.label}</strong><em>{option.percentage}%</em></span>
+      <i><b style={{ backgroundColor: COLORS[index % COLORS.length], width: `${option.percentage}%` }} /></i>
+    </button>)}
+  </div>;
+  if (question.chartType === "column") return <div aria-label="选项比例柱状图" className="survey-column-chart" role="group">
+    {question.options.map((option, index) => <button aria-label={`${option.label}，${option.percentage}%，${option.count} 人`} aria-pressed={selectedOptionId === option.id} className={selectedOptionId === option.id ? "is-selected" : ""} onClick={() => onSelect(option.id)} type="button" key={option.id}>
+      <strong>{option.percentage}%</strong><span><i style={{ backgroundColor: COLORS[index % COLORS.length], height: `${Math.max(option.percentage, option.count ? 5 : 1)}%` }} /></span><small>{option.label}</small>
+    </button>)}
+  </div>;
+  return <div className="survey-donut-wrap"><div className="survey-donut" style={{ background: choiceGradient(question.options) }}><div><strong>{question.responseCount}</strong><span>有效回答</span></div></div><small className="survey-chart-hint">点击右侧选项查看实名学生</small></div>;
+}
+
 export default function SurveyDashboardPage() {
   const { activityId } = useParams<{ activityId: string }>();
   const stageRef = useRef<HTMLDivElement>(null);
@@ -38,8 +54,9 @@ export default function SurveyDashboardPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [presentation, setPresentation] = useState(false);
-  const [autoPlay, setAutoPlay] = useState(true);
+  const [autoPlay, setAutoPlay] = useState(false);
   const [selectedTerm, setSelectedTerm] = useState<string | null>(null);
+  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true);
@@ -66,15 +83,18 @@ export default function SurveyDashboardPage() {
   useEffect(() => {
     const count = result?.analytics.questions.length ?? 0;
     if (!presentation || !autoPlay || count < 2) return;
-    const timer = window.setInterval(() => { setQuestionIndex((current) => (current + 1) % count); setSelectedTerm(null); }, 10_000);
+    const timer = window.setInterval(() => { setQuestionIndex((current) => (current + 1) % count); setSelectedTerm(null); setSelectedOptionId(null); }, 10_000);
     return () => window.clearInterval(timer);
   }, [autoPlay, presentation, result?.analytics.questions.length]);
 
   const questions = result?.analytics.questions ?? [];
   const current = questions[Math.min(questionIndex, Math.max(0, questions.length - 1))];
   const selectedResponses = useMemo(() => current?.type === "short-text" && selectedTerm
-    ? current.responses.filter((response) => response.toLocaleLowerCase("zh-CN").includes(selectedTerm.toLocaleLowerCase("zh-CN"))).slice(0, 3)
+    ? current.responses.filter((response) => response.content.toLocaleLowerCase("zh-CN").includes(selectedTerm.toLocaleLowerCase("zh-CN")))
     : [], [current, selectedTerm]);
+  const selectedOption = current?.type === "single-choice" || current?.type === "multiple-choice"
+    ? current.options.find((option) => option.id === selectedOptionId) ?? null
+    : null;
 
   async function togglePresentation() {
     if (presentation) {
@@ -85,7 +105,7 @@ export default function SurveyDashboardPage() {
     await stageRef.current?.requestFullscreen?.().catch(() => undefined);
   }
 
-  function selectQuestion(index: number) { setQuestionIndex(index); setSelectedTerm(null); }
+  function selectQuestion(index: number) { setQuestionIndex(index); setSelectedTerm(null); setSelectedOptionId(null); }
   function step(offset: number) {
     if (!questions.length) return;
     selectQuestion((questionIndex + offset + questions.length) % questions.length);
@@ -98,7 +118,7 @@ export default function SurveyDashboardPage() {
         <header className="survey-board-heading">
           <div className="min-w-0">
             <div className="survey-board-kicker">
-              <span>课堂问卷 · 实时简报</span>
+              <span>课堂问卷 · 实名数据简报</span>
               <span className={`survey-collection-state ${result?.activity.isOpen ? "is-live" : ""}`}>
                 <i aria-hidden="true" />
                 {result?.activity.isOpen ? "正在收集" : "已暂停收集"}
@@ -166,7 +186,7 @@ export default function SurveyDashboardPage() {
                     {questions.map((question, index) => (
                       <button aria-current={index === questionIndex ? "true" : undefined} className="survey-question-tab" onClick={() => selectQuestion(index)} type="button" key={question.id}>
                         <span className="survey-question-number">{String(index + 1).padStart(2, "0")}</span>
-                        <span className="survey-question-copy"><strong>{question.title}</strong><small>{question.type === "single-choice" ? "单项选择" : "简答观点"} · {question.responseCount} 份回答</small></span>
+                        <span className="survey-question-copy"><strong>{question.title}</strong><small>{question.type === "single-choice" ? "单项选择" : question.type === "multiple-choice" ? "多项选择" : "简答观点"} · {question.responseCount} 份回答</small></span>
                       </button>
                     ))}
                   </nav>
@@ -182,7 +202,7 @@ export default function SurveyDashboardPage() {
                 <section className="survey-insight-canvas survey-chart-enter" key={current?.id}>
                   <header className="survey-insight-heading">
                     <div>
-                      <p>问题 {String(questionIndex + 1).padStart(2, "0")} · {current?.type === "single-choice" ? "选择分布" : "观点聚合"}</p>
+                      <p>问题 {String(questionIndex + 1).padStart(2, "0")} · {current?.type === "short-text" ? "观点聚合" : current?.type === "multiple-choice" ? "多选分布" : "选择分布"}</p>
                       <h2>{current?.title}</h2>
                     </div>
                     <div className="survey-insight-meta">
@@ -197,23 +217,25 @@ export default function SurveyDashboardPage() {
                     </div>
                   </header>
 
-                  {current?.type === "single-choice" ? (
+                  {current?.type === "single-choice" || current?.type === "multiple-choice" ? (
                     <div className="survey-choice-layout">
-                      <div className="survey-donut-wrap">
-                        <div className="survey-donut" style={{ background: choiceGradient(current.options) }}>
-                          <div><strong>{current.responseCount}</strong><span>有效回答</span></div>
-                        </div>
-                      </div>
+                      <ChoiceChart question={current} selectedOptionId={selectedOptionId} onSelect={(optionId) => setSelectedOptionId((selected) => selected === optionId ? null : optionId)} />
                       <div className="survey-choice-list">
                         {current.options.map((option, index) => (
-                          <div className="survey-choice-row" key={option.id}>
+                          <button aria-pressed={selectedOptionId === option.id} className={`survey-choice-row ${selectedOptionId === option.id ? "is-selected" : ""}`} onClick={() => setSelectedOptionId((selected) => selected === option.id ? null : option.id)} type="button" key={option.id}>
                             <div>
                               <span className="survey-choice-label"><i style={{ backgroundColor: COLORS[index % COLORS.length] }} />{option.label}</span>
                               <strong>{option.percentage}% <small>{option.count} 人</small></strong>
                             </div>
                             <div className="survey-choice-track"><i className="survey-choice-bar" style={{ backgroundColor: COLORS[index % COLORS.length], width: `${option.percentage}%` }} /></div>
-                          </div>
+                          </button>
                         ))}
+                        <section aria-live="polite" className={`survey-choice-respondents ${selectedOption ? "is-visible" : ""}`}>
+                          {selectedOption ? <>
+                            <div className="survey-choice-respondents-heading"><div><UsersRound size={16} /><span>选择“{selectedOption.label}”的学生</span></div><strong>{selectedOption.respondents.length} 人</strong></div>
+                            {selectedOption.respondents.length ? <div className="survey-student-name-list">{selectedOption.respondents.map((student) => <span key={student.studentId}><UserRound size={14} />{student.displayName}</span>)}</div> : <p>当前没有学生选择此项。</p>}
+                          </> : <p>点击任一选项，查看选择该答案的实名学生名单。</p>}
+                        </section>
                       </div>
                     </div>
                   ) : current?.type === "short-text" ? (
@@ -232,7 +254,7 @@ export default function SurveyDashboardPage() {
                             </div>
                             <div className="survey-response-list">
                               {selectedResponses.length ? selectedResponses.map((response, index) => (
-                                <blockquote key={`${response}-${index}`}>{response}</blockquote>
+                                <blockquote key={`${response.studentId}-${index}`}><p>{response.content}</p><footer><Quote size={13} /><span>{response.displayName}</span></footer></blockquote>
                               )) : <p className="survey-response-empty">暂无包含该关键词的原回答。</p>}
                             </div>
                           </>
@@ -240,7 +262,7 @@ export default function SurveyDashboardPage() {
                           <div className="survey-response-placeholder">
                             <BarChart3 size={26} />
                             <p>选择一个关键词</p>
-                            <span>这里会展示相关的匿名原回答，帮助教师理解词频背后的真实观点。</span>
+                            <span>这里会展示相关的实名原回答，帮助教师理解词频背后的真实观点。</span>
                           </div>
                         )}
                       </aside>

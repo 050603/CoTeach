@@ -2,7 +2,10 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import type { AuthClaims } from "@/lib/auth/session";
 import { authenticateRequest } from "@/lib/auth/request-guards";
 import { getRequestedAuthRole, isAuthConfigured, type AuthRole } from "@/lib/auth/session";
-import { OFFERING_COVER_MEDIA_PREFIX } from "./classroom-cover";
+import {
+  OFFERING_COVER_MEDIA_PREFIX,
+  TEMPLATE_COVER_MEDIA_PREFIX,
+} from "./classroom-cover";
 
 export type PlatformDb = PrismaClient | Prisma.TransactionClient;
 
@@ -75,16 +78,22 @@ export async function findLegacyParticipation(db: PlatformDb, instanceId: string
 }
 
 /** Resolve the teaching view to its existing V2 template or classroom run. */
-export async function canAccessLegacyCourse(claims: AuthClaims, courseId: string, mode: "read" | "write" = "read"): Promise<boolean> {
-  const { prisma } = await import("@/lib/db/client");
-  const user = await getPlatformUser(claims, prisma); if (!user) return false;
-  const template = await prisma.classroomTemplate.findUnique({ where: { id: courseId }, select: { ownerId: true, status: true } });
-  if (template) return user.role === "teacher" && template.ownerId === user.id && template.status !== "ARCHIVED";
-  const instance = await prisma.classroomInstance.findUnique({ where: { id: courseId }, include: { activity: { include: { chapter: { include: { offering: true } } } } } });
+export async function canAccessLegacyCourse(claims: AuthClaims, courseId: string, mode: "read" | "write" = "read", db?: PlatformDb): Promise<boolean> {
+  const database = db ?? (await import("@/lib/db/client")).prisma;
+  const user = await getPlatformUser(claims, database); if (!user) return false;
+  const template = await database.classroomTemplate.findUnique({ where: { id: courseId }, select: { ownerId: true, status: true } });
+  if (template) return user.role === "teacher" && template.ownerId === user.id && template.status.toUpperCase() === "ACTIVE";
+  const offering = await database.courseOffering.findUnique({ where: { id: courseId }, select: { id: true } });
+  if (offering) {
+    if (user.role === "teacher") return Boolean(await database.courseTeacher.findFirst({ where: { offeringId: offering.id, userId: user.id } }));
+    if (mode === "write") return false;
+    return Boolean(await database.enrollment.findFirst({ where: { offeringId: offering.id, userId: user.id, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } }));
+  }
+  const instance = await database.classroomInstance.findUnique({ where: { id: courseId }, include: { activity: { include: { chapter: { include: { offering: true } } } } } });
   if (!instance) return false;
   const offeringId = instance.activity.chapter.offeringId;
-  if (user.role === "teacher") return Boolean(await prisma.courseTeacher.findFirst({ where: { offeringId, userId: user.id } }));
-  const participation = await prisma.classroomParticipation.findFirst({ where: { instanceId: courseId, enrollment: { userId: user.id, offeringId, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } }, include: { enrollment: true } });
+  if (user.role === "teacher") return Boolean(await database.courseTeacher.findFirst({ where: { offeringId, userId: user.id } }));
+  const participation = await database.classroomParticipation.findFirst({ where: { instanceId: courseId, enrollment: { userId: user.id, offeringId, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } }, include: { enrollment: true } });
   if (!participation) return false;
   return mode === "read" || (instance.status.toUpperCase() === "TEACHING" && participation.enrollment.status.toUpperCase() === "ACTIVE" && instance.activity.chapter.offering.status.toUpperCase() === "OPEN");
 }
@@ -113,6 +122,32 @@ export async function canReadOfferingCover(
   }));
 }
 
+export async function canReadTemplateCover(
+  claims: AuthClaims,
+  templateId: string,
+  db?: PlatformDb,
+): Promise<boolean> {
+  const database = db ?? (await import("@/lib/db/client")).prisma;
+  const user = await getPlatformUser(claims, database);
+  if (!user) return false;
+  if (user.role === "teacher") {
+    return Boolean(await database.classroomTemplate.findFirst({
+      where: { id: templateId, ownerId: user.id, status: { notIn: ["DELETED", "deleted"] } },
+      select: { id: true },
+    }));
+  }
+  return Boolean(await database.classroomParticipation.findFirst({
+    where: {
+      enrollment: {
+        userId: user.id,
+        status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] },
+      },
+      instance: { templateVersion: { templateId } },
+    },
+    select: { id: true },
+  }));
+}
+
 export function preferredMediaAuthRole(request: Request): AuthRole | undefined {
   const requested = getRequestedAuthRole(request);
   if (requested) return requested;
@@ -136,6 +171,11 @@ export async function authorizeLegacyClassroomRead(request: Request, classroomId
     const offeringId = classroomId.slice(OFFERING_COVER_MEDIA_PREFIX.length);
     if (offeringId && await canReadOfferingCover(auth.claims, offeringId)) return null;
     return Response.json({ code: "FORBIDDEN", message: "无权读取此课程封面" }, { status: 403 });
+  }
+  if (classroomId.startsWith(TEMPLATE_COVER_MEDIA_PREFIX)) {
+    const templateId = classroomId.slice(TEMPLATE_COVER_MEDIA_PREFIX.length);
+    if (templateId && await canReadTemplateCover(auth.claims, templateId)) return null;
+    return Response.json({ code: "FORBIDDEN", message: "无权读取此课堂封面" }, { status: 403 });
   }
   const { prisma } = await import("@/lib/db/client");
   const references = await prisma.classroomTemplateVersion.findMany({ where: { OR: [

@@ -19,8 +19,8 @@ const STATUS_TONE: Record<CourseStatus, string> = {
 };
 
 const STATUS_ACTION: Record<CourseStatus, { label: string; href: (c: Course) => string }> = {
-  draft: { label: "继续备课", href: (c) => `/teacher/prepare/${c.id}/verify` },
-  preparing: { label: "继续备课", href: (c) => `/teacher/prepare/${c.id}/verify` },
+  draft: { label: "继续备课", href: (c) => `/teacher/prepare/${c.id}/preview` },
+  preparing: { label: "继续备课", href: (c) => `/teacher/prepare/${c.id}/preview` },
   ready: { label: "开始授课", href: (c) => `/teacher/teach/${c.id}/setup` },
   teaching: { label: "进入教室", href: (c) => `/teacher/teach/${c.id}/classroom` },
   finished: { label: "查看报告", href: (c) => `/teacher/prepare/${c.id}/preview` },

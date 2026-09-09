@@ -15,6 +15,35 @@ describe('Qwen image throttling metadata', () => {
       { prompt: 'classroom illustration' },
     )).rejects.toMatchObject({ statusCode: 429, retryAfterMs: 30_000 });
   });
+
+  it('forwards cover controls and cancellation to Qwen Image 2.0 Pro', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      output: {
+        choices: [{ message: { content: [{ image: 'https://cdn.example.test/cover.png' }] } }],
+      },
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    await generateWithQwenImage(
+      { providerId: 'qwen-image', apiKey: 'test-key', model: 'qwen-image-2.0-pro' },
+      {
+        prompt: 'specific course scene',
+        width: 2688,
+        height: 1536,
+        promptExtend: false,
+        seed: 1_234_567,
+        signal: controller.signal,
+      },
+    );
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request.signal).toBe(controller.signal);
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      model: 'qwen-image-2.0-pro',
+      parameters: { prompt_extend: false, seed: 1_234_567, size: '2688*1536' },
+    });
+  });
 });
 
 describe('Qwen image connectivity security', () => {

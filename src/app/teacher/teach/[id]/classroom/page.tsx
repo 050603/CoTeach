@@ -19,6 +19,7 @@ import { DashboardShell, Avatar } from "@/components/dashboard-shell";
 import { StageGateDialog } from "@/components/classroom/classroom-chrome";
 import { TeacherStageView } from "@/components/views/teacher/stage-dispatcher";
 import { TeacherStageDashboard } from "@/components/classroom/teacher-stage-dashboard";
+import { TeacherClassroomPulse } from "@/components/classroom/teacher-classroom-pulse";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogTitle, Button, FlowActionBar, SaveStatus } from "@/components/ui";
 import { useSession, useCourse, useHydrated } from "@/lib/session/store";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,7 @@ import { normalizeInviteCode } from "@/lib/session/invite-code";
 import type { TeacherStageFocus } from "@/lib/classroom/teacher-dashboard-metrics";
 import {
   ClassroomToolPopover,
+  DEFAULT_CLASSROOM_DATA_SIDEBAR_COLLAPSED,
   formatClock,
   shouldShowClassroomDataSidebar,
   TimerPanel,
@@ -70,7 +72,7 @@ export default function TeachClassroomPage() {
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState<string>();
   const [endDialogOpen, setEndDialogOpen] = useState(false);
-  const [focusMode, setFocusMode] = useState(false);
+  const [dataSidebarCollapsed, setDataSidebarCollapsed] = useState(DEFAULT_CLASSROOM_DATA_SIDEBAR_COLLAPSED);
   const [dashboardFocus, setDashboardFocus] = useState<TeacherStageFocus>();
   const showcaseController = useShowcasePresentation(
     course?.stages[course.currentStageIndex]?.key === "showcase" ? course.id : undefined,
@@ -145,7 +147,7 @@ export default function TeachClassroomPage() {
   }
 
   const currentStage = course.stages[course.currentStageIndex];
-  const showDataSidebar = shouldShowClassroomDataSidebar(currentStage?.key, focusMode);
+  const showDataSidebar = shouldShowClassroomDataSidebar(currentStage?.key, dataSidebarCollapsed);
   const canPrev = course.currentStageIndex > 0;
   const canNext = course.currentStageIndex < course.stages.length - 1;
   const previousStage = canPrev ? course.stages[course.currentStageIndex - 1] : undefined;
@@ -387,17 +389,26 @@ export default function TeachClassroomPage() {
         </div>
       </div>
 
-      {/* 双栏布局：中主区 + 右数据面板 */}
+      {/* 主显示区；班级概览按需展开。 */}
       <div className={cn("grid gap-3 pb-8", showDataSidebar && "xl:pr-[21.25rem]")}>
         {/* 中间：阶段控制 + 横幅 + 阶段视图 */}
         <div className="min-w-0 space-y-3">
-          {course.uiState?.aiAnalysisPending ? (
+          {showDataSidebar && course.uiState?.aiAnalysisPending ? (
             <div className="inline-flex items-center gap-2 rounded-full bg-[var(--pbl-warning-soft)] px-3 py-1 text-xs font-semibold text-[var(--pbl-warning)] ring-1 ring-orange-100">
               <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--pbl-warning)]" />
               学生有新更新，请刷新 AI 建议
             </div>
           ) : null}
 
+
+          {currentStage ? (
+            <TeacherClassroomPulse
+              course={course}
+              degraded={presence.degraded}
+              showcaseData={showcaseController.data}
+              stageKey={currentStage.key}
+            />
+          ) : null}
 
           {currentStage ? (
             <section
@@ -421,9 +432,10 @@ export default function TeachClassroomPage() {
           <div className="relative max-xl:fixed max-xl:bottom-3 max-xl:left-3 max-xl:right-3 max-xl:z-40 max-xl:h-[min(70dvh,560px)] xl:fixed xl:bottom-[4.5rem] xl:right-0 xl:top-16 xl:z-20 xl:w-[21.25rem] min-[1920px]:right-[4vw]">
             <aside className="flex h-full flex-col overflow-hidden rounded-2xl border border-blue-100 bg-white/95 shadow-[0_18px_50px_rgba(30,64,175,0.10)] backdrop-blur">
               <TeacherStageDashboard
+                active={showDataSidebar}
                 course={course}
                 degraded={presence.degraded}
-                onCollapse={() => setFocusMode(true)}
+                onCollapse={() => setDataSidebarCollapsed(true)}
                 onFocus={setDashboardFocus}
                 onSelectStage={requestStage}
                 showcaseData={showcaseController.data}
@@ -439,7 +451,7 @@ export default function TeachClassroomPage() {
           aria-label="显示班级概览"
           aria-expanded="false"
           className="fixed right-0 top-1/2 z-40 grid h-14 w-7 -translate-y-1/2 place-items-center rounded-l-xl border border-r-0 border-blue-200 bg-white/95 text-blue-500 shadow-[-6px_0_18px_rgba(30,64,175,0.12)] backdrop-blur transition hover:w-8 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
-          onClick={() => setFocusMode(false)}
+          onClick={() => setDataSidebarCollapsed(false)}
           title="展开班级概览"
           type="button"
         >

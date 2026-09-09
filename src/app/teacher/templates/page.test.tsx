@@ -31,12 +31,31 @@ describe("teacher course library", () => {
     expect(navigation.push).toHaveBeenCalledWith("/teacher/prepare/quick-course/verify");
     expect(screen.queryByRole("link", { name: "完整五阶段备课" })).toBeNull();
   });
-  it("routes full PBL templates to the existing preparation editor", async () => {
+  it("opens generated PBL courses and continue-preparation actions in the publish center", async () => {
     const snapshot = encodePblTemplate(createPblTemplateCourse("pbl", { name: "五阶段项目" }));
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{ ...template, id: "pbl", title: "五阶段项目", versions: [{ version: 1, snapshot }] }] }) });
     render(<TeacherTemplatesPage />);
-    expect((await screen.findByRole("link", { name: "继续备课" })).getAttribute("href")).toBe("/teacher/prepare/pbl/verify");
+    expect((await screen.findByRole("link", { name: "打开课程 五阶段项目" })).getAttribute("href")).toBe("/teacher/prepare/pbl/preview");
+    expect(screen.getByRole("link", { name: "继续备课" }).getAttribute("href")).toBe("/teacher/prepare/pbl/preview");
     expect(screen.queryByRole("link", { name: "完整五阶段备课" })).toBeNull();
+  });
+  it("shows the latest generated classroom cover on its course-library card", async () => {
+    const coverImageUrl = "/api/openmaic/classroom-media/template-cover-pbl/media/classroom-cover-v2.webp";
+    const snapshot = encodePblTemplate(createPblTemplateCourse("pbl", {
+      name: "人工智能教学法",
+      coverImageUrl,
+    }));
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{
+      ...template,
+      id: "pbl",
+      title: "人工智能教学法",
+      versions: [{ version: 2, snapshot }],
+    }] }) });
+
+    render(<TeacherTemplatesPage />);
+
+    expect(await screen.findByRole("img", { name: "人工智能教学法课程封面" }))
+      .toHaveAttribute("src", coverImageUrl);
   });
   it("requires confirmation before archiving a reusable course", async () => {
     render(<TeacherTemplatesPage />); await screen.findByRole("heading", { name: "雨水收集" });
@@ -44,5 +63,21 @@ describe("teacher course library", () => {
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "确认归档" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/platform/templates/template-1/versions", { method: "DELETE" }));
+  });
+  it("restores an archived course", async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{ ...template, status: "ARCHIVED" }] }) });
+    render(<TeacherTemplatesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "已归档" }));
+    fireEvent.click(await screen.findByRole("button", { name: "恢复 雨水收集" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/platform/templates/template-1", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ action: "restore" }) })));
+  });
+  it("requires confirmation before deleting an archived course", async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{ ...template, status: "ARCHIVED" }] }) });
+    render(<TeacherTemplatesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "已归档" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除 雨水收集" }));
+    expect(fetchMock.mock.calls.some(([url]) => url === "/api/platform/templates/template-1")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/platform/templates/template-1", { method: "DELETE" }));
   });
 });

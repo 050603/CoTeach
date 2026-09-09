@@ -1,10 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
 
 const mocks = vi.hoisted(() => ({
   updateCourse: vi.fn(),
   requestCourseCoverImage: vi.fn(() => new Promise<string | null>(() => undefined)),
+  uploadCourseCoverImage: vi.fn(() => new Promise<string | null>(() => undefined)),
 }));
 
 vi.mock("@/lib/session/store", () => ({
@@ -13,6 +14,7 @@ vi.mock("@/lib/session/store", () => ({
 
 vi.mock("@/lib/course-cover", () => ({
   requestCourseCoverImage: mocks.requestCourseCoverImage,
+  uploadCourseCoverImage: mocks.uploadCourseCoverImage,
 }));
 
 import { ProjectCoverImage } from "./visuals";
@@ -41,6 +43,10 @@ const course = {
 } satisfies Course;
 
 describe("ProjectCoverImage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("keeps the current cover visible with a blurred regeneration status", async () => {
     render(<ProjectCoverImage allowGenerate course={course} />);
 
@@ -49,5 +55,26 @@ describe("ProjectCoverImage", () => {
     expect(await screen.findByText("正在重新生成")).toBeTruthy();
     expect(screen.getByRole("img", { name: "人工智能基础" }).className).toContain("blur-[7px]");
     expect((screen.getByRole("button", { name: "重新生成封面" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("offers a teacher upload action and sends the selected image", async () => {
+    mocks.uploadCourseCoverImage.mockResolvedValueOnce("/uploaded-cover.webp");
+    const { container } = render(<ProjectCoverImage allowGenerate course={course} />);
+    const file = new File(["image"], "cover.jpg", { type: "image/jpeg" });
+
+    fireEvent.click(screen.getByRole("button", { name: "上传封面图片" }));
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => expect(mocks.uploadCourseCoverImage).toHaveBeenCalledWith(
+      "course-1",
+      file,
+      expect.any(AbortSignal),
+    ));
+    expect(await screen.findByRole("img", { name: "人工智能基础" })).toHaveAttribute(
+      "src",
+      "/uploaded-cover.webp",
+    );
   });
 });

@@ -17,7 +17,7 @@ export async function loadCourse(courseId: string, db: Prisma.TransactionClient 
 export function stateFor(courses: Course[]): SessionState { return { ...initialSessionState(), courses, hydrated: true, updatedAt: new Date().toISOString() }; }
 export async function loadSessionState(ownerId?: string): Promise<SessionState> {
   const [templates, instances] = await Promise.all([
-    prisma.classroomTemplate.findMany({ where: { ...(ownerId ? { ownerId } : {}), status: { not: "ARCHIVED" } }, select: { id: true } }),
+    prisma.classroomTemplate.findMany({ where: { ...(ownerId ? { ownerId } : {}), status: { notIn: ["ARCHIVED", "archived", "DELETED", "deleted"] } }, select: { id: true } }),
     prisma.classroomInstance.findMany({ where: ownerId ? { activity: { chapter: { offering: { teachers: { some: { userId: ownerId } } } } } } : {}, select: { id: true } }),
   ]);
   const courses = await Promise.all([...templates, ...instances].map(t => loadCourse(t.id)));

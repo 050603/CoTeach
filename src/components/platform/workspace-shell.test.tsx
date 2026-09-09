@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const route = vi.hoisted(() => ({ pathname: "/teacher/classes" }));
 vi.mock("next/navigation", () => ({ usePathname: () => route.pathname }));
@@ -8,8 +8,10 @@ vi.mock("next/navigation", () => ({ usePathname: () => route.pathname }));
 import { StudentShell } from "./student-shell";
 import { TeacherPlatformHeader, TeacherPlatformPage } from "./teacher-shell";
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("platform workspace shells", () => {
-  it("puts the teacher return action in the sidebar without a top bar", () => {
+  it("puts teacher navigation and the contextual return action in a light top bar", () => {
     route.pathname = "/teacher/templates/new";
     render(
       <TeacherPlatformPage>
@@ -18,10 +20,48 @@ describe("platform workspace shells", () => {
       </TeacherPlatformPage>,
     );
 
-    expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+    expect(screen.getByRole("banner")).toBeInTheDocument();
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "返回课程库" })).toHaveAttribute("href", "/teacher/templates");
+    expect(screen.getByRole("link", { name: "课程库" })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText("旧面包屑")).not.toBeInTheDocument();
     expect(screen.queryByText("教师工作空间")).not.toBeInTheDocument();
+    expect(screen.queryByText("让学习真正发生")).not.toBeInTheDocument();
+  });
+
+  it("shows the signed-in teacher account and common account actions", async () => {
+    route.pathname = "/teacher/classes";
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ user: { role: "teacher", displayName: "李老师", username: "teacher.li" } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: "暂时无法退出" }), { status: 500 }));
+    vi.stubGlobal("fetch", fetcher);
+    render(<TeacherPlatformHeader active="classes" />);
+
+    const account = await screen.findByRole("button", { name: "教师账号：李老师" });
+    expect(account).toHaveTextContent("李老师");
+    expect(account).toHaveTextContent("@teacher.li");
+    expect(screen.queryByRole("link", { name: "AI 设置" })).toBeNull();
+    fireEvent.pointerDown(account, { button: 0, ctrlKey: false });
+    expect(await screen.findByText("账号：teacher.li")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "个人中心" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "创建教师账号" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "退出登录" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/auth/logout", expect.objectContaining({ method: "POST", headers: { "X-OpenPBL-Role": "teacher" } })));
+    expect(await screen.findByRole("alert")).toHaveTextContent("退出失败，请重试");
+  });
+
+  it("keeps course pages on the same top-navigation layout", () => {
+    route.pathname = "/teacher/classes/course-1";
+    render(
+      <TeacherPlatformPage compactNav>
+        <TeacherPlatformHeader compact active="classes" />
+      </TeacherPlatformPage>,
+    );
+
+    expect(screen.getByRole("main")).not.toHaveClass("pbl-workspace-teacher");
+    expect(screen.getByRole("banner")).toHaveAttribute("data-compact", "true");
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    expect(screen.queryByText("让学习真正发生")).not.toBeInTheDocument();
   });
 
   it("uses a supplied parent route for dynamic teacher pages", () => {
@@ -40,7 +80,7 @@ describe("platform workspace shells", () => {
     route.pathname = "/teacher/templates";
     render(<TeacherPlatformHeader active="templates" />);
 
-    expect(screen.getByRole("link", { name: "返回课程系列" })).toHaveAttribute("href", "/teacher/classes");
+    expect(screen.getByRole("link", { name: "返回教学班" })).toHaveAttribute("href", "/teacher/classes");
   });
 
   it("returns from course members to the owning course", () => {
@@ -53,7 +93,8 @@ describe("platform workspace shells", () => {
     route.pathname = "/student/courses/course-1";
     render(<StudentShell>课程内容</StudentShell>);
 
-    expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+    expect(screen.getByRole("banner")).toBeInTheDocument();
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "返回我的课程" })).toHaveAttribute("href", "/student?all=1");
     expect(screen.queryByText("学生学习空间")).not.toBeInTheDocument();
     expect(screen.getByText("课程内容")).toBeInTheDocument();

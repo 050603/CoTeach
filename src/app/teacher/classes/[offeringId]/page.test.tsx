@@ -10,6 +10,20 @@ let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   push.mockReset();
   fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+    if (
+      url === "/api/platform/offerings/course-1/cover"
+      && (options?.method === "POST" || options?.method === "PUT")
+    ) {
+      return new Response(JSON.stringify({
+        offering: {
+          ...offering,
+          version: 2,
+          coverImageUrl: options.method === "POST"
+            ? "/api/openmaic/classroom-media/offering-course-1/media/redrawn.webp"
+            : "/api/openmaic/classroom-media/offering-course-1/media/uploaded.webp",
+        },
+      }));
+    }
     if (options?.method) return new Response(JSON.stringify({ success: true }));
     return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [] } : { offerings: [offering] }));
   });
@@ -18,9 +32,19 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("课程章节管理", () => {
+  it("renders chapters as one continuous directory instead of nested cards", async () => {
+    const { container } = render(<Page />);
+    await screen.findByRole("heading", { name: "设计思维" });
+    expect(container.querySelectorAll(".pbl-teacher-chapter-list")).toHaveLength(1);
+    expect(container.querySelectorAll(".pbl-teacher-chapter")).toHaveLength(1);
+    expect(container.querySelector(".pbl-chapter-card")).toBeNull();
+  });
   it("locks a chapter in its directory with optimistic version protection", async () => {
     render(<Page />);
-    fireEvent.click(await screen.findByRole("button", { name: "锁定章节" }));
+    const access = await screen.findByRole("button", { name: "锁定章节" });
+    expect(access).toHaveTextContent("已解锁");
+    expect(screen.getAllByText("已解锁")).toHaveLength(1);
+    fireEvent.click(access);
     await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/chapters/chapter-1", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ isOpen: false, version: 2 }) })));
     expect(await screen.findByText("章节已锁定")).toBeTruthy();
   });
@@ -35,7 +59,7 @@ describe("课程章节管理", () => {
     fireEvent.change(screen.getByLabelText("第 1 题选项 2"), { target: { value: "公共交通" } });
     fireEvent.click(screen.getByRole("button", { name: "添加题目" }));
     fireEvent.change(screen.getByLabelText("第 2 题题目内容"), { target: { value: "你有哪些相关经验？" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "添加到章节" }));
     await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/offerings/course-1/chapters/chapter-1/activities", expect.objectContaining({ method: "POST" })));
     const request = fetcher.mock.calls.find(([url, options]) => url === "/api/platform/offerings/course-1/chapters/chapter-1/activities" && options?.method === "POST");
     const body = JSON.parse(String(request?.[1]?.body));
@@ -50,16 +74,142 @@ describe("课程章节管理", () => {
     fireEvent.change(screen.getByLabelText("内容类型"), { target: { value: "Assignment" } });
     fireEvent.change(screen.getByLabelText("标题"), { target: { value: "调研报告" } });
     fetcher.mockImplementationOnce(async () => new Response(JSON.stringify({ message: "课程已被其他教师更新" }), { status: 409 }));
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "添加到章节" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("课程已被其他教师更新");
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+  it("does not offer archived courses when adding classroom content", async () => {
+    fetcher.mockImplementation(async (url: string) => new Response(JSON.stringify(
+      url === "/api/platform/templates"
+        ? { templates: [{ id: "archived", title: "已归档教案", status: "ARCHIVED", versions: [{ id: "version", version: 1, status: "published" }] }] }
+        : { offerings: [offering] },
+    )));
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("button", { name: "添加学习内容" }));
+    expect(screen.queryByRole("option", { name: /已归档教案/ })).toBeNull();
+    expect(screen.getByText("课程库暂无可用教案")).toBeInTheDocument();
+  });
+  it("uploads a PDF and saves it as a file reference", async () => {
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url === "/api/uploads") return new Response(JSON.stringify({ id: "8f31b270-b23d-4ec1-bd2b-8543210bcf88", url: "/api/uploads/8f31b270-b23d-4ec1-bd2b-8543210bcf88", fileName: "观察方法.pdf", size: "1.2 MB" }), { status: 201 });
+      if (options?.method) return new Response(JSON.stringify({ activity: { id: "resource" } }), { status: 201 });
+      return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [] } : { offerings: [offering] }));
+    });
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("button", { name: "添加学习内容" }));
+    fireEvent.change(screen.getByLabelText("内容类型"), { target: { value: "Resource" } });
+    fireEvent.change(screen.getByLabelText("标题"), { target: { value: "社区观察方法" } });
+    fireEvent.click(screen.getByRole("button", { name: "PDF 文件" }));
+    fireEvent.change(screen.getByLabelText("上传 PDF 文档"), { target: { files: [new File(["%PDF-1.7"], "观察方法.pdf", { type: "application/pdf" })] } });
+    fireEvent.submit(screen.getByRole("dialog").querySelector("form")!);
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/uploads", expect.objectContaining({ method: "POST", body: expect.any(FormData) })));
+    const activityRequest = fetcher.mock.calls.find(([url]) => url === "/api/platform/offerings/course-1/chapters/chapter-1/activities");
+    const body = JSON.parse(String(activityRequest?.[1]?.body));
+    expect(body.config).toMatchObject({ resourceKind: "file", fileId: "8f31b270-b23d-4ec1-bd2b-8543210bcf88", fileName: "观察方法.pdf", url: "/api/uploads/8f31b270-b23d-4ec1-bd2b-8543210bcf88" });
+  });
+  it("manages course-level links and PDF files from course settings", async () => {
+    vi.stubGlobal("crypto", {
+      getRandomValues: (array: Uint8Array) => {
+        array.fill(7);
+        return array;
+      },
+    });
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url === "/api/uploads") return new Response(JSON.stringify({ id: "8f31b270-b23d-4ec1-bd2b-8543210bcf88", url: "/api/uploads/8f31b270-b23d-4ec1-bd2b-8543210bcf88" }), { status: 201 });
+      if (options?.method) return new Response(JSON.stringify({ success: true }));
+      return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [] } : { offerings: [offering] }));
+    });
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("button", { name: /课程设置/ }));
+    fireEvent.click(screen.getByRole("button", { name: "添加链接" }));
+    fireEvent.change(screen.getByLabelText("链接标题"), { target: { value: "延伸阅读" } });
+    fireEvent.change(screen.getByLabelText("参考资料链接"), { target: { value: "https://example.test/reading" } });
+    fireEvent.change(screen.getByLabelText("上传课程参考资料 PDF"), { target: { files: [new File(["%PDF-1.7"], "课程手册.pdf", { type: "application/pdf" })] } });
+    fireEvent.submit(screen.getByRole("dialog").querySelector("form")!);
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/uploads", expect.objectContaining({ method: "POST", body: expect.any(FormData) })));
+    const settingsRequest = fetcher.mock.calls.find(([url, options]) => url === "/api/platform/offerings/course-1" && options?.method === "PATCH");
+    expect(JSON.parse(String(settingsRequest?.[1]?.body))).toMatchObject({ referenceLinks: [{ title: "延伸阅读", url: "https://example.test/reading" }] });
   });
   it("generates the course cover from the course homepage", async () => {
     render(<Page />);
     fireEvent.click(await screen.findByRole("tab", { name: "课程主页" }));
-    fireEvent.click(screen.getByRole("button", { name: "AI 生成课程封面" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI 生成" }));
     await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/offerings/course-1/cover", expect.objectContaining({ method: "POST" })));
     expect(await screen.findByText("课程封面已生成")).toBeInTheDocument();
+  });
+  it("shows the newly returned cover immediately instead of reloading a stale URL", async () => {
+    const oldCover = "/api/openmaic/classroom-media/offering-course-1/media/old-cover.webp";
+    const newCover = "/api/openmaic/classroom-media/offering-course-1/media/new-cover-unique.webp";
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url === "/api/platform/offerings/course-1/cover" && options?.method === "POST") {
+        return new Response(JSON.stringify({
+          offering: { ...offering, version: 5, coverImageUrl: newCover },
+        }));
+      }
+      return new Response(JSON.stringify(
+        url === "/api/platform/templates"
+          ? { templates: [] }
+          : { offerings: [{ ...offering, version: 4, coverImageUrl: oldCover }] },
+      ));
+    });
+
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("tab", { name: "课程主页" }));
+    expect(screen.getByRole("img", { name: "设计思维课程封面" })).toHaveAttribute("src", oldCover);
+    fireEvent.click(screen.getByRole("button", { name: "AI 重绘" }));
+
+    await waitFor(() => expect(
+      screen.getByRole("img", { name: "设计思维课程封面" }),
+    ).toHaveAttribute("src", newCover));
+    expect(await screen.findByText("课程封面已重新生成")).toBeInTheDocument();
+    expect(fetcher.mock.calls.filter(([url]) => url === "/api/platform/offerings")).toHaveLength(1);
+  });
+  it("uploads a teacher-selected course cover from the course homepage", async () => {
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("tab", { name: "课程主页" }));
+    const file = new File(["image"], "cover.webp", { type: "image/webp" });
+    fireEvent.change(screen.getByLabelText("选择课程封面图片"), { target: { files: [file] } });
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith(
+      "/api/platform/offerings/course-1/cover",
+      expect.objectContaining({ method: "PUT", body: expect.any(FormData) }),
+    ));
+    expect(await screen.findByText("课程封面已上传")).toBeInTheDocument();
+  });
+  it("moves chapter name editing into the chapter more menu", async () => {
+    render(<Page />);
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "发现问题更多操作" }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "编辑章节名称" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText("章节名称")).toHaveValue("发现问题");
+  });
+  it("shows the invitation code in a wide copy dialog with success feedback", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (options?.method) return new Response(JSON.stringify({ success: true }));
+      return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [] } : { offerings: [{ ...offering, invitation: { code: "A7B9C2" } }] }));
+    });
+    render(<Page />);
+    const invitation = await screen.findByRole("button", { name: /学生邀请码/ });
+    expect(screen.queryByDisplayValue("A7B9C2")).toBeNull();
+    fireEvent.click(invitation);
+    expect(screen.getByRole("dialog")).toHaveClass("pbl-invitation-dialog");
+    expect(screen.getByLabelText("学生邀请码")).toHaveValue("A7B9C2");
+    fireEvent.click(screen.getByRole("button", { name: "复制邀请码" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("A7B9C2"));
+    expect(await screen.findByText("邀请码已复制")).toBeInTheDocument();
+  });
+  it("keeps the invitation code selectable if clipboard copy fails", async () => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (options?.method) return new Response(JSON.stringify({ success: true }));
+      return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [] } : { offerings: [{ ...offering, invitation: { code: "A7B9C2" } }] }));
+    });
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("button", { name: /学生邀请码/ }));
+    fireEvent.click(screen.getByRole("button", { name: "复制邀请码" }));
+    expect(await screen.findByText("复制失败，请手动选择邀请码")).toBeInTheDocument();
+    expect(screen.getByLabelText("学生邀请码")).toHaveAttribute("readonly");
   });
 });
 
@@ -68,15 +218,35 @@ describe("课堂主入口", () => {
   function classrooms(status?: string, published = true) {
     fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
       if (options?.method) return new Response(JSON.stringify({ instance: { id: "new-run", status: "scheduled" } }));
-      return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [{ id: "template", title: "课堂教案", versions: [{ id: "version", version: 1, status: published ? "published" : "draft" }] }] } : { offerings: [{ ...offering, chapters: [{ ...offering.chapters[0], activities: [{ id: "activity", title: "项目课堂", type: "Classroom", isOpen: true, templateId: "template", instances: status ? [{ id: "run", status }] : [] }] }] }] }));
+      return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [{ id: "template", title: "课堂教案", status: "ACTIVE", versions: [{ id: "version", version: 1, status: published ? "published" : "draft" }] }] } : { offerings: [{ ...offering, chapters: [{ ...offering.chapters[0], activities: [{ id: "activity", title: "项目课堂", type: "Classroom", isOpen: true, templateId: "template", instances: status ? [{ id: "run", status }] : [] }] }] }] }));
     });
   }
   it.each([["scheduled", "进入课堂", "/teacher/teach/run/setup"], ["teaching", "继续授课", "/teacher/teach/run/setup?enter=1"], ["finished", "查看课堂记录", "/teacher/classrooms/run"]])("routes %s with one teaching entry", async (status, label, href) => {
     classrooms(status); render(<Page />);
-    expect(await screen.findByRole("link", { name: label })).toHaveAttribute("href", href);
+    const entry = await screen.findByRole("link", { name: label });
+    expect(entry).toHaveAttribute("href", href);
+    expect(entry).toHaveClass("pbl-row-secondary-action");
+    expect(entry.firstElementChild?.tagName.toLowerCase()).toBe("svg");
     expect(screen.queryByRole("button", { name: "开始课堂" })).toBeNull();
     expect(screen.queryByRole("button", { name: "结束课堂" })).toBeNull();
     expect(screen.queryByRole("button", { name: "配置" })).toBeNull();
+  });
+  it("keeps classroom and dashboard actions icon-first with the same control structure", async () => {
+    fetcher.mockImplementation(async (url: string) => new Response(JSON.stringify(
+      url === "/api/platform/templates"
+        ? { templates: [{ id: "template", title: "课堂教案", status: "ACTIVE", versions: [{ id: "version", version: 1, status: "published" }] }] }
+        : { offerings: [{ ...offering, chapters: [{ ...offering.chapters[0], activities: [
+          { id: "activity", title: "项目课堂", type: "Classroom", isOpen: true, templateId: "template", instances: [{ id: "run", status: "teaching" }] },
+          { id: "survey", title: "课堂反馈", type: "Form", isOpen: true, instances: [] },
+        ] }] }] },
+    )));
+    render(<Page />);
+    const classroom = await screen.findByRole("link", { name: "继续授课" });
+    const dashboard = screen.getByRole("link", { name: "数据看板" });
+    expect(classroom).toHaveClass("pbl-row-secondary-action");
+    expect(dashboard).toHaveClass("pbl-row-secondary-action");
+    expect(classroom.firstElementChild?.tagName.toLowerCase()).toBe("svg");
+    expect(dashboard.firstElementChild?.tagName.toLowerCase()).toBe("svg");
   });
   it("creates a scheduled run then opens setup without a start request", async () => {
     classrooms(); render(<Page />);

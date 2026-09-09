@@ -1,15 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, BookOpen, Layers3, Settings2 } from "lucide-react";
+import { ArrowLeft, BookOpen, ChevronDown, Layers3, LogOut, Settings2, UserPlus } from "lucide-react";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { PraixisLogo } from "@/components/brand/praixis-logo";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 type WorkspaceNavProps = {
   role: "teacher" | "student";
   active?: "classes" | "templates" | "settings";
   backHref?: string;
   backLabel?: string;
+  compact?: boolean;
+};
+
+type TeacherIdentity = {
+  displayName: string;
+  username: string;
 };
 
 function defaultBackTarget(pathname: string, role: WorkspaceNavProps["role"]) {
@@ -22,37 +37,105 @@ function defaultBackTarget(pathname: string, role: WorkspaceNavProps["role"]) {
     return { href: "/teacher/templates", label: "返回课程库" };
   }
   if (pathname === "/teacher/templates" || pathname === "/teacher/settings") {
-    return { href: "/teacher/classes", label: "返回课程系列" };
+    return { href: "/teacher/classes", label: "返回教学班" };
   }
   const memberPage = pathname.match(/^\/teacher\/classes\/([^/]+)\/students$/);
   if (memberPage) {
     return { href: `/teacher/classes/${memberPage[1]}`, label: "返回课程" };
   }
   if (pathname.startsWith("/teacher/classes/") || pathname.startsWith("/teacher/classrooms/") || pathname.startsWith("/teacher/participations/")) {
-    return { href: "/teacher/classes", label: "返回课程系列" };
+    return { href: "/teacher/classes", label: "返回教学班" };
   }
   return { href: "/", label: "返回平台首页" };
 }
 
-export function WorkspaceNav({ role, active = "classes", backHref, backLabel }: WorkspaceNavProps) {
+export function WorkspaceNav({ role, active = "classes", backHref, backLabel, compact = false }: WorkspaceNavProps) {
   const pathname = usePathname();
   const teacher = role === "teacher";
+  const [identity, setIdentity] = useState<TeacherIdentity | null>(null);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [accountError, setAccountError] = useState("");
+
+  useEffect(() => {
+    if (!teacher) return;
+    const controller = new AbortController();
+    void fetch("/api/auth/me", {
+      cache: "no-store",
+      headers: { "X-OpenPBL-Role": "teacher" },
+      signal: controller.signal,
+    }).then(async (response) => {
+      if (!response.ok) return;
+      const data = await response.json() as { user?: { role?: string; displayName?: string; username?: string } | null };
+      if (data.user?.role === "teacher") {
+        setIdentity({ displayName: data.user.displayName || "教师", username: data.user.username || "" });
+      }
+    }).catch(() => undefined);
+    const updateIdentity = (event: Event) => {
+      const detail = (event as CustomEvent<TeacherIdentity>).detail;
+      if (detail?.displayName) setIdentity(detail);
+    };
+    window.addEventListener("teacher-profile-updated", updateIdentity);
+    return () => {
+      controller.abort();
+      window.removeEventListener("teacher-profile-updated", updateIdentity);
+    };
+  }, [teacher]);
+
+  async function logout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    setAccountError("");
+    try {
+      const response = await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { "X-OpenPBL-Role": "teacher" },
+      });
+      if (!response.ok) throw new Error("退出失败");
+      window.location.assign("/teacher/login");
+    } catch {
+      setAccountError("退出失败，请重试");
+      setLoggingOut(false);
+    }
+  }
   const defaultBack = defaultBackTarget(pathname, role);
   const back = { href: backHref ?? defaultBack.href, label: backLabel ?? defaultBack.label };
   const items = teacher ? [
-    { href: "/teacher/classes", label: "课程系列", icon: Layers3, description: "组织教学与学习任务" },
-    { href: "/teacher/templates", label: "课程库", icon: BookOpen, description: "积累可复用的好课" },
-  ] : [{ href: "/student?all=1", label: "我的课程", icon: BookOpen, description: "接续你的学习旅程" }];
-  return <aside className="pbl-workspace-nav">
-    <Link href={teacher ? "/teacher/classes" : "/student?all=1"} className="pbl-workspace-brand" aria-label="PrAIxis"><PraixisLogo variant="horizontalSolid" height={38} priority /></Link>
-    <Link href={back.href} className="pbl-workspace-back"><ArrowLeft size={17}/><span>{back.label}</span></Link>
-    <p className="pbl-nav-caption">{teacher ? "教学管理" : "学习中心"}</p>
-    <nav aria-label={teacher ? "教师导航" : "学生导航"}>
-      {items.map(({ href, label, icon: Icon, description }) => <Link key={href} href={href} aria-current={(!teacher || href === `/teacher/${active}`) ? "page" : undefined} className="pbl-workspace-nav-link"><Icon size={19}/><span>{label}<small>{description}</small></span></Link>)}
-    </nav>
-    <div className="pbl-workspace-nav-bottom">
-      <div className="pbl-workspace-note"><span>让学习真正发生</span><p>{teacher ? "将一堂好课，连接成一段完整的学习旅程。" : "带着问题出发，在每一次实践中积累成长。"}</p></div>
-      {teacher && <Link href="/teacher/settings" aria-current={active === "settings" ? "page" : undefined} className="pbl-workspace-nav-link"><Settings2 size={18}/><span>AI 设置</span></Link>}
+    { href: "/teacher/classes", label: "教学班", icon: Layers3, id: "classes" },
+    { href: "/teacher/templates", label: "课程库", icon: BookOpen, id: "templates" },
+  ] : [{ href: "/student?all=1", label: "我的课程", icon: BookOpen, id: "classes" }];
+  return <header className="pbl-platform-topbar" data-role={role} data-compact={compact || undefined}>
+    <div className="pbl-platform-topbar-inner">
+      <div className="pbl-platform-topbar-context">
+        <Link href={teacher ? "/teacher/classes" : "/student?all=1"} className="pbl-workspace-brand" aria-label="PrAIxis"><PraixisLogo variant="horizontalSolid" height={38} priority /></Link>
+        <span className="pbl-platform-topbar-divider" aria-hidden="true" />
+        <Link href={back.href} className="pbl-workspace-back"><ArrowLeft size={17}/><span>{back.label}</span></Link>
+      </div>
+      <div className="pbl-platform-topbar-actions">
+        <nav aria-label={teacher ? "教师导航" : "学生导航"}>
+          {items.map(({ href, label, icon: Icon, id }) => <Link key={href} href={href} aria-current={(!teacher || id === active) ? "page" : undefined} className="pbl-workspace-nav-link"><Icon size={16}/><span>{label}</span></Link>)}
+        </nav>
+        {teacher ? <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" className="pbl-teacher-account-trigger" aria-label={`教师账号：${identity?.displayName || "教师"}`}>
+              <span className="pbl-teacher-account-avatar" aria-hidden="true">{(identity?.displayName || "教").trim().charAt(0)}</span>
+              <span className="pbl-teacher-account-copy"><strong>{identity?.displayName || "教师"}</strong><small>{identity?.username ? `@${identity.username}` : "教师账号"}</small></span>
+              <ChevronDown size={15}/>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" sideOffset={8} className="pbl-platform-theme pbl-teacher-account-menu w-64">
+            <DropdownMenuLabel className="pbl-teacher-account-label">
+              <span className="pbl-teacher-account-avatar" aria-hidden="true">{(identity?.displayName || "教").trim().charAt(0)}</span>
+              <span><strong>{identity?.displayName || "教师"}</strong><small>{identity?.username ? `账号：${identity.username}` : "当前登录的教师账号"}</small></span>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator/>
+            <DropdownMenuItem asChild><Link href="/teacher/settings"><Settings2/>个人中心</Link></DropdownMenuItem>
+            <DropdownMenuItem asChild><Link href="/teacher/register"><UserPlus/>创建教师账号</Link></DropdownMenuItem>
+            <DropdownMenuSeparator/>
+            {accountError ? <p role="alert" className="px-2 py-1.5 text-xs text-[var(--pbl-danger)]">{accountError}</p> : null}
+            <DropdownMenuItem variant="destructive" disabled={loggingOut} onSelect={(event) => { event.preventDefault(); void logout(); }}><LogOut/>{loggingOut ? "正在退出…" : "退出登录"}</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu> : null}
+      </div>
     </div>
-  </aside>;
+  </header>;
 }

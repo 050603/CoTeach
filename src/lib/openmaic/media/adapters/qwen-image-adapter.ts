@@ -5,10 +5,11 @@
  * Endpoint: https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
  *
  * Supported models:
- * - qwen-image-max     (highest quality)
- * - z-image-turbo      (fast, good quality)
+ * - qwen-image-2.0-pro (high semantic fidelity and detail)
+ * - qwen-image-max     (legacy high-quality generation)
+ * - z-image-turbo      (fast generation)
  *
- * API docs: https://help.aliyun.com/zh/model-studio/developer-reference/text-to-image
+ * API docs: https://help.aliyun.com/zh/model-studio/qwen-image-api
  */
 
 import type {
@@ -101,6 +102,7 @@ export async function generateWithQwenImage(
 
   const response = await fetch(`${baseUrl}/api/v1/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
+    signal: options.signal,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`,
@@ -121,9 +123,10 @@ export async function generateWithQwenImage(
       },
       parameters: {
         negative_prompt: options.negativePrompt || undefined,
-        prompt_extend: true,
+        prompt_extend: options.promptExtend ?? true,
         watermark: false,
         size: resolveDashScopeSize(options),
+        seed: options.seed,
       },
     }),
   });

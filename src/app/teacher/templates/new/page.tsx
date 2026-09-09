@@ -183,7 +183,7 @@ export default function NewTeacherTemplatePage() {
               <span><strong className="block text-sm">{item.title}</strong><span className="mt-1 block text-xs leading-5 text-[var(--pbl-text-muted)]">{item.description}</span></span>
             </li>)}
           </ol>
-          <p className="mt-6 border-t border-[var(--pbl-border)] pt-5 text-xs leading-6 text-[var(--pbl-text-muted)]">草稿会保存在当前浏览器。发布后课程进入课程库，可在课程系列的章节中选用。</p>
+          <p className="mt-6 border-t border-[var(--pbl-border)] pt-5 text-xs leading-6 text-[var(--pbl-text-muted)]">草稿会保存在当前浏览器。发布后课程进入课程库，可在教学班的章节中选用。</p>
         </aside>
 
         <section className="pbl-platform-panel overflow-hidden rounded-[var(--radius-xl)] border-t-4 border-t-[var(--pbl-teacher)] shadow-[var(--shadow-raised)]">

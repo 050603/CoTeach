@@ -24,6 +24,7 @@ export async function generateWithMiniMaxImage(
 
   const response = await fetch(`${baseUrl}/v1/image_generation`, {
     method: 'POST',
+    signal: options.signal,
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json; charset=utf-8',
@@ -41,7 +42,10 @@ export async function generateWithMiniMaxImage(
 
   if (!response.ok) {
     const errText = await response.text().catch(() => response.statusText);
-    throw new Error(`MiniMax Image API error: ${errText}`);
+    throw Object.assign(
+      new Error(`MiniMax Image API error (${response.status}): ${errText}`),
+      { statusCode: response.status },
+    );
   }
 
   const data = await response.json();

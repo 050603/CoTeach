@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
+import { promises as fs } from 'node:fs';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { Scene } from '@openmaic/lib/types/stage';
 import {
   buildInstructionalImagePrompt,
   findUnresolvedClassroomMedia,
   mediaServingUrl,
+  normalizeCourseImageToAspectRatio,
+  persistGeneratedClassroomImage,
   replaceMediaPlaceholders,
   reviewGeneratedCourseImage,
   resolveCourseImageDimensions,
@@ -14,6 +17,7 @@ import {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('classroom media URL and placeholder backfill', () => {
@@ -149,6 +153,40 @@ describe('classroom media URL and placeholder backfill', () => {
       },
     }).png().toBuffer();
     await expect(validateGeneratedCourseImage(wrongRatio, '16:9')).rejects.toThrow('比例不符合');
+  });
+
+  it('normalizes provider output to a consistent 16:9 WebP cover', async () => {
+    const providerImage = await sharp({
+      create: {
+        width: 1536,
+        height: 1024,
+        channels: 3,
+        background: '#dbeafe',
+      },
+    }).png().toBuffer();
+
+    const normalized = await normalizeCourseImageToAspectRatio(providerImage, '16:9');
+    await expect(validateGeneratedCourseImage(normalized, '16:9')).resolves.toEqual({
+      extension: 'webp',
+      width: 1280,
+      height: 720,
+    });
+  });
+
+  it('does not write a generated cover when the independent reviewer rejects it', async () => {
+    const source = await sharp({ create: { width: 1280, height: 720, channels: 3, background: '#ffffff' } }).png().toBuffer();
+    const write = vi.spyOn(fs, 'writeFile').mockResolvedValue(undefined);
+    const mkdir = vi.spyOn(fs, 'mkdir').mockResolvedValue(undefined);
+    const rejected = Object.assign(new Error('visible text'), { code: 'COURSE_COVER_QUALITY_REJECTED' });
+    const reviewer = vi.fn().mockRejectedValue(rejected);
+    await expect(persistGeneratedClassroomImage({
+      result: { base64: source.toString('base64'), width: 1280, height: 720 },
+      classroomId: 'review-test', elementId: 'cover', baseUrl: '',
+      normalizeToAspectRatio: true, validateBeforePersist: reviewer,
+    })).rejects.toBe(rejected);
+    expect(reviewer).toHaveBeenCalledWith(expect.any(Buffer));
+    expect(write).not.toHaveBeenCalled();
+    expect(mkdir).not.toHaveBeenCalled();
   });
 
   it('uses Qwen vision review as a semantic quality gate', async () => {

@@ -32,7 +32,7 @@ export default async function TeachingSetupPage({ params, searchParams }: { para
       <Link className="inline-block underline" href="/teacher/classes">管理或创建教学班</Link>
     </> : <>
       <p>请先完成备课并发布教案，再到教学班安排课堂。</p>
-      <Link className="inline-block underline" href={`/teacher/prepare/${id}/verify`}>继续备课</Link>
+      <Link className="inline-block underline" href={`/teacher/prepare/${id}/preview`}>继续备课</Link>
     </>}
   </section></div></div></TeacherPlatformPage></div>;
 }

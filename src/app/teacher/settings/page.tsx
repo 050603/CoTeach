@@ -31,6 +31,7 @@ import {
   Zap,
 } from "lucide-react";
 import { TeacherPlatformPage, TeacherPlatformHeader } from "@/components/platform/teacher-shell";
+import { TeacherProfilePanel } from "./teacher-profile-panel";
 import {
   Pill,
   PrimaryButton,
@@ -1098,9 +1099,11 @@ export default function TeacherSettingsPage() {
   }
 
   return (
-    <TeacherPlatformPage><TeacherPlatformHeader active="settings" backHref="/teacher/classes" backLabel="返回课程系列" /><div className="pbl-workspace-content pbl-settings-layout">
-      <div className="pbl-page-heading"><div><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">工作空间 / 服务连接</p><h1 className="mt-3 font-semibold">AI 服务设置</h1><p className="mt-3 text-sm leading-7 text-[var(--pbl-text-muted)]">连接教学所需的模型与音视频服务，管理配置并验证可用性。</p></div></div>
-      <div className="mb-5 overflow-hidden rounded-[14px] border border-stone-200 bg-white">
+    <TeacherPlatformPage><TeacherPlatformHeader active="settings" backHref="/teacher/classes" backLabel="返回教学班" /><div className="pbl-workspace-content pbl-settings-layout">
+      <div className="pbl-page-heading"><div><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">教师账号 / 个人中心</p><h1 className="mt-3 font-semibold">个人中心</h1><p className="mt-3 text-sm leading-7 text-[var(--pbl-text-muted)]">管理教师个人信息、登录安全以及教学所需的 AI 服务。</p></div></div>
+      <TeacherProfilePanel/>
+      <section className="mb-5 border-t border-[var(--pbl-border)] pt-7" aria-labelledby="ai-service-settings-heading"><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">教学能力配置</p><h2 id="ai-service-settings-heading" className="mt-2 text-xl font-semibold text-[var(--pbl-text-strong)]">AI 服务设置</h2><p className="mt-2 text-sm leading-6 text-[var(--pbl-text-muted)]">连接教学所需的模型与音视频服务，管理配置并验证可用性。</p></section>
+      <div className="pbl-settings-tabs mb-5 overflow-hidden rounded-[14px] border border-stone-200 bg-white">
         <div className="flex items-center gap-3 border-b border-stone-200 px-3 py-3 sm:px-4">
           <h2 className="min-w-0 truncate text-lg font-bold text-stone-900 sm:text-xl">模型与服务</h2>
         </div>
@@ -1320,7 +1323,7 @@ function ProviderEditor({
   const hasSavedConfig = Boolean(saved?.hasApiKey || saved?.enabled !== undefined);
 
   return (
-    <section className="min-w-0 overflow-hidden rounded-[12px] border border-stone-200 bg-white">
+    <section className="pbl-settings-editor min-w-0 overflow-hidden rounded-[12px] border border-stone-200 bg-white">
       <header className="flex min-w-0 items-center justify-between gap-3 border-b border-stone-200 bg-stone-50/70 px-4 py-3.5 sm:px-5">
         <div className="flex min-w-0 items-center gap-3">
           <ProviderLogo icon={provider.icon} name={provider.name} />
@@ -1372,7 +1375,7 @@ function ProviderList({
   onSelect: (provider: ProviderMeta) => void;
 }) {
   return (
-    <aside className="min-w-0 overflow-hidden rounded-[12px] border border-stone-200 bg-white lg:sticky lg:top-20">
+    <aside className="pbl-settings-provider-list min-w-0 overflow-hidden rounded-[12px] border border-stone-200 bg-white lg:sticky lg:top-20">
       <div className="border-b border-stone-200 bg-stone-50/70 p-3">
         <div className="mb-2.5 flex items-center justify-between gap-3 px-1">
           <h3 className="text-sm font-bold text-stone-800">服务商</h3>

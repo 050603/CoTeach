@@ -65,6 +65,13 @@ describe("TeacherStageDashboard", () => {
     expect(onFocus).toHaveBeenCalledWith(expect.objectContaining({ stageKey: "launch", studentId: "s1", status: "not-opened" }));
   });
 
+  it("does not start sidebar analysis while the dashboard is inactive", () => {
+    render(<TeacherStageDashboard active={false} course={makeCourse()} degraded={false} onCollapse={vi.fn()} onFocus={vi.fn()} onSelectStage={vi.fn()} stageKey="launch" />);
+    expect(screen.queryByText("课堂实时监控")).toBeNull();
+    expect(supportMocks.dashboardAdvice).not.toHaveBeenCalled();
+    expect(supportMocks.reflectionSummary).not.toHaveBeenCalled();
+  });
+
   it("changes the decision model by stage and reports degraded sync honestly", () => {
     render(<TeacherStageDashboard course={makeCourse()} degraded onCollapse={vi.fn()} onFocus={vi.fn()} onSelectStage={vi.fn()} stageKey="reflection" />);
     expect(screen.getByText("同步延迟")).toBeTruthy();

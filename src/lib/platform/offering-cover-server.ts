@@ -1,14 +1,15 @@
+import { randomUUID } from "node:crypto";
 import type { AuthClaims } from "@/lib/auth/session";
-import { generateCourseCoverImageOnServer } from "@/lib/course-cover-server";
+import {
+  generateCourseCoverImageOnServer,
+  persistUploadedCourseCover,
+} from "@/lib/course-cover-server";
 import { prisma } from "@/lib/db/client";
 import { requireTeacherUser } from "./access";
 import { OFFERING_COVER_MEDIA_PREFIX } from "./classroom-cover";
 import { PlatformError, updateOffering } from "./repository";
 
-export async function generateOfferingCoverImage(
-  claims: AuthClaims,
-  offeringId: string,
-) {
+async function ownedOffering(claims: AuthClaims, offeringId: string) {
   const teacher = await requireTeacherUser(claims);
   const offering = await prisma.courseOffering.findUnique({
     where: { id: offeringId },
@@ -20,9 +21,30 @@ export async function generateOfferingCoverImage(
     select: { id: true },
   });
   if (!owns) throw new PlatformError("FORBIDDEN", "无权操作该教学班", 403);
+  return offering;
+}
+
+async function persistOfferingCover(
+  claims: AuthClaims,
+  offering: Awaited<ReturnType<typeof ownedOffering>>,
+  coverImageUrl: string,
+) {
+  return updateOffering(claims, offering.id, {
+    coverImageUrl,
+    version: offering.version,
+  });
+}
+
+export async function generateOfferingCoverImage(
+  claims: AuthClaims,
+  offeringId: string,
+  signal?: AbortSignal,
+) {
+  const offering = await ownedOffering(claims, offeringId);
 
   const coverImageUrl = await generateCourseCoverImageOnServer(
     {
+      coverKind: "course",
       name: offering.name,
       summary: offering.description ?? undefined,
       term: offering.term ?? undefined,
@@ -32,11 +54,22 @@ export async function generateOfferingCoverImage(
         : undefined,
     },
     `${OFFERING_COVER_MEDIA_PREFIX}${offering.id}`,
-    undefined,
-    `course-cover-v${offering.version + 1}`,
+    signal,
+    `course-cover-v${offering.version + 1}-${randomUUID()}`,
   );
-  return updateOffering(claims, offering.id, {
-    coverImageUrl,
-    version: offering.version,
-  });
+  return persistOfferingCover(claims, offering, coverImageUrl);
+}
+
+export async function uploadOfferingCoverImage(
+  claims: AuthClaims,
+  offeringId: string,
+  file: File,
+) {
+  const offering = await ownedOffering(claims, offeringId);
+  const coverImageUrl = await persistUploadedCourseCover(
+    file,
+    `${OFFERING_COVER_MEDIA_PREFIX}${offering.id}`,
+    `course-cover-upload-v${offering.version + 1}-${randomUUID()}`,
+  );
+  return persistOfferingCover(claims, offering, coverImageUrl);
 }

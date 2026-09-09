@@ -22,7 +22,14 @@ describe("课堂学习记录入口", () => {
     expect(screen.getByText("等待第一份学习记录")).toBeTruthy();
   });
   it("recovers from a failed load and clears its error", async () => {
-    const fetcher = vi.fn().mockResolvedValueOnce({ ok: false, json: async () => ({ message: "读取暂时失败" }) }).mockResolvedValue({ ok: true, json: async () => classroom("scheduled") });
+    let attempts = 0;
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === "/api/auth/me") return { ok: true, json: async () => ({ user: { role: "teacher", displayName: "李老师", username: "teacher.li" } }) };
+      attempts += 1;
+      return attempts === 1
+        ? { ok: false, json: async () => ({ message: "读取暂时失败" }) }
+        : { ok: true, json: async () => classroom("scheduled") };
+    });
     vi.stubGlobal("fetch", fetcher);
     render(<ClassroomMonitor/>);
     expect(await screen.findByRole("alert")).toBeTruthy();

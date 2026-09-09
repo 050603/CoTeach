@@ -301,6 +301,18 @@ export async function validateGeneratedCourseImage(
   return { extension, width, height };
 }
 
+export async function normalizeCourseImageToAspectRatio(
+  buffer: Buffer,
+  aspectRatio = '16:9',
+): Promise<Buffer> {
+  const expected = resolveCourseImageDimensions(aspectRatio);
+  return sharp(buffer)
+    .rotate()
+    .resize(expected.width, expected.height, { fit: 'cover', position: 'attention' })
+    .webp({ quality: 90 })
+    .toBuffer();
+}
+
 type GeneratedImageQualityReview = {
   pass?: boolean;
   issues?: unknown;
@@ -320,6 +332,7 @@ function qwenImageReviewEndpoint(baseUrl?: string): string {
  */
 export async function reviewGeneratedCourseImage(input: {
   buffer: Buffer;
+  detailImages?: Buffer[];
   providerId: ImageProviderId;
   apiKey: string;
   baseUrl?: string;
@@ -328,7 +341,7 @@ export async function reviewGeneratedCourseImage(input: {
 }): Promise<void> {
   if (input.providerId !== 'qwen-image') return;
   const reviewImage = await sharp(input.buffer)
-    .resize({ width: 960, withoutEnlargement: true })
+    .resize({ width: 1280, withoutEnlargement: true })
     .jpeg({ quality: 82 })
     .toBuffer();
   const timeoutSignal = AbortSignal.timeout(60_000);
@@ -354,11 +367,19 @@ export async function reviewGeneratedCourseImage(input: {
               type: 'image_url',
               image_url: { url: `data:image/jpeg;base64,${reviewImage.toString('base64')}` },
             },
+            ...(input.detailImages ?? []).map((detail) => ({
+              type: 'image_url',
+              image_url: { url: `data:image/jpeg;base64,${detail.toString('base64')}` },
+            })),
             {
               type: 'text',
               text: [
+                input.detailImages?.length
+                  ? '第一张是完整封面，之后是同一封面的局部放大，只用来检查细节，不是分栏或多张封面。重点检查书页、纸张、屏幕与角落；成段排列的短横线、印刷痕迹也属于伪文字，即使无法读出具体字，也违反无文字要求。'
+                  : '',
                 `原始教学配图要求：${input.requirement}`,
                 '请检查：一、所有可见文字是否有错别字、乱码或截断；若要求明确禁止文字，则出现任何可辨认字符、伪文字或标签都必须判定不通过；二、核心概念、步骤、顺序和关系是否与要求一致；三、是否出现要求之外且会误导学习者的事实；四、构图是否清晰并适合课堂投影。',
+                '只报告图片中实际可见的具体问题，不把自然纹理、纯图形或无法确认的微小痕迹猜测成文字；不要因未要求的辅助细节而拒绝。每条 issues 必须是真正需要修正的问题，不写已经排除的问题或通过项。',
                 '仅输出 JSON：{"pass":boolean,"issues":["具体问题"]}。只有全部合格时 pass 才能为 true。',
               ].join('\n'),
             },
@@ -381,15 +402,21 @@ export async function reviewGeneratedCourseImage(input: {
   };
   const content = payload.choices?.[0]?.message?.content;
   const review = content ? parseJsonResponse<GeneratedImageQualityReview>(content) : null;
-  const issues = Array.isArray(review?.issues)
-    ? review.issues.filter((issue): issue is string => typeof issue === 'string' && issue.trim().length > 0)
-    : [];
-  if (review?.pass !== true) {
+  if (typeof review?.pass !== 'boolean' || !Array.isArray(review.issues)
+    || !review.issues.every((issue): issue is string => typeof issue === 'string' && issue.trim().length > 0)) {
+    throw Object.assign(new Error('教学图片质量审校返回了无效结果'), {
+      code: 'GENERATED_IMAGE_REVIEW_FAILED',
+      isRetryable: false,
+    });
+  }
+  const issues = review.issues.map((issue) => issue.trim());
+  if (!review.pass || issues.length > 0) {
     throw Object.assign(new Error(
       `教学图片质量审校未通过${issues.length > 0 ? `：${issues.join('；')}` : ''}`,
     ), {
       code: 'GENERATED_IMAGE_QUALITY_REJECTED',
       isRetryable: true,
+      issues,
     });
   }
 }
@@ -401,6 +428,9 @@ export async function persistGeneratedClassroomImage(input: {
   aspectRatio?: string;
   baseUrl: string;
   signal?: AbortSignal;
+  normalizeToAspectRatio?: boolean;
+  /** Covers can use the configured vision model independently of the image provider. */
+  validateBeforePersist?: (buffer: Buffer) => Promise<void>;
   qualityReview?: {
     providerId: ImageProviderId;
     apiKey: string;
@@ -409,17 +439,20 @@ export async function persistGeneratedClassroomImage(input: {
   };
 }): Promise<string> {
   throwIfAborted(input.signal);
-  const buffer = input.result.base64
+  const sourceBuffer = input.result.base64
     ? Buffer.from(input.result.base64, 'base64')
     : input.result.url
       ? await downloadToBuffer(input.result.url, input.signal)
       : null;
-  if (!buffer?.length) {
+  if (!sourceBuffer?.length) {
     throw Object.assign(new Error('图片生成服务未返回可用的图片文件'), {
       code: 'GENERATED_IMAGE_EMPTY',
       isRetryable: true,
     });
   }
+  const buffer = input.normalizeToAspectRatio
+    ? await normalizeCourseImageToAspectRatio(sourceBuffer, input.aspectRatio)
+    : sourceBuffer;
   const validated = await validateGeneratedCourseImage(buffer, input.aspectRatio);
   if (input.qualityReview) {
     await reviewGeneratedCourseImage({
@@ -428,6 +461,7 @@ export async function persistGeneratedClassroomImage(input: {
       ...input.qualityReview,
     });
   }
+  await input.validateBeforePersist?.(buffer);
   throwIfAborted(input.signal);
   const mediaDir = path.join(CLASSROOMS_DIR, input.classroomId, 'media');
   await ensureDir(mediaDir);

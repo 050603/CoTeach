@@ -11,6 +11,7 @@ export async function authorizeTemplateRequest(request: Request, templateId: str
   const template = await prisma.classroomTemplate.findUnique({ where: { id: templateId }, select: { ownerId: true, status: true } });
   if (!template) return Response.json({ error: "Template not found" }, { status: 404 });
   if (template.ownerId !== user.id) return Response.json({ error: "Forbidden" }, { status: 403 });
+  if (template.status.toUpperCase() === "DELETED") return Response.json({ error: "Template not found" }, { status: 404 });
   if (template.status.toUpperCase() === "ARCHIVED" && request.method !== "GET") return Response.json({ error: "Template archived" }, { status: 409 });
   return user.id;
 }

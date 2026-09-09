@@ -1,6 +1,7 @@
 const DATA_IMAGE_URL = /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$/i;
 
 export const OFFERING_COVER_MEDIA_PREFIX = "offering-";
+export const TEMPLATE_COVER_MEDIA_PREFIX = "template-cover-";
 
 export function isSafeCoverImageUrl(value: string): boolean {
   if (value.startsWith("/") && !value.startsWith("//")) return true;

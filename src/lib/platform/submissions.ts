@@ -8,8 +8,15 @@ import { SurveyConfigSchema } from "./survey";
 
 export const submissionSchema = z.object({
   answer: z.string().trim().max(30000).optional(),
-  answers: z.record(z.string(), z.string().trim().max(10000)).optional(),
+  answers: z.record(z.string(), z.union([
+    z.string().trim().max(10000),
+    z.array(z.string().trim().min(1).max(80)).max(10),
+  ])).optional(),
 });
+
+function hasAnswer(value: string | string[] | undefined): boolean {
+  return Array.isArray(value) ? value.length > 0 : Boolean(value?.trim());
+}
 
 export async function submitActivity(claims: AuthClaims, activityId: string, input: z.infer<typeof submissionSchema>) {
   const student = await requireStudentUser(claims);
@@ -25,14 +32,19 @@ export async function submitActivity(claims: AuthClaims, activityId: string, inp
   if (type === "FORM" || type === "QUIZ") {
     const questions = Array.isArray(config.questions) ? config.questions as Array<{ id: string; required?: boolean }> : [];
     if (!questions.length && !input.answer) throw new PlatformError("ANSWER_REQUIRED", "请填写回答", 400);
-    if (questions.some((question) => question.required !== false && !input.answers?.[question.id]?.trim())) throw new PlatformError("ANSWER_REQUIRED", "请完成所有必答题", 400);
+    if (questions.some((question) => question.required !== false && !hasAnswer(input.answers?.[question.id]))) throw new PlatformError("ANSWER_REQUIRED", "请完成所有必答题", 400);
   }
   if (type === "FORM") {
     const survey = SurveyConfigSchema.safeParse(config);
     if (!survey.success) throw new PlatformError("INVALID_ACTIVITY_CONFIG", "问卷配置不完整，请联系教师", 400);
-    const invalidChoice = survey.data.questions.find((question) => question.type === "single-choice"
-      && input.answers?.[question.id]
-      && !question.options.some((option) => option.id === input.answers?.[question.id]));
+    const invalidChoice = survey.data.questions.find((question) => {
+      const answer = input.answers?.[question.id];
+      if (answer === undefined) return false;
+      if (question.type === "short-text") return typeof answer !== "string";
+      const optionIds = new Set(question.options.map((option) => option.id));
+      if (question.type === "single-choice") return typeof answer !== "string" || !optionIds.has(answer);
+      return !Array.isArray(answer) || new Set(answer).size !== answer.length || answer.some((optionId) => !optionIds.has(optionId));
+    });
     if (invalidChoice) throw new PlatformError("INVALID_ANSWER", `“${invalidChoice.title}”的选项无效，请重新选择`, 400);
   }
   const now = new Date();

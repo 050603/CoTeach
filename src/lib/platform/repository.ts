@@ -9,6 +9,7 @@ import { generateInviteCode, normalizeInviteCode } from "@/lib/session/invite-co
 import { ActivityConfigSchema, type ActivityType } from "./activity";
 import { buildSurveyAnalytics, SurveyConfigSchema } from "./survey";
 import { classroomCoverImageUrl } from "./classroom-cover";
+import { CourseReferenceLinksSchema, type CourseReferenceLink } from "./course-reference";
 import { normalizeUsername, requireStudentUser, requireTeacherUser, type PlatformDb, type PlatformUser } from "./access";
 
 const ACTIVE_ENROLLMENT_STATUSES = ["ACTIVE", "active", "COMPLETED", "completed"];
@@ -19,9 +20,37 @@ function jsonValue(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
 }
 
-function courseDetails(settings: unknown): { outline: string; referenceMaterials: string } {
+function courseDetails(settings: unknown): { outline: string; referenceMaterials: string; referenceLinks: CourseReferenceLink[] } {
   const value = settings && typeof settings === "object" ? settings as Record<string, unknown> : {};
-  return { outline: typeof value.outline === "string" ? value.outline : "", referenceMaterials: typeof value.referenceMaterials === "string" ? value.referenceMaterials : "" };
+  const referenceLinks = CourseReferenceLinksSchema.safeParse(value.referenceLinks);
+  return {
+    outline: typeof value.outline === "string" ? value.outline : "",
+    referenceMaterials: typeof value.referenceMaterials === "string" ? value.referenceMaterials : "",
+    referenceLinks: referenceLinks.success ? referenceLinks.data : [],
+  };
+}
+
+type CourseResourceRow = { title: string; fileAsset: { id: string; originalName: string; size: bigint; mimeType: string; deletedAt: Date | null } | null };
+
+function formattedFileSize(bytes: bigint): string {
+  const value = Number(bytes);
+  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function courseReferences(settings: unknown, resources: CourseResourceRow[] = []) {
+  return [
+    ...courseDetails(settings).referenceLinks.map((reference) => ({ ...reference, kind: "link" as const })),
+    ...resources.flatMap((resource) => resource.fileAsset && !resource.fileAsset.deletedAt ? [{
+      id: resource.fileAsset.id,
+      kind: "file" as const,
+      title: resource.title || resource.fileAsset.originalName,
+      url: `/api/uploads/${resource.fileAsset.id}`,
+      fileName: resource.fileAsset.originalName,
+      fileSize: formattedFileSize(resource.fileAsset.size),
+      mimeType: resource.fileAsset.mimeType,
+    }] : []),
+  ];
 }
 
 function normalizedStatus(value: string): string {
@@ -51,6 +80,19 @@ function parsedActivityConfig(type: string, input: unknown) {
   } catch {
     throw new PlatformError("INVALID_ACTIVITY_CONFIG", type.toUpperCase() === "FORM" ? "请完善问卷题目与单选选项" : "活动配置无效", 400);
   }
+}
+
+function activityResourceFileId(type: string, config: unknown): string | null {
+  if (type.toUpperCase() !== "RESOURCE" || !config || typeof config !== "object" || Array.isArray(config)) return null;
+  const fileId = (config as Record<string, unknown>).fileId;
+  return typeof fileId === "string" && fileId.length > 0 ? fileId : null;
+}
+
+async function bindActivityResource(db: PlatformDb, input: { activityId: string; fileId: string; offeringId: string; teacherId: string }) {
+  const resource = await db.resource.findFirst({ where: { id: input.fileId, fileAssetId: input.fileId, offeringId: input.offeringId, createdById: input.teacherId }, include: { fileAsset: true } });
+  if (!resource || resource.fileAsset?.deletedAt || resource.fileAsset?.mimeType !== "application/pdf") throw new PlatformError("INVALID_ACTIVITY_RESOURCE", "请选择当前教学班中已上传的 PDF 参考资料", 400);
+  await db.resource.updateMany({ where: { activityId: input.activityId, id: { not: resource.id } }, data: { activityId: null } });
+  await db.resource.update({ where: { id: resource.id }, data: { activityId: input.activityId } });
 }
 
 
@@ -155,6 +197,7 @@ export async function listStudentOfferings(claims: AuthClaims) {
       offering: {
         include: {
           teachers: { include: { user: { select: { displayName: true } } } },
+          resources: { where: { activityId: null }, orderBy: { createdAt: "asc" }, include: { fileAsset: true } },
           chapters: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { activities: { where: { archivedAt: null }, orderBy: { position: "asc" } } } },
         },
       },
@@ -171,6 +214,7 @@ export async function listStudentOfferings(claims: AuthClaims) {
       description: row.offering.description,
       coverImageUrl: row.offering.coverImageUrl,
       ...courseDetails(row.offering.settings),
+      courseReferences: courseReferences(row.offering.settings, row.offering.resources),
       term: row.offering.term,
       startsAt: row.offering.startsAt,
       endsAt: row.offering.endsAt,
@@ -263,19 +307,24 @@ export async function listTeacherOfferings(claims: AuthClaims) {
   const teacher = await requireTeacherUser(claims);
   const offerings = await prisma.courseOffering.findMany({
     where: { teachers: { some: { userId: teacher.id } } },
-    include: { invitations: { where: { status: { in: ["ACTIVE", "active"] } }, orderBy: { createdAt: "desc" }, take: 1 }, chapters: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { activities: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { classroomInstances: { orderBy: { createdAt: "desc" }, take: 1, include: { templateVersion: { select: { id: true, templateId: true, version: true, status: true, snapshot: true } } } } } } } }, _count: { select: { enrollments: true } } },
+    include: {
+      invitations: { where: { status: { in: ["ACTIVE", "active"] } }, orderBy: { createdAt: "desc" }, take: 1 },
+      resources: { where: { activityId: null }, orderBy: { createdAt: "asc" }, include: { fileAsset: true } },
+      chapters: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { activities: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { classroomInstances: { orderBy: { createdAt: "desc" }, take: 1, include: { templateVersion: { select: { id: true, templateId: true, version: true, status: true, snapshot: true } } } } } } } },
+      _count: { select: { enrollments: true } },
+    },
     orderBy: { updatedAt: "desc" },
   });
-  return offerings.map((offering) => ({ ...offering, ...courseDetails(offering.settings), status: normalizedStatus(offering.status), invitation: offering.invitations[0] ?? null, invitations: undefined, studentCount: offering._count.enrollments, _count: undefined, chapters: offering.chapters.map((chapter) => ({ ...chapter, activities: chapter.activities.map((activity) => ({ ...activity, type: activityTypeForApi(activity.type), templateId: activity.classroomInstances[0]?.templateVersion.templateId ?? null, instances: activity.classroomInstances.map((instance) => ({ ...instance, status: normalizedStatus(instance.status), templateId: instance.templateVersion.templateId, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) })) })) })) }));
+  return offerings.map((offering) => ({ ...offering, ...courseDetails(offering.settings), courseReferences: courseReferences(offering.settings, offering.resources), resources: undefined, status: normalizedStatus(offering.status), invitation: offering.invitations[0] ?? null, invitations: undefined, studentCount: offering._count.enrollments, _count: undefined, chapters: offering.chapters.map((chapter) => ({ ...chapter, activities: chapter.activities.map((activity) => ({ ...activity, type: activityTypeForApi(activity.type), templateId: activity.classroomInstances[0]?.templateVersion.templateId ?? null, instances: activity.classroomInstances.map((instance) => ({ ...instance, status: normalizedStatus(instance.status), templateId: instance.templateVersion.templateId, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) })) })) })) }));
 }
 
-export async function createOffering(claims: AuthClaims, input: { name: string; description?: string; term?: string; startsAt?: string; endsAt?: string; coverImageUrl?: string | null; outline?: string; referenceMaterials?: string }) {
+export async function createOffering(claims: AuthClaims, input: { name: string; description?: string; term?: string; startsAt?: string; endsAt?: string; coverImageUrl?: string | null; outline?: string; referenceMaterials?: string; referenceLinks?: CourseReferenceLink[] }) {
   const teacher = await requireTeacherUser(claims);
   return prisma.courseOffering.create({
     data: {
       name: input.name,
       coverImageUrl: input.coverImageUrl,
-      settings: { outline: input.outline ?? "", referenceMaterials: input.referenceMaterials ?? "" },
+      settings: { outline: input.outline ?? "", referenceMaterials: input.referenceMaterials ?? "", referenceLinks: input.referenceLinks ?? [] },
       description: input.description,
       term: input.term,
       startsAt: dateOrNull(input.startsAt),
@@ -287,14 +336,14 @@ export async function createOffering(claims: AuthClaims, input: { name: string; 
   });
 }
 
-export async function updateOffering(claims: AuthClaims, offeringId: string, data: { name?: string; description?: string; term?: string; status?: string; startsAt?: string | null; endsAt?: string | null; coverImageUrl?: string | null; outline?: string; referenceMaterials?: string; version?: number }) {
+export async function updateOffering(claims: AuthClaims, offeringId: string, data: { name?: string; description?: string; term?: string; status?: string; startsAt?: string | null; endsAt?: string | null; coverImageUrl?: string | null; outline?: string; referenceMaterials?: string; referenceLinks?: CourseReferenceLink[]; version?: number }) {
   return runMutationTransaction(async (tx) => {
     await tx.$queryRaw`SELECT "id" FROM "CourseOffering" WHERE "id" = ${offeringId} FOR UPDATE`;
     await teacherForOffering(claims, offeringId, tx);
     const current = await tx.courseOffering.findUnique({ where: { id: offeringId } });
     if (!current) throw new PlatformError("NOT_FOUND", "教学班不存在", 404);
     if (data.version !== undefined && data.version !== current.version) throw new PlatformError("VERSION_CONFLICT", "教学班已被其他操作更新", 409);
-    return tx.courseOffering.update({ where: { id: offeringId }, data: { name: data.name, description: data.description, term: data.term, status: data.status?.toUpperCase(), startsAt: dateOrNull(data.startsAt), endsAt: dateOrNull(data.endsAt), coverImageUrl: data.coverImageUrl, settings: { ...(current.settings && typeof current.settings === "object" && !Array.isArray(current.settings) ? current.settings : {}), ...courseDetails(current.settings), ...(data.outline !== undefined ? { outline: data.outline } : {}), ...(data.referenceMaterials !== undefined ? { referenceMaterials: data.referenceMaterials } : {}) }, version: { increment: 1 } } });
+    return tx.courseOffering.update({ where: { id: offeringId }, data: { name: data.name, description: data.description, term: data.term, status: data.status?.toUpperCase(), startsAt: dateOrNull(data.startsAt), endsAt: dateOrNull(data.endsAt), coverImageUrl: data.coverImageUrl, settings: { ...(current.settings && typeof current.settings === "object" && !Array.isArray(current.settings) ? current.settings : {}), ...courseDetails(current.settings), ...(data.outline !== undefined ? { outline: data.outline } : {}), ...(data.referenceMaterials !== undefined ? { referenceMaterials: data.referenceMaterials } : {}), ...(data.referenceLinks !== undefined ? { referenceLinks: data.referenceLinks } : {}) }, version: { increment: 1 } } });
   });
 }
 
@@ -309,7 +358,7 @@ export async function createChapter(claims: AuthClaims, offeringId: string, inpu
 
 async function readyTemplateVersion(claims: AuthClaims, templateId: string, db: PlatformDb = prisma) {
   const teacher = await requireTeacherUser(claims, db);
-  const template = await db.classroomTemplate.findFirst({ where: { id: templateId, ownerId: teacher.id, status: { not: "ARCHIVED" } }, include: { versions: { where: { status: { in: ["PUBLISHED", "published", "ACTIVE", "active"] } }, orderBy: { version: "desc" }, take: 1 } } });
+  const template = await db.classroomTemplate.findFirst({ where: { id: templateId, ownerId: teacher.id, status: { in: ["ACTIVE", "active"] } }, include: { versions: { where: { status: { in: ["PUBLISHED", "published", "ACTIVE", "active"] } }, orderBy: { version: "desc" }, take: 1 } } });
   const version = template?.versions[0];
   if (!version) throw new PlatformError("TEMPLATE_NOT_READY", "请选择课程库中已发布的课堂内容", 400);
   return version;
@@ -318,7 +367,7 @@ async function readyTemplateVersion(claims: AuthClaims, templateId: string, db: 
 export async function createActivity(claims: AuthClaims, offeringId: string, chapterId: string, input: { type: ActivityType; title: string; description?: string; position?: number; templateId?: string; config?: unknown }) {
   return runMutationTransaction(async (tx) => {
     await tx.$queryRaw`SELECT "id" FROM "Chapter" WHERE "id" = ${chapterId} FOR UPDATE`;
-    await teacherForOffering(claims, offeringId, tx);
+    const teacher = await teacherForOffering(claims, offeringId, tx);
     const chapter = await tx.chapter.findFirst({ where: { id: chapterId, offeringId, archivedAt: null } });
     if (!chapter) throw new PlatformError("NOT_FOUND", "章节不存在", 404);
     const position = input.position ?? ((await tx.activity.aggregate({ where: { chapterId }, _max: { position: true } }))._max.position ?? -1) + 1;
@@ -328,6 +377,8 @@ export async function createActivity(claims: AuthClaims, offeringId: string, cha
     if (input.type.toUpperCase() === "CLASSROOM" && input.templateId) {
       if (selectedVersion) await tx.classroomInstance.create({ data: { activityId: created.id, templateVersionId: selectedVersion.id, runNo: 1, status: "SCHEDULED" } });
     }
+    const resourceFileId = activityResourceFileId(input.type, config);
+    if (resourceFileId) await bindActivityResource(tx, { activityId: created.id, fileId: resourceFileId, offeringId, teacherId: teacher.id });
     return created;
   });
 }
@@ -351,6 +402,9 @@ export async function updateActivity(claims: AuthClaims, activityId: string, dat
     const config = data.config === undefined ? undefined : parsedActivityConfig(activity.type, data.config);
     const selectedVersion = data.templateId ? await readyTemplateVersion(claims, data.templateId, tx) : null;
     const updated = await tx.activity.update({ where: { id: activityId }, data: { title: data.title, description: data.description, isOpen: data.isOpen, opensAt: dateOrNull(data.opensAt), position: data.position, config: config === undefined ? undefined : jsonValue(config), version: { increment: 1 } } });
+    const resourceFileId = activityResourceFileId(activity.type, config);
+    if (resourceFileId) await bindActivityResource(tx, { activityId, fileId: resourceFileId, offeringId: activity.chapter.offeringId, teacherId: claims.sub! });
+    else if (activity.type.toUpperCase() === "RESOURCE" && config !== undefined) await tx.resource.updateMany({ where: { activityId }, data: { activityId: null } });
     if (data.templateId) {
       const version = selectedVersion;
       if (version) {
@@ -393,7 +447,11 @@ export async function getSurveyAnalytics(claims: AuthClaims, activityId: string)
     }),
     prisma.activityProgress.findMany({
       where: { activityId, status: { in: ["COMPLETED", "completed"] }, enrollment: { status: { in: ACTIVE_ENROLLMENT_STATUSES } } },
-      select: { progressData: true, completedAt: true },
+      select: {
+        progressData: true,
+        completedAt: true,
+        enrollment: { select: { user: { select: { id: true, displayName: true } } } },
+      },
       orderBy: { completedAt: "desc" },
     }),
   ]);
@@ -406,14 +464,18 @@ export async function getSurveyAnalytics(claims: AuthClaims, activityId: string)
       chapter: { id: activity.chapter.id, title: activity.chapter.title },
       offering: { id: activity.chapter.offering.id, name: activity.chapter.offering.name },
     },
-    analytics: buildSurveyAnalytics(config.data, rows, totalStudents),
+    analytics: buildSurveyAnalytics(config.data, rows.map((row) => ({
+      progressData: row.progressData,
+      completedAt: row.completedAt,
+      respondent: { studentId: row.enrollment.user.id, displayName: row.enrollment.user.displayName },
+    })), totalStudents),
     updatedAt: new Date().toISOString(),
   };
 }
 
 export async function listPrivateTemplates(claims: AuthClaims) {
   const teacher = await requireTeacherUser(claims);
-  return prisma.classroomTemplate.findMany({ where: { ownerId: teacher.id }, include: { versions: { orderBy: { version: "desc" } } }, orderBy: { updatedAt: "desc" } });
+  return prisma.classroomTemplate.findMany({ where: { ownerId: teacher.id, status: { notIn: ["DELETED", "deleted"] } }, include: { versions: { orderBy: { version: "desc" } } }, orderBy: { updatedAt: "desc" } });
 }
 
 export async function createPrivateTemplate(claims: AuthClaims, input: { title: string; description?: string; snapshot: unknown; mediaRefs?: unknown }) {
@@ -433,7 +495,7 @@ export async function createTemplateVersion(claims: AuthClaims, templateId: stri
   return runMutationTransaction(async (tx) => {
     await tx.$queryRaw`SELECT "id" FROM "ClassroomTemplate" WHERE "id" = ${templateId} FOR UPDATE`;
     const teacher = await requireTeacherUser(claims, tx);
-    const template = await tx.classroomTemplate.findFirst({ where: { id: templateId, ownerId: teacher.id, status: { not: "ARCHIVED" } }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
+    const template = await tx.classroomTemplate.findFirst({ where: { id: templateId, ownerId: teacher.id, status: { in: ["ACTIVE", "active"] } }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
     if (!template) throw new PlatformError("NOT_FOUND", "课堂模板不存在", 404);
     const version = (template.versions[0]?.version ?? 0) + 1;
     return tx.classroomTemplateVersion.create({ data: { templateId, version, status: "PUBLISHED", snapshot: jsonValue(input.snapshot), mediaRefs: input.mediaRefs === undefined ? undefined : jsonValue(input.mediaRefs) } });
@@ -442,9 +504,27 @@ export async function createTemplateVersion(claims: AuthClaims, templateId: stri
 
 export async function archivePrivateTemplate(claims: AuthClaims, templateId: string) {
   const teacher = await requireTeacherUser(claims);
-  const template = await prisma.classroomTemplate.findFirst({ where: { id: templateId, ownerId: teacher.id } });
+  const template = await prisma.classroomTemplate.findFirst({ where: { id: templateId, ownerId: teacher.id, status: { notIn: ["DELETED", "deleted"] } } });
   if (!template) throw new PlatformError("NOT_FOUND", "课堂模板不存在", 404);
   return prisma.classroomTemplate.update({ where: { id: templateId }, data: { status: "ARCHIVED" } });
+}
+
+export async function restorePrivateTemplate(claims: AuthClaims, templateId: string) {
+  const teacher = await requireTeacherUser(claims);
+  const template = await prisma.classroomTemplate.findFirst({ where: { id: templateId, ownerId: teacher.id } });
+  if (!template || template.status.toUpperCase() === "DELETED") throw new PlatformError("NOT_FOUND", "课堂模板不存在", 404);
+  if (template.status.toUpperCase() !== "ARCHIVED") throw new PlatformError("TEMPLATE_NOT_ARCHIVED", "只有已归档课程可以恢复", 409);
+  return prisma.classroomTemplate.update({ where: { id: templateId }, data: { status: "ACTIVE" } });
+}
+
+export async function deleteArchivedPrivateTemplate(claims: AuthClaims, templateId: string) {
+  const teacher = await requireTeacherUser(claims);
+  const template = await prisma.classroomTemplate.findFirst({ where: { id: templateId, ownerId: teacher.id } });
+  if (!template || template.status.toUpperCase() === "DELETED") throw new PlatformError("NOT_FOUND", "课堂模板不存在", 404);
+  if (template.status.toUpperCase() !== "ARCHIVED") throw new PlatformError("TEMPLATE_NOT_ARCHIVED", "请先归档课程，再进行删除", 409);
+  // Keep immutable versions for classroom instances and research records, while
+  // removing the template from every teacher-facing library/query surface.
+  return prisma.classroomTemplate.update({ where: { id: templateId }, data: { status: "DELETED" } });
 }
 
 export async function createClassroomInstance(claims: AuthClaims, activityId: string, templateVersionId: string) {

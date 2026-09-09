@@ -2,16 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthClaims } from "@/lib/auth/session";
 
 const mocks = vi.hoisted(() => {
-  const model = () => ({ findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), findFirst: vi.fn(), aggregate: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), upsert: vi.fn() });
-  const tx = { $queryRaw: vi.fn(), courseTeacher: model(), courseOffering: model(), chapter: model(), activity: model(), classroomTemplate: model(), classroomTemplateVersion: model(), classroomInstance: model(), activityProgress: model(), courseInvitation: model() };
+  const model = () => ({ findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), aggregate: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), upsert: vi.fn() });
+  const tx = { $queryRaw: vi.fn(), courseTeacher: model(), courseOffering: model(), chapter: model(), activity: model(), resource: model(), classroomTemplate: model(), classroomTemplateVersion: model(), classroomInstance: model(), activityProgress: model(), courseInvitation: model() };
   return { tx, transaction: vi.fn(), teacher: vi.fn(), student: vi.fn(), activity: vi.fn(), enrollment: vi.fn(), offerings: vi.fn() };
 });
-vi.mock("@/lib/db/client", () => ({ prisma: { activity: { findUnique: mocks.activity }, enrollment: { findUnique: mocks.enrollment }, courseOffering: { findMany: mocks.offerings } } }));
+vi.mock("@/lib/db/client", () => ({ prisma: { activity: { findUnique: mocks.activity }, enrollment: { findUnique: mocks.enrollment }, courseOffering: { findMany: mocks.offerings }, classroomTemplate: mocks.tx.classroomTemplate } }));
 vi.mock("@/lib/db/transaction-retry", () => ({ runMutationTransaction: mocks.transaction }));
 vi.mock("./learning-events", () => ({ appendValidatedLearningEvents: vi.fn().mockResolvedValue([]) }));
 vi.mock("./access", () => ({ requireTeacherUser: mocks.teacher, requireStudentUser: mocks.student, normalizeUsername: (value: string) => value }));
 
-import { createActivity, createChapter, createClassroomInstance, createTemplateVersion, getStudentActivity, listTeacherOfferings, resetOfferingInvitation, updateActivity, updateChapter, updateOffering } from "./repository";
+import { createActivity, createChapter, createClassroomInstance, createTemplateVersion, deleteArchivedPrivateTemplate, getStudentActivity, listPrivateTemplates, listTeacherOfferings, resetOfferingInvitation, restorePrivateTemplate, updateActivity, updateChapter, updateOffering } from "./repository";
 const teacherClaims = { sub: "teacher", role: "teacher" } as AuthClaims;
 const studentClaims = { sub: "student", role: "student" } as AuthClaims;
 const release = { isOpen: true, opensAt: null, archivedAt: null };
@@ -47,6 +47,16 @@ describe("serialized content changes", () => {
     expectLockedBefore(mocks.tx.activity.aggregate, "Chapter");
     expect(mocks.tx.classroomInstance.create).toHaveBeenCalledWith({ data: { activityId: "activity", templateVersionId: "version", runNo: 1, status: "SCHEDULED" } });
     expect(mocks.transaction).toHaveBeenCalledOnce();
+  });
+
+  it("binds an uploaded PDF to the reference activity", async () => {
+    mocks.tx.chapter.findFirst.mockResolvedValue({ id: "chapter" });
+    mocks.tx.activity.aggregate.mockResolvedValue({ _max: { position: null } });
+    mocks.tx.activity.create.mockResolvedValue({ id: "activity" });
+    mocks.tx.resource.findFirst.mockResolvedValue({ id: "file", fileAsset: { deletedAt: null, mimeType: "application/pdf" } });
+    await createActivity(teacherClaims, "offering", "chapter", { type: "Resource", title: "Reference", config: { schemaVersion: 1, resourceKind: "file", fileId: "file", url: "/api/uploads/file" } });
+    expect(mocks.tx.resource.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: "file", offeringId: "offering", createdById: "teacher" }) }));
+    expect(mocks.tx.resource.update).toHaveBeenCalledWith({ where: { id: "file" }, data: { activityId: "activity" } });
   });
 
   it("rejects stale offering and chapter versions inside the locked transaction", async () => {
@@ -100,6 +110,27 @@ describe("serialized content changes", () => {
   });
 });
 
+describe("course library lifecycle", () => {
+  it("excludes deleted templates from the teacher library", async () => {
+    mocks.tx.classroomTemplate.findMany.mockResolvedValue([]);
+    await listPrivateTemplates(teacherClaims);
+    expect(mocks.tx.classroomTemplate.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { ownerId: "teacher", status: { notIn: ["DELETED", "deleted"] } } }));
+  });
+
+  it("restores archived templates and logically deletes only archived templates", async () => {
+    mocks.tx.classroomTemplate.findFirst.mockResolvedValueOnce({ id: "template", status: "ARCHIVED" });
+    await restorePrivateTemplate(teacherClaims, "template");
+    expect(mocks.tx.classroomTemplate.update).toHaveBeenLastCalledWith({ where: { id: "template" }, data: { status: "ACTIVE" } });
+
+    mocks.tx.classroomTemplate.findFirst.mockResolvedValueOnce({ id: "template", status: "ARCHIVED" });
+    await deleteArchivedPrivateTemplate(teacherClaims, "template");
+    expect(mocks.tx.classroomTemplate.update).toHaveBeenLastCalledWith({ where: { id: "template" }, data: { status: "DELETED" } });
+
+    mocks.tx.classroomTemplate.findFirst.mockResolvedValueOnce({ id: "active", status: "ACTIVE" });
+    await expect(deleteArchivedPrivateTemplate(teacherClaims, "active")).rejects.toMatchObject({ code: "TEMPLATE_NOT_ARCHIVED" });
+  });
+});
+
 describe("activity access concurrent with completion", () => {
   it("preserves the committed completion even when the initial enrollment snapshot was not started", async () => {
     mocks.activity.mockResolvedValue({ id: "activity", type: "ASSIGNMENT", ...release, chapterId: "chapter", chapter: { id: "chapter", ...release, offering: { id: "offering", status: "OPEN" } }, classroomInstances: [] });
@@ -136,8 +167,9 @@ describe("teacher offering classroom covers", () => {
       id: "offering",
       name: "课程",
       status: "OPEN",
-      settings: null,
+      settings: { referenceLinks: [{ id: "reading", title: "延伸阅读", url: "https://example.test/reading" }] },
       invitations: [],
+      resources: [{ title: "观察手册", fileAsset: { id: "8f31b270-b23d-4ec1-bd2b-8543210bcf88", originalName: "观察手册.pdf", size: BigInt(2048), mimeType: "application/pdf", deletedAt: null } }],
       _count: { enrollments: 2 },
       chapters: [{
         id: "chapter",
@@ -153,6 +185,10 @@ describe("teacher offering classroom covers", () => {
       id: "instance",
       coverImageUrl: "https://cdn.example.test/classroom.webp",
     });
+    expect(result[0].courseReferences).toEqual([
+      { id: "reading", kind: "link", title: "延伸阅读", url: "https://example.test/reading" },
+      expect.objectContaining({ id: "8f31b270-b23d-4ec1-bd2b-8543210bcf88", kind: "file", title: "观察手册", fileName: "观察手册.pdf", url: "/api/uploads/8f31b270-b23d-4ec1-bd2b-8543210bcf88" }),
+    ]);
     expect(mocks.offerings).toHaveBeenCalledWith(expect.objectContaining({
       include: expect.objectContaining({
         chapters: expect.objectContaining({

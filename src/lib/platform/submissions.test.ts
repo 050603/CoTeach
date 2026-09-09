@@ -70,6 +70,14 @@ describe("learning task submission", () => {
     await submitActivity(claims, "task", { answers: { q1: "a" } });
     expect(mocks.save).toHaveBeenCalledOnce();
   });
+  it("validates and persists multiple-choice option arrays", async () => {
+    mocks.activity.mockResolvedValue({ ...activity, type: "FORM", config: { schemaVersion: 2, content: "", questions: [{ id: "q1", title: "练习过哪些能力？", type: "multiple-choice", chartType: "bar", required: true, options: [{ id: "a", label: "调研" }, { id: "b", label: "协作" }] }] } });
+    await expect(submitActivity(claims, "task", { answers: { q1: "a" } })).rejects.toMatchObject({ code: "INVALID_ANSWER" });
+    await expect(submitActivity(claims, "task", { answers: { q1: ["a", "a"] } })).rejects.toMatchObject({ code: "INVALID_ANSWER" });
+    await expect(submitActivity(claims, "task", { answers: { q1: ["a", "unknown"] } })).rejects.toMatchObject({ code: "INVALID_ANSWER" });
+    await submitActivity(claims, "task", { answers: { q1: ["a", "b"] } });
+    expect(mocks.history).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ payload: expect.objectContaining({ answers: { q1: ["a", "b"] } }) }) }));
+  });
   it("does not let clients complete classrooms using task submissions", async () => {
     mocks.activity.mockResolvedValue({ ...activity, type: "CLASSROOM" });
     await expect(submitActivity(claims, "task", {})).rejects.toMatchObject({ code: "INVALID_ACTIVITY" });

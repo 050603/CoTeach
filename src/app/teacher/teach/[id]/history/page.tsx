@@ -98,11 +98,12 @@ export default async function CourseHistoryPage({
 
   const auth = await authenticateRequest(new Request("http://localhost/teacher/history", { headers: await headers() }), "teacher");
   if ("response" in auth || !await canAccessLegacyCourse(auth.claims, courseId)) notFound();
+  const teacherName = auth.claims.role === "teacher" ? auth.claims.displayName : "教师";
   const course = await getCourse(courseId);
 
   if (!course) {
     return (
-      <DashboardShell role="teacher" userName="教师" variant="bare">
+      <DashboardShell role="teacher" userName={teacherName} variant="bare">
         <div className="grid place-items-center py-20 text-stone-500">
           未找到课程。
           <Link
@@ -121,7 +122,7 @@ export default async function CourseHistoryPage({
     return (
       <DashboardShell
         role="teacher"
-        userName="教师"
+        userName={teacherName}
         variant="bare"
         currentCourse={{ id: course.id, name: course.name, status: course.status }}
       >
@@ -158,7 +159,7 @@ export default async function CourseHistoryPage({
   return (
     <DashboardShell
       role="teacher"
-      userName="教师"
+      userName={teacherName}
       variant="bare"
       currentCourse={{ id: course.id, name: course.name, status: course.status }}
     >

@@ -249,4 +249,63 @@ describe("buildQuickClassroomArtifacts", () => {
       items: expect.arrayContaining([expect.objectContaining({ value: "校园雨水花园" })]),
     });
   });
+
+  it("uses the latest cover outcome after a managed recovery", () => {
+    const recovered = job({
+      status: "completed",
+      step: "completed",
+      events: [
+        { step: "generating_course_cover", progress: 99, message: "正在生成课程封面", scenesGenerated: 6, totalScenes: 6, ts: 1 },
+        { step: "course_cover_failed", progress: 99, message: "课程封面生成未完成", scenesGenerated: 6, totalScenes: 6, ts: 2 },
+        { step: "generating_course_cover", progress: 99, message: "正在重新生成课程封面", scenesGenerated: 6, totalScenes: 6, ts: 3 },
+        { step: "course_cover_ready", progress: 99, message: "课程封面已生成并保存", scenesGenerated: 6, totalScenes: 6, ts: 4 },
+        { step: "generation_resources_ready", progress: 99, message: "课程封面与课堂资源已经就绪", scenesGenerated: 6, totalScenes: 6, ts: 5 },
+      ],
+    });
+
+    const artifacts = buildQuickClassroomArtifacts(recovered);
+    expect(artifacts.find((item) => item.id === "classroom-course-cover")).toMatchObject({
+      kind: "audit",
+      title: "课程专属封面已经生成",
+      summary: "课程封面已生成并保存",
+      items: expect.arrayContaining([expect.objectContaining({ label: "保存状态", value: "已写入课程" })]),
+    });
+    expect(artifacts.find((item) => item.id === "classroom-resources-ready")?.items[0]).toMatchObject({
+      label: "课程封面",
+      value: "主题封面已写入课程",
+    });
+  });
+
+  it("keeps concurrent media and TTS cards in a single forward sequence", () => {
+    const events: QuickClassroomGenerationSnapshot["events"] = [
+      { step: "generating_media_assets", assetPhaseStatus: "running", progress: 98, message: "正在生成图片", scenesGenerated: 6, totalScenes: 6, ts: 1 },
+      { step: "generating_tts_assets", assetPhaseStatus: "running", progress: 98, message: "正在生成语音", scenesGenerated: 6, totalScenes: 6, ts: 2 },
+    ];
+    expect(resolveQuickClassroomActiveArtifactId(job({ step: "generating_tts_assets", events })))
+      .toBe("classroom-media-assets");
+
+    events.push({
+      step: "generating_media_assets",
+      assetPhaseStatus: "completed",
+      progress: 99,
+      message: "图片已经生成",
+      scenesGenerated: 6,
+      totalScenes: 6,
+      ts: 3,
+    });
+    expect(resolveQuickClassroomActiveArtifactId(job({ step: "generating_media_assets", events: [...events] })))
+      .toBe("classroom-tts-assets");
+
+    events.push({
+      step: "generating_tts_assets",
+      assetPhaseStatus: "completed",
+      progress: 99,
+      message: "语音已经生成",
+      scenesGenerated: 6,
+      totalScenes: 6,
+      ts: 4,
+    });
+    expect(resolveQuickClassroomActiveArtifactId(job({ step: "generating_tts_assets", events })))
+      .toBe("classroom-tts-assets");
+  });
 });

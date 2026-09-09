@@ -107,6 +107,7 @@ export async function generateWithNanoBanana(
 
   const response = await fetch(`${baseUrl}/v1beta/models/${model}:generateContent`, {
     method: 'POST',
+    signal: options.signal,
     headers: {
       'Content-Type': 'application/json',
       'x-goog-api-key': config.apiKey,
@@ -125,7 +126,10 @@ export async function generateWithNanoBanana(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Gemini image generation failed (${response.status}): ${text}`);
+    throw Object.assign(
+      new Error(`Gemini image generation failed (${response.status}): ${text}`),
+      { statusCode: response.status },
+    );
   }
 
   const data: GeminiResponse = await response.json();

@@ -21,6 +21,36 @@ export type MissingTtsResource = {
   title: string;
 };
 
+export type GeneratedMediaFailure = {
+  type: "image" | "video";
+};
+
+/**
+ * A course cover is generated and retried independently from classroom media.
+ * It may need later attention, but it must never make the whole classroom,
+ * image, and TTS pipeline restart from the beginning.
+ */
+export function summarizeGeneratedMediaReadiness(input: {
+  failures: ReadonlyArray<GeneratedMediaFailure>;
+  enableImageGeneration: boolean;
+  enableVideoGeneration: boolean;
+  coverStatus: "ready" | "failed";
+}): {
+  missingRequiredImageCount: number;
+  missingRequiredVideoCount: number;
+  coverNeedsAttention: boolean;
+} {
+  return {
+    missingRequiredImageCount: input.enableImageGeneration
+      ? input.failures.filter((failure) => failure.type === "image").length
+      : 0,
+    missingRequiredVideoCount: input.enableVideoGeneration
+      ? input.failures.filter((failure) => failure.type === "video").length
+      : 0,
+    coverNeedsAttention: input.coverStatus !== "ready",
+  };
+}
+
 type ResourceReadinessOutline = {
   id: string;
   title: string;

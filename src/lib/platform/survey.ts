@@ -5,15 +5,21 @@ export const SurveyOptionSchema = z.object({
   label: z.string().trim().min(1).max(200),
 });
 
+export const SurveyChartTypeSchema = z.enum(["donut", "bar", "column"]);
+
 export const SurveyQuestionSchema = z.object({
   id: z.string().trim().min(1).max(80),
   title: z.string().trim().min(1).max(500),
-  type: z.enum(["single-choice", "short-text"]).default("short-text"),
+  type: z.enum(["single-choice", "multiple-choice", "short-text"]).default("short-text"),
+  chartType: SurveyChartTypeSchema.default("donut"),
   required: z.boolean().default(true),
   options: z.array(SurveyOptionSchema).max(10).default([]),
 }).superRefine((question, context) => {
-  if (question.type === "single-choice" && question.options.length < 2) {
-    context.addIssue({ code: "custom", message: "单选题至少需要两个选项", path: ["options"] });
+  if (question.type !== "short-text" && question.options.length < 2) {
+    context.addIssue({ code: "custom", message: "选择题至少需要两个选项", path: ["options"] });
+  }
+  if (question.type === "multiple-choice" && question.chartType === "donut") {
+    context.addIssue({ code: "custom", message: "多选题请选择条形图或柱状图", path: ["chartType"] });
   }
   const optionIds = new Set<string>();
   question.options.forEach((option, index) => {
@@ -37,22 +43,34 @@ export const SurveyConfigSchema = z.object({
 export type SurveyConfig = z.infer<typeof SurveyConfigSchema>;
 export type SurveyQuestion = z.infer<typeof SurveyQuestionSchema>;
 export type SurveyOption = z.infer<typeof SurveyOptionSchema>;
+export type SurveyChartType = z.infer<typeof SurveyChartTypeSchema>;
+export type SurveyAnswer = string | string[];
 
 export type SurveyAnalyticsRow = {
   progressData: unknown;
   completedAt?: Date | string | null;
+  respondent: SurveyRespondent;
+};
+
+export type SurveyRespondent = {
+  studentId: string;
+  displayName: string;
 };
 
 export type SurveyChoiceAnalytics = SurveyQuestion & {
-  type: "single-choice";
+  type: "single-choice" | "multiple-choice";
   responseCount: number;
-  options: Array<SurveyOption & { count: number; percentage: number }>;
+  options: Array<SurveyOption & { count: number; percentage: number; respondents: SurveyRespondent[] }>;
+};
+
+export type SurveyTextResponse = SurveyRespondent & {
+  content: string;
 };
 
 export type SurveyTextAnalytics = SurveyQuestion & {
   type: "short-text";
   responseCount: number;
-  responses: string[];
+  responses: SurveyTextResponse[];
   terms: Array<{ label: string; value: number }>;
 };
 
@@ -63,16 +81,26 @@ const STOP_WORDS = new Set([
   "the", "and", "that", "this", "with", "from", "have", "would", "could", "very", "about", "into", "your", "our",
 ]);
 
-function responseAnswers(progressData: unknown): Record<string, string> {
+function responseAnswers(progressData: unknown): Record<string, SurveyAnswer> {
   if (!progressData || typeof progressData !== "object" || Array.isArray(progressData)) return {};
   const data = progressData as Record<string, unknown>;
   const source = data.submission && typeof data.submission === "object" && !Array.isArray(data.submission)
     ? data.submission as Record<string, unknown>
     : data;
   if (!source.answers || typeof source.answers !== "object" || Array.isArray(source.answers)) return {};
-  return Object.fromEntries(Object.entries(source.answers as Record<string, unknown>)
-    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-    .map(([key, value]) => [key, value.trim()]));
+  return Object.entries(source.answers as Record<string, unknown>).reduce<Record<string, SurveyAnswer>>((answers, [key, value]) => {
+    if (typeof value === "string") answers[key] = value.trim();
+    if (Array.isArray(value)) {
+      const selections = [...new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))];
+      answers[key] = selections;
+    }
+    return answers;
+  }, {});
+}
+
+function selectedOptionIds(answer: SurveyAnswer | undefined): string[] {
+  if (Array.isArray(answer)) return answer;
+  return answer ? [answer] : [];
 }
 
 export function extractSurveyTerms(responses: string[], limit = 48): Array<{ label: string; value: number }> {
@@ -98,22 +126,25 @@ export function extractSurveyTerms(responses: string[], limit = 48): Array<{ lab
 
 export function buildSurveyAnalytics(configInput: unknown, rows: SurveyAnalyticsRow[], totalStudents: number) {
   const config = SurveyConfigSchema.parse(configInput);
-  const answers = rows.map((row) => responseAnswers(row.progressData));
+  const respondentAnswers = rows.map((row) => ({ answers: responseAnswers(row.progressData), respondent: row.respondent }));
   const questions: SurveyQuestionAnalytics[] = config.questions.map((question) => {
-    if (question.type === "single-choice") {
-      const responseCount = answers.reduce((count, answer) => count + (answer[question.id] ? 1 : 0), 0);
+    if (question.type !== "short-text") {
+      const responseCount = respondentAnswers.reduce((count, row) => count + (selectedOptionIds(row.answers[question.id]).length ? 1 : 0), 0);
       return {
         ...question,
-        type: "single-choice" as const,
+        type: question.type,
         responseCount,
         options: question.options.map((option) => {
-          const count = answers.reduce((total, answer) => total + (answer[question.id] === option.id ? 1 : 0), 0);
-          return { ...option, count, percentage: responseCount ? Math.round((count / responseCount) * 1000) / 10 : 0 };
+          const respondents = respondentAnswers.filter((row) => selectedOptionIds(row.answers[question.id]).includes(option.id)).map((row) => row.respondent);
+          return { ...option, count: respondents.length, percentage: responseCount ? Math.round((respondents.length / responseCount) * 1000) / 10 : 0, respondents };
         }),
       };
     }
-    const responses = answers.map((answer) => answer[question.id]).filter((answer): answer is string => Boolean(answer));
-    return { ...question, type: "short-text" as const, responseCount: responses.length, responses, terms: extractSurveyTerms(responses) };
+    const responses = respondentAnswers.flatMap((row) => {
+      const content = row.answers[question.id];
+      return typeof content === "string" && content ? [{ ...row.respondent, content }] : [];
+    });
+    return { ...question, type: "short-text" as const, responseCount: responses.length, responses, terms: extractSurveyTerms(responses.map((response) => response.content)) };
   });
   const submittedCount = rows.length;
   return {
