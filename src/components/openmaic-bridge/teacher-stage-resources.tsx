@@ -360,13 +360,15 @@ export function TeacherStageResources({
 
 export function StudentProjectedTeacherResource({
   projection,
+  projectionVersion,
   fullscreen = false,
 }: {
   projection: TeacherResourceProjection;
+  projectionVersion?: number;
   fullscreen?: boolean;
 }) {
   return (
-    <section data-openpbl-embed className={cn("overflow-hidden bg-[var(--pbl-surface)]", fullscreen ? "h-full" : "rounded-[var(--radius-lg)] border border-[var(--pbl-border)]")}>
+    <section data-openpbl-embed data-projection-version={projectionVersion} className={cn("overflow-hidden bg-[var(--pbl-surface)]", fullscreen ? "h-full" : "rounded-[var(--radius-lg)] border border-[var(--pbl-border)]")}>
       {!fullscreen ? <div className="flex items-center justify-between gap-3 border-b border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)] px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-bold text-[var(--pbl-teacher)]">

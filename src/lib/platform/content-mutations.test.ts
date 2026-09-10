@@ -72,11 +72,50 @@ describe("serialized content changes", () => {
   });
 
   it("rejects stale activity versions without creating replacement runs", async () => {
-    mocks.tx.activity.findUnique.mockResolvedValue({ version: 2, chapter: { offeringId: "offering" } });
+    mocks.tx.activity.findUnique.mockResolvedValue({ chapterId: "chapter", version: 2, chapter: { offeringId: "offering" } });
     await expect(updateActivity(teacherClaims, "activity", { version: 1, templateId: "template" })).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
-    expectLockedBefore(mocks.tx.activity.findUnique, "Activity");
+    expect(mocks.tx.$queryRaw.mock.calls[0][0].join("")).toContain('FROM "Chapter"');
+    expect(mocks.tx.$queryRaw.mock.calls[1][0].join("")).toContain('FROM "Activity"');
     expect(mocks.tx.activity.update).not.toHaveBeenCalled();
     expect(mocks.tx.classroomInstance.create).not.toHaveBeenCalled();
+  });
+
+  it("locks every active activity when its chapter is locked", async () => {
+    mocks.tx.chapter.findUnique.mockResolvedValue({ id: "chapter", offeringId: "offering", version: 2 });
+    mocks.tx.chapter.update.mockResolvedValue({ id: "chapter", isOpen: false, version: 3 });
+
+    await updateChapter(teacherClaims, "chapter", { isOpen: false, version: 2 });
+
+    expect(mocks.tx.activity.updateMany).toHaveBeenCalledWith({
+      where: { chapterId: "chapter", archivedAt: null, isOpen: true },
+      data: { isOpen: false, version: { increment: 1 } },
+    });
+    expect(mocks.tx.chapter.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "chapter" },
+      data: expect.objectContaining({ isOpen: false }),
+    }));
+  });
+
+  it("unlocks the parent chapter when an activity is unlocked", async () => {
+    mocks.tx.activity.findUnique.mockResolvedValue({
+      id: "activity",
+      chapterId: "chapter",
+      type: "RESOURCE",
+      version: 4,
+      chapter: { id: "chapter", offeringId: "offering", isOpen: false },
+    });
+    mocks.tx.activity.update.mockResolvedValue({ id: "activity", isOpen: true, version: 5 });
+
+    await updateActivity(teacherClaims, "activity", { isOpen: true, version: 4 });
+
+    expect(mocks.tx.chapter.update).toHaveBeenCalledWith({
+      where: { id: "chapter" },
+      data: { isOpen: true, version: { increment: 1 } },
+    });
+    expect(mocks.tx.activity.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "activity" },
+      data: expect.objectContaining({ isOpen: true }),
+    }));
   });
 
   it("allocates template revisions and classroom run numbers under their parent locks", async () => {

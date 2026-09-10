@@ -27,6 +27,39 @@ it('uses a timestamp and ID seek predicate for equal-time events', async () => {
   expect(response.status).toBe(200);
   expect(mocks.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { AND: [{ classroomInstanceId: 'instance' }, { OR: [{ createdAt: { gt: new Date(timestamp) } }, { createdAt: new Date(timestamp), id: { gt: id } }] }] } }));
 });
+it('delivers the compact projection payload for direct client application', async () => {
+  mocks.findMany.mockResolvedValue([{
+    id,
+    createdAt: new Date(timestamp),
+    eventType: 'projection-changed',
+    actorId: 'teacher',
+    participation: null,
+    payload: {
+      fingerprint: 'private',
+      ack: { requestId: 'private' },
+      courseVersion: 5,
+      projection: {
+        courseId: 'instance',
+        courseVersion: 5,
+        projectionVersion: 3,
+        projectionUpdatedAt: timestamp,
+        serverTime: timestamp,
+        resourceProjection: null,
+        teacherResourceProjection: null,
+      },
+    },
+  }]);
+  const body = await (await GET(
+    new Request('http://localhost/api/courses/instance/events?after=0'),
+    context,
+  )).json();
+  expect(body.events[0]).toMatchObject({
+    type: 'projection-changed',
+    payload: { projectionVersion: 3, resourceProjection: null },
+  });
+  expect(JSON.stringify(body)).not.toContain('fingerprint');
+  expect(JSON.stringify(body)).not.toContain('requestId');
+});
 it('rejects malformed legacy numeric cursors and denied access before data reads', async () => {
   expect((await GET(new Request('http://localhost/api/courses/instance/events?after=99'), context)).status).toBe(400);
   mocks.access.mockResolvedValue(false);

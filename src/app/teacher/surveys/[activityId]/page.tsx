@@ -8,7 +8,7 @@ import { SurveyWordCloud } from "@/components/platform/survey-word-cloud";
 import { teacherPlatformFetch } from "@/lib/platform/client";
 import { TeacherPlatformHeader, TeacherPlatformPage } from "@/components/platform/teacher-shell";
 
-type Respondent = { studentId: string; displayName: string };
+type Respondent = { studentId: string; displayName: string; detail?: string };
 type ChoiceQuestion = { id: string; title: string; type: "single-choice" | "multiple-choice"; chartType: "donut" | "bar" | "column"; required: boolean; responseCount: number; options: Array<{ id: string; label: string; count: number; percentage: number; respondents: Respondent[] }> };
 type TextQuestion = { id: string; title: string; type: "short-text"; required: boolean; responseCount: number; responses: Array<Respondent & { content: string }>; terms: Array<{ label: string; value: number }> };
 type SurveyResult = {
@@ -233,7 +233,7 @@ export default function SurveyDashboardPage() {
                         <section aria-live="polite" className={`survey-choice-respondents ${selectedOption ? "is-visible" : ""}`}>
                           {selectedOption ? <>
                             <div className="survey-choice-respondents-heading"><div><UsersRound size={16} /><span>选择“{selectedOption.label}”的学生</span></div><strong>{selectedOption.respondents.length} 人</strong></div>
-                            {selectedOption.respondents.length ? <div className="survey-student-name-list">{selectedOption.respondents.map((student) => <span key={student.studentId}><UserRound size={14} />{student.displayName}</span>)}</div> : <p>当前没有学生选择此项。</p>}
+                            {selectedOption.respondents.length ? <div className="survey-student-name-list">{selectedOption.respondents.map((student) => <div className="survey-choice-response" key={student.studentId}><span><UserRound size={14} />{student.displayName}</span>{student.detail ? <p>{student.detail}</p> : null}</div>)}</div> : <p>当前没有学生选择此项。</p>}
                           </> : <p>点击任一选项，查看选择该答案的实名学生名单。</p>}
                         </section>
                       </div>

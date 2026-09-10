@@ -65,7 +65,7 @@ function dispatchLocal(event: RealtimeEvent): void {
 }
 
 export async function initializeEventBus(): Promise<void> {
-  if (publisher?.isReady) return;
+  if (publisher?.isReady && subscriber?.isReady) return;
   if (initialization) return initialization;
   const url = process.env.REDIS_URL?.trim();
   if (!url) return;
@@ -130,7 +130,12 @@ export async function publishCourseEvent(
 ): Promise<void> {
   if (!courseId) return;
   dispatchLocal(event);
-  if (!publisher?.isReady) {
+  const publisherAtStart = publisher;
+  const subscriberNeedsRepair = Boolean(
+    process.env.REDIS_URL?.trim()
+    && !subscriber?.isReady,
+  );
+  if (!publisherAtStart?.isReady) {
     if (
       process.env.REDIS_URL?.trim()
       && Date.now() - lastInitializationAttemptAt >= RECONNECT_THROTTLE_MS
@@ -140,7 +145,16 @@ export async function publishCourseEvent(
     return;
   }
   const envelope: RedisEnvelope = { origin: instanceId, event };
-  await publisher.publish(CHANNEL, JSON.stringify(envelope));
+  await publisherAtStart.publish(CHANNEL, JSON.stringify(envelope));
+  // A healthy publisher does not imply that this instance still receives
+  // events from its peers. Repair the pair after sending the current event so
+  // a dead subscriber cannot leave locally connected classrooms stale.
+  if (
+    subscriberNeedsRepair
+    && Date.now() - lastInitializationAttemptAt >= RECONNECT_THROTTLE_MS
+  ) {
+    void initializeEventBus();
+  }
 }
 
 export function subscribeCourseEvents(

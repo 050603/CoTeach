@@ -373,10 +373,6 @@ export default function StudentCoursePage() {
     );
   }
 
-  const resources = tasks.filter(
-    ({ activity }) => normalized(activity.type) === "resource",
-  );
-
   function toggleChapter(chapterId: string) {
     setExpanded((current) => {
       const next = new Set(current);
@@ -615,9 +611,9 @@ export default function StudentCoursePage() {
               <div className="pbl-student-secondary-copy">
                 <span>COURSE MATERIALS</span>
                 <h2>课程资料</h2>
-                <p>{course.referenceMaterials || "课程参考资料与章节资料统一展示在这里。"}</p>
+                <p>{course.referenceMaterials || "教师单独上传的课程参考资料会展示在这里。"}</p>
               </div>
-              {course.courseReferences?.length || resources.length ? (
+              {course.courseReferences?.length ? (
                 <div className="pbl-student-resource-list">
                   {course.courseReferences?.map((reference) => (
                     <a key={reference.id} href={reference.url} target="_blank" rel="noreferrer">
@@ -632,31 +628,12 @@ export default function StudentCoursePage() {
                       </div>
                     </a>
                   ))}
-                  {resources.map(({ chapter, chapterIndex, activity }) => {
-                    const open = chapter.isOpen && activity.isOpen;
-                    const item = (
-                      <div className={`pbl-student-resource-row${open ? "" : " is-locked"}`}>
-                        <span className="pbl-student-task-icon"><FileText size={16} /></span>
-                        <div className="min-w-0 flex-1">
-                          <strong title={activity.title}>{activity.title}</strong>
-                          <p>第 {chapterIndex + 1} 章 · {chapter.title}</p>
-                        </div>
-                        <span>{open ? (isCompleted(activity) ? "已完成" : "查看资料") : "未解锁"}</span>
-                        {open ? <ArrowRight size={15} /> : <LockKeyhole size={15} />}
-                      </div>
-                    );
-                    return open ? (
-                      <Link key={activity.id} href={`/student/activities/${activity.id}`}>{item}</Link>
-                    ) : (
-                      <div key={activity.id} aria-disabled="true">{item}</div>
-                    );
-                  })}
                 </div>
               ) : (
                 <div className="pbl-student-course-empty pbl-student-course-empty-compact">
                   <FileText size={23} />
                   <h3>暂无课程资料</h3>
-                  <p>教师添加的课程参考资料和资料类活动会显示在这里。</p>
+                  <p>教师单独上传课程参考资料后会显示在这里。</p>
                 </div>
               )}
             </div>

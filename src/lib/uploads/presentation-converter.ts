@@ -101,7 +101,7 @@ export async function convertPresentationToPdf({
     }
 
     await copyFile(generatedPath, targetPath, constants.COPYFILE_EXCL);
-    await chmod(targetPath, 0o600);
+    await chmod(targetPath, 0o644);
     return { size: info.size, mimeType: "application/pdf" };
   } catch (error) {
     await unlink(targetPath).catch(() => undefined);

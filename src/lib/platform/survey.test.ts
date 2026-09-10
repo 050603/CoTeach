@@ -14,6 +14,7 @@ describe("survey configuration and analytics", () => {
   it("accepts mixed question types and rejects incomplete choices", () => {
     expect(SurveyConfigSchema.parse(config).questions).toHaveLength(2);
     expect(SurveyConfigSchema.safeParse({ ...config, questions: [{ id: "q", title: "选择", type: "single-choice", options: [{ id: "a", label: "A" }] }] }).success).toBe(false);
+    expect(SurveyConfigSchema.safeParse({ ...config, questions: [{ id: "q", title: "多选", type: "multiple-choice", chartType: "bar", maxSelections: 3, options: [{ id: "a", label: "A" }, { id: "b", label: "B" }] }] }).success).toBe(false);
   });
 
   it("uses the latest progress projection to calculate ratios and text terms", () => {
@@ -51,5 +52,18 @@ describe("survey configuration and analytics", () => {
     expect(question).toMatchObject({ type: "multiple-choice", chartType: "bar", responseCount: 2, options: [{ count: 1, percentage: 50 }, { count: 2, percentage: 100 }, { count: 1, percentage: 50 }] });
     expect(question.type !== "short-text" && question.options[1].respondents.map((student) => student.displayName)).toEqual(["林晓", "陈舟"]);
     expect(SurveyConfigSchema.safeParse({ ...multiConfig, questions: [{ ...multiConfig.questions[0], chartType: "donut" }] }).success).toBe(false);
+  });
+
+  it("keeps supplemental option text attached to the named respondent", () => {
+    const otherConfig = { schemaVersion: 2, content: "", questions: [{ id: "pace", title: "课堂节奏如何？", type: "single-choice", chartType: "bar", required: true, options: [{ id: "good", label: "合适" }, { id: "other", label: "其他", allowTextInput: true }] }] };
+    const result = buildSurveyAnalytics(otherConfig, [
+      { respondent: { studentId: "s1", displayName: "林晓" }, progressData: { answers: { pace: { selected: "other", optionText: { other: "讨论环节偏快" } } } } },
+      { respondent: { studentId: "s2", displayName: "陈舟" }, progressData: { answers: { pace: "good" } } },
+    ], 2);
+    const question = result.questions[0];
+
+    expect(question.type !== "short-text" && question.options[1].respondents).toEqual([
+      { studentId: "s1", displayName: "林晓", detail: "讨论环节偏快" },
+    ]);
   });
 });

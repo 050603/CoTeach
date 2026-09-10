@@ -400,6 +400,12 @@ export type CourseUiState = {
   activeGenerationMode?: "new";
   /** 教师选择并向当前阶段全班投屏的上传资源。 */
   resourceProjection?: ClassroomResourceProjection | null;
+  /** 服务端为两类课堂投屏统一分配的单调递增版本。 */
+  projectionVersion?: number;
+  /** 最近一次投屏状态在服务端提交的时间。 */
+  projectionUpdatedAt?: string;
+  /** 仅存在于浏览器内存中，用于校正视频跟随时的客户端时钟偏差。 */
+  projectionClockOffsetMs?: number;
   /** 第四阶段个人汇报队列配置。 */
   showcaseReporting?: {
     schemaVersion: 1;

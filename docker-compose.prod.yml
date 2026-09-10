@@ -120,6 +120,7 @@ services:
       LOAD_TEST_CLIENT_IP: ${LOAD_TEST_CLIENT_IP:-127.0.0.1}
     volumes:
       - ./deploy/nginx/openpbl.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./.openpbl-data/uploads:/srv/openpbl/uploads:ro
       - letsencrypt:/etc/letsencrypt:ro
       - acme-webroot:/var/www/acme:ro
       - nginx-logs:/var/log/nginx

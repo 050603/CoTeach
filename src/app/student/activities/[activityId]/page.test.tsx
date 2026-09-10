@@ -36,8 +36,8 @@ describe("student questionnaire", () => {
       id: "activity", type: "Form", title: "课堂反馈", description: null, isOpen: true,
       offering: { id: "offering", name: "课程", status: "open" }, chapter: { title: "章节" },
       config: { content: "请真实表达", questions: [
-        { id: "pace", title: "课堂节奏如何？", type: "single-choice", required: true, options: [{ id: "fast", label: "偏快" }, { id: "good", label: "合适" }] },
-        { id: "skills", title: "练习了哪些能力？", type: "multiple-choice", chartType: "bar", required: true, options: [{ id: "research", label: "调研" }, { id: "teamwork", label: "协作" }, { id: "present", label: "表达" }] },
+        { id: "pace", title: "课堂节奏如何？", type: "single-choice", required: true, options: [{ id: "fast", label: "偏快" }, { id: "good", label: "合适" }, { id: "other", label: "其他", allowTextInput: true }] },
+        { id: "skills", title: "练习了哪些能力？", type: "multiple-choice", chartType: "bar", maxSelections: 2, required: true, options: [{ id: "research", label: "调研" }, { id: "teamwork", label: "协作" }, { id: "present", label: "表达" }] },
         { id: "idea", title: "最有启发的内容？", type: "short-text", required: true, options: [] },
       ] }, progress: { status: "not_started", progressData: {} }, instance: null,
     } })));
@@ -45,14 +45,20 @@ describe("student questionnaire", () => {
     expect(screen.queryByText("我的学习空间")).toBeNull();
     expect(await screen.findByText("单选题")).toBeInTheDocument();
     expect(screen.getByText("多选题")).toBeInTheDocument();
-    expect(screen.getByText(/单选：本题只能选择一个选项/)).toBeInTheDocument();
-    expect(screen.getByText(/多选：本题可以选择一个或多个选项/)).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("radio", { name: /合适/ }));
+    expect(screen.queryByText(/本题只能选择一个选项/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/本题可以选择一个或多个选项/)).not.toBeInTheDocument();
+    expect(screen.getByText("最多选 2 项")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("radio", { name: /其他/ }));
+    const otherDetail = screen.getByRole("textbox", { name: "请补充其他的具体内容" });
+    expect(otherDetail).toBeRequired();
+    expect(otherDetail).toHaveAttribute("maxlength", "200");
+    fireEvent.change(otherDetail, { target: { value: "前半段合适，讨论环节偏快" } });
     fireEvent.click(screen.getByRole("checkbox", { name: /调研/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: /协作/ }));
+    expect(screen.getByRole("checkbox", { name: /表达/ })).toBeDisabled();
     fireEvent.change(screen.getByRole("textbox", { name: "最有启发的内容？" }), { target: { value: "小组共创让我理解了设计思维" } });
     fireEvent.click(screen.getByRole("button", { name: "提交问卷" }));
-    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/activities/activity/submit", expect.objectContaining({ method: "POST", body: JSON.stringify({ answer: "", answers: { pace: "good", skills: ["research", "teamwork"], idea: "小组共创让我理解了设计思维" } }) })));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/activities/activity/submit", expect.objectContaining({ method: "POST", body: JSON.stringify({ answer: "", answers: { pace: { selected: "other", optionText: { other: "前半段合适，讨论环节偏快" } }, skills: ["research", "teamwork"], idea: "小组共创让我理解了设计思维" } }) })));
     expect(await screen.findByRole("link", { name: "返回课程" })).toHaveAttribute("href", "/student/courses/offering");
     expect(screen.getByRole("button", { name: "更新回答" })).toBeInTheDocument();
   });

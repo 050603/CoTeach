@@ -20,6 +20,7 @@
     "test:e2e": "playwright test",
     "test:classroom-flow": "node scripts/verify-research-database.mjs",
     "test:e2e:ui": "playwright test --ui",
+    "test:projection-sync": "node scripts/measure-projection-sync.mjs",
     "playwright:install": "playwright install chromium",
     "db:generate": "node scripts/run-prisma.mjs generate",
     "db:migrate": "node scripts/run-prisma.mjs migrate dev",

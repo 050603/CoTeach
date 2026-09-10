@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const mocks = vi.hoisted(() => ({ file: vi.fn(), resource: vi.fn(), update: vi.fn(), remove: vi.fn(), count: vi.fn(),
@@ -27,6 +27,20 @@ describe('V2 FileAsset routes', () => {
     await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, '%PDF-1.7 content');
     const response = await GET(new Request(`http://localhost/api/uploads/${id}`, { headers: { Range: 'bytes=0-3' } }), context);
     expect(response.status).toBe(206); expect(await response.text()).toBe('%PDF'); expect(mocks.access).toHaveBeenCalledWith(mocks.claims, 'offering-1', 'read');
+  });
+  it('delegates an authenticated file response to the internal Nginx media location', async () => {
+    await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, '%PDF-1.7 content');
+    const response = await GET(new Request(`http://localhost/api/uploads/${id}`, { headers: { 'X-OpenPBL-Accel-Redirect': '1' } }), context);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-accel-redirect')).toBe(`/_openpbl_uploads/${file.storageKey}`);
+    expect(response.headers.get('content-disposition')).toContain('lesson.pdf');
+    expect(await response.text()).toBe('');
+  });
+  it('falls back to the application stream when the gateway cannot read a private file', async () => {
+    await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, '%PDF-1.7 content'); await chmod(target, 0o600);
+    const response = await GET(new Request(`http://localhost/api/uploads/${id}`, { headers: { 'X-OpenPBL-Accel-Redirect': '1' } }), context);
+    expect(response.headers.get('x-accel-redirect')).toBeNull();
+    expect(await response.text()).toBe('%PDF-1.7 content');
   });
   it('denies teachers outside the offering and unowned private assets', async () => {
     mocks.access.mockResolvedValue(false);

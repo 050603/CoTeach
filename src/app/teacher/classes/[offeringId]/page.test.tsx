@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Page from "./page";
 
@@ -42,11 +42,88 @@ describe("课程章节管理", () => {
   it("locks a chapter in its directory with optimistic version protection", async () => {
     render(<Page />);
     const access = await screen.findByRole("button", { name: "锁定章节" });
+    const label = access.querySelector(".pbl-access-label");
+    expect(access).not.toHaveClass("is-expanded");
     expect(access).toHaveTextContent("已解锁");
+    expect(label).toHaveAttribute("aria-hidden", "true");
     expect(screen.getAllByText("已解锁")).toHaveLength(1);
     fireEvent.click(access);
+    expect(access).toHaveClass("is-expanded", "is-locked");
+    expect(label).toHaveTextContent("已锁定");
+    expect(label).toHaveAttribute("aria-hidden", "false");
     await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/chapters/chapter-1", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ isOpen: false, version: 2 }) })));
-    expect(await screen.findByText("章节已锁定")).toBeTruthy();
+    expect(await screen.findByText("章节及其内容已锁定")).toBeTruthy();
+  });
+  it("toggles a resource from a compact lock icon and collapses its status after two seconds", async () => {
+    let currentOffering = {
+      ...offering,
+      chapters: [{
+        ...offering.chapters[0],
+        isOpen: false,
+        activities: [{ id: "resource-1", title: "社区观察方法", type: "Resource", isOpen: false, version: 4 }],
+      }],
+    };
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url === "/api/platform/activities/resource-1/manage" && options?.method === "PATCH") {
+        currentOffering = {
+          ...currentOffering,
+          chapters: [{
+            ...currentOffering.chapters[0],
+            isOpen: true,
+            activities: [{ ...currentOffering.chapters[0].activities[0], isOpen: true, version: 5 }],
+          }],
+        };
+        return new Response(JSON.stringify({ success: true }));
+      }
+      return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [] } : { offerings: [currentOffering] }));
+    });
+    render(<Page />);
+    const access = await screen.findByRole("button", { name: "解锁内容" });
+    const label = access.querySelector(".pbl-access-label");
+    expect(access).not.toHaveClass("is-expanded");
+    expect(label).toHaveAttribute("aria-hidden", "true");
+
+    const nativeSetTimeout = globalThis.setTimeout;
+    let collapse: (() => void) | undefined;
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: Parameters<typeof setTimeout>[0], delay?: number) => {
+      if (delay === 2000 && typeof handler === "function") {
+        collapse = handler;
+        return -1 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return nativeSetTimeout(handler, delay);
+    }) as typeof setTimeout);
+
+    fireEvent.click(access);
+    expect(access).toHaveClass("is-expanded", "is-open");
+    expect(label).toHaveTextContent("已解锁");
+    expect(label).toHaveAttribute("aria-hidden", "false");
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/activities/resource-1/manage", expect.objectContaining({
+      method: "PATCH",
+      body: JSON.stringify({ isOpen: true, version: 4 }),
+    })));
+    await waitFor(() => expect(collapse).toBeTypeOf("function"));
+    expect(screen.getByRole("button", { name: "锁定章节" })).toBeInTheDocument();
+    expect(screen.queryByText("解锁内容")).not.toBeInTheDocument();
+
+    act(() => collapse?.());
+    expect(access).not.toHaveClass("is-expanded");
+    expect(label).toHaveAttribute("aria-hidden", "true");
+    timeoutSpy.mockRestore();
+  });
+  it("opens a resource editor from its title and main row area", async () => {
+    fetcher.mockImplementation(async (url: string) => new Response(JSON.stringify(
+      url === "/api/platform/templates"
+        ? { templates: [] }
+        : { offerings: [{ ...offering, chapters: [{ ...offering.chapters[0], activities: [{ id: "resource-1", title: "社区观察方法", type: "Resource", isOpen: true, version: 4 }] }] }] },
+    )));
+    render(<Page />);
+    const title = await screen.findByText("社区观察方法");
+    const mainArea = screen.getByRole("button", { name: "打开“社区观察方法”：编辑内容" });
+    expect(mainArea).toContainElement(title);
+
+    fireEvent.click(title);
+
+    expect(await screen.findByRole("heading", { name: "编辑学习内容" })).toBeInTheDocument();
   });
   it("creates a questionnaire within the chosen chapter with actual questions", async () => {
     render(<Page />);
@@ -56,7 +133,10 @@ describe("课程章节管理", () => {
     fireEvent.click(screen.getByRole("button", { name: "单选题" }));
     fireEvent.change(screen.getByLabelText("第 1 题题目内容"), { target: { value: "你最关注什么问题？" } });
     fireEvent.change(screen.getByLabelText("第 1 题选项 1"), { target: { value: "校园环境" } });
-    fireEvent.change(screen.getByLabelText("第 1 题选项 2"), { target: { value: "公共交通" } });
+    fireEvent.change(screen.getByLabelText("第 1 题选项 2"), { target: { value: "其他" } });
+    fireEvent.click(screen.getByRole("button", { name: "第 1 题选项 2 要求补充填写" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "添加学习内容" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "添加题目" }));
     fireEvent.change(screen.getByLabelText("第 2 题题目内容"), { target: { value: "你有哪些相关经验？" } });
     fireEvent.click(screen.getByRole("button", { name: "添加到章节" }));
@@ -64,7 +144,7 @@ describe("课程章节管理", () => {
     const request = fetcher.mock.calls.find(([url, options]) => url === "/api/platform/offerings/course-1/chapters/chapter-1/activities" && options?.method === "POST");
     const body = JSON.parse(String(request?.[1]?.body));
     expect(body.config.questions).toEqual([
-      expect.objectContaining({ title: "你最关注什么问题？", type: "single-choice", required: true, options: [expect.objectContaining({ label: "校园环境" }), expect.objectContaining({ label: "公共交通" })] }),
+      expect.objectContaining({ title: "你最关注什么问题？", type: "single-choice", required: true, options: [expect.objectContaining({ label: "校园环境" }), expect.objectContaining({ label: "其他", allowTextInput: true })] }),
       expect.objectContaining({ title: "你有哪些相关经验？", type: "short-text", required: true, options: [] }),
     ]);
   });
@@ -194,13 +274,18 @@ describe("课程章节管理", () => {
     expect(screen.queryByDisplayValue("A7B9C2")).toBeNull();
     fireEvent.click(invitation);
     expect(screen.getByRole("dialog")).toHaveClass("pbl-invitation-dialog");
-    expect(screen.getByLabelText("学生邀请码")).toHaveValue("A7B9C2");
+    expect(screen.getByRole("img", { name: "PrAIxis" })).toBeInTheDocument();
+    expect(screen.getByLabelText("学生端访问地址")).toHaveTextContent("172.16.185.157");
+    expect(screen.getByLabelText("加入课程步骤")).toHaveTextContent(/打开电脑浏览器.*注册 \/ 登录.*输入课程邀请码/);
+    expect(screen.getByLabelText("学生邀请码")).toHaveTextContent("A7B 9C2");
     fireEvent.click(screen.getByRole("button", { name: "复制邀请码" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("A7B9C2"));
     expect(await screen.findByText("邀请码已复制")).toBeInTheDocument();
   });
-  it("keeps the invitation code selectable if clipboard copy fails", async () => {
+  it("copies the invitation code through the plain-HTTP fallback", async () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
+    const execCommand = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
     fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
       if (options?.method) return new Response(JSON.stringify({ success: true }));
       return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [] } : { offerings: [{ ...offering, invitation: { code: "A7B9C2" } }] }));
@@ -208,8 +293,8 @@ describe("课程章节管理", () => {
     render(<Page />);
     fireEvent.click(await screen.findByRole("button", { name: /学生邀请码/ }));
     fireEvent.click(screen.getByRole("button", { name: "复制邀请码" }));
-    expect(await screen.findByText("复制失败，请手动选择邀请码")).toBeInTheDocument();
-    expect(screen.getByLabelText("学生邀请码")).toHaveAttribute("readonly");
+    await waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+    expect(await screen.findByText("邀请码已复制")).toBeInTheDocument();
   });
 });
 
@@ -224,7 +309,10 @@ describe("课堂主入口", () => {
   it.each([["scheduled", "进入课堂", "/teacher/teach/run/setup"], ["teaching", "继续授课", "/teacher/teach/run/setup?enter=1"], ["finished", "查看课堂记录", "/teacher/classrooms/run"]])("routes %s with one teaching entry", async (status, label, href) => {
     classrooms(status); render(<Page />);
     const entry = await screen.findByRole("link", { name: label });
+    const mainArea = screen.getByRole("link", { name: `打开“项目课堂”：${label}` });
     expect(entry).toHaveAttribute("href", href);
+    expect(mainArea).toHaveAttribute("href", href);
+    expect(mainArea).toContainElement(screen.getByText("项目课堂"));
     expect(entry).toHaveClass("pbl-row-secondary-action");
     expect(entry.firstElementChild?.tagName.toLowerCase()).toBe("svg");
     expect(screen.queryByRole("button", { name: "开始课堂" })).toBeNull();

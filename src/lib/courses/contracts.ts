@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { SessionAction } from "@/lib/session/actions";
+import type { ProjectionStateSnapshot } from "@/lib/realtime/projection-state";
 
 type JsonValue =
   | null
@@ -166,6 +167,69 @@ const ReflectionActionSchema = z.object({
   }).strict(),
 }).strict();
 
+const ResourceProjectionSchema = z.object({
+  resourceId: z.string().min(1).max(128),
+  stageKey: z.string().min(1).max(64),
+  title: z.string().max(256),
+  startedAt: z.iso.datetime(),
+  viewState: z.object({
+    scrollRatio: z.number().finite().min(0).max(1).optional(),
+    page: z.number().int().positive().optional(),
+    mediaTime: z.number().finite().min(0).optional(),
+    mediaPlaying: z.boolean().optional(),
+    mediaPlaybackRate: z.number().finite().min(0.25).max(4).optional(),
+    updatedAt: z.iso.datetime(),
+    revision: z.number().int().nonnegative(),
+  }).strict().optional(),
+}).strict();
+
+const TeacherProjectionSchema = z.object({
+  classroomId: z.string().min(1).max(256),
+  sceneId: z.string().min(1).max(128),
+  stageKey: z.string().min(1).max(64),
+  title: z.string().max(256),
+  sceneType: z.enum(["slide", "quiz", "interactive", "pbl"]),
+  startedAt: z.iso.datetime(),
+  mode: z.enum(["forced", "optional"]).optional(),
+  version: z.number().int().nonnegative().optional(),
+  updatedAt: z.iso.datetime().optional(),
+  engineMode: z.enum(["idle", "playing", "paused", "live"]).optional(),
+  playback: z.object({
+    sceneIndex: z.number().int().nonnegative(),
+    actionIndex: z.number().int().nonnegative(),
+    consumedDiscussions: z.array(z.string().max(128)).max(500),
+    sceneId: z.string().max(128).optional(),
+  }).strict().optional(),
+  interactionState: z.record(z.string().min(1).max(128), JsonValueSchema).nullable().optional(),
+}).strict();
+
+const UiStateActionSchema = z.object({
+  type: z.literal("SET_UI_STATE"),
+  payload: z.object({
+    courseId: z.string().min(1).max(128),
+    patch: z.record(z.string().min(1).max(128), JsonValueSchema),
+  }).strict(),
+}).strict().superRefine((action, context) => {
+  const keys = Object.keys(action.payload.patch);
+  if (
+    keys.length === 0
+    || !keys.every((key) => key === "resourceProjection" || key === "teacherResourceProjection")
+  ) return;
+  const projectionPatch = z.object({
+    resourceProjection: ResourceProjectionSchema.nullable().optional(),
+    teacherResourceProjection: TeacherProjectionSchema.nullable().optional(),
+  }).strict().safeParse(action.payload.patch);
+  if (!projectionPatch.success) {
+    for (const issue of projectionPatch.error.issues) {
+      context.addIssue({
+        code: "custom",
+        path: ["payload", "patch", ...issue.path],
+        message: issue.message,
+      });
+    }
+  }
+});
+
 export const ActionEnvelopeSchema = z.object({
   requestId: z.string().uuid(),
   expectedVersion: z.number().int().positive().optional(),
@@ -178,7 +242,9 @@ export const ActionEnvelopeSchema = z.object({
         ? SubmissionActionSchema
         : envelope.action.type === "UPSERT_REFLECTION"
           ? ReflectionActionSchema
-        : null;
+          : envelope.action.type === "SET_UI_STATE"
+            ? UiStateActionSchema
+            : null;
   if (!specialized) return;
   const result = specialized.safeParse(envelope.action);
   if (!result.success) {
@@ -202,6 +268,7 @@ export type ActionAck = {
   requestId: string;
   courseVersion: number;
   eventCursor: string;
+  projection?: ProjectionStateSnapshot;
 };
 
 export function actionCourseId(action: SessionAction): string | null {

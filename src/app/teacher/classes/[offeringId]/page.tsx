@@ -4,8 +4,8 @@ import Link from "next/link";
 import { TeacherPlatformPage, TeacherPlatformHeader } from "@/components/platform/teacher-shell";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { BarChart3, BookOpen, Check, ChevronDown, ClipboardList, Copy, FileText, Link2, LockKeyhole, MoreHorizontal, ArrowUpRight, PencilLine, Play, Plus, Settings2, Sparkles, Trash2, UnlockKeyhole, Upload, Users } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { BarChart3, BookOpen, Check, ChevronDown, ClipboardList, Copy, FileText, Link2, LockKeyhole, MoreHorizontal, ArrowUpRight, PencilLine, Play, Plus, Settings2, Sparkles, Trash2, UnlockKeyhole, Upload, Users, X } from "lucide-react";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { offeringStatusLabel, instanceStatusLabel } from "@/lib/platform/labels";
 import { teacherPlatformFetch } from "@/lib/platform/client";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -13,7 +13,10 @@ import { publishedClassroomVersion, teacherClassroomEntry } from "@/lib/platform
 import { createEmptySurveyQuestion, SurveyBuilder } from "@/components/platform/survey-builder";
 import type { SurveyQuestion } from "@/lib/platform/survey";
 import { LearningArt } from "@/components/platform/learning-art";
+import { PraixisLogo } from "@/components/brand/praixis-logo";
 import { clientUUID } from "@/lib/uuid";
+import { copyTextToClipboard } from "@/lib/browser/copy-text";
+const DEFAULT_STUDENT_ACCESS_ADDRESS = "172.16.185.157";
 type Instance = {
     id: string;
     status: string;
@@ -98,6 +101,64 @@ function TeacherActivityIcon({ type }: { type: string }) {
     const Icon = type === "Classroom" ? Play : type === "Resource" ? FileText : ClipboardList;
     return <Icon aria-hidden="true" size={17}/>;
 }
+function AccessToggle({
+    disabled,
+    isOpen,
+    onToggle,
+    subject,
+    title,
+}: {
+    disabled: boolean;
+    isOpen: boolean;
+    onToggle: () => Promise<boolean>;
+    subject: "章节" | "内容";
+    title?: string;
+}) {
+    const [feedbackState, setFeedbackState] = useState<boolean | null>(null);
+    const [expanded, setExpanded] = useState(false);
+    const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const displayedIsOpen = feedbackState ?? isOpen;
+
+    useEffect(() => () => {
+        if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
+    }, []);
+
+    async function toggleAccess() {
+        const nextIsOpen = !isOpen;
+        if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
+        setFeedbackState(nextIsOpen);
+        setExpanded(true);
+        const succeeded = await onToggle();
+        if (!succeeded) {
+            setFeedbackState(null);
+            setExpanded(false);
+            return;
+        }
+        collapseTimerRef.current = setTimeout(() => {
+            setFeedbackState(null);
+            setExpanded(false);
+            collapseTimerRef.current = null;
+        }, 2000);
+    }
+
+    const stateLabel = displayedIsOpen ? "已解锁" : "已锁定";
+    return (
+        <button
+            type="button"
+            className={`pbl-access-toggle ${displayedIsOpen ? "is-open" : "is-locked"}${expanded ? " is-expanded" : ""}`}
+            aria-label={`${isOpen ? "锁定" : "解锁"}${subject}`}
+            aria-pressed={isOpen}
+            disabled={disabled}
+            title={title ?? `当前${isOpen ? "已解锁" : "已锁定"}，点击${isOpen ? "锁定" : "解锁"}${subject}`}
+            onClick={() => void toggleAccess()}
+        >
+            <span className="pbl-access-icon" aria-hidden="true">
+                {displayedIsOpen ? <UnlockKeyhole /> : <LockKeyhole />}
+            </span>
+            <span className="pbl-access-label" aria-hidden={!expanded}>{stateLabel}</span>
+        </button>
+    );
+}
 export default function TeacherClassEditorPage() {
     const router = useRouter();
     const { offeringId } = useParams<{
@@ -134,6 +195,7 @@ export default function TeacherClassEditorPage() {
     const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set());
     const [invitationOpen, setInvitationOpen] = useState(false);
     const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
+    const [studentAccessAddress, setStudentAccessAddress] = useState(DEFAULT_STUDENT_ACCESS_ADDRESS);
     const copyButtonRef = useRef<HTMLButtonElement>(null);
     const coverInputRef = useRef<HTMLInputElement>(null);
     const load = useCallback(async () => {
@@ -150,6 +212,11 @@ export default function TeacherClassEditorPage() {
             throw new Error(templateData.message ?? "课程库暂时无法加载");
         setTemplates(templateData.templates ?? []);
     }, [offeringId]);
+    useEffect(() => {
+        const hostname = window.location.hostname;
+        if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostname) && hostname !== "127.0.0.1")
+            setStudentAccessAddress(hostname);
+    }, []);
     useEffect(() => { void load().catch((reason) => setError(reason instanceof Error ? reason.message : "加载失败")); }, [load]);
     async function mutate(url: string, body?: unknown, method = "PATCH") {
         const response = await teacherPlatformFetch(url, { method, headers: { "Content-Type": "application/json" }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
@@ -158,9 +225,9 @@ export default function TeacherClassEditorPage() {
             throw new Error(data.message ?? "操作失败，请重试");
         return data;
     }
-    async function run(action: () => Promise<void>, success = "已保存", reloadAfter = true) {
+    async function run(action: () => Promise<void>, success = "已保存", reloadAfter = true): Promise<boolean> {
         if (busy)
-            return;
+            return false;
         setBusy(true);
         setError(null);
         setMessage("");
@@ -168,10 +235,12 @@ export default function TeacherClassEditorPage() {
             await action();
             if (reloadAfter) await load();
             setMessage(success);
+            return true;
         }
         catch (reason) {
             await load().catch(() => undefined);
             setError(reason instanceof Error ? reason.message : "操作失败，请重试");
+            return false;
         }
         finally {
             setBusy(false);
@@ -263,7 +332,7 @@ export default function TeacherClassEditorPage() {
         if (!offering?.invitation?.code)
             return;
         try {
-            await navigator.clipboard.writeText(offering.invitation.code);
+            await copyTextToClipboard(offering.invitation.code);
             setCopyStatus("copied");
         }
         catch {
@@ -371,21 +440,18 @@ export default function TeacherClassEditorPage() {
                       <ChevronDown size={17} className="pbl-teacher-chapter-chevron" />
                     </button>
                     <div className="pbl-teacher-chapter-actions">
-                      <button
-                        className={`pbl-chapter-access-toggle ${chapter.isOpen ? "is-open" : "is-locked"}`}
-                        aria-label={chapter.isOpen ? "锁定章节" : "解锁章节"}
-                        title={chapter.isOpen ? "当前学生可见，点击锁定" : "当前学生不可见，点击解锁"}
+                      <AccessToggle
                         disabled={busy}
-                        onClick={() => void run(async () => {
+                        isOpen={chapter.isOpen}
+                        subject="章节"
+                        title={chapter.isOpen ? "当前学生可见，点击锁定章节" : "当前学生不可见，点击解锁章节"}
+                        onToggle={() => run(async () => {
                           await mutate("/api/platform/chapters/" + chapter.id, {
                             isOpen: !chapter.isOpen,
                             version: chapter.version,
                           });
-                        }, chapter.isOpen ? "章节已锁定" : "章节已解锁")}
-                      >
-                        {chapter.isOpen ? <UnlockKeyhole size={14} /> : <LockKeyhole size={14} />}
-                        {chapter.isOpen ? "已解锁" : "已锁定"}
-                      </button>
+                        }, chapter.isOpen ? "章节及其内容已锁定" : "章节已解锁")}
+                      />
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <button className="pbl-row-more-button" aria-label={chapter.title + "更多操作"}>
@@ -413,31 +479,65 @@ export default function TeacherClassEditorPage() {
                         const template = templates.find((entry) => entry.id === item.templateId);
                         const entry = instance ? teacherClassroomEntry(instance) : null;
                         const version = readyVersion(template);
-                        const visibleToStudents = chapter.isOpen && item.isOpen;
+                        const primaryLabel = item.type === "Classroom"
+                          ? entry?.label ?? (version ? "进入课堂" : "前往课程库")
+                          : item.type === "Form" ? "数据看板" : "编辑内容";
+                        const primaryHref = item.type === "Classroom"
+                          ? entry?.href ?? (version ? null : "/teacher/templates")
+                          : item.type === "Form" ? "/teacher/surveys/" + item.id : null;
+                        const openDefaultActivity = () => {
+                          if (item.type !== "Classroom" || !version) {
+                            openActivity(chapter, item);
+                            return;
+                          }
+                          void run(async () => {
+                            const data = await mutate("/api/platform/activities/" + item.id + "/instance", { templateVersionId: version.id }, "POST");
+                            if (!data.instance?.id) throw new Error("课堂创建失败，请重试");
+                            router.push(teacherClassroomEntry(data.instance).href);
+                          });
+                        };
+                        const activitySummary = <>
+                          <span className="pbl-teacher-activity-visual">
+                            {item.type === "Classroom" && instance?.coverImageUrl ? (
+                              <img src={instance.coverImageUrl} alt="" className="pbl-teacher-activity-cover" />
+                            ) : <TeacherActivityIcon type={item.type}/>}
+                          </span>
+                          <span className="pbl-teacher-activity-copy">
+                            <span className="pbl-teacher-activity-meta">
+                              <span>{index + 1}.{itemIndex + 1}</span>
+                              <span>{types[item.type] || item.type}</span>
+                            </span>
+                            <span className="pbl-teacher-activity-title" title={item.title}>{item.title}</span>
+                            {item.type === "Classroom" ? (
+                              <small>
+                                {template?.title || "待选择课程库课堂"}
+                                {instance ? " · " + instanceStatusLabel(instance.status) : ""}
+                                {!instance && !version ? " · 请先在课程库发布教案" : ""}
+                              </small>
+                            ) : null}
+                          </span>
+                        </>;
                         return (
                           <div key={item.id} role="listitem" className="pbl-activity-row pbl-teacher-activity-row">
-                            <span className="pbl-teacher-activity-visual">
-                              {item.type === "Classroom" && instance?.coverImageUrl ? (
-                                <img src={instance.coverImageUrl} alt="" className="pbl-teacher-activity-cover" />
-                              ) : <TeacherActivityIcon type={item.type}/>}
-                            </span>
-                            <div className="pbl-teacher-activity-copy">
-                              <span className="pbl-teacher-activity-meta">
-                                <span>{index + 1}.{itemIndex + 1}</span>
-                                <span>{types[item.type] || item.type}</span>
-                                <span className={visibleToStudents ? "is-open" : "is-locked"}>
-                                  {visibleToStudents ? "学生可见" : chapter.isOpen ? "内容已锁定" : "随章节锁定"}
-                                </span>
-                              </span>
-                              <p title={item.title}>{item.title}</p>
-                              {item.type === "Classroom" ? (
-                                <small>
-                                  {template?.title || "待选择课程库课堂"}
-                                  {instance ? " · " + instanceStatusLabel(instance.status) : ""}
-                                  {!instance && !version ? " · 请先在课程库发布教案" : ""}
-                                </small>
-                              ) : null}
-                            </div>
+                            {primaryHref ? (
+                              <Link
+                                className="pbl-teacher-activity-main"
+                                href={primaryHref}
+                                aria-label={`打开“${item.title}”：${primaryLabel}`}
+                              >
+                                {activitySummary}
+                              </Link>
+                            ) : (
+                              <button
+                                type="button"
+                                className="pbl-teacher-activity-main"
+                                aria-label={`打开“${item.title}”：${primaryLabel}`}
+                                disabled={busy && item.type === "Classroom"}
+                                onClick={openDefaultActivity}
+                              >
+                                {activitySummary}
+                              </button>
+                            )}
                             <div className="pbl-teacher-activity-actions">
                             {item.type === "Classroom" ? (
                               entry ? (
@@ -448,11 +548,7 @@ export default function TeacherClassEditorPage() {
                                 <button
                                   className={rowAction}
                                   disabled={busy}
-                                  onClick={() => void run(async () => {
-                                    const data = await mutate("/api/platform/activities/" + item.id + "/instance", { templateVersionId: version.id }, "POST");
-                                    if (!data.instance?.id) throw new Error("课堂创建失败，请重试");
-                                    router.push(teacherClassroomEntry(data.instance).href);
-                                  })}
+                                  onClick={openDefaultActivity}
                                 >
                                   <ArrowUpRight size={14} />进入课堂
                                 </button>
@@ -464,8 +560,22 @@ export default function TeacherClassEditorPage() {
                                 <BarChart3 size={14} />数据看板
                               </Link>
                             ) : (
-                              <button className={rowAction} onClick={() => openActivity(chapter, item)}><PencilLine size={14}/>编辑内容</button>
+                              <button className={rowAction} onClick={openDefaultActivity}><PencilLine size={14}/>编辑内容</button>
                             )}
+                            <AccessToggle
+                              disabled={busy}
+                              isOpen={item.isOpen}
+                              subject="内容"
+                              title={item.isOpen
+                                ? chapter.isOpen ? "当前学生可见，点击锁定内容" : "内容已解锁，将在章节解锁后对学生可见；点击锁定内容"
+                                : "当前学生不可见，点击解锁内容"}
+                              onToggle={() => run(async () => {
+                                await mutate("/api/platform/activities/" + item.id + "/manage", {
+                                  isOpen: !item.isOpen,
+                                  version: item.version,
+                                });
+                              }, item.isOpen ? "内容已锁定" : chapter.isOpen ? "内容已解锁" : "内容与章节已解锁")}
+                            />
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <button className="pbl-row-more-button" aria-label={item.title + "更多操作"} disabled={busy}>
@@ -474,14 +584,6 @@ export default function TeacherClassEditorPage() {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="pbl-platform-theme pbl-platform-dialog">
                                 <DropdownMenuItem onSelect={() => openActivity(chapter, item)}>编辑名称与内容关联</DropdownMenuItem>
-                                <DropdownMenuItem onSelect={() => void run(async () => {
-                                  await mutate("/api/platform/activities/" + item.id + "/manage", {
-                                    isOpen: !item.isOpen,
-                                    version: item.version,
-                                  });
-                                }, item.isOpen ? "内容已锁定" : "内容已解锁")}>
-                                  {item.isOpen ? "锁定内容" : "解锁内容"}
-                                </DropdownMenuItem>
                                 {instance && instance.status !== "finished" ? (
                                   <DropdownMenuItem asChild>
                                     <Link href={"/teacher/classrooms/" + instance.id}>课堂学习记录</Link>
@@ -707,35 +809,62 @@ export default function TeacherClassEditorPage() {
     </Dialog>
     <Dialog open={invitationOpen} onOpenChange={(open) => { setInvitationOpen(open); if (!open) setCopyStatus("idle"); }}>
       <DialogContent
-        className="pbl-platform-theme pbl-platform-dialog pbl-invitation-dialog sm:max-w-3xl"
+        className="pbl-platform-theme pbl-platform-dialog pbl-invitation-dialog"
+        showCloseButton={false}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           copyButtonRef.current?.focus();
         }}
       >
-        <DialogHeader>
-          <DialogTitle>邀请学生加入课程</DialogTitle>
-          <DialogDescription>{offering.name} · 邀请码已激活</DialogDescription>
+        <header className="pbl-invitation-topbar">
+          <PraixisLogo className="pbl-invitation-brand" variant="horizontalSolid" height={58} priority />
+          <div><span>学生课堂入口</span><strong>{offering.name}</strong></div>
+          <DialogClose asChild>
+            <button type="button" aria-label="关闭邀请码投屏"><X size={21} /></button>
+          </DialogClose>
+        </header>
+        <DialogHeader className="sr-only">
+          <DialogTitle>学生加入课程</DialogTitle>
+          <DialogDescription>按照屏幕上的三步说明打开学生端并加入课程。</DialogDescription>
         </DialogHeader>
-        <div className="pbl-invitation-display">
-          <span>学生邀请码</span>
-          <input
-            aria-label="学生邀请码"
-            readOnly
-            value={offering.invitation?.code ?? ""}
-            onFocus={(event) => event.currentTarget.select()}
-          />
-          <p>请学生在注册或加入课程时输入这组六位邀请码。邀请码可直接选择并手动复制。</p>
-        </div>
-        <div className="pbl-invitation-actions">
+        <section className="pbl-invitation-board" aria-label="加入课程步骤">
+          <article className="pbl-invitation-step pbl-invitation-step-access">
+            <div className="pbl-invitation-step-heading"><b>01</b><span>第一步</span></div>
+            <div className="pbl-invitation-step-content">
+              <h2>打开电脑浏览器</h2>
+              <p>在地址栏输入</p>
+              <output aria-label="学生端访问地址">{studentAccessAddress}</output>
+              <small>输入完成后，按 Enter 键打开学生端</small>
+            </div>
+          </article>
+          <article className="pbl-invitation-step pbl-invitation-step-account">
+            <div className="pbl-invitation-step-heading"><b>02</b><span>第二步</span></div>
+            <div className="pbl-invitation-step-content">
+              <h2>注册 / 登录</h2>
+              <strong>首次使用<br />注册学生账号</strong>
+              <small>已有账号的同学直接登录</small>
+            </div>
+          </article>
+          <article className="pbl-invitation-step pbl-invitation-step-code">
+            <div className="pbl-invitation-step-heading"><b>03</b><span>第三步</span></div>
+            <div className="pbl-invitation-step-content">
+              <h2>输入课程邀请码</h2>
+              <output aria-label="学生邀请码">
+                {(offering.invitation?.code ?? "").slice(0, 3)} <b>{(offering.invitation?.code ?? "").slice(3, 6)}</b>
+              </output>
+              <small>注册或加入课程时，输入这组邀请码</small>
+            </div>
+          </article>
+        </section>
+        <footer className="pbl-invitation-actions">
           <p role="status">
-            {copyStatus === "copied" ? "邀请码已复制" : copyStatus === "failed" ? "复制失败，请手动选择邀请码" : " "}
+            {copyStatus === "copied" ? "邀请码已复制" : copyStatus === "failed" ? "复制失败，请手动记录邀请码" : "完成以上三步，即可进入课程"}
           </p>
-          <button ref={copyButtonRef} type="button" className={button + " bg-[var(--pbl-teacher)] px-5 text-white"} onClick={() => void copyInvitation()}>
-            {copyStatus === "copied" ? <Check size={16} /> : <Copy size={16} />}
+          <button ref={copyButtonRef} type="button" onClick={() => void copyInvitation()}>
+            {copyStatus === "copied" ? <Check size={17} /> : <Copy size={17} />}
             {copyStatus === "copied" ? "已复制" : "复制邀请码"}
           </button>
-        </div>
+        </footer>
       </DialogContent>
     </Dialog>
   </TeacherPlatformPage>;

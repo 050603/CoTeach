@@ -8,6 +8,7 @@ import {
 } from "@/lib/courses/contracts";
 import { CourseActionError, executeCourseAction } from "@/lib/courses/action-service";
 import { withHttpMetrics } from "@/lib/observability/http";
+import { isProjectionOnlyAction } from "@/lib/realtime/projection-state";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,11 +31,15 @@ async function postCourseAction(
   if (actionCourseId(envelope.action) !== courseId) {
     return apiError(request, "COURSE_MISMATCH", "Action course does not match the route.", 400);
   }
+  const projectionControl = auth.claims.role === "teacher"
+    && isProjectionOnlyAction(envelope.action);
   const limit = await checkDistributedRateLimit({
-    namespace: "course-action",
+    namespace: projectionControl ? "course-projection" : "course-action",
     key: `${auth.claims.sub}:${courseId}`,
-    limit: auth.claims.role === "teacher" ? 120 : 90,
-    windowSeconds: 60,
+    // A two-second fixed window permits a short burst of 20 control updates
+    // while keeping sustained projection traffic at 10 updates/second.
+    limit: projectionControl ? 20 : auth.claims.role === "teacher" ? 120 : 90,
+    windowSeconds: projectionControl ? 2 : 60,
   });
   if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
 

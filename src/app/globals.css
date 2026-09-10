@@ -1416,18 +1416,30 @@ body.plate-default-theme [data-slot="popover-content"] {
   margin-top: 13px;
 }
 
-.survey-student-name-list span {
-  display: inline-flex;
+.survey-choice-response {
+  display: grid;
   min-height: 32px;
-  align-items: center;
-  gap: 6px;
+  gap: 5px;
   border: 1px solid #dce4ef;
-  border-radius: 999px;
+  border-radius: 12px;
   background: #fff;
-  padding: 5px 10px;
+  padding: 8px 10px;
   color: #405570;
   font-size: 0.7rem;
   font-weight: 650;
+}
+
+.survey-choice-response span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.survey-choice-response p {
+  max-width: 28rem;
+  color: #65758a;
+  font-weight: 500;
+  line-height: 1.6;
 }
 
 .survey-text-layout {
@@ -2105,6 +2117,16 @@ body.plate-default-theme [data-slot="popover-content"] {
   gap: 0.7rem;
 }
 
+.survey-paper-option-wrap {
+  display: grid;
+}
+
+.survey-paper-option-wrap.has-detail {
+  grid-template-columns: minmax(0, 1fr) minmax(8rem, 0.55fr);
+  align-items: center;
+  gap: 0.85rem;
+}
+
 .survey-paper-option {
   display: grid;
   min-height: 3.75rem;
@@ -2135,6 +2157,11 @@ body.plate-default-theme [data-slot="popover-content"] {
   font-weight: 700;
 }
 
+.survey-paper-option.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .survey-paper-option-mark {
   display: grid;
   width: 1.3rem;
@@ -2160,6 +2187,35 @@ body.plate-default-theme [data-slot="popover-content"] {
   font-family: var(--font-mono, monospace);
   font-size: 0.6875rem;
   font-weight: 700;
+}
+
+.survey-paper-option-detail {
+  width: 100%;
+  min-height: 2.75rem;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(15, 118, 110, 0.35);
+  outline: 0;
+  background: transparent;
+  padding: 0.55rem 0.25rem;
+  color: #344b44;
+  font-size: 0.8125rem;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.survey-paper-option-detail::placeholder { color: #9a9f9c; }
+.survey-paper-option-detail:focus { border-color: #0f766e; }
+
+@media (max-width: 640px) {
+  .survey-paper-option-wrap.has-detail {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+
+  .survey-paper-option-detail {
+    width: calc(100% - 3.75rem);
+    margin-left: 3.75rem;
+  }
 }
 
 .survey-writing-wrap {
@@ -3192,7 +3248,7 @@ body.plate-default-theme [data-slot="popover-content"] {
   100% { transform: scale(1.6); opacity: 0; }
 }
 @keyframes pbl-scroll-hint-bounce {
-  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  0%, 100% { transform: translateY(0); opacity: 0.72; }
   50% { transform: translateY(6px); opacity: 1; }
 }
 
@@ -3572,6 +3628,7 @@ body.plate-default-theme [data-slot="popover-content"] {
 }
 
 .praixis-origin__ai {
+  top: 0.067em;
   color: #0fb9b1;
   opacity: 0;
   transform: translateY(0.35em) scale(0.45);

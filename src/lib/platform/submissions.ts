@@ -4,17 +4,31 @@ import { prisma } from "@/lib/db/client";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
 import { requireStudentUser } from "./access";
 import { isActivityOpen, PlatformError } from "./repository";
-import { SurveyConfigSchema } from "./survey";
+import { selectedSurveyOptionIds, SurveyConfigSchema, type SurveyAnswer } from "./survey";
+
+const surveyChoiceAnswerSchema = z.object({
+  selected: z.union([
+    z.string().trim().min(1).max(80),
+    z.array(z.string().trim().min(1).max(80)).max(10),
+  ]),
+  optionText: z.record(z.string().trim().min(1).max(80), z.string().trim().max(200)).optional(),
+}).strict().superRefine((answer, context) => {
+  if (answer.optionText && Object.keys(answer.optionText).length > 10) {
+    context.addIssue({ code: "custom", message: "补充回答数量过多", path: ["optionText"] });
+  }
+});
 
 export const submissionSchema = z.object({
   answer: z.string().trim().max(30000).optional(),
   answers: z.record(z.string(), z.union([
     z.string().trim().max(10000),
     z.array(z.string().trim().min(1).max(80)).max(10),
+    surveyChoiceAnswerSchema,
   ])).optional(),
 });
 
-function hasAnswer(value: string | string[] | undefined): boolean {
+function hasAnswer(value: SurveyAnswer | undefined): boolean {
+  if (value && typeof value === "object" && !Array.isArray(value)) return selectedSurveyOptionIds(value).length > 0;
   return Array.isArray(value) ? value.length > 0 : Boolean(value?.trim());
 }
 
@@ -42,10 +56,27 @@ export async function submitActivity(claims: AuthClaims, activityId: string, inp
       if (answer === undefined) return false;
       if (question.type === "short-text") return typeof answer !== "string";
       const optionIds = new Set(question.options.map((option) => option.id));
-      if (question.type === "single-choice") return typeof answer !== "string" || !optionIds.has(answer);
-      return !Array.isArray(answer) || new Set(answer).size !== answer.length || answer.some((optionId) => !optionIds.has(optionId));
+      const selected = selectedSurveyOptionIds(answer);
+      const structured = answer && typeof answer === "object" && !Array.isArray(answer) ? answer : null;
+      if (question.type === "single-choice" && (selected.length !== 1 || Array.isArray(structured?.selected))) return true;
+      if (question.type === "multiple-choice" && (!Array.isArray(answer) && !Array.isArray(structured?.selected))) return true;
+      if (new Set(selected).size !== selected.length || selected.some((optionId) => !optionIds.has(optionId))) return true;
+      if (question.type === "multiple-choice" && question.maxSelections && selected.length > question.maxSelections) return true;
+      if (!structured?.optionText) return false;
+      return Object.keys(structured.optionText).some((optionId) => {
+        const option = question.options.find((item) => item.id === optionId);
+        return !selected.includes(optionId) || !option?.allowTextInput;
+      });
     });
     if (invalidChoice) throw new PlatformError("INVALID_ANSWER", `“${invalidChoice.title}”的选项无效，请重新选择`, 400);
+    const missingChoiceDetail = survey.data.questions.find((question) => {
+      if (question.type === "short-text") return false;
+      const answer = input.answers?.[question.id];
+      const selected = selectedSurveyOptionIds(answer);
+      const optionText = answer && typeof answer === "object" && !Array.isArray(answer) ? answer.optionText : undefined;
+      return question.options.some((option) => option.allowTextInput && selected.includes(option.id) && !optionText?.[option.id]?.trim());
+    });
+    if (missingChoiceDetail) throw new PlatformError("ANSWER_REQUIRED", `选择“${missingChoiceDetail.title}”的开放选项后，请填写补充内容`, 400);
   }
   const now = new Date();
   const progressData = { answer: input.answer ?? "", answers: input.answers ?? {}, submittedAt: now.toISOString() };

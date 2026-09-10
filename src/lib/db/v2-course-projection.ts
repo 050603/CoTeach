@@ -26,6 +26,35 @@ export function json(value: unknown): Prisma.InputJsonValue { return JSON.parse(
 function object(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function parseNotes(value: string | null): Record<string, unknown> { try { return object(JSON.parse(value ?? "{}")); } catch { return {}; } }
 function view<T>(value: unknown): T { return object(value).view as T; }
+type StoredCourseResource = {
+  id: string;
+  title: string;
+  type: string;
+  description: string | null;
+  metadata: unknown;
+  fileAsset: { id: string; size: bigint; deletedAt: Date | null } | null;
+};
+
+/** Build the browser-facing resource from its durable Resource/FileAsset pair. */
+export function projectStoredCourseResource(resource: StoredCourseResource): NonNullable<Course["resources"]>[number] {
+  const metadata = object(resource.metadata);
+  const activeFile = resource.fileAsset && !resource.fileAsset.deletedAt
+    ? resource.fileAsset
+    : null;
+  return {
+    ...metadata,
+    id: resource.id,
+    title: resource.title,
+    type: resource.type,
+    size: activeFile ? String(activeFile.size) : "",
+    description: resource.description ?? undefined,
+    downloadedBy: metadata.downloadedBy as string[] ?? [],
+    // Upload metadata intentionally does not persist an access URL. Always
+    // derive it from the owned FileAsset so classroom snapshots cannot lose
+    // the media source or trust a stale/foreign URL from JSON metadata.
+    ...(activeFile ? { url: `/api/uploads/${activeFile.id}` } : {}),
+  } as NonNullable<Course["resources"]>[number];
+}
 const selectInstance = { templateVersion: true, activity: { include: { chapter: { include: { offering: { include: { teachers: true, invitations: { where: { status: "ACTIVE" }, take: 1 } } } } } } }, participations: { include: { enrollment: { include: { user: true } } } } } satisfies Prisma.ClassroomInstanceInclude;
 
 /** Old UI Course is a read projection, never a stored aggregate or a legacy table. */
@@ -91,7 +120,10 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
     announcements: announcements.filter(a => !a.groupId).map(a => ({ id: a.id, title: a.title, content: a.content, createdAt: a.createdAt.toISOString(), updatedAt: a.updatedAt.toISOString(), replies: a.replies.map(r => ({ id: r.id, studentId: r.authorId, studentName: instance.participations.find(p => p.enrollment.userId === r.authorId)?.enrollment.user.displayName ?? "教师", content: r.content, createdAt: r.createdAt.toISOString() })) })) as Course["announcements"],
     groupAnnouncements: announcements.filter(a => a.groupId).map(a => ({ id: a.id, groupId: groupViewId(a.groupId!), title: a.title, content: a.content, actor: a.createdBy.displayName, createdAt: a.createdAt.toISOString() })) as Course["groupAnnouncements"],
     todos: todos.map(t => ({ id: t.id, title: t.title, description: t.description ?? "", completedBy: t.completions.map(c => c.userId) })),
-    resources: [...(base.resources ?? []).filter(r => !resources.some(stored => stored.id === r.id)), ...resources.map(r => ({ ...object(r.metadata), id: r.id, title: r.title, type: r.type, size: r.fileAsset ? String(r.fileAsset.size) : "", description: r.description ?? undefined, downloadedBy: object(r.metadata).downloadedBy as string[] ?? [] }))] as Course["resources"],
+    resources: [
+      ...(base.resources ?? []).filter(r => !resources.some(stored => stored.id === r.id)),
+      ...resources.map(projectStoredCourseResource),
+    ] as Course["resources"],
     teamContributions: collection(submissions.map(s => ({ metadata: s.payload })), "teamContributions"),
     classCommonIssues: aggregateCommonIssues(signals.map(s => view<LearningSignal>(s.payload)).filter(Boolean), instance.participations.length),
     resolvedInterventionSignalIds: runtime.resolvedInterventionSignalIds as string[] ?? [],

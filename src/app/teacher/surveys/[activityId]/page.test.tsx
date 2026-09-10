@@ -32,7 +32,7 @@ const result = {
         required: true,
         responseCount: 2,
         options: [
-          { id: "good", label: "合适", count: 2, percentage: 100, respondents: [{ studentId: "s1", displayName: "林晓" }, { studentId: "s2", displayName: "陈舟" }] },
+          { id: "good", label: "合适", count: 2, percentage: 100, respondents: [{ studentId: "s1", displayName: "林晓", detail: "讨论环节有一点快" }, { studentId: "s2", displayName: "陈舟" }] },
           { id: "fast", label: "偏快", count: 0, percentage: 0, respondents: [] },
         ],
       },
@@ -79,6 +79,7 @@ describe("teacher survey dashboard", () => {
     expect(screen.getByText("选择“合适”的学生")).toBeInTheDocument();
     expect(screen.getByText("林晓")).toBeInTheDocument();
     expect(screen.getByText("陈舟")).toBeInTheDocument();
+    expect(screen.getByText("讨论环节有一点快")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /你学到了什么/ }));
     fireEvent.click(screen.getByRole("button", { name: "合作" }));

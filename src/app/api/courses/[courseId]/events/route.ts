@@ -42,9 +42,18 @@ async function getCourseEvents(request: Request, context: { params: Promise<{ co
   return Response.json({
     events: visible.map((event) => {
       const info = eventInfo(event);
+      const projection = event.eventType === 'projection-changed'
+        && info.payload.projection
+        && typeof info.payload.projection === 'object'
+        && !Array.isArray(info.payload.projection)
+        ? info.payload.projection as Record<string, unknown>
+        : null;
       return { cursor: encodeEventCursor(event), type: event.eventType, courseVersion: typeof info.payload.courseVersion === 'number' ? info.payload.courseVersion : scope.version,
-        // The feed carries invalidation facts; canonical state supplies role-scoped content.
-        payload: { scope: info.scope, ...(info.studentId ? { studentId: info.studentId } : {}), source: 'v2-domain-event' },
+        // Projection controls are safe, compact and latency-sensitive. Other
+        // events remain invalidations whose canonical role-scoped state is read separately.
+        payload: projection
+          ? { ...projection, scope: info.scope, source: 'v2-domain-event' }
+          : { scope: info.scope, ...(info.studentId ? { studentId: info.studentId } : {}), source: 'v2-domain-event' },
         createdAt: event.createdAt.toISOString() };
     }),
     nextCursor: events.length ? encodeEventCursor(events[events.length - 1]) : parsed.data.after,

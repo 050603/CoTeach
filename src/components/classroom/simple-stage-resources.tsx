@@ -46,6 +46,9 @@ const UPLOAD_ACCEPT = [
   ".webp", ".gif", ".txt", ".md", ".csv",
 ].join(",");
 const STREAMED_VIDEO_EXTENSIONS = [".mp4", ".mov", ".webm"];
+const VIDEO_PRECACHE_HEAD_BYTES = 2 * 1024 * 1024;
+const VIDEO_PRECACHE_TAIL_BYTES = 512 * 1024;
+const VIDEO_PRECACHE_STAGGER_MS = 12_000;
 
 type UploadResponse = {
   id?: string;
@@ -215,6 +218,87 @@ function isPresentationPdf(resource: CourseResource): boolean {
 
 function resourcePreviewUrl(resource: CourseResource): string | undefined {
   return resource.previewUrl ?? resource.url;
+}
+
+function resourceSizeBytes(resource: CourseResource): number | undefined {
+  if (!/^\d+$/.test(resource.size)) return undefined;
+  const value = Number(resource.size);
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+export function videoPrecacheRanges(resource: CourseResource): string[] {
+  const size = resourceSizeBytes(resource);
+  if (!size) return [`bytes=0-${VIDEO_PRECACHE_HEAD_BYTES - 1}`];
+  const headEnd = Math.min(size - 1, VIDEO_PRECACHE_HEAD_BYTES - 1);
+  const ranges = [`bytes=0-${headEnd}`];
+  const tailStart = Math.max(headEnd + 1, size - VIDEO_PRECACHE_TAIL_BYTES);
+  if (tailStart < size) ranges.push(`bytes=${tailStart}-${size - 1}`);
+  return ranges;
+}
+
+export function StudentProjectionPrecache({
+  course,
+  stageKey,
+  active = false,
+}: {
+  course: Course;
+  stageKey: string;
+  active?: boolean;
+}) {
+  const videos = useMemo(() => resourcesForStage(course.resources, stageKey)
+    .filter((resource) => resourceKind(resource) === "video" && Boolean(resourcePreviewUrl(resource))), [course.resources, stageKey]);
+
+  useEffect(() => {
+    if (active || typeof window === "undefined") return;
+    const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+    if (connection?.saveData) return;
+    const controllers: AbortController[] = [];
+    const timers = videos.map((resource, index) => window.setTimeout(() => {
+      const previewUrl = resourcePreviewUrl(resource);
+      if (!previewUrl) return;
+      const url = new URL(previewUrl, window.location.origin);
+      if (url.origin !== window.location.origin) return;
+      const storageKey = `openpbl:projection-precache:v1:${course.id}:${resource.id}:${url.pathname}`;
+      try {
+        if (window.sessionStorage.getItem(storageKey) === "ready") return;
+      } catch {
+        // Session storage may be unavailable in private browsing; pre-caching can continue.
+      }
+      const controller = new AbortController();
+      controllers.push(controller);
+      void (async () => {
+        for (const range of videoPrecacheRanges(resource)) {
+          const response = await fetch(url, {
+            cache: "force-cache",
+            credentials: "same-origin",
+            headers: { Range: range },
+            signal: controller.signal,
+          });
+          // Never accept an origin that ignores Range: that could download the
+          // entire video on every student device before it is needed.
+          if (response.status !== 206) {
+            await response.body?.cancel();
+            return;
+          }
+          await response.arrayBuffer();
+        }
+        try {
+          window.sessionStorage.setItem(storageKey, "ready");
+        } catch {
+          // Cache warming remains useful even when session storage is unavailable.
+        }
+      })().catch(() => {
+        // Projection remains functional through normal media loading if warming fails.
+      });
+    }, 1_000 + Math.random() * VIDEO_PRECACHE_STAGGER_MS + index * 350));
+
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      controllers.forEach((controller) => controller.abort());
+    };
+  }, [active, course.id, videos]);
+
+  return null;
 }
 
 export function SimplifiedTeacherStageView({
@@ -549,16 +633,22 @@ export function SimplifiedTeacherStageView({
                 </div>
               </div>
               <div className="mt-3 h-[32rem] min-h-0 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)]">
-                <ResourceViewer
-                  initialReadingProgress={readingProgressByResource[selected.id]}
-                  key={`${selected.id}:${projectionIsActive(course, selected) ? "controller" : "self"}:${viewerRevision}`}
-                  mode={projectionIsActive(course, selected) ? "controller" : "self"}
-                  onReadingProgressChange={(progress) => setReadingProgressByResource((current) => ({ ...current, [selected.id]: progress }))}
-                  onViewStateChange={syncProjection}
-                  progressKey={`teacher:${course.id}:${selected.id}`}
-                  projection={projectionIsActive(course, selected) ? projection ?? undefined : undefined}
-                  resource={selected}
-                />
+                {dialogResource?.id === selected.id ? (
+                  <div className="grid h-full place-items-center bg-stone-950 text-sm font-semibold text-white/70">
+                    资源正在全屏窗口中播放
+                  </div>
+                ) : (
+                  <ResourceViewer
+                    initialReadingProgress={readingProgressByResource[selected.id]}
+                    key={`${selected.id}:${projectionIsActive(course, selected) ? "controller" : "self"}:${viewerRevision}`}
+                    mode={projectionIsActive(course, selected) ? "controller" : "self"}
+                    onReadingProgressChange={(progress) => setReadingProgressByResource((current) => ({ ...current, [selected.id]: progress }))}
+                    onViewStateChange={syncProjection}
+                    progressKey={`teacher:${course.id}:${selected.id}`}
+                    projection={projectionIsActive(course, selected) ? projection ?? undefined : undefined}
+                    resource={selected}
+                  />
+                )}
               </div>
             </>
           ) : (
@@ -751,13 +841,6 @@ export function SimplifiedStudentStageView({
     reportedProgressByResource.current[resource.id] = Math.max(previous, current);
   }
 
-  useEffect(() => {
-    if (!selected || !session.studentId) return;
-    sendResourceEvent(selected, "open");
-    if (selected.downloadedBy.includes(session.studentId)) return;
-    session.markResourceDownloaded(course.id, selected.id);
-  }, [course.id, selected, session, sendResourceEvent]);
-
   function openResource(resource: CourseResource) {
     sendResourceEvent(resource, "open");
     session.markResourceDownloaded(course.id, resource.id);
@@ -873,40 +956,24 @@ export function StudentResourceProjection({
   resource: CourseResource;
   projection: ClassroomResourceProjection;
 }) {
-  const session = useSession();
-  const sentProjectionKeys = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!course || !session.studentId) return;
-    const source = "teacher-projection" as const;
-    const emit = (type: "open" | "progress" | "complete", progressPercent?: number, milestone?: number) => {
-      const key = resourceEventIdempotencyKey(course.id, session.studentId!, resource.id, type, milestone, source);
-      if (sentProjectionKeys.current.has(key)) return;
-      sentProjectionKeys.current.add(key);
-      const progress = progressPercent === undefined ? undefined : Math.max(0, Math.min(100, Math.round(progressPercent)));
-      const event = createLearningEvent(type === "open" ? "resource-open" : type === "complete" ? "resource-complete" : "resource-progress", {
-        courseId: course.id,
-        studentId: session.studentId!,
-        stageKey: projection.stageKey,
-        sceneId: resource.id,
-        progressMarker: type === "complete" ? "completed" : "in-progress",
-        metadata: { resourceId: resource.id, source, ...(progress === undefined ? {} : { progressPercent: progress }) },
-        idempotencyKey: key,
-      });
-      void postLearningEvents({ courseId: course.id, studentId: session.studentId!, events: [event] }).catch(() => sentProjectionKeys.current.delete(key));
-    };
-    emit("open");
-    const viewState = projection.viewState;
-    // A projected slide does not expose the total page count in the shared
-    // view state. Only use the continuous scroll ratio when it is available;
-    // never infer “completed” from merely moving to page two.
-    const percent = viewState?.scrollRatio !== undefined ? viewState.scrollRatio * 100 : 0;
-    for (const threshold of crossedResourceProgressThresholds(0, percent ?? 0)) {
-      emit("progress", threshold, threshold);
+    // A student may already have the same resource open in the stage viewer.
+    // Pause media behind the forced projection to prevent two decoders and two
+    // audio tracks from running while the teacher controls the foreground copy.
+    for (const media of document.querySelectorAll<HTMLMediaElement>("video, audio")) {
+      if (!media.closest("[data-teacher-resource-projection]")) media.pause();
     }
-    if ((percent ?? 0) >= 90) emit("complete", percent, 90);
-  }, [course, projection.stageKey, projection.viewState, resource.id, session.studentId]);
+  }, [projection.resourceId]);
+  // A teacher-forced projection is control traffic, not evidence that a
+  // student actively opened or completed the resource. Avoiding those writes
+  // also keeps projection actions out of the classroom persistence queue.
   return (
-    <div className="fixed inset-0 z-[150] bg-slate-100" role="presentation">
+    <div
+      className="fixed inset-0 z-[150] bg-slate-100"
+      data-teacher-resource-projection
+      data-projection-version={course?.uiState?.projectionVersion}
+      role="presentation"
+    >
       <section aria-label={`教师投屏：${resource.title}`} aria-modal="true" className="relative h-full w-full overflow-hidden bg-[var(--pbl-surface)]" role="dialog">
         <div className="pointer-events-none absolute inset-x-0 top-3 z-30 flex items-center justify-between gap-3 px-4">
           <div className="max-w-[70vw] truncate rounded-full bg-slate-950/65 px-3 py-1.5 text-xs font-semibold text-white/90 shadow-lg backdrop-blur"><span className="mr-2 text-white/55">教师投屏</span>{resource.title}</div>
@@ -1224,7 +1291,7 @@ function PdfViewer({
           // 隐私模式或存储空间不足时，阅读器仍可正常使用。
         }
       }
-    }, 180);
+    }, 100);
   }
 
   function resumeReading() {
@@ -1655,8 +1722,11 @@ function VideoViewer({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastTimeSyncRef = useRef(0);
+  const playbackAttemptRef = useRef(0);
   const [playBlocked, setPlayBlocked] = useState(false);
-  const [playbackAuthorized, setPlaybackAuthorized] = useState(mode !== "follower");
+  // Start followers muted so browser autoplay policy can never delay the
+  // projected picture. A student gesture can enable synchronized sound.
+  const [soundBlocked, setSoundBlocked] = useState(mode === "follower");
   const [mediaReady, setMediaReady] = useState(false);
   const [buffering, setBuffering] = useState(false);
   const [mediaError, setMediaError] = useState(false);
@@ -1667,8 +1737,8 @@ function VideoViewer({
   const mediaUpdatedAt = viewState?.updatedAt;
   const mediaRevision = viewState?.revision;
 
-  const applyFollowerState = useCallback((video: HTMLVideoElement) => {
-    if (mode !== "follower" || !mediaUpdatedAt || video.readyState < 1) return;
+  const applyProjectedState = useCallback((video: HTMLVideoElement) => {
+    if (mode === "self" || !mediaUpdatedAt || video.readyState < 1) return;
     const elapsed = mediaPlaying
       ? Math.max(0, (Date.now() - Date.parse(mediaUpdatedAt)) / 1000)
       : 0;
@@ -1677,17 +1747,55 @@ function VideoViewer({
       video.currentTime = Math.min(expectedTime, Number.isFinite(video.duration) ? video.duration : expectedTime);
     }
     video.playbackRate = mediaPlaybackRate ?? 1;
-    if (mediaPlaying) {
-      void video.play().then(() => setPlayBlocked(false)).catch(() => setPlayBlocked(true));
-    } else {
+    const attempt = ++playbackAttemptRef.current;
+    if (!mediaPlaying) {
       video.pause();
+      setPlayBlocked(false);
+      return;
     }
+    void video.play().then(() => {
+      if (attempt !== playbackAttemptRef.current || mode !== "follower") return;
+      setPlayBlocked(false);
+      setSoundBlocked(video.muted);
+    }).catch(() => {
+      if (attempt !== playbackAttemptRef.current || mode !== "follower") return;
+      // Browsers commonly reject unmuted autoplay. Keep the projected picture
+      // moving immediately in muted mode and offer a small, non-blocking sound
+      // control instead of covering the video with an authorization screen.
+      video.muted = true;
+      void video.play().then(() => {
+        if (attempt !== playbackAttemptRef.current) return;
+        setPlayBlocked(false);
+        setSoundBlocked(true);
+      }).catch(() => {
+        if (attempt !== playbackAttemptRef.current) return;
+        setPlayBlocked(true);
+      });
+    });
   }, [mediaPlaybackRate, mediaPlaying, mediaTime, mediaUpdatedAt, mode]);
 
   useEffect(() => {
     if (!videoRef.current) return;
-    applyFollowerState(videoRef.current);
-  }, [applyFollowerState, mediaRevision]);
+    applyProjectedState(videoRef.current);
+  }, [applyProjectedState, mediaRevision]);
+
+  useEffect(() => {
+    if (mode !== "follower") return;
+    const catchUp = () => {
+      if (videoRef.current) applyProjectedState(videoRef.current);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") catchUp();
+    };
+    window.addEventListener("focus", catchUp);
+    window.addEventListener("online", catchUp);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.removeEventListener("focus", catchUp);
+      window.removeEventListener("online", catchUp);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [applyProjectedState, mode]);
 
   function emit(playing = !videoRef.current?.paused) {
     const video = videoRef.current;
@@ -1702,13 +1810,19 @@ function VideoViewer({
   async function authorizeFollowerPlayback() {
     const video = videoRef.current;
     if (!video) return;
+    const attempt = ++playbackAttemptRef.current;
     try {
+      video.muted = false;
       await video.play();
-      setPlaybackAuthorized(true);
+      if (attempt !== playbackAttemptRef.current) return;
+      setSoundBlocked(false);
       setPlayBlocked(false);
       if (!mediaPlaying) video.pause();
-      applyFollowerState(video);
+      applyProjectedState(video);
     } catch {
+      if (attempt !== playbackAttemptRef.current) return;
+      video.muted = true;
+      setSoundBlocked(true);
       setPlayBlocked(true);
     }
   }
@@ -1721,7 +1835,7 @@ function VideoViewer({
         onCanPlay={() => {
           setMediaReady(true);
           setBuffering(false);
-          if (videoRef.current) applyFollowerState(videoRef.current);
+          if (videoRef.current) applyProjectedState(videoRef.current);
         }}
         onError={() => {
           setMediaError(true);
@@ -1733,27 +1847,37 @@ function VideoViewer({
         }}
         onLoadedMetadata={() => {
           setMediaReady(true);
-          if (videoRef.current) applyFollowerState(videoRef.current);
+          if (videoRef.current) applyProjectedState(videoRef.current);
         }}
         onPause={() => emit(false)}
         onPlay={() => {
           setBuffering(false);
           emit(true);
         }}
-        onPlaying={() => setBuffering(false)}
+        onPlaying={() => {
+          setBuffering(false);
+          if (videoRef.current) applyProjectedState(videoRef.current);
+        }}
         onRateChange={() => emit()}
         onSeeked={() => emit()}
         onTimeUpdate={() => {
           const video = videoRef.current;
           if (video && Number.isFinite(video.duration) && video.duration > 0) onResourceProgress?.(video.currentTime / video.duration * 100);
-          if (Date.now() - lastTimeSyncRef.current < 1_500) return;
+          if (Date.now() - lastTimeSyncRef.current < 750) return;
           lastTimeSyncRef.current = Date.now();
           emit();
         }}
-        onEnded={() => onResourceProgress?.(100)}
+        onEnded={() => {
+          onResourceProgress?.(100);
+          emit(false);
+        }}
         onWaiting={() => setBuffering(true)}
         playsInline
-        preload={mode === "follower" ? "auto" : "metadata"}
+        muted={mode === "follower" && soundBlocked}
+        // Loading metadata is enough to establish duration and the first
+        // frame. `auto` made every student buffer tens of megabytes as soon as
+        // a paused video opened, which could delay later control messages.
+        preload="metadata"
         ref={videoRef}
         src={resource.url}
       />
@@ -1774,8 +1898,10 @@ function VideoViewer({
       {mode === "controller" && projection ? (
         <div className="pointer-events-none absolute left-3 top-3 rounded-full bg-emerald-500/90 px-3 py-1.5 text-xs font-bold text-white shadow-lg backdrop-blur">实时投屏控制</div>
       ) : null}
-      {mode === "follower" && (!playbackAuthorized || (playBlocked && mediaPlaying)) ? (
-        <button className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 px-6 text-center text-white backdrop-blur-[2px]" onClick={() => void authorizeFollowerPlayback()} type="button"><span className="grid size-16 place-items-center rounded-full bg-white text-stone-950 shadow-xl"><Play className="ml-1" size={28} /></span><span className="mt-4 text-base font-bold">点击启用同步播放</span><span className="mt-1 max-w-md text-xs leading-5 text-white/70">浏览器需要你授权一次声音播放；之后将自动跟随教师的播放、暂停、跳转和倍速。</span></button>
+      {mode === "follower" && mediaPlaying && playBlocked ? (
+        <button className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 px-6 text-center text-white backdrop-blur-[2px]" onClick={() => void authorizeFollowerPlayback()} type="button"><span className="grid size-16 place-items-center rounded-full bg-white text-stone-950 shadow-xl"><Play className="ml-1" size={28} /></span><span className="mt-4 text-base font-bold">点击继续同步播放</span><span className="mt-1 max-w-md text-xs leading-5 text-white/70">浏览器阻止了自动播放，点击后将立即追上教师进度。</span></button>
+      ) : mode === "follower" && mediaPlaying && soundBlocked ? (
+        <button className="absolute bottom-14 right-4 z-20 inline-flex items-center gap-2 rounded-full bg-white/95 px-4 py-2 text-xs font-bold text-stone-950 shadow-xl" onClick={() => void authorizeFollowerPlayback()} type="button"><Play size={14} />点击开启同步声音</button>
       ) : null}
     </div>
   );

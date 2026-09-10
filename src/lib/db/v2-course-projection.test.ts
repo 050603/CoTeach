@@ -4,7 +4,7 @@ import type { Course } from "@/lib/session/types";
 import { normalizeCourse } from "@/lib/session/actions";
 import { createPblTemplateCourse } from "@/lib/platform/pbl-template";
 vi.mock("@/lib/companion/server-store", () => ({ loadCompanionState: vi.fn(async () => ({})), persistCompanionState: vi.fn(async () => undefined) }));
-import { assertImmutableClassroomDesign, persistInstanceCourse } from "./v2-course-projection";
+import { assertImmutableClassroomDesign, persistInstanceCourse, projectStoredCourseResource } from "./v2-course-projection";
 function fixture() {
   const course = createPblTemplateCourse("instance", { name: "Project" }); course.status = "teaching"; course.version = 1;
   course.students = ["a", "b"].map(id => ({ id, name: id, joinedAt: "2026-09-01T00:00:00Z", stageProgress: {} }));
@@ -20,6 +20,29 @@ beforeEach(() => {
   db = delegates as unknown as Prisma.TransactionClient;
 });
 describe("V2 classroom projection writes", () => {
+  it("restores the canonical upload URL for a classroom video", () => {
+    expect(projectStoredCourseResource({
+      id: "video-resource",
+      title: "课堂示范.mp4",
+      type: "MP4",
+      description: null,
+      metadata: { stageKey: "launch", url: "https://stale.example/video.mp4" },
+      fileAsset: {
+        id: "video-asset",
+        size: BigInt(65_770_721),
+        deletedAt: null,
+      },
+    })).toMatchObject({
+      id: "video-resource",
+      title: "课堂示范.mp4",
+      type: "MP4",
+      stageKey: "launch",
+      size: "65770721",
+      url: "/api/uploads/video-asset",
+      downloadedBy: [],
+    });
+  });
+
   it("completes participations and records the shared lifecycle event when ending", async () => {
     const before = fixture();
     await persistInstanceCourse(db, before, { ...before, status: "finished" }, teacher);

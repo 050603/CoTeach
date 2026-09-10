@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Bell,
@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { COURSE_STATUS_LABEL } from "@/lib/session/types";
 import type { CourseStatus } from "@/lib/session/types";
 import { useSession } from "@/lib/session/store";
+import { loadJSON, saveJSON } from "@/lib/session/storage";
 import { PrimaryButton, SaveStatus, TextInput } from "@/components/ui";
 
 type Role = "student" | "teacher";
@@ -73,6 +74,27 @@ export type DashboardTopBarProps = Pick<
 
 type OpenPanel = "courses" | "notifications" | "profile" | null;
 
+type NotificationReadState = {
+  storageKey: string;
+  byCourse: Record<string, string>;
+};
+
+const NOTIFICATION_READ_STORAGE_PREFIX = "openpbl.notifications.read-through.v1";
+
+function notificationReadStorageKey(role: Role, studentId?: string): string {
+  return role === "student" && studentId
+    ? `${NOTIFICATION_READ_STORAGE_PREFIX}:student:${studentId}`
+    : `${NOTIFICATION_READ_STORAGE_PREFIX}:${role}`;
+}
+
+function loadNotificationReads(storageKey: string): Record<string, string> {
+  const stored = loadJSON<unknown>(storageKey, {});
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) return {};
+  return Object.fromEntries(
+    Object.entries(stored).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+}
+
 export function DashboardTopBar({
   role,
   phase = "",
@@ -91,7 +113,11 @@ export function DashboardTopBar({
 }: DashboardTopBarProps) {
   const session = useSession();
   const [openPanel, setOpenPanel] = useState<OpenPanel>(null);
-  const [readThroughByCourse, setReadThroughByCourse] = useState<Record<string, string>>({});
+  const readStorageKey = notificationReadStorageKey(role, session.studentId);
+  const [notificationReads, setNotificationReads] = useState<NotificationReadState>({
+    storageKey: "",
+    byCourse: {},
+  });
   const isTeacher = role === "teacher";
   const [nameDraft, setNameDraft] = useState(() => {
     const name = userName ?? session.user.name;
@@ -111,17 +137,46 @@ export function DashboardTopBar({
     return session.courses[0];
   }, [currentCourse, session.courses]);
   const notifications = (current?.activityLog ?? []).slice(0, 8);
-  const readThroughId = current ? readThroughByCourse[current.id] : undefined;
+  const notificationReadsReady = notificationReads.storageKey === readStorageKey;
+  const readThroughId = current && notificationReadsReady
+    ? notificationReads.byCourse[current.id]
+    : undefined;
   const readThroughIndex = readThroughId
     ? notifications.findIndex((item) => item.id === readThroughId)
     : -1;
-  const unreadCount = readThroughId
-    ? (readThroughIndex >= 0 ? readThroughIndex : notifications.length)
-    : notifications.length;
+  const unreadCount = notificationReadsReady
+    ? readThroughId
+      ? (readThroughIndex >= 0 ? readThroughIndex : notifications.length)
+      : notifications.length
+    : 0;
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Read receipts hydrate from browser storage after SSR.
+    setNotificationReads({
+      storageKey: readStorageKey,
+      byCourse: loadNotificationReads(readStorageKey),
+    });
+
+    function syncNotificationReads(event: StorageEvent) {
+      if (event.key !== readStorageKey) return;
+      setNotificationReads({
+        storageKey: readStorageKey,
+        byCourse: loadNotificationReads(readStorageKey),
+      });
+    }
+
+    window.addEventListener("storage", syncNotificationReads);
+    return () => window.removeEventListener("storage", syncNotificationReads);
+  }, [readStorageKey]);
 
   function toggle(panel: OpenPanel) {
     if (panel === "notifications" && openPanel !== panel && current && notifications[0]) {
-      setReadThroughByCourse((value) => ({ ...value, [current.id]: notifications[0].id }));
+      const persisted = notificationReads.storageKey === readStorageKey
+        ? notificationReads.byCourse
+        : loadNotificationReads(readStorageKey);
+      const byCourse = { ...persisted, [current.id]: notifications[0].id };
+      setNotificationReads({ storageKey: readStorageKey, byCourse });
+      saveJSON(readStorageKey, byCourse);
     }
     setOpenPanel((currentPanel) => (currentPanel === panel ? null : panel));
   }

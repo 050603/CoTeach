@@ -1,3 +1,5 @@
+import { PraixisOriginWord } from "@/components/brand/praixis-origin-word";
+
 export function BrandOriginStory() {
   return (
     <section
@@ -15,14 +17,7 @@ export function BrandOriginStory() {
           </h2>
 
           <div className="praixis-origin__stage mt-14" aria-label="Praxis 演变为 PrAIxis">
-            <div className="praixis-origin__word" aria-hidden="true">
-              <span>Pr</span>
-              <span className="praixis-origin__mutable">
-                <span className="praixis-origin__a">a</span>
-                <span className="praixis-origin__ai">AI</span>
-              </span>
-              <span>xis</span>
-            </div>
+            <PraixisOriginWord />
 
             <div className="praixis-origin__meaning">
               <article className="praixis-origin__praxis-copy">

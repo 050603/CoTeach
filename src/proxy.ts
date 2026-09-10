@@ -85,6 +85,21 @@ export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // ---------- Page guards ----------
+  // A teacher session is persisted across browser restarts. When the teacher
+  // returns through the role switch, skip the login form while the JWT is
+  // still valid. A known-expired session must keep showing the login page to
+  // avoid redirect loops when the server-side session version has changed.
+  if (pathname === LOGIN_PATH && !req.nextUrl.searchParams.has("reason")) {
+    const token = readCookie(req, TEACHER_COOKIE);
+    const claims = await verifyCookie(token ?? "", secret);
+    if (claims?.role === "teacher") {
+      const url = req.nextUrl.clone();
+      url.pathname = "/teacher";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+  }
+
   // 注意：pathname.startsWith("/teacher/") 不匹配裸路径 "/teacher"，
   // 需要显式检查裸路径。
   if (

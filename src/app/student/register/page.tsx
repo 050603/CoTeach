@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import { ArrowRight, Badge, KeyRound, Lock, UserRound } from "lucide-react";
 import { StudentAuthShell } from "@/components/platform/student-auth-shell";
 
 type Invitation = {
@@ -90,25 +91,28 @@ function StudentRegisterPageContent() {
     <StudentAuthShell
       mode="register"
       title="创建学生账号"
-      description="先验证教师提供的邀请码，再创建账号。注册后直接进入对应课程。"
+      description="验证课程邀请码，创建账号后即可进入对应课程。"
     >
-      <section className="mt-7">
-        <label className="block text-sm font-semibold">
-          课程邀请码
-          <input
-            className="mt-2 min-h-11 w-full rounded-[6px] border border-[var(--pbl-border)] px-3 uppercase"
-            value={code}
-            disabled={busy}
-            onChange={(event) => {
-              setCode(event.target.value.toUpperCase());
-              setInvitation(null);
-              setError(null);
-            }}
-            placeholder="例如 A2K9QP"
-          />
+      <section className="pbl-auth-form-stack">
+        <label className="pbl-auth-field">
+          <span>课程邀请码</span>
+          <span className="pbl-auth-input-wrap">
+            <KeyRound aria-hidden="true" className="pbl-auth-input-icon" size={17} />
+            <input
+              className="pbl-auth-input uppercase"
+              value={code}
+              disabled={busy}
+              onChange={(event) => {
+                setCode(event.target.value.toUpperCase());
+                setInvitation(null);
+                setError(null);
+              }}
+              placeholder="例如 A2K9QP"
+            />
+          </span>
         </label>
         <button
-          className="mt-3 min-h-11 w-full rounded-[6px] border border-[var(--pbl-border)] text-sm font-semibold text-[var(--pbl-student)] disabled:opacity-50"
+          className="pbl-auth-secondary"
           disabled={busy || code.trim().length < 4}
           onClick={() => void verifyCode()}
           type="button"
@@ -116,72 +120,84 @@ function StudentRegisterPageContent() {
           {busy && !invitation ? "验证中…" : "验证邀请码"}
         </button>
         {invitation ? (
-          <div className="mt-4 rounded-[6px] bg-[var(--pbl-bg)] p-3 text-sm">
-            <p className="font-semibold">{invitation.offering.name}</p>
-            <p className="mt-1 text-[var(--pbl-text-muted)]">
+          <div className="pbl-auth-invitation">
+            <span aria-hidden="true"><Badge size={17} /></span>
+            <div>
+              <p>{invitation.offering.name}</p>
+              <small>
               教师：{invitation.offering.teacher?.displayName ?? "待公布"}
               {invitation.offering.term ? ` · ${invitation.offering.term}` : ""}
-            </p>
+              </small>
+            </div>
           </div>
         ) : null}
-        <form className="mt-5 space-y-4" onSubmit={register}>
-          <label className="block text-sm font-semibold">
-            登录账号
-            <input
-              className="mt-2 min-h-11 w-full rounded-[6px] border border-[var(--pbl-border)] px-3"
-              autoComplete="username"
-              required
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder="至少 3 个字符"
-            />
+        <form className="pbl-auth-fields pbl-auth-register-fields" onSubmit={register}>
+          <label className="pbl-auth-field">
+            <span>登录账号</span>
+            <span className="pbl-auth-input-wrap">
+              <UserRound aria-hidden="true" className="pbl-auth-input-icon" size={17} />
+              <input
+                className="pbl-auth-input"
+                autoComplete="username"
+                required
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="至少 3 个字符"
+              />
+            </span>
           </label>
-          <label className="block text-sm font-semibold">
-            姓名
-            <input
-              className="mt-2 min-h-11 w-full rounded-[6px] border border-[var(--pbl-border)] px-3"
-              required
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-            />
+          <label className="pbl-auth-field">
+            <span>姓名</span>
+            <span className="pbl-auth-input-wrap">
+              <Badge aria-hidden="true" className="pbl-auth-input-icon" size={17} />
+              <input
+                className="pbl-auth-input"
+                autoComplete="name"
+                placeholder="输入你的姓名"
+                required
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+              />
+            </span>
           </label>
-          <label className="block text-sm font-semibold">
-            密码
-            <input
-              className="mt-2 min-h-11 w-full rounded-[6px] border border-[var(--pbl-border)] px-3"
-              autoComplete="new-password"
-              minLength={PASSWORD_MIN_LENGTH}
-              maxLength={PASSWORD_MAX_LENGTH}
-              placeholder={PASSWORD_LENGTH_HINT}
-              required
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
+          <label className="pbl-auth-field">
+            <span>密码</span>
+            <span className="pbl-auth-input-wrap">
+              <Lock aria-hidden="true" className="pbl-auth-input-icon" size={17} />
+              <input
+                className="pbl-auth-input"
+                autoComplete="new-password"
+                minLength={PASSWORD_MIN_LENGTH}
+                maxLength={PASSWORD_MAX_LENGTH}
+                placeholder={PASSWORD_LENGTH_HINT}
+                required
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </span>
           </label>
           {error ? (
             <p
               role="alert"
-              className="rounded-[6px] bg-rose-50 px-3 py-2 text-sm text-rose-700"
+              className="pbl-auth-error"
             >
               {error}
             </p>
           ) : null}
           <button
-            className="min-h-11 w-full rounded-[6px] bg-[var(--pbl-student)] px-4 text-sm font-semibold text-white disabled:opacity-50"
+            className="pbl-auth-primary"
             disabled={!invitation || busy}
             type="submit"
           >
-            {busy && invitation ? "创建中…" : "创建账号并加入课程"}
+            <span>{busy && invitation ? "创建中…" : "创建账号并加入课程"}</span>
+            <ArrowRight aria-hidden="true" size={18} />
           </button>
         </form>
       </section>
-      <p className="mt-5 text-sm text-[var(--pbl-text-muted)]">
+      <p className="pbl-auth-form-footer">
         已有账号？
-        <Link
-          href="/student/login"
-          className="ml-2 font-semibold text-[var(--pbl-student)]"
-        >
+        <Link href="/student/login">
           登录学习空间
         </Link>
       </p>

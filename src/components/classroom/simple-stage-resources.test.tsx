@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
-import { SimplifiedStudentStageView, SimplifiedTeacherStageView } from "./simple-stage-resources";
+import { SimplifiedStudentStageView, SimplifiedTeacherStageView, StudentProjectionPrecache, StudentResourceProjection, videoPrecacheRanges } from "./simple-stage-resources";
 
 const session = vi.hoisted(() => ({
   refresh: vi.fn(),
@@ -24,8 +24,14 @@ const course = {
 } as unknown as Course;
 
 describe("simplified stage resources", () => {
-  beforeEach(() => vi.clearAllMocks());
-  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.sessionStorage.clear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
 
   it("uses the student title card in the first stage", () => {
     const emptyCourse = { ...course, resources: [] } as Course;
@@ -53,7 +59,37 @@ describe("simplified stage resources", () => {
     expect(screen.getByText(/3 MB · 未阅读/)).toBeTruthy();
     expect(screen.queryByText("已打开")).toBeNull();
     expect(screen.queryByText("未查看")).toBeNull();
-    expect(session.markResourceDownloaded).toHaveBeenCalledWith("course-1", "launch-file");
+    expect(session.markResourceDownloaded).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /评价说明\.pdf/ }));
+    expect(session.markResourceDownloaded).toHaveBeenCalledWith("course-1", "launch-unread");
+  });
+
+  it("warms only bounded video ranges and staggers the request", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const fetchMock = vi.fn().mockResolvedValue({
+      status: 206,
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const video = { id: "lesson-video", title: "课堂示范.mp4", type: "video/mp4", size: String(20 * 1024 * 1024), stageKey: "launch", url: "/api/uploads/lesson-video", downloadedBy: [] };
+    const videoCourse = { ...course, resources: [video] } as Course;
+
+    expect(videoPrecacheRanges(video)).toEqual([
+      "bytes=0-2097151",
+      "bytes=20447232-20971519",
+    ]);
+    render(<StudentProjectionPrecache course={videoCourse} stageKey="launch" />);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.runAllTimersAsync();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map(([, init]) => (init as RequestInit).headers)).toEqual([
+      { Range: "bytes=0-2097151" },
+      { Range: "bytes=20447232-20971519" },
+    ]);
+    vi.useRealTimers();
   });
 
   it("lets a student open and leave an immersive reader", () => {
@@ -94,20 +130,114 @@ describe("simplified stage resources", () => {
     });
   });
 
-  it("uses the shared immersive classroom chrome for video playback", () => {
+  it("uses one authoritative video controller in immersive projection", () => {
     const videoCourse = {
       ...course,
       resources: [
         { id: "lesson-video", title: "课堂示范.mp4", type: "MP4", size: "58 MB", stageKey: "launch", url: "/api/uploads/lesson-video", downloadedBy: [] },
       ],
     } as Course;
-    render(<SimplifiedTeacherStageView course={videoCourse} stageKey="launch" />);
+    const view = render(<SimplifiedTeacherStageView course={videoCourse} stageKey="launch" />);
 
     fireEvent.click(screen.getByRole("button", { name: "全屏预览" }));
     const dialog = screen.getByRole("dialog", { name: "学习资料预览" });
+    expect(document.querySelectorAll("video")).toHaveLength(1);
+    expect(document.querySelector("video")?.getAttribute("src")).toBe("/api/uploads/lesson-video");
+    expect(document.querySelector("video")?.getAttribute("preload")).toBe("metadata");
     expect(within(dialog).getByText("全屏播放")).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "投屏" })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "退出全屏播放" })).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "投屏" }));
+    const projectedCourse = {
+      ...videoCourse,
+      uiState: {
+        resourceProjection: {
+          resourceId: "lesson-video",
+          stageKey: "launch",
+          title: "课堂示范.mp4",
+          startedAt: new Date().toISOString(),
+          viewState: {
+            mediaTime: 12,
+            mediaPlaying: false,
+            mediaPlaybackRate: 1,
+            updatedAt: new Date().toISOString(),
+            revision: 2,
+          },
+        },
+      },
+    } as Course;
+    view.rerender(<SimplifiedTeacherStageView course={projectedCourse} stageKey="launch" />);
+
+    expect(document.querySelectorAll("video")).toHaveLength(1);
+    expect(within(screen.getByRole("dialog", { name: "学习资料预览" })).getByText("实时投屏控制")).toBeTruthy();
+    const video = document.querySelector("video")!;
+    Object.defineProperty(video, "currentTime", { configurable: true, value: 18, writable: true });
+    Object.defineProperty(video, "playbackRate", { configurable: true, value: 1.25, writable: true });
+    fireEvent.play(video);
+    expect(session.setUiState).toHaveBeenLastCalledWith("course-1", {
+      resourceProjection: expect.objectContaining({
+        viewState: expect.objectContaining({ mediaPlaying: true, mediaTime: 18, mediaPlaybackRate: 1.25 }),
+      }),
+    });
+    fireEvent.ended(video);
+    expect(session.setUiState).toHaveBeenLastCalledWith("course-1", {
+      resourceProjection: expect.objectContaining({
+        viewState: expect.objectContaining({ mediaPlaying: false, mediaTime: 18 }),
+      }),
+    });
+  });
+
+  it("shows a paused projected video without an authorization cover", () => {
+    const resource = { id: "lesson-video", title: "课堂示范.mp4", type: "MP4", size: "58 MB", stageKey: "launch", url: "/api/uploads/lesson-video", downloadedBy: [] };
+    const projection = {
+      resourceId: resource.id,
+      stageKey: "launch",
+      title: resource.title,
+      startedAt: new Date().toISOString(),
+      viewState: { mediaTime: 0, mediaPlaying: false, mediaPlaybackRate: 1, updatedAt: new Date().toISOString(), revision: 3 },
+    };
+
+    const view = render(<StudentResourceProjection course={course} projection={projection} resource={resource} />);
+
+    expect(document.querySelector("video")?.getAttribute("src")).toBe("/api/uploads/lesson-video");
+    expect(document.querySelector("video")?.muted).toBe(true);
+    expect(screen.queryByRole("button", { name: /同步播放|同步声音/ })).toBeNull();
+    view.unmount();
+    expect(document.querySelector("video")).toBeNull();
+  });
+
+  it("falls back to muted picture sync when the browser blocks sound autoplay", async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play")
+      .mockRejectedValueOnce(new DOMException("autoplay blocked", "NotAllowedError"))
+      .mockResolvedValue(undefined);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    const resource = { id: "lesson-video", title: "课堂示范.mp4", type: "MP4", size: "58 MB", stageKey: "launch", url: "/api/uploads/lesson-video", downloadedBy: [] };
+    const playingProjection = {
+      resourceId: resource.id,
+      stageKey: "launch",
+      title: resource.title,
+      startedAt: new Date().toISOString(),
+      viewState: { mediaTime: 8, mediaPlaying: true, mediaPlaybackRate: 1, updatedAt: new Date().toISOString(), revision: 4 },
+    };
+    const view = render(<StudentResourceProjection course={course} projection={playingProjection} resource={resource} />);
+    const video = document.querySelector("video")!;
+    Object.defineProperty(video, "readyState", { configurable: true, value: 4 });
+    Object.defineProperty(video, "duration", { configurable: true, value: 120 });
+
+    fireEvent.loadedMetadata(video);
+
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(video.muted).toBe(true);
+    expect(screen.getByRole("button", { name: "点击开启同步声音" })).toBeTruthy();
+
+    view.rerender(<StudentResourceProjection
+      course={course}
+      projection={{ ...playingProjection, viewState: { ...playingProjection.viewState, mediaPlaying: false, revision: 5 } }}
+      resource={resource}
+    />);
+    await waitFor(() => expect(pause).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "点击开启同步声音" })).toBeNull();
   });
 
   it("asks whether an uploaded PDF is a slide deck and submits slide mode", async () => {

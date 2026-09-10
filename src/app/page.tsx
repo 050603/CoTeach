@@ -1,7 +1,7 @@
 import Link from "next/link";
 import {
+  ArrowDown,
   ArrowRight,
-  ArrowUpRight,
   BookOpen,
   ClipboardCheck,
   Flag,
@@ -135,18 +135,11 @@ function SiteHeader() {
             课堂流程
           </a>
           <Link
-            href="/teacher"
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--pbl-border-strong)] bg-[var(--pbl-surface)] px-4 py-2 text-[13px] font-semibold text-[var(--pbl-text-strong)] transition-all hover:-translate-y-0.5 hover:border-[var(--pbl-teacher)] hover:text-[var(--pbl-teacher)] hover:shadow-md"
-          >
-            <GraduationCap size={14} />
-            教师端
-          </Link>
-          <Link
             href="/student/login"
             className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-[13px] font-semibold text-white shadow-md shadow-indigo-500/25 transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-indigo-500/40"
           >
             <UsersRound size={14} />
-            学生加入
+            立即加入
           </Link>
         </nav>
       </div>
@@ -216,19 +209,15 @@ function Hero() {
           AI 参与教学实践。学生在 AI 与教师共同指导下探究、设计、创作与反馈，并始终保有判断与行动，让学习真正发生。
         </p>
 
-        {/* 双 CTA */}
+        {/* 统一学生优先入口 */}
         <div
-          className="pbl-hero-text mt-10 flex flex-col items-center gap-3 sm:flex-row sm:gap-4"
+          className="pbl-hero-text mt-10 flex items-center justify-center"
           style={{ animationDelay: "0.55s" }}
         >
-          <Link href="/teacher" className="pbl-cosmic-btn-primary">
-            <GraduationCap size={16} />
-            进入教师端
-            <ArrowRight size={14} />
-          </Link>
-          <Link href="/student/login" className="pbl-cosmic-btn-ghost">
+          <Link href="/student/login" className="pbl-cosmic-btn-primary">
             <UsersRound size={16} />
-            学生加入课堂
+            立即加入
+            <ArrowRight size={14} />
           </Link>
         </div>
 
@@ -236,10 +225,10 @@ function Hero() {
 
       {/* 滚动提示 */}
       <div className="absolute inset-x-0 bottom-6 z-10 flex justify-center">
-        <div className="pbl-scroll-hint flex flex-col items-center gap-2 text-[var(--pbl-text-subtle)]">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.2em]">Scroll</span>
-          <svg width="14" height="20" viewBox="0 0 14 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="0.5" y="0.5" width="13" height="19" rx="6.5" stroke="currentColor" />
+        <div className="pbl-scroll-hint flex flex-col items-center gap-1.5 text-indigo-600/85 drop-shadow-[0_2px_6px_rgba(99,102,241,0.18)]">
+          <span className="text-[11px] font-semibold tracking-[0.14em]">向下探索</span>
+          <svg aria-hidden="true" width="14" height="20" viewBox="0 0 14 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="0.5" y="0.5" width="13" height="19" rx="6.5" stroke="currentColor" strokeWidth="1.2" />
             <rect x="6" y="4" width="2" height="5" rx="1" fill="currentColor" />
           </svg>
         </div>
@@ -361,54 +350,147 @@ function Workflow() {
 
         {/* 水平时间线 */}
         <CosmicReveal stagger>
-          <div className="relative grid grid-cols-2 gap-x-6 gap-y-10 md:grid-cols-5 md:gap-x-4">
-            {/* 连接线（仅桌面） */}
-            <div className="pointer-events-none absolute left-0 right-0 top-[26px] hidden h-px bg-gradient-to-r from-transparent via-[var(--pbl-border-strong)] to-transparent md:block" />
-
-            {stages.map((stage, index) => {
-              const Icon = stage.icon;
-              return (
-                <div key={stage.key} className="group relative">
-                  {/* 节点圆 */}
-                  <div className="relative mb-6 flex items-center gap-3">
-                    <span
-                      className={`relative grid h-[52px] w-[52px] shrink-0 place-items-center rounded-full bg-gradient-to-br ${stage.gradient} text-white shadow-lg transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3`}
-                      style={{ boxShadow: `0 8px 20px ${stage.color}33` }}
-                    >
-                      <Icon size={20} strokeWidth={1.8} />
-                      {/* 序号 */}
-                      <span className="absolute -right-1 -top-1 grid h-5 w-5 place-items-center rounded-full bg-white text-[10px] font-bold text-[var(--pbl-text-strong)] shadow-md ring-1 ring-[var(--pbl-border)]">
-                        {index + 1}
-                      </span>
-                    </span>
-                  </div>
-
-                  {/* 阶段名 */}
-                  <h3
-                    className="text-base font-bold tracking-tight"
-                    style={{ color: stage.color }}
+          <div
+            aria-label="五阶段学习闭环：从项目启动依次推进至学习反思，再回到新的项目启动"
+            className="relative"
+          >
+            {/* 桌面端：回环与前进箭头都限制在节点区域，不经过说明文字。 */}
+            <div className="relative hidden pt-12 md:block">
+              <svg
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 h-[100px] w-full overflow-visible"
+                preserveAspectRatio="none"
+                viewBox="0 0 1000 100"
+              >
+                <defs>
+                  <linearGradient id="workflow-loop-gradient" x1="0" x2="1">
+                    <stop offset="0" stopColor="#6366f1" stopOpacity="0.5" />
+                    <stop offset="0.5" stopColor="#8b5cf6" stopOpacity="0.66" />
+                    <stop offset="1" stopColor="#a855f7" stopOpacity="0.5" />
+                  </linearGradient>
+                  <marker
+                    id="workflow-arrow"
+                    markerHeight="8"
+                    markerUnits="userSpaceOnUse"
+                    markerWidth="8"
+                    orient="auto"
+                    refX="7"
+                    refY="4"
                   >
-                    {stage.label}
-                  </h3>
+                    <path d="M0 0L8 4L0 8Z" fill="#7c6cf2" fillOpacity="0.82" />
+                  </marker>
+                </defs>
 
-                  {/* 描述 */}
-                  <p className="mt-2 text-[12px] leading-5 text-[var(--pbl-text-muted)]">
-                    {stage.desc}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </CosmicReveal>
+                {/* 第五阶段沿节点上方回到第一阶段，形成闭环。 */}
+                <path
+                  d="M922 74H966Q984 74 984 56V20Q984 8 970 8H30Q16 8 16 20V56Q16 74 34 74H78"
+                  fill="none"
+                  markerEnd="url(#workflow-arrow)"
+                  stroke="url(#workflow-loop-gradient)"
+                  strokeDasharray="5 6"
+                  strokeLinecap="round"
+                  strokeWidth="1.6"
+                  vectorEffect="non-scaling-stroke"
+                />
+              </svg>
 
-        {/* 闭环提示 */}
-        <CosmicReveal>
-          <div className="mt-16 flex items-center gap-3 rounded-xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] px-5 py-4 shadow-sm">
-            <RotateCw size={16} className="shrink-0 text-indigo-500" />
-            <p className="text-[13px] leading-6 text-[var(--pbl-text-muted)]">
-              <span className="font-semibold text-[var(--pbl-text-strong)]">闭环持续循环</span>
-              ：第五阶段的反思产出，会成为下一个项目的起点。
-            </p>
+              <div className="relative grid grid-cols-5 gap-x-4">
+                {stages.map((stage, index) => {
+                  const Icon = stage.icon;
+                  return (
+                    <div key={stage.key} className="group relative text-center">
+                      {index < stages.length - 1 ? (
+                        <div
+                          aria-hidden="true"
+                          className="absolute left-[calc(50%+34px)] top-[25px] flex w-[calc(100%-52px)] items-center text-indigo-500/85"
+                        >
+                          <span className="h-0.5 flex-1 rounded-full bg-gradient-to-r from-indigo-300 via-violet-400 to-indigo-400" />
+                          <ArrowRight className="-ml-1 shrink-0" size={20} strokeWidth={2.25} />
+                        </div>
+                      ) : null}
+
+                      <div className="relative mb-6 flex items-center justify-center">
+                        <span
+                          className={`relative grid h-[52px] w-[52px] shrink-0 place-items-center rounded-full bg-gradient-to-br ${stage.gradient} text-white shadow-lg transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3`}
+                          style={{ boxShadow: `0 8px 20px ${stage.color}33` }}
+                        >
+                          <Icon size={20} strokeWidth={1.8} />
+                          <span className="absolute -right-1 -top-1 grid h-5 w-5 place-items-center rounded-full bg-white text-[10px] font-bold text-[var(--pbl-text-strong)] shadow-md ring-1 ring-[var(--pbl-border)]">
+                            {index + 1}
+                          </span>
+                        </span>
+                      </div>
+
+                      <h3 className="text-base font-bold tracking-tight" style={{ color: stage.color }}>
+                        {stage.label}
+                      </h3>
+                      <p className="mt-2 text-[12px] leading-5 text-[var(--pbl-text-muted)]">
+                        {stage.desc}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 移动端：纵向排列，明确显示每一次阶段推进。 */}
+            <div className="relative mx-auto max-w-md pl-8 pr-2 md:hidden">
+              <svg
+                aria-hidden="true"
+                className="pointer-events-none absolute bottom-0 left-0 top-0 h-full w-8 overflow-visible text-indigo-400/70"
+                preserveAspectRatio="none"
+                viewBox="0 0 32 100"
+              >
+                <defs>
+                  <marker id="workflow-mobile-loop-arrow" markerHeight="7" markerWidth="7" orient="auto" refX="6" refY="3.5">
+                    <path d="M0 0L7 3.5L0 7Z" fill="currentColor" />
+                  </marker>
+                </defs>
+                <path
+                  d="M32 96H10Q4 96 4 90V10Q4 4 10 4H28"
+                  fill="none"
+                  markerEnd="url(#workflow-mobile-loop-arrow)"
+                  stroke="currentColor"
+                  strokeDasharray="3 4"
+                  strokeLinecap="round"
+                  strokeWidth="1.4"
+                  vectorEffect="non-scaling-stroke"
+                />
+              </svg>
+
+              {stages.map((stage, index) => {
+                const Icon = stage.icon;
+                return (
+                  <div key={stage.key}>
+                    <div className="group relative flex items-start gap-4">
+                      <span
+                        className={`relative grid h-[52px] w-[52px] shrink-0 place-items-center rounded-full bg-gradient-to-br ${stage.gradient} text-white shadow-lg`}
+                        style={{ boxShadow: `0 8px 20px ${stage.color}33` }}
+                      >
+                        <Icon size={20} strokeWidth={1.8} />
+                        <span className="absolute -right-1 -top-1 grid h-5 w-5 place-items-center rounded-full bg-white text-[10px] font-bold text-[var(--pbl-text-strong)] shadow-md ring-1 ring-[var(--pbl-border)]">
+                          {index + 1}
+                        </span>
+                      </span>
+                      <div className="min-w-0 pt-1">
+                        <h3 className="text-base font-bold tracking-tight" style={{ color: stage.color }}>
+                          {stage.label}
+                        </h3>
+                        <p className="mt-1.5 text-[12px] leading-5 text-[var(--pbl-text-muted)]">
+                          {stage.desc}
+                        </p>
+                      </div>
+                    </div>
+
+                    {index < stages.length - 1 ? (
+                      <div aria-hidden="true" className="my-2 ml-3.5 flex h-7 w-6 items-center justify-center text-indigo-400/75">
+                        <ArrowDown size={18} strokeWidth={1.8} />
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </CosmicReveal>
       </div>
@@ -417,7 +499,7 @@ function Workflow() {
 }
 
 /* ============================================================
-   5. Entry —— 教师 / 学生双入口（紧凑卡片，不展开表单）
+   5. Entry —— 统一学生优先入口
    ============================================================ */
 function Entry() {
   return (
@@ -439,113 +521,24 @@ function Entry() {
             <span className="h-px w-8 bg-[var(--pbl-text-strong)]" />
           </div>
           <h2 className="text-[length:clamp(2rem,5vw,3.25rem)] font-extrabold leading-[1.05] tracking-tight text-[var(--pbl-text-strong)]">
-            下一次实践，
-            <span className="pbl-display-gradient">从这里开始。</span>
+            进入项目课堂，
+            <span className="pbl-display-gradient">从行动开始。</span>
           </h2>
           <p className="mx-auto mt-5 max-w-xl text-[15px] leading-7 text-[var(--pbl-text-muted)]">
-            教师创建并引领项目课堂，学生通过邀请码进入实践现场，与 AI 一起把想法变成作品。
+            登录学习账号，或使用教师提供的邀请码注册，与同伴和 AI 一起开始实践。
           </p>
         </CosmicReveal>
 
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* 教师端 */}
-          <CosmicReveal>
-            <Link
-              href="/teacher"
-              className="pbl-shine-card group relative block overflow-hidden rounded-3xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-8 transition-all duration-300 hover:-translate-y-1 hover:border-indigo-300 hover:shadow-2xl hover:shadow-indigo-100/60"
-            >
-              {/* 背景渐变 */}
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-indigo-50 via-transparent to-transparent opacity-50 transition-opacity duration-500 group-hover:opacity-100" />
-
-              <div className="relative flex items-start gap-6">
-                {/* 渐变图标 */}
-                <div className="inline-flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-xl shadow-indigo-500/30 transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3">
-                  <GraduationCap size={30} strokeWidth={1.8} />
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="mb-1 inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-indigo-600">
-                    For Teachers
-                  </div>
-                  <h3 className="text-2xl font-extrabold tracking-tight text-[var(--pbl-text-strong)]">
-                    教师端
-                  </h3>
-                  <p className="mt-2 text-[14px] leading-6 text-[var(--pbl-text-muted)]">
-                    一个平台完成课程创建、五阶段课堂与课程结束：轻量资源授课、分节知识讲授和文档或代码项目实践。
-                  </p>
-
-                  {/* 功能标签 */}
-                  <div className="mt-4 flex flex-wrap gap-1.5">
-                    {["课程创建", "资源投屏", "知识讲授", "项目实践"].map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-full border border-indigo-100 bg-indigo-50/60 px-2.5 py-1 text-[11px] font-semibold text-indigo-700"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                {/* 右侧箭头 */}
-                <div className="hidden shrink-0 self-center md:block">
-                  <div className="grid h-10 w-10 place-items-center rounded-full bg-[var(--pbl-surface-soft)] text-[var(--pbl-text-muted)] transition-all duration-300 group-hover:bg-indigo-500 group-hover:text-white">
-                    <ArrowUpRight size={18} />
-                  </div>
-                </div>
-              </div>
-            </Link>
-          </CosmicReveal>
-
-          {/* 学生端 */}
-          <CosmicReveal delay={100}>
-            <Link
-              href="/student/login"
-              className="pbl-shine-card group relative block overflow-hidden rounded-3xl border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-8 transition-all duration-300 hover:-translate-y-1 hover:border-emerald-300 hover:shadow-2xl hover:shadow-emerald-100/60"
-            >
-              {/* 背景渐变 */}
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-emerald-50 via-transparent to-transparent opacity-50 transition-opacity duration-500 group-hover:opacity-100" />
-
-              <div className="relative flex items-start gap-6">
-                {/* 渐变图标 */}
-                <div className="inline-flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-xl shadow-emerald-500/30 transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3">
-                  <UsersRound size={30} strokeWidth={1.8} />
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="mb-1 inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-600">
-                    For Students
-                  </div>
-                  <h3 className="text-2xl font-extrabold tracking-tight text-[var(--pbl-text-strong)]">
-                    学生端
-                  </h3>
-                  <p className="mt-2 text-[14px] leading-6 text-[var(--pbl-text-muted)]">
-                    使用教师提供的 6 位邀请码进入课堂，跟随课堂流程完成项目学习与反思。
-                  </p>
-
-                  {/* 功能标签 */}
-                  <div className="mt-4 flex flex-wrap gap-1.5">
-                    {["邀请码加入", "项目实践", "成果汇报", "学习反思"].map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-full border border-emerald-100 bg-emerald-50/60 px-2.5 py-1 text-[11px] font-semibold text-emerald-700"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                {/* 右侧箭头 */}
-                <div className="hidden shrink-0 self-center md:block">
-                  <div className="grid h-10 w-10 place-items-center rounded-full bg-[var(--pbl-surface-soft)] text-[var(--pbl-text-muted)] transition-all duration-300 group-hover:bg-emerald-500 group-hover:text-white">
-                    <ArrowUpRight size={18} />
-                  </div>
-                </div>
-              </div>
-            </Link>
-          </CosmicReveal>
-        </div>
+        <CosmicReveal delay={100} className="text-center">
+          <Link href="/student/login" className="pbl-cosmic-btn-primary">
+            <UsersRound size={16} />
+            立即加入
+            <ArrowRight size={14} />
+          </Link>
+          <p className="mt-5 text-[12px] leading-6 text-[var(--pbl-text-subtle)]">
+            教师可在登录页右上角切换至教师入口
+          </p>
+        </CosmicReveal>
       </div>
     </section>
   );

@@ -141,7 +141,7 @@ describe("学生课程工作区", () => {
     expect(screen.getByRole("heading", { name: "课程大纲" })).toBeInTheDocument();
   });
 
-  it("collects course references and chapter resource activities", async () => {
+  it("shows only separately uploaded course references", async () => {
     respond();
     render(<StudentCoursePage />);
     await screen.findByRole("heading", { name: course.name });
@@ -150,11 +150,8 @@ describe("学生课程工作区", () => {
     expect(screen.getByText(course.referenceMaterials)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /城市生态延伸阅读/ })).toHaveAttribute("href", "https://example.test/reading");
     expect(screen.getByRole("link", { name: /课程阅读手册/ })).toHaveAttribute("href", "/api/uploads/pdf");
-    expect(screen.getByRole("link", { name: /社区观察方法/ })).toHaveAttribute(
-      "href",
-      "/student/activities/resource-1",
-    );
-    expect(screen.getByText("方案设计工具包").closest("a")).toBeNull();
+    expect(screen.queryByText("社区观察方法")).not.toBeInTheDocument();
+    expect(screen.queryByText("方案设计工具包")).not.toBeInTheDocument();
   });
 
   it("shows computed course reminders without unread persistence", async () => {

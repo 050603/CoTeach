@@ -71,12 +71,21 @@ describe("learning task submission", () => {
     expect(mocks.save).toHaveBeenCalledOnce();
   });
   it("validates and persists multiple-choice option arrays", async () => {
-    mocks.activity.mockResolvedValue({ ...activity, type: "FORM", config: { schemaVersion: 2, content: "", questions: [{ id: "q1", title: "练习过哪些能力？", type: "multiple-choice", chartType: "bar", required: true, options: [{ id: "a", label: "调研" }, { id: "b", label: "协作" }] }] } });
+    mocks.activity.mockResolvedValue({ ...activity, type: "FORM", config: { schemaVersion: 2, content: "", questions: [{ id: "q1", title: "练习过哪些能力？", type: "multiple-choice", chartType: "bar", maxSelections: 2, required: true, options: [{ id: "a", label: "调研" }, { id: "b", label: "协作" }, { id: "c", label: "表达" }] }] } });
     await expect(submitActivity(claims, "task", { answers: { q1: "a" } })).rejects.toMatchObject({ code: "INVALID_ANSWER" });
     await expect(submitActivity(claims, "task", { answers: { q1: ["a", "a"] } })).rejects.toMatchObject({ code: "INVALID_ANSWER" });
     await expect(submitActivity(claims, "task", { answers: { q1: ["a", "unknown"] } })).rejects.toMatchObject({ code: "INVALID_ANSWER" });
+    await expect(submitActivity(claims, "task", { answers: { q1: ["a", "b", "c"] } })).rejects.toMatchObject({ code: "INVALID_ANSWER" });
     await submitActivity(claims, "task", { answers: { q1: ["a", "b"] } });
     expect(mocks.history).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ payload: expect.objectContaining({ answers: { q1: ["a", "b"] } }) }) }));
+  });
+  it("validates and persists supplemental text for a configured choice", async () => {
+    mocks.activity.mockResolvedValue({ ...activity, type: "FORM", config: { schemaVersion: 2, content: "", questions: [{ id: "q1", title: "课堂节奏如何？", type: "single-choice", chartType: "bar", required: true, options: [{ id: "a", label: "合适" }, { id: "other", label: "其他", allowTextInput: true }] }] } });
+    await expect(submitActivity(claims, "task", { answers: { q1: { selected: "other" } } })).rejects.toMatchObject({ code: "ANSWER_REQUIRED" });
+    await expect(submitActivity(claims, "task", { answers: { q1: { selected: "other", optionText: { a: "无效补充" } } } })).rejects.toMatchObject({ code: "INVALID_ANSWER" });
+    await expect(submitActivity(claims, "task", { answers: { q1: { selected: "other", optionText: { unknown: "无效补充" } } } })).rejects.toMatchObject({ code: "INVALID_ANSWER" });
+    await submitActivity(claims, "task", { answers: { q1: { selected: "other", optionText: { other: "讨论环节偏快" } } } });
+    expect(mocks.history).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ payload: expect.objectContaining({ answers: { q1: { selected: "other", optionText: { other: "讨论环节偏快" } } } }) }) }));
   });
   it("does not let clients complete classrooms using task submissions", async () => {
     mocks.activity.mockResolvedValue({ ...activity, type: "CLASSROOM" });
@@ -85,5 +94,6 @@ describe("learning task submission", () => {
   it("trims empty answers and limits payloads", () => {
     expect(submissionSchema.parse({ answer: "  " }).answer).toBe("");
     expect(submissionSchema.safeParse({ answer: "x".repeat(30001) }).success).toBe(false);
+    expect(submissionSchema.safeParse({ answers: { q1: { selected: "other", optionText: { other: "x".repeat(201) } } } }).success).toBe(false);
   });
 });

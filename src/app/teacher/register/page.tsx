@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  ArrowRight,
   ShieldCheck,
   Lock,
   User,
@@ -130,33 +131,35 @@ export default function TeacherRegisterPage() {
   }
 
   return (
-    <TeacherAuthShell>
-        <section className="pbl-platform-panel pbl-auth-form">
+    <TeacherAuthShell
+      description={status.loading
+        ? "正在确认当前系统的账号状态。"
+        : status.available
+          ? status.mode === "bootstrap"
+            ? "完成初始设置后，将直接进入教师工作空间。"
+            : "为协作教师创建独立的工作空间账号。"
+          : "请先登录已有教师账号，再创建其他教师。"}
+      mode="register"
+      title={status.loading
+        ? "正在准备注册"
+        : status.available
+          ? status.mode === "bootstrap" ? "设置首个教师账号" : "创建教师账号"
+          : "需要教师身份"}
+    >
+        <section className="pbl-auth-form-stack">
           {status.loading ? (
-            <div className="space-y-4" aria-label="正在检查注册状态">
-              <div className="pbl-skeleton h-7 w-40 rounded-md" />
-              <div className="pbl-skeleton h-11 rounded-md" />
-              <div className="pbl-skeleton h-11 rounded-md" />
-              <div className="pbl-skeleton h-11 rounded-md" />
+            <div className="pbl-auth-skeleton" aria-label="正在检查注册状态">
+              <div className="pbl-skeleton" />
+              <div className="pbl-skeleton" />
+              <div className="pbl-skeleton" />
+              <div className="pbl-skeleton" />
             </div>
           ) : status.available ? (
-            <form className="space-y-4" onSubmit={submit}>
-              <div>
-                <h1 className="text-2xl font-semibold text-[var(--pbl-text-strong)]">
-                  {status.mode === "bootstrap"
-                    ? "设置首个教师信息"
-                    : "创建其他教师账号"}
-                </h1>
-                <p className="mt-1 text-xs leading-5 text-[var(--pbl-text-muted)]">
-                  {status.mode === "bootstrap"
-                    ? "创建后将使用该账号自动登录。"
-                    : "新账号创建后，当前教师仍保持登录。"}
-                </p>
-              </div>
+            <form className="pbl-auth-fields" onSubmit={submit}>
               {createdTeacher ? (
                 <div
                   aria-live="polite"
-                  className="rounded-[var(--radius-xs)] border border-[var(--pbl-success)]/20 bg-[var(--pbl-success-soft)] px-3 py-2 text-sm text-[var(--pbl-success)]"
+                  className="pbl-auth-success"
                 >
                   已创建教师账号：
                   <span className="font-semibold">
@@ -204,13 +207,13 @@ export default function TeacherRegisterPage() {
               {error ? (
                 <p
                   aria-live="polite"
-                  className="rounded-[var(--radius-xs)] bg-[var(--pbl-danger-soft)] px-3 py-2 text-sm text-[var(--pbl-danger)]"
+                  className="pbl-auth-error"
                 >
                   {error}
                 </p>
               ) : null}
               <button
-                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-[var(--radius-xs)] bg-[var(--pbl-teacher)] px-4 text-sm font-semibold text-white transition hover:bg-[var(--pbl-teacher-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+                className="pbl-auth-primary"
                 disabled={
                   submitting ||
                   username.trim().length < 3 ||
@@ -220,27 +223,24 @@ export default function TeacherRegisterPage() {
                 }
                 type="submit"
               >
-                <UserPlus size={16} />
-                {submitting
+                <span>{submitting
                   ? "正在创建..."
                   : status.mode === "bootstrap"
                     ? "创建并进入教师端"
-                    : "创建教师账号"}
+                    : "创建教师账号"}</span>
+                <ArrowRight aria-hidden="true" size={18} />
               </button>
             </form>
           ) : (
-            <div className="py-5 text-center">
-              <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[var(--pbl-surface-soft)] text-[var(--pbl-text-muted)]">
+            <div className="pbl-auth-restricted">
+              <span>
                 <ShieldCheck size={23} />
               </span>
-              <h1 className="mt-4 text-xl font-semibold text-[var(--pbl-text-strong)]">
-                需要教师身份
-              </h1>
-              <p className="mt-2 text-sm leading-6 text-[var(--pbl-text-muted)]">
+              <p>
                 {status.message ?? "请先登录教师账号，再创建其他教师。"}
               </p>
               <Link
-                className="mt-5 inline-flex min-h-10 items-center justify-center rounded-[var(--radius-xs)] bg-[var(--pbl-teacher)] px-5 text-sm font-semibold text-white"
+                className="pbl-auth-inline-action"
                 href="/teacher/login"
               >
                 前往教师登录
@@ -274,15 +274,15 @@ function Field({
   value: string;
 }) {
   return (
-    <label className="block">
-      <span className="text-sm font-semibold">{label}</span>
-      <span className="relative mt-1.5 block">
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--pbl-text-muted)]">
+    <label className="pbl-auth-field">
+      <span>{label}</span>
+      <span className="pbl-auth-input-wrap">
+        <span className="pbl-auth-input-icon">
           {icon}
         </span>
         <input
           autoComplete={autoComplete}
-          className="min-h-11 w-full rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-white pl-9 pr-3 text-sm outline-none transition focus:border-[var(--pbl-teacher)]"
+          className="pbl-auth-input"
           maxLength={type === "password" ? PASSWORD_MAX_LENGTH : 80}
           minLength={minLength}
           onChange={(event) => onChange(event.target.value)}

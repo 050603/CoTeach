@@ -99,6 +99,38 @@ describe("ActionEnvelopeSchema", () => {
     }).success).toBe(false);
   });
 
+  it("validates the bounded projection control payload", () => {
+    const valid = ActionEnvelopeSchema.safeParse({
+      requestId,
+      action: {
+        type: "SET_UI_STATE",
+        payload: {
+          courseId: "course-1",
+          patch: { resourceProjection: null },
+        },
+      },
+    });
+    const invalid = ActionEnvelopeSchema.safeParse({
+      requestId,
+      action: {
+        type: "SET_UI_STATE",
+        payload: {
+          courseId: "course-1",
+          patch: {
+            resourceProjection: {
+              resourceId: "resource-1",
+              stageKey: "launch",
+              title: "视频",
+              startedAt: "not-a-date",
+            },
+          },
+        },
+      },
+    });
+    expect(valid.success).toBe(true);
+    expect(invalid.success).toBe(false);
+  });
+
   it("rejects incomplete survey scores or answers", () => {
     const now = new Date().toISOString();
     expect(ActionEnvelopeSchema.safeParse({

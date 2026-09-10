@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileTypeFromBuffer } from "file-type";
 import { z } from "zod";
@@ -231,6 +231,10 @@ export async function POST(request: Request) {
       flag: "wx",
       mode: 0o600,
     });
+    // HTTP access remains protected by the authenticated upload route and an
+    // Nginx `internal` location. World-readable file mode only lets the
+    // unprivileged gateway process use sendfile after authorization succeeds.
+    await chmod(/* turbopackIgnore: true */ targetPath, 0o644);
     const info = await stat(/* turbopackIgnore: true */ targetPath);
     if (info.size <= 0 || info.size > MAX_UPLOAD_BYTES) {
       throw new UploadHttpError("INVALID_FILE_SIZE", "文件大小无效。", 413);
@@ -438,6 +442,7 @@ async function uploadStreamedVideo(
     if (storedInfo.size !== size) {
       throw new UploadHttpError("UPLOAD_INCOMPLETE", "视频写入不完整，请重新上传。", 500);
     }
+    await chmod(/* turbopackIgnore: true */ targetPath, 0o644);
 
     const detected = await fileTypeFromBuffer(signature).catch(() => null);
     if (!detected || !expected.detected?.includes(detected.ext)) {

@@ -81,6 +81,21 @@ import {
   latestEventCursor,
   type RealtimeTransportMode,
 } from "@/lib/realtime/sync-policy";
+import {
+  PROJECTION_COALESCE_MS,
+  PROJECTION_CONNECTED_CHECK_INTERVAL_MS,
+  PROJECTION_POLL_INTERVAL_MS,
+  PROJECTION_REQUEST_TIMEOUT_MS,
+  estimateServerClockOffset,
+  highestKnownProjectionVersion,
+  isImmediateProjectionPatch,
+  mergeCourseUiStateWithProjectionGuard,
+  projectionPatchFromAction,
+  shouldApplyProjectionVersion,
+  withProjectionClockOffset,
+  type ProjectionStateSnapshot,
+} from "@/lib/realtime/projection-state";
+import { LatestValueQueue } from "@/lib/realtime/latest-value-queue";
 import { emitShowcasePresentation } from "@/lib/showcase/realtime-client";
 import type { ShowcaseEventPayload } from "@/lib/showcase/types";
 
@@ -117,6 +132,11 @@ type SubmissionInput = Omit<
   ClassroomSubmission,
   "id" | "courseId" | "createdAt" | "updatedAt"
 > & { id?: string; courseId?: string };
+
+type QueuedProjectionUpdate = {
+  action: SessionAction;
+  requestId: string;
+};
 
 type SessionApi = SessionState & {
   saveState: "idle" | "unsaved" | "saving" | "saved" | "error";
@@ -292,6 +312,7 @@ async function postSessionAction(
   state: SessionState,
   requestId: string,
   expectedVersionOverride?: number,
+  includeExpectedVersion = true,
 ): Promise<ActionAck> {
   const role = getClientRole();
   const courseId = courseIdForAction(action);
@@ -306,7 +327,7 @@ async function postSessionAction(
     },
     body: JSON.stringify({
       requestId,
-      ...(action.type !== "CREATE_COURSE" && expectedVersion
+      ...(includeExpectedVersion && action.type !== "CREATE_COURSE" && expectedVersion
         ? { expectedVersion }
         : {}),
       action,
@@ -346,6 +367,22 @@ async function postSessionActionWithRetry(
   );
 }
 
+async function postProjectionActionWithRetry(
+  update: QueuedProjectionUpdate,
+  state: SessionState,
+): Promise<ActionAck> {
+  return retryVersionConflict(
+    () => postSessionAction(
+      update.action,
+      state,
+      update.requestId,
+      undefined,
+      false,
+    ),
+    undefined,
+  );
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [state, dispatch] = useReducer(reducer, undefined, initialSessionState);
@@ -374,6 +411,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const coursePollTimerRef = useRef<number | null>(null);
   const coursePollInFlightRef = useRef(false);
   const coursePollFailuresRef = useRef(0);
+  const wsConnectionTimerRef = useRef<number | null>(null);
+  const wsSubscriptionTimerRef = useRef<number | null>(null);
+  const projectionPollTimerRef = useRef<number | null>(null);
+  const projectionPollAbortRef = useRef<AbortController | null>(null);
+  const projectionPollSequenceRef = useRef(0);
+  const projectionVersionRef = useRef<Record<string, number>>({});
+  const projectionQueuesRef = useRef<Map<string, LatestValueQueue<QueuedProjectionUpdate>>>(new Map());
+  const projectionFailureCountRef = useRef<Record<string, number>>({});
   const [realtimeMode, setRealtimeMode] = useState<"websocket" | "polling">("polling");
 
   useEffect(() => {
@@ -557,6 +602,66 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       });
   }
 
+  function projectionQueueFor(courseId: string) {
+    const existing = projectionQueuesRef.current.get(courseId);
+    if (existing) return existing;
+    const queue = new LatestValueQueue<QueuedProjectionUpdate>(
+      async (update) => {
+        const requestStartedAt = Date.now();
+        const ack = await postProjectionActionWithRetry(update, stateRef.current);
+        const responseReceivedAt = Date.now();
+        if (ack.projection) {
+          applyProjectionSnapshot(
+            courseId,
+            ack.projection,
+            requestStartedAt,
+            responseReceivedAt,
+            queue.hasPending(),
+          );
+        }
+      },
+      PROJECTION_COALESCE_MS,
+      PROJECTION_POLL_INTERVAL_MS,
+      (error) => {
+        const failures = (projectionFailureCountRef.current[courseId] ?? 0) + 1;
+        projectionFailureCountRef.current[courseId] = failures;
+        console.error("[session] Projection update failed; retrying latest state:", error);
+        if (failures === COURSE_SYNC_FAILURE_NOTICE_THRESHOLD) {
+          toast.error("投屏同步暂时中断", {
+            id: "projection-sync-error",
+            description: "系统正在重试最新投屏状态。",
+          });
+        }
+      },
+    );
+    projectionQueuesRef.current.set(courseId, queue);
+    return queue;
+  }
+
+  function queueProjectionAction(action: SessionAction): void {
+    const patch = projectionPatchFromAction(action);
+    const courseId = courseIdForAction(action);
+    if (!patch || !courseId) {
+      void commit(action);
+      return;
+    }
+    const previous = stateRef.current.courses.find(
+      (course) => course.id === courseId,
+    )?.uiState;
+    const immediate = isImmediateProjectionPatch(previous, patch);
+    const next = applySessionAction(stateRef.current, action);
+    stateRef.current = next;
+    dispatch(action);
+    projectionQueueFor(courseId).enqueue(
+      { action, requestId: clientUUID() },
+      immediate,
+    );
+  }
+
+  function hasProjectionWork(courseId: string): boolean {
+    return projectionQueuesRef.current.get(courseId)?.hasWork() ?? false;
+  }
+
   async function retrySave() {
     const failed = lastFailedActionRef.current;
     if (!failed) return;
@@ -619,7 +724,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(wsRetryTimerRef.current);
       wsRetryTimerRef.current = null;
     }
+    if (wsSubscriptionTimerRef.current !== null) {
+      window.clearTimeout(wsSubscriptionTimerRef.current);
+      wsSubscriptionTimerRef.current = null;
+    }
+    if (wsConnectionTimerRef.current !== null) {
+      window.clearTimeout(wsConnectionTimerRef.current);
+      wsConnectionTimerRef.current = null;
+    }
     stopCoursePolling();
+    stopProjectionPolling();
     const ws = wsRef.current;
     if (!ws) return;
     try {
@@ -641,6 +755,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  function stopProjectionPolling() {
+    if (projectionPollTimerRef.current !== null) {
+      window.clearInterval(projectionPollTimerRef.current);
+      projectionPollTimerRef.current = null;
+    }
+    projectionPollAbortRef.current?.abort();
+    projectionPollAbortRef.current = null;
+    projectionPollSequenceRef.current += 1;
+  }
+
   function recordCourseSyncSuccess() {
     if (coursePollFailuresRef.current >= COURSE_SYNC_FAILURE_NOTICE_THRESHOLD) {
       toast.success("课堂实时同步已恢复", { id: "course-sync-error" });
@@ -657,6 +781,131 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         description: "无法从服务器读取最新课堂状态，系统正在自动重试。",
       });
     }
+  }
+
+  function applyProjectionSnapshot(
+    courseId: string,
+    snapshot: ProjectionStateSnapshot,
+    requestStartedAt: number,
+    responseReceivedAt: number,
+    preserveOptimisticProjection = false,
+  ): boolean {
+    if (snapshot.courseId !== courseId) return false;
+    const incomingVersion = snapshot.projectionVersion;
+    const current = stateRef.current;
+    const currentCourse = current.courses.find((course) => course.id === courseId);
+    const hydratedVersion = currentCourse?.uiState?.projectionVersion;
+    const trackedVersion = projectionVersionRef.current[courseId];
+    const knownVersion = highestKnownProjectionVersion(
+      hydratedVersion,
+      trackedVersion,
+    );
+    if (!shouldApplyProjectionVersion(
+      knownVersion,
+      incomingVersion,
+    )) {
+      return false;
+    }
+    const offsetMs = estimateServerClockOffset(
+      snapshot.serverTime,
+      requestStartedAt,
+      responseReceivedAt,
+    );
+    const adjusted = withProjectionClockOffset(snapshot, offsetMs);
+    if (!currentCourse) return false;
+    const patch: Partial<CourseUiState> = {
+      projectionVersion: incomingVersion,
+      projectionUpdatedAt: snapshot.projectionUpdatedAt,
+      projectionClockOffsetMs: offsetMs,
+      ...(preserveOptimisticProjection
+        ? {}
+        : {
+            resourceProjection: adjusted.resourceProjection,
+            teacherResourceProjection: adjusted.teacherResourceProjection,
+          }),
+    };
+    let next = applySessionAction(current, {
+      type: "SET_UI_STATE",
+      payload: { courseId, patch },
+    });
+    next = {
+      ...next,
+      courses: next.courses.map((course) => course.id === courseId
+        ? { ...course, version: Math.max(course.version ?? 0, snapshot.courseVersion) }
+        : course),
+    };
+    projectionVersionRef.current[courseId] = incomingVersion;
+    stateRef.current = next;
+    dispatch({ type: "HYDRATE", payload: next });
+    if (
+      (projectionFailureCountRef.current[courseId] ?? 0)
+      >= COURSE_SYNC_FAILURE_NOTICE_THRESHOLD
+    ) {
+      toast.success("投屏同步已恢复", { id: "projection-sync-error" });
+    }
+    projectionFailureCountRef.current[courseId] = 0;
+    return true;
+  }
+
+  async function refreshProjectionState(courseId: string): Promise<void> {
+    if (
+      !isRealtimePollingActive(document.visibilityState)
+      || projectionPollAbortRef.current
+      || wsCourseIdRef.current !== courseId
+    ) return;
+    const controller = new AbortController();
+    const sequence = ++projectionPollSequenceRef.current;
+    projectionPollAbortRef.current = controller;
+    const timeout = window.setTimeout(
+      () => controller.abort(),
+      PROJECTION_REQUEST_TIMEOUT_MS,
+    );
+    const requestStartedAt = Date.now();
+    try {
+      const response = await fetch(
+        `/api/courses/${encodeURIComponent(courseId)}/projection`,
+        {
+          cache: "no-store",
+          headers: { "X-OpenPBL-Role": getClientRole() ?? "student" },
+          signal: controller.signal,
+        },
+      );
+      const responseReceivedAt = Date.now();
+      if (!response.ok) throw new Error(`PROJECTION_STATE_FAILED_${response.status}`);
+      const snapshot = await response.json() as ProjectionStateSnapshot;
+      if (
+        sequence !== projectionPollSequenceRef.current
+        || wsCourseIdRef.current !== courseId
+      ) return;
+      applyProjectionSnapshot(
+        courseId,
+        snapshot,
+        requestStartedAt,
+        responseReceivedAt,
+        hasProjectionWork(courseId),
+      );
+    } catch (error) {
+      if (!controller.signal.aborted || wsCourseIdRef.current === courseId) {
+        recordCourseSyncFailure(error);
+      }
+    } finally {
+      window.clearTimeout(timeout);
+      if (projectionPollAbortRef.current === controller) {
+        projectionPollAbortRef.current = null;
+      }
+    }
+  }
+
+  function startProjectionPolling(courseId: string | undefined): void {
+    stopProjectionPolling();
+    if (!courseId) return;
+    void refreshProjectionState(courseId);
+    projectionPollTimerRef.current = window.setInterval(
+      () => void refreshProjectionState(courseId),
+      wsModeRef.current === "websocket"
+        ? PROJECTION_CONNECTED_CHECK_INTERVAL_MS
+        : PROJECTION_POLL_INTERVAL_MS,
+    );
   }
 
   function startCoursePolling(
@@ -705,6 +954,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setRealtimeMode("polling");
     }
     startCoursePolling(wsCourseIdRef.current, "polling");
+    startProjectionPolling(wsCourseIdRef.current);
   }
 
   async function refreshCourse(courseId: string, cursor?: string): Promise<boolean> {
@@ -730,12 +980,22 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     ) {
       return false;
     }
+    const incomingCourse: Course = currentCourse
+      ? {
+          ...body.course,
+          uiState: mergeCourseUiStateWithProjectionGuard(
+            currentCourse.uiState,
+            body.course.uiState,
+            hasProjectionWork(courseId),
+          ),
+        }
+      : body.course;
     const found = current.courses.some((course) => course.id === courseId);
     const next = applyIdentity({
       ...current,
       courses: found
-        ? current.courses.map((course) => (course.id === courseId ? body.course : course))
-        : [body.course, ...current.courses],
+        ? current.courses.map((course) => (course.id === courseId ? incomingCourse : course))
+        : [incomingCourse, ...current.courses],
       updatedAt: body.course.updatedAt,
       hydrated: true,
     });
@@ -799,7 +1059,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         cursor: event.cursor,
         payload: event.payload ?? undefined,
       }));
-    if ((body.events.length > 0 && !projectionsApplied) || versionGap) {
+    if (
+      (body.events.length > 0 && !projectionsApplied)
+      || (versionGap && !projectionsApplied)
+    ) {
       const refreshed = await refreshCourse(courseId, body.nextCursor);
       if (!refreshed) return;
     } else {
@@ -834,33 +1097,36 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       "teacherResourceProjection",
     );
     if (!hasResourceProjection && !hasTeacherProjection) return false;
-    const patch: Partial<CourseUiState> = {};
-    if (hasResourceProjection) {
-      patch.resourceProjection = payload.resourceProjection as CourseUiState["resourceProjection"];
+    if (
+      typeof payload.projectionVersion !== "number"
+      || typeof payload.projectionUpdatedAt !== "string"
+      || typeof payload.serverTime !== "string"
+    ) {
+      return false;
     }
-    if (hasTeacherProjection) {
-      patch.teacherResourceProjection = payload.teacherResourceProjection as CourseUiState["teacherResourceProjection"];
-    }
-    const current = stateRef.current;
-    let next = applySessionAction(current, {
-      type: "SET_UI_STATE",
-      payload: { courseId, patch },
-    });
-    if (typeof event.courseVersion === "number") {
-      next = {
-        ...next,
-        courses: next.courses.map((course) => course.id === courseId
-          ? { ...course, version: Math.max(course.version ?? 0, event.courseVersion!) }
-          : course),
-      };
-    }
-    eventCursorRef.current[courseId] = latestEventCursor(
-      eventCursorRef.current[courseId],
-      event.cursor,
-      typeof payload.eventCursor === "string" ? payload.eventCursor : undefined,
+    const receivedAt = Date.now();
+    const snapshot: ProjectionStateSnapshot = {
+      courseId,
+      courseVersion: typeof payload.courseVersion === "number"
+        ? payload.courseVersion
+        : event.courseVersion ?? 0,
+      projectionVersion: payload.projectionVersion,
+      projectionUpdatedAt: payload.projectionUpdatedAt,
+      serverTime: payload.serverTime,
+      resourceProjection: hasResourceProjection
+        ? payload.resourceProjection as CourseUiState["resourceProjection"]
+        : null,
+      teacherResourceProjection: hasTeacherProjection
+        ? payload.teacherResourceProjection as CourseUiState["teacherResourceProjection"]
+        : null,
+    };
+    applyProjectionSnapshot(
+      courseId,
+      snapshot,
+      receivedAt,
+      receivedAt,
+      hasProjectionWork(courseId),
     );
-    stateRef.current = next;
-    dispatch({ type: "HYDRATE", payload: next });
     return true;
   }
 
@@ -873,17 +1139,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       switchToPolling();
       return;
     }
-    // Already connected — just re-subscribe by sending a new subscribe msg.
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      try {
-        wsRef.current.send(JSON.stringify({ type: "subscribe", courseId }));
-        startCoursePolling(courseId, "websocket");
-        void catchUpCourseEvents(courseId)
-          .then(recordCourseSyncSuccess)
-          .catch(recordCourseSyncFailure);
-      } catch {
-        /* noop */
-      }
+    // Focus/network recovery on an already subscribed room only needs an
+    // immediate durable catch-up. A course switch gets a fresh socket so old
+    // handler closures cannot apply messages to the new room.
+    if (
+      wsRef.current
+      && wsRef.current.readyState === WebSocket.OPEN
+      && previousCourseId === courseId
+    ) {
+      startProjectionPolling(courseId);
+      void Promise.all([
+        catchUpCourseEvents(courseId),
+        refreshProjectionState(courseId),
+      ]).then(recordCourseSyncSuccess).catch(recordCourseSyncFailure);
       return;
     }
     if (
@@ -892,10 +1160,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       && previousCourseId === courseId
     ) {
       startCoursePolling(courseId, "polling");
+      startProjectionPolling(courseId);
       return;
     }
     // Tear down any half-open socket before retrying.
     teardownWebSocket();
+    startProjectionPolling(courseId);
 
     const role = getClientRole();
     if (!role) return;
@@ -923,28 +1193,37 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       return;
     }
     wsRef.current = ws;
+    wsConnectionTimerRef.current = window.setTimeout(() => {
+      wsConnectionTimerRef.current = null;
+      if (wsRef.current === ws && ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
+    }, 5_000);
     // Keep the durable event-cursor fallback active while the upgrade is in
     // flight. A proxy can leave a failed upgrade pending for several seconds.
     startCoursePolling(courseId);
 
     ws.onopen = () => {
-      wsFailureCountRef.current = 0;
-      pollingRef.current = false;
-      if (wsModeRef.current !== "websocket") {
-        wsModeRef.current = "websocket";
-        setRealtimeMode("websocket");
+      if (wsRef.current !== ws) return;
+      if (wsConnectionTimerRef.current !== null) {
+        window.clearTimeout(wsConnectionTimerRef.current);
+        wsConnectionTimerRef.current = null;
       }
-      // Keep a low-frequency durable cursor reconciliation active even while
-      // the socket is healthy. This covers cross-instance delivery gaps when
-      // Redis or reverse-proxy routing is unavailable.
-      startCoursePolling(courseId, "websocket");
+      wsFailureCountRef.current = 0;
+      // Opening the transport is not enough: stay in fast polling mode until
+      // the server confirms that this socket joined the requested room.
+      switchToPolling();
       try {
         ws.send(JSON.stringify({ type: "subscribe", courseId }));
-        void catchUpCourseEvents(courseId)
-          .then(recordCourseSyncSuccess)
-          .catch(recordCourseSyncFailure);
+        if (wsSubscriptionTimerRef.current !== null) {
+          window.clearTimeout(wsSubscriptionTimerRef.current);
+        }
+        wsSubscriptionTimerRef.current = window.setTimeout(() => {
+          wsSubscriptionTimerRef.current = null;
+          if (wsRef.current === ws) ws.close(4008, "SUBSCRIBE_TIMEOUT");
+        }, 3_000);
       } catch {
-        /* noop */
+        ws.close(1011, "SUBSCRIBE_FAILED");
       }
     };
 
@@ -962,6 +1241,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               payload?: { eventCursor?: string; actionType?: string; [key: string]: unknown };
             };
           };
+          if (parsed.type === "subscribed" && parsed.courseId === courseId) {
+            if (wsSubscriptionTimerRef.current !== null) {
+              window.clearTimeout(wsSubscriptionTimerRef.current);
+              wsSubscriptionTimerRef.current = null;
+            }
+            pollingRef.current = false;
+            if (wsModeRef.current !== "websocket") {
+              wsModeRef.current = "websocket";
+              setRealtimeMode("websocket");
+            }
+            startProjectionPolling(courseId);
+            startCoursePolling(courseId, "websocket");
+            void Promise.all([
+              catchUpCourseEvents(courseId),
+              refreshProjectionState(courseId),
+            ]).then(recordCourseSyncSuccess).catch(recordCourseSyncFailure);
+            return;
+          }
           if (parsed.type === "course-event" && parsed.courseId === courseId) {
             if (parsed.event?.type === "showcase-presentation") {
               emitShowcasePresentation(
@@ -1004,6 +1301,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     ws.onerror = () => {};
 
     ws.onclose = () => {
+      if (wsRef.current !== ws) return;
+      if (wsConnectionTimerRef.current !== null) {
+        window.clearTimeout(wsConnectionTimerRef.current);
+        wsConnectionTimerRef.current = null;
+      }
+      if (wsSubscriptionTimerRef.current !== null) {
+        window.clearTimeout(wsSubscriptionTimerRef.current);
+        wsSubscriptionTimerRef.current = null;
+      }
       wsRef.current = null;
       wsFailureCountRef.current++;
       switchToPolling();
@@ -1097,7 +1403,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // silently and the per-course event cursor keeps the UI fresh regardless.
   // Tear down both transports on unmount.
   useEffect(() => {
-    return () => teardownWebSocket();
+    const projectionQueues = projectionQueuesRef.current;
+    return () => {
+      teardownWebSocket();
+      for (const queue of projectionQueues.values()) queue.dispose();
+      projectionQueues.clear();
+    };
     // The provider owns one socket lifecycle; render-local function identity
     // changes must not tear it down and recreate it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1979,7 +2290,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return suggestion;
       },
       setUiState(courseId, patch) {
-        commit({ type: "SET_UI_STATE", payload: { courseId, patch } });
+        const action: SessionAction = {
+          type: "SET_UI_STATE",
+          payload: { courseId, patch },
+        };
+        if (projectionPatchFromAction(action)) queueProjectionAction(action);
+        else void commit(action);
       },
       addActivity(courseId, action, detail, actor = state.user.name) {
         const activity: ActivityRecord = {

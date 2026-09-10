@@ -1,0 +1,27 @@
+{
+  "generatedAt": "2026-09-10T03:17:08.904Z",
+  "scope": "video projection smoke test",
+  "media": {
+    "container": "MP4",
+    "resolution": "1920x1080",
+    "sizeBytes": 65770721
+  },
+  "methodology": {
+    "studentBrowserContexts": 30,
+    "identityNote": "One authorized test student was replicated across 30 isolated browser contexts; the reusable acceptance runner requires 30 distinct storage states.",
+    "websocketContexts": 15,
+    "pollingFallbackContexts": 15,
+    "pollingFallbackIntervalMs": 150,
+    "latencyTargetMs": 1000,
+    "projectedVideoElementsPerContext": 1
+  },
+  "operations": [
+    { "name": "open", "p50Ms": 299, "p95Ms": 606, "maxMs": 643 },
+    { "name": "play", "p50Ms": 603, "p95Ms": 887, "maxMs": 950 },
+    { "name": "pause", "p50Ms": 327, "p95Ms": 412, "maxMs": 412 },
+    { "name": "close", "p50Ms": 170, "p95Ms": 369, "maxMs": 385 }
+  ],
+  "pageErrors": 0,
+  "leftoverTestClassrooms": 0,
+  "passed": true
+}

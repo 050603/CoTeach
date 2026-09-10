@@ -5,6 +5,7 @@ import { PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_LENGTH_HINT } from "
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import { ArrowLeft, ArrowRight, Lock } from "lucide-react";
 import { StudentAuthShell } from "@/components/platform/student-auth-shell";
 
 function StudentResetPasswordPageContent() {
@@ -43,50 +44,56 @@ function StudentResetPasswordPageContent() {
       description="使用教师提供的重置链接，为你的学习账号设置新密码。"
     >
       {done ? (
-        <p className="mt-6 rounded-[6px] bg-emerald-50 p-4 text-sm text-emerald-700">
+        <p className="pbl-auth-success">
           密码已更新，正在返回登录页。
         </p>
       ) : (
         <form
-          className="mt-8 space-y-4 rounded-xl border border-[var(--pbl-border)] bg-white p-5"
+          className="pbl-auth-fields"
           onSubmit={submit}
         >
-          <label className="block text-sm font-semibold">
-            新密码
-            <input
-              className="mt-2 min-h-11 w-full rounded-[6px] border border-[var(--pbl-border)] px-3"
-              minLength={PASSWORD_MIN_LENGTH}
-              maxLength={PASSWORD_MAX_LENGTH}
-              placeholder={PASSWORD_LENGTH_HINT}
-              required
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
+          <label className="pbl-auth-field">
+            <span>新密码</span>
+            <span className="pbl-auth-input-wrap">
+              <Lock aria-hidden="true" className="pbl-auth-input-icon" size={17} />
+              <input
+                className="pbl-auth-input"
+                autoComplete="new-password"
+                minLength={PASSWORD_MIN_LENGTH}
+                maxLength={PASSWORD_MAX_LENGTH}
+                placeholder={PASSWORD_LENGTH_HINT}
+                required
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </span>
           </label>
           {error ? (
-            <p className="rounded-[6px] bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            <p className="pbl-auth-error" role="alert">
               {error}
             </p>
           ) : null}
           <button
-            className="min-h-11 w-full rounded-[6px] bg-[var(--pbl-student)] px-4 text-sm font-bold text-white disabled:opacity-50"
+            className="pbl-auth-primary"
             disabled={busy || !search.get("token")}
             type="submit"
           >
-            {busy ? "保存中…" : "保存新密码"}
+            <span>{busy ? "保存中…" : "保存新密码"}</span>
+            <ArrowRight aria-hidden="true" size={18} />
           </button>
         </form>
       )}
       {!search.get("token") ? (
-        <p role="alert" className="mt-4 text-sm text-[var(--pbl-danger)]">
+        <p role="alert" className="pbl-auth-error">
           此链接缺少重置凭据，请联系教师获取完整链接。
         </p>
       ) : null}
       <Link
         href="/student/login"
-        className="mt-5 inline-flex min-h-11 items-center text-sm text-[var(--pbl-student)]"
+        className="pbl-auth-back-link"
       >
+        <ArrowLeft aria-hidden="true" size={16} />
         返回登录
       </Link>
     </StudentAuthShell>

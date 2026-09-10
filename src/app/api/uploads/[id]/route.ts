@@ -84,22 +84,39 @@ export async function GET(
       },
     });
   }
+  const responseHeaders = {
+    "Content-Type": selectedMimeType,
+    "Accept-Ranges": "bytes",
+    "Content-Disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(
+      classroomVariant ? classroomPreviewName(file.originalName) : file.originalName,
+    )}`,
+    ETag: etag,
+    "Last-Modified": info.mtime.toUTCString(),
+    "Cache-Control": "private, max-age=3600, immutable",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+  };
+  if (
+    request.headers.get("x-openpbl-accel-redirect") === "1"
+    && (info.mode & 0o004) !== 0
+  ) {
+    // Nginx sets the trusted request header only after this authenticated API
+    // route is selected. The internal redirect lets sendfile serve large media
+    // without tying up the Next.js process that handles classroom controls.
+    return new Response(null, {
+      headers: {
+        ...responseHeaders,
+        "X-Accel-Redirect": `/_openpbl_uploads/${encodeURIComponent(selectedStoredName)}`,
+      },
+    });
+  }
   const stream = createReadStream(/* turbopackIgnore: true */ target, { start, end });
   return new Response(Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>, {
     status: range ? 206 : 200,
     headers: {
-      "Content-Type": selectedMimeType,
+      ...responseHeaders,
       "Content-Length": String(end - start + 1),
       ...(range ? { "Content-Range": `bytes ${start}-${end}/${info.size}` } : {}),
-      "Accept-Ranges": "bytes",
-      "Content-Disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(
-        classroomVariant ? classroomPreviewName(file.originalName) : file.originalName,
-      )}`,
-      ETag: etag,
-      "Last-Modified": info.mtime.toUTCString(),
-      "Cache-Control": "private, max-age=3600, immutable",
-      "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy": "default-src 'none'; sandbox",
     },
   });
 }

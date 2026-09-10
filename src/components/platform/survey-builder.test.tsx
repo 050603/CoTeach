@@ -22,7 +22,22 @@ describe("survey builder", () => {
 
     view.rerender(<SurveyBuilder questions={[multiQuestion]} onChange={onChange} />);
     expect(screen.queryByRole("button", { name: /环状图/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("第 1 题最多可选"), { target: { value: "1" } });
+    expect(onChange.mock.calls.at(-1)?.[0][0]).toMatchObject({ type: "multiple-choice", maxSelections: 1 });
     fireEvent.click(screen.getByRole("button", { name: /柱状图/ }));
     expect(onChange.mock.calls.at(-1)?.[0][0]).toMatchObject({ type: "multiple-choice", chartType: "column" });
+  });
+
+  it("lets teachers enable a follow-up input for an other option", () => {
+    const onChange = vi.fn();
+    const view = render(<SurveyBuilder questions={[question]} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText("第 1 题选项 2"), { target: { value: "其他" } });
+    const renamed = onChange.mock.calls.at(-1)?.[0][0] as SurveyQuestion;
+    expect(renamed.options[1].label).toBe("其他");
+
+    view.rerender(<SurveyBuilder questions={[renamed]} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: "第 1 题选项 2 要求补充填写" }));
+    expect(onChange.mock.calls.at(-1)?.[0][0].options[1]).toMatchObject({ label: "其他", allowTextInput: true });
   });
 });

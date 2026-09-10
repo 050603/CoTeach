@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { ArrowLeft, Check, CheckCircle2, Clock3, FileText, Send, Sparkles, UserRoundCheck } from "lucide-react";
 import type { FormEvent } from "react";
-import type { SurveyAnswer, SurveyQuestion } from "@/lib/platform/survey";
+import { surveyAnswerHasValue, type SurveyAnswer, type SurveyQuestion } from "@/lib/platform/survey";
 import { SurveyQuestionFields } from "./survey-question-fields";
 
 type SurveyActivity = {
@@ -27,10 +27,7 @@ export function StudentSurveyExperience({ activity, answers, busy, error, saved,
   onSubmit: (event: FormEvent) => void;
 }) {
   const questions = (activity.config?.questions ?? []).map((question) => ({ ...question, type: question.type ?? "short-text" as const, options: question.options ?? [] }));
-  const answeredCount = questions.filter((question) => {
-    const answer = answers[question.id];
-    return Array.isArray(answer) ? answer.length > 0 : Boolean(answer?.trim());
-  }).length;
+  const answeredCount = questions.filter((question) => surveyAnswerHasValue(answers[question.id])).length;
   const percentage = questions.length ? Math.round((answeredCount / questions.length) * 100) : 0;
   const locked = !activity.isOpen || activity.offering.status !== "open";
 

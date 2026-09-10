@@ -390,17 +390,32 @@ export async function updateChapter(claims: AuthClaims, chapterId: string, data:
     if (!chapter) throw new PlatformError("NOT_FOUND", "章节不存在", 404);
     await teacherForOffering(claims, chapter.offeringId, tx);
     if (data.version !== undefined && data.version !== chapter.version) throw new PlatformError("VERSION_CONFLICT", "章节已被其他操作更新", 409);
+    if (data.isOpen === false) {
+      await tx.activity.updateMany({
+        where: { chapterId, archivedAt: null, isOpen: true },
+        data: { isOpen: false, version: { increment: 1 } },
+      });
+    }
     return tx.chapter.update({ where: { id: chapterId }, data: { title: data.title, description: data.description, isOpen: data.isOpen, opensAt: dateOrNull(data.opensAt), position: data.position, version: { increment: 1 } } });
   });
 }
 
 export async function updateActivity(claims: AuthClaims, activityId: string, data: { title?: string; description?: string; isOpen?: boolean; opensAt?: string | null; position?: number; config?: unknown; templateId?: string | null; version?: number }) {
   return runMutationTransaction(async (tx) => {
+    const activityParent = await tx.activity.findUnique({ where: { id: activityId }, select: { chapterId: true } });
+    if (!activityParent) throw new PlatformError("NOT_FOUND", "活动不存在", 404);
+    await tx.$queryRaw`SELECT "id" FROM "Chapter" WHERE "id" = ${activityParent.chapterId} FOR UPDATE`;
     await tx.$queryRaw`SELECT "id" FROM "Activity" WHERE "id" = ${activityId} FOR UPDATE`;
     const activity = await activityForTeacher(claims, activityId, tx);
     if (data.version !== undefined && data.version !== activity.version) throw new PlatformError("VERSION_CONFLICT", "活动已被其他操作更新", 409);
     const config = data.config === undefined ? undefined : parsedActivityConfig(activity.type, data.config);
     const selectedVersion = data.templateId ? await readyTemplateVersion(claims, data.templateId, tx) : null;
+    if (data.isOpen === true && !activity.chapter.isOpen) {
+      await tx.chapter.update({
+        where: { id: activity.chapterId },
+        data: { isOpen: true, version: { increment: 1 } },
+      });
+    }
     const updated = await tx.activity.update({ where: { id: activityId }, data: { title: data.title, description: data.description, isOpen: data.isOpen, opensAt: dateOrNull(data.opensAt), position: data.position, config: config === undefined ? undefined : jsonValue(config), version: { increment: 1 } } });
     const resourceFileId = activityResourceFileId(activity.type, config);
     if (resourceFileId) await bindActivityResource(tx, { activityId, fileId: resourceFileId, offeringId: activity.chapter.offeringId, teacherId: claims.sub! });

@@ -46,9 +46,11 @@ const TEMPLATE_VERSION_STATUS_LABELS: Record<string, string> = {
 const PROGRESS_STATUS_LABELS: Record<string, string> = {
   not_started: "未开始",
   in_progress: "进行中",
+  submitted: "已提交",
   completed: "已完成",
   NOT_STARTED: "未开始",
   IN_PROGRESS: "进行中",
+  SUBMITTED: "已提交",
   COMPLETED: "已完成",
 };
 

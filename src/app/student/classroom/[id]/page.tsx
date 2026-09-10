@@ -17,7 +17,7 @@ import { StudentProjectedTeacherResource } from "@/components/openmaic-bridge/te
 import { StudentStageView } from "@/components/views/student/stage-dispatcher";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import { useCoursePresence } from "@/hooks/use-course-presence";
-import { StudentResourceProjection } from "@/components/classroom/simple-stage-resources";
+import { StudentProjectionPrecache, StudentResourceProjection } from "@/components/classroom/simple-stage-resources";
 import { StageEmptyState } from "@/components/classroom/classroom-ui";
 import { StudentClassroomHeaderStatus } from "@/components/classroom/student-classroom-header-status";
 import { normalizePblCourseConfig, type MakeArtifactMode } from "@/lib/pbl-course-config";
@@ -149,6 +149,18 @@ export default function StudentClassroomPage() {
         )
       }
     >
+      <span
+        aria-hidden
+        className="hidden"
+        data-course-projection-version={course.uiState?.projectionVersion ?? 0}
+      />
+      {isTeaching && currentStage ? (
+        <StudentProjectionPrecache
+          active={Boolean(uploadedProjection)}
+          course={course}
+          stageKey={currentStage.key}
+        />
+      ) : null}
       {course.status === "finished" ? (
         <FinishedState course={course} />
       ) : !isTeaching ? (
@@ -156,14 +168,14 @@ export default function StudentClassroomPage() {
       ) : currentStage ? (
         <>
           <div className={activeStageKey === "ai-learning" ? "flex h-full min-h-0 flex-col gap-3" : "space-y-3"}>
-              {forcedProjection ? <StudentProjectedTeacherResource projection={forcedProjection} /> : null}
+              {forcedProjection ? <StudentProjectedTeacherResource projection={forcedProjection} projectionVersion={course.uiState?.projectionVersion} /> : null}
               {optionalProjection ? (
                 <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)]/80">
                   <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                     <div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-full bg-white text-[var(--pbl-teacher)]"><MonitorUp size={18} /></span><div><p className="font-bold text-stone-900">教师正在投屏：{optionalProjection.title}</p><p className="text-xs text-[var(--pbl-teacher)]">你可以继续当前任务，也可以打开只读实时演示。</p></div></div>
                     <PrimaryButton onClick={() => setOptionalProjectionOpen((value) => !value)} type="button" variant="outline">{optionalProjectionOpen ? <><X size={15} />收起投屏</> : <><MonitorUp size={15} />查看投屏</>}</PrimaryButton>
                   </div>
-                  {optionalProjectionOpen ? <div className="border-t border-[var(--pbl-teacher-border)] bg-white p-3"><StudentProjectedTeacherResource projection={optionalProjection} /></div> : null}
+                  {optionalProjectionOpen ? <div className="border-t border-[var(--pbl-teacher-border)] bg-white p-3"><StudentProjectedTeacherResource projection={optionalProjection} projectionVersion={course.uiState?.projectionVersion} /></div> : null}
                 </div>
               ) : null}
               {activeStageKey === "proposal" || activeStageKey === "make" ? (
@@ -177,10 +189,12 @@ export default function StudentClassroomPage() {
               <section className={activeStageKey === "ai-learning"
                 ? "min-h-0 flex-1 overflow-hidden rounded-[var(--radius-lg)] border border-blue-100 bg-[linear-gradient(180deg,#f8fbff_0%,#ffffff_42%)] shadow-[0_16px_42px_rgba(30,64,175,0.08)]"
                 : "overflow-hidden rounded-[var(--radius-lg)]"}>
-                <StudentStageView
-                  course={course}
-                  view={currentStage.view}
-                />
+                {uploadedProjection ? null : (
+                  <StudentStageView
+                    course={course}
+                    view={currentStage.view}
+                  />
+                )}
               </section>
           </div>
         </>

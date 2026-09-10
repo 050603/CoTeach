@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ArrowRight, Lock, UserRound } from "lucide-react";
 import { StudentAuthShell } from "@/components/platform/student-auth-shell";
 
 export default function StudentLoginPage() {
@@ -40,53 +41,59 @@ export default function StudentLoginPage() {
   return (
     <StudentAuthShell
       mode="login"
-      title="欢迎回到学习空间"
-      description="登录后进入已加入的课程，查看章节与学习任务。"
+      title="欢迎回来"
+      description="登录后进入已加入的课程，继续你的学习与实践。"
     >
-      <form className="mt-7 space-y-5" onSubmit={submit}>
-        <label className="block text-sm font-medium">
-          登录账号
-          <input
-            className="mt-2 min-h-11 w-full rounded-[6px] border border-[var(--pbl-border)] bg-transparent px-3"
-            autoComplete="username"
-            required
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-          />
+      <form className="pbl-auth-fields" onSubmit={submit}>
+        <label className="pbl-auth-field">
+          <span>登录账号</span>
+          <span className="pbl-auth-input-wrap">
+            <UserRound aria-hidden="true" className="pbl-auth-input-icon" size={17} />
+            <input
+              className="pbl-auth-input"
+              autoComplete="username"
+              placeholder="输入你的账号"
+              required
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+            />
+          </span>
         </label>
-        <label className="block text-sm font-medium">
-          密码
-          <input
-            className="mt-2 min-h-11 w-full rounded-[6px] border border-[var(--pbl-border)] bg-transparent px-3"
-            autoComplete="current-password"
-            required
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
+        <label className="pbl-auth-field">
+          <span>密码</span>
+          <span className="pbl-auth-input-wrap">
+            <Lock aria-hidden="true" className="pbl-auth-input-icon" size={17} />
+            <input
+              className="pbl-auth-input"
+              autoComplete="current-password"
+              placeholder="输入密码"
+              required
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </span>
         </label>
         {error ? (
-          <p role="alert" className="text-sm text-[var(--pbl-danger)]">
+          <p role="alert" className="pbl-auth-error">
             {error}
           </p>
         ) : null}
         <button
-          className="min-h-11 w-full rounded-[6px] bg-[var(--pbl-student)] px-4 text-sm font-semibold text-white disabled:opacity-50"
+          className="pbl-auth-primary"
           disabled={busy}
           type="submit"
         >
-          {busy ? "登录中…" : "登录并进入课程"}
+          <span>{busy ? "登录中…" : "登录并进入课程"}</span>
+          <ArrowRight aria-hidden="true" size={18} />
         </button>
       </form>
-      <p className="mt-5 text-sm leading-6 text-[var(--pbl-text-muted)]">
+      <p className="pbl-auth-help">
         忘记密码？请联系任课教师获取重置链接。
       </p>
-      <p className="mt-5 border-t border-[var(--pbl-border)] pt-5 text-sm text-[var(--pbl-text-muted)]">
+      <p className="pbl-auth-form-footer">
         首次使用？{" "}
-        <Link
-          className="font-semibold text-[var(--pbl-student)]"
-          href="/student/register"
-        >
+        <Link href="/student/register">
           使用课程邀请码注册
         </Link>
       </p>
