@@ -103,7 +103,7 @@ run_app() {
     "$PROJECT_ROOT/.openpbl-data/uploads" \
     "$PROJECT_ROOT/.openpbl-data/whiteboards"
 
-  export PUBLIC_BASE_URL="${OPENPBL_PUBLIC_BASE_URL:-http://praixis.cc.cd}"
+  export PUBLIC_BASE_URL="${OPENPBL_PUBLIC_BASE_URL:-https://praixis.cn}"
   export TRUST_PROXY_HEADERS="true"
   # Keep durable generation owned by the server lifecycle so navigation or a
   # completed route response cannot terminate the task that started it.
@@ -112,6 +112,7 @@ run_app() {
   # course-event polling remains enabled as a one-second outage fallback.
   export ENABLE_WEBSOCKET="true"
   export WEBSOCKET_PORT="${OPENPBL_WEBSOCKET_PORT:-3001}"
+  export WEBSOCKET_HOST="${OPENPBL_WEBSOCKET_HOST:-127.0.0.1}"
   export UPLOAD_DIR="$PROJECT_ROOT/.openpbl-data/uploads"
   export WHITEBOARD_DATA_DIR="$PROJECT_ROOT/.openpbl-data/whiteboards"
   export CLASSROOM_DATA_DIR="$PROJECT_ROOT/.openpbl-data/classrooms"
@@ -120,7 +121,7 @@ run_app() {
 
   cd "$PROJECT_ROOT"
   export PORT="$APP_PORT"
-  export HOSTNAME=0.0.0.0
+  export HOSTNAME="${OPENPBL_HOSTNAME:-127.0.0.1}"
   exec /usr/bin/node scripts/run-next-production.mjs start
 }
 

@@ -162,33 +162,22 @@ function Hero() {
 
       {/* 主内容 */}
       <div className="pbl-wide-container relative z-10 flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center px-6 py-20 text-center md:px-10">
-        {/* 顶部标签 */}
-        <div
-          className="pbl-hero-text mb-10 inline-flex items-center gap-2 rounded-full border border-[var(--pbl-border-strong)] bg-[var(--pbl-surface)]/80 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--pbl-text-muted)] backdrop-blur-sm"
-          style={{ animationDelay: "0s" }}
-        >
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-indigo-500 opacity-75" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-indigo-500" />
-          </span>
-          Praxis + AI · AI inside practice
-        </div>
-
         {/* 巨型横版 Logo —— 不使用 pbl-hero-text（初始 opacity:0），避免动画卡住导致 logo 不可见 */}
-        <div className="mb-10 pbl-float-soft">
-          <div className="relative inline-flex scale-[0.82] items-center justify-center sm:scale-100">
+        <div className="mb-12 pbl-float-soft">
+          <div className="relative inline-flex scale-[0.72] items-center justify-center sm:scale-100">
             <PraixisLogo
               variant="horizontal"
-              height={130}
+              height={160}
               priority
               style={{ filter: "drop-shadow(0 16px 48px rgba(99, 102, 241, 0.25))" }}
             />
             <span
               aria-label="系统版本 2.0"
-              className="absolute -right-3 top-1 inline-flex items-center gap-1.5 rounded-full border border-indigo-200/80 bg-white/75 px-2.5 py-1 text-[10px] font-bold tracking-[0.12em] text-indigo-600 shadow-[0_6px_20px_rgba(99,102,241,0.14)] backdrop-blur-md sm:-right-14 sm:top-3"
+              className="absolute -bottom-1 right-1 inline-flex items-center gap-2 whitespace-nowrap text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500 sm:-right-20 sm:bottom-5"
             >
-              <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-gradient-to-br from-cyan-400 to-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.55)]" />
-              v2.0
+              <span aria-hidden="true" className="h-px w-5 bg-gradient-to-r from-cyan-400 to-indigo-500" />
+              <span>Version</span>
+              <span className="font-bold tracking-[0.08em] text-indigo-600">2.0</span>
             </span>
           </div>
         </div>
@@ -196,7 +185,7 @@ function Hero() {
         {/* 一句话定位 —— 渐变文字 */}
         <h1
           className="pbl-hero-text text-[length:clamp(2rem,5.5vw,4rem)] font-extrabold leading-[1.08] tracking-tight [text-wrap:balance]"
-          style={{ animationDelay: "0.25s" }}
+          style={{ animationDelay: "0.15s" }}
         >
           <span className="pbl-display-gradient">与 AI 一起实践，让学习真正发生</span>
         </h1>
@@ -204,7 +193,7 @@ function Hero() {
         {/* 副标题 */}
         <p
           className="pbl-hero-text mt-7 max-w-3xl text-[16px] leading-7 text-[var(--pbl-text-muted)] md:text-[17px]"
-          style={{ animationDelay: "0.4s" }}
+          style={{ animationDelay: "0.3s" }}
         >
           AI 参与教学实践。学生在 AI 与教师共同指导下探究、设计、创作与反馈，并始终保有判断与行动，让学习真正发生。
         </p>
@@ -212,7 +201,7 @@ function Hero() {
         {/* 统一学生优先入口 */}
         <div
           className="pbl-hero-text mt-10 flex items-center justify-center"
-          style={{ animationDelay: "0.55s" }}
+          style={{ animationDelay: "0.45s" }}
         >
           <Link href="/student/login" className="pbl-cosmic-btn-primary">
             <UsersRound size={16} />

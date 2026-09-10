@@ -27,7 +27,7 @@ describe("student courses route", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       courses: [{ id: "course-1", name: "城市生态" }],
-      viewer: { displayName: "林晓雨" },
+      viewer: { id: "student-1", displayName: "林晓雨" },
     });
     expect(response.headers.get("cache-control")).toBe("private, no-store");
   });

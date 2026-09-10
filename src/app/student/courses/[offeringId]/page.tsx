@@ -30,6 +30,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { activityTypeLabel } from "@/lib/platform/labels";
+import { loadJSON, saveJSON } from "@/lib/session/storage";
 
 type ActivityProgress = {
   status: string;
@@ -88,6 +89,13 @@ type CourseTask = {
 
 type Tab = "learning" | "intro" | "resources";
 
+type ReminderReadState = {
+  storageKey: string;
+  reminders: string[];
+};
+
+const REMINDER_READ_STORAGE_PREFIX = "openpbl.course-reminders.read.v1";
+
 const tabs: Array<{ id: Tab; label: string }> = [
   { id: "learning", label: "课程学习" },
   { id: "intro", label: "课程介绍" },
@@ -127,6 +135,17 @@ function findNextTask(course: Course) {
   );
 }
 
+function reminderReadStorageKey(studentId: string, courseId: string): string {
+  return `${REMINDER_READ_STORAGE_PREFIX}:${studentId}:${courseId}`;
+}
+
+function loadReadReminders(storageKey: string): string[] {
+  const stored = loadJSON<unknown>(storageKey, []);
+  return Array.isArray(stored)
+    ? stored.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
 function ActivityIcon({ type }: { type: string }) {
   const value = normalized(type);
   const Icon =
@@ -139,13 +158,52 @@ function ActivityIcon({ type }: { type: string }) {
 }
 
 function CourseTopbar({
+  courseId,
+  studentId,
   viewerName,
   reminders,
 }: {
+  courseId: string;
+  studentId: string;
   viewerName: string;
   reminders: string[];
 }) {
   const initial = viewerName.trim().charAt(0) || "同";
+  const storageKey = reminderReadStorageKey(studentId, courseId);
+  const [readState, setReadState] = useState<ReminderReadState>({
+    storageKey: "",
+    reminders: [],
+  });
+  const readReminders = readState.storageKey === storageKey
+    ? new Set(readState.reminders)
+    : new Set<string>();
+  const unreadCount = readState.storageKey === storageKey
+    ? reminders.filter((reminder) => !readReminders.has(reminder)).length
+    : 0;
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Read receipts hydrate from browser storage after SSR.
+    setReadState({ storageKey, reminders: loadReadReminders(storageKey) });
+
+    function syncReadReminders(event: StorageEvent) {
+      if (event.key !== storageKey) return;
+      setReadState({ storageKey, reminders: loadReadReminders(storageKey) });
+    }
+
+    window.addEventListener("storage", syncReadReminders);
+    return () => window.removeEventListener("storage", syncReadReminders);
+  }, [storageKey]);
+
+  function markRemindersRead(open: boolean) {
+    if (!open || !reminders.length) return;
+    const persisted = readState.storageKey === storageKey
+      ? readState.reminders
+      : loadReadReminders(storageKey);
+    const next = Array.from(new Set([...persisted, ...reminders])).slice(-50);
+    setReadState({ storageKey, reminders: next });
+    saveJSON(storageKey, next);
+  }
+
   return (
     <header className="pbl-student-course-topbar">
       <div className="pbl-student-course-topbar-inner">
@@ -163,16 +221,16 @@ function CourseTopbar({
           </Link>
         </div>
         <div className="flex items-center gap-3">
-          <Popover>
+          <Popover onOpenChange={markRemindersRead}>
             <PopoverTrigger asChild>
               <button
                 type="button"
                 className="pbl-course-reminder-trigger"
-                aria-label={`课程提醒，共 ${reminders.length} 条`}
+                aria-label={`课程提醒，共 ${unreadCount} 条`}
               >
                 <Bell size={18} />
-                {reminders.length ? (
-                  <span aria-hidden="true">{reminders.length}</span>
+                {unreadCount ? (
+                  <span aria-hidden="true">{unreadCount}</span>
                 ) : null}
               </button>
             </PopoverTrigger>
@@ -216,17 +274,21 @@ function CourseTopbar({
 }
 
 function WorkspaceFrame({
+  courseId = "pending",
+  studentId = "pending",
   viewerName,
   reminders = [],
   children,
 }: {
+  courseId?: string;
+  studentId?: string;
   viewerName: string;
   reminders?: string[];
   children: ReactNode;
 }) {
   return (
     <main className="pbl-platform-theme pbl-platform-page-student pbl-student-course-workspace min-h-screen">
-      <CourseTopbar viewerName={viewerName} reminders={reminders} />
+      <CourseTopbar courseId={courseId} studentId={studentId} viewerName={viewerName} reminders={reminders} />
       {children}
     </main>
   );
@@ -266,6 +328,7 @@ export default function StudentCoursePage() {
   const params = useParams<{ offeringId: string }>();
   const router = useRouter();
   const [course, setCourse] = useState<Course | null>(null);
+  const [viewerId, setViewerId] = useState("pending");
   const [viewerName, setViewerName] = useState("同学");
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("learning");
@@ -294,6 +357,7 @@ export default function StudentCoursePage() {
           found.chapters.find((chapter) => chapter.isOpen)?.id ??
           found.chapters[0]?.id;
         setCourse(found);
+        setViewerId(typeof data.viewer?.id === "string" ? data.viewer.id : "student");
         setViewerName(data.viewer?.displayName?.trim() || "同学");
         setExpanded(initiallyOpen ? new Set([initiallyOpen]) : new Set());
         setError(null);
@@ -383,7 +447,7 @@ export default function StudentCoursePage() {
   }
 
   return (
-    <WorkspaceFrame viewerName={viewerName} reminders={reminders}>
+    <WorkspaceFrame courseId={course.id} studentId={viewerId} viewerName={viewerName} reminders={reminders}>
       <div className="pbl-student-course-layout">
         <aside className="pbl-student-course-summary-wrap" aria-label="课程概览">
           <div className="pbl-student-course-summary">

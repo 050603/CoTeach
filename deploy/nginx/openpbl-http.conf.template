@@ -44,7 +44,7 @@ server_tokens off;
 
 server {
     listen 80 default_server;
-    server_name ${PUBLIC_HOST} praixis.cc.cd _;
+    server_name ${PUBLIC_HOST} _;
 
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;

@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     return Response.json(
       {
         courses: await listStudentOfferings(auth.claims),
-        viewer: { displayName: auth.claims.studentName },
+        viewer: { id: auth.claims.sub, displayName: auth.claims.studentName },
       },
       { headers: { "Cache-Control": "private, no-store" } },
     );

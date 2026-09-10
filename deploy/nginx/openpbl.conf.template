@@ -1,10 +1,10 @@
 upstream openpbl_app {
-    server host.docker.internal:3000;
+    server ${OPENPBL_UPSTREAM_HOST}:3000;
     keepalive 64;
 }
 
 upstream openpbl_ws {
-    server host.docker.internal:3001;
+    server ${OPENPBL_UPSTREAM_HOST}:3001;
     keepalive 32;
 }
 
@@ -33,7 +33,6 @@ client_body_buffer_size 1m;
 client_max_body_size 501m;
 client_header_timeout 15s;
 client_body_timeout 600s;
-keepalive_timeout 65s;
 send_timeout 60s;
 server_tokens off;
 
@@ -59,7 +58,7 @@ server {
 
 # Docker-internal monitoring listener. Port 8080 is not published by Compose.
 server {
-    listen 8080;
+    listen ${NGINX_INTERNAL_LISTEN};
     server_name _;
 
     location = /api/metrics {

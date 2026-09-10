@@ -41,7 +41,8 @@ export async function register(): Promise<void> {
     const { startWebSocketServer } = await import("@/lib/realtime/websocket-server");
     await initializeEventBus();
     const wsPort = Number(process.env.WEBSOCKET_PORT ?? "3001");
-    startWebSocketServer(wsPort);
+    const wsHost = process.env.WEBSOCKET_HOST?.trim() || "127.0.0.1";
+    startWebSocketServer(wsPort, wsHost);
   }
   if (process.env.ENABLE_TLDRAW_SYNC === "true") {
     const { startTldrawSyncServer } = await import(

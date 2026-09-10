@@ -1,4 +1,4 @@
-# IP 直访(HTTP)+ host 网络部署覆盖 —— 与 docker-compose.prod.yml 叠加使用:
+# 内网域名(HTTPS)+ host 网络部署覆盖 —— 与 docker-compose.prod.yml 叠加使用:
 #   docker compose --env-file deploy/.deploy.env \
 #     -f docker-compose.prod.yml -f docker-compose.ip.yml \
 #     up -d
@@ -9,22 +9,27 @@
 #   - 因此全部服务使用 network_mode: host,直接复用宿主机网络栈(IPv6 出站正常)
 #
 # 端口规划(均已避开现有服务 5432/6379/8080/8081/4000/11434 等):
-#   - nginx:        0.0.0.0:80(公网入口)
+#   - nginx:        0.0.0.0:80/443(内网入口,HTTP 自动跳转 HTTPS)
 #   - app(Next.js): 127.0.0.1:3000(仅经 Nginx 访问)
 #   - WebSocket:    3001;tldraw sync: 3002
 #   - postgres:     127.0.0.1:15432
 #   - redis:        127.0.0.1:16379
 #
 # 其他差异:
-#   - PUBLIC_BASE_URL 根据 deploy/.deploy.env 的 PUBLIC_HOST 生成 HTTP 地址
-#   - Nginx 使用 HTTP 模板(原模板强制 HTTPS + Let's Encrypt 证书)
+#   - PUBLIC_BASE_URL 根据 deploy/.deploy.env 的 PUBLIC_HOST 生成 HTTPS 地址
+#   - Nginx 使用 HTTPS 模板和宿主机 Certbot 证书目录
 #   - postgres 使用官方镜像并关闭 WAL 归档(未启用 S3 备份 profile,
 #     归档命令持续失败会导致 pg_wal 无限堆积)
 services:
   nginx:
     network_mode: host
+    environment:
+      OPENPBL_UPSTREAM_HOST: 127.0.0.1
+      # 8080 已被宿主机其他服务占用，仅在回环地址暴露内部检查。
+      NGINX_INTERNAL_LISTEN: 127.0.0.1:18082
     volumes:
-      - ./deploy/nginx/openpbl-http.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/nginx/openpbl.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./.openpbl-data/letsencrypt:/etc/letsencrypt:ro
     ports: !override []
     # 原生产 Compose 的自定义 command(/bin/sh ...)会让镜像入口脚本跳过
     # 模板 envsubst(仅当 $1 为 nginx 时才执行),这里显式先渲染模板再启动

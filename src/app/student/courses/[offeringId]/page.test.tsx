@@ -79,7 +79,7 @@ function respond(value = course) {
       status: 200,
       json: async () => ({
         courses: [value],
-        viewer: { displayName: "林晓雨" },
+        viewer: { id: "student-1", displayName: "林晓雨" },
       }),
     }),
   );
@@ -87,6 +87,7 @@ function respond(value = course) {
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
@@ -154,16 +155,34 @@ describe("学生课程工作区", () => {
     expect(screen.queryByText("方案设计工具包")).not.toBeInTheDocument();
   });
 
-  it("shows computed course reminders without unread persistence", async () => {
+  it("marks computed course reminders read when opened and keeps them read after closing", async () => {
     respond();
     render(<StudentCoursePage />);
     await screen.findByRole("heading", { name: course.name });
 
-    const trigger = screen.getByRole("button", { name: "课程提醒，共 2 条" });
+    const trigger = await screen.findByRole("button", { name: "课程提醒，共 2 条" });
     fireEvent.click(trigger);
     const reminder = await screen.findByText("继续：城市问题发现课");
     expect(reminder).toBeInTheDocument();
     expect(screen.getByText("1 个章节尚待教师解锁。")).toBeInTheDocument();
+    expect(trigger).toHaveAccessibleName("课程提醒，共 0 条");
+
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAccessibleName("课程提醒，共 0 条");
+  });
+
+  it("does not restore read course reminders after the page remounts", async () => {
+    respond();
+    render(<StudentCoursePage />);
+    await screen.findByRole("heading", { name: course.name });
+    fireEvent.click(await screen.findByRole("button", { name: "课程提醒，共 2 条" }));
+
+    cleanup();
+    respond();
+    render(<StudentCoursePage />);
+    await screen.findByRole("heading", { name: course.name });
+
+    expect(screen.getByRole("button", { name: "课程提醒，共 0 条" })).toBeInTheDocument();
   });
 
   it("shows completion state when every task is complete", async () => {
@@ -184,7 +203,7 @@ describe("学生课程工作区", () => {
 
     expect(state).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /开始学习|继续学习/ })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "课程提醒，共 1 条" }));
+    fireEvent.click(await screen.findByRole("button", { name: "课程提醒，共 1 条" }));
     const popover = await screen.findByText("你已完成全部学习任务，可以查看学习记录。");
     expect(within(popover.closest("li")!).getByText(/全部学习任务/)).toBeInTheDocument();
   });

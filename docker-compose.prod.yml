@@ -118,6 +118,8 @@ services:
     environment:
       PUBLIC_HOST: ${PUBLIC_HOST:?Set PUBLIC_HOST}
       LOAD_TEST_CLIENT_IP: ${LOAD_TEST_CLIENT_IP:-127.0.0.1}
+      OPENPBL_UPSTREAM_HOST: ${OPENPBL_UPSTREAM_HOST:-host.docker.internal}
+      NGINX_INTERNAL_LISTEN: ${NGINX_INTERNAL_LISTEN:-8080}
     volumes:
       - ./deploy/nginx/openpbl.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ./.openpbl-data/uploads:/srv/openpbl/uploads:ro

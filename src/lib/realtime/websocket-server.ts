@@ -213,10 +213,14 @@ function attachClient(ws: WebSocket, claims: AuthClaims, ip: string): void {
   ws.once("close", () => clearInterval(pingTimer));
 }
 
-export function startWebSocketServer(port = 3001): WebSocketServer {
+export function startWebSocketServer(
+  port = 3001,
+  host = "127.0.0.1",
+): WebSocketServer {
   if (serverInstance) return serverInstance;
   const server = new WebSocketServer({
     port,
+    host,
     maxPayload: MAX_MESSAGE_BYTES,
     perMessageDeflate: false,
     verifyClient: (info, done) => {
@@ -243,7 +247,7 @@ export function startWebSocketServer(port = 3001): WebSocketServer {
   });
   server.on("error", (error) => console.error("[websocket-server] server error:", error));
   server.on("listening", () =>
-    console.info(`[websocket-server] listening on port ${port}`),
+    console.info(`[websocket-server] listening on ${host}:${port}`),
   );
   serverInstance = server;
   return server;

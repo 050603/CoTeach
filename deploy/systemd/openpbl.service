@@ -8,9 +8,11 @@ StartLimitIntervalSec=0
 Type=simple
 WorkingDirectory=/home/lkj/OpenPBL/openPBL
 Environment=OPENPBL_PORT=3000
+Environment=OPENPBL_HOSTNAME=127.0.0.1
 Environment=OPENPBL_WEBSOCKET_PORT=3001
+Environment=OPENPBL_WEBSOCKET_HOST=127.0.0.1
 Environment=OPENPBL_CODE_RUNNER_PORT=3002
-Environment=OPENPBL_PUBLIC_BASE_URL=http://praixis.cc.cd
+Environment=OPENPBL_PUBLIC_BASE_URL=https://praixis.cn
 ExecStart=/home/lkj/OpenPBL/openPBL/scripts/openpbl-production-service.sh run-app
 Restart=always
 RestartSec=5s
