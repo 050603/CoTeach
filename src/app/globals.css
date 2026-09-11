@@ -1939,6 +1939,7 @@ body.plate-default-theme [data-slot="popover-content"] {
 }
 
 .survey-answer-sheet {
+  --survey-sheet-inline-padding: clamp(1.5rem, 6vw, 5rem);
   position: relative;
   align-self: start;
   overflow: visible;
@@ -1949,7 +1950,7 @@ body.plate-default-theme [data-slot="popover-content"] {
     repeating-linear-gradient(0deg, rgba(92, 115, 139, 0.028) 0 1px, transparent 1px 32px),
     #fffdf8;
   box-shadow: 0 30px 80px rgba(43, 58, 52, 0.13), 0 3px 10px rgba(43, 58, 52, 0.06);
-  padding: clamp(2rem, 5vw, 4.25rem) clamp(1.5rem, 6vw, 5rem) 0;
+  padding: clamp(2rem, 5vw, 4.25rem) var(--survey-sheet-inline-padding) 0;
 }
 
 .survey-answer-sheet::after {
@@ -2258,8 +2259,8 @@ body.plate-default-theme [data-slot="popover-content"] {
   display: flex;
   align-items: center;
   gap: 1.5rem;
-  margin-inline: calc(clamp(1.5rem, 6vw, 5rem) * -1);
-  padding: 1rem clamp(1.5rem, 6vw, 5rem);
+  margin-inline: calc(var(--survey-sheet-inline-padding) * -1);
+  padding: 1rem var(--survey-sheet-inline-padding);
   border-top: 1px solid rgba(87, 88, 75, 0.14);
   border-radius: 0 0 12px 4px;
   background: rgba(255, 253, 248, 0.94);

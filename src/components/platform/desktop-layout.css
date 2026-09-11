@@ -131,7 +131,7 @@
 .pbl-platform-theme .survey-sheet-course { flex-wrap: wrap; overflow-wrap: anywhere; }
 .pbl-platform-theme .survey-sheet-footer { flex-wrap: wrap; }
 .pbl-platform-theme .survey-student-layout { width: min(100%, 1540px); grid-template-columns: clamp(180px,18vw,260px) minmax(0,1fr); gap: clamp(24px,3vw,48px); padding: clamp(24px,3vw,48px); }
-.pbl-platform-theme .survey-answer-sheet { min-width: 0; padding-inline: clamp(32px,4vw,64px); }
+.pbl-platform-theme .survey-answer-sheet { --survey-sheet-inline-padding: clamp(32px,4vw,64px); min-width: 0; }
 .pbl-platform-theme :is(.survey-paper-option, .survey-paper-option-detail, .survey-paper-answer,
   .survey-sheet-note, .survey-sheet-course, .survey-student-rail-copy > p) { font-size: var(--pbl-desktop-body); }
 .pbl-platform-theme .survey-sheet-question-heading { grid-template-columns: 32px minmax(0,1fr); gap: 12px; }
