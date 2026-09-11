@@ -84,13 +84,13 @@ export function WorkspaceAccountMenu({
 
   return <DropdownMenu>
     <DropdownMenuTrigger asChild>
-      <button type="button" className="pbl-teacher-account-trigger" aria-label={`${teacher ? "教师账号" : "学生个人中心"}：${displayName}`}>
+      <button type="button" className="pbl-teacher-account-trigger" data-role={role} aria-label={`${teacher ? "教师账号" : "学生个人中心"}：${displayName}`}>
         <span className="pbl-teacher-account-avatar" aria-hidden="true">{displayName.trim().charAt(0)}</span>
         <span className="pbl-teacher-account-copy"><strong>{displayName}</strong><small>{identity?.username ? `@${identity.username}` : (teacher ? "教师账号" : "个人中心")}</small></span>
         <ChevronDown size={15}/>
       </button>
     </DropdownMenuTrigger>
-    <DropdownMenuContent align="end" sideOffset={8} className="pbl-platform-theme pbl-teacher-account-menu w-64">
+    <DropdownMenuContent align="end" sideOffset={8} data-role={role} className="pbl-platform-theme pbl-teacher-account-menu w-64">
       <DropdownMenuLabel className="pbl-teacher-account-label">
         <span className="pbl-teacher-account-avatar" aria-hidden="true">{displayName.trim().charAt(0)}</span>
         <span><strong>{displayName}</strong><small>{identity?.username ? `账号：${identity.username}` : (teacher ? "当前登录的教师账号" : "当前登录的学生账号")}</small></span>

@@ -75,3 +75,7 @@ src/middleware-openmaic.ts.bak
 
 # database backups (Stage 11)
 /backups/
+
+# Python inference runtime bytecode
+__pycache__/
+*.py[cod]

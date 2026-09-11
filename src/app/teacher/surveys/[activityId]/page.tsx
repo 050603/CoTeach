@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { BarChart3, ChevronLeft, ChevronRight, Clock3, ClipboardList, Maximize2, Minimize2, Pause, Play, Quote, RefreshCw, UserRound, UsersRound } from "lucide-react";
 import { SurveyWordCloud } from "@/components/platform/survey-word-cloud";
 import { teacherPlatformFetch } from "@/lib/platform/client";
@@ -10,7 +10,7 @@ import { TeacherPlatformHeader, TeacherPlatformPage } from "@/components/platfor
 
 type Respondent = { studentId: string; displayName: string; detail?: string };
 type ChoiceQuestion = { id: string; title: string; type: "single-choice" | "multiple-choice"; chartType: "donut" | "bar" | "column"; required: boolean; responseCount: number; options: Array<{ id: string; label: string; count: number; percentage: number; respondents: Respondent[] }> };
-type TextQuestion = { id: string; title: string; type: "short-text"; required: boolean; responseCount: number; responses: Array<Respondent & { content: string }>; terms: Array<{ label: string; value: number }> };
+type TextQuestion = { id: string; title: string; type: "short-text"; required: boolean; responseCount: number; responses: Array<Respondent & { content: string }>; terms: Array<{ label: string; value: number; studentIds?: string[] }>; keywordStatus?: "processing" | "ready" | "unavailable"; keywordAnalyzedCount?: number; keywordMode?: "local" | "llm"; keywordRepresentedCount?: number; keywordUnrepresentedResponses?: Array<{ studentId: string; reason: "pending" | "analysis-unavailable" | "no-keywords" }> };
 type SurveyResult = {
   activity: { id: string; title: string; description?: string | null; isOpen: boolean; chapter: { id: string; title: string }; offering: { id: string; name: string } };
   analytics: { submittedCount: number; totalStudents: number; completionRate: number; questions: Array<ChoiceQuestion | TextQuestion> };
@@ -19,30 +19,49 @@ type SurveyResult = {
 
 const COLORS = ["#2563eb", "#0f766e", "#7c3aed", "#0891b2", "#c2410c", "#be185d", "#475569", "#4f46e5"];
 
-function choiceGradient(options: ChoiceQuestion["options"]) {
+function choiceSlices(options: ChoiceQuestion["options"]) {
   let cursor = 0;
-  const stops = options.map((option, index) => {
+  const positiveOptions = options.filter((option) => option.percentage > 0).length;
+  return options.map((option, index) => {
+    const percentage = Math.max(0, Math.min(100, option.percentage));
     const start = cursor;
-    cursor += option.percentage;
-    return `${COLORS[index % COLORS.length]} ${start}% ${cursor}%`;
+    cursor += percentage;
+    const gap = positiveOptions > 1 ? Math.min(0.7, percentage * 0.18) : 0;
+    return { option, color: COLORS[index % COLORS.length], start: start + gap / 2, length: Math.max(0, percentage - gap) };
   });
-  if (cursor < 100) stops.push(`#e8edf6 ${cursor}% 100%`);
-  return `conic-gradient(${stops.join(",")})`;
 }
 
 function ChoiceChart({ question, selectedOptionId, onSelect }: { question: ChoiceQuestion; selectedOptionId: string | null; onSelect: (optionId: string) => void }) {
   if (question.chartType === "bar") return <div aria-label="选项比例条形图" className="survey-bar-chart" role="group">
-    {question.options.map((option, index) => <button aria-label={`${option.label}，${option.percentage}%，${option.count} 人`} aria-pressed={selectedOptionId === option.id} className={selectedOptionId === option.id ? "is-selected" : ""} onClick={() => onSelect(option.id)} type="button" key={option.id}>
+    {question.options.map((option, index) => <button aria-label={`${option.label}，${option.percentage}%，${option.count} 人`} aria-pressed={selectedOptionId === option.id} className={selectedOptionId === option.id ? "is-selected" : ""} data-option-id={option.id} onClick={() => onSelect(option.id)} style={{ "--survey-option-color": COLORS[index % COLORS.length] } as CSSProperties} type="button" key={option.id}>
       <span><strong>{option.label}</strong><em>{option.percentage}%</em></span>
       <i><b style={{ backgroundColor: COLORS[index % COLORS.length], width: `${option.percentage}%` }} /></i>
     </button>)}
   </div>;
-  if (question.chartType === "column") return <div aria-label="选项比例柱状图" className="survey-column-chart" role="group">
-    {question.options.map((option, index) => <button aria-label={`${option.label}，${option.percentage}%，${option.count} 人`} aria-pressed={selectedOptionId === option.id} className={selectedOptionId === option.id ? "is-selected" : ""} onClick={() => onSelect(option.id)} type="button" key={option.id}>
-      <strong>{option.percentage}%</strong><span><i style={{ backgroundColor: COLORS[index % COLORS.length], height: `${Math.max(option.percentage, option.count ? 5 : 1)}%` }} /></span><small>{option.label}</small>
+  if (question.chartType === "column") return <div aria-label="选项比例柱状图" className="survey-column-chart" role="group" style={{ "--survey-option-count": Math.max(question.options.length, 1) } as CSSProperties}>
+    {question.options.map((option, index) => <button aria-label={`${option.label}，${option.percentage}%，${option.count} 人`} aria-pressed={selectedOptionId === option.id} className={selectedOptionId === option.id ? "is-selected" : ""} data-option-id={option.id} onClick={() => onSelect(option.id)} style={{ "--survey-option-color": COLORS[index % COLORS.length] } as CSSProperties} type="button" key={option.id}>
+      <strong>{option.percentage}%</strong><span aria-hidden="true"><i style={{ backgroundColor: COLORS[index % COLORS.length], height: `${option.percentage}%` }} /></span><small title={option.label}>{option.label}</small>
     </button>)}
   </div>;
-  return <div className="survey-donut-wrap"><div className="survey-donut" style={{ background: choiceGradient(question.options) }}><div><strong>{question.responseCount}</strong><span>有效回答</span></div></div><small className="survey-chart-hint">点击右侧选项查看实名学生</small></div>;
+  const selectedOption = question.options.find((option) => option.id === selectedOptionId);
+  return <div className="survey-donut-wrap">
+    <div className={`survey-donut ${selectedOption ? "has-selection" : ""}`}>
+      <svg aria-label="选项比例饼图" role="group" viewBox="0 0 200 200">
+        <circle className="survey-donut-track" cx="100" cy="100" fill="none" r="84" />
+        {choiceSlices(question.options).map(({ option, color, start, length }) => length > 0 ? <circle
+          aria-label={`${option.label}，${option.percentage}%，${option.count} 人`}
+          aria-pressed={selectedOptionId === option.id}
+          className={`survey-donut-slice ${selectedOptionId === option.id ? "is-selected" : ""}`}
+          cx="100" cy="100" data-option-id={option.id} fill="none" key={option.id} pathLength="100" r="84" role="button"
+          stroke={color} strokeDasharray={`${length} ${100 - length}`} strokeDashoffset={-start}
+          style={{ "--survey-option-color": color } as CSSProperties} tabIndex={0} transform="rotate(-90 100 100)"
+          onClick={() => onSelect(option.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(option.id); } }}
+        /> : null)}
+      </svg>
+      <div className="survey-donut-center"><strong>{selectedOption ? `${selectedOption.percentage}%` : question.responseCount}</strong><span title={selectedOption?.label}>{selectedOption?.label ?? "有效回答"}</span></div>
+    </div>
+    <small className="survey-chart-hint">点击图形或右侧选项查看对应学生</small>
+  </div>;
 }
 
 export default function SurveyDashboardPage() {
@@ -57,6 +76,7 @@ export default function SurveyDashboardPage() {
   const [autoPlay, setAutoPlay] = useState(false);
   const [selectedTerm, setSelectedTerm] = useState<string | null>(null);
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
+  const selectedChoiceRef = useRef<HTMLButtonElement>(null);
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true);
@@ -90,11 +110,19 @@ export default function SurveyDashboardPage() {
   const questions = result?.analytics.questions ?? [];
   const current = questions[Math.min(questionIndex, Math.max(0, questions.length - 1))];
   const selectedResponses = useMemo(() => current?.type === "short-text" && selectedTerm
-    ? current.responses.filter((response) => response.content.toLocaleLowerCase("zh-CN").includes(selectedTerm.toLocaleLowerCase("zh-CN")))
-    : [], [current, selectedTerm]);
+    ? current.responses.filter((response) => {
+      const term = current.terms.find((entry) => entry.label === selectedTerm);
+      return term?.studentIds ? term.studentIds.includes(response.studentId)
+        : response.content.normalize("NFKC").toLocaleLowerCase("zh-CN").includes(selectedTerm.normalize("NFKC").toLocaleLowerCase("zh-CN"));
+    })
+    : current?.type === "short-text" ? current.responses : [], [current, selectedTerm]);
   const selectedOption = current?.type === "single-choice" || current?.type === "multiple-choice"
     ? current.options.find((option) => option.id === selectedOptionId) ?? null
     : null;
+
+  useEffect(() => {
+    selectedChoiceRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+  }, [selectedOptionId]);
 
   async function togglePresentation() {
     if (presentation) {
@@ -206,6 +234,7 @@ export default function SurveyDashboardPage() {
                       <h2>{current?.title}</h2>
                     </div>
                     <div className="survey-insight-meta">
+                      {current?.type === "short-text" ? <button className="survey-all-responses" type="button" aria-pressed={!selectedTerm} onClick={() => setSelectedTerm(null)}>全部回答</button> : null}
                       <span>{current?.responseCount ?? 0} 份回答</span>
                       {questions.length > 1 ? (
                         <nav aria-label="大屏题目切换" className="survey-display-pager">
@@ -221,8 +250,9 @@ export default function SurveyDashboardPage() {
                     <div className="survey-choice-layout">
                       <ChoiceChart question={current} selectedOptionId={selectedOptionId} onSelect={(optionId) => setSelectedOptionId((selected) => selected === optionId ? null : optionId)} />
                       <div className="survey-choice-list">
+                        {current.type === "multiple-choice" ? <p className="survey-choice-percentage-note">按本题总选择人次计算占比，每选一项计 1 人次；有选择时各选项占比合计 100%。</p> : null}
                         {current.options.map((option, index) => (
-                          <button aria-pressed={selectedOptionId === option.id} className={`survey-choice-row ${selectedOptionId === option.id ? "is-selected" : ""}`} onClick={() => setSelectedOptionId((selected) => selected === option.id ? null : option.id)} type="button" key={option.id}>
+                          <button aria-pressed={selectedOptionId === option.id} className={`survey-choice-row ${selectedOptionId === option.id ? "is-selected" : ""}`} data-option-id={option.id} onClick={() => setSelectedOptionId((selected) => selected === option.id ? null : option.id)} ref={selectedOptionId === option.id ? selectedChoiceRef : null} style={{ "--survey-option-color": COLORS[index % COLORS.length] } as CSSProperties} type="button" key={option.id}>
                             <div>
                               <span className="survey-choice-label"><i style={{ backgroundColor: COLORS[index % COLORS.length] }} />{option.label}</span>
                               <strong>{option.percentage}% <small>{option.count} 人</small></strong>
@@ -240,31 +270,19 @@ export default function SurveyDashboardPage() {
                     </div>
                   ) : current?.type === "short-text" ? (
                     <div className="survey-text-layout">
-                      <SurveyWordCloud large={presentation} terms={current.terms} selected={selectedTerm} onSelect={(term) => setSelectedTerm((selected) => selected === term.label ? null : term.label)} />
+                      <SurveyWordCloud key={current.id} large={presentation} status={current.keywordStatus} analyzedCount={current.keywordAnalyzedCount} responseCount={current.responseCount} hasResponses={current.responseCount > 0} terms={current.terms} selected={selectedTerm} onSelect={(term) => { setSelectedTerm((selected) => selected === term.label ? null : term.label); }} />
                       <aside className="survey-response-echo">
                         <div className="survey-response-echo-heading">
                           <p>观点摘录</p>
-                          <span>点击左侧关键词筛选</span>
+                          <span>{current.keywordMode === "llm" ? "大模型概念提取" : "本地分词"} · 点击关键词筛选</span>
                         </div>
-                        {selectedTerm ? (
-                          <>
-                            <div className="survey-selected-term">
-                              <h3>{selectedTerm}</h3>
-                              <span>{current.terms.find((term) => term.label === selectedTerm)?.value ?? 0} 人提及</span>
-                            </div>
-                            <div className="survey-response-list">
-                              {selectedResponses.length ? selectedResponses.map((response, index) => (
-                                <blockquote key={`${response.studentId}-${index}`}><p>{response.content}</p><footer><Quote size={13} /><span>{response.displayName}</span></footer></blockquote>
-                              )) : <p className="survey-response-empty">暂无包含该关键词的原回答。</p>}
-                            </div>
-                          </>
-                        ) : (
-                          <div className="survey-response-placeholder">
-                            <BarChart3 size={26} />
-                            <p>选择一个关键词</p>
-                            <span>这里会展示相关的实名原回答，帮助教师理解词频背后的真实观点。</span>
-                          </div>
-                        )}
+                        {selectedTerm ? <div className="survey-selected-term"><h3>{selectedTerm}</h3><span>{current.terms.find((term) => term.label === selectedTerm)?.value ?? 0} 人提及</span></div> : null}
+                        <div className="survey-response-list">
+                          {selectedResponses.length ? selectedResponses.map((response, index) => {
+                            const reason = current.keywordUnrepresentedResponses?.find((entry) => entry.studentId === response.studentId)?.reason;
+                            return <blockquote key={`${response.studentId}-${index}`}><p>{response.content}</p><footer><Quote size={13} /><span>{response.displayName}</span>{reason ? <small>{reason === "pending" ? "分析中" : reason === "analysis-unavailable" ? "分析暂不可用" : "暂无关键词"}</small> : null}</footer></blockquote>;
+                          }) : <p className="survey-response-empty">{selectedTerm ? "暂无包含该关键词的原回答。" : "暂无对应的原回答。"}</p>}
+                        </div>
                       </aside>
                     </div>
                   ) : null}

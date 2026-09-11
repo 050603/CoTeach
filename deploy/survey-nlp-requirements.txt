@@ -1,0 +1,5 @@
+# CPU inference runtime. The setup script reuses an installed matching torch,
+# or installs its CPU wheel before resolving the remaining requirements.
+hanlp==2.1.3
+torch==2.9.1
+transformers==4.57.3

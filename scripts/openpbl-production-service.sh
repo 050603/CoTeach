@@ -134,6 +134,14 @@ run_code_runner() {
   exec /usr/bin/node scripts/code-runner-server.mjs
 }
 
+run_survey_nlp() {
+  export HANLP_HOME="$PROJECT_ROOT/.openpbl-runtime/nlp-models"
+  export OPENPBL_NLP_MODEL_PATH="$HANLP_HOME/coarse_electra_small_20220616_012050"
+  nlp_python="${OPENPBL_NLP_PYTHON:-$PROJECT_ROOT/.openpbl-runtime/nlp-venv/bin/python}"
+  cd "$PROJECT_ROOT"
+  exec "$nlp_python" scripts/survey-nlp-server.py
+}
+
 cleanup_data() {
   load_shared_environment
   wait_for_tcp "PostgreSQL" "127.0.0.1" "15432"
@@ -159,6 +167,9 @@ case "${1:-}" in
   run-code-runner)
     run_code_runner
     ;;
+  run-survey-nlp)
+    run_survey_nlp
+    ;;
   cleanup-data)
     cleanup_data
     ;;
@@ -167,7 +178,7 @@ case "${1:-}" in
     rehydrate_data "$@"
     ;;
   *)
-    echo "用法：$0 {run-app|run-code-runner|cleanup-data|rehydrate-data [参数]}" >&2
+    echo "用法：$0 {run-app|run-code-runner|run-survey-nlp|cleanup-data|rehydrate-data [参数]}" >&2
     exit 2
     ;;
 esac

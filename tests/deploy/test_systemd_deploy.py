@@ -32,11 +32,12 @@ case "$name:$1" in
   systemctl:--user)
     if [ "$2" = show ]; then pwd; fi ;;
   pnpm:build) exit "${TEST_BUILD_EXIT:-0}" ;;
+  python3:scripts/setup-survey-nlp.py) exit "${TEST_NLP_EXIT:-0}" ;;
   curl:*) exit "${TEST_HEALTH_EXIT:-0}" ;;
   flock:*) exit "${TEST_LOCK_EXIT:-0}" ;;
 esac
 '''
-        for command in ['git', 'pnpm', 'node', 'systemctl', 'curl', 'sleep', 'flock']:
+        for command in ['git', 'pnpm', 'node', 'python3', 'systemctl', 'curl', 'sleep', 'flock']:
             p = bin_dir / command
             p.write_text(fake)
             p.chmod(0o755)
@@ -55,6 +56,14 @@ esac
         self.assertIn(f'git checkout --detach {SHA}', calls)
         self.assertIn('Healthy deployment:', result.stdout)
         self.assertLess(calls.index('pnpm build'), calls.index('systemctl --user restart'))
+        self.assertIn('openpbl-survey-nlp.service', calls)
+        self.assertIn('http://127.0.0.1:3003/health/live', calls)
+
+    def test_failed_local_model_setup_preserves_running_services(self):
+        result, calls = self.run_deploy(TEST_NLP_EXIT='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('pnpm build', calls)
+        self.assertNotIn('systemctl --user restart', calls)
 
     def test_dirty_checkout_is_preserved(self):
         result, calls = self.run_deploy(TEST_DIRTY=' M user-work.ts')

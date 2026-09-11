@@ -705,7 +705,8 @@
 }
 
 /* Student course home and account */
-.pbl-platform-theme [data-role=student] .pbl-teacher-account-avatar { background: var(--pbl-student); }
+.pbl-platform-theme [data-role=student] .pbl-teacher-account-avatar,
+.pbl-platform-theme[data-role=student] .pbl-teacher-account-avatar { background: var(--pbl-student); }
 .pbl-platform-theme .pbl-student-dashboard { max-width: 1380px; margin-inline: auto; }
 .pbl-platform-theme .pbl-student-heading { min-height: 104px; margin-bottom: 12px; padding-bottom: 14px; }
 .pbl-platform-theme .pbl-student-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin: 0 0 16px; }

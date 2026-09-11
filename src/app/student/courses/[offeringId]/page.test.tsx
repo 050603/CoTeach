@@ -107,8 +107,10 @@ describe("学生课程工作区", () => {
     expect(screen.getByRole("link", { name: "返回我的课程" })).toHaveAttribute("href", "/student?all=1");
     const account = screen.getByRole("button", { name: "学生个人中心：林晓雨" });
     expect(account).toBeInTheDocument();
+    expect(account).toHaveAttribute("data-role", "student");
     fireEvent.pointerDown(account, { button: 0, ctrlKey: false });
     expect(await screen.findByRole("menuitem", { name: "个人中心" })).toHaveAttribute("href", "/student/profile");
+    expect(screen.getByRole("menu")).toHaveAttribute("data-role", "student");
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(screen.getByRole("button", { name: "课程学习" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("link", { name: /继续学习/ })).toHaveAttribute(

@@ -1,7 +1,7 @@
 [Unit]
 Description=OpenPBL production server (port 3000)
-Wants=network-online.target openpbl-code-runner.service
-After=network-online.target openpbl-code-runner.service
+Wants=network-online.target openpbl-code-runner.service openpbl-survey-nlp.service
+After=network-online.target openpbl-code-runner.service openpbl-survey-nlp.service
 StartLimitIntervalSec=0
 
 [Service]

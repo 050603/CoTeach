@@ -69,6 +69,7 @@ export function PraixisLogo({
         width={width}
         height={height}
         priority={priority}
+        unoptimized
         style={{
           display: "block",
           height,
