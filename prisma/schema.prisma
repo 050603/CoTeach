@@ -693,24 +693,35 @@ model Resource {
 }
 
 model FileAsset {
-  id           String    @id @default(uuid())
-  storageKey   String    @unique
-  originalName String
-  mimeType     String
-  size         BigInt
-  sha256       String?
-  uploadedById String
-  offeringId   String?
-  createdAt    DateTime  @default(now())
-  deletedAt    DateTime?
+  id                   String    @id @default(uuid())
+  storageKey           String    @unique
+  originalName         String
+  mimeType             String
+  size                 BigInt
+  sha256               String?
+  // SOURCE is irreplaceable user/course data. Derived roles describe bytes
+  // that can be rebuilt from sourceAsset + regenerationRecipe after restore.
+  assetRole            String    @default("SOURCE")
+  backupPolicy         String    @default("REQUIRED")
+  sourceAssetId        String?
+  regenerationRecipe   Json?
+  uploadedById         String
+  offeringId           String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  deletedAt            DateTime?
 
   uploadedBy       User              @relation("FileUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
   offering         CourseOffering?   @relation(fields: [offeringId], references: [id], onDelete: SetNull)
   resource         Resource?         @relation("ResourceAsset")
   artifactVersions ArtifactVersion[]
+  sourceAsset      FileAsset?        @relation("DerivedAssetSource", fields: [sourceAssetId], references: [id], onDelete: Restrict)
+  derivedAssets    FileAsset[]       @relation("DerivedAssetSource")
 
   @@index([offeringId, createdAt])
   @@index([sha256])
+  @@index([sourceAssetId])
+  @@index([backupPolicy, deletedAt])
 }
 
 // ---------------------------------------------------------------------------

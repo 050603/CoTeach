@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSurveyAnalytics, extractSurveyTerms, SurveyConfigSchema } from "./survey";
+import { buildSurveyAnalytics, estimateSurveyMinutes, extractSurveyTerms, SurveyConfigSchema } from "./survey";
 
 const config = {
   schemaVersion: 1,
@@ -11,6 +11,23 @@ const config = {
 };
 
 describe("survey configuration and analytics", () => {
+  it("estimates student completion time by question type and reading load", () => {
+    const choiceQuestions = Array.from({ length: 3 }, (_, index) => ({
+      id: `choice-${index}`,
+      title: "请选择最符合实际情况的一项",
+      type: "single-choice" as const,
+      chartType: "donut" as const,
+      required: true,
+      options: [{ id: "yes", label: "符合" }, { id: "no", label: "不符合" }],
+    }));
+    const textQuestions = choiceQuestions.map((question) => ({ ...question, type: "short-text" as const, options: [] }));
+
+    expect(estimateSurveyMinutes([])).toBe(1);
+    expect(estimateSurveyMinutes(choiceQuestions)).toBeLessThan(estimateSurveyMinutes(textQuestions));
+    expect(estimateSurveyMinutes(choiceQuestions, "请结合本节课的实际体验认真阅读并完成以下问题。".repeat(20)))
+      .toBeGreaterThan(estimateSurveyMinutes(choiceQuestions));
+  });
+
   it("accepts mixed question types and rejects incomplete choices", () => {
     expect(SurveyConfigSchema.parse(config).questions).toHaveLength(2);
     expect(SurveyConfigSchema.safeParse({ ...config, questions: [{ id: "q", title: "选择", type: "single-choice", options: [{ id: "a", label: "A" }] }] }).success).toBe(false);

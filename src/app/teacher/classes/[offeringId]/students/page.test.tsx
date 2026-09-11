@@ -57,7 +57,8 @@ describe("教师学生学习记录页面", () => {
   it("shows real summary data and filters the list by attention and activity status", async () => {
     mockFetch();
     render(<Page/>);
-    expect(await screen.findByRole("heading", { name: "设计思维" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "学生与学习记录" })).toBeInTheDocument();
+    expect(screen.getByText("设计思维")).toBeInTheDocument();
     expect(screen.getByText("含真实访问或提交记录")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("关注筛选"), { target: { value: "not_participated" } });
     expect(screen.getByRole("button", { name: /小王/ })).toBeInTheDocument();
@@ -99,7 +100,7 @@ describe("教师学生学习记录页面", () => {
     vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:zip"), revokeObjectURL: vi.fn() });
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     render(<Page/>);
-    await screen.findByRole("heading", { name: "设计思维" });
+    await screen.findByRole("heading", { name: "学生与学习记录" });
     fireEvent.click(screen.getByRole("button", { name: "导出当前结果" }));
     expect(screen.getByRole("dialog", { name: "导出学生学习记录数据包" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: /评价记录/ }));

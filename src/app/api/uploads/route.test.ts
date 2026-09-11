@@ -14,7 +14,10 @@ const mocks = vi.hoisted(() => ({
   courseCount: vi.fn(),
   transaction: vi.fn(),
   fileTypeFromBuffer: vi.fn(async () => ({ ext: "png", mime: "image/png" }) as { ext: string; mime: string } | null),
-  convertPresentationToPdf: vi.fn(async () => ({ size: 4096, mimeType: "application/pdf" as const })),
+  convertPresentationToPdf: vi.fn(async ({ targetPath }: { targetPath: string }) => {
+    await (await import("node:fs/promises")).writeFile(targetPath, "%PDF-preview");
+    return { size: 12, mimeType: "application/pdf" as const };
+  }),
 }));
 
 vi.mock("@/lib/auth/request-guards", () => ({
@@ -96,7 +99,7 @@ describe("teacher course resource upload", () => {
     expect(response.status).toBe(201);
     expect(payload).toMatchObject({ fileName: "prototype.py", fileType: "PY" });
     expect(mocks.uploadFileCreate).toHaveBeenCalledWith({
-      data: expect.objectContaining({ mimeType: "text/x-python" }),
+      data: expect.objectContaining({ mimeType: "text/x-python", sha256: expect.stringMatching(/^[0-9a-f]{64}$/) }),
     });
   });
 
@@ -194,7 +197,7 @@ describe("teacher course resource upload", () => {
     expect(response.status).toBe(201);
     expect(payload).toMatchObject({ fileName: "课堂实验.mp4", fileType: "MP4", sizeBytes: 12, boundToCourse: true });
     expect(mocks.uploadFileCreate).toHaveBeenCalledWith({
-      data: expect.objectContaining({ mimeType: "video/mp4", size: BigInt(12) }),
+      data: expect.objectContaining({ mimeType: "video/mp4", size: BigInt(12), sha256: expect.stringMatching(/^[0-9a-f]{64}$/) }),
     });
     expect(mocks.courseResourceCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({ offeringId: courseId, metadata: { stageKey: "launch" }, type: "MP4" }),
@@ -258,7 +261,12 @@ describe("teacher course resource upload", () => {
         originalName: "课堂演示.pptx.pdf",
         storageKey: expect.stringMatching(/\.classroom\.pdf$/),
         mimeType: "application/pdf",
-        size: BigInt(4096),
+        size: BigInt(12),
+        sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+        assetRole: "CLASSROOM_PREVIEW",
+        backupPolicy: "REGENERATE",
+        sourceAssetId: payload.id,
+        regenerationRecipe: expect.objectContaining({ operation: "presentation-to-pdf" }),
       }),
     });
     expect(mocks.courseResourceCreate).toHaveBeenCalledWith({

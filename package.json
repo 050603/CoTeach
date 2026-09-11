@@ -30,6 +30,7 @@
     "db:studio": "node scripts/run-prisma.mjs studio",
     "db:migrate-from-json": "tsx --env-file=.env.local scripts/migrate-json-to-db.ts",
     "cleanup:uploads": "tsx --env-file=.env.local scripts/cleanup-uploads.ts orphans",
+    "storage:rehydrate": "tsx --env-file=.env.local scripts/rehydrate-storage.ts",
     "admin:init-teacher": "tsx --env-file=.env.local scripts/init-teacher.ts",
     "postinstall": "cd packages/mathml2omml && pnpm run build && cd ../pptxgenjs && pnpm run build && cd ../@openmaic/dsl && pnpm run build && cd ../importer && pnpm run build && cd ../renderer && pnpm run build && cd ../../.. && node scripts/sync-maic-importer.mjs && node scripts/run-prisma.mjs generate"
   },

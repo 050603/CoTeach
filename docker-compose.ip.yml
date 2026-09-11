@@ -92,3 +92,12 @@ services:
 
   migrate:
     network_mode: host
+
+  volume-backup:
+    network_mode: host
+    environment:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "15432"
+
+  restore-files:
+    network_mode: host

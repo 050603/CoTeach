@@ -45,6 +45,7 @@ describe("student questionnaire", () => {
     expect(screen.queryByText("我的学习空间")).toBeNull();
     expect(await screen.findByText("单选题")).toBeInTheDocument();
     expect(screen.getByText("多选题")).toBeInTheDocument();
+    expect(screen.getByText("约 3 分钟")).toBeInTheDocument();
     expect(screen.queryByText(/本题只能选择一个选项/)).not.toBeInTheDocument();
     expect(screen.queryByText(/本题可以选择一个或多个选项/)).not.toBeInTheDocument();
     expect(screen.getByText("最多选 2 项")).toBeInTheDocument();

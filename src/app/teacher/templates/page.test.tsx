@@ -25,7 +25,7 @@ describe("teacher course library", () => {
       ? { ok: true, json: async () => ({ templateId: "quick-course" }) }
       : { ok: true, json: async () => ({ templates: [] }) });
     render(<TeacherTemplatesPage />);
-    await screen.findByText("从一堂课开始");
+    await screen.findByText("课程库为空");
     fireEvent.click(screen.getByRole("button", { name: "新建课程" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/platform/templates/pbl", expect.objectContaining({ method: "POST", body: "{}" })));
     expect(navigation.push).toHaveBeenCalledWith("/teacher/prepare/quick-course/verify");

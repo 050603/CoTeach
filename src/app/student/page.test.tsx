@@ -67,6 +67,7 @@ describe("student learning entry", () => {
     expect(
       await screen.findByRole("heading", { name: "城市生态" }),
     ).toBeTruthy();
+    expect(screen.queryByText("把好奇变成发现，让每一次学习都有收获。")).toBeNull();
     expect(navigation.replace).not.toHaveBeenCalled();
   });
   it("offers a choice when multiple course series are enrolled", async () => {
@@ -99,7 +100,8 @@ describe("student learning entry", () => {
         ok: true,
         json: async () => ({ enrollment: { offeringId: "joined-course" } }),
       });
-    vi.stubGlobal("fetch", fetcher);
+    const requests = fetcher;
+    vi.stubGlobal("fetch", (url: string, options?: RequestInit) => url === "/api/platform/auth/student-profile" ? Promise.resolve({ ok: true, json: async () => ({ user: null }) }) : requests(url, options));
     render(<StudentEntryPage />);
     fireEvent.change(await screen.findByLabelText("课程邀请码"), {
       target: { value: "ABC123" },
@@ -111,7 +113,7 @@ describe("student learning entry", () => {
       ),
     );
   });
-  it("continues the most recently visited open task and skips locked or finished courses", async () => {
+  it("shows courses directly without a recent-learning summary", async () => {
     query.all = true;
     const task = (id: string, lastAccessedAt: string, isOpen = true) => ({ id, title: id, isOpen, progress: { status: "in_progress", lastAccessedAt } });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ courses: [
@@ -119,7 +121,22 @@ describe("student learning entry", () => {
       { ...course, id: "ended", status: "finished", chapters: [{ isOpen: true, activities: [task("ended-task", "2026-09-09")] }] },
     ] }) }));
     render(<StudentEntryPage />);
-    expect((await screen.findByRole("link", { name: "继续学习" })).getAttribute("href")).toBe("/student/activities/latest");
+    expect((await screen.findAllByRole("link", { name: /城市生态/ })).length).toBe(2);
+    expect(screen.queryByRole("region", { name: "学习概况" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "继续学习" })).toBeNull();
+  });
+
+  it("filters courses by keyword and clears an empty result", async () => {
+    query.all = true;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ courses: [course] }) }));
+    render(<StudentEntryPage />);
+    const input = await screen.findByRole("textbox", { name: "搜索课程" });
+    fireEvent.change(input, { target: { value: "不存在" } });
+    expect(screen.getByText("没有找到匹配的课程")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(screen.getByRole("link", { name: /城市生态/ })).toHaveAttribute("href", "/student/courses/series-1");
+    fireEvent.click(screen.getByRole("button", { name: "已结束" }));
+    expect(screen.getByText("没有找到匹配的课程")).toBeInTheDocument();
   });
 
 });

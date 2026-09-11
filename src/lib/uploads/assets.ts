@@ -28,13 +28,17 @@ export async function persistUpload(tx: Prisma.TransactionClient, input: {
   id: string; originalName: string; storageKey: string; offeringId: string | null; uploadedById: string;
   size: number; mimeType: string; title: string; type: string; bind: boolean; stageKey?: string;
   displayMode?: string | null; previewStorageKey?: string | null; previewMimeType?: string | null; previewSize?: number | null;
+  sha256?: string | null; previewSha256?: string | null;
 }) {
   await tx.fileAsset.create({ data: { id: input.id, originalName: input.originalName, storageKey: input.storageKey,
-    offeringId: input.offeringId, uploadedById: input.uploadedById, size: BigInt(input.size), mimeType: input.mimeType } });
+    offeringId: input.offeringId, uploadedById: input.uploadedById, size: BigInt(input.size), mimeType: input.mimeType,
+    sha256: input.sha256 } });
   let previewAssetId: string | undefined;
   if (input.previewStorageKey && input.previewMimeType && input.previewSize != null) {
     const preview = await tx.fileAsset.create({ data: { originalName: `${input.originalName}.pdf`, storageKey: input.previewStorageKey,
-      offeringId: input.offeringId, uploadedById: input.uploadedById, size: BigInt(input.previewSize), mimeType: input.previewMimeType } });
+      offeringId: input.offeringId, uploadedById: input.uploadedById, size: BigInt(input.previewSize), mimeType: input.previewMimeType,
+      sha256: input.previewSha256, assetRole: 'CLASSROOM_PREVIEW', backupPolicy: 'REGENERATE', sourceAssetId: input.id,
+      regenerationRecipe: { schemaVersion: 1, operation: 'presentation-to-pdf', outputMimeType: 'application/pdf' } } });
     previewAssetId = preview.id;
   }
   if (!input.bind || !input.offeringId) return null;

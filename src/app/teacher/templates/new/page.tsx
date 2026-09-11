@@ -175,8 +175,8 @@ export default function NewTeacherTemplatePage() {
     <div className="pbl-workspace-content">
       <div className="grid gap-8 lg:grid-cols-[250px_minmax(0,1fr)]">
         <aside className="pbl-create-intro">
-          <p className="text-xs font-semibold tracking-[0.18em] text-[var(--pbl-teacher)]">课程创建流程</p>
-          <h1 className="mt-3 font-serif text-3xl font-semibold">创建一门新课程</h1>
+          <p className="text-xs font-semibold tracking-[0.18em] text-[var(--pbl-teacher)]">课程库 / 新建课程</p>
+          <h1 className="mt-3 font-serif text-3xl font-semibold">创建课程</h1>
           <ol className="mt-8 space-y-1" aria-label="创建进度">
             {STEPS.map((item, index) => <li key={item.title} className={`relative flex gap-4 rounded-[8px] px-3 py-4 ${step === index ? "bg-[var(--pbl-surface)] shadow-sm" : ""}`} aria-current={step === index ? "step" : undefined}>
               <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full border text-xs font-semibold ${index < step ? "border-[var(--pbl-teacher)] bg-[var(--pbl-teacher)] text-white" : step === index ? "border-[var(--pbl-teacher)] text-[var(--pbl-teacher)]" : "border-[var(--pbl-border)] text-[var(--pbl-text-muted)]"}`}>{index < step ? <Check size={14}/> : index + 1}</span>

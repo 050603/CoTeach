@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { chmod, mkdir, open, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileTypeFromBuffer } from "file-type";
@@ -211,6 +212,7 @@ export async function POST(request: Request) {
 
     failureStage = "inspect-file";
     const bytes = Buffer.from(await file.arrayBuffer());
+    const sourceSha256 = createHash("sha256").update(bytes).digest("hex");
     const detected = await fileTypeFromBuffer(bytes).catch(() => null);
     const isValidPlainText = expected.plainText
       ? !detected && isUtf8PlainText(bytes)
@@ -243,6 +245,7 @@ export async function POST(request: Request) {
     let previewStoredName: string | null = null;
     let previewMimeType: string | null = null;
     let previewSize: number | null = null;
+    let previewSha256: string | null = null;
     let previewUrl: string | null = null;
     let previewType: string | null = null;
     const needsClassroomPdf = isNewClassroomPptx && isPresentationConversionEnabled();
@@ -257,6 +260,7 @@ export async function POST(request: Request) {
         });
         previewMimeType = preview.mimeType;
         previewSize = preview.size;
+        previewSha256 = await sha256File(previewTargetPath);
         previewUrl = `/api/uploads/${id}?variant=classroom`;
         previewType = "PDF";
       } catch (error) {
@@ -290,6 +294,7 @@ export async function POST(request: Request) {
       id, originalName, storageKey: storedName, offeringId: storageScope?.offeringId ?? null, uploadedById: auth.claims.sub!,
       size: info.size, mimeType: expected.mime, title, type: fileType, bind: bindAsCourseResource,
       stageKey: parsedFields.data.stageKey, displayMode, previewStorageKey: previewStoredName, previewMimeType, previewSize,
+      sha256: sourceSha256, previewSha256,
     }));
 
     if (durableEvent && courseId) {
@@ -399,6 +404,7 @@ async function uploadStreamedVideo(
     await mkdir(/* turbopackIgnore: true */ dataDir, { recursive: true });
     fileHandle = await open(/* turbopackIgnore: true */ targetPath, "wx", 0o600);
     const reader = request.body.getReader();
+    const sourceHasher = createHash("sha256");
     let size = 0;
     let signature = Buffer.alloc(0);
     while (true) {
@@ -414,6 +420,7 @@ async function uploadStreamedVideo(
         signature = Buffer.concat([signature, Buffer.from(value.subarray(0, remaining))]);
       }
       const chunk = Buffer.from(value);
+      sourceHasher.update(chunk);
       let offset = 0;
       while (offset < chunk.length) {
         const { bytesWritten } = await fileHandle.write(
@@ -460,6 +467,7 @@ async function uploadStreamedVideo(
     const durableEvent = await prisma.$transaction((tx) => persistUpload(tx, {
       id, originalName, storageKey: storedName, offeringId: storageScope.offeringId, uploadedById: claims.sub!,
       size, mimeType: expected.mime, title, type: fileType, bind: true, stageKey: fields.data.stageKey,
+      sha256: sourceHasher.digest("hex"),
     }));
 
 
@@ -505,6 +513,13 @@ async function uploadStreamedVideo(
     });
     return apiError(requestId, "UPLOAD_SERVICE_ERROR", "视频上传服务暂时不可用，请稍后重试。", 500);
   }
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  const stream = createReadStream(/* turbopackIgnore: true */ filePath);
+  for await (const chunk of stream) hash.update(chunk as Buffer);
+  return hash.digest("hex");
 }
 
 function decodeUploadHeader(value: string | null): string | undefined {

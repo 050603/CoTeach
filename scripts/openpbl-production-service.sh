@@ -134,6 +134,24 @@ run_code_runner() {
   exec /usr/bin/node scripts/code-runner-server.mjs
 }
 
+cleanup_data() {
+  load_shared_environment
+  wait_for_tcp "PostgreSQL" "127.0.0.1" "15432"
+  export UPLOAD_DIR="$PROJECT_ROOT/.openpbl-data/uploads"
+  export CLASSROOM_DATA_DIR="$PROJECT_ROOT/.openpbl-data/classrooms"
+  cd "$PROJECT_ROOT"
+  exec /usr/local/bin/pnpm exec tsx scripts/cleanup-storage.ts
+}
+
+rehydrate_data() {
+  load_shared_environment
+  wait_for_tcp "PostgreSQL" "127.0.0.1" "15432"
+  export UPLOAD_DIR="$PROJECT_ROOT/.openpbl-data/uploads"
+  export CLASSROOM_DATA_DIR="$PROJECT_ROOT/.openpbl-data/classrooms"
+  cd "$PROJECT_ROOT"
+  exec /usr/local/bin/pnpm exec tsx scripts/rehydrate-storage.ts "$@"
+}
+
 case "${1:-}" in
   run-app)
     run_app
@@ -141,8 +159,15 @@ case "${1:-}" in
   run-code-runner)
     run_code_runner
     ;;
+  cleanup-data)
+    cleanup_data
+    ;;
+  rehydrate-data)
+    shift
+    rehydrate_data "$@"
+    ;;
   *)
-    echo "用法：$0 {run-app|run-code-runner}" >&2
+    echo "用法：$0 {run-app|run-code-runner|cleanup-data|rehydrate-data [参数]}" >&2
     exit 2
     ;;
 esac

@@ -73,7 +73,7 @@ export function AuthShell({
           <AuthBrandOrigin explanation={content.explanation} role={role} />
         </section>
 
-        <section className="pbl-auth-content">
+        <section className={`pbl-auth-content${mode ? ` pbl-auth-content-${mode}` : ""}`}>
           {mode ? (
             <nav aria-label={`${content.portal}账号`} className="pbl-auth-mode-switch">
               {(["login", "register"] as const).map((value) => (

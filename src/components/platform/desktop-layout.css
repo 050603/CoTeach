@@ -1,0 +1,166 @@
+/* Desktop windows, including laptop-height viewports and browser zoom.
+   Reading pages grow moderately; projection screens have their own typography. */
+.pbl-platform-theme {
+  --pbl-desktop-width: clamp(1024px, 92vw, 1840px);
+  --pbl-desktop-gutter: clamp(24px, 2.2vw, 48px);
+  --pbl-desktop-body: clamp(14px, .9vw, 17px);
+  --pbl-desktop-caption: clamp(13px, .8vw, 15px);
+}
+.pbl-platform-theme :is(.pbl-workspace-content, .pbl-platform-topbar-inner, .pbl-student-course-layout) {
+  max-width: var(--pbl-desktop-width);
+  padding-inline: var(--pbl-desktop-gutter);
+}
+.pbl-platform-theme .pbl-platform-topbar-context { flex: 1; }
+.pbl-platform-theme .pbl-workspace-back { min-width: 0; }
+.pbl-platform-theme .pbl-workspace-back span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pbl-platform-theme .pbl-platform-topbar-actions { flex-shrink: 0; }
+.pbl-platform-theme :is(.pbl-workspace-back, .pbl-workspace-nav-link) { font-size: var(--pbl-desktop-body); }
+
+/* Keep meaningful text legible without enlarging every decoration or diagram. */
+.pbl-platform-theme :is(.pbl-teacher-card-description, .pbl-template-card-description, .pbl-student-course-description,
+  .pbl-teacher-card-date, .pbl-teacher-card-footer, .pbl-student-course-date, .pbl-student-course-footer,
+  .pbl-template-card-meta, .pbl-teacher-card-eyebrow, .pbl-teacher-course-description,
+  .pbl-student-task-state, .pbl-student-task-copy > span, .pbl-student-chapter-copy > small,
+  .pbl-course-quick-action small) { font-size: var(--pbl-desktop-caption); line-height: 1.65; }
+.pbl-platform-theme :is(.pbl-teacher-search input, .pbl-student-search input,
+  .pbl-student-task-copy > strong, .pbl-course-quick-action strong,
+  .pbl-student-course-summary-description) { font-size: var(--pbl-desktop-body); }
+.pbl-platform-theme :is(.pbl-teacher-class-body h2, .pbl-template-card-title, .pbl-student-course-copy h2) {
+  font-size: clamp(18px, 1.15vw, 23px);
+  line-height: 1.5;
+}
+.pbl-platform-theme :is(.pbl-teacher-card-grid, .pbl-student-course-grid) {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: clamp(20px, 1.5vw, 30px);
+}
+.pbl-platform-theme .pbl-student-dashboard { max-width: none; }
+.pbl-platform-theme :is(.pbl-teacher-class-cover, .pbl-template-card .pbl-library-art) { height: auto; aspect-ratio: 16 / 8; }
+.pbl-platform-theme :is(.pbl-student-toolbar, .pbl-classes-heading-actions, .pbl-teacher-toolbar-actions) { flex-wrap: wrap; }
+.pbl-platform-theme :is(.pbl-teacher-card-footer, .pbl-student-course-footer) { flex-wrap: wrap; padding-block: 10px; }
+.pbl-platform-theme .pbl-student-course-workspace { min-width: 0; }
+.pbl-platform-theme .pbl-student-course-layout { grid-template-columns: minmax(240px, .3fr) minmax(0, .7fr); }
+.pbl-platform-theme .pbl-student-course-summary-wrap { min-width: 0; padding-right: clamp(20px, 2.2vw, 38px); }
+.pbl-platform-theme .pbl-student-course-main { padding-left: clamp(20px, 2.2vw, 42px); }
+.pbl-platform-theme .pbl-student-chapter-copy > strong { white-space: normal; }
+.pbl-platform-theme .pbl-student-task-copy > strong { white-space: normal; }
+.pbl-platform-theme .pbl-student-course-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 0; }
+.pbl-platform-theme .pbl-student-course-meta > div:nth-child(odd) { border-left: 0; }
+.pbl-platform-theme .pbl-teacher-course-heading { grid-template-columns: minmax(0,1fr) minmax(470px,.8fr); }
+.pbl-platform-theme .pbl-teacher-course-tools { max-width: 540px; }
+.pbl-platform-theme .pbl-teacher-course-heading h1 { white-space: normal; }
+
+/* Allocate enough space to the form at all desktop widths. */
+.pbl-platform-theme .pbl-auth-header { width: min(100%, 1760px); }
+.pbl-platform-theme .pbl-auth-stage {
+  width: min(100%, 1720px);
+  grid-template-columns: minmax(0, 1fr) minmax(430px, .95fr);
+  gap: clamp(24px, 3vw, 64px);
+  padding-inline: clamp(28px, 3vw, 64px);
+}
+.pbl-platform-theme .pbl-auth-content {
+  min-width: 0;
+  width: min(100%, 620px);
+  padding-left: clamp(24px, 2.8vw, 56px);
+}
+.pbl-platform-theme .pbl-auth-scene-student .pbl-auth-content-register { width: min(100%, 680px); }
+.pbl-platform-theme :is(.pbl-auth-field, .pbl-auth-input, .pbl-auth-primary,
+  .pbl-auth-title > div, .pbl-auth-mode-switch a, .pbl-auth-form-footer,
+  .pbl-auth-scene-student .pbl-auth-field, .pbl-auth-scene-student .pbl-auth-input,
+  .pbl-auth-scene-student .pbl-auth-primary) { font-size: var(--pbl-desktop-body); }
+.pbl-platform-theme .pbl-auth-input { min-width: 0; height: clamp(48px, 3.4vw, 60px); }
+.pbl-platform-theme .pbl-auth-primary { min-height: 48px; height: clamp(48px, 3.4vw, 60px); }
+.pbl-platform-theme .pbl-auth-content-register :is(.pbl-auth-register-fields, .pbl-auth-fields) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.pbl-platform-theme .pbl-auth-content-register .pbl-auth-fields > :not(label) { grid-column: 1 / -1; }
+.pbl-platform-theme .pbl-auth-content-register .pbl-auth-field { min-width: 0; }
+.pbl-platform-theme .pbl-auth-visual { min-height: 0; }
+
+/* Dialog bodies scroll, while titles and actions remain reachable on short laptops. */
+.pbl-platform-theme:is(.pbl-platform-form-dialog, .pbl-course-editor-dialog) { max-height: min(960px, calc(100dvh - 32px)); }
+.pbl-platform-theme :is(.pbl-dialog-field, .pbl-dialog-section-heading p,
+  .pbl-platform-dialog-footer > p, .pbl-course-dialog-footer > p, .pbl-dialog-secondary, .pbl-dialog-primary) { font-size: var(--pbl-desktop-caption); }
+.pbl-platform-theme :is(.pbl-dialog-field > small, .pbl-dialog-field > span small) { font-size: 12px; }
+.pbl-platform-theme :is(.pbl-platform-dialog-footer, .pbl-course-dialog-footer) { flex-wrap: wrap; gap: 12px !important; }
+.pbl-platform-theme :is(.pbl-platform-dialog-footer > p, .pbl-course-dialog-footer > p) { flex: 1 1 220px; }
+.pbl-platform-theme :is(.pbl-platform-dialog-footer > div, .pbl-course-dialog-footer > div) { margin-left: auto; }
+
+/* A chart responds to its own available width, not the whole monitor width. */
+.pbl-platform-theme .survey-dashboard--workspace { min-height: 0; }
+.pbl-platform-theme .survey-dashboard--workspace .survey-dashboard-frame { min-height: 0; padding: 0; }
+.pbl-platform-theme .survey-insight-canvas { container: survey-content / inline-size; }
+.pbl-platform-theme .survey-choice-layout { grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: clamp(20px, 2.5vw, 48px); align-items: start; }
+.pbl-platform-theme .survey-choice-layout > * { min-width: 0; }
+.pbl-platform-theme .survey-text-layout { grid-template-columns: minmax(0,1.3fr) minmax(240px,.8fr); }
+.pbl-platform-theme .survey-donut { width: min(100%, 340px); height: auto; aspect-ratio: 1; }
+.pbl-platform-theme .survey-column-chart { justify-content: flex-start; overflow-x: auto; overscroll-behavior-x: contain; min-height: 0; max-height: 100%; }
+.pbl-platform-theme .survey-column-chart button { flex: 1 0 64px; min-width: 64px; }
+.pbl-platform-theme :is(.survey-choice-label, .survey-bar-chart strong, .survey-response-list p) { overflow-wrap: anywhere; }
+.pbl-platform-theme :is(.survey-choice-label, .survey-bar-chart strong, .survey-response-list p,
+  .survey-question-copy strong, .survey-screen-button) { font-size: var(--pbl-desktop-body); }
+.pbl-platform-theme :is(.survey-chart-hint, .survey-column-chart button small,
+  .survey-question-copy small, .survey-board-heading > div > p) { font-size: var(--pbl-desktop-caption); }
+.pbl-platform-theme .survey-column-chart button strong { font-size: var(--pbl-desktop-caption); }
+.pbl-platform-theme .survey-overview-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.pbl-platform-theme .survey-overview-strip > * { border-bottom: 0; }
+.pbl-platform-theme .survey-overview-item:nth-child(3) { border-left: 1px solid #e1e6ee; }
+.pbl-platform-theme .survey-dashboard--presentation { height: 100dvh; }
+.pbl-platform-theme .survey-dashboard--presentation .survey-dashboard-frame {
+  overflow-y: auto;
+  grid-template-rows: auto auto minmax(340px, 1fr);
+  padding: clamp(18px, 2vw, 44px);
+}
+.pbl-platform-theme .survey-dashboard--presentation .survey-insight-canvas {
+  overflow: auto;
+  grid-template-rows: auto minmax(220px, 1fr);
+}
+.pbl-platform-theme .survey-dashboard--presentation .survey-choice-layout { align-items: center; }
+.pbl-platform-theme .survey-dashboard--presentation .survey-donut {
+  width: min(100%, clamp(180px, 28vh, 460px));
+  height: auto;
+}
+.pbl-platform-theme .survey-dashboard--presentation .survey-text-layout { grid-template-columns: minmax(0,1.3fr) minmax(240px,.8fr); }
+.pbl-platform-theme .survey-dashboard--presentation .survey-response-echo {
+  margin: 0 0 0 24px; padding: 0 0 0 24px; border-top: 0; border-left: 1px solid #dce3ec;
+}
+.pbl-platform-theme .survey-dashboard--presentation :is(.survey-column-chart, .survey-bar-chart) { max-height: 100%; overflow-y: auto; }
+.pbl-platform-theme .survey-dashboard--presentation .survey-bar-chart { min-height: 0; align-content: start; padding: 4px; }
+.pbl-platform-theme .survey-dashboard--presentation .survey-column-chart { height: clamp(220px, 38vh, 560px); }
+.pbl-platform-theme .survey-board-heading { flex-wrap: wrap; }
+.pbl-platform-theme .survey-board-actions { flex-wrap: wrap; }
+.pbl-platform-theme .survey-sheet-course { flex-wrap: wrap; overflow-wrap: anywhere; }
+.pbl-platform-theme .survey-sheet-footer { flex-wrap: wrap; }
+.pbl-platform-theme .survey-student-layout { width: min(100%, 1540px); grid-template-columns: clamp(180px,18vw,260px) minmax(0,1fr); gap: clamp(24px,3vw,48px); padding: clamp(24px,3vw,48px); }
+.pbl-platform-theme .survey-answer-sheet { min-width: 0; padding-inline: clamp(32px,4vw,64px); }
+.pbl-platform-theme :is(.survey-paper-option, .survey-paper-option-detail, .survey-paper-answer,
+  .survey-sheet-note, .survey-sheet-course, .survey-student-rail-copy > p) { font-size: var(--pbl-desktop-body); }
+.pbl-platform-theme .survey-sheet-question-heading { grid-template-columns: 32px minmax(0,1fr); gap: 12px; }
+.pbl-platform-theme .survey-paper-options { margin-left: 44px; }
+@container survey-content (max-width: 720px) {
+  .pbl-platform-theme .survey-choice-layout, .pbl-platform-theme .survey-text-layout { grid-template-columns: minmax(0,1fr); }
+  .pbl-platform-theme .survey-response-echo { margin: 24px 0 0; padding: 22px 0 0; border-left: 0; border-top: 1px solid #dce3ec; }
+}
+
+@media (max-width: 1180px) {
+  .pbl-platform-theme .pbl-teacher-course-heading { grid-template-columns: minmax(0,1fr); gap: 20px; }
+  .pbl-platform-theme .pbl-teacher-course-tools { max-width: none; }
+  .pbl-platform-theme .pbl-student-chapter-heading { gap: 12px; }
+  .pbl-platform-theme .pbl-student-chapter-index { width: 42px; }
+  .pbl-platform-theme .pbl-student-chapter-overview { width: 112px; }
+  .pbl-platform-theme .pbl-student-mini-progress { width: 54px; }
+  .pbl-platform-theme .pbl-student-chapter-content { padding-left: 46px; }
+  .pbl-platform-theme .pbl-student-chapter-content::before { left: 18px; }
+  .pbl-platform-theme .pbl-student-task-row::before { left: -27px; width: 20px; }
+  .pbl-platform-theme .pbl-student-task-row { grid-template-columns: 32px minmax(0,1fr) 82px 16px; gap: 8px; }
+  .pbl-platform-theme .pbl-student-task-icon { width: 32px; height: 32px; }
+}
+@media (max-height: 820px) {
+  .pbl-platform-theme .pbl-workspace-content { padding-top: 24px; }
+  .pbl-platform-theme .pbl-page-heading { min-height: 104px; margin-bottom: 18px; padding-bottom: 18px; }
+  .pbl-platform-theme .pbl-auth-content-register { justify-content: flex-start; padding-top: 22px; padding-bottom: 24px; }
+  .pbl-platform-theme .pbl-auth-content-register .pbl-auth-title { margin-top: 20px; }
+  .pbl-platform-theme .pbl-auth-content-register .pbl-auth-body { margin-top: 20px; }
+  .pbl-platform-theme .pbl-auth-content-register .pbl-auth-form-footer { margin-top: 18px; padding-top: 14px; }
+  .pbl-platform-theme:is(.pbl-platform-form-dialog, .pbl-course-editor-dialog) > [data-slot=dialog-header] { padding-block: 18px; }
+  .pbl-platform-theme :is(.pbl-platform-dialog-body, .pbl-course-dialog-body) { padding-block: 18px; }
+}

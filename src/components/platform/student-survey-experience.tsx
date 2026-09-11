@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { ArrowLeft, Check, CheckCircle2, Clock3, FileText, Send, Sparkles, UserRoundCheck } from "lucide-react";
 import type { FormEvent } from "react";
-import { surveyAnswerHasValue, type SurveyAnswer, type SurveyQuestion } from "@/lib/platform/survey";
+import { estimateSurveyMinutes, surveyAnswerHasValue, type SurveyAnswer, type SurveyQuestion } from "@/lib/platform/survey";
 import { SurveyQuestionFields } from "./survey-question-fields";
 
 type SurveyActivity = {
@@ -30,6 +30,7 @@ export function StudentSurveyExperience({ activity, answers, busy, error, saved,
   const answeredCount = questions.filter((question) => surveyAnswerHasValue(answers[question.id])).length;
   const percentage = questions.length ? Math.round((answeredCount / questions.length) * 100) : 0;
   const locked = !activity.isOpen || activity.offering.status !== "open";
+  const estimatedMinutes = estimateSurveyMinutes(questions, activity.config?.content);
 
   return <main className="survey-student-page min-h-screen">
     <div aria-hidden="true" className="survey-student-ambient survey-student-ambient-one" />
@@ -53,7 +54,7 @@ export function StudentSurveyExperience({ activity, answers, busy, error, saved,
         <header className="survey-sheet-header">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span className="inline-flex items-center gap-2 text-xs font-bold tracking-[0.16em] text-emerald-800"><FileText size={15} />课堂小问卷</span>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-stone-500"><span className="inline-flex items-center gap-1.5 text-emerald-800"><UserRoundCheck size={14} />实名提交</span><span className="inline-flex items-center gap-2"><Clock3 size={14} />约 {Math.max(2, questions.length * 2)} 分钟</span></div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-stone-500"><span className="inline-flex items-center gap-1.5 text-emerald-800"><UserRoundCheck size={14} />实名提交</span><span className="inline-flex items-center gap-2"><Clock3 size={14} />约 {estimatedMinutes} 分钟</span></div>
           </div>
           <h1>{activity.title}</h1>
           <p className="survey-sheet-course">{activity.offering.name}<span>·</span>{activity.chapter.title}</p>

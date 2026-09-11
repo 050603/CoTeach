@@ -106,4 +106,19 @@ describe("platform workspace shells", () => {
 
     expect(screen.getByRole("link", { name: "返回课程" })).toHaveAttribute("href", "/student/courses/course-1");
   });
+  it("opens student personal center and uses student-scoped logout", async () => {
+    route.pathname = "/student";
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ user: { role: "student", displayName: "小林", username: "lin" } })))
+      .mockResolvedValueOnce(new Response("{}", { status: 500 }));
+    vi.stubGlobal("fetch", fetcher);
+    render(<StudentShell>课程内容</StudentShell>);
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "学生个人中心：小林" }), { button: 0, ctrlKey: false });
+    expect(await screen.findByRole("menuitem", { name: "个人中心" })).toHaveAttribute("href", "/student/profile");
+    expect(screen.queryByRole("menuitem", { name: "创建教师账号" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "退出登录" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/auth/logout", expect.objectContaining({ headers: { "X-OpenPBL-Role": "student" } })));
+    expect(await screen.findByRole("alert")).toHaveTextContent("退出失败，请重试");
+  });
+
 });

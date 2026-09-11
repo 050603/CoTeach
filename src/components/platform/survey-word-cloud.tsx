@@ -39,8 +39,8 @@ export function SurveyWordCloud({ terms, selected, onSelect, large = false }: { 
     if (!element) return;
     const update = () => {
       const rect = element.getBoundingClientRect();
-      const width = Math.max(280, Math.floor(rect.width));
-      const height = Math.max(large ? 220 : 260, Math.floor(rect.height));
+      const width = Math.max(1, Math.floor(rect.width));
+      const height = Math.max(1, Math.floor(rect.height));
       setSize((current) => current.width === width && current.height === height ? current : { width, height });
     };
     update();

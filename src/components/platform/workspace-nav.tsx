@@ -27,6 +27,84 @@ type TeacherIdentity = {
   username: string;
 };
 
+export function WorkspaceAccountMenu({
+  role,
+  fallbackDisplayName,
+}: {
+  role: "teacher" | "student";
+  fallbackDisplayName?: string;
+}) {
+  const teacher = role === "teacher";
+  const [identity, setIdentity] = useState<TeacherIdentity | null>(null);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [accountError, setAccountError] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(teacher ? "/api/auth/me" : "/api/platform/auth/student-profile", {
+      cache: "no-store",
+      headers: { "X-OpenPBL-Role": role },
+      signal: controller.signal,
+    }).then(async (response) => {
+      if (!response.ok) return;
+      const data = await response.json() as { user?: { role?: string; displayName?: string; username?: string } | null };
+      if (data.user?.role === role) {
+        setIdentity({ displayName: data.user.displayName || (teacher ? "教师" : "学生"), username: data.user.username || "" });
+      }
+    }).catch(() => undefined);
+    const updateIdentity = (event: Event) => {
+      const detail = (event as CustomEvent<TeacherIdentity>).detail;
+      if (detail?.displayName) setIdentity(detail);
+    };
+    if (teacher) window.addEventListener("teacher-profile-updated", updateIdentity);
+    return () => {
+      controller.abort();
+      window.removeEventListener("teacher-profile-updated", updateIdentity);
+    };
+  }, [teacher, role]);
+
+  async function logout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    setAccountError("");
+    try {
+      const response = await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { "X-OpenPBL-Role": role },
+      });
+      if (!response.ok) throw new Error("退出失败");
+      window.location.assign(teacher ? "/teacher/login" : "/student/login");
+    } catch {
+      setAccountError("退出失败，请重试");
+      setLoggingOut(false);
+    }
+  }
+
+  const displayName = identity?.displayName || fallbackDisplayName || (teacher ? "教师" : "学生");
+
+  return <DropdownMenu>
+    <DropdownMenuTrigger asChild>
+      <button type="button" className="pbl-teacher-account-trigger" aria-label={`${teacher ? "教师账号" : "学生个人中心"}：${displayName}`}>
+        <span className="pbl-teacher-account-avatar" aria-hidden="true">{displayName.trim().charAt(0)}</span>
+        <span className="pbl-teacher-account-copy"><strong>{displayName}</strong><small>{identity?.username ? `@${identity.username}` : (teacher ? "教师账号" : "个人中心")}</small></span>
+        <ChevronDown size={15}/>
+      </button>
+    </DropdownMenuTrigger>
+    <DropdownMenuContent align="end" sideOffset={8} className="pbl-platform-theme pbl-teacher-account-menu w-64">
+      <DropdownMenuLabel className="pbl-teacher-account-label">
+        <span className="pbl-teacher-account-avatar" aria-hidden="true">{displayName.trim().charAt(0)}</span>
+        <span><strong>{displayName}</strong><small>{identity?.username ? `账号：${identity.username}` : (teacher ? "当前登录的教师账号" : "当前登录的学生账号")}</small></span>
+      </DropdownMenuLabel>
+      <DropdownMenuSeparator/>
+      <DropdownMenuItem asChild><Link href={teacher ? "/teacher/settings" : "/student/profile"}><Settings2/>个人中心</Link></DropdownMenuItem>
+      {teacher && <DropdownMenuItem asChild><Link href="/teacher/register"><UserPlus/>创建教师账号</Link></DropdownMenuItem>}
+      <DropdownMenuSeparator/>
+      {accountError ? <p role="alert" className="px-2 py-1.5 text-xs text-[var(--pbl-danger)]">{accountError}</p> : null}
+      <DropdownMenuItem variant="destructive" disabled={loggingOut} onSelect={(event) => { event.preventDefault(); void logout(); }}><LogOut/>{loggingOut ? "正在退出…" : "退出登录"}</DropdownMenuItem>
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
 function defaultBackTarget(pathname: string, role: WorkspaceNavProps["role"]) {
   if (role === "student") {
     if (pathname === "/student") return { href: "/", label: "返回平台首页" };
@@ -52,51 +130,6 @@ function defaultBackTarget(pathname: string, role: WorkspaceNavProps["role"]) {
 export function WorkspaceNav({ role, active = "classes", backHref, backLabel, compact = false }: WorkspaceNavProps) {
   const pathname = usePathname();
   const teacher = role === "teacher";
-  const [identity, setIdentity] = useState<TeacherIdentity | null>(null);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const [accountError, setAccountError] = useState("");
-
-  useEffect(() => {
-    if (!teacher) return;
-    const controller = new AbortController();
-    void fetch("/api/auth/me", {
-      cache: "no-store",
-      headers: { "X-OpenPBL-Role": "teacher" },
-      signal: controller.signal,
-    }).then(async (response) => {
-      if (!response.ok) return;
-      const data = await response.json() as { user?: { role?: string; displayName?: string; username?: string } | null };
-      if (data.user?.role === "teacher") {
-        setIdentity({ displayName: data.user.displayName || "教师", username: data.user.username || "" });
-      }
-    }).catch(() => undefined);
-    const updateIdentity = (event: Event) => {
-      const detail = (event as CustomEvent<TeacherIdentity>).detail;
-      if (detail?.displayName) setIdentity(detail);
-    };
-    window.addEventListener("teacher-profile-updated", updateIdentity);
-    return () => {
-      controller.abort();
-      window.removeEventListener("teacher-profile-updated", updateIdentity);
-    };
-  }, [teacher]);
-
-  async function logout() {
-    if (loggingOut) return;
-    setLoggingOut(true);
-    setAccountError("");
-    try {
-      const response = await fetch("/api/auth/logout", {
-        method: "POST",
-        headers: { "X-OpenPBL-Role": "teacher" },
-      });
-      if (!response.ok) throw new Error("退出失败");
-      window.location.assign("/teacher/login");
-    } catch {
-      setAccountError("退出失败，请重试");
-      setLoggingOut(false);
-    }
-  }
   const defaultBack = defaultBackTarget(pathname, role);
   const back = { href: backHref ?? defaultBack.href, label: backLabel ?? defaultBack.label };
   const items = teacher ? [
@@ -112,29 +145,9 @@ export function WorkspaceNav({ role, active = "classes", backHref, backLabel, co
       </div>
       <div className="pbl-platform-topbar-actions">
         <nav aria-label={teacher ? "教师导航" : "学生导航"}>
-          {items.map(({ href, label, icon: Icon, id }) => <Link key={href} href={href} aria-current={(!teacher || id === active) ? "page" : undefined} className="pbl-workspace-nav-link"><Icon size={16}/><span>{label}</span></Link>)}
+          {items.map(({ href, label, icon: Icon, id }) => <Link key={href} href={href} aria-current={(teacher ? id === active : pathname !== "/student/profile") ? "page" : undefined} className="pbl-workspace-nav-link"><Icon size={16}/><span>{label}</span></Link>)}
         </nav>
-        {teacher ? <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button type="button" className="pbl-teacher-account-trigger" aria-label={`教师账号：${identity?.displayName || "教师"}`}>
-              <span className="pbl-teacher-account-avatar" aria-hidden="true">{(identity?.displayName || "教").trim().charAt(0)}</span>
-              <span className="pbl-teacher-account-copy"><strong>{identity?.displayName || "教师"}</strong><small>{identity?.username ? `@${identity.username}` : "教师账号"}</small></span>
-              <ChevronDown size={15}/>
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" sideOffset={8} className="pbl-platform-theme pbl-teacher-account-menu w-64">
-            <DropdownMenuLabel className="pbl-teacher-account-label">
-              <span className="pbl-teacher-account-avatar" aria-hidden="true">{(identity?.displayName || "教").trim().charAt(0)}</span>
-              <span><strong>{identity?.displayName || "教师"}</strong><small>{identity?.username ? `账号：${identity.username}` : "当前登录的教师账号"}</small></span>
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator/>
-            <DropdownMenuItem asChild><Link href="/teacher/settings"><Settings2/>个人中心</Link></DropdownMenuItem>
-            <DropdownMenuItem asChild><Link href="/teacher/register"><UserPlus/>创建教师账号</Link></DropdownMenuItem>
-            <DropdownMenuSeparator/>
-            {accountError ? <p role="alert" className="px-2 py-1.5 text-xs text-[var(--pbl-danger)]">{accountError}</p> : null}
-            <DropdownMenuItem variant="destructive" disabled={loggingOut} onSelect={(event) => { event.preventDefault(); void logout(); }}><LogOut/>{loggingOut ? "正在退出…" : "退出登录"}</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu> : null}
+        <WorkspaceAccountMenu role={role} />
       </div>
     </div>
   </header>;

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run OpenPBL orphaned data cleanup daily
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=openpbl-data-cleanup.service
+
+[Install]
+WantedBy=timers.target

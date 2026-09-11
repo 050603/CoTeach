@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   if (csrf) return csrf;
   if (!isAuthConfigured() || !isDatabaseConfigured()) return jsonError(request, "AUTH_UNAVAILABLE", "账号服务尚未配置", 503);
   const parsed = schema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return jsonError(request, "INVALID_INPUT", "请输入用户名和密码", 400);
+  if (!parsed.success) return jsonError(request, "INVALID_INPUT", "请输入学号和密码", 400);
   const limitKey = `${getClientIp(request)}:${parsed.data.username.normalize("NFKC").trim().toLocaleLowerCase("en-US")}`;
   const limit = await checkDistributedRateLimit({ namespace: "platform-login", key: limitKey, limit: 10, windowSeconds: 60 });
   if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);

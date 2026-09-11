@@ -16,7 +16,6 @@ import { TeacherPlatformHeader, TeacherPlatformPage } from "@/components/platfor
 
 type Template = { id: string; title: string; description: string | null; status: string; versions: Array<{ id: string; version: number; status: string; createdAt: string; snapshot: unknown }> };
 const field = "min-h-11 w-full rounded-[6px] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pbl-teacher)]";
-const secondary = "inline-flex min-h-11 items-center justify-center gap-2 rounded-[6px] border border-[var(--pbl-border)] px-4 text-sm font-medium hover:bg-black/5 disabled:opacity-50";
 const primary = "inline-flex min-h-11 items-center justify-center gap-2 rounded-[6px] bg-[var(--pbl-teacher)] px-5 text-sm font-medium text-white disabled:opacity-50";
 const emptyContent = (): TemplateContent => ({ schemaVersion: 1, title: "", subject: "", grade: "", durationMinutes: 45, summary: "", learningObjectives: [""], outline: [{ title: "", durationMinutes: 45, description: "" }], resources: [] });
 
@@ -140,17 +139,19 @@ export default function TeacherTemplatesPage() {
   }
 
   const active = templates.filter((item) => item.status.toLowerCase() === "active");
+  const archivedCount = templates.filter((item) => item.status.toLowerCase() === "archived").length;
+  const versionCount = templates.reduce((sum, item) => sum + item.versions.length, 0);
   const visible = templates.filter((item) => (item.status.toLowerCase() === "archived") === (filter === "archived") && `${item.title} ${item.description ?? ""}`.toLowerCase().includes(query.toLowerCase()));
   const previewContent = preview ? readTemplateContent(preview.versions[0]?.snapshot) : null;
 
   return <TeacherPlatformPage>
     <TeacherPlatformHeader active="templates" />
-    <div className="pbl-workspace-content">
-      <div className="pbl-page-heading pbl-library-heading"><LearningArt /><div><p className="text-xs font-semibold tracking-[0.18em] text-[var(--pbl-teacher)]">教学内容 / LIBRARY</p><h1 className="mt-3 font-serif text-4xl font-semibold">课程库</h1></div><button className={primary} disabled={creating} onClick={() => void createCourse()} type="button">{creating ? <LoaderCircle className="animate-spin" size={17} /> : <Plus size={17} />}{creating ? "正在新建…" : "新建课程"}</button></div>
-      <div className="pbl-list-toolbar"><div className="flex gap-1" role="group" aria-label="课程状态"><button className={secondary + (filter === "active" ? " bg-[var(--pbl-surface)]" : " border-transparent text-[var(--pbl-text-muted)]")} aria-pressed={filter === "active"} onClick={() => setFilter("active")}>可用课程 <span className="text-xs">{active.length}</span></button><button className={secondary + (filter === "archived" ? " bg-[var(--pbl-surface)]" : " border-transparent text-[var(--pbl-text-muted)]")} aria-pressed={filter === "archived"} onClick={() => setFilter("archived")}>已归档</button></div><label className="relative w-full sm:w-72"><Search size={17} className="absolute left-3 top-3.5 text-[var(--pbl-text-muted)]"/><input aria-label="搜索课程" className={field + " pl-10"} placeholder="搜索课程名称或内容" value={query} onChange={(event) => setQuery(event.target.value)}/></label></div>
+    <div className="pbl-workspace-content pbl-teacher-dashboard pbl-teacher-library-page">
+      <div className="pbl-page-heading pbl-library-heading pbl-teacher-dashboard-heading"><LearningArt /><div><p className="text-xs font-semibold tracking-[0.18em] text-[var(--pbl-teacher)]">备课资源</p><h1 className="mt-3 text-4xl font-semibold">课程库</h1></div><div className="pbl-classes-heading-actions"><dl className="pbl-heading-metrics" aria-label="课程库概况"><div><dt>可用课程</dt><dd>{loading ? "—" : active.length}</dd></div><div><dt>已归档</dt><dd>{loading ? "—" : archivedCount}</dd></div><div><dt>累计版本</dt><dd>{loading ? "—" : versionCount}</dd></div></dl><button className="pbl-teacher-create-button" disabled={creating} onClick={() => void createCourse()} type="button">{creating ? <LoaderCircle className="animate-spin" size={17} /> : <Plus size={17} />}{creating ? "正在新建…" : "新建课程"}</button></div></div>
+      <div className="pbl-list-toolbar pbl-teacher-list-toolbar"><div className="pbl-teacher-segmented" role="group" aria-label="课程状态"><button aria-label="可用课程" aria-pressed={filter === "active"} onClick={() => setFilter("active")}>可用课程 <span>{active.length}</span></button><button aria-label="已归档" aria-pressed={filter === "archived"} onClick={() => setFilter("archived")}>已归档 <span>{archivedCount}</span></button></div><label className="pbl-teacher-search"><Search size={17}/><input aria-label="搜索课程" placeholder="搜索课程名称或内容" value={query} onChange={(event) => setQuery(event.target.value)}/></label></div>
       {error && <div role="alert" className="mt-5 flex items-center justify-between gap-3 rounded-[6px] border border-[var(--pbl-danger)] p-4 text-sm text-[var(--pbl-danger)]">{error}<button className="min-h-11 rounded-[6px] border border-[var(--pbl-border)] px-4 text-sm" onClick={() => void load()}>重试</button></div>}
       {notice && <p role="status" className="mt-5 flex items-center justify-between gap-3 rounded-[6px] border border-[var(--pbl-border)] p-4 text-sm">{notice}<button className="grid min-h-11 min-w-11 place-items-center" aria-label="关闭提示" onClick={() => setNotice("")}><X size={16}/></button></p>}
-      {loading ? <PlatformLoading label="正在加载课程库…" /> : visible.length === 0 ? <div className="pbl-empty"><BookOpen size={36} strokeWidth={1.3} className="mx-auto text-[var(--pbl-teacher)]"/><h2 className="mt-5 font-serif text-2xl">{query ? "没有找到匹配课程" : filter === "archived" ? "暂无归档课程" : "从一堂课开始"}</h2><p className="mx-auto mt-3 max-w-md text-sm leading-7 text-[var(--pbl-text-muted)]">{query ? "尝试其他关键词，或清空搜索查看全部课程。" : filter === "archived" ? "归档课程可以恢复；确认不再需要后也可以删除。" : "填写课程主题与教学要求，生成教学方案并审阅保存；也可以直接编写课程内容。"}</p></div> : <div className="mt-7 grid gap-5 md:grid-cols-2 xl:grid-cols-3">{visible.map((template) => {
+      {loading ? <PlatformLoading label="正在加载课程库…" /> : visible.length === 0 ? <div className="pbl-empty"><BookOpen size={36} strokeWidth={1.3} className="mx-auto text-[var(--pbl-teacher)]"/><h2 className="mt-5 font-serif text-2xl">{query ? "没有找到匹配课程" : filter === "archived" ? "暂无归档课程" : "课程库为空"}</h2><p className="mx-auto mt-3 max-w-md text-sm leading-7 text-[var(--pbl-text-muted)]">{query ? "尝试其他关键词，或清空搜索查看全部课程。" : filter === "archived" ? "归档课程可以恢复；确认不再需要后也可以删除。" : "填写课程主题与教学要求，生成教学方案并审阅保存；也可以直接编写课程内容。"}</p></div> : <div className="pbl-teacher-card-grid pbl-template-grid">{visible.map((template) => {
         const detail = readTemplateContent(template.versions[0]?.snapshot);
         const pbl = decodePblTemplate(template.versions[0]?.snapshot);
         const archived = template.status.toLowerCase() === "archived";
@@ -163,19 +164,19 @@ export default function TeacherTemplatesPage() {
             <span>{pbl ? "项目式学习" : "课程设计"}</span>
           </div>
           <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-xs font-medium text-[var(--pbl-teacher)]"><BookOpen size={16}/>{detail?.subject || "课堂教学"}</span><span className="text-xs text-[var(--pbl-text-muted)]">第 {template.versions[0]?.version ?? 1} 版</span></div>
-          <h2 className="mt-6 font-serif text-xl leading-8 font-semibold">{template.title}</h2>
-          <p className="mt-3 line-clamp-3 text-sm leading-7 text-[var(--pbl-text-muted)]">{detail?.summary || template.description || "打开课程查看内容与版本信息。"}</p>
-          <div className="mt-5 flex flex-wrap gap-4 text-xs text-[var(--pbl-text-muted)]">{detail && <><span className="flex items-center gap-1.5"><Clock3 size={14}/>{detail.durationMinutes} 分钟</span><span>{detail.outline.length} 个教学环节</span>{detail.grade && <span>{detail.grade}</span>}</>}</div>
+          <h2 className="pbl-template-card-title" title={template.title}>{template.title}</h2>
+          <p className="pbl-template-card-description">{detail?.summary || template.description || "打开课程查看内容与版本信息。"}</p>
+          <div className="pbl-template-card-meta">{detail && <><span><Clock3 size={14}/>{detail.durationMinutes} 分钟</span><span>{detail.outline.length} 个教学环节</span>{detail.grade && <span>{detail.grade}</span>}</>}</div>
         </>;
-        return <article key={template.id} className="pbl-library-card flex flex-col p-6">
+        return <article key={template.id} className="pbl-library-card pbl-template-card">
           {!archived && pbl ? (
-            <Link aria-label={`打开课程 ${template.title}`} className="block flex-1" href={courseHref}>{cardBody}</Link>
+            <Link aria-label={`打开课程 ${template.title}`} className="pbl-template-card-main" href={courseHref}>{cardBody}</Link>
           ) : !pbl ? (
-            <button aria-label={`打开课程 ${template.title}`} className="block flex-1 text-left" onClick={() => setPreview(template)} type="button">{cardBody}</button>
+            <button aria-label={`打开课程 ${template.title}`} className="pbl-template-card-main text-left" onClick={() => setPreview(template)} type="button">{cardBody}</button>
           ) : (
-            <div className="flex-1">{cardBody}</div>
+            <div className="pbl-template-card-main">{cardBody}</div>
           )}
-          <div className="mt-6 flex items-center justify-between gap-3 border-t border-[var(--pbl-border)] pt-4">
+          <div className="pbl-template-card-footer">
             {!archived && pbl ? <Link className="flex min-h-11 items-center gap-2 text-sm font-medium text-[var(--pbl-teacher)]" href={courseHref}>继续备课<ArrowRight size={16}/></Link> : !pbl ? <button className="flex min-h-11 items-center gap-2 text-sm font-medium text-[var(--pbl-teacher)]" onClick={() => setPreview(template)}>查看课程<ArrowRight size={16}/></button> : <span className="text-xs text-[var(--pbl-text-muted)]">已归档，恢复后可继续备课</span>}
             {archived ? <span className="flex items-center gap-1">
               <button className="grid min-h-11 min-w-11 place-items-center text-[var(--pbl-teacher)]" aria-label={`恢复 ${template.title}`} disabled={Boolean(busy)} onClick={() => void restore(template)}><RotateCcw size={16}/></button>

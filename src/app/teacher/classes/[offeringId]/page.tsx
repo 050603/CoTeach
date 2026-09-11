@@ -4,7 +4,7 @@ import Link from "next/link";
 import { TeacherPlatformPage, TeacherPlatformHeader } from "@/components/platform/teacher-shell";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { BarChart3, BookOpen, Check, ChevronDown, ClipboardList, Copy, FileText, Link2, LockKeyhole, MoreHorizontal, ArrowUpRight, PencilLine, Play, Plus, Settings2, Sparkles, Trash2, UnlockKeyhole, Upload, Users, X } from "lucide-react";
+import { ArrowRight, BarChart3, BookOpen, Check, ChevronDown, ClipboardList, Copy, FileText, Link2, LockKeyhole, MoreHorizontal, ArrowUpRight, PencilLine, Play, Plus, Settings2, Sparkles, Trash2, UnlockKeyhole, Upload, Users, X } from "lucide-react";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { offeringStatusLabel, instanceStatusLabel } from "@/lib/platform/labels";
 import { teacherPlatformFetch } from "@/lib/platform/client";
@@ -16,7 +16,7 @@ import { LearningArt } from "@/components/platform/learning-art";
 import { PraixisLogo } from "@/components/brand/praixis-logo";
 import { clientUUID } from "@/lib/uuid";
 import { copyTextToClipboard } from "@/lib/browser/copy-text";
-const DEFAULT_STUDENT_ACCESS_ADDRESS = "172.16.185.157";
+const STUDENT_ACCESS_ADDRESS = "praixis.cn";
 type Instance = {
     id: string;
     status: string;
@@ -195,7 +195,6 @@ export default function TeacherClassEditorPage() {
     const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set());
     const [invitationOpen, setInvitationOpen] = useState(false);
     const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
-    const [studentAccessAddress, setStudentAccessAddress] = useState(DEFAULT_STUDENT_ACCESS_ADDRESS);
     const copyButtonRef = useRef<HTMLButtonElement>(null);
     const coverInputRef = useRef<HTMLInputElement>(null);
     const load = useCallback(async () => {
@@ -212,11 +211,6 @@ export default function TeacherClassEditorPage() {
             throw new Error(templateData.message ?? "课程库暂时无法加载");
         setTemplates(templateData.templates ?? []);
     }, [offeringId]);
-    useEffect(() => {
-        const hostname = window.location.hostname;
-        if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostname) && hostname !== "127.0.0.1")
-            setStudentAccessAddress(hostname);
-    }, []);
     useEffect(() => { void load().catch((reason) => setError(reason instanceof Error ? reason.message : "加载失败")); }, [load]);
     async function mutate(url: string, body?: unknown, method = "PATCH") {
         const response = await teacherPlatformFetch(url, { method, headers: { "Content-Type": "application/json" }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
@@ -368,7 +362,7 @@ export default function TeacherClassEditorPage() {
             <span className="pbl-teacher-course-status">{offeringStatusLabel(offering.status)}</span>
           </div>
           <h1 title={offering.name}>{offering.name}</h1>
-          <p className="pbl-teacher-course-description">{offering.description || "以章节组织学习，将课堂与任务串成完整的课程。"}</p>
+          {offering.description ? <p className="pbl-teacher-course-description">{offering.description}</p> : null}
           <dl className="pbl-teacher-course-metrics">
             <div><dt>章节</dt><dd>{offering.chapters.length}</dd></div>
             <div><dt>学习内容</dt><dd>{count}</dd></div>
@@ -399,13 +393,9 @@ export default function TeacherClassEditorPage() {
       </div>
       <div className="pbl-teacher-course-tabs">
         <div role="tablist" aria-label="课程管理" className="flex gap-7">{[["chapters", "章节目录"], ["overview", "课程主页"]].map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? "is-active" : undefined} onClick={() => setTab(value)}>{label}</button>)}</div>
-        <p role="status" className="text-xs text-[var(--pbl-text-muted)]">{busy ? "正在保存…" : message}</p>
-      </div>
-      {error && !dialog ? <p role="alert" className="mt-4 text-sm text-[var(--pbl-danger)]">{error}</p> : null}
-      {tab === "chapters" ? (
-        <>
-          <div className="pbl-teacher-chapter-toolbar">
-            <p>在章节中添加学习内容；锁定后，学生仍可查看学习路径。</p>
+        <div className="pbl-teacher-course-tab-actions">
+          <p role="status" className="text-xs text-[var(--pbl-text-muted)]">{busy ? "正在保存…" : message}</p>
+          {tab === "chapters" ? (
             <button
               className={button + " border-transparent bg-[var(--pbl-teacher)] text-white"}
               onClick={() => {
@@ -418,7 +408,12 @@ export default function TeacherClassEditorPage() {
               <Plus size={15} />
               添加章节
             </button>
-          </div>
+          ) : null}
+        </div>
+      </div>
+      {error && !dialog ? <p role="alert" className="mt-4 text-sm text-[var(--pbl-danger)]">{error}</p> : null}
+      {tab === "chapters" ? (
+        <>
           <div className="pbl-teacher-chapter-list" role="list" aria-label="课程章节">
             {offering.chapters.map((chapter, index) => {
               const isExpanded = expandedChapters.has(chapter.id);
@@ -611,8 +606,8 @@ export default function TeacherClassEditorPage() {
           {offering.chapters.length === 0 ? (
             <div className="pbl-teacher-course-empty">
               <BookOpen size={30} strokeWidth={1.2} />
-              <h2>建立课程的第一章</h2>
-              <p>先确定学习阶段，再加入课堂、问卷、作业和资料。</p>
+              <h2>暂无章节</h2>
+              <p>添加章节后，可继续加入课堂、问卷、作业和资料。</p>
             </div>
           ) : null}
         </>
@@ -833,10 +828,11 @@ export default function TeacherClassEditorPage() {
             <div className="pbl-invitation-step-content">
               <h2>打开电脑浏览器</h2>
               <p>在地址栏输入</p>
-              <output aria-label="学生端访问地址">{studentAccessAddress}</output>
+              <output aria-label="学生端访问地址">{STUDENT_ACCESS_ADDRESS}</output>
               <small>输入完成后，按 Enter 键打开学生端</small>
             </div>
           </article>
+          <div className="pbl-invitation-connector" aria-hidden="true"><ArrowRight /></div>
           <article className="pbl-invitation-step pbl-invitation-step-account">
             <div className="pbl-invitation-step-heading"><b>02</b><span>第二步</span></div>
             <div className="pbl-invitation-step-content">
@@ -845,6 +841,7 @@ export default function TeacherClassEditorPage() {
               <small>已有账号的同学直接登录</small>
             </div>
           </article>
+          <div className="pbl-invitation-connector" aria-hidden="true"><ArrowRight /></div>
           <article className="pbl-invitation-step pbl-invitation-step-code">
             <div className="pbl-invitation-step-heading"><b>03</b><span>第三步</span></div>
             <div className="pbl-invitation-step-content">

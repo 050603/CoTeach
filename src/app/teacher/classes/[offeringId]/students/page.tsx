@@ -255,7 +255,7 @@ function TeacherStudentsContent() {
   return <TeacherPlatformPage><TeacherPlatformHeader compact active="classes" backHref={`/teacher/classes/${offeringId}`} backLabel="返回教学班"/>
     <div className="pbl-workspace-content xl:pb-5">
       <header className="flex flex-wrap items-end justify-between gap-5">
-        <div><p className="text-xs font-semibold tracking-[.16em] text-[var(--pbl-teacher)]">成员与学习证据</p><h1 className="mt-2 text-3xl font-semibold">{summary?.offering.name ?? "学生与学习记录"}</h1><p className="mt-3 text-sm text-[var(--pbl-text-muted)]">查看学生的活动进度、提交历史、课堂成果与评价。</p></div>
+        <div><p className="text-xs font-semibold tracking-[.16em] text-[var(--pbl-teacher)]">{summary?.offering.name ?? "教学班"}</p><h1 className="mt-2 text-3xl font-semibold">学生与学习记录</h1></div>
         <button className={secondaryButton} disabled={!filtered.length} onClick={() => { setExportError(""); setExportOpen(true); }}><ArrowDownToLine size={17}/>导出当前结果</button>
       </header>
       {error ? <div className="mt-5"><PlatformError message={error} onRetry={retry}/></div> : null}

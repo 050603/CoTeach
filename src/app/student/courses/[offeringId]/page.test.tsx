@@ -71,7 +71,7 @@ const course = {
   ],
 };
 
-function respond(value = course) {
+function respond(value: Omit<typeof course, "description"> & { description: string | null } = course) {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue({
@@ -105,7 +105,11 @@ describe("学生课程工作区", () => {
     expect(container.querySelector(".pbl-student-chapter-description")).toBeNull();
     expect(container.querySelectorAll(".pbl-student-task-list")).toHaveLength(1);
     expect(screen.getByRole("link", { name: "返回我的课程" })).toHaveAttribute("href", "/student?all=1");
-    expect(screen.getByLabelText("当前学生：林晓雨")).toBeInTheDocument();
+    const account = screen.getByRole("button", { name: "学生个人中心：林晓雨" });
+    expect(account).toBeInTheDocument();
+    fireEvent.pointerDown(account, { button: 0, ctrlKey: false });
+    expect(await screen.findByRole("menuitem", { name: "个人中心" })).toHaveAttribute("href", "/student/profile");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(screen.getByRole("button", { name: "课程学习" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("link", { name: /继续学习/ })).toHaveAttribute(
       "href",
@@ -115,6 +119,15 @@ describe("学生课程工作区", () => {
     expect(container.querySelectorAll(".pbl-student-task-row.is-current")).toHaveLength(1);
     expect(screen.getByRole("progressbar", { name: "课程学习进度" })).toHaveAttribute("aria-valuenow", "1");
     expect(screen.getByText("已完成 1 / 3 项任务")).toBeInTheDocument();
+  });
+
+  it("does not invent an explanatory subtitle when the course has no introduction", async () => {
+    respond({ ...course, description: null });
+    render(<StudentCoursePage />);
+
+    expect(await screen.findByRole("heading", { name: course.name })).toBeInTheDocument();
+    expect(screen.queryByText("围绕真实问题，按章节完成课堂学习与实践任务。")).toBeNull();
+    expect(screen.getByRole("progressbar", { name: "课程学习进度" })).toBeInTheDocument();
   });
 
   it("expands locked chapters while keeping their tasks unavailable", async () => {

@@ -1100,7 +1100,7 @@ export default function TeacherSettingsPage() {
 
   return (
     <TeacherPlatformPage><TeacherPlatformHeader active="settings" backHref="/teacher/classes" backLabel="返回教学班" /><div className="pbl-workspace-content pbl-settings-layout">
-      <div className="pbl-page-heading"><div><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">教师账号 / 个人中心</p><h1 className="mt-3 font-semibold">个人中心</h1><p className="mt-3 text-sm leading-7 text-[var(--pbl-text-muted)]">管理教师个人信息、登录安全以及教学所需的 AI 服务。</p></div></div>
+      <div className="pbl-page-heading"><div><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">教师账号</p><h1 className="mt-3 font-semibold">个人中心</h1></div></div>
       <TeacherProfilePanel/>
       <section className="mb-5 border-t border-[var(--pbl-border)] pt-7" aria-labelledby="ai-service-settings-heading"><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">教学能力配置</p><h2 id="ai-service-settings-heading" className="mt-2 text-xl font-semibold text-[var(--pbl-text-strong)]">AI 服务设置</h2><p className="mt-2 text-sm leading-6 text-[var(--pbl-text-muted)]">连接教学所需的模型与音视频服务，管理配置并验证可用性。</p></section>
       <div className="pbl-settings-tabs mb-5 overflow-hidden rounded-[14px] border border-stone-200 bg-white">

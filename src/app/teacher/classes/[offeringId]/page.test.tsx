@@ -35,9 +35,14 @@ describe("课程章节管理", () => {
   it("renders chapters as one continuous directory instead of nested cards", async () => {
     const { container } = render(<Page />);
     await screen.findByRole("heading", { name: "设计思维" });
+    const tabs = container.querySelector(".pbl-teacher-course-tabs");
     expect(container.querySelectorAll(".pbl-teacher-chapter-list")).toHaveLength(1);
     expect(container.querySelectorAll(".pbl-teacher-chapter")).toHaveLength(1);
     expect(container.querySelector(".pbl-chapter-card")).toBeNull();
+    expect(container.querySelector(".pbl-teacher-chapter-toolbar")).toBeNull();
+    expect(tabs).toContainElement(screen.getByRole("button", { name: "添加章节" }));
+    expect(screen.queryByText("在章节中添加学习内容；锁定后，学生仍可查看学习路径。")).toBeNull();
+    expect(screen.queryByText("以章节组织学习，将课堂与任务串成完整的课程。")).toBeNull();
   });
   it("locks a chapter in its directory with optimistic version protection", async () => {
     render(<Page />);
@@ -275,7 +280,8 @@ describe("课程章节管理", () => {
     fireEvent.click(invitation);
     expect(screen.getByRole("dialog")).toHaveClass("pbl-invitation-dialog");
     expect(screen.getByRole("img", { name: "PrAIxis" })).toBeInTheDocument();
-    expect(screen.getByLabelText("学生端访问地址")).toHaveTextContent("172.16.185.157");
+    expect(screen.getByLabelText("学生端访问地址")).toHaveTextContent("praixis.cn");
+    expect(document.querySelectorAll(".pbl-invitation-connector")).toHaveLength(2);
     expect(screen.getByLabelText("加入课程步骤")).toHaveTextContent(/打开电脑浏览器.*注册 \/ 登录.*输入课程邀请码/);
     expect(screen.getByLabelText("学生邀请码")).toHaveTextContent("A7B 9C2");
     fireEvent.click(screen.getByRole("button", { name: "复制邀请码" }));

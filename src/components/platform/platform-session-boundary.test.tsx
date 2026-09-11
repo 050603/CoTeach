@@ -6,6 +6,12 @@ vi.mock("next/navigation", () => ({ usePathname: () => route.pathname }));
 vi.mock("@/lib/session/store", () => ({ SessionProvider: ({ children }: { children: React.ReactNode }) => <div data-testid="classroom-session">{children}</div> }));
 import { PlatformSessionBoundary } from "./platform-session-boundary";
 describe("platform session boundary", () => {
+  it("applies platform styles to the student profile without loading classroom state", () => {
+    route.pathname = "/student/profile";
+    const { container } = render(<PlatformSessionBoundary>个人中心</PlatformSessionBoundary>);
+    expect(container.querySelector(".pbl-platform-theme")).toBeInTheDocument();
+    expect(screen.queryByTestId("classroom-session")).not.toBeInTheDocument();
+  });
   it("does not request retired classroom session APIs on course pages", () => {
     route.pathname = "/student/courses/demo";
     render(<PlatformSessionBoundary>课程主页</PlatformSessionBoundary>);

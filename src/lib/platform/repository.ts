@@ -154,7 +154,7 @@ export async function registerStudent(input: { invitationCode: string; username:
   const username = input.username.normalize("NFKC").trim();
   const usernameKey = normalizeUsername(username);
   const displayName = input.displayName.normalize("NFC").trim();
-  if (usernameKey.length < 3 || !displayName) throw new PlatformError("INVALID_INPUT", "用户名、姓名或密码不符合要求", 400);
+  if (usernameKey.length < 3 || !displayName) throw new PlatformError("INVALID_INPUT", "学号、姓名或密码不符合要求", 400);
   if (!isValidNewPasswordLength(input.password)) throw new PlatformError("INVALID_INPUT", PASSWORD_LENGTH_HINT, 400);
   const passwordHash = await hashPassword(input.password);
   return runMutationTransaction(async (tx) => {
@@ -169,7 +169,7 @@ export async function registerStudent(input: { invitationCode: string; username:
     if (!invitation || !isOfferingOpen(invitation, invitation.offering.status)) throw new PlatformError("INVITE_CODE_INVALID", "课程邀请码无效、已停用或已过期", 404);
     if (invitation.maxUses !== null && invitation.useCount >= invitation.maxUses) throw new PlatformError("INVITE_CODE_EXHAUSTED", "邀请码使用次数已达上限", 409);
     const existing = await tx.user.findUnique({ where: { usernameKey } });
-    if (existing) throw new PlatformError("USERNAME_TAKEN", "登录账号已存在", 409);
+    if (existing) throw new PlatformError("USERNAME_TAKEN", "学号已存在", 409);
     const user = await tx.user.create({ data: { username, usernameKey, displayName, passwordHash, role: "STUDENT", status: "ACTIVE" } });
     const enrollment = await tx.enrollment.create({ data: { userId: user.id, offeringId: invitation.offeringId, status: "ACTIVE" } });
     const activities = invitation.offering.chapters.flatMap((chapter) => chapter.activities);
@@ -184,7 +184,7 @@ export async function loginStudent(username: string, password: string) {
     where: { usernameKey: normalizeUsername(username) },
     include: { enrollments: { where: { status: { in: ACTIVE_ENROLLMENT_STATUSES } }, include: { offering: { select: { id: true, name: true, status: true } } } } },
   });
-  if (!account || account.role.toLowerCase() !== "student" || account.status.toLowerCase() !== "active" || !(await verifyPassword(password, account.passwordHash))) throw new PlatformError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
+  if (!account || account.role.toLowerCase() !== "student" || account.status.toLowerCase() !== "active" || !(await verifyPassword(password, account.passwordHash))) throw new PlatformError("INVALID_CREDENTIALS", "学号或密码错误", 401);
   await prisma.user.update({ where: { id: account.id }, data: { lastLoginAt: new Date() } });
   return account;
 }

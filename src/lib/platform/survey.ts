@@ -92,6 +92,43 @@ export type SurveyTextAnalytics = SurveyQuestion & {
 
 export type SurveyQuestionAnalytics = SurveyChoiceAnalytics | SurveyTextAnalytics;
 
+const SURVEY_ORIENTATION_AND_SUBMISSION_SECONDS = 20;
+
+function estimateSurveyReadingSeconds(text: string): number {
+  const normalized = text.normalize("NFKC").trim();
+  if (!normalized) return 0;
+
+  const hanCharacterCount = normalized.match(/\p{Script=Han}/gu)?.length ?? 0;
+  const nonHanWordCount = normalized
+    .replace(/\p{Script=Han}/gu, " ")
+    .match(/[\p{Letter}\p{Number}]+/gu)?.length ?? 0;
+
+  // Approximately 300 Chinese characters or 190 non-CJK words per minute.
+  return Math.ceil((hanCharacterCount / 5) + (nonHanWordCount / 3.2));
+}
+
+/** Estimate completion time from what the student actually needs to read and answer. */
+export function estimateSurveyMinutes(questions: SurveyQuestion[], introduction = ""): number {
+  const questionSeconds = questions.reduce((total, question) => {
+    const readingText = [question.title, ...question.options.map((option) => option.label)].join(" ");
+    const answerSeconds = question.type === "short-text"
+      ? 75
+      : question.type === "multiple-choice"
+        ? 20
+        : 12;
+    const optionalWeight = question.required === false ? 0.6 : 1;
+    const supplementalTextSeconds = question.options.some((option) => option.allowTextInput) ? 12 : 0;
+
+    return total + estimateSurveyReadingSeconds(readingText)
+      + Math.ceil((answerSeconds + supplementalTextSeconds) * optionalWeight);
+  }, 0);
+  const totalSeconds = SURVEY_ORIENTATION_AND_SUBMISSION_SECONDS
+    + estimateSurveyReadingSeconds(introduction)
+    + questionSeconds;
+
+  return Math.max(1, Math.ceil(totalSeconds / 60));
+}
+
 const STOP_WORDS = new Set([
   "一个", "一些", "这个", "那个", "这些", "那些", "我们", "你们", "他们", "自己", "以及", "因为", "所以", "但是", "然后", "可以", "能够", "觉得", "认为", "希望", "需要", "比较", "非常", "还是", "就是", "进行", "通过", "对于", "关于", "没有", "不是", "有点", "课程", "课堂", "学习", "学生", "老师", "问题", "回答",
   "the", "and", "that", "this", "with", "from", "have", "would", "could", "very", "about", "into", "your", "our",

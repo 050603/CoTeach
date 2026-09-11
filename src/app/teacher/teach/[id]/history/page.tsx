@@ -178,9 +178,9 @@ export default async function CourseHistoryPage({
           </div>
         </Card>
       ) : (
-        <div className="grid grid-cols-[360px_1fr] gap-5">
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]">
           {/* Session list */}
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-3">
             <h2 className="text-sm font-semibold text-stone-700">
               共 {sessions.length} 次开课记录
             </h2>
@@ -226,12 +226,12 @@ export default async function CourseHistoryPage({
           </div>
 
           {/* Session detail */}
-          <div>
+          <div className="min-w-0">
             {!selectedSession || !selectedArchived ? (
               <Card>
                 <div className="py-16 text-center text-stone-500">
                   <History className="mx-auto text-stone-300" size={48} />
-                  <p className="mt-4">从左侧选择一次开课记录查看详情</p>
+                  <p className="mt-4">选择一次开课记录查看详情</p>
                 </div>
               </Card>
             ) : (

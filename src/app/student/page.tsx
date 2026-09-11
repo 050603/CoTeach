@@ -5,7 +5,7 @@ import { LearningArt } from "@/components/platform/learning-art";
 import { PlatformLoading, PlatformEmpty } from "@/components/platform/platform-feedback";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { ArrowRight, Plus } from "lucide-react";
+import { ArrowRight, Plus, Search } from "lucide-react";
 import {
   CourseCover,
   StudentShell,
@@ -37,6 +37,8 @@ function StudentEntryPageContent() {
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [showJoin, setShowJoin] = useState(false);
+  const [keyword, setKeyword] = useState("");
+  const [filter, setFilter] = useState("all");
   useEffect(() => {
     let active = true;
     fetch("/api/platform/courses", { cache: "no-store" })
@@ -86,34 +88,26 @@ function StudentEntryPageContent() {
       setJoining(false);
     }
   }
-  const availableTasks = (courses ?? []).filter(course => course.status === "open").flatMap(course =>
-    course.chapters.filter(chapter => chapter.isOpen).flatMap(chapter => chapter.activities
-      .filter(task => task.id && task.isOpen && !["completed", "submitted"].includes(task.progress.status))
-      .map(task => ({ ...task, courseName: course.name }))));
-  const continuing = availableTasks.filter(task => task.progress.status === "in_progress")
-    .sort((a, b) => (Date.parse(b.progress.lastAccessedAt ?? "") || 0) - (Date.parse(a.progress.lastAccessedAt ?? "") || 0))[0] ?? availableTasks[0];
+  const visibleCourses = (courses ?? []).filter(course =>
+    (filter === "all" || course.status === filter) &&
+    [course.name, course.teacher?.displayName, course.term].some(value => value?.toLowerCase().includes(keyword.trim().toLowerCase())));
   return (
     <StudentShell>
-      <header className="pbl-page-heading"><LearningArt />
+      <div className="pbl-student-dashboard">
+      <header className="pbl-page-heading pbl-student-heading">
+        <LearningArt />
         <div>
-          <p className="text-xs tracking-widest text-[var(--pbl-student)]">
-            我的学习
-          </p>
-          <h1 className="mt-3 font-serif text-3xl font-semibold">我的课程</h1>
-          <p className="mt-3 text-sm text-[var(--pbl-text-muted)]">
-            选择课程，查看章节安排并继续学习。
-          </p>
+          <p className="text-xs tracking-widest text-[var(--pbl-student)]">我的学习</p>
+          <h1 className="mt-3 text-3xl font-semibold">我的课程</h1>
         </div>
         <button
           className="inline-flex min-h-11 items-center gap-2 rounded-[6px] border border-[var(--pbl-border)] px-4 text-sm"
           onClick={() => setShowJoin(!showJoin)}
           aria-expanded={showJoin}
         >
-          <Plus size={16} />
-          加入课程
+          <Plus size={16} />加入课程
         </button>
       </header>
-      {courses && courses.length > 0 && <section className="pbl-learning-overview" aria-label="学习概况"><div><p className="text-xs font-semibold text-[var(--pbl-student)]">每一步，都在积累</p><h2 className="mt-2 text-xl font-semibold">{continuing?.title ?? "今天，也向前一步"}</h2><p className="mt-3 text-sm leading-7 text-[var(--pbl-text-muted)]">{continuing ? `${continuing.courseName} · 接续你的学习任务` : "从课程目录找到下一项任务，继续你的探索。"}</p>{continuing && <Link className={`${studentPrimary} mt-4`} href={`/student/activities/${continuing.id}`}>{continuing.progress.status === "in_progress" ? "继续学习" : "开始下一项任务"}<ArrowRight size={16}/></Link>}</div><dl className="flex gap-8"><div><dt className="text-xs text-[var(--pbl-text-muted)]">已加入课程</dt><dd className="mt-3 text-3xl font-semibold tabular-nums">{courses.length}</dd></div><div><dt className="text-xs text-[var(--pbl-text-muted)]">已完成任务</dt><dd className="mt-3 text-3xl font-semibold tabular-nums">{courses.reduce((sum, course) => sum + course.chapters.flatMap(chapter => chapter.activities).filter(task => task.progress.status === "completed").length, 0)}</dd></div></dl></section>}
       {showJoin || courses?.length === 0 ? (
         <form
           onSubmit={join}
@@ -147,6 +141,10 @@ function StudentEntryPageContent() {
           ) : null}
         </form>
       ) : null}
+      {courses && courses.length > 0 && <section className="pbl-student-toolbar" aria-label="课程筛选">
+        <div className="pbl-student-filters">{[["all", "全部课程"], ["open", "进行中"], ["finished", "已结束"]].map(([value, label]) => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}{value === "all" && <span>{courses.length}</span>}</button>)}</div>
+        <label className="pbl-student-search"><Search size={18} aria-hidden="true"/><input aria-label="搜索课程" placeholder="搜索课程、教师或学期" value={keyword} onChange={event => setKeyword(event.target.value)}/></label>
+      </section>}
       {error ? (
         <div role="alert" className="mt-10">
           <p>{error}</p>
@@ -160,10 +158,11 @@ function StudentEntryPageContent() {
       ) : courses === null ? (
         <PlatformLoading label="正在打开学习空间…" />
       ) : courses.length === 0 ? (
-        <PlatformEmpty title="学习旅程，即将开始" description="你还没有加入课程。加入后，课程大纲、课堂与作业将在这里呈现。" />
+        <PlatformEmpty title="尚未加入课程" description="使用课程邀请码加入后，课程大纲、课堂与作业将在这里呈现。" />
       ) : (
-        <div className="mt-9 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {courses.map((course) => {
+        <div className="pbl-student-course-grid">
+          {visibleCourses.length === 0 && <div className="col-span-full"><PlatformEmpty title="没有找到匹配的课程" description="试试其他关键词，或切换到全部课程。" /><button className="min-h-11 text-sm text-[var(--pbl-student)]" onClick={() => { setKeyword(""); setFilter("all"); }}>清除筛选</button></div>}
+          {visibleCourses.map((course) => {
             const tasks = course.chapters.flatMap(
               (chapter) => chapter.activities,
             );
@@ -174,34 +173,35 @@ function StudentEntryPageContent() {
               <Link
                 key={course.id}
                 href={`/student/courses/${course.id}`}
-                className="pbl-course-card group transition-colors hover:border-[var(--pbl-student)]"
+                className="pbl-course-card pbl-student-course-card group"
               >
+                <div className="pbl-student-card-media">
                 <CourseCover
                   url={course.coverImageUrl}
                   name={course.name}
-                  className="h-48"
+                  className="pbl-student-cover"
                 />
-                <div className="p-5">
+                <span className="pbl-student-course-status" data-status={course.status}>{course.status === "finished" ? "已结束" : course.status === "open" ? "进行中" : "待开放"}</span>
+                </div>
+                <div className="pbl-student-course-copy">
                   <p className="text-xs text-[var(--pbl-text-muted)]">
                     {course.term ?? "课程系列"} ·{" "}
                     {course.teacher?.displayName ?? "任课教师待定"}
                   </p>
-                  <h2 className="mt-3 font-serif text-xl font-semibold">
+                  <h2 title={course.name}>
                     {course.name}
                   </h2>
-                  <p className="mt-3 text-xs text-[var(--pbl-text-muted)]">
+                  <p className="pbl-student-course-description">{course.description || "暂无课程介绍"}</p>
+                  <p className="pbl-student-course-date">
                     开课时间：{courseDate(course.startsAt)}
                   </p>
-                  <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-[var(--pbl-student-soft)]" role="progressbar" aria-label={`${course.name}完成进度`} aria-valuenow={completed} aria-valuemin={0} aria-valuemax={Math.max(tasks.length, 1)}><div className="h-full rounded-full bg-[var(--pbl-student)]" style={{ width: `${tasks.length ? completed / tasks.length * 100 : 0}%` }} /></div>
-                  <div className="mt-5 flex items-center justify-between border-t border-[var(--pbl-border)] pt-4 text-sm">
+                  <div className="pbl-student-progress-track" role="progressbar" aria-label={`${course.name}完成进度`} aria-valuenow={completed} aria-valuemin={0} aria-valuemax={Math.max(tasks.length, 1)}><div className="h-full rounded-full bg-[var(--pbl-student)]" style={{ width: `${tasks.length ? completed / tasks.length * 100 : 0}%` }} /></div>
+                  <div className="pbl-student-course-footer">
                     <span className="text-[var(--pbl-text-muted)]">
                       {course.chapters.length} 章 · 已完成 {completed}/
                       {tasks.length} 项
                     </span>
-                    <ArrowRight
-                      size={18}
-                      className="text-[var(--pbl-student)]"
-                    />
+                    <span className="pbl-student-course-enter">{course.status === "finished" ? "回顾课程" : "进入课程"}<ArrowRight size={16}/></span>
                   </div>
                 </div>
               </Link>
@@ -209,6 +209,7 @@ function StudentEntryPageContent() {
           })}
         </div>
       )}
+      </div>
     </StudentShell>
   );
 }

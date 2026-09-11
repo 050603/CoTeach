@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/popover";
 import { activityTypeLabel } from "@/lib/platform/labels";
 import { loadJSON, saveJSON } from "@/lib/session/storage";
+import { WorkspaceAccountMenu } from "@/components/platform/workspace-nav";
 
 type ActivityProgress = {
   status: string;
@@ -168,7 +169,6 @@ function CourseTopbar({
   viewerName: string;
   reminders: string[];
 }) {
-  const initial = viewerName.trim().charAt(0) || "同";
   const storageKey = reminderReadStorageKey(studentId, courseId);
   const [readState, setReadState] = useState<ReminderReadState>({
     storageKey: "",
@@ -263,10 +263,7 @@ function CourseTopbar({
               )}
             </PopoverContent>
           </Popover>
-          <div className="pbl-student-viewer" aria-label={`当前学生：${viewerName}`}>
-            <span aria-hidden="true">{initial}</span>
-            <strong>{viewerName}</strong>
-          </div>
+          <WorkspaceAccountMenu role="student" fallbackDisplayName={viewerName} />
         </div>
       </div>
     </header>
@@ -463,10 +460,10 @@ export default function StudentCoursePage() {
                 <span>{course.teacher?.displayName || "教师待公布"}</span>
               </div>
               <h1>{course.name}</h1>
-              <p className="pbl-student-course-summary-description">
-                {course.description || "围绕真实问题，按章节完成课堂学习与实践任务。"}
-              </p>
-              <CourseProgress completed={completed} total={tasks.length} />
+              {course.description ? <p className="pbl-student-course-summary-description">{course.description}</p> : null}
+              <div className={course.description ? undefined : "mt-6"}>
+                <CourseProgress completed={completed} total={tasks.length} />
+              </div>
 
               {allCompleted ? (
                 <div className="pbl-course-complete-state">
@@ -633,7 +630,7 @@ export default function StudentCoursePage() {
               ) : (
                 <div className="pbl-student-course-empty">
                   <BookOpen size={25} />
-                  <h3>课程章节正在准备中</h3>
+                  <h3>暂无可学习章节</h3>
                   <p>教师发布章节后，完整学习路径会显示在这里。</p>
                 </div>
               )}
