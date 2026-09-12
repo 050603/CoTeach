@@ -2,6 +2,7 @@
 
 import "./platform.css";
 import "./desktop-layout.css";
+import "./mobile-layout.css";
 
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";

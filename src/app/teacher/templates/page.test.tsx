@@ -55,7 +55,7 @@ describe("teacher course library", () => {
     render(<TeacherTemplatesPage />);
 
     expect(await screen.findByRole("img", { name: "人工智能教学法课程封面" }))
-      .toHaveAttribute("src", coverImageUrl);
+      .toHaveProperty("src", new URL(coverImageUrl, window.location.href).href);
   });
   it("requires confirmation before archiving a reusable course", async () => {
     render(<TeacherTemplatesPage />); await screen.findByRole("heading", { name: "雨水收集" });

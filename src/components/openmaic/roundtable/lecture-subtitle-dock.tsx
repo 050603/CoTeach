@@ -1,5 +1,7 @@
 'use client';
 
+import responsiveStyles from './lecture-subtitle-dock.module.css';
+
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import {
@@ -337,7 +339,7 @@ export function LectureSubtitleDock({
   return (
     <aside
       aria-label="AI 授课字幕与播放控制"
-      className="relative z-10 flex min-h-0 w-full shrink-0 overflow-hidden border-t border-slate-200/80 bg-white/96 dark:border-white/10 dark:bg-slate-950/96 xl:h-full xl:w-[304px] xl:border-l xl:border-t-0 xl:bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(252,254,253,0.97)_48%,rgba(241,249,246,0.94)_76%,rgba(255,255,255,0.98)_100%)] xl:dark:bg-[linear-gradient(180deg,rgba(2,6,23,0.98)_0%,rgba(8,20,31,0.97)_52%,rgba(10,36,34,0.82)_76%,rgba(2,6,23,0.98)_100%)]"
+      className={cn(responsiveStyles.dock, "relative z-10 flex min-h-0 w-full shrink-0 overflow-hidden border-t border-slate-200/80 bg-white/96 dark:border-white/10 dark:bg-slate-950/96 xl:h-full xl:w-[304px] xl:border-l xl:border-t-0 xl:bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(252,254,253,0.97)_48%,rgba(241,249,246,0.94)_76%,rgba(255,255,255,0.98)_100%)] xl:dark:bg-[linear-gradient(180deg,rgba(2,6,23,0.98)_0%,rgba(8,20,31,0.97)_52%,rgba(10,36,34,0.82)_76%,rgba(2,6,23,0.98)_100%)]")}
     >
       <div className="grid h-full min-h-0 min-w-0 flex-1 grid-rows-[auto_auto_minmax(0,1fr)_auto_auto] overflow-hidden px-4 py-3 xl:px-5 xl:py-4">
         <header className="flex items-center gap-3 xl:items-start">

@@ -1,5 +1,7 @@
 "use client";
 
+import responsiveStyles from "./collaboration-responsive.module.css";
+
 import { useEffect, useRef, useState } from "react";
 import {
   Bot,
@@ -133,7 +135,7 @@ export function AiMemberWorkspace({
   return (
     <section
       aria-label="AI 组员工作区"
-      className="fixed inset-x-3 bottom-2 top-[136px] z-[80] flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200/80 bg-white text-stone-950 shadow-[0_16px_48px_-24px_rgba(28,25,23,0.28)] sm:left-auto sm:right-2 sm:w-[min(500px,calc(100vw-32px))]"
+      className={`${responsiveStyles.memberPanel} fixed inset-x-3 bottom-2 top-[136px] z-[80] flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200/80 bg-white text-stone-950 shadow-[0_16px_48px_-24px_rgba(28,25,23,0.28)] sm:left-auto sm:right-2 sm:w-[min(500px,calc(100vw-32px))]`}
     >
       <header className="relative shrink-0 border-b border-stone-200/80 bg-white px-3 py-2">
         <div className="flex items-center justify-between gap-2">

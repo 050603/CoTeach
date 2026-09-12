@@ -54,7 +54,7 @@ export default function TeacherResourcesPage() {
         variant="bare"
         currentCourse={{ id: course.id, name: course.name, status: course.status }}
         headerSlot={
-          <div className="ml-4">
+          <div className="ml-4 hidden min-w-0 lg:block">
             <WizardStepper current={2} steps={STEPS} />
           </div>
         }

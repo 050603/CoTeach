@@ -1,5 +1,7 @@
 'use client';
 
+import responsiveStyles from './playback-responsive.module.css';
+
 import {
   forwardRef,
   useCallback,
@@ -1282,7 +1284,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       <div
         ref={stageRef}
         className={cn(
-          'flex-1 flex overflow-hidden bg-gray-50 dark:bg-gray-900',
+          'relative min-h-0 min-w-0 flex-1 flex overflow-hidden bg-gray-50 dark:bg-gray-900',
           isPresenting && !controlsVisible && 'cursor-none',
         )}
       >
@@ -1300,6 +1302,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             'relative flex min-w-0 flex-1 flex-col overflow-hidden',
             useSideTeachingRail &&
               'xl:grid xl:grid-cols-[minmax(0,1fr)_19rem] xl:grid-rows-[minmax(0,1fr)]',
+            useSideTeachingRail && responsiveStyles.landscapeGrid,
           )}
         >
           {playbackError ? (
@@ -1377,6 +1380,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 !isPresenting && 'shrink-0',
                 isPresenting && 'absolute inset-x-0 bottom-0 z-20',
                 useSideTeachingRail && 'xl:col-start-2 xl:row-start-1 xl:h-full xl:min-h-0',
+                useSideTeachingRail && responsiveStyles.landscapeRail,
               )}
             >
               <Roundtable

@@ -240,12 +240,12 @@ describe("课程章节管理", () => {
 
     render(<Page />);
     fireEvent.click(await screen.findByRole("tab", { name: "课程主页" }));
-    expect(screen.getByRole("img", { name: "设计思维课程封面" })).toHaveAttribute("src", oldCover);
+    expect(screen.getByRole("img", { name: "设计思维课程封面" })).toHaveProperty("src", new URL(oldCover, window.location.href).href);
     fireEvent.click(screen.getByRole("button", { name: "AI 重绘" }));
 
     await waitFor(() => expect(
       screen.getByRole("img", { name: "设计思维课程封面" }),
-    ).toHaveAttribute("src", newCover));
+    ).toHaveProperty("src", new URL(newCover, window.location.href).href));
     expect(await screen.findByText("课程封面已重新生成")).toBeInTheDocument();
     expect(fetcher.mock.calls.filter(([url]) => url === "/api/platform/offerings")).toHaveLength(1);
   });

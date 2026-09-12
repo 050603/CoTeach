@@ -58,7 +58,21 @@ export interface PersistedClassroomData {
   stage: Stage;
   scenes: Scene[];
   createdAt: string;
+  /** Monotonic document revision used by teacher editing to reject stale saves. */
+  revision?: number;
+  /** Last content or asset update. Legacy snapshots may not have this field. */
+  updatedAt?: string;
   assetGeneration?: ClassroomAssetGenerationStatus;
+}
+
+export class ClassroomRevisionConflictError extends Error {
+  constructor(
+    public readonly expectedRevision: number,
+    public readonly actualRevision: number,
+  ) {
+    super(`Classroom revision conflict: expected ${expectedRevision}, actual ${actualRevision}`);
+    this.name = 'ClassroomRevisionConflictError';
+  }
 }
 
 export type ClassroomAssetGenerationStatus = {
@@ -177,11 +191,14 @@ export async function persistClassroom(
   },
 ): Promise<PersistedClassroomData> {
   return withClassroomLock(data.id, async () => {
+    const now = new Date().toISOString();
     const next: PersistedClassroomData = {
       id: data.id,
       stage: data.stage,
       scenes: data.scenes,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
+      revision: 1,
     };
 
     await ensureClassroomsDir();
@@ -209,6 +226,8 @@ export async function updatePersistedClassroomScenes(
     const updated: PersistedClassroomData = {
       ...existing,
       scenes,
+      revision: (existing.revision ?? 0) + 1,
+      updatedAt: new Date().toISOString(),
     };
     const filePath = path.join(CLASSROOMS_DIR, `${classroomId}.json`);
     await writeJsonFileAtomic(filePath, updated);
@@ -223,8 +242,56 @@ export async function updatePersistedClassroomAssetStatus(
   return withClassroomLock(classroomId, async () => {
     const existing = await readClassroom(classroomId);
     if (!existing) throw new Error(`Classroom not found while updating asset status: ${classroomId}`);
-    const updated = { ...existing, assetGeneration };
+    const updated = {
+      ...existing,
+      assetGeneration,
+      revision: (existing.revision ?? 0) + 1,
+      updatedAt: new Date().toISOString(),
+    };
     await writeJsonFileAtomic(path.join(CLASSROOMS_DIR, `${classroomId}.json`), updated);
     return updated;
   });
+}
+
+/**
+ * Replace a teacher-editable classroom document with optimistic concurrency.
+ * Generated media can update the same JSON file in the background, so the
+ * revision covers both content and asset writes rather than only canvas edits.
+ */
+export async function updatePersistedClassroomForEditing(
+  classroomId: string,
+  data: { stage: Stage; scenes: Scene[] },
+  expectedRevision: number,
+): Promise<PersistedClassroomData> {
+  return withClassroomLock(classroomId, async () => {
+    const existing = await readClassroom(classroomId);
+    if (!existing) throw new Error(`Classroom not found while saving edit: ${classroomId}`);
+    const actualRevision = existing.revision ?? 0;
+    if (actualRevision !== expectedRevision) {
+      throw new ClassroomRevisionConflictError(expectedRevision, actualRevision);
+    }
+    const updated: PersistedClassroomData = {
+      ...existing,
+      stage: data.stage,
+      scenes: data.scenes,
+      revision: actualRevision + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeJsonFileAtomic(path.join(CLASSROOMS_DIR, `${classroomId}.json`), updated);
+    return updated;
+  });
+}
+
+/** Copy the generated media directory when a published classroom becomes a new draft. */
+export async function copyClassroomMedia(sourceId: string, targetId: string): Promise<void> {
+  if (!isValidClassroomId(sourceId) || !isValidClassroomId(targetId)) {
+    throw new Error('Invalid classroom id while copying media');
+  }
+  const sourceDir = path.join(CLASSROOMS_DIR, sourceId);
+  const targetDir = path.join(CLASSROOMS_DIR, targetId);
+  try {
+    await fs.cp(sourceDir, targetDir, { recursive: true, errorOnExist: true, force: false });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
 }

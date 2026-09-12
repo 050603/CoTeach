@@ -147,10 +147,11 @@ function StudentRegisterPageContent() {
         </ol>
         {!invitation ? <form key="invite" className="pbl-auth-fields pbl-student-step" aria-busy={busy} onSubmit={(event) => { event.preventDefault(); void verifyCode(); }}>
         <fieldset className="pbl-auth-field pbl-student-invite-field" disabled={busy}>
-          <legend>
+          <legend className="sr-only">课程邀请码，6 位字符</legend>
+          <div className="pbl-student-invite-heading" aria-hidden="true">
             <span><KeyRound aria-hidden="true" size={15} />课程邀请码</span>
             <small>6 位字符</small>
-          </legend>
+          </div>
           <div className="pbl-student-code-group" data-busy={busy}>
             {Array.from({ length: INVITE_CODE_LENGTH }, (_, index) => (
               <input

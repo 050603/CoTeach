@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { ResilientImage } from "@/components/resilient-image";
 import type { Course } from "@/lib/session/types";
 import {
   requestCourseCoverImage,
@@ -112,8 +113,9 @@ export function ProjectCoverImage({
         aria-busy={loading}
         className={cn("group relative overflow-hidden rounded-[var(--radius-sm)] bg-stone-200", className)}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        <ResilientImage
+          fill
+          unoptimized
           src={displayImageUrl}
           alt={course.name || "项目封面"}
           className={cn(

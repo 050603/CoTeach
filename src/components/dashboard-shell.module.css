@@ -1,0 +1,48 @@
+.shell {
+  min-width: 0;
+}
+
+.popover {
+  max-height: calc(100dvh - 5.5rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+}
+
+.toolbar {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.toolbar > * {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+@media (max-width: 1023px) {
+  .learningViewport {
+    /* Landscape lessons need the full width for canvas and playback controls. */
+    max-width: 100% !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .popover {
+    position: fixed;
+    inset: 4.5rem 0.75rem auto;
+    width: auto;
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+}
+
+@media (pointer: coarse) {
+  .toolbar :is(button, select) {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .toolbar {
+    height: auto;
+    min-height: 48px;
+  }
+}

@@ -207,14 +207,14 @@ function CourseTopbar({
   return (
     <header className="pbl-student-course-topbar">
       <div className="pbl-student-course-topbar-inner">
-        <div className="flex min-w-0 items-center gap-5">
+        <div className="pbl-student-course-topbar-context flex min-w-0 items-center gap-5">
           <Link href="/student" aria-label="PrAIxis 学生首页">
             <PraixisLogo variant="horizontalSolid" height={38} priority />
           </Link>
           <span className="h-5 w-px bg-[var(--pbl-border)]" aria-hidden="true" />
           <Link
             href="/student?all=1"
-            className="inline-flex min-h-10 items-center gap-2 rounded-[10px] px-2 text-sm font-medium text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)] hover:text-[var(--pbl-text-strong)]"
+            className="pbl-student-course-back inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-[10px] px-2 text-sm font-medium text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)] hover:text-[var(--pbl-text-strong)]"
           >
             <ArrowLeft size={17} />
             返回我的课程
@@ -298,11 +298,11 @@ function CourseProgress({ completed, total }: { completed: number; total: number
       <div className="flex items-end justify-between gap-4">
         <div>
           <span className="text-[13px] text-[var(--pbl-text-muted)]">学习进度</span>
-          <p className="mt-1 text-[15px] font-medium text-[var(--pbl-text-strong)]">
+          <p className="mt-1 whitespace-nowrap text-[15px] font-medium tabular-nums text-[var(--pbl-text-strong)]">
             已完成 {completed} / {total} 项任务
           </p>
         </div>
-        <strong className="text-xl text-[var(--pbl-student)]">{percentage}%</strong>
+        <strong className="whitespace-nowrap text-xl tabular-nums text-[var(--pbl-student)]">{percentage}%</strong>
       </div>
       <div
         className="mt-3 h-2 overflow-hidden rounded-full bg-[var(--pbl-border)]"

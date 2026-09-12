@@ -1,0 +1,9 @@
+@media (max-width: 1023px) {
+  .sidebar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    max-width: calc(100% - 44px);
+    background: var(--background, white);
+    z-index: 40;
+  }
+}

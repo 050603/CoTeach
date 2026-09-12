@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
+import { ResilientImage } from "@/components/resilient-image";
 import { LearningArt } from "@/components/platform/learning-art";
 import { PlatformLoading } from "@/components/platform/platform-feedback";
 import { useRouter } from "next/navigation";
@@ -159,7 +159,7 @@ export default function TeacherTemplatesPage() {
         const cardBody = <>
           <div className={"pbl-library-art" + (pbl?.coverImageUrl ? " pbl-library-art-cover" : "")}>
             {pbl?.coverImageUrl
-              ? <Image src={pbl.coverImageUrl} alt={`${template.title}课程封面`} fill unoptimized sizes="(min-width: 1280px) 33vw, 50vw" className="object-cover" />
+              ? <ResilientImage fallback={<LearningArt />} src={pbl.coverImageUrl} alt={`${template.title}课程封面`} fill unoptimized sizes="(min-width: 1280px) 33vw, 50vw" className="object-cover" />
               : <LearningArt />}
             <span>{pbl ? "项目式学习" : "课程设计"}</span>
           </div>

@@ -93,8 +93,8 @@
 .pbl-platform-theme .survey-choice-layout > * { min-width: 0; }
 .pbl-platform-theme .survey-text-layout { grid-template-columns: minmax(0,1.3fr) minmax(240px,.8fr); }
 .pbl-platform-theme .survey-donut { width: min(100%, 340px); height: auto; aspect-ratio: 1; }
-.pbl-platform-theme .survey-column-chart { overflow-x: hidden; min-height: 0; max-height: 100%; }
-.pbl-platform-theme .survey-column-chart button { min-width: 0; }
+.pbl-platform-theme .survey-column-chart { overflow-x: auto; min-height: 0; max-height: 100%; }
+.pbl-platform-theme .survey-column-chart button { min-width: 44px; }
 .pbl-platform-theme :is(.survey-choice-label, .survey-bar-chart strong, .survey-response-list p) { overflow-wrap: anywhere; }
 .pbl-platform-theme :is(.survey-choice-label, .survey-bar-chart strong, .survey-response-list p,
   .survey-question-copy strong, .survey-screen-button) { font-size: var(--pbl-desktop-body); }

@@ -2502,8 +2502,8 @@ export default function VerifyCoursePage() {
             </div>
           </section>
           <h3 className="pt-3 font-semibold">评价维度</h3>
-          <div className="overflow-hidden rounded-[6px] border border-stone-200">
-            <table className="w-full text-left text-sm">
+          <div className="overflow-x-auto rounded-[6px] border border-stone-200">
+            <table className="w-full min-w-[680px] text-left text-sm">
               <thead className="bg-stone-50 text-stone-500">
                 <tr>
                   <th className="p-3">维度</th>
@@ -2751,7 +2751,7 @@ export default function VerifyCoursePage() {
       variant="bare"
       currentCourse={{ id: course.id, name: course.name, status: course.status }}
       headerSlot={
-        <div className="ml-4">
+        <div className="ml-4 hidden min-w-0 lg:block">
           <WizardStepper current={0} steps={STEPS} />
         </div>
       }

@@ -257,114 +257,13 @@ html {
   max-width: clamp(87.5rem, 92vw, 164rem);
 }
 
-/* Mobile and tablet visitors receive an intentional access notice after the
-   client has enough capability signals. The checking state never hides the
-   application, which avoids false blockers before hydration on touch PCs. */
-.desktop-access-gate,
-.desktop-access-content {
-  min-height: 100%;
-}
+/* Keep font metrics stable on orientation changes; preserve browser zoom. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { min-height: 100dvh; }
 
-.desktop-access-blocker {
-  display: none;
-}
-
-.desktop-access-gate[data-access="unsupported"] > .desktop-access-content {
-  display: none;
-}
-
-.desktop-access-gate[data-access="unsupported"] > .desktop-access-blocker {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  display: grid;
-  min-height: 100dvh;
-  place-items: center;
-  overflow-y: auto;
-  padding: 1.5rem;
-  background:
-    radial-gradient(circle at 15% 10%, rgba(22, 101, 52, 0.12), transparent 38%),
-    radial-gradient(circle at 90% 90%, rgba(29, 78, 216, 0.1), transparent 36%),
-    var(--pbl-bg);
-}
-
-.desktop-access-blocker__card {
-  width: min(100%, 31rem);
-  border: 1px solid var(--pbl-border);
-  border-radius: 1.25rem;
-  padding: 2rem 1.5rem;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: var(--shadow-floating);
-  text-align: center;
-}
-
-.desktop-access-blocker__icon {
-  display: grid;
-  width: 4.5rem;
-  height: 4.5rem;
-  margin-inline: auto;
-  place-items: center;
-  border-radius: 1.25rem;
-  color: var(--pbl-student);
-  background: var(--pbl-student-soft);
-}
-
-.desktop-access-blocker__icon svg {
-  width: 2.75rem;
-  height: 2.75rem;
-}
-
-.desktop-access-blocker__eyebrow {
-  margin-top: 1.25rem;
-  color: var(--pbl-student);
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.desktop-access-blocker h1 {
-  margin-top: 0.5rem;
-  color: var(--pbl-text-strong);
-  font-size: 1.75rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-}
-
-.desktop-access-blocker h1 + p {
-  margin-top: 0.75rem;
-  color: var(--pbl-text);
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-.desktop-access-blocker__hint {
-  margin: 0.75rem auto 0;
-  max-width: 27rem;
-  color: var(--pbl-text-muted);
-  font-size: 0.8125rem;
-  line-height: 1.75;
-}
-
-.desktop-access-blocker__continue {
-  min-height: 2.75rem;
-  margin-top: 1.25rem;
-  border: 1px solid color-mix(in srgb, var(--pbl-student) 26%, transparent);
-  border-radius: 0.65rem;
-  padding: 0.65rem 1rem;
-  color: white;
-  background: var(--pbl-student);
-  font-size: 0.875rem;
-  font-weight: 700;
-  transition: filter 150ms ease, transform 150ms ease;
-}
-
-.desktop-access-blocker__continue:hover {
-  filter: brightness(0.94);
-}
-
-.desktop-access-blocker__continue:active {
-  transform: translateY(1px);
+@media (pointer: coarse) {
+  input:not([type=checkbox]):not([type=radio]), textarea, select { font-size: max(16px, 1em); }
+  [data-slot=dialog-close] { display: grid; min-width: 44px; min-height: 44px; place-items: center; }
 }
 
 button,

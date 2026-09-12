@@ -74,7 +74,19 @@ describe("ProjectCoverImage", () => {
     ));
     expect(await screen.findByRole("img", { name: "人工智能基础" })).toHaveAttribute(
       "src",
-      "/uploaded-cover.webp",
+      expect.stringMatching(/\/uploaded-cover\.webp$/),
     );
+  });
+
+  it("keeps cover upload available after the saved image fails and recovers with the uploaded URL", async () => {
+    mocks.uploadCourseCoverImage.mockResolvedValueOnce("/replacement.webp");
+    const { container } = render(<ProjectCoverImage allowGenerate course={course} />);
+    fireEvent.error(screen.getByRole("img", { name: "人工智能基础" }));
+    expect(screen.getByRole("img", { name: "人工智能基础（图片暂不可用）" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "上传封面图片" })).toBeEnabled();
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(["image"], "replacement.jpg", { type: "image/jpeg" })] },
+    });
+    await waitFor(() => expect(screen.getByRole("img", { name: "人工智能基础" })).toHaveAttribute("src", expect.stringMatching(/\/replacement\.webp$/)));
   });
 });

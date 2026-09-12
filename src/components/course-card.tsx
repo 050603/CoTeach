@@ -8,6 +8,7 @@ import { ProgressBar } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/session/store";
 import { useState } from "react";
+import { ResilientImage } from "@/components/resilient-image";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui";
 
 const STATUS_TONE: Record<CourseStatus, string> = {
@@ -52,7 +53,8 @@ export function CourseCard({ course }: { course: Course }) {
         "flex h-full flex-col overflow-hidden rounded-[var(--radius-md)] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] transition-colors hover:border-[var(--pbl-border-strong)]",
       )}
     >
-      <div className="min-h-28 border-b border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)] p-5" style={course.coverImageUrl ? { backgroundImage: `linear-gradient(rgba(31,41,51,.2),rgba(31,41,51,.35)),url(${course.coverImageUrl})`, backgroundPosition: "center", backgroundSize: "cover" } : undefined}>
+      <div className="relative isolate min-h-28 overflow-hidden border-b border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)] p-5">
+        {course.coverImageUrl ? <><ResilientImage src={course.coverImageUrl} alt="" fill unoptimized className="-z-20 object-cover" /><span aria-hidden="true" className="absolute inset-0 -z-10 bg-black/55" /></> : null}
         <p className={cn("text-xs font-semibold uppercase tracking-[0.12em]", course.coverImageUrl ? "text-white" : "text-[var(--pbl-text-muted)]")}>{course.subject || "项目课程"} · {course.grade || "全年级"}</p>
         <p className={cn("font-editorial mt-3 line-clamp-2 text-lg font-semibold leading-7", course.coverImageUrl ? "text-white" : "text-[var(--pbl-text)]")}>{course.drivingQuestion || "等待定义驱动问题"}</p>
       </div>

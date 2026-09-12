@@ -488,7 +488,7 @@ export default function TeachClassroomPage() {
       {toolPanel ? (
         <>
           <div className="fixed inset-0 z-[35] md:hidden" onClick={() => setToolPanel(null)} />
-          <div className="pbl-glass fixed left-1/2 top-20 z-40 w-[min(360px,calc(100vw-32px))] -translate-x-1/2 rounded-[var(--radius-md)] p-4 md:hidden">
+          <div className="pbl-glass fixed left-1/2 top-20 z-40 max-h-[calc(100dvh-6rem)] w-[min(360px,calc(100vw-32px))] -translate-x-1/2 overflow-y-auto rounded-[var(--radius-md)] p-4 md:hidden">
             <button
               className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-[var(--radius-xs)] text-stone-400 transition hover:bg-white hover:text-stone-700"
               onClick={() => setToolPanel(null)}

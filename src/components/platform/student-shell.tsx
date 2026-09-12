@@ -1,5 +1,5 @@
 import { LearningArt } from "./learning-art";
-import Image from "next/image";
+import { ResilientImage } from "@/components/resilient-image";
 import type { ReactNode } from "react";
 import { WorkspaceNav } from "./workspace-nav";
 
@@ -37,11 +37,12 @@ export function CourseCover({
 }) {
   return url ? (
     <div className={`relative overflow-hidden bg-[var(--pbl-student-soft)] ${className}`}>
-      <Image
+      <ResilientImage
         src={url}
         alt={`${name}课程封面`}
         fill
         unoptimized
+        fallback={<LearningArt />}
         className="object-cover"
       />
     </div>

@@ -1,0 +1,40 @@
+@media (max-width: 639px) {
+  .dock [data-subtitle-controls] {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.25rem;
+  }
+
+  .dock [data-subtitle-controls] > div {
+    flex-shrink: 0;
+  }
+
+  .dock [data-subtitle-controls] button {
+    white-space: nowrap;
+  }
+}
+
+@media (min-width: 560px) and (max-width: 1279px) and (max-height: 600px) {
+  .dock {
+    height: 100%;
+    border-top: 0;
+    border-left-width: 1px;
+  }
+
+  .dock > div {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .dock [data-subtitle-viewport-frame] {
+    height: 100%;
+    min-height: 3.75rem;
+  }
+
+  .dock [data-subtitle-controls] {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.25rem;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+  }
+}

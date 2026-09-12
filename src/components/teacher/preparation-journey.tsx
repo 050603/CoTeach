@@ -33,7 +33,7 @@ export function PreparationJourney({
         <div className="flex min-w-0 items-start gap-3">
           <Link
             aria-label="返回课程列表"
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-stone-300 bg-white/90 text-stone-600 shadow-sm transition hover:-translate-x-0.5 hover:border-amber-800 hover:text-amber-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-700 focus-visible:ring-offset-2 motion-reduce:transform-none motion-reduce:transition-none"
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-stone-300 bg-white/90 text-stone-600 shadow-sm transition hover:-translate-x-0.5 hover:border-amber-800 hover:text-amber-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-700 focus-visible:ring-offset-2 motion-reduce:transform-none motion-reduce:transition-none"
             href={backHref}
           >
             <ArrowLeft size={18} />
@@ -52,7 +52,18 @@ export function PreparationJourney({
         </div>
       </div>
 
-      <div className="overflow-x-auto px-4 py-4 sm:px-6">
+      <label className="block px-5 py-4 text-sm font-semibold text-stone-700 lg:hidden">
+        切换备课步骤
+        <select
+          className="mt-2 min-h-11 w-full min-w-0 rounded-[6px] border border-stone-300 bg-white px-3 text-sm"
+          onChange={(event) => onSelect(event.target.value as PreparationStepKey)}
+          value={currentKey}
+        >
+          {PREPARATION_FLOW_STEPS.map((step, index) => <option key={step.key} value={step.key}>{index + 1}. {step.label}{states[index] === "complete" ? "（已完成）" : ""}</option>)}
+        </select>
+      </label>
+
+      <div className="hidden overflow-x-auto px-4 py-4 sm:px-6 lg:block">
         <ol className="grid min-w-[1060px] grid-cols-7">
           {PREPARATION_FLOW_STEPS.map((step, index) => {
             const state = states[index];

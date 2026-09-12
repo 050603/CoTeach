@@ -1,6 +1,7 @@
 "use client";
-/* eslint-disable react-hooks/set-state-in-effect, @next/next/no-img-element */
+/* eslint-disable react-hooks/set-state-in-effect */
 import Link from "next/link";
+import { ResilientImage } from "@/components/resilient-image";
 import { TeacherPlatformPage, TeacherPlatformHeader } from "@/components/platform/teacher-shell";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
@@ -494,7 +495,7 @@ export default function TeacherClassEditorPage() {
                         const activitySummary = <>
                           <span className="pbl-teacher-activity-visual">
                             {item.type === "Classroom" && instance?.coverImageUrl ? (
-                              <img src={instance.coverImageUrl} alt="" className="pbl-teacher-activity-cover" />
+                              <ResilientImage width={96} height={54} unoptimized src={instance.coverImageUrl} alt="" className="pbl-teacher-activity-cover" />
                             ) : <TeacherActivityIcon type={item.type}/>}
                           </span>
                           <span className="pbl-teacher-activity-copy">
@@ -617,7 +618,7 @@ export default function TeacherClassEditorPage() {
             <section>
               <div className="pbl-teacher-overview-cover">
                 {offering.coverImageUrl ? (
-                  <img src={offering.coverImageUrl} alt={offering.name + "课程封面"} className="h-full w-full object-cover" />
+                  <ResilientImage fill unoptimized fallback={<LearningArt />} src={offering.coverImageUrl} alt={offering.name + "课程封面"} className="h-full w-full object-cover" />
                 ) : (
                   <LearningArt className="h-full w-full max-w-xl" />
                 )}

@@ -111,7 +111,7 @@ export function ClassroomToolPopover({
   onClose: () => void;
 }) {
   return (
-    <div className={cn("pbl-glass absolute top-[calc(100%+12px)] z-50 w-[360px] rounded-[var(--radius-md)] p-4", align === "right" ? "right-0" : "left-0")}>
+    <div className={cn("pbl-glass absolute top-[calc(100%+12px)] z-50 max-h-[calc(100dvh-5rem)] w-[360px] overflow-y-auto rounded-[var(--radius-md)] p-4", align === "right" ? "right-0" : "left-0")}>
       <button className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-[var(--radius-xs)] text-stone-400 transition hover:bg-white hover:text-stone-700" onClick={onClose} type="button" aria-label="关闭">
         <X size={15} />
       </button>

@@ -645,10 +645,10 @@
 .pbl-platform-theme .pbl-student-steps li[data-active=true] { color: var(--pbl-student); font-weight: 600; }
 .pbl-platform-theme .pbl-student-steps li[data-active=true] span { background: var(--pbl-student); color: white; }
 .pbl-platform-theme .pbl-student-invite-field { min-width: 0; padding: 0; border: 0; }
-.pbl-platform-theme .pbl-student-invite-field legend { display: flex; width: 100%; margin-bottom: 11px; align-items: center; justify-content: space-between; color: var(--pbl-text-strong); }
-.pbl-platform-theme .pbl-student-invite-field legend > span { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; }
-.pbl-platform-theme .pbl-student-invite-field legend svg { color: var(--pbl-student); }
-.pbl-platform-theme .pbl-student-invite-field legend small { color: var(--pbl-text-muted); font-size: 10px; font-weight: 500; letter-spacing: .05em; }
+.pbl-platform-theme .pbl-student-invite-heading { display: flex; width: 100%; min-width: 0; margin-bottom: 11px; align-items: center; justify-content: space-between; gap: 16px; color: var(--pbl-text-strong); white-space: nowrap; }
+.pbl-platform-theme .pbl-student-invite-heading > span { display: inline-flex; min-width: max-content; flex: 0 0 auto; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; }
+.pbl-platform-theme .pbl-student-invite-heading svg { flex: 0 0 auto; color: var(--pbl-student); }
+.pbl-platform-theme .pbl-student-invite-heading small { min-width: max-content; flex: 0 0 auto; color: var(--pbl-text-muted); font-size: 10px; font-weight: 500; letter-spacing: .05em; }
 .pbl-platform-theme .pbl-student-code-group { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)) 10px repeat(3,minmax(0,1fr)); gap: 8px; }
 .pbl-platform-theme .pbl-student-code-cell { min-width: 0; height: 58px; border: 1px solid #c9d9d4; border-radius: 10px; outline: none; background: rgba(255,255,255,.82); color: var(--pbl-text-strong); font-size: 20px; font-weight: 700; text-align: center; text-transform: uppercase; caret-color: var(--pbl-student); box-shadow: inset 0 1px 0 rgba(255,255,255,.8); transition: border-color .2s ease,background .2s ease,box-shadow .2s ease,transform .2s cubic-bezier(.22,1,.36,1); }
 .pbl-platform-theme .pbl-student-code-cell:nth-child(4) { grid-column: 5; }

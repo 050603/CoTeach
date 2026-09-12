@@ -22,6 +22,7 @@ import type { SceneType, SlideContent, InteractiveContent } from '@openmaic/lib/
 import { PENDING_SCENE_ID } from '@openmaic/lib/store/stage';
 import { useDisplayScale } from '@/hooks/use-display-scale';
 import { PraixisLogoMark } from '@/components/brand/praixis-logo';
+import styles from './scene-sidebar.module.css';
 
 interface SceneSidebarProps {
   readonly collapsed: boolean;
@@ -117,7 +118,7 @@ export function SceneSidebar({
         width: displayWidth,
         transition: isDragging ? 'none' : 'width 0.3s ease',
       }}
-      className="bg-white/80 dark:bg-stone-900/80 backdrop-blur-xl border-r border-gray-100 dark:border-gray-800 shadow-[2px_0_24px_rgba(0,0,0,0.02)] flex flex-col shrink-0 z-20 relative overflow-visible"
+      className={cn("bg-white/80 dark:bg-stone-900/80 backdrop-blur-xl border-r border-gray-100 dark:border-gray-800 shadow-[2px_0_24px_rgba(0,0,0,0.02)] flex flex-col shrink-0 z-20 relative overflow-visible", styles.sidebar)}
     >
       {/* Drag handle */}
       {!collapsed && (
@@ -148,8 +149,9 @@ export function SceneSidebar({
             </span>
           </button>
           <button
+            aria-label="收起页面目录"
             onClick={() => onCollapseChange(true)}
-            className="w-7 h-7 shrink-0 rounded-lg flex items-center justify-center bg-gray-100/80 dark:bg-gray-800/80 text-gray-500 dark:text-gray-400 ring-1 ring-black/[0.04] dark:ring-white/[0.06] hover:bg-gray-200/90 dark:hover:bg-gray-700/90 hover:text-gray-700 dark:hover:text-gray-200 active:scale-90 transition-all duration-200"
+            className="w-11 h-11 shrink-0 rounded-lg flex items-center justify-center bg-gray-100/80 dark:bg-gray-800/80 text-gray-500 dark:text-gray-400 ring-1 ring-black/[0.04] dark:ring-white/[0.06] hover:bg-gray-200/90 dark:hover:bg-gray-700/90 hover:text-gray-700 dark:hover:text-gray-200 active:scale-90 transition-all duration-200"
           >
             <PanelLeftClose className="w-4 h-4" />
           </button>
@@ -177,6 +179,9 @@ export function SceneSidebar({
                     onSceneSelect(scene.id);
                   } else {
                     setCurrentSceneId(scene.id);
+                  }
+                  if (window.matchMedia?.('(max-width: 1023px)').matches) {
+                    onCollapseChange(true);
                   }
                 }}
                 className={cn(

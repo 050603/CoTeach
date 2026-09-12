@@ -230,12 +230,12 @@ export default function PreviewCoursePage() {
       userName={user.name}
       variant="bare"
       currentCourse={{ id: course.id, name: course.name, status: course.status }}
-      headerSlot={<div className="ml-4"><WizardStepper current={2} steps={STEPS} /></div>}
+      headerSlot={<div className="ml-4 hidden min-w-0 lg:block"><WizardStepper current={2} steps={STEPS} /></div>}
     >
       <main>
         <header className="relative overflow-hidden rounded-[16px] border border-stone-200 bg-[radial-gradient(circle_at_92%_0%,rgba(254,215,170,0.34),transparent_34%),linear-gradient(120deg,#ffffff_0%,#fffdf8_100%)] px-5 py-5 shadow-[0_10px_32px_rgba(87,74,58,0.06)] sm:px-6">
           <div aria-hidden className="absolute bottom-0 left-16 right-0 h-px bg-gradient-to-r from-transparent via-amber-200 to-transparent" />
-          <div className="relative flex flex-wrap items-start gap-4">
+          <div className="relative grid grid-cols-[auto_minmax(0,1fr)] items-start gap-4 sm:flex sm:flex-wrap">
             <Link
               aria-label="返回课程编辑"
               className="grid size-10 shrink-0 place-items-center rounded-full border border-stone-200 bg-white text-stone-500 shadow-sm transition hover:-translate-x-0.5 hover:border-[var(--pbl-teacher)] hover:text-[var(--pbl-teacher)] motion-reduce:transform-none"
@@ -248,12 +248,12 @@ export default function PreviewCoursePage() {
                 <BookOpenCheck size={14} />
                 <span>课程发布中心 · 第 3 步</span>
               </div>
-              <h1 className="mt-1 truncate font-editorial text-[26px] font-semibold tracking-[-0.02em] text-stone-950 sm:text-[30px]">{course.name}</h1>
+              <h1 className="mt-1 break-words font-editorial text-xl font-semibold leading-snug tracking-[-0.02em] text-stone-950 sm:truncate sm:text-[30px]" title={course.name}>{course.name}</h1>
               <p className="mt-1 max-w-3xl text-sm leading-6 text-stone-500">
                 {[course.subject, course.grade].filter(Boolean).join(" · ")}
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="col-span-2 flex flex-wrap items-center gap-2">
               <Pill tone={isPublished ? "green" : readyToPublish ? "blue" : "amber"}>
                 {isPublished ? "已发布" : readyToPublish ? "可以发布" : resourceAuditLoaded ? `待完成 ${pendingPublishCount} 项` : "正在核对资源"}
               </Pill>
@@ -611,7 +611,7 @@ function StudentClassroomExperience({
         <div className="bg-stone-100 p-2 sm:p-3">
           <StudentStageHost
             backHref={`/teacher/prepare/${course.id}/preview`}
-            className="h-[min(820px,calc(100dvh-190px))] min-h-[650px] overflow-hidden rounded-[9px] border border-stone-200 bg-white"
+            className="h-[min(820px,calc(100dvh-190px))] min-h-[520px] overflow-hidden rounded-[9px] border border-stone-200 bg-white lg:min-h-[650px]"
             classroomId={classroomId}
             courseId={course.id}
             knowledgeGraph={course.content.knowledgeGraph}
@@ -649,13 +649,13 @@ function BranchClassroomPreview({
   if (!classroomId) return null;
   return (
     <div aria-label={`${branch.title}课堂实景`} aria-modal="true" className="fixed inset-0 z-[120] grid place-items-center bg-stone-950/70 p-3 backdrop-blur-sm" role="dialog">
-      <div className="flex h-[min(900px,94vh)] w-[min(1220px,98vw)] flex-col overflow-hidden rounded-[14px] border border-white/20 bg-white shadow-2xl">
+      <div className="flex h-[min(900px,calc(100dvh-24px))] w-full max-w-[1220px] min-w-0 flex-col overflow-hidden rounded-[14px] border border-white/20 bg-white shadow-2xl">
         <header className="flex items-center justify-between gap-3 border-b border-stone-200 px-4 py-3">
           <div>
             <p className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-800">个性化插入资源 · 学生实景</p>
             <h3 className="mt-0.5 text-sm font-black text-stone-900">{branch.title}</h3>
           </div>
-          <button aria-label="关闭课堂实景" className="grid size-9 place-items-center rounded-full text-stone-500 hover:bg-stone-100" onClick={onClose} type="button"><X size={18} /></button>
+          <button aria-label="关闭课堂实景" className="grid size-11 shrink-0 place-items-center rounded-full text-stone-500 hover:bg-stone-100" onClick={onClose} type="button"><X size={18} /></button>
         </header>
         <StudentStageHost
           backHref={`/teacher/prepare/${course.id}/preview`}

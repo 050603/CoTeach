@@ -1027,9 +1027,9 @@ export function CodeAiCollaboration({
         </div>
       </header>
 
-      <div className="flex min-h-[calc(100vh-8rem)] flex-1 flex-col px-2 py-3 sm:px-3 lg:px-4">
-        <section className="flex min-h-[calc(100vh-9.5rem)] flex-1 overflow-hidden border border-stone-200 bg-white shadow-sm">
-          <aside className={cn("hidden shrink-0 flex-col border-r border-stone-200 bg-stone-50/70 transition-[width] duration-200 md:flex", filesPanelOpen ? "w-56" : "w-11")}>
+      <div className="flex min-h-[calc(100dvh-8rem)] flex-1 flex-col px-2 py-3 sm:px-3 lg:px-4">
+        <section className="flex min-h-[calc(100dvh-9.5rem)] min-w-0 flex-1 flex-col overflow-hidden border border-stone-200 bg-white shadow-sm md:flex-row">
+          <aside aria-label="项目文件" className={cn("flex w-full shrink-0 flex-col border-b border-stone-200 bg-stone-50/70 transition-[width] duration-200 md:border-b-0 md:border-r", filesPanelOpen ? "md:w-56" : "md:w-11")}>
             {filesPanelOpen ? (
               <div className="flex h-11 items-center justify-between border-b border-stone-200 px-2.5">
                 <span className="pl-0.5 text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">项目文件</span>
@@ -1047,7 +1047,7 @@ export function CodeAiCollaboration({
               </div>
             )}
             {filesPanelOpen ? (
-            <div className="min-h-0 flex-1 overflow-y-auto py-1.5">
+            <div className="max-h-44 min-h-0 flex-1 overflow-y-auto py-1.5 md:max-h-none">
               {artifact.files.map((file) => (
                 <div className={cn("group/file relative flex items-center transition", file.id === artifact.activeFileId ? "bg-stone-200/80" : "hover:bg-stone-100")} key={file.id}>
                   <button className={cn("flex min-w-0 flex-1 items-center gap-2 px-3 py-2 pr-10 text-left text-sm", file.id === artifact.activeFileId ? "font-medium text-stone-950" : "text-stone-600 hover:text-stone-900")} disabled={Boolean(pendingChangeSet)} onClick={() => { setArtifact((current) => ({ ...current, activeFileId: file.id })); setSelection(undefined); setActiveCommentThreadId(null); }} type="button">
@@ -1055,7 +1055,7 @@ export function CodeAiCollaboration({
                     <span className="truncate">{file.path}</span>
                     {visibleCommentThreads.some((thread) => thread.filePath === file.path && threadIsUnread(thread)) ? <span className="ml-auto size-2 shrink-0 rounded-full bg-amber-500" title="有未读的 AI 组员批注" /> : null}
                   </button>
-                  <button aria-label={`删除 ${file.path}`} className="absolute right-2 grid size-7 place-items-center rounded text-stone-400 opacity-0 transition hover:bg-white hover:text-rose-600 group-hover/file:opacity-100 focus:opacity-100 disabled:hidden" disabled={artifact.files.length <= 1 || Boolean(pendingChangeSet)} onClick={() => setPendingDeleteFileId(file.id)} title={artifact.files.length <= 1 ? "项目至少保留一个文件" : "删除文件"} type="button"><Trash2 size={13} /></button>
+                  <button aria-label={`删除 ${file.path}`} className="absolute right-2 grid size-7 place-items-center rounded text-stone-400 transition hover:bg-white hover:text-rose-600 md:opacity-0 md:group-hover/file:opacity-100 focus:opacity-100 [@media(pointer:coarse)]:opacity-100 disabled:hidden" disabled={artifact.files.length <= 1 || Boolean(pendingChangeSet)} onClick={() => setPendingDeleteFileId(file.id)} title={artifact.files.length <= 1 ? "项目至少保留一个文件" : "删除文件"} type="button"><Trash2 size={13} /></button>
                   {pendingDeleteFileId === file.id ? (
                     <div className="absolute left-2 right-2 top-[calc(100%-2px)] z-30 rounded-lg border border-stone-200 bg-white p-2.5 text-[10px] text-stone-600 shadow-lg">
                       <p>确定删除 <strong className="font-mono text-stone-900">{file.path}</strong>？项目会自动保存这次删除。</p>
@@ -1077,7 +1077,7 @@ export function CodeAiCollaboration({
           </aside>
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="flex h-11 shrink-0 items-center justify-between border-b border-stone-200 bg-white px-3">
+            <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-stone-200 bg-white px-3 py-1">
               <div className="flex min-w-0 items-center gap-1.5 text-xs text-stone-500">
                 {pendingChangeSet ? <Sparkles className="text-sky-600" size={14} /> : <Code2 size={14} />}
                 <span>{pendingChangeSet ? "修改预览" : language === "python" ? "Python" : "C 语言"}</span><ChevronRight size={12} /><span className="truncate font-medium text-stone-800">{pendingChangeSet ? activePreview?.filePath : activeFile?.path}</span>

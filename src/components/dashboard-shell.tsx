@@ -24,6 +24,7 @@ import type { CourseStatus } from "@/lib/session/types";
 import { useSession } from "@/lib/session/store";
 import { loadJSON, saveJSON } from "@/lib/session/storage";
 import { PrimaryButton, SaveStatus, TextInput } from "@/components/ui";
+import styles from "./dashboard-shell.module.css";
 
 type Role = "student" | "teacher";
 
@@ -199,20 +200,24 @@ export function DashboardTopBar({
   return (
     <header className="fixed inset-x-0 top-0 z-[70] border-b border-[var(--pbl-border)] bg-[color-mix(in_srgb,var(--pbl-surface)_96%,transparent)] backdrop-blur-sm">
       <div className="pbl-wide-container flex min-h-16 items-center px-3 py-2 md:px-5">
-        <Link className="flex min-h-11 min-w-0 items-center gap-2.5" href={homeHref}>
+        <Link aria-label="返回课程空间" className="flex min-h-11 min-w-0 shrink-0 items-center gap-2.5" href={homeHref}>
           <LogoMark role={role} />
-          <div className="hidden min-w-0 sm:block">
+          <div className="hidden min-w-0 lg:block">
             <div className="flex items-baseline gap-1"><span className="truncate text-sm font-bold tracking-tight text-[var(--pbl-text-strong)]">PrAIxis</span></div>
             <div className="mt-0.5 max-w-44 truncate text-xs font-medium text-[var(--pbl-text-muted)]">{courseName ?? (isTeacher ? "教师课程空间" : title)}</div>
           </div>
         </Link>
-        <div className="ml-3 flex min-w-0 flex-1 items-center gap-3 md:ml-6">
+        <div className="ml-2 flex min-w-0 flex-1 items-center gap-2 md:ml-4">
+          <div className={cn("min-w-0 flex-1", hideCourseSwitcher ? "lg:hidden" : "md:hidden")}>
+            <p className="truncate text-xs font-semibold" title={courseName ?? title}>{courseName ?? title}</p>
+            {stageLabel ? <p className="mt-0.5 truncate text-[11px] text-[var(--pbl-text-muted)]" title={stageLabel}>{stageLabel}</p> : null}
+          </div>
           {(courseName || stageLabel) && !hideCourseSwitcher ? (
             <div className="relative hidden min-w-0 md:block">
-              <button className="inline-flex min-h-11 max-w-[620px] min-w-0 items-center gap-3 border-l border-[var(--pbl-border)] px-4 text-left text-sm font-semibold text-[var(--pbl-text)] transition-colors hover:bg-[var(--pbl-surface-soft)]" onClick={() => toggle("courses")} type="button">
-                <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-xs)]", isTeacher ? "bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]" : "bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]")}><GraduationCap size={16} /></span>
+              <button className="inline-flex min-h-11 w-full max-w-[620px] min-w-0 items-center gap-2 border-l border-[var(--pbl-border)] px-2 text-left text-sm font-semibold text-[var(--pbl-text)] transition-colors hover:bg-[var(--pbl-surface-soft)] lg:gap-3 lg:px-4" onClick={() => toggle("courses")} type="button">
+                <span className={cn("hidden h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-xs)] lg:grid", isTeacher ? "bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]" : "bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]")}><GraduationCap size={16} /></span>
                 <span className="min-w-0"><span className="block truncate">{stageLabel || courseName}</span><span className="block truncate text-xs font-normal text-[var(--pbl-text-muted)]">{[leadRole ? `${leadRole}主导` : null, currentTask ?? courseName].filter(Boolean).join(" · ")}</span></span>
-                {currentCourse ? <StatusPill status={currentCourse.status} /> : null}
+                {currentCourse ? <span className="hidden shrink-0 xl:inline-flex"><StatusPill status={currentCourse.status} /></span> : null}
                 <ChevronDown size={14} className={cn("shrink-0 text-[var(--pbl-text-subtle)] transition", openPanel === "courses" && "rotate-180")} />
               </button>
               {openPanel === "courses" ? <TopPopover align="left" onClose={() => setOpenPanel(null)}><CourseMenu currentId={currentCourse?.id} isTeacher={isTeacher} onClose={() => setOpenPanel(null)} onSelectStage={onSelectStage} stageOptions={stageOptions} /></TopPopover> : null}
@@ -231,10 +236,10 @@ export function DashboardTopBar({
             {openPanel === "notifications" ? <TopPopover align="right" onClose={() => setOpenPanel(null)}><NotificationMenu items={notifications} /></TopPopover> : null}
           </div>
           <div className="relative">
-            <button className="flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-1.5 transition hover:bg-white" onClick={() => toggle("profile")} type="button">
+            <button aria-label="个人信息" className="flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-1.5 transition hover:bg-white" onClick={() => toggle("profile")} type="button">
               <Avatar name={displayName || (isTeacher ? "教师" : "学生")} />
               <span className="hidden max-w-[100px] truncate text-[13px] font-semibold md:inline">{displayName || "未加入课堂"}</span>
-              <ChevronDown size={14} className={cn("text-[var(--pbl-text-subtle)] transition", openPanel === "profile" && "rotate-180")} />
+              <ChevronDown size={14} className={cn("hidden text-[var(--pbl-text-subtle)] transition sm:block", openPanel === "profile" && "rotate-180")} />
             </button>
             {openPanel === "profile" ? (
               <TopPopover align="right" onClose={() => setOpenPanel(null)}>
@@ -285,6 +290,7 @@ export function DashboardShell({
           : "min-h-screen",
         viewportLocked && "fixed inset-0",
         "text-[var(--pbl-text)]",
+        styles.shell,
         isTeacher ? "pbl-app-bg-role-teacher" : "pbl-app-bg-role-student",
       )}
     >
@@ -304,6 +310,7 @@ export function DashboardShell({
               ? cn(
                   "mx-auto h-full min-h-0 w-full overflow-hidden px-4 md:px-5",
                   wide ? "pbl-wide-container" : "pbl-dashboard-container",
+                  wide && styles.learningViewport,
                 )
               : cn(
                   "mx-auto w-full px-4 pb-10 md:px-5",
@@ -364,9 +371,9 @@ function StatusPill({ status }: { status: CourseStatus }) {
 
 function TopPopover({ children, onClose, align }: { children: ReactNode; onClose: () => void; align: "left" | "right" }) {
   return (
-    <div className={cn("pbl-glass absolute top-[calc(100%+10px)] z-40 w-[min(380px,calc(100vw-24px))] rounded-[var(--radius-md)] p-4", align === "left" ? "left-0" : "right-0")}>
+    <div className={cn("pbl-glass absolute top-[calc(100%+10px)] z-40 w-[min(380px,calc(100vw-24px))] rounded-[var(--radius-md)] p-4", styles.popover, align === "left" ? "left-0" : "right-0")}>
       <button
-        className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-[var(--radius-xs)] text-[var(--pbl-text-subtle)] transition hover:bg-[var(--pbl-surface)] hover:text-[var(--pbl-text-muted)]"
+        className="absolute right-1 top-1 grid h-11 w-11 place-items-center rounded-[var(--radius-xs)] text-[var(--pbl-text-subtle)] transition hover:bg-[var(--pbl-surface)] hover:text-[var(--pbl-text-muted)]"
         onClick={onClose}
         type="button"
         aria-label="关闭"
@@ -519,7 +526,7 @@ export function Toolbar() {
     { label: "S", name: "删除线" },
   ];
   return (
-    <div className="flex h-11 items-center gap-1 border-b border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)] px-3">
+    <div className={cn("flex h-11 items-center gap-1 border-b border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)] px-3", styles.toolbar)}>
       <select className="h-8 rounded-[var(--radius-xs)] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] px-3 text-sm text-[var(--pbl-text-muted)]">
         <option>正文</option>
       </select>

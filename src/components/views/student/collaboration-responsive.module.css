@@ -1,0 +1,26 @@
+.memberPanel {
+  overflow-wrap: anywhere;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.memberPanel textarea {
+  min-width: 0;
+}
+
+@media (max-height: 600px) and (max-width: 1023px) {
+  .memberPanel {
+    top: max(0.5rem, env(safe-area-inset-top));
+    bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+}
+
+@media (pointer: coarse) {
+  .memberPanel button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .memberPanel textarea {
+    font-size: 16px;
+  }
+}
