@@ -4,6 +4,7 @@ import type {
 } from "@/lib/pbl-time-model";
 import type { Course, KnowledgePoint, OpenMaicSceneOutlineSnapshot, TeachingOutlineSection } from "@/lib/session/types";
 import { allocateLectureBudget, isKnowledgeLectureBudgetInRange } from "./knowledge-lecture-budget";
+import type { CourseStagePlan } from "@/lib/resource-package/types";
 
 export const NEW_SYSTEM_STAGE_KEYS = [
   "launch",
@@ -124,6 +125,7 @@ export function buildNewSystemTimingPlan(
 export function isNewSystemAiTimingPlan(
   timing: PblModuleTimingPlan | null | undefined,
   courseHours?: number,
+  stagePlan?: CourseStagePlan,
 ): timing is PblModuleTimingPlan {
   if (!timing || timing.status !== "confirmed") return false;
   const aiAllocations = timing.allocations.filter(
@@ -137,7 +139,7 @@ export function isNewSystemAiTimingPlan(
     && timing.allocations.length === aiAllocations.length
     && Math.abs(timing.totalMinutes - aiMinutes) < 0.000001
     && aiMinutes > 0
-    && (courseHours === undefined || isKnowledgeLectureBudgetInRange(timing.totalMinutes, courseHours));
+    && ((courseHours === undefined && !stagePlan) || isKnowledgeLectureBudgetInRange(timing.totalMinutes, courseHours ?? 0, stagePlan));
 }
 
 export function buildNewSystemAiTeachingOutline(
@@ -201,6 +203,14 @@ export function getNewSystemCourseReadiness(
   });
 
   return [
+    ...((course.content.qualityReviewRequired || Number(course.content.resourcePackage?.schemaVersion ?? 0) >= 2 || Number(course.content.stagePlan?.schemaVersion ?? 0) >= 2) ? [{
+      id: "teacher-review",
+      label: "教师终审",
+      ok: Boolean(course.content.teacherReview?.signature
+        && course.content.teacherReview.signature === course.content.qualityReview?.signature
+        && course.content.teacherReview.classroomId === (course.aiLearningClassroomId || course.content._openmaicClassroomId)),
+      message: "请在预览发布页面核对检查结果，并确认当前版本可以授课。",
+    }] : []),
     {
       id: "basics",
       label: "课程基本信息",
@@ -215,10 +225,12 @@ export function getNewSystemCourseReadiness(
     },
     {
       id: "timing",
-      label: "知识讲授时长（整课 20%–40%）",
-      ok: isNewSystemAiTimingPlan(timing, course.hours)
+      label: course.content.stagePlan ? "知识讲授时长（教案预算）" : "知识讲授时长（整课 20%–40%）",
+      ok: isNewSystemAiTimingPlan(timing, course.hours, course.content.stagePlan)
         && (!lectureSections.length || hasExactKnowledgeLecturePageBudget(outlines, timing!.totalMinutes)),
-      message: `知识讲授须占总课时的 20%–40%（${Math.ceil(course.hours * 60 * 0.2)}–${Math.floor(course.hours * 60 * 0.4)} 分钟），由 AI 先确定总时长，再按预算生成讲解、互动和小测；旧的超长方案请重新生成。`,
+      message: course.content.stagePlan
+        ? "知识讲授必须严格采用教师确认的教案分钟数，讲解、例证、互动和小测合计必须等于该预算。"
+        : `知识讲授须占总课时的 20%–40%（${Math.ceil(course.hours * 60 * 0.2)}–${Math.floor(course.hours * 60 * 0.4)} 分钟），由 AI 先确定总时长，再按预算生成讲解、互动和小测；旧的超长方案请重新生成。`,
     },
     {
       id: "ai-outline",

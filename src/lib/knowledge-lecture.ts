@@ -1,5 +1,6 @@
 import type { SceneOutline } from "@openmaic/lib/types/generation";
 import { allocateLectureBudget } from "@/lib/classroom/knowledge-lecture-budget";
+import { normalizeTeachingBrief } from "@/lib/openmaic/generation/teaching-brief";
 import type {
   Course,
   KnowledgeGraph,
@@ -22,6 +23,14 @@ function connectedKnowledgeGroups(
 ): string[][] {
   const orderedIds = unique(knowledgePoints.map((point) => point.id));
   if (!orderedIds.length) return [];
+  if (knowledgePoints.some((point) => point.groupId)) {
+    const groups = new Map<string, string[]>();
+    for (const point of knowledgePoints) {
+      const key = point.groupId || point.id;
+      groups.set(key, [...(groups.get(key) ?? []), point.id]);
+    }
+    return [...groups.values()];
+  }
   const allowed = new Set(orderedIds);
   const neighbors = new Map(orderedIds.map((id) => [id, new Set<string>()]));
   for (const edge of knowledgeGraph?.edges ?? []) {
@@ -136,7 +145,8 @@ export function organizeKnowledgeLectureOutlines(
       ...entry.knowledgePointIds,
       ...entry.scenes.flatMap((scene) => scene.knowledgePointIds ?? []),
     ]).filter((id) => pointNames.has(id));
-    const title = sectionTitle(sectionIndex, knowledgePointIds, pointNames);
+    const sourceGroupNames = unique(input.knowledgePoints.filter((point) => knowledgePointIds.includes(point.id)).map((point) => point.groupName ?? ""));
+    const title = sourceGroupNames.length ? `第 ${sectionIndex + 1} 节 · ${sourceGroupNames.join("与")}` : sectionTitle(sectionIndex, knowledgePointIds, pointNames);
     const sectionScenes = entry.scenes.map((outline) => {
       const targetDurationSec = teachingDurations[teachingIndex++]!;
       return {
@@ -154,8 +164,18 @@ export function organizeKnowledgeLectureOutlines(
     const quizOutlineId = `${sectionId}-check`;
     const keyPoints = knowledgePointIds.map((id) => pointNames.get(id)).filter(Boolean) as string[];
     const anchor = sectionScenes.at(-1)!;
+    const briefs = sectionScenes.map(normalizeTeachingBrief);
     const quiz: LectureOutline = {
       ...anchor,
+      visualPlan: undefined,
+      teachingBrief: {
+        schemaVersion: 1,
+        explanation: briefs.map((brief) => brief.explanation).join("\n"),
+        examples: unique(briefs.flatMap((brief) => brief.examples)),
+        conditions: unique(briefs.flatMap((brief) => brief.conditions)),
+        evidence: [...new Map(briefs.flatMap((brief) => brief.evidence).map((item) => [`${item.sourceId}:${item.quote}`, item])).values()],
+        assessmentFocus: unique(briefs.map((brief) => brief.assessmentFocus)).join("；"),
+      },
       id: quizOutlineId,
       type: "quiz",
       title: `${title} · 节末小测`,

@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { after, type NextRequest } from "next/server";
-import { designGenerationJobs } from "@/lib/course-generation/job-storage";
+import { designGenerationJobs, resourcePackageJobs } from "@/lib/course-generation/job-storage";
 import { isBackgroundCourseGenerationEnabled } from "@/lib/course-generation/capability";
 import {
   cancelCourseDesignJob,
@@ -31,6 +31,7 @@ import {
   assertRequestedClassroomMediaProviders,
   classroomMediaConfigurationErrorResponse,
 } from "@openmaic/lib/server/classroom-media-readiness";
+import { ResourcePackageError, resolveConfirmedResourcePackage } from "@/lib/resource-package/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,6 +40,7 @@ export const dynamic = "force-dynamic";
 function responseJob(job: Awaited<ReturnType<typeof designGenerationJobs.findUnique>>) {
   if (!job) return null;
   const request = job.request as unknown as Partial<QuickDesignRequest>;
+  const packageDocumentIds = new Set(Object.values(request.resourcePackage?.documents ?? {}).map((document) => document.id));
   return {
     id: job.id,
     status: job.status,
@@ -68,11 +70,15 @@ function responseJob(job: Awaited<ReturnType<typeof designGenerationJobs.findUni
     updatedAt: job.updatedAt.toISOString(),
     requestPreview: {
       teacherBrief: typeof request.teacherBrief === "string" ? request.teacherBrief : "",
+      resourcePackage: request.resourcePackage ?? null,
+      resourcePackageId: request.resourcePackage?.id,
+      resourcePackageRevision: request.resourcePackage?.revision,
+      supplementalAnswers: request.supplementalAnswers ?? null,
       generationMode: request.generationMode === "deep-interaction"
         ? "deep-interaction"
         : "standard",
       options: request.options ?? null,
-      referenceMaterials: (request.referenceMaterials ?? []).map((material) => ({
+      referenceMaterials: (request.referenceMaterials ?? []).filter((material) => !packageDocumentIds.has(material.id)).map((material) => ({
         id: material.id,
         fileName: material.fileName,
         mimeType: material.mimeType,
@@ -146,24 +152,47 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
     if (!course) return Response.json({ error: "Course not found" }, { status: 404 });
     const body = await request.json().catch(() => null) as {
       teacherBrief?: unknown;
+      supplementalAnswers?: unknown;
+      resourcePackageId?: unknown;
+      resourcePackageRevision?: unknown;
       generationMode?: unknown;
       options?: Partial<NonNullable<QuickDesignRequest["options"]>>;
       referenceIds?: unknown;
     } | null;
-    const teacherBrief = typeof body?.teacherBrief === "string" ? body.teacherBrief.trim().slice(0, 4_000) : "";
-    if (!teacherBrief) return Response.json({ error: "请先描述课程生成要求。" }, { status: 400 });
+    const answers = body?.supplementalAnswers && typeof body.supplementalAnswers === "object"
+      ? body.supplementalAnswers as Record<string, unknown> : {};
+    const supplementalBrief = typeof answers.brief === "string" ? answers.brief.trim().slice(0, 4_000) : "";
+    const teacherBrief = typeof body?.teacherBrief === "string" ? body.teacherBrief.trim().slice(0, 4_000) : supplementalBrief;
+    let job = await designGenerationJobs.findUnique({ where: { courseId } });
+    const previousRequest = job?.request as unknown as QuickDesignRequest | undefined;
+    const hasPackageIdentifier = body?.resourcePackageId !== undefined || body?.resourcePackageRevision !== undefined;
+    const hasStartedPackageImport = !hasPackageIdentifier && Boolean(await resourcePackageJobs.findUnique({ where: { courseId } }));
+    if (!hasPackageIdentifier && (!previousRequest || previousRequest.resourcePackage || course.content?.resourcePackage || hasStartedPackageImport)) {
+      return Response.json({ error: "RESOURCE_PACKAGE_REQUIRED", detail: "请先上传资源包、补充关键问题并确认教案，再开始生成课堂。" }, { status: 400 });
+    }
     const referenceIds = Array.isArray(body?.referenceIds)
       ? body.referenceIds.filter((id): id is string => typeof id === "string").slice(0, 4)
       : [];
     let referenceMaterials: QuickDesignRequest["referenceMaterials"] = [];
+    let resourcePackage: QuickDesignRequest["resourcePackage"];
     try {
-      referenceMaterials = await resolveGenerationReferenceMaterials({
+      const extraReferences = await resolveGenerationReferenceMaterials({
         courseId,
         uploadIds: referenceIds,
         uploadedById: requestedBy || null,
       });
+      referenceMaterials = extraReferences;
+      if (hasPackageIdentifier) {
+        if (typeof body?.resourcePackageId !== "string" || !body.resourcePackageId.trim()
+          || typeof body.resourcePackageRevision !== "number" || !Number.isInteger(body.resourcePackageRevision) || body.resourcePackageRevision < 1) {
+          return Response.json({ error: "INVALID_RESOURCE_PACKAGE", detail: "资源包标识或版本无效，请重新确认资源包。" }, { status: 400 });
+        }
+        const confirmed = await resolveConfirmedResourcePackage(courseId, body.resourcePackageId, body.resourcePackageRevision, requestedBy);
+        resourcePackage = confirmed.resourcePackage;
+        referenceMaterials = [...confirmed.referenceMaterials, ...extraReferences];
+      }
     } catch (error) {
-      if (error instanceof GenerationReferenceError) {
+      if (error instanceof GenerationReferenceError || error instanceof ResourcePackageError) {
         return Response.json({ error: error.code, detail: error.message }, { status: error.status });
       }
       throw error;
@@ -172,6 +201,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       courseId,
       systemMode: getOpenPblSystemMode(),
       teacherBrief,
+      ...(resourcePackage ? { resourcePackage, supplementalAnswers: { brief: supplementalBrief || teacherBrief } } : {}),
       referenceMaterials,
       generationMode: body?.generationMode === "deep-interaction"
         ? "deep-interaction"
@@ -182,6 +212,13 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
         enableVideoGeneration: body?.options?.enableVideoGeneration === true,
       },
     };
+    if (!resourcePackage && !isSameCourseDesignRequest(previousRequest, quickRequest)) {
+      return Response.json({ error: "RESOURCE_PACKAGE_REQUIRED", detail: "历史无资源包任务仅支持按原参数恢复；新建或修改生成要求请先上传资源包。" }, { status: 400 });
+    }
+    if (job && ["queued", "running", "review_available", "paused", "cancelling"].includes(job.status)
+      && !isSameCourseDesignRequest(job.request, quickRequest)) {
+      return Response.json({ error: "GENERATION_REQUEST_CONFLICT", detail: "当前生成仍在使用已提交的资源包，请先中断当前任务后再应用新包或新要求。" }, { status: 409 });
+    }
     try {
       assertRequestedClassroomMediaProviders(quickRequest.options ?? {});
     } catch (error) {
@@ -197,8 +234,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       quickRequest.options,
       quickRequest.systemMode,
     );
-    let job = await designGenerationJobs.findUnique({ where: { courseId } });
-
     if (
       job
       && persistedJobMode(job) !== quickRequest.systemMode

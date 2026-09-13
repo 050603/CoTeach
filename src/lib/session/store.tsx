@@ -1838,6 +1838,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           groupId: input.groupId,
           stageKey: input.stageKey,
           dimensionScores: input.dimensionScores,
+          rubricSnapshot: input.rubricSnapshot,
           teacherTotal: input.teacherTotal,
           aiDimensionScores: input.aiDimensionScores,
           aiTotal: input.aiTotal,
@@ -1875,6 +1876,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           content: input.content,
           improvementPlan: input.improvementPlan,
           survey: input.survey,
+          courseReflection: input.courseReflection,
+          experienceSurvey: input.experienceSurvey,
           // A legacy reflection may share the same record id, but its
           // creation time predates the survey. Start the survey's first
           // submission clock at this save; subsequent structured updates

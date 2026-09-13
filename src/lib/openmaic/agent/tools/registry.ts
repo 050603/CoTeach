@@ -6,6 +6,7 @@ import {
 import { makeReadSceneContentTool } from './read-scene-content';
 import { makeRegenerateSceneTool } from './regenerate-scene';
 import { makeEditInteractiveHtmlTool } from './edit-interactive-html';
+import { makeEditWhiteboardTool } from './edit-whiteboard';
 
 /**
  * Deps needed to build the v0 toolset.
@@ -13,7 +14,7 @@ import { makeEditInteractiveHtmlTool } from './edit-interactive-html';
  * - `getSceneContext`: returns trusted scene/stage context from the client POST body;
  *   the model supplies only a sceneId, and the route fulfils the heavy data.
  *
- * All three tools share the same deps shape (`RegenerateActionsDeps`); the
+ * The tools share the same deps shape (`RegenerateActionsDeps`); the
  * read tool only uses `getSceneContext`.
  */
 export type ToolsetDeps = RegenerateActionsDeps & { activeSceneId?: string };
@@ -24,6 +25,7 @@ export type ToolsetDeps = RegenerateActionsDeps & { activeSceneId?: string };
  * - `regenerate_scene` — instruction-driven whole-slide regeneration (content + actions)
  * - `regenerate_scene_actions` — narration/actions only
  * - `edit_interactive_html` — surgical str_replace edits for an interactive scene's HTML
+ * - `edit_whiteboard` — replace one existing whiteboard teaching segment
  */
 export function buildToolset(deps: ToolsetDeps): AgentTool<never, never>[] {
   return [
@@ -31,6 +33,7 @@ export function buildToolset(deps: ToolsetDeps): AgentTool<never, never>[] {
     makeRegenerateSceneTool(deps) as never,
     makeRegenerateSceneActionsTool(deps) as never,
     makeEditInteractiveHtmlTool(deps) as never,
+    makeEditWhiteboardTool(deps) as never,
   ];
 }
 
@@ -40,4 +43,5 @@ export const V0_ALLOWLIST: ReadonlySet<string> = new Set([
   'regenerate_scene',
   'regenerate_scene_actions',
   'edit_interactive_html',
+  'edit_whiteboard',
 ]);

@@ -8,6 +8,7 @@ import type {
 } from "@/lib/session/types";
 import { getCompanionStagePolicy } from "./stage-policy";
 import { deriveStageReadiness } from "@/lib/learning-evidence/readiness";
+import { buildCourseStageRequirementsContext } from "@/lib/resource-package/course-requirements";
 
 export type CompanionContextSnapshot = {
   stageKey: string;
@@ -204,6 +205,7 @@ export function buildCompanionContext(course: Course, studentId: string | undefi
     "服务端学习上下文（以下是课程记录中的事实；没有记录就写‘无记录’，不得臆造）：",
     `学生=${student?.name ?? "未识别学生"}`,
     `阶段服务契约要求优先使用：${policy.requiredContext.join("；")}`,
+    buildCourseStageRequirementsContext(course, stageKey),
     ...promptSections.map((key) => {
       const labels: Record<ContextSectionKey, string> = {
         course: "课程与评价",

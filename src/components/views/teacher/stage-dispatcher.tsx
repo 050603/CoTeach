@@ -1,3 +1,4 @@
+import type { TeacherPresentationMode } from "@/lib/classroom/presentation";
 import type { Course, StageViewKey } from "@/lib/session/types";
 import type { TeacherStageFocus } from "@/lib/classroom/teacher-dashboard-metrics";
 import type { ShowcasePresentationController } from "@/hooks/use-showcase-presentation";
@@ -21,7 +22,11 @@ export function TeacherStageView({
   onSelectStudent,
   focus,
   showcaseController,
+  presentation = "workspace",
+  immersive = false,
 }: {
+  presentation?: TeacherPresentationMode;
+  immersive?: boolean;
   view: StageViewKey;
   course: Course;
   onSelectStudent?: (studentId: string) => void;
@@ -40,6 +45,7 @@ export function TeacherStageView({
     case "ai-learning":
       return (
         <AiLearningTeacherView
+          presentation={presentation}
           course={course}
           onSelectStudent={onSelectStudent}
           focus={focus?.stageKey === "ai-learning" ? focus : undefined}
@@ -48,20 +54,22 @@ export function TeacherStageView({
     case "simple-resource":
       return (
         <SimplifiedTeacherStageView
+          presentation={presentation}
           course={course}
           stageKey={course.stages[course.currentStageIndex]?.key ?? "launch"}
           focus={focus?.stageKey === "launch" ? focus : undefined}
         />
       );
     case "ai-collaboration":
-      return <AiCollaborationTeacherMonitor course={course} focus={focus?.stageKey === "make" ? focus : undefined} />;
+      return <AiCollaborationTeacherMonitor course={course} presentation={presentation} focus={focus?.stageKey === "make" ? focus : undefined} />;
     case "showcase-reporting":
-      return <NewShowcaseTeacherView course={course} focus={focus?.stageKey === "showcase" ? focus : undefined} controller={showcaseController} />;
+      return <NewShowcaseTeacherView immersive={immersive} course={course} presentation={presentation} focus={focus?.stageKey === "showcase" ? focus : undefined} controller={showcaseController} />;
     case "reflection-survey":
-      return <NewReflectionTeacherView course={course} focus={focus?.stageKey === "reflection" ? focus : undefined} />;
+      return <NewReflectionTeacherView course={course} presentation={presentation} focus={focus?.stageKey === "reflection" ? focus : undefined} />;
     default:
       return (
         <SimplifiedTeacherStageView
+          presentation={presentation}
           course={course}
           stageKey={currentStage?.key ?? "launch"}
           focus={focus?.stageKey === "launch" ? focus : undefined}

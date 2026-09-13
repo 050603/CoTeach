@@ -1,6 +1,14 @@
 import { evaluateLessonOutlines } from "@/lib/course-design/quality-gates";
 import type { PblActivityCatalogEntry, SceneOutline } from "@/lib/openmaic/types/generation";
 
+/** Once package import starts, an older free-form request must never resume alongside it. */
+export function canResumeCourseDesignWithPackageState(request: unknown, packageJob: { status: string } | null): boolean {
+  if (!request || typeof request !== "object") return false;
+  return (request as Record<string, unknown>).resourcePackage
+    ? packageJob?.status === "ready"
+    : packageJob === null;
+}
+
 function hasCompletedStep(trace: unknown, step: string): boolean {
   if (!Array.isArray(trace)) return false;
   return trace.some((entry) => {
@@ -65,6 +73,8 @@ function normalizedRequest(value: unknown): {
   enableTTS: boolean;
   enableVideoGeneration: boolean;
   referenceIds: string[];
+  resourcePackageSignature: string | null;
+  supplementalBrief: string;
 } | null {
   if (!value || typeof value !== "object") return null;
   const request = value as Record<string, unknown>;
@@ -72,6 +82,10 @@ function normalizedRequest(value: unknown): {
     ? request.options as Record<string, unknown>
     : {};
   if (typeof request.courseId !== "string" || typeof request.teacherBrief !== "string") return null;
+  const resourcePackage = request.resourcePackage && typeof request.resourcePackage === "object"
+    ? request.resourcePackage as Record<string, unknown> : null;
+  const answers = request.supplementalAnswers && typeof request.supplementalAnswers === "object"
+    ? request.supplementalAnswers as Record<string, unknown> : {};
   return {
     courseId: request.courseId,
     systemMode: "new",
@@ -79,6 +93,13 @@ function normalizedRequest(value: unknown): {
       ? "deep-interaction"
       : "standard",
     teacherBrief: request.teacherBrief.trim(),
+    supplementalBrief: typeof answers.brief === "string" ? answers.brief.trim() : "",
+    resourcePackageSignature: resourcePackage ? JSON.stringify({
+      id: resourcePackage.id,
+      revision: resourcePackage.revision,
+      source: resourcePackage.source,
+      draft: resourcePackage.draft,
+    }) : null,
     enableImageGeneration: options.enableImageGeneration !== false,
     enableTTS: options.enableTTS !== false,
     enableVideoGeneration: options.enableVideoGeneration === true,

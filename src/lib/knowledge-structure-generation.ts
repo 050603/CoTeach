@@ -18,6 +18,8 @@ import type { GenerationReferenceMaterial } from "@/lib/course-design/generation
 type ModelCall = typeof callLLM;
 
 export type KnowledgeStructureGenerationContext = {
+  /** Resource-package leaf targets. Group headings are metadata, never extra timed targets. */
+  teacherKnowledgePoints?: Array<{ id: string; name: string; description: string; groupId?: string; groupName?: string }>;
   pblOutline?: string;
   teacherRequiredKnowledgePoints?: string[];
   referenceMaterials?: GenerationReferenceMaterial[];
@@ -71,7 +73,7 @@ function prepareKnowledgeStructureForTeacherReview(
   parsed: JsonRecord,
   input: GenerateInput,
   context: KnowledgeStructureGenerationContext,
-): { knowledgePoints: unknown[]; knowledgeGraph: KnowledgeGraph } {
+): { knowledgePoints: CourseContent["knowledgePoints"]; knowledgeGraph: KnowledgeGraph } {
   const nested = [parsed, record(parsed.data), record(parsed.result), record(parsed.content)]
     .find((candidate) =>
       firstValue(candidate, ["knowledgePoints", "knowledge_points", "points"])
@@ -86,6 +88,7 @@ function prepareKnowledgeStructureForTeacherReview(
     ? suppliedPoints.map(record)
     : rawNodes.filter((node) => firstText(node, ["instructionalRole", "role"]) !== "prerequisite");
   const instructedNames = [
+    ...(context.teacherKnowledgePoints?.map((point) => point.name) ?? []),
     ...(context.teacherRequiredKnowledgePoints ?? []),
     ...(input.learningObjectives ?? []),
   ].map((item) => item.trim()).filter(Boolean);
@@ -95,30 +98,23 @@ function prepareKnowledgeStructureForTeacherReview(
     : fallbackNames.map((name) => ({ name }));
   const usedPointIds = new Set<string>();
   const usedPointNames = new Set<string>();
-  const knowledgePoints: Array<{
-    id: string;
-    name: string;
-    description: string;
-    keyInfo: string;
-    masteryBoundary: string;
-    objectiveIndexes: number[];
-    relatedIds?: string[];
-    level: "foundation" | "core" | "application" | "extension";
-  }> = [];
+  const knowledgePoints: CourseContent["knowledgePoints"] = [];
   const objectiveCount = input.learningObjectives?.length ?? 0;
   const addPoint = (source: JsonRecord, fallbackIndex: number) => {
     const name = firstText(source, ["name", "label", "title", "knowledgePoint"])
       || fallbackNames[fallbackIndex]
       || `${input.name}核心知识 ${fallbackIndex + 1}`;
     const normalizedName = normalizeKnowledgePointName(name);
+    const confirmed = context.teacherKnowledgePoints?.find((point) => normalizeKnowledgePointName(point.name) === normalizedName);
+    if (context.teacherKnowledgePoints?.length && !confirmed) return;
     if (!normalizedName || usedPointNames.has(normalizedName)) return;
-    const requestedId = firstText(source, ["id", "key"]);
+    const requestedId = confirmed?.id ?? firstText(source, ["id", "key"]);
     let id = requestedId && !usedPointIds.has(requestedId)
       ? requestedId
       : `kp-generated-${knowledgePoints.length + 1}`;
     while (usedPointIds.has(id)) id = `${id}-next`;
     const description = firstText(source, ["description", "summary", "explanation"])
-      || pointDescription(name);
+      || confirmed?.description || pointDescription(name);
     const objectiveIndexes = Array.isArray(source.objectiveIndexes)
       ? [...new Set(source.objectiveIndexes.filter((value): value is number =>
           typeof value === "number"
@@ -142,18 +138,18 @@ function prepareKnowledgeStructureForTeacherReview(
         ? source.relatedIds.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
         : undefined,
       level: validLevel(source.level),
+      ...(confirmed ? { groupId: confirmed.groupId, groupName: confirmed.groupName } : {}),
     });
   };
   pointSources.forEach(addPoint);
-  (context.teacherRequiredKnowledgePoints ?? []).forEach((name, index) => {
+  (context.teacherKnowledgePoints?.map((point) => point.name) ?? context.teacherRequiredKnowledgePoints ?? []).forEach((name, index) => {
     if (usedPointNames.has(normalizeKnowledgePointName(name))) return;
-    addPoint({ name, level: "core" }, pointSources.length + index);
+    const confirmed = context.teacherKnowledgePoints?.find((point) => normalizeKnowledgePointName(point.name) === normalizeKnowledgePointName(name));
+    addPoint({ name, level: "core", ...(confirmed ? { description: confirmed.description } : {}) }, pointSources.length + index);
   });
   if (knowledgePoints.length === 0) addPoint({ name: input.name, level: "core" }, 0);
-  for (let index = 0; index < objectiveCount; index += 1) {
-    if (knowledgePoints.some((point) => point.objectiveIndexes.includes(index))) continue;
-    knowledgePoints[index % knowledgePoints.length]!.objectiveIndexes.push(index);
-  }
+  // Missing objective mappings remain visible in the teacher report. Array order
+  // is never evidence that a knowledge point serves a learning objective.
 
   const pointById = new Map(knowledgePoints.map((point) => [point.id, point]));
   const pointIdByName = new Map(
@@ -171,6 +167,8 @@ function prepareKnowledgeStructureForTeacherReview(
       instructionalRole: "lesson",
       objectiveIndexes: point.objectiveIndexes,
       masteryBoundary: point.masteryBoundary,
+      groupId: point.groupId,
+      groupName: point.groupName,
       relatedLessonIds: Array.isArray(source.relatedLessonIds)
         ? source.relatedLessonIds.filter((value): value is string => typeof value === "string")
         : undefined,
@@ -179,17 +177,19 @@ function prepareKnowledgeStructureForTeacherReview(
   const usedNodeIds = new Set(knowledgePoints.map((point) => point.id));
   const usedNodeNames = new Set(knowledgePoints.map((point) => normalizeKnowledgePointName(point.name)));
   const endpointAliases = new Map(knowledgePoints.map((point) => [point.id, point.id]));
-  rawNodes.forEach((source) => {
+  [...rawNodes, ...rawPoints].forEach((source) => {
     const rawId = firstText(source, ["id", "key"]);
     const label = firstText(source, ["label", "name", "title"]);
     const lessonId = label ? pointIdByName.get(normalizeKnowledgePointName(label)) : undefined;
     if (rawId && lessonId) endpointAliases.set(rawId, lessonId);
   });
   const prerequisiteNodes: KnowledgeGraph["nodes"] = [];
+  const groupNames = new Set(context.teacherKnowledgePoints?.map((point) => normalizeKnowledgePointName(point.groupName ?? "")) ?? []);
   rawNodes.forEach((source, index) => {
     const rawId = firstText(source, ["id", "key"]);
     const label = firstText(source, ["label", "name", "title"]);
-    if (!label || pointById.has(rawId) || pointIdByName.has(normalizeKnowledgePointName(label))) return;
+    if (!label || groupNames.has(normalizeKnowledgePointName(label)) || pointById.has(rawId) || pointIdByName.has(normalizeKnowledgePointName(label))) return;
+    if (context.teacherKnowledgePoints?.length && rawPoints.some((point) => normalizeKnowledgePointName(firstText(point, ["name", "label", "title"])) === normalizeKnowledgePointName(label))) return;
     const normalizedName = normalizeKnowledgePointName(label);
     if (usedNodeNames.has(normalizedName)) return;
     let id = rawId && !usedNodeIds.has(rawId) ? rawId : `prereq-generated-${index + 1}`;
@@ -266,8 +266,8 @@ function prepareKnowledgeStructureForTeacherReview(
       || requestedType === "required-prerequisite"
         ? requestedType
         : "supports";
-    if (fromPrerequisite) type = "required-prerequisite";
-    else if (type === "required-prerequisite") type = "supports";
+    if (fromPrerequisite && type !== "required-prerequisite") type = "supports";
+    if (!fromPrerequisite && type === "required-prerequisite") type = "supports";
     if ((type === "application" || type === "transfer")
       && toNode.level !== "application"
       && toNode.level !== "extension") type = "supports";
@@ -275,15 +275,6 @@ function prepareKnowledgeStructureForTeacherReview(
       && levelRank[fromNode.level ?? "core"] > levelRank[toNode.level ?? "core"]) return;
     if (createsCycle(from, to)) return;
     const label = firstText(source, ["label", "relation", "description"]);
-    const fallbackLabel = type === "required-prerequisite"
-      ? `是“${toNode.label}”的必要基础`
-      : type === "application"
-        ? `支撑“${toNode.label}”中的应用`
-        : type === "transfer"
-          ? `迁移到“${toNode.label}”`
-          : type === "contrast"
-            ? `与“${toNode.label}”形成对比`
-            : `为“${toNode.label}”提供理解支撑`;
     const requestedEdgeId = firstText(source, ["id", "key"]);
     let edgeId = requestedEdgeId && !usedEdgeIds.has(requestedEdgeId)
       ? requestedEdgeId
@@ -293,40 +284,17 @@ function prepareKnowledgeStructureForTeacherReview(
       id: edgeId,
       source: from,
       target: to,
-      label: !label || /^(关联|相关|关系)$/.test(label) ? fallbackLabel : label,
+      label: !label || /^(关联|相关|关系)$/.test(label) ? "关系待核对" : label,
       type,
-      strength: type === "required-prerequisite"
-        ? "required"
-        : firstText(source, ["strength", "necessity"]) === "required" ? "required" : "helpful",
+      strength: firstText(source, ["strength", "necessity"]) === "required" ? "required" : "helpful",
       rationale: firstText(source, ["rationale", "reason", "explanation"])
-        || `${fromNode.label}会影响学生理解或应用${toNode.label}。`,
+        || "关系依据未提供，请教师核对，不能由节点顺序推断必要性。",
     });
     usedEdgeIds.add(edgeId);
     directedPairs.add(`${from}\u0000${to}`);
   });
-  prerequisiteNodes.forEach((node, index) => {
-    if (edges.some((edge) =>
-      edge.source === node.id
-      && edge.type === "required-prerequisite"
-      && pointById.has(edge.target)
-    )) return;
-    const target = knowledgePoints[index % knowledgePoints.length]!;
-    const pair = `${node.id}\u0000${target.id}`;
-    if (directedPairs.has(pair) || createsCycle(node.id, target.id)) return;
-    let edgeId = `edge-prerequisite-${index + 1}`;
-    while (usedEdgeIds.has(edgeId)) edgeId = `${edgeId}-next`;
-    edges.push({
-      id: edgeId,
-      source: node.id,
-      target: target.id,
-      label: `是“${target.name}”的必要基础`,
-      type: "required-prerequisite",
-      strength: "required",
-      rationale: `缺少“${node.label}”会直接影响学生理解“${target.name}”。`,
-    });
-    usedEdgeIds.add(edgeId);
-    directedPairs.add(pair);
-  });
+  // An unconnected proposed prerequisite is a review question. Never invent a
+  // "required" relation by cycling through lesson targets to make a graph pass.
 
   return { knowledgePoints, knowledgeGraph: { nodes, edges } };
 }
@@ -344,7 +312,9 @@ export async function generateKnowledgeStructureOnce(
   const prompt = buildKnowledgeGraphPrompt(input, context);
   const raw = await (options.modelCall ?? callLLM)([
     { role: "system", content: prompt.system },
-    { role: "user", content: prompt.user },
+    { role: "user", content: [prompt.user, context.teacherKnowledgePoints?.length
+      ? `教师资料中的叶子教学目标（使用精确id，groupName只用于知识分组，不生成重复父目标；description是原始知识说明）：\n${JSON.stringify(context.teacherKnowledgePoints)}` : "",
+    "缺乏明确依据的先修关系保留待核对，不能按节点顺序或为了连通图谱编造必要关系。课程目标映射也必须有实质依据。"].filter(Boolean).join("\n\n") },
   ], {
     jsonMode: true,
     abortSignal: options.abortSignal,
@@ -353,13 +323,8 @@ export async function generateKnowledgeStructureOnce(
   });
   const parsed = parseLLMJson<Record<string, unknown>>(raw);
   const prepared = prepareKnowledgeStructureForTeacherReview(parsed, input, context);
-  const normalized = normalizeKnowledgeGraphOutput(
-    prepared.knowledgePoints,
-    prepared.knowledgeGraph,
-    context.teacherRequiredKnowledgePoints,
-  );
-  delete normalized.knowledgeGraph.semanticReview;
-  return { ...normalized, revisionCount: 0 };
+  delete prepared.knowledgeGraph.semanticReview;
+  return { ...prepared, revisionCount: 0 };
 }
 
 export function buildKnowledgeStructureAuditMessages(

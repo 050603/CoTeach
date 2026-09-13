@@ -99,6 +99,20 @@ describe("GET /api/courses/:courseId/reflections/export", () => {
     );
     expect(response.status).toBe(404);
   });
+  it("exports confirmed question versions and keeps experience-only rows separate", async () => {
+    const questions = [{ id: "q1", prompt: "如何核验证据？", required: true }];
+    const submittedAt = "2026-09-12T10:00:00Z";
+    mocks.getCourse.mockResolvedValue({ id: "course-1", name: "测试课程", students: [{ id: "s1", name: "甲" }, { id: "s2", name: "乙" }], content: { stagePlan: { reflectionQuestionSet: { id: "questions", version: 3, questions } } }, reflections: [
+      { id: "r1", studentId: "s1", updatedAt: submittedAt, courseReflection: { schemaVersion: 1, questionSetId: "questions", questionSetVersion: 3, questions, answers: { q1: "查阅原始记录。" }, submittedAt } },
+      { id: "r2", studentId: "s2", updatedAt: submittedAt, experienceSurvey: { schemaVersion: 1, systemReflection: "操作清楚", aiHelpfulness: 4, systemUsability: 5, reuseIntention: 4, submittedAt } },
+    ] });
+    const response = await GET(new Request("http://localhost/api/export"), { params: Promise.resolve({ courseId: "course-1" }) });
+    const text = await response.text();
+    expect(text).toContain("question_set_version,question_id,question,answer,course_submitted_at,experience_submitted_at");
+    expect(text).toContain("s1,甲,questions,3,q1,如何核验证据？,查阅原始记录。");
+    expect(text).toContain("s2,乙,,,,,,,2026-09-12T10:00:00Z,操作清楚,4,5,4");
+    expect(text.trim().split("\n")).toHaveLength(3);
+  });
   it("rejects an unrelated teacher before exporting student responses", async () => {
     mocks.canAccessLegacyCourse.mockResolvedValue(false);
     expect((await GET(new Request("http://localhost/api/export"), { params: Promise.resolve({ courseId: "course-1" }) })).status).toBe(403);

@@ -17,6 +17,8 @@ import {
   type ProjectionStateSnapshot,
 } from "@/lib/realtime/projection-state";
 import type { CourseUiState } from "@/lib/session/types";
+import { CourseReflectionValidationError } from "@/lib/course-reflection";
+import { CourseRubricValidationError } from "@/lib/evaluation/course-rubric";
 
 export class CourseActionError extends Error { constructor(readonly code: string, message: string, readonly status: number, readonly details?: unknown) { super(message); } }
 export async function executeCourseAction(courseId: string, envelope: ActionEnvelope, claims: AuthClaims): Promise<ActionAck> {
@@ -46,9 +48,19 @@ export async function executeCourseAction(courseId: string, envelope: ActionEnve
       catch (error) { if (error instanceof StudentActionScopeError) throw new CourseActionError(error.code, error.message, error.status); throw error; }
     }
     if (before && claims.role === "teacher" && envelope.expectedVersion !== undefined && before.version !== envelope.expectedVersion) throw new CourseActionError("VERSION_CONFLICT", "课程已被其他操作更新", 409, { currentVersion: before.version });
+    if (before && ["PUBLISH_COURSE", "START_TEACHING", "RESTART_TEACHING"].includes(envelope.action.type)) {
+      const { assertCourseTeacherReview, CourseReviewError } = await import("@/lib/course-quality-review/review-service");
+      try { await assertCourseTeacherReview(before, claims.sub); }
+      catch (error) { if (error instanceof CourseReviewError) throw new CourseActionError(error.code, error.message, error.status); throw error; }
+    }
     let after;
     try { after = await mutateProjectedCourse(tx, envelope.action, claims.role === "teacher" ? claims.sub : undefined, { id: claims.sub!, role: claims.role }); }
-    catch (error) { if ((error instanceof ClassroomProjectionError || error instanceof PlatformError)) throw new CourseActionError(error.code, error.message, error.status); throw error; }
+    catch (error) {
+      if (error instanceof ClassroomProjectionError || error instanceof PlatformError) throw new CourseActionError(error.code, error.message, error.status);
+      if (error instanceof CourseReflectionValidationError) throw new CourseActionError("INVALID_COURSE_REFLECTION", error.message, 422);
+      if (error instanceof CourseRubricValidationError) throw new CourseActionError("INVALID_COURSE_RUBRIC", error.message, 422);
+      throw error;
+    }
     const instance = await tx.classroomInstance.findUnique({ where: { id: courseId }, include: { activity: { include: { chapter: true } } } });
     const participation = instance && claims.role === "student" ? await tx.classroomParticipation.findFirst({ where: { instanceId: instance.id, enrollment: { userId: claims.sub } }, include: { enrollment: true } }) : null;
     const now = new Date(); const id = crypto.randomUUID();

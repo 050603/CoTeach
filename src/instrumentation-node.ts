@@ -32,8 +32,12 @@ export async function register(): Promise<void> {
   if (isBackgroundCourseGenerationEnabled()) {
     const { startCourseGenerationWorker } = await import("@/lib/course-generation/job-runner");
     const { startCourseDesignWorker } = await import("@/lib/course-design/job-runner");
+    const { startResourcePackageWorker } = await import("@/lib/resource-package/job-runner");
+    const { startCourseQualityReviewWorker } = await import("@/lib/course-quality-review/job-runner");
     await startCourseGenerationWorker();
     await startCourseDesignWorker();
+    await startResourcePackageWorker();
+    await startCourseQualityReviewWorker();
   }
 
   if (process.env.ENABLE_WEBSOCKET === "true") {
@@ -100,8 +104,12 @@ async function installShutdownHandlers(): Promise<void> {
 
         const { stopCourseGenerationWorker } = await import("@/lib/course-generation/job-runner");
         const { stopCourseDesignWorker } = await import("@/lib/course-design/job-runner");
+        const { stopResourcePackageWorker } = await import("@/lib/resource-package/job-runner");
+        const { stopCourseQualityReviewWorker } = await import("@/lib/course-quality-review/job-runner");
         await stopCourseGenerationWorker();
         await stopCourseDesignWorker();
+        await stopResourcePackageWorker();
+        await stopCourseQualityReviewWorker();
 
         // 4) Close the database connection. Prisma is always instantiated
         //    (singleton), but if DATABASE_URL is unset (Demo mode) calling

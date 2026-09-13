@@ -15,6 +15,12 @@ function whiteboardScene(): Scene {
     content: { type: 'slide', elements: [] },
     actions: [
       {
+        id: 'draw-image',
+        type: 'wb_draw_image',
+        src: '/uploads/diagram.png',
+        x: 40, y: 40, width: 400, height: 240,
+      },
+      {
         id: 'draw-line',
         type: 'wb_draw_line',
         startX: 40,
@@ -45,7 +51,7 @@ function whiteboardScene(): Scene {
 }
 
 describe('PlaybackEngine whiteboard actions', () => {
-  it('dispatches line drawing and incremental code actions to the ActionEngine', async () => {
+  it('dispatches images, line drawing and incremental code actions to the ActionEngine', async () => {
     const execute = vi.fn<(action: Action) => Promise<void>>().mockResolvedValue(undefined);
     const actionEngine = {
       clearEffects: vi.fn(),
@@ -71,8 +77,9 @@ describe('PlaybackEngine whiteboard actions', () => {
     engine.start();
 
     await vi.waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
-    expect(execute).toHaveBeenCalledTimes(3);
+    expect(execute).toHaveBeenCalledTimes(4);
     expect(execute.mock.calls.map(([action]) => action.type)).toEqual([
+      'wb_draw_image',
       'wb_draw_line',
       'wb_draw_code',
       'wb_edit_code',

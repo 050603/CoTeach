@@ -105,6 +105,9 @@ function summarizeAgentWhiteboardActions(actions: WhiteboardActionRecord[]): str
       case 'wb_draw_shape':
         parts.push(`drew shape(${a.params.type || 'rectangle'})`);
         break;
+      case 'wb_draw_image':
+        parts.push('showed an image');
+        break;
       case 'wb_draw_chart': {
         const labels = Array.isArray(a.params.labels)
           ? a.params.labels

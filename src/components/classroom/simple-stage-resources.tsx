@@ -26,6 +26,9 @@ import {
 } from "lucide-react";
 import { Card, Pill, PrimaryButton, toast } from "@/components/ui";
 import { resourcesForStage } from "@/lib/classroom/stage-resources";
+import { CourseStageRequirements } from "@/components/classroom/course-stage-requirements";
+import type { TeacherPresentationMode } from "@/lib/classroom/presentation";
+import { TeacherPresentationActions } from "./teacher-presentation-actions";
 import type {
   ClassroomResourceProjection,
   ClassroomResourceViewState,
@@ -305,12 +308,16 @@ export function SimplifiedTeacherStageView({
   course,
   stageKey,
   focus,
+  presentation = "workspace",
 }: {
   course: Course;
   stageKey: string;
   focus?: Extract<TeacherStageFocus, { stageKey: "launch" }>;
+  presentation?: TeacherPresentationMode;
 }) {
   const session = useSession();
+  const teaching = presentation !== "workspace";
+  const stage = course.stages?.find((item) => item.key === stageKey);
   const resources = resourcesForStage(course.resources, stageKey);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number>();
@@ -320,7 +327,21 @@ export function SimplifiedTeacherStageView({
   const [resourceListOpen, setResourceListOpen] = useState(true);
   const [selectedId, setSelectedId] = useState<string>();
   const [dialogResource, setDialogResource] = useState<CourseResource>();
-  const [viewerRevision, setViewerRevision] = useState(0);
+  if (teaching && dialogResource) setDialogResource(undefined);
+  const previewExpanded = Boolean(dialogResource);
+  useEffect(() => {
+    if (!previewExpanded) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDialogResource(undefined);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [previewExpanded]);
   const [readingProgressByResource, setReadingProgressByResource] = useState<Record<string, PdfReadingProgress>>({});
   const [teacherTab, setTeacherTab] = useState<"resources" | "follow-up">("resources");
   const projection = course.uiState?.resourceProjection;
@@ -460,7 +481,7 @@ export function SimplifiedTeacherStageView({
     }
   }
 
-  function startProjection(resource: CourseResource) {
+  const startProjection = useCallback((resource: CourseResource) => {
     setSelectedId(resource.id);
     session.setUiState(course.id, {
       resourceProjection: {
@@ -479,7 +500,7 @@ export function SimplifiedTeacherStageView({
         },
       },
     });
-  }
+  }, [course.id, session, stageKey]);
 
   function stopProjection() {
     session.setUiState(course.id, { resourceProjection: null });
@@ -580,24 +601,25 @@ export function SimplifiedTeacherStageView({
   );
 
   const resourcePreview = (
-    <Card className="overflow-hidden classroom-panel" compact>
+    <Card className={cn("overflow-hidden classroom-panel", (teaching || previewExpanded) && "teacher-resource-preview flex h-full min-h-0 flex-col")} compact>
           {selected ? (
             <>
-              <div className="border-b border-[var(--pbl-border)] pb-4">
-                <div className="flex min-w-0 items-center gap-3">
-                  <h3 className="min-w-0 flex-1 truncate font-bold leading-7 text-[var(--pbl-text-strong)]">{selected.title}</h3>
-                  {isConvertedPresentation(selected) ? <Pill className="shrink-0 whitespace-nowrap" size="sm" tone="amber">建议改传PDF</Pill> : null}
-                  {projectionIsActive(course, selected) ? <Pill className="shrink-0 gap-1.5 whitespace-nowrap" size="sm" tone="green"><MonitorUp size={12} />投屏中</Pill> : null}
+              <div hidden={teaching} className="shrink-0 border-b border-[var(--pbl-border)] pb-4">
+                <div className={cn("flex min-w-0 items-center gap-3", teaching && "flex-wrap")}>
+                  <h3 className={cn("min-w-0 flex-1 font-bold leading-7 text-[var(--pbl-text-strong)]", teaching ? "break-words text-[clamp(20px,1.5vw,28px)]" : "truncate")}>{selected.title}</h3>
+                  {isConvertedPresentation(selected) && selected.id !== course.content?.resourcePackage?.launchResourceId ? <Pill className="shrink-0 whitespace-nowrap" size="sm" tone="amber">建议改传PDF</Pill> : null}
+                  {projectionIsActive(course, selected) ? <Pill className="shrink-0 gap-1.5 whitespace-nowrap" size="sm" tone="green"><MonitorUp size={12} />{teaching ? "学生同步中" : "投屏中"}</Pill> : null}
                   <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-                    <PrimaryButton onClick={() => setDialogResource(selected)} size="sm" tone="slate" variant="outline"><Maximize2 size={14} />全屏预览</PrimaryButton>
+                    {!teaching && !previewExpanded ? <PrimaryButton onClick={() => setDialogResource(selected)} size="sm" tone="slate" variant="outline"><Maximize2 size={14} />全屏预览</PrimaryButton> : null}
+                    {previewExpanded ? <><span className="text-sm">{resourceKind(selected) === "video" ? "全屏播放" : "学习资料预览"}</span><button aria-label={resourceKind(selected) === "video" ? "退出全屏播放" : "退出全屏阅读"} className="grid size-11 place-items-center rounded-[6px] border border-stone-300" onClick={() => setDialogResource(undefined)} type="button"><X size={20} /></button></> : null}
                     {projectionIsActive(course, selected) ? (
-                      <PrimaryButton onClick={stopProjection} size="sm" tone="red" variant="outline"><MonitorOff size={14} />停止投屏</PrimaryButton>
+                      <PrimaryButton onClick={stopProjection} size="sm" tone="red" variant="outline"><MonitorOff size={14} />{teaching ? "停止同步" : "停止投屏"}</PrimaryButton>
                     ) : (
-                      <PrimaryButton onClick={() => startProjection(selected)} size="sm"><MonitorUp size={14} />投屏</PrimaryButton>
+                      <PrimaryButton onClick={() => startProjection(selected)} size="sm"><MonitorUp size={14} />{teaching ? "同步到学生" : "投屏"}</PrimaryButton>
                     )}
                   </div>
                 </div>
-                <div className="mt-1 flex min-w-0 items-center gap-2 whitespace-nowrap text-xs text-[var(--pbl-text-muted)]">
+                <div hidden={teaching} className="mt-1 flex min-w-0 items-center gap-2 whitespace-nowrap text-xs text-[var(--pbl-text-muted)]">
                   <span>{resourceFormatLabel(selected)} · {selected.size}</span>
                   {selected.previewUrl && selected.url ? (
                     <a className="inline-flex shrink-0 items-center gap-1 font-semibold text-[var(--pbl-teacher)] hover:underline" href={selected.url} rel="noreferrer" target="_blank"><ExternalLink size={12} />原始PPT</a>
@@ -632,15 +654,11 @@ export function SimplifiedTeacherStageView({
                   ) : null}
                 </div>
               </div>
-              <div className="mt-3 h-[32rem] min-h-0 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)]">
-                {dialogResource?.id === selected.id ? (
-                  <div className="grid h-full place-items-center bg-stone-950 text-sm font-semibold text-white/70">
-                    资源正在全屏窗口中播放
-                  </div>
-                ) : (
+              <div className={cn("min-h-0 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)]", !teaching && "mt-3", (teaching || previewExpanded) ? "flex-1" : "h-[32rem]")}>
                   <ResourceViewer
+                    fullscreen={teaching || previewExpanded}
                     initialReadingProgress={readingProgressByResource[selected.id]}
-                    key={`${selected.id}:${projectionIsActive(course, selected) ? "controller" : "self"}:${viewerRevision}`}
+                    key={selected.id}
                     mode={projectionIsActive(course, selected) ? "controller" : "self"}
                     onReadingProgressChange={(progress) => setReadingProgressByResource((current) => ({ ...current, [selected.id]: progress }))}
                     onViewStateChange={syncProjection}
@@ -648,7 +666,6 @@ export function SimplifiedTeacherStageView({
                     projection={projectionIsActive(course, selected) ? projection ?? undefined : undefined}
                     resource={selected}
                   />
-                )}
               </div>
             </>
           ) : (
@@ -658,23 +675,36 @@ export function SimplifiedTeacherStageView({
   );
 
   return (
-    <div className="classroom-stage space-y-4">
-      <StagePageHeader
+    <div className={cn("classroom-stage", teaching ? "teacher-stage-resources flex h-full min-h-0 flex-col gap-3" : "space-y-4")}>
+      <TeacherPresentationActions>
+        <button data-tone="primary" disabled={!selected} onClick={() => { if (selected) { if (projectionIsActive(course, selected)) stopProjection(); else startProjection(selected); } }} type="button">
+          <MonitorUp size={20} />{selected ? projectionIsActive(course, selected) ? "停止同步" : "同步到学生" : "暂无可同步资料"}
+        </button>
+      </TeacherPresentationActions>
+      <div hidden={teaching}><StagePageHeader
         action={uploadControl}
         description="整理可讲授、可投屏的学习资料；视频支持 MP4、MOV、WebM（最大 500 MiB）并显示上传进度，PPT 请先导出为 PDF。"
         title="学习资料"
-      />
+      /></div>
+      {!teaching ? <CourseStageRequirements course={course} stageKey={stageKey} teacher /> : null}
 
-      {stageKey === "launch" ? <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-white p-1" role="tablist" aria-label="启动阶段工作台"><button aria-selected={teacherTab === "resources"} className={cn("rounded-[var(--radius-xs)] px-3 py-2 text-xs font-bold transition", teacherTab === "resources" ? "bg-[var(--pbl-teacher)] text-white" : "text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)]")} onClick={() => setTeacherTab("resources")} role="tab" type="button">资料与投屏</button><button aria-selected={teacherTab === "follow-up"} className={cn("rounded-[var(--radius-xs)] px-3 py-2 text-xs font-bold transition", teacherTab === "follow-up" ? "bg-[var(--pbl-teacher)] text-white" : "text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)]")} onClick={() => setTeacherTab("follow-up")} role="tab" type="button">阅读跟进</button></div> : null}
-      {stageKey === "launch" && teacherTab === "follow-up" ? <LaunchReadingFollowUp course={course} focus={focus} /> : resources.length ? (
-        <div className={cn(
-          "grid items-start gap-4",
-          resourceListOpen
+      {stageKey === "launch" ? <div hidden={teaching} className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-white p-1" role="tablist" aria-label="启动阶段工作台"><button aria-selected={teacherTab === "resources"} className={cn("rounded-[var(--radius-xs)] px-3 py-2 text-xs font-bold transition", teacherTab === "resources" ? "bg-[var(--pbl-teacher)] text-white" : "text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)]")} onClick={() => setTeacherTab("resources")} role="tab" type="button">资料与投屏</button><button aria-selected={teacherTab === "follow-up"} className={cn("rounded-[var(--radius-xs)] px-3 py-2 text-xs font-bold transition", teacherTab === "follow-up" ? "bg-[var(--pbl-teacher)] text-white" : "text-[var(--pbl-text-muted)] hover:bg-[var(--pbl-surface-soft)]")} onClick={() => setTeacherTab("follow-up")} role="tab" type="button">阅读跟进</button></div> : null}
+      {teaching && selected ? <div className="teacher-resource-toolbar flex shrink-0 items-center gap-2">
+        <button aria-label="上一份资料" className="grid size-11 place-items-center rounded-[6px] border border-stone-300 bg-white disabled:opacity-40" disabled={resources.indexOf(selected) <= 0} onClick={() => setSelectedId(resources[resources.indexOf(selected) - 1]?.id)} type="button"><ChevronLeft size={22} /></button>
+        <select aria-label="选择授课资料" className="min-h-11 min-w-0 flex-1 rounded-[6px] border border-stone-300 bg-white px-3 text-lg font-semibold" onChange={(event) => setSelectedId(event.target.value)} value={selected.id}>{resources.map((resource, index) => <option key={resource.id} value={resource.id}>{index + 1}. {resource.title}</option>)}</select>
+        <button aria-label="下一份资料" className="grid size-11 place-items-center rounded-[6px] border border-stone-300 bg-white disabled:opacity-40" disabled={resources.indexOf(selected) >= resources.length - 1} onClick={() => setSelectedId(resources[resources.indexOf(selected) + 1]?.id)} type="button"><ChevronRight size={22} /></button>
+        {projectionIsActive(course, selected) ? <PrimaryButton className="shrink-0 whitespace-nowrap" onClick={stopProjection} size="sm" tone="red" variant="outline"><MonitorOff size={18} />停止同步</PrimaryButton> : <PrimaryButton className="shrink-0 whitespace-nowrap" onClick={() => startProjection(selected)} size="sm"><MonitorUp size={18} />同步到学生</PrimaryButton>}
+      </div> : null}
+      {stageKey === "launch" && teacherTab === "follow-up" && !teaching ? <LaunchReadingFollowUp course={course} focus={focus} /> : null}
+      {resources.length ? (
+        <div hidden={!teaching && stageKey === "launch" && teacherTab === "follow-up"} className={cn(
+          teaching ? "min-h-0 flex-1" : "grid items-start gap-4",
+          !teaching && (resourceListOpen
             ? "xl:grid-cols-[minmax(0,1fr)_18rem]"
-            : "xl:grid-cols-[minmax(0,1fr)_3.25rem]",
+            : "xl:grid-cols-[minmax(0,1fr)_3.25rem]"),
         )}>
-          <div className="min-w-0">{resourcePreview}</div>
-          <aside className="min-w-0 xl:sticky xl:top-20">
+          <div aria-label={previewExpanded ? "学习资料预览" : undefined} aria-modal={previewExpanded ? true : undefined} role={previewExpanded ? "dialog" : undefined} className={cn("min-w-0", teaching && "h-full min-h-0", previewExpanded && "fixed inset-0 z-[140] bg-white p-2")}>{resourcePreview}</div>
+          <aside hidden={teaching} className="min-w-0 xl:sticky xl:top-20">
             {resourceListOpen ? resourceList : (
               <button
                 aria-label="展开学习资料侧栏"
@@ -691,6 +721,11 @@ export function SimplifiedTeacherStageView({
             )}
           </aside>
         </div>
+      ) : teaching ? (
+        <div className="flex min-h-0 flex-1 flex-col justify-center overflow-auto rounded-[10px] border border-stone-200 bg-white p-[clamp(20px,4vw,64px)]">
+          <h2 className="text-[clamp(28px,3vw,48px)] font-bold text-stone-900">{stage?.label || "本阶段任务"}</h2>
+          <p className="mt-6 whitespace-pre-wrap text-[clamp(20px,2vw,28px)] leading-relaxed text-stone-700">{stage?.description?.trim() || "本阶段尚未添加学习资料或任务。"}</p>
+        </div>
       ) : (
         <StageEmptyState
           description="上传 PDF、视频、图片或其他学习资料后，学生会在本阶段看到并阅读这些内容。"
@@ -701,27 +736,6 @@ export function SimplifiedTeacherStageView({
         />
       )}
 
-      {dialogResource ? (
-        <ResourceDialog
-          action={projectionIsActive(course, dialogResource) ? (
-            <PrimaryButton onClick={stopProjection} size="sm" tone="red" variant="outline"><MonitorOff size={14} />停止投屏</PrimaryButton>
-          ) : (
-            <PrimaryButton onClick={() => startProjection(dialogResource)} size="sm"><MonitorUp size={14} />投屏</PrimaryButton>
-          )}
-          initialReadingProgress={readingProgressByResource[dialogResource.id]}
-          mode={projectionIsActive(course, dialogResource) ? "controller" : "self"}
-          onClose={() => {
-            setDialogResource(undefined);
-            setViewerRevision((value) => value + 1);
-          }}
-          onReadingProgressChange={(progress) => setReadingProgressByResource((current) => ({ ...current, [dialogResource.id]: progress }))}
-          onViewStateChange={syncProjection}
-          progressKey={`teacher:${course.id}:${dialogResource.id}`}
-          projection={projectionIsActive(course, dialogResource) ? projection ?? undefined : undefined}
-          resource={dialogResource}
-          title="学习资料预览"
-        />
-      ) : null}
       {pendingPdf ? (
         <PdfDisplayModeDialog
           file={pendingPdf}
@@ -856,6 +870,7 @@ export function SimplifiedStudentStageView({
         title={stageKey === "launch" ? "了解项目任务，完成资料阅读" : "学习资料"}
         variant={stageKey === "launch" ? "student-card" : "plain"}
       />
+      <CourseStageRequirements course={course} stageKey={stageKey} expanded={stageKey === "make"} />
       {resources.length ? (
         <StageSplitLayout
           aside={(
@@ -1398,7 +1413,7 @@ function PdfViewer({
   return (
     <div className="relative flex h-full min-h-72 flex-col overflow-hidden rounded-[var(--radius-sm)] bg-slate-100" onPointerMove={fullscreen ? revealControls : undefined}>
       {fullscreen ? <div aria-label={`阅读进度 ${Math.round(readingProgress * 100)}%`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={Math.round(readingProgress * 100)} className="absolute inset-x-0 top-0 z-40 h-1 bg-slate-200/70" role="progressbar"><div className="h-full bg-[var(--pbl-student)] transition-[width] duration-150" style={{ width: `${Math.round(readingProgress * 100)}%` }} /></div> : null}
-      <div className={cn("shrink-0 border-b border-[var(--pbl-border)] bg-white px-3 py-2.5 shadow-sm sm:px-4", fullscreen && "absolute bottom-5 left-1/2 z-20 w-fit max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full border bg-white/[0.92] px-3 py-2 shadow-2xl backdrop-blur transition duration-200", fullscreen && !controlsVisible && "pointer-events-none translate-y-3 opacity-0")}>
+      <div className={cn("shrink-0 border-b border-[var(--pbl-border)] bg-white px-3 py-2.5 shadow-sm sm:px-4", fullscreen && "resource-pdf-controls", fullscreen && "absolute bottom-5 left-1/2 z-20 w-fit max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full border bg-white/[0.92] px-3 py-2 shadow-2xl backdrop-blur transition duration-200", fullscreen && !controlsVisible && "pointer-events-none translate-y-3 opacity-0")}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className={cn("flex items-center gap-2", fullscreen && "hidden")}>
             <span className="grid size-8 place-items-center rounded-[var(--radius-xs)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]"><BookOpen size={16} /></span>
@@ -1441,7 +1456,7 @@ function PdfViewer({
           <div className="h-full rounded-full bg-[var(--pbl-student)] transition-[width] duration-150" style={{ width: `${Math.round(readingProgress * 100)}%` }} />
         </div>
       </div>
-      <div className={cn("min-h-0 flex-1 overflow-auto overscroll-contain p-3 sm:p-5", fullscreen && "px-4 pb-20 pt-14 sm:px-8 sm:pb-24 sm:pt-16")} onScroll={handleScroll} ref={scrollRef}>
+      <div className={cn("min-h-0 flex-1 overflow-auto overscroll-contain p-3 sm:p-5", fullscreen && "resource-pdf-viewport", fullscreen && "px-4 pb-20 pt-14 sm:px-8 sm:pb-24 sm:pt-16")} onScroll={handleScroll} ref={scrollRef}>
         <div className="mx-auto space-y-4" style={{ maxWidth: "none", width: `${zoom * 100}%` }}>
           {Array.from({ length: pdf.numPages }, (_, index) => <PdfPageCanvas key={index + 1} pageNumber={index + 1} pdf={pdf} zoom={zoom} />)}
         </div>
@@ -1571,7 +1586,7 @@ function PdfPresentationViewer({
   return (
     <div className="relative flex h-full min-h-72 flex-col overflow-hidden rounded-[var(--radius-sm)] bg-slate-100" onPointerMove={fullscreen ? revealControls : undefined}>
       {fullscreen ? <div aria-label={`阅读进度 ${progressPercent}%`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={progressPercent} className="absolute inset-x-0 top-0 z-40 h-1 bg-slate-200/70" role="progressbar"><div className="h-full bg-[var(--pbl-student)] transition-[width] duration-150" style={{ width: `${progressPercent}%` }} /></div> : null}
-      <div className={cn("shrink-0 border-b border-[var(--pbl-border)] bg-white px-3 py-2.5 shadow-sm sm:px-4", fullscreen && "absolute bottom-5 left-1/2 z-20 w-fit max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full border bg-white/[0.92] px-3 py-2 shadow-2xl backdrop-blur transition duration-200", fullscreen && !controlsVisible && "pointer-events-none translate-y-3 opacity-0")}>
+      <div className={cn("shrink-0 border-b border-[var(--pbl-border)] bg-white px-3 py-2.5 shadow-sm sm:px-4", fullscreen && "resource-pdf-controls", fullscreen && "absolute bottom-5 left-1/2 z-20 w-fit max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full border bg-white/[0.92] px-3 py-2 shadow-2xl backdrop-blur transition duration-200", fullscreen && !controlsVisible && "pointer-events-none translate-y-3 opacity-0")}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className={cn("flex items-center gap-2", fullscreen && "hidden")}>
             <span className="grid size-8 place-items-center rounded-[var(--radius-xs)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]"><BookOpen size={16} /></span>
@@ -1613,7 +1628,7 @@ function PdfPresentationViewer({
           <div className="h-full rounded-full bg-[var(--pbl-student)] transition-[width] duration-150" style={{ width: `${progressPercent}%` }} />
         </div>
       </div>
-      <div className={cn("flex min-h-0 flex-1 items-center justify-center overflow-auto p-3 sm:p-5", fullscreen && "px-4 pb-20 pt-14 sm:px-8 sm:pb-24 sm:pt-16")} onScroll={fullscreen ? revealControls : undefined}>
+      <div className={cn("flex min-h-0 flex-1 items-center justify-center overflow-auto p-3 sm:p-5", fullscreen && "resource-pdf-viewport", fullscreen && "px-4 pb-20 pt-14 sm:px-8 sm:pb-24 sm:pt-16")} onScroll={fullscreen ? revealControls : undefined}>
         <PdfSlideCanvas fitWidth={fitWidth} key={`${safePage}:${zoom}:${fitWidth}`} pageNumber={safePage} pdf={pdf} zoom={zoom} />
       </div>
     </div>

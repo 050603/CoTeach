@@ -113,6 +113,7 @@ export type TeachingToolEvidence = {
 
 const WHITEBOARD_VISIBLE_ACTIONS = new Set<Action['type']>([
   'wb_draw_text',
+  'wb_draw_image',
   'wb_draw_latex',
   'wb_draw_shape',
   'wb_draw_line',
@@ -188,6 +189,8 @@ function actualContent(action: Action): string[] {
   switch (action.type) {
     case 'wb_draw_text':
       return [action.content.replace(/<[^>]+>/g, '')];
+    case 'wb_draw_image':
+      return [action.title || '白板图片'];
     case 'wb_draw_latex':
       return [action.latex];
     case 'wb_draw_code':

@@ -144,6 +144,7 @@ export type PersistedCourseGenerationRequest = GenerateClassroomInput & {
   systemMode?: "new";
   courseTitle?: string;
   moduleTimingPlan?: unknown;
+  resourcePackageIdentity?: { id: string; revision: number };
   adaptiveBranchCount?: number;
   /** Internal checkpoint-recovery state; never supplied by the teacher UI. */
   managedRecoveryCount?: number;
@@ -736,6 +737,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).courseId;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).systemMode;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).moduleTimingPlan;
+  delete (generationInput as Partial<PersistedCourseGenerationRequest>).resourcePackageIdentity;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).adaptiveBranchCount;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).managedRecoveryCount;
   const controller = new AbortController();
@@ -752,11 +754,17 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
   try {
     const checkpointState = await loadCheckpointState(job.id);
     const course = await getCourse(courseId);
+    const currentPackage = course?.content.resourcePackage;
+    if (request.resourcePackageIdentity
+      ? !currentPackage?.confirmedAt || currentPackage.id !== request.resourcePackageIdentity.id || currentPackage.revision !== request.resourcePackageIdentity.revision
+      : Boolean(currentPackage)) {
+      throw new Error("资源包已更换或重新编辑，请按最新确认的教案重新生成，旧课堂检查点不会应用到新包。");
+    }
     const timing = course?.content.moduleTimingPlan;
     const outlines = checkpointState.preparedOutlines.length ? checkpointState.preparedOutlines : generationInput.sceneOutlines ?? [];
-    if (!course || !isNewSystemAiTimingPlan(timing, course.hours)
+    if (!course || !isNewSystemAiTimingPlan(timing, course.hours, course.content.stagePlan)
       || !hasExactKnowledgeLecturePageBudget(outlines, timing.totalMinutes)) {
-      throw new Error("知识讲授时长必须占整课 20%–40%，且讲解与小测合计必须等于已确定预算。请重新规划知识讲授后生成，不可继续使用旧的超长页面或检查点。");
+      throw new Error("知识讲授必须符合已确认的课程时间预算，且讲解与小测合计必须等于该预算。资源包课程以教案分钟数为准，请重新规划后生成，不可继续使用不匹配的页面或检查点。");
     }
     const generated = await generateClassroom(generationInput, {
       signal: controller.signal,
@@ -968,6 +976,10 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         version: { increment: 1 },
       },
     });
+    // Draft completion is independent from optional semantic review. Durable
+    // checks start after media has settled so the report identifies the final revision.
+    const { enqueueCourseQualityReview } = await import("@/lib/course-quality-review/job-runner");
+    await enqueueCourseQualityReview(courseId).catch((reviewError) => log.warn("Background quality review will be resumed from preview", reviewError));
 
   } catch (error) {
     if (cancellationRequested.has(courseId)) {

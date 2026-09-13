@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { createPblTemplateCourse, decodePblTemplate, encodePblTemplate } from "./pbl-template";
+import { emptyResourcePackageDraft } from "@/lib/resource-package/types";
 
 describe("PBL authoring snapshot", () => {
+  it("round-trips resource package provenance and a separate full-course minute plan", () => {
+    const course = createPblTemplateCourse("package-template", { hours: 2.25 });
+    course.content.resourcePackage = { schemaVersion: 1, id: "package", revision: 2,
+      source: { id: "private-zip", fileName: "资源包.zip", url: "/api/uploads/private-zip" }, documents: {}, draft: emptyResourcePackageDraft(), confirmedAt: "2026-09-12T00:00:00Z" };
+    course.content.stagePlan = { schemaVersion: 1, source: "resource-package", totalMinutes: 135, lessonCount: 3,
+      minutesPerLesson: 45, stages: [], evaluationCriteria: "评价要求", reflectionQuestions: ["如何改进？"] };
+    course.content.knowledgeGroups = [{ id: "theory", name: "学习理论", description: "理论依据", knowledgePointIds: ["constructivism"] }];
+    const restored = decodePblTemplate(encodePblTemplate(course));
+    expect(restored?.content.resourcePackage).toEqual(course.content.resourcePackage);
+    expect(restored?.content.stagePlan).toEqual(course.content.stagePlan);
+    expect(restored?.content.knowledgeGroups).toEqual(course.content.knowledgeGroups);
+    expect(restored?.hours).toBe(2.25);
+  });
   it("retains all five stages and OpenMAIC authoring content without student evidence", () => {
     const course = createPblTemplateCourse("template", { name: "Project" });
     course.resources = [{ id: "asset", title: "Handout", type: "PDF", size: "1 MB", downloadedBy: ["private-student"] }];

@@ -35,6 +35,7 @@ export function invalidateChangedSpeechAudio(previous: Scene, next: Scene): Scen
     const cleaned = { ...action } as typeof action & { audioId?: string; audioUrl?: string };
     delete cleaned.audioId;
     delete cleaned.audioUrl;
+    cleaned.audioInvalidated = true;
     changed = true;
     return cleaned;
   });
@@ -97,28 +98,31 @@ export function prepareClassroomEdit(input: {
   }
 
   const scenes = input.scenes.map((rawScene, index) => {
+    if (!rawScene || typeof rawScene !== 'object') {
+      throw new InvalidClassroomEditError(`第 ${index + 1} 页内容无效`);
+    }
     if (sceneIds.has(rawScene.id)) {
       throw new InvalidClassroomEditError(`页面 ID 重复：${rawScene.id}`);
     }
     sceneIds.add(rawScene.id);
-    const previous = previousById.get(rawScene.id);
-    const withFreshNarration = previous
-      ? invalidateChangedSpeechAudio(previous, rawScene)
-      : rawScene;
-    if (withFreshNarration !== rawScene) narrationChanged = true;
-    const next = rewriteClassroomMediaReferences({
-      ...withFreshNarration,
+    const normalized = {
+      ...rawScene,
       stageId: input.targetClassroomId,
       order: index,
       updatedAt: now,
-    }, input.existing.id, input.targetClassroomId) as Scene;
-    const validation = validateScene(next);
+    } as Scene;
+    const validation = validateScene(normalized);
     if (!validation.valid) {
       throw new InvalidClassroomEditError(
-        `第 ${index + 1} 页“${next.title || '未命名'}”无效：${firstValidationIssue(validation)}`,
+        `第 ${index + 1} 页“${normalized.title || '未命名'}”无效：${firstValidationIssue(validation)}`,
       );
     }
-    return next;
+    const previous = previousById.get(rawScene.id);
+    const withFreshNarration = previous
+      ? invalidateChangedSpeechAudio(previous, normalized)
+      : normalized;
+    if (withFreshNarration !== normalized) narrationChanged = true;
+    return rewriteClassroomMediaReferences(withFreshNarration, input.existing.id, input.targetClassroomId);
   });
 
   return { stage, scenes, narrationChanged };

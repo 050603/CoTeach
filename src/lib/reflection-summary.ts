@@ -1,3 +1,4 @@
+import { courseQuestionSet, latestCourseReflection, latestExperienceSurvey, courseReflectionText } from "@/lib/course-reflection";
 import type {
   Course,
   ReflectionClassSummaryV1,
@@ -31,7 +32,7 @@ export type ReflectionSummaryTrigger = "threshold" | "course-finished" | "manual
 export type ReflectionSurveyEntry = {
   reflection: ReflectionRecord;
   studentId: string;
-  survey: NonNullable<ReturnType<typeof normalizeReflectionSurvey>>;
+  survey: Pick<NonNullable<ReturnType<typeof normalizeReflectionSurvey>>, "learningReflection" | "systemReflection"> & Partial<Pick<NonNullable<ReturnType<typeof normalizeReflectionSurvey>>, "aiHelpfulness" | "systemUsability" | "reuseIntention">>;
 };
 
 export type ReflectionSummaryDraft = {
@@ -117,6 +118,14 @@ function normalizeCategories(value: unknown, allowedStudentIds?: ReadonlySet<str
 }
 
 export function latestReflectionSurveyEntries(course: Course): ReflectionSurveyEntry[] {
+  if (courseQuestionSet(course)) return course.students.flatMap((student) => {
+    const reflection = latestCourseReflection(course, student.id);
+    if (!reflection?.courseReflection) return [];
+    const experience = latestExperienceSurvey(course, student.id);
+    return [{ reflection, studentId: student.id, survey: { learningReflection: courseReflectionText(reflection.courseReflection),
+      systemReflection: experience?.systemReflection ?? "", aiHelpfulness: experience?.aiHelpfulness,
+      systemUsability: experience?.systemUsability, reuseIntention: experience?.reuseIntention } }];
+  });
   const latest = latestReflectionByStudent(course.reflections);
   return course.students.flatMap((student) => {
     const reflection = latest.get(student.id);

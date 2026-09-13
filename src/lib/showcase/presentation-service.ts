@@ -9,6 +9,7 @@ export { loadShowcaseState } from "./state";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
 import type {
+  CourseContent,
   FinalArtifactKind,
   FinalArtifactSummary,
   ProjectDocumentVersion,
@@ -24,11 +25,13 @@ import type {
 } from "./types";
 import {
   buildShowcaseQueue,
-  defaultShowcaseQueueOrder,
   normalizeMinutesPerStudent,
   normalizeShowcaseQueueOrder,
   preserveShowcaseQueueLockedPositions,
+  showcaseSlotSeconds,
+  showcaseRemainingSeconds,
 } from "./queue";
+import { deriveClassroomTimingSnapshot, type ClassroomTimingState } from "@/lib/classroom/timing";
 
 export class ShowcasePresentationError extends Error {
   constructor(
@@ -49,6 +52,7 @@ type CourseGate = {
   presentingGroupId: string | null;
   presentingStudentId: string | null;
   uiState: unknown;
+  content?: CourseContent;
 };
 
 type StudentRow = { id: string; name: string };
@@ -178,12 +182,20 @@ async function loadCourseGate(courseId: string): Promise<CourseGate | null> {
       presentingGroupId: true,
       presentingStudentId: true,
       uiState: true,
+      content: true,
     },
   });
 }
 
-function parseShowcaseQueueConfig(value: unknown): Partial<ShowcaseQueueConfig> | undefined {
+function parseShowcaseQueueConfig(value: unknown, content?: CourseContent): Partial<ShowcaseQueueConfig> | undefined {
   const raw = asRecord(asRecord(value).showcaseReporting);
+  if (raw.schemaVersion === 2 || (!raw.schemaVersion && Number(content?.stagePlan?.schemaVersion ?? 0) >= 2)) {
+    const ids = (value: unknown) => Array.isArray(value) ? [...new Set(value.filter((item): item is string => typeof item === "string"))] : [];
+    const seconds = (value: unknown, fallback: number) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
+    return { schemaVersion: 2, selectionMode: "teacher-selected", selectedStudentIds: ids(raw.selectedStudentIds), orderedStudentIds: ids(raw.orderedStudentIds),
+      presentationSec: seconds(raw.presentationSec, 180), discussionSec: seconds(raw.discussionSec, 60), transitionSec: seconds(raw.transitionSec, 20), minutesPerStudent: (seconds(raw.presentationSec, 180) + seconds(raw.discussionSec, 60) + seconds(raw.transitionSec, 20)) / 60,
+      updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "" };
+  }
   const orderedStudentIds = Array.isArray(raw.orderedStudentIds)
     ? raw.orderedStudentIds.filter((studentId): studentId is string => typeof studentId === "string")
     : undefined;
@@ -197,6 +209,23 @@ function parseShowcaseQueueConfig(value: unknown): Partial<ShowcaseQueueConfig> 
     ...(minutesPerStudent === undefined ? {} : { minutesPerStudent }),
     ...(typeof raw.updatedAt === "string" ? { updatedAt: raw.updatedAt } : {}),
   };
+}
+
+function showcaseBudget(course: CourseGate, queue: ReturnType<typeof buildShowcaseQueue>, config?: Partial<ShowcaseQueueConfig>) {
+  const clock = asRecord(course.uiState).classroomTiming as ClassroomTimingState | undefined;
+  const snapshot = clock?.schemaVersion === 1 && Array.isArray(clock.stages)
+    ? deriveClassroomTimingSnapshot(clock, new Date().toISOString()).stages.find((stage) => stage.stageKey === "showcase") : undefined;
+  const stageRemainingSec = snapshot?.remainingSec ?? (course.content?.stagePlan?.stages.find((stage) => stage.key === "showcase")?.durationMin ?? 0) * 60;
+  const now = Date.now();
+  const plannedRemainingSec = queue.items.reduce((sum, item) => sum + showcaseRemainingSeconds(item, config, now), 0);
+  return { stageRemainingSec, plannedRemainingSec: Math.ceil(plannedRemainingSec), overrunSec: Math.max(0, Math.ceil(plannedRemainingSec - stageRemainingSec)) };
+}
+
+function assertSelectedPresenter(course: CourseGate, studentId: string): void {
+  const config = parseShowcaseQueueConfig(course.uiState, course.content);
+  if (config?.selectionMode === "teacher-selected" && !config.selectedStudentIds?.includes(studentId)) {
+    throw new ShowcasePresentationError("STUDENT_NOT_SELECTED", "该学生尚未被教师选入现场汇报名单。", 409);
+  }
 }
 
 async function loadStudentAndGroupRows(courseId: string) {
@@ -402,7 +431,7 @@ export async function getShowcaseData(
       ? presentation
       : { ...presentation, evaluationNote: undefined, evaluatedBy: undefined }),
     effectivePresentingStudentId,
-    parseShowcaseQueueConfig(course.uiState),
+    parseShowcaseQueueConfig(course.uiState, course.content),
   );
   const queue = claims.role === "teacher"
     ? queueResult.items
@@ -431,6 +460,8 @@ export async function getShowcaseData(
     presentations,
     queue,
     minutesPerStudent: queueResult.minutesPerStudent,
+    queueConfig: parseShowcaseQueueConfig(course.uiState, course.content) as ShowcaseQueueConfig | undefined,
+    ...(parseShowcaseQueueConfig(course.uiState, course.content)?.schemaVersion === 2 ? { budget: showcaseBudget(course, queueResult, parseShowcaseQueueConfig(course.uiState, course.content)) } : {}),
     currentQueueItem,
     nextQueueItem,
   };
@@ -448,7 +479,7 @@ async function assignPresenter(courseId: string, groupId: string | null, request
     await tx.lock(courseId);
     const course = await tx.loadCourse({
       where: { id: courseId },
-      select: { status: true, currentStageIndex: true, stages: true },
+      select: { status: true, currentStageIndex: true, stages: true, uiState: true, content: true },
     });
     if (!course) throw new ShowcasePresentationError("COURSE_NOT_FOUND", "课程不存在。", 404);
     assertShowcaseStage({ ...course, id: courseId, presentingGroupId: null, presentingStudentId: null, uiState: null });
@@ -475,6 +506,7 @@ async function assignPresenter(courseId: string, groupId: string | null, request
       if (requestedStudentId && !presentingStudent) {
         throw new ShowcasePresentationError("STUDENT_NOT_IN_GROUP", "指定学生不属于该项目组。", 409);
       }
+      if (presentingStudent) assertSelectedPresenter(course, presentingStudent.studentId);
       if (!presentingStudent) {
         throw new ShowcasePresentationError("GROUP_EMPTY", "汇报组中没有可汇报的学生。", 409);
       }
@@ -549,41 +581,48 @@ async function saveShowcaseQueue(
     artifacts: artifactsByStudent.get(student.id) ?? [],
     firstPresentableSubmissionAt: firstPresentableByStudent.get(student.id),
   } satisfies ShowcaseStudentSummary));
-  const defaultOrder = defaultShowcaseQueueOrder(queueStudents);
-  const requestedKnownOrder = action.orderedStudentIds.filter((studentId) => students.some((student) => student.id === studentId));
-  if (requestedKnownOrder.length !== new Set(requestedKnownOrder).size) {
-    throw new ShowcasePresentationError("INVALID_QUEUE", "汇报顺序中不能有重复学生。", 400);
+  const selectedMode = action.selectionMode === "teacher-selected" || parseShowcaseQueueConfig(course.uiState, course.content)?.schemaVersion === 2;
+  const selectedIds = selectedMode ? (action.selectedStudentIds ?? parseShowcaseQueueConfig(course.uiState, course.content)?.selectedStudentIds ?? []) : undefined;
+  const knownIds = new Set(students.map((student) => student.id));
+  if ([...action.orderedStudentIds, ...(selectedIds ?? [])].some((id) => !knownIds.has(id))
+    || action.orderedStudentIds.length !== new Set(action.orderedStudentIds).size || (selectedIds && selectedIds.length !== new Set(selectedIds).size)) {
+    throw new ShowcasePresentationError("INVALID_QUEUE", "汇报名单包含重复或不属于当前课堂的学生。", 400);
   }
-  const baseOrder = action.orderedStudentIds.length > 0 ? requestedKnownOrder : defaultOrder;
-  const mergedOrder = [...baseOrder, ...students.map((student) => student.id).filter((studentId) => !baseOrder.includes(studentId))];
+  const mergedOrder = normalizeShowcaseQueueOrder(queueStudents, action.orderedStudentIds, selectedIds);
   await store.transaction(async (tx) => {
     await tx.lock(courseId);
-    const locked = await tx.loadCourse({ where: { id: courseId }, select: { status: true, currentStageIndex: true, stages: true, uiState: true, presentingGroupId: true, presentingStudentId: true } });
+    const locked = await tx.loadCourse({ where: { id: courseId } });
     if (!locked) throw new ShowcasePresentationError("COURSE_NOT_FOUND", "课程不存在。", 404);
     assertShowcaseStage({ ...locked, id: courseId, uiState: locked.uiState });
-    const previousOrder = normalizeShowcaseQueueOrder(queueStudents, parseShowcaseQueueConfig(locked.uiState)?.orderedStudentIds);
-    const activeRows = await tx.listPresentations({
-      where: { courseId, status: { in: ["pending", "active", "rejected", "evaluating", "ended"] } },
-      select: { studentId: true },
-    });
+    const previousConfig = parseShowcaseQueueConfig(locked.uiState, locked.content);
+    const previousOrder = normalizeShowcaseQueueOrder(queueStudents, previousConfig?.orderedStudentIds, previousConfig?.selectionMode === "teacher-selected" ? previousConfig.selectedStudentIds : undefined);
+    const activeRows = await tx.listPresentations({ where: { courseId, status: { in: ["pending", "active", "rejected", "evaluating", "ended"] } } });
     const lockedStudentIds = new Set(activeRows.map((row) => row.studentId));
-    const assignedStudentId = locked.presentingStudentId
-      ?? queueStudents.find((student) => student.groupId === locked.presentingGroupId)?.studentId;
+    const assignedStudentId = locked.presentingStudentId ?? queueStudents.find((student) => student.groupId === locked.presentingGroupId)?.studentId;
     if (assignedStudentId) lockedStudentIds.add(assignedStudentId);
-    const nextOrder = action.orderedStudentIds.length === 0
-      ? preserveShowcaseQueueLockedPositions(previousOrder, mergedOrder, lockedStudentIds)
-      : mergedOrder;
-    for (const studentId of lockedStudentIds) {
-      if (previousOrder.indexOf(studentId) !== nextOrder.indexOf(studentId)) {
-        throw new ShowcasePresentationError("QUEUE_LOCKED", "已经开始或完成汇报的学生不能调整顺序。", 409);
-      }
+    if (selectedMode && [...lockedStudentIds].some((id) => !selectedIds?.includes(id))) {
+      throw new ShowcasePresentationError("QUEUE_LOCKED", "已点名、开始或完成汇报的学生须保留在本场次名单中。", 409);
     }
-    const nextConfig = {
-      schemaVersion: 1 as const,
-      orderedStudentIds: nextOrder,
-      minutesPerStudent: normalizeMinutesPerStudent(action.minutesPerStudent),
-      updatedAt: new Date().toISOString(),
-    } satisfies ShowcaseQueueConfig;
+    const nextOrder = !selectedMode && action.orderedStudentIds.length === 0
+      ? preserveShowcaseQueueLockedPositions(previousOrder, mergedOrder, lockedStudentIds) : mergedOrder;
+    const oldLockedOrder = previousOrder.filter((id) => lockedStudentIds.has(id));
+    const nextLockedOrder = nextOrder.filter((id) => lockedStudentIds.has(id));
+    if (selectedMode ? oldLockedOrder.some((id, i) => id !== nextLockedOrder[i]) : [...lockedStudentIds].some((id) => previousOrder.indexOf(id) !== nextOrder.indexOf(id))) {
+      throw new ShowcasePresentationError("QUEUE_LOCKED", "已开始或完成的汇报顺序不能改变。", 409);
+    }
+    const nextConfig: ShowcaseQueueConfig = selectedMode ? {
+      schemaVersion: 2, selectionMode: "teacher-selected", selectedStudentIds: selectedIds!, orderedStudentIds: nextOrder,
+      presentationSec: action.presentationSec ?? previousConfig?.presentationSec ?? 180,
+      discussionSec: action.discussionSec ?? previousConfig?.discussionSec ?? 60,
+      transitionSec: action.transitionSec ?? previousConfig?.transitionSec ?? 20,
+      minutesPerStudent: 0, updatedAt: new Date().toISOString(),
+    } : { schemaVersion: 1, orderedStudentIds: nextOrder, minutesPerStudent: normalizeMinutesPerStudent(action.minutesPerStudent), updatedAt: new Date().toISOString() };
+    if (selectedMode) {
+      nextConfig.minutesPerStudent = showcaseSlotSeconds(nextConfig) / 60;
+      const planned = buildShowcaseQueue(queueStudents, activeRows.map((row) => rowToSnapshot(row)), locked.presentingStudentId, nextConfig);
+      const budget = showcaseBudget(locked, planned, nextConfig);
+      if (budget.overrunSec > 0) throw new ShowcasePresentationError("SHOWCASE_BUDGET_EXCEEDED", `已选学生含汇报、点评和衔接共需 ${budget.plannedRemainingSec} 秒，阶段剩余 ${Math.floor(budget.stageRemainingSec)} 秒；请减少人数、调整单人安排或先调整阶段时间。`, 409);
+    }
     const uiState = asRecord(locked.uiState);
     await tx.updateCourse({
       where: { id: courseId },
@@ -615,6 +654,7 @@ async function requestPresentation(courseId: string, action: Extract<ShowcaseAct
   const course = await loadCourseGate(courseId);
   assertCourseExists(course);
   assertShowcaseStage(course);
+  assertSelectedPresenter(course, claims.sub!);
   const { groupId, studentName } = await assertAssignedStudent(course, courseId, claims.sub!);
   if (action.artifactKind === "document" && action.displayMode !== "continuous") {
     throw new ShowcasePresentationError("INVALID_DISPLAY_MODE", "富文档只支持连续阅读。", 400);
@@ -637,6 +677,7 @@ async function requestPresentation(courseId: string, action: Extract<ShowcaseAct
     });
     if (!lockedCourse) throw new ShowcasePresentationError("COURSE_NOT_FOUND", "课程不存在。", 404);
     assertShowcaseStage(lockedCourse);
+    assertSelectedPresenter(lockedCourse, claims.sub!);
     const lockedAssignedStudentId = lockedCourse.presentingStudentId
       ?? (lockedCourse.presentingGroupId
         ? (await tx.findMember({
@@ -937,7 +978,7 @@ async function finishEvaluation(
       firstPresentableSubmissionAt: firstPresentableByStudent.get(student.id),
     } satisfies ShowcaseStudentSummary));
     const rowSnapshots = rows.map((row) => rowToSnapshot(row, names.get(row.studentId)));
-    const queue = buildShowcaseQueue(queueStudents, rowSnapshots, lockedCourse.presentingStudentId, parseShowcaseQueueConfig(lockedCourse.uiState));
+    const queue = buildShowcaseQueue(queueStudents, rowSnapshots, lockedCourse.presentingStudentId, parseShowcaseQueueConfig(lockedCourse.uiState, lockedCourse.content));
     const currentIndex = queue.items.findIndex((item) => item.studentId === current.studentId);
     const candidate = queue.items.find((item, index) => index > currentIndex && item.status === "waiting" && item.groupId)
       ?? queue.items.find((item) => item.status === "waiting" && item.groupId && item.studentId !== current.studentId);

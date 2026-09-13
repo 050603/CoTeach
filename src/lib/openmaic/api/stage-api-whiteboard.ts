@@ -9,6 +9,11 @@ import type { Whiteboard } from '@openmaic/lib/types/stage';
 import type { PPTElement } from '@openmaic/dsl';
 import type { StageStore, APIResult } from './stage-api-types';
 import { generateId } from './stage-api-defaults';
+import {
+  removeWhiteboardElement,
+  resolveWhiteboardElementAnchors,
+  upsertWhiteboardElement,
+} from '@openmaic/lib/whiteboard/projection';
 
 const SCENE_WHITEBOARD_PREFIX = 'whiteboard-scene:';
 
@@ -93,7 +98,11 @@ export function createWhiteboardAPI(store: StageStore) {
         const state = store.getState();
         const whiteboard = state.stage?.whiteboard?.find((wb) => wb.id === whiteboardId);
         if (!whiteboard) return { success: false, error: 'Whiteboard not found' };
-        const newWhiteboard = { ...whiteboard, ...updates };
+        const newWhiteboard = {
+          ...whiteboard,
+          ...updates,
+          ...(updates.elements ? { elements: resolveWhiteboardElementAnchors(updates.elements) } : {}),
+        };
         const whiteboardList = state.stage!.whiteboard!.map((wb) =>
           wb.id === whiteboardId ? newWhiteboard : wb,
         );
@@ -161,7 +170,7 @@ export function createWhiteboardAPI(store: StageStore) {
     },
 
     /**
-     * Add a whiteboard element
+     * Add or replace a whiteboard element by its stable ID
      *
      * @param element - Element object
      * @param whiteboardId - Whiteboard ID
@@ -178,7 +187,7 @@ export function createWhiteboardAPI(store: StageStore) {
         };
         const newWhiteboard = {
           ...whiteboard,
-          elements: [...whiteboard.elements, newElement],
+          elements: upsertWhiteboardElement(whiteboard.elements, newElement),
         };
         const whiteboardList = state.stage!.whiteboard!.map((wb) =>
           wb.id === whiteboardId ? newWhiteboard : wb,
@@ -206,7 +215,7 @@ export function createWhiteboardAPI(store: StageStore) {
         if (!whiteboard) return { success: false, error: 'Whiteboard not found' };
         const newWhiteboard = {
           ...whiteboard,
-          elements: whiteboard.elements.filter((el) => el.id !== elementId),
+          elements: removeWhiteboardElement(whiteboard.elements, elementId),
         };
         const whiteboardList = state.stage!.whiteboard!.map((wb) =>
           wb.id === whiteboardId ? newWhiteboard : wb,
@@ -234,7 +243,9 @@ export function createWhiteboardAPI(store: StageStore) {
         if (!whiteboard) return { success: false, error: 'Whiteboard not found' };
         const newWhiteboard = {
           ...whiteboard,
-          elements: whiteboard.elements.map((el) => (el.id === element.id ? element : el)),
+          elements: resolveWhiteboardElementAnchors(
+            whiteboard.elements.map((el) => (el.id === element.id ? element : el)),
+          ),
         };
         const whiteboardList = state.stage!.whiteboard!.map((wb) =>
           wb.id === whiteboardId ? newWhiteboard : wb,

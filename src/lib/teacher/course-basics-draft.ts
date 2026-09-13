@@ -13,6 +13,8 @@ export type CourseBasicsDraft = {
   subject: string;
   grade: string;
   hours: number;
+  /** Resource-package minutes stay authoritative when editing unrelated basics. */
+  resourcePackageTotalMinutes?: number;
   learningObjectivesText: string;
   summary: string;
   priorKnowledge: string;
@@ -45,7 +47,8 @@ export function createCourseBasicsDraft(course: Course): CourseBasicsDraft {
     name: course.name,
     subject: course.subject,
     grade: course.grade,
-    hours: course.hours,
+    hours: course.content.stagePlan ? course.content.stagePlan.totalMinutes / 60 : course.hours,
+    ...(course.content.stagePlan ? { resourcePackageTotalMinutes: course.content.stagePlan.totalMinutes } : {}),
     learningObjectivesText: (course.learningObjectives ?? []).join("\n"),
     summary: course.summary,
     priorKnowledge: course.learnerProfile?.priorKnowledge ?? "",
@@ -75,7 +78,9 @@ export function buildCourseBasicsPatch(course: Course, draft: CourseBasicsDraft)
     name: draft.name.trim(),
     subject: draft.subject.trim(),
     grade: draft.grade.trim(),
-    hours: Math.min(5, Math.max(1, Math.round(draft.hours) || 1)),
+    hours: course.content.stagePlan
+      ? course.content.stagePlan.totalMinutes / 60
+      : Math.min(5, Math.max(1, Math.round(draft.hours) || 1)),
     learningObjectives: parseLearningObjectives(draft.learningObjectivesText),
     summary: draft.summary.trim(),
     learnerProfile: {
@@ -103,8 +108,12 @@ export function validateCourseBasicsDraft(draft: CourseBasicsDraft): string | nu
   if (!draft.name.trim()) return "请填写课程名称";
   if (!draft.subject.trim()) return "请填写学科";
   if (!draft.grade.trim()) return "请填写年级";
-  if (!Number.isFinite(draft.hours) || draft.hours < 1) return "预计课时不能少于 1";
-  if (draft.hours > 5) return "人工智能通识课程预计课时请设置为 1–5 课时";
+  if (draft.resourcePackageTotalMinutes !== undefined) {
+    if (!Number.isInteger(draft.resourcePackageTotalMinutes) || draft.resourcePackageTotalMinutes <= 0) return "请在资源包教案中确认有效的总分钟数";
+  } else {
+    if (!Number.isFinite(draft.hours) || draft.hours < 1) return "预计课时不能少于 1";
+    if (draft.hours > 5) return "人工智能通识课程预计课时请设置为 1–5 课时";
+  }
   if (!draft.drivingQuestions.some((question) => question.trim())) {
     return "请至少设置一个项目启发问题";
   }

@@ -2,7 +2,7 @@ import { Prisma, type GenerationJob } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
 
-type JobKind = "COURSE_DESIGN" | "COURSE_CONTENT";
+type JobKind = "COURSE_DESIGN" | "COURSE_CONTENT" | "COURSE_RESOURCE_PACKAGE" | "COURSE_QUALITY_REVIEW";
 type Json = Prisma.JsonValue;
 export type CourseGenerationJob = {
   id: string; courseId: string; requestedBy: string | null; status: string; step: string; progress: number;
@@ -104,9 +104,10 @@ function storage(kind: JobKind) {
         return { count: rows.length };
       });
     },
-    async upsert(input: { where: JobWhere; create: Patch; update: Patch }) {
+    async upsert(input: { where: JobWhere; create: Patch; update: Patch; rejectStatuses?: readonly string[] }) {
       return runMutationTransaction(async (tx) => {
         await lock(tx); const row = (await findIn(tx, { where: input.where }))[0];
+        if (row && input.rejectStatuses?.includes(row.status)) throw new Error("GENERATION_JOB_BUSY");
         if (!row) return createIn(tx, input.create);
         return projectGenerationJob(await tx.generationJob.update({ where: { id: row.id }, data: updateData(row, input.update) }));
       });
@@ -115,3 +116,5 @@ function storage(kind: JobKind) {
 }
 export const contentGenerationJobs = storage("COURSE_CONTENT");
 export const designGenerationJobs = storage("COURSE_DESIGN");
+export const resourcePackageJobs = storage("COURSE_RESOURCE_PACKAGE");
+export const qualityReviewJobs = storage("COURSE_QUALITY_REVIEW");

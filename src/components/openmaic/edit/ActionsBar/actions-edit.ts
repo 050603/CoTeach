@@ -55,6 +55,47 @@ export function appendDiscussion(actions: Action[], id: string): Action[] {
   return [...actions, makeDiscussion(id)];
 }
 
+/** Add one editable board-writing block before a terminal discussion, if present. */
+export function appendWhiteboardTextBlock(actions: Action[], id: string): Action[] {
+  const block: Action[] = [
+    { id: `${id}-open`, type: 'wb_open' },
+    {
+      id,
+      type: 'wb_draw_text',
+      content: '',
+      x: 80,
+      y: 72,
+      width: 840,
+      height: 120,
+      fontSize: 34,
+      color: '#243447',
+    },
+    { id: `${id}-close`, type: 'wb_close' },
+  ];
+  const slot = clampInsertSlot(actions, actions.length);
+  return [...actions.slice(0, slot), ...block, ...actions.slice(slot)];
+}
+
+/** Update the editable text action inside a whiteboard block. */
+export function setWhiteboardTextById(actions: Action[], id: string, content: string): Action[] {
+  const index = actions.findIndex((action) => action.id === id);
+  const action = actions[index];
+  if (!action || action.type !== 'wb_draw_text') return actions;
+  const next = actions.slice();
+  next[index] = { ...action, content };
+  return next;
+}
+
+/** Remove the complete open → text → close block created by the preparation editor. */
+export function removeWhiteboardTextBlockById(actions: Action[], id: string): Action[] {
+  const index = actions.findIndex((action) => action.id === id);
+  if (index < 0 || actions[index]?.type !== 'wb_draw_text') return actions;
+  if (actions[index - 1]?.type === 'wb_open' && actions[index + 1]?.type === 'wb_close') {
+    return [...actions.slice(0, index - 1), ...actions.slice(index + 2)];
+  }
+  return removeAt(actions, index);
+}
+
 /**
  * Cap an insertion slot so nothing can land AFTER the discussion — it stays
  * terminal. Returns the slot unchanged when there is no discussion.
@@ -120,6 +161,7 @@ export function setSpeechTextClearAudioById(actions: Action[], id: string, text:
   const cleaned = { ...a, text } as Action & { audioId?: string; audioUrl?: string };
   delete cleaned.audioId;
   delete cleaned.audioUrl;
+  if (cleaned.type === 'speech') cleaned.audioInvalidated = true;
   next[index] = cleaned;
   return next;
 }
@@ -166,8 +208,20 @@ export function setAudioId(actions: Action[], index: number, audioId: string): A
   const a = actions[index];
   if (!a || a.type !== 'speech') return actions;
   const next = actions.slice();
-  next[index] = { ...a, audioId } as Action;
+  const updated = { ...a, audioId };
+  // A newly synthesized local clip replaces the previously published URL.
+  delete updated.audioUrl;
+  delete updated.audioInvalidated;
+  next[index] = updated;
   return next;
+}
+
+/** A late synthesis response must not attach old audio to edited narration. */
+export function setFreshAudioById(actions: Action[], id: string, audioId: string, text: string): Action[] {
+  const index = actions.findIndex((action) => action.id === id);
+  const action = actions[index];
+  return action?.type === 'speech' && action.text === text
+    ? setAudioId(actions, index, audioId) : actions;
 }
 
 /** Like {@link setAudioId} but targets an action by id (index-stale-safe). */

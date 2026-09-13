@@ -25,7 +25,7 @@ import {
   type SceneGenerationContext,
   type AgentInfo,
 } from '@openmaic/lib/generation/generation-pipeline';
-import type { Action } from '@openmaic/lib/types/action';
+import type { Action, SpeechAction } from '@openmaic/lib/types/action';
 import type {
   SceneOutline,
   GeneratedSlideContent,
@@ -35,6 +35,8 @@ import type {
 } from '@openmaic/lib/types/generation';
 import type { SceneContent } from '@openmaic/lib/types/stage';
 import type { LlmStage } from '@openmaic/lib/server/model-routes';
+import { whiteboardBlocks } from '@openmaic/lib/edit/whiteboard-blocks';
+import { parseActionsFromStructuredOutput } from '@openmaic/lib/generation/action-parser';
 
 // ── Scene context shape (client-sourced, injected via deps) ──────────────────
 
@@ -45,6 +47,8 @@ export interface SceneContext {
   allOutlines: SceneOutline[];
   /** The current scene content. */
   content: SceneContent;
+  /** Current playback actions, including teacher-authored whiteboard segments. */
+  actions?: Action[];
   /** The stage id that owns this scene. */
   stageId: string;
   /** Optional agent info for multi-agent stages. */
@@ -139,6 +143,10 @@ export const RegenerateSceneActionsParams = Type.Object({
       'The id of the scene whose actions should be regenerated. ' +
       'Use the id of the current scene shown in the system prompt.',
   }),
+  instruction: Type.Optional(Type.String({
+    maxLength: 12000,
+    description: 'The teacher’s actual requested changes to the narration, including language, tone, length and which lines to keep. Always forward the user’s request. Existing whiteboard segments and non-speech cues are preserved; use edit_whiteboard for narration inside a whiteboard.',
+  })),
   previousSpeeches: Type.Optional(
     Type.Array(Type.String(), {
       description: 'Speech texts from the previous scene for cross-scene coherence.',
@@ -156,6 +164,12 @@ export type RegenerateSceneActionsParams = Static<typeof RegenerateSceneActionsP
 export interface RegenerateSceneActionsDetails {
   sceneId: string;
   actions: Action[];
+  narrationPatch?: NarrationPatch;
+}
+
+export interface NarrationPatch {
+  before: SpeechAction[];
+  speeches: SpeechAction[];
 }
 
 // ── Factory ──────────────────────────────────────────────────────────────────
@@ -167,14 +181,14 @@ export function makeRegenerateSceneActionsTool(
     name: 'regenerate_scene_actions',
     label: 'Regenerate scene actions',
     description:
-      'Re-generates the narration/playback actions for a scene to match its (edited) content. ' +
-      'Use this after the scene content has been modified (e.g. slide elements changed, quiz questions updated) ' +
-      'so that the actions stay in sync with what is actually on screen. ' +
-      'Only supply the sceneId — the scene data is loaded automatically.',
+      'Rewrites a scene’s spoken narration according to the teacher’s instruction and current content. ' +
+      'Supply sceneId and instruction containing the user’s actual request, including what must stay unchanged. ' +
+      'Existing whiteboard segments (including their narration and images) and non-speech playback cues are preserved exactly. ' +
+      'For narration or drawing inside a whiteboard, use edit_whiteboard. Scene data and the current script are loaded automatically.',
     parameters: RegenerateSceneActionsParams,
 
     execute: async (_toolCallId, params, signal) => {
-      const { sceneId, previousSpeeches, userProfile } = params;
+      const { sceneId, instruction, previousSpeeches, userProfile } = params;
 
       // ── Resolve trusted scene context from deps (not from model args) ──
       const ctxData = deps.getSceneContext(sceneId);
@@ -192,6 +206,34 @@ export function makeRegenerateSceneActionsTool(
       }
 
       const { outline, allOutlines, content, stageId, agents, languageDirective } = ctxData;
+      const originalActions = ctxData.actions;
+      const boardIndexes = new Set(whiteboardBlocks(originalActions ?? []).flatMap((block) =>
+        Array.from({ length: block.end - block.start + 1 }, (_item, index) => block.start + index),
+      ));
+      const editableSpeeches = originalActions?.filter((action, index) => action.type === 'speech' && !boardIndexes.has(index));
+      if (originalActions?.length && !editableSpeeches?.length) {
+        return {
+          content: [{ type: 'text', text: '本页没有白板之外的讲稿。若要修改白板中的讲解，请读取该白板后使用 edit_whiteboard。' }],
+          details: { sceneId, actions: [] }, isError: true,
+        };
+      }
+      const withoutImageBytes = (value: string) => value.replace(/data:[^,\s"']*;base64,[A-Za-z0-9+/=]+/gi, '[embedded asset preserved by id]');
+      const referenceActions = JSON.stringify(originalActions ?? [], (key, value) => {
+        if (['audioId', 'audioUrl', 'audioInvalidated'].includes(key)) return undefined;
+        return typeof value === 'string' && /^data:/i.test(value) ? '[embedded asset preserved by id]' : value;
+      });
+      const editInstructions = [
+        '## Teacher narration edit (overrides generic whole-script generation instructions for this call)',
+        instruction?.trim() ? `Teacher request: ${instruction.trim()}` : 'Teacher request: update the narration to fit the current page content, preserving unrequested wording and behavior.',
+        'Use the current actions below as the reference. Preserve everything the teacher did not ask to change.',
+        originalActions?.length
+          ? `Only rewrite these OUTSIDE-WHITEBOARD speech ids: ${JSON.stringify(editableSpeeches?.map((action) => action.id))}. Return only the changed speech actions, keeping their original ids. Never return whiteboard actions, whiteboard narration, spotlight, laser, video, discussion or widget actions; these are retained from the original document. Do not return image sources or the embedded-asset marker.`
+          : 'There is no existing narration to edit. Generate spoken narration only; do not add whiteboard or other playback actions.',
+        originalActions?.length
+          ? 'For this edit, return a JSON array using this exact narration format: [{"type":"action","name":"speech","action_id":"ORIGINAL_SPEECH_ID","params":{"text":"edited narration"}}]. Keep unchanged lines out of the response. For a whole-narration rewrite, include every editable speech id, without changing the number or position of speech slots.'
+          : 'Return narration in the usual JSON array format: [{"type":"text","content":"narration"}].',
+        `Current actions (reference only; binary assets omitted):\n${referenceActions}`,
+      ].join('\n');
 
       // Suppress unused variable — stageId is part of the context contract and
       // may be needed by future tool logic (e.g. quota checks, audit logging).
@@ -210,11 +252,20 @@ export function makeRegenerateSceneActionsTool(
       // Wrap deps.aiCall to match AICallFn (adds optional images param). Actions
       // generation resolves the `scene-actions` stage model — the same route the
       // course-generation actions path uses — not the agent conversation model.
-      const aiCallFn = (
+      let modelResponse: string | undefined;
+      const aiCallFn = async (
         systemPrompt: string,
         userPrompt: string,
         _images?: Array<{ id: string; src: string }>,
-      ): Promise<string> => deps.aiCall('scene-actions', systemPrompt, userPrompt, signal);
+      ): Promise<string> => {
+        modelResponse = await deps.aiCall(
+          'scene-actions',
+          withoutImageBytes(`${systemPrompt}\n\n${editInstructions}`),
+          withoutImageBytes(`${userPrompt}\n\n${editInstructions}`),
+          signal,
+        );
+        return modelResponse;
+      };
 
       // ── Generate actions ───────────────────────────────────────────────
       // Convert the runtime SceneContent shape to the generation-time shape that
@@ -225,12 +276,55 @@ export function makeRegenerateSceneActionsTool(
       // function returns [] immediately.
       const generationContent = toGenerationContent(content);
 
-      const actions = await generateSceneActions(outline, generationContent, aiCallFn, {
+      const generatedActions = await generateSceneActions(outline, generationContent, aiCallFn, {
         ctx,
         agents,
         userProfile,
         languageDirective,
       });
+
+      let actions = generatedActions;
+      let narrationPatch: NarrationPatch | undefined;
+      if (originalActions !== undefined) {
+        // Use the model's id-addressed edits before generic generation merges
+        // adjacent narration fragments or inserts lifecycle actions.
+        const proposed = modelResponse === undefined ? [] : parseActionsFromStructuredOutput(modelResponse, outline.type);
+        const editableById = new Map(editableSpeeches?.map((action) => [action.id, action]));
+        const seen = new Set<string>();
+        const valid = proposed.length > 0 && proposed.every((action) => {
+          if (action.type !== 'speech' || !action.text.trim() || action.text.length > 30000 || seen.has(action.id)) return false;
+          seen.add(action.id);
+          return originalActions.length === 0 || editableById.has(action.id);
+        });
+        if (!valid) {
+          return {
+            content: [{ type: 'text', text: '讲稿修改未应用：生成结果缺少原讲稿 ID，或包含白板/其他动作。请只修改白板外的讲稿并保留原 ID 后重试。' }],
+            details: { sceneId, actions: [] }, isError: true,
+          };
+        }
+        const updatedById = new Map(proposed.map<[string, Action]>((action) => {
+          const prior = editableById.get(action.id);
+          const text = action.type === 'speech' ? action.text : '';
+          if (prior?.type === 'speech' && prior.text === text) return [action.id, prior];
+          const edited = prior?.type === 'speech' ? { ...prior, text, audioInvalidated: true } : { id: action.id, type: 'speech' as const, text, audioInvalidated: true };
+          delete (edited as { audioId?: string }).audioId;
+          delete (edited as { audioUrl?: string }).audioUrl;
+          return [action.id, edited];
+        }));
+        actions = originalActions.length
+          ? originalActions.map((action) => updatedById.get(action.id) ?? action)
+          : [...updatedById.values()];
+        if (originalActions.length) {
+          narrationPatch = { before: [], speeches: [] };
+          for (const [id, updated] of updatedById) {
+            const before = editableById.get(id);
+            if (before?.type === 'speech' && updated.type === 'speech') {
+              narrationPatch.before.push(before);
+              narrationPatch.speeches.push(updated);
+            }
+          }
+        }
+      }
 
       if (actions.length === 0) {
         return {
@@ -248,6 +342,8 @@ export function makeRegenerateSceneActionsTool(
         };
       }
 
+      ctxData.actions = actions;
+
       return {
         content: [
           {
@@ -255,7 +351,7 @@ export function makeRegenerateSceneActionsTool(
             text: `Regenerated ${actions.length} actions for the scene.`,
           },
         ],
-        details: { sceneId, actions },
+        details: { sceneId, actions, ...(narrationPatch ? { narrationPatch } : {}) },
       };
     },
   };

@@ -1,3 +1,4 @@
+import { publicResourcePackageSnapshot } from "@/lib/resource-package/privacy";
 import { isValidNewPasswordLength, PASSWORD_LENGTH_HINT } from "@/lib/auth/password-policy";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
@@ -279,7 +280,7 @@ export async function getStudentActivity(claims: AuthClaims, activityId: string)
     enrollment: { id: enrollment.id },
     progress: progress ? { status: normalizedStatus(progress.status), startedAt: progress.startedAt, completedAt: progress.completedAt, lastAccessedAt: progress.lastAccessedAt, progressData: progress.progressData } : { status: "not_started", startedAt: null, completedAt: null, lastAccessedAt: null },
     instances: activity.classroomInstances.map((instance) => ({ id: instance.id, status: normalizedStatus(instance.status), startedAt: instance.startedAt, endedAt: instance.endedAt, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) })),
-    instance: activity.classroomInstances[0] ? { ...activity.classroomInstances[0], status: normalizedStatus(activity.classroomInstances[0].status), coverImageUrl: classroomCoverImageUrl(activity.classroomInstances[0].templateVersion.snapshot), canWrite: open && normalizedStatus(offering.status) === "open" && normalizedStatus(enrollment.status) === "active" && normalizedStatus(activity.classroomInstances[0].status) === "teaching" } : null,
+    instance: activity.classroomInstances[0] ? { ...activity.classroomInstances[0], templateVersion: { ...activity.classroomInstances[0].templateVersion, snapshot: publicResourcePackageSnapshot(activity.classroomInstances[0].templateVersion.snapshot) }, status: normalizedStatus(activity.classroomInstances[0].status), coverImageUrl: classroomCoverImageUrl(activity.classroomInstances[0].templateVersion.snapshot), canWrite: open && normalizedStatus(offering.status) === "open" && normalizedStatus(enrollment.status) === "active" && normalizedStatus(activity.classroomInstances[0].status) === "teaching" } : null,
   };
 }
 
@@ -496,6 +497,7 @@ export async function listPrivateTemplates(claims: AuthClaims) {
 
 export async function createPrivateTemplate(claims: AuthClaims, input: { title: string; description?: string; snapshot: unknown; mediaRefs?: unknown }) {
   const teacher = await requireTeacherUser(claims);
+  await assertTemplateReviewForPublication(input.snapshot, teacher.id);
   return prisma.classroomTemplate.create({ data: { ownerId: teacher.id, title: input.title, description: input.description, status: "ACTIVE", versions: { create: { version: 1, status: "PUBLISHED", snapshot: jsonValue(input.snapshot), mediaRefs: input.mediaRefs === undefined ? undefined : jsonValue(input.mediaRefs) } } }, include: { versions: true } });
 }
 
@@ -513,6 +515,7 @@ export async function createTemplateVersion(claims: AuthClaims, templateId: stri
     const teacher = await requireTeacherUser(claims, tx);
     const template = await tx.classroomTemplate.findFirst({ where: { id: templateId, ownerId: teacher.id, status: { in: ["ACTIVE", "active"] } }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
     if (!template) throw new PlatformError("NOT_FOUND", "课堂模板不存在", 404);
+    await assertTemplateReviewForPublication(input.snapshot, teacher.id);
     const version = (template.versions[0]?.version ?? 0) + 1;
     return tx.classroomTemplateVersion.create({ data: { templateId, version, status: "PUBLISHED", snapshot: jsonValue(input.snapshot), mediaRefs: input.mediaRefs === undefined ? undefined : jsonValue(input.mediaRefs) } });
   });
@@ -551,9 +554,20 @@ export async function createClassroomInstance(claims: AuthClaims, activityId: st
     if (!version || version.status.toUpperCase() !== "PUBLISHED" || version.template.status.toUpperCase() === "ARCHIVED" || version.template.ownerId !== (await requireTeacherUser(claims, tx)).id) throw new PlatformError("NOT_FOUND", "课堂模板版本不存在", 404);
     const active = await tx.classroomInstance.findFirst({ where: { activityId, status: { in: ["SCHEDULED", "TEACHING", "scheduled", "teaching"] } }, orderBy: { runNo: "desc" }, include: { templateVersion: true } });
     if (active) return active;
+    await assertTemplateReviewForPublication(version.snapshot, version.template.ownerId);
     const latest = await tx.classroomInstance.aggregate({ where: { activityId }, _max: { runNo: true } });
     return tx.classroomInstance.create({ data: { activityId: activity.id, templateVersionId, runNo: (latest._max.runNo ?? 0) + 1, status: "SCHEDULED" }, include: { templateVersion: true } });
   });
+}
+
+async function assertTemplateReviewForPublication(snapshot: unknown, teacherId: string): Promise<void> {
+  const { decodePblTemplate, createPblTemplateCourse } = await import("./pbl-template");
+  const design = decodePblTemplate(snapshot);
+  if (!design) return;
+  const { assertCourseTeacherReview, CourseReviewError } = await import("@/lib/course-quality-review/review-service");
+  const course = createPblTemplateCourse(design.content.teacherReview?.courseId ?? 'new-template', design);
+  try { await assertCourseTeacherReview(course, teacherId); }
+  catch (error) { if (error instanceof CourseReviewError) throw new PlatformError(error.code, error.message, error.status); throw error; }
 }
 
 export async function startClassroomInstance(claims: AuthClaims, instanceId: string) {
@@ -579,7 +593,7 @@ export async function enterClassroom(claims: AuthClaims, instanceId: string) {
   if (normalizedStatus(instance.status) === "finished") {
     const participation = await prisma.classroomParticipation.findUnique({ where: { instanceId_enrollmentId: { instanceId, enrollmentId: enrollment.id } } });
     if (!participation) throw new PlatformError("PARTICIPATION_NOT_FOUND", "没有本次课堂的参与记录", 404);
-    return { instance: { ...instance, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) }, participation, student };
+    return { instance: { ...instance, templateVersion: { ...instance.templateVersion, snapshot: publicResourcePackageSnapshot(instance.templateVersion.snapshot) }, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) }, participation, student };
   }
   const participation = await prisma.classroomParticipation.upsert({
     where: { instanceId_enrollmentId: { instanceId, enrollmentId: enrollment.id } },
@@ -587,7 +601,7 @@ export async function enterClassroom(claims: AuthClaims, instanceId: string) {
     update: { lastEnteredAt: new Date() },
   });
   await appendLearningEvents(claims, [{ idempotencyKey: `classroom-entered:${participation.id}:${Math.floor(Date.now() / 60_000)}`, type: "classroom_entered", offeringId: offering.id, activityId: instance.activityId, chapterId: instance.activity.chapterId, classroomInstanceId: instanceId, participationId: participation.id, source: "platform" }]);
-  return { instance: { ...instance, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) }, participation, student };
+  return { instance: { ...instance, templateVersion: { ...instance.templateVersion, snapshot: publicResourcePackageSnapshot(instance.templateVersion.snapshot) }, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) }, participation, student };
 }
 
 export async function appendLearningEvents(claims: AuthClaims, events: unknown) {

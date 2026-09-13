@@ -3,6 +3,7 @@ import type { Action } from '@openmaic/lib/types/action';
 
 const WHITEBOARD_DRAW_ACTIONS = new Set<Action['type']>([
   'wb_draw_text',
+  'wb_draw_image',
   'wb_draw_shape',
   'wb_draw_chart',
   'wb_draw_latex',

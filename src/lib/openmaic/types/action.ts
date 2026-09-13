@@ -12,11 +12,13 @@
 
 export type {
   ActionBase,
+  WhiteboardAnchor,
   SpotlightAction,
   LaserAction,
   SpeechAction,
   WbOpenAction,
   WbDrawTextAction,
+  WbDrawImageAction,
   WbDrawShapeAction,
   WbDrawChartAction,
   WbDrawLatexAction,

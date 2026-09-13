@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getStagesForSystemMode } from "@/lib/system-mode";
 import type { Course, ReflectionSurveyResponseV1 } from "@/lib/session/types";
@@ -107,6 +107,24 @@ beforeEach(() => {
 });
 
 describe("NewReflectionStudentView", () => {
+  it("submits confirmed course questions and experience survey independently", () => {
+    const course = makeCourse();
+    const questionSet = { id: "package-questions", version: 2, questions: [{ id: "decision", prompt: "哪次迭代改变了你的判断？", required: true }, { id: "next", prompt: "下一轮会做什么？", required: false }] };
+    course.content.stagePlan = { stages: [], reflectionQuestionSet: questionSet } as unknown as NonNullable<Course["content"]["stagePlan"]>;
+    mocks.upsertReflection.mockImplementation((record) => ({ ...record, id: "new-record" }));
+    render(<NewReflectionStudentView course={course} />);
+    expect(screen.queryByLabelText(REFLECTION_SURVEY_QUESTIONS.learningReflection)).toBeNull();
+    expect((screen.getByRole("button", { name: "提交课程反思" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("系统体验意见"), { target: { value: "希望 AI 回答更清楚" } });
+    for (const field of ["aiHelpfulness", "systemUsability", "reuseIntention"] as const) fireEvent.click(within(screen.getByRole("group", { name: REFLECTION_SURVEY_QUESTIONS[field] })).getByLabelText("4 同意"));
+    fireEvent.click(screen.getByRole("button", { name: "提交系统体验问卷" }));
+    expect(mocks.updateStudentProgress).not.toHaveBeenCalled();
+    expect(mocks.upsertReflection).toHaveBeenLastCalledWith(expect.objectContaining({ courseReflection: undefined, experienceSurvey: expect.objectContaining({ systemReflection: "希望 AI 回答更清楚" }) }));
+    fireEvent.change(screen.getByLabelText(questionSet.questions[0].prompt), { target: { value: "核验调查证据后，我修改了方案。" } });
+    fireEvent.click(screen.getByRole("button", { name: "提交课程反思" }));
+    expect(mocks.upsertReflection).toHaveBeenLastCalledWith(expect.objectContaining({ id: "new-record", courseReflection: expect.objectContaining({ questionSetId: questionSet.id, questionSetVersion: 2, questions: questionSet.questions, answers: { decision: "核验调查证据后，我修改了方案。", next: "" } }), experienceSurvey: expect.objectContaining({ systemReflection: "希望 AI 回答更清楚" }) }));
+    expect(mocks.updateStudentProgress).toHaveBeenCalledWith("reflection", 100);
+  });
   it("shows the compact questions, AI prompts, and validates all five answers", async () => {
     render(<NewReflectionStudentView course={makeCourse()} />);
 

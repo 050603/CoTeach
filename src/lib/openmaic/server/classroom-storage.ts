@@ -127,6 +127,7 @@ export function normalizePersistedClassroom(data: PersistedClassroomData): Persi
 
 const BOARD_DRAW_TYPES = new Set<Action['type']>([
   'wb_draw_text',
+  'wb_draw_image',
   'wb_draw_shape',
   'wb_draw_chart',
   'wb_draw_latex',
@@ -136,35 +137,42 @@ const BOARD_DRAW_TYPES = new Set<Action['type']>([
   'wb_edit_code',
 ]);
 
-/** Remove the old key-point-list fallback and any now-empty board lifecycle. */
+/** Remove the old key-point-list fallback and only the shells emptied by it. */
 export function removeLegacySyntheticWhiteboardActions(
   actions: ReadonlyArray<Action>,
 ): Action[] {
-  const withoutSyntheticNotes = actions.filter((action) => !(
-    action.type === 'wb_draw_text'
-    && action.elementId?.startsWith('planned-note-')
-  ));
+  const withoutSyntheticNotes: Action[] = [];
   const emptyLifecycleIndexes = new Set<number>();
   let openIndex = -1;
   let hasDrawing = false;
+  let removedSyntheticNote = false;
 
-  withoutSyntheticNotes.forEach((action, index) => {
+  actions.forEach((action) => {
+    if (action.type === 'wb_draw_text' && action.elementId?.startsWith('planned-note-')) {
+      if (openIndex >= 0) removedSyntheticNote = true;
+      return;
+    }
+    const index = withoutSyntheticNotes.length;
+    withoutSyntheticNotes.push(action);
     if (action.type === 'wb_open') {
+      if (openIndex >= 0 && !hasDrawing && removedSyntheticNote) emptyLifecycleIndexes.add(openIndex);
       openIndex = index;
       hasDrawing = false;
+      removedSyntheticNote = false;
       return;
     }
     if (openIndex >= 0 && BOARD_DRAW_TYPES.has(action.type)) hasDrawing = true;
     if (action.type === 'wb_close' && openIndex >= 0) {
-      if (!hasDrawing) {
+      if (!hasDrawing && removedSyntheticNote) {
         emptyLifecycleIndexes.add(openIndex);
         emptyLifecycleIndexes.add(index);
       }
       openIndex = -1;
       hasDrawing = false;
+      removedSyntheticNote = false;
     }
   });
-  if (openIndex >= 0 && !hasDrawing) emptyLifecycleIndexes.add(openIndex);
+  if (openIndex >= 0 && !hasDrawing && removedSyntheticNote) emptyLifecycleIndexes.add(openIndex);
   return withoutSyntheticNotes
     .filter((_action, index) => !emptyLifecycleIndexes.has(index))
     .map((action) => ({ ...action }));

@@ -13,10 +13,12 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useStageStore } from '@openmaic/lib/store';
 import { useCanvasStore } from '@openmaic/lib/store/canvas';
-import { ScreenElement } from '@openmaic/components/slide-renderer/Editor/ScreenElement';
+import { WhiteboardElement } from './whiteboard-element';
 import type { PPTElement } from '@openmaic/dsl';
 import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import { whiteboardIdForScene } from '@openmaic/lib/api/stage-api-whiteboard';
+import { getWhiteboardViewport } from '@openmaic/lib/whiteboard/projection';
+import { WHITEBOARD_HEIGHT, WHITEBOARD_WIDTH } from '@openmaic/lib/whiteboard/layout';
 
 export type WhiteboardCanvasHandle = {
   resetView: () => void;
@@ -25,6 +27,8 @@ export type WhiteboardCanvasHandle = {
 type InteractiveWhiteboardCanvasProps = {
   canvasHeight: number;
   canvasWidth: number;
+  contentLeft: number;
+  contentTop: number;
   containerWidth: number;
   containerHeight: number;
   containerScale: number;
@@ -89,14 +93,14 @@ function AnimatedElementBase({
       style={{ pointerEvents: isClearing ? 'none' : undefined }}
     >
       <div style={{ pointerEvents: 'auto' }}>
-        <ScreenElement elementInfo={element} elementIndex={index} animate />
+        <WhiteboardElement element={element} animate />
       </div>
     </motion.div>
   );
 }
 
 // Memoized so whiteboard pan/zoom state changes (which rerender the parent
-// on every pointer/wheel event) do not cascade into ScreenElement rerenders.
+// on every pointer/wheel event) do not cascade into element rerenders.
 // Without this, motion's projection system inside CodeLineRow remeasures
 // against the panning parent transform and animates the diff, making code
 // content visibly lag behind the surrounding element box during a pan.
@@ -109,6 +113,8 @@ const InteractiveWhiteboardCanvas = forwardRef<
   {
     canvasHeight,
     canvasWidth,
+    contentLeft,
+    contentTop,
     containerWidth,
     containerHeight,
     containerScale,
@@ -365,7 +371,7 @@ const InteractiveWhiteboardCanvas = forwardRef<
         </AnimatePresence>
 
         {/* Content layer — elements rendered at their raw coordinates */}
-        <div className="absolute inset-0">
+        <div className="absolute inset-0" style={{ transform: `translate(${-contentLeft}px, ${-contentTop}px)` }}>
           <AnimatePresence mode="popLayout">
             {elements.map((element, index) => (
               <AnimatedElement
@@ -409,33 +415,13 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasHandle, WhiteboardCan
     // Each scene owns an independent board page. Within that page the surface
     // grows with the generated notes, so collision avoidance can place later
     // reasoning below earlier work instead of clipping or covering it.
-    const { canvasWidth, canvasHeight } = useMemo(() => {
-      const bounds = elements.reduce(
-        (current, element) => {
-          const measurable = element as PPTElement & {
-            left?: number;
-            top?: number;
-            width?: number;
-            height?: number;
-          };
-          return {
-            right: Math.max(current.right, (measurable.left ?? 0) + (measurable.width ?? 0)),
-            bottom: Math.max(current.bottom, (measurable.top ?? 0) + (measurable.height ?? 0)),
-          };
-        },
-        { right: 0, bottom: 0 },
-      );
-      return {
-        canvasWidth: Math.max(1000, Math.ceil(bounds.right + 80)),
-        canvasHeight: Math.max(562.5, Math.ceil(bounds.bottom + 80)),
-      };
-    }, [elements]);
+    const viewport = useMemo(() => getWhiteboardViewport(elements), [elements]);
 
     const containerScale = useMemo(() => {
       if (containerSize.width === 0 || containerSize.height === 0) return 1;
       // Preserve the readable scale of one conventional board page; expanded
       // areas are reached by the existing drag/zoom interaction.
-      return Math.min(containerSize.width / 1000, containerSize.height / 562.5);
+      return Math.min(containerSize.width / WHITEBOARD_WIDTH, containerSize.height / WHITEBOARD_HEIGHT);
     }, [containerSize.width, containerSize.height]);
 
     useEffect(() => {
@@ -465,8 +451,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasHandle, WhiteboardCan
       <div ref={containerRef} className="w-full h-full overflow-hidden">
         <InteractiveWhiteboardCanvas
           ref={ref}
-          canvasHeight={canvasHeight}
-          canvasWidth={canvasWidth}
+          canvasHeight={viewport.height}
+          canvasWidth={viewport.width}
+          contentLeft={viewport.left}
+          contentTop={viewport.top}
           containerWidth={containerSize.width}
           containerHeight={containerSize.height}
           containerScale={containerScale}

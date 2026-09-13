@@ -32,7 +32,7 @@ export function FloatingInsertToolbar({ items }: Props) {
   if (items.length === 0) return null;
 
   return (
-    <div className="pointer-events-none absolute top-3 left-1/2 z-30 -translate-x-1/2">
+    <div className="pointer-events-none absolute top-3 left-1/2 z-30 w-max max-w-[calc(100%-1rem)] -translate-x-1/2">
       <AnimatePresence initial={false} mode="wait">
         {collapsed ? (
           <motion.button
@@ -46,12 +46,12 @@ export function FloatingInsertToolbar({ items }: Props) {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.18, ease: CHROME_EASE }}
             className={cn(
-              'pointer-events-auto inline-flex h-7 w-9 items-center justify-center rounded-b-lg rounded-t-none',
+              'pointer-events-auto inline-flex size-11 items-center justify-center rounded-b-lg rounded-t-none',
               'bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md',
               'ring-1 ring-zinc-200/80 dark:ring-zinc-700/80 border-t-0',
               'shadow-sm text-zinc-500 dark:text-zinc-400',
               'hover:text-violet-600 dark:hover:text-violet-300',
-              'transition-colors',
+              'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-current transition-colors',
             )}
           >
             <ChevronDown className="h-3.5 w-3.5" />
@@ -64,7 +64,7 @@ export function FloatingInsertToolbar({ items }: Props) {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.2, ease: CHROME_EASE }}
             className={cn(
-              'pointer-events-auto flex items-center gap-1 px-1.5 py-1',
+              'pointer-events-auto flex max-w-full items-center gap-0.5 overflow-x-auto overscroll-x-contain px-1 py-1 sm:gap-1 sm:px-1.5',
               'bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md',
               'ring-1 ring-zinc-200/80 dark:ring-zinc-700/80',
               'rounded-2xl shadow-md',
@@ -73,17 +73,17 @@ export function FloatingInsertToolbar({ items }: Props) {
             {items.map((item) => (
               <InsertButton key={item.id} item={item} />
             ))}
-            <span className="mx-1 h-5 w-px bg-zinc-200 dark:bg-zinc-700" />
+            <span className="mx-1 hidden h-5 w-px shrink-0 bg-zinc-200 dark:bg-zinc-700 sm:block" />
             <button
               type="button"
               onClick={() => setCollapsed(true)}
               aria-label={t('edit.insert.collapseToolbar')}
               title={t('edit.insert.collapseToolbar')}
               className={cn(
-                'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
+                'inline-flex size-11 shrink-0 items-center justify-center rounded-lg',
                 'text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-200',
                 'hover:bg-zinc-100 dark:hover:bg-zinc-800',
-                'transition-colors',
+                'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-current transition-colors',
               )}
             >
               <ChevronUp className="h-3.5 w-3.5" />

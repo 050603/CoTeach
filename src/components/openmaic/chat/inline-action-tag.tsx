@@ -6,6 +6,7 @@ import {
   MousePointer2,
   Type,
   Shapes,
+  ImageIcon,
   Eraser,
   PanelLeftOpen,
   PanelLeftClose,
@@ -73,6 +74,7 @@ const ACTION_CONFIG: Record<string, ActionCfg> = {
 
   // Whiteboard drawing
   wb_draw_text: { label: 'Text', Icon: Type, style: WB_STYLE, wb: true },
+  wb_draw_image: { label: 'Image', Icon: ImageIcon, style: WB_STYLE, wb: true },
   wb_draw_shape: { label: 'Shape', Icon: Shapes, style: WB_STYLE, wb: true },
   wb_draw_chart: { label: 'Chart', Icon: BarChart3, style: WB_STYLE, wb: true },
   wb_draw_latex: { label: 'Formula', Icon: Sigma, style: WB_STYLE, wb: true },

@@ -25,7 +25,12 @@ const DEFAULT_THEME: SlideTheme = {
  * script timeline surfaces inline as a "fill me in" cue for the user / MAIC
  * Agent instead.
  */
-export function createBlankSlideScene(stageId: string, title: string, order: number): Scene {
+export function createBlankSlideScene(
+  stageId: string,
+  title: string,
+  order: number,
+  neighbor?: Scene,
+): Scene {
   const slide: Slide = {
     id: nanoid(),
     viewportSize: 1000,
@@ -51,6 +56,15 @@ export function createBlankSlideScene(stageId: string, title: string, order: num
     order,
     content,
     actions,
+    ...(neighbor ? {
+      stageKey: neighbor.stageKey,
+      stageLabel: neighbor.stageLabel,
+      audience: neighbor.audience,
+      generationPurpose: neighbor.generationPurpose,
+      parentActivityId: neighbor.parentActivityId,
+      knowledgePointIds: neighbor.knowledgePointIds?.slice(),
+      ttsPolicy: neighbor.ttsPolicy,
+    } : {}),
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -68,7 +82,7 @@ export function duplicateSlideScene(source: Scene, copySuffix: string, order: nu
   if (source.type !== 'slide') {
     throw new Error('duplicateSlideScene: source scene is not a slide');
   }
-  const sourceContent = source.content as SlideContent;
+  const sourceContent = structuredClone(source.content) as SlideContent;
   const { elIdMap, groupIdMap } = createElementIdMap(sourceContent.canvas.elements);
   const clonedElements: PPTElement[] = sourceContent.canvas.elements.map((element) => ({
     ...element,
@@ -80,6 +94,9 @@ export function duplicateSlideScene(source: Scene, copySuffix: string, order: nu
     ...sourceContent.canvas,
     id: nanoid(),
     elements: clonedElements,
+    animations: sourceContent.canvas.animations
+      ?.filter((animation) => Boolean(elIdMap[animation.elId]))
+      .map((animation) => ({ ...animation, id: nanoid(), elId: elIdMap[animation.elId] })),
   };
 
   const content: SlideContent = {
@@ -94,19 +111,7 @@ export function duplicateSlideScene(source: Scene, copySuffix: string, order: nu
   // share audio-cache keys / React keys with the source), remap element-bound
   // cues onto the cloned element ids, and drop the stale audioId so the copy
   // re-derives / regenerates its own narration audio.
-  const clonedActions = source.actions?.map((action) => {
-    // Deep-clone so nested cue data (chart/table/line data, points, themeColors)
-    // isn't shared by reference with the source — same reason the canvas
-    // elements are deep-cloned above.
-    const next: Record<string, unknown> = { ...structuredClone(action), id: nanoid() };
-    const elId = next.elementId;
-    if (typeof elId === 'string' && elIdMap[elId]) next.elementId = elIdMap[elId];
-    // Drop both audio refs — playback prefers audioUrl, so leaving it would make
-    // the copy keep playing the source's server-generated TTS.
-    delete next.audioId;
-    delete next.audioUrl;
-    return next as unknown as Action;
-  });
+  const clonedActions = duplicateActions(source.actions, elIdMap);
 
   return {
     ...source,
@@ -123,4 +128,47 @@ export function duplicateSlideScene(source: Scene, copySuffix: string, order: nu
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
+}
+
+function duplicateActions(actions: Action[] | undefined, canvasIds: Record<string, string> = {}): Action[] | undefined {
+  const boardIds = new Map<string, string>();
+  const groups = new Map<string, string>();
+  for (const action of actions ?? []) {
+    if (action.type.startsWith('wb_draw_') && 'elementId' in action && action.elementId && !boardIds.has(action.elementId)) boardIds.set(action.elementId, nanoid());
+    if (action.groupId && !groups.has(action.groupId)) groups.set(action.groupId, nanoid());
+  }
+  return actions?.map((action) => {
+    const next: Action = { ...structuredClone(action), id: nanoid() };
+    if (next.groupId) next.groupId = groups.get(next.groupId);
+    if ('elementId' in next && next.elementId) {
+      next.elementId = next.type.startsWith('wb_') ? boardIds.get(next.elementId) ?? next.elementId : canvasIds[next.elementId] ?? next.elementId;
+    }
+    if (next.type === 'wb_draw_line') {
+      for (const anchor of [next.startAnchor, next.endAnchor]) {
+        if (anchor) anchor.elementId = boardIds.get(anchor.elementId) ?? anchor.elementId;
+      }
+    }
+    if (next.type === 'speech') {
+      delete next.audioId;
+      delete next.audioUrl;
+    }
+    return next;
+  });
+}
+
+/** Duplicating a quiz/interactive page gets independent action and outline
+ * identity too; its original questions/HTML remain deep-cloned content. */
+export function duplicateScene(source: Scene, copySuffix: string, order: number): Scene {
+  if (source.type === 'slide') return duplicateSlideScene(source, copySuffix, order);
+  const copy = structuredClone(source);
+  return {
+    ...copy,
+    id: nanoid(),
+    outlineId: undefined,
+    title: copySuffix ? `${source.title} ${copySuffix}` : source.title,
+    order,
+    actions: duplicateActions(copy.actions),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  } as Scene;
 }

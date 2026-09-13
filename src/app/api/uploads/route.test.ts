@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   publishCourseEvent: vi.fn(),
   courseCount: vi.fn(),
   transaction: vi.fn(),
+  uploadScope: vi.fn(),
   fileTypeFromBuffer: vi.fn(async () => ({ ext: "png", mime: "image/png" }) as { ext: string; mime: string } | null),
   convertPresentationToPdf: vi.fn(async ({ targetPath }: { targetPath: string }) => {
     await (await import("node:fs/promises")).writeFile(targetPath, "%PDF-preview");
@@ -53,7 +54,7 @@ vi.mock("@/lib/realtime/event-bus", () => ({
 
 vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: vi.fn(async () => true) }));
 
-vi.mock("@/lib/uploads/scope", () => ({ resolveUploadScope: async () => ({ offeringId: "course-1", templateOwnerId: null }) }));
+vi.mock("@/lib/uploads/scope", () => ({ resolveUploadScope: mocks.uploadScope }));
 
 import { POST } from "./route";
 
@@ -64,6 +65,7 @@ describe("teacher course resource upload", () => {
     vi.clearAllMocks();
     mocks.storedNames.length = 0;
     mocks.courseCount.mockResolvedValue(1);
+    mocks.uploadScope.mockResolvedValue({ offeringId: "course-1", templateOwnerId: null });
     process.env.NEXT_PUBLIC_OPENPBL_SYSTEM_MODE = "new";
     process.env.OPENPBL_PPTX_CLASSROOM_CONVERSION_ENABLED = "true";
     mocks.fileTypeFromBuffer.mockResolvedValue({ ext: "png", mime: "image/png" });
@@ -101,6 +103,29 @@ describe("teacher course resource upload", () => {
     expect(mocks.uploadFileCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({ mimeType: "text/x-python", sha256: expect.stringMatching(/^[0-9a-f]{64}$/) }),
     });
+  });
+  it("stores a resource package as a private template input with course provenance", async () => {
+    mocks.fileTypeFromBuffer.mockResolvedValueOnce({ ext: "zip", mime: "application/zip" });
+    mocks.uploadScope.mockResolvedValueOnce({ offeringId: null, templateOwnerId: "teacher-1", templateId: courseId });
+    const form = new FormData();
+    form.append("file", new File(["PK package"], "完整资源包.zip", { type: "application/zip" }));
+    form.append("courseId", courseId);
+    form.append("purpose", "course-resource-package");
+    const response = await POST(new Request("http://localhost:3000/api/uploads", { method: "POST", headers: { Origin: "http://localhost:3000" }, body: form }));
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ purpose: "course-resource-package", boundToCourse: false });
+    expect(mocks.uploadFileCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ offeringId: null, regenerationRecipe: { schemaVersion: 1, operation: "course-resource-package-upload", courseId } }) });
+    expect(mocks.courseResourceCreate).not.toHaveBeenCalled();
+  });
+  it("rejects publishing the original ZIP as a student classroom resource", async () => {
+    const form = new FormData();
+    form.append("file", new File(["PK package"], "完整资源包.zip", { type: "application/zip" }));
+    form.append("courseId", courseId);
+    form.append("purpose", "course-resource-package");
+    form.append("bindAsCourseResource", "true");
+    const response = await POST(new Request("http://localhost:3000/api/uploads", { method: "POST", headers: { Origin: "http://localhost:3000" }, body: form }));
+    expect(response.status).toBe(400);
+    expect(mocks.uploadFileCreate).not.toHaveBeenCalled();
   });
 
   it("stores a teacher knowledge file as a private generation reference", async () => {

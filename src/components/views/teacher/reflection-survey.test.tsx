@@ -1,8 +1,15 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getStagesForSystemMode } from "@/lib/system-mode";
-import type { Course } from "@/lib/session/types";
+import type { AiSupportRecord, Course } from "@/lib/session/types";
 import { NewReflectionTeacherView } from "./reflection-survey";
+import { REFLECTION_SURVEY_QUESTIONS } from "@/lib/reflection-survey";
+
+const summaryApi = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/teaching-ai/client-api", () => ({ buildReflectionClassSummary: summaryApi }));
+vi.mock("@/components/platform/survey-word-cloud", () => ({
+  SurveyWordCloud: ({ terms }: { terms: Array<{ label: string; value: number }> }) => <div aria-label="词云画布">{terms.map((term) => <span key={term.label}>{term.label}</span>)}</div>,
+}));
 
 vi.mock("@/lib/session/store", () => ({
   useSession: () => ({
@@ -90,4 +97,67 @@ describe("NewReflectionTeacherView", () => {
     expect((screen.getByRole("button", { name: "导出 CSV" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("暂无有效回答")).toBeTruthy();
   });
+});
+
+
+describe("reflection projection", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("projects the first question without student answers and resets an open personal dialog", () => {
+    const course = makeCourse();
+    const { rerender } = render(<NewReflectionTeacherView course={course} />);
+    fireEvent.click(screen.getByRole("button", { name: "小林的反思详情" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    rerender(<NewReflectionTeacherView course={course} presentation="teaching" />);
+    expect(screen.getByRole("heading", { name: REFLECTION_SURVEY_QUESTIONS.learningReflection })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText("小林")).toBeNull();
+    expect(screen.queryByText("通过数据修改了方案。")).toBeNull();
+    rerender(<NewReflectionTeacherView course={course} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+function summarySupport(course: Course): AiSupportRecord {
+  return {
+    id: "summary-projection", courseId: course.id, targetType: "course", targetId: course.id,
+    kind: "reflection-class-summary", updatedAt: "2026-09-05T12:00:00.000Z",
+    structuredPayload: {
+      schemaVersion: 1, trigger: "manual", generatedAt: "2026-09-05T12:00:00.000Z",
+      courseSummary: "学会依据证据修订方案。", responseCount: 1, totalStudentCount: 2, teachingRecommendations: ["教师应单独辅导小林"],
+      sourceRefs: course.reflections!.map((reflection) => ({ reflectionId: reflection.id, studentId: reflection.studentId, updatedAt: reflection.updatedAt })),
+      categories: [{ key: "learning-gains", title: "主要收获", summary: "学会依据证据修订方案。", terms: [
+        { label: "证据比较", sources: [{ studentId: "student-1", fields: ["learningReflection"] }] },
+        { label: "方案改进", sources: [{ studentId: "student-1", fields: ["learningReflection"] }] },
+      ] }],
+    },
+  } as unknown as AiSupportRecord;
+}
+
+it("uses the existing summary for the question cloud without requesting analysis or exposing recommendations", () => {
+  summaryApi.mockClear();
+  const course = makeCourse();
+  course.aiSupports = [summarySupport(course)];
+  render(<NewReflectionTeacherView course={course} presentation="teaching" />);
+  expect(screen.getByText("证据比较")).toBeTruthy();
+  expect(screen.getByText("方案改进")).toBeTruthy();
+  expect(screen.queryByText("教师应单独辅导小林")).toBeNull();
+  expect(screen.queryByText("小林")).toBeNull();
+  expect(summaryApi).not.toHaveBeenCalled();
+});
+
+it("refreshes the cloud only on request through the existing summary API and allows retry after failure", async () => {
+  const course = makeCourse();
+  course.students = course.students.slice(0, 1);
+  summaryApi.mockReset().mockRejectedValueOnce(new Error("分析暂不可用")).mockResolvedValueOnce(summarySupport(course));
+  render(<NewReflectionTeacherView course={course} presentation="teaching" />);
+  expect(summaryApi).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "更新词云" }));
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("分析暂不可用"));
+  expect(summaryApi).toHaveBeenCalledWith(course.id, "manual");
+  fireEvent.click(screen.getByRole("button", { name: "更新词云" }));
+  await waitFor(() => expect(screen.getByText("证据比较")).toBeTruthy());
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByText("教师应单独辅导小林")).toBeNull();
+  expect(summaryApi).toHaveBeenCalledTimes(2);
 });

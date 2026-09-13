@@ -4,7 +4,7 @@ import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const mocks = vi.hoisted(() => ({ file: vi.fn(), resource: vi.fn(), update: vi.fn(), remove: vi.fn(), count: vi.fn(),
-  access: vi.fn(), query: vi.fn(), claims: { sub: 'teacher-1', role: 'teacher' }, event: vi.fn(), resourceUpdate: vi.fn() }));
+  access: vi.fn(), templateAccess: vi.fn(), query: vi.fn(), claims: { sub: 'teacher-1', role: 'teacher' }, event: vi.fn(), resourceUpdate: vi.fn() }));
 vi.mock('@/lib/auth/request-guards', () => ({ authenticateRequest: async () => ({ claims: mocks.claims }), requireSameOrigin: () => null }));
 vi.mock('@/lib/platform/access', () => ({ canAccessLegacyCourse: mocks.access }));
 vi.mock('@/lib/db/client', () => {
@@ -12,14 +12,14 @@ vi.mock('@/lib/db/client', () => {
     artifactVersion: { count: mocks.count }, courseOffering: { update: async () => ({ version: 2 }) }, domainEvent: { create: mocks.event } };
   return { prisma: { ...tx, $transaction: async (fn: (db: typeof tx) => unknown) => fn(tx) } };
 });
-vi.mock("@/lib/uploads/scope", () => ({ canReadTemplateAsset: async () => false }));
+vi.mock("@/lib/uploads/scope", () => ({ canReadTemplateAsset: mocks.templateAccess }));
 import { DELETE, GET, PATCH } from './route';
 const id = '11111111-1111-4111-8111-111111111111';
 const context = { params: Promise.resolve({ id }) };
 const resource = { id, offeringId: 'offering-1', type: 'PDF', metadata: { stageKey: 'practice' }, fileAsset: { deletedAt: null } };
 const file = { id, offeringId: 'offering-1', uploadedById: 'teacher-1', originalName: 'lesson.pdf', storageKey: `${id}.pdf`, mimeType: 'application/pdf', resource, artifactVersions: [] };
 const target = path.resolve('.openpbl-data/uploads', file.storageKey);
-beforeEach(() => { vi.clearAllMocks(); mocks.claims = { sub: 'teacher-1', role: 'teacher' }; mocks.access.mockResolvedValue(true); mocks.file.mockResolvedValue(file); mocks.resource.mockResolvedValue(resource); mocks.count.mockResolvedValue(0); mocks.event.mockResolvedValue({ id: 'event' }); mocks.query.mockResolvedValue([{ referenced: false }]); });
+beforeEach(() => { vi.clearAllMocks(); mocks.claims = { sub: 'teacher-1', role: 'teacher' }; mocks.access.mockResolvedValue(true); mocks.templateAccess.mockResolvedValue(false); mocks.file.mockResolvedValue(file); mocks.resource.mockResolvedValue(resource); mocks.count.mockResolvedValue(0); mocks.event.mockResolvedValue({ id: 'event' }); mocks.query.mockResolvedValue([{ referenced: false }]); });
 afterEach(async () => { await rm(target, { force: true }); });
 describe('V2 FileAsset routes', () => {
   it('serves offering resources with byte ranges to enrolled students without legacy course claims', async () => {
@@ -59,6 +59,26 @@ describe('V2 FileAsset routes', () => {
   it('denies students access to another student private upload', async () => {
     mocks.claims = { sub: 'student-1', role: 'student' }; mocks.file.mockResolvedValue({ ...file, resource: null, uploadedById: 'student-2' });
     expect((await GET(new Request(`http://localhost/api/uploads/${id}`), context)).status).toBe(404);
+  });
+  it.each(['package.zip', 'knowledge.docx', 'lesson.docx'])('denies students direct and preview URLs for teacher-only %s', async (name) => {
+    mocks.claims = { sub: 'student-1', role: 'student' };
+    mocks.file.mockResolvedValue({ ...file, originalName: name, offeringId: null, resource: null });
+    for (const suffix of ['', '?variant=classroom']) {
+      expect((await GET(new Request(`http://localhost/api/uploads/${id}${suffix}`), context)).status).toBe(404);
+    }
+    expect(mocks.templateAccess).toHaveBeenCalledWith('student-1', id);
+    expect(mocks.access).not.toHaveBeenCalled();
+  });
+  it('serves the package launch PDF through its explicitly published template resource', async () => {
+    mocks.claims = { sub: 'student-1', role: 'student' };
+    mocks.templateAccess.mockResolvedValue(true);
+    await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, '%PDF launch');
+    mocks.file.mockResolvedValueOnce({ ...file, originalName: 'launch.pptx', offeringId: null, resource: null });
+    mocks.file.mockResolvedValueOnce({ storageKey: file.storageKey, mimeType: 'application/pdf' });
+    const response = await GET(new Request(`http://localhost/api/uploads/${id}?variant=classroom`), context);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('%PDF launch');
+    expect(mocks.file).toHaveBeenLastCalledWith({ where: { storageKey: `${id}.classroom.pdf`, uploadedById: 'teacher-1', offeringId: null, deletedAt: null } });
   });
   it('preserves artifact files and their references', async () => {
     mocks.count.mockResolvedValue(1);

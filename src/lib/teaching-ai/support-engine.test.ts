@@ -19,6 +19,7 @@ import {
   diagnoseGroupIdea,
   diagnoseProjectArtifact,
   generateProcessEvaluation,
+  generateLiveEvaluation,
   generateProjectSkeleton,
   isStrongPblDrivingQuestion,
 } from "./support-engine";
@@ -64,6 +65,28 @@ const course: Course = {
 describe("teaching AI support engine", () => {
   beforeEach(() => {
     llmMock.callLLM.mockReset();
+  });
+
+  it("scores the latest submitted individual outcome against confirmed package dimensions", async () => {
+    const rubric = { id: "rubric", version: 1, dimensions: [{ id: "evidence", name: "证据质量", weight: 100, description: "用原始数据支持结论" }], sourceWeights: { teacher: 60, ai: 40 } };
+    const packageCourse = structuredClone(course);
+    packageCourse.content.stagePlan = { stages: [], evaluationRubric: rubric } as unknown as NonNullable<Course["content"]["stagePlan"]>;
+    packageCourse.projectDocumentVersions = [
+      { id: "old", courseId: course.id, submissionId: "submission", studentId: "s1", stageKey: "make", sequence: 1, sourceVersion: 1, title: "旧作品", sourceHtml: "旧结论未核验", status: "submitted", submittedAt: "2026-01-01T10:00:00Z", createdAt: "2026-01-01T10:00:00Z" },
+      { id: "current", courseId: course.id, submissionId: "submission", studentId: "s1", stageKey: "make", sequence: 2, sourceVersion: 2, title: "最终作品", sourceHtml: "已核验最新原始记录", status: "submitted", submittedAt: "2026-01-01T11:00:00Z", createdAt: "2026-01-01T11:00:00Z" },
+    ];
+    llmMock.callLLM.mockResolvedValueOnce(JSON.stringify({ dimensions: [{ dimensionId: "evidence", name: "证据质量", suggestedScore: 85, rationale: "作品已核验原始数据" }], overallComment: "证据明确" }));
+    const result = await generateLiveEvaluation({ course: packageCourse, group });
+    expect(result.dimensions[0]).toMatchObject({ dimensionId: "evidence", suggestedScore: 85 });
+    const prompt = JSON.stringify(llmMock.callLLM.mock.calls[0]?.[0]);
+    expect(prompt).toContain("已核验最新原始记录");
+    expect(prompt).not.toContain("旧结论未核验");
+    expect(prompt).toContain("weight: 100%");
+    packageCourse.projectDocumentVersions = [];
+    await expect(generateLiveEvaluation({ course: packageCourse, group })).rejects.toThrow("缺少可读取的个人成果正文或教师观察");
+    expect(llmMock.callLLM).toHaveBeenCalledTimes(1);
+    llmMock.callLLM.mockResolvedValueOnce(JSON.stringify({ dimensions: [{ dimensionId: "evidence", name: "证据质量", suggestedScore: 140, rationale: "错误分数" }], overallComment: "结果" }));
+    await expect(generateLiveEvaluation({ course: packageCourse, group, teacherNotes: "观察到引用三份原始记录" })).rejects.toThrow("结构不完整");
   });
 
   it("recognizes open, authentic and bounded PBL driving questions", () => {

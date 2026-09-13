@@ -2,8 +2,8 @@
  * MAIC Agent — SSE transport endpoint.
  *
  * Hosts a server-side pi Agent and streams its `AgentEvent`s to the editor
- * sidebar as Server-Sent Events. The whole feature is gated behind the master
- * editor flag.
+ * sidebar as Server-Sent Events. Standalone editor access uses the master flag;
+ * the teacher preparation editor instead uses ownership of its course scope.
  */
 import type { NextRequest } from 'next/server';
 import type { AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core';
@@ -16,6 +16,7 @@ import { buildToolset } from '@openmaic/lib/agent/tools/registry';
 import { callLLM } from '@openmaic/lib/ai/llm';
 import { createLogger } from '@openmaic/lib/logger';
 import type { SceneContext } from '@openmaic/lib/agent/tools/regenerate-scene-actions';
+import { authorizeTemplateRequest } from '@/lib/platform/template-access';
 
 const log = createLogger('MAIC Agent');
 
@@ -34,6 +35,8 @@ export type SceneContextMap = Record<string, SceneContext>;
 
 interface AgentEditBody {
   message: string;
+  /** Teacher course scope used by the preparation editor when the global gate is off. */
+  courseId?: string;
   scene?: { id: string; title: string };
   /**
    * Prior conversation turns (text only) sent by the client so the agent has
@@ -77,11 +80,14 @@ function toHistoryMessages(history: AgentEditBody['history']): AgentMessage[] {
 }
 
 export async function POST(req: NextRequest) {
-  if (!isMaicEditorEnabled()) {
+  const body = (await req.json()) as AgentEditBody & Record<string, unknown>;
+  const courseId = typeof body.courseId === 'string' ? body.courseId.trim() : '';
+  if (courseId) {
+    const authorization = await authorizeTemplateRequest(req, courseId);
+    if (authorization instanceof Response) return authorization;
+  } else if (!isMaicEditorEnabled()) {
     return new Response('Not found', { status: 404 });
   }
-
-  const body = (await req.json()) as AgentEditBody & Record<string, unknown>;
   const message = (body.message ?? '').toString().trim();
   if (!message) {
     return new Response('message is required', { status: 400 });

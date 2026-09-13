@@ -63,6 +63,7 @@ export const WHITEBOARD_ACTIONS = [
   'wb_open',
   'wb_close',
   'wb_draw_text',
+  'wb_draw_image',
   'wb_draw_shape',
   'wb_draw_chart',
   'wb_draw_latex',

@@ -1,3 +1,4 @@
+import { publicResourcePackageSnapshot } from "@/lib/resource-package/privacy";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
@@ -25,7 +26,7 @@ export async function readClassroom(claims: AuthClaims, participationId: string)
   return {
     participation: { id: participation.id, firstEnteredAt: participation.firstEnteredAt, lastEnteredAt: participation.lastEnteredAt, completedAt: participation.completedAt, stageProgress: participation.stageProgress },
     student: { displayName: enrollment.user.displayName },
-    instance: { id: instance.id, status: instance.status.toLowerCase(), activityId: instance.activityId, runNo: instance.runNo, title: instance.activity.title, offeringId: instance.activity.chapter.offeringId, offeringName: instance.activity.chapter.offering.name, templateVersion: instance.templateVersion.version, snapshot: instance.templateVersion.snapshot, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot), runtimeConfig: instance.runtimeConfig },
+    instance: { id: instance.id, status: instance.status.toLowerCase(), activityId: instance.activityId, runNo: instance.runNo, title: instance.activity.title, offeringId: instance.activity.chapter.offeringId, offeringName: instance.activity.chapter.offering.name, templateVersion: instance.templateVersion.version, snapshot: isTeacher ? instance.templateVersion.snapshot : publicResourcePackageSnapshot(instance.templateVersion.snapshot), coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot), runtimeConfig: instance.runtimeConfig },
     workspace: workspace ? { version: workspace.version, projectState: workspace.projectState, updatedAt: workspace.updatedAt } : { version: 0, projectState: null, updatedAt: null },
     isTeacher,
     canWrite: !isTeacher && enrollment.status.toUpperCase() === "ACTIVE" && instance.status.toUpperCase() === "TEACHING" && instance.activity.chapter.offering.status.toUpperCase() === "OPEN",

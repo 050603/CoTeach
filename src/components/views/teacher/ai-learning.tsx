@@ -1,5 +1,7 @@
 "use client";
 
+import type { TeacherPresentationMode } from "@/lib/classroom/presentation";
+import { StageTaskPresentation } from "./stage-task-presentation";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -165,12 +167,20 @@ export function AiLearningTeacherView({
   course,
   onSelectStudent,
   focus,
+  presentation = "workspace",
 }: {
   course: Course;
+  presentation?: TeacherPresentationMode;
   onSelectStudent?: (id: string) => void;
   focus?: Extract<TeacherStageFocus, { stageKey: "ai-learning" }>;
 }) {
   const [selectedStudentId, setSelectedStudentId] = useState<string>();
+  const displayContext = `${course.id}:${course.currentStageIndex}:${presentation}`;
+  const [previousPresentation, setPreviousPresentation] = useState(displayContext);
+  if (previousPresentation !== displayContext) {
+    setPreviousPresentation(displayContext);
+    setSelectedStudentId(undefined);
+  }
   const [studentDetailTab, setStudentDetailTab] = useState<StudentLearningDetailTab>("trajectory");
   const [sortMetric, setSortMetric] = useState<"progress" | "accuracy">("progress");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
@@ -204,17 +214,18 @@ export function AiLearningTeacherView({
   // Reset local navigation only when the dashboard requests a different target.
   if (focusKey !== appliedFocusKey) {
     setAppliedFocusKey(focusKey);
-    if (focusedStudentId && focusedTab) {
+    if (presentation === "workspace" && focusedStudentId && focusedTab) {
       setStudentDetailTab(focusedTab);
       setSelectedStudentId(focusedStudentId);
     }
   }
   useEffect(() => {
-    if (focusedStudentId) onSelectStudent?.(focusedStudentId);
-  }, [focusedStudentId, focusedTab, onSelectStudent]);
+    if (presentation === "workspace" && focusedStudentId) onSelectStudent?.(focusedStudentId);
+  }, [focusedStudentId, focusedTab, onSelectStudent, presentation]);
 
   return (
-    <div className="classroom-stage space-y-5">
+    <div className="classroom-stage teacher-presentation-content space-y-5" hidden={presentation === "analytics"}>
+      {presentation === "workspace" ? <>
       <StagePageHeader
         description="查看全班进度、小测结果与需要介入的知识点。"
         status={<Pill tone={hasClassroom ? "green" : "amber"}>{hasClassroom ? "课堂运行中" : "待生成课堂"}</Pill>}
@@ -226,7 +237,9 @@ export function AiLearningTeacherView({
         </Card>
       ) : null}
 
-      {hasClassroom ? <AiLearningTeacherPreview course={course} /> : null}
+      </> : null}
+      {hasClassroom ? <AiLearningTeacherPreview course={course} presentation={presentation} /> : presentation === "teaching" ? <StageTaskPresentation course={course} /> : null}
+      {presentation === "workspace" ? <>
 
       <KnowledgeLectureAnalytics course={course} title="全班知识讲授学情" />
 
@@ -276,6 +289,7 @@ export function AiLearningTeacherView({
       </Card>
 
       <StudentLearningDetail course={course} initialTab={studentDetailTab} key={`${selectedStudentId ?? "none"}:${studentDetailTab}`} onOpenChange={(open) => { if (!open) setSelectedStudentId(undefined); }} open={Boolean(selectedStudentId)} studentId={selectedStudentId} />
+      </> : null}
     </div>
   );
 }

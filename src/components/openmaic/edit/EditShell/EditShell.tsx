@@ -9,6 +9,7 @@ import type { Scene } from '@openmaic/lib/types/stage';
 import { CHROME_DURATION, CHROME_EASE, CHROME_STAGGER } from '@openmaic/lib/edit/transitions';
 import { StageGrid } from '@openmaic/components/edit/StageGrid';
 import { CommandBar } from './CommandBar';
+import type { EditorControlsProps } from './EditorControls';
 import { FloatingInsertToolbar } from './FloatingInsertToolbar';
 import { FloatingToolbar } from './FloatingToolbar';
 import { HintRail } from './HintRail';
@@ -21,7 +22,9 @@ interface EditShellProps {
    * the rail (the prop is the only handoff seam), keeping chrome and
    * surface separable.
    */
-  readonly leftRail?: ReactNode;
+  readonly leftRail?: ReactNode | ((controls: EditorControlsProps) => ReactNode);
+  /** Embedded teacher preparation places surface controls in the page navigator. */
+  readonly commandPlacement?: 'top' | 'navigation';
   /**
    * Right-edge slot of the CommandBar — Stage uses this to hand in the
    * global controls (settings pill + Pro Switch) when the Stage Header
@@ -43,10 +46,10 @@ const COMMANDBAR_DELAY = CHROME_STAGGER;
 const LEFT_RAIL_DELAY = CHROME_STAGGER * 2;
 
 /**
- * Pro mode (edit) chrome — mounts inside the canvas slot of Stage, replacing
- * CanvasArea. The playback Header above stays mounted because it owns the
- * global Pro toggle Switch: exiting Pro mode is done by flipping that Switch
- * off, not by a dedicated button here.
+ * Edit chrome mounts inside Stage's canvas slot. The standalone editor keeps
+ * CommandBar for navigation and global controls. Teacher preparation already
+ * has a course header, so it passes the surface controls to the left navigator
+ * and omits the full-width command row.
  *
  *   ┌──────────────────────────────────────────────┐  (Stage Header above)
  *   ├──────────────────────────────────────────────┤
@@ -77,6 +80,7 @@ export function EditShell({
   commandTrailing,
   rightRail,
   bottomRail,
+  commandPlacement = 'top',
 }: EditShellProps) {
   const surface = sceneEditorRegistry.resolve(scene.type) ?? NOOP_SURFACE;
   // Surface state is published from a child runner (keyed by sceneType so it
@@ -99,7 +103,10 @@ export function EditShell({
       <SurfaceStateRunner key={scene.type} surface={surface} onChange={setState} />
       <Frame
         title={scene.title}
-        leftRail={leftRail}
+        leftRail={typeof leftRail === 'function'
+          ? leftRail({ title: scene.title, history: state?.history, commands: state?.commands })
+          : leftRail}
+        commandPlacement={commandPlacement}
         history={state?.history}
         commands={state?.commands}
         trailing={commandTrailing}
@@ -222,6 +229,7 @@ function surfaceStateEqual(a: SurfaceState, b: SurfaceState | null): boolean {
 
 interface FrameProps {
   readonly title: string;
+  readonly commandPlacement: 'top' | 'navigation';
   readonly leftRail?: ReactNode;
   readonly history?: React.ComponentProps<typeof CommandBar>['history'];
   readonly commands?: React.ComponentProps<typeof CommandBar>['commands'];
@@ -240,6 +248,7 @@ function Frame({
   rightRail,
   bottomRail,
   children,
+  commandPlacement,
 }: FrameProps) {
   const prefersReducedMotion = useReducedMotion();
 
@@ -264,7 +273,7 @@ function Frame({
   return (
     <StageGrid
       className="bg-gradient-to-b from-zinc-100 to-zinc-200 dark:from-zinc-950 dark:to-zinc-900"
-      topSlot={
+      topSlot={commandPlacement === 'top' ? (
         <motion.div
           initial={cmdInitial}
           animate={cmdAnimate}
@@ -272,7 +281,7 @@ function Frame({
         >
           <CommandBar title={title} history={history} commands={commands} trailing={trailing} />
         </motion.div>
-      }
+      ) : null}
       leftSlot={
         leftRail ? (
           <motion.div

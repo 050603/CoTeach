@@ -1,4 +1,5 @@
 import type { Course } from "@/lib/session/types";
+import { buildCourseStageRequirementsContext } from "@/lib/resource-package/course-requirements";
 
 export const DOCUMENT_COLLABORATION_INTENTS = [
   "discuss",
@@ -206,6 +207,7 @@ export function buildAuthoritativeCourseContext(
     `课程：${course.name}`,
     `当前阶段：${stage?.label ?? stageKey}`,
     `当前任务：${cleanText(stage?.description, 500) || "无记录"}`,
+    buildCourseStageRequirementsContext(course, stageKey),
     `学生项目主题：${cleanText(currentGroup?.topic, 500) || "尚未明确"}`,
     `学生项目目标：${cleanText(currentGroup?.goal, 700) || "尚未明确"}`,
     `计划成果形式：${currentGroup?.selectedForms.map((item) => cleanText(item, 120)).filter(Boolean).join("、") || "尚未选择"}`,

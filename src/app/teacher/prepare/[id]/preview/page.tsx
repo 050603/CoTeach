@@ -38,6 +38,7 @@ import { normalizeTeachingToolPlan } from "@/lib/openmaic/generation/teaching-to
 import { courseDetailedEditHref } from "@/lib/courses/preparation-navigation";
 import { cn } from "@/lib/utils";
 import { getNewSystemCourseReadiness } from "@/lib/classroom/new-system-course";
+import { CourseQualityReview, type TeacherReviewDecision } from "@/components/teacher/course-quality-review";
 
 const STEPS = [
   { key: "verify", label: "备课阶段" },
@@ -108,6 +109,8 @@ export default function PreviewCoursePage() {
   const [resourceAuditLoaded, setResourceAuditLoaded] = useState(false);
   const [repairingResources, setRepairingResources] = useState(false);
   const [resourceRepairVersion, setResourceRepairVersion] = useState(0);
+  const [reviewDecision, setReviewDecision] = useState<TeacherReviewDecision>({ canConfirm: false, signature: "", acceptedIssueIds: [], acknowledgeFailedCheck: false });
+  const [publishedHere, setPublishedHere] = useState(false);
 
   useEffect(() => {
     if (!params?.id) return;
@@ -160,12 +163,15 @@ export default function PreviewCoursePage() {
   );
   const activePreviewBranch = previewBranch ?? requestedPreviewBranch;
   const publishChecks = buildPublishChecks(course);
-  const readyCount = publishChecks.filter((item) => item.done).length;
+  const reviewRequired = course.content.qualityReviewRequired === true || Number(course.content.resourcePackage?.schemaVersion ?? 0) >= 2 || Number(course.content.stagePlan?.schemaVersion ?? 0) >= 2;
+  const prerequisiteChecks = getNewSystemCourseReadiness(course).filter((check) => check.id !== "teacher-review");
+  const readyCount = prerequisiteChecks.filter((item) => item.ok).length;
   const readyToPublish = resourceAuditLoaded
-    && readyCount === publishChecks.length
-    && resourceIssues.length === 0;
-  const pendingPublishCount = publishChecks.length - readyCount + resourceIssues.length;
-  const isPublished = course.status === "ready"
+    && readyCount === prerequisiteChecks.length
+    && resourceIssues.length === 0
+    && (!reviewRequired || reviewDecision.canConfirm);
+  const pendingPublishCount = prerequisiteChecks.length - readyCount + resourceIssues.length + (reviewRequired && !reviewDecision.canConfirm ? 1 : 0);
+  const isPublished = publishedHere || course.status === "ready"
     || course.status === "teaching"
     || course.status === "finished";
   const totalStudentSeconds = studentOutlines.reduce(
@@ -181,7 +187,13 @@ export default function PreviewCoursePage() {
   async function publish() {
     setPublishing(true);
     try {
-      publishCourse(courseId);
+      if (reviewRequired) {
+        const response = await fetch(`/api/courses/${courseId}/quality-review`, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "confirm", ...reviewDecision, publish: true }) });
+        const result = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(result.error || "教师终审未保存。");
+        setPublishedHere(true);
+      } else publishCourse(courseId);
       toast.success("课程已发布", {
         description: "发布中心仍会保留，你可以继续核对教学编排或体验学生课堂。",
       });
@@ -282,6 +294,14 @@ export default function PreviewCoursePage() {
               onClick={() => setView("student")}
               student
             />
+            {classroomId ? (
+              <Link
+                className="inline-flex min-h-10 items-center gap-2 rounded-[8px] px-4 text-sm font-semibold text-[var(--pbl-teacher)] transition hover:bg-[var(--pbl-teacher-soft)]"
+                href={`/teacher/prepare/${course.id}/classroom-editor`}
+              >
+                <Edit3 size={16} /> 编辑 AI 课堂
+              </Link>
+            ) : null}
           </div>
           <p className="hidden pr-3 text-xs text-stone-500 lg:block">
             {view === "director" ? "发布前总览" : "学生端完整课堂预览"}
@@ -364,13 +384,20 @@ export default function PreviewCoursePage() {
         />
       ) : null}
 
+      {reviewRequired && <div className="mx-auto w-full max-w-[1600px] px-4 pb-24 sm:px-6">
+        <CourseQualityReview courseId={courseId} onDecisionChange={setReviewDecision} onOpenPage={(sceneId) => {
+          setSelectedOutlineId(sceneId);
+          setView("director");
+        }} />
+      </div>}
+
       <FlowActionBar
         persistent
         back={<Link className="inline-flex min-h-11 items-center text-sm font-semibold text-[var(--pbl-text-muted)]" href={courseDetailedEditHref(course.id)}>上一步</Link>}
         saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} state={session.saveState} onRetry={() => void session.retrySave()} />}
       >
         {!isPublished ? (
-          <Button disabled={!readyToPublish || publishing} loading={publishing} onClick={() => void publish()}>发布课程</Button>
+          <Button disabled={!readyToPublish || publishing} loading={publishing} onClick={() => void publish()}>{reviewRequired ? "确认并发布" : "发布课程"}</Button>
         ) : (
           <Button onClick={() => router.push(`/teacher/teach/${course.id}/setup`)}>开始授课</Button>
         )}

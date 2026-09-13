@@ -4,6 +4,13 @@ import type { Course } from "@/lib/session/types";
 import { scopeCourseForClaims } from "./course-scope";
 
 describe("scopeCourseForClaims", () => {
+  it("removes private package authoring data while retaining classroom stage requirements", () => {
+    const course = { id: "course", stages: [], students: [], content: { resourcePackage: { secret: "teacher source" }, stagePlan: { totalMinutes: 135 } } } as unknown as Course;
+    const scoped = scopeCourseForClaims(course, { role: "student", sub: "student" } as StudentClaims);
+    expect(scoped.content).not.toHaveProperty("resourcePackage");
+    expect(scoped.content.stagePlan?.totalMinutes).toBe(135);
+    expect(course.content).toHaveProperty("resourcePackage");
+  });
   it("does not expose another student's knowledge-lecture answers", () => {
     const course = {
       id: "course-1",

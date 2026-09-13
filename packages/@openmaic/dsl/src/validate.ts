@@ -47,6 +47,7 @@ const ACTION_REQUIRED_FIELDS: Record<ActionType, Readonly<Record<string, FieldKi
   speech: { text: 'string' },
   wb_open: {},
   wb_draw_text: { content: 'string', x: 'number', y: 'number' },
+  wb_draw_image: { src: 'string', x: 'number', y: 'number', width: 'number', height: 'number' },
   wb_draw_shape: { shape: 'string', x: 'number', y: 'number', width: 'number', height: 'number' },
   wb_draw_chart: {
     chartType: 'string',
@@ -154,6 +155,9 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
     return;
   }
   reqString(doc, 'id', path, errors);
+  if (doc.groupId !== undefined && (typeof doc.groupId !== 'string' || !doc.groupId.trim())) {
+    errors.push({ path: `${path}/groupId`, message: 'groupId must be a non-empty string' });
+  }
   if (!isActionType(doc.type)) {
     errors.push({
       path: `${path}/type`,
@@ -173,6 +177,16 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
         path: `${path}/${field}`,
         message: `${doc.type} action field \`${field}\` must be ${kind}`,
       });
+    }
+  }
+  if (doc.type === 'wb_draw_line') {
+    for (const key of ['startAnchor', 'endAnchor']) {
+      const anchor = doc[key];
+      if (anchor === undefined) continue;
+      if (!isObject(anchor) || typeof anchor.elementId !== 'string' || !anchor.elementId.trim()
+        || !['top', 'right', 'bottom', 'left', 'center'].includes(String(anchor.side))) {
+        errors.push({ path: `${path}/${key}`, message: 'anchor requires a non-empty elementId and a valid side' });
+      }
     }
   }
 }

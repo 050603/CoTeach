@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CourseStageRequirements } from "@/components/classroom/course-stage-requirements";
+import { getCourseStageRequirements } from "@/lib/resource-package/course-requirements";
 import Editor, {
   DiffEditor,
   loader,
@@ -1007,13 +1009,14 @@ export function CodeAiCollaboration({
       <DashboardTopBar
         currentCourse={{ id: course.id, name: course.name, status: course.status }}
         currentStage={{ index: course.currentStageIndex, total: course.stages.length, label: stage?.label ?? "项目实践" }}
-        currentTask={stage?.description}
+        currentTask={getCourseStageRequirements(course, stage?.key ?? "make")?.requirements || stage?.description}
         headerSlot={stage ? <StudentClassroomHeaderStatus currentIndex={course.currentStageIndex} onlineCount={onlineCount} stageLabel={stage.label} total={course.stages.length} /> : undefined}
         hideCourseSwitcher
         leadRole="学生"
         role="student"
         userName={session.studentName ?? session.user.name}
       />
+      <div className="px-3"><CourseStageRequirements course={course} stageKey={stage?.key ?? "make"} /></div>
       <header className="sticky top-16 z-[60] h-16 border-b border-[var(--pbl-border)] bg-[color-mix(in_srgb,var(--pbl-surface)_96%,transparent)] backdrop-blur-sm">
         <div className="flex h-full w-full items-center justify-between gap-3 px-2 sm:px-3 lg:px-4">
           <div className="min-w-0">

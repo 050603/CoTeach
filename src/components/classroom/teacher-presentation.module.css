@@ -1,0 +1,73 @@
+.shell { height: 100%; min-height: 0; display: flex; flex-direction: column; background: #f4f6f8; color: #1f2933; --presentation-font: clamp(20px, 1.35vw, 28px); }
+.heading { display: flex; align-items: center; gap: clamp(16px, 2vw, 40px); flex: none; padding: clamp(16px, 1.5vw, 32px) clamp(20px, 2.5vw, 64px); background: #fcfbf8; border-bottom: 1px solid #d8d6d0; }
+.identity { flex: 1; min-width: 0; }
+.identity p { margin: 0; font-size: clamp(16px, 1.1vw, 24px); font-weight: 600; color: #344a6a; overflow-wrap: anywhere; }
+.identity p span { color: #5f6b76; font-weight: 400; }
+.identity h1 { margin: 5px 0 8px; font-size: clamp(28px, 2.3vw, 48px); line-height: 1.2; font-weight: 700; overflow-wrap: anywhere; }
+.progress { display: flex; align-items: center; gap: 6px; max-width: 520px; }
+.progress i { height: 5px; border-radius: 6px; background: #d8d6d0; flex: 1; }
+.progress i[data-state="complete"] { background: #2f6f65; }
+.progress i[data-state="current"] { background: #344a6a; height: 8px; }
+.progress span { margin-left: 8px; color: #5f6b76; font-size: 16px; font-variant-numeric: tabular-nums; }
+.status { flex: none; }
+.status div { display: flex; align-items: center; gap: 14px; }
+.status div span { color: #5f6b76; font-size: 16px; }
+.status strong { font-size: clamp(32px, 2.5vw, 56px); font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.status strong.overrun { color: #8a6422; }
+.status p { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; color: #5f6b76; font-size: 16px; margin: 8px 0 0; }
+.status em { color: #8a6422; font-style: normal; }
+.exit, .controls button, .controls select { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 12px; border: 1px solid #c7cfd8; border-radius: 6px; background: #fcfbf8; color: #344a6a; font-size: clamp(16px, 1vw, 22px); font-weight: 600; cursor: pointer; }
+.exit:hover, .controls button:hover { background: #e8edf3; }
+.shell :is(button,select,a):focus-visible { outline: 2px solid #344a6a; outline-offset: -2px; }
+.controls button:disabled { opacity: .4; cursor: default; }
+.body { flex: 1; min-height: 0; overflow: auto; padding: clamp(12px, 1.5vw, 32px) clamp(16px, 2.5vw, 64px); }
+.content { height: 100%; min-height: 0; min-width: 0; }
+.stage { height: 100%; min-height: 0; min-width: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0; overflow: auto; }
+/* The operation pages keep their normal document flow. A fixed-height inner
+   workspace and enlarged controls can overflow the compact rows they own. */
+.stage[data-details="true"] { height: auto; min-height: 100%; overflow: visible; }
+.stage[data-details="true"] > :global(.classroom-stage),
+.stage[data-details="true"] :global(.teacher-presentation-content) { height: auto; min-height: 0; overflow: visible; }
+.stage[data-details="true"] :global(.classroom-stage-header) { flex-wrap: wrap; align-items: flex-start; }
+.stage[data-details="true"] :global(.classroom-stage-header) > div { max-width: 100%; }
+.stage[data-details="true"] :global(.classroom-stage-title),
+.stage[data-details="true"] :global(.classroom-stage-description) { overflow-wrap: anywhere; }
+.shell [hidden] { display: none !important; }
+.stage:not([data-details="true"]) :is(button,select,input) { min-height: 44px; }
+.stage:not([data-details="true"]) button { min-width: 44px; }
+.stage :global(.teacher-presentation-content) { min-height: 0; height: 100%; }
+.stage :global(.teacher-stage-resources) { min-height: 0; }
+.stage :global(.teacher-resource-preview) :global(.min-h-72) { min-height: 0; }
+.stage :global(.teacher-presentation-showcase) :global(.min-h-72) { min-height: 0; }
+/* Reset Tailwind's translate variables too: CSS compatibility transforms may
+   rewrite translate:none without cancelling its separate translate utility. */
+.stage :global(.teacher-resource-preview) :global(.resource-pdf-controls) { --tw-translate-x: 0px; --tw-translate-y: 0px; position: static; order: 2; transform: none; translate: none; width: 100%; max-width: none; opacity: 1; pointer-events: auto; padding: 4px 8px; border-radius: 0; box-shadow: none; }
+.stage :global(.teacher-resource-preview) :global(.resource-pdf-controls) > div { justify-content: center; }
+.stage :global(.teacher-resource-preview) :global(.resource-pdf-controls) label { min-height: 44px; height: auto; }
+.stage :global(.teacher-resource-preview) :global(.resource-pdf-viewport) { order: 1; min-height: 0; padding: 8px; }
+.stage :global(.teacher-presentation-task) { padding: clamp(24px, 3vw, 64px); font-size: var(--presentation-font); line-height: 1.7; }
+.stage :global(.teacher-presentation-task) :is(h2,h3) { font-size: clamp(26px, 2vw, 40px); line-height: 1.35; font-weight: 600; margin-bottom: 18px; }
+.stage :global(.teacher-presentation-task) p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.stage :global(.teacher-presentation-task) button { min-height: 44px; font-size: 18px; }
+.controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: none; max-height: min(42dvh, 260px); overflow-y: auto; overscroll-behavior: contain; padding: 12px clamp(16px, 2vw, 48px); border-top: 1px solid #d8d6d0; background: #fcfbf8; box-shadow: 0 -4px 18px #1f29330a; }
+.views { display: flex; gap: 4px; margin-right: auto; }
+.views button[aria-pressed="true"] { color: #fff; background: #344a6a; border-color: #344a6a; }
+.stageActions { display: flex; min-width: 0; max-width: 100%; flex-wrap: wrap; gap: 4px; }
+.stageActions:empty { display: none; }
+.controls .stageActions button[data-tone="primary"] { color: #fff; background: #344a6a; border-color: #344a6a; }
+.controls .stageActions button[data-tone="primary"]:hover { background: #263c5a; }
+.controls .stageActions button[data-tone="danger"] { color: #8a3e3e; background: #fff7f7; border-color: #8a3e3e; }
+.controls .stageActions button[data-tone="danger"]:hover { background: #f8e8e8; }
+.stageControls { display: flex; gap: 4px; }
+.stageControls select { max-width: min(240px, 35vw); }
+.save { font-size: 13px; }
+.controls .end { color: #8a3e3e; }
+.dialog { width: min(860px, calc(100vw - 32px)); max-width: none; max-height: 85dvh; overflow: auto; }
+.advice { font-size: 20px; }
+.advice :is(p, strong, h3, button) { font-size: inherit; line-height: 1.6; }
+.advice button { min-height: 44px; min-width: 44px; }
+@media (max-width: 1100px) { .status div { display: block; } .status div span { display: block; margin-bottom: 5px; } }
+@media (max-width: 700px) { .heading { flex-wrap: wrap; gap: 12px; padding: 12px 16px; } .identity { flex-basis: 60%; } .status { order: 3; display: flex; gap: 16px; align-items: center; width: 100%; } .status div { display: flex; gap: 8px; } .status strong { font-size: 28px; } .status p { margin: 0; } .exit { margin-left: auto; } .views { width: 100%; } .controls { padding: 8px; } .controls button, .controls select { font-size: 14px; padding: 6px 8px; } .stageControls { margin-right: auto; } }
+@media (max-height: 650px) { .heading { padding-top: 10px; padding-bottom: 10px; } .identity h1 { font-size: 28px; margin: 3px 0; } .controls { padding-top: 6px; padding-bottom: 6px; } .body { padding-top: 10px; padding-bottom: 10px; } }
+@media (max-height: 650px), (max-width: 1100px) { .stage[data-details="true"] :global(.classroom-split-aside) { position: static; } }
+@media (prefers-reduced-motion: reduce) { .shell *, .shell *::before, .shell *::after { animation: none !important; transition: none !important; } }

@@ -39,6 +39,21 @@ const candidate = {
 };
 
 describe("reviewed knowledge structure generation", () => {
+  it("does not fabricate prerequisite edges or objective mappings to make the draft look complete", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({ ...candidate, knowledgePoints: candidate.knowledgePoints.map((point) => ({ ...point, objectiveIndexes: [] })), knowledgeGraph: { ...candidate.knowledgeGraph, edges: [] } }));
+    const result = await generateKnowledgeStructureOnce(input, {}, { modelCall });
+    expect(result.knowledgeGraph?.edges).toEqual([]);
+    expect(result.knowledgePoints.every((point) => !point.objectiveIndexes?.length)).toBe(true);
+  });
+
+  it("uses confirmed leaf ids and keeps group headings out of the prerequisite catalog", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({ ...candidate, knowledgeGraph: { ...candidate.knowledgeGraph, nodes: [...candidate.knowledgeGraph.nodes, { id: "group", label: "语言理解", instructionalRole: "lesson" }] } }));
+    const result = await generateKnowledgeStructureOnce(input, { teacherKnowledgePoints: [{ id: "stable-leaf", name: "自然语言处理基本任务", description: "原文说明", groupId: "group", groupName: "语言理解" }] }, { modelCall });
+    expect(result.knowledgePoints).toHaveLength(1);
+    expect(result.knowledgePoints[0]).toMatchObject({ id: "stable-leaf", groupId: "group", groupName: "语言理解" });
+    expect(result.knowledgeGraph?.nodes.some((node) => node.id === "group")).toBe(false);
+    expect(result.knowledgeGraph?.nodes.find((node) => node.id === "stable-leaf")?.groupName).toBe("语言理解");
+  });
   it("generates the new-system teacher checkpoint without an AI review call", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify(candidate));
 

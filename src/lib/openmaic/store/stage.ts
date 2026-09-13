@@ -163,12 +163,17 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     // Funnel through migrateScene so any incoming slide content lacking
     // a schemaVersion (API / snapshot / legacy) is normalized once at
     // the store boundary.
-    const migrated = scenes.map(migrateScene);
-    set({ scenes: migrated });
-    // Auto-select first scene if no current scene
-    if (!get().currentSceneId && migrated.length > 0) {
-      set({ currentSceneId: migrated[0].id });
-    }
+    const migrated = scenes.map((scene, order) => {
+      const next = migrateScene(scene);
+      return next.order === order ? next : { ...next, order };
+    });
+    const currentSceneId = get().currentSceneId;
+    set({
+      scenes: migrated,
+      currentSceneId: migrated.some((scene) => scene.id === currentSceneId)
+        ? currentSceneId
+        : migrated[0]?.id ?? null,
+    });
     debouncedSave();
   },
 
@@ -211,7 +216,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     const insertIndex = anchorIndex < 0 ? current.length : anchorIndex + 1;
     const migrated = migrateScene(scene);
     const next = [...current.slice(0, insertIndex), migrated, ...current.slice(insertIndex)];
-    const rebalanced = next.map((s, i) => (s.order === i + 1 ? s : { ...s, order: i + 1 }));
+    const rebalanced = next.map((s, order) => (s.order === order ? s : { ...s, order }));
     set({ scenes: rebalanced });
     debouncedSave();
   },
@@ -242,7 +247,8 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       get().failedOutlines.length === 0 &&
       get().outlines.every((o) => get().scenes.some((s) => s.order === o.order));
 
-    const scenes = get().scenes.filter((scene) => scene.id !== sceneId);
+    const scenes = get().scenes.filter((scene) => scene.id !== sceneId)
+      .map((scene, order) => scene.order === order ? scene : { ...scene, order });
     const currentSceneId = get().currentSceneId;
 
     // If deleted scene was current, select next or previous

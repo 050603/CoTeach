@@ -46,10 +46,13 @@ export type { AssistantPart, PiPart } from './merge-assistant-parts';
 import { toPiParts, type PiAssistantContent } from './to-pi-parts';
 import { useThinkingTimers } from './thinking-timers';
 import { useSceneRuntimeErrors } from '@openmaic/lib/store/scene-runtime-errors';
+import { toast } from 'sonner';
 
 export interface UseAgentRuntimeOptions {
   scene?: { id: string; title: string };
   isSendDisabled?: boolean;
+  /** Teacher-owned course scope that authorizes the embedded preparation editor. */
+  courseId?: string;
 }
 
 /** A prior conversation turn sent to the server so the agent has memory. */
@@ -267,6 +270,13 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
   // (the route's ReadableStream.cancel() calls agent.abort()).
   const abortRef = useRef<AbortController | null>(null);
 
+  useEffect(() => () => {
+    // Reloading a classroom unmounts this runtime while retaining scene ids.
+    // A late tool response must not write into the newly hydrated document.
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, []);
+
   const clearThread = useCallback(() => {
     // Discard any in-flight run first — otherwise its late SSE events still pass
     // isCurrent() and could rewrite the cleared thread or apply tool patches to
@@ -412,10 +422,15 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         const e = event as {
           toolCallId: string;
           toolName?: string;
-          result?: { details?: unknown };
+          result?: { details?: unknown; isError?: boolean };
           isError?: boolean;
         };
-        toolResultsRef.current.set(e.toolCallId, { result: e.result, isError: !!e.isError });
+        const failed = !!e.isError || !!e.result?.isError;
+        toolResultsRef.current.set(e.toolCallId, { result: e.result, isError: failed });
+        if (failed) {
+          refresh();
+          break;
+        }
         const details = (e.result?.details ?? {}) as RegenerateDetails;
         // Decide what to apply: regenerate_scene applies content (+actions) and
         // snapshots the pre-state for restore; regenerate_scene_actions applies
@@ -423,7 +438,17 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         const scene = details.sceneId
           ? useStageStore.getState().getSceneById(details.sceneId)
           : null;
-        const { snapshot, patch } = planRegenerateApply(details, scene, e.toolName);
+        const { snapshot, patch, error: applyError } = planRegenerateApply(details, scene, e.toolName);
+        if (applyError) {
+          toolResultsRef.current.set(e.toolCallId, {
+            isError: true,
+            result: { ...e.result, isError: true, content: [{ type: 'text', text: applyError }] },
+          });
+          errorRef.current = applyError;
+          toast.error(applyError);
+          refresh();
+          break;
+        }
         // Capture the applied patch as the snapshot's `redo` so an undo can be
         // resumed (the Restore button toggles undo ↔ resume).
         if (snapshot)
@@ -461,27 +486,32 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
       phaseRef.current = 'running';
       const abort = new AbortController();
       abortRef.current = abort;
+      const runStageId = useStageStore.getState().stage?.id;
 
       const userMsg: ThreadMessageLike = {
         role: 'user',
         id: `u-${turnId}`,
         content: [{ type: 'text', text: userText }],
       };
-      setMessages((prev) => [...prev, userMsg, buildAssistant(assistantId)]);
+      // The IndexedDB session load can finish before React commits this render.
+      // Publish the new conversation synchronously so hydration cannot erase it.
+      const nextMessages = [...messagesRef.current, userMsg, buildAssistant(assistantId)];
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
       setIsRunning(true);
 
       // This run is "current" only while it still owns abortRef. Once the user
       // stops and starts another run, a newer onNew takes abortRef — late SSE
       // events from this (superseded) run must not rewrite the new message.
-      const isCurrent = () => abortRef.current === abort;
+      const isCurrent = () => abortRef.current === abort
+        && useStageStore.getState().stage?.id === runStageId;
 
       const refresh = () => {
         if (!isCurrent()) return;
-        setMessages((prev) => {
-          const next = prev.slice();
-          next[next.length - 1] = buildAssistant(assistantId);
-          return next;
-        });
+        const next = messagesRef.current.slice();
+        next[next.length - 1] = buildAssistant(assistantId);
+        messagesRef.current = next;
+        setMessages(next);
       };
 
       try {
@@ -503,6 +533,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
             outline,
             allOutlines,
             content: scene.content,
+            actions: scene.actions ?? [],
             stageId: scene.stageId,
             languageDirective: stage?.languageDirective,
             // Runtime errors the interactive iframe reported, so read_scene_content
@@ -528,6 +559,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           body: JSON.stringify({
             message: userText,
             scene: opts.scene,
+            ...(opts.courseId ? { courseId: opts.courseId } : {}),
             history,
             sceneContextMap,
             // The route reads per-request thinking config from the body (not
@@ -565,6 +597,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           }
         }
       } catch (err) {
+        if (!isCurrent()) return;
         // User-initiated stop — keep whatever streamed, don't surface an error.
         if (abort.signal.aborted) {
           // Only finalize if this run still owns the state (a newer run may have
@@ -590,7 +623,7 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         // newer onNew has already taken over abortRef and the message list.
         // This (superseded) run must NOT reset isRunning or rewrite the last
         // message, or it would clobber the new run.
-        const superseded = abortRef.current !== abort;
+        const superseded = !isCurrent();
         if (!superseded) {
           abortRef.current = null;
           if (phaseRef.current === 'running') phaseRef.current = 'complete';
@@ -598,17 +631,16 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
           // last block as its final phase) so its duration is final.
           useThinkingTimers.getState().endAll(`${assistantId}:`, Date.now());
           setIsRunning(false);
-          setMessages((prev) => {
-            const next = prev.slice();
-            next[next.length - 1] = buildAssistant(assistantId);
-            return next;
-          });
+          const next = messagesRef.current.slice();
+          next[next.length - 1] = buildAssistant(assistantId);
+          messagesRef.current = next;
+          setMessages(next);
           // The persistence save runs via the [messages, isRunning] effect once
           // this update commits and isRunning flips false — see above.
         }
       }
     },
-    [buildAssistant, handleEvent, opts.scene],
+    [buildAssistant, handleEvent, opts.courseId, opts.scene],
   );
 
   // Stop the current response: abort the fetch (cancels the server stream) and

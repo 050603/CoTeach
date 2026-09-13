@@ -24,6 +24,11 @@ const ActionSchema = z.discriminatedUnion("action", [
     action: z.literal("save-queue"),
     orderedStudentIds: z.array(z.string().min(1).max(128)).max(500),
     minutesPerStudent: z.number().finite().int().min(1).max(60),
+    selectionMode: z.literal("teacher-selected").optional(),
+    selectedStudentIds: z.array(z.string().min(1).max(128)).max(500).optional(),
+    presentationSec: z.number().int().min(15).max(3600).optional(),
+    discussionSec: z.number().int().min(0).max(1800).optional(),
+    transitionSec: z.number().int().min(0).max(600).optional(),
   }).strict(),
   z.object({
     action: z.literal("request"),

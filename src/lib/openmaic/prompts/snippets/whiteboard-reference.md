@@ -54,6 +54,16 @@ Place plain text. Use for notes, steps, labels — **not** for math formulas (us
 
 **Common mistake**: embedding LaTeX like `"content":"\\frac{a}{b}"` in a text element — KaTeX is NOT run on text content, so the raw backslash prints. Use `wb_draw_latex` for any math.
 
+#### wb_draw_image
+
+Show an existing lesson image alongside the board notes. Reuse an image URL or asset reference provided in the lesson or by the teacher; do not invent a URL.
+
+```json
+{"type":"action","name":"wb_draw_image","params":{"src":"<provided image URL or asset reference>","x":60,"y":200,"width":500,"height":300,"elementId":"image1"}}
+```
+
+Required: `src`, `x`, `y`, `width`, `height`. Optional: `elementId` for later deletion. Keep a clear gap between the image and existing notes. Explain the visible image in the next text object before adding another board step.
+
 #### wb_draw_shape
 
 Place a geometric shape. Use for annotations, groupings, or simple diagrams.
@@ -341,7 +351,7 @@ For `wb_draw_latex` — use the category that best matches your formula:
 | Standalone fractions | `\\frac{a}{b}` | 50-80 |
 | Nested fractions | `\\frac{\\frac{a}{b}}{\\frac{c}{d}}` | 80-120 |
 
-Width is auto-computed from `height × aspect_ratio`; `width` acts as a horizontal cap only.
+Specify `width` and `height` as the reserved bounding rectangle. The formula keeps a consistent base text size and scales down only if necessary to fit. Increasing height alone does not enlarge the formula. Use a wider rectangle or split a long derivation instead of squeezing notation into a small box.
 
 **Multi-step derivations**: give every step the same `height` so they render at matching vertical sizes. Widths will differ — that's correct; it reflects each step's horizontal complexity.
 
@@ -359,3 +369,15 @@ Before emitting whiteboard actions, mentally walk through these:
 8. **[Safe zone]** Where possible, stay within `x ∈ [20, 980]`, `y ∈ [20, 543]`.
 9. **[Leave whiteboard open]** Do not call `wb_close` at the end of a drawing turn. Students need to read.
 10. **[Visual weight pairing]** Text that sits next to a LaTeX formula uses a `fontSize` matched to the LaTeX `height` per the pairing table above. No tiny 12-14px text next to height-80 formulas.
+
+### Bound diagrams and faithful data
+
+Use stable `elementId` values for every drawing. A shape and its inner label share `groupId` so layout adjustments preserve their relative placement. Unrelated elements must not share a group to bypass overlap checks.
+
+Lines can carry `startAnchor` and `endAnchor`: `{"elementId":"existing-node","side":"top|right|bottom|left|center"}`. Draw the target first; prefer a boundary side. Keep required start/end coordinates as legacy fallback. Endpoints are derived from the actual referenced shape and follow later redraws with the same elementId. Deleting a target removes its attached connectors; recreate those connectors if needed later. Never connect to a deleted element or another line.
+
+Choose a semantic layout before drawing: a title region, diagram or data region, and aligned explanation region within the 1000×562.5 page. Leave space for later reveals. Do not append below the visible page. Explain a full page before explicitly clearing for another one.
+
+Chart data has one series per legend and one value per category. A pie/ring has exactly one nonnegative series and a positive total. A scatter chart has exactly two numeric series, X then Y, with paired values. Use lesson data or clearly label illustrative samples. Match units and values between tables and charts.
+
+For a worked derivation, interleave each formula with the operation and conditions that justify it. Keep earlier expressions visible until their relationship has been explained. Formula parsing only checks notation, not the validity of the mathematical argument.

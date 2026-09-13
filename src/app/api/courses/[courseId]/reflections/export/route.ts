@@ -1,6 +1,7 @@
 import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { authenticateRequest } from "@/lib/auth/request-guards";
 import { getCourse } from "@/lib/session/server-store";
+import { courseQuestionSet, latestCourseReflection, latestExperienceSurvey } from "@/lib/course-reflection";
 import {
   latestReflectionByStudent,
   normalizeReflectionSurvey,
@@ -44,6 +45,20 @@ export async function GET(
   if (!await canAccessLegacyCourse(auth.claims, courseId, "read")) return Response.json({ code: "FORBIDDEN", message: "无权访问该课堂的反思数据" }, { status: 403 });
   const course = await getCourse(courseId);
   if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
+
+  if (courseQuestionSet(course)) {
+    const headers = ["course_id", "student_id", "student_name", "question_set_id", "question_set_version", "question_id", "question", "answer", "course_submitted_at", "experience_submitted_at", "system_reflection", "ai_helpfulness", "system_usability", "reuse_intention"];
+    const rows = course.students.flatMap((student) => {
+      const record = latestCourseReflection(course, student.id);
+      const response = record?.courseReflection;
+      const experience = latestExperienceSurvey(course, student.id);
+      if (!response && !experience) return [];
+      const questions = response?.questions ?? [{ id: "", prompt: "" }];
+      return questions.map((question) => [course.id, student.id, student.name, response?.questionSetId ?? "", response?.questionSetVersion ?? "", question.id, question.prompt,
+        response?.answers[question.id] ?? "", response?.submittedAt ?? "", experience?.submittedAt ?? "", experience?.systemReflection ?? "", experience?.aiHelpfulness ?? "", experience?.systemUsability ?? "", experience?.reuseIntention ?? ""].map(reflectionCsvCell).join(","));
+    });
+    return new Response(`\uFEFF${headers.join(",")}\n${rows.join("\n")}\n`, { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${safeFilePart(course.name)}-课程反思与系统体验.csv`)}`, "Cache-Control": "private, no-store" } });
+  }
 
   const latest = latestReflectionByStudent(course.reflections);
   const students = course.students

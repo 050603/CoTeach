@@ -40,6 +40,7 @@ export function Stage({
   interactionState,
   sidebarCollapsed,
   onSidebarCollapsedChange,
+  editorCourseId,
 }: {
   onRetryOutline?: (outlineId: string) => Promise<void>;
   experience?: StageExperience;
@@ -57,6 +58,8 @@ export function Stage({
   /** Controlled page-thumbnail rail state for embedded preview surfaces. */
   sidebarCollapsed?: boolean;
   onSidebarCollapsedChange?: (collapsed: boolean) => void;
+  /** Authorizes AI editing when Stage is embedded in a teacher preparation route. */
+  editorCourseId?: string;
 }) {
   const { mode, setMode, scenes, currentSceneId, generatingOutlines, stage } = useStageStore();
   const currentScene = useStageStore((s) => s.getCurrentScene());
@@ -157,6 +160,7 @@ export function Stage({
               scene={currentScene}
               isEditable={isEditable}
               onToggleEditMode={toggleHandler}
+              courseId={editorCourseId}
             />
           </motion.div>
         ) : (

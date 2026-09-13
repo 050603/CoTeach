@@ -22,6 +22,8 @@ import { CourseGenerationGlyph } from "@/components/course-workshop-animation";
 import { QuickKnowledgeReviewDialog } from "@/components/teacher/quick-knowledge-review-dialog";
 import { QuickOutlineReviewDialog } from "@/components/teacher/quick-outline-review-dialog";
 import { QuickGenerationStage } from "@/components/teacher/quick-generation-stage";
+import { ResourcePackageForm } from "@/components/teacher/resource-package-form";
+import type { CourseResourcePackage } from "@/lib/resource-package/types";
 import {
   buildQuickClassroomArtifacts,
   combineQuickGenerationProgress,
@@ -66,6 +68,9 @@ type DesignJob = {
   updatedAt?: string | null;
   requestPreview?: {
     teacherBrief?: string;
+    resourcePackageId?: string;
+    resourcePackageRevision?: number;
+    supplementalAnswers?: { brief?: string };
     generationMode?: CourseGenerationMode;
     options?: GenerationOptions | null;
     referenceMaterials?: UploadedKnowledgeReference[];
@@ -114,7 +119,7 @@ type UploadedKnowledgeReference = {
 };
 
 const QUICK_TOOLBAR_CONTROL_CLASS =
-  "inline-flex h-9 items-center gap-1.5 rounded-[9px] px-2.5 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-500";
+  "inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[9px] px-2.5 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-500";
 
 function formatDuration(seconds: number | null | undefined): string {
   if (!seconds || seconds <= 0) return "正在完成最后检查";
@@ -132,6 +137,8 @@ export function FastCourseGenerator({
 }) {
   const router = useRouter();
   const [brief, setBrief] = useState("");
+  const [confirmedPackage, setConfirmedPackage] = useState<CourseResourcePackage | null>(null);
+  const [hasResourcePackage, setHasResourcePackage] = useState(false);
   const [generationMode, setGenerationMode] = useState<CourseGenerationMode>("standard");
   const [job, setJob] = useState<DesignJob | null>(null);
   const [classroomJob, setClassroomJob] = useState<ClassroomGenerationResponse["job"]>(null);
@@ -160,6 +167,17 @@ export function FastCourseGenerator({
     || job?.status === "review_available"
     || job?.status === "paused"
     || job?.status === "cancelling";
+  // Existing failed jobs can retry their exact saved request without a new ZIP.
+  const savedRequest = job?.requestPreview;
+  const legacyResumeAvailable = !hasResourcePackage && Boolean(savedRequest)
+    && (job?.status === "failed" || job?.status === "cancelled")
+    && !savedRequest?.resourcePackageId
+    && brief === (savedRequest?.teacherBrief ?? "")
+    && generationMode === (savedRequest?.generationMode ?? "standard")
+    && options.enableImageGeneration === (savedRequest?.options?.enableImageGeneration !== false)
+    && options.enableTTS === (savedRequest?.options?.enableTTS !== false)
+    && options.enableVideoGeneration === (savedRequest?.options?.enableVideoGeneration === true)
+    && JSON.stringify(referenceMaterials.map((item) => item.id).sort()) === JSON.stringify((savedRequest?.referenceMaterials ?? []).map((item) => item.id).sort());
 
   const applyPayload = useCallback((payload: ResponsePayload) => {
     setBackgroundEnabled(payload.backgroundEnabled);
@@ -272,6 +290,10 @@ export function FastCourseGenerator({
   }, [confirmCancel]);
 
   async function start() {
+    if (!confirmedPackage?.confirmedAt && !legacyResumeAvailable) {
+      setError("请先上传资源包并确认教学要求。");
+      return;
+    }
     setSubmitting(true);
     setError(undefined);
     try {
@@ -280,6 +302,11 @@ export function FastCourseGenerator({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           teacherBrief: brief,
+          ...(confirmedPackage?.confirmedAt ? {
+            supplementalAnswers: { brief },
+            resourcePackageId: confirmedPackage.id,
+            resourcePackageRevision: confirmedPackage.revision,
+          } : {}),
           generationMode,
           options,
           referenceIds: referenceMaterials.map((material) => material.id),
@@ -553,7 +580,7 @@ export function FastCourseGenerator({
   }
 
   return (
-    <section className="relative flex min-h-[calc(100vh-150px)] items-center justify-center px-4 py-14">
+    <section className="relative flex min-h-[calc(100vh-150px)] items-start justify-center px-4 py-14">
       {!simplified ? <button
         className="absolute right-1 top-1 inline-flex h-10 items-center gap-2 rounded-[9px] border border-stone-200 bg-white px-3.5 text-xs font-bold text-stone-600 shadow-sm transition hover:border-stone-400 hover:text-stone-900"
         onClick={() => void onOpenDetailed()}
@@ -572,15 +599,15 @@ export function FastCourseGenerator({
           ) : null}
         </div>
 
-        <div className="overflow-visible rounded-[22px] border border-stone-300 bg-white shadow-[0_22px_70px_rgba(28,25,23,.11)] transition-shadow focus-within:shadow-[0_24px_75px_rgba(28,25,23,.13)]">
+        <ResourcePackageForm courseId={course.id} disabled={submitting || running || classroomRunning} onConfirmed={setConfirmedPackage} onPackagePresent={setHasResourcePackage} />
+        {legacyResumeAvailable ? <p className="mb-4 text-sm leading-6 text-stone-600">此旧任务可使用原有要求继续生成；修改教学要求或创建新课堂时，请上传资源包。</p> : null}
+        <div className="overflow-visible rounded-[14px] border border-stone-300 bg-white">
           <textarea
-            aria-label="描述课程生成要求"
-            className="quick-course-brief min-h-[190px] w-full resize-none rounded-t-[22px] border-0 bg-transparent px-6 pb-3 pt-5 text-[15px] leading-7 text-stone-900 [outline:none!important] focus-visible:!outline-none focus-visible:ring-0 placeholder:text-stone-400"
+            aria-label="补充课程生成要求（可选）"
+            className="quick-course-brief min-h-[120px] w-full resize-none rounded-t-[14px] border-0 bg-transparent px-6 pb-3 pt-5 text-[15px] leading-7 text-stone-900 focus-visible:outline-2 focus-visible:outline-stone-500 placeholder:text-stone-400"
             maxLength={4000}
             onChange={(event) => setBrief(event.target.value)}
-            placeholder={simplified
-              ? "描述课程主题、学生情况，以及需要重点讲清的知识……"
-              : "描述课程主题、学生情况、需要重点讲清的内容，或希望学生完成的成果……"}
+            placeholder="补充要求（可选）：希望重点讲清的概念、学生常见困难、案例偏好……"
             value={brief}
           />
 
@@ -640,7 +667,7 @@ export function FastCourseGenerator({
           </div> : null}
 
           <div className={cn(
-            "flex items-center justify-between gap-3",
+            "flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center",
             simplified
               ? "rounded-b-[21px] border-t border-stone-100 bg-stone-50/80 px-3 py-3"
               : "px-3 pb-3 pt-1",
@@ -702,7 +729,7 @@ export function FastCourseGenerator({
               </div>
             </div>}
 
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 items-center justify-end gap-1">
               {simplified ? (
                 <button
                   aria-label={generationMode === "deep-interaction" ? "关闭深度交互，使用普通模式" : "开启深度交互模式"}
@@ -723,8 +750,8 @@ export function FastCourseGenerator({
               ) : null}
               <button
                 aria-label={job?.status === "failed" ? "从已保存内容继续生成" : "开始生成课程"}
-                className="grid size-9 shrink-0 place-items-center rounded-[9px] bg-stone-950 text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-45"
-                disabled={submitting || uploadingReference || !brief.trim()}
+                className="grid size-11 shrink-0 place-items-center rounded-[9px] bg-stone-950 text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-45"
+                disabled={submitting || uploadingReference || (!confirmedPackage?.confirmedAt && !legacyResumeAvailable)}
                 onClick={() => void start()}
                 type="button"
                 title={job?.status === "failed" ? "从已保存内容继续生成" : "开始生成课程"}

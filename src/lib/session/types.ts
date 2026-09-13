@@ -407,12 +407,7 @@ export type CourseUiState = {
   /** 仅存在于浏览器内存中，用于校正视频跟随时的客户端时钟偏差。 */
   projectionClockOffsetMs?: number;
   /** 第四阶段个人汇报队列配置。 */
-  showcaseReporting?: {
-    schemaVersion: 1;
-    orderedStudentIds: string[];
-    minutesPerStudent: number;
-    updatedAt: string;
-  };
+  showcaseReporting?: import("@/lib/showcase/types").ShowcaseQueueConfig;
 };
 
 export type ClassroomResourceProjection = {
@@ -788,6 +783,8 @@ export type DynamicFacilitationScaffold = {
 };
 
 export type OpenMaicSceneOutlineSnapshot = {
+  teachingBrief?: import("@/lib/course-quality-review/types").TeachingBrief;
+  visualPlan?: import("@/lib/openmaic/generation/slide-visual-plan").SlideVisualPlan;
   id: string;
   type?: string;
   title: string;
@@ -1312,6 +1309,15 @@ export type Course = {
 };
 
 export type CourseContent = {
+  knowledgeGroups?: Array<{ id: string; name: string; description: string; knowledgePointIds: string[] }>;
+  /** Private package provenance and teacher-confirmed authoring input. */
+  resourcePackage?: import("@/lib/resource-package/types").CourseResourcePackage;
+  /** Authoritative five-stage teaching requirements and minute budgets. */
+  stagePlan?: import("@/lib/resource-package/types").CourseStagePlan;
+  qualityReview?: import("@/lib/course-quality-review/types").CourseQualityReport;
+  qualityReviewRequired?: boolean;
+  renderReview?: import("@/lib/course-quality-review/teacher-review").CourseRenderReview;
+  teacherReview?: import("@/lib/course-quality-review/teacher-review").CourseTeacherReview;
   pblOutline: string;
   /** 教师在生成知识图谱前指定、要求模型完整保留的知识点。 */
   teacherRequiredKnowledgePoints?: string[];
@@ -1491,6 +1497,9 @@ export type TeacherResourceScene = {
 };
 
 export type KnowledgePoint = {
+  sourceId?: string;
+  groupId?: string;
+  groupName?: string;
   id: string;
   name: string;
   description: string;
@@ -1533,6 +1542,8 @@ export type KnowledgeStructureSemanticReview = {
 };
 
 export type KnowledgeGraphNode = {
+  groupId?: string;
+  groupName?: string;
   id: string;
   label: string;
   description: string;
@@ -1610,6 +1621,8 @@ export type LessonOutlineSection = {
 };
 
 export type EvaluationPlan = {
+  rubricId?: string;
+  rubricVersion?: number;
   dimensions: EvaluationDimension[];
   overallRubric: string;
   flows?: EvaluationFlow[];
@@ -1714,6 +1727,8 @@ export type RubricScore = {
   groupId: string;
   stageKey: string;
   dimensionScores: Record<string, number>;
+  /** Frozen scoring contract; historical scores never follow later template edits. */
+  rubricSnapshot?: NonNullable<import("@/lib/resource-package/types").CourseStagePlan["evaluationRubric"]>;
   teacherTotal?: number;
   aiDimensionScores?: Record<string, number>;
   aiTotal?: number | null;
@@ -1737,11 +1752,31 @@ export type ReflectionRecord = {
   improvementPlan?: string;
   /** Structured response used by the new five-stage reflection survey. */
   survey?: ReflectionSurveyResponseV1;
+  courseReflection?: CourseReflectionResponse;
+  experienceSurvey?: ExperienceSurveyResponse;
   createdAt: string;
   updatedAt: string;
 };
 
 export type ReflectionSurveyScore = 1 | 2 | 3 | 4 | 5;
+
+export type CourseReflectionResponse = {
+  schemaVersion: 1;
+  questionSetId: string;
+  questionSetVersion: number;
+  questions: Array<{ id: string; prompt: string; required: boolean }>;
+  answers: Record<string, string>;
+  submittedAt: string;
+};
+
+export type ExperienceSurveyResponse = {
+  schemaVersion: 1;
+  systemReflection: string;
+  aiHelpfulness: ReflectionSurveyScore;
+  systemUsability: ReflectionSurveyScore;
+  reuseIntention: ReflectionSurveyScore;
+  submittedAt: string;
+};
 
 export type ReflectionSurveyResponseV1 = {
   schemaVersion: 1;

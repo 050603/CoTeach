@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GenerationJob } from "@prisma/client";
 const mocks = vi.hoisted(() => ({ find: vi.fn(), create: vi.fn(), update: vi.fn(), template: vi.fn(), transaction: vi.fn(), lock: vi.fn() }));
 vi.mock("@/lib/db/client", () => ({ prisma: { generationJob: { findMany: mocks.find }, $transaction: mocks.transaction } }));
-import { contentGenerationJobs, designGenerationJobs, projectGenerationJob } from "./job-storage";
+import { contentGenerationJobs, designGenerationJobs, resourcePackageJobs, projectGenerationJob } from "./job-storage";
 const now = new Date("2026-09-01T00:00:00Z");
 function row(): GenerationJob { return { id: "job", targetId: "template", targetType: "CLASSROOM_TEMPLATE", jobType: "COURSE_CONTENT", status: "QUEUED", step: "queued", progress: 0, request: {}, result: null, trace: null, qualityReport: null, error: null, attempt: 0, startedAt: null, completedAt: null, heartbeatAt: null, retryAt: null, createdAt: now, updatedAt: now }; }
 beforeEach(() => {
@@ -42,5 +42,15 @@ describe("V2 generation job persistence", () => {
   it("does not resume a scheduled retry before its deadline", async () => {
     mocks.find.mockResolvedValue([{ ...row(), retryAt: new Date(now.getTime() + 10000) }]);
     expect(await designGenerationJobs.findFirst({ where: { status: "queued", OR: [{ retryAt: null }, { retryAt: { lte: now } }] } })).toBeNull();
+  });
+  it("does not replace a resource package that another request queued before the lock", async () => {
+    await expect(resourcePackageJobs.upsert({ where: { courseId: "template" }, create: { courseId: "template" }, update: { request: { uploadId: "replacement" } }, rejectStatuses: ["queued", "running"] })).rejects.toThrow("GENERATION_JOB_BUSY");
+    expect(mocks.lock).toHaveBeenCalledOnce();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it("rejects a stale resource package confirmation after a new input version is saved", async () => {
+    mocks.find.mockResolvedValue([{ ...row(), status: "READY", trace: { state: { version: 3 } } }]);
+    await expect(resourcePackageJobs.update({ where: { id: "job", status: "ready", version: 2 }, data: { result: { package: "stale" } } })).rejects.toThrow("GENERATION_JOB_NOT_FOUND");
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 });

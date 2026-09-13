@@ -1,3 +1,4 @@
+import { courseQuestionSet, latestCourseReflection, latestExperienceSurvey } from "@/lib/course-reflection";
 import type {
   Course,
   CourseResource,
@@ -9,7 +10,6 @@ import { aggregateKnowledgePointMastery, firstKnowledgeLectureAttempts } from "@
 import {
   latestReflectionByStudent,
   normalizeReflectionSurvey,
-  reflectionSurveyAverage,
 } from "@/lib/reflection-survey";
 import {
   REFLECTION_SUMMARY_CATEGORY_DEFINITIONS,
@@ -416,7 +416,7 @@ function fallbackShowcaseQueue(course: Course): ShowcaseQueueItem[] {
     ];
     return { studentId: student.id, name: student.name, groupId: course.groups?.find((group) => group.members.some((member) => member.studentId === student.id))?.id, artifacts };
   });
-  return buildShowcaseQueue(students, course.showcasePresentations ?? [], course.presentingStudentId, course.uiState?.showcaseReporting).items;
+  return buildShowcaseQueue(students, course.showcasePresentations ?? [], course.presentingStudentId, course.uiState?.showcaseReporting ?? (course.content.stagePlan?.schemaVersion === 2 ? { schemaVersion: 2, selectionMode: "teacher-selected", selectedStudentIds: [], orderedStudentIds: [] } : undefined)).items;
 }
 
 export function deriveShowcaseDashboardMetrics(course: Course, data?: ShowcaseData): ShowcaseDashboardMetrics {
@@ -439,7 +439,7 @@ export function deriveShowcaseDashboardMetrics(course: Course, data?: ShowcaseDa
   const readyCount = queue.filter((item) => item.status !== "not-ready").length;
   const completedCount = queue.filter((item) => item.status === "completed").length;
   const now = Date.now();
-  const remainingMinutes = queue.filter((item) => !["completed", "not-ready"].includes(item.status)).reduce((sum, item) => {
+  const remainingMinutes = data?.budget ? data.budget.plannedRemainingSec / 60 : queue.filter((item) => !["completed", "not-ready"].includes(item.status)).reduce((sum, item) => {
     if (item.status === "presenting" && item.startedAt) {
       const startedAt = Date.parse(item.startedAt);
       const elapsed = Number.isFinite(startedAt) ? Math.max(0, (now - startedAt) / 60_000) : 0;
@@ -473,9 +473,9 @@ function latestReflectionSummary(course: Course) {
 
 export function deriveReflectionDashboardMetrics(course: Course): ReflectionDashboardMetrics {
   const latest = latestReflectionByStudent(course.reflections);
-  const records = course.students.map((student) => ({ student, reflection: latest.get(student.id), survey: normalizeReflectionSurvey(latest.get(student.id)?.survey) }));
-  const submitted = records.filter((item) => Boolean(item.survey));
-  const lowScoreRows = submitted.flatMap(({ student, survey }) => {
+  const records = course.students.map((student) => ({ student, reflection: courseQuestionSet(course) ? latestCourseReflection(course, student.id) : latest.get(student.id), survey: courseQuestionSet(course) ? latestExperienceSurvey(course, student.id) : normalizeReflectionSurvey(latest.get(student.id)?.survey) }));
+  const submitted = records.filter((item) => courseQuestionSet(course) ? Boolean(item.reflection?.courseReflection) : Boolean(item.survey));
+  const lowScoreRows = records.flatMap(({ student, survey }) => {
     if (!survey) return [];
     const dimensions = [
       survey.aiHelpfulness <= 2 ? "AI 引导帮助" : "",
@@ -486,20 +486,24 @@ export function deriveReflectionDashboardMetrics(course: Course): ReflectionDash
   });
   const summary = latestReflectionSummary(course);
   const hasValidSurvey = submitted.length > 0;
+  const average = (key: "aiHelpfulness" | "systemUsability" | "reuseIntention") => {
+    const values = records.flatMap((item) => item.survey ? [item.survey[key]] : []);
+    return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length * 10) / 10 : undefined;
+  };
   return {
     headlines: [
-      { metricId: "reflection-coverage", label: "有效反思提交", value: observedRatio(submitted.length, course.students.length, hasValidSurvey), helper: hasValidSurvey ? "仅统计新版结构化问卷" : "等待有效结构化问卷" },
-      { metricId: "reflection-ai-helpfulness", label: "AI 帮助度", value: reflectionSurveyAverage(submitted.map((item) => latest.get(item.student.id)!).filter(Boolean), "aiHelpfulness")?.toFixed(1) ?? "—", helper: "满分 5 分" },
-      { metricId: "reflection-system-usability", label: "系统易理解度", value: reflectionSurveyAverage(submitted.map((item) => latest.get(item.student.id)!).filter(Boolean), "systemUsability")?.toFixed(1) ?? "—", helper: "满分 5 分" },
-      { metricId: "reflection-reuse", label: "继续使用意愿", value: reflectionSurveyAverage(submitted.map((item) => latest.get(item.student.id)!).filter(Boolean), "reuseIntention")?.toFixed(1) ?? "—", helper: "满分 5 分" },
+      { metricId: "reflection-coverage", label: "有效反思提交", value: observedRatio(submitted.length, course.students.length, hasValidSurvey), helper: courseQuestionSet(course) ? "按课程题集统计，体验问卷独立提交" : hasValidSurvey ? "仅统计新版结构化问卷" : "等待有效结构化问卷" },
+      { metricId: "reflection-ai-helpfulness", label: "AI 帮助度", value: average("aiHelpfulness")?.toFixed(1) ?? "—", helper: "满分 5 分" },
+      { metricId: "reflection-system-usability", label: "系统易理解度", value: average("systemUsability")?.toFixed(1) ?? "—", helper: "满分 5 分" },
+      { metricId: "reflection-reuse", label: "继续使用意愿", value: average("reuseIntention")?.toFixed(1) ?? "—", helper: "满分 5 分" },
     ],
     submittedCount: submitted.length,
     lowScoreRows,
-    pendingStudents: records.filter((item) => !item.survey).map((item) => item.student),
+    pendingStudents: records.filter((item) => courseQuestionSet(course) ? !item.reflection?.courseReflection : !item.survey).map((item) => item.student),
     averages: {
-      aiHelpfulness: reflectionSurveyAverage(submitted.map((item) => latest.get(item.student.id)!).filter(Boolean), "aiHelpfulness") ?? undefined,
-      systemUsability: reflectionSurveyAverage(submitted.map((item) => latest.get(item.student.id)!).filter(Boolean), "systemUsability") ?? undefined,
-      reuseIntention: reflectionSurveyAverage(submitted.map((item) => latest.get(item.student.id)!).filter(Boolean), "reuseIntention") ?? undefined,
+      aiHelpfulness: average("aiHelpfulness") ?? undefined,
+      systemUsability: average("systemUsability") ?? undefined,
+      reuseIntention: average("reuseIntention") ?? undefined,
     },
     summary,
     summaryStale: reflectionClassSummaryIsStale(summary, course),

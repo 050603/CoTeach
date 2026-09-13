@@ -12,6 +12,9 @@
 import { create } from 'zustand';
 import type { Action } from '@openmaic/lib/types/action';
 import type { SceneContent } from '@openmaic/lib/types/stage';
+import { isEqual } from 'lodash';
+import type { WhiteboardPatch } from '@openmaic/lib/edit/whiteboard-patch';
+import { whiteboardBlocks, replaceWhiteboardSteps } from '@openmaic/lib/edit/whiteboard-blocks';
 
 export interface RegenSnapshot {
   sceneId: string;
@@ -24,6 +27,7 @@ export interface RegenSnapshot {
    * reseed the slide edit session.
    */
   actionsOnly?: boolean;
+  whiteboardPatch?: WhiteboardPatch;
   restored: boolean;
   /**
    * Post-edit state (the patch the tool applied), kept so an undo can be RESUMED
@@ -50,7 +54,11 @@ interface RegenSnapshotsState {
    * redo) and toggles back. A no-op if there's no snapshot, or when resuming but
    * no `redo` state was captured.
    */
-  restore: (toolCallId: string, apply: RestoreApplyFn) => void;
+  restore: (
+    toolCallId: string,
+    apply: RestoreApplyFn,
+    readActions?: (sceneId: string) => Action[] | null | undefined,
+  ) => string | undefined;
   /** Drop all snapshots (e.g. on "新对话") so stale entries don't accumulate. */
   clearAll: () => void;
 }
@@ -61,9 +69,22 @@ export const useRegenSnapshots = create<RegenSnapshotsState>((set, get) => ({
     set((s) => ({
       snapshots: { ...s.snapshots, [toolCallId]: { ...snap, restored: false } },
     })),
-  restore: (toolCallId, apply) => {
+  restore: (toolCallId, apply, readActions) => {
     const snap = get().snapshots[toolCallId];
     if (!snap) return;
+    if (snap.whiteboardPatch) {
+      if (snap.restored && !snap.redo) return;
+      const actions = readActions?.(snap.sceneId);
+      if (!actions) return '未找到当前页面，白板修改无法恢复。';
+      const board = whiteboardBlocks(actions).find((item) => item.id === snap.whiteboardPatch!.boardId);
+      if (!board) return '这块白板已被删除或替换，恢复没有应用。';
+      const expected = snap.restored ? snap.whiteboardPatch.before : snap.whiteboardPatch.steps;
+      if (!isEqual(board.steps, expected)) return '这块白板已有后续修改，已保留你的最新内容，无法直接撤销或重做 AI 修改。';
+      const target = snap.restored ? snap.whiteboardPatch.steps : snap.whiteboardPatch.before;
+      apply(snap.sceneId, { actions: replaceWhiteboardSteps(actions, board.id, target) });
+      set((s) => ({ snapshots: { ...s.snapshots, [toolCallId]: { ...snap, restored: !snap.restored } } }));
+      return;
+    }
     if (!snap.restored) {
       // Undo → pre-edit state.
       apply(

@@ -2,16 +2,18 @@
 
 import { useRef, useState, useLayoutEffect } from 'react';
 import type { PPTLatexElement } from '@openmaic/dsl';
+import 'katex/dist/katex.min.css';
 
 export interface BaseLatexElementProps {
   elementInfo: PPTLatexElement;
+  allowUpscale?: boolean;
 }
 
 /**
  * Base latex element for read-only/playback mode.
  * Renders KaTeX HTML if available, falls back to legacy SVG path.
  */
-export function BaseLatexElement({ elementInfo }: BaseLatexElementProps) {
+export function BaseLatexElement({ elementInfo, allowUpscale = true }: BaseLatexElementProps) {
   return (
     <div
       className="base-element-latex absolute"
@@ -26,13 +28,14 @@ export function BaseLatexElement({ elementInfo }: BaseLatexElementProps) {
         className="rotate-wrapper w-full h-full"
         style={{ transform: `rotate(${elementInfo.rotate}deg)` }}
       >
-        <div className="element-content relative w-full h-full">
+        <div className="element-content relative w-full h-full" style={{ color: elementInfo.color }}>
           {elementInfo.html ? (
             <KatexContent
               html={elementInfo.html}
               width={elementInfo.width}
               height={elementInfo.height}
               align={elementInfo.align}
+              allowUpscale={allowUpscale}
             />
           ) : elementInfo.path && elementInfo.viewBox ? (
             <svg
@@ -72,11 +75,13 @@ function KatexContent({
   width,
   height,
   align = 'center',
+  allowUpscale,
 }: {
   html: string;
   width: number;
   height: number;
   align?: 'left' | 'center' | 'right';
+  allowUpscale: boolean;
 }) {
   const innerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
@@ -86,9 +91,9 @@ function KatexContent({
     const naturalW = innerRef.current.scrollWidth;
     const naturalH = innerRef.current.scrollHeight;
     if (naturalW > 0 && naturalH > 0) {
-      setScale(Math.min(width / naturalW, height / naturalH));
+      setScale(Math.min(width / naturalW, height / naturalH, allowUpscale ? Infinity : 1));
     }
-  }, [html, width, height]);
+  }, [html, width, height, allowUpscale]);
 
   const justify = ALIGN_MAP[align];
   const origin =
@@ -112,6 +117,7 @@ function KatexContent({
           transformOrigin: origin,
           transform: `scale(${scale})`,
           whiteSpace: 'nowrap',
+          flexShrink: 0,
         }}
         dangerouslySetInnerHTML={{ __html: html }}
       />

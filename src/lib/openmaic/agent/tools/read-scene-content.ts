@@ -15,6 +15,10 @@
 import { Type, type Static } from 'typebox';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import type { SceneContext } from './regenerate-scene-actions';
+import { whiteboardBlocks } from '@openmaic/lib/edit/whiteboard-blocks';
+import { EMBEDDED_BOARD_IMAGE } from '@openmaic/lib/edit/whiteboard-patch';
+import { auditWhiteboardLayout } from '@openmaic/lib/whiteboard/layout';
+import { auditWhiteboardContent } from '@openmaic/lib/whiteboard/quality';
 
 // ── Deps ─────────────────────────────────────────────────────────────────────
 
@@ -152,6 +156,25 @@ function projectContent(content: SceneContext['content']): string {
     : projection;
 }
 
+function projectWhiteboards(actions: SceneContext['actions']): string {
+  const blocks = whiteboardBlocks(actions ?? []);
+  if (blocks.length === 0) return '\n\nWhiteboards: none. The teacher can add a whiteboard in the timeline.';
+  const projection = blocks.map((block) => ({
+    boardId: block.id,
+    canvas: { width: 1000, height: 562.5, safeMargin: 20 },
+    qualityIssues: [...auditWhiteboardLayout(block.steps), ...auditWhiteboardContent(block.steps)],
+    steps: block.steps.map((action) => {
+      if (action.type === 'speech') {
+        const { audioId: _audioId, audioUrl: _audioUrl, audioInvalidated: _invalidated, ...speech } = action;
+        return speech;
+      }
+      if (action.type === 'wb_draw_image' && action.src.startsWith('data:')) return { ...action, src: EMBEDDED_BOARD_IMAGE };
+      return action;
+    }),
+  }));
+  return `\n\nWhiteboard teaching segments (edit one using edit_whiteboard, preserving its boardId and retained step ids; steps exclude wb_open/wb_close; omitted embedded images can be retained by keeping the step id and omitting src):\n${JSON.stringify(projection, null, 2)}`;
+}
+
 // ── Params ───────────────────────────────────────────────────────────────────
 // The model only needs to say WHICH scene to read; defaults to the active one.
 
@@ -190,6 +213,7 @@ export function makeReadSceneContentTool(
     description:
       'Reads the current scene to understand what is on it — its outline (title, ' +
       'description, key points) and its content (slide elements / quiz questions / etc). ' +
+      'Also returns existing whiteboard ids and their ordered drawing/narration steps for edit_whiteboard. ' +
       'Use this BEFORE answering questions about the slide or regenerating it, so your ' +
       'reply and any regeneration instruction reflect what is actually on the slide. ' +
       'Only supply the sceneId — the scene data is loaded automatically.',
@@ -235,7 +259,7 @@ export function makeReadSceneContentTool(
               `Scene "${outline.title}" (type: ${outline.type}). ` +
               `Description: ${outline.description || '(none)'}. ` +
               `Key points: ${keyPoints || '(none)'}.\n` +
-              `Scene content:\n${projection}${errorsSection}`,
+              `Scene content:\n${projection}${projectWhiteboards(ctx.actions)}${errorsSection}`,
           },
         ],
         details: {

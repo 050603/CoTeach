@@ -12,6 +12,11 @@ import type { Action } from '@openmaic/lib/types/action';
 import type { Scene, ScenePatch, SceneContent, InteractiveContent } from '@openmaic/lib/types/stage';
 import type { GeneratedSlideContent } from '@openmaic/lib/types/generation';
 import { CURRENT_SLIDE_CONTENT_SCHEMA_VERSION } from '@openmaic/lib/edit/slide-schema';
+import { isEqual } from 'lodash';
+import { validateAction } from '@openmaic/dsl';
+import { whiteboardBlocks, replaceWhiteboardSteps } from '@openmaic/lib/edit/whiteboard-blocks';
+import type { WhiteboardPatch } from '@openmaic/lib/edit/whiteboard-patch';
+import type { NarrationPatch } from '@openmaic/lib/agent/tools/regenerate-scene-actions';
 
 // Mirrors the default theme minted by createSceneWithActions for fresh slides.
 const DEFAULT_THEME = {
@@ -67,6 +72,10 @@ export interface RegenerateDetails {
   /** Present for `edit_interactive_html` — the edited interactive page HTML. */
   html?: string | null;
   actions?: Action[];
+  /** Present only for a scoped `edit_whiteboard` tool result. */
+  whiteboardPatch?: WhiteboardPatch | null;
+  narrationPatch?: NarrationPatch;
+  error?: string;
 }
 
 export interface RegenerateApplyPlan {
@@ -77,9 +86,13 @@ export interface RegenerateApplyPlan {
     actions: Action[];
     /** True for narration-only regen — restore reverts actions only, not content. */
     actionsOnly?: boolean;
+    /** Scoped before/after board steps for undo that preserves later outside edits. */
+    whiteboardPatch?: WhiteboardPatch;
   } | null;
   /** Partial scene update to apply, or null if nothing should change. */
   patch: ScenePatch | null;
+  /** Human-readable refusal, including a concurrently edited target board. */
+  error?: string;
 }
 
 /**
@@ -97,6 +110,59 @@ export function planRegenerateApply(
 ): RegenerateApplyPlan {
   const { sceneId } = details;
   if (!sceneId) return { snapshot: null, patch: null };
+
+  if (toolName === 'edit_whiteboard') {
+    const boardPatch = details.whiteboardPatch;
+    const fail = (error: string): RegenerateApplyPlan => ({ snapshot: null, patch: null, error });
+    if (!scene || !boardPatch || !Array.isArray(boardPatch.before) || !Array.isArray(boardPatch.steps)) {
+      return fail(details.error || '白板编辑结果不完整，请重新生成。');
+    }
+    const block = whiteboardBlocks(scene.actions ?? []).find((item) => item.id === boardPatch.boardId);
+    if (!block) return fail('这块白板已被删除或替换，AI 修改没有应用。请重新选择白板。');
+    if (!isEqual(block.steps, boardPatch.before)) {
+      return fail('这块白板在 AI 编辑期间已被修改，已保留你的最新内容。请重新让 AI 编辑。');
+    }
+    if (boardPatch.steps.some((action) => !validateAction(action).valid || action.type === 'wb_open' || action.type === 'wb_close' || (action.type !== 'speech' && !action.type.startsWith('wb_')))) {
+      return fail('AI 返回了白板之外的步骤或不完整内容，修改没有应用。');
+    }
+    return {
+      snapshot: { sceneId, content: scene.content, actions: scene.actions ?? [], actionsOnly: true, whiteboardPatch: boardPatch },
+      patch: { actions: replaceWhiteboardSteps(scene.actions ?? [], boardPatch.boardId, boardPatch.steps) },
+    };
+  }
+
+  // Read tools and unknown tools must never be able to smuggle in scene edits.
+  if (toolName !== undefined && !['regenerate_scene', 'regenerate_scene_actions', 'edit_interactive_html'].includes(toolName)) {
+    return { snapshot: null, patch: null };
+  }
+
+  if (toolName === 'regenerate_scene_actions' && details.narrationPatch) {
+    const fail = (error: string): RegenerateApplyPlan => ({ snapshot: null, patch: null, error });
+    const { before, speeches } = details.narrationPatch;
+    if (!scene || !Array.isArray(before) || !Array.isArray(speeches) || before.length !== speeches.length || !before.length) {
+      return fail('讲稿修改结果不完整，未应用。');
+    }
+    const currentActions = scene.actions ?? [];
+    const boardIndexes = new Set(whiteboardBlocks(currentActions).flatMap((block) =>
+      Array.from({ length: block.end - block.start + 1 }, (_item, index) => block.start + index),
+    ));
+    const currentById = new Map(currentActions.filter((_action, index) => !boardIndexes.has(index)).map((action) => [action.id, action]));
+    const edited = new Map<string, Action>();
+    for (let index = 0; index < speeches.length; index++) {
+      const speech = speeches[index];
+      if (!validateAction(speech).valid || speech.type !== 'speech' || speech.id !== before[index]?.id || edited.has(speech.id)) {
+        return fail('讲稿修改包含不完整内容或白板之外的其他动作，未应用。');
+      }
+      if (!isEqual(currentById.get(speech.id), before[index])) {
+        return fail('这段讲稿在 AI 编辑期间已被修改或移动，已保留你的最新内容。请重新让 AI 编辑。');
+      }
+      edited.set(speech.id, speech);
+    }
+    return {
+      snapshot: { sceneId, content: scene.content, actions: currentActions, actionsOnly: true },
+      patch: { actions: currentActions.map((action) => edited.get(action.id) ?? action) },
+    };
+  }
 
   const actions = Array.isArray(details.actions) ? details.actions : [];
 

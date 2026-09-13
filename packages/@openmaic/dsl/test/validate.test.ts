@@ -134,6 +134,13 @@ describe('standalone promoted-content validators', () => {
 });
 
 describe('validateAction', () => {
+  it('accepts a whiteboard image and requires its source and geometry', () => {
+    const image = { id: 'a', type: 'wb_draw_image', src: '/image.png', x: 20, y: 40, width: 400, height: 240 };
+    expect(validateAction(image)).toEqual({ valid: true });
+    expect(errors(validateAction({ ...image, src: undefined, width: '400' }))).toEqual([
+      '/src', '/width',
+    ]);
+  });
   it('accepts a well-formed action (variant fields present)', () => {
     expect(validateAction({ id: 'a', type: 'spotlight', elementId: 'e' })).toEqual({ valid: true });
   });

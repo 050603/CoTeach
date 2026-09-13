@@ -36,7 +36,7 @@ const UploadFieldsSchema = z.object({
   bindAsCourseResource: z.literal("true").optional(),
   stageKey: z.string().trim().min(1).max(64).optional(),
   pdfDisplayMode: z.enum(["document", "slides"]).optional(),
-  purpose: z.enum(["generation-reference"]).optional(),
+  purpose: z.enum(["generation-reference", "course-resource-package"]).optional(),
 });
 
 type AllowedUploadType = {
@@ -170,6 +170,13 @@ export async function POST(request: Request) {
     const courseId = parsedFields.data.courseId ?? null;
     const bindAsCourseResource = parsedFields.data.bindAsCourseResource === "true";
     const isGenerationReference = parsedFields.data.purpose === "generation-reference";
+    const isResourcePackage = parsedFields.data.purpose === "course-resource-package";
+    if (isResourcePackage && (auth.claims.role !== "teacher" || !courseId || bindAsCourseResource)) {
+      throw new UploadHttpError("INVALID_RESOURCE_PACKAGE_UPLOAD", "资源包必须由教师上传至备课课程，并作为私有生成资料保存。", 400);
+    }
+    if (isResourcePackage && extension !== ".zip") {
+      throw new UploadHttpError("INVALID_RESOURCE_PACKAGE_UPLOAD", "请上传 ZIP 格式的完整资源包。", 415);
+    }
     if (bindAsCourseResource && auth.claims.role !== "teacher") {
       throw new UploadHttpError("FORBIDDEN", "只有教师可以发布课程资源。", 403);
     }
@@ -198,6 +205,9 @@ export async function POST(request: Request) {
     const storageScope = courseId ? await resolveUploadScope(courseId) : null;
     if (courseId && (!storageScope || (storageScope.templateOwnerId && storageScope.templateOwnerId !== auth.claims.sub))) {
       throw new UploadHttpError('COURSE_NOT_FOUND', '课程不存在或无权上传。', 404);
+    }
+    if (isResourcePackage && !storageScope?.templateId) {
+      throw new UploadHttpError("RESOURCE_PACKAGE_TEMPLATE_REQUIRED", "请在课程备课页面上传资源包。", 400);
     }
     const isNewClassroomPptx = extension === ".pptx"
       && bindAsCourseResource
@@ -295,6 +305,7 @@ export async function POST(request: Request) {
       size: info.size, mimeType: expected.mime, title, type: fileType, bind: bindAsCourseResource,
       stageKey: parsedFields.data.stageKey, displayMode, previewStorageKey: previewStoredName, previewMimeType, previewSize,
       sha256: sourceSha256, previewSha256,
+      ...(isResourcePackage ? { provenance: { schemaVersion: 1, operation: "course-resource-package-upload", courseId } } : {}),
     }));
 
     if (durableEvent && courseId) {

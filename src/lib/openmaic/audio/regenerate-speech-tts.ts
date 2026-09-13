@@ -34,8 +34,9 @@ export function isManagedTtsActive(): boolean {
 }
 
 /** True if an audio blob is cached under this exact audioId. */
-export async function audioExists(audioId: string): Promise<boolean> {
-  return !!(await db.audioFiles.get(audioId));
+export async function audioExists(audioId: string, text?: string): Promise<boolean> {
+  const record = await db.audioFiles.get(audioId);
+  return !!record && (text === undefined || record.text?.trim() === text.trim());
 }
 
 /** Existence for many audioIds in one IndexedDB round-trip. */
@@ -50,9 +51,9 @@ export async function audioExistsBulk(audioIds: string[]): Promise<Set<string>> 
 }
 
 /** Object URL for the audio cached under this exact audioId (caller revokes). */
-export async function audioObjectUrl(audioId: string): Promise<string | null> {
+export async function audioObjectUrl(audioId: string, text?: string): Promise<string | null> {
   const rec = await db.audioFiles.get(audioId);
-  return rec ? URL.createObjectURL(rec.blob) : null;
+  return rec && (text === undefined || rec.text?.trim() === text.trim()) ? URL.createObjectURL(rec.blob) : null;
 }
 
 /**

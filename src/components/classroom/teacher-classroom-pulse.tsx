@@ -104,6 +104,10 @@ export function deriveTeacherClassroomPulse(
     };
   }
 
+  if (stageKey !== "reflection") {
+    return { chartLabel: "当前阶段暂无可用统计", metrics: [], segments: [], total: 0 };
+  }
+
   const data = deriveReflectionDashboardMetrics(course);
   return {
     chartLabel: data.lowScoreRows.length ? `反思提交 · ${data.lowScoreRows.length} 人需关注` : "反思提交状态",

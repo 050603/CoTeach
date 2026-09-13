@@ -4,9 +4,11 @@ import { ACTION_DESCRIPTIONS } from './tool-schemas';
 
 const empty = z.object({});
 const elementId = z.string().min(1);
+const anchor = z.object({ elementId, side: z.enum(['top', 'right', 'bottom', 'left', 'center']) });
+const drawingIdentity = { elementId: elementId.optional(), groupId: elementId.optional() };
 const coordinates = {
   x: z.number().min(0).max(1000),
-  y: z.number().min(0).max(562),
+  y: z.number().min(0).max(562.5),
 };
 
 const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
@@ -24,7 +26,14 @@ const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
     height: z.number().positive().optional(),
     fontSize: z.number().min(8).max(96).optional(),
     color: z.string().optional(),
-    elementId: z.string().optional(),
+    ...drawingIdentity,
+  }),
+  wb_draw_image: z.object({
+    src: z.string().trim().min(1),
+    ...coordinates,
+    width: z.number().positive(),
+    height: z.number().positive(),
+    ...drawingIdentity,
   }),
   wb_draw_shape: z.object({
     shape: z.enum(['rectangle', 'circle', 'triangle']),
@@ -32,7 +41,7 @@ const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
     width: z.number().positive(),
     height: z.number().positive(),
     fillColor: z.string().optional(),
-    elementId: z.string().optional(),
+    ...drawingIdentity,
   }),
   wb_draw_chart: z.object({
     chartType: z.enum(['bar', 'column', 'line', 'pie', 'ring', 'area', 'radar', 'scatter']),
@@ -40,42 +49,48 @@ const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
     width: z.number().positive(),
     height: z.number().positive(),
     data: z.object({
-      labels: z.array(z.string()),
-      legends: z.array(z.string()),
-      series: z.array(z.array(z.number())),
-    }),
+      labels: z.array(z.string()).min(1),
+      legends: z.array(z.string()).min(1),
+      series: z.array(z.array(z.number().finite()).min(1)).min(1),
+    }).refine((data) => data.series.length === data.legends.length && data.series.every((values) => values.length === data.labels.length), 'Chart labels, legends and series must align'),
     themeColors: z.array(z.string()).optional(),
-    elementId: z.string().optional(),
-  }),
+    ...drawingIdentity,
+  }).refine((chart) => chart.chartType !== 'scatter' || chart.data.series.length === 2,
+    'Scatter charts require exactly two numeric series: X then Y')
+    .refine((chart) => !['pie', 'ring'].includes(chart.chartType) || (chart.data.series.length === 1
+      && chart.data.series[0].every((value) => value >= 0) && chart.data.series[0].some((value) => value > 0)),
+    'Pie and ring charts require one nonnegative series with a positive total'),
   wb_draw_latex: z.object({
     latex: z.string().min(1),
     ...coordinates,
     width: z.number().positive().optional(),
     height: z.number().positive().optional(),
     color: z.string().optional(),
-    elementId: z.string().optional(),
+    ...drawingIdentity,
   }),
   wb_draw_table: z.object({
     ...coordinates,
     width: z.number().positive(),
     height: z.number().positive(),
-    data: z.array(z.array(z.string())).min(1),
+    data: z.array(z.array(z.string()).min(1)).min(1).refine((rows) => rows.every((row) => row.length === rows[0].length), 'Table rows must have equal column counts'),
     outline: z
       .object({ width: z.number().positive(), style: z.string(), color: z.string() })
       .optional(),
     theme: z.object({ color: z.string() }).optional(),
-    elementId: z.string().optional(),
+    ...drawingIdentity,
   }),
   wb_draw_line: z.object({
     startX: z.number().min(0).max(1000),
-    startY: z.number().min(0).max(562),
+    startY: z.number().min(0).max(562.5),
     endX: z.number().min(0).max(1000),
-    endY: z.number().min(0).max(562),
+    endY: z.number().min(0).max(562.5),
+    startAnchor: anchor.optional(),
+    endAnchor: anchor.optional(),
     color: z.string().optional(),
     width: z.number().positive().optional(),
     style: z.enum(['solid', 'dashed']).optional(),
     points: z.tuple([z.enum(['', 'arrow']), z.enum(['', 'arrow'])]).optional(),
-    elementId: z.string().optional(),
+    ...drawingIdentity,
   }),
   wb_draw_code: z.object({
     language: z.string().min(1),
@@ -84,7 +99,7 @@ const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
     width: z.number().positive().optional(),
     height: z.number().positive().optional(),
     fileName: z.string().optional(),
-    elementId: z.string().optional(),
+    ...drawingIdentity,
   }),
   wb_edit_code: z.object({
     elementId,

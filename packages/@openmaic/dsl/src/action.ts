@@ -23,6 +23,14 @@ export interface ActionBase {
   id: string;
   title?: string;
   description?: string;
+  /** Whiteboard elements sharing this id move as one composition. */
+  groupId?: string;
+}
+
+/** An attachment to an existing whiteboard element, in board coordinates. */
+export interface WhiteboardAnchor {
+  elementId: string;
+  side: 'top' | 'right' | 'bottom' | 'left' | 'center';
 }
 
 // ==================== Fire-and-forget actions ====================
@@ -79,6 +87,18 @@ export interface WbDrawTextAction extends ActionBase {
   height?: number; // default 100
   fontSize?: number; // default 18
   color?: string; // default '#333333'
+}
+
+/** Show an existing image on the whiteboard (wait for render). */
+export interface WbDrawImageAction extends ActionBase {
+  type: 'wb_draw_image';
+  elementId?: string;
+  /** Image asset reference, data URL, or concrete URL. */
+  src: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /** Draw shape on whiteboard (wait for render) */
@@ -143,6 +163,9 @@ export interface WbDrawLineAction extends ActionBase {
   startY: number; // Start Y position (0-562)
   endX: number; // End X position (0-1000)
   endY: number; // End Y position (0-562)
+  /** Resolve against the target's current bounds; coordinates remain a legacy fallback. */
+  startAnchor?: WhiteboardAnchor;
+  endAnchor?: WhiteboardAnchor;
   color?: string; // Default '#333333'
   width?: number; // Line width, default 2
   style?: 'solid' | 'dashed'; // Default 'solid'
@@ -241,6 +264,7 @@ export type Action =
   | SpeechAction
   | WbOpenAction
   | WbDrawTextAction
+  | WbDrawImageAction
   | WbDrawShapeAction
   | WbDrawChartAction
   | WbDrawLatexAction
@@ -271,6 +295,7 @@ export const SYNC_ACTIONS: ActionType[] = [
   'play_video',
   'wb_open',
   'wb_draw_text',
+  'wb_draw_image',
   'wb_draw_shape',
   'wb_draw_chart',
   'wb_draw_latex',
@@ -296,6 +321,7 @@ export const ACTION_TYPES = [
   'speech',
   'wb_open',
   'wb_draw_text',
+  'wb_draw_image',
   'wb_draw_shape',
   'wb_draw_chart',
   'wb_draw_latex',

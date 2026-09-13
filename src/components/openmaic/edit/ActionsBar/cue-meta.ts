@@ -12,6 +12,7 @@ import {
   Crosshair,
   Flag,
   Focus,
+  Image,
   PenLine,
   Presentation,
   Quote,
@@ -59,6 +60,12 @@ const META: Record<string, CueMeta> = {
     glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400',
     accent: 'bg-sky-400/70',
   },
+  wb_close: {
+    icon: Presentation,
+    labelKey: 'edit.cue.whiteboardClose',
+    glyph: 'text-slate-600 bg-slate-500/10 dark:text-slate-300',
+    accent: 'bg-slate-400/70',
+  },
   wb_draw_text: {
     icon: PenLine,
     labelKey: 'edit.cue.whiteboardText',
@@ -80,6 +87,12 @@ const META: Record<string, CueMeta> = {
   wb_draw_table: {
     icon: Table2,
     labelKey: 'edit.cue.whiteboardTable',
+    glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400',
+    accent: 'bg-sky-400/70',
+  },
+  wb_draw_image: {
+    icon: Image,
+    labelKey: 'edit.cue.whiteboardImage',
     glyph: 'text-sky-600 bg-sky-500/10 dark:text-sky-400',
     accent: 'bg-sky-400/70',
   },

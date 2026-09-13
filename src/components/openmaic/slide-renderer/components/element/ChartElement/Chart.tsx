@@ -7,7 +7,7 @@ import { getChartOption } from './chartOption';
 
 import * as echarts from 'echarts/core';
 import { BarChart, LineChart, PieChart, ScatterChart, RadarChart } from 'echarts/charts';
-import { LegendComponent } from 'echarts/components';
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
 import { SVGRenderer } from 'echarts/renderers';
 
 echarts.use([
@@ -16,7 +16,9 @@ echarts.use([
   PieChart,
   ScatterChart,
   RadarChart,
+  GridComponent,
   LegendComponent,
+  TooltipComponent,
   SVGRenderer,
 ]);
 

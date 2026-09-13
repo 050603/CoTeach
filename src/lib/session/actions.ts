@@ -1,3 +1,5 @@
+import { mergeReflectionForCourse } from "@/lib/course-reflection";
+import { courseEvaluationPlan, normalizeCourseRubricScore } from "@/lib/evaluation/course-rubric";
 import type {
   ActivityRecord,
   AiSupportRecord,
@@ -33,7 +35,6 @@ import type {
   LearningEvidence,
   LearningSignal,
 } from "./types";
-import { DEFAULT_EVALUATION_FLOWS } from "./types";
 import { getStageWorkspacePolicy } from "@/lib/classroom/stage-workspace-policy";
 import {
   getStagesForSystemMode,
@@ -47,6 +48,7 @@ import { OPERATIONAL_SIGNAL_RETENTION_DAYS } from "@/lib/learning-evidence/types
 import {
   completeClassroomTiming,
   createClassroomTimingState,
+  resolveCourseTimingMinutes,
   reconcileClassroomTimingState,
   transitionClassroomStageTiming,
 } from "@/lib/classroom/timing";
@@ -235,12 +237,10 @@ export function applySessionAction(
       const classroomTiming = course
         ? createClassroomTimingState({
             stages: course.stages,
-            totalMinutes:
-              course.content.projectMainline?.totalMinutes
-              ?? course.content.moduleTimingPlan?.totalMinutes
-              ?? course.hours * 60,
+            totalMinutes: resolveCourseTimingMinutes(course),
             projectMainline: course.content.projectMainline,
             moduleTimingPlan: course.content.moduleTimingPlan,
+            stagePlan: course.content.stagePlan,
             activeStageKey: course.stages[0]?.key,
             now: touchedAt,
           })
@@ -255,6 +255,7 @@ export function applySessionAction(
           ...(course?.uiState ?? {}),
           teacherResourceProjection: null,
           resourceProjection: null,
+          showcaseReporting: undefined,
           ...(classroomTiming ? { classroomTiming } : {}),
         },
         // A new class starts with no project spaces. Each student receives one
@@ -289,12 +290,10 @@ export function applySessionAction(
       if (!course) return state;
       const classroomTiming = createClassroomTimingState({
         stages: course.stages,
-        totalMinutes:
-          course.content.projectMainline?.totalMinutes
-          ?? course.content.moduleTimingPlan?.totalMinutes
-          ?? course.hours * 60,
+        totalMinutes: resolveCourseTimingMinutes(course),
         projectMainline: course.content.projectMainline,
         moduleTimingPlan: course.content.moduleTimingPlan,
+        stagePlan: course.content.stagePlan,
         activeStageKey: course.stages[0]?.key,
         now: touchedAt,
       });
@@ -340,6 +339,7 @@ export function applySessionAction(
           ...(course.uiState ?? {}),
           teacherResourceProjection: null,
           resourceProjection: null,
+          showcaseReporting: undefined,
           classroomTiming,
         },
         // Preserve course resources: content, stages, pblConfig,
@@ -569,14 +569,18 @@ export function applySessionAction(
     }
     case "UPSERT_RUBRIC_SCORE": {
       const { courseId, score } = action.payload;
-      return updateCourseRecord(state, courseId, touchedAt, (c) => ({
-        rubricScores: upsertById(c.rubricScores ?? [], score),
-        activityLog: addActivity(c.activityLog, activity("教师", "提交评分", `${score.groupId}：${score.total} 分`, touchedAt)),
-      }));
+      return updateCourseRecord(state, courseId, touchedAt, (c) => {
+        const normalizedScore = normalizeCourseRubricScore(c, score);
+        return {
+          rubricScores: upsertById(c.rubricScores ?? [], normalizedScore),
+          activityLog: addActivity(c.activityLog, activity("教师", "提交评分", `${score.groupId}：${normalizedScore.total} 分`, touchedAt)),
+        };
+      });
     }
     case "UPSERT_REFLECTION": {
-      const { courseId, reflection } = action.payload;
+      const { courseId, reflection: submittedReflection } = action.payload;
       return updateCourseRecord(state, courseId, touchedAt, (c) => {
+        const reflection = mergeReflectionForCourse(c, submittedReflection);
         const currentReflections = c.reflections ?? [];
         const existingStructured = reflection.survey
           ? [...currentReflections]
@@ -1085,13 +1089,7 @@ export function normalizeCourse(course: Course): Course {
       ...course.content,
       lessonOutline: course.content.lessonOutline ?? [],
       teachingOutline: course.content.teachingOutline,
-      evaluationPlan: {
-        ...course.content.evaluationPlan,
-        flows: DEFAULT_EVALUATION_FLOWS.map((flow) => ({
-          ...flow,
-          evidenceRequirements: [...flow.evidenceRequirements],
-        })),
-      },
+      evaluationPlan: courseEvaluationPlan(course),
     },
   };
   const selected = reconcileCourseGenerationMode(normalized);
@@ -1109,9 +1107,10 @@ export function normalizeCourse(course: Course): Course {
       classroomTiming: reconcileClassroomTimingState({
         state: classroomTiming,
         stages: selected.stages,
-        totalMinutes: Math.max(1, selected.hours * 60),
+        totalMinutes: resolveCourseTimingMinutes(selected),
         projectMainline: selected.content.projectMainline,
         moduleTimingPlan: selected.content.moduleTimingPlan,
+        stagePlan: selected.content.stagePlan,
         activeStageKey: selected.stages[selected.currentStageIndex]?.key,
       }),
     },

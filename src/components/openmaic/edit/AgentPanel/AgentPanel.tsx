@@ -47,6 +47,7 @@ import { ReasoningPart } from './reasoning-part';
 import { RegenerateSceneActionsUI } from './regenerate-tool-ui';
 import { RegenerateSceneUI } from './regenerate-scene-tool-ui';
 import { EditInteractiveHtmlUI } from './edit-interactive-html-tool-ui';
+import { EditWhiteboardUI } from './edit-whiteboard-tool-ui';
 import { ReadSceneContentUI } from './read-tool-ui';
 
 const MIN_WIDTH = 320;
@@ -261,6 +262,7 @@ export function AgentPanel({
         <RegenerateSceneActionsUI />
         <RegenerateSceneUI />
         <EditInteractiveHtmlUI />
+        <EditWhiteboardUI />
 
         <ThreadPrimitive.Root className="relative flex min-h-0 flex-1 flex-col">
           <ThreadPrimitive.Viewport className="flex-1 space-y-6 overflow-y-auto px-4 py-5 scroll-smooth">
@@ -476,6 +478,7 @@ export function AgentPanel({
         <RegenerateSceneActionsUI />
         <RegenerateSceneUI />
         <EditInteractiveHtmlUI />
+        <EditWhiteboardUI />
 
         <ThreadPrimitive.Root className="relative flex min-h-0 flex-1 flex-col">
           <ThreadPrimitive.Viewport className="flex-1 space-y-6 overflow-y-auto px-4 py-5 scroll-smooth">

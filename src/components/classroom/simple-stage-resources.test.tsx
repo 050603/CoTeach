@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
+import { TeacherPresentationActionsProvider } from "./teacher-presentation-actions";
 import { SimplifiedStudentStageView, SimplifiedTeacherStageView, StudentProjectionPrecache, StudentResourceProjection, videoPrecacheRanges } from "./simple-stage-resources";
 
 const session = vi.hoisted(() => ({
@@ -24,6 +25,26 @@ const course = {
 } as unknown as Course;
 
 describe("simplified stage resources", () => {
+  it("synchronizes the selected resource only after the teacher uses the footer action", () => {
+    const target = render(<div />).container.firstElementChild as HTMLElement;
+    const view = render(<TeacherPresentationActionsProvider target={target}>
+      <SimplifiedTeacherStageView course={course} stageKey="launch" presentation="teaching" />
+    </TeacherPresentationActionsProvider>);
+    expect(session.setUiState).not.toHaveBeenCalled();
+    fireEvent.click(within(target).getByRole("button", { name: "同步到学生" }));
+    expect(session.setUiState).toHaveBeenCalledTimes(1);
+    const patch = session.setUiState.mock.calls[0][1];
+    expect(patch.resourceProjection).toMatchObject({ resourceId: "launch-file", stageKey: "launch" });
+    view.rerender(<TeacherPresentationActionsProvider target={target}>
+      <SimplifiedTeacherStageView course={{ ...course, uiState: patch }} stageKey="launch" presentation="analytics" />
+    </TeacherPresentationActionsProvider>);
+    expect(session.setUiState).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(target).getByRole("button", { name: "停止同步" }));
+    expect(session.setUiState).toHaveBeenLastCalledWith("course-1", { resourceProjection: null });
+    view.unmount();
+    expect(target.childElementCount).toBe(0);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
@@ -128,6 +149,48 @@ describe("simplified stage resources", () => {
         }),
       }),
     });
+  });
+
+  it("preserves the resource player and position across teaching and analytics without syncing students", () => {
+    const videoCourse = {
+      ...course,
+      resources: [
+        { id: "video-1", title: "演示一.mp4", type: "MP4", size: "2 MB", stageKey: "launch", url: "/video-1", downloadedBy: [] },
+        { id: "video-2", title: "演示二.mp4", type: "MP4", size: "2 MB", stageKey: "launch", url: "/video-2", downloadedBy: [] },
+      ],
+    } as Course;
+    const view = render(<SimplifiedTeacherStageView course={videoCourse} stageKey="launch" />);
+    fireEvent.click(screen.getByRole("button", { name: /^视频\s*演示二.mp4/ }));
+    const video = document.querySelector("video")!;
+    video.currentTime = 37;
+    fireEvent.click(screen.getByRole("button", { name: "全屏预览" }));
+    expect(document.querySelector("video")).toBe(video);
+    for (const presentation of ["teaching", "analytics", "teaching", "workspace"] as const) {
+      view.rerender(<SimplifiedTeacherStageView course={videoCourse} stageKey="launch" presentation={presentation} />);
+      expect(document.querySelector("video")).toBe(video);
+      expect(video.currentTime).toBe(37);
+      expect(document.querySelectorAll("video")).toHaveLength(1);
+      expect(screen.queryByRole("dialog", { name: "学习资料预览" })).toBeNull();
+    }
+    expect(session.setUiState).not.toHaveBeenCalled();
+    expect(session.markResourceDownloaded).not.toHaveBeenCalled();
+
+    view.rerender(<SimplifiedTeacherStageView course={videoCourse} stageKey="launch" presentation="teaching" />);
+    expect(screen.queryByRole("button", { name: /删除学习资料/ })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "阅读跟进" })).toBeNull();
+    expect((screen.getByRole("combobox", { name: "选择授课资料" }) as HTMLSelectElement).value).toBe("video-2");
+    fireEvent.click(screen.getByRole("button", { name: "同步到学生" }));
+    expect(session.setUiState).toHaveBeenCalledWith("course-1", { resourceProjection: expect.objectContaining({ resourceId: "video-2" }) });
+  });
+
+  it("uses only the requested stage task as the presentation fallback", () => {
+    const emptyCourse = { ...course, resources: [], stages: [{ key: "launch", label: "项目启动", description: "讨论校园节能问题", view: "project-launch" }, { key: "reflection", label: "学习反思", description: "总结本次实践", view: "reflection" }] } as Course;
+    const view = render(<SimplifiedTeacherStageView course={emptyCourse} stageKey="launch" presentation="teaching" />);
+    expect(screen.getByText("讨论校园节能问题")).toBeTruthy();
+    expect(screen.queryByText("总结本次实践")).toBeNull();
+    view.rerender(<SimplifiedTeacherStageView course={emptyCourse} stageKey="unknown" presentation="teaching" />);
+    expect(screen.getByText("本阶段尚未添加学习资料或任务。")).toBeTruthy();
+    expect(screen.queryByText("讨论校园节能问题")).toBeNull();
   });
 
   it("uses one authoritative video controller in immersive projection", () => {

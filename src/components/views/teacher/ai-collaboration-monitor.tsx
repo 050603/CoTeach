@@ -1,5 +1,9 @@
 "use client";
 
+import type { TeacherPresentationMode } from "@/lib/classroom/presentation";
+import { StageTaskPresentation } from "./stage-task-presentation";
+import { CourseStageRequirements } from "@/components/classroom/course-stage-requirements";
+import { TeacherPresentationActions } from "@/components/classroom/teacher-presentation-actions";
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowUpDown, Bot, ChevronDown, Clock3, Download, FileCode2, FileText, FolderDown, MessageSquareText, Search, ShieldAlert, UserRound } from "lucide-react";
 import { Card, Pill } from "@/components/ui";
@@ -122,7 +126,7 @@ function latestExternalVersion(versions: ProjectPdfVersion[]): ProjectPdfVersion
   }, undefined);
 }
 
-export function AiCollaborationTeacherMonitor({ course, focus }: { course: Course; focus?: Extract<TeacherStageFocus, { stageKey: "make" }> }) {
+export function AiCollaborationTeacherMonitor({ course, focus, presentation = "workspace" }: { course: Course; presentation?: TeacherPresentationMode; focus?: Extract<TeacherStageFocus, { stageKey: "make" }> }) {
   const artifactMode = normalizePblCourseConfig(course.pblConfig).makeArtifactMode;
   const isNewSystem = inferStageCollectionMode(course.stages) === "new";
   const rows = useMemo<StudentRow[]>(() => course.students.map((student) => {
@@ -167,6 +171,14 @@ export function AiCollaborationTeacherMonitor({ course, focus }: { course: Cours
     };
   }), [artifactMode, course, isNewSystem]);
   const [selectedStudentId, setSelectedStudentId] = useState<string>();
+  const [showWorks, setShowWorks] = useState(false);
+  const displayContext = `${course.id}:${course.currentStageIndex}:${presentation}`;
+  const [previousPresentation, setPreviousPresentation] = useState(displayContext);
+  if (previousPresentation !== displayContext) {
+    setPreviousPresentation(displayContext);
+    setSelectedStudentId(undefined);
+    setShowWorks(false);
+  }
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "unsubmitted" | "attention">("all");
   const [sort, setSort] = useState<"updated" | "completion">("updated");
@@ -186,7 +198,7 @@ export function AiCollaborationTeacherMonitor({ course, focus }: { course: Cours
   const [appliedFocusKey, setAppliedFocusKey] = useState("");
   if (focusKey !== appliedFocusKey) {
     setAppliedFocusKey(focusKey);
-    if (focus) {
+    if (focus && presentation === "workspace") {
       setSelectedStudentId(focus.studentId);
       setFocusTarget(focus.section);
     }
@@ -201,8 +213,32 @@ export function AiCollaborationTeacherMonitor({ course, focus }: { course: Cours
     return () => window.clearTimeout(timer);
   }, [focusTarget, selected]);
 
+  if (presentation !== "workspace") {
+    const chosen = rows.find((row) => row.student.id === selectedStudentId);
+    return <div className="teacher-presentation-content space-y-5" hidden={presentation === "analytics"}>
+      {presentation === "teaching" ? <TeacherPresentationActions>
+        <button aria-expanded={showWorks} data-tone="primary" onClick={() => { setShowWorks((value) => !value); setSelectedStudentId(undefined); }} type="button"><FileText size={20} />{showWorks ? "收起学生成果" : "选择学生成果"}</button>
+      </TeacherPresentationActions> : null}
+      <StageTaskPresentation course={course} />
+      <button aria-expanded={showWorks} className="min-h-11 rounded-lg border border-blue-300 bg-white px-4 py-2 text-xl font-semibold text-blue-800" onClick={() => { setShowWorks((value) => !value); setSelectedStudentId(undefined); }} type="button">{showWorks ? "收起学生成果" : "选择学生成果"}</button>
+      {showWorks ? <section aria-label="选择展示成果" className="space-y-4">
+        <label className="flex flex-wrap items-center gap-3 text-xl">展示成果
+          <select aria-label="选择展示学生成果" className="min-h-11 max-w-full rounded-lg border border-stone-300 bg-white px-3" value={selectedStudentId ?? ""} onChange={(event) => setSelectedStudentId(event.target.value || undefined)}>
+            <option value="">请选择学生成果</option>
+            {rows.filter((row) => row.artifact || row.externalVersions.length).map((row) => <option key={row.student.id} value={row.student.id}>{row.student.name} · {row.artifact?.title ?? latestExternalVersion(row.externalVersions)?.title}</option>)}
+          </select>
+        </label>
+        {!rows.some((row) => row.artifact || row.externalVersions.length) ? <p className="text-xl text-stone-600">暂无可展示的学生成果。</p> : null}
+        {chosen ? <ArtifactPreview artifact={chosen.artifact} aiEvents={[]} documentVersions={chosen.documentVersions} externalVersions={chosen.externalVersions} artifactMode={artifactMode} courseId={course.id} studentId={chosen.student.id} studentName={chosen.student.name} signals={[]} publicDisplay /> : null}
+      </section> : null}
+    </div>;
+  }
+
   return (
     <div className="classroom-stage space-y-4">
+      <TeacherPresentationActions>
+        <button aria-pressed={filter === "unsubmitted"} data-tone="primary" onClick={() => setFilter((value) => value === "unsubmitted" ? "all" : "unsubmitted")} type="button"><FileText size={20} />{filter === "unsubmitted" ? "查看全部成果" : "查看未提交学生"}</button>
+      </TeacherPresentationActions>
       <StagePageHeader
         action={(
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -219,6 +255,7 @@ export function AiCollaborationTeacherMonitor({ course, focus }: { course: Cours
         description="查看学生成果与 AI 协作进度，优先处理尚未形成成果的学生。"
         title="项目实践进度"
       />
+      <CourseStageRequirements course={course} stageKey="make" teacher />
 
       <Card className="classroom-panel p-0">
         <div className="grid min-h-[34rem] lg:grid-cols-[19rem_minmax(0,1fr)]">
@@ -285,7 +322,9 @@ function ArtifactPreview({
   studentId,
   signals,
   artifactMode,
+  publicDisplay = false,
 }: {
+  publicDisplay?: boolean;
   artifact?: ClassroomSubmission;
   studentName: string;
   aiEvents: Course["aiInteractionEvents"];
@@ -307,16 +346,16 @@ function ArtifactPreview({
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-stone-200 pb-4">
         <div><p className="text-xs font-semibold text-[var(--pbl-ai)]">{studentName} · {artifactMode === "other" ? "其他成果" : artifactMode === "python" ? "Python 代码" : artifactMode === "c" ? "C 语言代码" : "文档成果"}</p><h3 className="mt-1 text-xl font-bold text-[var(--pbl-text-strong)]">{artifactMode === "other" ? "成果协作稿与本地成果" : artifact?.title ?? "尚未保存学习成果"}</h3>{artifact ? <p className="mt-1 flex items-center gap-1 text-xs text-[var(--pbl-text-muted)]"><Clock3 size={13} />最近保存：{new Date(artifact.updatedAt).toLocaleString("zh-CN")}</p> : <p className="mt-1 text-xs text-[var(--pbl-text-muted)]">仍可查看该学生已经发生的 AI 协作过程。</p>}</div>
-        <div className="flex flex-wrap justify-end gap-2">
+        {!publicDisplay ? <div className="flex flex-wrap justify-end gap-2">
           <Pill tone="blue"><Bot size={13} />AI 主动建议 {metrics.proactiveSuggestions}</Pill>
           <Pill tone="gray"><MessageSquareText size={13} />学生对话 {metrics.dialogueRounds} 轮</Pill>
           <Pill tone={metrics.boundaryTriggers ? "red" : "green"}><ShieldAlert size={13} />边界触发 {metrics.boundaryTriggers} 次</Pill>
           {externalVersions.length ? <Pill tone={externalVersions.some((version) => version.status === "submitted") ? "green" : "gray"}>本地成果 {externalVersions.filter((version) => version.status === "submitted").length} 版</Pill> : null}
           {documentVersions?.length ? <Pill tone="green">Word 成果 {documentVersions.filter((version) => version.status === "submitted").length} 版</Pill> : null}
           <a className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:border-blue-300 hover:text-blue-700" download href={`/api/project-practice/export?courseId=${encodeURIComponent(courseId)}&studentId=${encodeURIComponent(studentId)}`}><Download size={13} />导出该生 JSON</a>
-        </div>
+        </div> : null}
       </div>
-      {signals.length ? (
+      {!publicDisplay && signals.length ? (
         <section className="mt-4 rounded-xl border border-amber-200 bg-amber-50/70 p-4" id={`practice-signal-${studentId}`}>
           <div className="flex items-center justify-between gap-3"><h4 className="flex items-center gap-2 text-sm font-bold text-amber-950"><AlertTriangle size={16} />需关注问题</h4><Pill tone="red">{signals.length} 条</Pill></div>
           <ul className="mt-2 space-y-2">{signals.map((signal) => <li className="rounded-lg bg-white/80 px-3 py-2" key={signal.id}><strong className="text-xs text-amber-950">{signal.title}</strong><p className="mt-1 text-xs leading-5 text-stone-600">{signal.summary}</p></li>)}</ul>
@@ -364,7 +403,7 @@ function ArtifactPreview({
           </div>
         </div>
       ) : null}
-      {interactionTurns.length ? (
+      {!publicDisplay ? interactionTurns.length ? (
         <div className="mt-4 rounded-xl border border-stone-200 bg-white p-4" id={`practice-conversation-${studentId}`}>
           <div className="flex items-center justify-between gap-3"><p className="flex items-center gap-2 text-sm font-bold text-stone-800"><MessageSquareText size={16} className="text-blue-600" />学生与 AI 协作对话</p><span className="text-[10px] text-stone-500">按上下文对话轮完整展示</span></div>
           <div className="mt-3 max-h-[42rem] space-y-4 overflow-auto pr-1">
@@ -402,7 +441,7 @@ function ArtifactPreview({
             ))}
           </div>
         </div>
-      ) : <div className="mt-4 rounded-xl border border-dashed border-stone-300 px-4 py-8 text-center text-sm text-stone-500">尚无学生与 AI 的协作对话。</div>}
+      ) : <div className="mt-4 rounded-xl border border-dashed border-stone-300 px-4 py-8 text-center text-sm text-stone-500">尚无学生与 AI 的协作对话。</div> : null}
     </div>
   );
 }

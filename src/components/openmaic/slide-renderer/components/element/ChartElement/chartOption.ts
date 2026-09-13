@@ -7,9 +7,10 @@ import type {
   RadarSeriesOption,
 } from 'echarts/charts';
 import type { ChartData, ChartType } from '@openmaic/dsl';
+import type { TooltipComponentOption, GridComponentOption } from 'echarts/components';
 
 type EChartOption = ComposeOption<
-  BarSeriesOption | LineSeriesOption | PieSeriesOption | ScatterSeriesOption | RadarSeriesOption
+  BarSeriesOption | LineSeriesOption | PieSeriesOption | ScatterSeriesOption | RadarSeriesOption | TooltipComponentOption | GridComponentOption
 >;
 
 export interface ChartOptionPayload {
@@ -320,33 +321,18 @@ export const getChartOption = ({
   if (type === 'scatter') {
     const series0 = data.series[0];
     if (!Array.isArray(series0)) return null;
-    const formatedData = [];
-    for (let i = 0; i < series0.length; i++) {
-      const x = series0[i];
-      const y = data.series[1]?.[i] ?? x;
-      formatedData.push([x, y]);
-    }
-
+    const points = series0.map((x, index) => ({
+      name: data.labels[index] ?? String(index + 1),
+      value: [x, data.series[1]?.[index] ?? x],
+    }));
     return {
       color: themeColors,
       textStyle,
-      xAxis: {
-        axisLine,
-        axisLabel,
-        splitLine,
-      },
-      yAxis: {
-        axisLine,
-        axisLabel,
-        splitLine,
-      },
-      series: [
-        {
-          symbolSize: 12,
-          data: formatedData,
-          type: 'scatter',
-        },
-      ],
+      grid: { left: 56, right: 32, top: 24, bottom: 52, containLabel: true },
+      tooltip: { trigger: 'item' },
+      xAxis: { type: 'value', name: data.legends[0] ?? 'X', nameLocation: 'middle', nameGap: 30, axisLine, axisLabel, splitLine },
+      yAxis: { type: 'value', name: data.legends[1] ?? 'Y', nameLocation: 'middle', nameGap: 36, axisLine, axisLabel, splitLine },
+      series: [{ symbolSize: 12, data: points, type: 'scatter' }],
     };
   }
 

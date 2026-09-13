@@ -22,52 +22,26 @@ import type {
   LaserAction,
   SpeechAction,
   PlayVideoAction,
-  WbDrawTextAction,
-  WbDrawShapeAction,
-  WbDrawChartAction,
-  WbDrawLatexAction,
-  WbDrawTableAction,
   WbDeleteAction,
-  WbDrawLineAction,
-  WbDrawCodeAction,
   WbEditCodeAction,
   WidgetHighlightAction,
   WidgetSetStateAction,
   WidgetAnnotationAction,
   WidgetRevealAction,
 } from '@openmaic/lib/types/action';
-import type { CodeLine } from '@openmaic/dsl';
-import katex from 'katex';
+import {
+  editWhiteboardCodeElement,
+  whiteboardActionToElement,
+  type WhiteboardDrawAction,
+} from '@openmaic/lib/whiteboard/projection';
 import { createLogger } from '@openmaic/lib/logger';
 
 const log = createLogger('ActionEngine');
-
-// ==================== SVG Paths for Shapes ====================
-
-const SHAPE_PATHS: Record<string, string> = {
-  rectangle: 'M 0 0 L 1000 0 L 1000 1000 L 0 1000 Z',
-  circle: 'M 500 0 A 500 500 0 1 1 499 0 Z',
-  triangle: 'M 500 0 L 1000 1000 L 0 1000 Z',
-};
 
 // ==================== Helpers ====================
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Convert raw code string to CodeLine array with unique IDs */
-function codeToLines(code: string): CodeLine[] {
-  return code.split('\n').map((content, i) => ({
-    id: `L${i + 1}`,
-    content,
-  }));
-}
-
-let lineIdCounter = 0;
-/** Generate unique line IDs for newly inserted lines */
-function generateLineIds(count: number): string[] {
-  return Array.from({ length: count }, () => `L_${++lineIdCounter}_${Date.now().toString(36)}`);
 }
 
 // ==================== ActionEngine ====================
@@ -139,19 +113,14 @@ export class ActionEngine {
       case 'wb_open':
         return this.executeWbOpen();
       case 'wb_draw_text':
-        return this.executeWbDrawText(action);
+      case 'wb_draw_image':
       case 'wb_draw_shape':
-        return this.executeWbDrawShape(action);
       case 'wb_draw_chart':
-        return this.executeWbDrawChart(action);
       case 'wb_draw_latex':
-        return this.executeWbDrawLatex(action);
       case 'wb_draw_table':
-        return this.executeWbDrawTable(action);
       case 'wb_draw_line':
-        return this.executeWbDrawLine(action as WbDrawLineAction);
       case 'wb_draw_code':
-        return this.executeWbDrawCode(action as WbDrawCodeAction);
+        return this.executeWbDraw(action);
       case 'wb_edit_code':
         return this.executeWbEditCode(action as WbEditCodeAction);
       case 'wb_clear':
@@ -375,302 +344,29 @@ export class ActionEngine {
     await this.waitForWhiteboardVisual(2000);
   }
 
-  private async executeWbDrawText(action: WbDrawTextAction): Promise<void> {
+  private async executeWbDraw(action: WhiteboardDrawAction): Promise<void> {
     const wb = this.getActiveWhiteboard();
     if (!wb.success || !wb.data) return;
 
-    const fontSize = action.fontSize ?? 18;
-    let htmlContent = action.content ?? '';
-    if (!htmlContent) return; // nothing to draw
-    if (!htmlContent.startsWith('<')) {
-      htmlContent = `<p style="font-size: ${fontSize}px;">${htmlContent}</p>`;
-    }
-
-    this.stageAPI.whiteboard.addElement(
-      {
-        id: action.elementId || '',
-        type: 'text',
-        content: htmlContent,
-        left: action.x,
-        top: action.y,
-        width: action.width ?? 400,
-        height: action.height ?? 100,
-        rotate: 0,
-        defaultFontName: 'Microsoft YaHei',
-        defaultColor: action.color ?? '#333333',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      wb.data.id,
-    );
-
-    // Wait for element fade-in animation
-    await this.waitForWhiteboardVisual(800);
-  }
-
-  private async executeWbDrawShape(action: WbDrawShapeAction): Promise<void> {
-    const wb = this.getActiveWhiteboard();
-    if (!wb.success || !wb.data) return;
-
-    this.stageAPI.whiteboard.addElement(
-      {
-        id: action.elementId || '',
-        type: 'shape',
-        viewBox: [1000, 1000] as [number, number],
-        path: SHAPE_PATHS[action.shape] ?? SHAPE_PATHS.rectangle,
-        left: action.x,
-        top: action.y,
-        width: action.width,
-        height: action.height,
-        rotate: 0,
-        fill: action.fillColor ?? '#5b9bd5',
-        fixedRatio: false,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      wb.data.id,
-    );
-
-    // Wait for element fade-in animation
-    await this.waitForWhiteboardVisual(800);
-  }
-
-  private async executeWbDrawChart(action: WbDrawChartAction): Promise<void> {
-    const wb = this.getActiveWhiteboard();
-    if (!wb.success || !wb.data) return;
-
-    this.stageAPI.whiteboard.addElement(
-      {
-        id: action.elementId || '',
-        type: 'chart',
-        left: action.x,
-        top: action.y,
-        width: action.width,
-        height: action.height,
-        rotate: 0,
-        chartType: action.chartType,
-        data: action.data,
-        themeColors: action.themeColors ?? ['#5b9bd5', '#ed7d31', '#a5a5a5', '#ffc000', '#4472c4'],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      wb.data.id,
-    );
-
-    await this.waitForWhiteboardVisual(800);
-  }
-
-  private async executeWbDrawLatex(action: WbDrawLatexAction): Promise<void> {
-    const wb = this.getActiveWhiteboard();
-    if (!wb.success || !wb.data) return;
-
-    try {
-      const html = katex.renderToString(action.latex, {
-        throwOnError: false,
-        displayMode: true,
-        output: 'html',
-      });
-
-      this.stageAPI.whiteboard.addElement(
-        {
-          id: action.elementId || '',
-          type: 'latex',
-          left: action.x,
-          top: action.y,
-          width: action.width ?? 400,
-          height: action.height ?? 80,
-          rotate: 0,
-          latex: action.latex,
-          html,
-          color: action.color ?? '#000000',
-          fixedRatio: true,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
-        wb.data.id,
-      );
-    } catch (err) {
-      log.warn(`Failed to render latex "${action.latex}":`, err);
-      return;
-    }
-
-    await this.waitForWhiteboardVisual(800);
-  }
-
-  private async executeWbDrawTable(action: WbDrawTableAction): Promise<void> {
-    const wb = this.getActiveWhiteboard();
-    if (!wb.success || !wb.data) return;
-
-    const rows = action.data.length;
-    const cols = rows > 0 ? action.data[0].length : 0;
-    if (rows === 0 || cols === 0) return;
-
-    // Build colWidths: equal distribution
-    const colWidths = Array(cols).fill(1 / cols);
-
-    // Build TableCell[][] from string[][]
-    let cellId = 0;
-    const tableData = action.data.map((row) =>
-      row.map((text) => ({
-        id: `cell_${cellId++}`,
-        colspan: 1,
-        rowspan: 1,
-        text,
-      })),
-    );
-
-    this.stageAPI.whiteboard.addElement(
-      {
-        id: action.elementId || '',
-        type: 'table',
-        left: action.x,
-        top: action.y,
-        width: action.width,
-        height: action.height,
-        rotate: 0,
-        colWidths,
-        cellMinHeight: 36,
-        data: tableData,
-        outline: action.outline ?? {
-          width: 2,
-          style: 'solid',
-          color: '#eeece1',
-        },
-        theme: action.theme
-          ? {
-              color: action.theme.color,
-              rowHeader: true,
-              rowFooter: false,
-              colHeader: false,
-              colFooter: false,
-            }
-          : undefined,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      wb.data.id,
-    );
-
-    await this.waitForWhiteboardVisual(800);
-  }
-
-  private async executeWbDrawLine(action: WbDrawLineAction): Promise<void> {
-    const wb = this.getActiveWhiteboard();
-    if (!wb.success || !wb.data) return;
-
-    // Calculate bounding box — left/top is the minimum of start/end coordinates
-    const left = Math.min(action.startX, action.endX);
-    const top = Math.min(action.startY, action.endY);
-
-    // Convert absolute coordinates to relative coordinates (relative to left/top)
-    const start: [number, number] = [action.startX - left, action.startY - top];
-    const end: [number, number] = [action.endX - left, action.endY - top];
-
-    this.stageAPI.whiteboard.addElement(
-      {
-        id: action.elementId || '',
-        type: 'line',
-        left,
-        top,
-        width: action.width ?? 2,
-        start,
-        end,
-        style: action.style ?? 'solid',
-        color: action.color ?? '#333333',
-        points: action.points ?? ['', ''],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      wb.data.id,
-    );
-
-    // Wait for element fade-in animation
-    await this.waitForWhiteboardVisual(800);
-  }
-
-  private async executeWbDrawCode(action: WbDrawCodeAction): Promise<void> {
-    const wb = this.getActiveWhiteboard();
-    if (!wb.success || !wb.data) return;
-
-    const lines = codeToLines(action.code);
-
-    this.stageAPI.whiteboard.addElement(
-      {
-        id: action.elementId || '',
-        type: 'code',
-        language: action.language,
-        lines,
-        fileName: action.fileName,
-        showLineNumbers: true,
-        fontSize: 14,
-        left: action.x,
-        top: action.y,
-        width: action.width ?? 500,
-        height: action.height ?? 300,
-        rotate: 0,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      wb.data.id,
-    );
-
-    // Wait for typing animation: base 800ms + 50ms per line, capped at 3s
-    const animMs = Math.min(800 + lines.length * 50, 3000);
+    const element = whiteboardActionToElement(action);
+    if (!element) return;
+    // The Stage API resolves attachment points against the current native
+    // elements and replaces an existing stable element ID in place.
+    this.stageAPI.whiteboard.addElement(element, wb.data.id);
+    const animMs = element.type === 'code'
+      ? Math.min(800 + element.lines.length * 50, 3000)
+      : 800;
     await this.waitForWhiteboardVisual(animMs);
   }
 
   private async executeWbEditCode(action: WbEditCodeAction): Promise<void> {
     const wb = this.getActiveWhiteboard();
     if (!wb.success || !wb.data) return;
-
-    const elementResult = this.stageAPI.whiteboard.getElement(action.elementId, wb.data.id);
-    if (!elementResult.success || !elementResult.data) return;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const element = elementResult.data as any;
-    if (element.type !== 'code') return;
-
-    let lines: CodeLine[] = [...element.lines];
-    const newContentLines = action.content ? action.content.split('\n') : [];
-    const newLineIds = generateLineIds(newContentLines.length);
-
-    switch (action.operation) {
-      case 'insert_after': {
-        const idx = lines.findIndex((l) => l.id === action.lineId);
-        if (idx === -1) return;
-        const newLines = newContentLines.map((content, i) => ({ id: newLineIds[i], content }));
-        lines.splice(idx + 1, 0, ...newLines);
-        break;
-      }
-      case 'insert_before': {
-        const idx = lines.findIndex((l) => l.id === action.lineId);
-        if (idx === -1) return;
-        const newLines = newContentLines.map((content, i) => ({ id: newLineIds[i], content }));
-        lines.splice(idx, 0, ...newLines);
-        break;
-      }
-      case 'delete_lines': {
-        if (!action.lineIds?.length) return;
-        const deleteSet = new Set(action.lineIds);
-        lines = lines.filter((l) => !deleteSet.has(l.id));
-        break;
-      }
-      case 'replace_lines': {
-        if (!action.lineIds?.length) return;
-        const replaceIds = action.lineIds;
-        const firstIdx = lines.findIndex((l) => l.id === replaceIds[0]);
-        if (firstIdx === -1) return;
-        const deleteSet = new Set(replaceIds);
-        lines = lines.filter((l) => !deleteSet.has(l.id));
-        const newLines = newContentLines.map((content, i) => ({
-          id: i < replaceIds.length ? replaceIds[i] : newLineIds[i],
-          content,
-        }));
-        lines.splice(firstIdx, 0, ...newLines);
-        break;
-      }
-    }
-
-    this.stageAPI.whiteboard.updateElement(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { ...element, lines } as any,
-      wb.data.id,
-    );
-
-    // Wait for edit animation
+    const result = this.stageAPI.whiteboard.getElement(action.elementId, wb.data.id);
+    if (!result.success || result.data?.type !== 'code') return;
+    const updated = editWhiteboardCodeElement(result.data, action);
+    if (updated === result.data) return;
+    this.stageAPI.whiteboard.updateElement(updated, wb.data.id);
     await this.waitForWhiteboardVisual(600);
   }
 

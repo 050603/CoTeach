@@ -26,15 +26,25 @@ type I18nContextType = {
 
 const I18nContext = createContext<I18nContextType | undefined>(undefined);
 
-export function I18nProvider({ children }: { children: ReactNode }) {
+export function I18nProvider({
+  children,
+  locale: fixedLocale,
+}: {
+  children: ReactNode;
+  locale?: Locale;
+}) {
   const { t, i18n } = useTranslation();
 
-  const locale = (i18n.language || defaultLocale) as Locale;
+  const locale = fixedLocale ?? (i18n.language || defaultLocale) as Locale;
 
   // Detect language after hydration to avoid SSR mismatch.
   // i18next handles fallback automatically: if the detected language
   // has no matching JSON file, it falls back to fallbackLng.
   useEffect(() => {
+    if (fixedLocale) {
+      if (fixedLocale !== i18n.language) void i18n.changeLanguage(fixedLocale);
+      return;
+    }
     try {
       const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
       const raw = stored || navigator.language || defaultLocale;
@@ -43,9 +53,10 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     } catch {
       // localStorage unavailable, keep default
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fixedLocale]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setLocale = (newLocale: Locale) => {
+    if (fixedLocale) return;
     i18n.changeLanguage(newLocale);
     try {
       localStorage.setItem(LOCALE_STORAGE_KEY, newLocale);

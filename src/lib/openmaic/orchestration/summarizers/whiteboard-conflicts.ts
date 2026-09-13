@@ -22,6 +22,7 @@ interface BBox {
   y: number;
   w: number;
   h: number;
+  groupId?: string;
 }
 
 interface LineSeg {
@@ -31,6 +32,7 @@ interface LineSeg {
   y1: number;
   x2: number;
   y2: number;
+  targets: string[];
 }
 
 function stripHtml(html: string): string {
@@ -83,6 +85,7 @@ function toBBox(el: any): BBox | null {
     y: el.top,
     w: el.width,
     h: el.height,
+    groupId: el.groupId,
   };
 }
 
@@ -102,6 +105,7 @@ function toLineSeg(el: any): LineSeg | null {
     y1: ly + sy,
     x2: lx + ex,
     y2: ly + ey,
+    targets: [el.whiteboard?.action?.startAnchor?.elementId, el.whiteboard?.action?.endAnchor?.elementId].filter((id): id is string => typeof id === 'string'),
   };
 }
 
@@ -197,6 +201,12 @@ export function buildWhiteboardConflicts(elements: any[]): string {
   for (let i = 0; i < bboxes.length; i++) {
     for (let j = i + 1; j < bboxes.length; j++) {
       const ratio = relativeOverlap(bboxes[i], bboxes[j]);
+      // A contained label is intentional; moving it away breaks the diagram.
+      const a = bboxes[i];
+      const b = bboxes[j];
+      const containsLabel = (shape: BBox, label: BBox) => shape.type === 'shape' && ['text', 'latex'].includes(label.type)
+        && label.x >= shape.x && label.y >= shape.y && label.x + label.w <= shape.x + shape.w && label.y + label.h <= shape.y + shape.h;
+      if (containsLabel(a, b) || containsLabel(b, a)) continue;
       if (ratio >= OVERLAP_THRESHOLD) {
         conflicts.push(
           `OVERLAP: ${bboxes[i].label}${shortId(bboxes[i].id)} and ${bboxes[j].label}${shortId(bboxes[j].id)} share ${Math.round(ratio * 100)}% of the smaller one's area — they sit on top of each other.`,
@@ -208,6 +218,7 @@ export function buildWhiteboardConflicts(elements: any[]): string {
   // Lines crossing element bboxes
   for (const line of lines) {
     for (const b of bboxes) {
+      if (line.targets.includes(b.id)) continue;
       if (lineCrossesBBox(line, b)) {
         conflicts.push(
           `LINE CROSSES: ${line.label}${shortId(line.id)} from (${Math.round(line.x1)},${Math.round(line.y1)}) to (${Math.round(line.x2)},${Math.round(line.y2)}) passes through ${b.label}${shortId(b.id)} — the line is drawn over content.`,
@@ -236,7 +247,7 @@ export function buildWhiteboardConflicts(elements: any[]): string {
 
   const lines_out = conflicts.map((c) => `  - ${c}`).join('\n');
   return `\n## ⚠ Layout Conflicts Detected (computed from current whiteboard JSON)
-The following geometric conflicts exist on the board RIGHT NOW. Each entry is a real visible problem on the current board. You MUST address these before adding new content — either wb_delete one of the conflicting elements, or wb_clear and start fresh:
+The following geometric conflicts need inspection. Preserve valid existing teaching content. Repair the affected positions or connections using stable elementIds and anchors; clear only for an intentional next page after explaining the current page:
 ${lines_out}
 `;
 }

@@ -8,6 +8,8 @@ import type {
   WorkPlanItem,
 } from "@/lib/session/types";
 import { callLLM, parseLLMJson } from "@/lib/llm/client";
+import { buildCourseStageRequirementsContext } from "@/lib/resource-package/course-requirements";
+import { confirmedCourseRubric } from "@/lib/evaluation/course-rubric";
 import { throwIfAborted } from "@/lib/openmaic/generation/generation-retry";
 import { buildStagePolicyPrompt } from "@/lib/companion/stage-policy";
 import {
@@ -359,6 +361,8 @@ export async function buildShowcaseCoach(input: {
     stageSystemPrompt("showcase"),
     `请为以下学生的个人成果汇报给出教练建议，覆盖作品质量、过程证据、独立决策和 AI 使用边界。
 
+${buildCourseStageRequirementsContext(course, "showcase")}
+
 课程名称：${course.name}
 个人项目：${group.name}
 选题：${group.topic || "未填写"}
@@ -446,7 +450,8 @@ export async function buildReflectionEvidencePrompts(input: {
     .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
     .slice(0, 12);
 
-  const context = `课程名称：${course.name}
+  const context = `${buildCourseStageRequirementsContext(course, "reflection")}
+课程名称：${course.name}
 学生姓名：${student?.name ?? "未识别学生"}
 个人项目：${group?.name ?? "（项目空间待同步）"}
 选题：${group?.topic ?? "（无）"}
@@ -580,7 +585,7 @@ export async function buildReflectionClassSummary(
 课程背景：${course.name}（${course.subject}，${course.grade}）
 有效反思数：${entries.length}/${course.students.length}
 触发方式：${trigger}
-字段含义：learningReflection 同时回答“主要收获”和“常见困难”；systemReflection 同时回答“AI 协作看法”和“下一轮课程改进”。
+字段含义：learningReflection 是课程学习反思（资源包课程保留逐题题干与回答），可涉及收获、困难、AI协作与改进；systemReflection 是独立系统体验意见，可能未提交。scores 缺失表示未提交体验问卷，不得据此推断分数或课程反思缺失。必须按实际题目含义分析，不能把所有题目都当成固定旧问卷。
 
 重要约束：
 1. 不得输出、推断或改写学生姓名；只能使用输入中的临时 studentId。
@@ -1481,10 +1486,14 @@ export async function generateLiveEvaluation(input: {
   throwIfAborted(opts.abortSignal);
   const { course, group, teacherNotes } = input;
   const uploads = (course.uploads ?? []).filter((u) => u.groupId === group.id);
-  const submission = (course.submissions ?? []).find(
-    (s) => s.groupId === group.id && s.type === "document",
-  );
-  const documentText = submission?.content ? plainText(submission.content).slice(0, 2000) : "";
+  const studentIds = new Set(group.members.map((member) => member.studentId));
+  const finalDocument = (course.projectDocumentVersions ?? []).filter((version) => studentIds.has(version.studentId) && version.status === "submitted" && version.stageKey === "make")
+    .sort((left, right) => Date.parse(right.submittedAt ?? right.createdAt) - Date.parse(left.submittedAt ?? left.createdAt))[0];
+  const rubric = confirmedCourseRubric(course);
+  const submission = (course.submissions ?? []).filter((s) => s.groupId === group.id && s.type === "document" && (!rubric || s.stageKey === "make" && Boolean(s.submittedAt)))
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+  const documentText = plainText(finalDocument?.sourceHtml ?? submission?.content ?? "").slice(0, 6000);
+  if (rubric && !documentText.trim() && !teacherNotes?.trim()) throw new Error("当前缺少可读取的个人成果正文或教师观察，请先补充教师点评中的作品证据，再生成 AI 评分建议。");
   const rubricDimensions = getShowcaseRubricDimensions(course);
 
   const llmResult = await callLLMForJson<{
@@ -1499,6 +1508,8 @@ export async function generateLiveEvaluation(input: {
     stageSystemPrompt("showcase"),
     `请为以下学生的个人项目最终汇报生成实时评价建议。必须严格按照“课程评分维度”逐项返回，不要新增、合并或改名维度。
 
+${buildCourseStageRequirementsContext(course, "showcase")}
+
 课程名称：${course.name}
 个人项目：${group.name}
 选题：${group.topic || "未填写"}
@@ -1506,7 +1517,8 @@ export async function generateLiveEvaluation(input: {
 
 个人项目材料：
 - 上传文件：${uploads.map((u) => `${u.title}（${u.fileType}）`).join("、") || "无"}
-- 方案文档（截断到 2000 字）：${documentText || "无"}
+- 已提交成果正文（最新版本，最多 6000 字）：${documentText || "无可读取的正文"}
+- 成果版本：${finalDocument?.id ?? submission?.id ?? "无"}
 
 教师现场速记：${teacherNotes || "（无）"}
 
@@ -1523,6 +1535,7 @@ ${rubricDimensions
 2. suggestedScore：每维度 0-100 分，必须是整数。
 3. rationale：每维度 1 句话评分理由，必须结合学生材料或教师现场速记。
 4. overallComment：1 段 50-100 字总体评价。
+5. 上传文件名不代表已读取其内容。只能依据上方实际正文与教师观察评分；存在证据缺口时须在对应 rationale 中明确说明，不得捏造作品细节或把使用 AI 的次数当作质量。
 
 仅返回 JSON：{ "dimensions": [{ "dimensionId": "string", "name": "string", "suggestedScore": 80, "rationale": "string" }], "overallComment": "string" }`,
     { abortSignal: opts.abortSignal },
@@ -1544,7 +1557,7 @@ ${rubricDimensions
 }
 
 function getShowcaseRubricDimensions(course: Course): EvaluationDimension[] {
-  const dimensions = course.content.evaluationPlan.dimensions ?? [];
+  const dimensions = confirmedCourseRubric(course)?.dimensions ?? course.content.evaluationPlan.dimensions ?? [];
   if (!dimensions.length) {
     return invalidAiResult("实时汇报评价");
   }
@@ -1567,7 +1580,7 @@ function normalizeLiveEvaluationDimensions(
     if (!aiDimension) {
       return invalidAiResult(`实时汇报评价：缺少维度「${rubricDimension.name}」`);
     }
-    if (typeof aiDimension.suggestedScore !== "number" || !aiDimension.rationale) {
+    if (typeof aiDimension.suggestedScore !== "number" || !Number.isFinite(aiDimension.suggestedScore) || aiDimension.suggestedScore < 0 || aiDimension.suggestedScore > 100 || !aiDimension.rationale) {
       return invalidAiResult(`实时汇报评价：维度「${rubricDimension.name}」结构不完整`);
     }
     return {

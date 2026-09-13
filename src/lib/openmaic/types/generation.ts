@@ -48,6 +48,8 @@ export interface UploadedDocument {
  * All details (topic, duration, style, etc.) should be included in the requirement text
  */
 export interface UserRequirements {
+  /** Private source evidence used only during authoring, never a runtime instruction. */
+  teachingSourceContext?: string;
   requirement: string; // Single free-form text for all user input
   userNickname?: string; // Student nickname for personalization
   userBio?: string; // Student background for personalization
@@ -200,6 +202,8 @@ export type PblActivityCatalogEntry = {
  * Gives AI more freedom, only requiring intent description and key points
  */
 export interface SceneOutline {
+  teachingBrief?: import("@/lib/course-quality-review/types").TeachingBrief;
+  visualPlan?: import("@openmaic/lib/generation/slide-visual-plan").SlideVisualPlan;
   id: string;
   type: 'slide' | 'quiz' | 'interactive' | 'pbl';
   title: string;

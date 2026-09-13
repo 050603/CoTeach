@@ -25,6 +25,9 @@ export interface SlimToolResult {
      */
     html?: string | null;
     editCount?: number;
+    /** Whiteboard success marker and counts; never persist full board snapshots here. */
+    whiteboardPatch?: { boardId?: string; steps: { type?: string }[] } | null;
+    error?: string;
   };
 }
 
@@ -79,6 +82,17 @@ function slimResult(result: unknown): SlimToolResult | undefined {
     else if (typeof dh === 'string') details.html = dh.length > 0 ? '…' : '';
     const ec = (d as { editCount?: unknown }).editCount;
     if (typeof ec === 'number') details.editCount = ec;
+    const boardPatch = (d as { whiteboardPatch?: unknown }).whiteboardPatch;
+    if (boardPatch === null) details.whiteboardPatch = null;
+    else if (boardPatch && typeof boardPatch === 'object') {
+      const board = boardPatch as { boardId?: unknown; steps?: unknown };
+      details.whiteboardPatch = {
+        ...(typeof board.boardId === 'string' ? { boardId: board.boardId } : {}),
+        steps: Array.isArray(board.steps) ? board.steps.map((action) => ({ type: (action as AnyPart)?.type as string | undefined })) : [],
+      };
+    }
+    const error = (d as { error?: unknown }).error;
+    if (typeof error === 'string') details.error = error;
     if (Array.isArray(d.actions)) {
       details.actions = d.actions.map((a) => ({
         type: (a as AnyPart)?.type as string | undefined,

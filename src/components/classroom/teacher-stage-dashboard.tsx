@@ -179,7 +179,7 @@ function dashboardAdviceRevision(course: Course, stageKey: string): string {
   return [course.id, stageKey, course.updatedAt, lastSignal?.lastDetectedAt, lastEvent?.occurredAt, course.reflections?.length, course.showcasePresentations?.length, course.projectDocumentVersions?.length, course.projectPdfVersions?.length].join(":");
 }
 
-function RealtimeTeachingActions({ course, stageKey }: { course: Course; stageKey: string }) {
+export function RealtimeTeachingActions({ course, stageKey }: { course: Course; stageKey: string }) {
   const courseRef = useRef(course);
   const requestSequence = useRef(0);
   const [advice, setAdvice] = useState<TeacherDashboardAdvice>();

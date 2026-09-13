@@ -1,5 +1,9 @@
 "use client";
 
+import { CourseReflectionReview } from "./course-reflection-review";
+import type { TeacherPresentationMode } from "@/lib/classroom/presentation";
+import { ReflectionQuestionPresentation } from "./reflection-question-presentation";
+import { TeacherPresentationActions } from "@/components/classroom/teacher-presentation-actions";
 import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
@@ -41,8 +45,10 @@ import {
   reflectionClassSummaryIsStale,
 } from "@/lib/reflection-summary";
 import { StagePageHeader } from "@/components/classroom/classroom-ui";
+import { CourseStageRequirements } from "@/components/classroom/course-stage-requirements";
 import { ReflectionWordCloud } from "./reflection-word-cloud";
 import type { TeacherStageFocus } from "@/lib/classroom/teacher-dashboard-metrics";
+import { buildReflectionClassSummary } from "@/lib/teaching-ai/client-api";
 
 const SCORE_FIELDS: Array<{
   key: "aiHelpfulness" | "systemUsability" | "reuseIntention";
@@ -128,10 +134,18 @@ function InsightCard({
   );
 }
 
-export function NewReflectionTeacherView({ course, focus }: { course: Course; focus?: Extract<TeacherStageFocus, { stageKey: "reflection" }> }) {
+function LegacyReflectionTeacherView({ course, focus, presentation = "workspace" }: { course: Course; presentation?: TeacherPresentationMode; focus?: Extract<TeacherStageFocus, { stageKey: "reflection" }> }) {
   const [selectedStudentId, setSelectedStudentId] = useState<string>();
   const [selectedTerm, setSelectedTerm] = useState<{ category: ReflectionSummaryCategory; term: ReflectionSummaryTerm }>();
+  const displayContext = `${course.id}:${course.currentStageIndex}:${presentation}`;
+  const [previousPresentation, setPreviousPresentation] = useState(displayContext);
+  if (previousPresentation !== displayContext) {
+    setPreviousPresentation(displayContext);
+    setSelectedStudentId(undefined);
+    setSelectedTerm(undefined);
+  }
   const [localSummary, setLocalSummary] = useState<{ courseId: string; support: AiSupportRecord }>();
+  const [summaryRequest, setSummaryRequest] = useState<{ courseId: string; pending: boolean; error?: string }>();
   const [studentQuery, setStudentQuery] = useState("");
   const [studentFilter, setStudentFilter] = useState<"all" | "pending" | "low-score">("all");
   const latest = useMemo(() => latestReflectionByStudent(course.reflections), [course.reflections]);
@@ -163,7 +177,7 @@ export function NewReflectionTeacherView({ course, focus }: { course: Course; fo
   const [appliedFocusKey, setAppliedFocusKey] = useState("");
   if (focusKey !== appliedFocusKey) {
     setAppliedFocusKey(focusKey);
-    if (focus) {
+    if (focus && presentation === "workspace") {
       setStudentFilter(focus.filter);
       if (focusedStudentId) {
         if (focusedStudent) setStudentQuery(focusedStudent.name);
@@ -209,13 +223,41 @@ export function NewReflectionTeacherView({ course, focus }: { course: Course; fo
   const selectedReflection = selectedStudent ? latest.get(selectedStudent.id) : undefined;
   const selectedSurvey = surveyFor(selectedReflection);
 
+  async function refreshSummary() {
+    if (summaryRequest?.courseId === course.id && summaryRequest.pending) return;
+    setSummaryRequest({ courseId: course.id, pending: true });
+    try {
+      const support = await buildReflectionClassSummary(course.id, course.status === "finished" ? "course-finished" : "manual");
+      setLocalSummary({ courseId: course.id, support });
+      window.dispatchEvent(new CustomEvent("openpbl:reflection-summary-updated", { detail: { courseId: course.id, support } }));
+      setSummaryRequest({ courseId: course.id, pending: false });
+    } catch (error) {
+      setSummaryRequest({ courseId: course.id, pending: false, error: error instanceof Error ? error.message : "词云更新失败，请稍后重试。" });
+    }
+  }
+
+  if (presentation !== "workspace") {
+    return <ReflectionQuestionPresentation
+      course={course}
+      summary={summary}
+      presentation={presentation}
+      onRefreshSummary={() => void refreshSummary()}
+      summaryPending={summaryRequest?.courseId === course.id && summaryRequest.pending}
+      summaryError={summaryRequest?.courseId === course.id ? summaryRequest.error : undefined}
+    />;
+  }
+
   return (
     <div className="classroom-stage space-y-5">
+      <TeacherPresentationActions>
+        <button data-tone="primary" disabled={!submittedCount} onClick={() => { window.location.href = exportHref; }} type="button"><Download size={20} />导出反思</button>
+      </TeacherPresentationActions>
       <StagePageHeader
         action={<PrimaryButton disabled={!submittedCount} onClick={() => { window.location.href = exportHref; }} size="sm" tone="blue"><Download size={15} />导出 CSV</PrimaryButton>}
         status={<SummaryBadge course={course} summary={summary} />}
         title="学习反思与课程洞察"
       />
+      <CourseStageRequirements course={course} stageKey="reflection" teacher />
 
       <section className="grid gap-4 md:grid-cols-2" aria-label="AI 反思洞察">
         {categories.map((category) => (
@@ -408,4 +450,9 @@ function SurveyDetail({ survey }: { survey: ReflectionSurveyResponseV1 }) {
       <div className="lg:col-span-2"><ScoreChips survey={survey} /></div>
     </div>
   );
+}
+
+export function NewReflectionTeacherView(props: { course: Course; presentation?: TeacherPresentationMode; focus?: Extract<TeacherStageFocus, { stageKey: "reflection" }> }) {
+  const set = props.course.content.stagePlan?.reflectionQuestionSet;
+  return set?.questions.length ? <CourseReflectionReview key={`${props.course.id}:${set.id}:${set.version}`} course={props.course} presentation={props.presentation} /> : <LegacyReflectionTeacherView {...props} />;
 }

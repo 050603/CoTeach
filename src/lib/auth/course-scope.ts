@@ -1,3 +1,4 @@
+import { withoutPrivatePackageContent } from "@/lib/resource-package/privacy";
 import type { AuthClaims } from "@/lib/auth/session";
 import type { Course } from "@/lib/session/types";
 
@@ -19,6 +20,7 @@ export function scopeCourseForClaims(course: Course, claims: AuthClaims): Course
 
   return {
     ...course,
+    content: withoutPrivatePackageContent(course.content),
     stages,
     aiLearningProgress: studentId && course.aiLearningProgress?.[studentId]
       ? { [studentId]: course.aiLearningProgress[studentId] }

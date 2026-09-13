@@ -1051,6 +1051,9 @@ export default function TeacherSettingsPage() {
 
   const selectedLlmProvider = providers.find((provider) => provider.id === selectedLlmId) ?? null;
   const selectedModalityProvider = providers.find((provider) => provider.id === expandedId) ?? null;
+  const selectedProviderName = activeTab === "llm"
+    ? selectedLlmProvider?.name
+    : selectedModalityProvider?.name;
   const configuredProvidersCount = providers.filter((provider) => {
     const saved = savedConfigs[configKey(currentTab.section, provider.id)];
     return saved?.hasApiKey || saved?.enabled !== undefined;
@@ -1105,82 +1108,89 @@ export default function TeacherSettingsPage() {
       <TeacherProfilePanel/>
       <SurveyKeywordSettings/>
       <section className="mb-5 border-t border-[var(--pbl-border)] pt-7" aria-labelledby="ai-service-settings-heading"><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">教学能力配置</p><h2 id="ai-service-settings-heading" className="mt-2 text-xl font-semibold text-[var(--pbl-text-strong)]">AI 服务设置</h2><p className="mt-2 text-sm leading-6 text-[var(--pbl-text-muted)]">连接教学所需的模型与音视频服务，管理配置并验证可用性。</p></section>
-      <div className="pbl-settings-tabs mb-5 overflow-hidden rounded-[14px] border border-stone-200 bg-white">
-        <div className="flex items-center gap-3 border-b border-stone-200 px-3 py-3 sm:px-4">
-          <h2 className="min-w-0 truncate text-lg font-bold text-stone-900 sm:text-xl">模型与服务</h2>
-        </div>
-
-        <nav aria-label="AI 服务类型" className="overflow-x-auto p-2">
-            <div className="grid min-w-[880px] grid-cols-9 gap-1">
-              {TABS.map((tab) => {
-                const Icon = tab.icon;
-                const active = activeTab === tab.key;
-                const tabProviders = getProvidersForTab(tab.key);
-                const tabSection = tab.section;
-                const tabConfigured = tabProviders.filter((p) => {
-                  const saved = savedConfigs[configKey(tabSection, p.id)];
-                  return saved?.hasApiKey || saved?.enabled !== undefined;
-                }).length;
-                return (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    aria-current={active ? "page" : undefined}
-                    onClick={() => handleTabChange(tab.key)}
-                    className={cn(
-                      "inline-flex h-10 min-w-0 items-center justify-center gap-2 rounded-[8px] px-3 text-sm font-bold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--pbl-teacher)]",
-                      active
-                        ? "bg-[var(--pbl-teacher)] text-white"
-                        : "text-stone-500 hover:bg-stone-100 hover:text-stone-800",
-                    )}
-                  >
-                    <Icon size={16} className="shrink-0" />
-                    <span className="truncate">{tab.shortLabel}</span>
-                    {tabConfigured > 0 ? (
-                      <span className={cn(
-                        "inline-flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-bold",
-                        active
-                          ? "bg-white/20 text-white"
-                          : "bg-[var(--pbl-success-soft)] text-[var(--pbl-success)]",
-                      )}>
-                        {tabConfigured}
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
-            </div>
-        </nav>
-      </div>
-
       <ThemeProvider>
         <I18nProvider>
           <ServerProvidersInit />
+          <div className="pbl-settings-workbench mb-8 min-w-0 overflow-hidden rounded-[14px] border border-stone-200 bg-white lg:grid lg:grid-cols-[224px_minmax(0,1fr)]">
+            <aside className="min-w-0 border-b border-stone-200 bg-stone-50/70 lg:border-b-0 lg:border-r">
+              <div className="border-b border-stone-200 px-4 py-4">
+                <p className="text-[11px] font-semibold tracking-widest text-stone-500">服务类型</p>
+                <h3 className="mt-1 text-base font-bold text-stone-900">模型与能力</h3>
+              </div>
+              <nav aria-label="AI 服务类型" className="flex gap-1 overflow-x-auto p-2 lg:flex-col lg:overflow-visible">
+                {TABS.map((tab) => {
+                  const Icon = tab.icon;
+                  const active = activeTab === tab.key;
+                  const tabProviders = getProvidersForTab(tab.key);
+                  const tabConfigured = tabProviders.filter((provider) => {
+                    const saved = savedConfigs[configKey(tab.section, provider.id)];
+                    return saved?.hasApiKey || saved?.enabled !== undefined;
+                  }).length;
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      aria-current={active ? "page" : undefined}
+                      onClick={() => handleTabChange(tab.key)}
+                      className={cn(
+                        "inline-flex min-h-11 min-w-[132px] items-center gap-2.5 rounded-[8px] px-3 text-left text-sm font-semibold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--pbl-teacher)] lg:min-w-0",
+                        active
+                          ? "bg-[var(--pbl-teacher)] text-white"
+                          : "text-stone-600 hover:bg-white hover:text-stone-950",
+                      )}
+                    >
+                      <Icon size={16} className="shrink-0" />
+                      <span className="min-w-0 flex-1 truncate">{tab.label}</span>
+                      {tabConfigured > 0 ? (
+                        <span className={cn(
+                          "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-bold",
+                          active
+                            ? "bg-white/20 text-white"
+                            : "bg-[var(--pbl-success-soft)] text-[var(--pbl-success)]",
+                        )}>
+                          {tabConfigured}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </nav>
+            </aside>
 
-          <div className="min-w-0">
             <section className="min-w-0">
-              <div className="mb-4 flex min-h-8 items-center justify-between gap-3">
-                <h2 className="truncate text-lg font-bold text-stone-900 sm:text-xl">{tabCopy.title}</h2>
+              <header className="flex min-h-[73px] flex-wrap items-center justify-between gap-3 border-b border-stone-200 px-4 py-3 sm:px-5">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2 text-[11px] font-semibold text-stone-500">
+                    <span>服务类型</span>
+                    <span aria-hidden="true">/</span>
+                    <span className="truncate text-[var(--pbl-teacher)]">{tabCopy.title}</span>
+                    {selectedProviderName ? (
+                      <><span aria-hidden="true">/</span><span className="truncate">{selectedProviderName}</span></>
+                    ) : null}
+                  </div>
+                  <h2 className="mt-1 truncate text-lg font-bold text-stone-950">{tabCopy.title}</h2>
+                </div>
                 {activeTab !== "agent-voice" && activeTab !== "knowledge-tutor" ? (
                   <span className="shrink-0 text-xs font-medium tabular-nums text-stone-500">
                     {configuredProvidersCount}/{providers.length} 已配置
                   </span>
                 ) : null}
-              </div>
+              </header>
 
-              {configLoading ? (
-                <div className="mb-4 inline-flex items-center gap-2 rounded-[6px] bg-stone-100 px-3 py-2 text-sm font-semibold text-stone-500">
-                  <Loader2 size={16} className="animate-spin" />
-                  正在读取服务端配置
-                </div>
-              ) : null}
+              <div className="min-w-0 p-3 sm:p-4">
+                {configLoading ? (
+                  <div className="mb-4 inline-flex items-center gap-2 rounded-[6px] bg-stone-100 px-3 py-2 text-sm font-semibold text-stone-500">
+                    <Loader2 size={16} className="animate-spin" />
+                    正在读取服务端配置
+                  </div>
+                ) : null}
 
               {activeTab === "knowledge-tutor" ? (
                 <KnowledgeTutorConfig />
               ) : activeTab === "agent-voice" ? (
                 <AgentVoiceConfig />
               ) : activeTab === "llm" ? (
-                <div className="grid items-start gap-4 lg:grid-cols-[304px_minmax(0,1fr)]">
+                <div className="grid items-start gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
                   <ProviderList
                     providers={filteredProviders}
                     totalCount={providers.length}
@@ -1224,7 +1234,7 @@ export default function TeacherSettingsPage() {
                   )}
                 </div>
               ) : (
-                <div className="grid items-start gap-4 lg:grid-cols-[304px_minmax(0,1fr)]">
+                <div className="grid items-start gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
                   <ProviderList
                     providers={filteredProviders}
                     totalCount={providers.length}
@@ -1271,6 +1281,7 @@ export default function TeacherSettingsPage() {
                   )}
                 </div>
               )}
+              </div>
             </section>
           </div>
         </I18nProvider>
@@ -1330,6 +1341,9 @@ function ProviderEditor({
         <div className="flex min-w-0 items-center gap-3">
           <ProviderLogo icon={provider.icon} name={provider.name} />
           <div className="min-w-0">
+            <p className="mb-0.5 text-[10px] font-semibold tracking-widest text-stone-500">
+              连接与模型
+            </p>
             <h3 className="truncate text-base font-bold text-stone-950" title={provider.name}>
               {provider.name}
             </h3>
@@ -1380,7 +1394,10 @@ function ProviderList({
     <aside className="pbl-settings-provider-list min-w-0 overflow-hidden rounded-[12px] border border-stone-200 bg-white lg:sticky lg:top-20">
       <div className="border-b border-stone-200 bg-stone-50/70 p-3">
         <div className="mb-2.5 flex items-center justify-between gap-3 px-1">
-          <h3 className="text-sm font-bold text-stone-800">服务商</h3>
+          <div>
+            <p className="text-[10px] font-semibold tracking-widest text-stone-500">服务商与 API</p>
+            <h3 className="mt-0.5 text-sm font-bold text-stone-800">选择接入服务</h3>
+          </div>
           <span className="shrink-0 text-xs tabular-nums text-stone-500">
             {providers.length === totalCount ? totalCount : `${providers.length}/${totalCount}`}
           </span>

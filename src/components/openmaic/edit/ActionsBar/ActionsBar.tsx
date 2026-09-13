@@ -21,6 +21,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { toast } from 'sonner';
 import {
   ChevronLeft,
   ChevronRight,
@@ -30,8 +31,10 @@ import {
   Flag,
   FoldVertical,
   GripVertical,
+  Presentation,
   Play,
   RefreshCw,
+  SquarePen,
   Trash2,
   UnfoldVertical,
   Volume2,
@@ -67,13 +70,17 @@ import {
   moveById,
   moveByIdDir,
   removeById,
-  setAudioIdById,
+  removeWhiteboardTextBlockById,
+  setFreshAudioById,
   setDiscussionAgentById,
   setDiscussionPromptById,
   setDiscussionTopicById,
   setSpeechTextClearAudioById,
+  setWhiteboardTextById,
   type AddableType,
 } from './actions-edit';
+import { WhiteboardEditor } from './WhiteboardEditor';
+import { appendWhiteboardBlock, boardStepSummary, moveTimelineActionByIdDir, moveWhiteboardBlock, removeWhiteboardBlock, whiteboardBlocks, type WhiteboardBlock } from './whiteboard-edit';
 import {
   audioExists,
   audioObjectUrl,
@@ -360,7 +367,7 @@ function SpeechTtsBar({
   text: string;
   audioUrl?: string;
   refreshKey?: number;
-  onGenerated: () => void;
+  onGenerated: (text: string) => void;
 }) {
   const { t } = useI18n();
   const [status, setStatus] = useState<TtsStatus>('none');
@@ -387,13 +394,13 @@ function SpeechTtsBar({
         if (alive) setStatus('ready');
         return;
       }
-      const has = await audioExists(lookupId);
+      const has = await audioExists(lookupId, text);
       if (alive) setStatus((s) => (s === 'generating' ? s : has ? 'ready' : 'none'));
     })();
     return () => {
       alive = false;
     };
-  }, [lookupId, audioUrl, refreshKey]);
+  }, [lookupId, audioUrl, refreshKey, text]);
 
   useEffect(() => () => stopPreview(), [stopPreview]);
 
@@ -401,7 +408,7 @@ function SpeechTtsBar({
     stopPreview();
     let src = audioUrl ?? null;
     if (!src) {
-      src = await audioObjectUrl(lookupId);
+      src = await audioObjectUrl(lookupId, text);
       objUrlRef.current = src;
     }
     if (!src) return;
@@ -416,7 +423,7 @@ function SpeechTtsBar({
     try {
       const id = await regenerateSpeechAudio(sceneOrder, { id: actionId, text }, language);
       if (id) {
-        onGenerated();
+        onGenerated(text);
         setStatus('ready');
       } else {
         setStatus('none');
@@ -500,7 +507,7 @@ function SpeechClip({
   audioUrl?: string;
   ttsRefresh?: number;
   onCommit: (text: string) => void;
-  onGenerated: () => void;
+  onGenerated: (text: string) => void;
   onDelete: () => void;
   onMoveLeft: () => void;
   onMoveRight: () => void;
@@ -577,8 +584,9 @@ function SpeechClip({
         ref={ref}
         value={val}
         onChange={(e) => {
-          dirtyRef.current = true;
+          dirtyRef.current = false;
           setVal(e.target.value);
+          onCommit(e.target.value);
         }}
         onBlur={commit}
         placeholder={t('edit.timeline.speechPlaceholder')}
@@ -596,6 +604,82 @@ function SpeechClip({
           onGenerated={onGenerated}
         />
       )}
+    </div>
+  );
+}
+
+/** One teacher-authored board-writing step backed by a real wb_draw_text action. */
+function WhiteboardTextClip({
+  content,
+  onCommit,
+  onDelete,
+}: {
+  content: string;
+  onCommit: (content: string) => void;
+  onDelete: () => void;
+}) {
+  const [value, setValue] = useState(content);
+  const dirtyRef = useRef(false);
+
+  useEffect(() => {
+    if (!dirtyRef.current) setValue(content);
+  }, [content]);
+
+  return (
+    <div className={cn(
+      'relative flex h-full w-[228px] shrink-0 flex-col overflow-hidden rounded-xl border bg-white/70 shadow-sm',
+      content.trim() ? 'border-sky-200' : INCOMPLETE_CLIP,
+    )}>
+      <span className="absolute inset-x-0 top-0 h-[3px] bg-sky-400/80" />
+      <div className="flex items-center gap-2 border-b border-sky-100 bg-sky-50/80 px-2.5 py-1.5">
+        <Presentation className="size-3.5 text-sky-700" />
+        <span className="text-[10px] font-semibold tracking-[0.12em] text-sky-800">白板内容</span>
+        <span className="ml-auto"><DeleteButton onDelete={onDelete} /></span>
+      </div>
+      <textarea
+        value={value}
+        onChange={(event) => {
+          dirtyRef.current = true;
+          setValue(event.target.value);
+        }}
+        onBlur={() => {
+          if (dirtyRef.current) onCommit(value);
+          dirtyRef.current = false;
+        }}
+        placeholder="输入需要在白板上呈现的内容…"
+        className="min-h-0 flex-1 resize-none bg-transparent px-3 py-2 text-[12.5px] leading-[1.7] text-foreground/85 outline-none placeholder:text-muted-foreground/40"
+      />
+    </div>
+  );
+}
+
+function WhiteboardClip({ block, onEdit, onDelete, onMoveLeft, onMoveRight, canMoveLeft, canMoveRight }: {
+  block: WhiteboardBlock;
+  onEdit: () => void;
+  onDelete: () => void;
+  onMoveLeft: () => void;
+  onMoveRight: () => void;
+  canMoveLeft: boolean;
+  canMoveRight: boolean;
+}) {
+  const speechCount = block.steps.filter((step) => step.type === 'speech').length;
+  const content = block.steps.filter((step) => step.type.startsWith('wb_draw_'));
+  const iconButton = 'grid size-11 shrink-0 place-items-center rounded-[10px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-30 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-violet-500 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100';
+  return (
+    <div data-whiteboard-id={block.id} className="group/clip relative flex h-full w-[248px] shrink-0 flex-col overflow-hidden rounded-xl border border-gray-200/80 bg-white/70 shadow-sm transition-colors focus-within:border-violet-400 hover:border-violet-300/70 dark:border-gray-700/60 dark:bg-stone-800/50 dark:hover:border-violet-500/40">
+      <span className="absolute inset-x-0 top-0 h-[3px] bg-primary/30 transition-colors group-hover/clip:bg-primary/60" />
+      <div className="flex shrink-0 items-center border-b border-gray-100 bg-gray-50/70 px-2 dark:border-gray-700/50 dark:bg-stone-900/40">
+        <Presentation className="mr-1 size-3.5 shrink-0 text-primary/60" />
+        <span className="mr-auto whitespace-nowrap text-xs font-medium text-zinc-700 dark:text-zinc-200">白板讲授</span>
+        <button type="button" aria-label="白板前移" className={iconButton} disabled={!canMoveLeft} onClick={onMoveLeft}><ChevronLeft size={15} /></button>
+        <button type="button" aria-label="白板后移" className={iconButton} disabled={!canMoveRight} onClick={onMoveRight}><ChevronRight size={15} /></button>
+        <button type="button" aria-label="删除白板" className={cn(iconButton, 'hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40 dark:hover:text-rose-400')} onClick={onDelete}><Trash2 size={15} /></button>
+      </div>
+      <button type="button" onClick={onEdit} aria-label="编辑白板内容与讲解" className="flex min-h-11 flex-1 flex-col gap-1 overflow-hidden px-3 py-2 text-left text-foreground/85 transition-colors hover:bg-violet-50/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-violet-500 dark:hover:bg-violet-500/10">
+        <span className="line-clamp-2 text-[12.5px] leading-[1.7]">{content.map(boardStepSummary).join(' · ') || '点击添加白板内容'}</span>
+        <span className="mt-auto text-[11px] text-muted-foreground">{speechCount} 段讲解 · {content.length} 项板书</span>
+        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-600 dark:text-violet-400"><SquarePen size={13} />编辑内容与步骤</span>
+      </button>
     </div>
   );
 }
@@ -980,7 +1064,17 @@ function DropZone({
   );
 }
 
-export function ActionsBar({ sceneId }: { sceneId: string }) {
+export function ActionsBar({
+  sceneId,
+  teacherPreparation = false,
+  onEditWhiteboardWithAI,
+  aiRunning,
+}: {
+  sceneId: string;
+  teacherPreparation?: boolean;
+  onEditWhiteboardWithAI?: (prompt: string) => void;
+  aiRunning?: boolean;
+}) {
   const { t } = useI18n();
   const scene = useStageStore((s) => s.scenes.find((x) => x.id === sceneId));
   const actions = scene?.actions ?? EMPTY;
@@ -1018,6 +1112,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   const [tip, setTip] = useState<TooltipState | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
+  const [editingBoard, setEditingBoard] = useState<{ sceneId: string; id: string } | null>(null);
   const [regenAll, setRegenAll] = useState(false);
   const [ttsRefresh, setTtsRefresh] = useState(0); // bump → speech clips re-check audio status
   const reduce = useReducedMotion();
@@ -1034,6 +1129,9 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
     [sceneId],
   );
 
+  const nudge = (current: Action[], id: string, direction: -1 | 1) => teacherPreparation
+    ? moveTimelineActionByIdDir(current, id, direction) : moveByIdDir(current, id, direction);
+
   // Regenerate TTS for every speech line in the scene, then stamp audioIds.
   // Reads the latest actions from the store at each step so a concurrent edit
   // isn't clobbered, and stamps by id (index-stale-safe).
@@ -1048,7 +1146,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
     setRegenAll(true);
     // Stamp audioId only for lines that actually synthesized — a skipped/failed
     // line must not get an id pointing at a blob that was never written.
-    const okIds = new Set<string>();
+    const okIds = new Map<string, string>();
     try {
       for (const a of speeches) {
         if (!a.id) continue;
@@ -1058,7 +1156,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
             { id: a.id, text: (a as { text?: string }).text ?? '' },
             language,
           );
-          if (id) okIds.add(a.id);
+          if (id && a.type === 'speech') okIds.set(a.id, a.text);
         } catch {
           /* skip a failed line, keep going */
         }
@@ -1068,12 +1166,14 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
           let next = cur;
           for (const a of cur) {
             if (a.type === 'speech' && a.id && okIds.has(a.id))
-              next = setAudioIdById(next, a.id, speechAudioId(order, a.id));
+              next = setFreshAudioById(next, a.id, speechAudioId(order, a.id), okIds.get(a.id)!);
           }
           return next;
         });
         setTtsRefresh((n) => n + 1);
       }
+      if (okIds.size < speeches.length) toast.error(`已生成 ${okIds.size} / ${speeches.length} 段语音，请重试未完成的讲解`);
+      else toast.success('语音已生成，请保存课堂');
     } finally {
       setRegenAll(false);
     }
@@ -1162,11 +1262,23 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
     commit((cur) => appendDiscussion(cur, id));
   }, [commit]);
 
-  const items = actions.map((action, index) => {
+  const addWhiteboard = () => {
+    const id = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `wb-${Date.now()}`;
+    commit((current) => appendWhiteboardBlock(current, id));
+    setLineMode(false);
+    setEditingBoard({ sceneId, id });
+  };
+
+  const boards = teacherPreparation ? whiteboardBlocks(actions) : [];
+  const items = actions.flatMap((action, index) => {
+    if (boards.some((board) => index > board.start && index <= board.end)) return [];
+    const block = boards.find((board) => board.start === index);
     const speechIndex = actions
       .slice(0, index + 1)
       .filter((candidate) => candidate.type === 'speech' && !isActivityPauseAction(candidate)).length;
-    return { action, index, key: (action.id ?? `a-${index}`) as string, speechIndex };
+    return [{ action, index, endIndex: block?.end ?? index, block, key: (action.id ?? `a-${index}`) as string, speechIndex }];
   });
 
   return (
@@ -1187,11 +1299,11 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
         </div>
       )}
 
-      <div className="flex h-10 shrink-0 items-center gap-2.5 px-6">
+      <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1.5">
         <button
           type="button"
           onClick={() => setLineMode((v) => !v)}
-          className="flex items-center gap-2.5"
+          className="flex shrink-0 items-center gap-2.5"
         >
           <span className="size-1.5 rounded-full bg-primary" />
           <span className="text-[12px] font-medium tracking-[0.18em] text-foreground/80">
@@ -1199,82 +1311,89 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
           </span>
         </button>
 
-        {actions.length > 0 && (
-          <span className="ml-3 hidden text-[10px] text-muted-foreground/55 xl:inline">
-            {t('edit.timeline.triggerHint')}
-          </span>
-        )}
-
         {!lineMode && (
-          <div className="ml-3 flex items-center gap-1.5 border-l border-gray-200/70 pl-3 dark:border-gray-700/60">
-            <span className="text-[10px] text-muted-foreground/45">
-              {t('edit.timeline.dragToAdd')}
-            </span>
-            {palette.map((pt) => {
-              const Icon = cueMeta(pt).icon;
-              return (
-                <span
-                  key={pt}
-                  draggable
-                  onDragStart={(e) => {
-                    dragRef.current = { kind: 'new', type: pt };
-                    setBlankDragImage(e);
-                  }}
-                  onDragEnd={() => {
-                    dragRef.current = null;
-                    setDragOver(null);
-                  }}
-                  className="inline-flex cursor-grab items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground active:cursor-grabbing"
+          <div className="min-w-0 flex-1 overflow-x-auto max-md:order-last max-md:basis-full [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex min-w-max items-center gap-1.5 border-l border-gray-200/70 pl-3 dark:border-gray-700/60">
+              <span className="text-[10px] text-muted-foreground/45">
+                {t('edit.timeline.dragToAdd')}
+              </span>
+              {palette.map((pt) => {
+                const Icon = cueMeta(pt).icon;
+                return (
+                  <button
+                    type="button"
+                    key={pt}
+                    aria-label={`添加${cueLabel(pt, t)}`}
+                    onClick={() => {
+                      const id = crypto.randomUUID?.() ?? `a-${Date.now()}`;
+                      commit((current) => insertAt(current, clampInsertSlot(current, current.length), makeAction(pt, id)));
+                      if (pt === 'speech') setFocusId(id);
+                    }}
+                    draggable
+                    onDragStart={(e) => {
+                      dragRef.current = { kind: 'new', type: pt };
+                      setBlankDragImage(e);
+                    }}
+                    onDragEnd={() => {
+                      dragRef.current = null;
+                      setDragOver(null);
+                    }}
+                    className="inline-flex min-h-11 cursor-grab items-center gap-1 whitespace-nowrap rounded-[6px] border border-border bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground active:cursor-grabbing"
+                  >
+                    <Icon className="size-3" />
+                    {cueLabel(pt, t)}
+                  </button>
+                );
+              })}
+
+              {ttsActive ? (
+                <button
+                  type="button"
+                  onClick={regenerateAllAudio}
+                  disabled={regenAll}
+                  title={t('edit.timeline.regenAllTts')}
+                  aria-label={t('edit.timeline.regenAllTts')}
+                  className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground disabled:opacity-50"
                 >
-                  <Icon className="size-3" />
-                  {cueLabel(pt, t)}
-                </span>
-              );
-            })}
+                  <RefreshCw className={cn('size-3', regenAll && 'animate-spin')} />
+                  {t('edit.timeline.voiceAll')}
+                </button>
+              ) : null}
+
+              {teacherPreparation ? (
+                <button
+                  type="button"
+                  onClick={addWhiteboard}
+                  title="添加一段可编辑白板内容"
+                  aria-label="添加白板"
+                  className="inline-flex min-h-11 items-center gap-1 whitespace-nowrap rounded-[6px] border border-border bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-violet-500"
+                >
+                  <Presentation className="size-3" />
+                  添加白板
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={addDiscussion}
+                  disabled={discussionPresent}
+                  title={discussionPresent ? t('edit.timeline.addDiscussionExists') : t('edit.timeline.addDiscussion')}
+                  aria-label={t('edit.timeline.addDiscussion')}
+                  className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-yellow-400/50 hover:text-foreground disabled:opacity-40"
+                >
+                  <Flag className="size-3" />
+                  {t('edit.timeline.addDiscussion')}
+                </button>
+              )}
+            </div>
           </div>
         )}
 
-        {!lineMode && ttsActive && (
-          <button
-            type="button"
-            onClick={regenerateAllAudio}
-            disabled={regenAll}
-            title={t('edit.timeline.regenAllTts')}
-            aria-label={t('edit.timeline.regenAllTts')}
-            className="ml-1.5 inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground disabled:opacity-50"
-          >
-            <RefreshCw className={cn('size-3', regenAll && 'animate-spin')} />
-            {t('edit.timeline.voiceAll')}
-          </button>
-        )}
-
-        {/* A discussion is terminal + at-most-one, so it's appended here rather
-            than dragged in. Disabled once the scene already has one. The flag
-            icon matches the discussion's terminal-anchor node on the track. */}
-        {!lineMode && (
-          <button
-            type="button"
-            onClick={addDiscussion}
-            disabled={discussionPresent}
-            title={
-              discussionPresent
-                ? t('edit.timeline.addDiscussionExists')
-                : t('edit.timeline.addDiscussion')
-            }
-            aria-label={t('edit.timeline.addDiscussion')}
-            className="ml-1.5 inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-yellow-400/50 hover:text-foreground disabled:opacity-40 disabled:hover:border-border disabled:hover:text-muted-foreground"
-          >
-            <Flag className="size-3" />
-            {t('edit.timeline.addDiscussion')}
-          </button>
-        )}
-
-        <span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground/60">
+        <span className="ml-auto whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/60">
           {t('edit.timeline.counts', { speech: speechCount, cue: cueCount })}
         </span>
         {/* pan the timeline viewport left/right */}
         {!lineMode && (
-          <div className="ml-1 flex items-center border-l border-gray-200/70 pl-1 dark:border-gray-700/60">
+          <div className="ml-1 hidden items-center border-l border-gray-200/70 pl-1 sm:flex dark:border-gray-700/60">
             <button
               type="button"
               onClick={() => panViewport(-1)}
@@ -1328,10 +1447,10 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
               onEnter={() => setDragOver(0)}
               onDrop={() => handleDrop(0)}
             />
-            {items.map(({ action, index, key, speechIndex: si }) => {
+            {items.map(({ action, index, endIndex, block, key, speechIndex: si }) => {
               // A discussion is pinned terminal, so it can't be drag-reordered.
               const isDiscussion = action.type === 'discussion';
-              const onDragStart = isDiscussion
+              const onDragStart = isDiscussion || block
                 ? () => {}
                 : (e: React.DragEvent) => {
                     dragRef.current = { kind: 'move', id: key };
@@ -1353,7 +1472,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                   onPick={onPick}
                   onDragStart={onDragStart}
                   onDragEnd={onDragEnd}
-                  canDrag={!isDiscussion}
+                  canDrag={!isDiscussion && !block}
                 />
               );
               return (
@@ -1370,18 +1489,38 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                     style={{ paddingTop: AXIS_FROM_TOP - 12 }}
                   >
                     {lineMode ? (
-                      <div className="w-9">{dot}</div>
+                      <div className={block ? 'w-12' : 'w-9'}>{block ? <button type="button" aria-label="编辑白板内容与讲解" className="grid size-11 place-items-center rounded-[10px] bg-violet-100 text-violet-700 transition-colors hover:bg-violet-200 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-violet-500 dark:bg-violet-500/15 dark:text-violet-300 dark:hover:bg-violet-500/25" onClick={() => setEditingBoard({ sceneId, id: block.id })}><Presentation size={18} /></button> : dot}</div>
                     ) : (
                       <>
                         {dot}
                         <div className="my-1 h-2.5 w-px bg-border" />
                         <div className="min-h-0 w-full flex-1">
-                          {isActivityPauseAction(action) ? (
+                          {block ? (
+                            <WhiteboardClip block={block}
+                              onEdit={() => setEditingBoard({ sceneId, id: block.id })}
+                              onDelete={() => {
+                                const current = useStageStore.getState().getSceneById(sceneId)?.actions ?? [];
+                                const removed = whiteboardBlocks(current).find((item) => item.id === block.id);
+                                if (!removed) return;
+                                const saved = current.slice(removed.start, removed.end + 1);
+                                commit((latest) => removeWhiteboardBlock(latest, block.id));
+                                toast('白板已删除', { action: { label: '撤销', onClick: () => commit((latest) => {
+                                  if (latest.some((step) => step.id === block.id)) return latest;
+                                  const slot = clampInsertSlot(latest, Math.min(removed.start, latest.length));
+                                  return [...latest.slice(0, slot), ...saved, ...latest.slice(slot)];
+                                }) } });
+                              }}
+                              onMoveLeft={() => commit((current) => moveWhiteboardBlock(current, block.id, -1))}
+                              onMoveRight={() => commit((current) => moveWhiteboardBlock(current, block.id, 1))}
+                              canMoveLeft={index > 0}
+                              canMoveRight={endIndex < lastMovableIndex}
+                            />
+                          ) : isActivityPauseAction(action) ? (
                             <ActivityGateClip
                               seconds={Math.round(action.activityPauseSec)}
                               onDelete={() => commit((cur) => removeById(cur, key))}
-                              onMoveLeft={() => commit((cur) => moveByIdDir(cur, key, -1))}
-                              onMoveRight={() => commit((cur) => moveByIdDir(cur, key, 1))}
+                              onMoveLeft={() => commit((cur) => nudge(cur, key, -1))}
+                              onMoveRight={() => commit((cur) => nudge(cur, key, 1))}
                               canMoveLeft={index > 0}
                               canMoveRight={index < lastMovableIndex}
                               onDragStart={onDragStart}
@@ -1415,18 +1554,28 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                                   audioId: prevAudioId,
                                 }).finally(() => setTtsRefresh((n) => n + 1));
                               }}
-                              onGenerated={() =>
+                              onGenerated={(generatedText) =>
                                 commit((cur) =>
-                                  setAudioIdById(cur, key, speechAudioId(sceneOrder, key)),
+                                  setFreshAudioById(cur, key, speechAudioId(sceneOrder, key), generatedText),
                                 )
                               }
                               onDelete={() => commit((cur) => removeById(cur, key))}
-                              onMoveLeft={() => commit((cur) => moveByIdDir(cur, key, -1))}
-                              onMoveRight={() => commit((cur) => moveByIdDir(cur, key, 1))}
+                              onMoveLeft={() => commit((cur) => nudge(cur, key, -1))}
+                              onMoveRight={() => commit((cur) => nudge(cur, key, 1))}
                               canMoveLeft={index > 0}
                               canMoveRight={index < lastMovableIndex}
                               onDragStart={onDragStart}
                               onDragEnd={onDragEnd}
+                            />
+                          ) : action.type === 'wb_draw_text' && teacherPreparation ? (
+                            <WhiteboardTextClip
+                              content={action.content}
+                              onCommit={(content) =>
+                                commit((current) => setWhiteboardTextById(current, key, content))
+                              }
+                              onDelete={() =>
+                                commit((current) => removeWhiteboardTextBlockById(current, key))
+                              }
                             />
                           ) : isDiscussion ? (
                             <DiscussionClip
@@ -1452,8 +1601,8 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                               onTip={setTip}
                               onDelete={() => commit((cur) => removeById(cur, key))}
                               onPick={onPick}
-                              onMoveLeft={() => commit((cur) => moveByIdDir(cur, key, -1))}
-                              onMoveRight={() => commit((cur) => moveByIdDir(cur, key, 1))}
+                              onMoveLeft={() => commit((cur) => nudge(cur, key, -1))}
+                              onMoveRight={() => commit((cur) => nudge(cur, key, 1))}
                               canMoveLeft={index > 0}
                               canMoveRight={index < lastMovableIndex}
                               onDragStart={onDragStart}
@@ -1465,9 +1614,9 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                     )}
                   </motion.div>
                   <DropZone
-                    active={dragOver === index + 1}
-                    onEnter={() => setDragOver(index + 1)}
-                    onDrop={() => handleDrop(index + 1)}
+                    active={dragOver === endIndex + 1}
+                    onEnter={() => setDragOver(endIndex + 1)}
+                    onDrop={() => handleDrop(endIndex + 1)}
                   />
                 </div>
               );
@@ -1477,6 +1626,22 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
       </div>
 
       {tip && <CueTooltip tip={tip} />}
+      {editingBoard?.sceneId === sceneId && <WhiteboardEditor
+        key={`${sceneId}:${editingBoard.id}`}
+        sceneId={sceneId}
+        boardId={editingBoard.id}
+        aiRunning={aiRunning}
+        onEditWithAI={onEditWhiteboardWithAI}
+        onClose={() => {
+          const id = editingBoard.id;
+          setEditingBoard(null);
+          requestAnimationFrame(() => {
+            const card = Array.from(sectionRef.current?.querySelectorAll<HTMLElement>('[data-whiteboard-id]') ?? []).find((element) => element.dataset.whiteboardId === id);
+            card?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+            card?.querySelector<HTMLButtonElement>('[aria-label="编辑白板内容与讲解"]')?.focus({ preventScroll: true });
+          });
+        }}
+      />}
     </section>
   );
 }

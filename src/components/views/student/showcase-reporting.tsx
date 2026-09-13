@@ -25,6 +25,7 @@ import type {
 } from "@/lib/session/types";
 import { useShowcasePresentation } from "@/hooks/use-showcase-presentation";
 import type { ShowcaseQueueItemStatus } from "@/lib/showcase/types";
+import { CourseStageRequirements } from "@/components/classroom/course-stage-requirements";
 
 function newRequestId(): string | undefined {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -170,10 +171,13 @@ export function NewShowcaseStudentView({ course }: { course: Course }) {
     return <Card className="grid min-h-56 place-items-center"><span className="inline-flex items-center gap-2 text-sm text-stone-500"><LoaderCircle className="animate-spin" size={18} />正在读取汇报状态…</span></Card>;
   }
 
-  const isCurrent = ownItem?.studentId === current?.studentId;
+  const isCurrent = Boolean(ownItem && current && ownItem.studentId === current.studentId);
+  const awaitingSelection = data?.queueConfig?.selectionMode === "teacher-selected" && !ownItem;
   const status = ownItem?.status ?? "not-ready";
   const flowIndex = status === "not-ready" ? 0 : status === "waiting" ? 1 : status === "called" || status === "rejected" ? 2 : status === "pending-approval" ? 3 : status === "presenting" ? 4 : status === "evaluating" ? 5 : 6;
-  const primaryMessage = !ownItem || status === "not-ready"
+  const primaryMessage = awaitingSelection && ownArtifacts.length
+    ? "作品已提交，教师将选择部分同学现场汇报；请继续观看并准备回应。"
+    : !ownItem || status === "not-ready"
     ? "先完成并提交可投屏成果"
     : status === "completed"
       ? "本次汇报已完成"
@@ -190,11 +194,12 @@ export function NewShowcaseStudentView({ course }: { course: Course }) {
   return (
     <div className="classroom-stage space-y-5">
       <StagePageHeader
-        description="这里是课堂汇报控制台：先看队列位置，再按提示完成申请、汇报和教师点评。"
+        description={data?.queueConfig?.selectionMode === "teacher-selected" ? "每位同学提交个人作品，教师选择现场汇报同学；入选后按提示申请投屏。" : "这里是课堂汇报控制台：先看队列位置，再按提示完成申请、汇报和教师点评。"}
         status={<Pill tone={activePresentation ? "green" : status === "completed" ? "teal" : isCurrent ? "amber" : ownArtifacts.length ? "blue" : "gray"}>{activePresentation ? "课堂汇报中" : statusLabels[status]}</Pill>}
         title="成果汇报"
         variant="student-card"
       />
+      <CourseStageRequirements course={course} stageKey="showcase" expanded />
 
       {(error || localError) ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700" role="alert"><span>{localError ?? error}</span><button aria-label="重试读取汇报状态" className="inline-flex min-h-11 items-center rounded-[var(--radius-xs)] border border-rose-300 px-3 font-semibold text-rose-800 hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700" onClick={() => { setLocalError(undefined); void reload(); }} type="button">重试</button></div> : null}
 
@@ -278,7 +283,7 @@ export function NewShowcaseStudentView({ course }: { course: Course }) {
                 <div className="grid grid-cols-7 gap-1">{flowSteps.map((step, index) => <span aria-label={`${index + 1}. ${step}`} className={`h-1.5 rounded-full ${index <= flowIndex ? "bg-[var(--pbl-student)]" : "bg-[var(--pbl-border)]"}`} key={step} title={step} />)}</div>
                 <div className="mt-1.5 flex items-center justify-between text-[11px]"><span className="font-semibold text-[var(--pbl-student)]">第 {flowIndex + 1}/7 步 · {flowSteps[flowIndex]}</span><span className="text-[var(--pbl-text-muted)]">{ownItem ? `队列第 ${ownItem.position} 位` : "尚未入队"}</span></div>
               </div>
-              <div className="mt-3 rounded-[var(--radius-sm)] bg-[var(--pbl-surface-soft)] px-3 py-2 text-xs leading-5 text-[var(--pbl-text-muted)]"><p>当前：<strong className="text-[var(--pbl-text-strong)]">{current?.studentName ?? "尚未开始"}</strong>{next ? ` · 下一位：${next.studentName}` : ""}</p>{ownItem?.estimatedWaitMinutes !== undefined && !isCurrent && status !== "completed" ? <p>预计等待约 {ownItem.estimatedWaitMinutes} 分钟（不含审批、切换与点评）</p> : null}</div>
+              <div className="mt-3 rounded-[var(--radius-sm)] bg-[var(--pbl-surface-soft)] px-3 py-2 text-xs leading-5 text-[var(--pbl-text-muted)]"><p>当前：<strong className="text-[var(--pbl-text-strong)]">{current?.studentName ?? "尚未开始"}</strong>{next ? ` · 下一位：${next.studentName}` : ""}</p>{ownItem?.estimatedWaitMinutes !== undefined && !isCurrent && status !== "completed" ? <p>预计等待约 {ownItem.estimatedWaitMinutes} 分钟{data?.queueConfig?.schemaVersion === 2 ? "（含计划点评与切换时间）" : "（不含审批、切换与点评）"}</p> : null}</div>
               {isCurrent && (status === "called" || status === "rejected") && selectedArtifact && selectedArtifact.kind !== "file" ? <PrimaryButton className="mt-3 w-full justify-center" disabled={busy} onClick={() => void requestPresentation()} tone="teal"><Send size={16} />{busy ? "申请中…" : status === "rejected" ? "重新申请投屏" : "申请全班投屏"}</PrimaryButton> : null}
               {isCurrent && (status === "called" || status === "rejected") && selectedArtifact?.kind === "file" ? <p className="mt-3 rounded-[var(--radius-sm)] bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">当前资料不能投屏，请在左侧选择主文档或 PDF。</p> : null}
               {isCurrent && status === "pending-approval" ? <div className="mt-3 rounded-[var(--radius-sm)] border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">教师端已收到申请，请等待批准。</div> : null}

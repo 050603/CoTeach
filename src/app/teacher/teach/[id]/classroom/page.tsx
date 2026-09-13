@@ -10,6 +10,7 @@ import {
   Clock3,
   Copy,
   Eye,
+  Maximize2,
   QrCode,
   UserRoundCheck,
   Users,
@@ -18,9 +19,14 @@ import {
 import { DashboardShell, Avatar } from "@/components/dashboard-shell";
 import { StageGateDialog } from "@/components/classroom/classroom-chrome";
 import { TeacherStageView } from "@/components/views/teacher/stage-dispatcher";
-import { TeacherStageDashboard } from "@/components/classroom/teacher-stage-dashboard";
+import { RealtimeTeachingActions, TeacherStageDashboard } from "@/components/classroom/teacher-stage-dashboard";
+import { TeacherPresentationAnalytics } from "@/components/classroom/teacher-presentation-analytics";
+import { TeacherPresentationControls, TeacherPresentationHeader } from "@/components/classroom/teacher-presentation-chrome";
+import { TeacherPresentationActionsProvider } from "@/components/classroom/teacher-presentation-actions";
+import presentationStyles from "@/components/classroom/teacher-presentation.module.css";
+import { useTeacherPresentation } from "@/hooks/use-teacher-presentation";
 import { TeacherClassroomPulse } from "@/components/classroom/teacher-classroom-pulse";
-import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogTitle, Button, FlowActionBar, SaveStatus } from "@/components/ui";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogTitle, Button, Dialog, DialogContent, DialogDescription, DialogTitle, FlowActionBar, SaveStatus } from "@/components/ui";
 import { useSession, useCourse, useHydrated } from "@/lib/session/store";
 import { cn } from "@/lib/utils";
 import { evaluateStageGate } from "@/lib/classroom/stage-gates";
@@ -33,6 +39,7 @@ import { STAGE_READINESS_LABEL } from "@/lib/learning-evidence/types";
 import {
   adjustClassroomStageTiming,
   createClassroomTimingState,
+  resolveCourseTimingMinutes,
   deriveClassroomTimingSnapshot,
   pauseClassroomTiming,
   resetActiveClassroomStageTiming,
@@ -74,6 +81,18 @@ export default function TeachClassroomPage() {
   const [endDialogOpen, setEndDialogOpen] = useState(false);
   const [dataSidebarCollapsed, setDataSidebarCollapsed] = useState(DEFAULT_CLASSROOM_DATA_SIDEBAR_COLLAPSED);
   const [dashboardFocus, setDashboardFocus] = useState<TeacherStageFocus>();
+  const presentation = useTeacherPresentation();
+  const [presentationView, setPresentationView] = useState<"teaching" | "analytics">("teaching");
+  const [presentationDetails, setPresentationDetails] = useState(false);
+  const [stageActionsTarget, setStageActionsTarget] = useState<HTMLDivElement | null>(null);
+  const [presentationTool, setPresentationTool] = useState<"timer" | "advice" | "tools" | "invite" | "students" | null>(null);
+  const displayScope = `${course?.id}:${course?.currentStageIndex}:${presentation.active}:${presentationView}`;
+  const [appliedDisplayScope, setAppliedDisplayScope] = useState(displayScope);
+  if (appliedDisplayScope !== displayScope) {
+    setAppliedDisplayScope(displayScope);
+    setPresentationDetails(false);
+    setPresentationTool(null);
+  }
   const showcaseController = useShowcasePresentation(
     course?.stages[course.currentStageIndex]?.key === "showcase" ? course.id : undefined,
   );
@@ -99,12 +118,10 @@ export default function TeachClassroomPage() {
     }
     const classroomTiming = createClassroomTimingState({
       stages: course.stages,
-      totalMinutes:
-        course.content.projectMainline?.totalMinutes
-        ?? course.content.moduleTimingPlan?.totalMinutes
-        ?? course.hours * 60,
+      totalMinutes: resolveCourseTimingMinutes(course),
       projectMainline: course.content.projectMainline,
       moduleTimingPlan: course.content.moduleTimingPlan,
+      stagePlan: course.content.stagePlan,
       activeStageKey: course.stages[course.currentStageIndex]?.key,
     });
     updateCourse(course.id, {
@@ -147,7 +164,7 @@ export default function TeachClassroomPage() {
   }
 
   const currentStage = course.stages[course.currentStageIndex];
-  const showDataSidebar = shouldShowClassroomDataSidebar(currentStage?.key, dataSidebarCollapsed);
+  const showDataSidebar = !presentation.active && shouldShowClassroomDataSidebar(currentStage?.key, dataSidebarCollapsed);
   const canPrev = course.currentStageIndex > 0;
   const canNext = course.currentStageIndex < course.stages.length - 1;
   const previousStage = canPrev ? course.stages[course.currentStageIndex - 1] : undefined;
@@ -157,6 +174,15 @@ export default function TeachClassroomPage() {
       ? `+${formatClock(timingSnapshot.activeStage.overrunSec)}`
       : formatClock(timingSnapshot.activeStage.remainingSec)
     : "--:--";
+
+  function enterPresentation() {
+    setToolPanel(null);
+    setDashboardFocus(undefined);
+    setPresentationDetails(false);
+    setPresentationTool(null);
+    setPresentationView("teaching");
+    void presentation.enter();
+  }
 
   async function endClass() {
     if (!course || ending) return;
@@ -272,10 +298,12 @@ export default function TeachClassroomPage() {
   ) : null;
 
   return (
+    <TeacherPresentationActionsProvider target={presentation.active ? stageActionsTarget : null}>
     <DashboardShell
       role="teacher"
       userName={user.name}
       variant="bare"
+      immersive={presentation.active}
       currentCourse={{ id: course.id, name: course.name, status: course.status }}
       currentStage={currentStage ? { index: course.currentStageIndex, total: course.stages.length, label: currentStage.label } : undefined}
       currentTask={currentStage ? `检查${currentStage.label}的阶段产出` : undefined}
@@ -285,6 +313,7 @@ export default function TeachClassroomPage() {
       wide
       headerSlot={
         <div className="hidden items-center gap-1 md:flex">
+          <button className="inline-flex min-h-11 items-center gap-2 rounded-md border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher)] px-3 text-sm font-semibold text-white" data-teacher-presentation-trigger onClick={enterPresentation} type="button"><Maximize2 size={17} />全屏授课</button>
           {/* 计时器 */}
           <div className="relative">
             <button
@@ -343,8 +372,11 @@ export default function TeachClassroomPage() {
         </div>
       }
     >
+      <div className={presentation.active ? cn("teacher-presentation", presentationStyles.shell) : undefined}>
+      {presentation.active ? <TeacherPresentationHeader course={course} timerText={timerText} paused={timingSnapshot?.status === "paused"} degraded={presence.degraded} onlineCount={onlineCount} onExit={() => void presentation.exit()} /> : null}
       {/* 移动端工具栏：小屏幕上显示精简版 */}
-      <div className="mb-3 flex flex-wrap items-center gap-2 md:hidden">
+      <div className={cn("mb-3 flex flex-wrap items-center gap-2 md:hidden", presentation.active && "!hidden")}>
+        <button className="inline-flex min-h-11 items-center gap-2 rounded-md bg-[var(--pbl-teacher)] px-3 text-sm font-semibold text-white" data-teacher-presentation-trigger onClick={enterPresentation} type="button"><Maximize2 size={17} />全屏授课</button>
         <label className="order-first w-full"><span className="sr-only">当前教学阶段</span><select aria-label="当前教学阶段" className="h-9 w-full truncate rounded-[var(--radius-sm)] border border-blue-200 bg-blue-50/70 px-2 text-xs font-bold text-blue-800 outline-none focus-visible:ring-2 focus-visible:ring-blue-500" onChange={(event) => requestStage(Number(event.target.value))} value={course.currentStageIndex}>{course.stages.map((stage, index) => <option key={stage.key} value={index}>{index + 1}. {stage.label}</option>)}</select></label>
         <button
           className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-sm)] border border-stone-200 bg-white px-3 text-[13px] font-semibold text-stone-600"
@@ -390,9 +422,9 @@ export default function TeachClassroomPage() {
       </div>
 
       {/* 主显示区；班级概览按需展开。 */}
-      <div className={cn("grid gap-3 pb-8", showDataSidebar && "xl:pr-[21.25rem]")}>
+      <div className={cn(presentation.active ? presentationStyles.body : "grid gap-3 pb-8", showDataSidebar && "xl:pr-[21.25rem]")}>
         {/* 中间：阶段控制 + 横幅 + 阶段视图 */}
-        <div className="min-w-0 space-y-3">
+        <div className={presentation.active ? presentationStyles.content : "min-w-0 space-y-3"}>
           {showDataSidebar && course.uiState?.aiAnalysisPending ? (
             <div className="inline-flex items-center gap-2 rounded-full bg-[var(--pbl-warning-soft)] px-3 py-1 text-xs font-semibold text-[var(--pbl-warning)] ring-1 ring-orange-100">
               <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--pbl-warning)]" />
@@ -401,7 +433,7 @@ export default function TeachClassroomPage() {
           ) : null}
 
 
-          {currentStage ? (
+          {currentStage && !presentation.active ? (
             <TeacherClassroomPulse
               course={course}
               degraded={presence.degraded}
@@ -410,12 +442,19 @@ export default function TeachClassroomPage() {
             />
           ) : null}
 
+          {currentStage && currentStage.key !== "reflection" && presentation.active && presentationView === "analytics" && !presentationDetails ? <TeacherPresentationAnalytics course={course} stageKey={currentStage.key} showcaseData={showcaseController.data} degraded={presence.degraded} onDetails={() => setPresentationDetails(true)} /> : null}
+
           {currentStage ? (
             <section
               className={cn(
-                "classroom-stage pbl-card rounded-[var(--radius-lg)] p-3 md:p-4",
-                currentStage.key === "make" ? "overflow-visible" : "overflow-hidden",
+                "classroom-stage",
+                presentation.active ? presentationStyles.stage : cn(
+                  "pbl-card rounded-[var(--radius-lg)] p-3 md:p-4",
+                  currentStage.key === "make" ? "overflow-visible" : "overflow-hidden",
+                ),
               )}
+              data-details={presentation.active && presentationDetails}
+              hidden={currentStage.key !== "reflection" && presentation.active && presentationView === "analytics" && !presentationDetails}
               key={currentStage.key}
             >
               <TeacherStageView
@@ -423,6 +462,8 @@ export default function TeachClassroomPage() {
                 focus={dashboardFocus}
                 showcaseController={showcaseController}
                 view={currentStage.view}
+                presentation={!presentation.active || presentationDetails ? "workspace" : presentationView}
+                immersive={presentation.active}
               />
             </section>
           ) : null}
@@ -446,7 +487,7 @@ export default function TeachClassroomPage() {
         ) : null}
       </div>
 
-      {!showDataSidebar ? (
+      {!showDataSidebar && !presentation.active ? (
         <button
           aria-label="显示班级概览"
           aria-expanded="false"
@@ -460,14 +501,43 @@ export default function TeachClassroomPage() {
       ) : null}
 
 
-      <FlowActionBar
+      {!presentation.active ? <FlowActionBar
         back={previousStage ? <Button onClick={() => requestStage(course.currentStageIndex - 1)} variant="text">回退到「{previousStage.label}」</Button> : null}
         persistent
         reserveSpace={false}
         saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} onRetry={() => void session.retrySave()} state={session.saveState} />}
       >
         {nextStage ? <Button onClick={() => requestStage(course.currentStageIndex + 1)}>结束「{currentStage?.label}」并进入「{nextStage.label}」</Button> : <Button onClick={() => setEndDialogOpen(true)}>结束本次课程</Button>}
-      </FlowActionBar>
+      </FlowActionBar> : <TeacherPresentationControls
+        stageActionsRef={setStageActionsTarget}
+        course={course}
+        view={presentationView}
+        details={presentationDetails}
+        onView={(view) => { setPresentationDetails(false); setDashboardFocus(undefined); setPresentationView(view); }}
+        onWorkspace={() => setPresentationDetails(true)}
+        onDetailsClose={() => { setPresentationDetails(false); setDashboardFocus(undefined); }}
+        onStage={requestStage}
+        onTimer={() => setPresentationTool("timer")}
+        onTools={() => setPresentationTool("tools")}
+        onAdvice={() => setPresentationTool("advice")}
+        onEnd={() => setEndDialogOpen(true)}
+        saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} onRetry={() => void session.retrySave()} state={session.saveState} />}
+      />}
+
+      <Dialog open={presentation.active && presentationTool !== null} onOpenChange={(open) => { if (!open) setPresentationTool(null); }}>
+        <DialogContent className={presentationStyles.dialog}>
+          <DialogTitle>{presentationTool === "timer" ? "课堂计时" : presentationTool === "advice" ? "教学建议" : presentationTool === "invite" ? "学生邀请码" : presentationTool === "students" ? "在线学生" : "课堂工具"}</DialogTitle>
+          <DialogDescription>{currentStage?.label} · {course.name}</DialogDescription>
+          {presentationTool === "timer" ? <TimerPanel snapshot={timingSnapshot} onTogglePause={toggleClassroomTimer} onReset={resetActiveStageTimer} onAdjust={adjustActiveStage} /> : presentationTool === "advice" ? <div className={presentationStyles.advice}><RealtimeTeachingActions course={course} stageKey={currentStage?.key ?? "launch"} /></div> : null}
+          {presentationTool === "tools" ? <div className="grid gap-3 sm:grid-cols-2">
+            <Button onClick={() => setPresentationTool("invite")} variant="outline"><QrCode size={18} />学生邀请码</Button>
+            <Button onClick={() => setPresentationTool("students")} variant="outline"><Users size={18} />在线学生</Button>
+            <Link className="flex min-h-11 items-center justify-center gap-2 rounded-md border border-stone-300 px-4 text-sm font-semibold text-[var(--pbl-teacher)]" href={`/teacher/prepare/${course.platformContext?.templateId ?? course.id}/preview`} target="_blank" rel="noopener noreferrer"><Eye size={18} />查看课程</Link>
+          </div> : null}
+          {presentationTool === "invite" ? <InvitePanel code={course.inviteCode} onCopy={() => course.inviteCode ? copyTextToClipboard(normalizeInviteCode(course.inviteCode)).then(() => true, () => false) : Promise.resolve(false)} accessHref={`/teacher/classes/${course.platformContext?.offeringId ?? ""}/access`} /> : null}
+          {presentationTool === "students" ? <StudentsPanel course={course} currentStageKey={currentStage?.key} onlineStudentIds={presence.onlineStudentIds} /> : null}
+        </DialogContent>
+      </Dialog>
 
       {targetStageIndex !== null ? <StageGateDialog course={course} onConfirm={confirmStage} onOpenChange={(open) => { if (!open) setTargetStageIndex(null); }} open targetIndex={targetStageIndex} /> : null}
 
@@ -485,7 +555,7 @@ export default function TeachClassroomPage() {
 
 
       {/* 移动端工具弹窗；桌面端弹层直接锚定在对应顶栏按钮下方。 */}
-      {toolPanel ? (
+      {toolPanel && !presentation.active ? (
         <>
           <div className="fixed inset-0 z-[35] md:hidden" onClick={() => setToolPanel(null)} />
           <div className="pbl-glass fixed left-1/2 top-20 z-40 max-h-[calc(100dvh-6rem)] w-[min(360px,calc(100vw-32px))] -translate-x-1/2 overflow-y-auto rounded-[var(--radius-md)] p-4 md:hidden">
@@ -501,7 +571,9 @@ export default function TeachClassroomPage() {
           </div>
         </>
       ) : null}
+      </div>
     </DashboardShell>
+    </TeacherPresentationActionsProvider>
   );
 }
 

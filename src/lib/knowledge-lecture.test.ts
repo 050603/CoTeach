@@ -38,6 +38,22 @@ function outline(
 }
 
 describe("knowledge lecture sections", () => {
+  it("preserves source groups and gives each section quiz all of its teaching evidence", () => {
+    const first = { ...outline("first", ["a"]), teachingBrief: { schemaVersion: 1 as const, explanation: "第一个概念的核心解释", examples: ["例一"], conditions: ["条件一"], evidence: [{ sourceId: "doc", quote: "原文一" }], assessmentFocus: "解释概念一" } };
+    const second = { ...outline("second", ["b"]), teachingBrief: { ...first.teachingBrief, explanation: "第二个概念的核心解释", examples: ["例二"], conditions: ["条件二"], assessmentFocus: "解释概念二" } };
+    const result = organizeKnowledgeLectureOutlines([first, second, outline("third", ["c"])], { totalDurationSec: 1200, knowledgePoints: [
+      { id: "a", name: "概念一", description: "", groupId: "g1", groupName: "理论依据" },
+      { id: "b", name: "概念二", description: "", groupId: "g1", groupName: "理论依据" },
+      { id: "c", name: "概念三", description: "", groupId: "g2", groupName: "课堂方法" },
+    ] });
+    expect(result.sections.map((section) => section.knowledgePointIds)).toEqual([["a", "b"], ["c"]]);
+    expect(result.sections[0].title).toContain("理论依据");
+    const quiz = result.outlines.find((page) => page.id === result.sections[0].quizOutlineId)!;
+    expect(quiz.teachingBrief?.explanation).toContain("第一个概念");
+    expect(quiz.teachingBrief?.explanation).toContain("第二个概念");
+    expect(quiz.teachingBrief?.conditions).toEqual(["条件一", "条件二"]);
+    expect(quiz.teachingBrief?.evidence).toHaveLength(1);
+  });
   it.each([600, 1440, 2880, 1501])("keeps teaching and quizzes inside an exact %i second budget", (totalDurationSec) => {
     const points = Array.from({ length: 5 }, (_, index) => ({ id: `kp-${index}`, name: `知识${index}`, description: "" }));
     const result = organizeKnowledgeLectureOutlines(points.map((point) => outline(`page-${point.id}`, [point.id])), {

@@ -4,6 +4,9 @@ import {
   type PblProjectMainline,
   type PblStageKey,
 } from "@/lib/pbl-time-model";
+import type { Course } from "@/lib/session/types";
+import type { CourseStagePlan } from "@/lib/resource-package/types";
+import { knowledgeLectureBudgetBounds } from "./knowledge-lecture-budget";
 
 export type ClassroomStageTimingStatus = "pending" | "active" | "completed";
 export type ClassroomTimingStatus = "running" | "paused" | "completed";
@@ -63,11 +66,19 @@ type CreateClassroomTimingStateInput = {
   totalMinutes: number;
   projectMainline?: PblProjectMainline;
   moduleTimingPlan?: PblModuleTimingPlan;
+  stagePlan?: CourseStagePlan;
   activeStageKey?: string;
   now?: string;
 };
 
 const MIN_STAGE_SECONDS = 60;
+
+/** A lecture-only allocation is never the total duration of a five-stage course. */
+export function resolveCourseTimingMinutes(course: Pick<Course, "content" | "hours">): number {
+  return course.content.stagePlan?.totalMinutes
+    ?? course.content.projectMainline?.totalMinutes
+    ?? course.hours * 60;
+}
 
 function safeIso(value?: string): string {
   if (value && Number.isFinite(Date.parse(value))) return new Date(value).toISOString();
@@ -145,6 +156,14 @@ function enforceMinimums(
 function resolvePlannedSeconds(
   input: CreateClassroomTimingStateInput,
 ): number[] {
+  if (input.stagePlan) {
+    knowledgeLectureBudgetBounds(input.totalMinutes / 60, input.stagePlan);
+    const durations = new Map(input.stagePlan.stages.map((stage) => [stage.key as string, stage.durationMin!]));
+    if (input.stages.length !== durations.size || input.stages.some((stage) => !durations.has(stage.key))) {
+      throw new Error("课堂阶段与已确认资源包的五阶段安排不一致。");
+    }
+    return input.stages.map((stage) => durations.get(stage.key)! * 60);
+  }
   const courseTotalSec = Math.max(
     input.stages.length,
     Math.round(Math.max(0, input.totalMinutes) * 60),
@@ -316,6 +335,7 @@ export function reconcileClassroomTimingState(
     totalMinutes: input.totalMinutes,
     projectMainline: input.projectMainline,
     moduleTimingPlan: input.moduleTimingPlan,
+    stagePlan: input.stagePlan,
     activeStageKey: mappedActive,
     now,
   });

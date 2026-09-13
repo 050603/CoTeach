@@ -14,6 +14,7 @@ export async function hasSnapshotReference(tx: Prisma.TransactionClient, fileId:
     UNION ALL SELECT 1 FROM "ClassroomSubmission" WHERE "payload"::text LIKE ${needle}
     UNION ALL SELECT 1 FROM "ClassroomTemplateVersion" WHERE "snapshot"::text LIKE ${needle} OR "mediaRefs"::text LIKE ${needle}
     UNION ALL SELECT 1 FROM "StudentProjectWorkspace" WHERE "projectState"::text LIKE ${needle}
+    UNION ALL SELECT 1 FROM "GenerationJob" WHERE "request"::text LIKE ${needle} OR "result"::text LIKE ${needle}
   ) AS referenced`;
   return rows[0]?.referenced ?? false;
 }
@@ -29,10 +30,11 @@ export async function persistUpload(tx: Prisma.TransactionClient, input: {
   size: number; mimeType: string; title: string; type: string; bind: boolean; stageKey?: string;
   displayMode?: string | null; previewStorageKey?: string | null; previewMimeType?: string | null; previewSize?: number | null;
   sha256?: string | null; previewSha256?: string | null;
+  provenance?: Prisma.InputJsonValue;
 }) {
   await tx.fileAsset.create({ data: { id: input.id, originalName: input.originalName, storageKey: input.storageKey,
     offeringId: input.offeringId, uploadedById: input.uploadedById, size: BigInt(input.size), mimeType: input.mimeType,
-    sha256: input.sha256 } });
+    sha256: input.sha256, regenerationRecipe: input.provenance } });
   let previewAssetId: string | undefined;
   if (input.previewStorageKey && input.previewMimeType && input.previewSize != null) {
     const preview = await tx.fileAsset.create({ data: { originalName: `${input.originalName}.pdf`, storageKey: input.previewStorageKey,

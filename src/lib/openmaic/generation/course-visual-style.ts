@@ -16,11 +16,11 @@ export interface CourseVisualStyle {
 const PALETTES: ReadonlyArray<Omit<CourseVisualStyle, 'theme'>> = [
   {
     id: 'cobalt-teal', name: 'Cobalt & Teal', background: '#F7FAFC', surface: '#FFFFFF',
-    primary: '#1D4ED8', secondary: '#0F766E', accent: '#F59E0B', text: '#172033', mutedText: '#526077',
+    primary: '#294C6B', secondary: '#287568', accent: '#AE7730', text: '#172033', mutedText: '#526077',
   },
   {
-    id: 'indigo-amber', name: 'Indigo & Amber', background: '#F8F7FC', surface: '#FFFFFF',
-    primary: '#4F46E5', secondary: '#7C3AED', accent: '#D97706', text: '#1F1B2D', mutedText: '#625B72',
+    id: 'indigo-amber', name: 'Indigo & Amber', background: '#FAF8F3', surface: '#FFFFFF',
+    primary: '#365C74', secondary: '#397D72', accent: '#B87D37', text: '#1F1B2D', mutedText: '#625B72',
   },
   {
     id: 'forest-coral', name: 'Forest & Coral', background: '#F6FAF7', surface: '#FFFFFF',
@@ -32,7 +32,7 @@ const PALETTES: ReadonlyArray<Omit<CourseVisualStyle, 'theme'>> = [
   },
   {
     id: 'plum-rose', name: 'Plum & Rose', background: '#FCF7FB', surface: '#FFFFFF',
-    primary: '#7E22CE', secondary: '#BE185D', accent: '#E11D48', text: '#2C1831', mutedText: '#735D78',
+    primary: '#61465E', secondary: '#866752', accent: '#AB6751', text: '#2C1831', mutedText: '#735D78',
   },
 ];
 
@@ -68,9 +68,9 @@ export function resolveCourseVisualStyle(seed: string): CourseVisualStyle {
         palette.mutedText,
       ],
       fontColor: palette.text,
-      fontName: 'Microsoft YaHei',
+      fontName: 'Noto Sans SC',
       outline: { color: palette.primary, width: 2, style: 'solid' },
-      shadow: { h: 0, v: 3, blur: 14, color: '#000000' },
+      shadow: { h: 0, v: 0, blur: 0, color: '#00000000' },
     },
   };
 }
@@ -81,6 +81,8 @@ export function formatCourseVisualStyle(style: CourseVisualStyle): string {
     `Canvas background: ${style.background}; content surfaces: ${style.surface}`,
     `Primary: ${style.primary}; secondary: ${style.secondary}; accent: ${style.accent}`,
     `Main text: ${style.text}; secondary text: ${style.mutedText}`,
+    '- Typography: Noto Sans SC; 32–40px titles, 22–28px body, 18px minimum essential labels. Prefer open editorial alignment, thin rules and restrained emphasis; avoid automatic card backgrounds and shadows.',
+    '- Sparse pages need deliberate full-canvas composition: enlarge and center the focal model with balanced whitespace; do not cluster content in the upper half.',
     '- Use this exact family across every PPT page in the course. Do not invent another saturated palette.',
     '- Use primary for titles and structural anchors, secondary for relationships/comparisons, and accent only for the single most important focus or warning.',
     '- Choose the layout from the page meaning: comparison, process, evidence, hierarchy, worked example, or summary. Preserve generous whitespace and one clear visual focal point.',

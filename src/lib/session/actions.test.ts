@@ -14,6 +14,7 @@ import type {
 } from "./types";
 import { DEFAULT_STAGES } from "./types";
 import { DEFAULT_PBL_COURSE_CONFIG } from "@/lib/pbl-course-config";
+import { getStagesForSystemMode } from "@/lib/system-mode";
 
 function makeCourse(overrides: Partial<Course> = {}): Course {
   return {
@@ -137,6 +138,22 @@ describe("applySessionAction — showcase presentation", () => {
 });
 
 describe("applySessionAction — classroom timing", () => {
+  it("keeps the 135 minute package plan across reload and gives a new run an empty presenter selection", () => {
+    const course = makeCourse({ status: "ready", hours: 9 });
+    const keys = ["launch", "ai-learning", "make", "showcase", "reflection"] as const;
+    course.stages = getStagesForSystemMode("new");
+    course.content.stagePlan = { schemaVersion: 2, totalMinutes: 135, stages: keys.map((key, i) => ({ key, durationMin: [15, 30, 60, 20, 10][i] })) } as unknown as NonNullable<Course["content"]["stagePlan"]>;
+    course.content.moduleTimingPlan = { totalMinutes: 30 } as NonNullable<Course["content"]["moduleTimingPlan"]>;
+    course.uiState = { showcaseReporting: { schemaVersion: 2, selectionMode: "teacher-selected", selectedStudentIds: ["old-student"], orderedStudentIds: ["old-student"], minutesPerStudent: 3, updatedAt: "2026-01-01T00:00:00Z" } };
+    const started = applySessionAction(stateWithCourses(course), { type: "START_TEACHING", payload: { id: course.id, classConfig: { groupMode: "solo", totalStudents: 30 }, inviteCode: "123456" } });
+    expect(started.courses[0].uiState?.classroomTiming?.stages.map((stage) => stage.basePlannedSec)).toEqual([900, 1800, 3600, 1200, 600]);
+    expect(started.courses[0].uiState?.showcaseReporting).toBeUndefined();
+    started.courses[0].uiState!.classroomTiming!.stages[0].elapsedSec = 125;
+    expect(normalizeCourse(started.courses[0]).uiState?.classroomTiming?.stages[0].elapsedSec).toBe(125);
+    const restarted = applySessionAction(started, { type: "RESTART_TEACHING", payload: { id: course.id, newInviteCode: "654321" } });
+    expect(restarted.courses[0].uiState?.classroomTiming?.stages.map((stage) => stage.basePlannedSec)).toEqual([900, 1800, 3600, 1200, 600]);
+    expect(restarted.courses[0].uiState?.showcaseReporting).toBeUndefined();
+  });
   it("persists an absolute stage clock across start, stage changes, and finish", () => {
     vi.useFakeTimers();
     try {

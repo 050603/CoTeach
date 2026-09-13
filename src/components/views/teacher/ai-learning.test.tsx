@@ -258,3 +258,24 @@ describe("AiLearningTeacherView", () => {
   });
 
 });
+
+
+describe("knowledge lecture projection", () => {
+  it("keeps one preview mounted while hiding student evidence and closes details on return", () => {
+    const { rerender } = render(<AiLearningTeacherView course={course} />);
+    const preview = screen.getByText("预览学生 AI 课程");
+    fireEvent.click(screen.getByRole("button", { name: "查看张三的学习轨迹" }));
+    expect(screen.getByRole("tab", { name: "学习轨迹" })).toBeTruthy();
+    rerender(<AiLearningTeacherView course={course} presentation="teaching" />);
+    expect(screen.getByText("预览学生 AI 课程")).toBe(preview);
+    expect(screen.queryByText("学生学习情况")).toBeNull();
+    expect(screen.queryByRole("tab", { name: "学习轨迹" })).toBeNull();
+    expect(screen.queryByText("张三")).toBeNull();
+    rerender(<AiLearningTeacherView course={course} presentation="analytics" />);
+    expect(screen.getByText("预览学生 AI 课程")).toBe(preview);
+    expect(preview.closest("[hidden]")).toBeTruthy();
+    rerender(<AiLearningTeacherView course={course} />);
+    expect(screen.getByText("预览学生 AI 课程")).toBe(preview);
+    expect(screen.queryByRole("tab", { name: "学习轨迹" })).toBeNull();
+  });
+});

@@ -106,6 +106,7 @@ export async function generateAndStoreTTS(
     id: audioId,
     blob: new Blob([bytes], { type: `audio/${data.format}` }),
     format: data.format,
+    text,
     createdAt: Date.now(),
   });
 }

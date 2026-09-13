@@ -7,6 +7,7 @@ import {
   DEFAULT_NEW_COURSE_SUBJECT,
   getEmptyCourseBasicsSuggestionParts,
   parseLearningObjectives,
+  validateCourseBasicsDraft,
 } from "./course-basics-draft";
 
 function courseFixture(): Course {
@@ -92,6 +93,17 @@ describe("course basics draft", () => {
     draft.hours = 8;
 
     expect(buildCourseBasicsPatch(course, draft).hours).toBe(5);
+  });
+
+  it.each([45, 135, 360])("preserves a %i minute package budget when saving course basics", (totalMinutes) => {
+    const course = courseFixture();
+    course.content.stagePlan = { schemaVersion: 1, source: "resource-package", totalMinutes, lessonCount: null, minutesPerLesson: null, stages: [], evaluationCriteria: "", reflectionQuestions: [] };
+    const draft = createCourseBasicsDraft(course);
+    expect(draft.hours).toBe(totalMinutes / 60);
+    expect(validateCourseBasicsDraft(draft)).toBeNull();
+    draft.name = "只编辑课程名称";
+    draft.hours = 3;
+    expect(buildCourseBasicsPatch(course, draft).hours).toBe(totalMinutes / 60);
   });
 
   it("persists only one core project driving question", () => {

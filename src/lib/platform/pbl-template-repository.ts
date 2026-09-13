@@ -34,6 +34,11 @@ export async function savePblTemplateCourse(course: Course, ownerId?: string, db
     const snapshot = JSON.parse(JSON.stringify(encodePblTemplate(course))) as Prisma.InputJsonValue;
     const published = course.status === "ready";
     const latest = template?.versions[0];
+    if (published && (!latest || latest.status === "DRAFT")) {
+      const { assertCourseTeacherReview, CourseReviewError } = await import("@/lib/course-quality-review/review-service");
+      try { await assertCourseTeacherReview(course, template?.ownerId ?? ownerId); }
+      catch (error) { if (error instanceof CourseReviewError) throw new PlatformError(error.code, error.message, error.status); throw error; }
+    }
     if (!template) {
       await tx.classroomTemplate.create({ data: { id: course.id, ownerId: ownerId!, title: course.name, description: course.summary, status: "ACTIVE", versions: { create: { version: 1, status: published ? "PUBLISHED" : "DRAFT", snapshot } } } });
     } else {

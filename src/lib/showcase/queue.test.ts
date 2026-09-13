@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildShowcaseQueue, defaultShowcaseQueueOrder, normalizeMinutesPerStudent, preserveShowcaseQueueLockedPositions } from "./queue";
+import { buildShowcaseQueue, defaultShowcaseQueueOrder, normalizeMinutesPerStudent, preserveShowcaseQueueLockedPositions, showcaseRemainingSeconds } from "./queue";
 import type { FinalArtifactSummary, ShowcasePresentationSnapshot } from "@/lib/session/types";
 
 const artifact = (studentId: string, submittedAt: string, kind: "document" | "pdf" = "document"): FinalArtifactSummary => ({
@@ -71,5 +71,35 @@ describe("showcase queue", () => {
       ["movable-b", "completed", "movable-a", "started"],
       new Set(["started", "completed"]),
     )).toEqual(["started", "movable-b", "completed", "movable-a"]);
+  });
+
+  it("only queues explicitly selected students and an empty selection stays empty", () => {
+    const students = ["s1", "s2", "s3"].map((id) => ({ studentId: id, name: id, artifacts: [artifact(id, "2026-09-05T09:01:00.000Z")] }));
+    const config = { schemaVersion: 2 as const, selectionMode: "teacher-selected" as const, selectedStudentIds: ["s2"], orderedStudentIds: ["s1", "s2"], presentationSec: 80, discussionSec: 25, transitionSec: 10 };
+    const result = buildShowcaseQueue(students, [], null, config);
+    expect(result.items.map((item) => item.studentId)).toEqual(["s2"]);
+    expect(result.minutesPerStudent).toBe(115 / 60);
+    expect(buildShowcaseQueue(students, [], null, { ...config, selectedStudentIds: [] }).items).toEqual([]);
+  });
+
+  it("preserves existing presentation history when restoring a selected queue", () => {
+    const students = ["s1", "s2"].map((id) => ({ studentId: id, name: id, artifacts: [artifact(id, "2026-09-05T09:01:00.000Z")] }));
+    const result = buildShowcaseQueue(students, [presentation("s1", "ended")], null, { schemaVersion: 2, selectionMode: "teacher-selected", selectedStudentIds: [] });
+    expect(result.items.map((item) => [item.studentId, item.status])).toEqual([["s1", "completed"]]);
+    expect(result.next).toBeNull();
+  });
+
+  it("keeps discussion and transition time after presentation overruns and counts elapsed discussion", () => {
+    const students = ["s1", "s2"].map((id) => ({ studentId: id, name: id, artifacts: [artifact(id, "2026-09-05T09:01:00.000Z")] }));
+    const config = { schemaVersion: 2 as const, selectionMode: "teacher-selected" as const, selectedStudentIds: ["s1", "s2"], orderedStudentIds: ["s1", "s2"], presentationSec: 80, discussionSec: 60, transitionSec: 15 };
+    const now = Date.parse("2026-09-05T10:02:00Z");
+    const active = { ...presentation("s1", "active"), startedAt: "2026-09-05T10:00:00Z" };
+    const presenting = buildShowcaseQueue(students, [active], "s1", config, now);
+    expect(showcaseRemainingSeconds(presenting.current!, config, now)).toBe(75);
+    const evaluating = buildShowcaseQueue(students, [{ ...active, status: "evaluating", endedAt: "2026-09-05T10:01:30Z" }], "s1", config, now);
+    expect(showcaseRemainingSeconds(evaluating.current!, config, now)).toBe(45);
+    expect(evaluating.next?.estimatedWaitMinutes).toBe(1);
+    const restored = buildShowcaseQueue([{ ...students[0], artifacts: [] }], [presentation("s1", "ended")], null, { ...config, selectedStudentIds: [] });
+    expect(restored.items[0]?.status).toBe("completed");
   });
 });

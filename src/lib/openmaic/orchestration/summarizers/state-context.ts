@@ -15,7 +15,7 @@ function stripHtml(html: string): string {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PPTElement variants have heterogeneous shapes
 function summarizeElement(el: any): string {
-  const id = el.id ? `[id:${el.id}]` : '';
+  const id = `${el.id ? `[id:${el.id}]` : ''}${el.groupId ? `[group:${el.groupId}]` : ''}`;
   const pos = `at (${Math.round(el.left)},${Math.round(el.top)})`;
   const size =
     el.width != null && el.height != null
@@ -54,7 +54,9 @@ function summarizeElement(el: any): string {
       const sy = el.start?.[1] ?? 0;
       const ex = el.end?.[0] ?? 0;
       const ey = el.end?.[1] ?? 0;
-      return `${id} line: (${lx + sx},${ly + sy}) → (${lx + ex},${ly + ey})`;
+      const attachments = [el.whiteboard?.action?.startAnchor, el.whiteboard?.action?.endAnchor]
+        .map((anchor) => anchor ? `${anchor.elementId}.${anchor.side}` : 'free').join(' → ');
+      return `${id} line: (${lx + sx},${ly + sy}) → (${lx + ex},${ly + ey}); attachments ${attachments}`;
     }
     case 'code': {
       const lang = el.language || 'unknown';
@@ -218,12 +220,13 @@ export function buildStateContext(storeState: StatelessChatRequest['storeState']
     );
   }
 
-  // Whiteboard content (last whiteboard in the stage)
+  // Match the same scene-owned board selected by the playback Stage API.
   if (stage?.whiteboard && stage.whiteboard.length > 0) {
-    const lastWb = stage.whiteboard[stage.whiteboard.length - 1];
-    const wbElements = lastWb.elements || [];
+    const scoped = stage.whiteboard.find((board) => board.id === `whiteboard-scene:${currentSceneId}`);
+    const current = scoped ?? (stage.whiteboard.some((board) => board.id.startsWith('whiteboard-scene:')) ? undefined : stage.whiteboard.at(-1));
+    const wbElements = current?.elements || [];
     lines.push(
-      `Whiteboard (last of ${stage.whiteboard.length}, ${wbElements.length} elements):\n${summarizeElements(wbElements)}`,
+      `Current scene whiteboard (${wbElements.length} elements, canvas 1000×562.5):\n${summarizeElements(wbElements)}`,
     );
     const conflictsText = buildWhiteboardConflicts(wbElements);
     if (conflictsText) lines.push(conflictsText);

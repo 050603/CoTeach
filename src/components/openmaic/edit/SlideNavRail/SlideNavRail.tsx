@@ -10,13 +10,14 @@ import { useStageStore } from '@openmaic/lib/store';
 import { useSettingsStore } from '@openmaic/lib/store/settings';
 import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import { useDeletedSceneRecycle } from '@openmaic/lib/edit/deleted-scene-recycle';
-import { clientUUID } from '@/lib/uuid';
-import { createBlankSlideScene, duplicateSlideScene } from '@openmaic/lib/edit/slide-defaults';
+import { createBlankSlideScene, duplicateScene } from '@openmaic/lib/edit/slide-defaults';
 import { SCENE_CREATION_ENABLED } from '@openmaic/lib/edit/scene-creation-enabled';
 import { CHROME_DURATION_MS, CHROME_EASE, CHROME_EASE_CSS } from '@openmaic/lib/edit/transitions';
 import type { Scene } from '@openmaic/lib/types/stage';
 import { ThumbItem } from './ThumbItem';
 import { InsertionZone } from './InsertionZone';
+import { EditorControls, type EditorControlsProps } from '../EditShell/EditorControls';
+import { useEditorMediaQuery } from '../EditShell/use-editor-media-query';
 
 const RAIL_COLLAPSED_PX = 56;
 const RAIL_MIN_PX = 180;
@@ -37,7 +38,13 @@ const RAIL_MAX_PX = 360;
  * explicit grip handle on the thumb so the whole tile remains
  * click-to-switch.
  */
-export function SlideNavRail() {
+export function SlideNavRail({
+  brand,
+  editorControls,
+}: {
+  readonly brand?: { src: string; iconSrc?: string; alt: string; href?: string };
+  readonly editorControls?: EditorControlsProps;
+} = {}) {
   const { t } = useI18n();
   const router = useRouter();
   const scenes = useStageStore.use.scenes();
@@ -47,8 +54,15 @@ export function SlideNavRail() {
   const insertSceneAfter = useStageStore.use.insertSceneAfter();
   const deleteScene = useStageStore.use.deleteScene();
   const stage = useStageStore.use.stage();
-  const collapsed = useSettingsStore((s) => s.editRailCollapsed);
-  const setCollapsed = useSettingsStore((s) => s.setEditRailCollapsed);
+  const persistedCollapsed = useSettingsStore((s) => s.editRailCollapsed);
+  const setPersistedCollapsed = useSettingsStore((s) => s.setEditRailCollapsed);
+  const narrow = useEditorMediaQuery('(max-width: 767px)');
+  const [narrowExpanded, setNarrowExpanded] = useState(false);
+  const collapsed = narrow ? !narrowExpanded : persistedCollapsed;
+  const setCollapsed = (value: boolean) => {
+    if (narrow) setNarrowExpanded(!value);
+    else setPersistedCollapsed(value);
+  };
   const persistedWidth = useSettingsStore((s) => s.editRailWidth);
   const setPersistedWidth = useSettingsStore((s) => s.setEditRailWidth);
   const prefersReducedMotion = useReducedMotion();
@@ -73,6 +87,7 @@ export function SlideNavRail() {
   // 280ms tween from the collapse/expand animation would fight every
   // direct width write.
   const railRef = useRef<HTMLElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const dragStateRef = useRef<{
     startX: number;
     startWidth: number;
@@ -112,8 +127,8 @@ export function SlideNavRail() {
       }
       dragStateRef.current = {
         startX: e.clientX,
-        startWidth: persistedWidth,
-        lastWidth: persistedWidth,
+        startWidth: railRef.current?.getBoundingClientRect().width ?? persistedWidth,
+        lastWidth: railRef.current?.getBoundingClientRect().width ?? persistedWidth,
         pointerId: e.pointerId,
       };
       document.body.style.cursor = 'col-resize';
@@ -176,20 +191,21 @@ export function SlideNavRail() {
         .map((id) => byId.get(id))
         .filter((s): s is Scene => Boolean(s));
       if (next.length !== scenes.length) return;
-      const rebalanced = next.map((s, i) => (s.order === i + 1 ? s : { ...s, order: i + 1 }));
-      setScenes(rebalanced);
+      if (new Set(newOrder).size !== scenes.length) return;
+      setScenes(next);
     },
     [scenes, setScenes],
   );
 
   const handleActivate = useCallback(
     (sceneId: string) => {
+      if (narrow) setNarrowExpanded(false);
       if (sceneId === currentSceneId) return;
       // Switching to a non-slide scene is fine — useEditModeLock will
       // auto-exit Pro mode the moment the new scene is uneditable.
       setCurrentSceneId(sceneId);
     },
-    [currentSceneId, setCurrentSceneId],
+    [currentSceneId, narrow, setCurrentSceneId],
   );
 
   /**
@@ -204,7 +220,7 @@ export function SlideNavRail() {
       if (!stage) return;
       const beforeIndex = scenes.findIndex((s) => s.id === beforeSceneId);
       if (beforeIndex < 0) return;
-      const blank = createBlankSlideScene(stage.id, t('edit.nav.untitledSlide'), beforeIndex + 1);
+      const blank = createBlankSlideScene(stage.id, t('edit.nav.untitledSlide'), beforeIndex, scenes[beforeIndex]);
       if (beforeIndex === 0) {
         // Prepend: setScenes rebalances `order` to match the array index.
         setScenes([blank, ...scenes]);
@@ -226,8 +242,8 @@ export function SlideNavRail() {
         : (currentScene ?? scenes[scenes.length - 1]);
       if (!anchor) return;
       const anchorIndex = scenes.findIndex((s) => s.id === anchor.id);
-      const newOrder = anchorIndex + 2;
-      const blank = createBlankSlideScene(stage.id, t('edit.nav.untitledSlide'), newOrder);
+      const newOrder = anchorIndex + 1;
+      const blank = createBlankSlideScene(stage.id, t('edit.nav.untitledSlide'), newOrder, anchor);
       insertSceneAfter(anchor.id, blank);
       setCurrentSceneId(blank.id);
     },
@@ -239,20 +255,8 @@ export function SlideNavRail() {
       const source = scenes.find((s) => s.id === sceneId);
       if (!source) return;
       const anchorIndex = scenes.findIndex((s) => s.id === sceneId);
-      const newOrder = anchorIndex + 2;
-      // Slide scenes get a deep clone with reseeded element IDs; non-slide
-      // scenes just get a shallow id + title bump.
-      const copy: Scene =
-        source.type === 'slide'
-          ? duplicateSlideScene(source, t('edit.nav.copySuffix'), newOrder)
-          : {
-              ...source,
-              id: clientUUID(),
-              title: `${source.title} ${t('edit.nav.copySuffix')}`,
-              order: newOrder,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-            };
+      const newOrder = anchorIndex + 1;
+      const copy = duplicateScene(source, t('edit.nav.copySuffix'), newOrder);
       insertSceneAfter(sceneId, copy);
       setCurrentSceneId(copy.id);
     },
@@ -325,155 +329,182 @@ export function SlideNavRail() {
       : `width ${CHROME_DURATION_MS}ms ${CHROME_EASE_CSS}`;
 
   return (
-    <aside
-      ref={railRef}
-      data-testid="slide-nav-rail"
-      data-collapsed={collapsed}
-      // Mirrors playback SceneSidebar: white/translucent surface, soft
-      // right border, backdrop blur. `overflow-hidden` clips tiles to
-      // the rail's current width — without it, mid-drag widths leak
-      // children rightward (the inner scroll body has overflow-x-hidden
-      // but it sits inside this aside and only clips its own
-      // descendants, not the aside's edge).
-      //
-      // Width is React-driven only outside drag gestures. During a drag,
-      // `handleResizeStart` writes `style.width` directly on this element
-      // for instant, cursor-locked tracking; React's render value would
-      // arrive too late.
-      className={cn(
-        'relative flex h-full shrink-0 flex-col overflow-hidden',
-        'border-r border-gray-100 dark:border-gray-800',
-        'bg-white/80 dark:bg-stone-900/80 backdrop-blur-xl',
-        'shadow-[2px_0_24px_rgba(0,0,0,0.02)]',
-      )}
-      style={{
-        width: collapsed ? RAIL_COLLAPSED_PX : persistedWidth,
-        transition: widthTransitionCss,
-      }}
-    >
-      {/* Resize handle — right edge, 6px hit zone, only enabled when
-          expanded. Pointer Events with capture: once the gesture starts
-          this element owns the move/up/cancel stream regardless of
-          cursor location, so the rail can't get stuck in a "still
-          dragging" state on alt-tab / window blur / cursor-leaves-
-          window. */}
-      {!collapsed && (
-        <div
-          onPointerDown={handleResizeStart}
-          onPointerMove={handleResizeMove}
-          onPointerUp={handleResizeEnd}
-          onPointerCancel={handleResizeEnd}
-          className="group absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize touch-none hover:bg-violet-400/30 dark:hover:bg-violet-500/30 active:bg-violet-500/50 transition-colors"
-        >
-          <div className="absolute right-0.5 top-1/2 -translate-y-1/2 w-0.5 h-8 rounded-full bg-gray-300 dark:bg-gray-600 group-hover:bg-violet-400 dark:group-hover:bg-violet-500 transition-colors" />
-        </div>
-      )}
-      {/* Header band — mirrors playback `SceneSidebar`: OpenMAIC logo
-          on the left (click → home), action cluster on the right.
-          Height (h-10 + mt-3 mb-1 = ~56px) matches playback so the
-          chrome top edge stays at the same screen pixel across the
-          mode swap. */}
-      <div
+    <div className="relative h-full shrink-0" style={{ width: narrow ? RAIL_COLLAPSED_PX : undefined }}>
+      <aside
+        ref={railRef}
+        data-testid="slide-nav-rail"
+        data-collapsed={collapsed}
+        onKeyDown={(event) => {
+          if (narrow && !collapsed && event.key === 'Escape') {
+            setNarrowExpanded(false);
+            toggleRef.current?.focus();
+          }
+        }}
+        // Mirrors playback SceneSidebar: white/translucent surface, soft
+        // right border, backdrop blur. `overflow-hidden` clips tiles to
+        // the rail's current width — without it, mid-drag widths leak
+        // children rightward (the inner scroll body has overflow-x-hidden
+        // but it sits inside this aside and only clips its own
+        // descendants, not the aside's edge).
+        //
+        // Width is React-driven only outside drag gestures. During a drag,
+        // `handleResizeStart` writes `style.width` directly on this element
+        // for instant, cursor-locked tracking; React's render value would
+        // arrive too late.
         className={cn(
-          'shrink-0 px-3 mt-3 mb-1 h-10',
-          collapsed ? 'flex flex-col items-center gap-1' : 'flex items-center justify-between',
+          'relative flex h-full shrink-0 flex-col overflow-hidden',
+          'border-r border-gray-100 dark:border-gray-800',
+          'bg-white/80 dark:bg-stone-900/80 backdrop-blur-xl',
+          'shadow-[2px_0_24px_rgba(0,0,0,0.02)]',
+          narrow && !collapsed && 'absolute left-0 top-0 z-40 shadow-lg',
         )}
+        style={{
+          width: collapsed ? RAIL_COLLAPSED_PX : persistedWidth,
+          maxWidth: narrow ? 'calc(100vw - 44px)' : '24vw',
+          transition: widthTransitionCss,
+        }}
       >
-        {!collapsed && (
-          <button
-            type="button"
-            onClick={() => router.push('/')}
-            title={t('generation.backToHome')}
-            className="flex items-center gap-2 cursor-pointer rounded-lg px-1.5 -mx-1.5 py-1 -my-1 hover:bg-gray-100/80 dark:hover:bg-gray-800/60 active:scale-[0.97] transition-all duration-150"
+        {/* Resize handle — right edge, 6px hit zone, only enabled when
+            expanded. Pointer Events with capture: once the gesture starts
+            this element owns the move/up/cancel stream regardless of
+            cursor location, so the rail can't get stuck in a "still
+            dragging" state on alt-tab / window blur / cursor-leaves-
+            window. */}
+        {!collapsed && !narrow && (
+          <div
+            onPointerDown={handleResizeStart}
+            onPointerMove={handleResizeMove}
+            onPointerUp={handleResizeEnd}
+            onPointerCancel={handleResizeEnd}
+            className="group absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize touch-none hover:bg-violet-400/30 dark:hover:bg-violet-500/30 active:bg-violet-500/50 transition-colors"
           >
-            <img src="/logo-horizontal.png" alt="OpenMAIC" className="h-6" />
-          </button>
+            <div className="absolute right-0.5 top-1/2 -translate-y-1/2 w-0.5 h-8 rounded-full bg-gray-300 dark:bg-gray-600 group-hover:bg-violet-400 dark:group-hover:bg-violet-500 transition-colors" />
+          </div>
         )}
-        <div className={cn('flex items-center gap-1', collapsed && 'flex-col')}>
-          {/* Insertion lives in the `InsertionZone` strips between (and
-              before/after) thumbs now — no header `+` button. */}
-          <button
-            type="button"
-            onClick={() => setCollapsed(!collapsed)}
-            aria-label={collapsed ? t('edit.nav.expand') : t('edit.nav.collapse')}
-            title={collapsed ? t('edit.nav.expand') : t('edit.nav.collapse')}
-            className={cn(
-              'inline-flex h-7 w-7 items-center justify-center rounded-lg',
-              'bg-gray-100/80 text-gray-500 ring-1 ring-black/[0.04]',
-              'dark:bg-gray-800/80 dark:text-gray-400 dark:ring-white/[0.06]',
-              'hover:bg-gray-200/90 hover:text-gray-700',
-              'dark:hover:bg-gray-700/90 dark:hover:text-gray-200',
-              'active:scale-90 transition-all duration-200',
-            )}
-          >
-            {collapsed ? (
-              <PanelLeftOpen className="h-4 w-4" />
-            ) : (
-              <PanelLeftClose className="h-4 w-4" />
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Body — list padding (p-2 space-y-2) matches playback's scene
-          list so spacing/density read the same. */}
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide pt-1">
-        {collapsed ? (
-          <CollapsedList
-            scenes={scenes}
-            currentSceneId={currentSceneId}
-            onActivate={handleActivate}
-          />
-        ) : (
-          <AnimatePresence initial={false}>
-            <motion.div
-              key="expanded-list"
-              initial={prefersReducedMotion ? false : { opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.18, ease: CHROME_EASE }}
-              className="p-2"
+        {/* Keep the brand stable as pages change; page titles belong to thumbnails. */}
+        <div
+          className={cn(
+            'flex min-h-11 shrink-0 items-center gap-1 px-1.5 pt-1.5',
+            collapsed ? 'flex-col justify-center' : 'justify-between',
+          )}
+        >
+          {(!collapsed || brand?.iconSrc) && (brand && !brand.href ? (
+            <div className="flex min-h-11 min-w-0 items-center px-1.5">
+              <img
+                src={collapsed ? brand.iconSrc : brand.src}
+                alt={brand.alt}
+                draggable={false}
+                className={cn('object-contain', collapsed ? 'size-8' : 'h-8 w-full max-w-[132px] object-left dark:brightness-0 dark:invert')}
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => router.push(brand?.href ?? '/')}
+              title={t('generation.backToHome')}
+              aria-label={t('generation.backToHome')}
+              className="flex min-h-11 min-w-0 items-center gap-2 cursor-pointer rounded-lg px-1.5 hover:bg-gray-100/80 dark:hover:bg-gray-800/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-current transition-colors"
             >
-              <Reorder.Group
-                axis="y"
-                values={scenes.map((s) => s.id)}
-                onReorder={onReorderIds}
-                as="ol"
-                className="m-0 list-none p-0"
-              >
-                {/* Leading zone — hover the top padding to insert
-                    before the first thumb. Hits the `+ at top` use
-                    case the user called out. */}
-                {SCENE_CREATION_ENABLED && scenes[0] ? (
-                  <InsertionZone
-                    label={t('edit.nav.addSlide')}
-                    onInsert={() => handleInsertBefore(scenes[0].id)}
-                  />
-                ) : null}
-                {scenes.map((scene, index) => (
-                  <Fragment key={scene.id}>
-                    <ThumbItem
-                      scene={scene}
-                      index={index}
-                      active={scene.id === currentSceneId}
-                      canDelete={scene.type === 'slide' ? canDeleteSlide : canDeleteAny}
-                      onActivate={() => handleActivate(scene.id)}
-                      onDuplicate={() => handleDuplicate(scene.id)}
-                      onDelete={() => handleDelete(scene.id)}
-                    />
-                    {SCENE_CREATION_ENABLED && (
-                      <InsertionZone
-                        label={t('edit.nav.addSlide')}
-                        onInsert={() => handleInsertAt(scene.id)}
-                      />
-                    )}
-                  </Fragment>
-                ))}
-              </Reorder.Group>
-            </motion.div>
-          </AnimatePresence>
+              <img
+                src={(collapsed ? brand?.iconSrc : brand?.src) ?? '/logo-horizontal.png'}
+                alt={brand?.alt ?? 'OpenMAIC'}
+                className={cn('object-contain', collapsed ? 'size-8' : 'h-6 w-full max-w-[132px] object-left')}
+              />
+            </button>
+          ))}
+          <div className={cn('flex items-center gap-1', collapsed && 'flex-col')}>
+            {/* Insertion lives in the `InsertionZone` strips between (and
+                before/after) thumbs now — no header `+` button. */}
+            <button
+              ref={toggleRef}
+              type="button"
+              onClick={() => setCollapsed(!collapsed)}
+              aria-expanded={!collapsed}
+              aria-label={collapsed ? t('edit.nav.expand') : t('edit.nav.collapse')}
+              title={collapsed ? t('edit.nav.expand') : t('edit.nav.collapse')}
+              className={cn(
+                'inline-flex size-11 shrink-0 items-center justify-center rounded-lg',
+                'bg-gray-100/80 text-gray-500 ring-1 ring-black/[0.04]',
+                'dark:bg-gray-800/80 dark:text-gray-400 dark:ring-white/[0.06]',
+                'hover:bg-gray-200/90 hover:text-gray-700',
+                'dark:hover:bg-gray-700/90 dark:hover:text-gray-200',
+                'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-current transition-colors',
+              )}
+            >
+              {collapsed ? (
+                <PanelLeftOpen className="h-4 w-4" />
+              ) : (
+                <PanelLeftClose className="h-4 w-4" />
+              )}
+            </button>
+          </div>
+        </div>
+        {editorControls && (
+          <div className={cn('shrink-0 border-b border-zinc-100 px-1.5 pb-1 dark:border-zinc-800', collapsed && 'flex justify-center')}>
+            <EditorControls history={editorControls.history} commands={editorControls.commands} vertical={collapsed} />
+          </div>
         )}
-      </div>
-    </aside>
+
+        {/* Body — list padding (p-2 space-y-2) matches playback's scene
+            list so spacing/density read the same. */}
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide pt-1">
+          {collapsed ? (
+            <CollapsedList
+              scenes={scenes}
+              currentSceneId={currentSceneId}
+              onActivate={handleActivate}
+            />
+          ) : (
+            <AnimatePresence initial={false}>
+              <motion.div
+                key="expanded-list"
+                initial={prefersReducedMotion ? false : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.18, ease: CHROME_EASE }}
+                className="p-2"
+              >
+                <Reorder.Group
+                  axis="y"
+                  values={scenes.map((s) => s.id)}
+                  onReorder={onReorderIds}
+                  as="ol"
+                  className="m-0 list-none p-0"
+                >
+                  {/* Leading zone — hover the top padding to insert
+                      before the first thumb. Hits the `+ at top` use
+                      case the user called out. */}
+                  {SCENE_CREATION_ENABLED && scenes[0] ? (
+                    <InsertionZone
+                      label={t('edit.nav.addSlide')}
+                      onInsert={() => handleInsertBefore(scenes[0].id)}
+                    />
+                  ) : null}
+                  {scenes.map((scene, index) => (
+                    <Fragment key={scene.id}>
+                      <ThumbItem
+                        scene={scene}
+                        index={index}
+                        active={scene.id === currentSceneId}
+                        canDelete={scene.type === 'slide' ? canDeleteSlide : canDeleteAny}
+                        onActivate={() => handleActivate(scene.id)}
+                        onDuplicate={() => handleDuplicate(scene.id)}
+                        onDelete={() => handleDelete(scene.id)}
+                      />
+                      {SCENE_CREATION_ENABLED && (
+                        <InsertionZone
+                          label={t('edit.nav.addSlide')}
+                          onInsert={() => handleInsertAt(scene.id)}
+                        />
+                      )}
+                    </Fragment>
+                  ))}
+                </Reorder.Group>
+              </motion.div>
+            </AnimatePresence>
+          )}
+        </div>
+      </aside>
+    </div>
   );
 }
 
@@ -495,10 +526,12 @@ function CollapsedList({ scenes, currentSceneId, onActivate }: CollapsedListProp
               type="button"
               onClick={() => onActivate(scene.id)}
               title={scene.title || `${index + 1}`}
+              aria-label={scene.title || `${index + 1}`}
+              aria-current={active ? 'page' : undefined}
               data-active={active}
               data-scene-type={scene.type}
               className={cn(
-                'group/cl flex h-7 w-full items-center justify-center rounded-md',
+                'group/cl flex h-11 w-full items-center justify-center rounded-md focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-current',
                 'font-mono text-[10px] leading-none tabular-nums tracking-wide transition-colors',
                 active
                   ? 'bg-violet-500 text-white shadow-sm shadow-violet-500/40'

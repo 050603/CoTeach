@@ -1,3 +1,4 @@
+import { planCourseSlideVisuals, fallbackSlideVisualPlan } from "@openmaic/lib/generation/slide-visual-plan";
 import { nanoid } from 'nanoid';
 import { callLLM } from '@openmaic/lib/ai/llm';
 import { createStageAPI } from '@openmaic/lib/api/stage-api';
@@ -79,6 +80,7 @@ function getSpeechActionText(actions: ReadonlyArray<Action> | undefined): string
 }
 
 export interface GenerateClassroomInput {
+  teachingSourceContext?: string;
   requirement: string;
   generationMode?: UserRequirements['generationMode'];
   pblProfile?: UserRequirements['pblProfile'];
@@ -622,6 +624,7 @@ export async function generateClassroom(
 
   const requirements: UserRequirements = {
     requirement,
+    teachingSourceContext: input.teachingSourceContext,
     generationMode: input.generationMode,
     pblProfile: input.pblProfile,
     pblTeachingActivities: input.pblTeachingActivities,
@@ -784,6 +787,21 @@ export async function generateClassroom(
       log.warn('Media planning failed; continuing with confirmed course content:', error);
     }
   }
+  // A shared storyboard makes the full deck coherent before independent page workers run.
+  if (baseOutlines.some((outline) => outline.type === 'slide' && !outline.visualPlan)) {
+    await reportProgress({ step: 'generating_outlines', progress: 28, message: '正在规划每页核心内容、图示与整体构图', scenesGenerated: 0, totalScenes: baseOutlines.length });
+    try {
+      baseOutlines = await withGenerationRetry(
+        () => planCourseSlideVisuals(baseOutlines, aiCall, input.teachingSourceContext ?? requirement),
+        { label: 'slide visual storyboards', maxRetries: 1, signal: options.signal },
+      );
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      log.warn('Visual storyboarding unavailable; using semantic compositions:', error);
+      baseOutlines = baseOutlines.map((outline) => outline.type === 'slide'
+        ? { ...outline, visualPlan: outline.visualPlan ?? fallbackSlideVisualPlan(outline) } : outline);
+    }
+  }
   const ttsTimingSelection = resolveServerTtsTimingSelection({
     providerId: input.ttsProviderId,
     modelId: input.ttsModelId,
@@ -933,6 +951,9 @@ export async function generateClassroom(
       const content = await withGenerationRetry(
         () =>
           generateSceneContent(safeOutline, sceneAiCall, {
+            // Content review runs across the completed section in the background;
+            // keep the fast draft path bounded to concrete rendering/structure repair.
+            reviewSlideContent: false,
             agents,
             languageDirective,
             userRequirements: requirements,
@@ -965,6 +986,7 @@ export async function generateClassroom(
             languageDirective,
             pblProfile: requirements.pblProfile,
             teachingConstraints: requirements.teachingConstraints,
+            teachingSourceContext: requirements.teachingSourceContext,
           }),
         {
           label: `scene ${index + 1}/${outlines.length} actions`,
@@ -993,6 +1015,7 @@ export async function generateClassroom(
             languageDirective,
             pblProfile: requirements.pblProfile,
             teachingConstraints: requirements.teachingConstraints,
+            teachingSourceContext: requirements.teachingSourceContext,
             teachingToolCorrection: correction,
           }),
           {
@@ -1045,6 +1068,7 @@ export async function generateClassroom(
               languageDirective,
               pblProfile: requirements.pblProfile,
               teachingConstraints: requirements.teachingConstraints,
+              teachingSourceContext: requirements.teachingSourceContext,
               timingCorrection: firstAssessment.suggestions.join('；'),
             }),
             {

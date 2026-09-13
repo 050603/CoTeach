@@ -765,6 +765,7 @@ export class PlaybackEngine {
       case 'play_video':
       case 'wb_open':
       case 'wb_draw_text':
+      case 'wb_draw_image':
       case 'wb_draw_shape':
       case 'wb_draw_chart':
       case 'wb_draw_latex':

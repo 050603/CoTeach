@@ -32,7 +32,12 @@ export type ShowcaseQueueItem = {
 };
 
 export type ShowcaseQueueConfig = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
+  selectionMode?: "teacher-selected";
+  selectedStudentIds?: string[];
+  presentationSec?: number;
+  discussionSec?: number;
+  transitionSec?: number;
   orderedStudentIds: string[];
   minutesPerStudent: number;
   updatedAt: string;
@@ -62,6 +67,8 @@ export type ShowcaseData = {
   presentations: ShowcasePresentationSnapshot[];
   queue: ShowcaseQueueItem[];
   minutesPerStudent: number;
+  queueConfig?: ShowcaseQueueConfig;
+  budget?: { stageRemainingSec: number; plannedRemainingSec: number; overrunSec: number };
   currentQueueItem?: ShowcaseQueueItem | null;
   nextQueueItem?: ShowcaseQueueItem | null;
 };
@@ -76,6 +83,11 @@ export type ShowcaseAction =
       action: "save-queue";
       orderedStudentIds: string[];
       minutesPerStudent: number;
+      selectionMode?: "teacher-selected";
+      selectedStudentIds?: string[];
+      presentationSec?: number;
+      discussionSec?: number;
+      transitionSec?: number;
     }
   | {
       action: "request";

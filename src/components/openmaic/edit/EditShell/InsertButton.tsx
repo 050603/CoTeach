@@ -18,18 +18,20 @@ export function InsertButton({ item }: { readonly item: InsertPaletteItem }) {
   const button = (
     <button
       type="button"
+      aria-label={item.label}
+      aria-pressed={item.active}
       disabled={item.disabled}
       onClick={item.popoverContent ? undefined : item.onInvoke}
-      className={`group flex h-9 items-center gap-1.5 rounded-xl px-3 transition-colors disabled:pointer-events-none disabled:opacity-40 ${
+      className={`group flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-[10px] px-2 transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-current disabled:pointer-events-none disabled:opacity-40 sm:px-3 ${
         item.active
           ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300'
           : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'
       }`}
     >
-      <span className="flex h-4 w-4 items-center justify-center [&>svg]:h-4 [&>svg]:w-4">
+      {item.icon && <span className="flex size-4 shrink-0 items-center justify-center [&>svg]:h-4 [&>svg]:w-4">
         {item.icon}
-      </span>
-      <span className="text-xs font-medium">{item.label}</span>
+      </span>}
+      <span className={`whitespace-nowrap text-xs font-medium ${item.icon ? 'hidden sm:inline' : ''}`}>{item.label}</span>
     </button>
   );
 

@@ -4,17 +4,30 @@ import { useState } from "react";
 import { ChevronDown, Eye, Network, PanelLeft, ShieldCheck } from "lucide-react";
 import { StudentStageHost } from "@/components/openmaic-bridge/student-stage-host";
 import type { Course } from "@/lib/session/types";
+import type { TeacherPresentationMode } from "@/lib/classroom/presentation";
 import { cn } from "@/lib/utils";
+import { TeacherPresentationActions } from "@/components/classroom/teacher-presentation-actions";
 
-export function AiLearningTeacherPreview({ course }: { course: Course }) {
+export function AiLearningTeacherPreview({ course, presentation = "workspace" }: { course: Course; presentation?: TeacherPresentationMode }) {
   const [expanded, setExpanded] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [teachingVisited, setTeachingVisited] = useState(presentation === "teaching");
+  const [teachingDirectoryOpen, setTeachingDirectoryOpen] = useState(false);
+  const teaching = presentation !== "workspace";
+  if (presentation === "teaching" && !teachingVisited) setTeachingVisited(true);
+  const visible = presentation === "teaching" || (presentation === "workspace" && expanded);
 
   if (!course.aiLearningClassroomId) return null;
 
   return (
-    <section className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--pbl-border)] bg-[var(--pbl-surface)]">
+    <section className={cn("overflow-hidden rounded-[var(--radius-lg)] border border-[var(--pbl-border)] bg-[var(--pbl-surface)]", teaching && "teacher-course-preview flex h-full min-h-0 flex-col")}>
+      {presentation !== "analytics" ? <TeacherPresentationActions>
+        <button aria-expanded={teaching ? teachingDirectoryOpen : expanded} data-tone="primary" onClick={() => { if (teaching) setTeachingDirectoryOpen((value) => !value); else setExpanded((value) => !value); }} type="button">
+          <PanelLeft size={20} />{teaching ? teachingDirectoryOpen ? "收起课程目录" : "课程目录" : expanded ? "收起课程预览" : "打开课程预览"}
+        </button>
+      </TeacherPresentationActions> : null}
       <button
+        hidden={teaching}
         aria-controls={`ai-learning-teacher-preview-${course.id}`}
         aria-expanded={expanded}
         className={cn(
@@ -31,7 +44,7 @@ export function AiLearningTeacherPreview({ course }: { course: Course }) {
           <span className="min-w-0">
             <span className="block text-base font-bold text-stone-900">学生知识讲授课程预览</span>
             <span className="mt-0.5 block text-xs text-stone-500">
-              {expanded ? "正在预览 · 收起后自动停止播放" : "默认收起 · 点击展开课程"}
+              {expanded ? (teachingVisited ? "正在预览 · 保留授课位置" : "正在预览 · 收起后自动停止播放") : "默认收起 · 点击展开课程"}
             </span>
           </span>
         </span>
@@ -48,22 +61,23 @@ export function AiLearningTeacherPreview({ course }: { course: Course }) {
         </span>
       </button>
 
-      {expanded ? (
-        <div className="p-3" id={`ai-learning-teacher-preview-${course.id}`}>
-          <div className="mb-3 flex items-center gap-2 rounded-[6px] bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-100">
+      {teaching ? <div className="flex shrink-0 justify-end border-b border-stone-200 p-2"><button aria-expanded={teachingDirectoryOpen} className="inline-flex min-h-11 items-center gap-2 rounded-[6px] border border-stone-300 bg-white px-4 text-lg font-semibold" onClick={() => setTeachingDirectoryOpen((value) => !value)} type="button"><PanelLeft size={20} />{teachingDirectoryOpen ? "收起课程目录" : "课程目录"}</button></div> : null}
+      {expanded || teachingVisited || presentation === "teaching" ? (
+        <div hidden={!visible} className={cn("p-3", teaching && "min-h-0 flex-1 !p-0")} id={`ai-learning-teacher-preview-${course.id}`}>
+          <div hidden={teaching} className="mb-3 flex items-center gap-2 rounded-[6px] bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-100">
             <ShieldCheck size={15} />
             预览操作不会写入学生进度；可通过左侧缩略页快速切换课程内容。
           </div>
           <StudentStageHost
             backHref="#"
-            className="h-[min(780px,calc(100dvh-170px))] min-h-[640px] max-h-[860px]"
+            className={teaching ? "h-full min-h-[240px]" : "h-[min(780px,calc(100dvh-170px))] min-h-[640px] max-h-[860px]"}
             classroomId={course.aiLearningClassroomId}
             courseId={course.id}
             knowledgeGraph={course.content.knowledgeGraph}
             knowledgePoints={course.content.knowledgePoints}
             mode="teacher-preview"
-            onSidebarCollapsedChange={setSidebarCollapsed}
-            sidebarCollapsed={sidebarCollapsed}
+            onSidebarCollapsedChange={teaching ? (collapsed) => setTeachingDirectoryOpen(!collapsed) : setSidebarCollapsed}
+            sidebarCollapsed={teaching ? !teachingDirectoryOpen : sidebarCollapsed}
             variant="embedded"
           />
         </div>

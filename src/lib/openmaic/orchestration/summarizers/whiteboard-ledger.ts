@@ -9,7 +9,8 @@ import type { WhiteboardActionRecord } from '../types';
 interface VirtualWhiteboardElement {
   agentName: string;
   summary: string;
-  elementId?: string; // Present for elements from initial whiteboard state
+  elementId?: string;
+  targets?: string[];
 }
 
 /**
@@ -31,16 +32,21 @@ export function buildVirtualWhiteboardContext(
   const elements: VirtualWhiteboardElement[] = [];
 
   for (const record of ledger) {
+    const id = typeof record.params.elementId === 'string' ? record.params.elementId : undefined;
+    if (record.actionName.startsWith('wb_draw_') && id) {
+      const existing = elements.findIndex((element) => element.elementId === id);
+      if (existing >= 0) elements.splice(existing, 1);
+    }
     switch (record.actionName) {
       case 'wb_clear':
         elements.length = 0;
         break;
       case 'wb_delete': {
-        // Remove element by matching elementId from initial whiteboard state
-        // (elements drawn this round don't have tracked IDs)
+        // Attached arrows disappear with their target, just as in playback.
         const deleteId = String(record.params.elementId || '');
-        const idx = elements.findIndex((el) => el.elementId === deleteId);
-        if (idx >= 0) elements.splice(idx, 1);
+        for (let i = elements.length - 1; i >= 0; i--) {
+          if (elements[i].elementId === deleteId || elements[i].targets?.includes(deleteId)) elements.splice(i, 1);
+        }
         break;
       }
       case 'wb_draw_text': {
@@ -51,7 +57,20 @@ export function buildVirtualWhiteboardContext(
         const h = record.params.height ?? 100;
         elements.push({
           agentName: record.agentName,
+          elementId: id,
           summary: `text: "${content}${content.length >= 40 ? '...' : ''}" at (${x},${y}), size ~${w}x${h}`,
+        });
+        break;
+      }
+      case 'wb_draw_image': {
+        const x = record.params.x ?? '?';
+        const y = record.params.y ?? '?';
+        const w = record.params.width ?? '?';
+        const h = record.params.height ?? '?';
+        elements.push({
+          agentName: record.agentName,
+          elementId: typeof record.params.elementId === 'string' ? record.params.elementId : undefined,
+          summary: `image at (${x},${y}), size ${w}x${h}`,
         });
         break;
       }
@@ -63,6 +82,7 @@ export function buildVirtualWhiteboardContext(
         const h = record.params.height ?? 100;
         elements.push({
           agentName: record.agentName,
+          elementId: id,
           summary: `shape(${shapeType}) at (${x},${y}), size ${w}x${h}`,
         });
         break;
@@ -78,6 +98,7 @@ export function buildVirtualWhiteboardContext(
         const h = record.params.height ?? 250;
         elements.push({
           agentName: record.agentName,
+          elementId: id,
           summary: `chart(${chartType})${labels ? `: labels=[${(labels as string[]).slice(0, 4).join(',')}]` : ''} at (${x},${y}), size ${w}x${h}`,
         });
         break;
@@ -91,6 +112,7 @@ export function buildVirtualWhiteboardContext(
         const h = record.params.height ?? 80;
         elements.push({
           agentName: record.agentName,
+          elementId: id,
           summary: `latex: "${latex}${latex.length >= 40 ? '...' : ''}" at (${x},${y}), size ~${w}x${h}`,
         });
         break;
@@ -105,6 +127,7 @@ export function buildVirtualWhiteboardContext(
         const h = record.params.height ?? rows * 40 + 20;
         elements.push({
           agentName: record.agentName,
+          elementId: id,
           summary: `table(${rows}×${cols}) at (${x},${y}), size ${w}x${h}`,
         });
         break;
@@ -116,9 +139,14 @@ export function buildVirtualWhiteboardContext(
         const ey = record.params.endY ?? '?';
         const pts = record.params.points as string[] | undefined;
         const hasArrow = pts?.includes('arrow') ? ' (arrow)' : '';
+        const anchors = [record.params.startAnchor, record.params.endAnchor] as Array<{ elementId?: string; side?: string } | undefined>;
+        const targets = anchors.flatMap((anchor) => anchor?.elementId ? [anchor.elementId] : []);
+        const attachments = anchors.map((anchor) => anchor?.elementId ? `${anchor.elementId}.${anchor.side}` : 'free');
         elements.push({
           agentName: record.agentName,
-          summary: `line${hasArrow}: (${sx},${sy}) → (${ex},${ey})`,
+          elementId: id,
+          targets,
+          summary: `line${hasArrow}: (${sx},${sy}) → (${ex},${ey}); attachments ${attachments.join(' → ')}`,
         });
         break;
       }
@@ -133,6 +161,7 @@ export function buildVirtualWhiteboardContext(
         const lineCount = code.split('\n').length;
         elements.push({
           agentName: record.agentName,
+          elementId: id,
           summary: `code block${codeFileName} (${lang}, ${lineCount} lines) at (${x},${y}), size ${w}x${h}`,
         });
         break;
@@ -142,6 +171,7 @@ export function buildVirtualWhiteboardContext(
         const targetId = record.params.elementId || '?';
         elements.push({
           agentName: record.agentName,
+          elementId: id,
           summary: `edited code "${targetId}" (${op})`,
         });
         break;
@@ -153,7 +183,7 @@ export function buildVirtualWhiteboardContext(
   if (elements.length === 0) return '';
 
   const elementLines = elements
-    .map((el, i) => `  ${i + 1}. [by ${el.agentName}] ${el.summary}`)
+    .map((el, i) => `  ${i + 1}. [by ${el.agentName}]${el.elementId ? ` [id=${el.elementId}]` : ''} ${el.summary}`)
     .join('\n');
 
   return `

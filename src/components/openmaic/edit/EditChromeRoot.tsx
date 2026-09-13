@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { EditShell } from '@openmaic/components/edit/EditShell';
 import { SlideNavRail } from '@openmaic/components/edit/SlideNavRail';
 import { ActionsBar } from '@openmaic/components/edit/ActionsBar/ActionsBar';
@@ -16,6 +16,7 @@ interface EditChromeRootProps {
   readonly scene: Scene;
   readonly isEditable: boolean;
   readonly onToggleEditMode?: () => void;
+  readonly courseId?: string;
 }
 
 /**
@@ -39,7 +40,8 @@ interface EditChromeRootProps {
  * `scene` is required (non-null). The parent gates mounting on
  * `mode === 'edit' && currentScene` to satisfy this contract.
  */
-export function EditChromeRoot({ scene, isEditable, onToggleEditMode }: EditChromeRootProps) {
+export function EditChromeRoot({ scene, isEditable, onToggleEditMode, courseId }: EditChromeRootProps) {
+  const [aiOpenSignal, setAiOpenSignal] = useState(0);
   // Mark the body while edit mode is mounted, so the editor-scoped CSS
   // rule in globals.css that pins `body.padding-right` to 0 only fires
   // in Pro mode — not on non-editor pages where Radix's
@@ -81,9 +83,10 @@ export function EditChromeRoot({ scene, isEditable, onToggleEditMode }: EditChro
   const agentRuntime = useAgentRuntime({
     scene: agentEnabled ? { id: scene.id, title: scene.title } : undefined,
     isSendDisabled: !agentEnabled,
+    courseId,
   });
 
-  const headerControls = (
+  const headerControls = courseId ? undefined : (
     <HeaderControls
       mode="edit"
       canEdit={isEditable}
@@ -94,7 +97,17 @@ export function EditChromeRoot({ scene, isEditable, onToggleEditMode }: EditChro
   return (
     <EditShell
       scene={scene}
-      leftRail={<SlideNavRail />}
+      commandPlacement={courseId ? 'navigation' : 'top'}
+      leftRail={(controls) => (
+        <SlideNavRail
+          editorControls={courseId ? controls : undefined}
+          brand={courseId ? {
+            src: '/brand/PrAIxis/PrAIxis2.png',
+            iconSrc: '/brand/PrAIxis/PrAIxis4.png',
+            alt: 'PrAIxis',
+          } : undefined}
+        />
+      )}
       rightRail={
         <RightRailTabs
           scene={{ id: scene.id, title: scene.title, type: scene.type }}
@@ -109,9 +122,21 @@ export function EditChromeRoot({ scene, isEditable, onToggleEditMode }: EditChro
           switchSession={agentRuntime.switchSession}
           deleteSessionAndRefresh={agentRuntime.deleteSessionAndRefresh}
           refreshSessions={agentRuntime.refreshSessions}
+          aiOnly={Boolean(courseId)}
+          openSignal={aiOpenSignal}
         />
       }
-      bottomRail={authoringEnabled ? <ActionsBar sceneId={scene.id} /> : undefined}
+      bottomRail={authoringEnabled ? (
+        <ActionsBar
+          sceneId={scene.id}
+          teacherPreparation={Boolean(courseId)}
+          aiRunning={agentRuntime.isRunning}
+          onEditWhiteboardWithAI={(prompt) => {
+            setAiOpenSignal((signal) => signal + 1);
+            agentRuntime.runtime.thread.append({ role: 'user', content: [{ type: 'text', text: prompt }] });
+          }}
+        />
+      ) : undefined}
       commandTrailing={headerControls}
     />
   );

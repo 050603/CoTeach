@@ -3,6 +3,7 @@
  */
 
 import type { GenerationProgress } from '@openmaic/lib/types/generation';
+import type { PPTElement } from '@openmaic/dsl';
 
 // ==================== Agent Info ====================
 
@@ -37,7 +38,7 @@ export interface SceneGenerationContext {
  */
 export interface GeneratedSlideData {
   elements: Array<{
-    type: 'text' | 'image' | 'video' | 'shape' | 'chart' | 'latex' | 'line';
+    type: PPTElement['type'];
     left: number;
     top: number;
     width: number;

@@ -31,7 +31,8 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "retain-on-failure",
   },
-  webServer: {
+  // An explicit acceptance server must never be replaced by a dev server.
+  webServer: process.env.OPENPBL_RESOURCE_E2E_BASE_URL ? undefined : {
     command: "pnpm dev",
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
