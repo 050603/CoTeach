@@ -2,7 +2,7 @@
  * Media Generation Orchestrator
  *
  * Dispatches media generation API calls for all mediaGenerations across outlines.
- * Runs entirely on the frontend — calls the canonical openPBL media APIs,
+ * Runs entirely on the frontend — calls the canonical CoTeach media APIs,
  * fetches result blobs, stores in IndexedDB, and updates the Zustand store.
  */
 

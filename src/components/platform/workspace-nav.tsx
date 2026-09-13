@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ArrowLeft, BookOpen, ChevronDown, Layers3, LogOut, Settings2, UserPlus } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { PraixisLogo } from "@/components/brand/praixis-logo";
+import { CoTeachLogo } from "@/components/brand/coteach-logo";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -139,7 +139,7 @@ export function WorkspaceNav({ role, active = "classes", backHref, backLabel, co
   return <header className="pbl-platform-topbar" data-role={role} data-compact={compact || undefined}>
     <div className="pbl-platform-topbar-inner">
       <div className="pbl-platform-topbar-context">
-        <Link href={teacher ? "/teacher/classes" : "/student?all=1"} className="pbl-workspace-brand" aria-label="PrAIxis"><PraixisLogo variant="horizontalSolid" height={38} priority /></Link>
+        <Link href={teacher ? "/teacher/classes" : "/student?all=1"} className="pbl-workspace-brand" aria-label="CoTeach"><CoTeachLogo variant="horizontalSolid" height={38} priority /></Link>
         <span className="pbl-platform-topbar-divider" aria-hidden="true" />
         <Link href={back.href} className="pbl-workspace-back"><ArrowLeft size={17}/><span>{back.label}</span></Link>
       </div>

@@ -6,7 +6,7 @@ Generate a self-contained HTML code editor with execution and test validation.
 
 ## Supported Languages
 
-- Python (via the OpenPBL same-origin Pyodide runtime)
+- Python (via the CoTeach same-origin Pyodide runtime)
 - JavaScript (native browser execution)
 - TypeScript only when a same-origin compiler is explicitly available; never
   invent or fetch a compiler from a public CDN
@@ -31,7 +31,7 @@ Generate a self-contained HTML code editor with execution and test validation.
 
 When generating Python widgets using Pyodide, follow these **mandatory patterns**:
 
-### 0. Use the OpenPBL Runtime URLs
+### 0. Use the CoTeach Runtime URLs
 
 Do not reference jsDelivr, cdnjs, unpkg, or another public CDN for executable
 runtime assets. The classroom CSP blocks third-party scripts and student devices
@@ -171,7 +171,7 @@ async function runCode() {
 
 ## Technical Requirements
 
-- Use CodeMirror from the OpenPBL same-origin runtime URLs above for editing
+- Use CodeMirror from the CoTeach same-origin runtime URLs above for editing
 - Syntax highlighting for the language
 - Run button with output display
 - Test case validation with pass/fail indicators

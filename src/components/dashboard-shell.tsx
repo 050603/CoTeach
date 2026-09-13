@@ -17,7 +17,7 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { PraixisLogoMark } from "@/components/brand/praixis-logo";
+import { CoTeachLogoMark } from "@/components/brand/coteach-logo";
 import { cn } from "@/lib/utils";
 import { COURSE_STATUS_LABEL } from "@/lib/session/types";
 import type { CourseStatus } from "@/lib/session/types";
@@ -203,7 +203,7 @@ export function DashboardTopBar({
         <Link aria-label="返回课程空间" className="flex min-h-11 min-w-0 shrink-0 items-center gap-2.5" href={homeHref}>
           <LogoMark role={role} />
           <div className="hidden min-w-0 lg:block">
-            <div className="flex items-baseline gap-1"><span className="truncate text-sm font-bold tracking-tight text-[var(--pbl-text-strong)]">PrAIxis</span></div>
+            <div className="flex items-baseline gap-1"><span className="truncate text-sm font-bold tracking-tight text-[var(--pbl-text-strong)]">CoTeach</span></div>
             <div className="mt-0.5 max-w-44 truncate text-xs font-medium text-[var(--pbl-text-muted)]">{courseName ?? (isTeacher ? "教师课程空间" : title)}</div>
           </div>
         </Link>
@@ -475,7 +475,7 @@ export function LogoMark({ role = "teacher" }: { role?: Role }) {
   // 使用统一品牌 Logo 图标（不再按 role 切换颜色，保持品牌一致性）
   return (
     <span className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center">
-      <PraixisLogoMark size={36} />
+      <CoTeachLogoMark size={36} />
       {/* 角色 dot 标识 */}
       <span
         className={cn(

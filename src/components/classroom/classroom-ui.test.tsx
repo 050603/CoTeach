@@ -72,6 +72,6 @@ describe("classroom UI primitives", () => {
     );
 
     expect(screen.queryByRole("link", { name: "返回课堂" })).toBeNull();
-    expect(screen.getByRole("link", { name: /PrAIxis/ }).getAttribute("href")).toBe("/student/classroom/course-1");
+    expect(screen.getByRole("link", { name: /CoTeach/ }).getAttribute("href")).toBe("/student/classroom/course-1");
   });
 });

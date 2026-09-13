@@ -1,4 +1,4 @@
-// Prometheus metrics (prom-client) for the OpenPBL app.
+// Prometheus metrics (prom-client) for the CoTeach app.
 //
 // The default Registry is exported for /api/metrics. Custom metrics must be
 // reused across Next.js development-module evaluations because prom-client's

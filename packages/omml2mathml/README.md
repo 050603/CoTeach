@@ -1,4 +1,4 @@
-# OpenPBL OMML to MathML converter
+# CoTeach OMML to MathML converter
 
 This private workspace package is a security-maintained fork of
 `omml2mathml@1.3.0` (Apache-2.0).

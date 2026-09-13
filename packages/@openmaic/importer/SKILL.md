@@ -1,6 +1,6 @@
 ---
 name: maic-importer
-description: 修复或扩展 openPBL 的 PPTX 导入、OOXML 解析及导入还原质量。适用于 packages/@openmaic/importer；纯 UI 或仅渲染器修改无需加载。
+description: 修复或扩展 CoTeach 的 PPTX 导入、OOXML 解析及导入还原质量。适用于 packages/@openmaic/importer；纯 UI 或仅渲染器修改无需加载。
 ---
 
 # PPTX 导入器维护

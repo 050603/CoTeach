@@ -14,10 +14,10 @@ import { publishedClassroomVersion, teacherClassroomEntry } from "@/lib/platform
 import { createEmptySurveyQuestion, SurveyBuilder } from "@/components/platform/survey-builder";
 import type { SurveyQuestion } from "@/lib/platform/survey";
 import { LearningArt } from "@/components/platform/learning-art";
-import { PraixisLogo } from "@/components/brand/praixis-logo";
+import { CoTeachLogo } from "@/components/brand/coteach-logo";
 import { clientUUID } from "@/lib/uuid";
 import { copyTextToClipboard } from "@/lib/browser/copy-text";
-const STUDENT_ACCESS_ADDRESS = "praixis.cn";
+const STUDENT_ACCESS_ADDRESS = "coteach.cn";
 type Instance = {
     id: string;
     status: string;
@@ -813,7 +813,7 @@ export default function TeacherClassEditorPage() {
         }}
       >
         <header className="pbl-invitation-topbar">
-          <PraixisLogo className="pbl-invitation-brand" variant="horizontalSolid" height={58} priority />
+          <CoTeachLogo className="pbl-invitation-brand" variant="horizontalSolid" height={58} priority />
           <div><span>学生课堂入口</span><strong>{offering.name}</strong></div>
           <DialogClose asChild>
             <button type="button" aria-label="关闭邀请码投屏"><X size={21} /></button>

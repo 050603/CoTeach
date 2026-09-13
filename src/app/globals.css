@@ -8,7 +8,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /* ============================================================
-   OpenPBL Design System v3 — 教育温暖风
+   CoTeach Design System v3 — 教育温暖风
    设计原则：温暖、亲和、有教育感
    - 教师端：深蓝（Blue）+ 暖橙强调 — 主控、权威、温度
    - 学生端：森林绿（Green）— 成长、探索、自然
@@ -37,7 +37,7 @@
   --pbl-border-strong: #d6d3d1;
   --pbl-border-soft: #f5f4f1;
 
-  /* Plate 官方 UI 语义色。值复用 OpenPBL 色板，组件结构和交互保持
+  /* Plate 官方 UI 语义色。值复用 CoTeach 色板，组件结构和交互保持
      Plate registry 默认实现，避免在编辑器内部另画一套控件。 */
   --card: #ffffff;
   --card-foreground: #1c1917;
@@ -56,7 +56,7 @@
   --ring: #8b5cf6;
   --brand: #7c3aed;
   /* Shadcn/Plate/OpenMAIC buttons use the generic destructive token. Keep it
-     wired to the OpenPBL danger palette so destructive actions never degrade
+     wired to the CoTeach danger palette so destructive actions never degrade
      to transparent backgrounds with white (therefore invisible) labels. */
   --destructive: var(--pbl-danger);
   --destructive-foreground: #ffffff;
@@ -316,7 +316,7 @@ select {
 }
 
 /* Keep the document canvas on Plate's original neutral light palette. The
-   surrounding project and AI surfaces continue to use OpenPBL identity colors. */
+   surrounding project and AI surfaces continue to use CoTeach identity colors. */
 .pbl-document-editor,
 body.plate-default-theme {
   --background: #ffffff;
@@ -3556,8 +3556,16 @@ body.plate-default-theme [data-slot="popover-content"] {
   transform: translateY(0);
 }
 
-/* PrAIxis 命名动画：Praxis → Pr·AI·xis */
-.praixis-origin {
+/* Keep the backdrop still while the brand storyboard animates. */
+.pbl-brand-hero .pbl-aurora::before,
+.pbl-brand-hero .pbl-aurora::after,
+.pbl-brand-hero .pbl-aurora-3,
+.pbl-brand-hero .pbl-grid-light {
+  animation: none;
+}
+
+/* CoTeach 品牌理念：共同参与、共同教学、共同学习 */
+.coteach-origin {
   position: relative;
   overflow: hidden;
   background:
@@ -3566,7 +3574,7 @@ body.plate-default-theme [data-slot="popover-content"] {
     #fff;
 }
 
-.praixis-origin::before {
+.coteach-origin::before {
   position: absolute;
   inset: 0;
   content: "";
@@ -3579,14 +3587,14 @@ body.plate-default-theme [data-slot="popover-content"] {
   mask-image: radial-gradient(circle at center, black, transparent 72%);
 }
 
-.praixis-origin__eyebrow {
+.coteach-origin__eyebrow {
   color: #0f766e;
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.24em;
 }
 
-.praixis-origin__stage {
+.coteach-origin__stage {
   position: relative;
   min-height: 500px;
   padding: 58px 24px 32px;
@@ -3598,7 +3606,7 @@ body.plate-default-theme [data-slot="popover-content"] {
   backdrop-filter: blur(18px);
 }
 
-.praixis-origin__stage::before {
+.coteach-origin__stage::before {
   position: absolute;
   left: 50%;
   top: 52px;
@@ -3609,10 +3617,9 @@ body.plate-default-theme [data-slot="popover-content"] {
   border-radius: 999px;
   background: rgba(20, 184, 166, 0.16);
   filter: blur(52px);
-  animation: praixis-origin-glow 12s ease-in-out infinite;
 }
 
-.praixis-origin__word {
+.coteach-origin__word {
   position: relative;
   z-index: 1;
   display: flex;
@@ -3626,39 +3633,39 @@ body.plate-default-theme [data-slot="popover-content"] {
   letter-spacing: -0.055em;
 }
 
-.praixis-origin__mutable {
+.coteach-origin__mutable {
   position: relative;
   display: inline-block;
   width: 0.72em;
   height: 1em;
   color: #0f766e;
-  animation: praixis-origin-width 12s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  animation: coteach-origin-width 12s cubic-bezier(0.16, 1, 0.3, 1) infinite;
 }
 
-.praixis-origin__a,
-.praixis-origin__ai {
+.coteach-origin__a,
+.coteach-origin__ai {
   position: absolute;
   inset: 0 auto auto 0;
   white-space: nowrap;
   transform-origin: 50% 70%;
 }
 
-.praixis-origin__a {
+.coteach-origin__a {
   left: 0.075em;
   top: 0.055em;
-  animation: praixis-origin-a 12s ease-in-out infinite;
+  animation: coteach-origin-a 12s ease-in-out infinite;
 }
 
-.praixis-origin__ai {
+.coteach-origin__ai {
   top: 0.067em;
   color: #0fb9b1;
   opacity: 0;
   transform: translateY(0.35em) scale(0.45);
   text-shadow: 0 12px 42px rgba(20, 184, 166, 0.25);
-  animation: praixis-origin-ai 12s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  animation: coteach-origin-ai 12s cubic-bezier(0.16, 1, 0.3, 1) infinite;
 }
 
-.praixis-origin__meaning {
+.coteach-origin__meaning {
   position: relative;
   z-index: 1;
   display: grid;
@@ -3669,8 +3676,8 @@ body.plate-default-theme [data-slot="popover-content"] {
   text-align: left;
 }
 
-.praixis-origin__praxis-copy,
-.praixis-origin__praixis-copy {
+.coteach-origin__co-copy,
+.coteach-origin__coteach-copy {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -3681,16 +3688,16 @@ body.plate-default-theme [data-slot="popover-content"] {
   box-shadow: 0 14px 38px rgba(15, 23, 42, 0.055);
 }
 
-.praixis-origin__praxis-copy {
+.coteach-origin__co-copy {
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(240, 253, 250, 0.72));
 }
 
-.praixis-origin__praixis-copy {
+.coteach-origin__coteach-copy {
   border-color: rgba(99, 102, 241, 0.16);
   background: linear-gradient(145deg, rgba(238, 242, 255, 0.72), rgba(236, 254, 255, 0.72));
 }
 
-.praixis-origin__step {
+.coteach-origin__step {
   margin-bottom: 14px;
   color: #64748b;
   font-size: 10px;
@@ -3698,7 +3705,7 @@ body.plate-default-theme [data-slot="popover-content"] {
   letter-spacing: 0.18em;
 }
 
-.praixis-origin__greek {
+.coteach-origin__concept {
   display: inline-flex;
   padding: 6px 13px;
   border: 1px solid rgba(15, 118, 110, 0.18);
@@ -3710,7 +3717,7 @@ body.plate-default-theme [data-slot="popover-content"] {
   letter-spacing: 0.12em;
 }
 
-.praixis-origin__praxis-copy > p {
+.coteach-origin__co-copy > p {
   margin-top: 14px;
   color: var(--pbl-text-strong);
   font-size: 15px;
@@ -3718,24 +3725,24 @@ body.plate-default-theme [data-slot="popover-content"] {
   line-height: 1.65;
 }
 
-.praixis-origin__praxis-copy > p strong {
+.coteach-origin__co-copy > p strong {
   color: #0f766e;
   font-weight: 800;
 }
 
-.praixis-origin__taxonomy-group {
+.coteach-origin__taxonomy-group {
   width: 100%;
   margin-top: 16px;
 }
 
-.praixis-origin__taxonomy {
+.coteach-origin__taxonomy {
   display: grid;
   width: 100%;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
-.praixis-origin__taxonomy > span {
+.coteach-origin__taxonomy > span {
   display: flex;
   min-height: 76px;
   flex-direction: column;
@@ -3748,29 +3755,29 @@ body.plate-default-theme [data-slot="popover-content"] {
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.04);
 }
 
-.praixis-origin__taxonomy strong {
+.coteach-origin__taxonomy strong {
   color: #334155;
   font-family: var(--font-editorial, serif);
   font-size: 14px;
 }
 
-.praixis-origin__taxonomy small {
+.coteach-origin__taxonomy small {
   color: var(--pbl-text-muted);
   font-size: 11px;
 }
 
-.praixis-origin__taxonomy > .is-praxis {
+.coteach-origin__taxonomy > .is-co {
   border-color: rgba(13, 148, 136, 0.32);
   background: linear-gradient(135deg, #ecfeff, #f0fdfa);
   box-shadow: 0 12px 34px rgba(13, 148, 136, 0.12);
 }
 
-.praixis-origin__taxonomy > .is-praxis strong,
-.praixis-origin__taxonomy > .is-praxis small {
+.coteach-origin__taxonomy > .is-co strong,
+.coteach-origin__taxonomy > .is-co small {
   color: #0f766e;
 }
 
-.praixis-origin__aristotle {
+.coteach-origin__community {
   display: grid;
   width: 100%;
   grid-template-columns: auto 1fr;
@@ -3782,7 +3789,7 @@ body.plate-default-theme [data-slot="popover-content"] {
   background: rgba(255, 255, 255, 0.72);
 }
 
-.praixis-origin__aristotle span {
+.coteach-origin__community span {
   grid-row: 1 / 3;
   align-self: center;
   padding: 5px 8px;
@@ -3794,19 +3801,19 @@ body.plate-default-theme [data-slot="popover-content"] {
   letter-spacing: 0.08em;
 }
 
-.praixis-origin__aristotle strong {
+.coteach-origin__community strong {
   color: #0f4c81;
   font-family: var(--font-editorial, serif);
   font-size: 13px;
   font-weight: 850;
 }
 
-.praixis-origin__aristotle small {
+.coteach-origin__community small {
   color: var(--pbl-text-muted);
   font-size: 11px;
 }
 
-.praixis-origin__bridge {
+.coteach-origin__bridge {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -3816,7 +3823,7 @@ body.plate-default-theme [data-slot="popover-content"] {
   color: #4f46e5;
 }
 
-.praixis-origin__bridge::before {
+.coteach-origin__bridge::before {
   position: absolute;
   inset-block: 14px;
   left: 50%;
@@ -3826,14 +3833,14 @@ body.plate-default-theme [data-slot="popover-content"] {
   background: linear-gradient(transparent, rgba(99, 102, 241, 0.35), transparent);
 }
 
-.praixis-origin__bridge span,
-.praixis-origin__bridge small {
+.coteach-origin__bridge span,
+.coteach-origin__bridge small {
   position: relative;
   z-index: 1;
   background: #fff;
 }
 
-.praixis-origin__bridge span {
+.coteach-origin__bridge span {
   display: grid;
   width: 32px;
   height: 32px;
@@ -3845,7 +3852,7 @@ body.plate-default-theme [data-slot="popover-content"] {
   box-shadow: 0 8px 24px rgba(99, 102, 241, 0.12);
 }
 
-.praixis-origin__bridge small {
+.coteach-origin__bridge small {
   padding-block: 4px;
   color: #64748b;
   font-size: 10px;
@@ -3855,7 +3862,7 @@ body.plate-default-theme [data-slot="popover-content"] {
   text-align: center;
 }
 
-.praixis-origin__thesis {
+.coteach-origin__thesis {
   margin-top: 0;
   color: var(--pbl-text-strong);
   font-size: clamp(1.25rem, 2.1vw, 1.75rem);
@@ -3864,7 +3871,7 @@ body.plate-default-theme [data-slot="popover-content"] {
   letter-spacing: -0.03em;
 }
 
-.praixis-origin__roles {
+.coteach-origin__roles {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-start;
@@ -3872,7 +3879,7 @@ body.plate-default-theme [data-slot="popover-content"] {
   margin-top: 22px;
 }
 
-.praixis-origin__roles span {
+.coteach-origin__roles span {
   padding: 8px 13px;
   border: 1px solid rgba(13, 148, 136, 0.2);
   border-radius: 999px;
@@ -3882,20 +3889,20 @@ body.plate-default-theme [data-slot="popover-content"] {
   font-weight: 750;
 }
 
-.praixis-origin__praixis-copy > p:last-child {
+.coteach-origin__coteach-copy > p:last-child {
   margin-top: 22px;
   color: var(--pbl-text-muted);
   font-size: 13px;
   line-height: 1.8;
 }
 
-.praixis-origin__praixis-copy strong {
+.coteach-origin__coteach-copy strong {
   margin-left: 0.35em;
   color: #0f766e;
   font-weight: 800;
 }
 
-.praixis-origin__closing {
+.coteach-origin__closing {
   position: relative;
   margin: 34px auto 0;
   max-width: 760px;
@@ -3904,78 +3911,78 @@ body.plate-default-theme [data-slot="popover-content"] {
   line-height: 1.9;
 }
 
-.praixis-origin__closing span,
-.praixis-origin__closing strong {
+.coteach-origin__closing span,
+.coteach-origin__closing strong {
   color: #0f9e99;
   font-weight: 800;
 }
 
-@keyframes praixis-origin-width {
+@keyframes coteach-origin-width {
   0%, 36%, 100% { width: 0.72em; }
   46%, 90% { width: 1.22em; }
 }
 
-@keyframes praixis-origin-a {
+@keyframes coteach-origin-a {
   0%, 34% { opacity: 1; transform: translateY(0) scale(1); }
   44%, 92% { opacity: 0; transform: translateY(-0.28em) scale(0.6); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-@keyframes praixis-origin-ai {
+@keyframes coteach-origin-ai {
   0%, 36%, 100% { opacity: 0; transform: translateY(0.35em) scale(0.45); }
   48%, 90% { opacity: 1; transform: translateY(0) scale(1); }
   96% { opacity: 0; transform: translateY(-0.2em) scale(0.75); }
 }
 
-@keyframes praixis-origin-old-copy {
+@keyframes coteach-origin-old-copy {
   0%, 34% { opacity: 1; transform: translateY(0); }
   43%, 96% { opacity: 0; transform: translateY(-14px); }
   100% { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes praixis-origin-new-copy {
+@keyframes coteach-origin-new-copy {
   0%, 40%, 100% { opacity: 0; transform: translateY(18px); }
   50%, 90% { opacity: 1; transform: translateY(0); }
   96% { opacity: 0; transform: translateY(-12px); }
 }
 
-@keyframes praixis-origin-glow {
+@keyframes coteach-origin-glow {
   0%, 36%, 100% { opacity: 0.45; transform: translateX(-50%) scale(0.82); }
   50%, 90% { opacity: 0.9; transform: translateX(-50%) scale(1.18); }
 }
 
 @media (max-width: 640px) {
-  .praixis-origin__stage {
+  .coteach-origin__stage {
     min-height: 0;
     padding: 44px 16px 18px;
   }
 
-  .praixis-origin__meaning {
+  .coteach-origin__meaning {
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
     margin-top: 24px;
   }
 
-  .praixis-origin__praxis-copy,
-  .praixis-origin__praixis-copy {
+  .coteach-origin__co-copy,
+  .coteach-origin__coteach-copy {
     padding: 18px;
   }
 
-  .praixis-origin__taxonomy {
+  .coteach-origin__taxonomy {
     grid-template-columns: 1fr;
   }
 
-  .praixis-origin__taxonomy > span {
+  .coteach-origin__taxonomy > span {
     min-height: 58px;
   }
 
-  .praixis-origin__bridge {
+  .coteach-origin__bridge {
     min-height: 58px;
     flex-direction: row;
     gap: 10px;
   }
 
-  .praixis-origin__bridge::before {
+  .coteach-origin__bridge::before {
     inset: 50% 16px auto;
     width: auto;
     height: 1px;
@@ -3983,20 +3990,20 @@ body.plate-default-theme [data-slot="popover-content"] {
     background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.35), transparent);
   }
 
-  .praixis-origin__bridge small {
+  .coteach-origin__bridge small {
     padding: 5px 8px;
     background: #fff;
   }
 
-  .praixis-origin__roles {
+  .coteach-origin__roles {
     gap: 6px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .praixis-origin__mutable { width: 1.22em; }
-  .praixis-origin__a { display: none; }
-  .praixis-origin__ai {
+  .coteach-origin__mutable { width: 1.22em; }
+  .coteach-origin__a { display: none; }
+  .coteach-origin__ai {
     opacity: 1;
     transform: none;
   }

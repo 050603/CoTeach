@@ -67,7 +67,7 @@ function effectiveVoiceDesign(agent: AgentConfig | undefined): VoiceDesign | und
 }
 
 /**
- * Produce the `ttsProviderOptions` to send to the openPBL TTS endpoint for `agent`
+ * Produce the `ttsProviderOptions` to send to the CoTeach TTS endpoint for `agent`
  * (pass the teacher agent for narration, the speaking agent for discussion,
  * or undefined when there is no agent). Returns undefined for providers with
  * no special options.

@@ -89,7 +89,7 @@ const usersData: Record<
   },
 };
 
-// Plate owns the native discussion UI state. OpenPBL hydrates the actual
+// Plate owns the native discussion UI state. CoTeach hydrates the actual
 // paragraph threads from its server store instead of shipping demo comments.
 export const discussionPlugin = createPlatePlugin({
   key: 'discussion',

@@ -77,7 +77,7 @@ function TeacherEditor({ scene = mocks.scenes[0] }: { scene?: Scene }) {
     <EditShell
       scene={scene}
       commandPlacement="navigation"
-      leftRail={(controls) => <SlideNavRail editorControls={controls} brand={{ src: '/brand.png', iconSrc: '/brand-icon.png', alt: 'PrAIxis' }} />}
+      leftRail={(controls) => <SlideNavRail editorControls={controls} brand={{ src: '/brand.png', iconSrc: '/brand-icon.png', alt: 'CoTeach' }} />}
     />
   );
 }
@@ -115,7 +115,7 @@ describe('teacher editor chrome', () => {
     expect(screen.getByText('页面画布')).toBeInTheDocument();
 
     const rail = within(screen.getByTestId('slide-nav-rail'));
-    expect(rail.getByRole('img', { name: 'PrAIxis' })).toHaveAttribute('src', '/brand.png');
+    expect(rail.getByRole('img', { name: 'CoTeach' })).toHaveAttribute('src', '/brand.png');
     fireEvent.click(rail.getByRole('button', { name: 'edit.undo' }));
     expect(mocks.undo).toHaveBeenCalledOnce();
     expect(rail.getByRole('button', { name: 'edit.redo' })).toBeDisabled();
@@ -123,7 +123,7 @@ describe('teacher editor chrome', () => {
     expect(mocks.command).toHaveBeenCalledOnce();
 
     fireEvent.click(rail.getByRole('button', { name: 'edit.nav.collapse' }));
-    expect(rail.getByRole('img', { name: 'PrAIxis' })).toHaveAttribute('src', '/brand-icon.png');
+    expect(rail.getByRole('img', { name: 'CoTeach' })).toHaveAttribute('src', '/brand-icon.png');
     fireEvent.click(rail.getByRole('button', { name: 'edit.undo' }));
     expect(mocks.undo).toHaveBeenCalledTimes(2);
     expect(rail.getByRole('button', { name: '页面一' })).toHaveAttribute('aria-current', 'page');
@@ -135,7 +135,7 @@ describe('teacher editor chrome', () => {
     view.rerender(<TeacherEditor scene={{ ...mocks.scenes[0], title: '阅读说明', type: 'interactive' } as Scene} />);
 
     await waitFor(() => expect(within(screen.getByTestId('slide-nav-rail')).queryByText('阅读说明')).not.toBeInTheDocument());
-    expect(within(screen.getByTestId('slide-nav-rail')).getByRole('img', { name: 'PrAIxis' })).toHaveAttribute('src', '/brand.png');
+    expect(within(screen.getByTestId('slide-nav-rail')).getByRole('img', { name: 'CoTeach' })).toHaveAttribute('src', '/brand.png');
     expect(screen.queryByRole('button', { name: 'edit.undo' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '导出页面' })).not.toBeInTheDocument();
   });
@@ -163,8 +163,8 @@ describe('teacher editor chrome', () => {
   });
 
   it('does not let teacher branding bypass the protected return action', () => {
-    render(<SlideNavRail brand={{ src: '/brand.png', alt: 'PrAIxis' }} />);
-    const brand = screen.getByRole('img', { name: 'PrAIxis' });
+    render(<SlideNavRail brand={{ src: '/brand.png', alt: 'CoTeach' }} />);
+    const brand = screen.getByRole('img', { name: 'CoTeach' });
     fireEvent.click(brand);
     expect(brand.closest('button')).toBeNull();
     expect(mocks.navigate).not.toHaveBeenCalled();

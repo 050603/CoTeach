@@ -6,7 +6,7 @@ if (existsSync(".env.local")) {
 }
 
 /**
- * Playwright E2E configuration for openPBL.
+ * Playwright E2E configuration for CoTeach.
  *
  * - CI: single worker, 2 retries, github + html reporters
  * - Local: default workers, no retries, list reporter

@@ -1,9 +1,8 @@
 [Unit]
-Description=OpenPBL orphaned data cleanup
+Description=CoTeach orphaned data cleanup
 After=network-online.target
 
 [Service]
 Type=oneshot
 WorkingDirectory=/home/lkj/OpenPBL/openPBL
 ExecStart=/home/lkj/OpenPBL/openPBL/scripts/openpbl-production-service.sh cleanup-data
-

@@ -1,4 +1,4 @@
-// Phase 2.9 PoC: 验证 OpenMAIC 核心算法测试可在 openPBL 中跑通
+// Phase 2.9 PoC: 验证 OpenMAIC 核心算法测试可在 CoTeach 中跑通
 // 迁移自 OpenMAIC-main/tests/utils/concurrency.test.ts
 // 路径改写: @/lib/utils/concurrency → @openmaic/lib/utils/concurrency
 import { describe, expect, it } from 'vitest';

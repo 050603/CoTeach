@@ -17,7 +17,7 @@ import {
 import { useRouter } from "next/navigation";
 import { AnimatePresence, LayoutGroup } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PraixisLogo } from "@/components/brand/praixis-logo";
+import { CoTeachLogo } from "@/components/brand/coteach-logo";
 import { CourseGenerationGlyph } from "@/components/course-workshop-animation";
 import { QuickKnowledgeReviewDialog } from "@/components/teacher/quick-knowledge-review-dialog";
 import { QuickOutlineReviewDialog } from "@/components/teacher/quick-outline-review-dialog";
@@ -591,7 +591,7 @@ export function FastCourseGenerator({
 
       <div className="w-full max-w-[820px]">
         <div className={cn("flex flex-col items-center justify-center", simplified ? "mb-8" : "mb-10")}>
-          <PraixisLogo height={simplified ? 104 : 82} variant="horizontal" />
+          <CoTeachLogo height={simplified ? 104 : 82} variant="horizontal" />
           {simplified ? (
             <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.32em] text-stone-400">
               AI inside practice.

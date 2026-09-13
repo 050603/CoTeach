@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { ComponentType, ReactNode } from "react";
 import { ArrowLeft, CheckCircle2, CircleAlert, Clock3 } from "lucide-react";
-import { PraixisLogoMark } from "@/components/brand/praixis-logo";
+import { CoTeachLogoMark } from "@/components/brand/coteach-logo";
 import { cn } from "@/lib/utils";
 
 type Role = "teacher" | "student";
@@ -147,11 +147,11 @@ export function ClassroomContextHeader({
           )) : null}
           <Link className="flex min-w-0 items-center gap-2.5" href={homeHref}>
             <span className="relative grid size-8 shrink-0 place-items-center">
-              <PraixisLogoMark size={30} />
+              <CoTeachLogoMark size={30} />
               <span className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-white" style={{ backgroundColor: roleColor }} />
             </span>
             <span className="hidden min-w-0 sm:block">
-              <span className="block text-sm font-bold tracking-tight text-[var(--pbl-text-strong)]">PrAIxis</span>
+              <span className="block text-sm font-bold tracking-tight text-[var(--pbl-text-strong)]">CoTeach</span>
               <span className="block max-w-64 truncate text-xs text-[var(--pbl-text-muted)]">{courseName}</span>
             </span>
           </Link>

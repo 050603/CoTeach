@@ -102,9 +102,9 @@ export function EditChromeRoot({ scene, isEditable, onToggleEditMode, courseId }
         <SlideNavRail
           editorControls={courseId ? controls : undefined}
           brand={courseId ? {
-            src: '/brand/PrAIxis/PrAIxis2.png',
-            iconSrc: '/brand/PrAIxis/PrAIxis4.png',
-            alt: 'PrAIxis',
+            src: '/brand/coteach/horizontal-solid.png',
+            iconSrc: '/brand/coteach/icon-color.png',
+            alt: 'CoTeach',
           } : undefined}
         />
       )}

@@ -12,7 +12,8 @@ import {
   RotateCw,
   UsersRound,
 } from "lucide-react";
-import { PraixisLogo } from "@/components/brand/praixis-logo";
+import { CoTeachLogo } from "@/components/brand/coteach-logo";
+import { CoTeachLogoAnimation } from "@/components/brand/coteach-logo-animation";
 import { BrandOriginStory } from "@/components/home/brand-origin-story";
 import { CosmicReveal } from "@/components/home/cosmic-reveal";
 const NEW_STAGES = [
@@ -117,9 +118,9 @@ function SiteHeader() {
         <Link
           href="/"
           className="flex items-center transition-opacity hover:opacity-80"
-          aria-label="PrAIxis 首页"
+          aria-label="CoTeach 首页"
         >
-          <PraixisLogo variant="horizontalSolid" height={30} priority />
+          <CoTeachLogo variant="horizontalSolid" height={30} priority />
         </Link>
         <nav className="flex items-center gap-2 md:gap-3">
           <a
@@ -152,7 +153,7 @@ function SiteHeader() {
    ============================================================ */
 function Hero() {
   return (
-    <section className="pbl-aurora-light relative min-h-screen pt-16">
+    <section className="pbl-brand-hero pbl-aurora-light relative min-h-screen pt-16">
       {/* 渐变光斑背景 */}
       <div className="pbl-aurora">
         <div className="pbl-aurora-3" />
@@ -162,24 +163,14 @@ function Hero() {
 
       {/* 主内容 */}
       <div className="pbl-wide-container relative z-10 flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center px-6 py-20 text-center md:px-10">
-        {/* 巨型横版 Logo —— 不使用 pbl-hero-text（初始 opacity:0），避免动画卡住导致 logo 不可见 */}
-        <div className="mb-12 pbl-float-soft">
-          <div className="relative inline-flex scale-[0.72] items-center justify-center sm:scale-100">
-            <PraixisLogo
-              variant="horizontal"
-              height={160}
-              priority
-              style={{ filter: "drop-shadow(0 16px 48px rgba(99, 102, 241, 0.25))" }}
-            />
-            <span
-              aria-label="系统版本 2.0"
-              className="absolute -bottom-1 right-1 inline-flex items-center gap-2 whitespace-nowrap text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500 sm:-right-20 sm:bottom-5"
-            >
-              <span aria-hidden="true" className="h-px w-5 bg-gradient-to-r from-cyan-400 to-indigo-500" />
-              <span>Version</span>
-              <span className="font-bold tracking-[0.08em] text-indigo-600">2.0</span>
-            </span>
-          </div>
+        <div className="relative mb-8 w-full max-w-[640px]">
+          <CoTeachLogoAnimation playback="once" />
+          <span
+            aria-label="系统版本 2.0"
+            className="absolute bottom-4 right-2 text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500"
+          >
+            Version <span className="font-bold text-indigo-600">2.0</span>
+          </span>
         </div>
 
         {/* 一句话定位 —— 渐变文字 */}
@@ -246,7 +237,7 @@ function Features() {
             <span className="pbl-display-gradient">走向一次真正的创造。</span>
           </h2>
           <p className="mt-5 max-w-4xl text-[15px] leading-7 text-[var(--pbl-text-muted)]">
-            PrAIxis 让教师、学生与 AI 围绕同一个真实问题协同工作，让知识进入行动，让每一次行动留下可见的成长证据。
+            CoTeach 让教师、学生与 AI 围绕同一个真实问题协同工作，让知识进入行动，让每一次行动留下可见的成长证据。
           </p>
         </CosmicReveal>
 
@@ -542,10 +533,10 @@ function SiteFooter() {
       <div className="pbl-wide-container px-6 md:px-10">
         <div className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-center">
           <div className="flex items-center gap-3">
-            <PraixisLogo variant="horizontalCompact" height={28} />
+            <CoTeachLogo variant="horizontalCompact" height={28} />
           </div>
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[12px] font-medium text-[var(--pbl-text-muted)]">
-            <span>Praxis + AI</span>
+            <span>共教 · 共学 · 共创</span>
             <span className="hidden md:inline text-[var(--pbl-text-subtle)]">·</span>
             <span>备课</span>
             <span className="hidden md:inline text-[var(--pbl-text-subtle)]">·</span>
@@ -556,7 +547,7 @@ function SiteFooter() {
             <span>五阶段课堂</span>
           </div>
           <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--pbl-text-subtle)]">
-            © 2026 PrAIxis · AI inside practice.
+            © 2026 CoTeach · Teach together. Learn together.
           </div>
         </div>
       </div>

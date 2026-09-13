@@ -15,7 +15,7 @@ const prismaCli = path.join(
   "index.js",
 );
 const prismaEnv = { ...process.env };
-// OpenPBL connects directly to PostgreSQL. A no-engine/Data Proxy client
+// CoTeach connects directly to PostgreSQL. A no-engine/Data Proxy client
 // accepts only prisma:// URLs and makes local postgresql:// deployments fail
 // during Next.js instrumentation startup.
 delete prismaEnv.PRISMA_GENERATE_NO_ENGINE;
@@ -47,7 +47,7 @@ if (result.status !== 0) {
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   if (/EPERM: operation not permitted, rename[\s\S]+query_engine-windows\.dll\.node/i.test(output)) {
     console.error(
-      "\nPrisma 查询引擎正被运行中的 openPBL/Node 进程占用。" +
+      "\nPrisma 查询引擎正被运行中的 CoTeach/Node 进程占用。" +
         "请先关闭现有开发服务器（可执行 pnpm dev:stop，或结束对应的 pnpm dev/next dev 进程），再重新启动。" +
         "如果只是重复执行 pnpm dev，项目在 Client 有效时会自动复用，不会再次覆盖 DLL。",
     );
@@ -96,7 +96,7 @@ function assertLocalQueryEngine() {
   if (!hasLocalEngine) {
     throw new Error(
       "Prisma Client was generated without a local query engine. " +
-        "OpenPBL requires the standard library engine for postgresql:// URLs.",
+        "CoTeach requires the standard library engine for postgresql:// URLs.",
     );
   }
 }

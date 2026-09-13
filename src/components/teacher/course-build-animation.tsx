@@ -242,7 +242,7 @@ function CoursePage({
         )}><Icon size={14} /></span>
       </div>
       <div className="mt-3 border-t border-stone-100 pt-3">{page.body}</div>
-      <span className="absolute bottom-2.5 right-3 text-[8px] font-semibold tabular-nums text-stone-300">PRAIXIS · {page.id.toUpperCase()}</span>
+      <span className="absolute bottom-2.5 right-3 text-[8px] font-semibold tabular-nums text-stone-300">COTEACH · {page.id.toUpperCase()}</span>
     </div>
   );
 }

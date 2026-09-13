@@ -72,7 +72,11 @@
   .pbl-platform-theme .pbl-auth-header { position: relative; min-height: 76px; padding: 12px 24px; gap: 16px; }
   .pbl-platform-theme .pbl-auth-header-actions { gap: 16px; }
   .pbl-platform-theme .pbl-auth-stage { display: block; width: min(100%, 620px); min-height: 0; padding: 12px 24px 32px; }
-  .pbl-platform-theme .pbl-auth-visual { display: none; }
+  .pbl-platform-theme .pbl-auth-visual { display: block; position: relative; top: auto; height: auto; min-height: 0; }
+  .pbl-platform-theme .pbl-auth-visual-heading,
+  .pbl-platform-theme .pbl-auth-brand-caption,
+  .pbl-platform-theme .pbl-auth-origin-glow { display: none; }
+  .pbl-platform-theme .pbl-auth-origin { position: relative; inset: auto; width: min(100%,340px); margin: 0 auto 8px; }
   .pbl-platform-theme .pbl-auth-content { width: 100%; min-height: 0; padding: 16px 0 24px; }
   .pbl-platform-theme .pbl-auth-content::before { display: none; }
   .pbl-platform-theme .pbl-auth-scene-student .pbl-auth-content-register { width: 100%; }

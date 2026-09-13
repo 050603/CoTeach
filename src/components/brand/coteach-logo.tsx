@@ -2,7 +2,7 @@ import Image from "next/image";
 import type { CSSProperties } from "react";
 
 /**
- * PrAIxis 品牌标识。
+ * CoTeach 品牌标识。
  *
  * - horizontal：彩色横版，适合首页主视觉
  * - horizontalSolid：深蓝横版，适合小尺寸顶栏
@@ -10,15 +10,15 @@ import type { CSSProperties } from "react";
  * - icon：彩色方形标志，适合应用侧栏与头像位
  * - vertical：竖版组合，适合独立品牌场景
  */
-export type PraixisLogoVariant =
+export type CoTeachLogoVariant =
   | "horizontal"
   | "horizontalSolid"
   | "horizontalCompact"
   | "icon"
   | "vertical";
 
-export type PraixisLogoProps = {
-  variant?: PraixisLogoVariant;
+export type CoTeachLogoProps = {
+  variant?: CoTeachLogoVariant;
   height?: number;
   className?: string;
   style?: CSSProperties;
@@ -26,30 +26,30 @@ export type PraixisLogoProps = {
   priority?: boolean;
 };
 
-const RATIOS: Record<PraixisLogoVariant, number> = {
-  horizontal: 3,
-  horizontalSolid: 3,
-  horizontalCompact: 3,
+const RATIOS: Record<CoTeachLogoVariant, number> = {
+  horizontal: 2048 / 683,
+  horizontalSolid: 2048 / 683,
+  horizontalCompact: 2048 / 683,
   icon: 1,
-  vertical: 1,
+  vertical: 1122 / 1402,
 };
 
-const SOURCES: Record<PraixisLogoVariant, string> = {
-  horizontal: "/brand/PrAIxis/PrAIxis.png",
-  horizontalSolid: "/brand/PrAIxis/PrAIxis2.png",
-  horizontalCompact: "/brand/PrAIxis/PrAIxis3.png",
-  icon: "/brand/PrAIxis/PrAIxis4.png",
-  vertical: "/brand/PrAIxis/PrAIxis5.png",
+const SOURCES: Record<CoTeachLogoVariant, string> = {
+  horizontal: "/brand/coteach/horizontal-color.png",
+  horizontalSolid: "/brand/coteach/horizontal-solid.png",
+  horizontalCompact: "/brand/coteach/horizontal-color.png",
+  icon: "/brand/coteach/icon-color.png",
+  vertical: "/brand/coteach/vertical-color.png",
 };
 
-export function PraixisLogo({
+export function CoTeachLogo({
   variant = "horizontal",
   height = 40,
   className,
   style,
   glow = false,
   priority = false,
-}: PraixisLogoProps) {
+}: CoTeachLogoProps) {
   const width = Math.round(height * RATIOS[variant]);
 
   return (
@@ -65,7 +65,7 @@ export function PraixisLogo({
     >
       <Image
         src={SOURCES[variant]}
-        alt="PrAIxis"
+        alt="CoTeach"
         width={width}
         height={height}
         priority={priority}
@@ -86,7 +86,7 @@ export function PraixisLogo({
   );
 }
 
-export function PraixisLogoMark({
+export function CoTeachLogoMark({
   size = 32,
   className,
   style,
@@ -98,7 +98,7 @@ export function PraixisLogoMark({
   glow?: boolean;
 }) {
   return (
-    <PraixisLogo
+    <CoTeachLogo
       variant="icon"
       height={size}
       className={className}

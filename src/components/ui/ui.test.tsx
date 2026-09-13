@@ -18,7 +18,7 @@ import {
 } from "./overlays";
 import { FlowActionBar, SaveStatus } from "./states";
 
-describe("openPBL shared UI", () => {
+describe("CoTeach shared UI", () => {
   it("disables a loading primary action", () => {
     render(<Button loading>正在保存</Button>);
     expect((screen.getByRole("button", { name: "正在保存" }) as HTMLButtonElement).disabled).toBe(true);

@@ -1,4 +1,4 @@
-# OpenPBL 单系统生产部署
+# CoTeach 单系统生产部署
 
 生产环境只运行当前系统。Next.js 应用、代码运行器和本地问卷分词服务由 systemd 用户服务托管；Docker Compose 只负责 PostgreSQL、Redis、Nginx、数据库迁移以及可选的监控和备份服务。
 

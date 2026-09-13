@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { courseResourceTypeLabel } from "@/lib/user-facing-labels";
 
 /* ============================================================
-   OpenPBL 基础组件库 v2
+   CoTeach 基础组件库 v2
    - 统一圆角（8/12/16）
    - 语义化变体
    - 克制字重（去除 font-bold 滥用，最多到 font-bold）

@@ -1,4 +1,4 @@
-# openPBL V2 数据库设计
+# CoTeach V2 数据库设计
 
 ## 总览
 

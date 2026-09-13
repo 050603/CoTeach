@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenPBL production server (port 3000)
+Description=CoTeach production server (port 3000)
 Wants=network-online.target openpbl-code-runner.service openpbl-survey-nlp.service
 After=network-online.target openpbl-code-runner.service openpbl-survey-nlp.service
 StartLimitIntervalSec=0
@@ -12,7 +12,7 @@ Environment=OPENPBL_HOSTNAME=127.0.0.1
 Environment=OPENPBL_WEBSOCKET_PORT=3001
 Environment=OPENPBL_WEBSOCKET_HOST=127.0.0.1
 Environment=OPENPBL_CODE_RUNNER_PORT=3002
-Environment=OPENPBL_PUBLIC_BASE_URL=https://praixis.cn
+Environment=OPENPBL_PUBLIC_BASE_URL=https://coteach.cn
 ExecStart=/home/lkj/OpenPBL/openPBL/scripts/openpbl-production-service.sh run-app
 Restart=always
 RestartSec=5s

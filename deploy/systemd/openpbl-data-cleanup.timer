@@ -1,5 +1,5 @@
 [Unit]
-Description=Run OpenPBL orphaned data cleanup daily
+Description=Run CoTeach orphaned data cleanup daily
 
 [Timer]
 OnCalendar=*-*-* 03:30:00

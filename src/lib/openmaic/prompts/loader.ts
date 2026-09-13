@@ -18,7 +18,7 @@ const log = createLogger('PromptLoader');
  * Get the prompts directory path
  */
 function getPromptsDir(): string {
-  // openPBL 迁移后模板位于 src/lib/openmaic/prompts/，
+  // CoTeach 迁移后模板位于 src/lib/openmaic/prompts/，
   // TS 路径别名 @openmaic/lib/* 仅在编译期生效，运行时文件 IO 必须用磁盘路径。
   return path.join(process.cwd(), 'src', 'lib', 'openmaic', 'prompts');
 }

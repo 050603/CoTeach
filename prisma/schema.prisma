@@ -1,4 +1,4 @@
-// openPBL V2 database schema.
+// CoTeach V2 database schema.
 // This schema intentionally has no Legacy/compatibility models. The V2 data
 // model is rebuilt from scratch around CourseOffering, Activity, ClassroomInstance,
 // ClassroomParticipation and LearningEvent.

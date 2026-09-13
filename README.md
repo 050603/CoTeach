@@ -1,6 +1,10 @@
-# PrAIxis
+# CoTeach
 
-PrAIxis（Praxis + AI）是面向项目式学习（PBL）的 AI 教学与学习平台。系统把长期课程、课堂活动、AI 备课、五阶段项目课堂、学习成果与研究数据连接在同一条教学链路中，同时为教师和学生提供彼此独立的工作门户。
+![CoTeach 横版标识](public/brand/coteach/horizontal-color.png)
+
+CoTeach 是面向项目式学习（PBL）的 AI 协同教学平台。名称中的 “Co” 代表共同参与，系统让教师、学生与 AI 围绕真实问题共同设计、实践、反馈与反思，并把长期课程、课堂活动、AI 备课、五阶段项目课堂、学习成果与研究数据连接在同一条教学链路中。
+
+横版、深蓝横版、图形标与竖版组合的使用规则见[品牌资源说明](docs/brand.md)。
 
 当前版本以 **V2 课程平台**为唯一业务入口，面向“单台云服务器、2–3 名教师、50–80 名学生同时在线”的部署规模设计。生产环境采用模块化单体：Next.js 应用和代码运行器由 systemd 托管，PostgreSQL、Redis、Nginx、监控与备份组件由 Docker Compose 管理。
 
@@ -87,7 +91,7 @@ flowchart LR
     CP --> R["成果 · AI · 评价 · 反思 · 事件"]
 ```
 
-PostgreSQL 当前包含 45 张正式业务/基础设施表。完整表清单、字段职责、唯一约束和关系说明见 [openPBL V2 数据库设计](docs/database-v2.md)。
+PostgreSQL 当前包含 45 张正式业务/基础设施表。完整表清单、字段职责、唯一约束和关系说明见 [CoTeach V2 数据库设计](docs/database-v2.md)。
 
 ## 系统架构
 
@@ -124,7 +128,7 @@ flowchart LR
 ## 目录结构
 
 ```text
-openPBL/
+CoTeach/
 ├─ src/
 │  ├─ app/
 │  │  ├─ teacher/                 # 教师门户、课程库、教学班与课堂

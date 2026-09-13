@@ -1,5 +1,5 @@
-// 将 OpenMAIC 生成的 classroom 与 openPBL 的 Course 关联
-// 这是 openPBL 侧的逻辑，不修改 OpenMAIC 任何代码
+// 将 OpenMAIC 生成的 classroom 与 CoTeach 的 Course 关联
+// 这是 CoTeach 侧的逻辑，不修改 OpenMAIC 任何代码
 
 import { updateCourse, getCourse } from '@/lib/session/server-store';
 import type {

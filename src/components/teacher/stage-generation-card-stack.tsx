@@ -259,7 +259,7 @@ function GenerationCard({
           {actionLabel}
         </button>
       ) : null}
-      <span className="absolute bottom-2.5 right-3 text-[8px] font-semibold tracking-[0.1em] text-stone-300">PRAIXIS · AI DESIGN</span>
+      <span className="absolute bottom-2.5 right-3 text-[8px] font-semibold tracking-[0.1em] text-stone-300">COTEACH · AI DESIGN</span>
     </div>
   );
 }

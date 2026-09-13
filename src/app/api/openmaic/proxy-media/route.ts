@@ -46,7 +46,7 @@ export async function POST(request: Request) {
         redirect: "manual",
         headers: {
           Accept: "image/*,video/*,audio/*,application/pdf,application/octet-stream",
-          "User-Agent": "OpenPBL-MediaProxy/1.0",
+          "User-Agent": "CoTeach-MediaProxy/1.0",
         },
         signal: AbortSignal.timeout(30_000),
       });

@@ -6,7 +6,7 @@ groups:
         for: 2m
         labels: { severity: critical }
         annotations:
-          summary: OpenPBL metrics target is unavailable
+          summary: CoTeach metrics target is unavailable
       - alert: OpenPblHttpErrorRateHigh
         expr: |
           sum(rate(http_requests_total{status=~"5.."}[5m]))
@@ -16,7 +16,7 @@ groups:
         for: 5m
         labels: { severity: warning }
         annotations:
-          summary: OpenPBL HTTP 5xx rate exceeds 0.5%
+          summary: CoTeach HTTP 5xx rate exceeds 0.5%
       - alert: OpenPblHttpP95High
         expr: |
           histogram_quantile(
@@ -26,19 +26,19 @@ groups:
         for: 10m
         labels: { severity: warning }
         annotations:
-          summary: OpenPBL HTTP p95 exceeds 500 ms
+          summary: CoTeach HTTP p95 exceeds 500 ms
       - alert: OpenPblEventLoopLagHigh
         expr: nodejs_eventloop_lag_p99_seconds > 0.2
         for: 5m
         labels: { severity: warning }
         annotations:
-          summary: OpenPBL Node.js event-loop p99 lag exceeds 200 ms
+          summary: CoTeach Node.js event-loop p99 lag exceeds 200 ms
       - alert: OpenPblHeapPressure
         expr: nodejs_heap_size_used_bytes / nodejs_heap_size_total_bytes > 0.8
         for: 10m
         labels: { severity: warning }
         annotations:
-          summary: OpenPBL Node.js heap usage exceeds 80%
+          summary: CoTeach Node.js heap usage exceeds 80%
       - alert: OpenPblHostDiskLow
         expr: |
           node_filesystem_avail_bytes{mountpoint="/"}
@@ -47,12 +47,12 @@ groups:
         for: 10m
         labels: { severity: critical }
         annotations:
-          summary: OpenPBL host disk has less than 15% free
+          summary: CoTeach host disk has less than 15% free
       - alert: OpenPblContainerRestarting
         expr: changes(container_start_time_seconds{name=~".*openpbl.*"}[15m]) > 2
         labels: { severity: warning }
         annotations:
-          summary: An OpenPBL container is repeatedly restarting
+          summary: A CoTeach container is repeatedly restarting
       - alert: OpenPblPostgresConnectionsHigh
         expr: pg_stat_activity_count / pg_settings_max_connections > 0.8
         for: 5m
@@ -82,4 +82,4 @@ groups:
         for: 5m
         labels: { severity: critical }
         annotations:
-          summary: OpenPBL TLS certificate expires within 48 hours
+          summary: CoTeach TLS certificate expires within 48 hours

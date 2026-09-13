@@ -279,8 +279,8 @@ describe("课程章节管理", () => {
     expect(screen.queryByDisplayValue("A7B9C2")).toBeNull();
     fireEvent.click(invitation);
     expect(screen.getByRole("dialog")).toHaveClass("pbl-invitation-dialog");
-    expect(screen.getByRole("img", { name: "PrAIxis" })).toBeInTheDocument();
-    expect(screen.getByLabelText("学生端访问地址")).toHaveTextContent("praixis.cn");
+    expect(screen.getByRole("img", { name: "CoTeach" })).toBeInTheDocument();
+    expect(screen.getByLabelText("学生端访问地址")).toHaveTextContent("coteach.cn");
     expect(document.querySelectorAll(".pbl-invitation-connector")).toHaveLength(2);
     expect(screen.getByLabelText("加入课程步骤")).toHaveTextContent(/打开电脑浏览器.*注册 \/ 登录.*输入课程邀请码/);
     expect(screen.getByLabelText("学生邀请码")).toHaveTextContent("A7B 9C2");

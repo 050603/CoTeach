@@ -18,7 +18,7 @@ import {
   Play,
   Sparkles,
 } from "lucide-react";
-import { PraixisLogo } from "@/components/brand/praixis-logo";
+import { CoTeachLogo } from "@/components/brand/coteach-logo";
 import {
   CourseCover,
   courseDate,
@@ -208,8 +208,8 @@ function CourseTopbar({
     <header className="pbl-student-course-topbar">
       <div className="pbl-student-course-topbar-inner">
         <div className="pbl-student-course-topbar-context flex min-w-0 items-center gap-5">
-          <Link href="/student" aria-label="PrAIxis 学生首页">
-            <PraixisLogo variant="horizontalSolid" height={38} priority />
+          <Link href="/student" aria-label="CoTeach 学生首页">
+            <CoTeachLogo variant="horizontalSolid" height={38} priority />
           </Link>
           <span className="h-5 w-px bg-[var(--pbl-border)]" aria-hidden="true" />
           <Link

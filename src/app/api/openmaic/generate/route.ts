@@ -346,7 +346,7 @@ export async function POST(request: NextRequest) {
           signal,
         });
 
-        // 关联到 openPBL 课程。此时学生课堂已经完成服务端分流，绝不再
+        // 关联到 CoTeach 课程。此时学生课堂已经完成服务端分流，绝不再
         // 把含教师资源的原始全量课堂暴露给学生端。
         if (courseId) {
           throwIfAborted(signal);

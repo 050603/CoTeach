@@ -18,7 +18,7 @@ import { interpolateVariables } from '@openmaic/lib/prompts/loader';
 const _cache = new Map<string, string>();
 
 function promptsDir(): string {
-  // openPBL 迁移后模板位于 src/lib/openmaic/pbl/v2/prompts/
+  // CoTeach 迁移后模板位于 src/lib/openmaic/pbl/v2/prompts/
   return path.join(process.cwd(), 'src', 'lib', 'openmaic', 'pbl', 'v2', 'prompts');
 }
 

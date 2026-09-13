@@ -1,4 +1,4 @@
-# OpenPBL C-plan motion material run
+# CoTeach C-plan motion material run
 
 These scripts are thin project adapters around the installed
 `openpbl-sprite-maker` skill. They only point its catalog loader at

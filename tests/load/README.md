@@ -1,4 +1,4 @@
-# OpenPBL cloud load tests
+# CoTeach cloud load tests
 
 Do not run `target`, `stress`, or `soak` on a developer laptop. Run the suite
 from a temporary machine in the same region as the candidate server.

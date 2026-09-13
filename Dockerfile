@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# OpenPBL production image — multi-stage build.
+# CoTeach production image — multi-stage build.
 #
 # Stages:
 #   1. deps    — install node_modules (incl. workspace packages + prisma client)
@@ -88,9 +88,9 @@ FROM node:22-alpine AS runner
 
 ARG OPENPBL_DEPLOYMENT_ID
 
-LABEL org.opencontainers.image.title="openpbl-app" \
-      org.opencontainers.image.description="OpenPBL — Project-Based Learning classroom platform" \
-      org.opencontainers.image.source="https://github.com/openpbl/openpbl" \
+LABEL org.opencontainers.image.title="coteach-app" \
+      org.opencontainers.image.description="CoTeach — AI-powered collaborative teaching platform for project-based learning" \
+      org.opencontainers.image.source="https://github.com/050603/CoTeach" \
       org.opencontainers.image.version="0.1.0"
 
 # Runtime dependencies:

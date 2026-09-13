@@ -458,10 +458,10 @@
 .pbl-platform-theme .pbl-auth-scene { --pbl-auth-accent: var(--pbl-teacher); --pbl-auth-accent-rgb: 54,95,202; position: relative; isolation: isolate; min-height: 100dvh; overflow-x: clip; background: #f4f7fb; color: var(--pbl-text); }
 .pbl-platform-theme .pbl-auth-scene-student { --pbl-auth-accent: var(--pbl-student); --pbl-auth-accent-rgb: 22,118,109; background: #f3f8f6; }
 .pbl-platform-theme .pbl-auth-scene::after { position: absolute; z-index: -5; inset: 0; background: linear-gradient(117deg,rgba(255,255,255,.78) 0%,rgba(255,255,255,.28) 42%,transparent 73%); content: ''; }
-.pbl-platform-theme .pbl-auth-grid { position: absolute; z-index: -4; inset: 0; opacity: .72; background-image: linear-gradient(rgba(var(--pbl-auth-accent-rgb),.045) 1px,transparent 1px),linear-gradient(90deg,rgba(var(--pbl-auth-accent-rgb),.045) 1px,transparent 1px); background-size: 68px 68px; mask-image: linear-gradient(100deg,#000 0%,transparent 72%); animation: pbl-auth-grid-drift 28s linear infinite; }
-.pbl-platform-theme .pbl-auth-glow { position: fixed; z-index: -3; border-radius: 50%; opacity: .6; filter: blur(5px); will-change: transform; }
-.pbl-platform-theme .pbl-auth-glow-one { top: -24%; left: -10%; width: 58vw; height: 58vw; background: radial-gradient(circle,rgba(var(--pbl-auth-accent-rgb),.2),rgba(var(--pbl-auth-accent-rgb),.035) 46%,transparent 70%); animation: pbl-auth-glow-drift 16s ease-in-out infinite alternate; }
-.pbl-platform-theme .pbl-auth-glow-two { right: -19%; bottom: -40%; width: 60vw; height: 60vw; background: radial-gradient(circle,rgba(225,178,101,.13),rgba(255,255,255,.04) 46%,transparent 70%); animation: pbl-auth-glow-drift 20s ease-in-out -5s infinite alternate-reverse; }
+.pbl-platform-theme .pbl-auth-grid { position: absolute; z-index: -4; inset: 0; opacity: .72; background-image: linear-gradient(rgba(var(--pbl-auth-accent-rgb),.045) 1px,transparent 1px),linear-gradient(90deg,rgba(var(--pbl-auth-accent-rgb),.045) 1px,transparent 1px); background-size: 68px 68px; mask-image: linear-gradient(100deg,#000 0%,transparent 72%); }
+.pbl-platform-theme .pbl-auth-glow { position: fixed; z-index: -3; border-radius: 50%; opacity: .6; filter: blur(5px); }
+.pbl-platform-theme .pbl-auth-glow-one { top: -24%; left: -10%; width: 58vw; height: 58vw; background: radial-gradient(circle,rgba(var(--pbl-auth-accent-rgb),.2),rgba(var(--pbl-auth-accent-rgb),.035) 46%,transparent 70%); }
+.pbl-platform-theme .pbl-auth-glow-two { right: -19%; bottom: -40%; width: 60vw; height: 60vw; background: radial-gradient(circle,rgba(225,178,101,.13),rgba(255,255,255,.04) 46%,transparent 70%); }
 .pbl-platform-theme .pbl-auth-header { position: sticky; z-index: 10; top: 0; display: flex; width: min(100%,1520px); min-height: 96px; margin: auto; padding: 28px 54px 18px; align-items: center; justify-content: space-between; background: linear-gradient(180deg,rgba(247,249,252,.94) 0%,rgba(247,249,252,.76) 72%,transparent 100%); backdrop-filter: blur(12px); }
 .pbl-platform-theme .pbl-auth-scene-student .pbl-auth-header { background: linear-gradient(180deg,rgba(245,250,248,.94) 0%,rgba(245,250,248,.76) 72%,transparent 100%); }
 .pbl-platform-theme .pbl-auth-brand { display: inline-flex; min-height: 44px; align-items: center; border-radius: 9px; }
@@ -481,27 +481,10 @@
 .pbl-platform-theme .pbl-auth-visual-heading p { color: var(--pbl-text-muted); font-size: 10px; font-weight: 700; letter-spacing: .19em; }
 .pbl-platform-theme .pbl-auth-visual-heading h2 { margin-top: 7px; color: var(--pbl-text-strong); font-size: 17px; font-weight: 600; letter-spacing: .02em; }
 .pbl-platform-theme .pbl-auth-origin { position: absolute; inset: 108px 20px 38px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--pbl-text-strong); text-align: center; }
-.pbl-platform-theme .pbl-auth-origin-glow { position: absolute; top: 50%; left: 50%; width: min(580px,82%); height: 260px; border-radius: 50%; background: radial-gradient(ellipse,rgba(15,185,177,.16),rgba(var(--pbl-auth-accent-rgb),.07) 42%,transparent 72%); filter: blur(34px); transform: translate(-50%,-50%); animation: pbl-auth-origin-glow 12s ease-in-out infinite; }
+.pbl-platform-theme .pbl-auth-origin-glow { position: absolute; top: 50%; left: 50%; width: min(580px,82%); height: 260px; border-radius: 50%; background: radial-gradient(ellipse,rgba(15,185,177,.16),rgba(var(--pbl-auth-accent-rgb),.07) 42%,transparent 72%); filter: blur(34px); transform: translate(-50%,-50%); }
 .pbl-platform-theme .pbl-auth-origin-word-wrap { position: relative; z-index: 1; width: 100%; }
-.pbl-platform-theme .pbl-auth-origin-word { color: #082f6b; font-size: clamp(5.2rem,8.2vw,7.5rem); text-shadow: 0 20px 52px rgba(15,47,107,.08); }
-.pbl-platform-theme .pbl-auth-origin-equation { position: relative; z-index: 1; display: grid; width: min(100%,560px); grid-template-columns: max-content minmax(28px,1fr) max-content minmax(28px,1fr) max-content; align-items: center; gap: 12px; margin-top: 44px; color: var(--pbl-text-muted); font-size: 9px; font-weight: 700; letter-spacing: .12em; }
-.pbl-platform-theme .pbl-auth-origin-equation i { position: relative; height: 1px; overflow: hidden; background: rgba(var(--pbl-auth-accent-rgb),.12); }
-.pbl-platform-theme .pbl-auth-origin-equation i::after { position: absolute; inset: 0; background: linear-gradient(90deg,transparent,var(--pbl-auth-accent),transparent); content: ''; transform: translateX(-110%); animation: pbl-auth-origin-line 12s ease-in-out infinite; }
-.pbl-platform-theme .pbl-auth-origin-equation strong { display: grid; width: 46px; height: 46px; place-items: center; border: 1px solid rgba(15,185,177,.28); border-radius: 50%; background: rgba(255,255,255,.58); color: #0f8f89; font-size: 11px; letter-spacing: .02em; box-shadow: 0 12px 34px rgba(15,118,110,.1); animation: pbl-auth-origin-ai 12s ease-in-out infinite; }
-.pbl-platform-theme .pbl-auth-origin-narrative { position: relative; z-index: 1; width: min(100%,560px); height: 132px; margin-top: 27px; border-top: 1px solid rgba(var(--pbl-auth-accent-rgb),.14); color: var(--pbl-text-muted); text-align: center; }
-.pbl-platform-theme .pbl-auth-origin-state { position: absolute; inset: 0; padding-top: 18px; }
-.pbl-platform-theme .pbl-auth-origin-state > span { position: absolute; top: -6px; left: 50%; padding-inline: 12px; background: #f5f8fb; color: var(--pbl-auth-accent); font-size: 8px; font-weight: 750; letter-spacing: .13em; white-space: nowrap; transform: translateX(-50%); }
-.pbl-platform-theme .pbl-auth-scene-student .pbl-auth-origin-state > span { background: #f4f9f7; }
-.pbl-platform-theme .pbl-auth-origin-state > p { max-width: 520px; margin: auto; font-size: 11px; line-height: 1.9; text-wrap: balance; }
-.pbl-platform-theme .pbl-auth-origin-triad { display: grid; width: min(100%,470px); margin: 3px auto 13px; grid-template-columns: 1fr 28px 1fr 28px 1fr; align-items: center; }
-.pbl-platform-theme .pbl-auth-origin-triad > span { display: grid; min-height: 48px; align-content: center; gap: 3px; border-radius: 24px; color: var(--pbl-text-strong); }
-.pbl-platform-theme .pbl-auth-origin-triad b { font-family: Georgia,'Times New Roman',serif; font-size: 16px; font-weight: 500; letter-spacing: .04em; line-height: 1; }
-.pbl-platform-theme .pbl-auth-origin-triad small { color: var(--pbl-text-muted); font-size: 9px; font-weight: 650; letter-spacing: .16em; }
-.pbl-platform-theme .pbl-auth-origin-triad i { height: 1px; background: linear-gradient(90deg,transparent,rgba(var(--pbl-auth-accent-rgb),.24),transparent); }
-.pbl-platform-theme .pbl-auth-origin-triad .is-origin { border: 1px solid rgba(var(--pbl-auth-accent-rgb),.22); background: rgba(255,255,255,.54); color: var(--pbl-auth-accent); box-shadow: 0 8px 24px rgba(var(--pbl-auth-accent-rgb),.08); }
-.pbl-platform-theme .pbl-auth-origin-state-praixis > p { padding-top: 18px; }
-.pbl-platform-theme .pbl-auth-origin-state-praxis { animation: praixis-origin-old-copy 12s ease-in-out infinite; }
-.pbl-platform-theme .pbl-auth-origin-state-praixis { opacity: 0; animation: praixis-origin-new-copy 12s ease-in-out infinite; }
+.pbl-platform-theme .pbl-auth-brand-caption { position: relative; width: min(100%,480px); margin-top: 24px; color: var(--pbl-text-muted); font-size: 12px; line-height: 1.9; text-wrap: balance; }
+.pbl-platform-theme .pbl-auth-brand-caption .pbl-auth-brand-motto { margin-bottom: 14px; color: var(--pbl-text-strong); font-size: 18px; font-weight: 600; letter-spacing: .12em; }
 .pbl-platform-theme .pbl-auth-content { position: relative; display: flex; width: min(100%,470px); min-height: calc(100dvh - 96px); flex-direction: column; justify-content: center; justify-self: center; padding: 48px 0 58px 70px; animation: pbl-auth-enter-right .7s .08s cubic-bezier(.22,1,.36,1) both; }
 .pbl-platform-theme .pbl-auth-content::before { position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: linear-gradient(transparent,rgba(var(--pbl-auth-accent-rgb),.16) 12%,rgba(var(--pbl-auth-accent-rgb),.2) 84%,transparent); content: ''; }
 .pbl-platform-theme .pbl-auth-mode-switch { display: flex; gap: 32px; width: 100%; border-bottom: 1px solid rgba(var(--pbl-auth-accent-rgb),.14); }
@@ -616,8 +599,6 @@
 @media (prefers-reduced-motion:reduce) {
   .pbl-platform-theme *, .pbl-platform-theme *::before, .pbl-platform-theme *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
   .pbl-platform-theme :is(.pbl-course-card,.pbl-library-card):hover { transform: none; }
-  .pbl-platform-theme .pbl-auth-origin-state-praxis { display: none; }
-  .pbl-platform-theme .pbl-auth-origin-state-praixis { opacity: 1; }
 }
 
 /* Student account forms: keep the shared brand animation untouched. */

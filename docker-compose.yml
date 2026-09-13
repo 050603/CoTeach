@@ -1,4 +1,4 @@
-# OpenPBL — full local/dev stack.
+# CoTeach — full local/dev stack.
 #
 # Brings up the Next.js app, PostgreSQL, and Redis together with healthchecks
 # so `docker compose up` gives you a working environment. Production uses the
@@ -20,7 +20,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: openpbl-app:latest
+    image: coteach-app:latest
     ports:
       - "3000:3000"
       # WebSocket server (Stage 4 realtime). Exposed for direct local testing;

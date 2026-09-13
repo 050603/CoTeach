@@ -56,7 +56,7 @@ def required_files_exist(directory: Path, names: tuple[str, ...]) -> bool:
 def download_verified(url: str, expected_sha256: str, destination: Path) -> None:
     digest = hashlib.sha256()
     downloaded = 0
-    request = urllib.request.Request(url, headers={"User-Agent": "openPBL-survey-nlp-setup"})
+    request = urllib.request.Request(url, headers={"User-Agent": "CoTeach-survey-nlp-setup"})
     with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
         if not response.url.startswith("https://"):
             raise RuntimeError("Resource download redirected to an insecure URL.")

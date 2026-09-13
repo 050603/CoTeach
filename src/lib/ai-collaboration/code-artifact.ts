@@ -18,11 +18,11 @@ export type CodeArtifact = {
 const DEFAULT_SOURCE: Record<CodeArtifactLanguage, { path: string; content: string }> = {
   python: {
     path: "main.py",
-    content: "# 在这里开始你的项目\n\n\ndef main():\n    print(\"你好，OpenPBL！\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+    content: "# 在这里开始你的项目\n\n\ndef main():\n    print(\"你好，CoTeach！\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
   },
   c: {
     path: "main.c",
-    content: "#include <stdio.h>\n\nint main(void) {\n    printf(\"你好，OpenPBL！\\n\");\n    return 0;\n}\n",
+    content: "#include <stdio.h>\n\nint main(void) {\n    printf(\"你好，CoTeach！\\n\");\n    return 0;\n}\n",
   },
 };
 

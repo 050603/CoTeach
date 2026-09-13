@@ -132,7 +132,7 @@ describe("code collaboration policy", () => {
           severity: "error",
           title: "错误定位",
           message: "引用内容应决定实际行号。",
-          quotedCode: 'print("你好，OpenPBL！")',
+          quotedCode: 'print("你好，CoTeach！")',
         }],
       },
     });

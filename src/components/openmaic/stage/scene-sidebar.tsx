@@ -21,7 +21,7 @@ import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import type { SceneType, SlideContent, InteractiveContent } from '@openmaic/lib/types/stage';
 import { PENDING_SCENE_ID } from '@openmaic/lib/store/stage';
 import { useDisplayScale } from '@/hooks/use-display-scale';
-import { PraixisLogoMark } from '@/components/brand/praixis-logo';
+import { CoTeachLogoMark } from '@/components/brand/coteach-logo';
 import styles from './scene-sidebar.module.css';
 
 interface SceneSidebarProps {
@@ -138,13 +138,13 @@ export function SceneSidebar({
             className="flex items-center gap-2 cursor-pointer rounded-lg px-1.5 -mx-1.5 py-1 -my-1 hover:bg-gray-100/80 dark:hover:bg-gray-800/60 active:scale-[0.97] transition-all duration-150"
             title={t('generation.backToHome')}
           >
-            <PraixisLogoMark size={28} className="shrink-0" />
+            <CoTeachLogoMark size={28} className="shrink-0" />
             <span className="min-w-0">
               <span className="block text-sm font-bold leading-4 text-stone-900 dark:text-slate-100">
-                PrAIxis
+                CoTeach
               </span>
               <span className="block text-[10px] font-semibold leading-3 text-stone-400 dark:text-stone-500">
-                AI inside practice
+                Teach together
               </span>
             </span>
           </button>

@@ -19,7 +19,7 @@ export default function Error({
 
   useEffect(() => {
     // 上报到控制台便于教师排查；未来可接入监控平台
-    console.error("[PrAIxis] 未捕获错误:", error);
+    console.error("[CoTeach] 未捕获错误:", error);
     recoverFromChunkLoadError(error);
   }, [error]);
 
@@ -96,7 +96,7 @@ export default function Error({
 
         {/* 底部签名 */}
         <p className="mt-16 text-xs text-[var(--pbl-text-subtle)]">
-          PrAIxis · AI inside practice.
+          CoTeach · Teach together. Learn together.
         </p>
       </main>
     </div>

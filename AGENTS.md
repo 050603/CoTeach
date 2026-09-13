@@ -1,4 +1,4 @@
-# openPBL / PrAIxis
+# CoTeach
 
 ## 仓库入口
 

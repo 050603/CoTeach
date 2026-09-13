@@ -2,7 +2,7 @@
   "name": "omml2mathml",
   "version": "1.3.1-openpbl.1",
   "private": true,
-  "description": "Security-maintained OpenPBL fork of the OMML to MathML converter",
+  "description": "Security-maintained CoTeach fork of the OMML to MathML converter",
   "main": "index.js",
   "types": "index.d.ts",
   "license": "Apache-2.0",

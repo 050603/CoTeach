@@ -1166,7 +1166,7 @@ export default function VerifyCoursePage() {
     // P0 优化：注入学生画像（与 OpenMAIC 一致）
     // OpenMAIC 的 scene-outlines-stream 路由会从 requirements.userNickname/userBio
     // 构建 "## Student Profile" 文本块，引导 LLM 根据学生背景调整难度与示例。
-    // OpenPBL 中由教师代为生成课程，因此从课程信息推导目标学生受众的画像。
+    // CoTeach 中由教师代为生成课程，因此从课程信息推导目标学生受众的画像。
     const userNickname = `${course.grade || ""}学生`.trim() || undefined;
     const userBioParts: string[] = [];
     if (course.subject) userBioParts.push(`${course.subject}学科学生`);

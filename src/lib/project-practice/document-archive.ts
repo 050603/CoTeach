@@ -167,7 +167,7 @@ export async function buildProjectDocumentDocx(input: {
   const { htmlToDocxBlob } = await import("@platejs/docx-io");
   const blob = await htmlToDocxBlob(prepared.html, {
     title: input.title,
-    creator: "OpenPBL",
+    creator: "CoTeach",
     description: "项目实践最终成果",
     allowRemoteImages: false,
     orientation: "portrait",

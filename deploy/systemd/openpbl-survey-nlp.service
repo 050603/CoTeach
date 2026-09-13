@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenPBL offline neural survey tokenizer (loopback port 3003)
+Description=CoTeach offline neural survey tokenizer (loopback port 3003)
 PartOf=openpbl.service
 Before=openpbl.service
 StartLimitIntervalSec=0

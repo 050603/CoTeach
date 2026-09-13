@@ -17,9 +17,18 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "PrAIxis - 与 AI 一起实践，让学习真正发生",
+  applicationName: "CoTeach",
+  title: "CoTeach - 与 AI 协同教学，让学习真正发生",
   description:
-    "PrAIxis 是将 AI 融入项目式学习实践的教学平台，贯通教师备课、课堂协同、项目创作、成果评价与学习反思。",
+    "CoTeach 是面向项目式学习的 AI 协同教学平台，贯通教师备课、课堂协作、项目创作、成果评价与学习反思。",
+  openGraph: {
+    type: "website",
+    locale: "zh_CN",
+    siteName: "CoTeach",
+    title: "CoTeach - 与 AI 协同教学，让学习真正发生",
+    description:
+      "连接教师、学生与 AI 的项目式学习平台，让备课、课堂、创作、评价与反思在同一条教学链路中协同发生。",
+  },
 };
 
 export default function RootLayout({

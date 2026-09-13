@@ -242,7 +242,7 @@ async function assertEditorChrome(page: Page) {
   await expect(page.getByRole('button', { name: '返回预览发布', exact: true })).toBeInViewport({ ratio: 1 });
   await expect(page.getByRole('button', { name: '保存课堂', exact: true })).toBeInViewport({ ratio: 1 });
   await expect(page.getByRole('button', { name: '返回首页', exact: true })).toHaveCount(0);
-  const logo = page.getByTestId('slide-nav-rail').getByRole('img', { name: 'PrAIxis', exact: true });
+  const logo = page.getByTestId('slide-nav-rail').getByRole('img', { name: 'CoTeach', exact: true });
   await expect(logo).toBeInViewport({ ratio: 1 });
   await expect.poll(() => logo.evaluate((element) => (element as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
   await expect(page.getByTestId('slide-nav-rail').getByTitle('观察能源使用', { exact: true }).first()).toBeAttached();

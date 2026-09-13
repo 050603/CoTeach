@@ -1,4 +1,4 @@
-// localStorage helpers for the openPBL session store.
+// localStorage helpers for the CoTeach session store.
 // Falls back to an in-memory map when localStorage is unavailable (SSR / private mode).
 
 const memory = new Map<string, string>();

@@ -63,7 +63,7 @@ function createAsrTestWav(): Buffer {
 }
 
 function createPdfTestDocument(): Buffer {
-  const stream = 'BT /F1 18 Tf 72 720 Td (OpenPBL provider test) Tj ET';
+  const stream = 'BT /F1 18 Tf 72 720 Td (CoTeach provider test) Tj ET';
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',

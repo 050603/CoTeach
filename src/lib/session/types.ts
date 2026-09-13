@@ -1,4 +1,4 @@
-// Domain types for the openPBL classroom demo.
+// Domain types for the CoTeach classroom.
 
 import type { PblCourseConfig } from "@/lib/pbl-course-config";
 import type {

@@ -1,4 +1,4 @@
-# OpenPBL HTTP gateway for the single current host service.
+# CoTeach HTTP gateway for the single current host service.
 
 # The application and realtime server run as systemd user services on the host.
 upstream openpbl_new_app {

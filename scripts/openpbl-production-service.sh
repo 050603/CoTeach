@@ -9,7 +9,7 @@ RUNNER_PORT="${OPENPBL_CODE_RUNNER_PORT:-3002}"
 read_secret() {
   secret_path="$SECRET_DIR/$1"
   if [ ! -r "$secret_path" ] || [ ! -s "$secret_path" ]; then
-    echo "OpenPBL 配置文件不可读或为空：$secret_path" >&2
+    echo "CoTeach 配置文件不可读或为空：$secret_path" >&2
     exit 1
   fi
   tr -d '\r\n' < "$secret_path"
@@ -103,7 +103,7 @@ run_app() {
     "$PROJECT_ROOT/.openpbl-data/uploads" \
     "$PROJECT_ROOT/.openpbl-data/whiteboards"
 
-  export PUBLIC_BASE_URL="${OPENPBL_PUBLIC_BASE_URL:-https://praixis.cn}"
+  export PUBLIC_BASE_URL="${OPENPBL_PUBLIC_BASE_URL:-https://coteach.cn}"
   export TRUST_PROXY_HEADERS="true"
   # Keep durable generation owned by the server lifecycle so navigation or a
   # completed route response cannot terminate the task that started it.

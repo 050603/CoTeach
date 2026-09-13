@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenPBL production code runner (loopback port 3002)
+Description=CoTeach production code runner (loopback port 3002)
 PartOf=openpbl.service
 Before=openpbl.service
 StartLimitIntervalSec=0
