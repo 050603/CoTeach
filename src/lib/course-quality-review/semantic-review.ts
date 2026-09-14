@@ -77,7 +77,12 @@ export function collectCourseStructureIssues(course: Course, scenes: readonly Sc
     const audit = auditGeneratedSlide(canvas.elements, { canvasWidth, canvasHeight });
     for (const reason of audit.reasons) add({ origin: "structure", severity: "error", sceneId: scene.id, title: "幻灯片结构异常", evidence: reason, suggestion: "修正空白、无效几何或越界元素后重新检查。" });
     const composition = auditGeneratedSlide(canvas.elements, { canvasWidth, canvasHeight, checkComposition: true });
-    for (const reason of composition.reasons.filter((reason) => !audit.reasons.includes(reason))) add({ origin: "render", severity: "suggestion", sceneId: scene.id, title: "幻灯片版式需要预览核对", evidence: reason, suggestion: "在实际预览中核对字号、文字遮挡与全页布局；必要时编辑本页后重新检查。" });
+    for (const reason of composition.reasons.filter((reason) => !audit.reasons.includes(reason))) {
+      const concreteFailure = /(needs at least|too small|wraps unexpectedly|overlap|collides|covered|cannot fit|outside)/i.test(reason);
+      add(concreteFailure
+        ? { origin: "structure", severity: "error", sceneId: scene.id, title: "幻灯片存在确定的排版冲突", evidence: reason, suggestion: "重新生成或编辑本页，消除异常换行、越界、遮挡和内容区域重叠后再发布。" }
+        : { origin: "render", severity: "suggestion", sceneId: scene.id, title: "幻灯片版式需要预览核对", evidence: reason, suggestion: "在实际预览中核对字号、文字遮挡与全页布局；必要时编辑本页后重新检查。" });
+    }
   }
   const graph = assessKnowledgeGraphQuality(course.content.knowledgeGraph, course.content.knowledgePoints, course.content.teacherRequiredKnowledgePoints);
   for (const reason of graph.issues) add({ origin: "semantic", severity: "suggestion", title: "知识结构需要核对", evidence: reason, suggestion: "根据教学资料核对知识边界、先修依据及关系；不要按顺序猜测依赖。" });

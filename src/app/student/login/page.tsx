@@ -42,8 +42,7 @@ export default function StudentLoginPage() {
   return (
     <StudentAuthShell
       mode="login"
-      title="欢迎回来"
-      description="登录后进入已加入的课程，继续你的学习与实践。"
+      title="学生登录"
     >
       <form className="pbl-auth-fields" onSubmit={submit} aria-busy={busy}>
         <label className="pbl-auth-field">
@@ -89,7 +88,7 @@ export default function StudentLoginPage() {
           disabled={busy}
           type="submit"
         >
-          <span>{busy ? "登录中…" : "登录并进入课程"}</span>
+          <span>{busy ? "登录中…" : "登录"}</span>
           {busy ? <LoaderCircle aria-hidden="true" className="pbl-student-spinner" size={18} /> : <ArrowRight aria-hidden="true" size={18} />}
         </button>
       </form>

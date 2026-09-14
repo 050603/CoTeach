@@ -53,18 +53,25 @@ export function BaseTextElement({ elementInfo, target }: BaseTextElementProps) {
           className="element-content slide-renderer-prose"
           style={{
             position: 'relative',
+            // Keep thumbnails and package consumers on the same geometry as
+            // the OpenMAIC prompt and the classroom player.
+            boxSizing: 'border-box',
+            padding: '10px',
+            overflowWrap: 'break-word',
             width: elementInfo.vertical ? 'auto' : '100%',
             height: elementInfo.vertical ? '100%' : 'auto',
             textShadow: shadowStyle,
-            lineHeight: elementInfo.lineHeight,
+            // Keep read-only playback on the same metrics used by the editor,
+            // generation prompt and deterministic layout audit. Browser
+            // `normal` differs across fonts and previously turned a valid DSL
+            // box into an overlapping classroom slide.
+            lineHeight: elementInfo.lineHeight ?? 1.5,
             letterSpacing:
               elementInfo.wordSpace !== undefined ? `${elementInfo.wordSpace}px` : undefined,
             color: elementInfo.defaultColor,
             fontFamily: elementInfo.defaultFontName,
             writingMode: elementInfo.vertical ? 'vertical-rl' : 'horizontal-tb',
-            ...(elementInfo.paragraphSpace !== undefined
-              ? ({ '--paragraphSpace': `${elementInfo.paragraphSpace}px` } as CSSProperties)
-              : null),
+            ...({ '--paragraphSpace': `${elementInfo.paragraphSpace ?? 5}px` } as CSSProperties),
           }}
         >
           <ElementOutline

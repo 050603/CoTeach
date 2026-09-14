@@ -132,19 +132,12 @@ export default function TeacherRegisterPage() {
 
   return (
     <TeacherAuthShell
-      description={status.loading
-        ? "正在确认当前系统的账号状态。"
-        : status.available
-          ? status.mode === "bootstrap"
-            ? "完成初始设置后，将直接进入教师工作空间。"
-            : "为协作教师创建独立的工作空间账号。"
-          : "请先登录已有教师账号，再创建其他教师。"}
       mode="register"
       title={status.loading
-        ? "正在准备注册"
+        ? "创建教师账号"
         : status.available
-          ? status.mode === "bootstrap" ? "设置首个教师账号" : "创建教师账号"
-          : "需要教师身份"}
+          ? status.mode === "bootstrap" ? "创建首个教师账号" : "创建教师账号"
+          : "创建教师账号"}
     >
         <section className="pbl-auth-form-stack">
           {status.loading ? (
@@ -237,7 +230,7 @@ export default function TeacherRegisterPage() {
                 <ShieldCheck size={23} />
               </span>
               <p>
-                {status.message ?? "请先登录教师账号，再创建其他教师。"}
+                {status.message ?? "请先登录教师账号。"}
               </p>
               <Link
                 className="pbl-auth-inline-action"

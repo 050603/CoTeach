@@ -16,12 +16,12 @@ import { CoTeachLogo } from "@/components/brand/coteach-logo";
 import { CoTeachLogoAnimation } from "@/components/brand/coteach-logo-animation";
 import { BrandOriginStory } from "@/components/home/brand-origin-story";
 import { CosmicReveal } from "@/components/home/cosmic-reveal";
-const NEW_STAGES = [
+const CLASSROOM_STAGES = [
   {
     key: "launch",
-    label: "项目启动",
+    label: "课堂导入",
     icon: Flag,
-    desc: "教师发布驱动问题，学生确认项目方向与成果要求",
+    desc: "教师明确学习主题、目标与任务",
     gradient: "from-slate-700 to-slate-900",
     color: "#1c1917",
   },
@@ -29,23 +29,23 @@ const NEW_STAGES = [
     key: "ai-learning",
     label: "知识讲授",
     icon: BookOpen,
-    desc: "分节讲授核心知识，支持节末小测、AI 批阅与助教讲解",
+    desc: "教师与 AI 参与讲授，结合小测开展讲解与答疑",
     gradient: "from-indigo-500 to-violet-600",
     color: "#6366f1",
   },
   {
     key: "make",
-    label: "项目实践",
+    label: "协作实践",
     icon: PenTool,
-    desc: "学生在文档或代码工作台与 AI 组员协作完成真实产物",
+    desc: "学生运用所学开展创作，与 AI 协作完成学习任务",
     gradient: "from-emerald-500 to-teal-500",
     color: "#10b981",
   },
   {
     key: "showcase",
-    label: "成果汇报与评价",
+    label: "成果交流",
     icon: Presentation,
-    desc: "教师通过资源与投屏组织成果汇报和课堂评价",
+    desc: "展示学习成果，开展交流与评价",
     gradient: "from-orange-500 to-amber-500",
     color: "#f97316",
   },
@@ -53,7 +53,7 @@ const NEW_STAGES = [
     key: "reflection",
     label: "学习反思",
     icon: RotateCw,
-    desc: "通过教师资源与课堂引导完成学习回顾",
+    desc: "回顾学习过程，梳理收获与问题",
     gradient: "from-purple-500 to-fuchsia-500",
     color: "#a855f7",
   },
@@ -62,33 +62,29 @@ const NEW_STAGES = [
 const FEATURES = [
   {
     icon: Layers,
-    title: "贯通每一步",
-    desc: "从驱动问题到成果反思，课程设计、课堂组织与学习证据在同一条实践链路中持续流动。",
-    points: ["五阶段清晰衔接", "文档与代码形成真实产物", "每一步都可回看、可延续"],
+    title: "协同备课",
+    desc: "教师与 AI 共同编排课程大纲、课件与教学活动。",
     accent: "from-indigo-50 to-violet-50",
     iconBg: "from-indigo-500 to-violet-600",
   },
   {
     icon: BookOpen,
-    title: "更从容地备课",
-    desc: "围绕真实问题设定主题与知识边界，由 AI 协助生成并打磨课程大纲、课堂内容与项目任务。",
-    points: ["从真实问题组织课程", "AI 协助生成与打磨", "备课成果直接进入课堂"],
+    title: "AI 授课",
+    desc: "AI 讲授课程知识，结合小测开展讲解与答疑。",
     accent: "from-amber-50 to-orange-50",
     iconBg: "from-amber-500 to-orange-500",
   },
   {
     icon: GraduationCap,
-    title: "看见每一次推进",
-    desc: "教师掌握课堂节奏与关键判断，AI 在讲授、答疑和过程支持中随时响应，学生进度清晰可见。",
-    points: ["教师始终掌握课堂", "AI 在实践现场协同", "学习状态实时同步"],
+    title: "课堂协作",
+    desc: "教师组织课堂，学生与 AI 开展学习互动和实践创作。",
     accent: "from-blue-50 to-cyan-50",
     iconBg: "from-blue-500 to-cyan-500",
   },
   {
     icon: ClipboardCheck,
-    title: "让成长有据可循",
-    desc: "把作品、反馈、过程证据与学习反思连接起来，让评价不仅指向结果，也照亮下一次实践。",
-    points: ["作品与过程共同评价", "反馈推动持续迭代", "反思沉淀为可迁移经验"],
+    title: "学习记录与评价",
+    desc: "查看学习成果、过程记录与评价反馈。",
     accent: "from-emerald-50 to-teal-50",
     iconBg: "from-emerald-500 to-teal-500",
   },
@@ -127,20 +123,20 @@ function SiteHeader() {
             href="#features"
             className="hidden rounded-full px-3 py-2 text-[13px] font-semibold text-[var(--pbl-text-muted)] transition-colors hover:bg-[var(--pbl-surface-soft)] hover:text-[var(--pbl-text-strong)] md:inline-block"
           >
-            核心能力
+            协同教学
           </a>
           <a
             href="#workflow"
             className="hidden rounded-full px-3 py-2 text-[13px] font-semibold text-[var(--pbl-text-muted)] transition-colors hover:bg-[var(--pbl-surface-soft)] hover:text-[var(--pbl-text-strong)] md:inline-block"
           >
-            课堂流程
+            课堂教学
           </a>
           <Link
             href="/student/login"
-            className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-[13px] font-semibold text-white shadow-md shadow-indigo-500/25 transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-indigo-500/40"
+            className="pbl-cosmic-btn-primary pbl-cosmic-btn-primary-compact"
           >
             <UsersRound size={14} />
-            立即加入
+            开始学习
           </Link>
         </nav>
       </div>
@@ -165,28 +161,22 @@ function Hero() {
       <div className="pbl-wide-container relative z-10 flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center px-6 py-20 text-center md:px-10">
         <div className="relative mb-8 w-full max-w-[640px]">
           <CoTeachLogoAnimation playback="once" />
-          <span
-            aria-label="系统版本 2.0"
-            className="absolute bottom-4 right-2 text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500"
-          >
-            Version <span className="font-bold text-indigo-600">2.0</span>
-          </span>
         </div>
 
-        {/* 一句话定位 —— 渐变文字 */}
         <h1
-          className="pbl-hero-text text-[length:clamp(2rem,5.5vw,4rem)] font-extrabold leading-[1.08] tracking-tight [text-wrap:balance]"
-          style={{ animationDelay: "0.15s" }}
+          aria-label="共同教、共同学、共同创造"
+          className="pbl-hero-principles text-[length:clamp(1.75rem,4vw,3rem)] font-bold leading-[1.2] tracking-tight [text-wrap:balance]"
         >
-          <span className="pbl-display-gradient">与 AI 一起实践，让学习真正发生</span>
+          <span aria-hidden="true" className="inline-block">共同教 · 共同学</span>
+          <span aria-hidden="true" className="hidden sm:inline"> · </span>
+          <span aria-hidden="true" className="block sm:inline">共同创造</span>
         </h1>
 
-        {/* 副标题 */}
         <p
-          className="pbl-hero-text mt-7 max-w-3xl text-[16px] leading-7 text-[var(--pbl-text-muted)] md:text-[17px]"
+          className="pbl-hero-text mt-5 text-[16px] font-normal text-black md:text-[18px]"
           style={{ animationDelay: "0.3s" }}
         >
-          AI 参与教学实践。学生在 AI 与教师共同指导下探究、设计、创作与反馈，并始终保有判断与行动，让学习真正发生。
+          AI 协同教学平台
         </p>
 
         {/* 统一学生优先入口 */}
@@ -196,7 +186,7 @@ function Hero() {
         >
           <Link href="/student/login" className="pbl-cosmic-btn-primary">
             <UsersRound size={16} />
-            立即加入
+            开始学习
             <ArrowRight size={14} />
           </Link>
         </div>
@@ -218,7 +208,7 @@ function Hero() {
 }
 
 /* ============================================================
-   4. Features —— 4 个核心能力卡片
+   4. Features —— 协同教学能力
    ============================================================ */
 function Features() {
   return (
@@ -228,17 +218,9 @@ function Features() {
     >
       <div className="pbl-wide-container px-6 md:px-10">
         <CosmicReveal className="mb-16">
-          <div className="mb-4 inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--pbl-text-subtle)]">
-            <span className="h-px w-8 bg-[var(--pbl-text-strong)]" />
-            TEACH · LEARN · CREATE
-          </div>
-          <h2 className="text-[length:clamp(2rem,5vw,3.25rem)] font-extrabold leading-[1.05] tracking-tight text-[var(--pbl-text-strong)] [text-wrap:balance]">
-            从一堂课，
-            <span className="pbl-display-gradient">走向一次真正的创造。</span>
+          <h2 className="pbl-section-title text-[length:clamp(2rem,5vw,3.25rem)] font-extrabold leading-[1.05] tracking-tight [text-wrap:balance]">
+            协同教学
           </h2>
-          <p className="mt-5 max-w-4xl text-[15px] leading-7 text-[var(--pbl-text-muted)]">
-            CoTeach 让教师、学生与 AI 围绕同一个真实问题协同工作，让知识进入行动，让每一次行动留下可见的成长证据。
-          </p>
         </CosmicReveal>
 
         <div className="grid gap-6 md:grid-cols-2">
@@ -267,30 +249,6 @@ function Features() {
                     <p className="mt-3 text-[14px] leading-7 text-[var(--pbl-text-muted)]">
                       {f.desc}
                     </p>
-                    {/* 要点 */}
-                    <ul className="mt-5 space-y-2">
-                      {f.points.map((p) => (
-                        <li
-                          key={p}
-                          className="flex items-start gap-2 text-[13px] leading-6 text-[var(--pbl-text)]"
-                        >
-                          <svg
-                            className="mt-1.5 h-3 w-3 shrink-0 text-indigo-500"
-                            viewBox="0 0 12 12"
-                            fill="none"
-                          >
-                            <path
-                              d="M2 6L5 9L10 3"
-                              stroke="currentColor"
-                              strokeWidth="1.6"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                          {p}
-                        </li>
-                      ))}
-                    </ul>
                   </div>
                 </article>
               </CosmicReveal>
@@ -303,10 +261,10 @@ function Features() {
 }
 
 /* ============================================================
-   4. Workflow —— 亮色五阶段流程图
+   4. Workflow —— 课堂教学环节
    ============================================================ */
 function Workflow() {
-  const stages = NEW_STAGES;
+  const stages = CLASSROOM_STAGES;
   return (
     <section
       id="workflow"
@@ -318,62 +276,19 @@ function Workflow() {
 
       <div className="pbl-wide-container relative z-10 px-6 md:px-10">
         <CosmicReveal className="mb-16 max-w-3xl">
-          <div className="pbl-cosmic-chapter mb-4">LEARN BY DOING</div>
-          <h2 className="text-[length:clamp(2rem,5vw,3.25rem)] font-extrabold leading-[1.05] tracking-tight text-[var(--pbl-text-strong)]">
-            问题引路，
-            <span className="pbl-display-gradient">作品作答。</span>
+          <h2 className="pbl-section-title text-[length:clamp(2rem,5vw,3.25rem)] font-extrabold leading-[1.05] tracking-tight">
+            课堂教学
           </h2>
-          <p className="mt-5 text-[15px] leading-7 text-[var(--pbl-text-muted)]">
-            五个阶段把知识授予、项目实践与课堂资源组织连接起来，学生最终以真实文档或代码成果回应问题。
-          </p>
         </CosmicReveal>
 
         {/* 水平时间线 */}
         <CosmicReveal stagger>
           <div
-            aria-label="五阶段学习闭环：从项目启动依次推进至学习反思，再回到新的项目启动"
+            aria-label="课堂教学环节：从课堂导入依次推进至学习反思"
             className="relative"
           >
-            {/* 桌面端：回环与前进箭头都限制在节点区域，不经过说明文字。 */}
-            <div className="relative hidden pt-12 md:block">
-              <svg
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 top-0 h-[100px] w-full overflow-visible"
-                preserveAspectRatio="none"
-                viewBox="0 0 1000 100"
-              >
-                <defs>
-                  <linearGradient id="workflow-loop-gradient" x1="0" x2="1">
-                    <stop offset="0" stopColor="#6366f1" stopOpacity="0.5" />
-                    <stop offset="0.5" stopColor="#8b5cf6" stopOpacity="0.66" />
-                    <stop offset="1" stopColor="#a855f7" stopOpacity="0.5" />
-                  </linearGradient>
-                  <marker
-                    id="workflow-arrow"
-                    markerHeight="8"
-                    markerUnits="userSpaceOnUse"
-                    markerWidth="8"
-                    orient="auto"
-                    refX="7"
-                    refY="4"
-                  >
-                    <path d="M0 0L8 4L0 8Z" fill="#7c6cf2" fillOpacity="0.82" />
-                  </marker>
-                </defs>
-
-                {/* 第五阶段沿节点上方回到第一阶段，形成闭环。 */}
-                <path
-                  d="M922 74H966Q984 74 984 56V20Q984 8 970 8H30Q16 8 16 20V56Q16 74 34 74H78"
-                  fill="none"
-                  markerEnd="url(#workflow-arrow)"
-                  stroke="url(#workflow-loop-gradient)"
-                  strokeDasharray="5 6"
-                  strokeLinecap="round"
-                  strokeWidth="1.6"
-                  vectorEffect="non-scaling-stroke"
-                />
-              </svg>
-
+            {/* 桌面端按顺序连接各教学环节。 */}
+            <div className="relative hidden md:block">
               <div className="relative grid grid-cols-5 gap-x-4">
                 {stages.map((stage, index) => {
                   const Icon = stage.icon;
@@ -414,30 +329,7 @@ function Workflow() {
             </div>
 
             {/* 移动端：纵向排列，明确显示每一次阶段推进。 */}
-            <div className="relative mx-auto max-w-md pl-8 pr-2 md:hidden">
-              <svg
-                aria-hidden="true"
-                className="pointer-events-none absolute bottom-0 left-0 top-0 h-full w-8 overflow-visible text-indigo-400/70"
-                preserveAspectRatio="none"
-                viewBox="0 0 32 100"
-              >
-                <defs>
-                  <marker id="workflow-mobile-loop-arrow" markerHeight="7" markerWidth="7" orient="auto" refX="6" refY="3.5">
-                    <path d="M0 0L7 3.5L0 7Z" fill="currentColor" />
-                  </marker>
-                </defs>
-                <path
-                  d="M32 96H10Q4 96 4 90V10Q4 4 10 4H28"
-                  fill="none"
-                  markerEnd="url(#workflow-mobile-loop-arrow)"
-                  stroke="currentColor"
-                  strokeDasharray="3 4"
-                  strokeLinecap="round"
-                  strokeWidth="1.4"
-                  vectorEffect="non-scaling-stroke"
-                />
-              </svg>
-
+            <div className="relative mx-auto max-w-md px-2 md:hidden">
               {stages.map((stage, index) => {
                 const Icon = stage.icon;
                 return (
@@ -495,29 +387,17 @@ function Entry() {
 
       <div className="pbl-wide-container relative z-10 px-6 md:px-10">
         <CosmicReveal className="mb-14 text-center">
-          <div className="mb-4 inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--pbl-text-subtle)]">
-            <span className="h-px w-8 bg-[var(--pbl-text-strong)]" />
-            STEP INTO PRACTICE
-            <span className="h-px w-8 bg-[var(--pbl-text-strong)]" />
-          </div>
-          <h2 className="text-[length:clamp(2rem,5vw,3.25rem)] font-extrabold leading-[1.05] tracking-tight text-[var(--pbl-text-strong)]">
-            进入项目课堂，
-            <span className="pbl-display-gradient">从行动开始。</span>
+          <h2 className="pbl-section-title text-[length:clamp(2rem,5vw,3.25rem)] font-extrabold leading-[1.05] tracking-tight">
+            进入学习空间
           </h2>
-          <p className="mx-auto mt-5 max-w-xl text-[15px] leading-7 text-[var(--pbl-text-muted)]">
-            登录学习账号，或使用教师提供的邀请码注册，与同伴和 AI 一起开始实践。
-          </p>
         </CosmicReveal>
 
         <CosmicReveal delay={100} className="text-center">
           <Link href="/student/login" className="pbl-cosmic-btn-primary">
             <UsersRound size={16} />
-            立即加入
+            开始学习
             <ArrowRight size={14} />
           </Link>
-          <p className="mt-5 text-[12px] leading-6 text-[var(--pbl-text-subtle)]">
-            教师可在登录页右上角切换至教师入口
-          </p>
         </CosmicReveal>
       </div>
     </section>
@@ -535,19 +415,8 @@ function SiteFooter() {
           <div className="flex items-center gap-3">
             <CoTeachLogo variant="horizontalCompact" height={28} />
           </div>
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[12px] font-medium text-[var(--pbl-text-muted)]">
-            <span>共教 · 共学 · 共创</span>
-            <span className="hidden md:inline text-[var(--pbl-text-subtle)]">·</span>
-            <span>备课</span>
-            <span className="hidden md:inline text-[var(--pbl-text-subtle)]">·</span>
-            <span>课堂讲授</span>
-            <span className="hidden md:inline text-[var(--pbl-text-subtle)]">·</span>
-            <span>课后评价</span>
-            <span className="hidden md:inline text-[var(--pbl-text-subtle)]">·</span>
-            <span>五阶段课堂</span>
-          </div>
-          <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--pbl-text-subtle)]">
-            © 2026 CoTeach · Teach together. Learn together.
+          <div className="text-[11px] tracking-[0.08em] text-[var(--pbl-text-subtle)]">
+            © 2026 CoTeach
           </div>
         </div>
       </div>

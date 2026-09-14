@@ -56,9 +56,8 @@ function TeacherLoginPageContent() {
 
   return (
     <TeacherAuthShell
-      description="登录后继续编排课程、管理学生与开展教学。"
       mode="login"
-      title="欢迎回来"
+      title="教师登录"
     >
       <div className="pbl-auth-form-stack">
         {sessionExpired ? <p role="status" className="pbl-auth-notice pbl-auth-notice-warning">原登录状态已失效，请重新登录。</p> : null}
@@ -116,7 +115,7 @@ function TeacherLoginPageContent() {
             disabled={submitting || !username.trim() || !password}
             type="submit"
           >
-            <span>{submitting ? "登录中..." : "登录教师工作空间"}</span>
+            <span>{submitting ? "登录中..." : "登录"}</span>
             <ArrowRight aria-hidden="true" size={18} />
           </button>
         </form>

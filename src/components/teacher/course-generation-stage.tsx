@@ -437,6 +437,8 @@ function localizeProgressMessage(message: string): string | null {
   if (sceneStart) return `正在制作第 ${sceneStart[1]}/${sceneStart[2]} 个课堂页面：${sceneStart[3]}`;
   const sceneDone = trimmed.match(/^Generated\s+(\d+)\/(\d+)\s+scenes?$/i);
   if (sceneDone) return `已经完成 ${sceneDone[1]}/${sceneDone[2]} 个课堂页面。`;
+  const sceneRepair = trimmed.match(/^Repairing scene\s+(\d+)\/(\d+)\s+layout\s+\((\d+)\/1\):\s*(.+)$/i);
+  if (sceneRepair) return `正在调整第 ${sceneRepair[1]}/${sceneRepair[2]} 个课堂页面的版式（本次仅修复一次）：${sceneRepair[4]}`;
   const outlineDone = trimmed.match(/^Generated\s+(\d+)\s+scene outlines?$/i);
   if (outlineDone) return `已经规划好 ${outlineDone[1]} 个课堂页面。`;
 

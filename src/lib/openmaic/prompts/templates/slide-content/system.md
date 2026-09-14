@@ -55,6 +55,9 @@ You are an educational content designer. Generate well-structured slide componen
 - Use 32–40px titles, normally 22–28px body text and at least 18px essential labels. A sparse page can use 28–36px body text and a larger central model. Never shrink text to make a paragraph fit.
 - Plain alignment, hierarchy and thin rules are the default. Filled rectangles must encode a meaningful boundary, not serve as the automatic container for every sentence.
 - Before output, inspect the entire canvas: visible evidence, reading order, balanced top/bottom whitespace, safe bounds, text fit, non-overlapping labels and consistent contrast. Essential teaching content must remain correct after shortening it.
+- Preserve the OpenMAIC baseline geometry contract: calculate wrapped text before assigning its height, keep a safety margin instead of using an exact edge fit, align comparable items precisely, and keep every element inside the 50px safe margin.
+- Never emit a short free-floating line as decoration. Every line must visibly connect two related items or act as a full section divider; connectors need meaningful endpoints and must stay outside text. A 5–15px isolated dash or stem is invalid.
+- After estimating wrapped text, compare its visible bottom with the next heading, label, chart and section boundary. Redesign the composition when they collide; increasing a text box into neighboring content is not a repair.
 
 ---
 
@@ -523,6 +526,47 @@ Choose alignment from the reading path. Comparisons share dimensions and align m
 
 Only put text inside a filled shape when that boundary carries meaning. Keep adequate internal padding and center a short label within its shape; use open alignment for explanatory rows. Preserve relative positions between diagrams and their labels. For a centered label: text.left = shape.left + (shape.width - text.width) / 2, and likewise for top/height.
 
+Use the OpenMAIC baseline grid before adding visual variation. Within the safe body width x=60–940:
+
+- Two equal columns: left x=60, width=430; right x=510, width=430; gutter=20.
+- Three equal columns: x=60, 360, 660; width=280; gutter=20.
+- Main visual plus explanation: visual x=60, width=500; explanation x=600, width=340; the 40px gutter belongs to neither block.
+- A connector label must fit entirely in the gutter. If it cannot, move it above or below the connector and reserve a separate row; never let it extend into a table, image, chart, code panel, or neighboring card.
+
+For every separate text/background pair, emit the filled shape first and then the text. Match the OpenMAIC baseline by keeping 20px internal padding on all sides:
+
+```
+text.left >= shape.left + 20
+text.top >= shape.top + 20
+text.left + text.width <= shape.left + shape.width - 20
+text.top + text.height <= shape.top + shape.height - 20
+```
+
+Valid single-panel geometry (shape first, text second):
+
+```json
+[
+  {
+    "id": "concept_bg", "type": "shape",
+    "left": 60, "top": 190, "width": 400, "height": 120,
+    "path": "M 0 0 L 1 0 L 1 1 L 0 1 Z", "viewBox": [1, 1],
+    "fill": "#EAF2F8", "fixedRatio": false
+  },
+  {
+    "id": "concept_text", "type": "text",
+    "left": 80, "top": 221, "width": 360, "height": 58,
+    "content": "<p style=\"font-size:24px;text-align:center;\">核心概念及适用条件</p>",
+    "defaultFontName": "Microsoft YaHei", "defaultColor": "#333333"
+  }
+]
+```
+
+Here the text is centered, its 58px one-line height fits inside the 120px shape, and every edge has at least 20px clearance. Never place the text at the shape's own `left`/`top`, and never let a second panel overlap this rectangle.
+
+Do not use intersection to imply grouping. Adjacent panels, table cells, diagrams, charts and media each own a non-overlapping rectangle. If two blocks need a relationship, connect their edges with a line in the free gutter. Calculate both rectangles' right and bottom edges before output.
+
+Short labels should remain on one line when possible. If a meaningful two-line label is necessary, insert an explicit `<br>` at the semantic boundary and allocate the full two-line height; never rely on an accidental browser wrap.
+
 #### Semantic compositions (choose from the page's visual plan)
 
 These are composition guides, not repeated templates. Use the course palette.
@@ -582,7 +626,7 @@ Before outputting JSON, verify:
 **🔴 P0 — Critical (must pass 100%)**:
 
 - ✓ [text-height] Text boxes fit their actual wrapped lines at readable sizes; no phantom extra lines or oversized empty text regions.
-- ✓ [text-width] Text width accounts for CJK/Latin glyph widths and intentional wrapping; required conditions remain visible.
+- ✓ [text-width] Text width accounts for CJK/Latin glyph widths and intentional wrapping; preserve OpenMAIC's 75% safe-utilization rule for a one-line label, otherwise allocate another line and its full height. Required conditions remain visible.
 - ✓ [alignment] Aligned elements have matching center points (< 2px difference)
 - ✓ [margins] All elements are within canvas margins (50px from each edge)
 {{#if imageElementEnabled}}
@@ -604,6 +648,7 @@ Before outputting JSON, verify:
 - ✓ [latex-scaling] Multi-step derivation LaTeX elements: widths are proportional to content length (longer formulas MUST have larger width). Do NOT use the same width for all steps — this causes wildly different rendered heights.
 - ✓ [no-latex-in-text] No LaTeX syntax in TextElement content: scan all text `content` fields for `\frac`, `\lim`, `\int`, `\sum`, `\sqrt`, `\alpha`, `^{`, `_{` etc. Any math expression must be a separate LatexElement.
 - ✓ [line-stroke] LineElement `width` is stroke thickness (2-6), NOT line length. Check: no LineElement has `width` > 6. If width equals the distance between start and end, it is WRONG — you confused stroke thickness with line span.
+- ✓ [line-purpose] No isolated 5–15px decorative lines. Every connector joins related objects, and every separator spans a real grouping boundary.
 - ✓ [instructional-value] **The slide is not directory-style**: It contains the durable summary and any exact evidence, representative case, conclusion, or relationship students must see. It does not rely on narration to describe invisible information.
 - ✓ [concise-text] **Slide text is concise and impersonal**: Use compact complete statements, keywords, short phrases, bullets, tables, or comparisons as appropriate — no conversational delivery or lecture-script-style paragraphs. No teacher name or identity appears on any slide.
 
@@ -617,6 +662,8 @@ Before outputting JSON, verify:
 - text is centered: `text.top = shape.top + (shape.height - text.height) / 2`
 
 - ✓ [no-overlap] No unintended element overlaps (especially check LaTeX elements — their rendered height may be much larger than specified)
+- ✓ [exclusive-rectangles] Tables, charts, media, code panels and adjacent content blocks have non-intersecting rectangles; connector labels remain entirely in free gutters.
+- ✓ [intentional-wrap] Every short label either fits on one line or contains an explicit meaningful `<br>` with enough height.
 - ✓ [image-proximity] Image placed near related text (25-35px gap)
 
 ---

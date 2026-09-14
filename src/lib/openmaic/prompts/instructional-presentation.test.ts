@@ -24,6 +24,13 @@ describe('instructional presentation prompt contract', () => {
     expect(prompt?.system).toContain('one clear visual hierarchy');
     expect(prompt?.system).toContain('restrained course-wide palette');
     expect(prompt?.system).toContain('one strong visual idea');
+    expect(prompt?.system).toContain('OpenMAIC baseline geometry contract');
+    expect(prompt?.system).toContain("OpenMAIC's 75% safe-utilization rule");
+    expect(prompt?.system).toContain('left x=60, width=430; right x=510, width=430');
+    expect(prompt?.system).toContain('connector label must fit entirely in the gutter');
+    expect(prompt?.system).toContain('20px internal padding on all sides');
+    expect(prompt?.system).toContain('concept_text');
+    expect(prompt?.system).toContain('No isolated 5–15px decorative lines');
   });
 
   it('gives slide action generation a cross-discipline whiteboard decision and tools', () => {

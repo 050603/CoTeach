@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Action } from '@openmaic/lib/types/action';
+import { isRetryableGenerationError } from './generation-retry';
 import { ensureGeneratedWhiteboardQuality } from './whiteboard-quality';
 
 const valid: Action[] = [{ id: 'equation', type: 'wb_draw_latex', latex: 'x=2', x: 60, y: 80, width: 600, height: 80 }];
@@ -19,7 +20,31 @@ describe('generated whiteboard repair', () => {
     expect(repair.mock.calls[0][0]).toContain('公式无法解析');
   });
   it('refuses another broken result or silently dropping whiteboard teaching', async () => {
-    await expect(ensureGeneratedWhiteboardQuality(broken, vi.fn().mockResolvedValue(broken))).rejects.toThrow(/白板仍存在/);
-    await expect(ensureGeneratedWhiteboardQuality(broken, vi.fn().mockResolvedValue([]))).rejects.toThrow(/未保留讲授内容/);
+    for (const repair of [
+      vi.fn().mockResolvedValue(broken),
+      vi.fn().mockResolvedValue([]),
+    ]) {
+      const error = await ensureGeneratedWhiteboardQuality(broken, repair).catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/白板/);
+      expect(error).toMatchObject({ code: 'WHITEBOARD_QUALITY_REPAIR_INCOMPLETE', isRetryable: true });
+      expect(isRetryableGenerationError(error)).toBe(true);
+    }
+  });
+  it('drops only optional whiteboard actions after repair is exhausted', async () => {
+    const narrated: Action[] = [
+      { id: 'intro', type: 'speech', text: '保留讲解' },
+      { id: 'open', type: 'wb_open' },
+      ...broken,
+      { id: 'close', type: 'wb_close' },
+      { id: 'recap', type: 'speech', text: '保留总结' },
+    ];
+    const result = await ensureGeneratedWhiteboardQuality(
+      narrated,
+      vi.fn().mockResolvedValue(narrated),
+      { allowWhiteboardFallback: true },
+    );
+
+    expect(result.map((action) => action.id)).toEqual(['intro', 'recap']);
   });
 });

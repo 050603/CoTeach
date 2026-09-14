@@ -11,6 +11,7 @@ describe("LLM request timeout policy", () => {
   });
   it("gives long structured course outputs substantially more time", () => {
     expect(resolveLlmRequestTimeoutMs("standard", {})).toBe(180_000);
+    expect(resolveLlmRequestTimeoutMs("page-generation", {})).toBe(180_000);
     expect(resolveLlmRequestTimeoutMs("quality-review", {})).toBe(300_000);
     expect(resolveLlmRequestTimeoutMs("long-generation", {})).toBe(600_000);
   });
@@ -26,6 +27,9 @@ describe("LLM request timeout policy", () => {
     expect(resolveLlmRequestTimeoutMs("standard", {
       OPENPBL_LLM_REQUEST_TIMEOUT_MS: "240000",
     })).toBe(240_000);
+    expect(resolveLlmRequestTimeoutMs("page-generation", {
+      OPENPBL_LLM_PAGE_REQUEST_TIMEOUT_MS: "120000",
+    })).toBe(120_000);
     expect(resolveLlmRequestTimeoutMs("long-generation", {
       OPENPBL_LLM_LONG_REQUEST_TIMEOUT_MS: "900000",
     })).toBe(900_000);

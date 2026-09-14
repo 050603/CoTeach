@@ -45,7 +45,6 @@ import {
 } from "@/lib/course-cover";
 import { generateCourseCoverImageOnServer } from "@/lib/course-cover-server";
 import {
-  createCourseMediaGenerationIncompleteError,
   createManagedCourseGenerationRecoveryRequest,
   deserializeCourseGenerationFailure,
   serializeCourseGenerationFailure,
@@ -60,7 +59,10 @@ const log = createLogger("CourseGenerationWorker");
 const POLL_INTERVAL_MS = 1_500;
 const STALE_AFTER_MS = 30 * 60 * 1_000;
 const MAX_STORED_EVENTS = 80;
-const FINAL_MEDIA_REPAIR_DELAYS_MS = [15_000, 60_000] as const;
+// Image/video providers already own their bounded item-level repair. A second
+// job-level repair loop repeated the same expensive policy
+// and could hold a completed classroom on one image for more than ten minutes.
+const FINAL_MEDIA_REPAIR_DELAYS_MS = [] as const;
 
 function mediaFailuresFromAudit(issues: CourseResourceIssue[]): Array<{
   elementId: string;
@@ -928,10 +930,9 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       coverStatus,
     });
     if (missingRequiredImageCount > 0 || missingRequiredVideoCount > 0) {
-      throw createCourseMediaGenerationIncompleteError({
-        imageCount: missingRequiredImageCount,
-        videoCount: missingRequiredVideoCount,
-      });
+      log.warn(
+        `Course content completed with unresolved media [courseId=${courseId}, images=${missingRequiredImageCount}, videos=${missingRequiredVideoCount}]`,
+      );
     }
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
       step: "generation_resources_ready",

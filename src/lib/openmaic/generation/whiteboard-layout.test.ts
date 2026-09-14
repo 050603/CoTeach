@@ -105,6 +105,16 @@ describe('normalizeWhiteboardActionLayout', () => {
     expect(auditWhiteboardLayout(result)).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'out-of-bounds', actionIds: ['text'] })]));
   });
 
+  it('keeps fixed text padding readable when a grouped diagram is scaled down', () => {
+    const result = normalizeWhiteboardActionLayout([
+      { id: 'node', type: 'wb_draw_shape', shape: 'rectangle', groupId: 'wide', x: 0, y: 0, width: 1200, height: 100 },
+      { id: 'label', type: 'wb_draw_text', groupId: 'wide', content: '项目式学习', x: 20, y: 20, width: 240, height: 50, fontSize: 20 },
+    ]);
+
+    expect(result[1]).toMatchObject({ fontSize: expect.any(Number), height: expect.any(Number) });
+    expect(auditWhiteboardLayout(result).filter((issue) => issue.code === 'unreadable-content')).toEqual([]);
+  });
+
   it('does not reserve a redraw trajectory or shrink a moving node and keeps its arrow attached', () => {
     const result = normalizeWhiteboardActionLayout([
       { id: 'first', elementId: 'node', groupId: 'moving', type: 'wb_draw_shape', shape: 'rectangle', x: 40, y: 40, width: 200, height: 100 },

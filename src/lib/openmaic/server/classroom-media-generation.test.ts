@@ -5,6 +5,7 @@ import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { Scene } from '@openmaic/lib/types/stage';
 import {
   buildInstructionalImagePrompt,
+  buildInstructionalImageRepairPrompt,
   findUnresolvedClassroomMedia,
   mediaServingUrl,
   normalizeCourseImageToAspectRatio,
@@ -117,6 +118,20 @@ describe('classroom media URL and placeholder backfill', () => {
     expect(prompt).toContain('中文必须逐字准确');
     expect(prompt).toContain('不得擅自增加事实');
     expect(resolveCourseImageDimensions('16:9')).toEqual({ width: 1280, height: 720 });
+  });
+
+  it('turns the first review rejection into a focused final repair prompt', () => {
+    const prompt = buildInstructionalImageRepairPrompt({
+      type: 'image',
+      elementId: 'gen_img_1',
+      prompt: '用逐步减少的支架表现学习者能力提升',
+      aspectRatio: '16:9',
+    }, '教学图片质量审校未通过：支架数量没有随学习阶段减少');
+
+    expect(prompt).toContain('用逐步减少的支架表现学习者能力提升');
+    expect(prompt).toContain('上一版图片未通过教学质量检查');
+    expect(prompt).toContain('支架数量没有随学习阶段减少');
+    expect(prompt).not.toContain('教学图片质量审校未通过：教学图片质量审校未通过');
   });
 
   it('validates generated image integrity, resolution, and aspect ratio', async () => {

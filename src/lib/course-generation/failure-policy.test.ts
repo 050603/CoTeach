@@ -20,6 +20,16 @@ describe("managed classroom-generation recovery", () => {
     )).toMatchObject({ managedRecoveryCount: 1 });
   });
 
+  it("upgrades whiteboard quality failures persisted by older builds into checkpoint recovery", () => {
+    const legacyFailure = serializeCourseGenerationFailure(new Error(
+      'Scene 3/12 "PBL与探究式教学" failed: 白板仍存在布局或内容问题：文字过小或超出文本框',
+    ));
+
+    expect(deserializeCourseGenerationFailure(legacyFailure)).toMatchObject({ isRetryable: true });
+    expect(createManagedCourseGenerationRecoveryRequest({}, deserializeCourseGenerationFailure(legacyFailure)))
+      .toMatchObject({ managedRecoveryCount: 1 });
+  });
+
   it("does not create an unbounded recovery loop", () => {
     expect(createManagedCourseGenerationRecoveryRequest(
       { courseId: "course-1", managedRecoveryCount: 2 },
@@ -80,15 +90,16 @@ describe("managed classroom-generation recovery", () => {
     expect(message).not.toContain("Inference engine");
   });
 
-  it("keeps enabled course media incomplete instead of reporting a lower-quality completion", () => {
+  it("does not restart the entire classroom when optional media repair is exhausted", () => {
     const error = createCourseMediaGenerationIncompleteError({ imageCount: 3, videoCount: 0 });
     const persisted = serializeCourseGenerationFailure(error);
 
     expect(deserializeCourseGenerationFailure(persisted)).toMatchObject({
       code: "COURSE_MEDIA_GENERATION_INCOMPLETE",
-      isRetryable: true,
+      isRetryable: false,
     });
     expect(formatPersistedCourseGenerationErrorForTeacher(persisted)).toContain("3 张课程图片");
+    expect(createManagedCourseGenerationRecoveryRequest({}, error)).toBeNull();
   });
 
   it("shows an actionable configuration error when image generation was enabled without a provider", () => {

@@ -16,6 +16,7 @@ import {
   generateTTSForClassroom,
   findUnresolvedClassroomMedia,
   replaceMediaPlaceholders,
+  type ClassroomMediaItemProgress,
   type ServerTtsTimingSelection,
 } from '@openmaic/lib/server/classroom-media-generation';
 import { runIndependentClassroomAssetTasks } from '@openmaic/lib/server/classroom-asset-tasks';
@@ -39,7 +40,24 @@ type AssetFailure = MediaFailure | {
   error: string;
 };
 
-const MAX_MEDIA_REPAIR_PASSES = 1;
+// The provider call already owns a bounded retry policy (including 429 and
+// quality-review failures). Retrying that whole policy again here multiplied a
+// single image into six generation attempts before the final audit even ran.
+const MAX_MEDIA_REPAIR_PASSES = 0;
+
+export function formatClassroomMediaItemProgress(item: ClassroomMediaItemProgress): string {
+  const label = item.type === 'image' ? '课堂配图' : '课堂视频';
+  const ordinal = Math.min(
+    item.total,
+    item.completed + (item.status === 'completed' || item.status === 'failed' ? 0 : 1),
+  );
+  if (item.status === 'retrying') {
+    return `${label} ${ordinal} / ${item.total} 正在进行第 ${item.attempt} / ${item.maxAttempts} 次生成，约 ${Math.max(1, Math.ceil((item.nextDelayMs ?? 0) / 1_000))} 秒后继续`;
+  }
+  if (item.status === 'completed') return `${label}已完成 ${item.completed} / ${item.total}`;
+  if (item.status === 'failed') return `${label} ${item.completed} / ${item.total} 未通过审校，正在继续处理其余资源`;
+  return `正在生成${label} ${ordinal} / ${item.total}`;
+}
 
 function mediaRequestKey(request: Pick<MediaGenerationRequest, 'elementId' | 'type'>): string {
   return `${request.type}:${request.elementId}`;
@@ -229,6 +247,15 @@ export async function generateClassroomAssets(
           input.baseUrl,
           capabilities,
           input.signal,
+          async (item) => {
+            await input.onProgress?.({
+              phase: 'media',
+              status: 'running',
+              completed: item.completed,
+              total: item.total,
+              message: formatClassroomMediaItemProgress(item),
+            });
+          },
         );
         Object.assign(mediaMap, result.mediaMap);
         replaceMediaPlaceholders(allScenes, result.mediaMap, input.outlines);
@@ -266,6 +293,13 @@ export async function generateClassroomAssets(
         type: input.enableImageGeneration ? 'image' : 'video',
         error: error instanceof Error ? error.message : String(error),
       }]).catch((statusError) => log.warn('Failed to persist asset failure status:', statusError));
+      await input.onProgress?.({
+        phase: 'media',
+        status: 'partial-failure',
+        completed: 0,
+        total: requestedMedia.length,
+        message: '视觉资源生成暂未完成，课堂正文与已生成资源均已保留',
+      });
     }
   };
 

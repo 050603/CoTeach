@@ -1,6 +1,6 @@
 import type { LlmCallRequest } from "@/lib/llm/types";
 
-export type LlmRequestClass = "standard" | "quality-review" | "long-generation";
+export type LlmRequestClass = "standard" | "page-generation" | "quality-review" | "long-generation";
 
 // Durable background generation can safely repeat a request because no stage
 // is persisted until a complete, validated response is received. Four retries
@@ -8,6 +8,7 @@ export type LlmRequestClass = "standard" | "quality-review" | "long-generation";
 export const DURABLE_GENERATION_TRANSIENT_RETRIES = 4;
 
 const STANDARD_TIMEOUT_MS = 180_000;
+const PAGE_GENERATION_TIMEOUT_MS = 180_000;
 // Deep-reasoning reviewers often spend substantial time evaluating a dense
 // curriculum graph before emitting a relatively small JSON verdict. A short
 // output is not necessarily a short inference, so keep a conservative five-
@@ -39,6 +40,12 @@ export function resolveLlmRequestTimeoutMs(
     return boundedTimeout(
       environment.OPENPBL_LLM_QUALITY_REVIEW_TIMEOUT_MS,
       QUALITY_REVIEW_TIMEOUT_MS,
+    );
+  }
+  if (requestClass === "page-generation") {
+    return boundedTimeout(
+      environment.OPENPBL_LLM_PAGE_REQUEST_TIMEOUT_MS,
+      PAGE_GENERATION_TIMEOUT_MS,
     );
   }
   return boundedTimeout(

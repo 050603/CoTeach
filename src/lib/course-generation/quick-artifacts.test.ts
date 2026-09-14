@@ -308,4 +308,31 @@ describe("buildQuickClassroomArtifacts", () => {
     expect(resolveQuickClassroomActiveArtifactId(job({ step: "generating_tts_assets", events })))
       .toBe("classroom-tts-assets");
   });
+
+  it("shows exhausted media as a preview repair instead of an indefinitely running write", () => {
+    const events: QuickClassroomGenerationSnapshot["events"] = [{
+      step: "generating_media_assets",
+      assetPhaseStatus: "partial-failure",
+      progress: 99,
+      message: "已插入 1 / 2 项媒体资源",
+      scenesGenerated: 6,
+      totalScenes: 6,
+      ts: 1,
+    }];
+    const artifacts = buildQuickClassroomArtifacts(job({
+      step: "generating_tts_assets",
+      events,
+    }));
+
+    expect(artifacts.find((artifact) => artifact.id === "classroom-media-assets")).toMatchObject({
+      title: "部分视觉资源需要在预览页处理",
+      summary: "已插入 1 / 2 项媒体资源",
+      items: expect.arrayContaining([expect.objectContaining({
+        label: "课堂配图",
+        value: expect.stringContaining("定向重试"),
+      })]),
+    });
+    expect(resolveQuickClassroomActiveArtifactId(job({ step: "generating_tts_assets", events })))
+      .toBe("classroom-tts-assets");
+  });
 });

@@ -111,18 +111,25 @@ function isContainedLabel(shape: Action, label: Action): boolean {
   return Boolean(outer && inner && contains(outer, inner));
 }
 
-function textWillClip(action: Extract<Action, { type: 'wb_draw_text' }>, box: WhiteboardActionBox): boolean {
+export function minimumWhiteboardTextHeight(
+  action: Extract<Action, { type: 'wb_draw_text' }>,
+  width = action.width ?? 400,
+): number {
   const fontSize = action.fontSize ?? 18;
   const plain = action.content.replace(/<br\s*\/?\s*>|<\/(?:p|div)>/gi, '\n')
     .replace(/<[^>]*>/g, '').replace(/&(?:nbsp|amp|lt|gt|quot);/g, ' ').trim();
-  if (!plain) return false;
+  if (!plain) return 0;
   const rows = plain.split('\n').reduce((sum, line) => {
-    const width = [...line].reduce((total, character) => total + fontSize * (/[^\u0000-\u00ff]/.test(character) ? 1 : 0.6), 0);
-    return sum + Math.max(1, Math.ceil(width / Math.max(1, box.width - 20)));
+    const measuredWidth = [...line].reduce((total, character) => total + fontSize * (/[^\u0000-\u00ff]/.test(character) ? 1 : 0.6), 0);
+    return sum + Math.max(1, Math.ceil(measuredWidth / Math.max(1, width - 20)));
   }, 0);
   // The native text element uses 10px padding and a 1.5 line-height. This is
   // deliberately conservative: a single-line label must have room for both.
-  return rows * fontSize * 1.5 + 20 > box.height + 1;
+  return rows * fontSize * 1.5 + 20;
+}
+
+function textWillClip(action: Extract<Action, { type: 'wb_draw_text' }>, box: WhiteboardActionBox): boolean {
+  return minimumWhiteboardTextHeight(action, box.width) > box.height + 1;
 }
 
 function lineCrossesBox(line: WbDrawLineAction, box: WhiteboardActionBox): boolean {

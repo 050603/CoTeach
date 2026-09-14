@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AICallFn } from './pipeline-types';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import {
@@ -81,14 +81,7 @@ describe('current OpenMAIC generation baseline parity', () => {
   });
 
   it('uses the DSL normalizer for malformed model-generated PPT elements', async () => {
-    const content = await generateSceneContent({
-      id: 'slide-1',
-      type: 'slide',
-      title: '变量关系',
-      description: '显示变量关系',
-      keyPoints: ['变量关系'],
-      order: 0,
-    }, async () => JSON.stringify({
+    const first = {
       elements: [
         {
           type: 'line', left: 100, top: 80, width: 240, height: 0,
@@ -100,7 +93,17 @@ describe('current OpenMAIC generation baseline parity', () => {
         },
         { type: 'unknown-element', left: 0, top: 0, width: 10, height: 10 },
       ],
-    }));
+    };
+    const repaired = { elements: first.elements.slice(0, 2) };
+    const ai = vi.fn().mockResolvedValueOnce(JSON.stringify(first)).mockResolvedValueOnce(JSON.stringify(repaired));
+    const content = await generateSceneContent({
+      id: 'slide-1',
+      type: 'slide',
+      title: '变量关系',
+      description: '显示变量关系',
+      keyPoints: ['变量关系'],
+      order: 0,
+    }, ai);
 
     expect(content).not.toBeNull();
     if (!content || !('elements' in content)) throw new Error('expected slide content');
@@ -112,5 +115,6 @@ describe('current OpenMAIC generation baseline parity', () => {
       points: ['', ''],
       style: 'solid',
     });
+    expect(ai).toHaveBeenCalledTimes(2);
   });
 });

@@ -44,7 +44,7 @@ import {
   resolveCourseVisualStyle,
   type CourseVisualStyle,
 } from './course-visual-style';
-import { auditGeneratedSlide, balanceSparseSlideLayout } from './slide-quality';
+import { auditGeneratedSlide, balanceSparseSlideLayout, fitGeneratedTextBoxHeights } from './slide-quality';
 import { formatTeachingBrief } from './teaching-brief';
 import { parseActionsFromStructuredOutput } from './action-parser';
 import { parseJsonResponse } from './json-repair';
@@ -86,6 +86,7 @@ import { ensureGeneratedWhiteboardQuality } from './whiteboard-quality';
 import {
   applyPlannedTeachingToolActions,
   formatTeachingToolPlanForPrompt,
+  normalizeTeachingToolPlan,
 } from './teaching-tool-plan';
 const log = createLogger('Generation');
 
@@ -129,6 +130,8 @@ export interface SceneContentOptions {
   baselineContent?: GeneratedSlideContent;
   /** Abort nested PBL generation when the owning request ends. */
   signal?: AbortSignal;
+  /** Reports the single bounded slide-layout correction to durable progress. */
+  onSlideQualityRepair?: (attempt: number, reasons: readonly string[]) => void | Promise<void>;
 }
 
 export interface SceneActionsOptions {
@@ -443,6 +446,7 @@ export async function generateSceneContent(
     baselineContent,
     reviewSlideContent = false,
     signal,
+    onSlideQualityRepair,
   } = options;
   const pblContext = [
     formatTeachingBrief(outline),
@@ -495,6 +499,9 @@ export async function generateSceneContent(
         editDirective,
         baselineContent,
         reviewSlideContent,
+        '',
+        0,
+        onSlideQualityRepair,
       );
     case 'quiz':
       return generateQuizContent(outline, aiCall, languageDirective, pblContext);
@@ -800,6 +807,7 @@ async function generateSlideContent(
   reviewContent = false,
   qualityFeedback = "",
   correctionAttempt = 0,
+  onQualityRepair?: (attempt: number, reasons: readonly string[]) => void | Promise<void>,
 ): Promise<GeneratedSlideContent | null> {
   // Build assigned images description for the prompt
   let assignedImagesText = '无可用图片，禁止插入任何 image 元素';
@@ -996,10 +1004,13 @@ async function generateSlideContent(
     rotate: 0,
   })) as PPTElement[];
 
-  const processedElements = editDirective || baselineContent ? rawProcessedElements : balanceSparseSlideLayout(rawProcessedElements);
-  // Fast drafts only retry concrete structural failures. Composition estimates
-  // become background review items and actual DOM checks in teacher preview.
-  const slideQuality = auditGeneratedSlide(processedElements);
+  const processedElements = fitGeneratedTextBoxHeights(
+    editDirective || baselineContent ? rawProcessedElements : balanceSparseSlideLayout(rawProcessedElements),
+  );
+  // Reject mechanical layout failures before the draft is persisted. Browser
+  // review remains the final authority, but it should verify a viable page
+  // instead of being the first place obvious wrapping and overlap are found.
+  const slideQuality = auditGeneratedSlide(processedElements, { checkComposition: true });
   const issues = [...elementRepair.issues, ...slideQuality.reasons];
   if (!issues.length && reviewContent && !editDirective && !baselineContent) {
     issues.push(...await reviewSlideInstructionalContent(outline, processedElements, pblContext ?? '', aiCall));
@@ -1007,11 +1018,12 @@ async function generateSlideContent(
   if (issues.length) {
     log.warn(`PPT quality correction for "${outline.title}": ${issues.join('; ')}`);
     if (correctionAttempt < 1) {
+      await onQualityRepair?.(correctionAttempt + 1, issues);
       return generateSlideContent(outline, aiCall, assignedImages, imageMapping, visionEnabled,
         generatedMediaMapping, agents, languageDirective, pblContext, courseVisualStyle,
         editDirective, baselineContent, reviewContent,
         `${issues.join('\n')}\nPrevious page content and geometry to correct:\n${JSON.stringify(slideReviewEvidence(processedElements))}`,
-        correctionAttempt + 1);
+        correctionAttempt + 1, onQualityRepair);
     }
     return null;
   }
@@ -1527,11 +1539,19 @@ export async function generateSceneActions(
     if (actions.length > 0) {
       // Validate and fill in Action IDs
       const processed = processActions(actions, content.elements, agents);
-      return ensureGeneratedWhiteboardQuality(finalizeSlideActions(processed), async (feedback) => {
+      const requiredWhiteboard = normalizeTeachingToolPlan(outline.teachingToolPlan)
+        .some((item) => item.tool === 'whiteboard' && item.required !== false);
+      const finalized = finalizeSlideActions(processed);
+      const qualityActions = await ensureGeneratedWhiteboardQuality(finalized, async (feedback) => {
         const repairedResponse = await aiCall(prompts.system, `${prompts.user}\n\n${feedback}`);
         const repaired = parseActionsFromStructuredOutput(repairedResponse, outline.type);
         return finalizeSlideActions(processActions(repaired, content.elements, agents));
-      });
+      }, { allowWhiteboardFallback: !requiredWhiteboard });
+      if (finalized.some((action) => action.type.startsWith('wb_'))
+        && !qualityActions.some((action) => action.type.startsWith('wb_'))) {
+        log.warn(`Optional whiteboard for scene "${outline.title}" did not pass repair; keeping slide narration without it`);
+      }
+      return qualityActions;
     }
 
     const fallback = generateDefaultSlideActions(outline, content.elements);

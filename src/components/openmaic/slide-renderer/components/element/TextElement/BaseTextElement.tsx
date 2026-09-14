@@ -38,7 +38,7 @@ export function BaseTextElement({ elementInfo, target }: BaseTextElementProps) {
             backgroundColor: elementInfo.fill,
             opacity: elementInfo.opacity,
             textShadow: shadowStyle,
-            lineHeight: elementInfo.lineHeight,
+            lineHeight: elementInfo.lineHeight ?? 1.5,
             letterSpacing: `${elementInfo.wordSpace || 0}px`,
             color: elementInfo.defaultColor,
             fontFamily: elementInfo.defaultFontName,

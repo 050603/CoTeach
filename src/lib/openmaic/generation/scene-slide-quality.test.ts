@@ -11,7 +11,7 @@ const outline: SceneOutline = {
   keyPoints: ['学生通过反思修正理解'], targetDurationSec: 90, order: 0,
 };
 const page = (text: string, extra = false) => JSON.stringify({ elements: [
-  { type: 'text', left: 60, top: 55, width: 800, height: 55, content: '<p style="font-size:36px">主动建构</p>' },
+  { type: 'text', left: 60, top: 55, width: 800, height: 76, content: '<p style="font-size:36px">主动建构</p>' },
   { type: 'text', left: 180, top: 260, width: 640, height: 100, content: `<p style="font-size:28px">${text}</p>` },
   ...(extra ? [{ type: 'text', left: 180, top: 270, width: 640, height: 100, content: '<p style="font-size:28px">重叠说明</p>' }] : []),
 ] });
@@ -36,11 +36,14 @@ describe('slide generation quality repair', () => {
     expect(outline.targetDurationSec).toBe(90);
   });
 
-  it('returns a fast draft without extra LLM calls when text boxes overlap', async () => {
-    const ai = vi.fn().mockResolvedValue(page('学生主动修正理解', true));
+  it('repairs overlapping text before returning the draft', async () => {
+    const ai = vi.fn()
+      .mockResolvedValueOnce(page('学生主动修正理解', true))
+      .mockResolvedValueOnce(page('学生主动修正理解'));
     const result = await generateSceneContent(outline, ai);
-    expect(result && 'elements' in result && result.elements).toHaveLength(3);
-    expect(ai).toHaveBeenCalledOnce();
+    expect(result && 'elements' in result && result.elements).toHaveLength(2);
+    expect(ai).toHaveBeenCalledTimes(2);
+    expect(ai.mock.calls[1][1]).toContain('overlap substantially');
   });
 
   it.each([

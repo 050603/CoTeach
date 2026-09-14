@@ -10,7 +10,7 @@ import { packageDraftSignature } from "@/lib/resource-package/compatibility";
 
 const outline: SceneOutline = { id: "outline", type: "slide", title: "边界条件", description: "依据样本条件解释结论", order: 0, keyPoints: ["独立测试数据才能用于检查泛化"], knowledgePointIds: ["kp"] };
 const scene = { id: "scene", outlineId: "outline", stageId: "stage", type: "slide", title: "边界条件", order: 0, actions: [{ id: "speech", type: "speech", text: "不能使用训练样本代替独立测试" }],
-  content: { type: "slide", canvas: { elements: [{ id: "text", type: "text", left: 80, top: 200, width: 800, height: 100, content: `<p>${"核心解释".repeat(30)}仅适用于独立测试</p>` }] } } } as unknown as Scene;
+  content: { type: "slide", canvas: { elements: [{ id: "text", type: "text", left: 80, top: 200, width: 800, height: 160, content: `<p>${"核心解释".repeat(30)}仅适用于独立测试</p>` }] } } } as unknown as Scene;
 
 function confirmedCourse() {
   const course = createPblTemplateCourse("confirmed-course");
@@ -109,13 +109,14 @@ describe("fast draft and section-wide teaching review", () => {
     const custom = structuredClone(scene);
     if (custom.content.type !== "slide") throw new Error("fixture must be a slide");
     custom.content.canvas.viewportSize = 1280; custom.content.canvas.viewportRatio = 0.625;
-    custom.content.canvas.elements[0].left = 1100; custom.content.canvas.elements[0].top = 650; custom.content.canvas.elements[0].width = 160;
+    custom.content.canvas.elements[0].left = 1100; custom.content.canvas.elements[0].top = 630; custom.content.canvas.elements[0].width = 160;
+    if (custom.content.canvas.elements[0].type === "text") custom.content.canvas.elements[0].content = "<p>边界内文字</p>";
     expect(collectCourseStructureIssues(course, [custom]).filter((issue) => issue.origin === "structure")).toEqual([]);
     custom.content.canvas.elements[0].left = 1250;
     expect(collectCourseStructureIssues(course, [custom]).some((issue) => issue.evidence.includes("outside the slide canvas"))).toBe(true);
   });
 
-  it("reports overlapping text and small fonts as preview suggestions without a hard failure", () => {
+  it("blocks concrete overlap and unreadable type while keeping subjective composition advisory", () => {
     const course = confirmedCourse();
     const draft = structuredClone(scene);
     if (draft.content.type !== "slide") throw new Error("fixture must be a slide");
@@ -123,10 +124,9 @@ describe("fast draft and section-wide teaching review", () => {
     if (text.type !== "text") throw new Error("fixture must contain text");
     draft.content.canvas.elements.push({ ...text, id: "overlap", top: 210, content: '<p style="font-size:14px">与核心说明重叠的注释</p>' });
     const issues = collectCourseStructureIssues(course, [draft]);
-    expect(issues.filter((issue) => issue.origin === "structure")).toEqual([]);
     expect(issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ origin: "render", severity: "suggestion", sceneId: scene.id, evidence: expect.stringContaining("overlap substantially") }),
-      expect.objectContaining({ origin: "render", severity: "suggestion", evidence: expect.stringContaining("too small") }),
+      expect.objectContaining({ origin: "structure", severity: "error", sceneId: scene.id, evidence: expect.stringContaining("overlap substantially") }),
+      expect.objectContaining({ origin: "structure", severity: "error", evidence: expect.stringContaining("too small") }),
     ]));
   });
 });

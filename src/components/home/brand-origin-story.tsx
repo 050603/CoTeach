@@ -1,6 +1,34 @@
 import { CoTeachLogoAnimation } from "@/components/brand/coteach-logo-animation";
+import { AudioLines, Compass, Presentation } from "lucide-react";
 
 export function BrandOriginStory() {
+  const roles = [
+    {
+      name: "教师",
+      key: "teacher",
+      icon: Presentation,
+      identity: "教学主导",
+      description: "设计课程与学习任务，组织课堂节奏，观察并评价学习过程。",
+      abilities: ["课程设计", "课堂引导", "学习评价"],
+    },
+    {
+      name: "学生",
+      key: "student",
+      icon: Compass,
+      identity: "学习主体",
+      description: "主动探究、参与互动，在实践与交流中形成自己的理解和成果。",
+      abilities: ["主动学习", "协作实践", "成果表达"],
+    },
+    {
+      name: "AI",
+      key: "ai",
+      icon: AudioLines,
+      identity: "共同教学者",
+      description: "参与知识讲授与互动答疑，根据学习进展提供反馈，并与师生协作。",
+      abilities: ["知识讲授", "互动答疑", "协作反馈"],
+    },
+  ] as const;
+
   return (
     <section
       aria-labelledby="brand-origin-title"
@@ -8,74 +36,46 @@ export function BrandOriginStory() {
     >
       <div className="pbl-wide-container px-6 py-24 md:px-10 md:py-32">
         <div className="mx-auto max-w-5xl text-center">
-          <p className="coteach-origin__eyebrow">CO · TEACH · LEARN</p>
           <h2
             id="brand-origin-title"
-            className="mt-4 text-[length:clamp(1.75rem,4vw,3rem)] font-extrabold tracking-tight text-[var(--pbl-text-strong)] [text-wrap:balance]"
+            className="pbl-section-title text-[length:clamp(1.75rem,4vw,3rem)] font-extrabold tracking-tight [text-wrap:balance]"
           >
-            教学，不再是一场独奏
+            每一种智慧，都在课堂中相遇
           </h2>
+          <p className="coteach-origin__intro">
+            教师引导、学生探索、AI 讲授，共同推动学习发生。
+          </p>
 
-          <div className="coteach-origin__stage mt-14" aria-label="CoTeach 协同教学理念">
+          <div className="coteach-origin__stage mt-14">
             <div className="coteach-origin__word">
               <CoTeachLogoAnimation playback="once" />
             </div>
 
-            <div className="coteach-origin__meaning">
-              <article className="coteach-origin__co-copy">
-                <span className="coteach-origin__step">01 · CO</span>
-                <span className="coteach-origin__concept">CO · 共同参与</span>
-                <p>
-                  让课堂中的每个角色都成为<strong>学习共同体</strong>的一员
-                </p>
-                <div className="coteach-origin__taxonomy-group">
-                  <div className="coteach-origin__taxonomy">
-                    <span>
-                      <strong>教师</strong>
-                      <small>设计 · 引导判断</small>
-                    </span>
-                    <span>
-                      <strong>学生</strong>
-                      <small>探究 · 付诸行动</small>
-                    </span>
-                    <span className="is-co">
-                      <strong>AI</strong>
-                      <small>支架 · 协同反馈</small>
-                    </span>
-                  </div>
-                  <div className="coteach-origin__community">
-                    <span>共同目标</span>
-                    <strong>Teaching Community · 教学共同体</strong>
-                    <small>围绕真实问题共同设计、实践与反思</small>
-                  </div>
-                </div>
-              </article>
-
-              <div className="coteach-origin__bridge" aria-hidden="true">
-                <span>+</span>
-                <small>共同设计</small>
-              </div>
-
-              <article className="coteach-origin__coteach-copy">
-                <span className="coteach-origin__step">02 · TEACH</span>
-                <p className="coteach-origin__thesis">协同教学，不替代人的判断</p>
-                <div className="coteach-origin__roles" aria-label="CoTeach 的协同关系">
-                  <span>共同备课</span>
-                  <span>共同实践</span>
-                  <span>共同评价</span>
-                </div>
-                <p>
-                  教师与学生始终拥有
-                  <strong>判断、行动、证据与反思</strong>
-                </p>
-              </article>
+            <div className="coteach-origin__role-list" aria-label="CoTeach 课堂参与角色">
+              {roles.map((role) => {
+                const Icon = role.icon;
+                return (
+                  <article
+                    className="coteach-origin__role"
+                    data-role={role.key}
+                    key={role.name}
+                  >
+                    <div className="coteach-origin__role-symbol" aria-hidden="true">
+                      <Icon size={44} strokeWidth={1.35} />
+                    </div>
+                    <div className="coteach-origin__role-heading">
+                      <h3>{role.name}</h3>
+                      <span>{role.identity}</span>
+                    </div>
+                    <p>{role.description}</p>
+                    <ul aria-label={`${role.name}的参与方式`}>
+                      {role.abilities.map((ability) => <li key={ability}>{ability}</li>)}
+                    </ul>
+                  </article>
+                );
+              })}
             </div>
           </div>
-
-          <p className="coteach-origin__closing">
-            Co<span>Teach</span> 所代表的，不是让 AI 接管课堂，
-            <strong>而是让教师、学生与 AI 在真实问题中共同教、共同学、共同创造。</strong>
-          </p>
         </div>
       </div>
     </section>

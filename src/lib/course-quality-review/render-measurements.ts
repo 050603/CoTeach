@@ -22,6 +22,11 @@ function intersection(a: VisibleRect, b: VisibleRect): number {
     * Math.max(0, Math.min(bottom(a), bottom(b)) - Math.max(a.top, b.top));
 }
 
+function contains(outer: VisibleRect, inner: VisibleRect, inset = 0): boolean {
+  return inner.left >= outer.left + inset && inner.top >= outer.top + inset
+    && right(inner) <= right(outer) - inset && bottom(inner) <= bottom(outer) - inset;
+}
+
 /** Uses visible glyph lines, not a text element's mostly-empty outer rectangle. */
 export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[], width = 1000, height = 562.5): CourseQualityIssue[] {
   const issues: CourseQualityIssue[] = [];
@@ -49,6 +54,17 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
       const a = textItems[i], b = textItems[j];
       if (a.textRects.some((ra) => b.textRects.some((rb) => intersection(ra, rb) > Math.min(area(ra), area(rb)) * 0.2))) {
         add(`overlap-${b.id}`, '两处文字相互重叠', `文字 ${a.id} 与 ${b.id} 的实际文字行重叠。`, '重新安排两处内容的位置或尺度。', a.id);
+      }
+    }
+  }
+  const reservedTypes: PPTElement['type'][] = ['image', 'shape', 'table', 'chart', 'video', 'code', 'latex'];
+  for (const item of textItems) {
+    for (const block of elements) {
+      if (block.id === item.id || !reservedTypes.includes(block.type)) continue;
+      if (block.type === 'shape' && !block.opaque) continue;
+      if (block.type === 'shape' && block.opaque && contains(block.box, item.box, 4)) continue;
+      if (item.textRects.some((rect) => intersection(rect, block.box) > area(rect) * 0.08)) {
+        add(`collision-${block.id}`, '文字侵入相邻内容区域', `文字 ${item.id} 与 ${block.type} ${block.id} 的实际显示区域相交。`, '为表格、图示和面板分配互不相交的区域；容器内文字应完整留在内边距中。', item.id);
       }
     }
   }
@@ -83,10 +99,15 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
 
 export function measureSlideElements(root: HTMLElement, elements: readonly PPTElement[]): RenderedElement[] {
   const origin = root.getBoundingClientRect();
-  const translate = (rect: DOMRect): VisibleRect => ({ left: rect.left - origin.left, top: rect.top - origin.top, width: rect.width, height: rect.height });
+  const scaleX = origin.width > 0 ? origin.width / Math.max(1, root.offsetWidth || origin.width) : 1;
+  const scaleY = origin.height > 0 ? origin.height / Math.max(1, root.offsetHeight || origin.height) : 1;
+  const translate = (rect: DOMRect): VisibleRect => ({ left: (rect.left - origin.left) / scaleX, top: (rect.top - origin.top) / scaleY,
+    width: rect.width / scaleX, height: rect.height / scaleY });
   return elements.map((element) => {
     const wrapper = Array.from(root.querySelectorAll<HTMLElement>('[data-review-element]')).find((node) => node.dataset.reviewElement === element.id);
-    const box = { left: element.left, top: element.top, width: element.width, height: element.type === 'line' ? 0 : element.height };
+    const visual = wrapper?.querySelector<HTMLElement>('[class*="base-element-"]');
+    const box = visual ? translate(visual.getBoundingClientRect())
+      : { left: element.left, top: element.top, width: element.width, height: element.type === 'line' ? 0 : element.height };
     if (!wrapper) return { id: element.id, type: element.type, box, text: '', textRects: [] };
     const textRoot = wrapper.querySelector<HTMLElement>('.ProseMirror-static') ?? (['code', 'table', 'latex'].includes(element.type) ? wrapper : null);
     const textRects: VisibleRect[] = [];

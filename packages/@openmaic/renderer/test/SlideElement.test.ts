@@ -46,4 +46,19 @@ describe('SlideElement', () => {
     expect(html).toContain('class="slide-element-hit-target"');
     expect(html).not.toContain('pointer-events:auto');
   });
+
+  it('uses the same text padding and wrapping geometry as generated classroom slides', () => {
+    const html = renderToStaticMarkup(
+      createElement(SlideElement, {
+        elementInfo: textElement,
+        elementIndex: 3,
+      }),
+    );
+
+    expect(html).toContain('box-sizing:border-box');
+    expect(html).toContain('padding:10px');
+    expect(html).toContain('overflow-wrap:break-word');
+    expect(html).toContain('line-height:1.5');
+    expect(html).toContain('--paragraphSpace:5px');
+  });
 });

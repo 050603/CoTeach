@@ -253,6 +253,27 @@ export function buildInstructionalImagePrompt(request: MediaGenerationRequest): 
   ].filter(Boolean).join('\n');
 }
 
+export function buildInstructionalImageRepairPrompt(
+  request: MediaGenerationRequest,
+  reviewIssue: string,
+): string {
+  const conciseIssue = reviewIssue.replace(/^教学图片质量审校未通过[：:]?\s*/, '').slice(0, 1_200);
+  return [
+    buildInstructionalImagePrompt(request),
+    '上一版图片未通过教学质量检查。请重新构图并明确修正以下问题：',
+    conciseIssue,
+    '保留原始教学要求，不增加未经要求的新概念、标签或结论。',
+  ].join('\n');
+}
+
+function isGeneratedImageQualityRejection(error: unknown): boolean {
+  return Boolean(
+    error
+      && typeof error === 'object'
+      && (error as { code?: unknown }).code === 'GENERATED_IMAGE_QUALITY_REJECTED',
+  );
+}
+
 export async function validateGeneratedCourseImage(
   buffer: Buffer,
   aspectRatio = '16:9',
@@ -327,8 +348,10 @@ function qwenImageReviewEndpoint(baseUrl?: string): string {
 
 /**
  * Qwen Image shares its credential with DashScope's vision model. Use that
- * model as a second, independent gate for Chinese text, factual relationships,
- * and instructional relevance before the generated file is accepted.
+ * model once as a second, independent check for objective teaching errors.
+ * A rejected first draft is regenerated once; the replacement is accepted
+ * without another semantic review so subjective judgments cannot block a
+ * complete classroom indefinitely.
  */
 export async function reviewGeneratedCourseImage(input: {
   buffer: Buffer;
@@ -358,7 +381,7 @@ export async function reviewGeneratedCourseImage(input: {
       messages: [
         {
           role: 'system',
-          content: '你是严格但遵循给定教学意图的中文课程图片审校员。只根据明确要求检查，不自行添加未要求的对应关系。',
+          content: '你是中文课程图片审校员。只判断明确、可证实、会误导教学的硬错误；审美偏好和可选改进不属于不通过原因。只根据原始要求检查，不自行补充要求或理论解释。',
         },
         {
           role: 'user',
@@ -378,8 +401,8 @@ export async function reviewGeneratedCourseImage(input: {
                   ? '第一张是完整封面，之后是同一封面的局部放大，只用来检查细节，不是分栏或多张封面。重点检查书页、纸张、屏幕与角落；成段排列的短横线、印刷痕迹也属于伪文字，即使无法读出具体字，也违反无文字要求。'
                   : '',
                 `原始教学配图要求：${input.requirement}`,
-                '请检查：一、所有可见文字是否有错别字、乱码或截断；若要求明确禁止文字，则出现任何可辨认字符、伪文字或标签都必须判定不通过；二、核心概念、步骤、顺序和关系是否与要求一致；三、是否出现要求之外且会误导学习者的事实；四、构图是否清晰并适合课堂投影。',
-                '只报告图片中实际可见的具体问题，不把自然纹理、纯图形或无法确认的微小痕迹猜测成文字；不要因未要求的辅助细节而拒绝。每条 issues 必须是真正需要修正的问题，不写已经排除的问题或通过项。',
+                '请只检查：一、明确要求出现的文字是否有错别字、乱码或截断；若要求明确禁止文字，则出现可辨认字符或明显伪文字必须判定不通过；二、原始要求明确规定的概念、步骤、顺序或关系是否被画反、画错或遗漏；三、是否出现会直接误导学习者的可证实事实错误；四、主体是否因裁切、遮挡或极低对比而无法辨认。',
+                '不得因为标签位置、比喻方式、视觉风格、缺少原始要求未指定的说明或理论细节而拒绝；不得把“可以更好”当成硬错误。只报告图片中实际可见且能引用原始要求定位的具体问题，不猜测微小痕迹，不写建议、通过项或已经排除的问题。',
                 '仅输出 JSON：{"pass":boolean,"issues":["具体问题"]}。只有全部合格时 pass 才能为 true。',
               ].join('\n'),
             },
@@ -474,12 +497,24 @@ export async function persistGeneratedClassroomImage(input: {
 // Image / Video generation
 // ---------------------------------------------------------------------------
 
+export type ClassroomMediaItemProgress = {
+  type: 'image' | 'video';
+  elementId: string;
+  status: 'generating' | 'retrying' | 'completed' | 'failed';
+  completed: number;
+  total: number;
+  attempt?: number;
+  maxAttempts?: number;
+  nextDelayMs?: number;
+};
+
 export async function generateMediaForClassroom(
   outlines: SceneOutline[],
   classroomId: string,
   baseUrl: string,
   capabilities: { image: boolean; video: boolean },
   signal?: AbortSignal,
+  onProgress?: (progress: ClassroomMediaItemProgress) => Promise<void> | void,
 ): Promise<{
   mediaMap: Record<string, string>;
   failures: Array<{ elementId: string; type: 'image' | 'video'; error: string }>;
@@ -522,11 +557,17 @@ export async function generateMediaForClassroom(
   // but run the two types in parallel (providers often have limited concurrency).
   const imageRequests = requests.filter((r) => capabilities.image && r.type === 'image' && imageProviderIds.length > 0);
   const videoRequests = requests.filter((r) => capabilities.video && r.type === 'video' && videoProviderIds.length > 0);
+  const totalRequests = imageRequests.length + videoRequests.length;
+  let completedRequests = 0;
 
   const generateImages = async () => {
     for (const req of imageRequests) {
       try {
         throwIfAborted(signal);
+        await onProgress?.({
+          type: 'image', elementId: req.elementId, status: 'generating',
+          completed: completedRequests, total: totalRequests,
+        });
         const providerId = imageProviderIds[0] as ImageProviderId;
         const apiKey = resolveImageApiKey(providerId);
         const providerConfig = IMAGE_PROVIDERS[providerId];
@@ -539,52 +580,102 @@ export async function generateMediaForClassroom(
 
         const aspectRatio = req.aspectRatio || '16:9';
         const dimensions = resolveCourseImageDimensions(aspectRatio);
-        await withGenerationRetry(async () => {
-          const result = await waitForProviderSlot(providerId, signal, () => generateImage(
-            { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
-            {
-              prompt: buildInstructionalImagePrompt(req),
-              aspectRatio,
-              ...dimensions,
-              style: req.style,
-              negativePrompt: 'watermark, logo, irrelevant decoration, illegible text, garbled Chinese characters, factual errors, cropped content, cluttered layout',
+        let qualityRepairIssue: string | undefined;
+        let rejectedDraft: ImageGenerationResult | undefined;
+        try {
+          await withGenerationRetry(async () => {
+            const result = await waitForProviderSlot(providerId, signal, () => generateImage(
+              { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
+              {
+                prompt: qualityRepairIssue
+                  ? buildInstructionalImageRepairPrompt(req, qualityRepairIssue)
+                  : buildInstructionalImagePrompt(req),
+                aspectRatio,
+                ...dimensions,
+                style: req.style,
+                negativePrompt: 'watermark, logo, irrelevant decoration, illegible text, garbled Chinese characters, factual errors, cropped content, cluttered layout',
+              },
+            ));
+            throwIfAborted(signal);
+            try {
+              mediaMap[req.elementId] = await persistGeneratedClassroomImage({
+                result,
+                classroomId,
+                elementId: req.elementId,
+                aspectRatio,
+                baseUrl,
+                signal,
+                // Review the first valid draft once. When it has been rejected,
+                // the next generation carries the review feedback and is saved
+                // after deterministic file checks without a second semantic veto.
+                qualityReview: qualityRepairIssue ? undefined : {
+                  providerId,
+                  apiKey,
+                  baseUrl: resolveImageBaseUrl(providerId),
+                  requirement: req.prompt,
+                },
+              });
+            } catch (error) {
+              if (isGeneratedImageQualityRejection(error)) {
+                rejectedDraft = result;
+                qualityRepairIssue = error instanceof Error ? error.message : String(error);
+              }
+              throw error;
+            }
+            log.info(`Generated and validated image: ${req.elementId}`);
+          }, {
+            label: `image ${req.elementId}`,
+            signal,
+            // Network retries for the same generated URL happen inside
+            // downloadToBuffer. Provider retries regenerate only after that URL
+            // is genuinely unusable or expired. OpenMAIC's baseline does not run
+            // a vision review at all; CoTeach keeps one review-driven repair, but
+            // never lets subjective review regenerate the same image repeatedly.
+            maxRetries: 1,
+            baseDelayMs: providerId === 'qwen-image' ? 10_000 : 1_000,
+            maxDelayMs: providerId === 'qwen-image' ? 60_000 : 16_000,
+            onRetry: async ({ attempt, maxAttempts, nextDelayMs, reason }) => {
+              log.warn(
+                `Retrying image ${req.elementId} [provider=${providerId}, attempt=${attempt + 1}/${maxAttempts}, waitMs=${nextDelayMs}, reason=${reason}]`,
+              );
+              await onProgress?.({
+                type: 'image', elementId: req.elementId, status: 'retrying',
+                completed: completedRequests, total: totalRequests,
+                attempt: attempt + 1, maxAttempts, nextDelayMs,
+              });
             },
-          ));
+          });
+        } catch (repairError) {
           throwIfAborted(signal);
+          if (!rejectedDraft) throw repairError;
+          // The first draft is mechanically valid because the semantic review
+          // runs after file validation. If the single repair request is rate
+          // limited or returns a broken file, keep that usable draft rather
+          // than leaving an empty placeholder in the classroom.
           mediaMap[req.elementId] = await persistGeneratedClassroomImage({
-            result,
+            result: rejectedDraft,
             classroomId,
             elementId: req.elementId,
             aspectRatio,
             baseUrl,
             signal,
-            qualityReview: {
-              providerId,
-              apiKey,
-              baseUrl: resolveImageBaseUrl(providerId),
-              requirement: req.prompt,
-            },
           });
-          log.info(`Generated and validated image: ${req.elementId}`);
-        }, {
-          label: `image ${req.elementId}`,
-          signal,
-          // Network retries for the same generated URL happen inside
-          // downloadToBuffer. Provider retries regenerate only after that URL
-          // is genuinely unusable or expired.
-          maxRetries: providerId === 'qwen-image' ? 2 : 2,
-          baseDelayMs: providerId === 'qwen-image' ? 10_000 : 1_000,
-          maxDelayMs: providerId === 'qwen-image' ? 60_000 : 16_000,
-          onRetry: ({ attempt, maxAttempts, nextDelayMs, reason }) => {
-            log.warn(
-              `Retrying image ${req.elementId} [provider=${providerId}, attempt=${attempt + 1}/${maxAttempts}, waitMs=${nextDelayMs}, reason=${reason}]`,
-            );
-          },
+          log.warn(`Image repair failed; retained the reviewed first draft for ${req.elementId}`, repairError);
+        }
+        completedRequests += 1;
+        await onProgress?.({
+          type: 'image', elementId: req.elementId, status: 'completed',
+          completed: completedRequests, total: totalRequests,
         });
       } catch (err) {
         if (signal?.aborted) throw err;
         log.warn(`Image generation failed for ${req.elementId}:`, err);
         failures.push({ elementId: req.elementId, type: 'image', error: err instanceof Error ? err.message : String(err) });
+        completedRequests += 1;
+        await onProgress?.({
+          type: 'image', elementId: req.elementId, status: 'failed',
+          completed: completedRequests, total: totalRequests,
+        });
       }
     }
   };
@@ -593,6 +684,10 @@ export async function generateMediaForClassroom(
     for (const req of videoRequests) {
       try {
         throwIfAborted(signal);
+        await onProgress?.({
+          type: 'video', elementId: req.elementId, status: 'generating',
+          completed: completedRequests, total: totalRequests,
+        });
         const providerId = videoProviderIds[0] as VideoProviderId;
         const apiKey = resolveVideoApiKey(providerId);
         if (!apiKey) {
@@ -620,11 +715,32 @@ export async function generateMediaForClassroom(
           await fs.writeFile(path.join(mediaDir, filename), buf);
           mediaMap[req.elementId] = mediaServingUrl(baseUrl, classroomId, `media/${filename}`);
           log.info(`Generated video: ${filename}`);
-        }, { label: `video ${req.elementId}`, signal, maxRetries: 1 });
+        }, {
+          label: `video ${req.elementId}`,
+          signal,
+          maxRetries: 1,
+          onRetry: async ({ attempt, maxAttempts, nextDelayMs }) => {
+            await onProgress?.({
+              type: 'video', elementId: req.elementId, status: 'retrying',
+              completed: completedRequests, total: totalRequests,
+              attempt: attempt + 1, maxAttempts, nextDelayMs,
+            });
+          },
+        });
+        completedRequests += 1;
+        await onProgress?.({
+          type: 'video', elementId: req.elementId, status: 'completed',
+          completed: completedRequests, total: totalRequests,
+        });
       } catch (err) {
         if (signal?.aborted) throw err;
         log.warn(`Video generation failed for ${req.elementId}:`, err);
         failures.push({ elementId: req.elementId, type: 'video', error: err instanceof Error ? err.message : String(err) });
+        completedRequests += 1;
+        await onProgress?.({
+          type: 'video', elementId: req.elementId, status: 'failed',
+          completed: completedRequests, total: totalRequests,
+        });
       }
     }
   };

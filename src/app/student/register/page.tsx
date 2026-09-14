@@ -135,7 +135,6 @@ function StudentRegisterPageContent() {
     <StudentAuthShell
       mode="register"
       title="创建学生账号"
-      description="验证课程邀请码，创建账号后即可进入对应课程。"
     >
       <section
         className="pbl-auth-form-stack pbl-student-register"

@@ -134,16 +134,29 @@ export function buildQuickClassroomArtifacts(
 
   const options = job.requestPreview;
   if (hasAnyStep(job, ["generating_media_assets"]) && (options?.enableImageGeneration || options?.enableVideoGeneration)) {
+    const latestMedia = [...job.events].reverse().find((event) => event.step === "generating_media_assets");
+    const mediaPartial = latestMedia?.assetPhaseStatus === "partial-failure";
+    const mediaCompleted = latestMedia?.assetPhaseStatus === "completed";
     artifacts.push({
       id: "classroom-media-assets",
       kind: "facts",
       eyebrow: "课堂资源生成 · 图片与视频",
-      title: "视觉资源正在写入课堂",
+      title: mediaPartial
+        ? "部分视觉资源需要在预览页处理"
+        : mediaCompleted
+          ? "视觉资源已经写入课堂"
+          : "视觉资源正在写入课堂",
       summary: latestMessage(job, ["generating_media_assets"]),
       accent: "orange",
       items: [
-        ...(options.enableImageGeneration ? [{ label: "课堂配图", value: "生成、校验并替换页面占位素材" }] : []),
-        ...(options.enableVideoGeneration ? [{ label: "课堂视频", value: "生成并绑定适用的视频片段" }] : []),
+        ...(options.enableImageGeneration ? [{
+          label: "课堂配图",
+          value: mediaPartial ? "未完成项目已保留，可在预览页定向重试" : mediaCompleted ? "已生成、校验并写入页面" : "生成、校验并替换页面占位素材",
+        }] : []),
+        ...(options.enableVideoGeneration ? [{
+          label: "课堂视频",
+          value: mediaPartial ? "未完成项目已保留，可在预览页定向重试" : mediaCompleted ? "已生成并绑定适用页面" : "生成并绑定适用的视频片段",
+        }] : []),
       ],
     });
   }

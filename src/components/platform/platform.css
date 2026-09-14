@@ -480,7 +480,7 @@
 .pbl-platform-theme .pbl-auth-visual-heading div { padding-left: 18px; border-left: 1px solid rgba(var(--pbl-auth-accent-rgb),.22); }
 .pbl-platform-theme .pbl-auth-visual-heading p { color: var(--pbl-text-muted); font-size: 10px; font-weight: 700; letter-spacing: .19em; }
 .pbl-platform-theme .pbl-auth-visual-heading h2 { margin-top: 7px; color: var(--pbl-text-strong); font-size: 17px; font-weight: 600; letter-spacing: .02em; }
-.pbl-platform-theme .pbl-auth-origin { position: absolute; inset: 108px 20px 38px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--pbl-text-strong); text-align: center; }
+.pbl-platform-theme .pbl-auth-origin { position: absolute; inset: 38px 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--pbl-text-strong); text-align: center; }
 .pbl-platform-theme .pbl-auth-origin-glow { position: absolute; top: 50%; left: 50%; width: min(580px,82%); height: 260px; border-radius: 50%; background: radial-gradient(ellipse,rgba(15,185,177,.16),rgba(var(--pbl-auth-accent-rgb),.07) 42%,transparent 72%); filter: blur(34px); transform: translate(-50%,-50%); }
 .pbl-platform-theme .pbl-auth-origin-word-wrap { position: relative; z-index: 1; width: 100%; }
 .pbl-platform-theme .pbl-auth-brand-caption { position: relative; width: min(100%,480px); margin-top: 24px; color: var(--pbl-text-muted); font-size: 12px; line-height: 1.9; text-wrap: balance; }
@@ -496,7 +496,7 @@
 .pbl-platform-theme .pbl-auth-title { margin-top: 38px; }
 .pbl-platform-theme .pbl-auth-title > p { display: flex; align-items: center; gap: 9px; color: var(--pbl-auth-accent); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
 .pbl-platform-theme .pbl-auth-title > p span { width: 18px; height: 1px; background: currentColor; }
-.pbl-platform-theme .pbl-auth-title h1 { margin-top: 13px; color: var(--pbl-text-strong); font-size: clamp(28px,2.3vw,36px); font-weight: 600; letter-spacing: -.045em; line-height: 1.25; }
+.pbl-platform-theme .pbl-auth-title h1 { margin-top: 0; color: var(--pbl-text-strong); font-size: clamp(28px,2.3vw,36px); font-weight: 600; letter-spacing: -.045em; line-height: 1.25; }
 .pbl-platform-theme .pbl-auth-title > div { margin-top: 12px; color: var(--pbl-text-muted); font-size: 13px; line-height: 1.8; }
 .pbl-platform-theme .pbl-auth-body { margin-top: 32px; }
 .pbl-platform-theme .pbl-auth-form-stack { display: grid; gap: 18px; }

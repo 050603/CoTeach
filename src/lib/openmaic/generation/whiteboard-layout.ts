@@ -1,6 +1,6 @@
 import type { Action, WbDrawLineAction } from '@openmaic/lib/types/action';
 import {
-  getWhiteboardActionBox, resolveWhiteboardLine, WHITEBOARD_HEIGHT, WHITEBOARD_WIDTH,
+  getWhiteboardActionBox, minimumWhiteboardTextHeight, resolveWhiteboardLine, WHITEBOARD_HEIGHT, WHITEBOARD_WIDTH,
   type WhiteboardActionBox,
 } from '@openmaic/lib/whiteboard/layout';
 
@@ -11,6 +11,8 @@ type Drawing = { index: number; end: number; action: Action; box: Box };
 type Group = { key: number; members: Drawing[]; box: Box; groupId?: string };
 type Placement = { left: number; top: number; scale: number };
 type PlacedGroup = { group: Group; placement: Placement };
+
+const round = (value: number) => Math.round(value * 1000) / 1000;
 
 function finiteBox(box: Box): boolean {
   return [box.left, box.top, box.width, box.height].every(Number.isFinite) && box.width > 0 && box.height > 0;
@@ -91,6 +93,42 @@ function intersectionArea(a: Box, b: Box, gap = 0): number {
   return Math.max(0, width) * Math.max(0, height);
 }
 
+function scaledTextFontSize(action: Extract<Action, { type: 'wb_draw_text' }>, scale: number): number {
+  const sourceFontSize = action.fontSize ?? 18;
+  return round(Math.max(12, Math.min(sourceFontSize, 14), sourceFontSize * scale));
+}
+
+function scaledDrawingBox(action: Action, origin: Box, scale: number): Box | null {
+  const box = getWhiteboardActionBox(action);
+  if (!box) return null;
+  const width = round(box.width * scale);
+  const scaledHeight = round(box.height * scale);
+  const height = action.type === 'wb_draw_text'
+    ? round(Math.max(
+        scaledHeight,
+        minimumWhiteboardTextHeight({
+          ...action,
+          width,
+          fontSize: scaledTextFontSize(action, scale),
+        }, width),
+      ))
+    : scaledHeight;
+  return {
+    id: box.id,
+    left: round((box.left - origin.left) * scale),
+    top: round((box.top - origin.top) * scale),
+    width,
+    height,
+  };
+}
+
+function scaledGroupBox(group: Group, origin: Box, scale: number): Box {
+  return unionBoxes(group.members.flatMap(({ action }) => {
+    const box = scaledDrawingBox(action, origin, scale);
+    return box ? [box] : [];
+  }));
+}
+
 function groupAt(group: Group, index: number): Group {
   const members = new Map<string, Drawing>();
   for (const drawing of group.members) {
@@ -108,7 +146,9 @@ function groupAt(group: Group, index: number): Group {
 }
 
 function placeGroup(group: Group, occupied: Box[]): Placement {
-  const scaleToFit = Math.min(1, (WHITEBOARD_WIDTH - 2 * MARGIN) / group.box.width, (WHITEBOARD_HEIGHT - 2 * MARGIN) / group.box.height);
+  const availableWidth = WHITEBOARD_WIDTH - 2 * MARGIN;
+  const availableHeight = WHITEBOARD_HEIGHT - 2 * MARGIN;
+  const scaleToFit = Math.min(1, availableWidth / group.box.width, availableHeight / group.box.height);
   // Code/table fonts have no scalable field; retain readability and diagnose
   // overflow rather than silently squeezing their text into a smaller box.
   const minimumScale = Math.max(0, ...group.members.map(({ action }) => {
@@ -116,9 +156,19 @@ function placeGroup(group: Group, occupied: Box[]): Placement {
     if (action.type === 'wb_draw_code' || action.type === 'wb_draw_table') return 1;
     return 0;
   }));
-  const scale = Math.min(1, Math.max(scaleToFit, minimumScale));
-  const width = group.box.width * scale;
-  const height = group.box.height * scale;
+  let scale = Math.min(1, Math.max(scaleToFit, minimumScale));
+  let scaledBox = scaledGroupBox(group, group.box, scale);
+  // Text has fixed renderer padding, so proportional geometry can remain a
+  // few pixels too tall after scaling. Recalculate against the actual text
+  // bounds while respecting the established readable-font floor.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const correction = Math.min(1, availableWidth / scaledBox.width, availableHeight / scaledBox.height);
+    const nextScale = Math.max(minimumScale, scale * correction);
+    if (correction >= 0.999 || nextScale >= scale - 0.001) break;
+    scale = nextScale;
+    scaledBox = scaledGroupBox(group, group.box, scale);
+  }
+  const { width, height } = scaledBox;
   const clamp = (value: number, maximum: number) => Math.max(MARGIN, Math.min(value, maximum - MARGIN));
   const left = clamp(group.box.left, WHITEBOARD_WIDTH - width);
   const top = clamp(group.box.top, WHITEBOARD_HEIGHT - height);
@@ -146,21 +196,20 @@ function placeGroup(group: Group, occupied: Box[]): Placement {
   return { left: chosen.left, top: chosen.top, scale };
 }
 
-const round = (value: number) => Math.round(value * 1000) / 1000;
-
 function transformDrawing(source: Action, group: Group, placement: Placement): Action {
   const box = getWhiteboardActionBox(source);
   if (!box || !('x' in source)) return { ...source };
-  const { scale } = placement;
+  const transformed = scaledDrawingBox(source, group.box, placement.scale)!;
+  const fontSize = source.type === 'wb_draw_text' ? scaledTextFontSize(source, placement.scale) : undefined;
   return {
     ...source,
-    x: round(placement.left + (box.left - group.box.left) * scale),
-    y: round(placement.top + (box.top - group.box.top) * scale),
+    x: round(placement.left + transformed.left),
+    y: round(placement.top + transformed.top),
     ...(group.groupId ? { groupId: group.groupId } : {}),
-    ...(scale !== 1 ? {
-      width: round(box.width * scale), height: round(box.height * scale),
-      ...(source.type === 'wb_draw_text' ? { fontSize: round((source.fontSize ?? 18) * scale) } : {}),
-    } : {}),
+    ...(placement.scale !== 1 || transformed.height !== box.height
+      ? { width: transformed.width, height: transformed.height }
+      : {}),
+    ...(source.type === 'wb_draw_text' && fontSize !== (source.fontSize ?? 18) ? { fontSize } : {}),
   } as Action;
 }
 
@@ -212,10 +261,12 @@ function normalizePage(actions: readonly Action[]): Action[] {
           const entry = groupAt(groups.get(activeKey)!, index);
           const placed = placements.get(activeKey)!;
           const { placement } = placed;
-          return { ...entry.box,
-            left: placement.left + (entry.box.left - placed.group.box.left) * placement.scale,
-            top: placement.top + (entry.box.top - placed.group.box.top) * placement.scale,
-            width: entry.box.width * placement.scale, height: entry.box.height * placement.scale };
+          const box = scaledGroupBox(entry, placed.group.box, placement.scale);
+          return {
+            ...box,
+            left: placement.left + box.left,
+            top: placement.top + box.top,
+          };
         });
         placements.set(key, { group, placement: placeGroup(group, occupied) });
       }

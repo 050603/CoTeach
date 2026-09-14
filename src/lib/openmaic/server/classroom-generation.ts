@@ -70,6 +70,11 @@ import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@openmaic/lib/consta
 const log = createLogger('Classroom');
 const MAX_PAGE_GENERATION_RETRIES = 2;
 
+/** Slides already perform one evidence-preserving layout repair internally. */
+export function contentRetryBudget(type: SceneOutline['type']): number {
+  return type === 'slide' ? 0 : MAX_PAGE_GENERATION_RETRIES;
+}
+
 function getSpeechActionText(actions: ReadonlyArray<Action> | undefined): string {
   return (actions ?? [])
     .filter((action): action is Extract<Action, { type: 'speech' }> => (
@@ -580,12 +585,11 @@ export async function generateClassroom(
 
   const sceneAiCall: AICallFn = async (systemPrompt, userPrompt, _images) => {
     // A single pathological page must not hold the entire classroom job
-    // indefinitely. Deep-thinking models can legitimately need several minutes
-    // for a complex interactive page, so use the conservative long-generation
-    // policy instead of the former hard-coded 150-second cutoff. Checkpoint-level
-    // recovery will still retry only the missing page if this bounded call fails.
+    // indefinitely. Whole-course and graph generation retain their separate
+    // long timeout; a single page has a three-minute bound and checkpoint-level
+    // recovery can still retry only that missing page.
     const pageTimeoutSignal = AbortSignal.timeout(
-      resolveLlmRequestTimeoutMs('long-generation'),
+      resolveLlmRequestTimeoutMs('page-generation'),
     );
     const pageSignal = options.signal
       ? AbortSignal.any([options.signal, pageTimeoutSignal])
@@ -960,10 +964,19 @@ export async function generateClassroom(
             pblProfile: requirements.pblProfile,
             allowProceduralSkill: vocationalActive,
             signal: options.signal,
+            onSlideQualityRepair: async (attempt) => {
+              await reportProgress({
+                step: 'generating_scenes',
+                progress: completedSceneGenerationProgress(generatedSceneDrafts, outlines.length),
+                message: `Repairing scene ${index + 1}/${outlines.length} layout (${attempt}/1): ${safeOutline.title}`,
+                scenesGenerated: generatedSceneDrafts,
+                totalScenes: outlines.length,
+              });
+            },
           }),
         {
           label: `scene ${index + 1}/${outlines.length} content`,
-          maxRetries: MAX_PAGE_GENERATION_RETRIES,
+          maxRetries: contentRetryBudget(safeOutline.type),
           signal: options.signal,
           shouldRetryResult: (result) => result === null,
           onRetry: (event) => reportSceneRetry('content', event),

@@ -41,7 +41,6 @@ function StudentResetPasswordPageContent() {
   return (
     <StudentAuthShell
       title="设置新密码"
-      description="使用教师提供的重置链接，为你的学习账号设置新密码。"
     >
       {done ? (
         <p className="pbl-auth-success">

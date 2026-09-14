@@ -3,6 +3,7 @@ import type { SceneOutline } from '@openmaic/lib/types/generation';
 import {
   buildMediaRepairOutlines,
   collectRequestedClassroomMedia,
+  formatClassroomMediaItemProgress,
   reconcileMediaFailures,
 } from './classroom-asset-generation';
 
@@ -63,5 +64,15 @@ describe('classroom asset repair planning', () => {
       type: 'image',
       error: '素材生成未返回可用文件',
     }]);
+  });
+
+  it('reports the concrete item and retry attempt instead of leaving one static media message', () => {
+    expect(formatClassroomMediaItemProgress({
+      type: 'image', elementId: 'image-detail', status: 'retrying',
+      completed: 1, total: 2, attempt: 2, maxAttempts: 3, nextDelayMs: 15_000,
+    })).toBe('课堂配图 2 / 2 正在进行第 2 / 3 次生成，约 15 秒后继续');
+    expect(formatClassroomMediaItemProgress({
+      type: 'image', elementId: 'image-detail', status: 'failed', completed: 2, total: 2,
+    })).toContain('未通过审校');
   });
 });

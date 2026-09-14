@@ -3,6 +3,28 @@ import { expect, test } from "@playwright/test";
 const base = process.env.OPENPBL_RESOURCE_E2E_BASE_URL || "http://127.0.0.1:3000";
 const routes = ["/", "/teacher/login", "/teacher/register", "/student/login", "/student/register"];
 
+test("public pages use the concise CoTeach positioning", async ({ page }) => {
+  await page.goto(base);
+  await expect(page).toHaveTitle("CoTeach｜AI 协同教学平台");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("共同教 · 共同学 · 共同创造");
+  await expect(page.getByRole("link", { name: "开始学习" }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "每一种智慧，都在课堂中相遇" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "AI 授课" })).toBeVisible();
+  await expect(page.getByText("AI 讲授课程知识，结合小测开展讲解与答疑。").first()).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("项目式学习");
+
+  for (const [route, title] of [
+    ["/teacher/login", "教师登录｜CoTeach"],
+    ["/teacher/register", "创建教师账号｜CoTeach"],
+    ["/student/login", "学生登录｜CoTeach"],
+    ["/student/register", "创建学生账号｜CoTeach"],
+    ["/student/reset-password", "设置新密码｜CoTeach"],
+  ]) {
+    await page.goto(`${base}${route}`);
+    await expect(page).toHaveTitle(title);
+  }
+});
+
 for (const route of routes) {
   test(`brand plays automatically without controls on ${route}`, async ({ page }) => {
     await page.goto(`${base}${route}`);
@@ -149,7 +171,7 @@ test("home hero replays on refresh and client navigation back to home", async ({
   const entranceTime = () => hero.locator('[data-coteach-part="pages"]').evaluate((element) => Number(element.getAnimations()[0].currentTime));
   expect(await entranceTime()).toBeLessThan(3000);
   await hero.evaluate((element) => element.getAnimations({ subtree: true }).filter((animation) => animation.effect!.getTiming().iterations === 1).forEach((animation) => animation.finish()));
-  await page.getByRole("link", { name: "立即加入", exact: true }).first().click();
+  await page.getByRole("link", { name: "开始学习", exact: true }).first().click();
   await page.getByRole("link", { name: "返回首页", exact: true }).click();
   await expect(hero).toHaveAttribute("data-running", "true");
   await expect.poll(() => hero.locator('[data-coteach-part="pages"]').evaluate((element) => element.getAnimations().length)).toBe(1);
@@ -160,6 +182,9 @@ test("reduced motion shows the finished logo without animations", async ({ page 
   await page.emulateMedia({ reducedMotion: "reduce" });
   for (const route of ["/", "/student/login"]) {
     await page.goto(`${base}${route}`);
+    if (route === "/") {
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    }
     const logo = page.locator("[data-coteach-animation]").first();
     await expect(logo).toBeVisible();
     expect(await logo.evaluate((element) => element.getAnimations({ subtree: true }).length)).toBe(0);

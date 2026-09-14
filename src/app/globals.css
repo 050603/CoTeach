@@ -3133,6 +3133,14 @@ body.plate-default-theme [data-slot="popover-content"] {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
+
+  .pbl-hero-text,
+  .pbl-hero-principles {
+    opacity: 1 !important;
+    animation: none !important;
+    filter: none;
+    transform: none;
+  }
 }
 
 /* 高对比度聚焦 */
@@ -3262,8 +3270,8 @@ body.plate-default-theme [data-slot="popover-content"] {
   }
 }
 @keyframes pbl-shimmer-sweep {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+  0%, 12% { transform: translateX(-100%); }
+  82%, 100% { transform: translateX(100%); }
 }
 @keyframes pbl-pulse-ring {
   0% { transform: scale(0.85); opacity: 0.7; }
@@ -3422,6 +3430,25 @@ body.plate-default-theme [data-slot="popover-content"] {
   animation: pbl-hero-text-in 1.1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+.pbl-hero-principles {
+  background: linear-gradient(90deg, #073f8c 0%, #0757a6 38%, #07958f 72%, #0aa49d 100%);
+  background-clip: text;
+  color: transparent;
+  opacity: 0;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: pbl-hero-text-in 1.1s 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.pbl-section-title {
+  display: inline-block;
+  background: linear-gradient(90deg, #102f5b 0%, #0757a6 48%, #07958f 100%);
+  background-clip: text;
+  color: transparent;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
 /* Hero 按钮：实心渐变 */
 .pbl-cosmic-btn-primary {
   position: relative;
@@ -3433,14 +3460,19 @@ body.plate-default-theme [data-slot="popover-content"] {
   font-weight: 600;
   letter-spacing: 0.01em;
   color: #ffffff;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  background: linear-gradient(100deg, #0757a6 0%, #078c91 58%, #0aa49d 100%);
   border-radius: 999px;
   box-shadow:
-    0 1px 2px rgba(99, 102, 241, 0.35),
-    0 8px 24px rgba(99, 102, 241, 0.28),
+    0 1px 2px rgba(7, 87, 166, 0.3),
+    0 8px 24px rgba(7, 140, 145, 0.24),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
   transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   overflow: hidden;
+}
+
+.pbl-cosmic-btn-primary-compact {
+  padding: 9px 17px;
+  font-size: 13px;
 }
 
 .pbl-cosmic-btn-primary::before {
@@ -3448,16 +3480,16 @@ body.plate-default-theme [data-slot="popover-content"] {
   position: absolute;
   inset: 0;
   background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.35) 50%, transparent 70%);
-  background-size: 200% 100%;
   animation: pbl-shimmer-sweep 4s linear infinite;
+  transform: translateX(-100%);
   pointer-events: none;
 }
 
 .pbl-cosmic-btn-primary:hover {
   transform: translateY(-2px);
   box-shadow:
-    0 2px 4px rgba(99, 102, 241, 0.45),
-    0 12px 32px rgba(99, 102, 241, 0.38),
+    0 2px 4px rgba(7, 87, 166, 0.35),
+    0 12px 32px rgba(7, 140, 145, 0.3),
     inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
@@ -3596,14 +3628,7 @@ body.plate-default-theme [data-slot="popover-content"] {
 
 .coteach-origin__stage {
   position: relative;
-  min-height: 500px;
-  padding: 58px 24px 32px;
-  overflow: hidden;
-  border: 1px solid rgba(15, 118, 110, 0.16);
-  border-radius: 32px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 30px 90px rgba(15, 23, 42, 0.08);
-  backdrop-filter: blur(18px);
+  padding: 12px 0 0;
 }
 
 .coteach-origin__stage::before {
@@ -3631,6 +3656,107 @@ body.plate-default-theme [data-slot="popover-content"] {
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.055em;
+}
+
+.coteach-origin__intro {
+  max-width: 640px;
+  margin: 18px auto 0;
+  color: var(--pbl-text-muted);
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+.coteach-origin__role-list {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(28px, 4vw, 64px);
+  margin: 48px auto 0;
+  text-align: left;
+}
+
+.coteach-origin__role {
+  position: relative;
+  min-width: 0;
+}
+
+.coteach-origin__role-symbol {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  width: 76px;
+  height: 76px;
+  margin-bottom: 24px;
+  place-items: center;
+  color: var(--coteach-role-accent);
+}
+
+.coteach-origin__role-symbol::before {
+  position: absolute;
+  z-index: -1;
+  inset: -6px;
+  border-radius: 42% 58% 64% 36% / 54% 42% 58% 46%;
+  background: radial-gradient(ellipse at 35% 35%, color-mix(in srgb, var(--coteach-role-accent) 12%, transparent), transparent 72%);
+  content: "";
+}
+
+.coteach-origin__role[data-role="teacher"] {
+  --coteach-role-accent: #235a9c;
+}
+
+.coteach-origin__role[data-role="student"] {
+  --coteach-role-accent: #0f8f86;
+}
+
+.coteach-origin__role[data-role="ai"] {
+  --coteach-role-accent: #5b64c9;
+}
+
+.coteach-origin__role-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.coteach-origin__role-heading h3 {
+  color: var(--pbl-text-strong);
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.coteach-origin__role-heading span {
+  color: var(--coteach-role-accent);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.coteach-origin__role > p {
+  margin-top: 18px;
+  color: var(--pbl-text-muted);
+  font-size: 15px;
+  line-height: 1.9;
+}
+
+.coteach-origin__role ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 0;
+  margin-top: 20px;
+}
+
+.coteach-origin__role li {
+  color: color-mix(in srgb, var(--coteach-role-accent) 82%, #1f2937);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.coteach-origin__role li + li::before {
+  margin: 0 8px;
+  color: #9ca9b4;
+  content: "·";
 }
 
 .coteach-origin__mutable {
@@ -3953,8 +4079,7 @@ body.plate-default-theme [data-slot="popover-content"] {
 
 @media (max-width: 640px) {
   .coteach-origin__stage {
-    min-height: 0;
-    padding: 44px 16px 18px;
+    padding: 0;
   }
 
   .coteach-origin__meaning {
@@ -3997,6 +4122,38 @@ body.plate-default-theme [data-slot="popover-content"] {
 
   .coteach-origin__roles {
     gap: 6px;
+  }
+
+  .coteach-origin__role-list {
+    grid-template-columns: 1fr;
+    gap: 40px;
+    margin-top: 36px;
+  }
+
+  .coteach-origin__role {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    column-gap: 18px;
+    padding: 0;
+  }
+
+  .coteach-origin__role-symbol {
+    grid-column: 1;
+    grid-row: 1 / 4;
+    width: 52px;
+    height: 52px;
+    margin: 0;
+  }
+
+  .coteach-origin__role-symbol svg { width: 34px; height: 34px; }
+
+  .coteach-origin__role-heading,
+  .coteach-origin__role > p,
+  .coteach-origin__role ul { grid-column: 2; }
+
+  .coteach-origin__role > p {
+    margin-top: 12px;
+    font-size: 14px;
   }
 }
 

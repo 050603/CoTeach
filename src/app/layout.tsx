@@ -18,16 +18,14 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   applicationName: "CoTeach",
-  title: "CoTeach - 与 AI 协同教学，让学习真正发生",
-  description:
-    "CoTeach 是面向项目式学习的 AI 协同教学平台，贯通教师备课、课堂协作、项目创作、成果评价与学习反思。",
+  title: "CoTeach｜AI 协同教学平台",
+  description: "CoTeach 是 AI 协同教学平台，支持教师与 AI 协同备课、开展讲授与答疑，以及学生的学习协作、实践与评价。",
   openGraph: {
     type: "website",
     locale: "zh_CN",
     siteName: "CoTeach",
-    title: "CoTeach - 与 AI 协同教学，让学习真正发生",
-    description:
-      "连接教师、学生与 AI 的项目式学习平台，让备课、课堂、创作、评价与反思在同一条教学链路中协同发生。",
+    title: "CoTeach｜AI 协同教学平台",
+    description: "CoTeach 是 AI 协同教学平台，支持教师与 AI 协同备课、开展讲授与答疑，以及学生的学习协作、实践与评价。",
   },
 };
 

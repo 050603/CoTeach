@@ -25,4 +25,17 @@ describe('actual rendered teaching content', () => {
     const issues = inspectRenderedSlide('scene', [small, image]);
     expect(issues.map((issue) => issue.id)).toEqual(expect.arrayContaining(['render:scene:overflow:small', 'render:scene:small-type:small', 'render:scene:image-missing:image']));
   });
+  it('detects rendered text that intrudes into a table even when the table was authored first', () => {
+    const label = { ...text('label', 250, 76), box: { left: 565, top: 250, width: 150, height: 76 },
+      textRects: [{ left: 575, top: 260, width: 125, height: 45 }] };
+    const table: RenderedElement = { id: 'rubric', type: 'table', box: { left: 600, top: 150, width: 340, height: 280 }, textRects: [], text: '' };
+    expect(inspectRenderedSlide('scene', [table, label]).map((issue) => issue.id))
+      .toContain('render:scene:collision-rubric:label');
+  });
+
+  it('allows text fully contained by its intended opaque background', () => {
+    const label = { ...text('label', 210), box: { left: 120, top: 210, width: 260, height: 50 } };
+    const panel: RenderedElement = { id: 'panel', type: 'shape', box: { left: 100, top: 190, width: 300, height: 90 }, textRects: [], text: '', opaque: true };
+    expect(inspectRenderedSlide('scene', [panel, label]).some((issue) => issue.id.includes('collision-panel'))).toBe(false);
+  });
 });

@@ -30,7 +30,10 @@ export function createCourseMediaGenerationIncompleteError(input: {
     `${parts.join("、") || "课程媒体"}在多次自动重试后仍未完成；已生成的课程页面均已保留，请稍后继续生成。`,
   ), {
     code: COURSE_MEDIA_GENERATION_INCOMPLETE,
-    isRetryable: true,
+    // Restarting the course cannot improve a page-independent provider or
+    // media-review failure. The classroom remains usable and the preview owns
+    // targeted resource repair.
+    isRetryable: false,
   });
 }
 
@@ -38,6 +41,7 @@ export function createManagedCourseGenerationRecoveryRequest<T extends object>(
   request: T & ManagedCourseGenerationRequest,
   error: unknown,
 ): (T & ManagedCourseGenerationRequest) | null {
+  if (stringValue(errorRecord(error)?.code) === COURSE_MEDIA_GENERATION_INCOMPLETE) return null;
   // A provider can fail before the first page reaches its checkpoint. Those
   // failures still benefit from the same bounded managed recovery; requiring a
   // checkpoint here turned a brief first-page outage into a terminal job.
@@ -85,6 +89,14 @@ function redactPersistedErrorMessage(message: string): string {
 
 function isRecoverableTeachingToolFailure(message: string): boolean {
   return /missing required teaching tools(?: after correction)?:/i.test(message);
+}
+
+function isRecoverableWhiteboardQualityFailure(message: string): boolean {
+  // Builds before WHITEBOARD_QUALITY_REPAIR_INCOMPLETE was introduced stored
+  // these model-output defects as terminal errors. They are page-local and can
+  // be regenerated safely while the other scene checkpoints stay intact.
+  return message.includes("白板仍存在布局或内容问题")
+    || message.includes("白板修正未保留讲授内容");
 }
 
 /**
@@ -135,6 +147,7 @@ export function deserializeCourseGenerationFailure(value: string): Error {
     if (
       value.includes("AI 页面生成服务连续多次未能完成")
       || isRecoverableTeachingToolFailure(value)
+      || isRecoverableWhiteboardQualityFailure(value)
     ) {
       Object.assign(legacy, { isRetryable: true });
     }
@@ -147,7 +160,9 @@ export function deserializeCourseGenerationFailure(value: string): Error {
     // validation error. New builds can safely regenerate only that page from
     // checkpoints, so upgrade those existing rows into the managed recovery
     // path as well.
-    isRetryable: persisted.retryable || isRecoverableTeachingToolFailure(persisted.message),
+    isRetryable: persisted.retryable
+      || isRecoverableTeachingToolFailure(persisted.message)
+      || isRecoverableWhiteboardQualityFailure(persisted.message),
     ...(persisted.code !== undefined ? { code: persisted.code } : {}),
     ...(persisted.status !== undefined ? { status: persisted.status } : {}),
   });

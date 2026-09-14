@@ -8,7 +8,7 @@ export function TeacherAuthShell({
   title,
 }: {
   children: ReactNode;
-  description: string;
+  description?: string;
   mode?: "login" | "register";
   title: string;
 }) {
