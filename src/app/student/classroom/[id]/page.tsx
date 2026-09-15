@@ -21,6 +21,7 @@ import { StudentProjectionPrecache, StudentResourceProjection } from "@/componen
 import { StageEmptyState } from "@/components/classroom/classroom-ui";
 import { StudentClassroomHeaderStatus } from "@/components/classroom/student-classroom-header-status";
 import { normalizePblCourseConfig, type MakeArtifactMode } from "@/lib/pbl-course-config";
+import { PublicDiscussionStudentOverlay } from "@/components/views/student/public-discussion-overlay";
 
 export default function StudentClassroomPage() {
   const params = useParams<{ id: string }>();
@@ -149,6 +150,7 @@ export default function StudentClassroomPage() {
         )
       }
     >
+      <PublicDiscussionStudentOverlay courseId={course.id} />
       <span
         aria-hidden
         className="hidden"

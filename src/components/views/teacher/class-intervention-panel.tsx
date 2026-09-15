@@ -25,6 +25,7 @@ import type {
 } from "@/lib/session/types";
 import { useSession } from "@/lib/session/store";
 import { cn } from "@/lib/utils";
+import { PublicDiscussionTeacherPanel } from "./public-discussion-panel";
 
 type Recommendation = {
   id: string;
@@ -261,6 +262,11 @@ export function ClassInterventionPanel({
           </div>
         </div>
       </header>
+
+      <PublicDiscussionTeacherPanel
+        course={course}
+        recommendedKnowledgePointIds={recommendations.map((item) => item.id)}
+      />
 
       <div className="grid xl:grid-cols-[minmax(0,.9fr)_minmax(460px,1.1fr)]">
         <section className="border-b border-stone-100 p-4 xl:border-b-0 xl:border-r">

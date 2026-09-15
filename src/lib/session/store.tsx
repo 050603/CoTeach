@@ -97,6 +97,7 @@ import {
 } from "@/lib/realtime/projection-state";
 import { LatestValueQueue } from "@/lib/realtime/latest-value-queue";
 import { emitShowcasePresentation } from "@/lib/showcase/realtime-client";
+import { emitPublicDiscussionUpdate } from "@/lib/public-discussion/realtime-client";
 import type { ShowcaseEventPayload } from "@/lib/showcase/types";
 
 const IDENTITY_KEY = "openpbl.identity.v1";
@@ -1275,6 +1276,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 courseId,
                 (parsed.event.payload ?? {}) as ShowcaseEventPayload,
               );
+              return;
+            }
+            if (parsed.event?.type === "public-discussion") {
+              emitPublicDiscussionUpdate(courseId);
               return;
             }
             if (applyProjectionEvent(courseId, {

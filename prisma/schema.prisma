@@ -61,6 +61,10 @@ model User {
   providerCredentials    ProviderCredential[]    @relation("CredentialOwner")
   loadTestRuns           LoadTestRun[]           @relation("LoadTestInitiator")
   maintainedTextbooks    Textbook[]              @relation("TextbookMaintainer")
+  publicDiscussionsCreated  PublicDiscussionSession[] @relation("PublicDiscussionCreator")
+  publicDiscussionsAssigned PublicDiscussionSession[] @relation("PublicDiscussionStudent")
+  publicDiscussionSoundSessions PublicDiscussionSession[] @relation("PublicDiscussionSoundOwner")
+  publicDiscussionTurns     PublicDiscussionTurn[]
 }
 
 model PasswordResetToken {
@@ -316,9 +320,67 @@ model ClassroomInstance {
   announcements   Announcement[]
   learningEvents  LearningEvent[]
   domainEvents    DomainEvent[]
+  publicDiscussions PublicDiscussionSession[]
 
   @@unique([activityId, runNo])
   @@index([status, startedAt])
+}
+
+// Whole-class AI discussions are separate from private student tutor chats.
+// Every enrolled student may read the transcript; recommendation evidence is
+// exposed only by teacher-scoped API responses.
+model PublicDiscussionSession {
+  id                  String    @id @default(uuid())
+  classroomInstanceId String
+  createdById         String
+  currentStudentId    String?
+  knowledgePointId    String
+  topic               String
+  mode                String
+  openingPrompt       String    @db.Text
+  status              String    @default("INVITING")
+  resumeStatus        String?
+  version             Int       @default(1)
+  roundCount          Int       @default(0)
+  candidateEvidence   Json?
+  soundOwnerId        String?
+  soundClientId       String?
+  soundLeaseUntil     DateTime?
+  keyConclusion       String?   @db.Text
+  misconceptionRepair String?   @db.Text
+  transferQuestion    String?   @db.Text
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  endedAt             DateTime?
+
+  classroomInstance ClassroomInstance @relation(fields: [classroomInstanceId], references: [id], onDelete: Cascade)
+  createdBy         User              @relation("PublicDiscussionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  currentStudent    User?             @relation("PublicDiscussionStudent", fields: [currentStudentId], references: [id], onDelete: SetNull)
+  soundOwner        User?             @relation("PublicDiscussionSoundOwner", fields: [soundOwnerId], references: [id], onDelete: SetNull)
+  turns             PublicDiscussionTurn[]
+
+  @@index([classroomInstanceId, status, updatedAt])
+  @@index([currentStudentId, updatedAt])
+  @@index([soundOwnerId, soundLeaseUntil])
+}
+
+model PublicDiscussionTurn {
+  id              String   @id @default(uuid())
+  sessionId       String
+  studentId       String?
+  clientRequestId String   @unique
+  sequence        Int
+  role            String
+  content         String   @db.Text
+  source          String   @default("TEXT")
+  createdAt       DateTime @default(now())
+
+  session PublicDiscussionSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student User?                   @relation(fields: [studentId], references: [id], onDelete: SetNull)
+
+  @@unique([sessionId, sequence])
+  @@index([sessionId, createdAt])
+  @@index([studentId, createdAt])
 }
 
 model ClassroomParticipation {

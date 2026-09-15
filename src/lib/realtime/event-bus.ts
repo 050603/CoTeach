@@ -12,6 +12,7 @@ export type RealtimeEventType =
   | "companion-message"
   | "projection-changed"
   | "showcase-presentation"
+  | "public-discussion"
   | "presence-update";
 
 export interface RealtimeEvent {
