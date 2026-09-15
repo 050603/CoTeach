@@ -250,4 +250,56 @@ describe('teaching rail layout', () => {
     fireEvent.wheel(viewport);
     expect(nextLine.className).toContain('opacity-60');
   });
+
+  it('keeps a mouse click targeted at the subtitle so it can seek playback', () => {
+    const onCueSelect = vi.fn().mockReturnValue(true);
+    render(
+      <TeachingKnowledgeGraphProvider graph={undefined} points={[]}>
+        <LectureSubtitleDock
+          activeActionIndex={0}
+          autoPlay
+          canGoNext={false}
+          canGoNextCue
+          canGoPrevious={false}
+          canGoPreviousCue={false}
+          cues={[
+            { actionIndex: 0, text: '当前字幕。' },
+            { actionIndex: 3, text: '下一段字幕。' },
+          ]}
+          currentText="当前字幕。"
+          engineMode="paused"
+          muted={false}
+          onCueSelect={onCueSelect}
+          onCycleSpeed={vi.fn()}
+          onToggleAutoPlay={vi.fn()}
+          onToggleMute={vi.fn()}
+          playbackSpeed={1}
+          sceneIndex={0}
+          scenesCount={1}
+          teacherAvatar="/teacher.webp"
+          teacherName="知知"
+        />
+      </TeachingKnowledgeGraphProvider>,
+    );
+
+    const viewport = screen.getByLabelText('讲解字幕，可滚动浏览或拖动查看');
+    const target = screen.getByRole('button', { name: '从此处重新播放：下一段字幕。' });
+    const setPointerCapture = vi.fn();
+    Object.defineProperty(viewport, 'setPointerCapture', {
+      configurable: true,
+      value: setPointerCapture,
+    });
+
+    fireEvent.wheel(viewport);
+    fireEvent.pointerDown(target, {
+      button: 0,
+      clientY: 80,
+      pointerId: 7,
+      pointerType: 'mouse',
+    });
+
+    expect(setPointerCapture).not.toHaveBeenCalled();
+    fireEvent.click(target);
+    expect(onCueSelect).toHaveBeenCalledWith(3, 0);
+  });
 });

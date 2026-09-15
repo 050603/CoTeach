@@ -286,14 +286,19 @@ export function LectureSubtitleDock({
       scrollTop: event.currentTarget.scrollTop,
     };
     didDragRef.current = false;
-    event.currentTarget.setPointerCapture(event.pointerId);
   }, [revealSubtitleHistory]);
 
   const handleSubtitlePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const distance = event.clientY - drag.startY;
-    if (Math.abs(distance) > 4) didDragRef.current = true;
+    if (Math.abs(distance) > 4 && !didDragRef.current) {
+      didDragRef.current = true;
+      // Capturing on pointer-down retargets pointer-up (and therefore click)
+      // from the subtitle button to this viewport. Wait until the gesture is
+      // demonstrably a drag so a normal subtitle click can reach the button.
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
     event.currentTarget.scrollTop = drag.scrollTop - distance;
     revealSubtitleHistory();
   }, [revealSubtitleHistory]);
