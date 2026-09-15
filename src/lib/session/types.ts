@@ -783,8 +783,12 @@ export type DynamicFacilitationScaffold = {
 };
 
 export type OpenMaicSceneOutlineSnapshot = {
+  /** Course-level directive returned by the upstream outline generator. */
+  courseLanguageDirective?: string;
   teachingBrief?: import("@/lib/course-quality-review/types").TeachingBrief;
   visualPlan?: import("@/lib/openmaic/generation/slide-visual-plan").SlideVisualPlan;
+  courseVisualDirection?: string;
+  courseVisualTheme?: import("@/lib/openmaic/types/generation").CourseVisualTheme;
   id: string;
   type?: string;
   title: string;

@@ -232,9 +232,6 @@ export async function PATCH(
       };
     }, { actor: { id: requestedBy, role: 'teacher' } });
 
-    const { enqueueCourseQualityReview } = await import('@/lib/course-quality-review/job-runner');
-    await enqueueCourseQualityReview(courseId);
-
     return Response.json({
       success: true,
       classroom,

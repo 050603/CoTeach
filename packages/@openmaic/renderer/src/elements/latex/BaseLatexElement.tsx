@@ -93,15 +93,52 @@ function KatexContent({
   const [scale, setScale] = useState(1);
 
   useLayoutEffect(() => {
-    if (!innerRef.current) return;
-    const naturalW = innerRef.current.scrollWidth;
-    const naturalH = innerRef.current.scrollHeight;
-    if (naturalW > 0 && naturalH > 0) {
-      // Cap at 1: only ever shrink the formula to fit its box, never enlarge.
-      // A short formula sitting in a large frame (e.g. slide 29 的右侧推理框)
-      // would otherwise get scaled up to fill the box and render huge.
-      setScale(Math.min(width / naturalW, height / naturalH, 1));
+    const inner = innerRef.current;
+    if (!inner) return;
+    let disposed = false;
+    let frame: number | undefined;
+    const measure = () => {
+      frame = undefined;
+      if (disposed) return;
+      // scroll dimensions are untransformed: updating scale cannot resize the
+      // observed content and create a ResizeObserver feedback loop.
+      // scrollWidth/Height round to integer pixels. Keep the fractional CSS
+      // size too, so enlarging a short expression does not clip its edge.
+      const style = getComputedStyle(inner);
+      const naturalW = Math.max(inner.scrollWidth, Number.parseFloat(style.width) || 0);
+      const naturalH = Math.max(inner.scrollHeight, Number.parseFloat(style.height) || 0);
+      if (naturalW > 0 && naturalH > 0) {
+        const next = Math.min(width / naturalW, height / naturalH, 1);
+        setScale((previous) => Math.abs(previous - next) < 0.000001 ? previous : next);
+      }
+    };
+    const schedule = () => {
+      if (!disposed && frame === undefined) frame = requestAnimationFrame(measure);
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(schedule);
+    observer?.observe(inner);
+    const fonts = document.fonts;
+    if (fonts) {
+      fonts.addEventListener('loadingdone', schedule);
+      // Request the faces used by this formula before awaiting ready; otherwise
+      // ready can resolve before the browser starts loading KaTeX's fonts.
+      const faces = new Set<string>();
+      for (const node of [inner, ...inner.querySelectorAll<HTMLElement>('*')]) {
+        const style = getComputedStyle(node);
+        if (style.fontFamily && style.fontSize) {
+          faces.add(`${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`);
+        }
+      }
+      void Promise.allSettled([...faces].map((face) => fonts.load(face, inner.textContent || 'x')))
+        .then(() => fonts.ready).then(schedule, schedule);
     }
+    return () => {
+      disposed = true;
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      observer?.disconnect();
+      fonts?.removeEventListener('loadingdone', schedule);
+    };
   }, [html, width, height]);
 
   const justify = ALIGN_MAP[align];
@@ -126,6 +163,7 @@ function KatexContent({
           transformOrigin: origin,
           transform: `scale(${scale})`,
           whiteSpace: 'nowrap',
+          flexShrink: 0,
         }}
         dangerouslySetInnerHTML={{ __html: html }}
       />

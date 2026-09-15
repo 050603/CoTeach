@@ -1,0 +1,650 @@
+[
+  {
+    "id": "01-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:48:32.453511+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "额外柱状图高度过小，Y轴刻度拥挤且字号过小。关键数值仍完整出现在正文。"
+  },
+  {
+    "id": "01-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:48:32.453536+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "复核修正：播放器native LaTeX左右裁切，左侧系数1缺失、右侧J贴裁边；原响应虽含完整公式，屏幕未完整呈现。"
+  },
+  {
+    "id": "01-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:48:32.453543+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "截图无明显遮挡或溢出；核对三个给定知识点与数值均保留。"
+  },
+  {
+    "id": "02-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:48:32.453547+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "左下文本末字超过浅蓝背景容器底边；没有被裁切，也未遮住其他文字。"
+  },
+  {
+    "id": "02-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:48:32.453551+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "截图无明显遮挡或溢出；核对三个给定知识点与数值均保留。"
+  },
+  {
+    "id": "03-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:48:32.453554+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "截图无明显遮挡或溢出；核对三个给定知识点与数值均保留。"
+  },
+  {
+    "id": "03-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:52:47.133502+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "截图无明显遮挡或溢出；给定三个关键知识点保留。"
+  },
+  {
+    "id": "03-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:52:47.133527+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "截图无明显遮挡或溢出；给定三个关键知识点保留。"
+  },
+  {
+    "id": "04-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:52:47.133532+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "并联列最后“支路”超出浅色容器底边，仍在画布内可见。"
+  },
+  {
+    "id": "04-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:52:47.133536+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "截图无明显遮挡或溢出；给定三个关键知识点保留。"
+  },
+  {
+    "id": "02-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:55:01.093756+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "截图无明显遮挡或溢出；给定三个关键知识点保留。"
+  },
+  {
+    "id": "04-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:55:01.093778+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "截图无明显遮挡或溢出；给定三个关键知识点保留。"
+  },
+  {
+    "id": "05-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:55:01.093784+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "上排两个卡片的末行“胞。”和“细胞。”超过背景容器底边；无画布裁切。"
+  },
+  {
+    "id": "05-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T02:55:01.093788+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "截图无明显遮挡或溢出；给定三个关键知识点保留。"
+  },
+  {
+    "id": "05-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:41:01.562722+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "分裂次数、细胞数、染色体数变化与用途均可见，未见明显溢出遮挡。"
+  },
+  {
+    "id": "06-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:41:01.562747+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "列表顺序及重复值、集合唯一性及索引限制、应用例子全部可见。"
+  },
+  {
+    "id": "06-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:41:01.562756+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "列表与集合对比及事件/学号例子全部可见，未见明显溢出遮挡。"
+  },
+  {
+    "id": "06-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:41:01.562760+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "两列最末行落在背景容器底边之外，文字仍完整可见；三个知识点保留。"
+  },
+  {
+    "id": "07-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:41:01.562763+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "记录、按统一单位计算、同法比较节能方案三步保留，未见明显溢出遮挡。"
+  },
+  {
+    "id": "07-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:41:01.562766+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "步骤编号白字偏出圆形；第三步圆形覆盖文字起始处。主要知识内容仍可辨。"
+  },
+  {
+    "id": "07-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:41:01.562769+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "三个步骤内容完整；图中缺少步骤1到2顺序箭头，但编号和公式保留，未见明显遮挡。"
+  },
+  {
+    "id": "08-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:41:01.562772+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "连接线穿过设计实验、数据评价等标签，标签还发生不合理断行；三个正文知识点保留。"
+  },
+  {
+    "id": "08-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:42:12.077174+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "三个知识点完整可见，正文与箭头没有明显溢出遮挡。"
+  },
+  {
+    "id": "08-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:42:12.077190+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "三个知识点完整可见，正文与箭头没有明显溢出遮挡。"
+  },
+  {
+    "id": "09-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:43:46.164340+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "底部Goal说明末行超出浅色容器底边；调试三个步骤和最早错误状态知识点保留。"
+  },
+  {
+    "id": "09-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:43:46.164370+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "第二步末行state落在背景容器底边外；三个知识点仍完整可见。"
+  },
+  {
+    "id": "09-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:46:55.918261+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "三张步骤卡片末行均越出背景底边，标题顶边贴画布；三个调试知识点仍完整可读。"
+  },
+  {
+    "id": "10-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:47:11.073472+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "温室气体作用的白字第二行越过蓝色背景，落入白底不可读，能量散失速率关键表述未完整显示；第三段末行也越出背景底边。"
+  },
+  {
+    "id": "10-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:49:07.901389+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "太阳短波、地表红外、温室气体吸收再发射及升温条件三个要点可见，未见明显遮挡溢出。"
+  },
+  {
+    "id": "10-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:50:19.614216+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "中间和右侧正文的末行明显越出卡片背景底边；三个关键知识点仍完整可见。"
+  },
+  {
+    "id": "11-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:55:30.154132+00:00",
+    "phase": "no generated slide available (request timeout)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "供应商请求在两次有限重试后超时，没有成稿或截图；作为未成功交付样本计入，不归类为已观察到的排版错误。"
+  },
+  {
+    "id": "12-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:55:30.154159+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "请求积压、等待时间与容量/到达率/重试三个要点完整显示，未见明显溢出遮挡。"
+  },
+  {
+    "id": "11-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:57:36.550541+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "草→兔→鹰及草→蚱蜢方向正确，正文说明生产者、传递方向与能量逐级减少，无循环误示。"
+  },
+  {
+    "id": "12-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:57:36.550566+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "请求积压、等待时间与容量/到达率/重试三个要点完整显示，未见明显溢出遮挡。"
+  },
+  {
+    "id": "12-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:57:36.550572+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "到达率/服务率标签与箭头交叉、lambda/mu标记被下方卡片遮住；等待时间文字超出背景。关键因果和重试增加到达请求仍有其他清晰文字保留。"
+  },
+  {
+    "id": "11-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:59:21.013021+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "兔到鹰的箭头进入圆形中心并与鹰字顶部交叉；蚱蜢图标签只写蚱。正文完整解释食物关系和能量方向、逐级减少。"
+  },
+  {
+    "id": "13-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:59:21.013051+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "原始功率/数量/时长、5kWh计算、30天150kWh及照明需求相同假设均完整可见。"
+  },
+  {
+    "id": "13-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:01:55.186607+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "60W/10W、20盏、5小时、每日5kWh、每月150kWh及照明需求相同假设完整可见。"
+  },
+  {
+    "id": "13-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:01:55.186628+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "所有给定功率、时间、计算结果和条件完整可见，未见明显溢出遮挡。"
+  },
+  {
+    "id": "14-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:01:55.186634+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "54g、20cm³、密度2.7g/cm³、铝的对照与材料/误差局限完整可见。"
+  },
+  {
+    "id": "14-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:01:55.186638+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "第3步蓝色编号圆形与正文起始测字重叠，编号位置偏下；给定测量数值、密度公式与不能单独定材料的局限仍完整可辨。"
+  },
+  {
+    "id": "14-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:03:44.726015+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "质量、体积、密度计算与材料判断局限全部可见；没有明显溢出遮挡。"
+  },
+  {
+    "id": "15-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:03:44.726039+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "初值0、列表[3,1,4]、3/4/8累加步骤和不变量完整可见；标题贴上边缘且留白偏多，但未见字符裁切或遮挡。"
+  },
+  {
+    "id": "15-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:06:01.119126+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "初始列表、逐次累加3/4/8和不变量全部可见，流程纵向排列清楚。"
+  },
+  {
+    "id": "15-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:06:01.119151+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "初始状态、三步累加和不变量全部可见，未见明显遮挡溢出。"
+  },
+  {
+    "id": "16-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:06:01.119156+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "原生柱状图实际仅约7px高且数值微小，图形呈现不可读；正文完整保留12/10/14kWh、均值12、差4和不能证明因果的局限。"
+  },
+  {
+    "id": "16-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:06:01.119160+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": false,
+    "notes": "画面无明显文字碰撞或溢出，但图表未显示周一/周二/周三分类标签（DSL原始labels完整）；没有其他正文补足日期与12/10/14的对应，关键原始数据未完整可读。"
+  },
+  {
+    "id": "16-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:09:27.329180+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "下方文本卡片遮住表格最末行，左下正文末行也明显超出卡片；数据、均值差值和不能证明因果在其余正文完整保留。"
+  },
+  {
+    "id": "17-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:09:27.329206+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "20/18和20/2、90%和10%、同温光、重复实验与样本局限在正文和表格完整可见。"
+  },
+  {
+    "id": "17-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:09:27.329211+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "两组样本数/萌发数/率、同温光和结论局限全部可见，表格和文字布局清晰。"
+  },
+  {
+    "id": "17-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:09:27.329215+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "原生柱状图被压成低矮横条，Y轴数值相互挤压不可读；正文完整保留全部实验数值、控制条件与结论局限。"
+  },
+  {
+    "id": "18-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:10:07.329567+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "两组原始三次耗时、均值与输入/环境/不能泛化的限制完整可见，未见明显溢出遮挡。"
+  },
+  {
+    "id": "18-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:10:07.329591+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "表格末行明显越出背景容器，Implementation表头在单词中间断行；所有数值和结论限制仍完整可见。"
+  },
+  {
+    "id": "18-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:10:07.329597+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "左下正文最后environment行落到背景底边之外；三次观测、均值和限制均完整可读。"
+  },
+  {
+    "id": "19-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:12:07.740288+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "生物/非生物分层、生产者/消费者/分解者与阳光/水/温度分类、非食物链顺序说明均可見，未见明显溢出遮挡。"
+  },
+  {
+    "id": "19-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:16:16.589710+00:00",
+    "phase": "no generated slide available (request timeout)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "供应商请求在两次有限重试后仍超时，没有成稿或截图；计入交付失败，不能当作已观察到的排版错误。"
+  },
+  {
+    "id": "19-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:17:53.641045+00:00",
+    "phase": "no generated slide available (request timeout)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "供应商请求在两次有限重试后超时，没有成稿和截图；作为交付失败计入，不归类为可观察的排版错误。"
+  },
+  {
+    "id": "20-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:19:48.461155+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "机械/热/化学/电能分类、动能势能子类、小车/举高物体例子和非大小排序说明完整可见，无明显溢出遮挡。"
+  },
+  {
+    "id": "20-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:21:58.330325+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "四类能量、机械能子类、两个实例与非大小排序提示均完整显示；提示贴近底边但未越出，布局通过。"
+  },
+  {
+    "id": "21-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:23:49.187999+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "蓝色Test Suite区域副标题Groups of related test cases跨出背景，白字部分落入白底且被分支线穿过，suite包含相关用例分组的文字未完整显示。其余输入/操作/预期、断言和非执行因果说明可见。"
+  },
+  {
+    "id": "20-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:25:39.363015+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "能量形式四类、机械能下的动能势能、两个实例与非大小排序说明完整；节点树位置清楚，无明显遮挡。"
+  },
+  {
+    "id": "21-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:25:39.363039+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "套件包含相关用例、用例输入/操作/预期、断言和非执行因果说明均完整显示，未见明显溢出遮挡。"
+  },
+  {
+    "id": "21-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:27:19.204475+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "套件/用例/断言三个知识点和嵌套不代表执行因果的条件完整显示；采用纵向节点文字清单，无明显遮挡溢出。"
+  },
+  {
+    "id": "22-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:27:19.204496+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "120kWh、0.50元/kWh、60元、用量/单价含义与阶梯/附加费用排除条件全部可见。"
+  },
+  {
+    "id": "22-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:27:38.444785+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "给定电量、单价、费用及计算式全部显示，用量含义与未计额外收费条件完整，无明显遮挡溢出。"
+  },
+  {
+    "id": "22-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:29:30.864878+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "电费单数值、用量/价格含义、120×0.50=60与额外收费规则排除条件完整可见。"
+  },
+  {
+    "id": "23-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:30:06.074578+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "叶脉运输/支撑且非光源、叶肉光合作用、气孔交换/蒸腾及比例限制全部可见。椭圆叶片示意图的引线有交叉，但未遮挡知识文字或关键结构标记。"
+  },
+  {
+    "id": "23-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:31:42.957231+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "左上叶脉说明越框，光能来源末字被下方卡片遮住；右侧光合作用和左下比例说明也超出背景。原文字存在于DSL，但屏幕未完整呈现叶脉不是光能来源的句子。"
+  },
+  {
+    "id": "23-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:33:30.307596+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "左上、右上和下方三个标注正文均越出背景容器，下方两行明显落在容器外；知识文字仍全部可见。"
+  },
+  {
+    "id": "24-budget-1",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:33:30.307621+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "给定单行代码表示、零除保护、返回执行条件及非输入类型验证说明完整可见。代码照录了fixture的单行表示，并非有效的可直接运行Python缩进；本项只判材料保留与布局，不声称可执行性通过。"
+  },
+  {
+    "id": "24-budget-2",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:34:54.921013+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "给定函数表示、零除保护与返回条件/控制流范围全部可见，未见明显溢出遮挡。函数仍是材料中的单行文字表示，未将代码可执行性计为已验证。"
+  },
+  {
+    "id": "24-budget-3",
+    "reviewer": "Codex screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:36:48.307785+00:00",
+    "phase": "first generated slide after deterministic parsing (one model call)",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "代码和两段注释的末行均明显越出背景容器；材料中的代码表示、保护条件及控制流范围仍完整可见。未验证代码可执行性。"
+  }
+]

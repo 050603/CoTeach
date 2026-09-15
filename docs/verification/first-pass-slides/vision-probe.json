@@ -1,0 +1,19 @@
+{
+  "at": "2026-09-14T04:08:30.618Z",
+  "model": "deepseek:deepseek-v4-flash-vision-exp",
+  "configuredVision": true,
+  "logicalCalls": 1,
+  "transportRetries": 0,
+  "expected": {
+    "text": "COTEACH 731",
+    "objectsLeftToRight": [
+      "green rectangle",
+      "blue circle",
+      "red triangle"
+    ]
+  },
+  "prompt": "Read the exact text in the attached image. Then list each shape and its color, from left to right. Return JSON with text and objectsLeftToRight. Do not guess if the image cannot be accessed.",
+  "status": "failed",
+  "error": "Model not exist.",
+  "elapsedMs": 338
+}

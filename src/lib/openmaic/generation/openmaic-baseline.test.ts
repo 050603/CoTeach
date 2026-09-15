@@ -1,0 +1,196 @@
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { buildOutlinePrompt as buildUpstreamOutlinePrompt } from '@openmaic/generation';
+import type { SceneOutline } from '@openmaic/lib/types/generation';
+import {
+  adaptOutlineToOpenMaicBaseline,
+  adaptOutlineToOpenMaicWorkbenchContent,
+  buildOpenMaicBaselineOutlinePrompt,
+  generateOpenMaicBaselineContent,
+  generateOpenMaicBaselineOutlines,
+  OPENMAIC_GENERATION_BASELINE,
+} from './openmaic-baseline';
+
+const PINNED_PROMPT_HASHES = {
+  'slide-content/system.md': 'fac82e884070e71cf82ffca67fb1ee1c861e3cd90d4f9816c7085c428180aebd',
+  'slide-content/user.md': '7d7486fed0d897a85273794359cd17383d7b9f2dbca7481134a1519687368c99',
+  'slide-actions/system.md': '219e8da1eb3c854dbe6ee6fdedda1936e0092fff6c8984b9277c5c6cef2443b6',
+  'slide-actions/user.md': '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
+  'requirements-to-outlines/system.md': '813240c132acfe63007ddcf3dd764b47b5ad1d7b5005d47361ede3aa42614c65',
+  'requirements-to-outlines/user.md': '79fe5ce9a64dc63f174bd1c99dd3e4f1feb2a00e2797edc2a11abc5ac2d6f9ff',
+} as const;
+
+const outline: SceneOutline = {
+  id: 'slide-1',
+  type: 'slide',
+  title: '随机抽样',
+  description: '解释随机抽样的基本目的。',
+  keyPoints: ['减少选择偏差'],
+  order: 0,
+  knowledgePointIds: ['kp-private-id'],
+  targetDurationSec: 180,
+  timingPlan: {
+    providerId: 'test', modelId: 'test', voiceId: 'test', profileId: 'test',
+    language: 'zh-CN', speed: 1, targetDurationSec: 180,
+    targetUnits: 300, minUnits: 270, maxUnits: 330, unit: 'cjk-char',
+    contentType: 'explanation',
+  },
+  teachingBrief: {
+    schemaVersion: 1,
+    explanation: '总体中每个个体需要具有明确的被抽取机会。',
+    examples: ['使用随机数表选择样本。'],
+    conditions: ['抽样框覆盖目标总体。'],
+    evidence: [{ sourceId: 'source-1', quote: '样本来自明确界定的目标总体。' }],
+    assessmentFocus: '判断抽样过程是否存在选择偏差。',
+  },
+};
+
+describe('pinned OpenMAIC generation baseline', () => {
+  it('keeps all six one-click prompt assets byte-identical to the pinned release', async () => {
+    expect(OPENMAIC_GENERATION_BASELINE.release).toBe('v1.0.3');
+    expect(OPENMAIC_GENERATION_BASELINE.releaseCommit).toBe(
+      'e693e11a81644f84c258df73dbda378643520a62',
+    );
+    expect(OPENMAIC_GENERATION_BASELINE.version).toBe('0.3.7');
+    for (const [file, expected] of Object.entries(PINNED_PROMPT_HASHES)) {
+      const body = await readFile(path.join(
+        process.cwd(), 'packages', '@openmaic', 'generation', 'templates', file,
+      ));
+      expect(createHash('sha256').update(body).digest('hex'), file).toBe(expected);
+    }
+  });
+
+  it('keeps upstream semantic fields unchanged and strips CoTeach orchestration metadata', () => {
+    const adapted = adaptOutlineToOpenMaicBaseline(outline);
+    expect(adapted.description).toBe('解释随机抽样的基本目的。');
+    expect(adapted.keyPoints).toEqual(['减少选择偏差']);
+    expect(JSON.stringify(adapted)).not.toContain('样本来自明确界定的目标总体');
+    expect(JSON.stringify(adapted)).not.toContain('检测重点');
+    expect(adapted).not.toHaveProperty('knowledgePointIds');
+    expect(adapted).not.toHaveProperty('timingPlan');
+    expect(adaptOutlineToOpenMaicBaseline({
+      ...outline,
+      description: '页面目的。\n资源说明：来自资源包的事实。\n掌握边界：学生能够解释条件。',
+    }).description).toBe('页面目的。\n资源说明：来自资源包的事实。\n掌握边界：学生能够解释条件。');
+    expect(adaptOutlineToOpenMaicBaseline({
+      ...outline,
+      keyPoints: ['相同事实', '相同事实'],
+    }).keyPoints).toEqual(['相同事实', '相同事实']);
+  });
+
+  it('builds the same one-click outline prompt as the upstream package', () => {
+    const requirements = {
+      requirement: '为初中生讲解随机抽样',
+      userNickname: 'Learner',
+      generationMode: 'deep-interaction' as const,
+      teachingSourceContext: 'CoTeach-only source',
+    };
+    const context = {
+      pdfText: '抽样资料原文',
+      imageGenerationEnabled: true,
+      researchContext: '已核验研究资料',
+    };
+    expect(buildOpenMaicBaselineOutlinePrompt(requirements, context)).toEqual(
+      buildUpstreamOutlinePrompt(
+        { requirement: requirements.requirement, userNickname: requirements.userNickname },
+        context,
+      ),
+    );
+  });
+
+  it('returns the upstream outline without manufacturing a page-level quiz', async () => {
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({
+      languageDirective: '使用中文',
+      outlines: [{
+        id: 'official-page', type: 'slide', title: '随机抽样',
+        description: '解释随机抽样。', keyPoints: ['随机性'], order: 0,
+      }],
+    }));
+    const result = await generateOpenMaicBaselineOutlines(
+      { requirement: '讲解随机抽样' },
+      undefined,
+      undefined,
+      ai,
+    );
+    expect(result.success).toBe(true);
+    expect(result.data?.outlines.map((item) => item.type)).toEqual(['slide']);
+    expect(ai.mock.calls[0]?.[0]).toContain('# Scene Outline Generator');
+  });
+
+  it('uses the official slide prompt without local visual or timing policy blocks', async () => {
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [{
+      type: 'text', left: 60, top: 60, width: 800, height: 80,
+      content: '<p><span style="font-size:32px">随机抽样</span></p>',
+    }] }));
+    const result = await generateOpenMaicBaselineContent(outline, ai);
+    expect(result && 'elements' in result && result.elements).toHaveLength(1);
+    expect(ai).toHaveBeenCalledOnce();
+    const [system, user] = ai.mock.calls[0];
+    expect(system).toContain('# Slide Content Generator');
+    expect(user).not.toContain('使用随机数表选择样本');
+    expect(user).not.toContain('样本来自明确界定的目标总体');
+    expect(`${system}\n${user}`).not.toContain('Semantic page and narration budget');
+    expect(`${system}\n${user}`).not.toContain('Course visual system');
+    expect(`${system}\n${user}`).not.toContain('spatial budget');
+    expect(`${system}\n${user}`).not.toContain('kp-private-id');
+  });
+
+  it('adds only the measured website reference profile when production opts in', async () => {
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [{
+      type: 'text', left: 60, top: 60, width: 800, height: 80,
+      content: '<p><span style="font-size:32px">随机抽样</span></p>',
+    }] }));
+    await generateOpenMaicBaselineContent(outline, ai, {
+      websiteReferenceContext: {
+        courseTitle: '统计入门',
+        slideTitles: ['随机抽样', '抽样误差'],
+      },
+    });
+
+    const [system, user] = ai.mock.calls[0];
+    expect(system).toContain('# Slide Content Generator');
+    expect(system).toContain('OpenMAIC website course-deck reference profile');
+    expect(system).toContain('#1E3A8A/#1E40AF');
+    expect(system).toContain('Never use a table merely as a grid');
+    expect(user).toContain('Course title: 统计入门');
+    expect(user).toContain('随机抽样 | 抽样误差');
+    expect(`${system}\n${user}`).not.toContain('kp-private-id');
+    expect(`${system}\n${user}`).not.toContain('targetDurationSec');
+    expect(`${system}\n${user}`).not.toContain('spatial budget');
+  });
+
+  it('keeps stale local visual directions out of the official first-draft boundary', async () => {
+    const adapted = adaptOutlineToOpenMaicWorkbenchContent({
+      ...outline,
+      generationPurpose: 'knowledge-teaching',
+      courseVisualDirection: '暖白底色、墨绿主色、珊瑚色强调，以抽样路径为图形母题。',
+    });
+    expect(adapted.description).toBe(outline.description);
+    expect(adapted.description).not.toContain('暖白底色、墨绿主色、珊瑚色强调');
+    expect(adapted.description).not.toContain('110–180');
+    expect(adapted.description).not.toContain('18px');
+    expect(adaptOutlineToOpenMaicBaseline({
+      ...outline,
+      generationPurpose: 'knowledge-teaching',
+    }).description).toBe(outline.description);
+
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [{
+      type: 'text', left: 60, top: 60, width: 800, height: 80,
+      content: '<p><span style="font-size:32px">随机抽样</span></p>',
+    }] }));
+    const generated = await generateOpenMaicBaselineContent({
+      ...outline,
+      generationPurpose: 'knowledge-teaching',
+      courseVisualDirection: '暖白底色、墨绿主色、珊瑚色强调，以抽样路径为图形母题。',
+    }, ai);
+    expect(ai.mock.calls[0]?.[1]).not.toContain('Course-wide visual theme contract');
+    expect(ai.mock.calls[0]?.[1]).not.toContain('#5B9BD5');
+    expect(ai.mock.calls[0]?.[1]).not.toContain('#4472C4');
+    expect(ai.mock.calls[0]?.[1]).not.toContain('暖白底色、墨绿主色、珊瑚色强调');
+    expect(ai.mock.calls[0]?.[1]).not.toContain('visible Chinese characters');
+    expect(generated && 'elements' in generated ? generated.background : undefined).toBeUndefined();
+    expect(generated && 'elements' in generated ? generated.theme : undefined).toBeUndefined();
+  });
+});

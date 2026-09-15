@@ -69,7 +69,7 @@ describe('current OpenMAIC generation baseline parity', () => {
       },
       async (_system, user) => {
         capturedPrompt = user;
-        return '[]';
+        return JSON.stringify([{ type: 'text', content: '点击开始查看结果。' }]);
       },
     );
 
@@ -91,7 +91,6 @@ describe('current OpenMAIC generation baseline parity', () => {
           type: 'text', left: 100, top: 100, width: 500, height: 80,
           content: '变量变化与结果之间的关系', defaultFontName: null, defaultColor: null,
         },
-        { type: 'unknown-element', left: 0, top: 0, width: 10, height: 10 },
       ],
     };
     const repaired = { elements: first.elements.slice(0, 2) };
@@ -115,6 +114,6 @@ describe('current OpenMAIC generation baseline parity', () => {
       points: ['', ''],
       style: 'solid',
     });
-    expect(ai).toHaveBeenCalledTimes(2);
+    expect(ai).toHaveBeenCalledOnce();
   });
 });

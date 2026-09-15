@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   assessTtsDurationError,
+  countSpeechUnits,
+  countLatinArticulationUnits,
+  TTS_TIMING_ALGORITHM_VERSION,
+  formatTtsParagraphBudgets,
   buildTtsTimingPlan,
   calculateTtsContentBudget,
   createTtsVoiceTimingCalibration,
@@ -13,6 +17,9 @@ import {
 } from './tts-timing';
 
 describe('TTS timing model', () => {
+  it('preserves English word boundaries separated by Chinese text', () => {
+    expect(countSpeechUnits('hello世界world')).toMatchObject({ cjkChars: 2, latinWords: 2, otherChars: 0 });
+  });
   it('resolves a model-specific static profile', () => {
     const qwen = getTtsTimingProfile('qwen-tts', 'qwen3-tts-flash');
     const azure = getTtsTimingProfile('azure-tts', '');
@@ -237,4 +244,102 @@ describe('TTS timing model', () => {
       1,
     );
   });
+  it('counts complete English words once and excludes spaces and decimal punctuation', () => {
+    expect(countSpeechUnits("Hello world, it's 3.14."))
+      .toEqual({ cjkChars: 0, latinWords: 4, otherChars: 0, punctuation: 2 });
+    expect(countSpeechUnits('你好 OpenAI 2026！'))
+      .toEqual({ cjkChars: 2, latinWords: 2, otherChars: 0, punctuation: 1 });
+  });
+
+  it('isolates language, speed and algorithm version in runtime calibration', () => {
+    const calibration = createTtsVoiceTimingCalibration({
+      providerId: 'isolation-test', modelId: 'm', voiceId: 'v', language: 'en-US',
+      speed: 1.5, text: 'A measured English voice sample.', measuredDurationSec: 3,
+    });
+    registerTtsVoiceTimingCalibration(calibration);
+    expect(getTtsTimingProfile('isolation-test', 'm', 'v', 'en-US', 1.5).source).toBe('configured');
+    expect(getTtsTimingProfile('isolation-test', 'm', 'v', 'zh-CN', 1.5).source).toBe('seed');
+    expect(getTtsTimingProfile('isolation-test', 'm', 'v', 'en-US', 1).source).toBe('seed');
+    registerTtsVoiceTimingCalibration({ ...calibration, voiceId: 'old', algorithmVersion: undefined });
+    expect(getTtsTimingProfile('isolation-test', 'm', 'old', 'en-US', 1.5).source).toBe('seed');
+    expect(getTtsCalibrationKey(calibration)).not.toBe(getTtsCalibrationKey({ ...calibration, algorithmVersion: undefined }));
+    expect(estimateSpeechDurationSec('A measured English voice sample.', {
+      providerId: 'isolation-test', modelId: 'm', voiceId: 'v', language: 'en-US', speed: 1.5,
+    })).toBeCloseTo(3, 1);
+  });
+
+  it('preserves narration seconds and speech units across all first-draft paragraphs', () => {
+    const plan = buildTtsTimingPlan({ targetDurationSec: 57, feedbackSec: 13, language: 'en-US' });
+    expect(plan.algorithmVersion).toBe(TTS_TIMING_ALGORITHM_VERSION);
+    expect(plan.paragraphBudgets!.reduce((total, part) => total + part.targetDurationSec, 0)).toBe(57);
+    expect(plan.paragraphBudgets!.reduce((total, part) => total + part.targetUnits, 0)).toBe(plan.targetUnits);
+    expect(plan.paragraphBudgets!.find((part) => part.role === 'feedback')!.targetDurationSec).toBe(13);
+    expect(formatTtsParagraphBudgets(plan)).toContain('反馈：13 秒');
+    expect(formatTtsParagraphBudgets(plan)).toContain('不要求各段分别落在±10%内');
+  });
+
+  it('uses articulation length for technical words and never counts CJK twice', () => {
+    expect(countLatinArticulationUnits('observation measurement information'))
+      .toBeGreaterThan(countLatinArticulationUnits('see this leaf'));
+    expect(countLatinArticulationUnits('这是中文。')).toBe(0);
+    expect(countLatinArticulationUnits('API')).toBe(2);
+    expect(countLatinArticulationUnits('3.14')).toBeGreaterThan(countLatinArticulationUnits('3'));
+  });
+
+  it('fits independent varied-length calibration samples with nonnegative timing components', () => {
+    let aggregate: ReturnType<typeof createTtsVoiceTimingCalibration> | undefined;
+    for (const [chars, pauses] of [[2, 1], [6, 2], [12, 1], [24, 4], [48, 3], [96, 8]]) {
+      const sample = createTtsVoiceTimingCalibration({
+        providerId: 'linear-fit-test', modelId: 'm', voiceId: 'v',
+        text: '学'.repeat(chars) + '。'.repeat(pauses),
+        measuredDurationSec: 0.3 + chars * 0.2 + pauses * 0.15,
+      });
+      aggregate = mergeTtsVoiceTimingCalibrations(aggregate, sample);
+    }
+    const profile = registerTtsVoiceTimingCalibration(aggregate!);
+    expect(aggregate!.rateModel).toBe('relative-linear-v1');
+    expect(profile.fixedOverheadSec).toBeGreaterThanOrEqual(0);
+    expect(profile.punctuationPauseSec).toBeGreaterThanOrEqual(0);
+    const estimated = estimateSpeechDurationSec('学'.repeat(15) + '。'.repeat(5), { profile });
+    expect(Math.abs(estimated - 4.05)).toBeLessThan(0.4);
+  });
+
+  it('loads independent deployed-voice calibration only for its complete identity', () => {
+    expect(getTtsTimingProfile('qwen-tts', 'qwen3-tts-flash', 'Ethan', 'en-US', 1).source).toBe('configured');
+    expect(getTtsTimingProfile('qwen-tts', 'qwen3-tts-flash', 'Ethan', 'de-DE', 1).source).toBe('seed');
+    expect(getTtsTimingProfile('qwen-tts', 'qwen3-tts-flash', 'Ethan', 'en-US', 1.2).source).toBe('seed');
+  });
+
+  it('keeps an unusually long calibration from dominating ordinary short narration', () => {
+    let aggregate: ReturnType<typeof createTtsVoiceTimingCalibration> | undefined;
+    for (const [chars, duration] of [[10, 2], [20, 4], [30, 6], [40, 8], [50, 10], [1000, 300]]) {
+      aggregate = mergeTtsVoiceTimingCalibrations(aggregate, createTtsVoiceTimingCalibration({
+        providerId: 'relative-fit-test', text: '学'.repeat(chars), measuredDurationSec: duration,
+      }));
+    }
+    const profile = registerTtsVoiceTimingCalibration(aggregate!);
+    expect(estimateSpeechDurationSec('学'.repeat(30), { profile })).toBeLessThan(6.6);
+  });
+
+  it('rejects version-three calibration for the new relative-error model', () => {
+    const sample = createTtsVoiceTimingCalibration({ providerId: 'prior-fit-version', text: '学'.repeat(60), measuredDurationSec: 5 });
+    expect(registerTtsVoiceTimingCalibration({ ...sample, algorithmVersion: 3 }).source).toBe('seed');
+    expect(sample.algorithmVersion).toBe(4);
+  });
+
+  it('defines mixed budgets with the locked profile equivalent-unit ratio and inverts both languages', () => {
+    const profile = getTtsTimingProfile('qwen-tts', 'qwen3-tts-flash', 'Ethan', 'mixed', 1);
+    const text = '学'.repeat(20) + ' one two three';
+    const equivalent = 20 + countLatinArticulationUnits(text) * profile.cjkCharsPerMinute / profile.latinWordsPerMinute;
+    const target = (profile.fixedOverheadSec ?? 0) + equivalent * 60 / profile.cjkCharsPerMinute;
+    const budget = calculateTtsContentBudget(target, { profile, language: 'mixed', punctuationRatio: 0 });
+    expect(budget.unit).toBe('mixed-unit');
+    expect(budget.targetUnits).toBe(Math.round(equivalent));
+    expect(estimateSpeechDurationSec(text, { profile })).toBeCloseTo(target, 1);
+    const plan = buildTtsTimingPlan({ targetDurationSec: 60, providerId: 'qwen-tts', modelId: 'qwen3-tts-flash', voiceId: 'Ethan', language: 'mixed' });
+    expect(plan.latinReferenceWordCjkUnits).toBe(budget.latinReferenceWordCjkUnits);
+    expect(formatTtsParagraphBudgets(plan)).toContain('中文等价单位');
+    expect(formatTtsParagraphBudgets(plan)).toContain(plan.latinReferenceWordCjkUnits!.toFixed(3));
+  });
+
 });

@@ -8,49 +8,9 @@
 
 import { db } from '@openmaic/lib/utils/database';
 import { createLogger } from '@openmaic/lib/logger';
+import { hasWavHeader, normalizePlayableWav } from '@openmaic/lib/audio/wav-container';
 
 const log = createLogger('AudioPlayer');
-
-function bytesToAscii(bytes: Uint8Array, offset: number, length: number): string {
-  if (offset < 0 || offset + length > bytes.byteLength) return '';
-  let value = '';
-  for (let i = 0; i < length; i++) value += String.fromCharCode(bytes[offset + i]);
-  return value;
-}
-
-function normalizePlayableWav(audio: Uint8Array): Uint8Array {
-  if (audio.byteLength < 44) return audio;
-  if (bytesToAscii(audio, 0, 4) !== 'RIFF' || bytesToAscii(audio, 8, 4) !== 'WAVE') {
-    return audio;
-  }
-
-  const normalized = new Uint8Array(audio);
-  const view = new DataView(normalized.buffer, normalized.byteOffset, normalized.byteLength);
-  view.setUint32(4, normalized.byteLength - 8, true);
-
-  let offset = 12;
-  while (offset + 8 <= normalized.byteLength) {
-    const chunkId = bytesToAscii(normalized, offset, 4);
-    const chunkSizeOffset = offset + 4;
-    const chunkDataOffset = offset + 8;
-    const chunkSize = view.getUint32(chunkSizeOffset, true);
-
-    if (chunkId === 'data') {
-      view.setUint32(chunkSizeOffset, normalized.byteLength - chunkDataOffset, true);
-      break;
-    }
-
-    const nextOffset = chunkDataOffset + chunkSize + (chunkSize % 2);
-    if (nextOffset <= offset || nextOffset > normalized.byteLength) break;
-    offset = nextOffset;
-  }
-
-  return normalized;
-}
-
-function hasWavHeader(bytes: Uint8Array): boolean {
-  return bytesToAscii(bytes, 0, 4) === 'RIFF' && bytesToAscii(bytes, 8, 4) === 'WAVE';
-}
 
 function isWavAudio(blob: Blob, format?: string): boolean {
   const lowerFormat = format?.toLowerCase();

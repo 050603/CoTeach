@@ -36,6 +36,10 @@ export type QuickClassroomGenerationSnapshot = {
     teacherClassroomId?: string;
     qualityReport?: { score?: number; summary?: string };
   } | null;
+  preview?: {
+    classroomId: string;
+    scenesCount: number;
+  } | null;
   requestPreview?: {
     courseTitle?: string;
     sceneOutlines: QuickClassroomScenePreview[];

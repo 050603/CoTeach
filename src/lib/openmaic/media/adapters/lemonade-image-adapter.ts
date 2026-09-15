@@ -4,6 +4,7 @@
  * Lemonade exposes OpenAI-compatible image generation at /v1/images/generations.
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import type {
   ImageGenerationConfig,
   ImageGenerationOptions,
@@ -56,7 +57,7 @@ export async function generateWithLemonadeImage(
   const width = options.width || 1024;
   const height = options.height || 1024;
 
-  const response = await fetch(`${baseUrl}/images/generations`, {
+  const response = await fetchMediaRequest(`${baseUrl}/images/generations`, {
     method: 'POST',
     signal: options.signal,
     headers: {
@@ -72,18 +73,11 @@ export async function generateWithLemonadeImage(
     }),
   });
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => response.statusText);
-    throw Object.assign(
-      new Error(`Lemonade image generation failed (${response.status}): ${text}`),
-      { statusCode: response.status },
-    );
-  }
 
   const data = await response.json();
   const imageData = data.data?.[0];
   if (!imageData?.url && !imageData?.b64_json) {
-    throw new Error('Lemonade returned empty image response');
+    throw mediaGenerationFailure('Lemonade returned empty image response');
   }
 
   return {

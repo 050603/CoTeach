@@ -10,12 +10,20 @@ upstream openpbl_ws {
 
 # A whole classroom commonly shares one campus NAT address. Application-level
 # limits key authenticated writes by user and course; this edge limit is only
-# a broad abuse ceiling and must leave room for normal class-wide bursts.
-limit_req_zone $binary_remote_addr zone=general:10m rate=120r/s;
+# a broad abuse ceiling. Leave room for 40 browsers fetching pages, profiles,
+# course data and Next.js navigation prefetches together (up to 30 per browser).
+limit_req_zone $binary_remote_addr zone=general:10m rate=300r/s;
 limit_req_zone $binary_remote_addr zone=uploads:10m rate=10r/s;
 limit_req_zone $binary_remote_addr zone=projection_reads:10m rate=300r/s;
 limit_req_zone $binary_remote_addr zone=media_reads:10m rate=300r/s;
-limit_conn_zone $binary_remote_addr zone=per_ip:10m;
+# HTTP/2 counts each concurrent resource request as a connection. Forty cold
+# browsers must be able to fetch their JS/CSS/fonts without consuming the
+# shared campus ceiling for application requests. Empty keys are not counted.
+map $uri $application_connection_key {
+    default $binary_remote_addr;
+    ~^/(_next/static|brand)/ "";
+}
+limit_conn_zone $application_connection_key zone=per_ip_application:10m;
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -112,8 +120,8 @@ server {
     proxy_set_header X-Request-Id $request_id;
     proxy_connect_timeout 10s;
     # One classroom can share a campus NAT address. Keep a bounded ceiling,
-    # but do not reject normal connection pools from 30 students.
-    limit_conn per_ip 200;
+    # with static bundles accounted for separately from application requests.
+    limit_conn per_ip_application 200;
 
     location = /api/metrics { return 404; }
     location = /api/health/ready { return 404; }
@@ -129,7 +137,7 @@ server {
     }
 
     location /ws {
-        limit_conn per_ip 150;
+        limit_conn per_ip_application 150;
         proxy_pass http://openpbl_ws;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -139,7 +147,7 @@ server {
     }
 
     location ~ ^/api/courses/[^/]+/actions$ {
-        limit_req zone=general burst=240 nodelay;
+        limit_req zone=general burst=1200 nodelay;
         proxy_pass http://openpbl_app;
     }
 
@@ -150,7 +158,7 @@ server {
     }
 
     location ~* ^/api/(.*/stream|openmaic/chat|chat/.*)$ {
-        limit_req zone=general burst=240 nodelay;
+        limit_req zone=general burst=1200 nodelay;
         proxy_pass http://openpbl_app;
         proxy_buffering off;
         proxy_cache off;
@@ -199,7 +207,7 @@ server {
     }
 
     location / {
-        limit_req zone=general burst=240 nodelay;
+        limit_req zone=general burst=1200 nodelay;
         proxy_pass http://openpbl_app;
         proxy_read_timeout 60s;
     }

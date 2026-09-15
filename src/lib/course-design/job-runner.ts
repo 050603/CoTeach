@@ -10,7 +10,6 @@ import { buildCourseGenerationInput } from "@/lib/teacher/course-generation-inpu
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import { generateKnowledgeStructureOnce } from "@/lib/knowledge-structure-generation";
 import { resourcePackageTeachingPoints } from "./resource-package-knowledge";
-import { normalizeTeachingBrief } from "@/lib/openmaic/generation/teaching-brief";
 import { assessKnowledgeGraphQuality } from "@/lib/knowledge-graph-quality";
 import { deriveCourseEntryPolicy } from "@/lib/course-entry-policy";
 import {
@@ -33,10 +32,13 @@ import {
   type PersistedCourseGenerationRequest,
 } from "@/lib/course-generation/job-runner";
 import type { SceneOutline } from "@/lib/openmaic/types/generation";
-import { generateSceneOutlinesFromRequirements } from "@/lib/openmaic/generation/outline-generator";
+import { generateOpenMaicBaselineOutlines } from "@/lib/openmaic/generation/openmaic-baseline";
+import { ZH_CN_COURSE_LANGUAGE_DIRECTIVE } from "@/lib/openmaic/generation/course-language";
+import { findServerDefaultModelString } from "@/lib/openmaic/server/provider-config";
+import { resolveModel } from "@/lib/openmaic/server/resolve-model";
+import { createCourseGenerationAiCall } from "@/lib/openmaic/server/course-generation-ai-call";
 import type {
   CourseGenerationMode,
-  UserRequirements,
 } from "@/lib/openmaic/types/generation";
 import {
   DEFAULT_PBL_EVIDENCE_REQUIREMENTS,
@@ -56,7 +58,10 @@ import {
 } from "@/lib/course-design/failure-policy";
 import { editCourseDesignStage } from "@/lib/course-design/stage-editor";
 import { createLogger } from "@openmaic/lib/logger";
-import { DURABLE_GENERATION_TRANSIENT_RETRIES } from "@/lib/llm/request-policy";
+import {
+  DURABLE_GENERATION_TRANSIENT_RETRIES,
+  resolveLlmRequestTimeoutMs,
+} from "@/lib/llm/request-policy";
 import {
   buildNewSystemAiTimingPlan,
   buildNewSystemAiTeachingOutline,
@@ -96,6 +101,8 @@ export type QuickDesignReviewKind = "knowledge" | "outline";
 
 export type QuickDesignRequest = {
   courseId: string;
+  /** Exact teacher-selected model captured when this durable task is submitted. */
+  generationModelString?: string;
   /** Persisted at submission so a worker restart cannot cross generation modes. */
   systemMode?: "new";
   /** Course-page planning strategy selected by the teacher. */
@@ -1059,6 +1066,10 @@ export async function generateProjectDesign(
   throw new Error(`项目成果编辑 Agent 无法修复硬规则问题：${latestQuality.issues.join("；") || latestAuditIssues.join("；")}`);
 }
 
+function uniqueStrings(values: readonly string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
 export function normalizeNewSystemAiOutlines(
   outlines: readonly SceneOutline[],
   input: {
@@ -1066,35 +1077,42 @@ export function normalizeNewSystemAiOutlines(
     knowledgePointIds: readonly string[];
     knowledgePoints?: readonly KnowledgePoint[];
     knowledgeGraph?: KnowledgeGraph;
+    courseLanguageDirective?: string;
   },
 ): Array<SceneOutline & OpenMaicSceneOutlineSnapshot> {
   if (outlines.length === 0) return [];
-  const source = outlines.length === 1
-    ? [
-        outlines[0]!,
-        {
-          ...outlines[0]!,
-          id: `${outlines[0]!.id || "new-ai-learning"}-check`,
-          title: `${outlines[0]!.title} · 学习检测`,
-          type: "quiz" as const,
-          description: "检查学生是否掌握本阶段核心知识。",
-        },
-      ]
-    : [...outlines];
+  // OpenMAIC may include quizzes in its generic one-click outline. CoTeach's
+  // external contract is section-level assessment, so retain only upstream
+  // teaching pages here and append exactly one quiz after section grouping.
+  const source = outlines.filter((outline) => outline.type !== "quiz");
+  if (source.length === 0) return [];
   const targetDurationSec = Math.max(
     60,
     Math.round(input.totalDurationSec / source.length),
   );
+  const allowedIds = new Set(input.knowledgePointIds);
+  const knowledgePoints = input.knowledgePoints?.length
+    ? input.knowledgePoints
+    : input.knowledgePointIds.map((id) => ({ id, name: id, description: "" }));
+  const semanticText = (outline: SceneOutline) =>
+    `${outline.title}\n${outline.description}\n${outline.keyPoints.join("\n")}`.toLocaleLowerCase();
   const normalized = source.map((outline, index) => {
-    let type = outline.type === "pbl" ? "interactive" : outline.type;
+    const hasCompleteWidget = outline.type === "interactive"
+      && Boolean(outline.widgetType && outline.widgetOutline);
+    let type: SceneOutline["type"] = hasCompleteWidget ? "interactive" : "slide";
     if (index === 0 && !source.some((item) => item.type === "slide")) {
       type = "slide";
     }
-    const knowledgePointIds = outline.knowledgePointIds?.filter((id) =>
-      input.knowledgePointIds.includes(id)
-    );
+    const explicitIds = outline.knowledgePointIds?.filter((id) => allowedIds.has(id)) ?? [];
+    const text = semanticText(outline);
+    const inferredIds = knowledgePoints
+      .filter((point) => point.name.trim() && text.includes(point.name.trim().toLocaleLowerCase()))
+      .map((point) => point.id);
     return {
       ...outline,
+      ...(input.courseLanguageDirective?.trim()
+        ? { courseLanguageDirective: input.courseLanguageDirective.trim() }
+        : {}),
       id: outline.id?.trim() || `new-ai-learning-${index + 1}`,
       type,
       order: index,
@@ -1109,11 +1127,7 @@ export function normalizeNewSystemAiOutlines(
         : type === "interactive"
           ? "interactive-practice"
           : "other",
-      knowledgePointIds: knowledgePointIds?.length
-        ? knowledgePointIds
-        : input.knowledgePointIds.length
-          ? [input.knowledgePointIds[index % input.knowledgePointIds.length]!]
-          : [],
+      knowledgePointIds: uniqueStrings([...explicitIds, ...inferredIds]),
       targetDurationSec: Number.isFinite(outline.targetDurationSec ?? outline.estimatedDuration)
         && (outline.targetDurationSec ?? outline.estimatedDuration ?? 0) > 0
         ? outline.targetDurationSec ?? outline.estimatedDuration : targetDurationSec,
@@ -1129,13 +1143,77 @@ export function normalizeNewSystemAiOutlines(
           : [],
     } as SceneOutline & OpenMaicSceneOutlineSnapshot;
   });
+  // Upstream intentionally does not know CoTeach knowledge-point IDs. Attach
+  // those IDs after generation without changing the upstream semantic fields,
+  // preferring title/content matches and otherwise distributing them in order.
+  const covered = new Set(normalized.flatMap((outline) => outline.knowledgePointIds ?? []));
+  knowledgePoints.forEach((point, pointIndex) => {
+    if (covered.has(point.id)) return;
+    const name = point.name.trim().toLocaleLowerCase();
+    const matchedIndex = name
+      ? normalized.findIndex((outline) => semanticText(outline).includes(name))
+      : -1;
+    const fallbackIndex = Math.min(
+      normalized.length - 1,
+      Math.floor((pointIndex * normalized.length) / Math.max(1, knowledgePoints.length)),
+    );
+    const target = normalized[matchedIndex >= 0 ? matchedIndex : fallbackIndex]!;
+    target.knowledgePointIds = uniqueStrings([...(target.knowledgePointIds ?? []), point.id]);
+    covered.add(point.id);
+  });
+  normalized.forEach((outline, index) => {
+    if (outline.knowledgePointIds?.length || knowledgePoints.length === 0) return;
+    const pointIndex = Math.min(
+      knowledgePoints.length - 1,
+      Math.floor((index * knowledgePoints.length) / Math.max(1, normalized.length)),
+    );
+    outline.knowledgePointIds = [knowledgePoints[pointIndex]!.id];
+  });
+  // Resource material already entered the official OpenMAIC outline generator
+  // through its native pdfText/material-context argument. Do not rewrite the
+  // generated description or keyPoints here: even well-intended fact packing
+  // changes the downstream page composition and was the direct cause of
+  // repetitive, table-heavy slides. CoTeach only adds orchestration metadata
+  // and knowledge-point IDs after the official semantic outline is complete.
   return organizeKnowledgeLectureOutlines(normalized, {
     totalDurationSec: input.totalDurationSec,
-    knowledgePoints: input.knowledgePoints?.length
-      ? input.knowledgePoints
-      : input.knowledgePointIds.map((id) => ({ id, name: id, description: "" })),
+    knowledgePoints,
     knowledgeGraph: input.knowledgeGraph,
   }).outlines;
+}
+
+export function buildOpenMaicKnowledgeLectureRequirement(
+  course: Course,
+  content: CourseContent,
+  request: QuickDesignRequest,
+  aiDurationMin: number,
+): string {
+  const sectionMap = new Map<string, string[]>();
+  for (const point of content.knowledgePoints) {
+    const section = point.groupName?.trim() || "核心知识";
+    sectionMap.set(section, [...(sectionMap.get(section) ?? []), point.name]);
+  }
+  const sections = [...sectionMap.entries()].map(([title, points], index) =>
+    `${index + 1}. ${title}：${points.join("、")}`,
+  );
+  const quizReserveMinutes = [...sectionMap.values()].reduce(
+    (sum, points) => sum + (points.length >= 3 ? 4 : 3),
+    0,
+  );
+  const minimumLectureMinutes = Math.max(2, sectionMap.size * 1.5);
+  const lectureMinutes = Math.max(
+    1,
+    Math.round(Math.max(minimumLectureMinutes, aiDurationMin - quizReserveMinutes)),
+  );
+  return [
+    `请为《${course.name}》生成面向${course.grade}学生的知识讲授课程大纲。`,
+    `学科：${course.subject}；AI 授知阶段总时长约 ${aiDurationMin} 分钟，其中本次需要规划的 PPT 讲授与必要互动约 ${lectureMinutes} 分钟，其余时间由系统按小节安排简答检测。`,
+    `课程目标：${(course.learningObjectives ?? []).join("；") || course.summary}。`,
+    `教师补充要求：${teacherGenerationBrief(request) || "无"}。`,
+    sections.length ? `内容按以下小节组织：\n${sections.join("\n")}` : "",
+    "以教师提供的课程资料作为事实依据。",
+    "本步骤只规划知识讲授 slide，以及确有必要且配置完整的通用 interactive；不要生成 quiz 或 PBL。将紧密相关的定义、关系、条件、例证和结论组织成信息充分的一页，不要把一个完整概念机械拆成多张稀疏页面。每个 slide 的 keyPoints 应包含 4–6 个互补且可见的信息单元，例如核心定义、作用机制、成立条件、具体例证、常见误区或结论；不要用泛化口号凑数，也不要为排版而默认添加 Table。",
+  ].filter(Boolean).join("\n\n");
 }
 
 async function generateNewSystemAiOutlines(
@@ -1154,62 +1232,28 @@ async function generateNewSystemAiOutlines(
     (sum, allocation) => sum + allocation.durationMin,
     0,
   );
-  const knowledgePointBudgets = aiAllocations.map((allocation) => ({
-    knowledgePointId: allocation.knowledgePointIds?.[0],
-    name: allocation.title,
-    durationMin: allocation.durationMin,
-  }));
-  const requirements: UserRequirements = {
-    teachingSourceContext: buildCourseTeachingSourceContext(request.resourcePackage, teacherGenerationBrief(request), request.referenceMaterials ?? []),
-    requirement: [
-      `课程名称：${course.name}`,
-      `学科与对象：${course.subject}，${course.grade}`,
-      `教师要求：${teacherGenerationBrief(request)}`,
-      formatGenerationReferenceContext(request.referenceMaterials ?? []),
-      resourcePackageTeachingContext(request.resourcePackage),
-      `课程说明：${course.summary}`,
-      `学习目标：${JSON.stringify(course.learningObjectives ?? [])}`,
-      `本次只编写第二阶段“知识讲授”的学生学习页面。${content.stagePlan ? "教师已按资源包教案" : "AI 已在整课的 20%–40% 范围内"}锁定总时长为 ${aiDurationMin} 分钟。这是完整预算，所有讲解、互动、节末小测与基础讲评都必须包含在内，不能追加时长。内容多时合并关联小节、减少重复例证与非核心拓展，不得遗漏教师指定知识。`,
-      `逐知识点时间预算：${JSON.stringify(knowledgePointBudgets)}。页面规划必须整体服从这些预算；可以跨页讲解同一知识点或在一页整合多个紧密关联知识点，但不得遗漏、重复计时或用低价值页面填满时长。`,
-      `完整知识内容与目标映射：${JSON.stringify(content.knowledgePoints)}。每个知识点必须在至少一个非测验页面中明确讲授并标记 knowledgePointIds，不能只在检测中出现；禁止给所有页面机械挂全量知识点。`,
-      "依据知识图谱的先决关系和教案主题形成连贯小节。每小节围绕一个可观察学习目标，按问题情境、核心解释、具体例证、辨析或操作、迁移检查逐步展开；同一概念只在一处完整定义，后续用简短回顾或新情境，不重复讲相同定义和例子。",
-      "每页 description 必须说明该页要达成的理解、具体讲解内容和例证（含适用条件与常见误解），keyPoints 写可教的事实或判断步骤；练习和小测须对应本节已讲知识与学习目标，避免仅复述术语、空泛互动、无依据事实以及先测未教。",
-      '每页同步返回 teachingBrief:{schemaVersion:1,explanation:"核心解释与推理",examples:["具体例证；假设需明示"],conditions:["适用条件与易错边界"],evidence:[{sourceId:"输入资料id",quote:"实际原文短引"}],assessmentFocus:"需要学生证明什么"}。这是PPT、讲稿、互动和题目共同的教学依据；没有来源不要伪造引文，不能只列主题。父知识组只用于分节，子知识点才是可教可测目标，不重复计时。',
-      request.managedRecoveryFeedback ? `必须修正上次检查发现的问题：${request.managedRecoveryFeedback}` : "",
-      request.generationMode === "deep-interaction"
-        ? "采用深度交互策略：优先安排有真实操作价值的非评分互动，但不得按固定页数机械插入或用点击查看详情凑数。"
-        : "采用普通策略：根据教学必要性动态选择讲解、互动与检测；互动可以为零或少量，不得按固定页数机械插入。",
-      "把相互关联的知识点组织成若干小节。每小节先完成讲解与必要互动，再以 2—3 道简短主观题作为节末小测；学生只需用关键词和一两句话作答，整组预计 2—5 分钟，题目必须标注对应知识点并提供清晰评分要点，供 AI 自动批阅与助教讲解。",
-      "禁止生成项目启动、项目实践、成果汇报、学习反思或任何教师授课资源；禁止把这些阶段写成页面。",
-      "所有页面 audience 必须为 student，stageKey 必须为 ai-learning。",
-    ].join("\n"),
-    pblProfile: normalizePblCourseConfig({
-      ...course.pblConfig,
-      generationTemplate: "new-ai-learning-only",
-    }),
-    pblActivityCatalog: buildPblActivityCatalog(content),
-    knowledgePoints: content.knowledgePoints.map((point) => ({
-      id: point.id,
-      name: point.name,
-      level: point.level,
-    })),
-    teachingConstraints: buildCourseTeachingConstraints(course, content),
-    generationMode: request.generationMode ?? "standard",
-  };
-  const result = await generateSceneOutlinesFromRequirements(
-    requirements,
-    undefined,
-    undefined,
-    async (system, user) => callLLM(
-      [{ role: "system", content: system }, { role: "user", content: user }],
-      {
-        jsonMode: true,
-        abortSignal: signal,
-        requestClass: "long-generation",
-        maxTransientRetries: DURABLE_GENERATION_TRANSIENT_RETRIES,
-      },
+  const resolved = await resolveModel({
+    modelString: request.generationModelString ?? findServerDefaultModelString(),
+  });
+  const result = await generateOpenMaicBaselineOutlines(
+    {
+      requirement: buildOpenMaicKnowledgeLectureRequirement(course, content, request, aiDurationMin),
+    },
+    buildCourseTeachingSourceContext(
+      request.resourcePackage,
+      teacherGenerationBrief(request),
+      request.referenceMaterials ?? [],
     ),
     undefined,
+    createCourseGenerationAiCall({
+      model: resolved.model,
+      vision: false,
+      source: "classic-course-outline",
+      signal,
+      maxOutputTokens: resolved.modelInfo?.outputWindow,
+      thinking: resolved.thinkingConfig,
+      timeoutMs: resolveLlmRequestTimeoutMs("long-generation"),
+    }),
     {
       imageGenerationEnabled: request.options?.enableImageGeneration === true,
       videoGenerationEnabled: request.options?.enableVideoGeneration === true,
@@ -1218,13 +1262,15 @@ async function generateNewSystemAiOutlines(
   if (!result.success || !result.data?.outlines.length) {
     throw new Error(result.error || "知识讲授页面大纲生成失败");
   }
-  assertAiOutlineKnowledgeCoverage(result.data.outlines, content.knowledgePoints);
-  return normalizeNewSystemAiOutlines(result.data.outlines.map((outline) => ({ ...outline, teachingBrief: normalizeTeachingBrief(outline) })), {
+  const normalized = normalizeNewSystemAiOutlines(result.data.outlines, {
     totalDurationSec: aiDurationMin * 60,
     knowledgePointIds: content.knowledgePoints.map((point) => point.id),
     knowledgePoints: content.knowledgePoints,
     knowledgeGraph: content.knowledgeGraph,
+    courseLanguageDirective: result.data.languageDirective,
   });
+  assertAiOutlineKnowledgeCoverage(normalized, content.knowledgePoints);
+  return normalized;
 }
 
 export function assertAiOutlineKnowledgeCoverage(outlines: readonly SceneOutline[], points: readonly KnowledgePoint[]): void {
@@ -1280,6 +1326,7 @@ async function enqueueClassroomGeneration(
   generationMode: CourseGenerationMode = "standard",
   referenceMaterials: readonly GenerationReferenceMaterial[] = [],
   teacherBrief = "",
+  generationModelString?: string,
 ): Promise<void> {
   const sceneOutlines = (course.content._openmaicSceneOutlines ?? []).map((scene, index) => ({
     ...scene,
@@ -1291,8 +1338,13 @@ async function enqueueClassroomGeneration(
     estimatedDuration: scene.estimatedDuration ?? scene.targetDurationSec ?? 300,
     order: scene.order ?? index,
   })) as Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
+  const generatedLanguageDirective = sceneOutlines.find(
+    (scene) => typeof scene.courseLanguageDirective === "string"
+      && scene.courseLanguageDirective.trim(),
+  )?.courseLanguageDirective;
   const request: PersistedCourseGenerationRequest = {
     courseId: course.id,
+    generationModelString: generationModelString ?? findServerDefaultModelString(),
     teachingSourceContext: buildCourseTeachingSourceContext(course.content.resourcePackage, teacherBrief, referenceMaterials),
     systemMode,
     courseTitle: course.name,
@@ -1321,6 +1373,7 @@ async function enqueueClassroomGeneration(
     enableImageGeneration: options?.enableImageGeneration ?? true,
     enableVideoGeneration: options?.enableVideoGeneration ?? false,
     enableTTS: options?.enableTTS ?? true,
+    languageDirective: generatedLanguageDirective || ZH_CN_COURSE_LANGUAGE_DIRECTIVE,
     ttsLanguage: "zh-CN",
     agentMode: "default",
   };
@@ -1858,6 +1911,7 @@ async function runNewSystemCourseDesign(
     request.generationMode ?? "standard",
     request.referenceMaterials,
     teacherGenerationBrief(request),
+    request.generationModelString,
   );
   await designGenerationJobs.update({
     where: { id: job.id },

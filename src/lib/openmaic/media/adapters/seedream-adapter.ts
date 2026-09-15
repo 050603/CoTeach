@@ -14,6 +14,7 @@
  * API docs: https://www.volcengine.com/docs/6791/1399028
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import type {
   ImageGenerationConfig,
   ImageGenerationOptions,
@@ -86,7 +87,7 @@ export async function generateWithSeedream(
 ): Promise<ImageGenerationResult> {
   const baseUrl = config.baseUrl || DEFAULT_BASE_URL;
 
-  const response = await fetch(`${baseUrl}/api/v3/images/generations`, {
+  const response = await fetchMediaRequest(`${baseUrl}/api/v3/images/generations`, {
     method: 'POST',
     signal: options.signal,
     headers: {
@@ -101,20 +102,13 @@ export async function generateWithSeedream(
     }),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw Object.assign(
-      new Error(`Seedream generation failed (${response.status}): ${text}`),
-      { statusCode: response.status },
-    );
-  }
 
   const data = await response.json();
 
   // OpenAI-compatible response format: { data: [{ url, b64_json, ... }] }
   const imageData = data.data?.[0];
   if (!imageData) {
-    throw new Error('Seedream returned empty response');
+    throw mediaGenerationFailure('Seedream returned empty response');
   }
 
   return {

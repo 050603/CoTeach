@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getProviderConnectionPresentation,
   getProviderCredentialError,
+  getProviderModelError,
   getProviderStatePresentation,
 } from "./ai-service-settings";
 
@@ -111,6 +112,29 @@ describe("getProviderCredentialError", () => {
     expect(getProviderCredentialError({
       providerId: "deepseek",
       baseUrl: "https://api.deepseek.com/v1",
+      errorMessage: "Model not found",
+    })).toBeNull();
+  });
+});
+
+describe("getProviderModelError", () => {
+  it("explains that an Alibaba endpoint only accepts models exposed to its workspace", () => {
+    expect(getProviderModelError({
+      providerId: "deepseek",
+      baseUrl: "https://deployment.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      modelId: "deepseek-v4.1-flash",
+      errorMessage: "Model not exist.",
+    })).toEqual({
+      message: "阿里云 Model Studio 当前业务空间拒绝了模型 deepseek-v4.1-flash。",
+      details: expect.stringContaining("原始模型 ID"),
+    });
+  });
+
+  it("does not rewrite missing-model errors from other endpoints", () => {
+    expect(getProviderModelError({
+      providerId: "deepseek",
+      baseUrl: "https://api.deepseek.com/v1",
+      modelId: "unknown-model",
       errorMessage: "Model not found",
     })).toBeNull();
   });

@@ -265,7 +265,7 @@ export function formatPblSceneContext(
       : "",
     outline.ttsPolicy === "target-duration" && outline.targetDurationSec
       ? outline.timingPlan
-        ? `学生 TTS：${outline.timingPlan.providerId}/${outline.timingPlan.modelId || "default"}/${outline.timingPlan.voiceId || "default"}，固定自然 1.0 语速；本页总目标 ${outline.timingPlan.activityTargetDurationSec ?? outline.targetDurationSec} 秒，其中 AI 朗读 ${outline.timingPlan.targetDurationSec} 秒、学生阅读理解 ${outline.timingPlan.readingThinkingSec ?? 0} 秒、实际操作/作答 ${outline.timingPlan.operationSec ?? 0} 秒、页面切换 ${outline.timingPlan.transitionSec ?? 0} 秒；讲稿控制在 ${outline.timingPlan.minUnits}-${outline.timingPlan.maxUnits} ${outline.timingPlan.unit === "latin-word" ? "英文词" : "中文字符/混合文本单位"}。必须用与当前知识点直接相关的概念、依据、案例、反例和分步解释调整内容量与深度，禁止用固定字速公式、重复套话、图谱外知识或变速音频凑时长。`
+        ? `学生 TTS：${outline.timingPlan.providerId}/${outline.timingPlan.modelId || "default"}/${outline.timingPlan.voiceId || "default"}，固定自然 1.0 语速；本页总目标 ${outline.timingPlan.activityTargetDurationSec ?? outline.targetDurationSec} 秒，其中 AI 朗读 ${outline.timingPlan.targetDurationSec} 秒、学生阅读理解 ${outline.timingPlan.readingThinkingSec ?? 0} 秒、实际操作/作答 ${outline.timingPlan.operationSec ?? 0} 秒、页面切换 ${outline.timingPlan.transitionSec ?? 0} 秒；本页讲稿量参考 ${outline.timingPlan.minUnits}-${outline.timingPlan.maxUnits} ${outline.timingPlan.unit === "latin-word" ? "英文参考词（约1.5音节/单位）" : "中文字符/混合文本单位"}。各页、各段可按内容量灵活分配，最终只对知识讲授阶段总时长采用±10%验收，不逐段硬卡。必须用与当前知识点直接相关的概念、依据、案例、反例和分步解释调整内容量与深度，禁止用固定字速公式、重复套话、图谱外知识或变速音频凑时长。`
         : `学生 TTS 目标：${outline.targetDurationSec} 秒；服务端会按实际 TTS 模型参数计算所需内容量，必须通过与当前知识点直接相关的有效概念、依据、案例、反例和分步解释贴近目标，不得使用固定的 4.5 字/秒公式或引入图谱之外的知识。`
       : outline.ttsPolicy === "none"
         ? "TTS 规则：本课程大纲资源是教师普通课堂资源，不生成 TTS。"

@@ -48,7 +48,7 @@ describe("managed LLM survey concept extraction", () => {
     const model = await resolveSurveyLlmKeywordModel();
     expect(await model.extract("对课程的意见", ["难", "反馈太慢", "希望有更多动手实践"]))
       .toEqual([["难"], ["反馈太慢"], ["更多动手实践"]]);
-    expect(mocks.callLLM.mock.calls[0][0].system).toContain("每条有实质内容的回答至少保留一个代表词");
+    expect(mocks.callLLM.mock.calls[0][0].system).toContain("最小且可独立理解的核心词");
   });
 
   it.each([
@@ -79,12 +79,99 @@ describe("managed LLM survey concept extraction", () => {
     expect(mocks.callLLM).not.toHaveBeenCalled();
   });
 
-  it("limits meaningful terms and rejects overly long phrases without truncating them", async () => {
+  it("limits each response to three evidence phrases and rejects overly long phrases without truncating them", async () => {
     const terms = Array.from({ length: 20 }, (_, index) => `concept${index}`);
     const tooLong = "长".repeat(49);
     mocks.callLLM.mockResolvedValue({ text: JSON.stringify({ responses: [{ id: 0, terms: [tooLong, ...terms] }] }) });
     const model = await resolveSurveyLlmKeywordModel();
-    expect(await model.extract("题目", [[tooLong, ...terms].join(" ")])).toEqual([terms.slice(0, 16)]);
+    expect(await model.extract("题目", [[tooLong, ...terms].join(" ")])).toEqual([terms.slice(0, 3)]);
+  });
+
+  it("asks for atomic source words instead of composing related course concepts", async () => {
+    mocks.callLLM.mockResolvedValue({ text: JSON.stringify({ responses: [
+      { id: 0, terms: ["机器人", "编程", "编程教育"] },
+      { id: 1, terms: ["人工智能", "编程"] },
+    ] }) });
+    const model = await resolveSurveyLlmKeywordModel();
+    expect(await model.extract("人工智能教育", ["机器人和编程教育", "人工智能编程"])).toEqual([
+      ["机器人", "编程"], ["人工智能", "编程"],
+    ]);
+    expect(mocks.callLLM.mock.calls[0][0].system).toContain("机器人和编程教育提取机器人、编程");
+  });
+
+  it("removes generic context suffixes from coordinated concepts across subject areas", async () => {
+    mocks.callLLM.mockResolvedValue({ text: JSON.stringify({ responses: [
+      { id: 0, terms: ["数据分析", "可视化技术"] },
+      { id: 1, terms: ["历史教育"] },
+    ] }) });
+    const model = await resolveSurveyLlmKeywordModel();
+    expect(await model.extract("关注方向", ["数据分析与可视化技术", "历史教育"])).toEqual([
+      ["数据分析", "可视化"], ["历史教育"],
+    ]);
+  });
+
+  it("consolidates synonymous evidence while preserving opposite sentiment and leaves counting to the caller", async () => {
+    mocks.callLLM.mockResolvedValue({ text: JSON.stringify({ themes: [
+      { canonicalEvidenceId: 0, evidenceIds: [0, 1] },
+      { canonicalEvidenceId: 2, evidenceIds: [2] },
+      { canonicalEvidenceId: 3, evidenceIds: [3] },
+    ] }) });
+    const model = await resolveSurveyLlmKeywordModel();
+    const evidence = [
+      { id: 0, responseId: 0, text: "小组协作" },
+      { id: 1, responseId: 1, text: "组员配合" },
+      { id: 2, responseId: 2, text: "反馈及时" },
+      { id: 3, responseId: 3, text: "反馈太慢" },
+    ];
+    expect(await model.consolidate!("课堂体验", evidence)).toEqual([
+      { canonicalEvidenceId: 0, evidenceIds: [0, 1] },
+      { canonicalEvidenceId: 2, evidenceIds: [2] },
+      { canonicalEvidenceId: 3, evidenceIds: [3] },
+    ]);
+    const request = mocks.callLLM.mock.calls[0][0];
+    expect(request.system).toContain("反馈及时与反馈太慢等方向相反的评价也必须分开");
+    expect(request.system).toContain("机器人与编程或编程教育不得合并");
+    expect(request.system).toContain("返回全部有实质内容的主题组");
+    expect(request.system).toContain("禁止创造、拼接或改写主题名称");
+    expect(JSON.parse(request.prompt)).toMatchObject({ question: "课堂体验", evidence });
+  });
+
+  it("sanitizes recoverable theme rows without trusting invented labels or duplicate mappings", async () => {
+    mocks.callLLM.mockResolvedValue({ text: `<think>draft</think>
+      [{"label":"机器人编程","canonicalEvidenceId":9,"evidenceIds":[0,0,99]},
+       {"canonicalEvidenceId":0,"evidenceIds":[1]},
+       {"canonicalEvidenceId":2,"evidenceIds":[2]},
+       {"evidenceIds":["invalid"]}]` });
+    const model = await resolveSurveyLlmKeywordModel();
+    await expect(model.consolidate!("题目", [
+      { id: 0, responseId: 0, text: "小组协作" },
+      { id: 1, responseId: 1, text: "团队合作" },
+      { id: 2, responseId: 2, text: "小组协作" },
+    ])).resolves.toEqual([
+      { canonicalEvidenceId: 0, evidenceIds: [0, 2] },
+      { canonicalEvidenceId: 1, evidenceIds: [1] },
+    ]);
+  });
+
+  it("returns more than twelve valid themes without a presentation-layer cap", async () => {
+    const evidence = Array.from({ length: 20 }, (_, id) => ({ id, responseId: id, text: `概念${id}` }));
+    mocks.callLLM.mockResolvedValue({ text: JSON.stringify({ themes: evidence.map(({ id }) => ({
+      canonicalEvidenceId: id, evidenceIds: [id],
+    })) }) });
+    const model = await resolveSurveyLlmKeywordModel();
+    await expect(model.consolidate!("题目", evidence)).resolves.toHaveLength(20);
+  });
+
+  it.each([
+    "invalid JSON", "{}", '{"themes":[]}',
+    '{"themes":[{"canonicalEvidenceId":9,"evidenceIds":[99]}]}',
+    '{"themes":[{"evidenceIds":"not-an-array"}]}',
+  ])("rejects a theme result with no usable source evidence: %s", async (text) => {
+    mocks.callLLM.mockResolvedValue({ text });
+    const model = await resolveSurveyLlmKeywordModel();
+    await expect(model.consolidate!("题目", [
+      { id: 0, responseId: 0, text: "小组协作" },
+    ])).rejects.toThrow("主题结果不完整或格式无效");
   });
 
   it.each([
@@ -93,6 +180,7 @@ describe("managed LLM survey concept extraction", () => {
   ])("isolates caches when the configured model connection changes: %j", async (change) => {
     const first = await resolveSurveyLlmKeywordModel();
     expect((await resolveSurveyLlmKeywordModel()).cacheKey).toBe(first.cacheKey);
+    expect((await resolveSurveyLlmKeywordModel()).themeCacheKey).toBe(first.themeCacheKey);
     expect(first.cacheKey).not.toContain(configuredModel.apiKey);
     expect(first.cacheKey).not.toContain(configuredModel.baseUrl);
     expect(first.modelName).toBe(configuredModel.modelString);

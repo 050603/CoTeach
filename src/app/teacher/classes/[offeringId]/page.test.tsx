@@ -153,6 +153,17 @@ describe("课程章节管理", () => {
       expect.objectContaining({ title: "你有哪些相关经验？", type: "short-text", required: true, options: [] }),
     ]);
   });
+  it("offers questionnaire CSV export from the resource more menu", async () => {
+    fetcher.mockImplementation(async (url: string) => new Response(JSON.stringify(
+      url === "/api/platform/templates"
+        ? { templates: [] }
+        : { offerings: [{ ...offering, chapters: [{ ...offering.chapters[0], activities: [{ id: "survey-1", title: "课堂反馈", type: "Form", isOpen: true, version: 1 }] }] }] },
+    )));
+    render(<Page />);
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "课堂反馈更多操作" }), { button: 0, ctrlKey: false });
+    const exportItem = await screen.findByRole("menuitem", { name: "导出问卷数据（CSV）" });
+    expect(exportItem).toHaveAttribute("href", "/api/platform/activities/survey-1/survey-export");
+  });
   it("keeps the editor open and explains a failed activity save", async () => {
     render(<Page />);
     fireEvent.click(await screen.findByRole("button", { name: "添加学习内容" }));

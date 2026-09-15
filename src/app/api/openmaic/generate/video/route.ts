@@ -27,6 +27,7 @@ import type { VideoProviderId, VideoGenerationOptions } from '@openmaic/lib/medi
 import { createLogger } from '@openmaic/lib/logger';
 import { apiError, apiSuccess } from '@openmaic/lib/server/api-response';
 import { validateUrlForSSRF } from '@openmaic/lib/server/ssrf-guard';
+import { mediaGenerationErrorResponse } from '@openmaic/lib/server/media-generation-error';
 
 const log = createLogger('VideoGeneration API');
 
@@ -95,6 +96,6 @@ export async function POST(request: NextRequest) {
       `Video generation failed [provider=${request.headers.get('x-video-provider') ?? 'kling'}, model=${request.headers.get('x-video-model') ?? 'default'}]:`,
       error,
     );
-    return apiError('INTERNAL_ERROR', 500, message);
+    return mediaGenerationErrorResponse(error);
   }
 }

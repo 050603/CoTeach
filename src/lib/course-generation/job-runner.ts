@@ -9,7 +9,6 @@ import {
   type GenerateClassroomInput,
 } from "@openmaic/lib/server/classroom-generation";
 import {
-  buildMediaRepairOutlines,
   generateClassroomAssets,
   type ClassroomAssetGenerationProgress,
 } from "@openmaic/lib/server/classroom-asset-generation";
@@ -17,7 +16,6 @@ import { splitGeneratedClassroom } from "@/lib/openmaic-bridge/server-classroom-
 import { linkClassroomToCourse } from "@/lib/openmaic-bridge/course-linker";
 import {
   isAbortError,
-  withGenerationRetry,
 } from "@openmaic/lib/generation/generation-retry";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import { hasExactKnowledgeLecturePageBudget, isNewSystemAiTimingPlan } from "@/lib/classroom/new-system-course";
@@ -45,8 +43,6 @@ import {
 } from "@/lib/course-cover";
 import { generateCourseCoverImageOnServer } from "@/lib/course-cover-server";
 import {
-  createManagedCourseGenerationRecoveryRequest,
-  deserializeCourseGenerationFailure,
   serializeCourseGenerationFailure,
 } from "@/lib/course-generation/failure-policy";
 import {
@@ -57,13 +53,7 @@ import { summarizeGeneratedMediaReadiness } from "@/lib/course-generation/resour
 
 const log = createLogger("CourseGenerationWorker");
 const POLL_INTERVAL_MS = 1_500;
-const STALE_AFTER_MS = 30 * 60 * 1_000;
 const MAX_STORED_EVENTS = 80;
-// Image/video providers already own their bounded item-level repair. A second
-// job-level repair loop repeated the same expensive policy
-// and could hold a completed classroom on one image for more than ten minutes.
-const FINAL_MEDIA_REPAIR_DELAYS_MS = [] as const;
-
 function mediaFailuresFromAudit(issues: CourseResourceIssue[]): Array<{
   elementId: string;
   type: "image" | "video";
@@ -74,25 +64,6 @@ function mediaFailuresFromAudit(issues: CourseResourceIssue[]): Array<{
     return match
       ? [{ type: match[1] as "image" | "video", elementId: match[2], error: issue.detail }]
       : [];
-  });
-}
-
-async function waitForResourceRepair(delayMs: number, signal: AbortSignal): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -437,7 +408,7 @@ export async function generateAdaptiveBranchResource(
   });
 
   try {
-    return await withGenerationRetry(async () => {
+    return await (async () => {
       const sceneOutline: SceneOutline = ensureTeachingToolPlans([{
         id: `adaptive-${branch.id}`,
         type: branch.sceneType ?? "slide",
@@ -493,7 +464,7 @@ export async function generateAdaptiveBranchResource(
       );
       if (speechWithoutConfiguredAudio) {
         const error = new Error("个性化学习资源仍有语音未生成") as Error & { isRetryable: boolean };
-        error.isRetryable = true;
+        error.isRetryable = false;
         throw error;
       }
       const preparedResource: AdaptivePreparedBranchResource = {
@@ -505,11 +476,7 @@ export async function generateAdaptiveBranchResource(
       };
       await persistAdaptiveBranchResource(courseId, branch.id, preparedResource);
       return preparedResource;
-    }, {
-      label: `adaptive resource ${branch.id}`,
-      maxRetries: 2,
-      signal,
-    });
+    })();
   } catch (error) {
     if (signal.aborted || isAbortError(error)) throw error;
     await persistAdaptiveBranchResource(courseId, branch.id, {
@@ -644,48 +611,9 @@ export async function runQueuedCourseGenerationToCompletion(
   return contentGenerationJobs.findUnique({ where: { id: candidate.id } });
 }
 
-export function managedCourseGenerationRetryDelayMs(recoveryCount: number): number {
-  return recoveryCount <= 1 ? 2_000 : 8_000;
-}
-
-function scheduleManagedCourseGenerationRetry(courseId: string, recoveryCount: number): void {
-  const retryTimer = setTimeout(() => {
-    void startQueuedCourseGeneration(courseId).catch((error) => {
-      log.error(`Failed to schedule managed classroom-generation recovery for ${courseId}`, error);
-    });
-  }, managedCourseGenerationRetryDelayMs(recoveryCount));
-  retryTimer.unref?.();
-}
-
-export async function resumeRecoverableCourseGenerationJob(
-  courseId: string,
-): Promise<CourseGenerationJob | null> {
-  const job = await contentGenerationJobs.findUnique({ where: { courseId } });
-  if (!job || job.status !== "failed" || !job.error) return job;
-  const completedPageCount = await countGenerationPageCheckpoints(job.id);
-  const request = job.request as unknown as PersistedCourseGenerationRequest;
-  const recoveryRequest = createManagedCourseGenerationRecoveryRequest(
-    request,
-    deserializeCourseGenerationFailure(job.error),
-  );
-  if (!recoveryRequest) return job;
-  const recoveryCount = recoveryRequest.managedRecoveryCount ?? 1;
-  const updated = await contentGenerationJobs.updateMany({
-    where: { id: job.id, status: "failed" },
-    data: {
-      status: "queued",
-      step: "recovering_scenes",
-      message: `页面生成服务短暂中止，正在从 ${completedPageCount} 个已完成页面继续（第 ${recoveryCount} 次）`,
-      request: recoveryRequest as unknown as Prisma.InputJsonValue,
-      error: null,
-      completedAt: null,
-      estimatedRemainingSeconds: 120,
-      lastHeartbeatAt: new Date(),
-      version: { increment: 1 },
-    },
-  });
-  if (updated.count === 1) scheduleManagedCourseGenerationRetry(courseId, recoveryCount);
-  return contentGenerationJobs.findUnique({ where: { id: job.id } });
+/** Legacy read endpoint: recovery now requires explicit continuation. */
+export async function resumeRecoverableCourseGenerationJob(courseId: string): Promise<CourseGenerationJob | null> {
+  return contentGenerationJobs.findUnique({ where: { courseId } });
 }
 
 /**
@@ -874,46 +802,10 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
       step: "auditing_resources",
       progress: 99,
-      message: "正在进行课程页面与配套资源完整性审校",
+      message: "正在确认课程资源已保存并可用",
       estimatedRemainingSeconds: 15,
     }));
-    let resourceAudit = await auditCourseGeneratedResources(courseId);
-    for (const [repairIndex, delayMs] of FINAL_MEDIA_REPAIR_DELAYS_MS.entries()) {
-      const mediaFailures = mediaFailuresFromAudit(resourceAudit.issues);
-      if (mediaFailures.length === 0) break;
-      await serializeWorkerWrite(() => persistWorkerPhase(job, {
-        step: "repairing_media_resources",
-        progress: 99,
-        message: `检测到 ${mediaFailures.length} 项图片或视频尚未落盘，正在后台自动补齐（第 ${repairIndex + 1} 次）`,
-        estimatedRemainingSeconds: Math.ceil(delayMs / 1_000) + 120,
-      }));
-      await waitForResourceRepair(delayMs, controller.signal);
-      const repairOutlines = buildMediaRepairOutlines(
-        generated.assetContext.outlines,
-        mediaFailures,
-      );
-      await generateClassroomAssets({
-        ...generated.assetContext,
-        outlines: repairOutlines,
-        baseUrl,
-        studentClassroomId: split.studentClassroomId,
-        studentScenes: split.studentScenes,
-        teacherClassroomId: split.teacherClassroomId || undefined,
-        teacherScenes: split.teacherScenes,
-        enableImageGeneration: mediaFailures.some((failure) => failure.type === "image"),
-        enableVideoGeneration: mediaFailures.some((failure) => failure.type === "video"),
-        enableTTS: false,
-        signal: controller.signal,
-        onProgress: (progress) => serializeWorkerWrite(() => persistWorkerPhase(job, {
-          step: assetPhaseStep(progress),
-          progress: 99,
-          message: progress.message,
-          estimatedRemainingSeconds: 90,
-          assetPhaseStatus: progress.status,
-        })),
-      });
-      resourceAudit = await auditCourseGeneratedResources(courseId);
-    }
+    const resourceAudit = await auditCourseGeneratedResources(courseId);
     const requiredMediaFailures = mediaFailuresFromAudit(resourceAudit.issues).filter((failure) =>
       failure.type === "image"
         ? generationInput.enableImageGeneration !== false
@@ -971,16 +863,14 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           ...result,
           resourceIssues: resourceAudit.issues,
         } as unknown as Prisma.InputJsonValue,
+        qualityReport: generated.qualityReport as unknown as Prisma.InputJsonValue,
         events: [...asEvents(job.events), finalEvent].slice(-MAX_STORED_EVENTS) as unknown as Prisma.InputJsonValue,
         completedAt: new Date(),
         lastHeartbeatAt: new Date(),
         version: { increment: 1 },
       },
     });
-    // Draft completion is independent from optional semantic review. Durable
-    // checks start after media has settled so the report identifies the final revision.
-    const { enqueueCourseQualityReview } = await import("@/lib/course-quality-review/job-runner");
-    await enqueueCourseQualityReview(courseId).catch((reviewError) => log.warn("Background quality review will be resumed from preview", reviewError));
+
 
   } catch (error) {
     if (cancellationRequested.has(courseId)) {
@@ -1004,34 +894,6 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         where: { id: job.id, status: "running" },
         data: { status: "queued", step: "queued", message: "等待服务器继续生成", lastHeartbeatAt: new Date() },
       });
-      return;
-    }
-    const completedPageCount = await countGenerationPageCheckpoints(job.id);
-    const recoveryRequest = createManagedCourseGenerationRecoveryRequest(
-      request,
-      error,
-    );
-    if (recoveryRequest) {
-      const recoveryCount = recoveryRequest.managedRecoveryCount ?? 1;
-      log.warn(
-        `Managed classroom-generation recovery ${recoveryCount} queued for ${courseId} from ${completedPageCount} checkpoints`,
-        error,
-      );
-      await contentGenerationJobs.update({
-        where: { id: job.id },
-        data: {
-          status: "queued",
-          step: "recovering_scenes",
-          message: `第 ${job.scenesGenerated + 1} 个页面生成服务短暂中止，正在从 ${completedPageCount} 个已完成页面继续`,
-          request: recoveryRequest as unknown as Prisma.InputJsonValue,
-          error: null,
-          completedAt: null,
-          estimatedRemainingSeconds: 120,
-          lastHeartbeatAt: new Date(),
-          version: { increment: 1 },
-        },
-      });
-      scheduleManagedCourseGenerationRetry(courseId, recoveryCount);
       return;
     }
     log.error(`Course generation job ${job.id} failed`, error);
@@ -1103,14 +965,13 @@ export async function startCourseGenerationWorker(): Promise<void> {
   if (workerStarted) return;
   workerStarted = true;
   stopping = false;
+  // This deployment owns exactly one durable course worker. Any RUNNING row
+  // present before this process starts belonged to the previous process and
+  // no longer has an executor, even when its last heartbeat is recent. Requeue
+  // immediately so a service restart resumes page checkpoints without a
+  // misleading 30-minute frozen state.
   await contentGenerationJobs.updateMany({
-    where: {
-      status: "running",
-      OR: [
-        { lastHeartbeatAt: null },
-        { lastHeartbeatAt: { lt: new Date(Date.now() - STALE_AFTER_MS) } },
-      ],
-    },
+    where: { status: "running" },
     data: { status: "queued", step: "queued", message: "等待服务器继续生成" },
   });
   void tick();

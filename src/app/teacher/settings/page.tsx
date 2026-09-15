@@ -63,7 +63,7 @@ import { ServerProvidersInit } from "@openmaic/components/server-providers-init"
 import { I18nProvider } from "@openmaic/lib/hooks/use-i18n";
 import { ThemeProvider } from "@openmaic/lib/hooks/use-theme";
 
-type TabKey = "llm" | "tts" | "asr" | "image" | "video" | "web-search" | "pdf" | "agent-voice" | "knowledge-tutor";
+type TabKey = "llm" | "tts" | "asr" | "image" | "video" | "web-search" | "pdf" | "agent-voice" | "knowledge-tutor" | "quality-review";
 
 type ProviderMeta = {
   id: string;
@@ -158,6 +158,7 @@ const TABS: Array<{
   { key: "pdf", label: "PDF 解析", shortLabel: "PDF", section: "pdf", icon: FileText },
   { key: "agent-voice", label: "智能体音色", shortLabel: "音色", section: "tts", icon: Users },
   { key: "knowledge-tutor", label: "知识讲授助教", shortLabel: "知识助教", section: "providers", icon: GraduationCap },
+  { key: "quality-review", label: "课程质量检验", shortLabel: "质量检验", section: "providers", icon: Eye },
 ];
 
 const TAB_COPY: Record<TabKey, { title: string }> = {
@@ -187,6 +188,9 @@ const TAB_COPY: Record<TabKey, { title: string }> = {
   },
   "knowledge-tutor": {
     title: "知识讲授助教",
+  },
+  "quality-review": {
+    title: "课程质量检验",
   },
 };
 
@@ -264,6 +268,7 @@ function getProvidersForTab(tab: TabKey): ProviderMeta[] {
       }));
     case "agent-voice":
     case "knowledge-tutor":
+    case "quality-review":
       return [];
   }
 }
@@ -648,6 +653,136 @@ function KnowledgeTutorConfig() {
           <PrimaryButton className="h-10" disabled={saving} onClick={() => void save()}>{saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}保存配置</PrimaryButton>
           <PrimaryButton className="h-10" variant="outline" disabled={testing || !settings.ttsProviderId || !settings.ttsVoice} onClick={() => void testVoice()}>{testing ? <Loader2 className="animate-spin" size={15} /> : <Volume2 size={15} />}试听音色</PrimaryButton>
         </div>
+        <ResultNotice result={result} />
+      </div>
+    </section>
+  );
+}
+
+type QualityReviewSettings = {
+  modelString?: string;
+};
+
+function QualityReviewConfig() {
+  const [settings, setSettings] = useState<QualityReviewSettings>({});
+  const [modelOptions, setModelOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [generationModelLabel, setGenerationModelLabel] = useState("正在读取…");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState<ResultState>(null);
+
+  useEffect(() => {
+    void Promise.all([
+      fetch("/api/course-quality-review/settings", { cache: "no-store" }).then((response) => response.json()),
+      fetch("/api/openmaic/provider-config?section=providers", { cache: "no-store" }).then((response) => response.json()),
+    ]).then(([settingsPayload, providerPayload]) => {
+      const configured = (providerPayload?.providers ?? {}) as Record<string, SavedConfig>;
+      const enabledProviders = Object.entries(configured).filter(([, config]) => config.enabled !== false);
+      const defaultEntry = [...enabledProviders].sort((left, right) =>
+        (left[1].priority ?? Number.MAX_SAFE_INTEGER) - (right[1].priority ?? Number.MAX_SAFE_INTEGER),
+      )[0];
+      if (defaultEntry) {
+        const [providerId, config] = defaultEntry;
+        const provider = PROVIDERS[providerId as keyof typeof PROVIDERS];
+        const modelId = config.defaultModel || config.models?.[0] || provider?.models[0]?.id;
+        setGenerationModelLabel(modelId
+          ? `${provider?.name ?? providerId} · ${provider?.models.find((model) => model.id === modelId)?.name ?? modelId}`
+          : "尚未选择默认模型");
+      } else {
+        setGenerationModelLabel("尚未配置默认模型");
+      }
+
+      const options = enabledProviders.flatMap(([providerId, config]) => {
+        const provider = PROVIDERS[providerId as keyof typeof PROVIDERS];
+        const modelIds = config.models?.length
+          ? config.models
+          : provider?.models.map((model) => model.id) ?? [];
+        return modelIds.flatMap((modelId) => {
+          const model = provider?.models.find((candidate) => candidate.id === modelId);
+          if (model?.capabilities?.vision !== true) return [];
+          return [{
+            value: `${providerId}:${modelId}`,
+            label: `${provider?.name ?? providerId} · ${model.name}`,
+          }];
+        });
+      });
+      setModelOptions(options);
+      setSettings(settingsPayload?.settings ?? {});
+    }).catch(() => setResult({ ok: false, message: "课程质量检验配置读取失败。" }))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setResult(null);
+    try {
+      const response = await fetch("/api/course-quality-review/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.settings) {
+        throw new Error(typeof payload?.message === "string"
+          ? payload.message
+          : getReadableError(payload, "课程质量检验配置保存失败。"));
+      }
+      setSettings(payload.settings);
+      setResult({
+        ok: true,
+        message: payload.settings.modelString
+          ? "独立检验模型已保存；课程生成模型不会改变。"
+          : "已关闭独立检验模型；质量核对将跟随每门课程锁定的生成模型。",
+      });
+    } catch (cause) {
+      setResult({ ok: false, message: cause instanceof Error ? cause.message : "保存失败" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <EmptyPanel text="正在读取课程质量检验配置…" />;
+
+  return (
+    <section className="overflow-hidden rounded-[12px] border border-stone-200 bg-white">
+      <div className="border-b border-stone-200 bg-stone-50/70 px-5 py-4">
+        <h3 className="font-bold text-stone-950">生成模型与检验模型分离</h3>
+        <p className="mt-1 text-xs leading-5 text-stone-500">
+          课程大纲、PPT 页面、讲稿、动作与单次页面修复始终使用「AI 大模型」页选定的生成模型，不会因为页面含图片或需要视觉能力而自动换模。
+        </p>
+      </div>
+      <div className="space-y-5 p-5">
+        <div className="rounded-[8px] border border-emerald-200 bg-emerald-50 px-4 py-3">
+          <p className="text-xs font-semibold text-emerald-700">当前默认生成模型</p>
+          <p className="mt-1 text-sm font-bold text-emerald-950">{generationModelLabel}</p>
+          <p className="mt-1 text-xs leading-5 text-emerald-800">生成任务入队时会锁定该模型，任务执行期间修改默认设置也不会让同一门课程混用模型。</p>
+        </div>
+        <Field
+          label="独立检验模型（可选）"
+          helper="只显示已在 AI 大模型页配置、且模型目录明确标记支持视觉能力的模型。它仅用于生成完成后的质量核对，不参与课程创作。"
+          icon={Eye}
+        >
+          <select
+            className="h-10 w-full rounded-[8px] border border-stone-200 bg-white px-3 text-sm outline-none focus:border-[var(--pbl-teacher)]"
+            value={settings.modelString ?? ""}
+            onChange={(event) => setSettings({ modelString: event.target.value || undefined })}
+          >
+            <option value="">不单独配置（跟随本课程生成模型）</option>
+            {modelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          {modelOptions.length === 0 ? (
+            <p className="mt-2 text-xs leading-5 text-amber-700">当前没有已配置且明确支持视觉能力的模型。可先到「AI 大模型」页启用此类模型；课程生成不会因此受阻。</p>
+          ) : null}
+        </Field>
+        <div className="rounded-[8px] border border-stone-200 bg-stone-50 px-4 py-3 text-xs leading-5 text-stone-600">
+          浏览器排版检查使用当前 OpenMAIC 渲染器测量溢出、裁切和遮挡，本身不调用第二个大模型。独立检验模型也不会反向改写页面。
+        </div>
+      </div>
+      <div className="border-t border-stone-200 px-5 py-4">
+        <PrimaryButton className="h-10" disabled={saving} onClick={() => void save()}>
+          {saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}
+          保存检验设置
+        </PrimaryButton>
         <ResultNotice result={result} />
       </div>
     </section>
@@ -1122,7 +1257,7 @@ export default function TeacherSettingsPage() {
                   const Icon = tab.icon;
                   const active = activeTab === tab.key;
                   const tabProviders = getProvidersForTab(tab.key);
-                  const tabConfigured = tabProviders.filter((provider) => {
+                  const tabConfigured = ["agent-voice", "knowledge-tutor", "quality-review"].includes(tab.key) ? 0 : tabProviders.filter((provider) => {
                     const saved = savedConfigs[configKey(tab.section, provider.id)];
                     return saved?.hasApiKey || saved?.enabled !== undefined;
                   }).length;
@@ -1170,7 +1305,7 @@ export default function TeacherSettingsPage() {
                   </div>
                   <h2 className="mt-1 truncate text-lg font-bold text-stone-950">{tabCopy.title}</h2>
                 </div>
-                {activeTab !== "agent-voice" && activeTab !== "knowledge-tutor" ? (
+                {activeTab !== "agent-voice" && activeTab !== "knowledge-tutor" && activeTab !== "quality-review" ? (
                   <span className="shrink-0 text-xs font-medium tabular-nums text-stone-500">
                     {configuredProvidersCount}/{providers.length} 已配置
                   </span>
@@ -1185,7 +1320,9 @@ export default function TeacherSettingsPage() {
                   </div>
                 ) : null}
 
-              {activeTab === "knowledge-tutor" ? (
+              {activeTab === "quality-review" ? (
+                <QualityReviewConfig />
+              ) : activeTab === "knowledge-tutor" ? (
                 <KnowledgeTutorConfig />
               ) : activeTab === "agent-voice" ? (
                 <AgentVoiceConfig />

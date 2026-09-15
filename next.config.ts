@@ -64,6 +64,16 @@ const nextConfig: NextConfig = {
       // PromptLoader reads the Markdown prompt templates with fs at runtime.
       // Keep them in every standalone production build.
       "./src/lib/openmaic/prompts/**/*",
+      "./node_modules/@fontsource/noto-sans-sc/**/*",
+      "./node_modules/katex/dist/**/*",
+      "./packages/@openmaic/renderer/src/styles.ts",
+      "./node_modules/elkjs/LICENSE.md",
+      "./node_modules/playwright/LICENSE",
+      "./node_modules/playwright/NOTICE",
+      // Spatial planning imports playwright-core at runtime. Next.js keeps
+      // Playwright external, so standalone tracing must copy its executable
+      // JavaScript instead of retaining only license files.
+      "./node_modules/playwright-core/**/*",
     ],
   },
   // Stage 9: standalone output for minimal Docker images.
@@ -81,6 +91,9 @@ const nextConfig: NextConfig = {
   ],
   serverExternalPackages: [
     "sharp",
+    "playwright",
+    "playwright-core",
+    "elkjs",
     "unpdf",
     "undici",
     "jszip",

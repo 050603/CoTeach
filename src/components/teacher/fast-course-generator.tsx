@@ -7,6 +7,7 @@ import {
   LoaderCircle,
   Mic2,
   Paperclip,
+  RefreshCw,
   Send,
   Settings2,
   Sparkles,
@@ -22,6 +23,7 @@ import { CourseGenerationGlyph } from "@/components/course-workshop-animation";
 import { QuickKnowledgeReviewDialog } from "@/components/teacher/quick-knowledge-review-dialog";
 import { QuickOutlineReviewDialog } from "@/components/teacher/quick-outline-review-dialog";
 import { QuickGenerationStage } from "@/components/teacher/quick-generation-stage";
+import { StudentStageHost } from "@/components/openmaic-bridge/student-stage-host";
 import { ResourcePackageForm } from "@/components/teacher/resource-package-form";
 import type { CourseResourcePackage } from "@/lib/resource-package/types";
 import {
@@ -156,6 +158,11 @@ export function FastCourseGenerator({
   const [knowledgeReviewOpen, setKnowledgeReviewOpen] = useState(false);
   const [outlinePreview, setOutlinePreview] = useState<SceneOutline[]>([]);
   const [outlineReviewOpen, setOutlineReviewOpen] = useState(false);
+  const [generationPreview, setGenerationPreview] = useState<{
+    classroomId: string;
+    loadedScenesCount: number;
+    revision: number;
+  } | null>(null);
   const autoOpenedClassroomId = useRef<string | null>(null);
   const [options, setOptions] = useState<GenerationOptions>({
     enableImageGeneration: true,
@@ -546,10 +553,19 @@ export function FastCourseGenerator({
         onOpenCourse={() => {
           if (classroomJob?.result?.id) router.push(`/teacher/prepare/${course.id}/preview?classroomId=${classroomJob.result.id}`);
         }}
+        onPreviewGenerated={() => {
+          if (!classroomJob?.preview) return;
+          setGenerationPreview({
+            classroomId: classroomJob.preview.classroomId,
+            loadedScenesCount: classroomJob.preview.scenesCount,
+            revision: 0,
+          });
+        }}
         onRetry={() => void resumeClassroomGeneration()}
         onReview={() => void reviewArtifact()}
         paused={job?.status === "paused"}
         progress={overallProgress}
+        previewScenesCount={classroomJob?.preview?.scenesCount ?? 0}
         recovering={recovering}
         remainingLabel={classroomCompleted ? "全部内容已经生成并自动保存" : classroomFailed ? "已完成页面均已保存，可从断点继续" : recovering ? "正在重新连接后台生成任务" : formatDuration(activeRemaining)}
         retrying={classroomRetrying}
@@ -575,6 +591,19 @@ export function FastCourseGenerator({
           />
         ) : null}
       </AnimatePresence>
+      {generationPreview ? (
+        <GenerationCheckpointPreview
+          availableScenesCount={classroomJob?.preview?.scenesCount ?? generationPreview.loadedScenesCount}
+          course={course}
+          preview={generationPreview}
+          onClose={() => setGenerationPreview(null)}
+          onRefresh={(scenesCount) => setGenerationPreview((current) => current ? {
+            ...current,
+            loadedScenesCount: scenesCount,
+            revision: current.revision + 1,
+          } : null)}
+        />
+      ) : null}
       </LayoutGroup>
     );
   }
@@ -765,6 +794,80 @@ export function FastCourseGenerator({
         {error ? <p className="mx-auto mt-4 max-w-[760px] rounded-[10px] bg-red-50 px-4 py-3 text-center text-xs font-semibold leading-5 text-red-700">{error}</p> : null}
       </div>
     </section>
+  );
+}
+
+function GenerationCheckpointPreview({
+  availableScenesCount,
+  course,
+  onClose,
+  onRefresh,
+  preview,
+}: {
+  availableScenesCount: number;
+  course: Course;
+  onClose: () => void;
+  onRefresh: (scenesCount: number) => void;
+  preview: { classroomId: string; loadedScenesCount: number; revision: number };
+}) {
+  const newScenesCount = Math.max(0, availableScenesCount - preview.loadedScenesCount);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div aria-label="已生成课程页面预览" aria-modal="true" className="fixed inset-0 z-[100] flex flex-col bg-stone-100" role="dialog">
+      <header className="flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-stone-200 bg-white px-4 py-3 shadow-sm sm:px-6">
+        <div className="min-w-0">
+          <p className="text-sm font-black text-stone-950">已生成页面预览</p>
+          <p className="mt-0.5 text-xs text-stone-500">
+            当前载入 {preview.loadedScenesCount} 页 · 课程生成仍在后台继续
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {newScenesCount > 0 ? (
+            <button
+              className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-blue-200 bg-blue-50 px-3.5 text-xs font-bold text-blue-700 transition hover:border-blue-400"
+              onClick={() => onRefresh(availableScenesCount)}
+              type="button"
+            >
+              <RefreshCw className="size-3.5" />刷新新增 {newScenesCount} 页
+            </button>
+          ) : null}
+          <button
+            className="inline-flex h-10 items-center gap-2 rounded-[8px] bg-stone-950 px-4 text-xs font-bold text-white transition hover:bg-blue-700"
+            onClick={onClose}
+            type="button"
+          >
+            返回生成进度 <X className="size-3.5" />
+          </button>
+        </div>
+      </header>
+      <div className="min-h-0 flex-1 p-2 sm:p-3">
+        <StudentStageHost
+          backHref={`/teacher/prepare/${course.id}/verify`}
+          className="h-full min-h-[520px] overflow-hidden rounded-[10px] border border-stone-200 bg-white shadow-sm"
+          classroomId={preview.classroomId}
+          courseId={course.id}
+          key={`${preview.classroomId}:${preview.revision}`}
+          knowledgeGraph={course.content.knowledgeGraph}
+          knowledgePoints={course.content.knowledgePoints}
+          mode="teacher-preview"
+          standalone
+          variant="embedded"
+        />
+      </div>
+    </div>
   );
 }
 

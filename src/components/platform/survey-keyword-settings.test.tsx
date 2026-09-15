@@ -7,8 +7,8 @@ vi.mock("@/lib/platform/client", () => ({ teacherPlatformFetch: mocks.fetch }));
 import { SurveyKeywordSettings } from "./survey-keyword-settings";
 
 const response = (mode: string) => Response.json({ mode });
-const localButton = () => screen.getByRole("button", { name: /本地分词/ });
-const llmButton = () => screen.getByRole("button", { name: /大模型分析/ });
+const localButton = () => screen.getByRole("button", { name: /本地高频词/ });
+const llmButton = () => screen.getByRole("button", { name: /AI 主题聚合/ });
 
 beforeEach(() => vi.resetAllMocks());
 
@@ -24,7 +24,7 @@ describe("survey keyword settings controls", () => {
 
     fireEvent.click(localButton());
     await waitFor(() => expect(localButton()).toHaveAttribute("aria-pressed", "true"));
-    expect(screen.getByRole("status")).toHaveTextContent("已保存：本地分词");
+    expect(screen.getByRole("status")).toHaveTextContent("已保存：本地高频词");
     expect(mocks.fetch).toHaveBeenLastCalledWith("/api/platform/survey-settings", expect.objectContaining({
       method: "POST", body: JSON.stringify({ mode: "local" }), cache: "no-store",
     }));
@@ -72,6 +72,6 @@ describe("survey keyword settings controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "重试保存" }));
     await waitFor(() => expect(llmButton()).toHaveAttribute("aria-pressed", "true"));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("已保存：大模型分析");
+    expect(screen.getByRole("status")).toHaveTextContent("已保存：AI 主题聚合");
   });
 });

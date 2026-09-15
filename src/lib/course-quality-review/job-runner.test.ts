@@ -6,12 +6,29 @@ import type { PersistedClassroomData } from "@/lib/openmaic/server/classroom-sto
 import type { CourseQualityIssue, CourseQualityReport } from "./types";
 import { computeCourseQualitySignature } from "./signature";
 
-const mocks = vi.hoisted(() => ({ course: null as unknown, classroom: null as unknown, job: null as unknown, claimable: false, source: "教师资料", review: vi.fn(), upsert: vi.fn(), updates: [] as unknown[] }));
+const mocks = vi.hoisted(() => ({
+  course: null as unknown,
+  classroom: null as unknown,
+  job: null as unknown,
+  claimable: false,
+  source: "教师资料",
+  generationModelString: undefined as string | undefined,
+  reviewModelString: undefined as string | undefined,
+  review: vi.fn(),
+  resolveModel: vi.fn(),
+  createAiCall: vi.fn(),
+  upsert: vi.fn(),
+  updates: [] as unknown[],
+}));
 vi.mock("@/lib/session/server-store", () => ({ getCourse: async () => mocks.course, updateCourse: async (_id: string, update: (course: unknown) => unknown) => { mocks.course = update(mocks.course); return mocks.course; } }));
 vi.mock("@/lib/openmaic/server/classroom-storage", () => ({ readClassroom: async () => mocks.classroom }));
 vi.mock("@/lib/llm/client", () => ({ callLLM: vi.fn() }));
+vi.mock("./settings", () => ({ getCourseQualityReviewSettings: async () => ({ modelString: mocks.reviewModelString }) }));
+vi.mock("@/lib/openmaic/server/resolve-model", () => ({ resolveModel: mocks.resolveModel }));
+vi.mock("@/lib/openmaic/server/course-generation-ai-call", () => ({ createCourseGenerationAiCall: mocks.createAiCall }));
+vi.mock("@/lib/openmaic/server/provider-config", () => ({ findServerDefaultModelString: () => undefined }));
 vi.mock("./semantic-review", async (original) => ({ ...await original<typeof import("./semantic-review")>(), reviewCourseSection: mocks.review }));
-vi.mock("@/lib/course-generation/job-storage", () => ({ contentGenerationJobs: { findUnique: async () => ({ request: { teachingSourceContext: mocks.source } }) }, qualityReviewJobs: {
+vi.mock("@/lib/course-generation/job-storage", () => ({ contentGenerationJobs: { findUnique: async () => ({ request: { teachingSourceContext: mocks.source, generationModelString: mocks.generationModelString } }) }, qualityReviewJobs: {
   findUnique: async () => mocks.job, findFirst: async () => null,
   upsert: async (args: { create: Record<string, unknown>; update: Record<string, unknown> }) => {
     mocks.upsert(args);
@@ -41,7 +58,9 @@ function fixture() {
 beforeEach(() => {
   vi.clearAllMocks();
   const { course, classroom } = fixture();
-  mocks.course = course; mocks.classroom = classroom; mocks.job = null; mocks.claimable = false; mocks.source = "教师资料"; mocks.updates = [];
+  mocks.course = course; mocks.classroom = classroom; mocks.job = null; mocks.claimable = false; mocks.source = "教师资料"; mocks.generationModelString = undefined; mocks.reviewModelString = undefined; mocks.updates = [];
+  mocks.resolveModel.mockResolvedValue({ model: {}, modelInfo: { capabilities: { vision: true }, outputWindow: 12_000 }, thinkingConfig: undefined });
+  mocks.createAiCall.mockReturnValue(vi.fn().mockResolvedValue('{"issues":[]}'));
 });
 
 describe("durable background quality review", () => {
@@ -69,6 +88,51 @@ describe("durable background quality review", () => {
     course.content.resourcePackage = undefined;
     course.content.stagePlan = { schemaVersion: 2, source: "resource-package", totalMinutes: 135, lessonCount: 3, minutesPerLesson: 45, stages: [], evaluationCriteria: "", reflectionQuestions: [] };
     expect(await enqueueCourseQualityReview("course")).toMatchObject({ status: "pending" });
+  });
+
+  it("stores an explicitly selected reviewer separately and invalidates old review checkpoints when it changes", async () => {
+    mocks.reviewModelString = "deepseek:deepseek-v4-flash-vision-exp";
+    const first = (await enqueueCourseQualityReview("course"))!;
+    expect(first.reviewModelString).toBe("deepseek:deepseek-v4-flash-vision-exp");
+    expect((mocks.job as { request: { reviewModelString?: string } }).request.reviewModelString)
+      .toBe("deepseek:deepseek-v4-flash-vision-exp");
+
+    first.status = "completed";
+    first.sections![0].status = "completed";
+    (mocks.job as { result: CourseQualityReport; status: string }).result = first;
+    (mocks.job as { status: string }).status = "completed";
+    (mocks.course as Course).content.qualityReview = first;
+    mocks.reviewModelString = "openai:gpt-5.6";
+
+    const second = (await enqueueCourseQualityReview("course"))!;
+    expect(second).toMatchObject({ status: "pending", reviewModelString: "openai:gpt-5.6" });
+    expect(second.sections!.every((section) => section.status === "pending")).toBe(true);
+  });
+
+  it("follows the model locked by course generation when no independent reviewer is selected", async () => {
+    mocks.generationModelString = "deepseek:deepseek-v4-flash";
+    const report = (await enqueueCourseQualityReview("course"))!;
+    expect(report.reviewModelString).toBe("deepseek:deepseek-v4-flash");
+    expect((mocks.job as { request: { reviewModelString?: string } }).request.reviewModelString)
+      .toBe("deepseek:deepseek-v4-flash");
+  });
+
+  it("resolves an explicitly selected vision reviewer without changing the generation request", async () => {
+    mocks.generationModelString = "deepseek:deepseek-v4-flash";
+    mocks.reviewModelString = "deepseek:deepseek-v4-flash-vision-exp";
+    mocks.review.mockResolvedValue([]);
+    await enqueueCourseQualityReview("course");
+    mocks.claimable = true;
+
+    await runCourseQualityReviewJob("job");
+
+    expect(mocks.resolveModel).toHaveBeenCalledWith({ modelString: "deepseek:deepseek-v4-flash-vision-exp" });
+    expect(mocks.createAiCall).toHaveBeenCalledWith(expect.objectContaining({
+      vision: true,
+      source: "course-quality-review",
+    }));
+    expect((mocks.job as { request: { reviewModelString?: string } }).request.reviewModelString)
+      .toBe("deepseek:deepseek-v4-flash-vision-exp");
   });
 
   it("resumes only unfinished sections and replaces their issues instead of appending duplicates", async () => {

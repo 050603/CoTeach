@@ -105,13 +105,14 @@ LABEL org.opencontainers.image.title="coteach-app" \
 #     exported PDF by default. Noto CJK and Liberation provide common fallbacks.
 RUN apk add --no-cache \
     vips wget tini su-exec \
-    libreoffice-impress font-noto-cjk font-liberation
+    libreoffice-impress font-noto-cjk font-liberation chromium
 
 WORKDIR /app
 
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     NEXT_DEPLOYMENT_ID=$OPENPBL_DEPLOYMENT_ID \
+    OPENPBL_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser \
     HOSTNAME=0.0.0.0 \
     PORT=3000
 

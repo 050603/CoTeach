@@ -4,18 +4,26 @@ import type { SurveyKeywordMode } from "./survey-keyword-settings";
 export const LOCAL_SURVEY_MODEL = "COARSE_ELECTRA_SMALL_ZH:20220616";
 // Function words are filtered for display; word boundaries come exclusively from the neural model.
 const STOP_WORDS = new Set([
+  "我", "你", "他", "她", "它", "的", "了", "和", "与", "及", "在", "也", "都", "就", "很", "把", "被", "着", "啊", "呀", "吗", "呢",
   "一个", "一些", "这个", "那个", "这些", "那些", "我们", "你们", "他们", "自己",
   "以及", "因为", "所以", "但是", "然后", "可以", "能够", "觉得", "认为", "希望",
   "需要", "比较", "非常", "还是", "就是", "进行", "通过", "对于", "关于", "没有",
-  "不是", "有点", "什么", "怎么", "这样", "那么", "已经", "还有", "更加", "真的",
+  "不是", "有点", "什么", "怎么", "这样", "那么", "已经", "还有", "更加", "真的", "可能",
+  "课程", "内容", "东西", "方面", "感觉", "总体", "整体", "个人", "目前", "这里", "一下",
   "the", "and", "that", "this", "with", "from", "have", "would", "could", "very",
   "about", "into", "your", "our", "are", "was", "were", "for", "but", "not", "you",
+  "course", "content", "thing", "things", "something", "overall", "maybe", "really",
 ]);
+
+export type SurveyThemeEvidence = { id: number; responseId: number; text: string };
+export type SurveyThemeGroup = { canonicalEvidenceId: number; evidenceIds: number[] };
 
 export interface SurveyKeywordModel {
   cacheKey: string;
+  themeCacheKey?: string;
   modelName: string;
   extract(questionTitle: string, responses: string[]): Promise<string[][]>;
+  consolidate?: (questionTitle: string, evidence: SurveyThemeEvidence[]) => Promise<SurveyThemeGroup[]>;
 }
 
 function normalize(value: string): string {
@@ -34,9 +42,9 @@ export async function resolveSurveyKeywordModel(mode: SurveyKeywordMode = "local
     throw new Error("问卷分词服务必须使用本机回环地址。");
   }
   const modelName = LOCAL_SURVEY_MODEL;
-  const fingerprint = createHash("sha256").update(`${modelName}:${url.origin}:filter-v1`).digest("hex");
+  const fingerprint = createHash("sha256").update(`${modelName}:${url.origin}:filter-v2`).digest("hex");
   return {
-    cacheKey: `local-neural-v1:${fingerprint}`,
+    cacheKey: `local-neural-v2:${fingerprint}`,
     modelName,
     async extract(_questionTitle, responses) {
       if (!responses.length) return [];
@@ -63,8 +71,12 @@ export async function resolveSurveyKeywordModel(mode: SurveyKeywordMode = "local
         }
         const source = normalize(responses[index]);
         return [...new Set(tokens.map((token: string) => normalize(token))
-          .filter((term) => term.length >= 2 && [...term].length <= 48 && /\p{Letter}/u.test(term)
-            && !STOP_WORDS.has(term) && source.includes(term)))];
+          .filter((term) => {
+            const characters = [...term];
+            const maximumLength = /\p{Script=Han}/u.test(term) ? 12 : 24;
+            return term.length >= 2 && characters.length <= maximumLength && /\p{Letter}/u.test(term)
+              && !STOP_WORDS.has(term) && source.includes(term);
+          }))];
       });
     },
   };

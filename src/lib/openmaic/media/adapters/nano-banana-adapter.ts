@@ -14,6 +14,7 @@
  * API docs: https://ai.google.dev/gemini-api/docs/image-generation
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import type {
   ImageGenerationConfig,
   ImageGenerationOptions,
@@ -105,7 +106,7 @@ export async function generateWithNanoBanana(
   const baseUrl = config.baseUrl || DEFAULT_BASE_URL;
   const model = config.model || DEFAULT_MODEL;
 
-  const response = await fetch(`${baseUrl}/v1beta/models/${model}:generateContent`, {
+  const response = await fetchMediaRequest(`${baseUrl}/v1beta/models/${model}:generateContent`, {
     method: 'POST',
     signal: options.signal,
     headers: {
@@ -124,23 +125,16 @@ export async function generateWithNanoBanana(
     }),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw Object.assign(
-      new Error(`Gemini image generation failed (${response.status}): ${text}`),
-      { statusCode: response.status },
-    );
-  }
 
   const data: GeminiResponse = await response.json();
 
   if (data.error) {
-    throw new Error(`Gemini error: ${data.error.code} - ${data.error.message}`);
+    throw mediaGenerationFailure(`Gemini error: ${data.error.code} - ${data.error.message}`);
   }
 
   const parts = data.candidates?.[0]?.content?.parts;
   if (!parts || parts.length === 0) {
-    throw new Error('Gemini returned empty response');
+    throw mediaGenerationFailure('Gemini returned empty response');
   }
 
   // Find the image part (inlineData with base64)
@@ -148,7 +142,7 @@ export async function generateWithNanoBanana(
   if (!imagePart?.inlineData) {
     // Might have returned text only (e.g. if prompt was rejected)
     const textPart = parts.find((p) => p.text);
-    throw new Error(`Gemini did not return an image. Response text: ${textPart?.text || 'none'}`);
+    throw mediaGenerationFailure(`Gemini did not return an image. Response text: ${textPart?.text || 'none'}`);
   }
 
   return {

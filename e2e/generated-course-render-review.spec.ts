@@ -69,6 +69,7 @@ test('renders every generated teaching slide with loaded fonts and records page-
     return json({});
   });
   await page.goto(`/teacher/prepare/${course.id}/preview`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: '检查页面', exact: true }).click();
   await expect.poll(() => reports.length, { timeout: 120_000 }).toBe(expected.length);
   expect(expected.length).toBeGreaterThan(0);
   expect(reports.every((report) => report.status === 'completed')).toBe(true);

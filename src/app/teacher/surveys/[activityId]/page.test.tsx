@@ -77,22 +77,23 @@ describe("teacher survey dashboard", () => {
     expect(screen.getByText("通过讨论形成了新方案")).toBeInTheDocument();
     expect(screen.getByText("合作帮助我理解了设计思维")).toBeInTheDocument();
   });
-  it("uses verified phrase sources instead of including a substring from a different concept", async () => {
+  it("uses verified student mappings for a normalized AI theme that is not a source substring", async () => {
     mocks.fetch.mockResolvedValue(new Response(JSON.stringify({
       ...result,
       analytics: { ...result.analytics, questions: [{
         ...result.analytics.questions[1],
         responses: [
-          { studentId: "s1", displayName: "林晓", content: "人工智能促进发展" },
-          { studentId: "s2", displayName: "陈舟", content: "智能的定义" },
+          { studentId: "s1", displayName: "林晓", content: "组员之间配合默契" },
+          { studentId: "s2", displayName: "陈舟", content: "更喜欢个人阅读" },
         ],
-        terms: [{ label: "智能", value: 1, studentIds: ["s2"] }],
+        keywordMode: "llm",
+        terms: [{ label: "团队协作", value: 1, studentIds: ["s1"] }],
       }] },
     }), { status: 200 }));
     render(<SurveyDashboardPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "智能" }));
-    expect(screen.getByText("智能的定义")).toBeInTheDocument();
-    expect(screen.queryByText("人工智能促进发展")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "团队协作" }));
+    expect(screen.getByText("组员之间配合默契")).toBeInTheDocument();
+    expect(screen.queryByText("更喜欢个人阅读")).not.toBeInTheDocument();
   });
   it.each(["ai", "ＡＩ"])("matches normalized word-cloud term %s against full-width source responses", async (label) => {
     const textResult = {

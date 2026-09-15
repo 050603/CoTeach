@@ -66,6 +66,7 @@ export function canResumeAfterValidatedTeachingOutline(input: {
 
 function normalizedRequest(value: unknown): {
   courseId: string;
+  generationModelString: string | null;
   systemMode: "new";
   generationMode: "standard" | "deep-interaction";
   teacherBrief: string;
@@ -88,6 +89,9 @@ function normalizedRequest(value: unknown): {
     ? request.supplementalAnswers as Record<string, unknown> : {};
   return {
     courseId: request.courseId,
+    generationModelString: typeof request.generationModelString === "string"
+      ? request.generationModelString.trim() || null
+      : null,
     systemMode: "new",
     generationMode: request.generationMode === "deep-interaction"
       ? "deep-interaction"

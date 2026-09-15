@@ -10,7 +10,7 @@ import { TeacherPlatformHeader, TeacherPlatformPage } from "@/components/platfor
 
 type Respondent = { studentId: string; displayName: string; detail?: string };
 type ChoiceQuestion = { id: string; title: string; type: "single-choice" | "multiple-choice"; chartType: "donut" | "bar" | "column"; required: boolean; responseCount: number; options: Array<{ id: string; label: string; count: number; percentage: number; respondents: Respondent[] }> };
-type TextQuestion = { id: string; title: string; type: "short-text"; required: boolean; responseCount: number; responses: Array<Respondent & { content: string }>; terms: Array<{ label: string; value: number; studentIds?: string[] }>; keywordStatus?: "processing" | "ready" | "unavailable"; keywordAnalyzedCount?: number; keywordMode?: "local" | "llm"; keywordRepresentedCount?: number; keywordUnrepresentedResponses?: Array<{ studentId: string; reason: "pending" | "analysis-unavailable" | "no-keywords" }> };
+type TextQuestion = { id: string; title: string; type: "short-text"; required: boolean; responseCount: number; responses: Array<Respondent & { content: string }>; terms: Array<{ label: string; value: number; studentIds?: string[] }>; keywordStatus?: "processing" | "ready" | "unavailable"; keywordAggregation?: "semantic" | "exact-fallback"; keywordAnalyzedCount?: number; keywordMode?: "local" | "llm"; keywordRepresentedCount?: number; keywordUnrepresentedResponses?: Array<{ studentId: string; reason: "pending" | "analysis-unavailable" | "no-keywords" | "no-theme" }> };
 type SurveyResult = {
   activity: { id: string; title: string; description?: string | null; isOpen: boolean; chapter: { id: string; title: string }; offering: { id: string; name: string } };
   analytics: { submittedCount: number; totalStudents: number; completionRate: number; questions: Array<ChoiceQuestion | TextQuestion> };
@@ -123,6 +123,11 @@ export default function SurveyDashboardPage() {
   useEffect(() => {
     selectedChoiceRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
   }, [selectedOptionId]);
+  useEffect(() => {
+    if (selectedTerm && current?.type === "short-text" && !current.terms.some((term) => term.label === selectedTerm)) {
+      setSelectedTerm(null);
+    }
+  }, [current, selectedTerm]);
 
   async function togglePresentation() {
     if (presentation) {
@@ -274,14 +279,14 @@ export default function SurveyDashboardPage() {
                       <aside className="survey-response-echo">
                         <div className="survey-response-echo-heading">
                           <p>观点摘录</p>
-                          <span>{current.keywordMode === "llm" ? "大模型概念提取" : "本地分词"} · 点击关键词筛选</span>
+                          <span>{current.keywordMode === "llm" ? current.keywordAggregation === "exact-fallback" ? "AI 原词聚合" : "AI 主题聚合" : "本地高频词（不合并同义词）"} · 点击词条筛选</span>
                         </div>
                         {selectedTerm ? <div className="survey-selected-term"><h3>{selectedTerm}</h3><span>{current.terms.find((term) => term.label === selectedTerm)?.value ?? 0} 人提及</span></div> : null}
                         <div className="survey-response-list">
                           {selectedResponses.length ? selectedResponses.map((response, index) => {
                             const reason = current.keywordUnrepresentedResponses?.find((entry) => entry.studentId === response.studentId)?.reason;
-                            return <blockquote key={`${response.studentId}-${index}`}><p>{response.content}</p><footer><Quote size={13} /><span>{response.displayName}</span>{reason ? <small>{reason === "pending" ? "分析中" : reason === "analysis-unavailable" ? "分析暂不可用" : "暂无关键词"}</small> : null}</footer></blockquote>;
-                          }) : <p className="survey-response-empty">{selectedTerm ? "暂无包含该关键词的原回答。" : "暂无对应的原回答。"}</p>}
+                            return <blockquote key={`${response.studentId}-${index}`}><p>{response.content}</p><footer><Quote size={13} /><span>{response.displayName}</span>{reason ? <small>{reason === "pending" ? "分析中" : reason === "analysis-unavailable" ? "分析暂不可用" : reason === "no-theme" ? "未归入展示主题" : "暂无关键词"}</small> : null}</footer></blockquote>;
+                          }) : <p className="survey-response-empty">{selectedTerm ? "暂无归入该主题的原回答。" : "暂无对应的原回答。"}</p>}
                         </div>
                       </aside>
                     </div>

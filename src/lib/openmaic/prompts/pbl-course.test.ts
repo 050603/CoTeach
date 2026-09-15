@@ -32,15 +32,15 @@ describe("PBL course prompt", () => {
     expect(prompt?.system).toContain("fixed seconds-per-page rule");
     expect(prompt?.system).toContain("companionStagePolicies[stageKey]");
     expect(prompt?.system).toContain("reflection");
-    expect(prompt?.system).toContain("exactly one terminal `quiz` scene");
+    expect(prompt?.system).toContain("exactly one concise `quiz`");
     expect(prompt?.user).toContain("节能方案");
     expect(prompt?.user).toContain("companionStagePolicies");
     expect(prompt?.user).toContain("launch, showcase");
     expect(prompt?.user).toContain("one coherent PPT page");
     expect(prompt?.user).toContain("fixed seconds-per-page threshold");
     expect(prompt?.user).toContain("教师负责线下校准与成果评价");
-    expect(prompt?.user).toContain("exactly one terminal mastery `quiz`");
-    expect(prompt?.user).toContain("Never add a quiz after each knowledge block");
+    expect(prompt?.user).toContain("End every completed knowledge section");
+    expect(prompt?.user).toContain("2–3 `short_answer` questions");
     expect(prompt?.user).toContain("knowledgePointIds");
   });
 

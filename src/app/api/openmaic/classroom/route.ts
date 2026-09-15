@@ -6,6 +6,10 @@ import {
 } from '@openmaic/lib/server/classroom-storage';
 import { createLogger } from '@openmaic/lib/logger';
 import { authorizeLegacyClassroomRead } from '@/lib/platform/access';
+import {
+  courseGenerationPreviewJobId,
+  loadCourseGenerationPreviewClassroom,
+} from '@/lib/course-generation/generation-preview';
 
 const log = createLogger('Classroom API');
 
@@ -30,7 +34,9 @@ export async function GET(request: NextRequest) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 400, 'Invalid classroom id');
     }
 
-    const classroom = await readClassroom(id);
+    const classroom = courseGenerationPreviewJobId(id)
+      ? await loadCourseGenerationPreviewClassroom(id)
+      : await readClassroom(id);
     if (!classroom) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Classroom not found');
     }

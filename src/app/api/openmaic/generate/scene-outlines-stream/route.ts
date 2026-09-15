@@ -29,9 +29,12 @@ import {
   enforcePblOutlineContract,
   normalizeSceneOutlinesForDuration,
 } from '@openmaic/lib/generation/outline-generator';
-import { ensureTerminalMasteryAssessment } from '@openmaic/lib/generation/terminal-mastery-assessment-policy';
 import { splitLongStudentSlides } from '@openmaic/lib/generation/student-slide-duration-policy';
 import { resolveOutlinePromptPlan } from '@openmaic/lib/generation/outline-prompt-plan';
+import {
+  buildOpenMaicBaselineOutlinePrompt,
+  shouldUseOpenMaicBaselineOutlines,
+} from '@openmaic/lib/generation/openmaic-baseline';
 import { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from '@openmaic/lib/constants/generation';
 import { nanoid } from 'nanoid';
 import type {
@@ -310,7 +313,7 @@ export async function POST(req: NextRequest) {
       modelInfo,
       modelString,
       thinkingConfig,
-    } = await resolveModelFromRequest(req, body, 'scene-outlines-stream');
+    } = await resolveModelFromRequest(req, body);
     resolvedModelString = modelString;
 
     if (!body.requirements) {
@@ -394,36 +397,51 @@ export async function POST(req: NextRequest) {
     const taskEngineMode = resolveVocationalActive(requirements);
     const promptPlan = resolveOutlinePromptPlan(requirements, taskEngineMode);
     const promptId = promptPlan.promptId;
+    const useOpenMaicBaseline = shouldUseOpenMaicBaselineOutlines(
+      requirements,
+      taskEngineMode,
+    );
 
-    const prompts = buildPrompt(promptId, {
-      requirement: requirements.requirement,
-      pdfContent: pdfText ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS) : 'None',
-      availableImages: availableImagesText,
-      researchContext: researchContext || 'None',
-      hasSourceImages,
-      imageEnabled: imageGenerationEnabled,
-      videoEnabled: videoGenerationEnabled,
-      mediaEnabled: mediaGenerationEnabled,
-      teacherContext,
-      userProfile: userProfileText,
-      pblProfile: requirements.pblProfile
-        ? formatPblCourseConfigForPrompt(requirements.pblProfile)
-        : '',
-      pblStages:
-        requirements.pblProfile?.generationTemplate === 'pbl-six-stage'
-          ? formatPblStageDefinitionsForPrompt()
-          : '',
-      requiredTeacherResourceStages:
-        requirements.pblProfile?.generationTemplate === 'pbl-six-stage'
-          ? PBL_REQUIRED_TEACHER_RESOURCE_STAGE_KEYS.join(', ')
-          : '',
-      ttsTimingContext: requirements.ttsTimingContext
-        ? JSON.stringify(requirements.ttsTimingContext, null, 2)
-        : 'No explicit calibration; use the conservative natural-speed fallback.',
-      deepInteractionMode: promptPlan.deepInteractionMode,
-      standardMode: !promptPlan.deepInteractionMode,
-      generationMode: promptPlan.generationMode,
-    });
+    const prompts = useOpenMaicBaseline
+      ? buildOpenMaicBaselineOutlinePrompt(requirements, {
+          pdfText,
+          pdfImages,
+          visionEnabled: hasVision,
+          imageMapping,
+          imageGenerationEnabled,
+          videoGenerationEnabled,
+          researchContext,
+          teacherContext,
+        })
+      : buildPrompt(promptId, {
+          requirement: requirements.requirement,
+          pdfContent: pdfText ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS) : 'None',
+          availableImages: availableImagesText,
+          researchContext: researchContext || 'None',
+          hasSourceImages,
+          imageEnabled: imageGenerationEnabled,
+          videoEnabled: videoGenerationEnabled,
+          mediaEnabled: mediaGenerationEnabled,
+          teacherContext,
+          userProfile: userProfileText,
+          pblProfile: requirements.pblProfile
+            ? formatPblCourseConfigForPrompt(requirements.pblProfile)
+            : '',
+          pblStages:
+            requirements.pblProfile?.generationTemplate === 'pbl-six-stage'
+              ? formatPblStageDefinitionsForPrompt()
+              : '',
+          requiredTeacherResourceStages:
+            requirements.pblProfile?.generationTemplate === 'pbl-six-stage'
+              ? PBL_REQUIRED_TEACHER_RESOURCE_STAGE_KEYS.join(', ')
+              : '',
+          ttsTimingContext: requirements.ttsTimingContext
+            ? JSON.stringify(requirements.ttsTimingContext, null, 2)
+            : 'No explicit calibration; use the conservative natural-speed fallback.',
+          deepInteractionMode: promptPlan.deepInteractionMode,
+          standardMode: !promptPlan.deepInteractionMode,
+          generationMode: promptPlan.generationMode,
+        });
 
     if (!prompts) {
       return apiError('INTERNAL_ERROR', 500, 'Prompt template not found');
@@ -641,10 +659,9 @@ export async function POST(req: NextRequest) {
             const contractOutlines = requirements.pblProfile?.generationTemplate === 'pbl-six-stage'
               ? enforcePblOutlineContract(parsedOutlines, requirements)
               : parsedOutlines;
-            const modeAwareOutlines = ensureTerminalMasteryAssessment(contractOutlines);
-            const normalizedOutlines = normalizeSceneOutlinesForDuration(
-              splitLongStudentSlides(modeAwareOutlines),
-            );
+            const normalizedOutlines = useOpenMaicBaseline
+              ? contractOutlines
+              : normalizeSceneOutlinesForDuration(splitLongStudentSlides(contractOutlines));
             const uniquifiedOutlines = uniquifyMediaElementIds(normalizedOutlines);
             // Send done event with all outlines
             const doneEvent = JSON.stringify({

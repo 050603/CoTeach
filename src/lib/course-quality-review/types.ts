@@ -18,6 +18,8 @@ export type CourseQualityReport = {
   courseId: string;
   classroomId: string;
   classroomRevision: number;
+  /** Exact model used by the optional post-generation semantic reviewer. */
+  reviewModelString?: string;
   status: "pending" | "running" | "completed" | "failed";
   issues: CourseQualityIssue[];
   sections?: Array<{ id: string; sceneIds: string[]; status: "pending" | "completed" | "failed"; issues: CourseQualityIssue[]; checkedAt?: string; error?: string }>;

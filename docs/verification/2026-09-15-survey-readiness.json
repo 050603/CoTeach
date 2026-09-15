@@ -1,0 +1,191 @@
+{
+  "startedAt": "2026-09-15T02:27:03.475Z",
+  "concurrentStudents": 40,
+  "transport": "HTTPS through production Nginx; DNS mapped to loopback",
+  "stages": [
+    {
+      "name": "40 simultaneous homepage requests",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 285
+    },
+    {
+      "name": "40 simultaneous invitation checks",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 155
+    },
+    {
+      "name": "40 simultaneous registrations from one IP",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 862
+    },
+    {
+      "name": "40 simultaneous logins",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 438
+    },
+    {
+      "name": "40 simultaneous course reads",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 222
+    },
+    {
+      "name": "40 cold browser homepages",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 24541
+    },
+    {
+      "name": "40 browser course pages",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 1823
+    },
+    {
+      "name": "40 browser questionnaire pages",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 5050
+    },
+    {
+      "name": "40 browser questionnaire answers",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 10167
+    },
+    {
+      "name": "40 simultaneous browser submissions with teacher polling",
+      "count": 41,
+      "failed": 0,
+      "durationMs": 728
+    },
+    {
+      "name": "40 browser reloads preserve answers",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 2026
+    },
+    {
+      "name": "40 simultaneous repeat submissions",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 1155
+    }
+  ],
+  "browserErrors": 0,
+  "failedBrowserResources": 0,
+  "verified": {
+    "newStudents": 40,
+    "newRespondents": 40,
+    "repeatSubmissionInflation": 0,
+    "questions": 8,
+    "teacherPageRendered": true
+  },
+  "success": true,
+  "finishedAt": "2026-09-15T02:27:53.139Z",
+  "http": [
+    {
+      "label": "teacher-baseline",
+      "count": 1,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 67,
+      "maxMs": 67
+    },
+    {
+      "label": "homepage",
+      "count": 40,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 231,
+      "maxMs": 235
+    },
+    {
+      "label": "invitation",
+      "count": 40,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 144,
+      "maxMs": 150
+    },
+    {
+      "label": "register",
+      "count": 40,
+      "statuses": [
+        201
+      ],
+      "p95Ms": 822,
+      "maxMs": 854
+    },
+    {
+      "label": "login",
+      "count": 40,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 426,
+      "maxMs": 431
+    },
+    {
+      "label": "courses",
+      "count": 40,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 211,
+      "maxMs": 215
+    },
+    {
+      "label": "student-cannot-read-teacher-statistics",
+      "count": 1,
+      "statuses": [
+        401
+      ],
+      "p95Ms": 5,
+      "maxMs": 5
+    },
+    {
+      "label": "required-answer-validation",
+      "count": 1,
+      "statuses": [
+        400
+      ],
+      "p95Ms": 14,
+      "maxMs": 14
+    },
+    {
+      "label": "teacher-poll-during-submit",
+      "count": 5,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 323,
+      "maxMs": 323
+    },
+    {
+      "label": "browser-submit",
+      "count": 40,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 584,
+      "maxMs": 607
+    },
+    {
+      "label": "teacher-final",
+      "count": 1,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 49,
+      "maxMs": 49
+    }
+  ]
+}

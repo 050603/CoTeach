@@ -556,7 +556,7 @@ Valid single-panel geometry (shape first, text second):
     "id": "concept_text", "type": "text",
     "left": 80, "top": 221, "width": 360, "height": 58,
     "content": "<p style=\"font-size:24px;text-align:center;\">核心概念及适用条件</p>",
-    "defaultFontName": "Microsoft YaHei", "defaultColor": "#333333"
+    "defaultFontName": "Noto Sans SC", "defaultColor": "#333333"
   }
 ]
 ```

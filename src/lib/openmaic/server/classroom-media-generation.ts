@@ -7,6 +7,7 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
+import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { createLogger } from '@openmaic/lib/logger';
 import { CLASSROOMS_DIR } from '@openmaic/lib/server/classroom-storage';
@@ -44,14 +45,11 @@ import type { VideoProviderId } from '@openmaic/lib/media/types';
 import type { TTSProviderId } from '@openmaic/lib/audio/types';
 import { splitLongSpeechActions } from '@openmaic/lib/audio/tts-utils';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@openmaic/lib/audio/voxcpm';
-import {
-  getTtsTimingProfile,
-} from '@openmaic/lib/audio/tts-timing';
 import { throwIfAborted, withGenerationRetry } from '@openmaic/lib/generation/generation-retry';
+import { auditNarrationLanguage } from '@openmaic/lib/generation/course-language';
 import { mapWithConcurrency } from '@openmaic/lib/utils/concurrency';
 import { runWithGlobalTtsProviderSlot } from '@openmaic/lib/server/tts-provider-limiter';
 import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
-import { parseJsonResponse } from '@openmaic/lib/generation/json-repair';
 import {
   hasPblRoutingMetadata,
   isStudentAiLearningScene,
@@ -59,15 +57,6 @@ import {
 
 const log = createLogger('ClassroomMedia');
 const TTS_SEGMENT_RETRIES = 2;
-
-class TtsSegmentGenerationError extends Error {
-  readonly isRetryable = true;
-
-  constructor(actionId: string) {
-    super(`TTS generation failed for action ${actionId}: all configured providers failed`);
-    this.name = 'TtsSegmentGenerationError';
-  }
-}
 
 const imageProviderQueue = new Map<ImageProviderId, Promise<void>>();
 const imageProviderLastStartedAt = new Map<ImageProviderId, number>();
@@ -148,7 +137,7 @@ async function ensureDir(dir: string) {
 
 const DOWNLOAD_TIMEOUT_MS = 120_000; // 2 minutes
 const DOWNLOAD_MAX_SIZE = 100 * 1024 * 1024; // 100 MB
-const DOWNLOAD_RETRIES = 3;
+const DOWNLOAD_RETRIES = 2;
 
 async function downloadToBufferOnce(url: string, signal?: AbortSignal): Promise<Buffer> {
   const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
@@ -175,13 +164,14 @@ async function downloadToBufferOnce(url: string, signal?: AbortSignal): Promise<
     );
   }
   if (!resp.ok) {
+    const retryAfter = resp.headers.get('retry-after') || '0';
+    const retryAfterSeconds = Number(retryAfter);
     throw Object.assign(
       new Error(`Generated resource download failed: ${resp.status} ${resp.statusText}`),
       {
         statusCode: resp.status,
-        // Generated OSS URLs are short-lived. A fresh provider response is
-        // required after expiry/not-found instead of retrying the same URL.
-        isRetryable: resp.status === 403 || resp.status === 404 || resp.status >= 500,
+        isRetryable: resp.status === 429 || resp.status >= 500,
+        retryAfterMs: Number.isFinite(retryAfterSeconds) ? Math.max(0, retryAfterSeconds * 1_000) : Math.max(0, Date.parse(retryAfter) - Date.now()) || 0,
       },
     );
   }
@@ -201,13 +191,6 @@ async function downloadToBuffer(url: string, signal?: AbortSignal): Promise<Buff
       maxRetries: DOWNLOAD_RETRIES,
       baseDelayMs: 2_000,
       maxDelayMs: 15_000,
-      // Connection failures can reuse the same signed URL. HTTP failures are
-      // returned immediately so the outer provider retry can obtain a fresh
-      // short-lived URL instead.
-      shouldRetryError: (error) => {
-        if (!error || typeof error !== 'object') return true;
-        return !(typeof (error as { statusCode?: unknown }).statusCode === 'number');
-      },
       onRetry: ({ attempt, maxAttempts, nextDelayMs, reason }) => {
         log.warn(
           `Retrying generated resource download [host=${new URL(url).hostname}, attempt=${attempt + 1}/${maxAttempts}, waitMs=${nextDelayMs}, reason=${reason}]`,
@@ -240,43 +223,20 @@ export function resolveCourseImageDimensions(aspectRatio = '16:9'): {
 }
 
 export function buildInstructionalImagePrompt(request: MediaGenerationRequest): string {
-  const includesStructuredText = /中文|文字|标签|标题|流程图|矩阵|表格|信息图/.test(request.prompt);
   return [
-    '生成一张直接服务于课程讲解的高质量教学配图，不得使用无关的装饰性素材。',
+    '生成一张直接服务于课程讲解的高质量教学配图，呈现一个明确的情境或视觉示例。',
     `教学内容与构图要求：${request.prompt}`,
     request.style ? `视觉形式：${request.style}。` : undefined,
-    '内容必须准确、层级清楚、主体完整，严格遵守给定概念、关系、步骤和学习者年龄范围；不得擅自增加事实、标签或结论。',
-    includesStructuredText
-      ? '图片中的中文必须逐字准确、清晰可读；若空间不足，应减少装饰或次要说明，不得生成错别字、乱码或含义不明的标签。'
-      : '除非教学内容明确要求，否则不要在图片中添加文字、字母、数字、标志或水印。',
-    '画面应适合真实课堂投影，具有明确视觉焦点、充足留白和清晰对比。',
+    `画幅：${request.aspectRatio || '16:9'}。主体、关键动作和对象关系必须位于画面中央 80% 安全区域，四周保留裁切余量。`,
+    '严格遵守给定概念、关系、步骤和学习者年龄范围；不增加未经要求的事实或结论。',
+    '画面不要文字、字母、数字、公式、标签、标题、标志或水印。精确文字、数值、公式和关系标签由页面原生可编辑元素呈现，图片只表达主体及空间关系。',
+    '适合课堂投影，具有明确视觉焦点、充足留白和清晰对比；不以细小细节承载必须理解的知识点。',
   ].filter(Boolean).join('\n');
-}
-
-export function buildInstructionalImageRepairPrompt(
-  request: MediaGenerationRequest,
-  reviewIssue: string,
-): string {
-  const conciseIssue = reviewIssue.replace(/^教学图片质量审校未通过[：:]?\s*/, '').slice(0, 1_200);
-  return [
-    buildInstructionalImagePrompt(request),
-    '上一版图片未通过教学质量检查。请重新构图并明确修正以下问题：',
-    conciseIssue,
-    '保留原始教学要求，不增加未经要求的新概念、标签或结论。',
-  ].join('\n');
-}
-
-function isGeneratedImageQualityRejection(error: unknown): boolean {
-  return Boolean(
-    error
-      && typeof error === 'object'
-      && (error as { code?: unknown }).code === 'GENERATED_IMAGE_QUALITY_REJECTED',
-  );
 }
 
 export async function validateGeneratedCourseImage(
   buffer: Buffer,
-  aspectRatio = '16:9',
+  _aspectRatio = '16:9',
 ): Promise<{ extension: 'png' | 'jpg' | 'webp'; width: number; height: number }> {
   let metadata: Awaited<ReturnType<ReturnType<typeof sharp>['metadata']>>;
   try {
@@ -284,26 +244,14 @@ export async function validateGeneratedCourseImage(
   } catch (error) {
     throw Object.assign(new Error('图片生成结果不是可解析的有效图片', { cause: error }), {
       code: 'GENERATED_IMAGE_INVALID',
-      isRetryable: true,
+      isRetryable: false,
     });
   }
   const width = metadata.width ?? 0;
   const height = metadata.height ?? 0;
-  if (width < 1 || height < 1 || Math.min(width, height) < 512) {
-    throw Object.assign(new Error(`图片生成结果分辨率不足：${width}×${height}`), {
-      code: 'GENERATED_IMAGE_TOO_SMALL',
-      isRetryable: true,
-    });
-  }
-  const expected = resolveCourseImageDimensions(aspectRatio);
-  const expectedRatio = expected.width / expected.height;
-  const actualRatio = width / height;
-  if (Math.abs(actualRatio - expectedRatio) / expectedRatio > 0.08) {
-    throw Object.assign(new Error(
-      `图片生成结果比例不符合 ${aspectRatio} 要求：${width}×${height}`,
-    ), {
-      code: 'GENERATED_IMAGE_ASPECT_RATIO_MISMATCH',
-      isRetryable: true,
+  if (width < 1 || height < 1) {
+    throw Object.assign(new Error('图片生成结果缺少有效尺寸'), {
+      code: 'GENERATED_IMAGE_INVALID', isRetryable: false,
     });
   }
   const extension = metadata.format === 'jpeg'
@@ -316,7 +264,7 @@ export async function validateGeneratedCourseImage(
   if (!extension) {
     throw Object.assign(new Error(`图片生成结果格式不受支持：${metadata.format || 'unknown'}`), {
       code: 'GENERATED_IMAGE_FORMAT_UNSUPPORTED',
-      isRetryable: true,
+      isRetryable: false,
     });
   }
   return { extension, width, height };
@@ -334,116 +282,6 @@ export async function normalizeCourseImageToAspectRatio(
     .toBuffer();
 }
 
-type GeneratedImageQualityReview = {
-  pass?: boolean;
-  issues?: unknown;
-};
-
-function qwenImageReviewEndpoint(baseUrl?: string): string {
-  const normalized = !baseUrl || baseUrl.includes('/compatible-mode') || baseUrl.includes('maas.aliyuncs')
-    ? 'https://dashscope.aliyuncs.com'
-    : baseUrl.replace(/\/$/, '');
-  return `${normalized}/compatible-mode/v1/chat/completions`;
-}
-
-/**
- * Qwen Image shares its credential with DashScope's vision model. Use that
- * model once as a second, independent check for objective teaching errors.
- * A rejected first draft is regenerated once; the replacement is accepted
- * without another semantic review so subjective judgments cannot block a
- * complete classroom indefinitely.
- */
-export async function reviewGeneratedCourseImage(input: {
-  buffer: Buffer;
-  detailImages?: Buffer[];
-  providerId: ImageProviderId;
-  apiKey: string;
-  baseUrl?: string;
-  requirement: string;
-  signal?: AbortSignal;
-}): Promise<void> {
-  if (input.providerId !== 'qwen-image') return;
-  const reviewImage = await sharp(input.buffer)
-    .resize({ width: 1280, withoutEnlargement: true })
-    .jpeg({ quality: 82 })
-    .toBuffer();
-  const timeoutSignal = AbortSignal.timeout(60_000);
-  const signal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal;
-  const response = await fetch(qwenImageReviewEndpoint(input.baseUrl), {
-    method: 'POST',
-    signal,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${input.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: process.env.OPENPBL_QWEN_IMAGE_REVIEW_MODEL || 'qwen3-vl-plus',
-      messages: [
-        {
-          role: 'system',
-          content: '你是中文课程图片审校员。只判断明确、可证实、会误导教学的硬错误；审美偏好和可选改进不属于不通过原因。只根据原始要求检查，不自行补充要求或理论解释。',
-        },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image_url',
-              image_url: { url: `data:image/jpeg;base64,${reviewImage.toString('base64')}` },
-            },
-            ...(input.detailImages ?? []).map((detail) => ({
-              type: 'image_url',
-              image_url: { url: `data:image/jpeg;base64,${detail.toString('base64')}` },
-            })),
-            {
-              type: 'text',
-              text: [
-                input.detailImages?.length
-                  ? '第一张是完整封面，之后是同一封面的局部放大，只用来检查细节，不是分栏或多张封面。重点检查书页、纸张、屏幕与角落；成段排列的短横线、印刷痕迹也属于伪文字，即使无法读出具体字，也违反无文字要求。'
-                  : '',
-                `原始教学配图要求：${input.requirement}`,
-                '请只检查：一、明确要求出现的文字是否有错别字、乱码或截断；若要求明确禁止文字，则出现可辨认字符或明显伪文字必须判定不通过；二、原始要求明确规定的概念、步骤、顺序或关系是否被画反、画错或遗漏；三、是否出现会直接误导学习者的可证实事实错误；四、主体是否因裁切、遮挡或极低对比而无法辨认。',
-                '不得因为标签位置、比喻方式、视觉风格、缺少原始要求未指定的说明或理论细节而拒绝；不得把“可以更好”当成硬错误。只报告图片中实际可见且能引用原始要求定位的具体问题，不猜测微小痕迹，不写建议、通过项或已经排除的问题。',
-                '仅输出 JSON：{"pass":boolean,"issues":["具体问题"]}。只有全部合格时 pass 才能为 true。',
-              ].join('\n'),
-            },
-          ],
-        },
-      ],
-      max_tokens: 500,
-    }),
-  });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => response.statusText);
-    throw Object.assign(new Error(`教学图片质量审校服务失败（${response.status}）：${detail}`), {
-      code: 'GENERATED_IMAGE_REVIEW_FAILED',
-      statusCode: response.status,
-      isRetryable: response.status === 429 || response.status >= 500,
-    });
-  }
-  const payload = await response.json() as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const content = payload.choices?.[0]?.message?.content;
-  const review = content ? parseJsonResponse<GeneratedImageQualityReview>(content) : null;
-  if (typeof review?.pass !== 'boolean' || !Array.isArray(review.issues)
-    || !review.issues.every((issue): issue is string => typeof issue === 'string' && issue.trim().length > 0)) {
-    throw Object.assign(new Error('教学图片质量审校返回了无效结果'), {
-      code: 'GENERATED_IMAGE_REVIEW_FAILED',
-      isRetryable: false,
-    });
-  }
-  const issues = review.issues.map((issue) => issue.trim());
-  if (!review.pass || issues.length > 0) {
-    throw Object.assign(new Error(
-      `教学图片质量审校未通过${issues.length > 0 ? `：${issues.join('；')}` : ''}`,
-    ), {
-      code: 'GENERATED_IMAGE_QUALITY_REJECTED',
-      isRetryable: true,
-      issues,
-    });
-  }
-}
-
 export async function persistGeneratedClassroomImage(input: {
   result: ImageGenerationResult;
   classroomId: string;
@@ -452,14 +290,6 @@ export async function persistGeneratedClassroomImage(input: {
   baseUrl: string;
   signal?: AbortSignal;
   normalizeToAspectRatio?: boolean;
-  /** Covers can use the configured vision model independently of the image provider. */
-  validateBeforePersist?: (buffer: Buffer) => Promise<void>;
-  qualityReview?: {
-    providerId: ImageProviderId;
-    apiKey: string;
-    baseUrl?: string;
-    requirement: string;
-  };
 }): Promise<string> {
   throwIfAborted(input.signal);
   const sourceBuffer = input.result.base64
@@ -470,21 +300,13 @@ export async function persistGeneratedClassroomImage(input: {
   if (!sourceBuffer?.length) {
     throw Object.assign(new Error('图片生成服务未返回可用的图片文件'), {
       code: 'GENERATED_IMAGE_EMPTY',
-      isRetryable: true,
+      isRetryable: false,
     });
   }
   const buffer = input.normalizeToAspectRatio
     ? await normalizeCourseImageToAspectRatio(sourceBuffer, input.aspectRatio)
     : sourceBuffer;
   const validated = await validateGeneratedCourseImage(buffer, input.aspectRatio);
-  if (input.qualityReview) {
-    await reviewGeneratedCourseImage({
-      buffer,
-      signal: input.signal,
-      ...input.qualityReview,
-    });
-  }
-  await input.validateBeforePersist?.(buffer);
   throwIfAborted(input.signal);
   const mediaDir = path.join(CLASSROOMS_DIR, input.classroomId, 'media');
   await ensureDir(mediaDir);
@@ -580,88 +402,34 @@ export async function generateMediaForClassroom(
 
         const aspectRatio = req.aspectRatio || '16:9';
         const dimensions = resolveCourseImageDimensions(aspectRatio);
-        let qualityRepairIssue: string | undefined;
-        let rejectedDraft: ImageGenerationResult | undefined;
+        const pendingKey = createHash('sha256').update(JSON.stringify({ req, providerId, model })).digest('hex');
+        const pendingPath = path.join(mediaDir, `.pending-image-${pendingKey}.json`);
+        let pendingResult: ImageGenerationResult | undefined;
         try {
-          await withGenerationRetry(async () => {
-            const result = await waitForProviderSlot(providerId, signal, () => generateImage(
-              { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
-              {
-                prompt: qualityRepairIssue
-                  ? buildInstructionalImageRepairPrompt(req, qualityRepairIssue)
-                  : buildInstructionalImagePrompt(req),
-                aspectRatio,
-                ...dimensions,
-                style: req.style,
-                negativePrompt: 'watermark, logo, irrelevant decoration, illegible text, garbled Chinese characters, factual errors, cropped content, cluttered layout',
-              },
-            ));
-            throwIfAborted(signal);
-            try {
-              mediaMap[req.elementId] = await persistGeneratedClassroomImage({
-                result,
-                classroomId,
-                elementId: req.elementId,
-                aspectRatio,
-                baseUrl,
-                signal,
-                // Review the first valid draft once. When it has been rejected,
-                // the next generation carries the review feedback and is saved
-                // after deterministic file checks without a second semantic veto.
-                qualityReview: qualityRepairIssue ? undefined : {
-                  providerId,
-                  apiKey,
-                  baseUrl: resolveImageBaseUrl(providerId),
-                  requirement: req.prompt,
-                },
-              });
-            } catch (error) {
-              if (isGeneratedImageQualityRejection(error)) {
-                rejectedDraft = result;
-                qualityRepairIssue = error instanceof Error ? error.message : String(error);
-              }
-              throw error;
-            }
-            log.info(`Generated and validated image: ${req.elementId}`);
-          }, {
-            label: `image ${req.elementId}`,
-            signal,
-            // Network retries for the same generated URL happen inside
-            // downloadToBuffer. Provider retries regenerate only after that URL
-            // is genuinely unusable or expired. OpenMAIC's baseline does not run
-            // a vision review at all; CoTeach keeps one review-driven repair, but
-            // never lets subjective review regenerate the same image repeatedly.
-            maxRetries: 1,
-            baseDelayMs: providerId === 'qwen-image' ? 10_000 : 1_000,
-            maxDelayMs: providerId === 'qwen-image' ? 60_000 : 16_000,
-            onRetry: async ({ attempt, maxAttempts, nextDelayMs, reason }) => {
-              log.warn(
-                `Retrying image ${req.elementId} [provider=${providerId}, attempt=${attempt + 1}/${maxAttempts}, waitMs=${nextDelayMs}, reason=${reason}]`,
-              );
-              await onProgress?.({
-                type: 'image', elementId: req.elementId, status: 'retrying',
-                completed: completedRequests, total: totalRequests,
-                attempt: attempt + 1, maxAttempts, nextDelayMs,
-              });
-            },
-          });
-        } catch (repairError) {
-          throwIfAborted(signal);
-          if (!rejectedDraft) throw repairError;
-          // The first draft is mechanically valid because the semantic review
-          // runs after file validation. If the single repair request is rate
-          // limited or returns a broken file, keep that usable draft rather
-          // than leaving an empty placeholder in the classroom.
-          mediaMap[req.elementId] = await persistGeneratedClassroomImage({
-            result: rejectedDraft,
-            classroomId,
-            elementId: req.elementId,
-            aspectRatio,
-            baseUrl,
-            signal,
-          });
-          log.warn(`Image repair failed; retained the reviewed first draft for ${req.elementId}`, repairError);
+          pendingResult = JSON.parse(await fs.readFile(pendingPath, 'utf8')) as ImageGenerationResult;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         }
+        const result = pendingResult ?? await waitForProviderSlot(providerId, signal, () => generateImage(
+            { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
+            {
+              prompt: buildInstructionalImagePrompt(req),
+              aspectRatio,
+              ...dimensions,
+              style: req.style,
+              signal,
+              negativePrompt: 'text, numbers, formula, label, watermark, logo, irrelevant decoration, cropped subject, cluttered layout',
+            },
+          ));
+        // Keep the provider result before downloading so interrupted jobs also
+        // reuse the same image. A changed prompt has a different pending key.
+        if (!pendingResult) await fs.writeFile(pendingPath, JSON.stringify(result));
+        // Download and persist the same result; neither operation may redraw it.
+        mediaMap[req.elementId] = await persistGeneratedClassroomImage({
+          result, classroomId, elementId: req.elementId, aspectRatio, baseUrl, signal,
+        });
+        await fs.unlink(pendingPath).catch((error) => log.warn('Could not clean completed image checkpoint', error));
+        log.info(`Generated image: ${req.elementId}`);
         completedRequests += 1;
         await onProgress?.({
           type: 'image', elementId: req.elementId, status: 'completed',
@@ -688,7 +456,8 @@ export async function generateMediaForClassroom(
           type: 'video', elementId: req.elementId, status: 'generating',
           completed: completedRequests, total: totalRequests,
         });
-        const providerId = videoProviderIds[0] as VideoProviderId;
+        const providerId = req.videoProviderId ?? videoProviderIds[0] as VideoProviderId;
+        if (!videoProviders[providerId]) throw Object.assign(new Error(`已锁定的视频供应商 ${providerId} 当前不可用`), { isRetryable: false });
         const apiKey = resolveVideoApiKey(providerId);
         if (!apiKey) {
           log.warn(`No API key for video provider "${providerId}", skipping ${req.elementId}`);
@@ -700,33 +469,23 @@ export async function generateMediaForClassroom(
 
         const normalized = normalizeVideoOptions(providerId, {
           prompt: req.prompt,
+          duration: req.duration,
           aspectRatio: (req.aspectRatio as '16:9' | '4:3' | '1:1' | '9:16') || '16:9',
         });
+        if (req.videoProviderId && normalized.duration !== req.duration) {
+          throw Object.assign(new Error(`已锁定的视频时长 ${req.duration} 秒与供应商能力不一致`), { isRetryable: false });
+        }
 
-        await withGenerationRetry(async () => {
-          const result = await generateVideo(
-            { providerId, apiKey, baseUrl: resolveVideoBaseUrl(providerId), model },
-            normalized,
-          );
-          throwIfAborted(signal);
-          const buf = await downloadToBuffer(result.url, signal);
-          throwIfAborted(signal);
-          const filename = `${req.elementId}.mp4`;
-          await fs.writeFile(path.join(mediaDir, filename), buf);
-          mediaMap[req.elementId] = mediaServingUrl(baseUrl, classroomId, `media/${filename}`);
-          log.info(`Generated video: ${filename}`);
-        }, {
-          label: `video ${req.elementId}`,
-          signal,
-          maxRetries: 1,
-          onRetry: async ({ attempt, maxAttempts, nextDelayMs }) => {
-            await onProgress?.({
-              type: 'video', elementId: req.elementId, status: 'retrying',
-              completed: completedRequests, total: totalRequests,
-              attempt: attempt + 1, maxAttempts, nextDelayMs,
-            });
-          },
-        });
+        const result = await generateVideo(
+          { providerId, apiKey, baseUrl: resolveVideoBaseUrl(providerId), model },
+          { ...normalized, signal },
+        );
+        const buf = await downloadToBuffer(result.url, signal);
+        throwIfAborted(signal);
+        if (!buf.length) throw new Error('视频生成服务返回了空文件');
+        const filename = `${req.elementId}.mp4`;
+        await fs.writeFile(path.join(mediaDir, filename), buf);
+        mediaMap[req.elementId] = mediaServingUrl(baseUrl, classroomId, `media/${filename}`);
         completedRequests += 1;
         await onProgress?.({
           type: 'video', elementId: req.elementId, status: 'completed',
@@ -949,29 +708,14 @@ export function resolveServerTtsTimingSelection(options: {
   );
   const runtime = runtimes[0];
   const providerId = runtime?.providerId ?? options.providerId ?? 'default';
-  const requestedModelIsForSelectedProvider = Boolean(
-    options.modelId && (!options.providerId || options.providerId === providerId),
-  );
-  const requestedVoiceIsForSelectedProvider = Boolean(
-    options.voiceId && (!options.providerId || options.providerId === providerId),
-  );
   const modelId = runtime?.modelId ?? options.modelId ?? '';
-  const voiceId = requestedVoiceIsForSelectedProvider
-    ? options.voiceId!
+  const voiceId = options.voiceId && (!options.providerId || options.providerId === providerId)
+    ? options.voiceId
     : runtime?.voice ?? options.voiceId ?? 'default';
-  resolveTTSTimingCalibration(providerId, modelId, voiceId);
-  const profile = getTtsTimingProfile(
-    providerId,
-    requestedModelIsForSelectedProvider ? options.modelId : modelId,
-    voiceId,
-  );
-  return {
-    providerId: profile.providerId,
-    modelId: profile.modelId,
-    voiceId,
-    speed: 1,
-    language: options.language || 'zh-CN',
-  };
+  const language = options.language || 'zh-CN';
+  const speed = 1;
+  resolveTTSTimingCalibration(providerId, modelId, voiceId, language, speed);
+  return { providerId, modelId, voiceId, speed, language };
 }
 
 export async function generateTTSForClassroom(
@@ -990,6 +734,25 @@ export async function generateTTSForClassroom(
     ? scenes.filter(isStudentNarratedScene)
     : scenes;
 
+  if (eligibleScenes.length === 0) return;
+  const narrationLanguageIssues = eligibleScenes.flatMap((scene) =>
+    auditNarrationLanguage(
+      scene.actions,
+      scene.timingPlan?.language ?? timingOptions.language,
+    ).map((issue) => ({ ...issue, sceneTitle: scene.title, sceneOrder: scene.order })),
+  );
+  if (narrationLanguageIssues.length > 0) {
+    const examples = narrationLanguageIssues
+      .slice(0, 3)
+      .map((issue) => `${issue.sceneOrder + 1}. ${issue.sceneTitle} / ${issue.actionId}`)
+      .join('；');
+    const error = new Error(
+      `检测到 ${narrationLanguageIssues.length} 段讲稿语言与中文课程不一致，已在 TTS 合成前停止：${examples}`,
+    ) as Error & { isRetryable: boolean };
+    error.name = 'ClassroomNarrationLanguageError';
+    error.isRetryable = false;
+    throw error;
+  }
   const audioDir = path.join(CLASSROOMS_DIR, classroomId, 'audio');
   await ensureDir(audioDir);
 
@@ -999,6 +762,7 @@ export async function generateTTSForClassroom(
     .filter(([id, info]) => id !== 'browser-native-tts' && !info.disabled)
     .map(([id]) => id);
   if (ttsProviderIds.length === 0) {
+    if (timingOptions.providerId && timingOptions.providerId !== 'default') throw new Error('已锁定的 TTS 供应商不可用，请恢复原配置');
     log.warn('No server TTS provider configured, skipping TTS generation');
     return;
   }
@@ -1008,19 +772,12 @@ export async function generateTTSForClassroom(
     log.warn('No usable server TTS provider configured, skipping TTS generation');
     return;
   }
-  const preferredRuntimeIndex = timingOptions.providerId
-    ? runtimes.findIndex((runtime) => runtime.providerId === timingOptions.providerId)
-    : 0;
-  if (preferredRuntimeIndex > 0) {
-    const [preferred] = runtimes.splice(preferredRuntimeIndex, 1);
-    if (preferred) runtimes.unshift(preferred);
-  }
-  const selectedRuntime = runtimes[0];
-  const splitProviderId = selectedRuntime.providerId;
   const speechTasks: Array<{
     speechAction: SpeechAction;
     actionId: string;
     audioId: string;
+    runtime: ServerTTSRuntime;
+    timing: Partial<ServerTtsTimingSelection>;
   }> = [];
 
   // Prepare all scene actions before starting requests. This keeps action
@@ -1030,9 +787,14 @@ export async function generateTTSForClassroom(
     throwIfAborted(signal);
     if (!scene.actions) continue;
 
+    const timing = scene.timingPlan ?? timingOptions;
+    const runtime = timing.providerId && timing.providerId !== 'default'
+      ? runtimes.find((candidate) => candidate.providerId === timing.providerId)
+      : runtimes[0];
+    if (!runtime) throw new Error('页面已锁定的 TTS 供应商不可用，请恢复原配置');
     // Split long speech actions into multiple shorter ones before TTS generation,
     // mirroring the client-side approach. Each sub-action gets its own audio file.
-    scene.actions = splitLongSpeechActions(scene.actions, splitProviderId);
+    scene.actions = splitLongSpeechActions(scene.actions, runtime.providerId);
     // Use scene order to make audio IDs unique across scenes
     const sceneOrder = scene.order;
 
@@ -1045,18 +807,15 @@ export async function generateTTSForClassroom(
       const speechAction = action as SpeechAction;
       // Include scene order in audioId to prevent collision across scenes
       const audioId = `tts_s${sceneOrder}_${action.id}`;
-      speechTasks.push({ speechAction, actionId: action.id, audioId });
+      speechTasks.push({ speechAction, actionId: action.id, audioId, runtime, timing });
     }
   }
 
   if (speechTasks.length === 0) return;
 
-  // A fallback provider may have a lower quota than the preferred provider.
-  // Use the strictest configured limit so a provider switch never creates a
-  // burst larger than one of the possible runtimes can handle.
   const concurrency = Math.min(
     speechTasks.length,
-    ...runtimes.map((runtime) => getTtsConcurrencyLimit(runtime.providerId)),
+    ...speechTasks.map((task) => getTtsConcurrencyLimit(task.runtime.providerId)),
   );
   log.info(
     `Generating TTS with bounded concurrency [classroomId=${classroomId}, segments=${speechTasks.length}, concurrency=${concurrency}]`,
@@ -1064,52 +823,32 @@ export async function generateTTSForClassroom(
 
   const outcomes = await mapWithConcurrency(speechTasks, concurrency, async (task) => {
     try {
-      await withGenerationRetry(async () => {
-        throwIfAborted(signal);
-        for (const runtime of runtimes) {
-          try {
-            const result = await runWithGlobalTtsProviderSlot(
-              runtime.providerId,
-              getTtsConcurrencyLimit(runtime.providerId),
-              () => generateTTS(
-                {
-                  providerId: runtime.providerId,
-                  modelId:
-                    runtime.providerId === selectedRuntime.providerId && timingOptions.modelId
-                      ? timingOptions.modelId
-                      : runtime.modelId,
-                  apiKey: runtime.apiKey,
-                  baseUrl: runtime.baseUrl,
-                  voice:
-                    runtime.providerId === selectedRuntime.providerId
-                      ? timingOptions.voiceId || runtime.voice
-                      : runtime.voice,
-                  speed: 1,
-                },
-                task.speechAction.text,
-              ),
-              signal,
-            );
-            throwIfAborted(signal);
-            const filename = `${task.audioId}.${result.format || runtime.format}`;
-            await fs.writeFile(path.join(audioDir, filename), result.audio);
-            task.speechAction.audioId = task.audioId;
-            task.speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${filename}`);
-            log.info(
-              `Generated TTS via ${runtime.providerId}: ${filename} (${result.audio.length} bytes)`,
-            );
-            return;
-          } catch (err) {
-            if (signal?.aborted) throw err;
-            log.warn(`TTS provider "${runtime.providerId}" failed for action ${task.actionId}:`, err);
-          }
-        }
-        throw new TtsSegmentGenerationError(task.actionId);
-      }, {
-        label: `tts action ${task.actionId}`,
-        maxRetries: TTS_SEGMENT_RETRIES,
-        signal,
-      });
+      const { runtime, timing } = task;
+      const result = await withGenerationRetry(
+        () => runWithGlobalTtsProviderSlot(
+          runtime.providerId,
+          getTtsConcurrencyLimit(runtime.providerId),
+          () => generateTTS({
+            providerId: runtime.providerId,
+            modelId: timing.modelId || runtime.modelId,
+            apiKey: runtime.apiKey,
+            baseUrl: runtime.baseUrl,
+            voice: timing.voiceId || runtime.voice,
+            speed: timing.speed ?? 1,
+            language: timing.language,
+            signal,
+          }, task.speechAction.text),
+          signal,
+        ),
+        { label: `tts action ${task.actionId}`, maxRetries: TTS_SEGMENT_RETRIES, signal },
+      );
+      throwIfAborted(signal);
+      if (!result.audio.length) throw new Error('TTS 返回了空音频文件');
+      const filename = `${task.audioId}.${result.format || runtime.format}`;
+      await fs.writeFile(path.join(audioDir, filename), result.audio);
+      task.speechAction.audioId = task.audioId;
+      task.speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${filename}`);
+      log.info(`Generated TTS via ${runtime.providerId}: ${filename} (${result.audio.length} bytes)`);
       return true;
     } catch (error) {
       if (signal?.aborted) throw error;
@@ -1124,7 +863,7 @@ export async function generateTTSForClassroom(
       `课堂语音仍有 ${failedActionIds.length} 段未生成：${failedActionIds.join(', ')}`,
     ) as Error & { isRetryable: boolean };
     error.name = 'ClassroomTtsIncompleteError';
-    error.isRetryable = true;
+    error.isRetryable = false;
     throw error;
   }
 }

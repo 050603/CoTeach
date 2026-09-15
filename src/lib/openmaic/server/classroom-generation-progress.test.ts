@@ -7,9 +7,9 @@ describe("classroom scene generation progress", () => {
     expect(completedSceneGenerationProgress(9, 14)).toBe(68);
     expect(completedSceneGenerationProgress(14, 14)).toBe(90);
   });
-  it("does not multiply a slide's internal layout repair with outer page retries", () => {
+  it("does not retry any completed page response at the orchestration layer", () => {
     expect(contentRetryBudget("slide")).toBe(0);
-    expect(contentRetryBudget("quiz")).toBe(2);
-    expect(contentRetryBudget("interactive")).toBe(2);
+    expect(contentRetryBudget("quiz")).toBe(0);
+    expect(contentRetryBudget("interactive")).toBe(0);
   });
 });

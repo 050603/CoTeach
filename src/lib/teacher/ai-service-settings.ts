@@ -97,7 +97,7 @@ export function getProviderConnectionPresentation({
       protocol: protocolLabel(providerType),
       tone: "warning",
       credentialHint:
-        "这是通过 OpenAI 兼容协议调用阿里云托管的 DeepSeek 模型；请使用与该专属部署、账号和地域匹配的 Model Studio API Key。",
+        "这是通过 OpenAI 兼容协议调用阿里云托管的 DeepSeek 模型；请使用与该专属部署、账号和地域匹配的 Model Studio API Key，并只填写该部署实际开放的模型 ID。DeepSeek 官方目录的新模型不会自动在此地址可用。",
     };
   }
 
@@ -147,6 +147,35 @@ export function getProviderCredentialError({
     message: "API Key 无效、已过期，或与当前服务地址不匹配。",
     details: "请确认密钥由当前服务地址所属的平台签发。",
   };
+}
+
+export function getProviderModelError({
+  providerId,
+  baseUrl,
+  modelId,
+  errorMessage,
+}: {
+  providerId?: string;
+  baseUrl?: string;
+  modelId?: string;
+  errorMessage: string;
+}): { message: string; details: string } | null {
+  const looksLikeMissingModel = /model[^\n]*(?:not exist|not found)|(?:not exist|not found)[^\n]*model/i.test(
+    errorMessage,
+  );
+  if (!looksLikeMissingModel) return null;
+
+  const host = endpointHost(baseUrl);
+  if (providerId === "deepseek" && ALIBABA_MODEL_STUDIO_HOST.test(host)) {
+    const selectedModel = modelId || "所选模型";
+    return {
+      message: `阿里云 Model Studio 当前业务空间拒绝了模型 ${selectedModel}。`,
+      details:
+        "该地址只接受当前业务空间实际开放的原始模型 ID；请核对业务空间、地域、模型权限和模型列表。DeepSeek 官方 API 别名不会应用到阿里云地址。",
+    };
+  }
+
+  return null;
 }
 
 export function getProviderStatePresentation({

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
+  enqueueReview: vi.fn(),
   getCourse: vi.fn(),
   updateCourse: vi.fn(),
   findPublished: vi.fn(),
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   persistAudio: vi.fn(),
 }));
 
+vi.mock('@/lib/course-quality-review/job-runner', () => ({ enqueueCourseQualityReview: mocks.enqueueReview }));
 vi.mock('@/lib/platform/template-access', () => ({ authorizeTemplateRequest: mocks.authorize }));
 vi.mock('@/lib/session/server-store', () => ({
   getCourse: mocks.getCourse,
@@ -153,6 +155,7 @@ describe('teacher classroom resource route', () => {
       }],
     }), context);
     expect(response.status).toBe(200);
+    expect(mocks.enqueueReview).not.toHaveBeenCalled();
     expect(mocks.persistAudio).toHaveBeenCalledWith('classroom-1', [expect.objectContaining({ filename: expect.stringMatching(/^edit-.*\.wav$/) })]);
     await expect(response.json()).resolves.toMatchObject({
       narrationChanged: false,

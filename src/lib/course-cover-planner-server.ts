@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { withGenerationRetry } from "@openmaic/lib/generation/generation-retry";
 import { callLLM } from "@openmaic/lib/ai/llm";
 import { resolveModel } from "@openmaic/lib/server/resolve-model";
 import { parseJsonResponse } from "@openmaic/lib/generation/json-repair";
@@ -88,46 +89,34 @@ export function parseCourseCoverVisualPlan(response: string): CourseCoverVisualP
 export async function planCourseCoverImageOnServer(
   course: CourseCoverContext,
   signal?: AbortSignal,
-  correction?: { previousPlan: CourseCoverVisualPlan; issues: string[] },
 ): Promise<CourseCoverVisualPlan> {
   signal?.throwIfAborted();
   let resolved: Awaited<ReturnType<typeof resolveModel>>;
   try {
-    resolved = await resolveModel({ stage: "course-cover-plan" });
+    resolved = await resolveModel({});
   } catch (error) {
     signal?.throwIfAborted();
     throw new CourseCoverPlanningError("COURSE_COVER_PLAN_UNAVAILABLE", "封面内容策划所需的文本模型未配置", error);
   }
   const planningSignal = AbortSignal.any([AbortSignal.timeout(90_000), ...(signal ? [signal] : [])]);
-  const input = buildCourseCoverPlanningInput(course) + (correction
-    ? `\n上一幅图片未通过审查。以下为待修正方案与审查数据，请保持课程重点并改写具体画面，避免问题再次出现：${JSON.stringify({
-      previousPlan: correction.previousPlan,
-      issues: list(correction.issues, 5, 300),
-    })}`
-    : "");
-  let invalidResponse = "";
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let response: { text: string };
-    try {
-      response = await callLLM({
-        model: resolved.model,
-        system: PLANNER_SYSTEM,
-        messages: [{
-          role: "user",
-          content: input + (attempt ? `\n上一轮输出不符合要求。以下是待修正的输出数据：${JSON.stringify(invalidResponse)}\n请重新输出完整JSON。sceneDescription是160至1500个ASCII字符的具体英文画面段落，不能出现数字（年龄也须用英文词）、引号、换行、labeled/labelled/titled/inscribed等文字标注要求、字段标签或课程原文。只保留有教学依据的一个场景。` : ""),
-        }],
-        maxOutputTokens: 4_096,
-        maxRetries: 0,
-        abortSignal: planningSignal,
-      }, "course-cover-plan", undefined, resolved.thinkingConfig);
-      planningSignal.throwIfAborted();
-    } catch (error) {
-      signal?.throwIfAborted();
-      throw new CourseCoverPlanningError("COURSE_COVER_PLAN_FAILED", "封面内容策划失败，请重试", error);
-    }
-    const plan = parseCourseCoverVisualPlan(response.text);
-    if (plan) return plan;
-    invalidResponse = response.text.slice(0, 5_000);
+  let response: { text: string };
+  try {
+    response = await withGenerationRetry(() => callLLM({
+      model: resolved.model,
+      system: PLANNER_SYSTEM,
+      messages: [{ role: "user", content: buildCourseCoverPlanningInput(course) }],
+      maxOutputTokens: 4_096,
+      maxRetries: 0,
+      abortSignal: planningSignal,
+    }, "course-cover-plan", undefined, resolved.thinkingConfig), {
+      label: 'course cover planning', maxRetries: 2, signal: planningSignal,
+    });
+    planningSignal.throwIfAborted();
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw new CourseCoverPlanningError("COURSE_COVER_PLAN_FAILED", "封面内容策划失败，请重试", error);
   }
-  throw new CourseCoverPlanningError("COURSE_COVER_PLAN_INVALID", "封面画面方案未通过校验，请重试");
+  const plan = parseCourseCoverVisualPlan(response.text);
+  if (plan) return plan;
+  throw new CourseCoverPlanningError("COURSE_COVER_PLAN_INVALID", "封面画面方案未通过校验，请调整内容后重试");
 }

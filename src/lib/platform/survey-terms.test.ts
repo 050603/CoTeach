@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { SurveyQuestionAnalytics, SurveyTextAnalytics } from "./survey";
 
-const mocks = vi.hoisted(() => ({ resolve: vi.fn(), extract: vi.fn(), redis: vi.fn() }));
+const mocks = vi.hoisted(() => ({ resolve: vi.fn(), extract: vi.fn(), consolidate: vi.fn(), redis: vi.fn() }));
 vi.mock("./survey-keyword-model", () => ({ resolveSurveyKeywordModel: mocks.resolve }));
 vi.mock("@/lib/redis/client", () => ({ getRedisClient: mocks.redis }));
 
@@ -14,8 +14,13 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   mocks.redis.mockResolvedValue(null);
-  mocks.resolve.mockResolvedValue({ cacheKey: "model-v1", modelName: "test", extract: mocks.extract });
+  mocks.resolve.mockResolvedValue({ cacheKey: "model-v1", modelName: "test", extract: mocks.extract, consolidate: mocks.consolidate });
   mocks.extract.mockResolvedValue([["人工智能", "人工智能"], ["人工智能", "机器学习"]]);
+  mocks.consolidate.mockImplementation(async (_title: string, evidence: Array<{ id: number; text: string }>) => {
+    const idsByLabel = new Map<string, number[]>();
+    evidence.forEach(({ id, text }) => idsByLabel.set(text, [...(idsByLabel.get(text) ?? []), id]));
+    return [...idsByLabel].map(([, evidenceIds]) => ({ canonicalEvidenceId: evidenceIds[0], evidenceIds }));
+  });
 });
 afterEach(() => vi.useRealTimers());
 
@@ -23,13 +28,16 @@ async function setup() {
   const { populateSurveyTerms } = await import("./survey-terms");
   const work: Array<() => Promise<void>> = [];
   const defer = (job: () => Promise<void>) => { work.push(job); };
-  return { populateSurveyTerms: (scope: string, questions: SurveyQuestionAnalytics[], schedule: typeof defer) => populateSurveyTerms(scope, questions, schedule, 0), work, defer };
+  return { populateSurveyTerms: (scope: string, questions: SurveyQuestionAnalytics[], schedule: typeof defer, wait = 0, mode: "local" | "llm" = "local") => {
+    void wait;
+    return populateSurveyTerms(scope, questions, schedule, 0, mode);
+  }, work, defer };
 }
 
 describe("local neural survey keyword cache", () => {
   it("defers LLM work immediately, isolates mode caches and reuses them after switching back", async () => {
     const { populateSurveyTerms } = await import("./survey-terms");
-    mocks.resolve.mockImplementation(async (mode: string) => ({ cacheKey: mode, extract: mocks.extract }));
+    mocks.resolve.mockImplementation(async (mode: string) => ({ cacheKey: mode, extract: mocks.extract, ...(mode === "llm" ? { consolidate: mocks.consolidate } : {}) }));
     mocks.extract.mockImplementation(async (_title: string, responses: string[]) => responses.map(() => ["人工智能"]));
     const work: Array<() => Promise<void>> = [];
     const defer = (job: () => Promise<void>) => { work.push(job); };
@@ -40,6 +48,10 @@ describe("local neural survey keyword cache", () => {
     await work.shift()!();
     await populateSurveyTerms("activity", [q], defer, 500, "local");
     expect(q).toMatchObject({ keywordMode: "local", keywordStatus: "ready" });
+    while (work.length) await work.shift()!();
+    await populateSurveyTerms("activity", [q], defer, 500, "llm");
+    expect(q).toMatchObject({ keywordMode: "llm", keywordStatus: "processing" });
+    await work.shift()!();
     await populateSurveyTerms("activity", [q], defer, 500, "llm");
     expect(q).toMatchObject({ keywordMode: "llm", keywordStatus: "ready" });
     expect(mocks.extract).toHaveBeenCalledTimes(2);
@@ -49,7 +61,7 @@ describe("local neural survey keyword cache", () => {
     const { populateSurveyTerms } = await import("./survey-terms");
     let complete: (value: string[][]) => void = () => {};
     const remoteExtract = vi.fn(() => new Promise<string[][]>((resolve) => { complete = resolve; }));
-    mocks.resolve.mockImplementation(async (mode: string) => ({ cacheKey: mode, extract: mode === "llm" ? remoteExtract : mocks.extract }));
+    mocks.resolve.mockImplementation(async (mode: string) => ({ cacheKey: mode, extract: mode === "llm" ? remoteExtract : mocks.extract, ...(mode === "llm" ? { consolidate: mocks.consolidate } : {}) }));
     const work: Array<() => Promise<void>> = [];
     const defer = (job: () => Promise<void>) => { work.push(job); };
     await populateSurveyTerms("activity", [question(Array.from({ length: 9 }, (_, i) => `人工智能${i}`))], defer, 500, "llm");
@@ -124,7 +136,7 @@ describe("local neural survey keyword cache", () => {
     expect(updated.keywordUnrepresentedResponses).toEqual([]);
   });
 
-  it("prioritizes a unique student opinion on the first page and retains every term for later pages", async () => {
+  it("keeps repeated local terms first without dropping the remaining verified terms", async () => {
     const { populateSurveyTerms, work, defer } = await setup();
     const common = Array.from({ length: 50 }, (_, index) => `共同观点${String(index).padStart(3, "0")}`);
     const q = question([common.join(" "), common.join(" "), "独特的改进建议"]);
@@ -133,13 +145,13 @@ describe("local neural survey keyword cache", () => {
     await work.shift()!();
     await populateSurveyTerms("activity", [q], defer);
     expect(q.terms).toHaveLength(51);
-    expect(q.terms.slice(0, 48)).toContainEqual({ label: "独特的改进建议", value: 1, studentIds: ["s2"] });
-    expect(new Set(q.terms.slice(0, 48).flatMap((term) => term.studentIds!)).size).toBe(3);
-    expect(q).toMatchObject({ keywordAnalyzedCount: 3, keywordRepresentedCount: 3, keywordUnrepresentedResponses: [] });
-    expect(new Set(q.terms.map((term) => term.label))).toEqual(new Set([...common, "独特的改进建议"]));
+    expect(q.terms.slice(0, 50).every((term) => term.value === 2)).toBe(true);
+    expect(q.terms.at(-1)).toMatchObject({ label: "独特的改进建议", value: 1 });
+    expect(q).toMatchObject({ keywordAnalyzedCount: 3, keywordRepresentedCount: 3,
+      keywordUnrepresentedResponses: [] });
   });
 
-  it("keeps all distinct class responses reachable beyond the 48-term first page", async () => {
+  it("keeps every verified local term when all responses are unique", async () => {
     const { populateSurveyTerms, work, defer } = await setup();
     const contents = Array.from({ length: 61 }, (_, index) => `独立反馈${String(index).padStart(3, "0")}`);
     const q = question(contents);
@@ -150,10 +162,24 @@ describe("local neural survey keyword cache", () => {
       await populateSurveyTerms("activity", [q], defer);
     }
     expect(q.terms).toHaveLength(61);
-    expect(q.terms.slice(48)).toHaveLength(13);
+    expect(q.terms.every((term) => term.value === 1)).toBe(true);
     expect(new Set(q.terms.flatMap((term) => term.studentIds!)).size).toBe(61);
-    expect(q).toMatchObject({ keywordAnalyzedCount: 61, keywordRepresentedCount: 61, keywordUnrepresentedResponses: [] });
+    expect(q).toMatchObject({ keywordAnalyzedCount: 61, keywordRepresentedCount: 61 });
+    expect(q.keywordUnrepresentedResponses).toEqual([]);
     expect(mocks.extract.mock.calls.map((call) => call[1].length)).toEqual([24, 24, 13]);
+  });
+
+  it("downranks words repeated from the question while preserving their real counts", async () => {
+    const { populateSurveyTerms, work, defer } = await setup();
+    const q = { ...question(["人工智能 实践", "人工智能 实践", "人工智能"]), title: "谈谈人工智能" };
+    mocks.extract.mockImplementation(async (_title: string, responses: string[]) => responses.map((response) => response.split(" ")));
+    await populateSurveyTerms("activity", [q], defer);
+    await work.shift()!();
+    await populateSurveyTerms("activity", [q], defer);
+    expect(q.terms).toEqual([
+      { label: "实践", value: 2, studentIds: ["s0", "s1"] },
+      { label: "人工智能", value: 3, studentIds: ["s0", "s1", "s2"] },
+    ]);
   });
 
   it("distinguishes completed answers without verified keywords from pending and failed analysis", async () => {
@@ -164,7 +190,7 @@ describe("local neural survey keyword cache", () => {
     await work.shift()!();
     await populateSurveyTerms("activity", [first], defer);
     expect(first).toMatchObject({ keywordAnalyzedCount: 3, keywordRepresentedCount: 1,
-      keywordUnrepresentedResponses: [{ studentId: "s1", reason: "no-keywords" }, { studentId: "s2", reason: "no-keywords" }] });
+      keywordUnrepresentedResponses: [{ studentId: "s1", reason: "no-keywords" }, { studentId: "s2", reason: "no-theme" }] });
     const updated = question([...first.responses.map((response) => response.content), "新反馈"]);
     mocks.extract.mockRejectedValueOnce(new Error("timeout"));
     await populateSurveyTerms("activity", [updated], defer);
@@ -173,7 +199,7 @@ describe("local neural survey keyword cache", () => {
     await populateSurveyTerms("activity", [updated], defer);
     expect(updated).toMatchObject({ keywordAnalyzedCount: 3, keywordRepresentedCount: 1 });
     expect(updated.keywordUnrepresentedResponses).toEqual([
-      { studentId: "s1", reason: "no-keywords" }, { studentId: "s2", reason: "no-keywords" },
+      { studentId: "s1", reason: "no-keywords" }, { studentId: "s2", reason: "no-theme" },
       { studentId: "s3", reason: "analysis-unavailable" },
     ]);
   });
@@ -289,5 +315,115 @@ describe("local neural survey keyword cache", () => {
     expect(q).toMatchObject({ keywordAnalyzedCount: 0, keywordRepresentedCount: 0,
       keywordUnrepresentedResponses: [{ studentId: "s0", reason: "analysis-unavailable" }, { studentId: "s1", reason: "analysis-unavailable" }] });
     expect(work).toHaveLength(0);
+  });
+
+  it("consolidates LLM evidence into class themes and counts each student once", async () => {
+    const { populateSurveyTerms, work, defer } = await setup();
+    const q = question(["小组协作", "组员配合", "团队合作", "反馈太慢"]);
+    mocks.extract.mockResolvedValue([["小组协作"], ["组员配合"], ["团队合作"], ["反馈太慢"]]);
+    mocks.consolidate.mockResolvedValue([
+      { canonicalEvidenceId: 0, evidenceIds: [0, 1, 2] },
+      { canonicalEvidenceId: 3, evidenceIds: [3] },
+    ]);
+
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+    await work.shift()!();
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+    await work.shift()!();
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+
+    expect(q).toMatchObject({ keywordStatus: "ready", terms: [
+      { label: "小组协作", value: 3, studentIds: ["s0", "s1", "s2"] },
+      { label: "反馈太慢", value: 1, studentIds: ["s3"] },
+    ] });
+    expect(mocks.consolidate).toHaveBeenCalledWith("你的收获", [
+      { id: 0, responseId: 0, text: "小组协作" },
+      { id: 1, responseId: 1, text: "组员配合" },
+      { id: 2, responseId: 2, text: "团队合作" },
+      { id: 3, responseId: 3, text: "反馈太慢" },
+    ]);
+  });
+
+  it("splits a model group that combines separate points from the same answer", async () => {
+    const { populateSurveyTerms, work, defer } = await setup();
+    const q = question(["机器人和编程", "机器人", "编程"]);
+    mocks.extract.mockResolvedValue([["机器人", "编程"], ["机器人"], ["编程"]]);
+    mocks.consolidate.mockResolvedValue([{ canonicalEvidenceId: 0, evidenceIds: [0, 1, 2, 3] }]);
+
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+    await work.shift()!();
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+    await work.shift()!();
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+
+    expect(q).toMatchObject({ keywordStatus: "ready", keywordAggregation: "semantic", terms: [
+      { label: "编程", value: 2, studentIds: ["s0", "s2"] },
+      { label: "机器人", value: 2, studentIds: ["s0", "s1"] },
+    ] });
+  });
+
+  it("keeps robot and programming separate and accumulates only the repeated atomic word", async () => {
+    const { populateSurveyTerms, work, defer } = await setup();
+    const q = question(["机器人和编程教育", "人工智能编程"]);
+    mocks.extract.mockResolvedValue([["机器人", "编程"], ["人工智能", "编程"]]);
+    mocks.consolidate.mockResolvedValue([
+      { canonicalEvidenceId: 0, evidenceIds: [0] },
+      { canonicalEvidenceId: 1, evidenceIds: [1, 3] },
+      { canonicalEvidenceId: 2, evidenceIds: [2] },
+    ]);
+
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+    await work.shift()!();
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+    await work.shift()!();
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+
+    expect(q.terms).toEqual(expect.arrayContaining([
+      { label: "编程", value: 2, studentIds: ["s0", "s1"] },
+      { label: "机器人", value: 1, studentIds: ["s0"] },
+      { label: "人工智能", value: 1, studentIds: ["s1"] },
+    ]));
+    expect(q.terms).not.toContainEqual(expect.objectContaining({ label: "机器人编程" }));
+  });
+
+  it("falls back to exact verified AI terms when semantic grouping is invalid", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { populateSurveyTerms, work, defer } = await setup();
+    const q = question(["机器人", "编程", "也想学编程"]);
+    mocks.extract.mockResolvedValue([["机器人"], ["编程"], ["编程"]]);
+    mocks.consolidate.mockRejectedValue(new Error("invalid semantic grouping"));
+
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+    await work.shift()!();
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+    await work.shift()!();
+    await populateSurveyTerms("activity", [q], defer, 0, "llm");
+
+    expect(q).toMatchObject({ keywordStatus: "ready", keywordAggregation: "exact-fallback", terms: [
+      { label: "编程", value: 2, studentIds: ["s1", "s2"] },
+      { label: "机器人", value: 1, studentIds: ["s0"] },
+    ] });
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("displaying verified exact evidence"));
+  });
+
+  it("reuses the last LLM theme snapshot only for additive submissions", async () => {
+    const { populateSurveyTerms, work, defer } = await setup();
+    mocks.extract.mockImplementation(async (_title: string, responses: string[]) => responses.map((response) => [response]));
+    mocks.consolidate.mockResolvedValue([{ canonicalEvidenceId: 0, evidenceIds: [0, 1] }]);
+    const initial = question(["小组协作", "团队合作"]);
+    await populateSurveyTerms("activity", [initial], defer, 0, "llm");
+    await work.shift()!();
+    await populateSurveyTerms("activity", [initial], defer, 0, "llm");
+    await work.shift()!();
+    await populateSurveyTerms("activity", [initial], defer, 0, "llm");
+    expect(initial.terms[0]).toMatchObject({ label: "小组协作", value: 2 });
+
+    const added = question(["小组协作", "团队合作", "实践机会"]);
+    await populateSurveyTerms("activity", [added], defer, 0, "llm");
+    expect(added).toMatchObject({ keywordStatus: "processing", terms: [{ label: "小组协作", value: 2 }] });
+
+    const edited = question(["个人阅读", "团队合作"]);
+    await populateSurveyTerms("activity", [edited], defer, 0, "llm");
+    expect(edited).toMatchObject({ keywordStatus: "processing", terms: [] });
   });
 });

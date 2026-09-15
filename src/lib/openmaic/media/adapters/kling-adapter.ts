@@ -17,6 +17,7 @@
  * API docs: https://docs.klingai.com/api
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import crypto from 'crypto';
 import type {
   VideoGenerationConfig,
@@ -62,7 +63,7 @@ function generateJWT(accessKey: string, secretKey: string): string {
 function parseApiKey(apiKey: string): { accessKey: string; secretKey: string } {
   const sep = apiKey.indexOf(':');
   if (sep <= 0) {
-    throw new Error('Kling apiKey must be "accessKey:secretKey" format');
+    throw mediaGenerationFailure('Kling apiKey must be "accessKey:secretKey" format');
   }
   return {
     accessKey: apiKey.slice(0, sep),
@@ -170,7 +171,8 @@ async function submitTask(
   if (options.duration) body.duration = String(options.duration);
   if (options.aspectRatio) body.aspect_ratio = options.aspectRatio;
 
-  const response = await fetch(`${baseUrl}/v1/videos/text2video`, {
+  const response = await fetchMediaRequest(`${baseUrl}/v1/videos/text2video`, {
+    signal: options.signal,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -179,17 +181,13 @@ async function submitTask(
     body: JSON.stringify(body),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Kling submit failed (${response.status}): ${text}`);
-  }
 
   const data = (await response.json()) as KlingSubmitResponse;
   if (data.code !== 0) {
-    throw new Error(`Kling submit error ${data.code}: ${data.message}`);
+    throw mediaGenerationFailure(`Kling submit error ${data.code}: ${data.message}`);
   }
   if (!data.data?.task_id) {
-    throw new Error('Kling returned empty task_id');
+    throw mediaGenerationFailure('Kling returned empty task_id');
   }
 
   return data.data.task_id;
@@ -203,20 +201,18 @@ async function pollTask(
   baseUrl: string,
   token: string,
   taskId: string,
+  signal?: AbortSignal,
 ): Promise<KlingPollResponse['data']> {
-  const response = await fetch(`${baseUrl}/v1/videos/text2video/${taskId}`, {
+  const response = await fetchMediaRequest(`${baseUrl}/v1/videos/text2video/${taskId}`, {
+    signal: signal,
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Kling poll failed (${response.status}): ${text}`);
-  }
 
   const data = (await response.json()) as KlingPollResponse;
   if (data.code !== 0) {
-    throw new Error(`Kling poll error ${data.code}: ${data.message}`);
+    throw mediaGenerationFailure(`Kling poll error ${data.code}: ${data.message}`);
   }
 
   return data.data;
@@ -241,12 +237,13 @@ export async function generateWithKling(
   // 2. Poll until done
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-    const result = await pollTask(baseUrl, token, taskId);
+    const result = await pollTask(baseUrl, token, taskId, options.signal);
+    if (!result) throw mediaGenerationFailure('Kling returned an empty task status');
 
     if (result.task_status === 'succeed') {
       const video = result.task_result?.videos?.[0];
       if (!video?.url) {
-        throw new Error('Kling task succeeded but no video URL returned');
+        throw mediaGenerationFailure('Kling task succeeded but no video URL returned');
       }
       const { width, height } = getDimensions(options.aspectRatio);
       return {
@@ -258,13 +255,16 @@ export async function generateWithKling(
     }
 
     if (result.task_status === 'failed') {
-      throw new Error(
+      throw mediaGenerationFailure(
         `Kling video generation failed: ${result.task_status_msg || 'Unknown error'}`,
       );
     }
+    if (!['submitted', 'processing'].includes(result.task_status)) {
+      throw mediaGenerationFailure('Kling returned an invalid task status');
+    }
   }
 
-  throw new Error(
+  throw mediaGenerationFailure(
     `Kling video generation timed out after ${(MAX_POLL_ATTEMPTS * POLL_INTERVAL_MS) / 1000}s (task: ${taskId})`,
   );
 }

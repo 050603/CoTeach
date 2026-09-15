@@ -11,6 +11,40 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 describe("student registration", () => {
+  it("keeps the native input value unchanged while presenting a normalized invite code", () => {
+    render(<StudentRegisterPage />);
+
+    const inviteInput = screen.getByLabelText("课程邀请码");
+    inviteInput.focus();
+    fireEvent.change(inviteInput, { target: { value: "a" } });
+
+    expect(inviteInput).toHaveValue("a");
+    expect(inviteInput).toHaveAttribute("autocapitalize", "none");
+    expect(inviteInput).toHaveAttribute("autocomplete", "off");
+    expect(inviteInput).toHaveAttribute("autocorrect", "off");
+    expect(document.activeElement).toBe(inviteInput);
+    expect(
+      Array.from(document.querySelectorAll(".pbl-student-code-cell"), (cell) => cell.textContent),
+    ).toEqual(["A", "", "", "", "", ""]);
+  });
+
+  it("does not rewrite iOS composition text", () => {
+    render(<StudentRegisterPage />);
+
+    const inviteInput = screen.getByLabelText("课程邀请码");
+    inviteInput.focus();
+    fireEvent.compositionStart(inviteInput);
+    fireEvent.change(inviteInput, { target: { value: "ab" } });
+    expect(inviteInput).toHaveValue("ab");
+
+    fireEvent.compositionEnd(inviteInput, { data: "ab" });
+    expect(inviteInput).toHaveValue("ab");
+    expect(
+      Array.from(document.querySelectorAll(".pbl-student-code-cell"), (cell) => cell.textContent),
+    ).toEqual(["A", "B", "", "", "", ""]);
+    expect(document.activeElement).toBe(inviteInput);
+  });
+
   it("collects a student ID and requires matching password confirmation", async () => {
     const fetcher = vi
       .fn()

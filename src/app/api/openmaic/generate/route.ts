@@ -228,6 +228,7 @@ export async function POST(request: NextRequest) {
   }
 
   const generationInput = {
+    generationModelString: request.headers.get('x-model')?.trim() || undefined,
     requirement,
     generationMode: generationMode === 'deep-interaction'
       ? 'deep-interaction' as const

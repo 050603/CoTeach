@@ -11,6 +11,7 @@ import {
   Clock3,
   AlertTriangle,
   GitBranch,
+  Eye,
   Layers3,
   Network,
   Route,
@@ -67,8 +68,10 @@ export function QuickGenerationStage({
   failed = false,
   failureMessage,
   retrying = false,
+  previewScenesCount = 0,
   onCancel,
   onOpenCourse,
+  onPreviewGenerated,
   onRetry,
   onReview,
 }: {
@@ -93,6 +96,8 @@ export function QuickGenerationStage({
   retrying?: boolean;
   onCancel: () => void;
   onOpenCourse: () => void;
+  onPreviewGenerated?: () => void;
+  previewScenesCount?: number;
   onRetry?: () => void;
   onReview: () => void;
 }) {
@@ -190,6 +195,16 @@ export function QuickGenerationStage({
             </span>
             <span className="truncate">{failed ? "课程页面生成未完成" : recovering ? "正在自动恢复" : paused ? activeReviewKind === "knowledge" ? "生成已暂停，等待知识图谱确认" : "生成已暂停，等待课程大纲确认" : message || "正在生成课程"}</span>
           </div>
+          <div className="flex shrink-0 items-center gap-2">
+          {previewScenesCount > 0 && !completed && onPreviewGenerated ? (
+            <button
+              className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-xs)] border border-blue-200 bg-white px-4 text-xs font-semibold text-blue-700 shadow-sm transition hover:border-blue-400 hover:bg-blue-50"
+              onClick={onPreviewGenerated}
+              type="button"
+            >
+              <Eye className="size-3.5" />预览已生成 {previewScenesCount} 页
+            </button>
+          ) : null}
           {failed ? (
             <button
               className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-xs)] bg-[var(--pbl-teacher)] px-4 text-xs font-semibold text-white shadow-[var(--shadow-raised)] transition hover:bg-[var(--pbl-teacher-hover)] disabled:cursor-wait disabled:opacity-60"
@@ -217,6 +232,7 @@ export function QuickGenerationStage({
               {cancelling ? "正在中断" : confirmCancel ? "确认中断" : "中断生成"}
             </button>
           )}
+          </div>
         </header>
 
         <main className="mx-auto grid w-full max-w-[1120px] flex-1 place-items-center py-7 sm:py-9">

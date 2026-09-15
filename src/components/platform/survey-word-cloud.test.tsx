@@ -14,18 +14,15 @@ function measure(width = 1000, height = 500) {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0, toJSON() {} });
 }
 
-it('keeps every keyword reachable through pagination and search beyond the first 48', () => {
+it('renders every term supplied by the analytics API', () => {
   measure();
   mocks.layout.mockImplementation(({ words }) => words);
-  const terms = Array.from({ length: 61 }, (_, index) => ({ label: `词条${index}`, value: 1 }));
+  const terms = Array.from({ length: 20 }, (_, index) => ({ label: `词条${index}`, value: 20 - index }));
   render(<SurveyWordCloud terms={terms} onSelect={vi.fn()} />);
-  expect(screen.getAllByRole('button', { name: /人提及/ })).toHaveLength(48);
-  expect(screen.queryByRole('button', { name: '词条60，1 人提及' })).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '下一页关键词' }));
-  expect(screen.getAllByRole('button', { name: /人提及/ })).toHaveLength(13);
-  expect(screen.getByRole('button', { name: '词条60，1 人提及' })).toBeInTheDocument();
-  fireEvent.change(screen.getByRole('textbox', { name: '查找关键词' }), { target: { value: '词条60' } });
-  expect(screen.getAllByRole('button', { name: /人提及/ })).toHaveLength(1);
+  expect(screen.getAllByRole('button', { name: /人提及/ })).toHaveLength(20);
+  expect(screen.getByRole('button', { name: '词条0，20 人提及' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '词条12，8 人提及' })).toBeInTheDocument();
+  expect(screen.queryByRole('textbox', { name: '查找关键词' })).not.toBeInTheDocument();
 });
 
 it('exposes complete readable labels if collision layout keeps dropping words', async () => {
@@ -50,10 +47,23 @@ it.each([
   expect(screen.queryByText('等待学生写下更多想法')).not.toBeInTheDocument();
 });
 
-it('keeps existing keywords and a loading message without analysis counts', () => {
+it('keeps existing keywords without rendering a cloud-top status message', () => {
   render(<SurveyWordCloud terms={[{ label: '人工智能', value: 2 }]} status="processing" analyzedCount={2} responseCount={3} hasResponses onSelect={vi.fn()} />);
-  expect(screen.getByRole('status')).toHaveTextContent('正在分析新增回答');
-  expect(screen.queryByText(/已分析|字号表示|个关键词/)).not.toBeInTheDocument();
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(screen.queryByText(/正在分析新增回答|已分析|字号表示|个关键词/)).not.toBeInTheDocument();
+});
+
+it('does not render any cloud-top hint for normal or all-singleton terms', () => {
+  const { rerender } = render(<SurveyWordCloud terms={[{ label: '团队协作', value: 3 }, { label: '实践', value: 1 }]} status="ready" onSelect={vi.fn()} />);
+  expect(screen.queryByText('字号代表不同学生的提及人数')).not.toBeInTheDocument();
+  rerender(<SurveyWordCloud terms={[{ label: '团队协作', value: 1 }, { label: '实践', value: 1 }]} status="ready" onSelect={vi.fn()} />);
+  expect(screen.queryByText('当前观点较分散 · 各词条均为 1 人提及')).not.toBeInTheDocument();
+});
+
+it('renders verified fallback evidence as a stable usable cloud', () => {
+  render(<SurveyWordCloud terms={[{ label: '机器人', value: 1 }, { label: '编程', value: 2 }]} status="ready" onSelect={vi.fn()} />);
+  expect(screen.queryByText('AI 同义归并暂未完成 · 当前展示已验证原词')).not.toBeInTheDocument();
+  expect(screen.queryByText('关键词分析暂时不可用')).not.toBeInTheDocument();
 });
 
 it('animates the cloud surface and reveals words with a capped stagger', () => {
@@ -66,7 +76,17 @@ it('animates the cloud surface and reveals words with a capped stagger', () => {
   expect(animatedWords).toHaveLength(25);
   expect(animatedWords[0].style.getPropertyValue('--survey-word-delay')).toBe('0ms');
   expect(animatedWords[1].style.getPropertyValue('--survey-word-delay')).toBe('28ms');
+  expect(animatedWords[11].style.getPropertyValue('--survey-word-delay')).toBe('308ms');
   expect(animatedWords[24].style.getPropertyValue('--survey-word-delay')).toBe('620ms');
+});
+
+it('skips collision layout and uses the complete readable list when the cloud would be too dense', () => {
+  measure(320, 180);
+  const terms = Array.from({ length: 200 }, (_, index) => ({ label: `密集词条${index}`, value: 1 }));
+  render(<SurveyWordCloud terms={terms} onSelect={vi.fn()} />);
+  expect(screen.getByLabelText('完整关键词列表')).toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: /人提及/ })).toHaveLength(200);
+  expect(mocks.layout).toHaveBeenCalledWith(expect.objectContaining({ words: [] }));
 });
 
 it('fits the measured container when a short projection window is resized', () => {

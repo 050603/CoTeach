@@ -26,6 +26,7 @@ export interface MediaTask {
     aspectRatio?: string;
     style?: string;
     duration?: number;
+    videoProviderId?: MediaGenerationRequest['videoProviderId'];
   };
   objectUrl?: string; // URL.createObjectURL() for rendering
   poster?: string; // Video poster objectUrl
@@ -86,6 +87,8 @@ export const useMediaGenerationStore = create<MediaGenerationState>()((set, get)
         params: {
           aspectRatio: req.aspectRatio,
           style: req.style,
+          duration: req.duration,
+          videoProviderId: req.videoProviderId,
         },
         retryCount: 0,
         stageId,

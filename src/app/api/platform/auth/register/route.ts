@@ -30,7 +30,9 @@ export async function POST(request: Request) {
   if (!isAuthConfigured() || !isDatabaseConfigured()) return jsonError(request, "AUTH_UNAVAILABLE", "账号服务尚未配置", 503);
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return jsonError(request, "INVALID_REGISTRATION", `请检查注册信息；${PASSWORD_LENGTH_HINT}`, 400, parsed.error.flatten());
-  const limitKey = getClientIp(request);
+  // A classroom shares one public IP. Keep retries bounded per student so
+  // classmates registering simultaneously do not exhaust one shared bucket.
+  const limitKey = `${getClientIp(request)}:${parsed.data.username.normalize("NFKC").trim().toLocaleLowerCase("en-US")}`;
   const limit = await checkDistributedRateLimit({ namespace: "platform-register", key: limitKey, limit: 5, windowSeconds: 10 * 60 });
   if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
   try {

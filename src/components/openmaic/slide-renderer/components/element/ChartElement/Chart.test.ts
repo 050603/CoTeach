@@ -26,3 +26,24 @@ describe('native chart component registration', () => {
     },
   );
 });
+
+describe('compact native chart layout', () => {
+  it.each([138.5, 220])('keeps category labels and a usable plot inside a %spx frame', async (height) => {
+    const { getChartOption: getPackageChartOption } = await import('../../../../../../../packages/@openmaic/renderer/src/elements/chart/chartOption');
+    for (const makeOption of [getChartOption, getPackageChartOption]) {
+      const chart = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 411, height });
+      try {
+        chart.setOption({ ...makeOption({ type: 'bar', themeColors: ['#5B9BD5'], data: {
+          labels: ['周一', '周二', '周三'], legends: ['用电量 (kWh)'], series: [[12, 10, 14]],
+        } }), animation: false });
+        const svg = chart.renderToSVGString();
+        for (const label of ['周一', '周二', '周三']) expect(svg).toContain(label);
+        const bottom = chart.convertToPixel({ yAxisIndex: 0 }, 0) as number;
+        const top = chart.convertToPixel({ yAxisIndex: 0 }, 14) as number;
+        expect(bottom - top).toBeGreaterThan(height * 0.45);
+        expect(top).toBeGreaterThanOrEqual(0);
+        expect(bottom).toBeLessThan(height);
+      } finally { chart.dispose(); }
+    }
+  });
+});

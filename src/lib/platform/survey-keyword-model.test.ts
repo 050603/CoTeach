@@ -33,6 +33,12 @@ describe("local neural survey tokenizer", () => {
     expect(await model.extract("", ["ＡＩ ai 3D打印 H₂O 123！"])).toEqual([["ai", "3d打印", "h2o"]]);
   });
 
+  it("removes common survey filler before local frequency aggregation", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ model: LOCAL_SURVEY_MODEL, tokens: [["我们", "觉得", "可以", "课程", "这个", "团队协作"]] })));
+    const model = await resolveSurveyKeywordModel();
+    expect(await model.extract("课程体验", ["我们觉得这个课程可以加强团队协作"])).toEqual([["团队协作"]]);
+  });
+
   it.each([
     { model: LOCAL_SURVEY_MODEL, tokens: [] },
     { model: "different-model", tokens: [["人工智能"]] },

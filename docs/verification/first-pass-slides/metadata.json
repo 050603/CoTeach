@@ -1,0 +1,18 @@
+{
+  "startedAt": "2026-09-14T02:40:00.514Z",
+  "implementationSha256": "9b82ffec071d19a2730faa3e17b559e32db50c06292005073c20430d6474d160",
+  "baselineCommit": "843847af93106f9b6ac64f10154fb056d7141303",
+  "model": "deepseek:deepseek-v4-flash",
+  "vision": false,
+  "samplesSha256": "6aee6985a73ccf0104e5e23852bee1e9c2e5c2ee7eb8f7b0a82a1607d7f971b3",
+  "groups": [
+    "baseline",
+    "budget",
+    "sketch"
+  ],
+  "repetitions": 3,
+  "plannedCases": 216,
+  "baselineScope": "Frozen HEAD generation and prompt sources; shared current provider transport/DSL/runtime dependencies",
+  "measurement": "Static geometry only; not browser-rendered layout acceptance. Knowledge coverage requires manual review.",
+  "media": "No image generation or TTS calls; exact diagram/data evidence supplied as text; no teaching course persisted."
+}

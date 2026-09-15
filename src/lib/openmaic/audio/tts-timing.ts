@@ -7,6 +7,10 @@
  * without changing any generation or playback code.
  */
 
+import offlineVoiceCalibrations from './tts-voice-calibrations.json';
+
+export const TTS_TIMING_ALGORITHM_VERSION = 4;
+
 export type TtsSpeechUnit = 'cjk-char' | 'latin-word' | 'mixed-unit';
 
 export type TtsTimingProfile = {
@@ -18,11 +22,25 @@ export type TtsTimingProfile = {
   cjkCharsPerMinute: number;
   latinWordsPerMinute: number;
   punctuationPauseSec: number;
+  fixedOverheadSec?: number;
   defaultSpeed: number;
   source: 'seed' | 'configured';
 };
 
+export type TtsCalibrationMeasurement = {
+  cjkChars: number;
+  latinWords: number;
+  punctuation: number;
+  durationSec: number;
+};
+
 export type TtsVoiceTimingCalibration = {
+  /** Missing versions are legacy measurements and must be recalibrated. */
+  algorithmVersion?: number;
+  fixedOverheadSec?: number;
+  punctuationPauseSec?: number;
+  measurements?: TtsCalibrationMeasurement[];
+  rateModel?: 'linear-v1' | 'relative-linear-v1';
   providerId: string;
   modelId: string;
   voiceId: string;
@@ -50,9 +68,17 @@ export type TtsContentBudget = {
   targetDurationSec: number;
   effectiveCharsPerMinute?: number;
   effectiveWordsPerMinute?: number;
+  /** Chinese-equivalent units per English reference word (~1.5 syllables). */
+  latinReferenceWordCjkUnits?: number;
+};
+
+export type TtsNarrationParagraphBudget = TtsContentBudget & {
+  role: 'introduction' | 'explanation' | 'example' | 'feedback';
 };
 
 export type TtsTimingPlan = {
+  algorithmVersion?: number;
+  paragraphBudgets?: TtsNarrationParagraphBudget[];
   providerId: string;
   modelId: string;
   voiceId?: string;
@@ -67,6 +93,7 @@ export type TtsTimingPlan = {
   calibrationSource?: TtsTimingProfile['source'];
   /** Effective rate after punctuation pauses, expressed in the plan's speech unit. */
   effectiveUnitsPerMinute?: number;
+  latinReferenceWordCjkUnits?: number;
   /** Natural-speed speech guidance and explanation. */
   narrationSec?: number;
   /** Silent comprehension time before/during the learner task. */
@@ -78,6 +105,8 @@ export type TtsTimingPlan = {
   /** Feedback or answer-analysis time included in narrationSec. */
   feedbackSec?: number;
   transitionSec?: number;
+  /** Reserved playback time; excluded from narration and learner activity. */
+  videoSec?: number;
   /** Total activity budget; targetDurationSec is the narration budget. */
   activityTargetDurationSec?: number;
   targetDurationSec: number;
@@ -141,6 +170,7 @@ export const TTS_TIMING_PROFILES: readonly TtsTimingProfile[] = PROFILE_SEEDS.ma
 }));
 
 const runtimeProfiles = new Map<string, TtsTimingProfile>();
+const calibratedProfiles = new Map<string, TtsTimingProfile>();
 
 /** Register a new model without changing the provider implementation. */
 export function registerTtsTimingProfile(
@@ -169,10 +199,23 @@ function normalizeModelId(modelId?: string): string {
   return modelId?.trim() || '';
 }
 
-export function getTtsTimingProfile(providerId?: string, modelId?: string, voiceId?: string): TtsTimingProfile {
+export function getTtsTimingProfile(providerId?: string, modelId?: string, voiceId?: string, language = 'zh-CN', speed = 1): TtsTimingProfile {
   const provider = providerId?.trim() || DEFAULT_PROFILE.providerId;
   const model = normalizeModelId(modelId);
   const voice = voiceId?.trim() || '';
+  const calibrated = calibratedProfiles.get(getTtsCalibrationKey({
+    providerId: provider, modelId: model, voiceId: voice || 'default', language, speed,
+    algorithmVersion: TTS_TIMING_ALGORITHM_VERSION,
+  }));
+  if (calibrated) return calibrated;
+  const offline = offlineVoiceCalibrations.profiles.find((profile) =>
+    profile.algorithmVersion === TTS_TIMING_ALGORITHM_VERSION
+    && getTtsCalibrationKey(profile) === getTtsCalibrationKey({
+      providerId: provider, modelId: model, voiceId: voice || 'default', language, speed,
+      algorithmVersion: TTS_TIMING_ALGORITHM_VERSION,
+    }),
+  );
+  if (offline) return registerTtsVoiceTimingCalibration(offline as TtsVoiceTimingCalibration);
   const runtimeExact = runtimeProfiles.get(`${provider}:${model}:${voice}`)
     ?? runtimeProfiles.get(`${provider}:${model}:`);
   if (runtimeExact) return runtimeExact;
@@ -211,17 +254,37 @@ export function getTtsTimingProfile(providerId?: string, modelId?: string, voice
   return DEFAULT_PROFILE;
 }
 
+/** English articulation estimate in reference words of 1.5 syllables. */
+export function countLatinArticulationUnits(text: string): number {
+  const words = text.normalize('NFKC').replace(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/gu, ' ').match(/\p{L}+(?:['’]\p{L}+)?|\d+(?:\.\d+)?/gu) ?? [];
+  const syllables = words.reduce((total, word) => {
+    if (/^[A-Z]{2,6}$/.test(word)) return total + word.length + (word.match(/W/g)?.length ?? 0) * 2;
+    if (/^\d/.test(word)) return total + word.replace('.', '').length + (word.includes('.') ? 1 : 0);
+    if (/[^A-Za-z'’]/.test(word)) return total + 1.5;
+    const lower = word.toLowerCase().replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '').replace(/^y/, '');
+    return total + Math.max(1, lower.match(/[aeiouy]{1,2}/g)?.length ?? 1);
+  }, 0);
+  return syllables / 1.5;
+}
+
 export function countSpeechUnits(text: string): {
   cjkChars: number;
   latinWords: number;
   otherChars: number;
   punctuation: number;
 } {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  const cjkChars = (normalized.match(/[\u3400-\u9fff]/g) ?? []).length;
-  const latinWords = (normalized.match(/[A-Za-z]+(?:['’][A-Za-z]+)?|\d+(?:\.\d+)?/g) ?? []).length;
-  const punctuation = (normalized.match(/[，。！？；：、,.!?;:]/g) ?? []).length;
-  const otherChars = Math.max(0, normalized.length - cjkChars - latinWords - punctuation);
+  let remaining = text.normalize('NFKC').replace(/\s+/g, ' ').trim();
+  const cjkPattern = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/gu;
+  const cjkChars = (remaining.match(cjkPattern) ?? []).length;
+  remaining = remaining.replace(cjkPattern, ' ');
+  const wordPattern = /\p{L}+(?:['’]\p{L}+)?|\d+(?:\.\d+)?/gu;
+  const latinWords = (remaining.match(wordPattern) ?? []).length;
+  // Remove the entire matched word, not one character per word. Otherwise
+  // "hello" contributes both one word and four phantom CJK units.
+  remaining = remaining.replace(wordPattern, '');
+  const punctuationPattern = /[，。！？；：、,.!?;:]/gu;
+  const punctuation = (remaining.match(punctuationPattern) ?? []).length;
+  const otherChars = [...remaining.replace(/[\p{P}\p{Z}\s]/gu, '')].length;
   return { cjkChars, latinWords, otherChars, punctuation };
 }
 
@@ -238,13 +301,17 @@ export function createTtsVoiceTimingCalibration(options: {
 }): TtsVoiceTimingCalibration {
   const duration = Math.max(0.1, Number(options.measuredDurationSec) || 0.1);
   const units = countSpeechUnits(options.text);
+  const latinArticulationUnits = countLatinArticulationUnits(options.text);
   const seed = getTtsTimingProfile(options.providerId, options.modelId);
-  const cjkUnits = units.cjkChars + units.otherChars;
-  const measuredCjk = cjkUnits > 0 ? (cjkUnits * 60) / duration : seed.cjkCharsPerMinute;
-  const measuredLatin = units.latinWords > 0 && cjkUnits === 0
-    ? (units.latinWords * 60) / duration
-    : measuredCjk * (seed.latinWordsPerMinute / seed.cjkCharsPerMinute);
+  // Express mixed samples in one seed-equivalent unit so English words are
+  // represented exactly once and repeated mixed calibrations aggregate safely.
+  const cjkUnits = units.cjkChars + units.otherChars
+    + latinArticulationUnits * seed.cjkCharsPerMinute / seed.latinWordsPerMinute;
+  const measuredCjk = (Math.max(1, cjkUnits) * 60) / duration;
+  const measuredLatin = measuredCjk * seed.latinWordsPerMinute / seed.cjkCharsPerMinute;
   return {
+    algorithmVersion: TTS_TIMING_ALGORITHM_VERSION,
+    measurements: [{ cjkChars: units.cjkChars + units.otherChars, latinWords: latinArticulationUnits, punctuation: units.punctuation, durationSec: duration }],
     providerId: options.providerId.trim(),
     modelId: options.modelId?.trim() || '',
     voiceId: options.voiceId?.trim() || 'default',
@@ -262,15 +329,64 @@ export function createTtsVoiceTimingCalibration(options: {
 }
 
 export function getTtsCalibrationKey(
-  calibration: Pick<TtsVoiceTimingCalibration, 'providerId' | 'modelId' | 'voiceId' | 'language' | 'speed'>,
+  calibration: Pick<TtsVoiceTimingCalibration, 'providerId' | 'modelId' | 'voiceId' | 'language' | 'speed' | 'algorithmVersion'>,
 ): string {
   return [
+    String(calibration.algorithmVersion ?? 1),
     calibration.providerId.trim(),
     calibration.modelId.trim(),
     calibration.voiceId.trim() || 'default',
     calibration.language.trim().toLowerCase() || 'zh-cn',
     String(clamp(Number(calibration.speed ?? 1) || 1, 0.25, 4)),
   ].join('::');
+}
+
+/**
+ * A small nonnegative ridge regression separates articulation, punctuation and
+ * fixed segment overhead. Priors keep sparse or correlated mixed-language
+ * samples from producing implausible rates. Relative-error weighting keeps long
+ * clips from dominating the ±10% timing objective. Only independent calibration audio
+ * is fitted; runtime narration never enters a correction loop.
+ */
+function fitCalibrationTimingModel(
+  measurements: TtsCalibrationMeasurement[],
+  seed: TtsTimingProfile,
+  speed: number,
+): Pick<TtsVoiceTimingCalibration, 'cjkCharsPerMinute' | 'latinWordsPerMinute' | 'fixedOverheadSec' | 'punctuationPauseSec' | 'rateModel'> {
+  const priors = [0.2, 60 / seed.cjkCharsPerMinute, 60 / seed.latinWordsPerMinute, seed.punctuationPauseSec];
+  const coefficients = [...priors];
+  const penalties = [2, 600, 150, 30];
+  const bounds = [[0, 1.5], [0.06, 0.6], [0.12, 1.2], [0, 0.8]];
+  const durations = measurements.map((sample) => sample.durationSec).sort((a, b) => a - b);
+  const middle = Math.floor(durations.length / 2);
+  const medianDuration = durations.length % 2
+    ? durations[middle]
+    : (durations[middle - 1] + durations[middle]) / 2;
+  const rows = measurements.map((sample) => ({
+    x: [1, sample.cjkChars / speed, sample.latinWords / speed, sample.punctuation / speed],
+    y: sample.durationSec,
+    // Scaling by the median preserves the existing prior's units and strength.
+    weight: (medianDuration / Math.max(0.1, sample.durationSec)) ** 2,
+  }));
+  for (let iteration = 0; iteration < 300; iteration++) {
+    for (let feature = 0; feature < coefficients.length; feature++) {
+      let numerator = penalties[feature] * priors[feature];
+      let denominator = penalties[feature];
+      for (const row of rows) {
+        const residual = row.y - row.x.reduce((sum, value, index) => index === feature ? sum : sum + value * coefficients[index], 0);
+        numerator += row.weight * row.x[feature] * residual;
+        denominator += row.weight * row.x[feature] ** 2;
+      }
+      coefficients[feature] = clamp(numerator / denominator, bounds[feature][0], bounds[feature][1]);
+    }
+  }
+  return {
+    fixedOverheadSec: coefficients[0],
+    cjkCharsPerMinute: 60 / coefficients[1] * speed,
+    latinWordsPerMinute: 60 / coefficients[2] * speed,
+    punctuationPauseSec: coefficients[3],
+    rateModel: 'relative-linear-v1',
+  };
 }
 
 /** Merge repeated measurements into one duration-weighted shared profile. */
@@ -289,8 +405,13 @@ export function mergeTtsVoiceTimingCalibrations(
   const latinRatio = sample.cjkCharsPerMinute > 0
     ? sample.latinWordsPerMinute / sample.cjkCharsPerMinute
     : 1;
+  const measurements = [...(current.measurements ?? []), ...(sample.measurements ?? [])].slice(-48);
+  const fitted = measurements.length >= 6
+    ? fitCalibrationTimingModel(measurements, getTtsTimingProfile(sample.providerId, sample.modelId), sample.speed ?? 1)
+    : undefined;
   return {
     ...sample,
+    measurements,
     cjkCharsPerMinute: Math.round(cjkCharsPerMinute * 10) / 10,
     latinWordsPerMinute: Math.round(cjkCharsPerMinute * latinRatio * 10) / 10,
     sampleUnits: totalUnits,
@@ -298,25 +419,32 @@ export function mergeTtsVoiceTimingCalibrations(
     sampleCount: (current.sampleCount ?? 1) + (sample.sampleCount ?? 1),
     totalSampleUnits: totalUnits,
     totalMeasuredDurationSec: Math.round(totalDuration * 100) / 100,
+    ...fitted,
   };
 }
 
 export function registerTtsVoiceTimingCalibration(
   calibration: TtsVoiceTimingCalibration,
 ): TtsTimingProfile {
-  return registerTtsTimingProfile({
-    id: `${calibration.providerId}:${calibration.modelId || 'default'}:${calibration.voiceId}`,
+  if (calibration.algorithmVersion !== TTS_TIMING_ALGORITHM_VERSION) {
+    return getTtsTimingProfile(calibration.providerId, calibration.modelId);
+  }
+  const calibratedSpeed = clamp(Number(calibration.speed ?? 1) || 1, 0.25, 4);
+  const profile: TtsTimingProfile = {
+    id: getTtsCalibrationKey(calibration),
     providerId: calibration.providerId,
     modelId: calibration.modelId,
     voiceId: calibration.voiceId,
     label: `${calibration.providerId}/${calibration.modelId || 'default'}/${calibration.voiceId}`,
-    cjkCharsPerMinute: calibration.cjkCharsPerMinute,
-    latinWordsPerMinute: calibration.latinWordsPerMinute,
-    // The measured effective rate already includes pauses in the sample.
-    punctuationPauseSec: 0,
-    defaultSpeed: 1,
+    cjkCharsPerMinute: calibration.cjkCharsPerMinute / calibratedSpeed,
+    latinWordsPerMinute: calibration.latinWordsPerMinute / calibratedSpeed,
+    punctuationPauseSec: calibration.punctuationPauseSec ?? 0,
+    fixedOverheadSec: calibration.fixedOverheadSec ?? 0,
+    defaultSpeed: calibratedSpeed,
     source: 'configured',
-  });
+  };
+  calibratedProfiles.set(getTtsCalibrationKey(calibration), profile);
+  return profile;
 }
 
 export function estimateSpeechDurationSec(
@@ -326,24 +454,25 @@ export function estimateSpeechDurationSec(
     providerId?: string;
     modelId?: string;
     voiceId?: string;
+    language?: string;
     speed?: number;
     minSeconds?: number;
   } = {},
 ): number {
-  const profile = options.profile ?? getTtsTimingProfile(options.providerId, options.modelId, options.voiceId);
+  const profile = options.profile ?? getTtsTimingProfile(options.providerId, options.modelId, options.voiceId, options.language, options.speed);
   const speed = clamp(Number(options.speed ?? profile.defaultSpeed) || profile.defaultSpeed, 0.25, 4);
   const units = countSpeechUnits(text);
   if (units.cjkChars + units.latinWords + units.otherChars === 0) return options.minSeconds ?? 1;
 
   const cjkSeconds = units.cjkChars / Math.max(1, (profile.cjkCharsPerMinute * speed) / 60);
-  const latinSeconds = units.latinWords / Math.max(1, (profile.latinWordsPerMinute * speed) / 60);
+  const latinSeconds = countLatinArticulationUnits(text) / Math.max(1, (profile.latinWordsPerMinute * speed) / 60);
   const otherSeconds = units.otherChars > 0
     ? units.otherChars / Math.max(1, (profile.cjkCharsPerMinute * speed) / 60)
     : 0;
   const pauseSeconds = (units.punctuation * profile.punctuationPauseSec) / speed;
   return Math.max(
     options.minSeconds ?? 1,
-    Math.round((cjkSeconds + latinSeconds + otherSeconds + pauseSeconds) * 10) / 10,
+    Math.round((cjkSeconds + latinSeconds + otherSeconds + pauseSeconds + (profile.fixedOverheadSec ?? 0)) * 10) / 10,
   );
 }
 
@@ -361,6 +490,7 @@ export function calculateTtsContentBudget(
 ): TtsContentBudget {
   const profile = options.profile ?? getTtsTimingProfile(options.providerId, options.modelId);
   const target = Math.max(1, Number(targetDurationSec) || 1);
+  const availableSpeechSec = Math.max(0, target - (profile.fixedOverheadSec ?? 0));
   const speed = clamp(Number(options.speed ?? profile.defaultSpeed) || profile.defaultSpeed, 0.25, 4);
   const tolerance = clamp(Number(options.tolerance ?? 0.1) || 0.1, 0.02, 0.25);
   const language = options.language?.toLowerCase() ?? 'zh-cn';
@@ -370,7 +500,7 @@ export function calculateTtsContentBudget(
   if (isCjk) {
     const charsPerSec = Math.max(1, (profile.cjkCharsPerMinute * speed) / 60);
     const secondsPerChar = 1 / charsPerSec + (punctuationRatio * profile.punctuationPauseSec) / speed;
-    const targetUnits = Math.max(1, Math.round(target / secondsPerChar));
+    const targetUnits = Math.max(1, Math.round(availableSpeechSec / secondsPerChar));
     return {
       unit: 'cjk-char',
       targetUnits,
@@ -384,7 +514,7 @@ export function calculateTtsContentBudget(
   if (/^(en|fr|de|es|it|pt|ru)/.test(language)) {
     const wordsPerSec = Math.max(1, (profile.latinWordsPerMinute * speed) / 60);
     const secondsPerWord = 1 / wordsPerSec + (punctuationRatio * profile.punctuationPauseSec) / speed;
-    const targetUnits = Math.max(1, Math.round(target / secondsPerWord));
+    const targetUnits = Math.max(1, Math.round(availableSpeechSec / secondsPerWord));
     return {
       unit: 'latin-word',
       targetUnits,
@@ -402,7 +532,10 @@ export function calculateTtsContentBudget(
     tolerance,
     punctuationRatio,
   });
-  return { ...cjkBudget, unit: 'mixed-unit' };
+  return {
+    ...cjkBudget, unit: 'mixed-unit',
+    latinReferenceWordCjkUnits: profile.cjkCharsPerMinute / profile.latinWordsPerMinute,
+  };
 }
 
 export function buildTtsTimingPlan(options: {
@@ -421,15 +554,16 @@ export function buildTtsTimingPlan(options: {
   studentActivitySec?: number;
   feedbackSec?: number;
   transitionSec?: number;
+  videoSec?: number;
   taskComplexity?: 'low' | 'medium' | 'high';
   recommendedStudentActivitySec?: number;
   taskFitsBudget?: boolean;
   timingRationale?: string[];
 }): TtsTimingPlan {
-  const profile = getTtsTimingProfile(options.providerId, options.modelId, options.voiceId);
   const language = options.language || 'zh-CN';
   const naturalSpeedLocked = Boolean(options.naturalSpeedLocked);
   const requestedSpeed = naturalSpeedLocked ? 1 : options.speed;
+  const profile = getTtsTimingProfile(options.providerId, options.modelId, options.voiceId, language, requestedSpeed);
   const budget = calculateTtsContentBudget(options.targetDurationSec, {
     profile,
     speed: requestedSpeed,
@@ -443,7 +577,30 @@ export function buildTtsTimingPlan(options: {
   const effectiveUnitsPerMinute = (
     budget.effectiveCharsPerMinute ?? budget.effectiveWordsPerMinute
   );
+  const feedback = Math.min(budget.targetDurationSec, Math.max(0, options.feedbackSec ?? 0));
+  const main = budget.targetDurationSec - feedback;
+  const introduction = Math.floor(main * 0.1);
+  const example = Math.floor(main * 0.3);
+  const paragraphDurations: Array<[TtsNarrationParagraphBudget['role'], number]> = [
+    ['introduction', introduction], ['explanation', main - introduction - example],
+    ['example', example], ['feedback', feedback],
+  ];
+  // Allocate units by cumulative rounding, preserving both total seconds and units.
+  let allocatedUnits = 0;
+  let elapsed = 0;
+  const paragraphBudgets = paragraphDurations.filter(([, seconds]) => seconds > 0).map(([role, seconds]) => {
+    elapsed += seconds;
+    const cumulativeUnits = Math.round(budget.targetUnits * elapsed / budget.targetDurationSec);
+    const targetUnits = cumulativeUnits - allocatedUnits;
+    allocatedUnits = cumulativeUnits;
+    return {
+      role, unit: budget.unit, targetDurationSec: seconds, targetUnits,
+      minUnits: Math.floor(targetUnits * 0.9), maxUnits: Math.ceil(targetUnits * 1.1),
+    };
+  });
   return {
+    algorithmVersion: TTS_TIMING_ALGORITHM_VERSION,
+    paragraphBudgets,
     providerId: profile.providerId,
     modelId: profile.modelId,
     voiceId: options.voiceId || profile.voiceId,
@@ -463,6 +620,7 @@ export function buildTtsTimingPlan(options: {
     studentActivitySec: Math.max(0, Math.round(options.studentActivitySec ?? 0)),
     feedbackSec: Math.max(0, Math.round(options.feedbackSec ?? 0)),
     transitionSec: Math.max(0, Math.round(options.transitionSec ?? 0)),
+    videoSec: Math.max(0, options.videoSec ?? 0),
     ...(options.activityTargetDurationSec !== undefined
       ? { activityTargetDurationSec: Math.max(1, Math.round(options.activityTargetDurationSec)) }
       : {}),
@@ -471,6 +629,8 @@ export function buildTtsTimingPlan(options: {
     targetUnits: budget.targetUnits,
     minUnits: budget.minUnits,
     maxUnits: budget.maxUnits,
+    ...(budget.latinReferenceWordCjkUnits !== undefined
+      ? { latinReferenceWordCjkUnits: budget.latinReferenceWordCjkUnits } : {}),
     ...(options.taskComplexity ? { taskComplexity: options.taskComplexity } : {}),
     ...(options.recommendedStudentActivitySec !== undefined
       ? {
@@ -542,4 +702,16 @@ export function isActivityTimingCorrectionCloser(options: {
     Math.max(0, Math.round(options.correctedNarrationSec)) + reservedActivitySec;
   return Math.abs(correctedTotalSec - activityTargetSec)
     < Math.abs(firstTotalSec - activityTargetSec);
+}
+
+/** Compact first-draft guidance; never used to request a corrected narration. */
+export function formatTtsParagraphBudgets(plan: TtsTimingPlan): string {
+  const labels = { introduction: '引入', explanation: '解释', example: '例子', feedback: '反馈' };
+  return '以下是首次讲稿的内容分配参考，可按教学内容量灵活调整段落时长与文字量，不要求各段分别落在±10%内；知识讲授阶段总时长才是最终时长约束。'
+    + (plan.paragraphBudgets ?? []).map((part) =>
+    `${labels[part.role]}：${part.targetDurationSec} 秒，参考 ${part.targetUnits} ${part.unit}`,
+  ).join('；') + (plan.unit === 'latin-word' ? '。英文参考词按约1.5音节/单位折算，技术长词与字母缩写应预留更多时长。' : '')
+    + (plan.unit === 'mixed-unit' && plan.latinReferenceWordCjkUnits !== undefined
+      ? `。mixed-unit 为中文等价单位：每个中文或其他可发音字符计1单位；每个英文参考词（约1.5音节）计${plan.latinReferenceWordCjkUnits.toFixed(3)}单位，长词按音节折算。将中英文等价单位相加后遵守同一总量预算，不能把英文词直接当作1个中文字。`
+      : '');
 }

@@ -47,6 +47,14 @@ function readyCourse(): Course {
 }
 
 describe("new-system course contract", () => {
+  it("recognizes teacher confirmation without an optional quality report", () => {
+    const course = readyCourse();
+    course.content.qualityReviewRequired = true;
+    course.content.teacherReview = { schemaVersion: 1, courseId: course.id, classroomId: "classroom-ai", signature: "a".repeat(64), teacherId: "teacher", confirmedAt: "2026-09-14", acceptedIssueIds: [], seal: "b".repeat(64) };
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "teacher-review")?.ok).toBe(true);
+    course.content.teacherReview.classroomId = "old-classroom";
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "teacher-review")?.ok).toBe(false);
+  });
   it("builds an AI-only compatibility plan without fixed five-stage ratios", () => {
     const plan = buildNewSystemTimingPlan(90, "2026-08-30T00:00:00.000Z");
     expect(plan.status).toBe("confirmed");

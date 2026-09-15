@@ -89,12 +89,13 @@ export type SurveyTextAnalytics = SurveyQuestion & {
   responses: SurveyTextResponse[];
   terms: Array<{ label: string; value: number; studentIds?: string[] }>;
   keywordStatus?: "processing" | "ready" | "unavailable";
+  keywordAggregation?: "semantic" | "exact-fallback";
   keywordAnalyzedCount?: number;
   /** Responses with at least one source-verified term in the complete term list. */
   keywordRepresentedCount?: number;
   keywordUnrepresentedResponses?: Array<{
     studentId: string;
-    reason: "pending" | "analysis-unavailable" | "no-keywords";
+    reason: "pending" | "analysis-unavailable" | "no-keywords" | "no-theme";
   }>;
   keywordMode?: "local" | "llm";
 };

@@ -1,0 +1,57 @@
+{
+  "checkedAt": "2026-09-15T02:33:34.552507+00:00",
+  "endpoint": "https://praixis-backup-a7k3m9.cn-beijing.oss.aliyuncs.com",
+  "authentication": "OSS v1 HMAC-SHA1, existing configured credential; credential and signature omitted",
+  "checks": [
+    {
+      "operation": "ListObjectsV2",
+      "httpStatus": 200,
+      "keyCount": 1,
+      "prefixes": [
+        "openpbl-production/"
+      ],
+      "isTruncated": "false"
+    },
+    {
+      "operation": "GetBucketVersioning",
+      "httpStatus": 403,
+      "errorCode": "AccessDenied",
+      "errorMessage": "The bucket you access does not belong to you."
+    },
+    {
+      "operation": "ListObjectVersions",
+      "httpStatus": 403,
+      "errorCode": "AccessDenied",
+      "errorMessage": "The bucket you access does not belong to you."
+    }
+  ],
+  "conclusion": "Authenticated ordinary object listing succeeds on both configured and native OSS endpoints; unsigned listing is denied. Both endpoints deny GetBucketVersioning and ListObjectVersions with HTTP 403 AccessDenied. The configured credential cannot verify whether historical versions exist; historical-version cleanup cannot be independently established with this access.",
+  "nativeEndpointCrossCheck": {
+    "endpoint": "https://praixis-backup-a7k3m9.oss-cn-beijing.aliyuncs.com",
+    "checkedAt": "2026-09-15T02:34:24.150348+00:00",
+    "checks": [
+      {
+        "operation": "ListObjectsV2",
+        "httpStatus": 200,
+        "keyCount": 1,
+        "prefixes": [
+          "openpbl-production/"
+        ],
+        "isTruncated": "false"
+      },
+      {
+        "operation": "GetBucketVersioning",
+        "httpStatus": 403,
+        "errorCode": "AccessDenied",
+        "errorMessage": "The bucket you access does not belong to you."
+      },
+      {
+        "operation": "ListObjectVersions",
+        "httpStatus": 403,
+        "errorCode": "AccessDenied",
+        "errorMessage": "The bucket you access does not belong to you."
+      }
+    ]
+  },
+  "unsignedListObjectsHttpStatus": 403
+}

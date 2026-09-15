@@ -41,12 +41,13 @@ describe("knowledge lecture sections", () => {
   it("preserves source groups and gives each section quiz all of its teaching evidence", () => {
     const first = { ...outline("first", ["a"]), teachingBrief: { schemaVersion: 1 as const, explanation: "第一个概念的核心解释", examples: ["例一"], conditions: ["条件一"], evidence: [{ sourceId: "doc", quote: "原文一" }], assessmentFocus: "解释概念一" } };
     const second = { ...outline("second", ["b"]), teachingBrief: { ...first.teachingBrief, explanation: "第二个概念的核心解释", examples: ["例二"], conditions: ["条件二"], assessmentFocus: "解释概念二" } };
-    const result = organizeKnowledgeLectureOutlines([first, second, outline("third", ["c"])], { totalDurationSec: 1200, knowledgePoints: [
+    const result = organizeKnowledgeLectureOutlines([first, second, outline("third", ["c"]), outline("fourth", ["d"])], { totalDurationSec: 1200, knowledgePoints: [
       { id: "a", name: "概念一", description: "", groupId: "g1", groupName: "理论依据" },
       { id: "b", name: "概念二", description: "", groupId: "g1", groupName: "理论依据" },
       { id: "c", name: "概念三", description: "", groupId: "g2", groupName: "课堂方法" },
+      { id: "d", name: "概念四", description: "", groupId: "g2", groupName: "课堂方法" },
     ] });
-    expect(result.sections.map((section) => section.knowledgePointIds)).toEqual([["a", "b"], ["c"]]);
+    expect(result.sections.map((section) => section.knowledgePointIds)).toEqual([["a", "b"], ["c", "d"]]);
     expect(result.sections[0].title).toContain("理论依据");
     const quiz = result.outlines.find((page) => page.id === result.sections[0].quizOutlineId)!;
     expect(quiz.teachingBrief?.explanation).toContain("第一个概念");
@@ -71,7 +72,7 @@ describe("knowledge lecture sections", () => {
     })).toThrow("时间预算");
   });
 
-  it("groups related knowledge points and appends a concise subjective quiz to every section", () => {
+  it("merges a one-page tail into a teaching section before appending its quiz", () => {
     const result = organizeKnowledgeLectureOutlines([
       outline("page-1", ["kp-1"]),
       outline("page-2", ["kp-2"]),
@@ -89,8 +90,9 @@ describe("knowledge lecture sections", () => {
       },
     });
 
-    expect(result.sections).toHaveLength(2);
-    expect(result.outlines.filter((item) => item.type === "quiz")).toHaveLength(2);
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections.every((section) => section.sceneOutlineIds.length >= 2)).toBe(true);
+    expect(result.outlines.filter((item) => item.type === "quiz")).toHaveLength(1);
     expect(result.outlines.filter((item) => item.type !== "quiz").map((item) => item.id)).toEqual([
       "page-1",
       "page-2",
@@ -104,6 +106,25 @@ describe("knowledge lecture sections", () => {
       expect(quiz.quizConfig?.questionTypes).toEqual(["short_answer"]);
     }
     expect(deriveKnowledgeLectureSectionsFromOutlines(result.outlines)).toEqual(result.sections);
+  });
+
+  it("creates one quiz per multi-page section instead of one quiz per slide", () => {
+    const points = ["a", "b", "c", "d"].map((id, index) => ({
+      id,
+      name: `知识${index + 1}`,
+      description: "",
+      groupId: `group-${id}`,
+      groupName: `主题${index + 1}`,
+    }));
+    const result = organizeKnowledgeLectureOutlines(
+      points.map((point) => outline(`page-${point.id}`, [point.id])),
+      { totalDurationSec: 1_200, knowledgePoints: points },
+    );
+    expect(result.sections).toHaveLength(2);
+    expect(result.sections.map((section) => section.sceneOutlineIds.length)).toEqual([2, 2]);
+    expect(result.outlines.map((item) => item.type)).toEqual([
+      "slide", "slide", "quiz", "slide", "slide", "quiz",
+    ]);
   });
 
   it("reports the exact generated quiz question count and duration", () => {

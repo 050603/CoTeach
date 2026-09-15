@@ -198,12 +198,48 @@ export type PblActivityCatalogEntry = {
 };
 
 /**
+ * Exact course-wide tokens selected once by the page planner.
+ *
+ * Page composition remains owned by OpenMAIC. These tokens only prevent the
+ * independent generate_scene calls from inventing a different background,
+ * palette, and typography for every slide.
+ */
+export type CourseVisualTheme = {
+  schemaVersion: 1;
+  name: string;
+  background: string;
+  surface: string;
+  primary: string;
+  secondary: string;
+  accent: string;
+  text: string;
+  mutedText: string;
+  motif: string;
+  editorialStyle: string;
+};
+
+/**
  * Simplified scene outline
  * Gives AI more freedom, only requiring intent description and key points
  */
 export interface SceneOutline {
   teachingBrief?: import("@/lib/course-quality-review/types").TeachingBrief;
+  /**
+   * One concise course-level art direction chosen during page planning.
+   *
+   * This is CoTeach orchestration metadata, not learner-facing copy. The thin
+   * OpenMAIC adapter carries it into slide content and media generation only;
+   * action/narration generation deliberately never sees it.
+   */
+  courseVisualDirection?: string;
+  /** Machine-checkable companion to courseVisualDirection. */
+  courseVisualTheme?: CourseVisualTheme;
   visualPlan?: import("@openmaic/lib/generation/slide-visual-plan").SlideVisualPlan;
+  spatialBudget?: import("@openmaic/lib/generation/slide-spatial-types").SlideSpatialBudget;
+  /** Original confirmed page when spatial preparation splits it. */
+  spatialParentId?: string;
+  /** Parent scope is evidence; each split page only renders its own region content. */
+  spatialSourceContext?: { description: string; teachingObjective?: string; coreMessage: string };
   id: string;
   type: 'slide' | 'quiz' | 'interactive' | 'pbl';
   title: string;
@@ -245,6 +281,8 @@ export interface SceneOutline {
   ttsPolicy?: PblTtsPolicy;
   /** Model-specific narration budget used by generation and playback verification. */
   timingPlan?: TtsTimingPlan;
+  /** Overall teaching-stage acceptance; page/paragraph allocations remain advisory. */
+  teachingStageTiming?: import("@openmaic/lib/server/teaching-stage-timing-plan").TeachingStageTimingBudget;
   /** Embedded resources continue a parent lesson and never own greetings/farewells. */
   narrationMode?: 'standalone-course' | 'embedded-segment';
   /** Teacher-reviewable intent for whiteboard/canvas/widget use on this page. */

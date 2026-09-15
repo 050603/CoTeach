@@ -1,0 +1,461 @@
+[
+  {
+    "id": "01-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:00:08.739831+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "中心公式压住左右定义文字，影响功率/电能定义阅读；数值例子仍可见。"
+  },
+  {
+    "id": "01-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:00:08.739831+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "三个给定定义与数值均可见，无明显遮挡或越界。"
+  },
+  {
+    "id": "01-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:00:08.739831+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "两栏与例子完整可见，未见明显溢出遮挡。"
+  },
+  {
+    "id": "02-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:00:08.739831+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "叶绿体（场所）标签换行到背景区域下方；光能标签断行为两行，知识含义仍保留。"
+  },
+  {
+    "id": "02-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:00:08.739831+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "反应关系、能量与原料区别、植物碳来源均可见，无明显遮挡。"
+  },
+  {
+    "id": "02-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:00:08.739831+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "输入箭头横穿H₂O文字，光能箭头穿过上方标签；相关知识文字仍可辨认。"
+  },
+  {
+    "id": "03-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:01:11.839271+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "Initialization、Maintenance、Termination白字被蓝/橙容器裁断，上方回环箭头压住说明文字，完整关键标签不可见。"
+  },
+  {
+    "id": "03-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:01:11.839271+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "Invariant定义被三块背景覆盖，仅露出一部分橙色文字；缺少完整可见定义。"
+  },
+  {
+    "id": "03-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:01:11.839271+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "中央each iteration白字溢出蓝块后不可见，Maintenance/Termination异常断词且箭头穿字。"
+  },
+  {
+    "id": "04-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:01:11.839271+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "并联断路影响末字“路”越过浅色行背景；知识点仍可见。"
+  },
+  {
+    "id": "04-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:01:11.839271+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "两栏三项比较完整可见，无明显遮挡或越界。"
+  },
+  {
+    "id": "04-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:01:11.839271+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "三行比较完整可见，所有给定关系保留。"
+  },
+  {
+    "id": "05-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:04:44.412774+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "全部给定比较维度及用途完整可见，无明显溢出或遮挡。"
+  },
+  {
+    "id": "05-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:04:44.412774+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "全部给定比较维度及用途完整可见，无明显溢出或遮挡。"
+  },
+  {
+    "id": "05-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:04:44.412774+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "全部给定比较维度及用途完整可见，无明显溢出或遮挡。"
+  },
+  {
+    "id": "06-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:04:44.412774+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "全部给定比较维度及用途完整可见，无明显溢出或遮挡。"
+  },
+  {
+    "id": "06-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:04:44.412774+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "全部给定比较维度及用途完整可见，无明显溢出或遮挡。"
+  },
+  {
+    "id": "06-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:04:44.412774+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "全部给定比较维度及用途完整可见，无明显溢出或遮挡。"
+  },
+  {
+    "id": "07-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:07:33.039915+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "调查、单位换算与相同方法比较前后的三步完整可见，无明显遮挡。"
+  },
+  {
+    "id": "07-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:07:33.039937+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "下方大型公式两端裁切；上方步骤文字重复保留完整E=P×n×t及单位，所以给定知识仍全部可见。"
+  },
+  {
+    "id": "07-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:07:33.039942+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "三步顺序、公式和单位完整可见；DOM实际文字边界仍在对应区域内，无明显遮挡。"
+  },
+  {
+    "id": "08-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:42:52.409505+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "可检验假设、控制变量/多次测量、评价与局限均完整可见。"
+  },
+  {
+    "id": "08-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:42:52.409545+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": false,
+    "notes": "排版清楚，但给定第二条的“多次测量降低随机波动”未呈现。"
+  },
+  {
+    "id": "09-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:42:52.409556+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "最小复现、检查首个错误状态、修复并复测三步完整可见。"
+  },
+  {
+    "id": "08-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:46:22.566991+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "前两栏末行越过背景容器，标题与正文异常多次断行；给定知识仍可见。"
+  },
+  {
+    "id": "09-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:46:22.567013+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "第三栏regressions末行越过背景底边；三步和相关回归检查仍完整可见。"
+  },
+  {
+    "id": "09-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:46:22.567019+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "第二步末行state紧贴并侵入底部Key说明行，显示区域拥挤；给定步骤仍可辨认。"
+  },
+  {
+    "id": "17-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:06:10.512184+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "原生表格含20/18/2及90%/10%；同温光条件、重复实验及样本限制全部可见，未见明显溢出遮挡。"
+  },
+  {
+    "id": "17-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:13:13.236129+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "实际图表仅显示90、10而无组别与单位；20粒种子中的18/2个萌发原始数据缺失，不能由图中两个数值完整还原。"
+  },
+  {
+    "id": "17-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:13:13.236163+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "右侧解释最后一行越过浅灰背景下边缘；原生表格数据、对照条件、重复及样本限制仍全部可见。"
+  },
+  {
+    "id": "18-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:13:13.236173+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "原生表格列出A/B三次时间与均值，解释包含测试条件、工作负载局限、输入规模与环境；表头换行但无明显遮挡。"
+  },
+  {
+    "id": "18-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:14:17.433062+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "表格完整显示A/B三次数据及均值，正文保留三次观测局限、输入规模与测量环境；无明显溢出遮挡。"
+  },
+  {
+    "id": "18-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:14:17.433091+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "表格与说明完整保留数据、均值条件及泛化限制，警示框全部容纳文字。"
+  },
+  {
+    "id": "19-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:15:17.223296+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "树状分类包含生物/非生物、三类生物功能、阳光水温度，且注明分类不是食物链顺序；文字与连线无明显遮挡。"
+  },
+  {
+    "id": "19-baseline-3",
+    "reviewer": "Codex root generation evidence inspection",
+    "reviewedAt": "2026-09-14T04:17:21.030546+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "单次逻辑请求经过最多两次网络超时重试后失败（363.249秒），没有模型响应或首稿可供截图审阅；按无产物失败记录，不作图像诊断。"
+  },
+  {
+    "id": "19-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:17:40.673038+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "生产者/消费者/分解者标签分行较碎但完整可辨，未见可见背景越边或遮挡；层级、环境三例及非食物链提示齐全。"
+  },
+  {
+    "id": "20-baseline-1",
+    "reviewer": "Codex root generation evidence inspection",
+    "reviewedAt": "2026-09-14T04:25:05.252311+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "363.161秒网络超时终态失败，没有模型响应及首稿截图；记录无产物，不作视觉诊断。"
+  },
+  {
+    "id": "20-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:25:05.252341+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "左下实例的“小车”“物体”末行贴出/越过浅蓝背景下边界，属于轻微容器边界问题；分类、动能/势能实例及不是大小排序的说明均可辨。"
+  },
+  {
+    "id": "20-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:25:05.252351+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "两个实例说明互相重叠；动能/势能分支错误地从热能下方出发，未正确表达机械能的下级分类。"
+  },
+  {
+    "id": "21-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:25:05.252359+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": false,
+    "notes": "主要层级和输入/操作/预期结果、断言均可见且未溢出，但省略“嵌套仅组织测试、不决定执行因果”的关键限制。"
+  },
+  {
+    "id": "21-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:27:50.967405+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "左侧三级包含关系与右侧测试输入/操作/预期结果、断言和嵌套不决定执行因果的说明完整可见，无明显遮挡。"
+  },
+  {
+    "id": "22-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:27:50.967456+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "账单数值120kWh、0.50元/kWh、60元与乘法关系正确；用电量含义、费用换算及未计阶梯/附加/其他规则齐全。"
+  },
+  {
+    "id": "22-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:29:31.118014+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "右侧前两条解释被文字框裁掉末行，分别停在“反映累计消耗的电”和“用于将电能换算为”；关键物理含义及费用关系未完整呈现。左侧数值和算式、计费规则限制可见。"
+  },
+  {
+    "id": "21-baseline-3",
+    "reviewer": "Codex root generation evidence inspection",
+    "reviewedAt": "2026-09-14T04:31:14.330134+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "请求网络超时终态失败（363.337秒），没有响应或首稿截图；只记录无产物，不作视觉诊断。"
+  },
+  {
+    "id": "23-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:31:35.252903+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "左右注释末行略越浅蓝背景下边界；支撑运输且非光能来源、含叶绿体细胞的光合作用、气孔功能及比例限制均仍完整可辨。"
+  },
+  {
+    "id": "22-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:35:12.152681+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "左侧用电量解释仅露出“用电量反映”，下一行被裁切，累计消耗电能的关键含义没有完整可见；数值与其余解释存在。"
+  },
+  {
+    "id": "23-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:35:12.152715+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "多块注释末行越出浅灰背景。核对原响应确认“不可标注为光能”是模型的简写，并非“来源”被裁切；措辞不够精确，但叶脉的支撑运输及非光能含义仍可辨，叶肉/气孔功能与比例限制完整。"
+  },
+  {
+    "id": "24-baseline-1",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:35:12.152731+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": false,
+    "notes": "版面无明显遮挡，但省略“不是输入类型验证”的范围限制。代码未体现Python缩进；固定fixture本身是一行伪代码式文字，本项未作可执行性验收。"
+  },
+  {
+    "id": "24-baseline-2",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:35:12.152741+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "Return说明的permits越过背景下边界；省略不涵盖输入类型验证的限制，原生代码换行较碎。未把固定fixture当作可执行代码验收。"
+  },
+  {
+    "id": "24-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:39:58.642702+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "右侧 Return 注释的 guard allows 越出蓝色背景底边；未明确说明该守卫不验证输入类型。原夹具为伪代码，不据缩进或末尾标点判定可执行性。"
+  },
+  {
+    "id": "23-baseline-3",
+    "reviewer": "Codex root screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:41:48.831595+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "叶肉说明越出右侧背景；气孔说明越出背景并与底部比例注释重叠。未呈现叶脉不是光能来源的必要限制。"
+  }
+]

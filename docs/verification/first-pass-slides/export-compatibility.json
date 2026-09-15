@@ -1,0 +1,572 @@
+{
+  "method": "Existing buildPptxBlob in real Chromium; ZIP CRC and XML parse; text and geometry checks",
+  "reports": [
+    {
+      "id": "01-budget-1",
+      "bytes": 73177,
+      "zipEntries": 42,
+      "sourceTypes": [
+        "text",
+        "shape",
+        "chart"
+      ],
+      "malformed": [],
+      "slideSizePx": {
+        "width": 1000,
+        "height": 562.5
+      },
+      "boxes": [
+        {
+          "kind": "sp",
+          "text": "功率与电能",
+          "left": 60,
+          "top": 60,
+          "width": 880,
+          "height": 70
+        },
+        {
+          "kind": "sp",
+          "text": "",
+          "left": 60,
+          "top": 145,
+          "width": 431,
+          "height": 158.5
+        },
+        {
+          "kind": "sp",
+          "text": "功率表示单位时间消耗电能的快慢，单位为瓦特 W。",
+          "left": 80,
+          "top": 178,
+          "width": 391,
+          "height": 92
+        },
+        {
+          "kind": "sp",
+          "text": "",
+          "left": 509,
+          "top": 145,
+          "width": 431,
+          "height": 158.5
+        },
+        {
+          "kind": "sp",
+          "text": "电能是能量的累计，1 kWh = 3.6 × 10⁶ J。",
+          "left": 529,
+          "top": 178,
+          "width": 391,
+          "height": 92
+        },
+        {
+          "kind": "sp",
+          "text": "",
+          "left": 60,
+          "top": 321.5,
+          "width": 431,
+          "height": 158.5
+        },
+        {
+          "kind": "sp",
+          "text": "同样使用 2 小时，100 W 灯消耗 0.2 kWh，10 W 灯消耗 0.02 kWh。",
+          "left": 80,
+          "top": 335,
+          "width": 391,
+          "height": 130
+        },
+        {
+          "kind": "graphicFrame",
+          "text": "",
+          "left": 491,
+          "top": 321.5,
+          "width": 449,
+          "height": 158.5
+        }
+      ],
+      "coordinates": [
+        {
+          "id": "text_-DeCLy00",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 60,
+            "top": 60,
+            "width": 880,
+            "height": 70
+          }
+        },
+        {
+          "id": "shape_FkqDcYIq",
+          "type": "shape",
+          "matched": true,
+          "original": {
+            "left": 60,
+            "top": 145,
+            "width": 431,
+            "height": 158.5
+          }
+        },
+        {
+          "id": "text_2dmprSS4",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 80,
+            "top": 178,
+            "width": 391,
+            "height": 92
+          }
+        },
+        {
+          "id": "shape_647D8u2S",
+          "type": "shape",
+          "matched": true,
+          "original": {
+            "left": 509,
+            "top": 145,
+            "width": 431,
+            "height": 158.5
+          }
+        },
+        {
+          "id": "text_XN9z96bX",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 529,
+            "top": 178,
+            "width": 391,
+            "height": 92
+          }
+        },
+        {
+          "id": "shape_1tKZqZiF",
+          "type": "shape",
+          "matched": true,
+          "original": {
+            "left": 60,
+            "top": 321.5,
+            "width": 431,
+            "height": 158.5
+          }
+        },
+        {
+          "id": "text_hiZdsGG2",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 80,
+            "top": 335,
+            "width": 391,
+            "height": 130
+          }
+        },
+        {
+          "id": "chart_jUzqyq-e",
+          "type": "chart",
+          "matched": true,
+          "original": {
+            "left": 491,
+            "top": 321.5,
+            "width": 449,
+            "height": 158.5
+          }
+        }
+      ],
+      "textPresence": [
+        {
+          "id": "text_-DeCLy00",
+          "text": "功率与电能",
+          "present": true
+        },
+        {
+          "id": "text_2dmprSS4",
+          "text": "功率表示单位时间消耗电能的快慢，单位为瓦特 W。",
+          "present": true
+        },
+        {
+          "id": "text_XN9z96bX",
+          "text": "电能是能量的累计，1 kWh = 3.6 × 10⁶ J。",
+          "present": true
+        },
+        {
+          "id": "text_hiZdsGG2",
+          "text": "同样使用 2 小时，100 W 灯消耗 0.2 kWh，10 W 灯消耗 0.02 kWh。",
+          "present": true
+        }
+      ],
+      "formulaCount": 0,
+      "formulaText": "",
+      "charts": [
+        {
+          "name": "ppt/charts/chart1.xml",
+          "values": [
+            "Series 1",
+            "100 W 灯",
+            "10 W 灯",
+            "0.2",
+            "0.02"
+          ]
+        }
+      ],
+      "passed": true,
+      "browserErrors": []
+    },
+    {
+      "id": "01-budget-2",
+      "bytes": 53759,
+      "zipEntries": 39,
+      "sourceTypes": [
+        "text",
+        "shape",
+        "latex"
+      ],
+      "malformed": [],
+      "slideSizePx": {
+        "width": 1000,
+        "height": 562.5
+      },
+      "boxes": [
+        {
+          "kind": "sp",
+          "text": "功率与电能",
+          "left": 60,
+          "top": 50,
+          "width": 880,
+          "height": 60
+        },
+        {
+          "kind": "sp",
+          "text": "",
+          "left": 60,
+          "top": 140,
+          "width": 430,
+          "height": 155
+        },
+        {
+          "kind": "sp",
+          "text": "功率表示单位时间消耗电能的快慢单位为瓦特 (W)",
+          "left": 80,
+          "top": 170,
+          "width": 390,
+          "height": 88
+        },
+        {
+          "kind": "sp",
+          "text": "",
+          "left": 510,
+          "top": 140,
+          "width": 430,
+          "height": 155
+        },
+        {
+          "kind": "sp",
+          "text": "电能是能量的累计",
+          "left": 530,
+          "top": 170,
+          "width": 390,
+          "height": 58
+        },
+        {
+          "kind": "sp",
+          "text": "",
+          "left": 530,
+          "top": 228,
+          "width": 390,
+          "height": 60
+        },
+        {
+          "kind": "sp",
+          "text": "",
+          "left": 60,
+          "top": 305,
+          "width": 880,
+          "height": 120
+        },
+        {
+          "kind": "sp",
+          "text": "同样使用 2 小时，100 W 灯消耗 0.2 kWh，10 W 灯消耗 0.02 kWh。",
+          "left": 80,
+          "top": 325,
+          "width": 840,
+          "height": 88
+        }
+      ],
+      "coordinates": [
+        {
+          "id": "text_pJg5w1Xa",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 60,
+            "top": 50,
+            "width": 880,
+            "height": 60
+          }
+        },
+        {
+          "id": "shape_bGPNrU26",
+          "type": "shape",
+          "matched": true,
+          "original": {
+            "left": 60,
+            "top": 140,
+            "width": 430,
+            "height": 155
+          }
+        },
+        {
+          "id": "text_7fFxHkvV",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 80,
+            "top": 170,
+            "width": 390,
+            "height": 88
+          }
+        },
+        {
+          "id": "shape_84yTXwi3",
+          "type": "shape",
+          "matched": true,
+          "original": {
+            "left": 510,
+            "top": 140,
+            "width": 430,
+            "height": 155
+          }
+        },
+        {
+          "id": "text_GGgXLmZQ",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 530,
+            "top": 170,
+            "width": 390,
+            "height": 58
+          }
+        },
+        {
+          "id": "latex_28ZBaqhd",
+          "type": "latex",
+          "matched": true,
+          "original": {
+            "left": 530,
+            "top": 228,
+            "width": 390,
+            "height": 60
+          }
+        },
+        {
+          "id": "shape_c_0tbQz7",
+          "type": "shape",
+          "matched": true,
+          "original": {
+            "left": 60,
+            "top": 305,
+            "width": 880,
+            "height": 120
+          }
+        },
+        {
+          "id": "text_Rh4x41Ao",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 80,
+            "top": 325,
+            "width": 840,
+            "height": 88
+          }
+        }
+      ],
+      "textPresence": [
+        {
+          "id": "text_pJg5w1Xa",
+          "text": "功率与电能",
+          "present": true
+        },
+        {
+          "id": "text_7fFxHkvV",
+          "text": "功率表示单位时间消耗电能的快慢单位为瓦特 (W)",
+          "present": true
+        },
+        {
+          "id": "text_GGgXLmZQ",
+          "text": "电能是能量的累计",
+          "present": true
+        },
+        {
+          "id": "text_Rh4x41Ao",
+          "text": "同样使用 2 小时，100 W 灯消耗 0.2 kWh，10 W 灯消耗 0.02 kWh。",
+          "present": true
+        }
+      ],
+      "formulaCount": 1,
+      "formulaText": "1 kWh=3.6×106 J",
+      "charts": [],
+      "passed": true,
+      "browserErrors": []
+    },
+    {
+      "id": "02-budget-2",
+      "bytes": 57251,
+      "zipEntries": 39,
+      "sourceTypes": [
+        "text",
+        "shape",
+        "latex"
+      ],
+      "malformed": [],
+      "slideSizePx": {
+        "width": 1000,
+        "height": 562.5
+      },
+      "boxes": [
+        {
+          "kind": "sp",
+          "text": "光合作用的物质转化",
+          "left": 60,
+          "top": 38,
+          "width": 880,
+          "height": 68
+        },
+        {
+          "kind": "sp",
+          "text": "绿色植物利用光能，将二氧化碳和水转化为有机物并释放氧气。",
+          "left": 60,
+          "top": 178,
+          "width": 431,
+          "height": 92
+        },
+        {
+          "kind": "sp",
+          "text": "叶绿体是光合作用的主要场所；光提供能量，不能当作物质原料。",
+          "left": 509,
+          "top": 178,
+          "width": 431,
+          "height": 92
+        },
+        {
+          "kind": "sp",
+          "text": "植物生长所增加的碳主要来自空气中的二氧化碳。",
+          "left": 60,
+          "top": 354,
+          "width": 431,
+          "height": 92
+        },
+        {
+          "kind": "sp",
+          "text": "",
+          "left": 495,
+          "top": 326,
+          "width": 440,
+          "height": 150
+        },
+        {
+          "kind": "sp",
+          "text": "",
+          "left": 515,
+          "top": 366,
+          "width": 400,
+          "height": 70
+        }
+      ],
+      "coordinates": [
+        {
+          "id": "text_nkKGz-Av",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 60,
+            "top": 38,
+            "width": 880,
+            "height": 68
+          }
+        },
+        {
+          "id": "text_ohItdkNP",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 60,
+            "top": 178,
+            "width": 431,
+            "height": 92
+          }
+        },
+        {
+          "id": "text_pzufXnFE",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 509,
+            "top": 178,
+            "width": 431,
+            "height": 92
+          }
+        },
+        {
+          "id": "text_Uwk7T2z6",
+          "type": "text",
+          "matched": true,
+          "original": {
+            "left": 60,
+            "top": 354,
+            "width": 431,
+            "height": 92
+          }
+        },
+        {
+          "id": "shape_oRPOQrJ_",
+          "type": "shape",
+          "matched": true,
+          "original": {
+            "left": 495,
+            "top": 326,
+            "width": 440,
+            "height": 150
+          }
+        },
+        {
+          "id": "latex_yxCXrCdl",
+          "type": "latex",
+          "matched": true,
+          "original": {
+            "left": 515,
+            "top": 366,
+            "width": 400,
+            "height": 70
+          }
+        }
+      ],
+      "textPresence": [
+        {
+          "id": "text_nkKGz-Av",
+          "text": "光合作用的物质转化",
+          "present": true
+        },
+        {
+          "id": "text_ohItdkNP",
+          "text": "绿色植物利用光能，将二氧化碳和水转化为有机物并释放氧气。",
+          "present": true
+        },
+        {
+          "id": "text_pzufXnFE",
+          "text": "叶绿体是光合作用的主要场所；光提供能量，不能当作物质原料。",
+          "present": true
+        },
+        {
+          "id": "text_Uwk7T2z6",
+          "text": "植物生长所增加的碳主要来自空气中的二氧化碳。",
+          "present": true
+        }
+      ],
+      "formulaCount": 1,
+      "formulaText": "6CO2+6H2O → 光能   C6H12O6+6O2",
+      "charts": [],
+      "passed": true,
+      "browserErrors": []
+    }
+  ]
+}

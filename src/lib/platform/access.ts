@@ -6,6 +6,7 @@ import {
   OFFERING_COVER_MEDIA_PREFIX,
   TEMPLATE_COVER_MEDIA_PREFIX,
 } from "./classroom-cover";
+import { findCourseGenerationPreviewCourseId } from "@/lib/course-generation/generation-preview";
 
 export type PlatformDb = PrismaClient | Prisma.TransactionClient;
 
@@ -178,6 +179,11 @@ export async function authorizeLegacyClassroomRead(request: Request, classroomId
     return Response.json({ code: "FORBIDDEN", message: "无权读取此课堂封面" }, { status: 403 });
   }
   const { prisma } = await import("@/lib/db/client");
+  const generationPreviewCourseId = await findCourseGenerationPreviewCourseId(classroomId);
+  if (generationPreviewCourseId) {
+    if (auth.claims.role === "teacher" && await canAccessLegacyCourse(auth.claims, generationPreviewCourseId)) return null;
+    return Response.json({ code: "FORBIDDEN", message: "无权读取课程生成预览" }, { status: 403 });
+  }
   const references = await prisma.classroomTemplateVersion.findMany({ where: { OR: [
     { snapshot: { path: ["design", "aiLearningClassroomId"], equals: classroomId } },
     { snapshot: { path: ["design", "teacherClassroomId"], equals: classroomId } },

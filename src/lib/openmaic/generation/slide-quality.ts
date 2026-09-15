@@ -280,7 +280,7 @@ export function auditGeneratedSlide(elements: ReadonlyArray<PPTElement>, options
       if (element.type === 'line') continue;
       const layout = textLayout(element);
       if (!layout) continue;
-      if (layout.fontSize < 18) reasons.push(`text ${element.id} is too small for a teaching slide (under 18px)`);
+      if (layout.fontSize < 16) reasons.push(`text ${element.id} is too small for a teaching slide (under 16px)`);
       if (layout.requiredHeight > element.height + 3) {
         reasons.push(`text ${element.id} needs at least ${layout.requiredHeight}px height after wrapping, but its box is ${Math.round(element.height)}px`);
       }

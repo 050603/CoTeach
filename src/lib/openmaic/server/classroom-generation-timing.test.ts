@@ -5,6 +5,7 @@ import {
   registerTtsVoiceTimingCalibration,
 } from '@openmaic/lib/audio/tts-timing';
 import { attachTtsTimingPlans } from './classroom-generation';
+import { prepareVideoTimingRequests } from './video-timing-plan';
 
 const selection = {
   providerId: 'qwen-tts',
@@ -31,6 +32,40 @@ function outline(overrides: Partial<SceneOutline>): SceneOutline {
 }
 
 describe('attachTtsTimingPlans', () => {
+  it('reserves normalized video playback before speech, interaction and transition without double counting feedback', () => {
+    const [planned] = attachTtsTimingPlans([outline({
+      type: 'interactive', widgetType: 'code', targetDurationSec: 180,
+      mediaGenerations: [
+        { type: 'video', elementId: 'v1', prompt: '实验过程', duration: 10 },
+        { type: 'video', elementId: 'v2', prompt: '对照实验' },
+        { type: 'image', elementId: 'i1', prompt: '示意图', duration: 40 },
+      ],
+    })], selection, 'seedance');
+    expect(planned.mediaGenerations?.slice(0, 2)).toMatchObject([
+      { duration: 10, videoProviderId: 'seedance', durationSource: 'requested' },
+      { duration: 5, videoProviderId: 'seedance', durationSource: 'provider-default' },
+    ]);
+    const plan = planned.timingPlan!;
+    expect(plan.videoSec).toBe(15);
+    expect(plan.targetDurationSec + plan.videoSec! + plan.studentActivitySec! + plan.transitionSec!).toBe(180);
+    expect(plan.paragraphBudgets?.reduce((sum, part) => sum + part.targetDurationSec, 0)).toBe(plan.targetDurationSec);
+    expect(plan.speed).toBe(1);
+  });
+
+  it('fails unavailable video duration planning before narration instead of assigning zero time', () => {
+    const videoOutline = outline({ mediaGenerations: [{ type: 'video', elementId: 'v1', prompt: '实验' }] });
+    expect(() => prepareVideoTimingRequests(videoOutline)).toThrow('未配置可用的视频供应商');
+    expect(() => prepareVideoTimingRequests(videoOutline, 'sora')).toThrow('没有可计算的默认视频时长');
+    expect(() => attachTtsTimingPlans([{ ...videoOutline, targetDurationSec: 5 }], selection, 'seedance')).toThrow('没有讲解或活动余量');
+    expect(() => prepareVideoTimingRequests({ ...videoOutline, mediaGenerations: [{ ...videoOutline.mediaGenerations![0], duration: -1 }] }, 'seedance')).toThrow('时长必须为正数');
+  });
+
+  it('normalizes unsupported requested duration once and records that the provider default was used', () => {
+    const [planned] = attachTtsTimingPlans([outline({ mediaGenerations: [{ type: 'video', elementId: 'v1', prompt: '过程', duration: 10 }] })], selection, 'veo');
+    expect(planned.mediaGenerations?.[0]).toMatchObject({ duration: 8, durationSource: 'provider-default' });
+    expect(planned.timingPlan?.videoSec).toBe(8);
+  });
+
   it('turns almost the whole slide budget into natural-speed script content', () => {
     const [planned] = attachTtsTimingPlans([outline({})], selection);
     const plan = planned.timingPlan!;

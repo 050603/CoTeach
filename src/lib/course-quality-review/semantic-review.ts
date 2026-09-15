@@ -28,7 +28,7 @@ export function reviewSceneEvidence(scene: Scene): unknown {
 }
 
 /** Only concrete structure is a hard error; semantic questions remain teacher-reviewable. */
-export function collectCourseStructureIssues(course: Course, scenes: readonly Scene[]): CourseQualityIssue[] {
+export function collectCourseStructureIssues(course: Course, scenes: readonly Scene[], options: { includePresentation?: boolean } = {}): CourseQualityIssue[] {
   const issues: CourseQualityIssue[] = [];
   const add = (issue: Omit<CourseQualityIssue, "id">) => issues.push({ ...issue, id: `structure-${issues.length + 1}` });
   const outlines = course.content._openmaicSceneOutlines ?? [];
@@ -70,6 +70,8 @@ export function collectCourseStructureIssues(course: Course, scenes: readonly Sc
   }
   for (const point of course.content.knowledgePoints) if (!taught.has(point.id)) add({ origin: "structure", severity: "error", title: "必需知识缺少讲授页面", evidence: point.name, suggestion: "在现有时间预算内为该知识安排讲授内容。" });
   for (const outline of outlines) if (!scenes.some((scene) => scene.outlineId === outline.id || scene.id === outline.id)) add({ origin: "structure", severity: "error", title: "课堂页面未生成", evidence: outline.title, suggestion: "补齐该页面后重新检查。" });
+  // Publication validates required content only; presentation checks are teacher-triggered.
+  if (options.includePresentation === false) return issues;
   for (const scene of scenes) if (scene.content.type === "slide") {
     const canvas = scene.content.canvas;
     const canvasWidth = canvas.viewportSize ?? 1000;

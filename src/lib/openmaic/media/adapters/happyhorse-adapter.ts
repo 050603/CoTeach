@@ -6,6 +6,7 @@
  * GET  /api/v1/tasks/{task_id}
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import type {
   VideoGenerationConfig,
   VideoGenerationOptions,
@@ -97,7 +98,8 @@ export async function submitHappyHorseTask(
   options: VideoGenerationOptions,
 ): Promise<string> {
   const baseUrl = normalizeBaseUrl(config.baseUrl);
-  const response = await fetch(`${baseUrl}/api/v1/services/aigc/video-generation/video-synthesis`, {
+  const response = await fetchMediaRequest(`${baseUrl}/api/v1/services/aigc/video-generation/video-synthesis`, {
+    signal: options.signal,
     method: 'POST',
     headers: {
       ...jsonHeaders(config.apiKey),
@@ -117,17 +119,13 @@ export async function submitHappyHorseTask(
     }),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`HappyHorse task submission failed (${response.status}): ${text}`);
-  }
 
   const data = (await response.json()) as HappyHorseSubmitResponse;
   if (data.code || data.message) {
-    throw new Error(`HappyHorse task submission failed: ${getErrorMessage(data)}`);
+    throw mediaGenerationFailure(`HappyHorse task submission failed: ${getErrorMessage(data)}`);
   }
   if (!data.output?.task_id) {
-    throw new Error(`HappyHorse returned empty task ID. Response: ${JSON.stringify(data)}`);
+    throw mediaGenerationFailure(`HappyHorse returned empty task ID. Response: ${JSON.stringify(data)}`);
   }
 
   return data.output.task_id;
@@ -136,24 +134,22 @@ export async function submitHappyHorseTask(
 export async function pollHappyHorseTask(
   config: VideoGenerationConfig,
   taskId: string,
+  signal?: AbortSignal,
 ): Promise<VideoGenerationResult | null> {
   const baseUrl = normalizeBaseUrl(config.baseUrl);
-  const response = await fetch(`${baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+  const response = await fetchMediaRequest(`${baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+    signal: signal,
     method: 'GET',
     headers: authHeaders(config.apiKey),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`HappyHorse poll failed (${response.status}): ${text}`);
-  }
 
   const data = (await response.json()) as HappyHorsePollResponse;
   const status = data.output?.task_status;
 
   if (status === 'SUCCEEDED') {
     if (!data.output?.video_url) {
-      throw new Error('HappyHorse task succeeded but no video URL returned');
+      throw mediaGenerationFailure('HappyHorse task succeeded but no video URL returned');
     }
     const dimensions = estimateDimensions(data.usage?.ratio, data.usage?.SR);
     return {
@@ -165,7 +161,11 @@ export async function pollHappyHorseTask(
   }
 
   if (status === 'FAILED' || status === 'CANCELED' || status === 'UNKNOWN') {
-    throw new Error(`HappyHorse video generation failed: ${getErrorMessage(data)}`);
+    throw mediaGenerationFailure(`HappyHorse video generation failed: ${getErrorMessage(data)}`);
+  }
+
+  if (status !== 'PENDING' && status !== 'RUNNING') {
+    throw mediaGenerationFailure('HappyHorse returned an invalid task status');
   }
 
   return null;
@@ -179,11 +179,11 @@ export async function generateWithHappyHorse(
 
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
     await delay(POLL_INTERVAL_MS);
-    const result = await pollHappyHorseTask(config, taskId);
+    const result = await pollHappyHorseTask(config, taskId, options.signal);
     if (result) return result;
   }
 
-  throw new Error(
+  throw mediaGenerationFailure(
     `HappyHorse video generation timed out after ${(MAX_POLL_ATTEMPTS * POLL_INTERVAL_MS) / 1000}s (task: ${taskId})`,
   );
 }

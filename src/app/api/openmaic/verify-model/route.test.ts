@@ -21,6 +21,7 @@ describe("model connection verification errors", () => {
     mocks.resolveModel.mockResolvedValue({
       model: {},
       providerId: "deepseek",
+      modelId: "deepseek-v4.1-flash",
       baseUrl: "https://deployment.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
     });
   });
@@ -39,6 +40,23 @@ describe("model connection verification errors", () => {
       errorCode: "INVALID_REQUEST",
       error: "阿里云 Model Studio 拒绝了当前密钥。",
       details: expect.stringContaining("专属部署、阿里云账号和地域匹配"),
+    });
+  });
+
+  it("explains that the configured Alibaba workspace rejected the model ID", async () => {
+    mocks.callLLM.mockRejectedValue(new Error("Model not exist."));
+    const response = await POST(new Request("http://localhost/api/openmaic/verify-model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "deepseek:deepseek-v4.1-flash" }),
+    }) as never);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      errorCode: "INVALID_REQUEST",
+      error: "阿里云 Model Studio 当前业务空间拒绝了模型 deepseek-v4.1-flash。",
+      details: expect.stringContaining("原始模型 ID"),
     });
   });
 });

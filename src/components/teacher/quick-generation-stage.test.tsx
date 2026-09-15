@@ -32,6 +32,35 @@ afterEach(() => {
 });
 
 describe("QuickGenerationStage", () => {
+  it("lets the teacher preview completed pages before generation finishes", () => {
+    const onPreviewGenerated = vi.fn();
+    render(
+      <QuickGenerationStage
+        artifacts={[outlineArtifact]}
+        backgroundEnabled
+        brief="设计一节项目课"
+        cancelling={false}
+        completed={false}
+        confirmCancel={false}
+        message="正在制作课堂页面"
+        onCancel={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onPreviewGenerated={onPreviewGenerated}
+        onReview={vi.fn()}
+        paused={false}
+        previewScenesCount={3}
+        progress={72}
+        remainingLabel="预计还需约 3 分钟"
+        reviewAvailable={false}
+        startedAt={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "预览已生成 3 页" }));
+    expect(onPreviewGenerated).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "中断生成" })).toBeTruthy();
+  });
+
   it("shows the new-system AI-learning blueprint as a detailed production workspace", () => {
     render(
       <QuickGenerationStage

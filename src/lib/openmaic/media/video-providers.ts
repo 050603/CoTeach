@@ -200,20 +200,26 @@ export async function generateVideo(
   config: VideoGenerationConfig,
   options: VideoGenerationOptions,
 ): Promise<VideoGenerationResult> {
-  switch (config.providerId) {
-    case 'seedance':
-      return generateWithSeedance(config, options);
-    case 'kling':
-      return generateWithKling(config, options);
-    case 'veo':
-      return generateWithVeo(config, options);
-    case 'minimax-video':
-      return generateWithMiniMaxVideo(config, options);
-    case 'grok-video':
-      return generateWithGrokVideo(config, options);
-    case 'happyhorse':
-      return generateWithHappyHorse(config, options);
-    default:
-      throw new Error(`Unsupported video provider: ${config.providerId}`);
+  // HTTP requests retry inside adapters; completed operations never restart here.
+  try {
+    switch (config.providerId) {
+      case 'seedance':
+        return await generateWithSeedance(config, options);
+      case 'kling':
+        return await generateWithKling(config, options);
+      case 'veo':
+        return await generateWithVeo(config, options);
+      case 'minimax-video':
+        return await generateWithMiniMaxVideo(config, options);
+      case 'grok-video':
+        return await generateWithGrokVideo(config, options);
+      case 'happyhorse':
+        return await generateWithHappyHorse(config, options);
+      default:
+        throw new Error(`Unsupported video provider: ${config.providerId}`);
+    }
+  } catch (error) {
+    if (error instanceof Error) throw Object.assign(error, { isRetryable: false });
+    throw Object.assign(new Error(String(error)), { isRetryable: false });
   }
 }

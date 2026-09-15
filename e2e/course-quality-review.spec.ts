@@ -6,7 +6,7 @@ import { buildNewSystemTimingPlan } from '../src/lib/classroom/new-system-course
 
 const baseURL = process.env.OPENPBL_RESOURCE_E2E_BASE_URL || 'http://localhost:3000';
 test.use({ baseURL });
-test('actual slide measurement resumes after refresh and teacher accepts the current draft', async ({ page }, info) => {
+for (const manualCheck of [false, true]) test(`teacher publishes ${manualCheck ? 'after a manual page check' : 'without auxiliary reports'}`, async ({ page }, info) => {
   test.setTimeout(150_000);
   const courseId = 'e2e-quality-review', classroomId = 'e2e-quality-classroom', signature = 'a'.repeat(64);
   const course = createPblTemplateCourse(courseId, { name: '课程终审验收', subject: '教育学', grade: '本科一年级', hours: 1.5, drivingQuestion: '怎样用证据解释学习？' });
@@ -20,7 +20,7 @@ test('actual slide measurement resumes after refresh and teacher accepts the cur
     { id: 'body', type: 'text', left: 100, top: 150, width: 800, height: 350, rotate: 0, content: '<p style="font-size:28px">用学生实际表现支持你的教学判断。</p>', defaultFontName: 'Noto Sans SC', defaultColor: '#163B3C' },
   ] } } };
   const classroom = { id: classroomId, revision: 1, stage: { id: 'stage', name: '学习证据' }, scenes: [scene], createdAt: new Date().toISOString() };
-  const quality = { schemaVersion: 1, courseId, classroomId, signature, classroomRevision: 1, status: 'completed', issues: [] };
+  const quality = null;
   let renderReview: unknown = null;
   const writes: Array<Record<string, unknown>> = [], errors: string[] = [], unexpected: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -54,16 +54,21 @@ test('actual slide measurement resumes after refresh and teacher accepts the cur
   await page.goto(`/teacher/prepare/${courseId}/preview`, { waitUntil: 'domcontentloaded' });
   const review = page.getByRole('region', { name: '课程质量与教师终审' });
   await expect(review).toBeVisible({ timeout: 60_000 });
-  await expect(review.getByText('页面呈现：1 / 1 页，已检查')).toBeVisible({ timeout: 30_000 });
-  await expect.poll(() => writes.filter((write) => write.action === 'render-page').length).toBe(1);
-  const result = writes.find((write) => write.action === 'render-page') as { page: { issues: Array<{ id: string }> } };
-  expect(result.page.issues.some((issue) => issue.id.includes('top-heavy'))).toBe(true);
-  await expect(page.getByRole('button', { name: '确认并发布', exact: true })).toBeDisabled();
-  await page.reload();
-  await expect(review.getByText('页面呈现：1 / 1 页，已检查')).toBeVisible({ timeout: 30_000 });
-  expect(writes.filter((write) => write.action === 'render-page')).toHaveLength(1);
-  for (const checkbox of await review.getByRole('checkbox').all()) await checkbox.check();
+  await expect(review.getByText('内容检查：未检查')).toBeVisible();
+  await expect(review.getByText('页面呈现：未检查')).toBeVisible();
   await expect(page.getByRole('button', { name: '确认并发布', exact: true })).toBeEnabled();
+  expect(writes).toHaveLength(0);
+  if (manualCheck) {
+    await review.getByRole('button', { name: '检查页面', exact: true }).click();
+    await expect(review.getByText('页面呈现：1 / 1 页，已检查')).toBeVisible({ timeout: 30_000 });
+    await expect.poll(() => writes.filter((write) => write.action === 'render-page').length).toBe(1);
+    const result = writes.find((write) => write.action === 'render-page') as { page: { issues: Array<{ id: string }> } };
+    expect(result.page.issues.some((issue) => issue.id.includes('top-heavy'))).toBe(true);
+    await page.reload();
+    await expect(review.getByText('页面呈现：1 / 1 页，已检查')).toBeVisible({ timeout: 30_000 });
+    expect(writes.filter((write) => write.action === 'render-page')).toHaveLength(1);
+    await expect(page.getByRole('button', { name: '确认并发布', exact: true })).toBeEnabled();
+  }
   await page.screenshot({ path: info.outputPath('teacher-quality-review.png'), fullPage: true });
   await page.getByRole('button', { name: '确认并发布', exact: true }).click();
   await expect.poll(() => writes.some((write) => write.action === 'confirm' && write.signature === signature && write.publish === true)).toBe(true);

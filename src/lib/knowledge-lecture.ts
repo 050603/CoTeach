@@ -114,6 +114,46 @@ export function organizeKnowledgeLectureOutlines(
   const nonEmpty = assigned
     .map((scenes, index) => ({ scenes, knowledgePointIds: effectiveGroups[index] ?? [] }))
     .filter((entry) => entry.scenes.length > 0);
+  // A section is a teaching sequence, not a single-page wrapper around a
+  // quiz. When the outline model produced enough teaching material, fold any
+  // isolated one-page group into its adjacent section. This preserves every
+  // page and every knowledge point while preventing the visible
+  // slide -> quiz -> slide -> quiz cadence.
+  for (let index = 0; index < nonEmpty.length && nonEmpty.length > 1;) {
+    const current = nonEmpty[index]!;
+    if (current.scenes.length > 1) {
+      index += 1;
+      continue;
+    }
+    const next = nonEmpty[index + 1];
+    if (next?.scenes.length === 1) {
+      current.scenes.push(...next.scenes);
+      current.knowledgePointIds = unique([
+        ...current.knowledgePointIds,
+        ...next.knowledgePointIds,
+      ]);
+      nonEmpty.splice(index + 1, 1);
+      index += 1;
+      continue;
+    }
+    if (index === 0) {
+      const following = nonEmpty[1]!;
+      following.scenes = [...current.scenes, ...following.scenes];
+      following.knowledgePointIds = unique([
+        ...current.knowledgePointIds,
+        ...following.knowledgePointIds,
+      ]);
+      nonEmpty.splice(0, 1);
+      continue;
+    }
+    const previous = nonEmpty[index - 1]!;
+    previous.scenes.push(...current.scenes);
+    previous.knowledgePointIds = unique([
+      ...previous.knowledgePointIds,
+      ...current.knowledgePointIds,
+    ]);
+    nonEmpty.splice(index, 1);
+  }
   const totalSeconds = Math.round(input.totalDurationSec);
   // Never add quiz time on top of the approved lecture budget. If necessary,
   // combine adjacent sections, preserving every teaching page and knowledge ID.

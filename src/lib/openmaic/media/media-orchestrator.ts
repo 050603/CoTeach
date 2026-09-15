@@ -11,6 +11,7 @@ import { useSettingsStore } from '@openmaic/lib/store/settings';
 import { db, mediaFileKey } from '@openmaic/lib/utils/database';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { MediaGenerationRequest } from '@openmaic/lib/media/types';
+import { isRetryableGenerationError } from '@openmaic/lib/generation/generation-retry';
 import { createLogger } from '@openmaic/lib/logger';
 
 const log = createLogger('MediaOrchestrator');
@@ -24,13 +25,21 @@ const MAX_AUTO_RETRIES = 2;
 
 /** Base delay between retries (ms), multiplied by attempt number. */
 const RETRY_BASE_DELAY_MS = 2_000;
+const generatedResources = new Map<string, { url: string; poster?: string }>();
 
 /** Error with a structured errorCode from the API */
 class MediaApiError extends Error {
   errorCode?: string;
-  constructor(message: string, errorCode?: string) {
+  statusCode?: number;
+  retryAfterMs?: number;
+  isRetryable?: boolean;
+  constructor(message: string, errorCode?: string, response?: Response) {
     super(message);
     this.errorCode = errorCode;
+    this.statusCode = response?.status;
+    if (response?.headers.get('x-generation-retryable') === 'false') this.isRetryable = false;
+    const hint = response?.headers.get('retry-after');
+    this.retryAfterMs = hint ? (Number.isFinite(Number(hint)) ? Number(hint) * 1000 : Math.max(0, Date.parse(hint) - Date.now())) : undefined;
   }
 }
 
@@ -72,23 +81,7 @@ function withTimeoutSignal(
 }
 
 function isRetryableError(err: unknown): boolean {
-  if (err instanceof MediaApiError) {
-    // Content safety / disabled errors are not retryable.
-    const nonRetryable = ['CONTENT_SENSITIVE', 'GENERATION_DISABLED'];
-    if (err.errorCode && nonRetryable.includes(err.errorCode)) return false;
-    return true;
-  }
-  // Network errors, timeouts, and generic failures are retryable.
-  if (err instanceof DOMException && err.name === 'TimeoutError') return true;
-  if (err instanceof Error) {
-    const msg = err.message.toLowerCase();
-    if (msg.includes('fetch') || msg.includes('network') || msg.includes('timeout')) return true;
-  }
-  return true;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return isRetryableGenerationError(err);
 }
 
 /**
@@ -161,6 +154,8 @@ export async function retryMediaTask(elementId: string): Promise<void> {
       elementId: task.elementId,
       aspectRatio: task.params.aspectRatio as MediaGenerationRequest['aspectRatio'],
       style: task.params.style,
+      duration: task.params.duration,
+      videoProviderId: task.params.videoProviderId,
     },
     task.stageId,
   );
@@ -178,25 +173,20 @@ async function generateSingleMedia(
 
   let lastError: unknown;
   let lastErrorCode: string | undefined;
+  const resourceKey = `${stageId}:${req.elementId}:${req.prompt}`;
+  let resource = generatedResources.get(resourceKey);
 
   for (let attempt = 0; attempt <= MAX_AUTO_RETRIES; attempt++) {
     if (abortSignal?.aborted) return;
 
     try {
-      let resultUrl: string;
-      let posterUrl: string | undefined;
-      let mimeType: string;
-
-      if (req.type === 'image') {
-        const result = await callImageApi(req, abortSignal);
-        resultUrl = result.url;
-        mimeType = 'image/png';
-      } else {
-        const result = await callVideoApi(req, abortSignal);
-        resultUrl = result.url;
-        posterUrl = result.poster;
-        mimeType = 'video/mp4';
+      if (!resource) {
+        resource = await (req.type === 'image' ? callImageApi(req, abortSignal) : callVideoApi(req, abortSignal));
+        generatedResources.set(resourceKey, resource);
       }
+      const resultUrl = resource.url;
+      const posterUrl = resource.poster;
+      const mimeType = req.type === 'image' ? 'image/png' : 'video/mp4';
 
       if (abortSignal?.aborted) return;
 
@@ -217,6 +207,8 @@ async function generateSingleMedia(
         params: JSON.stringify({
           aspectRatio: req.aspectRatio,
           style: req.style,
+          duration: req.duration,
+          videoProviderId: req.videoProviderId,
         }),
         createdAt: Date.now(),
       });
@@ -225,6 +217,7 @@ async function generateSingleMedia(
       const objectUrl = URL.createObjectURL(blob);
       const posterObjectUrl = posterBlob ? URL.createObjectURL(posterBlob) : undefined;
       useMediaGenerationStore.getState().markDone(req.elementId, objectUrl, posterObjectUrl);
+      generatedResources.delete(resourceKey);
       return; // success — exit retry loop
     } catch (err) {
       if (abortSignal?.aborted) return;
@@ -236,10 +229,10 @@ async function generateSingleMedia(
       log.warn(`Failed ${req.elementId} (attempt ${attempt + 1}/${MAX_AUTO_RETRIES + 1}): ${message}${isTimeout ? ' [TIMEOUT]' : ''}`);
 
       // Don't retry non-retryable errors or if the caller aborted.
-      if (!isRetryableError(err) || attempt >= MAX_AUTO_RETRIES) break;
+      if (!resource || !isRetryableError(err) || attempt >= MAX_AUTO_RETRIES) break;
 
       // Exponential backoff before retry.
-      await sleep(RETRY_BASE_DELAY_MS * (attempt + 1));
+      await new Promise((resolve) => setTimeout(resolve, Math.max(RETRY_BASE_DELAY_MS * (attempt + 1), err instanceof MediaApiError ? err.retryAfterMs ?? 0 : 0)));
     }
   }
 
@@ -267,6 +260,8 @@ async function generateSingleMedia(
         params: JSON.stringify({
           aspectRatio: req.aspectRatio,
           style: req.style,
+          duration: req.duration,
+          videoProviderId: req.videoProviderId,
         }),
         error: displayMessage,
         errorCode: lastErrorCode,
@@ -305,7 +300,7 @@ async function callImageApi(
 
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      throw new MediaApiError(data.error || `Image API returned ${response.status}`, data.errorCode);
+      throw new MediaApiError(data.error || `Image API returned ${response.status}`, data.errorCode, response);
     }
 
     const data = await response.json();
@@ -327,7 +322,8 @@ async function callVideoApi(
   abortSignal?: AbortSignal,
 ): Promise<{ url: string; poster?: string }> {
   const settings = useSettingsStore.getState();
-  const providerConfig = settings.videoProvidersConfig?.[settings.videoProviderId];
+  const providerId = req.videoProviderId ?? settings.videoProviderId;
+  const providerConfig = settings.videoProvidersConfig?.[providerId];
 
   const { signal: timeoutSignal, cleanup } = withTimeoutSignal(abortSignal, VIDEO_API_TIMEOUT_MS);
 
@@ -336,7 +332,7 @@ async function callVideoApi(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-video-provider': settings.videoProviderId || '',
+        'x-video-provider': providerId || '',
         'x-video-model': settings.videoModelId || '',
         'x-api-key': providerConfig?.apiKey || '',
         'x-base-url': providerConfig?.baseUrl || '',
@@ -344,13 +340,14 @@ async function callVideoApi(
       body: JSON.stringify({
         prompt: req.prompt,
         aspectRatio: req.aspectRatio,
+        duration: req.duration,
       }),
       signal: timeoutSignal,
     });
 
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      throw new MediaApiError(data.error || `Video API returned ${response.status}`, data.errorCode);
+      throw new MediaApiError(data.error || `Video API returned ${response.status}`, data.errorCode, response);
     }
 
     const data = await response.json();
@@ -373,19 +370,19 @@ async function fetchAsBlob(url: string): Promise<Blob> {
   }
   // For remote URLs, proxy through our server to bypass CORS restrictions
   if (url.startsWith('http://') || url.startsWith('https://')) {
-    const res = await fetch('/api/proxy-media', {
+    const res = await fetch('/api/openmaic/proxy-media', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || `Proxy fetch failed: ${res.status}`);
+      throw new MediaApiError(data.error || `Proxy fetch failed: ${res.status}`, undefined, res);
     }
     return res.blob();
   }
   // Relative URLs (shouldn't happen, but handle gracefully)
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch blob: ${res.status}`);
+  if (!res.ok) throw new MediaApiError(`Failed to fetch blob: ${res.status}`, undefined, res);
   return res.blob();
 }

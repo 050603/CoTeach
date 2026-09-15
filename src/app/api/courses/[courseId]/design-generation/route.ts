@@ -32,6 +32,7 @@ import {
   classroomMediaConfigurationErrorResponse,
 } from "@openmaic/lib/server/classroom-media-readiness";
 import { ResourcePackageError, resolveConfirmedResourcePackage } from "@/lib/resource-package/server";
+import { findServerDefaultModelString } from "@/lib/openmaic/server/provider-config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -199,6 +200,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
     }
     const quickRequest: QuickDesignRequest = {
       courseId,
+      generationModelString: findServerDefaultModelString(),
       systemMode: getOpenPblSystemMode(),
       teacherBrief,
       ...(resourcePackage ? { resourcePackage, supplementalAnswers: { brief: supplementalBrief || teacherBrief } } : {}),

@@ -1,0 +1,28 @@
+{
+  "at": "2026-09-15T02:33:19.459Z",
+  "before": {
+    "students": 139,
+    "submissions": 108,
+    "progress": 145,
+    "enrollments": 142,
+    "learningEvents": 245
+  },
+  "after": {
+    "enrollment": 0,
+    "activityProgress": 0,
+    "activitySubmission": 0,
+    "classroomParticipation": 0,
+    "artifact": 0,
+    "artifactVersion": 0,
+    "learningEvent": 0,
+    "aiInteractionEvent": 0,
+    "groupMember": 0,
+    "projectGroup": 0,
+    "students": 0,
+    "teachers": 1
+  },
+  "preservedContentHashesMatch": true,
+  "surveysVerifiedEmpty": 2,
+  "oldStudentSessionStatus": 401,
+  "studentFilesRemoved": 1
+}

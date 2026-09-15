@@ -4,14 +4,25 @@ import { contentGenerationJobs, qualityReviewJobs } from "@/lib/course-generatio
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import { readClassroom } from "@/lib/openmaic/server/classroom-storage";
 import type { SceneOutline } from "@/lib/openmaic/types/generation";
+import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
 import { callLLM } from "@/lib/llm/client";
 import { runWithCourseGenerationLlmContext } from "@/lib/course-generation/llm-concurrency";
+import { createCourseGenerationAiCall } from "@/lib/openmaic/server/course-generation-ai-call";
+import { resolveModel } from "@/lib/openmaic/server/resolve-model";
+import { findServerDefaultModelString } from "@/lib/openmaic/server/provider-config";
 import { computeCourseQualitySignature } from "./signature";
 import { collectCourseStructureIssues, courseReviewSections, reviewCourseSection } from "./semantic-review";
+import { getCourseQualityReviewSettings } from "./settings";
 import type { CourseQualityReport } from "./types";
 import { REVIEW_SOURCE_LIMIT } from "./source-selection";
 
-type ReviewRequest = { courseId: string; classroomId: string; signature: string; sourceContext: string };
+type ReviewRequest = {
+  courseId: string;
+  classroomId: string;
+  signature: string;
+  sourceContext: string;
+  reviewModelString?: string;
+};
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value));
 let started = false;
 let stopping = false;
@@ -53,8 +64,24 @@ export async function enqueueCourseQualityReview(courseId: string, options: { fo
   const classroom = await readClassroom(classroomId);
   if (!classroom) return null;
   const signature = computeCourseQualitySignature(course, classroom);
+  const [generation, reviewSettings] = await Promise.all([
+    contentGenerationJobs.findUnique({ where: { courseId } }),
+    getCourseQualityReviewSettings(),
+  ]);
+  const generationRequest = generation?.request as {
+    generationModelString?: string;
+    teachingSourceContext?: string;
+  } | undefined;
+  // An independent reviewer is opt-in. Without one, review follows the exact
+  // model locked onto this course-generation job instead of resolving a new
+  // model based on visual capability or a stage route.
+  const reviewModelString = reviewSettings.modelString
+    ?? generationRequest?.generationModelString
+    ?? findServerDefaultModelString();
   const existing = await qualityReviewJobs.findUnique({ where: { courseId } });
-  const sameInput = (existing?.request as unknown as ReviewRequest | undefined)?.signature === signature;
+  const existingRequest = existing?.request as unknown as ReviewRequest | undefined;
+  const sameInput = existingRequest?.signature === signature
+    && existingRequest.reviewModelString === reviewModelString;
   const previous = sameInput ? existing?.result as unknown as CourseQualityReport | undefined : undefined;
   if (existing && !sameInput) controllers.get(existing.id)?.abort();
   if (previous && (!options.force || existing?.status === "running")) {
@@ -66,14 +93,14 @@ export async function enqueueCourseQualityReview(courseId: string, options: { fo
     if (existing?.status === "queued") void runCourseQualityReviewJob(existing.id).catch(() => undefined);
     return previous;
   }
-  const generation = await contentGenerationJobs.findUnique({ where: { courseId } });
-  const sourceContext = (generation?.request as { teachingSourceContext?: string } | undefined)?.teachingSourceContext
+  const sourceContext = generationRequest?.teachingSourceContext
     ?? JSON.stringify({ teacherConfirmed: course.content.resourcePackage?.draft, knowledgePoints: course.content.knowledgePoints });
   const sections = initializeReviewSections(courseReviewSections(course, classroom.scenes), previous);
   const report: CourseQualityReport = { schemaVersion: 1, signature, courseId, classroomId, classroomRevision: classroom.revision ?? 1, status: "pending",
+    ...(reviewModelString ? { reviewModelString } : {}),
     sections, sourceCoverage: { totalChars: sourceContext.length, perSectionLimit: REVIEW_SOURCE_LIMIT, partial: sourceContext.length > REVIEW_SOURCE_LIMIT },
     issues: mergeReviewIssues([...collectCourseStructureIssues(course, classroom.scenes), ...sourceCoverageIssue(sourceContext)], sections) };
-  const data = { courseId, status: "queued", request: json({ courseId, classroomId, signature, sourceContext }), result: json(report), qualityReport: json(report), error: null,
+  const data = { courseId, status: "queued", request: json({ courseId, classroomId, signature, sourceContext, ...(reviewModelString ? { reviewModelString } : {}) }), result: json(report), qualityReport: json(report), error: null,
     step: "queued", message: "课堂草稿已生成，正在后台核对讲授、练习与知识依据", progress: Math.round(sections.filter((section) => section.status === "completed").length / Math.max(1, sections.length) * 100), completedAt: null, startedAt: null, version: { increment: 1 } };
   const job = await qualityReviewJobs.upsert({ where: { courseId }, create: data, update: data });
   await updateCourse(courseId, (current) => computeCourseQualitySignature(current, classroom) !== signature ? current : ({ ...current, content: { ...current.content, qualityReviewRequired: true, qualityReview: report } }));
@@ -95,7 +122,9 @@ export async function runCourseQualityReviewJob(jobId: string): Promise<void> {
   let report = { ...(job.result as unknown as CourseQualityReport), status: "running" as CourseQualityReport["status"] };
   const persist = async (next: CourseQualityReport, status: string) => {
     const currentJob = await qualityReviewJobs.findUnique({ where: { id: jobId } });
-    if ((currentJob?.request as unknown as ReviewRequest)?.signature !== request.signature) return;
+    const currentRequest = currentJob?.request as unknown as ReviewRequest | undefined;
+    if (currentRequest?.signature !== request.signature
+      || currentRequest.reviewModelString !== request.reviewModelString) return;
     const completed = next.sections?.filter((section) => section.status === "completed").length ?? 0;
     const total = next.sections?.length ?? 1;
     const changed = await qualityReviewJobs.updateMany({ where: owner, data: { status, progress: next.status === "completed" ? 100 : Math.round(completed / Math.max(1, total) * 100), result: json(next), qualityReport: json(next),
@@ -119,13 +148,36 @@ export async function runCourseQualityReviewJob(jobId: string): Promise<void> {
     report = { ...report, sections, error: undefined, checkedAt: undefined, issues: mergeReviewIssues(baseIssues, sections) };
     await persist(report, "running");
     const pendingIndexes = sections.flatMap((section, index) => section.status === "completed" ? [] : [index]);
+    let reviewAiCall: AICallFn;
+    if (request.reviewModelString) {
+      const resolved = await resolveModel({ modelString: request.reviewModelString });
+      const selectedCall = createCourseGenerationAiCall({
+        model: resolved.model,
+        vision: resolved.modelInfo?.capabilities?.vision === true,
+        source: "course-quality-review",
+        signal: controller.signal,
+        maxOutputTokens: resolved.modelInfo?.outputWindow,
+        thinking: resolved.thinkingConfig,
+        timeoutMs: 180_000,
+      });
+      reviewAiCall = (system, user, images) => runWithCourseGenerationLlmContext(
+        () => selectedCall(system, user, images),
+      );
+    } else {
+      // Legacy jobs created before generation-model locking keep the prior
+      // default-model behavior. New jobs always carry the generation model.
+      reviewAiCall = (system, user) => runWithCourseGenerationLlmContext(() => callLLM(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        { jsonMode: true, abortSignal: controller.signal, requestClass: "long-generation", maxTransientRetries: 1 },
+      ));
+    }
     // Two independent section calls at a time, one semantic pass, no visual-LLM retry loop.
     for (let index = 0; index < pendingIndexes.length; index += 2) {
       controller.signal.throwIfAborted();
       const batch = pendingIndexes.slice(index, index + 2);
       const result = await Promise.allSettled(batch.map((sectionIndex) => reviewCourseSection({ course, scenes: groups[sectionIndex],
         outlines: (course.content._openmaicSceneOutlines ?? []) as SceneOutline[], sourceContext: request.sourceContext, includeKnowledgeGraph: sectionIndex === 0 },
-      (system, user) => runWithCourseGenerationLlmContext(() => callLLM([{ role: "system", content: system }, { role: "user", content: user }], { jsonMode: true, abortSignal: controller.signal, requestClass: "long-generation", maxTransientRetries: 1 })))));
+      reviewAiCall)));
       for (const [offset, item] of result.entries()) {
         const sectionIndex = batch[offset];
         sections[sectionIndex] = { ...sections[sectionIndex], checkedAt: new Date().toISOString(),

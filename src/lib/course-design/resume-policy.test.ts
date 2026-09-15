@@ -126,6 +126,13 @@ describe("quick-design resume policy", () => {
     })).toBe(false);
     expect(isSameCourseDesignRequest({
       ...request,
+      generationModelString: "deepseek:deepseek-v4-flash",
+    }, {
+      ...request,
+      generationModelString: "openai:gpt-5",
+    })).toBe(false);
+    expect(isSameCourseDesignRequest({
+      ...request,
       generationMode: "standard",
     }, request)).toBe(true);
     expect(isSameCourseDesignRequest({

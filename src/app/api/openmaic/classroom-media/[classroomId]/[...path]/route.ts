@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { type NextRequest } from 'next/server';
 import { CLASSROOMS_DIR, isValidClassroomId } from '@openmaic/lib/server/classroom-storage';
+import { normalizePlayableWav } from '@openmaic/lib/audio/wav-container';
 import { authorizeLegacyClassroomRead } from '@/lib/platform/access';
 
 export const runtime = 'nodejs';
@@ -22,43 +23,6 @@ const MIME_TYPES: Record<string, string> = {
   '.webm': 'audio/webm',
   '.webp': 'image/webp',
 };
-
-function bytesToAscii(bytes: Uint8Array, offset: number, length: number): string {
-  if (offset < 0 || offset + length > bytes.byteLength) return '';
-  let value = '';
-  for (let i = 0; i < length; i++) value += String.fromCharCode(bytes[offset + i]);
-  return value;
-}
-
-function normalizePlayableWav(bytes: Uint8Array): Uint8Array {
-  if (bytes.byteLength < 44) return bytes;
-  if (bytesToAscii(bytes, 0, 4) !== 'RIFF' || bytesToAscii(bytes, 8, 4) !== 'WAVE') {
-    return bytes;
-  }
-
-  const normalized = new Uint8Array(bytes);
-  const view = new DataView(normalized.buffer, normalized.byteOffset, normalized.byteLength);
-  view.setUint32(4, normalized.byteLength - 8, true);
-
-  let offset = 12;
-  while (offset + 8 <= normalized.byteLength) {
-    const chunkId = bytesToAscii(normalized, offset, 4);
-    const chunkSizeOffset = offset + 4;
-    const chunkDataOffset = offset + 8;
-    const chunkSize = view.getUint32(chunkSizeOffset, true);
-
-    if (chunkId === 'data') {
-      view.setUint32(chunkSizeOffset, normalized.byteLength - chunkDataOffset, true);
-      break;
-    }
-
-    const nextOffset = chunkDataOffset + chunkSize + (chunkSize % 2);
-    if (nextOffset <= offset || nextOffset > normalized.byteLength) break;
-    offset = nextOffset;
-  }
-
-  return normalized;
-}
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;

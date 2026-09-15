@@ -12,6 +12,7 @@ import {
   type PersistedCourseGenerationRequest,
 } from "@/lib/course-generation/job-runner";
 import { formatPersistedCourseGenerationErrorForTeacher } from "@/lib/course-generation/failure-policy";
+import { courseGenerationPreviewClassroomId } from "@/lib/course-generation/generation-preview";
 import { authorizeTemplateRequest } from "@/lib/platform/template-access";
 import { loadPblTemplateCourse } from "@/lib/platform/pbl-template-repository";
 import {
@@ -42,6 +43,12 @@ function responseJob(job: Awaited<ReturnType<typeof contentGenerationJobs.findUn
     estimatedRemainingSeconds: job.estimatedRemainingSeconds,
     events: job.events,
     result: job.result,
+    preview: job.scenesGenerated > 0 && job.status !== "completed"
+      ? {
+          classroomId: courseGenerationPreviewClassroomId(job.id),
+          scenesCount: job.scenesGenerated,
+        }
+      : null,
     error: job.status === "failed" && job.error
       ? formatPersistedCourseGenerationErrorForTeacher(job.error)
       : null,

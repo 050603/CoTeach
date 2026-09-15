@@ -207,9 +207,8 @@ export function getNewSystemCourseReadiness(
       id: "teacher-review",
       label: "教师终审",
       ok: Boolean(course.content.teacherReview?.signature
-        && course.content.teacherReview.signature === course.content.qualityReview?.signature
         && course.content.teacherReview.classroomId === (course.aiLearningClassroomId || course.content._openmaicClassroomId)),
-      message: "请在预览发布页面核对检查结果，并确认当前版本可以授课。",
+      message: "请在预览发布页面确认当前版本可以授课。",
     }] : []),
     {
       id: "basics",

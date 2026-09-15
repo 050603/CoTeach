@@ -1,0 +1,120 @@
+{
+  "startedAt": "2026-09-15T02:23:08.156Z",
+  "concurrentStudents": 40,
+  "transport": "HTTPS through production Nginx; DNS mapped to loopback",
+  "stages": [
+    {
+      "name": "40 simultaneous homepage requests",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 279
+    },
+    {
+      "name": "40 simultaneous invitation checks",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 166
+    },
+    {
+      "name": "40 simultaneous registrations from one IP",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 1298
+    },
+    {
+      "name": "40 simultaneous logins",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 441
+    },
+    {
+      "name": "40 simultaneous course reads",
+      "count": 40,
+      "failed": 0,
+      "durationMs": 218
+    },
+    {
+      "name": "40 browser course pages",
+      "count": 40,
+      "failed": 32,
+      "durationMs": 37777
+    }
+  ],
+  "success": false,
+  "error": "locator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\nlocator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link').filter({ hasText: '人工智能教育课前学情调查' }).first() to be visible\u001b[22m\n\n\n32 !== 0\n",
+  "finishedAt": "2026-09-15T02:23:49.533Z",
+  "http": [
+    {
+      "label": "teacher-baseline",
+      "count": 1,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 331,
+      "maxMs": 331
+    },
+    {
+      "label": "homepage",
+      "count": 40,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 228,
+      "maxMs": 236
+    },
+    {
+      "label": "invitation",
+      "count": 40,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 157,
+      "maxMs": 162
+    },
+    {
+      "label": "register",
+      "count": 40,
+      "statuses": [
+        201
+      ],
+      "p95Ms": 1239,
+      "maxMs": 1294
+    },
+    {
+      "label": "login",
+      "count": 40,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 427,
+      "maxMs": 433
+    },
+    {
+      "label": "courses",
+      "count": 40,
+      "statuses": [
+        200
+      ],
+      "p95Ms": 209,
+      "maxMs": 212
+    },
+    {
+      "label": "student-cannot-read-teacher-statistics",
+      "count": 1,
+      "statuses": [
+        401
+      ],
+      "p95Ms": 6,
+      "maxMs": 6
+    },
+    {
+      "label": "required-answer-validation",
+      "count": 1,
+      "statuses": [
+        400
+      ],
+      "p95Ms": 20,
+      "maxMs": 20
+    }
+  ]
+}

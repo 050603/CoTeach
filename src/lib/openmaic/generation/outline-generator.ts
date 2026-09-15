@@ -32,8 +32,11 @@ import { createLogger } from '@openmaic/lib/logger';
 import { formatTeachingConstraintsForPrompt } from '@openmaic/lib/pedagogy/teaching-constraints';
 import { resolveOutlinePromptPlan } from './outline-prompt-plan';
 import { splitLongStudentSlides } from './student-slide-duration-policy';
-import { ensureTerminalMasteryAssessment } from './terminal-mastery-assessment-policy';
 import { ensureTeachingToolPlans } from './teaching-tool-plan';
+import {
+  generateOpenMaicBaselineOutlines,
+  shouldUseOpenMaicBaselineOutlines,
+} from './openmaic-baseline';
 const log = createLogger('Generation');
 
 /**
@@ -83,6 +86,42 @@ export async function generateSceneOutlinesFromRequirements(
 ): Promise<
   GenerationResult<{ languageDirective: string; courseTitle?: string; outlines: SceneOutline[] }>
 > {
+  if (shouldUseOpenMaicBaselineOutlines(requirements)) {
+    callbacks?.onProgress?.({
+      currentStage: 1,
+      overallProgress: 20,
+      stageProgress: 50,
+      statusMessage: '正在使用 OpenMAIC 官方基线生成场景大纲...',
+      scenesGenerated: 0,
+      totalScenes: 0,
+    });
+    const result = await generateOpenMaicBaselineOutlines(
+      requirements,
+      pdfText,
+      pdfImages,
+      aiCall,
+      {
+        visionEnabled: options?.visionEnabled,
+        imageMapping: options?.imageMapping,
+        imageGenerationEnabled: options?.imageGenerationEnabled,
+        videoGenerationEnabled: options?.videoGenerationEnabled,
+        researchContext: options?.researchContext,
+        teacherContext: options?.teacherContext,
+      },
+    );
+    if (result.success && result.data) {
+      callbacks?.onProgress?.({
+        currentStage: 1,
+        overallProgress: 50,
+        stageProgress: 100,
+        statusMessage: `已生成 ${result.data.outlines.length} 个场景大纲`,
+        scenesGenerated: 0,
+        totalScenes: result.data.outlines.length,
+      });
+    }
+    return result;
+  }
+
   // Build available images description for the prompt
   let availableImagesText = 'No images available';
   let visionImages: Array<{ id: string; src: string }> | undefined;
@@ -219,10 +258,8 @@ export async function generateSceneOutlinesFromRequirements(
     // Scene types and cadence are curriculum decisions made by the selected
     // outline planner. Do not manufacture interaction pages after planning:
     // that was the source of low-value "click next / view details" filler.
-    const withTerminalAssessment = ensureTerminalMasteryAssessment(
-      enforcePblOutlineContract(enriched, requirements),
-    );
-    const durationSafeOutlines = splitLongStudentSlides(withTerminalAssessment);
+    const contractOutlines = enforcePblOutlineContract(enriched, requirements);
+    const durationSafeOutlines = splitLongStudentSlides(contractOutlines);
     const parentActivities = (requirements.pblActivityCatalog ?? []).map((activity) => ({
       id: activity.activityId,
       durationMin: activity.durationMin,

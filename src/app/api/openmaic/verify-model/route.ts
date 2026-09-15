@@ -4,12 +4,16 @@ import { apiError, apiSuccess } from '@openmaic/lib/server/api-response';
 import { resolveModel } from '@openmaic/lib/server/resolve-model';
 import { callLLM } from '@openmaic/lib/ai/llm';
 import { isAbortError } from '@openmaic/lib/generation/generation-retry';
-import { getProviderCredentialError } from '@/lib/teacher/ai-service-settings';
+import {
+  getProviderCredentialError,
+  getProviderModelError,
+} from '@/lib/teacher/ai-service-settings';
 const log = createLogger('Verify Model');
 
 export async function POST(req: NextRequest) {
   let model: string | undefined;
   let resolvedProviderId: string | undefined;
+  let resolvedModelId: string | undefined;
   let resolvedBaseUrl: string | undefined;
   try {
     if (req.signal.aborted) return new Response(null, { status: 499 });
@@ -32,6 +36,7 @@ export async function POST(req: NextRequest) {
       });
       languageModel = result.model;
       resolvedProviderId = result.providerId;
+      resolvedModelId = result.modelId;
       resolvedBaseUrl = result.baseUrl;
     } catch (error) {
       return apiError(
@@ -74,6 +79,15 @@ export async function POST(req: NextRequest) {
       });
       if (credentialError) {
         return apiError('INVALID_REQUEST', 401, credentialError.message, credentialError.details);
+      }
+      const modelError = getProviderModelError({
+        providerId: resolvedProviderId,
+        baseUrl: resolvedBaseUrl,
+        modelId: resolvedModelId,
+        errorMessage: error.message,
+      });
+      if (modelError) {
+        return apiError('INVALID_REQUEST', 400, modelError.message, modelError.details);
       }
       // Parse common error messages
       if (error.message.includes('401') || error.message.includes('Unauthorized')) {

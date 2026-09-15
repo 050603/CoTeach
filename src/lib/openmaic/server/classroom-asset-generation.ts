@@ -40,11 +40,6 @@ type AssetFailure = MediaFailure | {
   error: string;
 };
 
-// The provider call already owns a bounded retry policy (including 429 and
-// quality-review failures). Retrying that whole policy again here multiplied a
-// single image into six generation attempts before the final audit even ran.
-const MAX_MEDIA_REPAIR_PASSES = 0;
-
 export function formatClassroomMediaItemProgress(item: ClassroomMediaItemProgress): string {
   const label = item.type === 'image' ? '课堂配图' : '课堂视频';
   const ordinal = Math.min(
@@ -236,40 +231,16 @@ export async function generateClassroomAssets(
         message: `正在生成并插入 ${requestedMedia.length} 项图片与视频资源`,
       });
       await updateAssetStatus('running', 0, []);
-      const mediaMap: Record<string, string> = {};
-      let failures: MediaFailure[] = [];
-      let repairOutlines = input.outlines;
-
-      for (let pass = 0; pass <= MAX_MEDIA_REPAIR_PASSES; pass += 1) {
-        const result = await generateMediaForClassroom(
-          repairOutlines,
-          input.studentClassroomId,
-          input.baseUrl,
-          capabilities,
-          input.signal,
-          async (item) => {
-            await input.onProgress?.({
-              phase: 'media',
-              status: 'running',
-              completed: item.completed,
-              total: item.total,
-              message: formatClassroomMediaItemProgress(item),
-            });
-          },
-        );
-        Object.assign(mediaMap, result.mediaMap);
-        replaceMediaPlaceholders(allScenes, result.mediaMap, input.outlines);
-        await persistSceneGroups(groups);
-
-        failures = reconcileMediaFailures(requestedMedia, mediaMap, result.failures);
-        if (failures.length === 0 || pass >= MAX_MEDIA_REPAIR_PASSES) break;
-
-        repairOutlines = buildMediaRepairOutlines(input.outlines, failures);
-        await updateAssetStatus('running', Object.keys(mediaMap).length, failures);
-        log.warn(
-          `Retrying missing classroom media [studentClassroomId=${input.studentClassroomId}, pass=${pass + 2}, missing=${failures.length}]`,
-        );
-      }
+      const result = await generateMediaForClassroom(
+        input.outlines, input.studentClassroomId, input.baseUrl, capabilities, input.signal,
+        async (item) => {
+          await input.onProgress?.({ phase: 'media', status: 'running', completed: item.completed,
+            total: item.total, message: formatClassroomMediaItemProgress(item) });
+        },
+      );
+      replaceMediaPlaceholders(allScenes, result.mediaMap, input.outlines);
+      await persistSceneGroups(groups);
+      const failures = reconcileMediaFailures(requestedMedia, result.mediaMap, result.failures);
 
       const completed = requestedMedia.length - failures.length;
       await updateAssetStatus(failures.length > 0 ? 'partial-failure' : 'completed', completed, failures);

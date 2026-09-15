@@ -26,7 +26,7 @@ Use this provider/model/voice rate before deciding student AI-learning narration
 - Every interaction must reuse valid `parentActivityId` and `knowledgePointIds`, and directly require prediction, manipulation or decision, observation, and explanatory feedback. Decorative clicking, animation, points, or unguided exploration is invalid.
 - Interactions are ungraded exploration or operation spaces, not extra assessments. Do not request matching, sorting, ordering, drag-to-answer, multiple-choice, answer submission, correctness verdicts, knowledge scores, rankings, or pass/fail gates. If dragging is pedagogically necessary, it must directly manipulate or construct the model and must not compare the final arrangement with an answer key.
 - Mark an interaction complete only after a meaningful operation or exploration loop and show what changed and why.
-- Reserve no more than 20% of student AI-learning time for the terminal assessment and keep the largest share for explicit teaching and meaningful practice.
+- Reserve no more than 20% of student AI-learning time for section assessments in total and keep the largest share for explicit teaching and meaningful practice.
 
 {{#if standardMode}}
 #### Standard mode strategy
@@ -45,12 +45,12 @@ Use this provider/model/voice rate before deciding student AI-learning narration
 - Deep interaction applies only to student `ai-learning`. Keep `launch`, `proposal`, `make`, `showcase`, and `reflection` teacher-facing and PPT/script-only under the phase contract.
 {{/if}}
 
-### One terminal mastery assessment
+### One concise assessment per knowledge section
 
-- Generate exactly one terminal mastery `quiz` after every student explanation and interaction scene. Never add a quiz after each knowledge block, and never add another comprehensive quiz after the terminal assessment.
-- Give it a learner-facing title equivalent to “主课达标测”, not “章节练习” or repeated “理解检查”. Normally use 4–8 focused questions depending on the number of confirmed knowledge points and available time.
-- The quiz scene carries all assessed `knowledgePointIds`. During question generation, every question must carry one or more specific `knowledgePointIds` from that scene so the runtime can calculate a mastery profile per knowledge point.
-- Keep reading, answering, and answer analysis inside the confirmed course duration. Prepared enrichment is optional and runs only after this assessment when mastery and remaining time allow; it must not reduce the time needed to teach the core lesson well.
+- End every completed knowledge section with exactly one mastery `quiz` containing 2–3 `short_answer` questions. Do not interrupt an unfinished section with a quiz and do not add a redundant comprehensive quiz after the final section.
+- Give each quiz a concise learner-facing section-check title and keep answers to keywords or one to two sentences.
+- Each quiz scene carries that section's assessed `knowledgePointIds`. During question generation, every question must carry one or more specific IDs from that scene so the runtime can calculate a mastery profile per knowledge point.
+- Keep reading, answering, and answer analysis inside the confirmed course duration. Prepared enrichment is optional and must not reduce the time needed to teach the core lesson well.
 
 - Cover all six phase keys exactly as defined by the phase contract.
 - Build a one-to-many hierarchy: a course module may have multiple course-outline details, and details under different parents may have different resource types. Every detail must include `parentActivityId` from the confirmed course-module catalog.

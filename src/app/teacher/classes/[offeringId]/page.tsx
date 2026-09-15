@@ -5,7 +5,7 @@ import { ResilientImage } from "@/components/resilient-image";
 import { TeacherPlatformPage, TeacherPlatformHeader } from "@/components/platform/teacher-shell";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowRight, BarChart3, BookOpen, Check, ChevronDown, ClipboardList, Copy, FileText, Link2, LockKeyhole, MoreHorizontal, ArrowUpRight, PencilLine, Play, Plus, Settings2, Sparkles, Trash2, UnlockKeyhole, Upload, Users, X } from "lucide-react";
+import { ArrowRight, BarChart3, BookOpen, Check, ChevronDown, ClipboardList, Copy, Download, FileText, Link2, LockKeyhole, MoreHorizontal, ArrowUpRight, PencilLine, Play, Plus, Settings2, Sparkles, Trash2, UnlockKeyhole, Upload, Users, X } from "lucide-react";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { offeringStatusLabel, instanceStatusLabel } from "@/lib/platform/labels";
 import { teacherPlatformFetch } from "@/lib/platform/client";
@@ -580,6 +580,13 @@ export default function TeacherClassEditorPage() {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="pbl-platform-theme pbl-platform-dialog">
                                 <DropdownMenuItem onSelect={() => openActivity(chapter, item)}>编辑名称与内容关联</DropdownMenuItem>
+                                {item.type === "Form" ? (
+                                  <DropdownMenuItem asChild>
+                                    <a href={`/api/platform/activities/${item.id}/survey-export`}>
+                                      <Download size={15} />导出问卷数据（CSV）
+                                    </a>
+                                  </DropdownMenuItem>
+                                ) : null}
                                 {instance && instance.status !== "finished" ? (
                                   <DropdownMenuItem asChild>
                                     <Link href={"/teacher/classrooms/" + instance.id}>课堂学习记录</Link>

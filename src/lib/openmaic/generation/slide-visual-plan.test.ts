@@ -35,13 +35,12 @@ describe('teaching slide storyboards and factual review', () => {
     const code = { id: 'code', type: 'code', left: 60, top: 170, width: 800, height: 180, lines, language: 'python' } as PPTElement;
     expect(slideReviewEvidence([code])).toEqual([expect.objectContaining({ lines, language: 'python' })]);
   });
-  it.each(['{}', '{"blockingIssues":[null]}', '{"blockingIssues":[{"evidence":"结论"}]}'])('recovers a malformed content review without failing the course: %s', async (invalid) => {
+  it.each(['{}', '{"blockingIssues":[null]}', '{"blockingIssues":[{"evidence":"结论"}]}'])('does not treat malformed content review as a network failure: %s', async (invalid) => {
     const ai = vi.fn().mockResolvedValueOnce(invalid).mockResolvedValueOnce('{"blockingIssues":[],"keyPointCoverage":[]}');
-    const result = await withGenerationRetry(() => reviewSlideInstructionalContent({ ...page, keyPoints: [] }, [], '教师证据', ai), {
+    await expect(withGenerationRetry(() => reviewSlideInstructionalContent({ ...page, keyPoints: [] }, [], '教师证据', ai), {
       label: 'slide content review', maxRetries: 1, sleep: async () => {},
-    });
-    expect(result).toEqual([]);
-    expect(ai).toHaveBeenCalledTimes(2);
+    })).rejects.toThrow('未返回有效结果');
+    expect(ai).toHaveBeenCalledOnce();
   });
   it('requires visible evidence for every key point and rejects invented supporting quotes', async () => {
     const elements = [{ id: 't', type: 'text', left: 60, top: 160, width: 800, height: 90, content: '<p>项目式学习 VS 探究式学习</p>' }] as PPTElement[];
@@ -128,13 +127,9 @@ describe('teaching slide storyboards and factual review', () => {
     expect(await reviewSlideInstructionalContent(target, corrected, '', ai)).toEqual([]);
     expect(ai).toHaveBeenCalledOnce();
   });
-  it.each(['{}', '{"pages":[null]}', '{"pages":[]}', '{"pages":[{"id":"unknown"}]}'])('retries malformed storyboards before semantic fallback: %s', async (invalid) => {
-    const ai = vi.fn().mockResolvedValueOnce(invalid).mockResolvedValueOnce('{"pages":[{"id":"compare","composition":"comparison"}]}');
-    const result = await withGenerationRetry(() => planCourseSlideVisuals([page], ai), {
-      label: 'slide storyboards', maxRetries: 1, sleep: async () => {},
-    });
-    expect(result[0].visualPlan?.composition).toBe('comparison');
-    expect(result[0].targetDurationSec).toBe(90);
-    expect(ai).toHaveBeenCalledTimes(2);
+  it.each(['{}', '{"pages":[null]}', '{"pages":[]}', '{"pages":[{"id":"unknown"}]}'])('fails malformed storyboards without quality retries: %s', async (invalid) => {
+    const ai = vi.fn().mockResolvedValue(invalid);
+    await expect(planCourseSlideVisuals([page], ai)).rejects.toThrow('未返回有效页面方案');
+    expect(ai).toHaveBeenCalledOnce();
   });
 });

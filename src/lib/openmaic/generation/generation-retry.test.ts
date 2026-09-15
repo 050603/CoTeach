@@ -7,6 +7,25 @@ import {
 } from './generation-retry';
 
 describe('withGenerationRetry', () => {
+  it('honors AI SDK Retry-After response headers beyond the backoff cap', async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const operation = vi.fn().mockRejectedValueOnce({ statusCode: 429, responseHeaders: { 'retry-after': '45' } }).mockResolvedValue('ok');
+    await withGenerationRetry(operation, { label: 'SDK', sleep, random: () => 0 });
+    expect(sleep).toHaveBeenCalledWith(45_000, undefined);
+  });
+  it('caps fault retries at two even when callers request more', async () => {
+    const operation = vi.fn().mockRejectedValue(Object.assign(new Error('unavailable'), { statusCode: 503 }));
+    await expect(withGenerationRetry(operation, { label: 'test', maxRetries: 8, sleep: async () => {} })).rejects.toThrow('unavailable');
+    expect(operation).toHaveBeenCalledTimes(3);
+  });
+  it('does not let result validation schedule another generation', async () => {
+    const operation = vi.fn().mockResolvedValue(null);
+    expect(await withGenerationRetry(operation, { label: 'test', shouldRetryResult: () => true })).toBeNull();
+    expect(operation).toHaveBeenCalledOnce();
+  });
+  it.each([409, 425, 401, 403, 422, 501])('does not retry HTTP %s', (statusCode) => {
+    expect(isRetryableGenerationError({ statusCode, isRetryable: true })).toBe(false);
+  });
   it('honors an upstream retryAfterMs hint for throttled requests', async () => {
     const sleep = vi.fn().mockResolvedValue(undefined);
     const throttled = Object.assign(new Error('rate limit exceeded'), {
@@ -46,7 +65,7 @@ describe('withGenerationRetry', () => {
     expect(operation).toHaveBeenCalledTimes(2);
   });
 
-  it('retries an empty successful upstream response once', async () => {
+  it('does not regenerate an empty successful upstream response', async () => {
     const operation = vi.fn()
       .mockRejectedValueOnce(new LlmEmptyResponseError())
       .mockResolvedValueOnce('valid JSON');
@@ -56,21 +75,22 @@ describe('withGenerationRetry', () => {
       maxRetries: 1,
       sleep: vi.fn().mockResolvedValue(undefined),
       random: () => 0,
-    })).resolves.toBe('valid JSON');
+    })).rejects.toBeInstanceOf(LlmEmptyResponseError);
+    expect(operation).toHaveBeenCalledOnce();
   });
 
-  it('treats an inference-engine abort with an unknown finish reason as transient', () => {
+  it('does not infer a network failure from an unknown finish reason', () => {
     expect(isRetryableGenerationError(new Error(
       'An error occurred in model serving, error message is: [Inference engine abort. Finish reason: [UNKNOWN].]',
-    ))).toBe(true);
+    ))).toBe(false);
   });
 
   it.each(['AI_EmptyResponseBodyError', 'AI_NoOutputGeneratedError'])(
-    'treats %s as a transient provider response',
+    'does not regenerate %s without an explicit transport failure',
     (name) => {
       const error = new Error('No output generated.');
       error.name = name;
-      expect(isRetryableGenerationError(error)).toBe(true);
+      expect(isRetryableGenerationError(error)).toBe(false);
     },
   );
 
@@ -91,6 +111,13 @@ describe('withGenerationRetry', () => {
       statusCode: 503,
     });
     expect(isRetryableGenerationError(contextualized)).toBe(true);
+  });
+
+  it('keeps exhausted request budgets terminal when page context is added', () => {
+    const exhausted = Object.assign(new Error('upstream timeout'), { statusCode: 503, isRetryable: false });
+    const contextualized = contextualizeGenerationError(exhausted, 'Scene 1/8 failed');
+    expect(contextualized).toMatchObject({ statusCode: 503, isRetryable: false });
+    expect(isRetryableGenerationError(contextualized)).toBe(false);
   });
 
   it('allows a caller to separate same-resource retries from regeneration', async () => {

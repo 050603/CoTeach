@@ -93,9 +93,11 @@
  */
 
 import type { TTSModelConfig } from './types';
+import { withGenerationRetry } from '@openmaic/lib/generation/generation-retry';
 import { isCustomTTSProvider } from './types';
 import { TTS_PROVIDERS } from './constants';
 import { splitConcatenatedJsonObjects } from './json-stream';
+import { hasWavHeader, normalizePlayableWav } from './wav-container';
 import {
   VOXCPM_VLLM_MODEL_ID,
   VOXCPM_AUTO_VOICE_ID,
@@ -133,53 +135,22 @@ export class TTSRateLimitError extends Error {
  * can surface it as 429 instead of a generic 500. Call right after an
  * `!response.ok` check, before building the provider-specific error message.
  */
-export function throwIfTtsRateLimited(provider: string, status: number): void {
+export function throwIfTtsRateLimited(provider: string, status: number, headers?: Headers): void {
   if (status === 429) {
-    throw new TTSRateLimitError(provider, `${provider} TTS rate limit exceeded (HTTP 429)`);
+    throw Object.assign(new TTSRateLimitError(provider, `${provider} TTS rate limit exceeded (HTTP 429)`), { statusCode: status, retryAfterMs: retryAfterMilliseconds(headers) });
+  }
+  if (status >= 500 && status < 600) {
+    throw Object.assign(new Error(`${provider} TTS service failed (HTTP ${status})`), {
+      statusCode: status, retryAfterMs: retryAfterMilliseconds(headers),
+    });
   }
 }
 
-function bytesToAscii(bytes: Uint8Array, offset: number, length: number): string {
-  if (offset < 0 || offset + length > bytes.byteLength) return '';
-  let value = '';
-  for (let i = 0; i < length; i++) value += String.fromCharCode(bytes[offset + i]);
-  return value;
-}
-
-/**
- * Some upstream TTS services return WAV files with sentinel RIFF/data chunk
- * sizes (for example 0x7fffffff) even though the payload is complete. Native
- * audio elements reject those files as "no supported source". Normalize the
- * container lengths while preserving the PCM bytes.
- */
-function normalizePlayableWav(audio: Uint8Array): Uint8Array {
-  if (audio.byteLength < 44) return audio;
-  if (bytesToAscii(audio, 0, 4) !== 'RIFF' || bytesToAscii(audio, 8, 4) !== 'WAVE') {
-    return audio;
-  }
-
-  const normalized = new Uint8Array(audio);
-  const view = new DataView(normalized.buffer, normalized.byteOffset, normalized.byteLength);
-  view.setUint32(4, normalized.byteLength - 8, true);
-
-  let offset = 12;
-  while (offset + 8 <= normalized.byteLength) {
-    const chunkId = bytesToAscii(normalized, offset, 4);
-    const chunkSizeOffset = offset + 4;
-    const chunkDataOffset = offset + 8;
-    const chunkSize = view.getUint32(chunkSizeOffset, true);
-
-    if (chunkId === 'data') {
-      view.setUint32(chunkSizeOffset, normalized.byteLength - chunkDataOffset, true);
-      break;
-    }
-
-    const nextOffset = chunkDataOffset + chunkSize + (chunkSize % 2);
-    if (nextOffset <= offset || nextOffset > normalized.byteLength) break;
-    offset = nextOffset;
-  }
-
-  return normalized;
+function retryAfterMilliseconds(headers?: Headers): number {
+  const value = headers?.get('retry-after');
+  if (!value) return 0;
+  const seconds = Number(value);
+  return Number.isFinite(seconds) ? Math.max(0, seconds * 1_000) : Math.max(0, Date.parse(value) - Date.now()) || 0;
 }
 
 /**
@@ -260,7 +231,7 @@ async function generateOpenAITTS(
   });
 
   if (!response.ok) {
-    throwIfTtsRateLimited('OpenAI', response.status);
+    throwIfTtsRateLimited('OpenAI', response.status, response.headers);
     const error = await response.json().catch(() => ({ error: response.statusText }));
     throw new Error(`OpenAI TTS API error: ${error.error?.message || response.statusText}`);
   }
@@ -305,7 +276,7 @@ async function generateLemonadeTTS(
   });
 
   if (!response.ok) {
-    throwIfTtsRateLimited('Lemonade', response.status);
+    throwIfTtsRateLimited('Lemonade', response.status, response.headers);
     throw new Error(`Lemonade TTS API error: ${await readTTSApiError(response)}`);
   }
 
@@ -376,7 +347,7 @@ async function generateVoxCPMTTS(
         : await postVoxCPMVLLMOmni(baseUrl, request, config);
 
   if (!response.ok) {
-    throwIfTtsRateLimited('VoxCPM', response.status);
+    throwIfTtsRateLimited('VoxCPM', response.status, response.headers);
     throw new Error(`VoxCPM TTS API error: ${await readTTSApiError(response)}`);
   }
 
@@ -628,7 +599,7 @@ async function generateAzureTTS(
   });
 
   if (!response.ok) {
-    throwIfTtsRateLimited('Azure', response.status);
+    throwIfTtsRateLimited('Azure', response.status, response.headers);
     throw new Error(`Azure TTS API error: ${response.statusText}`);
   }
 
@@ -662,7 +633,7 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
   });
 
   if (!response.ok) {
-    throwIfTtsRateLimited('GLM', response.status);
+    throwIfTtsRateLimited('GLM', response.status, response.headers);
     const errorText = await response.text().catch(() => response.statusText);
     let errorMessage = `GLM TTS API error: ${errorText}`;
     try {
@@ -686,6 +657,15 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
 /**
  * Qwen TTS implementation (DashScope API - Qwen3 TTS Flash)
  */
+// https://www.alibabacloud.com/help/en/model-studio/qwen-tts-api
+export function qwenSpeechLanguage(language?: string): string {
+  const languages: Record<string, string> = {
+    zh: 'Chinese', en: 'English', de: 'German', it: 'Italian', pt: 'Portuguese',
+    es: 'Spanish', ja: 'Japanese', ko: 'Korean', fr: 'French', ru: 'Russian',
+  };
+  return languages[language?.toLowerCase().split('-')[0] ?? ''] ?? 'Auto';
+}
+
 async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TTSGenerationResult> {
   const configuredBaseUrl = config.baseUrl || TTS_PROVIDERS['qwen-tts'].defaultBaseUrl;
   const baseUrl = configuredBaseUrl?.includes('/compatible-mode/')
@@ -702,6 +682,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   // 而非音频字节,导致客户端"音频无法解码"。
   const response = await fetch(`${baseUrl}/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
+    signal: config.signal,
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json; charset=utf-8',
@@ -712,7 +693,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
       input: {
         text,
         voice: config.voice,
-        language_type: 'Chinese',
+        language_type: qwenSpeechLanguage(config.language),
       },
       parameters: {
         rate, // Speech rate from -500 to 500
@@ -721,7 +702,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   });
 
   if (!response.ok) {
-    throwIfTtsRateLimited('Qwen', response.status);
+    throwIfTtsRateLimited('Qwen', response.status, response.headers);
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`Qwen TTS API error: ${errorText}`);
   }
@@ -730,42 +711,26 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   if (contentType.includes('text/event-stream') && response.body) {
     const pcm = await collectQwenSsePcm(response.body);
     if (pcm.length > 0) {
-      return { audio: pcmToWav(pcm, 24000, 16, 1), format: 'wav' };
+      return {
+        audio: normalizePlayableWav(
+          hasWavHeader(pcm) ? pcm : pcmToWav(pcm, 24000, 16, 1),
+        ),
+        format: 'wav',
+      };
     }
-    // 未收到任何 PCM(异常情况),回退到非流式逻辑重新请求。
-    const fallback = await fetch(`${baseUrl}/services/aigc/multimodal-generation/generation`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        'Content-Type': 'application/json; charset=utf-8',
-      },
-      body: JSON.stringify({
-        model: config.modelId || 'qwen3-tts-flash',
-        input: {
-          text,
-          voice: config.voice,
-          language_type: 'Chinese',
-        },
-        parameters: {
-          rate, // Speech rate from -500 to 500
-        },
-      }),
-    });
-    if (!fallback.ok) {
-      throwIfTtsRateLimited('Qwen', fallback.status);
-      const errorText = await fallback.text().catch(() => fallback.statusText);
-      throw new Error(`Qwen TTS API error: ${errorText}`);
-    }
-    return {
-      audio: normalizePlayableWav(await downloadQwenAudio(await fallback.json())),
-      format: 'wav', // Qwen3 TTS returns WAV format
-    };
+    throw Object.assign(new Error('Qwen TTS returned an empty audio stream'), { isRetryable: false });
   }
 
   const data = await response.json();
   const inline = data?.output?.audio?.data;
   if (typeof inline === 'string' && inline.length > 0) {
-    return { audio: pcmToWav(decodeBase64(inline), 24000, 16, 1), format: 'wav' };
+    const bytes = decodeBase64(inline);
+    return {
+      audio: normalizePlayableWav(
+        hasWavHeader(bytes) ? bytes : pcmToWav(bytes, 24000, 16, 1),
+      ),
+      format: 'wav',
+    };
   }
   return {
     audio: normalizePlayableWav(await downloadQwenAudio(data)),
@@ -859,13 +824,18 @@ async function downloadQwenAudio(data: unknown): Promise<Uint8Array> {
   }
 
   // Download audio from URL
-  const audioResponse = await fetch(audioUrl as string);
-
-  if (!audioResponse.ok) {
-    throw new Error(`Failed to download audio from URL: ${audioResponse.statusText}`);
+  let arrayBuffer: ArrayBuffer;
+  try {
+    arrayBuffer = await withGenerationRetry(async () => {
+      const audioResponse = await fetch(audioUrl as string);
+      if (!audioResponse.ok) throw Object.assign(new Error(`Failed to download audio: HTTP ${audioResponse.status}`), {
+        statusCode: audioResponse.status, retryAfterMs: retryAfterMilliseconds(audioResponse.headers),
+      });
+      return audioResponse.arrayBuffer();
+    }, { label: 'TTS audio download', maxRetries: 2 });
+  } catch (error) {
+    throw Object.assign(new Error('TTS 音频下载失败，不能通过重新合成恢复', { cause: error }), { isRetryable: false });
   }
-
-  const arrayBuffer = await audioResponse.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
   // 网关/门户劫持会以 200 返回 HTML 页面;RIFF/ID3/ftyp/OggS 均不是 HTML,
   // 以 '<' 开头的基本可断定不是音频。明确报错优于把 HTML 当音频下发。
@@ -918,7 +888,7 @@ async function generateMiniMaxTTS(
   });
 
   if (!response.ok) {
-    throwIfTtsRateLimited('MiniMax', response.status);
+    throwIfTtsRateLimited('MiniMax', response.status, response.headers);
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`MiniMax TTS API error: ${errorText}`);
   }
@@ -984,7 +954,7 @@ async function generateElevenLabsTTS(
   );
 
   if (!response.ok) {
-    throwIfTtsRateLimited('ElevenLabs', response.status);
+    throwIfTtsRateLimited('ElevenLabs', response.status, response.headers);
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`ElevenLabs TTS API error: ${errorText || response.statusText}`);
   }
@@ -1065,7 +1035,7 @@ async function generateDoubaoTTS(
   });
 
   if (!response.ok) {
-    throwIfTtsRateLimited('Doubao', response.status);
+    throwIfTtsRateLimited('Doubao', response.status, response.headers);
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`Doubao TTS API error (${response.status}): ${errorText}`);
   }

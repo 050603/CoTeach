@@ -5,7 +5,7 @@ import { PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_LENGTH_HINT } from "
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useRef, useState } from "react";
+import { Suspense, useState } from "react";
 import { Eye, EyeOff, LoaderCircle, ArrowRight, Badge, KeyRound, Lock, UserRound } from "lucide-react";
 import { StudentAuthShell } from "@/components/platform/student-auth-shell";
 
@@ -30,10 +30,10 @@ type Invitation = {
 function StudentRegisterPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [code, setCode] = useState(
+  const [inviteCodeInput, setInviteCodeInput] = useState(
     () => cleanInviteCode(searchParams.get("code") ?? ""),
   );
-  const inviteInputRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const code = cleanInviteCode(inviteCodeInput);
   const [invitation, setInvitation] = useState<Invitation | null>(null);
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -43,33 +43,10 @@ function StudentRegisterPageContent() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function updateInviteCode(index: number, value: string) {
-    const entered = cleanInviteCode(value);
-    const next = entered
-      ? cleanInviteCode(`${code.slice(0, index)}${entered}${code.slice(index + entered.length)}`)
-      : `${code.slice(0, index)}${code.slice(index + 1)}`;
-
-    setCode(next);
+  function updateInviteCode(value: string) {
+    setInviteCodeInput(value);
     setInvitation(null);
     setError(null);
-
-    if (entered) {
-      inviteInputRefs.current[Math.min(index + entered.length, INVITE_CODE_LENGTH - 1)]?.focus();
-    }
-  }
-
-  function handleInviteKeyDown(index: number, event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Backspace" && !code[index] && index > 0) {
-      event.preventDefault();
-      updateInviteCode(index - 1, "");
-      inviteInputRefs.current[index - 1]?.focus();
-    } else if (event.key === "ArrowLeft" && index > 0) {
-      event.preventDefault();
-      inviteInputRefs.current[index - 1]?.focus();
-    } else if (event.key === "ArrowRight" && index < INVITE_CODE_LENGTH - 1) {
-      event.preventDefault();
-      inviteInputRefs.current[index + 1]?.focus();
-    }
   }
 
   async function verifyCode() {
@@ -153,24 +130,28 @@ function StudentRegisterPageContent() {
           </div>
           <div className="pbl-student-code-group" data-busy={busy}>
             {Array.from({ length: INVITE_CODE_LENGTH }, (_, index) => (
-              <input
-                aria-describedby="invite-hint"
-                aria-label={index === 0 ? "课程邀请码" : `邀请码第 ${index + 1} 位`}
-                autoCapitalize="characters"
-                autoComplete={index === 0 ? "one-time-code" : "off"}
+              <span
+                aria-hidden="true"
                 className="pbl-student-code-cell"
+                data-active={index === Math.min(code.length, INVITE_CODE_LENGTH - 1)}
                 data-filled={Boolean(code[index])}
-                inputMode="text"
                 key={index}
-                maxLength={index === 0 ? INVITE_CODE_LENGTH : 1}
-                onChange={(event) => updateInviteCode(index, event.target.value)}
-                onFocus={(event) => event.currentTarget.select()}
-                onKeyDown={(event) => handleInviteKeyDown(index, event)}
-                ref={(element) => { inviteInputRefs.current[index] = element; }}
-                spellCheck={false}
-                value={code[index] ?? ""}
-              />
+              >
+                {code[index] ?? ""}
+              </span>
             ))}
+            <input
+              aria-describedby="invite-hint"
+              aria-label="课程邀请码"
+              autoCapitalize="none"
+              autoComplete="off"
+              autoCorrect="off"
+              className="pbl-student-code-input"
+              inputMode="text"
+              onChange={(event) => updateInviteCode(event.target.value)}
+              spellCheck={false}
+              value={inviteCodeInput}
+            />
           </div>
           <span aria-live="polite" className="pbl-student-code-status">
             {code.length === INVITE_CODE_LENGTH ? "邀请码已填写完整" : `还需输入 ${INVITE_CODE_LENGTH - code.length} 位`}

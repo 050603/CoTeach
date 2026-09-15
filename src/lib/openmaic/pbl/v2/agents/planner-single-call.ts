@@ -26,7 +26,7 @@ import { createLogger } from '@openmaic/lib/logger';
 import { parseJsonResponse } from '@openmaic/lib/generation/json-repair';
 import { normalizeProjectRuntime, normalizeScenario } from '../operations/progress';
 import type { ThinkingConfig } from '@openmaic/lib/types/provider';
-import { throwIfAborted } from '@openmaic/lib/generation/generation-retry';
+import { throwIfAborted, withGenerationRetry } from '@openmaic/lib/generation/generation-retry';
 
 import {
   PlannerV2Error,
@@ -470,7 +470,7 @@ function hydrateProject(project: PBLProjectV2, parsed: PlannerLLMOutput): void {
  * `PBLProjectV2` output / `PlannerV2Error` failure contract.
  *
  * Strategy: one `callLLM` (no tools) → `parseJsonResponse` → validate
- * (structure + topic + language) with at most one targeted retry → hydrate
+ * (structure + topic + language) without quality regeneration → hydrate
  * → deterministic post-processing → completion-gate. Throws
  * `PlannerV2Error` if the model never produces a usable project; the
  * caller falls back (to the loop, then v1).
@@ -508,32 +508,18 @@ export async function generatePBLV2ProjectSingleCall(
 
   const callModel = async (prompt: string): Promise<PlannerLLMOutput | null> => {
     throwIfAborted(callbacks?.signal);
-    const result = await callLLM(
-      { model, system: systemPrompt, prompt, abortSignal: callbacks?.signal },
+    const result = await withGenerationRetry(() => callLLM(
+      { model, system: systemPrompt, prompt, abortSignal: callbacks?.signal, maxRetries: 0 },
       'pbl-v2-planner-single',
       undefined,
       thinkingConfig,
-    );
+    ), { label: 'pbl-v2-planner-single', signal: callbacks?.signal, maxRetries: 2 });
     throwIfAborted(callbacks?.signal);
     return parseJsonResponse<PlannerLLMOutput>(result.text);
   };
 
-  // First attempt.
-  let parsed = await callModel(basePrompt);
-  let gaps = validateLLMOutput(parsed, project, scenarioRoleplay);
-
-  // One targeted retry: hand the model its concrete problems back.
-  if (gaps.length > 0) {
-    throwIfAborted(callbacks?.signal);
-    log.warn(
-      `Single-call planner first attempt had ${gaps.length} gap(s); retrying once: ${gaps.join('; ')}`,
-    );
-    const retryPrompt = `${basePrompt}\n\nYour previous output had these problems:\n${gaps
-      .map((g) => `- ${g}`)
-      .join('\n')}\n\nFix every one of them and output the corrected single JSON object.`;
-    parsed = await callModel(retryPrompt);
-    gaps = validateLLMOutput(parsed, project, scenarioRoleplay);
-  }
+  const parsed = await callModel(basePrompt);
+  const gaps = validateLLMOutput(parsed, project, scenarioRoleplay);
 
   if (!parsed || gaps.length > 0) {
     throw new PlannerV2Error(

@@ -1,0 +1,177 @@
+{
+  "algorithmVersion": 4,
+  "source": "Independent offline calibration; six varied-length samples per language; median-normalized relative-error regression. See docs/verification/2026-09-14-tts-first-pass.md.",
+  "profiles": [
+    {
+      "algorithmVersion": 4,
+      "measurements": [
+        {
+          "cjkChars": 7,
+          "latinWords": 0,
+          "punctuation": 1,
+          "durationSec": 1.680907029478458
+        },
+        {
+          "cjkChars": 38,
+          "latinWords": 0,
+          "punctuation": 4,
+          "durationSec": 7.760907029478458
+        },
+        {
+          "cjkChars": 69,
+          "latinWords": 0,
+          "punctuation": 6,
+          "durationSec": 13.360907029478458
+        },
+        {
+          "cjkChars": 82,
+          "latinWords": 0,
+          "punctuation": 5,
+          "durationSec": 15.120907029478458
+        },
+        {
+          "cjkChars": 167,
+          "latinWords": 0,
+          "punctuation": 16,
+          "durationSec": 38.640907029478456
+        },
+        {
+          "cjkChars": 153,
+          "latinWords": 0,
+          "punctuation": 15,
+          "durationSec": 30.32090702947846
+        }
+      ],
+      "providerId": "qwen-tts",
+      "modelId": "qwen3-tts-flash",
+      "voiceId": "Ethan",
+      "language": "zh-CN",
+      "cjkCharsPerMinute": 330.9458368711913,
+      "latinWordsPerMinute": 155,
+      "sampleUnits": 516,
+      "measuredDurationSec": 17.81,
+      "speed": 1,
+      "sampleCount": 6,
+      "totalSampleUnits": 516,
+      "totalMeasuredDurationSec": 106.88,
+      "calibratedAt": "2026-09-14T02:39:14.052Z",
+      "fixedOverheadSec": 0.19598595975762065,
+      "punctuationPauseSec": 0.1981453326203779,
+      "rateModel": "relative-linear-v1"
+    },
+    {
+      "algorithmVersion": 4,
+      "measurements": [
+        {
+          "cjkChars": 0,
+          "latinWords": 5.333333333333333,
+          "punctuation": 1,
+          "durationSec": 2.560907029478458
+        },
+        {
+          "cjkChars": 0,
+          "latinWords": 22,
+          "punctuation": 3,
+          "durationSec": 8.960907029478458
+        },
+        {
+          "cjkChars": 0,
+          "latinWords": 38,
+          "punctuation": 6,
+          "durationSec": 14.080907029478459
+        },
+        {
+          "cjkChars": 0,
+          "latinWords": 45.333333333333336,
+          "punctuation": 2,
+          "durationSec": 12.720907029478457
+        },
+        {
+          "cjkChars": 0,
+          "latinWords": 69.33333333333333,
+          "punctuation": 11,
+          "durationSec": 25.600907029478456
+        },
+        {
+          "cjkChars": 0,
+          "latinWords": 78.66666666666667,
+          "punctuation": 10,
+          "durationSec": 32.40090702947846
+        }
+      ],
+      "providerId": "qwen-tts",
+      "modelId": "qwen3-tts-flash",
+      "voiceId": "Ethan",
+      "language": "en-US",
+      "cjkCharsPerMinute": 275,
+      "latinWordsPerMinute": 202.54707464872462,
+      "sampleUnits": 458.92473118279577,
+      "measuredDurationSec": 16.05,
+      "speed": 1,
+      "sampleCount": 6,
+      "totalSampleUnits": 458.92473118279577,
+      "totalMeasuredDurationSec": 96.32,
+      "calibratedAt": "2026-09-14T02:39:14.052Z",
+      "fixedOverheadSec": 0.5355681482033163,
+      "punctuationPauseSec": 0.4130026855748313,
+      "rateModel": "relative-linear-v1"
+    },
+    {
+      "algorithmVersion": 4,
+      "measurements": [
+        {
+          "cjkChars": 5,
+          "latinWords": 0.6666666666666666,
+          "punctuation": 1,
+          "durationSec": 1.360907029478458
+        },
+        {
+          "cjkChars": 21,
+          "latinWords": 4,
+          "punctuation": 4,
+          "durationSec": 5.760907029478458
+        },
+        {
+          "cjkChars": 40,
+          "latinWords": 8,
+          "punctuation": 5,
+          "durationSec": 11.120907029478458
+        },
+        {
+          "cjkChars": 33,
+          "latinWords": 15.333333333333334,
+          "punctuation": 5,
+          "durationSec": 11.840907029478458
+        },
+        {
+          "cjkChars": 104,
+          "latinWords": 16,
+          "punctuation": 13,
+          "durationSec": 27.440907029478456
+        },
+        {
+          "cjkChars": 70,
+          "latinWords": 32,
+          "punctuation": 12,
+          "durationSec": 29.040907029478458
+        }
+      ],
+      "providerId": "qwen-tts",
+      "modelId": "qwen3-tts-flash",
+      "voiceId": "Ethan",
+      "language": "mixed",
+      "cjkCharsPerMinute": 309.9193329654889,
+      "latinWordsPerMinute": 162.19499232732403,
+      "sampleUnits": 407.8387096774194,
+      "measuredDurationSec": 14.43,
+      "speed": 1,
+      "sampleCount": 6,
+      "totalSampleUnits": 407.8387096774194,
+      "totalMeasuredDurationSec": 86.56,
+      "calibratedAt": "2026-09-14T02:39:14.052Z",
+      "fixedOverheadSec": 0.03144707121554202,
+      "punctuationPauseSec": 0.1009582473850467,
+      "rateModel": "relative-linear-v1"
+    }
+  ]
+}

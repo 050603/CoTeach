@@ -1,0 +1,321 @@
+{
+  "experiment": "Real first-draft teaching-stage timing on fixed editable slide content",
+  "scope": "Real first-draft actions on fixed editable slides, followed by actual deployed TTS; no slide-content generation.",
+  "model": "deepseek:deepseek-v4-flash",
+  "algorithmVersion": 4,
+  "sourceHashes": {
+    "src/lib/openmaic/server/teaching-stage-timing-plan.ts": "9b21b9d04942ed9295a12a0d9b248968acd0b390dcb14b97b7380c4609fbd9d6",
+    "src/lib/openmaic/server/classroom-generation.ts": "68893f066086120a8dfc6a63cf7e3472a7fbe3bcb9af8910d2480b5fed232bc7",
+    "src/lib/openmaic/generation/scene-generator.ts": "f234ed7f94b70991e7b3282a8f2244df7e62b7c5d1b6b047261ed3fd2f08e321",
+    "src/lib/openmaic/audio/tts-timing.ts": "22537d5f9566a093d6322897a095b267eae6b92516bf28dd462f7cc7614f0892",
+    "src/lib/openmaic/audio/tts-voice-calibrations.json": "e73d286b8abd1d11fa561f542922b90ea6fdb42a9edf6b752c2420a27f4e63a3",
+    "src/lib/openmaic/audio/tts-providers.ts": "12eb4bddc4a9950baabff763bcbee2f4d90ec231ecba6496a8862890a3672471",
+    "src/lib/openmaic/audio/tts-utils.ts": "3930384a475e2e53ff049b4b140135cfcb95a5fc292fdffa9c9eed296bbc8349",
+    "src/lib/openmaic/prompts/templates/slide-actions/system.md": "b88032b00daaa676ad95a1529c5f4ee5bdef22701096144e1c4d7a3823741dda",
+    "src/lib/openmaic/prompts/templates/slide-actions/user.md": "61ac5ebb4d9b5014ca4a044e8cca9765017aa0f90c0b9a2dc8ab5908a0d3a771"
+  },
+  "identityHash": "9c52743797509d26d8b6fa21bf8fabdf5187fe2f71f8fca444ea5692449de7ff",
+  "frozenRuntimeHash": "0759e3ad3046aaad30fb37f2b342ee1973931cc6477f06d7363433e64fb7cf92",
+  "generatedAt": "2026-09-14T04:19:22.504Z",
+  "rules": {
+    "targetSecPerGroup": 120,
+    "pagesPerGroup": 2,
+    "qualityRetries": 0,
+    "networkRetriesMax": 2,
+    "ttsSpeed": 1,
+    "slideContentGeneration": false
+  },
+  "successfulFirstDraftResponses": 6,
+  "successfulSpeechSegments": 21,
+  "groupsWithinTolerance": 1,
+  "groups": [
+    {
+      "language": "zh-CN",
+      "targetSec": 120,
+      "audioTotalSec": 128.1663492063492,
+      "transitionSec": 6,
+      "actualTotalSec": 134.1663492063492,
+      "errorRatio": 0.11805291005290997,
+      "withinTolerance": false,
+      "pages": [
+        {
+          "page": 1,
+          "targetSec": 62,
+          "actualSpeechSec": 90.72362811791383,
+          "segments": [
+            {
+              "index": 1,
+              "text": "同学们，今天我们来认识蒸发——液态水变成水蒸气的过程。这是物态变化中极为常见的一种方式。",
+              "predictedSec": 7.9,
+              "actualSec": 9.120907029478458,
+              "cached": false,
+              "audioPath": "zh-CN/1/cd87cbfece1f5fd289d6963b2b8f832eb4629348f4d49bd7918fb7ff7b9f9c19.audio"
+            },
+            {
+              "index": 2,
+              "text": "蒸发可以在水的表面发生，而且任何温度下都可以进行。比如冬天晾在外面的衣服也会慢慢干，这就是低温蒸发的证据。从分子运动角度，液体表面的水分子获得足够能量后挣脱液面，进入空气中成为水蒸气。一杯水放久了水位下降，也是蒸发的直观证明。",
+              "predictedSec": 20.8,
+              "actualSec": 20.64090702947846,
+              "cached": false,
+              "audioPath": "zh-CN/1/6db44820587a1c9db91d1038972517f956cdfcf9970126c12361f33940318c3d.audio"
+            },
+            {
+              "index": 3,
+              "text": "第二点非常关键：水蒸气本身是看不见的。我们口中呼出的白气，其实是水蒸气遇冷凝结成的小水滴，而不是水蒸气本身。湿衣服变干正是蒸发的生活实例：衣服上的液态水变成了看不见的水蒸气，所以我们才看到衣服慢慢变干。雨后地面变干也是同样的道理。",
+              "predictedSec": 21.2,
+              "actualSec": 23.040907029478458,
+              "cached": false,
+              "audioPath": "zh-CN/1/4ef5e2f342eeabdcabfc36f8d0ba725124209d8317ca31e26d3eb3fab6f8fe1a.audio"
+            },
+            {
+              "index": 4,
+              "text": "最后，当我们想研究不同条件下蒸发的快慢时，需要用科学的比较方法。例如探究温度的影响：准备两块完全相同的湿布，用等量的水浸湿后拧到相同干湿度，一块放在阳光直射处，另一块放在室内阴凉处，其他条件如通风保持一致。记录两块布彻底变干的时间。如果阳光下的布先干，说明温度升高能加快蒸发。这个实验的关键就是每次只改变一个变量，其他条件完全一样，也就是我们常说的控制变量法。掌握这个方法，能帮助我们解释更多生活现象，也为后续学习打下基础。",
+              "predictedSec": 38.9,
+              "actualSec": 37.92090702947846,
+              "cached": false,
+              "audioPath": "zh-CN/1/705192f75a3c75f2cbca25de52d1ac4baf49db12cedbc66e060cc93d65fdf747.audio"
+            }
+          ],
+          "diagnosticOnly": true
+        },
+        {
+          "page": 2,
+          "targetSec": 52,
+          "actualSpeechSec": 37.44272108843538,
+          "segments": [
+            {
+              "index": 1,
+              "text": "同学们好，今天我们一起来认识一个常见的自然现象——凝结。简单来说，就是水蒸气遇冷变回液态水的过程。",
+              "predictedSec": 8.8,
+              "actualSec": 10.080907029478459,
+              "cached": false,
+              "audioPath": "zh-CN/2/1ad1c141feca47e7584039d058297c5453471e8167fbe6c7c2b9cb421ca20f97.audio"
+            },
+            {
+              "index": 2,
+              "text": "空气中的水蒸气，一旦碰到比较冷的表面，温度降低，就可能聚集成小水滴。比如清晨草叶上的露珠，就是凝结的结果。",
+              "predictedSec": 9.9,
+              "actualSec": 9.760907029478458,
+              "cached": false,
+              "audioPath": "zh-CN/2/61f6780b261ed2375e3c4d6a948def26c60c30e5d27bbde92f17b848396d3402.audio"
+            },
+            {
+              "index": 3,
+              "text": "再看一个生活现象：冷杯外壁出现的水滴，并不是杯内的水穿过了杯壁，而是周围空气中的水蒸气遇到低温的杯壁凝结上去的。这个用蒸发和凝结就能解释清楚——水蒸发到空气中，再在冷表面凝结成水。",
+              "predictedSec": 16.3,
+              "actualSec": 17.600907029478456,
+              "cached": false,
+              "audioPath": "zh-CN/2/70add5c0da32d8324205ffeb448c269cc5185c99c7af9a619bdd5db7fdfafb9c.audio"
+            }
+          ],
+          "diagnosticOnly": true
+        }
+      ],
+      "plannedSpeechSec": 114,
+      "generatedScriptPredictedSec": 123.80000000000001,
+      "draftBudgetErrorRatio": 0.0859649122807018,
+      "ttsPredictionErrorRatio": 0.03526937969587385,
+      "speechSegments": 7,
+      "calibrationIdentity": {
+        "providerId": "qwen-tts",
+        "modelId": "qwen3-tts-flash",
+        "voiceId": "Ethan",
+        "speed": 1,
+        "language": "zh-CN",
+        "algorithmVersion": 4
+      }
+    },
+    {
+      "language": "en-US",
+      "targetSec": 120,
+      "audioTotalSec": 112.88634920634921,
+      "transitionSec": 6,
+      "actualTotalSec": 118.88634920634921,
+      "errorRatio": -0.009280423280423222,
+      "withinTolerance": true,
+      "pages": [
+        {
+          "page": 1,
+          "targetSec": 64,
+          "actualSpeechSec": 55.84362811791384,
+          "segments": [
+            {
+              "index": 1,
+              "text": "Today we're looking at a very common but fascinating process — evaporation. Let's start with the main idea.",
+              "predictedSec": 7.3,
+              "actualSec": 6.560907029478458,
+              "cached": false,
+              "audioPath": "en-US/1/1fa78339c3cba13ffd3d4e829c5b09128e700b47d71fea3b6dd47b78f979c709.audio"
+            },
+            {
+              "index": 2,
+              "text": "Evaporation is the change of liquid water into water vapor. Notice it says this can happen right at the water surface — it doesn't need the water to boil. That's why puddles disappear even on a cool day.",
+              "predictedSec": 12.6,
+              "actualSec": 10.960907029478458,
+              "cached": false,
+              "audioPath": "en-US/1/e6a727d10cca8c11e76c2580853737e266c97a6d24beb1bd940fe984aae0f862.audio"
+            },
+            {
+              "index": 3,
+              "text": "Now, point one — water vapor itself is invisible. You can't see it floating in the air. But we know it's there because of everyday evidence. Think about wet clothes hanging out to dry. After a while, they become dry. The liquid water didn't vanish — it turned into invisible vapor and moved into the air.",
+              "predictedSec": 19.8,
+              "actualSec": 18.560907029478457,
+              "cached": false,
+              "audioPath": "en-US/1/19ca869e9d057aae48167c80d1c7dce0ca7662db84b42d7c84be18f1133da6e4.audio"
+            },
+            {
+              "index": 4,
+              "text": "Finally, if you want to test what affects drying speed — say, sun vs. shade — you must keep everything else the same. Use the same cloth, the same amount of water at the start. Only change the condition you're testing, then compare how long each takes to dry. That's a fair comparison, and it's the foundation of any good experiment.",
+              "predictedSec": 20.7,
+              "actualSec": 19.760907029478457,
+              "cached": false,
+              "audioPath": "en-US/1/0aec6b4bbea5b4c5735e5985321e0236c94f817af16525f1c2834e4a2b5d58e9.audio"
+            }
+          ],
+          "diagnosticOnly": true
+        },
+        {
+          "page": 2,
+          "targetSec": 50,
+          "actualSpeechSec": 57.04272108843537,
+          "segments": [
+            {
+              "index": 1,
+              "text": "Let's talk about condensation — the process that changes water vapor back into liquid water. We just saw how evaporation turns liquid water into invisible vapor. Condensation is the reverse: vapor turning back into liquid.",
+              "predictedSec": 14.6,
+              "actualSec": 14.320907029478459,
+              "cached": false,
+              "audioPath": "en-US/2/7ac1fe4ce9dddd94b3d7be36f523d32f5e8a7b5b37ecfd51b45af434daf66b1a.audio"
+            },
+            {
+              "index": 2,
+              "text": "Think about this: the air around us always contains water vapor. When that invisible vapor meets a surface that's cooler than the surrounding air, it loses energy and forms tiny liquid droplets. That's condensation happening right in front of you.",
+              "predictedSec": 15.2,
+              "actualSec": 14.400907029478459,
+              "cached": false,
+              "audioPath": "en-US/2/7456df13b13ee62fff8d03853a9714cb14921ecdfd62308047c295308286d40d.audio"
+            },
+            {
+              "index": 3,
+              "text": "Here's a common question — have you ever noticed water droplets forming on the outside of a cold glass? Some people wonder if the water is seeping through the glass. But it's not. The glass is solid. What's really happening is water vapor from the warm air around the glass is condensing on the cold surface. The droplets come from the air, not from inside the glass. This example connects perfectly to what we discussed earlier: evaporation sends water into the air, and condensation brings it back down onto cool surfaces.",
+              "predictedSec": 30.9,
+              "actualSec": 28.32090702947846,
+              "cached": false,
+              "audioPath": "en-US/2/dc446139466074787ab738000b8cd68f6929fcc35fe4d0996506c2975de9fced.audio"
+            }
+          ],
+          "diagnosticOnly": true
+        }
+      ],
+      "plannedSpeechSec": 114,
+      "generatedScriptPredictedSec": 121.1,
+      "draftBudgetErrorRatio": 0.062280701754385825,
+      "ttsPredictionErrorRatio": -0.06782535750330954,
+      "speechSegments": 7,
+      "calibrationIdentity": {
+        "providerId": "qwen-tts",
+        "modelId": "qwen3-tts-flash",
+        "voiceId": "Ethan",
+        "speed": 1,
+        "language": "en-US",
+        "algorithmVersion": 4
+      }
+    },
+    {
+      "language": "mixed",
+      "targetSec": 120,
+      "audioTotalSec": 100.64634920634921,
+      "transitionSec": 6,
+      "actualTotalSec": 106.64634920634921,
+      "errorRatio": -0.1112804232804232,
+      "withinTolerance": false,
+      "pages": [
+        {
+          "page": 1,
+          "targetSec": 60,
+          "actualSpeechSec": 53.84362811791383,
+          "segments": [
+            {
+              "index": 1,
+              "text": "同学们，今天我们一起来认识蒸发——evaporation。简单来说，evaporation 就是液态水变成 water vapor 的过程。",
+              "predictedSec": 9.3,
+              "actualSec": 10.240907029478459,
+              "cached": false,
+              "audioPath": "mixed/1/648d8730e92dd6091b73ca93f1c31f256df03c73c817d400bec450b158507b81.audio"
+            },
+            {
+              "index": 2,
+              "text": "注意，这个变化可以在水面的任何位置发生，并不需要加热到沸腾。液态水分子从表面逸出，进入空气中，就成了看不见的 water vapor。",
+              "predictedSec": 11.1,
+              "actualSec": 11.120907029478458,
+              "cached": false,
+              "audioPath": "mixed/1/4c4a726027cc582a98942472057206c976bbc587d9369747d35924a4131155c2.audio"
+            },
+            {
+              "index": 3,
+              "text": "water vapor 本身是看不见的。那我们怎么知道蒸发发生了呢？举个日常例子：湿衣服晾在太阳下会慢慢变干，这是因为衣服里的液态水蒸发成了 water vapor 跑掉了，所以我们看到衣服干了。",
+              "predictedSec": 15.6,
+              "actualSec": 13.920907029478458,
+              "cached": false,
+              "audioPath": "mixed/1/7933349125389b9a9867fdba5f2e57100f451d916ca289098f5517473c0c62f1.audio"
+            },
+            {
+              "index": 4,
+              "text": "如果我们想通过实验比较不同条件对蒸发快慢的影响，比如光照、风力，那就需要做一个 fair comparison——保持衣物大小、布料和初始含水量完全相同，每次只改变一个条件，用干燥时间作为证据。这样得到的结果才可靠。",
+              "predictedSec": 17.9,
+              "actualSec": 18.560907029478457,
+              "cached": false,
+              "audioPath": "mixed/1/e5829631e71a601c6812571825fe4d193592af9a866ad8bc76115a4589d15bf1.audio"
+            }
+          ],
+          "diagnosticOnly": true
+        },
+        {
+          "page": 2,
+          "targetSec": 54,
+          "actualSpeechSec": 46.802721088435376,
+          "segments": [
+            {
+              "index": 1,
+              "text": "同学们，今天我们来学习一个重要的概念——Condensation，也就是水蒸气变回液态水的过程。",
+              "predictedSec": 7.3,
+              "actualSec": 6.960907029478458,
+              "cached": false,
+              "audioPath": "mixed/2/d777af6532626b466f99d0a082956bc7e0727a152e0741788268fb3a59a84582.audio"
+            },
+            {
+              "index": 2,
+              "text": "空气中的 water vapor 是看不见的，但当它遇到较冷的表面时，就可能发生 condensation，形成我们能看到的小水滴。比如，从冰箱里拿出一瓶冰水，瓶壁外面很快就会凝结一层水珠。",
+              "predictedSec": 14.7,
+              "actualSec": 15.600907029478458,
+              "cached": false,
+              "audioPath": "mixed/2/1781995f4edbe162fd727a5eb8f2ba6f5acc287d51edad1f50e7a6a11141ade6.audio"
+            },
+            {
+              "index": 3,
+              "text": "这里需要特别强调：冷杯外壁上的水滴并不是从杯子里渗透出来的，而是来自空气中的 water vapor。大家可以想一想，我们之前学过 evaporation 让液态水变成 water vapor，而现在 condensation 让它变回来。这两个相反的过程共同解释了很多生活现象，比如夏天冰饮杯壁上的水珠、清晨草叶上的露珠等。",
+              "predictedSec": 25.1,
+              "actualSec": 24.240907029478457,
+              "cached": false,
+              "audioPath": "mixed/2/7e4c15c80a58894d1ad91da37bb684d6c32dd2b482b56b4ea4098207029b9948.audio"
+            }
+          ],
+          "diagnosticOnly": true
+        }
+      ],
+      "plannedSpeechSec": 114,
+      "generatedScriptPredictedSec": 101,
+      "draftBudgetErrorRatio": -0.11403508771929827,
+      "ttsPredictionErrorRatio": -0.0035014930064434235,
+      "speechSegments": 7,
+      "calibrationIdentity": {
+        "providerId": "qwen-tts",
+        "modelId": "qwen3-tts-flash",
+        "voiceId": "Ethan",
+        "speed": 1,
+        "language": "mixed",
+        "algorithmVersion": 4
+      }
+    }
+  ]
+}

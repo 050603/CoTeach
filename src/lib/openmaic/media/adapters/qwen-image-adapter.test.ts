@@ -2,18 +2,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { generateWithQwenImage, testQwenImageConnectivity } from './qwen-image-adapter';
 
 describe('Qwen image throttling metadata', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
   it('preserves 429 status and Retry-After for the shared retry policy', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response(
       JSON.stringify({ code: 'Throttling.RateQuota', message: 'rate limit exceeded' }),
       { status: 429, headers: { 'Retry-After': '30' } },
     )));
 
-    await expect(generateWithQwenImage(
+    const pending = expect(generateWithQwenImage(
       { providerId: 'qwen-image', apiKey: 'test-key' },
       { prompt: 'classroom illustration' },
-    )).rejects.toMatchObject({ statusCode: 429, retryAfterMs: 30_000 });
+    )).rejects.toMatchObject({ statusCode: 429, retryAfterMs: 30_000, isRetryable: false });
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it('forwards cover controls and cancellation to Qwen Image 2.0 Pro', async () => {
@@ -38,7 +42,9 @@ describe('Qwen image throttling metadata', () => {
     );
 
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    expect(request.signal).toBe(controller.signal);
+    expect(request.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(request.signal?.aborted).toBe(true);
     expect(JSON.parse(String(request.body))).toMatchObject({
       model: 'qwen-image-2.0-pro',
       parameters: { prompt_extend: false, seed: 1_234_567, size: '2688*1536' },

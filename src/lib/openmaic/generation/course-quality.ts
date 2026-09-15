@@ -3,9 +3,74 @@ import type { SceneOutline, UserRequirements } from '@openmaic/lib/types/generat
 import { normalizeQuizQuestions } from '@openmaic/lib/quiz/quality';
 
 export interface CourseQualityReport {
+  status?: 'not-checked' | 'completed';
   ok: boolean;
   corrections: string[];
   warnings: string[];
+  baselineVersion?: string;
+  generationMethod?: 'classic-one-click';
+  generationModelString?: string;
+  referenceProfileVersion?: string;
+  disposition?: 'ready' | 'needs-review' | 'audit-unavailable';
+  visualConsistency?: {
+    expectedBackground?: string;
+    slideCount: number;
+    matchingBackgroundCount: number;
+    distinctBackgrounds: string[];
+    passed: boolean;
+    deepBlueTitleCount?: number;
+    subtitleCount?: number;
+    semanticStructurePageCount?: number;
+    semanticStructureRequiredCount?: number;
+    paletteDeviationCount?: number;
+    repeatedLayoutPageCount?: number;
+    averageVisibleTextCharacters?: number;
+    averageElementCount?: number;
+    averageSemanticElementCount?: number;
+    referenceProfileVersion?: string;
+  };
+  layoutAudit?: {
+    status: 'completed' | 'partial' | 'unavailable';
+    pages: Array<{
+      outlineId: string;
+      title: string;
+      status: 'checked' | 'unavailable' | 'checkpoint-not-rechecked';
+      initialIssues: string[];
+      finalIssues: string[];
+      repairAttempted: boolean;
+      adopted: 'first-draft' | 'repair' | 'checkpoint';
+      initialKnowledgeCoverage?: number;
+      finalKnowledgeCoverage?: number;
+      initialDensityIssues?: string[];
+      finalDensityIssues?: string[];
+      initialVisibleTextCharacters?: number;
+      finalVisibleTextCharacters?: number;
+      initialVerticalSpan?: number;
+      finalVerticalSpan?: number;
+      initialContentAreaUtilization?: number;
+      finalContentAreaUtilization?: number;
+      initialMaxBlankBand?: number;
+      finalMaxBlankBand?: number;
+      initialHasDeepBlueTitle?: boolean;
+      finalHasDeepBlueTitle?: boolean;
+      initialHasSubtitle?: boolean;
+      finalHasSubtitle?: boolean;
+      semanticStructureRequired?: boolean;
+      initialSemanticStructures?: string[];
+      finalSemanticStructures?: string[];
+      initialSemanticStructureSatisfied?: boolean;
+      finalSemanticStructureSatisfied?: boolean;
+      initialPaletteDeviationCount?: number;
+      finalPaletteDeviationCount?: number;
+      initialElementCount?: number;
+      finalElementCount?: number;
+      initialSemanticElementCount?: number;
+      finalSemanticElementCount?: number;
+      initialQualityScore?: number;
+      finalQualityScore?: number;
+      reason?: string;
+    }>;
+  };
 }
 
 export function auditAndRepairGeneratedCourse(
@@ -59,6 +124,6 @@ export function auditAndRepairGeneratedCourse(
 
   return {
     scenes: correctedScenes,
-    report: { ok: warnings.length === 0, corrections, warnings },
+    report: { status: 'completed', ok: warnings.length === 0, corrections, warnings },
   };
 }

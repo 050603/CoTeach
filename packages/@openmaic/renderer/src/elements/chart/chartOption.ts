@@ -34,8 +34,8 @@ export const getChartOption = ({
 }: ChartOptionPayload): EChartOption | null => {
   const textStyle = textColor ? { color: textColor } : {};
 
-  const axisLine = textColor ? { lineStyle: { color: textColor } } : undefined;
-  const axisLabel = textColor ? { color: textColor } : undefined;
+  const axisLine = textColor ? { lineStyle: { color: textColor } } : {};
+  const axisLabel = textColor ? { color: textColor } : {};
   const splitLine = lineColor ? { lineStyle: { color: lineColor } } : {};
 
   if (!Array.isArray(data?.series) || data.series.length === 0) {
@@ -44,11 +44,18 @@ export const getChartOption = ({
 
   const legend = data.series.length > 1 ? { top: 'bottom' as const, textStyle } : undefined;
 
+  // An explicit undefined axis object suppresses ECharts' default labels.
+  // Keep empty style objects above so unstyled charts retain their axes.
+  // The library's default 65px + 80px grid margins exceed compact slide
+  // frames. Reserve proportional inner space without changing DSL geometry.
+  const grid = { left: '3%', right: '3%', top: '8%', bottom: legend ? 32 : '8%', containLabel: true };
+
   if (type === 'bar') {
     return {
       color: themeColors,
       textStyle,
       legend,
+      grid,
       xAxis: { type: 'category', data: data.labels, axisLine, axisLabel },
       yAxis: { type: 'value', axisLine, axisLabel, splitLine },
       series: data.series.map((item, index) => {
@@ -69,6 +76,7 @@ export const getChartOption = ({
       color: themeColors,
       textStyle,
       legend,
+      grid,
       yAxis: { type: 'category', data: data.labels, axisLine, axisLabel },
       xAxis: { type: 'value', axisLine, axisLabel, splitLine },
       series: data.series.map((item, index) => {
@@ -89,6 +97,7 @@ export const getChartOption = ({
       color: themeColors,
       textStyle,
       legend,
+      grid,
       xAxis: { type: 'category', data: data.labels, axisLine, axisLabel },
       yAxis: { type: 'value', axisLine, axisLabel, splitLine },
       series: data.series.map((item, index) => {
@@ -151,6 +160,7 @@ export const getChartOption = ({
       color: themeColors,
       textStyle,
       legend,
+      grid,
       xAxis: { type: 'category', boundaryGap: false, data: data.labels, axisLine, axisLabel },
       yAxis: { type: 'value', axisLine, axisLabel, splitLine },
       series: data.series.map((item, index) => {

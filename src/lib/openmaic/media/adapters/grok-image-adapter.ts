@@ -13,6 +13,7 @@
  * API docs: https://docs.x.ai/developers/rest-api-reference/inference/images
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import type {
   ImageGenerationConfig,
   ImageGenerationOptions,
@@ -63,7 +64,7 @@ export async function generateWithGrokImage(
 ): Promise<ImageGenerationResult> {
   const baseUrl = config.baseUrl || DEFAULT_BASE_URL;
 
-  const response = await fetch(`${baseUrl}/images/generations`, {
+  const response = await fetchMediaRequest(`${baseUrl}/images/generations`, {
     method: 'POST',
     signal: options.signal,
     headers: {
@@ -78,20 +79,13 @@ export async function generateWithGrokImage(
     }),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw Object.assign(
-      new Error(`Grok image generation failed (${response.status}): ${text}`),
-      { statusCode: response.status },
-    );
-  }
 
   const data = await response.json();
 
   // OpenAI-compatible response format: { data: [{ url, revised_prompt }] }
   const imageData = data.data?.[0];
   if (!imageData) {
-    throw new Error('Grok returned empty image response');
+    throw mediaGenerationFailure('Grok returned empty image response');
   }
 
   return {

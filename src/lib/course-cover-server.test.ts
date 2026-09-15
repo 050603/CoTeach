@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./course-cover-planner-server", () => ({ planCourseCoverImageOnServer: mocks.plan }));
-vi.mock("./course-cover-review-server", () => ({ createCourseCoverImageReviewer: mocks.createReviewer }));
 
 vi.mock("@openmaic/lib/media/image-providers", () => ({
   generateImage: mocks.generateImage,
@@ -116,7 +115,7 @@ describe("server course cover generation", () => {
       "qualityReview",
     );
     expect(mocks.plan).toHaveBeenCalledWith(expect.objectContaining({ name: "自然语言处理" }), expect.any(AbortSignal));
-    expect(mocks.review).toHaveBeenCalledTimes(1);
+    expect(mocks.review).not.toHaveBeenCalled();
     expect(mocks.plan.mock.invocationCallOrder[0]).toBeLessThan(mocks.generateImage.mock.invocationCallOrder[0]);
     expect(mocks.generateImage.mock.calls[0][1].prompt).not.toContain("自然语言处理");
   });
@@ -129,44 +128,27 @@ describe("server course cover generation", () => {
     expect(mocks.persistGeneratedClassroomImage).not.toHaveBeenCalled();
   });
 
-  it("checks that a vision reviewer is available before generating an image", async () => {
-    mocks.createReviewer.mockRejectedValue(Object.assign(new Error("no vision model"), { code: "COURSE_COVER_REVIEW_UNAVAILABLE" }));
-    await expect(generateCourseCoverImageOnServer({ name: "课程" }, "classroom-1"))
-      .rejects.toMatchObject({ code: "COURSE_COVER_REVIEW_UNAVAILABLE" });
-    expect(mocks.generateImage).not.toHaveBeenCalled();
-  });
-
-  it("replans once with visual feedback, then redraws and reviews before accepting", async () => {
+  it("generates once without requiring a vision reviewer", async () => {
+    mocks.createReviewer.mockRejectedValue(new Error("no vision model"));
     mocks.generateImage.mockResolvedValue({ base64: "aW1hZ2U=" });
-    mocks.review.mockRejectedValueOnce(Object.assign(new Error("visible text"), {
-      code: "COURSE_COVER_QUALITY_REJECTED", issues: ["封面顶部出现提示词文字"],
-    }));
-    await expect(generateCourseCoverImageOnServer({ name: "课程" }, "classroom-1")).resolves.toContain("course-cover.png");
-    expect(mocks.plan).toHaveBeenCalledTimes(2);
-    expect(mocks.plan.mock.calls[1][2]).toEqual({ previousPlan: visualPlan, issues: ["封面顶部出现提示词文字"] });
-    expect(mocks.generateImage).toHaveBeenCalledTimes(2);
-    expect(mocks.review).toHaveBeenCalledTimes(2);
-    for (const [, request] of mocks.generateImage.mock.calls) {
-      expect(request.prompt).not.toContain("封面顶部出现提示词文字");
-    }
-  });
-
-  it("fails after one redraw when both images are rejected", async () => {
-    mocks.generateImage.mockResolvedValue({ base64: "aW1hZ2U=" });
-    mocks.review.mockRejectedValue(Object.assign(new Error("visible text"), {
-      code: "COURSE_COVER_QUALITY_REJECTED", issues: ["标题文字"],
-    }));
     await expect(generateCourseCoverImageOnServer({ name: "课程" }, "classroom-1"))
-      .rejects.toMatchObject({ code: "COURSE_COVER_QUALITY_REJECTED", status: 422 });
-    expect(mocks.generateImage).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not redraw for an unavailable review service", async () => {
-    mocks.generateImage.mockResolvedValue({ base64: "aW1hZ2U=" });
-    mocks.review.mockRejectedValue(Object.assign(new Error("service unavailable"), { code: "COURSE_COVER_REVIEW_FAILED" }));
-    await expect(generateCourseCoverImageOnServer({ name: "课程" }, "classroom-1"))
-      .rejects.toMatchObject({ code: "COURSE_COVER_REVIEW_FAILED" });
+      .resolves.toContain("course-cover.png");
+    expect(mocks.createReviewer).not.toHaveBeenCalled();
+    expect(mocks.review).not.toHaveBeenCalled();
+    expect(mocks.plan).toHaveBeenCalledTimes(1);
     expect(mocks.generateImage).toHaveBeenCalledTimes(1);
+    expect(mocks.persistGeneratedClassroomImage.mock.calls[0][0]).not.toHaveProperty("validateBeforePersist");
+  });
+
+  it("does not redraw an invalid generated file", async () => {
+    mocks.generateImage.mockResolvedValue({ base64: "aW1hZ2U=" });
+    mocks.persistGeneratedClassroomImage.mockRejectedValue(Object.assign(new Error("图片生成结果格式不受支持"), {
+      code: "GENERATED_IMAGE_FORMAT_UNSUPPORTED", isRetryable: false,
+    }));
+    await expect(generateCourseCoverImageOnServer({ name: "课程" }, "classroom-1"))
+      .rejects.toMatchObject({ code: "COURSE_COVER_RESULT_INVALID" });
+    expect(mocks.generateImage).toHaveBeenCalledTimes(1);
+    expect(mocks.plan).toHaveBeenCalledTimes(1);
   });
 
   it("stops before drawing when the caller cancels during planning", async () => {
@@ -243,6 +225,7 @@ describe("server course cover generation", () => {
       status: 502,
       userMessage: expect.stringContaining("服务器无法下载生成结果"),
     });
+    expect(mocks.generateImage).toHaveBeenCalledTimes(1);
   });
 
   it("classifies an invalid Qwen model request as a configuration error", async () => {

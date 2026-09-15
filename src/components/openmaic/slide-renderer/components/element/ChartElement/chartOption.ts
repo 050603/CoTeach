@@ -44,13 +44,13 @@ export const getChartOption = ({
           color: textColor,
         },
       }
-    : undefined;
+    : {};
 
   const axisLabel = textColor
     ? {
         color: textColor,
       }
-    : undefined;
+    : {};
 
   const splitLine = lineColor
     ? {
@@ -73,11 +73,18 @@ export const getChartOption = ({
         }
       : undefined;
 
+  // An explicit undefined axis object suppresses ECharts' default labels.
+  // Keep empty style objects above so unstyled charts retain their axes.
+  // The library's default 65px + 80px grid margins exceed compact slide
+  // frames. Reserve proportional inner space without changing DSL geometry.
+  const grid = { left: '3%', right: '3%', top: '8%', bottom: legend ? 32 : '8%', containLabel: true };
+
   if (type === 'bar') {
     return {
       color: themeColors,
       textStyle,
       legend,
+      grid,
       xAxis: {
         type: 'category',
         data: data.labels,
@@ -112,6 +119,7 @@ export const getChartOption = ({
       color: themeColors,
       textStyle,
       legend,
+      grid,
       yAxis: {
         type: 'category',
         data: data.labels,
@@ -146,6 +154,7 @@ export const getChartOption = ({
       color: themeColors,
       textStyle,
       legend,
+      grid,
       xAxis: {
         type: 'category',
         data: data.labels,
@@ -256,6 +265,7 @@ export const getChartOption = ({
       color: themeColors,
       textStyle,
       legend,
+      grid,
       xAxis: {
         type: 'category',
         boundaryGap: false,

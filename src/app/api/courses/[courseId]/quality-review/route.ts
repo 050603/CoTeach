@@ -11,6 +11,7 @@ const renderIssue = z.object({
   title: z.string().min(1).max(300), evidence: z.string().max(3000), suggestion: z.string().max(3000),
 });
 const mutation = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('check') }),
   z.object({ action: z.literal('retry') }),
   z.object({ action: z.literal('render-page'), signature: z.string().regex(/^[a-f0-9]{64}$/), page: z.object({
     sceneId: z.string().min(1).max(200), status: z.enum(['completed', 'failed']), issues: z.array(renderIssue).max(300),
@@ -29,10 +30,8 @@ export async function GET(request: Request, context: { params: Promise<{ courseI
   const teacher = await authorizeTemplateRequest(request, courseId);
   if (teacher instanceof Response) return teacher;
   try {
-    const initial = await loadCourseReviewContext(courseId);
-    const required = requiresCourseTeacherReview(initial.course);
-    if (required && !freshQualityReport(initial.course, initial.signature)) await enqueueCourseQualityReview(courseId);
     const { course, classroom, signature } = await loadCourseReviewContext(courseId);
+    const required = requiresCourseTeacherReview(course);
     return Response.json({ required, signature, quality: freshQualityReport(course, signature) ?? null,
       renderReview: course.content.renderReview?.signature === signature ? course.content.renderReview : null,
       teacherReview: course.content.teacherReview?.signature === signature ? course.content.teacherReview : null,
@@ -51,7 +50,7 @@ export async function POST(request: Request, context: { params: Promise<{ course
   if (!parsed.success) return Response.json({ error: '检查请求格式无效。' }, { status: 400 });
   try {
     const body = parsed.data;
-    if (body.action === 'retry') {
+    if (body.action === 'check' || body.action === 'retry') {
       await enqueueCourseQualityReview(courseId, { force: true });
       return Response.json({ success: true });
     }

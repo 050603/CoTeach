@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   applyOutlineFallbacks,
+  generateSceneOutlinesFromRequirements,
   normalizeSceneOutlinesForDuration,
 } from "./outline-generator";
+import { buildOpenMaicBaselineOutlinePrompt } from "./openmaic-baseline";
 import type { SceneOutline } from "@openmaic/lib/types/generation";
 
 const legacyPblOutline: SceneOutline = {
@@ -20,6 +22,37 @@ const legacyPblOutline: SceneOutline = {
 };
 
 describe("PBL outline fallbacks", () => {
+  it("routes a standard production outline through the exact upstream one-click prompt", async () => {
+    let capturedSystem = "";
+    let capturedUser = "";
+    const requirements = { requirement: "为初中生讲解变量之间的关系" };
+    const result = await generateSceneOutlinesFromRequirements(
+      requirements,
+      "变量资料原文",
+      undefined,
+      async (system, user) => {
+        capturedSystem = system;
+        capturedUser = user;
+        return JSON.stringify({
+          languageDirective: "使用中文",
+          outlines: [{
+            id: "official-slide",
+            type: "slide",
+            title: "变量关系",
+            description: "比较变量变化与结果。",
+            keyPoints: ["自变量", "因变量"],
+            order: 0,
+          }],
+        });
+      },
+    );
+    const official = buildOpenMaicBaselineOutlinePrompt(requirements, {
+      pdfText: "变量资料原文",
+    });
+    expect({ system: capturedSystem, user: capturedUser }).toEqual(official);
+    expect(result.data?.outlines.map((outline) => outline.type)).toEqual(["slide"]);
+  });
+
   it("preserves an AI semantic page plan instead of splitting by fixed seconds", () => {
     const result = normalizeSceneOutlinesForDuration([
       {

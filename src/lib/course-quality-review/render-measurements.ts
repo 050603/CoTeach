@@ -45,8 +45,13 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
     if (item.textRects.some((rect) => bottom(rect) > bottom(item.box) + 6 || right(rect) > right(item.box) + 6 || rect.left < item.box.left - 6)) {
       add('box-overflow', '文字超出原有排版区域', '实际文字行超过文本或图形容器。', '按实际行数重新分配空间，避免与相邻内容相撞。', item.id);
     }
-    if (item.fontSize !== undefined && item.fontSize < 18) {
-      add('small-type', '投屏文字偏小', `可见文字最小字号约为 ${Math.round(item.fontSize)} px。`, '正文优先使用 22–28 px，必要图注至少 18 px。', item.id);
+    const visibleCharacters = item.text.replace(/\s+/g, '').length;
+    const shortCaption = item.fontSize !== undefined
+      && item.fontSize >= 14
+      && visibleCharacters <= 40
+      && item.textRects.length <= 2;
+    if (item.fontSize !== undefined && (item.fontSize < 14 || (item.fontSize < 16 && !shortCaption))) {
+      add('small-type', '投屏文字偏小', `可见文字最小字号约为 ${Math.round(item.fontSize)} px。`, '正文至少使用 16 px；不超过两行的简短图注可使用 14–16 px。', item.id);
     }
   }
   for (let i = 0; i < textItems.length; i++) {
@@ -62,7 +67,18 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
     for (const block of elements) {
       if (block.id === item.id || !reservedTypes.includes(block.type)) continue;
       if (block.type === 'shape' && !block.opaque) continue;
-      if (block.type === 'shape' && block.opaque && contains(block.box, item.box, 4)) continue;
+      if (
+        block.type === 'shape'
+        && block.opaque
+        && (
+          contains(block.box, item.box, 4)
+          // Generated diagram labels sometimes use a text box wider than the
+          // colored node for alignment, while every rendered glyph remains
+          // safely inside that node. Judge what the learner can actually see;
+          // otherwise valid OpenMAIC process diagrams become false collisions.
+          || item.textRects.every((rect) => contains(block.box, rect, 4))
+        )
+      ) continue;
       if (item.textRects.some((rect) => intersection(rect, block.box) > area(rect) * 0.08)) {
         add(`collision-${block.id}`, '文字侵入相邻内容区域', `文字 ${item.id} 与 ${block.type} ${block.id} 的实际显示区域相交。`, '为表格、图示和面板分配互不相交的区域；容器内文字应完整留在内边距中。', item.id);
       }

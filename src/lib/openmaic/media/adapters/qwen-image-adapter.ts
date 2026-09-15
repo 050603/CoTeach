@@ -12,6 +12,7 @@
  * API docs: https://help.aliyun.com/zh/model-studio/qwen-image-api
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import type {
   ImageGenerationConfig,
   ImageGenerationOptions,
@@ -20,17 +21,6 @@ import type {
 
 const DEFAULT_MODEL = 'qwen-image-max';
 const DEFAULT_BASE_URL = 'https://dashscope.aliyuncs.com';
-const DEFAULT_RATE_LIMIT_RETRY_MS = 15_000;
-
-function retryAfterMs(response: Response): number | undefined {
-  const raw = response.headers.get('retry-after');
-  if (!raw) return undefined;
-  const seconds = Number(raw);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  const retryAt = Date.parse(raw);
-  if (Number.isFinite(retryAt)) return Math.max(0, retryAt - Date.now());
-  return undefined;
-}
 
 /**
  * Detect and fix base URLs intended for LLM compatible-mode endpoints
@@ -100,7 +90,7 @@ export async function generateWithQwenImage(
 ): Promise<ImageGenerationResult> {
   const baseUrl = resolveBaseUrl(config.baseUrl);
 
-  const response = await fetch(`${baseUrl}/api/v1/services/aigc/multimodal-generation/generation`, {
+  const response = await fetchMediaRequest(`${baseUrl}/api/v1/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
     signal: options.signal,
     headers: {
@@ -129,20 +119,7 @@ export async function generateWithQwenImage(
         seed: options.seed,
       },
     }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw Object.assign(
-      new Error(`Qwen Image generation failed (${response.status}): ${text}`),
-      {
-        statusCode: response.status,
-        ...(response.status === 429
-          ? { retryAfterMs: retryAfterMs(response) ?? DEFAULT_RATE_LIMIT_RETRY_MS }
-          : {}),
-      },
-    );
-  }
+  }, { rateLimitFallbackMs: 15_000 });
 
   const data = await response.json();
 
@@ -152,16 +129,16 @@ export async function generateWithQwenImage(
   if (!choices || choices.length === 0) {
     // Check for error in response
     if (data.code || data.message) {
-      throw new Error(`Qwen Image error: ${data.code} - ${data.message}`);
+      throw mediaGenerationFailure(`Qwen Image error: ${data.code} - ${data.message}`);
     }
-    throw new Error('Qwen Image returned empty response');
+    throw mediaGenerationFailure('Qwen Image returned empty response');
   }
 
   const content = choices[0]?.message?.content;
   const imageContent = content?.find((c: { image?: string }) => c.image);
 
   if (!imageContent?.image) {
-    throw new Error('Qwen Image response missing image URL');
+    throw mediaGenerationFailure('Qwen Image response missing image URL');
   }
 
   return {

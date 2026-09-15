@@ -22,6 +22,7 @@
  * No files are saved on the server.
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import type {
   VideoGenerationConfig,
   VideoGenerationOptions,
@@ -103,16 +104,13 @@ async function submitVideoGeneration(
     body.parameters = parameters;
   }
 
-  const response = await fetch(url, {
+  const response = await fetchMediaRequest(url, {
+    signal: options.signal,
     method: 'POST',
     headers: apiHeaders(apiKey),
     body: JSON.stringify(body),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Veo submit failed (${response.status}): ${text}`);
-  }
 
   return response.json() as Promise<VeoOperation>;
 }
@@ -126,19 +124,17 @@ async function pollOperation(
   apiKey: string,
   model: string,
   operationName: string,
+  signal?: AbortSignal,
 ): Promise<VeoOperation> {
   const url = `${baseUrl}/v1beta/models/${model}:fetchPredictOperation`;
 
-  const response = await fetch(url, {
+  const response = await fetchMediaRequest(url, {
+    signal: signal,
     method: 'POST',
     headers: apiHeaders(apiKey),
     body: JSON.stringify({ operationName }),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Veo poll failed (${response.status}): ${text}`);
-  }
 
   return response.json() as Promise<VeoOperation>;
 }
@@ -212,7 +208,7 @@ export async function generateWithVeo(
   const operation = await submitVideoGeneration(baseUrl, config.apiKey, model, options);
 
   if (!operation.name) {
-    throw new Error('Veo returned operation without name');
+    throw mediaGenerationFailure('Veo returned operation without name');
   }
 
   // 2. Poll until done
@@ -220,27 +216,31 @@ export async function generateWithVeo(
   let pollCount = 0;
   while (!current.done) {
     if (pollCount >= MAX_POLL_ATTEMPTS) {
-      throw new Error('Veo video generation timed out after 10 minutes');
+      throw mediaGenerationFailure('Veo video generation timed out after 10 minutes');
     }
     await delay(POLL_INTERVAL_MS);
-    current = await pollOperation(baseUrl, config.apiKey, model, current.name);
+    current = await pollOperation(baseUrl, config.apiKey, model, operation.name, options.signal);
+    if (!current.name && !current.done && !current.error) {
+      throw mediaGenerationFailure('Veo returned an invalid operation status');
+    }
+    if (current.error) throw mediaGenerationFailure(`Veo generation failed: ${current.error.code} - ${current.error.message}`);
     pollCount++;
   }
 
   // 3. Check for errors
   if (current.error) {
-    throw new Error(`Veo generation failed: ${current.error.code} - ${current.error.message}`);
+    throw mediaGenerationFailure(`Veo generation failed: ${current.error.code} - ${current.error.message}`);
   }
 
   // 4. Extract inline base64 video from response.videos[]
   const videos = current.response?.videos;
   if (!videos || videos.length === 0) {
-    throw new Error('Veo returned no generated videos');
+    throw mediaGenerationFailure('Veo returned no generated videos');
   }
 
   const first = videos[0];
   if (!first.bytesBase64Encoded) {
-    throw new Error('Veo returned video entry without data');
+    throw mediaGenerationFailure('Veo returned video entry without data');
   }
 
   const base64 = first.bytesBase64Encoded;

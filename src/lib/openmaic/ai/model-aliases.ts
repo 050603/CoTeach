@@ -1,5 +1,7 @@
 const MODEL_ID_ALIASES: ReadonlyMap<string, string> = new Map([
   ['openai:gpt-5.6-sol', 'gpt-5.6'],
+  // V4.1 Flash is the release name; DeepSeek's public API uses `deepseek-flash`.
+  ['deepseek:deepseek-v4.1-flash', 'deepseek-flash'],
 ]);
 
 export function getCanonicalModelId(providerId: string, modelId: string): string {

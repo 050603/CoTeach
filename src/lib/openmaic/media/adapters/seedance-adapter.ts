@@ -27,6 +27,7 @@
  * API docs: https://www.volcengine.com/docs/6492/2165104
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import type {
   VideoGenerationConfig,
   VideoGenerationOptions,
@@ -160,7 +161,8 @@ export async function submitSeedanceTask(
   const resolution = toSeedanceResolution(options.resolution);
   if (resolution) body.resolution = resolution;
 
-  const response = await fetch(`${baseUrl}/api/v3/contents/generations/tasks`, {
+  const response = await fetchMediaRequest(`${baseUrl}/api/v3/contents/generations/tasks`, {
+    signal: options.signal,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -169,14 +171,10 @@ export async function submitSeedanceTask(
     body: JSON.stringify(body),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Seedance task submission failed (${response.status}): ${text}`);
-  }
 
   const data = (await response.json()) as SeedanceSubmitResponse;
   if (!data.id) {
-    throw new Error('Seedance returned empty task ID');
+    throw mediaGenerationFailure('Seedance returned empty task ID');
   }
 
   return data.id;
@@ -190,26 +188,24 @@ export async function submitSeedanceTask(
 export async function pollSeedanceTask(
   config: VideoGenerationConfig,
   taskId: string,
+  signal?: AbortSignal,
 ): Promise<VideoGenerationResult | null> {
   const baseUrl = config.baseUrl || DEFAULT_BASE_URL;
 
-  const response = await fetch(`${baseUrl}/api/v3/contents/generations/tasks/${taskId}`, {
+  const response = await fetchMediaRequest(`${baseUrl}/api/v3/contents/generations/tasks/${taskId}`, {
+    signal: signal,
     method: 'GET',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
     },
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Seedance poll failed (${response.status}): ${text}`);
-  }
 
   const data = (await response.json()) as SeedancePollResponse;
 
   if (data.status === 'succeeded') {
     if (!data.content?.video_url) {
-      throw new Error('Seedance task succeeded but no video URL returned');
+      throw mediaGenerationFailure('Seedance task succeeded but no video URL returned');
     }
     const dims = estimateDimensions(data.ratio, data.resolution);
     return {
@@ -221,10 +217,12 @@ export async function pollSeedanceTask(
   }
 
   if (data.status === 'failed') {
-    throw new Error(`Seedance video generation failed: ${data.error?.message || 'Unknown error'}`);
+    throw mediaGenerationFailure(`Seedance video generation failed: ${data.error?.message || 'Unknown error'}`);
   }
 
-  // queued or running
+  if (data.status !== 'queued' && data.status !== 'running') {
+    throw mediaGenerationFailure('Seedance returned an invalid task status');
+  }
   return null;
 }
 
@@ -239,11 +237,11 @@ export async function generateWithSeedance(
 
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-    const result = await pollSeedanceTask(config, taskId);
+    const result = await pollSeedanceTask(config, taskId, options.signal);
     if (result) return result;
   }
 
-  throw new Error(
+  throw mediaGenerationFailure(
     `Seedance video generation timed out after ${(MAX_POLL_ATTEMPTS * POLL_INTERVAL_MS) / 1000}s (task: ${taskId})`,
   );
 }

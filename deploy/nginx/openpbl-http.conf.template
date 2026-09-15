@@ -13,12 +13,19 @@ upstream openpbl_new_ws {
 
 # A whole classroom commonly shares one campus NAT address. Application-level
 # limits key authenticated writes by user and course; this edge limit is only
-# a broad abuse ceiling and must leave room for normal class-wide bursts.
-limit_req_zone $binary_remote_addr zone=general:10m rate=120r/s;
+# a broad abuse ceiling. Leave room for 40 browsers fetching pages, profiles,
+# course data and Next.js navigation prefetches together (up to 30 per browser).
+limit_req_zone $binary_remote_addr zone=general:10m rate=300r/s;
 limit_req_zone $binary_remote_addr zone=uploads:10m rate=10r/s;
 limit_req_zone $binary_remote_addr zone=projection_reads:10m rate=300r/s;
 limit_req_zone $binary_remote_addr zone=media_reads:10m rate=300r/s;
-limit_conn_zone $binary_remote_addr zone=per_ip:10m;
+# HTTP/2 resource streams must not consume the campus application limit.
+# Empty keys leave public JS/CSS/fonts and branding out of this counter.
+map $uri $application_connection_key {
+    default $binary_remote_addr;
+    ~^/(_next/static|brand)/ "";
+}
+limit_conn_zone $application_connection_key zone=per_ip_application:10m;
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -62,7 +69,7 @@ server {
     proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Request-Id $request_id;
     proxy_connect_timeout 10s;
-    limit_conn per_ip 200;
+    limit_conn per_ip_application 200;
 
     location = /healthz {
         access_log off;
@@ -93,7 +100,7 @@ server {
     }
 
     location ~ ^/api/courses/[^/]+/actions$ {
-        limit_req zone=general burst=240 nodelay;
+        limit_req zone=general burst=1200 nodelay;
         proxy_pass http://openpbl_new_app;
     }
 
@@ -106,7 +113,7 @@ server {
     }
 
     location ~* ^/api/(.*/stream|openmaic/chat|chat/.*)$ {
-        limit_req zone=general burst=240 nodelay;
+        limit_req zone=general burst=1200 nodelay;
         proxy_pass http://openpbl_new_app;
         proxy_buffering off;
         proxy_cache off;
@@ -158,7 +165,7 @@ server {
     }
 
     location / {
-        limit_req zone=general burst=240 nodelay;
+        limit_req zone=general burst=1200 nodelay;
         proxy_pass http://openpbl_new_app;
         proxy_buffering off;
         proxy_read_timeout 300s;

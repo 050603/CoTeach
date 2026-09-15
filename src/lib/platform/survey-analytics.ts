@@ -16,7 +16,7 @@ function normalizeChoiceAnswer(value: Record<string, unknown>): SurveyChoiceAnsw
   return { selected: normalizedSelected, ...(Object.keys(optionText).length ? { optionText } : {}) };
 }
 
-function responseAnswers(progressData: unknown): Record<string, SurveyAnswer> {
+export function surveyResponseAnswers(progressData: unknown): Record<string, SurveyAnswer> {
   if (!progressData || typeof progressData !== "object" || Array.isArray(progressData)) return {};
   const data = progressData as Record<string, unknown>;
   const source = data.submission && typeof data.submission === "object" && !Array.isArray(data.submission)
@@ -56,7 +56,7 @@ function choicePercentages(counts: number[]): number[] {
 
 export function buildSurveyAnalytics(configInput: unknown, rows: SurveyAnalyticsRow[], totalStudents: number) {
   const config = SurveyConfigSchema.parse(configInput);
-  const respondentAnswers = rows.map((row) => ({ answers: responseAnswers(row.progressData), respondent: row.respondent }));
+  const respondentAnswers = rows.map((row) => ({ answers: surveyResponseAnswers(row.progressData), respondent: row.respondent }));
   const questions: SurveyQuestionAnalytics[] = config.questions.map((question) => {
     if (question.type !== "short-text") {
       const validOptionIds = new Set(question.options.map((option) => option.id));

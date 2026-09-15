@@ -18,12 +18,7 @@ import {
   normalizeCourseImageToAspectRatio,
   persistGeneratedClassroomImage,
 } from "@openmaic/lib/server/classroom-media-generation";
-import {
-  isRetryableGenerationError,
-  withGenerationRetry,
-} from "@openmaic/lib/generation/generation-retry";
 import { planCourseCoverImageOnServer } from "./course-cover-planner-server";
-import { createCourseCoverImageReviewer } from "./course-cover-review-server";
 
 export const MAX_COURSE_COVER_UPLOAD_BYTES = 10 * 1024 * 1024;
 
@@ -111,9 +106,6 @@ function courseCoverGenerationError(error: unknown): CourseCoverGenerationError 
     COURSE_COVER_PLAN_UNAVAILABLE: ["封面内容策划需要文本模型，请先在教师设置中配置可用的文本模型", 503],
     COURSE_COVER_PLAN_FAILED: ["封面内容策划未完成，请重试；本次尚未生成图片", 502],
     COURSE_COVER_PLAN_INVALID: ["封面画面方案未通过校验，请重新生成", 502],
-    COURSE_COVER_REVIEW_UNAVAILABLE: ["封面质量检查需要可用的视觉理解模型，请在教师设置中配置", 503],
-    COURSE_COVER_REVIEW_FAILED: ["封面图片未能完成质量检查，已保留原封面，请稍后重试", 502],
-    COURSE_COVER_QUALITY_REJECTED: ["封面经重新绘制仍未通过无文字与主题检查，已保留原封面，请重试", 422],
   };
   if (code && stageErrors[code]) {
     const [userMessage, status] = stageErrors[code];
@@ -250,69 +242,19 @@ export async function generateCourseCoverImageOnServer(
   const config = resolveServerCourseCoverProvider();
   const pipelineSignal = AbortSignal.any([AbortSignal.timeout(270_000), ...(signal ? [signal] : [])]);
   try {
-    let plan = await planCourseCoverImageOnServer(course, pipelineSignal);
-    let correctionIssues: string[] | undefined;
-    return await withGenerationRetry(async () => {
-      if (correctionIssues) {
-        plan = await planCourseCoverImageOnServer(course, pipelineSignal, {
-          previousPlan: plan,
-          issues: correctionIssues,
-        });
-        correctionIssues = undefined;
-      }
-      const prompt = buildCourseCoverPrompt(plan);
-      const reviewer = await createCourseCoverImageReviewer(
-        `教学重点：${plan.topicSummary}\n视觉依据：${plan.visualAnchor}\n预定画面：${prompt}\n封面必须完全无文字、伪文字、标签与标题横条。`,
-        pipelineSignal,
-        config,
-      );
-      pipelineSignal.throwIfAborted();
-      const attemptTimeout = AbortSignal.timeout(75_000);
-      const attemptSignal = AbortSignal.any([pipelineSignal, attemptTimeout]);
-      const result = await generateImage(config, {
-        prompt,
-        ...generationSpecForProvider(config),
-        seed: randomInt(0, 2_147_483_648),
-        signal: attemptSignal,
-      });
-      if (attemptSignal.aborted) throw attemptSignal.reason;
-      return persistGeneratedClassroomImage({
-        result,
-        classroomId,
-        elementId,
-        aspectRatio: COURSE_COVER_GENERATION_SPEC.aspectRatio,
-        baseUrl: "",
-        signal: pipelineSignal,
-        normalizeToAspectRatio: true,
-        validateBeforePersist: async (buffer) => {
-          try {
-            await reviewer(buffer);
-          } catch (error) {
-            if (coverErrorCode(error) === "COURSE_COVER_QUALITY_REJECTED") {
-              const issues = error && typeof error === "object" && "issues" in error ? error.issues : null;
-              correctionIssues = Array.isArray(issues)
-                ? issues.filter((issue): issue is string => typeof issue === "string")
-                : ["画面未符合无文字、主题准确与连贯场景的要求"];
-            }
-            throw error;
-          }
-        },
-      });
-    }, {
-      label: `course cover ${classroomId}`,
+    const plan = await planCourseCoverImageOnServer(course, pipelineSignal);
+    const prompt = buildCourseCoverPrompt(plan);
+    pipelineSignal.throwIfAborted();
+    const result = await generateImage(config, {
+      prompt,
+      ...generationSpecForProvider(config),
+      seed: randomInt(0, 2_147_483_648),
       signal: pipelineSignal,
-      maxRetries: 1,
-      baseDelayMs: 3_000,
-      maxDelayMs: 10_000,
-      shouldRetryError: (error) => {
-        const code = coverErrorCode(error);
-        if (code === "COURSE_COVER_QUALITY_REJECTED") return true;
-        // Retrying image generation cannot fix a planner or reviewer outage.
-        if (code?.startsWith("COURSE_COVER_")) return false;
-        const message = error instanceof Error ? error.message : String(error);
-        if (/timeout|timed out|aborted/i.test(message)) return false;
-        return isRetryableGenerationError(error) || /\b5\d\d\b/.test(message);
-      },
+    });
+    return await persistGeneratedClassroomImage({
+      result, classroomId, elementId,
+      aspectRatio: COURSE_COVER_GENERATION_SPEC.aspectRatio,
+      baseUrl: "", signal: pipelineSignal, normalizeToAspectRatio: true,
     });
   } catch (error) {
     if (signal?.aborted) throw error;

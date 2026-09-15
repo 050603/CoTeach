@@ -5,6 +5,7 @@
  * Docs: https://platform.minimaxi.com/docs/api-reference/video-generation-t2v
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import type {
   VideoGenerationConfig,
   VideoGenerationOptions,
@@ -62,7 +63,8 @@ async function submitTask(
   };
   const resolution = resolutionMap[options.resolution || ''] || '768P';
 
-  const response = await fetch(`${baseUrl}/v1/video_generation`, {
+  const response = await fetchMediaRequest(`${baseUrl}/v1/video_generation`, {
+    signal: options.signal,
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
@@ -77,21 +79,17 @@ async function submitTask(
     }),
   });
 
-  if (!response.ok) {
-    const errText = await response.text().catch(() => response.statusText);
-    throw new Error(`MiniMax Video submit error: ${errText}`);
-  }
 
   const data: MiniMaxSubmitResponse = await response.json();
 
   if (data.base_resp?.status_code !== 0) {
     const code = data.base_resp?.status_code;
     const msg = data.base_resp?.status_msg || 'unknown error';
-    throw new Error(`MiniMax Video API error ${code}: ${msg}`);
+    throw mediaGenerationFailure(`MiniMax Video API error ${code}: ${msg}`);
   }
 
   if (!data.task_id) {
-    throw new Error(`MiniMax Video: no task_id returned. Response: ${JSON.stringify(data)}`);
+    throw mediaGenerationFailure(`MiniMax Video: no task_id returned. Response: ${JSON.stringify(data)}`);
   }
 
   return data.task_id;
@@ -100,21 +98,19 @@ async function submitTask(
 async function pollTaskStatus(
   config: VideoGenerationConfig,
   taskId: string,
+  signal?: AbortSignal,
 ): Promise<MiniMaxQueryResponse> {
   const baseUrl = (config.baseUrl || BASE_URL).replace(/\/$/, '');
   const url = `${baseUrl}/v1/query/video_generation?task_id=${encodeURIComponent(taskId)}`;
 
-  const response = await fetch(url, {
+  const response = await fetchMediaRequest(url, {
+    signal: signal,
     method: 'GET',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
     },
   });
 
-  if (!response.ok) {
-    const errText = await response.text().catch(() => response.statusText);
-    throw new Error(`MiniMax Video poll error: ${errText}`);
-  }
 
   return response.json() as Promise<MiniMaxQueryResponse>;
 }
@@ -122,32 +118,30 @@ async function pollTaskStatus(
 async function retrieveFileDownloadUrl(
   config: VideoGenerationConfig,
   fileId: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const baseUrl = (config.baseUrl || BASE_URL).replace(/\/$/, '');
   const url = `${baseUrl}/v1/files/retrieve?file_id=${encodeURIComponent(fileId)}`;
 
-  const response = await fetch(url, {
+  const response = await fetchMediaRequest(url, {
+    signal: signal,
     method: 'GET',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
     },
   });
 
-  if (!response.ok) {
-    const errText = await response.text().catch(() => response.statusText);
-    throw new Error(`MiniMax Video file retrieve error: ${errText}`);
-  }
 
   const data: MiniMaxFileRetrieveResponse = await response.json();
   if (data.base_resp?.status_code !== 0) {
     const code = data.base_resp?.status_code;
     const msg = data.base_resp?.status_msg || 'unknown error';
-    throw new Error(`MiniMax Video file retrieve error ${code}: ${msg}`);
+    throw mediaGenerationFailure(`MiniMax Video file retrieve error ${code}: ${msg}`);
   }
 
   const downloadUrl = data.file?.download_url;
   if (!downloadUrl) {
-    throw new Error(`MiniMax Video: no download_url returned. Response: ${JSON.stringify(data)}`);
+    throw mediaGenerationFailure(`MiniMax Video: no download_url returned. Response: ${JSON.stringify(data)}`);
   }
 
   return downloadUrl;
@@ -167,15 +161,18 @@ export async function generateWithMiniMaxVideo(
   while (attempts < MAX_POLL_ATTEMPTS) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 
-    const result = await pollTaskStatus(config, taskId);
+    const result = await pollTaskStatus(config, taskId, options.signal);
+    if (result.base_resp?.status_code !== 0) {
+      throw mediaGenerationFailure(`MiniMax Video poll error: ${result.base_resp?.status_msg || 'invalid response'}`);
+    }
     lastStatus = result.status;
 
     if (result.status === 'Success') {
       if (!result.file_id) {
-        throw new Error(`MiniMax Video: task succeeded but no file_id returned`);
+        throw mediaGenerationFailure(`MiniMax Video: task succeeded but no file_id returned`);
       }
 
-      const videoUrl = await retrieveFileDownloadUrl(config, result.file_id);
+      const videoUrl = await retrieveFileDownloadUrl(config, result.file_id, options.signal);
 
       return {
         url: videoUrl,
@@ -186,15 +183,19 @@ export async function generateWithMiniMaxVideo(
     }
 
     if (result.status === 'Fail') {
-      throw new Error(
+      throw mediaGenerationFailure(
         `MiniMax Video generation failed: ${result.base_resp?.status_msg || 'unknown'}`,
       );
+    }
+
+    if (!['Preparing', 'Queueing', 'Processing'].includes(result.status)) {
+      throw mediaGenerationFailure('MiniMax Video returned an invalid task status');
     }
 
     attempts++;
   }
 
-  throw new Error(
+  throw mediaGenerationFailure(
     `MiniMax Video: timeout after ${MAX_POLL_ATTEMPTS} polls, last status: ${lastStatus}`,
   );
 }

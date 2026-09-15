@@ -1,0 +1,16 @@
+{
+  "at": "2026-09-14T03:39:27.624Z",
+  "originalRuntimeSha256": "5b77a3d80809cbde0c7cbb7b9f20aed7422754a0fae98faeff133298be892739",
+  "resumedRuntimeSha256": "d92d4a4637f6b05ce1b404c15b3f55cc6629afc5e1ec4f8da7d69a28c45d22c4",
+  "baselineRuntimeSha256": "ef6eef4a8e31295ef5fb64beee863b0000fb52afdde7371323a494b626aabb20",
+  "originalImplementationSha256": "9b82ffec071d19a2730faa3e17b559e32db50c06292005073c20430d6474d160",
+  "slideFunctionEquivalent": true,
+  "rationale": "The original runtime is reused. Only the obsolete live-source fingerprint calculation and baseline recompilation call are bypassed. All saved result files are retained; model and sample hash checks remain active.",
+  "systemPromptCheck": {
+    "sample": "01-budget-1",
+    "saved": "6feaf3c8759fc782fcf76d48eebdcf9cf884a2aa35a54f4a080bc7fca6d33961",
+    "current": "6feaf3c8759fc782fcf76d48eebdcf9cf884a2aa35a54f4a080bc7fca6d33961",
+    "matches": true
+  },
+  "interruptionAccounting": "Logical call and elapsed-time totals include saved result records only. Requests in flight when the environment stopped may have reached the provider but their completion and billing cannot be established; they are not counted as confirmed completed calls."
+}

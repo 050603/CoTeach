@@ -27,9 +27,10 @@ describe('confirmed-outline media planner', () => {
     expect(result[1]?.mediaGenerations).toBeUndefined();
   });
 
-  it('limits generated images and videos instead of adding media to every page', () => {
+  it('has no course image quota, allows two media per page, and caps unique videos', () => {
     const plan = { media: [
       { outlineId: 'scene-1', type: 'video', prompt: '展示物体随时间连续运动变化的演示视频' },
+      { outlineId: 'scene-1', type: 'image', prompt: '展示物体运动路径和关键位置的连续示意图' },
       ...outlines.slice(1).map((outline) => ({
         outlineId: outline.id,
         type: 'image' as const,
@@ -38,8 +39,51 @@ describe('confirmed-outline media planner', () => {
     ] };
     const result = applyMediaPlanToOutlines(outlines, plan, { imageEnabled: true, videoEnabled: true });
     const requests = result.flatMap((outline) => outline.mediaGenerations ?? []);
-    expect(requests.filter((item) => item.type === 'image')).toHaveLength(2);
+    expect(requests.filter((item) => item.type === 'image')).toHaveLength(6);
     expect(requests.filter((item) => item.type === 'video')).toHaveLength(1);
-    expect(result.every((outline) => (outline.mediaGenerations?.length ?? 0) <= 1)).toBe(true);
+    expect(result.every((outline) => (outline.mediaGenerations?.length ?? 0) <= 2)).toBe(true);
+  });
+
+  it('reuses one generated asset across pages with the same reuse key', () => {
+    const result = applyMediaPlanToOutlines(outlines, { media: [
+      { outlineId: 'scene-1', type: 'image', reuseKey: 'shared-model', prompt: '同一个结构模型的准确教学示意图' },
+      { outlineId: 'scene-2', type: 'image', reuseKey: 'shared-model', prompt: '同一个结构模型的准确教学示意图' },
+    ] }, { imageEnabled: true, videoEnabled: false });
+    expect(result[0]?.mediaGenerations?.[0]?.elementId).toBe(
+      result[1]?.mediaGenerations?.[0]?.elementId,
+    );
+  });
+
+  it('keeps generated media in the planner-owned course visual direction', () => {
+    const result = applyMediaPlanToOutlines([
+      {
+        ...outlines[0]!,
+        generationPurpose: 'knowledge-teaching',
+        courseVisualDirection: '暖白背景、墨绿主色、珊瑚色强调，以抽样路径为图形母题。',
+      },
+    ], { media: [{
+      outlineId: 'scene-1',
+      type: 'image',
+      prompt: '解释抽样总体与样本关系的准确示意图',
+      style: 'flat vector',
+    }] }, { imageEnabled: true, videoEnabled: false });
+
+    expect(result[0]?.mediaGenerations?.[0]?.style).toContain('flat vector');
+    expect(result[0]?.mediaGenerations?.[0]?.style).toContain('暖白背景、墨绿主色、珊瑚色强调');
+    expect(result[0]?.mediaGenerations?.[0]?.style).not.toContain('topic-appropriate palette');
+  });
+
+  it('does not impose the lecture palette on unrelated course media', () => {
+    const result = applyMediaPlanToOutlines([{
+      ...outlines[0]!,
+      mediaGenerations: [{
+        type: 'image',
+        prompt: '一张用于项目情境导入的纪实照片',
+        elementId: 'existing-image',
+        style: 'documentary photography',
+      }],
+    }], { media: [] }, { imageEnabled: true, videoEnabled: false });
+
+    expect(result[0]?.mediaGenerations?.[0]?.style).toBe('documentary photography');
   });
 });

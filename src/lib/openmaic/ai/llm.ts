@@ -379,3 +379,26 @@ export function streamLLM<T extends StreamTextParams>(
 
   return result;
 }
+
+/**
+ * Consume a streamed model response as plain text while retaining the global
+ * course-generation concurrency slot until the response body is complete.
+ *
+ * Large interactive widgets are emitted as complete HTML/CSS/JS documents.
+ * Streaming lets compatible providers return response headers as soon as
+ * generation starts instead of waiting for the whole document, avoiding the
+ * transport's shorter response-header timeout without changing the model or
+ * the generated text contract.
+ */
+export async function callStreamingLLMText<T extends StreamTextParams>(
+  params: T,
+  source: string,
+  thinking?: ThinkingConfig,
+): Promise<string> {
+  return withCourseGenerationLlmSlot(async () => {
+    const result = streamLLM(params, source, thinking);
+    const text = await result.text;
+    throwIfAborted(params.abortSignal);
+    return text;
+  }, { signal: params.abortSignal });
+}

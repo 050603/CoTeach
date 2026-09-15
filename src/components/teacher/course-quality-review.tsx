@@ -7,7 +7,7 @@ import { ReadonlySlideCanvas } from '@/components/openmaic/slide-renderer/Editor
 import type { PersistedClassroomData } from '@/lib/openmaic/server/classroom-storage';
 import type { CourseQualityReport } from '@/lib/course-quality-review/types';
 import type { CourseRenderPageReview, CourseRenderReview, CourseTeacherReview } from '@/lib/course-quality-review/teacher-review';
-import { reviewableIssues, unresolvedHardIssues } from '@/lib/course-quality-review/teacher-review';
+import { reviewableIssues } from '@/lib/course-quality-review/teacher-review';
 import { inspectRenderedSlide, measureSlideElements } from '@/lib/course-quality-review/render-measurements';
 import type { Scene } from '@openmaic/lib/types/stage';
 
@@ -68,7 +68,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
   const [snapshot, setSnapshot] = useState<ReviewSnapshot | null>(null);
   const [error, setError] = useState('');
   const [accepted, setAccepted] = useState<string[]>([]);
-  const [manualReview, setManualReview] = useState(false);
+  const [renderRequested, setRenderRequested] = useState(false);
   const [busy, setBusy] = useState(false);
   const [savingPage, setSavingPage] = useState(false);
   const [localPages, setLocalPages] = useState<CourseRenderPageReview[]>([]);
@@ -84,7 +84,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
         signature.current = next.signature;
         setLocalPages(next.renderReview?.pages ?? []);
         setAccepted(next.teacherReview?.acceptedIssueIds ?? []);
-        setManualReview(false);
+        setRenderRequested(false);
         setRetryPageIds([]);
       }
       // Keep stable scene references while polling the same content version.
@@ -104,16 +104,15 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
     return [...byId.values()].filter((page) => page.status === 'completed' || !retryPageIds.includes(page.sceneId));
   }, [snapshot?.renderReview?.pages, localPages, retryPageIds]);
   const slides = useMemo(() => snapshot?.classroom.scenes.filter((scene) => scene.type === 'slide' && scene.content.type === 'slide') ?? [], [snapshot?.classroom]);
-  const nextScene = !savingPage && !error ? slides.find((scene) => !pages.some((page) => page.sceneId === scene.id)) : undefined;
+  const nextScene = renderRequested && !savingPage && !error ? slides.find((scene) => !pages.some((page) => page.sceneId === scene.id)) : undefined;
   const allRendered = slides.every((scene) => pages.some((page) => page.sceneId === scene.id && page.status === 'completed'));
   const issues = useMemo(() => [...(snapshot?.quality?.issues ?? []), ...pages.flatMap((page) => page.issues)], [snapshot?.quality?.issues, pages]);
-  const hard = unresolvedHardIssues(issues);
   const toReview = reviewableIssues(issues);
-  const contentChecked = snapshot?.quality?.status === 'completed' || (snapshot?.quality?.status === 'failed' && manualReview);
-  const canConfirm = Boolean(snapshot && !error && !savingPage && allRendered && contentChecked && !hard.length && toReview.every((issue) => accepted.includes(issue.id)));
+  const qualityRunning = snapshot?.quality?.status === 'running' || snapshot?.quality?.status === 'pending';
+  const canConfirm = Boolean(snapshot && snapshot.classroom.assetGeneration?.status !== 'running');
   useEffect(() => {
-    onDecisionChange({ canConfirm, signature: snapshot?.signature ?? '', acceptedIssueIds: accepted, acknowledgeFailedCheck: manualReview });
-  }, [canConfirm, snapshot?.signature, accepted, manualReview, onDecisionChange]);
+    onDecisionChange({ canConfirm, signature: snapshot?.signature ?? '', acceptedIssueIds: accepted, acknowledgeFailedCheck: true });
+  }, [canConfirm, snapshot?.signature, accepted, onDecisionChange]);
 
   const savePage = useCallback(async (page: CourseRenderPageReview) => {
     if (inFlightPage.current) return;
@@ -130,10 +129,18 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
     finally { inFlightPage.current = false; if (mounted.current) setSavingPage(false); }
   }, [courseId]);
   const onRenderComplete = useCallback((page: CourseRenderPageReview) => { void savePage(page); }, [savePage]);
-  async function retry() {
+  async function checkContent() {
     setBusy(true);
     try {
-      if (snapshot?.quality?.status === 'failed') await fetch(`/api/courses/${courseId}/quality-review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'retry' }) }).then(responseJson);
+      await fetch(`/api/courses/${courseId}/quality-review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'check' }) }).then(responseJson);
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '内容检查未启动。'); }
+    finally { setBusy(false); }
+  }
+  async function checkPages() {
+    setBusy(true);
+    try {
+      setRenderRequested(true);
       // Recheck failed browser pages without throwing away successful pages.
       setRetryPageIds(pages.filter((page) => page.status === 'failed').map((page) => page.sceneId));
       setLocalPages((current) => current.filter((page) => page.status === 'completed'));
@@ -145,25 +152,26 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
   return <section className="mt-5 rounded-xl border border-stone-200 bg-white p-5" aria-label="课程质量与教师终审">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><h2 className="font-bold text-stone-900">课程检查与教师终审</h2>
-        <p className="mt-1 text-sm leading-6 text-stone-600">先预览课程草稿，再核对内容和页面问题。检查结果用于辅助判断，最终由教师确认。</p></div>
-      {(error || snapshot?.quality?.status === 'failed' || pages.some((page) => page.status === 'failed')) && <Button loading={busy} onClick={() => void retry()}><RotateCcw size={14} />重试检查</Button>}
+        <p className="mt-1 text-sm leading-6 text-stone-600">教师预览后可直接确认发布，也可主动运行内容或页面检查，作为授课前的参考。</p></div>
+      <div className="flex flex-wrap gap-2">
+        <Button loading={busy} disabled={!snapshot || qualityRunning} onClick={() => void checkContent()}><RotateCcw size={14} />检查内容</Button>
+        <Button disabled={!snapshot || Boolean(nextScene) || savingPage} onClick={() => void checkPages()}>检查页面</Button>
+        {error && <Button onClick={() => void load()}>刷新状态</Button>}
+      </div>
     </div>
     <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-sm text-stone-600">
-      <span className="inline-flex items-center gap-2">{snapshot?.quality?.status === 'completed' ? <Check size={15} /> : <Loader2 className="animate-spin" size={15} />}
-        内容检查：{snapshot?.quality?.status === 'completed' ? '已完成' : snapshot?.quality?.status === 'failed' ? '未完成' : '正在后台检查'}</span>
-      <span>页面呈现：{pages.filter((page) => page.status === 'completed').length} / {slides.length} 页{allRendered && snapshot ? '，已检查' : '，请保持本页打开'}</span>
-      <span>{hard.length ? `${hard.length} 项必须修正` : `${toReview.length} 项待核对建议`}</span>
+      <span className="inline-flex items-center gap-2">{snapshot?.quality?.status === 'completed' ? <Check size={15} /> : qualityRunning ? <Loader2 className="animate-spin" size={15} /> : null}
+        内容检查：{snapshot?.quality?.status === 'completed' ? '已完成' : snapshot?.quality?.status === 'failed' ? '未完成' : qualityRunning ? '正在检查' : '未检查'}</span>
+      <span>页面呈现：{!pages.length && !renderRequested ? '未检查' : `${pages.filter((page) => page.status === 'completed').length} / ${slides.length} 页${allRendered && snapshot ? '，已检查' : renderRequested && nextScene ? '，正在检查' : '，未完成'}`}</span>
+      <span>{toReview.length} 项参考建议</span>
     </div>
     {error && <p role="alert" className="mt-3 text-sm text-rose-700">{error}</p>}
-    {snapshot?.quality?.status === 'failed' && <label className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-      <input type="checkbox" checked={manualReview} onChange={(event) => setManualReview(event.target.checked)} className="mt-1" />
-      <span>自动内容检查未完成：{snapshot.quality.error || '服务暂时不可用'}。我已人工核对知识、讲稿、互动和题目答案，并承担本次课程终审。</span>
-    </label>}
+    {snapshot?.quality?.status === 'failed' && <p className="mt-3 text-sm text-amber-900">内容检查未完成：{snapshot.quality.error || '服务暂时不可用'}。教师仍可根据实际预览确认发布。</p>}
     {issues.length > 0 && <div className="mt-4 max-h-96 space-y-3 overflow-y-auto">
       {issues.filter((issue) => issue.status !== 'resolved').map((issue) => {
         const blocking = issue.origin === 'structure' && issue.severity === 'error';
         return <div key={issue.id} className={`rounded-lg border p-3 text-sm ${blocking ? 'border-rose-200 bg-rose-50' : 'border-stone-200 bg-stone-50'}`}>
-          <div className="flex flex-wrap items-center justify-between gap-2"><strong className="inline-flex items-center gap-2"><AlertTriangle size={14} />{issue.title}{blocking ? ' · 必须修正' : ''}</strong>
+          <div className="flex flex-wrap items-center justify-between gap-2"><strong className="inline-flex items-center gap-2"><AlertTriangle size={14} />{issue.title}{blocking ? ' · 请核对' : ''}</strong>
             {issue.sceneId && <button type="button" className="font-semibold text-blue-700 underline" onClick={() => onOpenPage(snapshot?.classroom.scenes.find((scene) => scene.id === issue.sceneId)?.outlineId ?? issue.sceneId!)}>查看对应页面</button>}</div>
           <p className="mt-2 whitespace-pre-wrap leading-6 text-stone-600">{issue.evidence}</p><p className="mt-1 leading-6">{issue.suggestion}</p>
           {!blocking && <label className="mt-2 flex items-start gap-2"><input type="checkbox" className="mt-1" checked={accepted.includes(issue.id)} onChange={(event) => setAccepted((current) => event.target.checked ? [...new Set([...current, issue.id])] : current.filter((id) => id !== issue.id))} /><span>已核对，这一项可以用于本次授课</span></label>}

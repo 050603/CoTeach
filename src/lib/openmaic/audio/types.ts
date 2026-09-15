@@ -139,6 +139,9 @@ export interface TTSProviderConfig {
  */
 export interface TTSModelConfig {
   providerId: TTSProviderId;
+  /** BCP-47 language, or mixed for automatic language matching. */
+  language?: string;
+  signal?: AbortSignal;
   modelId?: string;
   apiKey?: string;
   baseUrl?: string;

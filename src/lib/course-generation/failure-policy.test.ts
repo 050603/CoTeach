@@ -13,21 +13,21 @@ const inferenceAbort = new Error(
 );
 
 describe("managed classroom-generation recovery", () => {
-  it("retries a transient final-page failure while preserving completed page checkpoints", () => {
+  it("does not layer job recovery over exhausted request retries", () => {
     expect(createManagedCourseGenerationRecoveryRequest(
       { courseId: "course-1" },
       inferenceAbort,
-    )).toMatchObject({ managedRecoveryCount: 1 });
+    )).toBeNull();
   });
 
-  it("upgrades whiteboard quality failures persisted by older builds into checkpoint recovery", () => {
+  it("keeps old whiteboard quality failures terminal", () => {
     const legacyFailure = serializeCourseGenerationFailure(new Error(
       'Scene 3/12 "PBL与探究式教学" failed: 白板仍存在布局或内容问题：文字过小或超出文本框',
     ));
 
-    expect(deserializeCourseGenerationFailure(legacyFailure)).toMatchObject({ isRetryable: true });
+    expect(deserializeCourseGenerationFailure(legacyFailure)).toMatchObject({ isRetryable: false });
     expect(createManagedCourseGenerationRecoveryRequest({}, deserializeCourseGenerationFailure(legacyFailure)))
-      .toMatchObject({ managedRecoveryCount: 1 });
+      .toBeNull();
   });
 
   it("does not create an unbounded recovery loop", () => {
@@ -37,11 +37,11 @@ describe("managed classroom-generation recovery", () => {
     )).toBeNull();
   });
 
-  it("recovers a transient failure that happens before the first checkpoint", () => {
+  it("does not restart generation before the first checkpoint", () => {
     expect(createManagedCourseGenerationRecoveryRequest(
       { courseId: "course-1" },
       inferenceAbort,
-    )).toMatchObject({ managedRecoveryCount: 1 });
+    )).toBeNull();
   });
 
   it("preserves retry classification across persistence without exposing diagnostics", () => {
@@ -49,7 +49,7 @@ describe("managed classroom-generation recovery", () => {
 
     expect(persisted).toContain("OPENPBL_COURSE_GENERATION_FAILURE_V1");
     expect(deserializeCourseGenerationFailure(persisted)).toMatchObject({
-      isRetryable: true,
+      isRetryable: false,
     });
     const teacherMessage = formatPersistedCourseGenerationErrorForTeacher(persisted);
     expect(teacherMessage).toContain("已经生成的页面均已保留");
@@ -63,13 +63,13 @@ describe("managed classroom-generation recovery", () => {
     });
   });
 
-  it("upgrades persisted teaching-tool omissions into checkpoint recovery", () => {
+  it("keeps teaching-tool omissions terminal", () => {
     const persisted = serializeCourseGenerationFailure(new Error(
       'Scene "节末小测" is missing required teaching tools after correction: whiteboard',
     ));
 
     expect(deserializeCourseGenerationFailure(persisted)).toMatchObject({
-      isRetryable: true,
+      isRetryable: false,
     });
   });
 

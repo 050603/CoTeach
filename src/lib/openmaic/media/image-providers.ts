@@ -166,23 +166,29 @@ export async function generateImage(
   config: ImageGenerationConfig,
   options: ImageGenerationOptions,
 ): Promise<ImageGenerationResult> {
-  switch (config.providerId) {
-    case 'seedream':
-      return generateWithSeedream(config, options);
-    case 'openai-image':
-      return generateWithOpenAIImage(config, options);
-    case 'qwen-image':
-      return generateWithQwenImage(config, options);
-    case 'nano-banana':
-      return generateWithNanoBanana(config, options);
-    case 'minimax-image':
-      return generateWithMiniMaxImage(config, options);
-    case 'grok-image':
-      return generateWithGrokImage(config, options);
-    case 'lemonade':
-      return generateWithLemonadeImage(config, options);
-    default:
-      throw new Error(`Unsupported image provider: ${config.providerId}`);
+  // HTTP requests retry inside adapters; completed operations never restart here.
+  try {
+    switch (config.providerId) {
+      case 'seedream':
+        return await generateWithSeedream(config, options);
+      case 'openai-image':
+        return await generateWithOpenAIImage(config, options);
+      case 'qwen-image':
+        return await generateWithQwenImage(config, options);
+      case 'nano-banana':
+        return await generateWithNanoBanana(config, options);
+      case 'minimax-image':
+        return await generateWithMiniMaxImage(config, options);
+      case 'grok-image':
+        return await generateWithGrokImage(config, options);
+      case 'lemonade':
+        return await generateWithLemonadeImage(config, options);
+      default:
+        throw new Error(`Unsupported image provider: ${config.providerId}`);
+    }
+  } catch (error) {
+    if (error instanceof Error) throw Object.assign(error, { isRetryable: false });
+    throw Object.assign(new Error(String(error)), { isRetryable: false });
   }
 }
 

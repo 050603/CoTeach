@@ -1,0 +1,191 @@
+[
+  {
+    "id": "10-baseline-1",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:58:47.810716+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "生成请求已终态失败：Course model request timed out；唯一调用无response，未产出可渲染首遍页面，不能执行截图检查。"
+  },
+  {
+    "id": "10-baseline-2",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:47:37.425904+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": false,
+    "notes": "三块文字与箭头可见且无明显溢出；但缺少“其他条件相近时”的因果条件，也未明确只吸收部分红外辐射。"
+  },
+  {
+    "id": "10-baseline-3",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:53:41.087257+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "蓝色连接线横穿“短波辐射升温”和“红外辐射”标签，标签还被窄区域拆行；其他条件相近的限制可见，但未呈现温室气体影响向太空散失能量速率的知识点。"
+  },
+  {
+    "id": "11-baseline-1",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:50:45.834194+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "草下方“生产者”灰色标签与底部箭头说明叠在同一区域，标签未完整清晰呈现；食物关系箭头及能量逐级减少、不可循环的说明可见。"
+  },
+  {
+    "id": "11-baseline-2",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:53:41.087283+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": false,
+    "notes": "四个生物节点、单向箭头及能量逐级减少不可循环的说明可见，无明显遮挡；未明确草为生产者，也没有明确解释箭头由被取食者指向取食者的含义。"
+  },
+  {
+    "id": "11-baseline-3",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:55:28.634817+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "标题换行后“传递”压在鹰节点上；蚱蜢节点仅显示“蚱”，图中连线端点缺少清晰可见箭头，且未说明草为生产者。底部能量方向与逐级减少不可循环的文字可见。"
+  },
+  {
+    "id": "12-baseline-1",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:57:04.670692+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "多条斜线交叉并横穿Arrival/Retry区域，“Arrival Rate > Service Rate”在节点内部被拆行且与连线混杂；未清楚呈现队列增加的是处理开始前等待时间，也未明确扩容或降到达率的稳定队列作用。"
+  },
+  {
+    "id": "12-baseline-2",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:00:43.008209+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "Demand、Capacity和latency等文字换行越出浅色背景容器；虽然有积压、重试增加到达与两个对策标签，仍缺少到达速度超过服务完成速度的触发条件及处理前等待的明确解释。"
+  },
+  {
+    "id": "12-baseline-3",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T03:58:47.810740+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": false,
+    "notes": "节点、箭头与底部对策说明清晰，无明显遮挡溢出；但漏掉“到达快于服务完成时积压”的条件和“处理开始前等待时间增加”的具体解释。"
+  },
+  {
+    "id": "13-baseline-1",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:00:43.008231+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "给定功率、灯数、日时长、每日5 kWh、每月30天150 kWh与照明需求相同的假设均完整可见；单位W换行较生硬但未遮挡或溢出。"
+  },
+  {
+    "id": "13-baseline-2",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:00:43.008237+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "给定参数、每日及每月计算式和照明需求相同的假设均可见，无明显遮挡或溢出。"
+  },
+  {
+    "id": "13-baseline-3",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:02:42.634463+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "橙色总结框内“每月节电150”后的kWh换到下一行，被背景边界裁切成白字残片；上方完整计算式已保留5kWh、30天150kWh，参数及照明需求相同假设也仍可见。"
+  },
+  {
+    "id": "14-baseline-1",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:00:43.008241+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "质量54g、体积20cm³、密度计算2.7g/cm³和不能单凭密度排除其他材料或测量误差的限制完整可见，无明显遮挡或溢出。"
+  },
+  {
+    "id": "14-baseline-2",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:02:42.634485+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "质量体积、密度分式与2.7g/cm³结果及与铝相近但不能排除其他材料/测量误差的限制完整可见，无明显遮挡或溢出。"
+  },
+  {
+    "id": "14-baseline-3",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:02:42.634490+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "已知量、ρ=m/V及代入结果、与铝相近和不能排除其他材料/测量误差的结论完整可见，无明显遮挡或溢出。"
+  },
+  {
+    "id": "15-baseline-1",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:02:42.634498+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "初始total和数组、三步结果3/4/8、不变量为已处理值之和全部清晰可见，无明显遮挡或溢出。"
+  },
+  {
+    "id": "15-baseline-2",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:08:09.592949+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "三个加法标签的“+”与数字分别换行落在箭头上下，箭头将操作标签分断；初始数组、total=0/3/4/8及已处理项之和不变量仍完整可见。"
+  },
+  {
+    "id": "15-baseline-3",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:04:12.916089+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "初始total=0与数组、每步累加结果3/4/8、处理剩余项和不变量全部可见，无明显遮挡或溢出。"
+  },
+  {
+    "id": "16-baseline-1",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:06:04.692824+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": true,
+    "requiredKnowledgePreserved": true,
+    "notes": "周一12、周二10、周三14 kWh、平均12 kWh及相差4 kWh、不能单独证明措施造成变化的限制均清晰可见，无明显遮挡或溢出。"
+  },
+  {
+    "id": "16-baseline-2",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:06:04.692848+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": true,
+    "notes": "左侧表格底边越过背景容器，右侧平均值换行后紧贴下一条计算；底部局限性说明下缘越出黄色背景。三日数据、平均值/差值及不能据此证明因果的限制仍完整可读。"
+  },
+  {
+    "id": "16-baseline-3",
+    "reviewer": "Codex latex_font_fix screenshot and evidence inspection",
+    "reviewedAt": "2026-09-14T04:08:09.592973+00:00",
+    "phase": "first response with structural defaults and KaTeX only",
+    "layoutAccepted": false,
+    "requiredKnowledgePreserved": false,
+    "notes": "图中三根柱有12/10/14，但类别轴周一/周二/周三与单位/图例均未显示，失去各日数据对应关系；右侧平均值、差值与不能证明措施因果的限制可见。"
+  }
+]

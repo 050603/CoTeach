@@ -12,6 +12,9 @@ vi.mock("@/lib/session/server-store", () => ({ getCourse: vi.fn() }));
 vi.mock("@/lib/course-design/generation-references", () => ({ GenerationReferenceError: class extends Error {}, resolveGenerationReferenceMaterials: mocks.references }));
 vi.mock("@/lib/resource-package/server", () => ({ ResourcePackageError: class extends Error {}, resolveConfirmedResourcePackage: mocks.resolve }));
 vi.mock("@openmaic/lib/server/classroom-media-readiness", () => ({ assertRequestedClassroomMediaProviders: vi.fn(), classroomMediaConfigurationErrorResponse: vi.fn() }));
+vi.mock("@/lib/openmaic/server/provider-config", () => ({
+  findServerDefaultModelString: () => "deepseek:deepseek-v4-flash",
+}));
 
 import { POST } from "./route";
 
@@ -49,12 +52,22 @@ describe("resource-package design generation admission", () => {
     const response = await POST(request({ resourcePackageId: "package-1", resourcePackageRevision: 3, supplementalAnswers: { brief: "" } }), context);
     expect(response.status).toBe(202);
     expect(mocks.resolve).toHaveBeenCalledWith("course-1", "package-1", 3, "teacher-1");
-    expect(mocks.create.mock.calls[0][0].data.request).toMatchObject({ teacherBrief: "", resourcePackage, referenceMaterials: [material], supplementalAnswers: { brief: "" } });
+    expect(mocks.create.mock.calls[0][0].data.request).toMatchObject({
+      teacherBrief: "",
+      generationModelString: "deepseek:deepseek-v4-flash",
+      resourcePackage,
+      referenceMaterials: [material],
+      supplementalAnswers: { brief: "" },
+    });
     expect(await response.json()).toMatchObject({ job: { requestPreview: { resourcePackageId: "package-1", resourcePackageRevision: 3 } } });
   });
 
   it("only allows legacy requests to resume with the same parameters", async () => {
-    const original = { courseId: "course-1", teacherBrief: "旧课程要求" };
+    const original = {
+      courseId: "course-1",
+      teacherBrief: "旧课程要求",
+      generationModelString: "deepseek:deepseek-v4-flash",
+    };
     mocks.find.mockResolvedValue(storedJob(original));
     expect((await POST(request({ teacherBrief: "旧课程要求" }), context)).status).toBe(202);
     const changed = await POST(request({ teacherBrief: "新课程要求" }), context);

@@ -1,0 +1,202 @@
+{
+  "startedAt": "2026-09-14T02:40:00.514Z",
+  "implementationSha256": "9b82ffec071d19a2730faa3e17b559e32db50c06292005073c20430d6474d160",
+  "baselineCommit": "843847af93106f9b6ac64f10154fb056d7141303",
+  "model": "deepseek:deepseek-v4-flash",
+  "vision": false,
+  "samplesSha256": "6aee6985a73ccf0104e5e23852bee1e9c2e5c2ee7eb8f7b0a82a1607d7f971b3",
+  "groups": [
+    {
+      "group": "baseline",
+      "completedCases": 72,
+      "plannedCases": 72,
+      "producedFinalSlide": 24,
+      "failedWithoutAnyModelResponse": 4,
+      "returnedNoFinalSlide": 44,
+      "unavailableVision": 0,
+      "logicalCalls": 161,
+      "elapsedMsSum": 13011597,
+      "observedElapsedMs": {
+        "median": 139557,
+        "p95": 454006
+      },
+      "spatialPreparationMs": {
+        "median": null,
+        "p95": null,
+        "note": "Includes spatial preparation and programmatic sketch generation, with service queue/font loading. Shared preparation is recorded on each dependent result; values must not be summed as independent computation."
+      },
+      "inputCompositionsCovered": [
+        "concept-focus",
+        "comparison",
+        "process",
+        "relationship",
+        "worked-example",
+        "evidence",
+        "hierarchy",
+        "annotated-example"
+      ],
+      "compositionCoverageInterpretation": "Eight fixture composition categories measure input coverage, not validated output layout diversity.",
+      "finalSlidesUsingNativeElementTypes": {
+        "text": 24,
+        "shape": 22,
+        "line": 11,
+        "chart": 1,
+        "table": 1,
+        "latex": 2,
+        "image": 0
+      },
+      "firstRendered": 68,
+      "firstRenderedWithoutRuleWarnings": 12,
+      "finalRendered": 24,
+      "finalRenderedWithoutRuleWarnings": 14,
+      "independentScreenshotReview": {
+        "reviewedWithRenderedScreenshot": 68,
+        "reviewedWithoutGeneratedArtifact": 4,
+        "reviewed": 72,
+        "layoutAndKnowledgeAccepted": 31,
+        "layoutAccepted": 37,
+        "requiredKnowledgePreserved": 45,
+        "reviewer": "Codex screenshot and evidence inspection; not a teacher sign-off"
+      },
+      "manualLayoutReview": "complete teacher review not performed",
+      "knowledgePointReview": "complete teacher review not performed"
+    },
+    {
+      "group": "budget",
+      "completedCases": 72,
+      "plannedCases": 72,
+      "producedFinalSlide": 69,
+      "failedWithoutAnyModelResponse": 3,
+      "returnedNoFinalSlide": 0,
+      "unavailableVision": 0,
+      "logicalCalls": 72,
+      "elapsedMsSum": 8631639,
+      "observedElapsedMs": {
+        "median": 93832,
+        "p95": 363190
+      },
+      "spatialPreparationMs": {
+        "median": 2799,
+        "p95": 3233,
+        "note": "Includes spatial preparation and programmatic sketch generation, with service queue/font loading. Shared preparation is recorded on each dependent result; values must not be summed as independent computation."
+      },
+      "inputCompositionsCovered": [
+        "concept-focus",
+        "comparison",
+        "process",
+        "relationship",
+        "worked-example",
+        "evidence",
+        "hierarchy",
+        "annotated-example"
+      ],
+      "compositionCoverageInterpretation": "Eight fixture composition categories measure input coverage, not validated output layout diversity.",
+      "finalSlidesUsingNativeElementTypes": {
+        "text": 69,
+        "shape": 64,
+        "line": 39,
+        "chart": 4,
+        "table": 4,
+        "latex": 2,
+        "image": 0
+      },
+      "firstRendered": 69,
+      "firstRenderedWithoutRuleWarnings": 18,
+      "finalRendered": 69,
+      "finalRenderedWithoutRuleWarnings": 18,
+      "independentScreenshotReview": {
+        "reviewedWithRenderedScreenshot": 69,
+        "reviewedWithoutGeneratedArtifact": 3,
+        "reviewed": 72,
+        "layoutAndKnowledgeAccepted": 43,
+        "layoutAccepted": 44,
+        "requiredKnowledgePreserved": 64,
+        "reviewer": "Codex screenshot and evidence inspection; not a teacher sign-off"
+      },
+      "manualLayoutReview": "complete teacher review not performed",
+      "knowledgePointReview": "complete teacher review not performed"
+    },
+    {
+      "group": "sketch",
+      "completedCases": 72,
+      "plannedCases": 72,
+      "producedFinalSlide": 0,
+      "failedWithoutAnyModelResponse": 0,
+      "returnedNoFinalSlide": 0,
+      "unavailableVision": 72,
+      "logicalCalls": 0,
+      "elapsedMsSum": 9321,
+      "observedElapsedMs": {
+        "median": null,
+        "p95": null
+      },
+      "spatialPreparationMs": {
+        "median": 2799,
+        "p95": 3233,
+        "note": "Includes spatial preparation and programmatic sketch generation, with service queue/font loading. Shared preparation is recorded on each dependent result; values must not be summed as independent computation."
+      },
+      "inputCompositionsCovered": [
+        "concept-focus",
+        "comparison",
+        "process",
+        "relationship",
+        "worked-example",
+        "evidence",
+        "hierarchy",
+        "annotated-example"
+      ],
+      "compositionCoverageInterpretation": "Eight fixture composition categories measure input coverage, not validated output layout diversity.",
+      "finalSlidesUsingNativeElementTypes": {
+        "text": 0,
+        "shape": 0,
+        "line": 0,
+        "chart": 0,
+        "table": 0,
+        "latex": 0,
+        "image": 0
+      },
+      "firstRendered": 0,
+      "firstRenderedWithoutRuleWarnings": 0,
+      "finalRendered": 0,
+      "finalRenderedWithoutRuleWarnings": 0,
+      "independentScreenshotReview": {
+        "reviewedWithRenderedScreenshot": 0,
+        "reviewedWithoutGeneratedArtifact": 0,
+        "reviewed": 0,
+        "layoutAndKnowledgeAccepted": 0,
+        "layoutAccepted": 0,
+        "requiredKnowledgePreserved": 0,
+        "reviewer": "Codex screenshot and evidence inspection; not a teacher sign-off"
+      },
+      "manualLayoutReview": "complete teacher review not performed",
+      "knowledgePointReview": "complete teacher review not performed"
+    }
+  ],
+  "repetitions": 3,
+  "plannedCases": 216,
+  "baselineScope": "Frozen HEAD generation and prompt sources; shared current provider transport/DSL/runtime dependencies",
+  "measurement": "Static geometry plus actual ReadonlySlideCanvas Chromium measurements; human acceptance remains separate",
+  "media": "No image generation or TTS calls; exact diagram/data evidence supplied as text; no teaching course persisted.",
+  "environmentLimits": "Tail conditions overlapped six additional action-generation calls to the same model and production builds on the shared host. Provider/system load was not isolated. Timing figures are observed request durations, not dedicated-environment benchmarks or billing totals.",
+  "baselineInterpretation": "Fixed Git commit baseline. It excludes the uncommitted accept-after-one-correction change present when this session began, so it does not represent the complete initial workspace or deployed behavior.",
+  "resumeEvidence": {
+    "at": "2026-09-14T03:39:27.624Z",
+    "originalRuntimeSha256": "5b77a3d80809cbde0c7cbb7b9f20aed7422754a0fae98faeff133298be892739",
+    "resumedRuntimeSha256": "d92d4a4637f6b05ce1b404c15b3f55cc6629afc5e1ec4f8da7d69a28c45d22c4",
+    "baselineRuntimeSha256": "ef6eef4a8e31295ef5fb64beee863b0000fb52afdde7371323a494b626aabb20",
+    "originalImplementationSha256": "9b82ffec071d19a2730faa3e17b559e32db50c06292005073c20430d6474d160",
+    "slideFunctionEquivalent": true,
+    "rationale": "The original runtime is reused. Only the obsolete live-source fingerprint calculation and baseline recompilation call are bypassed. All saved result files are retained; model and sample hash checks remain active.",
+    "systemPromptCheck": {
+      "sample": "01-budget-1",
+      "saved": "6feaf3c8759fc782fcf76d48eebdcf9cf884a2aa35a54f4a080bc7fca6d33961",
+      "current": "6feaf3c8759fc782fcf76d48eebdcf9cf884a2aa35a54f4a080bc7fca6d33961",
+      "matches": true
+    },
+    "interruptionAccounting": "Logical call and elapsed-time totals include saved result records only. Requests in flight when the environment stopped may have reached the provider but their completion and billing cannot be established; they are not counted as confirmed completed calls."
+  },
+  "callAccounting": "Saved logical requests only; transport retries and unpersisted requests in flight at environment interruption are not a provider billing total.",
+  "reportedAt": "2026-09-14T04:43:03.953Z",
+  "completedCases": 216,
+  "interpretation": "Counts without rule warnings are diagnostic, not human acceptance. First response and final content are measured separately; no-vision cases are unavailable, not model quality failures."
+}

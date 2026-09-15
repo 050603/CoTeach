@@ -13,10 +13,10 @@ describe('course visual style', () => {
     expect(style.theme).toMatchObject({
       backgroundColor: '#FFFFFF',
       fontColor: '#333333',
-      fontName: 'Microsoft YaHei',
+      fontName: 'Noto Sans SC',
       themeColors: ['#5B9BD5', '#ED7D31', '#A5A5A5', '#FFC000', '#4472C4'],
     });
-    expect(formatCourseVisualStyle(style)).toContain('OpenMAIC baseline');
+    expect(formatCourseVisualStyle(style)).toContain('bundled measurement and playback fonts');
     expect(formatCourseVisualStyle(style)).toContain('one clear visual focal point');
   });
 });

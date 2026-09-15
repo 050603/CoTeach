@@ -1,6 +1,8 @@
-import { planCourseSlideVisuals, fallbackSlideVisualPlan } from "@openmaic/lib/generation/slide-visual-plan";
 import { nanoid } from 'nanoid';
-import { callLLM } from '@openmaic/lib/ai/llm';
+import { createCourseGenerationAiCall } from './course-generation-ai-call';
+import { prepareVideoTimingRequests } from './video-timing-plan';
+import { allocateTeachingStageTiming } from './teaching-stage-timing-plan';
+import type { VideoProviderId } from '@openmaic/lib/media/types';
 import { createStageAPI } from '@openmaic/lib/api/stage-api';
 import type { StageStore } from '@openmaic/lib/api/stage-api-types';
 import {
@@ -21,7 +23,6 @@ import { createLogger } from '@openmaic/lib/logger';
 import { isProviderKeyRequired } from '@openmaic/lib/ai/providers';
 import { resolveClassroomWebSearchConfig } from '@openmaic/lib/server/web-search-config';
 import { resolveModel } from '@openmaic/lib/server/resolve-model';
-import { getStageModel } from '@openmaic/lib/server/model-routes';
 import { resolveVocationalActive } from '@openmaic/lib/config/feature-flags';
 import { buildSearchQuery } from '@openmaic/lib/server/search-query-builder';
 import { formatSearchResultsAsContext, searchWeb } from '@openmaic/lib/web-search';
@@ -32,10 +33,7 @@ import {
   type ServerTtsTimingSelection,
 } from '@openmaic/lib/server/classroom-media-generation';
 import {
-  assessTtsDurationError,
   buildTtsTimingPlan,
-  estimateSpeechDurationSec,
-  isActivityTimingCorrectionCloser,
 } from '@openmaic/lib/audio/tts-timing';
 import {
   planPblPageTiming,
@@ -46,45 +44,49 @@ import {
 import {
   contextualizeGenerationError,
   throwIfAborted,
-  withGenerationRetry,
 } from '@openmaic/lib/generation/generation-retry';
 import { mapWithConcurrencySettledOnError } from '@openmaic/lib/utils/concurrency';
 import {
   getClassroomSceneConcurrency,
+  getServerVideoProviders,
 } from '@openmaic/lib/server/provider-config';
 import { assertRequestedClassroomMediaProviders } from '@openmaic/lib/server/classroom-media-readiness';
 import { resolveLlmRequestTimeoutMs } from '@/lib/llm/request-policy';
 import { buildVideoManifestFromOutlines } from '@openmaic/lib/media/video-manifest';
-import { planMediaForConfirmedOutlines } from '@openmaic/lib/generation/media-planner';
 import { buildNarrationContext } from '@openmaic/lib/generation/narration-continuity';
-import { auditAndRepairGeneratedCourse } from '@openmaic/lib/generation/course-quality';
 import { findMissingRequiredTeachingTools } from '@openmaic/lib/generation/teaching-tool-plan';
-import { addStudentActivityPause } from '@openmaic/lib/generation/activity-gate';
 import { assertCompleteSceneGeneration } from '@openmaic/lib/generation/generation-completeness';
+import {
+  auditAndRepairGeneratedCourse,
+  type CourseQualityReport,
+} from '@openmaic/lib/generation/course-quality';
+import {
+  auditAndRepairSlideOnce,
+  auditSlideDensity,
+  auditSlideLayout,
+  slideKnowledgeCoverage,
+} from '@openmaic/lib/generation/slide-layout-audit';
+import {
+  auditCourseVisualConsistency,
+} from '@openmaic/lib/generation/course-visual-theme';
+import { OPENMAIC_GENERATION_BASELINE } from '@openmaic/lib/generation/openmaic-baseline';
+import {
+  auditNarrationLanguage,
+  narrationLanguageRepairDirective,
+  resolveCourseLanguagePolicy,
+} from '@openmaic/lib/generation/course-language';
 import type { SceneOutline, UserRequirements } from '@openmaic/lib/types/generation';
-import type { Action } from '@openmaic/lib/types/action';
 import { validatePblKnowledgeAlignment } from '@/lib/pbl-outline-validation';
 import type { Scene, Stage } from '@openmaic/lib/types/stage';
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@openmaic/lib/constants/agent-defaults';
 
 const log = createLogger('Classroom');
-const MAX_PAGE_GENERATION_RETRIES = 2;
-
-/** Slides already perform one evidence-preserving layout repair internally. */
-export function contentRetryBudget(type: SceneOutline['type']): number {
-  return type === 'slide' ? 0 : MAX_PAGE_GENERATION_RETRIES;
-}
-
-function getSpeechActionText(actions: ReadonlyArray<Action> | undefined): string {
-  return (actions ?? [])
-    .filter((action): action is Extract<Action, { type: 'speech' }> => (
-      action.type === 'speech' && Boolean(action.text)
-    ))
-    .map((action) => action.text)
-    .join('\n');
-}
+/** Page orchestration never retries a completed model response. Requests own fault retries. */
+export function contentRetryBudget(_type: SceneOutline['type']): number { return 0; }
 
 export interface GenerateClassroomInput {
+  /** Exact teacher-selected LLM locked when the generation job is created. */
+  generationModelString?: string;
   teachingSourceContext?: string;
   requirement: string;
   generationMode?: UserRequirements['generationMode'];
@@ -140,7 +142,7 @@ export interface GenerateClassroomResult {
   scenes: Scene[];
   scenesCount: number;
   createdAt: string;
-  qualityReport: import('@openmaic/lib/generation/course-quality').CourseQualityReport;
+  qualityReport: CourseQualityReport;
   /** Server-only context consumed by the post-response media task. */
   assetContext: {
     outlines: SceneOutline[];
@@ -165,7 +167,7 @@ export interface GenerateClassroomOptions {
     index: number,
     stageId: string,
   ) => Promise<Scene | null> | Scene | null;
-  /** Persist only a fully assembled page, after its timing correction pass. */
+  /** Persist only a fully assembled page, without a second content or timing pass. */
   onSceneCompleted?: (
     outline: SceneOutline,
     scene: Scene,
@@ -309,20 +311,28 @@ function inferOutlineQuiz(outline: SceneOutline): PblActivityTimingInput['quiz']
 export function attachTtsTimingPlans(
   outlines: SceneOutline[],
   selection: ServerTtsTimingSelection,
+  videoProviderId?: VideoProviderId,
 ): SceneOutline[] {
-  return outlines.map((outline) => {
-    if (outline.audience === 'teacher' || outline.ttsPolicy === 'none') {
-      return { ...outline, timingPlan: undefined };
-    }
+  const selectedVideoProvider = videoProviderId ?? (outlines.some((outline) =>
+    outline.mediaGenerations?.some((request) => request.type === 'video'))
+    ? Object.keys(getServerVideoProviders())[0] as VideoProviderId | undefined : undefined);
+  const planned = outlines.map((sourceOutline) => {
+    const { outline, videoSec } = prepareVideoTimingRequests(sourceOutline, selectedVideoProvider);
     const activityTargetSec = Math.max(
       1,
       Math.round(outline.targetDurationSec ?? outline.estimatedDuration ?? 60),
     );
+    if (videoSec >= activityTargetSec) {
+      throw Object.assign(new Error(`视频前置时长计算失败：${outline.id} 视频占用 ${videoSec} 秒，页面总预算仅 ${activityTargetSec} 秒，没有讲解或活动余量`), { isRetryable: false });
+    }
+    if (outline.audience === 'teacher' || outline.ttsPolicy === 'none') {
+      return { ...outline, timingPlan: undefined };
+    }
     const contentType = inferOutlineContentType(outline);
     const interaction = inferOutlineInteraction(outline);
     const quiz = inferOutlineQuiz(outline);
     const pageTiming = planPblPageTiming({
-      activityTargetSec,
+      activityTargetSec: activityTargetSec - videoSec,
       pageKind: outline.type === 'quiz'
         ? 'quiz'
         : outline.type === 'interactive'
@@ -337,6 +347,7 @@ export function attachTtsTimingPlans(
       timingPlan: buildTtsTimingPlan({
         targetDurationSec: pageTiming.narrationSec,
         activityTargetDurationSec: activityTargetSec,
+        videoSec,
         providerId: selection.providerId,
         modelId: selection.modelId,
         voiceId: selection.voiceId,
@@ -359,6 +370,7 @@ export function attachTtsTimingPlans(
       }),
     };
   });
+  return allocateTeachingStageTiming(planned);
 }
 
 /**
@@ -547,9 +559,9 @@ export async function generateClassroom(
     providerId,
     apiKey,
     thinkingConfig: classroomThinking,
-  } = await resolveModel({ stage: 'generate-classroom' });
+  } = await resolveModel({ modelString: input.generationModelString });
   throwIfAborted(options.signal);
-  log.info(`Using server-configured model: ${modelString}`);
+  log.info(`Using teacher-selected generation model for all course authoring calls: ${modelString}`);
 
   // Fail fast if the resolved provider has no API key configured
   if (isProviderKeyRequired(providerId) && !apiKey) {
@@ -559,72 +571,45 @@ export async function generateClassroom(
     );
   }
 
-  // The web-search query rewrite is a light, separable stage operators may route
-  // to a cheaper model. It defaults to the classroom model and is only
-  // re-resolved lazily (inside the web-search branch, and only when a route is
-  // configured). This keeps a misconfigured optional route from aborting all
-  // classroom generation, and skips the extra resolution when web search is off.
-  let searchQueryModel = languageModel;
-  let searchQueryThinking = classroomThinking;
+  const generationVision = modelInfo?.capabilities?.vision === true;
+  const aiCall = createCourseGenerationAiCall({
+    model: languageModel, vision: generationVision,
+    source: 'generate-classroom', signal: options.signal,
+    maxOutputTokens: modelInfo?.outputWindow, thinking: classroomThinking,
+    timeoutMs: resolveLlmRequestTimeoutMs('page-generation'),
+  });
+  // Interactive widgets return a full HTML/CSS/JS document and routinely need
+  // longer than a normal slide JSON response. Keep the exact same resolved
+  // teacher model, but use one bounded long request instead of three 180-second
+  // attempts that can fail a nearly completed course after many minutes.
+  const interactiveContentAiCall = createCourseGenerationAiCall({
+    model: languageModel,
+    vision: generationVision,
+    source: 'generate-classroom-interactive',
+    signal: options.signal,
+    maxOutputTokens: modelInfo?.outputWindow,
+    thinking: classroomThinking,
+    timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
+    maxRetries: 0,
+    streamResponse: true,
+  });
+  // Page content, action scripts, agent profiles, and repair drafts all use
+  // this exact model. Vision is a capability of that selection, never a reason
+  // to switch models behind the teacher's back.
+  const resolveSceneContentCall = async (outlineType: SceneOutline['type']) => ({
+    aiCall: outlineType === 'interactive' ? interactiveContentAiCall : aiCall,
+    vision: generationVision,
+    model: languageModel,
+    thinking: classroomThinking,
+  });
+  const getSceneActionsAiCall = async () => aiCall;
+  const getAgentProfilesAiCall = async () => aiCall;
 
-  const aiCall: AICallFn = async (systemPrompt, userPrompt, _images) => {
-    const result = await callLLM(
-      {
-        model: languageModel,
-        abortSignal: options.signal,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-        maxOutputTokens: modelInfo?.outputWindow,
-      },
-      'generate-classroom',
-      undefined,
-      classroomThinking,
-    );
-    return result.text;
-  };
-
-  const sceneAiCall: AICallFn = async (systemPrompt, userPrompt, _images) => {
-    // A single pathological page must not hold the entire classroom job
-    // indefinitely. Whole-course and graph generation retain their separate
-    // long timeout; a single page has a three-minute bound and checkpoint-level
-    // recovery can still retry only that missing page.
-    const pageTimeoutSignal = AbortSignal.timeout(
-      resolveLlmRequestTimeoutMs('page-generation'),
-    );
-    const pageSignal = options.signal
-      ? AbortSignal.any([options.signal, pageTimeoutSignal])
-      : pageTimeoutSignal;
-    const result = await callLLM(
-      {
-        model: languageModel,
-        abortSignal: pageSignal,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-        maxOutputTokens: modelInfo?.outputWindow,
-        maxRetries: 0,
-      },
-      'generate-classroom-scene',
-      undefined,
-      classroomThinking,
-    );
-    return result.text;
-  };
-
-  const searchQueryAiCall: AICallFn = async (systemPrompt, userPrompt, _images) => {
-    const result = await callLLM(
-      {
-        model: searchQueryModel,
-        abortSignal: options.signal,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-        maxOutputTokens: 256,
-      },
-      'web-search-query-rewrite',
-      undefined,
-      searchQueryThinking,
-    );
-    return result.text;
-  };
+  const searchQueryAiCall: AICallFn = (systemPrompt, userPrompt) => createCourseGenerationAiCall({
+    model: languageModel, vision: false, source: 'web-search-query-rewrite',
+    signal: options.signal, maxOutputTokens: 256, thinking: classroomThinking,
+    timeoutMs: resolveLlmRequestTimeoutMs('page-generation'),
+  })(systemPrompt, userPrompt);
 
   const requirements: UserRequirements = {
     requirement,
@@ -651,24 +636,6 @@ export async function generateClassroom(
   if (input.enableWebSearch) {
     const webSearchConfig = resolveClassroomWebSearchConfig(input);
     if (webSearchConfig) {
-      // Re-resolve the query-rewrite model only when explicitly routed. If
-      // resolution itself fails (e.g. unknown provider in the route), fall back
-      // to the classroom model here; a route with a missing key resolves fine
-      // and surfaces only later in callLLM, which the outer try/catch below
-      // degrades gracefully — either way the pipeline still works.
-      const rewriteRoute = getStageModel('web-search-query-rewrite');
-      if (rewriteRoute) {
-        try {
-          const rewriteResolved = await resolveModel({ stage: 'web-search-query-rewrite' });
-          searchQueryModel = rewriteResolved.model;
-          searchQueryThinking = rewriteResolved.thinkingConfig;
-        } catch (err) {
-          log.warn(
-            `web-search-query-rewrite route "${rewriteRoute}" unavailable; using classroom model for query rewrite`,
-            err,
-          );
-        }
-      }
       try {
         throwIfAborted(options.signal);
         const searchQuery = await buildSearchQuery(requirement, pdfText, searchQueryAiCall);
@@ -749,9 +716,8 @@ export async function generateClassroom(
     generatedCourseTitle = outlinesResult.data.courseTitle;
     generatedOutlines = outlinesResult.data.outlines;
   }
-  const languageDirective = input.languageDirective || generatedLanguageDirective;
   const courseTitle = input.courseTitle || generatedCourseTitle;
-  let baseOutlines = enforcePblOutlineContract(
+  const baseOutlines = enforcePblOutlineContract(
     preparedOutlines.length > 0
       ? preparedOutlines
       : confirmedOutlines.length > 0
@@ -759,53 +725,31 @@ export async function generateClassroom(
         : generatedOutlines,
     requirements,
   );
+  const courseLanguage = resolveCourseLanguagePolicy({
+    explicitDirective: input.languageDirective,
+    generatedDirective: generatedLanguageDirective,
+    ttsLanguage: input.ttsLanguage,
+    requirement,
+    courseTitle,
+    outlineText: baseOutlines.flatMap((outline) => [
+      outline.title,
+      outline.description,
+      ...(outline.keyPoints ?? []),
+    ]),
+  });
+  const languageDirective = courseLanguage.directive;
+  log.info(
+    `Resolved course language: ${courseLanguage.locale} (${courseLanguage.source})`,
+  );
   const outlineSource = preparedOutlines.length > 0
     ? 'prepared'
     : confirmedOutlines.length > 0
       ? 'confirmed'
       : 'generated';
-  // The selected outline planner owns page cadence. Never inject interaction
-  // pages after planning, and always preserve teacher-confirmed scene types.
-  if (
-    preparedOutlines.length === 0
-    && confirmedOutlines.length > 0
-    && (input.enableImageGeneration || input.enableVideoGeneration)
-  ) {
-    try {
-      baseOutlines = await withGenerationRetry(
-        () => planMediaForConfirmedOutlines(baseOutlines, aiCall, {
-          imageEnabled: Boolean(input.enableImageGeneration),
-          videoEnabled: Boolean(input.enableVideoGeneration),
-          researchContext,
-        }),
-        {
-          label: 'confirmed-outline media planning',
-          signal: options.signal,
-        },
-      );
-      log.info(
-        `Planned ${baseOutlines.flatMap((outline) => outline.mediaGenerations ?? []).length} optional media assets for confirmed outlines`,
-      );
-    } catch (error) {
-      if (options.signal?.aborted) throw error;
-      log.warn('Media planning failed; continuing with confirmed course content:', error);
-    }
-  }
-  // A shared storyboard makes the full deck coherent before independent page workers run.
-  if (baseOutlines.some((outline) => outline.type === 'slide' && !outline.visualPlan)) {
-    await reportProgress({ step: 'generating_outlines', progress: 28, message: '正在规划每页核心内容、图示与整体构图', scenesGenerated: 0, totalScenes: baseOutlines.length });
-    try {
-      baseOutlines = await withGenerationRetry(
-        () => planCourseSlideVisuals(baseOutlines, aiCall, input.teachingSourceContext ?? requirement),
-        { label: 'slide visual storyboards', maxRetries: 1, signal: options.signal },
-      );
-    } catch (error) {
-      if (options.signal?.aborted) throw error;
-      log.warn('Visual storyboarding unavailable; using semantic compositions:', error);
-      baseOutlines = baseOutlines.map((outline) => outline.type === 'slide'
-        ? { ...outline, visualPlan: outline.visualPlan ?? fallbackSlideVisualPlan(outline) } : outline);
-    }
-  }
+  // The official outline planner owns media choices. Confirmed outlines keep
+  // exactly the mediaGenerations it produced (or the teacher retained); a
+  // second CoTeach media-planning call changed page composition after outline
+  // approval and made this path diverge from OpenMAIC one-click generation.
   const ttsTimingSelection = resolveServerTtsTimingSelection({
     providerId: input.ttsProviderId,
     modelId: input.ttsModelId,
@@ -813,7 +757,7 @@ export async function generateClassroom(
     speed: input.ttsSpeed,
     language: input.ttsLanguage,
   });
-  const outlines = repairPblKnowledgeReferences(
+  const outlines = preparedOutlines.length ? baseOutlines : repairPblKnowledgeReferences(
     attachTtsTimingPlans(
       normalizeSceneOutlinesForDuration(baseOutlines),
       ttsTimingSelection,
@@ -844,7 +788,11 @@ export async function generateClassroom(
   if (agentMode === 'generate') {
     log.info('Generating custom agent profiles via LLM...');
     try {
-      agents = await generateAgentProfiles(requirement, languageDirective, aiCall);
+      agents = await generateAgentProfiles(
+        requirement,
+        languageDirective,
+        await getAgentProfilesAiCall(),
+      );
       log.info(`Generated ${agents.length} agent profiles`);
     } catch (e) {
       if (options.signal?.aborted) throw e;
@@ -862,7 +810,7 @@ export async function generateClassroom(
     description: undefined,
     languageDirective,
     videoManifest: buildVideoManifestFromOutlines(outlines),
-    style: 'interactive',
+    style: 'professional',
     createdAt: Date.now(),
     updatedAt: Date.now(),
     // For LLM-generated agents, embed full configs so the client can
@@ -889,8 +837,9 @@ export async function generateClassroom(
   const sceneConcurrency = getClassroomSceneConcurrency();
   log.info(`Generating scenes with bounded concurrency: ${sceneConcurrency}`);
   let generatedSceneDrafts = 0;
+  const layoutAuditPages: NonNullable<CourseQualityReport['layoutAudit']>['pages'] = [];
 
-  // Each worker keeps content -> actions (and the bounded timing correction)
+  // Each worker generates content -> actions once
   // sequential. Only independent scenes run concurrently; drafts are
   // assembled into the stage below in the original outline order.
   const sceneDrafts = await mapWithConcurrencySettledOnError(
@@ -915,217 +864,246 @@ export async function generateClassroom(
 
       const checkpoint = await options.loadSceneCheckpoint?.(safeOutline, index, stageId);
       if (checkpoint) {
-        const missingCheckpointTools = findMissingRequiredTeachingTools(safeOutline, {
-          sceneType: checkpoint.type,
-          content: checkpoint.content,
-          actions: checkpoint.actions,
-        });
-        if (missingCheckpointTools.length === 0) {
-          generatedSceneDrafts += 1;
-          await reportProgress({
-            step: 'generating_scenes',
-            progress: completedSceneGenerationProgress(generatedSceneDrafts, outlines.length),
-            message: `Restored ${generatedSceneDrafts}/${outlines.length} completed scenes`,
-            scenesGenerated: generatedSceneDrafts,
-            totalScenes: outlines.length,
-          });
-          return { outline: safeOutline, scene: checkpoint, index };
+        const checkpointLanguageIssues = auditNarrationLanguage(
+          checkpoint.actions,
+          courseLanguage.locale,
+        );
+        if (checkpointLanguageIssues.length > 0) {
+          log.warn(
+            `Ignoring checkpoint "${safeOutline.title}" because ${checkpointLanguageIssues.length} narration segment(s) do not match ${courseLanguage.locale}`,
+          );
+        } else {
+          if (safeOutline.type === 'slide') {
+            if (checkpoint.content.type !== 'slide') {
+              log.warn(`Ignoring checkpoint "${safeOutline.title}" because its content type is not slide`);
+            } else {
+              const checkpointContent = {
+                elements: checkpoint.content.canvas.elements,
+                background: checkpoint.content.canvas.background,
+                theme: checkpoint.content.canvas.theme,
+              };
+              const checkpointLayout = await auditSlideLayout(
+                checkpointContent,
+                safeOutline.id,
+              );
+              const checkpointDensity = auditSlideDensity(safeOutline, checkpointContent);
+              const checkpointKnowledgeCoverage = slideKnowledgeCoverage(
+                safeOutline.keyPoints,
+                checkpointContent.elements,
+              );
+              // Completed checkpoints are durable work. Density and semantic
+              // coverage are quality findings, not proof that the saved page
+              // is corrupt; reauthoring it on every continuation wastes model
+              // calls and can make a late single-page failure restart the deck.
+              // Only structural or rendered layout defects block reuse.
+              const checkpointBlockingIssues = checkpointLayout.issues;
+              if (checkpointBlockingIssues.length === 0) {
+                layoutAuditPages[index] = {
+                  outlineId: safeOutline.id,
+                  title: safeOutline.title,
+                  status: checkpointLayout.status,
+                  initialIssues: checkpointLayout.issues,
+                  finalIssues: checkpointLayout.issues,
+                  repairAttempted: false,
+                  adopted: 'checkpoint',
+                  initialKnowledgeCoverage: checkpointKnowledgeCoverage,
+                  finalKnowledgeCoverage: checkpointKnowledgeCoverage,
+                  initialDensityIssues: checkpointDensity.issues,
+                  finalDensityIssues: checkpointDensity.issues,
+                  initialVisibleTextCharacters: checkpointDensity.visibleTextCharacters,
+                  finalVisibleTextCharacters: checkpointDensity.visibleTextCharacters,
+                  initialVerticalSpan: checkpointDensity.verticalSpan,
+                  finalVerticalSpan: checkpointDensity.verticalSpan,
+                  initialContentAreaUtilization: checkpointDensity.contentAreaUtilization,
+                  finalContentAreaUtilization: checkpointDensity.contentAreaUtilization,
+                  initialMaxBlankBand: checkpointDensity.maxBlankBand,
+                  finalMaxBlankBand: checkpointDensity.maxBlankBand,
+                  initialHasDeepBlueTitle: checkpointDensity.hasDeepBlueTitle,
+                  finalHasDeepBlueTitle: checkpointDensity.hasDeepBlueTitle,
+                  initialHasSubtitle: checkpointDensity.hasSubtitle,
+                  finalHasSubtitle: checkpointDensity.hasSubtitle,
+                  semanticStructureRequired: checkpointDensity.semanticStructureRequired,
+                  initialSemanticStructures: checkpointDensity.semanticStructures,
+                  finalSemanticStructures: checkpointDensity.semanticStructures,
+                  initialSemanticStructureSatisfied: checkpointDensity.semanticStructureSatisfied,
+                  finalSemanticStructureSatisfied: checkpointDensity.semanticStructureSatisfied,
+                  initialPaletteDeviationCount: checkpointDensity.paletteDeviationCount,
+                  finalPaletteDeviationCount: checkpointDensity.paletteDeviationCount,
+                  initialElementCount: checkpointDensity.elementCount,
+                  finalElementCount: checkpointDensity.elementCount,
+                  initialSemanticElementCount: checkpointDensity.semanticElementCount,
+                  finalSemanticElementCount: checkpointDensity.semanticElementCount,
+                  initialQualityScore: undefined,
+                  finalQualityScore: undefined,
+                  reason: checkpointLayout.reason,
+                };
+                generatedSceneDrafts += 1;
+                await reportProgress({
+                  step: 'generating_scenes', progress: completedSceneGenerationProgress(generatedSceneDrafts, outlines.length),
+                  message: `Restored ${generatedSceneDrafts}/${outlines.length} audited scenes`,
+                  scenesGenerated: generatedSceneDrafts, totalScenes: outlines.length,
+                });
+                return { outline: safeOutline, scene: checkpoint, index };
+              }
+              log.warn(
+                `Ignoring checkpoint "${safeOutline.title}" because the resumed page failed structural/layout audit: ${checkpointBlockingIssues.join(' | ')}`,
+              );
+            }
+          } else {
+            generatedSceneDrafts += 1;
+            await reportProgress({
+              step: 'generating_scenes', progress: completedSceneGenerationProgress(generatedSceneDrafts, outlines.length),
+              message: `Restored ${generatedSceneDrafts}/${outlines.length} completed scenes`,
+              scenesGenerated: generatedSceneDrafts, totalScenes: outlines.length,
+            });
+            return { outline: safeOutline, scene: checkpoint, index };
+          }
         }
-        log.warn(
-          `Ignoring incomplete scene checkpoint "${safeOutline.title}": missing required tools ${missingCheckpointTools.join(', ')}`,
-        );
       }
 
-      const reportSceneRetry = async (
-        phase: 'content' | 'actions',
-        event: { attempt: number; maxAttempts: number; reason: string },
-      ) => {
-        const nextAttempt = Math.min(event.attempt + 1, event.maxAttempts);
-        const message = `Retrying scene ${index + 1}/${outlines.length} ${phase} (${nextAttempt}/${event.maxAttempts}): ${safeOutline.title}`;
-        log.warn(`${message} — ${event.reason}`);
-        await reportProgress({
-          step: 'generating_scenes',
-          progress: 31,
-          message,
-          scenesGenerated: 0,
-          totalScenes: outlines.length,
-        });
-      };
-
-      const content = await withGenerationRetry(
-        () =>
-          generateSceneContent(safeOutline, sceneAiCall, {
-            // Content review runs across the completed section in the background;
-            // keep the fast draft path bounded to concrete rendering/structure repair.
-            reviewSlideContent: false,
-            agents,
-            languageDirective,
-            userRequirements: requirements,
-            pblProfile: requirements.pblProfile,
-            allowProceduralSkill: vocationalActive,
-            signal: options.signal,
-            onSlideQualityRepair: async (attempt) => {
-              await reportProgress({
-                step: 'generating_scenes',
-                progress: completedSceneGenerationProgress(generatedSceneDrafts, outlines.length),
-                message: `Repairing scene ${index + 1}/${outlines.length} layout (${attempt}/1): ${safeOutline.title}`,
-                scenesGenerated: generatedSceneDrafts,
-                totalScenes: outlines.length,
-              });
-            },
-          }),
-        {
-          label: `scene ${index + 1}/${outlines.length} content`,
-          maxRetries: contentRetryBudget(safeOutline.type),
-          signal: options.signal,
-          shouldRetryResult: (result) => result === null,
-          onRetry: (event) => reportSceneRetry('content', event),
-        },
-      );
-      if (!content) {
-        const error = new Error(
-          `Scene "${safeOutline.title}" returned no usable content after page-level retries`,
-        );
-        Object.assign(error, { isRetryable: true });
-        throw error;
-      }
-      throwIfAborted(options.signal);
-
-      let actions = await withGenerationRetry(
-        () =>
-          generateSceneActions(safeOutline, content, sceneAiCall, {
-            ctx: buildNarrationContext(outlines, index),
-            agents,
-            languageDirective,
-            pblProfile: requirements.pblProfile,
-            teachingConstraints: requirements.teachingConstraints,
-            teachingSourceContext: requirements.teachingSourceContext,
-          }),
-        {
-          label: `scene ${index + 1}/${outlines.length} actions`,
-          maxRetries: MAX_PAGE_GENERATION_RETRIES,
-          signal: options.signal,
-          onRetry: (event) => reportSceneRetry('actions', event),
-        },
-      );
-      throwIfAborted(options.signal);
-
-      let missingRequiredTools = findMissingRequiredTeachingTools(safeOutline, {
-        sceneType: safeOutline.type,
-        content,
-        actions,
+      const contentCall = await resolveSceneContentCall(safeOutline.type);
+      const websiteReferenceContext = safeOutline.type === 'slide'
+        ? {
+            courseTitle,
+            slideTitles: outlines
+              .filter((item) => item.type === 'slide')
+              .map((item) => item.title),
+          }
+        : undefined;
+      let content = await generateSceneContent(safeOutline, contentCall.aiCall, {
+        agents, languageDirective, userRequirements: requirements,
+        pblProfile: requirements.pblProfile, allowProceduralSkill: vocationalActive,
+        signal: options.signal, visionEnabled: contentCall.vision,
+        languageModel: contentCall.model, thinkingConfig: contentCall.thinking,
+        ...(websiteReferenceContext ? { websiteReferenceContext } : {}),
       });
-      if (missingRequiredTools.length > 0) {
-        const correction = [
-          `The previous action script omitted these required teaching tools: ${missingRequiredTools.join(', ')}.`,
-          'Implement the planned trigger, purpose and visible content exactly where the narration reaches it.',
-        ].join(' ');
-        log.warn(`Correcting required tools for scene "${safeOutline.title}": ${missingRequiredTools.join(', ')}`);
-        actions = await withGenerationRetry(
-          () => generateSceneActions(safeOutline, content, sceneAiCall, {
-            ctx: buildNarrationContext(outlines, index),
-            agents,
-            languageDirective,
-            pblProfile: requirements.pblProfile,
-            teachingConstraints: requirements.teachingConstraints,
-            teachingSourceContext: requirements.teachingSourceContext,
-            teachingToolCorrection: correction,
-          }),
+      if (!content) throw Object.assign(new Error(`Scene "${safeOutline.title}" returned invalid content`), { isRetryable: false });
+      throwIfAborted(options.signal);
+      if (safeOutline.type === 'slide' && 'elements' in content) {
+        // The pinned OpenMAIC generator owns the first draft. A measured defect
+        // may invoke its own edit mode exactly once with the same teacher-picked
+        // model. The candidate is accepted only when browser/density evidence
+        // improves and the confirmed knowledge coverage is preserved.
+        const reviewed = await auditAndRepairSlideOnce({
+          outline: safeOutline,
+          content,
+          regenerate: async (editDirective, baselineContent) => {
+            try {
+              const candidate = await generateSceneContent(safeOutline, contentCall.aiCall, {
+                agents, languageDirective, userRequirements: requirements,
+                pblProfile: requirements.pblProfile,
+                allowProceduralSkill: vocationalActive,
+                signal: options.signal,
+                visionEnabled: contentCall.vision,
+                languageModel: contentCall.model,
+                thinkingConfig: contentCall.thinking,
+                editDirective,
+                baselineContent,
+                ...(websiteReferenceContext ? { websiteReferenceContext } : {}),
+              });
+              return candidate && 'elements' in candidate ? candidate : null;
+            } catch (error) {
+              if (options.signal?.aborted) throw error;
+              log.warn(
+                `Keeping the OpenMAIC first draft because the optional single page edit failed for "${safeOutline.title}":`,
+                error,
+              );
+              return null;
+            }
+          },
+        });
+        content = reviewed.content;
+        layoutAuditPages[index] = {
+          outlineId: safeOutline.id,
+          title: safeOutline.title,
+          status: reviewed.finalAudit.status,
+          initialIssues: reviewed.initialAudit.issues,
+          finalIssues: reviewed.finalAudit.issues,
+          repairAttempted: reviewed.repairAttempted,
+          adopted: reviewed.adopted,
+          initialKnowledgeCoverage: reviewed.initialKnowledgeCoverage,
+          finalKnowledgeCoverage: reviewed.finalKnowledgeCoverage,
+          initialDensityIssues: reviewed.initialDensityIssues,
+          finalDensityIssues: reviewed.finalDensityIssues,
+          initialVisibleTextCharacters: reviewed.initialVisibleTextCharacters,
+          finalVisibleTextCharacters: reviewed.finalVisibleTextCharacters,
+          initialVerticalSpan: reviewed.initialVerticalSpan,
+          finalVerticalSpan: reviewed.finalVerticalSpan,
+          initialContentAreaUtilization: reviewed.initialContentAreaUtilization,
+          finalContentAreaUtilization: reviewed.finalContentAreaUtilization,
+          initialMaxBlankBand: reviewed.initialMaxBlankBand,
+          finalMaxBlankBand: reviewed.finalMaxBlankBand,
+          initialHasDeepBlueTitle: reviewed.initialHasDeepBlueTitle,
+          finalHasDeepBlueTitle: reviewed.finalHasDeepBlueTitle,
+          initialHasSubtitle: reviewed.initialHasSubtitle,
+          finalHasSubtitle: reviewed.finalHasSubtitle,
+          semanticStructureRequired: reviewed.semanticStructureRequired,
+          initialSemanticStructures: reviewed.initialSemanticStructures,
+          finalSemanticStructures: reviewed.finalSemanticStructures,
+          initialSemanticStructureSatisfied: reviewed.initialSemanticStructureSatisfied,
+          finalSemanticStructureSatisfied: reviewed.finalSemanticStructureSatisfied,
+          initialPaletteDeviationCount: reviewed.initialPaletteDeviationCount,
+          finalPaletteDeviationCount: reviewed.finalPaletteDeviationCount,
+          initialElementCount: reviewed.initialElementCount,
+          finalElementCount: reviewed.finalElementCount,
+          initialSemanticElementCount: reviewed.initialSemanticElementCount,
+          finalSemanticElementCount: reviewed.finalSemanticElementCount,
+          initialQualityScore: reviewed.initialQualityScore,
+          finalQualityScore: reviewed.finalQualityScore,
+          reason: reviewed.finalAudit.reason,
+        };
+      }
+      throwIfAborted(options.signal);
+      const actionAiCall = await getSceneActionsAiCall();
+      const actionOptions = {
+        ctx: buildNarrationContext(outlines, index),
+        agents,
+        pblProfile: requirements.pblProfile,
+        teachingConstraints: requirements.teachingConstraints,
+        teachingSourceContext: requirements.teachingSourceContext,
+      };
+      let actions = await generateSceneActions(
+        safeOutline,
+        content,
+        actionAiCall,
+        {
+          ...actionOptions,
+          languageDirective,
+        },
+      );
+      let narrationLanguageIssues = auditNarrationLanguage(
+        actions,
+        courseLanguage.locale,
+      );
+      if (narrationLanguageIssues.length > 0) {
+        log.warn(
+          `Repairing ${narrationLanguageIssues.length} wrong-language narration segment(s) for "${safeOutline.title}"`,
+        );
+        actions = await generateSceneActions(
+          safeOutline,
+          content,
+          actionAiCall,
           {
-            label: `scene ${index + 1}/${outlines.length} required teaching tools`,
-            maxRetries: MAX_PAGE_GENERATION_RETRIES,
-            signal: options.signal,
-            onRetry: (event) => reportSceneRetry('actions', event),
+            ...actionOptions,
+            languageDirective: narrationLanguageRepairDirective(
+              courseLanguage,
+              narrationLanguageIssues,
+            ),
           },
         );
-        missingRequiredTools = findMissingRequiredTeachingTools(safeOutline, {
-          sceneType: safeOutline.type,
-          content,
+        narrationLanguageIssues = auditNarrationLanguage(
           actions,
-        });
-        if (missingRequiredTools.length > 0) {
+          courseLanguage.locale,
+        );
+        if (narrationLanguageIssues.length > 0) {
           const error = new Error(
-            `Scene "${safeOutline.title}" is missing required teaching tools after correction: ${missingRequiredTools.join(', ')}`,
+            `Scene "${safeOutline.title}" narration remained in the wrong language after one correction`,
           );
-          Object.assign(error, { isRetryable: true });
+          Object.assign(error, { isRetryable: false });
           throw error;
         }
       }
-
-      // A single bounded correction pass keeps the generated script close to
-      // the model-specific narration budget without creating an unbounded loop.
-      const timingPlan = safeOutline.timingPlan;
-      // Include the deterministic fallback feedback that assembly will add
-      // when the model omitted a closing speech line. Otherwise correction
-      // would underestimate the audio that is actually generated and played.
-      const firstSpeechText = getSpeechActionText(
-        addStudentActivityPause(safeOutline, actions),
-      );
-      if (timingPlan && firstSpeechText) {
-        const firstEstimatedSec = estimateSpeechDurationSec(firstSpeechText, {
-          providerId: timingPlan.providerId,
-          modelId: timingPlan.modelId,
-          voiceId: timingPlan.voiceId,
-          speed: timingPlan.speed,
-        });
-        const reservedActivitySec = (timingPlan.studentActivitySec ?? 0) + (timingPlan.transitionSec ?? 0);
-        const firstAssessment = assessTtsDurationError({
-          targetSec: timingPlan.activityTargetDurationSec ?? timingPlan.targetDurationSec,
-          actualSec: firstEstimatedSec + reservedActivitySec,
-        });
-        if (!firstAssessment.withinTolerance && timingPlan.targetDurationSec >= 30) {
-          const correctedActions = await withGenerationRetry(
-            () => generateSceneActions(safeOutline, content, sceneAiCall, {
-              ctx: buildNarrationContext(outlines, index),
-              agents,
-              languageDirective,
-              pblProfile: requirements.pblProfile,
-              teachingConstraints: requirements.teachingConstraints,
-              teachingSourceContext: requirements.teachingSourceContext,
-              timingCorrection: firstAssessment.suggestions.join('；'),
-            }),
-            {
-              label: `scene ${index + 1}/${outlines.length} timing correction`,
-              maxRetries: MAX_PAGE_GENERATION_RETRIES,
-              signal: options.signal,
-              onRetry: (event) => reportSceneRetry('actions', event),
-            },
-          );
-          const correctedText = getSpeechActionText(
-            addStudentActivityPause(safeOutline, correctedActions),
-          );
-          const correctedEstimatedSec = correctedText
-            ? estimateSpeechDurationSec(correctedText, {
-                providerId: timingPlan.providerId,
-                modelId: timingPlan.modelId,
-                voiceId: timingPlan.voiceId,
-                speed: timingPlan.speed,
-              })
-            : 0;
-          const activityTargetSec =
-            timingPlan.activityTargetDurationSec ?? timingPlan.targetDurationSec;
-          const correctedMissingTools = findMissingRequiredTeachingTools(safeOutline, {
-            sceneType: safeOutline.type,
-            content,
-            actions: correctedActions,
-          });
-          if (correctedMissingTools.length === 0 && correctedText && isActivityTimingCorrectionCloser({
-            activityTargetSec,
-            reservedActivitySec,
-            firstNarrationSec: firstEstimatedSec,
-            correctedNarrationSec: correctedEstimatedSec,
-          })) {
-            actions = correctedActions;
-          } else if (correctedMissingTools.length > 0) {
-            log.warn(
-              `Rejected timing correction for scene "${safeOutline.title}" because it omitted required tools: ${correctedMissingTools.join(', ')}`,
-            );
-          }
-          log.warn(
-            `Scene timing correction ${safeOutline.title}: activityTarget=${timingPlan.activityTargetDurationSec ?? timingPlan.targetDurationSec}s narrationTarget=${timingPlan.targetDurationSec}s firstTotal=${firstEstimatedSec + reservedActivitySec}s correctedTotal=${correctedEstimatedSec + reservedActivitySec}s`,
-          );
-        }
-      }
+      throwIfAborted(options.signal);
 
       log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
       // Keep the canonical assembler so restored and fresh pages have the
@@ -1133,14 +1111,15 @@ export async function generateClassroom(
       const pageStore = createInMemoryStore(stage);
       const pageApi = createStageAPI(pageStore);
       const sceneId = createSceneWithActions(safeOutline, content, actions, pageApi);
-      const scene = sceneId
+      const assembledScene = sceneId
         ? pageStore.getState().scenes.find((candidate) => candidate.id === sceneId) ?? null
         : null;
-      if (!scene) {
+      if (!assembledScene) {
         const error = new Error(`Scene "${safeOutline.title}" could not be assembled`);
-        Object.assign(error, { isRetryable: true });
+        Object.assign(error, { isRetryable: false });
         throw error;
       }
+      const scene = assembledScene;
       const assembledMissingTools = findMissingRequiredTeachingTools(safeOutline, {
         sceneType: scene.type,
         content: scene.content,
@@ -1150,7 +1129,7 @@ export async function generateClassroom(
         const error = new Error(
           `Assembled scene "${safeOutline.title}" is missing required teaching tools: ${assembledMissingTools.join(', ')}`,
         );
-        Object.assign(error, { isRetryable: true });
+        Object.assign(error, { isRetryable: false });
         throw error;
       }
       await options.onSceneCompleted?.(safeOutline, scene, index);
@@ -1204,11 +1183,58 @@ export async function generateClassroom(
     requirements.teachingConstraints,
   );
   const scenes = qualityResult.scenes;
-  if (qualityResult.report.corrections.length > 0) {
-    log.warn(`Course quality corrections: ${qualityResult.report.corrections.join(' | ')}`);
+  const visualConsistency = auditCourseVisualConsistency(outlines, scenes);
+  if (!visualConsistency.passed) {
+    qualityResult.report.warnings.push(
+      `全课 PPT 未达到 OpenMAIC 参考视觉规范：深蓝标题 ${visualConsistency.deepBlueTitleCount}/${visualConsistency.slideCount}，副标题 ${visualConsistency.subtitleCount}/${visualConsistency.slideCount}，语义结构 ${visualConsistency.semanticStructurePageCount}/${visualConsistency.semanticStructureRequiredCount}，参考色板偏离 ${visualConsistency.paletteDeviationCount} 处，平均可见字符 ${visualConsistency.averageVisibleTextCharacters}、元素 ${visualConsistency.averageElementCount}`,
+    );
   }
-  if (qualityResult.report.warnings.length > 0) {
-    log.warn(`Course quality warnings: ${qualityResult.report.warnings.join(' | ')}`);
+  const pages = layoutAuditPages.filter(Boolean);
+  const unavailablePages = pages.filter((page) => page.status === 'unavailable');
+  const uncheckedPages = pages.filter((page) => page.status === 'checkpoint-not-rechecked');
+  const unresolvedLayoutPages = pages.filter((page) => page.finalIssues.length > 0);
+  const unresolvedDensityPages = pages.filter((page) => (page.finalDensityIssues?.length ?? 0) > 0);
+  if (unavailablePages.length > 0) {
+    qualityResult.report.warnings.push(`有 ${unavailablePages.length} 页未能完成浏览器布局审计`);
+  }
+  if (uncheckedPages.length > 0) {
+    qualityResult.report.warnings.push(`有 ${uncheckedPages.length} 个断点恢复页面未在本轮重新审计`);
+  }
+  if (unresolvedLayoutPages.length > 0) {
+    qualityResult.report.warnings.push(`有 ${unresolvedLayoutPages.length} 页在单次修复后仍有可见布局问题`);
+  }
+  if (unresolvedDensityPages.length > 0) {
+    qualityResult.report.warnings.push(`有 ${unresolvedDensityPages.length} 页在单次修复后仍有信息覆盖或画布密度问题`);
+  }
+  const layoutStatus = pages.length > 0 && unavailablePages.length === pages.length
+    ? 'unavailable' as const
+    : unavailablePages.length > 0 || uncheckedPages.length > 0
+      ? 'partial' as const
+      : 'completed' as const;
+  const disposition = unavailablePages.length > 0
+    ? 'audit-unavailable' as const
+    : unresolvedLayoutPages.length > 0
+      || unresolvedDensityPages.length > 0
+      || !visualConsistency.passed
+      || qualityResult.report.warnings.length > 0
+      ? 'needs-review' as const
+      : 'ready' as const;
+  const qualityReport: CourseQualityReport = {
+    ...qualityResult.report,
+    ok: qualityResult.report.warnings.length === 0,
+    baselineVersion: `${OPENMAIC_GENERATION_BASELINE.release}@${OPENMAIC_GENERATION_BASELINE.releaseCommit.slice(0, 7)}/${OPENMAIC_GENERATION_BASELINE.package}@${OPENMAIC_GENERATION_BASELINE.version}`,
+    generationMethod: 'classic-one-click',
+    generationModelString: modelString,
+    referenceProfileVersion: OPENMAIC_GENERATION_BASELINE.referenceProfileVersion,
+    disposition,
+    visualConsistency,
+    layoutAudit: { status: layoutStatus, pages },
+  };
+  if (qualityReport.corrections.length > 0) {
+    log.warn(`Course quality corrections: ${qualityReport.corrections.join(' | ')}`);
+  }
+  if (qualityReport.warnings.length > 0) {
+    log.warn(`Course quality warnings: ${qualityReport.warnings.join(' | ')}`);
   }
   log.info(`Pipeline complete: ${scenes.length} scenes generated`);
 
@@ -1250,7 +1276,7 @@ export async function generateClassroom(
     scenes,
     scenesCount: scenes.length,
     createdAt: persisted.createdAt,
-    qualityReport: qualityResult.report,
+    qualityReport,
     assetContext: {
       outlines,
       enableImageGeneration: Boolean(input.enableImageGeneration),

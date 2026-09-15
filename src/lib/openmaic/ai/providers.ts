@@ -53,7 +53,7 @@ import {
   pickThinkingEffort,
 } from './thinking-config';
 import { createLogger } from '@openmaic/lib/logger';
-import { findModelById } from './model-aliases';
+import { findModelById, getCanonicalModelId } from './model-aliases';
 import { normalizeAzureBaseUrl } from './azure';
 // NOTE: Do NOT import thinking-context.ts here — it uses node:async_hooks
 // which is server-only, and this file is also used on the client via
@@ -761,6 +761,22 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     requiresApiKey: true,
     icon: '/logos/deepseek.svg',
     models: [
+      {
+        id: 'deepseek-v4.1-flash',
+        name: 'DeepSeek V4.1 Flash',
+        contextWindow: 1048576,
+        outputWindow: 393216,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: true,
+            budgetAdjustable: true,
+            defaultEnabled: true,
+          },
+        },
+      },
       {
         id: 'deepseek-v4-pro',
         name: 'DeepSeek V4 Pro',
@@ -1629,6 +1645,15 @@ function shouldUseOpenAIResponsesApi(providerId: ProviderId, modelId: string): b
   );
 }
 
+function usesOfficialDeepSeekEndpoint(providerId: ProviderId, baseUrl?: string): boolean {
+  if (providerId !== 'deepseek') return false;
+  try {
+    return new URL(baseUrl || 'https://api.deepseek.com/v1').hostname === 'api.deepseek.com';
+  } catch {
+    return false;
+  }
+}
+
 /** Returns true if the provider requires an API key (defaults to true for unknown providers). */
 export function isProviderKeyRequired(providerId: string): boolean {
   return getProviderConfig(providerId as ProviderId)?.requiresApiKey ?? true;
@@ -1800,9 +1825,12 @@ export function getModel(config: ModelConfig): ModelWithInfo {
       }
 
       const openai = createOpenAI(openaiOptions);
-      model = shouldUseOpenAIResponsesApi(config.providerId, config.modelId)
-        ? openai.responses(config.modelId)
-        : openai.chat(config.modelId);
+      const apiModelId = usesOfficialDeepSeekEndpoint(config.providerId, effectiveBaseUrl)
+        ? getCanonicalModelId(config.providerId, config.modelId)
+        : config.modelId;
+      model = shouldUseOpenAIResponsesApi(config.providerId, apiModelId)
+        ? openai.responses(apiModelId)
+        : openai.chat(apiModelId);
       // OpenAI-compatible providers (e.g. DeepSeek, Qwen) stream reasoning
       // either as a separate `reasoning_content` field (normalized to an inline
       // <think> block by compatFetch) or as native inline <think>.
@@ -1969,5 +1997,5 @@ export function getProvider(providerId: ProviderId): ProviderConfig | undefined 
  */
 export function getModelInfo(providerId: ProviderId, modelId: string): ModelInfo | undefined {
   const provider = PROVIDERS[providerId];
-  return provider?.models.find((m) => m.id === modelId);
+  return findModelById(providerId, provider?.models, modelId);
 }

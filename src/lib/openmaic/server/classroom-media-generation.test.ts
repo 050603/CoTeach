@@ -5,13 +5,11 @@ import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { Scene } from '@openmaic/lib/types/stage';
 import {
   buildInstructionalImagePrompt,
-  buildInstructionalImageRepairPrompt,
   findUnresolvedClassroomMedia,
   mediaServingUrl,
   normalizeCourseImageToAspectRatio,
   persistGeneratedClassroomImage,
   replaceMediaPlaceholders,
-  reviewGeneratedCourseImage,
   resolveCourseImageDimensions,
   validateGeneratedCourseImage,
 } from './classroom-media-generation';
@@ -115,26 +113,12 @@ describe('classroom media URL and placeholder backfill', () => {
       aspectRatio: '16:9',
     });
 
-    expect(prompt).toContain('中文必须逐字准确');
-    expect(prompt).toContain('不得擅自增加事实');
+    expect(prompt).toContain('精确文字、数值、公式和关系标签由页面原生可编辑元素呈现');
+    expect(prompt).toContain('不增加未经要求的事实');
     expect(resolveCourseImageDimensions('16:9')).toEqual({ width: 1280, height: 720 });
   });
 
-  it('turns the first review rejection into a focused final repair prompt', () => {
-    const prompt = buildInstructionalImageRepairPrompt({
-      type: 'image',
-      elementId: 'gen_img_1',
-      prompt: '用逐步减少的支架表现学习者能力提升',
-      aspectRatio: '16:9',
-    }, '教学图片质量审校未通过：支架数量没有随学习阶段减少');
-
-    expect(prompt).toContain('用逐步减少的支架表现学习者能力提升');
-    expect(prompt).toContain('上一版图片未通过教学质量检查');
-    expect(prompt).toContain('支架数量没有随学习阶段减少');
-    expect(prompt).not.toContain('教学图片质量审校未通过：教学图片质量审校未通过');
-  });
-
-  it('validates generated image integrity, resolution, and aspect ratio', async () => {
+  it('validates image integrity without rejecting a readable image for visual dimensions', async () => {
     const valid = await sharp({
       create: {
         width: 1280,
@@ -157,7 +141,7 @@ describe('classroom media URL and placeholder backfill', () => {
         background: '#f5f5f4',
       },
     }).png().toBuffer();
-    await expect(validateGeneratedCourseImage(tooSmall, '16:9')).rejects.toThrow('分辨率不足');
+    await expect(validateGeneratedCourseImage(tooSmall, '16:9')).resolves.toMatchObject({ width: 320, height: 180 });
 
     const wrongRatio = await sharp({
       create: {
@@ -167,7 +151,8 @@ describe('classroom media URL and placeholder backfill', () => {
         background: '#f5f5f4',
       },
     }).png().toBuffer();
-    await expect(validateGeneratedCourseImage(wrongRatio, '16:9')).rejects.toThrow('比例不符合');
+    await expect(validateGeneratedCourseImage(wrongRatio, '16:9')).resolves.toMatchObject({ width: 1024, height: 1024 });
+    await expect(validateGeneratedCourseImage(Buffer.from('invalid'))).rejects.toMatchObject({ code: 'GENERATED_IMAGE_INVALID', isRetryable: false });
   });
 
   it('normalizes provider output to a consistent 16:9 WebP cover', async () => {
@@ -188,68 +173,18 @@ describe('classroom media URL and placeholder backfill', () => {
     });
   });
 
-  it('does not write a generated cover when the independent reviewer rejects it', async () => {
+  it('persists the first readable image without calling any vision reviewer', async () => {
     const source = await sharp({ create: { width: 1280, height: 720, channels: 3, background: '#ffffff' } }).png().toBuffer();
     const write = vi.spyOn(fs, 'writeFile').mockResolvedValue(undefined);
-    const mkdir = vi.spyOn(fs, 'mkdir').mockResolvedValue(undefined);
-    const rejected = Object.assign(new Error('visible text'), { code: 'COURSE_COVER_QUALITY_REJECTED' });
-    const reviewer = vi.fn().mockRejectedValue(rejected);
+    vi.spyOn(fs, 'mkdir').mockResolvedValue(undefined);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
     await expect(persistGeneratedClassroomImage({
       result: { base64: source.toString('base64'), width: 1280, height: 720 },
-      classroomId: 'review-test', elementId: 'cover', baseUrl: '',
-      normalizeToAspectRatio: true, validateBeforePersist: reviewer,
-    })).rejects.toBe(rejected);
-    expect(reviewer).toHaveBeenCalledWith(expect.any(Buffer));
-    expect(write).not.toHaveBeenCalled();
-    expect(mkdir).not.toHaveBeenCalled();
-  });
-
-  it('uses Qwen vision review as a semantic quality gate', async () => {
-    const image = await sharp({
-      create: {
-        width: 1280,
-        height: 720,
-        channels: 3,
-        background: '#f5f5f4',
-      },
-    }).png().toBuffer();
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ message: { content: '{"pass":true,"issues":[]}' } }],
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(reviewGeneratedCourseImage({
-      buffer: image,
-      providerId: 'qwen-image',
-      apiKey: 'test-key',
-      requirement: '准确展示三个教学步骤，中文清晰',
-    })).resolves.toBeUndefined();
-
-    const request = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string) as {
-      messages: Array<{ content: Array<{ image_url?: { url?: string } }> }>;
-    };
-    expect(request.messages[1]?.content[0]?.image_url?.url).toMatch(/^data:image\/jpeg;base64,/);
-  });
-
-  it('rejects an image when semantic review finds garbled teaching text', async () => {
-    const image = await sharp({
-      create: {
-        width: 1280,
-        height: 720,
-        channels: 3,
-        background: '#f5f5f4',
-      },
-    }).png().toBuffer();
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ message: { content: '{"pass":false,"issues":["中文标签存在乱码"]}' } }],
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
-
-    await expect(reviewGeneratedCourseImage({
-      buffer: image,
-      providerId: 'qwen-image',
-      apiKey: 'test-key',
-      requirement: '中文教学流程图',
-    })).rejects.toThrow('中文标签存在乱码');
+      classroomId: 'single-pass-test', elementId: 'cover', baseUrl: '',
+    })).resolves.toContain('cover.png');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledTimes(1);
   });
 
 });

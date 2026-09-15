@@ -261,6 +261,8 @@ export interface VideoGenerationConfig {
  * Passed alongside VideoGenerationConfig to the provider.
  */
 export interface VideoGenerationOptions {
+  /** Cancellation applies to submit, polling and their bounded HTTP retries. */
+  signal?: AbortSignal;
   /** Text prompt describing the desired video */
   prompt: string;
   /** Desired video duration in seconds */
@@ -309,6 +311,12 @@ export interface MediaGenerationRequest {
   elementId: string;
   /** Desired aspect ratio */
   aspectRatio?: '16:9' | '4:3' | '1:1' | '9:16';
+  /** Video playback/generation duration in seconds, fixed before narration budgeting. */
+  duration?: number;
+  /** Provider whose capabilities determined the persisted video duration. */
+  videoProviderId?: VideoProviderId;
+  /** Whether the requested duration was supported or a provider default was used. */
+  durationSource?: 'requested' | 'provider-default';
   /** Optional artistic style hint */
   style?: string;
 }

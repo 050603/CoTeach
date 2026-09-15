@@ -14,15 +14,16 @@ export interface GenerationRetryOptions<T> {
   signal?: AbortSignal;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   random?: () => number;
+  /** @deprecated Completed responses never schedule another generation. */
   shouldRetryResult?: (result: T) => boolean;
   shouldRetryError?: (error: unknown) => boolean;
   onRetry?: (event: GenerationRetryEvent) => Promise<void> | void;
 }
 
-const DEFAULT_MAX_RETRIES = 5;
+const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_BASE_DELAY_MS = 1000;
 const DEFAULT_MAX_DELAY_MS = 16000;
-const RETRYABLE_STATUS_CODES = new Set([408, 409, 425, 429]);
+const RETRYABLE_STATUS_CODES = new Set([408, 429]);
 const NON_RETRYABLE_STATUS_CODES = new Set([400, 401, 403, 404, 422]);
 
 const defaultSleep = (ms: number, signal?: AbortSignal) =>
@@ -119,7 +120,7 @@ function messageFrom(value: unknown): string {
 
 function retryableByMessage(value: unknown): boolean {
   const message = messageFrom(value);
-  return /rate limit|too many requests|timeout|timed out|调用超时|请求超时|fetch failed|network|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EPIPE|socket hang up|empty response|no output generated|inference engine abort|model serving.*(?:abort|unknown)|finish reason:\s*\[?unknown/i.test(
+  return /rate limit|too many requests|timeout|timed out|调用超时|请求超时|fetch failed|network|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EPIPE|socket hang up/i.test(
     message,
   );
 }
@@ -145,12 +146,12 @@ export function isRetryableGenerationError(error: unknown, seen = new Set<unknow
 
   if (isRecord(error)) {
     const explicitRetryable = booleanField(error, 'isRetryable');
-    if (explicitRetryable !== undefined) return explicitRetryable;
+    if (explicitRetryable === false) return false;
   }
 
   const statusCode = statusCodeFrom(error);
   if (statusCode !== undefined) {
-    if (RETRYABLE_STATUS_CODES.has(statusCode) || statusCode >= 500) return true;
+    if (RETRYABLE_STATUS_CODES.has(statusCode) || [500, 502, 503, 504].includes(statusCode)) return true;
     if (NON_RETRYABLE_STATUS_CODES.has(statusCode) || (statusCode >= 400 && statusCode < 500)) {
       return false;
     }
@@ -165,9 +166,7 @@ export function isRetryableGenerationError(error: unknown, seen = new Set<unknow
   if (
     errorName === 'TimeoutError'
     || errorName === 'LlmTimeoutError'
-    || errorName === 'LlmEmptyResponseError'
-    || errorName === 'AI_EmptyResponseBodyError'
-    || errorName === 'AI_NoOutputGeneratedError'
+    || errorName === 'LlmRateLimitError'
   ) return true;
   if (error instanceof Error && error.name === 'TimeoutError') return true;
 
@@ -179,7 +178,9 @@ export function contextualizeGenerationError(error: unknown, context: string): E
   const detail = error instanceof Error ? error.message : String(error);
   const wrapped = new Error(`${context}: ${detail}`, { cause: error });
   const record = isRecord(error) ? error : null;
-  if (isRetryableGenerationError(error)) {
+  if (record?.isRetryable === false) {
+    Object.assign(wrapped, { isRetryable: false });
+  } else if (isRetryableGenerationError(error)) {
     Object.assign(wrapped, { isRetryable: true });
   }
   for (const key of ['code', 'status', 'statusCode', 'status_code'] as const) {
@@ -198,15 +199,27 @@ function retryReason(error: unknown): string {
   return message || 'retryable error';
 }
 
-function retryAfterMs(error: unknown, seen = new Set<unknown>()): number | undefined {
+export function generationRetryAfterMs(error: unknown, seen = new Set<unknown>()): number | undefined {
   if (!isRecord(error) || seen.has(error)) return undefined;
   seen.add(error);
 
   const direct = numberField(error, 'retryAfterMs') ?? numberField(error, 'retry_after_ms');
   if (direct !== undefined && direct >= 0) return direct;
 
+  // AI SDK API errors expose responseHeaders; fetch adapters may keep Headers.
+  for (const headers of [error.responseHeaders, error.headers, isRecord(error.response) ? error.response.headers : undefined]) {
+    const raw = headers instanceof Headers ? headers.get('retry-after')
+      : isRecord(headers) ? Object.entries(headers).find(([key]) => key.toLowerCase() === 'retry-after')?.[1]
+      : undefined;
+    if (typeof raw !== 'string') continue;
+    const seconds = Number(raw);
+    if (raw.trim() && Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+    const date = Date.parse(raw);
+    if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  }
+
   for (const nested of unwrapErrors(error)) {
-    const nestedDelay = retryAfterMs(nested, seen);
+    const nestedDelay = generationRetryAfterMs(nested, seen);
     if (nestedDelay !== undefined) return nestedDelay;
   }
   return undefined;
@@ -227,7 +240,7 @@ export async function withGenerationRetry<T>(
   operation: (attempt: number) => Promise<T>,
   options: GenerationRetryOptions<T>,
 ): Promise<T> {
-  const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const maxRetries = Math.max(0, Math.min(2, options.maxRetries ?? DEFAULT_MAX_RETRIES));
   const maxAttempts = maxRetries + 1;
   const baseDelayMs = options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
   const maxDelayMs = options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
@@ -241,20 +254,8 @@ export async function withGenerationRetry<T>(
       const result = await operation(attempt);
       throwIfAborted(options.signal);
 
-      if (!options.shouldRetryResult?.(result) || attempt >= maxAttempts) {
-        return result;
-      }
+      return result;
 
-      const nextDelayMs = retryDelayMs(attempt, baseDelayMs, maxDelayMs, random);
-      await options.onRetry?.({
-        label: options.label,
-        attempt,
-        maxAttempts,
-        nextDelayMs,
-        reason: 'empty result',
-      });
-      throwIfAborted(options.signal);
-      await sleep(nextDelayMs, options.signal);
     } catch (error) {
       if (isAbortError(error)) {
         throw error;
@@ -262,16 +263,14 @@ export async function withGenerationRetry<T>(
 
       throwIfAborted(options.signal);
 
-      const retryable = options.shouldRetryError
-        ? options.shouldRetryError(error)
-        : isRetryableGenerationError(error);
+      const retryable = isRetryableGenerationError(error) && (options.shouldRetryError?.(error) ?? true);
       if (attempt >= maxAttempts || !retryable) {
         throw error;
       }
 
       const nextDelayMs = Math.max(
         retryDelayMs(attempt, baseDelayMs, maxDelayMs, random),
-        retryAfterMs(error) ?? 0,
+        generationRetryAfterMs(error) ?? 0,
       );
       await options.onRetry?.({
         label: options.label,

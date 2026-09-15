@@ -4,6 +4,7 @@
  * API Docs: https://platform.minimaxi.com/docs/api-reference/image-generation-t2i
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import type {
   ImageGenerationConfig,
   ImageGenerationOptions,
@@ -22,7 +23,7 @@ export async function generateWithMiniMaxImage(
 
   const aspectRatio = options.aspectRatio || '1:1';
 
-  const response = await fetch(`${baseUrl}/v1/image_generation`, {
+  const response = await fetchMediaRequest(`${baseUrl}/v1/image_generation`, {
     method: 'POST',
     signal: options.signal,
     headers: {
@@ -40,13 +41,6 @@ export async function generateWithMiniMaxImage(
     }),
   });
 
-  if (!response.ok) {
-    const errText = await response.text().catch(() => response.statusText);
-    throw Object.assign(
-      new Error(`MiniMax Image API error (${response.status}): ${errText}`),
-      { statusCode: response.status },
-    );
-  }
 
   const data = await response.json();
 
@@ -54,12 +48,12 @@ export async function generateWithMiniMaxImage(
   if (data?.base_resp?.status_code !== 0 && data?.base_resp?.status_code !== undefined) {
     const code = data.base_resp.status_code;
     const msg = data.base_resp.status_msg || 'unknown error';
-    throw new Error(`MiniMax Image API error ${code}: ${msg}`);
+    throw mediaGenerationFailure(`MiniMax Image API error ${code}: ${msg}`);
   }
 
   const imageUrls = data?.data?.image_urls;
   if (!imageUrls || imageUrls.length === 0) {
-    throw new Error(`MiniMax Image: no image URLs returned. Response: ${JSON.stringify(data)}`);
+    throw mediaGenerationFailure(`MiniMax Image: no image URLs returned. Response: ${JSON.stringify(data)}`);
   }
 
   const imageUrl = imageUrls[0];

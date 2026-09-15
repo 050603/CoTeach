@@ -28,14 +28,127 @@ describe("quick positioning generation", () => {
       order: 9,
       stageKey: "launch",
       audience: "teacher",
-    }], { totalDurationSec: 1_200, knowledgePointIds: ["kp-1"] });
+    }], {
+      totalDurationSec: 1_200,
+      knowledgePointIds: ["kp-1"],
+      courseLanguageDirective: "本课程面向教师，使用专业、清晰的简体中文。",
+    });
 
     expect(outlines).toHaveLength(2);
     expect(outlines.every((item) => item.stageKey === "ai-learning")).toBe(true);
     expect(outlines.every((item) => item.audience === "student")).toBe(true);
+    expect(outlines[0]?.type).toBe("slide");
+    expect(outlines.some((item) => item.type === "interactive")).toBe(false);
     expect(outlines.some((item) => item.type === "slide")).toBe(true);
     expect(outlines.some((item) => item.type === "quiz")).toBe(true);
     expect(outlines.every((item) => item.knowledgePointIds?.includes("kp-1"))).toBe(true);
+    expect(outlines.every((item) => item.courseLanguageDirective === "本课程面向教师，使用专业、清晰的简体中文。"))
+      .toBe(true);
+  }, 15_000);
+
+  it("keeps the official page semantic fields unchanged after knowledge-point mapping", async () => {
+    const { normalizeNewSystemAiOutlines } = await import("./job-runner");
+    const input = [{
+      id: "constructivism",
+      type: "slide" as const,
+      title: "建构主义与以学生为中心",
+      description: "解释建构主义如何改变教师角色。",
+      keyPoints: [
+        "知识由学习者主动构建",
+        "教师从讲授者转为引导者",
+        "学生通过操作发现规律",
+        "避免纯讲授",
+      ],
+      knowledgePointIds: ["kp-constructivism"],
+      order: 0,
+    }];
+    const knowledgePoints = [{
+      id: "kp-constructivism",
+      name: "建构主义与以学生为中心",
+      description: "在 AI 课堂中应设计动手操作和探究活动。",
+      keyInfo: "知识基于已有经验主动构建；可让学生调试图像识别模型并自己发现规律。",
+      masteryBoundary: "能说明为何不能只使用教师讲授，并给出一项自主探索活动。",
+    }];
+
+    const once = normalizeNewSystemAiOutlines(input, {
+      totalDurationSec: 600,
+      knowledgePointIds: ["kp-constructivism"],
+      knowledgePoints,
+    });
+    const slide = once.find((outline) => outline.type === "slide");
+    expect(slide?.description).toBe("解释建构主义如何改变教师角色。");
+    expect(slide?.keyPoints).toEqual(input[0]?.keyPoints);
+    expect(JSON.stringify(slide)).not.toContain("资料上下文");
+    expect(JSON.stringify(slide)).not.toContain("资料事实");
+
+    const twice = normalizeNewSystemAiOutlines(once, {
+      totalDurationSec: 600,
+      knowledgePointIds: ["kp-constructivism"],
+      knowledgePoints,
+    });
+    expect(twice.find((outline) => outline.type === "slide")?.keyPoints).toEqual(slide?.keyPoints);
+    expect(twice.find((outline) => outline.type === "slide")?.description).toEqual(slide?.description);
+  });
+
+  it("preserves all upstream points without reserving slots for CoTeach fact packing", async () => {
+    const { normalizeNewSystemAiOutlines } = await import("./job-runner");
+    const base = {
+      type: "slide" as const,
+      description: "解释课堂中的学生实践。",
+      keyPoints: ["原则一", "原则二", "原则三", "原则四", "[Table] 原则比较"],
+      knowledgePointIds: ["kp-practice"],
+    };
+    const knowledgePoints = [{
+      id: "kp-practice",
+      name: "课堂实践",
+      description: "学生需要在真实任务中动手操作。",
+      keyInfo: "先观察模型输出；再调整输入条件；最后解释结果。",
+      masteryBoundary: "能够解释一次调整为何改善结果。",
+    }];
+
+    const normalized = normalizeNewSystemAiOutlines([
+      { ...base, id: "practice-observe", title: "观察模型输出", order: 0 },
+      { ...base, id: "practice-explain", title: "调整并解释", order: 1 },
+    ], {
+      totalDurationSec: 600,
+      knowledgePointIds: ["kp-practice"],
+      knowledgePoints,
+    });
+    const slides = normalized.filter((outline) => outline.type === "slide");
+    expect(slides).toHaveLength(2);
+    expect(slides.every((slide) => slide.keyPoints.length === 5)).toBe(true);
+    expect(slides.every((slide) => slide.keyPoints.at(-1) === "[Table] 原则比较")).toBe(true);
+    expect(slides.every((slide) => slide.description === "解释课堂中的学生实践。")).toBe(true);
+    expect(JSON.stringify(slides)).not.toContain("资料事实：");
+    expect(JSON.stringify(slides)).not.toContain("资料上下文：");
+  });
+
+  it("maps two knowledge points without changing the upstream comparison brief", async () => {
+    const { normalizeNewSystemAiOutlines } = await import("./job-runner");
+    const normalized = normalizeNewSystemAiOutlines([{
+      id: "shared-page",
+      type: "slide",
+      title: "学习理论对比",
+      description: "比较两种学习理论。",
+      keyPoints: ["[Table] 比较理论目标与课堂角色", "识别适用情境", "说明活动差异"],
+      knowledgePointIds: ["kp-a", "kp-b"],
+      order: 0,
+    }], {
+      totalDurationSec: 600,
+      knowledgePointIds: ["kp-a", "kp-b"],
+      knowledgePoints: [
+        { id: "kp-a", name: "建构主义", description: "学习者主动建构。", keyInfo: "通过操作和探究形成理解。" },
+        { id: "kp-b", name: "情境认知", description: "学习嵌入真实情境。", keyInfo: "真实问题促进知识迁移。" },
+      ],
+    });
+    const slide = normalized.find((outline) => outline.type === "slide");
+    expect(slide?.knowledgePointIds).toEqual(["kp-a", "kp-b"]);
+    expect(slide?.description).toBe("比较两种学习理论。");
+    expect(slide?.keyPoints).toEqual([
+      "[Table] 比较理论目标与课堂角色",
+      "识别适用情境",
+      "说明活动差异",
+    ]);
   });
 
   it("keeps an explicitly planned interaction and gives it the matching resource metadata", async () => {
@@ -84,6 +197,77 @@ describe("quick positioning generation", () => {
       detailKind: "other",
       resourceTypes: [],
     });
+  });
+
+  it("keeps the planner-owned visual direction separate from semantic page briefs", async () => {
+    const { normalizeNewSystemAiOutlines } = await import("./job-runner");
+    const direction = "深墨绿与暖沙色的现代编辑风格，以路径节点作为图形母题。";
+    const outlines = normalizeNewSystemAiOutlines([
+      {
+        id: "page-1",
+        type: "slide",
+        title: "先建立模型",
+        description: "解释核心模型。",
+        keyPoints: ["模型由条件与结论组成"],
+        courseVisualDirection: direction,
+        order: 0,
+      },
+      {
+        id: "page-2",
+        type: "slide",
+        title: "再检验边界",
+        description: "用反例检验模型。",
+        keyPoints: ["反例用于确认适用边界"],
+        courseVisualDirection: direction,
+        order: 1,
+      },
+    ], { totalDurationSec: 600, knowledgePointIds: ["kp-1"] });
+
+    const teachingPages = outlines.filter((outline) => outline.type !== "quiz");
+    expect(teachingPages).toHaveLength(2);
+    expect(teachingPages.every((outline) => outline.courseVisualDirection === direction)).toBe(true);
+    expect(teachingPages.map((outline) => outline.description)).toEqual([
+      "解释核心模型。",
+      "用反例检验模型。",
+    ]);
+  });
+
+  it("uses a minimal course requirement and leaves page structure to OpenMAIC", async () => {
+    const { buildOpenMaicKnowledgeLectureRequirement } = await import("./job-runner");
+    const requirement = buildOpenMaicKnowledgeLectureRequirement({
+      name: "AI 教学设计",
+      subject: "人工智能教育",
+      grade: "本科一年级",
+      summary: "理解教学设计理论并应用于真实案例",
+      learningObjectives: ["解释理论", "完成案例分析"],
+    } as Course, {
+      knowledgePoints: Array.from({ length: 12 }, (_, index) => ({
+        id: `kp-${index + 1}`,
+        name: `知识点 ${index + 1}`,
+        description: "",
+        groupName: `小节 ${Math.floor(index / 2) + 1}`,
+      })),
+    } as never, { courseId: "course-1", teacherBrief: "" } as never, 30);
+
+    expect(requirement).toContain("AI 授知阶段总时长约 30 分钟");
+    expect(requirement).toContain("PPT 讲授与必要互动约 12 分钟");
+    expect(requirement).toContain("不要生成 quiz 或 PBL");
+    expect(requirement).toContain("不要把一个完整概念机械拆成多张稀疏页面");
+    expect(requirement).toContain("keyPoints 应包含 4–6 个互补且可见的信息单元");
+    expect(requirement).toContain("不要为排版而默认添加 Table");
+    expect(requirement).toContain("内容按以下小节组织");
+    expect(requirement).toContain("以教师提供的课程资料作为事实依据");
+    expect(requirement).not.toContain("全课规划约");
+    expect(requirement).not.toContain("OpenMAIC v1.0.2");
+    expect(requirement).not.toContain("keyPoints 保留");
+    expect(requirement).not.toContain("[Table]");
+    expect(requirement).not.toContain("[Chart]");
+    expect(requirement).not.toContain("Workbench");
+    expect(requirement).not.toContain("materialFacts");
+    expect(requirement).not.toContain("【全课视觉方向】");
+    expect(requirement).not.toContain("110–180");
+    expect(requirement).not.toContain("Office 蓝橙");
+    expect(requirement).not.toContain("1–2 scenes per minute");
   });
 
   it("repairs a blank target grade instead of letting unknown learner context flow downstream", async () => {

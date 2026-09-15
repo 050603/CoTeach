@@ -39,7 +39,7 @@ describe("ensureTerminalMasteryAssessment", () => {
     ]);
   });
 
-  it("adds one terminal assessment when the model omitted it", () => {
+  it("adds one section assessment when the model omitted it", () => {
     const result = ensureTerminalMasteryAssessment([
       {
         ...scene("explain", "slide", ["kp-1"]),

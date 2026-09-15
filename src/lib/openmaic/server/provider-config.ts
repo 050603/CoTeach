@@ -12,6 +12,8 @@ import { createLogger } from '@openmaic/lib/logger';
 import { TTS_PROVIDERS } from '@openmaic/lib/audio/constants';
 import {
   registerTtsVoiceTimingCalibration,
+  getTtsCalibrationKey,
+  TTS_TIMING_ALGORITHM_VERSION,
   type TtsVoiceTimingCalibration,
 } from '@openmaic/lib/audio/tts-timing';
 import { prisma, isDatabaseConfigured } from '@/lib/db/client';
@@ -670,9 +672,15 @@ export function resolveTTSTimingCalibration(
   providerId: string,
   modelId: string,
   voiceId: string,
+  language = 'zh-CN',
+  speed = 1,
 ): TtsVoiceTimingCalibration | undefined {
+  const expectedKey = getTtsCalibrationKey({
+    providerId, modelId, voiceId, language, speed,
+    algorithmVersion: TTS_TIMING_ALGORITHM_VERSION,
+  });
   const calibration = getConfig().tts[providerId]?.timingCalibrations?.find(
-    (item) => item.modelId === modelId && item.voiceId === voiceId,
+    (item) => getTtsCalibrationKey(item) === expectedKey,
   );
   if (calibration) registerTtsVoiceTimingCalibration(calibration);
   return calibration;

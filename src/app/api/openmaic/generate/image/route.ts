@@ -40,6 +40,7 @@ import {
   rateLimitedResponse,
 } from '@/lib/auth/rate-limit';
 import { isAuthConfigured } from '@/lib/auth/session';
+import { mediaGenerationErrorResponse } from '@openmaic/lib/server/media-generation-error';
 
 const log = createLogger('ImageGeneration API');
 
@@ -169,6 +170,6 @@ export async function POST(request: NextRequest) {
       `Image generation failed [provider=${request.headers.get('x-image-provider') ?? 'seedream'}, model=${request.headers.get('x-image-model') ?? 'default'}]:`,
       error,
     );
-    return apiError('INTERNAL_ERROR', 500, message);
+    return mediaGenerationErrorResponse(error);
   }
 }

@@ -15,6 +15,7 @@
  * API docs: https://docs.x.ai/developers/rest-api-reference/inference/videos
  */
 
+import { fetchMediaRequest, mediaGenerationFailure } from '../media-request';
 import type {
   VideoGenerationConfig,
   VideoGenerationOptions,
@@ -126,20 +127,17 @@ async function submitVideoGeneration(
 
   if (options.duration) body.duration = options.duration;
 
-  const response = await fetch(`${baseUrl}/videos/generations`, {
+  const response = await fetchMediaRequest(`${baseUrl}/videos/generations`, {
+    signal: options.signal,
     method: 'POST',
     headers: apiHeaders(apiKey),
     body: JSON.stringify(body),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Grok video submit failed (${response.status}): ${text}`);
-  }
 
   const data = (await response.json()) as GrokVideoSubmitResponse;
   if (!data.request_id) {
-    throw new Error('Grok video returned empty request_id');
+    throw mediaGenerationFailure('Grok video returned empty request_id');
   }
 
   return data.request_id;
@@ -153,16 +151,14 @@ async function pollVideoStatus(
   baseUrl: string,
   apiKey: string,
   requestId: string,
+  signal?: AbortSignal,
 ): Promise<GrokVideoPollResponse> {
-  const response = await fetch(`${baseUrl}/videos/${requestId}`, {
+  const response = await fetchMediaRequest(`${baseUrl}/videos/${requestId}`, {
+    signal: signal,
     method: 'GET',
     headers: apiHeaders(apiKey),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Grok video poll failed (${response.status}): ${text}`);
-  }
 
   return response.json() as Promise<GrokVideoPollResponse>;
 }
@@ -184,11 +180,11 @@ export async function generateWithGrokVideo(
   // 2. Poll until done
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
     await delay(POLL_INTERVAL_MS);
-    const result = await pollVideoStatus(baseUrl, config.apiKey, requestId);
+    const result = await pollVideoStatus(baseUrl, config.apiKey, requestId, options.signal);
 
     if (result.status === 'done') {
       if (!result.video?.url) {
-        throw new Error('Grok video task completed but no video URL returned');
+        throw mediaGenerationFailure('Grok video task completed but no video URL returned');
       }
       const { width, height } = getDimensions(options.aspectRatio);
       return {
@@ -200,11 +196,14 @@ export async function generateWithGrokVideo(
     }
 
     if (result.status === 'failed') {
-      throw new Error(`Grok video generation failed: ${JSON.stringify(result)}`);
+      throw mediaGenerationFailure(`Grok video generation failed: ${JSON.stringify(result)}`);
+    }
+    if (result.status !== 'pending') {
+      throw mediaGenerationFailure('Grok video returned an invalid task status');
     }
   }
 
-  throw new Error(
+  throw mediaGenerationFailure(
     `Grok video generation timed out after ${(MAX_POLL_ATTEMPTS * POLL_INTERVAL_MS) / 1000}s (request: ${requestId})`,
   );
 }

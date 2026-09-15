@@ -7,8 +7,8 @@ import type { SurveyKeywordMode } from "@/lib/platform/survey-keyword-settings";
 import { cn } from "@/lib/utils";
 
 const MODES: Array<{ mode: SurveyKeywordMode; label: string; description: string }> = [
-  { mode: "local", label: "本地分词", description: "使用本机神经分词模型，响应更快。" },
-  { mode: "llm", label: "大模型分析", description: "复用下方 AI 服务的默认模型，更适合识别完整概念，首次分析稍慢。" },
+  { mode: "local", label: "本地高频词", description: "完全离线并过滤套话，按学生统计原词频；不合并同义表达。" },
+  { mode: "llm", label: "AI 主题聚合", description: "先提取原文证据，再把全班同义表达归并为简短主题；首次分析稍慢。" },
 ];
 
 async function readMode(response: Response): Promise<SurveyKeywordMode> {
@@ -55,7 +55,7 @@ export function SurveyKeywordSettings() {
       });
       const savedMode = await readMode(response);
       setMode(savedMode);
-      setNotice(`已保存：${savedMode === "local" ? "本地分词" : "大模型分析"}。重新打开问卷或等待看板自动更新即可生效。`);
+      setNotice(`已保存：${savedMode === "local" ? "本地高频词" : "AI 主题聚合"}。重新打开问卷或等待看板自动更新即可生效。`);
     } catch (reason) {
       setRetryMode(nextMode);
       setError(reason instanceof Error ? reason.message : "问卷分析设置保存失败。");
@@ -73,7 +73,7 @@ export function SurveyKeywordSettings() {
   }
 
   return <section aria-labelledby="survey-keyword-settings-heading" aria-busy={loading || saving !== null} className="mb-8 border-t border-[var(--pbl-border)] pt-7">
-    <h2 id="survey-keyword-settings-heading" className="text-xl font-semibold text-[var(--pbl-text-strong)]">问卷词云分析</h2>
+    <h2 id="survey-keyword-settings-heading" className="text-xl font-semibold text-[var(--pbl-text-strong)]">问卷主题云分析</h2>
     <p className="mt-2 text-sm leading-6 text-[var(--pbl-text-muted)]">仅对当前教师查看问卷时生效。点击下方按钮即可保存分析方式。</p>
     <div aria-label="问卷词云分析方式" role="group" className="mt-4 grid gap-3 sm:grid-cols-2">
       {MODES.map((option) => <button type="button" key={option.mode} aria-pressed={mode === option.mode} disabled={loading || saving !== null || mode === null} onClick={() => void save(option.mode)} className={cn("min-h-11 rounded-[10px] border px-4 py-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--pbl-teacher)] disabled:cursor-wait disabled:opacity-60", mode === option.mode ? "border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)]" : "border-[var(--pbl-border)] bg-white hover:border-[var(--pbl-teacher)]")}>
