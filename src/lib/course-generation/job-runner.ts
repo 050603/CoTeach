@@ -150,9 +150,15 @@ function localizedProgress(progress: ClassroomGenerationProgress): string {
   switch (progress.step) {
     case "initializing": return "正在初始化课程生成环境";
     case "researching": return "正在整理课程资料与教学要求";
-    case "generating_outlines": return "正在生成课程结构与页面安排";
+    case "generating_outlines":
+      return progress.message.startsWith("正在生成分小节教学设计")
+        || progress.message === "正在检查分小节教学设计"
+        ? progress.message
+        : "正在生成课程结构与页面安排";
     case "generating_scenes":
-      return progress.scenesGenerated > 0 && progress.totalScenes
+      return progress.message.startsWith("正在制作第 ")
+        ? progress.message
+        : progress.scenesGenerated > 0 && progress.totalScenes
         ? `已完成 ${progress.scenesGenerated} / ${progress.totalScenes} 个课堂页面`
         : "正在制作课堂页面与讲授内容";
     case "generating_media": return "正在补充课程图片与媒体资源";

@@ -984,8 +984,8 @@ export async function buildTeacherDashboardAdvice(
         ? `${makeArtifactStudentIds.size}/${course.students.length} 名学生已有成果记录，${makeSubmittedStudentIds.size}/${course.students.length} 名已有提交记录，当前记录到 ${makeInteractions.length} 条 AI 协作事件。`
         : stageKey === "showcase"
           ? showcaseRows.length
-            ? `当前有 ${showcaseRows.length} 份汇报申请，其中 ${showcaseRows.filter((item) => item.status === "ended").length} 份已结束、${showcaseRows.filter((item) => item.status === "active").length} 份正在汇报。`
-            : "本阶段尚未收到汇报申请。"
+            ? `当前有 ${showcaseRows.length} 份汇报记录，其中 ${showcaseRows.filter((item) => item.status === "ended").length} 份已结束、${showcaseRows.filter((item) => item.status === "active").length} 份正在汇报。`
+            : "本阶段尚未开始学生汇报。"
           : stageKey === "reflection"
             ? `${reflectionStudentIds.size}/${course.students.length} 名学生已提交学习反思。`
             : progressRows.some((row) => row.progress !== undefined)

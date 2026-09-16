@@ -7,7 +7,7 @@ import {
   clearServerProviderConfigCache,
   initializeServerProviderConfig,
 } from '@openmaic/lib/server/provider-config';
-import { prisma, isDatabaseConfigured } from '@/lib/db/client';
+import { providerPrisma, isProviderDatabaseConfigured } from '@/lib/db/client';
 import {
   decodeProviderSecret,
   encodeProviderSecret,
@@ -83,8 +83,8 @@ export async function mergeProviderTtsTimingCalibration(
   providerId: string,
   sample: TtsVoiceTimingCalibration,
 ): Promise<TtsVoiceTimingCalibration> {
-  if (isDatabaseConfigured()) {
-    const aggregate = await prisma.$transaction(async (tx) => {
+  if (isProviderDatabaseConfigured()) {
+    const aggregate = await providerPrisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`provider:tts:${providerId}`}))::text`;
       const row = await tx.providerCredential.findFirst({ where: { ownerId: null, name: 'tts', provider: providerId } });
       const entry = row ? providerRowToEntry(row) : { apiKey: '' };
@@ -131,8 +131,8 @@ export async function saveProviderEntry(
   providerId: string,
   entry: ProviderEntry,
 ): Promise<void> {
-  if (isDatabaseConfigured()) {
-    await prisma.$transaction(async (tx) => {
+  if (isProviderDatabaseConfigured()) {
+    await providerPrisma.$transaction(async (tx) => {
       // NULL ownerId is not covered by PostgreSQL's composite uniqueness.
       // Serialize global settings across processes, including first insertion.
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`provider:${section}:${providerId}`}))::text`;
@@ -190,8 +190,8 @@ export async function deleteProviderEntry(
   section: ProviderSection,
   providerId: string,
 ): Promise<void> {
-  if (isDatabaseConfigured()) {
-    await prisma.providerCredential.deleteMany({ where: { ownerId: null, name: section, provider: providerId } });
+  if (isProviderDatabaseConfigured()) {
+    await providerPrisma.providerCredential.deleteMany({ where: { ownerId: null, name: section, provider: providerId } });
     await initializeServerProviderConfig();
     return;
   }
@@ -212,8 +212,8 @@ export async function getProviderEntry(
   section: ProviderSection,
   providerId: string,
 ): Promise<ProviderEntry | null> {
-  if (isDatabaseConfigured()) {
-    const row = await prisma.providerCredential.findFirst({
+  if (isProviderDatabaseConfigured()) {
+    const row = await providerPrisma.providerCredential.findFirst({
       where: { ownerId: null, name: section, provider: providerId, status: 'ACTIVE' },
     });
     return row ? providerRowToEntry(row) : null;
@@ -238,8 +238,8 @@ export async function getProviderEntry(
 export async function listProviders(
   section: ProviderSection,
 ): Promise<Record<string, ProviderEntry>> {
-  if (isDatabaseConfigured()) {
-    const rows = await prisma.providerCredential.findMany({
+  if (isProviderDatabaseConfigured()) {
+    const rows = await providerPrisma.providerCredential.findMany({
       where: { ownerId: null, name: section, status: 'ACTIVE' },
       orderBy: { provider: 'asc' },
     });

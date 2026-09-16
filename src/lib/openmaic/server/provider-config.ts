@@ -16,7 +16,7 @@ import {
   TTS_TIMING_ALGORITHM_VERSION,
   type TtsVoiceTimingCalibration,
 } from '@openmaic/lib/audio/tts-timing';
-import { prisma, isDatabaseConfigured } from '@/lib/db/client';
+import { providerPrisma, isProviderDatabaseConfigured } from '@/lib/db/client';
 import { decodeProviderSecret } from '@/lib/security/provider-secret';
 
 const log = createLogger('ServerProviderConfig');
@@ -313,6 +313,7 @@ type ProviderConfigRuntimeState = {
   configs: Map<string, ServerConfig>;
   databaseYamlData: YamlData | null;
   initialization?: Promise<void>;
+  refreshTimer?: ReturnType<typeof setInterval>;
 };
 
 const PROVIDER_CONFIG_STATE_KEY = Symbol.for('openpbl.server-provider-config');
@@ -331,12 +332,12 @@ export async function initializeServerProviderConfig(): Promise<void> {
   const state = getProviderConfigRuntimeState();
   if (state.initialization) return state.initialization;
   state.initialization = (async () => {
-    if (!isDatabaseConfigured()) {
+    if (!isProviderDatabaseConfigured()) {
       state.databaseYamlData = {};
       state.configs.clear();
       return;
     }
-    const rows = await prisma.providerCredential.findMany({ where: { ownerId: null, status: 'ACTIVE' }, orderBy: { updatedAt: 'asc' } });
+    const rows = await providerPrisma.providerCredential.findMany({ where: { ownerId: null, status: 'ACTIVE' }, orderBy: { updatedAt: 'asc' } });
     const data: YamlData = {};
     for (const row of rows) {
       const section = row.name as keyof YamlData;
@@ -361,6 +362,21 @@ export async function initializeServerProviderConfig(): Promise<void> {
   } finally {
     state.initialization = undefined;
   }
+  ensureProviderConfigRefreshTimer(state);
+}
+
+function ensureProviderConfigRefreshTimer(state: ProviderConfigRuntimeState): void {
+  if (
+    state.refreshTimer ||
+    process.env.NODE_ENV !== 'production' ||
+    !isProviderDatabaseConfigured()
+  ) return;
+  state.refreshTimer = setInterval(() => {
+    void initializeServerProviderConfig().catch((error) => {
+      log.warn('[ServerProviderConfig] Shared provider refresh failed:', error);
+    });
+  }, 5_000);
+  state.refreshTimer.unref?.();
 }
 
 function applyOpenAIImageFallback(
@@ -708,6 +724,19 @@ export function resolveASRBaseUrl(providerId: string, clientBaseUrl?: string): s
   return resolveSectionBaseUrl('asr', providerId, clientBaseUrl);
 }
 
+/**
+ * Resolve the ASR model selected by the teacher. Managed ASR providers are
+ * authoritative for credentials, endpoint and model alike, so a stale model
+ * persisted in a student browser cannot override the current classroom
+ * configuration.
+ */
+export function resolveASRModel(providerId: string, clientModel?: string): string | undefined {
+  const entry = getConfig().asr[providerId];
+  if (entry?.defaultModel) return entry.defaultModel;
+  if (entry?.models && entry.models.length > 0) return entry.models[0];
+  return clientModel;
+}
+
 // ---------------------------------------------------------------------------
 // Public API — PDF
 // ---------------------------------------------------------------------------
@@ -853,12 +882,14 @@ export function getParallelSceneConcurrency(): number {
  *
  * The older client generation path keeps `getParallelSceneConcurrency()` opt-in
  * and defaults to serial generation. The teacher pipeline is now explicitly
- * finite-concurrent: it defaults to four scene workers and accepts the same
+ * finite-concurrent: it defaults to two scene workers and accepts the same
  * environment variable as an override, clamped to the supported 1-5 range.
+ * Two matches the validated course-quality lab and avoids placing four
+ * simultaneous long-reasoning JSON requests on one provider key.
  */
 export function getClassroomSceneConcurrency(): number {
   const configured = getParallelSceneConcurrency();
-  if (configured <= 0) return 4;
+  if (configured <= 0) return 2;
   return Math.min(configured, 5);
 }
 

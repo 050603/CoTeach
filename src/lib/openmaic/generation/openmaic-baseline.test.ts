@@ -119,7 +119,7 @@ describe('pinned OpenMAIC generation baseline', () => {
     expect(ai.mock.calls[0]?.[0]).toContain('# Scene Outline Generator');
   });
 
-  it('uses the official slide prompt without local visual or timing policy blocks', async () => {
+  it('keeps the official slide prompt and adds the shared teaching design only through the adapter', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [{
       type: 'text', left: 60, top: 60, width: 800, height: 80,
       content: '<p><span style="font-size:32px">随机抽样</span></p>',
@@ -129,8 +129,10 @@ describe('pinned OpenMAIC generation baseline', () => {
     expect(ai).toHaveBeenCalledOnce();
     const [system, user] = ai.mock.calls[0];
     expect(system).toContain('# Slide Content Generator');
-    expect(user).not.toContain('使用随机数表选择样本');
-    expect(user).not.toContain('样本来自明确界定的目标总体');
+    expect(system).toContain('CoTeach teaching enhancement adapter');
+    expect(system).not.toContain('使用随机数表选择样本');
+    expect(user).toContain('使用随机数表选择样本');
+    expect(user).toContain('样本来自明确界定的目标总体');
     expect(`${system}\n${user}`).not.toContain('Semantic page and narration budget');
     expect(`${system}\n${user}`).not.toContain('Course visual system');
     expect(`${system}\n${user}`).not.toContain('spatial budget');
@@ -152,10 +154,12 @@ describe('pinned OpenMAIC generation baseline', () => {
     const [system, user] = ai.mock.calls[0];
     expect(system).toContain('# Slide Content Generator');
     expect(system).toContain('OpenMAIC website course-deck reference profile');
+    expect(system).toContain('CoTeach teaching enhancement adapter');
     expect(system).toContain('#1E3A8A/#1E40AF');
     expect(system).toContain('Never use a table merely as a grid');
     expect(user).toContain('Course title: 统计入门');
     expect(user).toContain('随机抽样 | 抽样误差');
+    expect(user).toContain('总体中每个个体需要具有明确的被抽取机会');
     expect(`${system}\n${user}`).not.toContain('kp-private-id');
     expect(`${system}\n${user}`).not.toContain('targetDurationSec');
     expect(`${system}\n${user}`).not.toContain('spatial budget');

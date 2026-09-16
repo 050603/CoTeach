@@ -69,4 +69,22 @@ describe("showcase presentation route", () => {
     expect(response.status).toBe(400);
     expect(mocks.executeShowcaseAction).not.toHaveBeenCalled();
   });
+
+  it("accepts a teacher-started projection with an explicit student and artifact", async () => {
+    const response = await POST(request({ action: "start", studentId: "student-1", artifactKind: "pdf", artifactVersionId: "artifact-1", displayMode: "slides" }), context);
+    expect(response.status).toBe(200);
+    expect(mocks.executeShowcaseAction).toHaveBeenCalledWith(courseId, {
+      action: "start",
+      studentId: "student-1",
+      artifactKind: "pdf",
+      artifactVersionId: "artifact-1",
+      displayMode: "slides",
+    }, expect.anything());
+  });
+
+  it("no longer accepts student projection requests", async () => {
+    const response = await POST(request({ action: "request", artifactKind: "document", artifactVersionId: "artifact-1", displayMode: "continuous" }), context);
+    expect(response.status).toBe(400);
+    expect(mocks.executeShowcaseAction).not.toHaveBeenCalled();
+  });
 });

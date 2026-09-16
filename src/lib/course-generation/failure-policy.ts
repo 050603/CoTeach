@@ -162,12 +162,22 @@ export function deserializeCourseGenerationFailure(value: string): Error {
 export function formatCourseGenerationErrorForTeacher(error: unknown): string {
   const record = errorRecord(error);
   const code = stringValue(record?.code);
+  const name = error instanceof Error
+    ? error.name
+    : stringValue(record?.name);
+  const message = errorMessage(error);
   if (
     code === "IMAGE_PROVIDER_NOT_CONFIGURED"
     || code === "VIDEO_PROVIDER_NOT_CONFIGURED"
     || code === COURSE_MEDIA_GENERATION_INCOMPLETE
   ) {
-    return errorMessage(error);
+    return message;
+  }
+  if (
+    name === "TimeoutError"
+    || /Course model (?:request|stream).*(?:timed out|maximum duration)/i.test(message)
+  ) {
+    return "AI 页面生成在等待模型完整输出时超时；已经生成的页面均已保留，可从断点继续生成。";
   }
   if (isRetryableGenerationError(error)) {
     return "AI 页面生成服务连续多次未能完成最后的课堂页面；已经生成的页面均已保留，请稍后继续。";

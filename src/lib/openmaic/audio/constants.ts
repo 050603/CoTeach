@@ -1127,8 +1127,11 @@ export const ASR_PROVIDERS: Record<BuiltInASRProviderId, ASRProviderConfig> = {
     requiresApiKey: true,
     defaultBaseUrl: 'https://dashscope.aliyuncs.com/api/v1',
     icon: '/logos/bailian.svg',
-    models: [{ id: 'qwen3-asr-flash', name: 'Qwen3 ASR Flash' }],
-    defaultModelId: 'qwen3-asr-flash',
+    models: [
+      { id: 'qwen-audio-3.0-asr-flash', name: 'Qwen Audio 3.0 ASR Flash (推荐)' },
+      { id: 'qwen3-asr-flash', name: 'Qwen3 ASR Flash' },
+    ],
+    defaultModelId: 'qwen-audio-3.0-asr-flash',
     supportedLanguages: [
       // Qwen ASR supports 27 languages + auto-detect
       // If language is uncertain or mixed (e.g. Chinese-English-Japanese-Korean), use "auto" (do not specify language parameter)
@@ -1163,7 +1166,7 @@ export const ASR_PROVIDERS: Record<BuiltInASRProviderId, ASRProviderConfig> = {
       'uk', // Ukrainian
       'vi', // Vietnamese
     ],
-    supportedFormats: ['mp3', 'wav', 'webm', 'm4a', 'flac'],
+    supportedFormats: ['mp3', 'wav', 'webm', 'm4a', 'flac', 'ogg', 'opus', 'aac'],
   },
 
   'azure-asr': {

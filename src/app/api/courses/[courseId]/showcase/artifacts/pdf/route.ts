@@ -103,8 +103,9 @@ export async function POST(
       const candidate = stages[index];
       return Boolean(candidate && typeof candidate === "object" && (candidate as { key?: unknown }).key === key);
     });
-  if (course.status !== "teaching" || !newFiveStageCourse || !stage || typeof stage !== "object" || (stage as { key?: unknown }).key !== "make") {
-    return errorResponse("MAKE_INACTIVE", "只能在第三阶段项目实践中提交本地成果。", 409);
+  const activeStageKey = stage && typeof stage === "object" ? (stage as { key?: unknown }).key : undefined;
+  if (course.status !== "teaching" || !newFiveStageCourse || !["make", "showcase"].includes(String(activeStageKey))) {
+    return errorResponse("ARTIFACT_SUBMISSION_INACTIVE", "只能在项目实践或成果汇报阶段上传项目材料。", 409);
   }
   const member = await showcaseStore.findMember({
     where: { courseId, studentId },
@@ -162,8 +163,8 @@ export async function POST(
       const view = createShowcaseStore(tx);
       const lockedCourse = await view.loadCourse({ where: { id: courseId } });
       const lockedStages = Array.isArray(lockedCourse?.stages) ? lockedCourse.stages : [];
-      if (lockedCourse?.status !== 'teaching' || lockedStages[lockedCourse.currentStageIndex]?.key !== 'make') {
-        throw new ShowcasePresentationError('MAKE_INACTIVE', '只能在第三阶段项目实践中提交本地成果。', 409);
+      if (lockedCourse?.status !== 'teaching' || !['make', 'showcase'].includes(String(lockedStages[lockedCourse.currentStageIndex]?.key))) {
+        throw new ShowcasePresentationError('ARTIFACT_SUBMISSION_INACTIVE', '只能在项目实践或成果汇报阶段上传项目材料。', 409);
       }
       const participation = await tx.classroomParticipation.findFirst({ where: { instanceId: courseId, enrollment: { userId: studentId } }, include: { enrollment: true } });
       const lockedMember = await view.findMember({ where: { courseId, studentId } });

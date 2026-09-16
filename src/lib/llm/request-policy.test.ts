@@ -3,6 +3,7 @@ import {
   DURABLE_GENERATION_TRANSIENT_RETRIES,
   requestClassForCourseContentAction,
   resolveLlmRequestTimeoutMs,
+  resolveLlmStreamMaxDurationMs,
 } from "./request-policy";
 
 describe("LLM request timeout policy", () => {
@@ -35,6 +36,16 @@ describe("LLM request timeout policy", () => {
     })).toBe(900_000);
     expect(resolveLlmRequestTimeoutMs("long-generation", {
       OPENPBL_LLM_LONG_REQUEST_TIMEOUT_MS: "99999999",
+    })).toBe(1_800_000);
+  });
+
+  it("keeps active streams bounded independently from their inactivity timeout", () => {
+    expect(resolveLlmStreamMaxDurationMs({})).toBe(1_800_000);
+    expect(resolveLlmStreamMaxDurationMs({
+      OPENPBL_LLM_STREAM_MAX_DURATION_MS: "1200000",
+    })).toBe(1_200_000);
+    expect(resolveLlmStreamMaxDurationMs({
+      OPENPBL_LLM_STREAM_MAX_DURATION_MS: "99999999",
     })).toBe(1_800_000);
   });
 

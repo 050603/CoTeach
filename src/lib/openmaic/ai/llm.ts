@@ -394,11 +394,47 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
   params: T,
   source: string,
   thinking?: ThinkingConfig,
+  lifecycle: { onActivity?: () => void } = {},
 ): Promise<string> {
   return withCourseGenerationLlmSlot(async () => {
     const result = streamLLM(params, source, thinking);
-    const text = await result.text;
-    throwIfAborted(params.abortSignal);
-    return text;
+    let text = '';
+    let textCharacters = 0;
+    let reasoningCharacters = 0;
+    let activityEvents = 0;
+    const startedAt = Date.now();
+    try {
+      // Consume the complete event stream instead of awaiting `result.text` so
+      // reasoning deltas count as useful transport activity too. Deep-reasoning
+      // models can spend several minutes emitting reasoning before the first
+      // visible HTML token; treating that interval as a dead request caused
+      // valid interactive pages to be aborted at a fixed wall-clock deadline.
+      for await (const part of result.stream) {
+        activityEvents += 1;
+        lifecycle.onActivity?.();
+        if (part.type === 'text-delta') {
+          text += part.text;
+          textCharacters += part.text.length;
+        } else if (part.type === 'reasoning-delta') {
+          reasoningCharacters += part.text.length;
+        } else if (part.type === 'error') {
+          throw part.error;
+        } else if (part.type === 'abort') {
+          throw new DOMException(part.reason || 'Model stream aborted', 'AbortError');
+        }
+      }
+      throwIfAborted(params.abortSignal);
+      log.info(
+        `[${source}] Stream completed in ${Date.now() - startedAt}ms `
+        + `(events=${activityEvents}, reasoningChars=${reasoningCharacters}, textChars=${textCharacters})`,
+      );
+      return text;
+    } catch (error) {
+      log.warn(
+        `[${source}] Stream interrupted after ${Date.now() - startedAt}ms `
+        + `(events=${activityEvents}, reasoningChars=${reasoningCharacters}, textChars=${textCharacters})`,
+      );
+      throw error;
+    }
   }, { signal: params.abortSignal });
 }

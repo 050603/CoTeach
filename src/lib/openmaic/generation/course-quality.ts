@@ -11,6 +11,8 @@ export interface CourseQualityReport {
   generationMethod?: 'classic-one-click';
   generationModelString?: string;
   referenceProfileVersion?: string;
+  teachingEnhancementVersion?: string;
+  narrationEnhancementVersion?: string;
   disposition?: 'ready' | 'needs-review' | 'audit-unavailable';
   visualConsistency?: {
     expectedBackground?: string;

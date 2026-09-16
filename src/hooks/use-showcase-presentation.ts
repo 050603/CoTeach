@@ -155,7 +155,11 @@ export function useShowcasePresentation(courseId: string | undefined) {
     void load(controller.signal);
     const unsubscribe = subscribeShowcasePresentation(courseId, (payload) => {
       if (payload.snapshot || Object.prototype.hasOwnProperty.call(payload, "presentingGroupId") || Object.prototype.hasOwnProperty.call(payload, "presentingStudentId") || Object.prototype.hasOwnProperty.call(payload, "presentingStudentName")) {
-        setState((current) => current.data ? { ...current, data: applyRealtimePayload(current.data, payload), error: undefined } : current);
+        // Student devices only need queue/lifecycle refreshes. The active
+        // artifact and viewport stay teacher-side because the room watches
+        // the physical teacher projection.
+        const visiblePayload = isTeacherPage() ? payload : { ...payload, snapshot: undefined };
+        setState((current) => current.data ? { ...current, data: applyRealtimePayload(current.data, visiblePayload), error: undefined } : current);
         if (!payload.queue && (Object.prototype.hasOwnProperty.call(payload, "presentingStudentId") || payload.snapshot?.status !== "active")) {
           void load();
         }

@@ -110,6 +110,8 @@ export interface SettingsState {
       enabled: boolean;
       modelId?: string;
       customModels?: Array<{ id: string; name: string }>;
+      /** Models allowed by the teacher-managed server configuration. */
+      serverModels?: string[];
       providerOptions?: Record<string, unknown>;
       isServerConfigured?: boolean;
       // Custom provider fields
@@ -1341,15 +1343,18 @@ export const useSettingsStore = create<SettingsState>()(
                   newASRConfig[key] = {
                     ...newASRConfig[key],
                     isServerConfigured: false,
+                    serverModels: undefined,
                   };
                 }
               }
-              for (const pid of Object.keys(data.asr)) {
+              for (const [pid, info] of Object.entries(data.asr)) {
                 const key = pid as ASRProviderId;
                 if (newASRConfig[key]) {
                   newASRConfig[key] = {
                     ...newASRConfig[key],
                     isServerConfigured: true,
+                    serverModels: info.models,
+                    ...(info.defaultModel ? { modelId: info.defaultModel } : {}),
                   };
                 }
               }

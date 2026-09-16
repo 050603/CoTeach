@@ -63,6 +63,17 @@ describe("managed classroom-generation recovery", () => {
     });
   });
 
+  it("describes a single long model timeout without claiming multiple retries", () => {
+    const timeout = new DOMException("Course model request timed out", "TimeoutError");
+    const message = formatPersistedCourseGenerationErrorForTeacher(
+      serializeCourseGenerationFailure(timeout),
+    );
+
+    expect(message).toContain("等待模型完整输出时超时");
+    expect(message).toContain("可从断点继续生成");
+    expect(message).not.toContain("连续多次");
+  });
+
   it("keeps teaching-tool omissions terminal", () => {
     const persisted = serializeCourseGenerationFailure(new Error(
       'Scene "节末小测" is missing required teaching tools after correction: whiteboard',

@@ -388,7 +388,7 @@ function ShowcaseDashboard({ course, data, onFocus }: { course: Course; data?: S
     .map((item) => ({
       id: item.studentId,
       name: item.studentName,
-      reason: item.status === "pending-approval" ? "汇报申请待审批" : item.status === "rejected" ? "需要重新准备" : "正在汇报",
+      reason: item.status === "pending-approval" ? "等待教师发起投屏" : item.status === "rejected" ? "等待教师选择材料" : "正在汇报",
       onClick: () => onFocus({ stageKey: "showcase", target: "student", studentId: item.studentId }),
     }));
   return (
@@ -399,7 +399,7 @@ function ShowcaseDashboard({ course, data, onFocus }: { course: Course; data?: S
       <DashboardMetricStrip metrics={metrics.headlines.filter((item) => item.metricId !== "showcase-eta")} />
       <CompactSection icon={<Clock3 size={13} />} title="汇报提醒">
         <div className="mb-2 flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-2.5 py-2 text-[10px] text-stone-600"><span>计划 / 已完成平均</span><strong className="tabular-nums text-stone-900">{plannedMinutes} / {averageActual === undefined ? "—" : averageActual.toFixed(1)} 分钟</strong></div>
-        {metrics.pendingApprovals.length ? <AlertBanner tone="warning">有 {metrics.pendingApprovals.length} 项汇报申请待审批</AlertBanner> : metrics.current ? <AlertBanner tone="neutral">当前汇报流程正在进行，请留意计时与评价</AlertBanner> : metrics.next ? <AlertBanner tone="neutral">下一位汇报者已经就绪，可按队列推进</AlertBanner> : <AlertBanner tone="success">当前没有待处理的汇报动作</AlertBanner>}
+        {metrics.pendingApprovals.length ? <AlertBanner tone="warning">有 {metrics.pendingApprovals.length} 位学生等待教师发起投屏</AlertBanner> : metrics.current ? <AlertBanner tone="neutral">当前汇报流程正在进行，请留意计时与评价</AlertBanner> : metrics.next ? <AlertBanner tone="neutral">下一位汇报者已经就绪，可按队列推进</AlertBanner> : <AlertBanner tone="success">当前没有待处理的汇报动作</AlertBanner>}
       </CompactSection>
       <RealtimeTeachingActions course={course} stageKey="showcase" />
       <PatrolQueue emptyText="当前没有需要现场优先处理的汇报者" students={patrolStudents} title="现场关注" />

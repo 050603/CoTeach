@@ -6,9 +6,13 @@ export type EncryptedSecret = {
   authTag: Uint8Array<ArrayBuffer>;
 };
 
-export function encryptCredential(value: string, aad: string): EncryptedSecret | null {
+export function encryptCredential(
+  value: string,
+  aad: string,
+  keyOverride?: string,
+): EncryptedSecret | null {
   if (!value) return null;
-  const key = encryptionKey();
+  const key = encryptionKey(keyOverride);
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   cipher.setAAD(Buffer.from(aad));
@@ -25,10 +29,11 @@ export function decryptCredential(
   iv: Uint8Array | null,
   authTag: Uint8Array | null,
   aad: string,
+  keyOverride?: string,
 ): string {
   if (!encrypted) return "";
   if (!iv || !authTag) throw new Error("Encrypted provider credential is incomplete.");
-  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv));
+  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(keyOverride), Buffer.from(iv));
   decipher.setAAD(Buffer.from(aad));
   decipher.setAuthTag(Buffer.from(authTag));
   return Buffer.concat([
@@ -37,8 +42,8 @@ export function decryptCredential(
   ]).toString("utf8");
 }
 
-function encryptionKey(): Buffer {
-  const raw = process.env.PROVIDER_ENCRYPTION_KEY;
+function encryptionKey(keyOverride?: string): Buffer {
+  const raw = keyOverride || process.env.PROVIDER_ENCRYPTION_KEY;
   if (!raw) {
     if (process.env.NODE_ENV === "production") {
       throw new Error("PROVIDER_ENCRYPTION_KEY is required.");

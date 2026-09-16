@@ -15,6 +15,7 @@ const PAGE_GENERATION_TIMEOUT_MS = 180_000;
 // minute default while retaining an independent operator override.
 const QUALITY_REVIEW_TIMEOUT_MS = 300_000;
 const LONG_GENERATION_TIMEOUT_MS = 600_000;
+const STREAM_MAX_DURATION_MS = 1_800_000;
 const MIN_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 1_800_000;
 
@@ -51,6 +52,20 @@ export function resolveLlmRequestTimeoutMs(
   return boundedTimeout(
     environment.OPENPBL_LLM_REQUEST_TIMEOUT_MS,
     STANDARD_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Active model streams use the ordinary request timeout as an inactivity
+ * deadline. This independent ceiling prevents an upstream that keeps sending
+ * empty/control events from occupying a course-generation slot forever.
+ */
+export function resolveLlmStreamMaxDurationMs(
+  environment: TimeoutEnvironment = process.env,
+): number {
+  return boundedTimeout(
+    environment.OPENPBL_LLM_STREAM_MAX_DURATION_MS,
+    STREAM_MAX_DURATION_MS,
   );
 }
 

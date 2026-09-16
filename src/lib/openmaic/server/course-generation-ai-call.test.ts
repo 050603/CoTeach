@@ -63,4 +63,65 @@ describe('course generation model input', () => {
     await expect(call('system', 'widget')).rejects.toThrow('timed out');
     expect(mocks.stream).toHaveBeenCalledOnce();
   });
+
+  it('refreshes the stream inactivity deadline when reasoning or text arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.stream.mockReset().mockImplementation(async (...args: unknown[]) => {
+        const lifecycle = args[3] as { onActivity?: () => void } | undefined;
+        await new Promise<void>((resolve) => setTimeout(resolve, 750));
+        lifecycle?.onActivity?.();
+        await new Promise<void>((resolve) => setTimeout(resolve, 750));
+        lifecycle?.onActivity?.();
+        await new Promise<void>((resolve) => setTimeout(resolve, 750));
+        return '<html>complete widget</html>';
+      });
+      const call = createCourseGenerationAiCall({
+        model: {} as LanguageModel,
+        vision: false,
+        source: 'interactive',
+        timeoutMs: 1_000,
+        streamMaxDurationMs: 3_000,
+        maxRetries: 0,
+        streamResponse: true,
+      });
+      const result = call('system', 'widget');
+      await vi.advanceTimersByTimeAsync(2_250);
+      await expect(result).resolves.toBe('<html>complete widget</html>');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops a streamed request only after genuine inactivity', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.stream.mockReset().mockImplementation(async (...args: unknown[]) => {
+        const params = args[0] as { abortSignal?: AbortSignal };
+        return new Promise<string>((_resolve, reject) => {
+          params.abortSignal?.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+        });
+      });
+      const call = createCourseGenerationAiCall({
+        model: {} as LanguageModel,
+        vision: false,
+        source: 'interactive',
+        timeoutMs: 1_000,
+        streamMaxDurationMs: 3_000,
+        maxRetries: 0,
+        streamResponse: true,
+      });
+      const result = call('system', 'widget');
+      const rejection = expect(result).rejects.toThrow(
+        'Course model stream timed out after no reasoning or text activity',
+      );
+      await vi.advanceTimersByTimeAsync(1_001);
+      await rejection;
+      expect(mocks.stream).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -4,6 +4,8 @@ import {
   isServerConfiguredProvider,
   resolveASRApiKey,
   resolveASRBaseUrl,
+  resolveASRModel,
+  initializeServerProviderConfig,
 } from '@openmaic/lib/server/provider-config';
 import type { ASRProviderId } from '@openmaic/lib/audio/types';
 import { createLogger } from '@openmaic/lib/logger';
@@ -32,7 +34,10 @@ export async function POST(req: NextRequest) {
     // providerId is required from the client — no server-side store to fall back to
     const effectiveProviderId = providerId || ('openai-whisper' as ASRProviderId);
     resolvedProviderId = effectiveProviderId;
-    resolvedModelId = modelId ?? undefined;
+
+    // Refresh the shared provider snapshot so changes made from another
+    // deployment take effect without restarting this process.
+    await initializeServerProviderConfig();
 
     // Managed providers are admin-owned: ignore any client-sent key/baseUrl.
     const managed = isServerConfiguredProvider('asr', effectiveProviderId);
@@ -44,9 +49,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    resolvedModelId = resolveASRModel(effectiveProviderId, modelId || undefined);
     const config = {
       providerId: effectiveProviderId,
-      modelId: modelId || undefined,
+      modelId: resolvedModelId,
       language: language || 'auto',
       apiKey: resolveASRApiKey(effectiveProviderId, managed ? undefined : apiKey || undefined),
       baseUrl: resolveASRBaseUrl(effectiveProviderId, clientBaseUrl),

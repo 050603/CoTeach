@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
 import type { ShowcaseData, ShowcaseQueueItem } from "@/lib/showcase/types";
@@ -45,12 +45,13 @@ describe("NewShowcaseStudentView", () => {
     mocks.runAction.mockResolvedValue(state().data);
   });
 
-  it("shows the student's highlighted position and offers the next action", async () => {
+  it("shows the student's highlighted position without a student-side projection action", () => {
     render(<NewShowcaseStudentView course={course} />);
-    expect(screen.getByText("你已被选为汇报学生，请申请投屏")).toBeTruthy();
+    expect(screen.getByText("你已被选为汇报学生，请到讲台准备汇报")).toBeTruthy();
+    expect(screen.getByText(/教师会在教师机打开你的汇报材料并发起投屏/)).toBeTruthy();
     expect(screen.getAllByText("我").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getAllByRole("button", { name: /申请/ })[0]!);
-    await waitFor(() => expect(mocks.runAction).toHaveBeenCalledWith(expect.objectContaining({ action: "request", artifactKind: "document", artifactVersionId: "a1" })));
+    expect(screen.queryByRole("button", { name: /申请.*投屏|发起.*投屏/ })).toBeNull();
+    expect(mocks.runAction).not.toHaveBeenCalled();
   });
 
   it("keeps compact progress in the sticky sidebar and gives the preview more space", () => {
@@ -77,7 +78,7 @@ describe("NewShowcaseStudentView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "逐页演示" }));
     expect(screen.getByTestId("artifact-viewer").getAttribute("data-display-mode")).toBe("slides");
-    expect(screen.getByText("已选为主汇报资料")).toBeTruthy();
+    expect(screen.getByText("教师端可打开预览和投屏")).toBeTruthy();
   });
 
   it("explains that the teacher is evaluating after the projection ends", () => {

@@ -2,19 +2,17 @@
 
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { ArrowRight, Lock, User } from "lucide-react";
 import { TeacherAuthShell } from "@/components/platform/teacher-auth-shell";
+import { normalizeTeacherRedirect } from "./login-navigation";
 
 function TeacherLoginPageContent() {
-  const router = useRouter();
   const search = useSearchParams();
-  const redirect = search.get("redirect") ?? "/teacher";
+  const redirect = normalizeTeacherRedirect(search.get("redirect"));
   const sessionExpired = search.get("reason") === "session-expired";
   const [bootstrapAvailable, setBootstrapAvailable] = useState(false);
 
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,24 +27,41 @@ function TeacherLoginPageContent() {
     return () => { active = false; };
   }, []);
 
-  async function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitting) return;
+    const form = new FormData(e.currentTarget);
+    const username = String(form.get("username") ?? "").trim();
+    const password = String(form.get("password") ?? "");
+    if (!username || !password) {
+      setError("请输入教师账号和密码");
+      return;
+    }
     setError(null);
     setSubmitting(true);
     try {
       const res = await fetch("/api/platform/auth/teacher-login", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), password }),
+        body: JSON.stringify({ username, password }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
         setError(data?.message ?? "登录失败");
         return;
       }
-      router.push(redirect);
-      router.refresh();
+      const sessionResponse = await fetch("/api/auth/me", {
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { "X-OpenPBL-Role": "teacher" },
+      });
+      const session = await sessionResponse.json().catch(() => null);
+      if (!sessionResponse.ok || session?.user?.role !== "teacher") {
+        setError("浏览器未能保存登录状态。请允许本站使用 Cookie，并确认通过 HTTPS 地址访问后重试。");
+        return;
+      }
+      window.location.replace(redirect);
     } catch (err) {
       setError(err instanceof Error ? err.message : "网络错误,请重试");
     } finally {
@@ -75,11 +90,10 @@ function TeacherLoginPageContent() {
               <input
                 autoComplete="username"
                 className="pbl-auth-input"
-                onChange={(e) => setUsername(e.target.value)}
+                name="username"
                 placeholder="教师账号"
                 required
                 type="text"
-                value={username}
               />
             </div>
           </label>
@@ -94,12 +108,11 @@ function TeacherLoginPageContent() {
               />
               <input
                 className="pbl-auth-input"
-                onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
+                name="password"
                 placeholder="密码"
                 required
                 type="password"
-                value={password}
               />
             </div>
           </label>
@@ -112,7 +125,7 @@ function TeacherLoginPageContent() {
 
           <button
             className="pbl-auth-primary"
-            disabled={submitting || !username.trim() || !password}
+            disabled={submitting}
             type="submit"
           >
             <span>{submitting ? "登录中..." : "登录"}</span>

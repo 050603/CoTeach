@@ -128,6 +128,61 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.persist).toHaveBeenCalledOnce();
   });
 
+  it('regenerates an unmarked knowledge-page checkpoint so resumed courses cannot mix narration policies', async () => {
+    const enhancedOutline: SceneOutline = {
+      ...outline,
+      generationPurpose: 'knowledge-teaching',
+      audience: 'student',
+      teachingBrief: {
+        schemaVersion: 1,
+        explanation: '证据支持结论，语言流畅不能证明事实正确。',
+        examples: ['核对一个具体年份。'],
+        conditions: ['同源转载不是独立来源。'],
+        evidence: [],
+        assessmentFocus: '说明核验步骤和理由。',
+      },
+    };
+    const legacyCheckpoint = {
+      id: 'legacy-first-draft',
+      stageId: 'old-stage',
+      outlineId: enhancedOutline.id,
+      type: 'slide',
+      title: enhancedOutline.title,
+      order: 0,
+      content: {
+        type: 'slide',
+        canvas: {
+          id: 'legacy-canvas', viewportSize: 1000, viewportRatio: 0.5625,
+          elements: content.elements,
+        },
+      },
+      actions: [{ id: 'legacy-speech', type: 'speech', text: '首遍讲稿。' }],
+      createdAt: 1,
+      updatedAt: 1,
+    } as unknown as Scene;
+    mocks.ai.mockImplementation(async (system: string, user: string) => {
+      if (system.includes('# Slide Content Generator')) return JSON.stringify(content);
+      if (system.includes('Slide Action Generator')) return JSON.stringify(narration);
+      if (system.includes('中文课堂讲稿编辑')) {
+        const ids = [...user.matchAll(/^\[([^\]]+)]/gm)].map((match) => match[1]);
+        return JSON.stringify({ segments: ids.map((id) => ({
+          id,
+          text: '判断信息是否可靠，要回到独立来源核对事实和依据。',
+        })) });
+      }
+      throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
+    });
+
+    const result = await generateClassroom(input, {
+      preparedOutlines: [enhancedOutline],
+      loadSceneCheckpoint: () => legacyCheckpoint,
+    });
+
+    expect(mocks.ai).toHaveBeenCalledTimes(3);
+    expect(result.scenes[0]?.id).not.toBe('legacy-first-draft');
+    expect(result.scenes[0]?.narrationRevision).toBe('natural-teacher-speech-v2');
+  });
+
   it('regenerates a sparse resumed slide instead of bypassing the page audit', async () => {
     const themedOutline: SceneOutline = {
       ...outline,
@@ -152,9 +207,28 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       status: 'checked',
       issues: ['slide contains no elements'],
     });
-    mocks.ai
-      .mockResolvedValueOnce(JSON.stringify(content))
-      .mockResolvedValueOnce(JSON.stringify(narration));
+    mocks.ai.mockImplementation(async (system: string, user: string) => {
+      if (system.includes('课程小节的教学设计师')) {
+        return JSON.stringify({ pages: [{
+          outlineId: themedOutline.id,
+          explanation: '解释两个概念之间的证据关系。',
+          examples: ['用一个具体判断任务逐步说明。'],
+          conditions: ['结论只能落在已有证据范围内。'],
+          assessmentFocus: '说明判断和理由。',
+          evidenceQuotes: [],
+        }] });
+      }
+      if (system.includes('# Slide Content Generator')) return JSON.stringify(content);
+      if (system.includes('Slide Action Generator')) return JSON.stringify(narration);
+      if (system.includes('中文课堂讲稿编辑')) {
+        const ids = [...user.matchAll(/^\[([^\]]+)]/gm)].map((match) => match[1]);
+        return JSON.stringify({ segments: ids.map((id) => ({
+          id,
+          text: '先比较两个概念使用的证据，再判断结论能够成立到什么范围。',
+        })) });
+      }
+      throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
+    });
     const checkpoint = {
       id: 'sparse-checkpoint',
       stageId: 'old-stage',
@@ -179,6 +253,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         },
       },
       actions: [],
+      narrationRevision: 'natural-teacher-speech-v2',
       createdAt: 1,
       updatedAt: 1,
     } as unknown as Scene;
@@ -188,7 +263,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       loadSceneCheckpoint: () => checkpoint,
     });
 
-    expect(mocks.ai).toHaveBeenCalledTimes(2);
+    expect(mocks.ai).toHaveBeenCalledTimes(4);
     expect(result.scenes[0]?.id).not.toBe('sparse-checkpoint');
     expect(result.scenes[0]?.content.type).toBe('slide');
     if (result.scenes[0]?.content.type !== 'slide') throw new Error('Expected slide');
@@ -270,19 +345,138 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.persist).toHaveBeenCalledOnce();
   });
 
-  it('does not add a second CoTeach media-planning call after an official outline is confirmed', async () => {
-    mocks.ai.mockResolvedValueOnce(JSON.stringify(content)).mockResolvedValueOnce(JSON.stringify(narration));
+  it('adds one shared teaching-design call without restoring the obsolete media planner', async () => {
+    mocks.ai
+      .mockResolvedValueOnce(JSON.stringify({ pages: [{
+        outlineId: outline.id,
+        explanation: '解释两个概念之间的证据关系。',
+        examples: ['用一个具体判断任务逐步说明。'],
+        conditions: ['结论只能落在已有证据范围内。'],
+        assessmentFocus: '说明判断和理由。',
+        evidenceQuotes: [],
+      }] }))
+      .mockResolvedValueOnce(JSON.stringify(content))
+      .mockResolvedValueOnce(JSON.stringify(narration));
 
+    const onProgress = vi.fn();
     await generateClassroom({ ...input, enableImageGeneration: true, sceneOutlines: [outline] }, {
       loadSceneCheckpoint: () => null,
+      onProgress,
     });
 
-    expect(mocks.ai).toHaveBeenCalledTimes(2);
-    expect(mocks.ai.mock.calls[0]?.[0]).toContain('# Slide Content Generator');
-    expect(mocks.ai.mock.calls[1]?.[0]).toContain('Slide Action Generator');
+    expect(mocks.ai).toHaveBeenCalledTimes(3);
+    expect(mocks.ai.mock.calls[0]?.[0]).toContain('课程小节的教学设计师');
+    expect(mocks.ai.mock.calls[1]?.[0]).toContain('# Slide Content Generator');
+    expect(mocks.ai.mock.calls[2]?.[0]).toContain('Slide Action Generator');
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({
+      step: 'generating_outlines',
+      message: '正在生成分小节教学设计（1/1）',
+    }));
+    expect(mocks.prepare).not.toHaveBeenCalled();
+  });
+
+  it('carries one shared teaching design through slide, narration, and persisted outlines', async () => {
+    const enhancedOutline: SceneOutline = {
+      ...outline,
+      generationPurpose: 'knowledge-teaching',
+      audience: 'student',
+      parentActivityId: 'section-1',
+      narrationMode: 'embedded-segment',
+    };
+    mocks.ai.mockImplementation(async (system: string, user: string) => {
+      if (system.includes('课程小节的教学设计师')) {
+        return JSON.stringify({ pages: [{
+          outlineId: enhancedOutline.id,
+          explanation: '证据支持结论，表达流畅本身不能证明事实正确。',
+          examples: ['先标出年份主张，再查找独立原始资料并记录差异。'],
+          conditions: ['同源转载不能当作多个独立来源。'],
+          assessmentFocus: '说明核验步骤以及每一步的理由。',
+          evidenceQuotes: [],
+        }] });
+      }
+      if (system.includes('# Slide Content Generator')) return JSON.stringify(content);
+      if (system.includes('Slide Action Generator')) return JSON.stringify(narration);
+      if (system.includes('中文课堂讲稿编辑')) {
+        const ids = [...user.matchAll(/^\[([^\]]+)]/gm)].map((match) => match[1]);
+        return JSON.stringify({ segments: ids.map((id) => ({
+          id,
+          text: '大家先看这个具体回答。它的句子很通顺，细节也像是真的，但这些只能说明表达自然，不能证明事实成立。判断内容是否可靠，还要标出姓名、年份和数据，再回到独立的原始资料逐项核对。这样才能把语言表达和证据可靠性分开，也能说明每一步核验为什么必要。最后还要记录来源，让其他同学可以重复检查。',
+        })) });
+      }
+      throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
+    });
+
+    const result = await generateClassroom({
+      ...input,
+      sceneOutlines: [enhancedOutline],
+      courseTitle: '人工智能信息核验',
+      languageDirective: '使用简体中文授课',
+    }, { loadSceneCheckpoint: () => null });
+
+    expect(mocks.ai).toHaveBeenCalledTimes(4);
+    expect(mocks.ai.mock.calls[1]?.[0]).toContain('CoTeach teaching enhancement adapter');
+    expect(mocks.ai.mock.calls[1]?.[1]).toContain('同源转载不能当作多个独立来源');
+    expect(mocks.ai.mock.calls[2]?.[1]).toContain('说明核验步骤以及每一步的理由');
+    expect(result.assetContext.outlines[0]?.teachingBrief?.examples).toEqual([
+      '先标出年份主张，再查找独立原始资料并记录差异。',
+    ]);
+    expect(result.scenes[0]?.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'speech', text: expect.stringContaining('表达自然') }),
+    ]));
+    expect(result.scenes[0]?.narrationRevision).toBe('natural-teacher-speech-v2');
+    expect(result.qualityReport.teachingEnhancementVersion).toBe('section-teaching-brief-v2');
+    expect(result.qualityReport.narrationEnhancementVersion).toBe('natural-teacher-speech-v2');
+  });
+
+  it('does not publish a first-draft page when natural narration fails validation twice', async () => {
+    const enhancedOutline: SceneOutline = {
+      ...outline,
+      generationPurpose: 'knowledge-teaching',
+      audience: 'student',
+      parentActivityId: 'section-1',
+      narrationMode: 'embedded-segment',
+    };
+    mocks.ai.mockImplementation(async (system: string, user: string) => {
+      if (system.includes('课程小节的教学设计师')) {
+        return JSON.stringify({ pages: [{
+          outlineId: enhancedOutline.id,
+          explanation: '证据支持结论，表达流畅不能证明事实正确。',
+          examples: ['先标出事实主张，再查找独立资料。'],
+          conditions: ['同源转载不能当作多个独立来源。'],
+          assessmentFocus: '说明核验步骤和理由。',
+          evidenceQuotes: [],
+        }] });
+      }
+      if (system.includes('# Slide Content Generator')) return JSON.stringify(content);
+      if (system.includes('Slide Action Generator')) return JSON.stringify(narration);
+      if (system.includes('中文课堂讲稿编辑')) {
+        const ids = [...user.matchAll(/^\[([^\]]+)]/gm)].map((match) => match[1]);
+        return JSON.stringify({ segments: ids.map((id) => ({
+          id,
+          text: '这一页的核心观点是核验信息。',
+        })) });
+      }
+      throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
+    });
+
+    await expect(generateClassroom({
+      ...input,
+      sceneOutlines: [enhancedOutline],
+      languageDirective: '使用简体中文授课',
+    }, { loadSceneCheckpoint: () => null })).rejects.toThrow(/已停止课程生成/);
+
+    expect(mocks.ai).toHaveBeenCalledTimes(5);
+    expect(mocks.persist).not.toHaveBeenCalled();
   });
 
   it('resolves the teacher-selected model once and reuses it for every authoring call', async () => {
+    mocks.resolve.mockResolvedValue({
+      model: {},
+      modelInfo: { capabilities: { vision: true }, outputWindow: 393_216 },
+      modelString: 'deepseek:teacher-selected',
+      providerId: 'deepseek',
+      apiKey: 'test',
+    });
     mocks.ai.mockResolvedValueOnce(JSON.stringify(content)).mockResolvedValueOnce(JSON.stringify(narration));
     await generateClassroom({ ...input, generationModelString: 'deepseek:teacher-selected' }, {
       preparedOutlines: [outline],
@@ -291,14 +485,36 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.resolve).toHaveBeenCalledTimes(1);
     expect(mocks.resolve).toHaveBeenCalledWith({ modelString: 'deepseek:teacher-selected' });
     expect(mocks.ai).toHaveBeenCalledTimes(2);
-    expect(mocks.createAiCall).toHaveBeenNthCalledWith(2, expect.objectContaining({
+    const interactiveCall = mocks.createAiCall.mock.calls.find(([options]) => (
+      (options as { source?: string }).source === 'generate-classroom-interactive'
+    ));
+    expect(interactiveCall?.[0]).toEqual(expect.objectContaining({
       source: 'generate-classroom-interactive',
       timeoutMs: 600_000,
       maxRetries: 0,
       streamResponse: true,
     }));
-    expect(mocks.createAiCall.mock.calls[1]?.[0]?.model)
-      .toBe(mocks.createAiCall.mock.calls[0]?.[0]?.model);
+    for (const source of [
+      'generate-classroom',
+      'classroom-section-teaching-design',
+      'classroom-natural-narration',
+    ]) {
+      const structuredCall = mocks.createAiCall.mock.calls.find(([options]) => (
+        (options as { source?: string }).source === source
+      ));
+      expect(structuredCall?.[0]).toEqual(expect.objectContaining({
+        source,
+        timeoutMs: 600_000,
+        maxOutputTokens: 393_216,
+        maxRetries: 0,
+      }));
+      expect((structuredCall?.[0] as { streamResponse?: boolean }).streamResponse).toBe(
+        source === 'generate-classroom' ? true : undefined,
+      );
+    }
+    const selectedModel = mocks.createAiCall.mock.calls[0]?.[0]?.model;
+    expect(mocks.createAiCall.mock.calls.slice(0, 4).every(([options]) => options.model === selectedModel))
+      .toBe(true);
   });
 
   it('uses the same teacher-selected model for the one evidence-triggered page edit', async () => {

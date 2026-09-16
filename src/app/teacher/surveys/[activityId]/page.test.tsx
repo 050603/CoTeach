@@ -151,11 +151,11 @@ describe("teacher survey dashboard", () => {
       expect(chart).toHaveStyle({ "--survey-option-count": "4" });
       expect(robot).toHaveStyle({ "--survey-option-color": "#7c3aed" });
       expect(robot.querySelector("small")).toHaveAttribute("title", "利用人工智能支持学生开展跨学科项目学习");
-      expect(robot.querySelector("span > i")).toHaveStyle({ height: "3.3%" });
-      expect(empty.querySelector("span > i")).toHaveStyle({ height: "0%" });
+      expect(robot.querySelector("span > i")).toHaveStyle({ "--survey-option-ratio": "0.04" });
+      expect(empty.querySelector("span > i")).toHaveStyle({ "--survey-option-ratio": "0" });
     } else {
-      expect(robot.querySelector("i > b")).toHaveStyle({ width: "3.3%" });
-      expect(empty.querySelector("i > b")).toHaveStyle({ width: "0%" });
+      expect(robot.querySelector("i > b")).toHaveStyle({ "--survey-option-ratio": "0.04" });
+      expect(empty.querySelector("i > b")).toHaveStyle({ "--survey-option-ratio": "0" });
     }
     fireEvent.click(robot);
     expect(robot).toHaveAttribute("aria-pressed", "true");

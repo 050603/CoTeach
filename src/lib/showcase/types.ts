@@ -61,9 +61,9 @@ export type ShowcaseData = {
   presentingStudentName?: string;
   students: ShowcaseStudentSummary[];
   ownArtifacts: FinalArtifactSummary[];
-  /** Active presentation visible to every enrolled student, or teacher. */
+  /** Active teacher-side projection. Student responses intentionally omit it. */
   activePresentation?: ShowcasePresentationSnapshot | null;
-  /** The current student's request, or all teacher-visible requests. */
+  /** The current student's own history, or all teacher-visible presentation records. */
   presentations: ShowcasePresentationSnapshot[];
   queue: ShowcaseQueueItem[];
   minutesPerStudent: number;
@@ -90,25 +90,11 @@ export type ShowcaseAction =
       transitionSec?: number;
     }
   | {
-      action: "request";
+      action: "start";
+      studentId: string;
       artifactKind: "document" | "pdf";
       artifactVersionId: string;
       displayMode: ShowcaseDisplayMode;
-      requestId?: string;
-    }
-  | {
-      action: "review";
-      presentationId: string;
-      decision: "approve" | "reject";
-      reason?: string;
-    }
-  | {
-      action: "update";
-      presentationId: string;
-      viewState: {
-        page?: number;
-        scrollRatio?: number;
-      };
     }
   | {
       action: "end";

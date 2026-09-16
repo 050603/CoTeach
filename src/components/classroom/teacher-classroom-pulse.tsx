@@ -92,7 +92,7 @@ export function deriveTeacherClassroomPulse(
     const data = deriveShowcaseDashboardMetrics(course, showcaseData);
     const active = data.queue.filter((item) => ["called", "pending-approval", "presenting", "evaluating", "rejected"].includes(item.status)).length;
     return {
-      chartLabel: data.pendingApprovals.length ? `汇报队列 · ${data.pendingApprovals.length} 项待审批` : "汇报队列",
+      chartLabel: data.pendingApprovals.length ? `汇报队列 · ${data.pendingApprovals.length} 人待投屏` : "汇报队列",
       metrics: data.headlines,
       segments: [
         { label: "已评价", count: data.statusCounts.completed, className: "bg-emerald-600" },

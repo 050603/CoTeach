@@ -19,6 +19,13 @@ type SurveyResult = {
 
 const COLORS = ["#2563eb", "#0f766e", "#7c3aed", "#0891b2", "#c2410c", "#be185d", "#475569", "#4f46e5"];
 
+function choiceRatio(option: ChoiceQuestion["options"][number]) {
+  if (option.count <= 0) return 0;
+  const percentage = Number(option.percentage);
+  if (!Number.isFinite(percentage)) return 0.04;
+  return Math.max(0.04, Math.min(1, percentage / 100));
+}
+
 function choiceSlices(options: ChoiceQuestion["options"]) {
   let cursor = 0;
   const positiveOptions = options.filter((option) => option.percentage > 0).length;
@@ -35,12 +42,12 @@ function ChoiceChart({ question, selectedOptionId, onSelect }: { question: Choic
   if (question.chartType === "bar") return <div aria-label="选项比例条形图" className="survey-bar-chart" role="group">
     {question.options.map((option, index) => <button aria-label={`${option.label}，${option.percentage}%，${option.count} 人`} aria-pressed={selectedOptionId === option.id} className={selectedOptionId === option.id ? "is-selected" : ""} data-option-id={option.id} onClick={() => onSelect(option.id)} style={{ "--survey-option-color": COLORS[index % COLORS.length] } as CSSProperties} type="button" key={option.id}>
       <span><strong>{option.label}</strong><em>{option.percentage}%</em></span>
-      <i><b style={{ backgroundColor: COLORS[index % COLORS.length], width: `${option.percentage}%` }} /></i>
+      <i><b style={{ "--survey-option-ratio": choiceRatio(option), backgroundColor: COLORS[index % COLORS.length] } as CSSProperties} /></i>
     </button>)}
   </div>;
   if (question.chartType === "column") return <div aria-label="选项比例柱状图" className="survey-column-chart" role="group" style={{ "--survey-option-count": Math.max(question.options.length, 1) } as CSSProperties}>
     {question.options.map((option, index) => <button aria-label={`${option.label}，${option.percentage}%，${option.count} 人`} aria-pressed={selectedOptionId === option.id} className={selectedOptionId === option.id ? "is-selected" : ""} data-option-id={option.id} onClick={() => onSelect(option.id)} style={{ "--survey-option-color": COLORS[index % COLORS.length] } as CSSProperties} type="button" key={option.id}>
-      <strong>{option.percentage}%</strong><span aria-hidden="true"><i style={{ backgroundColor: COLORS[index % COLORS.length], height: `${option.percentage}%` }} /></span><small title={option.label}>{option.label}</small>
+      <strong>{option.percentage}%</strong><span aria-hidden="true"><i style={{ "--survey-option-ratio": choiceRatio(option), backgroundColor: COLORS[index % COLORS.length] } as CSSProperties} /></span><small title={option.label}>{option.label}</small>
     </button>)}
   </div>;
   const selectedOption = question.options.find((option) => option.id === selectedOptionId);

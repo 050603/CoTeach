@@ -8,6 +8,7 @@ import {
   getServerWebSearchProviders,
   getClassroomSceneConcurrency,
   getParallelSceneConcurrency,
+  initializeServerProviderConfig,
 } from '@openmaic/lib/server/provider-config';
 import { apiError, apiSuccess } from '@openmaic/lib/server/api-response';
 import { createLogger } from '@openmaic/lib/logger';
@@ -16,9 +17,13 @@ import { authenticateRequest } from '@/lib/auth/request-guards';
 const log = createLogger('ServerProviders');
 
 export async function GET(request: Request) {
-  const auth = await authenticateRequest(request, 'teacher');
+  // Students need the same redacted capability metadata to select the managed
+  // ASR/TTS providers used by the classroom. These getters never expose API
+  // keys or managed base URLs.
+  const auth = await authenticateRequest(request);
   if ('response' in auth) return auth.response;
   try {
+    await initializeServerProviderConfig();
     return apiSuccess({
       providers: getServerProviders(),
       tts: getServerTTSProviders(),

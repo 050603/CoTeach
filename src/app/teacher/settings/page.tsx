@@ -278,10 +278,7 @@ function configKey(section: ProviderSection, providerId: string) {
 }
 
 function modelsToText(models: string[] | undefined, provider: ProviderMeta) {
-  return [...new Set([
-    ...provider.models.map((model) => model.id),
-    ...(models ?? []),
-  ])].join("\n");
+  return (models?.length ? models : provider.models.map((model) => model.id)).join("\n");
 }
 
 function getInitialDefaultModel(provider: ProviderMeta, saved?: SavedConfig) {
@@ -889,6 +886,42 @@ export default function TeacherSettingsPage() {
     setSelectedLlmId(initialProvider.id);
     fillForm(initialProvider);
   }, [activeTab, configLoading, fillForm, getSavedConfig, providers, selectedLlmId]);
+
+  useEffect(() => {
+    if (
+      activeTab === "llm" ||
+      activeTab === "agent-voice" ||
+      activeTab === "knowledge-tutor" ||
+      activeTab === "quality-review" ||
+      expandedId ||
+      configLoading ||
+      providers.length === 0
+    ) return;
+
+    const configured = providers
+      .filter((provider) => {
+        const saved = getSavedConfig(currentTab.section, provider.id);
+        return saved?.hasApiKey || saved?.enabled !== undefined;
+      })
+      .sort((left, right) => {
+        const leftPriority = getSavedConfig(currentTab.section, left.id)?.priority;
+        const rightPriority = getSavedConfig(currentTab.section, right.id)?.priority;
+        return (leftPriority ?? Number.MAX_SAFE_INTEGER) -
+          (rightPriority ?? Number.MAX_SAFE_INTEGER);
+      });
+    const initialProvider = configured[0] ?? providers[0];
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Initialize the editor after its server config has loaded.
+    setExpandedId(initialProvider.id);
+    fillForm(initialProvider);
+  }, [
+    activeTab,
+    configLoading,
+    currentTab.section,
+    expandedId,
+    fillForm,
+    getSavedConfig,
+    providers,
+  ]);
 
   function selectProvider(provider: ProviderMeta) {
     fillForm(provider);
@@ -1807,8 +1840,12 @@ function ModalityConfigForm({
   onTest: () => void;
   onCalibrate?: () => void;
 }) {
-  const availableModels = provider.models ?? [];
   const modelIds = splitModelIds(editModels);
+  const providerModelMap = new Map(provider.models.map((model) => [model.id, model]));
+  const availableModels = [...new Set([
+    ...provider.models.map((model) => model.id),
+    ...modelIds,
+  ])].map((id) => providerModelMap.get(id) ?? { id, name: id });
   const availableVoices = getTTSVoices(provider.id as keyof typeof TTS_PROVIDERS);
   const activeCalibration = saved?.timingCalibrations?.find(
     (item) => item.modelId === editDefaultModel
@@ -1855,7 +1892,7 @@ function ModalityConfigForm({
       </div>
 
       {availableModels.length > 0 ? (
-          <Field label="模型" helper="选择保存后使用的默认模型。" icon={Bot}>
+          <Field label={`模型（${availableModels.length}）`} helper="列表同时显示内置目录与服务器已保存模型；选择后保存为默认模型。" icon={Bot}>
             <div className="grid gap-2 sm:grid-cols-2">
               {availableModels.map((m) => {
                 const isActive = editDefaultModel === m.id;
@@ -1884,7 +1921,10 @@ function ModalityConfigForm({
                     ) : (
                       <Circle size={12} />
                     )}
-                    <span className="min-w-0 truncate" title={m.name || m.id}>{m.name || m.id}</span>
+                    <span className="min-w-0 overflow-hidden">
+                      <span className="block truncate" title={m.name || m.id}>{m.name || m.id}</span>
+                      {m.name !== m.id ? <span className="block truncate text-[10px] opacity-70">{m.id}</span> : null}
+                    </span>
                   </button>
                 );
               })}

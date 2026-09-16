@@ -51,7 +51,10 @@ import {
   getServerVideoProviders,
 } from '@openmaic/lib/server/provider-config';
 import { assertRequestedClassroomMediaProviders } from '@openmaic/lib/server/classroom-media-readiness';
-import { resolveLlmRequestTimeoutMs } from '@/lib/llm/request-policy';
+import {
+  resolveLlmRequestTimeoutMs,
+  resolveLlmStreamMaxDurationMs,
+} from '@/lib/llm/request-policy';
 import { buildVideoManifestFromOutlines } from '@openmaic/lib/media/video-manifest';
 import { buildNarrationContext } from '@openmaic/lib/generation/narration-continuity';
 import { findMissingRequiredTeachingTools } from '@openmaic/lib/generation/teaching-tool-plan';
@@ -75,6 +78,15 @@ import {
   narrationLanguageRepairDirective,
   resolveCourseLanguagePolicy,
 } from '@openmaic/lib/generation/course-language';
+import {
+  enhanceTeachingBriefs,
+  hasCompleteTeachingBrief,
+  TEACHING_ENHANCEMENT_VERSION,
+} from '@openmaic/lib/generation/teaching-enhancement';
+import {
+  naturalizeKnowledgeNarration,
+  NATURAL_NARRATION_VERSION,
+} from '@openmaic/lib/generation/narration-style';
 import type { SceneOutline, UserRequirements } from '@openmaic/lib/types/generation';
 import { validatePblKnowledgeAlignment } from '@/lib/pbl-outline-validation';
 import type { Scene, Stage } from '@openmaic/lib/types/stage';
@@ -575,8 +587,40 @@ export async function generateClassroom(
   const aiCall = createCourseGenerationAiCall({
     model: languageModel, vision: generationVision,
     source: 'generate-classroom', signal: options.signal,
-    maxOutputTokens: modelInfo?.outputWindow, thinking: classroomThinking,
-    timeoutMs: resolveLlmRequestTimeoutMs('page-generation'),
+    // Reasoning tokens and visible JSON share the provider's output budget.
+    // DeepSeek V4.1 Flash used 6.5k reasoning tokens for a two-page teaching
+    // design in production, so a 16k cap can end before a slide JSON closes.
+    // Preserve the selected model's declared window, as the stable baseline did.
+    maxOutputTokens: modelInfo?.outputWindow,
+    thinking: classroomThinking,
+    timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
+    streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
+    maxRetries: 0,
+    // Long-reasoning slide calls can exceed the gateway's five-minute response
+    // header limit before a non-streaming body exists. Streaming establishes
+    // the response early; the full model output window above prevents the
+    // truncation that the former 16k streamed configuration caused.
+    streamResponse: true,
+  });
+  const teachingEnhancementAiCall = createCourseGenerationAiCall({
+    model: languageModel,
+    vision: false,
+    source: 'classroom-section-teaching-design',
+    signal: options.signal,
+    maxOutputTokens: modelInfo?.outputWindow,
+    thinking: classroomThinking,
+    timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
+    maxRetries: 0,
+  });
+  const narrationRewriteAiCall = createCourseGenerationAiCall({
+    model: languageModel,
+    vision: false,
+    source: 'classroom-natural-narration',
+    signal: options.signal,
+    maxOutputTokens: modelInfo?.outputWindow,
+    thinking: classroomThinking,
+    timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
+    maxRetries: 0,
   });
   // Interactive widgets return a full HTML/CSS/JS document and routinely need
   // longer than a normal slide JSON response. Keep the exact same resolved
@@ -592,6 +636,7 @@ export async function generateClassroom(
     timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
     maxRetries: 0,
     streamResponse: true,
+    streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
   });
   // Page content, action scripts, agent profiles, and repair drafts all use
   // this exact model. Vision is a capability of that selection, never a reason
@@ -757,13 +802,59 @@ export async function generateClassroom(
     speed: input.ttsSpeed,
     language: input.ttsLanguage,
   });
-  const outlines = preparedOutlines.length ? baseOutlines : repairPblKnowledgeReferences(
+  let outlines = preparedOutlines.length ? baseOutlines : repairPblKnowledgeReferences(
     attachTtsTimingPlans(
       normalizeSceneOutlinesForDuration(baseOutlines),
       ttsTimingSelection,
     ),
     input,
   );
+  const shouldEnhanceTeaching = preparedOutlines.length === 0 || outlines.some((outline) => (
+    outline.generationPurpose === 'knowledge-teaching'
+    && (outline.type === 'slide' || outline.type === 'interactive')
+    && !hasCompleteTeachingBrief(outline)
+  ));
+  if (shouldEnhanceTeaching) {
+    let teachingDesignProgress = { completedSections: 0, totalSections: 0 };
+    const reportTeachingDesignProgress = () => reportProgress({
+      step: 'generating_outlines',
+      progress: teachingDesignProgress.totalSections > 0
+        ? 18 + Math.floor((teachingDesignProgress.completedSections / teachingDesignProgress.totalSections) * 10)
+        : 18,
+      message: teachingDesignProgress.totalSections > 0
+        ? `正在生成分小节教学设计（${teachingDesignProgress.completedSections}/${teachingDesignProgress.totalSections}）`
+        : '正在检查分小节教学设计',
+      scenesGenerated: 0,
+      totalScenes: outlines.length,
+    });
+    const heartbeat = setInterval(() => {
+      void reportTeachingDesignProgress().catch((error) => {
+        if (!options.signal?.aborted) log.warn('Could not persist teaching-design heartbeat:', error);
+      });
+    }, 15_000);
+    try {
+      outlines = await enhanceTeachingBriefs({
+        outlines,
+        courseTitle,
+        requirement: requirements.requirement,
+        sourceContext: requirements.teachingSourceContext || pdfText || researchContext,
+        aiCall: teachingEnhancementAiCall,
+        concurrency: getClassroomSceneConcurrency(),
+        onProgress: async (progress) => {
+          teachingDesignProgress = progress;
+          log.info(
+            `Teaching design sections completed: ${progress.completedSections}/${progress.totalSections}`,
+          );
+          await reportTeachingDesignProgress();
+        },
+        onWarning: (warning) => {
+          log.warn(warning);
+        },
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }
   throwIfAborted(options.signal);
   validateConfirmedPblDetails(outlines, input);
   await options.onOutlinesPrepared?.(outlines);
@@ -851,6 +942,10 @@ export async function generateClassroom(
         allowProceduralSkill: vocationalActive,
         personalProject: requirements.pblProfile?.projectMode === 'personal',
       });
+      const requiresNaturalNarration = courseLanguage.locale === 'zh-CN'
+        && safeOutline.generationPurpose === 'knowledge-teaching'
+        && hasCompleteTeachingBrief(safeOutline);
+      let pageHeartbeat: ReturnType<typeof setInterval> | undefined;
       try {
       await reportProgress({
         step: 'generating_scenes',
@@ -861,6 +956,17 @@ export async function generateClassroom(
         scenesGenerated: 0,
         totalScenes: outlines.length,
       });
+      pageHeartbeat = setInterval(() => {
+        void reportProgress({
+          step: 'generating_scenes',
+          progress: completedSceneGenerationProgress(generatedSceneDrafts, outlines.length),
+          message: `正在制作第 ${index + 1}/${outlines.length} 页：${safeOutline.title}`,
+          scenesGenerated: generatedSceneDrafts,
+          totalScenes: outlines.length,
+        }).catch((error) => {
+          if (!options.signal?.aborted) log.warn(`Could not persist page heartbeat for "${safeOutline.title}":`, error);
+        });
+      }, 15_000);
 
       const checkpoint = await options.loadSceneCheckpoint?.(safeOutline, index, stageId);
       if (checkpoint) {
@@ -871,6 +977,13 @@ export async function generateClassroom(
         if (checkpointLanguageIssues.length > 0) {
           log.warn(
             `Ignoring checkpoint "${safeOutline.title}" because ${checkpointLanguageIssues.length} narration segment(s) do not match ${courseLanguage.locale}`,
+          );
+        } else if (
+          requiresNaturalNarration
+          && checkpoint.narrationRevision !== NATURAL_NARRATION_VERSION
+        ) {
+          log.warn(
+            `Ignoring checkpoint "${safeOutline.title}" because its narration did not pass ${NATURAL_NARRATION_VERSION}`,
           );
         } else {
           if (safeOutline.type === 'slide') {
@@ -1103,6 +1216,14 @@ export async function generateClassroom(
           throw error;
         }
       }
+      if (requiresNaturalNarration) {
+        actions = await naturalizeKnowledgeNarration({
+          outline: safeOutline,
+          actions,
+          aiCall: narrationRewriteAiCall,
+          context: actionOptions.ctx,
+        });
+      }
       throwIfAborted(options.signal);
 
       log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
@@ -1119,7 +1240,9 @@ export async function generateClassroom(
         Object.assign(error, { isRetryable: false });
         throw error;
       }
-      const scene = assembledScene;
+      const scene = requiresNaturalNarration
+        ? { ...assembledScene, narrationRevision: NATURAL_NARRATION_VERSION }
+        : assembledScene;
       const assembledMissingTools = findMissingRequiredTeachingTools(safeOutline, {
         sceneType: scene.type,
         content: scene.content,
@@ -1151,6 +1274,8 @@ export async function generateClassroom(
           error,
           `Scene ${index + 1}/${outlines.length} "${safeOutline.title}" failed`,
         );
+      } finally {
+        if (pageHeartbeat) clearInterval(pageHeartbeat);
       }
     },
     { shouldContinue: () => !options.signal?.aborted },
@@ -1226,6 +1351,8 @@ export async function generateClassroom(
     generationMethod: 'classic-one-click',
     generationModelString: modelString,
     referenceProfileVersion: OPENMAIC_GENERATION_BASELINE.referenceProfileVersion,
+    teachingEnhancementVersion: TEACHING_ENHANCEMENT_VERSION,
+    narrationEnhancementVersion: NATURAL_NARRATION_VERSION,
     disposition,
     visualConsistency,
     layoutAudit: { status: layoutStatus, pages },

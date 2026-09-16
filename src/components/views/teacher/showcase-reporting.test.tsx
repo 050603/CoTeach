@@ -14,13 +14,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/use-showcase-presentation", () => ({
   useShowcasePresentation: () => ({ ...mocks.state, runAction: mocks.runAction }),
 }));
-vi.mock("@/components/showcase/showcase-artifact-viewer", () => ({ ShowcaseArtifactViewer: () => <div data-testid="artifact-viewer" /> }));
+vi.mock("@/components/showcase/showcase-artifact-viewer", () => ({ ShowcaseArtifactViewer: ({ artifact, displayMode, mode }: { artifact: { versionId: string }; displayMode?: string; mode: string }) => <div data-display-mode={displayMode} data-mode={mode} data-testid="artifact-viewer" data-version-id={artifact.versionId} /> }));
 
 import { TeacherPresentationActionsProvider } from "@/components/classroom/teacher-presentation-actions";
 import { NewShowcaseTeacherView } from "./showcase-reporting";
 
 const now = "2026-09-05T10:00:00.000Z";
 const artifact = { kind: "document" as const, versionId: "a1", title: "校园节水方案", sequence: 1, submittedAt: now, displayModes: ["continuous" as const] };
+const pdfArtifact = { kind: "pdf" as const, versionId: "pdf-1", title: "校园节水汇报.pdf", sequence: 2, submittedAt: now, displayModes: ["continuous" as const, "slides" as const] };
 const course: Course = {
   id: "course-1", name: "测试课", subject: "科学", grade: "六年级", hours: 2, summary: "", drivingQuestion: "", status: "teaching",
   stages: getStagesForSystemMode("new"), currentStageIndex: 3,
@@ -71,6 +72,29 @@ describe("NewShowcaseTeacherView", () => {
     fireEvent.click(screen.getByRole("button", { name: "结束评价并点名下一位" }));
     await waitFor(() => expect(mocks.runAction).toHaveBeenCalledWith({ action: "finish-evaluation", presentationId: "p1", note: "表达清楚" }));
   });
+
+  it("previews each student's uploaded material and projects the teacher-selected PDF mode", async () => {
+    const current = { ...baseState().data.queue[0], status: "called" as const, artifacts: [artifact, pdfArtifact] };
+    mocks.state = baseState({ currentQueueItem: current, queue: [current] });
+    render(<NewShowcaseTeacherView course={course} />);
+    fireEvent.click(screen.getByRole("tab", { name: /校园节水汇报\.pdf/ }));
+    expect(screen.getByTestId("artifact-viewer").getAttribute("data-version-id")).toBe("pdf-1");
+    fireEvent.click(screen.getByRole("button", { name: "逐页演示" }));
+    fireEvent.click(screen.getByRole("button", { name: "投屏此材料" }));
+    await waitFor(() => expect(mocks.runAction).toHaveBeenCalledWith({ action: "start", studentId: "s1", artifactKind: "pdf", artifactVersionId: "pdf-1", displayMode: "slides" }));
+  });
+
+  it("lets the teacher inspect materials from students outside the live presentation queue", () => {
+    mocks.state = baseState({ students: [
+      { studentId: "s1", name: "小林", groupId: "g1", isAssigned: false, artifacts: [artifact] },
+      { studentId: "s2", name: "小周", groupId: "g2", isAssigned: false, artifacts: [pdfArtifact] },
+    ] });
+    render(<NewShowcaseTeacherView course={course} />);
+    fireEvent.change(screen.getByRole("combobox", { name: "选择查看材料的学生" }), { target: { value: "s2" } });
+    expect(screen.getByRole("heading", { name: "小周" })).toBeTruthy();
+    expect(screen.getByTestId("artifact-viewer").getAttribute("data-version-id")).toBe("pdf-1");
+    expect(screen.queryByRole("button", { name: "投屏此材料" })).toBeNull();
+  });
 });
 
 
@@ -98,15 +122,15 @@ describe("showcase projection", () => {
     const active = { id: "p1", courseId: "course-1", groupId: "g1", studentId: "s1", studentName: "小林", artifactKind: "document" as const, artifactVersionId: "a1", artifactTitle: artifact.title, displayMode: "continuous" as const, status: "active" as const, revision: 2, requestedAt: now, updatedAt: now };
     mocks.state = baseState({ activePresentation: active, presentations: [active] });
     const { rerender } = render(<NewShowcaseTeacherView course={course} presentation="teaching" immersive />);
-    const viewer = screen.getByTestId("artifact-viewer");
-    expect(screen.getByRole("region", { name: artifact.title })).toBeTruthy();
+    const projection = screen.getByRole("region", { name: artifact.title });
+    const viewer = within(projection).getByTestId("artifact-viewer");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(viewer.closest(".fixed")).toBeNull();
     rerender(<NewShowcaseTeacherView course={course} presentation="analytics" immersive />);
-    expect(screen.getByTestId("artifact-viewer")).toBe(viewer);
+    expect(within(screen.getByRole("region", { name: artifact.title, hidden: true })).getByTestId("artifact-viewer")).toBe(viewer);
     expect(viewer.closest("[hidden]")).toBeTruthy();
     rerender(<NewShowcaseTeacherView course={course} immersive />);
-    expect(screen.getByTestId("artifact-viewer")).toBe(viewer);
+    expect(within(screen.getByRole("region", { name: artifact.title })).getByTestId("artifact-viewer")).toBe(viewer);
     expect(viewer.closest(".fixed")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "结束汇报" }));
     await waitFor(() => expect(mocks.runAction).toHaveBeenCalledWith({ action: "end", presentationId: "p1" }));
@@ -131,7 +155,7 @@ describe("showcase fullscreen footer actions", () => {
     return { footer: within(target), target, rerender: (mode: typeof presentation = presentation) => result.rerender(renderView(mode)) };
   }
 
-  it("starts the first eligible student in the existing queue from the analytics footer without auto-approving", async () => {
+  it("starts the first eligible student in the existing queue from the analytics footer", async () => {
     const first = baseState().data.queue[0];
     mocks.state = baseState({ queue: [
       { ...first, studentId: "not-ready", status: "not-ready", groupId: undefined },
@@ -147,17 +171,13 @@ describe("showcase fullscreen footer actions", () => {
     await waitFor(() => expect(mocks.runAction).toHaveBeenCalledExactlyOnceWith({ action: "assign", groupId: "g2", studentId: "s2" }));
   });
 
-  it("waits for an application and only approves after the teacher clicks", async () => {
+  it("lets the teacher directly start projection for the called student", async () => {
     const item = { ...baseState().data.queue[0], status: "called" as const };
     mocks.state = baseState({ currentQueueItem: item, queue: [item] });
-    const { footer, rerender } = renderFooter();
-    expect((footer.getByRole("button", { name: "等待学生申请" }) as HTMLButtonElement).disabled).toBe(true);
-    const pending = { id: "p1", courseId: course.id, groupId: "g1", studentId: "s1", artifactKind: "document" as const, artifactVersionId: "a1", artifactTitle: artifact.title, displayMode: "continuous" as const, status: "pending" as const, revision: 1, requestedAt: now, updatedAt: now };
-    mocks.state = baseState({ currentQueueItem: { ...item, status: "pending-approval", presentationId: "p1" }, presentations: [pending] });
-    rerender("analytics");
+    const { footer } = renderFooter();
     expect(mocks.runAction).not.toHaveBeenCalled();
-    fireEvent.click(footer.getByRole("button", { name: "批准汇报" }));
-    await waitFor(() => expect(mocks.runAction).toHaveBeenCalledExactlyOnceWith({ action: "review", presentationId: "p1", decision: "approve", reason: undefined }));
+    fireEvent.click(footer.getByRole("button", { name: "教师发起投屏" }));
+    await waitFor(() => expect(mocks.runAction).toHaveBeenCalledExactlyOnceWith({ action: "start", studentId: "s1", artifactKind: "document", artifactVersionId: "a1", displayMode: "continuous" }));
   });
 
   it("ends an active report directly from the analytics footer", async () => {

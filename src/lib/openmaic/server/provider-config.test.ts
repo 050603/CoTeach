@@ -5,6 +5,7 @@ import {
   getServerTTSProviders,
   getTtsConcurrencyLimit,
   initializeServerProviderConfig,
+  resolveASRModel,
 } from '@openmaic/lib/server/provider-config';
 
 describe('server generation concurrency configuration', () => {
@@ -21,9 +22,9 @@ describe('server generation concurrency configuration', () => {
     expect(() => getServerTTSProviders()).not.toThrow();
   });
 
-  it('defaults the teacher scene pipeline to four workers', () => {
+  it('defaults the teacher scene pipeline to two workers', () => {
     vi.stubEnv('PARALLEL_SCENE_CONCURRENCY', '');
-    expect(getClassroomSceneConcurrency()).toBe(4);
+    expect(getClassroomSceneConcurrency()).toBe(2);
   });
 
   it('clamps the classroom scene override to one through five', () => {
@@ -48,5 +49,21 @@ describe('server generation concurrency configuration', () => {
   it('falls back to the provider default for invalid TTS overrides', () => {
     vi.stubEnv('TTS_GLM_TTS_CONCURRENCY', 'not-a-number');
     expect(getTtsConcurrencyLimit('glm-tts')).toBe(2);
+  });
+
+  it('uses the teacher-managed ASR model instead of a stale client model', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', '');
+    vi.stubEnv('ASR_QWEN_API_KEY', 'test-key');
+    vi.stubEnv(
+      'ASR_QWEN_MODELS',
+      'qwen-audio-3.0-asr-flash,qwen3-asr-flash',
+    );
+    await initializeServerProviderConfig();
+
+    expect(resolveASRModel('qwen-asr', 'stale-browser-model')).toBe(
+      'qwen-audio-3.0-asr-flash',
+    );
+    expect(resolveASRModel('unmanaged-asr', 'client-model')).toBe('client-model');
   });
 });

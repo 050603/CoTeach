@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { ASR_PROVIDERS } from '@openmaic/lib/audio/constants';
+import { requestAudioTranscription } from '@openmaic/lib/audio/transcription-client';
 import { normalizeASRUploadAudio } from '@openmaic/lib/audio/wav-utils';
 import { createLogger } from '@openmaic/lib/logger';
 
@@ -70,18 +71,8 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
           formData.append('audio', audioBlob, 'recording.webm');
         }
 
-        const response = await fetch('/api/transcription', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.error || 'Transcription failed');
-        }
-
-        const result = await response.json();
-        onTranscription?.(result.text);
+        const text = await requestAudioTranscription(formData);
+        onTranscription?.(text);
       } catch (error) {
         log.error('Transcription error:', error);
         onError?.(error instanceof Error ? error.message : '语音识别失败，请重试');

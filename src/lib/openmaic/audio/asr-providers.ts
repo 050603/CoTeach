@@ -343,70 +343,83 @@ async function transcribeQwenASR(
   config: ASRModelConfig,
   audioBuffer: Buffer | Blob,
 ): Promise<ASRTranscriptionResult> {
-  const baseUrl = config.baseUrl || ASR_PROVIDERS['qwen-asr'].defaultBaseUrl;
+  const configuredBaseUrl = config.baseUrl || ASR_PROVIDERS['qwen-asr'].defaultBaseUrl || '';
+  const baseUrl = configuredBaseUrl
+    .replace(/\/+$/, '')
+    .replace(/\/compatible-mode\/v1$/i, '/api/v1');
+  const modelId = config.modelId || ASR_PROVIDERS['qwen-asr'].defaultModelId;
+  const isQwenAudio3 = modelId.startsWith('qwen-audio-3.0-asr-flash');
+  const { dataUri, format } = await encodeAudioDataUri(audioBuffer);
+  const language = normalizeASRLanguage(config.language);
 
-  // Convert audio to base64
-  let base64Audio: string;
-  if (audioBuffer instanceof Buffer) {
-    base64Audio = audioBuffer.toString('base64');
-  } else if (audioBuffer instanceof Blob) {
-    const arrayBuffer = await audioBuffer.arrayBuffer();
-    base64Audio = Buffer.from(arrayBuffer).toString('base64');
-  } else {
-    throw new Error('Invalid audio buffer type');
-  }
-
-  // Build request body
-  const requestBody: Record<string, unknown> = {
-    model: config.modelId || 'qwen3-asr-flash',
-    input: {
-      messages: [
-        {
-          role: 'user',
-          content: [
+  const requestBody: Record<string, unknown> = isQwenAudio3
+    ? {
+        model: modelId,
+        input: {
+          messages: [
             {
-              audio: `data:audio/wav;base64,${base64Audio}`,
+              role: 'user',
+              content: [{ type: 'input_audio', input_audio: { data: dataUri } }],
             },
           ],
         },
-      ],
-    },
-  };
-
-  // Add language parameter in asr_options if specified (optional - improves accuracy for known languages)
-  // If language is uncertain or mixed, don't specify (auto-detect)
-  if (config.language && config.language !== 'auto') {
-    requestBody.parameters = {
-      asr_options: {
-        language: config.language,
-      },
-    };
-  }
+        parameters: {
+          format,
+          ...(language ? { language_hints: [language] } : {}),
+        },
+      }
+    : {
+        model: modelId,
+        input: {
+          messages: [
+            {
+              role: 'user',
+              content: [{ audio: dataUri }],
+            },
+          ],
+        },
+        parameters: {
+          asr_options: {
+            ...(language ? { language } : {}),
+            enable_itn: true,
+          },
+        },
+      };
 
   const response = await fetch(`${baseUrl}/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json; charset=utf-8',
-      'X-DashScope-Audio-Format': 'wav',
+      'X-DashScope-SSE': 'disable',
     },
     body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    // "The audio is empty" — treat as no speech detected
-    if (errorText.includes('audio is empty') || errorText.includes('InvalidParameter')) {
+    const normalizedError = errorText.toLowerCase();
+    if (
+      normalizedError.includes('audio is empty') ||
+      normalizedError.includes('audio too short') ||
+      normalizedError.includes('no speech')
+    ) {
       return { text: '' };
     }
-    throw new Error(`Qwen ASR API error: ${errorText}`);
+    throw new Error(
+      `Qwen ASR API error (${response.status}): ${errorText || response.statusText || 'Unknown error'}`,
+    );
   }
 
   const data = await response.json();
 
-  // Check for transcription result in response
-  // Qwen3 ASR returns OpenAI-compatible format:
-  // { output: { choices: [{ message: { content: [{ text: "transcribed text" }] } }] } }
+  if (isQwenAudio3) {
+    const text =
+      data.text ?? data.output?.text ?? data.sentence?.text ?? data.output?.sentence?.text;
+    if (typeof text === 'string') return { text };
+    throw new Error(`Qwen ASR error: No text in response. Response: ${JSON.stringify(data)}`);
+  }
+
   if (
     !data.output?.choices ||
     !Array.isArray(data.output.choices) ||
@@ -426,6 +439,46 @@ async function transcribeQwenASR(
   // Extract text from first content item
   const transcribedText = messageContent[0]?.text || '';
   return { text: transcribedText };
+}
+
+async function encodeAudioDataUri(
+  audioBuffer: Buffer | Blob,
+): Promise<{ dataUri: string; format: string }> {
+  let bytes: Buffer;
+  let mimeType = '';
+  if (audioBuffer instanceof Buffer) {
+    bytes = audioBuffer;
+    mimeType = detectWavBuffer(audioBuffer) ? 'audio/wav' : 'audio/webm';
+  } else if (audioBuffer instanceof Blob) {
+    bytes = Buffer.from(await audioBuffer.arrayBuffer());
+    mimeType = audioBuffer.type.split(';')[0] || (detectWavBuffer(bytes) ? 'audio/wav' : 'audio/webm');
+  } else {
+    throw new Error('Invalid audio buffer type');
+  }
+
+  const formatByMimeType: Record<string, string> = {
+    'audio/wav': 'wav',
+    'audio/x-wav': 'wav',
+    'audio/mpeg': 'mp3',
+    'audio/mp3': 'mp3',
+    'audio/ogg': 'ogg',
+    'audio/opus': 'opus',
+    'audio/webm': 'webm',
+    'audio/flac': 'flac',
+    'audio/mp4': 'm4a',
+    'audio/x-m4a': 'm4a',
+  };
+
+  return {
+    dataUri: `data:${mimeType};base64,${bytes.toString('base64')}`,
+    format: formatByMimeType[mimeType] || 'webm',
+  };
+}
+
+function normalizeASRLanguage(language?: string): string | undefined {
+  if (!language || language === 'auto') return undefined;
+  if (language.toLowerCase().startsWith('yue')) return 'yue';
+  return language.toLowerCase().split(/[-_]/)[0];
 }
 
 /**

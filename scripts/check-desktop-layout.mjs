@@ -13,7 +13,7 @@ if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(baseURL).hostname)) th
 const output = fs.mkdtempSync(path.join(os.tmpdir(), 'openpbl-responsive-'));
 const name = '城市生态与社区行动：跨学科项目实践';
 const options = Array.from({ length: 9 }, (_, i) => ({ id: `o${i}`, label: `方案 ${i + 1}：通过社区观察与访谈了解真实问题并设计可行方案`, count: 3, percentage: 11, respondents: [{ studentId: 'layout-student', displayName: '布局测试学生' }] }));
-const questions = ['donut', 'bar', 'column', 'text'].map((chartType, i) => ({ id: `q${i}`, title: `${i + 1}. 在这次跨学科项目实践中，你认为哪些学习方式最有助于解决社区中的实际问题？`, type: chartType === 'text' ? 'short-text' : 'single-choice', chartType, required: true, responseCount: 27, options: chartType === 'text' ? [] : options, terms: [{ label: '社区观察', value: 18 }, { label: '团队合作', value: 12 }], responses: Array.from({ length: 16 }, (_, j) => ({ studentId: `s${j}`, displayName: `测试学生${j}`, content: '通过社区观察发现问题，通过团队合作整理资料并提出方案。'.repeat(5) })) }));
+const questions = ['donut', 'bar', 'column', 'text'].map((chartType, i) => ({ id: `q${i}`, title: `${i + 1}. 在这次跨学科项目实践中，你认为哪些学习方式最有助于解决社区中的实际问题？`, type: chartType === 'text' ? 'short-text' : chartType === 'donut' ? 'single-choice' : 'multiple-choice', chartType, required: true, responseCount: 27, options: chartType === 'text' ? [] : options, terms: [{ label: '社区观察', value: 18 }, { label: '团队合作', value: 12 }], responses: Array.from({ length: 16 }, (_, j) => ({ studentId: `s${j}`, displayName: `测试学生${j}`, content: '通过社区观察发现问题，通过团队合作整理资料并提出方案。'.repeat(5) })) }));
 const course = { id: 'layout-course', name, coverImageUrl: '/brand/logo-horizontal.png', term: '2026 秋季学期', status: 'open', description: '观察真实社区，分析证据并形成可以付诸实践的方案。'.repeat(4), outline: '研究目标与教学内容。'.repeat(15), teacher: { displayName: '跨学科项目实践教师' }, startsAt: '2026-09-01', endsAt: '2027-01-10', invitation: { code: 'A7B9C2' }, chapters: Array.from({ length: 4 }, (_, i) => ({ id: `ch${i}`, title: `第${i + 1}章：从真实生活中发现值得研究的问题并规划我们的行动`, description: '观察与实践', isOpen: true, activities: [{ id: `a${i}`, title: '社区观察方法与项目学习反思问卷', type: 'Form', isOpen: true, progress: { status: 'in_progress' }, config: { questions } }] })) };
 const courses = Array.from({ length: 6 }, (_, i) => ({ ...course, id: i ? `course-${i}` : course.id, name: `${name}（${i + 1}班）` }));
 const activity = { id: 'layout-survey', title: '项目学习过程与协作体验问卷', type: 'Form', description: null, isOpen: true, offering: course, chapter: { title: '学习反思' }, progress: { status: 'not_started' }, instance: null, config: { content: '请根据本次学习的实际体验作答，选择最符合自己情况的选项。', questions } };
@@ -145,7 +145,7 @@ fixtures['/api/platform/survey-settings'] = { mode: 'local' };
   const selectedScenarios = scenarios.filter(([id]) => select(process.env.LAYOUT_SCENARIOS, id));
   const selectedProfiles = profiles.filter(({ id }) => select(process.env.LAYOUT_DEVICES, id));
   if (!selectedScenarios.length || !selectedProfiles.length) throw new Error('No matching layout scenarios/devices');
-  const isFailure = r => r.scenarioError || r.errors.length || r.failedResources.length || r.missingFixtures.length || r.blockedMutations.length || r.brokenImages?.length || r.chapterProgressIssues?.length || r.inviteHeadingIssues?.length || r.clippedClouds || r.missingTheme || r.undersizedColumns || r.clippedDialogs || r.surveyRailUnexpected || r.textIssues?.length || r.scrollWidth > r.width + 1 || r.boxes?.some(b => b.scroll > b.client + 2 && !b.scrollable);
+  const isFailure = r => r.scenarioError || r.errors.length || r.failedResources.length || r.missingFixtures.length || r.blockedMutations.length || r.brokenImages?.length || r.chapterProgressIssues?.length || r.inviteHeadingIssues?.length || r.clippedClouds || r.missingTheme || r.undersizedColumns || r.invisibleSurveyBars || r.clippedDialogs || r.surveyRailUnexpected || r.textIssues?.length || r.scrollWidth > r.width + 1 || r.boxes?.some(b => b.scroll > b.client + 2 && !b.scrollable);
   try {
     for (const profile of selectedProfiles) {
       const { id: device, ...deviceOptions } = profile;
@@ -203,6 +203,15 @@ fixtures['/api/platform/survey-settings'] = { mode: 'local' };
             const clippedClouds = [...document.querySelectorAll('.survey-word-cloud')].filter(el => visible(el) && el.querySelector('svg')?.getBoundingClientRect().height > el.clientHeight + 2).length;
             const missingTheme = !isHome && !document.querySelector('.pbl-platform-theme');
             const undersizedColumns = [...document.querySelectorAll('.survey-column-chart button')].some(el => visible(el) && el.getBoundingClientRect().width < 44);
+            const invisibleSurveyBars = [...document.querySelectorAll('.survey-column-chart button, .survey-bar-chart button')].filter(button => {
+              const count = Number((button.getAttribute('aria-label') || '').match(/，(\d+) 人$/)?.[1] || 0);
+              if (!visible(button) || count <= 0) return false;
+              const column = button.closest('.survey-column-chart');
+              const fill = button.querySelector(column ? 'span > i' : 'i > b');
+              if (!fill) return true;
+              const rect = fill.getBoundingClientRect();
+              return column ? rect.height < 3 : rect.width < 3;
+            }).length;
             const clippedDialogs = [...document.querySelectorAll('[role=dialog]')].some(el => { if (!visible(el)) return false; const rect = el.getBoundingClientRect(); return rect.top < -1 || rect.bottom > innerHeight + 1 || rect.left < -1 || rect.right > innerWidth + 1; });
             const brokenImages = [...document.images].filter(el => visible(el) && (!el.complete || !el.naturalWidth)).map(el => el.currentSrc || el.src);
             const surveyRail = document.querySelector('.survey-student-rail');
@@ -236,7 +245,7 @@ fixtures['/api/platform/survey-settings'] = { mode: 'local' };
               const intentionalTruncation = css.textOverflow === 'ellipsis' || Number(css.webkitLineClamp) > 0;
               return { text: el.textContent.trim().slice(0, 160), width: Math.round(rect.width), lines, fontSize: parseFloat(css.fontSize), overflow: !intentionalTruncation && el.scrollWidth > el.clientWidth + 2, unusuallyNarrow: el.textContent.trim().length >= 8 && rect.width < parseFloat(css.fontSize) * 4 && lines >= 3 };
             });
-            return { scrollWidth: document.documentElement.scrollWidth, width: innerWidth, boxes, chapterProgressIssues, inviteHeadingIssues, clippedClouds, missingTheme, undersizedColumns, clippedDialogs, brokenImages, surveyRailUnexpected, headings, textIssues: headings.filter(h => h.overflow || h.unusuallyNarrow), touch: navigator.maxTouchPoints, userAgent: navigator.userAgent, imageCount: document.images.length, resources: performance.getEntriesByType('resource').map(r => ({ url: r.name, durationMs: Math.round(r.duration), bytes: r.transferSize, type: r.initiatorType })) };
+            return { scrollWidth: document.documentElement.scrollWidth, width: innerWidth, boxes, chapterProgressIssues, inviteHeadingIssues, clippedClouds, missingTheme, undersizedColumns, invisibleSurveyBars, clippedDialogs, brokenImages, surveyRailUnexpected, headings, textIssues: headings.filter(h => h.overflow || h.unusuallyNarrow), touch: navigator.maxTouchPoints, userAgent: navigator.userAgent, imageCount: document.images.length, resources: performance.getEntriesByType('resource').map(r => ({ url: r.name, durationMs: Math.round(r.duration), bytes: r.transferSize, type: r.initiatorType })) };
           }, { isHome: id === 'home', isStudentSurvey: id === 'student-survey' });
           report = { ...report, ...metrics };
         } catch (error) {

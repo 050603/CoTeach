@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ first: vi.fn(), create: vi.fn(), update: vi.fn(), list: vi.fn(), remove: vi.fn(), lock: vi.fn(), reload: vi.fn() }));
 vi.mock('@/lib/db/client', () => {
   const tx = { providerCredential: { findFirst: mocks.first, create: mocks.create, update: mocks.update, findMany: mocks.list, deleteMany: mocks.remove }, $queryRaw: mocks.lock };
-  return { isDatabaseConfigured: () => true, prisma: { ...tx, $transaction: async (fn: (value: typeof tx) => unknown) => fn(tx) } };
+  return { isProviderDatabaseConfigured: () => true, providerPrisma: { ...tx, $transaction: async (fn: (value: typeof tx) => unknown) => fn(tx) } };
 });
 vi.mock('@openmaic/lib/server/provider-config', () => ({ clearServerProviderConfigCache: vi.fn(), initializeServerProviderConfig: mocks.reload }));
 import { saveProviderEntry, getProviderEntry, listProviders, deleteProviderEntry } from './provider-config-editor';

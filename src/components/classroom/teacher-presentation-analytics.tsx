@@ -62,7 +62,7 @@ function stageSummary(course: Course, stageKey: string, showcaseData?: ShowcaseD
   if (stageKey === "showcase") {
     const data = deriveShowcaseDashboardMetrics(course, showcaseData);
     return { title: "汇报安排", empty: "暂无可汇报队列", rows: data.queue.length ? [
-      { label: "待审批", value: `${data.pendingApprovals.length} 项` },
+      { label: "待投屏", value: `${data.pendingApprovals.length} 人` },
       { label: "等待汇报", value: `${data.statusCounts.waiting} 人` },
       { label: "汇报中", value: `${data.statusCounts.presenting} 人` },
       { label: "待完成评价", value: `${data.statusCounts.evaluating} 人` },

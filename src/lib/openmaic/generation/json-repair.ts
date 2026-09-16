@@ -13,6 +13,44 @@ function repairQuotedPropertyFragments(jsonStr: string): string {
   );
 }
 
+/**
+ * Some Chinese-capable models occasionally emit typographic punctuation as
+ * JSON syntax (`] ，"next"` or `"key"：value`). Normalize only while outside
+ * quoted strings so teaching prose keeps its original Chinese punctuation.
+ */
+export function normalizeFullWidthJsonSyntax(jsonStr: string): string {
+  const syntax: Record<string, string> = {
+    '，': ',',
+    '：': ':',
+    '｛': '{',
+    '｝': '}',
+    '［': '[',
+    '］': ']',
+  };
+  let result = '';
+  let inString = false;
+  let escapeNext = false;
+  for (const char of jsonStr) {
+    if (escapeNext) {
+      result += char;
+      escapeNext = false;
+      continue;
+    }
+    if (inString && char === '\\') {
+      result += char;
+      escapeNext = true;
+      continue;
+    }
+    if (char === '"') {
+      result += char;
+      inString = !inString;
+      continue;
+    }
+    result += inString ? char : (syntax[char] ?? char);
+  }
+  return result;
+}
+
 function logJsonParseError(stage: string, jsonStr: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   const positionMatch = message.match(/position\s+(\d+)/i);
@@ -138,7 +176,7 @@ export function tryParseJson<T>(jsonStr: string): T | null {
 
   // Attempt 2: Fix common JSON issues from AI responses
   try {
-    let fixed = jsonStr;
+    let fixed = normalizeFullWidthJsonSyntax(jsonStr);
 
     // Fix 0: Recover malformed property fragments that were accidentally
     // emitted as standalone strings inside an object, such as:
@@ -197,7 +235,7 @@ export function tryParseJson<T>(jsonStr: string): T | null {
 
   // Attempt 3: Use jsonrepair to fix malformed JSON (e.g. unescaped quotes in Chinese text)
   try {
-    const repaired = jsonrepair(jsonStr);
+    const repaired = jsonrepair(normalizeFullWidthJsonSyntax(jsonStr));
     return JSON.parse(repaired) as T;
   } catch (error) {
     logJsonParseError('Attempt 3', jsonStr, error);
@@ -206,7 +244,7 @@ export function tryParseJson<T>(jsonStr: string): T | null {
 
   // Attempt 4: More aggressive fixing - remove control characters
   try {
-    let fixed = jsonStr;
+    let fixed = normalizeFullWidthJsonSyntax(jsonStr);
 
     // Remove or escape control characters
     fixed = fixed.replace(/[\x00-\x1F\x7F]/g, (char) => {

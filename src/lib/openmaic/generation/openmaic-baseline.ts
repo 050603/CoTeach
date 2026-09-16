@@ -34,6 +34,7 @@ import {
 import { normalizeWhiteboardActionLifecycle } from './whiteboard-action-lifecycle';
 import { normalizeWhiteboardActionLayout } from './whiteboard-layout';
 import { formatOpenMaicWebsiteReferenceProfile } from './course-visual-theme';
+import { withTeachingEnhancement } from './teaching-enhancement';
 
 export const OPENMAIC_GENERATION_BASELINE = {
   release: 'v1.0.3',
@@ -247,9 +248,10 @@ export async function generateOpenMaicBaselineContent(
   if (outline.type !== 'slide' && outline.type !== 'interactive') {
     throw new Error(`OpenMAIC baseline content adapter does not own ${outline.type} scenes`);
   }
-  const contentAiCall = outline.type === 'slide' && options.websiteReferenceContext
+  const referenceAiCall = outline.type === 'slide' && options.websiteReferenceContext
     ? withWebsiteReferenceProfile(aiCall, options.websiteReferenceContext)
     : aiCall;
+  const contentAiCall = withTeachingEnhancement(referenceAiCall, outline, 'content');
   const generated = await generateOpenMaicSceneContent(
     adaptOutlineToOpenMaicBaseline(outline),
     contentAiCall,
@@ -318,8 +320,9 @@ export async function generateOpenMaicBaselineSlideActions(
   } = {},
 ): Promise<Action[]> {
   const extension = actionExtension(outline);
-  const actionAiCall: AICallFn = (system, user, images) =>
+  const extendedAiCall: AICallFn = (system, user, images) =>
     aiCall(`${system}${extension.system}`, `${user}${extension.user}`, images);
+  const actionAiCall = withTeachingEnhancement(extendedAiCall, outline, 'actions');
   const actions = await generateOpenMaicSceneActions(
     adaptOutlineToOpenMaicBaseline(outline),
     content as OpenMaicSlideContent,

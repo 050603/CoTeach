@@ -4,7 +4,8 @@ import type { AuthClaims } from "@/lib/auth/session";
 
 const mocks = vi.hoisted(() => ({ course: {} as Record<string, unknown>, rows: [] as Array<Record<string, unknown>>, store: {
   loadCourse: vi.fn(), listStudents: vi.fn(), listMembers: vi.fn(), listDocuments: vi.fn(), listFiles: vi.fn(), listPresentations: vi.fn(),
-  findPresentation: vi.fn(), findGroup: vi.fn(), findMember: vi.fn(), lock: vi.fn(), updateCourse: vi.fn(), transaction: vi.fn(),
+  findPresentation: vi.fn(), findGroup: vi.fn(), findMember: vi.fn(), findDocument: vi.fn(), findFile: vi.fn(), findParticipation: vi.fn(),
+  createPresentation: vi.fn(), updatePresentation: vi.fn(), updatePresentations: vi.fn(), lock: vi.fn(), updateCourse: vi.fn(), transaction: vi.fn(),
 } }));
 vi.mock("server-only", () => ({}));
 vi.mock("./persistence", () => ({ showcaseStore: mocks.store }));
@@ -34,6 +35,9 @@ describe("selected showcase lifecycle", () => {
     mocks.store.updateCourse.mockImplementation(async ({ data }) => { mocks.course = { ...mocks.course, ...data }; });
     mocks.store.findGroup.mockResolvedValue({ id: "g2" });
     mocks.store.findMember.mockResolvedValue({ studentId: "s2", studentName: "乙", groupId: "g2" });
+    mocks.store.findParticipation.mockResolvedValue({ id: "participation-s2" });
+    mocks.store.updatePresentations.mockResolvedValue({ count: 0 });
+    mocks.store.createPresentation.mockImplementation(async ({ data }) => ({ ...data, revision: 1, requestedAt: new Date(), updatedAt: new Date(), rejectionReason: null, endedAt: null, evaluatedAt: null, evaluatedBy: null, evaluationNote: null }));
   });
   it("starts with an empty shortlist, keeps the complete roster and persists selected seconds", async () => {
     expect((await getShowcaseData("course", teacher)).queue).toEqual([]);
@@ -57,9 +61,26 @@ describe("selected showcase lifecycle", () => {
     expect("budget" in saved && saved.budget).toMatchObject({ stageRemainingSec: 110, plannedRemainingSec: 110 });
     expect((mocks.course.uiState as Record<string, unknown>).classroomTiming).toEqual(clock);
   });
-  it("rejects assigning and requesting projection for an unselected student", async () => {
+  it("rejects assigning or starting projection for an unselected student and blocks student-side starts", async () => {
     await expect(executeShowcaseAction("course", { action: "assign", groupId: "g2", studentId: "s2" }, teacher)).rejects.toMatchObject({ code: "STUDENT_NOT_SELECTED" });
-    await expect(executeShowcaseAction("course", { action: "request", artifactKind: "pdf", artifactVersionId: "artifact", displayMode: "slides" }, student)).rejects.toMatchObject({ code: "STUDENT_NOT_SELECTED" });
+    await expect(executeShowcaseAction("course", { action: "start", studentId: "s2", artifactKind: "pdf", artifactVersionId: "artifact", displayMode: "slides" }, teacher)).rejects.toMatchObject({ code: "STUDENT_NOT_SELECTED" });
+    await expect(executeShowcaseAction("course", { action: "start", studentId: "s2", artifactKind: "pdf", artifactVersionId: "artifact", displayMode: "slides" }, student)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+  it("creates an active projection directly from the teacher-selected student's material", async () => {
+    mocks.course.presentingStudentId = "s2";
+    mocks.course.presentingGroupId = "g2";
+    mocks.course.uiState = { showcaseReporting: { schemaVersion: 2, selectionMode: "teacher-selected", selectedStudentIds: ["s2"], orderedStudentIds: ["s2"] } };
+    mocks.store.findFile.mockResolvedValue({ id: "artifact", title: "乙的汇报.pdf" });
+    const result = await executeShowcaseAction("course", { action: "start", studentId: "s2", artifactKind: "pdf", artifactVersionId: "artifact", displayMode: "slides" }, teacher);
+    expect(result).toMatchObject({ studentId: "s2", artifactVersionId: "artifact", status: "active", displayMode: "slides" });
+    expect(mocks.store.createPresentation).toHaveBeenCalledWith({ data: expect.objectContaining({
+      studentId: "s2",
+      groupId: "g2",
+      artifactKind: "pdf",
+      artifactVersionId: "artifact",
+      status: "active",
+      reviewedBy: "teacher",
+    }) });
   });
   it("keeps old v1 classrooms on their original roster queue and preserves started history", async () => {
     mocks.course.content = { stagePlan: { schemaVersion: 1, stages: [] } };

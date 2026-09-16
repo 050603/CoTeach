@@ -31,6 +31,7 @@ import { cn } from '@openmaic/lib/utils';
 import { toast } from 'sonner';
 import { createLogger } from '@openmaic/lib/logger';
 import { normalizeASRUploadAudio } from '@openmaic/lib/audio/wav-utils';
+import { requestAudioTranscription } from '@openmaic/lib/audio/transcription-client';
 
 const log = createLogger('ASRSettings');
 
@@ -50,6 +51,14 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
   const isCustom = isCustomASRProvider(selectedProviderId);
   const providerConfig = asrProvidersConfig[selectedProviderId];
   const isServerConfigured = !!providerConfig?.isServerConfigured;
+  const builtInModels = asrProvider?.models ?? [];
+  const builtInModelMap = new Map(builtInModels.map((model) => [model.id, model]));
+  const availableModels =
+    isServerConfigured && providerConfig?.serverModels?.length
+      ? providerConfig.serverModels.map(
+          (id) => builtInModelMap.get(id) ?? { id, name: id },
+        )
+      : builtInModels;
   const requiresApiKey = isCustom
     ? !!providerConfig?.requiresApiKey
     : !!asrProvider?.requiresApiKey;
@@ -152,26 +161,14 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
                 '';
               if (baseUrlValue?.trim()) formData.append('baseUrl', baseUrlValue);
 
-              const response = await fetch('/api/transcription', {
-                method: 'POST',
-                body: formData,
-              });
-              if (response.ok) {
-                const data = await response.json();
-                if (data.text?.trim()) {
-                  setASRResult(data.text);
-                  setTestStatus('success');
-                  setTestMessage(t('settings.asrTestSuccess'));
-                } else {
-                  setTestStatus('error');
-                  setTestMessage(data.error || t('settings.asrNoTranscription'));
-                }
+              const text = await requestAudioTranscription(formData);
+              if (text.trim()) {
+                setASRResult(text);
+                setTestStatus('success');
+                setTestMessage(t('settings.asrTestSuccess'));
               } else {
                 setTestStatus('error');
-                const errorData = await response
-                  .json()
-                  .catch(() => ({ error: response.statusText }));
-                setTestMessage(errorData.details || errorData.error || t('settings.asrTestFailed'));
+                setTestMessage(t('settings.asrNoTranscription'));
               }
             } catch (error) {
               log.error('ASR test failed:', error);
@@ -358,7 +355,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
       )}
 
       {/* Model Selection — built-in providers */}
-      {!isCustom && asrProvider?.models?.length > 0 && (
+      {!isCustom && availableModels.length > 0 && (
         <div className="space-y-2">
           <Label className="text-sm">{t('settings.defaultModel')}</Label>
           <Select
@@ -369,7 +366,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {asrProvider?.models.map((model) => (
+              {availableModels.map((model) => (
                 <SelectItem key={model.id} value={model.id}>
                   {model.name}
                 </SelectItem>

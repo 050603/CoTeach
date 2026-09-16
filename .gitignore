@@ -59,6 +59,8 @@ next-env.d.ts
 # openPBL local demo state and AI provider secrets
 .openpbl-data/
 .openpbl-runtime/
+tools/course-quality-lab/dist/
+tools/course-quality-lab/node_modules/
 
 # runtime data and generated assets (classrooms, audio, media)
 /data/

@@ -148,6 +148,8 @@ export type AppScene = DslScene<Action, SceneContent> & PblSceneMetadata & {
    * scene-derived outline.
    */
   outlineId?: string;
+  /** Identifies narration that passed the required whole-course speech policy. */
+  narrationRevision?: string;
 };
 export type Scene = AppScene;
 

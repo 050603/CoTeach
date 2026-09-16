@@ -30,8 +30,7 @@ export async function GET(
     include: { artifact: { include: { participation: { include: { enrollment: true } } } }, fileAsset: true } });
   if (!version) return new Response(null, { status: 404 });
   if (auth.claims.role === 'student' && version.artifact.participation.enrollment.userId !== auth.claims.sub) {
-    const active = await prisma.showcasePresentation.findFirst({ where: { status: 'ACTIVE', artifactVersionId: versionId, participation: { instanceId: courseId } } });
-    if (!active) return new Response(null, { status: 404 });
+    return new Response(null, { status: 404 });
   }
   if (version.artifact.type === 'DOCUMENT_ARCHIVE') return Response.json({ kind: 'document', versionId: version.id,
     title: version.artifact.title, sequence: version.sequence, submittedAt: version.submittedAt?.toISOString(), html: version.sourceHtml ?? '' },

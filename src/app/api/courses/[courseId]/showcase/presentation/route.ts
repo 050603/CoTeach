@@ -31,36 +31,15 @@ const ActionSchema = z.discriminatedUnion("action", [
     transitionSec: z.number().int().min(0).max(600).optional(),
   }).strict(),
   z.object({
-    action: z.literal("request"),
+    action: z.literal("start"),
+    studentId: z.string().min(1).max(128),
     artifactKind: z.enum(["document", "pdf"]),
     artifactVersionId: z.string().min(1).max(128),
-    // Keep the presentation endpoint compatible with clients that predate
-    // the explicit PDF mode and with browsers that provide a non-UUID
-    // idempotency token. The server still generates a UUID when omitted.
     displayMode: z.preprocess(
       (value) => value === "document" ? "continuous" : value,
       z.enum(["continuous", "slides"]),
     ).default("continuous"),
-    requestId: z.string().trim().min(1).max(160).optional(),
   }).strict(),
-  z.object({
-    action: z.literal("review"),
-    presentationId: z.string().uuid(),
-    decision: z.enum(["approve", "reject"]),
-    reason: z.string().trim().max(1_000).optional(),
-  }).strict(),
-  z.object({
-    action: z.literal("update"),
-    presentationId: z.string().uuid(),
-    viewState: z.object({
-      page: z.number().int().min(1).max(100_000).optional(),
-      scrollRatio: z.number().finite().min(0).max(1).optional(),
-    }).strict(),
-  }).strict().superRefine((value, context) => {
-    if (value.viewState.page === undefined && value.viewState.scrollRatio === undefined) {
-      context.addIssue({ code: "custom", path: ["viewState"], message: "视图位置不能为空。" });
-    }
-  }),
   z.object({ action: z.literal("end"), presentationId: z.string().uuid() }).strict(),
   z.object({
     action: z.literal("finish-evaluation"),
@@ -108,9 +87,9 @@ export async function POST(
   }
   const action = parsed.data as ShowcaseAction;
   const rate = await checkDistributedRateLimit({
-    namespace: action.action === "update" ? "showcase-view-state" : "showcase-presentation",
+    namespace: "showcase-presentation",
     key: `${auth.claims.sub}:${courseId}`,
-    limit: action.action === "update" ? 600 : 30,
+    limit: 30,
     windowSeconds: 60,
   });
   if (!rate.allowed) return rateLimitedResponse(rate.retryAfterMs);
