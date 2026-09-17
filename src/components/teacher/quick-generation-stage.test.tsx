@@ -61,15 +61,15 @@ describe("QuickGenerationStage", () => {
     expect(screen.getByRole("button", { name: "中断生成" })).toBeTruthy();
   });
 
-  it("shows the new-system AI-learning blueprint as a detailed production workspace", () => {
+  it("shows live concurrent page work as a detailed production card", () => {
     render(
       <QuickGenerationStage
-        activeArtifactId="ai-learning-generation-plan"
+        activeArtifactId="ai-learning-page-production"
         artifacts={[{
-          id: "ai-learning-generation-plan",
+          id: "ai-learning-page-production",
           kind: "timeline",
-          eyebrow: "知识讲授内容生成 · 制作蓝图",
-          title: "开始制作可上课的知识讲授内容",
+          eyebrow: "课程生成 · 页面制作",
+          title: "正在并行制作课堂页面",
           summary: "4 个课堂页面，将知识讲解、互动练习与节点检测编排成完整学习链路",
           accent: "blue",
           items: [
@@ -93,6 +93,11 @@ describe("QuickGenerationStage", () => {
                 { id: "4", title: "理解使用边界", type: "slide", typeLabel: "课件页面", estimatedDuration: 240 },
               ],
               assets: { images: true, videos: false, tts: true },
+              activePages: [
+                { index: 2, title: "观察模型如何预测", stage: "reviewed-content", startedAt: 1, executionMs: 12_000 },
+                { index: 3, title: "检查核心概念", stage: "actions", startedAt: 2, executionMs: 8_000 },
+                { index: 4, title: "理解使用边界", stage: "narration", startedAt: 3 },
+              ],
             },
           },
         }]}
@@ -113,33 +118,30 @@ describe("QuickGenerationStage", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "开始制作可上课的知识讲授内容" })).toBeTruthy();
-    expect(screen.getByLabelText("知识讲授内容生成流水线")).toBeTruthy();
-    expect(screen.getByText("页面制作")).toBeTruthy();
-    expect(screen.getByText("学习资源")).toBeTruthy();
-    expect(screen.getByText("审校保存")).toBeTruthy();
-    expect(screen.getByText("认识生成模型")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "正在并行制作课堂页面" })).toBeTruthy();
+    expect(screen.getByLabelText("当前并行页面任务")).toBeTruthy();
+    expect(screen.getByLabelText("单页制作流程")).toBeTruthy();
     expect(screen.getByText("观察模型如何预测")).toBeTruthy();
-    expect(screen.getByText("预计授课 约 16 分钟")).toBeTruthy();
-    expect(screen.queryByText("理解使用边界")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "查看全部 4 页" }));
+    expect(screen.getByText("检查核心概念")).toBeTruthy();
     expect(screen.getByText("理解使用边界")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "收起页面" }).getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "收起页面" }));
-    expect(screen.queryByText("理解使用边界")).toBeNull();
+    expect(screen.getByText("检查版式与知识覆盖")).toBeTruthy();
+    expect(screen.getByText("生成讲稿与教学动作")).toBeTruthy();
+    expect(screen.getByText("校验课堂口语")).toBeTruthy();
+    expect(screen.getByText("预计授课 约 16 分钟")).toBeTruthy();
   });
 
   it("updates aggregate page progress and stops live effects during recovery or reduced motion", () => {
     const snapshot: QuickClassroomGenerationSnapshot = {
       status: "running", step: "generating_scenes", progress: 40,
       message: "正在制作课堂页面", scenesGenerated: 0, totalScenes: 4, events: [],
+      activePages: [{ index: 1, title: "第一节课", stage: "actions", startedAt: 1 }],
       requestPreview: {
         sceneOutlines: [{ id: "p1", title: "第一节课", type: "slide", estimatedDuration: 180 }],
         enableImageGeneration: false, enableVideoGeneration: false, enableTTS: false,
       },
     };
     const props = {
-      activeArtifactId: "ai-learning-generation-plan", backgroundEnabled: true,
+      activeArtifactId: "ai-learning-page-production", backgroundEnabled: true,
       brief: "生成知识讲授课", cancelling: false, completed: false, confirmCancel: false,
       message: snapshot.message, onCancel: vi.fn(), onOpenCourse: vi.fn(), onReview: vi.fn(),
       paused: false, progress: 70, remainingLabel: "正在制作", reviewAvailable: false, startedAt: null,
@@ -149,12 +151,12 @@ describe("QuickGenerationStage", () => {
     expect(screen.getByTestId("ai-plan-shimmer")).toBeTruthy();
     rerender(<QuickGenerationStage {...props} artifacts={artifacts(2)} />);
     expect(screen.getByRole("progressbar", { name: "课堂页面制作进度" }).getAttribute("aria-valuenow")).toBe("2");
-    const currentStep = within(screen.getByLabelText("知识讲授内容生成流水线")).getAllByRole("listitem").find((item) => item.getAttribute("aria-current") === "step");
-    expect(currentStep?.textContent).toContain("页面制作");
+    const currentStep = within(screen.getByLabelText("单页制作流程")).getAllByRole("listitem").find((item) => item.getAttribute("aria-current") === "step");
+    expect(currentStep?.textContent).toContain("讲稿与教学动作");
 
     rerender(<QuickGenerationStage {...props} artifacts={artifacts(2)} recovering />);
     expect(screen.queryByTestId("ai-plan-shimmer")).toBeNull();
-    expect(screen.getByText("正在恢复 · 已完成 2 页")).toBeTruthy();
+    expect(screen.getAllByText("正在恢复").length).toBeGreaterThan(0);
 
     motionPreference.reduced = true;
     rerender(<QuickGenerationStage {...props} artifacts={artifacts(2)} />);

@@ -9,6 +9,8 @@ export type QuickClassroomGenerationEvent = {
   totalScenes: number;
   ts: number;
   assetPhaseStatus?: "running" | "completed" | "partial-failure";
+  assetCompleted?: number;
+  assetTotal?: number;
 };
 
 export type QuickClassroomScenePreview = {
@@ -77,6 +79,7 @@ export function buildQuickClassroomArtifacts(
   if (!job) return [];
   const outlines = job.requestPreview?.sceneOutlines ?? [];
   const aiLearningOnly = config.aiLearningOnly === true;
+  if (aiLearningOnly) return buildAiLearningClassroomArtifacts(job, outlines);
   const artifacts: CourseDesignGenerationArtifact[] = [aiLearningOnly
     ? buildAiLearningGenerationPlan(job, outlines)
     : {
@@ -255,18 +258,216 @@ export function buildQuickClassroomArtifacts(
   return artifacts;
 }
 
+const AI_LEARNING_RESOURCE_STEPS = [
+  "separating_classrooms",
+  "saving_classrooms",
+  "checking_adaptive_resources",
+  "generating_adaptive_resources",
+  "adaptive_resources_ready",
+  "generating_media_assets",
+  "generating_tts_assets",
+  "persisting_assets",
+] as const;
+
+const AI_LEARNING_COVER_STEPS = [
+  "generating_course_cover",
+  "course_cover_ready",
+  "course_cover_failed",
+] as const;
+
+const AI_LEARNING_FINAL_STEPS = [
+  "auditing_resources",
+  "generation_resources_ready",
+] as const;
+
+function buildAiLearningClassroomArtifacts(
+  job: QuickClassroomGenerationSnapshot,
+  outlines: QuickClassroomScenePreview[],
+): CourseDesignGenerationArtifact[] {
+  const artifacts = [buildAiLearningGenerationPlan(job, outlines)];
+  if (hasAnyStep(job, [...AI_LEARNING_RESOURCE_STEPS])) {
+    artifacts.push(buildAiLearningResourceArtifact(job));
+  }
+  if (hasAnyStep(job, [...AI_LEARNING_COVER_STEPS])) {
+    artifacts.push(buildAiLearningCoverArtifact(job));
+  }
+  if (job.status === "completed" || hasAnyStep(job, [...AI_LEARNING_FINAL_STEPS])) {
+    artifacts.push(buildAiLearningFinalArtifact(job));
+  }
+  return artifacts;
+}
+
+function buildAiLearningResourceArtifact(
+  job: QuickClassroomGenerationSnapshot,
+): CourseDesignGenerationArtifact {
+  const options = job.requestPreview;
+  const routingStep = latestStep(job, ["separating_classrooms", "saving_classrooms"]);
+  const adaptiveStep = latestStep(job, [
+    "checking_adaptive_resources",
+    "generating_adaptive_resources",
+    "adaptive_resources_ready",
+  ]);
+  const mediaEvent = latestEvent(job, ["generating_media_assets"]);
+  const ttsEvent = latestEvent(job, ["generating_tts_assets"]);
+  const laterThanRouting = Boolean(adaptiveStep || mediaEvent || ttsEvent || latestStep(job, ["persisting_assets"]));
+  const lanes: NonNullable<
+    NonNullable<CourseDesignGenerationArtifact["visualization"]>["resourcePlan"]
+  >["lanes"] = [
+      {
+        id: "routing",
+        label: "课堂关联",
+        status: laterThanRouting ? "completed" : routingStep ? "running" : "pending",
+        message: laterThanRouting
+          ? "知识讲授页面已经关联到本次课程"
+          : latestMessage(job, ["separating_classrooms", "saving_classrooms"]),
+      },
+    ];
+
+  if (adaptiveStep) {
+    lanes.push({
+      id: "adaptive",
+      label: "分层学习",
+      status: adaptiveStep === "adaptive_resources_ready" ? "completed" : "running",
+      message: latestMessage(job, [
+        "checking_adaptive_resources",
+        "generating_adaptive_resources",
+        "adaptive_resources_ready",
+      ]),
+    });
+  }
+
+  if (options?.enableImageGeneration || options?.enableVideoGeneration) {
+    lanes.push({
+      id: "media",
+      label: options.enableVideoGeneration ? "图片与视频" : "课堂配图",
+      status: assetEventStatus(mediaEvent),
+      message: mediaEvent?.message ?? "等待页面制作完成后生成视觉资源",
+      ...(mediaEvent?.assetCompleted !== undefined ? { completed: mediaEvent.assetCompleted } : {}),
+      ...(mediaEvent?.assetTotal !== undefined ? { total: mediaEvent.assetTotal } : {}),
+    });
+  }
+
+  if (options?.enableTTS) {
+    lanes.push({
+      id: "tts",
+      label: "讲授语音",
+      status: assetEventStatus(ttsEvent),
+      message: ttsEvent?.message ?? "等待按页面讲稿合成课堂语音",
+      ...(ttsEvent?.assetCompleted !== undefined ? { completed: ttsEvent.assetCompleted } : {}),
+      ...(ttsEvent?.assetTotal !== undefined ? { total: ttsEvent.assetTotal } : {}),
+    });
+  }
+
+  const allFinished = lanes.every((lane) => ["completed", "warning", "skipped"].includes(lane.status));
+  return {
+    id: "ai-learning-resources",
+    kind: "facts",
+    eyebrow: "课程生成 · 配套资源",
+    title: allFinished ? "课堂配套资源已经就绪" : "正在生成课堂配套资源",
+    summary: "课堂关联、分层学习、视觉素材与讲授语音按实际任务并行处理。",
+    accent: "violet",
+    items: lanes.map((lane) => ({
+      label: lane.label,
+      value: resourceLaneStatusLabel(lane.status),
+      meta: lane.message,
+    })),
+    visualization: { resourcePlan: { lanes } },
+  };
+}
+
+function buildAiLearningCoverArtifact(
+  job: QuickClassroomGenerationSnapshot,
+): CourseDesignGenerationArtifact {
+  const coverStatus = latestStep(job, [...AI_LEARNING_COVER_STEPS]);
+  const failed = coverStatus === "course_cover_failed";
+  const ready = coverStatus === "course_cover_ready";
+  return {
+    id: "ai-learning-course-cover",
+    kind: failed ? "facts" : "audit",
+    eyebrow: "课程生成 · 课程封面",
+    title: failed ? "课程封面需要稍后补充" : ready ? "课程封面已经生成并保存" : "正在生成课程封面",
+    summary: latestMessage(job, [...AI_LEARNING_COVER_STEPS]),
+    accent: failed ? "orange" : "green",
+    items: [
+      { label: "课程主题", value: job.requestPreview?.courseTitle || "本次知识讲授课程" },
+      { label: "图片规格", value: "16:9 · 1280×720", meta: "无文字、无标识的主题插画" },
+      { label: "保存状态", value: failed ? "可在课程设计稿中重新生成" : ready ? "已写入课程" : "正在生成" },
+    ],
+  };
+}
+
+function buildAiLearningFinalArtifact(
+  job: QuickClassroomGenerationSnapshot,
+): CourseDesignGenerationArtifact {
+  const completed = job.status === "completed";
+  const resourceMessage = completed
+    ? job.message
+    : latestMessage(job, ["generation_resources_ready", "auditing_resources"]);
+  return {
+    id: "ai-learning-finalizing",
+    kind: "audit",
+    eyebrow: "课程生成 · 核对保存",
+    title: completed ? "课程内容已经生成并保存" : "正在核对并保存课程内容",
+    summary: resourceMessage,
+    accent: "green",
+    items: [
+      { label: "课堂页面", value: `${job.result?.studentSceneCount ?? job.scenesGenerated} 个页面已写入课程` },
+      { label: "配套资源", value: resourceMessage || "正在核对图片、语音与页面关联" },
+      { label: "课程存档", value: completed ? "已自动保存" : "正在自动保存" },
+      ...(job.result?.qualityReport?.summary
+        ? [{ label: "生成检查", value: job.result.qualityReport.summary }]
+        : []),
+    ],
+  };
+}
+
+function latestEvent(
+  job: QuickClassroomGenerationSnapshot,
+  steps: string[],
+): QuickClassroomGenerationEvent | undefined {
+  return [...job.events].reverse().find((event) => steps.includes(event.step));
+}
+
+function assetEventStatus(
+  event: QuickClassroomGenerationEvent | undefined,
+): "pending" | "running" | "completed" | "warning" {
+  if (!event) return "pending";
+  if (event.assetPhaseStatus === "completed") return "completed";
+  if (event.assetPhaseStatus === "partial-failure") return "warning";
+  return "running";
+}
+
+function resourceLaneStatusLabel(
+  status: "pending" | "running" | "completed" | "warning" | "skipped",
+): string {
+  if (status === "completed") return "已完成";
+  if (status === "warning") return "部分内容待处理";
+  if (status === "skipped") return "本课无需生成";
+  if (status === "running") return "正在处理";
+  return "等待开始";
+}
+
 export function resolveQuickClassroomActiveArtifactId(
   job: QuickClassroomGenerationSnapshot | null,
   options: { aiLearningOnly?: boolean } = {},
 ): string | undefined {
   if (!job) return undefined;
-  if (options.aiLearningOnly && ["queued", "initializing", "researching", "generating_outlines", "generating_scenes", "recovering_scenes", "persisting", "failed", "cancelled"].includes(job.step) && job.status !== "completed") {
-    return "ai-learning-generation-plan";
+  if (options.aiLearningOnly) {
+    if (job.status === "completed") return "ai-learning-finalizing";
+    const observedSteps = [job.step, ...job.events.slice().reverse().map((event) => event.step)];
+    if (observedSteps.some((step) => AI_LEARNING_FINAL_STEPS.includes(step as typeof AI_LEARNING_FINAL_STEPS[number]))) {
+      return "ai-learning-finalizing";
+    }
+    if (observedSteps.some((step) => AI_LEARNING_COVER_STEPS.includes(step as typeof AI_LEARNING_COVER_STEPS[number]))) {
+      return "ai-learning-course-cover";
+    }
+    if (observedSteps.some((step) => AI_LEARNING_RESOURCE_STEPS.includes(step as typeof AI_LEARNING_RESOURCE_STEPS[number]))) {
+      return "ai-learning-resources";
+    }
+    // The classroom builder reports "completed" before post-page resources
+    // start. Until a later persisted phase appears, the page card stays active.
+    return "ai-learning-page-production";
   }
-  // The classroom builder also reports "completed" before optional resources
-  // finish. Only the persisted job status means the entire course is finished.
-  if (options.aiLearningOnly && job.step === "completed" && job.status !== "completed") return "ai-learning-generation-plan";
-  if (options.aiLearningOnly && job.step === "auditing_resources") return "ai-learning-generation-plan";
   if (job.status === "completed" || job.step === "completed") return "classroom-persisting";
   if (job.step === "persisting_assets") return "classroom-persisting";
   if (job.step === "generation_resources_ready") return "classroom-resources-ready";
@@ -281,7 +482,7 @@ export function resolveQuickClassroomActiveArtifactId(
   if (job.step === "generating_scenes" && job.scenesGenerated > 0) {
     return `classroom-pages-${Math.max(1, Math.ceil(job.scenesGenerated / 3))}`;
   }
-  return options.aiLearningOnly ? "ai-learning-generation-plan" : "classroom-generation-plan";
+  return "classroom-generation-plan";
 }
 
 export function combineQuickGenerationProgress(
@@ -356,18 +557,19 @@ function buildAiLearningGenerationPlan(
   }, {});
   const completedScenes = Math.max(0, Math.min(job.scenesGenerated, totalScenes));
   const phaseIndex = resolveAiLearningPhase(job);
-  const title = job.status === "failed" ? "知识讲授内容等待继续"
-    : job.status === "cancelled" ? "知识讲授内容制作已中断"
-    : job.status === "cancelling" ? "正在中断知识讲授内容制作"
-    : job.status === "completed" ? "知识讲授课堂内容已生成"
-    : job.step === "recovering_scenes" ? "正在恢复知识讲授内容制作"
-    : completedScenes > 0 ? "正在制作知识讲授课堂内容"
-    : "开始制作可上课的知识讲授内容";
+  const title = job.status === "failed" ? "课堂页面制作等待继续"
+    : job.status === "cancelled" ? "课堂页面制作已中断"
+    : job.status === "cancelling" ? "正在中断课堂页面制作"
+    : job.status === "completed" ? "课堂页面已经制作完成"
+    : job.step === "recovering_scenes" ? "正在恢复课堂页面制作"
+    : ["queued", "initializing", "researching", "generating_outlines"].includes(job.step)
+      ? "正在准备课堂页面制作"
+      : "正在并行制作课堂页面";
 
   return {
-    id: "ai-learning-generation-plan",
+    id: "ai-learning-page-production",
     kind: "timeline",
-    eyebrow: "知识讲授内容生成 · 制作蓝图",
+    eyebrow: "课程生成 · 页面制作",
     title,
     summary: totalScenes > 0
       ? `${totalScenes} 个课堂页面 · 知识讲解、互动练习与节点检测按教学顺序编排`
@@ -400,6 +602,7 @@ function buildAiLearningGenerationPlan(
           videos: job.requestPreview?.enableVideoGeneration === true,
           tts: job.requestPreview?.enableTTS === true,
         },
+        activePages: job.activePages ?? [],
       },
     },
   };

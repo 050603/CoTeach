@@ -242,6 +242,8 @@ export type CourseGenerationJobEvent = {
   totalScenes: number;
   ts: number;
   assetPhaseStatus?: ClassroomAssetGenerationProgress["status"];
+  assetCompleted?: number;
+  assetTotal?: number;
   activePages?: ClassroomGenerationProgress["activePages"];
   stageDetail?: ClassroomGenerationProgress["stage"];
 };
@@ -401,6 +403,8 @@ async function persistWorkerPhase(
     message: string;
     estimatedRemainingSeconds?: number;
     assetPhaseStatus?: ClassroomAssetGenerationProgress["status"];
+    assetCompleted?: number;
+    assetTotal?: number;
   },
 ): Promise<void> {
   const event: CourseGenerationJobEvent = {
@@ -411,6 +415,8 @@ async function persistWorkerPhase(
     totalScenes: job.totalScenes,
     ts: Date.now(),
     assetPhaseStatus: input.assetPhaseStatus,
+    assetCompleted: input.assetCompleted,
+    assetTotal: input.assetTotal,
   };
   const updated = await contentGenerationJobs.update({
     where: { id: job.id },
@@ -964,6 +970,8 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
             message: progress.message,
             estimatedRemainingSeconds: progress.phase === "persisting" ? 20 : 60,
             assetPhaseStatus: progress.status,
+            assetCompleted: progress.completed,
+            assetTotal: progress.total,
           })),
         });
       } catch (assetError) {

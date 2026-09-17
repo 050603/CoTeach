@@ -1418,6 +1418,29 @@ export type CourseDesignGenerationArtifact = {
         videos: boolean;
         tts: boolean;
       };
+      /** Concurrent page work currently reported by the classroom generator. */
+      activePages?: Array<{
+        index: number;
+        title: string;
+        stage: string;
+        startedAt: number;
+        queueMs?: number;
+        requestStartedAt?: number;
+        executionMs?: number;
+        retryCount?: number;
+        lastOutputAt?: number;
+      }>;
+    };
+    /** Parallel post-page work shown together instead of as competing cards. */
+    resourcePlan?: {
+      lanes: Array<{
+        id: "routing" | "adaptive" | "media" | "tts";
+        label: string;
+        status: "pending" | "running" | "completed" | "warning" | "skipped";
+        message: string;
+        completed?: number;
+        total?: number;
+      }>;
     };
   };
 };

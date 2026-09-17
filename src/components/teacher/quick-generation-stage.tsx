@@ -6,13 +6,14 @@ import {
   BrainCircuit,
   Check,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
   Clock3,
   AlertTriangle,
   GitBranch,
   Eye,
+  Image as ImageIcon,
   Layers3,
+  Link2,
+  Mic2,
   Network,
   Route,
   RotateCcw,
@@ -154,13 +155,13 @@ export function QuickGenerationStage({
     : -1;
   const current = artifacts[safeActiveIndex];
   const displayed: CourseDesignGenerationArtifact = current ?? {
-    id: "teacher-brief",
+    id: "new-system-base",
     kind: "facts",
-    eyebrow: "正在理解课程要求",
-    title: "拆解教师输入",
-    summary: message || "AI 正在识别课程主题、学习对象、课时边界与成果要求。",
-    accent: "blue",
-    items: [{ label: "教师要求", value: brief }],
+    eyebrow: "课程生成 · 课程定位",
+    title: "正在确认课程定位",
+    summary: message || "正在识别课程主题、学习对象、课时边界与生成要求。",
+    accent: "orange",
+    items: [{ label: "教师要求", value: brief || "按已确认的课程资料开始生成" }],
   };
   const elapsedSeconds = startedAt
     ? Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1_000))
@@ -408,7 +409,7 @@ function ArtifactCard({ artifact, active, suspendedLabel }: { artifact: CourseDe
         </div>
         {showFade ? (
           <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 flex h-16 items-end justify-center bg-gradient-to-b from-white/0 via-white/80 to-white pb-1">
-            {artifact.id === "ai-learning-generation-plan" ? (
+            {artifact.id === "ai-learning-page-production" ? (
               <span className="rounded-full border border-blue-100 bg-white/95 px-2.5 py-1 text-[10px] font-semibold text-blue-700 shadow-sm">向下查看完整生成过程</span>
             ) : null}
           </div>
@@ -420,7 +421,8 @@ function ArtifactCard({ artifact, active, suspendedLabel }: { artifact: CourseDe
 }
 
 function ArtifactBody({ artifact, active, suspendedLabel }: { artifact: CourseDesignGenerationArtifact; active: boolean; suspendedLabel?: string }) {
-  if (artifact.visualization?.generationPlan) return <AiLearningGenerationPlanPreview artifact={artifact} active={active} suspendedLabel={suspendedLabel} />;
+  if (artifact.visualization?.generationPlan) return <AiLearningPageProductionPreview artifact={artifact} active={active} suspendedLabel={suspendedLabel} />;
+  if (artifact.visualization?.resourcePlan) return <AiLearningResourcePreview artifact={artifact} active={active} />;
   if (artifact.id.startsWith("classroom-pages-")) return <PageProductionPreview artifact={artifact} />;
   if (artifact.id === "classroom-media-assets") return <ResourceProductionPreview artifact={artifact} />;
   if (artifact.id === "classroom-tts-assets") return <TtsProductionPreview artifact={artifact} />;
@@ -434,9 +436,26 @@ function ArtifactBody({ artifact, active, suspendedLabel }: { artifact: CourseDe
   return <FactsPreview artifact={artifact} />;
 }
 
-function AiLearningGenerationPlanPreview({ artifact, active, suspendedLabel }: { artifact: CourseDesignGenerationArtifact; active: boolean; suspendedLabel?: string }) {
+const PAGE_TASK_LABELS: Record<string, string> = {
+  restoring: "恢复断点",
+  content: "制作页面正文",
+  "reviewed-content": "检查版式与知识覆盖",
+  actions: "生成讲稿与教学动作",
+  narration: "校验课堂口语",
+  assembling: "组装并保存页面",
+};
+
+const PAGE_TASK_STAGES = [
+  "restoring",
+  "content",
+  "reviewed-content",
+  "actions",
+  "narration",
+  "assembling",
+] as const;
+
+function AiLearningPageProductionPreview({ artifact, active, suspendedLabel }: { artifact: CourseDesignGenerationArtifact; active: boolean; suspendedLabel?: string }) {
   const reducedMotion = useReducedMotion();
-  const [expanded, setExpanded] = useState(false);
   const plan = artifact.visualization?.generationPlan;
   if (!plan) return <TimelinePreview artifact={artifact} />;
 
@@ -444,38 +463,31 @@ function AiLearningGenerationPlanPreview({ artifact, active, suspendedLabel }: {
     counts[scene.type] = (counts[scene.type] ?? 0) + 1;
     return counts;
   }, {});
-  const assetLabels = [
-    plan.assets.images ? "配图" : null,
-    plan.assets.videos ? "视频" : null,
-    plan.assets.tts ? "语音" : null,
-  ].filter((label): label is string => Boolean(label));
-  const phases = [
-    { label: "内容编排", icon: Network },
-    { label: "页面制作", icon: BookOpenCheck },
-    { label: "学习资源", icon: Route },
-    { label: "课程封面", icon: Sparkles },
-    { label: "审校保存", icon: ShieldCheck },
-  ];
   const statusLabels = { queued: "等待开始", running: "正在生成", recovering: "正在恢复", cancelling: "正在中断", cancelled: "已中断", completed: "已完成", failed: "等待重试" };
   const statusLabel = suspendedLabel ?? statusLabels[plan.status];
   const isRunning = active && plan.status === "running";
   const pageProgress = plan.totalScenes > 0 ? Math.min(100, (plan.completedScenes / plan.totalScenes) * 100) : 0;
-  const visibleScenes = expanded ? plan.scenes : plan.scenes.slice(0, 3);
+  const activePages = (plan.activePages ?? []).slice(0, 4);
+  const activeStageIndexes = new Set(activePages.map((page) => PAGE_TASK_STAGES.indexOf(page.stage as typeof PAGE_TASK_STAGES[number])));
+  const firstActiveStage = activeStageIndexes.size > 0
+    ? Math.min(...activeStageIndexes)
+    : plan.completedScenes >= plan.totalScenes && plan.totalScenes > 0 ? PAGE_TASK_STAGES.length : 0;
+  const nextScene = plan.scenes[Math.min(plan.completedScenes, Math.max(0, plan.scenes.length - 1))];
 
   return (
-    <div className="grid min-h-[300px] sm:grid-cols-[230px_minmax(0,1fr)]">
+    <div className="grid min-h-[300px] sm:grid-cols-[210px_minmax(0,1fr)]">
       <motion.section
         animate={{ opacity: 1, x: 0 }}
-        className="relative isolate min-h-[184px] overflow-hidden border-l-2 border-[var(--pbl-teacher)] bg-[linear-gradient(90deg,var(--pbl-teacher-soft),transparent_88%)] px-5 py-4 text-[var(--pbl-text)] sm:min-h-[244px]"
+        className="relative isolate min-h-[184px] overflow-hidden border-l-2 border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)]/55 px-5 py-4 text-[var(--pbl-text)] sm:min-h-[244px]"
         initial={false}
       >
         {isRunning ? <span aria-hidden className="quick-plan-shimmer absolute inset-y-0 w-20 bg-gradient-to-r from-transparent via-white/80 to-transparent motion-reduce:hidden" data-testid="ai-plan-shimmer" /> : null}
         <div className="relative flex h-full flex-col">
           <div className="flex items-center justify-between gap-3">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--pbl-teacher-border)] bg-white px-2.5 py-1 text-[9px] font-semibold tracking-[.12em] text-[var(--pbl-teacher)]">
-              <BrainCircuit className="size-3" />知识讲授
+              <BookOpenCheck className="size-3" />页面制作
             </span>
-            <span className="text-[10px] font-medium text-[var(--pbl-text-subtle)]">内容制作</span>
+            <span className="text-[10px] font-medium text-[var(--pbl-text-subtle)]">并行任务</span>
           </div>
 
           <div className="mt-3 flex items-end gap-2 sm:mt-5">
@@ -508,85 +520,122 @@ function AiLearningGenerationPlanPreview({ artifact, active, suspendedLabel }: {
       <section className="min-w-0 border-t border-[var(--pbl-border)] px-4 py-3.5 sm:border-l sm:border-t-0 sm:pl-5">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold tracking-[.06em] text-blue-700">生成流程</p>
-            <p className="mt-1 text-[11px] text-[var(--pbl-text-muted)]">讲解、互动与检测一同制作</p>
+            <p className="text-xs font-semibold tracking-[.06em] text-[var(--pbl-teacher)]">当前页面任务</p>
+            <p className="mt-1 text-[11px] text-[var(--pbl-text-muted)]">每一行均来自后台正在执行的真实步骤</p>
           </div>
           <span className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold", suspendedLabel || ["failed", "cancelled", "cancelling", "recovering"].includes(plan.status) ? "bg-amber-50 text-amber-800" : "bg-blue-50 text-blue-700")}>
             <span className={cn("size-1.5 rounded-full bg-current", isRunning && "motion-safe:animate-pulse")} />{statusLabel}
           </span>
         </div>
 
-        <ol aria-label="知识讲授内容生成流水线" className="mt-3 grid grid-cols-5">
-          {phases.map((phase, index) => {
-            const PhaseIcon = phase.icon;
-            const state = index < plan.phaseIndex ? "done" : index === plan.phaseIndex ? "current" : "pending";
+        <div className="mt-3 divide-y divide-[var(--pbl-border-soft)] border-y border-[var(--pbl-border)]" aria-label="当前并行页面任务">
+          {activePages.map((page, index) => (
+            <motion.div
+              animate={{ opacity: 1, x: 0 }}
+              className="grid grid-cols-[54px_minmax(0,1fr)_auto] items-center gap-3 py-2.5"
+              initial={false}
+              key={`${page.index}-${page.stage}`}
+              transition={{ delay: index * .06 }}
+            >
+              <span className="text-[10px] font-semibold tabular-nums text-[var(--pbl-text-subtle)]">第 {String(page.index).padStart(2, "0")} 页</span>
+              <span className="min-w-0">
+                <span className="block truncate text-[11px] font-semibold text-[var(--pbl-text)]" title={page.title}>{page.title}</span>
+                <span className="mt-0.5 block text-[9px] text-[var(--pbl-text-subtle)]">{pageTaskRuntime(page)}</span>
+              </span>
+              <span className="max-w-28 text-right text-[10px] font-semibold leading-4 text-[var(--pbl-teacher)]">{PAGE_TASK_LABELS[page.stage] ?? "处理页面内容"}</span>
+            </motion.div>
+          ))}
+          {activePages.length === 0 ? (
+            <div className="px-3 py-5 text-center">
+              <p className="text-[11px] font-semibold text-[var(--pbl-text)]">{plan.message || statusLabel}</p>
+              {nextScene ? <p className="mt-1 text-[10px] text-[var(--pbl-text-muted)]">下一页：{nextScene.title}</p> : null}
+            </div>
+          ) : null}
+        </div>
+
+        <ol aria-label="单页制作流程" className="mt-4 grid grid-cols-6">
+          {PAGE_TASK_STAGES.map((stage, index) => {
+            const current = activeStageIndexes.has(index);
+            const done = index < firstActiveStage;
             return (
-              <motion.li
-                animate={{ opacity: 1, y: 0 }}
-                aria-current={state === "current" ? "step" : undefined}
+              <li
+                aria-current={current ? "step" : undefined}
                 className="relative min-w-0 text-center"
-                initial={false}
-                key={phase.label}
-                transition={{ delay: index * .08 }}
+                key={stage}
               >
-                {index < phases.length - 1 ? (
-                  <span aria-hidden className={cn("absolute left-[58%] right-[-42%] top-[13px] h-px", state === "done" ? "bg-blue-400" : "bg-blue-100")} />
+                {index < PAGE_TASK_STAGES.length - 1 ? (
+                  <span aria-hidden className={cn("absolute left-[58%] right-[-42%] top-[4px] h-px", done ? "bg-emerald-300" : "bg-[var(--pbl-border)]")} />
                 ) : null}
                 <span className={cn(
-                  "relative mx-auto grid size-7 place-items-center rounded-full border bg-white",
-                  state === "done" && "border-blue-600 bg-blue-600 text-white",
-                  state === "current" && "border-blue-300 text-blue-700 ring-4 ring-blue-100/80",
-                  state === "pending" && "border-stone-200 text-stone-500",
-                )}>
-                  {state === "done" ? <Check className="size-3.5" /> : <PhaseIcon className="size-3" />}
-                </span>
-                <p className={cn("mt-2 text-[10px] font-semibold", state === "pending" ? "text-stone-500" : "text-[var(--pbl-text)]")}>{phase.label}</p>
-                <span className="sr-only">{state === "done" ? "已完成" : state === "current" ? statusLabel : "待开始"}</span>
-              </motion.li>
+                  "relative mx-auto block size-2 rounded-full",
+                  done && "bg-emerald-600",
+                  current && "bg-[var(--pbl-teacher)] ring-4 ring-[var(--pbl-teacher-soft)]",
+                  !done && !current && "bg-[var(--pbl-border)]",
+                )} />
+                <p className={cn("mt-2 text-[9px] font-semibold leading-3", !done && !current ? "text-[var(--pbl-text-subtle)]" : "text-[var(--pbl-text)]")}>{PAGE_TASK_LABELS[stage].replace(/^生成|^检查|^校验|^组装并|^制作/, "")}</p>
+                <span className="sr-only">{done ? "已完成" : current ? statusLabel : "待开始"}</span>
+              </li>
             );
           })}
         </ol>
-
-        <div className="mt-3 rounded-[10px] bg-blue-50/70 px-3 py-2">
-          <p aria-live="polite" className="text-[11px] leading-5 text-blue-900" role="status">
-            {suspendedLabel ? `${suspendedLabel} · 已完成 ${plan.completedScenes} 页` : plan.message || statusLabel}
-          </p>
-          <p className="mt-0.5 text-[10px] leading-4 text-blue-700">配套资源：分层学习{assetLabels.length > 0 ? ` · ${assetLabels.join(" · ")}` : ""}</p>
-        </div>
-
-        <div className="mt-3 border-t border-blue-100 pt-2.5">
-          <div className="mb-1.5 flex items-center justify-between gap-3">
-            <p className="text-[11px] font-semibold text-[var(--pbl-text)]">页面编排预览</p>
-            <span className="text-[10px] text-[var(--pbl-text-muted)]">按教学顺序</span>
-          </div>
-          <div className="space-y-1">
-            {visibleScenes.map((scene, index) => (
-              <motion.div
-                animate={{ opacity: 1, x: 0 }}
-                className="grid grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2 rounded-[9px] border border-transparent bg-white px-2 py-1.5 shadow-[0_5px_18px_-16px_rgba(30,64,175,.7)] ring-1 ring-blue-50"
-                initial={false}
-                key={scene.id}
-                transition={{ delay: Math.min(.28 + index * .07, .5) }}
-              >
-                <span className="grid size-6 place-items-center rounded-[7px] bg-blue-50 text-[10px] font-bold tabular-nums text-blue-700">{String(index + 1).padStart(2, "0")}</span>
-                <div className="min-w-0">
-                  <p className="line-clamp-2 text-[11px] font-semibold leading-4 text-[var(--pbl-text)]" title={scene.title}>{scene.title}</p>
-                  <p className="mt-0.5 text-[10px] text-[var(--pbl-text-muted)]">{scene.typeLabel} · {formatPlanDuration(scene.estimatedDuration ?? 0)}</p>
-                </div>
-                <span className={cn("rounded-full px-2 py-1 text-[10px] font-semibold", sceneTypeSurface(scene.type))}>{shortSceneType(scene.type)}</span>
-              </motion.div>
-            ))}
-            {plan.scenes.length === 0 ? (
-              <div className="rounded-[9px] border border-dashed border-blue-200 bg-white/70 px-3 py-4 text-center text-[11px] text-[var(--pbl-text-muted)]">正在整理页面标题与学习顺序</div>
-            ) : null}
-          </div>
-          {plan.scenes.length > 3 ? (
-            <button aria-expanded={expanded} className="mt-2 flex min-h-9 w-full items-center justify-center gap-1 rounded-lg text-[11px] font-semibold text-blue-700 transition hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600" onClick={() => setExpanded((value) => !value)} type="button">
-              {expanded ? <>收起页面 <ChevronUp className="size-3.5" /></> : <>查看全部 {plan.scenes.length} 页 <ChevronDown className="size-3.5" /></>}
-            </button>
-          ) : null}
-        </div>
       </section>
+    </div>
+  );
+}
+
+function pageTaskRuntime(page: NonNullable<NonNullable<NonNullable<CourseDesignGenerationArtifact["visualization"]>["generationPlan"]>["activePages"]>[number]): string {
+  const details: string[] = [];
+  if ((page.queueMs ?? 0) >= 1_000) details.push(`排队 ${Math.ceil(page.queueMs! / 1_000)} 秒`);
+  if ((page.executionMs ?? 0) >= 1_000) details.push(`已处理 ${Math.ceil(page.executionMs! / 1_000)} 秒`);
+  if ((page.retryCount ?? 0) > 0) details.push(`已重试 ${page.retryCount} 次`);
+  return details.join(" · ") || "任务正在执行";
+}
+
+function AiLearningResourcePreview({ artifact, active }: { artifact: CourseDesignGenerationArtifact; active: boolean }) {
+  const plan = artifact.visualization?.resourcePlan;
+  if (!plan) return <FactsPreview artifact={artifact} />;
+  const icons = { routing: Link2, adaptive: Route, media: ImageIcon, tts: Mic2 };
+  const statusText = { pending: "等待开始", running: "正在处理", completed: "已完成", warning: "部分待处理", skipped: "无需生成" };
+  return (
+    <div className="grid min-h-[250px] content-center gap-x-6 sm:grid-cols-2">
+      {plan.lanes.map((lane, index) => {
+        const Icon = icons[lane.id];
+        const percentage = lane.total && lane.total > 0 ? Math.min(100, ((lane.completed ?? 0) / lane.total) * 100) : null;
+        return (
+          <motion.section
+            animate={{ opacity: 1, y: 0 }}
+            className="border-t border-[var(--pbl-border)] py-4"
+            initial={false}
+            key={lane.id}
+            transition={{ delay: index * .07 }}
+          >
+            <div className="flex items-start gap-3">
+              <span className={cn(
+                "relative grid size-9 shrink-0 place-items-center rounded-[var(--radius-md)] border",
+                lane.status === "completed" && "border-emerald-200 bg-emerald-50 text-emerald-700",
+                lane.status === "warning" && "border-amber-200 bg-amber-50 text-amber-800",
+                !["completed", "warning"].includes(lane.status) && "border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]",
+              )}>
+                <Icon className="size-4" />
+                {active && lane.status === "running" ? <span aria-hidden className="absolute -bottom-1 -right-1 size-2 rounded-full bg-emerald-500 ring-2 ring-white motion-safe:animate-pulse" /> : null}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[11px] font-semibold text-[var(--pbl-text)]">{lane.label}</p>
+                  <span className="shrink-0 text-[9px] font-semibold text-[var(--pbl-text-subtle)]">{statusText[lane.status]}</span>
+                </div>
+                <p className="mt-1 text-[9px] leading-[15px] text-[var(--pbl-text-muted)]">{lane.message}</p>
+                {percentage !== null ? (
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--pbl-border-soft)]"><motion.span animate={{ width: `${percentage}%` }} className="block h-full bg-[var(--pbl-teacher)]" initial={false} /></div>
+                    <span className="text-[9px] tabular-nums text-[var(--pbl-text-subtle)]">{lane.completed ?? 0}/{lane.total}</span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </motion.section>
+        );
+      })}
     </div>
   );
 }
@@ -985,20 +1034,6 @@ function compactSideTitle(title: string | undefined, fallback: string): string {
 function formatPlanDuration(seconds: number): string {
   if (seconds <= 0) return "动态时长";
   return `约 ${Math.max(1, Math.round(seconds / 60))} 分钟`;
-}
-
-function shortSceneType(type: string): string {
-  if (type === "interactive") return "互动";
-  if (type === "quiz") return "检测";
-  if (type === "pbl") return "任务";
-  return "讲解";
-}
-
-function sceneTypeSurface(type: string): string {
-  if (type === "interactive") return "bg-violet-50 text-violet-700";
-  if (type === "quiz") return "bg-amber-50 text-amber-700";
-  if (type === "pbl") return "bg-emerald-50 text-emerald-700";
-  return "bg-blue-50 text-blue-700";
 }
 
 function accentText(accent: CourseDesignGenerationArtifact["accent"]): string {

@@ -34,7 +34,7 @@ function job(overrides: Partial<QuickClassroomGenerationSnapshot> = {}): QuickCl
 }
 
 describe("buildQuickClassroomArtifacts", () => {
-  it("builds a detailed AI-learning production blueprint for the new system", () => {
+  it("builds a live AI-learning page-production card for the new system", () => {
     const aiLearningJob = job({
       scenesGenerated: 0,
       totalScenes: 4,
@@ -56,13 +56,14 @@ describe("buildQuickClassroomArtifacts", () => {
     const blueprint = artifacts[0];
 
     expect(blueprint).toMatchObject({
-      id: "ai-learning-generation-plan",
-      title: "开始制作可上课的知识讲授内容",
+      id: "ai-learning-page-production",
+      title: "正在并行制作课堂页面",
       visualization: {
         generationPlan: {
           totalScenes: 4,
           estimatedDuration: 960,
           assets: { images: true, videos: false, tts: true },
+          activePages: [],
         },
       },
     });
@@ -72,7 +73,7 @@ describe("buildQuickClassroomArtifacts", () => {
       "检查核心概念",
       "理解使用边界",
     ]);
-    expect(resolveQuickClassroomActiveArtifactId(aiLearningJob, { aiLearningOnly: true })).toBe("ai-learning-generation-plan");
+    expect(resolveQuickClassroomActiveArtifactId(aiLearningJob, { aiLearningOnly: true })).toBe("ai-learning-page-production");
   });
 
   it("uses readable fallbacks for malformed generated labels", () => {
@@ -97,7 +98,7 @@ describe("buildQuickClassroomArtifacts", () => {
     for (const step of ["generating_scenes", "recovering_scenes", "persisting", "completed"]) {
       const snapshot = job({ step, scenesGenerated: 4 });
       const artifacts = buildQuickClassroomArtifacts(snapshot, { aiLearningOnly: true });
-      expect(resolveQuickClassroomActiveArtifactId(snapshot, { aiLearningOnly: true })).toBe("ai-learning-generation-plan");
+      expect(resolveQuickClassroomActiveArtifactId(snapshot, { aiLearningOnly: true })).toBe("ai-learning-page-production");
       expect(artifacts[0].visualization?.generationPlan).toMatchObject({ completedScenes: 4, phaseIndex: 1 });
       expect(artifacts.some((artifact) => artifact.id.startsWith("classroom-pages-"))).toBe(false);
     }
@@ -123,7 +124,7 @@ describe("buildQuickClassroomArtifacts", () => {
       events: [{ step: "generating_scenes", progress: 40, message: "正在制作页面", scenesGenerated: 2, totalScenes: 6, ts: 1 }],
     });
     const artifact = buildQuickClassroomArtifacts(snapshot, { aiLearningOnly: true })[0];
-    expect(artifact.title).toBe("知识讲授内容等待继续");
+    expect(artifact.title).toBe("课堂页面制作等待继续");
     expect(artifact.visualization?.generationPlan).toMatchObject({ completedScenes: 2, phaseIndex: 1, status: "failed" });
   });
 
@@ -135,7 +136,29 @@ describe("buildQuickClassroomArtifacts", () => {
 
     const artifacts = buildQuickClassroomArtifacts(job({ status: "completed", step: "completed" }), { aiLearningOnly: true });
     expect(JSON.stringify(artifacts)).not.toContain("教师资源");
-    expect(resolveQuickClassroomActiveArtifactId(job({ status: "completed", step: "completed" }), { aiLearningOnly: true })).toBe("classroom-persisting");
+    expect(resolveQuickClassroomActiveArtifactId(job({ status: "completed", step: "completed" }), { aiLearningOnly: true })).toBe("ai-learning-finalizing");
+  });
+
+  it("uses four forward-only classroom cards after the four design cards", () => {
+    const events: QuickClassroomGenerationSnapshot["events"] = [
+      { step: "separating_classrooms", progress: 91, message: "正在关联课堂", scenesGenerated: 6, totalScenes: 6, ts: 1 },
+      { step: "generating_media_assets", assetPhaseStatus: "completed", assetCompleted: 4, assetTotal: 4, progress: 99, message: "已完成 4 项图片资源", scenesGenerated: 6, totalScenes: 6, ts: 2 },
+      { step: "generating_tts_assets", assetPhaseStatus: "completed", assetCompleted: 1, assetTotal: 1, progress: 99, message: "课堂讲授语音已经生成并写入页面", scenesGenerated: 6, totalScenes: 6, ts: 3 },
+      { step: "course_cover_ready", progress: 99, message: "课程封面已生成并保存", scenesGenerated: 6, totalScenes: 6, ts: 4 },
+      { step: "generation_resources_ready", progress: 99, message: "课程封面与课堂资源已经就绪", scenesGenerated: 6, totalScenes: 6, ts: 5 },
+    ];
+    const artifacts = buildQuickClassroomArtifacts(job({ status: "completed", step: "completed", events }), { aiLearningOnly: true });
+
+    expect(artifacts.map((artifact) => artifact.id)).toEqual([
+      "ai-learning-page-production",
+      "ai-learning-resources",
+      "ai-learning-course-cover",
+      "ai-learning-finalizing",
+    ]);
+    expect(artifacts[1].visualization?.resourcePlan?.lanes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "media", status: "completed", completed: 4, total: 4 }),
+      expect.objectContaining({ id: "tts", status: "completed" }),
+    ]));
   });
 
   it("continues the quick canvas with real outline titles and forward-only page batches", () => {

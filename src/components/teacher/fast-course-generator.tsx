@@ -149,6 +149,77 @@ function pageRuntimeLabel(page: NonNullable<QuickClassroomGenerationSnapshot["ac
   return details.length ? `，${details.join("，")}` : "";
 }
 
+function liveDesignArtifact(
+  job: DesignJob | null,
+  course: Course,
+): CourseDesignGenerationArtifact | null {
+  if (!job || job.status === "completed") return null;
+  const common = {
+    summary: job.message || "正在读取本次课程的已确认信息。",
+    accent: "blue" as const,
+  };
+  if (["queued", "base"].includes(job.step)) {
+    return {
+      id: "new-system-base",
+      kind: "facts",
+      eyebrow: "课程生成 · 课程定位",
+      title: "正在确认课程定位",
+      ...common,
+      accent: "orange",
+      items: [
+        { label: "课程", value: course.name || "本次课程" },
+        { label: "学习对象", value: course.grade || "正在读取" },
+        { label: "教师课时容量", value: `${Math.round(course.hours * 60)} 分钟` },
+      ],
+    };
+  }
+  if (["knowledgePoints", "knowledgeReview"].includes(job.step)) {
+    return {
+      id: "new-system-knowledge",
+      kind: "facts",
+      eyebrow: "课程生成 · 知识图谱",
+      title: job.status === "paused" || job.status === "review_available" ? "知识图谱等待教师确认" : "正在生成知识图谱",
+      ...common,
+      items: [
+        { label: "课程主题", value: course.name || "本次课程" },
+        { label: "生成内容", value: "知识点、层级与依赖关系" },
+        { label: "下一步", value: "教师确认后进入时长规划" },
+      ],
+    };
+  }
+  if (job.step === "aiDurationPlanning") {
+    return {
+      id: "new-system-ai-duration",
+      kind: "facts",
+      eyebrow: "课程生成 · 时长规划",
+      title: "正在规划知识讲授时长",
+      ...common,
+      accent: "violet",
+      items: [
+        { label: "课程容量", value: `${Math.round(course.hours * 60)} 分钟` },
+        { label: "规划依据", value: "知识层级、依赖关系与学情" },
+        { label: "时间范围", value: course.content.stagePlan ? "采用教师确认的教案时长" : "整课时长的 20%–40%" },
+      ],
+    };
+  }
+  if (["lessonOutline", "outlineReview"].includes(job.step)) {
+    return {
+      id: "new-system-pages",
+      kind: "facts",
+      eyebrow: "课程生成 · 页面大纲",
+      title: job.status === "paused" || job.status === "review_available" ? "页面大纲等待教师确认" : "正在编排页面大纲",
+      ...common,
+      accent: "green",
+      items: [
+        { label: "知识讲解", value: "按知识小节组织页面" },
+        { label: "互动练习", value: "在需要操作与反馈处安排" },
+        { label: "学习检测", value: "每个知识小节结束后检查达成" },
+      ],
+    };
+  }
+  return null;
+}
+
 export function FastCourseGenerator({
   course,
   onOpenDetailed,
@@ -510,12 +581,15 @@ export function FastCourseGenerator({
 
   const artifacts = useMemo<CourseDesignGenerationArtifact[]>(() => {
     const seen = new Set<string>();
-    return (job?.trace ?? []).flatMap((entry) => entry.artifacts ?? []).filter((item) => {
+    const completedArtifacts = (job?.trace ?? []).flatMap((entry) => entry.artifacts ?? []).filter((item) => {
       if (seen.has(item.id)) return false;
       seen.add(item.id);
       return true;
     });
-  }, [job?.trace]);
+    const liveArtifact = liveDesignArtifact(job, course);
+    if (liveArtifact && !seen.has(liveArtifact.id)) completedArtifacts.push(liveArtifact);
+    return completedArtifacts;
+  }, [course, job]);
 
   const combinedArtifacts = useMemo(
     () => [...artifacts, ...buildQuickClassroomArtifacts(classroomJob, { aiLearningOnly: simplified })],
