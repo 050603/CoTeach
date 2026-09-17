@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, Eye, Network, PanelLeft, ShieldCheck } from "lucide-react";
+import { ChevronDown, Clock3, Eye, Network, PanelLeft, ShieldCheck } from "lucide-react";
 import { StudentStageHost } from "@/components/openmaic-bridge/student-stage-host";
 import type { Course } from "@/lib/session/types";
 import type { TeacherPresentationMode } from "@/lib/classroom/presentation";
@@ -18,6 +18,8 @@ export function AiLearningTeacherPreview({ course, presentation = "workspace", w
   const workspace = presentation === "workspace";
   const workspacePreviewVisible = workspace && workspacePreviewEnabled && expanded;
   const visible = teaching || workspacePreviewVisible;
+  const timingAudit = course.content.teachingTimingAudit;
+  const formatMinutes = (seconds: number) => `${Math.round(seconds / 6) / 10} 分钟`;
 
   if (!course.aiLearningClassroomId) return null;
 
@@ -43,6 +45,15 @@ export function AiLearningTeacherPreview({ course, presentation = "workspace", w
           <span className="min-w-0">
             <span className="block text-base font-bold text-stone-900">学生知识讲授课程预览</span>
             <span className="mt-0.5 block text-xs text-stone-500">{expanded ? (teachingVisited ? "正在预览 · 保留授课位置" : "正在预览 · 收起后自动停止播放") : "默认收起 · 点击展开课程"}</span>
+            {timingAudit ? <span className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-stone-600">
+              <Clock3 size={12} />
+              {timingAudit.narrationDurationSource === "actual-audio"
+                ? `讲授音频实测 ${formatMinutes(timingAudit.substantiveTeachingDurationSec)}${timingAudit.complete ? "" : `（${timingAudit.measuredSegmentCount}/${timingAudit.narrationSegmentCount} 段）`}`
+                : `讲授时长估算 ${formatMinutes(timingAudit.substantiveTeachingDurationSec)}（TTS 未开启）`}
+              {!timingAudit.teachingRatioValid ? <span className="text-amber-700">讲授时长与计划偏差较大</span> : null}
+              <span className="text-stone-300">·</span>
+              小测与反馈预算 {formatMinutes(timingAudit.plannedAssessmentSec)}
+            </span> : null}
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-2 text-xs font-bold text-stone-500">

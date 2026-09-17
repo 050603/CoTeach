@@ -17,6 +17,37 @@ describe("quick positioning generation", () => {
     callLLM.mockReset();
   });
 
+  it("restores a transport attempt budget only for the same input and model", async () => {
+    const {
+      restoreCourseDesignAttemptCount,
+      restoreCourseDesignStageResponse,
+    } = await import("./job-runner");
+    const checkpoint = {
+      schemaVersion: 1,
+      inputFingerprint: "input-a",
+      modelFingerprint: "model-a",
+      attemptsStarted: 2,
+    };
+
+    expect(restoreCourseDesignAttemptCount(checkpoint, "input-a", "model-a")).toBe(2);
+    expect(restoreCourseDesignAttemptCount(checkpoint, "input-b", "model-a")).toBe(0);
+    expect(restoreCourseDesignAttemptCount(checkpoint, "input-a", "model-b")).toBe(0);
+
+    const completedResponse = {
+      schemaVersion: 1,
+      status: "response-complete",
+      inputFingerprint: "input-a",
+      modelFingerprint: "model-a",
+      rawResponse: '{"knowledgePoints":[],"knowledgeGraph":{"nodes":[],"edges":[]}}',
+    };
+    expect(restoreCourseDesignStageResponse(completedResponse, "input-a", "model-a"))
+      .toBe(completedResponse.rawResponse);
+    expect(restoreCourseDesignStageResponse(completedResponse, "input-b", "model-a")).toBeNull();
+    expect(restoreCourseDesignStageResponse(completedResponse, "input-a", "model-b")).toBeNull();
+    expect(restoreCourseDesignStageResponse({ ...completedResponse, status: "validated" }, "input-a", "model-a"))
+      .toBeNull();
+  }, 15_000);
+
   it("forces every new-system outline into the student AI授知 stage", async () => {
     const { normalizeNewSystemAiOutlines } = await import("./job-runner");
     const outlines = normalizeNewSystemAiOutlines([{

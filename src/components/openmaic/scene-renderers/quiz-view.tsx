@@ -13,6 +13,7 @@ import {
   Loader2,
   MessageCircleQuestion,
   ArrowRight,
+  GripVertical,
 } from 'lucide-react';
 import { cn } from '@openmaic/lib/utils';
 import { useI18n } from '@openmaic/lib/hooks/use-i18n';
@@ -364,6 +365,132 @@ function MultipleChoiceQuestion({
   );
 }
 
+function MatchingQuestion({
+  question,
+  index,
+  value,
+  onChange,
+  disabled,
+  result,
+  onExplain,
+}: {
+  question: QuizQuestion;
+  index: number;
+  value?: string[];
+  onChange: (value: string[]) => void;
+  disabled?: boolean;
+  result?: QuestionResult;
+  onExplain?: () => void;
+}) {
+  const [selectedRightId, setSelectedRightId] = useState<string>();
+  const pairs = question.matchingPairs ?? [];
+  const selected = value ?? [];
+  const relationMap = new Map(selected.flatMap((relation) => {
+    const separator = relation.indexOf(':');
+    return separator > 0 ? [[relation.slice(0, separator), relation.slice(separator + 1)] as const] : [];
+  }));
+  const rightById = new Map(pairs.map((pair) => [pair.rightId, pair.right]));
+  const shuffledRight = pairs.length > 1 ? [...pairs.slice(1), pairs[0]!] : pairs;
+  const correct = new Set(question.answer ?? []);
+  const review = Boolean(result);
+
+  const assign = (leftId: string, rightId: string) => {
+    if (disabled) return;
+    const next = selected.filter((relation) => {
+      const separator = relation.indexOf(':');
+      const currentLeft = relation.slice(0, separator);
+      const currentRight = relation.slice(separator + 1);
+      return currentLeft !== leftId && currentRight !== rightId;
+    });
+    onChange([...next, `${leftId}:${rightId}`]);
+    setSelectedRightId(undefined);
+  };
+
+  return (
+    <QuestionCard question={question} index={index} result={result} onExplain={onExplain}>
+      {!review && (
+        <p className="mb-3 text-xs text-gray-400 dark:text-gray-500">
+          拖动右侧卡片到对应项，也可以依次点击右侧卡片和左侧目标。
+        </p>
+      )}
+      <div className="grid gap-3 md:grid-cols-[1.35fr_1fr]">
+        <div className="space-y-2">
+          {pairs.map((pair) => {
+            const rightId = relationMap.get(pair.leftId);
+            const relation = rightId ? `${pair.leftId}:${rightId}` : '';
+            const isCorrect = review && correct.has(relation);
+            const isWrong = review && Boolean(rightId) && !isCorrect;
+            return (
+              <button
+                key={pair.leftId}
+                type="button"
+                disabled={disabled}
+                aria-label={`匹配到 ${pair.left}`}
+                onClick={() => selectedRightId && assign(pair.leftId, selectedRightId)}
+                onDragOver={(event) => {
+                  if (!disabled) event.preventDefault();
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const draggedRightId = event.dataTransfer.getData('application/x-openpbl-match');
+                  if (draggedRightId) assign(pair.leftId, draggedRightId);
+                }}
+                className={cn(
+                  'grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-3 rounded-xl border px-3 py-2 text-left text-sm transition',
+                  !review && 'border-gray-200 hover:border-violet-300 hover:bg-violet-50/40 dark:border-gray-600 dark:hover:border-violet-700',
+                  !review && selectedRightId && 'border-dashed border-violet-400 bg-violet-50/60 dark:bg-violet-900/20',
+                  isCorrect && 'border-emerald-400 bg-emerald-50 dark:bg-emerald-900/30',
+                  isWrong && 'border-red-300 bg-red-50 dark:bg-red-900/30',
+                )}
+              >
+                <span className="font-medium text-gray-800 dark:text-gray-100">{pair.left}</span>
+                <span className={cn(
+                  'rounded-lg border border-dashed px-3 py-2 text-gray-500 dark:border-gray-600 dark:text-gray-300',
+                  rightId && 'border-solid border-violet-200 bg-white dark:border-violet-700 dark:bg-gray-800',
+                )}>
+                  <span className="block">{rightId ? rightById.get(rightId) : '放置匹配项'}</span>
+                  {isWrong && <span className="mt-1 block text-xs font-medium text-emerald-700 dark:text-emerald-300">正确：{pair.right}</span>}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {!review && (
+          <div className="space-y-2">
+            {shuffledRight.map((pair) => {
+              const used = [...relationMap.values()].includes(pair.rightId);
+              return (
+                <button
+                  key={pair.rightId}
+                  type="button"
+                  draggable={!disabled}
+                  aria-pressed={selectedRightId === pair.rightId}
+                  aria-label={`选择匹配项 ${pair.right}`}
+                  onClick={() => !disabled && setSelectedRightId(pair.rightId)}
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData('application/x-openpbl-match', pair.rightId);
+                    event.dataTransfer.effectAllowed = 'move';
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition',
+                    selectedRightId === pair.rightId
+                      ? 'border-violet-400 bg-violet-50 text-violet-800 ring-1 ring-violet-200 dark:bg-violet-900/30 dark:text-violet-200'
+                      : 'border-gray-200 bg-white text-gray-700 hover:border-violet-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200',
+                    used && selectedRightId !== pair.rightId && 'opacity-50',
+                  )}
+                >
+                  <GripVertical className="h-4 w-4 shrink-0 text-gray-400" />
+                  <span>{pair.right}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </QuestionCard>
+  );
+}
+
 function ShortAnswerQuestion({
   question,
   index,
@@ -523,7 +650,9 @@ function QuestionCard({
               <QuizMathText text={question.question} allowDisplayMode />
             </div>
             <p className="text-xs text-gray-400 mt-0.5">
-              {question.format === 'true_false'
+              {question.format === 'matching'
+                ? '拖拽匹配题'
+                : question.format === 'true_false'
                 ? '判断题'
                 : question.format === 'fill_blank'
                   ? '填空题'
@@ -677,7 +806,9 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
     const reviews = new Map(lockedAttempt.questions.map((question) => [question.questionId, question]));
     const restoredAnswers = Object.fromEntries(questions.map((question) => {
       const answer = reviews.get(question.id)?.answer ?? '';
-      return [question.id, question.type === 'multiple' ? answer.split('、').filter(Boolean) : answer];
+      return [question.id, question.type === 'multiple' || question.type === 'matching'
+        ? answer.split('、').filter(Boolean)
+        : answer];
     }));
     return {
       kind: 'reviewing',
@@ -744,7 +875,16 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
     return questions.every((q) => {
       const a = answers[q.id];
       if (!a) return false;
-      if (Array.isArray(a)) return a.length > 0;
+      if (Array.isArray(a)) {
+        if (q.format === 'matching') {
+          const expectedLeftIds = new Set((q.matchingPairs ?? []).map((pair) => pair.leftId));
+          const answeredLeftIds = new Set(a.map((relation) => relation.split(':', 1)[0]).filter(Boolean));
+          return expectedLeftIds.size >= 2
+            && expectedLeftIds.size === answeredLeftIds.size
+            && [...expectedLeftIds].every((id) => answeredLeftIds.has(id));
+        }
+        return a.length > 0;
+      }
       return (a as string).trim().length > 0;
     });
   }, [questions, answers]);
@@ -873,10 +1013,13 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
                 </span>
                 <span className="text-xs text-gray-400 ml-1">
                   {
-                    Object.keys(answers).filter((k) => {
-                      const a = answers[k];
-                      if (Array.isArray(a)) return a.length > 0;
-                      return typeof a === 'string' && a.trim().length > 0;
+                    questions.filter((question) => {
+                      const answer = answers[question.id];
+                      if (Array.isArray(answer) && question.format === 'matching') {
+                        return answer.length === (question.matchingPairs?.length ?? 0) && answer.length >= 2;
+                      }
+                      if (Array.isArray(answer)) return answer.length > 0;
+                      return typeof answer === 'string' && answer.trim().length > 0;
                     }).length
                   }{' '}
                   / {questions.length}
@@ -899,6 +1042,17 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
             {/* Questions */}
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
               {questions.map((q, i) => {
+                if (q.format === 'matching') {
+                  return (
+                    <MatchingQuestion
+                      key={q.id}
+                      question={q}
+                      index={i}
+                      value={answers[q.id] as string[] | undefined}
+                      onChange={(v) => handleSetAnswer(q.id, v)}
+                    />
+                  );
+                }
                 if (q.type === 'single') {
                   return (
                     <SingleChoiceQuestion
@@ -999,6 +1153,20 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
 
               {questions.map((q, i) => {
                 const r = resultMap[q.id];
+                if (q.format === 'matching') {
+                  return (
+                    <MatchingQuestion
+                      key={q.id}
+                      question={q}
+                      index={i}
+                      value={answers[q.id] as string[] | undefined}
+                      onChange={() => {}}
+                      disabled
+                      result={r}
+                      onExplain={() => handleExplain(q.id)}
+                    />
+                  );
+                }
                 if (q.type === 'single') {
                   return (
                     <SingleChoiceQuestion

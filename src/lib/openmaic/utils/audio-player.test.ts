@@ -1,0 +1,83 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AudioPlayer } from './audio-player';
+
+class FakeAudio extends EventTarget {
+  src = '';
+  volume = 1;
+  defaultPlaybackRate = 1;
+  playbackRate = 1;
+  currentTime = 0;
+  duration = 10;
+  paused = true;
+  play = vi.fn(async () => {
+    this.paused = false;
+  });
+  pause = vi.fn(() => {
+    this.paused = true;
+  });
+  load = vi.fn();
+}
+
+describe('AudioPlayer playback warmup', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal('Audio', FakeAudio);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('prerolls quietly, rewinds, and then starts the first page clip audibly', async () => {
+    const player = new AudioPlayer();
+    player.setVolume(0.8);
+    player.requestPlaybackWarmup();
+
+    const playback = player.play('', '/narration.mp3');
+    await vi.advanceTimersByTimeAsync(319);
+
+    const audio = (player as unknown as { audio: FakeAudio }).audio;
+    expect(audio.play).toHaveBeenCalledTimes(1);
+    expect(audio.volume).toBe(0.001);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(playback).resolves.toBe(true);
+    expect(audio.pause).toHaveBeenCalledTimes(1);
+    expect(audio.currentTime).toBe(0);
+    expect(audio.volume).toBe(0.8);
+    expect(audio.play).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not add a warmup before every narration segment', async () => {
+    const player = new AudioPlayer();
+    const firstPlayback = player.play('', '/first.mp3');
+    await vi.advanceTimersByTimeAsync(320);
+    await firstPlayback;
+
+    await expect(player.play('', '/second.mp3')).resolves.toBe(true);
+    const audio = (player as unknown as { audio: FakeAudio }).audio;
+    expect(audio.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('rewinds and stays paused when the user pauses during warmup', async () => {
+    const player = new AudioPlayer();
+    const onEnded = vi.fn();
+    player.onEnded(onEnded);
+
+    const playback = player.play('', '/narration.mp3');
+    await vi.advanceTimersByTimeAsync(100);
+    const audio = (player as unknown as { audio: FakeAudio }).audio;
+    player.pause();
+    await vi.advanceTimersByTimeAsync(220);
+
+    await expect(playback).resolves.toBe(false);
+    expect(audio.paused).toBe(true);
+    expect(audio.currentTime).toBe(0);
+    expect(onEnded).not.toHaveBeenCalled();
+
+    player.resume();
+    expect(audio.play).toHaveBeenCalledTimes(2);
+    expect(audio.volume).toBe(1);
+  });
+});

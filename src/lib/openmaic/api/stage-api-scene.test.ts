@@ -36,6 +36,14 @@ describe("createSceneAPI PBL metadata", () => {
       companionIds: ["explainer"],
       companionPrompt: "解释并追问",
       activityId: "activity-1",
+      lectureSectionId: "section-1",
+      lectureSectionTitle: "训练集与测试集",
+      teachingUnitIds: ["unit-isolation"],
+      assessmentUnitIds: ["unit-isolation", "unit-leakage"],
+      segmentIndex: 1,
+      segmentCount: 2,
+      segmentRole: "mechanism",
+      segmentGroupId: "section-1-pages",
       resourceTypes: ["ppt"],
     });
 
@@ -48,6 +56,14 @@ describe("createSceneAPI PBL metadata", () => {
       companionIds: ["explainer"],
       companionPrompt: "解释并追问",
       activityId: "activity-1",
+      lectureSectionId: "section-1",
+      lectureSectionTitle: "训练集与测试集",
+      teachingUnitIds: ["unit-isolation"],
+      assessmentUnitIds: ["unit-isolation", "unit-leakage"],
+      segmentIndex: 1,
+      segmentCount: 2,
+      segmentRole: "mechanism",
+      segmentGroupId: "section-1-pages",
       resourceTypes: ["ppt"],
     });
   });

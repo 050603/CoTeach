@@ -1,6 +1,6 @@
 'use client';
 
-import { CircleDot, ListChecks, PencilLine, type LucideIcon } from 'lucide-react';
+import { CircleDot, ListChecks, PencilLine, Workflow, type LucideIcon } from 'lucide-react';
 import { PopoverClose } from '@openmaic/components/ui/popover';
 import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import type { QuizQuestionType } from '@openmaic/lib/types/stage';
@@ -24,6 +24,12 @@ const TYPES: { type: QuizQuestionType; labelKey: string; Icon: LucideIcon; tint:
     labelKey: 'edit.quiz.type.short_answer',
     Icon: PencilLine,
     tint: 'bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300',
+  },
+  {
+    type: 'matching',
+    labelKey: 'edit.quiz.type.matching',
+    Icon: Workflow,
+    tint: 'bg-cyan-100 text-cyan-600 dark:bg-cyan-500/15 dark:text-cyan-300',
   },
 ];
 

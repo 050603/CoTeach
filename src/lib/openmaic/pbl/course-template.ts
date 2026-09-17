@@ -40,7 +40,7 @@ export const PBL_STAGE_DEFINITIONS: PblStageDefinition[] = [
   {
     key: "ai-learning",
     label: "知识讲授",
-    responsibility: "学生按关联知识点分节学习核心知识，每节通过 2—3 道简短主观题小测与 AI 助教讲解验证并巩固理解。",
+    responsibility: "学生按关联知识点分节学习核心知识，每节通过 1—2 道符合教师所选模式的小测与 AI 助教讲解验证并巩固理解。",
     allowedAudience: "student",
     studentLearningRequired: true,
   },

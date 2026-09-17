@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   createFifoConcurrencyLimiter,
+  estimateCourseGenerationTokens,
   isCourseGenerationLlmContext,
+  reportCourseGenerationTokenUsage,
   runWithCourseGenerationLlmContext,
 } from "./llm-concurrency";
 
@@ -54,5 +56,15 @@ describe("course-generation LLM concurrency", () => {
     });
     expect(isCourseGenerationLlmContext()).toBe(false);
   });
-});
 
+  it("reports provider usage and falls back to a lightweight character estimate", async () => {
+    const totals: number[] = [];
+    await runWithCourseGenerationLlmContext(async () => {
+      await reportCourseGenerationTokenUsage(1_240, 10_000);
+      await reportCourseGenerationTokenUsage(undefined, 250);
+    }, { onTokenUsage: (total) => { totals.push(total); } });
+
+    expect(totals).toEqual([1_240, 100]);
+    expect(estimateCourseGenerationTokens(0)).toBe(0);
+  });
+});

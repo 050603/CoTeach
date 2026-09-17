@@ -22,7 +22,10 @@ import {
   isAbortError,
   throwIfAborted,
 } from '@openmaic/lib/generation/generation-retry';
-import { withCourseGenerationLlmSlot } from '@/lib/course-generation/llm-concurrency';
+import {
+  reportCourseGenerationTokenUsage,
+  withCourseGenerationLlmSlot,
+} from '@/lib/course-generation/llm-concurrency';
 const log = createLogger('LLM');
 
 // Re-export for external use
@@ -325,6 +328,10 @@ async function callLLMWithoutCourseLimit<T extends GenerateTextParams>(
         generateText(injectedParams),
       );
       throwIfAborted(params.abortSignal);
+      await reportCourseGenerationTokenUsage(
+        result.usage.totalTokens,
+        JSON.stringify(_extractRequestInfo(params)).length + result.text.length,
+      );
 
       // Validate result (only when retries are configured)
       if (validate && !validate(result.text)) {
@@ -396,7 +403,12 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
   source: string,
   thinking?: ThinkingConfig,
   lifecycle: {
-    onActivity?: () => void;
+    onActivity?: (activity: {
+      kind: 'reasoning' | 'text';
+      reasoningCharacters: number;
+      textCharacters: number;
+      firstOutputAt: number;
+    }) => void;
     bypassCourseGenerationLimit?: boolean;
   } = {},
 ): Promise<string> {
@@ -410,13 +422,20 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
     let reasoningCharacters = 0;
     let activityEvents = 0;
     let finishReason: string | undefined;
+    let reportedTotalTokens: number | undefined;
+    let usageRecorded = false;
     let firstOutputAt: number | undefined;
     const startedAt = Date.now();
-    const recordOutput = () => {
+    const recordOutput = (kind: 'reasoning' | 'text') => {
       const now = Date.now();
       firstOutputAt ??= now;
       activityEvents += 1;
-      lifecycle.onActivity?.();
+      lifecycle.onActivity?.({
+        kind,
+        reasoningCharacters,
+        textCharacters,
+        firstOutputAt,
+      });
     };
     try {
       // Consume the complete event stream instead of awaiting `result.text` so
@@ -426,21 +445,27 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
       // valid interactive pages to be aborted at a fixed wall-clock deadline.
       for await (const part of result.stream) {
         if (part.type === 'text-delta') {
-          recordOutput();
           text += part.text;
           textCharacters += part.text.length;
+          recordOutput('text');
         } else if (part.type === 'reasoning-delta') {
-          recordOutput();
           reasoningCharacters += part.text.length;
+          recordOutput('reasoning');
         } else if (part.type === 'error') {
           throw part.error;
         } else if (part.type === 'abort') {
           throw new DOMException(part.reason || 'Model stream aborted', 'AbortError');
         } else if (part.type === 'finish') {
           finishReason = part.finishReason;
+          reportedTotalTokens = part.totalUsage.totalTokens;
         }
       }
       throwIfAborted(params.abortSignal);
+      await reportCourseGenerationTokenUsage(
+        reportedTotalTokens,
+        JSON.stringify(_extractRequestInfo(params)).length + reasoningCharacters + textCharacters,
+      );
+      usageRecorded = true;
       if (!finishReason) {
         throw Object.assign(
           new Error('Model stream disconnected before a finish event'),
@@ -461,6 +486,12 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
       );
       return text;
     } catch (error) {
+      if (!usageRecorded && firstOutputAt) {
+        await reportCourseGenerationTokenUsage(
+          reportedTotalTokens,
+          JSON.stringify(_extractRequestInfo(params)).length + reasoningCharacters + textCharacters,
+        );
+      }
       log.warn(
         `[${source}] Stream interrupted after ${Date.now() - startedAt}ms `
         + `(provider=${modelMetadata.provider ?? 'unknown'}, model=${modelMetadata.modelId ?? 'unknown'}, `

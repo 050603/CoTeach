@@ -32,9 +32,10 @@ export function invalidateChangedSpeechAudio(previous: Scene, next: Scene): Scen
     if (action.type !== 'speech') return action;
     const before = previousById.get(action.id);
     if (!before || before.text === action.text) return action;
-    const cleaned = { ...action } as typeof action & { audioId?: string; audioUrl?: string };
+    const cleaned = { ...action } as typeof action & { audioId?: string; audioUrl?: string; audioDurationSec?: number };
     delete cleaned.audioId;
     delete cleaned.audioUrl;
+    delete cleaned.audioDurationSec;
     cleaned.audioInvalidated = true;
     changed = true;
     return cleaned;

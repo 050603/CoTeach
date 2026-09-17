@@ -14,6 +14,7 @@ import {
 import { deriveCourseEntryPolicy, formatCourseEntryPolicy } from "@/lib/course-entry-policy";
 import { DURABLE_GENERATION_TRANSIENT_RETRIES } from "@/lib/llm/request-policy";
 import type { GenerationReferenceMaterial } from "@/lib/course-design/generation-references";
+import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
 
 type ModelCall = typeof callLLM;
 
@@ -307,20 +308,23 @@ function prepareKnowledgeStructureForTeacherReview(
 export async function generateKnowledgeStructureOnce(
   input: GenerateInput,
   context: KnowledgeStructureGenerationContext = {},
-  options: { abortSignal?: AbortSignal; modelCall?: ModelCall } = {},
+  options: { abortSignal?: AbortSignal; modelCall?: ModelCall; aiCall?: AICallFn } = {},
 ): Promise<ReviewedKnowledgeStructure> {
   const prompt = buildKnowledgeGraphPrompt(input, context);
-  const raw = await (options.modelCall ?? callLLM)([
+  const messages = [
     { role: "system", content: prompt.system },
     { role: "user", content: [prompt.user, context.teacherKnowledgePoints?.length
       ? `教师资料中的叶子教学目标（使用精确id，groupName只用于知识分组，不生成重复父目标；description是原始知识说明）：\n${JSON.stringify(context.teacherKnowledgePoints)}` : "",
     "缺乏明确依据的先修关系保留待核对，不能按节点顺序或为了连通图谱编造必要关系。课程目标映射也必须有实质依据。"].filter(Boolean).join("\n\n") },
-  ], {
-    jsonMode: true,
-    abortSignal: options.abortSignal,
-    requestClass: "long-generation",
-    maxTransientRetries: DURABLE_GENERATION_TRANSIENT_RETRIES,
-  });
+  ] as const;
+  const raw = options.aiCall
+    ? await options.aiCall(messages[0].content, messages[1].content)
+    : await (options.modelCall ?? callLLM)([...messages], {
+        jsonMode: true,
+        abortSignal: options.abortSignal,
+        requestClass: "long-generation",
+        maxTransientRetries: DURABLE_GENERATION_TRANSIENT_RETRIES,
+      });
   const parsed = parseLLMJson<Record<string, unknown>>(raw);
   const prepared = prepareKnowledgeStructureForTeacherReview(parsed, input, context);
   delete prepared.knowledgeGraph.semanticReview;

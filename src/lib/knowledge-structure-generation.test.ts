@@ -65,6 +65,29 @@ describe("reviewed knowledge structure generation", () => {
     expect(modelCall.mock.calls[0][1]?.requestClass).toBe("long-generation");
   });
 
+  it("uses the injected streaming call without changing the normalized graph", async () => {
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(candidate));
+    const modelCall = vi.fn();
+
+    const streamed = await generateKnowledgeStructureOnce(input, {}, { aiCall, modelCall });
+    const legacy = await generateKnowledgeStructureOnce(input, {}, {
+      modelCall: vi.fn().mockResolvedValue(JSON.stringify(candidate)),
+    });
+
+    expect(streamed).toEqual(legacy);
+    expect(aiCall).toHaveBeenCalledOnce();
+    expect(aiCall).toHaveBeenCalledWith(expect.stringContaining("知识"), expect.any(String));
+    expect(modelCall).not.toHaveBeenCalled();
+  });
+
+  it("does not turn an invalid completed JSON response into a transport retry", async () => {
+    const aiCall = vi.fn().mockResolvedValue('{"knowledgePoints":[');
+
+    await expect(generateKnowledgeStructureOnce(input, {}, { aiCall })).rejects.toThrow();
+
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
   it("mechanically completes malformed relationship metadata without an AI repair call", async () => {
     const malformed = {
       ...candidate,

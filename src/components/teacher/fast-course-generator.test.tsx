@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
-import { FastCourseGenerator } from "./fast-course-generator";
+import { designCallLabel, FastCourseGenerator } from "./fast-course-generator";
 import { emptyResourcePackageDraft } from "@/lib/resource-package/types";
 
 function confirmedPackageJob() {
@@ -27,6 +27,23 @@ describe("FastCourseGenerator knowledge references", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("explains long reasoning and bounded retries instead of showing a static graph message", () => {
+    expect(designCallLabel({
+      stage: "knowledgePoints",
+      status: "reasoning",
+      attempt: 2,
+      maxAttempts: 3,
+      startedAt: Date.now() - 65_000,
+    })).toContain("模型推理中，第 2/3 次尝试，已执行 65 秒");
+    expect(designCallLabel({
+      stage: "knowledgePoints",
+      status: "receiving-output",
+      attempt: 1,
+      maxAttempts: 3,
+      lastActivityAt: Date.now() - 3_000,
+    })).toContain("正在接收图谱");
   });
 
   it("uploads an optional private reference and includes its id in the generation request", async () => {
@@ -105,6 +122,7 @@ describe("FastCourseGenerator knowledge references", () => {
         resourcePackageId: "package-1",
         resourcePackageRevision: 3,
         generationMode: "standard",
+        assessmentMode: "adaptive",
         referenceIds: ["11111111-1111-4111-8111-111111111111"],
         options: {
           enableImageGeneration: true,
@@ -115,7 +133,7 @@ describe("FastCourseGenerator knowledge references", () => {
     });
   });
 
-  it("places one deep-interaction toggle next to send and submits the lit state", async () => {
+  it("keeps deep interaction and deep response independent and submits both states", async () => {
     const requests: Array<{ method: string; body?: string }> = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const method = init?.method ?? "GET";
@@ -128,16 +146,24 @@ describe("FastCourseGenerator knowledge references", () => {
     await waitFor(() => expect(requests.some((request) => request.method === "GET")).toBe(true));
 
     const deepToggle = screen.getByRole("button", { name: "开启深度交互模式" });
+    const responseToggle = screen.getByRole("button", { name: "开启深度作答模式" });
     const send = screen.getByRole("button", { name: "开始生成课程" });
+    expect(responseToggle.getAttribute("aria-pressed")).toBe("false");
     expect(deepToggle.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(deepToggle);
     expect(screen.getByRole("button", { name: "关闭深度交互，使用普通模式" }).getAttribute("aria-pressed")).toBe("true");
+    expect(responseToggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(responseToggle);
+    expect(screen.getByRole("button", { name: "关闭深度作答，使用灵活题型" }).getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.change(screen.getByLabelText("补充课程生成要求（可选）"), { target: { value: "设计一节交互式 AI 课程" } });
     fireEvent.click(send);
     await waitFor(() => {
       const request = requests.find((item) => item.method === "POST");
-      expect(JSON.parse(request?.body ?? "{}")).toMatchObject({ generationMode: "deep-interaction" });
+      expect(JSON.parse(request?.body ?? "{}")).toMatchObject({
+        generationMode: "deep-interaction",
+        assessmentMode: "constructed-response",
+      });
     });
   });
 
@@ -178,6 +204,6 @@ describe("FastCourseGenerator knowledge references", () => {
     expect((retry as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText("补充课程生成要求（可选）"), { target: { value: "旧的课程要求" } });
     fireEvent.click(retry);
-    await waitFor(() => expect(post).toHaveBeenCalledWith({ teacherBrief: "旧的课程要求", generationMode: "standard", options: { enableImageGeneration: true, enableTTS: true, enableVideoGeneration: false }, referenceIds: [] }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ teacherBrief: "旧的课程要求", generationMode: "standard", assessmentMode: "constructed-response", options: { enableImageGeneration: true, enableTTS: true, enableVideoGeneration: false }, referenceIds: [] }));
   });
 });

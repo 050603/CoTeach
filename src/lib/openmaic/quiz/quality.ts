@@ -1,9 +1,10 @@
-import type { QuizOption, QuizQuestion } from '@openmaic/lib/types/stage';
+import type { QuizMatchingPair, QuizOption, QuizQuestion } from '@openmaic/lib/types/stage';
 
 export const SUPPORTED_QUIZ_FORMATS = [
   'single_choice',
   'multiple_choice',
   'true_false',
+  'matching',
   'fill_blank',
   'short_answer',
   'scenario_task',
@@ -16,7 +17,7 @@ export interface QuizNormalizationResult {
   issues: string[];
 }
 
-const GENERATABLE_FORMATS = new Set(['single', 'multiple', 'short_answer', 'true_false', 'fill_blank', 'scenario_task']);
+const GENERATABLE_FORMATS = new Set(['single', 'multiple', 'matching', 'short_answer', 'true_false', 'fill_blank', 'scenario_task']);
 
 export function selectQuizFormats(input: {
   objectiveText: string;
@@ -28,6 +29,7 @@ export function selectQuizFormats(input: {
   const textValue = input.objectiveText.toLowerCase();
   const candidates: string[] = [];
   if (/判断|辨认|识别|概念|定义|recogn|identify|define/.test(textValue)) candidates.push('true_false', 'single');
+  if (/对应|配对|匹配|关系|术语.*含义|概念.*例子|match|pair|correspond|relation/.test(textValue)) candidates.push('matching');
   if (/比较|分类|证据|多种|compare|classif|evidence/.test(textValue)) candidates.push('multiple');
   if (/解释|原因|机制|说明|explain|why|mechanism/.test(textValue)) candidates.push('short_answer');
   if (/应用|解决|设计|情境|案例|迁移|apply|solve|design|scenario|case/.test(textValue)) candidates.push('scenario_task');
@@ -35,7 +37,12 @@ export function selectQuizFormats(input: {
   if (candidates.length === 0) candidates.push('single', input.difficulty === 'easy' ? 'true_false' : 'short_answer');
   if (input.difficulty === 'hard') candidates.push('scenario_task');
 
-  const merged = Array.from(new Set([...selected, ...candidates]));
+  const merged = selected.length > 0
+    ? Array.from(new Set([
+        ...candidates.filter((candidate) => selected.includes(candidate)),
+        ...selected,
+      ]))
+    : Array.from(new Set(candidates));
   const maxFormats = Math.max(1, Math.min(input.questionCount, 3));
   return merged.slice(0, maxFormats);
 }
@@ -70,6 +77,7 @@ function normalizeOptions(value: unknown): QuizOption[] {
 
 function semanticFormat(rawType: string, rawFormat: string): SupportedQuizFormat {
   const value = `${rawFormat || rawType}`.toLowerCase().replace(/[\s-]+/g, '_');
+  if (/match|matching|drag|配对|匹配|拖拽/.test(value)) return 'matching';
   if (/true_false|judg|判断|boolean/.test(value)) return 'true_false';
   if (/fill|blank|填空/.test(value)) return 'fill_blank';
   if (/scenario|situation|情境|case_task/.test(value)) return 'scenario_task';
@@ -79,7 +87,38 @@ function semanticFormat(rawType: string, rawFormat: string): SupportedQuizFormat
 }
 
 function unsupportedStructuredType(rawType: string): boolean {
-  return /match|matching|drag|connect|line|order|sort|排序|连线|拖拽|匹配/.test(rawType.toLowerCase());
+  return /connect|line|order|sort|排序|连线/.test(rawType.toLowerCase());
+}
+
+function normalizeMatchingPairs(value: unknown): QuizMatchingPair[] {
+  if (!Array.isArray(value)) return [];
+  const pairs = value.slice(0, 8).flatMap((item, index): QuizMatchingPair[] => {
+    const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const left = text(record.left) || text(record.term) || text(record.source) || text(record.prompt);
+    const right = text(record.right) || text(record.definition) || text(record.target) || text(record.match);
+    if (!left || !right) return [];
+    const leftId = text(record.leftId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+    const rightId = text(record.rightId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+    return [{
+      leftId: leftId || `L${index + 1}`,
+      left,
+      rightId: rightId || `R${index + 1}`,
+      right,
+    }];
+  });
+  const leftIds = new Set<string>();
+  const rightIds = new Set<string>();
+  const leftLabels = new Set<string>();
+  const rightLabels = new Set<string>();
+  return pairs.filter((pair) => {
+    if (leftIds.has(pair.leftId) || rightIds.has(pair.rightId)
+      || leftLabels.has(pair.left) || rightLabels.has(pair.right)) return false;
+    leftIds.add(pair.leftId);
+    rightIds.add(pair.rightId);
+    leftLabels.add(pair.left);
+    rightLabels.add(pair.right);
+    return true;
+  });
 }
 
 function explainUnsupported(record: Record<string, unknown>): string {
@@ -131,9 +170,45 @@ export function normalizeQuizQuestions(
       : Array.from(new Set(config.fallbackKnowledgePointIds ?? [])).filter((knowledgePointId) =>
           !allowedKnowledgePointIds || allowedKnowledgePointIds.has(knowledgePointId),
         );
+    const teachingUnitIds = Array.isArray(record.teachingUnitIds)
+      ? Array.from(new Set(record.teachingUnitIds.map(text).filter(Boolean)))
+      : [];
     const pointsValue = Number(record.points);
     const points = Number.isFinite(pointsValue) && pointsValue > 0 ? Math.min(100, Math.round(pointsValue)) : 10;
     const originalAnalysis = text(record.analysis) || text(record.explanation);
+
+    const format = semanticFormat(rawType, text(record.format));
+    if (format === 'matching') {
+      const matchingPairs = normalizeMatchingPairs(record.matchingPairs ?? record.pairs);
+      if (matchingPairs.length >= 2) {
+        return [{
+          id,
+          knowledgePointIds,
+          teachingUnitIds,
+          type: 'matching',
+          format: 'matching',
+          question,
+          matchingPairs,
+          answer: matchingPairs.map((pair) => `${pair.leftId}:${pair.rightId}`),
+          analysis: originalAnalysis || '正确配对应体现每个概念、对象或步骤与其对应特征之间的准确关系。',
+          hasAnswer: true,
+          points,
+        }];
+      }
+      issues.push(`question ${index + 1}: invalid matching structure repaired as fill_blank`);
+      return [{
+        id,
+        knowledgePointIds,
+        teachingUnitIds,
+        type: 'short_answer',
+        format: 'fill_blank',
+        question: `${question}\n请填写最关键的一组对应关系。`,
+        analysis: originalAnalysis || '参考答案应准确写出题干要求的核心对应关系。',
+        commentPrompt: '评分规则：对应对象准确占80%；语义等价占20%。不要求展开论述。',
+        hasAnswer: false,
+        points,
+      }];
+    }
 
     if (unsupportedStructuredType(rawType)) {
       issues.push(`question ${index + 1}: unsupported ${rawType} downgraded to scenario_task`);
@@ -141,6 +216,7 @@ export function normalizeQuizQuestions(
       return [{
         id,
         knowledgePointIds,
+        teachingUnitIds,
         type: 'short_answer',
         format: 'scenario_task',
         question: structure ? `${question}\n请用“对象—对应关系/顺序—理由”的方式作答。可参考待处理项目：${structure}` : `${question}\n请写出完整关系或顺序，并说明理由。`,
@@ -151,11 +227,11 @@ export function normalizeQuizQuestions(
       }];
     }
 
-    const format = semanticFormat(rawType, text(record.format));
     if (format === 'fill_blank' || format === 'short_answer' || format === 'scenario_task') {
       return [{
         id,
         knowledgePointIds,
+        teachingUnitIds,
         type: 'short_answer',
         format,
         question,
@@ -183,15 +259,16 @@ export function normalizeQuizQuestions(
     answers = Array.from(new Set(answers.filter((answer) => options.some((option) => option.value === answer))));
 
     if (options.length < 2 || answers.length === 0) {
-      issues.push(`question ${index + 1}: invalid choice structure downgraded to short_answer`);
+      issues.push(`question ${index + 1}: invalid choice structure repaired as fill_blank`);
       return [{
         id,
         knowledgePointIds,
+        teachingUnitIds,
         type: 'short_answer',
-        format: 'short_answer',
-        question,
-        analysis: originalAnalysis || '参考答案应说明结论以及依据当前知识点得出该结论的原因。',
-        commentPrompt: text(record.commentPrompt) || '评分规则：结论准确占40%；理由或证据占50%；表达清楚占10%。',
+        format: 'fill_blank',
+        question: `${question}\n请只填写关键概念或正确结论。`,
+        analysis: originalAnalysis || '参考答案应给出题干要求的关键概念或正确结论。',
+        commentPrompt: text(record.commentPrompt) || '评分规则：关键概念或结论准确占80%；语义等价占20%。不要求展开论述。',
         hasAnswer: false,
         points,
       }];
@@ -204,6 +281,7 @@ export function normalizeQuizQuestions(
     return [{
       id,
       knowledgePointIds,
+      teachingUnitIds,
       type,
       format: type === 'multiple' ? 'multiple_choice' : format,
       question,

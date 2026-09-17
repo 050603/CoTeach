@@ -40,7 +40,8 @@ describe("PBL course prompt", () => {
     expect(prompt?.user).toContain("fixed seconds-per-page threshold");
     expect(prompt?.user).toContain("教师负责线下校准与成果评价");
     expect(prompt?.user).toContain("End every completed knowledge section");
-    expect(prompt?.user).toContain("2–3 `short_answer` questions");
+    expect(prompt?.user).toContain("at least one brief objective question for every taught knowledge point");
+    expect(prompt?.user).toContain("constructed-response mode");
     expect(prompt?.user).toContain("knowledgePointIds");
   });
 

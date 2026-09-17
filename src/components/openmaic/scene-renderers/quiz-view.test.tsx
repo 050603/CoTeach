@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { QuizQuestion } from "@openmaic/lib/types/stage";
 import type { KnowledgeLectureAttempt } from "@/lib/session/types";
@@ -50,5 +50,40 @@ describe("QuizView single-attempt review", () => {
     expect(screen.getByText("本小节测验仅可作答一次")).toBeTruthy();
     expect(screen.queryByText("重做")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("accepts click-based matching, grades it locally, and shows the read-only relations", async () => {
+    const questions: QuizQuestion[] = [{
+      id: "matching-1",
+      type: "matching",
+      format: "matching",
+      question: "匹配数据角色与用途",
+      matchingPairs: [
+        { leftId: "L1", left: "训练集", rightId: "R1", right: "学习参数" },
+        { leftId: "L2", left: "测试集", rightId: "R2", right: "独立评估" },
+      ],
+      answer: ["L1:R1", "L2:R2"],
+      analysis: "训练用于学习，测试用于独立评估。",
+      points: 10,
+    }];
+
+    render(
+      <I18nProvider>
+        <KnowledgeLectureQuizLockProvider attemptsBySceneId={new Map()}>
+          <QuizView questions={questions} quizOutlineId="quiz-matching" sceneId="scene-matching" />
+        </KnowledgeLectureQuizLockProvider>
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Quiz" }));
+    fireEvent.click(await screen.findByRole("button", { name: "选择匹配项 学习参数" }));
+    fireEvent.click(screen.getByRole("button", { name: "匹配到 训练集" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择匹配项 独立评估" }));
+    fireEvent.click(screen.getByRole("button", { name: "匹配到 测试集" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit Answers" }));
+
+    await waitFor(() => expect(screen.getByText("Quiz Report")).toBeTruthy());
+    expect(screen.getByText("训练集")).toBeTruthy();
+    expect(screen.getByText("训练用于学习，测试用于独立评估。")).toBeTruthy();
   });
 });

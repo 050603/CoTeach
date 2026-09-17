@@ -161,6 +161,37 @@ describe('attachTtsTimingPlans', () => {
     expect(planned.timingPlan?.targetUnits).toBeGreaterThan(0);
   });
 
+  it('preserves the teaching blueprint narration share instead of inferring a second split', () => {
+    const planned = attachTtsTimingPlans([
+      outline({
+        id: 'blueprint-1', targetDurationSec: 120,
+        plannedTiming: { narrationSec: 80, learnerActivitySec: 35, transitionSec: 5, role: 'teaching' },
+      }),
+      outline({
+        id: 'blueprint-2', targetDurationSec: 180,
+        plannedTiming: { narrationSec: 124, learnerActivitySec: 50, transitionSec: 6, role: 'teaching' },
+      }),
+    ], selection);
+    expect(planned.map((page) => ({
+      targetDurationSec: page.targetDurationSec,
+      narrationSec: page.timingPlan?.targetDurationSec,
+      studentActivitySec: page.timingPlan?.studentActivitySec,
+      transitionSec: page.timingPlan?.transitionSec,
+    }))).toEqual([
+      { targetDurationSec: 120, narrationSec: 80, studentActivitySec: 35, transitionSec: 5 },
+      { targetDurationSec: 180, narrationSec: 124, studentActivitySec: 50, transitionSec: 6 },
+    ]);
+    expect(planned.every((page) => page.timingPlan?.naturalSpeedLocked === true)).toBe(true);
+    expect(planned[0]?.teachingStageTiming).toMatchObject({ targetDurationSec: 300, narrationTargetDurationSec: 204 });
+  });
+
+  it('rejects a blueprint timing split that does not conserve the page budget', () => {
+    expect(() => attachTtsTimingPlans([outline({
+      targetDurationSec: 300,
+      plannedTiming: { narrationSec: 204, learnerActivitySec: 80, transitionSec: 12, role: 'teaching' },
+    })], selection)).toThrow('教学蓝图计时不守恒');
+  });
+
   it('does not add student TTS timing to teacher-only resources', () => {
     const [planned] = attachTtsTimingPlans([
       outline({ audience: 'teacher', ttsPolicy: 'none' }),

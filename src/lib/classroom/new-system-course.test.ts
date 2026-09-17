@@ -147,4 +147,64 @@ describe("new-system course contract", () => {
     expect(hasExactKnowledgeLecturePageBudget([{ targetDurationSec: NaN }], 24)).toBe(false);
     expect(hasExactKnowledgeLecturePageBudget([], 24)).toBe(false);
   });
+
+  it("enforces adaptive short-answer limits and constructed-response mode in readiness", () => {
+    const course = readyCourse();
+    course.content.knowledgeLectureSections = [{
+      id: "section-1", title: "第一节", order: 0, knowledgePointIds: ["kp-1"],
+      sceneOutlineIds: ["teach-1"], quizOutlineId: "quiz-1", estimatedMinutes: 27,
+    }];
+    course.content._openmaicSceneOutlines = [
+      { id: "teach-1", type: "slide", title: "讲解", stageKey: "ai-learning", audience: "student", targetDurationSec: 1_300 },
+      { id: "quiz-1", type: "quiz", title: "检测", stageKey: "ai-learning", audience: "student", targetDurationSec: 320,
+        quizConfig: { questionCount: 1, questionTypes: ["single", "true_false"], maxShortAnswerQuestions: 0 } },
+    ];
+    course.content.teachingBlueprint = { assessmentMode: "adaptive" } as Course["content"]["teachingBlueprint"];
+    course.content.teachingTimingAudit = {
+      schemaVersion: 1, totalBudgetSec: 1_620, plannedSubstantiveTeachingSec: 1_102,
+      plannedAssessmentSec: 320, plannedLearnerActivitySec: 198, substantiveTeachingDurationSec: 1_102,
+      assessmentAudioDurationSec: 0, narrationDurationSource: "estimated-script", measuredSegmentCount: 0,
+      narrationSegmentCount: 2, complete: true, substantiveTeachingRatio: 0.6802, teachingRatioValid: true,
+      generatedAt: "2026-09-17T00:00:00Z",
+    };
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "ai-outline")?.ok).toBe(true);
+    (course.content._openmaicSceneOutlines[1]!.quizConfig as { maxShortAnswerQuestions: number }).maxShortAnswerQuestions = 1;
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "ai-outline")?.ok).toBe(false);
+    course.content.teachingBlueprint = { assessmentMode: "constructed-response" } as Course["content"]["teachingBlueprint"];
+    course.content._openmaicSceneOutlines[1]!.quizConfig = { questionCount: 1, questionTypes: ["short_answer"], maxShortAnswerQuestions: 1 };
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "ai-outline")?.ok).toBe(true);
+  });
+
+  it("accepts more than two adaptive questions when explicit teaching targets require them", () => {
+    const course = readyCourse();
+    course.content.knowledgeLectureSections = [{
+      id: "section-1", title: "第一节", order: 0, knowledgePointIds: ["kp-1", "kp-2", "kp-3"],
+      sceneOutlineIds: ["teach-1"], quizOutlineId: "quiz-1", estimatedMinutes: 27,
+    }];
+    course.content._openmaicSceneOutlines = [
+      { id: "teach-1", type: "slide", title: "讲解", stageKey: "ai-learning", audience: "student", targetDurationSec: 1_300 },
+      {
+        id: "quiz-1", type: "quiz", title: "检测", stageKey: "ai-learning", audience: "student", targetDurationSec: 320,
+        knowledgePointIds: ["kp-1", "kp-2", "kp-3"],
+        assessmentTargets: [
+          { unitId: "unit-1", knowledgePointId: "kp-1", unitTitle: "一", learningOutcome: "识别一" },
+          { unitId: "unit-2", knowledgePointId: "kp-2", unitTitle: "二", learningOutcome: "识别二" },
+          { unitId: "unit-3", knowledgePointId: "kp-3", unitTitle: "三", learningOutcome: "识别三" },
+        ],
+        quizConfig: { questionCount: 3, questionTypes: ["single", "matching", "true_false"], maxShortAnswerQuestions: 0 },
+      },
+    ];
+    course.content.teachingBlueprint = { assessmentMode: "adaptive" } as Course["content"]["teachingBlueprint"];
+    course.content.teachingTimingAudit = {
+      schemaVersion: 1, totalBudgetSec: 1_620, plannedSubstantiveTeachingSec: 1_102,
+      plannedAssessmentSec: 320, plannedLearnerActivitySec: 198, substantiveTeachingDurationSec: 1_102,
+      assessmentAudioDurationSec: 0, narrationDurationSource: "estimated-script", measuredSegmentCount: 0,
+      narrationSegmentCount: 2, complete: true, substantiveTeachingRatio: 0.6802, teachingRatioValid: true,
+      generatedAt: "2026-09-17T00:00:00Z",
+    };
+
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "ai-outline")?.ok).toBe(true);
+    (course.content._openmaicSceneOutlines[1]!.quizConfig as { questionCount: number }).questionCount = 2;
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "ai-outline")?.ok).toBe(false);
+  });
 });

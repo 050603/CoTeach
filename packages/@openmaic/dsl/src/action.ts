@@ -108,6 +108,8 @@ export interface SpeechAction extends ActionBase {
   audioId?: AssetRef;
   /** Legacy OpenPBL TTS URL retained until all persisted classrooms use asset refs. */
   audioUrl?: string;
+  /** Decoded duration of the generated audio asset, in seconds. */
+  audioDurationSec?: number;
   /** Prevent legacy derived-id fallback after an edit invalidates old narration. */
   audioInvalidated?: boolean;
   voice?: string;

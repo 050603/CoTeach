@@ -49,7 +49,12 @@ import { useCanvasStore } from '@openmaic/lib/store/canvas';
 import { useSettingsStore } from '@openmaic/lib/store/settings';
 import { isTTSProviderEnabled } from '@openmaic/lib/audio/provider-enablement';
 import { createLogger } from '@openmaic/lib/logger';
-import { normalizeStudentActivityPause } from '@openmaic/lib/generation/activity-gate';
+import {
+  normalizeSlideActivityPause,
+  normalizeStudentActivityPause,
+} from '@openmaic/lib/generation/activity-gate';
+
+const MAX_PASSIVE_TIMELINE_PAUSE_MS = 400;
 
 export function shouldUseBrowserNativeTtsFallback(options: {
   hasText: boolean;
@@ -218,14 +223,19 @@ export class PlaybackEngine {
     audioPlayer: AudioPlayer,
     callbacks: PlaybackEngineCallbacks = {},
   ) {
-    // Current classrooms may contain the legacy order where platform widget
-    // actions perform the task before the student activity gate. Normalize at
-    // playback time as well as generation time so the fix applies immediately.
-    this.scenes = scenes.map((scene) => (
-      scene.type === 'interactive' && scene.actions
-        ? { ...scene, actions: normalizeStudentActivityPause(scene.actions) }
-        : scene
-    ));
+    // Current classrooms may contain either a late interactive gate or a slide
+    // reading pause encoded as a learner operation. Normalize at playback time
+    // as well as generation time so persisted classrooms are fixed immediately.
+    this.scenes = scenes.map((scene) => {
+      if (!scene.actions) return scene;
+      if (scene.type === 'interactive') {
+        return { ...scene, actions: normalizeStudentActivityPause(scene.actions) };
+      }
+      if (scene.type === 'slide') {
+        return { ...scene, actions: normalizeSlideActivityPause(scene.actions) };
+      }
+      return scene;
+    });
     this.sceneId = scenes[0]?.id;
     this.actionEngine = actionEngine;
     this.audioPlayer = audioPlayer;
@@ -815,7 +825,13 @@ export class PlaybackEngine {
         if (Number.isFinite(timelinePauseSec) && timelinePauseSec > 0) {
           this.actionEngine.clearEffects();
           this.activeEffectRange = null;
-          const pauseMs = timelinePauseSec * 1000;
+          // Passive slide pauses must not leave the classroom looking stuck
+          // after narration. Keep a brief visual beat, while real quiz and
+          // interaction gates below continue to honor their full duration.
+          const pauseMs = Math.min(
+            timelinePauseSec * 1000,
+            MAX_PASSIVE_TIMELINE_PAUSE_MS,
+          );
           this.speechTimerStart = Date.now();
           this.speechTimerRemaining = pauseMs;
           this.speechTimerIsActivityPause = false;
@@ -927,6 +943,9 @@ export class PlaybackEngine {
         this.audioPlayer
           .play(speechAction.audioId || '', speechAction.audioUrl, speechStartRatio)
           .then((audioStarted) => {
+            if (this.mode !== 'playing' || this.currentSpeechActionId !== speechAction.id) {
+              return;
+            }
             if (audioStarted) {
               this.startSpeechCueSchedule(
                 speechAction,
@@ -950,6 +969,9 @@ export class PlaybackEngine {
             }
           })
           .catch((err) => {
+            if (this.mode !== 'playing' || this.currentSpeechActionId !== speechAction.id) {
+              return;
+            }
             log.error('TTS error:', err);
             const error = err instanceof Error ? err : new Error(String(err));
             this.callbacks.onError?.(error);

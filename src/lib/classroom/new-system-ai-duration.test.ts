@@ -68,6 +68,30 @@ describe("new-system AI duration judgment", () => {
     expect(modelCall).toHaveBeenCalledOnce();
   });
 
+  it("uses the injected streaming call and preserves duration normalization", async () => {
+    const payload = JSON.stringify({
+      durationMin: 42,
+      rationale: "概念讲解与方案比较需要完整练习。",
+      confidence: "high",
+      knowledgePointBudgets: [
+        { knowledgePointId: "kp-1", durationMin: 12, rationale: "概念" },
+        { knowledgePointId: "kp-2", durationMin: 30, rationale: "应用" },
+      ],
+    });
+    const aiCall = vi.fn().mockResolvedValue(payload);
+    const modelCall = vi.fn();
+
+    const result = await generateNewSystemAiDurationRecommendation(durationInput(), {
+      aiCall,
+      modelCall,
+    });
+
+    expect(result.durationMin).toBe(42);
+    expect(result.knowledgePointBudgets.map((item) => item.durationMin)).toEqual([12, 30]);
+    expect(aiCall).toHaveBeenCalledOnce();
+    expect(modelCall).not.toHaveBeenCalled();
+  });
+
   it.each([79, 150])("caps an overlong %i minute judgment at 40 percent", (durationMin) => {
     const result = normalizeNewSystemAiDurationRecommendation({
       durationMin,

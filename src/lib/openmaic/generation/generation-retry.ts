@@ -148,23 +148,30 @@ export function isRetryableGenerationError(error: unknown, seen = new Set<unknow
 
   if (isAbortError(error)) return false;
 
-  if (isRecord(error)) {
-    const explicitRetryable = booleanField(error, 'isRetryable');
-    if (explicitRetryable === false) return false;
-  }
+  const explicitRetryable = isRecord(error)
+    ? booleanField(error, 'isRetryable')
+    : undefined;
+  if (explicitRetryable === false) return false;
 
   const statusCode = statusCodeFrom(error);
   if (statusCode !== undefined) {
     if (RETRYABLE_STATUS_CODES.has(statusCode) || [500, 502, 503, 504].includes(statusCode)) return true;
-    if (NON_RETRYABLE_STATUS_CODES.has(statusCode) || (statusCode >= 400 && statusCode < 500)) {
-      return false;
-    }
+    // A concrete HTTP status is authoritative. Only the explicit transient
+    // allow-list above is retried; unknown 4xx/5xx statuses such as 501 must
+    // not become retryable merely because a wrapper set a broad boolean flag.
+    if (NON_RETRYABLE_STATUS_CODES.has(statusCode) || statusCode >= 400) return false;
   }
 
   const nested = unwrapErrors(error);
   if (nested.length > 0) {
     return nested.some((nestedError) => isRetryableGenerationError(nestedError, seen));
   }
+
+  // A transport adapter can identify a broken stream even when the provider
+  // supplies neither an HTTP status nor a recognizable message. Explicit
+  // retryability is considered only after authoritative status and nested
+  // provider errors, so a wrapped 401/403 still remains terminal.
+  if (explicitRetryable === true) return true;
 
   const errorName = isRecord(error) ? stringField(error, 'name') : undefined;
   if (

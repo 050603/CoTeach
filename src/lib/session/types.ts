@@ -804,9 +804,21 @@ export type OpenMaicSceneOutlineSnapshot = {
   companionPrompt?: string;
   activityId?: string;
   parentActivityId?: string;
+  lectureSectionId?: string;
+  lectureSectionTitle?: string;
   detailKind?: PblDetailKind;
   knowledgePointIds?: string[];
+  teachingUnitIds?: string[];
+  assessmentUnitIds?: string[];
+  assessmentUnitMap?: Array<{ unitId: string; knowledgePointIds: string[] }>;
+  assessmentTargets?: Array<{
+    unitId: string;
+    knowledgePointId: string;
+    unitTitle: string;
+    learningOutcome: string;
+  }>;
   targetDurationSec?: number;
+  plannedTiming?: import("@/lib/openmaic/types/generation").SceneOutline["plannedTiming"];
   segmentIndex?: number;
   segmentCount?: number;
   segmentRole?: string;
@@ -874,6 +886,90 @@ export type KnowledgeLectureSection = {
   estimatedMinutes: number;
 };
 
+export type TeachingBlueprintSourceKind = "course-source" | "general-knowledge";
+
+export type TeachingBlueprintUnit = {
+  id: string;
+  title: string;
+  knowledgePointIds: string[];
+  learningOutcome: string;
+  explanation: string;
+  mechanism: string;
+  workedExample: string;
+  conditions: string[];
+  misconceptions: string[];
+  sourceKind: TeachingBlueprintSourceKind;
+  evidenceQuotes: string[];
+};
+
+export type TeachingBlueprintPage = {
+  id: string;
+  title: string;
+  type: "slide" | "interactive";
+  unitIds: string[];
+  knowledgePointIds: string[];
+  description: string;
+  keyPoints: string[];
+  teachingObjective: string;
+  widgetType?: import("@/lib/openmaic/types/widgets").WidgetType;
+  widgetOutline?: import("@/lib/openmaic/types/generation").WidgetOutline;
+  outlineId?: string;
+};
+
+export type TeachingBlueprintSection = {
+  id: string;
+  title: string;
+  order: number;
+  learningObjective: string;
+  knowledgePointIds: string[];
+  units: TeachingBlueprintUnit[];
+  pages: TeachingBlueprintPage[];
+  assessmentFocus: string[];
+  teachingDurationSec: number;
+  learnerActivityDurationSec: number;
+  assessmentDurationSec: number;
+  quizOutlineId?: string;
+};
+
+/** Teacher-private, versioned intermediate artifact used to make classroom pages. */
+export type TeachingBlueprint = {
+  schemaVersion: 1;
+  inputFingerprint: string;
+  assessmentMode: import("@/lib/openmaic/types/generation").AssessmentMode;
+  createdAt: string;
+  budget: {
+    totalDurationSec: number;
+    teachingDurationSec: number;
+    learnerActivityDurationSec: number;
+    assessmentDurationSec: number;
+    teachingRatio: number;
+    assessmentRatio: number;
+  };
+  sections: TeachingBlueprintSection[];
+};
+
+export type TeachingTimingAudit = {
+  schemaVersion: 1;
+  /** Exact approved knowledge-learning stage budget. */
+  totalBudgetSec: number;
+  plannedSubstantiveTeachingSec: number;
+  plannedAssessmentSec: number;
+  plannedLearnerActivitySec: number;
+  /** Speech audio on teaching pages only; quiz prompts and feedback are separate. */
+  substantiveTeachingDurationSec: number;
+  assessmentAudioDurationSec: number;
+  narrationDurationSource: "actual-audio" | "estimated-script";
+  measuredSegmentCount: number;
+  narrationSegmentCount: number;
+  complete: boolean;
+  substantiveTeachingRatio: number;
+  /** Absolute deviation from the approved teaching duration; actual classrooms allow normal pacing variance. */
+  teachingDurationDeviationRatio?: number;
+  teachingDurationToleranceRatio?: number;
+  teachingRatioValid: boolean;
+  generatedAt: string;
+};
+
 export type KnowledgeLectureQuestionReview = {
   questionId: string;
   prompt: string;
@@ -884,6 +980,8 @@ export type KnowledgeLectureQuestionReview = {
   feedback: string;
   referenceAnswer?: string;
   knowledgePointIds: string[];
+  /** Blueprint units that this question checks. */
+  teachingUnitIds?: string[];
 };
 
 export type KnowledgeLectureAttempt = {
@@ -1327,6 +1425,10 @@ export type CourseContent = {
   teacherRequiredKnowledgePoints?: string[];
   knowledgePoints: KnowledgePoint[];
   knowledgeGraph?: KnowledgeGraph;
+  /** Private, traceable curriculum compilation artifact. Student projections remove it. */
+  teachingBlueprint?: TeachingBlueprint;
+  /** Teacher-facing aggregate that distinguishes measured TTS from script estimates. */
+  teachingTimingAudit?: TeachingTimingAudit;
   /** Deterministic six-module timeline regenerated from the final teacher allocation. */
   projectMainline?: PblProjectMainline;
   /**

@@ -8,16 +8,35 @@ describe('quiz quality normalization', () => {
     expect(result.questions[0]?.options).toHaveLength(2);
   });
 
-  it('downgrades unsupported matching data into a gradable scenario task', () => {
+  it('normalizes matching pairs into a locally gradable drag response', () => {
+    const result = normalizeQuizQuestions([{
+      type: 'matching',
+      question: '关联数据角色与用途',
+      pairs: [
+        { left: '训练集', right: '学习参数' },
+        { left: '测试集', right: '独立评估' },
+      ],
+    }]);
+    expect(result.questions[0]).toMatchObject({
+      type: 'matching',
+      format: 'matching',
+      hasAnswer: true,
+      answer: ['L1:R1', 'L2:R2'],
+    });
+    expect(result.questions[0]?.matchingPairs).toHaveLength(2);
+    expect(result.issues).toEqual([]);
+  });
+
+  it('repairs an incomplete matching item as a one-line fill blank instead of an essay', () => {
     const result = normalizeQuizQuestions([{ type: 'matching', question: '关联概念与例子', pairs: [{ left: '分类', right: '垃圾邮件识别' }] }]);
-    expect(result.questions[0]).toMatchObject({ type: 'short_answer', format: 'scenario_task', hasAnswer: false });
-    expect(result.questions[0]?.commentPrompt).toContain('60%');
-    expect(result.issues[0]).toContain('downgraded');
+    expect(result.questions[0]).toMatchObject({ type: 'short_answer', format: 'fill_blank', hasAnswer: false });
+    expect(result.questions[0]?.question).toContain('最关键的一组对应关系');
   });
 
   it('repairs malformed choice questions instead of storing an ungradable choice', () => {
     const result = normalizeQuizQuestions([{ type: 'single', question: '哪个描述正确？', options: ['A', 'B'] }]);
-    expect(result.questions[0]?.type).toBe('short_answer');
+    expect(result.questions[0]).toMatchObject({ type: 'short_answer', format: 'fill_blank' });
+    expect(result.questions[0]?.question).toContain('只填写关键概念');
     expect(result.questions[0]?.commentPrompt).toBeTruthy();
   });
 
@@ -40,9 +59,28 @@ describe('quiz quality normalization', () => {
     expect(result.questions[1]?.knowledgePointIds).toEqual(['kp-2']);
   });
 
-  it('selects assessment forms from the objective rather than randomly', () => {
+  it('preserves explicit teaching-unit attribution through later quality passes', () => {
+    const result = normalizeQuizQuestions([{
+      id: 'q1',
+      type: 'judgment',
+      question: '测试集可以反复用于调参。',
+      answer: false,
+      knowledgePointIds: ['kp-test'],
+      teachingUnitIds: ['unit-isolation', 'unit-leakage'],
+    }]);
+
+    expect(result.questions[0]?.teachingUnitIds).toEqual(['unit-isolation', 'unit-leakage']);
+  });
+
+  it('treats requested assessment forms as a strict allowlist', () => {
     expect(selectQuizFormats({
       objectiveText: '比较两种分类结果并应用到校园情境', difficulty: 'medium', questionCount: 3, requested: ['single'],
-    })).toEqual(['single', 'multiple', 'scenario_task']);
+    })).toEqual(['single']);
+    expect(selectQuizFormats({
+      objectiveText: '比较两种分类结果并应用到校园情境', difficulty: 'medium', questionCount: 3,
+    })).toEqual(['multiple', 'scenario_task']);
+    expect(selectQuizFormats({
+      objectiveText: '匹配术语与对应含义', difficulty: 'easy', questionCount: 2, requested: ['single', 'matching'],
+    })).toEqual(['matching', 'single']);
   });
 });

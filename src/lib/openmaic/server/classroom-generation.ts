@@ -433,7 +433,7 @@ export function attachTtsTimingPlans(
     const contentType = inferOutlineContentType(outline);
     const interaction = inferOutlineInteraction(outline);
     const quiz = inferOutlineQuiz(outline);
-    const pageTiming = planPblPageTiming({
+    const inferredPageTiming = planPblPageTiming({
       activityTargetSec: activityTargetSec - videoSec,
       pageKind: outline.type === 'quiz'
         ? 'quiz'
@@ -444,6 +444,47 @@ export function attachTtsTimingPlans(
       interaction,
       quiz,
     });
+    const plannedTiming = outline.plannedTiming;
+    const plannedTotal = plannedTiming
+      ? plannedTiming.narrationSec + plannedTiming.learnerActivitySec + plannedTiming.transitionSec
+      : 0;
+    if (plannedTiming && plannedTotal !== activityTargetSec) {
+      throw Object.assign(new Error(`教学蓝图计时不守恒：${outline.id} 分项合计 ${plannedTotal} 秒，页面预算 ${activityTargetSec} 秒`), { isRetryable: false });
+    }
+    if (plannedTiming && videoSec > plannedTiming.learnerActivitySec) {
+      throw Object.assign(new Error(`教学蓝图没有为视频预留足够时间：${outline.id}`), { isRetryable: false });
+    }
+    const plannedLearnerSec = plannedTiming
+      ? Math.max(0, plannedTiming.learnerActivitySec - videoSec)
+      : inferredPageTiming.studentActivitySec;
+    const plannedReadingSec = plannedTiming
+      ? outline.type === 'interactive'
+        ? Math.round(plannedLearnerSec * 0.3)
+        : outline.type === 'quiz'
+          ? Math.round(plannedLearnerSec * 0.6)
+          : plannedLearnerSec
+      : inferredPageTiming.readingThinkingSec;
+    const pageTiming = plannedTiming
+      ? {
+          ...inferredPageTiming,
+          activityTargetSec: activityTargetSec - videoSec,
+          narrationSec: plannedTiming.narrationSec,
+          readingThinkingSec: plannedReadingSec,
+          operationSec: plannedLearnerSec - plannedReadingSec,
+          studentActivitySec: plannedLearnerSec,
+          transitionSec: plannedTiming.transitionSec,
+          feedbackSec: plannedTiming.role === 'assessment'
+            ? Math.min(plannedTiming.narrationSec, Math.max(10, Math.round(plannedTiming.narrationSec * 0.7)))
+            : outline.type === 'interactive'
+              ? Math.min(plannedTiming.narrationSec, Math.round(plannedTiming.narrationSec * 0.3))
+              : 0,
+          taskFitsBudget: true,
+          rationale: [
+            ...inferredPageTiming.rationale,
+            'Preserve the approved teaching-blueprint narration, learner-activity, and transition budget.',
+          ],
+        }
+      : inferredPageTiming;
     return {
       ...outline,
       timingPlan: buildTtsTimingPlan({

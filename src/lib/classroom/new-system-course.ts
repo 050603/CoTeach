@@ -192,15 +192,48 @@ export function getNewSystemCourseReadiness(
       && outline.audience !== "teacher",
   );
   const lectureSections = course.content.knowledgeLectureSections ?? [];
+  const blueprintMode = course.content.teachingBlueprint?.assessmentMode;
+  const timingAudit = course.content.teachingTimingAudit;
+  const blueprintTimingAuditValid = !blueprintMode
+    || Boolean(timingAudit?.complete && timingAudit.teachingRatioValid);
+  const blueprintQuizConfigs = lectureSections.flatMap((section) => {
+    const quiz = outlines.find((outline) => outline.id === section.quizOutlineId);
+    return quiz?.quizConfig && typeof quiz.quizConfig === "object"
+      ? [quiz.quizConfig as { questionCount?: number; questionTypes?: string[]; maxShortAnswerQuestions?: number }]
+      : [];
+  });
+  const blueprintQuestionCount = blueprintQuizConfigs.reduce((sum, config) => sum + Math.max(0, config.questionCount ?? 0), 0);
+  const blueprintShortAnswerLimit = blueprintQuizConfigs.reduce((sum, config) => sum + Math.max(0, config.maxShortAnswerQuestions ?? 0), 0);
+  const blueprintCourseAssessmentValid = !blueprintMode
+    || (blueprintQuizConfigs.length === lectureSections.length
+      && (blueprintMode === "constructed-response"
+        ? blueprintQuizConfigs.every((config) => (config.questionTypes ?? []).length === 1
+          && config.questionTypes?.[0] === "short_answer"
+          && config.maxShortAnswerQuestions === config.questionCount)
+        : blueprintShortAnswerLimit <= Math.floor(blueprintQuestionCount * 0.2)));
   const hasSectionChecks = lectureSections.length > 0 && lectureSections.every((section) => {
     const quiz = outlines.find((outline) => outline.id === section.quizOutlineId);
-    const quizConfig = quiz?.quizConfig as { questionCount?: number; questionTypes?: string[] } | undefined;
+    const quizConfig = quiz?.quizConfig as { questionCount?: number; questionTypes?: string[]; maxShortAnswerQuestions?: number } | undefined;
+    const questionTypes = quizConfig?.questionTypes ?? [];
+    const adaptiveTargetCount = Array.isArray(quiz?.assessmentTargets)
+      ? quiz.assessmentTargets.length
+      : Math.max(1, quiz?.knowledgePointIds?.length ?? 0);
+    const blueprintCheck = blueprintMode
+      ? (quizConfig?.questionCount ?? 0) >= 1
+        && questionTypes.length > 0
+        && (blueprintMode === "constructed-response"
+          ? (quizConfig?.questionCount ?? 0) <= 2
+            && questionTypes.every((type) => type === "short_answer")
+          : (quizConfig?.questionCount ?? 0) >= adaptiveTargetCount
+            && questionTypes.every((type) => ["single", "multiple", "matching", "true_false", "short_answer"].includes(type))
+            && (quizConfig?.maxShortAnswerQuestions ?? 0) <= (quizConfig?.questionCount ?? 0))
+      : (quizConfig?.questionCount ?? 0) >= 2
+        && (quizConfig?.questionCount ?? 0) <= 3
+        && questionTypes.every((type) => type === "short_answer");
     return section.sceneOutlineIds.length > 0
       && quiz?.type === "quiz"
-      && (quizConfig?.questionCount ?? 0) >= 2
-      && (quizConfig?.questionCount ?? 0) <= 3
-      && quizConfig?.questionTypes?.every((type) => type === "short_answer") === true;
-  });
+      && blueprintCheck;
+  }) && blueprintCourseAssessmentValid;
 
   return [
     ...((course.content.qualityReviewRequired || Number(course.content.resourcePackage?.schemaVersion ?? 0) >= 2 || Number(course.content.stagePlan?.schemaVersion ?? 0) >= 2) ? [{
@@ -226,9 +259,10 @@ export function getNewSystemCourseReadiness(
       id: "timing",
       label: course.content.stagePlan ? "知识讲授时长（教案预算）" : "知识讲授时长（整课 20%–40%）",
       ok: isNewSystemAiTimingPlan(timing, course.hours, course.content.stagePlan)
-        && (!lectureSections.length || hasExactKnowledgeLecturePageBudget(outlines, timing!.totalMinutes)),
+        && (!lectureSections.length || hasExactKnowledgeLecturePageBudget(outlines, timing!.totalMinutes))
+        && blueprintTimingAuditValid,
       message: course.content.stagePlan
-        ? "知识讲授必须严格采用教师确认的教案分钟数，讲解、例证、互动和小测合计必须等于该预算。"
+        ? "知识讲授必须严格采用教师确认的教案分钟数，讲解、例证、互动和小测合计必须等于该预算；新版课程还需确认实质讲授保持在 65%–70%。"
         : `知识讲授须占总课时的 20%–40%（${Math.ceil(course.hours * 60 * 0.2)}–${Math.floor(course.hours * 60 * 0.4)} 分钟），由 AI 先确定总时长，再按预算生成讲解、互动和小测；旧的超长方案请重新生成。`,
     },
     {

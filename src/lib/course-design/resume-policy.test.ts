@@ -137,6 +137,20 @@ describe("quick-design resume policy", () => {
     }, request)).toBe(true);
     expect(isSameCourseDesignRequest({
       ...request,
+      generationContractVersion: 2,
+      assessmentMode: "adaptive",
+    }, {
+      ...request,
+      generationContractVersion: 2,
+      assessmentMode: "constructed-response",
+    })).toBe(false);
+    expect(isSameCourseDesignRequest(request, {
+      ...request,
+      generationContractVersion: 2,
+      assessmentMode: "adaptive",
+    })).toBe(false);
+    expect(isSameCourseDesignRequest({
+      ...request,
       referenceMaterials: [{ id: "reference-1", fileName: "资料一.md" }],
     }, {
       ...request,

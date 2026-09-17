@@ -21,12 +21,25 @@ describe("V2 generation job persistence", () => {
     ]);
   });
   it("atomically claims queued work and preserves review state with its heartbeat", async () => {
-    const result = await designGenerationJobs.updateMany({ where: { id: "job", status: "queued" }, data: { status: "running", reviewStatus: "available", reviewAvailableUntil: now, message: "Review", lastHeartbeatAt: now, version: { increment: 1 }, attempt: { increment: 1 } } });
+    const currentCall = { stage: "knowledgePoints", status: "reasoning", attempt: 1 };
+    const result = await designGenerationJobs.updateMany({ where: { id: "job", status: "queued" }, data: { status: "running", reviewStatus: "available", reviewAvailableUntil: now, message: "Review", currentCall, lastHeartbeatAt: now, version: { increment: 1 }, attempt: { increment: 1 } } });
     expect(result.count).toBe(1); expect(mocks.lock).toHaveBeenCalledOnce();
     const data = mocks.update.mock.calls[0][0].data;
     expect(data).toMatchObject({ status: "RUNNING", heartbeatAt: now, attempt: 1, trace: { state: { version: 2, reviewStatus: "available" } } });
     const decoded = projectGenerationJob({ ...row(), ...data });
     expect(decoded.reviewAvailableUntil).toEqual(now); expect(decoded.message).toBe("Review");
+    expect(decoded.currentCall).toEqual(currentCall);
+  });
+  it("increments the persisted token estimate without a schema column", async () => {
+    await contentGenerationJobs.update({
+      where: { id: "job" },
+      data: { tokenUsage: { increment: 1_240 }, tokenUsageCalls: { increment: 1 } },
+    });
+    const data = mocks.update.mock.calls[0][0].data;
+    expect(data.trace.state).toMatchObject({ tokenUsage: 1_240, tokenUsageCalls: 1 });
+    const decoded = projectGenerationJob({ ...row(), ...data });
+    expect(decoded.tokenUsage).toBe(1_240);
+    expect(decoded.tokenUsageCalls).toBe(1);
   });
   it("does not claim a job whose status changed before the lock was acquired", async () => {
     mocks.find.mockResolvedValue([{ ...row(), status: "RUNNING" }]);

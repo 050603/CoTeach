@@ -2,6 +2,7 @@
 
 import { Reorder, motion, useDragControls } from 'motion/react';
 import {
+  ArrowRight,
   Check,
   ChevronDown,
   ChevronRight,
@@ -36,7 +37,7 @@ import {
   typeQuizQuestion,
 } from './use-quiz-surface';
 
-const TYPES: QuizQuestionType[] = ['single', 'multiple', 'short_answer'];
+const TYPES: QuizQuestionType[] = ['single', 'multiple', 'matching', 'short_answer'];
 
 /** Per-type accent: a quiz scene's question types read at a glance by colour. */
 const TYPE_ACCENT: Record<QuizQuestionType, { badge: string; rail: string }> = {
@@ -47,6 +48,10 @@ const TYPE_ACCENT: Record<QuizQuestionType, { badge: string; rail: string }> = {
   multiple: {
     badge: 'bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)] dark:bg-indigo-500/15 dark:text-indigo-300',
     rail: 'from-indigo-400 to-indigo-600',
+  },
+  matching: {
+    badge: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-300',
+    rail: 'from-cyan-400 to-cyan-600',
   },
   short_answer: {
     badge: 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
@@ -71,6 +76,7 @@ export function QuestionCard({ question: q, index, expanded, onToggle }: Props) 
   const { t } = useI18n();
   const controls = useDragControls();
   const choice = isChoice(q.type);
+  const matching = q.type === 'matching';
   const accent = TYPE_ACCENT[q.type];
 
   return (
@@ -308,11 +314,73 @@ export function QuestionCard({ question: q, index, expanded, onToggle }: Props) 
             </Field>
           )}
 
+          {matching && (
+            <Field label="匹配关系">
+              <div className="flex flex-col gap-2">
+                {(q.matchingPairs ?? []).map((pair, pairIndex) => (
+                  <div key={pair.leftId} className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-2 rounded-xl border border-zinc-200 p-2 dark:border-zinc-700">
+                    <Input
+                      value={pair.left}
+                      onPointerDown={stopDrag}
+                      onChange={(event) => {
+                        const matchingPairs = (q.matchingPairs ?? []).map((item, index) =>
+                          index === pairIndex ? { ...item, left: event.target.value } : item);
+                        typeQuizQuestion(q.id, { matchingPairs, answer: matchingPairs.map((item) => `${item.leftId}:${item.rightId}`) }, `${q.id}:pair:${pairIndex}:left`);
+                      }}
+                      placeholder="左侧概念或对象"
+                      className={FOCUS}
+                    />
+                    <ArrowRight className="h-4 w-4 text-zinc-400" />
+                    <Input
+                      value={pair.right}
+                      onPointerDown={stopDrag}
+                      onChange={(event) => {
+                        const matchingPairs = (q.matchingPairs ?? []).map((item, index) =>
+                          index === pairIndex ? { ...item, right: event.target.value } : item);
+                        typeQuizQuestion(q.id, { matchingPairs, answer: matchingPairs.map((item) => `${item.leftId}:${item.rightId}`) }, `${q.id}:pair:${pairIndex}:right`);
+                      }}
+                      placeholder="右侧对应内容"
+                      className={FOCUS}
+                    />
+                    <IconButton
+                      label="删除匹配关系"
+                      disabled={(q.matchingPairs?.length ?? 0) <= 2}
+                      onClick={() => {
+                        const matchingPairs = (q.matchingPairs ?? []).filter((_, index) => index !== pairIndex);
+                        typeQuizQuestion(q.id, { matchingPairs, answer: matchingPairs.map((item) => `${item.leftId}:${item.rightId}`) }, `${q.id}:pairs`);
+                      }}
+                      danger
+                    >
+                      <X className="h-4 w-4" />
+                    </IconButton>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  disabled={(q.matchingPairs?.length ?? 0) >= 6}
+                  onPointerDown={stopDrag}
+                  onClick={() => {
+                    const existing = q.matchingPairs ?? [];
+                    const nextNumber = existing.reduce((max, pair) => {
+                      const number = Number(pair.leftId.replace(/^L/, ''));
+                      return Number.isFinite(number) ? Math.max(max, number) : max;
+                    }, 0) + 1;
+                    const matchingPairs = [...existing, { leftId: `L${nextNumber}`, left: '', rightId: `R${nextNumber}`, right: '' }];
+                    typeQuizQuestion(q.id, { matchingPairs, answer: matchingPairs.map((item) => `${item.leftId}:${item.rightId}`) }, `${q.id}:pairs`);
+                  }}
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-zinc-200 py-2 text-xs font-medium text-zinc-500 hover:border-cyan-300 hover:bg-cyan-50/60 hover:text-cyan-700 disabled:pointer-events-none disabled:opacity-40 dark:border-zinc-700 dark:hover:border-cyan-500/40 dark:hover:bg-cyan-500/10"
+                >
+                  <Plus className="h-3.5 w-3.5" />增加匹配关系
+                </button>
+              </div>
+            </Field>
+          )}
+
           {/* Short-answer grading fields. Short answers are always AI-graded
               from the guidance below (see lib/quiz/grading.ts isShortAnswer),
               so there is no auto-grade toggle — an info note explains the
               scoring model instead. */}
-          {!choice && (
+          {!choice && !matching && (
             <>
               <div className="flex items-start gap-2.5 rounded-xl border border-violet-200/70 bg-violet-50/50 px-3 py-2.5 text-xs leading-relaxed text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/[0.07] dark:text-violet-300">
                 <Sparkles className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={2} />

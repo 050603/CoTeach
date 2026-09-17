@@ -51,13 +51,14 @@ describe('StaticTable visual target anchors', () => {
       rotate: 0,
       cellMinHeight: 30,
       colWidths: [1],
+      outline: { width: 1, style: 'solid', color: '#E2E8F0' },
       data: [[
         {
           id: 'cell',
           text: '不缩小字号的正文',
           colspan: 1,
           rowspan: 1,
-          style: { fontsize: 16 },
+          style: { fontsize: '16px' },
         },
       ]],
     } as PPTTableElement;

@@ -57,6 +57,7 @@ export function QuickGenerationStage({
   progress,
   remainingLabel,
   startedAt,
+  tokenUsage = 0,
   paused,
   reviewAvailable,
   reviewAvailableUntil,
@@ -83,6 +84,7 @@ export function QuickGenerationStage({
   progress: number;
   remainingLabel: string;
   startedAt: string | null;
+  tokenUsage?: number;
   paused: boolean;
   reviewAvailable: boolean;
   reviewAvailableUntil?: string | null;
@@ -188,51 +190,60 @@ export function QuickGenerationStage({
       </div>
 
       <div className="relative flex min-h-full flex-col px-5 py-5 sm:px-8 sm:py-7">
-        <header className="mx-auto flex w-full max-w-[1120px] items-center justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3 text-xs font-bold text-stone-600">
-            <span className="relative grid size-9 shrink-0 place-items-center rounded-[var(--radius-md)] border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]">
-              <BrainCircuit className="size-4" />
-              {!paused && !completed && !failed && !cancelling ? <span className={cn("absolute -right-0.5 -top-0.5 size-2.5 rounded-full border-2 border-[var(--pbl-bg)] motion-safe:animate-pulse", recovering ? "bg-amber-500" : "bg-emerald-500")} /> : null}
-            </span>
-            <span className="truncate">{failed ? "课程页面生成未完成" : recovering ? "正在自动恢复" : paused ? activeReviewKind === "knowledge" ? "生成已暂停，等待知识图谱确认" : "生成已暂停，等待课程大纲确认" : message || "正在生成课程"}</span>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-          {previewScenesCount > 0 && !completed && onPreviewGenerated ? (
-            <button
-              className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-xs)] border border-blue-200 bg-white px-4 text-xs font-semibold text-blue-700 shadow-sm transition hover:border-blue-400 hover:bg-blue-50"
-              onClick={onPreviewGenerated}
-              type="button"
-            >
-              <Eye className="size-3.5" />预览已生成 {previewScenesCount} 页
-            </button>
-          ) : null}
-          {failed ? (
-            <button
-              className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-xs)] bg-[var(--pbl-teacher)] px-4 text-xs font-semibold text-white shadow-[var(--shadow-raised)] transition hover:bg-[var(--pbl-teacher-hover)] disabled:cursor-wait disabled:opacity-60"
-              disabled={retrying || !onRetry}
-              onClick={onRetry}
-              type="button"
-            >
-              <RotateCcw className="size-3.5" />{retrying ? "正在继续" : "从已完成页面继续"}
-            </button>
-          ) : completed ? (
-            <button className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-xs)] bg-[var(--pbl-teacher)] px-4 text-xs font-semibold text-white shadow-[var(--shadow-raised)] transition hover:bg-[var(--pbl-teacher-hover)]" onClick={onOpenCourse} type="button">
-              查看生成课程 <ArrowRight className="size-3.5" />
-            </button>
-          ) : (
-            <button
-              className={cn(
-                "inline-flex h-9 shrink-0 items-center gap-2 rounded-[var(--radius-xs)] border px-3.5 text-xs font-semibold transition",
-                confirmCancel ? "border-red-600 bg-red-600 text-white" : "border-[var(--pbl-border)] bg-white text-[var(--pbl-text-muted)] hover:border-red-200 hover:text-red-700",
+        <header className="mx-auto flex w-full max-w-[1120px] justify-end" data-testid="quick-generation-command-bar">
+          <div className="inline-flex flex-wrap items-center gap-1.5 rounded-[var(--radius-lg)] border border-stone-200/90 bg-white/88 p-1.5 shadow-[0_14px_34px_-25px_rgba(15,23,42,.42)] backdrop-blur-xl">
+              <span
+                aria-label={tokenUsage > 0
+                  ? `本次课程生成约使用 ${Math.round(tokenUsage)} tokens`
+                  : completed
+                    ? "本次课程生成未产生新的 token 用量"
+                    : "正在统计本次课程生成 token 用量"}
+                className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-md)] bg-[var(--pbl-surface-soft)] px-3 text-[10px] text-[var(--pbl-text-muted)]"
+                data-testid="course-generation-token-usage"
+                title="基于模型回传数据与文本长度估算，仅供参考"
+              >
+                <span className="grid size-6 place-items-center rounded-full bg-white text-violet-600 shadow-sm"><Sparkles className="size-3" /></span>
+                <span className="leading-tight"><span className="block text-[8px] font-semibold tracking-[.08em] text-[var(--pbl-text-subtle)]">AI 用量</span><strong className="mt-0.5 block font-semibold tabular-nums text-[var(--pbl-text)]">{formatTokenUsage(tokenUsage, completed)}</strong></span>
+              </span>
+              {!completed && !failed ? (
+                <button
+                  className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-md)] border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)] px-3.5 text-[11px] font-semibold text-[var(--pbl-teacher)] transition hover:border-blue-300 hover:bg-blue-100/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-default disabled:border-[var(--pbl-border-soft)] disabled:bg-white disabled:text-[var(--pbl-text-subtle)] disabled:opacity-70"
+                  disabled={previewScenesCount <= 0 || !onPreviewGenerated}
+                  onClick={onPreviewGenerated}
+                  type="button"
+                >
+                  <Eye className="size-3.5" />{previewScenesCount > 0 ? `预览已生成 ${previewScenesCount} 页` : "预览生成"}
+                </button>
+              ) : null}
+              {failed ? (
+                <button
+                  className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-md)] bg-[var(--pbl-teacher)] px-3.5 text-[11px] font-semibold text-white shadow-sm transition hover:bg-[var(--pbl-teacher-hover)] disabled:cursor-wait disabled:opacity-60"
+                  disabled={retrying || !onRetry}
+                  onClick={onRetry}
+                  type="button"
+                >
+                  <RotateCcw className="size-3.5" />{retrying ? "正在继续" : "从已完成页面继续"}
+                </button>
+              ) : completed ? (
+                <button className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-md)] bg-[var(--pbl-teacher)] px-3.5 text-[11px] font-semibold text-white shadow-sm transition hover:bg-[var(--pbl-teacher-hover)]" onClick={onOpenCourse} type="button">
+                  查看生成课程 <ArrowRight className="size-3.5" />
+                </button>
+              ) : (
+                <button
+                  className={cn(
+                    "inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-md)] border px-3.5 text-[11px] font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2",
+                    confirmCancel
+                      ? "border-red-600 bg-red-600 text-white focus-visible:outline-red-500"
+                      : "border-[var(--pbl-border)] bg-white text-[var(--pbl-text-muted)] hover:border-red-200 hover:bg-red-50 hover:text-red-700 focus-visible:outline-red-400",
+                  )}
+                  disabled={cancelling}
+                  onClick={onCancel}
+                  type="button"
+                >
+                  <Square className="size-3" fill="currentColor" />
+                  {cancelling ? "正在中断" : confirmCancel ? "确认中断" : "中断生成"}
+                </button>
               )}
-              disabled={cancelling}
-              onClick={onCancel}
-              type="button"
-            >
-              <Square className="size-3" fill="currentColor" />
-              {cancelling ? "正在中断" : confirmCancel ? "确认中断" : "中断生成"}
-            </button>
-          )}
           </div>
         </header>
 
@@ -263,20 +274,15 @@ export function QuickGenerationStage({
                 <span className="absolute inset-y-8 left-2 w-px bg-gradient-to-b from-transparent via-blue-200 to-transparent" />
                 <span className="absolute right-3 top-5 max-h-36 overflow-hidden text-[8px] font-semibold tracking-[.12em] text-[var(--pbl-teacher)] [writing-mode:vertical-rl]">{compactSideTitle(nextArtifact?.title, "继续生成")}</span>
               </motion.div>
-              <motion.div
-                animate={reducedMotion || displayed.visualization?.generationPlan ? { rotateZ: 0, y: 0 } : { rotateZ: [-.16, .14, -.16], y: [-5, 4, -5] }}
-                className="absolute inset-0 z-10"
-                transition={{ duration: 6.8, repeat: Infinity, ease: "easeInOut" }}
-              >
+              <div className="absolute inset-0 z-10" data-testid="quick-generation-main-card-stage">
                 <AnimatePresence initial={false} mode="sync">
                   <motion.article
-                    animate={{ filter: "blur(0px)", opacity: 1, rotateY: 0, rotateZ: 0, scale: 1, x: 0 }}
-                    className="absolute inset-0 overflow-hidden rounded-[var(--radius-xl)] border border-stone-200/90 bg-[var(--pbl-surface)] p-5 shadow-[0_38px_86px_-40px_rgba(15,23,42,.38),0_17px_36px_-27px_rgba(37,99,235,.28),inset_0_1px_0_rgba(255,255,255,.98)] [transform-style:preserve-3d] sm:p-7"
-                    exit={{ filter: "blur(2px)", opacity: 0, rotateY: -24, rotateZ: -.8, scale: .965, x: -142 }}
-                    initial={reducedMotion ? false : { filter: "blur(2px)", opacity: 0, rotateY: 22, rotateZ: .8, scale: .965, x: 142 }}
+                    animate={{ opacity: 1, scale: 1, x: 0 }}
+                    className="absolute inset-0 overflow-hidden rounded-[var(--radius-xl)] border border-stone-200/90 bg-[var(--pbl-surface)] p-5 shadow-[0_38px_86px_-40px_rgba(15,23,42,.38),0_17px_36px_-27px_rgba(37,99,235,.28),inset_0_1px_0_rgba(255,255,255,.98)] [backface-visibility:hidden] sm:p-7"
+                    exit={{ opacity: 0, scale: .985, x: -96 }}
+                    initial={reducedMotion ? false : { opacity: 0, scale: .985, x: 96 }}
                     key={displayed.id}
-                    layoutId={displayed.kind === "pages" ? "quick-course-outline-surface" : undefined}
-                    transition={reducedMotion ? { duration: 0 } : { duration: .76, ease: [.22, 1, .36, 1] }}
+                    transition={reducedMotion ? { duration: 0 } : { duration: .5, ease: [.22, 1, .36, 1] }}
                   >
                     <span aria-hidden className="absolute inset-x-12 top-0 h-px bg-gradient-to-r from-transparent via-white to-transparent" />
                     {!paused && !completed && !failed && !recovering && !cancelling ? <span aria-hidden className="quick-card-scan absolute left-0 top-0 h-px w-28 bg-gradient-to-r from-transparent via-[var(--pbl-teacher)] to-transparent motion-reduce:hidden" /> : null}
@@ -311,7 +317,7 @@ export function QuickGenerationStage({
                     ) : null}
                   </motion.article>
                 </AnimatePresence>
-              </motion.div>
+              </div>
             </div>
 
             <div className="mx-auto mt-7 flex max-w-[760px] items-center gap-4">
@@ -353,14 +359,29 @@ export function QuickGenerationStage({
   );
 }
 
+function formatTokenUsage(tokens: number, completed: boolean): string {
+  const safeTokens = Number.isFinite(tokens) ? Math.max(0, Math.round(tokens)) : 0;
+  if (safeTokens === 0) return completed ? "≈ 0 tokens" : "统计中";
+  if (safeTokens < 1_000) return `≈ ${safeTokens} tokens`;
+  if (safeTokens < 1_000_000) {
+    const value = safeTokens >= 100_000
+      ? Math.round(safeTokens / 1_000)
+      : (safeTokens / 1_000).toFixed(1).replace(/\.0$/, "");
+    return `≈ ${value}k tokens`;
+  }
+  return `≈ ${(safeTokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}m tokens`;
+}
+
 function ArtifactCard({ artifact, active, suspendedLabel }: { artifact: CourseDesignGenerationArtifact; active: boolean; suspendedLabel?: string }) {
   const reducedMotion = useReducedMotion();
   const Icon = artifact.visualization?.generationPlan ? BrainCircuit : ICONS[artifact.kind];
+  const isPageProduction = artifact.id === "ai-learning-page-production";
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
   const [hasOverflow, setHasOverflow] = useState(artifact.items.length > 3);
   const [atBottom, setAtBottom] = useState(false);
 
   useEffect(() => {
+    if (isPageProduction) return;
     const area = scrollAreaRef.current;
     if (!area) return;
     const measure = () => {
@@ -374,17 +395,17 @@ function ArtifactCard({ artifact, active, suspendedLabel }: { artifact: CourseDe
     observer.observe(area);
     if (area.firstElementChild) observer.observe(area.firstElementChild);
     return () => observer.disconnect();
-  }, [artifact.id, artifact.items.length]);
+  }, [artifact.id, artifact.items.length, isPageProduction]);
 
-  const showFade = hasOverflow && !atBottom;
+  const showFade = !isPageProduction && hasOverflow && !atBottom;
 
   return (
-    <div className="flex h-full min-h-0 flex-col pb-10">
-      <div className="flex shrink-0 items-start justify-between gap-5 border-b border-[var(--pbl-border-soft)] pb-4">
+    <div className={cn("flex h-full min-h-0 flex-col", isPageProduction ? "pb-0" : "pb-10")}>
+      <div className={cn("flex shrink-0 items-start justify-between gap-5 border-b border-[var(--pbl-border-soft)]", isPageProduction ? "pb-3" : "pb-4")}>
         <div className="min-w-0">
           <p className={cn("text-[10px] font-semibold tracking-[.15em]", accentText(artifact.accent))}>{artifact.eyebrow}</p>
-          <h1 className="mt-2 line-clamp-2 font-editorial text-[26px] font-semibold leading-tight text-[var(--pbl-text-strong)] sm:text-[30px]">{artifact.title}</h1>
-          <p className="mt-1.5 line-clamp-2 max-w-[650px] text-[12px] leading-5 text-[var(--pbl-text-muted)]">{artifact.summary}</p>
+          <h1 className={cn("line-clamp-2 font-editorial font-semibold leading-tight text-[var(--pbl-text-strong)]", isPageProduction ? "mt-1.5 text-[24px] sm:text-[27px]" : "mt-2 text-[26px] sm:text-[30px]")}>{artifact.title}</h1>
+          <p className={cn("max-w-[650px] text-[12px] leading-5 text-[var(--pbl-text-muted)]", isPageProduction ? "mt-1 line-clamp-1" : "mt-1.5 line-clamp-2")}>{artifact.summary}</p>
         </div>
         <motion.span
           animate={active && !reducedMotion ? { rotate: [0, -10, 8, 0], scale: [1, 1.13, 1] } : undefined}
@@ -393,12 +414,17 @@ function ArtifactCard({ artifact, active, suspendedLabel }: { artifact: CourseDe
         ><Icon className="size-5" /></motion.span>
       </div>
 
-      <div className="relative mt-4 min-h-0 flex-1">
+      <div className={cn("relative min-h-0 flex-1", isPageProduction ? "mt-3" : "mt-4")}>
         <div
-          className="absolute inset-0 overflow-y-auto overscroll-contain pr-2 [scrollbar-gutter:stable]"
+          className={cn(
+            "absolute inset-0",
+            isPageProduction
+              ? "overflow-hidden"
+              : "overflow-y-auto overscroll-contain pr-2 [scrollbar-gutter:stable]",
+          )}
           data-testid="quick-generation-card-scroll"
           aria-label="课程生成内容详情"
-          tabIndex={0}
+          tabIndex={isPageProduction ? undefined : 0}
           ref={scrollAreaRef}
           onScroll={(event) => {
             const target = event.currentTarget;
@@ -408,11 +434,7 @@ function ArtifactCard({ artifact, active, suspendedLabel }: { artifact: CourseDe
           <ArtifactBody artifact={artifact} active={active} suspendedLabel={suspendedLabel} />
         </div>
         {showFade ? (
-          <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 flex h-16 items-end justify-center bg-gradient-to-b from-white/0 via-white/80 to-white pb-1">
-            {artifact.id === "ai-learning-page-production" ? (
-              <span className="rounded-full border border-blue-100 bg-white/95 px-2.5 py-1 text-[10px] font-semibold text-blue-700 shadow-sm">向下查看完整生成过程</span>
-            ) : null}
-          </div>
+          <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-b from-white/0 via-white/80 to-white" />
         ) : null}
       </div>
       {active ? <span aria-hidden className="absolute bottom-0 left-0 h-1 w-full bg-gradient-to-r from-transparent via-blue-500/55 to-transparent motion-safe:animate-pulse" /> : null}
@@ -454,6 +476,15 @@ const PAGE_TASK_STAGES = [
   "assembling",
 ] as const;
 
+const PAGE_TASK_SHORT_LABELS: Record<typeof PAGE_TASK_STAGES[number], string> = {
+  restoring: "恢复",
+  content: "正文",
+  "reviewed-content": "检查",
+  actions: "讲稿动作",
+  narration: "口语",
+  assembling: "保存",
+};
+
 function AiLearningPageProductionPreview({ artifact, active, suspendedLabel }: { artifact: CourseDesignGenerationArtifact; active: boolean; suspendedLabel?: string }) {
   const reducedMotion = useReducedMotion();
   const plan = artifact.visualization?.generationPlan;
@@ -468,17 +499,13 @@ function AiLearningPageProductionPreview({ artifact, active, suspendedLabel }: {
   const isRunning = active && plan.status === "running";
   const pageProgress = plan.totalScenes > 0 ? Math.min(100, (plan.completedScenes / plan.totalScenes) * 100) : 0;
   const activePages = (plan.activePages ?? []).slice(0, 4);
-  const activeStageIndexes = new Set(activePages.map((page) => PAGE_TASK_STAGES.indexOf(page.stage as typeof PAGE_TASK_STAGES[number])));
-  const firstActiveStage = activeStageIndexes.size > 0
-    ? Math.min(...activeStageIndexes)
-    : plan.completedScenes >= plan.totalScenes && plan.totalScenes > 0 ? PAGE_TASK_STAGES.length : 0;
   const nextScene = plan.scenes[Math.min(plan.completedScenes, Math.max(0, plan.scenes.length - 1))];
 
   return (
-    <div className="grid min-h-[300px] sm:grid-cols-[210px_minmax(0,1fr)]">
+    <div className="grid h-full min-h-0 sm:grid-cols-[200px_minmax(0,1fr)]">
       <motion.section
         animate={{ opacity: 1, x: 0 }}
-        className="relative isolate min-h-[184px] overflow-hidden border-l-2 border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)]/55 px-5 py-4 text-[var(--pbl-text)] sm:min-h-[244px]"
+        className="relative isolate min-h-0 overflow-hidden border-l-2 border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)]/55 px-4 py-3.5 text-[var(--pbl-text)]"
         initial={false}
       >
         {isRunning ? <span aria-hidden className="quick-plan-shimmer absolute inset-y-0 w-20 bg-gradient-to-r from-transparent via-white/80 to-transparent motion-reduce:hidden" data-testid="ai-plan-shimmer" /> : null}
@@ -490,8 +517,8 @@ function AiLearningPageProductionPreview({ artifact, active, suspendedLabel }: {
             <span className="text-[10px] font-medium text-[var(--pbl-text-subtle)]">并行任务</span>
           </div>
 
-          <div className="mt-3 flex items-end gap-2 sm:mt-5">
-            <strong className="font-editorial text-[42px] font-semibold leading-none tabular-nums sm:text-[50px]">{plan.completedScenes}</strong>
+          <div className="mt-3 flex items-end gap-2 sm:mt-4">
+            <strong className="font-editorial text-[40px] font-semibold leading-none tabular-nums sm:text-[46px]">{plan.completedScenes}</strong>
             <span className="pb-1 text-[13px] font-semibold tabular-nums text-[var(--pbl-text-muted)]">/ {plan.totalScenes || "—"} 页已完成</span>
           </div>
           <div aria-label="课堂页面制作进度" aria-valuemax={plan.totalScenes || 100} aria-valuemin={0} aria-valuenow={plan.completedScenes} aria-valuetext={plan.totalScenes > 0 ? `已完成 ${plan.completedScenes} / ${plan.totalScenes} 页` : "等待页面计划"} className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--pbl-border)]" role="progressbar">
@@ -501,13 +528,13 @@ function AiLearningPageProductionPreview({ artifact, active, suspendedLabel }: {
             预计授课 {formatPlanDuration(plan.estimatedDuration)}
           </p>
 
-          <div className="mt-auto grid grid-cols-3 gap-1.5 pt-3 sm:pt-5">
+          <div className="mt-auto grid grid-cols-3 gap-1.5 pt-3">
             {[
               { label: "讲解", value: sceneCounts.slide ?? 0 },
               { label: "互动", value: sceneCounts.interactive ?? 0 },
               { label: "检测", value: sceneCounts.quiz ?? 0 },
             ].map((stat) => (
-              <div className="border-l border-[var(--pbl-border)] px-2 py-1.5 text-center first:border-l-0 sm:py-2" key={stat.label}>
+              <div className="border-l border-[var(--pbl-border)] px-2 py-1.5 text-center first:border-l-0" key={stat.label}>
                 <strong className="block text-[15px] leading-none tabular-nums">{stat.value}</strong>
                 <span className="mt-1 block text-[10px] text-[var(--pbl-text-muted)]">{stat.label}</span>
               </div>
@@ -517,67 +544,83 @@ function AiLearningPageProductionPreview({ artifact, active, suspendedLabel }: {
         </div>
       </motion.section>
 
-      <section className="min-w-0 border-t border-[var(--pbl-border)] px-4 py-3.5 sm:border-l sm:border-t-0 sm:pl-5">
+      <section className="min-w-0 border-t border-[var(--pbl-border)] px-4 py-3 sm:border-l sm:border-t-0 sm:pl-5">
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold tracking-[.06em] text-[var(--pbl-teacher)]">当前页面任务</p>
-            <p className="mt-1 text-[11px] text-[var(--pbl-text-muted)]">每一行均来自后台正在执行的真实步骤</p>
-          </div>
+          <p className="text-xs font-semibold tracking-[.06em] text-[var(--pbl-teacher)]">当前页面任务</p>
           <span className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold", suspendedLabel || ["failed", "cancelled", "cancelling", "recovering"].includes(plan.status) ? "bg-amber-50 text-amber-800" : "bg-blue-50 text-blue-700")}>
             <span className={cn("size-1.5 rounded-full bg-current", isRunning && "motion-safe:animate-pulse")} />{statusLabel}
           </span>
         </div>
 
-        <div className="mt-3 divide-y divide-[var(--pbl-border-soft)] border-y border-[var(--pbl-border)]" aria-label="当前并行页面任务">
-          {activePages.map((page, index) => (
-            <motion.div
-              animate={{ opacity: 1, x: 0 }}
-              className="grid grid-cols-[54px_minmax(0,1fr)_auto] items-center gap-3 py-2.5"
-              initial={false}
-              key={`${page.index}-${page.stage}`}
-              transition={{ delay: index * .06 }}
-            >
-              <span className="text-[10px] font-semibold tabular-nums text-[var(--pbl-text-subtle)]">第 {String(page.index).padStart(2, "0")} 页</span>
-              <span className="min-w-0">
-                <span className="block truncate text-[11px] font-semibold text-[var(--pbl-text)]" title={page.title}>{page.title}</span>
-                <span className="mt-0.5 block text-[9px] text-[var(--pbl-text-subtle)]">{pageTaskRuntime(page)}</span>
-              </span>
-              <span className="max-w-28 text-right text-[10px] font-semibold leading-4 text-[var(--pbl-teacher)]">{PAGE_TASK_LABELS[page.stage] ?? "处理页面内容"}</span>
-            </motion.div>
-          ))}
+        <div className="mt-2.5 divide-y divide-[var(--pbl-border-soft)] border-y border-[var(--pbl-border)]" aria-label="当前并行页面任务">
+          {activePages.map((page, index) => {
+            const currentStageIndex = PAGE_TASK_STAGES.indexOf(page.stage as typeof PAGE_TASK_STAGES[number]);
+            const progressValue = Math.max(0, currentStageIndex + 1);
+            return (
+              <motion.section
+                animate={{ opacity: 1, x: 0 }}
+                className="py-2"
+                initial={false}
+                key={`${page.index}-${page.stage}`}
+                transition={{ delay: index * .06 }}
+              >
+                <div className="grid grid-cols-[54px_minmax(0,1fr)_auto] items-center gap-3">
+                  <span className="text-[10px] font-semibold tabular-nums text-[var(--pbl-text-subtle)]">第 {String(page.index).padStart(2, "0")} 页</span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-[11px] font-semibold text-[var(--pbl-text)]" title={page.title}>{page.title}</span>
+                    <span className="mt-0.5 block text-[9px] text-[var(--pbl-text-subtle)]">{pageTaskRuntime(page)}</span>
+                  </span>
+                  <span className="max-w-28 text-right text-[10px] font-semibold leading-4 text-[var(--pbl-teacher)]">{PAGE_TASK_LABELS[page.stage] ?? "处理页面内容"}</span>
+                </div>
+
+                <div
+                  aria-label={`第 ${page.index} 页制作进度`}
+                  aria-valuemax={PAGE_TASK_STAGES.length}
+                  aria-valuemin={0}
+                  aria-valuenow={progressValue}
+                  aria-valuetext={PAGE_TASK_LABELS[page.stage] ?? "处理页面内容"}
+                  className="mt-1.5 pl-[66px]"
+                  role="progressbar"
+                >
+                  <div className="grid grid-cols-6 gap-1" aria-hidden>
+                    {PAGE_TASK_STAGES.map((stage, stageIndex) => (
+                      <motion.span
+                        animate={stageIndex === currentStageIndex && isRunning && !reducedMotion ? { opacity: [.55, 1, .55] } : undefined}
+                        className={cn(
+                          "h-1 rounded-full",
+                          stageIndex < currentStageIndex && "bg-blue-400",
+                          stageIndex === currentStageIndex && "bg-[var(--pbl-teacher)] shadow-[0_0_0_2px_var(--pbl-teacher-soft)]",
+                          stageIndex > currentStageIndex && "bg-[var(--pbl-border)]",
+                        )}
+                        key={stage}
+                        transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+                      />
+                    ))}
+                  </div>
+                  <div className="mt-1 grid grid-cols-6 gap-1" aria-hidden>
+                    {PAGE_TASK_STAGES.map((stage, stageIndex) => (
+                      <span
+                        className={cn(
+                          "truncate text-center text-[7px] font-medium leading-none",
+                          stageIndex <= currentStageIndex ? "text-[var(--pbl-text-muted)]" : "text-[var(--pbl-text-subtle)]",
+                        )}
+                        key={stage}
+                      >
+                        {PAGE_TASK_SHORT_LABELS[stage]}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </motion.section>
+            );
+          })}
           {activePages.length === 0 ? (
-            <div className="px-3 py-5 text-center">
+            <div className="px-3 py-4 text-center">
               <p className="text-[11px] font-semibold text-[var(--pbl-text)]">{plan.message || statusLabel}</p>
               {nextScene ? <p className="mt-1 text-[10px] text-[var(--pbl-text-muted)]">下一页：{nextScene.title}</p> : null}
             </div>
           ) : null}
         </div>
-
-        <ol aria-label="单页制作流程" className="mt-4 grid grid-cols-6">
-          {PAGE_TASK_STAGES.map((stage, index) => {
-            const current = activeStageIndexes.has(index);
-            const done = index < firstActiveStage;
-            return (
-              <li
-                aria-current={current ? "step" : undefined}
-                className="relative min-w-0 text-center"
-                key={stage}
-              >
-                {index < PAGE_TASK_STAGES.length - 1 ? (
-                  <span aria-hidden className={cn("absolute left-[58%] right-[-42%] top-[4px] h-px", done ? "bg-emerald-300" : "bg-[var(--pbl-border)]")} />
-                ) : null}
-                <span className={cn(
-                  "relative mx-auto block size-2 rounded-full",
-                  done && "bg-emerald-600",
-                  current && "bg-[var(--pbl-teacher)] ring-4 ring-[var(--pbl-teacher-soft)]",
-                  !done && !current && "bg-[var(--pbl-border)]",
-                )} />
-                <p className={cn("mt-2 text-[9px] font-semibold leading-3", !done && !current ? "text-[var(--pbl-text-subtle)]" : "text-[var(--pbl-text)]")}>{PAGE_TASK_LABELS[stage].replace(/^生成|^检查|^校验|^组装并|^制作/, "")}</p>
-                <span className="sr-only">{done ? "已完成" : current ? statusLabel : "待开始"}</span>
-              </li>
-            );
-          })}
-        </ol>
       </section>
     </div>
   );

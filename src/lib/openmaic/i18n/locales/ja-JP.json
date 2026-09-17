@@ -264,6 +264,7 @@
       "type": {
         "single": "単一選択",
         "multiple": "複数選択",
+        "matching": "ドラッグ対応",
         "short_answer": "記述"
       },
       "shortAnswerGradingNote": "記述式は下の採点ガイドに基づき AI が自動採点します。",

@@ -16,7 +16,7 @@ vi.mock("@/lib/openmaic/server/provider-config", () => ({
   findServerDefaultModelString: () => "deepseek:deepseek-v4-flash",
 }));
 
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 const context = { params: Promise.resolve({ courseId: "course-1" }) };
 function request(body: unknown) {
@@ -28,6 +28,26 @@ function storedJob(request: unknown, status = "completed") {
 
 describe("resource-package design generation admission", () => {
   beforeEach(() => { vi.clearAllMocks(); mocks.find.mockResolvedValue(null); mocks.packageJob.mockResolvedValue(null); mocks.references.mockResolvedValue([]); });
+
+  it("returns the current streamed-call phase for live progress", async () => {
+    mocks.find.mockResolvedValue({
+      ...storedJob({ courseId: "course-1", teacherBrief: "" }, "running"),
+      step: "knowledgePoints",
+      currentCall: {
+        stage: "knowledgePoints",
+        status: "reasoning",
+        attempt: 2,
+        maxAttempts: 3,
+      },
+    });
+
+    const response = await GET(new NextRequest("http://localhost/api/courses/course-1/design-generation"), context);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      job: { currentCall: { status: "reasoning", attempt: 2, maxAttempts: 3 } },
+    });
+  });
 
   it("requires a confirmed resource package for new generation", async () => {
     const response = await POST(request({ teacherBrief: "生成新课程" }), context);
@@ -58,8 +78,25 @@ describe("resource-package design generation admission", () => {
       resourcePackage,
       referenceMaterials: [material],
       supplementalAnswers: { brief: "" },
+      generationContractVersion: 2,
+      assessmentMode: "adaptive",
     });
-    expect(await response.json()).toMatchObject({ job: { requestPreview: { resourcePackageId: "package-1", resourcePackageRevision: 3 } } });
+    expect(await response.json()).toMatchObject({ job: { requestPreview: { resourcePackageId: "package-1", resourcePackageRevision: 3, assessmentMode: "adaptive" } } });
+  });
+
+  it("accepts deep response independently and rejects unknown assessment modes", async () => {
+    const resourcePackage = { schemaVersion: 1, id: "package-1", revision: 3, source: { id: "zip-1", fileName: "教学.zip", url: "/private/zip" }, documents: {}, draft: emptyResourcePackageDraft(), confirmedAt: "2026-09-12T00:00:00Z" };
+    mocks.resolve.mockResolvedValue({ resourcePackage, referenceMaterials: [] });
+    mocks.create.mockImplementation(({ data }: { data: { request: unknown } }) => Promise.resolve(storedJob(data.request, "queued")));
+    const accepted = await POST(request({ resourcePackageId: "package-1", resourcePackageRevision: 3, assessmentMode: "constructed-response" }), context);
+    expect(accepted.status).toBe(202);
+    expect(mocks.create.mock.calls[0][0].data.request).toMatchObject({
+      generationContractVersion: 2,
+      assessmentMode: "constructed-response",
+    });
+    const rejected = await POST(request({ resourcePackageId: "package-1", resourcePackageRevision: 3, assessmentMode: "essay" }), context);
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({ error: "INVALID_ASSESSMENT_MODE" });
   });
 
   it("only allows legacy requests to resume with the same parameters", async () => {

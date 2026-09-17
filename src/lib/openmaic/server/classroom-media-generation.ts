@@ -50,6 +50,7 @@ import { throwIfAborted, withGenerationRetry } from '@openmaic/lib/generation/ge
 import { auditNarrationLanguage } from '@openmaic/lib/generation/course-language';
 import { mapWithConcurrency } from '@openmaic/lib/utils/concurrency';
 import { runWithGlobalTtsProviderSlot } from '@openmaic/lib/server/tts-provider-limiter';
+import { audioDurationSec } from '@openmaic/lib/audio/audio-duration';
 import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 import {
   hasPblRoutingMetadata,
@@ -853,6 +854,7 @@ export async function generateTTSForClassroom(
       await fs.writeFile(path.join(audioDir, filename), result.audio);
       task.speechAction.audioId = task.audioId;
       task.speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${filename}`);
+      task.speechAction.audioDurationSec = audioDurationSec(result.audio, result.format || runtime.format);
       delete task.speechAction.audioInvalidated;
       log.info(`Generated TTS via ${runtime.providerId}: ${filename} (${result.audio.length} bytes)`);
       return true;

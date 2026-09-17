@@ -10,7 +10,8 @@ type ActivityPauseSpeechAction = Extract<Action, { type: 'speech' }> & {
 
 type TimelinePauseSpeechAction = Extract<Action, { type: 'speech' }> & {
   timelinePauseSec: number;
-  timelinePausePurpose: 'page-transition';
+  timelinePausePurpose: 'page-transition' | 'learner-reflection';
+  timelinePauseSource?: 'page-timing';
 };
 
 export const MIN_STUDENT_ACTIVITY_SEC = 30;
@@ -29,6 +30,60 @@ function isTimelinePause(action: Action): action is TimelinePauseSpeechAction {
       Number((action as Action & { timelinePauseSec?: number }).timelinePauseSec),
     )
     && Number((action as Action & { timelinePauseSec?: number }).timelinePauseSec) > 0;
+}
+
+function isPageTimingActivityPause(action: Action): action is ActivityPauseSpeechAction {
+  return isActivityPause(action) && action.activityPauseSource === 'page-timing';
+}
+
+function createSlideReflectionPause(
+  seconds: number,
+  source?: ActivityPauseSpeechAction,
+): TimelinePauseSpeechAction {
+  const base = source
+    ? (() => {
+        const {
+          activityPauseSec: _activityPauseSec,
+          activityPausePurpose: _activityPausePurpose,
+          activityPauseSource: _activityPauseSource,
+          ...rest
+        } = source;
+        return rest;
+      })()
+    : {
+        id: `learner_reflection_${nanoid(8)}`,
+        type: 'speech' as const,
+        text: '',
+      };
+  return {
+    ...base,
+    title: '学生阅读与思考',
+    timelinePauseSec: normalizePlannedStudentActivitySec(seconds),
+    timelinePausePurpose: 'learner-reflection',
+    timelinePauseSource: 'page-timing',
+  };
+}
+
+/**
+ * Migrate generated slide waits from an interactive gate to a passive pause at
+ * the end of the narrated content. This keeps the planned page duration while
+ * ensuring a normal slide never interrupts narration to request an operation.
+ */
+export function normalizeSlideActivityPause(actions: Action[]): Action[] {
+  const gateIndex = actions.findIndex(isPageTimingActivityPause);
+  if (gateIndex < 0) return actions;
+
+  const gate = actions[gateIndex];
+  if (!isPageTimingActivityPause(gate)) return actions;
+  const withoutGate = actions.filter((_, index) => index !== gateIndex);
+  const transitionIndex = withoutGate.findIndex(isTimelinePause);
+  const insertionIndex = transitionIndex >= 0 ? transitionIndex : withoutGate.length;
+  const pause = createSlideReflectionPause(gate.activityPauseSec, gate);
+  return [
+    ...withoutGate.slice(0, insertionIndex),
+    pause,
+    ...withoutGate.slice(insertionIndex),
+  ];
 }
 
 function getStudentActivityInsertionIndex(actions: Action[]): number {
@@ -100,6 +155,13 @@ export function addStudentActivityPause(outline: SceneOutline, actions: Action[]
   const configuredActivitySec = Math.round(outline.timingPlan?.studentActivitySec ?? 0);
   if (configuredActivitySec <= 0) return actions;
   const activityPauseSec = normalizePlannedStudentActivitySec(configuredActivitySec);
+
+  // Slide pages can reserve reading/thinking time in the teaching blueprint,
+  // but they do not expose a learner-controlled operation. Keep that budget as
+  // a passive end-of-page pause so narration and visual cues remain contiguous.
+  if (outline.type === 'slide') {
+    return [...actions, createSlideReflectionPause(activityPauseSec)];
+  }
 
   const normalizedActions = actions.filter((action) => action.type === 'speech').length >= 2
     ? actions

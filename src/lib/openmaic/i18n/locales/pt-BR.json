@@ -249,6 +249,7 @@
       "type": {
         "single": "Escolha única",
         "multiple": "Múltipla escolha",
+        "matching": "Correspondência por arrastar",
         "short_answer": "Resposta curta"
       },
       "shortAnswerGradingNote": "Respostas curtas são sempre avaliadas por IA com base na orientação abaixo.",

@@ -82,6 +82,23 @@ describe("AiLearningTeacherPreview", () => {
     expect(screen.getByText(/左侧缩略页快速切换/)).toBeTruthy();
   });
 
+  it("labels measured TTS duration separately from the no-TTS estimate", () => {
+    const timedCourse = structuredClone(course);
+    timedCourse.content.teachingTimingAudit = {
+      schemaVersion: 1, totalBudgetSec: 1_800, plannedSubstantiveTeachingSec: 1_224,
+      plannedAssessmentSec: 360, plannedLearnerActivitySec: 216,
+      substantiveTeachingDurationSec: 1_206, assessmentAudioDurationSec: 82,
+      narrationDurationSource: "actual-audio", measuredSegmentCount: 8, narrationSegmentCount: 8,
+      complete: true, substantiveTeachingRatio: 0.67, teachingRatioValid: true, generatedAt: "2026-09-17T00:00:00Z",
+    };
+    const view = render(<AiLearningTeacherPreview course={timedCourse} />);
+    expect(screen.getByText(/讲授音频实测 20.1 分钟/)).toBeTruthy();
+    timedCourse.content.teachingTimingAudit.narrationDurationSource = "estimated-script";
+    timedCourse.content.teachingTimingAudit.substantiveTeachingDurationSec = 1_224;
+    view.rerender(<AiLearningTeacherPreview course={timedCourse} />);
+    expect(screen.getByText(/讲授时长估算 20.4 分钟（TTS 未开启）/)).toBeTruthy();
+  });
+
   it("retains one teacher-only player across presentation switches and restores the normal workspace rail", () => {
     const view = render(<AiLearningTeacherPreview course={course} />);
     fireEvent.click(screen.getByRole("button", { name: /学生知识讲授课程预览/ }));

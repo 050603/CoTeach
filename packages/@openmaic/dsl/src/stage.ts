@@ -154,16 +154,28 @@ export interface QuizOption {
   value: string; // Selection key: "A", "B", "C", "D"
 }
 
+/** One stable left/right relation used by the drag-and-drop matching response. */
+export interface QuizMatchingPair {
+  leftId: string;
+  left: string;
+  rightId: string;
+  right: string;
+}
+
 export interface QuizQuestion {
   id: string;
   /** Confirmed course knowledge points assessed by this question. */
   knowledgePointIds?: string[];
-  type: 'single' | 'multiple' | 'short_answer';
+  /** Stable teaching-blueprint units assessed by this question. */
+  teachingUnitIds?: string[];
+  type: 'single' | 'multiple' | 'matching' | 'short_answer';
   /** Pedagogical presentation within a runtime-supported response structure. */
-  format?: 'single_choice' | 'multiple_choice' | 'true_false' | 'fill_blank' | 'short_answer' | 'scenario_task';
+  format?: 'single_choice' | 'multiple_choice' | 'true_false' | 'matching' | 'fill_blank' | 'short_answer' | 'scenario_task';
   question: string;
   options?: QuizOption[];
-  answer?: string[]; // Correct answer values: ["A"], ["A","C"], or undefined for text
+  /** Relations use `leftId:rightId`; choices use option values. */
+  answer?: string[];
+  matchingPairs?: QuizMatchingPair[];
   analysis?: string; // Explanation shown after grading
   commentPrompt?: string; // Grading guidance for text questions
   hasAnswer?: boolean; // Whether auto-grading is possible

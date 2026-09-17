@@ -7,6 +7,7 @@ import {
   LoaderCircle,
   Mic2,
   Paperclip,
+  PenLine,
   RefreshCw,
   Send,
   Settings2,
@@ -62,6 +63,24 @@ type DesignJob = {
   progress: number;
   message: string;
   estimatedRemainingSeconds: number | null;
+  tokenUsage?: {
+    totalTokens: number;
+    calls: number;
+    approximate: boolean;
+  };
+  currentCall?: {
+    stage?: string;
+    status?: "queued" | "awaiting-first-output" | "reasoning" | "receiving-output" | "retry-wait";
+    attempt?: number;
+    maxAttempts?: number;
+    queueMs?: number;
+    startedAt?: number;
+    lastActivityAt?: number;
+    firstOutputAt?: number;
+    retryAt?: number;
+    reasoningCharacters?: number;
+    textCharacters?: number;
+  } | null;
   trace: Array<CourseDesignGenerationTraceEntry & { progress?: number; stepIndex?: number }>;
   qualityReport?: { score?: number; summary?: string; checks?: string[] } | null;
   error?: string | null;
@@ -74,6 +93,7 @@ type DesignJob = {
     resourcePackageRevision?: number;
     supplementalAnswers?: { brief?: string };
     generationMode?: CourseGenerationMode;
+    assessmentMode?: AssessmentMode;
     options?: GenerationOptions | null;
     referenceMaterials?: UploadedKnowledgeReference[];
   };
@@ -111,6 +131,7 @@ type GenerationOptions = {
 };
 
 type CourseGenerationMode = "standard" | "deep-interaction";
+type AssessmentMode = "adaptive" | "constructed-response";
 
 type UploadedKnowledgeReference = {
   id: string;
@@ -147,6 +168,34 @@ function pageRuntimeLabel(page: NonNullable<QuickClassroomGenerationSnapshot["ac
     details.push(`最近输出 ${Math.max(0, Math.floor((Date.now() - page.lastOutputAt) / 1_000))} 秒前`);
   }
   return details.length ? `，${details.join("，")}` : "";
+}
+
+export function designCallLabel(call: DesignJob["currentCall"]): string {
+  if (!call) return "";
+  const status = call.status === "queued"
+    ? "等待模型并发槽位"
+    : call.status === "awaiting-first-output"
+      ? "等待供应商首个响应"
+      : call.status === "reasoning"
+        ? "模型推理中"
+        : call.status === "receiving-output"
+          ? call.stage === "knowledgePoints"
+            ? "正在接收图谱"
+            : "正在接收结构化结果"
+          : call.status === "retry-wait"
+            ? "等待传输重试"
+            : "模型处理中";
+  const details = [status];
+  if ((call.attempt ?? 1) > 1) details.push(`第 ${call.attempt}/${call.maxAttempts ?? 3} 次尝试`);
+  if ((call.queueMs ?? 0) >= 1_000) details.push(`排队 ${Math.ceil(call.queueMs! / 1_000)} 秒`);
+  if (call.startedAt) details.push(`已执行 ${Math.max(0, Math.floor((Date.now() - call.startedAt) / 1_000))} 秒`);
+  if (call.lastActivityAt) {
+    details.push(`最近输出 ${Math.max(0, Math.floor((Date.now() - call.lastActivityAt) / 1_000))} 秒前`);
+  }
+  if (call.status === "retry-wait" && call.retryAt) {
+    details.push(`${Math.max(0, Math.ceil((call.retryAt - Date.now()) / 1_000))} 秒后重试`);
+  }
+  return details.join("，");
 }
 
 function liveDesignArtifact(
@@ -234,6 +283,7 @@ export function FastCourseGenerator({
   const [confirmedPackage, setConfirmedPackage] = useState<CourseResourcePackage | null>(null);
   const [hasResourcePackage, setHasResourcePackage] = useState(false);
   const [generationMode, setGenerationMode] = useState<CourseGenerationMode>("standard");
+  const [assessmentMode, setAssessmentMode] = useState<AssessmentMode>("adaptive");
   const [job, setJob] = useState<DesignJob | null>(null);
   const [classroomJob, setClassroomJob] = useState<ClassroomGenerationResponse["job"]>(null);
   const [backgroundEnabled, setBackgroundEnabled] = useState<boolean | null>(null);
@@ -273,6 +323,7 @@ export function FastCourseGenerator({
     && !savedRequest?.resourcePackageId
     && brief === (savedRequest?.teacherBrief ?? "")
     && generationMode === (savedRequest?.generationMode ?? "standard")
+    && assessmentMode === (savedRequest?.assessmentMode ?? "constructed-response")
     && options.enableImageGeneration === (savedRequest?.options?.enableImageGeneration !== false)
     && options.enableTTS === (savedRequest?.options?.enableTTS !== false)
     && options.enableVideoGeneration === (savedRequest?.options?.enableVideoGeneration === true)
@@ -285,6 +336,9 @@ export function FastCourseGenerator({
     if (savedBrief) setBrief(savedBrief);
     if (payload.job?.requestPreview?.generationMode) {
       setGenerationMode(payload.job.requestPreview.generationMode);
+    }
+    if (payload.job?.requestPreview) {
+      setAssessmentMode(payload.job.requestPreview.assessmentMode ?? "constructed-response");
     }
     const savedOptions = payload.job?.requestPreview?.options;
     if (savedOptions) {
@@ -407,6 +461,7 @@ export function FastCourseGenerator({
             resourcePackageRevision: confirmedPackage.revision,
           } : {}),
           generationMode,
+          assessmentMode,
           options,
           referenceIds: referenceMaterials.map((material) => material.id),
         }),
@@ -615,13 +670,17 @@ export function FastCourseGenerator({
           .map((page) => `第 ${page.index} 页：${page.title}（${CLASSROOM_PAGE_STAGE_LABELS[page.stage] ?? page.stage}${pageRuntimeLabel(page)}）`)
           .join("；")
       : classroomJob?.message || "课程设计已完成，正在衔接课堂内容生成"
-    : job?.message || "正在分析课程信息";
+    : job?.currentCall
+      ? `${job.message || "正在分析课程信息"}（${designCallLabel(job.currentCall)}）`
+      : job?.message || "正在分析课程信息";
   const activeRemaining = job?.status === "completed"
     ? classroomJob?.estimatedRemainingSeconds
     : job?.estimatedRemainingSeconds;
   const activeStartedAt = job?.status === "completed"
     ? classroomJob?.startedAt ?? job.startedAt ?? null
     : job?.startedAt ?? null;
+  const tokenUsage = Math.max(0, job?.tokenUsage?.totalTokens ?? 0)
+    + Math.max(0, classroomJob?.tokenUsage?.totalTokens ?? 0);
   const showGenerationCanvas = running || job?.status === "completed" || classroomRunning || classroomCompleted;
 
   useEffect(() => {
@@ -672,6 +731,7 @@ export function FastCourseGenerator({
         reviewAvailableUntil={job?.reviewAvailableUntil ?? null}
         reviewKind={job?.reviewKind ?? null}
         startedAt={activeStartedAt}
+        tokenUsage={tokenUsage}
       />
       <AnimatePresence>
         {knowledgeReviewOpen ? (
@@ -851,6 +911,13 @@ export function FastCourseGenerator({
                 />
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
+                <OptionToggle
+                  active={assessmentMode === "constructed-response"}
+                  description="开启后小节检测全部使用简答；关闭时以选择、判断为主，仅保留极少量短答"
+                  icon={PenLine}
+                  label="深度作答"
+                  onClick={() => setAssessmentMode((current) => current === "constructed-response" ? "adaptive" : "constructed-response")}
+                />
                 <OptionToggle active={options.enableImageGeneration} description="为适合的课堂页面生成配图" icon={ImageIcon} label="图片" onClick={() => setOptions((current) => ({ ...current, enableImageGeneration: !current.enableImageGeneration }))} />
                 <OptionToggle active={options.enableTTS} description="为授课内容生成中文语音" icon={Volume2} label="语音" onClick={() => setOptions((current) => ({ ...current, enableTTS: !current.enableTTS }))} />
                 <OptionToggle active={options.enableVideoGeneration} description="在适合的页面尝试生成视频资源" icon={Video} label="视频" onClick={() => setOptions((current) => ({ ...current, enableVideoGeneration: !current.enableVideoGeneration }))} />
@@ -859,22 +926,40 @@ export function FastCourseGenerator({
 
             <div className="flex shrink-0 items-center justify-end gap-1">
               {simplified ? (
-                <button
-                  aria-label={generationMode === "deep-interaction" ? "关闭深度交互，使用普通模式" : "开启深度交互模式"}
-                  aria-pressed={generationMode === "deep-interaction"}
-                  className={cn(
-                    QUICK_TOOLBAR_CONTROL_CLASS,
-                    generationMode === "deep-interaction"
-                      ? "bg-white text-violet-700 shadow-sm ring-1 ring-stone-200"
-                      : "text-stone-500 hover:bg-white hover:text-violet-700",
-                  )}
-                  onClick={() => setGenerationMode((current) => current === "deep-interaction" ? "standard" : "deep-interaction")}
-                  title="开启后优先生成有真实操作价值的模拟、编程与探索页面"
-                  type="button"
-                >
-                  <Sparkles className="size-3.5" />
-                  深度交互
-                </button>
+                <>
+                  <button
+                    aria-label={assessmentMode === "constructed-response" ? "关闭深度作答，使用灵活题型" : "开启深度作答模式"}
+                    aria-pressed={assessmentMode === "constructed-response"}
+                    className={cn(
+                      QUICK_TOOLBAR_CONTROL_CLASS,
+                      assessmentMode === "constructed-response"
+                        ? "bg-white text-blue-700 shadow-sm ring-1 ring-stone-200"
+                        : "text-stone-500 hover:bg-white hover:text-blue-700",
+                    )}
+                    onClick={() => setAssessmentMode((current) => current === "constructed-response" ? "adaptive" : "constructed-response")}
+                    title="开启后小节检测全部使用简答题；默认使用更易上手的灵活题型"
+                    type="button"
+                  >
+                    <PenLine className="size-3.5" />
+                    深度作答
+                  </button>
+                  <button
+                    aria-label={generationMode === "deep-interaction" ? "关闭深度交互，使用普通模式" : "开启深度交互模式"}
+                    aria-pressed={generationMode === "deep-interaction"}
+                    className={cn(
+                      QUICK_TOOLBAR_CONTROL_CLASS,
+                      generationMode === "deep-interaction"
+                        ? "bg-white text-violet-700 shadow-sm ring-1 ring-stone-200"
+                        : "text-stone-500 hover:bg-white hover:text-violet-700",
+                    )}
+                    onClick={() => setGenerationMode((current) => current === "deep-interaction" ? "standard" : "deep-interaction")}
+                    title="开启后优先生成有真实操作价值的模拟、编程与探索页面"
+                    type="button"
+                  >
+                    <Sparkles className="size-3.5" />
+                    深度交互
+                  </button>
+                </>
               ) : null}
               <button
                 aria-label={job?.status === "failed" ? "从已保存内容继续生成" : "开始生成课程"}

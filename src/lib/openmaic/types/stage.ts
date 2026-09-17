@@ -34,6 +34,7 @@ export type {
   Stage,
   SlideContent,
   QuizOption,
+  QuizMatchingPair,
   QuizQuestion,
   QuizContent,
 } from '@openmaic/dsl';
@@ -108,8 +109,12 @@ export type PblSceneMetadata = {
   companionPrompt?: string;
   activityId?: string;
   parentActivityId?: string;
+  lectureSectionId?: string;
+  lectureSectionTitle?: string;
   detailKind?: PblDetailKind;
   knowledgePointIds?: string[];
+  teachingUnitIds?: string[];
+  assessmentUnitIds?: string[];
   targetDurationSec?: number;
   segmentIndex?: number;
   segmentCount?: number;

@@ -77,6 +77,8 @@ function sanitizeAttemptQuestions(
   questions: IncomingReview[],
   allowedKnowledgePointIds: ReadonlySet<string>,
   fallbackKnowledgePointIds: readonly string[],
+  allowedTeachingUnitIds: ReadonlySet<string>,
+  fallbackTeachingUnitIds: readonly string[],
 ): KnowledgeLectureQuestionReview[] {
   return questions.slice(0, 3).flatMap((question, index) => {
     const prompt = text(question.prompt, 1_500);
@@ -86,6 +88,9 @@ function sanitizeAttemptQuestions(
     const earned = Math.max(0, Math.min(points, number(question.earned)));
     const requestedKnowledgePointIds = Array.isArray(question.knowledgePointIds)
       ? question.knowledgePointIds.map((id) => text(id, 160)).filter((id) => allowedKnowledgePointIds.has(id))
+      : [];
+    const requestedTeachingUnitIds = Array.isArray(question.teachingUnitIds)
+      ? question.teachingUnitIds.map((id) => text(id, 160)).filter((id) => allowedTeachingUnitIds.has(id))
       : [];
     return [{
       questionId,
@@ -99,6 +104,9 @@ function sanitizeAttemptQuestions(
       knowledgePointIds: requestedKnowledgePointIds.length
         ? Array.from(new Set(requestedKnowledgePointIds))
         : [...fallbackKnowledgePointIds],
+      teachingUnitIds: requestedTeachingUnitIds.length
+        ? Array.from(new Set(requestedTeachingUnitIds))
+        : [...fallbackTeachingUnitIds],
     }];
   });
 }
@@ -162,12 +170,16 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "SECTION_NOT_FOUND" }, { status: 404 });
     }
     const allowedKnowledgePointIds = new Set(section.knowledgePointIds);
+    const blueprintSection = course.content.teachingBlueprint?.sections.find((item) => item.id === sectionId);
+    const teachingUnitIds = blueprintSection?.units.map((unit) => unit.id) ?? [];
     const questions = sanitizeAttemptQuestions(
       Array.isArray(body.questions) ? body.questions : [],
       allowedKnowledgePointIds,
       section.knowledgePointIds,
+      new Set(teachingUnitIds),
+      teachingUnitIds,
     );
-    if (questions.length < 2) {
+    if (questions.length < 1) {
       return Response.json({ error: "QUIZ_RESULTS_INCOMPLETE" }, { status: 400 });
     }
     const now = new Date().toISOString();

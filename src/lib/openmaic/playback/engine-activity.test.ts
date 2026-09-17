@@ -88,6 +88,30 @@ function legacyInteractiveScene(): Scene {
   } as unknown as Scene;
 }
 
+function legacySlideScene(): Scene {
+  return {
+    id: 'slide-scene',
+    stageId: 'stage-1',
+    order: 0,
+    title: 'Explanation',
+    type: 'slide',
+    content: { type: 'slide', elements: [] },
+    actions: [
+      { id: 'intro', type: 'speech', text: '' },
+      {
+        id: 'legacy-gate',
+        type: 'speech',
+        text: '',
+        activityPauseSec: 5,
+        activityPausePurpose: 'interaction',
+        activityPauseSource: 'page-timing',
+      },
+      { id: 'first-visual-action', type: 'wb_open' },
+      { id: 'explanation', type: 'speech', text: '' },
+    ] as Action[],
+  } as unknown as Scene;
+}
+
 function createEngine(callbacks: ConstructorParameters<typeof PlaybackEngine>[3] = {}) {
   const actionEngine = {
     clearEffects: vi.fn(),
@@ -173,7 +197,7 @@ describe('PlaybackEngine activity gates', () => {
     );
 
     engine.start();
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(399);
     expect(actionEngine.execute).not.toHaveBeenCalled();
     expect(onActivityStart).not.toHaveBeenCalled();
 
@@ -204,13 +228,13 @@ describe('PlaybackEngine activity gates', () => {
     );
 
     engine.start();
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(200);
     engine.pause();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(actionEngine.execute).not.toHaveBeenCalled();
 
     engine.resume();
-    await vi.advanceTimersByTimeAsync(2_999);
+    await vi.advanceTimersByTimeAsync(199);
     expect(actionEngine.execute).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(actionEngine.execute).toHaveBeenCalledTimes(1);
@@ -269,6 +293,40 @@ describe('PlaybackEngine activity gates', () => {
     expect(actionEngine.execute).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'auto-demo', type: 'widget_setState' }),
     );
+  });
+
+  it('does not expose a persisted slide timing pause as an operation gate', async () => {
+    const onActivityStart = vi.fn();
+    const actionEngine = {
+      clearEffects: vi.fn(),
+      execute: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ActionEngine;
+    const audioPlayer = {
+      play: vi.fn().mockResolvedValue(false),
+      onEnded: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      stop: vi.fn(),
+      isPlaying: vi.fn().mockReturnValue(false),
+      hasActiveAudio: vi.fn().mockReturnValue(false),
+    } as unknown as AudioPlayer;
+    const engine = new PlaybackEngine(
+      [legacySlideScene()],
+      actionEngine,
+      audioPlayer,
+      { onActivityStart },
+    );
+
+    engine.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(actionEngine.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'first-visual-action' }),
+    );
+    expect(onActivityStart).not.toHaveBeenCalled();
+
+    await vi.runAllTimersAsync();
+    expect(onActivityStart).not.toHaveBeenCalled();
   });
 
   it('re-schedules a delayed discussion trigger after pause and resume', async () => {

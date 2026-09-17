@@ -25,7 +25,7 @@ export type PblInteractionType =
   | 'game'
   | 'custom';
 
-export type PblQuizQuestionType = 'single' | 'multiple' | 'short_answer' | 'true_false' | 'fill_blank' | 'scenario_task';
+export type PblQuizQuestionType = 'single' | 'multiple' | 'matching' | 'short_answer' | 'true_false' | 'fill_blank' | 'scenario_task';
 
 export type PblPageKind = 'slide' | 'interactive' | 'quiz';
 
@@ -155,6 +155,7 @@ const INTERACTION_SECONDS_PER_STEP: Record<PblInteractionType, number> = {
 const QUIZ_SECONDS_PER_QUESTION: Record<PblQuizQuestionType, number> = {
   single: 45,
   multiple: 65,
+  matching: 55,
   short_answer: 120,
   true_false: 35,
   fill_blank: 55,
@@ -174,6 +175,7 @@ const INTERACTION_READING_THINKING_SECONDS: Record<PblInteractionType, number> =
 const QUIZ_READING_THINKING_SECONDS: Record<PblQuizQuestionType, number> = {
   single: 35,
   multiple: 45,
+  matching: 40,
   short_answer: 55,
   true_false: 25,
   fill_blank: 30,

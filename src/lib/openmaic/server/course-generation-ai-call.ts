@@ -14,8 +14,22 @@ const log = createLogger('CourseGenerationAI');
 export type CourseGenerationAiCallContext = {
   attemptsStarted?: number;
   onQueued?: (input: { attempt: number; totalAttempt: number; queuedAt: number }) => Promise<void> | void;
+  onAttemptStarting?: (input: {
+    attempt: number;
+    totalAttempt: number;
+    queuedAt: number;
+    slotAcquiredAt: number;
+    queueMs: number;
+  }) => Promise<void> | void;
   onStarted?: (input: { attempt: number; totalAttempt: number; queueMs: number; startedAt: number }) => void;
-  onActivity?: (input: { attempt: number; at: number }) => void;
+  onActivity?: (input: {
+    attempt: number;
+    at: number;
+    kind: 'reasoning' | 'text';
+    reasoningCharacters: number;
+    textCharacters: number;
+    firstOutputAt: number;
+  }) => void;
   onRetry?: (event: GenerationRetryEvent) => Promise<void> | void;
   onSettled?: (input: { attempt: number; totalAttempt: number; durationMs: number }) => void;
 };
@@ -82,6 +96,7 @@ function createStreamDeadline(input: {
 export function createCourseGenerationAiCall(options: {
   model: LanguageModel; vision: boolean; source: string; signal?: AbortSignal;
   maxOutputTokens?: number; timeoutMs?: number; thinking?: ThinkingConfig;
+  temperature?: number;
   /** Transport retries only. Completed or invalid model output is never
    * regenerated. Large HTML widgets use one longer attempt instead. */
   maxRetries?: number;
@@ -112,8 +127,19 @@ export function createCourseGenerationAiCall(options: {
     const queuedAt = Date.now();
     await context.onQueued?.({ attempt, totalAttempt, queuedAt });
     return withCourseGenerationLlmSlot(async () => {
+      const slotAcquiredAt = Date.now();
+      const queueMs = slotAcquiredAt - queuedAt;
+      // Persist the attempt after the global slot is acquired but before any
+      // provider I/O. A process exit while merely queued must not consume the
+      // stage's durable three-attempt budget.
+      await context.onAttemptStarting?.({
+        attempt,
+        totalAttempt,
+        queuedAt,
+        slotAcquiredAt,
+        queueMs,
+      });
       const startedAt = Date.now();
-      const queueMs = startedAt - queuedAt;
       context.onStarted?.({ attempt, totalAttempt, queueMs, startedAt });
       log.info(`[${options.source}] model slot acquired (attempt=${totalAttempt}/${maximumAttempts}, queueMs=${queueMs})`);
       // Start transport deadlines after this request owns a provider slot. A
@@ -141,10 +167,11 @@ export function createCourseGenerationAiCall(options: {
           return await callStreamingLLMText({
             model: options.model, system, messages: [{ role: 'user', content }],
             abortSignal: signal, maxOutputTokens: options.maxOutputTokens, maxRetries: 0,
+            temperature: options.temperature,
           }, options.source, options.thinking, {
-            onActivity: () => {
+            onActivity: (activity) => {
               streamDeadline?.markActivity();
-              context.onActivity?.({ attempt, at: Date.now() });
+              context.onActivity?.({ attempt, at: Date.now(), ...activity });
             },
             bypassCourseGenerationLimit: true,
           });
@@ -152,6 +179,7 @@ export function createCourseGenerationAiCall(options: {
         const result = await callLLM({
           model: options.model, system, messages: [{ role: 'user', content }],
           abortSignal: signal, maxOutputTokens: options.maxOutputTokens, maxRetries: 0,
+          temperature: options.temperature,
         }, options.source, undefined, options.thinking, { bypassCourseGenerationLimit: true });
         return result.text;
       } catch (error) {

@@ -399,6 +399,7 @@
       },
       "type": {
         "multiple": "복수 선택",
+        "matching": "드래그 연결",
         "short_answer": "주관식",
         "single": "단일 선택"
       }

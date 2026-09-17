@@ -109,6 +109,37 @@ describe("confirmed resource package generation", () => {
     expect(boundedReviewContext).toContain("教师补充要求：使用校园生活例证");
   });
 
+  it("keeps management status and raw package documents outside teaching context without deleting normal subject language", async () => {
+    const { buildCourseTeachingSourceContext } = await import("./job-runner");
+    const resourcePackage = confirmedPackage();
+    resourcePackage.draft.knowledgePoints[0]!.evidenceStatus = "PARTIAL";
+    resourcePackage.draft.knowledgePoints[0]!.evidenceGap = "缺少直接证据";
+    resourcePackage.draft.knowledgePoints[0]!.source = { documentRole: "knowledge", locator: "第 2 节", quote: "训练样本用于学习规律。" };
+    resourcePackage.draft.knowledgeEvidenceSummary = { overallStatus: "PARTIAL", gaps: ["待审核"] };
+    resourcePackage.documents.knowledge = { id: "package-knowledge", fileName: "知识点.md", url: "/private/knowledge", format: "markdown" };
+    resourcePackage.planningIssues = [{
+      id: "issue-1", kind: "evidence", severity: "warning", requiresAcknowledgement: true,
+      summary: "证据不完整", detail: "PARTIAL", suggestion: "教师复核", evidence: [],
+    }];
+    const context = buildCourseTeachingSourceContext(resourcePackage, "保留数学术语", [
+      { id: "package-knowledge", fileName: "知识点.md", mimeType: "text/markdown", content: "# 内部审查\n**PARTIAL**\n证据状态：PARTIAL" },
+      { id: "package-knowledge:part-2", fileName: "知识点.md（第2段）", mimeType: "text/markdown", content: "原始包尾部管理信息 PARTIAL" },
+      { id: "teacher-extra", fileName: "补充资料.md", mimeType: "text/markdown", content: "偏导数的英文是 partial derivative。讨论证据状态随实验条件变化的科学含义。\nevidenceStatus: PARTIAL\n用于课堂的可靠例子。" },
+    ]);
+    expect(context).not.toContain("evidenceStatus");
+    expect(context).not.toContain("evidenceGap");
+    expect(context).not.toContain("knowledgeEvidenceSummary");
+    expect(context).not.toContain("planningIssues");
+    expect(context).not.toContain("**PARTIAL**");
+    expect(context).not.toContain("内部审查");
+    expect(context).not.toContain("原始包尾部管理信息");
+    expect(context).toContain("partial derivative");
+    expect(context).toContain("讨论证据状态随实验条件变化的科学含义");
+    expect(context).toContain("用于课堂的可靠例子");
+    expect(context).toContain("训练样本用于学习规律");
+    expect(context).toContain("第 2 节");
+  });
+
   it("requires actual teaching coverage instead of quiz-only coverage and rejects duplicate pages", async () => {
     const { assertAiOutlineKnowledgeCoverage } = await import("./job-runner");
     const points = [{ id: "kp-1", name: "训练样本", description: "作用" }, { id: "kp-2", name: "测试样本", description: "检验" }];

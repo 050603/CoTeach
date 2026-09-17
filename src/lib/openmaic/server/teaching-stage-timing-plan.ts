@@ -26,6 +26,24 @@ export function allocateTeachingStageTiming(outlines: SceneOutline[]): SceneOutl
   for (const [stageKey, members] of groups) {
     // Prepared checkpoints retain their allocation, even when the estimator evolves.
     if (members.some((outline) => outline.teachingStageTiming)) continue;
+    if (members.every((outline) => outline.plannedTiming)) {
+      const target = members.reduce((sum, outline) => sum + (outline.targetDurationSec ?? outline.estimatedDuration ?? 60), 0);
+      const narrationTarget = members.reduce((sum, outline) => sum + outline.plannedTiming!.narrationSec, 0);
+      const stageBudget: TeachingStageTimingBudget = {
+        schemaVersion: 1,
+        stageKey,
+        targetDurationSec: target,
+        minDurationSec: Math.round(target * 900) / 1000,
+        maxDurationSec: Math.round(target * 1100) / 1000,
+        narrationTargetDurationSec: narrationTarget,
+        reservedDurationSec: target - narrationTarget,
+        pageCount: members.length,
+        allocation: 'content-weighted',
+        acceptance: 'stage-total-only',
+      };
+      for (const outline of members) updates.set(outline.id, { ...outline, teachingStageTiming: stageBudget });
+      continue;
+    }
     const narrated = members.filter((outline) => outline.timingPlan);
     if (!narrated.length) continue;
     const target = members.reduce((sum, outline) => sum + (outline.targetDurationSec ?? outline.estimatedDuration ?? 60), 0);

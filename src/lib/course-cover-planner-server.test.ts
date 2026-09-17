@@ -24,7 +24,11 @@ describe("course cover content planning", () => {
     const result = await planCourseCoverImageOnServer({ name: "人工智能教育教学理论与方法", summary, coverKind });
     const request = mocks.callLLM.mock.calls[0][0];
     expect(JSON.parse(request.messages[0].content)).toMatchObject({ coverKind, summary });
-    expect(mocks.resolveModel).toHaveBeenCalledWith({});
+    expect(mocks.resolveModel).toHaveBeenCalledWith({
+      stage: "course-cover-plan",
+      thinkingConfig: { mode: "disabled", enabled: false },
+    });
+    expect(mocks.callLLM.mock.calls[0][3]).toEqual({ mode: "disabled", enabled: false });
     expect(request.abortSignal).toBeInstanceOf(AbortSignal);
     const prompt = buildCourseCoverPrompt(result);
     expect(prompt).toContain(plan.sceneDescription);
@@ -50,11 +54,17 @@ describe("course cover content planning", () => {
     expect(input).not.toContain("2026秋");
   });
 
-  it("reports malformed output without another planning call", async () => {
+  it("replans malformed output once instead of abandoning automatic cover generation", async () => {
     mocks.callLLM.mockResolvedValueOnce({ text: JSON.stringify({ ...plan, sceneDescription: "课堂封面任务：把课程名称印到顶部。" }) });
-    await expect(planCourseCoverImageOnServer({ name: "人工智能教育" }))
-      .rejects.toMatchObject({ code: "COURSE_COVER_PLAN_INVALID" });
-    expect(mocks.callLLM).toHaveBeenCalledTimes(1);
+    await expect(planCourseCoverImageOnServer({ name: "人工智能教育" })).resolves.toEqual(plan);
+    expect(mocks.callLLM).toHaveBeenCalledTimes(2);
+    expect(mocks.callLLM.mock.calls[1][0].messages[0].content).toContain("上一轮输出不符合要求");
+  });
+
+  it("retries an empty final response produced by a reasoning model", async () => {
+    mocks.callLLM.mockResolvedValueOnce({ text: "" });
+    await expect(planCourseCoverImageOnServer({ name: "人工智能教育" })).resolves.toEqual(plan);
+    expect(mocks.callLLM).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -66,11 +76,19 @@ describe("course cover content planning", () => {
     expect(parseCourseCoverVisualPlan(JSON.stringify({ ...plan, sceneDescription }))).toBeNull();
   });
 
+  it("ignores harmless extra planner fields that never reach the image model", () => {
+    expect(parseCourseCoverVisualPlan(JSON.stringify({
+      ...plan,
+      output: plan.sceneDescription,
+      subject: "人工智能",
+    }))).toEqual(plan);
+  });
+
   it("reports persistent invalid planning without a raw-course fallback", async () => {
     mocks.callLLM.mockResolvedValue({ text: '{"sceneDescription":"draw something"}' });
     await expect(planCourseCoverImageOnServer({ name: "人工智能教育" }))
       .rejects.toMatchObject({ code: "COURSE_COVER_PLAN_INVALID" });
-    expect(mocks.callLLM).toHaveBeenCalledTimes(1);
+    expect(mocks.callLLM).toHaveBeenCalledTimes(2);
   });
 
   it("returns a planning-stage error when the text model is unavailable", async () => {

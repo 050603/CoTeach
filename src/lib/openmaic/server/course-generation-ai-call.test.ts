@@ -42,6 +42,7 @@ describe('course generation model input', () => {
       source: 'interactive',
       maxRetries: 0,
       streamResponse: true,
+      temperature: 0.5,
     });
     await expect(call('system', 'widget')).resolves.toBe('<html>widget</html>');
     expect(mocks.call).not.toHaveBeenCalled();
@@ -49,6 +50,7 @@ describe('course generation model input', () => {
     expect(mocks.stream.mock.calls[0][0]).toMatchObject({
       model,
       maxRetries: 0,
+      temperature: 0.5,
       system: 'system',
       messages: [{ role: 'user', content: 'widget' }],
     });
@@ -78,6 +80,7 @@ describe('course generation model input', () => {
         .mockResolvedValueOnce('complete page');
       const callbacks = {
         onQueued: vi.fn(),
+        onAttemptStarting: vi.fn(),
         onStarted: vi.fn(),
         onActivity: vi.fn(),
         onRetry: vi.fn(),
@@ -96,6 +99,7 @@ describe('course generation model input', () => {
       await assertion;
       expect(mocks.stream).toHaveBeenCalledTimes(2);
       expect(callbacks.onQueued).toHaveBeenCalledTimes(2);
+      expect(callbacks.onAttemptStarting).toHaveBeenCalledTimes(2);
       expect(callbacks.onStarted).toHaveBeenCalledTimes(2);
       expect(callbacks.onRetry).toHaveBeenCalledOnce();
       expect(callbacks.onRetry).toHaveBeenCalledWith(expect.objectContaining({
@@ -106,6 +110,55 @@ describe('course generation model input', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each([
+    ['provider InternalError', Object.assign(new Error('Receive batching backend response failed'), { code: 'InternalError' })],
+    ['HTTP 429', Object.assign(new Error('rate limit'), { statusCode: 429, responseHeaders: { 'retry-after': '2' } })],
+    ['HTTP 503', Object.assign(new Error('service unavailable'), { statusCode: 503 })],
+    ['response header timeout', new DOMException('Headers Timeout Error', 'TimeoutError')],
+    ['reasoning stream disconnect', Object.assign(new Error('Model stream disconnected before a finish event'), {
+      code: 'LLM_STREAM_TRUNCATED',
+      isRetryable: true,
+    })],
+  ])('retries %s once inside the single transport boundary', async (_label, failure) => {
+    vi.useFakeTimers();
+    try {
+      mocks.stream.mockReset().mockRejectedValueOnce(failure).mockResolvedValueOnce('complete graph');
+      const call = createCourseGenerationAiCall({
+        model: {} as LanguageModel,
+        vision: false,
+        source: 'knowledge-structure',
+        maxRetries: 1,
+        streamResponse: true,
+      });
+      const pending = call('system', 'graph');
+      const assertion = expect(pending).resolves.toBe('complete graph');
+      await vi.runAllTimersAsync();
+      await assertion;
+      expect(mocks.stream).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['cancelled request', new DOMException('cancelled', 'AbortError')],
+    ['output truncation', Object.assign(new Error('finishReason=length'), {
+      code: 'LLM_STREAM_INCOMPLETE',
+      isRetryable: false,
+    })],
+  ])('does not retry %s', async (_label, failure) => {
+    mocks.stream.mockReset().mockRejectedValue(failure);
+    const call = createCourseGenerationAiCall({
+      model: {} as LanguageModel,
+      vision: false,
+      source: 'knowledge-structure',
+      maxRetries: 2,
+      streamResponse: true,
+    });
+    await expect(call('system', 'graph')).rejects.toBe(failure);
+    expect(mocks.stream).toHaveBeenCalledOnce();
   });
 
   it('does not reset a persisted stage attempt budget after restart', async () => {
@@ -140,11 +193,13 @@ describe('course generation model input', () => {
     vi.useFakeTimers();
     try {
       mocks.stream.mockReset().mockImplementation(async (...args: unknown[]) => {
-        const lifecycle = args[3] as { onActivity?: () => void } | undefined;
+        const lifecycle = args[3] as { onActivity?: (activity: {
+          kind: 'reasoning' | 'text'; reasoningCharacters: number; textCharacters: number; firstOutputAt: number;
+        }) => void } | undefined;
         await new Promise<void>((resolve) => setTimeout(resolve, 750));
-        lifecycle?.onActivity?.();
+        lifecycle?.onActivity?.({ kind: 'reasoning', reasoningCharacters: 8, textCharacters: 0, firstOutputAt: Date.now() });
         await new Promise<void>((resolve) => setTimeout(resolve, 750));
-        lifecycle?.onActivity?.();
+        lifecycle?.onActivity?.({ kind: 'text', reasoningCharacters: 8, textCharacters: 4, firstOutputAt: Date.now() - 750 });
         await new Promise<void>((resolve) => setTimeout(resolve, 750));
         return '<html>complete widget</html>';
       });

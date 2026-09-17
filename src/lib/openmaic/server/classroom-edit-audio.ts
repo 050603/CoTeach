@@ -5,6 +5,7 @@ import type { ClassroomAudioUpload } from '@openmaic/lib/audio/classroom-edit-au
 import type { Scene } from '@openmaic/lib/types/stage';
 import { InvalidClassroomEditError } from './classroom-edit';
 import { CLASSROOMS_DIR, isValidClassroomId } from './classroom-storage';
+import { audioDurationSec } from '@openmaic/lib/audio/audio-duration';
 
 const AUDIO_FORMATS = new Set(['mp3', 'wav', 'ogg', 'opus', 'aac', 'm4a', 'flac', 'webm']);
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
@@ -26,7 +27,7 @@ export function prepareClassroomAudioUploads(input: {
     throw new InvalidClassroomEditError('课堂语音内容无效');
   }
   const uploads = input.uploads ?? [];
-  const byAction = new Map<string, { audioId: string; audioUrl: string }>();
+  const byAction = new Map<string, { audioId: string; audioUrl: string; audioDurationSec?: number }>();
   const files: PreparedClassroomAudio['files'] = [];
   for (const raw of uploads) {
     if (!raw || typeof raw !== 'object') throw new InvalidClassroomEditError('课堂语音内容无效');
@@ -51,6 +52,7 @@ export function prepareClassroomAudioUploads(input: {
     byAction.set(key, {
       audioId: `edit-${digest}`,
       audioUrl: `/api/openmaic/classroom-media/${input.classroomId}/audio/${filename}`,
+      audioDurationSec: audioDurationSec(bytes, format),
     });
     files.push({ filename, bytes });
   }
@@ -68,6 +70,7 @@ export function prepareClassroomAudioUploads(input: {
       if (action.audioId && !action.audioUrl) {
         const next = { ...action };
         delete next.audioId;
+        delete next.audioDurationSec;
         next.audioInvalidated = true;
         return next;
       }

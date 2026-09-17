@@ -565,6 +565,9 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
         useWidgetIframeStore.getState().getSendMessage(sceneIdForWidget)?.(type, payload);
 
       // Create ActionEngine for playback (with audioPlayer for TTS and widget messaging)
+      // The first clip on each page gets a short inaudible pre-roll so a
+      // sleeping laptop/Bluetooth output does not swallow its opening words.
+      audioPlayerRef.current.requestPlaybackWarmup();
       const actionEngine = new ActionEngine(
         useStageStore,
         audioPlayerRef.current,
@@ -719,7 +722,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             chatAreaRef.current?.endSession(lectureSessionIdRef.current);
             lectureSessionIdRef.current = null;
           }
-          // Auto-play: advance to next scene after a short pause
+          // Auto-play: leave only a brief completion beat before advancing.
           const { autoPlayLecture } = useSettingsStore.getState();
           if (autoPlayLecture) {
             const completedSceneId = currentScene?.id;
@@ -755,7 +758,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 autoStartRef.current = true;
                 stageState.setCurrentSceneId(PENDING_SCENE_ID);
               }
-            }, 1500);
+            }, 350);
           }
         },
       });

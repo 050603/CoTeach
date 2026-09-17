@@ -27,6 +27,11 @@ export type QuickClassroomGenerationSnapshot = {
   step: string;
   progress: number;
   message: string;
+  tokenUsage?: {
+    totalTokens: number;
+    calls: number;
+    approximate: boolean;
+  };
   scenesGenerated: number;
   totalScenes: number;
   currentStage?: string | null;

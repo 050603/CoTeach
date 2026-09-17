@@ -41,13 +41,17 @@ function narrationDepthIssues(
   outline: SceneOutline,
   segments: readonly NarrationSegment[],
 ): string[] {
-  const minimumUnits = outline.timingPlan?.minUnits;
+  const minimumUnits = outline.plannedTiming?.role === 'teaching'
+    ? outline.timingPlan?.targetUnits
+    : outline.timingPlan?.minUnits;
   if (!minimumUnits) return [];
   const actualUnits = segments.reduce((sum, segment) =>
     sum + segment.text.replace(/\s/g, '').length, 0);
-  return actualUnits < Math.floor(minimumUnits * 0.7)
+  const minimumShare = outline.plannedTiming?.role === 'teaching' ? 0.96 : 0.7;
+  const issues = actualUnits < Math.floor(minimumUnits * minimumShare)
     ? [`讲稿只有约 ${actualUnits} 个有效字符，未达到既定教学内容量`]
     : [];
+  return issues;
 }
 
 export function normalizeNarrationRewrite(
@@ -102,7 +106,9 @@ export function buildNarrationRewritePrompt(
 ): { system: string; user: string } {
   const plan = outline.timingPlan;
   const timing = plan
-    ? `全部段落原计划约 ${plan.targetUnits} ${plan.unit}；这个数字只用于减少重复套话，口语自然度和教学完整性优先，不能为控制时长删掉必要解释。`
+    ? outline.plannedTiming?.role === 'teaching'
+      ? `全部段落按自然语速应接近 ${plan.targetUnits} ${plan.unit}，且不得少于约 ${Math.floor(plan.targetUnits * 0.96)}。若原稿不足，只补齐 teachingBrief 已确认的机制、推理步骤、完整例子、适用条件或误区辨析，不放慢语速，不重复概念，不增加知识边界。全阶段上限最终用真实 TTS 音频汇总审计，不按单页字符估算机械删减实质内容。`
+      : `全部段落原计划约 ${plan.targetUnits} ${plan.unit}；这个数字只用于减少重复套话，口语自然度和教学完整性优先，不能为控制时长删掉必要解释。`
     : '保持原讲稿总体篇幅和教学深度。';
   return {
     system: '你是经验丰富的中文课堂讲稿编辑。把已有讲稿改成教师面对学生时会自然说出口的话。只返回合法 JSON，不使用 Markdown。必须保持每个段落的 id、数量、顺序、事实、教学逻辑和与画面动作的对应关系；不得补充教学设计和资料没有支持的新事实。',
@@ -161,9 +167,16 @@ export async function naturalizeKnowledgeNarration(input: {
         throw new Error(`口语化讲稿未保留原有教学内容：${lostContent.join('；')}`);
       }
       const textById = new Map(rewritten.map((segment) => [segment.id, segment.text]));
-      return enforceNarrationContinuity(input.actions.map((action) => action.type === 'speech'
+      const mergedActions = input.actions.map((action) => action.type === 'speech'
         ? { ...action, text: textById.get(action.id) ?? action.text }
-        : { ...action }), input.context);
+        : { ...action });
+      const remainingDepthIssues = narrationDepthIssues(input.outline, mergedActions.flatMap((action) => action.type === 'speech'
+        ? [{ id: action.id, text: action.text }]
+        : []));
+      if (remainingDepthIssues.length > 0) {
+        throw new Error(`口语化讲稿教学内容量不足：${remainingDepthIssues.join('；')}`);
+      }
+      return enforceNarrationContinuity(mergedActions, input.context);
     } catch (error) {
       // Transport retries belong to createCourseGenerationAiCall. Rewriting
       // the same content again here would hide the provider failure and double

@@ -19,7 +19,7 @@ vi.mock("@openmaic/lib/server/resolve-model", () => ({ resolveModel: vi.fn(), re
 
 import { POST } from "./route";
 
-function request(answer: string) {
+function request(answer: string, questionCount = 2) {
   return new NextRequest("http://localhost/api/knowledge-lecture", {
     method: "POST",
     headers: { "content-type": "application/json", origin: "http://localhost" },
@@ -30,7 +30,7 @@ function request(answer: string) {
       sectionId: "section-1",
       quizOutlineId: "quiz-1",
       runtimeSceneId: "runtime-quiz-1",
-      questions: [1, 2].map((number) => ({
+      questions: Array.from({ length: questionCount }, (_, index) => index + 1).map((number) => ({
         questionId: `question-${number}`,
         prompt: `题目${number}`,
         answer,
@@ -39,6 +39,7 @@ function request(answer: string) {
         correct: false,
         feedback: "概念理解有误",
         knowledgePointIds: ["kp-1"],
+        teachingUnitIds: ["unit-1", "foreign-unit"],
       })),
     }),
   });
@@ -51,6 +52,9 @@ describe("knowledge lecture single-attempt integrity", () => {
       students: [{ id: "student-1" }],
       content: {
         knowledgeLectureSections: [{ id: "section-1", quizOutlineId: "quiz-1", knowledgePointIds: ["kp-1"] }],
+        teachingBlueprint: {
+          sections: [{ id: "section-1", units: [{ id: "unit-1" }] }],
+        },
       },
       aiLearningProgress: {},
     } as Course;
@@ -67,5 +71,13 @@ describe("knowledge lecture single-attempt integrity", () => {
       attempt: { questions: [{ answer: "首次答案" }, { answer: "首次答案" }] },
     });
     expect(store.course?.aiLearningProgress?.["student-1"].knowledgeLectureAttempts).toHaveLength(1);
+  });
+
+  it("accepts a one-question section check and preserves only approved teaching-unit evidence", async () => {
+    const response = await POST(request("关键词答案", 1));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      attempt: { questions: [{ teachingUnitIds: ["unit-1"] }] },
+    });
   });
 });

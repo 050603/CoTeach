@@ -57,6 +57,12 @@ function responseJob(job: Awaited<ReturnType<typeof designGenerationJobs.findUni
     progress: job.progress,
     message: job.message,
     estimatedRemainingSeconds: job.estimatedRemainingSeconds,
+    tokenUsage: {
+      totalTokens: job.tokenUsage,
+      calls: job.tokenUsageCalls,
+      approximate: true,
+    },
+    currentCall: job.currentCall,
     trace: job.trace,
     qualityReport: job.qualityReport,
     // Never expose model review diagnostics or historical raw worker errors to
@@ -78,8 +84,11 @@ function responseJob(job: Awaited<ReturnType<typeof designGenerationJobs.findUni
       generationMode: request.generationMode === "deep-interaction"
         ? "deep-interaction"
         : "standard",
+      assessmentMode: request.assessmentMode === "adaptive"
+        ? "adaptive"
+        : "constructed-response",
       options: request.options ?? null,
-      referenceMaterials: (request.referenceMaterials ?? []).filter((material) => !packageDocumentIds.has(material.id)).map((material) => ({
+      referenceMaterials: (request.referenceMaterials ?? []).filter((material) => ![...packageDocumentIds].some((id) => material.id === id || material.id.startsWith(`${id}:part-`))).map((material) => ({
         id: material.id,
         fileName: material.fileName,
         mimeType: material.mimeType,
@@ -157,6 +166,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       resourcePackageId?: unknown;
       resourcePackageRevision?: unknown;
       generationMode?: unknown;
+      assessmentMode?: unknown;
       options?: Partial<NonNullable<QuickDesignRequest["options"]>>;
       referenceIds?: unknown;
     } | null;
@@ -164,6 +174,11 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       ? body.supplementalAnswers as Record<string, unknown> : {};
     const supplementalBrief = typeof answers.brief === "string" ? answers.brief.trim().slice(0, 4_000) : "";
     const teacherBrief = typeof body?.teacherBrief === "string" ? body.teacherBrief.trim().slice(0, 4_000) : supplementalBrief;
+    if (body?.assessmentMode !== undefined
+      && body.assessmentMode !== "adaptive"
+      && body.assessmentMode !== "constructed-response") {
+      return Response.json({ error: "INVALID_ASSESSMENT_MODE", detail: "小节测验模式无效，请刷新页面后重试。" }, { status: 400 });
+    }
     let job = await designGenerationJobs.findUnique({ where: { courseId } });
     const previousRequest = job?.request as unknown as QuickDesignRequest | undefined;
     const hasPackageIdentifier = body?.resourcePackageId !== undefined || body?.resourcePackageRevision !== undefined;
@@ -208,6 +223,21 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       generationMode: body?.generationMode === "deep-interaction"
         ? "deep-interaction"
         : "standard",
+      ...(resourcePackage
+        ? {
+            generationContractVersion: 2 as const,
+            assessmentMode: body?.assessmentMode === "constructed-response"
+              ? "constructed-response" as const
+              : "adaptive" as const,
+          }
+        : {
+            ...(previousRequest?.generationContractVersion
+              ? { generationContractVersion: previousRequest.generationContractVersion }
+              : {}),
+            ...(previousRequest?.assessmentMode
+              ? { assessmentMode: previousRequest.assessmentMode }
+              : {}),
+          }),
       options: {
         enableImageGeneration: body?.options?.enableImageGeneration !== false,
         enableTTS: body?.options?.enableTTS !== false,
@@ -267,7 +297,10 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
           stepIndex: 0,
           progress: 0,
           message: "快速生成任务已重新提交",
+          currentCall: null,
           estimatedRemainingSeconds: estimate,
+          tokenUsage: preserveValidatedStages ? job.tokenUsage : 0,
+          tokenUsageCalls: preserveValidatedStages ? job.tokenUsageCalls : 0,
           request: requestJson,
           trace: preserveValidatedStages
             ? job.trace as Prisma.InputJsonValue

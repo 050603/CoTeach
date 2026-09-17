@@ -1045,7 +1045,9 @@ async function generateQuizContent(
     difficulty: quizConfig.difficulty,
     questionTypes: shortAnswerOnly
       ? 'short_answer only; every generated question must use type="short_answer" and have no options'
-      : questionFormats.join(', '),
+      : `${questionFormats.join(', ')} only; return exactly ${quizConfig.questionCount} questions; ${quizConfig.coveragePolicy === 'each-target' ? 'generate one question for each ordered assessment target' : 'cover the section as a synthesis'}; use at most ${quizConfig.maxShortAnswerQuestions ?? 0} explanation-style short_answer/scenario_task questions`,
+    knowledgePointIds: (outline.knowledgePointIds ?? []).join(', '),
+    assessmentTargets: JSON.stringify(outline.assessmentTargets ?? []),
     languageDirective: languageDirective || '',
     pblContext: pblContext || '',
   });
@@ -1067,18 +1069,58 @@ async function generateQuizContent(
 
   const normalized = normalizeQuizQuestions(generatedQuestions, {
     allowedKnowledgePointIds: outline.knowledgePointIds ?? [],
-    fallbackKnowledgePointIds: outline.knowledgePointIds ?? [],
+    fallbackKnowledgePointIds: quizConfig.coveragePolicy === 'each-target' ? [] : outline.knowledgePointIds ?? [],
   });
   if (normalized.issues.length > 0) {
     log.warn(`Quiz quality repairs for "${outline.title}": ${normalized.issues.join('; ')}`);
   }
+  if (normalized.questions.length < quizConfig.questionCount) {
+    throw new Error(`Quiz "${outline.title}" returned ${normalized.questions.length}/${quizConfig.questionCount} usable questions`);
+  }
+  const withTeachingUnitIds = quizConfig.coveragePolicy === 'each-target'
+    ? (() => {
+        const targets = outline.assessmentTargets ?? [];
+        if (targets.length !== quizConfig.questionCount) {
+          throw new Error(`Quiz "${outline.title}" has ${targets.length}/${quizConfig.questionCount} explicit assessment targets`);
+        }
+        const unused = new Set(normalized.questions.slice(0, quizConfig.questionCount).map((_, index) => index));
+        return targets.map((target): QuizQuestion => {
+          const exactIndex = [...unused].find((index) => {
+            const question = normalized.questions[index];
+            return question?.teachingUnitIds?.includes(target.unitId)
+              && question.knowledgePointIds?.includes(target.knowledgePointId);
+          });
+          const selectedIndex = exactIndex ?? unused.values().next().value;
+          if (typeof selectedIndex !== 'number') {
+            throw new Error(`Quiz "${outline.title}" cannot cover assessment target ${target.unitId}/${target.knowledgePointId}`);
+          }
+          unused.delete(selectedIndex);
+          return {
+            ...normalized.questions[selectedIndex]!,
+            knowledgePointIds: [target.knowledgePointId],
+            teachingUnitIds: [target.unitId],
+          };
+        });
+      })()
+    : normalized.questions.map((question): QuizQuestion => {
+        const mappedUnitIds = (outline.assessmentUnitMap ?? [])
+          .filter((unit) => unit.knowledgePointIds.some((id) => question.knowledgePointIds?.includes(id)))
+          .map((unit) => unit.unitId);
+        return {
+          ...question,
+          teachingUnitIds: mappedUnitIds.length
+            ? mappedUnitIds
+            : [...(outline.assessmentUnitIds ?? [])],
+        };
+      });
   const questions = shortAnswerOnly
-    ? normalized.questions.map((question): QuizQuestion => {
+    ? withTeachingUnitIds.map((question): QuizQuestion => {
         if (question.type === 'short_answer') return question;
         const choiceContext = question.options?.map((option) => option.label).filter(Boolean).join('；');
         return {
           id: question.id,
           knowledgePointIds: question.knowledgePointIds,
+          teachingUnitIds: question.teachingUnitIds,
           type: 'short_answer',
           format: 'short_answer',
           question: `${question.question}\n请直接写出正确结论并说明理由。${choiceContext ? `可参考这些原题信息：${choiceContext}` : ''}`,
@@ -1087,8 +1129,25 @@ async function generateQuizContent(
           hasAnswer: false,
           points: question.points,
         };
-      })
-    : normalized.questions;
+      }).slice(0, quizConfig.questionCount)
+    : (() => {
+        let remainingShortAnswers = Math.max(0, Math.floor(quizConfig.maxShortAnswerQuestions ?? 0));
+        return withTeachingUnitIds.slice(0, quizConfig.questionCount).map((question): QuizQuestion => {
+          const explanationStyle = question.type === 'short_answer'
+            && (question.format === 'short_answer' || question.format === 'scenario_task');
+          if (!explanationStyle) return question;
+          if (remainingShortAnswers > 0) {
+            remainingShortAnswers -= 1;
+            return question;
+          }
+          return {
+            ...question,
+            format: 'fill_blank',
+            question: `${question.question}\n请只填写关键词或一句话结论。`,
+            commentPrompt: '评分规则：关键概念或结论准确占80%；语义等价占20%。不要求展开论述。',
+          };
+        });
+      })();
   if (questions.length === 0) {
     log.error(`Quiz generation produced no usable questions for: ${outline.title}`);
     return null;
@@ -1586,7 +1645,9 @@ function formatQuestionsForPrompt(questions: QuizQuestion[]): string {
     .map((q, i) => {
       const optionsText = q.options
         ? `Options: ${q.options.map((o) => `${o.value}. ${o.label}`).join(', ')}`
-        : '';
+        : q.matchingPairs
+          ? `Pairs: ${q.matchingPairs.map((pair) => `${pair.left} ↔ ${pair.right}`).join(', ')}`
+          : '';
       return `Q${i + 1} (${q.type}): ${q.question}\n${optionsText}`;
     })
     .join('\n\n');
@@ -1726,9 +1787,17 @@ export function createSceneWithActions(
     ...(outline.companionPrompt ? { companionPrompt: outline.companionPrompt } : {}),
     ...(outline.activityId ? { activityId: outline.activityId } : {}),
     ...(outline.parentActivityId ? { parentActivityId: outline.parentActivityId } : {}),
+    ...(outline.lectureSectionId ? { lectureSectionId: outline.lectureSectionId } : {}),
+    ...(outline.lectureSectionTitle ? { lectureSectionTitle: outline.lectureSectionTitle } : {}),
     ...(outline.detailKind ? { detailKind: outline.detailKind } : {}),
     ...(outline.knowledgePointIds?.length
       ? { knowledgePointIds: [...outline.knowledgePointIds] }
+      : {}),
+    ...(outline.teachingUnitIds?.length
+      ? { teachingUnitIds: [...outline.teachingUnitIds] }
+      : {}),
+    ...(outline.assessmentUnitIds?.length
+      ? { assessmentUnitIds: [...outline.assessmentUnitIds] }
       : {}),
     ...(outline.targetDurationSec ? { targetDurationSec: outline.targetDurationSec } : {}),
     ...(outline.segmentIndex ? { segmentIndex: outline.segmentIndex } : {}),

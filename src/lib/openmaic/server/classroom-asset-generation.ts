@@ -22,6 +22,7 @@ import {
 import { runIndependentClassroomAssetTasks } from '@openmaic/lib/server/classroom-asset-tasks';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { Scene } from '@openmaic/lib/types/stage';
+import type { TeachingTimingAudit } from '@/lib/session/types';
 import type { MediaGenerationRequest } from '@openmaic/lib/media/types';
 import { throwIfAborted } from '@openmaic/lib/generation/generation-retry';
 import { assertRequestedClassroomMediaProviders } from '@openmaic/lib/server/classroom-media-readiness';
@@ -131,6 +132,66 @@ export type ClassroomAssetGenerationProgress = {
   message: string;
 };
 
+const TEACHING_DURATION_TOLERANCE_RATIO = 0.1;
+
+export function summarizeTeachingTimingAudit(input: Pick<ClassroomAssetGenerationInput, "outlines" | "studentScenes" | "enableTTS">): TeachingTimingAudit {
+  const outlineById = new Map(input.outlines.map((outline) => [outline.id, outline]));
+  const sceneByOutlineId = new Map(input.studentScenes.map((scene) => [scene.outlineId ?? scene.id, scene]));
+  let measuredSegmentCount = 0;
+  let narrationSegmentCount = 0;
+  let measuredTeachingSec = 0;
+  let measuredAssessmentSec = 0;
+  for (const scene of input.studentScenes) {
+    const outline = outlineById.get(scene.outlineId ?? scene.id);
+    const role = outline?.plannedTiming?.role ?? (scene.type === "quiz" ? "assessment" : "teaching");
+    for (const action of scene.actions ?? []) {
+      if (action.type !== "speech" || !action.text.trim()) continue;
+      narrationSegmentCount += 1;
+      if (!input.enableTTS) continue;
+      if (typeof action.audioDurationSec !== "number" || !Number.isFinite(action.audioDurationSec) || action.audioDurationSec <= 0) continue;
+      measuredSegmentCount += 1;
+      if (role === "assessment") measuredAssessmentSec += action.audioDurationSec;
+      else measuredTeachingSec += action.audioDurationSec;
+    }
+  }
+  const totalBudgetSec = input.outlines.reduce((sum, outline) => sum + Math.max(0, outline.targetDurationSec ?? outline.estimatedDuration ?? 0), 0);
+  const plannedSubstantiveTeachingSec = input.outlines
+    .filter((outline) => outline.type !== "quiz" && outline.plannedTiming?.role !== "assessment")
+    .reduce((sum, outline) => sum + (outline.plannedTiming?.narrationSec
+      ?? sceneByOutlineId.get(outline.id)?.timingPlan?.targetDurationSec
+      ?? 0), 0);
+  const plannedAssessmentSec = input.outlines
+    .filter((outline) => outline.type === "quiz" || outline.plannedTiming?.role === "assessment")
+    .reduce((sum, outline) => sum + Math.max(0, outline.targetDurationSec ?? outline.estimatedDuration ?? 0), 0);
+  const plannedLearnerActivitySec = Math.max(0, totalBudgetSec - plannedSubstantiveTeachingSec - plannedAssessmentSec);
+  const substantiveTeachingDurationSec = Math.round((input.enableTTS ? measuredTeachingSec : plannedSubstantiveTeachingSec) * 10) / 10;
+  const substantiveTeachingRatio = substantiveTeachingDurationSec / Math.max(1, totalBudgetSec);
+  const teachingDurationDeviationRatio = plannedSubstantiveTeachingSec > 0
+    ? Math.abs(substantiveTeachingDurationSec - plannedSubstantiveTeachingSec) / plannedSubstantiveTeachingSec
+    : Number.POSITIVE_INFINITY;
+  const teachingRatioValid = plannedSubstantiveTeachingSec > 0
+    ? teachingDurationDeviationRatio <= TEACHING_DURATION_TOLERANCE_RATIO
+    : substantiveTeachingRatio >= 0.65 && substantiveTeachingRatio <= 0.7;
+  return {
+    schemaVersion: 1,
+    totalBudgetSec: Math.round(totalBudgetSec),
+    plannedSubstantiveTeachingSec: Math.round(plannedSubstantiveTeachingSec),
+    plannedAssessmentSec: Math.round(plannedAssessmentSec),
+    plannedLearnerActivitySec: Math.round(plannedLearnerActivitySec),
+    substantiveTeachingDurationSec,
+    assessmentAudioDurationSec: Math.round(measuredAssessmentSec * 10) / 10,
+    narrationDurationSource: input.enableTTS ? "actual-audio" : "estimated-script",
+    measuredSegmentCount,
+    narrationSegmentCount,
+    complete: !input.enableTTS || (narrationSegmentCount > 0 && measuredSegmentCount === narrationSegmentCount),
+    substantiveTeachingRatio: Math.round(substantiveTeachingRatio * 10_000) / 10_000,
+    teachingDurationDeviationRatio: Math.round(teachingDurationDeviationRatio * 10_000) / 10_000,
+    teachingDurationToleranceRatio: TEACHING_DURATION_TOLERANCE_RATIO,
+    teachingRatioValid,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 function classroomGroups(input: ClassroomAssetGenerationInput): Array<{
   classroomId: string;
   scenes: Scene[];
@@ -179,7 +240,7 @@ async function persistSceneGroups(
  */
 export async function generateClassroomAssets(
   input: ClassroomAssetGenerationInput,
-): Promise<void> {
+): Promise<TeachingTimingAudit> {
   assertRequestedClassroomMediaProviders(input);
   const groups = classroomGroups(input);
   const allScenes = groups.flatMap((group) => group.scenes);
@@ -369,4 +430,5 @@ export async function generateClassroomAssets(
   // this outside persistMergedState also prevents a rejected TTS task from
   // overwriting its partial-failure status with completed.
   if (ttsOnlyStatus) await updateAssetStatus('completed', groups.length, []);
+  return summarizeTeachingTimingAudit(input);
 }

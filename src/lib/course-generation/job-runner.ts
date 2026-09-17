@@ -10,6 +10,7 @@ import {
 } from "@openmaic/lib/server/classroom-generation";
 import {
   generateClassroomAssets,
+  summarizeTeachingTimingAudit,
   type ClassroomAssetGenerationProgress,
 } from "@openmaic/lib/server/classroom-asset-generation";
 import { splitGeneratedClassroom } from "@/lib/openmaic-bridge/server-classroom-split";
@@ -24,6 +25,7 @@ import {
   selectAdaptiveBranchesForGeneration,
 } from "@/lib/teacher/adaptive-resource-generation";
 import type { SceneOutline } from "@/lib/openmaic/types/generation";
+import type { AssessmentMode } from "@/lib/openmaic/types/generation";
 import { runWithCourseGenerationLlmContext } from "@/lib/course-generation/llm-concurrency";
 import type { Scene } from "@openmaic/lib/types/stage";
 import {
@@ -106,6 +108,8 @@ async function loadCheckpointState(jobId: string): Promise<StoredCheckpointState
     checkpoints.set(row.pageKey, {
       pageKey: row.pageKey,
       outlineFingerprint: row.outlineFingerprint,
+      modelFingerprint: row.modelFingerprint,
+      inputFingerprint: row.inputFingerprint,
       scene: row.scene as unknown as Scene,
     });
   }
@@ -226,6 +230,8 @@ export async function resetCourseGenerationCheckpoints(jobId: string): Promise<v
 export type PersistedCourseGenerationRequest = GenerateClassroomInput & {
   courseId: string;
   systemMode?: "new";
+  generationContractVersion?: 2;
+  assessmentMode?: AssessmentMode;
   courseTitle?: string;
   moduleTimingPlan?: unknown;
   resourcePackageIdentity?: { id: string; revision: number };
@@ -770,7 +776,24 @@ export async function requeueCourseGenerationFromCheckpoints(
 }
 
 async function runJob(job: CourseGenerationJob): Promise<void> {
-  return runWithCourseGenerationLlmContext(() => runJobWithCourseGenerationContext(job));
+  return runWithCourseGenerationLlmContext(
+    () => runJobWithCourseGenerationContext(job),
+    {
+      onTokenUsage: async (totalTokens) => {
+        try {
+          await contentGenerationJobs.update({
+            where: { id: job.id },
+            data: {
+              tokenUsage: { increment: totalTokens },
+              tokenUsageCalls: { increment: 1 },
+            },
+          });
+        } catch (error) {
+          log.warn("Unable to persist classroom-generation token estimate", error);
+        }
+      },
+    },
+  );
 }
 
 async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Promise<void> {
@@ -779,6 +802,8 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
   const courseId = generationInput.courseId;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).courseId;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).systemMode;
+  delete (generationInput as Partial<PersistedCourseGenerationRequest>).generationContractVersion;
+  delete (generationInput as Partial<PersistedCourseGenerationRequest>).assessmentMode;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).moduleTimingPlan;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).resourcePackageIdentity;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).adaptiveBranchCount;
@@ -955,33 +980,41 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       serializeWorkerWrite,
     );
     const assetPromise = (async () => {
+      const assetInput = {
+        ...generated.assetContext,
+        baseUrl,
+        studentClassroomId: split.studentClassroomId,
+        studentScenes: split.studentScenes,
+        teacherClassroomId: split.teacherClassroomId || undefined,
+        teacherScenes: split.teacherScenes,
+        signal: controller.signal,
+        onProgress: (progress: ClassroomAssetGenerationProgress) => serializeWorkerWrite(() => persistWorkerPhase(job, {
+          step: assetPhaseStep(progress),
+          progress: progress.status === "completed" ? 99 : 98,
+          message: progress.message,
+          estimatedRemainingSeconds: progress.phase === "persisting" ? 20 : 60,
+          assetPhaseStatus: progress.status,
+          assetCompleted: progress.completed,
+          assetTotal: progress.total,
+        })),
+      };
       try {
-        await generateClassroomAssets({
-          ...generated.assetContext,
-          baseUrl,
-          studentClassroomId: split.studentClassroomId,
-          studentScenes: split.studentScenes,
-          teacherClassroomId: split.teacherClassroomId || undefined,
-          teacherScenes: split.teacherScenes,
-          signal: controller.signal,
-          onProgress: (progress) => serializeWorkerWrite(() => persistWorkerPhase(job, {
-            step: assetPhaseStep(progress),
-            progress: progress.status === "completed" ? 99 : 98,
-            message: progress.message,
-            estimatedRemainingSeconds: progress.phase === "persisting" ? 20 : 60,
-            assetPhaseStatus: progress.status,
-            assetCompleted: progress.completed,
-            assetTotal: progress.total,
-          })),
-        });
+        return await generateClassroomAssets(assetInput);
       } catch (assetError) {
         if (controller.signal.aborted || isAbortError(assetError)) throw assetError;
         // Classroom content has already been durably linked. Optional provider
         // failures must not discard a long-running successful generation.
         log.error("Background classroom asset generation failed", assetError);
+        return summarizeTeachingTimingAudit(assetInput);
       }
     })();
-    await Promise.all([adaptivePromise, assetPromise]);
+    const [, teachingTimingAudit] = await Promise.all([adaptivePromise, assetPromise]);
+    if (teachingTimingAudit) {
+      await updateCourse(courseId, (current) => ({
+        ...current,
+        content: { ...current.content, teachingTimingAudit },
+      }));
+    }
     const coverStatus = await generateAndPersistCourseCover(
       job,
       courseId,

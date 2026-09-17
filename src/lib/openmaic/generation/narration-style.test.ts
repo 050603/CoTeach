@@ -66,6 +66,46 @@ describe('natural teacher narration', () => {
       : []))).toEqual([]);
   });
 
+  it('fills a blueprint teaching narration with missing explanation instead of accepting a definition-length script', async () => {
+    const timedOutline: SceneOutline = {
+      ...outline,
+      plannedTiming: { narrationSec: 68, learnerActivitySec: 25, transitionSec: 7, role: 'teaching' },
+      timingPlan: {
+        unit: 'cjk-char', targetUnits: 110, minUnits: 100, maxUnits: 120,
+      } as NonNullable<SceneOutline['timingPlan']>,
+    };
+    const actions: Action[] = [{ id: 's1', type: 'speech', text: '语言模型会生成连贯文本，但连贯不等于事实正确。' }];
+    const expanded = "语言模型根据已有文本中的关联生成后续表达，所以句子可以很顺畅。核对事实时先回到独立来源检查人物与时间，再比对数据的定义和适用条件。最后用另一个来源复核关键结论，记录不一致之处，而不是通过放慢语速或重复定义来延长讲解。";
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ segments: [{ id: 's1', text: expanded }] }));
+    const rewritten = await naturalizeKnowledgeNarration({ outline: timedOutline, actions, aiCall: ai });
+    expect(ai.mock.calls[0]?.[1]).toContain('不放慢语速，不重复概念');
+    expect(ai.mock.calls[0]?.[1]).toContain('不得少于约 105');
+    expect(ai.mock.calls[0]?.[1]).toContain('真实 TTS 音频汇总审计');
+    expect(rewritten[0]).toMatchObject({ type: 'speech', text: expanded });
+  });
+
+  it('checks teaching depth across rewritten and unchanged speech segments', async () => {
+    const timedOutline: SceneOutline = {
+      ...outline,
+      plannedTiming: { narrationSec: 68, learnerActivitySec: 25, transitionSec: 7, role: 'teaching' },
+      timingPlan: {
+        unit: 'cjk-char', targetUnits: 110, minUnits: 100, maxUnits: 120,
+      } as NonNullable<SceneOutline['timingPlan']>,
+    };
+    const actions: Action[] = [
+      { id: 's1', type: 'speech', text: `这一页先分析：${'甲'.repeat(45)}` },
+      { id: 's2', type: 'speech', text: `接着说明具体条件和完整案例。${'乙'.repeat(45)}` },
+    ];
+    const revised = `先从问题本身分析。${'丙'.repeat(45)}`;
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ segments: [{ id: 's1', text: revised }] }));
+
+    const rewritten = await naturalizeKnowledgeNarration({ outline: timedOutline, actions, aiCall: ai });
+
+    expect(rewritten[0]).toMatchObject({ type: 'speech', text: revised });
+    expect(rewritten[1]).toEqual(actions[1]);
+    expect(ai).toHaveBeenCalledOnce();
+  });
+
   it('retries an invalid rewrite and requires the corrected narration', async () => {
     const actions: Action[] = [{ id: 's1', type: 'speech', text: '这一页先讲核验。' }];
     const ai = vi.fn()

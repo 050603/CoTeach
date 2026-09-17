@@ -326,9 +326,9 @@ Rules:
 
 ```json
 {
-  "questionCount": 2,
+  "questionCount": 1,
   "difficulty": "easy" | "medium" | "hard",
-  "questionTypes": ["single", "multiple", "short_answer"]
+  "questionTypes": ["single", "multiple", "true_false"]
 }
 ```
 
@@ -385,7 +385,7 @@ Omit `scenarioRoleplay` and `scenarioBrief` entirely for ordinary build-an-artef
 5. `quiz` scenes must include `quizConfig`.
 6. `interactive` scenes must include `widgetType` and `widgetOutline` (preferred). `interactiveConfig` is deprecated and only accepted for backwards compatibility.
 7. `pbl` scenes must include `pblConfig` with `projectTopic`, `projectDescription`, `targetSkills`, `issueCount`.
-8. Arrange scenes by semantic teaching need, not a mechanical pages-per-minute rule. Group related knowledge into coherent sections; fully explain and practise each section, use meaningful ungraded interactions where they improve understanding, then end it with one concise mastery quiz carrying only that section's taught `knowledgePointIds`. Never interrupt an unfinished section with a quiz or append a redundant all-course final quiz.
+8. Arrange scenes by semantic teaching need, not a mechanical pages-per-minute rule. Group related knowledge into coherent sections; fully explain and practise each section, use meaningful ungraded interactions where they improve understanding, then end it with one concise mastery quiz carrying only that section's taught `knowledgePointIds`. Obey the requested assessment policy: adaptive checks provide at least one brief objective item per taught knowledge point and may use drag matching for real correspondences, while constructed-response checks use only 1–2 comprehensive short answers. Never interrupt an unfinished section with a quiz or append a redundant all-course final quiz.
 9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
 10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
 11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.

@@ -1,6 +1,30 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-type CourseGenerationLlmContext = { workload: "course-generation" };
+type CourseGenerationLlmContext = {
+  workload: "course-generation";
+  onTokenUsage?: (totalTokens: number) => Promise<void> | void;
+};
+
+export function estimateCourseGenerationTokens(characterCount: number): number {
+  if (!Number.isFinite(characterCount) || characterCount <= 0) return 0;
+  // Course prompts mix Chinese prose, JSON and English identifiers. A token
+  // per 2.5 characters is intentionally a simple UI estimate for providers
+  // that do not return usage metadata.
+  return Math.ceil(characterCount / 2.5);
+}
+
+export async function reportCourseGenerationTokenUsage(
+  reportedTotal: number | null | undefined,
+  fallbackCharacterCount = 0,
+): Promise<void> {
+  const callback = context.getStore()?.onTokenUsage;
+  if (!callback) return;
+  const providerTotal = typeof reportedTotal === "number" && Number.isFinite(reportedTotal)
+    ? Math.max(0, Math.round(reportedTotal))
+    : 0;
+  const totalTokens = providerTotal || estimateCourseGenerationTokens(fallbackCharacterCount);
+  if (totalTokens > 0) await callback(totalTokens);
+}
 
 type QueuedTask<T> = {
   fn: () => Promise<T>;
@@ -94,8 +118,11 @@ export function isCourseGenerationLlmContext(): boolean {
   return context.getStore()?.workload === "course-generation";
 }
 
-export function runWithCourseGenerationLlmContext<T>(fn: () => T): T {
-  return context.run({ workload: "course-generation" }, fn);
+export function runWithCourseGenerationLlmContext<T>(
+  fn: () => T,
+  options: Pick<CourseGenerationLlmContext, "onTokenUsage"> = {},
+): T {
+  return context.run({ workload: "course-generation", ...options }, fn);
 }
 
 export function withCourseGenerationLlmSlot<T>(
@@ -106,4 +133,3 @@ export function withCourseGenerationLlmSlot<T>(
     ? limiter.run(fn, options)
     : fn();
 }
-

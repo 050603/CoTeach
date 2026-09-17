@@ -523,7 +523,7 @@ ${stageList}
 
 要求：
 1. 为六个课程模块中需要细化的每个活动生成一个或多个二级条目，必须使用 parentActivityId 指向真实的课程模块 id；不能按数组位置推断父子关系。每个父模块的 targetDurationSec 合计必须等于父级 durationMin×60。
-2. 知识讲授阶段（stageKey=ai-learning）只生成学生学习资源：把相互关联的知识点组成若干小节，知识讲解使用 slide，互动/代码练习使用 interactive；每小节末尾必须紧跟一个 quiz，设置 2—3 道 short_answer 主观简答题，总作答时间 2—5 分钟，回答只需关键词和一两句话。每个页面与题目必须关联已确认 knowledgePointIds。
+2. 知识讲授阶段（stageKey=ai-learning）只生成学生学习资源：把相互关联的知识点组成若干小节，知识讲解使用 slide，互动/代码练习使用 interactive；每小节末尾必须紧跟一个 quiz，设置 1—2 题并遵循已确认的测验模式。灵活题型以单选、多选和判断为主，深度作答才全部使用简答。每个页面与题目必须关联已确认 knowledgePointIds。
 3. 引入、项目启动、方案构思、项目实践、成果汇报与评价、学习反思及迁移等普通课堂活动只生成教师可用的 PPT/讲稿资源或主持支架，audience 必须为 teacher，resourceTypes 只能是 ppt、script，ttsPolicy 必须是 none。
 4. 每个二级条目必须填写 detailKind、knowledgePointIds、targetDurationSec 与 ttsPolicy。知识讲授条目的 targetDurationSec 应由父模块 durationMin 按知识点难度、教学任务和节末小测共同拆分。页面边界由你根据概念依赖、示例、方法、对比、练习、证据检查和认知负荷动态决定：相关内容可以合并为一个清晰页面，需要独立视觉焦点的内容才拆成多个条目，不得按固定秒数或固定页数机械切分。不要使用固定的“4.5 字/秒”公式，服务端会根据实际选定的 TTS provider/model 注入内容量预算，生成时必须通过增删与当前 knowledgePointIds 直接相关的有效解释、案例、反例和分步说明让讲稿贴近模型预算；不得为了填满时长引入图谱之外的知识。
 5. 必须先覆盖 foundation/core 节点，再安排 application/extension 节点；不得创造知识点 ID、改变已确认知识点含义，或超出课程年级的知识边界。每个知识讲授条目必须能说明其内容如何服务于所列 knowledgePointIds。

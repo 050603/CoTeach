@@ -50,7 +50,10 @@ import {
   type PblModelTimingRecommendation,
 } from "@/lib/pbl-time-model";
 import { localizeGeneratedNarrative } from "./generated-language";
-import { withCourseGenerationLlmSlot } from "@/lib/course-generation/llm-concurrency";
+import {
+  reportCourseGenerationTokenUsage,
+  withCourseGenerationLlmSlot,
+} from "@/lib/course-generation/llm-concurrency";
 import { withGenerationRetry } from "@openmaic/lib/generation/generation-retry";
 import {
   requestClassForCourseContentAction,
@@ -372,16 +375,26 @@ async function callChatCompletionsWithoutCourseLimit(
     });
   }
 
-  let data: { choices?: { message?: { content?: string } }[] };
+  let data: {
+    choices?: { message?: { content?: string } }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  };
   try {
     data = (await res.json()) as {
       choices?: { message?: { content?: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
     };
   } catch (error) {
     if (timeoutSignal.aborted) throw new LlmTimeoutError(opts.timeoutMs);
     throw error;
   }
   const content = data.choices?.[0]?.message?.content;
+  const reportedTotal = data.usage?.total_tokens
+    ?? ((data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0) || undefined);
+  await reportCourseGenerationTokenUsage(
+    reportedTotal,
+    messages.reduce((sum, message) => sum + message.content.length, 0) + (content?.length ?? 0),
+  );
   if (!content) throw new LlmEmptyResponseError();
   return content;
 }

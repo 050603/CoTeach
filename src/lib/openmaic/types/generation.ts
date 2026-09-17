@@ -85,6 +85,7 @@ export interface UserRequirements {
 }
 
 export type CourseGenerationMode = 'standard' | 'deep-interaction';
+export type AssessmentMode = 'adaptive' | 'constructed-response';
 
 // ==================== Stage 1 Output: Scene Outlines (Simplified) ====================
 
@@ -263,12 +264,36 @@ export interface SceneOutline {
   activityId?: string;
   /** First-level activity that owns this second-level detail. */
   parentActivityId?: string;
+  /** Stable lecture section used by the section manifest and learning evidence. */
+  lectureSectionId?: string;
+  lectureSectionTitle?: string;
   /** Semantic role of the detail inside its parent activity. */
   detailKind?: PblDetailKind;
   /** Explicit references to the confirmed course knowledge-point IDs. */
   knowledgePointIds?: string[];
+  /** Stable blueprint units taught or assessed by this scene. */
+  teachingUnitIds?: string[];
+  assessmentUnitIds?: string[];
+  assessmentUnitMap?: Array<{ unitId: string; knowledgePointIds: string[] }>;
+  /** Ordered, atomic checks compiled from the teaching blueprint. */
+  assessmentTargets?: Array<{
+    unitId: string;
+    knowledgePointId: string;
+    unitTitle: string;
+    learningOutcome: string;
+  }>;
   /** Target narration/content duration for this detail, in seconds. */
   targetDurationSec?: number;
+  /**
+   * Blueprint-owned activity decomposition. The classroom timing adapter must
+   * preserve these totals instead of inferring a second, conflicting split.
+   */
+  plannedTiming?: {
+    narrationSec: number;
+    learnerActivitySec: number;
+    transitionSec: number;
+    role: 'teaching' | 'assessment';
+  };
   /** 1-based page segment position when one detail is expanded into multiple pages. */
   segmentIndex?: number;
   /** Total page segments generated for the same parent detail. */
@@ -299,7 +324,10 @@ export interface SceneOutline {
   quizConfig?: {
     questionCount: number;
     difficulty: 'easy' | 'medium' | 'hard';
-    questionTypes: ('single' | 'multiple' | 'short_answer' | 'true_false' | 'fill_blank' | 'scenario_task')[];
+    questionTypes: ('single' | 'multiple' | 'matching' | 'short_answer' | 'true_false' | 'fill_blank' | 'scenario_task')[];
+    coveragePolicy?: 'each-target' | 'section-synthesis';
+    /** Maximum explanation-style responses. `fill_blank` is not counted. */
+    maxShortAnswerQuestions?: number;
   };
   /**
    * @deprecated Use widgetType + widgetOutline instead

@@ -11,6 +11,8 @@ import { createLogger } from '@openmaic/lib/logger';
 import { hasWavHeader, normalizePlayableWav } from '@openmaic/lib/audio/wav-container';
 
 const log = createLogger('AudioPlayer');
+const PLAYBACK_WARMUP_MS = 320;
+const PLAYBACK_WARMUP_VOLUME = 0.001;
 
 function isWavAudio(blob: Blob, format?: string): boolean {
   const lowerFormat = format?.toLowerCase();
@@ -46,6 +48,8 @@ export class AudioPlayer {
   private muted: boolean = false;
   private volume: number = 1;
   private playbackRate: number = 1;
+  private warmupNextPlayback: boolean = true;
+  private warmupAudio: HTMLAudioElement | null = null;
 
   /**
    * Play audio (from URL or IndexedDB pre-generated cache)
@@ -69,11 +73,14 @@ export class AudioPlayer {
         this.audio.defaultPlaybackRate = this.playbackRate;
         this.audio.playbackRate = this.playbackRate;
         await this.seekToRatioWhenReady(this.audio, startRatio);
-        this.audio.addEventListener('ended', () => {
+        const audio = this.audio;
+        audio.addEventListener('ended', () => {
+          if (this.warmupAudio === audio) return;
           this.onEndedCallback?.();
         });
+        if (!await this.warmupIfNeeded(audio, startRatio)) return false;
         try {
-          await this.audio.play();
+          await audio.play();
           return true;
         } catch (playError) {
           this.stop();
@@ -90,12 +97,15 @@ export class AudioPlayer {
           this.audio.defaultPlaybackRate = this.playbackRate;
           this.audio.playbackRate = this.playbackRate;
           await this.seekToRatioWhenReady(this.audio, startRatio);
-          this.audio.addEventListener('ended', () => {
+          const fallbackAudio = this.audio;
+          fallbackAudio.addEventListener('ended', () => {
+            if (this.warmupAudio === fallbackAudio) return;
             this.revokeObjectUrl();
             this.onEndedCallback?.();
           });
+          if (!await this.warmupIfNeeded(fallbackAudio, startRatio)) return false;
           try {
-            await this.audio.play();
+            await fallbackAudio.play();
           } catch (retryError) {
             this.revokeObjectUrl();
             log.error(
@@ -134,18 +144,21 @@ export class AudioPlayer {
       this.audio.defaultPlaybackRate = this.playbackRate;
       this.audio.playbackRate = this.playbackRate;
       await this.seekToRatioWhenReady(this.audio, startRatio);
+      const audio = this.audio;
 
       // Set ended callback
-      this.audio.addEventListener('ended', () => {
+      audio.addEventListener('ended', () => {
+        if (this.warmupAudio === audio) return;
         this.revokeObjectUrl();
         this.onEndedCallback?.();
       });
+      if (!await this.warmupIfNeeded(audio, startRatio)) return false;
 
       // Play. If play() rejects (autoplay policy, decode error, interrupted
       // load) the 'ended' listener never fires, so revoke the blob URL here to
       // avoid leaking it for the lifetime of the document.
       try {
-        await this.audio.play();
+        await audio.play();
       } catch (playError) {
         this.revokeObjectUrl();
         log.error(
@@ -170,6 +183,12 @@ export class AudioPlayer {
   public pause(): void {
     if (this.audio && !this.audio.paused) {
       this.audio.pause();
+      if (this.warmupAudio === this.audio) {
+        this.audio.currentTime = 0;
+        this.audio.volume = this.muted ? 0 : this.volume;
+        this.warmupAudio = null;
+        this.warmupNextPlayback = false;
+      }
     }
   }
 
@@ -180,6 +199,7 @@ export class AudioPlayer {
     if (this.audio) {
       this.audio.pause();
       this.audio.currentTime = 0;
+      if (this.warmupAudio === this.audio) this.warmupAudio = null;
       this.audio = null;
     }
     this.revokeObjectUrl();
@@ -219,7 +239,7 @@ export class AudioPlayer {
    * Get current playback time (milliseconds)
    */
   public getCurrentTime(): number {
-    return this.audio ? this.audio.currentTime * 1000 : 0;
+    return this.audio && this.warmupAudio !== this.audio ? this.audio.currentTime * 1000 : 0;
   }
 
   /**
@@ -234,6 +254,15 @@ export class AudioPlayer {
    */
   public onEnded(callback: () => void): void {
     this.onEndedCallback = callback;
+  }
+
+  /**
+   * Warm the media output before the next clip starts audibly. Laptop and
+   * Bluetooth sinks can take a few hundred milliseconds to wake after a page
+   * change; without a pre-roll that startup latency clips the first words.
+   */
+  public requestPlaybackWarmup(): void {
+    this.warmupNextPlayback = true;
   }
 
   /**
@@ -278,6 +307,29 @@ export class AudioPlayer {
     if (!this.objectUrl) return;
     URL.revokeObjectURL(this.objectUrl);
     this.objectUrl = null;
+  }
+
+  private async warmupIfNeeded(
+    audio: HTMLAudioElement,
+    startRatio: number,
+  ): Promise<boolean> {
+    if (!this.warmupNextPlayback || startRatio > 0 || this.muted || this.volume <= 0) {
+      this.warmupNextPlayback = false;
+      return this.audio === audio;
+    }
+
+    audio.volume = Math.min(this.volume, PLAYBACK_WARMUP_VOLUME);
+    this.warmupAudio = audio;
+    await audio.play();
+    await new Promise<void>((resolve) => window.setTimeout(resolve, PLAYBACK_WARMUP_MS));
+    if (this.audio !== audio || this.warmupAudio !== audio) return false;
+
+    audio.pause();
+    audio.currentTime = 0;
+    audio.volume = this.muted ? 0 : this.volume;
+    this.warmupAudio = null;
+    this.warmupNextPlayback = false;
+    return true;
   }
 
   /** Seek after metadata is available so subtitle clicks start at that sentence. */

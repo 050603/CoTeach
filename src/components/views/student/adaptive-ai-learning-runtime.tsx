@@ -371,6 +371,7 @@ export function AdaptiveAiLearningRuntime({
                 feedback: result?.aiComment ?? question.analysis ?? "AI 已完成批阅。",
                 referenceAnswer: question.analysis,
                 knowledgePointIds: question.knowledgePointIds ?? section.knowledgePointIds,
+                teachingUnitIds: question.teachingUnitIds,
               };
             }),
           }),

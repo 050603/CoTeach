@@ -198,11 +198,19 @@ export function evaluateLessonOutlines(
     .filter((outline) => outline.type === "slide")
     .reduce((max, outline) => Math.max(max, outline.targetDurationSec ?? outline.estimatedDuration ?? 0), 0);
   const studentByOrder = [...student].sort((left, right) => left.order - right.order);
-  const terminalQuiz = quizzes.length === 1 ? quizzes[0] : undefined;
-  const terminalQuizIsLast = Boolean(terminalQuiz)
-    && studentByOrder.at(-1)?.id === terminalQuiz?.id;
+  const sectionCheckIssues: string[] = [];
+  const sectionIds = new Set(student.map((outline) => outline.parentActivityId).filter(Boolean));
+  for (const sectionId of sectionIds) {
+    const pages = studentByOrder.filter((outline) => outline.parentActivityId === sectionId);
+    const sectionQuizzes = pages.filter((outline) => outline.type === "quiz");
+    if (sectionQuizzes.length === 0) sectionCheckIssues.push(`小节 ${sectionId} 缺少节末测验`);
+    if (sectionQuizzes.length > 1) sectionCheckIssues.push(`小节 ${sectionId} 包含 ${sectionQuizzes.length} 次重复测验`);
+    if (sectionQuizzes.length === 1 && pages.at(-1)?.id !== sectionQuizzes[0]?.id) {
+      sectionCheckIssues.push(`小节 ${sectionId} 的测验必须位于本节讲授之后`);
+    }
+  }
   const explainedKnowledgePointIds = new Set(
-    slides.flatMap((outline) => outline.knowledgePointIds ?? []),
+    student.filter((outline) => outline.type !== "quiz").flatMap((outline) => outline.knowledgePointIds ?? []),
   );
   const assessedKnowledgePointIds = new Set(
     quizzes.flatMap((outline) => outline.knowledgePointIds ?? []),
@@ -218,6 +226,11 @@ export function evaluateLessonOutlines(
     0,
   );
   const assessmentShare = studentDuration > 0 ? quizDuration / studentDuration : 0;
+  const hasPlannedTiming = student.some((outline) => outline.plannedTiming);
+  const teachingNarration = student
+    .filter((outline) => outline.plannedTiming?.role === "teaching")
+    .reduce((sum, outline) => sum + (outline.plannedTiming?.narrationSec ?? 0), 0);
+  const teachingShare = studentDuration > 0 ? teachingNarration / studentDuration : 0;
   const missingTeacherStages = REQUIRED_TEACHER_STAGES.filter((stage) => !teacherStages.has(stage));
   const catalogById = new Map(activityCatalog.map((activity) => [activity.activityId, activity]));
   const knowledgeIssues: string[] = [];
@@ -236,9 +249,7 @@ export function evaluateLessonOutlines(
         knowledgeIssues.push(`页面“${outline.title}”缺少有效父活动关联`);
         continue;
       }
-      const allowed = terminalQuiz?.id === outline.id
-        ? courseKnowledgePointIds
-        : new Set(parent.knowledgePointIds);
+      const allowed = new Set(parent.knowledgePointIds.length ? parent.knowledgePointIds : courseKnowledgePointIds);
       const outside = (outline.knowledgePointIds ?? []).filter((id) => !allowed.has(id));
       if (outside.length > 0) {
         knowledgeIssues.push(
@@ -267,17 +278,21 @@ export function evaluateLessonOutlines(
     }
   }
   const issues = [
-    student.length >= 3 ? "" : "学生主课页面数量不足",
+    student.length >= (hasPlannedTiming ? 2 : 3) ? "" : "学生主课页面数量不足",
     missingTeacherStages.length ? `缺少教师资源阶段：${missingTeacherStages.join("、")}` : "",
     longestStudentSlide <= 8 * 60 ? "" : "存在超过 8 分钟的单个学生 PPT 页面",
-    slides.length >= 2 ? "" : "基础教学讲解页不足，至少需要概念讲解与具体例子或推演",
-    interactive.length >= 1 ? "" : "深度互动教学至少需要一个有意义的非评分互动页面",
-    quizzes.length === 1 ? "" : `学生主课只能有一次主课达标测，当前为 ${quizzes.length} 次`,
-    terminalQuizIsLast ? "" : "主课达标测必须位于全部基础讲解与互动之后",
+    hasPlannedTiming ? student.some((outline) => outline.type !== "quiz") ? "" : "教学蓝图缺少讲授页面"
+      : slides.length >= 2 ? "" : "基础教学讲解页不足，至少需要概念讲解与具体例子或推演",
+    hasPlannedTiming || interactive.length >= 1 ? "" : "深度互动教学至少需要一个有意义的非评分互动页面",
+    quizzes.length >= 1 ? "" : "学生主课缺少节末检测",
+    ...sectionCheckIssues,
     unexplainedAssessmentIds.length === 0
       ? ""
       : `知识点尚未通过讲解页完整教学：${unexplainedAssessmentIds.join("、")}`,
     assessmentShare <= 0.2 ? "" : `测验时长占比过高（${Math.round(assessmentShare * 100)}%），应优先保证讲解与互动`,
+    !hasPlannedTiming || (teachingShare >= 0.65 && teachingShare <= 0.7)
+      ? ""
+      : `实质讲授占比为 ${Math.round(teachingShare * 100)}%，必须保持在 65%–70%`,
     ...knowledgeIssues,
   ].filter(Boolean);
   return {
@@ -288,6 +303,7 @@ export function evaluateLessonOutlines(
       `${interactive.length} 个互动页面`,
       `${quizzes.length} 次主课达标测`,
       `测验时长占学生主课 ${Math.round(assessmentShare * 100)}%`,
+      ...(hasPlannedTiming ? [`实质讲授占学生主课 ${Math.round(teachingShare * 100)}%`] : []),
       `单个学生 PPT 最长 ${Math.ceil(longestStudentSlide / 60)} 分钟`,
     ],
   };

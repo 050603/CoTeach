@@ -77,6 +77,7 @@ export async function planClassroomTtsRecovery(
       }
       delete speech.audioId;
       delete speech.audioUrl;
+      delete speech.audioDurationSec;
       delete speech.audioInvalidated;
       missingActionIds.push(speech.id);
     }

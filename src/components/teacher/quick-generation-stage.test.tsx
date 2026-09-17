@@ -32,6 +32,41 @@ afterEach(() => {
 });
 
 describe("QuickGenerationStage", () => {
+  it("shows a quiet approximate token counter in the generation header", () => {
+    render(
+      <QuickGenerationStage
+        artifacts={[outlineArtifact]}
+        backgroundEnabled
+        brief="设计一节项目课"
+        cancelling={false}
+        completed={false}
+        confirmCancel={false}
+        message="正在制作课堂页面"
+        onCancel={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onReview={vi.fn()}
+        paused={false}
+        progress={72}
+        remainingLabel="预计还需约 3 分钟"
+        reviewAvailable={false}
+        startedAt={null}
+        tokenUsage={12_640}
+      />,
+    );
+
+    const commandBar = within(screen.getByTestId("quick-generation-command-bar"));
+    const usage = commandBar.getByTestId("course-generation-token-usage");
+    expect(usage.textContent).toContain("AI 用量");
+    expect(usage.textContent).toContain("≈ 12.6k tokens");
+    expect(usage.getAttribute("title")).toContain("仅供参考");
+    expect(commandBar.getByRole("button", { name: "预览生成" }).hasAttribute("disabled")).toBe(true);
+    expect(commandBar.getByRole("button", { name: "中断生成" })).toBeTruthy();
+    expect(commandBar.queryByText("正在制作课堂页面")).toBeNull();
+    expect(screen.getByText("72%")).toBeTruthy();
+    expect(screen.getByTestId("quick-generation-progress-flow")).toBeTruthy();
+    expect(screen.getByTestId("quick-generation-main-card-stage").getAttribute("style")).toBeNull();
+  });
+
   it("lets the teacher preview completed pages before generation finishes", () => {
     const onPreviewGenerated = vi.fn();
     render(
@@ -120,7 +155,6 @@ describe("QuickGenerationStage", () => {
 
     expect(screen.getByRole("heading", { name: "正在并行制作课堂页面" })).toBeTruthy();
     expect(screen.getByLabelText("当前并行页面任务")).toBeTruthy();
-    expect(screen.getByLabelText("单页制作流程")).toBeTruthy();
     expect(screen.getByText("观察模型如何预测")).toBeTruthy();
     expect(screen.getByText("检查核心概念")).toBeTruthy();
     expect(screen.getByText("理解使用边界")).toBeTruthy();
@@ -128,6 +162,13 @@ describe("QuickGenerationStage", () => {
     expect(screen.getByText("生成讲稿与教学动作")).toBeTruthy();
     expect(screen.getByText("校验课堂口语")).toBeTruthy();
     expect(screen.getByText("预计授课 约 16 分钟")).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "第 2 页制作进度" }).getAttribute("aria-valuenow")).toBe("3");
+    expect(screen.getByRole("progressbar", { name: "第 3 页制作进度" }).getAttribute("aria-valuenow")).toBe("4");
+    expect(screen.getByRole("progressbar", { name: "第 4 页制作进度" }).getAttribute("aria-valuenow")).toBe("5");
+    expect(screen.queryByText("每一行均来自后台正在执行的真实步骤")).toBeNull();
+    expect(screen.getByTestId("quick-generation-card-scroll").className).toContain("overflow-hidden");
+    expect(screen.getByTestId("quick-generation-card-scroll").className).not.toContain("overflow-y-auto");
+    expect(screen.getByTestId("quick-generation-card-scroll").getAttribute("tabindex")).toBeNull();
   });
 
   it("updates aggregate page progress and stops live effects during recovery or reduced motion", () => {
@@ -151,8 +192,9 @@ describe("QuickGenerationStage", () => {
     expect(screen.getByTestId("ai-plan-shimmer")).toBeTruthy();
     rerender(<QuickGenerationStage {...props} artifacts={artifacts(2)} />);
     expect(screen.getByRole("progressbar", { name: "课堂页面制作进度" }).getAttribute("aria-valuenow")).toBe("2");
-    const currentStep = within(screen.getByLabelText("单页制作流程")).getAllByRole("listitem").find((item) => item.getAttribute("aria-current") === "step");
-    expect(currentStep?.textContent).toContain("讲稿与教学动作");
+    const pageProgress = screen.getByRole("progressbar", { name: "第 1 页制作进度" });
+    expect(pageProgress.getAttribute("aria-valuenow")).toBe("4");
+    expect(pageProgress.getAttribute("aria-valuetext")).toBe("生成讲稿与教学动作");
 
     rerender(<QuickGenerationStage {...props} artifacts={artifacts(2)} recovering />);
     expect(screen.queryByTestId("ai-plan-shimmer")).toBeNull();

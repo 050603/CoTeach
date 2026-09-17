@@ -90,13 +90,29 @@ export function createSceneAPI(store: StageStore) {
             ...(params.parentActivityId !== undefined && {
               parentActivityId: params.parentActivityId,
             }),
+            ...(params.lectureSectionId !== undefined && {
+              lectureSectionId: params.lectureSectionId,
+            }),
+            ...(params.lectureSectionTitle !== undefined && {
+              lectureSectionTitle: params.lectureSectionTitle,
+            }),
             ...(params.detailKind !== undefined && { detailKind: params.detailKind }),
             ...(params.knowledgePointIds !== undefined && {
               knowledgePointIds: [...params.knowledgePointIds],
             }),
+            ...(params.teachingUnitIds !== undefined && {
+              teachingUnitIds: [...params.teachingUnitIds],
+            }),
+            ...(params.assessmentUnitIds !== undefined && {
+              assessmentUnitIds: [...params.assessmentUnitIds],
+            }),
             ...(params.targetDurationSec !== undefined && {
               targetDurationSec: params.targetDurationSec,
             }),
+            ...(params.segmentIndex !== undefined && { segmentIndex: params.segmentIndex }),
+            ...(params.segmentCount !== undefined && { segmentCount: params.segmentCount }),
+            ...(params.segmentRole !== undefined && { segmentRole: params.segmentRole }),
+            ...(params.segmentGroupId !== undefined && { segmentGroupId: params.segmentGroupId }),
             ...(params.ttsPolicy !== undefined && { ttsPolicy: params.ttsPolicy }),
             ...(params.timingPlan !== undefined && {
               timingPlan: {

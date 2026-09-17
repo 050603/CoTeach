@@ -344,8 +344,14 @@ function audioDurationSec(url: string): Promise<number | undefined> {
 }
 
 async function measuredSceneTtsDurationSec(scene: Scene): Promise<number | undefined> {
-  const durations = await Promise.all(sceneAudioUrls(scene).map(audioDurationSec));
-  const measured = durations.reduce<number>((sum, duration) => sum + (duration ?? 0), 0);
+  const speechActions = (scene.actions ?? []).filter((action) => action.type === 'speech');
+  const persisted = speechActions.reduce((sum, action) =>
+    sum + (typeof action.audioDurationSec === 'number' && Number.isFinite(action.audioDurationSec) ? action.audioDurationSec : 0), 0);
+  const unresolvedUrls = [...new Set(speechActions.flatMap((action) =>
+    action.audioUrl && !(typeof action.audioDurationSec === 'number' && action.audioDurationSec > 0) ? [action.audioUrl] : [],
+  ))];
+  const durations = await Promise.all(unresolvedUrls.map(audioDurationSec));
+  const measured = persisted + durations.reduce<number>((sum, duration) => sum + (duration ?? 0), 0);
   return measured > 0 ? measured : undefined;
 }
 

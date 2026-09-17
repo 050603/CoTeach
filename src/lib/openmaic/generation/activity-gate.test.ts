@@ -4,6 +4,7 @@ import type { SceneOutline } from '@openmaic/lib/types/generation';
 import {
   addPageTimingPauses,
   addStudentActivityPause,
+  normalizeSlideActivityPause,
   normalizeStudentActivityPause,
 } from './activity-gate';
 
@@ -110,6 +111,71 @@ describe('addStudentActivityPause', () => {
       activityPauseSec: 12,
       activityPauseSource: 'page-timing',
     });
+  });
+
+  it('keeps slide reading time passive and after all narration', () => {
+    const outline = {
+      type: 'slide',
+      timingPlan: { studentActivitySec: 19, transitionSec: 5 },
+    } as SceneOutline;
+
+    const result = addPageTimingPauses(outline, [
+      { id: 'intro', type: 'speech', text: '先介绍问题。' },
+      { id: 'focus', type: 'spotlight', elementId: 'answer' },
+      { id: 'explanation', type: 'speech', text: '再完整解释。' },
+    ] as Action[]);
+
+    expect(result.map((action) => action.id)).toEqual([
+      'intro',
+      'focus',
+      'explanation',
+      expect.stringMatching(/^learner_reflection_/),
+      expect.stringMatching(/^page_transition_/),
+    ]);
+    expect(result[3]).toMatchObject({
+      type: 'speech',
+      text: '',
+      timelinePauseSec: 19,
+      timelinePausePurpose: 'learner-reflection',
+    });
+    expect(result.some((action) => 'activityPauseSec' in action)).toBe(false);
+  });
+
+  it('migrates a persisted slide activity gate behind narration without showing an operation', () => {
+    const result = normalizeSlideActivityPause([
+      { id: 'intro', type: 'speech', text: '先介绍问题。' },
+      {
+        id: 'legacy-gate',
+        type: 'speech',
+        text: '',
+        activityPauseSec: 19,
+        activityPausePurpose: 'interaction',
+        activityPauseSource: 'page-timing',
+      },
+      { id: 'focus', type: 'spotlight', elementId: 'answer' },
+      { id: 'explanation', type: 'speech', text: '再完整解释。' },
+      {
+        id: 'transition',
+        type: 'speech',
+        text: '',
+        timelinePauseSec: 5,
+        timelinePausePurpose: 'page-transition',
+      },
+    ] as Action[]);
+
+    expect(result.map((action) => action.id)).toEqual([
+      'intro',
+      'focus',
+      'explanation',
+      'legacy-gate',
+      'transition',
+    ]);
+    expect(result[3]).toMatchObject({
+      timelinePauseSec: 19,
+      timelinePausePurpose: 'learner-reflection',
+    });
+    expect(result[3]).not.toHaveProperty('activityPauseSec');
+    expect(result[3]).not.toHaveProperty('activityPausePurpose');
   });
 
   it('adds a fixed page-transition pause after all generated actions', () => {

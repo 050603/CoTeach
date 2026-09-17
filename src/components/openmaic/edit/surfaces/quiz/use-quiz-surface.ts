@@ -123,6 +123,7 @@ export function buildQuizHints(
     if (hints.length >= MAX_HINTS) return;
     const n = i + 1;
     const choice = isChoice(q.type);
+    const matching = q.type === 'matching';
     let issue: { severity: EditorHint['severity']; key: string } | null = null;
     if (!q.question.trim()) {
       issue = { severity: 'suggestion', key: 'emptyText' };
@@ -132,6 +133,9 @@ export function buildQuizHints(
       issue = { severity: 'suggestion', key: 'emptyOption' };
     } else if (choice && (q.answer?.length ?? 0) === 0) {
       issue = { severity: 'warning', key: 'noCorrect' };
+    } else if (matching && ((q.matchingPairs?.length ?? 0) < 2
+      || (q.matchingPairs ?? []).some((pair) => !pair.left.trim() || !pair.right.trim()))) {
+      issue = { severity: 'warning', key: 'fewOptions' };
     }
     if (issue) {
       hints.push({

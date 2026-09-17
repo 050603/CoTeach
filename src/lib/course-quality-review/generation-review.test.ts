@@ -68,6 +68,18 @@ describe("fast draft and section-wide teaching review", () => {
     expect(reviewSceneEvidence({ ...scene, actions: undefined })).toBeTruthy();
   });
 
+  it("blocks authoring status labels in student artifacts without banning normal subject vocabulary", () => {
+    const course = confirmedCourse();
+    const leaked = structuredClone(scene);
+    if (leaked.content.type !== "slide" || leaked.content.canvas.elements[0]?.type !== "text") throw new Error("fixture must be a slide");
+    leaked.content.canvas.elements[0].content = "<p>证据状态：PARTIAL</p>";
+    expect(collectCourseStructureIssues(course, [leaked]).some((issue) => issue.title === "教师侧管理字段进入学生内容")).toBe(true);
+    leaked.content.canvas.elements[0].content = "<p><strong>PARTIAL</strong></p>";
+    expect(collectCourseStructureIssues(course, [leaked]).some((issue) => issue.title === "教师侧管理字段进入学生内容")).toBe(true);
+    leaked.content.canvas.elements[0].content = "<p>偏导数的英文是 partial derivative；本节还会讨论证据状态随实验条件变化的科学含义。</p>";
+    expect(collectCourseStructureIssues(course, [leaked]).some((issue) => issue.title === "教师侧管理字段进入学生内容")).toBe(false);
+  });
+
   it("blocks changed confirmed audience, driving question and whole-course or stage minutes only for schema 2", () => {
     const course = confirmedCourse();
     expect(collectCourseStructureIssues(course, [scene]).filter((issue) => issue.origin === "structure")).toEqual([]);

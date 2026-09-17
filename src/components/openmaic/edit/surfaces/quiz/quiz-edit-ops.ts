@@ -113,6 +113,22 @@ export function createBlankQuestion(
   type: QuizQuestionType,
   id = createElementId('q'),
 ): QuizQuestion {
+  if (type === 'matching') {
+    const matchingPairs = [
+      { leftId: 'L1', left: '', rightId: 'R1', right: '' },
+      { leftId: 'L2', left: '', rightId: 'R2', right: '' },
+    ];
+    return {
+      id,
+      type: 'matching',
+      format: 'matching',
+      question: '',
+      matchingPairs,
+      answer: matchingPairs.map((pair) => `${pair.leftId}:${pair.rightId}`),
+      points: 1,
+      hasAnswer: true,
+    };
+  }
   if (isChoice(type)) {
     return {
       id,
@@ -184,6 +200,7 @@ export function updateQuestion(
   id: string,
   patch: Partial<
     Pick<QuizQuestion, 'question' | 'analysis' | 'commentPrompt' | 'points' | 'hasAnswer'>
+    & Pick<QuizQuestion, 'matchingPairs' | 'answer'>
   >,
 ): QuizContent {
   return mapQuestion(content, id, (q) => ({ ...q, ...patch }));
@@ -204,29 +221,47 @@ export function setQuestionType(
   return mapQuestion(content, id, (q) => {
     if (q.type === type) return q;
 
+    if (type === 'matching') {
+      const matchingPairs = q.matchingPairs?.length ? q.matchingPairs : [
+        { leftId: 'L1', left: '', rightId: 'R1', right: '' },
+        { leftId: 'L2', left: '', rightId: 'R2', right: '' },
+      ];
+      const { options: _o, commentPrompt: _c, ...rest } = q;
+      return {
+        ...rest,
+        type: 'matching',
+        format: 'matching',
+        matchingPairs,
+        answer: matchingPairs.map((pair) => `${pair.leftId}:${pair.rightId}`),
+        hasAnswer: true,
+      };
+    }
+
     if (!isChoice(type)) {
       // → short_answer
-      const { options: _o, answer: _a, ...rest } = q;
-      return { ...rest, type: 'short_answer', hasAnswer: q.hasAnswer ?? false };
+      const { options: _o, answer: _a, matchingPairs: _m, ...rest } = q;
+      return { ...rest, type: 'short_answer', format: 'short_answer', hasAnswer: false };
     }
 
     if (!isChoice(q.type)) {
       // short_answer → choice
-      const { commentPrompt: _c, hasAnswer: _h, ...rest } = q;
+      const { commentPrompt: _c, hasAnswer: _h, matchingPairs: _m, answer: _a, ...rest } = q;
       return {
         ...rest,
         type,
+        format: type === 'single' ? 'single_choice' : 'multiple_choice',
         options: [
           { label: '', value: 'A' },
           { label: '', value: 'B' },
         ],
         answer: [],
+        hasAnswer: true,
       };
     }
 
     // single ↔ multiple: keep options; single keeps at most one correct.
     const answer = type === 'single' ? (q.answer ?? []).slice(0, 1) : (q.answer ?? []);
-    return { ...q, type, answer };
+    return { ...q, type, format: type === 'single' ? 'single_choice' : 'multiple_choice', answer };
   });
 }
 

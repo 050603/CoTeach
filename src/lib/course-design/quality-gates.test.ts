@@ -192,24 +192,24 @@ describe("quick course design quality gates", () => {
     expect(result.issues.join("；")).not.toContain("pbl-module-make");
   });
 
-  it("rejects repeated block quizzes instead of one terminal mastery assessment", () => {
+  it("accepts one terminal check for each explicit teaching section", () => {
     const result = evaluateLessonOutlines([
-      { id: "explain-1", type: "slide", title: "概念与例子", description: "先解释概念，再用具体例子说明。", keyPoints: ["概念", "例子", "误区"], order: 0, audience: "student", stageKey: "ai-learning", knowledgePointIds: ["kp-1"] },
-      { id: "practice-1", type: "interactive", title: "观察变化", description: "操作并观察结果。", keyPoints: ["预测", "操作", "反馈"], order: 1, audience: "student", stageKey: "ai-learning", knowledgePointIds: ["kp-1"] },
-      { id: "quiz-1", type: "quiz", title: "章节测验", description: "测验一。", keyPoints: ["kp-1"], order: 2, audience: "student", stageKey: "ai-learning", knowledgePointIds: ["kp-1"] },
-      { id: "explain-2", type: "slide", title: "第二个概念", description: "解释第二个概念并比较。", keyPoints: ["概念", "比较", "例子"], order: 3, audience: "student", stageKey: "ai-learning", knowledgePointIds: ["kp-2"] },
-      { id: "quiz-final", type: "quiz", title: "主课达标测", description: "综合检查。", keyPoints: ["kp-1", "kp-2"], order: 4, audience: "student", stageKey: "ai-learning", knowledgePointIds: ["kp-1", "kp-2"] },
+      { id: "explain-1", type: "slide", title: "概念与例子", description: "先解释概念，再用具体例子说明。", keyPoints: ["概念", "例子", "误区"], order: 0, audience: "student", stageKey: "ai-learning", parentActivityId: "section-1", knowledgePointIds: ["kp-1"] },
+      { id: "practice-1", type: "interactive", title: "观察变化", description: "操作并观察结果。", keyPoints: ["预测", "操作", "反馈"], order: 1, audience: "student", stageKey: "ai-learning", parentActivityId: "section-1", knowledgePointIds: ["kp-1"] },
+      { id: "quiz-1", type: "quiz", title: "章节测验", description: "测验一。", keyPoints: ["kp-1"], order: 2, audience: "student", stageKey: "ai-learning", parentActivityId: "section-1", knowledgePointIds: ["kp-1"] },
+      { id: "explain-2", type: "slide", title: "第二个概念", description: "解释第二个概念并比较。", keyPoints: ["概念", "比较", "例子"], order: 3, audience: "student", stageKey: "ai-learning", parentActivityId: "section-2", knowledgePointIds: ["kp-2"] },
+      { id: "quiz-final", type: "quiz", title: "第二节检测", description: "检查第二节。", keyPoints: ["kp-2"], order: 4, audience: "student", stageKey: "ai-learning", parentActivityId: "section-2", knowledgePointIds: ["kp-2"] },
       ...["launch", "proposal", "make", "showcase"].map((stageKey, index) => ({ id: `teacher-${stageKey}`, type: "slide" as const, title: `教师资源 ${stageKey}`, description: "教师资源。", keyPoints: ["提示"], order: index + 5, audience: "teacher" as const, stageKey })),
     ]);
 
-    expect(result.passed).toBe(false);
-    expect(result.issues.join("；")).toContain("只能有一次主课达标测");
+    expect(result.passed).toBe(true);
+    expect(result.issues.join("；")).not.toContain("重复测验");
   });
 
   it("rejects assessment before all knowledge has been explained on slides", () => {
     const result = evaluateLessonOutlines([
       { id: "explain", type: "slide", title: "概念讲解", description: "解释概念并提供例子。", keyPoints: ["概念", "例子", "误区"], order: 0, audience: "student", stageKey: "ai-learning", knowledgePointIds: ["kp-1"] },
-      { id: "practice", type: "interactive", title: "引导探索", description: "操作、观察并获得解释反馈。", keyPoints: ["预测", "操作", "反馈"], order: 1, audience: "student", stageKey: "ai-learning", knowledgePointIds: ["kp-1", "kp-2"] },
+      { id: "practice", type: "interactive", title: "引导探索", description: "操作、观察并获得解释反馈。", keyPoints: ["预测", "操作", "反馈"], order: 1, audience: "student", stageKey: "ai-learning", knowledgePointIds: ["kp-1"] },
       { id: "quiz", type: "quiz", title: "主课达标测", description: "综合检查。", keyPoints: ["kp-1", "kp-2"], order: 2, audience: "student", stageKey: "ai-learning", knowledgePointIds: ["kp-1", "kp-2"] },
       ...["launch", "proposal", "make", "showcase"].map((stageKey, index) => ({ id: `teacher-${stageKey}`, type: "slide" as const, title: `教师资源 ${stageKey}`, description: "教师资源。", keyPoints: ["提示"], order: index + 3, audience: "teacher" as const, stageKey })),
     ]);

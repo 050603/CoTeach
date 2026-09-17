@@ -69,6 +69,8 @@ function normalizedRequest(value: unknown): {
   generationModelString: string | null;
   systemMode: "new";
   generationMode: "standard" | "deep-interaction";
+  generationContractVersion: 2 | null;
+  assessmentMode: "adaptive" | "constructed-response";
   teacherBrief: string;
   enableImageGeneration: boolean;
   enableTTS: boolean;
@@ -96,6 +98,10 @@ function normalizedRequest(value: unknown): {
     generationMode: request.generationMode === "deep-interaction"
       ? "deep-interaction"
       : "standard",
+    generationContractVersion: request.generationContractVersion === 2 ? 2 : null,
+    assessmentMode: request.assessmentMode === "adaptive"
+      ? "adaptive"
+      : "constructed-response",
     teacherBrief: request.teacherBrief.trim(),
     supplementalBrief: typeof answers.brief === "string" ? answers.brief.trim() : "",
     resourcePackageSignature: resourcePackage ? JSON.stringify({

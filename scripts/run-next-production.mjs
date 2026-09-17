@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -32,8 +32,21 @@ if (args[0] === "start") {
   try {
     await access(releaseReadyFile);
   } catch {
+    await rm(releaseDir, { recursive: true, force: true });
     await mkdir(releaseDir, { recursive: true });
-    await cp(standaloneDir, releaseDir, { recursive: true, force: true });
+    const runtimeDataDirectories = [".openpbl-data", ".openpbl-runtime"].map((name) =>
+      path.join(standaloneDir, name),
+    );
+    await cp(standaloneDir, releaseDir, {
+      recursive: true,
+      force: true,
+      // Next's standalone trace can include local runtime data. Those files
+      // are mutable and already mounted through explicit absolute paths below;
+      // copying them into an immutable release races active uploads/audio.
+      filter: (source) => !runtimeDataDirectories.some(
+        (directory) => source === directory || source.startsWith(`${directory}${path.sep}`),
+      ),
+    });
     await cp(path.resolve("public"), path.join(releaseDir, "public"), {
       recursive: true,
       force: true,

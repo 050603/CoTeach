@@ -264,6 +264,7 @@
       "type": {
         "single": "Single choice",
         "multiple": "Multiple choice",
+        "matching": "Drag matching",
         "short_answer": "Short answer"
       },
       "shortAnswerGradingNote": "Short answers are always graded by AI from the guidance below.",
