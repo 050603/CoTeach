@@ -68,6 +68,9 @@ export async function saveCourseRenderPage(courseId: string, signature: string, 
 export async function confirmCourseTeacherReview(courseId: string, teacherId: string, signature: string, acceptedIssueIds: string[], acknowledgeFailedCheck = false, publish = false) {
   const { course, classroom, signature: actual } = await loadCourseReviewContext(courseId);
   if (actual !== signature) throw new CourseReviewError('REVIEW_STALE', '课程已经修改，请重新核对后确认。');
+  if (course.content.classroomGenerationRun?.scope === 'test-lesson') {
+    throw new CourseReviewError('TEST_LESSON_NOT_PUBLISHABLE', '当前是正式链路生成的单节测试样本，请生成完整课程后再终审发布。');
+  }
   if (classroom.assetGeneration?.status === 'running') throw new CourseReviewError('ASSETS_RUNNING', '课堂资源仍在生成，请完成后再确认。');
   const readiness = getNewSystemCourseReadiness(course).filter((check) => check.id !== 'teacher-review' && !check.ok);
   if (readiness.length) throw new CourseReviewError('COURSE_NOT_READY', readiness.map((check) => check.message).join('\n'));
@@ -96,6 +99,9 @@ export async function confirmCourseTeacherReview(courseId: string, teacherId: st
 /** Used by publication AND new session creation; old courses do not acquire a new gate. */
 export async function assertCourseTeacherReview(course: Course, teacherId?: string): Promise<void> {
   if (!requiresCourseTeacherReview(course)) return;
+  if (course.content.classroomGenerationRun?.scope === 'test-lesson') {
+    throw new CourseReviewError('TEST_LESSON_NOT_PUBLISHABLE', '单节测试样本不能用于正式授课，请先生成完整课程。');
+  }
   const review = course.content.teacherReview;
   if (!review || !isAuthenticTeacherReview(review) || (teacherId && review.teacherId !== teacherId)) throw new CourseReviewError('TEACHER_REVIEW_REQUIRED', '请先在预览发布页面完成教师终审。');
   const classroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;

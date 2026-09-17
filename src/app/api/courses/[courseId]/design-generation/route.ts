@@ -81,6 +81,9 @@ function responseJob(job: Awaited<ReturnType<typeof designGenerationJobs.findUni
       resourcePackageId: request.resourcePackage?.id,
       resourcePackageRevision: request.resourcePackage?.revision,
       supplementalAnswers: request.supplementalAnswers ?? null,
+      generationScope: request.generationScope === "test-lesson"
+        ? "test-lesson"
+        : "full-course",
       generationMode: request.generationMode === "deep-interaction"
         ? "deep-interaction"
         : "standard",
@@ -165,6 +168,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       supplementalAnswers?: unknown;
       resourcePackageId?: unknown;
       resourcePackageRevision?: unknown;
+      generationScope?: unknown;
       generationMode?: unknown;
       assessmentMode?: unknown;
       options?: Partial<NonNullable<QuickDesignRequest["options"]>>;
@@ -178,6 +182,11 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       && body.assessmentMode !== "adaptive"
       && body.assessmentMode !== "constructed-response") {
       return Response.json({ error: "INVALID_ASSESSMENT_MODE", detail: "小节测验模式无效，请刷新页面后重试。" }, { status: 400 });
+    }
+    if (body?.generationScope !== undefined
+      && body.generationScope !== "full-course"
+      && body.generationScope !== "test-lesson") {
+      return Response.json({ error: "INVALID_GENERATION_SCOPE", detail: "课程生成范围无效，请刷新页面后重试。" }, { status: 400 });
     }
     let job = await designGenerationJobs.findUnique({ where: { courseId } });
     const previousRequest = job?.request as unknown as QuickDesignRequest | undefined;
@@ -220,6 +229,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       teacherBrief,
       ...(resourcePackage ? { resourcePackage, supplementalAnswers: { brief: supplementalBrief || teacherBrief } } : {}),
       referenceMaterials,
+      generationScope: body?.generationScope === "test-lesson"
+        ? "test-lesson"
+        : "full-course",
       generationMode: body?.generationMode === "deep-interaction"
         ? "deep-interaction"
         : "standard",

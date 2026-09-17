@@ -64,6 +64,11 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing required field: config.agentIds');
     }
 
+    const currentScene = body.storeState.scenes.find(
+      (scene) => scene.id === body.storeState.currentSceneId,
+    );
+    const modelStage = currentScene?.content?.type === 'pbl' ? 'pbl-chat' : 'chat-adapter';
+
     const {
       model: languageModel,
       apiKey: resolvedApiKey,
@@ -71,11 +76,11 @@ export async function POST(req: NextRequest) {
       thinkingConfig: resolvedThinking,
     } = await resolveModel({
       modelString: body.model,
-      stage: 'chat-adapter',
+      stage: modelStage,
       apiKey: body.apiKey,
       baseUrl: body.baseUrl,
       providerType: body.providerType,
-      // Let resolveModel arbitrate thinking too: a routed chat-adapter's thinking
+      // Let resolveModel arbitrate thinking too: a routed application stage's thinking
       // wins, an unrouted one honors this client thinking (see resolve-model.ts).
       thinkingConfig: body.thinkingConfig ?? body.thinking,
     });

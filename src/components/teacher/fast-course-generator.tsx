@@ -3,6 +3,7 @@
 import {
   Blocks,
   FileText,
+  FlaskConical,
   Image as ImageIcon,
   LoaderCircle,
   Mic2,
@@ -49,6 +50,7 @@ import {
   GENERATION_REFERENCE_ACCEPT,
   MAX_GENERATION_REFERENCE_FILES,
 } from "@/lib/course-design/generation-reference-policy";
+import type { ClassroomGenerationScope } from "@/lib/course-generation/generation-scope";
 
 type JobStatus = "queued" | "running" | "review_available" | "paused" | "cancelling" | "cancelled" | "completed" | "failed";
 
@@ -92,6 +94,7 @@ type DesignJob = {
     resourcePackageId?: string;
     resourcePackageRevision?: number;
     supplementalAnswers?: { brief?: string };
+    generationScope?: ClassroomGenerationScope;
     generationMode?: CourseGenerationMode;
     assessmentMode?: AssessmentMode;
     options?: GenerationOptions | null;
@@ -283,6 +286,7 @@ export function FastCourseGenerator({
   const [confirmedPackage, setConfirmedPackage] = useState<CourseResourcePackage | null>(null);
   const [hasResourcePackage, setHasResourcePackage] = useState(false);
   const [generationMode, setGenerationMode] = useState<CourseGenerationMode>("standard");
+  const [generationScope, setGenerationScope] = useState<ClassroomGenerationScope>("full-course");
   const [assessmentMode, setAssessmentMode] = useState<AssessmentMode>("adaptive");
   const [job, setJob] = useState<DesignJob | null>(null);
   const [classroomJob, setClassroomJob] = useState<ClassroomGenerationResponse["job"]>(null);
@@ -323,6 +327,7 @@ export function FastCourseGenerator({
     && !savedRequest?.resourcePackageId
     && brief === (savedRequest?.teacherBrief ?? "")
     && generationMode === (savedRequest?.generationMode ?? "standard")
+    && generationScope === (savedRequest?.generationScope ?? "full-course")
     && assessmentMode === (savedRequest?.assessmentMode ?? "constructed-response")
     && options.enableImageGeneration === (savedRequest?.options?.enableImageGeneration !== false)
     && options.enableTTS === (savedRequest?.options?.enableTTS !== false)
@@ -336,6 +341,9 @@ export function FastCourseGenerator({
     if (savedBrief) setBrief(savedBrief);
     if (payload.job?.requestPreview?.generationMode) {
       setGenerationMode(payload.job.requestPreview.generationMode);
+    }
+    if (payload.job?.requestPreview?.generationScope) {
+      setGenerationScope(payload.job.requestPreview.generationScope);
     }
     if (payload.job?.requestPreview) {
       setAssessmentMode(payload.job.requestPreview.assessmentMode ?? "constructed-response");
@@ -461,6 +469,7 @@ export function FastCourseGenerator({
             resourcePackageRevision: confirmedPackage.revision,
           } : {}),
           generationMode,
+          generationScope,
           assessmentMode,
           options,
           referenceIds: referenceMaterials.map((material) => material.id),
@@ -673,6 +682,9 @@ export function FastCourseGenerator({
     : job?.currentCall
       ? `${job.message || "正在分析课程信息"}（${designCallLabel(job.currentCall)}）`
       : job?.message || "正在分析课程信息";
+  const scopedActiveMessage = generationScope === "test-lesson"
+    ? `测试模式（正式链路 · 单个完整知识小节）：${activeMessage}`
+    : activeMessage;
   const activeRemaining = job?.status === "completed"
     ? classroomJob?.estimatedRemainingSeconds
     : job?.estimatedRemainingSeconds;
@@ -706,7 +718,7 @@ export function FastCourseGenerator({
         completed={classroomCompleted}
         failed={classroomFailed}
         failureMessage={classroomJob?.error || error}
-        message={activeMessage}
+        message={scopedActiveMessage}
         onCancel={() => void cancelGeneration()}
         onOpenCourse={() => {
           if (classroomJob?.result?.id) router.push(`/teacher/prepare/${course.id}/preview?classroomId=${classroomJob.result.id}`);
@@ -725,7 +737,11 @@ export function FastCourseGenerator({
         progress={overallProgress}
         previewScenesCount={classroomJob?.preview?.scenesCount ?? 0}
         recovering={recovering}
-        remainingLabel={classroomCompleted ? "全部内容已经生成并自动保存" : classroomFailed ? "已完成页面均已保存，可从断点继续" : recovering ? "正在重新连接后台生成任务" : formatDuration(activeRemaining)}
+        remainingLabel={classroomCompleted
+          ? generationScope === "test-lesson"
+            ? "测试小节已经由正式课堂链路生成并自动保存；发布前仍需生成完整课程"
+            : "全部内容已经生成并自动保存"
+          : classroomFailed ? "已完成页面均已保存，可从断点继续" : recovering ? "正在重新连接后台生成任务" : formatDuration(activeRemaining)}
         retrying={classroomRetrying}
         reviewAvailable={job?.status === "review_available" || job?.status === "paused"}
         reviewAvailableUntil={job?.reviewAvailableUntil ?? null}
@@ -894,21 +910,39 @@ export function FastCourseGenerator({
                 ) : null}
               </div>
             ) : <div className="space-y-2">
-              <div aria-label="课程生成模式" className="inline-flex rounded-full border border-stone-200 bg-stone-50 p-1" role="group">
-                <GenerationModeButton
-                  active={generationMode === "standard"}
-                  description="按教学必要性动态规划讲解、互动与检测，不设置互动页配额"
-                  icon={Blocks}
-                  label="普通模式"
-                  onClick={() => setGenerationMode("standard")}
-                />
-                <GenerationModeButton
-                  active={generationMode === "deep-interaction"}
-                  description="优先安排有真实操作价值的模拟、编程、探索与实践"
-                  icon={Sparkles}
-                  label="深度交互"
-                  onClick={() => setGenerationMode("deep-interaction")}
-                />
+              <div className="flex flex-wrap gap-2">
+                <div aria-label="课程生成范围" className="inline-flex rounded-full border border-stone-200 bg-stone-50 p-1" role="group">
+                  <GenerationModeButton
+                    active={generationScope === "full-course"}
+                    description="生成正式大纲中的全部知识小节，可完成终审并发布"
+                    icon={Blocks}
+                    label="完整课程"
+                    onClick={() => setGenerationScope("full-course")}
+                  />
+                  <GenerationModeButton
+                    active={generationScope === "test-lesson"}
+                    description="完整走正式链路，但只生成正式大纲中的第一个完整知识小节，不能直接发布"
+                    icon={FlaskConical}
+                    label="测试一节"
+                    onClick={() => setGenerationScope("test-lesson")}
+                  />
+                </div>
+                <div aria-label="课程生成模式" className="inline-flex rounded-full border border-stone-200 bg-stone-50 p-1" role="group">
+                  <GenerationModeButton
+                    active={generationMode === "standard"}
+                    description="按教学必要性动态规划讲解、互动与检测，不设置互动页配额"
+                    icon={Blocks}
+                    label="普通模式"
+                    onClick={() => setGenerationMode("standard")}
+                  />
+                  <GenerationModeButton
+                    active={generationMode === "deep-interaction"}
+                    description="优先安排有真实操作价值的模拟、编程、探索与实践"
+                    icon={Sparkles}
+                    label="深度交互"
+                    onClick={() => setGenerationMode("deep-interaction")}
+                  />
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 <OptionToggle
@@ -927,6 +961,22 @@ export function FastCourseGenerator({
             <div className="flex shrink-0 items-center justify-end gap-1">
               {simplified ? (
                 <>
+                  <button
+                    aria-label={generationScope === "test-lesson" ? "关闭测试模式，生成完整课程" : "开启单节测试模式"}
+                    aria-pressed={generationScope === "test-lesson"}
+                    className={cn(
+                      QUICK_TOOLBAR_CONTROL_CLASS,
+                      generationScope === "test-lesson"
+                        ? "bg-white text-amber-700 shadow-sm ring-1 ring-stone-200"
+                        : "text-stone-500 hover:bg-white hover:text-amber-700",
+                    )}
+                    onClick={() => setGenerationScope((current) => current === "test-lesson" ? "full-course" : "test-lesson")}
+                    title="沿用正式课程的全部输入、设计、页面生成和审校逻辑，只生成第一个完整知识小节；测试样本不能直接发布"
+                    type="button"
+                  >
+                    <FlaskConical className="size-3.5" />
+                    测试一节
+                  </button>
                   <button
                     aria-label={assessmentMode === "constructed-response" ? "关闭深度作答，使用灵活题型" : "开启深度作答模式"}
                     aria-pressed={assessmentMode === "constructed-response"}

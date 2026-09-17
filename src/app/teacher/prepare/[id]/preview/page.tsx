@@ -12,6 +12,7 @@ import {
   Clock3,
   Edit3,
   Eye,
+  FlaskConical,
   Gauge,
   Layers3,
   MonitorPlay,
@@ -150,6 +151,9 @@ export default function PreviewCoursePage() {
   }
 
   const outlines = course.content._openmaicSceneOutlines ?? [];
+  const classroomGenerationRun = course.content.classroomGenerationRun;
+  const isTestLesson = classroomGenerationRun?.scope === "test-lesson";
+  const testLessonTitle = classroomGenerationRun?.testLesson?.sectionTitle ?? "一个完整知识小节";
   const studentOutlines = outlines.filter((outline) => outline.audience !== "teacher");
   const selectedOutline = studentOutlines.find((outline) => outline.id === selectedOutlineId)
     ?? studentOutlines[0];
@@ -167,6 +171,7 @@ export default function PreviewCoursePage() {
   const prerequisiteChecks = getNewSystemCourseReadiness(course).filter((check) => check.id !== "teacher-review");
   const readyCount = prerequisiteChecks.filter((item) => item.ok).length;
   const readyToPublish = resourceAuditLoaded
+    && !isTestLesson
     && readyCount === prerequisiteChecks.length
     && resourceIssues.length === 0
     && (!reviewRequired || reviewDecision.canConfirm);
@@ -185,6 +190,10 @@ export default function PreviewCoursePage() {
   const courseId = course.id;
 
   async function publish() {
+    if (isTestLesson) {
+      toast.warning("测试样本不能发布", { description: "请返回课程生成页，切换为“完整课程”并完成正式生成。" });
+      return;
+    }
     setPublishing(true);
     try {
       if (reviewRequired) {
@@ -258,7 +267,7 @@ export default function PreviewCoursePage() {
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--pbl-accent)]">
                 <BookOpenCheck size={14} />
-                <span>课程发布中心 · 第 3 步</span>
+                <span>{isTestLesson ? "正式链路测试结果" : "课程发布中心 · 第 3 步"}</span>
               </div>
               <h1 className="mt-1 break-words font-editorial text-xl font-semibold leading-snug tracking-[-0.02em] text-stone-950 sm:truncate sm:text-[30px]" title={course.name}>{course.name}</h1>
               <p className="mt-1 max-w-3xl text-sm leading-6 text-stone-500">
@@ -266,8 +275,8 @@ export default function PreviewCoursePage() {
               </p>
             </div>
             <div className="col-span-2 flex flex-wrap items-center gap-2">
-              <Pill tone={isPublished ? "green" : readyToPublish ? "blue" : "amber"}>
-                {isPublished ? "已发布" : readyToPublish ? "可以发布" : resourceAuditLoaded ? `待完成 ${pendingPublishCount} 项` : "正在核对资源"}
+              <Pill tone={isPublished && !isTestLesson ? "green" : readyToPublish ? "blue" : "amber"}>
+                {isTestLesson ? "测试一节 · 不可发布" : isPublished ? "已发布" : readyToPublish ? "可以发布" : resourceAuditLoaded ? `待完成 ${pendingPublishCount} 项` : "正在核对资源"}
               </Pill>
               <Link
                 className="inline-flex h-10 items-center gap-1.5 rounded-[7px] border border-stone-200 bg-white px-3.5 text-sm font-semibold text-stone-600 shadow-sm transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)]"
@@ -278,6 +287,20 @@ export default function PreviewCoursePage() {
             </div>
           </div>
         </header>
+
+        {isTestLesson ? (
+          <section className="mt-5 rounded-[12px] border border-amber-300 bg-amber-50 px-5 py-4 text-amber-950">
+            <div className="flex items-start gap-3">
+              <FlaskConical className="mt-0.5 shrink-0" size={18} />
+              <div>
+                <h2 className="text-sm font-black">正在验收正式生成链路中的“{testLessonTitle}”</h2>
+                <p className="mt-1 text-xs leading-5 text-amber-900">
+                  本样本使用与完整课程相同的资源包解析、知识图谱、正式大纲、页面生成、审校、配图和语音逻辑，只把输出范围限制为 {studentOutlines.length} 页；完整大纲共 {classroomGenerationRun?.fullOutlineCount ?? studentOutlines.length} 页。测试通过后仍需返回生成完整课程，系统会继续使用同一套实现。
+                </p>
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-[12px] border border-stone-200 bg-white px-2 py-2 shadow-sm">
           <div aria-label="发布中心视图" className="flex flex-wrap gap-1" role="tablist">
@@ -384,7 +407,7 @@ export default function PreviewCoursePage() {
         />
       ) : null}
 
-      {reviewRequired && <div className="mx-auto w-full max-w-[1600px] px-4 pb-24 sm:px-6">
+      {reviewRequired && !isTestLesson && <div className="mx-auto w-full max-w-[1600px] px-4 pb-24 sm:px-6">
         <CourseQualityReview courseId={courseId} onDecisionChange={setReviewDecision} onOpenPage={(sceneId) => {
           setSelectedOutlineId(sceneId);
           setView("director");
@@ -396,7 +419,9 @@ export default function PreviewCoursePage() {
         back={<Link className="inline-flex min-h-11 items-center text-sm font-semibold text-[var(--pbl-text-muted)]" href={courseDetailedEditHref(course.id)}>上一步</Link>}
         saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} state={session.saveState} onRetry={() => void session.retrySave()} />}
       >
-        {!isPublished ? (
+        {isTestLesson ? (
+          <Link className="inline-flex min-h-11 items-center rounded-[7px] bg-[var(--pbl-teacher)] px-4 text-sm font-bold text-white" href={`/teacher/prepare/${encodeURIComponent(course.id)}/verify`}>返回生成页并切换“完整课程”</Link>
+        ) : !isPublished ? (
           <Button disabled={!readyToPublish || publishing} loading={publishing} onClick={() => void publish()}>{reviewRequired ? "确认并发布" : "发布课程"}</Button>
         ) : (
           <Button onClick={() => router.push(`/teacher/teach/${course.id}/setup`)}>开始授课</Button>

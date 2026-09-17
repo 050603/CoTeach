@@ -48,6 +48,12 @@ import type { ProviderSection } from "@/lib/openmaic-bridge/provider-config-edit
 import { qualifyModelForProvider, splitModelIds } from "@/lib/openmaic-bridge/model-id";
 
 import { PROVIDERS } from "@openmaic/lib/ai/providers";
+import {
+  type LlmThinkingScenarioConfigs,
+  type LlmThinkingScenarioId,
+  type ThinkingScenarioPreset,
+} from "@openmaic/lib/ai/thinking-scenarios";
+import { ThinkingScenarioPanel } from "./thinking-scenario-panel";
 import { ASR_PROVIDERS, DEFAULT_TTS_VOICES, TTS_PROVIDERS, getTTSVoices } from "@openmaic/lib/audio/constants";
 import {
   type TtsVoiceTimingCalibration,
@@ -95,6 +101,7 @@ type SavedConfig = {
   models?: string[];
   enabled?: boolean;
   defaultModel?: string;
+  thinkingScenarioConfigs?: LlmThinkingScenarioConfigs;
   priority?: number;
   defaultVoice?: string;
   scenarioConfigs?: TtsScenarioConfigs;
@@ -846,6 +853,8 @@ export default function TeacherSettingsPage() {
   const [editBaseUrl, setEditBaseUrl] = useState("");
   const [editModels, setEditModels] = useState("");
   const [editDefaultModel, setEditDefaultModel] = useState("");
+  const [editThinkingScenarioConfigs, setEditThinkingScenarioConfigs] =
+    useState<LlmThinkingScenarioConfigs>({});
   const [editDefaultVoice, setEditDefaultVoice] = useState("");
   const [editTtsScenarioConfigs, setEditTtsScenarioConfigs] = useState<TtsScenarioConfigs>({});
   const [showApiKey, setShowApiKey] = useState(false);
@@ -857,6 +866,7 @@ export default function TeacherSettingsPage() {
   const [testResult, setTestResult] = useState<ResultState>(null);
   const [deletingProvider, setDeletingProvider] = useState<ProviderMeta | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [restoringThinkingProviderId, setRestoringThinkingProviderId] = useState<string | null>(null);
 
   const currentTab = TABS.find((tab) => tab.key === activeTab)!;
   const tabCopy = TAB_COPY[activeTab];
@@ -892,6 +902,7 @@ export default function TeacherSettingsPage() {
       );
       const realtimeConfig = scenarioConfigs["realtime-interaction"];
       setEditDefaultModel(realtimeConfig?.modelId || defaultModel);
+      setEditThinkingScenarioConfigs(saved?.thinkingScenarioConfigs || {});
       setEditDefaultVoice(realtimeConfig?.voiceId || defaultVoice);
       setEditTtsScenarioConfigs(scenarioConfigs);
       setShowApiKey(false);
@@ -1039,6 +1050,9 @@ export default function TeacherSettingsPage() {
           defaultModel: activeTab === "tts"
             ? realtimeTtsConfig?.modelId || editDefaultModel || modelIds[0] || undefined
             : editDefaultModel || modelIds[0] || undefined,
+          ...(activeTab === "llm" ? {
+            thinkingScenarioConfigs: editThinkingScenarioConfigs,
+          } : {}),
           ...(activeTab === "tts" ? {
             defaultVoice: realtimeTtsConfig?.voiceId || editDefaultVoice || "default",
             scenarioConfigs: editTtsScenarioConfigs,
@@ -1118,6 +1132,59 @@ export default function TeacherSettingsPage() {
       return false;
     } finally {
       setSavingProviderId(null);
+    }
+  }
+
+  function handleThinkingScenarioChange(
+    scenario: LlmThinkingScenarioId,
+    preset: ThinkingScenarioPreset,
+  ) {
+    setEditThinkingScenarioConfigs((current) => {
+      const next = { ...current };
+      if (preset === "baseline") delete next[scenario];
+      else next[scenario] = preset;
+      return next;
+    });
+    setSaveResult(null);
+  }
+
+  async function handleRestoreThinkingBaseline(provider: ProviderMeta) {
+    setEditThinkingScenarioConfigs({});
+    const saved = getSavedConfig("providers", provider.id);
+    if (!saved?.hasApiKey && saved?.enabled === undefined) {
+      setSaveResult({ ok: true, message: "已恢复 baseline；该服务尚未保存，无需同步。" });
+      return;
+    }
+
+    setRestoringThinkingProviderId(provider.id);
+    setSaveResult(null);
+    try {
+      const response = await fetch("/api/openmaic/provider-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          section: "providers",
+          providerId: provider.id,
+          apiKey: "",
+          thinkingScenarioConfigs: {},
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || data?.success === false) {
+        throw new Error(getReadableError(data, "恢复 baseline 失败。"));
+      }
+      setSavedConfigs((current) => ({
+        ...current,
+        [configKey("providers", provider.id)]: data.provider,
+      }));
+      setSaveResult({ ok: true, message: "所有应用场景已恢复 baseline，并立即生效。" });
+    } catch (error) {
+      setSaveResult({
+        ok: false,
+        message: error instanceof Error ? error.message : "恢复 baseline 失败，请稍后重试。",
+      });
+    } finally {
+      setRestoringThinkingProviderId(null);
     }
   }
 
@@ -1472,8 +1539,10 @@ export default function TeacherSettingsPage() {
                         editBaseUrl={editBaseUrl}
                         editModels={editModels}
                         editDefaultModel={editDefaultModel}
+                        editThinkingScenarioConfigs={editThinkingScenarioConfigs}
                         showApiKey={showApiKey}
                         saving={savingProviderId === selectedLlmProvider.id}
+                        restoringThinking={restoringThinkingProviderId === selectedLlmProvider.id}
                         testing={testingProviderId === selectedLlmProvider.id}
                         saveResult={saveResult}
                         testResult={testResult}
@@ -1481,6 +1550,8 @@ export default function TeacherSettingsPage() {
                         onBaseUrlChange={setEditBaseUrl}
                         onModelsChange={handleModelTextChange}
                         onDefaultModelChange={setEditDefaultModel}
+                        onThinkingScenarioChange={handleThinkingScenarioChange}
+                        onRestoreThinkingBaseline={() => handleRestoreThinkingBaseline(selectedLlmProvider)}
                         onShowApiKeyChange={setShowApiKey}
                         onSave={() => handleSave(selectedLlmProvider)}
                         onTest={() => handleTestConnection(selectedLlmProvider)}
@@ -1737,8 +1808,10 @@ function LlmConfigForm({
   editBaseUrl,
   editModels,
   editDefaultModel,
+  editThinkingScenarioConfigs,
   showApiKey,
   saving,
+  restoringThinking,
   testing,
   saveResult,
   testResult,
@@ -1746,6 +1819,8 @@ function LlmConfigForm({
   onBaseUrlChange,
   onModelsChange,
   onDefaultModelChange,
+  onThinkingScenarioChange,
+  onRestoreThinkingBaseline,
   onShowApiKeyChange,
   onSave,
   onTest,
@@ -1756,8 +1831,10 @@ function LlmConfigForm({
   editBaseUrl: string;
   editModels: string;
   editDefaultModel: string;
+  editThinkingScenarioConfigs: LlmThinkingScenarioConfigs;
   showApiKey: boolean;
   saving: boolean;
+  restoringThinking: boolean;
   testing: boolean;
   saveResult: ResultState;
   testResult: ResultState;
@@ -1765,6 +1842,11 @@ function LlmConfigForm({
   onBaseUrlChange: (value: string) => void;
   onModelsChange: (value: string) => void;
   onDefaultModelChange: (value: string) => void;
+  onThinkingScenarioChange: (
+    scenario: LlmThinkingScenarioId,
+    preset: ThinkingScenarioPreset,
+  ) => void;
+  onRestoreThinkingBaseline: () => void;
   onShowApiKeyChange: (value: boolean) => void;
   onSave: () => void;
   onTest: () => void;
@@ -1875,6 +1957,15 @@ function LlmConfigForm({
           </div>
         </Field>
       ) : null}
+
+      <ThinkingScenarioPanel
+        providerId={provider.id}
+        modelId={testModel}
+        configs={editThinkingScenarioConfigs}
+        restoring={restoringThinking}
+        onChange={onThinkingScenarioChange}
+        onRestore={onRestoreThinkingBaseline}
+      />
 
       <ActionRow
         saving={saving}

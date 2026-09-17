@@ -85,8 +85,7 @@ docker-compose*.yml
 deploy
 # container-entrypoint.sh is COPY'd by the Dockerfile (migrator/runner stages)
 !deploy/container-entrypoint.sh
-!deploy/backup/backup-runner.sh
-!deploy/backup/restore-latest.sh
+!deploy/backup/manual-essential-backup.sh
 
 # ---- Examples / sample data ----
 *.example.yml

@@ -48,7 +48,7 @@ docker compose --env-file deploy/.deploy.env \
   up -d postgres redis nginx
 ```
 
-HTTPS 环境可按需启用 certificate、observability 和 backup profile。Nginx 只代理当前宿主机应用端口，不再创建旧版 blue/green 应用容器。
+HTTPS 环境可按需启用 certificate 和 observability profile。阿里云只保留管理员显式触发的正式学生账号与首课问卷精简备份，具体命令与范围见 `deploy/backup/README.md`。Nginx 只代理当前宿主机应用端口，不再创建旧版 blue/green 应用容器。
 
 不要运行 `docker compose down -v`，因为 `-v` 会删除持久化数据卷。备份与恢复演练说明位于 `deploy/backup/`。
 

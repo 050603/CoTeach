@@ -236,6 +236,15 @@ export function getNewSystemCourseReadiness(
   }) && blueprintCourseAssessmentValid;
 
   return [
+    ...(course.content.classroomGenerationRun ? [{
+      id: "full-classroom-generation",
+      label: "完整课程生成",
+      ok: course.content.classroomGenerationRun.scope === "full-course"
+        && course.content.classroomGenerationRun.status === "completed",
+      message: course.content.classroomGenerationRun.scope === "test-lesson"
+        ? "当前是正式链路生成的单节测试样本；确认效果后，请返回生成完整课程再发布。"
+        : "完整课程仍在生成，请等待全部课堂页面保存完成。",
+    }] : []),
     ...((course.content.qualityReviewRequired || Number(course.content.resourcePackage?.schemaVersion ?? 0) >= 2 || Number(course.content.stagePlan?.schemaVersion ?? 0) >= 2) ? [{
       id: "teacher-review",
       label: "教师终审",

@@ -23,6 +23,11 @@ import type {
   TtsScenarioConfigs,
   TtsScenarioId,
 } from '@openmaic/lib/audio/tts-scenarios';
+import {
+  resolveScenarioThinkingConfig,
+  type LlmThinkingScenarioConfigs,
+} from '@openmaic/lib/ai/thinking-scenarios';
+import type { ThinkingConfig } from '@openmaic/lib/types/provider';
 
 const log = createLogger('ServerProviderConfig');
 const DEFAULT_FILENAME = 'server-providers.yml';
@@ -51,6 +56,7 @@ interface ServerProviderEntry {
    * 当生成调用未携带 x-model 时，resolveModel 会回退到此值。
    */
   defaultModel?: string;
+  thinkingScenarioConfigs?: LlmThinkingScenarioConfigs;
   defaultVoice?: string;
   scenarioConfigs?: TtsScenarioConfigs;
   timingCalibrations?: TtsVoiceTimingCalibration[];
@@ -224,6 +230,7 @@ function loadEnvSection(
           proxy: entry.proxy,
           priority: typeof entry.priority === 'number' ? entry.priority : undefined,
           defaultModel: entry.defaultModel,
+          thinkingScenarioConfigs: entry.thinkingScenarioConfigs,
           defaultVoice: entry.defaultVoice,
           scenarioConfigs: entry.scenarioConfigs,
           timingCalibrations: entry.timingCalibrations,
@@ -433,6 +440,8 @@ function applyBedrockProviderConfig(
     models: envModels || configured?.models || providers[BEDROCK_PROVIDER_ID]?.models,
     proxy: configured?.proxy || providers[BEDROCK_PROVIDER_ID]?.proxy,
     defaultModel: configured?.defaultModel || providers[BEDROCK_PROVIDER_ID]?.defaultModel,
+    thinkingScenarioConfigs:
+      configured?.thinkingScenarioConfigs || providers[BEDROCK_PROVIDER_ID]?.thinkingScenarioConfigs,
     priority: configured?.priority ?? providers[BEDROCK_PROVIDER_ID]?.priority,
   };
   return providers;
@@ -612,6 +621,17 @@ export function getServerProviders(): Record<string, ProviderMetadata> {
  */
 export function resolveServerDefaultModel(providerId: string): string | undefined {
   return getConfig().providers[providerId]?.defaultModel;
+}
+
+/** Resolve an optional teacher-authored thinking override for an application stage. */
+export function resolveServerThinkingConfig(
+  providerId: string,
+  stage?: string,
+): ThinkingConfig | undefined {
+  return resolveScenarioThinkingConfig(
+    getConfig().providers[providerId]?.thinkingScenarioConfigs,
+    stage,
+  );
 }
 
 /**

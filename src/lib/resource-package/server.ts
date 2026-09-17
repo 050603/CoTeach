@@ -45,7 +45,7 @@ function invalidateGeneratedClassroom(course: Course): Course {
       _openmaicSceneOutlines: undefined, moduleTimingPlan: undefined, stagePlan: undefined, teacherClassroomId: undefined,
       knowledgeGraph: undefined, knowledgePoints: [], lessonOutline: [], knowledgeLectureSections: undefined,
       teacherReview: undefined, qualityReview: undefined, renderReview: undefined,
-      designGenerationTrace: undefined } };
+      designGenerationTrace: undefined, classroomGenerationRun: undefined } };
 }
 export async function assertResourcePackageEditable(courseId: string): Promise<void> {
   const active = ["queued", "running", "review_available", "paused", "cancelling"];

@@ -129,6 +129,49 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.persist).toHaveBeenCalledOnce();
   });
 
+  it('keeps the full formal outline as page input while generating only the requested test lesson pages', async () => {
+    const second = { ...outline, id: 'saved-page--spatial-2', title: '第二个正式页面', order: 1 };
+    const prepared = [outline, second];
+    const checkpoint = (savedOutline: SceneOutline, stageId: string): Scene => ({
+      id: `completed-${savedOutline.id}`,
+      stageId,
+      outlineId: savedOutline.id,
+      type: 'slide',
+      title: savedOutline.title,
+      order: savedOutline.order,
+      content: { type: 'slide', canvas: { id: `canvas-${savedOutline.id}`, viewportSize: 1000, viewportRatio: 0.5625, elements: content.elements } },
+      actions: [],
+      createdAt: 1,
+      updatedAt: 1,
+    } as unknown as Scene);
+    const testFingerprints = new Map<string, string | undefined>();
+    const formalFingerprints = new Map<string, string | undefined>();
+    const onOutlinesPrepared = vi.fn();
+
+    const testResult = await generateClassroom(input, {
+      preparedOutlines: prepared,
+      generationOutlineIds: [second.id],
+      onOutlinesPrepared,
+      loadSceneCheckpoint: (savedOutline, _index, stageId, _model, inputFingerprint) => {
+        testFingerprints.set(savedOutline.id, inputFingerprint);
+        return checkpoint(savedOutline, stageId);
+      },
+    });
+    const formalResult = await generateClassroom(input, {
+      preparedOutlines: prepared,
+      loadSceneCheckpoint: (savedOutline, _index, stageId, _model, inputFingerprint) => {
+        formalFingerprints.set(savedOutline.id, inputFingerprint);
+        return checkpoint(savedOutline, stageId);
+      },
+    });
+
+    expect(onOutlinesPrepared.mock.calls[0][0].map((item: SceneOutline) => item.id)).toEqual(prepared.map((item) => item.id));
+    expect(testResult.assetContext.outlines.map((item) => item.id)).toEqual([second.id]);
+    expect(formalResult.assetContext.outlines.map((item) => item.id)).toEqual(prepared.map((item) => item.id));
+    expect(testFingerprints.get(second.id)).toBe(formalFingerprints.get(second.id));
+    expect(mocks.ai).not.toHaveBeenCalled();
+  });
+
   it('regenerates an unmarked knowledge-page checkpoint so resumed courses cannot mix narration policies', async () => {
     const enhancedOutline: SceneOutline = {
       ...outline,

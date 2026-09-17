@@ -860,15 +860,23 @@ export class PlaybackEngine {
               : sceneType === 'quiz'
                 ? 'quiz'
                 : 'interaction';
-          const pauseMs = activityPauseSec * 1000;
           this.activeActivity = { sceneId, purpose, durationSec: activityPauseSec };
-          this.speechTimerStart = Date.now();
-          this.speechTimerRemaining = pauseMs;
-          this.speechTimerIsActivityPause = true;
+          // A quiz duration is planning/UI metadata, not a submission deadline.
+          // Never let its timer release the playback gate: the quiz view emits
+          // an explicit completion event only after the learner submits and
+          // confirms the review. Interactive widgets retain their timeout
+          // fallback because legacy/generated widgets may not emit completion.
+          const pauseMs = activityPauseSec * 1000;
+          const shouldTimeout = purpose === 'interaction';
+          this.speechTimerStart = shouldTimeout ? Date.now() : 0;
+          this.speechTimerRemaining = shouldTimeout ? pauseMs : 0;
+          this.speechTimerIsActivityPause = shouldTimeout;
           this.speechTimerIsTimelinePause = false;
-          this.speechTimer = setTimeout(() => {
-            this.finishActivity('timeout');
-          }, pauseMs);
+          this.speechTimer = shouldTimeout
+            ? setTimeout(() => {
+                this.finishActivity('timeout');
+              }, pauseMs)
+            : null;
           this.callbacks.onActivityStart?.(this.activeActivity);
           break;
         }

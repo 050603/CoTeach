@@ -204,6 +204,25 @@ describe("FastCourseGenerator knowledge references", () => {
     expect((retry as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText("补充课程生成要求（可选）"), { target: { value: "旧的课程要求" } });
     fireEvent.click(retry);
-    await waitFor(() => expect(post).toHaveBeenCalledWith({ teacherBrief: "旧的课程要求", generationMode: "standard", assessmentMode: "constructed-response", options: { enableImageGeneration: true, enableTTS: true, enableVideoGeneration: false }, referenceIds: [] }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ teacherBrief: "旧的课程要求", generationMode: "standard", generationScope: "full-course", assessmentMode: "constructed-response", options: { enableImageGeneration: true, enableTTS: true, enableVideoGeneration: false }, referenceIds: [] }));
+  });
+
+  it("submits the single-lesson test scope independently from teaching style options", async () => {
+    const post = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/resource-package")) return Response.json({ job: confirmedPackageJob() });
+      if (init?.method === "POST") post(JSON.parse(String(init.body)));
+      return Response.json({ backgroundEnabled: true, job: null }, { status: init?.method === "POST" ? 202 : 200 });
+    }));
+    render(<FastCourseGenerator course={{ id: "test-scope-course" } as Course} onOpenDetailed={vi.fn()} simplified />);
+    const testToggle = await screen.findByRole("button", { name: "开启单节测试模式" });
+    fireEvent.click(testToggle);
+    expect(screen.getByRole("button", { name: "关闭测试模式，生成完整课程" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "开始生成课程" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      generationScope: "test-lesson",
+      generationMode: "standard",
+      assessmentMode: "adaptive",
+    })));
   });
 });

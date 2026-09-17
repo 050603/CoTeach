@@ -1442,10 +1442,11 @@ export interface ModelWithInfo {
   modelInfo: ModelInfo | null;
 }
 
-function getCompatThinkingBodyParams(
+export function getCompatThinkingBodyParams(
   providerId: ProviderId,
   modelId: string,
   config: ThinkingConfig,
+  baseUrl?: string,
 ): Record<string, unknown> | undefined {
   const capability = getCatalogThinkingCapability(providerId, modelId);
   if (!capability || capability.control === 'none') return undefined;
@@ -1488,14 +1489,33 @@ function getCompatThinkingBodyParams(
     }
 
     case 'deepseek': {
-      if (mode === 'disabled' || config.effort === 'none') {
+      const effort = pickThinkingEffort(capability, config);
+      if (usesAlibabaModelStudioEndpoint(baseUrl)) {
+        if (mode === 'disabled' || effort === 'none') {
+          return { enable_thinking: false };
+        }
+        const normalizedEffort =
+          effort === 'max' || effort === 'xhigh'
+            ? 'max'
+            : effort === 'low' || effort === 'minimal'
+              ? 'low'
+              : 'high';
+        return { enable_thinking: true, reasoning_effort: normalizedEffort };
+      }
+
+      if (mode === 'disabled' || effort === 'none') {
         return { thinking: { type: 'disabled' } };
       }
 
-      const effort = config.effort === 'max' || config.effort === 'xhigh' ? 'max' : 'high';
+      const normalizedEffort =
+        effort === 'max' || effort === 'xhigh'
+          ? 'max'
+          : effort === 'low' || effort === 'minimal'
+            ? 'low'
+            : 'high';
       return {
         thinking: { type: 'enabled' },
-        reasoning_effort: effort,
+        reasoning_effort: normalizedEffort,
       };
     }
 
@@ -1654,6 +1674,15 @@ function usesOfficialDeepSeekEndpoint(providerId: ProviderId, baseUrl?: string):
   }
 }
 
+function usesAlibabaModelStudioEndpoint(baseUrl?: string): boolean {
+  try {
+    const host = new URL(baseUrl || '').hostname;
+    return /(^|\.)(aliyuncs\.com|alibabacloud\.com)$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
 /** Returns true if the provider requires an API key (defaults to true for unknown providers). */
 export function isProviderKeyRequired(providerId: string): boolean {
   return getProviderConfig(providerId as ProviderId)?.requiresApiKey ?? true;
@@ -1734,7 +1763,12 @@ export function getModel(config: ModelConfig): ModelWithInfo {
               ? getDefaultThinkingConfig(getCatalogThinkingCapability(providerId, config.modelId))
               : undefined);
           if (thinking && init?.body && typeof init.body === 'string') {
-            const extra = getCompatThinkingBodyParams(providerId, config.modelId, thinking);
+            const extra = getCompatThinkingBodyParams(
+              providerId,
+              config.modelId,
+              thinking,
+              effectiveBaseUrl,
+            );
             if (extra) {
               try {
                 const body = JSON.parse(init.body);

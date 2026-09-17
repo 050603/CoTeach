@@ -29,6 +29,15 @@ export async function saveGenerationCheckpoint(jobId: string, step: string, stat
 export async function resetGenerationCheckpoints(jobId: string) {
   await prisma.generationCheckpoint.deleteMany({ where: { jobId } });
 }
+/**
+ * A test lesson and its later full-course promotion share page checkpoints.
+ * Only discard the prepared outline envelope so the next request adopts the
+ * newly confirmed full outline; every retained page is still guarded by its
+ * exact outline, model, and production-input fingerprints.
+ */
+export async function resetPreparedOutlinesCheckpoint(jobId: string) {
+  await prisma.generationCheckpoint.deleteMany({ where: { jobId, step: PREPARED_OUTLINES_STEP } });
+}
 export async function countGenerationPageCheckpoints(jobId: string) {
   return prisma.generationCheckpoint.count({ where: { jobId, step: { startsWith: "page:" } } });
 }

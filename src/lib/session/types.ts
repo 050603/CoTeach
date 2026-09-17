@@ -1420,6 +1420,15 @@ export type CourseContent = {
   qualityReviewRequired?: boolean;
   renderReview?: import("@/lib/course-quality-review/teacher-review").CourseRenderReview;
   teacherReview?: import("@/lib/course-quality-review/teacher-review").CourseTeacherReview;
+  /** The production classroom pipeline's latest bounded or full generation run. */
+  classroomGenerationRun?: {
+    scope: import("@/lib/course-generation/generation-scope").ClassroomGenerationScope;
+    status: "pending" | "completed";
+    generatedOutlineIds: string[];
+    fullOutlineCount: number;
+    testLesson?: import("@/lib/course-generation/generation-scope").TestLessonGenerationTarget;
+    generatedAt?: string;
+  };
   pblOutline: string;
   /** 教师在生成知识图谱前指定、要求模型完整保留的知识点。 */
   teacherRequiredKnowledgePoints?: string[];

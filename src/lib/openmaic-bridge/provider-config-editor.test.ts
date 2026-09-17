@@ -22,6 +22,28 @@ it('retains encrypted keys on empty input and merges saved config', async () => 
   const data = mocks.update.mock.calls[0][0].data;
   expect(decodeProviderSecret(data.secret, 'tts:voice')).toBe('retained'); expect(data.config).toEqual({ defaultVoice: 'voice-a', enabled: false });
 });
+it('clears thinking overrides without changing the saved provider connection', async () => {
+  mocks.first.mockResolvedValue({
+    id: 'credential',
+    secret: encodeProviderSecret('retained', 'providers:deepseek'),
+    config: {
+      baseUrl: 'https://deployment.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+      thinkingScenarioConfigs: { 'course-planning': 'max' },
+    },
+  });
+
+  await saveProviderEntry('providers', 'deepseek', {
+    apiKey: '',
+    thinkingScenarioConfigs: {},
+  });
+
+  const data = mocks.update.mock.calls[0][0].data;
+  expect(decodeProviderSecret(data.secret, 'providers:deepseek')).toBe('retained');
+  expect(data.config).toEqual({
+    baseUrl: 'https://deployment.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+    thinkingScenarioConfigs: {},
+  });
+});
 it('reads V2 fields and excludes user-owned secrets from global operations', async () => {
   const row = { name: 'providers', provider: 'openai', secret: encodeProviderSecret('read-key', 'providers:openai'), config: { models: ['model'] } };
   mocks.first.mockResolvedValue(row); mocks.list.mockResolvedValue([row]);

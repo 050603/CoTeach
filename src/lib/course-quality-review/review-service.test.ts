@@ -29,6 +29,15 @@ describe('teacher confirmation of an exact teaching draft', () => {
     await expect(assertCourseTeacherReview(course, 'teacher')).rejects.toThrow('教师终审');
     await expect(assertCourseTeacherReview({ ...course, content: { ...course.content, qualityReviewRequired: false } })).resolves.toBeUndefined();
   });
+  it('rejects teacher confirmation and publication for a bounded test lesson', async () => {
+    course.content.classroomGenerationRun = {
+      scope: 'test-lesson', status: 'completed', generatedOutlineIds: [], fullOutlineCount: 8,
+    };
+    const signature = computeCourseQualitySignature(course, classroom);
+    await expect(confirmCourseTeacherReview('course', 'teacher', signature, [], false, true)).rejects.toThrow('单节测试样本');
+    await expect(assertCourseTeacherReview(course, 'teacher')).rejects.toThrow('单节测试样本');
+    expect(course.status).not.toBe('ready');
+  });
   it('accepts a server confirmation but rejects changed content, changed classroom and forged stamps', async () => {
     const signature = computeCourseQualitySignature(course, classroom);
     await confirmCourseTeacherReview('course', 'teacher', signature, []);

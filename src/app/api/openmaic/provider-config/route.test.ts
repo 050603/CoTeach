@@ -55,4 +55,30 @@ describe("provider configuration save receipts", () => {
     );
     expect(result.provider.scenarioConfigs).toEqual(scenarioConfigs);
   });
+  it("accepts and returns per-application LLM thinking presets", async () => {
+    const thinkingScenarioConfigs = {
+      "course-planning": "max",
+      "content-generation": "low",
+      "learning-assessment": "none",
+    };
+    mocks.get.mockResolvedValue({ ...stored, thinkingScenarioConfigs });
+    const response = await POST(new Request("http://localhost/api/openmaic/provider-config", {
+      method: "POST",
+      body: JSON.stringify({
+        section: "providers",
+        providerId: "deepseek",
+        apiKey: "",
+        thinkingScenarioConfigs,
+      }),
+    }));
+    const result = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mocks.save).toHaveBeenCalledWith(
+      "providers",
+      "deepseek",
+      expect.objectContaining({ thinkingScenarioConfigs }),
+    );
+    expect(result.provider.thinkingScenarioConfigs).toEqual(thinkingScenarioConfigs);
+  });
 });

@@ -173,6 +173,11 @@ const deepseekEffort: ThinkingCapability = {
   defaultEnabled: true,
 };
 
+const deepseekV41Effort: ThinkingCapability = {
+  ...deepseekEffort,
+  effortValues: ['none', 'low', 'high', 'max'],
+};
+
 const glm52Effort: ThinkingCapability = {
   control: 'effort',
   requestAdapter: 'glm',
@@ -361,6 +366,7 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
   [getModelMetadataKey('qwen', 'qwen3-max')]: qwenBudgetDisabled,
   [getModelMetadataKey('qwen', 'qwen3-vl-plus')]: qwenBudgetDisabled,
 
+  [getModelMetadataKey('deepseek', 'deepseek-v4.1-flash')]: deepseekV41Effort,
   [getModelMetadataKey('deepseek', 'deepseek-flash')]: deepseekEffort,
   [getModelMetadataKey('deepseek', 'deepseek-v4-pro')]: deepseekEffort,
   [getModelMetadataKey('deepseek', 'deepseek-v4-flash')]: deepseekEffort,
@@ -447,6 +453,8 @@ export function getCatalogThinkingCapability(
   providerId: string,
   modelId: string,
 ): ThinkingCapability | undefined {
+  const direct = THINKING_CAPABILITIES[getModelMetadataKey(providerId, modelId)];
+  if (direct) return direct;
   const canonicalModelId = getCanonicalModelId(providerId, modelId);
   const exact = THINKING_CAPABILITIES[getModelMetadataKey(providerId, canonicalModelId)];
   if (exact) return exact;

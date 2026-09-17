@@ -14,6 +14,7 @@ import {
   resolveBaseUrl,
   resolveProxy,
   findServerDefaultModelString,
+  resolveServerThinkingConfig,
 } from '@openmaic/lib/server/provider-config';
 import { validateUrlForSSRF } from '@openmaic/lib/server/ssrf-guard';
 import { getStageRoute, type LlmStage } from '@openmaic/lib/server/model-routes';
@@ -107,16 +108,13 @@ export async function resolveModel(params: {
     providerType: clientProviderType as 'openai' | 'anthropic' | 'google' | undefined,
   });
 
-  // Thinking arbitration mirrors model routing — the route carries a full
-  // ThinkingConfig (mode/effort/level/enabled/budgetTokens/…) which callLLM
-  // normalizes against the model's capability:
-  //  - routed + thinking set → the route's thinking wins (over client thinking).
-  //  - routed + no thinking  → routed model uses its own default; client thinking
-  //    is dropped (it belonged to the client's other model).
-  //  - unrouted              → honor the client's thinking config.
-  const thinkingConfig: ThinkingConfig | undefined = routed
-    ? stageRoute?.thinking
-    : params.thinkingConfig;
+  // Thinking precedence is explicit operator route > teacher application
+  // scenario > per-request client choice > provider baseline. A routed model
+  // still drops a client choice that belonged to another model.
+  const teacherScenarioThinking = resolveServerThinkingConfig(providerId, params.stage);
+  const thinkingConfig: ThinkingConfig | undefined = stageRoute?.thinking
+    ?? teacherScenarioThinking
+    ?? (routed ? undefined : params.thinkingConfig);
 
   return {
     model,

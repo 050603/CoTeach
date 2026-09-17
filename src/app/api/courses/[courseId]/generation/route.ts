@@ -32,6 +32,12 @@ function retainRequestBoundGeneration(courseId: string): void {
 function responseJob(job: Awaited<ReturnType<typeof contentGenerationJobs.findUnique>>) {
   if (!job) return null;
   const persistedRequest = job.request as unknown as Partial<PersistedCourseGenerationRequest>;
+  const testOutlineIds = persistedRequest.generationScope === "test-lesson"
+    ? new Set(persistedRequest.testLesson?.sceneOutlineIds ?? [])
+    : null;
+  const requestOutlines = Array.isArray(persistedRequest.sceneOutlines)
+    ? persistedRequest.sceneOutlines.filter((scene) => !testOutlineIds || testOutlineIds.has(scene.id))
+    : [];
   return {
     id: job.id,
     status: job.status,
@@ -65,16 +71,17 @@ function responseJob(job: Awaited<ReturnType<typeof contentGenerationJobs.findUn
     updatedAt: job.updatedAt.toISOString(),
     requestPreview: {
       courseTitle: persistedRequest.courseTitle,
-      sceneOutlines: Array.isArray(persistedRequest.sceneOutlines)
-        ? persistedRequest.sceneOutlines.map((scene) => ({
+      generationScope: persistedRequest.generationScope === "test-lesson" ? "test-lesson" : "full-course",
+      testLesson: persistedRequest.testLesson,
+      fullSceneCount: persistedRequest.fullSceneCount,
+      sceneOutlines: requestOutlines.map((scene) => ({
             id: scene.id,
             title: scene.title,
             type: scene.type,
             stageKey: scene.stageKey,
             stageLabel: scene.stageLabel,
             estimatedDuration: scene.estimatedDuration,
-          }))
-        : [],
+          })),
       enableImageGeneration: persistedRequest.enableImageGeneration !== false,
       enableVideoGeneration: persistedRequest.enableVideoGeneration === true,
       enableTTS: persistedRequest.enableTTS !== false,
@@ -140,6 +147,20 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
   const body = await request.json() as PersistedCourseGenerationRequest;
   if (body.courseId !== courseId || typeof body.requirement !== "string" || !body.requirement.trim()) {
     return Response.json({ error: "Invalid generation request" }, { status: 400 });
+  }
+  if (body.generationScope !== undefined
+    && body.generationScope !== "full-course"
+    && body.generationScope !== "test-lesson") {
+    return Response.json({ error: "INVALID_GENERATION_SCOPE" }, { status: 400 });
+  }
+  if (body.generationScope === "test-lesson" && (
+    !body.testLesson
+    || !Array.isArray(body.testLesson.sceneOutlineIds)
+    || body.testLesson.sceneOutlineIds.length === 0
+    || !Number.isInteger(body.fullSceneCount)
+    || (body.fullSceneCount ?? 0) < body.testLesson.sceneOutlineIds.length
+  )) {
+    return Response.json({ error: "INVALID_TEST_LESSON_TARGET" }, { status: 400 });
   }
   try {
     assertRequestedClassroomMediaProviders(body);

@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import type { CourseGenerationJob } from "@/lib/course-generation/job-storage";
-import { loadGenerationCheckpoints, saveGenerationCheckpoint, resetGenerationCheckpoints, countGenerationPageCheckpoints } from "./checkpoint-storage";
+import { loadGenerationCheckpoints, saveGenerationCheckpoint, resetGenerationCheckpoints, resetPreparedOutlinesCheckpoint, countGenerationPageCheckpoints } from "./checkpoint-storage";
 import { contentGenerationJobs } from "@/lib/course-generation/job-storage";
 import { createLogger } from "@openmaic/lib/logger";
 import {
@@ -59,6 +59,11 @@ import {
 } from "@/lib/course-generation/resource-audit-server";
 import { summarizeGeneratedMediaReadiness } from "@/lib/course-generation/resource-readiness";
 import { estimateRemainingSeconds } from "@/lib/course-generation/progress-estimate";
+import { deriveKnowledgeLectureSectionsFromOutlines } from "@/lib/knowledge-lecture";
+import type {
+  ClassroomGenerationScope,
+  TestLessonGenerationTarget,
+} from "@/lib/course-generation/generation-scope";
 
 const log = createLogger("CourseGenerationWorker");
 const POLL_INTERVAL_MS = 1_500;
@@ -227,8 +232,16 @@ export async function resetCourseGenerationCheckpoints(jobId: string): Promise<v
   await resetGenerationCheckpoints(jobId);
 }
 
+export async function prepareCourseGenerationCheckpointsForFullPromotion(jobId: string): Promise<void> {
+  await resetPreparedOutlinesCheckpoint(jobId);
+}
+
 export type PersistedCourseGenerationRequest = GenerateClassroomInput & {
   courseId: string;
+  generationScope?: ClassroomGenerationScope;
+  /** Count of pages in the confirmed full outline before a test selection. */
+  fullSceneCount?: number;
+  testLesson?: TestLessonGenerationTarget;
   systemMode?: "new";
   generationContractVersion?: 2;
   assessmentMode?: AssessmentMode;
@@ -801,6 +814,9 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
   const generationInput = { ...request };
   const courseId = generationInput.courseId;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).courseId;
+  delete (generationInput as Partial<PersistedCourseGenerationRequest>).generationScope;
+  delete (generationInput as Partial<PersistedCourseGenerationRequest>).fullSceneCount;
+  delete (generationInput as Partial<PersistedCourseGenerationRequest>).testLesson;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).systemMode;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).generationContractVersion;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).assessmentMode;
@@ -831,12 +847,29 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
     }
     const timing = course?.content.moduleTimingPlan;
     const outlines = checkpointState.preparedOutlines.length ? checkpointState.preparedOutlines : generationInput.sceneOutlines ?? [];
+    const isTestLesson = request.generationScope === "test-lesson";
+    const outlinesById = new Map(outlines.map((outline) => [outline.id, outline]));
+    const testOutlines = request.testLesson?.sceneOutlineIds.flatMap((id) => {
+      const outline = outlinesById.get(id);
+      return outline ? [outline] : [];
+    }) ?? [];
+    const testLessonIdsMatch = !isTestLesson || (
+      Boolean(request.testLesson)
+      && request.testLesson!.sceneOutlineIds.length === testOutlines.length
+      && (request.fullSceneCount ?? 0) === outlines.length
+      && hasExactKnowledgeLecturePageBudget(
+        testOutlines,
+        (request.testLesson?.durationSeconds ?? 0) / 60,
+      )
+    );
     if (!course || !isNewSystemAiTimingPlan(timing, course.hours, course.content.stagePlan)
-      || !hasExactKnowledgeLecturePageBudget(outlines, timing.totalMinutes)) {
+      || !testLessonIdsMatch
+      || !hasExactKnowledgeLecturePageBudget(outlines, timing?.totalMinutes ?? 0)) {
       throw new Error("知识讲授必须符合已确认的课程时间预算，且讲解与小测合计必须等于该预算。资源包课程以教案分钟数为准，请重新规划后生成，不可继续使用不匹配的页面或检查点。");
     }
     const generated = await generateClassroom(generationInput, {
       signal: controller.signal,
+      generationOutlineIds: isTestLesson ? request.testLesson?.sceneOutlineIds : undefined,
       preparedOutlines: checkpointState.preparedOutlines,
       onOutlinesPrepared: (outlines) => persistPreparedOutlines(job.id, outlines),
       loadTeachingSectionCheckpoint: (sectionKey, inputFingerprint, modelFingerprint) => {
@@ -955,6 +988,26 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       sceneOutlines: generated.assetContext.outlines,
       systemMode: "new",
     }, { signal: controller.signal });
+    const generatedOutlineIds = generated.assetContext.outlines.map((outline) => outline.id);
+    const generatedOutlineIdSet = new Set(generatedOutlineIds);
+    await updateCourse(courseId, (current) => ({
+      ...current,
+      content: {
+        ...current.content,
+        lessonOutline: current.content.lessonOutline.filter((outline) => generatedOutlineIdSet.has(outline.id)),
+        knowledgeLectureSections: deriveKnowledgeLectureSectionsFromOutlines(
+          generated.assetContext.outlines as unknown as import("@/lib/session/types").OpenMaicSceneOutlineSnapshot[],
+        ),
+        classroomGenerationRun: {
+          scope: request.generationScope ?? "full-course",
+          status: "completed",
+          generatedOutlineIds,
+          fullOutlineCount: request.fullSceneCount ?? generatedOutlineIds.length,
+          ...(request.testLesson ? { testLesson: request.testLesson } : {}),
+          generatedAt: new Date().toISOString(),
+        },
+      },
+    }));
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
       step: "checking_adaptive_resources",
       progress: 94,
@@ -971,6 +1024,8 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       pblCoverage: split.pblCoverage,
       qualityReport: generated.qualityReport,
       stage: { id: generated.stage.id, name: generated.stage.name },
+      generationScope: request.generationScope ?? "full-course",
+      ...(request.testLesson ? { testLesson: request.testLesson } : {}),
     };
     const baseUrl = process.env.PUBLIC_BASE_URL?.trim() || "";
     const adaptivePromise = prepareAdaptiveResources(
@@ -1062,11 +1117,15 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
     const finalEvent: CourseGenerationJobEvent = {
       step: "completed",
       progress: 100,
-      message: resourceAudit.issues.length > 0
-        ? `课程主体已生成，${resourceAudit.issues.length} 项配套资源需要在预览页继续处理`
-        : coverNeedsAttention
-          ? "课程内容已完整生成，课程封面可稍后补充"
-          : "课程内容与配套资源已完整生成",
+      message: isTestLesson
+        ? resourceAudit.issues.length > 0
+          ? `测试小节已由正式链路生成，${resourceAudit.issues.length} 项配套资源需要在预览页继续处理`
+          : "测试小节已由正式课堂链路完整生成，可开始验收"
+        : resourceAudit.issues.length > 0
+          ? `课程主体已生成，${resourceAudit.issues.length} 项配套资源需要在预览页继续处理`
+          : coverNeedsAttention
+            ? "课程内容已完整生成，课程封面可稍后补充"
+            : "课程内容与配套资源已完整生成",
       scenesGenerated: split.studentSceneCount,
       totalScenes: Math.max(job.totalScenes, split.studentSceneCount),
       ts: Date.now(),

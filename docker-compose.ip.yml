@@ -18,8 +18,7 @@
 # 其他差异:
 #   - PUBLIC_BASE_URL 根据 deploy/.deploy.env 的 PUBLIC_HOST 生成 HTTPS 地址
 #   - Nginx 使用 HTTPS 模板和宿主机 Certbot 证书目录
-#   - postgres 使用官方镜像并关闭 WAL 归档(未启用 S3 备份 profile,
-#     归档命令持续失败会导致 pg_wal 无限堆积)
+#   - postgres 使用官方镜像且不启用 WAL 云归档；精简备份仅由管理员手动触发
 services:
   nginx:
     network_mode: host
@@ -42,8 +41,6 @@ services:
         exec nginx -g 'daemon off;'
 
   postgres:
-    image: postgres:16.9-alpine
-    build: !reset null
     network_mode: host
     command: !override
       - postgres
@@ -93,11 +90,8 @@ services:
   migrate:
     network_mode: host
 
-  volume-backup:
+  manual-essential-backup:
     network_mode: host
     environment:
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: "15432"
-
-  restore-files:
-    network_mode: host

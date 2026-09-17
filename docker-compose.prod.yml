@@ -8,20 +8,13 @@ x-logging: &logging
 
 services:
   postgres:
-    build:
-      context: ./deploy/postgres
-    image: ${OPENPBL_POSTGRES_IMAGE:-openpbl-postgres:16.9-pgbackrest}
+    image: postgres:16.9-alpine
     environment:
       POSTGRES_DB: openpbl
       POSTGRES_USER: openpbl
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-      PGBACKREST_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
-      PGBACKREST_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
-      PGBACKREST_S3_REGION: ${BACKUP_S3_REGION:-us-east-1}
     secrets:
       - postgres_password
-      - s3_access_key
-      - s3_secret_key
     command:
       - postgres
       - -c
@@ -32,17 +25,8 @@ services:
       - effective_cache_size=3GB
       - -c
       - maintenance_work_mem=256MB
-      - -c
-      - wal_level=replica
-      - -c
-      - archive_mode=on
-      - -c
-      - archive_command=pgbackrest --stanza=openpbl archive-push %p
-      - -c
-      - archive_timeout=300s
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - pgbackrest-spool:/var/spool/pgbackrest
     expose:
       - "5432"
     healthcheck:
@@ -51,27 +35,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
-    restart: unless-stopped
-    logging: *logging
-
-  pgbackrest:
-    image: ${OPENPBL_POSTGRES_IMAGE:-openpbl-postgres:16.9-pgbackrest}
-    profiles: ["backup"]
-    entrypoint: ["/usr/local/bin/openpbl-pgbackrest-backup"]
-    environment:
-      PGBACKREST_S3_BUCKET: ${BACKUP_S3_BUCKET:?Set BACKUP_S3_BUCKET}
-      PGBACKREST_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:?Set BACKUP_S3_ENDPOINT}
-      PGBACKREST_S3_REGION: ${BACKUP_S3_REGION:-us-east-1}
-    secrets:
-      - s3_access_key
-      - s3_secret_key
-    volumes:
-      - postgres-data:/var/lib/postgresql/data:ro
-      - pgbackrest-spool:/var/spool/pgbackrest
-      - backup-status:/var/lib/openpbl-backup-status
-    depends_on:
-      postgres:
-        condition: service_healthy
     restart: unless-stopped
     logging: *logging
 
@@ -304,80 +267,30 @@ services:
     restart: unless-stopped
     logging: *logging
 
-  volume-backup:
+  manual-essential-backup:
     build:
       context: .
       dockerfile: deploy/backup/Dockerfile
       network: host
     image: ${OPENPBL_BACKUP_IMAGE:-openpbl-backup:0.1.0}
-    profiles: ["backup"]
+    profiles: ["manual-backup"]
+    entrypoint: ["/usr/local/bin/openpbl-manual-essential-backup"]
     environment:
-      RESTIC_REPOSITORY: s3:${BACKUP_S3_ENDPOINT:?Set BACKUP_S3_ENDPOINT}/${BACKUP_S3_BUCKET:?Set BACKUP_S3_BUCKET}/openpbl-production
+      RESTIC_REPOSITORY: s3:${BACKUP_S3_ENDPOINT:?Set BACKUP_S3_ENDPOINT}/${BACKUP_S3_BUCKET:?Set BACKUP_S3_BUCKET}/openpbl-manual-essential
       AWS_DEFAULT_REGION: ${BACKUP_S3_REGION:-us-east-1}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-600}
-      BACKUP_INCLUDE_REGENERABLE_ASSETS: ${BACKUP_INCLUDE_REGENERABLE_ASSETS:-false}
+      MANUAL_BACKUP_OFFERING_ID: ${MANUAL_BACKUP_OFFERING_ID:?Set MANUAL_BACKUP_OFFERING_ID}
     secrets:
       - s3_access_key
       - s3_secret_key
       - restic_password
       - postgres_password
     volumes:
-      - ./.openpbl-data/uploads:/data/uploads:ro
-      - ./.openpbl-data/whiteboards:/data/whiteboards:ro
-      - ./.openpbl-data/classrooms:/data/classrooms:ro
-      # Staging contains a database dump and is intentionally kept outside the
-      # application worktree/build context.
       - backup-staging:/staging
-      - backup-status:/status
     depends_on:
       postgres:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "test -r /status/backup.last-success.epoch && test $$(($$(date +%s) - $$(cat /status/backup.last-success.epoch))) -lt 1800"]
-      interval: 5m
-      timeout: 5s
-      retries: 3
-      start_period: 15m
-    restart: unless-stopped
-    logging: *logging
-
-  restore-files:
-    image: ${OPENPBL_BACKUP_IMAGE:-openpbl-backup:0.1.0}
-    profiles: ["restore-drill"]
-    entrypoint: ["/usr/local/bin/openpbl-restore-latest"]
-    environment:
-      RESTIC_REPOSITORY: s3:${BACKUP_S3_ENDPOINT:?Set BACKUP_S3_ENDPOINT}/${BACKUP_S3_BUCKET:?Set BACKUP_S3_BUCKET}/openpbl-production
-      AWS_DEFAULT_REGION: ${BACKUP_S3_REGION:-us-east-1}
-    secrets:
-      - s3_access_key
-      - s3_secret_key
-      - restic_password
-    volumes:
-      - restore-drill-input:/restore
-    restart: "no"
-    logging: *logging
-
-  restore-drill-db:
-    image: postgres:16.9-alpine
-    profiles: ["restore-drill"]
-    environment:
-      POSTGRES_DB: openpbl
-      POSTGRES_USER: openpbl
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-    secrets:
-      - postgres_password
-    volumes:
-      - restore-drill-data:/var/lib/postgresql/data
-      - restore-drill-input:/restore:ro
-    expose:
-      - "5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openpbl -d openpbl"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
     restart: "no"
     logging: *logging
 
@@ -405,7 +318,6 @@ secrets:
 
 volumes:
   postgres-data:
-  pgbackrest-spool:
   uploads:
   whiteboards:
   interactive-runtime-cache:
@@ -417,7 +329,3 @@ volumes:
   grafana-data:
   backup-status:
   backup-staging:
-  restore-drill-data:
-    name: openpbl-restore-drill-data
-  restore-drill-input:
-    name: openpbl-restore-drill-input

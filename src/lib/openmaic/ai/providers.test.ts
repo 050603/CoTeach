@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { getModel, getModelInfo, getProvider } from './providers';
+import {
+  getCompatThinkingBodyParams,
+  getModel,
+  getModelInfo,
+  getProvider,
+} from './providers';
 
 describe('OpenMAIC provider catalog synchronization', () => {
   it('keeps the current DeepSeek catalog and compatible endpoint support', () => {
@@ -26,6 +31,10 @@ describe('OpenMAIC provider catalog synchronization', () => {
         streaming: true,
         tools: true,
         vision: true,
+        thinking: {
+          effortValues: ['none', 'low', 'high', 'max'],
+          defaultEffort: 'high',
+        },
       },
     });
   });
@@ -50,6 +59,23 @@ describe('OpenMAIC provider catalog synchronization', () => {
     });
 
     expect((model as { modelId: string }).modelId).toBe('deepseek-v4.1-flash');
+  });
+
+  it('uses Alibaba Model Studio thinking parameters for hosted DeepSeek', () => {
+    const baseUrl = 'https://deployment.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+
+    expect(getCompatThinkingBodyParams(
+      'deepseek',
+      'deepseek-v4.1-flash',
+      { mode: 'enabled', effort: 'low' },
+      baseUrl,
+    )).toEqual({ enable_thinking: true, reasoning_effort: 'low' });
+    expect(getCompatThinkingBodyParams(
+      'deepseek',
+      'deepseek-v4.1-flash',
+      { mode: 'disabled', effort: 'none' },
+      baseUrl,
+    )).toEqual({ enable_thinking: false });
   });
 
   it('registers the new Azure, Atlas Cloud, and Bedrock providers', () => {

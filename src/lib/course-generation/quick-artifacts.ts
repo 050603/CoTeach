@@ -1,5 +1,6 @@
 import type { CourseDesignGenerationArtifact } from "@/lib/session/types";
 import { userFacingName, userFacingStageLabel } from "@/lib/user-facing-labels";
+import type { ClassroomGenerationScope, TestLessonGenerationTarget } from "./generation-scope";
 
 export type QuickClassroomGenerationEvent = {
   step: string;
@@ -61,6 +62,9 @@ export type QuickClassroomGenerationSnapshot = {
   } | null;
   requestPreview?: {
     courseTitle?: string;
+    generationScope?: ClassroomGenerationScope;
+    testLesson?: TestLessonGenerationTarget;
+    fullSceneCount?: number;
     sceneOutlines: QuickClassroomScenePreview[];
     enableImageGeneration: boolean;
     enableVideoGeneration: boolean;

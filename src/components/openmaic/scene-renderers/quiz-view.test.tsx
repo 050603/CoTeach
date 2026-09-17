@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { QuizQuestion } from "@openmaic/lib/types/stage";
 import type { KnowledgeLectureAttempt } from "@/lib/session/types";
 import { KnowledgeLectureQuizLockProvider } from "@/components/openmaic-bridge/knowledge-lecture-quiz-lock";
@@ -52,7 +52,7 @@ describe("QuizView single-attempt review", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("accepts click-based matching, grades it locally, and shows the read-only relations", async () => {
+  it("supports dragging an assigned card back to the pool before grading", async () => {
     const questions: QuizQuestion[] = [{
       id: "matching-1",
       type: "matching",
@@ -77,6 +77,21 @@ describe("QuizView single-attempt review", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start Quiz" }));
     fireEvent.click(await screen.findByRole("button", { name: "选择匹配项 学习参数" }));
+    fireEvent.click(screen.getByRole("button", { name: "匹配到 训练集" }));
+
+    const transferValues = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: "none",
+      getData: vi.fn((type: string) => transferValues.get(type) ?? ""),
+      setData: vi.fn((type: string, data: string) => transferValues.set(type, data)),
+      setDragImage: vi.fn(),
+    };
+    fireEvent.dragStart(screen.getByLabelText("移动匹配项 学习参数"), { dataTransfer });
+    expect(dataTransfer.setDragImage).toHaveBeenCalledOnce();
+    fireEvent.drop(screen.getByLabelText("待选匹配项"), { dataTransfer });
+    expect(screen.getByRole("button", { name: "选择匹配项 学习参数" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "选择匹配项 学习参数" }));
     fireEvent.click(screen.getByRole("button", { name: "匹配到 训练集" }));
     fireEvent.click(screen.getByRole("button", { name: "选择匹配项 独立评估" }));
     fireEvent.click(screen.getByRole("button", { name: "匹配到 测试集" }));

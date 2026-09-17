@@ -135,6 +135,10 @@ describe("quick-design resume policy", () => {
       ...request,
       generationMode: "standard",
     }, request)).toBe(true);
+    expect(isSameCourseDesignRequest(request, {
+      ...request,
+      generationScope: "test-lesson",
+    })).toBe(false);
     expect(isSameCourseDesignRequest({
       ...request,
       generationContractVersion: 2,

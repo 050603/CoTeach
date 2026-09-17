@@ -52,6 +52,7 @@ import { mapWithConcurrencySettledOnError } from '@openmaic/lib/utils/concurrenc
 import {
   getClassroomSceneConcurrency,
   getServerVideoProviders,
+  resolveServerThinkingConfig,
 } from '@openmaic/lib/server/provider-config';
 import { assertRequestedClassroomMediaProviders } from '@openmaic/lib/server/classroom-media-readiness';
 import {
@@ -200,6 +201,12 @@ export interface GenerateClassroomResult {
 export interface GenerateClassroomOptions {
   signal?: AbortSignal;
   onProgress?: (progress: ClassroomGenerationProgress) => Promise<void> | void;
+  /**
+   * Generate only these pages after the complete confirmed outline has passed
+   * the normal planning, teaching-design, and validation stages. This keeps a
+   * bounded test run on the production path without changing page inputs.
+   */
+  generationOutlineIds?: readonly string[];
   /** Final normalized/media-planned/timed outlines from an interrupted run. */
   preparedOutlines?: SceneOutline[];
   /** Persist final outlines before the first page starts. */
@@ -703,11 +710,27 @@ export async function generateClassroom(
     apiKey,
     thinkingConfig: classroomThinking,
   } = await resolveModel({ modelString: input.generationModelString });
+  const planningThinking = resolveServerThinkingConfig(providerId, 'generate-classroom')
+    ?? classroomThinking;
+  const contentThinking = resolveServerThinkingConfig(providerId, 'scene-content')
+    ?? classroomThinking;
+  const actionThinking = resolveServerThinkingConfig(providerId, 'scene-actions')
+    ?? contentThinking;
+  const agentProfileThinking = resolveServerThinkingConfig(providerId, 'agent-profiles')
+    ?? planningThinking;
+  const searchThinking = resolveServerThinkingConfig(providerId, 'web-search-query-rewrite')
+    ?? planningThinking;
   const generationModelFingerprint = fingerprintGenerationValue({
     modelString,
     providerId,
     outputWindow: modelInfo?.outputWindow ?? null,
-    thinking: classroomThinking ?? null,
+    thinking: {
+      planning: planningThinking ?? null,
+      content: contentThinking ?? null,
+      actions: actionThinking ?? null,
+      agents: agentProfileThinking ?? null,
+      search: searchThinking ?? null,
+    },
     pipeline: 'classic-course-page-v2',
   });
   throwIfAborted(options.signal);
@@ -730,7 +753,7 @@ export async function generateClassroom(
     // design in production, so a 16k cap can end before a slide JSON closes.
     // Preserve the selected model's declared window, as the stable baseline did.
     maxOutputTokens: modelInfo?.outputWindow,
-    thinking: classroomThinking,
+    thinking: planningThinking,
     timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
     streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
     maxRetries: 2,
@@ -746,7 +769,7 @@ export async function generateClassroom(
     source: 'classroom-section-teaching-design',
     signal: options.signal,
     maxOutputTokens: modelInfo?.outputWindow,
-    thinking: classroomThinking,
+    thinking: planningThinking,
     timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
     maxRetries: 2,
     streamResponse: true,
@@ -758,7 +781,7 @@ export async function generateClassroom(
     source: 'classroom-natural-narration',
     signal: options.signal,
     maxOutputTokens: modelInfo?.outputWindow,
-    thinking: classroomThinking,
+    thinking: contentThinking,
     timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
     maxRetries: 2,
     streamResponse: true,
@@ -774,7 +797,43 @@ export async function generateClassroom(
     source: 'generate-classroom-interactive',
     signal: options.signal,
     maxOutputTokens: modelInfo?.outputWindow,
-    thinking: classroomThinking,
+    thinking: contentThinking,
+    timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
+    maxRetries: 2,
+    streamResponse: true,
+    streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
+  });
+  const contentAiCall = createCourseGenerationAiCall({
+    model: languageModel,
+    vision: generationVision,
+    source: 'scene-content',
+    signal: options.signal,
+    maxOutputTokens: modelInfo?.outputWindow,
+    thinking: contentThinking,
+    timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
+    maxRetries: 2,
+    streamResponse: true,
+    streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
+  });
+  const sceneActionsAiCall = createCourseGenerationAiCall({
+    model: languageModel,
+    vision: generationVision,
+    source: 'scene-actions',
+    signal: options.signal,
+    maxOutputTokens: modelInfo?.outputWindow,
+    thinking: actionThinking,
+    timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
+    maxRetries: 2,
+    streamResponse: true,
+    streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
+  });
+  const agentProfilesAiCall = createCourseGenerationAiCall({
+    model: languageModel,
+    vision: false,
+    source: 'agent-profiles',
+    signal: options.signal,
+    maxOutputTokens: modelInfo?.outputWindow,
+    thinking: agentProfileThinking,
     timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
     maxRetries: 2,
     streamResponse: true,
@@ -784,17 +843,17 @@ export async function generateClassroom(
   // this exact model. Vision is a capability of that selection, never a reason
   // to switch models behind the teacher's back.
   const resolveSceneContentCall = async (outlineType: SceneOutline['type']) => ({
-    aiCall: outlineType === 'interactive' ? interactiveContentAiCall : aiCall,
+    aiCall: outlineType === 'interactive' ? interactiveContentAiCall : contentAiCall,
     vision: generationVision,
     model: languageModel,
-    thinking: classroomThinking,
+    thinking: contentThinking,
   });
-  const getSceneActionsAiCall = async () => aiCall;
-  const getAgentProfilesAiCall = async () => aiCall;
+  const getSceneActionsAiCall = async () => sceneActionsAiCall;
+  const getAgentProfilesAiCall = async () => agentProfilesAiCall;
 
   const searchQueryAiCall: AICallFn = (systemPrompt, userPrompt) => createCourseGenerationAiCall({
     model: languageModel, vision: false, source: 'web-search-query-rewrite',
-    signal: options.signal, maxOutputTokens: 256, thinking: classroomThinking,
+    signal: options.signal, maxOutputTokens: 256, thinking: searchThinking,
     timeoutMs: resolveLlmRequestTimeoutMs('page-generation'),
   })(systemPrompt, userPrompt);
 
@@ -1004,6 +1063,20 @@ export async function generateClassroom(
   validateConfirmedPblDetails(outlines, input);
   await options.onOutlinesPrepared?.(outlines);
   throwIfAborted(options.signal);
+  const outlineContext = outlines;
+  if (options.generationOutlineIds) {
+    const outlineById = new Map(outlineContext.map((outline) => [outline.id, outline]));
+    const selected = options.generationOutlineIds.flatMap((id) => {
+      const outline = outlineById.get(id);
+      return outline ? [outline] : [];
+    });
+    if (selected.length === 0
+      || selected.length !== options.generationOutlineIds.length
+      || new Set(options.generationOutlineIds).size !== options.generationOutlineIds.length) {
+      throw new Error('测试生成范围与已确认的正式课程大纲不一致，不能继续生成。');
+    }
+    outlines = selected;
+  }
   log.info(
     outlineSource === 'generated'
       ? `Generated ${outlines.length} scene outlines (languageDirective: ${languageDirective}, courseTitle: ${courseTitle ?? 'n/a'})`
@@ -1193,7 +1266,7 @@ export async function generateClassroom(
         languageDirective,
         requirements,
         agents,
-        outlineContext: outlines,
+        outlineContext,
         generationVision,
         narrationPolicy: requiresNaturalNarration ? NATURAL_NARRATION_VERSION : null,
         pipeline: 'classic-course-page-v2',
@@ -1334,7 +1407,7 @@ export async function generateClassroom(
       const websiteReferenceContext = safeOutline.type === 'slide'
         ? {
             courseTitle,
-            slideTitles: outlines
+            slideTitles: outlineContext
               .filter((item) => item.type === 'slide')
               .map((item) => item.title),
           }

@@ -69,6 +69,7 @@ function normalizedRequest(value: unknown): {
   generationModelString: string | null;
   systemMode: "new";
   generationMode: "standard" | "deep-interaction";
+  generationScope: "full-course" | "test-lesson";
   generationContractVersion: 2 | null;
   assessmentMode: "adaptive" | "constructed-response";
   teacherBrief: string;
@@ -98,6 +99,9 @@ function normalizedRequest(value: unknown): {
     generationMode: request.generationMode === "deep-interaction"
       ? "deep-interaction"
       : "standard",
+    generationScope: request.generationScope === "test-lesson"
+      ? "test-lesson"
+      : "full-course",
     generationContractVersion: request.generationContractVersion === 2 ? 2 : null,
     assessmentMode: request.assessmentMode === "adaptive"
       ? "adaptive"

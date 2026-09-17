@@ -26,6 +26,24 @@ const TtsScenarioConfigSchema = z.object({
   modelId: z.string().trim().min(1).max(200),
   voiceId: z.string().trim().min(1).max(200),
 }).strict();
+const ThinkingScenarioPresetSchema = z.enum([
+  "baseline",
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+const ThinkingScenarioConfigsSchema = z.object({
+  "course-planning": ThinkingScenarioPresetSchema.optional(),
+  "content-generation": ThinkingScenarioPresetSchema.optional(),
+  "learning-assessment": ThinkingScenarioPresetSchema.optional(),
+  "classroom-interaction": ThinkingScenarioPresetSchema.optional(),
+  "ai-copilot": ThinkingScenarioPresetSchema.optional(),
+  "search-understanding": ThinkingScenarioPresetSchema.optional(),
+}).strict();
 const SaveSchema = z.object({
   section: SectionSchema,
   providerId: ProviderIdSchema,
@@ -34,6 +52,7 @@ const SaveSchema = z.object({
   models: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
   enabled: z.boolean().optional(),
   defaultModel: z.string().trim().max(200).optional(),
+  thinkingScenarioConfigs: ThinkingScenarioConfigsSchema.optional(),
   priority: z.number().int().min(0).max(10_000).optional(),
   defaultVoice: z.string().trim().max(200).optional(),
   scenarioConfigs: z.object({
@@ -88,6 +107,7 @@ export async function POST(request: Request) {
 function publicEntry(entry: ProviderEntry) {
   return { hasApiKey: Boolean(entry.apiKey), baseUrl: entry.baseUrl, models: entry.models,
     enabled: entry.enabled, defaultModel: entry.defaultModel, priority: entry.priority,
+    thinkingScenarioConfigs: entry.thinkingScenarioConfigs,
     defaultVoice: entry.defaultVoice, scenarioConfigs: entry.scenarioConfigs,
     timingCalibrations: entry.timingCalibrations };
 }

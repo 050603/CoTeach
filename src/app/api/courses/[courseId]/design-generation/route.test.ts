@@ -99,6 +99,21 @@ describe("resource-package design generation admission", () => {
     expect(await rejected.json()).toMatchObject({ error: "INVALID_ASSESSMENT_MODE" });
   });
 
+  it("persists the bounded test scope and rejects unknown generation scopes", async () => {
+    const resourcePackage = { schemaVersion: 1, id: "package-1", revision: 3, source: { id: "zip-1", fileName: "教学.zip", url: "/private/zip" }, documents: {}, draft: emptyResourcePackageDraft(), confirmedAt: "2026-09-12T00:00:00Z" };
+    mocks.resolve.mockResolvedValue({ resourcePackage, referenceMaterials: [] });
+    mocks.create.mockImplementation(({ data }: { data: { request: unknown } }) => Promise.resolve(storedJob(data.request, "queued")));
+
+    const accepted = await POST(request({ resourcePackageId: "package-1", resourcePackageRevision: 3, generationScope: "test-lesson" }), context);
+    expect(accepted.status).toBe(202);
+    expect(mocks.create.mock.calls[0][0].data.request).toMatchObject({ generationScope: "test-lesson" });
+    expect(await accepted.json()).toMatchObject({ job: { requestPreview: { generationScope: "test-lesson" } } });
+
+    const rejected = await POST(request({ resourcePackageId: "package-1", resourcePackageRevision: 3, generationScope: "shortcut" }), context);
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({ error: "INVALID_GENERATION_SCOPE" });
+  });
+
   it("only allows legacy requests to resume with the same parameters", async () => {
     const original = {
       courseId: "course-1",

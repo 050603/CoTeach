@@ -29,9 +29,15 @@ import type {
 } from "@/lib/session/types";
 import {
   estimatePersistedCourseGenerationSeconds,
+  prepareCourseGenerationCheckpointsForFullPromotion,
   resetCourseGenerationCheckpoints,
   type PersistedCourseGenerationRequest,
 } from "@/lib/course-generation/job-runner";
+import {
+  isTestLessonPromotion,
+  selectClassroomGenerationOutlines,
+  type ClassroomGenerationScope,
+} from "@/lib/course-generation/generation-scope";
 import type { SceneOutline } from "@/lib/openmaic/types/generation";
 import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
 import { generateOpenMaicBaselineOutlines } from "@/lib/openmaic/generation/openmaic-baseline";
@@ -137,6 +143,8 @@ export type QuickDesignRequest = {
   generationContractVersion?: 2;
   /** Independent policy for section checks. Missing legacy jobs keep their old behavior. */
   assessmentMode?: AssessmentMode;
+  /** Full output or one complete lesson selected from the formal outline. */
+  generationScope?: ClassroomGenerationScope;
   teacherBrief: string;
   resourcePackage?: CourseResourcePackage;
   supplementalAnswers?: { brief: string };
@@ -287,6 +295,7 @@ async function createDesignStreamingAiCall(input: {
   const modelFingerprint = courseDesignModelFingerprint(input.request);
   const resolved = await resolveModel({
     modelString: modelFingerprint === "unconfigured-default" ? undefined : modelFingerprint,
+    stage: "scene-outlines-stream",
   });
   const attemptsStarted = restoreCourseDesignAttemptCount(
     input.storedAttempt,
@@ -1550,6 +1559,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
   if (!blueprint) {
     const resolved = await resolveModel({
       modelString: modelFingerprint,
+      stage: "scene-outlines-stream",
     });
     blueprint = await generateTeachingBlueprint(input, createCourseGenerationAiCall({
       model: resolved.model,
@@ -1595,6 +1605,7 @@ async function generateNewSystemAiOutlines(
   );
   const resolved = await resolveModel({
     modelString: request.generationModelString ?? findServerDefaultModelString(),
+    stage: "scene-outlines-stream",
   });
   const result = await generateOpenMaicBaselineOutlines(
     {
@@ -1693,8 +1704,9 @@ async function enqueueClassroomGeneration(
   generationModelString?: string,
   assessmentMode?: AssessmentMode,
   generationContractVersion?: 2,
+  generationScope: ClassroomGenerationScope = "full-course",
 ): Promise<void> {
-  const sceneOutlines = (course.content._openmaicSceneOutlines ?? []).map((scene, index) => ({
+  const confirmedSceneOutlines = (course.content._openmaicSceneOutlines ?? []).map((scene, index) => ({
     ...scene,
     id: scene.id,
     type: scene.type === "quiz" || scene.type === "interactive" || scene.type === "pbl" ? scene.type : "slide",
@@ -1704,12 +1716,17 @@ async function enqueueClassroomGeneration(
     estimatedDuration: scene.estimatedDuration ?? scene.targetDurationSec ?? 300,
     order: scene.order ?? index,
   })) as Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
+  const selection = selectClassroomGenerationOutlines(confirmedSceneOutlines, generationScope);
+  const sceneOutlines = confirmedSceneOutlines;
   const generatedLanguageDirective = sceneOutlines.find(
     (scene) => typeof scene.courseLanguageDirective === "string"
       && scene.courseLanguageDirective.trim(),
   )?.courseLanguageDirective;
   const request: PersistedCourseGenerationRequest = {
     courseId: course.id,
+    generationScope: selection.scope,
+    fullSceneCount: selection.fullSceneCount,
+    ...(selection.testLesson ? { testLesson: selection.testLesson } : {}),
     ...(generationContractVersion ? { generationContractVersion } : {}),
     ...(assessmentMode ? { assessmentMode } : {}),
     generationModelString: generationModelString ?? findServerDefaultModelString(),
@@ -1744,7 +1761,7 @@ async function enqueueClassroomGeneration(
     ttsLanguage: "zh-CN",
     agentMode: "default",
   };
-  const totalScenes = sceneOutlines.length;
+  const totalScenes = selection.outlines.length;
   const initialEstimate = estimatePersistedCourseGenerationSeconds({
     totalScenes,
     adaptiveBranchCount: request.adaptiveBranchCount,
@@ -1752,12 +1769,14 @@ async function enqueueClassroomGeneration(
     enableVideoGeneration: request.enableVideoGeneration,
     enableTTS: request.enableTTS,
   });
-  const existingGenerationJob = await contentGenerationJobs.findUnique({
-    where: { courseId: course.id },
-    select: { id: true },
-  });
+  const existingGenerationJob = await contentGenerationJobs.findUnique({ where: { courseId: course.id } });
   if (existingGenerationJob) {
-    await resetCourseGenerationCheckpoints(existingGenerationJob.id);
+    const previousRequest = existingGenerationJob.request as unknown as Partial<PersistedCourseGenerationRequest>;
+    if (isTestLessonPromotion(previousRequest.generationScope, selection.scope)) {
+      await prepareCourseGenerationCheckpointsForFullPromotion(existingGenerationJob.id);
+    } else {
+      await resetCourseGenerationCheckpoints(existingGenerationJob.id);
+    }
   }
   await contentGenerationJobs.upsert({
     where: { courseId: course.id },
@@ -1766,13 +1785,17 @@ async function enqueueClassroomGeneration(
       request: request as unknown as Prisma.InputJsonValue,
       totalScenes,
       estimatedRemainingSeconds: initialEstimate,
-      message: "课程设计已完成，等待生成课堂内容",
+      message: selection.scope === "test-lesson"
+        ? `正式课程设计已完成，等待生成测试小节“${selection.testLesson?.sectionTitle ?? "第一知识小节"}”`
+        : "课程设计已完成，等待生成课堂内容",
     },
     update: {
       status: "queued",
       step: "queued",
       progress: 0,
-      message: "课程设计已完成，等待生成课堂内容",
+      message: selection.scope === "test-lesson"
+        ? `正式课程设计已完成，等待生成测试小节“${selection.testLesson?.sectionTitle ?? "第一知识小节"}”`
+        : "课程设计已完成，等待生成课堂内容",
       scenesGenerated: 0,
       totalScenes,
       estimatedRemainingSeconds: initialEstimate,
@@ -2457,6 +2480,12 @@ async function runNewSystemCourseDesign(
       ...content,
       qualityReviewRequired: true,
       qualityReview: undefined,
+      classroomGenerationRun: {
+        scope: request.generationScope ?? "full-course",
+        status: "pending",
+        generatedOutlineIds: [],
+        fullOutlineCount: sceneOutlines.length,
+      },
       designGenerationTrace: {
         mode: "quick",
         teacherBrief: request.teacherBrief,
@@ -2480,7 +2509,9 @@ async function runNewSystemCourseDesign(
     request.generationModelString,
     request.assessmentMode,
     request.generationContractVersion,
+    request.generationScope ?? "full-course",
   );
+  const isTestLesson = request.generationScope === "test-lesson";
   await designGenerationJobs.update({
     where: { id: job.id },
     data: {
@@ -2488,10 +2519,14 @@ async function runNewSystemCourseDesign(
       step: "completed",
       stepIndex: 3,
       progress: 100,
-      message: "知识讲授设计已完成，课堂页面已进入生成队列",
+      message: isTestLesson
+        ? "正式课程设计已完成，一个完整知识小节已进入测试生成队列"
+        : "知识讲授设计已完成，课堂页面已进入生成队列",
       estimatedRemainingSeconds: 0,
       qualityReport: {
-        summary: "知识图谱与大纲草稿已生成，课堂内容生成后将后台核对，最终由教师确认发布。",
+        summary: isTestLesson
+          ? "知识图谱与完整大纲已按正式流程生成；本次只将其中一个完整知识小节交给正式课堂生成器验证。"
+          : "知识图谱与大纲草稿已生成，课堂内容生成后将后台核对，最终由教师确认发布。",
         checks: ["知识图谱确认", "动态时长判断", "分节小测", "课程大纲确认"],
       } as unknown as Prisma.InputJsonValue,
       completedAt: new Date(),

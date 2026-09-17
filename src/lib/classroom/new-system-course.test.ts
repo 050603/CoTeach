@@ -55,6 +55,27 @@ describe("new-system course contract", () => {
     course.content.teacherReview.classroomId = "old-classroom";
     expect(getNewSystemCourseReadiness(course).find((check) => check.id === "teacher-review")?.ok).toBe(false);
   });
+  it("keeps a single-lesson production sample out of the publishable state", () => {
+    const course = readyCourse();
+    course.content.classroomGenerationRun = {
+      scope: "test-lesson",
+      status: "completed",
+      generatedOutlineIds: ["scene-ai"],
+      fullOutlineCount: 8,
+      testLesson: { sectionId: "section-1", sectionTitle: "第一节", sceneOutlineIds: ["scene-ai"], durationSeconds: 300 },
+    };
+    const check = getNewSystemCourseReadiness(course).find((item) => item.id === "full-classroom-generation");
+    expect(check).toMatchObject({ ok: false, label: "完整课程生成" });
+    expect(check?.message).toContain("测试样本");
+
+    course.content.classroomGenerationRun = {
+      scope: "full-course",
+      status: "completed",
+      generatedOutlineIds: ["scene-ai"],
+      fullOutlineCount: 1,
+    };
+    expect(getNewSystemCourseReadiness(course).find((item) => item.id === "full-classroom-generation")?.ok).toBe(true);
+  });
   it("builds an AI-only compatibility plan without fixed five-stage ratios", () => {
     const plan = buildNewSystemTimingPlan(90, "2026-08-30T00:00:00.000Z");
     expect(plan.status).toBe("confirmed");

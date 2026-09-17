@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TeacherProfilePanel } from "./teacher-profile-panel";
+import { ThinkingScenarioPanel } from "./thinking-scenario-panel";
 
 describe("TeacherProfilePanel", () => {
   beforeEach(() => {
@@ -50,5 +51,49 @@ describe("TeacherProfilePanel", () => {
 
     expect(await screen.findByRole("button", { name: "保存个人信息" })).toHaveAttribute("type", "submit");
     expect(screen.getByRole("button", { name: "更新登录密码" })).toHaveAttribute("type", "submit");
+  });
+});
+
+describe("ThinkingScenarioPanel", () => {
+  it("shows baseline by default and exposes DeepSeek V4.1 depth options", () => {
+    const onChange = vi.fn();
+    render(
+      <ThinkingScenarioPanel
+        providerId="deepseek"
+        modelId="deepseek-v4.1-flash"
+        configs={{}}
+        restoring={false}
+        onChange={onChange}
+        onRestore={vi.fn()}
+      />,
+    );
+
+    const planning = screen.getByRole("combobox", { name: /^课程规划/ });
+    expect(planning).toHaveValue("baseline");
+    expect(screen.getAllByRole("option", {
+      name: "Baseline（当前默认：较高 / high）",
+    }).length).toBeGreaterThan(0);
+    expect(screen.getByText("当前模型的 Baseline：较高 / high。只对单独覆盖的场景发送思考深度参数。"))
+      .toBeInTheDocument();
+    expect(screen.getAllByRole("option", { name: "较低" }).length).toBeGreaterThan(0);
+    fireEvent.change(planning, { target: { value: "max" } });
+    expect(onChange).toHaveBeenCalledWith("course-planning", "max");
+  });
+
+  it("offers one-click baseline restore when overrides exist", () => {
+    const onRestore = vi.fn();
+    render(
+      <ThinkingScenarioPanel
+        providerId="deepseek"
+        modelId="deepseek-v4.1-flash"
+        configs={{ "content-generation": "high" }}
+        restoring={false}
+        onChange={vi.fn()}
+        onRestore={onRestore}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "一键恢复 baseline" }));
+    expect(onRestore).toHaveBeenCalledTimes(1);
   });
 });

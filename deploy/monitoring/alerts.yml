@@ -65,18 +65,6 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: Redis memory usage exceeds 80%
-      - alert: OpenPblDatabaseBackupStale
-        expr: time() - openpbl_backup_last_success_timestamp_seconds{kind="postgres"} > 93600
-        for: 15m
-        labels: { severity: critical }
-        annotations:
-          summary: PostgreSQL backup has not succeeded in 26 hours
-      - alert: OpenPblVolumeBackupStale
-        expr: time() - openpbl_backup_last_success_timestamp_seconds{kind="volumes"} > 93600
-        for: 15m
-        labels: { severity: critical }
-        annotations:
-          summary: Upload/whiteboard backup has not succeeded in 26 hours
       - alert: OpenPblCertificateExpiring
         expr: openpbl_certificate_expires_within_48h == 1
         for: 5m

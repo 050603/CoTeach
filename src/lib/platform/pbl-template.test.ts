@@ -10,10 +10,15 @@ describe("PBL authoring snapshot", () => {
     course.content.stagePlan = { schemaVersion: 1, source: "resource-package", totalMinutes: 135, lessonCount: 3,
       minutesPerLesson: 45, stages: [], evaluationCriteria: "评价要求", reflectionQuestions: ["如何改进？"] };
     course.content.knowledgeGroups = [{ id: "theory", name: "学习理论", description: "理论依据", knowledgePointIds: ["constructivism"] }];
+    course.content.classroomGenerationRun = {
+      scope: "test-lesson", status: "completed", generatedOutlineIds: ["scene-1"], fullOutlineCount: 6,
+      testLesson: { sectionId: "section-1", sectionTitle: "第一节", sceneOutlineIds: ["scene-1"], durationSeconds: 300 },
+    };
     const restored = decodePblTemplate(encodePblTemplate(course));
     expect(restored?.content.resourcePackage).toEqual(course.content.resourcePackage);
     expect(restored?.content.stagePlan).toEqual(course.content.stagePlan);
     expect(restored?.content.knowledgeGroups).toEqual(course.content.knowledgeGroups);
+    expect(restored?.content.classroomGenerationRun).toEqual(course.content.classroomGenerationRun);
     expect(restored?.hours).toBe(2.25);
   });
   it("retains all five stages and OpenMAIC authoring content without student evidence", () => {

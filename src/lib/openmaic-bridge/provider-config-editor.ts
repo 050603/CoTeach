@@ -20,6 +20,7 @@ import {
 } from '@openmaic/lib/audio/tts-timing';
 import { normalizeManagedProviderCatalog } from '@openmaic/lib/provider-catalog-policy';
 import type { TtsScenarioConfigs } from '@openmaic/lib/audio/tts-scenarios';
+import type { LlmThinkingScenarioConfigs } from '@openmaic/lib/ai/thinking-scenarios';
 
 export type ProviderSection = 'providers' | 'tts' | 'asr' | 'pdf' | 'image' | 'video' | 'web-search';
 
@@ -35,6 +36,7 @@ export interface ProviderEntry {
    * 仅用于 LLM providers；其他 Provider 分区会忽略此字段。
    */
   defaultModel?: string;
+  thinkingScenarioConfigs?: LlmThinkingScenarioConfigs;
   defaultVoice?: string;
   scenarioConfigs?: TtsScenarioConfigs;
   timingCalibrations?: TtsVoiceTimingCalibration[];
@@ -175,6 +177,11 @@ export async function saveProviderEntry(
         : existing.defaultModel
           ? { defaultModel: existing.defaultModel }
           : {}),
+      ...(entry.thinkingScenarioConfigs
+        ? { thinkingScenarioConfigs: entry.thinkingScenarioConfigs }
+        : existing.thinkingScenarioConfigs
+          ? { thinkingScenarioConfigs: existing.thinkingScenarioConfigs }
+          : {}),
       ...(entry.defaultVoice
         ? { defaultVoice: entry.defaultVoice }
         : existing.defaultVoice
@@ -241,6 +248,7 @@ export async function getProviderEntry(
     enabled: entry.enabled,
     priority: typeof entry.priority === 'number' ? entry.priority : undefined,
     defaultModel: entry.defaultModel,
+    thinkingScenarioConfigs: entry.thinkingScenarioConfigs,
     defaultVoice: entry.defaultVoice,
     scenarioConfigs: entry.scenarioConfigs,
     timingCalibrations: entry.timingCalibrations,
@@ -274,6 +282,7 @@ export async function listProviders(
       enabled: entry.enabled,
       priority: typeof entry.priority === 'number' ? entry.priority : undefined,
       defaultModel: entry.defaultModel,
+      thinkingScenarioConfigs: entry.thinkingScenarioConfigs,
       defaultVoice: entry.defaultVoice,
       scenarioConfigs: entry.scenarioConfigs,
       timingCalibrations: entry.timingCalibrations,
@@ -297,6 +306,9 @@ function providerConfigJson(
     ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
     ...(entry.priority !== undefined ? { priority: entry.priority } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
+    ...(entry.thinkingScenarioConfigs
+      ? { thinkingScenarioConfigs: entry.thinkingScenarioConfigs }
+      : {}),
     ...(entry.defaultVoice ? { defaultVoice: entry.defaultVoice } : {}),
     ...(entry.scenarioConfigs ? { scenarioConfigs: entry.scenarioConfigs } : {}),
     ...(entry.timingCalibrations ? { timingCalibrations: entry.timingCalibrations } : {}),
@@ -360,6 +372,7 @@ async function readProviderEntryRaw(
     enabled: entry.enabled,
     priority: typeof entry.priority === 'number' ? entry.priority : undefined,
     defaultModel: entry.defaultModel,
+    thinkingScenarioConfigs: entry.thinkingScenarioConfigs,
     defaultVoice: entry.defaultVoice,
     scenarioConfigs: entry.scenarioConfigs,
     timingCalibrations: entry.timingCalibrations,

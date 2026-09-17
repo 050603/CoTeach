@@ -1,9 +1,8 @@
 FROM restic/restic:0.18.0
 
-RUN apk add --no-cache jq postgresql16-client sqlite
+RUN apk add --no-cache postgresql16-client
 
-COPY deploy/backup/backup-runner.sh /usr/local/bin/openpbl-backup-runner
-COPY deploy/backup/restore-latest.sh /usr/local/bin/openpbl-restore-latest
-RUN chmod 0555 /usr/local/bin/openpbl-backup-runner /usr/local/bin/openpbl-restore-latest
+COPY deploy/backup/manual-essential-backup.sh /usr/local/bin/openpbl-manual-essential-backup
+RUN chmod 0555 /usr/local/bin/openpbl-manual-essential-backup
 
-ENTRYPOINT ["/usr/local/bin/openpbl-backup-runner"]
+ENTRYPOINT ["/usr/local/bin/openpbl-manual-essential-backup"]

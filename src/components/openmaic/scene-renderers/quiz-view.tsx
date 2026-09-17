@@ -83,6 +83,34 @@ const QuizMathText = memo(function QuizMathText({
   );
 });
 
+const MATCH_DRAG_MIME = 'application/x-openpbl-match';
+
+function startMatchingDrag(event: React.DragEvent<HTMLElement>, rightId: string) {
+  event.dataTransfer.setData(MATCH_DRAG_MIME, rightId);
+  event.dataTransfer.effectAllowed = 'move';
+  if (typeof event.dataTransfer.setDragImage !== 'function') return;
+
+  const source = event.currentTarget;
+  const bounds = source.getBoundingClientRect();
+  const preview = source.cloneNode(true) as HTMLElement;
+  Object.assign(preview.style, {
+    position: 'fixed',
+    left: '-10000px',
+    top: '-10000px',
+    width: `${Math.max(160, bounds.width)}px`,
+    margin: '0',
+    opacity: '1',
+    background: '#ffffff',
+    border: '1px solid #8b5cf6',
+    borderRadius: '12px',
+    boxShadow: '0 12px 28px rgba(76, 29, 149, 0.22)',
+  });
+  preview.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(preview);
+  event.dataTransfer.setDragImage(preview, 24, Math.max(12, bounds.height / 2));
+  window.setTimeout(() => preview.remove(), 0);
+}
+
 // ─── Sub-components ─────────────────────────────────────────────────────────
 
 function QuizCover({
@@ -406,6 +434,12 @@ function MatchingQuestion({
     setSelectedRightId(undefined);
   };
 
+  const unassign = (rightId: string) => {
+    if (disabled) return;
+    onChange(selected.filter((relation) => relation.slice(relation.indexOf(':') + 1) !== rightId));
+    setSelectedRightId(undefined);
+  };
+
   return (
     <QuestionCard question={question} index={index} result={result} onExplain={onExplain}>
       {!review && (
@@ -421,18 +455,24 @@ function MatchingQuestion({
             const isCorrect = review && correct.has(relation);
             const isWrong = review && Boolean(rightId) && !isCorrect;
             return (
-              <button
+              <div
                 key={pair.leftId}
-                type="button"
-                disabled={disabled}
+                role="button"
+                tabIndex={disabled ? -1 : 0}
                 aria-label={`匹配到 ${pair.left}`}
                 onClick={() => selectedRightId && assign(pair.leftId, selectedRightId)}
+                onKeyDown={(event) => {
+                  if ((event.key === 'Enter' || event.key === ' ') && selectedRightId) {
+                    event.preventDefault();
+                    assign(pair.leftId, selectedRightId);
+                  }
+                }}
                 onDragOver={(event) => {
                   if (!disabled) event.preventDefault();
                 }}
                 onDrop={(event) => {
                   event.preventDefault();
-                  const draggedRightId = event.dataTransfer.getData('application/x-openpbl-match');
+                  const draggedRightId = event.dataTransfer.getData(MATCH_DRAG_MIME);
                   if (draggedRightId) assign(pair.leftId, draggedRightId);
                 }}
                 className={cn(
@@ -444,21 +484,45 @@ function MatchingQuestion({
                 )}
               >
                 <span className="font-medium text-gray-800 dark:text-gray-100">{pair.left}</span>
-                <span className={cn(
-                  'rounded-lg border border-dashed px-3 py-2 text-gray-500 dark:border-gray-600 dark:text-gray-300',
-                  rightId && 'border-solid border-violet-200 bg-white dark:border-violet-700 dark:bg-gray-800',
-                )}>
-                  <span className="block">{rightId ? rightById.get(rightId) : '放置匹配项'}</span>
-                  {isWrong && <span className="mt-1 block text-xs font-medium text-emerald-700 dark:text-emerald-300">正确：{pair.right}</span>}
-                </span>
-              </button>
+                {rightId && !review ? (
+                  <div
+                    draggable={!disabled}
+                    aria-label={`移动匹配项 ${rightById.get(rightId)}`}
+                    onClick={(event) => event.stopPropagation()}
+                    onDragStart={(event) => startMatchingDrag(event, rightId)}
+                    className="flex cursor-grab select-none items-center gap-2 rounded-lg border border-violet-300 bg-white px-3 py-2 text-violet-800 shadow-sm active:cursor-grabbing dark:border-violet-600 dark:bg-gray-800 dark:text-violet-200"
+                  >
+                    <GripVertical className="h-4 w-4 shrink-0 text-violet-400" />
+                    <span className="min-w-0 flex-1">{rightById.get(rightId)}</span>
+                  </div>
+                ) : (
+                  <span className={cn(
+                    'rounded-lg border border-dashed px-3 py-2 text-gray-500 dark:border-gray-600 dark:text-gray-300',
+                    rightId && 'border-solid border-violet-200 bg-white dark:border-violet-700 dark:bg-gray-800',
+                  )}>
+                    <span className="block">{rightId ? rightById.get(rightId) : '放置匹配项'}</span>
+                    {isWrong && <span className="mt-1 block text-xs font-medium text-emerald-700 dark:text-emerald-300">正确：{pair.right}</span>}
+                  </span>
+                )}
+              </div>
             );
           })}
         </div>
         {!review && (
-          <div className="space-y-2">
-            {shuffledRight.map((pair) => {
-              const used = [...relationMap.values()].includes(pair.rightId);
+          <div
+            aria-label="待选匹配项"
+            onDragOver={(event) => {
+              if (!disabled) event.preventDefault();
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              const draggedRightId = event.dataTransfer.getData(MATCH_DRAG_MIME);
+              if (draggedRightId) unassign(draggedRightId);
+            }}
+            className="min-h-24 space-y-2 rounded-xl border border-dashed border-violet-200 bg-violet-50/30 p-2 dark:border-violet-800 dark:bg-violet-950/20"
+          >
+            <p className="px-1 text-[11px] font-medium text-violet-500">待选项</p>
+            {shuffledRight.filter((pair) => ![...relationMap.values()].includes(pair.rightId)).map((pair) => {
               return (
                 <button
                   key={pair.rightId}
@@ -467,16 +531,12 @@ function MatchingQuestion({
                   aria-pressed={selectedRightId === pair.rightId}
                   aria-label={`选择匹配项 ${pair.right}`}
                   onClick={() => !disabled && setSelectedRightId(pair.rightId)}
-                  onDragStart={(event) => {
-                    event.dataTransfer.setData('application/x-openpbl-match', pair.rightId);
-                    event.dataTransfer.effectAllowed = 'move';
-                  }}
+                  onDragStart={(event) => startMatchingDrag(event, pair.rightId)}
                   className={cn(
-                    'flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition',
+                    'flex w-full cursor-grab select-none items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition active:cursor-grabbing',
                     selectedRightId === pair.rightId
                       ? 'border-violet-400 bg-violet-50 text-violet-800 ring-1 ring-violet-200 dark:bg-violet-900/30 dark:text-violet-200'
                       : 'border-gray-200 bg-white text-gray-700 hover:border-violet-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200',
-                    used && selectedRightId !== pair.rightId && 'opacity-50',
                   )}
                 >
                   <GripVertical className="h-4 w-4 shrink-0 text-gray-400" />
@@ -484,6 +544,9 @@ function MatchingQuestion({
                 </button>
               );
             })}
+            {relationMap.size === pairs.length && (
+              <p className="px-2 py-3 text-center text-xs text-gray-400">所有卡片已放置</p>
+            )}
           </div>
         )}
       </div>

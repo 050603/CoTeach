@@ -5,9 +5,12 @@ import type { Action } from '@openmaic/lib/types/action';
 import type { ActionEngine } from '@openmaic/lib/action/engine';
 import type { AudioPlayer } from '@openmaic/lib/utils/audio-player';
 
-function activityScene(durationSec = 1): Scene {
+function activityScene(
+  durationSec = 1,
+  purpose: 'quiz' | 'interaction' = 'quiz',
+): Scene {
   return {
-    id: 'quiz-scene',
+    id: purpose === 'quiz' ? 'quiz-scene' : 'interaction-activity-scene',
     stageId: 'stage-1',
     order: 0,
     title: 'Quiz',
@@ -19,7 +22,7 @@ function activityScene(durationSec = 1): Scene {
         type: 'speech',
         text: '',
         activityPauseSec: durationSec,
-        activityPausePurpose: 'quiz',
+        activityPausePurpose: purpose,
       },
       { id: 'after-gate', type: 'wb_close' },
     ] as Action[],
@@ -112,7 +115,10 @@ function legacySlideScene(): Scene {
   } as unknown as Scene;
 }
 
-function createEngine(callbacks: ConstructorParameters<typeof PlaybackEngine>[3] = {}) {
+function createEngine(
+  callbacks: ConstructorParameters<typeof PlaybackEngine>[3] = {},
+  scene = activityScene(),
+) {
   const actionEngine = {
     clearEffects: vi.fn(),
     execute: vi.fn().mockResolvedValue(undefined),
@@ -126,7 +132,7 @@ function createEngine(callbacks: ConstructorParameters<typeof PlaybackEngine>[3]
     isPlaying: vi.fn().mockReturnValue(false),
     hasActiveAudio: vi.fn().mockReturnValue(false),
   } as unknown as AudioPlayer;
-  const engine = new PlaybackEngine([activityScene()], actionEngine, audioPlayer, callbacks);
+  const engine = new PlaybackEngine([scene], actionEngine, audioPlayer, callbacks);
   return { engine, actionEngine };
 }
 
@@ -134,15 +140,41 @@ describe('PlaybackEngine activity gates', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('continues after the activity timer expires', async () => {
+  it('keeps a quiz blocked after its planned duration until the student completes it', async () => {
     const onActivityComplete = vi.fn();
     const { engine, actionEngine } = createEngine({ onActivityComplete });
+
+    engine.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(onActivityComplete).not.toHaveBeenCalled();
+    expect(actionEngine.execute).not.toHaveBeenCalled();
+
+    expect(engine.completeActivity('quiz-scene', 'quiz')).toBe(true);
+    await vi.runAllTimersAsync();
+
+    expect(onActivityComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ sceneId: 'quiz-scene', purpose: 'quiz' }),
+      'user',
+    );
+    expect(actionEngine.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the timeout fallback for interactive activities', async () => {
+    const onActivityComplete = vi.fn();
+    const { engine, actionEngine } = createEngine(
+      { onActivityComplete },
+      activityScene(1, 'interaction'),
+    );
 
     engine.start();
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(onActivityComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ sceneId: 'quiz-scene', purpose: 'quiz' }),
+      expect.objectContaining({
+        sceneId: 'interaction-activity-scene',
+        purpose: 'interaction',
+      }),
       'timeout',
     );
     expect(actionEngine.execute).toHaveBeenCalledTimes(1);
@@ -160,7 +192,7 @@ describe('PlaybackEngine activity gates', () => {
   });
 
   it('preserves the remaining activity time across pause and resume', async () => {
-    const { engine, actionEngine } = createEngine();
+    const { engine, actionEngine } = createEngine({}, activityScene(1, 'interaction'));
     engine.start();
     await vi.advanceTimersByTimeAsync(400);
     engine.pause();
