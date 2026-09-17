@@ -654,7 +654,7 @@ export function SimplifiedTeacherStageView({
                   ) : null}
                 </div>
               </div>
-              <div className={cn("min-h-0 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)]", !teaching && "mt-3", (teaching || previewExpanded) ? "flex-1" : "h-[32rem]")}>
+              <div className={cn("min-h-0 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)]", resourceKind(selected) === "video" && "teacher-resource-video-container", !teaching && "mt-3", (teaching || previewExpanded) ? "flex-1" : "h-[32rem]")}>
                   <ResourceViewer
                     fullscreen={teaching || previewExpanded}
                     initialReadingProgress={readingProgressByResource[selected.id]}
@@ -677,9 +677,7 @@ export function SimplifiedTeacherStageView({
   return (
     <div className={cn("classroom-stage", teaching ? "teacher-stage-resources flex h-full min-h-0 flex-col gap-3" : "space-y-4")}>
       <TeacherPresentationActions>
-        <button data-tone="primary" disabled={!selected} onClick={() => { if (selected) { if (projectionIsActive(course, selected)) stopProjection(); else startProjection(selected); } }} type="button">
-          <MonitorUp size={20} />{selected ? projectionIsActive(course, selected) ? "停止同步" : "同步到学生" : "暂无可同步资料"}
-        </button>
+        {activeResource ? <button data-tone="danger" onClick={stopProjection} type="button"><MonitorOff size={20} />结束投屏</button> : null}
       </TeacherPresentationActions>
       <div hidden={teaching}><StagePageHeader
         action={uploadControl}
@@ -1843,9 +1841,9 @@ function VideoViewer({
   }
 
   return (
-    <div className={cn("relative grid h-full min-h-72 place-items-center overflow-hidden bg-black", !fullscreen && "rounded-[var(--radius-sm)]")}>
+    <div className={cn("teacher-resource-video relative grid h-full min-h-0 place-items-center overflow-hidden bg-black", !fullscreen && "min-h-72 rounded-[var(--radius-sm)]")}>
       <video
-        className="h-full w-full object-contain"
+        className="block h-full min-h-0 w-full max-w-full object-contain"
         controls={mode !== "follower"}
         onCanPlay={() => {
           setMediaReady(true);

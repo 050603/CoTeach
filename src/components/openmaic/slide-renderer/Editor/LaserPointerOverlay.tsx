@@ -1,19 +1,22 @@
 'use client';
 
-import { useRef, useState, useLayoutEffect, useCallback } from 'react';
+import { useRef, type RefObject } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { useSceneSelector } from '@openmaic/lib/contexts/scene-context';
 import { useCanvasStore } from '@openmaic/lib/store/canvas';
 import type { SlideContent } from '@openmaic/lib/types/stage';
 import type { PPTElement } from '@openmaic/dsl';
 import { LaserOverlay } from './LaserOverlay';
+import { visualTargetKey } from '@openmaic/lib/utils/visual-target';
+import { useVisualTargetGeometry } from './useVisualTargetGeometry';
+import { useVisualTargetPathGeometry } from '@openmaic/renderer';
 
 interface LaserPointerOverlayProps {
+  /** Explicit rendered slide root used to isolate duplicate element ids. */
+  rootRef: RefObject<HTMLElement | null>;
   /**
-   * DOM id prefix used to locate the target element. Playback screens render
-   * elements as `screen-element-<id>` (default); the editor canvas renders
-   * them as `editable-element-<id>` and passes that prefix so a `laser` cue
-   * replays as the real laser pointer in Pro mode.
+   * @deprecated Targeting uses data-slide-element-id. Retained while the
+   * editor preview caller migrates to an explicit root ref.
    */
   domIdPrefix?: string;
 }
@@ -28,63 +31,43 @@ interface LaserPointerOverlayProps {
  * were collapsed into a spotlight instead.
  */
 export function LaserPointerOverlay({
-  domIdPrefix = 'screen-element-',
-}: LaserPointerOverlayProps = {}) {
+  rootRef,
+}: LaserPointerOverlayProps) {
   const laserElementId = useCanvasStore.use.laserElementId();
   const laserOptions = useCanvasStore.use.laserOptions();
+  const canvasScale = useCanvasStore.use.canvasScale();
   const containerRef = useRef<HTMLDivElement>(null);
-  const [center, setCenter] = useState<{ x: number; y: number } | null>(null);
 
   const elements = useSceneSelector<SlideContent, PPTElement[]>(
     (content) => content.canvas.elements,
   );
 
-  // Compute the target element center as a percentage of the overlay container.
-  const measure = useCallback(() => {
-    if (!laserElementId || !containerRef.current) {
-      setCenter(null);
-      return;
-    }
-
-    const domElement = document.getElementById(`${domIdPrefix}${laserElementId}`);
-    if (!domElement) {
-      setCenter(null);
-      return;
-    }
-
-    // Prefer .element-content (the actual rendered area for auto-height).
-    const contentEl = domElement.querySelector('.element-content');
-    const targetEl = contentEl ?? domElement;
-
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const targetRect = targetEl.getBoundingClientRect();
-
-    if (containerRect.width === 0 || containerRect.height === 0) {
-      setCenter(null);
-      return;
-    }
-
-    setCenter({
-      x:
-        ((targetRect.left + targetRect.width / 2 - containerRect.left) / containerRect.width) * 100,
-      y:
-        ((targetRect.top + targetRect.height / 2 - containerRect.top) / containerRect.height) * 100,
-    });
-  }, [laserElementId, domIdPrefix]);
-
-  useLayoutEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- DOM measurement requires effect
-    measure();
-  }, [measure, elements]);
+  const selector = laserOptions?.selector;
+  const targetKey = laserElementId
+    ? visualTargetKey({ elementId: laserElementId, selector })
+    : 'inactive';
+  const geometry = useVisualTargetGeometry({
+    containerRef,
+    rootRef,
+    elementId: laserElementId,
+    selector,
+    canvasScale,
+    contentRevision: elements,
+  });
+  const waypointGeometries = useVisualTargetPathGeometry(
+    rootRef,
+    laserOptions?.waypoints,
+  );
 
   return (
     // No overflow-hidden: the laser flies in from just outside the frame.
     <div ref={containerRef} className="absolute inset-0 z-[101] pointer-events-none">
       <AnimatePresence>
-        {laserElementId && center && (
+        {laserElementId && geometry && waypointGeometries && (
           <LaserOverlay
-            key={`laser-${laserElementId}`}
-            geometry={{ x: 0, y: 0, w: 0, h: 0, centerX: center.x, centerY: center.y }}
+            key={`laser-${targetKey}`}
+            geometry={geometry}
+            waypointGeometries={waypointGeometries}
             color={laserOptions?.color}
             duration={laserOptions?.duration}
           />

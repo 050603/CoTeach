@@ -61,6 +61,7 @@ import { createLogger } from "@openmaic/lib/logger";
 import {
   DURABLE_GENERATION_TRANSIENT_RETRIES,
   resolveLlmRequestTimeoutMs,
+  resolveLlmStreamMaxDurationMs,
 } from "@/lib/llm/request-policy";
 import {
   buildNewSystemAiTimingPlan,
@@ -543,6 +544,15 @@ function resourcePackageTeachingContext(resourcePackage?: CourseResourcePackage)
       evaluationRubric: draft.evaluationRubric,
       reflectionQuestionSet: draft.reflectionQuestionSet,
       finalDeliverables: draft.finalDeliverables,
+      preClassPreparation: draft.preClassPreparation,
+      organizationRequirements: draft.organizationRequirements,
+      aiUsagePolicy: draft.aiUsagePolicy,
+      teachingHighlights: draft.teachingHighlights,
+      teachingDifficulties: draft.teachingDifficulties,
+      facilitatorReference: draft.facilitatorReference,
+      knowledgeEvidenceSummary: draft.knowledgeEvidenceSummary,
+      planningIssues: resourcePackage.planningIssues,
+      planningAcknowledgement: resourcePackage.planningAcknowledgement,
       totalMinutes: draft.totalMinutes,
       organization: "每位学生与 AI 伙伴协作完成个人项目，不创建真人小组。",
     }),
@@ -1253,6 +1263,9 @@ async function generateNewSystemAiOutlines(
       maxOutputTokens: resolved.modelInfo?.outputWindow,
       thinking: resolved.thinkingConfig,
       timeoutMs: resolveLlmRequestTimeoutMs("long-generation"),
+      maxRetries: 2,
+      streamResponse: true,
+      streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
     }),
     {
       imageGenerationEnabled: request.options?.enableImageGeneration === true,

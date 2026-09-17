@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import Canvas from '@openmaic/components/slide-renderer/Editor/Canvas';
 import { SpotlightOverlay } from '@openmaic/components/slide-renderer/Editor/SpotlightOverlay';
 import { LaserPointerOverlay } from '@openmaic/components/slide-renderer/Editor/LaserPointerOverlay';
@@ -31,6 +31,7 @@ import { ElementPickLayer } from './ElementPickLayer';
  * At most one bar is open at a time (single selection).
  */
 export function SlideCanvas() {
+  const slideRootRef = useRef<HTMLDivElement>(null);
   const { controller, gestureProps } = useSlideCanvasController();
   const editingElementId = useEditingTextElementId();
   const nonTextElement = useSelectedNonTextElement();
@@ -59,13 +60,13 @@ export function SlideCanvas() {
     // interactive layout jump.
     <div className="relative h-full w-full" {...gestureProps}>
       <SceneProvider controller={controller}>
-        <Canvas />
+        <Canvas slideRootRef={slideRootRef} />
         {/* Same spotlight + laser effects as playback, retargeted to the
             editor's element ids — driven by useCanvasStore.setSpotlight /
             setLaser (e.g. from the ActionsBar cue-badge hover). The laser cue
             replays as a laser pointer, the spotlight cue as a spotlight. */}
-        <SpotlightOverlay domIdPrefix="editable-element-" />
-        <LaserPointerOverlay domIdPrefix="editable-element-" />
+        <SpotlightOverlay rootRef={slideRootRef} domIdPrefix="editable-element-" />
+        <LaserPointerOverlay rootRef={slideRootRef} domIdPrefix="editable-element-" />
       </SceneProvider>
       <AnchoredTextBar editingElementId={editingElementId} />
       <AnchoredElementBar element={nonTextElement} />

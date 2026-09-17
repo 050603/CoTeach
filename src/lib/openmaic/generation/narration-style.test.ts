@@ -52,22 +52,22 @@ describe('natural teacher narration', () => {
     const actions: Action[] = [
       { id: 's1', type: 'speech', text: '这一页的核心观点是流畅不等于真实。' },
       { id: 'laser', type: 'laser', elementId: 'claim' },
-      { id: 's2', type: 'speech', text: '资料1告诉我们要核验。' },
+      { id: 's2', type: 'speech', text: '相关指导文件要求我们核验关键信息。' },
     ];
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ segments: [
       { id: 's1', text: '大家先看这个回答。它说得很顺，但流畅只能说明表达自然。' },
-      { id: 's2', text: '判断事实是否可靠，还要找到独立来源，逐项核对姓名、年份和数据。' },
     ] }));
     const rewritten = await naturalizeKnowledgeNarration({ outline, actions, aiCall: ai });
     expect(rewritten.map((action) => action.id)).toEqual(['s1', 'laser', 's2']);
     expect(rewritten[1]).toEqual(actions[1]);
+    expect(rewritten[2]).toEqual(actions[2]);
     expect(narrationStyleIssues(rewritten.flatMap((action) => action.type === 'speech'
       ? [{ id: action.id, text: action.text }]
       : []))).toEqual([]);
   });
 
   it('retries an invalid rewrite and requires the corrected narration', async () => {
-    const actions: Action[] = [{ id: 's1', type: 'speech', text: '首遍讲稿。' }];
+    const actions: Action[] = [{ id: 's1', type: 'speech', text: '这一页先讲核验。' }];
     const ai = vi.fn()
       .mockResolvedValueOnce(JSON.stringify({ segments: [{ id: 's1', text: '这一页的核心观点是核验。' }] }))
       .mockResolvedValueOnce(JSON.stringify({ segments: [{ id: 's1', text: '判断信息是否可靠，要回到独立来源核对事实。' }] }));
@@ -79,12 +79,35 @@ describe('natural teacher narration', () => {
   });
 
   it('stops generation after two invalid rewrites instead of returning the first draft', async () => {
-    const actions: Action[] = [{ id: 's1', type: 'speech', text: '首遍讲稿。' }];
+    const actions: Action[] = [{ id: 's1', type: 'speech', text: '这一页先讲核验。' }];
     const ai = vi.fn().mockResolvedValue(JSON.stringify({
       segments: [{ id: 's1', text: '这一页的核心观点仍然是核验。' }],
     }));
     await expect(naturalizeKnowledgeNarration({ outline, actions, aiCall: ai }))
       .rejects.toThrow(/已停止课程生成/);
     expect(ai).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a conforming first draft without another model call', async () => {
+    const actions: Action[] = [{
+      id: 's1',
+      type: 'speech',
+      text: '判断信息是否可靠，要回到独立来源核对姓名、年份和数据。',
+    }];
+    const ai = vi.fn();
+    await expect(naturalizeKnowledgeNarration({ outline, actions, aiCall: ai }))
+      .resolves.toEqual(actions);
+    expect(ai).not.toHaveBeenCalled();
+  });
+
+  it('does not disguise a transport failure as a second content rewrite', async () => {
+    const actions: Action[] = [{ id: 's1', type: 'speech', text: '这一页先讲核验。' }];
+    const transportError = Object.assign(new Error('Receive batching backend response failed'), {
+      code: 'InternalError',
+    });
+    const ai = vi.fn().mockRejectedValue(transportError);
+    await expect(naturalizeKnowledgeNarration({ outline, actions, aiCall: ai }))
+      .rejects.toBe(transportError);
+    expect(ai).toHaveBeenCalledOnce();
   });
 });

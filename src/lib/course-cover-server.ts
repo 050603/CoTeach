@@ -85,16 +85,9 @@ function generationSpecForProvider(config: { providerId: ImageProviderId; model?
   }
   if (
     config.providerId === "qwen-image"
-    && /^qwen-image-2\.0(?:-|$)/.test(config.model ?? "")
+    && /^qwen-image-3\.0(?:-|$)/.test(config.model ?? "")
   ) {
     return { ...COURSE_COVER_GENERATION_SPEC, width: 2688, height: 1536 };
-  }
-  if (
-    config.providerId === "qwen-image"
-    && /^(?:qwen-image(?:-max|-plus)?)(?:-|$)/.test(config.model ?? "qwen-image-max")
-    && !/^qwen-image-(?:2\.0|3\.0)/.test(config.model ?? "")
-  ) {
-    return { ...COURSE_COVER_GENERATION_SPEC, width: 1664, height: 928 };
   }
   return COURSE_COVER_GENERATION_SPEC;
 }

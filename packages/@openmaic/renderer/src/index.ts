@@ -21,6 +21,10 @@ export {
 
 export { useSlideBackgroundStyle } from './hooks/useSlideBackgroundStyle';
 export {
+  useVisualTargetGeometry,
+  useVisualTargetPathGeometry,
+} from './hooks/useVisualTargetGeometry';
+export {
   useViewportSize,
   type ViewportStyles,
   type UseViewportSizeOptions,
@@ -33,6 +37,14 @@ export {
   getElementPercentageGeometry,
   type PercentageGeometry,
 } from './utils/geometry';
+export {
+  resolveVisualTarget,
+  resolveVisualTargetGeometry,
+  visualTargetRectToPercentageGeometry,
+  visualTargetKey,
+  type ResolvedVisualTarget,
+  type VisualTarget,
+} from './utils/visualTarget';
 export { cn } from './utils/cn';
 
 export * from './types';

@@ -63,16 +63,20 @@ const ORDERING_WB = `- whiteboard actions can interleave WITH text objects (draw
 
 const SPOTLIGHT_EXAMPLES = `[{"type":"action","name":"spotlight","params":{"elementId":"img_1"}},{"type":"text","content":"Photosynthesis is the process by which plants convert light energy into chemical energy. Take a look at this diagram."},{"type":"text","content":"During this process, plants absorb carbon dioxide and water to produce glucose and oxygen."}]
 
-[{"type":"action","name":"spotlight","params":{"elementId":"eq_1"}},{"type":"action","name":"laser","params":{"elementId":"eq_2"}},{"type":"text","content":"Compare these two equations — notice how the left side is endothermic while the right side is exothermic."}]
+[{"type":"action","name":"spotlight","params":{"elementId":"table_1","selector":{"cellId":"row2-col3"}}},{"type":"text","content":"This cell gives the content form for middle-school learners."},{"type":"action","name":"laser","params":{"elementId":"text_1","selector":{"quote":"PBL","occurrence":0}}},{"type":"text","content":"Project-based learning is often abbreviated as PBL."}]
 
 `;
 
-const SLIDE_ACTION_GUIDELINES = `- spotlight: Use to focus attention on ONE key element. Don't overuse — max 1-2 per response.
-- laser: Use to point at elements. Good for directing attention during explanations.
+const SLIDE_ACTION_GUIDELINES = `- spotlight: Sustain focus while explaining ONE visible content block or table cell.
+- laser: Briefly point to ONE term, value, process node, or cell detail.
+- For an explicit comparison, ordered list, or process, one laser may slide through up to four additional precise targets with waypoints:[{elementId,selector?},...]. Use one continuous sweep instead of separate laser actions.
+- Use selector.cellId for a table cell, selector.cellId + quote for exact text inside it, and selector.quote + zero-based occurrence for other exact visible text. Never aim at a whole table when discussing one cell.
+- Visual cues are scarce attention aids. Use no visual action for transitions, title restatements, broad narration, or content whose layout is already clear. Keep one stable focus through a semantic block and do not point through every process node.
+- Choose the action by teaching necessity, not for variety.
 `;
 
 const MUTUAL_EXCLUSION_NOTE = `- IMPORTANT — Whiteboard / Canvas mutual exclusion: The whiteboard and slide canvas are mutually exclusive. When the whiteboard is OPEN, the slide canvas is hidden — spotlight and laser actions targeting slide elements will have NO visible effect. If you need to use spotlight or laser, call wb_close first to reveal the slide canvas. Conversely, if the whiteboard is CLOSED, wb_draw_* actions still work (they implicitly open the whiteboard), but be aware that doing so hides the slide canvas.
-- Prefer variety: mix spotlights, laser, and whiteboard for engaging teaching. Don't use the same action type repeatedly.`;
+- Choose spotlight, laser, whiteboard, or no visual action from the teaching purpose. Do not alternate tools merely for variety.`;
 
 // ==================== Private helpers ====================
 

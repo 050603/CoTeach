@@ -168,9 +168,11 @@ export function AiLearningTeacherView({
   onSelectStudent,
   focus,
   presentation = "workspace",
+  immersive = false,
 }: {
   course: Course;
   presentation?: TeacherPresentationMode;
+  immersive?: boolean;
   onSelectStudent?: (id: string) => void;
   focus?: Extract<TeacherStageFocus, { stageKey: "ai-learning" }>;
 }) {
@@ -238,10 +240,10 @@ export function AiLearningTeacherView({
       ) : null}
 
       </> : null}
-      {hasClassroom ? <AiLearningTeacherPreview course={course} presentation={presentation} /> : presentation === "teaching" ? <StageTaskPresentation course={course} /> : null}
+      {hasClassroom ? <AiLearningTeacherPreview course={course} presentation={presentation} workspacePreviewEnabled={!immersive} /> : presentation === "teaching" ? <StageTaskPresentation course={course} /> : null}
       {presentation === "workspace" ? <>
 
-      <KnowledgeLectureAnalytics course={course} title="全班知识讲授学情" />
+      <KnowledgeLectureAnalytics course={course} showSectionSummaryChart={!immersive} title="全班知识讲授学情" />
 
       <ClassInterventionPanel commonIssues={commonIssues} course={course} />
 

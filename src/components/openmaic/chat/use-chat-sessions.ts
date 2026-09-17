@@ -32,6 +32,15 @@ import { createLogger } from '@openmaic/lib/logger';
 const log = createLogger('ChatSessions');
 
 /**
+ * Live chat actions enter the system through StreamBuffer, while lecture
+ * actions have already been executed by PlaybackEngine before their transcript
+ * badges reach the buffer.
+ */
+export function streamBufferOwnsActionExecution(type?: SessionType): boolean {
+  return type !== 'lecture';
+}
+
+/**
  * Hydrate post-submit quiz state for the active scene from localStorage so the
  * agent receives the student's actual answers and grader feedback. Returns
  * `undefined` when the active scene is not a quiz, the student has not submitted
@@ -95,6 +104,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const onStopSessionRef = useRef(options.onStopSession);
   const onSegmentSealedRef = useRef(options.onSegmentSealed);
   const shouldHoldAfterRevealRef = useRef(options.shouldHoldAfterReveal);
+  const liveActionEngineRef = useRef<ActionEngine | null>(null);
   useEffect(() => {
     onLiveSpeechRef.current = options.onLiveSpeech;
     onSpeechProgressRef.current = options.onSpeechProgress;
@@ -121,6 +131,12 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   // Track current stageId for data isolation
   const stageId = useStageStore((s) => s.stage?.id);
   const stageIdRef = useRef(stageId);
+
+  useEffect(() => () => {
+    liveActionEngineRef.current?.clearEffects();
+    liveActionEngineRef.current?.dispose();
+    liveActionEngineRef.current = null;
+  }, [stageId]);
 
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     // Restore sessions from store (loaded from IndexedDB)
@@ -373,17 +389,24 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               }),
             );
 
-            // Execute the action via ActionEngine (fire-and-forget for visual effects)
+            // PlaybackEngine already owns lecture actions. Re-executing the
+            // transcript copy here races the authoritative action and used to
+            // overwrite precise cell/quote targets with a whole-element cue.
+            // The lecture buffer only records the badge after its text.
+            if (!streamBufferOwnsActionExecution(type)) return;
+
+            // Live discussion/QA actions originate in this buffer, so it owns
+            // their execution as well as their transcript badge.
             try {
               const sceneId = useStageStore.getState().currentSceneId;
-              const actionEngine = new ActionEngine(
+              const actionEngine = liveActionEngineRef.current ??= new ActionEngine(
                 useStageStore,
                 null,
-                (type, payload) => {
-                  if (!sceneId) return;
-                  useWidgetIframeStore.getState().getSendMessage(sceneId)?.(type, payload);
-                },
               );
+              actionEngine.setWidgetMessageCallback((type, payload) => {
+                if (!sceneId) return;
+                useWidgetIframeStore.getState().getSendMessage(sceneId)?.(type, payload);
+              });
               const action = {
                 id: data.actionId,
                 type: data.actionName,
@@ -399,6 +422,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             // Lecture sessions: roundtable text is managed by PlaybackEngine → setLectureSpeech
             // in stage.tsx. Buffer only drives chat area pacing for lectures.
             if (type === 'lecture') return;
+            if (text === null) liveActionEngineRef.current?.clearEffects();
             onLiveSpeechRef.current?.(text, agentId);
           },
 

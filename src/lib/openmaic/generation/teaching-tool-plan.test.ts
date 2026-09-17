@@ -160,4 +160,30 @@ describe('teaching tool plan', () => {
       actions: [{ id: 'open', type: 'wb_open' }],
     })).toEqual(['interactive-widget', 'whiteboard']);
   });
+
+  it('allows semantic cue validation to omit an unreliable planned visual target', () => {
+    expect(findMissingRequiredTeachingTools({
+      teachingToolPlan: [
+        {
+          id: 'spotlight-plan',
+          tool: 'spotlight',
+          trigger: '解释表格中的学段差异时',
+          purpose: '聚焦当前单元格',
+          content: ['小学内容形态'],
+          required: true,
+        },
+        {
+          id: 'laser-plan',
+          tool: 'laser-pointer',
+          trigger: '点名术语时',
+          purpose: '指出精确术语',
+          content: ['PBL'],
+          required: true,
+        },
+      ],
+    }, {
+      sceneType: 'slide',
+      actions: [{ id: 'speech', type: 'speech', text: '这一段没有可可靠定位的目标。' }],
+    })).toEqual([]);
+  });
 });

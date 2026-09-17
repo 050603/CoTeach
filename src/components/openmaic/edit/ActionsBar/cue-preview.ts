@@ -1,4 +1,8 @@
-import type { Action } from '@openmaic/lib/types/action';
+import type {
+  Action,
+  LaserWaypoint,
+  VisualTargetSelector,
+} from '@openmaic/lib/types/action';
 import { useCanvasStore } from '@openmaic/lib/store/canvas';
 
 /**
@@ -6,8 +10,13 @@ import { useCanvasStore } from '@openmaic/lib/store/canvas';
  * `none` = tooltip only, no canvas effect (the cue has no bound slide element).
  */
 export type CuePreview =
-  | { kind: 'spotlight'; elementId: string }
-  | { kind: 'laser'; elementId: string }
+  | { kind: 'spotlight'; elementId: string; selector?: VisualTargetSelector }
+  | {
+      kind: 'laser';
+      elementId: string;
+      selector?: VisualTargetSelector;
+      waypoints?: LaserWaypoint[];
+    }
   | { kind: 'none' };
 
 /**
@@ -22,17 +31,26 @@ export type CuePreview =
 export function cuePreviewFor(action: Action): CuePreview {
   const elementId = (action as { elementId?: string }).elementId;
   if (!elementId) return { kind: 'none' };
-  if (action.type === 'laser') return { kind: 'laser', elementId };
-  return { kind: 'spotlight', elementId };
+  if (action.type === 'laser') {
+    return {
+      kind: 'laser',
+      elementId,
+      selector: action.selector,
+      waypoints: action.waypoints,
+    };
+  }
+  return {
+    kind: 'spotlight',
+    elementId,
+    selector: action.type === 'spotlight' ? action.selector : undefined,
+  };
 }
 
 // ---- canvas-side effect (single home for the setSpotlight/setLaser dance) ----
 
 /** Clear any spotlight/laser preview from the canvas. */
 export function clearCuePreview(): void {
-  const cs = useCanvasStore.getState();
-  cs.setSpotlight('');
-  cs.clearLaser();
+  useCanvasStore.getState().clearAllEffects();
 }
 
 /**
@@ -40,11 +58,18 @@ export function clearCuePreview(): void {
  * the sibling effect first so a previous hover never lingers. `laser` drives the
  * laser pointer, anything else drives the spotlight.
  */
-export function previewCueEffect(cueType: string, elementId: string): void {
+export function previewCueEffect(
+  cueType: string,
+  elementId: string,
+  selector?: VisualTargetSelector,
+  waypoints?: LaserWaypoint[],
+): void {
   clearCuePreview();
   if (!elementId) return;
-  if (cueType === 'laser') useCanvasStore.getState().setLaser(elementId);
-  else useCanvasStore.getState().setSpotlight(elementId);
+  if (cueType === 'laser') {
+    useCanvasStore.getState().setLaser(elementId, { selector, waypoints });
+  }
+  else useCanvasStore.getState().setSpotlight(elementId, { selector });
 }
 
 /** Apply the preview decided by {@link cuePreviewFor}. */
@@ -53,5 +78,10 @@ export function applyCuePreview(preview: CuePreview): void {
     clearCuePreview();
     return;
   }
-  previewCueEffect(preview.kind, preview.elementId);
+  previewCueEffect(
+    preview.kind,
+    preview.elementId,
+    preview.selector,
+    preview.kind === 'laser' ? preview.waypoints : undefined,
+  );
 }

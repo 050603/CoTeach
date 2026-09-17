@@ -17,6 +17,7 @@ export function getCourseStageRequirements(course: Course, stageKey: string) {
     evaluationRubric: plan.evaluationRubric,
     finalDeliverables: plan.finalDeliverables ?? [],
     reflectionQuestions: plan.reflectionQuestionSet?.questions.map((question) => question.prompt) ?? plan.reflectionQuestions,
+    aiUsagePolicy: plan.aiUsagePolicy ?? "",
   };
 }
 
@@ -32,6 +33,7 @@ export function buildCourseStageRequirementsContext(course: Course, stageKey: st
     value.requirements ? `任务与活动：${bounded(value.requirements)}` : "",
     value.outputs ? `交付要求：${bounded(value.outputs)}` : "",
     value.aiActions ? `AI 伙伴支持：${bounded(value.aiActions)}` : "",
+    value.aiUsagePolicy ? `AI 使用边界：${bounded(value.aiUsagePolicy)}` : "",
     value.checkpoints.length ? `课次检查点：${bounded(value.checkpoints.join("\n"))}` : "",
     value.observationPoints.length ? `观察与介入：${bounded(value.observationPoints.join("\n"))}` : "",
     value.finalDeliverables.length ? `最终交付物：${value.finalDeliverables.map((item) => `${item.name}（${item.format}）：${bounded(item.requirements)}`).join("\n")}` : "",

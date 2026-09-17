@@ -13,7 +13,8 @@ export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ courseId: string }> };
 const postSchema = z.object({ uploadId: z.string().uuid(), selections: resourcePackageSelectionsSchema.optional() }).strict();
 const patchSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("confirm"), revision: z.number().int().positive(), draft: resourcePackageDraftSchema }).strict(),
+  z.object({ action: z.literal("confirm"), revision: z.number().int().positive(), draft: resourcePackageDraftSchema,
+    acknowledgement: z.object({ issueVersion: z.string().min(1).max(100), issueIds: z.array(z.string().min(1).max(200)).max(100) }).optional() }).strict(),
   z.object({ action: z.literal("retry"), selections: resourcePackageSelectionsSchema.optional() }).strict(),
   z.object({ action: z.literal("adapt"), revision: z.number().int().positive(), conflictVersion: z.string().min(1).max(100), draft: resourcePackageDraftSchema }).strict(),
 ]);
@@ -63,7 +64,7 @@ export async function PATCH(request: Request, context: Context) {
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) throw new ResourcePackageError("资源包编辑信息格式无效，请检查后重试。");
     const input = parsed.data;
-    const job = input.action === "confirm" ? await confirmResourcePackage(courseId, userId, input.revision, input.draft)
+    const job = input.action === "confirm" ? await confirmResourcePackage(courseId, userId, input.revision, input.draft, input.acknowledgement)
       : input.action === "adapt" ? await authorizeResourcePackageAdaptation(courseId, userId, input.revision, input.conflictVersion, input.draft)
       : await retryResourcePackage(courseId, userId, input.selections);
     if (job.status === "queued") await dispatch(job.id);

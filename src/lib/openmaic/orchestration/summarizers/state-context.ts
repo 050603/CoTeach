@@ -1,5 +1,6 @@
 import type { StatelessChatRequest } from '@openmaic/lib/types/chat';
 import { buildWhiteboardConflicts } from './whiteboard-conflicts';
+import { buildSlideTargetInventory } from '@openmaic/lib/generation/semantic-visual-cues';
 
 // ==================== Element Summarization ====================
 
@@ -131,6 +132,9 @@ export function buildStateContext(storeState: StatelessChatRequest['storeState']
       if (currentScene.content.type === 'slide') {
         const elements = currentScene.content.canvas.elements;
         lines.push(`Current slide elements (${elements.length}):\n${summarizeElements(elements)}`);
+        lines.push(
+          `Precise slide targets (use these exact element/cell ids and visible text for spotlight/laser selectors):\n${JSON.stringify(buildSlideTargetInventory(elements), null, 2)}`,
+        );
       }
 
       // Quiz scene: include question summary, or post-submit results when the

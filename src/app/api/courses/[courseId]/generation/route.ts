@@ -41,6 +41,8 @@ function responseJob(job: Awaited<ReturnType<typeof contentGenerationJobs.findUn
     scenesGenerated: job.scenesGenerated,
     totalScenes: job.totalScenes,
     estimatedRemainingSeconds: job.estimatedRemainingSeconds,
+    activePages: job.activePages,
+    currentStage: job.currentStage,
     events: job.events,
     result: job.result,
     preview: job.scenesGenerated > 0 && job.status !== "completed"

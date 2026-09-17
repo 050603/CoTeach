@@ -176,6 +176,7 @@ export function KnowledgeLectureBoard({
             text: clean.slice(0, 3_500),
             audioId: `knowledge_tutor_${attempt.id}_${question.questionId}_${audioSequenceRef.current++}`,
             ttsProviderId: audioSettings.ttsProviderId,
+            ttsScenario: "realtime-interaction",
             ttsModelId: audioSettings.ttsModelId,
             ttsVoice: audioSettings.ttsVoice,
             ttsSpeed: audioSettings.ttsSpeed ?? 1,

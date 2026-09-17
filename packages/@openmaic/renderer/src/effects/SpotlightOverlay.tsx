@@ -1,72 +1,38 @@
 'use client';
 
-import { useRef, useState, useLayoutEffect, useCallback } from 'react';
+import { useId, type RefObject } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { SpotlightEffectOptions } from '../types/effects';
-
-interface SpotlightRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+import type { PercentageGeometry } from '../utils/geometry';
+import { useVisualTargetGeometry } from '../hooks/useVisualTargetGeometry';
+import { visualTargetKey } from '../utils/visualTarget';
 
 export interface SpotlightOverlayProps {
   options?: SpotlightEffectOptions;
-  /** ID prefix the SlideElement uses on its root div. Default `slide-element-`. */
+  /** Pre-resolved geometry. When omitted, the target is measured within `rootRef`. */
+  geometry?: PercentageGeometry | null;
+  /** Rendered slide root that owns the target. */
+  rootRef?: RefObject<HTMLElement | null>;
+  /** @deprecated Targets are scoped by `rootRef`; retained for source compatibility. */
   elementIdPrefix?: string;
 }
 
 export function SpotlightOverlay({
   options,
-  elementIdPrefix = 'slide-element-',
+  geometry,
+  rootRef,
 }: SpotlightOverlayProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [rect, setRect] = useState<SpotlightRect | null>(null);
-
-  const spotlightElementId = options?.elementId;
-
-  const measure = useCallback(() => {
-    if (!spotlightElementId || !containerRef.current) {
-      setRect(null);
-      return;
-    }
-
-    const domElement = document.getElementById(`${elementIdPrefix}${spotlightElementId}`);
-    if (!domElement) {
-      setRect(null);
-      return;
-    }
-
-    const contentEl = domElement.querySelector('.element-content');
-    const targetEl = contentEl ?? domElement;
-
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const targetRect = targetEl.getBoundingClientRect();
-
-    if (containerRect.width === 0 || containerRect.height === 0) {
-      setRect(null);
-      return;
-    }
-
-    setRect({
-      x: ((targetRect.left - containerRect.left) / containerRect.width) * 100,
-      y: ((targetRect.top - containerRect.top) / containerRect.height) * 100,
-      w: (targetRect.width / containerRect.width) * 100,
-      h: (targetRect.height / containerRect.height) * 100,
-    });
-  }, [spotlightElementId, elementIdPrefix]);
-
-  useLayoutEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- DOM measurement requires effect
-    measure();
-  }, [measure]);
-
-  const active = !!spotlightElementId && !!rect;
+  const measuredGeometry = useVisualTargetGeometry(
+    rootRef,
+    geometry === undefined ? options : undefined,
+  );
+  const rect = geometry === undefined ? measuredGeometry : geometry;
+  const active = !!options?.elementId && !!rect;
+  const targetKey = options ? visualTargetKey(options) : 'inactive';
+  const maskId = `spotlight-mask-${useId().replace(/:/g, '')}`;
 
   return (
     <div
-      ref={containerRef}
       style={{
         position: 'absolute',
         inset: 0,
@@ -78,7 +44,7 @@ export function SpotlightOverlay({
       <AnimatePresence mode="wait">
         {active && rect && (
           <motion.div
-            key={`spotlight-${spotlightElementId}`}
+            key={`spotlight-${targetKey}`}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -92,7 +58,7 @@ export function SpotlightOverlay({
               style={{ position: 'absolute', inset: 0 }}
             >
               <defs>
-                <mask id={`mask-${spotlightElementId}`}>
+                <mask id={maskId}>
                   <rect x="0" y="0" width="100" height="100" fill="white" />
                   <motion.rect
                     fill="black"
@@ -118,8 +84,8 @@ export function SpotlightOverlay({
               <rect
                 width="100"
                 height="100"
-                fill="rgba(0,0,0,0.7)"
-                mask={`url(#mask-${spotlightElementId})`}
+                fill={`rgba(0,0,0,${options?.dimOpacity ?? 0.7})`}
+                mask={`url(#${maskId})`}
               />
 
               <motion.rect

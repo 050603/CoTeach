@@ -5,6 +5,7 @@ import type { PercentageGeometry } from '@openmaic/lib/types/action';
 
 interface LaserOverlayProps {
   geometry: PercentageGeometry;
+  waypointGeometries?: PercentageGeometry[];
   color?: string;
   duration?: number;
 }
@@ -19,15 +20,34 @@ interface LaserOverlayProps {
  */
 export function LaserOverlay({
   geometry,
+  waypointGeometries = [],
   color = '#ff3b30',
   duration: _duration = 3000,
 }: LaserOverlayProps) {
   const { centerX, centerY } = geometry;
+  const path = [geometry, ...waypointGeometries];
 
   const startPos = {
     x: centerX > 50 ? 105 : -5,
     y: centerY > 50 ? 105 : -5,
   };
+  const travelDuration = waypointGeometries.length > 0
+    ? Math.max(0.8, (_duration - 300) / 1000)
+    : 0.45;
+  const entryRatio = waypointGeometries.length > 0
+    ? Math.min(0.25, 0.45 / travelDuration)
+    : 1;
+  const times = waypointGeometries.length > 0
+    ? [
+        0,
+        entryRatio,
+        ...waypointGeometries.map((_point, index) => (
+          entryRatio + ((index + 1) / waypointGeometries.length) * (1 - entryRatio)
+        )),
+      ]
+    : [0, 1];
+  const leftPath = [`${startPos.x}%`, ...path.map((point) => `${point.centerX}%`)];
+  const topPath = [`${startPos.y}%`, ...path.map((point) => `${point.centerY}%`)];
 
   return (
     <motion.div
@@ -39,8 +59,8 @@ export function LaserOverlay({
       }}
       animate={{
         opacity: 1,
-        left: `${centerX}%`,
-        top: `${centerY}%`,
+        left: leftPath,
+        top: topPath,
       }}
       exit={{
         opacity: 0,
@@ -49,8 +69,8 @@ export function LaserOverlay({
         transition: { duration: 0.25, ease: [0.4, 0, 1, 1] },
       }}
       transition={{
-        left: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
-        top: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
+        left: { duration: travelDuration, ease: 'easeInOut', times },
+        top: { duration: travelDuration, ease: 'easeInOut', times },
         opacity: { duration: 0.15 },
       }}
       className="absolute z-[101] pointer-events-none"

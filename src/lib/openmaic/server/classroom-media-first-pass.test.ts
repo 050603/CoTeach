@@ -124,6 +124,21 @@ describe('first-pass media request boundaries', () => {
     expect(mocks.generateTTS.mock.calls[0][0]).toMatchObject({ providerId: 'qwen-tts', modelId: 'locked-model', voice: 'locked-voice', language: 'en-US', speed: 1 });
   });
 
+  it('clears the invalidation marker after replacement audio is ready', async () => {
+    const classroomScenes = scenes();
+    const speech = classroomScenes[0].actions?.[0];
+    if (speech?.type === 'speech') speech.audioInvalidated = true;
+    mocks.generateTTS.mockResolvedValue({ audio: Buffer.from('RIFF replacement audio'), format: 'wav' });
+
+    await generateTTSForClassroom(classroomScenes, 'test', '');
+
+    expect(classroomScenes[0].actions?.[0]).toMatchObject({
+      audioId: 'tts_s0_a1',
+      audioUrl: '/api/openmaic/classroom-media/test/audio/tts_s0_a1.wav',
+    });
+    expect(classroomScenes[0].actions?.[0]).not.toHaveProperty('audioInvalidated');
+  });
+
   it('stops wrong-language Chinese-course narration before sending any TTS request', async () => {
     await expect(generateTTSForClassroom(chineseCourseWithEnglishNarration(), 'test', ''))
       .rejects.toMatchObject({ name: 'ClassroomNarrationLanguageError', isRetryable: false });

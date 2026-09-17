@@ -18,7 +18,6 @@ function makeCourse(overrides: Partial<Course> = {}): Course {
 describe("TeacherPresentationAnalytics", () => {
   it.each([
     ["launch", "资料阅读覆盖", "已完成0、阅读中1、未打开1"],
-    ["ai-learning", "知识掌握汇总", "已完成0、学习中0、未开始2"],
     ["make", "AI 协作汇总", "已提交0、编制中0、待形成2"],
     ["showcase", "汇报安排", "已评价0、进行中0、等待中0、未就绪2"],
     ["reflection", "反思评价分布", "已提交0、待提交2"],
@@ -33,6 +32,38 @@ describe("TeacherPresentationAnalytics", () => {
     expect(onDetails).toHaveBeenCalledOnce();
     fireEvent.click(screen.getAllByRole("button")[1]!);
     expect(onDetails).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses three compact charts for knowledge-learning progress, quiz completion, and average score", () => {
+    const students = [
+      { id: "s1", name: "小明", joinedAt: "2026-09-16T08:00:00.000Z", stageProgress: {} },
+      { id: "s2", name: "小华", joinedAt: "2026-09-16T08:00:00.000Z", stageProgress: {} },
+    ];
+    const attempt = (sectionId: string, score: number) => ({
+      id: `attempt-${sectionId}`, sectionId, quizOutlineId: `quiz-${sectionId}`, runtimeSceneId: `runtime-${sectionId}`,
+      submittedAt: "2026-09-16T09:00:00.000Z", score, maxScore: 10, knowledgePointIds: [], questions: [],
+    });
+    const course = makeCourse({
+      students,
+      content: {
+        pblOutline: "", knowledgePoints: [], lessonOutline: [], evaluationPlan: { dimensions: [], overallRubric: "" },
+        knowledgeLectureSections: [
+          { id: "section-1", title: "第一节 · 基础概念", order: 0, knowledgePointIds: [], sceneOutlineIds: [], quizOutlineId: "quiz-1", estimatedMinutes: 5 },
+          { id: "section-2", title: "第二节 · 综合应用", order: 1, knowledgePointIds: [], sceneOutlineIds: [], quizOutlineId: "quiz-2", estimatedMinutes: 5 },
+        ],
+      },
+      aiLearningProgress: {
+        s1: { classroomId: "classroom-1", studentId: "s1", currentSceneIndex: 2, totalScenes: 4, completedScenes: ["scene-1", "scene-2"], completionModelVersion: 2, masteryLevel: "in-progress", lastActiveAt: "2026-09-16T09:00:00.000Z", knowledgeLectureAttempts: [attempt("section-1", 8), attempt("section-2", 6)] },
+        s2: { classroomId: "classroom-1", studentId: "s2", currentSceneIndex: 1, totalScenes: 4, completedScenes: ["scene-1"], completionModelVersion: 2, masteryLevel: "in-progress", lastActiveAt: "2026-09-16T09:00:00.000Z", knowledgeLectureAttempts: [attempt("section-1", 10)] },
+      },
+    });
+
+    render(<TeacherPresentationAnalytics course={course} stageKey="ai-learning" onDetails={vi.fn()} />);
+
+    expect(screen.getByRole("img", { name: "班级整体学习进度38%" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "章节测验完成率75%" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "章节测验班级均分80分" })).toBeTruthy();
+    expect(screen.queryByText("知识掌握汇总")).toBeNull();
   });
 
   it("shows an explicit empty state for legacy stages instead of reflection statistics", () => {

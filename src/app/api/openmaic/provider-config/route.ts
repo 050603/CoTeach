@@ -22,6 +22,10 @@ const SectionSchema = z.enum([
   "web-search",
 ]);
 const ProviderIdSchema = z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9_-]*$/i);
+const TtsScenarioConfigSchema = z.object({
+  modelId: z.string().trim().min(1).max(200),
+  voiceId: z.string().trim().min(1).max(200),
+}).strict();
 const SaveSchema = z.object({
   section: SectionSchema,
   providerId: ProviderIdSchema,
@@ -32,6 +36,10 @@ const SaveSchema = z.object({
   defaultModel: z.string().trim().max(200).optional(),
   priority: z.number().int().min(0).max(10_000).optional(),
   defaultVoice: z.string().trim().max(200).optional(),
+  scenarioConfigs: z.object({
+    "course-generation": TtsScenarioConfigSchema.optional(),
+    "realtime-interaction": TtsScenarioConfigSchema.optional(),
+  }).strict().optional(),
   timingCalibrations: z.array(z.record(z.string(), z.unknown())).max(500).optional(),
 }).strict();
 const DeleteSchema = z.object({
@@ -80,7 +88,8 @@ export async function POST(request: Request) {
 function publicEntry(entry: ProviderEntry) {
   return { hasApiKey: Boolean(entry.apiKey), baseUrl: entry.baseUrl, models: entry.models,
     enabled: entry.enabled, defaultModel: entry.defaultModel, priority: entry.priority,
-    defaultVoice: entry.defaultVoice, timingCalibrations: entry.timingCalibrations };
+    defaultVoice: entry.defaultVoice, scenarioConfigs: entry.scenarioConfigs,
+    timingCalibrations: entry.timingCalibrations };
 }
 
 export async function DELETE(request: Request) {

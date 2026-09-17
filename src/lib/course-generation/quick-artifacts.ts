@@ -27,6 +27,18 @@ export type QuickClassroomGenerationSnapshot = {
   message: string;
   scenesGenerated: number;
   totalScenes: number;
+  currentStage?: string | null;
+  activePages?: Array<{
+    index: number;
+    title: string;
+    stage: string;
+    startedAt: number;
+    queueMs?: number;
+    requestStartedAt?: number;
+    executionMs?: number;
+    retryCount?: number;
+    lastOutputAt?: number;
+  }>;
   events: QuickClassroomGenerationEvent[];
   result?: {
     id: string;

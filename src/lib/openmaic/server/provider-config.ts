@@ -18,6 +18,11 @@ import {
 } from '@openmaic/lib/audio/tts-timing';
 import { providerPrisma, isProviderDatabaseConfigured } from '@/lib/db/client';
 import { decodeProviderSecret } from '@/lib/security/provider-secret';
+import { normalizeManagedProviderCatalogSection } from '@openmaic/lib/provider-catalog-policy';
+import type {
+  TtsScenarioConfigs,
+  TtsScenarioId,
+} from '@openmaic/lib/audio/tts-scenarios';
 
 const log = createLogger('ServerProviderConfig');
 const DEFAULT_FILENAME = 'server-providers.yml';
@@ -47,6 +52,7 @@ interface ServerProviderEntry {
    */
   defaultModel?: string;
   defaultVoice?: string;
+  scenarioConfigs?: TtsScenarioConfigs;
   timingCalibrations?: TtsVoiceTimingCalibration[];
 }
 
@@ -219,6 +225,7 @@ function loadEnvSection(
           priority: typeof entry.priority === 'number' ? entry.priority : undefined,
           defaultModel: entry.defaultModel,
           defaultVoice: entry.defaultVoice,
+          scenarioConfigs: entry.scenarioConfigs,
           timingCalibrations: entry.timingCalibrations,
         };
       }
@@ -432,12 +439,12 @@ function applyBedrockProviderConfig(
 }
 
 function buildConfig(yamlData: YamlData): ServerConfig {
-  const image = applyOpenAIImageFallback(
+  const image = normalizeManagedProviderCatalogSection('image', applyOpenAIImageFallback(
     loadEnvSection(IMAGE_ENV_MAP, yamlData.image, {
       keylessProviders: new Set(['lemonade']),
     }),
     yamlData.image,
-  );
+  ));
 
   const providers = applyBedrockProviderConfig(
     loadEnvSection(LLM_ENV_MAP, yamlData.providers, {
@@ -448,9 +455,12 @@ function buildConfig(yamlData: YamlData): ServerConfig {
 
   return {
     providers,
-    tts: loadEnvSection(TTS_ENV_MAP, yamlData.tts, {
-      keylessProviders: new Set(['voxcpm-tts', 'lemonade-tts']),
-    }),
+    tts: normalizeManagedProviderCatalogSection(
+      'tts',
+      loadEnvSection(TTS_ENV_MAP, yamlData.tts, {
+        keylessProviders: new Set(['voxcpm-tts', 'lemonade-tts']),
+      }),
+    ),
     asr: loadEnvSection(ASR_ENV_MAP, yamlData.asr, {
       keylessProviders: new Set(['lemonade-asr']),
     }),
@@ -520,6 +530,7 @@ type ProviderMetadata = {
   defaultModel?: string;
   priority?: number;
   defaultVoice?: string;
+  scenarioConfigs?: TtsScenarioConfigs;
   timingCalibrations?: TtsVoiceTimingCalibration[];
 };
 
@@ -545,6 +556,7 @@ function toProviderMetadata(entry: ServerProviderEntry): ProviderMetadata {
   if (entry.defaultModel) metadata.defaultModel = entry.defaultModel;
   if (typeof entry.priority === 'number') metadata.priority = entry.priority;
   if (entry.defaultVoice) metadata.defaultVoice = entry.defaultVoice;
+  if (entry.scenarioConfigs) metadata.scenarioConfigs = entry.scenarioConfigs;
   if (entry.timingCalibrations?.length) metadata.timingCalibrations = entry.timingCalibrations;
   return metadata;
 }
@@ -667,20 +679,34 @@ export function resolveTTSBaseUrl(providerId: string, clientBaseUrl?: string): s
 }
 
 /**
- * Resolve the TTS model. A managed provider may pin its model server-side
- * (`${PREFIX}_MODELS`, first entry) — authoritative like its key/baseUrl, since
- * the managed-provider UI does not expose a model field. Otherwise the client
- * model wins.
+ * Resolve the TTS model. Managed providers may pin a model for each usage
+ * scenario; older configs fall back to their default/first model. Unmanaged
+ * providers continue to use the client selection.
  */
-export function resolveTTSModel(providerId: string, clientModel?: string): string | undefined {
+export function resolveTTSModel(
+  providerId: string,
+  clientModel?: string,
+  scenario?: TtsScenarioId,
+): string | undefined {
   const entry = getConfig().tts[providerId];
+  if (scenario && entry?.scenarioConfigs?.[scenario]?.modelId) {
+    return entry.scenarioConfigs[scenario].modelId;
+  }
   if (entry?.defaultModel) return entry.defaultModel;
   if (entry?.models && entry.models.length > 0) return entry.models[0];
   return clientModel;
 }
 
-export function resolveTTSVoice(providerId: string, clientVoice?: string): string | undefined {
-  return getConfig().tts[providerId]?.defaultVoice || clientVoice;
+export function resolveTTSVoice(
+  providerId: string,
+  clientVoice?: string,
+  scenario?: TtsScenarioId,
+): string | undefined {
+  const entry = getConfig().tts[providerId];
+  if (scenario && entry?.scenarioConfigs?.[scenario]?.voiceId) {
+    return entry.scenarioConfigs[scenario].voiceId;
+  }
+  return entry?.defaultVoice || clientVoice;
 }
 
 /** Register and return the exact normal-speed profile for provider/model/voice. */

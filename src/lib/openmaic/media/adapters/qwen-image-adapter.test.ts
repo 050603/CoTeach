@@ -20,7 +20,7 @@ describe('Qwen image throttling metadata', () => {
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 
-  it('forwards cover controls and cancellation to Qwen Image 2.0 Pro', async () => {
+  it('forwards cover controls and cancellation to Qwen Image 3.0 Pro', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       output: {
         choices: [{ message: { content: [{ image: 'https://cdn.example.test/cover.png' }] } }],
@@ -30,7 +30,7 @@ describe('Qwen image throttling metadata', () => {
     const controller = new AbortController();
 
     await generateWithQwenImage(
-      { providerId: 'qwen-image', apiKey: 'test-key', model: 'qwen-image-2.0-pro' },
+      { providerId: 'qwen-image', apiKey: 'test-key', model: 'qwen-image-3.0-pro' },
       {
         prompt: 'specific course scene',
         width: 2688,
@@ -46,7 +46,7 @@ describe('Qwen image throttling metadata', () => {
     controller.abort();
     expect(request.signal?.aborted).toBe(true);
     expect(JSON.parse(String(request.body))).toMatchObject({
-      model: 'qwen-image-2.0-pro',
+      model: 'qwen-image-3.0-pro',
       parameters: { prompt_extend: false, seed: 1_234_567, size: '2688*1536' },
     });
   });

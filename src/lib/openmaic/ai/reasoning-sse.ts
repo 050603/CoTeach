@@ -25,6 +25,26 @@ interface ChatChunkLike {
   choices?: { delta?: Record<string, unknown>; finish_reason?: string | null }[];
 }
 
+function normalizeUpstreamStreamError(value: Record<string, unknown>): Record<string, unknown> {
+  if (Array.isArray(value.choices) || value.error) return value;
+  const message = typeof value.message === 'string' ? value.message.trim() : '';
+  const code = typeof value.code === 'string' || typeof value.code === 'number'
+    ? value.code
+    : undefined;
+  if (!message || code === undefined) return value;
+  const requestId = typeof value.request_id === 'string' && value.request_id.trim()
+    ? value.request_id.trim()
+    : undefined;
+  return {
+    error: {
+      message: `${message}${requestId ? ` [request_id=${requestId}]` : ''}`,
+      type: 'upstream_stream_error',
+      param: requestId ?? null,
+      code,
+    },
+  };
+}
+
 const KIMI_REASONING_MARKER = '\u0000openmaic:kimi-reasoning:';
 
 function encodeKimiReasoning(text: string): string {
@@ -156,7 +176,8 @@ export function wrapResponseWithReasoning(response: Response): Response {
     const payload = line.slice(5).trim();
     if (payload === '' || payload === '[DONE]') return line;
     try {
-      const obj = rewrite(JSON.parse(payload) as Record<string, unknown>);
+      const parsed = normalizeUpstreamStreamError(JSON.parse(payload) as Record<string, unknown>);
+      const obj = rewrite(parsed);
       return 'data: ' + JSON.stringify(obj);
     } catch {
       return line; // keep-alive / non-JSON / partial — leave as-is

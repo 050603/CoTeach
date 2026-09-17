@@ -16,7 +16,8 @@ import {
   projectionSnapshotFromUiState,
   type ProjectionStateSnapshot,
 } from "@/lib/realtime/projection-state";
-import type { CourseUiState } from "@/lib/session/types";
+import type { Course, CourseUiState } from "@/lib/session/types";
+import { createPblTemplateCourse, decodePblTemplate } from "@/lib/platform/pbl-template";
 import { CourseReflectionValidationError } from "@/lib/course-reflection";
 import { CourseRubricValidationError } from "@/lib/evaluation/course-rubric";
 
@@ -50,7 +51,16 @@ export async function executeCourseAction(courseId: string, envelope: ActionEnve
     if (before && claims.role === "teacher" && envelope.expectedVersion !== undefined && before.version !== envelope.expectedVersion) throw new CourseActionError("VERSION_CONFLICT", "课程已被其他操作更新", 409, { currentVersion: before.version });
     if (before && ["PUBLISH_COURSE", "START_TEACHING", "RESTART_TEACHING"].includes(envelope.action.type)) {
       const { assertCourseTeacherReview, CourseReviewError } = await import("@/lib/course-quality-review/review-service");
-      try { await assertCourseTeacherReview(before, claims.sub); }
+      const version = before.platformContext
+        ? await tx.classroomTemplateVersion.findUnique({
+            where: { id: before.platformContext.templateVersionId },
+            select: { snapshot: true },
+          })
+        : null;
+      const reviewCourse = version
+        ? courseForTeacherReviewSnapshot(before, version.snapshot)
+        : before;
+      try { await assertCourseTeacherReview(reviewCourse, claims.sub); }
       catch (error) { if (error instanceof CourseReviewError) throw new CourseActionError(error.code, error.message, error.status); throw error; }
     }
     let after;
@@ -70,6 +80,24 @@ export async function executeCourseAction(courseId: string, envelope: ActionEnve
   });
   await publishRealtimeEvent(result.event);
   return result.ack;
+}
+
+/**
+ * A classroom projection also contains offering/activity resources added after
+ * publication. Teacher review belongs to the immutable template version, so
+ * revalidate that exact snapshot instead of the enriched classroom projection.
+ */
+export function courseForTeacherReviewSnapshot(
+  course: Course,
+  snapshot: unknown,
+): Course {
+  const design = decodePblTemplate(snapshot);
+  if (!design) return course;
+  const reviewedCourseId = design.content.teacherReview?.courseId
+    ?? course.content.teacherReview?.courseId
+    ?? course.platformContext?.templateId
+    ?? course.id;
+  return createPblTemplateCourse(reviewedCourseId, design);
 }
 
 async function executeProjectionAction(

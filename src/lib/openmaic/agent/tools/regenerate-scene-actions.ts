@@ -37,6 +37,7 @@ import type { SceneContent } from '@openmaic/lib/types/stage';
 import type { LlmStage } from '@openmaic/lib/server/model-routes';
 import { whiteboardBlocks } from '@openmaic/lib/edit/whiteboard-blocks';
 import { parseActionsFromStructuredOutput } from '@openmaic/lib/generation/action-parser';
+import { calibrateGeneratedVisualCues } from '@openmaic/lib/generation/semantic-visual-cues';
 
 // ── Scene context shape (client-sourced, injected via deps) ──────────────────
 
@@ -258,13 +259,19 @@ export function makeRegenerateSceneActionsTool(
         userPrompt: string,
         _images?: Array<{ id: string; src: string }>,
       ): Promise<string> => {
-        modelResponse = await deps.aiCall(
+        const narrationEditCall = modelResponse === undefined;
+        const response = await deps.aiCall(
           'scene-actions',
-          withoutImageBytes(`${systemPrompt}\n\n${editInstructions}`),
-          withoutImageBytes(`${userPrompt}\n\n${editInstructions}`),
+          withoutImageBytes(narrationEditCall
+            ? `${systemPrompt}\n\n${editInstructions}`
+            : systemPrompt),
+          withoutImageBytes(narrationEditCall
+            ? `${userPrompt}\n\n${editInstructions}`
+            : userPrompt),
           signal,
         );
-        return modelResponse;
+        if (narrationEditCall) modelResponse = response;
+        return response;
       };
 
       // ── Generate actions ───────────────────────────────────────────────
@@ -324,6 +331,17 @@ export function makeRegenerateSceneActionsTool(
             }
           }
         }
+      }
+
+      // Narration edits are merged back into the complete original timeline.
+      // Revalidate the already-interleaved OpenMAIC cues locally; no second
+      // model pass is allowed to rewrite or independently re-plan the script.
+      if (outline.type === 'slide' && 'elements' in generationContent) {
+        actions = calibrateGeneratedVisualCues({
+          outline,
+          elements: generationContent.elements,
+          actions,
+        });
       }
 
       if (actions.length === 0) {

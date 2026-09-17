@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Prisma } from "@prisma/client";
 import type { Course } from "@/lib/session/types";
-import { normalizeCourse } from "@/lib/session/actions";
+import { applySessionAction, initialSessionState, normalizeCourse } from "@/lib/session/actions";
 import { createPblTemplateCourse } from "@/lib/platform/pbl-template";
 vi.mock("@/lib/companion/server-store", () => ({ loadCompanionState: vi.fn(async () => ({})), persistCompanionState: vi.fn(async () => undefined) }));
 import { assertImmutableClassroomDesign, persistInstanceCourse, projectStoredCourseResource } from "./v2-course-projection";
@@ -85,6 +85,27 @@ describe("V2 classroom projection writes", () => {
     const before = fixture(); const normalized = normalizeCourse(before);
     expect(() => assertImmutableClassroomDesign(before, normalized)).not.toThrow();
     expect(() => assertImmutableClassroomDesign(before, { ...normalized, content: { ...normalized.content, pblOutline: "Changed" } })).toThrow();
+  });
+  it("starts an authored generated course after reducer normalization", () => {
+    const before = fixture();
+    before.status = "ready";
+    before.stages = before.stages.map((stage, index) => ({
+      ...stage,
+      description: `生成课程的第 ${index + 1} 阶段说明`,
+    }));
+    const after = applySessionAction(
+      { ...initialSessionState(), hydrated: true, courses: [before] },
+      {
+        type: "START_TEACHING",
+        payload: {
+          id: before.id,
+          classConfig: before.classConfig!,
+          inviteCode: "ABC123",
+        },
+      },
+    ).courses[0]!;
+
+    expect(() => assertImmutableClassroomDesign(before, after)).not.toThrow();
   });
   it("namespaces legacy personal group IDs by offering", async () => {
     const before = fixture(); before.groups = []; const after = normalizeCourse(before);

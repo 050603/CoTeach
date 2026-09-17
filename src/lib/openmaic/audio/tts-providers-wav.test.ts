@@ -42,7 +42,7 @@ describe('Qwen TTS WAV handling', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(qwenSseResponse(pcmWav(pcm))));
 
     const result = await generateTTS(
-      { providerId: 'qwen-tts', voice: 'Cherry', apiKey: 'test' },
+      { providerId: 'qwen-tts', voice: 'longanfengyue', apiKey: 'test' },
       '这是一段测试语音。',
     );
 
@@ -57,7 +57,7 @@ describe('Qwen TTS WAV handling', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(qwenSseResponse(pcm)));
 
     const result = await generateTTS(
-      { providerId: 'qwen-tts', voice: 'Cherry', apiKey: 'test' },
+      { providerId: 'qwen-tts', voice: 'longanfengyue', apiKey: 'test' },
       '这是一段测试语音。',
     );
 

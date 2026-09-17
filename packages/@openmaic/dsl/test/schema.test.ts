@@ -88,6 +88,32 @@ describe('generated JSON Schema — Action', () => {
   const v = validator('Action');
   it('accepts a spotlight action', () => {
     expect(v({ id: 'a', type: 'spotlight', elementId: 'e' })).toBe(true);
+    expect(v({
+      id: 'cell',
+      type: 'spotlight',
+      elementId: 'table',
+      selector: { cellId: 'r1c2' },
+      speechId: 'speech-1',
+      endSpeechId: 'speech-3',
+    })).toBe(true);
+    expect(v({
+      id: 'quote',
+      type: 'laser',
+      elementId: 'text',
+      selector: { quote: 'PBL', occurrence: 0 },
+      duration: 2500,
+    })).toBe(true);
+  });
+  it('accepts cell-scoped quotes and rejects malformed fine-grained visual selectors', () => {
+    expect(v({
+      id: 'a', type: 'spotlight', elementId: 'e', selector: { cellId: 'c', quote: 'q' },
+    })).toBe(true);
+    expect(v({
+      id: 'empty', type: 'spotlight', elementId: 'e', selector: {},
+    })).toBe(false);
+    expect(v({
+      id: 'a', type: 'laser', elementId: 'e', selector: { quote: 'PBL', occurrence: 'first' },
+    })).toBe(false);
   });
   it('rejects an action missing its required discriminated fields', () => {
     expect(v({ id: 'a', type: 'spotlight' /* missing elementId */ })).toBe(false);

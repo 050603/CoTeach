@@ -7,6 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, BarChart3, BookOpen, Check, ChevronDown, ClipboardList, Copy, Download, FileText, Link2, LockKeyhole, MoreHorizontal, ArrowUpRight, PencilLine, Play, Plus, Settings2, Sparkles, Trash2, UnlockKeyhole, Upload, Users, X } from "lucide-react";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogTitle } from "@/components/ui/overlays";
 import { offeringStatusLabel, instanceStatusLabel } from "@/lib/platform/labels";
 import { teacherPlatformFetch } from "@/lib/platform/client";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -31,6 +32,7 @@ type Activity = {
     description?: string;
     version?: number;
     templateId?: string | null;
+    templateVersionId?: string | null;
     config?: {
         content?: string;
         url?: string;
@@ -176,10 +178,11 @@ export default function TeacherClassEditorPage() {
     const [chapterTitle, setChapterTitle] = useState("");
     const [editChapter, setEditChapter] = useState<Chapter | null>(null);
     const [editActivity, setEditActivity] = useState<Activity | null>(null);
+    const [activityToDelete, setActivityToDelete] = useState<Activity | null>(null);
     const [activity, setActivity] = useState<{
         title: string;
         type: string;
-        templateId: string;
+        templateVersionId: string;
         content: string;
         url: string;
         resourceKind: "link" | "file";
@@ -189,7 +192,8 @@ export default function TeacherClassEditorPage() {
         fileSize: string;
         questions: string;
         surveyQuestions: SurveyQuestion[];
-    }>({ title: "", type: "Classroom", templateId: "", content: "", url: "", resourceKind: "link", file: null, fileId: "", fileName: "", fileSize: "", questions: "", surveyQuestions: [createEmptySurveyQuestion()] });
+    }>({ title: "", type: "Classroom", templateVersionId: "", content: "", url: "", resourceKind: "link", file: null, fileId: "", fileName: "", fileSize: "", questions: "", surveyQuestions: [createEmptySurveyQuestion()] });
+    const [preferredTemplateVersionId, setPreferredTemplateVersionId] = useState("");
     const [info, setInfo] = useState({ name: "", term: "", description: "", coverImageUrl: "", startsAt: "", endsAt: "", outline: "", referenceMaterials: "" });
     const [courseReferences, setCourseReferences] = useState<CourseReference[]>([]);
     const [removedCourseFileIds, setRemovedCourseFileIds] = useState<string[]>([]);
@@ -212,7 +216,10 @@ export default function TeacherClassEditorPage() {
             throw new Error(templateData.message ?? "课程库暂时无法加载");
         setTemplates(templateData.templates ?? []);
     }, [offeringId]);
-    useEffect(() => { void load().catch((reason) => setError(reason instanceof Error ? reason.message : "加载失败")); }, [load]);
+    useEffect(() => {
+        setPreferredTemplateVersionId(new URLSearchParams(window.location.search).get("templateVersionId") ?? "");
+        void load().catch((reason) => setError(reason instanceof Error ? reason.message : "加载失败"));
+    }, [load]);
     async function mutate(url: string, body?: unknown, method = "PATCH") {
         const response = await teacherPlatformFetch(url, { method, headers: { "Content-Type": "application/json" }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
         const data = await response.json();
@@ -261,9 +268,11 @@ export default function TeacherClassEditorPage() {
         setChapterId(chapter.id);
         setEditActivity(item ?? null);
         setError(null);
+        const preferredTemplate = !item ? templates.find((template) => template.versions.some((version) => version.id === preferredTemplateVersionId)) : undefined;
+        const preferredVersion = readyVersion(preferredTemplate);
         const configuredQuestions = item?.config?.questions?.map((question) => ({ ...question, type: question.type ?? "short-text", chartType: question.chartType ?? (question.type === "multiple-choice" ? "bar" : "donut"), options: question.options ?? [] })) ?? [];
         const resourceKind = item?.config?.resourceKind ?? (item?.config?.url?.startsWith("/api/uploads/") ? "file" : "link");
-        setActivity({ title: item?.title ?? "", type: item?.type ?? "Classroom", templateId: item?.templateId ?? "", content: item?.config?.content ?? item?.description ?? "", url: item?.config?.url ?? "", resourceKind, file: null, fileId: item?.config?.fileId ?? "", fileName: item?.config?.fileName ?? "", fileSize: item?.config?.fileSize ?? "", questions: configuredQuestions.map((question) => question.title).join("\n"), surveyQuestions: configuredQuestions.length ? configuredQuestions : [createEmptySurveyQuestion()] });
+        setActivity({ title: item?.title ?? preferredTemplate?.title ?? "", type: item?.type ?? "Classroom", templateVersionId: item?.templateVersionId ?? preferredVersion?.id ?? "", content: item?.config?.content ?? item?.description ?? "", url: item?.config?.url ?? "", resourceKind, file: null, fileId: item?.config?.fileId ?? "", fileName: item?.config?.fileName ?? "", fileSize: item?.config?.fileSize ?? "", questions: configuredQuestions.map((question) => question.title).join("\n"), surveyQuestions: configuredQuestions.length ? configuredQuestions : [createEmptySurveyQuestion()] });
         setDialog("activity");
     }
     function openInfo() {
@@ -318,7 +327,7 @@ export default function TeacherClassEditorPage() {
                     resource = { url: data.url, fileId: data.id, fileName: data.fileName ?? activity.file.name, fileSize: data.size ?? "" };
                 }
                 const config = { schemaVersion: activity.type === "Form" ? 2 : 1, content: activity.content, ...(activity.type === "Resource" ? { resourceKind: activity.resourceKind, ...(resource.url ? { url: resource.url } : {}), ...(activity.resourceKind === "file" && resource.fileId ? { fileId: resource.fileId, fileName: resource.fileName, fileSize: resource.fileSize } : {}) } : activity.url ? { url: activity.url } : {}), ...(activity.type === "Form" ? { questions: activity.surveyQuestions } : activity.type === "Quiz" ? { questions: activity.questions.split("\n").map((title) => title.trim()).filter(Boolean).map((title, index) => ({ id: editActivity?.config?.questions?.[index]?.id ?? `q${index + 1}`, title, required: true })) } : {}) };
-                await mutate(editActivity ? `/api/platform/activities/${editActivity.id}/manage` : `/api/platform/offerings/${offeringId}/chapters/${chapterId}/activities`, { title: activity.title.trim(), description: activity.content, config, ...(editActivity ? { version: editActivity.version } : { type: activity.type }), ...(activity.type === "Classroom" ? { templateId: activity.templateId || undefined } : {}) }, editActivity ? "PATCH" : "POST");
+                await mutate(editActivity ? `/api/platform/activities/${editActivity.id}/manage` : `/api/platform/offerings/${offeringId}/chapters/${chapterId}/activities`, { title: activity.title.trim(), description: activity.content, config, ...(editActivity ? { version: editActivity.version } : { type: activity.type }), ...(activity.type === "Classroom" ? { templateVersionId: activity.templateVersionId || undefined } : {}) }, editActivity ? "PATCH" : "POST");
             }
             setDialog(null);
         });
@@ -592,6 +601,9 @@ export default function TeacherClassEditorPage() {
                                     <Link href={"/teacher/classrooms/" + instance.id}>课堂学习记录</Link>
                                   </DropdownMenuItem>
                                 ) : null}
+                                <DropdownMenuItem variant="destructive" onSelect={() => setActivityToDelete(item)}>
+                                  <Trash2 size={15} />删除内容
+                                </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
                             </div>
@@ -741,7 +753,7 @@ export default function TeacherClassEditorPage() {
                   <div className="pbl-dialog-section-heading"><div><h3>{activity.type === "Classroom" ? "关联课堂" : "学习要求"}</h3><p>{activity.type === "Classroom" ? "选择备课阶段已发布的教案，进入课堂后仍由原工作台完成配置。" : "填写学生进入内容后需要理解和完成的信息。"}</p></div><span>02</span></div>
                   {activity.type === "Classroom" ? (
                     <>
-                      <label className="pbl-dialog-field" htmlFor="template"><span>课程库教案 <small>必填</small></span><select id="template" required disabled={Boolean(editActivity?.instances?.[0] && editActivity.instances[0].status !== "finished")} className={field} value={activity.templateId} onChange={(event) => { const template = availableTemplates.find((item) => item.id === event.target.value); setActivity({ ...activity, templateId: event.target.value, title: activity.title || template?.title || "" }); }}><option value="">选择已发布的课堂教案</option>{availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.title} · v{readyVersion(template)?.version}</option>)}</select></label>
+                      <label className="pbl-dialog-field" htmlFor="template"><span>课程库教案 <small>必填</small></span><select id="template" required disabled={Boolean(editActivity?.instances?.[0] && editActivity.instances[0].status !== "finished")} className={field} value={activity.templateVersionId} onChange={(event) => { const template = availableTemplates.find((item) => readyVersion(item)?.id === event.target.value); setActivity({ ...activity, templateVersionId: event.target.value, title: template?.title || activity.title }); }}><option value="">选择已发布的课堂教案</option>{availableTemplates.map((template) => { const version = readyVersion(template)!; return <option key={version.id} value={version.id}>{template.title} · v{version.version}</option>; })}</select></label>
                       {availableTemplates.length ? <p className="pbl-dialog-inline-note"><Check size={15}/>只显示未归档且已有发布版本的教案。关联后不会自动开始课堂。</p> : <div className="pbl-dialog-empty-notice"><BookOpen size={19}/><div><strong>课程库暂无可用教案</strong><p>请先完成备课并发布教案，再返回当前章节进行关联。</p><Link href="/teacher/templates">前往课程库 <ArrowUpRight size={14}/></Link></div></div>}
                     </>
                   ) : (
@@ -810,6 +822,32 @@ export default function TeacherClassEditorPage() {
         </form>
       </DialogContent>
     </Dialog>
+    <AlertDialog open={activityToDelete !== null} onOpenChange={(open) => { if (!open && !busy) setActivityToDelete(null); }}>
+      <AlertDialogContent className="pbl-platform-theme">
+        <div className="space-y-2">
+          <AlertDialogTitle>删除“{activityToDelete?.title}”？</AlertDialogTitle>
+          <AlertDialogDescription>
+            删除后，这项{activityToDelete ? types[activityToDelete.type] || "学习内容" : "学习内容"}将从章节目录和学生端移除。已有课堂、提交及学习记录会继续保留。
+          </AlertDialogDescription>
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel>取消</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              const selected = activityToDelete;
+              if (!selected) return;
+              void run(async () => {
+                await mutate(`/api/platform/activities/${selected.id}`, undefined, "DELETE");
+              }, `${types[selected.type] || "学习内容"}已从章节目录删除`).then((succeeded) => {
+                if (succeeded) setActivityToDelete(null);
+              });
+            }}
+          >
+            确认删除
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     <Dialog open={invitationOpen} onOpenChange={(open) => { setInvitationOpen(open); if (!open) setCopyStatus("idle"); }}>
       <DialogContent
         className="pbl-platform-theme pbl-platform-dialog pbl-invitation-dialog"

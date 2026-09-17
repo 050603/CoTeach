@@ -18,6 +18,15 @@ describe('withGenerationRetry', () => {
     await expect(withGenerationRetry(operation, { label: 'test', maxRetries: 8, sleep: async () => {} })).rejects.toThrow('unavailable');
     expect(operation).toHaveBeenCalledTimes(3);
   });
+  it('never retries a cancelled request', async () => {
+    const operation = vi.fn().mockRejectedValue(new DOMException('cancelled', 'AbortError'));
+    await expect(withGenerationRetry(operation, {
+      label: 'cancelled course request',
+      maxRetries: 2,
+      sleep: async () => {},
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(operation).toHaveBeenCalledOnce();
+  });
   it('does not let result validation schedule another generation', async () => {
     const operation = vi.fn().mockResolvedValue(null);
     expect(await withGenerationRetry(operation, { label: 'test', shouldRetryResult: () => true })).toBeNull();
@@ -111,6 +120,17 @@ describe('withGenerationRetry', () => {
       statusCode: 503,
     });
     expect(isRetryableGenerationError(contextualized)).toBe(true);
+  });
+
+  it('recognizes a provider InternalError retained inside an SDK validation error', () => {
+    const sdkError = Object.assign(new Error('Type validation failed'), {
+      value: {
+        code: 'InternalError',
+        message: 'Receive batching backend response failed!',
+        request_id: 'request-123',
+      },
+    });
+    expect(isRetryableGenerationError(sdkError)).toBe(true);
   });
 
   it('keeps exhausted request budgets terminal when page context is added', () => {

@@ -110,6 +110,7 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
               return (
                 <td
                   key={cell.id}
+                  data-slide-cell-id={cell.id}
                   colSpan={cell.colspan > 1 ? cell.colspan : undefined}
                   rowSpan={cell.rowspan > 1 ? cell.rowspan : undefined}
                   style={{

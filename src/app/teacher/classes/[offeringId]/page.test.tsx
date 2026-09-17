@@ -9,6 +9,7 @@ const offering = { id: "course-1", name: "设计思维", status: "open", chapter
 let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   push.mockReset();
+  window.history.replaceState({}, "", "/teacher/classes/course-1");
   fetcher = vi.fn(async (url: string, options?: RequestInit) => {
     if (
       url === "/api/platform/offerings/course-1/cover"
@@ -164,6 +165,40 @@ describe("课程章节管理", () => {
     const exportItem = await screen.findByRole("menuitem", { name: "导出问卷数据（CSV）" });
     expect(exportItem).toHaveAttribute("href", "/api/platform/activities/survey-1/survey-export");
   });
+  it("deletes an existing resource from the chapter directory after confirmation", async () => {
+    let currentOffering = {
+      ...offering,
+      chapters: [{
+        ...offering.chapters[0],
+        activities: [{ id: "resource-1", title: "社区观察方法", type: "Resource", isOpen: true, version: 4 }],
+      }],
+    };
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url === "/api/platform/activities/resource-1" && options?.method === "DELETE") {
+        currentOffering = {
+          ...currentOffering,
+          chapters: [{ ...currentOffering.chapters[0], activities: [] }],
+        };
+        return new Response(JSON.stringify({ activity: { id: "resource-1", archivedAt: new Date().toISOString() } }));
+      }
+      return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [] } : { offerings: [currentOffering] }));
+    });
+    render(<Page />);
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "社区观察方法更多操作" }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除内容" }));
+
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("删除“社区观察方法”？");
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("已有课堂、提交及学习记录会继续保留");
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith(
+      "/api/platform/activities/resource-1",
+      expect.objectContaining({ method: "DELETE" }),
+    ));
+    expect(await screen.findByText("资料已从章节目录删除")).toBeInTheDocument();
+    expect(screen.queryByText("社区观察方法")).toBeNull();
+  });
   it("keeps the editor open and explains a failed activity save", async () => {
     render(<Page />);
     fireEvent.click(await screen.findByRole("button", { name: "添加学习内容" }));
@@ -184,6 +219,27 @@ describe("课程章节管理", () => {
     fireEvent.click(await screen.findByRole("button", { name: "添加学习内容" }));
     expect(screen.queryByRole("option", { name: /已归档教案/ })).toBeNull();
     expect(screen.getByText("课程库暂无可用教案")).toBeInTheDocument();
+  });
+  it("keeps the exact course version selected before choosing a teaching class", async () => {
+    window.history.replaceState({}, "", "/teacher/classes/course-1?templateVersionId=new-version");
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (options?.method) return new Response(JSON.stringify({ activity: { id: "activity" } }), { status: 201 });
+      return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [
+        { id: "old-template", title: "旧课程", status: "ACTIVE", versions: [{ id: "old-version", version: 1, status: "published" }] },
+        { id: "new-template", title: "本次选择的课程", status: "ACTIVE", versions: [{ id: "new-version", version: 3, status: "published" }] },
+      ] } : { offerings: [offering] }));
+    });
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("button", { name: "添加学习内容" }));
+
+    expect(screen.getByLabelText(/课程库教案/)).toHaveValue("new-version");
+    expect(screen.getByLabelText("标题")).toHaveValue("本次选择的课程");
+    fireEvent.click(screen.getByRole("button", { name: "添加到章节" }));
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith(
+      "/api/platform/offerings/course-1/chapters/chapter-1/activities",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"templateVersionId":"new-version"') }),
+    ));
   });
   it("uploads a PDF and saves it as a file reference", async () => {
     fetcher.mockImplementation(async (url: string, options?: RequestInit) => {

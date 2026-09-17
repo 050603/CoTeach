@@ -4,6 +4,24 @@ import { ACTION_DESCRIPTIONS } from './tool-schemas';
 
 const empty = z.object({});
 const elementId = z.string().min(1);
+const visualSelector = z.union([
+  z.object({
+    cellId: z.string().min(1),
+    quote: z.string().min(1).optional(),
+    occurrence: z.number().int().nonnegative().optional(),
+  }).strict().refine(
+    (selector) => selector.occurrence === undefined || selector.quote !== undefined,
+    '`occurrence` requires `quote`',
+  ),
+  z.object({
+    quote: z.string().min(1),
+    occurrence: z.number().int().nonnegative().optional(),
+  }).strict(),
+]);
+const laserWaypoint = z.object({
+  elementId,
+  selector: visualSelector.optional(),
+}).strict();
 const anchor = z.object({ elementId, side: z.enum(['top', 'right', 'bottom', 'left', 'center']) });
 const drawingIdentity = { elementId: elementId.optional(), groupId: elementId.optional() };
 const coordinates = {
@@ -12,8 +30,18 @@ const coordinates = {
 };
 
 const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
-  spotlight: z.object({ elementId, dimOpacity: z.number().min(0).max(1).optional() }),
-  laser: z.object({ elementId, color: z.string().optional() }),
+  spotlight: z.object({
+    elementId,
+    selector: visualSelector.optional(),
+    dimOpacity: z.number().min(0).max(1).optional(),
+  }),
+  laser: z.object({
+    elementId,
+    selector: visualSelector.optional(),
+    waypoints: z.array(laserWaypoint).min(1).max(4).optional(),
+    color: z.string().optional(),
+    duration: z.number().positive().max(10_000).optional(),
+  }),
   play_video: z.object({ elementId }),
   wb_open: empty,
   wb_close: empty,

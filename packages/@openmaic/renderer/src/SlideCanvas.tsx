@@ -12,6 +12,11 @@ import type {
 } from '@openmaic/dsl';
 import type { SlideEffects } from './types/effects';
 import { findElementGeometry, type PercentageGeometry } from './utils/geometry';
+import {
+  useVisualTargetGeometry,
+  useVisualTargetPathGeometry,
+} from './hooks/useVisualTargetGeometry';
+import { visualTargetKey } from './utils/visualTarget';
 import { useSlideBackgroundStyle } from './hooks/useSlideBackgroundStyle';
 import { useViewportSize } from './hooks/useViewportSize';
 import { SlideElement } from './SlideElement';
@@ -77,6 +82,7 @@ export function SlideCanvas(props: SlideCanvasProps) {
   const chrome = props.chrome ?? true;
 
   const canvasRef = useRef<HTMLDivElement>(null);
+  const slideRootRef = useRef<HTMLDivElement>(null);
   const elements = slide.elements;
 
   const { viewportStyles, fitScale } = useViewportSize(canvasRef, {
@@ -90,9 +96,12 @@ export function SlideCanvas(props: SlideCanvasProps) {
 
   // Plain derivations: when this package is consumed in a React Compiler build
   // these are auto-memoized; otherwise the cost (O(elements) lookups) is trivial.
-  const laserGeometry: PercentageGeometry | null = effects?.laser
-    ? findElementGeometry(elements, effects.laser.elementId, slide.viewportSize)
-    : null;
+  const laserGeometry = useVisualTargetGeometry(slideRootRef, effects?.laser);
+  const laserWaypointGeometries = useVisualTargetPathGeometry(
+    slideRootRef,
+    effects?.laser?.waypoints,
+  );
+  const spotlightGeometry = useVisualTargetGeometry(slideRootRef, effects?.spotlight);
 
   const zoomGeometry: PercentageGeometry | null = effects?.zoom
     ? findElementGeometry(elements, effects.zoom.elementId, slide.viewportSize)
@@ -117,6 +126,7 @@ export function SlideCanvas(props: SlideCanvasProps) {
     >
       <style dangerouslySetInnerHTML={{ __html: SLIDE_RENDERER_STYLES }} />
       <div
+        ref={slideRootRef}
         style={{
           position: 'absolute',
           ...(chrome
@@ -178,22 +188,22 @@ export function SlideCanvas(props: SlideCanvasProps) {
           )}
         </div>
 
-        <SpotlightOverlay options={effects?.spotlight} />
+        <SpotlightOverlay options={effects?.spotlight} geometry={spotlightGeometry} />
 
         <div
           style={{
             position: 'absolute',
             inset: 0,
             pointerEvents: 'none',
-            padding: '5%',
           }}
         >
           <div style={{ position: 'relative', width: '100%', height: '100%' }}>
             <AnimatePresence>
-              {effects?.laser && laserGeometry && (
+              {effects?.laser && laserGeometry && laserWaypointGeometries && (
                 <LaserOverlay
-                  key={`laser-${effects.laser.elementId}`}
+                  key={`laser-${visualTargetKey(effects.laser)}`}
                   geometry={laserGeometry}
+                  waypointGeometries={laserWaypointGeometries}
                   color={effects.laser.color}
                   duration={effects.laser.duration}
                 />

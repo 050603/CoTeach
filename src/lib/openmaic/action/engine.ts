@@ -46,8 +46,15 @@ function delay(ms: number): Promise<void> {
 
 // ==================== ActionEngine ====================
 
-/** Default duration (ms) before fire-and-forget effects auto-clear */
-const EFFECT_AUTO_CLEAR_MS = 5000;
+/** A laser is a short pointer cue; spotlights are cleared by narration lifecycle. */
+const LASER_DEFAULT_DURATION_MS = 2500;
+
+function laserDuration(action: LaserAction): number {
+  if (action.duration !== undefined) return action.duration;
+  return action.waypoints?.length
+    ? Math.min(8000, Math.max(LASER_DEFAULT_DURATION_MS, (action.waypoints.length + 1) * 1400))
+    : LASER_DEFAULT_DURATION_MS;
+}
 
 /** Callback for sending messages to widget iframe */
 export type WidgetMessageCallback = (type: string, payload: Record<string, unknown>) => void;
@@ -57,6 +64,10 @@ export class ActionEngine {
   private stageAPI: ReturnType<typeof createStageAPI>;
   private audioPlayer: AudioPlayer | null;
   private effectTimer: ReturnType<typeof setTimeout> | null = null;
+  private activeEffect: SpotlightAction | LaserAction | null = null;
+  private effectTimerStartedAt = 0;
+  private effectTimerRemaining = 0;
+  private effectGeneration = 0;
   private widgetMessageCallback: WidgetMessageCallback | null = null;
   private restoringWhiteboard = false;
 
@@ -82,6 +93,8 @@ export class ActionEngine {
       clearTimeout(this.effectTimer);
       this.effectTimer = null;
     }
+    this.activeEffect = null;
+    this.effectTimerRemaining = 0;
   }
 
   /**
@@ -151,7 +164,35 @@ export class ActionEngine {
       clearTimeout(this.effectTimer);
       this.effectTimer = null;
     }
+    this.activeEffect = null;
+    this.effectTimerRemaining = 0;
+    this.effectGeneration++;
     useCanvasStore.getState().clearAllEffects();
+  }
+
+  /** Hide the current cue while preserving its remaining lifetime for resume. */
+  pauseEffects(): void {
+    if (this.effectTimer) {
+      clearTimeout(this.effectTimer);
+      this.effectTimer = null;
+      this.effectTimerRemaining = Math.max(
+        0,
+        this.effectTimerRemaining - (Date.now() - this.effectTimerStartedAt),
+      );
+    }
+    useCanvasStore.getState().clearAllEffects();
+  }
+
+  /** Restore the cue that belongs to the paused narration. */
+  resumeEffects(): void {
+    const effect = this.activeEffect;
+    if (!effect) return;
+    if (effect.type === 'laser' && this.effectTimerRemaining <= 0) {
+      this.clearEffects();
+      return;
+    }
+    this.renderEffect(effect);
+    if (effect.type === 'laser') this.scheduleLaserClear(this.effectTimerRemaining);
   }
 
   /**
@@ -182,31 +223,59 @@ export class ActionEngine {
     if (!this.restoringWhiteboard) await delay(ms);
   }
 
-  /** Schedule auto-clear for fire-and-forget effects */
-  private scheduleEffectClear(): void {
+  /** Schedule a token-guarded clear so an old timer cannot erase a newer cue. */
+  private scheduleLaserClear(duration: number): void {
     if (this.effectTimer) {
       clearTimeout(this.effectTimer);
     }
+    const generation = this.effectGeneration;
+    this.effectTimerStartedAt = Date.now();
+    this.effectTimerRemaining = duration;
     this.effectTimer = setTimeout(() => {
+      if (generation !== this.effectGeneration) return;
       useCanvasStore.getState().clearAllEffects();
       this.effectTimer = null;
-    }, EFFECT_AUTO_CLEAR_MS);
+      this.activeEffect = null;
+      this.effectTimerRemaining = 0;
+    }, duration);
   }
 
   // ==================== Fire-and-forget ====================
 
   private executeSpotlight(action: SpotlightAction): void {
-    useCanvasStore.getState().setSpotlight(action.elementId, {
-      dimness: action.dimOpacity ?? 0.5,
-    });
-    this.scheduleEffectClear();
+    this.replaceEffect(action);
   }
 
   private executeLaser(action: LaserAction): void {
+    this.replaceEffect(action);
+  }
+
+  private replaceEffect(action: SpotlightAction | LaserAction): void {
+    if (this.effectTimer) clearTimeout(this.effectTimer);
+    this.effectTimer = null;
+    this.effectGeneration++;
+    this.activeEffect = { ...action };
+    this.effectTimerRemaining = action.type === 'laser'
+      ? laserDuration(action)
+      : 0;
+    this.renderEffect(action);
+    if (action.type === 'laser') this.scheduleLaserClear(this.effectTimerRemaining);
+  }
+
+  private renderEffect(action: SpotlightAction | LaserAction): void {
+    if (action.type === 'spotlight') {
+      useCanvasStore.getState().setSpotlight(action.elementId, {
+        dimness: action.dimOpacity ?? 0.5,
+        selector: action.selector,
+      });
+      return;
+    }
     useCanvasStore.getState().setLaser(action.elementId, {
       color: action.color ?? '#ff0000',
+      duration: laserDuration(action),
+      selector: action.selector,
+      waypoints: action.waypoints,
     });
-    this.scheduleEffectClear();
   }
 
   // ==================== Synchronous — Speech ====================

@@ -18,6 +18,8 @@ import {
   mergeTtsVoiceTimingCalibrations,
   type TtsVoiceTimingCalibration,
 } from '@openmaic/lib/audio/tts-timing';
+import { normalizeManagedProviderCatalog } from '@openmaic/lib/provider-catalog-policy';
+import type { TtsScenarioConfigs } from '@openmaic/lib/audio/tts-scenarios';
 
 export type ProviderSection = 'providers' | 'tts' | 'asr' | 'pdf' | 'image' | 'video' | 'web-search';
 
@@ -34,6 +36,7 @@ export interface ProviderEntry {
    */
   defaultModel?: string;
   defaultVoice?: string;
+  scenarioConfigs?: TtsScenarioConfigs;
   timingCalibrations?: TtsVoiceTimingCalibration[];
 }
 
@@ -131,6 +134,7 @@ export async function saveProviderEntry(
   providerId: string,
   entry: ProviderEntry,
 ): Promise<void> {
+  entry = normalizeManagedProviderCatalog(section, providerId, entry);
   if (isProviderDatabaseConfigured()) {
     await providerPrisma.$transaction(async (tx) => {
       // NULL ownerId is not covered by PostgreSQL's composite uniqueness.
@@ -176,6 +180,11 @@ export async function saveProviderEntry(
         : existing.defaultVoice
           ? { defaultVoice: existing.defaultVoice }
           : {}),
+      ...(entry.scenarioConfigs
+        ? { scenarioConfigs: entry.scenarioConfigs }
+        : existing.scenarioConfigs
+          ? { scenarioConfigs: existing.scenarioConfigs }
+          : {}),
       ...(entry.timingCalibrations
         ? { timingCalibrations: entry.timingCalibrations }
         : existing.timingCalibrations
@@ -216,14 +225,16 @@ export async function getProviderEntry(
     const row = await providerPrisma.providerCredential.findFirst({
       where: { ownerId: null, name: section, provider: providerId, status: 'ACTIVE' },
     });
-    return row ? providerRowToEntry(row) : null;
+    return row
+      ? normalizeManagedProviderCatalog(section, providerId, providerRowToEntry(row))
+      : null;
   }
   await ensureMigratedInternal();
   const data = await readYaml();
   const sectionKey = section === 'web-search' ? 'web-search' : section;
   const entry = data[sectionKey]?.[providerId];
   if (!entry) return null;
-  return {
+  return normalizeManagedProviderCatalog(section, providerId, {
     apiKey: entry.apiKey || '',
     baseUrl: entry.baseUrl,
     models: entry.models,
@@ -231,8 +242,9 @@ export async function getProviderEntry(
     priority: typeof entry.priority === 'number' ? entry.priority : undefined,
     defaultModel: entry.defaultModel,
     defaultVoice: entry.defaultVoice,
+    scenarioConfigs: entry.scenarioConfigs,
     timingCalibrations: entry.timingCalibrations,
-  };
+  });
 }
 
 export async function listProviders(
@@ -243,7 +255,10 @@ export async function listProviders(
       where: { ownerId: null, name: section, status: 'ACTIVE' },
       orderBy: { provider: 'asc' },
     });
-    return Object.fromEntries(rows.map((row) => [row.provider, providerRowToEntry(row)]));
+    return Object.fromEntries(rows.map((row) => [
+      row.provider,
+      normalizeManagedProviderCatalog(section, row.provider, providerRowToEntry(row)),
+    ]));
   }
   await ensureMigratedInternal();
   const data = await readYaml();
@@ -252,7 +267,7 @@ export async function listProviders(
   const result: Record<string, ProviderEntry> = {};
   for (const [id, entry] of Object.entries(sectionData)) {
     if (!entry) continue;
-    result[id] = {
+    result[id] = normalizeManagedProviderCatalog(section, id, {
       apiKey: entry.apiKey || '',
       baseUrl: entry.baseUrl,
       models: entry.models,
@@ -260,8 +275,9 @@ export async function listProviders(
       priority: typeof entry.priority === 'number' ? entry.priority : undefined,
       defaultModel: entry.defaultModel,
       defaultVoice: entry.defaultVoice,
+      scenarioConfigs: entry.scenarioConfigs,
       timingCalibrations: entry.timingCalibrations,
-    };
+    });
   }
   return result;
 }
@@ -282,6 +298,7 @@ function providerConfigJson(
     ...(entry.priority !== undefined ? { priority: entry.priority } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
     ...(entry.defaultVoice ? { defaultVoice: entry.defaultVoice } : {}),
+    ...(entry.scenarioConfigs ? { scenarioConfigs: entry.scenarioConfigs } : {}),
     ...(entry.timingCalibrations ? { timingCalibrations: entry.timingCalibrations } : {}),
   } as Prisma.InputJsonValue;
 }
@@ -344,6 +361,7 @@ async function readProviderEntryRaw(
     priority: typeof entry.priority === 'number' ? entry.priority : undefined,
     defaultModel: entry.defaultModel,
     defaultVoice: entry.defaultVoice,
+    scenarioConfigs: entry.scenarioConfigs,
     timingCalibrations: entry.timingCalibrations,
   };
 }

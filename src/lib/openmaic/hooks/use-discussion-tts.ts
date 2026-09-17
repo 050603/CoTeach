@@ -202,6 +202,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
           text: item.text,
           audioId: item.partId,
           ttsProviderId: item.providerId,
+          ttsScenario: 'realtime-interaction',
           ttsModelId: item.modelId || providerConfig?.modelId,
           ttsVoice: item.voiceId,
           ttsSpeed: ttsSpeed,

@@ -15,8 +15,14 @@ import {
   resolveTTSApiKey,
   resolveTTSBaseUrl,
   resolveTTSModel,
+  resolveTTSVoice,
 } from '@openmaic/lib/server/provider-config';
 import type { TTSProviderId } from '@openmaic/lib/audio/types';
+import {
+  normalizeTtsScenarioId,
+  type TtsScenarioId,
+} from '@openmaic/lib/audio/tts-scenarios';
+import { qwenAudioTtsModelForVoice } from '@openmaic/lib/audio/qwen-audio-tts-catalog';
 import { createLogger } from '@openmaic/lib/logger';
 import { apiError, apiSuccess } from '@openmaic/lib/server/api-response';
 import { validateUrlForSSRF } from '@openmaic/lib/server/ssrf-guard';
@@ -56,6 +62,7 @@ export async function POST(req: NextRequest) {
       ttsApiKey?: string;
       ttsBaseUrl?: string;
       ttsProviderOptions?: Record<string, unknown>;
+      ttsScenario?: TtsScenarioId;
     };
     ttsProviderId = body.ttsProviderId;
     ttsVoice = body.ttsVoice;
@@ -112,12 +119,24 @@ export async function POST(req: NextRequest) {
 
     const apiKey = resolveTTSApiKey(ttsProviderId, managed ? undefined : ttsApiKey || undefined);
     const baseUrl = resolveTTSBaseUrl(ttsProviderId, clientBaseUrl);
+    const scenario = normalizeTtsScenarioId(body.ttsScenario);
+    const modelId = resolveTTSModel(ttsProviderId, ttsModelId, scenario);
+    const scenarioVoice = resolveTTSVoice(ttsProviderId, ttsVoice, scenario) || ttsVoice;
+    // Keep feature/agent voice overrides when they work with the selected
+    // scenario model. Qwen Audio 3.0 has disjoint Plus/Flash voice catalogs,
+    // so an incompatible requested voice falls back to the teacher's scenario
+    // voice instead of sending an invalid vendor request.
+    const voice = managed
+      && ttsProviderId === 'qwen-tts'
+      && qwenAudioTtsModelForVoice(ttsVoice) !== modelId
+        ? scenarioVoice
+        : ttsVoice;
 
-    // Build TTS config (managed providers may pin the model server-side)
+    // Build TTS config (managed providers pin the model by usage scenario).
     const config = {
       providerId: ttsProviderId as TTSProviderId,
-      modelId: resolveTTSModel(ttsProviderId, ttsModelId),
-      voice: ttsVoice,
+      modelId,
+      voice,
       speed: ttsSpeed ?? 1.0,
       apiKey,
       baseUrl,
@@ -125,7 +144,7 @@ export async function POST(req: NextRequest) {
     };
 
     log.info(
-      `Generating TTS: provider=${ttsProviderId}, model=${config.modelId || 'default'}, voice=${ttsVoice}, ` +
+      `Generating TTS: provider=${ttsProviderId}, scenario=${scenario}, model=${config.modelId || 'default'}, voice=${voice}, ` +
         `registeredVoiceId=${voxcpmRegisteredVoiceId || 'none'}, audioId=${audioId}, textLen=${text.length}`,
     );
 

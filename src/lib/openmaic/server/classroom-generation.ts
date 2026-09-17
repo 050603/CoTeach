@@ -1,5 +1,8 @@
 import { nanoid } from 'nanoid';
-import { createCourseGenerationAiCall } from './course-generation-ai-call';
+import {
+  createCourseGenerationAiCall,
+  withCourseGenerationAiCallContext,
+} from './course-generation-ai-call';
 import { prepareVideoTimingRequests } from './video-timing-plan';
 import { allocateTeachingStageTiming } from './teaching-stage-timing-plan';
 import type { VideoProviderId } from '@openmaic/lib/media/types';
@@ -87,12 +90,28 @@ import {
   naturalizeKnowledgeNarration,
   NATURAL_NARRATION_VERSION,
 } from '@openmaic/lib/generation/narration-style';
-import type { SceneOutline, UserRequirements } from '@openmaic/lib/types/generation';
+import type {
+  GeneratedInteractiveContent,
+  GeneratedPBLContent,
+  GeneratedQuizContent,
+  GeneratedSlideContent,
+  SceneOutline,
+  UserRequirements,
+} from '@openmaic/lib/types/generation';
 import { validatePblKnowledgeAlignment } from '@/lib/pbl-outline-validation';
 import type { Scene, Stage } from '@openmaic/lib/types/stage';
+import type { Action } from '@openmaic/lib/types/action';
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@openmaic/lib/constants/agent-defaults';
+import {
+  fingerprintGenerationValue,
+  type SceneGenerationCheckpointStage,
+} from '@/lib/course-generation/page-checkpoints';
 
 const log = createLogger('Classroom');
+type GeneratedSceneContent = GeneratedSlideContent
+  | GeneratedQuizContent
+  | GeneratedInteractiveContent
+  | GeneratedPBLContent;
 /** Page orchestration never retries a completed model response. Requests own fault retries. */
 export function contentRetryBudget(_type: SceneOutline['type']): number { return 0; }
 
@@ -142,6 +161,18 @@ export interface ClassroomGenerationProgress {
   message: string;
   scenesGenerated: number;
   totalScenes?: number;
+  activePages?: Array<{
+    index: number;
+    title: string;
+    stage: SceneGenerationCheckpointStage | 'restoring' | 'assembling';
+    startedAt: number;
+    queueMs?: number;
+    requestStartedAt?: number;
+    executionMs?: number;
+    retryCount?: number;
+    lastOutputAt?: number;
+  }>;
+  stage?: SceneGenerationCheckpointStage | 'restoring' | 'assembling';
 }
 
 export function completedSceneGenerationProgress(completed: number, total: number): number {
@@ -173,18 +204,77 @@ export interface GenerateClassroomOptions {
   preparedOutlines?: SceneOutline[];
   /** Persist final outlines before the first page starts. */
   onOutlinesPrepared?: (outlines: SceneOutline[]) => Promise<void> | void;
+  loadTeachingSectionCheckpoint?: (
+    sectionKey: string,
+    inputFingerprint: string,
+    modelFingerprint: string,
+  ) => Promise<Array<[string, unknown]> | null> | Array<[string, unknown]> | null;
+  onTeachingSectionCompleted?: (
+    sectionKey: string,
+    inputFingerprint: string,
+    modelFingerprint: string,
+    briefs: Array<[string, unknown]>,
+  ) => Promise<void> | void;
   /** Restore an exact-fingerprint completed page, if one exists. */
   loadSceneCheckpoint?: (
     outline: SceneOutline,
     index: number,
     stageId: string,
+    modelFingerprint: string,
+    inputFingerprint: string,
   ) => Promise<Scene | null> | Scene | null;
   /** Persist only a fully assembled page, without a second content or timing pass. */
   onSceneCompleted?: (
     outline: SceneOutline,
     scene: Scene,
     index: number,
+    modelFingerprint: string,
+    inputFingerprint: string,
   ) => Promise<void> | void;
+  /** Restore a validated partial page without repeating successful model work. */
+  loadSceneStageCheckpoint?: (
+    outline: SceneOutline,
+    stage: SceneGenerationCheckpointStage,
+    modelFingerprint: string,
+    inputFingerprint?: string,
+  ) => Promise<unknown | null> | unknown | null;
+  /** Persist content, review, actions and narration as independent stages. */
+  onSceneStageCompleted?: (
+    outline: SceneOutline,
+    stage: SceneGenerationCheckpointStage,
+    payload: unknown,
+    modelFingerprint: string,
+    inputFingerprint?: string,
+  ) => Promise<void> | void;
+  /** Persist attempts before transport starts so restarts cannot reset retries. */
+  loadSceneStageAttemptCount?: (
+    outline: SceneOutline,
+    stage: SceneGenerationCheckpointStage,
+    modelFingerprint: string,
+    inputFingerprint?: string,
+  ) => Promise<number> | number;
+  onSceneStageAttempt?: (
+    outline: SceneOutline,
+    stage: SceneGenerationCheckpointStage,
+    attemptsStarted: number,
+    modelFingerprint: string,
+    inputFingerprint?: string,
+  ) => Promise<void> | void;
+}
+
+function isGeneratedSceneContent(value: unknown, type: SceneOutline['type']): value is GeneratedSceneContent {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (type === 'slide') return Array.isArray(record.elements);
+  if (type === 'quiz') return Array.isArray(record.questions);
+  if (type === 'interactive') return typeof record.html === 'string';
+  return Boolean(record.projectV2 && typeof record.projectV2 === 'object');
+}
+
+function isActionList(value: unknown): value is Action[] {
+  return Array.isArray(value) && value.every((item) =>
+    Boolean(item && typeof item === 'object' && typeof (item as { type?: unknown }).type === 'string'),
+  );
 }
 
 function createInMemoryStore(stage: Stage): StageStore {
@@ -572,6 +662,13 @@ export async function generateClassroom(
     apiKey,
     thinkingConfig: classroomThinking,
   } = await resolveModel({ modelString: input.generationModelString });
+  const generationModelFingerprint = fingerprintGenerationValue({
+    modelString,
+    providerId,
+    outputWindow: modelInfo?.outputWindow ?? null,
+    thinking: classroomThinking ?? null,
+    pipeline: 'classic-course-page-v2',
+  });
   throwIfAborted(options.signal);
   log.info(`Using teacher-selected generation model for all course authoring calls: ${modelString}`);
 
@@ -595,7 +692,7 @@ export async function generateClassroom(
     thinking: classroomThinking,
     timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
     streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
-    maxRetries: 0,
+    maxRetries: 2,
     // Long-reasoning slide calls can exceed the gateway's five-minute response
     // header limit before a non-streaming body exists. Streaming establishes
     // the response early; the full model output window above prevents the
@@ -610,7 +707,9 @@ export async function generateClassroom(
     maxOutputTokens: modelInfo?.outputWindow,
     thinking: classroomThinking,
     timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
-    maxRetries: 0,
+    maxRetries: 2,
+    streamResponse: true,
+    streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
   });
   const narrationRewriteAiCall = createCourseGenerationAiCall({
     model: languageModel,
@@ -620,7 +719,9 @@ export async function generateClassroom(
     maxOutputTokens: modelInfo?.outputWindow,
     thinking: classroomThinking,
     timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
-    maxRetries: 0,
+    maxRetries: 2,
+    streamResponse: true,
+    streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
   });
   // Interactive widgets return a full HTML/CSS/JS document and routinely need
   // longer than a normal slide JSON response. Keep the exact same resolved
@@ -634,7 +735,7 @@ export async function generateClassroom(
     maxOutputTokens: modelInfo?.outputWindow,
     thinking: classroomThinking,
     timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
-    maxRetries: 0,
+    maxRetries: 2,
     streamResponse: true,
     streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
   });
@@ -850,6 +951,9 @@ export async function generateClassroom(
         onWarning: (warning) => {
           log.warn(warning);
         },
+        modelFingerprint: generationModelFingerprint,
+        loadSectionCheckpoint: options.loadTeachingSectionCheckpoint,
+        onSectionCompleted: options.onTeachingSectionCompleted,
       });
     } finally {
       clearInterval(heartbeat);
@@ -929,6 +1033,103 @@ export async function generateClassroom(
   log.info(`Generating scenes with bounded concurrency: ${sceneConcurrency}`);
   let generatedSceneDrafts = 0;
   const layoutAuditPages: NonNullable<CourseQualityReport['layoutAudit']>['pages'] = [];
+  const activePages = new Map<number, NonNullable<ClassroomGenerationProgress['activePages']>[number]>();
+  const activePageSnapshot = () => [...activePages.values()]
+    .map((page) => ({
+      ...page,
+      executionMs: page.requestStartedAt
+        ? Math.max(page.executionMs ?? 0, Date.now() - page.requestStartedAt)
+        : page.executionMs,
+    }))
+    .sort((left, right) => left.index - right.index);
+  const reportPageStage = async (
+    index: number,
+    title: string,
+    pageStage: NonNullable<ClassroomGenerationProgress['stage']>,
+  ) => {
+    const previous = activePages.get(index);
+    activePages.set(index, {
+      ...previous,
+      index: index + 1,
+      title,
+      stage: pageStage,
+      startedAt: previous?.stage === pageStage ? previous.startedAt : Date.now(),
+    });
+    const labels: Record<NonNullable<ClassroomGenerationProgress['stage']>, string> = {
+      restoring: '恢复断点',
+      content: '生成页面正文',
+      'reviewed-content': '检查版式与知识覆盖',
+      actions: '生成讲稿与教学动作',
+      narration: '校验课堂口语',
+      assembling: '组装并保存页面',
+    };
+    await reportProgress({
+      step: 'generating_scenes',
+      progress: completedSceneGenerationProgress(generatedSceneDrafts, outlines.length),
+      message: `第 ${index + 1}/${outlines.length} 页：${labels[pageStage]} · ${title}`,
+      scenesGenerated: generatedSceneDrafts,
+      totalScenes: outlines.length,
+      stage: pageStage,
+      activePages: activePageSnapshot(),
+    });
+  };
+  const pageCallContext = async (
+    index: number,
+    pageStage: SceneGenerationCheckpointStage,
+    inputFingerprint?: string,
+  ) => {
+    const attemptsStarted = Math.max(0, await options.loadSceneStageAttemptCount?.(
+      outlines[index]!,
+      pageStage,
+      generationModelFingerprint,
+      inputFingerprint,
+    ) ?? 0);
+    return {
+      attemptsStarted,
+      onQueued: async ({ totalAttempt }: { totalAttempt: number }) => {
+        const page = activePages.get(index);
+        if (page) activePages.set(index, { ...page, retryCount: totalAttempt - 1 });
+        await options.onSceneStageAttempt?.(
+          outlines[index]!,
+          pageStage,
+          totalAttempt,
+          generationModelFingerprint,
+          inputFingerprint,
+        );
+      },
+      onStarted: ({ totalAttempt, queueMs, startedAt }: {
+        totalAttempt: number;
+        queueMs: number;
+        startedAt: number;
+      }) => {
+        const page = activePages.get(index);
+        if (page) activePages.set(index, {
+          ...page,
+          queueMs,
+          requestStartedAt: startedAt,
+          executionMs: 0,
+          retryCount: totalAttempt - 1,
+        });
+      },
+      onActivity: ({ at }: { at: number }) => {
+        const page = activePages.get(index);
+        if (page) activePages.set(index, {
+          ...page,
+          lastOutputAt: at,
+          executionMs: page.requestStartedAt ? at - page.requestStartedAt : page.executionMs,
+        });
+      },
+      onRetry: async ({ attempt }: { attempt: number }) => {
+        const page = activePages.get(index);
+        if (page) activePages.set(index, { ...page, retryCount: attempt });
+        await reportPageStage(index, outlines[index]?.title ?? `Page ${index + 1}`, pageStage);
+      },
+      onSettled: ({ durationMs }: { durationMs: number }) => {
+        const page = activePages.get(index);
+        if (page) activePages.set(index, { ...page, executionMs: durationMs });
+      },
+    };
+  };
 
   // Each worker generates content -> actions once
   // sequential. Only independent scenes run concurrently; drafts are
@@ -945,30 +1146,44 @@ export async function generateClassroom(
       const requiresNaturalNarration = courseLanguage.locale === 'zh-CN'
         && safeOutline.generationPurpose === 'knowledge-teaching'
         && hasCompleteTeachingBrief(safeOutline);
+      const pageInputFingerprint = fingerprintGenerationValue({
+        courseTitle: courseTitle ?? null,
+        courseLanguage,
+        languageDirective,
+        requirements,
+        agents,
+        outlineContext: outlines,
+        generationVision,
+        narrationPolicy: requiresNaturalNarration ? NATURAL_NARRATION_VERSION : null,
+        pipeline: 'classic-course-page-v2',
+      });
       let pageHeartbeat: ReturnType<typeof setInterval> | undefined;
       try {
-      await reportProgress({
-        step: 'generating_scenes',
-        // Worker-start events can arrive out of order; keep them at the
-        // phase floor so ordered assembly below remains monotonic.
-        progress: 31,
-        message: `Generating scene ${index + 1}/${outlines.length}: ${safeOutline.title}`,
-        scenesGenerated: 0,
-        totalScenes: outlines.length,
-      });
+      await reportPageStage(index, safeOutline.title, 'restoring');
       pageHeartbeat = setInterval(() => {
+        const current = activePages.get(index);
         void reportProgress({
           step: 'generating_scenes',
           progress: completedSceneGenerationProgress(generatedSceneDrafts, outlines.length),
-          message: `正在制作第 ${index + 1}/${outlines.length} 页：${safeOutline.title}`,
+          message: current
+            ? `第 ${index + 1}/${outlines.length} 页仍在${current.stage}：${safeOutline.title}`
+            : `正在制作第 ${index + 1}/${outlines.length} 页：${safeOutline.title}`,
           scenesGenerated: generatedSceneDrafts,
           totalScenes: outlines.length,
+          stage: current?.stage,
+          activePages: activePageSnapshot(),
         }).catch((error) => {
           if (!options.signal?.aborted) log.warn(`Could not persist page heartbeat for "${safeOutline.title}":`, error);
         });
       }, 15_000);
 
-      const checkpoint = await options.loadSceneCheckpoint?.(safeOutline, index, stageId);
+      const checkpoint = await options.loadSceneCheckpoint?.(
+        safeOutline,
+        index,
+        stageId,
+        generationModelFingerprint,
+        pageInputFingerprint,
+      );
       if (checkpoint) {
         const checkpointLanguageIssues = auditNarrationLanguage(
           checkpoint.actions,
@@ -1083,16 +1298,72 @@ export async function generateClassroom(
               .map((item) => item.title),
           }
         : undefined;
-      let content = await generateSceneContent(safeOutline, contentCall.aiCall, {
-        agents, languageDirective, userRequirements: requirements,
-        pblProfile: requirements.pblProfile, allowProceduralSkill: vocationalActive,
-        signal: options.signal, visionEnabled: contentCall.vision,
-        languageModel: contentCall.model, thinkingConfig: contentCall.thinking,
-        ...(websiteReferenceContext ? { websiteReferenceContext } : {}),
-      });
-      if (!content) throw Object.assign(new Error(`Scene "${safeOutline.title}" returned invalid content`), { isRetryable: false });
+      const loadStage = (checkpointStage: SceneGenerationCheckpointStage, inputFingerprint?: string) =>
+        options.loadSceneStageCheckpoint?.(
+          safeOutline,
+          checkpointStage,
+          generationModelFingerprint,
+          inputFingerprint,
+        );
+      const saveStage = (
+        checkpointStage: SceneGenerationCheckpointStage,
+        payload: unknown,
+        inputFingerprint?: string,
+      ) => options.onSceneStageCompleted?.(
+        safeOutline,
+        checkpointStage,
+        payload,
+        generationModelFingerprint,
+        inputFingerprint,
+      );
+
+      await reportPageStage(index, safeOutline.title, 'content');
+      const restoredContentPayload = await loadStage('content', pageInputFingerprint);
+      let content = restoredContentPayload
+        && typeof restoredContentPayload === 'object'
+        && isGeneratedSceneContent(
+          (restoredContentPayload as { content?: unknown }).content,
+          safeOutline.type,
+        )
+        ? (restoredContentPayload as { content: GeneratedSceneContent }).content
+        : null;
+      if (!content) {
+        content = await generateSceneContent(
+          safeOutline,
+          withCourseGenerationAiCallContext(
+            contentCall.aiCall,
+            await pageCallContext(index, 'content', pageInputFingerprint),
+          ),
+          {
+          agents, languageDirective, userRequirements: requirements,
+          pblProfile: requirements.pblProfile, allowProceduralSkill: vocationalActive,
+          signal: options.signal, visionEnabled: contentCall.vision,
+          languageModel: contentCall.model, thinkingConfig: contentCall.thinking,
+          ...(websiteReferenceContext ? { websiteReferenceContext } : {}),
+          },
+        );
+        if (!content) throw Object.assign(new Error(`Scene "${safeOutline.title}" returned invalid content`), { isRetryable: false });
+        await saveStage('content', { content }, pageInputFingerprint);
+      }
       throwIfAborted(options.signal);
-      if (safeOutline.type === 'slide' && 'elements' in content) {
+      const rawContentFingerprint = fingerprintGenerationValue(content);
+      const reviewInputFingerprint = fingerprintGenerationValue({
+        rawContentFingerprint,
+        auditPolicy: 'browser-density-knowledge-v2',
+      });
+      await reportPageStage(index, safeOutline.title, 'reviewed-content');
+      const restoredReviewedPayload = await loadStage('reviewed-content', reviewInputFingerprint);
+      const restoredReviewed = restoredReviewedPayload && typeof restoredReviewedPayload === 'object'
+        ? restoredReviewedPayload as { content?: unknown; layoutAuditPage?: unknown }
+        : null;
+      let restoredReviewedValid = false;
+      if (restoredReviewed && isGeneratedSceneContent(restoredReviewed.content, safeOutline.type)) {
+        restoredReviewedValid = true;
+        content = restoredReviewed.content;
+        if (restoredReviewed.layoutAuditPage) {
+          layoutAuditPages[index] = restoredReviewed.layoutAuditPage as NonNullable<CourseQualityReport['layoutAudit']>['pages'][number];
+        }
+      } else if (safeOutline.type === 'slide' && 'elements' in content) {
         // The pinned OpenMAIC generator owns the first draft. A measured defect
         // may invoke its own edit mode exactly once with the same teacher-picked
         // model. The candidate is accepted only when browser/density evidence
@@ -1102,18 +1373,25 @@ export async function generateClassroom(
           content,
           regenerate: async (editDirective, baselineContent) => {
             try {
-              const candidate = await generateSceneContent(safeOutline, contentCall.aiCall, {
-                agents, languageDirective, userRequirements: requirements,
-                pblProfile: requirements.pblProfile,
-                allowProceduralSkill: vocationalActive,
-                signal: options.signal,
-                visionEnabled: contentCall.vision,
-                languageModel: contentCall.model,
-                thinkingConfig: contentCall.thinking,
-                editDirective,
-                baselineContent,
-                ...(websiteReferenceContext ? { websiteReferenceContext } : {}),
-              });
+              const candidate = await generateSceneContent(
+                safeOutline,
+                withCourseGenerationAiCallContext(
+                  contentCall.aiCall,
+                  await pageCallContext(index, 'reviewed-content', reviewInputFingerprint),
+                ),
+                {
+                  agents, languageDirective, userRequirements: requirements,
+                  pblProfile: requirements.pblProfile,
+                  allowProceduralSkill: vocationalActive,
+                  signal: options.signal,
+                  visionEnabled: contentCall.vision,
+                  languageModel: contentCall.model,
+                  thinkingConfig: contentCall.thinking,
+                  editDirective,
+                  baselineContent,
+                  ...(websiteReferenceContext ? { websiteReferenceContext } : {}),
+                },
+              );
               return candidate && 'elements' in candidate ? candidate : null;
             } catch (error) {
               if (options.signal?.aborted) throw error;
@@ -1166,6 +1444,12 @@ export async function generateClassroom(
           reason: reviewed.finalAudit.reason,
         };
       }
+      if (!restoredReviewedValid) {
+        await saveStage('reviewed-content', {
+          content,
+          ...(layoutAuditPages[index] ? { layoutAuditPage: layoutAuditPages[index] } : {}),
+        }, reviewInputFingerprint);
+      }
       throwIfAborted(options.signal);
       const actionAiCall = await getSceneActionsAiCall();
       const actionOptions = {
@@ -1175,15 +1459,34 @@ export async function generateClassroom(
         teachingConstraints: requirements.teachingConstraints,
         teachingSourceContext: requirements.teachingSourceContext,
       };
-      let actions = await generateSceneActions(
-        safeOutline,
+      const reviewedContentFingerprint = fingerprintGenerationValue({
         content,
+        pageInputFingerprint,
+        actionPolicy: 'scene-actions-v2',
+      });
+      const contextualActionAiCall = withCourseGenerationAiCallContext(
         actionAiCall,
-        {
-          ...actionOptions,
-          languageDirective,
-        },
+        await pageCallContext(index, 'actions', reviewedContentFingerprint),
       );
+      await reportPageStage(index, safeOutline.title, 'actions');
+      const restoredActionsPayload = await loadStage('actions', reviewedContentFingerprint);
+      let actions = restoredActionsPayload
+        && typeof restoredActionsPayload === 'object'
+        && isActionList((restoredActionsPayload as { actions?: unknown }).actions)
+        ? (restoredActionsPayload as { actions: Action[] }).actions
+        : null;
+      const restoredActionsValid = actions !== null;
+      if (!actions) {
+        actions = await generateSceneActions(
+          safeOutline,
+          content,
+          contextualActionAiCall,
+          {
+            ...actionOptions,
+            languageDirective,
+          },
+        );
+      }
       let narrationLanguageIssues = auditNarrationLanguage(
         actions,
         courseLanguage.locale,
@@ -1195,7 +1498,7 @@ export async function generateClassroom(
         actions = await generateSceneActions(
           safeOutline,
           content,
-          actionAiCall,
+          contextualActionAiCall,
           {
             ...actionOptions,
             languageDirective: narrationLanguageRepairDirective(
@@ -1216,17 +1519,40 @@ export async function generateClassroom(
           throw error;
         }
       }
+      if (!restoredActionsValid) {
+        await saveStage('actions', { actions }, reviewedContentFingerprint);
+      }
       if (requiresNaturalNarration) {
-        actions = await naturalizeKnowledgeNarration({
-          outline: safeOutline,
+        await reportPageStage(index, safeOutline.title, 'narration');
+        const actionsFingerprint = fingerprintGenerationValue({
           actions,
-          aiCall: narrationRewriteAiCall,
-          context: actionOptions.ctx,
+          pageInputFingerprint,
+          narrationPolicy: NATURAL_NARRATION_VERSION,
         });
+        const restoredNarrationPayload = await loadStage('narration', actionsFingerprint);
+        if (
+          restoredNarrationPayload
+          && typeof restoredNarrationPayload === 'object'
+          && isActionList((restoredNarrationPayload as { actions?: unknown }).actions)
+        ) {
+          actions = (restoredNarrationPayload as { actions: Action[] }).actions;
+        } else {
+          actions = await naturalizeKnowledgeNarration({
+            outline: safeOutline,
+            actions,
+            aiCall: withCourseGenerationAiCallContext(
+              narrationRewriteAiCall,
+              await pageCallContext(index, 'narration', actionsFingerprint),
+            ),
+            context: actionOptions.ctx,
+          });
+          await saveStage('narration', { actions }, actionsFingerprint);
+        }
       }
       throwIfAborted(options.signal);
 
       log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
+      await reportPageStage(index, safeOutline.title, 'assembling');
       // Keep the canonical assembler so restored and fresh pages have the
       // exact same timing pauses, PBL metadata and outline identity.
       const pageStore = createInMemoryStore(stage);
@@ -1255,7 +1581,13 @@ export async function generateClassroom(
         Object.assign(error, { isRetryable: false });
         throw error;
       }
-      await options.onSceneCompleted?.(safeOutline, scene, index);
+      await options.onSceneCompleted?.(
+        safeOutline,
+        scene,
+        index,
+        generationModelFingerprint,
+        pageInputFingerprint,
+      );
       throwIfAborted(options.signal);
       generatedSceneDrafts += 1;
       await reportProgress({
@@ -1270,12 +1602,24 @@ export async function generateClassroom(
         if (options.signal?.aborted) throw error;
         const message = error instanceof Error ? error.message : String(error);
         log.error(`Scene ${index + 1}/${outlines.length} "${safeOutline.title}" failed: ${message}`);
+        await reportProgress({
+          step: 'generating_scenes',
+          progress: completedSceneGenerationProgress(generatedSceneDrafts, outlines.length),
+          message: `第 ${index + 1}/${outlines.length} 页失败，正在等待其他活动页安全保存后报告失败`,
+          scenesGenerated: generatedSceneDrafts,
+          totalScenes: outlines.length,
+          stage: activePages.get(index)?.stage,
+          activePages: activePageSnapshot(),
+        }).catch((progressError) => {
+          log.warn('Could not persist the page-failure drain state:', progressError);
+        });
         throw contextualizeGenerationError(
           error,
           `Scene ${index + 1}/${outlines.length} "${safeOutline.title}" failed`,
         );
       } finally {
         if (pageHeartbeat) clearInterval(pageHeartbeat);
+        activePages.delete(index);
       }
     },
     { shouldContinue: () => !options.signal?.aborted },

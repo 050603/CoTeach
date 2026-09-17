@@ -13,10 +13,9 @@ import {
   OPENMAIC_GENERATION_BASELINE,
 } from './openmaic-baseline';
 
-const PINNED_PROMPT_HASHES = {
+const UNCHANGED_UPSTREAM_PROMPT_HASHES = {
   'slide-content/system.md': 'fac82e884070e71cf82ffca67fb1ee1c861e3cd90d4f9816c7085c428180aebd',
   'slide-content/user.md': '7d7486fed0d897a85273794359cd17383d7b9f2dbca7481134a1519687368c99',
-  'slide-actions/system.md': '219e8da1eb3c854dbe6ee6fdedda1936e0092fff6c8984b9277c5c6cef2443b6',
   'slide-actions/user.md': '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
   'requirements-to-outlines/system.md': '813240c132acfe63007ddcf3dd764b47b5ad1d7b5005d47361ede3aa42614c65',
   'requirements-to-outlines/user.md': '79fe5ce9a64dc63f174bd1c99dd3e4f1feb2a00e2797edc2a11abc5ac2d6f9ff',
@@ -48,18 +47,27 @@ const outline: SceneOutline = {
 };
 
 describe('pinned OpenMAIC generation baseline', () => {
-  it('keeps all six one-click prompt assets byte-identical to the pinned release', async () => {
+  it('keeps five unrelated prompts pinned and records the in-place action-prompt improvement', async () => {
     expect(OPENMAIC_GENERATION_BASELINE.release).toBe('v1.0.3');
     expect(OPENMAIC_GENERATION_BASELINE.releaseCommit).toBe(
       'e693e11a81644f84c258df73dbda378643520a62',
     );
     expect(OPENMAIC_GENERATION_BASELINE.version).toBe('0.3.7');
-    for (const [file, expected] of Object.entries(PINNED_PROMPT_HASHES)) {
+    for (const [file, expected] of Object.entries(UNCHANGED_UPSTREAM_PROMPT_HASHES)) {
       const body = await readFile(path.join(
         process.cwd(), 'packages', '@openmaic', 'generation', 'templates', file,
       ));
       expect(createHash('sha256').update(body).digest('hex'), file).toBe(expected);
     }
+    const actionPrompt = await readFile(path.join(
+      process.cwd(), 'packages', '@openmaic', 'generation', 'templates',
+      'slide-actions', 'system.md',
+    ));
+    const actionHash = createHash('sha256').update(actionPrompt).digest('hex');
+    expect(OPENMAIC_GENERATION_BASELINE.promptHashes.upstreamSlideActionsSystem)
+      .toBe('219e8da1eb3c854dbe6ee6fdedda1936e0092fff6c8984b9277c5c6cef2443b6');
+    expect(actionHash).toBe(OPENMAIC_GENERATION_BASELINE.promptHashes.slideActionsSystem);
+    expect(actionHash).not.toBe(OPENMAIC_GENERATION_BASELINE.promptHashes.upstreamSlideActionsSystem);
   });
 
   it('keeps upstream semantic fields unchanged and strips CoTeach orchestration metadata', () => {

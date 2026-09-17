@@ -7,8 +7,8 @@ import { resourcePackageJobs } from "@/lib/course-generation/job-storage";
 import { updateCourse } from "@/lib/session/server-store";
 import { convertPresentationToPdf, PresentationConversionError } from "@/lib/uploads/presentation-converter";
 import type { GenerationReferenceMaterial } from "@/lib/course-design/generation-references";
-import { identifyResourcePackage, normalizePackageStructure, parseResourcePackageDraft, readDocx, resourcePackageDraftSchema, ResourcePackageError, RESOURCE_PACKAGE_ROLES } from "./parser";
-import { inspectPackageCompatibility, readPresentationEvidence } from "./compatibility";
+import { identifyResourcePackage, normalizePackageStructure, parseMarkdownResourcePackageDraft, readMarkdown, resourcePackageDraftSchema, ResourcePackageError, RESOURCE_PACKAGE_ROLES, type MarkdownResourceDocument } from "./parser";
+import { inspectPackageCompatibility, readPresentationEvidence, stablePackageSignature } from "./compatibility";
 import { buildAdaptedLaunchPages, writeClassroomPresentation } from "./launch-presentation";
 import { resourcePackageDraftErrors } from "./types";
 import { readBoundedZip, type ArchiveEntry } from "./archive";
@@ -26,15 +26,16 @@ function stableId(value: string): string {
   const digest = createHash("sha256").update(value).digest("hex");
   return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
 }
-const roleMime: Record<ResourcePackageRole, string> = {
-  knowledge: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  lessonPlan: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  launchPresentation: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-};
+function documentFormat(role: ResourcePackageRole, entry: ArchiveEntry) {
+  if (role === "launchPresentation") return { extension: ".pptx", mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", format: "pptx" as const };
+  if (/\.md$/i.test(entry.name)) return { extension: ".md", mimeType: "text/markdown", format: "markdown" as const };
+  return { extension: ".docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", format: "docx" as const };
+}
 async function persistDocument(request: ResourcePackageRequest, role: ResourcePackageRole, entry: ArchiveEntry, bytes: Buffer): Promise<ResourcePackageFile> {
   const hash = createHash("sha256").update(bytes).digest("hex");
   const id = stableId(`${request.courseId}:${request.uploadId}:${role}:${entry.name}:${hash}`);
-  const storageKey = `${id}${role === "launchPresentation" ? ".pptx" : ".docx"}`;
+  const details = documentFormat(role, entry);
+  const storageKey = `${id}${details.extension}`;
   const fileName = path.basename(entry.name);
   const target = path.join(resourcePackageDataDir(), storageKey);
   await mkdir(/* turbopackIgnore: true */ resourcePackageDataDir(), { recursive: true });
@@ -43,14 +44,14 @@ async function persistDocument(request: ResourcePackageRequest, role: ResourcePa
     if (createHash("sha256").update(await readFile(/* turbopackIgnore: true */ target)).digest("hex") !== hash) throw new ResourcePackageError("已保存的资源文件校验失败，请重新上传资源包。", "RESOURCE_PACKAGE_FILE_CORRUPTED", 422);
   });
   await prisma.fileAsset.upsert({ where: { id }, create: { id, originalName: fileName, storageKey, uploadedById: request.requestedBy,
-    mimeType: roleMime[role], size: BigInt(bytes.length), sha256: hash, sourceAssetId: request.uploadId, assetRole: "SOURCE", backupPolicy: "REQUIRED" }, update: { deletedAt: null } });
-  return { id, fileName, url: `/api/uploads/${id}`, sha256: hash };
+    mimeType: details.mimeType, size: BigInt(bytes.length), sha256: hash, sourceAssetId: request.uploadId, assetRole: "SOURCE", backupPolicy: "REQUIRED" }, update: { deletedAt: null } });
+  return { id, fileName, url: `/api/uploads/${id}`, sha256: hash, format: details.format };
 }
 
 async function enrichMissingStructure(draft: ResourcePackageDraft, materials: GenerationReferenceMaterial[], signal: AbortSignal): Promise<ResourcePackageDraft> {
   // Established packages need no inference. Unrecognized document layouts get a bounded
   // extraction pass; unavailable models leave explicit blanks for the teacher to fill.
-  if (resourcePackageDraftErrors(draft).length === 0 && draft.stages.every((stage) => stage.teacherActions && stage.aiActions)) return draft;
+  if (draft.aiUsagePolicy !== undefined || (resourcePackageDraftErrors(draft).length === 0 && draft.stages.every((stage) => stage.teacherActions && stage.aiActions))) return draft;
   let merged = { ...draft };
   try {
     const { callLLM, parseLLMJson } = await import("@/lib/llm/client");
@@ -106,7 +107,7 @@ async function ensureLaunchPreview(resourcePackage: CourseResourcePackage, reque
     await writeFile(/* turbopackIgnore: true */ target, bytes, { mode: 0o644 });
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     const fileName = `${resourcePackage.draft.courseName}-适配授课版.pptx`;
-    await prisma.fileAsset.upsert({ where: { id }, create: { id, originalName: fileName, storageKey, uploadedById: request.requestedBy, mimeType: roleMime.launchPresentation,
+    await prisma.fileAsset.upsert({ where: { id }, create: { id, originalName: fileName, storageKey, uploadedById: request.requestedBy, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       size: BigInt(bytes.length), sha256, sourceAssetId: sourceId, assetRole: "SOURCE", backupPolicy: "REQUIRED", regenerationRecipe: { operation: "resource-package-adapted-launch", sourceRevision: resourcePackage.adaptation.sourceRevision, conflictVersion: resourcePackage.adaptation.conflictVersion, draftSignature: resourcePackage.adaptation.draftSignature } }, update: { deletedAt: null, size: BigInt(bytes.length), sha256 } });
     launch = { id, fileName, url: `/api/uploads/${id}`, sha256 };
     resourcePackage.classroomPresentation = launch;
@@ -164,7 +165,7 @@ export async function runResourcePackageJob(jobId: string): Promise<void> {
         return;
       }
       const documents: CourseResourcePackage["documents"] = {};
-      const parsed: Partial<Record<"knowledge" | "lessonPlan", ReturnType<typeof readDocx>>> = {};
+      const parsed: Partial<Record<"knowledge" | "lessonPlan", MarkdownResourceDocument>> = {};
       const materials: GenerationReferenceMaterial[] = [];
       for (const role of RESOURCE_PACKAGE_ROLES) {
         controller.signal.throwIfAborted();
@@ -173,14 +174,17 @@ export async function runResourcePackageJob(jobId: string): Promise<void> {
         if (role === "launchPresentation") {
           const presentation = readBoundedZip(data);
           if (!presentation.some((part) => part.name === "ppt/presentation.xml") || !presentation.some((part) => /^ppt\/slides\/slide\d+\.xml$/.test(part.name))) throw new ResourcePackageError("项目启动 PPTX 已损坏或没有幻灯片。", "RESOURCE_PACKAGE_INVALID_PPTX", 422);
-        } else parsed[role] = readDocx(data);
+        } else parsed[role] = readMarkdown(data, entry.name);
         documents[role] = await persistDocument(request, role, entry, data);
-        if (role !== "launchPresentation") materials.push({ id: documents[role]!.id, fileName: entry.name, mimeType: roleMime[role], content: parsed[role]!.text });
+        if (role !== "launchPresentation") materials.push({ id: documents[role]!.id, fileName: entry.name, mimeType: "text/markdown", content: parsed[role]!.text });
       }
       await resourcePackageJobs.update({ where: { id: jobId }, data: { progress: 40, message: "正在提取课程目标、知识点与五阶段时间安排" } });
-      const draft = await enrichMissingStructure(parseResourcePackageDraft(parsed.knowledge!, parsed.lessonPlan!), materials, controller.signal);
+      const deterministic = parseMarkdownResourcePackageDraft(parsed.knowledge!, parsed.lessonPlan!);
+      const draft = await enrichMissingStructure(deterministic.draft, materials, controller.signal);
       const compatibility = inspectPackageCompatibility(parsed.lessonPlan!.text, readPresentationEvidence(identified.selected.launchPresentation!.read()));
-      result = { ...result, package: { schemaVersion: 2, id: request.uploadId, revision: request.revision, source: request.source, documents, draft, ...compatibility }, referenceMaterials: materials };
+      const planningIssueVersion = stablePackageSignature(deterministic.planningIssues).slice(0, 20);
+      result = { ...result, package: { schemaVersion: 2, id: request.uploadId, revision: request.revision, source: request.source, documents, draft,
+        handoff: deterministic.handoff, planningIssues: deterministic.planningIssues, planningIssueVersion, ...compatibility }, referenceMaterials: materials };
       await updateCourse(request.courseId, (course) => ({ ...course, content: { ...course.content, resourcePackage: result.package } }));
       await resourcePackageJobs.update({ where: { id: jobId }, data: { progress: 65, step: "convert", message: "正在将项目启动 PPT 转换为课堂 PDF", result: json(result) } });
     }

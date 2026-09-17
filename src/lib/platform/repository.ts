@@ -312,12 +312,12 @@ export async function listTeacherOfferings(claims: AuthClaims) {
     include: {
       invitations: { where: { status: { in: ["ACTIVE", "active"] } }, orderBy: { createdAt: "desc" }, take: 1 },
       resources: { where: { activityId: null }, orderBy: { createdAt: "asc" }, include: { fileAsset: true } },
-      chapters: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { activities: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { classroomInstances: { orderBy: { createdAt: "desc" }, take: 1, include: { templateVersion: { select: { id: true, templateId: true, version: true, status: true, snapshot: true } } } } } } } },
+      chapters: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { activities: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { classroomInstances: { orderBy: { runNo: "desc" }, take: 1, include: { templateVersion: { select: { id: true, templateId: true, version: true, status: true, snapshot: true } } } } } } } },
       _count: { select: { enrollments: true } },
     },
     orderBy: { updatedAt: "desc" },
   });
-  return offerings.map((offering) => ({ ...offering, ...courseDetails(offering.settings), courseReferences: courseReferences(offering.settings, offering.resources), resources: undefined, status: normalizedStatus(offering.status), invitation: offering.invitations[0] ?? null, invitations: undefined, studentCount: offering._count.enrollments, _count: undefined, chapters: offering.chapters.map((chapter) => ({ ...chapter, activities: chapter.activities.map((activity) => ({ ...activity, type: activityTypeForApi(activity.type), templateId: activity.classroomInstances[0]?.templateVersion.templateId ?? null, instances: activity.classroomInstances.map((instance) => ({ ...instance, status: normalizedStatus(instance.status), templateId: instance.templateVersion.templateId, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) })) })) })) }));
+  return offerings.map((offering) => ({ ...offering, ...courseDetails(offering.settings), courseReferences: courseReferences(offering.settings, offering.resources), resources: undefined, status: normalizedStatus(offering.status), invitation: offering.invitations[0] ?? null, invitations: undefined, studentCount: offering._count.enrollments, _count: undefined, chapters: offering.chapters.map((chapter) => ({ ...chapter, activities: chapter.activities.map((activity) => ({ ...activity, type: activityTypeForApi(activity.type), templateId: activity.classroomInstances[0]?.templateVersion.templateId ?? null, templateVersionId: activity.classroomInstances[0]?.templateVersion.id ?? null, instances: activity.classroomInstances.map((instance) => ({ ...instance, status: normalizedStatus(instance.status), templateId: instance.templateVersion.templateId, templateVersionId: instance.templateVersion.id, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) })) })) })) }));
 }
 
 export async function createOffering(claims: AuthClaims, input: { name: string; description?: string; term?: string; startsAt?: string; endsAt?: string; coverImageUrl?: string | null; outline?: string; referenceMaterials?: string; referenceLinks?: CourseReferenceLink[] }) {
@@ -358,25 +358,31 @@ export async function createChapter(claims: AuthClaims, offeringId: string, inpu
   });
 }
 
-async function readyTemplateVersion(claims: AuthClaims, templateId: string, db: PlatformDb = prisma) {
+async function readyTemplateVersion(claims: AuthClaims, templateVersionId: string, db: PlatformDb = prisma) {
   const teacher = await requireTeacherUser(claims, db);
-  const template = await db.classroomTemplate.findFirst({ where: { id: templateId, ownerId: teacher.id, status: { in: ["ACTIVE", "active"] } }, include: { versions: { where: { status: { in: ["PUBLISHED", "published", "ACTIVE", "active"] } }, orderBy: { version: "desc" }, take: 1 } } });
-  const version = template?.versions[0];
+  const version = await db.classroomTemplateVersion.findFirst({
+    where: {
+      id: templateVersionId,
+      status: { in: ["PUBLISHED", "published"] },
+      template: { ownerId: teacher.id, status: { in: ["ACTIVE", "active"] } },
+    },
+  });
   if (!version) throw new PlatformError("TEMPLATE_NOT_READY", "请选择课程库中已发布的课堂内容", 400);
   return version;
 }
 
-export async function createActivity(claims: AuthClaims, offeringId: string, chapterId: string, input: { type: ActivityType; title: string; description?: string; position?: number; templateId?: string; config?: unknown }) {
+export async function createActivity(claims: AuthClaims, offeringId: string, chapterId: string, input: { type: ActivityType; title: string; description?: string; position?: number; templateVersionId?: string; config?: unknown }) {
   return runMutationTransaction(async (tx) => {
     await tx.$queryRaw`SELECT "id" FROM "Chapter" WHERE "id" = ${chapterId} FOR UPDATE`;
     const teacher = await teacherForOffering(claims, offeringId, tx);
     const chapter = await tx.chapter.findFirst({ where: { id: chapterId, offeringId, archivedAt: null } });
     if (!chapter) throw new PlatformError("NOT_FOUND", "章节不存在", 404);
+    if (input.type.toUpperCase() === "CLASSROOM" && !input.templateVersionId) throw new PlatformError("TEMPLATE_REQUIRED", "请选择要绑定的课程版本", 400);
     const position = input.position ?? ((await tx.activity.aggregate({ where: { chapterId }, _max: { position: true } }))._max.position ?? -1) + 1;
     const config = input.config === undefined ? undefined : parsedActivityConfig(input.type, input.config);
-    const selectedVersion = input.templateId ? await readyTemplateVersion(claims, input.templateId, tx) : null;
+    const selectedVersion = input.templateVersionId ? await readyTemplateVersion(claims, input.templateVersionId, tx) : null;
     const created = await tx.activity.create({ data: { chapterId, type: input.type.toUpperCase(), title: input.title, description: input.description, position, isOpen: false, config: config === undefined ? undefined : jsonValue(config) } });
-    if (input.type.toUpperCase() === "CLASSROOM" && input.templateId) {
+    if (input.type.toUpperCase() === "CLASSROOM" && input.templateVersionId) {
       if (selectedVersion) await tx.classroomInstance.create({ data: { activityId: created.id, templateVersionId: selectedVersion.id, runNo: 1, status: "SCHEDULED" } });
     }
     const resourceFileId = activityResourceFileId(input.type, config);
@@ -402,7 +408,7 @@ export async function updateChapter(claims: AuthClaims, chapterId: string, data:
   });
 }
 
-export async function updateActivity(claims: AuthClaims, activityId: string, data: { title?: string; description?: string; isOpen?: boolean; opensAt?: string | null; position?: number; config?: unknown; templateId?: string | null; version?: number }) {
+export async function updateActivity(claims: AuthClaims, activityId: string, data: { title?: string; description?: string; isOpen?: boolean; opensAt?: string | null; position?: number; config?: unknown; templateVersionId?: string | null; version?: number }) {
   return runMutationTransaction(async (tx) => {
     const activityParent = await tx.activity.findUnique({ where: { id: activityId }, select: { chapterId: true } });
     if (!activityParent) throw new PlatformError("NOT_FOUND", "活动不存在", 404);
@@ -411,7 +417,7 @@ export async function updateActivity(claims: AuthClaims, activityId: string, dat
     const activity = await activityForTeacher(claims, activityId, tx);
     if (data.version !== undefined && data.version !== activity.version) throw new PlatformError("VERSION_CONFLICT", "活动已被其他操作更新", 409);
     const config = data.config === undefined ? undefined : parsedActivityConfig(activity.type, data.config);
-    const selectedVersion = data.templateId ? await readyTemplateVersion(claims, data.templateId, tx) : null;
+    const selectedVersion = data.templateVersionId ? await readyTemplateVersion(claims, data.templateVersionId, tx) : null;
     if (data.isOpen === true && !activity.chapter.isOpen) {
       await tx.chapter.update({
         where: { id: activity.chapterId },
@@ -422,7 +428,7 @@ export async function updateActivity(claims: AuthClaims, activityId: string, dat
     const resourceFileId = activityResourceFileId(activity.type, config);
     if (resourceFileId) await bindActivityResource(tx, { activityId, fileId: resourceFileId, offeringId: activity.chapter.offeringId, teacherId: claims.sub! });
     else if (activity.type.toUpperCase() === "RESOURCE" && config !== undefined) await tx.resource.updateMany({ where: { activityId }, data: { activityId: null } });
-    if (data.templateId) {
+    if (data.templateVersionId) {
       const version = selectedVersion;
       if (version) {
         const latest = await tx.classroomInstance.findFirst({ where: { activityId }, orderBy: { runNo: "desc" } });
@@ -551,8 +557,8 @@ export async function createClassroomInstance(claims: AuthClaims, activityId: st
     await tx.$queryRaw`SELECT "id" FROM "Activity" WHERE "id" = ${activityId} FOR UPDATE`;
     const activity = await activityForTeacher(claims, activityId, tx);
     const version = await tx.classroomTemplateVersion.findUnique({ include: { template: true }, where: { id: templateVersionId } });
-    if (!version || version.status.toUpperCase() !== "PUBLISHED" || version.template.status.toUpperCase() === "ARCHIVED" || version.template.ownerId !== (await requireTeacherUser(claims, tx)).id) throw new PlatformError("NOT_FOUND", "课堂模板版本不存在", 404);
-    const active = await tx.classroomInstance.findFirst({ where: { activityId, status: { in: ["SCHEDULED", "TEACHING", "scheduled", "teaching"] } }, orderBy: { runNo: "desc" }, include: { templateVersion: true } });
+    if (!version || version.status.toUpperCase() !== "PUBLISHED" || version.template.status.toUpperCase() !== "ACTIVE" || version.template.ownerId !== (await requireTeacherUser(claims, tx)).id) throw new PlatformError("NOT_FOUND", "课堂模板版本不存在", 404);
+    const active = await tx.classroomInstance.findFirst({ where: { activityId, templateVersionId, status: { in: ["SCHEDULED", "TEACHING", "scheduled", "teaching"] } }, orderBy: { runNo: "desc" }, include: { templateVersion: true } });
     if (active) return active;
     await assertTemplateReviewForPublication(version.snapshot, version.template.ownerId);
     const latest = await tx.classroomInstance.aggregate({ where: { activityId }, _max: { runNo: true } });

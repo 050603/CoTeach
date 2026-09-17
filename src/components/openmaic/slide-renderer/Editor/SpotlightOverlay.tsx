@@ -1,18 +1,13 @@
 'use client';
 
-import { useRef, useState, useLayoutEffect, useCallback } from 'react';
+import { useId, useRef, type RefObject } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSceneSelector } from '@openmaic/lib/contexts/scene-context';
 import { useCanvasStore } from '@openmaic/lib/store/canvas';
 import type { SlideContent } from '@openmaic/lib/types/stage';
 import type { PPTElement } from '@openmaic/dsl';
-
-interface SpotlightRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+import { visualTargetKey } from '@openmaic/lib/utils/visual-target';
+import { useVisualTargetGeometry } from './useVisualTargetGeometry';
 
 /**
  * Spotlight overlay component
@@ -21,63 +16,38 @@ interface SpotlightRect {
  * avoiding alignment offsets from percentage coordinate conversion.
  */
 interface SpotlightOverlayProps {
+  /** Explicit rendered slide root used to isolate duplicate element ids. */
+  rootRef: RefObject<HTMLElement | null>;
   /**
-   * DOM id prefix used to locate the target element. Playback screens render
-   * elements as `screen-element-<id>` (default); the editor canvas renders
-   * them as `editable-element-<id>` and passes that prefix so the exact same
-   * spotlight effect plays in Pro mode.
+   * @deprecated Targeting uses data-slide-element-id. Retained while the
+   * editor preview caller migrates to an explicit root ref.
    */
   domIdPrefix?: string;
 }
 
-export function SpotlightOverlay({ domIdPrefix = 'screen-element-' }: SpotlightOverlayProps = {}) {
+export function SpotlightOverlay({ rootRef }: SpotlightOverlayProps) {
   const spotlightElementId = useCanvasStore.use.spotlightElementId();
   const spotlightOptions = useCanvasStore.use.spotlightOptions();
+  const canvasScale = useCanvasStore.use.canvasScale();
   const containerRef = useRef<HTMLDivElement>(null);
-  const [rect, setRect] = useState<SpotlightRect | null>(null);
+  const maskId = `spotlight-mask-${useId().replace(/:/g, '')}`;
 
   const elements = useSceneSelector<SlideContent, PPTElement[]>(
     (content) => content.canvas.elements,
   );
 
-  // Compute target element position in SVG coordinate system via DOM measurement
-  const measure = useCallback(() => {
-    if (!spotlightElementId || !containerRef.current) {
-      setRect(null);
-      return;
-    }
-
-    const domElement = document.getElementById(`${domIdPrefix}${spotlightElementId}`);
-    if (!domElement) {
-      setRect(null);
-      return;
-    }
-
-    // Prefer measuring .element-content (the actual rendered area for auto-height)
-    const contentEl = domElement.querySelector('.element-content');
-    const targetEl = contentEl ?? domElement;
-
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const targetRect = targetEl.getBoundingClientRect();
-
-    if (containerRect.width === 0 || containerRect.height === 0) {
-      setRect(null);
-      return;
-    }
-
-    // Convert to SVG viewBox 0-100 coordinates
-    setRect({
-      x: ((targetRect.left - containerRect.left) / containerRect.width) * 100,
-      y: ((targetRect.top - containerRect.top) / containerRect.height) * 100,
-      w: (targetRect.width / containerRect.width) * 100,
-      h: (targetRect.height / containerRect.height) * 100,
-    });
-  }, [spotlightElementId, domIdPrefix]);
-
-  useLayoutEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- DOM measurement requires effect
-    measure();
-  }, [measure, elements]);
+  const selector = spotlightOptions?.selector;
+  const targetKey = spotlightElementId
+    ? visualTargetKey({ elementId: spotlightElementId, selector })
+    : 'inactive';
+  const rect = useVisualTargetGeometry({
+    containerRef,
+    rootRef,
+    elementId: spotlightElementId,
+    selector,
+    canvasScale,
+    contentRevision: elements,
+  });
 
   const active = !!spotlightElementId && !!spotlightOptions && !!rect;
   const dimness = spotlightOptions?.dimness ?? 0.7;
@@ -90,7 +60,7 @@ export function SpotlightOverlay({ domIdPrefix = 'screen-element-' }: SpotlightO
       <AnimatePresence mode="wait">
         {active && rect && (
           <motion.div
-            key={`spotlight-${spotlightElementId}`}
+            key={`spotlight-${targetKey}`}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -104,7 +74,7 @@ export function SpotlightOverlay({ domIdPrefix = 'screen-element-' }: SpotlightO
               className="absolute inset-0"
             >
               <defs>
-                <mask id={`mask-${spotlightElementId}`}>
+                <mask id={maskId}>
                   {/* White background = show mask layer (dimmed) */}
                   <rect x="0" y="0" width="100" height="100" fill="white" />
                   {/* Black rectangle = hide mask layer (highlighted area / cutout) */}
@@ -142,7 +112,7 @@ export function SpotlightOverlay({ domIdPrefix = 'screen-element-' }: SpotlightO
                 width="100"
                 height="100"
                 fill={`rgba(0,0,0,${dimness})`}
-                mask={`url(#mask-${spotlightElementId})`}
+                mask={`url(#${maskId})`}
               />
 
               {/* THE ONE BORDER - white border */}

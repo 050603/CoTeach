@@ -97,6 +97,7 @@ export function useTTSPreview() {
           text: options.text,
           audioId: 'preview',
           ttsProviderId: options.providerId,
+          ttsScenario: 'realtime-interaction',
           ttsModelId: options.modelId,
           ttsVoice: options.voice,
           ttsSpeed: options.speed,

@@ -7,7 +7,7 @@ import { loadPblTemplateCourse } from "@/lib/platform/pbl-template-repository";
 import { updateCourse } from "@/lib/session/server-store";
 import type { GenerationReferenceMaterial } from "@/lib/course-design/generation-references";
 import type { Course } from "@/lib/session/types";
-import { normalizePackageStructure, readDocx, ResourcePackageError, resourcePackageDraftSchema, type ResourcePackageSelections } from "./parser";
+import { normalizePackageStructure, readDocx, readMarkdown, ResourcePackageError, resourcePackageDraftSchema, type ResourcePackageSelections } from "./parser";
 import { adaptResourcePackageDraft, inspectPackageCompatibility, packageDraftSignature, stablePackageSignature } from "./compatibility";
 import { resourcePackageDraftErrors, stagePlanFromResourcePackage, type CourseResourcePackage, type ResourcePackageDraft, type ResourcePackageFile, type ResourcePackageJobSnapshot, type ResourcePackageRole } from "./types";
 
@@ -118,7 +118,8 @@ export async function retryResourcePackage(courseId: string, userId: string, sel
     throw error;
   }
 }
-export async function confirmResourcePackage(courseId: string, userId: string, revision: number, input: ResourcePackageDraft): Promise<CourseGenerationJob> {
+export async function confirmResourcePackage(courseId: string, userId: string, revision: number, input: ResourcePackageDraft,
+  acknowledgement?: { issueVersion: string; issueIds: string[] }): Promise<CourseGenerationJob> {
   await requireOwnedTemplate(courseId, userId);
   await assertResourcePackageEditable(courseId);
   const job = await loadResourcePackageJob(courseId);
@@ -133,6 +134,13 @@ export async function confirmResourcePackage(courseId: string, userId: string, r
   parsed.data.sourceEvidence = current.draft.sourceEvidence;
   const errors = resourcePackageDraftErrors(parsed.data);
   if (errors.length) throw new ResourcePackageError(errors.join("\n"), "RESOURCE_PACKAGE_INVALID_DRAFT", 422);
+  const requiredIssueIds = (current.planningIssues ?? []).filter((issue) => issue.requiresAcknowledgement).map((issue) => issue.id).sort();
+  if (requiredIssueIds.length) {
+    const acknowledged = [...new Set(acknowledgement?.issueIds ?? [])].sort();
+    if (!current.planningIssueVersion || acknowledgement?.issueVersion !== current.planningIssueVersion || acknowledged.join("\n") !== requiredIssueIds.join("\n")) {
+      throw new ResourcePackageError("请先核对并确认资源包中的规划问题。", "RESOURCE_PACKAGE_PLANNING_ACKNOWLEDGEMENT_REQUIRED", 422);
+    }
+  }
   const normalized = normalizePackageStructure(parsed.data);
   if (current.draft.evaluationRubric && normalized.evaluationRubric && stablePackageSignature([current.draft.evaluationRubric.dimensions, current.draft.evaluationRubric.sourceWeights]) !== stablePackageSignature([normalized.evaluationRubric.dimensions, normalized.evaluationRubric.sourceWeights])) normalized.evaluationRubric.version = current.draft.evaluationRubric.version + 1;
   if (current.draft.reflectionQuestionSet && normalized.reflectionQuestionSet && stablePackageSignature(current.draft.reflectionQuestionSet.questions) !== stablePackageSignature(normalized.reflectionQuestionSet.questions)) normalized.reflectionQuestionSet.version = current.draft.reflectionQuestionSet.version + 1;
@@ -144,7 +152,9 @@ export async function confirmResourcePackage(courseId: string, userId: string, r
     return resourcePackageJobs.update({ where: { id: job.id, version: job.version }, data: { status: "blocked", message: "教学要求已保存；请修正上游资源包，或明确授权按系统流程统一适配。", request: JSON.parse(JSON.stringify({ ...(job.request as unknown as ResourcePackageRequest), revision: pending.revision })), result: JSON.parse(JSON.stringify({ ...result, package: pending })) } });
   }
   if (!current.launchResourceId) throw new ResourcePackageError("请等待启动课件处理完成。", "RESOURCE_PACKAGE_NOT_READY", 409);
-  const resourcePackage: CourseResourcePackage = { ...current, draft: normalized, revision: revision + 1, confirmedAt: new Date().toISOString() };
+  const resourcePackage: CourseResourcePackage = { ...current, draft: normalized, revision: revision + 1, confirmedAt: new Date().toISOString(),
+    ...(requiredIssueIds.length ? { planningAcknowledgement: { sourceRevision: revision, issueVersion: current.planningIssueVersion!, issueIds: requiredIssueIds,
+      acknowledgedBy: userId, acknowledgedAt: new Date().toISOString() } } : { planningAcknowledgement: undefined }) };
   const draft = resourcePackage.draft;
   await updateCourse(courseId, (course) => {
     if (course.content.resourcePackage?.revision !== revision) throw new ResourcePackageError("资源包内容已更新，请刷新后重新确认。", "RESOURCE_PACKAGE_REVISION_CONFLICT", 409);
@@ -187,7 +197,8 @@ export async function resolveConfirmedResourcePackage(courseId: string, id: stri
     if (!document) throw new ResourcePackageError("资源包缺少必要的课程文档。", "RESOURCE_PACKAGE_INVALID_DRAFT", 422);
     const { file, bytes } = await readPrivatePackageFile(document.id, userId);
     if (file.sourceAssetId !== resourcePackage.source.id) throw new ResourcePackageError("资源包文档来源不匹配。", "RESOURCE_PACKAGE_FILE_NOT_FOUND", 404);
-    const text = readDocx(bytes).text;
+    const isMarkdown = document.format === "markdown" || file.mimeType === "text/markdown" || /\.md$/i.test(file.originalName);
+    const text = isMarkdown ? readMarkdown(bytes, file.originalName).text : readDocx(bytes).text;
     // Keep complete source text; split into bounded, ordered materials so no document tail is silently discarded.
     for (let start = 0; start < text.length; start += 24000) referenceMaterials.push({ id: `${file.id}${start ? `:part-${start / 24000 + 1}` : ""}`, fileName: `${file.originalName}${text.length > 24000 ? `（第${start / 24000 + 1}段）` : ""}`, mimeType: file.mimeType, content: text.slice(start, start + 24000) });
   }

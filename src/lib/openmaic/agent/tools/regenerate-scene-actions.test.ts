@@ -31,7 +31,7 @@ describe('teacher-guided narration edits', () => {
     const { ctx, aiCall, tool } = setup([{ type: 'action', name: 'speech', action_id: 'intro', params: { text: '请观察两条证据，用自己的话解释。' } }]);
     const instruction = '只把开场讲稿改成面向初一学生的提问，其余内容保持原样。';
     const result = await tool.execute('edit', { sceneId: 'scene', instruction });
-    expect(aiCall).toHaveBeenCalledOnce();
+    expect(aiCall).toHaveBeenCalledTimes(1);
     const [stage, system, user] = aiCall.mock.calls[0];
     expect(stage).toBe('scene-actions');
     expect(system).toContain(instruction);
@@ -40,8 +40,8 @@ describe('teacher-guided narration edits', () => {
     expect(user).not.toContain('UNIQUEIMAGEBYTES');
     expect(system).not.toContain('UNIQUEIMAGEBYTES');
     expect(result.details.actions[0]).toEqual({ id: 'intro', type: 'speech', text: '请观察两条证据，用自己的话解释。', audioInvalidated: true });
-    expect(result.details.actions.slice(1)).toEqual(original.slice(1));
-    expect(result.details.actions[3]).toHaveProperty('src', imageSrc);
+    expect(result.details.actions.slice(1)).toEqual(original.slice(2));
+    expect(result.details.actions[2]).toHaveProperty('src', imageSrc);
     expect(ctx.actions).toEqual(result.details.actions);
     const current = original.map((action) => action.id === 'board-speech' ? { ...action, text: 'AI 运行期间手动修改的白板讲解' } as Action : action);
     const plan = planRegenerateApply(result.details, { content: ctx.content, actions: current }, 'regenerate_scene_actions');
@@ -64,7 +64,7 @@ describe('teacher-guided narration edits', () => {
   it('supports old calls without an instruction or current-action context', async () => {
     const { tool, aiCall } = setup([{ type: 'text', content: '新的基础讲解。' }], false);
     const result = await tool.execute('edit', { sceneId: 'scene' });
-    expect(aiCall).toHaveBeenCalledOnce();
+    expect(aiCall).toHaveBeenCalledTimes(1);
     expect(result.details.actions).toEqual([expect.objectContaining({ type: 'speech', text: '新的基础讲解。' })]);
   });
 });

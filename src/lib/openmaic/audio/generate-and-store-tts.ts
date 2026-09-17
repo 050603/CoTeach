@@ -67,6 +67,7 @@ export async function generateAndStoreTTS(
           text,
           audioId,
           ttsProviderId: settings.ttsProviderId,
+          ttsScenario: 'course-generation',
           ttsModelId: ttsProviderConfig?.modelId,
           ttsVoice: settings.ttsVoice,
           ttsSpeed: settings.ttsSpeed,

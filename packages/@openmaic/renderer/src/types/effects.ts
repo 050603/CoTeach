@@ -1,11 +1,20 @@
+import type { LaserWaypoint, VisualTargetSelector } from '@openmaic/dsl';
+
 export interface LaserEffectOptions {
   elementId: string;
+  selector?: VisualTargetSelector;
+  waypoints?: LaserWaypoint[];
+  speechId?: string;
   color?: string;
   duration?: number;
 }
 
 export interface SpotlightEffectOptions {
   elementId: string;
+  selector?: VisualTargetSelector;
+  speechId?: string;
+  endSpeechId?: string;
+  dimOpacity?: number;
 }
 
 export interface HighlightEffectOptions {

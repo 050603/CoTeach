@@ -30,4 +30,29 @@ describe("provider configuration save receipts", () => {
     const result = await response.json(); expect(result.providers.deepseek.hasApiKey).toBe(true);
     expect(result.providers.deepseek).not.toHaveProperty("apiKey");
   });
+  it("accepts and returns scene-based TTS model selections", async () => {
+    const scenarioConfigs = {
+      "course-generation": { modelId: "quality-model", voiceId: "quality-voice" },
+      "realtime-interaction": { modelId: "fast-model", voiceId: "fast-voice" },
+    };
+    mocks.get.mockResolvedValue({ ...stored, scenarioConfigs });
+    const response = await POST(new Request("http://localhost/api/openmaic/provider-config", {
+      method: "POST",
+      body: JSON.stringify({
+        section: "tts",
+        providerId: "qwen-tts",
+        apiKey: "",
+        scenarioConfigs,
+      }),
+    }));
+    const result = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mocks.save).toHaveBeenCalledWith(
+      "tts",
+      "qwen-tts",
+      expect.objectContaining({ scenarioConfigs }),
+    );
+    expect(result.provider.scenarioConfigs).toEqual(scenarioConfigs);
+  });
 });

@@ -25,6 +25,7 @@ import {
   generateWithLemonadeImage,
   testLemonadeImageConnectivity,
 } from './adapters/lemonade-image-adapter';
+import { QWEN_IMAGE_MODELS } from './qwen-image-catalog';
 
 export const IMAGE_PROVIDERS: Record<ImageProviderId, ImageProviderConfig> = {
   seedream: {
@@ -61,21 +62,7 @@ export const IMAGE_PROVIDERS: Record<ImageProviderId, ImageProviderConfig> = {
     name: 'Qwen Image',
     requiresApiKey: true,
     defaultBaseUrl: 'https://dashscope.aliyuncs.com',
-    models: [
-      { id: 'qwen-image-2.0-pro', name: 'Qwen Image 2.0 Pro' },
-      { id: 'qwen-image-2.0-pro-2026-03-03', name: 'Qwen Image 2.0 Pro (2026-03-03)' },
-      { id: 'qwen-image-2.0', name: 'Qwen Image 2.0' },
-      { id: 'qwen-image-2.0-2026-03-03', name: 'Qwen Image 2.0 (2026-03-03)' },
-      { id: 'qwen-image-max', name: 'Qwen Image Max' },
-      { id: 'qwen-image-max-2025-12-30', name: 'Qwen Image Max (2025-12-30)' },
-      { id: 'qwen-image-plus', name: 'Qwen Image Plus' },
-      {
-        id: 'qwen-image-plus-2026-01-09',
-        name: 'Qwen Image Plus (2026-01-09)',
-      },
-      { id: 'qwen-image', name: 'Qwen Image' },
-      { id: 'z-image-turbo', name: 'Z-Image Turbo' },
-    ],
+    models: QWEN_IMAGE_MODELS.map((model) => ({ ...model })),
     supportedAspectRatios: ['16:9', '4:3', '1:1', '9:16'],
   },
   'nano-banana': {

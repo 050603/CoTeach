@@ -29,7 +29,13 @@ import type { Scene } from "@openmaic/lib/types/stage";
 import {
   fingerprintSceneOutline,
   restoreSceneCheckpoint,
+  restoreSceneStageAttemptCount,
+  restoreSceneStageCheckpoint,
+  SCENE_STAGE_CHECKPOINT_VERSION,
   type PageCheckpointSnapshot,
+  type SceneGenerationCheckpointStage,
+  type SceneStageAttemptSnapshot,
+  type SceneStageCheckpointSnapshot,
 } from "@/lib/course-generation/page-checkpoints";
 import {
   ADAPTIVE_RESOURCE_CONCURRENCY,
@@ -50,6 +56,7 @@ import {
   type CourseResourceIssue,
 } from "@/lib/course-generation/resource-audit-server";
 import { summarizeGeneratedMediaReadiness } from "@/lib/course-generation/resource-readiness";
+import { estimateRemainingSeconds } from "@/lib/course-generation/progress-estimate";
 
 const log = createLogger("CourseGenerationWorker");
 const POLL_INTERVAL_MS = 1_500;
@@ -70,7 +77,22 @@ function mediaFailuresFromAudit(issues: CourseResourceIssue[]): Array<{
 type StoredCheckpointState = {
   preparedOutlines: SceneOutline[];
   checkpoints: Map<string, PageCheckpointSnapshot>;
+  stageCheckpoints: Map<string, SceneStageCheckpointSnapshot>;
+  stageAttemptCheckpoints: Map<string, SceneStageAttemptSnapshot>;
+  teachingSectionCheckpoints: Map<string, TeachingSectionCheckpointSnapshot>;
 };
+
+type TeachingSectionCheckpointSnapshot = {
+  schemaVersion: 1;
+  sectionKey: string;
+  inputFingerprint: string;
+  modelFingerprint: string;
+  briefs: Array<[string, unknown]>;
+};
+
+function stageCheckpointKey(pageKey: string, stage: SceneGenerationCheckpointStage): string {
+  return `${pageKey}:${stage}`;
+}
 
 async function loadCheckpointState(jobId: string): Promise<StoredCheckpointState> {
   const stored = await loadGenerationCheckpoints(jobId);
@@ -87,7 +109,28 @@ async function loadCheckpointState(jobId: string): Promise<StoredCheckpointState
       scene: row.scene as unknown as Scene,
     });
   }
-  return { preparedOutlines, checkpoints };
+  const stageCheckpoints = new Map<string, SceneStageCheckpointSnapshot>();
+  for (const row of stored.stages as unknown as SceneStageCheckpointSnapshot[]) {
+    if (!row || typeof row.pageKey !== "string" || typeof row.stage !== "string") continue;
+    stageCheckpoints.set(stageCheckpointKey(row.pageKey, row.stage), row);
+  }
+  const stageAttemptCheckpoints = new Map<string, SceneStageAttemptSnapshot>();
+  for (const row of stored.stageAttempts as unknown as SceneStageAttemptSnapshot[]) {
+    if (!row || typeof row.pageKey !== "string" || typeof row.stage !== "string") continue;
+    stageAttemptCheckpoints.set(stageCheckpointKey(row.pageKey, row.stage), row);
+  }
+  const teachingSectionCheckpoints = new Map<string, TeachingSectionCheckpointSnapshot>();
+  for (const row of stored.teachingSections as unknown as TeachingSectionCheckpointSnapshot[]) {
+    if (!row || row.schemaVersion !== 1 || typeof row.sectionKey !== "string") continue;
+    teachingSectionCheckpoints.set(row.sectionKey, row);
+  }
+  return {
+    preparedOutlines,
+    checkpoints,
+    stageCheckpoints,
+    stageAttemptCheckpoints,
+    teachingSectionCheckpoints,
+  };
 }
 
 async function persistPreparedOutlines(jobId: string, outlines: SceneOutline[]): Promise<void> {
@@ -98,14 +141,82 @@ async function persistSceneCheckpoint(
   jobId: string,
   outline: SceneOutline,
   scene: Scene,
+  modelFingerprint: string,
+  inputFingerprint: string,
 ): Promise<PageCheckpointSnapshot> {
   const checkpoint: PageCheckpointSnapshot = {
     pageKey: outline.id,
     outlineFingerprint: fingerprintSceneOutline(outline),
+    modelFingerprint,
+    inputFingerprint,
     scene,
   };
   await saveGenerationCheckpoint(jobId, `page:${checkpoint.pageKey}`, checkpoint);
   return checkpoint;
+}
+
+async function persistSceneStageCheckpoint(input: {
+  jobId: string;
+  outline: SceneOutline;
+  stage: SceneGenerationCheckpointStage;
+  modelFingerprint: string;
+  inputFingerprint?: string;
+  payload: unknown;
+}): Promise<SceneStageCheckpointSnapshot> {
+  const checkpoint: SceneStageCheckpointSnapshot = {
+    schemaVersion: SCENE_STAGE_CHECKPOINT_VERSION,
+    pageKey: input.outline.id,
+    stage: input.stage,
+    outlineFingerprint: fingerprintSceneOutline(input.outline),
+    modelFingerprint: input.modelFingerprint,
+    inputFingerprint: input.inputFingerprint,
+    payload: input.payload,
+  };
+  await saveGenerationCheckpoint(
+    input.jobId,
+    `stage:${input.outline.id}:${input.stage}`,
+    checkpoint,
+  );
+  return checkpoint;
+}
+
+async function persistSceneStageAttempt(input: {
+  jobId: string;
+  outline: SceneOutline;
+  stage: SceneGenerationCheckpointStage;
+  attemptsStarted: number;
+  modelFingerprint: string;
+  inputFingerprint?: string;
+}): Promise<SceneStageAttemptSnapshot> {
+  const checkpoint: SceneStageAttemptSnapshot = {
+    schemaVersion: SCENE_STAGE_CHECKPOINT_VERSION,
+    pageKey: input.outline.id,
+    stage: input.stage,
+    outlineFingerprint: fingerprintSceneOutline(input.outline),
+    modelFingerprint: input.modelFingerprint,
+    inputFingerprint: input.inputFingerprint,
+    attemptsStarted: input.attemptsStarted,
+  };
+  await saveGenerationCheckpoint(
+    input.jobId,
+    `stage-attempt:${input.outline.id}:${input.stage}`,
+    checkpoint,
+  );
+  return checkpoint;
+}
+
+async function partialCheckpointQualityReport(jobId: string): Promise<Prisma.InputJsonValue> {
+  const stored = await loadGenerationCheckpoints(jobId);
+  const pages = (stored.stages as unknown as SceneStageCheckpointSnapshot[]).flatMap((checkpoint) => {
+    if (checkpoint.stage !== "reviewed-content" || !checkpoint.payload || typeof checkpoint.payload !== "object") return [];
+    const page = (checkpoint.payload as { layoutAuditPage?: unknown }).layoutAuditPage;
+    return page && typeof page === "object" ? [page] : [];
+  });
+  return {
+    status: "partial",
+    completedPageAudits: pages.length,
+    layoutAudit: { status: "partial", pages },
+  } as unknown as Prisma.InputJsonValue;
 }
 
 export async function resetCourseGenerationCheckpoints(jobId: string): Promise<void> {
@@ -131,6 +242,8 @@ export type CourseGenerationJobEvent = {
   totalScenes: number;
   ts: number;
   assetPhaseStatus?: ClassroomAssetGenerationProgress["status"];
+  activePages?: ClassroomGenerationProgress["activePages"];
+  stageDetail?: ClassroomGenerationProgress["stage"];
 };
 
 let workerStarted = false;
@@ -156,7 +269,9 @@ function localizedProgress(progress: ClassroomGenerationProgress): string {
         ? progress.message
         : "正在生成课程结构与页面安排";
     case "generating_scenes":
-      return progress.message.startsWith("正在制作第 ")
+      return progress.stage || progress.activePages?.length
+        ? progress.message
+        : progress.message.startsWith("正在制作第 ")
         ? progress.message
         : progress.scenesGenerated > 0 && progress.totalScenes
         ? `已完成 ${progress.scenesGenerated} / ${progress.totalScenes} 个课堂页面`
@@ -189,31 +304,11 @@ export function estimatePersistedCourseGenerationSeconds(input: {
   return Math.max(5 * 60, classroomSeconds + adaptiveSeconds + Math.max(mediaSeconds, speechSeconds) + coverSeconds);
 }
 
-function estimateRemainingSeconds(input: {
-  startedAt: Date;
-  scenePhaseStartedAt: number | null;
-  scenesGenerated: number;
-  totalScenes: number;
-  progress: number;
-  baselineSeconds: number;
-}): number {
-  const elapsed = Math.max(1, (Date.now() - input.startedAt.getTime()) / 1_000);
-  if (input.scenesGenerated > 0 && input.totalScenes > input.scenesGenerated) {
-    const phaseElapsed = input.scenePhaseStartedAt
-      ? Math.max(1, (Date.now() - input.scenePhaseStartedAt) / 1_000)
-      : elapsed;
-    const observedWallSecondsPerPage = phaseElapsed / input.scenesGenerated;
-    const secondsPerPage = Math.min(75, Math.max(25, observedWallSecondsPerPage));
-    return Math.max(45, Math.round((input.totalScenes - input.scenesGenerated) * secondsPerPage + 60));
-  }
-  if (input.progress >= 90) return Math.max(20, Math.round(elapsed * 0.08));
-  return Math.max(45, Math.round(input.baselineSeconds - elapsed));
-}
-
 async function persistProgress(
   job: CourseGenerationJob,
   progress: ClassroomGenerationProgress,
   scenePhaseStartedAt: number | null,
+  scenePhaseInitialGenerated: number,
 ): Promise<void> {
   const message = localizedProgress(progress);
   const event: CourseGenerationJobEvent = {
@@ -225,14 +320,18 @@ async function persistProgress(
     scenesGenerated: Math.max(job.scenesGenerated, progress.scenesGenerated),
     totalScenes: progress.totalScenes ?? job.totalScenes,
     ts: Date.now(),
+    activePages: progress.activePages,
+    stageDetail: progress.stage,
   };
   const events = [...asEvents(job.events), event].slice(-MAX_STORED_EVENTS);
   const remaining = estimateRemainingSeconds({
     startedAt: job.startedAt ?? job.createdAt,
     scenePhaseStartedAt,
+    scenePhaseInitialGenerated,
     scenesGenerated: event.scenesGenerated,
     totalScenes: event.totalScenes,
     progress: event.progress,
+    step: event.step,
     baselineSeconds: estimatePersistedCourseGenerationSeconds({
       totalScenes: event.totalScenes,
       adaptiveBranchCount: (job.request as unknown as Partial<PersistedCourseGenerationRequest>).adaptiveBranchCount,
@@ -250,6 +349,8 @@ async function persistProgress(
       scenesGenerated: event.scenesGenerated,
       totalScenes: event.totalScenes,
       estimatedRemainingSeconds: remaining,
+      activePages: (progress.activePages ?? []) as unknown as Prisma.InputJsonValue,
+      currentStage: progress.stage ?? null,
       events: events as unknown as Prisma.InputJsonValue,
       lastHeartbeatAt: new Date(),
       version: { increment: 1 },
@@ -680,6 +781,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
   activeController = controller;
   activeCourseId = courseId;
   let scenePhaseStartedAt: number | null = null;
+  let scenePhaseInitialGenerated = job.scenesGenerated;
   let workerWriteChain = Promise.resolve();
   const serializeWorkerWrite = <T>(work: () => Promise<T>): Promise<T> => {
     const result = workerWriteChain.then(work, work);
@@ -706,20 +808,93 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       signal: controller.signal,
       preparedOutlines: checkpointState.preparedOutlines,
       onOutlinesPrepared: (outlines) => persistPreparedOutlines(job.id, outlines),
-      loadSceneCheckpoint: (outline, _index, stageId) => restoreSceneCheckpoint(
+      loadTeachingSectionCheckpoint: (sectionKey, inputFingerprint, modelFingerprint) => {
+        const checkpoint = checkpointState.teachingSectionCheckpoints.get(sectionKey);
+        if (
+          !checkpoint
+          || checkpoint.inputFingerprint !== inputFingerprint
+          || checkpoint.modelFingerprint !== modelFingerprint
+          || !Array.isArray(checkpoint.briefs)
+        ) return null;
+        return checkpoint.briefs;
+      },
+      onTeachingSectionCompleted: async (sectionKey, inputFingerprint, modelFingerprint, briefs) => {
+        const checkpoint: TeachingSectionCheckpointSnapshot = {
+          schemaVersion: 1,
+          sectionKey,
+          inputFingerprint,
+          modelFingerprint,
+          briefs,
+        };
+        await saveGenerationCheckpoint(job.id, `teaching-section:${sectionKey}`, checkpoint);
+        checkpointState.teachingSectionCheckpoints.set(sectionKey, checkpoint);
+      },
+      loadSceneCheckpoint: (outline, _index, stageId, modelFingerprint, inputFingerprint) => restoreSceneCheckpoint(
         outline,
         checkpointState.checkpoints.get(outline.id),
         stageId,
+        modelFingerprint,
+        inputFingerprint,
       ),
-      onSceneCompleted: async (outline, scene) => {
-        const checkpoint = await persistSceneCheckpoint(job.id, outline, scene);
+      loadSceneStageCheckpoint: (outline, stage, modelFingerprint, inputFingerprint) =>
+        restoreSceneStageCheckpoint({
+          outline,
+          checkpoint: checkpointState.stageCheckpoints.get(stageCheckpointKey(outline.id, stage)),
+          stage,
+          modelFingerprint,
+          inputFingerprint,
+        }),
+      onSceneStageCompleted: async (outline, stage, payload, modelFingerprint, inputFingerprint) => {
+        const checkpoint = await persistSceneStageCheckpoint({
+          jobId: job.id,
+          outline,
+          stage,
+          payload,
+          modelFingerprint,
+          inputFingerprint,
+        });
+        checkpointState.stageCheckpoints.set(stageCheckpointKey(outline.id, stage), checkpoint);
+      },
+      loadSceneStageAttemptCount: (outline, stage, modelFingerprint, inputFingerprint) =>
+        restoreSceneStageAttemptCount({
+          outline,
+          checkpoint: checkpointState.stageAttemptCheckpoints.get(stageCheckpointKey(outline.id, stage)),
+          stage,
+          modelFingerprint,
+          inputFingerprint,
+        }),
+      onSceneStageAttempt: async (outline, stage, attemptsStarted, modelFingerprint, inputFingerprint) => {
+        const checkpoint = await persistSceneStageAttempt({
+          jobId: job.id,
+          outline,
+          stage,
+          attemptsStarted,
+          modelFingerprint,
+          inputFingerprint,
+        });
+        checkpointState.stageAttemptCheckpoints.set(stageCheckpointKey(outline.id, stage), checkpoint);
+      },
+      onSceneCompleted: async (outline, scene, _index, modelFingerprint, inputFingerprint) => {
+        const checkpoint = await persistSceneCheckpoint(
+          job.id,
+          outline,
+          scene,
+          modelFingerprint,
+          inputFingerprint,
+        );
         checkpointState.checkpoints.set(outline.id, checkpoint);
       },
       onProgress: async (progress) => {
         if (progress.step === "generating_scenes" && scenePhaseStartedAt === null) {
           scenePhaseStartedAt = Date.now();
+          scenePhaseInitialGenerated = job.scenesGenerated;
         }
-        await serializeWorkerWrite(() => persistProgress(job, progress, scenePhaseStartedAt));
+        await serializeWorkerWrite(() => persistProgress(
+          job,
+          progress,
+          scenePhaseStartedAt,
+          scenePhaseInitialGenerated,
+        ));
       },
     });
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
@@ -903,6 +1078,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       return;
     }
     log.error(`Course generation job ${job.id} failed`, error);
+    const partialQualityReport = await partialCheckpointQualityReport(job.id).catch(() => null);
     await contentGenerationJobs.update({
       where: { id: job.id },
       data: {
@@ -910,6 +1086,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         step: "failed",
         message: "课程生成未完成",
         error: serializeCourseGenerationFailure(error),
+        ...(partialQualityReport ? { qualityReport: partialQualityReport } : {}),
         estimatedRemainingSeconds: null,
         completedAt: new Date(),
         lastHeartbeatAt: new Date(),

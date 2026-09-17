@@ -21,7 +21,7 @@ function activityScene(durationSec = 1): Scene {
         activityPauseSec: durationSec,
         activityPausePurpose: 'quiz',
       },
-      { id: 'after-gate', type: 'laser', elementId: 'answer' },
+      { id: 'after-gate', type: 'wb_close' },
     ] as Action[],
   } as unknown as Scene;
 }
@@ -60,7 +60,7 @@ function transitionScene(durationSec = 5): Scene {
         timelinePauseSec: durationSec,
         timelinePausePurpose: 'page-transition',
       },
-      { id: 'after-transition', type: 'laser', elementId: 'next' },
+      { id: 'after-transition', type: 'wb_close' },
     ] as Action[],
   } as unknown as Scene;
 }

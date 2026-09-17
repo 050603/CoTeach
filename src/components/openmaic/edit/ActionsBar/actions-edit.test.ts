@@ -3,6 +3,7 @@ import type { Action } from '@openmaic/lib/types/action';
 import {
   appendWhiteboardTextBlock,
   removeWhiteboardTextBlockById,
+  setElementIdById,
   setWhiteboardTextById,
 } from './actions-edit';
 
@@ -30,5 +31,22 @@ describe('teacher preparation whiteboard actions', () => {
     const edited = setWhiteboardTextById(created, 'board-1', '能量守恒');
     expect(edited[1]).toMatchObject({ type: 'wb_draw_text', content: '能量守恒' });
     expect(removeWhiteboardTextBlockById(edited, 'board-1')).toEqual([]);
+  });
+
+  it('clears a fine-grained selector when a cue is rebound to another element', () => {
+    const actions = [{
+      id: 'focus',
+      type: 'spotlight',
+      elementId: 'old-table',
+      selector: { cellId: 'r3c2' },
+      speechId: 'speech-1',
+    }] as Action[];
+
+    expect(setElementIdById(actions, 'focus', 'new-table')).toEqual([{
+      id: 'focus',
+      type: 'spotlight',
+      elementId: 'new-table',
+      speechId: 'speech-1',
+    }]);
   });
 });

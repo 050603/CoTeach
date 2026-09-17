@@ -3,8 +3,9 @@ export class SessionActionRequestError extends Error {
     readonly code: string,
     readonly status: number,
     readonly currentVersion?: number,
+    message?: string,
   ) {
-    super(code);
+    super(message ?? code);
     this.name = "SessionActionRequestError";
   }
 }

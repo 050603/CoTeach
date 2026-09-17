@@ -51,6 +51,7 @@ import { createLogger } from '@openmaic/lib/logger';
 import { useTTSPreview } from '@openmaic/lib/audio/use-tts-preview';
 import { isTTSProviderConfigured, isTTSProviderEnabled } from '@openmaic/lib/audio/provider-enablement';
 import { isCustomTTSProvider } from '@openmaic/lib/audio/types';
+import { normalizeQwenAudioTtsSelection } from '@openmaic/lib/audio/qwen-audio-tts-catalog';
 import {
   getVoxCPMProviderOptions,
   normalizeVoxCPMReferenceAudio,
@@ -114,6 +115,13 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
         ? ((providerConfig?.customVoices as Array<{ id: string }> | undefined) || [])[0]?.id ||
           'default'
         : DEFAULT_TTS_VOICES[selectedProviderId as keyof typeof DEFAULT_TTS_VOICES] || 'default';
+  const configuredModelId =
+    ttsProvidersConfig[selectedProviderId]?.modelId || ttsProvider?.defaultModelId || '';
+  const qwenSelection = selectedProviderId === 'qwen-tts'
+    ? normalizeQwenAudioTtsSelection(configuredModelId, effectiveVoice)
+    : undefined;
+  const effectiveModelId = qwenSelection?.modelId || configuredModelId;
+  const effectiveRequestVoice = qwenSelection?.voiceId || effectiveVoice;
 
   const [showApiKey, setShowApiKey] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -163,15 +171,14 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
         selectedProviderId === 'voxcpm-tts'
           ? {
               ...(ttsProvidersConfig[selectedProviderId]?.providerOptions || {}),
-              ...(await getVoxCPMProviderOptions(effectiveVoice, { role: 'teacher', locale })),
+              ...(await getVoxCPMProviderOptions(effectiveRequestVoice, { role: 'teacher', locale })),
             }
           : undefined;
       await startPreview({
         text: testText,
         providerId: selectedProviderId,
-        modelId:
-          ttsProvidersConfig[selectedProviderId]?.modelId || ttsProvider?.defaultModelId || '',
-        voice: effectiveVoice,
+        modelId: effectiveModelId,
+        voice: effectiveRequestVoice,
         speed: ttsSpeed,
         apiKey: ttsProvidersConfig[selectedProviderId]?.apiKey,
         // Managed providers resolve their base URL server-side; only send the
@@ -209,7 +216,7 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
       case 'azure-tts':
         return '/cognitiveservices/v1';
       case 'qwen-tts':
-        return '/services/aigc/multimodal-generation/generation';
+        return '/services/audio/tts/SpeechSynthesizer';
       case 'voxcpm-tts':
         return getVoxCPMBackendEndpoint(voxcpmBackend);
       case 'elevenlabs-tts':

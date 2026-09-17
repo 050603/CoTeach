@@ -7,6 +7,9 @@ export async function loadGenerationCheckpoints(jobId: string) {
   return {
     preparedOutlines: rows.find((row) => row.step === PREPARED_OUTLINES_STEP)?.state ?? [],
     pages: rows.filter((row) => row.step.startsWith("page:")).map((row) => row.state),
+    stages: rows.filter((row) => row.step.startsWith("stage:")).map((row) => row.state),
+    stageAttempts: rows.filter((row) => row.step.startsWith("stage-attempt:")).map((row) => row.state),
+    teachingSections: rows.filter((row) => row.step.startsWith("teaching-section:")).map((row) => row.state),
   };
 }
 export async function saveGenerationCheckpoint(jobId: string, step: string, state: unknown) {

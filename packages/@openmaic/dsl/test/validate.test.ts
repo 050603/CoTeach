@@ -143,6 +143,80 @@ describe('validateAction', () => {
   });
   it('accepts a well-formed action (variant fields present)', () => {
     expect(validateAction({ id: 'a', type: 'spotlight', elementId: 'e' })).toEqual({ valid: true });
+    expect(validateAction({
+      id: 'a-cell',
+      type: 'spotlight',
+      elementId: 'table',
+      selector: { cellId: 'r2c3' },
+      speechId: 'speech-2',
+      speechOffsetMs: 3200,
+      speechAnchor: { quote: '三个核心特征', occurrence: 0 },
+      necessity: 'essential',
+      omissionRisk: '不指引会混淆当前讲解的表格单元格',
+      endSpeechId: 'speech-4',
+    })).toEqual({ valid: true });
+    expect(validateAction({
+      id: 'a-cell-quote',
+      type: 'spotlight',
+      elementId: 'table',
+      selector: { cellId: 'r2c3', quote: '低代码', occurrence: 0 },
+    })).toEqual({ valid: true });
+    expect(validateAction({
+      id: 'a-quote',
+      type: 'laser',
+      elementId: 'text',
+      selector: { quote: 'PBL', occurrence: 1 },
+      waypoints: [
+        { elementId: 'feature-a', selector: { quote: '成果导向' } },
+        { elementId: 'feature-b' },
+      ],
+      duration: 2500,
+    })).toEqual({ valid: true });
+  });
+  it('validates fine-grained visual selectors and speech bindings', () => {
+    expect(errors(validateAction({
+      id: 'a', type: 'spotlight', elementId: 'e', selector: { cellId: '' },
+    }))).toContain('/selector/cellId');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', selector: { quote: 'PBL', occurrence: -1 },
+    }))).toContain('/selector/occurrence');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', selector: { quote: '', cellId: 'cell' },
+    }))).toContain('/selector/quote');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', selector: { cellId: 'cell', occurrence: -1 },
+    }))).toContain('/selector/occurrence');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', speechId: '',
+    }))).toContain('/speechId');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', speechOffsetMs: -1,
+    }))).toContain('/speechOffsetMs');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', speechAnchor: { quote: '' },
+    }))).toContain('/speechAnchor');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e',
+      speechAnchor: { quote: '第二次出现', occurrence: -1 },
+    }))).toContain('/speechAnchor/occurrence');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', necessity: 'always',
+    }))).toContain('/necessity');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', omissionRisk: '',
+    }))).toContain('/omissionRisk');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', duration: -1,
+    }))).toContain('/duration');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', waypoints: [],
+    }))).toContain('/waypoints');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', waypoints: [{ elementId: '' }],
+    }))).toContain('/waypoints/0/elementId');
+    expect(errors(validateAction({
+      id: 'a', type: 'spotlight', elementId: 'e', endSpeechId: '',
+    }))).toContain('/endSpeechId');
   });
   it('rejects an unknown action type', () => {
     const r = validateAction({ id: 'a', type: 'frobnicate' });

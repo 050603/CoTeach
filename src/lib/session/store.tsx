@@ -347,6 +347,7 @@ async function postSessionAction(
       body?.code ?? body?.message ?? body?.error ?? `SESSION_ACTION_FAILED_${res.status}`,
       res.status,
       body?.details?.currentVersion,
+      body?.message ?? body?.error,
     );
   }
   return (await res.json()) as ActionAck;
@@ -596,8 +597,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         console.error("[session] Failed to persist session action:", error);
         lastFailedActionRef.current = { action, requestId };
         setSaveState("error");
-        setSaveError("数据保存失败，请检查服务器状态后重试。");
-        toast.error("课堂数据尚未保存", { id: "session-write-error", description: "当前页面内容仍保留在本地，可直接重试。" });
+        const reason = error instanceof SessionActionRequestError
+          ? error.message
+          : "数据保存失败，请检查服务器状态后重试。";
+        setSaveError(reason);
+        toast.error("课堂数据尚未保存", {
+          id: "session-write-error",
+          description: `${reason} 当前页面内容仍保留在本地，可直接重试。`,
+        });
         return false;
       });
   }
@@ -699,8 +706,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       pendingCommitsRef.current--;
       console.error("[session] Retry failed:", error);
       setSaveState("error");
-      setSaveError("重试失败，请确认服务器可用。");
-      toast.error("重新保存失败");
+      const reason = error instanceof SessionActionRequestError
+        ? error.message
+        : "重试失败，请确认服务器可用。";
+      setSaveError(reason);
+      toast.error("重新保存失败", { description: reason });
     }
   }
 

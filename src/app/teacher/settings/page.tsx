@@ -53,6 +53,16 @@ import {
   type TtsVoiceTimingCalibration,
 } from "@openmaic/lib/audio/tts-timing";
 import { getEnabledProvidersWithVoices } from "@openmaic/lib/audio/voice-resolver";
+import {
+  qwenAudioTtsModelForVoice,
+  qwenAudioTtsVoiceForModel,
+} from "@openmaic/lib/audio/qwen-audio-tts-catalog";
+import {
+  TTS_SCENARIOS,
+  type TtsScenarioConfig,
+  type TtsScenarioConfigs,
+  type TtsScenarioId,
+} from "@openmaic/lib/audio/tts-scenarios";
 import { useSettingsStore } from "@openmaic/lib/store/settings";
 import { AI_COMPANIONS } from "@/lib/ai-companions";
 import { IMAGE_PROVIDERS } from "@openmaic/lib/media/image-providers";
@@ -87,8 +97,26 @@ type SavedConfig = {
   defaultModel?: string;
   priority?: number;
   defaultVoice?: string;
+  scenarioConfigs?: TtsScenarioConfigs;
   timingCalibrations?: TtsVoiceTimingCalibration[];
 };
+
+function getInitialTtsScenarioConfigs(
+  provider: ProviderMeta,
+  saved: SavedConfig | undefined,
+  defaultModel: string,
+  defaultVoice: string,
+): TtsScenarioConfigs {
+  const fallback = { modelId: defaultModel, voiceId: defaultVoice };
+  return Object.fromEntries(TTS_SCENARIOS.map(({ id }) => {
+    const configured = saved?.scenarioConfigs?.[id] ?? fallback;
+    if (provider.id !== "qwen-tts") return [id, configured];
+    return [id, {
+      modelId: configured.modelId,
+      voiceId: qwenAudioTtsVoiceForModel(configured.modelId, configured.voiceId),
+    }];
+  })) as TtsScenarioConfigs;
+}
 
 function getProviderRequestPreview(provider: ProviderMeta, baseUrl: string): string {
   if (provider.type === "bedrock") return "AWS SDK · Converse API";
@@ -303,13 +331,22 @@ function getReadableError(data: unknown, fallback: string) {
  * 仅在当前 TTS 服务商为 qwen-tts 时作为一键推荐。
  */
 const RECOMMENDED_QWEN_VOICES: Record<string, { voiceId: string; reason: string }> = {
-  knowledge: { voiceId: "Ethan", reason: "沉稳男声，适合知识讲解的权威感" },
-  ideation: { voiceId: "Maia", reason: "活泼女声，适合创意启发的灵动" },
-  critic: { voiceId: "Aiden", reason: "锐利男声，适合质疑检验的穿透力" },
-  planner: { voiceId: "Kai", reason: "干练男声，适合方案规划的条理" },
-  reviewer: { voiceId: "Serena", reason: "温和女声，适合评审反馈的亲切" },
-  recorder: { voiceId: "Chelsie", reason: "平稳女声，适合过程记录的沉静" },
+  knowledge: { voiceId: "longanlufeng", reason: "明亮男声，适合清晰讲解" },
+  ideation: { voiceId: "longanxiaoxin", reason: "亲切活泼，适合创意启发" },
+  critic: { voiceId: "longchuanshu_v3.6", reason: "鲜明男声，适合质疑检验" },
+  planner: { voiceId: "longjielidou_v3.6", reason: "清晰有活力，适合方案规划" },
+  reviewer: { voiceId: "longanfengyue", reason: "自然亲切，适合评审反馈" },
+  recorder: { voiceId: "longanlingxin", reason: "知心温暖，适合过程记录" },
 };
+
+function modelIdForVoice(
+  provider: { modelGroups: Array<{ modelId: string; voices: Array<{ id: string }> }> } | undefined,
+  voiceId: string,
+): string | undefined {
+  return provider?.modelGroups.find((group) =>
+    group.voices.some((voice) => voice.id === voiceId)
+  )?.modelId || undefined;
+}
 
 function AgentVoiceConfig() {
   const { ttsProvidersConfig, ttsProviderId, agentVoiceOverrides, setAgentVoiceOverride } =
@@ -336,6 +373,7 @@ function AgentVoiceConfig() {
       if (rec) {
         setAgentVoiceOverride(companion.id, {
           providerId: ttsProviderId,
+          modelId: qwenAudioTtsModelForVoice(rec.voiceId),
           voiceId: rec.voiceId,
         });
       }
@@ -353,7 +391,7 @@ function AgentVoiceConfig() {
     setTestResult(null);
     try {
       const providerConfig = ttsProvidersConfig[ttsProviderId];
-      const modelId = providerConfig?.modelId || undefined;
+      const modelId = modelIdForVoice(currentProvider, voiceId) || providerConfig?.modelId || undefined;
       const companion = AI_COMPANIONS.find((c) => c.id === companionId);
       const response = await fetch("/api/openmaic/generate/tts", {
         method: "POST",
@@ -362,6 +400,7 @@ function AgentVoiceConfig() {
           text: `大家好，我是${companion?.name ?? "智能体"}，很高兴和大家一起学习。`,
           audioId: `agent_voice_test_${companionId}`,
           ttsProviderId,
+          ttsScenario: "realtime-interaction",
           ttsModelId: modelId,
           ttsVoice: voiceId,
           ttsSpeed: 1,
@@ -466,6 +505,7 @@ function AgentVoiceConfig() {
                       if (voiceId) {
                         setAgentVoiceOverride(companion.id, {
                           providerId: ttsProviderId,
+                          modelId: modelIdForVoice(currentProvider, voiceId),
                           voiceId,
                         });
                       } else {
@@ -591,6 +631,7 @@ function KnowledgeTutorConfig() {
           text: "这是一段知识讲授助教的示范讲解。我们先看题目条件，再梳理判断依据。",
           audioId: `knowledge_tutor_test_${Date.now()}`,
           ttsProviderId: settings.ttsProviderId,
+          ttsScenario: "realtime-interaction",
           ttsModelId: settings.ttsModelId,
           ttsVoice: settings.ttsVoice,
           ttsSpeed: settings.ttsSpeed ?? 1,
@@ -634,7 +675,14 @@ function KnowledgeTutorConfig() {
           </select>
         </Field>
         <Field label="讲解音色" icon={Users}>
-          <select disabled={!selectedVoiceProvider} className="h-10 w-full rounded-[8px] border border-stone-200 bg-white px-3 text-sm outline-none disabled:bg-stone-100" value={settings.ttsVoice ?? ""} onChange={(event) => setSettings((current) => ({ ...current, ttsVoice: event.target.value || undefined }))}>
+          <select disabled={!selectedVoiceProvider} className="h-10 w-full rounded-[8px] border border-stone-200 bg-white px-3 text-sm outline-none disabled:bg-stone-100" value={settings.ttsVoice ?? ""} onChange={(event) => {
+            const voiceId = event.target.value || undefined;
+            setSettings((current) => ({
+              ...current,
+              ttsVoice: voiceId,
+              ttsModelId: voiceId ? modelIdForVoice(selectedVoiceProvider, voiceId) : undefined,
+            }));
+          }}>
             <option value="">选择音色</option>
             {(selectedVoiceProvider?.modelGroups.length ?? 0) > 1
               ? selectedVoiceProvider?.modelGroups.map((group) => <optgroup key={group.modelId} label={group.modelName}>{group.voices.map((voice) => <option key={`${group.modelId}:${voice.id}`} value={voice.id}>{voice.name}</option>)}</optgroup>)
@@ -799,11 +847,12 @@ export default function TeacherSettingsPage() {
   const [editModels, setEditModels] = useState("");
   const [editDefaultModel, setEditDefaultModel] = useState("");
   const [editDefaultVoice, setEditDefaultVoice] = useState("");
+  const [editTtsScenarioConfigs, setEditTtsScenarioConfigs] = useState<TtsScenarioConfigs>({});
   const [showApiKey, setShowApiKey] = useState(false);
 
   const [savingProviderId, setSavingProviderId] = useState<string | null>(null);
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
-  const [calibratingProviderId, setCalibratingProviderId] = useState<string | null>(null);
+  const [testingTtsScenario, setTestingTtsScenario] = useState<TtsScenarioId | null>(null);
   const [saveResult, setSaveResult] = useState<ResultState>(null);
   const [testResult, setTestResult] = useState<ResultState>(null);
   const [deletingProvider, setDeletingProvider] = useState<ProviderMeta | null>(null);
@@ -831,12 +880,20 @@ export default function TeacherSettingsPage() {
       setEditApiKey("");
       setEditBaseUrl(saved?.baseUrl || provider.defaultBaseUrl || "");
       setEditModels(modelsToText(saved?.models, provider));
-      setEditDefaultModel(getInitialDefaultModel(provider, saved));
-      setEditDefaultVoice(
-        saved?.defaultVoice ||
-          DEFAULT_TTS_VOICES[provider.id as keyof typeof DEFAULT_TTS_VOICES] ||
-          "default",
+      const defaultModel = getInitialDefaultModel(provider, saved);
+      const defaultVoice = saved?.defaultVoice ||
+        DEFAULT_TTS_VOICES[provider.id as keyof typeof DEFAULT_TTS_VOICES] ||
+        "default";
+      const scenarioConfigs = getInitialTtsScenarioConfigs(
+        provider,
+        saved,
+        defaultModel,
+        defaultVoice,
       );
+      const realtimeConfig = scenarioConfigs["realtime-interaction"];
+      setEditDefaultModel(realtimeConfig?.modelId || defaultModel);
+      setEditDefaultVoice(realtimeConfig?.voiceId || defaultVoice);
+      setEditTtsScenarioConfigs(scenarioConfigs);
       setShowApiKey(false);
       setSaveResult(null);
       setTestResult(null);
@@ -940,9 +997,21 @@ export default function TeacherSettingsPage() {
     }
   }
 
+  function handleTtsScenarioConfigChange(
+    scenario: TtsScenarioId,
+    config: TtsScenarioConfig,
+  ) {
+    setEditTtsScenarioConfigs((current) => ({ ...current, [scenario]: config }));
+    if (scenario === "realtime-interaction") {
+      setEditDefaultModel(config.modelId);
+      setEditDefaultVoice(config.voiceId);
+    }
+  }
+
   async function handleSave(provider: ProviderMeta, makeDefault = true) {
     const saved = getSavedConfig(currentTab.section, provider.id);
     const modelIds = splitModelIds(editModels);
+    const realtimeTtsConfig = editTtsScenarioConfigs["realtime-interaction"];
 
     if (provider.requiresApiKey && !saved?.hasApiKey && !editApiKey.trim()) {
       setSaveResult({ ok: false, message: "请先填写密钥。" });
@@ -967,8 +1036,13 @@ export default function TeacherSettingsPage() {
           baseUrl: editBaseUrl.trim() || undefined,
           enabled: true,
           models: modelIds.length > 0 ? modelIds : undefined,
-          defaultModel: editDefaultModel || modelIds[0] || undefined,
-          ...(activeTab === "tts" ? { defaultVoice: editDefaultVoice || "default" } : {}),
+          defaultModel: activeTab === "tts"
+            ? realtimeTtsConfig?.modelId || editDefaultModel || modelIds[0] || undefined
+            : editDefaultModel || modelIds[0] || undefined,
+          ...(activeTab === "tts" ? {
+            defaultVoice: realtimeTtsConfig?.voiceId || editDefaultVoice || "default",
+            scenarioConfigs: editTtsScenarioConfigs,
+          } : {}),
           ...(makeDefault ? { priority: 0 } : {}),
         }),
       });
@@ -1013,6 +1087,7 @@ export default function TeacherSettingsPage() {
                   ...(activeTab === "tts"
                     ? {
                         defaultVoice: otherSaved?.defaultVoice,
+                        scenarioConfigs: otherSaved?.scenarioConfigs,
                         timingCalibrations: otherSaved?.timingCalibrations,
                       }
                     : {}),
@@ -1046,9 +1121,17 @@ export default function TeacherSettingsPage() {
     }
   }
 
-  async function handleTestConnection(provider: ProviderMeta) {
+  async function handleTestConnection(
+    provider: ProviderMeta,
+    ttsScenario: TtsScenarioId = "realtime-interaction",
+    calibrateTts = false,
+  ) {
     const saved = getSavedConfig(currentTab.section, provider.id);
-    const modelId = editDefaultModel || splitModelIds(editModels)[0] || "";
+    const realtimeTtsConfig = editTtsScenarioConfigs["realtime-interaction"];
+    const selectedTtsConfig = editTtsScenarioConfigs[ttsScenario];
+    const modelId = activeTab === "tts"
+      ? selectedTtsConfig?.modelId || editDefaultModel || splitModelIds(editModels)[0] || ""
+      : editDefaultModel || splitModelIds(editModels)[0] || "";
 
     if (!modelId && activeTab !== "tts" && provider.models.length > 0) {
       setTestResult({ ok: false, message: "请先选择或填写一个模型 ID。" });
@@ -1068,9 +1151,10 @@ export default function TeacherSettingsPage() {
         return;
       }
 
-      const voice = editDefaultVoice ||
+      const voice = selectedTtsConfig?.voiceId || editDefaultVoice ||
         DEFAULT_TTS_VOICES[provider.id as keyof typeof DEFAULT_TTS_VOICES] || "default";
       setTestingProviderId(provider.id);
+      setTestingTtsScenario(ttsScenario);
       setTestResult(null);
       try {
         const configResponse = await fetch("/api/openmaic/provider-config", {
@@ -1083,8 +1167,9 @@ export default function TeacherSettingsPage() {
             baseUrl: editBaseUrl.trim() || undefined,
             enabled: true,
             models: splitModelIds(editModels).length ? splitModelIds(editModels) : undefined,
-            defaultModel: modelId || undefined,
-            defaultVoice: voice,
+            defaultModel: realtimeTtsConfig?.modelId || editDefaultModel || modelId || undefined,
+            defaultVoice: realtimeTtsConfig?.voiceId || editDefaultVoice || voice,
+            scenarioConfigs: editTtsScenarioConfigs,
             priority: saved?.priority,
           }),
         });
@@ -1097,8 +1182,9 @@ export default function TeacherSettingsPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             text: TTS_CALIBRATION_TEXT,
-            audioId: `settings_test_${provider.id}`,
+            audioId: `settings_test_${provider.id}_${ttsScenario}`,
             ttsProviderId: provider.id,
+            ttsScenario,
             ttsModelId: modelId || undefined,
             ttsVoice: voice,
             ttsSpeed: 1,
@@ -1114,35 +1200,44 @@ export default function TeacherSettingsPage() {
           throw new Error(getReadableError(data, "语音测试失败，请检查密钥、服务地址、模型和音色。"));
         }
 
-        const measuredDurationSec = await measureBase64AudioDuration(audioBase64, format);
-        const calibrationResponse = await fetch("/api/openmaic/tts-calibration", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            providerId: provider.id,
-            modelId,
-            voiceId: voice,
-            language: "zh-CN",
-            speed: 1,
-            text: TTS_CALIBRATION_TEXT,
-            measuredDurationSec,
-            apiKey: editApiKey.trim(),
-            baseUrl: editBaseUrl.trim() || undefined,
-            models: splitModelIds(editModels),
-          }),
-        });
-        const calibrationData = await calibrationResponse.json().catch(() => null);
-        if (!calibrationResponse.ok || calibrationData?.success === false) {
-          throw new Error(getReadableError(calibrationData, "音频生成成功，但语速建模保存失败。"));
+        const shouldCalibrate = calibrateTts && ttsScenario === "course-generation";
+        let measuredDurationSec: number | undefined;
+        let calibration: TtsVoiceTimingCalibration | undefined;
+        if (shouldCalibrate) {
+          measuredDurationSec = await measureBase64AudioDuration(audioBase64, format);
+          const calibrationResponse = await fetch("/api/openmaic/tts-calibration", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              providerId: provider.id,
+              modelId,
+              voiceId: voice,
+              language: "zh-CN",
+              speed: 1,
+              text: TTS_CALIBRATION_TEXT,
+              measuredDurationSec,
+              apiKey: editApiKey.trim(),
+              baseUrl: editBaseUrl.trim() || undefined,
+              models: splitModelIds(editModels),
+            }),
+          });
+          const calibrationData = await calibrationResponse.json().catch(() => null);
+          if (!calibrationResponse.ok || calibrationData?.success === false) {
+            throw new Error(getReadableError(calibrationData, "音频生成成功，但课程语速建模保存失败。"));
+          }
+          calibration = calibrationData?.calibration ?? calibrationData?.data?.calibration;
         }
-        const calibration = calibrationData?.calibration ?? calibrationData?.data?.calibration;
         const audioUrl = `data:audio/${format};base64,${audioBase64}`;
         const audio = new Audio(audioUrl);
         void audio.play().catch(() => undefined);
         setTestResult({
           ok: true,
-          message: "语音测试成功，已自动试听并完成自然语速建模。",
-          detail: `模型：${modelId || "默认"}；音色：${voice}；实测 ${measuredDurationSec.toFixed(2)} 秒；共享平均约 ${Number(calibration?.cjkCharsPerMinute ?? 0).toFixed(1)} 字/分钟（${calibration?.sampleCount ?? 1} 次样本）`,
+          message: shouldCalibrate
+            ? "课程生成试听成功，已完成该模型与音色的自然语速建模。"
+            : "实时交互试听成功。",
+          detail: shouldCalibrate && measuredDurationSec
+            ? `模型：${modelId || "默认"}；音色：${voice}；实测 ${measuredDurationSec.toFixed(2)} 秒；共享平均约 ${Number(calibration?.cjkCharsPerMinute ?? 0).toFixed(1)} 字/分钟（${calibration?.sampleCount ?? 1} 次样本）`
+            : `模型：${modelId || "默认"}；音色：${voice}`,
           audioUrl,
         });
         await fetchConfigs("tts");
@@ -1154,6 +1249,7 @@ export default function TeacherSettingsPage() {
         });
       } finally {
         setTestingProviderId(null);
+        setTestingTtsScenario(null);
       }
       return;
     }
@@ -1205,15 +1301,6 @@ export default function TeacherSettingsPage() {
       });
     } finally {
       setTestingProviderId(null);
-    }
-  }
-
-  async function handleCalibrateTts(provider: ProviderMeta) {
-    setCalibratingProviderId(provider.id);
-    try {
-      await handleTestConnection(provider);
-    } finally {
-      setCalibratingProviderId(null);
     }
   }
 
@@ -1429,10 +1516,11 @@ export default function TeacherSettingsPage() {
                         editModels={editModels}
                         editDefaultModel={editDefaultModel}
                         editDefaultVoice={editDefaultVoice}
+                        editTtsScenarioConfigs={editTtsScenarioConfigs}
                         showApiKey={showApiKey}
                         saving={savingProviderId === selectedModalityProvider.id}
                         testing={testingProviderId === selectedModalityProvider.id}
-                        calibrating={calibratingProviderId === selectedModalityProvider.id}
+                        testingTtsScenario={testingProviderId === selectedModalityProvider.id ? testingTtsScenario : null}
                         saveResult={saveResult}
                         testResult={testResult}
                         onApiKeyChange={setEditApiKey}
@@ -1440,10 +1528,17 @@ export default function TeacherSettingsPage() {
                         onModelsChange={setEditModels}
                         onDefaultModelChange={setEditDefaultModel}
                         onDefaultVoiceChange={setEditDefaultVoice}
+                        onTtsScenarioConfigChange={handleTtsScenarioConfigChange}
                         onShowApiKeyChange={setShowApiKey}
                         onSave={() => handleSave(selectedModalityProvider)}
                         onTest={() => handleTestConnection(selectedModalityProvider)}
-                        onCalibrate={activeTab === "tts" ? () => handleCalibrateTts(selectedModalityProvider) : undefined}
+                        onTestTtsScenario={activeTab === "tts"
+                          ? (scenario) => handleTestConnection(
+                              selectedModalityProvider,
+                              scenario,
+                              scenario === "course-generation",
+                            )
+                          : undefined}
                       />
                     </ProviderEditor>
                   ) : (
@@ -1801,10 +1896,11 @@ function ModalityConfigForm({
   editModels,
   editDefaultModel,
   editDefaultVoice,
+  editTtsScenarioConfigs,
   showApiKey,
   saving,
   testing,
-  calibrating,
+  testingTtsScenario,
   saveResult,
   testResult,
   onApiKeyChange,
@@ -1812,10 +1908,11 @@ function ModalityConfigForm({
   onModelsChange,
   onDefaultModelChange,
   onDefaultVoiceChange,
+  onTtsScenarioConfigChange,
   onShowApiKeyChange,
   onSave,
   onTest,
-  onCalibrate,
+  onTestTtsScenario,
 }: {
   provider: ProviderMeta;
   saved?: SavedConfig;
@@ -1824,10 +1921,11 @@ function ModalityConfigForm({
   editModels: string;
   editDefaultModel: string;
   editDefaultVoice: string;
+  editTtsScenarioConfigs: TtsScenarioConfigs;
   showApiKey: boolean;
   saving: boolean;
   testing: boolean;
-  calibrating: boolean;
+  testingTtsScenario: TtsScenarioId | null;
   saveResult: ResultState;
   testResult: ResultState;
   onApiKeyChange: (value: string) => void;
@@ -1835,10 +1933,11 @@ function ModalityConfigForm({
   onModelsChange: (value: string) => void;
   onDefaultModelChange: (value: string) => void;
   onDefaultVoiceChange: (value: string) => void;
+  onTtsScenarioConfigChange: (scenario: TtsScenarioId, config: TtsScenarioConfig) => void;
   onShowApiKeyChange: (value: boolean) => void;
   onSave: () => void;
   onTest: () => void;
-  onCalibrate?: () => void;
+  onTestTtsScenario?: (scenario: TtsScenarioId) => void;
 }) {
   const modelIds = splitModelIds(editModels);
   const providerModelMap = new Map(provider.models.map((model) => [model.id, model]));
@@ -1846,13 +1945,7 @@ function ModalityConfigForm({
     ...provider.models.map((model) => model.id),
     ...modelIds,
   ])].map((id) => providerModelMap.get(id) ?? { id, name: id });
-  const availableVoices = getTTSVoices(provider.id as keyof typeof TTS_PROVIDERS);
-  const activeCalibration = saved?.timingCalibrations?.find(
-    (item) => item.modelId === editDefaultModel
-      && item.voiceId === editDefaultVoice
-      && (item.language || "zh-CN").toLowerCase() === "zh-cn"
-      && (item.speed ?? 1) === 1,
-  );
+  const isTts = Boolean(onTestTtsScenario);
 
   return (
     <div className="space-y-5">
@@ -1891,7 +1984,132 @@ function ModalityConfigForm({
         </Field>
       </div>
 
-      {availableModels.length > 0 ? (
+      {isTts && availableModels.length > 0 ? (
+        <section className="overflow-hidden rounded-[10px] border border-stone-200 bg-stone-50/60">
+          <div className="border-b border-stone-200 bg-white px-4 py-3">
+            <div className="flex items-center gap-2 text-sm font-bold text-stone-900">
+              <SlidersHorizontal size={16} className="text-[var(--pbl-teacher)]" />
+              分场景模型与音色
+            </div>
+            <p className="mt-1 text-xs leading-5 text-stone-500">
+              课程生成使用质量档；AI 讨论、习题讲解和助教朗读统一使用实时档。
+            </p>
+          </div>
+          <div className="grid gap-3 p-3 lg:grid-cols-2">
+            {TTS_SCENARIOS.map((scenario) => {
+              const fallbackModel = editDefaultModel || availableModels[0]?.id || "";
+              const fallbackVoice = editDefaultVoice || "default";
+              const config = editTtsScenarioConfigs[scenario.id] ?? {
+                modelId: fallbackModel,
+                voiceId: fallbackVoice,
+              };
+              const voices = getTTSVoices(
+                provider.id as keyof typeof TTS_PROVIDERS,
+              ).filter((voice) =>
+                !voice.compatibleModels || voice.compatibleModels.includes(config.modelId)
+              );
+              const voiceLabel = voices.find((voice) => voice.id === config.voiceId)?.name
+                ?? config.voiceId;
+              const scenarioCalibration = scenario.id === "course-generation"
+                ? saved?.timingCalibrations?.find(
+                    (item) => item.modelId === config.modelId
+                      && item.voiceId === config.voiceId
+                      && (item.language || "zh-CN").toLowerCase() === "zh-cn"
+                      && (item.speed ?? 1) === 1,
+                  )
+                : undefined;
+              const isTestingScenario = testingTtsScenario === scenario.id;
+              return (
+                <div key={scenario.id} className="rounded-[8px] border border-stone-200 bg-white p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-bold text-stone-900">{scenario.label}</p>
+                      <p className="mt-1 text-xs leading-5 text-stone-500">{scenario.description}</p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-[var(--pbl-teacher-soft)] px-2 py-1 text-[10px] font-bold text-[var(--pbl-teacher)]">
+                      {scenario.badge}
+                    </span>
+                  </div>
+                  <label className="mt-3 block text-xs font-semibold text-stone-600">
+                    模型
+                    <select
+                      className="mt-1.5 h-10 w-full rounded-[8px] border border-stone-200 bg-white px-3 text-sm text-stone-800 outline-none focus:border-[var(--pbl-teacher)]"
+                      value={config.modelId}
+                      onChange={(event) => {
+                        const modelId = event.target.value;
+                        const compatibleVoices = getTTSVoices(
+                          provider.id as keyof typeof TTS_PROVIDERS,
+                        ).filter((voice) =>
+                          !voice.compatibleModels || voice.compatibleModels.includes(modelId)
+                        );
+                        const voiceId = compatibleVoices.some((voice) => voice.id === config.voiceId)
+                          ? config.voiceId
+                          : compatibleVoices[0]?.id || config.voiceId || "default";
+                        onTtsScenarioConfigChange(scenario.id, { modelId, voiceId });
+                      }}
+                    >
+                      {availableModels.map((model) => (
+                        <option key={model.id} value={model.id}>{model.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="mt-3 block text-xs font-semibold text-stone-600">
+                    音色
+                    <select
+                      className="mt-1.5 h-10 w-full rounded-[8px] border border-stone-200 bg-white px-3 text-sm text-stone-800 outline-none focus:border-[var(--pbl-teacher)]"
+                      value={config.voiceId}
+                      onChange={(event) => onTtsScenarioConfigChange(scenario.id, {
+                        ...config,
+                        voiceId: event.target.value,
+                      })}
+                    >
+                      {voices.length > 0 ? voices.map((voice) => (
+                        <option key={voice.id} value={voice.id}>{voice.name}</option>
+                      )) : <option value={config.voiceId}>{voiceLabel || "默认音色"}</option>}
+                    </select>
+                  </label>
+                  {scenario.id === "course-generation" ? (
+                    scenarioCalibration ? (
+                      <div className="mt-3 rounded-[8px] border border-[var(--pbl-success-border)] bg-[var(--pbl-success-soft)] px-3 py-2 text-xs text-[var(--pbl-success)]">
+                        已建模：约 {scenarioCalibration.cjkCharsPerMinute.toFixed(1)} 字/分钟，累计 {scenarioCalibration.sampleCount ?? 1} 次测试
+                      </div>
+                    ) : (
+                      <div className="mt-3 text-xs leading-5 text-[var(--pbl-warning)]">
+                        该课程生成模型与音色尚未建模，生成时将暂用内置保守语速。
+                      </div>
+                    )
+                  ) : (
+                    <div className="mt-3 text-xs leading-5 text-stone-500">
+                      实时档只进行声音试听，不写入课程时长估算基准。
+                    </div>
+                  )}
+                  <PrimaryButton
+                    variant="outline"
+                    onClick={() => onTestTtsScenario?.(scenario.id)}
+                    disabled={saving || testing}
+                    className="mt-3 h-10 w-full justify-center text-sm"
+                  >
+                    {isTestingScenario ? (
+                      <Loader2 size={15} className="animate-spin" />
+                    ) : scenario.id === "course-generation" ? (
+                      <SlidersHorizontal size={15} />
+                    ) : (
+                      <Volume2 size={15} />
+                    )}
+                    {isTestingScenario
+                      ? "正在生成试听"
+                      : scenario.id === "course-generation"
+                        ? "试听并进行语速建模"
+                        : "试听实时交互音色"}
+                  </PrimaryButton>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {!isTts && availableModels.length > 0 ? (
           <Field label={`模型（${availableModels.length}）`} helper="列表同时显示内置目录与服务器已保存模型；选择后保存为默认模型。" icon={Bot}>
             <div className="grid gap-2 sm:grid-cols-2">
               {availableModels.map((m) => {
@@ -1903,6 +2121,17 @@ function ModalityConfigForm({
                     type="button"
                     onClick={() => {
                       onDefaultModelChange(m.id);
+                      const compatibleVoices = getTTSVoices(
+                        provider.id as keyof typeof TTS_PROVIDERS,
+                      ).filter((voice) =>
+                        !voice.compatibleModels || voice.compatibleModels.includes(m.id)
+                      );
+                      if (
+                        compatibleVoices.length > 0 &&
+                        !compatibleVoices.some((voice) => voice.id === editDefaultVoice)
+                      ) {
+                        onDefaultVoiceChange(compatibleVoices[0].id);
+                      }
                       if (!isSelected) {
                         onModelsChange(editModels ? `${editModels}, ${m.id}` : m.id);
                       }
@@ -1932,40 +2161,13 @@ function ModalityConfigForm({
           </Field>
         ) : null}
 
-      {onCalibrate ? (
-          <Field
-            label="默认音色与自然语速"
-            helper="基于当前模型与音色测量中文自然语速。"
-            icon={Volume2}
-          >
-            <select
-              value={editDefaultVoice}
-              onChange={(event) => onDefaultVoiceChange(event.target.value)}
-              className="h-10 w-full rounded-[8px] border border-stone-200 bg-white px-3 text-sm text-stone-800 outline-none focus:border-[var(--pbl-teacher)]"
-            >
-              {availableVoices.length > 0 ? availableVoices.map((voice) => (
-                <option key={voice.id} value={voice.id}>{voice.name}</option>
-              )) : <option value="default">默认音色</option>}
-            </select>
-            {activeCalibration ? (
-              <div className="mt-2 rounded-[8px] border border-[var(--pbl-success-border)] bg-[var(--pbl-success-soft)] px-3 py-2 text-xs text-[var(--pbl-success)]">
-                已建模：约 {activeCalibration.cjkCharsPerMinute.toFixed(1)} 字/分钟，累计 {activeCalibration.sampleCount ?? 1} 次测试
-              </div>
-            ) : (
-              <div className="mt-2 text-xs text-[var(--pbl-warning)]">当前模型与音色尚未建模，将暂用内置保守语速。</div>
-            )}
-          </Field>
-        ) : null}
-
       <ActionRow
         saving={saving}
         testing={testing}
-        calibrating={calibrating}
         saveResult={saveResult}
         testResult={testResult}
         onSave={onSave}
-        onTest={onTest}
-        onCalibrate={onCalibrate}
+        onTest={isTts ? undefined : onTest}
       />
 
       {testResult?.audioUrl ? (
@@ -1988,21 +2190,17 @@ function ModalityConfigForm({
 function ActionRow({
   saving,
   testing,
-  calibrating = false,
   saveResult,
   testResult,
   onSave,
   onTest,
-  onCalibrate,
 }: {
   saving: boolean;
   testing: boolean;
-  calibrating?: boolean;
   saveResult: ResultState;
   testResult: ResultState;
   onSave: () => void;
-  onTest: () => void;
-  onCalibrate?: () => void;
+  onTest?: () => void;
 }) {
   return (
     <div className="space-y-3 border-t border-stone-200 pt-4">
@@ -2011,24 +2209,15 @@ function ActionRow({
           {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
           保存配置
         </PrimaryButton>
-        <PrimaryButton
-          variant="outline"
-          onClick={onTest}
-          disabled={saving || testing}
-          className="h-10 px-4 text-sm"
-        >
-          {testing ? <Loader2 size={15} className="animate-spin" /> : <Plug size={15} />}
-          {testing ? "正在测试" : "保存并测试连接"}
-        </PrimaryButton>
-        {onCalibrate ? (
+        {onTest ? (
           <PrimaryButton
             variant="outline"
-            onClick={onCalibrate}
-            disabled={saving || testing || calibrating}
+            onClick={onTest}
+            disabled={saving || testing}
             className="h-10 px-4 text-sm"
           >
-            {calibrating ? <Loader2 size={15} className="animate-spin" /> : <SlidersHorizontal size={15} />}
-            语速建模
+            {testing ? <Loader2 size={15} className="animate-spin" /> : <Plug size={15} />}
+            {testing ? "正在测试" : "保存并测试连接"}
           </PrimaryButton>
         ) : null}
       </div>

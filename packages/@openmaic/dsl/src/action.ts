@@ -35,10 +35,40 @@ export interface WhiteboardAnchor {
 
 // ==================== Fire-and-forget actions ====================
 
+/** Select a precise region inside a slide element. `occurrence` is zero-based. */
+export type VisualTargetSelector =
+  | { cellId: string; quote?: string; occurrence?: number }
+  | { quote: string; occurrence?: number };
+
+/** A precise target visited after the laser's primary `elementId`. */
+export interface LaserWaypoint {
+  elementId: string;
+  selector?: VisualTargetSelector;
+}
+
+/** Stable semantic start point inside the cue's bound narration paragraph. */
+export interface SpeechAnchor {
+  quote: string;
+  occurrence?: number;
+}
+
+export type VisualCueNecessity = 'essential' | 'helpful';
+
 /** Spotlight — focus on a single element, dim everything else */
 export interface SpotlightAction extends ActionBase {
   type: 'spotlight';
   elementId: string;
+  selector?: VisualTargetSelector;
+  /** Narration segment whose lifetime owns this visual cue. */
+  speechId?: string;
+  /** Start time inside `speechId`, in media milliseconds. Defaults to 0. */
+  speechOffsetMs?: number;
+  /** Phrase whose position is converted locally to `speechOffsetMs`. */
+  speechAnchor?: SpeechAnchor;
+  necessity?: VisualCueNecessity;
+  omissionRisk?: string;
+  /** Optional final narration segment through which the spotlight remains active. */
+  endSpeechId?: string;
   dimOpacity?: number; // default 0.5
 }
 
@@ -46,7 +76,20 @@ export interface SpotlightAction extends ActionBase {
 export interface LaserAction extends ActionBase {
   type: 'laser';
   elementId: string;
+  selector?: VisualTargetSelector;
+  /** Optional ordered targets for one continuous laser sweep. */
+  waypoints?: LaserWaypoint[];
+  /** Narration segment whose lifetime owns this visual cue. */
+  speechId?: string;
+  /** Start time inside `speechId`, in media milliseconds. Defaults to 0. */
+  speechOffsetMs?: number;
+  /** Phrase whose position is converted locally to `speechOffsetMs`. */
+  speechAnchor?: SpeechAnchor;
+  necessity?: VisualCueNecessity;
+  omissionRisk?: string;
   color?: string; // default '#ff0000'
+  /** Visible duration in milliseconds. Runtime default: 2500. */
+  duration?: number;
 }
 
 // ==================== Synchronous actions ====================

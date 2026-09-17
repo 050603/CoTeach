@@ -4,7 +4,7 @@ import type { Course } from "@/lib/session/types";
 import { DEFAULT_STAGES } from "@/lib/session/types";
 
 vi.mock("@/lib/session/store", () => ({ useSession: () => ({ addActivity: vi.fn(), setUiState: vi.fn() }) }));
-vi.mock("./ai-learning-preview", () => ({ AiLearningTeacherPreview: () => <button>预览学生 AI 课程</button> }));
+vi.mock("./ai-learning-preview", () => ({ AiLearningTeacherPreview: ({ presentation = "workspace", workspacePreviewEnabled = true }: { presentation?: string; workspacePreviewEnabled?: boolean }) => presentation === "teaching" || (presentation === "workspace" && workspacePreviewEnabled) ? <button>预览学生 AI 课程</button> : null }));
 
 import { adaptiveResponseStatus, AiLearningTeacherView, computeAiLearningProgress, deriveAiLearningClassMetrics } from "./ai-learning";
 
@@ -141,6 +141,7 @@ describe("AiLearningTeacherView", () => {
     }} />);
 
     expect(screen.getByRole("heading", { name: "教师介入与 PPT 投屏" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "各小节完成率与均分" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "知识点未达标率排名" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "各小节测验情况" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "本节逐题详情" })).toBeNull();
@@ -172,6 +173,23 @@ describe("AiLearningTeacherView", () => {
     expect(screen.getByRole("tab", { name: "答题详情" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("tab", { name: "学习轨迹" }));
     expect(screen.getByRole("tab", { name: "学习轨迹" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("hides the duplicated preview and section summary only in immersive classroom operations", () => {
+    const immersiveCourse = {
+      ...course,
+      content: {
+        ...course.content,
+        knowledgeLectureSections: [{ id: "section-1", title: "第一节", order: 0, knowledgePointIds: [], sceneOutlineIds: [], quizOutlineId: "quiz-1", estimatedMinutes: 5 }],
+      },
+    };
+    const view = render(<AiLearningTeacherView course={immersiveCourse} />);
+    expect(screen.getByText("预览学生 AI 课程")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "各小节完成率与均分" })).toBeTruthy();
+
+    view.rerender(<AiLearningTeacherView course={immersiveCourse} immersive />);
+    expect(screen.queryByText("预览学生 AI 课程")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "各小节完成率与均分" })).toBeNull();
   });
 
   it("renders forty students in the compact status overview", () => {
@@ -261,7 +279,7 @@ describe("AiLearningTeacherView", () => {
 
 
 describe("knowledge lecture projection", () => {
-  it("keeps one preview mounted while hiding student evidence and closes details on return", () => {
+  it("keeps the normal preview while hiding student evidence in teaching view and closes details on return", () => {
     const { rerender } = render(<AiLearningTeacherView course={course} />);
     const preview = screen.getByText("预览学生 AI 课程");
     fireEvent.click(screen.getByRole("button", { name: "查看张三的学习轨迹" }));
@@ -272,10 +290,9 @@ describe("knowledge lecture projection", () => {
     expect(screen.queryByRole("tab", { name: "学习轨迹" })).toBeNull();
     expect(screen.queryByText("张三")).toBeNull();
     rerender(<AiLearningTeacherView course={course} presentation="analytics" />);
-    expect(screen.getByText("预览学生 AI 课程")).toBe(preview);
-    expect(preview.closest("[hidden]")).toBeTruthy();
+    expect(screen.queryByText("预览学生 AI 课程")).toBeNull();
     rerender(<AiLearningTeacherView course={course} />);
-    expect(screen.getByText("预览学生 AI 课程")).toBe(preview);
+    expect(screen.getByText("预览学生 AI 课程")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "学习轨迹" })).toBeNull();
   });
 });

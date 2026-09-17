@@ -120,7 +120,7 @@ function messageFrom(value: unknown): string {
 
 function retryableByMessage(value: unknown): boolean {
   const message = messageFrom(value);
-  return /rate limit|too many requests|timeout|timed out|调用超时|请求超时|fetch failed|network|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EPIPE|socket hang up/i.test(
+  return /rate limit|too many requests|timeout|timed out|调用超时|请求超时|fetch failed|network|InternalError|batching backend|temporar(?:y|ily)|service unavailable|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EPIPE|socket hang up/i.test(
     message,
   );
 }
@@ -131,6 +131,10 @@ function unwrapErrors(value: unknown): unknown[] {
   const nested: unknown[] = [];
   if ('lastError' in value) nested.push(value.lastError);
   if ('cause' in value) nested.push(value.cause);
+  // AI SDK TypeValidationError retains an otherwise valid upstream error
+  // payload in `value`. Inspect it before treating the problem as malformed
+  // course JSON.
+  if ('value' in value) nested.push(value.value);
 
   const errors = value.errors;
   if (Array.isArray(errors)) nested.push(...errors);

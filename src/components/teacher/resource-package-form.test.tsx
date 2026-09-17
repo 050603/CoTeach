@@ -80,6 +80,28 @@ describe("ResourcePackageForm", () => {
     await waitFor(() => expect(onConfirmed).toHaveBeenLastCalledWith(expect.objectContaining({ id: "package-1", revision: 2, confirmedAt: expect.any(String) })));
   });
 
+  it("shows handoff evidence and sends a revision-bound planning acknowledgement", async () => {
+    const pack = makePackage();
+    pack.handoff = { handoffFormatVersion: 1, projectId: "project-1", packageId: "handoff-1", presentationVersion: 1,
+      documents: { knowledge: { handoffFormatVersion: 1, projectId: "project-1", packageId: "handoff-1", presentationVersion: 1, resourceType: "KNOWLEDGE", resourceVersion: 2 },
+        lessonPlan: { handoffFormatVersion: 1, projectId: "project-1", packageId: "handoff-1", presentationVersion: 1, resourceType: "LESSON_PLAN", resourceVersion: 3 } } };
+    pack.planningIssueVersion = "issues-v1";
+    pack.planningIssues = [{ id: "duration-review", kind: "duration", severity: "warning", requiresAcknowledgement: true, summary: "时间描述不一致", detail: "阶段时间表为59分钟，正文描述为85分钟。", suggestion: "确认采用阶段时间表", evidence: [] },
+      { id: "evidence-review", kind: "evidence", severity: "info", requiresAcknowledgement: false, summary: "证据状态为PARTIAL", detail: "部分内容待核对", suggestion: "保留提示", evidence: [] }];
+    const mutation = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") { mutation(JSON.parse(String(init.body))); return Response.json({ job: ready({ ...pack, revision: 2, confirmedAt: new Date().toISOString() }) }); }
+      return Response.json({ job: ready(pack) });
+    }));
+    render(<ResourcePackageForm courseId="course-1" disabled={false} onConfirmed={vi.fn()} />);
+    expect(await screen.findByText(/格式 v1 · 项目 project-1/)).toBeTruthy();
+    const confirm = screen.getByRole("button", { name: "确认并保存教学要求" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText(/我已核对上述规划问题/));
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mutation).toHaveBeenCalledWith(expect.objectContaining({ action: "confirm", acknowledgement: { issueVersion: "issues-v1", issueIds: ["duration-review"] } })));
+  });
+
   it("restores unsaved edits without treating them as confirmed", async () => {
     const pack = { ...makePackage(), confirmedAt: "2026-09-12T00:00:00Z" };
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ job: ready(pack) })));
@@ -99,14 +121,14 @@ describe("ResourcePackageForm", () => {
     const retry = vi.fn();
     vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PATCH") { retry(JSON.parse(String(init.body))); return Response.json({ job: ready() }); }
-      return Response.json({ job: { id: "job-1", status: "needs_selection", progress: 20, message: "找到多份知识文档", candidates: { knowledge: ["文件夹/知识点一.docx", "文件夹/知识点二.docx"], lessonPlan: ["完整教案.docx"], launchPresentation: ["项目启动.pptx"] } } });
+      return Response.json({ job: { id: "job-1", status: "needs_selection", progress: 20, message: "找到多份知识文档", candidates: { knowledge: ["文件夹/知识点一.md", "文件夹/知识点二.md"], lessonPlan: ["教案.md"], launchPresentation: ["项目启动.pptx"] } } });
     }));
     render(<ResourcePackageForm courseId="course-1" disabled={false} onConfirmed={vi.fn()} />);
     const button = await screen.findByRole("button", { name: "使用所选文件继续解析" });
     expect((button as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText("知识点文档"), { target: { value: "文件夹/知识点二.docx" } });
+    fireEvent.change(screen.getByLabelText("知识点文档"), { target: { value: "文件夹/知识点二.md" } });
     fireEvent.click(button);
-    await waitFor(() => expect(retry).toHaveBeenCalledWith({ action: "retry", selections: { knowledge: "文件夹/知识点二.docx", lessonPlan: "完整教案.docx", launchPresentation: "项目启动.pptx" } }));
+    await waitFor(() => expect(retry).toHaveBeenCalledWith({ action: "retry", selections: { knowledge: "文件夹/知识点二.md", lessonPlan: "教案.md", launchPresentation: "项目启动.pptx" } }));
   });
 
   it("shows conversion errors with a retry while retaining the package identity", async () => {

@@ -98,6 +98,7 @@ import { isCustomTTSProvider } from './types';
 import { TTS_PROVIDERS } from './constants';
 import { splitConcatenatedJsonObjects } from './json-stream';
 import { hasWavHeader, normalizePlayableWav } from './wav-container';
+import { normalizeQwenAudioTtsSelection } from './qwen-audio-tts-catalog';
 import {
   VOXCPM_VLLM_MODEL_ID,
   VOXCPM_AUTO_VOICE_ID,
@@ -655,32 +656,37 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
 }
 
 /**
- * Qwen TTS implementation (DashScope API - Qwen3 TTS Flash)
+ * Qwen Audio 3.0 TTS implementation (DashScope SpeechSynthesizer HTTP API).
  */
-// https://www.alibabacloud.com/help/en/model-studio/qwen-tts-api
-export function qwenSpeechLanguage(language?: string): string {
-  const languages: Record<string, string> = {
-    zh: 'Chinese', en: 'English', de: 'German', it: 'Italian', pt: 'Portuguese',
-    es: 'Spanish', ja: 'Japanese', ko: 'Korean', fr: 'French', ru: 'Russian',
-  };
-  return languages[language?.toLowerCase().split('-')[0] ?? ''] ?? 'Auto';
+// https://help.aliyun.com/zh/model-studio/cosyvoice-tts-http-api
+export function qwenSpeechLanguage(language?: string): string | undefined {
+  const code = language?.trim().toLowerCase().split('-')[0];
+  return code === 'zh' || code === 'en' ? code : undefined;
+}
+
+export function resolveQwenAudioTtsEndpoint(baseUrl?: string): string {
+  const fallback = TTS_PROVIDERS['qwen-tts'].defaultBaseUrl || 'https://dashscope.aliyuncs.com/api/v1';
+  const normalized = (baseUrl || fallback).replace(/\/+$/, '');
+  const endpointPath = '/services/audio/tts/SpeechSynthesizer';
+  if (normalized.endsWith(endpointPath)) return normalized;
+  if (/\/compatible-mode\/v1$/i.test(normalized)) {
+    return `${normalized.replace(/\/compatible-mode\/v1$/i, '/api/v1')}${endpointPath}`;
+  }
+  if (/\/api\/v1$/i.test(normalized)) return `${normalized}${endpointPath}`;
+  return `${normalized}/api/v1${endpointPath}`;
 }
 
 async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TTSGenerationResult> {
-  const configuredBaseUrl = config.baseUrl || TTS_PROVIDERS['qwen-tts'].defaultBaseUrl;
-  const baseUrl = configuredBaseUrl?.includes('/compatible-mode/')
-    ? configuredBaseUrl.replace(/\/compatible-mode\/v1\/?$/, '/api/v1')
-    : configuredBaseUrl;
-
-  // Calculate speed: Qwen3 uses rate parameter from -500 to 500
-  // speed 1.0 = rate 0, speed 2.0 = rate 500, speed 0.5 = rate -250
-  const rate = Math.round(((config.speed || 1.0) - 1.0) * 500);
+  const endpoint = resolveQwenAudioTtsEndpoint(config.baseUrl);
+  const selection = normalizeQwenAudioTtsSelection(config.modelId, config.voice);
+  const languageHint = qwenSpeechLanguage(config.language);
+  const rate = Math.min(2, Math.max(0.5, config.speed || 1));
 
   // 优先使用 SSE 流式模式:音频以 Base64 PCM(24kHz/16bit/mono)直接随响应
   // 返回,无需再从 OSS 结果 CDN 下载完整音频。部分网络环境(如仅 IPv6 出站
   // 的校园网)无法访问 IPv4-only 的 dashscope-result CDN,会拿到门户劫持页
   // 而非音频字节,导致客户端"音频无法解码"。
-  const response = await fetch(`${baseUrl}/services/aigc/multimodal-generation/generation`, {
+  const response = await fetch(endpoint, {
     method: 'POST',
     signal: config.signal,
     headers: {
@@ -689,14 +695,14 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
       'X-DashScope-SSE': 'enable',
     },
     body: JSON.stringify({
-      model: config.modelId || 'qwen3-tts-flash',
+      model: selection.modelId,
       input: {
         text,
-        voice: config.voice,
-        language_type: qwenSpeechLanguage(config.language),
-      },
-      parameters: {
-        rate, // Speech rate from -500 to 500
+        voice: selection.voiceId,
+        format: 'wav',
+        sample_rate: 24000,
+        rate,
+        ...(languageHint ? { language_hints: [languageHint] } : {}),
       },
     }),
   });

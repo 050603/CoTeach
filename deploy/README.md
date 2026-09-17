@@ -12,6 +12,10 @@
 
 `pnpm start` 会从 `.next-build` 创建 `.openpbl-runtime/releases/<BUILD_ID>` 不可变运行目录，避免下一次构建覆盖正在服务的版本。
 
+## 正式与测试系统共用 AI 设置
+
+正式系统以自身 `DATABASE_URL` 中的全局 `ProviderCredential` 为 AI 设置唯一来源。测试系统保留独立业务数据库，并将 `PROVIDER_CONFIG_DATABASE_URL` 指向正式数据库、`PROVIDER_CONFIG_ENCRYPTION_KEY` 设为正式系统的同一密钥；这样语言、语音、图像、视频等 Provider 的密钥、默认模型、音色和启用状态都由正式系统教师端的「AI 设置」统一管理。运行时每 5 秒刷新共享设置，测试系统不应再维护第二份 `server-providers.yml` 或 Provider 凭据。
+
 ## 课程前置空间计算
 
 新课程在成稿前使用 Playwright Chromium 加载播放器同源 Noto Sans SC 字体、CSS 和 KaTeX，计算文字、公式与表格容量，并按需生成区域草图。宿主部署首次安装运行 `pnpm exec playwright install chromium`；缺少系统库时由管理员安装 Chromium 依赖。已有系统 Chromium 可通过 `OPENPBL_CHROMIUM_EXECUTABLE_PATH` 指定完整路径。Docker 镜像已安装 Alpine Chromium 并设置该路径。精确度量会自动尝试配置路径、Playwright 自带浏览器与常见系统 Chromium，页面崩溃时重启重试。多次尝试仍失败时，仅当前空间计算切换到保守文本估算；草图截图不可用时继续传递已持久化的文本空间预算，不因辅助排版能力中断整门课程。

@@ -112,6 +112,54 @@ describe('formal course teaching enhancement', () => {
     expect(progress.at(-1)).toBe('2/2');
   });
 
+  it('restores a completed section design without repeating its model call', async () => {
+    const first = page('p1', 0);
+    let saved: {
+      sectionKey: string;
+      inputFingerprint: string;
+      modelFingerprint: string;
+      briefs: Array<[string, unknown]>;
+    } | null = null;
+    const ai = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({ pages: [{
+      outlineId: first.id,
+      explanation: '语言流畅来自模式匹配，不能单独证明事实正确。',
+      examples: ['标出年份主张，再到独立原始资料中逐项核对。'],
+      conditions: ['同源转载不能当作多个独立来源。'],
+      assessmentFocus: '说明核验步骤以及每一步的理由。',
+      evidenceQuotes: [],
+    }] }));
+    const common = {
+      outlines: [first],
+      requirement: '恢复小节教学设计',
+      modelFingerprint: 'model-a',
+    };
+    await enhanceTeachingBriefs({
+      ...common,
+      aiCall: ai,
+      onSectionCompleted: (sectionKey, inputFingerprint, modelFingerprint, briefs) => {
+        saved = { sectionKey, inputFingerprint, modelFingerprint, briefs };
+      },
+    });
+    expect(ai).toHaveBeenCalledOnce();
+    expect(saved).not.toBeNull();
+
+    const resumedAi = vi.fn<AICallFn>().mockRejectedValue(new Error('must not be called'));
+    const resumed = await enhanceTeachingBriefs({
+      ...common,
+      aiCall: resumedAi,
+      loadSectionCheckpoint: (sectionKey, inputFingerprint, modelFingerprint) => (
+        saved
+        && saved.sectionKey === sectionKey
+        && saved.inputFingerprint === inputFingerprint
+        && saved.modelFingerprint === modelFingerprint
+          ? saved.briefs
+          : null
+      ),
+    });
+    expect(resumedAi).not.toHaveBeenCalled();
+    expect(resumed.every(hasCompleteTeachingBrief)).toBe(true);
+  });
+
   it('rejects an incomplete course design instead of silently mixing enhanced and baseline pages', async () => {
     const first = page('p1', 0);
     const second = { ...page('p2', 1), parentActivityId: 'section-2' };

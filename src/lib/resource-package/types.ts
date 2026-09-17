@@ -5,8 +5,24 @@ export const RESOURCE_PACKAGE_STAGE_LABELS: Record<ResourcePackageStageKey, stri
   launch: "项目启动", "ai-learning": "知识讲授", make: "项目实践", showcase: "成果展示", reflection: "反思评价",
 };
 export type ResourcePackageRole = "knowledge" | "lessonPlan" | "launchPresentation";
-export type ResourcePackageFile = { id: string; fileName: string; url: string; sha256?: string };
+export type ResourcePackageDocumentFormat = "markdown" | "docx" | "pptx";
+export type ResourcePackageFile = { id: string; fileName: string; url: string; sha256?: string; format?: ResourcePackageDocumentFormat };
 export type ResourcePackageSource = { documentRole: ResourcePackageRole; locator: string; quote: string; archivePath?: string };
+export type HandoffDocumentMetadata = {
+  handoffFormatVersion: 1;
+  projectId: string;
+  resourceType: "KNOWLEDGE" | "LESSON_PLAN";
+  resourceVersion: number;
+  packageId: string;
+  presentationVersion: number;
+};
+export type ResourcePackageHandoffMetadata = {
+  handoffFormatVersion: 1;
+  projectId: string;
+  packageId: string;
+  presentationVersion: number;
+  documents: { knowledge: HandoffDocumentMetadata; lessonPlan: HandoffDocumentMetadata };
+};
 export type ResourcePackageEvaluationRubric = {
   id: string; version: number; dimensions: { id: string; name: string; weight: number; description: string }[];
   sourceWeights: { teacher: number; ai: number }; confirmedAt?: string;
@@ -26,7 +42,18 @@ export type ResourcePackageStage = {
   observationPoints?: string[];
 };
 export type ResourcePackageKnowledge = { id?: string; name: string; description: string; subPoints: string[]; source?: ResourcePackageSource;
-  children?: { id: string; name: string; description: string; source?: ResourcePackageSource }[] };
+  evidenceStatus?: "SUPPORTED" | "PARTIAL" | "UNSUPPORTED"; evidenceGap?: string; taskAssociation?: string; sources?: string[];
+  children?: { id: string; name: string; description: string; taskAssociation?: string; sources?: string[]; source?: ResourcePackageSource }[] };
+export type ResourcePackagePlanningIssue = {
+  id: string;
+  kind: "duration" | "organization" | "evidence";
+  severity: "info" | "warning";
+  requiresAcknowledgement: boolean;
+  summary: string;
+  detail: string;
+  suggestion: string;
+  evidence: ResourcePackageSource[];
+};
 export type ResourcePackageDraft = {
   courseName: string;
   subject: string;
@@ -48,6 +75,13 @@ export type ResourcePackageDraft = {
   finalDeliverables?: ResourcePackageDeliverable[];
   sourceEvidence?: Record<string, ResourcePackageSource[]>;
   originalEvaluationSources?: string;
+  preClassPreparation?: string[];
+  organizationRequirements?: string[];
+  aiUsagePolicy?: string;
+  teachingHighlights?: string[];
+  teachingDifficulties?: string[];
+  facilitatorReference?: string[];
+  knowledgeEvidenceSummary?: { overallStatus: "SUPPORTED" | "PARTIAL" | "UNSUPPORTED"; gaps: string[] };
 };
 /** Teacher-only authoring metadata. Never send this field in student snapshots. */
 export type CourseResourcePackage = {
@@ -63,6 +97,10 @@ export type CourseResourcePackage = {
   conflictVersion?: string;
   adaptation?: { sourceRevision: number; conflictVersion: string; authorizedBy: string; authorizedAt: string; draftSignature: string; changes: string[] };
   classroomPresentation?: ResourcePackageFile;
+  handoff?: ResourcePackageHandoffMetadata;
+  planningIssues?: ResourcePackagePlanningIssue[];
+  planningIssueVersion?: string;
+  planningAcknowledgement?: { sourceRevision: number; issueVersion: string; issueIds: string[]; acknowledgedBy: string; acknowledgedAt: string };
 };
 /** Teaching requirements safe to project into a student's classroom. */
 export type CourseStagePlan = {
@@ -77,6 +115,7 @@ export type CourseStagePlan = {
   evaluationRubric?: ResourcePackageEvaluationRubric;
   reflectionQuestionSet?: ResourcePackageReflectionQuestionSet;
   finalDeliverables?: ResourcePackageDeliverable[];
+  aiUsagePolicy?: string;
 };
 export type ResourcePackageJobSnapshot = {
   id: string;
@@ -106,16 +145,7 @@ export function resourcePackageDraftErrors(draft: ResourcePackageDraft): string[
   if (!draft.learningObjectives.some((item) => item.trim())) errors.push("请补充学习目标。");
   if (!draft.expectedOutcome.trim()) errors.push("请补充项目成果要求。");
   if (!draft.knowledgePoints.length || draft.knowledgePoints.some((item) => !item.name.trim())) errors.push("请补充课程必须覆盖的知识点。");
-  if (draft.parsingVersion === 2) {
-    for (const stage of draft.stages) {
-      if (!stage.requirements.trim()) errors.push(`请补充${RESOURCE_PACKAGE_STAGE_LABELS[stage.key]}的任务与教学活动。`);
-      if (!stage.outputs.trim()) errors.push(`请补充${RESOURCE_PACKAGE_STAGE_LABELS[stage.key]}的阶段产出。`);
-    }
-    if (!draft.finalDeliverables?.length) errors.push("请补充项目最终交付物。");
-    if (!draft.evaluationRubric?.dimensions.length) errors.push("请补充课程评价维度及权重。");
-    if (!draft.reflectionQuestionSet?.questions.length) errors.push("请补充课程反思题。");
-  }
-  if (draft.finalDeliverables?.some((item) => !item.name.trim() || !item.requirements.trim() || !item.format.trim())) errors.push("请填写每项最终交付物的名称、格式与具体要求。");
+  if (draft.finalDeliverables?.some((item) => !item.name?.trim() || !item.requirements?.trim() || !item.format?.trim())) errors.push("请填写每项最终交付物的名称、格式与具体要求。");
   if (draft.reflectionQuestionSet?.questions.some((item) => !item.id.trim() || !item.prompt.trim())) errors.push("请补充完整的反思题目。");
   if (draft.reflectionQuestionSet && new Set(draft.reflectionQuestionSet.questions.map((item) => item.id)).size !== draft.reflectionQuestionSet.questions.length) errors.push("反思题标识重复，请重新添加重复题目。");
   if (draft.evaluationRubric && new Set(draft.evaluationRubric.dimensions.map((item) => item.id)).size !== draft.evaluationRubric.dimensions.length) errors.push("评价维度标识重复，请重新添加重复维度。");
@@ -151,7 +181,8 @@ export function stagePlanFromResourcePackage(draft: ResourcePackageDraft): Cours
       teacherActions: adaptPersonalProjectText(stage.teacherActions), aiActions: adaptPersonalProjectText(stage.aiActions),
     })), evaluationCriteria: draft.parsingVersion === 2 ? draft.evaluationCriteria : adaptPersonalProjectText(draft.evaluationCriteria),
     reflectionQuestions: draft.reflectionQuestionSet?.questions.map((question) => question.prompt) ?? draft.reflectionQuestions.map(adaptPersonalProjectText),
-    evaluationRubric: draft.evaluationRubric, reflectionQuestionSet: draft.reflectionQuestionSet, finalDeliverables: draft.finalDeliverables };
+    evaluationRubric: draft.evaluationRubric, reflectionQuestionSet: draft.reflectionQuestionSet, finalDeliverables: draft.finalDeliverables,
+    aiUsagePolicy: draft.aiUsagePolicy };
 }
 
 /** Upstream sample group logistics are never instructions to create real teams. */

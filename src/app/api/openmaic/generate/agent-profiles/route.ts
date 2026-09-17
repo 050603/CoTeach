@@ -112,7 +112,7 @@ ${buildPromptQualityContract({ mode: 'json', audience: 'student', language: 'inh
       : '';
 
     const voiceJsonField = voiceListStr
-      ? ',\n      "voice": "string (voice id from available list, e.g. \'qwen-tts::Cherry\')"'
+      ? ',\n      "voice": "string (voice id from available list, e.g. \'qwen-tts::longanfengyue\')"'
       : '';
 
     const userPrompt = `Generate agent profiles for the following course:

@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./resolve-model', () => ({ resolveModel: mocks.resolve }));
 vi.mock('./course-generation-ai-call', () => ({
   createCourseGenerationAiCall: (options: unknown) => mocks.createAiCall(options),
+  withCourseGenerationAiCallContext: (aiCall: unknown) => aiCall,
 }));
 vi.mock('./classroom-media-readiness', () => ({ assertRequestedClassroomMediaProviders: () => {} }));
 vi.mock('./classroom-media-generation', () => ({ resolveServerTtsTimingSelection: () => ({ providerId: 'qwen-tts', modelId: 'qwen3-tts-flash', voiceId: 'Serena', language: 'zh-CN', speed: 1 }) }));
@@ -178,7 +179,8 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       loadSceneCheckpoint: () => legacyCheckpoint,
     });
 
-    expect(mocks.ai).toHaveBeenCalledTimes(3);
+    expect(mocks.ai).toHaveBeenCalledTimes(2);
+    expect(mocks.ai.mock.calls.some(([system]) => system.includes('中文课堂讲稿编辑'))).toBe(false);
     expect(result.scenes[0]?.id).not.toBe('legacy-first-draft');
     expect(result.scenes[0]?.narrationRevision).toBe('natural-teacher-speech-v2');
   });
@@ -263,7 +265,8 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       loadSceneCheckpoint: () => checkpoint,
     });
 
-    expect(mocks.ai).toHaveBeenCalledTimes(4);
+    expect(mocks.ai).toHaveBeenCalledTimes(3);
+    expect(mocks.ai.mock.calls.some(([system]) => system.includes('中文课堂讲稿编辑'))).toBe(false);
     expect(result.scenes[0]?.id).not.toBe('sparse-checkpoint');
     expect(result.scenes[0]?.content.type).toBe('slide');
     if (result.scenes[0]?.content.type !== 'slide') throw new Error('Expected slide');
@@ -343,6 +346,74 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(result.scenes[0].actions).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'speech', text: expect.stringContaining('短讲稿。') })]));
     expect(onSceneCompleted).toHaveBeenCalledOnce();
     expect(mocks.persist).toHaveBeenCalledOnce();
+  });
+
+  it('resumes after narration failure without regenerating completed content, review, or actions', async () => {
+    const resumableOutline: SceneOutline = {
+      ...outline,
+      generationPurpose: 'knowledge-teaching',
+      teachingBrief: {
+        schemaVersion: 1,
+        explanation: '语言流畅不能单独证明事实正确，需要核对独立来源。',
+        examples: ['标出事实主张，再逐项核对原始资料。'],
+        conditions: ['同源转载不能当作多个独立来源。'],
+        evidence: [],
+        assessmentFocus: '说明核验步骤和理由。',
+      },
+      timingPlan: {
+        unit: 'cjk-char', targetUnits: 120, minUnits: 100, maxUnits: 140,
+      } as NonNullable<SceneOutline['timingPlan']>,
+    };
+    const stages = new Map<string, unknown>();
+    let narrationAvailable = false;
+    mocks.ai.mockImplementation(async (system: string, user: string) => {
+      if (system.includes('# Slide Content Generator')) return JSON.stringify(content);
+      if (system.includes('Slide Action Generator')) return JSON.stringify(narration);
+      if (system.includes('中文课堂讲稿编辑')) {
+        if (!narrationAvailable) {
+          throw Object.assign(new Error('Receive batching backend response failed'), {
+            code: 'InternalError',
+          });
+        }
+        const [id] = [...user.matchAll(/^\[([^\]]+)]/gm)].map((match) => match[1]);
+        return JSON.stringify({ segments: [{
+          id,
+          text: '判断信息是否可靠，要回到独立来源核对事实、证据和适用条件。',
+        }] });
+      }
+      throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
+    });
+    const callbacks = {
+      preparedOutlines: [resumableOutline],
+      loadSceneCheckpoint: () => null,
+      loadSceneStageCheckpoint: (_saved: SceneOutline, stage: string) => stages.get(stage) ?? null,
+      onSceneStageCompleted: async (
+        _saved: SceneOutline,
+        stage: string,
+        payload: unknown,
+      ) => { stages.set(stage, payload); },
+    };
+
+    await expect(generateClassroom(input, callbacks)).rejects.toThrow(/batching backend/);
+    expect([...stages.keys()]).toEqual(['content', 'reviewed-content', 'actions']);
+    expect(mocks.ai).toHaveBeenCalledTimes(3);
+    expect(mocks.review).toHaveBeenCalledOnce();
+    expect(mocks.persist).not.toHaveBeenCalled();
+
+    narrationAvailable = true;
+    const result = await generateClassroom(input, callbacks);
+
+    expect(mocks.ai).toHaveBeenCalledTimes(4);
+    expect(mocks.ai.mock.calls.filter(([system]) => system.includes('# Slide Content Generator'))).toHaveLength(1);
+    expect(mocks.ai.mock.calls.filter(([system]) => system.includes('Slide Action Generator'))).toHaveLength(1);
+    expect(mocks.review).toHaveBeenCalledOnce();
+    expect(stages.has('narration')).toBe(true);
+    expect(result.scenes[0]?.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'speech',
+        text: expect.stringContaining('独立来源'),
+      }),
+    ]));
   });
 
   it('adds one shared teaching-design call without restoring the obsolete media planner', async () => {
@@ -491,7 +562,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(interactiveCall?.[0]).toEqual(expect.objectContaining({
       source: 'generate-classroom-interactive',
       timeoutMs: 600_000,
-      maxRetries: 0,
+      maxRetries: 2,
       streamResponse: true,
     }));
     for (const source of [
@@ -506,11 +577,9 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         source,
         timeoutMs: 600_000,
         maxOutputTokens: 393_216,
-        maxRetries: 0,
+        maxRetries: 2,
       }));
-      expect((structuredCall?.[0] as { streamResponse?: boolean }).streamResponse).toBe(
-        source === 'generate-classroom' ? true : undefined,
-      );
+      expect((structuredCall?.[0] as { streamResponse?: boolean }).streamResponse).toBe(true);
     }
     const selectedModel = mocks.createAiCall.mock.calls[0]?.[0]?.model;
     expect(mocks.createAiCall.mock.calls.slice(0, 4).every(([options]) => options.model === selectedModel))

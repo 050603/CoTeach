@@ -42,8 +42,9 @@ You MUST output a JSON array directly. Each element is an object with a `type` f
 
 ### Ordering Principles
 
-- spotlight actions should appear BEFORE the corresponding text object (point first, then speak)
-- Multiple spotlight+text pairs create a natural "focus then explain" flow
+- Visual actions appear BEFORE the corresponding text object (point first, then speak)
+- More than one visual action may precede one natural text paragraph. Keep the paragraph intact and use `speechAnchor` on later actions to identify the exact phrase where they should start.
+- Do not add an action merely to create a repeated "focus then explain" pattern. First decide whether omitting the cue would make learners look at the wrong place.
 
 ---
 
@@ -63,6 +64,8 @@ Highlight a specific element on the slide, used in conjunction with narration.
 
 - `elementId`: ID of element to focus on, **must** be selected from the provided element list
 - One spotlight action can only focus on **one** element
+- `selector` (optional): `{ "cellId": "..." }` for one table cell, `{ "cellId": "...", "quote": "...", "occurrence": 0 }` for text inside that cell, or `{ "quote": "...", "occurrence": 0 }` for exact text elsewhere
+- Use spotlight for sustained explanation of one content block, concept, or cell. Keep one spotlight stable across a continuous explanation instead of repeating or bouncing between targets.
 
 ### laser (Laser Pointer)
 
@@ -75,6 +78,16 @@ Briefly point at an element with a laser dot to draw attention, lighter than spo
 - `elementId`: ID of element to point at, **must** be from the provided element list
 - Use for quick, transient emphasis — e.g. "notice this value here"
 - Prefer laser for brief references; use spotlight for extended discussion
+- Use the same optional `selector` forms as spotlight so the dot lands beside the exact term or cell detail.
+- For one explicit comparison, ordered list, or process, add `waypoints` with 1-4 more `{ "elementId": "...", "selector": {...} }` targets. This creates one continuous sweep; do not emit a separate laser action for every item.
+
+### Visual action metadata
+
+Every spotlight or laser must include:
+
+- `necessity`: `"essential"` when omission would create a likely visual misunderstanding, otherwise `"helpful"`. Omit the entire action when the layout is already clear.
+- `omissionRisk`: one concise, concrete reason why this cue helps.
+- `speechAnchor` (optional): `{ "quote": "exact phrase in the following text", "occurrence": 0 }`. Use this on a later cue when several necessary cues belong to one unsplit text paragraph. Local calibration converts the phrase to playback timing.
 
 ### play_video (Play Video)
 
@@ -149,23 +162,26 @@ The `Classroom Agents` list in the user prompt is provided **only** so you can p
 Structure:
 
 - **Opening/Transition**: Based on page position (see above)
-- **Body**: Explain points one by one, with spotlight
+- **Body**: Explain the page naturally and use only the visual cues that resolve real attention ambiguity
 - **Summary**: Brief recap of this page's content
 
-### 2. Focus Strategy
+### 2. Visual Guidance Strategy
 
-Elements to focus on should be **key content currently being discussed**:
+Judge necessity before choosing a target or action:
 
-- Title or key point text being explained
-- Chart or image being discussed
-- Formula or data requiring special attention
+- Use no visual action for transitions, title repetition, broad narration, or a layout whose reading target is already obvious.
+- Prefer the smallest reliable rendered target. When narration discusses one table cell, select that cell; never point at the whole table or its center.
+- A target ID being valid does not prove semantic relevance. The visible text or cell context must directly support the narration.
+- Do not guess a location inside an image. Images without a structured local target may only receive whole-image spotlight.
 - Video elements: use `play_video` instead of spotlight for video elements
 - Do NOT focus on decorative elements
+- Different target changes should normally be at least 10 seconds apart unless the narration makes an essential comparison or ordered sweep explicit. Avoid short A-B-A switching.
 
 ### 3. Pacing Control
 
-- Generate 5-10 action/text objects for a natural teaching flow
-- Each spotlight should be paired with a corresponding text object
+- There is no minimum visual-action count. A short or self-explanatory page may have none.
+- On a content slide, use at most 8 visual cues and at most 2 laser actions.
+- Preserve natural narration paragraphs. Never split prose just to manufacture more visual actions.
 
 ---
 
@@ -173,6 +189,6 @@ Elements to focus on should be **key content currently being discussed**:
 
 1. **elementId must be valid**: Only use IDs provided in the element list
 2. **Generate speech content**: Write natural teaching speech based on the key points and description
-3. **Proper coordination**: Each spotlight should precede its corresponding text object
-4. **Content matching**: Speech text should relate to the focused element content
-5. **No timestamp/duration fields**: These are not needed
+3. **Proper coordination**: Each visual action should precede its corresponding text object; use `speechAnchor` for later cues in the same paragraph
+4. **Content matching**: The selected element, cell, or quote must directly support the exact speech it accompanies
+5. **No guessed fallback**: If no reliable target exists, omit the cue

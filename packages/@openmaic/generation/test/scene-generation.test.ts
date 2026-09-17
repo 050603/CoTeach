@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { PPTElement } from '@openmaic/dsl';
 import type { AICallFn } from '@openmaic/generation';
 import {
   PBLGenerationError,
@@ -96,6 +97,50 @@ describe('scene generation primitives', () => {
     });
     const actions = await generateSceneActions(outline, content, aiCall);
     expect(actions.map((action) => action.type)).toEqual(['widget_highlight', 'widget_setState']);
+  });
+
+  it('publishes precise table cells to the original action call and never fabricates a fallback target', async () => {
+    let userPrompt = '';
+    const table = {
+      id: 'stage-table', type: 'table', left: 40, top: 80, width: 800, height: 300,
+      outline: {}, colWidths: [0.4, 0.6], cellMinHeight: 40,
+      data: [[
+        { id: 'r1c1', colspan: 1, rowspan: 1, text: '学段' },
+        {
+          id: 'r1c2', colspan: 1, rowspan: 1,
+          text: '图形化编程、机器人体验等低代码工具，以及完整的不截断说明',
+        },
+      ]],
+    } as PPTElement;
+    const aiCall: AICallFn = async (_system, user) => {
+      userPrompt = user;
+      return JSON.stringify([
+        { type: 'action', name: 'spotlight', params: { elementId: 'missing-element' } },
+        { type: 'text', content: '小学采用低代码工具。' },
+      ]);
+    };
+
+    const actions = await generateSceneActions(slideOutline(), { elements: [table] }, aiCall);
+
+    expect(userPrompt).toContain('"cellId":"r1c2"');
+    expect(userPrompt).toContain('图形化编程、机器人体验等低代码工具，以及完整的不截断说明');
+    expect(actions[0]).toMatchObject({ type: 'spotlight', elementId: 'missing-element' });
+    expect(actions[0]).not.toHaveProperty('elementId', 'stage-table');
+  });
+
+  it('uses narration without a guessed visual action when action generation falls back', async () => {
+    const actions = await generateSceneActions(
+      slideOutline(),
+      {
+        elements: [{
+          id: 'visible-text', type: 'text', left: 0, top: 0, width: 100, height: 30,
+          content: 'Visible', defaultFontName: 'Arial', defaultColor: '#000000',
+        } as PPTElement],
+      },
+      async () => 'not-json',
+    );
+
+    expect(actions.map((action) => action.type)).toEqual(['speech']);
   });
 
   it('generates PBL content with the re-seated single-call planner', async () => {

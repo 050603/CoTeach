@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { PPTTextElement } from '../../dsl/src';
+import type { PPTTableElement, PPTTextElement } from '../../dsl/src';
 import { SlideElement } from '../src/SlideElement';
 
 const textElement: PPTTextElement = {
@@ -60,5 +60,33 @@ describe('SlideElement', () => {
     expect(html).toContain('overflow-wrap:break-word');
     expect(html).toContain('line-height:1.5');
     expect(html).toContain('--paragraphSpace:5px');
+  });
+
+  it('emits stable element and table-cell anchors for scoped visual targeting', () => {
+    const tableElement: PPTTableElement = {
+      id: 'table-1',
+      type: 'table',
+      left: 10,
+      top: 20,
+      width: 400,
+      height: 120,
+      rotate: 0,
+      outline: { color: '#333333', width: 1, style: 'solid' },
+      colWidths: [0.5, 0.5],
+      cellMinHeight: 40,
+      data: [[
+        { id: 'cell-a', colspan: 2, rowspan: 2, text: '小学' },
+        { id: 'cell-b', colspan: 1, rowspan: 1, text: '低代码' },
+      ]],
+    };
+    const html = renderToStaticMarkup(
+      createElement(SlideElement, { elementInfo: tableElement, elementIndex: 1 }),
+    );
+
+    expect(html).toContain('data-slide-element-id="table-1"');
+    expect(html).toContain('data-slide-cell-id="cell-a"');
+    expect(html).toContain('colSpan="2"');
+    expect(html).toContain('rowSpan="2"');
+    expect(html).toContain('data-slide-cell-id="cell-b"');
   });
 });

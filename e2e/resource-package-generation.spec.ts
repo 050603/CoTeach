@@ -34,7 +34,7 @@ function packageFixture(): CourseResourcePackage {
       stages: draft.stages.map((stage, index) => ({ ...stage, durationMin: [15, 30, 60, 20, 10][index], requirements: "依据学习理论设计活动，以学生可观察的学习证据检验设计。", outputs: index === 2 ? "提交个人教案与设计依据" : "记录自己的学习证据", teacherActions: "提供必要的反馈", aiActions: "支持比较方案，核心判断由学生完成" })),
       evaluationCriteria: "目标与学习活动一致，教学理论运用正确，评价依据可核查。",
       reflectionQuestions: ["哪次修改让你的活动更适合学习者？", "你怎样验证 AI 伙伴建议的可靠性？"],
-      finalDeliverables: [{ id: 'final', name: '个人终稿', requirements: '完整教案及10页PPT，标注图片来源' }],
+      finalDeliverables: [{ id: 'final', name: '个人终稿', format: 'document', requirements: '完整教案及10页PPT，标注图片来源', required: true }],
       reflectionQuestionSet: { id: 'questions', version: 1, questions: [{ id: 'reflection-1', prompt: '哪次修改让你的活动更适合学习者？', required: true }] },
       evaluationRubric: { id: 'rubric', version: 1, sourceWeights: { teacher: 60, ai: 40 }, dimensions: [{ id: 'theory', name: '理论适切性', description: '理论能够支持教学目标', weight: 30 }, { id: 'activity', name: '活动可行性', description: '活动具体可操作', weight: 40 }, { id: 'presentation', name: '呈现质量', description: '结构清楚、视觉规范', weight: 20 }, { id: 'collaboration', name: 'AI协作', description: '保留学生主体判断', weight: 10 }] },
     },
@@ -145,8 +145,8 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 720 
     await screenshot(page, info, "package-required");
 
     const zip = new JSZip();
-    zip.file("资料/知识点.docx", "browser upload fixture; parsing is mocked");
-    zip.file("资料/完整教案.docx", "browser upload fixture; parsing is mocked");
+    zip.file("资料/知识点.md", "browser upload fixture; parsing is mocked");
+    zip.file("资料/教案.md", "browser upload fixture; parsing is mocked");
     zip.file("资料/项目启动.pptx", "browser upload fixture; conversion is mocked");
     await page.getByLabel("上传课堂资源包").setInputFiles({ name: packageFixture().source.fileName, mimeType: "application/zip", buffer: await zip.generateAsync({ type: "nodebuffer" }) });
     await expect(page.getByRole("progressbar", { name: "资源包解析进度" })).toBeVisible();

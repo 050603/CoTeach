@@ -193,7 +193,11 @@ export function setElementId(actions: Action[], index: number, elementId: string
   const a = actions[index];
   if (!a || !ELEMENT_BOUND_TYPES.has(a.type)) return actions;
   const next = actions.slice();
-  next[index] = { ...a, elementId } as Action;
+  const rebound = { ...a, elementId } as Action & { selector?: unknown };
+  // Fine-grained targets belong to the previous element and must not survive
+  // a manual rebind to a different slide object.
+  delete rebound.selector;
+  next[index] = rebound as Action;
   return next;
 }
 

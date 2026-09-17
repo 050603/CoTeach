@@ -72,7 +72,10 @@ export function resolveAgentVoice(
     const list = getServerVoiceList(choice.providerId);
     const allVoiceIds = new Set([...list, ...fromEnabled.voices.map((v) => v.id)]);
     if (allVoiceIds.has(choice.voiceId)) {
-      return { providerId: choice.providerId, modelId: choice.modelId, voiceId: choice.voiceId };
+      const modelId = choice.modelId || fromEnabled.modelGroups.find((group) =>
+        group.voices.some((voice) => voice.id === choice.voiceId)
+      )?.modelId || undefined;
+      return { providerId: choice.providerId, modelId, voiceId: choice.voiceId };
     }
   }
 
@@ -82,6 +85,9 @@ export function resolveAgentVoice(
     if (first.voices.length > 0) {
       return {
         providerId: first.providerId,
+        modelId: first.modelGroups.find((group) =>
+          group.voices.some((voice) => voice.id === first.voices[agentIndex % first.voices.length].id)
+        )?.modelId || undefined,
         voiceId: first.voices[agentIndex % first.voices.length].id,
       };
     }

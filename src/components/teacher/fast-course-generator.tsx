@@ -120,12 +120,33 @@ type UploadedKnowledgeReference = {
   size?: string;
 };
 
+const CLASSROOM_PAGE_STAGE_LABELS: Record<string, string> = {
+  restoring: "恢复断点",
+  content: "生成正文",
+  "reviewed-content": "版式与知识检查",
+  actions: "生成讲稿与动作",
+  narration: "课堂口语检查",
+  assembling: "组装保存",
+};
+
 const QUICK_TOOLBAR_CONTROL_CLASS =
   "inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[9px] px-2.5 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-500";
 
 function formatDuration(seconds: number | null | undefined): string {
-  if (!seconds || seconds <= 0) return "正在完成最后检查";
+  if (seconds == null) return "剩余时间估算中";
+  if (seconds <= 0) return "正在完成最后检查";
   return `预计还需约 ${Math.max(1, Math.ceil(seconds / 60))} 分钟`;
+}
+
+function pageRuntimeLabel(page: NonNullable<QuickClassroomGenerationSnapshot["activePages"]>[number]): string {
+  const details: string[] = [];
+  if ((page.queueMs ?? 0) >= 1_000) details.push(`排队 ${Math.ceil(page.queueMs! / 1_000)} 秒`);
+  if ((page.executionMs ?? 0) >= 1_000) details.push(`已执行 ${Math.ceil(page.executionMs! / 1_000)} 秒`);
+  if ((page.retryCount ?? 0) > 0) details.push(`已重试 ${page.retryCount} 次`);
+  if (page.lastOutputAt) {
+    details.push(`最近输出 ${Math.max(0, Math.floor((Date.now() - page.lastOutputAt) / 1_000))} 秒前`);
+  }
+  return details.length ? `，${details.join("，")}` : "";
 }
 
 export function FastCourseGenerator({
@@ -515,7 +536,11 @@ export function FastCourseGenerator({
   const activeMessage = recovering
     ? "正在自动恢复"
     : job?.status === "completed"
-    ? classroomJob?.message || "课程设计已完成，正在衔接课堂内容生成"
+    ? classroomJob?.activePages?.length
+      ? classroomJob.activePages
+          .map((page) => `第 ${page.index} 页：${page.title}（${CLASSROOM_PAGE_STAGE_LABELS[page.stage] ?? page.stage}${pageRuntimeLabel(page)}）`)
+          .join("；")
+      : classroomJob?.message || "课程设计已完成，正在衔接课堂内容生成"
     : job?.message || "正在分析课程信息";
   const activeRemaining = job?.status === "completed"
     ? classroomJob?.estimatedRemainingSeconds

@@ -25,7 +25,7 @@ vi.mock("@openmaic/lib/media/image-providers", () => ({
     "qwen-image": {
       id: "qwen-image",
       requiresApiKey: true,
-      models: [{ id: "qwen-image-2.0-pro", name: "Qwen Image 2.0 Pro" }],
+      models: [{ id: "qwen-image-3.0-pro", name: "Qwen Image 3.0 Pro" }],
     },
     lemonade: {
       id: "lemonade",
@@ -162,9 +162,9 @@ describe("server course cover generation", () => {
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
-  it("uses Qwen Image 2.0 Pro's recommended landscape size without prompt expansion", async () => {
+  it("uses Qwen Image 3.0 Pro's recommended landscape size without prompt expansion", async () => {
     mocks.getServerImageProviders.mockReturnValue({
-      "qwen-image": { defaultModel: "qwen-image-2.0-pro" },
+      "qwen-image": { defaultModel: "qwen-image-3.0-pro" },
     });
     mocks.generateImage.mockResolvedValue({
       url: "https://cdn.example.test/qwen-cover.png",
@@ -177,7 +177,7 @@ describe("server course cover generation", () => {
     expect(mocks.generateImage).toHaveBeenCalledWith(
       expect.objectContaining({
         providerId: "qwen-image",
-        model: "qwen-image-2.0-pro",
+        model: "qwen-image-3.0-pro",
       }),
       expect.objectContaining({
         width: 2688,
@@ -189,21 +189,21 @@ describe("server course cover generation", () => {
     );
   });
 
-  it("adapts legacy Qwen Image models to their fixed landscape size", async () => {
+  it("uses the same recommended landscape size for Qwen Image 3.0", async () => {
     mocks.getServerImageProviders.mockReturnValue({
-      "qwen-image": { defaultModel: "qwen-image-max" },
+      "qwen-image": { defaultModel: "qwen-image-3.0" },
     });
     mocks.generateImage.mockResolvedValue({
       url: "https://cdn.example.test/qwen-cover.png",
-      width: 1664,
-      height: 928,
+      width: 2688,
+      height: 1536,
     });
 
     await generateCourseCoverImageOnServer({ name: "校园雨水花园" }, "classroom-1");
 
     expect(mocks.generateImage).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.objectContaining({ width: 1664, height: 928 }),
+      expect.objectContaining({ width: 2688, height: 1536 }),
     );
   });
 
@@ -230,7 +230,7 @@ describe("server course cover generation", () => {
 
   it("classifies an invalid Qwen model request as a configuration error", async () => {
     mocks.getServerImageProviders.mockReturnValue({
-      "qwen-image": { defaultModel: "qwen-image-2.0-pro" },
+      "qwen-image": { defaultModel: "qwen-image-3.0-pro" },
     });
     mocks.generateImage.mockRejectedValue(
       Object.assign(new Error("Qwen Image generation failed (400): invalid model"), {

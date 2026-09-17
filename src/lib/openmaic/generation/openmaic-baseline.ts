@@ -35,6 +35,7 @@ import { normalizeWhiteboardActionLifecycle } from './whiteboard-action-lifecycl
 import { normalizeWhiteboardActionLayout } from './whiteboard-layout';
 import { formatOpenMaicWebsiteReferenceProfile } from './course-visual-theme';
 import { withTeachingEnhancement } from './teaching-enhancement';
+import { calibrateGeneratedVisualCues } from './semantic-visual-cues';
 
 export const OPENMAIC_GENERATION_BASELINE = {
   release: 'v1.0.3',
@@ -48,7 +49,8 @@ export const OPENMAIC_GENERATION_BASELINE = {
     requirementsUser: '79fe5ce9a64dc63f174bd1c99dd3e4f1feb2a00e2797edc2a11abc5ac2d6f9ff',
     slideContentSystem: 'fac82e884070e71cf82ffca67fb1ee1c861e3cd90d4f9816c7085c428180aebd',
     slideContentUser: '7d7486fed0d897a85273794359cd17383d7b9f2dbca7481134a1519687368c99',
-    slideActionsSystem: '219e8da1eb3c854dbe6ee6fdedda1936e0092fff6c8984b9277c5c6cef2443b6',
+    upstreamSlideActionsSystem: '219e8da1eb3c854dbe6ee6fdedda1936e0092fff6c8984b9277c5c6cef2443b6',
+    slideActionsSystem: 'ae39fbf2f6bb5bcb7c61cb05c723cecc81b1db1fa543ac5b91cb1d8cb6c7f4a7',
     slideActionsUser: '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
   },
 } as const;
@@ -56,10 +58,11 @@ export const OPENMAIC_GENERATION_BASELINE = {
 /**
  * CoTeach keeps the v1.0.3 one-click semantic boundary: the official outline's
  * description/keyPoints are passed to the official page generator, while
- * orchestration metadata stays outside the prompt. The package prompt assets
- * remain byte-stable. Production may opt into the measured website reference
- * profile, but never a page template, geometry budget, timing appendix, or
- * generated theme plan.
+ * orchestration metadata stays outside the prompt. Five unrelated prompt
+ * assets remain byte-stable; the original slide-action prompt is deliberately
+ * extended in place with precise sparse guidance. Production may opt into the
+ * measured website reference profile, but never a page template, geometry
+ * budget, timing appendix, or generated theme plan.
  */
 function clean(value: string | undefined): string {
   return value?.trim() ?? '';
@@ -281,9 +284,10 @@ function actionExtension(outline: SceneOutline): { system: string; user: string 
   const timing = outline.timingPlan;
   const tools = normalizeTeachingToolPlan(outline.teachingToolPlan);
   const whiteboardRequired = tools.some((item) => item.tool === 'whiteboard');
-  const system = whiteboardRequired
+  const whiteboardExtension = whiteboardRequired
     ? `\n\n## CoTeach whiteboard extension\nThe following action names are also valid inside the same action objects: wb_open {}, wb_draw_text {content,x,y,width,height,fontSize,color,elementId}, wb_draw_latex {latex,x,y,width,height,elementId}, wb_draw_shape {shape,x,y,width,height,fillColor,elementId,groupId}, wb_draw_line {startX,startY,endX,endY,width,points,elementId,groupId}, wb_draw_table {x,y,width,height,data}, wb_draw_chart {chartType,x,y,width,height,data}, wb_draw_code {language,code,x,y,width,height,elementId}, wb_clear {}, and wb_close {}. Open the board before drawing, interleave each reveal with teacher speech, keep every object inside a 1000 x 562.5 canvas, and close the board before returning to slide actions.`
     : '';
+  const system = whiteboardExtension;
   const timingLines = timing
     ? [
         `- Natural-speed teacher narration target: about ${timing.targetDurationSec} seconds (${timing.minUnits}-${timing.maxUnits} ${timing.unit === 'latin-word' ? 'words' : 'Chinese/mixed text units'}).`,
@@ -334,7 +338,7 @@ export async function generateOpenMaicBaselineSlideActions(
       languageDirective: options.languageDirective,
     },
   );
-  return enforceNarrationContinuity(
+  const finalized = enforceNarrationContinuity(
     normalizeWhiteboardActionLifecycle(
       normalizeWhiteboardActionLayout(
         applyPlannedTeachingToolActions(outline, actions as Action[]),
@@ -342,4 +346,9 @@ export async function generateOpenMaicBaselineSlideActions(
     ),
     options.ctx,
   );
+  return calibrateGeneratedVisualCues({
+    outline,
+    elements: content.elements,
+    actions: finalized,
+  });
 }

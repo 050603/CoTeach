@@ -179,6 +179,170 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
       });
     }
   }
+  if (doc.type === 'spotlight' || doc.type === 'laser') {
+    if (doc.speechId !== undefined && (typeof doc.speechId !== 'string' || !doc.speechId.trim())) {
+      errors.push({
+        path: `${path}/speechId`,
+        message: `${doc.type} action field \`speechId\` must be a non-empty string`,
+      });
+    }
+    if (
+      doc.speechOffsetMs !== undefined
+      && (
+        typeof doc.speechOffsetMs !== 'number'
+        || !Number.isFinite(doc.speechOffsetMs)
+        || doc.speechOffsetMs < 0
+      )
+    ) {
+      errors.push({
+        path: `${path}/speechOffsetMs`,
+        message: `${doc.type} action field \`speechOffsetMs\` must be a non-negative finite number`,
+      });
+    }
+    if (doc.speechAnchor !== undefined) {
+      const anchor = doc.speechAnchor;
+      if (!isObject(anchor) || typeof anchor.quote !== 'string' || !anchor.quote) {
+        errors.push({
+          path: `${path}/speechAnchor`,
+          message: `${doc.type} action field \`speechAnchor\` must contain a non-empty quote`,
+        });
+      } else if (
+        anchor.occurrence !== undefined
+        && (
+          typeof anchor.occurrence !== 'number'
+          || !Number.isInteger(anchor.occurrence)
+          || anchor.occurrence < 0
+        )
+      ) {
+        errors.push({
+          path: `${path}/speechAnchor/occurrence`,
+          message: 'speech anchor occurrence must be a non-negative integer',
+        });
+      }
+    }
+    if (
+      doc.necessity !== undefined
+      && doc.necessity !== 'essential'
+      && doc.necessity !== 'helpful'
+    ) {
+      errors.push({
+        path: `${path}/necessity`,
+        message: 'visual action necessity must be `essential` or `helpful`',
+      });
+    }
+    if (
+      doc.omissionRisk !== undefined
+      && (typeof doc.omissionRisk !== 'string' || !doc.omissionRisk.trim())
+    ) {
+      errors.push({
+        path: `${path}/omissionRisk`,
+        message: 'visual action omissionRisk must be a non-empty string',
+      });
+    }
+    if (
+      doc.type === 'spotlight'
+      && doc.endSpeechId !== undefined
+      && (typeof doc.endSpeechId !== 'string' || !doc.endSpeechId.trim())
+    ) {
+      errors.push({
+        path: `${path}/endSpeechId`,
+        message: 'spotlight action field `endSpeechId` must be a non-empty string',
+      });
+    }
+
+    if (doc.selector !== undefined) {
+      const selectorPath = `${path}/selector`;
+      if (!isObject(doc.selector)) {
+        errors.push({ path: selectorPath, message: 'selector must be an object' });
+      } else if ('cellId' in doc.selector) {
+        if (typeof doc.selector.cellId !== 'string' || !doc.selector.cellId.trim()) {
+          errors.push({
+            path: `${selectorPath}/cellId`,
+            message: 'cell selector requires a non-empty string `cellId`',
+          });
+        }
+        if (
+          doc.selector.quote !== undefined
+          && (typeof doc.selector.quote !== 'string' || !doc.selector.quote)
+        ) {
+          errors.push({
+            path: `${selectorPath}/quote`,
+            message: '`quote` must be a non-empty string when present',
+          });
+        }
+      } else if ('quote' in doc.selector) {
+        if (typeof doc.selector.quote !== 'string' || !doc.selector.quote) {
+          errors.push({
+            path: `${selectorPath}/quote`,
+            message: 'quote selector requires a non-empty string `quote`',
+          });
+        }
+      } else {
+        errors.push({
+          path: selectorPath,
+          message: 'selector requires either `cellId` or `quote`',
+        });
+      }
+
+      if (isObject(doc.selector) && 'occurrence' in doc.selector) {
+        const occurrence = doc.selector.occurrence;
+        if (
+          occurrence !== undefined
+          && (
+            typeof occurrence !== 'number'
+            || !Number.isInteger(occurrence)
+            || occurrence < 0
+          )
+        ) {
+          errors.push({
+            path: `${selectorPath}/occurrence`,
+            message: '`occurrence` must be a non-negative integer',
+          });
+        }
+      }
+    }
+    if (
+      doc.type === 'laser'
+      && doc.duration !== undefined
+      && (typeof doc.duration !== 'number' || !Number.isFinite(doc.duration) || doc.duration < 0)
+    ) {
+      errors.push({
+        path: `${path}/duration`,
+        message: 'laser action field `duration` must be a non-negative finite number',
+      });
+    }
+    if (doc.type === 'laser' && doc.waypoints !== undefined) {
+      if (!Array.isArray(doc.waypoints) || doc.waypoints.length < 1 || doc.waypoints.length > 4) {
+        errors.push({
+          path: `${path}/waypoints`,
+          message: 'laser action field `waypoints` must contain 1 to 4 targets',
+        });
+      } else {
+        doc.waypoints.forEach((waypoint, index) => {
+          const waypointPath = `${path}/waypoints/${index}`;
+          if (!isObject(waypoint)) {
+            errors.push({ path: waypointPath, message: 'laser waypoint must be an object' });
+            return;
+          }
+          if (typeof waypoint.elementId !== 'string' || !waypoint.elementId.trim()) {
+            errors.push({
+              path: `${waypointPath}/elementId`,
+              message: 'laser waypoint requires a non-empty string `elementId`',
+            });
+          }
+          if (waypoint.selector !== undefined) {
+            const probe = {
+              id: '__waypoint_probe__',
+              type: 'laser',
+              elementId: waypoint.elementId,
+              selector: waypoint.selector,
+            };
+            checkAction(probe, waypointPath, errors);
+          }
+        });
+      }
+    }
+  }
   if (doc.type === 'wb_draw_line') {
     for (const key of ['startAnchor', 'endAnchor']) {
       const anchor = doc[key];

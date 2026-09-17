@@ -52,7 +52,7 @@ describe("AiLearningTeacherPreview", () => {
     expect(screen.getByTestId("student-stage-host")).toBe(player);
   });
 
-  it("starts collapsed and unmounts the player when collapsed again", () => {
+  it("starts collapsed and unmounts the normal-page player when collapsed again", () => {
     render(<AiLearningTeacherPreview course={course} />);
 
     const toggle = screen.getByRole("button", { name: /学生知识讲授课程预览/ });
@@ -82,7 +82,7 @@ describe("AiLearningTeacherPreview", () => {
     expect(screen.getByText(/左侧缩略页快速切换/)).toBeTruthy();
   });
 
-  it("retains one teacher-only player across presentation switches and restores the workspace rail", () => {
+  it("retains one teacher-only player across presentation switches and restores the normal workspace rail", () => {
     const view = render(<AiLearningTeacherPreview course={course} />);
     fireEvent.click(screen.getByRole("button", { name: /学生知识讲授课程预览/ }));
     const player = screen.getByTestId("student-stage-host");
@@ -90,17 +90,21 @@ describe("AiLearningTeacherPreview", () => {
 
     view.rerender(<AiLearningTeacherPreview course={course} presentation="teaching" />);
     expect(screen.getByTestId("student-stage-host")).toBe(player);
-    expect(screen.queryByRole("button", { name: /学生知识讲授课程预览/ })).toBeNull();
     expect(hostPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "teacher-preview", sidebarCollapsed: true }));
-    fireEvent.click(screen.getByRole("button", { name: "课程目录" }));
-    expect(hostPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ sidebarCollapsed: false }));
-
     view.rerender(<AiLearningTeacherPreview course={course} presentation="analytics" />);
+    expect(player.closest('[hidden]')).toBeTruthy();
     view.rerender(<AiLearningTeacherPreview course={course} presentation="teaching" />);
     view.rerender(<AiLearningTeacherPreview course={course} />);
     expect(screen.getByTestId("student-stage-host")).toBe(player);
-    expect(hostPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "teacher-preview", sidebarCollapsed: false }));
+    expect(player.closest('[hidden]')).toBeNull();
+    expect(screen.getByRole("button", { name: /学生知识讲授课程预览/ })).toBeTruthy();
     expect(hostUnmountSpy).toHaveBeenCalledTimes(unmounts);
+  });
+
+  it("hides the workspace preview when immersive operations disable it", () => {
+    render(<AiLearningTeacherPreview course={course} workspacePreviewEnabled={false} />);
+    expect(screen.queryByRole("button", { name: /课程预览/ })).toBeNull();
+    expect(screen.queryByTestId("student-stage-host")).toBeNull();
   });
 
   it("opens the course immediately for teaching and keeps it mounted after returning to a collapsed workspace", () => {

@@ -288,12 +288,13 @@ export async function callLLM<T extends GenerateTextParams>(
   source: string,
   retryOptions?: LLMRetryOptions,
   thinking?: ThinkingConfig,
+  execution: { bypassCourseGenerationLimit?: boolean } = {},
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<GenerateTextResult<any, any, any>> {
-  return withCourseGenerationLlmSlot(
-    () => callLLMWithoutCourseLimit(params, source, retryOptions, thinking),
-    { signal: params.abortSignal },
-  );
+  const run = () => callLLMWithoutCourseLimit(params, source, retryOptions, thinking);
+  return execution.bypassCourseGenerationLimit
+    ? run()
+    : withCourseGenerationLlmSlot(run, { signal: params.abortSignal });
 }
 
 async function callLLMWithoutCourseLimit<T extends GenerateTextParams>(
@@ -394,15 +395,29 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
   params: T,
   source: string,
   thinking?: ThinkingConfig,
-  lifecycle: { onActivity?: () => void } = {},
+  lifecycle: {
+    onActivity?: () => void;
+    bypassCourseGenerationLimit?: boolean;
+  } = {},
 ): Promise<string> {
-  return withCourseGenerationLlmSlot(async () => {
+  const run = async () => {
     const result = streamLLM(params, source, thinking);
+    const modelMetadata = typeof params.model === 'string'
+      ? { provider: 'registry', modelId: params.model }
+      : params.model as unknown as { provider?: string; modelId?: string };
     let text = '';
     let textCharacters = 0;
     let reasoningCharacters = 0;
     let activityEvents = 0;
+    let finishReason: string | undefined;
+    let firstOutputAt: number | undefined;
     const startedAt = Date.now();
+    const recordOutput = () => {
+      const now = Date.now();
+      firstOutputAt ??= now;
+      activityEvents += 1;
+      lifecycle.onActivity?.();
+    };
     try {
       // Consume the complete event stream instead of awaiting `result.text` so
       // reasoning deltas count as useful transport activity too. Deep-reasoning
@@ -410,31 +425,52 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
       // visible HTML token; treating that interval as a dead request caused
       // valid interactive pages to be aborted at a fixed wall-clock deadline.
       for await (const part of result.stream) {
-        activityEvents += 1;
-        lifecycle.onActivity?.();
         if (part.type === 'text-delta') {
+          recordOutput();
           text += part.text;
           textCharacters += part.text.length;
         } else if (part.type === 'reasoning-delta') {
+          recordOutput();
           reasoningCharacters += part.text.length;
         } else if (part.type === 'error') {
           throw part.error;
         } else if (part.type === 'abort') {
           throw new DOMException(part.reason || 'Model stream aborted', 'AbortError');
+        } else if (part.type === 'finish') {
+          finishReason = part.finishReason;
         }
       }
       throwIfAborted(params.abortSignal);
+      if (!finishReason) {
+        throw Object.assign(
+          new Error('Model stream disconnected before a finish event'),
+          { code: 'LLM_STREAM_TRUNCATED', isRetryable: true },
+        );
+      }
+      if (finishReason === 'length' || finishReason === 'content-filter' || finishReason === 'error') {
+        throw Object.assign(
+          new Error(`Model stream ended before a complete response was available (finishReason=${finishReason})`),
+          { code: 'LLM_STREAM_INCOMPLETE', isRetryable: false },
+        );
+      }
       log.info(
         `[${source}] Stream completed in ${Date.now() - startedAt}ms `
-        + `(events=${activityEvents}, reasoningChars=${reasoningCharacters}, textChars=${textCharacters})`,
+        + `(provider=${modelMetadata.provider ?? 'unknown'}, model=${modelMetadata.modelId ?? 'unknown'}, `
+        + `firstOutputMs=${firstOutputAt ? firstOutputAt - startedAt : 'none'}, finishReason=${finishReason}, `
+        + `events=${activityEvents}, reasoningChars=${reasoningCharacters}, textChars=${textCharacters})`,
       );
       return text;
     } catch (error) {
       log.warn(
         `[${source}] Stream interrupted after ${Date.now() - startedAt}ms `
-        + `(events=${activityEvents}, reasoningChars=${reasoningCharacters}, textChars=${textCharacters})`,
+        + `(provider=${modelMetadata.provider ?? 'unknown'}, model=${modelMetadata.modelId ?? 'unknown'}, `
+        + `firstOutputMs=${firstOutputAt ? firstOutputAt - startedAt : 'none'}, finishReason=${finishReason ?? 'missing'}, `
+        + `events=${activityEvents}, reasoningChars=${reasoningCharacters}, textChars=${textCharacters})`,
       );
       throw error;
     }
-  }, { signal: params.abortSignal });
+  };
+  return lifecycle.bypassCourseGenerationLimit
+    ? run()
+    : withCourseGenerationLlmSlot(run, { signal: params.abortSignal });
 }

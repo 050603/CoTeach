@@ -103,12 +103,18 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
               return (
                 <td
                   key={cell.id}
+                  data-cell-id={cell.id}
+                  data-slide-cell-id={cell.id}
                   colSpan={cell.colspan > 1 ? cell.colspan : undefined}
                   rowSpan={cell.rowspan > 1 ? cell.rowspan : undefined}
                   style={{
                     border: borderStyle,
                     backgroundColor: bgColor,
-                    padding: '5px',
+                    // Keep a one-line 16px cell inside the DSL's 30px default
+                    // row height. A 5px vertical inset made the browser grow
+                    // every row to ~36px while the table element retained its
+                    // declared height, so five-row tables visibly overflowed.
+                    padding: '1px 5px',
                     verticalAlign: 'middle',
                     wordBreak: 'break-word',
                     ...textStyle,

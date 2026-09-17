@@ -373,7 +373,7 @@ export default function TeachClassroomPage() {
       }
     >
       <div className={presentation.active ? cn("teacher-presentation", presentationStyles.shell) : undefined}>
-      {presentation.active ? <TeacherPresentationHeader course={course} timerText={timerText} paused={timingSnapshot?.status === "paused"} degraded={presence.degraded} onlineCount={onlineCount} onExit={() => void presentation.exit()} /> : null}
+      {presentation.active ? <TeacherPresentationHeader course={course} degraded={presence.degraded} onlineCount={onlineCount} onExit={() => void presentation.exit()} saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} onRetry={() => void session.retrySave()} state={session.saveState} />} /> : null}
       {/* 移动端工具栏：小屏幕上显示精简版 */}
       <div className={cn("mb-3 flex flex-wrap items-center gap-2 md:hidden", presentation.active && "!hidden")}>
         <button className="inline-flex min-h-11 items-center gap-2 rounded-md bg-[var(--pbl-teacher)] px-3 text-sm font-semibold text-white" data-teacher-presentation-trigger onClick={enterPresentation} type="button"><Maximize2 size={17} />全屏授课</button>
@@ -504,8 +504,6 @@ export default function TeachClassroomPage() {
       {!presentation.active ? <FlowActionBar
         back={previousStage ? <Button onClick={() => requestStage(course.currentStageIndex - 1)} variant="text">回退到「{previousStage.label}」</Button> : null}
         persistent
-        reserveSpace={false}
-        saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} onRetry={() => void session.retrySave()} state={session.saveState} />}
       >
         {nextStage ? <Button onClick={() => requestStage(course.currentStageIndex + 1)}>结束「{currentStage?.label}」并进入「{nextStage.label}」</Button> : <Button onClick={() => setEndDialogOpen(true)}>结束本次课程</Button>}
       </FlowActionBar> : <TeacherPresentationControls
@@ -517,11 +515,9 @@ export default function TeachClassroomPage() {
         onWorkspace={() => setPresentationDetails(true)}
         onDetailsClose={() => { setPresentationDetails(false); setDashboardFocus(undefined); }}
         onStage={requestStage}
-        onTimer={() => setPresentationTool("timer")}
         onTools={() => setPresentationTool("tools")}
         onAdvice={() => setPresentationTool("advice")}
         onEnd={() => setEndDialogOpen(true)}
-        saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} onRetry={() => void session.retrySave()} state={session.saveState} />}
       />}
 
       <Dialog open={presentation.active && presentationTool !== null} onOpenChange={(open) => { if (!open) setPresentationTool(null); }}>
@@ -530,6 +526,7 @@ export default function TeachClassroomPage() {
           <DialogDescription>{currentStage?.label} · {course.name}</DialogDescription>
           {presentationTool === "timer" ? <TimerPanel snapshot={timingSnapshot} onTogglePause={toggleClassroomTimer} onReset={resetActiveStageTimer} onAdjust={adjustActiveStage} /> : presentationTool === "advice" ? <div className={presentationStyles.advice}><RealtimeTeachingActions course={course} stageKey={currentStage?.key ?? "launch"} /></div> : null}
           {presentationTool === "tools" ? <div className="grid gap-3 sm:grid-cols-2">
+            <Button onClick={() => setPresentationTool("timer")} variant="outline"><Clock3 size={18} />课堂计时</Button>
             <Button onClick={() => setPresentationTool("invite")} variant="outline"><QrCode size={18} />学生邀请码</Button>
             <Button onClick={() => setPresentationTool("students")} variant="outline"><Users size={18} />在线学生</Button>
             <Link className="flex min-h-11 items-center justify-center gap-2 rounded-md border border-stone-300 px-4 text-sm font-semibold text-[var(--pbl-teacher)]" href={`/teacher/prepare/${course.platformContext?.templateId ?? course.id}/preview`} target="_blank" rel="noopener noreferrer"><Eye size={18} />查看课程</Link>

@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import type { Course } from "@/lib/session/types";
 import type { ShowcaseData } from "@/lib/showcase/types";
 import {
@@ -15,6 +16,72 @@ import styles from "./teacher-presentation-analytics.module.css";
 
 type AggregateRow = { label: string; value: string; detail?: string; percent?: number };
 type StageSummary = { title: string; rows: AggregateRow[]; empty: string; headlines?: TeacherDashboardMetric[] };
+
+function compactSectionTitle(title: string, index: number): string {
+  const trimmed = title.replace(/^第[一二三四五六七八九十\d]+[章节课]\s*[·：:]?\s*/, "").trim();
+  return trimmed || `第 ${index + 1} 节`;
+}
+
+function KnowledgePresentationOverview({ course, degraded, onDetails }: {
+  course: Course;
+  degraded: boolean;
+  onDetails: () => void;
+}) {
+  const data = deriveKnowledgeDashboardMetrics(course);
+  const hasProgress = data.studentRows.some((row) => row.hasEvidence || row.progress > 0);
+  const overallProgress = hasProgress && data.studentRows.length
+    ? Math.round(data.studentRows.reduce((sum, row) => sum + row.progress, 0) / data.studentRows.length)
+    : undefined;
+  const possibleQuizCompletions = data.sectionRows.length * course.students.length;
+  const completedQuizzes = data.sectionRows.reduce((sum, row) => sum + row.answeredCount, 0);
+  const quizCompletion = completedQuizzes > 0 && possibleQuizCompletions > 0
+    ? Math.round(completedQuizzes / possibleQuizCompletions * 100)
+    : undefined;
+  const scoredStudents = data.sectionRows.reduce((sum, row) => sum + (row.averageScore === undefined ? 0 : row.answeredCount), 0);
+  const averageScore = scoredStudents
+    ? Math.round(data.sectionRows.reduce((sum, row) => sum + (row.averageScore ?? 0) * row.answeredCount, 0) / scoredStudents)
+    : undefined;
+  return (
+    <section className={`${styles.root} ${styles.knowledgeRoot}`} aria-label="班级学情大屏">
+      <header className={styles.header}>
+        <div><h2>班级学情</h2><p>知识讲授 · 实时概览</p></div>
+        <button type="button" className={styles.details} onClick={onDetails}>查看明细</button>
+      </header>
+      {degraded ? <p role="status" className={styles.notice}>数据同步延迟，当前显示最近收到的课堂记录</p> : null}
+      {!course.students.length ? <p className={styles.empty}>暂无学生加入课堂</p> : (
+        <div className={styles.knowledgeGrid}>
+          <button className={styles.knowledgePanel} onClick={onDetails} type="button">
+            <span className={styles.panelHeading}>班级整体学习进度</span>
+            <span className={styles.progressChart} role="img" aria-label={`班级整体学习进度${overallProgress === undefined ? "暂无数据" : `${overallProgress}%`}`} style={{ "--chart-value": `${overallProgress ?? 0}%` } as CSSProperties}>
+              <span><strong>{overallProgress === undefined ? "—" : `${overallProgress}%`}</strong><small>平均进度</small></span>
+            </span>
+            <span className={styles.compactLegend}>
+              <span><i data-color="0" />已完成 <strong>{data.stateCounts.completed}</strong></span>
+              <span><i data-color="1" />学习中 <strong>{data.stateCounts.learning}</strong></span>
+              <span><i data-color="2" />未开始 <strong>{data.stateCounts.notStarted}</strong></span>
+            </span>
+          </button>
+          <button className={styles.knowledgePanel} onClick={onDetails} type="button">
+            <span className={styles.panelHeading}>章节测验完成情况 <strong>{quizCompletion === undefined ? "—" : `${quizCompletion}%`}</strong></span>
+            <span className={styles.barChart} role="img" aria-label={`章节测验完成率${quizCompletion === undefined ? "暂无数据" : `${quizCompletion}%`}`}>
+              {data.sectionRows.length ? data.sectionRows.map((row, index) => {
+                const percent = course.students.length ? Math.round(row.answeredCount / course.students.length * 100) : 0;
+                return <span className={styles.barRow} key={row.id}><small title={row.title}>{compactSectionTitle(row.title, index)}</small><span><i style={{ width: `${percent}%` }} /></span><strong>{row.answeredCount}/{course.students.length}</strong></span>;
+              }) : <small className={styles.chartEmpty}>尚未配置章节测验</small>}
+            </span>
+          </button>
+          <button className={styles.knowledgePanel} onClick={onDetails} type="button">
+            <span className={styles.panelHeading}>章节测验均分 <strong>{averageScore === undefined ? "—" : `${averageScore}分`}</strong></span>
+            <span className={`${styles.barChart} ${styles.scoreChart}`} role="img" aria-label={`章节测验班级均分${averageScore === undefined ? "暂无数据" : `${averageScore}分`}`}>
+              {data.sectionRows.length ? data.sectionRows.map((row, index) => <span className={styles.barRow} key={row.id}><small title={row.title}>{compactSectionTitle(row.title, index)}</small><span><i style={{ width: `${row.averageScore ?? 0}%` }} /></span><strong>{row.averageScore === undefined ? "—" : row.averageScore}</strong></span>) : <small className={styles.chartEmpty}>等待章节测验作答</small>}
+            </span>
+            <span className={styles.scoreScale}><small>0</small><small>班级均分（百分制）</small><small>100</small></span>
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
 
 function stageSummary(course: Course, stageKey: string, showcaseData?: ShowcaseData): StageSummary {
   if (stageKey === "launch") {
@@ -91,6 +158,7 @@ export function TeacherPresentationAnalytics({ course, stageKey, showcaseData, d
   degraded?: boolean;
   onDetails: () => void;
 }) {
+  if (stageKey === "ai-learning") return <KnowledgePresentationOverview course={course} degraded={degraded} onDetails={onDetails} />;
   const pulse = deriveTeacherClassroomPulse(course, stageKey, showcaseData);
   const summary = pulse.metrics.length ? stageSummary(course, stageKey, showcaseData) : undefined;
   const metrics = summary?.headlines ?? pulse.metrics;

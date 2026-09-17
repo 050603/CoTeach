@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
     const cfg: VoiceRegistrationConfig = {
       baseUrl,
       apiKey,
-      model: resolveTTSModel(providerId, body.ttsModelId),
+      model: resolveTTSModel(providerId, body.ttsModelId, 'realtime-interaction'),
     };
 
     // Already registered → no-op (also avoids a redundant re-register when the

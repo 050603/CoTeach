@@ -60,6 +60,7 @@ export function ScreenElement({ elementInfo, elementIndex, animate }: ScreenElem
     <div
       className="screen-element"
       id={`screen-element-${elementInfo.id}`}
+      data-slide-element-id={elementInfo.id}
       style={{
         zIndex: elementIndex,
         color: theme.fontColor,

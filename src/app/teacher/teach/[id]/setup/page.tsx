@@ -21,14 +21,14 @@ export default async function TeachingSetupPage({ params, searchParams }: { para
     if ((await searchParams).enter === "1" && instance.status.toUpperCase() === "TEACHING") redirect(`/teacher/teach/${id}/classroom`);
     return <TeachSetupWorkspace activityId={instance.activityId} offeringId={instance.activity.chapter.offeringId} templateVersionId={instance.templateVersionId} templateId={instance.templateVersion.templateId} />;
   }
-  const template = await prisma.classroomTemplate.findUnique({ where: { id }, select: { title: true, versions: { where: { status: "PUBLISHED" }, select: { id: true }, take: 1 } } });
+  const template = await prisma.classroomTemplate.findUnique({ where: { id }, select: { title: true, versions: { where: { status: "PUBLISHED" }, select: { id: true }, orderBy: { version: "desc" }, take: 1 } } });
   if (!template) notFound();
   const offerings = await prisma.courseOffering.findMany({ where: { teachers: { some: { userId: auth.claims.sub } }, status: "OPEN" }, select: { id: true, name: true }, orderBy: { updatedAt: "desc" } });
   return <div className="pbl-platform-theme"><TeacherPlatformPage><TeacherPlatformHeader active="templates" backHref="/teacher/templates" backLabel="返回课程库" /><div className="pbl-workspace-content"><div className="mx-auto max-w-4xl space-y-6">
     <header className="pbl-page-heading"><LearningArt /><div><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">课堂安排</p><h1 className="mt-3 font-semibold">为《{template.title}》安排课堂</h1></div></header><section className="pbl-content-card space-y-6 p-8 text-sm leading-7">
     {template.versions.length ? <>
       <p>选择教学班，在课堂活动中选用这份教案的已发布版本。学生沿用教学班邀请码加入，再次授课会创建新的场次并保留历史记录。</p>
-      <div className="grid gap-3">{offerings.map(offering => <Link className="flex min-h-14 items-center rounded-xl border border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)] px-5 py-3 font-medium text-[var(--pbl-teacher)]" href={`/teacher/classes/${offering.id}`} key={offering.id}>{offering.name}</Link>)}</div>
+      <div className="grid gap-3">{offerings.map(offering => <Link className="flex min-h-14 items-center rounded-xl border border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)] px-5 py-3 font-medium text-[var(--pbl-teacher)]" href={`/teacher/classes/${offering.id}?templateVersionId=${encodeURIComponent(template.versions[0].id)}`} key={offering.id}>{offering.name}</Link>)}</div>
       <Link className="inline-block underline" href="/teacher/classes">管理或创建教学班</Link>
     </> : <>
       <p>请先完成备课并发布教案，再到教学班安排课堂。</p>

@@ -6,7 +6,8 @@ type JobKind = "COURSE_DESIGN" | "COURSE_CONTENT" | "COURSE_RESOURCE_PACKAGE" | 
 type Json = Prisma.JsonValue;
 export type CourseGenerationJob = {
   id: string; courseId: string; requestedBy: string | null; status: string; step: string; progress: number;
-  message: string; scenesGenerated: number; totalScenes: number; estimatedRemainingSeconds: number;
+  message: string; scenesGenerated: number; totalScenes: number; estimatedRemainingSeconds: number | null;
+  activePages: Json; currentStage: string | null;
   events: Json; trace: Json; request: Json; result: Json; qualityReport: Json; preparedOutlines: Json;
   reviewStatus: string; reviewAvailableUntil: Date | null; stepIndex: number; version: number; attempt: number;
   error: string | null; startedAt: Date | null; completedAt: Date | null; lastHeartbeatAt: Date | null; retryAt: Date | null;
@@ -25,7 +26,9 @@ export function projectGenerationJob(row: GenerationJob): CourseGenerationJob {
   return {
     id: row.id, courseId: row.targetId, requestedBy: typeof state.requestedBy === "string" ? state.requestedBy : null,
     status: row.status.toLowerCase(), step: row.step ?? "queued", progress: row.progress, message: String(state.message ?? "等待生成"),
-    scenesGenerated: Number(state.scenesGenerated ?? 0), totalScenes: Number(state.totalScenes ?? 0), estimatedRemainingSeconds: Number(state.estimatedRemainingSeconds ?? 0),
+    scenesGenerated: Number(state.scenesGenerated ?? 0), totalScenes: Number(state.totalScenes ?? 0),
+    estimatedRemainingSeconds: state.estimatedRemainingSeconds == null ? null : Number(state.estimatedRemainingSeconds),
+    activePages: (state.activePages ?? []) as Json, currentStage: typeof state.currentStage === "string" ? state.currentStage : null,
     events: (state.events ?? []) as Json, trace: (envelope.entries ?? []) as Json, request: row.request, result: row.result, qualityReport: row.qualityReport,
     preparedOutlines: (state.preparedOutlines ?? null) as Json,
     reviewStatus: String(state.reviewStatus ?? "unavailable"), reviewAvailableUntil: date(state.reviewAvailableUntil), stepIndex: Number(state.stepIndex ?? 0), version: Number(state.version ?? 1),
@@ -68,6 +71,7 @@ function updateData(row: CourseGenerationJob, patch: Patch): Prisma.GenerationJo
     trace: json({ schemaVersion: 1, entries: next.trace, state: {
       requestedBy: next.requestedBy, message: next.message, scenesGenerated: next.scenesGenerated, totalScenes: next.totalScenes,
       estimatedRemainingSeconds: next.estimatedRemainingSeconds, events: next.events, reviewStatus: next.reviewStatus,
+      activePages: next.activePages, currentStage: next.currentStage,
       reviewAvailableUntil: next.reviewAvailableUntil, stepIndex: next.stepIndex, version: next.version, preparedOutlines: next.preparedOutlines,
     } }),
   };

@@ -1071,10 +1071,32 @@ export async function auditAndRepairSlideOnce(input: {
   const evidenceBaseline = styledBaseline ?? input.content;
   const measuredBaseline = repairMeasuredSlideGeometry(evidenceBaseline, initialAudit);
   const repairBaseline = measuredBaseline ?? styledBaseline;
-  let candidate = initialDensity.issues.length === 0 && measuredBaseline
-    ? measuredBaseline
+  // Re-audit deterministic style/geometry repair before asking the model to
+  // rewrite a whole page. The old branch used issues from the original draft,
+  // so an already-corrected page still paid for an unnecessary generation.
+  const deterministicAudit = repairBaseline
+    ? await audit(repairBaseline, input.outline.id)
+    : undefined;
+  const deterministicDensity = repairBaseline
+    ? auditSlideDensity(input.outline, repairBaseline)
+    : undefined;
+  const deterministicCoverage = repairBaseline
+    ? slideKnowledgeCoverage(input.outline.keyPoints, repairBaseline.elements)
+    : undefined;
+  const deterministicPasses = Boolean(
+    repairBaseline
+    && deterministicAudit?.status === 'checked'
+    && deterministicAudit.issues.length === 0
+    && deterministicDensity?.issues.length === 0
+    && (deterministicCoverage ?? 0) + 0.02 >= initialCoverage
+  );
+  let candidate = deterministicPasses
+    ? repairBaseline
     : await input.regenerate(
-        buildLayoutRepairDirective(initialAudit, initialDensity),
+        buildLayoutRepairDirective(
+          deterministicAudit?.status === 'checked' ? deterministicAudit : initialAudit,
+          deterministicDensity ?? initialDensity,
+        ),
         repairBaseline ?? input.content,
       );
   // If the one allowed model rewrite is unavailable or invalid, retain a
@@ -1124,14 +1146,20 @@ export async function auditAndRepairSlideOnce(input: {
     candidate,
     auditSlideDensity(input.outline, candidate),
   ) ?? candidate;
-  let candidateAudit = await audit(candidate, input.outline.id);
+  let candidateAudit = candidate === repairBaseline && deterministicAudit
+    ? deterministicAudit
+    : await audit(candidate, input.outline.id);
   const normalizedGeometry = repairMeasuredSlideGeometry(candidate, candidateAudit);
   if (normalizedGeometry) {
     candidate = normalizedGeometry;
     candidateAudit = await audit(candidate, input.outline.id);
   }
-  let candidateCoverage = slideKnowledgeCoverage(input.outline.keyPoints, candidate.elements);
-  let candidateDensity = auditSlideDensity(input.outline, candidate);
+  let candidateCoverage = candidate === repairBaseline && deterministicCoverage !== undefined
+    ? deterministicCoverage
+    : slideKnowledgeCoverage(input.outline.keyPoints, candidate.elements);
+  let candidateDensity = candidate === repairBaseline && deterministicDensity
+    ? deterministicDensity
+    : auditSlideDensity(input.outline, candidate);
   let candidateQualityScore = slideCompositeQualityScore(
     candidateAudit,
     candidateDensity,

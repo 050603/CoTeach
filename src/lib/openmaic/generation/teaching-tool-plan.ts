@@ -169,7 +169,15 @@ export function findMissingRequiredTeachingTools(
   if (hasUsableInteractiveSurface(evidence)) actual.add('interactive-widget');
 
   return normalizeTeachingToolPlan(outline.teachingToolPlan)
-    .filter((item) => item.required !== false && !actual.has(item.tool))
+    .filter((item) => {
+      if (item.required === false || actual.has(item.tool)) return false;
+      // Spotlight and laser entries in the outline are authoring intent rather
+      // than a delivery contract. The semantic cue pass may deliberately drop
+      // them when it cannot bind the narration to a reliable rendered target.
+      // Treating that safe omission as a generation failure would encourage a
+      // fallback to the first element or the centre of a whole table.
+      return item.tool !== 'spotlight' && item.tool !== 'laser-pointer';
+    })
     .map((item) => item.tool);
 }
 

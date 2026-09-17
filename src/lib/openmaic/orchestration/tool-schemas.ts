@@ -37,9 +37,9 @@ export function getEffectiveActions(allowedActions: string[], sceneType?: string
  */
 export const ACTION_DESCRIPTIONS: Record<string, string> = {
     spotlight:
-      'Focus attention on a single key element by dimming everything else. Use sparingly — max 1-2 per response. Parameters: { elementId: string, dimOpacity?: number }',
+      'Use sparingly to sustain focus on one essential visible block. For a table cell use selector:{cellId}; for exact text inside that cell use selector:{cellId,quote,occurrence?}; for other exact text use selector:{quote,occurrence?} (zero-based). Do not target a whole table when discussing one cell. Parameters: { elementId: string, selector?: {cellId:string,quote?:string,occurrence?:number}|{quote:string,occurrence?:number}, dimOpacity?: number }',
     laser:
-      'Point at an element with a laser pointer effect. Parameters: { elementId: string, color?: string }',
+      'Use for a rare, essential brief reference to one visible term, value, or cell detail. For an explicit comparison or ordered list, one laser may sweep continuously through 1-4 additional precise waypoints; do not emit one separate laser per item. Use the same selector forms as spotlight and omit the action when no reliable target exists. Parameters: { elementId: string, selector?: {cellId:string,quote?:string,occurrence?:number}|{quote:string,occurrence?:number}, waypoints?: Array<{elementId:string,selector?:...}>, color?: string, duration?: number }',
     wb_open:
       'Open the whiteboard for hand-drawn explanations, formulas, diagrams, or step-by-step derivations. Creates a new whiteboard if none exists. Call this before adding elements. Parameters: {}',
     wb_draw_text:

@@ -5,7 +5,10 @@ vi.mock('@openmaic/lib/ai/llm', () => ({
   callLLM: mocks.call,
   callStreamingLLMText: mocks.stream,
 }));
-import { createCourseGenerationAiCall } from './course-generation-ai-call';
+import {
+  createCourseGenerationAiCall,
+  withCourseGenerationAiCallContext,
+} from './course-generation-ai-call';
 
 describe('course generation model input', () => {
   it.each([true, false])('respects the selected model vision capability: %s', async (vision) => {
@@ -45,6 +48,7 @@ describe('course generation model input', () => {
     expect(mocks.stream).toHaveBeenCalledOnce();
     expect(mocks.stream.mock.calls[0][0]).toMatchObject({
       model,
+      maxRetries: 0,
       system: 'system',
       messages: [{ role: 'user', content: 'widget' }],
     });
@@ -62,6 +66,74 @@ describe('course generation model input', () => {
     });
     await expect(call('system', 'widget')).rejects.toThrow('timed out');
     expect(mocks.stream).toHaveBeenCalledOnce();
+  });
+
+  it('reports bounded transport retries to the page execution context', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.stream.mockReset()
+        .mockRejectedValueOnce(Object.assign(new Error('Receive batching backend response failed'), {
+          code: 'InternalError',
+        }))
+        .mockResolvedValueOnce('complete page');
+      const callbacks = {
+        onQueued: vi.fn(),
+        onStarted: vi.fn(),
+        onActivity: vi.fn(),
+        onRetry: vi.fn(),
+        onSettled: vi.fn(),
+      };
+      const call = withCourseGenerationAiCallContext(createCourseGenerationAiCall({
+        model: {} as LanguageModel,
+        vision: false,
+        source: 'page-content',
+        maxRetries: 2,
+        streamResponse: true,
+      }), callbacks);
+      const pending = call('system', 'page');
+      const assertion = expect(pending).resolves.toBe('complete page');
+      await vi.runAllTimersAsync();
+      await assertion;
+      expect(mocks.stream).toHaveBeenCalledTimes(2);
+      expect(callbacks.onQueued).toHaveBeenCalledTimes(2);
+      expect(callbacks.onStarted).toHaveBeenCalledTimes(2);
+      expect(callbacks.onRetry).toHaveBeenCalledOnce();
+      expect(callbacks.onRetry).toHaveBeenCalledWith(expect.objectContaining({
+        attempt: 1,
+        maxAttempts: 3,
+      }));
+      expect(callbacks.onSettled).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reset a persisted stage attempt budget after restart', async () => {
+    mocks.stream.mockReset().mockRejectedValue(Object.assign(new Error('service unavailable'), {
+      statusCode: 503,
+    }));
+    const base = createCourseGenerationAiCall({
+      model: {} as LanguageModel,
+      vision: false,
+      source: 'resumed-page-content',
+      maxRetries: 2,
+      streamResponse: true,
+    });
+    const lastAttempt = withCourseGenerationAiCallContext(base, {
+      attemptsStarted: 2,
+    });
+    await expect(lastAttempt('system', 'page')).rejects.toThrow('service unavailable');
+    expect(mocks.stream).toHaveBeenCalledOnce();
+
+    mocks.stream.mockClear();
+    const exhausted = withCourseGenerationAiCallContext(base, {
+      attemptsStarted: 3,
+    });
+    await expect(exhausted('system', 'page')).rejects.toMatchObject({
+      code: 'LLM_RETRY_BUDGET_EXHAUSTED',
+      isRetryable: false,
+    });
+    expect(mocks.stream).not.toHaveBeenCalled();
   });
 
   it('refreshes the stream inactivity deadline when reasoning or text arrives', async () => {

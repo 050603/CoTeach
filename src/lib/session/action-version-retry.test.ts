@@ -5,6 +5,18 @@ import {
 } from "./action-version-retry";
 
 describe("session action version conflict recovery", () => {
+  it("retains the server message for user-facing save errors", () => {
+    const error = new SessionActionRequestError(
+      "REVIEW_STALE",
+      409,
+      undefined,
+      "课程内容已变更，请重新进行教师终审。",
+    );
+
+    expect(error.code).toBe("REVIEW_STALE");
+    expect(error.message).toBe("课程内容已变更，请重新进行教师终审。");
+  });
+
   it("retries with the server version and preserves the original operation", async () => {
     const send = vi.fn()
       .mockRejectedValueOnce(new SessionActionRequestError("VERSION_CONFLICT", 409, 8))

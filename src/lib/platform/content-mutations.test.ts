@@ -41,12 +41,22 @@ describe("serialized content changes", () => {
   it("creates classroom activity and its first run in the same transaction", async () => {
     mocks.tx.chapter.findFirst.mockResolvedValue({ id: "chapter" });
     mocks.tx.activity.aggregate.mockResolvedValue({ _max: { position: null } });
-    mocks.tx.classroomTemplate.findFirst.mockResolvedValue({ versions: [{ id: "version" }] });
+    mocks.tx.classroomTemplateVersion.findFirst.mockResolvedValue({ id: "version" });
     mocks.tx.activity.create.mockResolvedValue({ id: "activity" });
-    await createActivity(teacherClaims, "offering", "chapter", { type: "Classroom", title: "Class", templateId: "template" });
+    await createActivity(teacherClaims, "offering", "chapter", { type: "Classroom", title: "Class", templateVersionId: "version" });
     expectLockedBefore(mocks.tx.activity.aggregate, "Chapter");
+    expect(mocks.tx.classroomTemplateVersion.findFirst).toHaveBeenCalledWith({ where: { id: "version", status: { in: ["PUBLISHED", "published"] }, template: { ownerId: "teacher", status: { in: ["ACTIVE", "active"] } } } });
     expect(mocks.tx.classroomInstance.create).toHaveBeenCalledWith({ data: { activityId: "activity", templateVersionId: "version", runNo: 1, status: "SCHEDULED" } });
     expect(mocks.transaction).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a classroom activity without an exact course version", async () => {
+    mocks.tx.chapter.findFirst.mockResolvedValue({ id: "chapter" });
+
+    await expect(createActivity(teacherClaims, "offering", "chapter", { type: "Classroom", title: "Class" })).rejects.toMatchObject({ code: "TEMPLATE_REQUIRED" });
+
+    expect(mocks.tx.activity.create).not.toHaveBeenCalled();
+    expect(mocks.tx.classroomInstance.create).not.toHaveBeenCalled();
   });
 
   it("binds an uploaded PDF to the reference activity", async () => {
@@ -73,7 +83,7 @@ describe("serialized content changes", () => {
 
   it("rejects stale activity versions without creating replacement runs", async () => {
     mocks.tx.activity.findUnique.mockResolvedValue({ chapterId: "chapter", version: 2, chapter: { offeringId: "offering" } });
-    await expect(updateActivity(teacherClaims, "activity", { version: 1, templateId: "template" })).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
+    await expect(updateActivity(teacherClaims, "activity", { version: 1, templateVersionId: "version" })).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
     expect(mocks.tx.$queryRaw.mock.calls[0][0].join("")).toContain('FROM "Chapter"');
     expect(mocks.tx.$queryRaw.mock.calls[1][0].join("")).toContain('FROM "Activity"');
     expect(mocks.tx.activity.update).not.toHaveBeenCalled();
@@ -139,6 +149,33 @@ describe("serialized content changes", () => {
     mocks.tx.classroomInstance.findFirst.mockResolvedValue(active);
     await expect(createClassroomInstance(teacherClaims, "activity", "version")).resolves.toEqual(active);
     expectLockedBefore(mocks.tx.classroomInstance.findFirst, "Activity");
+    expect(mocks.tx.classroomInstance.create).not.toHaveBeenCalled();
+  });
+
+  it("never reuses an active run from a different selected course version", async () => {
+    mocks.tx.activity.findUnique.mockResolvedValue({ id: "activity", chapter: { offeringId: "offering" } });
+    mocks.tx.classroomTemplateVersion.findUnique.mockResolvedValue({ status: "PUBLISHED", snapshot: {}, template: { ownerId: "teacher", status: "ACTIVE" } });
+    mocks.tx.classroomInstance.findFirst.mockResolvedValue(null);
+    mocks.tx.classroomInstance.aggregate.mockResolvedValue({ _max: { runNo: 3 } });
+    mocks.tx.classroomInstance.create.mockResolvedValue({ id: "new-run", templateVersionId: "selected-version" });
+
+    await createClassroomInstance(teacherClaims, "activity", "selected-version");
+
+    expect(mocks.tx.classroomInstance.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ activityId: "activity", templateVersionId: "selected-version" }),
+    }));
+    expect(mocks.tx.classroomInstance.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ templateVersionId: "selected-version", runNo: 4 }),
+    }));
+  });
+
+  it("rejects versions whose course has already been deleted", async () => {
+    mocks.tx.activity.findUnique.mockResolvedValue({ id: "activity", chapter: { offeringId: "offering" } });
+    mocks.tx.classroomTemplateVersion.findUnique.mockResolvedValue({ status: "PUBLISHED", template: { ownerId: "teacher", status: "DELETED" } });
+
+    await expect(createClassroomInstance(teacherClaims, "activity", "deleted-version")).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    expect(mocks.tx.classroomInstance.findFirst).not.toHaveBeenCalled();
     expect(mocks.tx.classroomInstance.create).not.toHaveBeenCalled();
   });
 
@@ -220,8 +257,13 @@ describe("teacher offering classroom covers", () => {
       }],
     }]);
     const result = await listTeacherOfferings(teacherClaims);
+    expect(result[0].chapters[0].activities[0]).toMatchObject({
+      templateId: "template",
+      templateVersionId: "version",
+    });
     expect(result[0].chapters[0].activities[0].instances[0]).toMatchObject({
       id: "instance",
+      templateVersionId: "version",
       coverImageUrl: "https://cdn.example.test/classroom.webp",
     });
     expect(result[0].courseReferences).toEqual([

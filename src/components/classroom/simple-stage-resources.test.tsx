@@ -25,13 +25,14 @@ const course = {
 } as unknown as Course;
 
 describe("simplified stage resources", () => {
-  it("synchronizes the selected resource only after the teacher uses the footer action", () => {
+  it("only exposes the end-projection action in the footer after projection starts", () => {
     const target = render(<div />).container.firstElementChild as HTMLElement;
     const view = render(<TeacherPresentationActionsProvider target={target}>
       <SimplifiedTeacherStageView course={course} stageKey="launch" presentation="teaching" />
     </TeacherPresentationActionsProvider>);
     expect(session.setUiState).not.toHaveBeenCalled();
-    fireEvent.click(within(target).getByRole("button", { name: "同步到学生" }));
+    expect(within(target).queryByRole("button", { name: /同步到学生|结束投屏/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "同步到学生" }));
     expect(session.setUiState).toHaveBeenCalledTimes(1);
     const patch = session.setUiState.mock.calls[0][1];
     expect(patch.resourceProjection).toMatchObject({ resourceId: "launch-file", stageKey: "launch" });
@@ -39,7 +40,7 @@ describe("simplified stage resources", () => {
       <SimplifiedTeacherStageView course={{ ...course, uiState: patch }} stageKey="launch" presentation="analytics" />
     </TeacherPresentationActionsProvider>);
     expect(session.setUiState).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(target).getByRole("button", { name: "停止同步" }));
+    fireEvent.click(within(target).getByRole("button", { name: "结束投屏" }));
     expect(session.setUiState).toHaveBeenLastCalledWith("course-1", { resourceProjection: null });
     view.unmount();
     expect(target.childElementCount).toBe(0);
@@ -207,6 +208,9 @@ describe("simplified stage resources", () => {
     expect(document.querySelectorAll("video")).toHaveLength(1);
     expect(document.querySelector("video")?.getAttribute("src")).toBe("/api/uploads/lesson-video");
     expect(document.querySelector("video")?.getAttribute("preload")).toBe("metadata");
+    expect(document.querySelector("video")?.controls).toBe(true);
+    expect(document.querySelector("video")?.closest(".teacher-resource-video")).toBeTruthy();
+    expect(document.querySelector("video")?.closest(".teacher-resource-video-container")).toBeTruthy();
     expect(within(dialog).getByText("全屏播放")).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "投屏" })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "退出全屏播放" })).toBeTruthy();

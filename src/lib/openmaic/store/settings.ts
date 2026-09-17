@@ -12,8 +12,13 @@ import type { ThinkingConfig } from '@openmaic/lib/types/provider';
 import { getThinkingConfigKey, supportsConfigurableThinking } from '@openmaic/lib/ai/thinking-config';
 import type { TTSProviderId, ASRProviderId, BuiltInTTSProviderId } from '@openmaic/lib/audio/types';
 import type { AgentVoiceOverride } from '@openmaic/lib/audio/voice-resolver';
+import type { TtsScenarioConfigs } from '@openmaic/lib/audio/tts-scenarios';
 import { isCustomTTSProvider, isCustomASRProvider } from '@openmaic/lib/audio/types';
 import { ASR_PROVIDERS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from '@openmaic/lib/audio/constants';
+import {
+  DEFAULT_QWEN_AUDIO_TTS_MODEL_ID,
+  normalizeQwenAudioTtsSelection,
+} from '@openmaic/lib/audio/qwen-audio-tts-catalog';
 import { DEFAULT_VOXCPM_BACKEND, VOXCPM_MODEL_ID, VOXCPM_VLLM_MODEL_ID } from '@openmaic/lib/audio/voxcpm';
 import { PDF_PROVIDERS } from '@openmaic/lib/pdf/constants';
 import type { PDFProviderId } from '@openmaic/lib/pdf/types';
@@ -92,6 +97,7 @@ export interface SettingsState {
       /** Admin/server-level force-off (server-providers.yml / env). Overrides `enabled`. */
       serverDisabled?: boolean;
       defaultVoice?: string;
+      scenarioConfigs?: TtsScenarioConfigs;
       timingCalibrations?: TtsVoiceTimingCalibration[];
       // Custom provider fields
       customName?: string;
@@ -417,7 +423,12 @@ const getDefaultAudioConfig = () => ({
     'openai-tts': { apiKey: '', baseUrl: '', enabled: true },
     'azure-tts': { apiKey: '', baseUrl: '', enabled: true },
     'glm-tts': { apiKey: '', baseUrl: '', enabled: true },
-    'qwen-tts': { apiKey: '', baseUrl: '', enabled: true },
+    'qwen-tts': {
+      apiKey: '',
+      baseUrl: '',
+      modelId: DEFAULT_QWEN_AUDIO_TTS_MODEL_ID,
+      enabled: true,
+    },
     'voxcpm-tts': {
       apiKey: '',
       baseUrl: '',
@@ -599,6 +610,16 @@ function ensureBuiltInAudioProviders(state: Partial<SettingsState>): void {
         backend: DEFAULT_VOXCPM_BACKEND,
         ...(voxcpmConfig.providerOptions || {}),
       };
+    }
+    const qwenConfig = state.ttsProvidersConfig['qwen-tts'];
+    if (qwenConfig) {
+      const selection = normalizeQwenAudioTtsSelection(
+        qwenConfig.modelId,
+        state.ttsProviderId === 'qwen-tts' ? state.ttsVoice : qwenConfig.defaultVoice,
+      );
+      qwenConfig.modelId = selection.modelId;
+      qwenConfig.defaultVoice = selection.voiceId;
+      if (state.ttsProviderId === 'qwen-tts') state.ttsVoice = selection.voiceId;
     }
   }
 
@@ -1255,7 +1276,7 @@ export const useSettingsStore = create<SettingsState>()(
               // generation, plus an admin/server-level force-off flag (#665).
               tts: Record<
                 string,
-                { disabled?: boolean; models?: string[]; defaultModel?: string; priority?: number; defaultVoice?: string; timingCalibrations?: TtsVoiceTimingCalibration[] }
+                { disabled?: boolean; models?: string[]; defaultModel?: string; priority?: number; defaultVoice?: string; scenarioConfigs?: TtsScenarioConfigs; timingCalibrations?: TtsVoiceTimingCalibration[] }
               >;
               asr: Record<string, { models?: string[]; defaultModel?: string; priority?: number }>;
               pdf: Record<string, { priority?: number }>;
@@ -1310,6 +1331,7 @@ export const useSettingsStore = create<SettingsState>()(
                     ...newTTSConfig[key],
                     isServerConfigured: false,
                     serverDisabled: false,
+                    scenarioConfigs: undefined,
                   };
                 }
               }
@@ -1322,6 +1344,7 @@ export const useSettingsStore = create<SettingsState>()(
                     serverDisabled: info.disabled === true,
                     ...(info.defaultModel ? { modelId: info.defaultModel } : {}),
                     ...(info.defaultVoice ? { defaultVoice: info.defaultVoice } : {}),
+                    ...(info.scenarioConfigs ? { scenarioConfigs: info.scenarioConfigs } : {}),
                     ...(info.timingCalibrations?.length
                       ? { timingCalibrations: info.timingCalibrations }
                       : {}),
@@ -1535,7 +1558,10 @@ export const useSettingsStore = create<SettingsState>()(
               const imageModels =
                 IMAGE_PROVIDERS[validImageProvider as ImageProviderId]?.models ?? [];
               const validImageModel = validImageProvider
-                ? resolveSelectedModel(state.imageModelId, imageModels)
+                ? resolveSelectedModel(
+                    data.image[validImageProvider]?.defaultModel || state.imageModelId,
+                    imageModels,
+                  )
                 : '';
               const videoModels =
                 VIDEO_PROVIDERS[validVideoProvider as VideoProviderId]?.models ?? [];
@@ -1543,10 +1569,18 @@ export const useSettingsStore = create<SettingsState>()(
                 ? resolveSelectedModel(state.videoModelId, videoModels)
                 : '';
 
-              const validTTSVoice =
+              let validTTSVoice =
                 validTTSProvider !== state.ttsProviderId
                   ? DEFAULT_TTS_VOICES[validTTSProvider as BuiltInTTSProviderId] || 'default'
                   : state.ttsVoice;
+              if (validTTSProvider === 'qwen-tts') {
+                const qwenSelection = normalizeQwenAudioTtsSelection(
+                  newTTSConfig['qwen-tts']?.modelId,
+                  newTTSConfig['qwen-tts']?.defaultVoice || validTTSVoice,
+                );
+                newTTSConfig['qwen-tts'].modelId = qwenSelection.modelId;
+                validTTSVoice = qwenSelection.voiceId;
+              }
 
               // Auto-disable image/video generation when no provider is usable
               const shouldDisableImage = !validImageProvider && state.imageGenerationEnabled;
@@ -1660,8 +1694,8 @@ export const useSettingsStore = create<SettingsState>()(
                 ...(validLLMModel !== state.modelId && { modelId: validLLMModel }),
                 ...(validTTSProvider !== state.ttsProviderId && {
                   ttsProviderId: validTTSProvider as TTSProviderId,
-                  ttsVoice: validTTSVoice,
                 }),
+                ...(validTTSVoice !== state.ttsVoice && { ttsVoice: validTTSVoice }),
                 ...(validASRProvider !== state.asrProviderId && {
                   asrProviderId: validASRProvider as ASRProviderId,
                 }),

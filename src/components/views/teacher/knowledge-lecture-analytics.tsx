@@ -161,11 +161,13 @@ export function KnowledgeLectureAnalytics({
   course,
   progressOverride,
   studentCountOverride,
+  showSectionSummaryChart = true,
   title = "节末小测实时学情",
 }: {
   course: Course;
   progressOverride?: Record<string, StudentAiProgress>;
   studentCountOverride?: number;
+  showSectionSummaryChart?: boolean;
   title?: string;
 }) {
   const progress = progressOverride ?? course.aiLearningProgress ?? {};
@@ -212,7 +214,7 @@ export function KnowledgeLectureAnalytics({
         {isNewSystem ? <span className="max-w-[12rem] text-right text-[10px] leading-4 text-stone-400">右栏展示班级摘要；此处查看知识点、分节和逐题证据</span> : <div className="flex flex-wrap gap-2 text-xs font-bold"><span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-stone-700 ring-1 ring-stone-200"><Users size={13} />已作答 {new Set(answeredStudentIds).size}/{studentCount}</span><span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[var(--pbl-teacher)] ring-1 ring-[var(--pbl-teacher-border)]"><BookOpenCheck size={13} />班级均分 {attempts.length ? `${averageScore}分` : "—"}</span></div>}
       </header>
 
-      {isNewSystem && sectionChartData.length ? <section className="border-b border-stone-100 bg-stone-50/40 px-4 py-4" aria-labelledby="knowledge-section-chart-title">
+      {showSectionSummaryChart && isNewSystem && sectionChartData.length ? <section className="border-b border-stone-100 bg-stone-50/40 px-4 py-4" aria-labelledby="knowledge-section-chart-title">
         <div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="text-sm font-bold text-stone-900" id="knowledge-section-chart-title">各小节完成率与均分</h4><p className="mt-0.5 text-[10px] text-stone-500">用轻量趋势线对比完成率和得分；悬浮数据点或标题可查看完整信息。</p></div><div className="flex items-center gap-3 rounded-full border border-stone-200 bg-white px-3 py-1.5 text-[10px] font-semibold text-stone-600 shadow-sm"><span className="inline-flex items-center gap-1.5"><span className="relative h-2 w-4 border-t border-dashed border-blue-500"><span className="absolute -top-1 left-1.5 size-2 rounded-full border-2 border-blue-500 bg-white" /></span>完成率</span><span className="inline-flex items-center gap-1.5"><span className="relative h-2 w-4 border-t-2 border-emerald-500"><span className="absolute -top-1 left-1.5 size-2 rounded-full bg-emerald-500 ring-2 ring-white" /></span>平均得分</span></div></div>
         <div className="mt-3 overflow-x-auto rounded-2xl border border-stone-200/80 bg-white shadow-[0_8px_24px_rgba(28,25,23,0.04)]" role="img" aria-label={sectionChartData.map((item) => `${item.fullName}：完成率${item.completionRate === null ? "暂无" : `${item.completionRate}%`}，均分${item.averageScore === null ? "暂无" : `${item.averageScore}分`}`).join("；")}>
           <div className="h-60 px-2 pb-1 pt-3" style={{ minWidth: `${Math.max(680, sectionChartData.length * 112)}px` }}>

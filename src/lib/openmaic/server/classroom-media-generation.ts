@@ -43,6 +43,7 @@ import type {
 } from '@openmaic/lib/media/types';
 import type { VideoProviderId } from '@openmaic/lib/media/types';
 import type { TTSProviderId } from '@openmaic/lib/audio/types';
+import type { TtsScenarioId } from '@openmaic/lib/audio/tts-scenarios';
 import { splitLongSpeechActions } from '@openmaic/lib/audio/tts-utils';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@openmaic/lib/audio/voxcpm';
 import { throwIfAborted, withGenerationRetry } from '@openmaic/lib/generation/generation-retry';
@@ -653,7 +654,10 @@ export function findUnresolvedClassroomMedia(
 // TTS generation
 // ---------------------------------------------------------------------------
 
-function resolveServerTTSRuntimes(providerIds: string[]): ServerTTSRuntime[] {
+function resolveServerTTSRuntimes(
+  providerIds: string[],
+  scenario: TtsScenarioId = 'course-generation',
+): ServerTTSRuntime[] {
   return providerIds.flatMap((id) => {
     const providerId = id as TTSProviderId;
     const apiKey = resolveTTSApiKey(providerId);
@@ -666,6 +670,7 @@ function resolveServerTTSRuntimes(providerIds: string[]): ServerTTSRuntime[] {
     const voice = resolveTTSVoice(
       providerId,
       DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] || 'default',
+      scenario,
     ) || 'default';
     if (providerId === VOXCPM_TTS_PROVIDER_ID && voice === VOXCPM_AUTO_VOICE_ID) {
       log.warn('VoxCPM Auto Voice requires agent context; skipping server-side provider');
@@ -678,7 +683,7 @@ function resolveServerTTSRuntimes(providerIds: string[]): ServerTTSRuntime[] {
         providerId,
         apiKey,
         baseUrl: resolveTTSBaseUrl(providerId) || ttsProvider?.defaultBaseUrl,
-        modelId: resolveTTSModel(providerId, defaultModel) || defaultModel,
+        modelId: resolveTTSModel(providerId, defaultModel, scenario) || defaultModel,
         voice,
         format: ttsProvider?.supportedFormats?.[0] || 'mp3',
       },
@@ -848,6 +853,7 @@ export async function generateTTSForClassroom(
       await fs.writeFile(path.join(audioDir, filename), result.audio);
       task.speechAction.audioId = task.audioId;
       task.speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${filename}`);
+      delete task.speechAction.audioInvalidated;
       log.info(`Generated TTS via ${runtime.providerId}: ${filename} (${result.audio.length} bytes)`);
       return true;
     } catch (error) {

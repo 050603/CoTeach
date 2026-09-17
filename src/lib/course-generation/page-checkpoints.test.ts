@@ -3,8 +3,14 @@ import type { SceneOutline } from "@openmaic/lib/types/generation";
 import type { Scene } from "@openmaic/lib/types/stage";
 import {
   fingerprintSceneOutline,
+  fingerprintGenerationValue,
+  restoreSceneStageAttemptCount,
+  restoreSceneStageCheckpoint,
+  SCENE_STAGE_CHECKPOINT_VERSION,
   restoreSceneCheckpoint,
   type PageCheckpointSnapshot,
+  type SceneStageCheckpointSnapshot,
+  type SceneStageAttemptSnapshot,
 } from "./page-checkpoints";
 
 const outline: SceneOutline = {
@@ -79,5 +85,96 @@ describe("course-generation page checkpoints", () => {
     };
     expect(restoreSceneCheckpoint({ ...outline, keyPoints: ["新的知识边界"] }, checkpoint, "stage")).toBeNull();
     expect(restoreSceneCheckpoint(outline, { ...checkpoint, scene: { ...scene, type: "quiz" } as Scene }, "stage")).toBeNull();
+  });
+
+  it("restores partial work only for the exact outline, model and upstream input", () => {
+    const checkpoint: SceneStageCheckpointSnapshot = {
+      schemaVersion: SCENE_STAGE_CHECKPOINT_VERSION,
+      pageKey: outline.id,
+      stage: "actions" as const,
+      outlineFingerprint: fingerprintSceneOutline(outline),
+      modelFingerprint: "model-a",
+      inputFingerprint: fingerprintGenerationValue({ elements: ["accepted-content"] }),
+      payload: { actions: [{ id: "speech-1", type: "speech", text: "讲稿" }] },
+    };
+    const inputFingerprint = fingerprintGenerationValue({ elements: ["accepted-content"] });
+    expect(restoreSceneStageCheckpoint({
+      outline,
+      checkpoint,
+      stage: "actions",
+      modelFingerprint: "model-a",
+      inputFingerprint,
+    })).toEqual(checkpoint.payload);
+    expect(restoreSceneStageCheckpoint({
+      outline,
+      checkpoint,
+      stage: "actions",
+      modelFingerprint: "model-b",
+      inputFingerprint,
+    })).toBeNull();
+    expect(restoreSceneStageCheckpoint({
+      outline,
+      checkpoint,
+      stage: "actions",
+      modelFingerprint: "model-a",
+      inputFingerprint: fingerprintGenerationValue({ elements: ["changed-content"] }),
+    })).toBeNull();
+  });
+
+  it("invalidates new completed-page checkpoints when the model or course input changes", () => {
+    const checkpoint: PageCheckpointSnapshot = {
+      pageKey: outline.id,
+      outlineFingerprint: fingerprintSceneOutline(outline),
+      modelFingerprint: "model-a",
+      inputFingerprint: "input-a",
+      scene,
+    };
+    expect(restoreSceneCheckpoint(
+      outline,
+      checkpoint,
+      "stage",
+      "model-a",
+      "input-a",
+    )).not.toBeNull();
+    expect(restoreSceneCheckpoint(
+      outline,
+      checkpoint,
+      "stage",
+      "model-b",
+      "input-a",
+    )).toBeNull();
+    expect(restoreSceneCheckpoint(
+      outline,
+      checkpoint,
+      "stage",
+      "model-a",
+      "input-b",
+    )).toBeNull();
+  });
+
+  it("restores only the matching persisted stage attempt budget", () => {
+    const checkpoint: SceneStageAttemptSnapshot = {
+      schemaVersion: SCENE_STAGE_CHECKPOINT_VERSION,
+      pageKey: outline.id,
+      stage: "narration",
+      outlineFingerprint: fingerprintSceneOutline(outline),
+      modelFingerprint: "model-a",
+      inputFingerprint: "actions-a",
+      attemptsStarted: 2,
+    };
+    expect(restoreSceneStageAttemptCount({
+      outline,
+      checkpoint,
+      stage: "narration",
+      modelFingerprint: "model-a",
+      inputFingerprint: "actions-a",
+    })).toBe(2);
+    expect(restoreSceneStageAttemptCount({
+      outline,
+      checkpoint,
+      stage: "narration",
+      modelFingerprint: "model-a",
+      inputFingerprint: "actions-b",
+    })).toBe(0);
   });
 });

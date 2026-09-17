@@ -43,6 +43,7 @@ export function ResourcePackageForm({ courseId, disabled, onConfirmed, onPackage
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string>();
   const [selections, setSelections] = useState<Partial<Record<ResourcePackageRole, string>>>({});
+  const [planningAcknowledged, setPlanningAcknowledged] = useState(false);
   const restoredKey = useRef("");
   const dirtyRef = useRef(false);
   const endpoint = `/api/courses/${encodeURIComponent(courseId)}/resource-package`;
@@ -69,6 +70,10 @@ export function ResourcePackageForm({ courseId, disabled, onConfirmed, onPackage
       setDraft(restored ?? pack?.draft ?? null);
       setDirty(Boolean(restored));
       dirtyRef.current = Boolean(restored);
+      const requiredIssueIds = (pack?.planningIssues ?? []).filter((issue) => issue.requiresAcknowledgement).map((issue) => issue.id).sort();
+      const savedIssueIds = [...(pack?.planningAcknowledgement?.issueIds ?? [])].sort();
+      setPlanningAcknowledged(!restored && Boolean(requiredIssueIds.length && pack?.planningIssueVersion === pack?.planningAcknowledgement?.issueVersion
+        && requiredIssueIds.join("\n") === savedIssueIds.join("\n")));
       onConfirmed(next?.status === "ready" && pack?.confirmedAt && !restored ? pack : null);
     } else {
       onConfirmed(next?.status === "ready" && pack?.confirmedAt && !dirtyRef.current ? pack : null);
@@ -108,6 +113,7 @@ export function ResourcePackageForm({ courseId, disabled, onConfirmed, onPackage
     setDraft(next);
     setDirty(true);
     dirtyRef.current = true;
+    setPlanningAcknowledged(false);
     onConfirmed(null);
     try { window.sessionStorage.setItem(storageKey, JSON.stringify({ key: restoredKey.current, draft: next })); } catch { /* Optional draft recovery. */ }
   }
@@ -118,6 +124,7 @@ export function ResourcePackageForm({ courseId, disabled, onConfirmed, onPackage
     onConfirmed(null);
     setDirty(true);
     dirtyRef.current = true;
+    setPlanningAcknowledged(false);
     try {
       const response = await fetch(endpoint, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const payload = await readJsonResponse<PackageResponse>(response, "资源包保存失败，请重试。");
@@ -161,7 +168,7 @@ export function ResourcePackageForm({ courseId, disabled, onConfirmed, onPackage
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="space-y-2">
         <h1 className="text-xl font-semibold text-stone-950">从教学资源包生成课堂</h1>
-        <p className="max-w-xl text-sm leading-6 text-stone-600">上传知识点文档、完整教案与项目启动 PPT 所在的 ZIP。确认教学要求后，按教案时间生成五阶段课堂。</p>
+        <p className="max-w-xl text-sm leading-6 text-stone-600">上传上游导出的知识点 Markdown、教案 Markdown 与项目启动 PPTX 交接包。确认教学要求后，按教案时间生成五阶段课堂。</p>
       </div>
       <label className={`${BUTTON} ${locked ? "cursor-not-allowed opacity-45" : "cursor-pointer"}`}>
         {busy ? <LoaderCircle aria-hidden className="size-4 animate-spin" /> : <FileArchive aria-hidden className="size-4" />}
@@ -169,7 +176,7 @@ export function ResourcePackageForm({ courseId, disabled, onConfirmed, onPackage
         <input accept=".zip,application/zip,application/x-zip-compressed" aria-label="上传课堂资源包" className="sr-only" disabled={locked} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} type="file" />
       </label>
     </div>
-    <p className="text-xs text-stone-500">支持 ZIP，最大 50 MiB。启动 PPT 自动加入第一阶段；其余文档作为教师备课资料。</p>
+    <p className="text-xs text-stone-500">支持新版 ZIP 交接包，最大 50 MiB。新上传不再接受 DOCX；历史课程中已保存的 DOCX 仍可继续使用。</p>
     {!loaded && !error ? <p aria-live="polite" className="text-sm text-stone-500">正在读取已保存的资源包…</p> : null}
     {snapshot ? <div aria-live="polite" className="space-y-2 text-sm text-stone-600">
       {snapshot.package?.source.fileName ? <p className="break-all font-medium text-stone-800">{snapshot.package.source.fileName}</p> : null}
@@ -187,6 +194,22 @@ export function ResourcePackageForm({ courseId, disabled, onConfirmed, onPackage
       <a className={BUTTON} download href={`${endpoint}?download=feedback`}>下载上游修改反馈</a>
     </section> : null}
     {snapshot?.package?.adaptation ? <details className="rounded-[10px] border border-emerald-200 bg-emerald-50 p-4"><summary className="cursor-pointer font-medium text-emerald-950">已按教师授权统一适配 · 查看变更</summary><ul className="mt-3 space-y-2 text-sm text-emerald-900">{snapshot.package.adaptation.changes.map((item) => <li key={item}>{item}</li>)}</ul>{snapshot.package.classroomPresentation ? <a className={`${BUTTON} mt-3`} href={snapshot.package.classroomPresentation.url}>下载适配授课版 PPT</a> : null}</details> : null}
+    {snapshot?.package?.handoff ? <section aria-label="上游交接版本" className="rounded-[10px] border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-700">
+      <h2 className="font-semibold text-stone-900">上游交接版本</h2>
+      <p>格式 v{snapshot.package.handoff.handoffFormatVersion} · 项目 {snapshot.package.handoff.projectId} · 交接包 {snapshot.package.handoff.packageId} · 演示版本 {snapshot.package.handoff.presentationVersion}</p>
+      <p>知识点资源 v{snapshot.package.handoff.documents.knowledge.resourceVersion} · 教案资源 v{snapshot.package.handoff.documents.lessonPlan.resourceVersion}</p>
+    </section> : null}
+    {snapshot?.package?.planningIssues?.length ? <section aria-label="上游规划核对" className="space-y-3 rounded-[10px] border border-amber-300 bg-amber-50 p-4">
+      <h2 className="font-semibold text-amber-950">上游规划核对</h2>
+      {snapshot.package.planningIssues.map((issue) => <details key={issue.id} className="border-t border-amber-200 pt-3" open={issue.requiresAcknowledgement}>
+        <summary className="cursor-pointer font-medium text-amber-950">{issue.requiresAcknowledgement ? "待确认" : "证据提示"} · {issue.summary}</summary>
+        <div className="space-y-2 pt-2 text-sm leading-6 text-amber-900"><p>{issue.detail}</p><p>处理建议：{issue.suggestion}</p>{issue.evidence.length ? <ul className="space-y-2">{issue.evidence.map((source, index) => <li className="rounded bg-white/70 p-2" key={index}><strong>{ROLES[source.documentRole]} · {source.locator}</strong><p className="whitespace-pre-wrap">{source.quote}</p></li>)}</ul> : null}</div>
+      </details>)}
+      {snapshot.package.planningIssues.some((issue) => issue.requiresAcknowledgement) ? <label className="flex items-start gap-2 text-sm font-medium text-amber-950">
+        <input checked={planningAcknowledged} className="mt-1 size-4" disabled={locked} onChange={(event) => setPlanningAcknowledged(event.target.checked)} type="checkbox" />
+        <span>我已核对上述规划问题；未修改的冲突按当前五阶段时间表和个人任务方式继续。</span>
+      </label> : null}
+    </section> : null}
     {validation.length ? <ul aria-label="待补充或修正的信息" className="space-y-1 rounded-[10px] bg-amber-50 p-3 text-sm text-amber-800">{validation.map((item) => <li key={item}>{item}</li>)}</ul> : null}
     {snapshot?.candidates && !processing ? <details open={snapshot.status === "needs_selection"} className="border-b border-stone-200 pb-3"><summary className="min-h-11 cursor-pointer py-2 font-medium">资料对应关系与教师原件</summary><fieldset className="space-y-3 pt-2" disabled={locked}>
       <legend className="mb-2 text-sm font-semibold">请选择各类资料对应的文件</legend>
@@ -210,6 +233,18 @@ export function ResourcePackageForm({ courseId, disabled, onConfirmed, onPackage
       <div className="grid gap-3 sm:grid-cols-3">
         {([['lessonCount', '课次数'], ['minutesPerLesson', '每课次分钟数'], ['totalMinutes', '课程总分钟数（必填）']] as const).map(([key, label]) => <Field key={key} label={label} numeric onChange={(value) => change({ ...draft, [key]: value === "" ? null : Number(value) })} value={draft[key]} />)}
       </div>
+      <details className="border-b border-stone-200 pb-3">
+        <summary className="min-h-11 cursor-pointer py-2 font-medium text-stone-800">上游备课约束与主持参考</summary>
+        <div className="space-y-3 pt-2">
+          <Field label="课前准备（每行一项）" multiline onChange={(value) => change({ ...draft, preClassPreparation: value.split("\n").filter(Boolean) })} value={draft.preClassPreparation?.join("\n") ?? ""} />
+          <Field label="组织安排（每行一项）" multiline onChange={(value) => change({ ...draft, organizationRequirements: value.split("\n").filter(Boolean) })} value={draft.organizationRequirements?.join("\n") ?? ""} />
+          <Field label="学生使用 AI 的边界" multiline onChange={(value) => change({ ...draft, aiUsagePolicy: value })} value={draft.aiUsagePolicy ?? ""} />
+          <Field label="AI 知识教学重点（每行一项）" multiline onChange={(value) => change({ ...draft, teachingHighlights: value.split("\n").filter(Boolean) })} value={draft.teachingHighlights?.join("\n") ?? ""} />
+          <Field label="AI 知识理解难点（每行一项）" multiline onChange={(value) => change({ ...draft, teachingDifficulties: value.split("\n").filter(Boolean) })} value={draft.teachingDifficulties?.join("\n") ?? ""} />
+          <Field label="教师主持参考（每行一项）" multiline onChange={(value) => change({ ...draft, facilitatorReference: value.split("\n").filter(Boolean) })} value={draft.facilitatorReference?.join("\n") ?? ""} />
+          {draft.knowledgeEvidenceSummary ? <p className="rounded bg-stone-100 p-3 text-sm leading-6 text-stone-700">知识证据总体状态：{draft.knowledgeEvidenceSummary.overallStatus}{draft.knowledgeEvidenceSummary.gaps.length ? `；${draft.knowledgeEvidenceSummary.gaps.join("；")}` : ""}</p> : null}
+        </div>
+      </details>
       <section aria-label="五阶段教案安排" className="space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2"><h2 className="font-semibold text-stone-900">五阶段教案安排</h2><span className="text-sm text-stone-500">阶段合计 {draft.stages.reduce((sum, stage) => sum + (stage.durationMin || 0), 0)} / {draft.totalMinutes ?? "待填写"} 分钟</span></div>
         <p className="text-sm text-stone-600">按一个学生与 AI 虚拟伙伴协作安排活动，每位学生提交自己的作品。</p>
@@ -246,7 +281,8 @@ export function ResourcePackageForm({ courseId, disabled, onConfirmed, onPackage
         <Field label="反思要点（每行一项）" multiline onChange={(value) => change({ ...draft, reflectionQuestions: value.split("\n"), reflectionQuestionSet: { id: draft.reflectionQuestionSet?.id ?? crypto.randomUUID(), version: draft.reflectionQuestionSet?.version ?? 1, questions: value.split("\n").filter(Boolean).map((prompt, index) => ({ id: draft.reflectionQuestionSet?.questions[index]?.id ?? crypto.randomUUID(), prompt, required: true })) } })} value={draft.reflectionQuestions.join("\n")} /></div>
       </details>
       <div className="flex flex-wrap items-center gap-3">
-        <button className={BUTTON} disabled={validation.length > 0 || (!dirty && Boolean(snapshot.package?.confirmedAt))} onClick={() => void update({ action: "confirm", revision: snapshot.package?.revision, draft })} type="button">{busy ? "正在保存…" : "确认并保存教学要求"}</button>
+        <button className={BUTTON} disabled={validation.length > 0 || (snapshot.package?.planningIssues?.some((issue) => issue.requiresAcknowledgement) && !planningAcknowledged) || (!dirty && Boolean(snapshot.package?.confirmedAt))} onClick={() => void update({ action: "confirm", revision: snapshot.package?.revision, draft,
+          ...(snapshot.package?.planningIssueVersion && planningAcknowledged ? { acknowledgement: { issueVersion: snapshot.package.planningIssueVersion, issueIds: snapshot.package.planningIssues?.filter((issue) => issue.requiresAcknowledgement).map((issue) => issue.id) ?? [] } } : {}) })} type="button">{busy ? "正在保存…" : "确认并保存教学要求"}</button>
         <span aria-live="polite" className="text-sm text-stone-600">{!dirty && snapshot.package?.confirmedAt ? "教学要求已确认，可开始生成课堂" : dirty ? "有修改待确认，草稿已保留" : "请核对自动识别的教学要求"}</span>
         {snapshot.status === "blocked" && snapshot.package?.conflictVersion ? <button className={`${BUTTON} border-amber-600 bg-amber-100`} disabled={validation.length > 0} onClick={() => void update({ action: "adapt", revision: snapshot.package?.revision, conflictVersion: snapshot.package?.conflictVersion, draft })} type="button">按系统流程适配后继续</button> : null}
       </div>

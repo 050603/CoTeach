@@ -45,6 +45,7 @@ export function TeacherStageView({
     case "ai-learning":
       return (
         <AiLearningTeacherView
+          immersive={immersive}
           presentation={presentation}
           course={course}
           onSelectStudent={onSelectStudent}

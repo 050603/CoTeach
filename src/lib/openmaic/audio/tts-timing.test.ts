@@ -21,10 +21,10 @@ describe('TTS timing model', () => {
     expect(countSpeechUnits('hello世界world')).toMatchObject({ cjkChars: 2, latinWords: 2, otherChars: 0 });
   });
   it('resolves a model-specific static profile', () => {
-    const qwen = getTtsTimingProfile('qwen-tts', 'qwen3-tts-flash');
+    const qwen = getTtsTimingProfile('qwen-tts', 'qwen-audio-3.0-tts-flash');
     const azure = getTtsTimingProfile('azure-tts', '');
 
-    expect(qwen.modelId).toBe('qwen3-tts-flash');
+    expect(qwen.modelId).toBe('qwen-audio-3.0-tts-flash');
     expect(azure.providerId).toBe('azure-tts');
     expect(qwen.id).not.toBe(azure.id);
   });
@@ -38,7 +38,7 @@ describe('TTS timing model', () => {
   });
 
   it('calculates enough Chinese content for a five-minute narration', () => {
-    const profile = getTtsTimingProfile('qwen-tts', 'qwen3-tts-flash');
+    const profile = getTtsTimingProfile('qwen-tts', 'qwen-audio-3.0-tts-flash');
     const budget = calculateTtsContentBudget(300, {
       profile,
       speed: 1,
@@ -304,10 +304,9 @@ describe('TTS timing model', () => {
     expect(Math.abs(estimated - 4.05)).toBeLessThan(0.4);
   });
 
-  it('loads independent deployed-voice calibration only for its complete identity', () => {
-    expect(getTtsTimingProfile('qwen-tts', 'qwen3-tts-flash', 'Ethan', 'en-US', 1).source).toBe('configured');
-    expect(getTtsTimingProfile('qwen-tts', 'qwen3-tts-flash', 'Ethan', 'de-DE', 1).source).toBe('seed');
-    expect(getTtsTimingProfile('qwen-tts', 'qwen3-tts-flash', 'Ethan', 'en-US', 1.2).source).toBe('seed');
+  it('does not reuse removed-model offline calibration for Qwen Audio 3.0', () => {
+    expect(getTtsTimingProfile('qwen-tts', 'qwen-audio-3.0-tts-flash', 'longanfengyue', 'en-US', 1).source).toBe('seed');
+    expect(getTtsTimingProfile('qwen-tts', 'qwen-audio-3.0-tts-plus', 'longanlingxin', 'zh-CN', 1).source).toBe('seed');
   });
 
   it('keeps an unusually long calibration from dominating ordinary short narration', () => {

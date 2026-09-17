@@ -3,13 +3,29 @@
  */
 
 import type { PlaybackSnapshot } from '@openmaic/lib/utils/playback-storage';
+import type { LaserWaypoint, VisualTargetSelector } from '@openmaic/lib/types/action';
 
 export type { PlaybackSnapshot };
 
 /** Visual effects (for onEffectFire callback) */
 export type Effect =
-  | { kind: 'spotlight'; targetId: string; dimOpacity?: number }
-  | { kind: 'laser'; targetId: string; color?: string };
+  | {
+      kind: 'spotlight';
+      targetId: string;
+      selector?: VisualTargetSelector;
+      speechId?: string;
+      endSpeechId?: string;
+      dimOpacity?: number;
+    }
+  | {
+      kind: 'laser';
+      targetId: string;
+      selector?: VisualTargetSelector;
+      waypoints?: LaserWaypoint[];
+      speechId?: string;
+      color?: string;
+      duration?: number;
+    };
 
 /** Engine mode state machine */
 export type EngineMode = 'idle' | 'playing' | 'paused' | 'live';

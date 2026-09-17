@@ -218,6 +218,7 @@ export function EditableElement({
     return (
       <div
         id={`editable-element-${elementInfo.id}`}
+        data-slide-element-id={elementInfo.id}
         className="editable-element absolute"
         style={{
           zIndex: elementIndex,
@@ -236,6 +237,7 @@ export function EditableElement({
   return (
     <div
       id={`editable-element-${elementInfo.id}`}
+      data-slide-element-id={elementInfo.id}
       className="editable-element absolute"
       style={{
         zIndex: elementIndex,

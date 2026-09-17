@@ -1812,15 +1812,39 @@ function formatElementsForPrompt(elements: PPTElement[]): string {
     .map((el) => {
       let summary = '';
       if (el.type === 'text' && 'content' in el) {
-        // Extract text content summary (strip HTML tags)
-        const textContent = ((el.content as string) || '').replace(/<[^>]*>/g, '').substring(0, 50);
-        summary = `Content summary: "${textContent}${textContent.length >= 50 ? '...' : ''}"`;
+        const textContent = ((el.content as string) || '').replace(/<[^>]*>/g, '').trim();
+        summary = `Visible text: ${JSON.stringify(textContent)}`;
+      } else if (el.type === 'table') {
+        const occupied = new Set<string>();
+        const cells = el.data.flatMap((row, rowIndex) => {
+          let columnIndex = 0;
+          return row.map((cell) => {
+            while (occupied.has(`${rowIndex}:${columnIndex}`)) columnIndex += 1;
+            const anchorColumn = columnIndex;
+            for (let rowOffset = 0; rowOffset < Math.max(1, cell.rowspan); rowOffset += 1) {
+              for (let columnOffset = 0; columnOffset < Math.max(1, cell.colspan); columnOffset += 1) {
+                occupied.add(`${rowIndex + rowOffset}:${anchorColumn + columnOffset}`);
+              }
+            }
+            columnIndex += Math.max(1, cell.colspan);
+            return {
+              cellId: cell.id,
+              row: rowIndex + 1,
+              column: anchorColumn + 1,
+              rowspan: cell.rowspan,
+              colspan: cell.colspan,
+              text: cell.text.replace(/<[^>]*>/g, '').trim(),
+            };
+          });
+        });
+        summary = `Renderable table cells: ${JSON.stringify(cells)}`;
       } else if (el.type === 'chart' && 'chartType' in el) {
-        summary = `Chart type: ${el.chartType}`;
+        summary = `Chart type: ${el.chartType}; labels: ${JSON.stringify(el.data.labels)}; legends: ${JSON.stringify(el.data.legends)}`;
       } else if (el.type === 'image') {
         summary = 'Image element';
-      } else if (el.type === 'shape' && 'shapeName' in el) {
-        summary = `Shape: ${el.shapeName || 'unknown'}`;
+      } else if (el.type === 'shape') {
+        const text = el.text?.content?.replace(/<[^>]*>/g, '').trim();
+        summary = `Shape element${text ? `; visible text: ${JSON.stringify(text)}` : ''}`;
       } else if (el.type === 'latex' && 'latex' in el) {
         summary = `Formula: ${((el.latex as string) || '').substring(0, 30)}`;
       } else {
@@ -1866,18 +1890,13 @@ function processActions(
       id: action.id || `action_${nanoid(8)}`,
     };
 
-    // Validate spotlight elementId
-    if (processedAction.type === 'spotlight') {
-      const spotlightAction = processedAction;
-      if (!spotlightAction.elementId || !elementIds.has(spotlightAction.elementId)) {
-        // If elementId is invalid, try selecting the first element
-        if (elements.length > 0) {
-          spotlightAction.elementId = elements[0].id;
-          log.warn(
-            `Invalid elementId, falling back to first element: ${spotlightAction.elementId}`,
-          );
-        }
-      }
+    // Keep invalid visual targets unchanged so the CoTeach validation pass can
+    // drop them with a quality warning. Never fabricate a first-element target.
+    if (
+      (processedAction.type === 'spotlight' || processedAction.type === 'laser')
+      && (!processedAction.elementId || !elementIds.has(processedAction.elementId))
+    ) {
+      log.warn(`Invalid ${processedAction.type} elementId: ${processedAction.elementId}`);
     }
 
     // Validate/fill discussion agentId
@@ -1904,19 +1923,8 @@ function processActions(
 /**
  * Generate default slide Actions (fallback)
  */
-function generateDefaultSlideActions(outline: SceneOutline, elements: PPTElement[]): Action[] {
+function generateDefaultSlideActions(outline: SceneOutline, _elements: PPTElement[]): Action[] {
   const actions: Action[] = [];
-
-  // Add spotlight for text elements
-  const textElements = elements.filter((el) => el.type === 'text');
-  if (textElements.length > 0) {
-    actions.push({
-      id: `action_${nanoid(8)}`,
-      type: 'spotlight',
-      title: '聚焦重点',
-      elementId: textElements[0].id,
-    });
-  }
 
   // Add opening speech based on key points
   const speechText = outline.keyPoints?.length

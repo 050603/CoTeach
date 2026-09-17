@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, type RefObject } from 'react';
 import { useCanvasStore } from '@openmaic/lib/store/canvas';
 import { useSceneSelector } from '@openmaic/lib/contexts/scene-context';
 import { useKeyboardStore } from '@openmaic/lib/store/keyboard';
@@ -43,6 +43,8 @@ import {
 
 export interface CanvasProps {
   editable?: boolean;
+  /** Explicit DOM root for visual-cue targeting in the current slide only. */
+  slideRootRef?: RefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -59,9 +61,10 @@ export interface CanvasProps {
  *   <Canvas />
  * </SceneProvider>
  */
-export function Canvas(_props: CanvasProps) {
+export function Canvas({ slideRootRef }: CanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
-  const viewportRef = useRef<HTMLDivElement>(null);
+  const internalViewportRef = useRef<HTMLDivElement>(null);
+  const viewportRef = slideRootRef ?? internalViewportRef;
 
   // Subscribe to specific parts for performance optimization
   const elements = useSceneSelector<SlideContent, PPTElement[]>(

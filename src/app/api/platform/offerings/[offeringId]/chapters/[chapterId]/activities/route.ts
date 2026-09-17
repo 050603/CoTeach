@@ -6,7 +6,7 @@ import { jsonError } from "@/lib/platform/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-const schema = z.object({ type: ActivityTypeSchema, title: z.string().trim().min(1).max(160), description: z.string().max(20_000).optional(), position: z.number().int().min(0).optional(), templateId: z.string().trim().optional(), config: z.unknown().optional() });
+const schema = z.object({ type: ActivityTypeSchema, title: z.string().trim().min(1).max(160), description: z.string().max(20_000).optional(), position: z.number().int().min(0).optional(), templateVersionId: z.string().trim().optional(), config: z.unknown().optional() });
 
 export async function POST(request: Request, context: { params: Promise<{ offeringId: string; chapterId: string }> }) {
   const csrf = requireSameOrigin(request); if (csrf) return csrf;
@@ -16,4 +16,3 @@ export async function POST(request: Request, context: { params: Promise<{ offeri
   try { return Response.json({ activity: await createActivity(auth.claims, offeringId, chapterId, parsed.data) }, { status: 201 }); }
   catch (error) { if (error instanceof PlatformError) return jsonError(request, error.code, error.message, error.status); return jsonError(request, "ACTIVITY_CREATE_FAILED", "无法创建活动", 503); }
 }
-

@@ -628,6 +628,12 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 id: `${effect.kind}-${Date.now()}`,
                 type: effect.kind,
                 elementId: effect.targetId,
+                selector: effect.selector,
+                speechId: effect.speechId,
+                ...(effect.kind === 'spotlight' ? { endSpeechId: effect.endSpeechId } : {}),
+                ...(effect.kind === 'laser'
+                  ? { duration: effect.duration, waypoints: effect.waypoints }
+                  : {}),
               } as Action,
               idx,
             );

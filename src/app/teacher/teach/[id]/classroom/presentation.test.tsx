@@ -72,6 +72,10 @@ describe("teacher full-screen classroom integration", () => {
     const stage = screen.getByTestId("stage");
     fireEvent.change(screen.getByLabelText("阶段编辑草稿"), { target: { value: "保留中的课堂点评" } });
     enterPresentation();
+    const footer = screen.getByRole("contentinfo", { name: "全屏课堂操作栏" });
+    expect(footer).toHaveAttribute("data-layout", "single-row");
+    expect(within(screen.getByRole("group", { name: "左侧展示操作" })).getByRole("button", { name: "授课展示" })).toBeTruthy();
+    expect(within(screen.getByRole("group", { name: "右侧课堂操作" })).getByRole("button", { name: "课堂操作" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "原有阶段操作" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "班级学情" }));
     expect(screen.getByTestId("stage").dataset.presentation).toBe("analytics");
@@ -103,19 +107,21 @@ describe("teacher full-screen classroom integration", () => {
     expect(mocks.updateCourse).not.toHaveBeenCalled();
   });
 
-  it("keeps the reflection question view visible in analytics and opens operations without changing the stage", () => {
+  it("keeps reflection in a single-row footer without teaching and analytics toggles", () => {
     mocks.course = { ...makeCourse(), currentStageIndex: 4 };
     render(<TeachClassroomPage />);
     enterPresentation();
     const stage = screen.getByTestId("stage");
-    fireEvent.click(screen.getByRole("button", { name: "班级学情" }));
-    expect(stage.dataset.presentation).toBe("analytics");
+    expect(screen.queryByRole("button", { name: "授课展示" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "班级学情" })).toBeNull();
+    expect(screen.getByRole("contentinfo", { name: "全屏课堂操作栏" })).toHaveAttribute("data-layout", "single-row");
+    expect(stage.dataset.presentation).toBe("teaching");
     expect(stage.closest("section")).not.toHaveAttribute("hidden");
     expect(screen.queryByRole("region", { name: "班级汇总" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "课堂操作" }));
     expect(stage.dataset.presentation).toBe("workspace");
-    fireEvent.click(screen.getByRole("button", { name: "返回汇总" }));
-    expect(stage.dataset.presentation).toBe("analytics");
+    fireEvent.click(screen.getByRole("button", { name: "返回展示" }));
+    expect(stage.dataset.presentation).toBe("teaching");
     expect(stage.closest("section")).not.toHaveAttribute("hidden");
     expect(mocks.updateCourse).not.toHaveBeenCalled();
   });
@@ -143,7 +149,9 @@ describe("teacher full-screen classroom integration", () => {
   it("uses existing timer adjustments inside a fullscreen dialog", () => {
     render(<TeachClassroomPage />);
     enterPresentation();
-    fireEvent.click(screen.getByRole("button", { name: "计时" }));
+    expect(screen.queryByRole("button", { name: "计时" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "工具" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "课堂工具" })).getByRole("button", { name: "课堂计时" }));
     const dialog = screen.getByRole("dialog", { name: "课堂计时" });
     fireEvent.click(within(dialog).getByRole("button", { name: "+2 分" }));
     expect(mocks.updateCourse).toHaveBeenCalledOnce();

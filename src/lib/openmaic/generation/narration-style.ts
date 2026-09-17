@@ -4,6 +4,10 @@ import type { AICallFn } from './pipeline-types';
 import { parseJsonResponse } from './json-repair';
 import { enforceNarrationContinuity } from './narration-continuity';
 import type { SceneGenerationContext } from './pipeline-types';
+import {
+  isAbortError,
+  isRetryableGenerationError,
+} from './generation-retry';
 
 type NarrationSegment = { id: string; text: string };
 
@@ -11,7 +15,7 @@ export const NATURAL_NARRATION_VERSION = 'natural-teacher-speech-v2';
 const NARRATION_REWRITE_ATTEMPTS = 2;
 
 const META_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
-  { label: '页面制作视角', pattern: /(?:这一页|这页|本页|上一页|下一页|当前页|页面|幻灯片|课件|PPT)/i },
+  { label: '页面制作视角', pattern: /(?:这一页|这页|本页|上一页|下一页|当前页|这张幻灯片|当前(?:课件|PPT))/i },
   { label: '讲稿提纲标签', pattern: /(?:核心观点|核心命题|本页主张|这页的主张|本页给出|这一页给出|本页承担)/ },
   { label: '资料编号', pattern: /(?:资料|材料)\s*[一二三四五六七八九十\d]+\s*(?:指出|要求|强调|认为|提出|说明)?/ },
   { label: '书面排版符号', pattern: /(?:^|\s)[#*]{1,3}\s|```|\|/m },
@@ -31,6 +35,19 @@ export function narrationStyleIssues(segments: readonly NarrationSegment[]): str
     }
     return issues;
   });
+}
+
+function narrationDepthIssues(
+  outline: SceneOutline,
+  segments: readonly NarrationSegment[],
+): string[] {
+  const minimumUnits = outline.timingPlan?.minUnits;
+  if (!minimumUnits) return [];
+  const actualUnits = segments.reduce((sum, segment) =>
+    sum + segment.text.replace(/\s/g, '').length, 0);
+  return actualUnits < Math.floor(minimumUnits * 0.7)
+    ? [`讲稿只有约 ${actualUnits} 个有效字符，未达到既定教学内容量`]
+    : [];
 }
 
 export function normalizeNarrationRewrite(
@@ -57,6 +74,26 @@ export function normalizeNarrationRewrite(
   const issues = narrationStyleIssues(segments);
   if (issues.length) throw new Error(`口语化讲稿仍有问题：${issues.join('；')}`);
   return segments;
+}
+
+function preservationIssues(
+  before: readonly NarrationSegment[],
+  after: readonly NarrationSegment[],
+): string[] {
+  const afterById = new Map(after.map((segment) => [segment.id, segment.text]));
+  return before.flatMap((segment) => {
+    const next = afterById.get(segment.id) ?? '';
+    const issues: string[] = [];
+    if (next.length < Math.max(12, Math.floor(segment.text.length * 0.7))) {
+      issues.push(`${segment.id} 改写后篇幅不足，可能删减了教学解释`);
+    }
+    const anchors = Array.from(new Set(
+      segment.text.match(/\d+(?:\.\d+)?%?|[A-Za-z][A-Za-z0-9+.#-]{1,}|《[^》]{2,}》/g) ?? [],
+    ));
+    const missing = anchors.filter((anchor) => !next.includes(anchor));
+    if (missing.length > 0) issues.push(`${segment.id} 丢失关键事实标记：${missing.join('、')}`);
+    return issues;
+  });
 }
 
 export function buildNarrationRewritePrompt(
@@ -97,7 +134,17 @@ export async function naturalizeKnowledgeNarration(input: {
     ? [{ id: action.id, text: action.text }]
     : []);
   if (!segments.length) return input.actions.map((action) => ({ ...action }));
-  const prompt = buildNarrationRewritePrompt(input.outline, segments);
+  const depthIssues = narrationDepthIssues(input.outline, segments);
+  const affected = depthIssues.length > 0
+    ? segments
+    : segments.filter((segment) => narrationStyleIssues([segment]).length > 0);
+  // The action prompt already asks for natural teacher speech. Preserve a
+  // conforming first draft byte-for-byte instead of paying for a second model
+  // pass that cannot add teaching value.
+  if (affected.length === 0) {
+    return input.actions.map((action) => ({ ...action }));
+  }
+  const prompt = buildNarrationRewritePrompt(input.outline, affected);
   let lastError: unknown;
   for (let attempt = 1; attempt <= NARRATION_REWRITE_ATTEMPTS; attempt += 1) {
     const correction = attempt === 1
@@ -107,19 +154,27 @@ export async function naturalizeKnowledgeNarration(input: {
       const response = await input.aiCall(prompt.system, `${prompt.user}${correction}`);
       const rewritten = normalizeNarrationRewrite(
         parseJsonResponse<unknown>(response),
-        segments,
+        affected,
       );
+      const lostContent = preservationIssues(affected, rewritten);
+      if (lostContent.length > 0) {
+        throw new Error(`口语化讲稿未保留原有教学内容：${lostContent.join('；')}`);
+      }
       const textById = new Map(rewritten.map((segment) => [segment.id, segment.text]));
       return enforceNarrationContinuity(input.actions.map((action) => action.type === 'speech'
         ? { ...action, text: textById.get(action.id) ?? action.text }
         : { ...action }), input.context);
     } catch (error) {
+      // Transport retries belong to createCourseGenerationAiCall. Rewriting
+      // the same content again here would hide the provider failure and double
+      // the cost. Cancellation must also propagate immediately.
+      if (isAbortError(error) || isRetryableGenerationError(error)) throw error;
       lastError = error;
     }
   }
   const error = new Error(
     `口语化讲稿连续 ${NARRATION_REWRITE_ATTEMPTS} 次未通过验收，已停止课程生成：${lastError instanceof Error ? lastError.message : String(lastError)}`,
   );
-  Object.assign(error, { isRetryable: true });
+  Object.assign(error, { isRetryable: false });
   throw error;
 }

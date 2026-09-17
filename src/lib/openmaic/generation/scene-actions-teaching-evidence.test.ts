@@ -20,8 +20,11 @@ describe("teaching-enhanced narration evidence boundary", () => {
     expect(prompt).toContain("不能复用训练集");
     expect(prompt).toContain("说明判断依据");
     expect(prompt).toContain("Speak like a teacher addressing this class");
-    expect(prompt).not.toContain("最后的必要条件不可省略");
-    expect(prompt).not.toContain("形状中的实际结论");
+    expect(prompt).toContain("最后的必要条件不可省略");
+    expect(prompt).toContain("形状中的实际结论");
+    const sharedTeachingDesign = prompt.split("## CoTeach shared teaching design")[1] ?? "";
+    expect(sharedTeachingDesign).not.toContain("最后的必要条件不可省略");
+    expect(sharedTeachingDesign).not.toContain("形状中的实际结论");
     expect(prompt).not.toContain("记录正确率为0.75");
     expect(prompt).not.toContain("原始教案：样本必须独立");
     expect(prompt).not.toContain("墨绿主色");

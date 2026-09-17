@@ -5,9 +5,8 @@
  * Endpoint: https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
  *
  * Supported models:
- * - qwen-image-2.0-pro (high semantic fidelity and detail)
- * - qwen-image-max     (legacy high-quality generation)
- * - z-image-turbo      (fast generation)
+ * - qwen-image-3.0-pro
+ * - qwen-image-3.0
  *
  * API docs: https://help.aliyun.com/zh/model-studio/qwen-image-api
  */
@@ -18,8 +17,11 @@ import type {
   ImageGenerationOptions,
   ImageGenerationResult,
 } from '../types';
+import {
+  DEFAULT_QWEN_IMAGE_MODEL_ID,
+  normalizeQwenImageModel,
+} from '../qwen-image-catalog';
 
-const DEFAULT_MODEL = 'qwen-image-max';
 const DEFAULT_BASE_URL = 'https://dashscope.aliyuncs.com';
 
 /**
@@ -65,7 +67,7 @@ export async function testQwenImageConnectivity(
           Authorization: `Bearer ${config.apiKey}`,
         },
         body: JSON.stringify({
-          model: config.model || DEFAULT_MODEL,
+          model: normalizeQwenImageModel(config.model || DEFAULT_QWEN_IMAGE_MODEL_ID),
           input: { messages: [{ role: 'user', content: [{ text: '' }] }] },
           parameters: { size: '1*1' },
         }),
@@ -98,7 +100,7 @@ export async function generateWithQwenImage(
       Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify({
-      model: config.model || DEFAULT_MODEL,
+      model: normalizeQwenImageModel(config.model || DEFAULT_QWEN_IMAGE_MODEL_ID),
       input: {
         messages: [
           {

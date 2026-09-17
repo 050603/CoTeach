@@ -5,6 +5,7 @@ import type { AICallFn } from './pipeline-types';
 import { parseJsonResponse } from './json-repair';
 import { mapWithConcurrencySettledOnError } from '@openmaic/lib/utils/concurrency';
 import { isAbortError } from './generation-retry';
+import { fingerprintGenerationValue } from '@/lib/course-generation/page-checkpoints';
 
 export const TEACHING_ENHANCEMENT_VERSION = 'section-teaching-brief-v2';
 const TEACHING_SOURCE_LIMIT = 12_000;
@@ -168,6 +169,18 @@ export async function enhanceTeachingBriefs(input: {
   concurrency?: number;
   onProgress?: (progress: { completedSections: number; totalSections: number }) => Promise<void> | void;
   onWarning?: (warning: string) => Promise<void> | void;
+  modelFingerprint?: string;
+  loadSectionCheckpoint?: (
+    sectionKey: string,
+    inputFingerprint: string,
+    modelFingerprint: string,
+  ) => Promise<Array<[string, unknown]> | null> | Array<[string, unknown]> | null;
+  onSectionCompleted?: (
+    sectionKey: string,
+    inputFingerprint: string,
+    modelFingerprint: string,
+    briefs: Array<[string, unknown]>,
+  ) => Promise<void> | void;
 }): Promise<SceneOutline[]> {
   const pages = input.outlines.filter(teachingPage);
   const missing = pages.filter((page) => !hasCompleteTeachingBrief(page));
@@ -189,6 +202,28 @@ export async function enhanceTeachingBriefs(input: {
     Math.min(2, Math.max(1, Math.floor(input.concurrency ?? 2))),
     async (sectionPages) => {
       try {
+        const sectionKey = sectionIdentity(sectionPages[0]!);
+        const inputFingerprint = fingerprintGenerationValue({
+          pages: sectionPages,
+          courseTitle: input.courseTitle,
+          requirement: input.requirement,
+          sourceContext: input.sourceContext,
+          version: TEACHING_ENHANCEMENT_VERSION,
+        });
+        const modelFingerprint = input.modelFingerprint ?? 'unspecified-model';
+        const restored = await input.loadSectionCheckpoint?.(
+          sectionKey,
+          inputFingerprint,
+          modelFingerprint,
+        );
+        if (Array.isArray(restored)) {
+          const restoredBriefs = new Map<string, TeachingBrief>();
+          for (const entry of restored) {
+            if (!Array.isArray(entry) || typeof entry[0] !== 'string' || !entry[1] || typeof entry[1] !== 'object') continue;
+            restoredBriefs.set(entry[0], entry[1] as TeachingBrief);
+          }
+          if (sectionPages.every((page) => restoredBriefs.has(page.id))) return restoredBriefs;
+        }
         const prompt = buildTeachingEnhancementPrompt({ ...input, pages: sectionPages });
         const response = await input.aiCall(prompt.system, prompt.user);
         const parsed = parseJsonResponse<unknown>(response);
@@ -204,6 +239,12 @@ export async function enhanceTeachingBriefs(input: {
           failures.push(warning);
           await input.onWarning?.(warning);
         }
+        await input.onSectionCompleted?.(
+          sectionKey,
+          inputFingerprint,
+          modelFingerprint,
+          [...sectionBriefs.entries()],
+        );
         return sectionBriefs;
       } catch (error) {
         if (isAbortError(error)) throw error;

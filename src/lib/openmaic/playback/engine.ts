@@ -24,7 +24,13 @@
  */
 
 import type { Scene } from '@openmaic/lib/types/stage';
-import type { Action, SpeechAction, DiscussionAction } from '@openmaic/lib/types/action';
+import type {
+  Action,
+  SpeechAction,
+  DiscussionAction,
+  SpotlightAction,
+  LaserAction,
+} from '@openmaic/lib/types/action';
 import type {
   EngineMode,
   TopicState,
@@ -67,6 +73,94 @@ const log = createLogger('PlaybackEngine');
  * numbers, and short Latin fragments (e.g. "AI课堂").
  */
 const CJK_LANG_THRESHOLD = 0.3;
+const LASER_DEFAULT_DURATION_MS = 2500;
+
+type VisualCueAction = SpotlightAction | LaserAction;
+
+interface ActiveEffectRange {
+  speechIds: Set<string>;
+  endSpeechId: string;
+}
+
+function isVisualCue(action: Action): action is VisualCueAction {
+  return action.type === 'spotlight' || action.type === 'laser';
+}
+
+function isSpeechBarrier(action: Action): boolean {
+  if (action.type !== 'speech') return !isVisualCue(action);
+  const timed = action as SpeechAction & {
+    timelinePauseSec?: number;
+    activityPauseSec?: number;
+  };
+  return Number(timed.timelinePauseSec) > 0 || Number(timed.activityPauseSec) > 0;
+}
+
+/**
+ * Resolve the contiguous narration interval owned by one cue. Legacy cues and
+ * lasers own one speech; a spotlight may extend through endSpeechId.
+ */
+function resolveVisualCueRange(
+  actions: ReadonlyArray<Action>,
+  cue: VisualCueAction,
+  fallbackSpeechId?: string,
+): ActiveEffectRange | null {
+  const startSpeechId = cue.speechId ?? fallbackSpeechId;
+  if (!startSpeechId) return null;
+  const endSpeechId = cue.type === 'spotlight'
+    ? (cue.endSpeechId ?? startSpeechId)
+    : startSpeechId;
+  const startIndex = actions.findIndex(
+    (candidate) => candidate.type === 'speech' && candidate.id === startSpeechId,
+  );
+  const endIndex = actions.findIndex(
+    (candidate) => candidate.type === 'speech' && candidate.id === endSpeechId,
+  );
+  if (startIndex < 0 || endIndex < startIndex) return null;
+
+  const interval = actions.slice(startIndex, endIndex + 1);
+  if (interval.some(isSpeechBarrier)) return null;
+  const speechIds = new Set(
+    interval.flatMap((candidate) => candidate.type === 'speech' ? [candidate.id] : []),
+  );
+  return speechIds.size > 0 ? { speechIds, endSpeechId } : null;
+}
+
+/** Resolve an explicit binding first, then support the legacy adjacent cue shape. */
+function findVisualCueForSpeech(
+  actions: ReadonlyArray<Action>,
+  speechIndex: number,
+): VisualCueAction | null {
+  const speech = actions[speechIndex];
+  if (!speech || speech.type !== 'speech') return null;
+  let rangedCue: VisualCueAction | null = null;
+  for (let index = speechIndex - 1; index >= 0; index--) {
+    const candidate = actions[index];
+    if (!isVisualCue(candidate) || !candidate.speechId) continue;
+    if (candidate.speechId === speech.id && (candidate.speechOffsetMs ?? 0) > 0) continue;
+    const range = resolveVisualCueRange(actions, candidate);
+    if (range?.speechIds.has(speech.id)) {
+      rangedCue = candidate;
+      break;
+    }
+  }
+  if (rangedCue) return rangedCue;
+  for (let index = speechIndex - 1; index >= 0; index--) {
+    const candidate = actions[index];
+    if (candidate.type === 'speech') break;
+    if (isVisualCue(candidate) && !candidate.speechId) return candidate;
+  }
+  return null;
+}
+
+function estimatedSpeechMediaDurationMs(text: string): number {
+  const cjkCount = (
+    text.match(/[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g) || []
+  ).length;
+  const isCJK = cjkCount > text.length * 0.3;
+  return isCJK
+    ? Math.max(2000, text.length * 150)
+    : Math.max(2000, text.split(/\s+/).filter(Boolean).length * 240);
+}
 
 export class PlaybackEngine {
   private scenes: Scene[] = [];
@@ -110,6 +204,13 @@ export class PlaybackEngine {
   private activeActivity: ActivityGate | null = null;
   private seekVersion = 0;
   private pendingSpeechStartRatio = 0;
+  private activeEffectRange: ActiveEffectRange | null = null;
+  private currentSpeechActionId: string | null = null;
+  private speechCueTimer: ReturnType<typeof setTimeout> | null = null;
+  private speechCueTimerStartedAt = 0;
+  private speechCueTimerRemaining = 0;
+  private speechCueQueue: VisualCueAction[] = [];
+  private speechCueScheduleSpeechId: string | null = null;
 
   constructor(
     scenes: Scene[],
@@ -183,7 +284,20 @@ export class PlaybackEngine {
       return;
     }
     this.setMode('playing');
-    this.processNext();
+    const actions = this.scenes[this.sceneIndex]?.actions ?? [];
+    const visualCue = findVisualCueForSpeech(actions, this.actionIndex);
+    if (visualCue) {
+      void this.executeActionSafely(visualCue).then(() => {
+        const speech = actions[this.actionIndex];
+        this.activeEffectRange = speech?.type === 'speech'
+          ? resolveVisualCueRange(actions, visualCue, speech.id)
+          : null;
+        this.fireEffectCallback(visualCue);
+        if (this.mode === 'playing') this.processNext();
+      });
+    } else {
+      this.processNext();
+    }
   }
 
   /** Restart playback from one exact speech cue in the current scene. */
@@ -199,7 +313,13 @@ export class PlaybackEngine {
     this.pendingSpeechStartRatio = Math.max(0, Math.min(0.999, startRatio));
     this.setMode('playing');
     void this.actionEngine.restoreWhiteboard((scene.actions ?? []).slice(0, actionIndex))
-      .then(() => {
+      .then(async () => {
+        const visualCue = findVisualCueForSpeech(scene.actions ?? [], actionIndex);
+        if (visualCue) {
+          await this.executeActionSafely(visualCue);
+          this.activeEffectRange = resolveVisualCueRange(scene.actions ?? [], visualCue, action.id);
+          this.fireEffectCallback(visualCue);
+        }
         if (this.mode === 'playing' && this.seekVersion === seekVersion) this.processNext();
       })
       .catch((cause) => {
@@ -233,6 +353,8 @@ export class PlaybackEngine {
         this.speechTimer = null;
       }
       this.setMode('paused');
+      this.actionEngine.pauseEffects?.();
+      this.pauseSpeechCueSchedule();
       // Freeze TTS — but skip if waiting on ProactiveCard (no active speech)
       if (!this.currentTrigger) {
         if (this.browserTTSActive) {
@@ -277,6 +399,8 @@ export class PlaybackEngine {
     } else {
       // Resume lecture
       this.setMode('playing');
+      this.actionEngine.resumeEffects?.();
+      this.resumeSpeechCueSchedule();
       if (this.browserTTSPausedChunks.length > 0) {
         // Browser TTS was paused via cancel — re-speak remaining chunks
         this.browserTTSActive = true;
@@ -302,6 +426,7 @@ export class PlaybackEngine {
           } else {
             this.speechTimer = null;
             this.speechTimerRemaining = 0;
+            this.finishSpeechEffect(this.currentSpeechActionId);
             this.callbacks.onSpeechEnd?.();
             if (this.mode === 'playing') this.processNext();
           }
@@ -341,6 +466,9 @@ export class PlaybackEngine {
     this.currentTopicState = null;
     this.currentTrigger = null;
     this.pendingSpeechStartRatio = 0;
+    this.activeEffectRange = null;
+    this.currentSpeechActionId = null;
+    this.clearSpeechCueSchedule();
   }
 
   /** User clicks "Join" on ProactiveCard → save cursor → live */
@@ -449,6 +577,9 @@ export class PlaybackEngine {
     // processNext that would advance actionIndex past the interrupted speech.
     this.currentTopicState = 'active';
     this.setMode('live');
+    this.actionEngine.clearEffects();
+    this.activeEffectRange = null;
+    this.clearSpeechCueSchedule();
     this.audioPlayer.stop();
     this.cancelBrowserTTS();
     this.callbacks.onUserInterrupt?.(text);
@@ -482,6 +613,111 @@ export class PlaybackEngine {
     if (this.mode === mode) return;
     this.mode = mode;
     this.callbacks.onModeChange?.(mode);
+  }
+
+  private clearSpeechCueSchedule(): void {
+    if (this.speechCueTimer) clearTimeout(this.speechCueTimer);
+    this.speechCueTimer = null;
+    this.speechCueTimerStartedAt = 0;
+    this.speechCueTimerRemaining = 0;
+    this.speechCueQueue = [];
+    this.speechCueScheduleSpeechId = null;
+  }
+
+  private pauseSpeechCueSchedule(): void {
+    if (!this.speechCueTimer) return;
+    clearTimeout(this.speechCueTimer);
+    this.speechCueTimer = null;
+    this.speechCueTimerRemaining = Math.max(
+      0,
+      this.speechCueTimerRemaining - (Date.now() - this.speechCueTimerStartedAt),
+    );
+  }
+
+  private resumeSpeechCueSchedule(): void {
+    if (
+      this.speechCueScheduleSpeechId !== this.currentSpeechActionId
+      || this.speechCueQueue.length === 0
+    ) return;
+    this.scheduleNextSpeechCue(this.speechCueTimerRemaining);
+  }
+
+  private scheduleNextSpeechCue(delayMs: number): void {
+    if (this.speechCueQueue.length === 0 || !this.speechCueScheduleSpeechId) return;
+    this.speechCueTimerRemaining = Math.max(0, delayMs);
+    if (this.mode !== 'playing') return;
+    this.speechCueTimerStartedAt = Date.now();
+    this.speechCueTimer = setTimeout(() => {
+      this.speechCueTimer = null;
+      this.speechCueTimerRemaining = 0;
+      const cue = this.speechCueQueue.shift();
+      if (
+        !cue
+        || this.mode !== 'playing'
+        || this.currentSpeechActionId !== this.speechCueScheduleSpeechId
+      ) return;
+      void this.executeActionSafely(cue);
+      const actions = this.scenes[this.sceneIndex]?.actions ?? [];
+      this.activeEffectRange = resolveVisualCueRange(actions, cue, cue.speechId);
+      this.fireEffectCallback(cue);
+      const next = this.speechCueQueue[0];
+      if (next) {
+        const speed = Math.max(0.1, this.callbacks.getPlaybackSpeed?.() ?? 1);
+        const interval = Math.max(
+          0,
+          ((next.speechOffsetMs ?? 0) - (cue.speechOffsetMs ?? 0)) / speed,
+        );
+        this.scheduleNextSpeechCue(interval);
+      }
+    }, this.speechCueTimerRemaining);
+  }
+
+  private startSpeechCueSchedule(
+    speech: SpeechAction,
+    startRatio: number,
+    durationMs: number,
+  ): void {
+    if (this.currentSpeechActionId !== speech.id) return;
+    this.clearSpeechCueSchedule();
+    const actions = this.scenes[this.sceneIndex]?.actions ?? [];
+    const cues = actions
+      .filter((action): action is VisualCueAction => (
+        isVisualCue(action)
+        && action.speechId === speech.id
+        && (action.speechOffsetMs ?? 0) > 0
+        && Boolean(resolveVisualCueRange(actions, action)?.speechIds.has(speech.id))
+      ))
+      .sort((left, right) => (
+        (left.speechOffsetMs ?? 0) - (right.speechOffsetMs ?? 0)
+      ));
+    if (cues.length === 0) return;
+
+    const mediaDuration = durationMs > 0
+      ? durationMs
+      : estimatedSpeechMediaDurationMs(speech.text);
+    const currentMediaMs = Math.max(0, Math.min(0.999, startRatio)) * mediaDuration;
+    const elapsed = cues.filter((cue) => (cue.speechOffsetMs ?? 0) <= currentMediaMs);
+    const latest = elapsed.at(-1);
+    if (latest) {
+      const offset = latest.speechOffsetMs ?? 0;
+      const stillVisible = latest.type === 'spotlight'
+        || currentMediaMs - offset < (latest.duration ?? LASER_DEFAULT_DURATION_MS);
+      if (stillVisible) {
+        void this.executeActionSafely(latest);
+        this.activeEffectRange = resolveVisualCueRange(actions, latest, speech.id);
+        this.fireEffectCallback(latest);
+      } else {
+        this.actionEngine.clearEffects();
+        this.activeEffectRange = null;
+      }
+    }
+
+    this.speechCueQueue = cues.filter((cue) => (cue.speechOffsetMs ?? 0) > currentMediaMs);
+    this.speechCueScheduleSpeechId = speech.id;
+    const next = this.speechCueQueue[0];
+    if (!next) return;
+    const speed = Math.max(0.1, this.callbacks.getPlaybackSpeed?.() ?? 1);
+    this.scheduleNextSpeechCue(((next.speechOffsetMs ?? 0) - currentMediaMs) / speed);
   }
 
   private restoreSavedLectureState(): void {
@@ -534,6 +770,8 @@ export class PlaybackEngine {
     if (this.actionIndex === 0 && this.sceneIndex < this.scenes.length) {
       const scene = this.scenes[this.sceneIndex];
       this.actionEngine.clearEffects();
+      this.activeEffectRange = null;
+      this.clearSpeechCueSchedule();
       this.callbacks.onSceneChange?.(scene.id);
       this.callbacks.onSpeakerChange?.('teacher');
     }
@@ -541,6 +779,7 @@ export class PlaybackEngine {
     const current = this.getCurrentAction();
     if (!current) {
       // All scenes complete
+      this.clearSpeechCueSchedule();
       this.actionEngine.clearEffects();
       this.setMode('idle');
       this.callbacks.onComplete?.();
@@ -559,6 +798,12 @@ export class PlaybackEngine {
     switch (action.type) {
       case 'speech': {
         const speechAction = action as SpeechAction;
+        this.clearSpeechCueSchedule();
+        if (this.activeEffectRange && !this.activeEffectRange.speechIds.has(speechAction.id)) {
+          this.actionEngine.clearEffects();
+          this.activeEffectRange = null;
+        }
+        this.currentSpeechActionId = speechAction.id;
         const speechStartRatio = this.pendingSpeechStartRatio;
         this.pendingSpeechStartRatio = 0;
         const timelinePauseSec = Number(
@@ -568,6 +813,8 @@ export class PlaybackEngine {
           }).timelinePauseSec,
         );
         if (Number.isFinite(timelinePauseSec) && timelinePauseSec > 0) {
+          this.actionEngine.clearEffects();
+          this.activeEffectRange = null;
           const pauseMs = timelinePauseSec * 1000;
           this.speechTimerStart = Date.now();
           this.speechTimerRemaining = pauseMs;
@@ -585,6 +832,8 @@ export class PlaybackEngine {
           (speechAction as SpeechAction & { activityPauseSec?: number }).activityPauseSec,
         );
         if (Number.isFinite(activityPauseSec) && activityPauseSec > 0) {
+          this.actionEngine.clearEffects();
+          this.activeEffectRange = null;
           const configuredPurpose = (speechAction as SpeechAction & {
             activityPausePurpose?: ActivityPurpose;
           }).activityPausePurpose;
@@ -616,6 +865,7 @@ export class PlaybackEngine {
         // onEnded → processNext; if paused, resume() will call processNext
         this.audioPlayer.onEnded(() => {
           this.callbacks.onSpeechProgress?.(1);
+          this.finishSpeechEffect(speechAction.id);
           this.callbacks.onSpeechEnd?.();
           if (this.mode === 'playing') {
             this.processNext();
@@ -628,15 +878,10 @@ export class PlaybackEngine {
         // Min 2s. Cancelled on pause; resume() calls processNext directly.
         const scheduleReadingTimer = () => {
           const text = speechAction.text;
-          const cjkCount = (
-            text.match(/[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g) || []
-          ).length;
-          const isCJK = cjkCount > text.length * 0.3;
           const speed = this.callbacks.getPlaybackSpeed?.() ?? 1;
-          const rawMs = isCJK
-            ? Math.max(2000, text.length * 150)
-            : Math.max(2000, text.split(/\s+/).filter(Boolean).length * 240);
+          const rawMs = estimatedSpeechMediaDurationMs(text);
           const readingMs = rawMs / speed;
+          this.startSpeechCueSchedule(speechAction, speechStartRatio, rawMs);
           this.speechTimerStart = Date.now();
           this.speechTimerRemaining = readingMs;
           this.speechTimerIsActivityPause = false;
@@ -644,6 +889,7 @@ export class PlaybackEngine {
           this.speechTimer = setTimeout(() => {
             this.speechTimer = null;
             this.speechTimerRemaining = 0;
+            this.finishSpeechEffect(speechAction.id);
             this.callbacks.onSpeechEnd?.();
             if (this.mode === 'playing') this.processNext();
           }, readingMs);
@@ -667,6 +913,11 @@ export class PlaybackEngine {
             browserNativeEnabled,
             speechSynthesisAvailable: typeof window !== 'undefined' && Boolean(window.speechSynthesis),
           })) {
+            this.startSpeechCueSchedule(
+              speechAction,
+              speechStartRatio,
+              estimatedSpeechMediaDurationMs(speechAction.text),
+            );
             this.playBrowserTTS(speechAction);
           } else {
             scheduleReadingTimer();
@@ -676,11 +927,19 @@ export class PlaybackEngine {
         this.audioPlayer
           .play(speechAction.audioId || '', speechAction.audioUrl, speechStartRatio)
           .then((audioStarted) => {
-            if (!audioStarted) {
+            if (audioStarted) {
+              this.startSpeechCueSchedule(
+                speechAction,
+                speechStartRatio,
+                this.audioPlayer.getDuration?.() ?? 0,
+              );
+            } else {
               if (this.scenes[this.sceneIndex]?.ttsPolicy === 'target-duration') {
                 const error = new Error(`课堂语音资源缺失：${speechAction.id}`);
                 log.error(error.message);
                 this.setMode('idle');
+                this.actionEngine.clearEffects();
+                this.activeEffectRange = null;
                 this.callbacks.onError?.(error);
                 return;
               }
@@ -703,22 +962,44 @@ export class PlaybackEngine {
               settings.ttsProvidersConfig?.['browser-native-tts'],
             );
             if (browserNativeEnabled) playSpeechFallback();
-            else this.setMode('idle');
+            else {
+              this.setMode('idle');
+              this.actionEngine.clearEffects();
+              this.activeEffectRange = null;
+            }
           });
         break;
       }
 
       case 'spotlight':
       case 'laser': {
-        // Fire-and-forget visual effects via ActionEngine
+        const sceneActions = this.scenes[this.sceneIndex]?.actions ?? [];
+        const nextSpeech = sceneActions.slice(this.actionIndex).find(
+          (candidate): candidate is SpeechAction => candidate.type === 'speech',
+        );
+        const cueRange = nextSpeech
+          ? resolveVisualCueRange(sceneActions, action, nextSpeech.id)
+          : null;
+        // A generated binding must match the immediately following narration.
+        // Invalid/stale fine-grained cues are skipped instead of pointing elsewhere.
+        if (
+          !nextSpeech
+          || (action.speechId && action.speechId !== nextSpeech.id)
+          || !cueRange
+          || !cueRange.speechIds.has(nextSpeech.id)
+        ) {
+          this.actionEngine.clearEffects();
+          this.activeEffectRange = null;
+          queueMicrotask(() => this.processNext());
+          break;
+        }
+        if ((action.speechOffsetMs ?? 0) > 0) {
+          queueMicrotask(() => this.processNext());
+          break;
+        }
         void this.executeActionSafely(action);
-        this.callbacks.onEffectFire?.({
-          kind: action.type,
-          targetId: action.elementId,
-          ...(action.type === 'spotlight'
-            ? { dimOpacity: action.dimOpacity }
-            : { color: action.color }),
-        } as Effect);
+        this.activeEffectRange = cueRange;
+        this.fireEffectCallback(action);
         // Don't block — continue immediately (use queueMicrotask to avoid
         // stack overflow from deep synchronous recursion when many consecutive
         // spotlight/laser actions appear in sequence)
@@ -727,6 +1008,8 @@ export class PlaybackEngine {
       }
 
       case 'discussion': {
+        this.actionEngine.clearEffects();
+        this.activeEffectRange = null;
         const discussionAction = action as DiscussionAction;
         // Check if already consumed
         if (this.consumedDiscussions.has(discussionAction.id)) {
@@ -780,6 +1063,8 @@ export class PlaybackEngine {
       case 'widget_setState':
       case 'widget_annotation':
       case 'widget_reveal': {
+        this.actionEngine.clearEffects();
+        this.activeEffectRange = null;
         // Synchronous actions — await completion, then continue
         await this.executeActionSafely(action);
         if (this.mode === 'playing') {
@@ -801,6 +1086,30 @@ export class PlaybackEngine {
     } catch (error) {
       log.error(`Playback action failed [${action.type}:${action.id}]:`, error);
     }
+  }
+
+  private fireEffectCallback(action: VisualCueAction): void {
+    this.callbacks.onEffectFire?.({
+      kind: action.type,
+      targetId: action.elementId,
+      selector: action.selector,
+      speechId: action.speechId,
+      ...(action.type === 'spotlight' ? { endSpeechId: action.endSpeechId } : {}),
+      ...(action.type === 'spotlight'
+        ? { dimOpacity: action.dimOpacity }
+        : { color: action.color, duration: action.duration, waypoints: action.waypoints }),
+    } as Effect);
+  }
+
+  private finishSpeechEffect(speechId: string | null): void {
+    if (speechId && this.speechCueScheduleSpeechId === speechId) {
+      this.clearSpeechCueSchedule();
+    }
+    if (speechId && this.activeEffectRange?.endSpeechId === speechId) {
+      this.actionEngine.clearEffects();
+      this.activeEffectRange = null;
+    }
+    if (this.currentSpeechActionId === speechId) this.currentSpeechActionId = null;
   }
 
   // ==================== Browser Native TTS ====================
@@ -849,6 +1158,7 @@ export class PlaybackEngine {
       this.browserTTSActive = false;
       this.browserTTSChunks = [];
       this.callbacks.onSpeechProgress?.(1);
+      this.finishSpeechEffect(this.currentSpeechActionId);
       this.callbacks.onSpeechEnd?.();
       if (this.mode === 'playing') this.processNext();
       return;

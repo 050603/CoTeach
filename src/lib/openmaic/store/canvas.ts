@@ -3,7 +3,11 @@ import { createSelectors } from '@openmaic/lib/utils/create-selectors';
 import type { TextAttrs } from '@openmaic/lib/prosemirror/utils';
 import { defaultRichTextAttrs } from '@openmaic/lib/prosemirror/utils';
 import type { TextFormatPainter, ShapeFormatPainter, CreatingElement } from '@openmaic/lib/types/edit';
-import type { PercentageGeometry } from '@openmaic/lib/types/action';
+import type {
+  LaserWaypoint,
+  PercentageGeometry,
+  VisualTargetSelector,
+} from '@openmaic/lib/types/action';
 
 /**
  * Spotlight options
@@ -12,6 +16,7 @@ export interface SpotlightOptions {
   radius?: number; // Spotlight radius (pixels)
   dimness?: number; // Background dimming level (0-1)
   transition?: number; // Transition animation duration (milliseconds)
+  selector?: VisualTargetSelector; // Optional table-cell or exact-text target
 }
 
 /**
@@ -30,6 +35,8 @@ export interface HighlightOverlayOptions {
 export interface LaserOptions {
   color?: string; // Laser pointer color, default red
   duration?: number; // Duration (milliseconds)
+  selector?: VisualTargetSelector; // Optional table-cell or exact-text target
+  waypoints?: LaserWaypoint[]; // Optional ordered sweep targets
 }
 
 /**
@@ -371,6 +378,8 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
         ...options,
       },
       spotlightPercentageGeometry: null,
+      laserElementId: '',
+      laserOptions: null,
     });
   },
 
@@ -384,6 +393,8 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
         transition: 300,
         ...options,
       },
+      laserElementId: '',
+      laserOptions: null,
     });
   },
 
@@ -424,6 +435,10 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
         duration: 3000,
         ...options,
       },
+      spotlightElementId: '',
+      spotlightOptions: null,
+      spotlightMode: 'pixel',
+      spotlightPercentageGeometry: null,
     });
   },
 

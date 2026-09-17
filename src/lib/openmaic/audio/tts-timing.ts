@@ -151,9 +151,8 @@ const PROFILE_SEEDS: readonly Omit<TtsTimingProfile, 'source'>[] = [
   { id: 'openai-tts:tts-1-hd', providerId: 'openai-tts', modelId: 'tts-1-hd', label: 'OpenAI TTS-1 HD', cjkCharsPerMinute: 260, latinWordsPerMinute: 145, punctuationPauseSec: 0.18, defaultSpeed: 1 },
   { id: 'azure-tts:default', providerId: 'azure-tts', modelId: '', label: 'Azure Neural TTS', cjkCharsPerMinute: 255, latinWordsPerMinute: 145, punctuationPauseSec: 0.2, defaultSpeed: 1 },
   { id: 'glm-tts:glm-tts', providerId: 'glm-tts', modelId: 'glm-tts', label: 'GLM TTS', cjkCharsPerMinute: 270, latinWordsPerMinute: 150, punctuationPauseSec: 0.18, defaultSpeed: 1 },
-  { id: 'qwen-tts:qwen3-tts-flash', providerId: 'qwen-tts', modelId: 'qwen3-tts-flash', label: '通义千问 TTS Flash', cjkCharsPerMinute: 275, latinWordsPerMinute: 155, punctuationPauseSec: 0.17, defaultSpeed: 1 },
-  { id: 'qwen-tts:qwen3-tts-instruct-flash', providerId: 'qwen-tts', modelId: 'qwen3-tts-instruct-flash', label: '通义千问 TTS Instruct Flash', cjkCharsPerMinute: 270, latinWordsPerMinute: 150, punctuationPauseSec: 0.18, defaultSpeed: 1 },
-  { id: 'qwen-tts:qwen-tts', providerId: 'qwen-tts', modelId: 'qwen-tts', label: '通义千问 TTS', cjkCharsPerMinute: 265, latinWordsPerMinute: 150, punctuationPauseSec: 0.18, defaultSpeed: 1 },
+  { id: 'qwen-tts:qwen-audio-3.0-tts-plus', providerId: 'qwen-tts', modelId: 'qwen-audio-3.0-tts-plus', label: 'Qwen Audio 3.0 TTS Plus', cjkCharsPerMinute: 270, latinWordsPerMinute: 150, punctuationPauseSec: 0.18, defaultSpeed: 1 },
+  { id: 'qwen-tts:qwen-audio-3.0-tts-flash', providerId: 'qwen-tts', modelId: 'qwen-audio-3.0-tts-flash', label: 'Qwen Audio 3.0 TTS Flash', cjkCharsPerMinute: 275, latinWordsPerMinute: 155, punctuationPauseSec: 0.17, defaultSpeed: 1 },
   { id: 'minimax-tts:speech-2.8-hd', providerId: 'minimax-tts', modelId: 'speech-2.8-hd', label: 'MiniMax Speech 2.8 HD', cjkCharsPerMinute: 285, latinWordsPerMinute: 160, punctuationPauseSec: 0.16, defaultSpeed: 1 },
   { id: 'minimax-tts:speech-2.8-turbo', providerId: 'minimax-tts', modelId: 'speech-2.8-turbo', label: 'MiniMax Speech 2.8 Turbo', cjkCharsPerMinute: 300, latinWordsPerMinute: 170, punctuationPauseSec: 0.15, defaultSpeed: 1 },
   { id: 'minimax-tts:speech-2.6-hd', providerId: 'minimax-tts', modelId: 'speech-2.6-hd', label: 'MiniMax Speech 2.6 HD', cjkCharsPerMinute: 280, latinWordsPerMinute: 155, punctuationPauseSec: 0.17, defaultSpeed: 1 },
@@ -208,7 +207,7 @@ export function getTtsTimingProfile(providerId?: string, modelId?: string, voice
     algorithmVersion: TTS_TIMING_ALGORITHM_VERSION,
   }));
   if (calibrated) return calibrated;
-  const offline = offlineVoiceCalibrations.profiles.find((profile) =>
+  const offline = (offlineVoiceCalibrations.profiles as TtsVoiceTimingCalibration[]).find((profile) =>
     profile.algorithmVersion === TTS_TIMING_ALGORITHM_VERSION
     && getTtsCalibrationKey(profile) === getTtsCalibrationKey({
       providerId: provider, modelId: model, voiceId: voice || 'default', language, speed,

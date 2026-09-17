@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
-import { emptyResourcePackageDraft, type CourseResourcePackage } from "./types";
+import { emptyResourcePackageDraft, resourcePackageDraftErrors, type CourseResourcePackage } from "./types";
 
 const mocks = vi.hoisted(() => ({ template: vi.fn(), file: vi.fn(), design: vi.fn(), content: vi.fn(), find: vi.fn(), update: vi.fn(), upsert: vi.fn(), load: vi.fn(), save: vi.fn(), stat: vi.fn(), read: vi.fn() }));
 vi.mock("@/lib/db/client", () => ({ prisma: { classroomTemplate: { findUnique: mocks.template }, fileAsset: { findFirst: mocks.file } } }));
@@ -59,6 +59,18 @@ describe("resource package persistence and authorization", () => {
     expect(course.aiLearningClassroomId).toBeUndefined();
     expect(course.status).toBe("draft");
     expect(job.message).toContain("已确认");
+  });
+  it("requires acknowledgement bound to the current planning issue version", async () => {
+    const pkg = resourcePackage();
+    pkg.planningIssueVersion = "issues-v1";
+    pkg.planningIssues = [{ id: "duration-review", kind: "duration", severity: "warning", requiresAcknowledgement: true,
+      summary: "时间描述不一致", detail: "阶段表与正文不同", suggestion: "确认采用阶段表", evidence: [] }];
+    course.content.resourcePackage = pkg;
+    mocks.find.mockResolvedValue({ id: "job", version: 1, requestedBy: "teacher", status: "ready", request: { revision: 2 }, result: { package: pkg } });
+    await expect(confirmResourcePackage("course", "teacher", 2, pkg.draft)).rejects.toMatchObject({ code: "RESOURCE_PACKAGE_PLANNING_ACKNOWLEDGEMENT_REQUIRED" });
+    await expect(confirmResourcePackage("course", "teacher", 2, pkg.draft, { issueVersion: "old", issueIds: ["duration-review"] })).rejects.toMatchObject({ code: "RESOURCE_PACKAGE_PLANNING_ACKNOWLEDGEMENT_REQUIRED" });
+    await confirmResourcePackage("course", "teacher", 2, pkg.draft, { issueVersion: "issues-v1", issueIds: ["duration-review"] });
+    expect(course.content.resourcePackage?.planningAcknowledgement).toMatchObject({ sourceRevision: 2, issueVersion: "issues-v1", issueIds: ["duration-review"], acknowledgedBy: "teacher" });
   });
   it("does not save inconsistent stage budgets", async () => {
     const draft = resourcePackage().draft; draft.stages[1].durationMin = 31;
@@ -134,12 +146,12 @@ describe("resource package persistence and authorization", () => {
     expect(course.content.resourcePackage?.adaptation).toBeUndefined();
     expect(course.content.resourcePackage?.launchResourceId).toBeUndefined();
   });
-  it("cannot bypass missing activities or conflicting minutes by authorizing adaptation or downgrading the parser version", async () => {
+  it("allows generation to fill non-critical activities but never bypasses conflicting minutes", async () => {
     const pkg = modernPackage(); course.content.resourcePackage = pkg;
     mocks.find.mockResolvedValue({ id: "job", version: 1, requestedBy: "teacher", status: "blocked", result: { package: pkg } });
     const draft = structuredClone(pkg.draft); delete draft.parsingVersion; draft.stages[2].requirements = "";
-    await expect(authorizeResourcePackageAdaptation("course", "teacher", 2, pkg.conflictVersion!, draft)).rejects.toMatchObject({ code: "RESOURCE_PACKAGE_INVALID_DRAFT" });
-    draft.stages[2].requirements = "完成个人作品"; draft.stages[1].durationMin = 31;
+    expect(resourcePackageDraftErrors({ ...draft, parsingVersion: 2 })).not.toContain("请补充项目实践的任务与教学活动。");
+    draft.stages[1].durationMin = 31;
     await expect(authorizeResourcePackageAdaptation("course", "teacher", 2, pkg.conflictVersion!, draft)).rejects.toMatchObject({ code: "RESOURCE_PACKAGE_INVALID_DRAFT" });
     expect(mocks.save).not.toHaveBeenCalled();
   });

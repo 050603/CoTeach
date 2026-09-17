@@ -3,17 +3,16 @@
 import { ScreenElement } from './ScreenElement';
 import { HighlightOverlay } from './HighlightOverlay';
 import { SpotlightOverlay } from './SpotlightOverlay';
-import { LaserOverlay } from './LaserOverlay';
+import { LaserPointerOverlay } from './LaserPointerOverlay';
 import { useSlideBackgroundStyle } from '@openmaic/lib/hooks/use-slide-background-style';
 import { useCanvasStore } from '@openmaic/lib/store';
 import { useSceneSelector } from '@openmaic/lib/contexts/scene-context';
 import { findElementGeometry } from '@openmaic/lib/utils/geometry';
 import type { SlideContent } from '@openmaic/lib/types/stage';
-import type { PPTElement, SlideBackground } from '@openmaic/dsl';
 import type { PercentageGeometry } from '@openmaic/lib/types/action';
+import type { PPTElement, SlideBackground } from '@openmaic/dsl';
 import { useViewportSize } from './Canvas/hooks/useViewportSize';
 import { useRef, useMemo } from 'react';
-import { AnimatePresence } from 'motion/react';
 
 export function ScreenCanvas() {
   const canvasScale = useCanvasStore.use.canvasScale();
@@ -21,6 +20,7 @@ export function ScreenCanvas() {
     (content) => content.canvas.elements,
   );
   const canvasRef = useRef<HTMLDivElement>(null);
+  const slideRootRef = useRef<HTMLDivElement>(null);
 
   // Viewport size and positioning
   const { viewportStyles } = useViewportSize(canvasRef);
@@ -32,20 +32,7 @@ export function ScreenCanvas() {
   const { backgroundStyle } = useSlideBackgroundStyle(background);
 
   // Get visual effect state
-  const laserElementId = useCanvasStore.use.laserElementId();
-  const laserOptions = useCanvasStore.use.laserOptions();
   const zoomTarget = useCanvasStore.use.zoomTarget();
-
-  // Compute laser pointer geometry
-  const laserGeometry = useMemo<PercentageGeometry | null>(() => {
-    if (!laserElementId) return null;
-    const element = elements.find((el) => el.id === laserElementId);
-    if (!element) return null;
-    return findElementGeometry(
-      { type: 'slide', content: { canvas: { elements } } } as Record<string, unknown>,
-      laserElementId,
-    );
-  }, [laserElementId, elements]);
 
   // Compute zoom target geometry
   const zoomGeometry = useMemo<PercentageGeometry | null>(() => {
@@ -61,6 +48,7 @@ export function ScreenCanvas() {
   return (
     <div className="relative h-full w-full overflow-hidden select-none" ref={canvasRef}>
       <div
+        ref={slideRootRef}
         className="absolute shadow-[0_0_0_1px_rgba(0,0,0,0.01),0_0_12px_0_rgba(0,0,0,0.1)] rounded-lg overflow-hidden transition-transform duration-700"
         style={{
           width: `${viewportStyles.width * canvasScale}px`,
@@ -99,24 +87,8 @@ export function ScreenCanvas() {
         </div>
 
         {/* Spotlight overlay - covers the entire slide, positioned via DOM measurement */}
-        <SpotlightOverlay />
-
-        {/* Visual effects layer - outside the scale layer, using percentage coordinates */}
-        <div className="absolute inset-0 pointer-events-none" style={{ padding: '5%' }}>
-          <div className="relative w-full h-full">
-            {/* Laser pointer overlay */}
-            <AnimatePresence>
-              {laserElementId && laserGeometry && (
-                <LaserOverlay
-                  key={`laser-${laserElementId}`}
-                  geometry={laserGeometry}
-                  color={laserOptions?.color}
-                  duration={laserOptions?.duration}
-                />
-              )}
-            </AnimatePresence>
-          </div>
-        </div>
+        <SpotlightOverlay rootRef={slideRootRef} />
+        <LaserPointerOverlay rootRef={slideRootRef} />
       </div>
     </div>
   );

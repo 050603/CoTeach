@@ -36,18 +36,13 @@ const goodAudit: SlideLayoutAudit = {
 };
 
 describe('slide layout audit repair policy', () => {
-  it('attempts exactly one evidence-triggered repair and adopts an improvement', async () => {
-    const repaired = { elements: [text('a2', '随机抽样减少选择偏差'), text('b2', '样本必须来自目标总体', 260)] };
+  it('skips a model rewrite when deterministic repair clears the measured defect', async () => {
     const audit = vi.fn().mockResolvedValueOnce(badAudit).mockResolvedValueOnce(goodAudit);
-    const regenerate = vi.fn().mockResolvedValue(repaired);
+    const regenerate = vi.fn();
     const result = await auditAndRepairSlideOnce({ outline, content: original, audit, regenerate });
-    expect(regenerate).toHaveBeenCalledOnce();
-    expect(regenerate.mock.calls[0][0]).toContain('文字超出页面');
+    expect(regenerate).not.toHaveBeenCalled();
     expect(result.adopted).toBe('repair');
-    expect(result.content.elements).toEqual([
-      expect.objectContaining({ id: 'a2', defaultColor: '#1E3A8A' }),
-      repaired.elements[1],
-    ]);
+    expect(result.content.elements[0]).toMatchObject({ id: 'a', defaultColor: '#1E3A8A' });
   });
 
   it('keeps the official first draft byte-for-byte in production baseline mode', async () => {
@@ -310,7 +305,7 @@ describe('slide layout audit repair policy', () => {
     const repaired = repairMeasuredSlideGeometry({ elements: [card, label] }, measuredAudit);
     expect(repaired?.elements[1]).toMatchObject({ left: 120, width: 260, top: 212 });
 
-    const audit = vi.fn().mockResolvedValueOnce(measuredAudit).mockResolvedValueOnce(goodAudit);
+    const audit = vi.fn().mockResolvedValueOnce(measuredAudit).mockResolvedValue(goodAudit);
     const regenerate = vi.fn();
     const result = await auditAndRepairSlideOnce({
       outline,
@@ -318,7 +313,7 @@ describe('slide layout audit repair policy', () => {
       audit,
       regenerate,
     });
-    expect(regenerate).toHaveBeenCalledOnce();
+    expect(regenerate).not.toHaveBeenCalled();
     expect(result).toMatchObject({ adopted: 'repair', repairAttempted: true });
   });
 
@@ -522,7 +517,7 @@ describe('slide layout audit repair policy', () => {
       text('case', '案例：先建立完整名单，再使用随机数抽取对象，并记录未响应者。', 320),
       text('boundary', '应用边界：抽样框需要完整覆盖总体；遗漏某类对象时，随机步骤本身也不能消除覆盖偏差。', 440),
     ] };
-    const audit = vi.fn().mockResolvedValueOnce(measuredAudit).mockResolvedValueOnce(goodAudit);
+    const audit = vi.fn().mockResolvedValueOnce(measuredAudit).mockResolvedValue(goodAudit);
     const regenerate = vi.fn().mockResolvedValue(repaired);
 
     const result = await auditAndRepairSlideOnce({
