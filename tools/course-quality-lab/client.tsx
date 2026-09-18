@@ -8,6 +8,7 @@ import type {
   LabScriptSegment,
   LabSection,
   LabVariantKey,
+  LabVariantMetrics,
   LabVariantResult,
   PairReview,
   ReviewCollection,
@@ -26,7 +27,7 @@ const DIMENSIONS: Array<{ key: ReviewDimension; label: string }> = [
 ];
 const OUTCOMES: Array<{ value: ReviewOutcome; label: string }> = [
   { value: "baseline", label: "基线更好" },
-  { value: "enhanced", label: "增强更好" },
+  { value: "enhanced", label: "本次优化更好" },
   { value: "tie", label: "相当" },
   { value: "undecided", label: "暂不判断" },
 ];
@@ -66,6 +67,73 @@ function normalizeReviews(payload: ReviewCollection | PairReview[] | Record<stri
 function formatTime(rawSeconds: number): string {
   const seconds = Number.isFinite(rawSeconds) ? Math.max(0, Math.round(rawSeconds)) : 0;
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function formatCompactNumber(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 100_000 ? 0 : 1)}k`;
+  return String(Math.round(value));
+}
+
+function formatElapsed(rawMilliseconds: number): string {
+  const seconds = Math.max(0, Math.round(rawMilliseconds / 1_000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`;
+}
+
+function MetricStrip({ metrics }: { metrics?: LabVariantMetrics }) {
+  if (!metrics) return null;
+  const tokenTitle = metrics.tokenUsageEstimated
+    ? `约 ${metrics.tokenUsage.toLocaleString()} tokens；供应商未记录完整 usage 的调用按项目统一规则每 2.5 个字符估算。输入 ${metrics.inputCharacters.toLocaleString()} 字符，输出 ${metrics.outputCharacters.toLocaleString()} 字符。`
+    : `${metrics.tokenUsage.toLocaleString()} tokens；来自供应商 usage。输入 ${metrics.inputCharacters.toLocaleString()} 字符，输出 ${metrics.outputCharacters.toLocaleString()} 字符。`;
+  return (
+    <section className="metric-strip" aria-label="成本与稳定性指标">
+      <div title={tokenTitle}>
+        <span>Token 用量{metrics.tokenUsageEstimated ? "（约）" : ""}</span>
+        <b>{formatCompactNumber(metrics.tokenUsage)}</b>
+        <small>输入/输出字符 {formatCompactNumber(metrics.inputCharacters)} / {formatCompactNumber(metrics.outputCharacters)}</small>
+      </div>
+      <div title="模型与语音调用耗时之和；并行请求的耗时会重叠，因此不等同于墙钟总时长。">
+        <span>端到端 / 调用合计</span>
+        <b>{metrics.telemetryRecorded ? formatElapsed(metrics.wallClockMs) : "未记录"}</b>
+        <small>模型 {formatElapsed(metrics.modelElapsedMs)} · TTS {formatElapsed(metrics.ttsElapsedMs)}</small>
+      </div>
+      <div className={metrics.failedModelCalls || metrics.abandonedModelCalls ? "metric--warning" : ""}>
+        <span>逻辑调用</span>
+        <b>{metrics.modelCalls}</b>
+        <small>设计 {metrics.designCalls} · 生成/审核 {metrics.generationCalls} · 失败/中断 {metrics.failedModelCalls}/{metrics.abandonedModelCalls}</small>
+      </div>
+      <div className={metrics.transportRetries ? "metric--warning" : ""}>
+        <span>真实请求</span>
+        <b>{metrics.transportAttemptsRecorded ? metrics.transportAttempts : "未记录"}</b>
+        <small>{metrics.transportAttemptsRecorded ? `传输重试 ${metrics.transportRetries}` : "历史版本无法直接比较"}</small>
+      </div>
+      <div>
+        <span>质量修复 / 恢复复用</span>
+        <b>{metrics.telemetryRecorded ? `${metrics.qualityRepairCalls} / ${metrics.checkpointReuses}` : "未记录"}</b>
+        <small>仅统计 v4 分阶段检查点</small>
+      </div>
+      <div className={metrics.failedTtsCalls ? "metric--warning" : ""}>
+        <span>TTS 调用</span>
+        <b>{metrics.ttsCalls}</b>
+        <small>失败 {metrics.failedTtsCalls} · 缓存命中 {metrics.ttsCacheHits}</small>
+      </div>
+    </section>
+  );
+}
+
+function SummaryMetric({ result }: { result: LabVariantResult }) {
+  const metrics = result.metrics;
+  if (!metrics) return <span className="metric-empty">暂无记录</span>;
+  const failures = metrics.failedModelCalls + metrics.failedTtsCalls;
+  return (
+    <span className="summary-metric">
+      <b>{metrics.tokenUsageEstimated ? "约 " : ""}{formatCompactNumber(metrics.tokenUsage)} tokens</b>
+      <small>{metrics.modelCalls} 次逻辑调用 · {metrics.transportAttemptsRecorded ? `${metrics.transportAttempts} 次真实请求` : "真实请求未记录"} · {failures} 失败 · {metrics.telemetryRecorded ? formatElapsed(metrics.wallClockMs) : formatElapsed(metrics.modelElapsedMs + metrics.ttsElapsedMs)}</small>
+    </span>
+  );
 }
 
 function artifactUrl(pairId: string, variant: LabVariantKey, kind: "pptx" | "script" | "audio.zip"): string {
@@ -383,7 +451,7 @@ function VariantPane({ pair, variant, pageIndex, enlarged, onToggleEnlarged, reg
   const pageDuration = result.script
     .filter((segment) => segment.slideIndex === pageIndex)
     .reduce((total, segment) => total + (segment.durationSec ?? 0), 0);
-  const title = result.label ?? (variant === "baseline" ? "当前基线" : "教学增强");
+  const title = result.label ?? (variant === "baseline" ? "当前基线" : "本次优化版");
   const hiddenByEnlarge = enlarged && enlarged !== variant;
 
   return (
@@ -410,6 +478,7 @@ function VariantPane({ pair, variant, pageIndex, enlarged, onToggleEnlarged, reg
         <StatusBadge label="讲稿" {...result.statuses.script} />
         <StatusBadge label="TTS" {...result.statuses.tts} />
       </div>
+      <MetricStrip metrics={result.metrics} />
       <div className="slide-shell">
         <SlideFrame result={result} pageIndex={pageIndex} activeSegmentId={activeSegmentId} />
       </div>
@@ -441,17 +510,9 @@ function VariantPane({ pair, variant, pageIndex, enlarged, onToggleEnlarged, reg
 
 function ReferencePanel({ section }: { section: LabSection }) {
   const design = section.enhancedDesign;
-  const designGroups = design
-    ? [
-        ["核心解释", design.coreExplanation],
-        ["示例推演", design.workedExample],
-        ["条件与误区", design.conditionsAndMisconceptions],
-        ["考查重点", design.assessmentFocus],
-      ] as const
-    : [];
   return (
     <details className="reference-panel">
-      <summary>参考资料、教学目标与增强设计</summary>
+      <summary>参考资料、教学目标与本次优化设计</summary>
       <div className="reference-grid">
         <section>
           <h3>教学目标</h3>
@@ -469,18 +530,16 @@ function ReferencePanel({ section }: { section: LabSection }) {
           </ul>
         </section>
         <section className="reference-grid__design">
-          <h3>增强设计</h3>
-          {!design && <p className="empty-copy">暂无增强设计记录。</p>}
-          {designGroups.map(([label, items]) => (items?.length ? (
-            <div key={label} className="design-group">
-              <b>{label}</b>
-              <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>
-            </div>
-          ) : null))}
+          <h3>本次优化设计</h3>
+          {!design && <p className="empty-copy">暂无本次优化设计记录。</p>}
           {design?.pagePlan?.length ? (
             <div className="design-group">
               <b>页面分工</b>
-              <ul>{design.pagePlan.map((item) => <li key={`${item.page}-${item.purpose}`}>第 {item.page} 页：{item.purpose}</li>)}</ul>
+              <ul>{design.pagePlan.map((item) => (
+                <li key={`${item.page}-${item.purpose}`}>
+                  第 {item.page} 页：{item.purpose}；此前已讲：{item.priorKnowledge}；本页新增：{item.newContent}
+                </li>
+              ))}</ul>
             </div>
           ) : null}
         </section>
@@ -494,6 +553,110 @@ interface ReviewPanelProps {
   review: PairReview;
   saveState: SaveState;
   onChange: (updater: (review: PairReview) => PairReview) => void;
+}
+
+interface TeacherReviewPanelProps {
+  pair: LabPair;
+  pageIndex: number;
+  review: PairReview;
+  saveState: SaveState;
+  onChange: (updater: (review: PairReview) => PairReview) => void;
+}
+
+const TEACHER_REVIEW_OPTIONS = [
+  { value: "pending" as const, label: "待处理" },
+  { value: "confirmed" as const, label: "已确认" },
+  { value: "needs-revision" as const, label: "需修改" },
+];
+
+function TeacherReviewPanel({ pair, pageIndex, review, saveState, onChange }: TeacherReviewPanelProps) {
+  const entries = VARIANTS.flatMap((variant) => (pair.variants[variant].teacherReviewNotes ?? [])
+    .filter((note) => note.page === pageIndex + 1)
+    .map((note) => ({ variant, note })));
+  const total = VARIANTS.reduce((sum, variant) => sum + (pair.variants[variant].teacherReviewNotes?.length ?? 0), 0);
+  const saveLabel = saveState === "pending" ? "等待保存…"
+    : saveState === "saving" ? "正在保存…"
+      : saveState === "saved" ? "已保存"
+        : saveState === "error" ? "保存失败，请继续编辑以重试" : "";
+  const updateDecision = (
+    variant: LabVariantKey,
+    noteId: string,
+    patch: { status?: "pending" | "confirmed" | "needs-revision"; note?: string },
+  ) => onChange((current) => {
+    const existing = current.teacherReviews?.[variant];
+    const decision = existing?.notes[noteId] ?? { status: "pending" as const };
+    return {
+      ...current,
+      teacherReviews: {
+        ...current.teacherReviews,
+        [variant]: {
+          experimentId: pair.experimentId ?? pair.id,
+          variant,
+          notes: {
+            ...(existing && existing.experimentId === pair.experimentId ? existing.notes : {}),
+            [noteId]: { ...decision, ...patch },
+          },
+        },
+      },
+    };
+  });
+
+  return (
+    <section className="teacher-review-panel">
+      <header className="review-panel__header">
+        <div>
+          <span className="eyebrow">仅供教师</span>
+          <h2>课程已保存：请复核存疑内容</h2>
+          <p role="status">疑点不阻断生成。内容审核发现的存疑断言会保留在学生内容中，请教师在发布或授课前逐条核实并按需修改。</p>
+        </div>
+        <span className={`save-state save-state--${saveState}`} role="status">{saveLabel}</span>
+      </header>
+      {entries.length ? (
+        <div className="teacher-review-list">
+          {entries.map(({ variant, note }) => {
+            const saved = review.teacherReviews?.[variant];
+            const decision = saved && saved.experimentId === pair.experimentId
+              ? saved.notes[note.id]
+              : undefined;
+            return (
+              <article className="teacher-review-item" key={`${variant}-${note.id}`}>
+                <div className="teacher-review-item__heading">
+                  <span>{variant === "enhanced" ? "本次优化版" : "当前基线"}</span>
+                  <select
+                    aria-label={`审核状态：${note.claim}`}
+                    value={decision?.status ?? "pending"}
+                    onChange={(event) => updateDecision(variant, note.id, {
+                      status: event.target.value as "pending" | "confirmed" | "needs-revision",
+                    })}
+                  >
+                    {TEACHER_REVIEW_OPTIONS.map((option) => (
+                      <option value={option.value} key={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <h3>{note.claim}</h3>
+                <p><b>原因：</b>{note.reason}</p>
+                <p><b>建议：</b>{note.suggestion}</p>
+                <label>
+                  <span>教师备注</span>
+                  <textarea
+                    rows={2}
+                    value={decision?.note ?? ""}
+                    placeholder="记录核实依据、修改意见或后续处理…"
+                    onChange={(event) => updateDecision(variant, note.id, { note: event.target.value })}
+                  />
+                </label>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="teacher-review-empty">
+          {total ? `第 ${pageIndex + 1} 页没有待审核疑点；本小节其他页面共有 ${total} 条。` : "本小节没有识别到需要教师核实的事实疑点。"}
+        </p>
+      )}
+    </section>
+  );
 }
 
 function ReviewPanel({ pageIndex, review, saveState, onChange }: ReviewPanelProps) {
@@ -596,14 +759,14 @@ function Summary({ manifest, reviews, onOpenPair }: {
           <p>这里只汇总你的记录，不自动给出采用结论。</p>
         </div>
         <div className="summary-counts">
-          <div><b>{enhancedWins}</b><span>增强胜出</span></div>
+          <div><b>{enhancedWins}</b><span>本次优化胜出</span></div>
           <div><b>{baselineWins}</b><span>基线胜出</span></div>
           <div><b>{rows.length - decided}</b><span>待判断</span></div>
         </div>
       </section>
       <div className="summary-table-wrap">
         <table className="summary-table">
-          <thead><tr><th>小节</th><th>批次</th><th>结论</th><th>已评分维度</th><th>备注</th><th /></tr></thead>
+          <thead><tr><th>小节</th><th>批次</th><th>当前基线成本/稳定性</th><th>本次优化成本/稳定性</th><th>结论</th><th>已评分维度</th><th>备注</th><th /></tr></thead>
           <tbody>
             {rows.map(({ section, pair }) => {
               const review = reviews[pair.id] ?? emptyReview(pair.id);
@@ -613,6 +776,8 @@ function Summary({ manifest, reviews, onOpenPair }: {
                 <tr key={pair.id}>
                   <td><b>{section.title}</b><small>{[section.scenario, section.subject, section.grade].filter(Boolean).join(" · ")}</small></td>
                   <td>第 {pair.batch} 次</td>
+                  <td><SummaryMetric result={pair.variants.baseline} /></td>
+                  <td><SummaryMetric result={pair.variants.enhanced} /></td>
                   <td><span className={`outcome outcome--${review.outcome}`}>{outcome}</span></td>
                   <td>{Object.keys(review.dimensions).length} / {DIMENSIONS.length}</td>
                   <td>{notes} 条</td>
@@ -860,6 +1025,14 @@ function App() {
               />
             ))}
           </section>
+
+          <TeacherReviewPanel
+            pair={pair}
+            pageIndex={pageIndex}
+            review={review}
+            saveState={saveStates[pair.id] ?? "idle"}
+            onChange={updateReview}
+          />
 
           <ReviewPanel
             pageIndex={pageIndex}

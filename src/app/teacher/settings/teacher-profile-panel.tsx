@@ -59,7 +59,7 @@ export function TeacherProfilePanel() {
     void updateProfile(passwords, "password");
   }
 
-  return <section className="mb-8 grid gap-5 lg:grid-cols-2" aria-labelledby="teacher-profile-heading">
+  return <section className="grid items-start gap-5 xl:grid-cols-2" aria-labelledby="teacher-profile-heading">
     <form onSubmit={saveName} className="rounded-[14px] border border-[var(--pbl-border)] bg-white p-5 sm:p-6">
       <div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-full bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]"><UserRound size={19}/></span><div><h2 id="teacher-profile-heading" className="font-semibold text-[var(--pbl-text-strong)]">个人信息</h2><p className="mt-1 text-xs leading-5 text-[var(--pbl-text-muted)]">用于教师端账号区域以及学生看到的教师姓名。</p></div></div>
       <div className="mt-5 grid gap-4">
@@ -77,6 +77,6 @@ export function TeacherProfilePanel() {
       </div>
       <PrimaryButton type="submit" className="mt-5 h-10" disabled={saving !== null}>{saving === "password" ? <Loader2 size={15} className="animate-spin"/> : <KeyRound size={15}/>}更新登录密码</PrimaryButton>
     </form>
-    {(notice || error) ? <p className={cn("lg:col-span-2 rounded-[8px] border px-4 py-3 text-sm", error ? "border-red-200 bg-red-50 text-[var(--pbl-danger)]" : "border-emerald-200 bg-emerald-50 text-emerald-700")} role={error ? "alert" : "status"}>{error || notice}</p> : null}
+    {(notice || error) ? <p className={cn("rounded-[8px] border px-4 py-3 text-sm xl:col-span-2", error ? "border-red-200 bg-red-50 text-[var(--pbl-danger)]" : "border-emerald-200 bg-emerald-50 text-emerald-700")} role={error ? "alert" : "status"}>{error || notice}</p> : null}
   </section>;
 }

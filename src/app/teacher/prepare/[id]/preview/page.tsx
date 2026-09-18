@@ -10,6 +10,7 @@ import {
   BookOpenCheck,
   Check,
   Clock3,
+  Download,
   Edit3,
   Eye,
   FlaskConical,
@@ -40,6 +41,7 @@ import { courseDetailedEditHref } from "@/lib/courses/preparation-navigation";
 import { cn } from "@/lib/utils";
 import { getNewSystemCourseReadiness } from "@/lib/classroom/new-system-course";
 import { CourseQualityReview, type TeacherReviewDecision } from "@/components/teacher/course-quality-review";
+import { downloadCourseResources } from "@/lib/course-resources/download-course-resources";
 
 const STEPS = [
   { key: "verify", label: "备课阶段" },
@@ -112,6 +114,7 @@ export default function PreviewCoursePage() {
   const [resourceRepairVersion, setResourceRepairVersion] = useState(0);
   const [reviewDecision, setReviewDecision] = useState<TeacherReviewDecision>({ canConfirm: false, signature: "", acceptedIssueIds: [], acknowledgeFailedCheck: false });
   const [publishedHere, setPublishedHere] = useState(false);
+  const [downloadingResources, setDownloadingResources] = useState(false);
 
   useEffect(() => {
     if (!params?.id) return;
@@ -161,6 +164,11 @@ export default function PreviewCoursePage() {
   const classroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;
   const adaptivePlan = course.content.adaptiveLearningPlan;
   const activeAdaptiveBranches = adaptivePlan?.branches.filter((branch) => branch.enabled !== false) ?? [];
+  const hasDownloadableResources = Boolean(
+    classroomId
+    || course.content.teacherClassroomId
+    || activeAdaptiveBranches.some((branch) => branch.preparedResource?.classroomId),
+  );
   const requestedPreviewBranch = activeAdaptiveBranches.find(
     (branch) => branch.id === searchParams.get("adaptiveBranchId")
       && Boolean(branch.preparedResource?.classroomId),
@@ -238,6 +246,22 @@ export default function PreviewCoursePage() {
     }
   }
 
+  async function downloadResources() {
+    setDownloadingResources(true);
+    try {
+      await downloadCourseResources(courseId);
+      toast.success("课程资源已开始下载", {
+        description: "压缩包包含课程 PPT、讲稿、互动页面和原始教学资料。",
+      });
+    } catch (error) {
+      toast.error("课程资源下载失败", {
+        description: error instanceof Error ? error.message : "请稍后重试",
+      });
+    } finally {
+      setDownloadingResources(false);
+    }
+  }
+
   function closeBranchPreview() {
     setPreviewBranch(undefined);
     if (requestedPreviewBranch) {
@@ -284,6 +308,15 @@ export default function PreviewCoursePage() {
               >
                 <Edit3 size={15} /> 返回修改
               </Link>
+              <button
+                className="inline-flex h-10 items-center gap-1.5 rounded-[7px] border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)] px-3.5 text-sm font-semibold text-[var(--pbl-teacher)] shadow-sm transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
+                disabled={downloadingResources || !hasDownloadableResources}
+                onClick={() => void downloadResources()}
+                type="button"
+              >
+                <Download className={downloadingResources ? "animate-bounce" : ""} size={15} />
+                {downloadingResources ? "正在打包…" : "下载课程资源"}
+              </button>
             </div>
           </div>
         </header>

@@ -58,11 +58,14 @@ describe("TeacherPresentationAnalytics", () => {
       },
     });
 
-    render(<TeacherPresentationAnalytics course={course} stageKey="ai-learning" onDetails={vi.fn()} />);
+    const { container } = render(<TeacherPresentationAnalytics course={course} stageKey="ai-learning" onDetails={vi.fn()} />);
 
     expect(screen.getByRole("img", { name: "班级整体学习进度38%" })).toBeTruthy();
     expect(screen.getByRole("img", { name: "章节测验完成率75%" })).toBeTruthy();
     expect(screen.getByRole("img", { name: "章节测验班级均分80分" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "班级学习航线：0–24% 0人、25–49% 1人、50–74% 1人、75–99% 0人、100% 0人" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看班级学习航线明细" })).toBeTruthy();
+    expect(container.textContent).not.toMatch(/小明|小华/);
     expect(screen.queryByText("知识掌握汇总")).toBeNull();
   });
 

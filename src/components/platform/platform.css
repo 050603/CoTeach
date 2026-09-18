@@ -236,10 +236,8 @@
 .pbl-platform-theme .pbl-settings-tabs { border: 0 !important; border-bottom: 1px solid var(--pbl-border) !important; border-radius: 0 !important; background: transparent !important; }
 .pbl-platform-theme .pbl-settings-tabs > div:first-child { padding-inline: 0; background: transparent; }
 .pbl-platform-theme .pbl-settings-tabs nav { padding-inline: 0; }
-.pbl-platform-theme .pbl-settings-editor { border: 0 !important; border-left: 1px solid var(--pbl-border) !important; border-radius: 0 !important; background: transparent !important; }
-.pbl-platform-theme .pbl-settings-editor > header { padding-top: 0; border: 0; background: transparent; }
-.pbl-platform-theme .pbl-settings-provider-list { border: 0 !important; border-radius: 0 !important; background: transparent !important; }
-.pbl-platform-theme .pbl-settings-provider-list > div:first-child { padding: 0 0 12px; border: 0; background: transparent; }
+.pbl-platform-theme .pbl-settings-workbench { isolation: isolate; }
+.pbl-platform-theme .pbl-settings-editor { min-height: 100%; }
 .pbl-platform-form-dialog, .pbl-course-editor-dialog { display: flex !important; max-height: min(860px,calc(100vh - 42px)); flex-direction: column; gap: 0 !important; overflow: hidden !important; padding: 0 !important; border-color: #d5e0ec !important; border-radius: 20px !important; box-shadow: 0 28px 90px #14284230 !important; }
 .pbl-platform-form-dialog > [data-slot=dialog-close], .pbl-course-editor-dialog > [data-slot=dialog-close] { top: 22px; right: 22px; display: grid; width: 34px; height: 34px; place-items: center; border-radius: 9px; background: #ffffffba; color: var(--pbl-text-muted); opacity: 1; }
 .pbl-platform-form-dialog > [data-slot=dialog-header], .pbl-course-dialog-header { display: grid !important; grid-template-columns: 44px minmax(0,1fr); gap: 15px !important; padding: 26px 64px 22px 30px; border-bottom: 1px solid var(--pbl-border); background: linear-gradient(115deg,#eef3fc 0,#f8faff 58%,#eef6f3 100%); text-align: left !important; }
@@ -564,6 +562,11 @@
 .pbl-platform-theme .pbl-skeleton-card div { height: 138px; margin-top: 0; }
 .pbl-platform-theme .pbl-skeleton-card span:last-child { width: 65%; margin-bottom: 8px; }
 .pbl-platform-theme .pbl-settings-layout :where(button,a,input) { min-height: 44px; }
+.pbl-platform-theme .pbl-workspace-content.pbl-settings-layout { padding-top: 24px; padding-bottom: 20px; }
+.pbl-platform-theme .pbl-settings-masthead { min-height: 76px; }
+.pbl-platform-theme .pbl-settings-main { min-height: 0; }
+.pbl-platform-theme .pbl-settings-section-nav { scrollbar-width: none; }
+.pbl-platform-theme .pbl-settings-section-nav::-webkit-scrollbar { display: none; }
 .pbl-platform-theme .pbl-student-pane-scroll { scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: #c7d3e0 transparent; }
 .pbl-platform-theme .pbl-student-pane-scroll::-webkit-scrollbar { width: 7px; }
 .pbl-platform-theme .pbl-student-pane-scroll::-webkit-scrollbar-track { background: transparent; }

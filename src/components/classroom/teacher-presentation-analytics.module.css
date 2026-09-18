@@ -67,8 +67,36 @@
 .barRow strong { text-align: right; color: #344a6a; font-size: 13px; font-variant-numeric: tabular-nums; }
 .scoreChart .barRow i { background: #267262; }
 .scoreScale { display: flex; justify-content: space-between; gap: 8px; margin-top: auto; color: #78838e; font-size: 11px; }
+.knowledgeJourney { grid-column: 1 / -1; display: flex; min-width: 0; min-height: 250px; flex-direction: column; overflow: hidden; border: 1px solid #cad8e6; border-radius: 14px; background: radial-gradient(circle at 18% 35%, #dff5ed 0, transparent 23%), radial-gradient(circle at 82% 20%, #e3ebf7 0, transparent 28%), linear-gradient(135deg, #f8fbfc, #f4f7fb); padding: clamp(16px, 1.5vw, 24px); box-shadow: 0 10px 30px #1f29330a; }
+.knowledgeJourney:hover { border-color: #8fa6bd; background: radial-gradient(circle at 18% 35%, #d8f2e9 0, transparent 25%), radial-gradient(circle at 82% 20%, #dce7f5 0, transparent 30%), linear-gradient(135deg, #f7fbfc, #f1f6fb); }
+.journeyHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.journeyHeading > span { display: grid; gap: 2px; }
+.journeyHeading strong { color: #1f2933; font-size: clamp(19px, 1.35vw, 26px); font-weight: 650; }
+.journeyHeading small { color: #66717d; font-size: 13px; }
+.journeyHeading > b { flex: none; border-radius: 999px; background: #344a6a; padding: 6px 12px; color: #fff; font-size: clamp(15px, 1vw, 19px); font-weight: 650; font-variant-numeric: tabular-nums; }
+.journeyChart { position: relative; display: block; min-height: 140px; margin: 2px 12px 0; }
+.journeyTrack { position: absolute; top: 50%; right: 0; left: 0; height: 8px; overflow: hidden; border-radius: 999px; background: #dce2e7; transform: translateY(-50%); }
+.journeyTrack > i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #2f7668, #3b6f9e); transition: width .5s ease; }
+.journeyStation { --station-progress: 0%; position: absolute; top: 50%; left: clamp(0px, var(--station-progress), 100%); display: grid; justify-items: center; transform: translate(-50%, -50%); }
+.journeyStation > i { width: 18px; height: 18px; border: 4px solid #f8fbfc; border-radius: 50%; background: #708090; box-shadow: 0 0 0 2px #aebbc7; }
+.journeyStation > small { position: absolute; top: 18px; display: flex; min-width: 58px; flex-direction: column; align-items: center; color: #66717d; font-size: 11px; white-space: nowrap; }
+.journeyStation > small b { color: #344a6a; font-size: 12px; font-variant-numeric: tabular-nums; }
+.studentSpark { --student-progress: 0%; --student-lane: 0px; --student-delay: 0ms; position: absolute; z-index: 2; top: calc(50% + var(--student-lane)); left: clamp(8px, var(--student-progress), calc(100% - 8px)); width: 12px; height: 12px; border: 2px solid #f8fbfc; border-radius: 50%; background: #9ba6af; box-shadow: 0 0 0 2px #9ba6af55; transform: translate(-50%, -50%); animation: studentSparkFloat 2.8s ease-in-out infinite alternate; animation-delay: var(--student-delay); }
+.studentSpark[data-state="learning"] { background: #356d9d; box-shadow: 0 0 0 3px #356d9d2e, 0 0 14px #356d9d70; }
+.studentSpark[data-state="completed"] { background: #218269; box-shadow: 0 0 0 3px #2182692e, 0 0 16px #21826980; }
+.averageBeacon { --average-progress: 0%; position: absolute; z-index: 3; top: 7px; left: clamp(18px, var(--average-progress), calc(100% - 18px)); display: grid; justify-items: center; color: #344a6a; font-size: 11px; font-weight: 650; white-space: nowrap; transform: translateX(-50%); }
+.averageBeacon i { width: 2px; height: 34px; background: #344a6a; box-shadow: 0 0 8px #344a6a55; }
+.averageBeacon i::before { content: ""; display: block; width: 12px; height: 9px; border-radius: 2px 5px 5px 2px; background: #344a6a; transform: translateX(2px); }
+.journeyLegend { display: flex; align-items: center; gap: 18px; color: #52606d; font-size: 12px; }
+.journeyLegend > span { display: inline-flex; align-items: center; gap: 6px; }
+.journeyLegend i { width: 9px; height: 9px; border-radius: 50%; background: #9ba6af; }
+.journeyLegend i[data-state="learning"] { background: #356d9d; }
+.journeyLegend i[data-state="completed"] { background: #218269; }
+.journeyLegend small { margin-left: auto; color: #78838e; font-size: 11px; }
+@keyframes studentSparkFloat { from { translate: 0 -2px; } to { translate: 0 2px; } }
 .chartEmpty { display: grid; min-height: 160px; place-items: center; color: #66717d; text-align: center; }
 @media (max-width: 900px) { .charts { grid-template-columns: minmax(0, 1fr); } }
-@media (max-width: 1100px) { .knowledgeGrid { grid-template-columns: minmax(0, 1fr); } .knowledgePanel { min-height: 220px; } }
+@media (max-width: 1100px) { .knowledgeGrid { grid-template-columns: minmax(0, 1fr); } .knowledgePanel { min-height: 220px; } .journeyHeading { align-items: flex-start; } }
 @media (max-width: 600px) { .metrics { grid-template-columns: minmax(0, 1fr); } }
 @media (max-height: 650px) { .root { padding: 16px; } .header { margin-bottom: 12px; } .metrics { padding-bottom: 16px; } .charts { margin-top: 16px; } }
+@media (prefers-reduced-motion: reduce) { .studentSpark { animation: none; } .journeyTrack > i { transition: none; } }

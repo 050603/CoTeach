@@ -6,7 +6,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createCourseQualityLabServer, parseCliOptions } from "./server";
+import { createCourseQualityLabServer, parseCliOptions, withRuntimeMetrics } from "./server";
 import type { CourseQualityLabManifest, LabVariantResult } from "./types";
 
 const COMPLETE = { state: "complete" as const };
@@ -27,6 +27,16 @@ function variant(prefix: string): LabVariantResult {
       audioUrl: `/files/audio/pair-1/${prefix}/segment-1.mp3`,
     }],
     quiz: [],
+    ...(prefix === "enhanced" ? {
+      teacherReviewNotes: [{
+        id: "review-note-1",
+        page: 1,
+        claim: "示例中的具体年份",
+        reason: "现有资料没有提供该年份",
+        suggestion: "教师核对原始资料或删除年份",
+        origin: "design" as const,
+      }],
+    } : {}),
     downloads: {
       pptx: `/files/artifacts/pair-1/${prefix}/course.pptx`,
       script: `/files/artifacts/pair-1/${prefix}/script.txt`,
@@ -46,6 +56,7 @@ function manifest(): CourseQualityLabManifest {
       sources: [],
       pairs: [{
         id: "pair-1",
+        experimentId: "experiment-v3",
         batch: 1,
         variants: { baseline: variant("baseline"), enhanced: variant("enhanced") },
       }],
@@ -123,6 +134,62 @@ describe("course quality lab server", () => {
     expect(await rendererFont.text()).toBe("standalone-font");
   });
 
+  it("adds token, latency, call and failure metrics from private runtime logs", async () => {
+    const value = manifest();
+    value.sections[0].pairs[0].variants.enhanced.artifactBaseUrl = "/files/artifacts/experiment/section-1/1/enhanced";
+    const runDir = path.join(rootDir, "runs", "experiment", "section-1", "1", "enhanced");
+    const designDir = path.join(rootDir, "designs", "experiment", "section-1", "1");
+    await mkdir(runDir, { recursive: true });
+    await mkdir(designDir, { recursive: true });
+    await writeFile(path.join(runDir, "calls.json"), JSON.stringify([
+      { status: "complete", kind: "slide", elapsedMs: 1_200, systemChars: 1_000, userChars: 500, outputChars: 250, tokenUsage: 640,
+        attempts: [{ status: "failed", startedAt: "2026-01-01T00:00:01.000Z" }, { status: "complete", startedAt: "2026-01-01T00:00:02.000Z" }] },
+      { status: "failed", kind: "repair", elapsedMs: 800, systemChars: 100, userChars: 50,
+        attempts: [{ status: "failed", startedAt: "2026-01-01T00:00:03.000Z" }] },
+    ]));
+    await writeFile(path.join(designDir, "calls.json"), JSON.stringify([
+      { status: "complete", kind: "design", elapsedMs: 500, systemChars: 250, userChars: 250, outputChars: 100,
+        attempts: [{ status: "complete", startedAt: "2026-01-01T00:00:00.000Z" }] },
+    ]));
+    await writeFile(path.join(runDir, "tts-calls.json"), JSON.stringify([
+      { status: "complete", elapsedMs: 300, cacheHit: true, audioBytes: 4_096 },
+      { status: "failed", elapsedMs: 200, cacheHit: false },
+    ]));
+    await writeFile(path.join(runDir, "telemetry.json"), JSON.stringify({
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:10.000Z",
+      checkpointReuses: 2,
+      qualityRepairCalls: 1,
+    }));
+
+    const enriched = await withRuntimeMetrics(rootDir, value);
+    expect(value.sections[0].pairs[0].variants.enhanced.metrics).toBeUndefined();
+    expect(enriched.sections[0].pairs[0].variants.enhanced.metrics).toEqual({
+      tokenUsage: 940,
+      tokenUsageEstimated: true,
+      inputCharacters: 2_150,
+      outputCharacters: 350,
+      modelCalls: 3,
+      failedModelCalls: 1,
+      transportAttempts: 4,
+      transportRetries: 1,
+      transportAttemptsRecorded: true,
+      qualityRepairCalls: 1,
+      abandonedModelCalls: 0,
+      checkpointReuses: 2,
+      telemetryRecorded: true,
+      wallClockMs: 10_000,
+      modelElapsedMs: 2_500,
+      designCalls: 1,
+      generationCalls: 2,
+      ttsCalls: 2,
+      failedTtsCalls: 1,
+      ttsElapsedMs: 500,
+      ttsCacheHits: 1,
+      audioBytes: 4_096,
+    });
+  });
+
   it("atomically creates and updates reviews and exports JSON and safe CSV", async () => {
     expect(await (await fetch(`${baseUrl}/api/reviews`)).json()).toEqual({ reviews: [] });
     const input = {
@@ -144,6 +211,27 @@ describe("course quality lab server", () => {
     expect(saved.reviews).toHaveLength(1);
     expect(saved.reviews[0].outcome).toBe("enhanced");
 
+    const teacherReviewSave = await fetch(`${baseUrl}/api/reviews/pair-1`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        teacherReviews: {
+          enhanced: {
+            experimentId: "experiment-v3",
+            variant: "enhanced",
+            notes: { "review-note-1": { status: "confirmed", note: "已核对校志" } },
+          },
+        },
+      }),
+    });
+    expect(teacherReviewSave.status).toBe(200);
+    const teacherReviewSaved = JSON.parse(await readFile(path.join(rootDir, "reviews.json"), "utf8"));
+    expect(teacherReviewSaved.reviews[0].teacherReviews.enhanced.notes["review-note-1"]).toEqual({
+      status: "confirmed",
+      note: "已核对校志",
+    });
+
     const csv = await (await fetch(`${baseUrl}/api/exports/reviews.csv`)).text();
     expect(csv).toContain('"pair-1","enhanced"');
     expect(csv).toContain("'=增强版解释更完整");
@@ -164,6 +252,23 @@ describe("course quality lab server", () => {
       body: JSON.stringify({ outcome: "undecided", dimensions: {}, pageNotes: {} }),
     });
     expect(unknown.status).toBe(404);
+    const mismatchedTeacherReview = await fetch(`${baseUrl}/api/reviews/pair-1`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        outcome: "undecided",
+        dimensions: {},
+        pageNotes: {},
+        teacherReviews: {
+          enhanced: {
+            experimentId: "old-experiment",
+            variant: "enhanced",
+            notes: { "review-note-1": { status: "confirmed" } },
+          },
+        },
+      }),
+    });
+    expect(mismatchedTeacherReview.status).toBe(400);
     expect(await (await fetch(`${baseUrl}/api/reviews`)).json()).toEqual({ reviews: [] });
   });
 

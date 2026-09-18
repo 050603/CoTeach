@@ -13,6 +13,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { AsyncLocalStorage } from "node:async_hooks";
 import JSZip from "jszip";
 import type { QuizQuestion } from "@openmaic/dsl";
 import type { AICallFn, SceneGenerationContext } from "@openmaic/lib/generation/pipeline-types";
@@ -23,13 +24,18 @@ import type { TTSModelConfig } from "@openmaic/lib/audio/types";
 import { DEFAULT_TTS_MODELS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from "@openmaic/lib/audio/constants";
 import { generateTTS } from "@openmaic/lib/audio/tts-providers";
 import { splitLongSpeechActions } from "@openmaic/lib/audio/tts-utils";
-import { buildTtsTimingPlan } from "@openmaic/lib/audio/tts-timing";
-import { withGenerationRetry } from "@openmaic/lib/generation/generation-retry";
+import { buildTtsTimingPlan, countLatinArticulationUnits, countSpeechUnits } from "@openmaic/lib/audio/tts-timing";
 import { buildCompleteScene } from "@openmaic/lib/generation/scene-builder";
 import { generateSceneActions, generateSceneContent } from "@openmaic/lib/generation/scene-generator";
+import { withGenerationRetry } from "@openmaic/lib/generation/generation-retry";
 import { auditAndRepairSlideOnce } from "@openmaic/lib/generation/slide-layout-audit";
 import { OPENMAIC_GENERATION_BASELINE } from "@openmaic/lib/generation/openmaic-baseline";
-import { createCourseGenerationAiCall } from "@openmaic/lib/server/course-generation-ai-call";
+import {
+  createCourseGenerationAiCall,
+  withCourseGenerationAiCallContext,
+} from "@openmaic/lib/server/course-generation-ai-call";
+import { runWithCourseGenerationLlmContext } from "@/lib/course-generation/llm-concurrency";
+import { slideReviewEvidence } from "@/lib/openmaic/generation/slide-content-review";
 import {
   getServerTTSProviders,
   initializeServerProviderConfig,
@@ -49,15 +55,22 @@ import type {
   ArtifactStatus,
   CourseQualityLabManifest,
   LabQuizQuestion,
+  LabReviewIssue,
   LabScriptSegment,
+  LabTeacherReviewNote,
   LabVariantKey,
   LabVariantResult,
   TeachingDesign,
 } from "./types";
 
-export const LAB_GENERATOR_VERSION = "course-quality-lab-v1";
-const ENHANCED_TEACHING_ADAPTER_VERSION = "single-teaching-brief-v2";
-const ENHANCED_NARRATION_VERSION = "natural-teacher-speech-v4";
+export const LAB_GENERATOR_VERSION = "course-quality-lab-v4";
+export const LAB_EXPERIMENT_ID = "source-first-workflow-v4";
+const DESIGN_PROMPT_VERSION = "budgeted-page-contract-v1";
+const ENHANCED_TEACHING_ADAPTER_VERSION = "lab-isolated-page-contract-v2";
+const ENHANCED_NARRATION_VERSION = "budgeted-natural-narration-v4";
+const PAGE_REVIEW_VERSION = "joint-slide-narration-review-v4";
+const RESULT_ASSEMBLY_VERSION = "teacher-review-dedup-v1";
+const SLIDE_REPAIR_VERSION = "targeted-element-patch-v2";
 export const LAB_RUNTIME_ROOT = path.resolve(
   process.env.COURSE_QUALITY_LAB_ROOT ?? ".openpbl-runtime/course-quality-lab",
 );
@@ -65,6 +78,8 @@ const MANIFEST_PATH = path.join(LAB_RUNTIME_ROOT, "manifest.json");
 const GENERATOR_LOCK_PATH = path.join(LAB_RUNTIME_ROOT, ".generator.lock");
 const LANGUAGE = "zh-CN";
 const SPEED = 1;
+const MODEL_TIMEOUT_MS = 300_000;
+const MODEL_MAX_DURATION_MS = 600_000;
 
 interface CliOptions {
   sectionIds: Set<string>;
@@ -72,24 +87,129 @@ interface CliOptions {
   variants: Set<LabVariantKey>;
   modelString?: string;
   ttsOnly: boolean;
-  narrationOnly: boolean;
   retryFailed: boolean;
   deploymentSecrets: boolean;
   concurrency: number;
 }
 
-interface LoggedCall {
+export interface LabCheckpointStore {
+  readJson<T>(key: string): Promise<T | undefined>;
+  writeJson(key: string, value: unknown): Promise<void>;
+  writeText(key: string, value: string): Promise<void>;
+  exists(key: string): Promise<boolean>;
+}
+
+export type LabGenerationProgressEvent = {
+  sectionId: string;
+  batch: number;
+  stage: "design" | LabVariantKey;
+  state: "started" | "completed" | "failed" | "reused";
+  message?: string;
+};
+
+export interface LabGenerationCoreAdapters {
+  checkpointStore?: LabCheckpointStore;
+  createModelCall?: typeof createCourseGenerationAiCall;
+  onProgress?: (event: LabGenerationProgressEvent) => Promise<void> | void;
+}
+
+const coreAdapterContext = new AsyncLocalStorage<LabGenerationCoreAdapters>();
+
+const fileCheckpointStore: LabCheckpointStore = {
+  async readJson<T>(key: string): Promise<T | undefined> {
+    try {
+      return JSON.parse(await fs.readFile(key, "utf8")) as T;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  },
+  async writeJson(key, value) {
+    await fs.mkdir(path.dirname(key), { recursive: true });
+    const temporary = `${key}.${process.pid}.tmp`;
+    await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`);
+    await fs.rename(temporary, key);
+  },
+  async writeText(key, value) {
+    await fs.mkdir(path.dirname(key), { recursive: true });
+    const temporary = `${key}.${process.pid}.tmp`;
+    await fs.writeFile(temporary, value, "utf8");
+    await fs.rename(temporary, key);
+  },
+  async exists(key) {
+    try {
+      await fs.access(key);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
+
+function checkpointStore(): LabCheckpointStore {
+  return coreAdapterContext.getStore()?.checkpointStore ?? fileCheckpointStore;
+}
+
+interface LoggedTransportAttempt {
+  attempt: number;
+  status: "queued" | "running" | "complete" | "failed" | "abandoned";
+  queuedAt: string;
+  startedAt?: string;
+  queueMs?: number;
+  firstOutputMs?: number;
+  reasoningCharacters?: number;
+  textCharacters?: number;
+  elapsedMs?: number;
+  error?: string;
+}
+
+export interface LoggedCall {
   id: number;
+  stageId: string;
   label: string;
+  kind: "design" | "slide" | "narration" | "review" | "repair" | "quiz";
   startedAt: string;
+  completedAt?: string;
   elapsedMs: number;
-  status: "complete" | "failed";
+  status: "running" | "complete" | "failed" | "abandoned";
   systemSha256: string;
   userSha256: string;
+  imagesSha256?: string;
   systemChars: number;
   userChars: number;
   outputChars?: number;
+  responseFile?: string;
+  responseSha256?: string;
+  parseError?: string;
+  /** Provider total when supplied, with the shared character estimate as fallback. */
+  tokenUsage?: number;
+  attempts: LoggedTransportAttempt[];
   error?: string;
+}
+
+type GeneratedSlideContent = Extract<
+  NonNullable<Awaited<ReturnType<typeof generateSceneContent>>>,
+  { elements: unknown }
+>;
+
+interface PageStageCheckpoint {
+  contentFingerprint?: string;
+  content?: GeneratedSlideContent;
+  layoutChecks?: string[];
+  narrationFingerprint?: string;
+  actions?: Action[];
+  reviewFingerprint?: string;
+  reviewIssues?: LabReviewIssue[];
+  teacherReviewNotes?: LabTeacherReviewNote[];
+  scene?: Scene;
+}
+
+interface GenerationTelemetry {
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  checkpointReuses: number;
+  qualityRepairCalls: number;
 }
 
 interface GenerationCheckpoint {
@@ -108,12 +228,14 @@ interface GenerationCheckpoint {
 }
 
 interface GenerationPartialCheckpoint {
-  version: 1;
+  version: 2;
   generationFingerprint: string;
   generatedAt: string;
-  scenes: Scene[];
-  checks: string[];
+  pages: PageStageCheckpoint[];
+  quizFingerprint?: string;
+  quiz?: LabQuizQuestion[];
   calls: LoggedCall[];
+  telemetry: GenerationTelemetry;
 }
 
 interface DesignCheckpoint {
@@ -185,28 +307,19 @@ function emptyVariant(label: string): LabVariantResult {
 }
 
 async function fileExists(file: string): Promise<boolean> {
-  try {
-    await fs.access(file);
-    return true;
-  } catch {
-    return false;
-  }
+  return checkpointStore().exists(file);
 }
 
 async function readJson<T>(file: string): Promise<T | undefined> {
-  try {
-    return JSON.parse(await fs.readFile(file, "utf8")) as T;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
+  return checkpointStore().readJson<T>(file);
 }
 
 async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`);
-  await fs.rename(temporary, file);
+  await checkpointStore().writeJson(file, value);
+}
+
+async function writeTextAtomic(file: string, value: string): Promise<void> {
+  await checkpointStore().writeText(file, value);
 }
 
 let manifestSaveQueue: Promise<void> = Promise.resolve();
@@ -238,7 +351,19 @@ async function acquireGeneratorLock(): Promise<() => Promise<void>> {
   return () => fs.unlink(GENERATOR_LOCK_PATH).catch(() => undefined);
 }
 
-function initialManifest(existing?: CourseQualityLabManifest): CourseQualityLabManifest {
+export function initialManifest(existing?: CourseQualityLabManifest): CourseQualityLabManifest {
+  const withCanonicalRenderUrls = (
+    result: LabVariantResult,
+    sectionId: string,
+    batch: number,
+    variant: LabVariantKey,
+  ): LabVariantResult => ({
+    ...result,
+    slides: result.slides.map((slide, index) => ({
+      ...slide,
+      renderUrl: publicRender(sectionId, batch, variant, index),
+    })),
+  });
   return {
     version: 1,
     title: "CoTeach AI课程质量对比实验",
@@ -256,15 +381,34 @@ function initialManifest(existing?: CourseQualityLabManifest): CourseQualityLabM
         sources: fixture.sources.map((source) => ({ ...source })),
         enhancedDesign: prior?.enhancedDesign,
         pairs: LAB_BATCHES.map((batch) => {
-          const id = `${fixture.id}-batch-${batch}`;
+          const id = `${fixture.id}-${LAB_EXPERIMENT_ID}-batch-${batch}`;
           const previous = prior?.pairs.find((pair) => pair.id === id);
-          return previous ?? {
-            id,
-            batch,
-            label: `第 ${batch} 次生成`,
+          if (previous) return {
+            ...previous,
+            experimentId: LAB_EXPERIMENT_ID,
             variants: {
-              baseline: emptyVariant("当前基线"),
-              enhanced: emptyVariant("教学增强"),
+              baseline: withCanonicalRenderUrls(previous.variants.baseline, fixture.id, batch, "baseline"),
+              enhanced: withCanonicalRenderUrls(previous.variants.enhanced, fixture.id, batch, "enhanced"),
+            },
+          };
+          const archivedPair = prior?.pairs.find((pair) => pair.experimentId !== LAB_EXPERIMENT_ID
+            && pair.variants.enhanced.statuses.ppt.state === "complete"
+            && pair.variants.enhanced.statuses.script.state === "complete")
+            ?? prior?.pairs.find((pair) => pair.variants.enhanced.statuses.ppt.state === "complete"
+              && pair.variants.enhanced.statuses.script.state === "complete");
+          return {
+            id,
+            experimentId: LAB_EXPERIMENT_ID,
+            batch,
+            label: `第 ${batch} 次独立生成`,
+            variants: {
+              baseline: archivedPair
+                ? withCanonicalRenderUrls({
+                    ...structuredClone(archivedPair.variants.enhanced),
+                    label: "优化前版本（归档）",
+                  }, fixture.id, batch, "baseline")
+                : emptyVariant("优化前版本（归档）"),
+              enhanced: emptyVariant("v4 重组流程"),
             },
           };
         }),
@@ -304,22 +448,17 @@ function parseCli(argv: string[]): CliOptions {
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 4) {
     throw new Error("--concurrency must be an integer from 1 to 4");
   }
-  const narrationOnly = argv.includes("--narration-only");
-  if (narrationOnly && variant !== "enhanced") {
-    throw new Error("--narration-only requires --variant enhanced");
-  }
-  if (narrationOnly && (argv.includes("--tts-only") || argv.includes("--retry-failed"))) {
-    throw new Error("--narration-only cannot be combined with --tts-only or --retry-failed");
+  if (argv.includes("--narration-only")) {
+    throw new Error("--narration-only 已移除；本次优化版在首次动作生成时直接生成自然讲稿");
   }
   return {
     sectionIds: new Set(section ? [section] : LAB_SECTION_FIXTURES.map((item) => item.id)),
     batches: new Set(batch ? [batch] : LAB_BATCHES),
     variants: new Set<LabVariantKey>(variant
       ? [variant as LabVariantKey]
-      : ["baseline", "enhanced"]),
+      : ["enhanced"]),
     modelString: valueAfter("--model"),
     ttsOnly: argv.includes("--tts-only"),
-    narrationOnly,
     retryFailed: argv.includes("--retry-failed"),
     deploymentSecrets: argv.includes("--deployment-secrets"),
     concurrency,
@@ -361,7 +500,144 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
-export function normalizeTeachingDesign(value: unknown, pageCount: number): TeachingDesign {
+function normalizeTeacherReviewNotes(
+  value: unknown,
+  pageCount: number,
+  origin: LabTeacherReviewNote["origin"] = "design",
+): LabTeacherReviewNote[] {
+  if (!Array.isArray(value)) return [];
+  const notes = value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    const page = Number(record.page);
+    const claim = typeof record.claim === "string" ? record.claim.trim() : "";
+    const reason = typeof record.reason === "string" ? record.reason.trim() : "";
+    const suggestion = typeof record.suggestion === "string" ? record.suggestion.trim() : "";
+    if (!Number.isInteger(page) || page < 1 || page > pageCount || !claim || !reason || !suggestion) return [];
+    const suppliedId = typeof record.id === "string" && /^[a-zA-Z0-9._-]{1,96}$/.test(record.id)
+      ? record.id
+      : undefined;
+    return [{
+      id: suppliedId ?? `page-${page}-${sha256(`${claim}\n${reason}`).slice(0, 12)}`,
+      page,
+      claim,
+      reason,
+      suggestion,
+      origin,
+    } satisfies LabTeacherReviewNote];
+  });
+  return [...new Map(notes.map((note) => [`${note.page}\n${note.claim}`, note])).values()];
+}
+
+type PageTimingBudget = NonNullable<NonNullable<TeachingDesign["pagePlan"]>[number]["narrationBudget"]>;
+
+function sourceContainsEvidenceQuote(sourceText: string, quote: string): boolean {
+  const trimmed = quote.trim();
+  if (sourceText.includes(trimmed)) return true;
+  // Models commonly close a verbatim excerpt with a sentence mark even when the
+  // same words are followed by a comma in the source. Accept only that boundary
+  // punctuation change; the quoted words themselves must remain an exact slice.
+  const withoutTerminalPunctuation = trimmed.replace(/[，。！？；：,.!?;:]+$/u, "").trimEnd();
+  return withoutTerminalPunctuation.length >= 4 && sourceText.includes(withoutTerminalPunctuation);
+}
+
+export function applySlideElementUpdates(
+  value: unknown,
+  current: GeneratedSlideContent,
+  issueCount = 1,
+): GeneratedSlideContent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("页面局部修复不是 JSON 对象");
+  }
+  const rawUpdates = (value as { updates?: unknown }).updates;
+  if (!Array.isArray(rawUpdates) || rawUpdates.length === 0) {
+    throw new Error("页面局部修复没有返回元素更新");
+  }
+  if (rawUpdates.length > Math.max(1, issueCount)) {
+    throw new Error("页面局部修复修改了过多元素");
+  }
+  const currentById = new Map(current.elements.map((element) => [element.id, element]));
+  const updates = new Map<string, GeneratedSlideContent["elements"][number]>();
+  for (const rawUpdate of rawUpdates) {
+    if (!rawUpdate || typeof rawUpdate !== "object" || Array.isArray(rawUpdate)) {
+      throw new Error("页面局部修复包含无效更新");
+    }
+    const update = rawUpdate as { id?: unknown; changes?: unknown };
+    if (typeof update.id !== "string" || !currentById.has(update.id) || updates.has(update.id)) {
+      throw new Error("页面局部修复必须引用唯一的现有元素 id");
+    }
+    if (!update.changes || typeof update.changes !== "object" || Array.isArray(update.changes)) {
+      throw new Error(`元素 ${update.id} 缺少 changes 对象`);
+    }
+    const changes = update.changes as Record<string, unknown>;
+    if (Object.keys(changes).length === 0 || "id" in changes || "type" in changes) {
+      throw new Error(`元素 ${update.id} 的局部修复不得为空或改变 id/type`);
+    }
+    const original = currentById.get(update.id);
+    if (!original) throw new Error(`元素 ${update.id} 不存在`);
+    if (original.type === "text" && typeof changes.content === "string") {
+      const fontSizes = [...changes.content.matchAll(/font-size\s*:\s*([0-9.]+)px/gi)]
+        .map((match) => Number(match[1]))
+        .filter(Number.isFinite);
+      if (fontSizes.some((fontSize) => fontSize < 16)) {
+        throw new Error(`元素 ${update.id} 的投屏文字不得低于 16px`);
+      }
+    }
+    const merged = {
+      ...original,
+      ...changes,
+      id: original.id,
+      type: original.type,
+    } as GeneratedSlideContent["elements"][number];
+    if (JSON.stringify(merged) === JSON.stringify(original)) {
+      throw new Error(`元素 ${update.id} 的局部修复没有产生变化`);
+    }
+    updates.set(update.id, merged);
+  }
+  return {
+    ...current,
+    elements: current.elements.map((element) => updates.get(element.id) ?? element),
+  };
+}
+
+async function repairSlideElementsOnce(options: {
+  content: GeneratedSlideContent;
+  issues: readonly LabReviewIssue[];
+  aiCall: AICallFn;
+}): Promise<GeneratedSlideContent> {
+  const response = await options.aiCall(
+    [
+      "你负责局部修复课程 PPT 元素。只修改审核问题直接涉及的现有元素。",
+      "不得重建页面、删除元素、增加元素、改变元素 id/type，也不得顺手改写无关内容。",
+      "修改文字时优先用斜杠、箭头和短语精简表述，使可见字数不超过原元素并保持原行数；投屏正文不得低于 16px。保持原几何是首选，只有确认不会侵入相邻区域时才能在 changes 中调整 left/top/width/height。",
+      "同一要求只修改最合适的一个元素，不要在标题、步骤和说明框中重复补写同一句。新增关系词时优先替换为长度相近的标题或短标签，避免拉长正文。",
+      "返回严格 JSON：{\"updates\":[{\"id\":\"现有元素 id\",\"changes\":{\"需要变化的字段\":\"新值\"}}]}。",
+      "changes 只写发生变化的字段；文本元素的 content 保留合法 HTML。不要返回说明或 Markdown。",
+      `协议版本：${SLIDE_REPAIR_VERSION}`,
+    ].join("\n"),
+    [
+      `当前元素：${JSON.stringify(options.content.elements)}`,
+      `审核问题：${JSON.stringify(options.issues.map((issue) => ({
+        category: issue.category,
+        targetType: issue.targetType,
+        targetId: issue.targetId,
+        evidence: issue.evidence,
+        repair: issue.repair,
+      })))}`,
+    ].join("\n\n"),
+  );
+  return applySlideElementUpdates(
+    JSON.parse(stripCodeFence(response)),
+    options.content,
+    options.issues.length,
+  );
+}
+
+export function normalizeTeachingDesign(
+  value: unknown,
+  pageCount: number,
+  options: { timingBudgets?: readonly PageTimingBudget[]; sourceText?: string } = {},
+): TeachingDesign {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("教学设计不是 JSON 对象");
   }
@@ -369,10 +645,43 @@ export function normalizeTeachingDesign(value: unknown, pageCount: number): Teac
   const pagePlan = Array.isArray(record.pagePlan)
     ? record.pagePlan.flatMap((item) => {
         if (!item || typeof item !== "object") return [];
-        const page = Number((item as Record<string, unknown>).page);
-        const purpose = (item as Record<string, unknown>).purpose;
-        return Number.isInteger(page) && page >= 1 && page <= pageCount && typeof purpose === "string" && purpose.trim()
-          ? [{ page, purpose: purpose.trim() }]
+        const pageRecord = item as Record<string, unknown>;
+        const page = Number(pageRecord.page);
+        const purpose = pageRecord.purpose;
+        const priorKnowledge = pageRecord.priorKnowledge;
+        const newContent = pageRecord.newContent;
+        const explanation = stringArray(pageRecord.explanation);
+        const requiredVisibleContent = stringArray(pageRecord.requiredVisibleContent);
+        const narrationFocus = stringArray(pageRecord.narrationFocus);
+        const evidenceQuotes = stringArray(pageRecord.evidenceQuotes);
+        const assessmentFocus = stringArray(pageRecord.assessmentFocus);
+        return Number.isInteger(page) && page >= 1 && page <= pageCount
+          && typeof purpose === "string" && purpose.trim()
+          && typeof priorKnowledge === "string" && priorKnowledge.trim()
+          && typeof newContent === "string" && newContent.trim()
+          && explanation.length > 0
+          && requiredVisibleContent.length > 0
+          && narrationFocus.length > 0
+          && evidenceQuotes.length > 0
+          && evidenceQuotes.every((quote) => !options.sourceText
+            || sourceContainsEvidenceQuote(options.sourceText, quote))
+          && assessmentFocus.length > 0
+          ? [{
+              page,
+              purpose: purpose.trim(),
+              priorKnowledge: priorKnowledge.trim(),
+              newContent: newContent.trim(),
+              explanation,
+              examples: stringArray(pageRecord.examples),
+              conditions: stringArray(pageRecord.conditions),
+              requiredVisibleContent,
+              narrationFocus,
+              evidenceQuotes,
+              ...(options.timingBudgets?.[page - 1]
+                ? { narrationBudget: { ...options.timingBudgets[page - 1] } }
+                : {}),
+              assessmentFocus,
+            }]
           : [];
       })
     : [];
@@ -382,9 +691,11 @@ export function normalizeTeachingDesign(value: unknown, pageCount: number): Teac
     conditionsAndMisconceptions: stringArray(record.conditionsAndMisconceptions),
     assessmentFocus: stringArray(record.assessmentFocus),
     pagePlan,
+    teacherReviewNotes: normalizeTeacherReviewNotes(record.teacherReviewNotes, pageCount),
   };
-  if (!design.coreExplanation?.length || !design.workedExample?.length || !design.assessmentFocus?.length) {
-    throw new Error("教学设计缺少核心解释、示例推演或理解检验");
+  const plannedPages = new Set(pagePlan.map((item) => item.page));
+  if (pagePlan.length !== pageCount || plannedPages.size !== pageCount) {
+    throw new Error("教学设计缺少逐页职责、内容分工、依据、解释或理解检验");
   }
   return design;
 }
@@ -395,10 +706,36 @@ function sourceContext(fixture: LabSectionFixture): string {
   ).join("\n\n");
 }
 
-function designPrompt(fixture: LabSectionFixture): { system: string; user: string } {
+function timingBudgetsForFixture(fixture: LabSectionFixture, tts: TtsRuntime): PageTimingBudget[] {
+  return fixture.pages.map(() => {
+    const plan = buildTtsTimingPlan({
+      targetDurationSec: fixture.targetPageDurationSec,
+      providerId: tts.publicConfig.provider,
+      modelId: tts.publicConfig.model,
+      voiceId: tts.publicConfig.voice,
+      language: LANGUAGE,
+      speed: SPEED,
+      contentType: "explanation",
+      pageKind: "slide",
+      naturalSpeedLocked: true,
+    });
+    return {
+      targetDurationSec: plan.targetDurationSec,
+      targetUnits: plan.targetUnits,
+      minUnits: plan.minUnits,
+      maxUnits: plan.maxUnits,
+      unit: plan.unit,
+    };
+  });
+}
+
+function designPrompt(
+  fixture: LabSectionFixture,
+  timingBudgets: readonly PageTimingBudget[],
+): { system: string; user: string } {
   return {
-    system: `你是课程小节的教学设计师。只返回合法 JSON，不使用 Markdown。设计必须完全受给定资料约束；资料没有支持的事实应保留未知。页面已经冻结为 ${fixture.pages.length} 页，不得增加页面。`,
-    user: `为以下小节生成一份让 PPT、讲稿和节末题共享的教学设计。\n\n小节：${fixture.title}\n学段：${fixture.grade}\n学习目标：\n${fixture.learningObjectives.map((item) => `- ${item}`).join("\n")}\n\n冻结页面：\n${fixture.pages.map((page, index) => `${index + 1}. ${page.title}：${page.purpose}\n   要点：${page.keyPoints.join("；")}`).join("\n")}\n\n权威资料：\n${sourceContext(fixture)}\n\n返回结构：\n{"coreExplanation":["必须讲清的因果关系或原理"],"workedExample":["含具体条件、步骤和每步理由的完整推演"],"conditionsAndMisconceptions":["适用边界或误区及辨析依据"],"assessmentFocus":["学生应能解释或应用什么以及答案必须包含的理由"],"pagePlan":[{"page":1,"purpose":"本页承担的解释、例证和边界"}]}\npagePlan 必须逐页且页码只使用 1-${fixture.pages.length}。`,
+    system: `你是课程小节的教学设计师。只返回合法 JSON，不使用 Markdown。设计必须完全受给定资料约束。页面已经冻结为 ${fixture.pages.length} 页，不得增加页面。学生教学内容与教师审核信息必须严格分离：资料不足以支持的具体事实不得进入 pagePlan，只能写入 teacherReviewNotes；不要用删除限定语的方式把不确定说法改成确定结论。`,
+    user: `为以下小节生成一份让 PPT、讲稿、审核和节末题共享的逐页教学合同。\n\n小节：${fixture.title}\n学习对象与已有基础：${fixture.grade}\n学习目标：\n${fixture.learningObjectives.map((item) => `- ${item}`).join("\n")}\n\n冻结页面与自然语速预算：\n${fixture.pages.map((page, index) => `${index + 1}. ${page.title}：${page.purpose}\n   要点：${page.keyPoints.join("；")}\n   讲稿预算：${timingBudgets[index].targetDurationSec} 秒，约 ${timingBudgets[index].targetUnits} ${timingBudgets[index].unit}（参考范围 ${timingBudgets[index].minUnits}-${timingBudgets[index].maxUnits}）`).join("\n")}\n\n权威资料：\n${sourceContext(fixture)}\n\n设计要求：\n1. 每页只承担它在小节中的职责，不重复完整教学流程。\n2. priorKnowledge 写此前已讲内容，newContent 只写本页新增认识。\n3. requiredVisibleContent 写为防止误解而必须显示在 PPT 上的关系、条件或证据；narrationFocus 写画面不重复、由讲稿展开的理由、推理和必要背景；explanation 概括两者如何共同完成本页教学。\n4. evidenceQuotes 必须逐字摘录权威资料，只选择当前页实际使用的依据。按给定预算安排解释量，不为凑时长重复定义或总结。\n5. examples 与 conditions 可为空。案例出现时必须说明观察到的现象为什么支持概念或结论。\n6. 假设案例自然引入；可能原因不得写成确定原因，教学建议不得写成普遍必要条件。\n7. assessmentFocus 只检查本页实际承担的学习结果。\n8. pagePlan 只能写学生实际要看到和听到的内容。teacherReviewNotes 单独记录资料不足的具体主张；没有疑点时返回空数组。\n\n返回结构：\n{"pagePlan":[{"page":1,"purpose":"本页职责","priorKnowledge":"此前已讲内容或已有基础","newContent":"本页新增认识","explanation":["画面与讲稿如何共同完成教学"],"examples":[],"conditions":[],"requiredVisibleContent":["PPT 必须呈现的关系、条件或证据"],"narrationFocus":["讲稿需要展开的理由或推理"],"evidenceQuotes":["权威资料中的逐字短引文"],"assessmentFocus":["学生应能解释或应用什么"]}],"teacherReviewNotes":[{"page":1,"claim":"待核实的具体主张","reason":"为什么现有资料不足","suggestion":"教师应如何核实或修改"}]}\npagePlan 必须覆盖 1-${fixture.pages.length} 页。`,
   };
 }
 
@@ -418,12 +755,18 @@ export function withActuallyTaughtNarration(
 
 type NarrationRewriteSegment = { id: string; text: string };
 
+const STUDENT_REVIEW_LEAK_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
+  { label: "备课审核说明", pattern: /(?:(?:资料|材料|来源)(?:里|中)?(?:没有|未)(?:给出|提供|说明|支持|支撑)|(?:此处|这里|这一说法).{0,10}(?:需要|有待)(?:教师|老师)?(?:核实|确认|审核)|(?:需要|请)(?:教师|老师)(?:核实|确认|审核))/ },
+  { label: "假设案例免责声明", pattern: /(?:(?:先|首先)?(?:说清楚|说明)(?:一下)?(?:性质|这一点)?[：,:，]?\s*)?(?:这|这个|本|该)?(?:是|只是)?(?:一个)?假设(?:案例|课堂|情境)?[（(，,:：\s]*(?:并?非|不是|不)(?:真实|实际)(?:事件|案例)?/ },
+];
+
 const NARRATION_META_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
   { label: "页面制作视角", pattern: /(?:这一页|这页|本页|上一页|下一页|当前页|页面|幻灯片|课件|PPT)/i },
   { label: "讲稿提纲标签", pattern: /(?:核心观点|核心命题|本页主张|这页的主张|本页给出|这一页给出|本页承担)/ },
   { label: "资料编号", pattern: /(?:资料|材料)\s*[一二三四五六七八九十\d]+\s*(?:指出|要求|强调|认为|提出|说明)?/ },
   { label: "跨页总结", pattern: /(?:两页|前后两页)\s*(?:合起来|连起来)/ },
   { label: "书面排版符号", pattern: /(?:^|\s)[#*]{1,3}\s|```|\|/m },
+  ...STUDENT_REVIEW_LEAK_PATTERNS,
 ];
 
 export function narrationStyleIssues(segments: readonly NarrationRewriteSegment[]): string[] {
@@ -448,81 +791,217 @@ export function narrationStyleIssues(segments: readonly NarrationRewriteSegment[
 
 export function normalizeNarrationRewrite(
   value: unknown,
-  expected: readonly NarrationRewriteSegment[],
-  targetChars?: number,
+  fullPage: readonly NarrationRewriteSegment[],
+  targetIds: readonly string[],
 ): NarrationRewriteSegment[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("口语化讲稿不是 JSON 对象");
   }
   const rawSegments = (value as { segments?: unknown }).segments;
-  if (!Array.isArray(rawSegments) || rawSegments.length !== expected.length) {
-    throw new Error(`口语化讲稿必须返回 ${expected.length} 个原位段落`);
+  if (!Array.isArray(rawSegments) || rawSegments.length !== targetIds.length) {
+    throw new Error(`局部口语化必须且只能返回 ${targetIds.length} 个待改段落`);
+  }
+  const sourceById = new Map(fullPage.map((segment) => [segment.id, segment]));
+  const targetSet = new Set(targetIds);
+  if (targetSet.size !== targetIds.length || targetIds.some((id) => !sourceById.has(id))) {
+    throw new Error("局部口语化的待改 id 无效");
   }
   const segments = rawSegments.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new Error(`口语化讲稿第 ${index + 1} 段格式无效`);
     }
     const record = item as Record<string, unknown>;
-    if (record.id !== expected[index].id || typeof record.text !== "string" || !record.text.trim()) {
-      throw new Error(`口语化讲稿第 ${index + 1} 段必须保留 id ${expected[index].id}`);
+    if (record.id !== targetIds[index] || typeof record.text !== "string" || !record.text.trim()) {
+      throw new Error(`局部口语化第 ${index + 1} 段必须保留 id ${targetIds[index]}`);
     }
-    return { id: expected[index].id, text: record.text.trim() };
+    return { id: targetIds[index], text: record.text.trim() };
   });
-  const originalLength = expected.reduce((sum, segment) => sum + segment.text.length, 0);
-  const revisedLength = segments.reduce((sum, segment) => sum + segment.text.length, 0);
-  if (targetChars) {
-    const targetRatio = revisedLength / targetChars;
-    if (targetRatio < 0.8 || targetRatio > 1.2) {
-      throw new Error(`口语化讲稿共 ${revisedLength} 字，目标约 ${targetChars} 字`);
-    }
-  } else {
-    const lengthRatio = originalLength ? revisedLength / originalLength : 1;
-    if (lengthRatio < 0.72 || lengthRatio > 1.28) {
-      throw new Error(`口语化讲稿总长度变化过大（${Math.round(lengthRatio * 100)}%）`);
-    }
-  }
   const issues = narrationStyleIssues(segments);
   if (issues.length) throw new Error(`口语化讲稿仍有问题：${issues.join("；")}`);
   return segments;
 }
 
-function narrationRewritePrompt(
+export function normalizeNarrationPatch(
+  value: unknown,
+  fullPage: readonly NarrationRewriteSegment[],
+): NarrationRewriteSegment[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("讲稿预算局部调整不是 JSON 对象");
+  }
+  const rawSegments = (value as { segments?: unknown }).segments;
+  if (!Array.isArray(rawSegments) || rawSegments.length === 0 || rawSegments.length > fullPage.length) {
+    throw new Error("讲稿预算局部调整必须返回至少一个且不多于原稿的段落");
+  }
+  const sourceById = new Map(fullPage.map((segment) => [segment.id, segment]));
+  const seen = new Set<string>();
+  const segments = rawSegments.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`讲稿预算局部调整第 ${index + 1} 段格式无效`);
+    }
+    const record = item as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id : "";
+    if (!sourceById.has(id) || seen.has(id) || typeof record.text !== "string" || !record.text.trim()) {
+      throw new Error(`讲稿预算局部调整第 ${index + 1} 段必须引用唯一的原段落 id`);
+    }
+    seen.add(id);
+    return { id, text: record.text.trim() };
+  });
+  const issues = narrationStyleIssues(segments);
+  if (issues.length) throw new Error(`讲稿预算局部调整仍有问题：${issues.join("；")}`);
+  return segments;
+}
+
+export function withEnhancedNarrationGuidance(
+  aiCall: AICallFn,
   fixture: LabSectionFixture,
-  outline: SceneOutline,
   design: TeachingDesign,
   pageIndex: number,
-  segments: readonly NarrationRewriteSegment[],
-  targetChars: number,
-  priorIssues: readonly string[] = [],
-): { system: string; user: string } {
-  const pageDesign = design.pagePlan?.filter((item) => item.page === pageIndex + 1) ?? [];
-  return {
-    system: `你是经验丰富的中文课堂讲稿编辑。把已有讲稿改成教师面对学生时会自然说出口的话。只返回合法 JSON，不使用 Markdown。必须保持每个段落的 id、数量、顺序、事实、教学逻辑和与画面动作的对应关系；不得补充来源没有支持的新事实。`,
-    user: `课程：${fixture.title}
-学段：${fixture.grade}
-当前教学目标：${outline.teachingObjective ?? ""}
-当前内容要点：${outline.keyPoints?.join("；") ?? ""}
-教学设计：${JSON.stringify({
-  coreExplanation: design.coreExplanation,
-  workedExample: design.workedExample,
-  conditionsAndMisconceptions: design.conditionsAndMisconceptions,
-  pagePlan: pageDesign,
-})}
+): AICallFn {
+  const currentPlan = design.pagePlan?.find((item) => item.page === pageIndex + 1);
+  const progression = (design.pagePlan ?? []).map((item) => ({
+    page: item.page,
+    purpose: item.purpose,
+    newContent: item.newContent,
+  }));
+  const block = [
+    "## 3010 实验讲稿合同",
+    `学习对象与已有基础：${fixture.grade}`,
+    `全节递进摘要：${JSON.stringify(progression)}`,
+    `当前页完整合同：${JSON.stringify(currentPlan ?? {})}`,
+    "像老师面对学生讲课：优先从一个能理解的问题、现象或具体情境切入，再解释原因并引出概念；不要连续宣读定义、判断和边界。根据内容选择讲解顺序，不套固定流程。",
+    "讲稿要补充画面没有展开的理由、推理和必要背景，不能把页面要点换词复述。",
+    "本实验不设固定讲稿段数；按教学需要组织段落，不能为了满足段数填充套话。",
+    "只承担当前页的新内容；前页内容仅在推理需要时简短引用，不用固定开场、报幕或逐页总结制造连贯。",
+    "不要重新列举前页的术语或清单；需要承接时只用一个短语指代，再直接展开当前页的新推理。",
+    "返回前在内部逐项核对 narrationFocus：每项要求的原因、判断依据或推理桥都必须明确讲出，不能只列方法名称、职责或结论；不要输出核对表。",
+    "案例必须说明现象为什么支持所讲概念；假设案例要用“假设你……”等自然情境引入，不宣读真实性免责声明；可能原因不得写成确定原因，教学建议不得写成普遍必要条件。",
+    "可以适度用问题引导学生观察或预测，但不要虚构学生回答，也不要新增平台互动。",
+    "不要向学生说明资料缺口、待教师核实事项或生成风险。缺少依据的具体断言应省略或换成已有资料支持的解释，不能删掉限定语后说得更确定。知识本身的适用条件、事实核验方法和课程目标中的风险仍须正常讲清。",
+    "案例中的教学活动是讲解和分析对象，不要据此新增当前平台的现场互动。",
+    currentPlan?.narrationBudget
+      ? `所有 speech 文本合计必须落入 ${currentPlan.narrationBudget.minUnits}-${currentPlan.narrationBudget.maxUnits} ${currentPlan.narrationBudget.unit}，目标 ${currentPlan.narrationBudget.targetUnits}。返回前按总量自检；不得把 JSON、元素 id 或动作字段计入讲稿量。`
+      : "首次生成必须遵守当前页合同中的 narrationBudget；时长是表达预算，不以套话凑量。",
+  ].join("\n");
+  return (system, user, images) => aiCall(`${compactLabNarrationSystem(system)}\n\n${block}`, user, images);
+}
 
-原讲稿段落：
-${segments.map((segment) => `[${segment.id}] ${segment.text}`).join("\n")}
+export function compactLabNarrationSystem(system: string): string {
+  return system
+    .replace(
+      /\*\*Speech is where all verbal content belongs\.\*\*[\s\S]*?(?=\n\n\*\*CRITICAL — Same-session continuity\*\*:)/,
+      "**Speech carries the explanation that the current teaching contract assigns to narration; do not repeat the slide or add generic encouragement and transitions.**",
+    )
+    .replace(
+      /\*\*CRITICAL — Same-session continuity\*\*:[\s\S]*?(?=\n### 2\. Visual Guidance Strategy)/,
+      "**Same-session continuity:** Use the supplied progression and current-page responsibility. Do not force a greeting, page announcement, fixed opening/body/summary structure, or page-by-page recap.",
+    )
+    .replace("## 时间预算（阶段总量约束，页与段仅供分配参考）", "## 时间预算（首次生成必须执行）")
+    .replace(
+      /- 时间验收只针对整个知识讲授阶段的总时长（±10%），不要求每页或每段分别命中。[^\n]*\n/,
+      "- 当前页份额是首次生成的可执行内容预算；按教学需要分段，但所有 speech 文本合计必须落入本页范围。\n",
+    )
+    .replace(
+      /- 本页讲稿量参考：约 ([^；\n]+)；([^\n]+) 是规划参考范围，不是逐页验收条件/,
+      "- 本页所有 speech 文本合计目标：约 $1；$2 是首次生成必须满足的范围",
+    );
+}
 
-编辑要求：
-1. 直接讲概念、证据、例子和推理，不说“这一页、本页、上一页、下一页、PPT、课件、页面、核心观点、核心命题”等制作视角用语。
-2. 不说“资料1、材料2”一类编号；需要交代依据时，自然说出文件名称或“相关指导文件”。
-3. 像老师在教室里讲解：可以用“大家先想一想”“看左边这个例子”“为什么会这样”等自然引导，但不要反复欢迎、报幕、总结提纲或宣读板书。
-4. 每句话只承担一个主要意思；用逗号、句号和问号形成自然停顿，单句不超过 105 个汉字。不要用 Markdown、项目符号、斜杠串联或舞台说明。
-5. 保留具体例子、因果理由、适用条件、误区辨析和人的责任。本页全部段落合计控制在 ${targetChars} 字左右，允许上下浮动 20%。优先删除重复结论、同义复述和不承担新教学作用的过渡句，不能把讲解压缩成只剩结论的摘要。
-6. 口头表达中优先说“人工智能”，不要无解释地连续朗读英文缩写。
-${priorIssues.length ? `\n上一次结果仍有这些问题，必须全部修正：\n- ${priorIssues.join("\n- ")}` : ""}
+function withEnhancedSlideGuidance(
+  aiCall: AICallFn,
+  fixture: LabSectionFixture,
+  design: TeachingDesign,
+  pageIndex: number,
+): AICallFn {
+  const currentPlan = design.pagePlan?.find((item) => item.page === pageIndex + 1);
+  const progression = (design.pagePlan ?? []).map((item) => ({
+    page: item.page,
+    purpose: item.purpose,
+    newContent: item.newContent,
+  }));
+  const block = [
+    "## 3010 实验页面合同",
+    `课程与学习者：${fixture.title}；${fixture.grade}`,
+    `全节递进摘要：${JSON.stringify(progression)}`,
+    `当前页完整合同：${JSON.stringify(currentPlan ?? {})}`,
+    "PPT 必须清楚呈现 requiredVisibleContent；返回前在内部逐项核对其中每个关系、条件、限定词和清单成员均已可见，但不要输出核对表。narrationFocus 由讲稿展开，不要复制成长段文字。",
+    "若当前合同描述工作流，所有后续步骤、替代机制和反思机制都必须用箭头、编号或明确连接词接入流程，不能作为与主流程无关系的悬浮卡片。",
+    "证据只支持‘未找到、待核验、可能’时，画面不得强化成‘错误、编造、必然’。图形、连线、比较或过程必须表达真实关系，不能只把文字装进方框。不要显示资料编号、审核说明、页码、时长或合同字段名。",
+  ].join("\n");
+  return (system, user, images) => aiCall(compactLabSlideSystem(system), `${user}\n\n${block}`, images);
+}
 
-返回结构：{"segments":[{"id":"原段落 id","text":"口语化后的完整讲稿"}]}`,
-  };
+export function compactLabSlideSystem(system: string): string {
+  return system
+    .replace(
+      /### LineElement[\s\S]*?(?=\n### ChartElement)/,
+      `### LineElement
+
+Required fields: \`id\`, \`type:"line"\`, \`left\`, \`top\`, \`width\` (stroke thickness 2-4px, never visual length), \`start:[x,y]\`, \`end:[x,y]\`, \`style\`, \`color\`, \`points:[start,end]\`. The visual span comes from start/end. Keep 60-80px clear space for connector arrows and route them outside text/card interiors.
+
+Example: {"id":"line_001","type":"line","left":320,"top":240,"width":3,"start":[0,0],"end":[60,0],"style":"solid","color":"#5b9bd5","points":["","arrow"]}
+`,
+    )
+    .replace(
+      /### ChartElement[\s\S]*?(?=\n### LatexElement)/,
+      `### ChartElement
+
+Use only when the source contains real numeric data. Required: \`id,type,left,top,width,height,chartType,data,themeColors\`; data contains aligned \`labels\`, \`legends\`, and 2D \`series\`. Never invent values.
+`,
+    )
+    .replace(
+      /### LatexElement[\s\S]*?(?=\n### TableElement)/,
+      `### LatexElement
+
+Use only for actual formulas. Required: \`id,type,left,top,width,height,latex,color\`; optional \`align\`. Do not output path/viewBox/strokeWidth/fixedRatio. Width is a cap and height is the preferred rendered size; split long formulas at natural operators. Chinese labels belong in TextElement.
+`,
+    )
+    .replace(
+      /#### Complete Example: Card with centered text[\s\S]*?(?=\n### Rule 6: Decorative Lines)/,
+      `#### Card layout contract
+
+Create the background shape before its text. Keep text inside the shape's padded bounds, use lookup-table heights, center both axes deliberately, and calculate repeated cards from shared width/gap values. Do not guess by eye or let text overlap adjacent cards.
+`,
+    )
+    .replace(
+      /### Rule 6: Decorative Lines[\s\S]*?(?=\n### Rule 7: Spacing Standards)/,
+      `### Rule 6: Decorative Lines
+
+Use at most a few thin 2-4px lines for real hierarchy or relationships. Their start/end coordinates must stay inside the canvas and outside text. Do not add ornamental lines that compete with teaching content.
+`,
+    );
+}
+
+const callLogSaveQueues = new Map<string, Promise<void>>();
+
+async function saveCallLog(callsPath: string, calls: LoggedCall[]): Promise<void> {
+  const snapshot = structuredClone(calls);
+  const pending = (callLogSaveQueues.get(callsPath) ?? Promise.resolve())
+    .then(() => writeJsonAtomic(callsPath, snapshot));
+  callLogSaveQueues.set(callsPath, pending.catch(() => undefined));
+  await pending;
+}
+
+async function restoreCallLog(callsPath: string): Promise<LoggedCall[]> {
+  const calls = await readJson<LoggedCall[]>(callsPath) ?? [];
+  let changed = false;
+  for (const call of calls) {
+    call.attempts ??= [];
+    if (call.status === "running") {
+      call.status = "abandoned";
+      call.error = call.error ?? "生成进程在调用完成前中断";
+      call.completedAt = call.completedAt ?? new Date().toISOString();
+      changed = true;
+    }
+    for (const attempt of call.attempts) {
+      if (attempt.status === "running" || attempt.status === "queued") {
+        attempt.status = "abandoned";
+        attempt.error = attempt.error ?? "生成进程中断";
+        changed = true;
+      }
+    }
+  }
+  if (changed) await saveCallLog(callsPath, calls);
+  return calls;
 }
 
 function loggedAiCall(
@@ -530,106 +1009,513 @@ function loggedAiCall(
   calls: LoggedCall[],
   callsPath: string,
   label: string,
-  maxRetries = 1,
 ): AICallFn {
   return async (system, user, images) => {
+    const systemSha256 = sha256(system);
+    const userSha256 = sha256(user);
+    const imagesSha256 = images?.length ? fingerprint(images) : undefined;
+    const reusable = calls.findLast((call) => call.stageId === label
+      && call.status === "complete"
+      && !call.parseError
+      && call.systemSha256 === systemSha256
+      && call.userSha256 === userSha256
+      && call.imagesSha256 === imagesSha256
+      && call.responseFile);
+    if (reusable?.responseFile) {
+      try {
+        const response = await fs.readFile(path.join(path.dirname(callsPath), reusable.responseFile), "utf8");
+        if (!reusable.responseSha256 || sha256(response) === reusable.responseSha256) return response;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
     const started = Date.now();
+    const kind: LoggedCall["kind"] = label.includes("design") ? "design"
+      : label.includes("review") || label.includes("verify") ? "review"
+        : label.includes("repair") || label.includes("adjust") ? "repair"
+          : label.includes("actions") || label.includes("narration") ? "narration"
+            : label.includes("quiz") ? "quiz"
+              : "slide";
+    const interrupted = calls.findLast((call) => call.stageId === label
+      && (call.status === "failed" || call.status === "abandoned"));
+    const previousAttempts = (interrupted?.attempts ?? [])
+      .filter((attempt) => Boolean(attempt.startedAt)).length;
     const entry: LoggedCall = {
       id: calls.length + 1,
+      stageId: label,
       label,
+      kind,
       startedAt: new Date(started).toISOString(),
       elapsedMs: 0,
-      status: "failed",
-      systemSha256: sha256(system),
-      userSha256: sha256(user),
+      status: "running",
+      systemSha256,
+      userSha256,
+      ...(imagesSha256 ? { imagesSha256 } : {}),
       systemChars: system.length,
       userChars: user.length,
+      attempts: [],
     };
     calls.push(entry);
+    await saveCallLog(callsPath, calls);
+    const contextualCall = withCourseGenerationAiCallContext(aiCall, {
+      attemptsStarted: previousAttempts,
+      onQueued: async ({ totalAttempt, queuedAt }) => {
+        entry.attempts.push({
+          attempt: totalAttempt,
+          status: "queued",
+          queuedAt: new Date(queuedAt).toISOString(),
+        });
+        await saveCallLog(callsPath, calls);
+      },
+      onAttemptStarting: async ({ totalAttempt, queueMs, slotAcquiredAt }) => {
+        const attempt = entry.attempts.find((item) => item.attempt === totalAttempt);
+        if (attempt) {
+          attempt.status = "running";
+          attempt.startedAt = new Date(slotAcquiredAt).toISOString();
+          attempt.queueMs = queueMs;
+        }
+        await saveCallLog(callsPath, calls);
+      },
+      onActivity: ({ attempt, at, reasoningCharacters, textCharacters, firstOutputAt }) => {
+        const current = entry.attempts.find((item) => item.attempt === previousAttempts + attempt);
+        if (!current) return;
+        current.reasoningCharacters = reasoningCharacters;
+        current.textCharacters = textCharacters;
+        const startedAt = current.startedAt ? Date.parse(current.startedAt) : started;
+        current.firstOutputMs = Math.max(0, firstOutputAt - startedAt || at - startedAt);
+      },
+      onRetry: async (event) => {
+        const attempt = entry.attempts.find((item) => item.attempt === event.attempt);
+        if (attempt) {
+          attempt.status = "failed";
+          attempt.error = event.reason;
+        }
+        await saveCallLog(callsPath, calls);
+      },
+      onSettled: ({ totalAttempt, durationMs }) => {
+        const attempt = entry.attempts.find((item) => item.attempt === totalAttempt);
+        if (attempt) attempt.elapsedMs = durationMs;
+      },
+    });
     try {
-      const result = await withGenerationRetry(
-        () => aiCall(system, user, images),
-        { label: `lab model ${label}`, maxRetries },
+      const result = await runWithCourseGenerationLlmContext(
+        () => contextualCall(system, user, images),
+        {
+          onTokenUsage: (totalTokens) => {
+            entry.tokenUsage = (entry.tokenUsage ?? 0) + totalTokens;
+          },
+        },
       );
       entry.status = "complete";
       entry.outputChars = result.length;
+      entry.responseFile = path.posix.join("model-responses", `${entry.id}-${sha256(label).slice(0, 10)}.txt`);
+      entry.responseSha256 = sha256(result);
+      await writeTextAtomic(path.join(path.dirname(callsPath), entry.responseFile), result);
+      const finalAttempt = entry.attempts.at(-1);
+      if (finalAttempt) finalAttempt.status = "complete";
       return result;
     } catch (error) {
       entry.error = error instanceof Error ? error.message : String(error);
+      entry.status = error instanceof Error && error.name === "AbortError" ? "abandoned" : "failed";
+      const finalAttempt = entry.attempts.at(-1);
+      if (finalAttempt && (finalAttempt.status === "running" || finalAttempt.status === "queued")) {
+        finalAttempt.status = entry.status === "abandoned" ? "abandoned" : "failed";
+        finalAttempt.error = entry.error;
+      }
       throw error;
     } finally {
       entry.elapsedMs = Date.now() - started;
-      await writeJsonAtomic(callsPath, calls);
+      entry.completedAt = new Date().toISOString();
+      await saveCallLog(callsPath, calls);
     }
   };
 }
 
-async function polishEnhancedNarration(params: {
+export async function runLoggedStage<T>(
+  aiCall: AICallFn,
+  calls: LoggedCall[],
+  callsPath: string,
+  label: string,
+  operation: (stageCall: AICallFn) => Promise<T>,
+): Promise<T> {
+  let revalidatedCall: LoggedCall | undefined;
+  const callWithStoredParseFailure: AICallFn = async (system, user, images) => {
+    const systemSha256 = sha256(system);
+    const userSha256 = sha256(user);
+    const imagesSha256 = images?.length ? fingerprint(images) : undefined;
+    const stored = calls.findLast((call) => call.stageId === label
+      && call.status === "complete"
+      && Boolean(call.parseError)
+      && call.systemSha256 === systemSha256
+      && call.userSha256 === userSha256
+      && call.imagesSha256 === imagesSha256
+      && call.responseFile);
+    if (stored?.responseFile) {
+      try {
+        const response = await fs.readFile(path.join(path.dirname(callsPath), stored.responseFile), "utf8");
+        if (!stored.responseSha256 || sha256(response) === stored.responseSha256) {
+          revalidatedCall = stored;
+          return response;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return loggedAiCall(aiCall, calls, callsPath, label)(system, user, images);
+  };
+  const markLatestParseFailure = async (error: unknown) => {
+    const completed = calls.findLast((call) => call.stageId === label
+      && call.status === "complete"
+      && !call.parseError);
+    if (completed) {
+      completed.parseError = error instanceof Error ? error.message : String(error);
+      await saveCallLog(callsPath, calls);
+    }
+  };
+  try {
+    const result = await operation(callWithStoredParseFailure);
+    if (revalidatedCall) {
+      delete revalidatedCall.parseError;
+      await saveCallLog(callsPath, calls);
+    }
+    return result;
+  } catch (error) {
+    if (revalidatedCall) {
+      revalidatedCall.parseError = error instanceof Error ? error.message : String(error);
+      await saveCallLog(callsPath, calls);
+    } else {
+      await markLatestParseFailure(error);
+    }
+    try {
+      return await operation(loggedAiCall(aiCall, calls, callsPath, label));
+    } catch (retryError) {
+      await markLatestParseFailure(retryError);
+      throw retryError;
+    }
+  }
+}
+
+type LabPageJointReview = {
+  issues: LabReviewIssue[];
+  teacherReviewNotes: LabTeacherReviewNote[];
+};
+
+const REVIEW_CATEGORIES = new Set<LabReviewIssue["category"]>([
+  "factual-grounding",
+  "knowledge-coverage",
+  "case-reasoning",
+  "slide-narration-alignment",
+  "narration-style",
+  "teacher-note-leak",
+  "cross-page-repetition",
+]);
+
+export function normalizeLabPageJointReview(
+  value: unknown,
+  page: number,
+  pageCount: number,
+  requirements: readonly { requirementId: string; text: string }[],
+  elements: ReturnType<typeof slideReviewEvidence>,
+  segments: readonly NarrationRewriteSegment[],
+): LabPageJointReview {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("页面联合审核不是 JSON 对象");
+  }
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.issues) || !Array.isArray(record.teacherReviewNotes)) {
+    throw new Error("页面联合审核缺少完整数组");
+  }
+  const sourceById = new Map(segments.map((segment) => [segment.id, segment.text]));
+  const elementById = new Map(elements.flatMap((element) => {
+    const id = element && typeof element === "object" && "id" in element && typeof element.id === "string"
+      ? element.id
+      : undefined;
+    return id ? [[id, JSON.stringify(element)] as const] : [];
+  }));
+  const requirementById = new Map(requirements.map((item) => [item.requirementId, item.text]));
+  const issues = record.issues.map((item, index): LabReviewIssue => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("联合审核问题格式无效");
+    }
+    const issue = item as Record<string, unknown>;
+    const category = typeof issue.category === "string" ? issue.category : "";
+    const targetType = typeof issue.targetType === "string" ? issue.targetType : "";
+    const targetId = typeof issue.targetId === "string" ? issue.targetId : "";
+    const evidence = typeof issue.evidence === "string" ? issue.evidence.trim() : "";
+    const repair = typeof issue.repair === "string" ? issue.repair.trim() : "";
+    const validTarget = targetType === "speech-segment"
+      ? Boolean(sourceById.get(targetId)?.includes(evidence))
+      : targetType === "slide-element"
+        ? Boolean(elementById.get(targetId)?.includes(evidence))
+        : targetType === "teaching-requirement"
+          ? requirementById.get(targetId) === evidence
+          : false;
+    if (!REVIEW_CATEGORIES.has(category as LabReviewIssue["category"])
+      || !validTarget || !repair) {
+      throw new Error(`联合审核问题未绑定有效目标与证据：targetType=${targetType || "空"}，targetId=${targetId || "空"}`);
+    }
+    return {
+      id: typeof issue.id === "string" && /^[a-zA-Z0-9._-]{1,96}$/.test(issue.id)
+        ? issue.id
+        : `page-${page}-issue-${index + 1}-${sha256(`${category}\n${targetType}\n${targetId}\n${evidence}`).slice(0, 10)}`,
+      category: category as LabReviewIssue["category"],
+      targetType: targetType as LabReviewIssue["targetType"],
+      targetId,
+      evidence,
+      repair,
+    };
+  });
+  const factualGroundingIssues = issues.filter((issue) => issue.category === "factual-grounding");
+  const blockingIssues = issues.filter((issue) => issue.category !== "factual-grounding");
+  const studentContent = [
+    ...sourceById.values(),
+    ...elementById.values(),
+  ].join("\n");
+  for (const item of record.teacherReviewNotes) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const noteRecord = item as Record<string, unknown>;
+    const claim = typeof noteRecord.claim === "string"
+      ? noteRecord.claim.trim()
+      : "";
+    if (claim && !studentContent.includes(claim)) {
+      throw new Error("教师复核提醒必须逐字引用当前页学生内容");
+    }
+  }
+  const teacherReviewNotes = normalizeTeacherReviewNotes(
+    [
+      ...record.teacherReviewNotes.map((item) => item && typeof item === "object" && !Array.isArray(item)
+        ? { ...item, page }
+        : item),
+      ...factualGroundingIssues.map((issue) => ({
+        page,
+        claim: issue.evidence,
+        reason: `联合审核发现该学生内容的依据不足或真伪存疑（${issue.targetType}：${issue.targetId}）。`,
+        suggestion: `课程已保存，请教师在发布或授课前复核并按需修改。审核建议：${issue.repair}`,
+      })),
+    ],
+    pageCount,
+    "content-review",
+  ).map((note) => ({ ...note, page }));
+  return {
+    issues: [...new Map(blockingIssues.map((issue) => [issue.id, issue])).values()],
+    teacherReviewNotes: [...new Map(teacherReviewNotes.map((note) => [
+      `${note.page}\n${note.claim}`,
+      note,
+    ])).values()],
+  };
+}
+
+async function reviewLabPageJointly(params: {
   fixture: LabSectionFixture;
   outline: SceneOutline;
   design: TeachingDesign;
   pageIndex: number;
-  actions: Action[];
-  baseAiCall: AICallFn;
-  calls: LoggedCall[];
-  callsPath: string;
-}): Promise<Action[]> {
-  const speechSegments = params.actions.flatMap((action) => action.type === "speech"
+  elements: ReturnType<typeof slideReviewEvidence>;
+  actions: readonly Action[];
+  previousNarration: readonly string[];
+  aiCall: AICallFn;
+}): Promise<LabPageJointReview> {
+  const page = params.pageIndex + 1;
+  const segments = params.actions.flatMap((action) => action.type === "speech"
     ? [{ id: action.id, text: action.text }]
     : []);
-  if (!speechSegments.length) return params.actions;
+  const currentPlan = params.design.pagePlan?.find((item) => item.page === page);
+  const teachingRequirements = [
+    ...(currentPlan?.requiredVisibleContent ?? []).map((text, index) => ({
+      requirementId: `page-${page}-visible-${index + 1}`,
+      owner: "slide" as const,
+      text,
+    })),
+    ...(currentPlan?.narrationFocus ?? []).map((text, index) => ({
+      requirementId: `page-${page}-narration-${index + 1}`,
+      owner: "narration" as const,
+      text,
+    })),
+  ];
+  const response = await params.aiCall(
+    `你是独立课程质量审核员。只返回合法 JSON。一次联合检查 PPT 与讲稿的事实依据、知识覆盖、案例推理、图文对应、自然表达、跨页重复和师生信息隔离。教学合同明确了 PPT 必须显示什么、讲稿负责展开什么；不要要求两边重复同一内容，也不要因个人风格偏好报错。
 
-  // The current fixed voice delivers about 4.8 Chinese characters per second
-  // after sentence pauses. Target the fixture's page duration and let decoded
-  // audio remain the final source of truth reported by the lab.
-  const targetChars = Math.max(
-    Math.round(params.fixture.targetPageDurationSec * 4.8),
-    speechSegments.length * 70,
+阻断问题只用于知识覆盖、案例推理、图文对应、自然表达、师生信息泄漏和跨页重复，类别使用 knowledge-coverage、case-reasoning、slide-narration-alignment、narration-style、teacher-note-leak、cross-page-repetition。targetType 只能为 slide-element、speech-segment 或 teaching-requirement。引用现有元素或讲稿时，targetId 必须逐字复制输入 id，evidence 必须逐字摘录该目标中的文本；缺失合同内容时引用给定 requirementId，并把对应要求写入 evidence。不得虚构 ID 或证据。不要检查或报告 narrationBudget、字数、语音单位、时长、JSON、元素坐标、越界或动作引用；这些由确定性校验负责，不能成为联合审核问题。
+
+逐句对照 authoritativeSources 检查学生 PPT 与讲稿。任何关于成本高低、效果强弱、因果关系、统计事实或普遍性的断言，只要资料不能直接支持，并且原文没有明确写成假设、可能性或待核验内容，就必须写入 teacherReviewNotes；不能因为它看起来合理、常见或符合经验而省略。claim 必须是当前页 PPT 或讲稿中的逐字原文。
+
+这些无依据、来源不足或真伪存疑的断言只写入 teacherReviewNotes，不列入 issues，不触发自动修复，也不阻断课程保存。教师会在课程生成后统一复核和修改。不要把课程本身教授的风险、适用条件或合理不确定表达列为疑点。只有逐句核对后确认不存在疑点时，teacherReviewNotes 才能返回空数组。
+
+返回：{"issues":[{"id":"可选稳定 id","category":"knowledge-coverage","targetType":"teaching-requirement","targetId":"page-1-visible-1","evidence":"合同中的要求","repair":"具体修复要求"}],"teacherReviewNotes":[{"claim":"待核实主张","reason":"资料为何不足","suggestion":"如何处理"}]}`,
+    JSON.stringify({
+      course: params.fixture.title,
+      grade: params.fixture.grade,
+      page,
+      outline: {
+        title: params.outline.title,
+        description: params.outline.description,
+        keyPoints: params.outline.keyPoints,
+        teachingObjective: params.outline.teachingObjective,
+      },
+      studentTeachingContract: currentPlan,
+      teachingRequirements,
+      authoritativeSources: sourceContext(params.fixture),
+      visibleElements: params.elements,
+      narration: segments,
+      previousPageNarrationForRepetitionOnly: params.previousNarration,
+    }),
   );
-  let issues: string[] = [];
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const prompt = narrationRewritePrompt(
-      params.fixture,
-      params.outline,
-      params.design,
-      params.pageIndex,
-      speechSegments,
-      targetChars,
-      issues,
-    );
-    const rewriteCall = loggedAiCall(
-      params.baseAiCall,
-      params.calls,
-      params.callsPath,
-      `slide-${params.pageIndex + 1}-narration-polish-${attempt}`,
-      0,
-    );
-    try {
-      const response = await rewriteCall(prompt.system, prompt.user);
-      const rewritten = normalizeNarrationRewrite(
-        JSON.parse(stripCodeFence(response)),
-        speechSegments,
-        targetChars,
-      );
-      const textById = new Map(rewritten.map((segment) => [segment.id, segment.text]));
-      return params.actions.map((action) => action.type === "speech"
-        ? { ...action, text: textById.get(action.id) ?? action.text }
-        : action);
-    } catch (error) {
-      issues = [error instanceof Error ? error.message : String(error)];
-    }
+  return normalizeLabPageJointReview(
+    JSON.parse(stripCodeFence(response)),
+    page,
+    params.fixture.pages.length,
+    teachingRequirements,
+    params.elements,
+    segments,
+  );
+}
+
+async function repairReviewedNarrationOnce(params: {
+  fixture: LabSectionFixture;
+  outline: SceneOutline;
+  design: TeachingDesign;
+  pageIndex: number;
+  actions: readonly Action[];
+  issues: readonly LabReviewIssue[];
+  aiCall: AICallFn;
+}): Promise<Action[]> {
+  const segments = params.actions.flatMap((action) => action.type === "speech"
+    ? [{ id: action.id, text: action.text }]
+    : []);
+  const narrationIssues = [...params.issues];
+  const missingRequirementAnchor = narrationIssues.some((issue) => issue.targetType === "teaching-requirement")
+    ? segments.at(-1)?.id
+    : undefined;
+  const targetIds = [...new Set([
+    ...narrationIssues.flatMap((issue) => issue.targetType === "speech-segment" ? [issue.targetId] : []),
+    ...(missingRequirementAnchor ? [missingRequirementAnchor] : []),
+  ])];
+  if (!targetIds.length) return [...params.actions];
+  const response = await params.aiCall(
+    `你是经验丰富的中文课堂讲稿编辑。只返回合法 JSON，不使用 Markdown。只修改指定段落并保持 id、顺序、事实边界、教学职责和画面动作对应关系。必须删除备课审核说明和真实性免责声明；对缺少依据的具体断言，应省略或改为权威资料能支持的解释，不能通过删除限定语把它说得更确定。保留课程本身需要教授的事实核验、风险、适用条件和合理不确定表达。保持自然讲解与适度启发，不虚构学生回答，不新增互动。即使审核建议中出现页面回指，改写也不得使用“上一页”“本页”“这一页”“页面上”“画面”等制作视角；请用“这个边界”“刚才的判断”等内容承接。处理跨页重复时只缩短重复的原则句，不得删去当前页 narrationFocus 要求的新术语、因果桥或案例推理。`,
+    `课程：${params.fixture.title}
+学段：${params.fixture.grade}
+当前教学目标：${params.outline.teachingObjective ?? ""}
+本页学生教学内容：${JSON.stringify(params.design.pagePlan?.find((item) => item.page === params.pageIndex + 1) ?? {})}
+
+权威资料：
+${sourceContext(params.fixture)}
+
+整页讲稿：
+${segments.map((segment) => `[${segment.id}] ${segment.text}`).join("\n")}
+
+必须修复的问题：
+${narrationIssues.map((issue) => `- ${issue.targetId}：“${issue.evidence}” → ${issue.repair}`).join("\n")}
+
+返回结构：{"segments":[${targetIds.map((id) => `{"id":"${id}","text":"修正后的完整段落"}`).join(",")}]}`,
+  );
+  const rewritten = normalizeNarrationRewrite(
+    JSON.parse(stripCodeFence(response)),
+    segments,
+    targetIds,
+  );
+  const textById = new Map(rewritten.map((segment) => [segment.id, segment.text]));
+  return params.actions.map((action) => action.type === "speech" && textById.has(action.id)
+    ? { ...action, text: textById.get(action.id) ?? action.text }
+    : { ...action });
+}
+
+function narrationUnits(text: string, unit: "cjk-char" | "latin-word" | "mixed-unit"): number {
+  const shortPauses = text.match(/[，、,：:；;]/g)?.length ?? 0;
+  const longPauses = text.match(/[。！？!?\n]/g)?.length ?? 0;
+  const pauseUnits = shortPauses * 0.4 + longPauses * 0.8;
+  const spokenText = text.replace(/[，、,：:；;。！？!?]/g, " ");
+  if (unit === "latin-word") return Math.round(countLatinArticulationUnits(spokenText) + pauseUnits);
+  const counted = countSpeechUnits(spokenText);
+  return Math.round(counted.cjkChars + counted.otherChars + countLatinArticulationUnits(spokenText) * 2 + pauseUnits);
+}
+
+function validateGeneratedNarration(actions: readonly Action[]): Action[] {
+  const segments = actions.flatMap((action) => action.type === "speech"
+    ? [{ id: action.id, text: action.text }]
+    : []);
+  const issues = narrationStyleIssues(segments);
+  if (issues.length) {
+    throw new Error(`首次讲稿自然表达未通过：${issues.join("；")}`);
   }
-  throw new Error(`增强讲稿口语化质检失败：${issues.join("；")}`);
+  return actions.map((action) => ({ ...action }));
+}
+
+export function stageNarrationBudgetState(
+  outlines: readonly SceneOutline[],
+  scenes: readonly Scene[],
+): { actualUnits: number; targetUnits: number; rewriteRequired: boolean } {
+  const targetUnits = outlines.reduce((sum, outline) => sum + (outline.timingPlan?.targetUnits ?? 0), 0);
+  const actualUnits = scenes.reduce((sum, scene, pageIndex) => {
+    const text = (scene.actions ?? []).flatMap((action) => action.type === "speech" ? [action.text] : []).join("\n");
+    return sum + narrationUnits(text, outlines[pageIndex]?.timingPlan?.unit ?? "cjk-char");
+  }, 0);
+  return {
+    actualUnits,
+    targetUnits,
+    rewriteRequired: targetUnits > 0 && (
+      actualUnits > Math.ceil(targetUnits * 1.1)
+      || actualUnits < Math.floor(targetUnits * 0.9)
+    ),
+  };
+}
+
+async function adjustNarrationToBudgetOnce(params: {
+  fixture: LabSectionFixture;
+  outline: SceneOutline;
+  actions: readonly Action[];
+  design: TeachingDesign;
+  pageIndex: number;
+  aiCall: AICallFn;
+}): Promise<Action[]> {
+  const plan = params.outline.timingPlan;
+  if (!plan) return [...params.actions];
+  const segments = params.actions.flatMap((action) => action.type === "speech"
+    ? [{ id: action.id, text: action.text }]
+    : []);
+  const actualUnits = narrationUnits(
+    segments.map((segment) => segment.text).join("\n"),
+    plan.unit,
+  );
+  if (actualUnits >= plan.minUnits && actualUnits <= plan.maxUnits) return [...params.actions];
+  const direction = actualUnits > plan.maxUnits ? "删减" : "补足";
+  const response = await params.aiCall(
+      `你是中文课堂讲稿编辑。只返回合法 JSON。当前讲稿没有落入首次生成时已经给定的自然语速预算，请做一次局部${direction}。选择能让总量达标的最少段落，只返回实际修改的段落，未返回的段落会原样保留。保留教学合同中的新增知识、理由、推理桥、必要条件和案例证据；过长时删除重复定义和抽象总结，过短时只补充合同指定但尚未讲清的推理，不得用套话凑量。保持所改段落 id 及画面动作对应关系。改写后仍须像教师直接面对学生讲解，不得出现“这一页”“本页”“页面上”“资料 1”“讲稿”等制作视角或资料标签。`,
+      `课程：${params.fixture.title}
+当前页：${params.outline.title}
+学生教学合同：${JSON.stringify(params.design.pagePlan?.find((item) => item.page === params.pageIndex + 1) ?? {})}
+当前约 ${actualUnits} 个语音单位；目标 ${plan.targetUnits}，允许范围 ${plan.minUnits}-${plan.maxUnits}。
+
+原讲稿：
+${segments.map((segment) => `[${segment.id}] ${segment.text}`).join("\n")}
+
+返回结构：{"segments":[{"id":"实际修改的原段落 id","text":"调整后的完整段落"}]}`,
+    );
+  const rewritten = normalizeNarrationPatch(
+    JSON.parse(stripCodeFence(response)),
+    segments,
+  );
+  const textById = new Map(rewritten.map((segment) => [segment.id, segment.text]));
+  const adjustedActions = params.actions.map((action) => action.type === "speech" && textById.has(action.id)
+    ? { ...action, text: textById.get(action.id) ?? action.text }
+    : { ...action });
+  const finalUnits = narrationUnits(adjustedActions.flatMap((action) => action.type === "speech"
+    ? [action.text]
+    : []).join("\n"), plan.unit);
+  if (finalUnits < plan.minUnits || finalUnits > plan.maxUnits) {
+    throw new Error(`第 ${params.pageIndex + 1} 页讲稿调整后仍超出预算范围：${finalUnits}/${plan.minUnits}-${plan.maxUnits}`);
+  }
+  return adjustedActions;
 }
 
 function makeOutlines(
   fixture: LabSectionFixture,
-  variant: LabVariantKey,
+  _variant: LabVariantKey,
   design: TeachingDesign | undefined,
   tts: TtsRuntime,
 ): { slides: SceneOutline[]; quiz: SceneOutline } {
   const slides = fixture.pages.map((page, index): SceneOutline => {
-    const pageDesign = design?.pagePlan?.filter((item) => item.page === index + 1).map((item) => item.purpose) ?? [];
+    const pageDesign = design?.pagePlan?.find((item) => item.page === index + 1);
     return {
       id: `${fixture.id}-slide-${index + 1}`,
       type: "slide",
@@ -641,7 +1527,8 @@ function makeOutlines(
       targetDurationSec: fixture.targetPageDurationSec,
       order: index,
       generationPurpose: "knowledge-teaching",
-      timingPlan: buildTtsTimingPlan({
+      timingPlan: {
+        ...buildTtsTimingPlan({
         targetDurationSec: fixture.targetPageDurationSec,
         providerId: tts.publicConfig.provider,
         modelId: tts.publicConfig.model,
@@ -651,17 +1538,9 @@ function makeOutlines(
         contentType: "explanation",
         pageKind: "slide",
         naturalSpeedLocked: true,
-      }),
-      ...(variant === "enhanced" && design ? {
-        teachingBrief: {
-          schemaVersion: 1,
-          explanation: [...(design.coreExplanation ?? []), ...pageDesign].join("；"),
-          examples: [...(design.workedExample ?? [])],
-          conditions: [...(design.conditionsAndMisconceptions ?? [])],
-          evidence: fixture.sources.map((source, sourceIndex) => ({ sourceId: `source-${sourceIndex + 1}`, quote: source.detail })),
-          assessmentFocus: (design.assessmentFocus ?? []).join("；"),
-        },
-      } : {}),
+        }),
+        ...(pageDesign?.narrationBudget ?? {}),
+      },
     };
   });
   return {
@@ -679,16 +1558,6 @@ function makeOutlines(
         difficulty: "medium",
         questionTypes: ["short_answer"],
       },
-      ...(variant === "enhanced" && design ? {
-        teachingBrief: {
-          schemaVersion: 1,
-          explanation: (design.coreExplanation ?? []).join("；"),
-          examples: [...(design.workedExample ?? [])],
-          conditions: [...(design.conditionsAndMisconceptions ?? [])],
-          evidence: fixture.sources.map((source, sourceIndex) => ({ sourceId: `source-${sourceIndex + 1}`, quote: source.detail })),
-          assessmentFocus: (design.assessmentFocus ?? []).join("；"),
-        },
-      } : {}),
     },
   };
 }
@@ -721,7 +1590,7 @@ function manifestQuiz(questions: QuizQuestion[], scripts: LabScriptSegment[]): L
 }
 
 function runRelative(sectionId: string, batch: number, variant: LabVariantKey): string {
-  return path.posix.join("artifacts", sectionId, String(batch), variant);
+  return path.posix.join("artifacts", LAB_EXPERIMENT_ID, sectionId, String(batch), variant);
 }
 
 function publicFile(relative: string): string {
@@ -734,22 +1603,50 @@ function publicRender(sectionId: string, batch: number, variant: LabVariantKey, 
 
 async function generateDesign(
   fixture: LabSectionFixture,
+  batch: number,
   modelString: string,
+  thinkingConfig: unknown,
   aiCall: AICallFn,
+  tts: TtsRuntime,
 ): Promise<TeachingDesign> {
-  const designDir = path.join(LAB_RUNTIME_ROOT, "designs", fixture.id);
+  const designDir = path.join(LAB_RUNTIME_ROOT, "designs", LAB_EXPERIMENT_ID, fixture.id, String(batch));
   const checkpointPath = path.join(designDir, "design.json");
-  const inputFingerprint = fingerprint({ version: LAB_GENERATOR_VERSION, modelString, fixture, prompt: "design-v1" });
+  const callsPath = path.join(designDir, "calls.json");
+  const timingBudgets = timingBudgetsForFixture(fixture, tts);
+  const inputFingerprint = fingerprint({
+    generatorVersion: LAB_GENERATOR_VERSION,
+    experimentId: LAB_EXPERIMENT_ID,
+    designPromptVersion: DESIGN_PROMPT_VERSION,
+    modelString,
+    thinkingConfig,
+    modelTimeoutMs: MODEL_TIMEOUT_MS,
+    fixture,
+    batch,
+    timingBudgets,
+  });
   const saved = await readJson<DesignCheckpoint>(checkpointPath);
   if (saved?.fingerprint === inputFingerprint) return saved.design;
-  const calls: LoggedCall[] = [];
-  const prompt = designPrompt(fixture);
-  const response = await loggedAiCall(aiCall, calls, path.join(designDir, "calls.json"), "teaching-design")(
-    prompt.system,
-    prompt.user,
-  );
-  const design = normalizeTeachingDesign(JSON.parse(stripCodeFence(response)), fixture.pages.length);
-  await writeJsonAtomic(path.join(designDir, "input.json"), { fingerprint: inputFingerprint, fixture, modelString });
+  const calls = await restoreCallLog(callsPath);
+  const prompt = designPrompt(fixture, timingBudgets);
+  const sourceText = sourceContext(fixture);
+  const design = await runLoggedStage(aiCall, calls, callsPath, "teaching-design", async (stageCall) => {
+    const response = await stageCall(prompt.system, prompt.user);
+    return normalizeTeachingDesign(JSON.parse(stripCodeFence(response)), fixture.pages.length, {
+      timingBudgets,
+      sourceText,
+    });
+  });
+  await writeJsonAtomic(path.join(designDir, "input.json"), {
+    fingerprint: inputFingerprint,
+    experimentId: LAB_EXPERIMENT_ID,
+    designPromptVersion: DESIGN_PROMPT_VERSION,
+    fixture,
+    batch,
+    timingBudgets,
+    modelString,
+    thinkingConfig,
+    modelTimeoutMs: MODEL_TIMEOUT_MS,
+  });
   await writeJsonAtomic(checkpointPath, {
     version: 1,
     fingerprint: inputFingerprint,
@@ -928,12 +1825,15 @@ async function synthesizeScript(
     : nowStatus("complete");
 }
 
-function recordDurationCheck(result: LabVariantResult, fixture: LabSectionFixture): void {
+export function recordDurationCheck(result: LabVariantResult, fixture: LabSectionFixture): void {
   if (!result.durationSec) return;
   const targetSec = fixture.pages.length * fixture.targetPageDurationSec;
   const deviation = ((result.durationSec - targetSec) / targetSec) * 100;
   const message = `真实 TTS 时长：${result.durationSec.toFixed(1)} 秒；目标 ${targetSec} 秒；偏差 ${deviation >= 0 ? "+" : ""}${deviation.toFixed(1)}%。`;
   result.checks = [...(result.checks ?? []).filter((check) => !check.startsWith("真实 TTS 时长：")), message];
+  if (Math.abs(deviation) > 10 && result.statuses.tts.state === "complete") {
+    result.statuses.tts = nowStatus("failed", `真实 TTS 总时长偏差 ${deviation >= 0 ? "+" : ""}${deviation.toFixed(1)}%，超出 ±10% 验收范围，需重新生成讲稿`);
+  }
 }
 
 async function exec(command: string, args: string[]): Promise<void> {
@@ -954,6 +1854,7 @@ async function exportArtifacts(
   const artifactDir = path.join(LAB_RUNTIME_ROOT, relativeDir);
   const slidesDir = path.join(artifactDir, "slides");
   await fs.mkdir(slidesDir, { recursive: true });
+  result.artifactBaseUrl = publicFile(relativeDir);
   await writeJsonAtomic(path.join(artifactDir, "scenes.json"), scenes);
   const scriptPath = path.join(artifactDir, "script.txt");
   await fs.writeFile(scriptPath, result.script.map((segment) => `[第 ${segment.slideIndex + 1} 页] ${segment.text}`).join("\n\n"));
@@ -1016,83 +1917,51 @@ async function generateVariant(params: {
   batch: number;
   variant: LabVariantKey;
   modelString: string;
+  thinkingConfig: unknown;
   baseAiCall: AICallFn;
   design?: TeachingDesign;
   tts: TtsRuntime;
   ttsOnly: boolean;
-  narrationOnly: boolean;
   retryFailed: boolean;
   measurer: AudioDurationMeasurer;
   onArtifactsReady?: (result: LabVariantResult) => Promise<void>;
 }): Promise<GenerationCheckpoint> {
-  const { fixture, batch, variant, modelString, baseAiCall, design, tts, measurer } = params;
-  const runDir = path.join(LAB_RUNTIME_ROOT, "runs", fixture.id, String(batch), variant);
+  const { fixture, batch, variant, modelString, thinkingConfig, baseAiCall, design, tts, measurer } = params;
+  const runDir = path.join(LAB_RUNTIME_ROOT, "runs", LAB_EXPERIMENT_ID, fixture.id, String(batch), variant);
   const checkpointPath = path.join(runDir, "result.json");
   const partialPath = path.join(runDir, "partial.json");
   const callsPath = path.join(runDir, "calls.json");
   const generationFingerprint = fingerprint({
     generator: LAB_GENERATOR_VERSION,
+    resultAssembly: RESULT_ASSEMBLY_VERSION,
+    experimentId: LAB_EXPERIMENT_ID,
     baseline: OPENMAIC_GENERATION_BASELINE,
     enhancedTeachingAdapter: variant === "enhanced" ? ENHANCED_TEACHING_ADAPTER_VERSION : undefined,
     enhancedNarration: variant === "enhanced" ? ENHANCED_NARRATION_VERSION : undefined,
+    pageReview: variant === "enhanced" ? PAGE_REVIEW_VERSION : undefined,
     fixture,
     batch,
     variant,
     modelString,
+    thinkingConfig,
+    modelTimeoutMs: MODEL_TIMEOUT_MS,
     design: variant === "enhanced" ? design : undefined,
+    ttsTiming: {
+      targetPageDurationSec: fixture.targetPageDurationSec,
+      language: LANGUAGE,
+      speed: SPEED,
+      provider: tts.publicConfig.provider,
+      model: tts.publicConfig.model,
+      voice: tts.publicConfig.voice,
+      naturalSpeedLocked: true,
+    },
   });
   let checkpoint = await readJson<GenerationCheckpoint>(checkpointPath);
   const hasReusableScript = checkpoint?.result.statuses.script.state === "complete";
   const reusable = checkpoint?.generationFingerprint === generationFingerprint
     && hasReusableScript
     && (variant !== "enhanced" || checkpoint.teachingAdapterVersion === ENHANCED_TEACHING_ADAPTER_VERSION);
-  if (params.narrationOnly) {
-    if (variant !== "enhanced" || !design || !checkpoint) {
-      throw new Error(`没有可供口语化改写的 ${fixture.id}/${batch}/enhanced 检查点`);
-    }
-    const outlines = makeOutlines(fixture, variant, design, tts);
-    if (checkpoint.scenes.length !== outlines.slides.length) {
-      throw new Error(`已有课件页数与当前小节不一致，不能只改讲稿`);
-    }
-    const calls = checkpoint.calls ?? [];
-    for (const [pageIndex, scene] of checkpoint.scenes.entries()) {
-      scene.actions = await polishEnhancedNarration({
-        fixture,
-        outline: outlines.slides[pageIndex],
-        design,
-        pageIndex,
-        actions: scene.actions ?? [],
-        baseAiCall,
-        calls,
-        callsPath,
-      });
-    }
-    const scripts = narrationSegments(checkpoint.scenes);
-    checkpoint.result.script = scripts;
-    if (checkpoint.result.downloads) {
-      const currentDownloads = { ...checkpoint.result.downloads };
-      delete currentDownloads.audioZip;
-      checkpoint.result.downloads = currentDownloads;
-    }
-    checkpoint.result.slides = checkpoint.result.slides.map((slide, index) => ({
-      ...slide,
-      narrationSegmentIds: scripts
-        .filter((segment) => segment.slideIndex === index)
-        .map((segment) => segment.id),
-    }));
-    checkpoint.result.quiz = checkpoint.result.quiz.map((question) => ({
-      ...question,
-      sourceSegmentIds: scripts.map((segment) => segment.id),
-    }));
-    checkpoint.result.statuses.script = nowStatus("complete");
-    checkpoint.result.statuses.tts = nowStatus("pending");
-    checkpoint.generationFingerprint = generationFingerprint;
-    checkpoint.generatorVersion = LAB_GENERATOR_VERSION;
-    checkpoint.generatedAt = new Date().toISOString();
-    checkpoint.calls = calls;
-    await fs.unlink(partialPath).catch(() => undefined);
-    await writeJsonAtomic(checkpointPath, checkpoint);
-  } else if (!params.ttsOnly && !params.retryFailed && reusable
+  if (!params.ttsOnly && !params.retryFailed && reusable
     && checkpoint?.result.statuses.tts.state === "complete") {
     recordDurationCheck(checkpoint.result, fixture);
     return checkpoint;
@@ -1102,48 +1971,130 @@ async function generateVariant(params: {
     }
   } else {
     const savedPartial = await readJson<GenerationPartialCheckpoint>(partialPath);
-    const partial = savedPartial?.generationFingerprint === generationFingerprint
-      && savedPartial.scenes.length <= fixture.pages.length
+    const partial = savedPartial?.version === 2
+      && savedPartial.pages.length === fixture.pages.length
       ? savedPartial
       : undefined;
-    const calls: LoggedCall[] = partial?.calls ?? [];
+    const calls = await restoreCallLog(callsPath);
     const outlines = makeOutlines(fixture, variant, design, tts);
-    const scenes: Scene[] = partial?.scenes ?? [];
-    const checks: string[] = partial?.checks ?? [];
-    let previousSpeeches = scenes.at(-1)?.actions?.flatMap((action) => action.type === "speech" ? [action.text] : []) ?? [];
-    for (const [pageIndex, outline] of outlines.slides.entries()) {
-      if (pageIndex < scenes.length) continue;
-      const contentLogged = loggedAiCall(baseAiCall, calls, callsPath, `slide-${pageIndex + 1}-content`);
-      const generated = await generateSceneContent(outline, contentLogged, {
-        languageDirective: LAB_LANGUAGE_DIRECTIVE,
-        websiteReferenceContext: { courseTitle: fixture.title, slideTitles: outlines.slides.map((item) => item.title) },
+    const pages: PageStageCheckpoint[] = Array.from(
+      { length: outlines.slides.length },
+      (_, index) => structuredClone(partial?.pages[index] ?? {}),
+    );
+    const expectedPageReviewFingerprint = (pageIndex: number) => {
+      const page = pages[pageIndex];
+      if (!page.content || !page.actions) return undefined;
+      const previousNarration = pageIndex > 0
+        ? (pages[pageIndex - 1].actions ?? []).flatMap((action) => action.type === "speech" ? [action.text] : [])
+        : [];
+      return fingerprint({
+        content: page.content,
+        actions: page.actions,
+        previousNarration,
+        version: PAGE_REVIEW_VERSION,
       });
-      if (!generated || !("elements" in generated)) throw new Error(`第 ${pageIndex + 1} 页未返回幻灯片内容`);
+    };
+    const invalidateStalePageReviews = () => {
+      for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+        const page = pages[pageIndex];
+        if (page.scene && page.reviewFingerprint !== expectedPageReviewFingerprint(pageIndex)) {
+          page.scene = undefined;
+          page.reviewIssues = undefined;
+          page.teacherReviewNotes = undefined;
+        }
+      }
+    };
+    invalidateStalePageReviews();
+    const telemetry: GenerationTelemetry = structuredClone(partial?.telemetry ?? {
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      checkpointReuses: 0,
+      qualityRepairCalls: 0,
+    });
+    let quizFingerprint = partial?.quizFingerprint;
+    let savedQuiz = structuredClone(partial?.quiz);
+    let partialSaveQueue = Promise.resolve();
+    const savePartial = async () => {
+      telemetry.updatedAt = new Date().toISOString();
+      const snapshot = {
+        version: 2 as const,
+        generationFingerprint,
+        generatedAt: new Date().toISOString(),
+        pages: structuredClone(pages),
+        ...(quizFingerprint ? { quizFingerprint } : {}),
+        ...(savedQuiz ? { quiz: structuredClone(savedQuiz) } : {}),
+        calls: structuredClone(calls),
+        telemetry: structuredClone(telemetry),
+      } satisfies GenerationPartialCheckpoint;
+      const pending = partialSaveQueue.then(() => writeJsonAtomic(partialPath, snapshot));
+      partialSaveQueue = pending.catch(() => undefined);
+      await pending;
+    };
+    const generatePage = async (pageIndex: number, previousSpeeches: string[]) => {
+      const outline = outlines.slides[pageIndex];
+      const page = pages[pageIndex];
+      if (page.scene && page.reviewIssues?.length === 0) {
+        telemetry.checkpointReuses += 1;
+        return;
+      }
+      const localChecks: string[] = [];
+      const contentFingerprint = fingerprint({
+        outline,
+        design: design?.pagePlan?.[pageIndex],
+        modelString,
+        version: ENHANCED_TEACHING_ADAPTER_VERSION,
+      });
+      let content = page.contentFingerprint === contentFingerprint ? page.content : undefined;
+      if (content) telemetry.checkpointReuses += 1;
+      if (content && page.layoutChecks?.length) {
+        throw new Error(`第 ${pageIndex + 1} 页已有未解决的布局诊断，停止自动返工：${page.layoutChecks.join("；")}`);
+      }
+      if (!content) {
+        if (!design) throw new Error("优化版缺少教学设计");
+        const stageId = `slide-${pageIndex + 1}-content`;
+        const generated = await runLoggedStage(baseAiCall, calls, callsPath, stageId, async (stageCall) => {
+          const candidate = await generateSceneContent(
+            outline,
+            withEnhancedSlideGuidance(stageCall, fixture, design, pageIndex),
+            {
+              languageDirective: LAB_LANGUAGE_DIRECTIVE,
+              websiteReferenceContext: { courseTitle: fixture.title, slideTitles: outlines.slides.map((item) => item.title) },
+            },
+          );
+          if (!candidate || !("elements" in candidate)) throw new Error(`第 ${pageIndex + 1} 页未返回幻灯片内容`);
+          return candidate;
+        });
+        content = generated;
+      }
       const reviewed = await auditAndRepairSlideOnce({
         outline,
-        content: generated,
+        content,
         regenerate: async (editDirective, baselineContent) => {
-          try {
-            // A visual repair is useful but must not discard an otherwise
-            // complete course after a provider timeout. The original page and
-            // audit remain reviewable when this single repair attempt fails.
-            const repairLogged = loggedAiCall(baseAiCall, calls, callsPath, `slide-${pageIndex + 1}-repair`, 0);
-            const candidate = await generateSceneContent(outline, repairLogged, {
+          telemetry.qualityRepairCalls += 1;
+          const stageId = `slide-${pageIndex + 1}-layout-repair`;
+          const candidate = await runLoggedStage(baseAiCall, calls, callsPath, stageId, async (stageCall) => {
+            const generated = await generateSceneContent(outline, stageCall, {
               languageDirective: LAB_LANGUAGE_DIRECTIVE,
               websiteReferenceContext: { courseTitle: fixture.title, slideTitles: outlines.slides.map((item) => item.title) },
               editDirective,
               baselineContent,
             });
-            return candidate && "elements" in candidate ? candidate : null;
-          } catch (error) {
-            checks.push(`第 ${pageIndex + 1} 页：视觉修复调用失败，已保留修复前页面：${error instanceof Error ? error.message : String(error)}`);
-            return null;
-          }
+            if (!generated || !("elements" in generated)) throw new Error(`第 ${pageIndex + 1} 页布局修复未返回幻灯片`);
+            return generated;
+          });
+          return candidate;
         },
       });
-      checks.push(...reviewed.finalAudit.issues.map((message) => `第 ${pageIndex + 1} 页：${message}`));
+      localChecks.push(...reviewed.finalAudit.issues.map((message) => `第 ${pageIndex + 1} 页：${message}`));
       if (reviewed.finalAudit.status === "unavailable") {
-        checks.push(`第 ${pageIndex + 1} 页渲染检查不可用：${reviewed.finalAudit.reason ?? "未知原因"}`);
+        localChecks.push(`第 ${pageIndex + 1} 页渲染检查不可用：${reviewed.finalAudit.reason ?? "未知原因"}`);
+      }
+      page.contentFingerprint = contentFingerprint;
+      page.content = reviewed.content;
+      page.layoutChecks = localChecks;
+      await savePartial();
+      if (reviewed.finalAudit.status === "unavailable" || reviewed.finalAudit.issues.length) {
+        throw new Error(`第 ${pageIndex + 1} 页确定性布局验收未通过：${localChecks.join("；")}`);
       }
       const ctx: SceneGenerationContext = {
         pageIndex: pageIndex + 1,
@@ -1155,47 +2106,176 @@ async function generateVariant(params: {
         currentTeachingObjective: outline.teachingObjective,
         narrationMode: "standalone-course",
       };
-      const actionsLogged = loggedAiCall(baseAiCall, calls, callsPath, `slide-${pageIndex + 1}-actions`);
-      let actions = await generateSceneActions(outline, reviewed.content, actionsLogged, {
-        languageDirective: LAB_LANGUAGE_DIRECTIVE,
-        ctx,
+      const narrationFingerprint = fingerprint({
+        outline,
+        content: reviewed.content,
+        contract: design?.pagePlan?.[pageIndex],
+        modelString,
+        version: ENHANCED_NARRATION_VERSION,
       });
-      if (variant === "enhanced" && design) {
-        actions = await polishEnhancedNarration({
+      let actions = page.narrationFingerprint === narrationFingerprint ? page.actions : undefined;
+      if (actions) telemetry.checkpointReuses += 1;
+      if (!actions) {
+        if (!design) throw new Error("优化版缺少教学设计");
+        const stageId = `slide-${pageIndex + 1}-narration`;
+        actions = await runLoggedStage(baseAiCall, calls, callsPath, stageId, async (stageCall) =>
+          validateGeneratedNarration(await generateSceneActions(
+            outline,
+            reviewed.content,
+            withEnhancedNarrationGuidance(stageCall, fixture, design, pageIndex),
+            { languageDirective: LAB_LANGUAGE_DIRECTIVE, ctx },
+          )));
+        const callsBeforeAdjustment = calls.length;
+        const adjustmentStageId = `slide-${pageIndex + 1}-narration-budget-adjust`;
+        actions = await runLoggedStage(baseAiCall, calls, callsPath, adjustmentStageId, (stageCall) =>
+          adjustNarrationToBudgetOnce({
+            fixture,
+            outline,
+            actions: actions as Action[],
+            design,
+            pageIndex,
+            aiCall: stageCall,
+          }));
+        if (calls.length > callsBeforeAdjustment) telemetry.qualityRepairCalls += 1;
+        page.narrationFingerprint = narrationFingerprint;
+        page.actions = structuredClone(actions);
+        page.reviewFingerprint = undefined;
+        page.reviewIssues = undefined;
+        page.scene = undefined;
+        await savePartial();
+      }
+    };
+    if (variant !== "enhanced" || !design) {
+      throw new Error("基线为冻结归档结果，生成器只重建本次优化版");
+    }
+    const draftResults = await Promise.allSettled(
+      outlines.slides.map((_, pageIndex) => generatePage(pageIndex, [])),
+    );
+    const failedDraft = draftResults.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failedDraft) throw failedDraft.reason;
+    await partialSaveQueue;
+    invalidateStalePageReviews();
+
+    const reviewPage = async (pageIndex: number) => {
+      const page = pages[pageIndex];
+      if (page.scene && page.reviewIssues?.length === 0) return;
+      if (page.reviewIssues?.length) {
+        throw new Error(`第 ${pageIndex + 1} 页已有未解决的联合审核诊断，停止自动返工：${page.reviewIssues.map((issue) => issue.repair).join("；")}`);
+      }
+      if (!page.content || !page.actions) throw new Error(`第 ${pageIndex + 1} 页草稿阶段未完成`);
+      const outline = outlines.slides[pageIndex];
+      const previousNarration = pageIndex > 0
+        ? (pages[pageIndex - 1].actions ?? []).flatMap((action) => action.type === "speech" ? [action.text] : [])
+        : [];
+      const runReview = (label: string, content: GeneratedSlideContent, actions: readonly Action[]) =>
+        runLoggedStage(baseAiCall, calls, callsPath, label, (stageCall) => reviewLabPageJointly({
           fixture,
           outline,
           design,
           pageIndex,
+          elements: slideReviewEvidence(content.elements),
           actions,
-          baseAiCall,
-          calls,
-          callsPath,
-        });
+          previousNarration,
+          aiCall: stageCall,
+        }));
+
+      let content = page.content;
+      let actions = page.actions;
+      const first = await runReview(`slide-${pageIndex + 1}-joint-review`, content, actions);
+      let notes = first.teacherReviewNotes;
+      if (first.issues.length) {
+        const narrationIssues = first.issues.filter((issue) => issue.targetType === "speech-segment"
+          || (issue.targetType === "teaching-requirement" && issue.targetId.includes("-narration-")));
+        const narrationIssueIds = new Set(narrationIssues.map((issue) => issue.id));
+        const slideIssues = first.issues.filter((issue) => !narrationIssueIds.has(issue.id));
+        if (slideIssues.length) {
+          telemetry.qualityRepairCalls += 1;
+          const repairStageId = `slide-${pageIndex + 1}-joint-slide-repair`;
+          const repaired = await runLoggedStage(baseAiCall, calls, callsPath, repairStageId, (stageCall) =>
+            repairSlideElementsOnce({ content, issues: slideIssues, aiCall: stageCall }));
+          const audited = await auditAndRepairSlideOnce({ outline, content: repaired, regenerate: async () => null });
+          const repairLayoutChecks = audited.finalAudit.issues
+            .map((message) => `第 ${pageIndex + 1} 页联合修复后：${message}`);
+          page.layoutChecks = [...(page.layoutChecks ?? []), ...repairLayoutChecks];
+          if (audited.finalAudit.status === "unavailable" || audited.finalAudit.issues.length) {
+            page.content = audited.content;
+            await savePartial();
+            throw new Error(`第 ${pageIndex + 1} 页联合修复后布局验收未通过：${repairLayoutChecks.join("；")}`);
+          }
+          content = audited.content;
+        }
+        if (narrationIssues.length) {
+          telemetry.qualityRepairCalls += 1;
+          const repairStageId = `slide-${pageIndex + 1}-joint-narration-repair`;
+          actions = await runLoggedStage(baseAiCall, calls, callsPath, repairStageId, (stageCall) =>
+            repairReviewedNarrationOnce({
+              fixture,
+              outline,
+              design,
+              pageIndex,
+              actions,
+              issues: narrationIssues,
+              aiCall: stageCall,
+            }));
+        }
+        page.content = content;
+        page.actions = structuredClone(actions);
+        page.reviewIssues = undefined;
+        await savePartial();
+
+        const verified = await runReview(`slide-${pageIndex + 1}-joint-verify`, content, actions);
+        notes = [...notes, ...verified.teacherReviewNotes];
+        if (verified.issues.length) {
+          page.reviewIssues = verified.issues;
+          await savePartial();
+          const before = first.issues.map((issue) => `${issue.category}:${issue.targetType}:${issue.targetId}`).sort().join("|");
+          const after = verified.issues.map((issue) => `${issue.category}:${issue.targetType}:${issue.targetId}`).sort().join("|");
+          const diagnosis = before === after ? "修复后问题无进展" : "修复引入或遗留阻断问题";
+          throw new Error(`第 ${pageIndex + 1} 页${diagnosis}：${verified.issues.map((issue) => issue.repair).join("；")}`);
+        }
       }
-      const scene = buildCompleteScene(outline, reviewed.content, actions, `lab-${fixture.id}-${batch}-${variant}`);
+      const scene = buildCompleteScene(outline, content, actions, `lab-${fixture.id}-${batch}-${variant}`);
       if (!scene) throw new Error(`第 ${pageIndex + 1} 页无法组装场景`);
-      scenes.push(scene);
-      previousSpeeches = actions.flatMap((action) => action.type === "speech" ? [action.text] : []);
-      await writeJsonAtomic(partialPath, {
-        version: 1,
-        generationFingerprint,
-        generatedAt: new Date().toISOString(),
-        scenes,
-        checks,
-        calls,
-      } satisfies GenerationPartialCheckpoint);
-    }
+      page.content = content;
+      page.actions = structuredClone(actions);
+      page.reviewFingerprint = expectedPageReviewFingerprint(pageIndex);
+      page.reviewIssues = [];
+      page.teacherReviewNotes = [...new Map(notes.map((note) => [`${note.page}\n${note.claim}`, note])).values()];
+      page.scene = scene;
+      await savePartial();
+    };
+    const reviewResults = await Promise.allSettled(outlines.slides.map((_, pageIndex) => reviewPage(pageIndex)));
+    const failedReview = reviewResults.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failedReview) throw failedReview.reason;
+    await partialSaveQueue;
+    if (pages.some((page) => !page.scene)) throw new Error("页面联合审核未完成，已保留逐阶段检查点");
+    const scenes = pages.map((page) => page.scene as Scene);
+    const checks = pages.flatMap((page) => page.layoutChecks ?? []);
     const scripts = narrationSegments(scenes);
-    const quizLogged = loggedAiCall(baseAiCall, calls, callsPath, "quiz-content");
-    const quizAi = variant === "enhanced" && design
-      ? withActuallyTaughtNarration(quizLogged, scripts)
-      : quizLogged;
-    const quizContent = await generateSceneContent(outlines.quiz, quizAi, {
-      languageDirective: LAB_LANGUAGE_DIRECTIVE,
+    const requiredQuizFingerprint = fingerprint({
+      outline: outlines.quiz,
+      scripts,
+      version: LAB_GENERATOR_VERSION,
     });
-    if (!quizContent || !("questions" in quizContent)) throw new Error("节末题生成失败");
+    if (quizFingerprint === requiredQuizFingerprint && savedQuiz) {
+      telemetry.checkpointReuses += 1;
+    } else {
+      const quizContent = await runLoggedStage(baseAiCall, calls, callsPath, "quiz-content", async (stageCall) => {
+        const candidate = await generateSceneContent(
+          outlines.quiz,
+          withActuallyTaughtNarration(stageCall, scripts),
+          { languageDirective: LAB_LANGUAGE_DIRECTIVE },
+        );
+        if (!candidate || !("questions" in candidate)) throw new Error("节末题生成失败");
+        return candidate;
+      });
+      savedQuiz = manifestQuiz(quizContent.questions, scripts);
+      quizFingerprint = requiredQuizFingerprint;
+      await savePartial();
+    }
+    await savePartial();
     const result: LabVariantResult = {
-      label: variant === "baseline" ? "当前基线" : "教学增强",
+      label: "v4 重组流程",
       statuses: { ppt: nowStatus("running"), script: nowStatus("complete"), tts: nowStatus("pending") },
       slides: scenes.map((scene, index) => ({
         id: scene.outlineId ?? scene.id,
@@ -1205,8 +2285,15 @@ async function generateVariant(params: {
         checkMessages: checks.filter((message) => message.startsWith(`第 ${index + 1} 页`)),
       })),
       script: scripts,
-      quiz: manifestQuiz(quizContent.questions, scripts),
+      quiz: savedQuiz ?? [],
       checks,
+      ...(variant === "enhanced" && design ? {
+        teacherReviewNotes: [
+          ...(design.teacherReviewNotes ?? []),
+          ...pages.flatMap((page) => page.teacherReviewNotes ?? []),
+        ].filter((note, index, notes) => notes.findIndex((candidate) =>
+          candidate.page === note.page && candidate.claim === note.claim) === index),
+      } : {}),
     };
     checkpoint = {
       version: 1,
@@ -1222,13 +2309,32 @@ async function generateVariant(params: {
       result,
       calls,
     };
-    await writeJsonAtomic(path.join(runDir, "input.json"), { generationFingerprint, fixture, batch, variant, modelString, design });
+    await writeJsonAtomic(path.join(runDir, "input.json"), {
+      generationFingerprint,
+      experimentId: LAB_EXPERIMENT_ID,
+      fixture,
+      batch,
+      variant,
+      modelString,
+      thinkingConfig,
+      modelTimeoutMs: MODEL_TIMEOUT_MS,
+      design,
+      ttsTiming: {
+        targetPageDurationSec: fixture.targetPageDurationSec,
+        language: LANGUAGE,
+        speed: SPEED,
+        provider: tts.publicConfig.provider,
+        model: tts.publicConfig.model,
+        voice: tts.publicConfig.voice,
+        naturalSpeedLocked: true,
+      },
+    });
     await writeJsonAtomic(checkpointPath, checkpoint);
-    await fs.unlink(partialPath).catch(() => undefined);
+    await writeJsonAtomic(path.join(runDir, "telemetry.json"), telemetry);
   }
   checkpoint.result.statuses.tts = nowStatus("running");
   await exportArtifacts(fixture, batch, variant, checkpoint.scenes, checkpoint.result, {
-    presentation: !params.ttsOnly && !params.narrationOnly && !params.retryFailed,
+    presentation: !params.ttsOnly && !params.retryFailed,
     audio: false,
   });
   await writeJsonAtomic(checkpointPath, checkpoint);
@@ -1242,6 +2348,13 @@ async function generateVariant(params: {
     audio: true,
   });
   await writeJsonAtomic(checkpointPath, checkpoint);
+  const telemetryPath = path.join(runDir, "telemetry.json");
+  const finalTelemetry = await readJson<GenerationTelemetry>(telemetryPath);
+  if (finalTelemetry) {
+    finalTelemetry.updatedAt = new Date().toISOString();
+    finalTelemetry.completedAt = finalTelemetry.updatedAt;
+    await writeJsonAtomic(telemetryPath, finalTelemetry);
+  }
   return checkpoint;
 }
 
@@ -1288,7 +2401,19 @@ export function recoverVariantAfterGenerationFailure(
   };
 }
 
-export async function runLabGenerator(argv = process.argv.slice(2)): Promise<void> {
+async function reportProgress(event: LabGenerationProgressEvent): Promise<void> {
+  const sink = coreAdapterContext.getStore()?.onProgress;
+  if (sink) {
+    await sink(event);
+    return;
+  }
+  const suffix = event.message ? `：${event.message}` : "";
+  const line = `[${event.sectionId}/${event.batch}/${event.stage}] ${event.state}${suffix}`;
+  if (event.state === "failed") console.error(line);
+  else console.log(line);
+}
+
+async function runLabGeneratorInternal(argv: string[]): Promise<void> {
   const options = parseCli(argv);
   const releaseLock = await acquireGeneratorLock();
   try {
@@ -1296,15 +2421,32 @@ export async function runLabGenerator(argv = process.argv.slice(2)): Promise<voi
     await initializeServerProviderConfig();
     const tts = await resolveTtsRuntime();
     const resolved = await resolveModel({ modelString: options.modelString });
-    const baseAiCall = createCourseGenerationAiCall({
+    const baseAiCall = (coreAdapterContext.getStore()?.createModelCall ?? createCourseGenerationAiCall)({
       model: resolved.model,
       vision: resolved.modelInfo?.capabilities?.vision === true,
       source: "course-quality-lab",
       maxOutputTokens: resolved.modelInfo?.outputWindow,
       thinking: resolved.thinkingConfig,
-      timeoutMs: 180_000,
+      // The configured reasoning model regularly completes valid slide JSON
+      // after three minutes. Avoid resubmitting the same page while keeping a
+      // finite ceiling for genuinely stalled provider requests.
+      timeoutMs: MODEL_TIMEOUT_MS,
+      streamResponse: true,
+      streamMaxDurationMs: MODEL_MAX_DURATION_MS,
+      maxRetries: 2,
     });
-    const manifest = initialManifest(await readJson<CourseQualityLabManifest>(MANIFEST_PATH));
+    const previousManifest = await readJson<CourseQualityLabManifest>(MANIFEST_PATH);
+    const alreadyArchivedForV4 = previousManifest?.sections.some((section) =>
+      section.pairs.some((pair) => pair.experimentId === LAB_EXPERIMENT_ID));
+    if (previousManifest && !alreadyArchivedForV4) {
+      const archiveName = `${previousManifest.generatedAt ?? new Date().toISOString()}`
+        .replace(/[^0-9A-Za-z._-]/g, "-");
+      await writeJsonAtomic(
+        path.join(LAB_RUNTIME_ROOT, "manifest-history", `${archiveName}.json`),
+        previousManifest,
+      );
+    }
+    const manifest = initialManifest(previousManifest);
     manifest.ttsConfig = tts.publicConfig;
     await saveManifest(manifest);
     const measurer = new AudioDurationMeasurer();
@@ -1312,19 +2454,29 @@ export async function runLabGenerator(argv = process.argv.slice(2)): Promise<voi
       const selectedFixtures = LAB_SECTION_FIXTURES.filter((item) => options.sectionIds.has(item.id));
       const designs = new Map<string, TeachingDesign>();
       if (options.variants.has("enhanced")) {
-        await mapWithConcurrency(selectedFixtures, options.concurrency, async (fixture) => {
+        const designTasks = selectedFixtures.flatMap((fixture) =>
+          LAB_BATCHES.filter((batch) => options.batches.has(batch)).map((batch) => ({ fixture, batch })),
+        );
+        await mapWithConcurrency(designTasks, options.concurrency, async ({ fixture, batch }) => {
           const section = manifest.sections.find((item) => item.id === fixture.id);
+          await reportProgress({ sectionId: fixture.id, batch, stage: "design", state: "started" });
           try {
-            const design = options.ttsOnly && section?.enhancedDesign
-              ? section.enhancedDesign
-              : await generateDesign(fixture, resolved.modelString, baseAiCall);
-            designs.set(fixture.id, design);
-            if (section) section.enhancedDesign = design;
+            const design = await generateDesign(
+              fixture,
+              batch,
+              resolved.modelString,
+              resolved.thinkingConfig,
+              baseAiCall,
+              tts,
+            );
+            designs.set(`${fixture.id}:${batch}`, design);
+            if (section && batch === LAB_BATCHES[0]) section.enhancedDesign = design;
             await saveManifest(manifest);
+            await reportProgress({ sectionId: fixture.id, batch, stage: "design", state: "completed" });
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             for (const pair of section?.pairs ?? []) {
-              if (!options.batches.has(pair.batch)) continue;
+              if (pair.batch !== batch) continue;
               const previousResult = pair.variants.enhanced;
               pair.variants.enhanced = recoverVariantAfterGenerationFailure(
                 {
@@ -1339,7 +2491,7 @@ export async function runLabGenerator(argv = process.argv.slice(2)): Promise<voi
                 `教学设计生成失败：${message}`,
               );
             }
-            console.error(`[${fixture.id}/design] ${message}`);
+            await reportProgress({ sectionId: fixture.id, batch, stage: "design", state: "failed", message });
             await saveManifest(manifest);
           }
         });
@@ -1349,7 +2501,7 @@ export async function runLabGenerator(argv = process.argv.slice(2)): Promise<voi
         LAB_BATCHES.filter((batch) => options.batches.has(batch)).flatMap((batch) =>
           (["baseline", "enhanced"] as const)
             .filter((variant) => options.variants.has(variant))
-            .filter((variant) => variant === "baseline" || designs.has(fixture.id))
+            .filter((variant) => variant === "baseline" || designs.has(`${fixture.id}:${batch}`))
             .map((variant) => ({ fixture, batch, variant })),
         ),
       );
@@ -1357,27 +2509,37 @@ export async function runLabGenerator(argv = process.argv.slice(2)): Promise<voi
         const section = manifest.sections.find((item) => item.id === fixture.id);
         const pair = section?.pairs.find((item) => item.batch === batch);
         if (!pair) throw new Error(`Manifest entry missing for ${fixture.id}/${batch}`);
+        const baselineIsFrozen = variant === "baseline"
+          && !options.ttsOnly
+          && !options.retryFailed
+          && pair.variants.baseline.statuses.ppt.state === "complete"
+          && pair.variants.baseline.statuses.script.state === "complete"
+          && pair.variants.baseline.slides.length > 0;
+        if (baselineIsFrozen) {
+          await reportProgress({ sectionId: fixture.id, batch, stage: "baseline", state: "reused", message: "沿用归档优化版" });
+          return;
+        }
         const previousResult = structuredClone(pair.variants[variant]);
         pair.variants[variant].statuses = {
-          ppt: options.ttsOnly || options.narrationOnly
+          ppt: options.ttsOnly
             ? pair.variants[variant].statuses.ppt
             : nowStatus("running"),
           script: options.ttsOnly ? pair.variants[variant].statuses.script : nowStatus("running"),
           tts: nowStatus("running"),
         };
         await saveManifest(manifest);
-        console.log(`[${fixture.id}/${batch}/${variant}] 开始`);
+        await reportProgress({ sectionId: fixture.id, batch, stage: variant, state: "started" });
         try {
           const checkpoint = await generateVariant({
             fixture,
             batch,
             variant,
             modelString: resolved.modelString,
+            thinkingConfig: resolved.thinkingConfig,
             baseAiCall,
-            design: variant === "enhanced" ? designs.get(fixture.id) : undefined,
+            design: variant === "enhanced" ? designs.get(`${fixture.id}:${batch}`) : undefined,
             tts,
             ttsOnly: options.ttsOnly,
-            narrationOnly: options.narrationOnly,
             retryFailed: options.retryFailed,
             measurer,
             onArtifactsReady: async (result) => {
@@ -1386,7 +2548,7 @@ export async function runLabGenerator(argv = process.argv.slice(2)): Promise<voi
             },
           });
           updateVariant(manifest, fixture.id, batch, variant, checkpoint.result);
-          console.log(`[${fixture.id}/${batch}/${variant}] 完成`);
+          await reportProgress({ sectionId: fixture.id, batch, stage: variant, state: "completed" });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           pair.variants[variant] = recoverVariantAfterGenerationFailure(
@@ -1394,7 +2556,7 @@ export async function runLabGenerator(argv = process.argv.slice(2)): Promise<voi
             previousResult,
             message,
           );
-          console.error(`[${fixture.id}/${batch}/${variant}] ${message}`);
+          await reportProgress({ sectionId: fixture.id, batch, stage: variant, state: "failed", message });
         }
         await saveManifest(manifest);
       });
@@ -1406,6 +2568,13 @@ export async function runLabGenerator(argv = process.argv.slice(2)): Promise<voi
   } finally {
     await releaseLock();
   }
+}
+
+export async function runLabGenerator(
+  argv = process.argv.slice(2),
+  adapters: LabGenerationCoreAdapters = {},
+): Promise<void> {
+  await coreAdapterContext.run(adapters, () => runLabGeneratorInternal(argv));
 }
 
 const invokedAsScript = process.argv[1]

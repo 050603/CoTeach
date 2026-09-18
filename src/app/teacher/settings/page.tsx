@@ -3,10 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import {
   AlertCircle,
+  ArrowLeft,
   Bot,
   CheckCircle2,
+  ChevronRight,
   Circle,
   CircleDot,
   Eye,
@@ -24,6 +27,7 @@ import {
   Server,
   SlidersHorizontal,
   Trash2,
+  UserRound,
   Users,
   Video,
   Volume2,
@@ -80,6 +84,46 @@ import { I18nProvider } from "@openmaic/lib/hooks/use-i18n";
 import { ThemeProvider } from "@openmaic/lib/hooks/use-theme";
 
 type TabKey = "llm" | "tts" | "asr" | "image" | "video" | "web-search" | "pdf" | "agent-voice" | "knowledge-tutor" | "quality-review";
+type SettingsSection = "account" | "teaching" | "ai";
+type AiServiceView = "overview" | "detail";
+
+const SETTINGS_SECTIONS: Array<{
+  key: SettingsSection;
+  label: string;
+  description: string;
+  eyebrow: string;
+  title: string;
+  intro: string;
+  icon: ComponentType<{ size?: number; className?: string }>;
+}> = [
+  {
+    key: "account",
+    label: "账号与安全",
+    description: "姓名、登录账号与密码",
+    eyebrow: "教师账号",
+    title: "账号与安全",
+    intro: "管理教师身份信息和登录凭据。",
+    icon: UserRound,
+  },
+  {
+    key: "teaching",
+    label: "教学偏好",
+    description: "问卷与课堂分析方式",
+    eyebrow: "课堂工具",
+    title: "教学偏好",
+    intro: "设置适用于当前教师账号的课堂分析方式。",
+    icon: SlidersHorizontal,
+  },
+  {
+    key: "ai",
+    label: "AI 服务",
+    description: "模型、语音与生成能力",
+    eyebrow: "教学能力配置",
+    title: "AI 服务设置",
+    intro: "连接教学所需的模型与音视频服务，管理配置并验证可用性。",
+    icon: Bot,
+  },
+];
 
 type ProviderMeta = {
   id: string;
@@ -196,38 +240,96 @@ const TABS: Array<{
   { key: "quality-review", label: "课程质量检验", shortLabel: "质量检验", section: "providers", icon: Eye },
 ];
 
-const TAB_COPY: Record<TabKey, { title: string }> = {
+const AI_SERVICE_DETAILS: Record<TabKey, {
+  description: string;
+  related: string[];
+  group: "course" | "classroom" | "content";
+}> = {
   llm: {
-    title: "AI 大模型",
-  },
-  tts: {
-    title: "语音朗读",
-  },
-  asr: {
-    title: "语音识别",
-  },
-  image: {
-    title: "图像生成",
-  },
-  video: {
-    title: "视频生成",
-  },
-  "web-search": {
-    title: "联网搜索",
-  },
-  pdf: {
-    title: "PDF 解析",
-  },
-  "agent-voice": {
-    title: "智能体音色",
+    description: "为课程设计、教学内容生成和课堂智能体提供基础推理能力。",
+    related: ["课程备课", "课堂智能体", "教学内容生成"],
+    group: "course",
   },
   "knowledge-tutor": {
-    title: "知识讲授助教",
+    description: "为知识讲授环节指定模型和讲授策略，独立控制课堂讲解能力。",
+    related: ["知识讲授", "课堂助教", "教学策略"],
+    group: "course",
   },
   "quality-review": {
-    title: "课程质量检验",
+    description: "检查课程页面排版与内容质量，并配置独立的视觉检验模型。",
+    related: ["课程质量检验", "页面排版检查", "发布前复核"],
+    group: "course",
+  },
+  tts: {
+    description: "将教学文本转换为语音，用于课件讲解、课堂播报和智能体发言。",
+    related: ["课件旁白", "知识讲授", "智能体发言"],
+    group: "classroom",
+  },
+  asr: {
+    description: "把课堂语音转换为文本，为语音输入和课堂互动提供支持。",
+    related: ["课堂语音输入", "互动记录", "语音转写"],
+    group: "classroom",
+  },
+  "agent-voice": {
+    description: "为不同教学智能体分配音色，让课堂角色表达更容易区分。",
+    related: ["智能体角色", "课堂对话", "语音试听"],
+    group: "classroom",
+  },
+  image: {
+    description: "生成课程封面和教学插图，补充备课与课件中的视觉素材。",
+    related: ["课程封面", "课件插图", "视觉素材"],
+    group: "content",
+  },
+  video: {
+    description: "生成教学短视频和动态素材，为课程内容提供补充说明。",
+    related: ["教学视频", "动态素材", "课程内容"],
+    group: "content",
+  },
+  "web-search": {
+    description: "为需要外部资料的教学任务提供联网检索和信息补充能力。",
+    related: ["资料检索", "内容生成", "事实补充"],
+    group: "content",
+  },
+  pdf: {
+    description: "解析上传的 PDF 教学资料，提取可用于备课和课堂的内容。",
+    related: ["教学资料", "文档解析", "课程资源"],
+    group: "content",
   },
 };
+
+const AI_SERVICE_GROUPS: Array<{
+  key: "course" | "classroom" | "content";
+  eyebrow: string;
+  title: string;
+  description: string;
+  tabs: TabKey[];
+  links: Array<{ label: string; href: string }>;
+}> = [
+  {
+    key: "course",
+    eyebrow: "01 · 核心能力",
+    title: "课程设计与质量",
+    description: "先建立课程生成的基础模型，再按需配置知识讲授和质量检验。",
+    tabs: ["llm", "knowledge-tutor", "quality-review"],
+    links: [{ label: "前往课程库", href: "/teacher/templates" }],
+  },
+  {
+    key: "classroom",
+    eyebrow: "02 · 课堂互动",
+    title: "语音与智能体",
+    description: "管理课堂朗读、语音识别，以及不同教学智能体的专属音色。",
+    tabs: ["tts", "asr", "agent-voice"],
+    links: [{ label: "前往教学班", href: "/teacher/classes" }],
+  },
+  {
+    key: "content",
+    eyebrow: "03 · 内容扩展",
+    title: "素材与信息处理",
+    description: "按课程需要接入图像、视频、联网搜索和 PDF 解析能力。",
+    tabs: ["image", "video", "web-search", "pdf"],
+    links: [{ label: "查看课程资源", href: "/teacher/templates" }],
+  },
+];
 
 function getProvidersForTab(tab: TabKey): ProviderMeta[] {
   switch (tab) {
@@ -841,7 +943,188 @@ function QualityReviewConfig() {
   );
 }
 
+function formatConfiguredModel(modelString: string | undefined): string | null {
+  if (!modelString) return null;
+  const separator = modelString.indexOf(":");
+  if (separator < 0) return modelString;
+  const providerId = modelString.slice(0, separator);
+  const modelId = modelString.slice(separator + 1);
+  const provider = PROVIDERS[providerId as keyof typeof PROVIDERS];
+  return `${provider?.name ?? providerId} · ${provider?.models.find((model) => model.id === modelId)?.name ?? modelId}`;
+}
+
+function getTtsProviderName(providerId: string): string {
+  return (TTS_PROVIDERS as Record<string, { name: string }>)[providerId]?.name ?? providerId;
+}
+
+function getProviderOverview(
+  tabKey: TabKey,
+  savedConfigs: Record<string, SavedConfig>,
+): { status: string; summary: string; configured: boolean } | null {
+  const tab = TABS.find((item) => item.key === tabKey);
+  if (!tab) return null;
+  const providers = getProvidersForTab(tabKey);
+  if (providers.length === 0) return null;
+  const configured = providers.flatMap((provider) => {
+    const saved = savedConfigs[configKey(tab.section, provider.id)];
+    if (!saved?.hasApiKey && saved?.enabled === undefined) return [];
+    const modelId = saved.defaultModel || saved.models?.[0] || provider.defaultModelId || provider.models[0]?.id;
+    const modelName = provider.models.find((model) => model.id === modelId)?.name ?? modelId;
+    const voice = tabKey === "tts" && saved.defaultVoice ? ` · ${saved.defaultVoice}` : "";
+    return [`${provider.name}${modelName ? ` · ${modelName}` : ""}${voice}`];
+  });
+  return configured.length > 0
+    ? { status: `${configured.length} 个连接`, summary: configured.join("；"), configured: true }
+    : { status: "未配置", summary: "尚未保存可用的服务商连接", configured: false };
+}
+
+function AiServiceOverview({
+  savedConfigs,
+  loading,
+  error,
+  onOpen,
+}: {
+  savedConfigs: Record<string, SavedConfig>;
+  loading: boolean;
+  error?: string;
+  onOpen: (tab: TabKey) => void;
+}) {
+  const { agentVoiceOverrides, ttsProviderId } = useSettingsStore();
+  const [knowledgeSettings, setKnowledgeSettings] = useState<KnowledgeTutorSettings | null>(null);
+  const [qualitySettings, setQualitySettings] = useState<QualityReviewSettings | null>(null);
+  const [linkedSettingsLoading, setLinkedSettingsLoading] = useState(true);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void Promise.all([
+      fetch("/api/knowledge-lecture/settings", { cache: "no-store", signal: controller.signal }).then((response) => response.json()),
+      fetch("/api/course-quality-review/settings", { cache: "no-store", signal: controller.signal }).then((response) => response.json()),
+    ]).then(([knowledgePayload, qualityPayload]) => {
+      if (controller.signal.aborted) return;
+      setKnowledgeSettings(knowledgePayload?.settings ?? {});
+      setQualitySettings(qualityPayload?.settings ?? {});
+    }).catch(() => {
+      if (!controller.signal.aborted) {
+        setKnowledgeSettings({});
+        setQualitySettings({});
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted) setLinkedSettingsLoading(false);
+    });
+    return () => controller.abort();
+  }, []);
+
+  const voiceOverrideCount = Object.values(agentVoiceOverrides).filter((override) => override?.voiceId).length;
+  const overviewItems = TABS.map((tab) => {
+    const providerOverview = getProviderOverview(tab.key, savedConfigs);
+    if (providerOverview) return { tab, ...providerOverview };
+    if (tab.key === "agent-voice") {
+      const providerName = getTtsProviderName(ttsProviderId);
+      return {
+        tab,
+        configured: voiceOverrideCount > 0,
+        status: voiceOverrideCount > 0 ? `${voiceOverrideCount} 个角色` : "跟随默认",
+        summary: voiceOverrideCount > 0 ? `${providerName} · 已为部分智能体指定音色` : `${providerName} · 所有智能体使用默认音色`,
+      };
+    }
+    if (tab.key === "knowledge-tutor") {
+      const model = formatConfiguredModel(knowledgeSettings?.modelString);
+      const voiceProvider = knowledgeSettings?.ttsProviderId
+        ? getTtsProviderName(knowledgeSettings.ttsProviderId)
+        : "浏览器默认语音";
+      return {
+        tab,
+        configured: Boolean(knowledgeSettings?.modelString || knowledgeSettings?.ttsProviderId),
+        status: linkedSettingsLoading ? "读取中" : model || knowledgeSettings?.ttsProviderId ? "已设置" : "跟随默认",
+        summary: linkedSettingsLoading ? "正在读取知识讲授配置" : `${model ?? "系统默认模型"} · ${voiceProvider}`,
+      };
+    }
+    const qualityModel = formatConfiguredModel(qualitySettings?.modelString);
+    return {
+      tab,
+      configured: Boolean(qualityModel),
+      status: linkedSettingsLoading ? "读取中" : qualityModel ? "独立模型" : "跟随课程",
+      summary: linkedSettingsLoading ? "正在读取课程检验配置" : qualityModel ?? "使用每门课程锁定的生成模型",
+    };
+  });
+  const overviewByKey = new Map(overviewItems.map((item) => [item.tab.key, item]));
+
+  return <div className="min-w-0">
+    <section aria-labelledby="ai-configuration-overview-heading">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-[var(--pbl-border)] pb-3">
+        <h3 id="ai-configuration-overview-heading" className="text-base font-semibold text-[var(--pbl-text-strong)]">配置概览</h3>
+        <p className="text-xs text-[var(--pbl-text-muted)]">直接查看当前服务商、模型和默认策略</p>
+      </div>
+      <div className="mt-4 grid items-stretch gap-4 xl:grid-cols-3">
+        {AI_SERVICE_GROUPS.map((group) => (
+          <section key={group.key} className="flex min-w-0 flex-col overflow-hidden rounded-[12px] border border-[var(--pbl-border)] bg-white" aria-labelledby={`ai-service-group-${group.key}`}>
+            <header className="min-h-[116px] border-b border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)]/45 px-4 py-3.5">
+              <p className="text-[10px] font-semibold tracking-[.12em] text-[var(--pbl-teacher)]">{group.eyebrow}</p>
+              <h4 id={`ai-service-group-${group.key}`} className="mt-1.5 text-base font-semibold text-[var(--pbl-text-strong)]">{group.title}</h4>
+              <p className="mt-1.5 text-xs leading-5 text-[var(--pbl-text-muted)]">{group.description}</p>
+            </header>
+            <div className="divide-y divide-[var(--pbl-border)]">
+              {group.tabs.map((tabKey) => {
+                const item = overviewByKey.get(tabKey)!;
+                const Icon = item.tab.icon;
+                return <button key={tabKey} type="button" onClick={() => onOpen(tabKey)} className="group flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left hover:bg-[var(--pbl-teacher-soft)]/30">
+                  <span className="grid size-9 shrink-0 place-items-center rounded-[9px] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]"><Icon size={16}/></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-center gap-2"><strong className="truncate text-sm font-semibold text-[var(--pbl-text-strong)]">{item.tab.label}</strong><span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold", item.configured ? "bg-emerald-50 text-emerald-700" : "bg-[var(--pbl-surface-soft)] text-[var(--pbl-text-muted)]")}>{loading && getProviderOverview(tabKey, savedConfigs) ? "读取中" : item.status}</span></span>
+                    <small className="mt-1 block truncate text-[11px] text-[var(--pbl-text-muted)]" title={item.summary}>{item.summary}</small>
+                  </span>
+                  <ChevronRight className="shrink-0 text-[var(--pbl-border-strong)] group-hover:text-[var(--pbl-teacher)]" size={15}/>
+                </button>;
+              })}
+            </div>
+            <div className="mt-auto border-t border-[var(--pbl-border)] px-4 py-2">
+              {group.links.map((link) => <Link key={link.href} href={link.href} className="inline-flex min-h-11 items-center gap-1.5 text-xs font-semibold text-[var(--pbl-teacher)]">{link.label}<ChevronRight size={14}/></Link>)}
+            </div>
+          </section>
+        ))}
+      </div>
+    </section>
+    {error ? <p role="alert" className="mt-4 rounded-[8px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-[var(--pbl-danger)]">{error}</p> : null}
+  </div>;
+}
+
+function AiServiceDetailHeader({
+  activeTab,
+  onBack,
+  onChange,
+}: {
+  activeTab: TabKey;
+  onBack: () => void;
+  onChange: (tab: TabKey) => void;
+}) {
+  const tab = TABS.find((item) => item.key === activeTab)!;
+  const detail = AI_SERVICE_DETAILS[activeTab];
+  const group = AI_SERVICE_GROUPS.find((item) => item.key === detail.group)!;
+  const Icon = tab.icon;
+
+  return <header className="pbl-settings-content-header min-w-0 border-b border-[var(--pbl-border)] pb-5" aria-labelledby="teacher-settings-section-heading">
+    <div className="flex min-w-0 flex-wrap items-center gap-3 sm:gap-4">
+      <button type="button" aria-label="返回服务总览" onClick={onBack} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-[8px] px-2 text-sm font-semibold text-[var(--pbl-teacher)] hover:bg-[var(--pbl-teacher-soft)]"><ArrowLeft size={16}/><span className="hidden sm:inline">服务概览</span></button>
+      <span aria-hidden="true" className="hidden h-11 w-px shrink-0 bg-[var(--pbl-border)] sm:block" />
+      <span className="grid size-11 shrink-0 place-items-center rounded-[10px] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]"><Icon size={19}/></span>
+      <div className="min-w-[220px] flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <h2 id="teacher-settings-section-heading" className="text-xl font-semibold tracking-[-.02em] text-[var(--pbl-text-strong)]">{tab.label}</h2>
+          <span className="text-[10px] font-semibold tracking-[.1em] text-[var(--pbl-teacher)]">{group.title}</span>
+        </div>
+        <p className="mt-1 max-w-3xl text-xs leading-5 text-[var(--pbl-text-muted)]">{detail.description}</p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5"><span className="mr-0.5 text-[10px] font-medium text-[var(--pbl-text-subtle)]">关联功能</span>{detail.related.map((item) => <span key={item} className="text-[10px] font-medium text-[var(--pbl-text-muted)]">{item}</span>)}</div>
+      </div>
+      <label className="flex min-h-11 w-full shrink-0 items-center gap-2 text-xs font-medium text-[var(--pbl-text-muted)] sm:w-auto"><span className="shrink-0">当前能力</span><select aria-label="切换 AI 服务功能" value={activeTab} onChange={(event) => onChange(event.target.value as TabKey)} className="min-h-11 min-w-0 flex-1 rounded-[8px] border border-[var(--pbl-border)] bg-white px-3 text-sm font-semibold text-[var(--pbl-text-strong)] sm:w-[190px]">
+        {AI_SERVICE_GROUPS.map((item) => <optgroup key={item.key} label={item.title}>{item.tabs.map((tabKey) => <option key={tabKey} value={tabKey}>{TABS.find((candidate) => candidate.key === tabKey)?.label}</option>)}</optgroup>)}
+      </select></label>
+    </div>
+  </header>;
+}
+
 export default function TeacherSettingsPage() {
+  const [activeSection, setActiveSection] = useState<SettingsSection>("account");
+  const [aiServiceView, setAiServiceView] = useState<AiServiceView>("overview");
   const [activeTab, setActiveTab] = useState<TabKey>("llm");
   const [savedConfigs, setSavedConfigs] = useState<Record<string, SavedConfig>>({});
   const [configLoading, setConfigLoading] = useState(true);
@@ -869,7 +1152,8 @@ export default function TeacherSettingsPage() {
   const [restoringThinkingProviderId, setRestoringThinkingProviderId] = useState<string | null>(null);
 
   const currentTab = TABS.find((tab) => tab.key === activeTab)!;
-  const tabCopy = TAB_COPY[activeTab];
+  const currentSection = SETTINGS_SECTIONS.find((section) => section.key === activeSection)!;
+  const CurrentSectionIcon = currentSection.icon;
   const providers = useMemo(() => getProvidersForTab(activeTab), [activeTab]);
   const filteredProviders = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -912,8 +1196,8 @@ export default function TeacherSettingsPage() {
     [currentTab.section, getSavedConfig],
   );
 
-  const fetchConfigs = useCallback(async (section: ProviderSection) => {
-    setConfigLoading(true);
+  const fetchConfigs = useCallback(async (section: ProviderSection, showLoading = true) => {
+    if (showLoading) setConfigLoading(true);
     try {
       const response = await fetch(`/api/openmaic/provider-config?section=${section}`, { cache: "no-store" });
       const data = await response.json().catch(() => null);
@@ -923,25 +1207,37 @@ export default function TeacherSettingsPage() {
 
       if (!response.ok || !providersData) throw new Error(getReadableError(data, "读取已保存配置失败，请重试。"));
       if (providersData) {
-        setSavedConfigs((current) => ({
-          ...current,
-          ...Object.fromEntries(
+        setSavedConfigs((current) => {
+          const retained = Object.fromEntries(
+            Object.entries(current).filter(([key]) => !key.startsWith(`${section}:`)),
+          );
+          return {
+            ...retained,
+            ...Object.fromEntries(
             Object.entries(providersData).map(([providerId, value]) => [
               configKey(section, providerId),
               value,
             ]),
           ),
-        }));
+          };
+        });
       }
     } finally {
-      setConfigLoading(false);
+      if (showLoading) setConfigLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    if (activeSection !== "ai") return;
+    const sections = Array.from(new Set(
+      TABS.filter((tab) => getProvidersForTab(tab.key).length > 0).map((tab) => tab.section),
+    ));
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchConfigs(currentTab.section).catch((error: Error) => setSaveResult({ ok: false, message: error.message }));
-  }, [currentTab.section, fetchConfigs]);
+    setConfigLoading(true);
+    void Promise.all(sections.map((section) => fetchConfigs(section, false)))
+      .catch((error: Error) => setSaveResult({ ok: false, message: error.message }))
+      .finally(() => setConfigLoading(false));
+  }, [activeSection, fetchConfigs]);
 
   useEffect(() => {
     if (activeTab !== "llm" || selectedLlmId || configLoading || providers.length === 0) return;
@@ -1373,9 +1669,6 @@ export default function TeacherSettingsPage() {
 
   const selectedLlmProvider = providers.find((provider) => provider.id === selectedLlmId) ?? null;
   const selectedModalityProvider = providers.find((provider) => provider.id === expandedId) ?? null;
-  const selectedProviderName = activeTab === "llm"
-    ? selectedLlmProvider?.name
-    : selectedModalityProvider?.name;
   const configuredProvidersCount = providers.filter((provider) => {
     const saved = savedConfigs[configKey(currentTab.section, provider.id)];
     return saved?.hasApiKey || saved?.enabled !== undefined;
@@ -1419,105 +1712,95 @@ export default function TeacherSettingsPage() {
     setSaveResult(null);
     setTestResult(null);
     setQuery("");
-    setConfigLoading(true);
     setSelectedLlmId(null);
     setExpandedId(null);
   }
 
+  function openAiService(tab: TabKey) {
+    handleTabChange(tab);
+    setAiServiceView("detail");
+  }
+
   return (
     <TeacherPlatformPage><TeacherPlatformHeader active="settings" backHref="/teacher/classes" backLabel="返回教学班" /><div className="pbl-workspace-content pbl-settings-layout">
-      <div className="pbl-page-heading"><div><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">教师账号</p><h1 className="mt-3 font-semibold">个人中心</h1></div></div>
-      <TeacherProfilePanel/>
-      <SurveyKeywordSettings/>
-      <section className="mb-5 border-t border-[var(--pbl-border)] pt-7" aria-labelledby="ai-service-settings-heading"><p className="text-xs tracking-widest text-[var(--pbl-teacher)]">教学能力配置</p><h2 id="ai-service-settings-heading" className="mt-2 text-xl font-semibold text-[var(--pbl-text-strong)]">AI 服务设置</h2><p className="mt-2 text-sm leading-6 text-[var(--pbl-text-muted)]">连接教学所需的模型与音视频服务，管理配置并验证可用性。</p></section>
-      <ThemeProvider>
+      <header className="pbl-settings-masthead flex min-w-0 flex-wrap items-center justify-between gap-4 border-b border-[var(--pbl-border)] pb-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 className="text-2xl font-semibold tracking-[-.035em] text-[var(--pbl-text-strong)]">个人中心</h1>
+            <span className="text-[11px] font-semibold tracking-[.12em] text-[var(--pbl-teacher)]">教师账号</span>
+          </div>
+          <p className="mt-1.5 text-xs leading-5 text-[var(--pbl-text-muted)]">管理账号、教学偏好与 AI 教学服务</p>
+        </div>
+        <nav className="pbl-settings-section-nav flex min-w-0 max-w-full gap-1 overflow-x-auto rounded-[10px] bg-[var(--pbl-surface-soft)] p-1" aria-label="个人中心设置分类">
+          {SETTINGS_SECTIONS.map((section) => {
+            const Icon = section.icon;
+            const active = section.key === activeSection;
+            return <button
+              key={section.key}
+              type="button"
+              aria-current={active ? "page" : undefined}
+              onClick={() => {
+                setActiveSection(section.key);
+                if (section.key === "ai") setAiServiceView("overview");
+              }}
+              className={cn(
+                "flex min-h-11 shrink-0 items-center gap-2 rounded-[8px] px-3.5 text-sm font-semibold transition",
+                active
+                  ? "bg-white text-[var(--pbl-teacher)] shadow-[0_1px_3px_rgba(41,57,79,0.08)]"
+                  : "text-[var(--pbl-text-muted)] hover:bg-white/60 hover:text-[var(--pbl-text-strong)]",
+              )}
+            >
+              <Icon size={16}/>
+              {section.label}
+            </button>;
+          })}
+        </nav>
+      </header>
+
+      <section className="pbl-settings-main min-w-0 pt-5" aria-labelledby="teacher-settings-section-heading">
+          {activeSection === "ai" && aiServiceView === "detail" ? (
+            <AiServiceDetailHeader activeTab={activeTab} onBack={() => setAiServiceView("overview")} onChange={handleTabChange}/>
+          ) : (
+            <header className="pbl-settings-content-header mb-5 flex min-w-0 items-start gap-3 border-b border-[var(--pbl-border)] pb-5">
+              <span className="grid size-11 shrink-0 place-items-center rounded-[10px] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]"><CurrentSectionIcon size={19}/></span>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                  <h2 id="teacher-settings-section-heading" className="text-xl font-semibold tracking-[-.02em] text-[var(--pbl-text-strong)]">{currentSection.title}</h2>
+                  <span className="text-[10px] font-semibold tracking-[.12em] text-[var(--pbl-teacher)]">{currentSection.eyebrow}</span>
+                </div>
+                <p className="mt-1 text-xs leading-5 text-[var(--pbl-text-muted)]">{currentSection.intro}</p>
+              </div>
+            </header>
+          )}
+
+          {activeSection === "account" ? <TeacherProfilePanel/> : null}
+          {activeSection === "teaching" ? <SurveyKeywordSettings/> : null}
+          {activeSection === "ai" ? <ThemeProvider>
         <I18nProvider>
           <ServerProvidersInit />
-          <div className="pbl-settings-workbench mb-8 min-w-0 overflow-hidden rounded-[14px] border border-stone-200 bg-white lg:grid lg:grid-cols-[224px_minmax(0,1fr)]">
-            <aside className="min-w-0 border-b border-stone-200 bg-stone-50/70 lg:border-b-0 lg:border-r">
-              <div className="border-b border-stone-200 px-4 py-4">
-                <p className="text-[11px] font-semibold tracking-widest text-stone-500">服务类型</p>
-                <h3 className="mt-1 text-base font-bold text-stone-900">模型与能力</h3>
-              </div>
-              <nav aria-label="AI 服务类型" className="flex gap-1 overflow-x-auto p-2 lg:flex-col lg:overflow-visible">
-                {TABS.map((tab) => {
-                  const Icon = tab.icon;
-                  const active = activeTab === tab.key;
-                  const tabProviders = getProvidersForTab(tab.key);
-                  const tabConfigured = ["agent-voice", "knowledge-tutor", "quality-review"].includes(tab.key) ? 0 : tabProviders.filter((provider) => {
-                    const saved = savedConfigs[configKey(tab.section, provider.id)];
-                    return saved?.hasApiKey || saved?.enabled !== undefined;
-                  }).length;
-                  return (
-                    <button
-                      key={tab.key}
-                      type="button"
-                      aria-current={active ? "page" : undefined}
-                      onClick={() => handleTabChange(tab.key)}
-                      className={cn(
-                        "inline-flex min-h-11 min-w-[132px] items-center gap-2.5 rounded-[8px] px-3 text-left text-sm font-semibold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--pbl-teacher)] lg:min-w-0",
-                        active
-                          ? "bg-[var(--pbl-teacher)] text-white"
-                          : "text-stone-600 hover:bg-white hover:text-stone-950",
-                      )}
-                    >
-                      <Icon size={16} className="shrink-0" />
-                      <span className="min-w-0 flex-1 truncate">{tab.label}</span>
-                      {tabConfigured > 0 ? (
-                        <span className={cn(
-                          "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-bold",
-                          active
-                            ? "bg-white/20 text-white"
-                            : "bg-[var(--pbl-success-soft)] text-[var(--pbl-success)]",
-                        )}>
-                          {tabConfigured}
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </nav>
-            </aside>
-
+          {aiServiceView === "overview" ? <AiServiceOverview savedConfigs={savedConfigs} loading={configLoading} error={saveResult && !saveResult.ok ? saveResult.message : undefined} onOpen={openAiService}/> : <>
+          <div className="pbl-settings-workbench min-w-0 rounded-[14px] border border-stone-200 bg-white">
             <section className="min-w-0">
-              <header className="flex min-h-[73px] flex-wrap items-center justify-between gap-3 border-b border-stone-200 px-4 py-3 sm:px-5">
-                <div className="min-w-0">
-                  <div className="flex min-w-0 items-center gap-2 text-[11px] font-semibold text-stone-500">
-                    <span>服务类型</span>
-                    <span aria-hidden="true">/</span>
-                    <span className="truncate text-[var(--pbl-teacher)]">{tabCopy.title}</span>
-                    {selectedProviderName ? (
-                      <><span aria-hidden="true">/</span><span className="truncate">{selectedProviderName}</span></>
-                    ) : null}
-                  </div>
-                  <h2 className="mt-1 truncate text-lg font-bold text-stone-950">{tabCopy.title}</h2>
-                </div>
-                {activeTab !== "agent-voice" && activeTab !== "knowledge-tutor" && activeTab !== "quality-review" ? (
-                  <span className="shrink-0 text-xs font-medium tabular-nums text-stone-500">
-                    {configuredProvidersCount}/{providers.length} 已配置
-                  </span>
-                ) : null}
-              </header>
-
-              <div className="min-w-0 p-3 sm:p-4">
+              <div className="min-w-0">
                 {configLoading ? (
-                  <div className="mb-4 inline-flex items-center gap-2 rounded-[6px] bg-stone-100 px-3 py-2 text-sm font-semibold text-stone-500">
+                  <div className="m-4 inline-flex items-center gap-2 rounded-[6px] bg-stone-100 px-3 py-2 text-sm font-semibold text-stone-500">
                     <Loader2 size={16} className="animate-spin" />
                     正在读取服务端配置
                   </div>
                 ) : null}
 
               {activeTab === "quality-review" ? (
-                <QualityReviewConfig />
+                <div className="p-4 sm:p-6"><QualityReviewConfig /></div>
               ) : activeTab === "knowledge-tutor" ? (
-                <KnowledgeTutorConfig />
+                <div className="p-4 sm:p-6"><KnowledgeTutorConfig /></div>
               ) : activeTab === "agent-voice" ? (
-                <AgentVoiceConfig />
+                <div className="p-4 sm:p-6"><AgentVoiceConfig /></div>
               ) : activeTab === "llm" ? (
-                <div className="grid items-start gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+                <div className="grid min-w-0 items-start xl:grid-cols-[248px_minmax(0,1fr)]">
                   <ProviderList
                     providers={filteredProviders}
                     totalCount={providers.length}
+                    configuredCount={configuredProvidersCount}
                     selectedId={selectedLlmId}
                     section={currentTab.section}
                     savedConfigs={savedConfigs}
@@ -1562,10 +1845,11 @@ export default function TeacherSettingsPage() {
                   )}
                 </div>
               ) : (
-                <div className="grid items-start gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+                <div className="grid min-w-0 items-start xl:grid-cols-[248px_minmax(0,1fr)]">
                   <ProviderList
                     providers={filteredProviders}
                     totalCount={providers.length}
+                    configuredCount={configuredProvidersCount}
                     selectedId={expandedId}
                     section={currentTab.section}
                     savedConfigs={savedConfigs}
@@ -1620,11 +1904,13 @@ export default function TeacherSettingsPage() {
               </div>
             </section>
           </div>
+          </>}
         </I18nProvider>
-      </ThemeProvider>
+      </ThemeProvider> : null}
+      </section>
 
       {/* 删除确认对话框 */}
-      {deletingProvider ? (
+      {activeSection === "ai" && deletingProvider ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 backdrop-blur-sm">
           <div className="mx-4 max-w-md rounded-xl border border-stone-200 bg-white p-6 shadow-2xl">
             <h3 className="text-lg font-bold text-stone-900">确认删除配置</h3>
@@ -1672,21 +1958,18 @@ function ProviderEditor({
   const hasSavedConfig = Boolean(saved?.hasApiKey || saved?.enabled !== undefined);
 
   return (
-    <section className="pbl-settings-editor min-w-0 overflow-hidden rounded-[12px] border border-stone-200 bg-white">
-      <header className="flex min-w-0 items-center justify-between gap-3 border-b border-stone-200 bg-stone-50/70 px-4 py-3.5 sm:px-5">
+    <section className="pbl-settings-editor min-w-0 bg-white">
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-stone-200 px-4 py-4 sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <ProviderLogo icon={provider.icon} name={provider.name} />
           <div className="min-w-0">
-            <p className="mb-0.5 text-[10px] font-semibold tracking-widest text-stone-500">
-              连接与模型
-            </p>
-            <h3 className="truncate text-base font-bold text-stone-950" title={provider.name}>
-              {provider.name}
+            <h3 className="truncate text-base font-semibold text-stone-950" title={`${provider.name} 配置`}>
+              {provider.name} 配置
             </h3>
-            <p className="truncate text-xs text-stone-500" title={provider.id}>{provider.id}</p>
+            <p className="mt-1 truncate text-xs text-stone-500" title={provider.id}>服务标识 · {provider.id}</p>
           </div>
         </div>
-        <div className="flex min-w-0 shrink items-center justify-end gap-2">
+        <div className="flex min-w-0 shrink items-center justify-end gap-1.5">
           <div className="min-w-0 max-w-[220px]">
             <ProviderStateBadge provider={provider} saved={saved} />
           </div>
@@ -1694,7 +1977,8 @@ function ProviderEditor({
             <button
               type="button"
               onClick={onDelete}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] text-stone-400 transition hover:bg-[var(--pbl-danger-soft)] hover:text-[var(--pbl-danger)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pbl-danger)]"
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-stone-400 transition hover:bg-[var(--pbl-danger-soft)] hover:text-[var(--pbl-danger)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pbl-danger)]"
+              aria-label={`删除 ${provider.name} 配置`}
               title="删除配置"
             >
               <Trash2 size={14} />
@@ -1702,7 +1986,7 @@ function ProviderEditor({
           ) : null}
         </div>
       </header>
-      <div className="p-4 sm:p-5">{children}</div>
+      <div className="px-4 sm:px-6">{children}</div>
     </section>
   );
 }
@@ -1710,6 +1994,7 @@ function ProviderEditor({
 function ProviderList({
   providers,
   totalCount,
+  configuredCount,
   selectedId,
   section,
   savedConfigs,
@@ -1719,6 +2004,7 @@ function ProviderList({
 }: {
   providers: ProviderMeta[];
   totalCount: number;
+  configuredCount: number;
   selectedId: string | null;
   section: ProviderSection;
   savedConfigs: Record<string, SavedConfig>;
@@ -1727,15 +2013,15 @@ function ProviderList({
   onSelect: (provider: ProviderMeta) => void;
 }) {
   return (
-    <aside className="pbl-settings-provider-list min-w-0 overflow-hidden rounded-[12px] border border-stone-200 bg-white lg:sticky lg:top-20">
-      <div className="border-b border-stone-200 bg-stone-50/70 p-3">
+    <aside className="pbl-settings-provider-list min-w-0 border-b border-stone-200 bg-stone-50/55 p-3 xl:sticky xl:top-20 xl:border-b-0 xl:border-r">
+      <div>
         <div className="mb-2.5 flex items-center justify-between gap-3 px-1">
           <div>
-            <p className="text-[10px] font-semibold tracking-widest text-stone-500">服务商与 API</p>
-            <h3 className="mt-0.5 text-sm font-bold text-stone-800">选择接入服务</h3>
+            <p className="text-[10px] font-semibold tracking-widest text-[var(--pbl-teacher)]">服务商</p>
+            <h3 className="mt-0.5 text-sm font-semibold text-stone-800">选择接入服务</h3>
           </div>
-          <span className="shrink-0 text-xs tabular-nums text-stone-500">
-            {providers.length === totalCount ? totalCount : `${providers.length}/${totalCount}`}
+          <span className="shrink-0 text-[11px] tabular-nums text-stone-500">
+            {configuredCount}/{totalCount} 已接入
           </span>
         </div>
         <div className="relative">
@@ -1752,13 +2038,13 @@ function ProviderList({
         </div>
       </div>
 
-      <div className="max-h-[320px] overflow-y-auto p-2 lg:max-h-[calc(100vh-248px)]">
+      <div className="mt-3 flex max-w-full gap-2 overflow-x-auto pb-1 xl:max-h-[calc(100vh-246px)] xl:flex-col xl:overflow-y-auto xl:pr-1">
         {providers.length === 0 ? (
           <div className="grid min-h-28 place-items-center px-4 text-center text-sm text-stone-500">
             没有匹配的服务商
           </div>
         ) : (
-          <div className="space-y-1">
+          <div className="contents">
             {providers.map((provider) => {
               const saved = savedConfigs[configKey(section, provider.id)];
               const selected = selectedId === provider.id;
@@ -1769,10 +2055,10 @@ function ProviderList({
                   aria-pressed={selected}
                   onClick={() => onSelect(provider)}
                   className={cn(
-                    "group relative flex min-h-[64px] w-full min-w-0 items-center gap-3 overflow-hidden rounded-[8px] px-2.5 py-2.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--pbl-teacher)]",
+                    "group relative flex min-h-[62px] w-[218px] min-w-[218px] items-center gap-3 overflow-hidden rounded-[8px] border px-2.5 py-2.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--pbl-teacher)] xl:w-full xl:min-w-0",
                     selected
-                      ? "bg-[var(--pbl-teacher-soft)]"
-                      : "hover:bg-stone-50",
+                      ? "border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)]"
+                      : "border-transparent bg-white/70 hover:border-stone-200 hover:bg-white",
                   )}
                 >
                   <span
@@ -1798,6 +2084,33 @@ function ProviderList({
         )}
       </div>
     </aside>
+  );
+}
+
+function ConfigSection({
+  index,
+  title,
+  description,
+  children,
+}: {
+  index: string;
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="border-t border-stone-200 py-6 first:border-t-0">
+      <header className="flex items-start gap-3">
+        <span className="grid size-7 shrink-0 place-items-center rounded-[6px] bg-[var(--pbl-teacher-soft)] text-[10px] font-bold text-[var(--pbl-teacher)]">
+          {index}
+        </span>
+        <div className="min-w-0">
+          <h4 className="text-sm font-semibold text-stone-900">{title}</h4>
+          <p className="mt-1 text-xs leading-5 text-stone-500">{description}</p>
+        </div>
+      </header>
+      <div className="mt-4">{children}</div>
+    </section>
   );
 }
 
@@ -1861,102 +2174,124 @@ function LlmConfigForm({
   });
 
   return (
-    <div className="space-y-5">
-      <div
-        className={cn(
-          "rounded-[8px] border px-3 py-3 text-sm",
-          connection.tone === "success" && "border-emerald-200 bg-emerald-50 text-emerald-800",
-          connection.tone === "warning" && "border-amber-300 bg-amber-50 text-amber-900",
-          connection.tone === "info" && "border-blue-200 bg-blue-50 text-blue-800",
-        )}
+    <div>
+      <ConfigSection
+        index="01"
+        title="连接认证"
+        description="确认接入协议，填写密钥和服务地址。已保存的密钥不会在页面中回显。"
       >
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-bold">
-          <span>接入方式：{connection.label}</span>
-          <span>接口协议：{connection.protocol}</span>
-        </div>
-        <p className="mt-1.5 leading-5 opacity-90">{connection.credentialHint}</p>
-      </div>
-
-      <div className="grid items-start gap-4 md:grid-cols-2">
-        <SecretField
-          label="密钥"
-          value={editApiKey}
-          show={showApiKey}
-          required={provider.requiresApiKey}
-          saved={saved?.hasApiKey}
-          placeholder={saved?.hasApiKey ? "密钥已保存（留空表示不修改）" : "输入密钥"}
-          onChange={onApiKeyChange}
-          onToggleShow={() => onShowApiKeyChange(!showApiKey)}
-        />
-
-        <Field label="服务地址" icon={Server}>
-          <TextInput
-            value={editBaseUrl}
-            onChange={(event) => onBaseUrlChange(event.target.value)}
-            placeholder={provider.baseUrlPlaceholder || provider.defaultBaseUrl || "输入兼容服务地址"}
-          />
-          {provider.defaultBaseUrl ? (
-            <button
-              type="button"
-              onClick={() => onBaseUrlChange(provider.defaultBaseUrl || "")}
-              className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[var(--pbl-teacher)] hover:text-[var(--pbl-teacher)]"
-            >
-              <RefreshCw size={13} />
-              {provider.id === "deepseek" ? "切换到 DeepSeek 官方地址" : "恢复官方默认地址"}
-            </button>
-          ) : null}
-          <span className="mt-2 block break-all text-xs leading-5 text-stone-500">
-            调用目标：{getProviderRequestPreview(provider, editBaseUrl)}
-          </span>
-        </Field>
-      </div>
-
-      <Field label="模型列表" helper="每行一个模型 ID。" icon={Bot}>
-        <TextArea
-          value={editModels}
-          onChange={(event) => onModelsChange(event.target.value)}
-          rows={4}
-          placeholder="deepseek-v4-flash&#10;deepseek-v4-pro"
-        />
-      </Field>
-
-      {modelIds.length > 0 ? (
-        <Field
-          label="默认模型"
-          helper={`连接测试将使用 ${qualifyModelForProvider(testModel, provider.id)}`}
-          icon={CircleDot}
+        <div
+          className={cn(
+            "mb-5 grid gap-3 rounded-[8px] px-4 py-3 text-sm sm:grid-cols-2",
+            connection.tone === "success" && "bg-emerald-50 text-emerald-800",
+            connection.tone === "warning" && "bg-amber-50 text-amber-900",
+            connection.tone === "info" && "bg-blue-50 text-blue-800",
+          )}
         >
-          <div className="grid gap-2 md:grid-cols-2">
-            {modelIds.map((modelId) => {
-              const modelMeta = provider.models.find((model) => model.id === modelId);
-              const selected = editDefaultModel === modelId;
-              return (
-                <button
-                  key={modelId}
-                  type="button"
-                  onClick={() => onDefaultModelChange(modelId)}
-                  className={cn(
-                    "flex min-h-12 min-w-0 items-center gap-2 overflow-hidden rounded-[8px] border px-3 py-2 text-left text-sm transition",
-                    selected
-                      ? "border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)] ring-1 ring-[var(--pbl-teacher)]/20"
-                      : "border-stone-200 bg-white text-stone-600 hover:border-stone-300",
-                  )}
-                >
-                  {selected ? (
-                    <Zap size={17} className="shrink-0 text-[var(--pbl-teacher)]" />
-                  ) : (
-                    <Circle size={17} className="shrink-0 text-stone-300" />
-                  )}
-                  <span className="min-w-0 overflow-hidden">
-                    <span className="block truncate font-bold" title={modelMeta?.name || modelId}>{modelMeta?.name || modelId}</span>
-                    {modelMeta ? <span className="block truncate text-xs opacity-75">{modelId}</span> : null}
-                  </span>
-                </button>
-              );
-            })}
+          <div>
+            <span className="block text-[10px] font-semibold uppercase tracking-wider opacity-70">接入方式</span>
+            <strong className="mt-0.5 block font-semibold">{connection.label}</strong>
           </div>
-        </Field>
-      ) : null}
+          <div>
+            <span className="block text-[10px] font-semibold uppercase tracking-wider opacity-70">接口协议</span>
+            <strong className="mt-0.5 block font-semibold">{connection.protocol}</strong>
+          </div>
+          <p className="leading-5 opacity-90 sm:col-span-2">{connection.credentialHint}</p>
+        </div>
+
+        <div className="grid items-start gap-5 md:grid-cols-2">
+          <SecretField
+            label="密钥"
+            value={editApiKey}
+            show={showApiKey}
+            required={provider.requiresApiKey}
+            saved={saved?.hasApiKey}
+            placeholder={saved?.hasApiKey ? "密钥已保存（留空表示不修改）" : "输入密钥"}
+            onChange={onApiKeyChange}
+            onToggleShow={() => onShowApiKeyChange(!showApiKey)}
+          />
+
+          <Field label="服务地址" icon={Server}>
+            <TextInput
+              value={editBaseUrl}
+              onChange={(event) => onBaseUrlChange(event.target.value)}
+              placeholder={provider.baseUrlPlaceholder || provider.defaultBaseUrl || "输入兼容服务地址"}
+            />
+            {provider.defaultBaseUrl ? (
+              <button
+                type="button"
+                onClick={() => onBaseUrlChange(provider.defaultBaseUrl || "")}
+                className="mt-2 inline-flex min-h-8 items-center gap-1 text-xs font-semibold text-[var(--pbl-teacher)]"
+              >
+                <RefreshCw size={13} />
+                {provider.id === "deepseek" ? "切换到 DeepSeek 官方地址" : "恢复官方默认地址"}
+              </button>
+            ) : null}
+            <span className="mt-1 block break-all text-xs leading-5 text-stone-500">
+              调用目标：{getProviderRequestPreview(provider, editBaseUrl)}
+            </span>
+          </Field>
+        </div>
+      </ConfigSection>
+
+      <ConfigSection
+        index="02"
+        title="模型配置"
+        description="维护该服务可调用的模型，并明确课程生成和连接测试使用的默认模型。"
+      >
+        <div className="grid items-start gap-5 lg:grid-cols-2">
+          <Field label="模型列表" helper="每行一个模型 ID。" icon={Bot}>
+            <TextArea
+              value={editModels}
+              onChange={(event) => onModelsChange(event.target.value)}
+              rows={Math.max(4, Math.min(modelIds.length, 7))}
+              placeholder="deepseek-v4-flash&#10;deepseek-v4-pro"
+            />
+          </Field>
+
+          {modelIds.length > 0 ? (
+            <Field
+              label="默认模型"
+              helper={`连接测试将使用 ${qualifyModelForProvider(testModel, provider.id)}`}
+              icon={CircleDot}
+            >
+              <div className="grid max-h-[256px] gap-2 overflow-y-auto pr-1">
+                {modelIds.map((modelId) => {
+                  const modelMeta = provider.models.find((model) => model.id === modelId);
+                  const selected = editDefaultModel === modelId;
+                  return (
+                    <button
+                      key={modelId}
+                      type="button"
+                      onClick={() => onDefaultModelChange(modelId)}
+                      className={cn(
+                        "flex min-h-12 min-w-0 items-center gap-2 overflow-hidden rounded-[8px] border px-3 py-2 text-left text-sm transition",
+                        selected
+                          ? "border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)] ring-1 ring-[var(--pbl-teacher)]/20"
+                          : "border-stone-200 bg-white text-stone-600 hover:border-stone-300",
+                      )}
+                    >
+                      {selected ? (
+                        <Zap size={17} className="shrink-0 text-[var(--pbl-teacher)]" />
+                      ) : (
+                        <Circle size={17} className="shrink-0 text-stone-300" />
+                      )}
+                      <span className="min-w-0 overflow-hidden">
+                        <span className="block truncate font-semibold" title={modelMeta?.name || modelId}>{modelMeta?.name || modelId}</span>
+                        {modelMeta ? <span className="block truncate text-xs opacity-75">{modelId}</span> : null}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+          ) : (
+            <div className="grid min-h-32 place-items-center rounded-[8px] border border-dashed border-stone-300 px-5 text-center text-xs leading-5 text-stone-500">
+              添加模型 ID 后，可在这里选择默认模型。
+            </div>
+          )}
+        </div>
+      </ConfigSection>
 
       <ThinkingScenarioPanel
         providerId={provider.id}
@@ -2039,8 +2374,13 @@ function ModalityConfigForm({
   const isTts = Boolean(onTestTtsScenario);
 
   return (
-    <div className="space-y-5">
-      <div className="grid items-start gap-4 md:grid-cols-2">
+    <div>
+      <ConfigSection
+        index="01"
+        title="连接认证"
+        description="配置服务凭据和调用地址，保存后可直接验证服务是否可用。"
+      >
+      <div className="grid items-start gap-5 md:grid-cols-2">
         {provider.requiresApiKey ? (
           <SecretField
             label="密钥"
@@ -2074,19 +2414,15 @@ function ModalityConfigForm({
           ) : null}
         </Field>
       </div>
+      </ConfigSection>
 
       {isTts && availableModels.length > 0 ? (
-        <section className="overflow-hidden rounded-[10px] border border-stone-200 bg-stone-50/60">
-          <div className="border-b border-stone-200 bg-white px-4 py-3">
-            <div className="flex items-center gap-2 text-sm font-bold text-stone-900">
-              <SlidersHorizontal size={16} className="text-[var(--pbl-teacher)]" />
-              分场景模型与音色
-            </div>
-            <p className="mt-1 text-xs leading-5 text-stone-500">
-              课程生成使用质量档；AI 讨论、习题讲解和助教朗读统一使用实时档。
-            </p>
-          </div>
-          <div className="grid gap-3 p-3 lg:grid-cols-2">
+        <ConfigSection
+          index="02"
+          title="分场景模型与音色"
+          description="课程生成使用质量档；AI 讨论、习题讲解和助教朗读统一使用实时档。"
+        >
+          <div className="grid gap-3 lg:grid-cols-2">
             {TTS_SCENARIOS.map((scenario) => {
               const fallbackModel = editDefaultModel || availableModels[0]?.id || "";
               const fallbackVoice = editDefaultVoice || "default";
@@ -2197,10 +2533,15 @@ function ModalityConfigForm({
               );
             })}
           </div>
-        </section>
+        </ConfigSection>
       ) : null}
 
       {!isTts && availableModels.length > 0 ? (
+        <ConfigSection
+          index="02"
+          title="默认模型"
+          description="从内置目录和服务器已保存模型中，选择该能力默认使用的模型。"
+        >
           <Field label={`模型（${availableModels.length}）`} helper="列表同时显示内置目录与服务器已保存模型；选择后保存为默认模型。" icon={Bot}>
             <div className="grid gap-2 sm:grid-cols-2">
               {availableModels.map((m) => {
@@ -2250,6 +2591,7 @@ function ModalityConfigForm({
               })}
             </div>
           </Field>
+        </ConfigSection>
         ) : null}
 
       <ActionRow
@@ -2262,12 +2604,12 @@ function ModalityConfigForm({
       />
 
       {testResult?.audioUrl ? (
-        <audio className="w-full" controls preload="metadata" src={testResult.audioUrl} />
+        <audio className="mb-5 w-full" controls preload="metadata" src={testResult.audioUrl} />
       ) : null}
       {testResult?.previewUrl ? (
         <Image
           alt="图像模型测试结果"
-          className="h-auto max-h-72 w-full rounded-[8px] border border-stone-200 object-contain"
+          className="mb-5 h-auto max-h-72 w-full rounded-[8px] border border-stone-200 object-contain"
           height={320}
           src={testResult.previewUrl}
           unoptimized
@@ -2294,27 +2636,35 @@ function ActionRow({
   onTest?: () => void;
 }) {
   return (
-    <div className="space-y-3 border-t border-stone-200 pt-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <PrimaryButton onClick={onSave} disabled={saving || testing} className="h-10 px-4 text-sm">
-          {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-          保存配置
-        </PrimaryButton>
-        {onTest ? (
-          <PrimaryButton
-            variant="outline"
-            onClick={onTest}
-            disabled={saving || testing}
-            className="h-10 px-4 text-sm"
-          >
-            {testing ? <Loader2 size={15} className="animate-spin" /> : <Plug size={15} />}
-            {testing ? "正在测试" : "保存并测试连接"}
+    <>
+      {saveResult || testResult ? (
+        <div className="space-y-2 pb-4">
+          <ResultNotice result={saveResult} />
+          <ResultNotice result={testResult} />
+        </div>
+      ) : null}
+      <div className="pbl-ai-action-row sticky bottom-0 z-10 -mx-4 flex flex-wrap items-center justify-between gap-3 border-t border-stone-200 bg-white/95 px-4 py-3 shadow-[0_-10px_24px_rgba(41,57,79,0.07)] backdrop-blur sm:-mx-6 sm:px-6">
+        <p className="pbl-ai-action-hint text-xs leading-5 text-stone-500">修改仅在保存后生效，可保存并立即验证连接。</p>
+        <div className="ml-auto flex flex-1 flex-wrap items-center justify-end gap-2 sm:flex-none">
+          {onTest ? (
+            <PrimaryButton
+              variant="outline"
+              onClick={onTest}
+              disabled={saving || testing}
+              aria-label={testing ? "正在测试" : "保存并测试连接"}
+              className="h-11 flex-1 px-4 text-sm sm:flex-none"
+            >
+              {testing ? <Loader2 size={15} className="animate-spin" /> : <Plug size={15} />}
+              {testing ? "正在测试" : <><span className="hidden sm:inline">保存并</span>测试连接</>}
+            </PrimaryButton>
+          ) : null}
+          <PrimaryButton onClick={onSave} disabled={saving || testing} className="h-11 flex-1 px-4 text-sm sm:flex-none">
+            {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+            保存配置
           </PrimaryButton>
-        ) : null}
+        </div>
       </div>
-      <ResultNotice result={saveResult} />
-      <ResultNotice result={testResult} />
-    </div>
+    </>
   );
 }
 

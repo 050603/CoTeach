@@ -72,7 +72,7 @@ export function SurveyKeywordSettings() {
     setLoadRevision((revision) => revision + 1);
   }
 
-  return <section aria-labelledby="survey-keyword-settings-heading" aria-busy={loading || saving !== null} className="mb-8 border-t border-[var(--pbl-border)] pt-7">
+  return <section aria-labelledby="survey-keyword-settings-heading" aria-busy={loading || saving !== null} className="rounded-[14px] border border-[var(--pbl-border)] bg-white p-5 sm:p-6">
     <h2 id="survey-keyword-settings-heading" className="text-xl font-semibold text-[var(--pbl-text-strong)]">问卷主题云分析</h2>
     <p className="mt-2 text-sm leading-6 text-[var(--pbl-text-muted)]">仅对当前教师查看问卷时生效。点击下方按钮即可保存分析方式。</p>
     <div aria-label="问卷词云分析方式" role="group" className="mt-4 grid gap-3 sm:grid-cols-2">

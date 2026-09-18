@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { lstat, realpath, stat } from "node:fs/promises";
+import { lstat, readFile, realpath, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,7 @@ import type {
   CourseQualityLabManifest,
   LabPair,
   LabVariantKey,
+  LabVariantMetrics,
   LabVariantResult,
   PairReview,
   ReviewCollection,
@@ -259,7 +260,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function validateReview(value: unknown, pairId: string): PairReview {
+function validateReview(value: unknown, pairId: string, pair: LabPair): PairReview {
   if (!isRecord(value)) throw publicError(400, "INVALID_REVIEW", "评判内容格式无效。");
   if (value.pairId !== undefined && value.pairId !== pairId) {
     throw publicError(400, "PAIR_ID_MISMATCH", "请求路径与评判内容中的 pairId 不一致。");
@@ -286,18 +287,233 @@ function validateReview(value: unknown, pairId: string): PairReview {
   if (value.overallNote !== undefined && (typeof value.overallNote !== "string" || value.overallNote.length > 50_000)) {
     throw publicError(400, "INVALID_REVIEW", "总体备注格式无效。");
   }
+  const teacherReviews: PairReview["teacherReviews"] = {};
+  if (value.teacherReviews !== undefined) {
+    if (!isRecord(value.teacherReviews)) throw publicError(400, "INVALID_REVIEW", "教师审核记录格式无效。");
+    for (const [variantKey, rawReview] of Object.entries(value.teacherReviews)) {
+      if ((variantKey !== "baseline" && variantKey !== "enhanced") || !isRecord(rawReview)) {
+        throw publicError(400, "INVALID_REVIEW", "教师审核方案格式无效。");
+      }
+      const variant = variantKey as LabVariantKey;
+      if (typeof rawReview.experimentId !== "string" || rawReview.experimentId !== pair.experimentId
+        || rawReview.variant !== variant || !isRecord(rawReview.notes)) {
+        throw publicError(400, "INVALID_REVIEW", "教师审核记录与当前实验或方案不匹配。");
+      }
+      const allowedIds = new Set((pair.variants[variant].teacherReviewNotes ?? []).map((note) => note.id));
+      const notes: NonNullable<NonNullable<PairReview["teacherReviews"]>[LabVariantKey]>["notes"] = {};
+      for (const [noteId, rawDecision] of Object.entries(rawReview.notes)) {
+        if (!allowedIds.has(noteId) || !isRecord(rawDecision)
+          || !["pending", "confirmed", "needs-revision"].includes(String(rawDecision.status))
+          || (rawDecision.note !== undefined
+            && (typeof rawDecision.note !== "string" || rawDecision.note.length > 10_000))) {
+          throw publicError(400, "INVALID_REVIEW", "教师审核疑点、状态或备注无效。");
+        }
+        notes[noteId] = {
+          status: rawDecision.status as "pending" | "confirmed" | "needs-revision",
+          ...(typeof rawDecision.note === "string" ? { note: rawDecision.note } : {}),
+        };
+      }
+      teacherReviews[variant] = {
+        experimentId: rawReview.experimentId,
+        variant,
+        notes,
+      };
+    }
+  }
   return {
     pairId,
     outcome: value.outcome as ReviewOutcome,
     dimensions,
     pageNotes,
     ...(typeof value.overallNote === "string" ? { overallNote: value.overallNote } : {}),
+    ...(Object.keys(teacherReviews).length ? { teacherReviews } : {}),
     updatedAt: new Date().toISOString(),
   };
 }
 
 function allPairs(manifest: CourseQualityLabManifest): LabPair[] {
   return manifest.sections.flatMap((section) => section.pairs);
+}
+
+type ModelCallRecord = {
+  kind?: unknown;
+  startedAt?: unknown;
+  elapsedMs?: unknown;
+  status?: unknown;
+  systemChars?: unknown;
+  userChars?: unknown;
+  outputChars?: unknown;
+  tokenUsage?: unknown;
+  attempts?: Array<{
+    status?: unknown;
+    startedAt?: unknown;
+  }>;
+};
+
+type TtsCallMetricRecord = {
+  elapsedMs?: unknown;
+  status?: unknown;
+  cacheHit?: unknown;
+  audioBytes?: unknown;
+};
+
+type GenerationTelemetryRecord = {
+  startedAt?: unknown;
+  completedAt?: unknown;
+  checkpointReuses?: unknown;
+  qualityRepairCalls?: unknown;
+};
+
+function finiteNonNegative(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function estimateTokens(characters: number): number {
+  return characters > 0 ? Math.ceil(characters / 2.5) : 0;
+}
+
+async function readOptionalJsonArray<T>(filePath: string): Promise<T[]> {
+  try {
+    const value = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+    return Array.isArray(value) ? value as T[] : [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function readOptionalJson<T>(filePath: string): Promise<T | undefined> {
+  try {
+    return JSON.parse(await readFile(filePath, "utf8")) as T;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function runtimeIdentity(
+  rootDir: string,
+  sectionId: string,
+  batch: number,
+  _variantKey: LabVariantKey,
+  result: LabVariantResult,
+): { runDir: string; designDir?: string; legacyDesignDir?: string } | undefined {
+  const artifactUrl = result.artifactBaseUrl ?? result.downloads?.script?.replace(/\/script\.txt$/, "");
+  if (!artifactUrl?.startsWith("/files/artifacts/")) return undefined;
+  const encodedRelative = artifactUrl.slice("/files/artifacts/".length);
+  let relative: string;
+  try {
+    relative = decodeURIComponent(encodedRelative);
+  } catch {
+    return undefined;
+  }
+  const segments = relative.split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) return undefined;
+  const runDir = path.join(rootDir, "runs", ...segments);
+  const tail = segments.slice(-3);
+  const hasExpectedTail = tail[0] === sectionId
+    && tail[1] === String(batch)
+    && (tail[2] === "baseline" || tail[2] === "enhanced");
+  const experimentSegments = hasExpectedTail ? segments.slice(0, -3) : [];
+  const designDir = experimentSegments.length > 0
+    ? path.join(rootDir, "designs", ...experimentSegments, sectionId, String(batch))
+    : undefined;
+  const legacyDesignDir = experimentSegments.length > 0
+    ? path.join(rootDir, "designs", ...experimentSegments, sectionId)
+    : undefined;
+  return { runDir, designDir, legacyDesignDir };
+}
+
+function summarizeMetrics(
+  generationCalls: readonly ModelCallRecord[],
+  designCalls: readonly ModelCallRecord[],
+  ttsCalls: readonly TtsCallMetricRecord[],
+  telemetry?: GenerationTelemetryRecord,
+): LabVariantMetrics {
+  const modelCalls = [...designCalls, ...generationCalls];
+  const requestAttempts = modelCalls.flatMap((call) => call.attempts ?? [])
+    .filter((attempt) => typeof attempt.startedAt === "string" && attempt.status !== "queued");
+  const transportRetries = modelCalls.reduce((total, call) => {
+    const started = (call.attempts ?? [])
+      .filter((attempt) => typeof attempt.startedAt === "string" && attempt.status !== "queued").length;
+    return total + Math.max(0, started - 1);
+  }, 0);
+  const startedAtCandidates = [
+    typeof telemetry?.startedAt === "string" ? Date.parse(telemetry.startedAt) : Number.NaN,
+    ...modelCalls.flatMap((call) => typeof call.startedAt === "string" ? [Date.parse(call.startedAt)] : []),
+  ].filter(Number.isFinite);
+  const startedAt = startedAtCandidates.length ? Math.min(...startedAtCandidates) : Number.NaN;
+  const completedAt = typeof telemetry?.completedAt === "string" ? Date.parse(telemetry.completedAt) : Number.NaN;
+  let tokenUsageEstimated = false;
+  const tokenUsage = modelCalls.reduce((total, call) => {
+    const reported = finiteNonNegative(call.tokenUsage);
+    if (reported > 0) return total + Math.round(reported);
+    tokenUsageEstimated = true;
+    return total + estimateTokens(
+      finiteNonNegative(call.systemChars)
+      + finiteNonNegative(call.userChars)
+      + finiteNonNegative(call.outputChars),
+    );
+  }, 0);
+  return {
+    tokenUsage,
+    tokenUsageEstimated,
+    inputCharacters: modelCalls.reduce((sum, call) => sum
+      + finiteNonNegative(call.systemChars)
+      + finiteNonNegative(call.userChars), 0),
+    outputCharacters: modelCalls.reduce((sum, call) => sum + finiteNonNegative(call.outputChars), 0),
+    modelCalls: modelCalls.length,
+    failedModelCalls: modelCalls.filter((call) => call.status === "failed").length,
+    transportAttempts: requestAttempts.length,
+    transportRetries,
+    transportAttemptsRecorded: modelCalls.some((call) => Array.isArray(call.attempts)),
+    qualityRepairCalls: finiteNonNegative(telemetry?.qualityRepairCalls),
+    abandonedModelCalls: modelCalls.filter((call) => call.status === "abandoned").length,
+    checkpointReuses: finiteNonNegative(telemetry?.checkpointReuses),
+    telemetryRecorded: Boolean(telemetry),
+    wallClockMs: Number.isFinite(startedAt) && Number.isFinite(completedAt)
+      ? Math.max(0, completedAt - startedAt)
+      : 0,
+    modelElapsedMs: modelCalls.reduce((sum, call) => sum + finiteNonNegative(call.elapsedMs), 0),
+    designCalls: designCalls.length,
+    generationCalls: generationCalls.length,
+    ttsCalls: ttsCalls.length,
+    failedTtsCalls: ttsCalls.filter((call) => call.status === "failed").length,
+    ttsElapsedMs: ttsCalls.reduce((sum, call) => sum + finiteNonNegative(call.elapsedMs), 0),
+    ttsCacheHits: ttsCalls.filter((call) => call.cacheHit === true).length,
+    audioBytes: ttsCalls.reduce((sum, call) => sum + finiteNonNegative(call.audioBytes), 0),
+  };
+}
+
+/** Adds cost/stability metrics from private runtime logs without exposing call prompts or provider secrets. */
+export async function withRuntimeMetrics(
+  rootDir: string,
+  manifest: CourseQualityLabManifest,
+): Promise<CourseQualityLabManifest> {
+  const enriched = structuredClone(manifest);
+  await Promise.all(enriched.sections.flatMap((section) => section.pairs.flatMap((pair) =>
+    (["baseline", "enhanced"] as const).map(async (variantKey) => {
+      const result = pair.variants[variantKey];
+      const identity = runtimeIdentity(rootDir, section.id, pair.batch, variantKey, result);
+      if (!identity) return;
+      const [generationCalls, currentDesignCalls, legacyDesignCalls, ttsCalls, telemetry] = await Promise.all([
+        readOptionalJsonArray<ModelCallRecord>(path.join(identity.runDir, "calls.json")),
+        identity.designDir
+          ? readOptionalJsonArray<ModelCallRecord>(path.join(identity.designDir, "calls.json"))
+          : Promise.resolve([]),
+        identity.legacyDesignDir
+          ? readOptionalJsonArray<ModelCallRecord>(path.join(identity.legacyDesignDir, "calls.json"))
+          : Promise.resolve([]),
+        readOptionalJsonArray<TtsCallMetricRecord>(path.join(identity.runDir, "tts-calls.json")),
+        readOptionalJson<GenerationTelemetryRecord>(path.join(identity.runDir, "telemetry.json")),
+      ]);
+      const designCalls = currentDesignCalls.length ? currentDesignCalls : legacyDesignCalls;
+      if (generationCalls.length || designCalls.length || ttsCalls.length) {
+        result.metrics = summarizeMetrics(generationCalls, designCalls, ttsCalls, telemetry);
+      }
+    }),
+  )));
+  return enriched;
 }
 
 function findPair(manifest: CourseQualityLabManifest, pairId: string): LabPair {
@@ -325,12 +541,15 @@ async function renderSlideFrame(
 ): Promise<void> {
   const section = manifest.sections.find((item) => item.id === sectionId);
   const pair = section?.pairs.find((item) => item.batch === batch);
-  const slide = pair?.variants[variantKey]?.slides[slideIndex];
+  const variant = pair?.variants[variantKey];
+  const slide = variant?.slides[slideIndex];
   if (!section || !pair || !slide) throw publicError(404, "SLIDE_NOT_FOUND", "该幻灯片尚未生成。");
   const imageUrl = typeof slide.imageUrl === "string" && slide.imageUrl.startsWith("/files/")
     ? slide.imageUrl
     : "";
-  const scenesUrl = `/files/artifacts/${encodeURIComponent(sectionId)}/${batch}/${variantKey}/scenes.json`;
+  const scenesUrl = variant?.artifactBaseUrl?.startsWith("/files/")
+    ? `${variant.artifactBaseUrl}/scenes.json`
+    : `/files/artifacts/${encodeURIComponent(sectionId)}/${batch}/${variantKey}/scenes.json`;
   let frameScript = "";
   try {
     await resolveExistingFile(buildDir, "slide-frame.js");
@@ -396,6 +615,7 @@ export function reviewsToCsv(collection: ReviewCollection): string {
     ...DIMENSIONS,
     "pageNotes",
     "overallNote",
+    "teacherReviews",
     "updatedAt",
   ];
   const rows = collection.reviews.map((review) => [
@@ -404,6 +624,7 @@ export function reviewsToCsv(collection: ReviewCollection): string {
     ...Array.from(DIMENSIONS, (dimension) => review.dimensions[dimension]),
     JSON.stringify(review.pageNotes),
     review.overallNote,
+    JSON.stringify(review.teacherReviews ?? {}),
     review.updatedAt,
   ]);
   return `\uFEFF${[headers, ...rows].map((row) => row.map(spreadsheetSafe).join(",")).join("\r\n")}\r\n`;
@@ -515,7 +736,10 @@ export function createCourseQualityLabServer(options: CourseQualityLabServerOpti
         return;
       }
       if (pathname === "/api/manifest" && method === "GET") {
-        sendJson(response, 200, publicManifestValue(await storage.readManifest()));
+        sendJson(response, 200, publicManifestValue(await withRuntimeMetrics(
+          storage.rootDir,
+          await storage.readManifest(),
+        )));
         return;
       }
       if (pathname === "/api/reviews" && method === "GET") {
@@ -527,8 +751,8 @@ export function createCourseQualityLabServer(options: CourseQualityLabServerOpti
         const pairId = decodeRoutePart(reviewMatch[1]);
         if (!PAIR_ID.test(pairId)) throw publicError(400, "INVALID_PAIR_ID", "pairId 格式无效。");
         const manifest = await storage.readManifest();
-        findPair(manifest, pairId);
-        const review = validateReview(await readJsonBody(request), pairId);
+        const pair = findPair(manifest, pairId);
+        const review = validateReview(await readJsonBody(request), pairId, pair);
         const collection = await storage.savePairReview(review);
         sendJson(response, 200, { review, reviews: collection.reviews, savedAt: review.updatedAt });
         return;

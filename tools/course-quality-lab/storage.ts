@@ -33,6 +33,7 @@ function isValidPairReview(value: unknown): value is PairReview {
   if (typeof value.pairId !== "string" || !value.pairId) return false;
   if (!["baseline", "enhanced", "tie", "undecided"].includes(String(value.outcome))) return false;
   if (!isRecord(value.dimensions) || !isRecord(value.pageNotes)) return false;
+  if (value.teacherReviews !== undefined && !isRecord(value.teacherReviews)) return false;
   return true;
 }
 
@@ -129,4 +130,3 @@ export class CourseQualityLabStorage {
     return saved as ReviewCollection;
   }
 }
-

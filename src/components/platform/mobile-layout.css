@@ -95,6 +95,10 @@
   .pbl-platform-theme .pbl-workspace-brand img { max-width: 132px; height: auto; }
   .pbl-platform-theme .pbl-workspace-back { max-width: 55%; }
   .pbl-platform-theme .pbl-workspace-content { padding-block: 20px 36px; }
+  .pbl-platform-theme .pbl-workspace-content.pbl-settings-layout { padding-block: 16px; }
+  .pbl-platform-theme .pbl-settings-masthead { align-items: flex-start; }
+  .pbl-platform-theme .pbl-settings-masthead .pbl-settings-section-nav { width: 100%; }
+  .pbl-platform-theme .pbl-settings-content-header { margin-bottom: 16px; padding-bottom: 16px; }
   .pbl-platform-theme .pbl-page-heading { min-height: 0; gap: 18px; padding-block: 8px 20px; }
   .pbl-platform-theme .pbl-page-heading:has(> .pbl-learning-art) > div:first-of-type { max-width: 100%; }
   .pbl-platform-theme .pbl-page-heading > .pbl-learning-art { display: none; }
@@ -154,6 +158,11 @@
   .pbl-platform-theme .survey-dashboard--presentation .survey-dashboard-frame { padding: 16px; grid-template-rows: auto auto minmax(340px, 1fr); }
   .pbl-platform-theme .survey-dashboard--presentation .survey-text-layout { grid-template-columns: minmax(0, 1fr); }
   .pbl-platform-theme .survey-dashboard--presentation .survey-response-echo { margin: 20px 0 0; padding: 16px 0 0; border-left: 0; border-top: 1px solid #dce3ec; }
+}
+
+@media (max-height: 600px) {
+  .pbl-platform-theme .pbl-ai-action-row { gap: 8px; padding-block: 8px; }
+  .pbl-platform-theme .pbl-ai-action-hint { display: none; }
 }
 
 @media (max-width: 540px) {

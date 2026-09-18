@@ -180,6 +180,26 @@ textarea { resize: vertical; min-height: 80px; padding: 11px 12px; line-height: 
 .status--failed { color: var(--red); background: #f8e6e3; }
 .status--failed .status__dot { background: var(--red); }
 @keyframes pulse { 50% { opacity: .35; } }
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 18px 15px;
+}
+.metric-strip > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #f6f7f4;
+}
+.metric-strip span { color: var(--muted); font-size: 10px; font-weight: 700; }
+.metric-strip b { overflow: hidden; font: 700 18px/1.2 ui-monospace, monospace; text-overflow: ellipsis; }
+.metric-strip small { overflow: hidden; color: var(--muted); font-size: 9px; line-height: 1.35; text-overflow: ellipsis; }
+.metric-strip .metric--warning { border-color: #e4b2a9; background: #fbedeb; }
+.metric-strip .metric--warning b, .metric-strip .metric--warning small { color: var(--red); }
 .slide-shell { aspect-ratio: 16 / 9; margin: 0 18px; overflow: hidden; border: 1px solid #cfd5d0; border-radius: 10px; background: #192328; }
 .slide-frame { width: 100%; height: 100%; border: 0; background: white; }
 .slide-empty { display: grid; place-content: center; gap: 8px; width: 100%; height: 100%; color: #d6ddda; text-align: center; }
@@ -262,6 +282,26 @@ textarea { resize: vertical; min-height: 80px; padding: 11px 12px; line-height: 
 .dimension-grid { display: grid; grid-template-columns: repeat(5, minmax(100px, 1fr)); gap: 10px; }
 .review-notes { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 17px; }
 
+.teacher-review-panel {
+  margin-top: 22px;
+  padding: 22px;
+  border: 1px solid #d7c89e;
+  border-radius: 15px;
+  background: #fffaf0;
+}
+.teacher-review-panel .review-panel__header p { margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+.teacher-review-list { display: grid; gap: 12px; margin-top: 18px; }
+.teacher-review-item { padding: 16px; border: 1px solid #e3d7b6; border-radius: 10px; background: #fff; }
+.teacher-review-item__heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.teacher-review-item__heading > span { color: #765b19; font-size: 12px; font-weight: 700; }
+.teacher-review-item__heading select { width: auto; min-width: 112px; }
+.teacher-review-item h3 { margin: 13px 0 8px; font-size: 16px; }
+.teacher-review-item p { margin: 5px 0; color: #4e595d; font-size: 13px; line-height: 1.6; }
+.teacher-review-item label { display: grid; gap: 7px; margin-top: 13px; }
+.teacher-review-item label > span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.teacher-review-item textarea { min-height: 62px; }
+.teacher-review-empty { margin: 16px 0 0; color: var(--muted); font-size: 13px; }
+
 .summary-view { max-width: 1280px; }
 .summary-hero { display: flex; align-items: center; justify-content: space-between; gap: 30px; padding: 27px 30px; border-radius: 15px; color: #f4f6f3; background: var(--ink); box-shadow: var(--shadow); }
 .summary-hero h1 { margin: 5px 0 6px; font: 700 32px Georgia, "Noto Serif SC", serif; }
@@ -276,6 +316,10 @@ textarea { resize: vertical; min-height: 80px; padding: 11px 12px; line-height: 
 .summary-table th { color: var(--muted); background: #f2f4f1; font-size: 11px; letter-spacing: .05em; }
 .summary-table tr:last-child td { border-bottom: 0; }
 .summary-table td small { display: block; margin-top: 3px; color: var(--muted); }
+.summary-metric { display: grid; gap: 3px; min-width: 140px; }
+.summary-metric b { font: 700 12px/1.3 ui-monospace, monospace; }
+.summary-metric small { margin: 0; white-space: nowrap; }
+.metric-empty { color: var(--muted); font-size: 12px; }
 .outcome { display: inline-flex; padding: 4px 8px; border-radius: 20px; background: #e9edea; font-size: 11px; }
 .outcome--enhanced { color: var(--orange); background: var(--orange-soft); }
 .outcome--baseline { color: var(--blue); background: var(--blue-soft); }
@@ -298,6 +342,7 @@ textarea { resize: vertical; min-height: 80px; padding: 11px 12px; line-height: 
   .comparison-grid { grid-template-columns: 1fr; }
   .variant-pane--hidden { display: none; }
   .dimension-grid { grid-template-columns: repeat(3, 1fr); }
+  .metric-strip { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 700px) {
@@ -314,6 +359,7 @@ textarea { resize: vertical; min-height: 80px; padding: 11px 12px; line-height: 
   .variant-actions { display: grid; }
   .outcome-options { grid-template-columns: 1fr 1fr; }
   .dimension-grid { grid-template-columns: 1fr 1fr; }
+  .metric-strip { grid-template-columns: 1fr; }
   .summary-hero { align-items: start; flex-direction: column; }
   .summary-counts { width: 100%; justify-content: space-between; gap: 14px; }
 }

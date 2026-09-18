@@ -80,22 +80,27 @@ export function ThinkingScenarioPanel({
   ).length;
 
   return (
-    <section className="overflow-hidden rounded-[10px] border border-stone-200 bg-stone-50/60">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-stone-200 bg-white px-4 py-3">
-        <div>
-          <div className="flex items-center gap-2 text-sm font-bold text-stone-900">
-            <SlidersHorizontal size={15} className="text-[var(--pbl-teacher)]" />
-            应用场景思考深度
+    <section className="border-t border-stone-200 py-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="grid size-7 shrink-0 place-items-center rounded-[6px] bg-[var(--pbl-teacher-soft)] text-[10px] font-bold text-[var(--pbl-teacher)]">
+            03
+          </span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm font-semibold text-stone-900">
+              <SlidersHorizontal size={15} className="text-[var(--pbl-teacher)]" />
+              应用场景思考深度
+            </div>
+            <p className="mt-1 text-xs leading-5 text-stone-500">
+              当前模型的 Baseline：{baselineDescription}。只对单独覆盖的场景发送思考深度参数。
+            </p>
           </div>
-          <p className="mt-1 text-xs leading-5 text-stone-500">
-            当前模型的 Baseline：{baselineDescription}。只对单独覆盖的场景发送思考深度参数。
-          </p>
         </div>
         <button
           type="button"
           onClick={onRestore}
           disabled={restoring || overriddenCount === 0}
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border border-stone-200 bg-white px-3 text-xs font-semibold text-stone-700 transition hover:border-[var(--pbl-teacher)] hover:text-[var(--pbl-teacher)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-[8px] border border-stone-200 bg-white px-3 text-xs font-semibold text-stone-700 transition hover:border-[var(--pbl-teacher)] hover:text-[var(--pbl-teacher)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {restoring ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
           一键恢复 baseline
@@ -103,12 +108,12 @@ export function ThinkingScenarioPanel({
       </div>
 
       {!configurable ? (
-        <div className="border-b border-stone-200 bg-amber-50 px-4 py-2.5 text-xs leading-5 text-amber-800">
+        <div className="mt-4 rounded-t-[8px] bg-amber-50 px-4 py-2.5 text-xs leading-5 text-amber-800">
           当前默认模型没有可用的思考深度控制元数据，将保持 baseline。
         </div>
       ) : null}
 
-      <div className="divide-y divide-stone-200">
+      <div className="mt-4 overflow-hidden rounded-[8px] border border-stone-200 bg-stone-50/60 divide-y divide-stone-200">
         {LLM_THINKING_SCENARIOS.map((scenario) => {
           const value = configs[scenario.id] ?? "baseline";
           return (

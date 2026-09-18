@@ -37,6 +37,8 @@ fixtures['/api/platform/offerings/layout-course/students/layout-enrollment'] = {
 fixtures['/api/openmaic/provider-config'] = { providers: {} };
 fixtures['/api/server-providers'] = { providers: {}, tts: {}, asr: {}, pdf: {}, image: {}, video: {}, webSearch: {} };
 fixtures['/api/platform/survey-settings'] = { mode: 'local' };
+fixtures['/api/knowledge-lecture/settings'] = { settings: {} };
+fixtures['/api/course-quality-review/settings'] = { settings: {} };
 
 (async () => {
   const { SignJWT } = await import('jose');
@@ -62,7 +64,23 @@ fixtures['/api/platform/survey-settings'] = { mode: 'local' };
   ];
   const scenarios = [
     ['home', '/', '.pbl-aurora-light'],
-    ['teacher-settings', '/teacher/settings', '.pbl-settings-editor'],
+    ['teacher-settings', '/teacher/settings', '.pbl-settings-section-nav'],
+    ['teacher-settings-ai', '/teacher/settings', '.pbl-settings-section-nav', async (page) => {
+      await page.getByRole('button', { name: /AI 服务/ }).click();
+      await page.getByRole('heading', { name: '课程设计与质量' }).waitFor();
+    }],
+    ['teacher-settings-ai-detail', '/teacher/settings', '.pbl-settings-section-nav', async (page) => {
+      await page.getByRole('button', { name: /AI 服务/ }).click();
+      await page.getByRole('button', { name: /AI 大模型/ }).click();
+      await page.locator('.pbl-settings-editor').waitFor();
+    }],
+    ['teacher-settings-ai-model-form', '/teacher/settings', '.pbl-settings-section-nav', async (page) => {
+      await page.getByRole('button', { name: /AI 服务/ }).click();
+      await page.getByRole('button', { name: /AI 大模型/ }).click();
+      const modelHeading = page.getByRole('heading', { name: '模型配置' });
+      await modelHeading.waitFor();
+      await modelHeading.scrollIntoViewIfNeeded();
+    }],
     ['teacher-students', '/teacher/classes/layout-course/students', '[data-enrollment-id]'],
     ['teacher-student-detail', '/teacher/classes/layout-course/students', '[data-enrollment-id]', async (page) => { await page.locator('[data-enrollment-id]').first().click(); await page.getByRole('navigation', { name: '学生档案内容' }).filter({ visible: true }).waitFor(); }],
     ['student-login', '/student/login', '.pbl-auth-input'],
@@ -145,7 +163,7 @@ fixtures['/api/platform/survey-settings'] = { mode: 'local' };
   const selectedScenarios = scenarios.filter(([id]) => select(process.env.LAYOUT_SCENARIOS, id));
   const selectedProfiles = profiles.filter(({ id }) => select(process.env.LAYOUT_DEVICES, id));
   if (!selectedScenarios.length || !selectedProfiles.length) throw new Error('No matching layout scenarios/devices');
-  const isFailure = r => r.scenarioError || r.errors.length || r.failedResources.length || r.missingFixtures.length || r.blockedMutations.length || r.brokenImages?.length || r.chapterProgressIssues?.length || r.inviteHeadingIssues?.length || r.clippedClouds || r.missingTheme || r.undersizedColumns || r.invisibleSurveyBars || r.clippedDialogs || r.surveyRailUnexpected || r.textIssues?.length || r.scrollWidth > r.width + 1 || r.boxes?.some(b => b.scroll > b.client + 2 && !b.scrollable);
+  const isFailure = r => r.scenarioError || r.errors.length || r.failedResources.length || r.missingFixtures.length || r.blockedMutations.length || r.brokenImages?.length || r.chapterProgressIssues?.length || r.inviteHeadingIssues?.length || r.clippedClouds || r.missingTheme || r.undersizedColumns || r.invisibleSurveyBars || r.clippedDialogs || r.surveyRailUnexpected || r.settingsTrailingSpace > 32 || r.textIssues?.length || r.scrollWidth > r.width + 1 || r.boxes?.some(b => b.scroll > b.client + 2 && !b.scrollable);
   try {
     for (const profile of selectedProfiles) {
       const { id: device, ...deviceOptions } = profile;
@@ -198,7 +216,7 @@ fixtures['/api/platform/survey-settings'] = { mode: 'local' };
           await page.waitForTimeout(150);
           const metrics = await page.evaluate(({ isHome, isStudentSurvey }) => {
             const visible = el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
-            const selectors = '.pbl-auth-stage,.pbl-auth-content,.pbl-student-course-layout,.pbl-teacher-course-heading,.survey-choice-layout,.survey-column-chart,.survey-insight-canvas,[role=dialog]';
+            const selectors = '.pbl-auth-stage,.pbl-auth-content,.pbl-student-course-layout,.pbl-teacher-course-heading,.pbl-settings-workbench,.pbl-settings-editor,.pbl-settings-provider-list,.survey-choice-layout,.survey-column-chart,.survey-insight-canvas,[role=dialog]';
             const boxes = [...document.querySelectorAll(selectors)].filter(visible).map(el => ({ selector: String(el.className), client: el.clientWidth, scroll: el.scrollWidth, height: el.clientHeight, scrollHeight: el.scrollHeight, right: Math.round(el.getBoundingClientRect().right), children: el.scrollWidth > el.clientWidth + 2 ? [...el.children].map(child => ({ selector: String(child.className), left: child.getBoundingClientRect().left, right: child.getBoundingClientRect().right, width: child.getBoundingClientRect().width, client: child.clientWidth, scroll: child.scrollWidth, minWidth: getComputedStyle(child).minWidth, gap: getComputedStyle(child).gap })) : [], scrollable: ['auto', 'scroll'].includes(getComputedStyle(el).overflowX) }));
             const clippedClouds = [...document.querySelectorAll('.survey-word-cloud')].filter(el => visible(el) && el.querySelector('svg')?.getBoundingClientRect().height > el.clientHeight + 2).length;
             const missingTheme = !isHome && !document.querySelector('.pbl-platform-theme');
@@ -217,6 +235,11 @@ fixtures['/api/platform/survey-settings'] = { mode: 'local' };
             const surveyRail = document.querySelector('.survey-student-rail');
             const compactSurvey = innerWidth <= 1180 && innerHeight > innerWidth || innerWidth <= 1023 && innerHeight <= 600;
             const surveyRailUnexpected = isStudentSurvey && (!surveyRail || visible(surveyRail) === compactSurvey);
+            const settingsLayout = document.querySelector('.pbl-settings-layout');
+            const settingsLastChild = settingsLayout?.lastElementChild;
+            const settingsTrailingSpace = settingsLayout && settingsLastChild && document.documentElement.scrollHeight > innerHeight
+              ? Math.max(0, Math.round(document.documentElement.scrollHeight - (settingsLastChild.getBoundingClientRect().bottom + scrollY)))
+              : 0;
             const chapterProgressIssues = [...document.querySelectorAll('.pbl-student-chapter-progress-row')].filter(row => {
               if (!visible(row) || row.scrollWidth > row.clientWidth + 1) return visible(row) && row.scrollWidth > row.clientWidth + 1;
               return [...row.children].filter(child => !child.classList.contains('pbl-student-mini-progress')).some(child => {
@@ -245,7 +268,7 @@ fixtures['/api/platform/survey-settings'] = { mode: 'local' };
               const intentionalTruncation = css.textOverflow === 'ellipsis' || Number(css.webkitLineClamp) > 0;
               return { text: el.textContent.trim().slice(0, 160), width: Math.round(rect.width), lines, fontSize: parseFloat(css.fontSize), overflow: !intentionalTruncation && el.scrollWidth > el.clientWidth + 2, unusuallyNarrow: el.textContent.trim().length >= 8 && rect.width < parseFloat(css.fontSize) * 4 && lines >= 3 };
             });
-            return { scrollWidth: document.documentElement.scrollWidth, width: innerWidth, boxes, chapterProgressIssues, inviteHeadingIssues, clippedClouds, missingTheme, undersizedColumns, invisibleSurveyBars, clippedDialogs, brokenImages, surveyRailUnexpected, headings, textIssues: headings.filter(h => h.overflow || h.unusuallyNarrow), touch: navigator.maxTouchPoints, userAgent: navigator.userAgent, imageCount: document.images.length, resources: performance.getEntriesByType('resource').map(r => ({ url: r.name, durationMs: Math.round(r.duration), bytes: r.transferSize, type: r.initiatorType })) };
+            return { scrollWidth: document.documentElement.scrollWidth, width: innerWidth, boxes, chapterProgressIssues, inviteHeadingIssues, clippedClouds, missingTheme, undersizedColumns, invisibleSurveyBars, clippedDialogs, brokenImages, surveyRailUnexpected, settingsTrailingSpace, headings, textIssues: headings.filter(h => h.overflow || h.unusuallyNarrow), touch: navigator.maxTouchPoints, userAgent: navigator.userAgent, imageCount: document.images.length, resources: performance.getEntriesByType('resource').map(r => ({ url: r.name, durationMs: Math.round(r.duration), bytes: r.transferSize, type: r.initiatorType })) };
           }, { isHome: id === 'home', isStudentSurvey: id === 'student-survey' });
           report = { ...report, ...metrics };
         } catch (error) {

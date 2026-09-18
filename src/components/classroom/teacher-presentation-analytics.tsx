@@ -22,6 +22,16 @@ function compactSectionTitle(title: string, index: number): string {
   return trimmed || `第 ${index + 1} 节`;
 }
 
+function knowledgeProgressDistribution(progressValues: number[]) {
+  return [
+    { label: "0–24%", count: progressValues.filter((value) => value < 25).length },
+    { label: "25–49%", count: progressValues.filter((value) => value >= 25 && value < 50).length },
+    { label: "50–74%", count: progressValues.filter((value) => value >= 50 && value < 75).length },
+    { label: "75–99%", count: progressValues.filter((value) => value >= 75 && value < 100).length },
+    { label: "100%", count: progressValues.filter((value) => value >= 100).length },
+  ];
+}
+
 function KnowledgePresentationOverview({ course, degraded, onDetails }: {
   course: Course;
   degraded: boolean;
@@ -41,6 +51,8 @@ function KnowledgePresentationOverview({ course, degraded, onDetails }: {
   const averageScore = scoredStudents
     ? Math.round(data.sectionRows.reduce((sum, row) => sum + (row.averageScore ?? 0) * row.answeredCount, 0) / scoredStudents)
     : undefined;
+  const progressDistribution = knowledgeProgressDistribution(data.studentRows.map((row) => row.progress));
+  const progressDistributionLabel = progressDistribution.map((item) => `${item.label} ${item.count}人`).join("、");
   return (
     <section className={`${styles.root} ${styles.knowledgeRoot}`} aria-label="班级学情大屏">
       <header className={styles.header}>
@@ -76,6 +88,40 @@ function KnowledgePresentationOverview({ course, degraded, onDetails }: {
               {data.sectionRows.length ? data.sectionRows.map((row, index) => <span className={styles.barRow} key={row.id}><small title={row.title}>{compactSectionTitle(row.title, index)}</small><span><i style={{ width: `${row.averageScore ?? 0}%` }} /></span><strong>{row.averageScore === undefined ? "—" : row.averageScore}</strong></span>) : <small className={styles.chartEmpty}>等待章节测验作答</small>}
             </span>
             <span className={styles.scoreScale}><small>0</small><small>班级均分（百分制）</small><small>100</small></span>
+          </button>
+          <button aria-label="查看班级学习航线明细" className={styles.knowledgeJourney} onClick={onDetails} type="button">
+            <span className={styles.journeyHeading}>
+              <span><strong>班级学习航线</strong><small>每个光点代表一名学生，位置随学习进度实时前进</small></span>
+              <b>{overallProgress === undefined ? "等待出发" : `全班平均 ${overallProgress}%`}</b>
+            </span>
+            <span aria-label={`班级学习航线：${progressDistributionLabel}`} className={styles.journeyChart} role="img">
+              <span aria-hidden="true" className={styles.journeyTrack}><i style={{ width: `${overallProgress ?? 0}%` }} /></span>
+              {[0, 25, 50, 75, 100].map((progress, index) => (
+                <span aria-hidden="true" className={styles.journeyStation} key={progress} style={{ "--station-progress": `${progress}%` } as CSSProperties}>
+                  <i /><small>{["启程", "热身", "深入", "冲刺", "完成"][index]}<b>{progress}%</b></small>
+                </span>
+              ))}
+              {data.studentRows.map((row, index) => (
+                <i
+                  aria-hidden="true"
+                  className={styles.studentSpark}
+                  data-state={row.progress >= 100 ? "completed" : row.hasEvidence || row.progress > 0 ? "learning" : "not-started"}
+                  key={row.student.id}
+                  style={{
+                    "--student-progress": `${row.progress}%`,
+                    "--student-lane": `${(index % 7 - 3) * 14}px`,
+                    "--student-delay": `${index * -170}ms`,
+                  } as CSSProperties}
+                />
+              ))}
+              {overallProgress !== undefined ? <span aria-hidden="true" className={styles.averageBeacon} style={{ "--average-progress": `${overallProgress}%` } as CSSProperties}><i />平均</span> : null}
+            </span>
+            <span className={styles.journeyLegend} aria-hidden="true">
+              <span><i data-state="not-started" />未开始</span>
+              <span><i data-state="learning" />学习中</span>
+              <span><i data-state="completed" />已完成</span>
+              <small>点击查看学生明细</small>
+            </span>
           </button>
         </div>
       )}
