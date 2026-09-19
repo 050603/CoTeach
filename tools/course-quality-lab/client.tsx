@@ -115,21 +115,31 @@ function isV4V5Pair(pair: LabPair): boolean {
   return /\bv?4(?:\b|[-_.])/i.test(baseline) && /\bv?5(?:\b|[-_.])/i.test(enhanced);
 }
 
-function pairIsComplete(pair: LabPair): boolean {
-  return VARIANTS.every((variant) => {
-    const statuses = pair.variants[variant].statuses;
-    return statuses.ppt.state === "complete"
-      && statuses.script.state === "complete"
-      && statuses.tts.state === "complete";
-  });
+function pairIsRunning(pair: LabPair): boolean {
+  return VARIANTS.some((variant) => Object.values(pair.variants[variant].statuses)
+    .some((status) => status.state === "running"));
+}
+
+function pairHasArtifacts(pair: LabPair): boolean {
+  return VARIANTS.some((variant) => pair.variants[variant].slides.length > 0
+    || pair.variants[variant].script.length > 0
+    || pair.variants[variant].quiz.length > 0);
+}
+
+function variantHasDisplayableResult(result: LabVariantResult): boolean {
+  return result.slides.length > 0
+    || result.script.length > 0
+    || result.quiz.length > 0
+    || result.technicalValidation !== undefined
+    || Object.values(result.statuses).some((status) => status.state !== "pending");
 }
 
 function defaultPair(section?: LabSection): LabPair | undefined {
   if (!section) return undefined;
   return [...section.pairs]
     .sort((left, right) => {
-      const readiness = Number(pairIsComplete(right)) - Number(pairIsComplete(left));
-      if (readiness) return readiness;
+      const availability = Number(pairHasArtifacts(right)) - Number(pairHasArtifacts(left));
+      if (availability) return availability;
       const rightTime = right.createdAt ? Date.parse(right.createdAt) : Number.NaN;
       const leftTime = left.createdAt ? Date.parse(left.createdAt) : Number.NaN;
       if (Number.isFinite(rightTime) && Number.isFinite(leftTime) && rightTime !== leftTime) return rightTime - leftTime;
@@ -168,17 +178,17 @@ function MetricStrip({ metrics }: { metrics?: LabVariantMetrics }) {
       <div className={metrics.failedModelCalls || metrics.abandonedModelCalls ? "metric--warning" : ""}>
         <span>逻辑调用</span>
         <b>{metrics.modelCalls}</b>
-        <small>设计 {metrics.designCalls} · 生成/审核 {metrics.generationCalls} · 失败/中断 {metrics.failedModelCalls}/{metrics.abandonedModelCalls}</small>
+        <small>设计 {metrics.designCalls} · 页面/讲稿/测验 {metrics.generationCalls} · 失败/中断 {metrics.failedModelCalls}/{metrics.abandonedModelCalls}</small>
       </div>
       <div className={metrics.transportRetries ? "metric--warning" : ""}>
         <span>真实请求</span>
         <b>{metrics.transportAttemptsRecorded ? metrics.transportAttempts : "未记录"}</b>
         <small>{metrics.transportAttemptsRecorded ? `传输重试 ${metrics.transportRetries}` : "历史版本无法直接比较"}</small>
       </div>
-      <div>
-        <span>质量修复 / 恢复复用</span>
-        <b>{metrics.telemetryRecorded ? `${metrics.qualityRepairCalls} / ${metrics.checkpointReuses}` : "未记录"}</b>
-        <small>模型质量修复与检查点复用分开统计</small>
+      <div className={(metrics.invalidOutputRetries ?? 0) || (metrics.technicalFailureStages ?? 0) ? "metric--warning" : ""}>
+        <span>格式重试 / 恢复复用</span>
+        <b>{metrics.telemetryRecorded ? `${metrics.invalidOutputRetries ?? 0} / ${metrics.checkpointReuses}` : "未记录"}</b>
+        <small>技术失败阶段 {metrics.technicalFailureStages ?? 0}</small>
       </div>
       <div>
         <span>首次通过页面</span>
@@ -277,6 +287,36 @@ function StatusBadge({ state, message, label }: { state: ArtifactState; message?
       <span className="status__dot" aria-hidden="true" />
       {label} · {STATUS_LABELS[state]}
     </span>
+  );
+}
+
+function QualityBadge({ result }: { result: LabVariantResult }) {
+  if (result.technicalValidation) {
+    const label = result.technicalValidation.state === "complete"
+      ? "技术校验通过"
+      : result.technicalValidation.state === "failed"
+        ? "技术校验失败"
+        : result.technicalValidation.state === "running"
+          ? result.technicalValidation.stage === "recovery" ? "正在恢复" : "技术校验进行中"
+          : "等待技术校验";
+    return (
+      <p className={`quality-state quality-state--technical-${result.technicalValidation.state}`} title={result.technicalValidation.message}>
+        {label}{result.technicalValidation.stage ? ` · ${result.technicalValidation.stage}` : ""}
+      </p>
+    );
+  }
+  if (!result.quality) return null;
+  const label = result.quality.status === "passed"
+    ? "轻量检查通过"
+    : result.quality.status === "check-unavailable"
+      ? "检查未完成，已交付首稿"
+      : result.quality.repairAttempts
+        ? "已修正一次，不再复审"
+        : "带质量提示交付";
+  return (
+    <p className={`quality-state quality-state--${result.quality.status}`} title={result.quality.message}>
+      {label}{result.quality.issueCount ? ` · ${result.quality.issueCount} 项提示` : ""}
+    </p>
   );
 }
 
@@ -581,6 +621,8 @@ interface VariantPaneProps {
 function VariantPane({ pair, variant, pageIndex, enlarged, onToggleEnlarged, registerAudio, onExclusivePlay, onSlideChange }: VariantPaneProps) {
   const paneRef = useRef<HTMLElement | null>(null);
   const [activeSegmentId, setActiveSegmentId] = useState<string>();
+  const [retryState, setRetryState] = useState<"idle" | "starting" | "started" | "error">("idle");
+  const [retryMessage, setRetryMessage] = useState<string>();
   const result = pair.variants[variant];
   const slide = result.slides[pageIndex];
   const pageDuration = result.script
@@ -588,6 +630,20 @@ function VariantPane({ pair, variant, pageIndex, enlarged, onToggleEnlarged, reg
     .reduce((total, segment) => total + (segment.durationSec ?? 0), 0);
   const title = variantTitle(pair, variant);
   const hiddenByEnlarge = enlarged && enlarged !== variant;
+  const retryTechnicalFailure = async () => {
+    setRetryState("starting");
+    setRetryMessage(undefined);
+    try {
+      const response = await fetch(`/api/generation/retry/${encodeURIComponent(pair.id)}/${variant}`, { method: "POST" });
+      const payload = await response.json() as { message?: string };
+      if (!response.ok) throw new Error(payload.message ?? `恢复请求失败（${response.status}）`);
+      setRetryState("started");
+      setRetryMessage("已开始恢复，只会重跑失败阶段。页面会自动刷新状态。");
+    } catch (error) {
+      setRetryState("error");
+      setRetryMessage(error instanceof Error ? error.message : "恢复请求失败");
+    }
+  };
 
   return (
     <article
@@ -613,16 +669,27 @@ function VariantPane({ pair, variant, pageIndex, enlarged, onToggleEnlarged, reg
         <StatusBadge label="讲稿" {...result.statuses.script} />
         <StatusBadge label="TTS" {...result.statuses.tts} />
       </div>
+      <QualityBadge result={result} />
+      {result.technicalValidation?.state === "failed" && (
+        <div className="technical-retry">
+          <button className="quiet-button" type="button" disabled={retryState === "starting" || retryState === "started"} onClick={() => void retryTechnicalFailure()}>
+            {retryState === "starting" ? "正在启动…" : retryState === "started" ? "恢复已启动" : "重试失败阶段"}
+          </button>
+          {retryMessage && <span className={retryState === "error" ? "inline-error" : ""}>{retryMessage}</span>}
+        </div>
+      )}
       <MetricStrip metrics={result.metrics} />
       <PipelineDetails result={result} />
       <div className="slide-shell">
-        <SlideFrame
-          pairId={pair.id}
-          variant={variant}
-          result={result}
-          pageIndex={pageIndex}
-          activeSegmentId={activeSegmentId}
-        />
+        {result.slides.length > 0 ? (
+          <SlideFrame
+            pairId={pair.id}
+            variant={variant}
+            result={result}
+            pageIndex={pageIndex}
+            activeSegmentId={activeSegmentId}
+          />
+        ) : <div className="slide-empty">本方案未生成</div>}
       </div>
       <div className="slide-caption">
         <span>第 {pageIndex + 1} / {result.slides.length || 0} 页</span>
@@ -1012,7 +1079,12 @@ function App() {
 
   const section = manifest?.sections.find((item) => item.id === sectionId) ?? manifest?.sections[0];
   const pair = section?.pairs.find((item) => item.id === pairId) ?? defaultPair(section);
-  const maxPages = pair ? Math.max(...VARIANTS.map((variant) => pair.variants[variant].slides.length), 1) : 1;
+  const latestPair = defaultPair(section);
+  const visibleVariants = pair
+    ? VARIANTS.filter((variant) => variantHasDisplayableResult(pair.variants[variant]))
+    : [];
+  const displayVariants = visibleVariants.length > 0 ? visibleVariants : VARIANTS;
+  const maxPages = pair ? Math.max(...displayVariants.map((variant) => pair.variants[variant].slides.length), 1) : 1;
   const review = pair ? reviews[pair.id] ?? emptyReview(pair.id) : undefined;
 
   const registerAudio = useCallback((variant: LabVariantKey, audio: HTMLAudioElement | null) => {
@@ -1051,13 +1123,13 @@ function App() {
     }, 650);
   }, []);
 
-  const updateReview = useCallback((updater: (review: PairReview) => PairReview) => {
+  const updateReview = (updater: (review: PairReview) => PairReview) => {
     if (!pair) return;
     const next = { ...updater(reviewsRef.current[pair.id] ?? emptyReview(pair.id)), updatedAt: new Date().toISOString() };
     reviewsRef.current = { ...reviewsRef.current, [pair.id]: next };
     setReviews((current) => ({ ...current, [pair.id]: next }));
     queueReviewSave(next);
-  }, [pair, queueReviewSave]);
+  };
 
   const openPair = (nextSectionId: string, nextPairId: string) => {
     setSectionId(nextSectionId);
@@ -1121,10 +1193,18 @@ function App() {
                 setPageIndex(0);
                 setEnlarged(null);
               }}>
-                {section.pairs.map((item) => {
-                  const versions = [resultPipelineVersion(item.variants.baseline), resultPipelineVersion(item.variants.enhanced)].filter(Boolean).join(" vs ");
-                  return <option value={item.id} key={item.id}>第 {item.batch} 次{item.label ? ` · ${item.label}` : ""}{versions ? ` · ${versions}` : ""}</option>;
-                })}
+                {([
+                  { label: "当前结果", items: latestPair ? [latestPair] : [] },
+                  { label: "正在运行", items: section.pairs.filter((item) => item.id !== latestPair?.id && pairIsRunning(item)) },
+                  { label: "历史成功结果", items: section.pairs.filter((item) => item.id !== latestPair?.id && !pairIsRunning(item) && pairHasArtifacts(item)) },
+                ]).filter((group) => group.items.length > 0).map((group) => (
+                  <optgroup label={group.label} key={group.label}>
+                    {group.items.map((item) => {
+                      const versions = [resultPipelineVersion(item.variants.baseline), resultPipelineVersion(item.variants.enhanced)].filter(Boolean).join(" vs ");
+                      return <option value={item.id} key={item.id}>第 {item.batch} 次{item.label ? ` · ${item.label}` : ""}{versions ? ` · ${versions}` : ""}</option>;
+                    })}
+                  </optgroup>
+                ))}
               </select>
             </label>
             <div className="section-context">
@@ -1155,8 +1235,8 @@ function App() {
             <button className="quiet-button" type="button" disabled={pageIndex >= maxPages - 1} onClick={() => setPageIndex((current) => Math.min(maxPages - 1, current + 1))}>下一页</button>
           </section>
 
-          <section className={`comparison-grid ${enlarged ? "comparison-grid--enlarged" : ""}`}>
-            {VARIANTS.map((variant) => (
+          <section className={`comparison-grid ${displayVariants.length === 1 || enlarged ? "comparison-grid--enlarged" : ""}`}>
+            {displayVariants.map((variant) => (
               <VariantPane
                 key={`${pair.id}-${variant}`}
                 pair={pair}
@@ -1171,20 +1251,24 @@ function App() {
             ))}
           </section>
 
-          <TeacherReviewPanel
-            pair={pair}
-            pageIndex={pageIndex}
-            review={review}
-            saveState={saveStates[pair.id] ?? "idle"}
-            onChange={updateReview}
-          />
+          {VARIANTS.some((variant) => (pair.variants[variant].teacherReviewNotes?.length ?? 0) > 0) && (
+            <TeacherReviewPanel
+              pair={pair}
+              pageIndex={pageIndex}
+              review={review}
+              saveState={saveStates[pair.id] ?? "idle"}
+              onChange={updateReview}
+            />
+          )}
 
-          <ReviewPanel
-            pageIndex={pageIndex}
-            review={review}
-            saveState={saveStates[pair.id] ?? "idle"}
-            onChange={updateReview}
-          />
+          {displayVariants.length > 1 && (
+            <ReviewPanel
+              pageIndex={pageIndex}
+              review={review}
+              saveState={saveStates[pair.id] ?? "idle"}
+              onChange={updateReview}
+            />
+          )}
         </main>
       ) : (
         <main className="state-page"><h1>当前没有可评判的实验批次</h1><p>生成第一组结果后刷新此页面。</p></main>

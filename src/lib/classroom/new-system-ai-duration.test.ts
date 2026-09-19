@@ -92,6 +92,28 @@ describe("new-system AI duration judgment", () => {
     expect(modelCall).not.toHaveBeenCalled();
   });
 
+  it("retries only when the duration response cannot be parsed", async () => {
+    const aiCall = vi.fn()
+      .mockResolvedValueOnce('{"durationMin":')
+      .mockResolvedValueOnce(JSON.stringify({
+        durationMin: 36,
+        rationale: "概念讲解和应用判断均需要课堂时间。",
+        confidence: "medium",
+        knowledgePointBudgets: [
+          { knowledgePointId: "kp-1", durationMin: 12, rationale: "概念" },
+          { knowledgePointId: "kp-2", durationMin: 24, rationale: "应用" },
+        ],
+      }));
+
+    const result = await generateNewSystemAiDurationRecommendation(durationInput(), {
+      aiCall,
+      retrySleep: async () => undefined,
+    });
+
+    expect(result.durationMin).toBe(36);
+    expect(aiCall).toHaveBeenCalledTimes(2);
+  });
+
   it.each([79, 150])("caps an overlong %i minute judgment at 40 percent", (durationMin) => {
     const result = normalizeNewSystemAiDurationRecommendation({
       durationMin,

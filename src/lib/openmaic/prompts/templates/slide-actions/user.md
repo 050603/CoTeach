@@ -14,5 +14,5 @@ Generate speech and actions for this semantic page only. Use this page's target 
 
 **Language Directive**: {{languageDirective}}
 
-Output as a JSON array directly (no explanation or code fences; normally 5-10 segments, up to 18 only for a justified step-by-step whiteboard explanation):
+Output as a JSON array directly (no explanation or code fences; choose segment count from the explanation and meaningful visual changes):
 [{"type":"action","name":"spotlight","params":{"elementId":"text_xxx"}},{"type":"text","content":"Opening speech content"}]

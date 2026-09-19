@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LAB_SECTION_FIXTURES } from "./fixtures";
+import { LAB_TECHNICAL_POLICY } from "./technical-policy";
 import { readExperimentArmMetrics, type ExperimentState } from "./experiment-report";
 import {
   buildExperimentState,
@@ -64,6 +65,7 @@ describe("V4/V5 experiment runner", () => {
     ]);
     expect(new Set(state.runs.map((run) => run.runId))).toHaveLength(6);
     expect(new Set(state.runs.map((run) => run.audioCacheScope))).toHaveLength(6);
+    expect(state.freeze.generationPolicy).toEqual(LAB_TECHNICAL_POLICY);
     expect(state.runs.every((run) => run.command.includes("--fresh")
       && run.command.includes("--concurrency")
       && run.command.includes("1"))).toBe(true);

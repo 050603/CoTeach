@@ -3,10 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AICallFn } from "@openmaic/lib/generation/pipeline-types";
-import { LAB_BATCHES, LAB_SECTION_FIXTURES } from "./fixtures";
+import { FORMAL_QUALITY_REGRESSION_FIXTURES, LAB_BATCHES, LAB_SECTION_FIXTURES } from "./fixtures";
 import {
   LAB_EXPERIMENT_ID,
+  bindCallGenerationIdentity,
+  resolveLabThinking,
   applySlideElementUpdates,
+  bindScriptAudioToScenes,
+  buildFirstPassTeachingEvidence,
   buildV5SemanticMap,
   compileV5Actions,
   compactLabNarrationSystem,
@@ -22,15 +26,18 @@ import {
   planNarrationBudgetRepairs,
   repairV5PageOnce,
   recordDurationCheck,
+  repairLabCourseOnce,
   recoverVariantAfterGenerationFailure,
   restoreV5SemanticElementIds,
   runLoggedStage,
+  reviewLabCourseLightly,
   stageNarrationBudgetState,
   v5NarrationAssemblyIssues,
   v5RelevantLayoutIssues,
   withActuallyTaughtNarration,
   withEnhancedNarrationGuidance,
 } from "./generate";
+import { cleanManifestRecords } from "./cleanup";
 import type { LoggedCall } from "./generate";
 import type { CourseQualityLabManifest, LabVariantResult, TeachingDesign } from "./types";
 import type { GeneratedSlideContent, SceneOutline } from "@openmaic/lib/types/generation";
@@ -52,6 +59,14 @@ describe("course quality lab fixtures", () => {
     expect(LAB_SECTION_FIXTURES.every((section) => section.questionCount === 2)).toBe(true);
     expect(LAB_SECTION_FIXTURES.find((section) => section.id === "ai-education-teaching-methods")?.grade)
       .toContain("已具备教育学、教学设计和人工智能常识基础");
+  });
+
+  it("keeps the theory-mode-method progression case as an opt-in formal regression", () => {
+    const fixture = FORMAL_QUALITY_REGRESSION_FIXTURES.find((item) => item.id === "theory-mode-method-progression");
+    expect(fixture?.pages[0]?.purpose).toContain("完整呈现猫狗分类课堂中教师和学生的行动");
+    expect(fixture?.pages[1]?.purpose).toContain("只把半成品对比表改为口头提问");
+    expect(fixture?.sources[1]?.detail).toContain("不能单独决定分类");
+    expect(fixture?.sources[1]?.detail).toContain("不能据此断定教学设计本身没有依据");
   });
 
   it("adds only the actually taught narration at quiz time", async () => {
@@ -160,6 +175,50 @@ format`);
     }
   });
 
+  it.each([undefined, "previous-policy"])("does not reuse responses or attempts from generation %s", async (previousIdentity) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "quality-lab-identity-"));
+    try {
+      const calls: LoggedCall[] = [];
+      const callsPath = path.join(directory, "calls.json");
+      if (previousIdentity) bindCallGenerationIdentity(calls, previousIdentity);
+      const parse = (stageCall: AICallFn) => stageCall("system", "user").then((text) => JSON.parse(text) as unknown);
+      const oldModel = vi.fn<AICallFn>().mockResolvedValueOnce("not-json").mockResolvedValueOnce('{"old":true}');
+      await expect(runLoggedStage(oldModel, calls, callsPath, "slide", parse)).resolves.toEqual({ old: true });
+      expect(oldModel).toHaveBeenCalledTimes(2);
+      const restored = JSON.parse(await fs.readFile(callsPath, "utf8")) as LoggedCall[];
+      bindCallGenerationIdentity(restored, "explicit-disabled-policy");
+      const newModel = vi.fn<AICallFn>(async () => '{"new":true}');
+      await expect(runLoggedStage(newModel, restored, callsPath, "slide", parse)).resolves.toEqual({ new: true });
+      await expect(runLoggedStage(newModel, restored, callsPath, "slide", parse)).resolves.toEqual({ new: true });
+      expect(newModel).toHaveBeenCalledOnce();
+      expect(restored).toHaveLength(3);
+      expect(restored[2].generationIdentity).toBe("explicit-disabled-policy");
+      expect(restored[2].attempts[0].attempt).toBe(1);
+      expect(restored[0]).toEqual(calls[0]);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["system", "user", "image"])("does not reuse a stage after its %s changes", async (changed) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "quality-lab-prompt-"));
+    try {
+      const calls: LoggedCall[] = [];
+      bindCallGenerationIdentity(calls, "same-policy");
+      const callsPath = path.join(directory, "calls.json");
+      const model = vi.fn<AICallFn>().mockResolvedValueOnce("old").mockResolvedValueOnce("new");
+      await runLoggedStage(model, calls, callsPath, "slide", (stageCall) => stageCall("system", "user", [{ id: "image", src: "old" }]));
+      await expect(runLoggedStage(model, calls, callsPath, "slide", (stageCall) => stageCall(
+        changed === "system" ? "new system" : "system",
+        changed === "user" ? "new user" : "user",
+        [{ id: "image", src: changed === "image" ? "new" : "old" }],
+      ))).resolves.toBe("new");
+      expect(model).toHaveBeenCalledTimes(2);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("does not multiply transport failures at the stage boundary", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "quality-lab-transport-"));
     try {
@@ -176,6 +235,57 @@ format`);
       expect(calls).toHaveLength(1);
       expect(calls[0].status).toBe("failed");
       expect(calls[0].parseError).toBeUndefined();
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("stops after two invalid model outputs and sends the validator error to the retry", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "quality-lab-invalid-budget-"));
+    try {
+      const calls: LoggedCall[] = [];
+      const model = vi.fn<AICallFn>(async () => "not-json");
+      await expect(runLoggedStage(
+        model,
+        calls,
+        path.join(directory, "calls.json"),
+        "slide-1-content",
+        (stageCall) => stageCall("json system", "page input").then((text) => JSON.parse(text) as unknown),
+      )).rejects.toThrow();
+      expect(model).toHaveBeenCalledTimes(2);
+      expect(model.mock.calls[1]?.[0]).toContain("技术错误");
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.retryReason).toBe("invalid-output");
+      expect(calls.every((call) => call.parseError)).toBe(true);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("retries an interrupted stage on the next resume without discarding its checkpoint", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "quality-lab-resume-"));
+    try {
+      const calls: LoggedCall[] = [];
+      const callsPath = path.join(directory, "calls.json");
+      await expect(runLoggedStage(
+        vi.fn<AICallFn>(async () => { throw new Error("connection interrupted"); }),
+        calls,
+        callsPath,
+        "course-light-review",
+        (stageCall) => stageCall("system", "user"),
+        { retryInvalidOutput: false },
+      )).rejects.toThrow("connection interrupted");
+      const resumed = vi.fn<AICallFn>(async () => '{"pages":[]}');
+      await expect(runLoggedStage(
+        resumed,
+        calls,
+        callsPath,
+        "course-light-review",
+        (stageCall) => stageCall("system", "user"),
+        { retryInvalidOutput: false },
+      )).resolves.toBe('{"pages":[]}');
+      expect(resumed).toHaveBeenCalledTimes(1);
+      expect(calls.map((call) => call.status)).toEqual(["failed", "complete"]);
     } finally {
       await fs.rm(directory, { recursive: true, force: true });
     }
@@ -340,7 +450,7 @@ format`);
     ]);
   });
 
-  it("normalizes opening and closing into one budgeted V5 teaching contract", () => {
+  it.each([{ visibleIndexes: [] }, { visibleIndexes: [1] }])("allows optional visual references in opening and closing: $visibleIndexes", ({ visibleIndexes }) => {
     const design = normalizeTeachingDesign({ pagePlan: [{
       page: 1,
       purpose: "完成一页课程",
@@ -358,9 +468,9 @@ format`);
         relationship: "用箭头连接证据、推理和结论",
       },
       deliveryPlan: [
-        { function: "opening", instruction: "简短问好并引入学习方向", visibleRequirementIndexes: [], budgetWeight: 1 },
-        { function: "knowledge", instruction: "准确解释证据与结论的关系和成立条件", visibleRequirementIndexes: [1], budgetWeight: 6 },
-        { function: "closing", instruction: "回扣核心认识并转入节末练习", visibleRequirementIndexes: [], budgetWeight: 1 },
+        { function: "opening", instruction: "简短问好并引入学习方向", visibleRequirementIndexes: visibleIndexes, budgetWeight: 1 },
+        { function: "example", instruction: "用案例准确解释证据与结论的关系和成立条件", visibleRequirementIndexes: [1], budgetWeight: 6 },
+        { function: "closing", instruction: "回扣核心认识并转入节末练习", visibleRequirementIndexes: visibleIndexes, budgetWeight: 1 },
       ],
       evidenceQuotes: ["课程依据"],
       assessmentFocus: ["能解释证据关系"],
@@ -370,13 +480,13 @@ format`);
     });
     const page = design.pagePlan?.[0];
     expect(page?.pageRole).toBe("single");
-    expect(page?.deliveryPlan?.map((step) => step.function)).toEqual(["opening", "knowledge", "closing"]);
+    expect(page?.deliveryPlan?.map((step) => step.function)).toEqual(["opening", "example", "closing"]);
     expect(page?.deliveryPlan?.reduce((sum, step) => sum + step.targetUnits, 0)).toBe(400);
-    expect(page?.deliveryPlan?.[0].visibleRequirementIndexes).toEqual([]);
-    expect(page?.deliveryPlan?.at(-1)?.visibleRequirementIndexes).toEqual([]);
+    expect(page?.deliveryPlan?.[0].visibleRequirementIndexes).toEqual(visibleIndexes);
+    expect(page?.deliveryPlan?.at(-1)?.visibleRequirementIndexes).toEqual(visibleIndexes);
   });
 
-  it("assigns greeting, continuation and closing only to their course positions", () => {
+  it("preserves page roles without forcing every page into a delivery template", () => {
     const page = (
       pageNumber: number,
       pageRole: "opening" | "continuation" | "closing",
@@ -420,11 +530,12 @@ format`);
     ] }, 3, { requireV5Contract: true, timingBudgets });
     expect(design.pagePlan?.map((item) => item.pageRole)).toEqual(["opening", "continuation", "closing"]);
     expect(design.pagePlan?.[1].deliveryPlan?.map((step) => step.function)).not.toContain("opening");
-    expect(() => normalizeTeachingDesign({ pagePlan: [
+    const flexible = normalizeTeachingDesign({ pagePlan: [
       page(1, "opening", ["opening", "knowledge"]),
       page(2, "continuation", ["opening", "knowledge"]),
       page(3, "closing", ["knowledge", "closing"]),
-    ] }, 3, { requireV5Contract: true, timingBudgets })).toThrow(/缺少逐页职责/);
+    ] }, 3, { requireV5Contract: true, timingBudgets });
+    expect(flexible.pagePlan?.[1].deliveryPlan?.map((step) => step.function)).toEqual(["opening", "knowledge"]);
   });
 
   it("generates long professional narration once without a polishing loop", async () => {
@@ -447,14 +558,19 @@ format`);
       },
       deliveryPlan: [
         { function: "opening", instruction: "问好并引入", visibleRequirementIndexes: [], budgetWeight: 1 },
-        { function: "knowledge", instruction: "解释机制与条件", visibleRequirementIndexes: [1], budgetWeight: 6 },
+        {
+          function: "knowledge",
+          instruction: "解释机制与条件",
+          visibleRequirementIndexes: [1],
+          budgetWeight: 6,
+        },
         { function: "closing", instruction: "收束并转入练习", visibleRequirementIndexes: [], budgetWeight: 1 },
       ],
       evidenceQuotes: [fixture.sources.at(-1)?.detail?.slice(0, 12) ?? "生成模型"],
       assessmentFocus: ["能说明二者区别"],
     }] }, 1, {
       requireV5Contract: true,
-      timingBudgets: [{ targetDurationSec: 90, targetUnits: 400, minUnits: 360, maxUnits: 440, unit: "cjk-char" }],
+      timingBudgets: [{ targetDurationSec: 90, targetUnits: 130, minUnits: 100, maxUnits: 160, unit: "cjk-char" }],
     });
     const longProfessionalSentence = "生成模型根据输入与训练中学到的语言模式生成后续内容，因此即使输出在语法、结构和语气上都很流畅，也不能据此推出姓名、年份、数据或引文已经经过独立来源核验。";
     const model = vi.fn<AICallFn>(async () => JSON.stringify({ segments: [
@@ -464,7 +580,29 @@ format`);
     ] }));
     const narration = await generateV5Narration({ fixture, design, pageIndex: 0, aiCall: model });
     expect(model).toHaveBeenCalledTimes(1);
+    expect(model.mock.calls[0]?.[0]).toContain("所有 segments.text 合计必须落在其中 minUnits 到 maxUnits 之间");
+    expect(model.mock.calls[0]?.[0]).toContain("以 130 cjk-char 为目标");
+    expect(model.mock.calls[0]?.[0]).toContain("把 reasoningSteps 合成一条连续因果链");
+    expect(model.mock.calls[0]?.[0]).toContain("不要求每个步骤命中同一比例");
+    expect(model.mock.calls[0]?.[0]).toContain("步骤可以采用不同结构");
+    expect(model.mock.calls[0]?.[0]).toContain("Adjacent segments may jointly establish");
+    expect(model.mock.calls[0]?.[0]).not.toContain("每个 knowledge 或 example 步骤都要形成可独立听懂的解释");
+    expect(model.mock.calls[0]?.[0]).toContain("次数由当前内容决定，可以没有");
+    expect(model.mock.calls[0]?.[0]).toContain("查不到依据只能说未证实");
+    expect(model.mock.calls[0]?.[0]).toContain("数字、时长、篇幅、对象和任务要求必须互相兼容");
+    expect(model.mock.calls[0]?.[1]).toContain('"minUnits":100');
+    expect(model.mock.calls[0]?.[1]).toContain('"maxUnits":160');
+    expect(model.mock.calls[0]?.[1]).toContain('"firstPassPageUnitRequirement"');
+    expect(model.mock.calls[0]?.[1]).toContain('"estimatedTotalUnits":130');
     expect(narration[1].text).toBe(longProfessionalSentence);
+    const tooShort = vi.fn<AICallFn>(async () => JSON.stringify({ segments: [
+      { semanticIds: ["page-1-narration-1"], function: "opening", text: "同学们好。" },
+      { semanticIds: ["page-1-narration-2"], function: "knowledge", text: "流畅不等于可靠。" },
+      { semanticIds: ["page-1-narration-3"], function: "closing", text: "下面练习。" },
+    ] }));
+    await expect(generateV5Narration({ fixture, design, pageIndex: 0, aiCall: tooShort }))
+      .resolves.toHaveLength(3);
+    expect(tooShort).toHaveBeenCalledTimes(1);
   });
 
   it("keeps every essential V5 cue when more narration segments than visible targets are present", () => {
@@ -607,11 +745,7 @@ format`);
       suggestion: "删除学校名称，或由教师补充可核对来源",
     }] }, 2);
     expect(design.pagePlan?.[0]).toMatchObject({ examples: [], conditions: [] });
-    expect(design.teacherReviewNotes).toEqual([expect.objectContaining({
-      page: 2,
-      claim: "某学校已经采用这一评价规则",
-      origin: "design",
-    })]);
+    expect(design.teacherReviewNotes).toBeUndefined();
     expect(JSON.stringify(design.pagePlan)).not.toContain("权威资料没有提供");
   });
 
@@ -717,6 +851,8 @@ format`);
       aiCall: model,
     });
     expect(model).toHaveBeenCalledTimes(1);
+    expect(model.mock.calls[0]?.[0]).toContain("PPT 元素的宽高是固定容量");
+    expect(model.mock.calls[0]?.[0]).toContain("不得为了逐字复述 requiredVisibleContent 填入长句");
     expect(repaired.content.elements[0]).toMatchObject({ content: "<p>提示改善 ≠ 事实核验</p>" });
     expect(repaired.actions[0]).toMatchObject({ text: "提示写清楚可以提高任务匹配度，但关键事实仍要核验。" });
 
@@ -739,6 +875,113 @@ format`);
     expect(slideOnlyRepair.actions).toEqual(actions);
   });
 
+  it("checks the complete lesson once and repairs all affected pages in one request", async () => {
+    const fixture = LAB_SECTION_FIXTURES[0];
+    const design = {
+      pagePlan: fixture.pages.map((_, index) => ({
+        page: index + 1,
+        purpose: `第 ${index + 1} 页`,
+        priorKnowledge: "已有基础",
+        newContent: "关键关系",
+        explanation: ["解释关系"],
+        examples: [],
+        conditions: [],
+        requiredVisibleContent: ["提示改善不能替代事实核验"],
+        narrationFocus: ["解释为什么仍要核验"],
+        evidenceQuotes: [],
+        assessmentFocus: ["能说明核验原因"],
+      })),
+    } satisfies TeachingDesign;
+    const outlines = fixture.pages.map((page, index) => ({
+      id: `slide-${index + 1}`,
+      type: "slide",
+      title: page.title,
+      description: page.purpose,
+      keyPoints: page.keyPoints,
+      order: index,
+    })) as SceneOutline[];
+    const pages = fixture.pages.map((_, index) => ({
+      content: {
+        elements: [{
+          id: `page-${index + 1}-visible-1`,
+          type: "text",
+          left: 10,
+          top: 10,
+          width: 300,
+          height: 60,
+          content: "<p>提示可以保证事实正确</p>",
+        }],
+      } as GeneratedSlideContent,
+      actions: [{
+        id: `page-${index + 1}-narration-1`,
+        type: "speech",
+        text: "提示写清楚后，事实就一定正确。",
+      }] as Action[],
+    }));
+    const reviewModel = vi.fn<AICallFn>(async () => JSON.stringify({ pages: [
+      {
+        page: 1,
+        issues: [{
+          category: "slide-narration-alignment",
+          targetType: "slide-element",
+          targetId: "page-1-visible-1",
+          evidence: "提示可以保证事实正确",
+          repair: "改为提示不能替代核验",
+        }],
+        teacherReviewNotes: [],
+      },
+      { page: 2, issues: [], teacherReviewNotes: [] },
+    ] }));
+    const reviews = await reviewLabCourseLightly({ fixture, outlines, design, pages, aiCall: reviewModel });
+    expect(reviewModel).toHaveBeenCalledTimes(1);
+    expect(reviews.flatMap((review) => review.issues)).toHaveLength(1);
+    expect(reviewModel.mock.calls[0]?.[0]).toContain("不要报告措辞风格");
+
+    const repairModel = vi.fn<AICallFn>(async () => JSON.stringify({ pages: [{
+      page: 1,
+      updates: [{ id: "page-1-visible-1", changes: { content: "<p>提示改善 ≠ 事实核验</p>" } }],
+      segments: [],
+    }] }));
+    const repaired = await repairLabCourseOnce({ fixture, outlines, design, pages, reviews, aiCall: repairModel });
+    expect(repairModel).toHaveBeenCalledTimes(1);
+    expect(repaired[0].content.elements[0]).toMatchObject({ content: "<p>提示改善 ≠ 事实核验</p>" });
+    expect(repaired[1]).toEqual(pages[1]);
+  });
+
+  it("removes only empty unreviewed records from the manifest cleanup plan", () => {
+    const empty = (state: "pending" | "failed" = "pending"): LabVariantResult => ({
+      statuses: { ppt: { state }, script: { state }, tts: { state } },
+      slides: [],
+      script: [],
+      quiz: [],
+    });
+    const complete: LabVariantResult = {
+      ...empty(),
+      statuses: { ppt: { state: "complete" }, script: { state: "complete" }, tts: { state: "complete" } },
+      slides: [{ id: "kept-slide" }],
+    };
+    const fixture = LAB_SECTION_FIXTURES[0];
+    const manifest = {
+      version: 1,
+      sections: [{
+        id: fixture.id,
+        title: fixture.title,
+        learningObjectives: [],
+        sources: [],
+        pairs: [
+          { id: "successful", experimentId: "successful", batch: 1, variants: { baseline: empty(), enhanced: complete } },
+          { id: "reviewed-failure", experimentId: "reviewed", batch: 1, variants: { baseline: empty(), enhanced: empty("failed") } },
+          { id: "discarded-failure", experimentId: "discarded", batch: 1, variants: { baseline: empty(), enhanced: empty("failed") } },
+        ],
+      }],
+    } satisfies CourseQualityLabManifest;
+    const cleaned = cleanManifestRecords(manifest, {
+      reviews: [{ pairId: "reviewed-failure", outcome: "undecided", dimensions: {}, pageNotes: {} }],
+    });
+    expect(cleaned.manifest.sections[0].pairs.map((pair) => pair.id)).toEqual(["successful", "reviewed-failure"]);
+    expect(cleaned.removed).toEqual([expect.objectContaining({ pairId: "discarded-failure" })]);
+  });
+
   it("lets the explicit V5 visual plan own semantic structure while retaining physical layout failures", () => {
     expect(v5RelevantLayoutIssues([
       "页面内容需要data语义结构，但当前未使用表格、图表、连线或分组关系表达",
@@ -748,18 +991,33 @@ format`);
     ])).toEqual(["正文区域存在 160px 的连续空白带，信息分布明显失衡"]);
     expect(v5RelevantLayoutIssues([
       "正文区域网格利用率仅 87.9%，低于 90% 目标",
-    ])).toEqual(["正文区域网格利用率仅 87.9%，低于 90% 目标"]);
+    ])).toEqual([]);
+    expect(v5RelevantLayoutIssues([
+      "正文区域网格利用率仅 84.9%，低于 90% 目标",
+    ])).toEqual(["正文区域网格利用率仅 84.9%，低于 90% 目标"]);
   });
 
-  it("checks production perspective deterministically without treating a long professional sentence as a style defect", () => {
+  it("rejects slide-production narration while allowing natural classroom page transitions", () => {
     expect(v5NarrationAssemblyIssues([{
       id: "knowledge",
       text: `在适用条件成立且证据来源可追溯时，${"这一专业判断必须完整保留限定条件".repeat(8)}。`,
     }])).toEqual([]);
     expect(v5NarrationAssemblyIssues([{
       id: "transition",
-      text: "下一页，我们继续分析这个条件。",
+      text: "翻到下一页，我们继续分析这个条件。",
     }])).toEqual([expect.stringContaining("页面制作视角")]);
+    expect(v5NarrationAssemblyIssues([{
+      id: "transition-natural",
+      text: "上一页的校史案例说明，表达流畅不能替代证据，接下来看看怎样核验关键主张。",
+    }])).toEqual([]);
+    expect(v5NarrationAssemblyIssues([{
+      id: "reasoned-sequence",
+      text: "面对教学任务，凭什么决定用不用人工智能？先看育人目标，再确定学习证据，然后判断人工智能能否增强学习过程。如果不能增强，就不应把它设为必要环节。",
+    }])).toEqual([]);
+    expect(v5NarrationAssemblyIssues([{
+      id: "evidence-questions",
+      text: "怎样判断人工智能是否改善学习？要比较三稿。看四类证据：论证质量是否提高；学生是否投入；核验是否有效；不同学生是否都能使用。如果确有改善且没有增加错误，这次应用才适切。",
+    }])).toEqual([]);
     expect(v5NarrationAssemblyIssues([{
       id: "closing",
       function: "closing",
@@ -772,6 +1030,136 @@ format`);
       function: "closing",
       text: "记住目标、证据与条件的关系，下面用练习检验你的判断。",
     }], { requirePracticeTransition: true })).toEqual([]);
+  });
+
+  it("rejects outline-like spoken prose while allowing a natural single colon", () => {
+    expect(narrationStyleIssues([
+      { id: "s1", text: "案例分析：连接情境、证据与判断。" },
+      { id: "s2", text: "探究学习：在支架下形成问题解决过程。" },
+    ])).toEqual(expect.arrayContaining([
+      expect.stringContaining("连续使用术语标签"),
+    ]));
+    expect(narrationStyleIssues([{
+      id: "s3",
+      text: "讲授适合建立共同基础；案例分析适合连接证据与判断；探究学习适合形成解决问题的过程；项目学习适合整合作品迭代。",
+    }])).toEqual(expect.arrayContaining([
+      expect.stringContaining("连续罗列概念职责"),
+    ]));
+    expect(narrationStyleIssues([{
+      id: "s4",
+      text: "请观察这个现象：模型回答得很流畅，可其中的年份找不到可靠出处。为什么不能直接相信它？因为流畅只说明语言组织自然，不能证明事实已经核实。",
+    }])).toEqual([]);
+  });
+
+  it("rejects command chains that omit their teaching reason", () => {
+    expect(narrationStyleIssues([{
+      id: "commands",
+      text: "先标记姓名和年份，再查阅学校官网，然后记录出处，最后改写结论。",
+    }])).toEqual(expect.arrayContaining([
+      expect.stringContaining("操作指令串"),
+    ]));
+    expect(narrationStyleIssues([{
+      id: "explained-commands",
+      text: "先标记姓名和年份，因为这些信息最容易被核验。再查阅独立来源，这样才能判断原来的说法是否站得住。",
+    }])).toEqual([]);
+    expect(narrationStyleIssues([{
+      id: "question-before-steps",
+      text: "再问，面对流畅、详细的回答，凭什么判断能不能相信？姓名和年份一旦出错，会影响事实可靠性。先标记高风险主张，再查阅独立来源，并据此改写。先区分表达质量和证据可靠性，再决定是否采用。",
+    }])).toEqual([]);
+    expect(narrationStyleIssues([{
+      id: "explained-workflow",
+      text: "对一条高风险主张，核验怎样走？先标记姓名、年份和引文。接着查原始文件，不能只看一个转载网页。然后交叉核验，看来源是否一致；冲突要写出。最后记录证据并据此改写。",
+    }])).toEqual([]);
+  });
+
+  it("allows a concept framework when the teacher explains its purpose and boundary", () => {
+    expect(narrationStyleIssues([{
+      id: "explained-framework",
+      text: "怎样把任务说清楚，又不把结果当成事实？目标是解决什么问题；背景是给谁看、已有材料是什么；约束是长度和不能编造；输出要求是怎样呈现。这样系统更清楚要做什么，但事实仍要独立核验。",
+    }])).toEqual([]);
+  });
+
+  it("keeps the frozen course duration while allocating depth between pages", () => {
+    const pages = [1, 2].map((page) => ({
+      page,
+      narrationDurationWeight: page === 1 ? 1 : 2,
+      purpose: `第 ${page} 页职责`,
+      priorKnowledge: "已有基础",
+      newContent: `新内容 ${page}`,
+      explanation: ["讲清原因"],
+      examples: ["具体案例"],
+      conditions: ["适用边界"],
+      requiredVisibleContent: [`关系 ${page}`],
+      narrationFocus: ["解释原因与判断依据"],
+      pageRole: page === 1 ? "opening" : "closing",
+      visualPlan: {
+        structure: "case-reasoning",
+        regions: [{ purpose: "关系", visibleRequirementIndexes: [1] }],
+        relationship: "用箭头表达推理",
+      },
+      deliveryPlan: [
+        ...(page === 1 ? [{ function: "opening", instruction: "问好并引入", visibleRequirementIndexes: [], budgetWeight: 1 }] : []),
+        {
+          function: "knowledge",
+          instruction: "讲清原因与判断依据",
+          visibleRequirementIndexes: [1],
+          objectiveIndexes: [page],
+          explanationArc: {
+            learnerQuestion: `学生需要解决的问题 ${page}`,
+            reasoningSteps: ["观察具体证据", "解释证据怎样支持判断"],
+            takeaway: `学生能够形成认识 ${page}`,
+          },
+          budgetWeight: 6,
+        },
+        ...(page === 2 ? [{ function: "closing", instruction: "回扣并转入练习", visibleRequirementIndexes: [], budgetWeight: 1 }] : []),
+      ],
+      evidenceQuotes: ["课程依据"],
+      assessmentFocus: ["解释判断依据"],
+    }));
+    const courseTiming = {
+      minimumDurationSec: 180,
+      maximumDurationSec: 180,
+      budgetForDuration: (durationSec: number) => ({
+        targetDurationSec: durationSec,
+        targetUnits: durationSec * 4,
+        minUnits: Math.floor(durationSec * 3.6),
+        maxUnits: Math.ceil(durationSec * 4.4),
+        unit: "cjk-char" as const,
+      }),
+    };
+    const design = normalizeTeachingDesign({ courseTargetDurationSec: 180, pagePlan: pages }, 2, {
+      requireV5Contract: true,
+      objectiveCount: 2,
+      courseTiming,
+    });
+    expect(design.courseTargetDurationSec).toBe(180);
+    expect(design.pagePlan?.map((page) => page.narrationBudget?.targetDurationSec)).toEqual([60, 120]);
+    expect(design.pagePlan?.map((page) =>
+      page.deliveryPlan?.reduce((sum, step) => sum + step.targetUnits, 0)))
+      .toEqual([240, 480]);
+
+    const unevenPages = structuredClone(pages);
+    unevenPages[1].narrationDurationWeight = 5;
+    expect(normalizeTeachingDesign({ courseTargetDurationSec: 180, pagePlan: unevenPages }, 2, {
+      requireV5Contract: true,
+      objectiveCount: 2,
+      courseTiming,
+    }).pagePlan?.map((page) => page.narrationBudget?.targetDurationSec)).toEqual([30, 150]);
+
+    const contentDrivenPages = structuredClone(pages);
+    const extraStep = structuredClone(contentDrivenPages[0].deliveryPlan[1]);
+    extraStep.instruction = "补充另一个必要推理";
+    contentDrivenPages[0].deliveryPlan.push(structuredClone(extraStep), structuredClone(extraStep));
+    expect(normalizeTeachingDesign({ courseTargetDurationSec: 180, pagePlan: contentDrivenPages }, 2, {
+      requireV5Contract: true,
+      objectiveCount: 2,
+      courseTiming,
+    }).pagePlan?.[0].deliveryPlan).toHaveLength(4);
+    expect(() => normalizeTeachingDesign({ courseTargetDurationSec: 210, pagePlan: pages }, 2, {
+      requireV5Contract: true,
+      objectiveCount: 2,
+      courseTiming,
+    })).toThrow(/必须选择 180-180 秒/);
   });
 
   it("allocates an out-of-range course budget to page repair opportunities without looping", () => {
@@ -822,23 +1210,25 @@ format`);
       text: "一二三四五六七八九十甲乙",
     }] as Action[]);
     expect([...planNarrationBudgetRepairs(outlines, actions).values()]).toEqual([
-      expect.stringContaining("从约 12 调整到约 10"),
+      expect.stringContaining("从约 12 调整到约 11"),
     ]);
   });
 
   it("rejects production language and source labels before enhanced narration reaches TTS", () => {
     expect(narrationStyleIssues([
-      { id: "s1", text: "这一页的核心观点是，表达流畅不等于事实可靠。" },
+      { id: "s1", text: "这一页展示的核心观点是，表达流畅不等于事实可靠。" },
       { id: "s2", text: "资料1要求我们先确认学习目标。" },
-      { id: "s3", text: "先说清楚性质：这是假设案例，不是真实事件。" },
     ])).toEqual(expect.arrayContaining([
       expect.stringContaining("页面制作视角"),
       expect.stringContaining("讲稿提纲标签"),
       expect.stringContaining("资料编号"),
-      expect.stringContaining("假设案例免责声明"),
     ]));
     expect(narrationStyleIssues([
+      { id: "hypothetical", text: "这是用于教学分析的假设案例，不是真实事件。接下来根据目标和学情判断方法组合。" },
+    ])).toEqual([]);
+    expect(narrationStyleIssues([
       { id: "valid", text: "遇到姓名、年份和数据，先找到独立来源核验，再决定是否采用。" },
+      { id: "natural-transition", text: "把这一页连成一句话就是，提示提高匹配度，核验决定可靠性。" },
     ])).toEqual([]);
   });
 
@@ -914,6 +1304,55 @@ format`);
     }, 2, 2, [{ requirementId: "page-2-visible-1", text: "必须显示判断条件" }], [], [{ id: "s1", text: "原讲稿" }])).toThrow(/有效目标与证据/);
   });
 
+  it("derives review evidence directly from the first-pass semantic narration", () => {
+    const design = normalizeTeachingDesign({ pagePlan: [{
+      page: 1,
+      purpose: "解释流畅与真实的区别",
+      priorKnowledge: "学生使用过生成式人工智能",
+      newContent: "流畅表达不能证明事实可靠",
+      explanation: ["解释机制与核验边界"],
+      examples: ["校史年份案例"],
+      conditions: ["关键事实需要独立来源"],
+      requiredVisibleContent: ["流畅表达不等于事实证据"],
+      narrationFocus: ["解释为什么仍需核验"],
+      evidenceQuotes: ["课程依据"],
+      assessmentFocus: ["说明核验原因"],
+    }] }, 1);
+    expect(buildFirstPassTeachingEvidence(design, 0, [{
+      id: "page-1-narration-1",
+      text: "语言流畅只说明表达符合常见模式。年份是否真实，仍要回到独立来源核对。",
+    }])).toEqual([{
+      requirementId: "page-1-narration-1",
+      segmentId: "page-1-narration-1",
+      evidence: "语言流畅只说明表达符合常见模式。年份是否真实，仍要回到独立来源核对。",
+    }]);
+  });
+
+  it("binds generated audio with the scene-and-action compound key", () => {
+    const scenes = [{
+      id: "scene-runtime",
+      outlineId: "outline-1",
+      stageId: "stage-1",
+      title: "讲授",
+      order: 0,
+      type: "slide",
+      content: { type: "slide", canvas: { id: "canvas", viewportSize: 1000, viewportRatio: 0.5625, theme: {}, elements: [] } },
+      actions: [{ id: "speech-1", type: "speech", text: "需要讲清的内容。" }],
+    }] as unknown as Scene[];
+    bindScriptAudioToScenes([{
+      id: "outline-1:speech-1",
+      slideIndex: 0,
+      text: "需要讲清的内容。",
+      audioUrl: "/files/audio/voice.mp3",
+      durationSec: 3.5,
+    }], scenes);
+    expect(scenes[0].actions?.[0]).toMatchObject({
+      id: "speech-1",
+      audioUrl: "/files/audio/voice.mp3",
+      audioDurationSec: 3.5,
+    });
+  });
+
   it("uses the whole-stage narration budget and leaves room for natural punctuation pauses", () => {
     const outlines = [1, 2].map((page) => ({
       id: `p${page}`,
@@ -953,16 +1392,17 @@ format`);
     expect(withPauses.actualUnits - base.actualUnits).toBeLessThan(10);
   });
 
-  it("marks real TTS duration outside the stage tolerance as failed", () => {
-    const result = {
+  it("records real TTS duration outside the target as a non-blocking check", () => {
+    const result: LabVariantResult = {
       statuses: { ppt: { state: "complete" }, script: { state: "complete" }, tts: { state: "complete" } },
       slides: [],
       script: [],
       quiz: [],
       durationSec: 220,
-    } satisfies LabVariantResult;
+    };
     recordDurationCheck(result, LAB_SECTION_FIXTURES[0]);
-    expect(result.statuses.tts).toMatchObject({ state: "failed", message: expect.stringContaining("±10%") });
+    expect(result.statuses.tts).toEqual({ state: "complete" });
+    expect(result.checks).toEqual([expect.stringContaining("真实 TTS 时长")]);
   });
 
   it("rewrites only selected narration ids while seeing the full page", () => {
@@ -993,7 +1433,7 @@ format`);
       response: { segments: [{ id: "s2", text: "删去重复，只保留判断理由。" }] },
     }, original)).toEqual([{ id: "s2", text: "删去重复，只保留判断理由。" }]);
     expect(() => normalizeNarrationPatch({
-      segments: [{ id: "s2", text: "这一页删去重复定义。" }],
+      segments: [{ id: "s2", text: "这一页展示了需要删去的重复定义。" }],
     }, original)).toThrow(/页面制作视角/);
   });
 
@@ -1010,6 +1450,49 @@ format`);
     expect(base.mock.calls[0][0]).toContain("案例必须说明现象为什么支持");
     expect(base.mock.calls[0].join("\n")).not.toContain("只给教师看的主张");
     expect(base.mock.calls[0][1]).toBe("action-user");
+  });
+
+  it("tells the first narration pass to avoid duplicated cross-page announcements", async () => {
+    const call = vi.fn<AICallFn>(async () => JSON.stringify({ segments: [
+      { id: "page-2-narration-1", semanticIds: ["page-2-narration-1"], function: "transition", text: "回到刚才的案例，提示写清楚就能保证事实正确吗？" },
+    ] }));
+    const fixture = LAB_SECTION_FIXTURES[0];
+    const design = {
+      courseTargetDurationSec: 210,
+      pagePlan: fixture.pages.map((_page, index) => ({
+        page: index + 1,
+        purpose: index === 0 ? "区分表达和证据" : "形成核验工作流",
+        priorKnowledge: index === 0 ? "学生听过生成式人工智能" : "已区分表达和证据",
+        newContent: index === 0 ? "流畅不等于可靠" : "提示、核验和责任",
+        explanation: ["讲清判断理由"],
+        examples: [],
+        conditions: [],
+        requiredVisibleContent: ["判断关系"],
+        narrationFocus: ["解释理由"],
+        pageRole: index === 0 ? "opening" : "closing",
+        narrationDurationWeight: 1,
+        deliveryPlan: [{
+          id: `page-${index + 1}-narration-1`,
+          function: "transition",
+          instruction: "自然承接并进入新内容",
+          visibleRequirementIndexes: [],
+          budgetWeight: 1,
+          targetUnits: 20,
+        }],
+        evidenceQuotes: ["课堂依据"],
+        assessmentFocus: ["解释判断"],
+      })),
+      teacherReviewNotes: [],
+    } satisfies TeachingDesign;
+    await generateV5Narration({ fixture, design, pageIndex: 1, aiCall: call });
+    const input = JSON.parse(call.mock.calls[0]?.[1] ?? "{}");
+    expect(input.progression[0].explanationResponsibilities).toEqual([{
+      function: "transition", instruction: "自然承接并进入新内容",
+    }]);
+    expect(call.mock.calls[0]?.[0]).toContain("只让一侧承担完整过渡");
+    expect(call.mock.calls[0]?.[0]).toContain("不要再次宣布本页主题、工作流或学习安排");
+    expect(call.mock.calls[0]?.[0]).toContain("前一步不得提前讲完后一步");
+    expect(call.mock.calls[0]?.[0]).toContain("只允许一个步骤完整复述案例流程");
   });
 
   it("uses a new pair id and freezes the archived optimized result for comparison", () => {
@@ -1107,6 +1590,17 @@ format`);
     expect(recovered.slides[0]?.id).toBe("new-slide");
     expect(recovered.statuses.ppt.state).toBe("complete");
     expect(recovered.statuses.script.state).toBe("complete");
+    expect(recovered.technicalValidation).toMatchObject({ state: "failed", stage: "tts" });
     expect(recovered.statuses.tts).toMatchObject({ state: "failed", message: "音频打包失败" });
+  });
+});
+
+ describe("lab reasoning request semantics", () => {
+  it("distinguishes provider default from an explicit disable request", () => {
+    expect(resolveLabThinking()).toBeUndefined();
+    expect(resolveLabThinking("baseline")).toBeUndefined();
+    expect(resolveLabThinking("none")).toEqual({ mode: "disabled", enabled: false, effort: "none" });
+    expect(resolveLabThinking("low")).toMatchObject({ mode: "enabled", effort: "low" });
+    expect(() => resolveLabThinking("typo")).toThrow();
   });
 });

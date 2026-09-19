@@ -330,11 +330,11 @@ describe('slide layout audit repair policy', () => {
     ]));
   });
 
-  it('accepts a dense navy-title page with a subtitle and well-used body grid', () => {
+  it.each([900, 700])('accepts complete readable content at body width %s without imposing 90% utilization', (bodyWidth) => {
     const styledText = (id: string, content: string, top: number, height: number, color: string) => ({
       ...text(id, content, top),
       height,
-      width: 900,
+      width: bodyWidth,
       defaultColor: color,
     }) as PPTElement;
     const density = auditSlideDensity({
@@ -351,9 +351,24 @@ describe('slide layout audit repair policy', () => {
 
     expect(density.issues).toEqual([]);
     expect(density.visibleTextCharacters).toBeGreaterThanOrEqual(150);
-    expect(density.contentAreaUtilization).toBeGreaterThanOrEqual(0.9);
+    if (bodyWidth === 700) expect(density.contentAreaUtilization).toBeLessThan(0.9);
+    else expect(density.contentAreaUtilization).toBeGreaterThanOrEqual(0.9);
     expect(density.hasDeepBlueTitle).toBe(true);
     expect(density.hasSubtitle).toBe(true);
+  });
+
+  it('recognizes a full-width subtitle at the lower edge of the title band', () => {
+    const density = auditSlideDensity({
+      ...outline,
+      generationPurpose: 'knowledge-teaching',
+      keyPoints: [],
+    }, { elements: [
+      { ...text('title', '为什么流畅回答也可能出错', 50), width: 880, height: 70, defaultColor: '#1E3A8A' } as PPTElement,
+      { ...text('subtitle', '流畅不等于真实，先把回答当作待核验材料', 150), width: 880, height: 49, defaultColor: '#64748B' } as PPTElement,
+      text('body', '生成式人工智能按语言模式生成内容，表达质量不能代替证据可靠性。', 230),
+    ] });
+    expect(density.hasSubtitle).toBe(true);
+    expect(density.issues).not.toContain('普通讲授页缺少独立副标题，标题与正文未形成清晰的两级页首层级');
   });
 
   it('does not mistake two body-column headings for an independent subtitle', () => {

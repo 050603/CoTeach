@@ -745,8 +745,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 }
                 autoStartRef.current = true;
                 stageState.setCurrentSceneId(allScenes[idx + 1].id);
-              } else if (idx === allScenes.length - 1 && stageState.generatingOutlines.length > 0) {
-                // Last scene exhausted but next is still generating — go to pending page
+              } else if (idx === allScenes.length - 1) {
                 const currentScene = allScenes[idx];
                 if (
                   currentScene.type === 'pbl' ||
@@ -755,8 +754,16 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 ) {
                   return;
                 }
-                autoStartRef.current = true;
-                stageState.setCurrentSceneId(PENDING_SCENE_ID);
+                const canShowPendingSlot = stageState.generatingOutlines.length > 0
+                  || stageState.generationComplete
+                  || (
+                    stageState.outlines.length > 0
+                    && allScenes.length === stageState.outlines.length
+                  );
+                if (canShowPendingSlot) {
+                  autoStartRef.current = true;
+                  stageState.setCurrentSceneId(PENDING_SCENE_ID);
+                }
               }
             }, 350);
           }

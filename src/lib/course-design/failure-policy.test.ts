@@ -8,11 +8,11 @@ import {
 } from "./failure-policy";
 
 describe("course design failure policy", () => {
-  it("keeps model structure and quality failures inside managed recovery", () => {
+  it("does not turn model structure or quality failures into a whole-course rewrite", () => {
     const error = new Error("主课脚本代理无法生成结构完整的数据：缺少知识点覆盖");
     expect(classifyCourseDesignFailure(error)).toBe("recoverable-generation");
     expect(createManagedRecoveryRequest({ courseId: "c", teacherBrief: "b" }, error))
-      .toMatchObject({ managedRecoveryCount: 1 });
+      .toBeNull();
   });
 
   it("recovers malformed model JSON even when wrapped as a cause", () => {
@@ -35,7 +35,7 @@ describe("course design failure policy", () => {
     const once = formatFatalCourseDesignError(original);
     const twice = formatFatalCourseDesignError(new Error(once));
 
-    expect(twice.match(/当前课程阶段经过多轮定向编辑后仍未通过质量检查/g)).toHaveLength(1);
+    expect(twice.match(/当前课程阶段未返回可保存的完整结构/g)).toHaveLength(1);
     expect(twice).toContain("关系字段不完整");
   });
 
@@ -73,12 +73,11 @@ describe("course design failure policy", () => {
     }, network)).toBeNull();
   });
 
-  it("stops managed recovery after its bounded retry budget", () => {
+  it("keeps the legacy managed-recovery export disabled", () => {
     const error = new Error("课程设计代理未能补齐必要结构");
     expect(createManagedRecoveryRequest({
       courseId: "c",
       teacherBrief: "b",
-      managedRecoveryCount: 2,
     }, error)).toBeNull();
     expect(formatFatalCourseDesignError(error)).not.toContain("必要结构");
   });

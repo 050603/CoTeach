@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { OPENMAIC_BLUE_COURSE_THEME } from './course-visual-theme';
 import type { GeneratedSlideContent } from '@openmaic/lib/types/generation';
 import {
   buildOpenMaicWorkbenchLecturePlanPrompt,
@@ -15,7 +16,10 @@ describe('OpenMAIC Workbench lecture planner adapter', () => {
     });
 
     expect(prompt.system).toContain('title, type, brief, and materialFacts');
-    expect(prompt.system).toContain('4-6 materialFacts');
+    expect(prompt.system).toContain('Choose the number of materialFacts');
+    expect(prompt.system).toContain('Adjacent segments may jointly establish');
+    expect(prompt.system).not.toContain('4-6 materialFacts');
+    expect(prompt.system).not.toContain('Across three to five');
     expect(prompt.system).toContain('Plan no quiz pages');
     expect(prompt.system).not.toContain('1-2 scenes per minute');
     expect(prompt.system).not.toContain('110–180');
@@ -52,15 +56,9 @@ describe('OpenMAIC Workbench lecture planner adapter', () => {
       type: 'slide',
       title: '合力如何改变运动',
       description: '用同一辆小车比较不同合力下的加速度，建立因果链。',
-      courseVisualTheme: {
-        name: 'OpenMAIC Blue',
-        background: '#FFFFFF',
-        primary: '#5B9BD5',
-        secondary: '#4472C4',
-        accent: '#ED7D31',
-      },
+      courseVisualTheme: OPENMAIC_BLUE_COURSE_THEME,
     });
-    expect(result.data?.outlines[0]?.courseVisualDirection).toContain('OpenMAIC Blue');
+    expect(result.data?.outlines[0]?.courseVisualDirection).toContain(OPENMAIC_BLUE_COURSE_THEME.name);
     expect(result.data?.outlines[0]?.courseVisualDirection).not.toContain('旧的模型选色');
     expect(result.data?.outlines[0]?.keyPoints).toHaveLength(4);
     expect(result.data?.outlines[0]?.description).not.toContain('视觉方向');
@@ -80,6 +78,19 @@ describe('OpenMAIC Workbench lecture planner adapter', () => {
     );
 
     expect(result.data?.outlines[0]?.type).toBe('slide');
+  });
+
+  it('preserves a variable number of distinct facts without padding or truncating evidence', async () => {
+    const facts = Array.from({ length: 7 }, (_, index) => `必要证据 ${index + 1}`);
+    const result = await generateOpenMaicWorkbenchLecturePlan(
+      { requirement: '根据内容安排证据数量' },
+      vi.fn().mockResolvedValue(JSON.stringify({ pages: [
+        { title: '简单关系', brief: '建立一个关系', materialFacts: ['单一关系'] },
+        { title: '综合判断', brief: '结合必要证据完成判断', materialFacts: [...facts, facts[0]] },
+      ] })),
+    );
+    expect(result.success).toBe(true);
+    expect(result.data?.outlines.map((page) => page.keyPoints)).toEqual([['单一关系'], facts]);
   });
 
   it('strips both legacy visual-direction forms without deleting semantic copy', () => {

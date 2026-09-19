@@ -13,6 +13,28 @@ function page(id: string, content: string, overrides: Partial<SceneOutline> = {}
 }
 
 describe('teaching stage timing', () => {
+  it('keeps quiz and interactive allocations independent of lecture wording', () => {
+    const quiz = page('quiz', '详尽的考查描述'.repeat(40), { type: 'quiz', targetDurationSec: 300, estimatedDuration: 300,
+      timingPlan: buildTtsTimingPlan({ targetDurationSec: 21, activityTargetDurationSec: 300, pageKind: 'quiz', studentActivitySec: 271, readingThinkingSec: 263, operationSec: 8, transitionSec: 8, feedbackSec: 13 }),
+    });
+    const interactive = page('interactive', '操控变量'.repeat(30), { type: 'interactive' });
+    const result = allocateTeachingStageTiming([page('lecture', '简单解释'), quiz, interactive]);
+    expect(result[0].timingPlan!.targetDurationSec).toBe(80);
+    expect(result[1].timingPlan).toEqual(quiz.timingPlan);
+    expect(result[1].targetDurationSec).toBe(300);
+    expect(result[2].timingPlan).toEqual(interactive.timingPlan);
+    expect(result.reduce((sum, row) => sum + row.targetDurationSec!, 0)).toBe(500);
+  });
+
+  it('preserves an approved breakdown alongside pages that lack blueprint timing', () => {
+    const fixed = page('approved', '复杂解释'.repeat(40), { plannedTiming: { narrationSec: 80, learnerActivitySec: 17, transitionSec: 3, role: 'teaching' } });
+    const result = allocateTeachingStageTiming([fixed, page('legacy', '简短解释')]);
+    expect(result[0].timingPlan).toEqual(fixed.timingPlan);
+    expect(result[0].plannedTiming).toEqual(fixed.plannedTiming);
+    expect(result[0].targetDurationSec).toBe(100);
+    expect(result[1].targetDurationSec).toBe(100);
+  });
+
   it('gives denser teaching content more narration while preserving the stage total and silent/video time', () => {
     const result = allocateTeachingStageTiming([
       page('brief', '给出定义。'),

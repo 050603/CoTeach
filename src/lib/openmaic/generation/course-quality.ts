@@ -13,6 +13,8 @@ export interface CourseQualityReport {
   referenceProfileVersion?: string;
   teachingEnhancementVersion?: string;
   narrationEnhancementVersion?: string;
+  reviewPolicyVersion?: string;
+  reviewMode?: 'local-technical';
   disposition?: 'ready' | 'needs-review' | 'audit-unavailable';
   visualConsistency?: {
     expectedBackground?: string;

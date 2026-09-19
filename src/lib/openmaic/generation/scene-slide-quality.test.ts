@@ -5,6 +5,7 @@ import { generateSceneContent } from './scene-generator';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import { slideReviewEvidence } from './slide-content-review';
 import { StaticTable } from '@/components/openmaic/slide-renderer/components/element/TableElement/StaticTable';
+import { deriveTeachingConstraints } from '@/lib/openmaic/pedagogy/teaching-constraints';
 
 const outline: SceneOutline = {
   id: 'concept', type: 'slide', title: '主动建构', description: '用已有经验理解新证据',
@@ -21,11 +22,20 @@ describe('first-pass slide generation', () => {
     const ai = vi.fn().mockResolvedValue(page('学生结合已有经验主动修正理解'));
     const result = await generateSceneContent(outline, ai, {
       reviewSlideContent: true,
-      userRequirements: { requirement: '本科一年级', teachingSourceContext: '教师确认：学生主动建构知识' },
+      userRequirements: { requirement: '本科一年级', teachingSourceContext: '教师确认：学生主动建构知识',
+        teachingConstraints: deriveTeachingConstraints({ grade: '本科一年级', subject: '教育学', topic: '主动建构', hours: 1,
+          learnerProfile: { priorKnowledge: '有观察课堂的经验', learningNeeds: '不熟悉教育学术语', familiarContexts: '校园广播' },
+          learningObjectives: ['根据证据修正解释'],
+        }),
+      },
     });
     expect(result).toBeTruthy();
     expect(ai).toHaveBeenCalledOnce();
     expect(ai.mock.calls[0][1]).not.toContain('教师确认：学生主动建构知识');
+    expect(ai.mock.calls[0][1]).toContain('有观察课堂的经验');
+    expect(ai.mock.calls[0][1]).toContain('不熟悉教育学术语');
+    expect(ai.mock.calls[0][1]).toContain('校园广播');
+    expect(ai.mock.calls[0][1]).toContain('根据证据修正解释');
   });
 
   it('preserves first-pass coordinates even when visual findings remain', async () => {

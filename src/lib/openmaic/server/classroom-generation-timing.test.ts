@@ -4,7 +4,7 @@ import {
   createTtsVoiceTimingCalibration,
   registerTtsVoiceTimingCalibration,
 } from '@openmaic/lib/audio/tts-timing';
-import { attachTtsTimingPlans } from './classroom-generation';
+import { attachTtsTimingPlans, normalizeSceneOutlinesForGeneration } from './classroom-generation';
 import { prepareVideoTimingRequests } from './video-timing-plan';
 
 const selection = {
@@ -32,6 +32,20 @@ function outline(overrides: Partial<SceneOutline>): SceneOutline {
 }
 
 describe('attachTtsTimingPlans', () => {
+  it('infers an unspecified one-question quiz without stealing lecture time or filling feedback', () => {
+    const pages = normalizeSceneOutlinesForGeneration([
+      outline({ id: 'teaching', targetDurationSec: 70, estimatedDuration: 70 }),
+      outline({ id: 'quiz', type: 'quiz', targetDurationSec: undefined, estimatedDuration: undefined,
+        quizConfig: { questionCount: 1, difficulty: 'easy', questionTypes: ['single'] } }),
+    ]);
+    const [teaching, quiz] = attachTtsTimingPlans(pages, selection);
+    expect(teaching.targetDurationSec).toBe(70);
+    expect(quiz.timingPlan!.activityTargetDurationSec).toBeLessThan(180);
+    expect(quiz.timingPlan!.narrationSec).toBeLessThan(60);
+    expect(quiz.timingPlan!.studentActivitySec).toBeGreaterThan(quiz.timingPlan!.narrationSec!);
+    expect(quiz.timingPlan!.targetDurationSec + quiz.timingPlan!.studentActivitySec! + quiz.timingPlan!.transitionSec!).toBe(quiz.timingPlan!.activityTargetDurationSec);
+  });
+
   it('reserves normalized video playback before speech, interaction and transition without double counting feedback', () => {
     const [planned] = attachTtsTimingPlans([outline({
       type: 'interactive', widgetType: 'code', targetDurationSec: 180,

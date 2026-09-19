@@ -141,6 +141,32 @@ describe('addStudentActivityPause', () => {
     expect(result.some((action) => 'activityPauseSec' in action)).toBe(false);
   });
 
+  it('places passive thinking time after the prompt on a variant slide', () => {
+    const outline = {
+      type: 'slide',
+      teachingBrief: {
+        pageTask: { caseUse: 'variant' },
+      },
+      timingPlan: { studentActivitySec: 12, transitionSec: 3 },
+    } as SceneOutline;
+
+    const result = addPageTimingPauses(outline, [
+      { id: 'prompt', type: 'speech', text: '只改这一项，请先判断主要改变了什么。' },
+      { id: 'explanation', type: 'speech', text: '现在说明判断理由。' },
+    ] as Action[]);
+
+    expect(result.map((action) => action.id)).toEqual([
+      'prompt',
+      expect.stringMatching(/^learner_reflection_/),
+      'explanation',
+      expect.stringMatching(/^page_transition_/),
+    ]);
+    expect(result[1]).toMatchObject({
+      timelinePauseSec: 12,
+      timelinePausePurpose: 'learner-reflection',
+    });
+  });
+
   it('migrates a persisted slide activity gate behind narration without showing an operation', () => {
     const result = normalizeSlideActivityPause([
       { id: 'intro', type: 'speech', text: '先介绍问题。' },

@@ -48,6 +48,29 @@ describe("quick positioning generation", () => {
       .toBeNull();
   }, 15_000);
 
+  it("turns a 30-minute, 20-point course into fixed sections with a compact page capacity", async () => {
+    const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
+    const groupSizes = [3, 5, 3, 3, 3, 3];
+    const knowledgePoints = groupSizes.flatMap((size, groupIndex) =>
+      Array.from({ length: size }, (_, pointIndex) => ({
+        id: `g${groupIndex + 1}-p${pointIndex + 1}`,
+        name: `第 ${groupIndex + 1} 组知识 ${pointIndex + 1}`,
+        description: "用于验证蓝图容量。",
+        level: "core" as const,
+        groupName: `第 ${groupIndex + 1} 组`,
+      })),
+    );
+
+    const plans = buildTeachingBlueprintSectionPlans({ knowledgePoints }, 30 * 60);
+
+    expect(plans).toHaveLength(6);
+    expect(plans.reduce((sum, plan) => sum + plan.maxPages, 0)).toBe(16);
+    expect(plans.flatMap((plan) => plan.knowledgePointIds)).toEqual(
+      knowledgePoints.map((point) => point.id),
+    );
+    expect(new Set(plans.flatMap((plan) => plan.knowledgePointIds)).size).toBe(20);
+  }, 15_000);
+
   it("forces every new-system outline into the student AI授知 stage", async () => {
     const { normalizeNewSystemAiOutlines } = await import("./job-runner");
     const outlines = normalizeNewSystemAiOutlines([{
@@ -271,6 +294,7 @@ describe("quick positioning generation", () => {
       grade: "本科一年级",
       summary: "理解教学设计理论并应用于真实案例",
       learningObjectives: ["解释理论", "完成案例分析"],
+      learnerProfile: { priorKnowledge: "会观察课堂案例，还不熟悉教学理论", learningNeeds: "需要展开因果关系", familiarContexts: "校园广播" },
     } as Course, {
       knowledgePoints: Array.from({ length: 12 }, (_, index) => ({
         id: `kp-${index + 1}`,
@@ -284,7 +308,10 @@ describe("quick positioning generation", () => {
     expect(requirement).toContain("PPT 讲授与必要互动约 12 分钟");
     expect(requirement).toContain("不要生成 quiz 或 PBL");
     expect(requirement).toContain("不要把一个完整概念机械拆成多张稀疏页面");
-    expect(requirement).toContain("keyPoints 应包含 4–6 个互补且可见的信息单元");
+    expect(requirement).toContain("不设条目配额");
+    expect(requirement).toContain("会观察课堂案例，还不熟悉教学理论");
+    expect(requirement).toContain("需要展开因果关系");
+    expect(requirement).toContain("校园广播");
     expect(requirement).toContain("不要为排版而默认添加 Table");
     expect(requirement).toContain("内容按以下小节组织");
     expect(requirement).toContain("以教师提供的课程资料作为事实依据");
@@ -404,7 +431,7 @@ describe("quick positioning generation", () => {
     expect(merged.content.knowledgePoints).toHaveLength(1);
   });
 
-  it("lets the design agent repair positioning misalignment instead of failing the quick flow", async () => {
+  it("keeps the first usable positioning draft for the teacher checkpoint", async () => {
     generateProjectSkeleton.mockImplementation(async (input: { targetPart: string }) => {
       if (input.targetPart === "learningObjectives") {
         return { learningObjectiveOptions: [["列举 AI 误判案例", "归纳常见错误类型", "撰写校园广播稿", "形成 AI 使用守则"]] };
@@ -417,26 +444,7 @@ describe("quick positioning generation", () => {
       }
       return { drivingQuestions: ["我们如何设计校园广播稿介绍 AI 错误类型和正确用法？"] };
     });
-    callLLM
-      .mockResolvedValueOnce(JSON.stringify({ name: "校园 AI 使用指南", subject: "信息科技", grade: "七年级", hours: 2 }))
-      .mockResolvedValueOnce(JSON.stringify({
-        passed: false,
-        summary: "目标与驱动问题不一致且任务量偏大",
-        issues: [
-          "驱动问题要求介绍AI错误类型，但课程目标未完整覆盖错误类型与正确用法",
-          "2课时内同时完成多个大型成果，任务量超出范围",
-        ],
-      }))
-      .mockResolvedValueOnce(JSON.stringify({
-        summary: "已直接修订课程定位",
-        revised: {
-          summary: "学生在两课时内分析三个校园 AI 误判案例，归纳错误类型和核验方法，最终共同形成一份简明校园广播稿。",
-          learningObjectives: ["识别校园情境中的 AI 误判", "归纳两类常见错误及核验方法", "依据案例撰写简明校园广播稿"],
-          learnerProfile: { priorKnowledge: "了解常见 AI 应用", learningNeeds: "需要案例分类与写作支架", familiarContexts: "校园广播" },
-          drivingQuestion: "我们如何用一份校园广播稿帮助同学识别 AI 错误并正确核验？",
-        },
-      }))
-      .mockResolvedValueOnce(JSON.stringify({ passed: true, summary: "定位一致且课时可执行", issues: [] }));
+    callLLM.mockResolvedValueOnce(JSON.stringify({ name: "校园 AI 使用指南", subject: "信息科技", grade: "七年级", hours: 2 }));
 
     const { generatePositioning } = await import("./job-runner");
     const baseCourse = {
@@ -463,10 +471,10 @@ describe("quick positioning generation", () => {
       new AbortController().signal,
     );
 
-    expect(result.review.revisionCount).toBe(1);
-    expect(result.value.learningObjectives).toHaveLength(3);
-    expect(result.value.drivingQuestion).toContain("识别 AI 错误");
+    expect(result.review.revisionCount).toBe(0);
+    expect(result.value.learningObjectives).toHaveLength(4);
+    expect(result.value.drivingQuestion).toContain("设计校园广播稿");
     expect(result.value.hours).toBe(2);
-    expect(callLLM).toHaveBeenCalledTimes(4);
+    expect(callLLM).toHaveBeenCalledOnce();
   });
 });

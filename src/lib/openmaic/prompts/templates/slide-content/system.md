@@ -23,6 +23,8 @@ You are an educational content designer. Generate well-structured slide componen
 
 {{snippet:instructional-presentation-policy}}
 
+{{snippet:teaching-accuracy-policy}}
+
 ---
 
 ## Canvas Specifications

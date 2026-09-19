@@ -1,11 +1,8 @@
-export const MAX_MANAGED_COURSE_DESIGN_RECOVERIES = 2;
 export const MAX_TRANSIENT_INFRASTRUCTURE_RECOVERIES = 3;
 
 type RecoverableRequest = {
   courseId: string;
   teacherBrief: string;
-  managedRecoveryCount?: number;
-  managedRecoveryFeedback?: string;
   transientRecoveryCount?: number;
   [key: string]: unknown;
 };
@@ -78,14 +75,12 @@ export function createManagedRecoveryRequest<T extends RecoverableRequest>(
   request: T,
   error: unknown,
 ): T | null {
-  if (classifyCourseDesignFailure(error) !== "recoverable-generation") return null;
-  const recoveryCount = request.managedRecoveryCount ?? 0;
-  if (recoveryCount >= MAX_MANAGED_COURSE_DESIGN_RECOVERIES) return null;
-  return {
-    ...request,
-    managedRecoveryCount: recoveryCount + 1,
-    managedRecoveryFeedback: messageOf(error).slice(0, 2_000),
-  };
+  // Kept as a compatibility export for older callers and persisted tasks.
+  // Completed course artifacts are never fed back into an automatic whole-job
+  // rewrite. Invalid output is retried only inside its originating stage.
+  void request;
+  void error;
+  return null;
 }
 
 export function formatFatalCourseDesignError(error: unknown): string {
@@ -103,7 +98,7 @@ export function formatFatalCourseDesignError(error: unknown): string {
     const unwrappedDetail = detail?.includes(marker)
       ? detail.slice(detail.lastIndexOf(marker) + marker.length)
       : detail;
-    return `当前课程阶段经过多轮定向编辑后仍未通过质量检查，生成已停止且不会整项重跑；此前已经完成的内容仍会保留。具体原因：${(unwrappedDetail || "本阶段未通过发布校验").slice(0, 1_000)}`;
+    return `当前课程阶段未返回可保存的完整结构，生成已停止且不会整项重跑；此前已经完成的内容仍会保留。具体原因：${(unwrappedDetail || "本阶段输出结构不完整").slice(0, 1_000)}`;
   }
   return "快速生成遇到无法继续的系统错误，已安全停止；已完成的课程设计内容仍会保留，请稍后重试。";
 }

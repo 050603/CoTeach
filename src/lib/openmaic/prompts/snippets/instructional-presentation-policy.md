@@ -8,6 +8,10 @@ Every generated page, scene, chapter, activity, quiz, and system operation in th
 
 When a transition is genuinely useful, use same-lesson wording in the output language, such as `接下来`, `下一页`, `后面的环节`, `稍后在本节课中`, “next”, or “later in this lesson”. Do not end every page with a course-level teaser or promise. A page may simply conclude its current idea, bridge to the immediately following page, or give the learner the next operation. Mention a separate future lesson only when the input explicitly establishes that lesson and the current page is the terminal page of the current course; never infer a future lesson from page or chapter boundaries.
 
+### Case presentation
+
+Keep case-provenance notes backstage. Do not add labels or notices saying an ordinary teaching case is hypothetical, fictional, real, or not a real event, in either PPT or narration. Present the situation and the information needed to understand it directly. Do not copy authenticity disclaimers from planning notes. Preserve accurate attribution and evidence when they are part of the actual subject being taught; do not invent real-world events, quotations, or observations.
+
 ### PPT responsibility: stable visual reference
 
 The slide should preserve the information students need to scan, compare, remember, or revisit:
@@ -16,6 +20,8 @@ The slide should preserve the information students need to scan, compare, rememb
 - core concepts, concise but complete definitions, important conclusions, and key takeaways;
 - representative cases, exact evidence, data, symbols, notation, wording, or states that the explanation depends on;
 - summaries of difficult points and relationships that should remain visible after the explanation.
+
+For a discrimination, comparison, or changed-condition task, make the material to inspect and the changed condition visible before showing a complete classification or solution. Preserve exact case wording, step names, and technical terms supplied by the shared teaching design.
 
 "Concise and scannable" does **not** mean title-only, keyword-only, or directory-style. A compact complete statement, a paired example, a small table, a diagram, or a visible formula is preferable when isolated labels would make the narration impossible to follow. If the teacher's explanation depends on students noticing an exact difference or relationship, that evidence must be visible on the slide or be constructed on the whiteboard before it is discussed.
 
@@ -33,4 +39,4 @@ For every page, ask:
 2. What would be hard to understand by listening alone because students must see a process, change, difference, or relationship? Teach that through a paced whiteboard sequence.
 3. Can a student understand the intended example and conclusion from the visuals plus narration without guessing at omitted evidence? If not, strengthen the PPT or whiteboard plan before output.
 
-Before extending an explanation, choose a visual tool before adding more speech whenever the next idea depends on a relationship, transformation, comparison, or sequence. Never place two long speech segments back-to-back; alternate concise narration with a meaningful visual construction, guided observation, or learner operation.
+Before extending an explanation, choose a visual tool before adding more speech whenever the next idea depends on a relationship, transformation, comparison, or sequence. Choose segment boundaries and visual changes from the reasoning and cognitive load, not a fixed alternation quota. A continuous explanation is appropriate when the current visual already supports it.

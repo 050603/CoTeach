@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid';
+import { loadSnippet } from '@openmaic/lib/prompts';
 import { MAX_PDF_CONTENT_CHARS } from '@openmaic/lib/constants/generation';
 import type { CourseVisualTheme, SceneOutline } from '@openmaic/lib/types/generation';
 import type { AICallFn, GenerationResult } from './pipeline-types';
@@ -52,7 +53,7 @@ function cleanFacts(value: unknown): string[] {
     if (!fact || seen.has(key)) return [];
     seen.add(key);
     return [fact];
-  }).slice(0, 6);
+  });
 }
 
 /** Remove legacy planning labels from a semantic page brief.
@@ -77,14 +78,16 @@ export function buildOpenMaicWorkbenchLecturePlanPrompt(
 
 Plan one coherent lecture in the user's language. Follow the current Agent Workbench contract rather than the classic one-click outline cadence:
 - Return one explicit page call at a time in plan order. Each page has title, type, brief, and materialFacts, matching generate_scene's public inputs.
-- The first page opens the lecture with the question the subject answers, why it matters, and the route through the argument; it is not a definitions page or a table of contents. The final page closes on what the argument established, its boundary, and a meaningful next question rather than a generic bullet recap.
-- The body advances in teaching arcs. Across three to five related pages, carry one idea from claim to mechanism to consequence and real cases. A page carries one useful claim plus its mechanism or evidence and a concrete case, comparison, boundary, worked step, or consequence. Reuse a real case across related pages instead of restarting with a new example every page.
-- Give every substantive slide 4-6 materialFacts. They must be complete, source-grounded propositions rather than labels or layout headings. Do not invent citations, figures, or facts absent from the supplied material.
+- Choose the opening from learners’ prior knowledge and the entry point the subject needs. Close the learning thread with a useful conclusion or application; a further question is optional. Do not impose the same opening and closing sequence on every lesson.
+- The body advances coherently across as many related pages as the confirmed scope, available time, and understanding require. Give each page a clear contribution; adjacent pages may share a reasoning chain without each repeating a full explanation cycle. Reuse a relevant case when it advances understanding, without forcing a case onto every page.
+- Choose the number of materialFacts from the page’s learning purpose and complexity. Preserve the facts and conditions needed to understand the argument; do not pad to a minimum or omit essential evidence to meet a quota. They must be complete, source-grounded propositions rather than labels or layout headings. Do not invent citations, figures, or facts absent from the supplied material.
 - The brief is self-contained and explains the teaching intent, the relationship among the facts, and the most meaningful semantic visual form (for example a causal chain, comparison, timeline, evidence view, or worked example). Do not prescribe coordinates, font sizes, character quotas, element counts, or a card grid.
 - Plan no quiz pages. CoTeach adds one short-answer check only after each confirmed section, preserving its teaching contract.
 - Use interactive only when manipulating a mechanism materially improves understanding, and include widgetType plus widgetOutline. Otherwise use slide.
 
 Do not plan a palette, background, font, or page-level art direction. The current OpenMAIC slide generator owns its standard blue visual system. Keep briefs semantic so independent pages cannot invent competing themes. You may name the semantic visual form a claim needs, but never describe a second decorative style.
+
+${loadSnippet('adaptive-narration-policy')}
 
 Return JSON only with this shape:
 {"languageDirective":"...","courseTitle":"...","pages":[{"id":"page-1","type":"slide|interactive","title":"...","brief":"...","materialFacts":["..."],"widgetType":"optional","widgetOutline":{}}]}`;

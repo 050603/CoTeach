@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/client";
 
 export const PREPARED_OUTLINES_STEP = "prepared-outlines";
 export const TEACHING_BLUEPRINT_STEP = "teaching-blueprint";
+export const TEACHING_BLUEPRINT_ATTEMPT_STEP = "course-design-attempt:teaching-blueprint";
 export const KNOWLEDGE_STRUCTURE_STEP = "course-design:knowledge-structure";
 export const KNOWLEDGE_STRUCTURE_ATTEMPT_STEP = "course-design-attempt:knowledge-structure";
 export const AI_DURATION_STEP = "course-design:ai-duration";
@@ -12,6 +13,7 @@ export async function loadGenerationCheckpoints(jobId: string) {
   return {
     preparedOutlines: rows.find((row) => row.step === PREPARED_OUTLINES_STEP)?.state ?? [],
     teachingBlueprint: rows.find((row) => row.step === TEACHING_BLUEPRINT_STEP)?.state ?? null,
+    teachingBlueprintAttempt: rows.find((row) => row.step === TEACHING_BLUEPRINT_ATTEMPT_STEP)?.state ?? null,
     knowledgeStructure: rows.find((row) => row.step === KNOWLEDGE_STRUCTURE_STEP)?.state ?? null,
     knowledgeStructureAttempt: rows.find((row) => row.step === KNOWLEDGE_STRUCTURE_ATTEMPT_STEP)?.state ?? null,
     aiDuration: rows.find((row) => row.step === AI_DURATION_STEP)?.state ?? null,

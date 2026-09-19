@@ -47,6 +47,39 @@ function readyCourse(): Course {
 }
 
 describe("new-system course contract", () => {
+  it("keeps measured duration deviation advisory while requiring complete usable audio evidence", () => {
+    const course = readyCourse();
+    course.content.teachingBlueprint = { assessmentMode: "adaptive" } as Course["content"]["teachingBlueprint"];
+    course.content.teachingTimingAudit = {
+      schemaVersion: 1, totalBudgetSec: 1_620, plannedSubstantiveTeachingSec: 1_100,
+      plannedAssessmentSec: 320, plannedLearnerActivitySec: 200,
+      substantiveTeachingDurationSec: 1_400, assessmentAudioDurationSec: 0,
+      narrationDurationSource: "actual-audio", measuredSegmentCount: 2, narrationSegmentCount: 2,
+      complete: true, substantiveTeachingRatio: 0.8642, teachingRatioValid: false,
+      generatedAt: "2026-09-20T00:00:00Z",
+    };
+    expect(isNewSystemCourseReady(course)).toBe(true);
+    expect(course.content.teachingTimingAudit.teachingRatioValid).toBe(false);
+
+    const audit = course.content.teachingTimingAudit;
+    for (const patch of [
+      { complete: false }, { measuredSegmentCount: 1 }, { narrationSegmentCount: 0, measuredSegmentCount: 0 },
+      { substantiveTeachingDurationSec: 0 }, { substantiveTeachingDurationSec: Number.NaN },
+    ]) {
+      const incomplete = { ...course, content: { ...course.content, teachingTimingAudit: { ...audit, ...patch } } };
+      expect(getNewSystemCourseReadiness(incomplete).find((check) => check.id === "timing")?.ok).toBe(false);
+    }
+    delete course.content.teachingTimingAudit;
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "timing")?.ok).toBe(false);
+  });
+
+  it("preserves the confirmed page budget even when narration duration is only advisory", () => {
+    const course = readyCourse();
+    course.content.knowledgeLectureSections = [{ id: "section", title: "节能", order: 0, knowledgePointIds: ["kp-1"], sceneOutlineIds: ["scene-ai"], quizOutlineId: "quiz", estimatedMinutes: 27 }];
+    course.content._openmaicSceneOutlines![0]!.targetDurationSec = 120;
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "timing")?.ok).toBe(false);
+  });
+
   it("recognizes teacher confirmation without an optional quality report", () => {
     const course = readyCourse();
     course.content.qualityReviewRequired = true;

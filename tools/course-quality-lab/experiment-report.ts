@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { LabModuleMetrics, LabTokenUsageSource } from "./types";
+import type { LAB_TECHNICAL_POLICY } from "./technical-policy";
 
 export type ExperimentPipeline = "v4" | "v5";
 export type ExperimentVariant = "baseline" | "enhanced";
@@ -36,6 +37,9 @@ export interface ExperimentState {
   dryRun: boolean;
   freeze: {
     fixtureSha256: string;
+    /** Legacy content-review policy retained when reading archived experiments. */
+    qualityPolicy?: Record<string, unknown>;
+    generationPolicy?: typeof LAB_TECHNICAL_POLICY;
     code: { commit: string; dirty: boolean; worktreeSha256: string };
     model: { modelString: string; reasoning: string };
     tts: { provider: string; model: string; voice: string; language: string; speed: number };
@@ -68,6 +72,7 @@ export interface ExperimentArmMetrics {
 interface CheckpointResult {
   result?: {
     statuses?: Record<string, { state?: string }>;
+    technicalValidation?: { state?: string };
     durationSec?: number;
     checks?: string[];
     metrics?: Record<string, unknown>;
@@ -246,8 +251,7 @@ export async function readExperimentArmMetrics(
       ...result.metrics,
       durationSec: result.durationSec,
       qualityPassed: Object.values(result.statuses ?? {}).every((item) => item.state === "complete")
-        && finite(result.durationSec) >= 162
-        && finite(result.durationSec) <= 198,
+        && (result.technicalValidation?.state === undefined || result.technicalValidation.state === "complete"),
     }, run);
     if (normalized.endToEndMs <= 0) {
       normalized.endToEndMs = experimentWallClockMs(run);
@@ -265,15 +269,16 @@ export async function readExperimentArmMetrics(
   const durationSec = finite(result?.durationSec) || undefined;
   const statusesComplete = Object.values(result?.statuses ?? {}).length > 0
     && Object.values(result?.statuses ?? {}).every((item) => item.state === "complete");
-  const durationPassed = durationSec !== undefined && durationSec >= 162 && durationSec <= 198;
+  const technicalValidationPassed = result?.technicalValidation?.state === undefined
+    || result.technicalValidation.state === "complete";
   const qualityReasons = [
     ...(!statusesComplete ? ["PPT、文稿或音频产物不完整"] : []),
-    ...(!durationPassed ? ["真实音频时长不在 180 秒 ±10% 内"] : []),
+    ...(!technicalValidationPassed ? ["技术校验未完成"] : []),
   ];
   return {
     sectionId: run.sectionId,
     pipeline: run.pipeline,
-    qualityPassed: statusesComplete && durationPassed,
+    qualityPassed: statusesComplete && technicalValidationPassed,
     qualityReasons,
     ...tokens,
     endToEndMs: experimentWallClockMs(run)

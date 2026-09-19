@@ -147,9 +147,9 @@ type UploadedKnowledgeReference = {
 const CLASSROOM_PAGE_STAGE_LABELS: Record<string, string> = {
   restoring: "恢复断点",
   content: "生成正文",
-  "reviewed-content": "版式与知识检查",
+  "reviewed-content": "恢复旧版页面断点",
   actions: "生成讲稿与动作",
-  narration: "课堂口语检查",
+  narration: "编写课堂讲稿",
   assembling: "组装保存",
 };
 
@@ -158,7 +158,7 @@ const QUICK_TOOLBAR_CONTROL_CLASS =
 
 function formatDuration(seconds: number | null | undefined): string {
   if (seconds == null) return "剩余时间估算中";
-  if (seconds <= 0) return "正在完成最后检查";
+  if (seconds <= 0) return "正在完成保存";
   return `预计还需约 ${Math.max(1, Math.ceil(seconds / 60))} 分钟`;
 }
 
@@ -971,7 +971,7 @@ export function FastCourseGenerator({
                         : "text-stone-500 hover:bg-white hover:text-amber-700",
                     )}
                     onClick={() => setGenerationScope((current) => current === "test-lesson" ? "full-course" : "test-lesson")}
-                    title="沿用正式课程的全部输入、设计、页面生成和审校逻辑，只生成第一个完整知识小节；测试样本不能直接发布"
+                    title="沿用正式课程的全部输入、设计和页面生成逻辑，只生成第一个完整知识小节；测试样本不能直接发布"
                     type="button"
                   >
                     <FlaskConical className="size-3.5" />

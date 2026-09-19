@@ -31,7 +31,7 @@ export interface LabRepairEvent {
   scope: LabRepairScope;
   reason: string;
   targetIds: string[];
-  outcome: "resolved" | "no-progress" | "regressed" | "escalated" | "failed";
+  outcome: "applied" | "resolved" | "no-progress" | "regressed" | "escalated" | "failed";
   attempt: number;
 }
 
@@ -104,6 +104,15 @@ export interface LabDownloadLinks {
   pptx?: string;
   script?: string;
   audioZip?: string;
+  /** Production-player-compatible classroom assembled from the lab artifacts. */
+  classroom?: string;
+}
+
+export interface LabTeachingEvidence {
+  requirementId: string;
+  segmentId: string;
+  /** Exact excerpt from the narration segment that demonstrates the explanation. */
+  evidence: string;
 }
 
 export interface LabSlide {
@@ -114,6 +123,8 @@ export interface LabSlide {
   imageUrl?: string;
   narrationSegmentIds?: string[];
   checkMessages?: string[];
+  /** Evidence-bound coverage for the page's core narration requirements. */
+  teachingEvidence?: LabTeachingEvidence[];
 }
 
 export interface LabScriptSegment {
@@ -147,6 +158,10 @@ export interface LabVariantMetrics {
   /** Actual provider requests, including transport retries inside one logical call. */
   transportAttempts: number;
   transportRetries: number;
+  /** Regenerations caused by invalid JSON, DSL, fields, or references. */
+  invalidOutputRetries?: number;
+  /** Model stages that exhausted their technical request budget. */
+  technicalFailureStages?: number;
   transportAttemptsRecorded: boolean;
   qualityRepairCalls: number;
   /** Pages accepted from their first model drafts without a quality repair. */
@@ -191,9 +206,26 @@ export interface LabVariantResult {
   script: LabScriptSegment[];
   quiz: LabQuizQuestion[];
   durationSec?: number;
+  /** Duration selected by the teaching design before narration generation. */
+  targetDurationSec?: number;
   /** Runtime-derived cost and stability indicators. The lab server can backfill archived results. */
   metrics?: LabVariantMetrics;
   checks?: string[];
+  /** Technical generation state for new runs. Complete is required for delivery. */
+  technicalValidation?: {
+    policyVersion: string;
+    state: "pending" | "running" | "complete" | "failed";
+    stage?: string;
+    message?: string;
+  };
+  /** Legacy content-review outcome retained for archived results only. */
+  quality?: {
+    policyVersion: string;
+    status: "passed" | "completed-with-notes" | "check-unavailable";
+    issueCount: number;
+    repairAttempts: 0 | 1;
+    message?: string;
+  };
   /** Teacher-only reminders. A flagged claim may remain in student artifacts until the teacher reviews it. */
   teacherReviewNotes?: LabTeacherReviewNote[];
   downloads?: LabDownloadLinks;
@@ -220,6 +252,8 @@ export interface TeachingDesign {
   workedExample?: string[];
   conditionsAndMisconceptions?: string[];
   assessmentFocus?: string[];
+  /** Whole-section duration selected during teaching design. V4 archives omit it. */
+  courseTargetDurationSec?: number;
   pagePlan?: Array<{
     page: number;
     purpose: string;
@@ -249,6 +283,15 @@ export interface TeachingDesign {
       function: "opening" | "knowledge" | "example" | "transition" | "closing";
       instruction: string;
       visibleRequirementIndexes: number[];
+      /** One-based learning-objective indexes taught by this core step. */
+      objectiveIndexes?: number[];
+      /** Required first-pass explanation structure for knowledge/example steps. */
+      explanationArc?: {
+        learnerQuestion: string;
+        reasoningSteps: string[];
+        takeaway: string;
+      };
+      /** A proportional writing guide; only the whole-section budget is a pass/fail gate. */
       targetUnits: number;
     }>;
     /** Exact source excerpts selected for this page. */

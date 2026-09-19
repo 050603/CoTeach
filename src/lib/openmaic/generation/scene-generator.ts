@@ -82,6 +82,14 @@ import { createLogger } from '@openmaic/lib/logger';
 import { throwIfAborted } from '@openmaic/lib/generation/generation-retry';
 import { buildNarrationContext, enforceNarrationContinuity } from './narration-continuity';
 import { formatTeachingConstraintsForPrompt } from '@openmaic/lib/pedagogy/teaching-constraints';
+
+/** Keep class-level readiness available across the upstream adapter boundary.
+ * This is authoring context, not a teacher's personal profile or student dialogue. */
+function withClassroomReadiness(aiCall: AICallFn, constraints?: UserRequirements['teachingConstraints']): AICallFn {
+  const context = formatTeachingConstraintsForPrompt(constraints);
+  if (!context) return aiCall;
+  return (system, user, images) => aiCall(system, `${user}\n\n${context}\nUse this class-level context to choose prerequisite explanations, familiar examples, vocabulary and scaffolding. Do not recite this profile, label students by their difficulties, invent individual histories or assessment results, or treat absent information as demonstrated mastery.`, images);
+}
 import { normalizeQuizQuestions, selectQuizFormats } from '@openmaic/lib/quiz/quality';
 import { normalizeWhiteboardActionLifecycle } from './whiteboard-action-lifecycle';
 import { normalizeWhiteboardActionLayout } from './whiteboard-layout';
@@ -465,7 +473,7 @@ export async function generateSceneContent(
   ].filter(Boolean).join('\n\n');
   // Unified path for interactive scenes (both normal and ultra mode)
   if (outline.type === 'interactive') {
-    return generateOpenMaicBaselineContent(outline, aiCall, {
+    return generateOpenMaicBaselineContent(outline, withClassroomReadiness(aiCall, userRequirements?.teachingConstraints), {
       assignedImages,
       imageMapping,
       visionEnabled,
@@ -478,7 +486,7 @@ export async function generateSceneContent(
 
   switch (outline.type) {
     case 'slide':
-      return generateOpenMaicBaselineContent(outline, aiCall, {
+      return generateOpenMaicBaselineContent(outline, withClassroomReadiness(aiCall, userRequirements?.teachingConstraints), {
         assignedImages,
         imageMapping,
         visionEnabled,
@@ -1492,7 +1500,7 @@ export async function generateSceneActions(
   }
 
   if (outline.type === 'slide' && 'elements' in content) {
-    return generateOpenMaicBaselineSlideActions(outline, content, aiCall, {
+    return generateOpenMaicBaselineSlideActions(outline, content, withClassroomReadiness(aiCall, options.teachingConstraints), {
       ctx,
       agents,
       userProfile,

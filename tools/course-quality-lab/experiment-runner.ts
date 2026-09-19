@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { LAB_SECTION_FIXTURES } from "./fixtures";
+import { LAB_TECHNICAL_POLICY } from "./technical-policy";
 import {
   type ExperimentPipeline,
   type ExperimentRunRecord,
@@ -167,6 +168,7 @@ export function buildExperimentState(
     dryRun: options.dryRun,
     freeze: {
       fixtureSha256: sha256(JSON.stringify(LAB_SECTION_FIXTURES)),
+      generationPolicy: LAB_TECHNICAL_POLICY,
       code,
       model: { modelString: options.modelString, reasoning: options.reasoning },
       tts: options.tts,
@@ -214,6 +216,9 @@ function assertFreeze(expected: ExperimentState, code: ExperimentState["freeze"]
   }
   if (expected.freeze.fixtureSha256 !== sha256(JSON.stringify(LAB_SECTION_FIXTURES))) {
     throw new Error("实验期间课程 fixture 发生变化，已停止后续 arm");
+  }
+  if (JSON.stringify(expected.freeze.generationPolicy) !== JSON.stringify(LAB_TECHNICAL_POLICY)) {
+    throw new Error("实验期间技术生成策略发生变化，已停止后续 arm");
   }
 }
 

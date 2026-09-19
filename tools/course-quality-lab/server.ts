@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { spawn } from "node:child_process";
 import { lstat, readFile, realpath, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -71,6 +72,12 @@ export interface CourseQualityLabServerOptions {
   rootDir?: string;
   buildDir?: string;
   logger?: Log;
+  startGenerationRetry?: (input: {
+    rootDir: string;
+    sectionId: string;
+    pair: LabPair;
+    variant: LabVariantKey;
+  }) => Promise<{ pid?: number }>;
 }
 
 type PublicError = Error & { status?: number; code?: string };
@@ -351,6 +358,7 @@ type ModelCallRecord = {
   outputChars?: unknown;
   tokenUsage?: unknown;
   tokenUsageSource?: unknown;
+  retryReason?: unknown;
   attempts?: Array<{
     status?: unknown;
     startedAt?: unknown;
@@ -623,6 +631,10 @@ function summarizeMetrics(
   const firstPassPages = optionalFiniteNonNegative(telemetry?.firstPassPages);
   const evaluatedPages = optionalFiniteNonNegative(telemetry?.evaluatedPages);
   const deterministicAdjustments = optionalFiniteNonNegative(telemetry?.deterministicAdjustments);
+  const invalidOutputRetries = modelCalls.filter((call) => call.retryReason === "invalid-output").length;
+  const technicalFailureStages = new Set(modelCalls
+    .filter((call) => call.status === "failed")
+    .flatMap((call) => typeof call.stageId === "string" ? [call.stageId] : [])).size;
   return {
     tokenUsage,
     tokenUsageSource,
@@ -635,6 +647,8 @@ function summarizeMetrics(
     failedModelCalls: modelCalls.filter((call) => call.status === "failed").length,
     transportAttempts: requestAttempts.length,
     transportRetries,
+    invalidOutputRetries,
+    technicalFailureStages,
     transportAttemptsRecorded: modelCalls.some((call) => Array.isArray(call.attempts)),
     qualityRepairCalls: finiteNonNegative(telemetry?.qualityRepairCalls) || repairEvents?.length || 0,
     ...(firstPassPages !== undefined
@@ -918,10 +932,58 @@ function storageErrorStatus(error: LabStorageError): number {
   return error.code === "NOT_FOUND" ? 404 : 500;
 }
 
+async function defaultStartGenerationRetry(input: {
+  rootDir: string;
+  sectionId: string;
+  pair: LabPair;
+  variant: LabVariantKey;
+}): Promise<{ pid?: number }> {
+  const experimentId = input.pair.experimentId;
+  if (!experimentId || !PAIR_ID.test(experimentId) || !PAIR_ID.test(input.sectionId)) {
+    throw publicError(409, "RETRY_CONFIG_MISSING", "这条记录缺少可恢复的实验标识。");
+  }
+  const configPath = path.join(
+    input.rootDir,
+    "runs",
+    experimentId,
+    input.sectionId,
+    String(input.pair.batch),
+    input.variant,
+    "resume-config.json",
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(configPath, "utf8")) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw publicError(409, "RETRY_CONFIG_MISSING", "这条历史记录没有保存自动恢复配置。");
+    }
+    throw error;
+  }
+  if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.args)
+    || parsed.args.some((value) => typeof value !== "string") || parsed.args.length > 80) {
+    throw publicError(409, "RETRY_CONFIG_INVALID", "自动恢复配置无效。");
+  }
+  const child = spawn("pnpm", ["quality-lab:generate", "--", ...parsed.args as string[], "--retry-technical"], {
+    cwd: process.cwd(),
+    detached: true,
+    stdio: "ignore",
+    env: process.env,
+  });
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", resolve);
+    child.once("error", reject);
+  });
+  child.unref();
+  return { pid: child.pid };
+}
+
 export function createCourseQualityLabServer(options: CourseQualityLabServerOptions = {}): Server {
   const storage = new CourseQualityLabStorage(options.rootDir ?? DEFAULT_LAB_ROOT);
   const buildDir = path.resolve(options.buildDir ?? DEFAULT_BUILD_DIR);
   const logger = options.logger ?? console;
+  const startGenerationRetry = options.startGenerationRetry ?? defaultStartGenerationRetry;
+  const activeRetries = new Set<string>();
 
   return createServer(async (request, response) => {
     try {
@@ -942,6 +1004,32 @@ export function createCourseQualityLabServer(options: CourseQualityLabServerOpti
       }
       if (pathname === "/api/reviews" && method === "GET") {
         sendJson(response, 200, await storage.readReviews());
+        return;
+      }
+      const retryMatch = routeMatch(pathname, /^\/api\/generation\/retry\/([^/]+)\/(baseline|enhanced)$/);
+      if (retryMatch && method === "POST") {
+        const pairId = decodeRoutePart(retryMatch[1]);
+        const variant = retryMatch[2] as LabVariantKey;
+        if (!PAIR_ID.test(pairId)) throw publicError(400, "INVALID_PAIR_ID", "pairId 格式无效。");
+        const manifest = await storage.readManifest();
+        const section = manifest.sections.find((item) => item.pairs.some((pair) => pair.id === pairId));
+        const pair = section?.pairs.find((item) => item.id === pairId);
+        if (!section || !pair) throw publicError(404, "PAIR_NOT_FOUND", "清单中不存在这组结果。");
+        const result = pair.variants[variant];
+        const hasFailure = result.technicalValidation?.state === "failed"
+          || Object.values(result.statuses).some((status) => status.state === "failed" || status.state === "missing");
+        if (!hasFailure) throw publicError(409, "RETRY_NOT_NEEDED", "当前方案没有可重试的技术失败阶段。");
+        const retryKey = `${pairId}:${variant}`;
+        if (activeRetries.has(retryKey)) throw publicError(409, "RETRY_ALREADY_RUNNING", "该方案已在恢复中。");
+        activeRetries.add(retryKey);
+        try {
+          const started = await startGenerationRetry({ rootDir: storage.rootDir, sectionId: section.id, pair, variant });
+          setTimeout(() => activeRetries.delete(retryKey), 5_000).unref();
+          sendJson(response, 202, { status: "started", ...started });
+        } catch (error) {
+          activeRetries.delete(retryKey);
+          throw error;
+        }
         return;
       }
       const reviewMatch = routeMatch(pathname, /^\/api\/reviews\/([^/]+)$/);

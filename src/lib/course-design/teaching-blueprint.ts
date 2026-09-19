@@ -3,6 +3,10 @@ import type { WidgetType } from "@/lib/openmaic/types/widgets";
 import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
 import { parseJsonResponse } from "@/lib/openmaic/generation/json-repair";
 import { fingerprintGenerationValue } from "@/lib/course-generation/page-checkpoints";
+import { formatTeachingConstraintsForChinesePrompt, type TeachingConstraints } from "@/lib/openmaic/pedagogy/teaching-constraints";
+import { loadSnippet } from "@/lib/openmaic/prompts";
+import type { PageLearningTask, SharedTeachingContext } from "@/lib/course-quality-review/types";
+import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic/generation/generated-output-retry";
 import type {
   KnowledgeGraph,
   KnowledgePoint,
@@ -14,6 +18,7 @@ import type {
 } from "@/lib/session/types";
 
 export const TEACHING_BLUEPRINT_SCHEMA_VERSION = 1 as const;
+export const TEACHING_BLUEPRINT_POLICY_VERSION = "teacher-checkpoint-blueprint-v5";
 export const TEACHING_NARRATION_RATIO = 0.68;
 export const MAX_ASSESSMENT_RATIO = 0.2;
 const MIN_TEACHING_PAGE_SEC = 45;
@@ -41,6 +46,7 @@ export type TeachingBlueprintInput = {
   subject: string;
   grade: string;
   learningObjectives: readonly string[];
+  teachingConstraints?: TeachingConstraints;
   projectContext: string;
   knowledgePoints: readonly KnowledgePoint[];
   knowledgeGraph?: KnowledgeGraph;
@@ -49,6 +55,20 @@ export type TeachingBlueprintInput = {
   generationMode: CourseGenerationMode;
   teacherBrief?: string;
   sourceContext?: string;
+  /** Confirmed upstream grouping and capacity. The model fills this plan; it must not regroup the course. */
+  sectionPlans?: readonly TeachingBlueprintSectionPlan[];
+};
+
+export type TeachingBlueprintSectionPlan = {
+  title: string;
+  knowledgePointIds: readonly string[];
+  /** A dynamic capacity derived from this section's approved teaching time. */
+  maxPages: number;
+};
+
+export type TeachingBlueprintValidation = {
+  issues: readonly string[];
+  responseCharacters: number;
 };
 
 function clean(value: unknown, maxLength = 4_000): string {
@@ -69,6 +89,10 @@ function records(value: unknown): Array<Record<string, unknown>> {
   return Array.isArray(value)
     ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
     : [];
+}
+
+function comparableSourceText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function stableIds(value: unknown, allowed: ReadonlySet<string>): string[] {
@@ -133,6 +157,7 @@ function sectionQuestionCount(section: TeachingBlueprintSection, mode: Assessmen
 export function teachingBlueprintInputFingerprint(input: TeachingBlueprintInput): string {
   return fingerprintGenerationValue({
     schemaVersion: TEACHING_BLUEPRINT_SCHEMA_VERSION,
+    authoringPolicy: TEACHING_BLUEPRINT_POLICY_VERSION,
     budgetPolicy: {
       teachingRatio: TEACHING_NARRATION_RATIO,
       assessmentMaxRatio: MAX_ASSESSMENT_RATIO,
@@ -144,6 +169,7 @@ export function teachingBlueprintInputFingerprint(input: TeachingBlueprintInput)
     subject: input.subject,
     grade: input.grade,
     learningObjectives: input.learningObjectives,
+    teachingConstraints: input.teachingConstraints,
     projectContext: input.projectContext,
     knowledgePoints: input.knowledgePoints,
     knowledgeGraph: input.knowledgeGraph,
@@ -152,12 +178,12 @@ export function teachingBlueprintInputFingerprint(input: TeachingBlueprintInput)
     generationMode: input.generationMode,
     teacherBrief: input.teacherBrief,
     sourceContext: input.sourceContext,
+    sectionPlans: input.sectionPlans,
   });
 }
 
 export function buildTeachingBlueprintPrompt(
   input: TeachingBlueprintInput,
-  repair?: { issues: readonly string[]; previous: unknown },
 ): { system: string; user: string } {
   const graphEdges = (input.knowledgeGraph?.edges ?? []).map((edge) => ({
     source: edge.source,
@@ -167,29 +193,54 @@ export function buildTeachingBlueprintPrompt(
   }));
   const system = [
     "你是把粗粒度知识节点编译为可执行课堂的教学设计师。只返回合法 JSON，不使用 Markdown。",
-    "必须先展开可讲授的机制、推理、完整例子、适用条件与常见误区，再决定小节和页面；不能把定义换句话说后当作深入讲解。",
-    "严格保留给定 knowledgePointId。每个 unit 和 page 都必须显式列出真实对应的 ID，禁止按位置猜测或为覆盖率随意挂载。",
+    "这是供下游小节设计继续展开的紧凑教学蓝图，不是逐字讲稿。用简洁但完整的设计说明写清机制、推理、案例动作、适用条件与误区，避免长篇复述资料。",
+    "严格保留给定 knowledgePointId。每个 unit 必须列出真实对应的 knowledgePointId，每个 page 必须列出真实对应的 unitId；禁止按位置猜测或为覆盖率随意挂载。",
+    "必须沿用已经确认的小节边界与顺序。每个知识点只归属一个 unit；页面可以组合多个 unit，不得为了换例子或换说法重复创建同一知识点的 unit。",
     "可用适龄的通行学科知识补足解释与例子，但不得扩大课程目标、捏造资料出处或把内部证据状态写给学生。",
     "sourceKind=course-source 时 evidenceQuotes 必须逐字来自给定资料；通行知识写 general-knowledge 且 evidenceQuotes=[]。",
-    "页面之间应形成问题—机制—案例—边界或应用的连续论证。一个页面只承担一个清晰教学作用，但不能制造只有标题和定义的稀疏页面。",
+    "每个小节先说明学习这些内容将帮助学生解决什么实际问题，再安排页面。页面之间形成连续的认识进展，每页只承担一个清晰贡献。",
+    "同一材料再次出现时，后页必须增加新的推理、改变一个明确条件或要求独立应用；不得换一种说法重复同一分类、理由和结论。",
+    "assessmentFocus 只写学生应独立完成的判断、解释或操作及其理由要求，不得复写讲授案例里已经公布的题目和答案。考查迁移或应用时，必须要求使用一个未在讲授中直接解答过的简短新片段，并保持在已讲知识边界内。判断理由必须回到表述的主要功能、证据关系或适用条件，不得要求学生靠圈出某几个词或复述表面线索证明答案。",
+    loadSnippet('adaptive-narration-policy'),
+    loadSnippet('teaching-accuracy-policy'),
     input.generationMode === "deep-interaction"
       ? "仅在操控变量、执行步骤或观察反馈能显著改善理解时安排 interactive，并提供完整 widgetType/widgetOutline；其余使用 slide。"
       : "默认使用 slide；只有操作本身具有明确学习价值时才使用 interactive，不设互动页配额。",
   ].join("\n");
-  const repairBlock = repair
-    ? `\n\n上一次结果未通过校验。只修复列出的问题，不改变知识边界：\n${repair.issues.map((issue, index) => `${index + 1}. ${issue}`).join("\n")}\n\n上一次 JSON：\n${JSON.stringify(repair.previous)}`
-    : "";
+  const sectionPlans = input.sectionPlans?.length ? input.sectionPlans : undefined;
+  const plannedPointIds = new Set(sectionPlans?.flatMap((section) => [...section.knowledgePointIds]) ?? []);
+  const pointsById = new Map(input.knowledgePoints.map((point) => [point.id, point]));
+  const plannedSections = sectionPlans?.map((section) => ({
+    title: section.title,
+    maxPages: section.maxPages,
+    knowledgePoints: section.knowledgePointIds.flatMap((id) => {
+      const point = pointsById.get(id);
+      return point ? [{
+        id: point.id,
+        name: point.name,
+        description: point.description,
+        masteryBoundary: point.masteryBoundary,
+        level: point.level,
+      }] : [];
+    }),
+  }));
+  const assessmentDurationSec = Math.floor(Math.max(1, Math.round(input.totalDurationSec)) * MAX_ASSESSMENT_RATIO);
+  const teachingDurationSec = Math.round(Math.max(1, Math.round(input.totalDurationSec)) * TEACHING_NARRATION_RATIO);
+  const globalMaxPages = Math.floor(teachingDurationSec / MIN_TEACHING_PAGE_SEC);
   const user = `课程：${input.courseTitle}
 学科与学段：${input.subject}；${input.grade}
 学习目标：${input.learningObjectives.join("；")}
+${formatTeachingConstraintsForChinesePrompt(input.teachingConstraints)}
 项目情境：${input.projectContext || "无"}
 教师补充：${input.teacherBrief?.trim() || "无"}
 知识学习阶段总时长：${Math.round(input.totalDurationSec / 60)} 分钟
 讲授要求：自然语速的实质解释与例子占总时长 65%–70%，本次目标 68%；全部小测与反馈合计不超过 20%。
 测验模式：${input.assessmentMode === "constructed-response" ? "深度作答，节末以一题简答为默认" : "灵活题型，以选择、判断和拖拽匹配为主；每个教学单元中的每个原始知识点都必须形成一个独立检测目标，仅在必要时安排极少量一句话短答"}
 
+已确认的蓝图容量：讲授 ${teachingDurationSec} 秒；小测与反馈 ${assessmentDurationSec} 秒；讲授页面总数不得超过 ${globalMaxPages}。${plannedSections ? `必须严格按以下 ${plannedSections.length} 个小节及其顺序生成，不得合并、拆分或移动知识点；maxPages 是各小节动态上限：\n${JSON.stringify(plannedSections)}` : "尚未提供固定小节边界，请按知识组组织紧凑小节。"}
+
 必须覆盖的知识点：
-${JSON.stringify(input.knowledgePoints.map((point) => ({
+${plannedSections ? "已完整列在上述已确认小节中；不得增加其他知识点。" : JSON.stringify(input.knowledgePoints.filter((point) => !plannedPointIds.size || plannedPointIds.has(point.id)).map((point) => ({
     id: point.id,
     name: point.name,
     description: point.description,
@@ -206,14 +257,14 @@ ${JSON.stringify(graphEdges)}
 ${input.sourceContext?.trim() || "没有额外资料；可使用适龄的通行学科知识细化，但不能编造来源。"}
 
 返回结构：
-{"sections":[{"title":"小节标题","learningObjective":"学生完成后能做什么","knowledgePointIds":["原始ID"],"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID"],"learningOutcome":"可观察结果","explanation":"完整解释","mechanism":"因果、过程或推理链","workedExample":"含条件、步骤及每步理由的完整例子","conditions":["适用条件或边界"],"misconceptions":["常见误区及辨析"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["资料逐字原句"]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题","type":"slide|interactive","unitIds":["本节 unit id"],"knowledgePointIds":["原始ID"],"description":"页面教学意图与内容关系","keyPoints":["4-6个完整、互补的信息单元"],"teachingObjective":"本页达成目标","widgetType":"仅互动页需要","widgetOutline":{}}],"assessmentFocus":["只考本节已讲内容的可观察目标"]}]}
+{"sections":[{"title":"小节标题","learningObjective":"学生完成后能做什么","sharedContext":{"learningPurpose":"学习本节内容能解决什么实际问题","caseId":"复用案例的稳定ID，无案例时为空","caseFacts":["支持判断的动作、观察或结果"],"fixedWording":["跨页保持一致的案例关键句"],"stableTerms":["固定步骤名称或核心术语"],"conceptBoundaries":["必要边界或不能推出的结论"]},"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID；每个ID在全部units中只出现一次"],"learningOutcome":"可观察结果","explanation":"支持后续展开的简洁解释","mechanism":"必要的因果、过程或推理链","workedExample":"案例条件、关键动作、观察结果与理由","conditions":["适用条件或边界"],"misconceptions":["常见误区及辨析"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["能逐字核对时才填写资料原句，否则为空"]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题","type":"slide|interactive","unitIds":["本节 unit id"],"description":"页面教学意图与内容关系","keyPoints":["按教学需要给出非空、互补的信息单元"],"teachingObjective":"本页达成目标","learningTask":{"learnerAction":"学生要观察、判断或完成什么","newContribution":"相比前页新增的认识","reasoningFocus":"理由应涉及什么","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"widgetType":"仅互动页需要","widgetOutline":{}}],"assessmentFocus":["只考本节已讲内容的可观察目标"]}]}
 
-约束：每个知识点至少进入一个 unit 和一个 page；每页必须引用本节 unit；每个 unit 必须被页面使用；required-prerequisite 的 source 必须早于 target；页数必须能让每页获得至少 ${MIN_TEACHING_PAGE_SEC} 秒实质讲解；小节测验至少获得 ${MIN_SECTION_ASSESSMENT_SEC} 秒，灵活题型还要为每个“unit—knowledgePointId”检测目标至少保留 ${MIN_ADAPTIVE_QUESTION_SEC} 秒。${repairBlock}`;
+约束：每个知识点必须且只能进入一个 unit，并至少进入一个 page；页面的知识点映射由系统根据 unitIds 计算，不要输出 page.knowledgePointIds 或 section.knowledgePointIds；每页必须引用本节 unit 且 keyPoints 至少包含一个实质信息单元；每个 unit 必须被页面使用；learningTask 仅在学生确实需要观察、判断或操作时提供，不为每页强设任务；variant 必须写清 changedConditions 与 preservedConditions；required-prerequisite 的 source 必须早于 target；不得超过已确认的小节与总页数上限；小节测验至少获得 ${MIN_SECTION_ASSESSMENT_SEC} 秒，灵活题型还要为每个知识点检测目标至少保留 ${MIN_ADAPTIVE_QUESTION_SEC} 秒。`;
   return { system, user };
 }
 
 function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): { blueprint?: TeachingBlueprint; issues: string[] } {
-  const issues: string[] = [];
+  const structuralIssues: string[] = [];
   const envelope = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
@@ -221,25 +272,42 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
   if (!rawSections.length) return { issues: ["没有返回 sections"] };
   const allowedIds = new Set(input.knowledgePoints.map((point) => point.id));
   const sourceContext = input.sourceContext ?? "";
+  const comparableSource = comparableSourceText(sourceContext);
   const sections: TeachingBlueprintSection[] = rawSections.map((rawSection: RawSection, sectionIndex) => {
+    const sectionPlan = input.sectionPlans?.[sectionIndex];
+    const sectionAllowedIds = sectionPlan
+      ? new Set(sectionPlan.knowledgePointIds.filter((id) => allowedIds.has(id)))
+      : allowedIds;
+    const rawShared = rawSection.sharedContext && typeof rawSection.sharedContext === "object" && !Array.isArray(rawSection.sharedContext)
+      ? rawSection.sharedContext as Record<string, unknown>
+      : {};
+    const sharedContext: SharedTeachingContext = {
+      learningPurpose: clean(rawShared.learningPurpose, 1_000)
+        || clean(rawSection.learningObjective, 1_000)
+        || sectionPlan?.title
+        || `理解并应用第 ${sectionIndex + 1} 节内容`,
+      caseId: clean(rawShared.caseId, 160),
+      caseFacts: strings(rawShared.caseFacts, 20, 800),
+      fixedWording: strings(rawShared.fixedWording, 20, 800),
+      stableTerms: strings(rawShared.stableTerms, 30, 240),
+      conceptBoundaries: strings(rawShared.conceptBoundaries, 20, 800),
+    };
     const rawUnits = records(rawSection.units);
     const rawUnitIdMap = new Map<string, string>();
     const units = rawUnits.map((rawUnit: RawUnit, unitIndex): TeachingBlueprintUnit => {
       const id = `teaching-section-${sectionIndex + 1}-unit-${unitIndex + 1}`;
       const rawId = clean(rawUnit.id, 160);
       if (rawId) rawUnitIdMap.set(rawId, id);
-      const sourceKind = rawUnit.sourceKind === "course-source" ? "course-source" : "general-knowledge";
-      const evidenceQuotes = strings(rawUnit.evidenceQuotes, 8, 360);
-      for (const quote of evidenceQuotes) {
-        if (!sourceContext.includes(quote)) issues.push(`第 ${sectionIndex + 1} 节单元“${clean(rawUnit.title)}”引用了资料中不存在的原句`);
-      }
-      if (sourceKind === "course-source" && evidenceQuotes.length === 0) {
-        issues.push(`第 ${sectionIndex + 1} 节单元“${clean(rawUnit.title)}”标为资料依据但没有可核对原句`);
-      }
+      // Provenance is derived from quotes we can actually verify. Formatting
+      // differences introduced by PDF extraction do not invalidate teaching
+      // content, and an unverifiable quote is never retained as source proof.
+      const evidenceQuotes = strings(rawUnit.evidenceQuotes, 8, 360)
+        .filter((quote) => comparableSource.includes(comparableSourceText(quote)));
+      const sourceKind = evidenceQuotes.length > 0 ? "course-source" : "general-knowledge";
       const unit: TeachingBlueprintUnit = {
         id,
         title: clean(rawUnit.title, 160),
-        knowledgePointIds: stableIds(rawUnit.knowledgePointIds, allowedIds),
+        knowledgePointIds: stableIds(rawUnit.knowledgePointIds, sectionAllowedIds),
         learningOutcome: clean(rawUnit.learningOutcome, 800),
         explanation: clean(rawUnit.explanation),
         mechanism: clean(rawUnit.mechanism),
@@ -249,10 +317,8 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
         sourceKind,
         evidenceQuotes,
       };
-      if (!unit.title || !unit.learningOutcome || unit.explanation.length < 30 || unit.mechanism.length < 15
-        || unit.workedExample.length < 25 || !unit.conditions.length || !unit.misconceptions.length
-        || !unit.knowledgePointIds.length) {
-        issues.push(`第 ${sectionIndex + 1} 节第 ${unitIndex + 1} 个单元缺少完整解释、机制、例子、边界、误区或知识点映射`);
+      if (!unit.title || !unit.learningOutcome || !unit.explanation || !unit.knowledgePointIds.length) {
+        structuralIssues.push(`第 ${sectionIndex + 1} 节第 ${unitIndex + 1} 个单元缺少必要字段或知识点映射`);
       }
       return unit;
     });
@@ -265,11 +331,6 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
         return normalized ? [normalized] : [];
       }))];
       const unitKnowledgeIds = [...new Set(unitIds.flatMap((id) => unitById.get(id)?.knowledgePointIds ?? []))];
-      const requestedKnowledgeIds = stableIds(rawPage.knowledgePointIds, allowedIds);
-      if (requestedKnowledgeIds.some((id) => !unitKnowledgeIds.includes(id))
-        || unitKnowledgeIds.some((id) => !requestedKnowledgeIds.includes(id))) {
-        issues.push(`第 ${sectionIndex + 1} 节第 ${pageIndex + 1} 页的知识点映射与 unitIds 不一致`);
-      }
       const requestedType = rawPage.type === "interactive" ? "interactive" : "slide";
       const widgetType = typeof rawPage.widgetType === "string" && WIDGET_TYPES.has(rawPage.widgetType as WidgetType)
         ? rawPage.widgetType as WidgetType
@@ -278,9 +339,31 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
         ? rawPage.widgetOutline as WidgetOutline
         : undefined;
       const type = requestedType === "interactive" && widgetType && widgetOutline ? "interactive" : "slide";
-      if (requestedType === "interactive" && type !== "interactive" && input.generationMode === "deep-interaction") {
-        issues.push(`第 ${sectionIndex + 1} 节第 ${pageIndex + 1} 页要求互动但缺少完整 widgetType/widgetOutline`);
-      }
+      const rawTask = rawPage.learningTask && typeof rawPage.learningTask === "object" && !Array.isArray(rawPage.learningTask)
+        ? rawPage.learningTask as Record<string, unknown>
+        : undefined;
+      const requestedCaseUse = rawTask?.caseUse;
+      const caseUse = requestedCaseUse === "introduce" || requestedCaseUse === "reuse"
+        || requestedCaseUse === "variant" || requestedCaseUse === "independent"
+        ? requestedCaseUse
+        : undefined;
+      const candidateLearningTask: PageLearningTask | undefined = rawTask && caseUse
+        && clean(rawTask.learnerAction, 800) && clean(rawTask.newContribution, 800)
+        && clean(rawTask.reasoningFocus, 800)
+        ? {
+            learnerAction: clean(rawTask.learnerAction, 800),
+            newContribution: clean(rawTask.newContribution, 800),
+            reasoningFocus: clean(rawTask.reasoningFocus, 800),
+            caseUse,
+            changedConditions: strings(rawTask.changedConditions, 12, 500),
+            preservedConditions: strings(rawTask.preservedConditions, 12, 500),
+          }
+        : undefined;
+      // learningTask and interaction are optional. Incomplete optional
+      // decorations are omitted locally instead of regenerating the course.
+      const learningTask = candidateLearningTask?.caseUse !== "variant"
+        || candidateLearningTask.changedConditions.length > 0
+        ? candidateLearningTask : undefined;
       const page: TeachingBlueprintPage = {
         id: `teaching-section-${sectionIndex + 1}-page-${pageIndex + 1}`,
         title: clean(rawPage.title, 160),
@@ -290,31 +373,31 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
         description: clean(rawPage.description, 1_600),
         keyPoints: strings(rawPage.keyPoints, 8, 500),
         teachingObjective: clean(rawPage.teachingObjective, 800),
+        ...(learningTask ? { learningTask } : {}),
         ...(type === "interactive" ? { widgetType, widgetOutline } : {}),
       };
-      if (!page.title || !page.description || page.keyPoints.length < 3 || !page.teachingObjective || !page.unitIds.length) {
-        issues.push(`第 ${sectionIndex + 1} 节第 ${pageIndex + 1} 页缺少标题、教学意图、至少三个实质要点、目标或单元映射`);
+      if (!page.title || !page.description || page.keyPoints.length < 1 || !page.teachingObjective || !page.unitIds.length) {
+        structuralIssues.push(`第 ${sectionIndex + 1} 节第 ${pageIndex + 1} 页缺少必要字段或单元映射`);
       }
       return page;
     });
     const knowledgePointIds = [...new Set(units.flatMap((unit) => unit.knowledgePointIds))];
-    const declaredSectionIds = stableIds(rawSection.knowledgePointIds, allowedIds);
-    if (declaredSectionIds.some((id) => !knowledgePointIds.includes(id))
-      || knowledgePointIds.some((id) => !declaredSectionIds.includes(id))) {
-      issues.push(`第 ${sectionIndex + 1} 节 knowledgePointIds 与单元映射不一致`);
-    }
-    for (const unit of units) {
-      if (!pages.some((page) => page.unitIds.includes(unit.id))) issues.push(`教学单元“${unit.title}”没有对应页面`);
+    const sectionTitle = clean(rawSection.title, 160) || sectionPlan?.title || `第 ${sectionIndex + 1} 节`;
+    const learningObjective = clean(rawSection.learningObjective, 1_000) || sharedContext.learningPurpose;
+    const assessmentFocus = strings(rawSection.assessmentFocus, 6, 800);
+    if (!units.length || !pages.length) {
+      structuralIssues.push(`第 ${sectionIndex + 1} 节缺少教学单元或页面`);
     }
     return {
       id: `teaching-section-${sectionIndex + 1}`,
-      title: clean(rawSection.title, 160),
+      title: sectionTitle,
       order: sectionIndex,
-      learningObjective: clean(rawSection.learningObjective, 1_000),
+      learningObjective,
+      sharedContext,
       knowledgePointIds,
       units,
       pages,
-      assessmentFocus: strings(rawSection.assessmentFocus, 6, 800),
+      assessmentFocus: assessmentFocus.length ? assessmentFocus : [learningObjective],
       teachingDurationSec: 0,
       learnerActivityDurationSec: 0,
       assessmentDurationSec: 0,
@@ -325,83 +408,38 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
   const teachingDurationSec = Math.round(totalDurationSec * TEACHING_NARRATION_RATIO);
   const assessmentDurationSec = Math.floor(totalDurationSec * MAX_ASSESSMENT_RATIO);
   const learnerActivityDurationSec = totalDurationSec - teachingDurationSec - assessmentDurationSec;
-  const allPages = sections.flatMap((section) => section.pages);
-  if (teachingDurationSec < allPages.length * MIN_TEACHING_PAGE_SEC) {
-    issues.push(`页面过多：${allPages.length} 页无法在 ${teachingDurationSec} 秒实质讲授预算内保证每页至少 ${MIN_TEACHING_PAGE_SEC} 秒`);
-  }
   const sectionAssessmentMinimums = sections.map((section) => input.assessmentMode === "adaptive"
     ? Math.max(MIN_SECTION_ASSESSMENT_SEC, sectionAssessmentTargets(section).length * MIN_ADAPTIVE_QUESTION_SEC)
     : MIN_SECTION_ASSESSMENT_SEC);
-  const minimumAssessmentTotal = sectionAssessmentMinimums.reduce((sum, value) => sum + value, 0);
-  if (assessmentDurationSec < minimumAssessmentTotal) {
-    issues.push(input.assessmentMode === "adaptive"
-      ? `小测预算冲突：逐一检测 ${sections.reduce((sum, section) => sum + sectionAssessmentTargets(section).length, 0)} 个教学单元—知识点目标至少需要 ${minimumAssessmentTotal} 秒，当前只有 ${assessmentDurationSec} 秒；请合并重复单元或增加课时`
-      : `小节过多：${sections.length} 节无法在 ${assessmentDurationSec} 秒小测预算内保证每节至少 ${MIN_SECTION_ASSESSMENT_SEC} 秒`);
-  }
-  const coveredByUnits = new Set(sections.flatMap((section) => section.units.flatMap((unit) => unit.knowledgePointIds)));
-  const coveredByPages = new Set(allPages.flatMap((page) => page.knowledgePointIds));
-  for (const point of input.knowledgePoints) {
-    if (!coveredByUnits.has(point.id)) issues.push(`知识点“${point.name}”没有进入任何教学单元`);
-    if (!coveredByPages.has(point.id)) issues.push(`知识点“${point.name}”没有进入任何讲授页面`);
-  }
-  const pointSection = new Map<string, number>();
-  const pointUnitOrder = new Map<string, number>();
-  let unitOrder = 0;
-  sections.forEach((section, index) => section.knowledgePointIds.forEach((id) => {
-    if (!pointSection.has(id)) pointSection.set(id, index);
-  }));
-  for (const section of sections) {
-    for (const unit of section.units) {
-      for (const id of unit.knowledgePointIds) if (!pointUnitOrder.has(id)) pointUnitOrder.set(id, unitOrder);
-      unitOrder += 1;
-    }
-  }
-  for (const edge of input.knowledgeGraph?.edges ?? []) {
-    if (edge.type !== "required-prerequisite") continue;
-    const sourceIndex = pointSection.get(edge.source);
-    const targetIndex = pointSection.get(edge.target);
-    const sourceUnitOrder = pointUnitOrder.get(edge.source);
-    const targetUnitOrder = pointUnitOrder.get(edge.target);
-    if (sourceIndex !== undefined && targetIndex !== undefined && (sourceIndex > targetIndex
-      || (sourceIndex === targetIndex && sourceUnitOrder !== undefined && targetUnitOrder !== undefined && sourceUnitOrder > targetUnitOrder))) {
-      issues.push(`先修顺序错误：${edge.source} 必须早于 ${edge.target}`);
-    }
-  }
-  const unitSignatures = new Map<string, string>();
-  for (const unit of sections.flatMap((section) => section.units)) {
-    const signature = `${unit.explanation}|${unit.mechanism}|${unit.workedExample}`.replace(/[\s，。；：、,.!?！？:;"'“”‘’（）()]/g, "").toLowerCase();
-    const duplicate = unitSignatures.get(signature);
-    if (signature.length >= 80 && duplicate) issues.push(`教学单元“${unit.title}”与“${duplicate}”重复讲解相同内容`);
-    else if (signature.length >= 80) unitSignatures.set(signature, unit.title);
-  }
-  for (const [index, section] of sections.entries()) {
-    if (!section.title || !section.learningObjective || !section.units.length || !section.pages.length || !section.assessmentFocus.length) {
-      issues.push(`第 ${index + 1} 节缺少标题、目标、教学单元、页面或检测重点`);
-    }
-  }
-  if (MANAGEMENT_METADATA_PATTERN.test(JSON.stringify(sections))) {
-    issues.push("教学蓝图包含证据状态或审查管理字段");
-  }
 
   const pointWeights = new Map(input.knowledgePoints.map((point) => [point.id, point]));
   const sectionWeights = sections.map((section) => section.units.reduce((sum, unit) => sum + unitWeight(unit, pointWeights), 0));
-  const sectionTeaching = allocateExactWithMinimums(
+  let sectionTeaching = allocateExactWithMinimums(
     teachingDurationSec,
     sectionWeights,
     sections.map((section) => section.pages.length * MIN_TEACHING_PAGE_SEC),
   );
-  const sectionAssessment = allocateExactWithMinimums(
+  let sectionAssessment = allocateExactWithMinimums(
     assessmentDurationSec,
     sections.map((section) => input.assessmentMode === "adaptive"
       ? Math.max(1, sectionAssessmentTargets(section).length)
       : Math.max(1, section.assessmentFocus.length)),
     sectionAssessmentMinimums,
   );
-  const sectionActivity = allocateExact(learnerActivityDurationSec, sections.map((section) =>
+  let sectionActivity = allocateExact(learnerActivityDurationSec, sections.map((section) =>
     section.pages.reduce((sum, page) => sum + (page.type === "interactive" ? 2 : 1), 0),
   ));
+  if (sectionTeaching.length !== sections.length) {
+    sectionTeaching = allocateExact(teachingDurationSec, sectionWeights, 1);
+  }
+  if (sectionAssessment.length !== sections.length) {
+    sectionAssessment = allocateExact(assessmentDurationSec, sections.map((section) => Math.max(1, sectionAssessmentTargets(section).length)), 1);
+  }
+  if (sectionActivity.length !== sections.length) {
+    sectionActivity = allocateExact(learnerActivityDurationSec, sections.map(() => 1));
+  }
   if (sectionTeaching.length !== sections.length || sectionAssessment.length !== sections.length || sectionActivity.length !== sections.length) {
-    issues.push("总时长不足以形成满足最低讲授和小测时长的小节");
+    structuralIssues.push("总时长不足以为每个小节分配可用时间");
   }
   const timedSections = sections.map((section, index) => ({
     ...section,
@@ -409,7 +447,10 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
     learnerActivityDurationSec: sectionActivity[index] ?? 0,
     assessmentDurationSec: sectionAssessment[index] ?? 0,
   }));
-  if (issues.length) return { issues: [...new Set(issues)].slice(0, 20) };
+  // Semantic preferences and quality findings are intentionally not a
+  // generation gate. A structurally usable first draft proceeds to the
+  // teacher checkpoint without an automatic audit or rewrite.
+  if (structuralIssues.length) return { issues: [...new Set(structuralIssues)].slice(0, 20) };
   return {
     issues: [],
     blueprint: {
@@ -433,18 +474,37 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
 export async function generateTeachingBlueprint(
   input: TeachingBlueprintInput,
   aiCall: AICallFn,
+  options: {
+    onValidation?: (validation: TeachingBlueprintValidation) => void | Promise<void>;
+    retrySleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  } = {},
 ): Promise<TeachingBlueprint> {
-  let previous: unknown;
-  let issues: string[] = [];
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const prompt = buildTeachingBlueprintPrompt(input, attempt > 0 ? { issues, previous } : undefined);
+  const prompt = buildTeachingBlueprintPrompt(input);
+  return withGeneratedOutputRetry(async () => {
     const response = await aiCall(prompt.system, prompt.user);
-    previous = parseJsonResponse<unknown>(response);
-    const normalized = normalizeRawBlueprint(previous, input);
+    let parsed: unknown;
+    try {
+      parsed = parseJsonResponse<unknown>(response);
+    } catch (error) {
+      const issues = [`JSON 解析失败：${error instanceof Error ? error.message : String(error)}`];
+      await options.onValidation?.({ issues, responseCharacters: response.length });
+      throw invalidGeneratedOutput(error, "教学蓝图 JSON 无法解析");
+    }
+    const normalized = normalizeRawBlueprint(parsed, input);
+    await options.onValidation?.({
+      issues: normalized.issues,
+      responseCharacters: response.length,
+    });
     if (normalized.blueprint) return normalized.blueprint;
-    issues = normalized.issues;
-  }
-  throw new Error(`教学蓝图连续三次未通过校验：${issues.join("；")}`);
+    throw invalidGeneratedOutput(
+      new Error(normalized.issues.join("；")),
+      "教学蓝图缺少可用结构",
+    );
+  }, {
+    label: "teaching-blueprint-output",
+    maxRetries: 2,
+    sleep: options.retrySleep,
+  });
 }
 
 function sectionTeachingBrief(section: TeachingBlueprintSection, page?: TeachingBlueprintPage) {
@@ -452,6 +512,8 @@ function sectionTeachingBrief(section: TeachingBlueprintSection, page?: Teaching
   const units = section.units.filter((unit) => ids.has(unit.id));
   return {
     schemaVersion: 1 as const,
+    sharedContext: section.sharedContext,
+    ...(page?.learningTask ? { pageTask: page.learningTask } : {}),
     explanation: units.map((unit) => `${unit.explanation}\n${unit.mechanism}`).join("\n"),
     examples: units.map((unit) => unit.workedExample),
     conditions: [...new Set(units.flatMap((unit) => [...unit.conditions, ...unit.misconceptions]))],
@@ -542,8 +604,8 @@ export function teachingBlueprintToOutlines(
       type: "quiz",
       title: `${section.title} · 节末小测`,
       description: blueprint.assessmentMode === "constructed-response"
-        ? `围绕${section.assessmentFocus.join("、")}设置 ${questionCount} 道简答题，要求用关键词和简洁理由作答。`
-        : `围绕${section.assessmentFocus.join("、")}设置 ${questionCount} 道低负担检测，逐一覆盖实际讲授的教学单元—知识点目标，并选择最合适的选择、判断或拖拽匹配交互。`,
+        ? `使用未在讲授示例中直接公布答案的简短新片段进行独立判断，不复述共享案例的原题答案。围绕${section.assessmentFocus.join("、")}设置 ${questionCount} 道简答题，要求用关键词和简洁理由作答。`
+        : `使用未在讲授示例中直接公布答案的简短新片段进行独立检测，不复述共享案例的原题答案。围绕${section.assessmentFocus.join("、")}设置 ${questionCount} 道低负担检测，逐一覆盖实际讲授的教学单元—知识点目标，并选择最合适的选择、判断或拖拽匹配交互。`,
       keyPoints: section.assessmentFocus,
       teachingObjective: section.assessmentFocus.join("；"),
       teachingBrief: sectionTeachingBrief(section),

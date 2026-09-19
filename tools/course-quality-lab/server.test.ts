@@ -4,9 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import JSZip from "jszip";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createCourseQualityLabServer, parseCliOptions, withRuntimeMetrics } from "./server";
+import {
+  createCourseQualityLabServer,
+  parseCliOptions,
+  withRuntimeMetrics,
+  type CourseQualityLabServerOptions,
+} from "./server";
 import type { CourseQualityLabManifest, LabVariantResult } from "./types";
 
 const COMPLETE = { state: "complete" as const };
@@ -70,6 +75,7 @@ describe("course quality lab server", () => {
   let buildDir: string;
   let server: Server;
   let baseUrl: string;
+  let startGenerationRetry: NonNullable<CourseQualityLabServerOptions["startGenerationRetry"]>;
 
   beforeEach(async () => {
     workspace = await mkdtemp(path.join(tmpdir(), "course-quality-lab-test-"));
@@ -93,7 +99,13 @@ describe("course quality lab server", () => {
       await writeFile(path.join(artifactDir, "script.txt"), `script-${variantKey}`);
       await writeFile(path.join(rootDir, "audio", "pair-1", variantKey, "segment-1.mp3"), "0123456789");
     }
-    server = createCourseQualityLabServer({ rootDir, buildDir, logger: { info() {}, error() {} } });
+    startGenerationRetry = vi.fn(async () => ({ pid: 1234 }));
+    server = createCourseQualityLabServer({
+      rootDir,
+      buildDir,
+      logger: { info() {}, error() {} },
+      startGenerationRetry,
+    });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", resolve);
@@ -132,6 +144,31 @@ describe("course quality lab server", () => {
     const rendererFont = await fetch(`${baseUrl}/_next/static/media/formula.woff2`);
     expect(rendererFont.status).toBe(200);
     expect(await rendererFont.text()).toBe("standalone-font");
+  });
+
+  it("starts a new technical recovery round only for a failed variant", async () => {
+    const value = manifest();
+    value.sections[0]!.pairs[0]!.variants.enhanced.technicalValidation = {
+      policyVersion: "technical-generation-v1",
+      state: "failed",
+      stage: "tts",
+      message: "audio failed",
+    };
+    value.sections[0]!.pairs[0]!.variants.enhanced.statuses.tts = { state: "failed" };
+    await writeFile(path.join(rootDir, "manifest.json"), JSON.stringify(value));
+
+    const started = await fetch(`${baseUrl}/api/generation/retry/pair-1/enhanced`, { method: "POST" });
+    expect(started.status).toBe(202);
+    expect(await started.json()).toEqual({ status: "started", pid: 1234 });
+    expect(startGenerationRetry).toHaveBeenCalledWith(expect.objectContaining({
+      rootDir,
+      sectionId: "section-1",
+      variant: "enhanced",
+    }));
+
+    const notFailed = await fetch(`${baseUrl}/api/generation/retry/pair-1/baseline`, { method: "POST" });
+    expect(notFailed.status).toBe(409);
+    expect(startGenerationRetry).toHaveBeenCalledTimes(1);
   });
 
   it("adds token, latency, call and failure metrics from private runtime logs", async () => {

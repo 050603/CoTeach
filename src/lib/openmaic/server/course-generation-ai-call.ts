@@ -9,6 +9,12 @@ import {
 import { withCourseGenerationLlmSlot } from '@/lib/course-generation/llm-concurrency';
 import { createLogger } from '@openmaic/lib/logger';
 
+import {
+  calculateCourseExecutionDurationMs,
+  COURSE_EXECUTION_BUDGET_VERSION,
+  type CourseExecutionBudgetOptions,
+} from '@openmaic/lib/generation/course-output-budget';
+
 const log = createLogger('CourseGenerationAI');
 
 export type CourseGenerationAiCallContext = {
@@ -21,7 +27,16 @@ export type CourseGenerationAiCallContext = {
     slotAcquiredAt: number;
     queueMs: number;
   }) => Promise<void> | void;
-  onStarted?: (input: { attempt: number; totalAttempt: number; queueMs: number; startedAt: number }) => void;
+  onStarted?: (input: {
+    attempt: number;
+    totalAttempt: number;
+    queueMs: number;
+    startedAt: number;
+    requestPolicy?: {
+      maxOutputTokens?: number; thinking?: ThinkingConfig;
+      executionBudgetVersion?: string; idleTimeoutMs?: number; maxDurationMs?: number;
+    };
+  }) => void;
   onActivity?: (input: {
     attempt: number;
     at: number;
@@ -49,7 +64,7 @@ export function withCourseGenerationAiCallContext(
 type StreamDeadline = {
   signal: AbortSignal;
   markActivity: () => void;
-  timeoutMessage: () => string | undefined;
+  timeoutError: () => Error | undefined;
   dispose: () => void;
 };
 
@@ -73,17 +88,20 @@ function createStreamDeadline(input: {
   armIdleTimer();
   const maximumTimer = setTimeout(
     () => abortFor('maximum-duration'),
-    Math.max(input.idleTimeoutMs, input.maxDurationMs),
+    input.maxDurationMs,
   );
   return {
     signal: input.signal
       ? AbortSignal.any([controller.signal, input.signal])
       : controller.signal,
     markActivity: armIdleTimer,
-    timeoutMessage: () => timeoutKind === 'idle'
-      ? 'Course model stream timed out after no reasoning or text activity'
+    timeoutError: () => timeoutKind === 'idle'
+      ? new DOMException('Course model stream timed out after no reasoning or text activity', 'TimeoutError')
       : timeoutKind === 'maximum-duration'
-        ? 'Course model stream exceeded its maximum duration'
+        ? Object.assign(new Error('Course model stream exceeded its maximum duration'), {
+            code: 'LLM_EXECUTION_BUDGET_EXCEEDED',
+            isRetryable: false,
+          })
         : undefined,
     dispose: () => {
       if (idleTimer) clearTimeout(idleTimer);
@@ -96,6 +114,8 @@ function createStreamDeadline(input: {
 export function createCourseGenerationAiCall(options: {
   model: LanguageModel; vision: boolean; source: string; signal?: AbortSignal;
   maxOutputTokens?: number; timeoutMs?: number; thinking?: ThinkingConfig;
+  /** Per-artifact budget, resolved once before transport retries. */
+  outputBudget?: (system: string, prompt: string) => number;
   temperature?: number;
   /** Transport retries only. Completed or invalid model output is never
    * regenerated. Large HTML widgets use one longer attempt instead. */
@@ -106,6 +126,8 @@ export function createCourseGenerationAiCall(options: {
   /** Absolute safety ceiling for an active stream. The ordinary timeout is an
    * inactivity deadline and is refreshed by reasoning and visible text. */
   streamMaxDurationMs?: number;
+  /** Opt in to a work-based deadline. An explicit streamMaxDurationMs still wins. */
+  executionBudget?: CourseExecutionBudgetOptions;
 }): AICallFn {
   const execute = async (
     system: string,
@@ -113,6 +135,10 @@ export function createCourseGenerationAiCall(options: {
     images?: Array<{ id: string; src: string }>,
     context: CourseGenerationAiCallContext = {},
   ) => {
+    const maxOutputTokens = options.outputBudget?.(system, prompt) ?? options.maxOutputTokens;
+    const maxDurationMs = options.streamMaxDurationMs ?? (options.executionBudget
+      ? calculateCourseExecutionDurationMs(maxOutputTokens, options.timeoutMs ?? 0, options.executionBudget)
+      : options.timeoutMs);
     const configuredMaxRetries = Math.max(0, Math.min(2, options.maxRetries ?? 2));
     const attemptsStarted = Math.max(0, Math.floor(context.attemptsStarted ?? 0));
     const maximumAttempts = configuredMaxRetries + 1;
@@ -131,7 +157,7 @@ export function createCourseGenerationAiCall(options: {
       const queueMs = slotAcquiredAt - queuedAt;
       // Persist the attempt after the global slot is acquired but before any
       // provider I/O. A process exit while merely queued must not consume the
-      // stage's durable three-attempt budget.
+      // stage's durable request budget.
       await context.onAttemptStarting?.({
         attempt,
         totalAttempt,
@@ -139,15 +165,25 @@ export function createCourseGenerationAiCall(options: {
         slotAcquiredAt,
         queueMs,
       });
+      // Technical corrections using this same stage context consume the same
+      // budget as transport retries; they must not restart numbering at one.
+      context.attemptsStarted = totalAttempt;
       const startedAt = Date.now();
-      context.onStarted?.({ attempt, totalAttempt, queueMs, startedAt });
-      log.info(`[${options.source}] model slot acquired (attempt=${totalAttempt}/${maximumAttempts}, queueMs=${queueMs})`);
+      const requestPolicy = {
+        maxOutputTokens, thinking: options.thinking,
+        ...(options.executionBudget ? {
+          executionBudgetVersion: COURSE_EXECUTION_BUDGET_VERSION,
+          idleTimeoutMs: options.timeoutMs, maxDurationMs,
+        } : {}),
+      };
+      context.onStarted?.({ attempt, totalAttempt, queueMs, startedAt, requestPolicy });
+      log.info(`[${options.source}] model slot acquired (attempt=${totalAttempt}/${maximumAttempts}, queueMs=${queueMs}, requestPolicy=${JSON.stringify(requestPolicy)})`);
       // Start transport deadlines after this request owns a provider slot. A
       // saturated course queue must not consume the model's execution budget.
       const streamDeadline = options.streamResponse && options.timeoutMs
         ? createStreamDeadline({
             idleTimeoutMs: options.timeoutMs,
-            maxDurationMs: options.streamMaxDurationMs ?? options.timeoutMs,
+            maxDurationMs: maxDurationMs ?? options.timeoutMs,
             signal: options.signal,
           })
         : undefined;
@@ -166,7 +202,7 @@ export function createCourseGenerationAiCall(options: {
         if (options.streamResponse) {
           return await callStreamingLLMText({
             model: options.model, system, messages: [{ role: 'user', content }],
-            abortSignal: signal, maxOutputTokens: options.maxOutputTokens, maxRetries: 0,
+            abortSignal: signal, maxOutputTokens, maxRetries: 0,
             temperature: options.temperature,
           }, options.source, options.thinking, {
             onActivity: (activity) => {
@@ -178,16 +214,19 @@ export function createCourseGenerationAiCall(options: {
         }
         const result = await callLLM({
           model: options.model, system, messages: [{ role: 'user', content }],
-          abortSignal: signal, maxOutputTokens: options.maxOutputTokens, maxRetries: 0,
+          abortSignal: signal, maxOutputTokens, maxRetries: 0,
           temperature: options.temperature,
         }, options.source, undefined, options.thinking, { bypassCourseGenerationLimit: true });
         return result.text;
       } catch (error) {
-        const streamTimeoutMessage = streamDeadline?.timeoutMessage();
-        if (!options.signal?.aborted && streamTimeoutMessage) {
-          throw new DOMException(streamTimeoutMessage, 'TimeoutError');
-        }
-        if (!options.signal?.aborted && timeout?.aborted) throw new DOMException('Course model request timed out', 'TimeoutError');
+        // User cancellation wins even when it races a local deadline or the
+        // provider wraps the abort in a transport error.
+        if (options.signal?.aborted) throw options.signal.reason;
+        const streamTimeoutError = streamDeadline?.timeoutError();
+        // An active request exhausting our execution budget is not a broken
+        // connection. Replaying it would consume the same budget again.
+        if (streamTimeoutError) throw streamTimeoutError;
+        if (timeout?.aborted) throw new DOMException('Course model request timed out', 'TimeoutError');
         throw error;
       } finally {
         streamDeadline?.dispose();

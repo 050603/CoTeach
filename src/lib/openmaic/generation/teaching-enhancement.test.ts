@@ -3,8 +3,11 @@ import type { AICallFn } from './pipeline-types';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import {
   enhanceTeachingBriefs,
+  buildTeachingEnhancementPrompt,
+  hasCurrentTeachingBrief,
   hasCompleteTeachingBrief,
   normalizeTeachingEnhancement,
+  TEACHING_ENHANCEMENT_VERSION,
   withTeachingEnhancement,
 } from './teaching-enhancement';
 
@@ -22,6 +25,18 @@ function page(id: string, order: number): SceneOutline {
   };
 }
 
+const teachingPlan = {
+  purpose: '解释事实核验依据', priorKnowledge: '会区分主张和证据', newContent: '判断来源是否独立',
+  learnerQuestion: '多个网页为什么不一定是多份证据', reasoningSteps: ['检查是否转载同一来源'],
+  takeaway: '判断来源独立性，而不是只数网页', visibleContent: ['转载来源之间的关系'],
+  narrationFocus: ['为什么同源转载不能相互证实'],
+};
+const sharedContext = {
+  learningPurpose: '判断信息能否作为可靠依据', caseId: 'school-history-check',
+  caseFacts: ['多个网页可能转载同一份校史材料'], fixedWording: ['先确认来源关系'],
+  stableTerms: ['独立来源', '同源转载'], conceptBoundaries: ['网页数量不等于独立证据数量'],
+};
+
 describe('formal course teaching enhancement', () => {
   it('treats malformed stored briefs as incomplete instead of crashing a resumed job', () => {
     const malformed = page('p1', 0);
@@ -38,13 +53,13 @@ describe('formal course teaching enhancement', () => {
 
   it('accepts complete page designs and keeps only exact source evidence', () => {
     const source = '指导文件要求：学生需要核验生成内容的事实与来源。';
-    const briefs = normalizeTeachingEnhancement({ pages: [{
+    const briefs = normalizeTeachingEnhancement({ sharedContext, pages: [{
       outlineId: 'p1',
       explanation: '表达流畅来自语言模式，不能证明事实成立。',
       examples: ['核对校史年份：先标出主张，再查官方校志并记录差异。'],
       conditions: ['官网转载同一错误时，不能算作独立来源。'],
       assessmentFocus: '说明核验步骤以及每一步的理由。',
-      evidenceQuotes: ['学生需要核验生成内容的事实与来源', '并不存在的原句'],
+      teachingPlan, evidenceQuotes: ['学生需要核验生成内容的事实与来源', '并不存在的原句'],
     }] }, [page('p1', 0)], source);
     const brief = briefs.get('p1');
     expect(brief?.examples).toHaveLength(1);
@@ -54,6 +69,40 @@ describe('formal course teaching enhancement', () => {
     ]);
   });
 
+  it('recovers a single-page section when the model returns a placeholder outline id', () => {
+    const briefs = normalizeTeachingEnhancement({ sharedContext, pages: [{
+      outlineId: 'x',
+      explanation: '教学模式需要按学习目标、内容性质和课堂条件选择。',
+      examples: [],
+      conditions: ['模式适配是倾向，不是绝对限制。'],
+      assessmentFocus: '能根据目标说明模式选择理由。',
+      teachingPlan,
+      evidenceQuotes: [],
+    }] }, [page('actual-outline-id', 0)]);
+
+    expect(briefs.get('actual-outline-id')).toMatchObject({
+      explanation: '教学模式需要按学习目标、内容性质和课堂条件选择。',
+      designVersion: 'section-teaching-brief-v5',
+    });
+  });
+
+  it('does not guess placeholder outline ids for multi-page sections', () => {
+    const responsePage = {
+      outlineId: 'x',
+      explanation: '无法安全确定属于哪一页。',
+      examples: [],
+      conditions: [],
+      assessmentFocus: '说明理由。',
+      teachingPlan,
+      evidenceQuotes: [],
+    };
+
+    expect(() => normalizeTeachingEnhancement(
+      { sharedContext, pages: [responsePage, { ...responsePage, outlineId: 'y' }] },
+      [page('p1', 0), page('p2', 1)],
+    )).toThrow('教学增强缺少页面');
+  });
+
   it('creates one shared design call and propagates page briefs into the section quiz', async () => {
     const pages = [page('p1', 0), page('p2', 1)];
     const quiz = {
@@ -61,13 +110,13 @@ describe('formal course teaching enhancement', () => {
       type: 'quiz' as const,
       quizConfig: { questionCount: 2, difficulty: 'medium' as const, questionTypes: ['short_answer' as const] },
     };
-    const ai = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({ pages: pages.map((item) => ({
+    const ai = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({ sharedContext, pages: pages.map((item) => ({
       outlineId: item.id,
       explanation: `${item.id} 的机制解释`,
       examples: [`${item.id} 的完整示例`],
       conditions: [`${item.id} 的适用条件`],
       assessmentFocus: `${item.id} 的解释与应用`,
-      evidenceQuotes: [],
+      teachingPlan, evidenceQuotes: [],
     })) }));
     const outlines = await enhanceTeachingBriefs({
       outlines: [...pages, quiz],
@@ -87,13 +136,13 @@ describe('formal course teaching enhancement', () => {
     const progress: string[] = [];
     const ai = vi.fn<AICallFn>().mockImplementation(async (_system, user) => {
       const outlineId = user.includes('[p1]') ? 'p1' : 'p2';
-      return JSON.stringify({ pages: [{
+      return JSON.stringify({ sharedContext, pages: [{
         outlineId,
         explanation: `${outlineId} 的机制解释`,
         examples: [`${outlineId} 的完整示例`],
         conditions: [`${outlineId} 的适用条件`],
         assessmentFocus: `${outlineId} 的解释与应用`,
-        evidenceQuotes: [],
+        teachingPlan, evidenceQuotes: [],
       }] });
     });
     const outlines = await enhanceTeachingBriefs({
@@ -120,13 +169,13 @@ describe('formal course teaching enhancement', () => {
       modelFingerprint: string;
       briefs: Array<[string, unknown]>;
     } | null = null;
-    const ai = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({ pages: [{
+    const ai = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({ sharedContext, pages: [{
       outlineId: first.id,
       explanation: '语言流畅来自模式匹配，不能单独证明事实正确。',
       examples: ['标出年份主张，再到独立原始资料中逐项核对。'],
       conditions: ['同源转载不能当作多个独立来源。'],
       assessmentFocus: '说明核验步骤以及每一步的理由。',
-      evidenceQuotes: [],
+      teachingPlan, evidenceQuotes: [],
     }] }));
     const common = {
       outlines: [first],
@@ -167,13 +216,13 @@ describe('formal course teaching enhancement', () => {
     const progress: string[] = [];
     const ai = vi.fn<AICallFn>().mockImplementation(async (_system, user) => (
       user.includes('[p1]')
-        ? JSON.stringify({ pages: [{
+        ? JSON.stringify({ sharedContext, pages: [{
             outlineId: 'p1',
             explanation: 'p1 的机制解释',
             examples: ['p1 的完整示例'],
             conditions: ['p1 的适用条件'],
             assessmentFocus: 'p1 的解释与应用',
-            evidenceQuotes: [],
+            teachingPlan, evidenceQuotes: [],
           }] })
         : '{"pages":['
     ));
@@ -181,6 +230,7 @@ describe('formal course teaching enhancement', () => {
       outlines: [first, second],
       requirement: '一个小节失败时保留其他增强结果',
       aiCall: ai,
+      retrySleep: async () => undefined,
       concurrency: 4,
       onWarning: (warning) => { warnings.push(warning); },
       onProgress: ({ completedSections, totalSections }) => {
@@ -189,6 +239,7 @@ describe('formal course teaching enhancement', () => {
     })).rejects.toThrow('教学增强未完整生成');
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('页面2');
+    expect(ai).toHaveBeenCalledTimes(3);
     expect(progress[0]).toBe('0/2');
     expect(progress.at(-1)).toBe('2/2');
   });
@@ -210,6 +261,68 @@ describe('formal course teaching enhancement', () => {
     expect(ai.mock.calls[0]?.[0]).toBe(ai.mock.calls[1]?.[0]);
     expect(ai.mock.calls[0]?.[0]).not.toContain('解释一');
     expect(ai.mock.calls[0]?.[1]).toContain('解释一');
+    expect(ai.mock.calls[0]?.[1]).toContain('do not place every classification, standard answer');
     expect(ai.mock.calls[1]?.[1]).toContain('解释二');
+  });
+});
+
+ describe('adaptive teaching contracts', () => {
+  it('allows a focused page with no extra example or boundary and preserves its explanation responsibilities', () => {
+    const brief = normalizeTeachingEnhancement({ sharedContext, pages: [{ outlineId: 'p1', explanation: '检查多个页面是否转载同一来源',
+      examples: [], conditions: [], assessmentFocus: '识别同源转载', evidenceQuotes: [], teachingPlan }] }, [page('p1', 0)]).get('p1')!;
+    expect(brief.examples).toEqual([]);
+    expect(brief.conditions).toEqual([]);
+    expect(brief.teachingPlan).toEqual(teachingPlan);
+    expect(hasCurrentTeachingBrief({ ...page('p1', 0), teachingBrief: brief })).toBe(true);
+    expect(hasCurrentTeachingBrief({ ...page('p1', 0), teachingBrief: { ...brief, designVersion: 'old' } })).toBe(false);
+  });
+  it('includes learner readiness and adjacent-page responsibilities in the authoring prompt', async () => {
+    const { deriveTeachingConstraints } = await import('@openmaic/lib/pedagogy/teaching-constraints');
+    const prompt = buildTeachingEnhancementPrompt({ requirement: '完成来源核验', pages: [page('p1', 0)],
+      courseProgression: [page('p1', 0), page('p2', 1)],
+      teachingConstraints: deriveTeachingConstraints({ grade: '八年级', learnerProfile: {
+        priorKnowledge: '会比较网页来源', learningNeeds: '需要区分转载和独立证据', familiarContexts: '校史调查',
+      } }),
+    });
+    expect(prompt.user).toContain('会比较网页来源');
+    expect(prompt.user).toContain('需要区分转载和独立证据');
+    expect(prompt.user).toContain('校史调查');
+    expect(prompt.user).toContain('p2');
+    expect(prompt.user).toContain('不得在案例前列出全部术语及一句话释义');
+    expect(prompt.user).toContain('不得同时列出全部分类结果、标准答案或完整推理');
+    expect(prompt.system).toContain('Write for hearing once');
+  });
+
+  it('fills only a missing page while preserving the section case and completed sibling design', async () => {
+    const completed = page('p1', 0);
+    completed.teachingBrief = {
+      schemaVersion: 1, designVersion: TEACHING_ENHANCEMENT_VERSION, sharedContext, teachingPlan,
+      explanation: '第一页已经完整解释为什么网页数量不能代表独立证据数量。', examples: ['完整案例'],
+      conditions: ['同源转载不独立'], evidence: [], assessmentFocus: '说明来源关系',
+    };
+    const missing = page('p2', 1);
+    const existingTask = { learnerAction: '只改变提问方式后判断主要变化', newContribution: '辨析条件变化',
+      reasoningFocus: '判断表述主要承担的功能', caseUse: 'variant' as const,
+      changedConditions: ['把对比表换成口头提问'], preservedConditions: ['课堂流程和学习目标不变'] };
+    missing.teachingBrief = {
+      schemaVersion: 1, designVersion: 'outdated', sharedContext, pageTask: existingTask,
+      explanation: '蓝图中的第二页解释', examples: ['蓝图中的完整变式'], conditions: [], evidence: [], assessmentFocus: '说明理由',
+    };
+    const ai = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({
+      sharedContext: { ...sharedContext, fixedWording: ['模型擅自改写'] },
+      pages: [{ outlineId: 'p2', pageTask: { ...existingTask, changedConditions: ['模型擅自改变另一条件'] },
+        explanation: '展开第二页的新判断', examples: ['保留原安排，只改变提问方式'], conditions: [],
+        assessmentFocus: '说明变化主要发生在哪一层', teachingPlan, evidenceQuotes: [] }],
+    }));
+    const result = await enhanceTeachingBriefs({
+      outlines: [completed, missing], requirement: '完成同一案例的条件辨析',
+      courseProgression: [completed, missing], aiCall: ai,
+    });
+    expect(ai).toHaveBeenCalledOnce();
+    expect(ai.mock.calls[0]?.[1]).toContain('第一页已经完整解释为什么网页数量不能代表独立证据数量');
+    expect(ai.mock.calls[0]?.[1]).toContain('蓝图中的完整变式');
+    expect(result[0]?.teachingBrief).toEqual(completed.teachingBrief);
+    expect(result[1]?.teachingBrief?.sharedContext).toEqual(sharedContext);
+    expect(result[1]?.teachingBrief?.pageTask).toEqual(existingTask);
   });
 });

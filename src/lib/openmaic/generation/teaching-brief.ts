@@ -8,6 +8,10 @@ export function normalizeTeachingBrief(outline: SceneOutline): TeachingBrief {
   const raw = outline.teachingBrief;
   return {
     schemaVersion: 1,
+    ...(raw?.designVersion ? { designVersion: raw.designVersion } : {}),
+    ...(raw?.sharedContext ? { sharedContext: raw.sharedContext } : {}),
+    ...(raw?.pageTask ? { pageTask: raw.pageTask } : {}),
+    ...(raw?.teachingPlan ? { teachingPlan: raw.teachingPlan } : {}),
     explanation: typeof raw?.explanation === "string" && raw.explanation.trim() ? raw.explanation : outline.description,
     examples: strings(raw?.examples),
     conditions: strings(raw?.conditions),
@@ -17,5 +21,5 @@ export function normalizeTeachingBrief(outline: SceneOutline): TeachingBrief {
 }
 
 export function formatTeachingBrief(outline: SceneOutline): string {
-  return `同一页面的教学依据（讲授、互动、讲稿和小测共同遵守；缺失证据保留未知，不编造）：\n${JSON.stringify(normalizeTeachingBrief(outline))}`;
+  return `本小节共享上下文与当前页面教学依据（课件、讲稿、互动和小测共同遵守；跨页保持案例原句、步骤名和术语一致；缺失证据保留未知，不编造）：\n${JSON.stringify(normalizeTeachingBrief(outline))}`;
 }

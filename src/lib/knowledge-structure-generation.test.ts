@@ -80,12 +80,15 @@ describe("reviewed knowledge structure generation", () => {
     expect(modelCall).not.toHaveBeenCalled();
   });
 
-  it("does not turn an invalid completed JSON response into a transport retry", async () => {
+  it("retries an invalid completed JSON response as a hard-output failure", async () => {
     const aiCall = vi.fn().mockResolvedValue('{"knowledgePoints":[');
 
-    await expect(generateKnowledgeStructureOnce(input, {}, { aiCall })).rejects.toThrow();
+    await expect(generateKnowledgeStructureOnce(input, {}, {
+      aiCall,
+      retrySleep: async () => undefined,
+    })).rejects.toThrow();
 
-    expect(aiCall).toHaveBeenCalledOnce();
+    expect(aiCall).toHaveBeenCalledTimes(3);
   });
 
   it("mechanically completes malformed relationship metadata without an AI repair call", async () => {

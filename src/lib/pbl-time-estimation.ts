@@ -298,6 +298,27 @@ function quizTaskDemand(
   };
 }
 
+/** Planning estimate for brief directions and concept-level feedback. It
+ * grows with the questions' reasoning demand, never the page's spare time.
+ * These seconds are allowances, not required sentence counts or speech length. */
+function quizNarrationDemand(quiz: NonNullable<PblActivityTimingInput['quiz']>): { narrationSec: number; feedbackSec: number } {
+  const count = clamp(Math.round(quiz.questionCount), 0, 100);
+  const types = quiz.questionTypes?.length ? quiz.questionTypes : ['single'] as PblQuizQuestionType[];
+  const factor = difficultyFactor(quiz.difficulty);
+  const feedbackSec = roundSeconds(Array.from({ length: count }, (_, index) =>
+    QUIZ_READING_THINKING_SECONDS[types[index % types.length] ?? 'single'] * 0.45,
+  ).reduce((sum, seconds) => sum + seconds, 0) * factor);
+  return { narrationSec: Math.max(1, roundSeconds(10 * factor) + feedbackSec), feedbackSec };
+}
+
+/** A missing quiz duration is derived from its work, not a five-minute
+ * generic slide fallback. Explicit teacher budgets remain authoritative. */
+export function estimateQuizPageDurationSec(quiz: NonNullable<PblActivityTimingInput['quiz']>): number {
+  const task = quizTaskDemand(quiz);
+  const base = task.readingThinkingSec + task.operationSec + quizNarrationDemand(quiz).narrationSec;
+  return base + pageTransitionSec('quiz', base + 10);
+}
+
 function taskComplexityForSeconds(seconds: number): PblTaskComplexity {
   if (seconds <= 75) return 'low';
   if (seconds <= 210) return 'medium';
@@ -383,8 +404,16 @@ export function planPblPageTiming(input: PblPageTimingInput): PblPageTimingBreak
   const recommendedStudentActivitySec = (
     recommendedReadingThinkingSec + recommendedOperationSec
   );
+  const quizNarration = pageKind === 'quiz' ? quizNarrationDemand(input.quiz ?? {
+    questionCount: 1, questionTypes: ['single'], difficulty: 'standard',
+  }) : undefined;
+  const usableSec = Math.max(0, activityTargetSec - transitionSec);
   const minimumNarrationSec = pageKind === 'slide'
     ? 0
+    : quizNarration
+      ? Math.min(usableSec, quizNarration.narrationSec,
+          Math.max(1, Math.round(usableSec * quizNarration.narrationSec
+            / Math.max(1, quizNarration.narrationSec + recommendedStudentActivitySec))))
     : Math.min(
         activityTargetSec - transitionSec,
         clamp(Math.round(activityTargetSec * 0.22), 20, 90),
@@ -398,6 +427,11 @@ export function planPblPageTiming(input: PblPageTimingInput): PblPageTimingBreak
     recommendedReadingThinkingSec,
     recommendedOperationSec,
   });
+  if (pageKind === 'quiz') {
+    // Extra teacher-approved time belongs to independent reading, reasoning
+    // and checking, not increasingly long answer narration.
+    allocation.readingThinkingSec += Math.max(0, availableStudentSec - allocation.readingThinkingSec - allocation.operationSec);
+  }
   const studentActivitySec = allocation.readingThinkingSec + allocation.operationSec;
   const narrationSec = Math.max(
     1,
@@ -405,7 +439,7 @@ export function planPblPageTiming(input: PblPageTimingInput): PblPageTimingBreak
   );
   const taskFitsBudget = recommendedStudentActivitySec <= availableStudentSec;
   const feedbackSec = pageKind === 'quiz'
-    ? Math.min(narrationSec, Math.max(10, Math.round(narrationSec * 0.55)))
+    ? Math.min(narrationSec, Math.round(narrationSec * quizNarration!.feedbackSec / quizNarration!.narrationSec))
     : pageKind === 'interactive'
       ? Math.min(narrationSec, Math.max(8, Math.round(narrationSec * 0.3)))
       : 0;
@@ -418,6 +452,7 @@ export function planPblPageTiming(input: PblPageTimingInput): PblPageTimingBreak
         taskFitsBudget
           ? 'The modeled task fits the confirmed page budget.'
           : 'Simplify the generated task to fit the confirmed page budget; never speed up TTS or extend the page.',
+        ...(pageKind === 'quiz' ? ['Guidance and feedback follow question reasoning demand; spare page time is reserved for student reading and checking, never speech padding.'] : []),
       ];
 
   return {

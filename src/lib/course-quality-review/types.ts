@@ -28,9 +28,46 @@ export type CourseQualityReport = {
   error?: string;
 };
 
+/** Stable section-level meaning reused by every page, narration, and check. */
+export type SharedTeachingContext = {
+  learningPurpose: string;
+  /** Optional stable identifier when the section reuses one concrete case. */
+  caseId: string;
+  /** Actions, observations, or results that later judgments may rely on. */
+  caseFacts: string[];
+  /** Exact case sentences that must not drift between pages. */
+  fixedWording: string[];
+  /** Step names and technical terms that remain stable across the section. */
+  stableTerms: string[];
+  /** Necessary distinctions, qualifications, and non-equivalences. */
+  conceptBoundaries: string[];
+};
+
+export type PageLearningTask = {
+  learnerAction: string;
+  newContribution: string;
+  reasoningFocus: string;
+  caseUse: "introduce" | "reuse" | "variant" | "independent";
+  changedConditions: string[];
+  preservedConditions: string[];
+};
+
 /** Shared teaching meaning supplied by the existing outline call, not another generation step. */
 export type TeachingBrief = {
   schemaVersion: 1;
+  designVersion?: string;
+  sharedContext?: SharedTeachingContext;
+  pageTask?: PageLearningTask;
+  teachingPlan?: {
+    purpose: string;
+    priorKnowledge: string;
+    newContent: string;
+    learnerQuestion: string;
+    reasoningSteps: string[];
+    takeaway: string;
+    visibleContent: string[];
+    narrationFocus: string[];
+  };
   explanation: string;
   examples: string[];
   conditions: string[];

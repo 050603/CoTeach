@@ -184,7 +184,7 @@ export function deriveTeachingConstraints(input: {
     terminologyRule: defaults.terminologyRule,
     abstractionRule: defaults.abstractionRule,
     exampleRule: defaults.exampleRule,
-    progressionRule: 'Sequence pages as activate prior knowledge → explain with a concrete example → make the mechanism explicit → guided application → independent check → concise synthesis. Do not increase difficulty merely to fill time.',
+    progressionRule: 'Choose progression from confirmed prior knowledge, learning goals, and the missing reasoning bridge. Use examples, mechanism explanation, supported application, checks, or synthesis only where they advance understanding; do not require a fixed cycle on every page. Do not increase difficulty merely to fill time.',
     assessmentRule: 'Assess only the current objective and confirmed knowledge points. Progress from recognition to explanation and then application; distractors must reflect plausible misconceptions, and every analysis must explain the reasoning.',
   };
 }

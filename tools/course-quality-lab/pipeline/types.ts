@@ -1,5 +1,4 @@
 import type { Action } from "@openmaic/lib/types/action";
-import type { GeneratedSlideContent } from "@openmaic/lib/types/generation";
 
 export type PipelineModuleId = string;
 
@@ -175,7 +174,8 @@ export type SemanticUnitKind =
   | "assessment"
   | "evidence";
 
-export type ActionSupport = "none" | "helpful" | "essential";
+import type { ActionSupport } from "@openmaic/lib/generation/action-binding-types";
+export type { ActionSupport } from "@openmaic/lib/generation/action-binding-types";
 
 export interface SemanticTeachingUnit {
   id: string;
@@ -199,36 +199,13 @@ export interface SemanticTeachingPlan {
   pages: SemanticTeachingPage[];
 }
 
-export interface SlideElementBinding {
-  semanticId: string;
-  elementIds: string[];
-}
-
-export interface SlideModuleOutput {
-  pageId: string;
-  content: GeneratedSlideContent;
-  bindings: SlideElementBinding[];
-}
-
-export interface NarrationAnchor {
-  id: string;
-  semanticId: string;
-  quote: string;
-  occurrence?: number;
-}
-
-export interface NarrationSegment {
-  id: string;
-  pageId: string;
-  text: string;
-  semanticIds: string[];
-  anchors?: NarrationAnchor[];
-}
-
-export interface NarrationModuleOutput {
-  pageId: string;
-  segments: NarrationSegment[];
-}
+export type {
+  SlideElementBinding,
+  SlideModuleOutput,
+  NarrationAnchor,
+  NarrationSegment,
+  NarrationModuleOutput,
+} from "@openmaic/lib/generation/action-binding-types";
 
 export interface ActionModuleOutput {
   pageId: string;

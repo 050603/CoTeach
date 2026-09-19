@@ -44,7 +44,7 @@ import {
   runAdaptiveResourcePool,
 } from "@/lib/course-generation/adaptive-resource-pool";
 import type { AdaptivePreparedBranchResource } from "@/lib/session/types";
-import { buildAdaptiveResourceRequirement } from "@/lib/adaptive-learning";
+import { buildAdaptiveBranchTeachingContext } from "./adaptive-teaching-context";
 import { ensureTeachingToolPlans } from "@/lib/openmaic/generation/teaching-tool-plan";
 import {
   COURSE_COVER_GENERATION_SPEC,
@@ -212,20 +212,6 @@ async function persistSceneStageAttempt(input: {
     checkpoint,
   );
   return checkpoint;
-}
-
-async function partialCheckpointQualityReport(jobId: string): Promise<Prisma.InputJsonValue> {
-  const stored = await loadGenerationCheckpoints(jobId);
-  const pages = (stored.stages as unknown as SceneStageCheckpointSnapshot[]).flatMap((checkpoint) => {
-    if (checkpoint.stage !== "reviewed-content" || !checkpoint.payload || typeof checkpoint.payload !== "object") return [];
-    const page = (checkpoint.payload as { layoutAuditPage?: unknown }).layoutAuditPage;
-    return page && typeof page === "object" ? [page] : [];
-  });
-  return {
-    status: "partial",
-    completedPageAudits: pages.length,
-    layoutAudit: { status: "partial", pages },
-  } as unknown as Prisma.InputJsonValue;
 }
 
 export async function resetCourseGenerationCheckpoints(jobId: string): Promise<void> {
@@ -541,6 +527,7 @@ export async function generateAdaptiveBranchResource(
 
   try {
     return await (async () => {
+      const teachingContext = buildAdaptiveBranchTeachingContext(course, branch, plan);
       const sceneOutline: SceneOutline = ensureTeachingToolPlans([{
         id: `adaptive-${branch.id}`,
         type: branch.sceneType ?? "slide",
@@ -556,14 +543,14 @@ export async function generateAdaptiveBranchResource(
         audience: "student",
         generationPurpose: "knowledge-teaching",
         detailKind: "knowledge-explanation",
-        knowledgePointIds: branch.anchorKnowledgePointIds,
+        knowledgePointIds: teachingContext.knowledgePoints.map((point) => point.id),
         ttsPolicy: "target-duration",
         resourceTypes: branch.sceneType === "interactive" ? ["interactive-demo"] : ["ppt"],
         narrationMode: "embedded-segment",
       }])[0];
       const generated = await generateClassroom({
         courseTitle: `${course.name} · ${branch.title}`,
-        requirement: buildAdaptiveResourceRequirement(course.name, branch, plan),
+        ...teachingContext,
         sceneOutlines: [sceneOutline],
         enableTTS: true,
       }, {
@@ -1178,7 +1165,6 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       return;
     }
     log.error(`Course generation job ${job.id} failed`, error);
-    const partialQualityReport = await partialCheckpointQualityReport(job.id).catch(() => null);
     await contentGenerationJobs.update({
       where: { id: job.id },
       data: {
@@ -1186,7 +1172,6 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         step: "failed",
         message: "课程生成未完成",
         error: serializeCourseGenerationFailure(error),
-        ...(partialQualityReport ? { qualityReport: partialQualityReport } : {}),
         estimatedRemainingSeconds: null,
         completedAt: new Date(),
         lastHeartbeatAt: new Date(),

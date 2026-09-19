@@ -911,6 +911,8 @@ export type TeachingBlueprintPage = {
   description: string;
   keyPoints: string[];
   teachingObjective: string;
+  /** Optional student-facing intellectual work; omit for a pure explanation page. */
+  learningTask?: import("@/lib/course-quality-review/types").PageLearningTask;
   widgetType?: import("@/lib/openmaic/types/widgets").WidgetType;
   widgetOutline?: import("@/lib/openmaic/types/generation").WidgetOutline;
   outlineId?: string;
@@ -921,6 +923,7 @@ export type TeachingBlueprintSection = {
   title: string;
   order: number;
   learningObjective: string;
+  sharedContext: import("@/lib/course-quality-review/types").SharedTeachingContext;
   knowledgePointIds: string[];
   units: TeachingBlueprintUnit[];
   pages: TeachingBlueprintPage[];

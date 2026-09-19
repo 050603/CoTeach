@@ -48,7 +48,12 @@ export function allocateTeachingStageTiming(outlines: SceneOutline[]): SceneOutl
     if (!narrated.length) continue;
     const target = members.reduce((sum, outline) => sum + (outline.targetDurationSec ?? outline.estimatedDuration ?? 60), 0);
     const narrationTarget = narrated.reduce((sum, outline) => sum + outline.timingPlan!.targetDurationSec, 0);
-    const weights = narrated.map((outline) => {
+    // Assessments and interactive work own task-dependent silent/speech
+    // allocations. Never blend those with lecture text weights. Preserve each
+    // explicitly approved blueprint allocation even in mixed legacy input.
+    const weighted = narrated.filter((outline) => outline.type === 'slide' && !outline.plannedTiming);
+    const weightedNarrationTarget = weighted.reduce((sum, outline) => sum + outline.timingPlan!.targetDurationSec, 0);
+    const weights = weighted.map((outline) => {
       const plan = outline.timingPlan!;
       const content = outline.keyPoints.length ? outline.keyPoints.join('。') : outline.description || outline.title;
       const contentSeconds = estimateSpeechDurationSec(content, plan);
@@ -57,9 +62,9 @@ export function allocateTeachingStageTiming(outlines: SceneOutline[]): SceneOutl
       return Math.sqrt(Math.max(1, contentSeconds) * Math.max(1, plan.targetDurationSec));
     });
     const weightSum = weights.reduce((sum, weight) => sum + weight, 0);
-    const exact = weights.map((weight) => 1 + Math.max(0, narrationTarget - narrated.length) * weight / weightSum);
+    const exact = weights.map((weight) => 1 + Math.max(0, weightedNarrationTarget - weighted.length) * weight / weightSum);
     const seconds = exact.map(Math.floor);
-    let remainder = Math.round(narrationTarget - seconds.reduce((sum, value) => sum + value, 0));
+    let remainder = Math.round(weightedNarrationTarget - seconds.reduce((sum, value) => sum + value, 0));
     for (const index of exact.map((value, index) => ({ index, fraction: value - Math.floor(value) })).sort((a, b) => b.fraction - a.fraction || a.index - b.index)) {
       if (remainder-- <= 0) break;
       seconds[index.index]++;
@@ -70,7 +75,7 @@ export function allocateTeachingStageTiming(outlines: SceneOutline[]): SceneOutl
       narrationTargetDurationSec: narrationTarget, reservedDurationSec: target - narrationTarget,
       pageCount: members.length, allocation: 'content-weighted', acceptance: 'stage-total-only',
     };
-    narrated.forEach((outline, index) => {
+    weighted.forEach((outline, index) => {
       const plan = outline.timingPlan!;
       const reserved = (plan.activityTargetDurationSec ?? outline.targetDurationSec ?? outline.estimatedDuration ?? plan.targetDurationSec) - plan.targetDurationSec;
       const activityTarget = reserved + seconds[index];

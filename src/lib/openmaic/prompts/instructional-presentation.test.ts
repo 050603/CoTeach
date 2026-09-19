@@ -31,6 +31,21 @@ describe('instructional presentation prompt contract', () => {
     expect(prompt?.system).toContain('20px internal padding on all sides');
     expect(prompt?.system).toContain('concept_text');
     expect(prompt?.system).toContain('No isolated 5–15px decorative lines');
+    expect(prompt?.system).toContain('make the material to inspect and the changed condition visible before showing a complete classification');
+    expect(prompt?.system).toContain('A setting label alone is not a worked case');
+  });
+
+  it('keeps quiz scope separate from answer authority and discourages worked-example replay', () => {
+    const prompt = buildPrompt(PROMPT_IDS.QUIZ_CONTENT, {
+      title: '概念辨析', description: '独立判断', keyPoints: '判断主要功能',
+      knowledgePointIds: 'kp-1', questionCount: 1, difficulty: 'medium', questionTypes: 'single',
+      assessmentTargets: '[]', pblContext: 'completed narration and source boundaries', languageDirective: '使用简体中文',
+    });
+    expect(prompt?.system).toContain('completed narration limits what may be assessed');
+    expect(prompt?.system).toContain('authoritative source evidence');
+    expect(prompt?.system).toContain('fresh compact situation');
+    expect(prompt?.system).toContain("Do not copy the worked example's objects, exact statements, changed condition");
+    expect(prompt?.system).toContain('not sufficient definitions or universal decision rules');
   });
 
   it('gives slide action generation a cross-discipline whiteboard decision and tools', () => {
@@ -54,7 +69,11 @@ describe('instructional presentation prompt contract', () => {
     expect(prompt?.system).toContain('Close and return to PPT');
     expect(prompt?.system).toContain('Do not use the whiteboard merely to copy the slide');
     expect(prompt?.system).toContain('choose a visual tool before adding more speech');
-    expect(prompt?.system).toContain('Never place two long speech segments back-to-back');
+    expect(prompt?.system).toContain('not a fixed alternation quota');
+    expect(prompt?.system).toContain('Adjacent segments may jointly establish');
+    expect(prompt?.system).toContain('Warmth comes from recognizing a plausible difficulty');
+    expect(prompt?.system).not.toContain('5-10 objects');
+    expect(prompt?.system).not.toContain('**Summary**: Brief recap');
     expect(prompt?.system).toContain('Every generated page, scene, chapter, activity, quiz, and system operation');
     expect(prompt?.system).toContain('NEVER call a later page, chapter, activity, or operation');
     expect(prompt?.system).toContain('下节课');

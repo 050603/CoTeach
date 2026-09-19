@@ -86,7 +86,7 @@ const TASK_CARDS: Record<StageGenerationKind, CardDefinition[]> = {
     card("base", "课程定位", "整理课程基础信息", "分析教师输入和课程边界", FileText, "orange", ["课程主题", "学习对象", "课时范围"]),
     card("knowledge", "目标与知识", "建立目标和知识图谱", "形成后续课程设计的内容骨架", BrainCircuit, "blue", ["学习目标", "知识节点", "概念关系"]),
     card("design", "课程设计", "生成成果、评价与阶段架构", "保持任务、评价和课堂活动一致", GitBranch, "violet", ["项目成果", "评价标准", "六阶段架构"]),
-    card("lesson", "课堂内容", "生成主课与个性化路径", "完成后执行全课程质量复核", BookOpenCheck, "green", ["主课脚本", "学习分支", "质量复核"]),
+    card("lesson", "课堂内容", "生成主课与个性化路径", "完成后交由教师预览、修改并确认", BookOpenCheck, "green", ["主课脚本", "学习分支", "教师确认"]),
   ],
   generic: [
     card("context", "任务理解", "读取生成要求", "整理教师提供的课程上下文", FileText, "orange", ["输入内容", "生成约束", "课程数据"]),

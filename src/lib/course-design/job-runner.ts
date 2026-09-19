@@ -6,12 +6,12 @@ import {
   parseLLMJson,
 } from "@/lib/llm/client";
 import { generateProjectSkeleton } from "@/lib/teaching-ai/support-engine";
+import { createCourseOutputBudget, resolveCourseExecutionBudgetOptions, COURSE_OUTPUT_BUDGET_VERSION, COURSE_EXECUTION_BUDGET_VERSION } from "@/lib/openmaic/generation/course-output-budget";
 import { buildCourseGenerationInput } from "@/lib/teacher/course-generation-input";
+import { formatTeachingConstraintsForChinesePrompt } from "@/lib/openmaic/pedagogy/teaching-constraints";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import { generateKnowledgeStructureOnce } from "@/lib/knowledge-structure-generation";
 import { resourcePackageTeachingPoints } from "./resource-package-knowledge";
-import { assessKnowledgeGraphQuality } from "@/lib/knowledge-graph-quality";
-import { deriveCourseEntryPolicy } from "@/lib/course-entry-policy";
 import {
   buildPblActivityCatalog,
   buildCourseTeachingConstraints,
@@ -56,15 +56,9 @@ import {
   DEFAULT_PBL_EVIDENCE_REQUIREMENTS,
   normalizePblCourseConfig,
 } from "@/lib/pbl-course-config";
-import {
-  evaluatePositioning,
-  evaluateProjectDesign,
-  type StageQualityResult,
-} from "@/lib/course-design/quality-gates";
 import { runWithCourseGenerationLlmContext } from "@/lib/course-generation/llm-concurrency";
 import {
   createTransientInfrastructureRecoveryRequest,
-  createManagedRecoveryRequest,
   formatFatalCourseDesignError,
   transientInfrastructureRetryDelayMs,
 } from "@/lib/course-design/failure-policy";
@@ -73,7 +67,6 @@ import { createLogger } from "@openmaic/lib/logger";
 import {
   DURABLE_GENERATION_TRANSIENT_RETRIES,
   resolveLlmRequestTimeoutMs,
-  resolveLlmStreamMaxDurationMs,
 } from "@/lib/llm/request-policy";
 import {
   buildNewSystemAiTimingPlan,
@@ -106,6 +99,7 @@ import {
   AI_DURATION_STEP,
   KNOWLEDGE_STRUCTURE_ATTEMPT_STEP,
   KNOWLEDGE_STRUCTURE_STEP,
+  TEACHING_BLUEPRINT_ATTEMPT_STEP,
   TEACHING_BLUEPRINT_STEP,
 } from "@/lib/course-generation/checkpoint-storage";
 import { fingerprintGenerationValue } from "@/lib/course-generation/page-checkpoints";
@@ -113,16 +107,16 @@ import {
   generateTeachingBlueprint,
   teachingBlueprintInputFingerprint,
   teachingBlueprintToOutlines,
-  validateTeachingBlueprintBudget,
+  TEACHING_NARRATION_RATIO,
   type TeachingBlueprintInput,
+  type TeachingBlueprintSectionPlan,
 } from "./teaching-blueprint";
 
 const POLL_INTERVAL_MS = 1_500;
 const STALE_AFTER_MS = 30 * 60 * 1_000;
 const MAX_TRACE_ENTRIES = 24;
-const MAX_AGENT_REVIEW_ROUNDS = 4;
-// Deep-reasoning providers can spend several minutes on graph construction,
-// independent review, and page planning. Estimates are deliberately
+// Deep-reasoning providers can spend several minutes on graph construction
+// and page planning. Estimates are deliberately
 // conservative so the quick-generation UI does not imply that a healthy job
 // is stuck while a long inference is still within policy.
 const NEW_SYSTEM_STEP_ESTIMATES = [180, 720, 360];
@@ -157,10 +151,6 @@ export type QuickDesignRequest = {
   };
   resumeFromOutlineReview?: boolean;
   resumeReviewKind?: QuickDesignReviewKind;
-  /** Internal Agent recovery state. Never supplied by the teacher-facing UI. */
-  managedRecoveryCount?: number;
-  /** Last correctable quality failure, fed back into the next Agent run. */
-  managedRecoveryFeedback?: string;
   /** Internal durable retry count for transient network/provider failures. */
   transientRecoveryCount?: number;
 };
@@ -260,11 +250,25 @@ export function restoreCourseDesignStageResponse(
     : null;
 }
 
-function courseDesignModelFingerprint(request: QuickDesignRequest): string {
-  return request.generationModelString
-    ?? findServerDefaultModelString()
-    ?? process.env.DEFAULT_MODEL
-    ?? "unconfigured-default";
+function courseDesignModelString(request: QuickDesignRequest): string | undefined {
+  return request.generationModelString ?? findServerDefaultModelString() ?? process.env.DEFAULT_MODEL;
+}
+
+function resolvedCourseDesignModelFingerprint(resolved: Awaited<ReturnType<typeof resolveModel>>): string {
+  return fingerprintGenerationValue({
+    model: resolved.modelString,
+    thinking: resolved.thinkingConfig ?? null,
+    outputWindow: resolved.modelInfo?.outputWindow ?? null,
+    outputBudgetPolicy: COURSE_OUTPUT_BUDGET_VERSION,
+    executionBudgetPolicy: COURSE_EXECUTION_BUDGET_VERSION,
+    executionBudget: resolveCourseExecutionBudgetOptions(),
+  });
+}
+
+async function courseDesignModelFingerprint(request: QuickDesignRequest): Promise<string> {
+  return resolvedCourseDesignModelFingerprint(await resolveModel({
+    modelString: courseDesignModelString(request), stage: "scene-outlines-stream",
+  }));
 }
 
 async function updateDesignCurrentCall(
@@ -291,12 +295,14 @@ async function createDesignStreamingAiCall(input: {
   inputFingerprint: string;
   attemptCheckpointStep: string;
   storedAttempt: unknown;
+  maxOutputTokens?: number;
+  temperature?: number;
 }): Promise<{ aiCall: AICallFn; clear: () => Promise<void> }> {
-  const modelFingerprint = courseDesignModelFingerprint(input.request);
   const resolved = await resolveModel({
-    modelString: modelFingerprint === "unconfigured-default" ? undefined : modelFingerprint,
+    modelString: courseDesignModelString(input.request),
     stage: "scene-outlines-stream",
   });
+  const modelFingerprint = resolvedCourseDesignModelFingerprint(resolved);
   const attemptsStarted = restoreCourseDesignAttemptCount(
     input.storedAttempt,
     input.inputFingerprint,
@@ -331,18 +337,25 @@ async function createDesignStreamingAiCall(input: {
       log.warn(`Unable to persist ${input.stage} activity`, error);
     });
   };
+  const outputBudget = createCourseOutputBudget({
+    resource: 'planning',
+    modelOutputWindow: resolved.modelInfo?.outputWindow,
+    thinking: resolved.thinkingConfig,
+  });
   const base = createCourseGenerationAiCall({
     model: resolved.model,
     vision: false,
     source: input.source,
     signal: input.signal,
-    maxOutputTokens: resolved.modelInfo?.outputWindow,
-    temperature: 0.5,
+    outputBudget: input.maxOutputTokens
+      ? (system, prompt) => Math.min(input.maxOutputTokens!, outputBudget(system, prompt))
+      : outputBudget,
+    executionBudget: resolveCourseExecutionBudgetOptions(),
+    temperature: input.temperature ?? 0.5,
     thinking: resolved.thinkingConfig,
     timeoutMs: resolveLlmRequestTimeoutMs("long-generation"),
     maxRetries: 2,
     streamResponse: true,
-    streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
   });
   const aiCall = withCourseGenerationAiCallContext(base, {
     attemptsStarted,
@@ -708,58 +721,6 @@ function sceneOutlineToLessonSection(
   };
 }
 
-type AiStageAudit = {
-  passed: boolean;
-  summary: string;
-  issues: string[];
-};
-
-async function auditStage(
-  label: string,
-  snapshot: unknown,
-  deterministic: StageQualityResult,
-  signal: AbortSignal,
-): Promise<AiStageAudit> {
-  if (!deterministic.passed) {
-    return {
-      passed: false,
-      summary: deterministic.issues.join("；"),
-      issues: deterministic.issues,
-    };
-  }
-  try {
-    const response = await callLLM([
-      {
-        role: "system",
-        content: `你是课程设计流程代理，不掌握教师未提供的真实学情或学校条件。你只检查当前数据中可以直接观察到的常见明显问题：字段遗漏、前后矛盾、目标与成果错配、时间明显不可执行、引用对象不存在，以及常见的课程设计错误。
-不得凭空推断学生真实能力、学校设备、教师偏好或唯一正确的教学取舍；这类不确定判断不要列为问题。不要改写内容，只返回 JSON。`,
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          stage: label,
-          deterministicChecks: deterministic.checks,
-          snapshot,
-          output: { passed: true, summary: "string", issues: ["string"] },
-        }),
-      },
-    ], { jsonMode: true, abortSignal: signal, maxTransientRetries: DURABLE_GENERATION_TRANSIENT_RETRIES });
-    const parsed = parseLLMJson<{ passed?: unknown; summary?: unknown; issues?: unknown }>(response);
-    const issues = Array.isArray(parsed.issues)
-      ? parsed.issues.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 6)
-      : [];
-    return {
-      passed: parsed.passed !== false && issues.length === 0,
-      summary: typeof parsed.summary === "string" && parsed.summary.trim()
-        ? parsed.summary.trim()
-        : "当前阶段已通过 AI 审校",
-      issues,
-    };
-  } catch {
-    return { passed: true, summary: "Agent 建议检查暂不可用；确定性硬规则已通过", issues: [] };
-  }
-}
-
 function resourcePackageTeachingContext(resourcePackage?: CourseResourcePackage): string {
   if (!resourcePackage) return "";
   const draft = resourcePackage.draft;
@@ -905,7 +866,6 @@ function stageSummaryInput(
       course.summary,
       referenceContext,
       "按学习目标和先决依赖组织知识，区分主题分组与可教可测的知识点；保留资源包指定知识，不把同义表述拆成重复节点。先讲清概念与适用条件，用例证及必要操作巩固，再按知识小节检测理解。",
-      request.managedRecoveryFeedback ? `上次生成需修正的问题：${request.managedRecoveryFeedback}` : "",
     ].filter(Boolean).join("\n"),
   });
 }
@@ -1195,7 +1155,7 @@ export async function generatePositioning(
 ): Promise<AgentStageResult<Course>> {
   const seed = await inferCourseSeed(course, request, signal);
   const details = await generatePositioningDetails(course, seed, request, "", signal);
-  let candidate: Course = {
+  const candidate: Course = {
     ...course,
     ...seed,
     summary: details.summary || request.teacherBrief,
@@ -1203,42 +1163,12 @@ export async function generatePositioning(
     learnerProfile: details.learnerProfile ?? course.learnerProfile,
     drivingQuestion: details.drivingQuestion || course.drivingQuestion,
   };
-  const resolvedIssues: string[] = [];
-  let latestIssues: string[] = [];
-  for (let attempt = 0; attempt < MAX_AGENT_REVIEW_ROUNDS; attempt += 1) {
-    const quality = evaluatePositioning(candidate);
-    const audit = await auditStage("课程定位", {
-      name: candidate.name,
-      subject: candidate.subject,
-      grade: candidate.grade,
-      hours: candidate.hours,
-      summary: candidate.summary,
-      objectives: candidate.learningObjectives,
-      drivingQuestion: candidate.drivingQuestion,
-      previousIssues: latestIssues,
-    }, quality, signal);
-    if (audit.passed) {
-      return {
-        value: candidate,
-        review: { revisionCount: attempt, resolvedIssues, advisoryIssues: [] },
-      };
-    }
-    latestIssues = audit.issues.length ? audit.issues : [audit.summary];
-    if (attempt < MAX_AGENT_REVIEW_ROUNDS - 1) {
-      resolvedIssues.push(...latestIssues);
-      candidate = await revisePositioningCandidate(candidate, request, latestIssues, signal);
-    }
-  }
-  const structural = evaluatePositioning(candidate);
-  if (!structural.passed) {
-    throw new Error(`课程定位代理无法生成结构完整的数据：${structural.issues.join("；")}`);
-  }
   return {
     value: candidate,
     review: {
-      revisionCount: MAX_AGENT_REVIEW_ROUNDS - 1,
-      resolvedIssues,
-      advisoryIssues: latestIssues,
+      revisionCount: 0,
+      resolvedIssues: [],
+      advisoryIssues: [],
     },
   };
 }
@@ -1299,49 +1229,7 @@ export async function generateProjectDesign(
       }),
     },
   ], { jsonMode: true, abortSignal: signal, maxTransientRetries: DURABLE_GENERATION_TRANSIENT_RETRIES });
-  let candidate = applyProjectDesignPayload(course, parseLLMJson<unknown>(response));
-  let latestQuality = evaluateProjectDesign(candidate);
-  let latestAuditIssues: string[] = [];
-  for (let attempt = 0; attempt < MAX_AGENT_REVIEW_ROUNDS; attempt += 1) {
-    const quality = evaluateProjectDesign(candidate);
-    latestQuality = quality;
-    const audit = await auditStage("项目成果", {
-      outcome: candidate.pblConfig?.outcome,
-      evidenceRequirements: candidate.pblConfig?.evidenceRequirements,
-    }, quality, signal);
-    if (audit.passed) return candidate;
-    latestAuditIssues = audit.issues.length ? audit.issues : [audit.summary];
-    if (attempt < MAX_AGENT_REVIEW_ROUNDS - 1) {
-      candidate = await editCourseDesignStage({
-        label: "项目成果",
-        current: {
-          difficultyLevel: candidate.pblConfig?.difficultyLevel,
-          ...candidate.pblConfig?.outcome,
-          evidenceKinds: candidate.pblConfig?.evidenceRequirements?.map((item) => item.kind),
-        },
-        issues: audit.issues.length ? audit.issues : [audit.summary],
-        fixedConstraints: {
-          teacherBrief: request.teacherBrief,
-          hours: course.hours,
-          drivingQuestion: course.drivingQuestion,
-          learningObjectives: course.learningObjectives,
-          knowledgePoints: course.content.knowledgePoints,
-        },
-        outputSchema: {
-          difficultyLevel: "introductory|standard|advanced",
-          artifact: "string",
-          presentation: "string",
-          reflection: "string",
-          evidenceKinds: ["idea-draft"],
-        },
-        abortSignal: signal,
-        preserveValueOnMalformedEdit: candidate,
-        parse: (value) => applyProjectDesignPayload(course, value),
-      });
-    }
-  }
-  if (latestQuality.passed) return candidate;
-  throw new Error(`项目成果编辑 Agent 无法修复硬规则问题：${latestQuality.issues.join("；") || latestAuditIssues.join("；")}`);
+  return applyProjectDesignPayload(course, parseLLMJson<unknown>(response));
 }
 
 function uniqueStrings(values: readonly string[]): string[] {
@@ -1487,11 +1375,55 @@ export function buildOpenMaicKnowledgeLectureRequirement(
     `请为《${course.name}》生成面向${course.grade}学生的知识讲授课程大纲。`,
     `学科：${course.subject}；AI 授知阶段总时长约 ${aiDurationMin} 分钟，其中本次需要规划的 PPT 讲授与必要互动约 ${lectureMinutes} 分钟，其余时间由系统按小节安排简答检测。`,
     `课程目标：${(course.learningObjectives ?? []).join("；") || course.summary}。`,
+    formatTeachingConstraintsForChinesePrompt(buildCourseTeachingConstraints(course, content)),
     `教师补充要求：${teacherGenerationBrief(request) || "无"}。`,
     sections.length ? `内容按以下小节组织：\n${sections.join("\n")}` : "",
     "以教师提供的课程资料作为事实依据。",
-    "本步骤只规划知识讲授 slide，以及确有必要且配置完整的通用 interactive；不要生成 quiz 或 PBL。将紧密相关的定义、关系、条件、例证和结论组织成信息充分的一页，不要把一个完整概念机械拆成多张稀疏页面。每个 slide 的 keyPoints 应包含 4–6 个互补且可见的信息单元，例如核心定义、作用机制、成立条件、具体例证、常见误区或结论；不要用泛化口号凑数，也不要为排版而默认添加 Table。",
+    "本步骤只规划知识讲授 slide，以及确有必要且配置完整的通用 interactive；不要生成 quiz 或 PBL。将紧密相关的定义、关系、条件、例证和结论组织成信息充分的一页，不要把一个完整概念机械拆成多张稀疏页面。每个 slide 的 keyPoints 根据本页职责、学生已有基础与知识难度选择互补且必要的信息单元；保留理解所需的关系和条件，不设条目配额，不用泛化口号凑数，也不要为排版而默认添加 Table。",
   ].filter(Boolean).join("\n\n");
+}
+
+const BLUEPRINT_PLANNING_SECONDS_PER_PAGE = 75;
+
+export function buildTeachingBlueprintSectionPlans(
+  content: Pick<CourseContent, "knowledgePoints" | "moduleTimingPlan">,
+  totalDurationSec: number,
+): TeachingBlueprintSectionPlan[] {
+  const groups = new Map<string, string[]>();
+  for (const point of content.knowledgePoints) {
+    const title = point.groupName?.trim() || "核心知识";
+    groups.set(title, [...(groups.get(title) ?? []), point.id]);
+  }
+  const entries = [...groups.entries()];
+  if (!entries.length) return [];
+  const durationByPoint = new Map(
+    (content.moduleTimingPlan?.allocations ?? []).flatMap((allocation) =>
+      (allocation.knowledgePointIds ?? []).map((id) => [id, Math.max(0, allocation.durationMin)] as const)),
+  );
+  const weights = entries.map(([, ids]) => ids.reduce(
+    (sum, id) => sum + (durationByPoint.get(id) ?? 1),
+    0,
+  ));
+  const teachingDurationSec = Math.round(totalDurationSec * TEACHING_NARRATION_RATIO);
+  const pageCapacity = Math.max(entries.length, Math.floor(
+    teachingDurationSec / BLUEPRINT_PLANNING_SECONDS_PER_PAGE,
+  ));
+  const extraCapacity = Math.max(0, pageCapacity - entries.length);
+  const weightTotal = weights.reduce((sum, weight) => sum + Math.max(1, weight), 0);
+  const exactExtras = weights.map((weight) => extraCapacity * Math.max(1, weight) / weightTotal);
+  const extras = exactExtras.map(Math.floor);
+  let remaining = extraCapacity - extras.reduce((sum, value) => sum + value, 0);
+  for (const item of exactExtras
+    .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
+    .sort((left, right) => right.fraction - left.fraction || left.index - right.index)) {
+    if (remaining-- <= 0) break;
+    extras[item.index] += 1;
+  }
+  return entries.map(([title, knowledgePointIds], index) => ({
+    title,
+    knowledgePointIds,
+    maxPages: 1 + (extras[index] ?? 0),
+  }));
 }
 
 function buildTeachingBlueprintInput(
@@ -1500,16 +1432,18 @@ function buildTeachingBlueprintInput(
   request: QuickDesignRequest,
   aiDurationMin: number,
 ): TeachingBlueprintInput {
+  const totalDurationSec = aiDurationMin * 60;
   return {
     generationModelFingerprint: request.generationModelString ?? findServerDefaultModelString(),
     courseTitle: course.name,
     subject: course.subject,
     grade: course.grade,
     learningObjectives: course.learningObjectives ?? [],
+    teachingConstraints: buildCourseTeachingConstraints(course, content),
     projectContext: [course.drivingQuestion, course.expectedOutcome].filter(Boolean).join("；"),
     knowledgePoints: content.knowledgePoints,
     knowledgeGraph: content.knowledgeGraph,
-    totalDurationSec: aiDurationMin * 60,
+    totalDurationSec,
     assessmentMode: request.assessmentMode ?? "adaptive",
     generationMode: request.generationMode ?? "standard",
     teacherBrief: teacherGenerationBrief(request),
@@ -1518,11 +1452,12 @@ function buildTeachingBlueprintInput(
       teacherGenerationBrief(request),
       request.referenceMaterials ?? [],
     ),
+    sectionPlans: buildTeachingBlueprintSectionPlans(content, totalDurationSec),
   };
 }
 
 async function generateNewSystemTeachingBlueprintOutlines(
-  jobId: string,
+  job: CourseDesignGenerationJob,
   course: Course,
   content: CourseContent,
   request: QuickDesignRequest,
@@ -1537,18 +1472,29 @@ async function generateNewSystemTeachingBlueprintOutlines(
   if (!isNewSystemAiTimingPlan(content.moduleTimingPlan, course.hours, content.stagePlan) || aiDurationMin <= 0) {
     throw new Error("请先确认知识讲授时间预算，再生成教学蓝图。");
   }
-  const input = buildTeachingBlueprintInput(course, content, request, aiDurationMin);
+  const resolved = await resolveModel({
+    modelString: request.generationModelString ?? findServerDefaultModelString(),
+    stage: "scene-outlines-stream",
+  });
+  const modelFingerprint = resolvedCourseDesignModelFingerprint(resolved);
+  const input = { ...buildTeachingBlueprintInput(course, content, request, aiDurationMin), generationModelFingerprint: modelFingerprint };
   const expectedFingerprint = teachingBlueprintInputFingerprint(input);
-  const modelFingerprint = request.generationModelString ?? findServerDefaultModelString();
+  const stored = await loadGenerationCheckpoints(job.id);
+  const checkpoint = stored.teachingBlueprint && typeof stored.teachingBlueprint === "object" && !Array.isArray(stored.teachingBlueprint)
+    ? stored.teachingBlueprint as unknown as {
+        schemaVersion?: unknown;
+        status?: unknown;
+        inputFingerprint?: unknown;
+        modelFingerprint?: unknown;
+        rawResponse?: unknown;
+        blueprint?: unknown;
+      }
+    : undefined;
   let blueprint = content.teachingBlueprint?.schemaVersion === 1
     && content.teachingBlueprint.inputFingerprint === expectedFingerprint
     ? content.teachingBlueprint
     : undefined;
   if (!blueprint) {
-    const stored = await loadGenerationCheckpoints(jobId);
-    const checkpoint = stored.teachingBlueprint && typeof stored.teachingBlueprint === "object" && !Array.isArray(stored.teachingBlueprint)
-      ? stored.teachingBlueprint as unknown as { schemaVersion?: unknown; inputFingerprint?: unknown; modelFingerprint?: unknown; blueprint?: unknown }
-      : undefined;
     if (checkpoint?.schemaVersion === 1
       && checkpoint.inputFingerprint === expectedFingerprint
       && checkpoint.modelFingerprint === modelFingerprint
@@ -1557,33 +1503,73 @@ async function generateNewSystemTeachingBlueprintOutlines(
     }
   }
   if (!blueprint) {
-    const resolved = await resolveModel({
-      modelString: modelFingerprint,
-      stage: "scene-outlines-stream",
-    });
-    blueprint = await generateTeachingBlueprint(input, createCourseGenerationAiCall({
-      model: resolved.model,
-      vision: false,
-      source: "teaching-blueprint",
-      signal,
-      maxOutputTokens: resolved.modelInfo?.outputWindow,
-      thinking: resolved.thinkingConfig,
-      timeoutMs: resolveLlmRequestTimeoutMs("long-generation"),
-      maxRetries: 2,
-      streamResponse: true,
-      streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
-    }));
-    await saveGenerationCheckpoint(jobId, TEACHING_BLUEPRINT_STEP, {
+    const storedResponse = restoreCourseDesignStageResponse(
+      checkpoint,
+      expectedFingerprint,
+      modelFingerprint,
+    );
+    let rawResponse = storedResponse ?? "";
+    let clearStreaming: (() => Promise<void>) | undefined;
+    let aiCall: AICallFn;
+    if (storedResponse) {
+      aiCall = async () => storedResponse;
+    } else {
+      const streaming = await createDesignStreamingAiCall({
+        job,
+        request,
+        stage: "teachingBlueprint",
+        source: "teaching-blueprint",
+        signal,
+        inputFingerprint: expectedFingerprint,
+        attemptCheckpointStep: TEACHING_BLUEPRINT_ATTEMPT_STEP,
+        storedAttempt: stored.teachingBlueprintAttempt,
+        maxOutputTokens: 65_536,
+        temperature: 0.2,
+      });
+      clearStreaming = streaming.clear;
+      aiCall = async (system, prompt, images) => {
+        rawResponse = await streaming.aiCall(system, prompt, images);
+        await saveGenerationCheckpoint(job.id, TEACHING_BLUEPRINT_STEP, {
+          schemaVersion: 1,
+          status: "response-complete",
+          inputFingerprint: expectedFingerprint,
+          modelFingerprint,
+          rawResponse,
+        });
+        return rawResponse;
+      };
+    }
+    try {
+      blueprint = await generateTeachingBlueprint(input, aiCall, {
+        onValidation: async ({ issues, responseCharacters }) => {
+          if (issues.length) {
+            log.warn(`[teaching-blueprint] unusable output (${responseCharacters} chars): ${issues.join("；")}`);
+          }
+          await saveGenerationCheckpoint(job.id, TEACHING_BLUEPRINT_STEP, {
+            schemaVersion: 1,
+            status: issues.length ? "invalid-output" : "response-complete",
+            inputFingerprint: expectedFingerprint,
+            modelFingerprint,
+            rawResponse,
+            validationIssues: issues,
+            responseCharacters,
+          });
+        },
+      });
+    } finally {
+      if (clearStreaming) {
+        await clearStreaming().catch((error) => log.warn("Unable to clear teaching-blueprint activity", error));
+      }
+    }
+    await saveGenerationCheckpoint(job.id, TEACHING_BLUEPRINT_STEP, {
       schemaVersion: 1,
+      status: "validated",
       inputFingerprint: expectedFingerprint,
       modelFingerprint,
       blueprint,
     });
   }
   const outlines = teachingBlueprintToOutlines(blueprint, ZH_CN_COURSE_LANGUAGE_DIRECTIVE);
-  const budgetIssues = validateTeachingBlueprintBudget(blueprint, outlines);
-  if (budgetIssues.length) throw new Error(`教学蓝图预算未通过校验：${budgetIssues.join("；")}`);
-  assertAiOutlineKnowledgeCoverage(outlines, content.knowledgePoints);
   return { blueprint, outlines };
 }
 
@@ -1622,12 +1608,12 @@ async function generateNewSystemAiOutlines(
       vision: false,
       source: "classic-course-outline",
       signal,
-      maxOutputTokens: resolved.modelInfo?.outputWindow,
+      outputBudget: createCourseOutputBudget({ resource: 'planning', modelOutputWindow: resolved.modelInfo?.outputWindow, thinking: resolved.thinkingConfig }),
+      executionBudget: resolveCourseExecutionBudgetOptions(),
       thinking: resolved.thinkingConfig,
       timeoutMs: resolveLlmRequestTimeoutMs("long-generation"),
       maxRetries: 2,
       streamResponse: true,
-      streamMaxDurationMs: resolveLlmStreamMaxDurationMs(),
     }),
     {
       imageGenerationEnabled: request.options?.enableImageGeneration === true,
@@ -1644,7 +1630,6 @@ async function generateNewSystemAiOutlines(
     knowledgeGraph: content.knowledgeGraph,
     courseLanguageDirective: result.data.languageDirective,
   });
-  assertAiOutlineKnowledgeCoverage(normalized, content.knowledgePoints);
   return normalized;
 }
 
@@ -1735,6 +1720,8 @@ async function enqueueClassroomGeneration(
     courseTitle: course.name,
     requirement: [
       `课程：${course.name}（${course.subject}，${course.grade}）`,
+      `课程学习目标：${(course.learningObjectives ?? []).join("；") || course.summary || "未单独提供；遵循已确认页面目标"}`,
+      formatTeachingConstraintsForChinesePrompt(buildCourseTeachingConstraints(course, course.content)),
       "只根据已确认 sceneOutlines 制作第二阶段知识讲授的学生课堂。",
       "不得新增其他阶段页面，不得生成教师课堂或教师资源。",
       buildCourseTeachingSourceContext(course.content.resourcePackage, teacherBrief, referenceMaterials),
@@ -1829,30 +1816,6 @@ function sceneOutlinesFromContent(content: CourseContent): Array<SceneOutline & 
   })) as Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
 }
 
-function scheduleManagedCourseDesignRetry(jobId: string): void {
-  const retryTimer = setTimeout(() => {
-    void (async () => {
-      const now = new Date();
-      const claimed = await designGenerationJobs.updateMany({
-        where: { id: jobId, status: "queued" },
-        data: {
-          status: "running",
-          step: "managed_recovery",
-          message: "托管生成 Agent 正在根据质量审校结果自动修订课程",
-          lastHeartbeatAt: now,
-          error: null,
-          attempt: { increment: 1 },
-          version: { increment: 1 },
-        },
-      });
-      if (claimed.count !== 1) return;
-      const retryJob = await designGenerationJobs.findUnique({ where: { id: jobId } });
-      if (retryJob) await runCourseDesignJob(retryJob);
-    })().catch((error) => log.error("Failed to schedule managed course-design recovery", error));
-  }, 150);
-  retryTimer.unref?.();
-}
-
 export async function runCourseDesignJob(job: CourseDesignGenerationJob): Promise<void> {
   return runWithCourseGenerationLlmContext(
     () => runCourseDesignJobWithGenerationContext(job),
@@ -1874,11 +1837,7 @@ export async function runCourseDesignJob(job: CourseDesignGenerationJob): Promis
   );
 }
 
-/**
- * Upgrades a previously failed, but structurally recoverable, durable task to
- * the managed Agent loop. This lets deployments resume jobs that failed under
- * the old fail-fast policy without asking the teacher to resubmit the brief.
- */
+/** Resume only interrupted infrastructure work from durable checkpoints. */
 export async function resumeRecoverableCourseDesignJob(
   courseId: string,
 ): Promise<CourseDesignGenerationJob | null> {
@@ -1887,26 +1846,19 @@ export async function resumeRecoverableCourseDesignJob(
   const request = job.request as unknown as QuickDesignRequest;
   const packageJob = await resourcePackageJobs.findUnique({ where: { courseId } });
   if (!canResumeCourseDesignWithPackageState(request, packageJob)) return job;
-  const managedRecoveryRequest = createManagedRecoveryRequest(request, new Error(job.error));
   const transientRecoveryRequest = createTransientInfrastructureRecoveryRequest(
     request,
     new Error(job.error),
   );
-  const recoveryRequest = managedRecoveryRequest ?? transientRecoveryRequest;
-  if (!recoveryRequest) return job;
-  const isTransientRecovery = Boolean(transientRecoveryRequest && !managedRecoveryRequest);
-  const recoveryCount = isTransientRecovery
-    ? transientRecoveryRequest?.transientRecoveryCount ?? 1
-    : managedRecoveryRequest?.managedRecoveryCount ?? 1;
-  const updated = await designGenerationJobs.updateMany({
+  if (!transientRecoveryRequest) return job;
+  const recoveryCount = transientRecoveryRequest.transientRecoveryCount ?? 1;
+  await designGenerationJobs.updateMany({
     where: { id: job.id, status: "failed" },
     data: {
       status: "queued",
-      step: isTransientRecovery ? "infrastructure_retry" : "managed_recovery",
-      message: isTransientRecovery
-        ? `检测到此前的模型服务连接中断，正在从已保存阶段自动恢复（第 ${recoveryCount} 次）`
-        : `检测到可修复的生成问题，托管生成 Agent 正在自动恢复（第 ${recoveryCount} 次）`,
-      request: recoveryRequest as unknown as Prisma.InputJsonValue,
+      step: "infrastructure_retry",
+      message: `检测到此前的模型服务连接中断，正在从已保存阶段自动恢复（第 ${recoveryCount} 次）`,
+      request: transientRecoveryRequest as unknown as Prisma.InputJsonValue,
       error: null,
       completedAt: null,
       retryAt: new Date(),
@@ -1919,7 +1871,6 @@ export async function resumeRecoverableCourseDesignJob(
       version: { increment: 1 },
     },
   });
-  if (updated.count === 1 && !isTransientRecovery) scheduleManagedCourseDesignRetry(job.id);
   return designGenerationJobs.findUnique({ where: { id: job.id } });
 }
 
@@ -1960,8 +1911,7 @@ async function runNewSystemCourseDesign(
     && initialCourse.grade.trim().length > 0
     && initialCourse.hours > 0
     && (initialCourse.learningObjectives?.length ?? 0) > 0;
-  const resumeAtSavedKnowledge = !request.managedRecoveryFeedback
-    && traceEvents(job.trace).some((entry) => (
+  const resumeAtSavedKnowledge = traceEvents(job.trace).some((entry) => (
       entry.step === "knowledgePoints" && (entry.status === "completed" || entry.status === "warning")
     ))
     && initialCourse.content.knowledgePoints.length > 0
@@ -2032,7 +1982,7 @@ async function runNewSystemCourseDesign(
       input: knowledgeInput,
       context: knowledgeContext,
     });
-    const knowledgeModelFingerprint = courseDesignModelFingerprint(request);
+    const knowledgeModelFingerprint = await courseDesignModelFingerprint(request);
     const storedCheckpoints = await loadGenerationCheckpoints(job.id);
     const storedKnowledge = checkpointRecord(storedCheckpoints.knowledgeStructure);
     const storedKnowledgeResponse = restoreCourseDesignStageResponse(
@@ -2097,25 +2047,6 @@ async function runNewSystemCourseDesign(
       }
     }
     const generatedGraph = generated.knowledgeGraph ?? { nodes: [], edges: [] };
-    const generatedEntryPolicy = deriveCourseEntryPolicy({
-      hours: course.hours,
-      grade: course.grade,
-      lessonTargetCount: generated.knowledgePoints.length,
-      foundationTargetCount: generated.knowledgePoints.filter((point) => point.level === "foundation").length,
-      acceptedPrerequisiteCount: generatedGraph.nodes
-        .filter((node) => node.instructionalRole === "prerequisite").length,
-      courseMode: course.pblConfig?.generationTemplate,
-    });
-    const generatedGraphQuality = assessKnowledgeGraphQuality(
-      generatedGraph,
-      generated.knowledgePoints,
-      course.content.teacherRequiredKnowledgePoints,
-      {
-        objectiveCount: course.learningObjectives?.length ?? 0,
-        minimumPrerequisites: generatedEntryPolicy.minimumPrerequisites,
-        maximumPrerequisites: generatedEntryPolicy.maximumPrerequisites,
-      },
-    );
     await saveGenerationCheckpoint(job.id, KNOWLEDGE_STRUCTURE_STEP, {
       schemaVersion: 1,
       status: "validated",
@@ -2124,7 +2055,6 @@ async function runNewSystemCourseDesign(
       knowledgePoints: generated.knowledgePoints,
       knowledgeGraph: generatedGraph,
       revisionCount: generated.revisionCount,
-      quality: generatedGraphQuality,
     });
     const content: CourseContent = {
       ...course.content,
@@ -2170,12 +2100,10 @@ async function runNewSystemCourseDesign(
       progress: 52,
       label: "知识图谱",
       summary: `已生成 ${content.knowledgePoints.length} 个知识点，等待教师确认`,
-      status: generatedGraphQuality.ok ? "completed" : "warning",
+      status: "completed",
       checks: [
         "已完成字段、引用和关系元数据的确定性整理，未调用第二个 AI 审校",
-        ...(generatedGraphQuality.ok
-          ? ["知识图谱已具备可查看、可编辑的完整结构"]
-          : [`建议教师重点检查：${generatedGraphQuality.issues.slice(0, 3).join("；")}`]),
+        "知识图谱已具备可查看、可编辑的完整结构",
         ...(request.referenceMaterials?.length ? [`已参考 ${request.referenceMaterials.length} 份教师知识资料`] : []),
         "教师可在继续前查看和编辑",
       ],
@@ -2224,7 +2152,7 @@ async function runNewSystemCourseDesign(
       stagePlan: course.content.stagePlan,
     };
     const durationInputFingerprint = fingerprintGenerationValue({ schemaVersion: 1, input: durationInput });
-    const durationModelFingerprint = courseDesignModelFingerprint(request);
+    const durationModelFingerprint = await courseDesignModelFingerprint(request);
     const storedCheckpoints = await loadGenerationCheckpoints(job.id);
     const storedDuration = checkpointRecord(storedCheckpoints.aiDuration);
     const storedDurationResponse = restoreCourseDesignStageResponse(
@@ -2346,9 +2274,6 @@ async function runNewSystemCourseDesign(
     if (usesTeachingBlueprint) {
       if (!content.teachingBlueprint) throw new Error("教学蓝图检查点缺失，无法复用新版课程大纲。");
       sceneOutlines = sceneOutlinesFromContent(content) as Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
-      const issues = validateTeachingBlueprintBudget(content.teachingBlueprint, sceneOutlines);
-      if (issues.length) throw new Error(`已保存课程大纲与教学蓝图不一致：${issues.join("；")}`);
-      assertAiOutlineKnowledgeCoverage(sceneOutlines, content.knowledgePoints);
     } else {
       sceneOutlines = normalizeNewSystemAiOutlines(sceneOutlinesFromContent(content), {
         totalDurationSec: timingPlan.totalMinutes * 60,
@@ -2372,7 +2297,7 @@ async function runNewSystemCourseDesign(
     await beginStep(job, "lessonOutline", 2, 68, "正在按时间预算编写分节知识讲授大纲");
     if (usesTeachingBlueprint) {
       const compiled = await generateNewSystemTeachingBlueprintOutlines(
-        job.id,
+        job,
         course,
         content,
         request,
@@ -2439,9 +2364,6 @@ async function runNewSystemCourseDesign(
     if (usesTeachingBlueprint) {
       if (!content.teachingBlueprint) throw new Error("教师确认后的教学蓝图缺失。");
       sceneOutlines = sceneOutlinesFromContent(content) as Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
-      const issues = validateTeachingBlueprintBudget(content.teachingBlueprint, sceneOutlines);
-      if (issues.length) throw new Error(`教师确认后的课程大纲与教学蓝图不一致：${issues.join("；")}`);
-      assertAiOutlineKnowledgeCoverage(sceneOutlines, content.knowledgePoints);
     } else {
       sceneOutlines = normalizeNewSystemAiOutlines(sceneOutlinesFromContent(content), {
         totalDurationSec: timingPlan.totalMinutes * 60,
@@ -2526,7 +2448,7 @@ async function runNewSystemCourseDesign(
       qualityReport: {
         summary: isTestLesson
           ? "知识图谱与完整大纲已按正式流程生成；本次只将其中一个完整知识小节交给正式课堂生成器验证。"
-          : "知识图谱与大纲草稿已生成，课堂内容生成后将后台核对，最终由教师确认发布。",
+          : "知识图谱与大纲草稿已生成；课堂内容完成后由教师预览、修改并确认发布。",
         checks: ["知识图谱确认", "动态时长判断", "分节小测", "课程大纲确认"],
       } as unknown as Prisma.InputJsonValue,
       completedAt: new Date(),
@@ -2582,7 +2504,6 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
       });
       return;
     }
-    const managedRecoveryRequest = createManagedRecoveryRequest(request, error);
     const transientRecoveryRequest = createTransientInfrastructureRecoveryRequest(request, error);
     if (transientRecoveryRequest) {
       const recoveryCount = transientRecoveryRequest.transientRecoveryCount ?? 1;
@@ -2610,34 +2531,6 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
           version: { increment: 1 },
         },
       });
-      return;
-    }
-    if (managedRecoveryRequest) {
-      const recoveryCount = managedRecoveryRequest.managedRecoveryCount ?? 1;
-      log.warn(
-        `Managed course-design recovery ${recoveryCount} queued for ${request.courseId}`,
-        error,
-      );
-      await designGenerationJobs.update({
-        where: { id: job.id },
-        data: {
-          status: "queued",
-          step: "managed_recovery",
-          message: `质量审校发现可修复问题，托管生成 Agent 正在自动调整（第 ${recoveryCount} 次）`,
-          request: managedRecoveryRequest as unknown as Prisma.InputJsonValue,
-          error: null,
-          retryAt: null,
-          estimatedRemainingSeconds: remainingSeconds(
-            Math.max(0, Math.min(job.stepIndex, NEW_SYSTEM_STEP_ESTIMATES.length - 1)),
-            request.options,
-            request.systemMode,
-          ),
-          completedAt: null,
-          lastHeartbeatAt: new Date(),
-          version: { increment: 1 },
-        },
-      });
-      scheduleManagedCourseDesignRetry(job.id);
       return;
     }
     log.error(`Course design failed for ${request.courseId}`, error);

@@ -93,6 +93,10 @@ describe("AiLearningTeacherPreview", () => {
     };
     const view = render(<AiLearningTeacherPreview course={timedCourse} />);
     expect(screen.getByText(/讲授音频实测 20.1 分钟/)).toBeTruthy();
+    timedCourse.content.teachingTimingAudit.teachingRatioValid = false;
+    view.rerender(<AiLearningTeacherPreview course={timedCourse} />);
+    expect(screen.getByText("讲授时长与计划偏差较大")).toBeTruthy();
+    expect(screen.getByText(/讲授音频实测 20.1 分钟/)).toBeTruthy();
     timedCourse.content.teachingTimingAudit.narrationDurationSource = "estimated-script";
     timedCourse.content.teachingTimingAudit.substantiveTeachingDurationSec = 1_224;
     view.rerender(<AiLearningTeacherPreview course={timedCourse} />);

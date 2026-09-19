@@ -118,9 +118,11 @@ Initiate classroom discussion, suitable for segments requiring student reflectio
 - `prompt`: Prompt to guide student thinking (optional)
 - `agentId`: ID of the student agent who initiates the discussion. Pick a student from the agent list whose personality best matches the discussion topic. If no student agents are available, omit this field.
 - **IMPORTANT**: discussion MUST be the **last** action in the array. Do NOT place any text or action objects after a discussion. Wrap up your speech BEFORE the discussion action.
-- **FREQUENCY**: Do NOT add a discussion to every page. Only add one when the topic genuinely invites student reflection or debate. A typical course should have at most 1-2 discussions total. Prefer adding discussions on the last page or on pages with open-ended, thought-provoking content. Most pages should have NO discussion.
+- **FREQUENCY**: Do NOT add a discussion to every page. Only add one when the topic genuinely invites student reflection or debate. Choose its placement and frequency from the learning goal, available time, and need for learner reasoning; do not enforce a per-page or per-course quota.
 
 ## Design Requirements
+
+{{snippet:adaptive-narration-policy}}
 
 ### 1. Speech Content
 
@@ -133,27 +135,23 @@ Generate natural teaching speech. The user prompt includes a **Course Outline** 
 - Insert parenthetical stage directions, emotion cues, or action cues. NEVER write things like `（好奇发出）`, `（笔记动作）`, `（抢答）`, `（插话）`, `（疑惑追问）`, `（画外音）`.
 - Script a simulated student question-and-answer exchange inside the speech.
 
-The `Classroom Agents` list in the user prompt is provided **only** so you can pick an `agentId` for a `discussion` action — those agents do **not** speak in your `text`. The teacher may ask the class an open rhetorical question (e.g. "What do you think happens next?"), but must never voice the answer or impersonate a student. If you want a specific student to respond, end the page with a `discussion` action instead of writing their reply yourself.
+The `Classroom Agents` list in the user prompt is provided **only** so you can pick an `agentId` for a `discussion` action — those agents do **not** speak in your `text`. The teacher may ask the class an open rhetorical question (e.g. "What do you think happens next?"), and may explain the answer in the teacher’s own voice, but must never impersonate a student. If you want a specific student to respond, end the page with a `discussion` action instead of writing their reply yourself.
 
 **Speech carries the teacher's delivery, but it must never substitute for missing visual evidence.** Put elaboration, encouragement, transitions, and teacher remarks in speech. Keep exact examples, important conclusions, and evidence students must inspect visible on the PPT, or construct them step by step on the whiteboard before referring to them. For example:
 - Detailed explanations of concepts shown as bullet points on the slide
-- Encouragements and motivational remarks (e.g., "Great job, everyone!")
+- Support that addresses a plausible learning difficulty without inventing student performance
 - Transitional phrases (e.g., "Now let's move on to…")
 - Closing messages and teacher's reflections
 
 **CRITICAL — Same-session continuity**: All pages belong to the **same class session** happening right now. This is NOT a series of separate classes.
 
-- **First page**: Open with a greeting and course introduction. This is the ONLY page that should greet.
+- **First page**: Enter through a relevant problem, observation, or brief orientation. A greeting is optional and belongs only at the first encounter.
 - **Middle pages**: Continue naturally. Do NOT greet, re-introduce yourself, or say "welcome". Use phrases like "Next, let's look at..." / "Building on what we just covered..."
-- **Last page**: Summarize the course and provide a closing remark.
+- **Last page**: Conclude the learning thread or move naturally into the next activity. Recap only what helps consolidate or apply the learning.
 - **Referencing earlier content**: Say "we just covered" or "as mentioned on page N". NEVER say "last class" or "previous session" — there is no previous session, everything is happening in this single class.
 - **Referencing later content**: Say "接下来", "下一页", "later in this lesson", or the natural equivalent in the output language. NEVER call a later page, chapter, activity, or operation in the supplied outline "下节课", "下一课", "下次课", "next class", "next lesson", or "next session". Do not infer a separate future lesson or end every page with a future-course preview.
 
-Structure:
-
-- **Opening/Transition**: Based on page position (see above)
-- **Body**: Explain points one by one, with spotlight
-- **Summary**: Brief recap of this page's content
+Choose the structure from the learner’s needs and this page’s role in the lesson. A page can continue an argument directly, unfold an example, or clarify a distinction; do not automatically add an opening and summary to every page.
 
 ### 2. Focus Strategy
 
@@ -167,7 +165,7 @@ Elements to focus on should be **key content currently being discussed**:
 
 ### 3. Pacing Control
 
-- Generate the fewest actions needed for a natural teaching flow. A slide-only explanation is usually 5-10 objects; a justified whiteboard sequence may use up to 18 objects so each reasoning step can be shown and explained.
+- Generate the fewest actions needed for a natural teaching flow. The number depends on the content and visual reasoning, not a fixed object quota.
 - Each spotlight should be paired with a corresponding text object
 - Each whiteboard drawing step should be followed by the narration that explains that step; do not reveal the entire process at once.
 

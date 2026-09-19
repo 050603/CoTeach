@@ -23,6 +23,7 @@ import {
 } from '@/lib/openmaic/pbl/course-template';
 import { normalizePblStageKey } from '@/lib/pbl-time-model';
 import { rescalePblDetailDurations } from '@/lib/pbl-time-model';
+import { estimateQuizPageDurationSec } from '@/lib/pbl-time-estimation';
 import { resolveCompanionIds } from '@/lib/companion/stage-policy';
 import { formatImageDescription, formatImagePlaceholder } from './prompt-formatters';
 import { parseJsonResponse } from './json-repair';
@@ -314,12 +315,29 @@ export function sanitizeProceduralSkillOutline(outline: SceneOutline): SceneOutl
   };
 }
 
+export function inferQuizOutlineDurationSec(outline: Pick<SceneOutline, 'targetDurationSec' | 'estimatedDuration' | 'plannedTiming' | 'quizConfig'>): number {
+  for (const duration of [outline.targetDurationSec, outline.estimatedDuration]) {
+    if (typeof duration === 'number' && Number.isFinite(duration) && duration > 0) return duration;
+  }
+  if (outline.plannedTiming) {
+    const total = outline.plannedTiming.narrationSec + outline.plannedTiming.learnerActivitySec + outline.plannedTiming.transitionSec;
+    if (Number.isFinite(total) && total > 0) return total;
+  }
+  return estimateQuizPageDurationSec({
+    questionCount: Math.max(1, Math.round(outline.quizConfig?.questionCount ?? 3)),
+    questionTypes: outline.quizConfig?.questionTypes,
+    difficulty: outline.quizConfig?.difficulty === 'hard' ? 'advanced' : outline.quizConfig?.difficulty === 'easy' ? 'introductory' : 'standard',
+  });
+}
+
 export function applyOutlineFallbacks(
   outline: SceneOutline,
   hasLanguageModel: boolean,
   options: { allowProceduralSkill?: boolean; personalProject?: boolean } = {},
 ): SceneOutline {
-  const normalizedOutline = normalizeInteractiveIntent(outline);
+  const normalizedOutline = normalizeInteractiveIntent(outline.type === 'quiz' && outline.estimatedDuration == null
+    ? { ...outline, estimatedDuration: inferQuizOutlineDurationSec(outline) }
+    : outline);
   // Ultra Mode: interactive scenes with widgetType + widgetOutline are valid
   const hasWidgetConfig = normalizedOutline.widgetType && normalizedOutline.widgetOutline;
 

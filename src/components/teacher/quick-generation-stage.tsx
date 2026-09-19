@@ -461,27 +461,25 @@ function ArtifactBody({ artifact, active, suspendedLabel }: { artifact: CourseDe
 const PAGE_TASK_LABELS: Record<string, string> = {
   restoring: "恢复断点",
   content: "制作页面正文",
-  "reviewed-content": "检查版式与知识覆盖",
+  "reviewed-content": "恢复旧版页面断点",
   actions: "生成讲稿与教学动作",
-  narration: "校验课堂口语",
+  narration: "编写课堂讲稿",
   assembling: "组装并保存页面",
 };
 
 const PAGE_TASK_STAGES = [
   "restoring",
-  "content",
-  "reviewed-content",
-  "actions",
   "narration",
+  "content",
+  "actions",
   "assembling",
 ] as const;
 
 const PAGE_TASK_SHORT_LABELS: Record<typeof PAGE_TASK_STAGES[number], string> = {
   restoring: "恢复",
+  narration: "讲稿",
   content: "正文",
-  "reviewed-content": "检查",
-  actions: "讲稿动作",
-  narration: "口语",
+  actions: "动作",
   assembling: "保存",
 };
 
@@ -582,7 +580,7 @@ function AiLearningPageProductionPreview({ artifact, active, suspendedLabel }: {
                   className="mt-1.5 pl-[66px]"
                   role="progressbar"
                 >
-                  <div className="grid grid-cols-6 gap-1" aria-hidden>
+                  <div className="grid grid-cols-5 gap-1" aria-hidden>
                     {PAGE_TASK_STAGES.map((stage, stageIndex) => (
                       <motion.span
                         animate={stageIndex === currentStageIndex && isRunning && !reducedMotion ? { opacity: [.55, 1, .55] } : undefined}
@@ -597,7 +595,7 @@ function AiLearningPageProductionPreview({ artifact, active, suspendedLabel }: {
                       />
                     ))}
                   </div>
-                  <div className="mt-1 grid grid-cols-6 gap-1" aria-hidden>
+                  <div className="mt-1 grid grid-cols-5 gap-1" aria-hidden>
                     {PAGE_TASK_STAGES.map((stage, stageIndex) => (
                       <span
                         className={cn(

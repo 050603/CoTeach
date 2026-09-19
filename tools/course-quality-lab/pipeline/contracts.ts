@@ -1,24 +1,24 @@
-export const V5_PIPELINE_VERSION = "course-quality-lab-v5-first-pass-v10";
+export const V5_PIPELINE_VERSION = "course-quality-lab-v5-first-pass-v26";
 
 export const V5_MODULE_CONTRACTS = {
   plan: {
-    version: "first-pass-teaching-contract-v2",
+    version: "explanation-first-teaching-contract-v5",
     dependencies: [],
   },
   slides: {
-    version: "explicit-semantic-slide-v2",
+    version: "explicit-semantic-slide-v3",
     dependencies: ["plan"],
   },
   narration: {
-    version: "role-aware-narration-v2",
+    version: "explanation-first-narration-v11",
     dependencies: ["plan"],
   },
   actions: {
-    version: "explicit-action-binding-v2",
+    version: "explicit-action-binding-v3",
     dependencies: ["slides", "narration"],
   },
   review: {
-    version: "single-page-repair-review-v2",
+    version: "first-pass-evidence-review-v8",
     dependencies: ["plan", "slides", "narration", "actions"],
   },
   quiz: {
@@ -26,11 +26,11 @@ export const V5_MODULE_CONTRACTS = {
     dependencies: ["narration", "review"],
   },
   audio: {
-    version: "segment-audio-v1",
+    version: "playback-bound-segment-audio-v2",
     dependencies: ["narration", "review"],
   },
   export: {
-    version: "course-export-v1",
+    version: "playable-course-export-v2",
     // Export intentionally does not depend on audio, so both can proceed once
     // their own prerequisites are ready.
     dependencies: ["slides", "actions", "quiz", "review"],

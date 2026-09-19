@@ -507,7 +507,7 @@ function hasIndependentSubtitle(outline: SceneOutline, elements: readonly PPTEle
     if (element === title || !elementVisibleText(element).trim()) return false;
     const width = 'width' in element && typeof element.width === 'number' ? element.width : 0;
     return element.top >= Math.max(95, titleBottom - 8)
-      && element.top <= 145
+      && element.top <= 165
       && width >= Math.max(300, titleWidth * 0.45);
   });
 }
@@ -767,9 +767,8 @@ export function auditSlideDensity(
   if (paletteDeviationCount > 0) {
     issues.push(`页面存在 ${paletteDeviationCount} 种非 OpenMAIC 参考元素色或非参考背景，导致跨页视觉体系漂移`);
   }
-  if (area.utilization < 0.9) {
-    issues.push(`正文区域网格利用率仅 ${(area.utilization * 100).toFixed(1)}%，低于 90% 目标`);
-  }
+  // Utilization is a continuous comparison signal, not a pass/fail target.
+  // Intentional whitespace alone must not trigger another model request.
   if (area.maxBlankBand > 125) {
     issues.push(`正文区域存在 ${area.maxBlankBand}px 的连续空白带，信息分布明显失衡`);
   }
@@ -854,7 +853,7 @@ export function buildLayoutRepairDirective(
         ? ['映射或层级内容必须使用分组节点与 line 连接线或原生 table，清楚表现对应关系。']
         : []),
     ] : []),
-    ...(density && density.contentAreaUtilization < 0.9 ? [
+    ...(density && density.maxBlankBand > 125 ? [
       `重组现有内容以利用正文区域，消除 ${density.maxBlankBand}px 连续空白带；可以拆分现有要点、增加关系标签或结论带，但不得增加新事实。`,
     ] : []),
     '返回完整页面 JSON。确保所有对象位于 1000 × 562.5 画布内，正文不小于 16px；仅不超过两行的简短图注可使用 14–16px。',

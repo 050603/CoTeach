@@ -7,6 +7,7 @@ import type { NewSystemAiDurationRecommendation } from "@/lib/classroom/new-syst
 import { allocateLectureBudget, knowledgeLectureBudgetBounds } from "./knowledge-lecture-budget";
 import type { CourseStagePlan } from "@/lib/resource-package/types";
 import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
+import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic/generation/generated-output-retry";
 
 type ModelCall = typeof callLLM;
 
@@ -209,19 +210,35 @@ export function normalizeNewSystemAiDurationRecommendation(
 
 export async function generateNewSystemAiDurationRecommendation(
   input: NewSystemAiDurationInput,
-  options: { abortSignal?: AbortSignal; modelCall?: ModelCall; aiCall?: AICallFn } = {},
+  options: {
+    abortSignal?: AbortSignal;
+    modelCall?: ModelCall;
+    aiCall?: AICallFn;
+    retrySleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  } = {},
 ): Promise<NewSystemAiDurationRecommendation> {
   const messages = buildNewSystemAiDurationMessages(input);
-  const raw = options.aiCall
-    ? await options.aiCall(
-        messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n"),
-        messages.filter((message) => message.role !== "system").map((message) => message.content).join("\n\n"),
-      )
-    : await (options.modelCall ?? callLLM)(messages, {
-        jsonMode: true,
-        abortSignal: options.abortSignal,
-        requestClass: "long-generation",
-        maxTransientRetries: DURABLE_GENERATION_TRANSIENT_RETRIES,
-      });
-  return normalizeNewSystemAiDurationRecommendation(parseLLMJson<unknown>(raw), input);
+  return withGeneratedOutputRetry(async () => {
+    const raw = options.aiCall
+      ? await options.aiCall(
+          messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n"),
+          messages.filter((message) => message.role !== "system").map((message) => message.content).join("\n\n"),
+        )
+      : await (options.modelCall ?? callLLM)(messages, {
+          jsonMode: true,
+          abortSignal: options.abortSignal,
+          requestClass: "long-generation",
+          maxTransientRetries: DURABLE_GENERATION_TRANSIENT_RETRIES,
+        });
+    try {
+      return normalizeNewSystemAiDurationRecommendation(parseLLMJson<unknown>(raw), input);
+    } catch (error) {
+      throw invalidGeneratedOutput(error, "知识讲授时长结果无法解析或缺少必要字段");
+    }
+  }, {
+    label: "ai-duration-output",
+    signal: options.abortSignal,
+    maxRetries: 2,
+    sleep: options.retrySleep,
+  });
 }

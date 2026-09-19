@@ -15,31 +15,14 @@ vi.mock("@/lib/llm/client", async (importOriginal) => {
 describe("course design Agent editing", () => {
   beforeEach(() => callLLM.mockReset());
 
-  it("generates the project outcome once and sends review findings only to the editor", async () => {
-    callLLM
-      .mockResolvedValueOnce(JSON.stringify({
-        difficultyLevel: "standard",
-        artifact: "校园节能方案",
-        presentation: "现场说明方案与证据",
-        reflection: "反思方案改进过程",
-        evidenceKinds: ["idea-draft", "revision-log", "reflection-log", "data-screenshot"],
-      }))
-      .mockResolvedValueOnce(JSON.stringify({
-        passed: false,
-        summary: "成果没有明确服务对象",
-        issues: ["作品描述缺少服务对象"],
-      }))
-      .mockResolvedValueOnce(JSON.stringify({
-        summary: "已补充服务对象",
-        revised: {
-          difficultyLevel: "standard",
-          artifact: "面向学校后勤部门的校园节能方案",
-          presentation: "向学校后勤部门说明方案与证据",
-          reflection: "反思方案改进过程",
-          evidenceKinds: ["idea-draft", "revision-log", "reflection-log", "data-screenshot"],
-        },
-      }))
-      .mockResolvedValueOnce(JSON.stringify({ passed: true, summary: "明显问题已修复", issues: [] }));
+  it("keeps the first usable project outcome for teacher review without audit calls", async () => {
+    callLLM.mockResolvedValueOnce(JSON.stringify({
+      difficultyLevel: "standard",
+      artifact: "校园节能方案",
+      presentation: "现场说明方案与证据",
+      reflection: "反思方案改进过程",
+      evidenceKinds: ["idea-draft", "revision-log", "reflection-log", "data-screenshot"],
+    }));
 
     const { generateProjectDesign } = await import("./job-runner");
     const course = {
@@ -76,10 +59,8 @@ describe("course design Agent editing", () => {
       new AbortController().signal,
     );
 
-    expect(result.pblConfig?.outcome.artifact).toContain("学校后勤部门");
-    expect(callLLM).toHaveBeenCalledTimes(4);
+    expect(result.pblConfig?.outcome.artifact).toBe("校园节能方案");
+    expect(callLLM).toHaveBeenCalledOnce();
     expect(callLLM.mock.calls.filter((call) => call[0][0].content.includes("PBL 项目成果设计师"))).toHaveLength(1);
-    expect(callLLM.mock.calls[2][0][0].content).toContain("课程设计编辑 Agent");
-    expect(callLLM.mock.calls[2][0][1].content).toContain("作品描述缺少服务对象");
-  });
+  }, 15_000);
 });

@@ -1,12 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   generateTeachingBlueprint,
+  buildTeachingBlueprintPrompt,
   teachingBlueprintInputFingerprint,
   teachingBlueprintToOutlines,
   validateTeachingBlueprintBudget,
   type TeachingBlueprintInput,
 } from "./teaching-blueprint";
 import { deriveKnowledgeLectureSectionsFromOutlines } from "@/lib/knowledge-lecture";
+import { deriveTeachingConstraints } from "@/lib/openmaic/pedagogy/teaching-constraints";
+
+it("uses confirmed class readiness in planning and invalidates cached plans when it changes", () => {
+  const base = input();
+  const teachingConstraints = deriveTeachingConstraints({
+    grade: base.grade, subject: base.subject, topic: base.courseTitle, hours: 1,
+    learnerProfile: { priorKnowledge: "会分类，还没接触训练集", learningNeeds: "需要图例支架", familiarContexts: "校园植物" },
+    learningObjectives: [...base.learningObjectives], knowledgePoints: [...base.knowledgePoints],
+  });
+  const enriched = {
+    ...base,
+    teachingConstraints,
+    sectionPlans: [
+      { title: "数据角色", knowledgePointIds: ["kp-train", "kp-test"], maxPages: 2 },
+      { title: "可靠划分", knowledgePointIds: ["kp-split", "kp-leak"], maxPages: 2 },
+    ],
+  };
+  const prompt = buildTeachingBlueprintPrompt(enriched);
+  expect(prompt.user).toContain("会分类，还没接触训练集");
+  expect(prompt.user).toContain("需要图例支架");
+  expect(prompt.user).toContain("校园植物");
+  expect(prompt.system).toContain("同一材料再次出现时");
+  expect(prompt.system).toContain("不得复写讲授案例里已经公布的题目和答案");
+  expect(prompt.system).toContain("不得要求学生靠圈出某几个词");
+  expect(prompt.system).toContain("Replacement, deletion, scope-of-effect");
+  expect(prompt.user).toContain('"sharedContext"');
+  expect(prompt.user).toContain('"learningTask"');
+  expect(prompt.user).toContain("必须严格按以下 2 个小节及其顺序生成");
+  expect(prompt.user).toContain('"maxPages":2');
+  expect(prompt.system).toContain("紧凑教学蓝图，不是逐字讲稿");
+  expect(prompt.user).not.toContain("4-6个完整");
+  expect(prompt.user).not.toContain("至少三个实质要点");
+  expect(teachingBlueprintInputFingerprint(enriched)).not.toBe(teachingBlueprintInputFingerprint(base));
+  expect(teachingBlueprintInputFingerprint({ ...enriched, teachingConstraints: { ...teachingConstraints, learnerFoundation: "已能独立划分数据集" } })).not.toBe(teachingBlueprintInputFingerprint(enriched));
+});
 
 function input(assessmentMode: TeachingBlueprintInput["assessmentMode"] = "adaptive"): TeachingBlueprintInput {
   return {
@@ -39,6 +75,14 @@ function modelBlueprint() {
         title: "为什么必须分开数据",
         learningObjective: "解释训练与独立测试的不同职责",
         knowledgePointIds: ["kp-train", "kp-test"],
+        sharedContext: {
+          learningPurpose: "帮助学生判断一次分类器评估是否真正检验了新数据。",
+          caseId: "campus-plant-classifier",
+          caseFacts: ["同一批校园植物照片被分别用于训练和测试。"],
+          fixedWording: ["同一批数据不能同时教与考"],
+          stableTerms: ["训练集", "测试集", "独立检验"],
+          conceptBoundaries: ["数据较难不是测试集的定义。"],
+        },
         units: [
           {
             id: "roles",
@@ -64,6 +108,14 @@ function modelBlueprint() {
             description: "从两个集合回答的不同问题建立独立评估的必要性。",
             keyPoints: ["训练集参与参数学习", "测试集在学习结束后使用", "独立性决定评估可信度", "难度不是两者的定义差异"],
             teachingObjective: "说明训练集与测试集职责不同的原因",
+            learningTask: {
+              learnerAction: "比较两组照片分别在训练和评估中的用途。",
+              newContribution: "从用途差异理解独立评估。",
+              reasoningFocus: "数据是否参与过参数学习。",
+              caseUse: "introduce",
+              changedConditions: [] as string[],
+              preservedConditions: [] as string[],
+            },
           },
         ],
         assessmentFocus: ["识别训练数据和独立测试数据"],
@@ -72,6 +124,14 @@ function modelBlueprint() {
         title: "怎样划分并避免泄漏",
         learningObjective: "应用数据划分规则并识别泄漏",
         knowledgePointIds: ["kp-split", "kp-leak"],
+        sharedContext: {
+          learningPurpose: "帮助学生修正会让评估结果虚高的数据划分。",
+          caseId: "plant-photo-split",
+          caseFacts: ["同一株植物有多张连拍照片。"],
+          fixedWording: ["按植物个体分组后再划分"],
+          stableTerms: ["近重复记录", "数据泄漏"],
+          conceptBoundaries: ["随机划分不必然阻止同一对象跨集合。"],
+        },
         units: [
           {
             id: "split",
@@ -97,6 +157,14 @@ function modelBlueprint() {
             description: "沿用校园植物案例演示近重复泄漏及修正步骤。",
             keyPoints: ["先确定泛化对象", "识别近重复记录", "按对象整体分组", "最后一次使用测试集"],
             teachingObjective: "判断并修正数据泄漏",
+            learningTask: {
+              learnerAction: "比较随机按照片划分与按植物个体划分。",
+              newContribution: "识别近重复记录造成的泄漏。",
+              reasoningFocus: "同一对象的信息是否跨越集合。",
+              caseUse: "variant",
+              changedConditions: ["划分单位从照片改为植物个体"],
+              preservedConditions: ["照片内容和分类目标不变"],
+            },
           },
         ],
         assessmentFocus: ["判断划分方案是否造成泄漏", "说明修正原则"],
@@ -111,6 +179,14 @@ function compactModelBlueprint() {
       title: "训练、测试与可靠评估",
       learningObjective: "解释数据分工并识别会高估效果的泄漏",
       knowledgePointIds: ["kp-train", "kp-test", "kp-split", "kp-leak"],
+      sharedContext: {
+        learningPurpose: "判断校园植物分类器的评估结果是否可信。",
+        caseId: "reliable-plant-evaluation",
+        caseFacts: ["同一株植物的连拍照片可能被分到训练集和测试集。"],
+        fixedWording: ["先按植物个体分组，再划分训练集与测试集"],
+        stableTerms: ["训练集", "测试集", "近重复泄漏"],
+        conceptBoundaries: ["随机按照片划分不必然安全。"],
+      },
       units: [{
         id: "reliable-evaluation",
         title: "从数据分工到可靠评估",
@@ -133,6 +209,14 @@ function compactModelBlueprint() {
         description: "用同一株植物连拍照片的案例串联数据分工、划分规则与泄漏后果。",
         keyPoints: ["训练集用于学习", "测试集用于独立检验", "按最终泛化对象划分", "近重复记录可能造成泄漏"],
         teachingObjective: "解释独立测试与可靠评估的因果关系",
+        learningTask: {
+          learnerAction: "判断两种数据划分是否保持独立评估。",
+          newContribution: "把数据用途与泄漏风险连起来。",
+          reasoningFocus: "测试信息是否进入训练。",
+          caseUse: "introduce",
+          changedConditions: [] as string[],
+          preservedConditions: [] as string[],
+        },
       }],
       assessmentFocus: ["判断一个具体流程是否发生数据泄漏"],
     }],
@@ -161,7 +245,12 @@ describe("teaching blueprint compiler", () => {
       "teaching-section-1-unit-1",
       "teaching-section-2-unit-1",
     ]);
+    expect(outlines[0]?.teachingBrief?.sharedContext?.caseId).toBe("campus-plant-classifier");
+    expect(outlines[0]?.teachingBrief?.pageTask?.newContribution).toContain("用途差异");
+    expect(outlines.find((item) => item.type === "quiz")?.teachingBrief?.sharedContext?.fixedWording)
+      .toEqual(["同一批数据不能同时教与考"]);
     const quizzes = outlines.filter((outline) => outline.type === "quiz");
+    expect(quizzes[0]?.description).toContain("未在讲授示例中直接公布答案的简短新片段");
     expect(quizzes).toHaveLength(2);
     expect(quizzes.map((quiz) => quiz.quizConfig?.questionCount)).toEqual([2, 2]);
     expect(quizzes.reduce((sum, quiz) => sum + (quiz.quizConfig?.maxShortAnswerQuestions ?? 0), 0)).toBeLessThanOrEqual(1);
@@ -178,6 +267,37 @@ describe("teaching blueprint compiler", () => {
     ]);
   });
 
+  it("accepts one substantive key point and preserves a changed-condition task without padding", async () => {
+    const candidate = compactModelBlueprint();
+    candidate.sections[0]!.pages[0]!.keyPoints = ["测试信息进入训练会破坏独立评估"];
+    candidate.sections[0]!.pages[0]!.learningTask = {
+      learnerAction: "比较只改动划分单位前后的评估流程。",
+      newContribution: "判断改变划分单位如何阻断泄漏。",
+      reasoningFocus: "测试对象是否曾以近重复形式进入训练。",
+      caseUse: "variant",
+      changedConditions: ["从按照片随机划分改为按植物个体划分"],
+      preservedConditions: ["照片总量、分类目标与模型保持不变"],
+    };
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
+    expect(outline.keyPoints).toEqual(["测试信息进入训练会破坏独立评估"]);
+    expect(outline.teachingBrief?.pageTask).toMatchObject({
+      caseUse: "variant",
+      changedConditions: ["从按照片随机划分改为按植物个体划分"],
+      preservedConditions: ["照片总量、分类目标与模型保持不变"],
+    });
+  });
+
+  it("does not force a learner task onto a pure mechanism-explanation page", async () => {
+    const candidate = compactModelBlueprint();
+    delete (candidate.sections[0]!.pages[0]! as { learningTask?: unknown }).learningTask;
+    candidate.sections[0]!.pages[0]!.description = "解释测试信息进入训练后，评估为何不再独立。";
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
+    expect(outline.teachingBrief?.pageTask).toBeUndefined();
+    expect(outline.description).toContain("为何不再独立");
+  });
+
   it("uses one or two short answers only when deep-response mode is enabled", async () => {
     const blueprint = await generateTeachingBlueprint(input("constructed-response"), async () => JSON.stringify(modelBlueprint()));
     const quizzes = teachingBlueprintToOutlines(blueprint, "使用简体中文").filter((outline) => outline.type === "quiz");
@@ -185,7 +305,7 @@ describe("teaching blueprint compiler", () => {
     expect(quizzes.every((quiz) => (quiz.quizConfig?.questionCount ?? 0) >= 1 && (quiz.quizConfig?.questionCount ?? 0) <= 2)).toBe(true);
   });
 
-  it("creates separate adaptive checks when one knowledge point is taught through multiple units", async () => {
+  it("keeps a parseable first draft without semantic review or regeneration", async () => {
     const candidate = modelBlueprint();
     candidate.sections[0]!.units.push({
       ...candidate.sections[0]!.units[0]!,
@@ -212,16 +332,15 @@ describe("teaching blueprint compiler", () => {
       teachingObjective: "识别测试信息被提前使用的流程",
     });
 
-    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+    const ai = vi.fn(async () => JSON.stringify(candidate));
+    const blueprint = await generateTeachingBlueprint(input(), ai);
     const quiz = teachingBlueprintToOutlines(blueprint, "使用简体中文")
       .find((outline) => outline.id === "teaching-section-1-check");
-
-    expect(quiz?.quizConfig?.questionCount).toBe(3);
     expect(quiz?.assessmentTargets?.filter((target) => target.knowledgePointId === "kp-test")).toHaveLength(2);
-    expect(validateTeachingBlueprintBudget(blueprint, teachingBlueprintToOutlines(blueprint, "使用简体中文"))).toEqual([]);
+    expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it("reports a concrete conflict instead of dropping adaptive coverage when the quiz budget is too small", async () => {
+  it("does not regenerate a parseable draft because its semantic scope exceeds a quality preference", async () => {
     const overloaded = compactModelBlueprint();
     overloaded.sections[0]!.units.push({
       ...overloaded.sections[0]!.units[0]!,
@@ -246,18 +365,49 @@ describe("teaching blueprint compiler", () => {
     const shortInput = { ...input(), totalDurationSec: 300 };
     const ai = vi.fn(async () => JSON.stringify(overloaded));
 
-    await expect(generateTeachingBlueprint(shortInput, ai)).rejects.toThrow("小测预算冲突");
-    expect(ai).toHaveBeenCalledTimes(3);
+    await expect(generateTeachingBlueprint(shortInput, ai)).resolves.toMatchObject({ schemaVersion: 1 });
+    expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it("repairs an invalid shallow blueprint before accepting it", async () => {
+  it("retries only when completed output has no usable structure", async () => {
+    const ai = vi.fn(async () => JSON.stringify({ sections: [] }));
+    const onValidation = vi.fn();
+    await expect(generateTeachingBlueprint(input(), ai, {
+      onValidation,
+      retrySleep: async () => undefined,
+    })).rejects.toThrow("教学蓝图缺少可用结构");
+    expect(ai).toHaveBeenCalledTimes(3);
+    expect(onValidation).toHaveBeenLastCalledWith({
+      issues: ["没有返回 sections"],
+      responseCharacters: expect.any(Number),
+    });
+  });
+
+  it("accepts the next complete result after a hard-output retry", async () => {
     const ai = vi.fn()
       .mockResolvedValueOnce(JSON.stringify({ sections: [] }))
       .mockResolvedValueOnce(JSON.stringify(modelBlueprint()));
-    const blueprint = await generateTeachingBlueprint(input(), ai);
-    expect(blueprint.sections).toHaveLength(2);
+    await expect(generateTeachingBlueprint(input(), ai, {
+      retrySleep: async () => undefined,
+    })).resolves.toMatchObject({ schemaVersion: 1 });
     expect(ai).toHaveBeenCalledTimes(2);
-    expect(ai.mock.calls[1]?.[1]).toContain("没有返回 sections");
+  });
+
+  it("derives declarative mappings locally and keeps only whitespace-normalized source quotes", async () => {
+    const candidate = modelBlueprint();
+    candidate.sections[0]!.knowledgePointIds = ["kp-leak"];
+    candidate.sections[0]!.pages[0]!.knowledgePointIds = ["kp-leak"];
+    candidate.sections[0]!.units[0]!.evidenceQuotes = ["训练集用于学习 模型参数。"];
+    const ai = vi.fn(async () => JSON.stringify(candidate));
+    const blueprint = await generateTeachingBlueprint({
+      ...input(),
+      sourceContext: "训练集用于学习\n模型参数。测试集只用于独立检验。",
+    }, ai);
+    expect(blueprint.sections[0]?.knowledgePointIds).toEqual(["kp-train", "kp-test"]);
+    expect(blueprint.sections[0]?.pages[0]?.knowledgePointIds).toEqual(["kp-train", "kp-test"]);
+    expect(blueprint.sections[0]?.units[0]?.sourceKind).toBe("course-source");
+    expect(blueprint.sections[0]?.units[0]?.evidenceQuotes).toEqual(["训练集用于学习 模型参数。"]);
+    expect(ai).toHaveBeenCalledTimes(1);
   });
 
   it("downgrades an incomplete optional interaction to a slide in standard mode", async () => {

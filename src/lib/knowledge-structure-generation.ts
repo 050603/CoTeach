@@ -15,6 +15,7 @@ import { deriveCourseEntryPolicy, formatCourseEntryPolicy } from "@/lib/course-e
 import { DURABLE_GENERATION_TRANSIENT_RETRIES } from "@/lib/llm/request-policy";
 import type { GenerationReferenceMaterial } from "@/lib/course-design/generation-references";
 import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
+import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic/generation/generated-output-retry";
 
 type ModelCall = typeof callLLM;
 
@@ -308,7 +309,12 @@ function prepareKnowledgeStructureForTeacherReview(
 export async function generateKnowledgeStructureOnce(
   input: GenerateInput,
   context: KnowledgeStructureGenerationContext = {},
-  options: { abortSignal?: AbortSignal; modelCall?: ModelCall; aiCall?: AICallFn } = {},
+  options: {
+    abortSignal?: AbortSignal;
+    modelCall?: ModelCall;
+    aiCall?: AICallFn;
+    retrySleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  } = {},
 ): Promise<ReviewedKnowledgeStructure> {
   const prompt = buildKnowledgeGraphPrompt(input, context);
   const messages = [
@@ -317,18 +323,33 @@ export async function generateKnowledgeStructureOnce(
       ? `教师资料中的叶子教学目标（使用精确id，groupName只用于知识分组，不生成重复父目标；description是原始知识说明）：\n${JSON.stringify(context.teacherKnowledgePoints)}` : "",
     "缺乏明确依据的先修关系保留待核对，不能按节点顺序或为了连通图谱编造必要关系。课程目标映射也必须有实质依据。"].filter(Boolean).join("\n\n") },
   ] as const;
-  const raw = options.aiCall
-    ? await options.aiCall(messages[0].content, messages[1].content)
-    : await (options.modelCall ?? callLLM)([...messages], {
-        jsonMode: true,
-        abortSignal: options.abortSignal,
-        requestClass: "long-generation",
-        maxTransientRetries: DURABLE_GENERATION_TRANSIENT_RETRIES,
-      });
-  const parsed = parseLLMJson<Record<string, unknown>>(raw);
-  const prepared = prepareKnowledgeStructureForTeacherReview(parsed, input, context);
-  delete prepared.knowledgeGraph.semanticReview;
-  return { ...prepared, revisionCount: 0 };
+  return withGeneratedOutputRetry(async () => {
+    const raw = options.aiCall
+      ? await options.aiCall(messages[0].content, messages[1].content)
+      : await (options.modelCall ?? callLLM)([...messages], {
+          jsonMode: true,
+          abortSignal: options.abortSignal,
+          requestClass: "long-generation",
+          maxTransientRetries: DURABLE_GENERATION_TRANSIENT_RETRIES,
+        });
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = parseLLMJson<Record<string, unknown>>(raw);
+    } catch (error) {
+      throw invalidGeneratedOutput(error, "知识结构 JSON 无法解析");
+    }
+    const prepared = prepareKnowledgeStructureForTeacherReview(parsed, input, context);
+    if (!prepared.knowledgePoints.length || !prepared.knowledgeGraph.nodes.length) {
+      throw invalidGeneratedOutput(new Error("缺少可用知识点或图谱节点"), "知识结构字段不完整");
+    }
+    delete prepared.knowledgeGraph.semanticReview;
+    return { ...prepared, revisionCount: 0 };
+  }, {
+    label: "knowledge-structure-output",
+    signal: options.abortSignal,
+    maxRetries: 2,
+    sleep: options.retrySleep,
+  });
 }
 
 export function buildKnowledgeStructureAuditMessages(

@@ -23,6 +23,7 @@
     "test:projection-sync": "node scripts/measure-projection-sync.mjs",
     "quality-lab:build": "node tools/course-quality-lab/build.mjs",
     "quality-lab:generate": "NODE_OPTIONS=--conditions=import tsx tools/course-quality-lab/generate.ts --deployment-secrets",
+    "quality-lab:cleanup": "NODE_OPTIONS=--conditions=import tsx tools/course-quality-lab/cleanup.ts",
     "quality-lab:experiment": "NODE_OPTIONS=--conditions=import tsx tools/course-quality-lab/experiment-runner.ts",
     "quality-lab:start": "tsx tools/course-quality-lab/server.ts",
     "quality-lab:test": "vitest run --config tools/course-quality-lab/vitest.config.ts",

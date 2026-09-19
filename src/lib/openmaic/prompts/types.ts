@@ -46,6 +46,8 @@ export type SnippetId =
   | 'speech-guidelines'
   | 'whiteboard-reference'
   | 'instructional-presentation-policy'
+  | 'adaptive-narration-policy'
+  | 'teaching-accuracy-policy'
   | 'generated-whiteboard-actions'
   | 'widget-action-bridge';
 

@@ -3,9 +3,43 @@ import {
   buildPblTimingInputFromScene,
   estimatePblActivityTime,
   planPblPageTiming,
+  estimateQuizPageDurationSec,
 } from './pbl-time-estimation';
 
 describe('PBL activity time estimation', () => {
+  it('derives a missing quiz duration from question demand rather than a generic 300 seconds', () => {
+    const quiz = { questionCount: 1, questionTypes: ['single' as const], difficulty: 'introductory' as const };
+    const duration = estimateQuizPageDurationSec(quiz);
+    const plan = planPblPageTiming({ activityTargetSec: duration, pageKind: 'quiz', quiz });
+    expect(duration).toBeLessThan(120);
+    expect(plan.taskFitsBudget).toBe(true);
+    expect(plan.studentActivitySec).toBeGreaterThanOrEqual(plan.recommendedStudentActivitySec);
+    expect(plan.narrationSec + plan.studentActivitySec + plan.transitionSec).toBe(duration);
+  });
+
+  it('gives extra confirmed quiz time to students without extending spoken feedback', () => {
+    const quiz = { questionCount: 1, questionTypes: ['single' as const], difficulty: 'introductory' as const };
+    const short = planPblPageTiming({ activityTargetSec: 90, pageKind: 'quiz', quiz });
+    const long = planPblPageTiming({ activityTargetSec: 300, pageKind: 'quiz', quiz });
+    expect(long.narrationSec).toBe(short.narrationSec);
+    expect(long.feedbackSec).toBe(short.feedbackSec);
+    expect(long.readingThinkingSec).toBeGreaterThan(short.readingThinkingSec);
+    expect(long.operationSec).toBe(short.operationSec);
+    expect(long.narrationSec + long.studentActivitySec + long.transitionSec).toBe(300);
+  });
+
+  it('allocates more feedback to more complex questions while marking undersized budgets honestly', () => {
+    const easy = { questionCount: 1, questionTypes: ['single' as const], difficulty: 'introductory' as const };
+    const complex = { questionCount: 3, questionTypes: ['short_answer' as const, 'scenario_task' as const], difficulty: 'advanced' as const };
+    const simple = planPblPageTiming({ activityTargetSec: estimateQuizPageDurationSec(easy), pageKind: 'quiz', quiz: easy });
+    const written = planPblPageTiming({ activityTargetSec: estimateQuizPageDurationSec(complex), pageKind: 'quiz', quiz: complex });
+    expect(written.feedbackSec).toBeGreaterThan(simple.feedbackSec);
+    expect(written.studentActivitySec).toBeGreaterThan(simple.studentActivitySec);
+    expect(written.taskFitsBudget).toBe(true);
+    const cramped = planPblPageTiming({ activityTargetSec: 30, pageKind: 'quiz', quiz: complex });
+    expect(cramped.taskFitsBudget).toBe(false);
+    expect(cramped.narrationSec + cramped.studentActivitySec + cramped.transitionSec).toBe(30);
+  });
   it('estimates theory narration from static TTS parameters and includes transition time', () => {
     const estimate = estimatePblActivityTime({
       id: 'theory-1',

@@ -3,6 +3,7 @@ import {
   applyOutlineFallbacks,
   generateSceneOutlinesFromRequirements,
   normalizeSceneOutlinesForDuration,
+  inferQuizOutlineDurationSec,
 } from "./outline-generator";
 import { buildOpenMaicBaselineOutlinePrompt } from "./openmaic-baseline";
 import type { SceneOutline } from "@openmaic/lib/types/generation";
@@ -22,6 +23,17 @@ const legacyPblOutline: SceneOutline = {
 };
 
 describe("PBL outline fallbacks", () => {
+  it("uses question workload only when quiz duration is unspecified", () => {
+    const quiz: SceneOutline = { id: "quiz", type: "quiz", title: "核验", description: "一道选择题", keyPoints: [], order: 0,
+      quizConfig: { questionCount: 1, questionTypes: ['single'], difficulty: 'easy' },
+    };
+    const inferred = applyOutlineFallbacks(quiz, true);
+    expect(inferred.estimatedDuration).toBe(inferQuizOutlineDurationSec(quiz));
+    expect(inferred.estimatedDuration).toBeLessThan(120);
+    expect(applyOutlineFallbacks({ ...quiz, estimatedDuration: 300 }, true).estimatedDuration).toBe(300);
+    expect(inferQuizOutlineDurationSec({ ...quiz, targetDurationSec: 180 })).toBe(180);
+    expect(inferQuizOutlineDurationSec({ ...quiz, plannedTiming: { narrationSec: 20, learnerActivitySec: 80, transitionSec: 5, role: 'assessment' } })).toBe(105);
+  });
   it("routes a standard production outline through the exact upstream one-click prompt", async () => {
     let capturedSystem = "";
     let capturedUser = "";

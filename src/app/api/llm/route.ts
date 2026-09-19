@@ -7,7 +7,7 @@
 
 import { NextRequest } from "next/server";
 import { generateCourseContent, isActiveLlmConfigured } from "@/lib/llm/client";
-import { generateReviewedKnowledgeStructure } from "@/lib/knowledge-structure-generation";
+import { generateKnowledgeStructureOnce } from "@/lib/knowledge-structure-generation";
 import type { LlmCallRequest } from "@/lib/llm/types";
 import {
   LlmCallFailedError,
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
   try {
     let result;
     if (body.action === "knowledgeGraph") {
-      const structure = await generateReviewedKnowledgeStructure(
+      const structure = await generateKnowledgeStructureOnce(
         body.input,
         body.context,
         { abortSignal: req.signal },

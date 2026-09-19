@@ -194,8 +194,19 @@ export function getNewSystemCourseReadiness(
   const lectureSections = course.content.knowledgeLectureSections ?? [];
   const blueprintMode = course.content.teachingBlueprint?.assessmentMode;
   const timingAudit = course.content.teachingTimingAudit;
-  const blueprintTimingAuditValid = !blueprintMode
-    || Boolean(timingAudit?.complete && timingAudit.teachingRatioValid);
+  // Natural narration can differ from its planning estimate. Preserve the
+  // measured deviation for teacher review, but only missing/incomplete audio
+  // evidence blocks readiness; a duration preference must not force rewrites.
+  const blueprintTimingAuditValid = !blueprintMode || Boolean(
+    timingAudit?.complete
+    && Number.isFinite(timingAudit.substantiveTeachingDurationSec)
+    && timingAudit.substantiveTeachingDurationSec > 0
+    && (timingAudit.narrationDurationSource === "estimated-script"
+      || (timingAudit.narrationDurationSource === "actual-audio"
+        && Number.isInteger(timingAudit.narrationSegmentCount)
+        && timingAudit.narrationSegmentCount > 0
+        && timingAudit.measuredSegmentCount === timingAudit.narrationSegmentCount)),
+  );
   const blueprintQuizConfigs = lectureSections.flatMap((section) => {
     const quiz = outlines.find((outline) => outline.id === section.quizOutlineId);
     return quiz?.quizConfig && typeof quiz.quizConfig === "object"
@@ -271,8 +282,8 @@ export function getNewSystemCourseReadiness(
         && (!lectureSections.length || hasExactKnowledgeLecturePageBudget(outlines, timing!.totalMinutes))
         && blueprintTimingAuditValid,
       message: course.content.stagePlan
-        ? "知识讲授必须严格采用教师确认的教案分钟数，讲解、例证、互动和小测合计必须等于该预算；新版课程还需确认实质讲授保持在 65%–70%。"
-        : `知识讲授须占总课时的 20%–40%（${Math.ceil(course.hours * 60 * 0.2)}–${Math.floor(course.hours * 60 * 0.4)} 分钟），由 AI 先确定总时长，再按预算生成讲解、互动和小测；旧的超长方案请重新生成。`,
+        ? "页面规划须采用教师确认的教案时长，讲解、例证、互动和小测的计划时长合计须等于该预算；开启语音后还须完成全部讲授音频及其时长记录。实际语速造成的时长偏差供教师评估，不要求自动改稿。"
+        : `知识讲授计划须占总课时的 20%–40%（${Math.ceil(course.hours * 60 * 0.2)}–${Math.floor(course.hours * 60 * 0.4)} 分钟），按确认预算分配页面；开启语音后须完成全部讲授音频及其时长记录。实际时长偏差供教师评估。`,
     },
     {
       id: "ai-outline",

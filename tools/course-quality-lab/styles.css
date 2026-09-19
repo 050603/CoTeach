@@ -178,6 +178,13 @@ textarea { resize: vertical; min-height: 80px; padding: 11px 12px; line-height: 
 .status--running { color: #80621a; background: #faf0cd; }
 .status--running .status__dot { background: #c9951a; animation: pulse 1.4s infinite; }
 .status--failed { color: var(--red); background: #f8e6e3; }
+.quality-state { margin: -5px 18px 13px; color: #53615d; font-size: 12px; }
+.quality-state--passed { color: var(--green); }
+.quality-state--completed-with-notes, .quality-state--check-unavailable { color: #80621a; }
+.quality-state--technical-complete { color: var(--green); }
+.quality-state--technical-running, .quality-state--technical-pending { color: #80621a; }
+.quality-state--technical-failed { color: #a33b32; }
+.technical-retry { display: flex; align-items: center; gap: 10px; margin: -5px 18px 13px; font-size: 12px; }
 .status--failed .status__dot { background: var(--red); }
 @keyframes pulse { 50% { opacity: .35; } }
 .metric-strip {

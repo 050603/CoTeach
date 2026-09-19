@@ -11,6 +11,39 @@ import {
 } from './course-generation-ai-call';
 
 describe('course generation model input', () => {
+  it('shares one durable request budget across technical corrections in a stage', async () => {
+    mocks.call.mockReset().mockResolvedValue({ text: '{}' });
+    const onAttemptStarting = vi.fn();
+    const call = withCourseGenerationAiCallContext(createCourseGenerationAiCall({
+      model: {} as LanguageModel, vision: false, source: 'stage', maxRetries: 1,
+    }), { onAttemptStarting });
+    await call('system', 'first draft');
+    await call('system', 'correct invalid structure');
+    await expect(call('system', 'another correction')).rejects.toMatchObject({
+      code: 'LLM_RETRY_BUDGET_EXHAUSTED', isRetryable: false,
+    });
+    expect(mocks.call).toHaveBeenCalledTimes(2);
+    expect(onAttemptStarting.mock.calls.map(([event]) => event.totalAttempt)).toEqual([1, 2]);
+  });
+
+  it.each([true, false])('uses the artifact output budget for streaming=%s', async (streamResponse) => {
+    mocks.call.mockReset().mockResolvedValue({ text: 'complete' });
+    mocks.stream.mockReset().mockResolvedValue('complete');
+    const outputBudget = vi.fn().mockReturnValue(4096);
+    const onStarted = vi.fn();
+    const thinking = { mode: 'disabled', effort: 'none' } as const;
+    const call = withCourseGenerationAiCallContext(createCourseGenerationAiCall({
+      model: {} as LanguageModel, vision: false, source: 'test',
+      maxOutputTokens: 393216, outputBudget, streamResponse, thinking,
+    }), { onStarted });
+    await expect(call('system', 'page')).resolves.toBe('complete');
+    expect(outputBudget).toHaveBeenCalledExactlyOnceWith('system', 'page');
+    expect((streamResponse ? mocks.stream : mocks.call).mock.calls[0][0].maxOutputTokens).toBe(4096);
+    expect(onStarted).toHaveBeenCalledWith(expect.objectContaining({
+      requestPolicy: { maxOutputTokens: 4096, thinking },
+    }));
+  });
+
   it.each([true, false])('respects the selected model vision capability: %s', async (vision) => {
     mocks.call.mockReset().mockResolvedValue({ text: '{}' });
     const model = {} as LanguageModel;
@@ -220,6 +253,62 @@ describe('course generation model input', () => {
     }
   });
 
+  it('allows active high-thinking work past the old fixed deadline without changing teacher settings', async () => {
+    vi.useFakeTimers();
+    try {
+      const thinking = { mode: 'enabled', effort: 'high' } as const;
+      mocks.stream.mockReset().mockImplementation((params, _source, selectedThinking, lifecycle) => {
+        expect(selectedThinking).toBe(thinking);
+        return new Promise<string>((resolve, reject) => {
+          const activity = setInterval(() => lifecycle.onActivity({
+            kind: 'reasoning', reasoningCharacters: 100, textCharacters: 0, firstOutputAt: Date.now(),
+          }), 60_000);
+          const completion = setTimeout(() => { clearInterval(activity); resolve('complete page'); }, 2_000_000);
+          params.abortSignal.addEventListener('abort', () => {
+            clearInterval(activity);
+            clearTimeout(completion);
+            reject(new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+        });
+      });
+      const onStarted = vi.fn();
+      const call = withCourseGenerationAiCallContext(createCourseGenerationAiCall({
+        model: {} as LanguageModel, vision: false, source: 'high-thinking', thinking,
+        outputBudget: () => 100_000, timeoutMs: 180_000, maxRetries: 0, streamResponse: true,
+        executionBudget: { minTokensPerSecond: 20, startupAllowanceMs: 120_000, maxDurationMs: 7_200_000 },
+      }), { onStarted });
+      const assertion = expect(call('system', 'page')).resolves.toBe('complete page');
+      await vi.runAllTimersAsync();
+      await assertion;
+      expect(mocks.stream).toHaveBeenCalledOnce();
+      expect(onStarted).toHaveBeenCalledWith(expect.objectContaining({
+        requestPolicy: expect.objectContaining({ maxOutputTokens: 100_000, thinking, maxDurationMs: 5_120_000, idleTimeoutMs: 180_000 }),
+      }));
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('honors an explicit safety ceiling shorter than the idle allowance', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.stream.mockReset().mockImplementation((params) => new Promise<string>((_resolve, reject) => {
+        params.abortSignal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+      }));
+      const call = createCourseGenerationAiCall({
+        model: {} as LanguageModel, vision: false, source: 'bounded-high-thinking',
+        timeoutMs: 3000, streamMaxDurationMs: 1000, maxRetries: 2, streamResponse: true,
+        executionBudget: { minTokensPerSecond: 20, startupAllowanceMs: 120_000, maxDurationMs: 7_200_000 },
+      });
+      const assertion = expect(call('system', 'page')).rejects.toMatchObject({
+        code: 'LLM_EXECUTION_BUDGET_EXCEEDED', isRetryable: false,
+      });
+      await vi.advanceTimersByTimeAsync(1001);
+      await assertion;
+      expect(mocks.stream).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('stops a streamed request only after genuine inactivity', async () => {
     vi.useFakeTimers();
     try {
@@ -246,6 +335,92 @@ describe('course generation model input', () => {
       );
       await vi.advanceTimersByTimeAsync(1_001);
       await rejection;
+      expect(mocks.stream).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not replay a continuously active stream that exhausts its execution budget', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.stream.mockReset().mockImplementation((params, _source, _thinking, lifecycle) => (
+        new Promise<string>((_resolve, reject) => {
+          const activity = setInterval(() => lifecycle.onActivity({
+            kind: 'reasoning', reasoningCharacters: 10, textCharacters: 0, firstOutputAt: Date.now(),
+          }), 500);
+          params.abortSignal.addEventListener('abort', () => {
+            clearInterval(activity);
+            reject(new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+        })
+      ));
+      const onRetry = vi.fn();
+      const call = withCourseGenerationAiCallContext(createCourseGenerationAiCall({
+        model: {} as LanguageModel, vision: false, source: 'page-content',
+        timeoutMs: 1000, streamMaxDurationMs: 3000, maxRetries: 2, streamResponse: true,
+      }), { onRetry });
+      const rejection = expect(call('system', 'page')).rejects.toMatchObject({
+        code: 'LLM_EXECUTION_BUDGET_EXCEEDED', isRetryable: false,
+      });
+      await vi.runAllTimersAsync();
+      await rejection;
+      expect(mocks.stream).toHaveBeenCalledOnce();
+      expect(onRetry).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries an idle stream within the transport budget', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.stream.mockReset().mockImplementationOnce((params) => (
+        new Promise<string>((_resolve, reject) => {
+          params.abortSignal.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+        })
+      )).mockResolvedValueOnce('complete page');
+      const call = createCourseGenerationAiCall({
+        model: {} as LanguageModel, vision: false, source: 'page-content',
+        timeoutMs: 1000, streamMaxDurationMs: 3000, maxRetries: 1, streamResponse: true,
+      });
+      const assertion = expect(call('system', 'page')).resolves.toBe('complete page');
+      await vi.runAllTimersAsync();
+      await assertion;
+      expect(mocks.stream).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves external cancellation when it races the execution deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const cancelled = new DOMException('teacher cancelled', 'AbortError');
+      mocks.stream.mockReset().mockImplementation((params, _source, _thinking, lifecycle) => (
+        new Promise<string>((_resolve, reject) => {
+          const activity = setInterval(() => lifecycle.onActivity({
+            kind: 'reasoning', reasoningCharacters: 10, textCharacters: 0, firstOutputAt: Date.now(),
+          }), 500);
+          params.abortSignal.addEventListener('abort', () => {
+            clearInterval(activity);
+            controller.abort(cancelled);
+            reject(new Error('provider wrapped cancellation'));
+          }, { once: true });
+        })
+      ));
+      const call = createCourseGenerationAiCall({
+        model: {} as LanguageModel, vision: false, source: 'page-content', signal: controller.signal,
+        timeoutMs: 1000, streamMaxDurationMs: 3000, maxRetries: 2, streamResponse: true,
+      });
+      const assertion = expect(call('system', 'page')).rejects.toBe(cancelled);
+      await vi.runAllTimersAsync();
+      await assertion;
       expect(mocks.stream).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();

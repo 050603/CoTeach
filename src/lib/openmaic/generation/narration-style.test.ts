@@ -115,7 +115,7 @@ describe('natural teacher narration', () => {
     expect(ai).toHaveBeenCalledTimes(2);
     expect(ai.mock.calls[1]?.[1]).toContain('上一次结果未通过验收');
     expect(rewritten[0]).toMatchObject({ type: 'speech', text: expect.stringContaining('独立来源') });
-    expect(NATURAL_NARRATION_VERSION).toBe('natural-teacher-speech-v2');
+    expect(NATURAL_NARRATION_VERSION).toBe('natural-teacher-speech-v3');
   });
 
   it('stops generation after two invalid rewrites instead of returning the first draft', async () => {

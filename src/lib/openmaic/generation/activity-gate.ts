@@ -156,10 +156,21 @@ export function addStudentActivityPause(outline: SceneOutline, actions: Action[]
   if (configuredActivitySec <= 0) return actions;
   const activityPauseSec = normalizePlannedStudentActivitySec(configuredActivitySec);
 
-  // Slide pages can reserve reading/thinking time in the teaching blueprint,
-  // but they do not expose a learner-controlled operation. Keep that budget as
-  // a passive end-of-page pause so narration and visual cues remain contiguous.
+  // Slide pages use passive thinking time because they expose no learner-controlled
+  // operation. A variant or independent task pauses after the prompt segment so
+  // the learner can decide before hearing the explanation; other slides retain
+  // their end-of-page reflection time.
   if (outline.type === 'slide') {
+    const caseUse = outline.teachingBrief?.pageTask?.caseUse;
+    if ((caseUse === 'variant' || caseUse === 'independent')
+      && actions.filter((action) => action.type === 'speech' && action.text.trim()).length >= 2) {
+      const insertionIndex = getStudentActivityInsertionIndex(actions);
+      return [
+        ...actions.slice(0, insertionIndex),
+        createSlideReflectionPause(activityPauseSec),
+        ...actions.slice(insertionIndex),
+      ];
+    }
     return [...actions, createSlideReflectionPause(activityPauseSec)];
   }
 

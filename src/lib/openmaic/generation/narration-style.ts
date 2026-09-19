@@ -1,3 +1,4 @@
+import { loadSnippet } from '@openmaic/lib/prompts';
 import type { Action } from '@openmaic/lib/types/action';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { AICallFn } from './pipeline-types';
@@ -11,7 +12,7 @@ import {
 
 type NarrationSegment = { id: string; text: string };
 
-export const NATURAL_NARRATION_VERSION = 'natural-teacher-speech-v2';
+export const NATURAL_NARRATION_VERSION = 'natural-teacher-speech-v3';
 const NARRATION_REWRITE_ATTEMPTS = 2;
 
 const META_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
@@ -111,7 +112,7 @@ export function buildNarrationRewritePrompt(
       : `全部段落原计划约 ${plan.targetUnits} ${plan.unit}；这个数字只用于减少重复套话，口语自然度和教学完整性优先，不能为控制时长删掉必要解释。`
     : '保持原讲稿总体篇幅和教学深度。';
   return {
-    system: '你是经验丰富的中文课堂讲稿编辑。把已有讲稿改成教师面对学生时会自然说出口的话。只返回合法 JSON，不使用 Markdown。必须保持每个段落的 id、数量、顺序、事实、教学逻辑和与画面动作的对应关系；不得补充教学设计和资料没有支持的新事实。',
+    system: '你是经验丰富的中文课堂讲稿编辑。把已有讲稿改成教师面对学生时会自然说出口的话。只返回合法 JSON，不使用 Markdown。必须保持每个段落的 id、数量、顺序、事实、教学逻辑和与画面动作的对应关系；不得补充教学设计和资料没有支持的新事实。\n\n' + loadSnippet('adaptive-narration-policy'),
     user: `课程页面：${outline.title}
 教学目标：${outline.teachingObjective ?? outline.description}
 共享教学设计：${JSON.stringify(outline.teachingBrief)}
