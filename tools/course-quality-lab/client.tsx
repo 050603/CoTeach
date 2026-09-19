@@ -5,8 +5,10 @@ import type {
   ArtifactState,
   CourseQualityLabManifest,
   LabPair,
+  LabPipelineModule,
   LabScriptSegment,
   LabSection,
+  LabTokenUsageSource,
   LabVariantKey,
   LabVariantMetrics,
   LabVariantResult,
@@ -37,6 +39,22 @@ const STATUS_LABELS: Record<ArtifactState, string> = {
   complete: "已完成",
   failed: "失败",
   missing: "缺失",
+};
+const MODULE_LABELS: Record<LabPipelineModule, string> = {
+  planning: "教学规划",
+  slide: "PPT",
+  narration: "文稿",
+  action: "动作",
+  review: "审核",
+  repair: "修复",
+  quiz: "测验",
+  tts: "音频",
+};
+const TOKEN_SOURCE_LABELS: Record<LabTokenUsageSource, string> = {
+  "provider-reported": "供应商实报",
+  estimated: "估算",
+  mixed: "实报与估算混合",
+  unknown: "来源未知",
 };
 
 type SaveState = "idle" | "pending" | "saving" | "saved" | "error";
@@ -83,17 +101,64 @@ function formatElapsed(rawMilliseconds: number): string {
   return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`;
 }
 
+function tokenSource(metrics: LabVariantMetrics): LabTokenUsageSource {
+  return metrics.tokenUsageSource ?? "unknown";
+}
+
+function resultPipelineVersion(result: LabVariantResult): string | undefined {
+  return result.pipelineVersion ?? result.metrics?.pipelineVersion;
+}
+
+function isV4V5Pair(pair: LabPair): boolean {
+  const baseline = `${resultPipelineVersion(pair.variants.baseline) ?? ""} ${pair.variants.baseline.label ?? ""}`;
+  const enhanced = `${resultPipelineVersion(pair.variants.enhanced) ?? ""} ${pair.variants.enhanced.label ?? ""}`;
+  return /\bv?4(?:\b|[-_.])/i.test(baseline) && /\bv?5(?:\b|[-_.])/i.test(enhanced);
+}
+
+function pairIsComplete(pair: LabPair): boolean {
+  return VARIANTS.every((variant) => {
+    const statuses = pair.variants[variant].statuses;
+    return statuses.ppt.state === "complete"
+      && statuses.script.state === "complete"
+      && statuses.tts.state === "complete";
+  });
+}
+
+function defaultPair(section?: LabSection): LabPair | undefined {
+  if (!section) return undefined;
+  return [...section.pairs]
+    .sort((left, right) => {
+      const readiness = Number(pairIsComplete(right)) - Number(pairIsComplete(left));
+      if (readiness) return readiness;
+      const rightTime = right.createdAt ? Date.parse(right.createdAt) : Number.NaN;
+      const leftTime = left.createdAt ? Date.parse(left.createdAt) : Number.NaN;
+      if (Number.isFinite(rightTime) && Number.isFinite(leftTime) && rightTime !== leftTime) return rightTime - leftTime;
+      const preference = Number(isV4V5Pair(right)) - Number(isV4V5Pair(left));
+      if (preference) return preference;
+      return right.batch - left.batch;
+    })[0];
+}
+
+function variantTitle(pair: LabPair, variant: LabVariantKey): string {
+  const result = pair.variants[variant];
+  if (result.label) return result.label;
+  const version = resultPipelineVersion(result);
+  if (/^v?4(?:\b|[-_.])/i.test(version ?? "") && variant === "baseline") return "V4 clean 基线";
+  if (/^v?5(?:\b|[-_.])/i.test(version ?? "") && variant === "enhanced") return "V5 优化候选";
+  if (version) return `${version} · ${variant === "baseline" ? "基线" : "候选"}`;
+  return variant === "baseline" ? "当前基线" : "本次优化版";
+}
+
 function MetricStrip({ metrics }: { metrics?: LabVariantMetrics }) {
   if (!metrics) return null;
-  const tokenTitle = metrics.tokenUsageEstimated
-    ? `约 ${metrics.tokenUsage.toLocaleString()} tokens；供应商未记录完整 usage 的调用按项目统一规则每 2.5 个字符估算。输入 ${metrics.inputCharacters.toLocaleString()} 字符，输出 ${metrics.outputCharacters.toLocaleString()} 字符。`
-    : `${metrics.tokenUsage.toLocaleString()} tokens；来自供应商 usage。输入 ${metrics.inputCharacters.toLocaleString()} 字符，输出 ${metrics.outputCharacters.toLocaleString()} 字符。`;
+  const source = tokenSource(metrics);
+  const tokenTitle = `${metrics.tokenUsage.toLocaleString()} tokens；${TOKEN_SOURCE_LABELS[source]}。输入 ${metrics.inputCharacters.toLocaleString()} 字符，输出 ${metrics.outputCharacters.toLocaleString()} 字符。`;
   return (
     <section className="metric-strip" aria-label="成本与稳定性指标">
       <div title={tokenTitle}>
-        <span>Token 用量{metrics.tokenUsageEstimated ? "（约）" : ""}</span>
+        <span>Token 用量</span>
         <b>{formatCompactNumber(metrics.tokenUsage)}</b>
-        <small>输入/输出字符 {formatCompactNumber(metrics.inputCharacters)} / {formatCompactNumber(metrics.outputCharacters)}</small>
+        <small>{TOKEN_SOURCE_LABELS[source]} · 输入/输出字符 {formatCompactNumber(metrics.inputCharacters)} / {formatCompactNumber(metrics.outputCharacters)}</small>
       </div>
       <div title="模型与语音调用耗时之和；并行请求的耗时会重叠，因此不等同于墙钟总时长。">
         <span>端到端 / 调用合计</span>
@@ -113,7 +178,16 @@ function MetricStrip({ metrics }: { metrics?: LabVariantMetrics }) {
       <div>
         <span>质量修复 / 恢复复用</span>
         <b>{metrics.telemetryRecorded ? `${metrics.qualityRepairCalls} / ${metrics.checkpointReuses}` : "未记录"}</b>
-        <small>仅统计 v4 分阶段检查点</small>
+        <small>模型质量修复与检查点复用分开统计</small>
+      </div>
+      <div>
+        <span>首次通过页面</span>
+        <b>{metrics.firstPassPages !== undefined && metrics.evaluatedPages !== undefined
+          ? `${metrics.firstPassPages} / ${metrics.evaluatedPages}`
+          : "未记录"}</b>
+        <small>{metrics.deterministicAdjustments !== undefined
+          ? `确定性调整 ${metrics.deterministicAdjustments}`
+          : "历史版本没有首次检查数据"}</small>
       </div>
       <div className={metrics.failedTtsCalls ? "metric--warning" : ""}>
         <span>TTS 调用</span>
@@ -124,13 +198,70 @@ function MetricStrip({ metrics }: { metrics?: LabVariantMetrics }) {
   );
 }
 
+function PipelineDetails({ result }: { result: LabVariantResult }) {
+  const metrics = result.metrics;
+  const modules = metrics?.moduleMetrics
+    ? Object.entries(metrics.moduleMetrics) as Array<[LabPipelineModule, NonNullable<LabVariantMetrics["moduleMetrics"]>[LabPipelineModule]]>
+    : [];
+  const repairs = metrics?.repairEvents ?? [];
+  const version = resultPipelineVersion(result);
+  const artifacts = Object.entries(metrics?.artifactVersions ?? {});
+  if (!version && !modules.length && !repairs.length && !artifacts.length) return null;
+  return (
+    <section className="pipeline-details" aria-label="流水线版本与模块指标">
+      <div className="pipeline-version">
+        <span>流水线</span>
+        <b>{version ?? "版本未记录"}</b>
+        {artifacts.length > 0 && <small>检查点 {artifacts.length} 类</small>}
+      </div>
+      {artifacts.length > 0 && (
+        <div className="artifact-versions" aria-label="检查点产物版本">
+          {artifacts.map(([name, artifactVersion]) => <span key={name}><b>{name}</b> {artifactVersion}</span>)}
+        </div>
+      )}
+      {modules.length > 0 && (
+        <details open>
+          <summary>模块成本与时长（{modules.length}）</summary>
+          <div className="module-metrics-table" role="table" aria-label="模块成本与时长">
+            <div className="module-metrics-head" role="row"><span>模块</span><span>Token / 来源</span><span>调用 / 失败</span><span>耗时</span></div>
+            {modules.map(([module, item]) => item && (
+              <div role="row" key={module}>
+                <b>{MODULE_LABELS[module]}</b>
+                <span>{formatCompactNumber(item.tokenUsage)} <small>{TOKEN_SOURCE_LABELS[item.tokenUsageSource]}</small></span>
+                <span>{item.calls} / {item.failedCalls}</span>
+                <span>{formatElapsed(item.elapsedMs)}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {repairs.length > 0 && (
+        <details>
+          <summary>修复轨迹（{repairs.length}）</summary>
+          <ul className="repair-events">
+            {repairs.map((event, index) => (
+              <li key={`${event.module}-${event.scope}-${event.attempt}-${index}`}>
+                <b>{event.module} · {event.scope}</b>
+                <span>{event.reason}</span>
+                <small>{event.outcome} · 第 {event.attempt} 次 · 影响 {event.targetIds.length} 项</small>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </section>
+  );
+}
+
 function SummaryMetric({ result }: { result: LabVariantResult }) {
   const metrics = result.metrics;
   if (!metrics) return <span className="metric-empty">暂无记录</span>;
   const failures = metrics.failedModelCalls + metrics.failedTtsCalls;
+  const source = tokenSource(metrics);
   return (
     <span className="summary-metric">
-      <b>{metrics.tokenUsageEstimated ? "约 " : ""}{formatCompactNumber(metrics.tokenUsage)} tokens</b>
+      <b>{formatCompactNumber(metrics.tokenUsage)} tokens · {TOKEN_SOURCE_LABELS[source]}</b>
+      {resultPipelineVersion(result) && <small>{resultPipelineVersion(result)}</small>}
       <small>{metrics.modelCalls} 次逻辑调用 · {metrics.transportAttemptsRecorded ? `${metrics.transportAttempts} 次真实请求` : "真实请求未记录"} · {failures} 失败 · {metrics.telemetryRecorded ? formatElapsed(metrics.wallClockMs) : formatElapsed(metrics.modelElapsedMs + metrics.ttsElapsedMs)}</small>
     </span>
   );
@@ -166,14 +297,18 @@ function Downloads({ pair, variant, result }: { pair: LabPair; variant: LabVaria
   );
 }
 
-function SlideFrame({ result, pageIndex, activeSegmentId }: {
+function SlideFrame({ pairId, variant, result, pageIndex, activeSegmentId }: {
+  pairId: string;
+  variant: LabVariantKey;
   result: LabVariantResult;
   pageIndex: number;
   activeSegmentId?: string;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const slide = result.slides[pageIndex];
-  const src = slide?.renderUrl ?? slide?.imageUrl;
+  const src = slide
+    ? `/render-pair/${encodeURIComponent(pairId)}/${variant}/${pageIndex}`
+    : undefined;
   const syncAction = useCallback(() => {
     frameRef.current?.contentWindow?.postMessage({
       type: "course-quality-lab:active-segment",
@@ -451,7 +586,7 @@ function VariantPane({ pair, variant, pageIndex, enlarged, onToggleEnlarged, reg
   const pageDuration = result.script
     .filter((segment) => segment.slideIndex === pageIndex)
     .reduce((total, segment) => total + (segment.durationSec ?? 0), 0);
-  const title = result.label ?? (variant === "baseline" ? "当前基线" : "本次优化版");
+  const title = variantTitle(pair, variant);
   const hiddenByEnlarge = enlarged && enlarged !== variant;
 
   return (
@@ -479,8 +614,15 @@ function VariantPane({ pair, variant, pageIndex, enlarged, onToggleEnlarged, reg
         <StatusBadge label="TTS" {...result.statuses.tts} />
       </div>
       <MetricStrip metrics={result.metrics} />
+      <PipelineDetails result={result} />
       <div className="slide-shell">
-        <SlideFrame result={result} pageIndex={pageIndex} activeSegmentId={activeSegmentId} />
+        <SlideFrame
+          pairId={pair.id}
+          variant={variant}
+          result={result}
+          pageIndex={pageIndex}
+          activeSegmentId={activeSegmentId}
+        />
       </div>
       <div className="slide-caption">
         <span>第 {pageIndex + 1} / {result.slides.length || 0} 页</span>
@@ -830,7 +972,7 @@ function App() {
       reviewsRef.current = nextReviews;
       const firstSection = nextManifest.sections[0];
       setSectionId(firstSection?.id ?? "");
-      setPairId(firstSection?.pairs[0]?.id ?? "");
+      setPairId(defaultPair(firstSection)?.id ?? "");
     }).catch((error: unknown) => {
       if ((error as Error).name !== "AbortError") setLoadError(error instanceof Error ? error.message : "测试数据加载失败");
     });
@@ -869,7 +1011,7 @@ function App() {
   }, []);
 
   const section = manifest?.sections.find((item) => item.id === sectionId) ?? manifest?.sections[0];
-  const pair = section?.pairs.find((item) => item.id === pairId) ?? section?.pairs[0];
+  const pair = section?.pairs.find((item) => item.id === pairId) ?? defaultPair(section);
   const maxPages = pair ? Math.max(...VARIANTS.map((variant) => pair.variants[variant].slides.length), 1) : 1;
   const review = pair ? reviews[pair.id] ?? emptyReview(pair.id) : undefined;
 
@@ -959,7 +1101,7 @@ function App() {
               <select value={section.id} onChange={(event) => {
                 const nextSection = manifest.sections.find((item) => item.id === event.target.value);
                 setSectionId(event.target.value);
-                setPairId(nextSection?.pairs[0]?.id ?? "");
+                setPairId(defaultPair(nextSection)?.id ?? "");
                 setPageIndex(0);
                 setEnlarged(null);
               }}>
@@ -979,7 +1121,10 @@ function App() {
                 setPageIndex(0);
                 setEnlarged(null);
               }}>
-                {section.pairs.map((item) => <option value={item.id} key={item.id}>第 {item.batch} 次{item.label ? ` · ${item.label}` : ""}</option>)}
+                {section.pairs.map((item) => {
+                  const versions = [resultPipelineVersion(item.variants.baseline), resultPipelineVersion(item.variants.enhanced)].filter(Boolean).join(" vs ");
+                  return <option value={item.id} key={item.id}>第 {item.batch} 次{item.label ? ` · ${item.label}` : ""}{versions ? ` · ${versions}` : ""}</option>;
+                })}
               </select>
             </label>
             <div className="section-context">

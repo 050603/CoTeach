@@ -136,19 +136,20 @@ describe("course quality lab server", () => {
 
   it("adds token, latency, call and failure metrics from private runtime logs", async () => {
     const value = manifest();
+    value.sections[0].pairs[0].variants.enhanced.pipelineVersion = "v5";
     value.sections[0].pairs[0].variants.enhanced.artifactBaseUrl = "/files/artifacts/experiment/section-1/1/enhanced";
     const runDir = path.join(rootDir, "runs", "experiment", "section-1", "1", "enhanced");
-    const designDir = path.join(rootDir, "designs", "experiment", "section-1", "1");
+    const designDir = path.join(rootDir, "designs", "experiment", "section-1", "1", "v5");
     await mkdir(runDir, { recursive: true });
     await mkdir(designDir, { recursive: true });
     await writeFile(path.join(runDir, "calls.json"), JSON.stringify([
-      { status: "complete", kind: "slide", elapsedMs: 1_200, systemChars: 1_000, userChars: 500, outputChars: 250, tokenUsage: 640,
+      { status: "complete", kind: "slide", module: "slide", elapsedMs: 1_200, systemChars: 1_000, userChars: 500, outputChars: 250, tokenUsage: 640, tokenUsageSource: "provider",
         attempts: [{ status: "failed", startedAt: "2026-01-01T00:00:01.000Z" }, { status: "complete", startedAt: "2026-01-01T00:00:02.000Z" }] },
-      { status: "failed", kind: "repair", elapsedMs: 800, systemChars: 100, userChars: 50,
+      { status: "failed", kind: "repair", module: "repair", elapsedMs: 800, systemChars: 100, userChars: 50,
         attempts: [{ status: "failed", startedAt: "2026-01-01T00:00:03.000Z" }] },
     ]));
     await writeFile(path.join(designDir, "calls.json"), JSON.stringify([
-      { status: "complete", kind: "design", elapsedMs: 500, systemChars: 250, userChars: 250, outputChars: 100,
+      { status: "complete", kind: "design", module: "planning", elapsedMs: 500, systemChars: 250, userChars: 250, outputChars: 100, tokenUsageSource: "estimated",
         attempts: [{ status: "complete", startedAt: "2026-01-01T00:00:00.000Z" }] },
     ]));
     await writeFile(path.join(runDir, "tts-calls.json"), JSON.stringify([
@@ -160,12 +161,27 @@ describe("course quality lab server", () => {
       completedAt: "2026-01-01T00:00:10.000Z",
       checkpointReuses: 2,
       qualityRepairCalls: 1,
+      firstPassPages: 1,
+      evaluatedPages: 2,
+      deterministicAdjustments: 1,
+      pipelineVersion: "v5.0.0",
+      artifactVersions: { planning: "plan-v2", narration: "narration-v1" },
+      repairEvents: [{
+        module: "narration",
+        scope: "segment",
+        reason: "讲解缺少因果过渡 sk-secretvalue123456",
+        targetIds: ["segment-1"],
+        outcome: "resolved",
+        attempt: 2,
+        prompt: "must-not-leak",
+      }],
     }));
 
     const enriched = await withRuntimeMetrics(rootDir, value);
     expect(value.sections[0].pairs[0].variants.enhanced.metrics).toBeUndefined();
-    expect(enriched.sections[0].pairs[0].variants.enhanced.metrics).toEqual({
+    expect(enriched.sections[0].pairs[0].variants.enhanced.metrics).toMatchObject({
       tokenUsage: 940,
+      tokenUsageSource: "mixed",
       tokenUsageEstimated: true,
       inputCharacters: 2_150,
       outputCharacters: 350,
@@ -175,6 +191,9 @@ describe("course quality lab server", () => {
       transportRetries: 1,
       transportAttemptsRecorded: true,
       qualityRepairCalls: 1,
+      firstPassPages: 1,
+      evaluatedPages: 2,
+      deterministicAdjustments: 1,
       abandonedModelCalls: 0,
       checkpointReuses: 2,
       telemetryRecorded: true,
@@ -187,6 +206,51 @@ describe("course quality lab server", () => {
       ttsElapsedMs: 500,
       ttsCacheHits: 1,
       audioBytes: 4_096,
+      pipelineVersion: "v5.0.0",
+      artifactVersions: { planning: "plan-v2", narration: "narration-v1" },
+    });
+    const metrics = enriched.sections[0].pairs[0].variants.enhanced.metrics;
+    expect(metrics?.moduleMetrics?.slide).toMatchObject({
+      tokenUsage: 640,
+      tokenUsageSource: "provider-reported",
+      calls: 1,
+      transportAttempts: 2,
+      transportRetries: 1,
+    });
+    expect(metrics?.moduleMetrics?.planning).toMatchObject({ tokenUsage: 240, tokenUsageSource: "estimated" });
+    expect(metrics?.moduleMetrics?.repair).toMatchObject({ tokenUsage: 60, tokenUsageSource: "unknown" });
+    expect(metrics?.moduleMetrics?.tts).toMatchObject({ calls: 2, failedCalls: 1, elapsedMs: 500 });
+    expect(metrics?.repairEvents).toEqual([{
+      module: "narration",
+      scope: "segment",
+      reason: "讲解缺少因果过渡 [redacted]",
+      targetIds: ["segment-1"],
+      outcome: "resolved",
+      attempt: 2,
+    }]);
+    expect(JSON.stringify(metrics)).not.toContain("must-not-leak");
+  });
+
+  it("keeps archived token logs explicitly unknown even when they contain a numeric total", async () => {
+    const value = manifest();
+    value.sections[0].pairs[0].variants.baseline.artifactBaseUrl = "/files/artifacts/archive/section-1/1/baseline";
+    const runDir = path.join(rootDir, "runs", "archive", "section-1", "1", "baseline");
+    await mkdir(runDir, { recursive: true });
+    await writeFile(path.join(runDir, "calls.json"), JSON.stringify([{
+      status: "complete",
+      kind: "slide",
+      elapsedMs: 100,
+      systemChars: 100,
+      userChars: 100,
+      outputChars: 50,
+      tokenUsage: 77,
+    }]));
+
+    const enriched = await withRuntimeMetrics(rootDir, value);
+    expect(enriched.sections[0].pairs[0].variants.baseline.metrics).toMatchObject({
+      tokenUsage: 77,
+      tokenUsageSource: "unknown",
+      tokenUsageEstimated: true,
     });
   });
 
@@ -296,6 +360,9 @@ describe("course quality lab server", () => {
     const frameHtml = await frame.text();
     expect(frameHtml).toContain('/files/artifacts/pair-1/baseline/slides/slide-1.png');
     expect(frameHtml).toContain('<script type="module" src="/slide-frame.js"></script>');
+    const pairFrame = await fetch(`${baseUrl}/render-pair/pair-1/enhanced/0`);
+    expect(pairFrame.status).toBe(200);
+    expect(await pairFrame.text()).toContain('/files/artifacts/pair-1/enhanced/slides/slide-1.png');
 
     const script = await fetch(`${baseUrl}/api/download/pair-1/baseline/script`);
     expect(await script.text()).toBe("script-baseline");

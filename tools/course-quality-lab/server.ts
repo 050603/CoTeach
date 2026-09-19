@@ -13,7 +13,11 @@ import {
 } from "./storage";
 import type {
   CourseQualityLabManifest,
+  LabModuleMetrics,
   LabPair,
+  LabPipelineModule,
+  LabRepairEvent,
+  LabTokenUsageSource,
   LabVariantKey,
   LabVariantMetrics,
   LabVariantResult,
@@ -337,6 +341,8 @@ function allPairs(manifest: CourseQualityLabManifest): LabPair[] {
 
 type ModelCallRecord = {
   kind?: unknown;
+  module?: unknown;
+  stageId?: unknown;
   startedAt?: unknown;
   elapsedMs?: unknown;
   status?: unknown;
@@ -344,6 +350,7 @@ type ModelCallRecord = {
   userChars?: unknown;
   outputChars?: unknown;
   tokenUsage?: unknown;
+  tokenUsageSource?: unknown;
   attempts?: Array<{
     status?: unknown;
     startedAt?: unknown;
@@ -362,14 +369,146 @@ type GenerationTelemetryRecord = {
   completedAt?: unknown;
   checkpointReuses?: unknown;
   qualityRepairCalls?: unknown;
+  firstPassPages?: unknown;
+  evaluatedPages?: unknown;
+  deterministicAdjustments?: unknown;
+  pipelineVersion?: unknown;
+  artifactVersions?: unknown;
+  repairEvents?: unknown;
 };
+
+const PIPELINE_MODULES = new Set<LabPipelineModule>([
+  "planning",
+  "slide",
+  "narration",
+  "action",
+  "review",
+  "repair",
+  "quiz",
+  "tts",
+]);
+const REPAIR_SCOPES = new Set(["element", "segment", "page", "section"]);
+const REPAIR_OUTCOMES = new Set(["resolved", "no-progress", "regressed", "escalated", "failed"]);
 
 function finiteNonNegative(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
+function optionalFiniteNonNegative(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function estimateTokens(characters: number): number {
   return characters > 0 ? Math.ceil(characters / 2.5) : 0;
+}
+
+function modelCallModule(call: ModelCallRecord): LabPipelineModule | undefined {
+  if (typeof call.module === "string" && PIPELINE_MODULES.has(call.module as LabPipelineModule)) {
+    return call.module as LabPipelineModule;
+  }
+  const hint = `${typeof call.kind === "string" ? call.kind : ""} ${typeof call.stageId === "string" ? call.stageId : ""}`.toLowerCase();
+  if (/\b(?:planning|plan|design)\b/.test(hint)) return "planning";
+  if (/\brepair\b/.test(hint)) return "repair";
+  if (/\b(?:narration|script|speech)\b/.test(hint)) return "narration";
+  if (/\b(?:action|animation)\b/.test(hint)) return "action";
+  if (/\b(?:review|audit|check)\b/.test(hint)) return "review";
+  if (/\bquiz\b/.test(hint)) return "quiz";
+  if (/\bslide\b/.test(hint)) return "slide";
+  return undefined;
+}
+
+function callTokenSource(call: ModelCallRecord): "provider" | "estimated" | "mixed" | "unknown" {
+  return call.tokenUsageSource === "provider"
+    || call.tokenUsageSource === "estimated"
+    || call.tokenUsageSource === "mixed"
+    ? call.tokenUsageSource
+    : "unknown";
+}
+
+function aggregateTokenSource(calls: readonly ModelCallRecord[]): LabTokenUsageSource {
+  if (!calls.length) return "unknown";
+  const sources = new Set(calls.map(callTokenSource));
+  if (sources.size !== 1) return "mixed";
+  const source = [...sources][0];
+  return source === "provider" ? "provider-reported" : source;
+}
+
+function tokenUsageForCall(call: ModelCallRecord): number {
+  if (typeof call.tokenUsage === "number" && Number.isFinite(call.tokenUsage) && call.tokenUsage >= 0) {
+    return Math.round(call.tokenUsage);
+  }
+  return estimateTokens(
+    finiteNonNegative(call.systemChars)
+    + finiteNonNegative(call.userChars)
+    + finiteNonNegative(call.outputChars),
+  );
+}
+
+function summarizeModelModule(calls: readonly ModelCallRecord[]): LabModuleMetrics {
+  const attempts = calls.flatMap((call) => call.attempts ?? [])
+    .filter((attempt) => typeof attempt.startedAt === "string" && attempt.status !== "queued");
+  return {
+    tokenUsage: calls.reduce((sum, call) => sum + tokenUsageForCall(call), 0),
+    tokenUsageSource: aggregateTokenSource(calls),
+    inputCharacters: calls.reduce((sum, call) => sum
+      + finiteNonNegative(call.systemChars)
+      + finiteNonNegative(call.userChars), 0),
+    outputCharacters: calls.reduce((sum, call) => sum + finiteNonNegative(call.outputChars), 0),
+    calls: calls.length,
+    failedCalls: calls.filter((call) => call.status === "failed").length,
+    transportAttempts: attempts.length,
+    transportRetries: calls.reduce((total, call) => {
+      const started = (call.attempts ?? [])
+        .filter((attempt) => typeof attempt.startedAt === "string" && attempt.status !== "queued").length;
+      return total + Math.max(0, started - 1);
+    }, 0),
+    elapsedMs: calls.reduce((sum, call) => sum + finiteNonNegative(call.elapsedMs), 0),
+  };
+}
+
+function sanitizeTelemetryText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim().slice(0, maxLength);
+  if (!text) return undefined;
+  return text
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, "[redacted]")
+    .replace(/\b(?:sk|key)-[A-Za-z0-9_-]{12,}\b/gi, "[redacted]");
+}
+
+function sanitizeRepairEvents(value: unknown): LabRepairEvent[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const events = value.flatMap((raw): LabRepairEvent[] => {
+    if (!isRecord(raw) || typeof raw.scope !== "string" || !REPAIR_SCOPES.has(raw.scope)
+      || typeof raw.outcome !== "string" || !REPAIR_OUTCOMES.has(raw.outcome)) return [];
+    const moduleName = sanitizeTelemetryText(raw.module, 64);
+    const reason = sanitizeTelemetryText(raw.reason, 500);
+    if (!moduleName || !reason) return [];
+    const targetIds = Array.isArray(raw.targetIds)
+      ? raw.targetIds.flatMap((target) => {
+        const safe = sanitizeTelemetryText(target, 160);
+        return safe ? [safe] : [];
+      }).slice(0, 100)
+      : [];
+    return [{
+      module: moduleName,
+      scope: raw.scope as LabRepairEvent["scope"],
+      reason,
+      targetIds,
+      outcome: raw.outcome as LabRepairEvent["outcome"],
+      attempt: Math.max(0, Math.trunc(finiteNonNegative(raw.attempt))),
+    }];
+  });
+  return events.length ? events : undefined;
+}
+
+function sanitizeArtifactVersions(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined;
+  const entries = Object.entries(value).flatMap(([key, version]) => {
+    const safeKey = sanitizeTelemetryText(key, 100);
+    const safeVersion = sanitizeTelemetryText(version, 100);
+    return safeKey && safeVersion ? [[safeKey, safeVersion] as const] : [];
+  }).slice(0, 100);
+  return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
 async function readOptionalJsonArray<T>(filePath: string): Promise<T[]> {
@@ -395,9 +534,9 @@ function runtimeIdentity(
   rootDir: string,
   sectionId: string,
   batch: number,
-  _variantKey: LabVariantKey,
+  variantKey: LabVariantKey,
   result: LabVariantResult,
-): { runDir: string; designDir?: string; legacyDesignDir?: string } | undefined {
+): { runDir: string; designDir?: string; legacyDesignDir?: string; oldestDesignDir?: string } | undefined {
   const artifactUrl = result.artifactBaseUrl ?? result.downloads?.script?.replace(/\/script\.txt$/, "");
   if (!artifactUrl?.startsWith("/files/artifacts/")) return undefined;
   const encodedRelative = artifactUrl.slice("/files/artifacts/".length);
@@ -413,15 +552,28 @@ function runtimeIdentity(
   const tail = segments.slice(-3);
   const hasExpectedTail = tail[0] === sectionId
     && tail[1] === String(batch)
-    && (tail[2] === "baseline" || tail[2] === "enhanced");
+    && tail[2] === variantKey;
   const experimentSegments = hasExpectedTail ? segments.slice(0, -3) : [];
-  const designDir = experimentSegments.length > 0
+  const declaredPipelineVersion = result.pipelineVersion ?? result.metrics?.pipelineVersion;
+  const safePipelineVersion = typeof declaredPipelineVersion === "string"
+    && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(declaredPipelineVersion)
+    ? declaredPipelineVersion
+    : undefined;
+  const batchDesignDir = experimentSegments.length > 0
     ? path.join(rootDir, "designs", ...experimentSegments, sectionId, String(batch))
     : undefined;
+  const designDir = batchDesignDir && safePipelineVersion
+    ? path.join(batchDesignDir, safePipelineVersion)
+    : batchDesignDir;
   const legacyDesignDir = experimentSegments.length > 0
+    ? (safePipelineVersion
+      ? batchDesignDir
+      : path.join(rootDir, "designs", ...experimentSegments, sectionId))
+    : undefined;
+  const oldestDesignDir = experimentSegments.length > 0 && safePipelineVersion
     ? path.join(rootDir, "designs", ...experimentSegments, sectionId)
     : undefined;
-  return { runDir, designDir, legacyDesignDir };
+  return { runDir, designDir, legacyDesignDir, oldestDesignDir };
 }
 
 function summarizeMetrics(
@@ -444,20 +596,37 @@ function summarizeMetrics(
   ].filter(Number.isFinite);
   const startedAt = startedAtCandidates.length ? Math.min(...startedAtCandidates) : Number.NaN;
   const completedAt = typeof telemetry?.completedAt === "string" ? Date.parse(telemetry.completedAt) : Number.NaN;
-  let tokenUsageEstimated = false;
-  const tokenUsage = modelCalls.reduce((total, call) => {
-    const reported = finiteNonNegative(call.tokenUsage);
-    if (reported > 0) return total + Math.round(reported);
-    tokenUsageEstimated = true;
-    return total + estimateTokens(
-      finiteNonNegative(call.systemChars)
-      + finiteNonNegative(call.userChars)
-      + finiteNonNegative(call.outputChars),
-    );
-  }, 0);
+  const tokenUsageSource = aggregateTokenSource(modelCalls);
+  const tokenUsage = modelCalls.reduce((total, call) => total + tokenUsageForCall(call), 0);
+  const moduleMetrics: Partial<Record<LabPipelineModule, LabModuleMetrics>> = {};
+  for (const moduleName of PIPELINE_MODULES) {
+    if (moduleName === "tts") continue;
+    const calls = modelCalls.filter((call) => modelCallModule(call) === moduleName);
+    if (calls.length) moduleMetrics[moduleName] = summarizeModelModule(calls);
+  }
+  if (ttsCalls.length) {
+    moduleMetrics.tts = {
+      tokenUsage: 0,
+      tokenUsageSource: "unknown",
+      inputCharacters: 0,
+      outputCharacters: 0,
+      calls: ttsCalls.length,
+      failedCalls: ttsCalls.filter((call) => call.status === "failed").length,
+      transportAttempts: ttsCalls.length,
+      transportRetries: 0,
+      elapsedMs: ttsCalls.reduce((sum, call) => sum + finiteNonNegative(call.elapsedMs), 0),
+    };
+  }
+  const repairEvents = sanitizeRepairEvents(telemetry?.repairEvents);
+  const pipelineVersion = sanitizeTelemetryText(telemetry?.pipelineVersion, 100);
+  const artifactVersions = sanitizeArtifactVersions(telemetry?.artifactVersions);
+  const firstPassPages = optionalFiniteNonNegative(telemetry?.firstPassPages);
+  const evaluatedPages = optionalFiniteNonNegative(telemetry?.evaluatedPages);
+  const deterministicAdjustments = optionalFiniteNonNegative(telemetry?.deterministicAdjustments);
   return {
     tokenUsage,
-    tokenUsageEstimated,
+    tokenUsageSource,
+    tokenUsageEstimated: tokenUsageSource !== "provider-reported",
     inputCharacters: modelCalls.reduce((sum, call) => sum
       + finiteNonNegative(call.systemChars)
       + finiteNonNegative(call.userChars), 0),
@@ -467,7 +636,16 @@ function summarizeMetrics(
     transportAttempts: requestAttempts.length,
     transportRetries,
     transportAttemptsRecorded: modelCalls.some((call) => Array.isArray(call.attempts)),
-    qualityRepairCalls: finiteNonNegative(telemetry?.qualityRepairCalls),
+    qualityRepairCalls: finiteNonNegative(telemetry?.qualityRepairCalls) || repairEvents?.length || 0,
+    ...(firstPassPages !== undefined
+      ? { firstPassPages }
+      : {}),
+    ...(evaluatedPages !== undefined
+      ? { evaluatedPages }
+      : {}),
+    ...(deterministicAdjustments !== undefined
+      ? { deterministicAdjustments }
+      : {}),
     abandonedModelCalls: modelCalls.filter((call) => call.status === "abandoned").length,
     checkpointReuses: finiteNonNegative(telemetry?.checkpointReuses),
     telemetryRecorded: Boolean(telemetry),
@@ -482,6 +660,10 @@ function summarizeMetrics(
     ttsElapsedMs: ttsCalls.reduce((sum, call) => sum + finiteNonNegative(call.elapsedMs), 0),
     ttsCacheHits: ttsCalls.filter((call) => call.cacheHit === true).length,
     audioBytes: ttsCalls.reduce((sum, call) => sum + finiteNonNegative(call.audioBytes), 0),
+    ...(Object.keys(moduleMetrics).length ? { moduleMetrics } : {}),
+    ...(repairEvents ? { repairEvents } : {}),
+    ...(pipelineVersion ? { pipelineVersion } : {}),
+    ...(artifactVersions ? { artifactVersions } : {}),
   };
 }
 
@@ -496,7 +678,7 @@ export async function withRuntimeMetrics(
       const result = pair.variants[variantKey];
       const identity = runtimeIdentity(rootDir, section.id, pair.batch, variantKey, result);
       if (!identity) return;
-      const [generationCalls, currentDesignCalls, legacyDesignCalls, ttsCalls, telemetry] = await Promise.all([
+      const [generationCalls, currentDesignCalls, legacyDesignCalls, oldestDesignCalls, ttsCalls, telemetry] = await Promise.all([
         readOptionalJsonArray<ModelCallRecord>(path.join(identity.runDir, "calls.json")),
         identity.designDir
           ? readOptionalJsonArray<ModelCallRecord>(path.join(identity.designDir, "calls.json"))
@@ -504,12 +686,23 @@ export async function withRuntimeMetrics(
         identity.legacyDesignDir
           ? readOptionalJsonArray<ModelCallRecord>(path.join(identity.legacyDesignDir, "calls.json"))
           : Promise.resolve([]),
+        identity.oldestDesignDir
+          ? readOptionalJsonArray<ModelCallRecord>(path.join(identity.oldestDesignDir, "calls.json"))
+          : Promise.resolve([]),
         readOptionalJsonArray<TtsCallMetricRecord>(path.join(identity.runDir, "tts-calls.json")),
         readOptionalJson<GenerationTelemetryRecord>(path.join(identity.runDir, "telemetry.json")),
       ]);
-      const designCalls = currentDesignCalls.length ? currentDesignCalls : legacyDesignCalls;
-      if (generationCalls.length || designCalls.length || ttsCalls.length) {
-        result.metrics = summarizeMetrics(generationCalls, designCalls, ttsCalls, telemetry);
+      const designCalls = currentDesignCalls.length
+        ? currentDesignCalls
+        : legacyDesignCalls.length ? legacyDesignCalls : oldestDesignCalls;
+      if (generationCalls.length || designCalls.length || ttsCalls.length || telemetry) {
+        result.metrics = {
+          ...result.metrics,
+          ...summarizeMetrics(generationCalls, designCalls, ttsCalls, telemetry),
+          ...(result.pipelineVersion && !telemetry?.pipelineVersion
+            ? { pipelineVersion: result.pipelineVersion }
+            : {}),
+        };
       }
     }),
   )));
@@ -534,13 +727,18 @@ async function renderSlideFrame(
   response: ServerResponse,
   buildDir: string,
   manifest: CourseQualityLabManifest,
-  sectionId: string,
-  batch: number,
+  identity: { pairId: string } | { sectionId: string; batch: number },
   variantKey: LabVariantKey,
   slideIndex: number,
 ): Promise<void> {
-  const section = manifest.sections.find((item) => item.id === sectionId);
-  const pair = section?.pairs.find((item) => item.batch === batch);
+  const section = "pairId" in identity
+    ? manifest.sections.find((item) => item.pairs.some((pair) => pair.id === identity.pairId))
+    : manifest.sections.find((item) => item.id === identity.sectionId);
+  const pair = "pairId" in identity
+    ? section?.pairs.find((item) => item.id === identity.pairId)
+    : section?.pairs.find((item) => item.batch === identity.batch);
+  const sectionId = section?.id ?? ("sectionId" in identity ? identity.sectionId : "");
+  const batch = pair?.batch ?? ("batch" in identity ? identity.batch : 0);
   const variant = pair?.variants[variantKey];
   const slide = variant?.slides[slideIndex];
   if (!section || !pair || !slide) throw publicError(404, "SLIDE_NOT_FOUND", "该幻灯片尚未生成。");
@@ -793,9 +991,25 @@ export function createCourseQualityLabServer(options: CourseQualityLabServerOpti
           response,
           buildDir,
           await storage.readManifest(),
-          sectionId,
-          batch,
+          { sectionId, batch },
           renderMatch[3] as LabVariantKey,
+          slideIndex,
+        );
+        return;
+      }
+      const pairRenderMatch = routeMatch(pathname, /^\/render-pair\/([^/]+)\/(baseline|enhanced)\/(\d+)$/);
+      if (pairRenderMatch && (method === "GET" || method === "HEAD")) {
+        const pairId = decodeRoutePart(pairRenderMatch[1]);
+        const slideIndex = Number(pairRenderMatch[3]);
+        if (!PAIR_ID.test(pairId) || !Number.isSafeInteger(slideIndex)) {
+          throw publicError(400, "INVALID_SLIDE_PATH", "幻灯片路径无效。");
+        }
+        await renderSlideFrame(
+          response,
+          buildDir,
+          await storage.readManifest(),
+          { pairId },
+          pairRenderMatch[2] as LabVariantKey,
           slideIndex,
         );
         return;

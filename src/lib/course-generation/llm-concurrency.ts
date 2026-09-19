@@ -2,7 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 type CourseGenerationLlmContext = {
   workload: "course-generation";
-  onTokenUsage?: (totalTokens: number) => Promise<void> | void;
+  onTokenUsage?: (
+    totalTokens: number,
+    source: "provider" | "estimated",
+  ) => Promise<void> | void;
 };
 
 export function estimateCourseGenerationTokens(characterCount: number): number {
@@ -23,7 +26,7 @@ export async function reportCourseGenerationTokenUsage(
     ? Math.max(0, Math.round(reportedTotal))
     : 0;
   const totalTokens = providerTotal || estimateCourseGenerationTokens(fallbackCharacterCount);
-  if (totalTokens > 0) await callback(totalTokens);
+  if (totalTokens > 0) await callback(totalTokens, providerTotal > 0 ? "provider" : "estimated");
 }
 
 type QueuedTask<T> = {

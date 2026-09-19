@@ -7,24 +7,34 @@ import { LAB_BATCHES, LAB_SECTION_FIXTURES } from "./fixtures";
 import {
   LAB_EXPERIMENT_ID,
   applySlideElementUpdates,
+  buildV5SemanticMap,
+  compileV5Actions,
   compactLabNarrationSystem,
   compactLabSlideSystem,
+  generateV5Narration,
   initialManifest,
   narrationStyleIssues,
   normalizeLabPageJointReview,
   normalizeNarrationRewrite,
   normalizeNarrationPatch,
   normalizeTeachingDesign,
+  normalizeV5Narration,
+  planNarrationBudgetRepairs,
+  repairV5PageOnce,
   recordDurationCheck,
   recoverVariantAfterGenerationFailure,
+  restoreV5SemanticElementIds,
   runLoggedStage,
   stageNarrationBudgetState,
+  v5NarrationAssemblyIssues,
+  v5RelevantLayoutIssues,
   withActuallyTaughtNarration,
   withEnhancedNarrationGuidance,
 } from "./generate";
 import type { LoggedCall } from "./generate";
 import type { CourseQualityLabManifest, LabVariantResult, TeachingDesign } from "./types";
-import type { SceneOutline } from "@openmaic/lib/types/generation";
+import type { GeneratedSlideContent, SceneOutline } from "@openmaic/lib/types/generation";
+import type { Action } from "@openmaic/lib/types/action";
 import type { Scene } from "@openmaic/lib/types/stage";
 
 describe("course quality lab fixtures", () => {
@@ -150,6 +160,417 @@ format`);
     }
   });
 
+  it("does not multiply transport failures at the stage boundary", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "quality-lab-transport-"));
+    try {
+      const calls: LoggedCall[] = [];
+      const model = vi.fn<AICallFn>(async () => { throw new Error("provider unavailable"); });
+      await expect(runLoggedStage(
+        model,
+        calls,
+        path.join(directory, "calls.json"),
+        "slide-1-content",
+        (stageCall) => stageCall("system", "user"),
+      )).rejects.toThrow("provider unavailable");
+      expect(model).toHaveBeenCalledTimes(1);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].status).toBe("failed");
+      expect(calls[0].parseError).toBeUndefined();
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not regenerate an invalid combined repair response", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "quality-lab-single-repair-"));
+    try {
+      const calls: LoggedCall[] = [];
+      const model = vi.fn<AICallFn>(async () => "not-json");
+      await expect(runLoggedStage(
+        model,
+        calls,
+        path.join(directory, "calls.json"),
+        "slide-1-combined-repair",
+        (stageCall) => stageCall("system", "user").then((text) => JSON.parse(text) as unknown),
+        { retryInvalidOutput: false },
+      )).rejects.toThrow();
+      expect(model).toHaveBeenCalledTimes(1);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].parseError).toBeTruthy();
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps V5 narration and action references stable across independent artifacts", () => {
+    const design = normalizeTeachingDesign({ pagePlan: [{
+      page: 1,
+      purpose: "解释证据与结论的关系",
+      priorKnowledge: "学生知道生成模型会输出文本",
+      newContent: "流畅表达不能替代核验",
+      explanation: ["用校史案例连接现象与结论"],
+      examples: ["校史年份案例"],
+      conditions: ["高风险主张需要独立来源"],
+      requiredVisibleContent: ["流畅表达 ≠ 事实证据"],
+      narrationFocus: ["解释为什么流畅度不能证明事实正确"],
+      evidenceQuotes: ["流畅度不是事实性的保证"],
+      assessmentFocus: ["说明需要核验的原因"],
+    }] }, 1);
+    const narration = normalizeV5Narration({ segments: [{
+      semanticIds: ["page-1-narration-1"],
+      text: "语言很顺，只说明表达符合常见模式；年份是否真实，仍要回到校志或原始文件核对。",
+    }] }, design, 0);
+    expect(narration[0].id).toBe("page-1-narration-1");
+    expect(normalizeV5Narration({ response: { segments: [{
+      semanticIds: ["page-1-narration-1"],
+      text: "语言很顺，只说明表达符合常见模式；年份是否真实，仍要回到校志或原始文件核对。",
+    }] } }, design, 0)).toEqual(narration);
+    const content = {
+      elements: [{
+        id: "page-1-visible-1",
+        type: "text",
+        left: 100,
+        top: 100,
+        width: 500,
+        height: 80,
+        content: "<p>流畅表达 ≠ 事实证据</p>",
+        rotate: 0,
+      }],
+    } as GeneratedSlideContent;
+    const semanticMap = buildV5SemanticMap(content, design, 0);
+    expect(semanticMap.requirementToElement["page-1-visible-1"]).toBe("page-1-visible-1");
+    const outline = {
+      id: "slide-1",
+      type: "slide",
+      title: "会表达不等于会求证",
+      description: "",
+      keyPoints: ["流畅不等于真实"],
+      order: 0,
+    } as SceneOutline;
+    const actions = compileV5Actions(outline, content, narration, semanticMap);
+    expect(actions.some((action) => action.type === "speech" && action.id === narration[0].id)).toBe(true);
+    expect(actions.some((action) => action.type === "spotlight"
+      && action.elementId === "page-1-visible-1"
+      && action.speechId === narration[0].id)).toBe(true);
+
+    const spokenTurns = normalizeV5Narration({ segments: [
+      {
+        semanticIds: ["page-1-narration-1"],
+        text: "先看一个现象。系统回答得很流畅，你会马上相信它吗？",
+      },
+      {
+        semanticIds: ["page-1-narration-1"],
+        text: "别急着下结论。流畅说明表达自然，却不能说明年份已经核实。",
+      },
+      {
+        semanticIds: ["page-1-narration-1"],
+        text: "所以遇到姓名、年份或数据，我们要回到独立来源，一项一项确认。",
+      },
+    ] }, design, 0);
+    expect(spokenTurns.map((segment) => segment.id)).toEqual([
+      "page-1-narration-1-turn-1",
+      "page-1-narration-1-turn-2",
+      "page-1-narration-1-turn-3",
+    ]);
+    const spokenActions = compileV5Actions(outline, content, spokenTurns, semanticMap);
+    expect(spokenActions.filter((action) => action.type === "speech")).toHaveLength(3);
+    expect(spokenActions.filter((action) => action.type === "spotlight")).toHaveLength(1);
+    expect(() => normalizeV5Narration({ segments: [{
+      semanticIds: ["page-1-narration-1"],
+      text: `这句话没有给语音留下自然停顿，${"而且还在不断叠加书面信息".repeat(6)}。`,
+    }] }, design, 0)).not.toThrow();
+
+    const regionContent = {
+      elements: [{
+        id: "page-1-visible-1",
+        type: "shape",
+        left: 80,
+        top: 120,
+        width: 600,
+        height: 260,
+        path: "M 0 0 L 1 0 L 1 1 L 0 1 Z",
+        viewBox: [1, 1],
+        fill: "#F8FAFC",
+        fixedRatio: false,
+      }],
+    } as GeneratedSlideContent;
+    expect(buildV5SemanticMap(regionContent, design, 0).requirementToElement)
+      .toEqual({ "page-1-visible-1": "page-1-visible-1" });
+  });
+
+  it("restores model-authored semantic IDs by exact element identity after renderer reminting", () => {
+    const design = normalizeTeachingDesign({ pagePlan: [{
+      page: 1,
+      purpose: "比较证据和条件",
+      priorKnowledge: "理解基本概念",
+      newContent: "证据和条件承担不同职责",
+      explanation: ["说明两者关系"],
+      examples: [],
+      conditions: [],
+      requiredVisibleContent: ["案例证据", "适用条件"],
+      narrationFocus: ["解释案例证据", "解释适用条件"],
+      evidenceQuotes: ["课程依据"],
+      assessmentFocus: ["能区分证据和条件"],
+    }] }, 1);
+    const identity = (content: string, left: number) => ({
+      type: "text",
+      left,
+      top: 120,
+      width: 260,
+      height: 80,
+      content: `<p>${content}</p>`,
+    });
+    const rawResponse = JSON.stringify({ elements: [
+      { id: "page-1-visible-2", ...identity("适用条件", 420) },
+      { id: "decorative-title", ...identity("比较框架", 100) },
+      { id: "page-1-visible-1", ...identity("案例证据", 100) },
+    ] });
+    const reminted = {
+      elements: [
+        { id: "text_random_a", ...identity("案例证据", 100), rotate: 0 },
+        { id: "text_random_b", ...identity("适用条件", 420), rotate: 0 },
+        { id: "text_random_c", ...identity("比较框架", 100), rotate: 0 },
+      ],
+    } as GeneratedSlideContent;
+    const restored = restoreV5SemanticElementIds(reminted, rawResponse, design, 0);
+    expect(restored.elements.map((element) => element.id)).toEqual([
+      "page-1-visible-1",
+      "page-1-visible-2",
+      "text_random_c",
+    ]);
+  });
+
+  it("normalizes opening and closing into one budgeted V5 teaching contract", () => {
+    const design = normalizeTeachingDesign({ pagePlan: [{
+      page: 1,
+      purpose: "完成一页课程",
+      priorKnowledge: "学生了解基本概念",
+      newContent: "证据与结论必须对应",
+      explanation: ["用案例解释证据关系"],
+      examples: ["核验案例"],
+      conditions: ["结论只在证据范围内成立"],
+      requiredVisibleContent: ["证据 → 推理 → 结论"],
+      narrationFocus: ["解释证据怎样支持结论"],
+      pageRole: "single",
+      visualPlan: {
+        structure: "case-reasoning",
+        regions: [{ purpose: "证据链", visibleRequirementIndexes: [1] }],
+        relationship: "用箭头连接证据、推理和结论",
+      },
+      deliveryPlan: [
+        { function: "opening", instruction: "简短问好并引入学习方向", visibleRequirementIndexes: [], budgetWeight: 1 },
+        { function: "knowledge", instruction: "准确解释证据与结论的关系和成立条件", visibleRequirementIndexes: [1], budgetWeight: 6 },
+        { function: "closing", instruction: "回扣核心认识并转入节末练习", visibleRequirementIndexes: [], budgetWeight: 1 },
+      ],
+      evidenceQuotes: ["课程依据"],
+      assessmentFocus: ["能解释证据关系"],
+    }] }, 1, {
+      requireV5Contract: true,
+      timingBudgets: [{ targetDurationSec: 90, targetUnits: 400, minUnits: 360, maxUnits: 440, unit: "cjk-char" }],
+    });
+    const page = design.pagePlan?.[0];
+    expect(page?.pageRole).toBe("single");
+    expect(page?.deliveryPlan?.map((step) => step.function)).toEqual(["opening", "knowledge", "closing"]);
+    expect(page?.deliveryPlan?.reduce((sum, step) => sum + step.targetUnits, 0)).toBe(400);
+    expect(page?.deliveryPlan?.[0].visibleRequirementIndexes).toEqual([]);
+    expect(page?.deliveryPlan?.at(-1)?.visibleRequirementIndexes).toEqual([]);
+  });
+
+  it("assigns greeting, continuation and closing only to their course positions", () => {
+    const page = (
+      pageNumber: number,
+      pageRole: "opening" | "continuation" | "closing",
+      functions: Array<"opening" | "knowledge" | "transition" | "closing">,
+    ) => ({
+      page: pageNumber,
+      purpose: `第 ${pageNumber} 页职责`,
+      priorKnowledge: "已有基础",
+      newContent: `新增认识 ${pageNumber}`,
+      explanation: ["完成本页教学"],
+      examples: [],
+      conditions: ["保留适用条件"],
+      requiredVisibleContent: [`可见关系 ${pageNumber}`],
+      narrationFocus: [`讲解步骤 ${pageNumber}`],
+      pageRole,
+      visualPlan: {
+        structure: "framework",
+        regions: [{ purpose: "主要区域", visibleRequirementIndexes: [1] }],
+        relationship: "按框架组织",
+      },
+      deliveryPlan: functions.map((fn) => ({
+        function: fn,
+        instruction: `${fn} 表达任务`,
+        visibleRequirementIndexes: fn === "knowledge" ? [1] : [],
+        budgetWeight: fn === "knowledge" ? 6 : 1,
+      })),
+      evidenceQuotes: ["课程依据"],
+      assessmentFocus: ["检查本页学习结果"],
+    });
+    const timingBudgets = [1, 2, 3].map(() => ({
+      targetDurationSec: 60,
+      targetUnits: 240,
+      minUnits: 216,
+      maxUnits: 264,
+      unit: "cjk-char" as const,
+    }));
+    const design = normalizeTeachingDesign({ pagePlan: [
+      page(1, "opening", ["opening", "knowledge"]),
+      page(2, "continuation", ["transition", "knowledge"]),
+      page(3, "closing", ["knowledge", "closing"]),
+    ] }, 3, { requireV5Contract: true, timingBudgets });
+    expect(design.pagePlan?.map((item) => item.pageRole)).toEqual(["opening", "continuation", "closing"]);
+    expect(design.pagePlan?.[1].deliveryPlan?.map((step) => step.function)).not.toContain("opening");
+    expect(() => normalizeTeachingDesign({ pagePlan: [
+      page(1, "opening", ["opening", "knowledge"]),
+      page(2, "continuation", ["opening", "knowledge"]),
+      page(3, "closing", ["knowledge", "closing"]),
+    ] }, 3, { requireV5Contract: true, timingBudgets })).toThrow(/缺少逐页职责/);
+  });
+
+  it("generates long professional narration once without a polishing loop", async () => {
+    const fixture = LAB_SECTION_FIXTURES[0];
+    const design = normalizeTeachingDesign({ pagePlan: [{
+      page: 1,
+      purpose: "解释机制",
+      priorKnowledge: "学生使用过生成式人工智能",
+      newContent: "提示改善不等于事实核验",
+      explanation: ["保持机制与条件完整"],
+      examples: [],
+      conditions: ["关键事实仍需核验"],
+      requiredVisibleContent: ["提示改善 ≠ 事实核验"],
+      narrationFocus: ["准确解释两者关系"],
+      pageRole: "single",
+      visualPlan: {
+        structure: "comparison",
+        regions: [{ purpose: "概念对照", visibleRequirementIndexes: [1] }],
+        relationship: "用不等号表达边界",
+      },
+      deliveryPlan: [
+        { function: "opening", instruction: "问好并引入", visibleRequirementIndexes: [], budgetWeight: 1 },
+        { function: "knowledge", instruction: "解释机制与条件", visibleRequirementIndexes: [1], budgetWeight: 6 },
+        { function: "closing", instruction: "收束并转入练习", visibleRequirementIndexes: [], budgetWeight: 1 },
+      ],
+      evidenceQuotes: [fixture.sources.at(-1)?.detail?.slice(0, 12) ?? "生成模型"],
+      assessmentFocus: ["能说明二者区别"],
+    }] }, 1, {
+      requireV5Contract: true,
+      timingBudgets: [{ targetDurationSec: 90, targetUnits: 400, minUnits: 360, maxUnits: 440, unit: "cjk-char" }],
+    });
+    const longProfessionalSentence = "生成模型根据输入与训练中学到的语言模式生成后续内容，因此即使输出在语法、结构和语气上都很流畅，也不能据此推出姓名、年份、数据或引文已经经过独立来源核验。";
+    const model = vi.fn<AICallFn>(async () => JSON.stringify({ segments: [
+      { semanticIds: ["page-1-narration-1"], function: "opening", text: "同学们好，我们从一个流畅却待核验的回答开始。" },
+      { semanticIds: ["page-1-narration-2"], function: "knowledge", text: longProfessionalSentence },
+      { semanticIds: ["page-1-narration-3"], function: "closing", text: "记住这个边界，接下来用练习判断哪些主张需要核验。" },
+    ] }));
+    const narration = await generateV5Narration({ fixture, design, pageIndex: 0, aiCall: model });
+    expect(model).toHaveBeenCalledTimes(1);
+    expect(narration[1].text).toBe(longProfessionalSentence);
+  });
+
+  it("keeps every essential V5 cue when more narration segments than visible targets are present", () => {
+    const content = {
+      elements: ["relation-a", "relation-b", "relation-c"].map((id, index) => ({
+        id,
+        type: "text",
+        left: 100 + index * 400,
+        top: 100,
+        width: 320,
+        height: 80,
+        content: `<p>${id}</p>`,
+        rotate: 0,
+      })),
+    } as GeneratedSlideContent;
+    const narration = [1, 2, 3, 4].map((index) => ({
+      id: `page-1-narration-${index}`,
+      semanticIds: [`page-1-narration-${index}`],
+      function: "knowledge" as const,
+      text: `第${index}段讲解会完整说明观察、推理依据、适用条件和判断结论之间的关系，帮助学生把当前内容连接到页面上可见的证据，并知道什么时候需要继续核验。`,
+    }));
+    const actions = compileV5Actions({
+      id: "slide-1",
+      type: "slide",
+      title: "证据关系",
+      description: "",
+      keyPoints: ["观察、依据、条件与结论"],
+      order: 0,
+    } as SceneOutline, content, narration, {
+      requirementToElement: {
+        "page-1-visible-1": "relation-a",
+        "page-1-visible-2": "relation-b",
+        "page-1-visible-3": "relation-c",
+      },
+      narrationToElements: {
+        "page-1-narration-1": ["relation-a"],
+        "page-1-narration-2": ["relation-b"],
+        "page-1-narration-3": ["relation-c"],
+        "page-1-narration-4": ["relation-c"],
+      },
+    });
+    const spotlights = actions.filter((action) => action.type === "spotlight");
+    expect(spotlights).toHaveLength(4);
+    expect(spotlights.map((action) => action.speechId)).toEqual(narration.map((segment) => segment.id));
+    expect(spotlights.at(-1)).toMatchObject({ elementId: "relation-c" });
+  });
+
+  it("binds narration to explicit visible requirements even when teaching order differs", () => {
+    const design = normalizeTeachingDesign({ pagePlan: [{
+      page: 1,
+      purpose: "先解释条件，再分析案例",
+      priorKnowledge: "理解基本概念",
+      newContent: "条件和案例承担不同职责",
+      explanation: ["按教学顺序使用两个区域"],
+      examples: ["案例"],
+      conditions: ["条件"],
+      requiredVisibleContent: ["案例证据", "适用条件"],
+      narrationFocus: ["先讲条件", "再讲案例"],
+      pageRole: "single",
+      visualPlan: {
+        structure: "case-reasoning",
+        regions: [
+          { purpose: "案例", visibleRequirementIndexes: [1] },
+          { purpose: "条件", visibleRequirementIndexes: [2] },
+        ],
+        relationship: "条件限定案例结论",
+      },
+      deliveryPlan: [
+        { function: "opening", instruction: "问好并引入", visibleRequirementIndexes: [], budgetWeight: 1 },
+        { function: "knowledge", instruction: "先解释适用条件", visibleRequirementIndexes: [2], budgetWeight: 4 },
+        { function: "example", instruction: "再分析案例证据", visibleRequirementIndexes: [1], budgetWeight: 4 },
+        { function: "closing", instruction: "收束并转入练习", visibleRequirementIndexes: [], budgetWeight: 1 },
+      ],
+      evidenceQuotes: ["课程依据"],
+      assessmentFocus: ["能说明条件和案例关系"],
+    }] }, 1, {
+      requireV5Contract: true,
+      timingBudgets: [{ targetDurationSec: 60, targetUnits: 240, minUnits: 216, maxUnits: 264, unit: "cjk-char" }],
+    });
+    const content = {
+      elements: [1, 2].map((index) => ({
+        id: `page-1-visible-${index}`,
+        type: "text",
+        left: index * 300,
+        top: 100,
+        width: 250,
+        height: 80,
+        content: `<p>${index === 1 ? "案例证据" : "适用条件"}</p>`,
+      })),
+    } as GeneratedSlideContent;
+    const narration = normalizeV5Narration({ segments: [
+      { semanticIds: ["page-1-narration-1"], function: "opening", text: "同学们好，我们先明确判断边界。" },
+      { semanticIds: ["page-1-narration-2"], function: "knowledge", text: "这个结论只在给定条件下成立。" },
+      { semanticIds: ["page-1-narration-3"], function: "example", text: "再看案例中的证据怎样支持判断。" },
+      { semanticIds: ["page-1-narration-4"], function: "closing", text: "记住条件与证据的关系，接着完成练习。" },
+    ] }, design, 0);
+    const semanticMap = buildV5SemanticMap(content, design, 0);
+    const actions = compileV5Actions({
+      id: "slide-1", type: "slide", title: "条件与案例", description: "", keyPoints: [], order: 0,
+    } as SceneOutline, content, narration, semanticMap);
+    expect(actions.filter((action) => action.type === "spotlight").map((action) => action.elementId)).toEqual([
+      "page-1-visible-2",
+      "page-1-visible-1",
+    ]);
+  });
+
   it("requires complete page ownership while allowing pages without examples or conditions", () => {
     expect(() => normalizeTeachingDesign({ coreExplanation: [] }, 2)).toThrow(/缺少/);
     const design = normalizeTeachingDesign({ pagePlan: [
@@ -253,6 +674,158 @@ format`);
     }, current, 1)).toThrow(/修改了过多元素/);
   });
 
+  it("combines slide and narration defects into one V5 repair call", async () => {
+    const content = {
+      elements: [{
+        id: "page-1-visible-1",
+        type: "text",
+        left: 10,
+        top: 10,
+        width: 300,
+        height: 60,
+        content: "<p>提示可以保证事实正确</p>",
+      }],
+    } as GeneratedSlideContent;
+    const actions = [{
+      id: "page-1-narration-1",
+      type: "speech",
+      text: "提示写清楚之后，事实就一定正确。",
+    }] as Action[];
+    const model = vi.fn<AICallFn>(async () => JSON.stringify({
+      updates: [{ id: "page-1-visible-1", changes: { content: "<p>提示改善 ≠ 事实核验</p>" } }],
+      segments: [{ id: "page-1-narration-1", text: "提示写清楚可以提高任务匹配度，但关键事实仍要核验。" }],
+    }));
+    const repaired = await repairV5PageOnce({
+      fixture: LAB_SECTION_FIXTURES[0],
+      outline: { id: "slide-1", type: "slide", title: "提示与核验", description: "", keyPoints: [], order: 0 } as SceneOutline,
+      design: { pagePlan: [] },
+      pageIndex: 0,
+      content,
+      actions,
+      layoutIssues: ["文字区域过密"],
+      deterministicNarrationIssues: [],
+      budgetDirective: "适度补足解释",
+      issues: [{
+        id: "confirmed-error",
+        category: "factual-grounding",
+        targetType: "speech-segment",
+        targetId: "page-1-narration-1",
+        evidence: "事实就一定正确",
+        sourceEvidence: "提示词改善只能提高任务匹配度，不能替代事实核验",
+        repair: "恢复准确关系",
+      }],
+      aiCall: model,
+    });
+    expect(model).toHaveBeenCalledTimes(1);
+    expect(repaired.content.elements[0]).toMatchObject({ content: "<p>提示改善 ≠ 事实核验</p>" });
+    expect(repaired.actions[0]).toMatchObject({ text: "提示写清楚可以提高任务匹配度，但关键事实仍要核验。" });
+
+    const slideOnlyRepair = await repairV5PageOnce({
+      fixture: LAB_SECTION_FIXTURES[0],
+      outline: { id: "slide-1", type: "slide", title: "提示与核验", description: "", keyPoints: [], order: 0 } as SceneOutline,
+      design: { pagePlan: [] },
+      pageIndex: 0,
+      content,
+      actions,
+      layoutIssues: ["文字区域过密"],
+      deterministicNarrationIssues: [],
+      issues: [],
+      aiCall: async () => JSON.stringify({
+        updates: [{ id: "page-1-visible-1", changes: { content: "<p>提示改善 ≠ 事实核验</p>" } }],
+        segments: [{ id: "page-1-narration-1", text: "顺手润色讲稿。" }],
+      }),
+    });
+    expect(slideOnlyRepair.content.elements[0]).toMatchObject({ content: "<p>提示改善 ≠ 事实核验</p>" });
+    expect(slideOnlyRepair.actions).toEqual(actions);
+  });
+
+  it("lets the explicit V5 visual plan own semantic structure while retaining physical layout failures", () => {
+    expect(v5RelevantLayoutIssues([
+      "页面内容需要data语义结构，但当前未使用表格、图表、连线或分组关系表达",
+      "关键教学点可见覆盖率仅 66.7%，存在 1 条未完整可见的已确认要点",
+      "正文区域网格利用率仅 89.3%，低于 90% 目标",
+      "正文区域存在 160px 的连续空白带，信息分布明显失衡",
+    ])).toEqual(["正文区域存在 160px 的连续空白带，信息分布明显失衡"]);
+    expect(v5RelevantLayoutIssues([
+      "正文区域网格利用率仅 87.9%，低于 90% 目标",
+    ])).toEqual(["正文区域网格利用率仅 87.9%，低于 90% 目标"]);
+  });
+
+  it("checks production perspective deterministically without treating a long professional sentence as a style defect", () => {
+    expect(v5NarrationAssemblyIssues([{
+      id: "knowledge",
+      text: `在适用条件成立且证据来源可追溯时，${"这一专业判断必须完整保留限定条件".repeat(8)}。`,
+    }])).toEqual([]);
+    expect(v5NarrationAssemblyIssues([{
+      id: "transition",
+      text: "下一页，我们继续分析这个条件。",
+    }])).toEqual([expect.stringContaining("页面制作视角")]);
+    expect(v5NarrationAssemblyIssues([{
+      id: "closing",
+      function: "closing",
+      text: "记住目标、证据与条件的关系。",
+    }], { requirePracticeTransition: true })).toEqual([
+      expect.stringContaining("转入节末练习"),
+    ]);
+    expect(v5NarrationAssemblyIssues([{
+      id: "closing",
+      function: "closing",
+      text: "记住目标、证据与条件的关系，下面用练习检验你的判断。",
+    }], { requirePracticeTransition: true })).toEqual([]);
+  });
+
+  it("allocates an out-of-range course budget to page repair opportunities without looping", () => {
+    const outlines = [0, 1].map((order) => ({
+      id: `slide-${order + 1}`,
+      type: "slide",
+      title: `第 ${order + 1} 页`,
+      description: "",
+      keyPoints: [],
+      order,
+      timingPlan: {
+        targetDurationSec: 30,
+        targetUnits: 100,
+        minUnits: 90,
+        maxUnits: 110,
+        unit: "cjk-char",
+      },
+    })) as unknown as SceneOutline[];
+    const actions = [0, 1].map((page) => [{
+      id: `s${page + 1}`,
+      type: "speech",
+      text: "证据需要核验。",
+    }] as Action[]);
+    const directives = planNarrationBudgetRepairs(outlines, actions);
+    expect([...directives.keys()]).toEqual([0, 1]);
+    expect([...directives.values()].every((directive) => directive.includes("整节首次文稿"))).toBe(true);
+  });
+
+  it("allocates only the change needed to reach the nearest valid course-budget boundary", () => {
+    const outlines = [0, 1].map((order) => ({
+      id: `slide-${order + 1}`,
+      type: "slide",
+      title: `第 ${order + 1} 页`,
+      description: "",
+      keyPoints: [],
+      order,
+      timingPlan: {
+        targetDurationSec: 10,
+        targetUnits: 10,
+        minUnits: 9,
+        maxUnits: 11,
+        unit: "cjk-char",
+      },
+    })) as unknown as SceneOutline[];
+    const actions = [0, 1].map((page) => [{
+      id: `s${page + 1}`,
+      type: "speech",
+      text: "一二三四五六七八九十甲乙",
+    }] as Action[]);
+    expect([...planNarrationBudgetRepairs(outlines, actions).values()]).toEqual([
+      expect.stringContaining("从约 12 调整到约 10"),
+    ]);
+  });
+
   it("rejects production language and source labels before enhanced narration reaches TTS", () => {
     expect(narrationStyleIssues([
       { id: "s1", text: "这一页的核心观点是，表达流畅不等于事实可靠。" },
@@ -287,13 +860,7 @@ format`);
     expect(review.issues[0]).toMatchObject({ targetId: "s1", targetType: "speech-segment" });
     expect(review.teacherReviewNotes[0]).toMatchObject({ page: 2, origin: "content-review" });
     const nonBlockingClaim = normalizeLabPageJointReview({
-      issues: [{
-        category: "factual-grounding",
-        targetType: "speech-segment",
-        targetId: "s1",
-        evidence: "生成完整论证对工具成本极低",
-        repair: "删除没有资料支持的成本判断",
-      }],
+      issues: [],
       teacherReviewNotes: [{
         claim: "生成完整论证对工具成本极低",
         reason: "资料没有成本依据",
@@ -306,9 +873,23 @@ format`);
         page: 2,
         claim: "生成完整论证对工具成本极低",
         origin: "content-review",
-        reason: expect.stringContaining("依据不足或真伪存疑"),
-        suggestion: expect.stringContaining("课程已保存"),
+        reason: "资料没有成本依据",
+        suggestion: "教师核实",
       }),
+    ]);
+    const confirmedError = normalizeLabPageJointReview({
+      issues: [{
+        category: "factual-grounding",
+        targetType: "speech-segment",
+        targetId: "s1",
+        evidence: "提示写清楚就能保证事实正确",
+        sourceEvidence: "提示词改善只能提高任务匹配度，不能替代事实核验",
+        repair: "恢复提示改善与事实核验的准确关系",
+      }],
+      teacherReviewNotes: [],
+    }, 2, 2, [], [], [{ id: "s1", text: "提示写清楚就能保证事实正确。" }], "提示词改善只能提高任务匹配度，不能替代事实核验");
+    expect(confirmedError.issues).toEqual([
+      expect.objectContaining({ category: "factual-grounding", sourceEvidence: expect.any(String) }),
     ]);
     expect(() => normalizeLabPageJointReview({
       issues: [],
@@ -407,6 +988,9 @@ format`);
     ];
     expect(normalizeNarrationPatch({
       segments: [{ id: "s2", text: "删去重复，只保留判断理由。" }],
+    }, original)).toEqual([{ id: "s2", text: "删去重复，只保留判断理由。" }]);
+    expect(normalizeNarrationPatch({
+      response: { segments: [{ id: "s2", text: "删去重复，只保留判断理由。" }] },
     }, original)).toEqual([{ id: "s2", text: "删去重复，只保留判断理由。" }]);
     expect(() => normalizeNarrationPatch({
       segments: [{ id: "s2", text: "这一页删去重复定义。" }],

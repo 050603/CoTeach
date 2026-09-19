@@ -80,6 +80,48 @@ pnpm quality-lab:generate -- --section generative-ai-verification --batch 1 --tt
 
 三次生成完成后，报告写入 `.openpbl-runtime/course-quality-lab/reports/source-first-workflow-v4.md`，包含三门课程各一次运行及三次总体的中位数与范围、首次通过率、修复率、真实时长、音频缓存情况和逐页人工评判入口。评测调用与生成调用分开统计。
 
+## V4 / V5 固定对比实验
+
+V5 候选使用独立实验 runner 串行运行六个 arm，固定顺序为：第一门 V4→V5、第二门 V5→V4、第三门 V4→V5。每个 arm 都有独立运行 ID、目录和音频缓存身份，生成并发固定为 1，runner 进程锁禁止两个对比实验竞争模型资源。
+
+先用 dry-run 固化实验协议并检查命令，不会调用模型：
+
+```bash
+pnpm quality-lab:experiment -- \
+  --experiment-id modular-pipeline-v5-candidate-1 \
+  --model deepseek:deepseek-v4.1-flash \
+  --reasoning none \
+  --tts-provider qwen-tts \
+  --tts-model qwen-audio-3.0-tts-flash \
+  --tts-voice longanfengyue \
+  --dry-run
+```
+
+正式运行使用同一组冻结参数并增加 `--resume`。dry-run 已保存协议，因此 `--resume` 会沿用该协议；如果某个 arm 中断，再次执行同一命令只恢复失败和未开始的 arm，已完成 arm 不会重跑。第一次启动 arm 时传给生成器的 `--fresh` 只确认该唯一实验 ID 下没有既有检查点，不删除任何历史；失败后的恢复不再传 `--fresh`。
+
+```bash
+pnpm quality-lab:experiment -- \
+  --experiment-id modular-pipeline-v5-candidate-1 \
+  --model deepseek:deepseek-v4.1-flash \
+  --reasoning none \
+  --tts-provider qwen-tts \
+  --tts-model qwen-audio-3.0-tts-flash \
+  --tts-voice longanfengyue \
+  --resume
+```
+
+实验协议和每次尝试保存在 `experiments/<experiment-id>/experiment.json`，六次产物保存在 `runs/<experiment-id>/<section>/1/<variant>/`，报告写入 `reports/<experiment-id>.md`。报告逐课程比较 Token、端到端时间和独立质量门槛，再给出三门的中位数与范围。只有质量通过且 V5 的 Token 和时间都下降时才标记为优化候选；Token 的供应商实报、估算、混合或未知来源会明确标注，教师听感单独留给 3010 人工评判。
+
+runner 启动时冻结并记录 Git 提交与工作区指纹、fixture 指纹、模型、推理配置和 TTS 配置，每个 arm 前再次核对；实验期间代码或 fixture 改变会停止后续 arm。开发测试可使用 `--fixture-metrics-dir <目录>`，从 `<section>.<pipeline>.json` 读取六份指标，不调用真实模型。
+
+## V5 课堂口语轮次
+
+V5 在一次教学设计中同时确定课程位置、页面结构、可见要求、有序讲解步骤、表达功能、图文关联和语音预算。首讲授页安排简短问好与主题引入，末讲授页回扣核心认识并转入节末练习；单页课程同时承担开场和收束。引入、例子与承接可以亲切，定义、机制、因果、推理和适用条件保持专业限定。句长和段长只是首次写作参考，不会触发独立口语化模型改写。
+
+PPT 的关键元素使用教学合同中的稳定语义 ID，讲稿步骤显式引用这些可见要求；开场、转场和收束不强行绑定画面。首次 PPT、讲稿和检查结果分别保存在逐页检查点。确定性几何调整、首次通过页面、模型质量修复和恢复复用分开计数。
+
+布局、整节时长、知识覆盖、明确事实错误、图文对应和课堂表达问题先汇总，再共享每页唯一一次合并修复。修改后只做一次联合复核；仍有阻断问题就保存诊断并停止，不进入口语润色、整节反复补写或整页升级重生成。资料明确证明错误的内容会阻断；资料不足或真伪存疑的主张仍写入教师复核提醒。课程最终时长继续按完整真实音频验收。
+
 ## 迁移边界
 
 可迁移的生成核心以四类边界工作：编排器只决定阶段依赖；模型网关负责一次逻辑调用并回报真实传输尝试；检查点存储按指纹保存原始响应和解析产物；进度事件向 UI 或任务系统报告阶段状态。实验文件系统只是检查点适配器。正式系统迁移时可替换为数据库或对象存储，并沿用相同的阶段键、问题对象、依赖失效和停止条件，不需要复制 3010 的页面或文件路径。

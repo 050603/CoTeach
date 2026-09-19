@@ -1,5 +1,40 @@
 export type LabVariantKey = "baseline" | "enhanced";
 
+export type LabPipelineModule =
+  | "planning"
+  | "slide"
+  | "narration"
+  | "action"
+  | "review"
+  | "repair"
+  | "quiz"
+  | "tts";
+
+export type LabTokenUsageSource = "provider-reported" | "estimated" | "mixed" | "unknown";
+
+export type LabRepairScope = "element" | "segment" | "page" | "section";
+
+export interface LabModuleMetrics {
+  tokenUsage: number;
+  tokenUsageSource: LabTokenUsageSource;
+  inputCharacters: number;
+  outputCharacters: number;
+  calls: number;
+  failedCalls: number;
+  transportAttempts: number;
+  transportRetries: number;
+  elapsedMs: number;
+}
+
+export interface LabRepairEvent {
+  module: string;
+  scope: LabRepairScope;
+  reason: string;
+  targetIds: string[];
+  outcome: "resolved" | "no-progress" | "regressed" | "escalated" | "failed";
+  attempt: number;
+}
+
 export type ArtifactState = "pending" | "running" | "complete" | "failed" | "missing";
 
 export type ReviewOutcome = "baseline" | "enhanced" | "tie" | "undecided";
@@ -25,6 +60,8 @@ export interface LabReviewIssue {
   targetId: string;
   /** Exact source text for an existing target; requirement text for missing content. */
   evidence: string;
+  /** Exact authoritative excerpt required for confirmed factual contradictions. */
+  sourceEvidence?: string;
   repair: string;
 }
 
@@ -99,6 +136,9 @@ export interface LabQuizQuestion {
 export interface LabVariantMetrics {
   /** Provider-reported total when available; otherwise the shared 2.5 chars/token estimate. */
   tokenUsage: number;
+  /** Explicit provenance for the aggregate. Archived logs without provenance remain unknown. */
+  tokenUsageSource?: LabTokenUsageSource;
+  /** Legacy display hint retained for archived manifests. */
   tokenUsageEstimated: boolean;
   inputCharacters: number;
   outputCharacters: number;
@@ -109,6 +149,12 @@ export interface LabVariantMetrics {
   transportRetries: number;
   transportAttemptsRecorded: boolean;
   qualityRepairCalls: number;
+  /** Pages accepted from their first model drafts without a quality repair. */
+  firstPassPages?: number;
+  /** Total teaching pages evaluated for first-pass quality. */
+  evaluatedPages?: number;
+  /** Non-model geometry/style normalizations applied before review. */
+  deterministicAdjustments?: number;
   abandonedModelCalls: number;
   checkpointReuses: number;
   telemetryRecorded: boolean;
@@ -121,10 +167,19 @@ export interface LabVariantMetrics {
   ttsElapsedMs: number;
   ttsCacheHits: number;
   audioBytes: number;
+  /** Per-module cost and latency, present for versioned pipeline telemetry. */
+  moduleMetrics?: Partial<Record<LabPipelineModule, LabModuleMetrics>>;
+  /** Sanitized repair decisions; prompts and raw model responses are never included. */
+  repairEvents?: LabRepairEvent[];
+  pipelineVersion?: string;
+  /** Checkpoint artifact name -> producing module/schema version. */
+  artifactVersions?: Record<string, string>;
 }
 
 export interface LabVariantResult {
   label?: string;
+  /** Producing pipeline version, for example v4-clean or v5. */
+  pipelineVersion?: string;
   /** Base URL for this experiment's immutable-ish artifact set; absent on archived v1 manifests. */
   artifactBaseUrl?: string;
   statuses: {
@@ -177,6 +232,25 @@ export interface TeachingDesign {
     requiredVisibleContent: string[];
     /** Reasoning/background assigned to narration instead of repeated on the slide. */
     narrationFocus: string[];
+    /** V5 course position; absent in archived V4 contracts. */
+    pageRole?: "opening" | "continuation" | "closing" | "single";
+    /** V5 slide composition and explicit ownership of visible requirements. */
+    visualPlan?: {
+      structure: "comparison" | "process" | "case-reasoning" | "framework";
+      regions: Array<{
+        purpose: string;
+        visibleRequirementIndexes: number[];
+      }>;
+      relationship: string;
+    };
+    /** Ordered V5 delivery steps. Indexes refer to requiredVisibleContent. */
+    deliveryPlan?: Array<{
+      id: string;
+      function: "opening" | "knowledge" | "example" | "transition" | "closing";
+      instruction: string;
+      visibleRequirementIndexes: number[];
+      targetUnits: number;
+    }>;
     /** Exact source excerpts selected for this page. */
     evidenceQuotes: string[];
     /** Deterministic budget supplied by the selected TTS voice profile. */
