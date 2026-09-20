@@ -814,8 +814,10 @@ function GraphPreview({ artifact }: { artifact: CourseDesignGenerationArtifact }
         </div>
         {scopePlan && scopeCounts ? (
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[9px] text-[var(--pbl-text-subtle)]">
-            <span className="font-semibold text-[var(--pbl-teacher)]">容量编译</span>
-            <span>{scopePlan.planningDurationMin} 分钟：形成 {scopePlan.targetPointCount} 个教学目标；来源概念独立 {scopeCounts.standalone} 项 · 并入 {scopeCounts.embedded} 项 · 后续承接 {scopeCounts.deferred} 项</span>
+            <span className="font-semibold text-[var(--pbl-teacher)]">知识范围</span>
+            <span>{scopePlan.policyVersion
+              ? `${scopePlan.planningDurationMin} 分钟：资源包必授 ${scopePlan.sourcePointCount} 项全部保留，图谱共 ${scopePlan.targetPointCount} 个课程知识点；相关知识可组合讲授和展示`
+              : `${scopePlan.planningDurationMin} 分钟：形成 ${scopePlan.targetPointCount} 个教学目标；来源概念独立 ${scopeCounts.standalone} 项 · 并入 ${scopeCounts.embedded} 项 · 后续承接 ${scopeCounts.deferred} 项`}</span>
             <span>解释与活动 {scopePlan.explanationAndActivityMin} 分钟 · 检测反馈 {scopePlan.assessmentReserveMin} 分钟</span>
           </div>
         ) : null}

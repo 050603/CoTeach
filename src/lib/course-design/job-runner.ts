@@ -10,7 +10,11 @@ import { createCourseOutputBudget, resolveCourseExecutionBudgetOptions, COURSE_O
 import { buildCourseGenerationInput } from "@/lib/teacher/course-generation-input";
 import { formatTeachingConstraintsForChinesePrompt } from "@/lib/openmaic/pedagogy/teaching-constraints";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
-import { generateKnowledgeStructureOnce, type KnowledgeStructureGenerationContext } from "@/lib/knowledge-structure-generation";
+import {
+  generateKnowledgeStructureOnce,
+  KNOWLEDGE_STRUCTURE_POLICY_VERSION,
+  type KnowledgeStructureGenerationContext,
+} from "@/lib/knowledge-structure-generation";
 import { resourcePackageTeachingPoints } from "./resource-package-knowledge";
 import {
   buildPblActivityCatalog,
@@ -585,16 +589,25 @@ export async function resumeCourseDesignAfterOutlineReview(
   if (reviewKind === "knowledge" && (review?.knowledgePoints || review?.knowledgeGraph)) {
     await updateCourse(courseId, (course) => {
       const knowledgePoints = review.knowledgePoints ?? course.content.knowledgePoints;
+      const requiredPackagePoints = resourcePackageTeachingPoints(course.content.resourcePackage);
+      const missingRequiredPoints = requiredPackagePoints.filter((required) => !knowledgePoints.some((point) => (
+        point.id === required.id || point.sourceKnowledgePointIds?.includes(required.id)
+      )));
+      if (missingRequiredPoints.length) {
+        throw new Error(`知识图谱不能删除资源包规定的必授知识点：${missingRequiredPoints.map((point) => point.name).join("、")}`);
+      }
       const knowledgeScopePlan = course.content.knowledgeScopePlan
         ? {
             ...course.content.knowledgeScopePlan,
             targetPointCount: knowledgePoints.length,
             decisions: course.content.knowledgeScopePlan.decisions.map((decision) => {
-              const target = knowledgePoints.find((point) => point.sourceKnowledgePointIds?.includes(decision.sourceKnowledgePointId));
+              const target = knowledgePoints.find((point) => (
+                point.id === decision.sourceKnowledgePointId
+                || point.sourceKnowledgePointIds?.includes(decision.sourceKnowledgePointId)
+              ));
               return target
-                ? { ...decision, disposition: target.sourceKnowledgePointIds?.length === 1 ? "standalone" as const : "embedded" as const,
-                    targetKnowledgePointId: target.id }
-                : { ...decision, disposition: "deferred" as const, targetKnowledgePointId: undefined };
+                ? { ...decision, disposition: "standalone" as const, targetKnowledgePointId: target.id }
+                : decision;
             }),
           }
         : undefined;
@@ -2275,6 +2288,7 @@ async function runNewSystemCourseDesign(
     ))
     && initialCourse.content.knowledgePoints.length > 0
     && initialCourse.content.knowledgeScopePlan?.schemaVersion === 1
+    && initialCourse.content.knowledgeScopePlan.policyVersion === KNOWLEDGE_STRUCTURE_POLICY_VERSION
     && (initialCourse.content.knowledgeGraph?.nodes.length ?? 0) >= initialCourse.content.knowledgePoints.length;
 
   let course: Course = initialCourse;
@@ -2348,7 +2362,8 @@ async function runNewSystemCourseDesign(
       teachingCapacity,
     };
     const knowledgeInputFingerprint = fingerprintGenerationValue({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      policyVersion: KNOWLEDGE_STRUCTURE_POLICY_VERSION,
       input: knowledgeInput,
       context: knowledgeContext,
     });
@@ -2369,7 +2384,8 @@ async function runNewSystemCourseDesign(
       && checkpointRecord(storedKnowledge.knowledgeGraph)
       && Array.isArray(checkpointRecord(storedKnowledge.knowledgeGraph)?.nodes)
       && Array.isArray(checkpointRecord(storedKnowledge.knowledgeGraph)?.edges)
-      && checkpointRecord(storedKnowledge.knowledgeScopePlan)?.schemaVersion === 1) {
+      && checkpointRecord(storedKnowledge.knowledgeScopePlan)?.schemaVersion === 1
+      && checkpointRecord(storedKnowledge.knowledgeScopePlan)?.policyVersion === KNOWLEDGE_STRUCTURE_POLICY_VERSION) {
       generated = {
         knowledgePoints: storedKnowledge.knowledgePoints as KnowledgePoint[],
         knowledgeGraph: storedKnowledge.knowledgeGraph as unknown as KnowledgeGraph,
@@ -2479,11 +2495,11 @@ async function runNewSystemCourseDesign(
       stepIndex: 1,
       progress: 52,
       label: "知识图谱",
-      summary: `已按 ${content.knowledgeScopePlan?.planningDurationMin ?? teachingCapacity.planningDurationMin} 分钟容量编译为 ${content.knowledgePoints.length} 个可讲透目标，等待教师确认`,
+      summary: `已完整保留资源包必授范围并组织为 ${content.knowledgePoints.length} 个课程知识点，讲授分组与深度按 ${content.knowledgeScopePlan?.planningDurationMin ?? teachingCapacity.planningDurationMin} 分钟容量规划，等待教师确认`,
       status: "completed",
       checks: [
         `先按知识讲授预算完成范围规划：${content.knowledgeScopePlan?.explanationAndActivityMin ?? teachingCapacity.explanationAndActivityMin} 分钟用于解释与必要活动，${content.knowledgeScopePlan?.assessmentReserveMin ?? teachingCapacity.assessmentReserveMin} 分钟预留检测反馈`,
-        `资源目录 ${content.knowledgeScopePlan?.sourcePointCount ?? packageKnowledgePoints.length} 项已分别决定独立讲授、并入核心目标或后续承接`,
+        `资源目录 ${content.knowledgeScopePlan?.sourcePointCount ?? packageKnowledgePoints.length} 项已全部保留为本课知识节点，相关知识可组合讲授`,
         "已完成字段、引用和关系元数据的确定性整理，未调用第二个 AI 审校",
         "知识图谱已具备可查看、可编辑的完整结构",
         ...(request.referenceMaterials?.length ? [`已参考 ${request.referenceMaterials.length} 份教师知识资料`] : []),
@@ -2493,7 +2509,7 @@ async function runNewSystemCourseDesign(
         "new-system-knowledge",
         "graph",
         "知识图谱",
-        `${content.knowledgePoints.length} 个独立教学目标`,
+        `${content.knowledgePoints.length} 个课程知识点`,
         content.knowledgeScopePlan?.rationale ?? "知识讲解、互动练习与学习检测将采用这份知识结构。",
         "blue",
         content.knowledgePoints.slice(0, 8).map((point) => ({

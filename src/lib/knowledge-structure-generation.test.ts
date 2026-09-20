@@ -5,6 +5,7 @@ import {
   buildKnowledgeStructureRepairMessages,
   generateKnowledgeStructureOnce,
   generateReviewedKnowledgeStructure,
+  KNOWLEDGE_STRUCTURE_POLICY_VERSION,
 } from "@/lib/knowledge-structure-generation";
 import type { GenerateInput } from "@/lib/llm/types";
 
@@ -57,7 +58,7 @@ describe("reviewed knowledge structure generation", () => {
     expect(result.knowledgeGraph?.nodes.find((node) => node.id === "stable-leaf")?.groupName).toBe("语言理解");
   });
 
-  it("compiles a large source catalog into a time-bounded set before duration allocation", async () => {
+  it("keeps every resource-package leaf even when the model tries to collapse the catalog", async () => {
     const teacherKnowledgePoints = Array.from({ length: 20 }, (_, index) => ({
       id: `source-${index + 1}`,
       name: `来源概念${index + 1}`,
@@ -104,17 +105,33 @@ describe("reviewed knowledge structure generation", () => {
       },
     }, { modelCall });
 
-    expect(result.knowledgePoints).toHaveLength(4);
-    expect(result.knowledgePoints.flatMap((point) => point.sourceKnowledgePointIds ?? [])).toHaveLength(20);
+    expect(result.knowledgePoints).toHaveLength(20);
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(
+      teacherKnowledgePoints.map((point) => point.id),
+    );
+    expect(result.knowledgePoints.map((point) => point.name)).toEqual(
+      teacherKnowledgePoints.map((point) => point.name),
+    );
+    expect(result.knowledgePoints.every((point) => point.sourceKnowledgePointIds?.length === 1)).toBe(true);
+    expect(result.knowledgePoints.map((point) => point.keyInfo)).toEqual(
+      teacherKnowledgePoints.map((point) => point.description),
+    );
+    expect(result.knowledgePoints.flatMap((point) => point.sourceKnowledgePointIds ?? []))
+      .toEqual(teacherKnowledgePoints.map((point) => point.id));
     expect(result.knowledgeScopePlan).toMatchObject({
+      policyVersion: KNOWLEDGE_STRUCTURE_POLICY_VERSION,
       planningDurationMin: 30,
       assessmentReserveMin: 4,
       explanationAndActivityMin: 26,
       sourcePointCount: 20,
-      targetPointCount: 4,
+      targetPointCount: 20,
     });
     expect(result.knowledgeScopePlan?.decisions).toHaveLength(20);
-    expect(result.knowledgeScopePlan?.decisions.filter((decision) => decision.disposition === "embedded")).toHaveLength(20);
+    expect(result.knowledgeScopePlan?.decisions.every((decision) => (
+      decision.disposition === "standalone"
+      && decision.targetKnowledgePointId === decision.sourceKnowledgePointId
+    ))).toBe(true);
+    expect(result.knowledgeScopePlan?.rationale).toContain("完整保留资源包规定的知识点");
   });
   it("generates the new-system teacher checkpoint without an AI review call", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify(candidate));
@@ -141,6 +158,7 @@ describe("reviewed knowledge structure generation", () => {
     expect(aiCall).toHaveBeenCalledWith(expect.stringContaining("知识"), expect.any(String));
     expect(aiCall.mock.calls[0]?.[1]).toContain("驱动问题、最终成果和资料中的“任务关联”不自动成为每个节点");
     expect(aiCall.mock.calls[0]?.[1]).toContain("不能因为某知识将来可用于成果制作");
+    expect(aiCall.mock.calls[0]?.[1]).toContain("资源包来源项不得标为 embedded 或 deferred");
     expect(modelCall).not.toHaveBeenCalled();
   });
 

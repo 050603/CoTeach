@@ -64,9 +64,16 @@ interface MediaGenerationState {
 
 // ==================== Helper ====================
 
-/** Check if a src string is a generated media placeholder ID */
+/**
+ * Check if a src string is a generated media placeholder ID.
+ *
+ * Besides the legacy `gen_img_*` / `gen_vid_*` IDs, teaching-blueprint pages
+ * use deterministic `<outline-id>:media-<n>` IDs so narration, layout and the
+ * generated asset all refer to the same resource. Keep both forms here: this
+ * predicate is shared by server backfill, playback and export.
+ */
 export function isMediaPlaceholder(src: string): boolean {
-  return /^gen_(img|vid)_[\w-]+$/i.test(src);
+  return /^gen_(img|vid)_[\w-]+$/i.test(src) || /^[\w-]+:media-\d+$/i.test(src);
 }
 
 // ==================== Store ====================

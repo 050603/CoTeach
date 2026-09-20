@@ -892,6 +892,8 @@ export type TeachingExplanationNode = {
   id: string;
   kind: "term" | "concept" | "relation" | "mechanism" | "example" | "condition" | "misconception";
   content: string;
+  /** Lesson knowledge responsibilities actually explained by this node. */
+  knowledgePointIds?: string[];
   prerequisiteNodeIds: string[];
   provenance: "course-source" | "derived" | "general-knowledge" | "constructed" | "unverified";
 };
@@ -1696,7 +1698,7 @@ export type TeacherResourceScene = {
 
 export type KnowledgePoint = {
   sourceId?: string;
-  /** Source-package leaf concepts compiled into this teachable target. */
+  /** Source-package leaf represented by this lesson node. Package-owned nodes use exactly one source ID. */
   sourceKnowledgePointIds?: string[];
   sourceKnowledgePointNames?: string[];
   groupId?: string;
@@ -1715,6 +1717,8 @@ export type KnowledgePoint = {
 
 export type KnowledgeScopePlan = {
   schemaVersion: 1;
+  /** Generation-policy identity used to prevent resuming an obsolete coverage contract. */
+  policyVersion?: string;
   /** Guaranteed budget used while deciding the lesson-owned knowledge scope. */
   planningDurationMin: number;
   durationRangeMin: number;
@@ -1728,6 +1732,7 @@ export type KnowledgeScopePlan = {
   decisions: Array<{
     sourceKnowledgePointId: string;
     sourceKnowledgePointName: string;
+    /** Legacy snapshots may contain embedded/deferred; new resource-package generations require standalone. */
     disposition: "standalone" | "embedded" | "deferred";
     targetKnowledgePointId?: string;
     rationale: string;

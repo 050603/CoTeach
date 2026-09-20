@@ -56,6 +56,7 @@ describe('teaching slide storyboards and factual review', () => {
     expect(result[0].visualPlan?.coreMessage).toContain('项目目标');
     expect(result[1]).not.toHaveProperty('visualPlan');
     expect(ai.mock.calls[0][1]).toContain('教师知识文档');
+    expect(ai.mock.calls[0][0]).toContain('requiredVisibleStatements');
   });
   it('returns specific source-grounded corrections and never includes private media bytes', async () => {
     const elements = [{ id: 't', type: 'text', left: 60, top: 160, width: 800, height: 90, content: '<p>所有学生都只能被动学习</p>' },

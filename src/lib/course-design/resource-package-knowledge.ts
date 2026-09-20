@@ -4,7 +4,7 @@ import type { CourseResourcePackage } from "@/lib/resource-package/types";
 export type ResourcePackageTeachingPoint = { id: string; name: string; description: string; groupId?: string; groupName?: string };
 const stableId = (text: string) => `kp-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
 
-/** Teach leaf concepts; a six-group/twelve-leaf package has twelve timed targets, not eighteen. */
+/** Preserve leaf concepts as tracked lesson responsibilities; groups organize them and pages may combine them. */
 export function resourcePackageTeachingPoints(resourcePackage?: CourseResourcePackage): ResourcePackageTeachingPoint[] {
   if (!resourcePackage) return [];
   return resourcePackage.draft.knowledgePoints.flatMap((group) => {

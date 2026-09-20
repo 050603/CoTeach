@@ -306,6 +306,20 @@ export function slideKnowledgeCoverage(
   return represented / meaningful.length;
 }
 
+/**
+ * The PPT contract is broader than the concise outline key points. In
+ * particular, first-introduced concept definitions compiled into
+ * teachingPlan.visibleContent must stay visible even when the key point uses a
+ * short label. Keep one combined set for first generation scoring and the
+ * existing single repair opportunity.
+ */
+export function slideRequiredVisibleStatements(outline: SceneOutline): string[] {
+  return [...new Set([
+    ...outline.keyPoints,
+    ...(outline.teachingBrief?.teachingPlan?.visibleContent ?? []),
+  ].map((statement) => statement.trim()).filter(Boolean))];
+}
+
 function keyPointCoverage(keyPoint: string, elements: readonly PPTElement[]): number {
   const expected = semanticUnits(keyPoint);
   if (expected.size === 0) return 1;
@@ -725,8 +739,9 @@ export function auditSlideDensity(
   }
   const visibleCharacters = visibleTextCharacters(content.elements);
   const verticalSpan = instructionalVerticalSpan(content.elements);
-  const knowledgeCoverage = slideKnowledgeCoverage(outline.keyPoints, content.elements);
-  const underrepresentedKeyPoints = outline.keyPoints
+  const requiredVisibleStatements = slideRequiredVisibleStatements(outline);
+  const knowledgeCoverage = slideKnowledgeCoverage(requiredVisibleStatements, content.elements);
+  const underrepresentedKeyPoints = requiredVisibleStatements
     .map((keyPoint) => ({ keyPoint, coverage: keyPointCoverage(keyPoint, content.elements) }))
     .filter((item) => item.coverage < 0.3)
     .sort((a, b) => a.coverage - b.coverage);
@@ -746,7 +761,7 @@ export function auditSlideDensity(
     element.type !== 'line' && (element.type !== 'shape' || Boolean(element.text?.content)),
   ).length;
   const issues: string[] = [];
-  if (outline.keyPoints.length > 0 && underrepresentedKeyPoints.length > 0) {
+  if (requiredVisibleStatements.length > 0 && underrepresentedKeyPoints.length > 0) {
     issues.push(`关键教学点可见覆盖率仅 ${(knowledgeCoverage * 100).toFixed(1)}%，存在 ${underrepresentedKeyPoints.length} 条未完整可见的已确认要点`);
   }
   if (!hasSemanticEvidence && visibleCharacters < 150) {
@@ -1006,7 +1021,8 @@ export async function auditAndRepairSlideOnce(input: {
 }): Promise<SlideLayoutRepairResult> {
   const audit = input.audit ?? auditSlideLayout;
   const initialAudit = await audit(input.content, input.outline.id);
-  const initialCoverage = slideKnowledgeCoverage(input.outline.keyPoints, input.content.elements);
+  const requiredVisibleStatements = slideRequiredVisibleStatements(input.outline);
+  const initialCoverage = slideKnowledgeCoverage(requiredVisibleStatements, input.content.elements);
   const initialDensity = auditSlideDensity(input.outline, input.content);
   const initialQualityScore = slideCompositeQualityScore(
     initialAudit,
@@ -1080,7 +1096,7 @@ export async function auditAndRepairSlideOnce(input: {
     ? auditSlideDensity(input.outline, repairBaseline)
     : undefined;
   const deterministicCoverage = repairBaseline
-    ? slideKnowledgeCoverage(input.outline.keyPoints, repairBaseline.elements)
+    ? slideKnowledgeCoverage(requiredVisibleStatements, repairBaseline.elements)
     : undefined;
   const deterministicPasses = Boolean(
     repairBaseline
@@ -1155,7 +1171,7 @@ export async function auditAndRepairSlideOnce(input: {
   }
   let candidateCoverage = candidate === repairBaseline && deterministicCoverage !== undefined
     ? deterministicCoverage
-    : slideKnowledgeCoverage(input.outline.keyPoints, candidate.elements);
+    : slideKnowledgeCoverage(requiredVisibleStatements, candidate.elements);
   let candidateDensity = candidate === repairBaseline && deterministicDensity
     ? deterministicDensity
     : auditSlideDensity(input.outline, candidate);

@@ -78,6 +78,27 @@ describe("quick positioning generation", () => {
     expect(new Set(plans.flatMap((plan) => plan.knowledgePointIds)).size).toBe(20);
   }, 15_000);
 
+  it("keeps resource knowledge count separate from page count", async () => {
+    const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
+    const knowledgePoints = Array.from({ length: 6 }, (_, index) => ({
+      id: `source-${index + 1}`,
+      name: `相关知识 ${index + 1}`,
+      description: `知识说明 ${index + 1}`,
+      level: "core" as const,
+      groupId: "group-related",
+      groupName: "关联概念",
+      sourceKnowledgePointIds: [`source-${index + 1}`],
+    }));
+
+    const plans = buildTeachingBlueprintSectionPlans({ knowledgePoints }, 6 * 60);
+
+    expect(plans.flatMap((plan) => plan.knowledgePointIds)).toEqual(
+      knowledgePoints.map((point) => point.id),
+    );
+    expect(plans.reduce((sum, plan) => sum + (plan.suggestedMaxPages ?? 0), 0))
+      .toBeLessThan(knowledgePoints.length);
+  }, 15_000);
+
   it("keeps missing groups separate and splits an overlong group at knowledge boundaries", async () => {
     const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
     const ungrouped = buildTeachingBlueprintSectionPlans({

@@ -17,12 +17,12 @@ import {
   stripRepeatedNarrationOpening,
 } from './narration-continuity';
 
-export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v16-dynamic-task-connection';
+export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v17-grounded-page-handoffs';
 /**
  * Changes to local normalization invalidate narration attempt checkpoints
  * without invalidating the already generated slide-content checkpoints.
  */
-export const TEACHING_NARRATION_NORMALIZATION_VERSION = 'verified-anchor-recovery-v5-direct-targets';
+export const TEACHING_NARRATION_NORMALIZATION_VERSION = 'verified-anchor-recovery-v6-grounded-page-handoffs';
 
 const log = createLogger('TeachingNarration');
 
@@ -51,20 +51,85 @@ function pageNarrationContext(
   );
 }
 
+const EXPLICIT_PREVIOUS_PAGE_LEAD = /(?:上一页|前一页|刚才我们|刚刚我们|前面我们)/;
+
+function withoutTerminalPunctuation(value: string): string {
+  return value.trim().replace(/[，,。.!！?？；;：:\s]+$/u, '');
+}
+
+function groundedPageTransition(previous: SceneOutline, current: SceneOutline): string {
+  const previousPlan = previous.teachingBrief?.teachingPlan;
+  const currentPlan = current.teachingBrief?.teachingPlan;
+  const established = withoutTerminalPunctuation(
+    previousPlan?.takeaway
+      || previousPlan?.visibleContent.at(-1)
+      || previous.description
+      || previous.title,
+  );
+  const adoptedBridge = currentPlan?.entryPoint?.bridge;
+  const bridge = withoutTerminalPunctuation(
+    adoptedBridge && !EXPLICIT_PREVIOUS_PAGE_LEAD.test(adoptedBridge)
+      ? adoptedBridge
+      : currentPlan?.purpose || current.description || current.title,
+  );
+  return `刚才我们已经明确：${established}。接下来，${bridge}。`;
+}
+
+/**
+ * Replace an explicit retrospective lead with a transition compiled from the
+ * adjacent page contracts. The first verified current-page anchor is retained,
+ * so narration detail and its visual action stay authored by the model while
+ * unsupported claims about what the previous page contained are removed.
+ */
+export function groundPreviousPageNarrationLead(
+  segment: NarrationModuleOutput['segments'][number],
+  previous: SceneOutline,
+  current: SceneOutline,
+): string {
+  const marker = segment.text.search(EXPLICIT_PREVIOUS_PAGE_LEAD);
+  if (marker < 0 || marker > 160) return segment.text;
+  const candidates = (segment.anchors ?? []).flatMap((anchor) => {
+    const index = segment.text.indexOf(anchor.quote);
+    return index > marker ? [index] : [];
+  });
+  for (const statement of current.teachingBrief?.teachingPlan?.visibleContent ?? []) {
+    const index = segment.text.indexOf(statement);
+    if (index > marker) candidates.push(index);
+  }
+  const boundary = candidates.length ? Math.min(...candidates) : undefined;
+  if (boundary === undefined) {
+    const currentContent = withoutTerminalPunctuation(
+      current.teachingBrief?.teachingPlan?.newContent
+        || current.description
+        || current.title,
+    );
+    return `${groundedPageTransition(previous, current)}${currentContent}。`;
+  }
+  const suffix = segment.text.slice(boundary).replace(/^[，,。.!！?？；;：:\s]+/u, '');
+  return `${groundedPageTransition(previous, current)}${suffix}`;
+}
+
 /**
  * Apply course-level continuity after structural normalization. This is a
- * deterministic fallback for a missing greeting or a repeated section welcome;
- * authored wording otherwise remains intact. Anchors removed by trimming are
- * discarded so no later action can point at text that TTS will not speak.
+ * deterministic fallback for a missing greeting, repeated section welcome or
+ * unsupported retrospective lead. The latter is rebuilt from the adjacent
+ * adopted page contracts while retaining the first verified current-page
+ * anchor. Anchors removed by trimming are discarded so no later action can
+ * point at text that TTS will not speak.
  */
 function applyPageNarrationContinuity(
   narration: NarrationModuleOutput,
   context: SceneGenerationContext,
+  outline: SceneOutline,
+  previousOutline?: SceneOutline,
 ): NarrationModuleOutput {
   const lastSpokenIndex = narration.segments.findLastIndex((segment) => segment.text.trim().length > 0);
   const segments = narration.segments.map((segment, index) => {
     let text = segment.text;
     if (index === 0) {
+      if (previousOutline) {
+        text = groundPreviousPageNarrationLead({ ...segment, text }, previousOutline, outline);
+      }
       text = context.sectionPosition === 'course-first' && context.narrationMode === 'standalone-course'
         ? normalizeCourseFirstOpening(text, context.courseTitle)
         : stripRepeatedNarrationOpening(text);
@@ -107,6 +172,8 @@ function applySectionNarrationContinuity(
     pages: output.pages.map((page, index) => applyPageNarrationContinuity(
       page,
       pageNarrationContext(outlines[index]!, index, outlines, courseProgression, courseTitle),
+      outlines[index]!,
+      index > 0 ? outlines[index - 1] : undefined,
     )),
   };
 }
@@ -220,7 +287,7 @@ export function withTeachingSlideGuidance(
   return async (system, prompt, images) => {
     const response = await aiCall([
     system,
-    'Use the shared page contract below as the teaching meaning of this slide. Preserve the required visible statements, but do not copy the oral explanation onto the canvas. Choose the visual form from the stated relationship: aligned comparison for differences, connected stages for a process, a relationship diagram for causes or systems, a chart for quantities, a sequence for derivation, an illustration for a concrete scene, or concise text when no stronger visual relation exists. These are choices, not a fixed template. Do not default to cards, equal columns, question titles, or an activity worksheet. Keep every independently referenced comparison item, process stage, diagram node, and worked step as a distinct targetable element; do not merge an entire sequence into one text box. Use each supplied semantic ID on the element that best represents the complete visible statement, rather than assigning it arbitrarily to the first label in a multi-object relationship. Keep required material readable and within the canvas; remove decorative copy before shrinking or dropping teaching evidence. Internal IDs and authoring fields must never be learner-visible. Return only the original slide response contract; do not add narration, source status, review notes, or visual actions.',
+    'Use the shared page contract below as the teaching meaning of this slide. Preserve every required visible statement, but do not copy the oral explanation onto the canvas. A first-introduced core term or concept must remain a complete learner-readable definition (name plus essential meaning and any indispensable boundary); a label, question, slogan, or example title is not an adequate replacement. Keep the definition, key relationship, condition, or conclusion learners need to inspect on the slide, while leaving reasons, intermediate inference, analogy and example expansion to narration. Choose the visual form from the stated relationship: aligned comparison for differences, connected stages for a process, a relationship diagram for causes or systems, a chart for quantities, a sequence for derivation, an illustration for a concrete scene, or concise text when no stronger visual relation exists. These are choices, not a fixed template. Do not default to cards, equal columns, question titles, or an activity worksheet. Keep every independently referenced comparison item, process stage, diagram node, and worked step as a distinct targetable element; do not merge an entire sequence into one text box. Use each supplied semantic ID on the element that best represents the complete visible statement, rather than assigning it arbitrarily to the first label in a multi-object relationship. Keep required material readable and within the canvas; remove decorative copy before shrinking or dropping teaching evidence. Internal IDs and authoring fields must never be learner-visible. Return only the original slide response contract; do not add narration, source status, review notes, or visual actions.',
     isStandaloneCourseOpening
       ? 'This is the opening page of a standalone AI course resource. Make the adopted entryPoint visible through its concrete object, familiar situation, meaningful contrast, or question so narration can begin from something learners can inspect or recall. The slide may also begin the first concept when time is short, but a course title, objectives list, or abstract definition alone is not an adequate knowledge entry.'
       : '',
@@ -413,6 +480,40 @@ function actualSlideForNarration(content: GeneratedSlideContent) {
   };
 }
 
+function actualSlideVisibleEvidence(content: GeneratedSlideContent): string[] {
+  const evidence: string[] = [];
+  for (const element of actualSlideForNarration(content).elements) {
+    if (typeof element.content === 'string' && element.content) evidence.push(element.content);
+    else if (typeof element.text === 'string' && element.text) evidence.push(element.text);
+    else if (element.table) evidence.push(JSON.stringify(element.table));
+    else if (element.chart) evidence.push(JSON.stringify(element.chart));
+    else if (typeof element.latex === 'string' && element.latex) evidence.push(element.latex);
+  }
+  return evidence;
+}
+
+function pageContinuityContract(
+  pages: ReadonlyArray<{ outline: SceneOutline; content: GeneratedSlideContent }>,
+  index: number,
+) {
+  if (index === 0) return { position: 'section-opening' as const };
+  const previous = pages[index - 1]!;
+  const current = pages[index]!;
+  return {
+    position: 'continuation' as const,
+    previousPageId: previous.outline.id,
+    previousPageTitle: previous.outline.title,
+    establishedVisibleStatements: previous.outline.teachingBrief?.teachingPlan?.visibleContent ?? [],
+    establishedTakeaway: previous.outline.teachingBrief?.teachingPlan?.takeaway,
+    previousActualVisibleEvidence: actualSlideVisibleEvidence(previous.content),
+    adoptedCurrentEntryPoint: current.outline.teachingBrief?.teachingPlan?.entryPoint,
+    currentNewContent: current.outline.teachingBrief?.teachingPlan?.newContent,
+    notYetEstablishedOnPreviousPage: pages.slice(index + 1).flatMap(({ outline }) => (
+      outline.teachingBrief?.teachingPlan?.visibleContent ?? []
+    )),
+  };
+}
+
 /**
  * Write one continuous explanation after the section's actual slides exist,
  * then split the authored result by page for the existing playback pipeline.
@@ -442,6 +543,7 @@ export async function generateTeachingSectionNarration(input: {
     'The adopted teaching design is the authority for knowledge, concept boundaries, stable example facts, core reasoning and understanding criteria. The actual slide is the authority only for what is visible and what can be pointed to. Never preserve a slide error or delete a required explanation merely to make words agree with the slide.',
     'Explain the section at the depth this learner and time budget require. Define unfamiliar terms on first use, make intermediate causal or inferential links explicit, and explain how a result follows instead of repeating conclusions.',
     'Advance one line of understanding across pages. Use introduces, deepens, and references as page ownership: teach new nodes where introduced, add the planned relation or application where deepened, and use only a short bridge where referenced.',
+    'Treat each page continuityContract as a closed-world handoff. A later page may say the previous page established only a proposition present in establishedVisibleStatements, establishedTakeaway, or previousActualVisibleEvidence. Never claim that the previous page raised, showed, discussed, or left a question, example, term, project or conclusion that is absent from that evidence. Material listed under currentNewContent or notYetEstablishedOnPreviousPage must be introduced as new at its own page. When no retrospective wording adds value, continue directly from the established proposition instead of saying “上一页”.',
     'Use each page entryPoint as the real way into its reasoning. The standalone AI resource must feel complete even when a teacher-led phase may have introduced the wider lesson earlier. On the first course page, give a brief natural greeting, identify the course or immediate learning focus when useful, and establish the entryPoint through a concrete familiar experience, observable contrast, question, or direct proposition. Let learners notice the relevant feature before explicitly bridging from it to the first new idea. Do not merely prepend a greeting to a definition, recite objectives, announce an abstract agenda, or claim that learners answered. On later pages, connect from the exact idea already established instead of restarting the lesson.',
     'When an abstract or unfamiliar term has a familiar example or visible contrast, establish that object first, let the learner notice the relevant feature, and only then name and define the concept. A direct definition is still appropriate when the term is already familiar or the content calls for it.',
     'Use actual slide content for concrete visual references. Name the referent in speech. If a required visible item is absent or conflicts with the adopted design, do not invent that it is visible and do not silently weaken the explanation. Keep the correct explanation self-contained so the resource gap can be reported separately.',
@@ -492,6 +594,7 @@ export async function generateTeachingSectionNarration(input: {
       timingPlan: outline.timingPlan,
       semanticUnits: buildTeachingNarrationSemantics(outline),
       deliveryContext: pageNarrationContext(outline, index, outlines, input.courseProgression, input.courseTitle),
+      continuityContract: pageContinuityContract(input.pages, index),
     })),
     courseProgression: input.courseProgression?.map((outline) => ({
       id: outline.id,
@@ -616,10 +719,14 @@ export async function generateTeachingNarration(input: {
     requiredOutputShape: { segments: [{ id: `${input.outline.id}:speech-1`, text: 'Direct classroom speech in the requested language', semanticIds: [semantics.teaching.id], anchors: [] }] },
   });
   const response = await input.aiCall(system, prompt);
+  const progressionIndex = input.courseProgression?.findIndex((outline) => outline.id === input.outline.id) ?? -1;
+  const previousOutline = progressionIndex > 0 ? input.courseProgression?.[progressionIndex - 1] : undefined;
   try {
     return applyPageNarrationContinuity(
       normalizeTeachingNarration(parseJsonResponse(response), input.outline),
       input.outlineContext ?? pageNarrationContext(input.outline, 0, [input.outline], input.courseProgression, input.courseTitle),
+      input.outline,
+      previousOutline,
     );
   } catch (error) {
     log.warn(`Page narration requires one technical correction: ${error instanceof Error ? error.message : String(error)}`);
@@ -632,6 +739,8 @@ export async function generateTeachingNarration(input: {
     return applyPageNarrationContinuity(
       normalizeTeachingNarration(parseJsonResponse(corrected), input.outline),
       input.outlineContext ?? pageNarrationContext(input.outline, 0, [input.outline], input.courseProgression, input.courseTitle),
+      input.outline,
+      previousOutline,
     );
   }
 }

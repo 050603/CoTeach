@@ -20,8 +20,8 @@ import type {
 } from "@/lib/session/types";
 
 export const TEACHING_BLUEPRINT_SCHEMA_VERSION = 3 as const;
-export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v19-adaptive-visual-forms";
-export const TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION = "teaching-blueprint-v3-compiled-v5";
+export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v21-complete-knowledge-coverage";
+export const TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION = "teaching-blueprint-v3-compiled-v7-knowledge-responsibility";
 /** Kept as a compatibility export for callers being migrated away from ratio budgeting. */
 export const MAX_ASSESSMENT_RATIO = 0.2;
 const MIN_TEACHING_PAGE_SEC = 1;
@@ -219,6 +219,7 @@ function unitExplanationNodes(unit: TeachingBlueprintUnit): TeachingExplanationN
     id: `${unit.id}:legacy-explanation`,
     kind: unit.mechanism.trim() ? "mechanism" : "concept",
     content: unit.mechanism.trim() || unit.explanation.trim() || unit.learningOutcome.trim(),
+    knowledgePointIds: [...unit.knowledgePointIds],
     prerequisiteNodeIds: [],
     provenance: unit.sourceKind === "course-source" ? "course-source" : "general-knowledge",
   }];
@@ -319,7 +320,7 @@ export function buildTeachingBlueprintPrompt(
     "explanation、mechanism、workedExample、conceptBoundaries、keyPoints 必须写出实际要讲的知识、推理连接、案例事实与边界。禁止只写‘解释……’‘说明区别’‘举例说明’‘澄清误区’等生成任务。",
     "先判断知识类型与学习者已有基础，再选择讲法。概念辨析、因果机制、数学推导、操作技能、历史材料和综合应用可以采用不同的解释结构；这些结构是可选策略，不是固定页面模板。",
     "教学主线要完成核心含义、关系或技能的理解，再安排必要应用。explanation 展开初学者可能不懂的用语；mechanism 写清前提、中间连接与结论为何成立。案例、类比、图表和活动必须服务一个明确理解难点，不能代替知识解释。",
-    "把解释主线落实到 learningPurpose、learningObjective、understandingCriteria、页面顺序、teachingObjective 和页面知识职责。每页用 introducesNodeIds、deepensNodeIds、referencesNodeIds 明确首次解释、深化和必要承接；后页只携带理解当前新增内容所需的最短前提。",
+    "把解释主线落实到 learningPurpose、learningObjective、understandingCriteria、页面顺序、teachingObjective 和页面知识职责。每页用 introducesNodeIds、deepensNodeIds、referencesNodeIds 明确首次解释、深化和必要承接；后页只携带理解当前新增内容所需的最短前提。entryPoint.kind=continuation 时，object 必须复用紧邻上一页 keyPoints 中已经明确建立的一项命题，bridge 再说明它如何通向本页新增认识；不得把后页才出现的术语、案例、问题或任务伪装成上一页已经讲过或留下的内容。",
     "先建立学生需要理解的对象，再要求比较、判断或操作。可以从熟悉经验、可观察现象、关键问题或直接解释进入，具体入口由知识特点决定；不得把某一种导入顺序固化为所有课程模板。对于首次出现的抽象概念，如果已有适龄且熟悉的对象能降低理解门槛，先让学生观察或回想该对象，再给出概念名称和定义。",
     "entryPoint 写出实际开场对象以及它如何自然引到本页新知识，不能写‘情境导入’‘提出问题’等待办词。它服务当下理解，不必与项目成果或贯穿案例绑定；只有确实有帮助时才复用项目情境。课程第一页必须让 AI 课程资源自身完整成立：在简短问候后，从实际学习者熟悉的经历、可观察对象、鲜明差异或有意义的问题切入，引导注意关键特征，再自然过渡到第一个新知识。即使前一教学阶段已经由教师导入，也不能省略这一资源内入口。",
     "导入是否独立成页由总时长、知识难度和视觉价值动态决定：时间和观察需求允许时可用一页呈现具体场景或对照；时间较紧时把问候、入口和过渡整合进首个知识页。不得用标题页、目标宣读或直接抛出定义代替导入，也不得为了导入挤掉关键知识。",
@@ -330,7 +331,8 @@ export function buildTeachingBlueprintPrompt(
     "每页必须填写 taskConnection。mode=none 表示独立讲解更清楚，页面、活动和案例不得为了呼应项目而提及驱动问题或成果物；mode=helpful-context 仅在最终任务与当前知识共享同一对象、关系或操作，且不会引入额外背景时使用；mode=direct-application 仅在本页学习目标本身就是把已学知识迁移到最终任务时使用。rationale 写明取舍依据，但不得进入学生页面或讲稿。",
     "sharedContext.learningPurpose 先说明这组知识本身能帮助学生理解、判断或完成什么，不默认写成‘为了完成最终成果’。只有同一最终任务情境确实服务本节多个页面时，才能把它放入 caseId/caseFacts/fixedWording；单页偶尔借用的任务情境留在该页，不得升级为整节共享案例。",
     "不得因为最终成果恰好包含某个术语，就把成果制作过程当作该术语的默认例子。尤其不能用教案、报告、PPT 等成果物中的几句话，机械替代对概念本身更直观的现象、对比或操作；只有它比独立例子更能暴露当前理解难点时才可采用。",
-    "keyPoints 是学生必须看见才能跟随推理的命题、关系、原文或对照材料，优先展示推理依据，不重复堆放分类结论。讲解页可以展示关键推理关系；独立练习页才保留答案。",
+    "keyPoints 是学生必须看见才能跟随推理的核心定义、命题、关系、原文或对照材料。页面首次建立核心术语或概念时，keyPoints 必须包含‘概念名称 + 完整基本含义’，必要时再补充与相近概念的关键边界；只写概念名称、提问句、口号或案例标签不算完成可见解释。判断与分类既要呈现必要结论，也要呈现学生跟随判断所需的依据。独立练习页才保留答案。",
+    "区分 PPT 与讲稿的职责：学生在当页需要反复查看、比较、定位或带走的核心定义、关系、条件和结论必须完整出现在 keyPoints；原因、中间推理、例子展开、类比和口头过渡进入 explanation、mechanism 或 narrationFocus。不得为了让页面简洁而把核心概念只留在讲稿，也不得把整段讲稿搬到页面。",
     "visualRelationship 先写清学生需要看见的关系，再给出 preferredForm 和 rationale。对齐维度且需要逐项查读的比较可优先 table；具有完整、可比较数值并需要看趋势、比例或量级时可优先 chart；具体人物、物体、空间状态或外观差异本身是观察依据且图片可用时可优先 illustration；步骤、因果、系统和概念关系通常优先 diagram；少量核心命题或定义用 text 反而更清楚；同页只有在两种形式互相补足时才用 mixed。",
     "preferredForm 是教学表达偏好，不是强制模板，也没有每节必须使用几种形式的配额。不能为了版式多样而制造数据、请求装饰图片或把本可直接说明的内容做成表格；选择能最直接降低理解负担的形式。图表只能使用输入资料或本轮教学设计已经登记的完整数据，单位、对象和数值必须与 reviewItems、讲稿及题目一致。",
     "独立练习页的 keyPoints 只提供题干和作答所需材料，不提前写出标准答案或完整理由；答案进入学习者作答后的讲稿反馈或节末小测解析。",
@@ -338,8 +340,9 @@ export function buildTeachingBlueprintPrompt(
     "分类、推导和判断必须给出成立依据及关系解释。标题、栏目、步骤数量或关键词不能单独代替理由；从前提到结论之间需要的中间连接不能省略。",
     "每个页面只承担一个学生能说清的主要认知任务，并给它一个清晰视觉焦点。一个知识点可以跨多页：当概念/规则的建立、关系/机制的展开、完整例子的分析、反例/边界辨析或学生练习各自需要说明和观察，必须拆成前后衔接的页面，不得把“知识结论+完整案例+练习”挤在同一张 PPT。一页若需要连续讲授超过约 4 分钟，通常表明认知任务过多，应在自然的理解转折处拆页。",
     "返回前在同一次作答中静默检查：术语是否已经解释；关键关系是否包含中间连接；页面是否各有新增认识；后页是否重复展开已经完成的解释；视觉材料是否有明确教学用途。发现缺项先修正当前 JSON 草稿再返回，不输出检查过程。",
-    "严格保留给定 knowledgePointId。每个 unit 必须列出真实对应的 knowledgePointId，每个 page 必须列出真实对应的 unitId；禁止按位置猜测或为覆盖率随意挂载。",
-    "必须沿用已经确认的小节边界与顺序。每个知识点只归属一个 unit；页面可以组合多个 unit，不得为了换例子或换说法重复创建同一知识点的 unit。",
+    "严格保留给定 knowledgePointId。输入中的每个知识点都是必须讲授的知识责任，必须且只能归属一个 unit，并至少由该 unit 的一个 explanationNode 具体解释、由一个 page 实际承担；每个 explanationNode 用 knowledgePointIds 声明它真正解释哪些知识点。禁止遗漏、按位置猜测或只为覆盖率挂载却不写进 explanation、explanationNodes 与可见内容。",
+    "知识点、讲授单元和 PPT 页面不是一一对应关系。先按定义—关系—机制—应用等真实知识联系，把可以共享解释主线、视觉关系或案例的多个知识点编入同一个 unit，也可以让一个页面组合多个紧密相关 unit；只有认知任务或视觉焦点发生实质变化时才拆页。不得为了凑覆盖率机械制作‘一个知识点一页’，也不得用一个概括名称吞掉各知识点应有的具体解释责任。",
+    "必须沿用已经确认的小节边界与顺序。页面可以组合多个 unit，不得为了换例子或换说法重复创建同一知识点的 unit。时间不足时先压缩重复铺垫、共享相关点的引入与案例并减少可选扩展，仍无法完成必授内容才报告 capacityConflict，不能静默漏讲。",
     "可用适龄的通行学科知识补足解释，也可为教学构造案例、类比和示意数据。不得捏造资料出处、研究机构或引用。所有 constructed 或 unverified 内容必须写入 reviewItems，供课程完成后集中反馈教师；这些状态不得进入学生页面和讲稿。",
     "sourceKind=course-source 时 evidenceQuotes 必须逐字来自给定资料；通行知识写 general-knowledge 且 evidenceQuotes=[]。",
     "项目情境只规定用途和约束，不能自动变成知识目标或每页案例。小节先建立整体认识，再按知识特点形成连续进展；纯解释页合法，不强制案例、互动或统一页面套路。",
@@ -410,7 +413,7 @@ ${input.sourceContext?.trim() || "没有额外资料；可使用适龄的通行�
 
 illustrative-data 类型的 reviewItems 还必须填写 values（原始数值、单位和含义）以及 comparisonObjects（比较对象）；其他类型无对应内容时可省略。
 返回结构：
-{"capacityConflict":"仅在输入时间确实无法容纳必需内容时说明冲突，否则省略","sections":[{"title":"小节标题","learningObjective":"学生完成后能解释或完成的核心认识与技能","sharedContext":{"learningPurpose":"理解这些知识能解决什么认识或实践问题","caseId":"确需复用案例时填写，否则为空","caseFacts":["跨页稳定的必要案例事实"],"fixedWording":["跨页保持一致的关键事实"],"stableTerms":["核心术语"],"conceptBoundaries":["具体误解、正确边界及理由"]},"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID；每个ID在全部units中只出现一次"],"learningOutcome":"可观察的解释、推理或操作结果","explanation":"实际核心解释","mechanism":"前提、中间连接与结论","workedExample":"确有帮助时提供，否则为空","conditions":["适用条件或边界"],"misconceptions":["具体误解及纠正理由"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["可逐字核对时填写"],"estimatedTeachingWeight":1,"explanationNodes":[{"id":"单元内稳定ID","kind":"term|concept|relation|mechanism|example|condition|misconception","content":"一项可被页面引用的实际解释责任","prerequisiteNodeIds":["同节中需要先理解的节点ID"],"provenance":"course-source|derived|general-knowledge|constructed|unverified"}],"reviewItems":[{"kind":"illustrative-data|constructed-example|unverified-claim","provenance":"derived|general-knowledge|constructed|unverified","content":"需要教师确认的具体内容","teachingPurpose":"它帮助学生理解什么","source":"已有来源或空字符串"}]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题","type":"slide|interactive","unitIds":["本节 unit id"],"introducesNodeIds":["本页首次建立的解释节点"],"deepensNodeIds":["本页继续展开的解释节点"],"referencesNodeIds":["只为承接而简短引用的已讲节点"],"estimatedTeachingWeight":1,"description":"本页实际展开的认识及前后进展","keyPoints":["学生必须看见才能跟随本页解释的信息"],"teachingObjective":"本页新增理解或技能","taskConnection":{"mode":"none|helpful-context|direct-application","rationale":"为什么连接或不连接最终任务更有利于本页理解"},"entryPoint":{"kind":"familiar-experience|concrete-observation|problem|direct-explanation|continuation","object":"学生实际能回想、观察或理解的对象／问题／直接命题","bridge":"该对象怎样自然引出本页新知识"},"visualRelationship":{"kind":"comparison|process|causal|system|quantitative|sequence|spatial|statement","description":"画面应帮助看清的关系，不规定模板","readingOrder":["建议观察顺序"],"preferredForm":"text|table|chart|diagram|illustration|mixed","rationale":"为什么这种形式最能帮助当前学习者看懂，不是版式配额"},"learningTask":{"learnerAction":"确有必要时填写","newContribution":"本页新增认识","reasoningFocus":"理由焦点","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"resourceNeeds":[{"kind":"diagram|image|video|interactive","purpose":"对理解的作用","required":true,"prompt":"内容要求","durationSec":8}],"widgetType":"仅互动页需要","widgetOutline":{},"reviewItems":[]}],"assessmentFocus":["只考已经讲解的内容"],"understandingCriteria":{"goals":["可观察理解目标"],"answerEssentials":["合格回答要点"],"misconceptions":["典型错误"],"supportingUnitIds":["本节 unit id"]}}]}
+{"capacityConflict":"仅在输入时间确实无法容纳必需内容时说明冲突，否则省略","sections":[{"title":"小节标题","learningObjective":"学生完成后能解释或完成的核心认识与技能","sharedContext":{"learningPurpose":"理解这些知识能解决什么认识或实践问题","caseId":"确需复用案例时填写，否则为空","caseFacts":["跨页稳定的必要案例事实"],"fixedWording":["跨页保持一致的关键事实"],"stableTerms":["核心术语"],"conceptBoundaries":["具体误解、正确边界及理由"]},"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID；每个ID在全部units中只出现一次"],"learningOutcome":"可观察的解释、推理或操作结果","explanation":"实际核心解释","mechanism":"前提、中间连接与结论","workedExample":"确有帮助时提供，否则为空","conditions":["适用条件或边界"],"misconceptions":["具体误解及纠正理由"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["可逐字核对时填写"],"estimatedTeachingWeight":1,"explanationNodes":[{"id":"单元内稳定ID","kind":"term|concept|relation|mechanism|example|condition|misconception","content":"一项可被页面引用的实际解释责任","knowledgePointIds":["该节点实际解释的本单元知识点ID"],"prerequisiteNodeIds":["同节中需要先理解的节点ID"],"provenance":"course-source|derived|general-knowledge|constructed|unverified"}],"reviewItems":[{"kind":"illustrative-data|constructed-example|unverified-claim","provenance":"derived|general-knowledge|constructed|unverified","content":"需要教师确认的具体内容","teachingPurpose":"它帮助学生理解什么","source":"已有来源或空字符串"}]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题","type":"slide|interactive","unitIds":["本节 unit id"],"introducesNodeIds":["本页首次建立的解释节点"],"deepensNodeIds":["本页继续展开的解释节点"],"referencesNodeIds":["只为承接而简短引用的已讲节点"],"estimatedTeachingWeight":1,"description":"本页实际展开的认识及前后进展","keyPoints":["学生必须看见才能跟随本页解释的信息"],"teachingObjective":"本页新增理解或技能","taskConnection":{"mode":"none|helpful-context|direct-application","rationale":"为什么连接或不连接最终任务更有利于本页理解"},"entryPoint":{"kind":"familiar-experience|concrete-observation|problem|direct-explanation|continuation","object":"学生实际能回想、观察或理解的对象／问题／直接命题","bridge":"该对象怎样自然引出本页新知识"},"visualRelationship":{"kind":"comparison|process|causal|system|quantitative|sequence|spatial|statement","description":"画面应帮助看清的关系，不规定模板","readingOrder":["建议观察顺序"],"preferredForm":"text|table|chart|diagram|illustration|mixed","rationale":"为什么这种形式最能帮助当前学习者看懂，不是版式配额"},"learningTask":{"learnerAction":"确有必要时填写","newContribution":"本页新增认识","reasoningFocus":"理由焦点","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"resourceNeeds":[{"kind":"diagram|image|video|interactive","purpose":"对理解的作用","required":true,"prompt":"内容要求","durationSec":8}],"widgetType":"仅互动页需要","widgetOutline":{},"reviewItems":[]}],"assessmentFocus":["只考已经讲解的内容"],"understandingCriteria":{"goals":["可观察理解目标"],"answerEssentials":["合格回答要点"],"misconceptions":["典型错误"],"supportingUnitIds":["本节 unit id"]}}]}
 
 约束：每个知识点必须且只能进入一个 unit，并至少进入一个 page；每个 explanationNode 至少被一页 introduces 或 deepens，且只能首次 introduces 一次；references 不能携带完整重复解释；页面映射由系统计算，不输出 page.knowledgePointIds 或 section.knowledgePointIds；estimatedTeachingWeight 是同层相对权重，不是秒数，并须包含该页承担的导入、解释或收束工作量；learningTask 仅在确有学习价值时提供；理解标准先于题目确定。若输入时间无法承载必需解释，返回明确容量说明，不得静默漏讲或自行增加时长。`;
   return { system, user };
@@ -456,6 +459,7 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
     const rawNodeIdMap = new Map<string, string>();
     const units = rawUnits.map((rawUnit: RawUnit, unitIndex): TeachingBlueprintUnit => {
       const id = `teaching-section-${sectionIndex + 1}-unit-${unitIndex + 1}`;
+      const unitKnowledgePointIds = stableIds(rawUnit.knowledgePointIds, sectionAllowedIds);
       const rawId = clean(rawUnit.id, 160);
       if (rawId) rawUnitIdMap.set(rawId, id);
       // Provenance is derived from quotes we can actually verify. Formatting
@@ -466,9 +470,9 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
       const sourceKind = evidenceQuotes.length > 0 ? "course-source" : "general-knowledge";
       const rawNodes = records(rawUnit.explanationNodes);
       const candidateNodes = rawNodes.length ? rawNodes : [
-        { kind: "concept", content: rawUnit.explanation, provenance: sourceKind },
-        ...(clean(rawUnit.mechanism) ? [{ kind: "mechanism", content: rawUnit.mechanism, provenance: sourceKind }] : []),
-        ...(clean(rawUnit.workedExample) ? [{ kind: "example", content: rawUnit.workedExample, provenance: "constructed" }] : []),
+        { kind: "concept", content: rawUnit.explanation, knowledgePointIds: unitKnowledgePointIds, provenance: sourceKind },
+        ...(clean(rawUnit.mechanism) ? [{ kind: "mechanism", content: rawUnit.mechanism, knowledgePointIds: unitKnowledgePointIds, provenance: sourceKind }] : []),
+        ...(clean(rawUnit.workedExample) ? [{ kind: "example", content: rawUnit.workedExample, knowledgePointIds: unitKnowledgePointIds, provenance: "constructed" }] : []),
       ];
       const localNodeIds = new Map<string, string>();
       candidateNodes.forEach((node, nodeIndex) => {
@@ -491,6 +495,7 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
           id: `${id}-node-${nodeIndex + 1}`,
           kind,
           content,
+          knowledgePointIds: stableIds(node.knowledgePointIds, new Set(unitKnowledgePointIds)),
           prerequisiteNodeIds: strings(node.prerequisiteNodeIds, 20, 160)
             .flatMap((nodeId) => localNodeIds.get(nodeId) ?? rawNodeIdMap.get(nodeId) ?? []),
           provenance,
@@ -500,7 +505,7 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
       const unit: TeachingBlueprintUnit = {
         id,
         title: clean(rawUnit.title, 160),
-        knowledgePointIds: stableIds(rawUnit.knowledgePointIds, sectionAllowedIds),
+        knowledgePointIds: unitKnowledgePointIds,
         learningOutcome: clean(rawUnit.learningOutcome, 800),
         explanation: clean(rawUnit.explanation),
         mechanism: clean(rawUnit.mechanism),
@@ -521,6 +526,13 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
       }
       if (isAuthoringTaskOnly(unit.explanation) || !unitExplanationNodes(unit).length) {
         structuralIssues.push(`第 ${sectionIndex + 1} 节第 ${unitIndex + 1} 个单元的核心解释仍是待办任务，未写出实际教学内容`);
+      }
+      const explainedKnowledgePointIds = new Set(unitExplanationNodes(unit)
+        .flatMap((node) => node.knowledgePointIds ?? []));
+      const unassignedKnowledgePointIds = unit.knowledgePointIds
+        .filter((knowledgePointId) => !explainedKnowledgePointIds.has(knowledgePointId));
+      if (unassignedKnowledgePointIds.length) {
+        structuralIssues.push(`第 ${sectionIndex + 1} 节第 ${unitIndex + 1} 个单元存在只挂载但未由解释节点承担的知识点：${unassignedKnowledgePointIds.join("、")}`);
       }
       const supportingExplanations = [unit.mechanism, unit.workedExample, ...unit.conditions,
         ...unit.misconceptions, ...sharedContext.conceptBoundaries].filter(Boolean);
@@ -932,6 +944,20 @@ function sectionTeachingBrief(section: TeachingBlueprintSection, page?: Teaching
         ...page.learningTask.preservedConditions,
       ].filter((item): item is string => Boolean(item?.trim()))
     : undefined;
+  const introducedNodeIds = new Set(page ? pageIntroduces(page) : []);
+  const introducedConceptDefinitions = page?.learningTask?.caseUse === "independent"
+    ? []
+    : ownedNodes
+      .filter((node) => introducedNodeIds.has(node.id)
+        && (node.kind === "term" || node.kind === "concept"))
+      .map((node) => node.content);
+  // A complete definition is stable page evidence, not oral elaboration. The
+  // blueprint model may still supply concise keyPoints, so compile introduced
+  // term/concept nodes into the shared visible contract before PPT generation.
+  const visibleContent = independentVisibleContent ?? [...new Set([
+    ...introducedConceptDefinitions,
+    ...(page?.keyPoints ?? []),
+  ].map((item) => item.trim()).filter(Boolean))];
   return {
     schemaVersion: 1 as const,
     // A compiled blueprint is complete source material, but it has not yet
@@ -952,7 +978,7 @@ function sectionTeachingBrief(section: TeachingBlueprintSection, page?: Teaching
       takeaway: page.learningTask?.caseUse === "independent"
         ? page.learningTask.newContribution
         : page.keyPoints.join("；"),
-      visibleContent: independentVisibleContent ?? page.keyPoints,
+      visibleContent,
       narrationFocus: [...explanation, ...reasoningSteps, ...(page.learningTask?.caseUse === "independent" ? page.keyPoints.slice(1) : [])],
       ...(page.entryPoint ? { entryPoint: page.entryPoint } : {}),
       introduces: [...pageIntroduces(page)],

@@ -36,6 +36,7 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("同一材料再次出现时");
   expect(prompt.system).toContain("概念辨析、因果机制、数学推导、操作技能、历史材料和综合应用");
   expect(prompt.system).toContain("introducesNodeIds、deepensNodeIds、referencesNodeIds");
+  expect(prompt.system).toContain("不得把后页才出现的术语、案例、问题或任务伪装成上一页已经讲过");
   expect(prompt.system).toContain("entryPoint 写出实际开场对象");
   expect(prompt.system).toContain("即使前一教学阶段已经由教师导入，也不能省略这一资源内入口");
   expect(prompt.system).toContain("导入是否独立成页由总时长、知识难度和视觉价值动态决定");
@@ -63,8 +64,12 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("可直接制作资源的小节内容设计");
   expect(prompt.system).toContain("禁止只写");
   expect(prompt.user).toContain('"understandingCriteria"');
-  expect(prompt.system).toContain("优先展示推理依据");
+  expect(prompt.system).toContain("概念名称 + 完整基本含义");
+  expect(prompt.system).toContain("不得为了让页面简洁而把核心概念只留在讲稿");
   expect(prompt.system).toContain("一个知识点可以跨多页");
+  expect(prompt.system).toContain("知识点、讲授单元和 PPT 页面不是一一对应关系");
+  expect(prompt.system).toContain("每个 explanationNode 用 knowledgePointIds 声明");
+  expect(prompt.user).toContain('"knowledgePointIds":["该节点实际解释的本单元知识点ID"]');
   expect(prompt.system).toContain("知识结论+完整案例+练习");
   expect(prompt.user).toContain("输入时间无法承载必需解释");
   expect(prompt.user).toContain("完整课程开场、必要解释、推理、例子、操作、短测和正式收束估时");
@@ -395,6 +400,12 @@ describe("teaching blueprint compiler", () => {
     expect(outline.teachingBrief?.designVersion).toBe(TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION);
     expect(hasCurrentTeachingBrief(outline)).toBe(false);
     expect(outline.teachingBrief?.teachingPlan?.newContent).toContain("训练集提供模型学习规律所需的信息");
+    expect(outline.teachingBrief?.teachingPlan?.visibleContent).toContain(
+      "训练集提供模型学习规律所需的信息，测试集在训练结束后独立检查这些规律能否用于新对象，划分规则必须服务于这种独立性。",
+    );
+    expect(blueprint.sections[0]?.units[0]?.explanationNodes?.every((node) => (
+      node.knowledgePointIds?.length === 4
+    ))).toBe(true);
   });
 
   it("keeps an independent page answer out of the compiled visible projection", async () => {
@@ -466,6 +477,29 @@ describe("teaching blueprint compiler", () => {
     await expect(generateTeachingBlueprint(input(), ai, { retrySleep: async () => undefined }))
       .rejects.toThrow("教学蓝图缺少可用结构");
     expect(ai).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects knowledge ids that are only attached to a unit without an explanation responsibility", async () => {
+    const candidate = compactModelBlueprint();
+    Object.assign(candidate.sections[0]!.units[0]!, {
+      explanationNodes: [{
+        id: "roles-only",
+        kind: "concept",
+        content: "训练集负责学习规律，测试集负责独立检验。",
+        knowledgePointIds: ["kp-train", "kp-test"],
+        prerequisiteNodeIds: [],
+        provenance: "general-knowledge",
+      }],
+    });
+    const ai = vi.fn(async () => JSON.stringify(candidate));
+    const onValidation = vi.fn();
+
+    await expect(generateTeachingBlueprint(input(), ai, {
+      onValidation,
+      retrySleep: async () => undefined,
+    })).rejects.toThrow("教学蓝图缺少可用结构");
+    expect(onValidation.mock.calls.at(-1)?.[0].issues.join("；"))
+      .toContain("只挂载但未由解释节点承担的知识点：kp-split、kp-leak");
   });
 
   it("applies bounded outline edits back to the design before recompiling resources", async () => {

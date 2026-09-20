@@ -3,6 +3,7 @@ import sharp from 'sharp';
 import { promises as fs } from 'node:fs';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { Scene } from '@openmaic/lib/types/stage';
+import { isMediaPlaceholder } from '@openmaic/lib/store/media-generation';
 import {
   buildInstructionalImagePrompt,
   findUnresolvedClassroomMedia,
@@ -20,6 +21,12 @@ afterEach(() => {
 });
 
 describe('classroom media URL and placeholder backfill', () => {
+  it('recognizes both legacy and teaching-blueprint media placeholders', () => {
+    expect(isMediaPlaceholder('gen_img_randomized')).toBe(true);
+    expect(isMediaPlaceholder('teaching-section-1-page-1:media-1')).toBe(true);
+    expect(isMediaPlaceholder('/api/openmaic/classroom-media/c1/media/image.png')).toBe(false);
+  });
+
   it('always builds migration-safe same-origin URLs', () => {
     expect(mediaServingUrl('', 'classroom-1', 'media/image.png')).toBe(
       '/api/openmaic/classroom-media/classroom-1/media/image.png',
@@ -63,6 +70,61 @@ describe('classroom media URL and placeholder backfill', () => {
     const element = (scenes[0]!.content as { canvas: { elements: Array<{ src: string }> } })
       .canvas.elements[0];
     expect(element?.src).toBe('/api/openmaic/classroom-media/c1/media/generated.png');
+  });
+
+  it('backfills deterministic teaching-blueprint media IDs with the generated URL', () => {
+    const mediaId = 'teaching-section-1-page-1:media-1';
+    const outlines = [{
+      id: 'teaching-section-1-page-1',
+      type: 'slide',
+      title: '页面',
+      description: '说明',
+      keyPoints: [],
+      order: 0,
+      mediaGenerations: [{ type: 'image', elementId: mediaId, prompt: '课堂情境插图' }],
+    }] as SceneOutline[];
+    const scenes = [{
+      id: 'scene-1',
+      outlineId: 'teaching-section-1-page-1',
+      type: 'slide',
+      content: { canvas: { elements: [{ id: 'image-1', type: 'image', src: mediaId }] } },
+    }] as unknown as Scene[];
+
+    replaceMediaPlaceholders(
+      scenes,
+      { [mediaId]: `/api/openmaic/classroom-media/c1/media/${mediaId}.png` },
+      outlines,
+    );
+
+    const element = (scenes[0]!.content as { canvas: { elements: Array<{ src: string }> } })
+      .canvas.elements[0];
+    expect(element?.src).toBe(`/api/openmaic/classroom-media/c1/media/${mediaId}.png`);
+    expect(findUnresolvedClassroomMedia(outlines, scenes)).toEqual([]);
+  });
+
+  it('reports an unresolved deterministic media ID instead of marking the batch complete', () => {
+    const mediaId = 'teaching-section-1-page-1:media-1';
+    const outlines = [{
+      id: 'teaching-section-1-page-1',
+      type: 'slide',
+      title: '页面',
+      description: '说明',
+      keyPoints: [],
+      order: 0,
+      mediaGenerations: [{ type: 'image', elementId: mediaId, prompt: '课堂情境插图' }],
+    }] as SceneOutline[];
+    const scenes = [{
+      id: 'scene-1',
+      outlineId: 'teaching-section-1-page-1',
+      type: 'slide',
+      content: { canvas: { elements: [{ id: 'image-1', type: 'image', src: mediaId }] } },
+    }] as unknown as Scene[];
+
+    expect(findUnresolvedClassroomMedia(outlines, scenes)).toEqual([{
+      elementId: mediaId,
+      type: 'image',
+      error: '页面仍包含未解析的媒体占位符',
+    }]);
   });
 
   it('discovers unresolved placeholders even when no asset failure was recorded', () => {

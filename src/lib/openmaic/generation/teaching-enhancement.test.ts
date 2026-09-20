@@ -311,6 +311,8 @@ describe('formal course teaching enhancement', () => {
     };
     const attemptedPlan = {
       ...teachingPlan,
+      visibleContent: ['模型只保留了概念名称'],
+      entryPoint: { kind: 'continuation' as const, object: '后面页面才出现的项目式学习', bridge: '假装上一页已经讨论过' },
       taskConnection: {
         mode: 'direct-application' as const,
         rationale: '模型试图把这一页改成最终任务。',
@@ -330,6 +332,11 @@ describe('formal course teaching enhancement', () => {
     }, [adoptedPage]).get('p1')!;
 
     expect(brief.teachingPlan?.taskConnection).toEqual(teachingPlan.taskConnection);
+    expect(brief.teachingPlan?.entryPoint).toEqual(teachingPlan.entryPoint);
+    expect(brief.teachingPlan?.visibleContent).toEqual([
+      ...teachingPlan.visibleContent,
+      '模型只保留了概念名称',
+    ]);
   });
   it('includes learner readiness and adjacent-page responsibilities in the authoring prompt', async () => {
     const { deriveTeachingConstraints } = await import('@openmaic/lib/pedagogy/teaching-constraints');
@@ -354,10 +361,12 @@ describe('formal course teaching enhancement', () => {
     expect(prompt.system).toContain('不得因为资料的 taskAssociation 提到成果制作');
     expect(prompt.system).toContain('实际学习者由学段、专业和 learner profile 决定');
     expect(prompt.system).toContain('即使课程前面存在教师导入阶段');
+    expect(prompt.system).toContain('后页才出现的术语、案例或问题必须在其所属页面作为新内容引入');
     expect(prompt.system).toContain('测验后的反馈完成收束');
     expect(prompt.user).toContain('需要按共同维度逐项查读的差异可优先 table');
     expect(prompt.user).toContain('后台字段不得进入学生页面或讲稿');
     expect(prompt.user).toContain('每页新增认识是否有充分解释支撑');
+    expect(prompt.user).toContain('完整基本定义');
     expect(prompt.system).toContain('概念与区别可从熟悉对象');
     expect(prompt.system).not.toContain('相对稳定');
     expect(prompt.system).not.toContain('具体化');

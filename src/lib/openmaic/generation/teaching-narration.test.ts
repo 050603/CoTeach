@@ -8,6 +8,7 @@ import {
   compileTeachingNarrationActions,
   generateTeachingSectionNarration,
   generateTeachingNarration,
+  groundPreviousPageNarrationLead,
   normalizeTeachingNarration,
   normalizeTeachingSectionNarration,
   withTeachingSlideGuidance,
@@ -97,6 +98,12 @@ describe('independent first-pass teaching narration', () => {
     expect(prompt.pages[0].explanation).toContain('记录需要与具体说法相关');
     expect(prompt.pages[0].teachingPlan.visibleContent).toEqual(['语气肯定 ≠ 事实正确']);
     expect(prompt.pages[0].deliveryContext).toMatchObject({ sectionPosition: 'course-first', pageIndex: 1, courseTitle: 'AI信息核验' });
+    expect(prompt.pages[1].continuityContract).toMatchObject({
+      position: 'continuation',
+      previousPageId: 'page-a',
+      establishedTakeaway: '有相关依据再采用',
+    });
+    expect(aiCall.mock.calls[0][0]).toContain('continuityContract as a closed-world handoff');
     expect(prompt.pages[0].teachingPlan.entryPoint.object).toContain('班级小报');
     expect(prompt.pages[0].visualActionIntent[0]).toMatchObject({ tool: 'laser-pointer', purpose: '依次指示步骤' });
     expect(prompt.teacherVoice).toEqual({ name: '林老师', role: 'teacher' });
@@ -104,6 +111,53 @@ describe('independent first-pass teaching narration', () => {
     expect(generated.pages[1]?.segments.at(-1)?.text).toMatch(/感谢大家的认真参与，同学们再见。$/);
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0], response.pages[0]] }, 'section-a', [first, second])).toThrow('重复返回页面');
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0]] }, 'section-a', [first, second])).toThrow('缺少页面');
+  });
+
+  it('replaces an invented previous-page lead while retaining the first verified current-page anchor', () => {
+    const previous = outline();
+    const current: SceneOutline = {
+      ...outline(),
+      id: 'page-b',
+      title: '两条判断依据',
+      teachingBrief: {
+        ...outline().teachingBrief!,
+        teachingPlan: {
+          ...outline().teachingBrief!.teachingPlan!,
+          purpose: '用判断依据区分三类表述',
+          newContent: '判断一段表述是否规定稳定结构',
+          visibleContent: ['这段表述有没有规定一套相对固定、可以重复的结构或流程？'],
+          entryPoint: {
+            kind: 'continuation',
+            object: '有相关依据再采用',
+            bridge: '从已经建立的核验要求进入第一条判断依据',
+          },
+        },
+      },
+    };
+    const quote = '这段表述有没有规定一套相对固定、可以重复的结构或流程';
+    const text = `上一页留下两个疑问：项目式学习算模式还是方法？建构主义怎么用？判据一：${quote}？有，就在模式层。`;
+    const grounded = groundPreviousPageNarrationLead({
+      id: 'page-b:speech-1',
+      pageId: 'page-b',
+      text,
+      semanticIds: ['page-b:teaching', 'page-b:visible-1'],
+      anchors: [{ id: 'a1', semanticId: 'page-b:visible-1', quote, occurrence: 0 }],
+    }, previous, current);
+
+    expect(grounded).toContain('刚才我们已经明确：有相关依据再采用');
+    expect(grounded).toContain('从已经建立的核验要求进入第一条判断依据');
+    expect(grounded).toContain(quote);
+    expect(grounded).not.toContain('项目式学习');
+    expect(grounded).not.toContain('建构主义');
+
+    const withoutAnchor = groundPreviousPageNarrationLead({
+      id: 'page-b:speech-1',
+      pageId: 'page-b',
+      text: '上一页留下了一个并未讲过的项目问题，下面继续。',
+      semanticIds: ['page-b:teaching'],
+    }, previous, current);
+    expect(withoutAnchor).toContain('判断一段表述是否规定稳定结构');
+    expect(withoutAnchor).not.toContain('并未讲过的项目问题');
   });
 
   it('removes a repeated welcome from an embedded resource while keeping course-first pages welcoming', async () => {

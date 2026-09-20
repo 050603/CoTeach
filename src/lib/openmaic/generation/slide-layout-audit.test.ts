@@ -330,6 +330,41 @@ describe('slide layout audit repair policy', () => {
     ]));
   });
 
+  it('requires the complete visible concept contract even when keyPoints contain only labels', () => {
+    const density = auditSlideDensity({
+      ...outline,
+      generationPurpose: 'knowledge-teaching',
+      keyPoints: ['教学理论', '教学模式', '教学方法'],
+      teachingBrief: {
+        schemaVersion: 1,
+        explanation: '区分三个概念。', examples: [], conditions: [], evidence: [], assessmentFocus: '说明区别。',
+        teachingPlan: {
+          purpose: '建立三个基本概念', priorKnowledge: '', newContent: '三个概念', learnerQuestion: '',
+          reasoningSteps: [], takeaway: '三者承担不同任务',
+          visibleContent: [
+            '教学理论阐述教学活动的基本原则、规律和概念，为教学安排提供依据。',
+            '教学模式是在一定理论指导下形成的相对稳定、可重复的教学活动结构。',
+            '教学方法是教师和学生在具体环节中为实现目标采用的操作方式与手段。',
+          ],
+          narrationFocus: ['解释三者关系'],
+        },
+      },
+    }, { elements: [
+      { ...text('title', '三个基本概念', 40), defaultColor: '#1E3A8A' },
+      { ...text('subtitle', '教学理论 · 教学模式 · 教学方法', 120), defaultColor: '#64748B' },
+      text('labels', '教学理论　教学模式　教学方法', 220),
+    ] });
+
+    expect(density.underrepresentedKeyPoints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ keyPoint: expect.stringContaining('教学理论阐述') }),
+      expect.objectContaining({ keyPoint: expect.stringContaining('教学模式是在') }),
+      expect.objectContaining({ keyPoint: expect.stringContaining('教学方法是') }),
+    ]));
+    expect(density.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining('关键教学点可见覆盖率'),
+    ]));
+  });
+
   it.each([900, 700])('accepts complete readable content at body width %s without imposing 90% utilization', (bodyWidth) => {
     const styledText = (id: string, content: string, top: number, height: number, color: string) => ({
       ...text(id, content, top),

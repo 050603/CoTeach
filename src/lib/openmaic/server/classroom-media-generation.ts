@@ -547,21 +547,23 @@ export function replaceMediaPlaceholders(
         el.type === 'video' &&
         typeof el.mediaRef === 'string' &&
         mediaMap[el.mediaRef] &&
-        (!el.src || isMediaPlaceholder(el.src))
+        (!el.src || el.src === el.mediaRef || isMediaPlaceholder(el.src))
       ) {
         el.src = mediaMap[el.mediaRef];
         continue;
       }
-      if (
-        (el.type === 'image' || el.type === 'video') &&
-        typeof el.src === 'string' &&
-        isMediaPlaceholder(el.src)
-      ) {
+      if ((el.type === 'image' || el.type === 'video') && typeof el.src === 'string') {
+        // Resolve an exact request key first. New teaching blueprints use
+        // stable `<outline-id>:media-<n>` keys, while older courses use
+        // `gen_img_*` / `gen_vid_*`. Requiring the legacy shape before this
+        // lookup left successfully generated files disconnected from slides.
         const exactUrl = mediaMap[el.src];
         if (exactUrl) {
           el.src = exactUrl;
           continue;
         }
+
+        if (!isMediaPlaceholder(el.src)) continue;
 
         // Some providers occasionally normalize the placeholder back to a
         // sequential gen_img_1/gen_vid_1 ID instead of echoing the randomized
@@ -607,10 +609,11 @@ export function findUnresolvedClassroomMedia(
       const hasUnresolvedElement = elements.some((element) => {
         if (element.type !== request.type) return false;
         if (request.type === 'video' && element.mediaRef === request.elementId) {
-          return !element.src || isMediaPlaceholder(element.src);
+          return !element.src || element.src === request.elementId || isMediaPlaceholder(element.src);
         }
-        if (typeof element.src !== 'string' || !isMediaPlaceholder(element.src)) return false;
-        return element.src === request.elementId || sameTypeRequests.length === 1;
+        if (typeof element.src !== 'string') return false;
+        return element.src === request.elementId
+          || (isMediaPlaceholder(element.src) && sameTypeRequests.length === 1);
       });
       if (!hasUnresolvedElement) continue;
       unresolved.set(`${request.type}:${request.elementId}`, {

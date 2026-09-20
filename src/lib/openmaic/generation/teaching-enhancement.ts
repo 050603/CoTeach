@@ -10,7 +10,7 @@ import { isAbortError } from './generation-retry';
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from './generated-output-retry';
 import { fingerprintGenerationValue } from '@/lib/course-generation/page-checkpoints';
 
-export const TEACHING_ENHANCEMENT_VERSION = 'shared-page-contract-v15-adaptive-visual-forms';
+export const TEACHING_ENHANCEMENT_VERSION = 'shared-page-contract-v16-grounded-continuity-visible-concepts';
 const TEACHING_SOURCE_LIMIT = 60_000;
 const ENTRY_POINT_KINDS = new Set([
   'familiar-experience', 'concrete-observation', 'problem', 'direct-explanation', 'continuation',
@@ -177,7 +177,7 @@ function normalizeTeachingPlan(
     || !Array.isArray(plan.narrationFocus)) return undefined;
   const rawEntryPoint = plan.entryPoint && typeof plan.entryPoint === 'object' && !Array.isArray(plan.entryPoint)
     ? plan.entryPoint as Record<string, unknown> : undefined;
-  const entryPoint = rawEntryPoint
+  const generatedEntryPoint = rawEntryPoint
     && typeof rawEntryPoint.kind === 'string'
     && ENTRY_POINT_KINDS.has(rawEntryPoint.kind as never)
     && compact(rawEntryPoint.object)
@@ -187,17 +187,22 @@ function normalizeTeachingPlan(
         object: compact(rawEntryPoint.object),
         bridge: compact(rawEntryPoint.bridge),
       }
-    : inherited?.entryPoint;
+    : undefined;
+  // Page ownership and its transition were already decided in the blueprint.
+  // Enhancement expands the explanation but may not introduce a different
+  // retrospective claim or replace the adopted entry object.
+  const entryPoint = inherited?.entryPoint ?? generatedEntryPoint;
   const taskConnection = normalizeTaskConnection(plan.taskConnection, inherited?.taskConnection);
   const visualRelationship = normalizeVisualRelationship(plan.visualRelationship, inherited?.visualRelationship);
   return {
     purpose: compact(plan.purpose), priorKnowledge: compact(plan.priorKnowledge),
     newContent: compact(plan.newContent), learnerQuestion: compact(plan.learnerQuestion),
     reasoningSteps: strings(plan.reasoningSteps), takeaway: compact(plan.takeaway),
-    visibleContent: strings(plan.visibleContent), narrationFocus: strings(plan.narrationFocus),
-    introduces: strings(plan.introduces).length ? strings(plan.introduces) : inherited?.introduces ?? [],
-    deepens: strings(plan.deepens).length ? strings(plan.deepens) : inherited?.deepens ?? [],
-    references: strings(plan.references).length ? strings(plan.references) : inherited?.references ?? [],
+    visibleContent: unique([...(inherited?.visibleContent ?? []), ...strings(plan.visibleContent)]),
+    narrationFocus: strings(plan.narrationFocus),
+    introduces: inherited?.introduces ?? strings(plan.introduces),
+    deepens: inherited?.deepens ?? strings(plan.deepens),
+    references: inherited?.references ?? strings(plan.references),
     ...(entryPoint ? { entryPoint } : {}),
     ...(visualRelationship ? { visualRelationship } : {}),
     ...(taskConnection ? { taskConnection } : {}),
@@ -376,7 +381,7 @@ export function buildTeachingEnhancementPrompt(input: {
       '为每个已确认页面补足可直接制作的实质教学内容，使 PPT、教师讲稿和节末检测共享同一套含义、事实、数量和概念边界。',
       '写出实际解释、必要前提、中间连接和判断理由，不得只写“解释概念”“说明区别”“举例说明”等待办语句。根据知识类型选择讲法，不强制案例、固定流程或每页活动。',
       '概念与区别可从熟悉对象、定义展开或对应比较进入；因果与机制要补足条件、过程和结果间的连接；数学推导要写出已知、步骤、理由和检验；操作技能要说明对象、步骤、观察和常见错误；历史人文要连接背景、材料与解释；综合应用要说明条件、方法选择、过程和结果。按内容组合，不把这些选项变成固定栏目。',
-      '继承蓝图的解释节点和页面职责。页面可以首次解释、深化或必要承接，但不能把完整 explanation、mechanism 或推导压缩成标签，也不能在相邻页面重新讲同一段。不得更改页面数量、ID、顺序和知识边界。',
+      '继承蓝图的解释节点和页面职责。页面可以首次解释、深化或必要承接，但不能把完整 explanation、mechanism 或推导压缩成标签，也不能在相邻页面重新讲同一段。entryPoint.kind=continuation 时只能承接紧邻上一页 existingTeachingBrief.teachingPlan.visibleContent/takeaway 中已经建立的内容；后页才出现的术语、案例或问题必须在其所属页面作为新内容引入。不得更改页面数量、ID、顺序和知识边界。',
       '继承 entryPoint 中已经确定的理解入口，并把它展开成学生能听懂的具体对象、观察重点与过渡。不要把入口重新改成项目任务，不要用抽象定义、页面标题或“今天我们来学习”替代实际对象。',
       'resourcePosition=course-opening 的页面必须支持一个独立完整的 AI 课程开场，即使课程前面存在教师导入阶段：简短问候由讲稿承担，页面与教学设计负责给出适龄、熟悉、可观察或可比较的切入对象，并写清从这个对象到首个知识的自然桥梁。时长较短时与首个知识合并，不能因此省略，也不能假装学生已经回答。',
       'resourcePosition=course-closing 的页面要为课程收束提供已经讲过的核心认识和后续应用方向；正式致谢与告别由讲稿承担。若最后一页是测验，前一教学页只自然引向测验，测验后的反馈完成收束，不提前告别。',
@@ -408,10 +413,10 @@ ${selected.text || '未提供额外资料；只能使用已确认页面中的事
 设计要求：
 1. sharedContext 只保存整节确需复用的学习用途、稳定事实、术语和边界。learningPurpose 说明知识本身的理解或应用价值，不默认改写为完成最终成果。只有确需贯穿案例时才填写案例字段；不同知识适合不同例子时可以自然更换。项目情境不能自动变成每页案例，单页 taskConnection 允许的局部任务情境也不得升级为整节共享案例。
 2. explanation 写清本页拥有的核心含义、首次出现术语、关系、机制、推理步骤、理解障碍和应用条件。细致程度以补足理解为准，不以字数、案例数或段落数衡量。
-3. teachingPlan 继承 entryPoint、introduces、deepens、references 和 visualRelationship。entryPoint 要保留具体对象、需要注意的特征及其通向新知识的理由；introduces 负责首次建立认识，deepens 增加关系、机制或应用，references 只作最短承接。reasoningSteps 按实际过程展开，数量不限。course-opening 页的 visibleContent 应优先呈现需要观察、回想或比较的实际对象，不能只放课程标题、目标或抽象定义。
+3. teachingPlan 原样继承 entryPoint、introduces、deepens、references 和 visualRelationship。entryPoint 要保留具体对象、需要注意的特征及其通向新知识的理由；continuation 只能引用紧邻上一页已可见或已明确得出的认识。introduces 负责首次建立认识，deepens 增加关系、机制或应用，references 只作最短承接。reasoningSteps 按实际过程展开，数量不限。course-opening 页的 visibleContent 应先呈现需要观察、回想或比较的实际对象，并在同页承担首次概念建立时继续完整呈现核心定义，不能只放课程标题、目标、概念名称或提问。
 4. examples 先按当前难点的解释力、实际学习者的熟悉度和学段适切性选择。类比、对比、示范或独立案例均可，不要求连接项目任务或后续活动；无需例子时返回空数组，不为每页凑数。跨页复用案例时保持事实、术语和数量一致。teachingPlan.taskConnection 是硬边界，必须原样继承，不得由本步骤把 none 提升为项目关联。
 5. conditions 只写会改变理解、推导或应用的条件、边界和常见错误。无新增必要内容时返回空数组。
-6. visibleContent 只列学生必须看见、观察、比较或定位的对象；visualRelationship 说明页面要表达的实际关系、阅读顺序、preferredForm 及其 rationale。narrationFocus 保存需要口头讲开的原因、中间过程和关键选择，不与画面逐字重复。
+6. visibleContent 列出学生必须看见、观察、比较、定位或带走的对象与命题。首次出现的核心术语必须保留继承而来的完整基本定义，不能压缩成名称、关键词、问句或由讲稿代替；关键关系、条件和结论也应形成可独立阅读的短句。visualRelationship 说明页面要表达的实际关系、阅读顺序、preferredForm 及其 rationale。narrationFocus 保存需要口头讲开的原因、中间过程、例子展开和关键选择，不与画面逐字重复。
 7. 页面表现形式由关系决定：需要按共同维度逐项查读的差异可优先 table；具有完整数值且重点是趋势、比例或量级时可优先 chart；具体外观、人物、物体或空间状态本身是观察依据且图片可用时可优先 illustration；过程、因果、系统和概念关系可用 diagram；少量核心命题可用 text；两种形式确实互补时才用 mixed。preferredForm 是可调整的教学偏好，不是固定版式；整节没有展示形式配额，不为追求丰富而制造数据、添加装饰图片或把简洁内容表格化。
 8. 已有 pageTask 原样继承；没有时只在学习活动确实帮助理解时补充。独立练习的画面只给作答材料，答案及反馈放在作答之后的口头说明。
 9. assessmentFocus 说明学生应能解释、推导、操作或应用什么，以及合格回答需要的理由。只能检测本节实际解释过的内容。
