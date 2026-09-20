@@ -93,15 +93,17 @@ describe('OpenMAIC visual reference audit', () => {
     const profile = formatOpenMaicWebsiteReferenceProfile();
     expect(profile).toContain('#1E3A8A/#1E40AF');
     expect(profile).toContain('#EFF6FF');
-    expect(profile).toContain('distinct explanatory subtitle');
-    expect(profile).toContain('The complete page must contain 160-230');
-    expect(profile).toContain('do not return a sparse page');
-    expect(profile).toContain('at least eight editable elements');
+    expect(profile).toContain('distinct explanatory subtitle when it adds useful orientation');
+    expect(profile).toContain('semantic-fit check');
+    expect(profile).toContain('Do not pad the page to a character or element quota');
+    expect(profile).toContain('goal-action-result relations spatially explicit');
     expect(profile).toContain('native-table cell must render at 16px or larger');
     expect(profile).toContain('Never solve fit by shrinking teaching text below 16px');
-    expect(profile).toContain('subtitle as a second, separate text element');
+    expect(profile).toContain('emit it as a separate 18-20px slate text element');
     expect(profile).toContain('native tables only for a genuine two-dimensional comparison');
     expect(profile).toContain('Vary the semantic composition across pages');
+    expect(profile).not.toContain('160-230');
+    expect(profile).not.toContain('at least eight editable elements');
     expect(profile).not.toContain('every page must use a table');
   });
 

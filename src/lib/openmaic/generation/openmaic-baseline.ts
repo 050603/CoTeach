@@ -43,7 +43,7 @@ export const OPENMAIC_GENERATION_BASELINE = {
   package: '@openmaic/generation',
   version: '0.3.7',
   planningMethod: 'classic-one-click',
-  referenceProfileVersion: 'openmaic-v1.0.2-export-blue-editorial-v2',
+  referenceProfileVersion: 'openmaic-v1.0.2-export-blue-editorial-v3-semantic-fit',
   promptHashes: {
     requirementsSystem: '813240c132acfe63007ddcf3dd764b47b5ad1d7b5005d47361ede3aa42614c65',
     requirementsUser: '79fe5ce9a64dc63f174bd1c99dd3e4f1feb2a00e2797edc2a11abc5ac2d6f9ff',

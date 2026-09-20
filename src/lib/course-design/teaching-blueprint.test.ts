@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyReviewedOutlinesToTeachingBlueprint,
+  adaptTeachingBlueprintResourceCapabilities,
   generateTeachingBlueprint,
   buildTeachingBlueprintPrompt,
+  TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION,
   teachingBlueprintInputFingerprint,
   teachingBlueprintToOutlines,
   validateTeachingBlueprintBudget,
@@ -10,6 +12,7 @@ import {
 } from "./teaching-blueprint";
 import { deriveKnowledgeLectureSectionsFromOutlines } from "@/lib/knowledge-lecture";
 import { deriveTeachingConstraints } from "@/lib/openmaic/pedagogy/teaching-constraints";
+import { hasCurrentTeachingBrief } from "@/lib/openmaic/generation/teaching-enhancement";
 
 it("uses confirmed class readiness in planning and invalidates cached plans when it changes", () => {
   const base = input();
@@ -34,6 +37,28 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("不得复写讲授案例里已经公布的题目和答案");
   expect(prompt.system).toContain("不得要求学生靠圈出某几个词");
   expect(prompt.system).toContain("Replacement, deletion, scope-of-effect");
+  expect(prompt.system).toContain("定义＋案例＋归类结论");
+  expect(prompt.system).toContain("不能成为小节目的、首页任务或多数页面的新增认识");
+  expect(prompt.system).toContain("不能把编写、归类或修改材料的便利当成首要学习意义");
+  expect(prompt.system).toContain("在要求学生分类、比较或调整之前");
+  expect(prompt.system).toContain("学生可见标题不得只写");
+  expect(prompt.system).toContain("师生行为以及已观察或预期的学习结果");
+  expect(prompt.system).toContain("案例自身的具体教学目标");
+  expect(prompt.system).toContain("不能冒充案例中的教学目标");
+  expect(prompt.system).toContain("相关目标、原做法、改后做法和结果要进入此前或当前的 keyPoints");
+  expect(prompt.system).toContain("不能未经解释替换其中一个概念");
+  expect(prompt.system).toContain("当前例子中被保持的条件只表示本次比较不改变它");
+  expect(prompt.system).toContain("页面标题、提问和结论也不得用‘哪些不能动’");
+  expect(prompt.system).toContain("没有写顺序、列出若干步骤");
+  expect(prompt.system).toContain("‘具体化’不能只解释成列出先后步骤");
+  expect(prompt.system).toContain("稳定的对象、可以变化的对象及稳定部分为何有用");
+  expect(prompt.system).toContain("返回前在同一次作答中静默检查每个小节");
+  expect(prompt.system).toContain("不以字数、页数、例子数量或关键词命中代替教学判断");
+  expect(prompt.system).toContain("看到教案时不再混淆类别");
+  expect(prompt.system).toContain("不要第一页压缩罗列全部定义");
+  expect(prompt.system).toContain("workedExample 中的‘目标’必须是例子所描述课堂的学科学习目标");
+  expect(prompt.system).toContain("caseUse=independent 时");
+  expect(prompt.system).toContain("未启用图片或视频时不得请求对应种类");
   expect(prompt.user).toContain('"sharedContext"');
   expect(prompt.user).toContain('"learningTask"');
   expect(prompt.user).toContain("必须严格按以下 2 个小节及其顺序生成");
@@ -41,6 +66,10 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("可直接制作资源的小节内容设计");
   expect(prompt.system).toContain("禁止只写");
   expect(prompt.user).toContain('"understandingCriteria"');
+  expect(prompt.user).toContain("归类或调整只能作为解释之后的必要迁移");
+  expect(prompt.system).toContain("优先展示推理依据");
+  expect(prompt.user).toContain("不得静默删除解释");
+  expect(prompt.user).toContain("缺一项时不得让后页依赖该项判断");
   expect(prompt.user).not.toContain("4-6个完整");
   expect(prompt.user).not.toContain("至少三个实质要点");
   expect(teachingBlueprintInputFingerprint(enriched)).not.toBe(teachingBlueprintInputFingerprint(base));
@@ -318,6 +347,71 @@ describe("teaching blueprint compiler", () => {
     const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
     expect(outline.teachingBrief?.pageTask).toBeUndefined();
     expect(outline.description).toContain("为何不再独立");
+  });
+
+  it("marks compiled blueprint briefs for the existing downstream enhancement call", async () => {
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(compactModelBlueprint()));
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")
+      .find((item) => item.type === "slide")!;
+
+    expect(outline.teachingBrief?.designVersion).toBe(TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION);
+    expect(hasCurrentTeachingBrief(outline)).toBe(false);
+    expect(outline.teachingBrief?.teachingPlan?.newContent).toContain("训练集提供模型学习规律所需的信息");
+  });
+
+  it("keeps an independent page answer out of the compiled visible projection", async () => {
+    const candidate = compactModelBlueprint();
+    const page = candidate.sections[0]!.pages[0]!;
+    page.keyPoints = [
+      "阅读两种划分流程并判断测试信息是否回流",
+      "按照片随机划分会让同一植物的近重复信息跨集合",
+      "因此第一种流程存在数据泄漏",
+    ];
+    page.learningTask = {
+      learnerAction: "先独立比较两种划分流程。",
+      newContribution: "把独立性原理迁移到新的划分材料。",
+      reasoningFocus: "测试对象的信息是否曾进入训练。",
+      caseUse: "independent",
+      changedConditions: ["划分单位从照片改为植物个体"],
+      preservedConditions: ["分类目标和照片内容保持不变"],
+    };
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
+
+    expect(outline.teachingBrief?.teachingPlan?.visibleContent).toEqual([
+      "阅读两种划分流程并判断测试信息是否回流",
+      "先独立比较两种划分流程。",
+      "划分单位从照片改为植物个体",
+      "分类目标和照片内容保持不变",
+    ]);
+    expect(outline.teachingBrief?.teachingPlan?.visibleContent).not.toContain("因此第一种流程存在数据泄漏");
+    expect(outline.teachingBrief?.teachingPlan?.narrationFocus).toContain("因此第一种流程存在数据泄漏");
+  });
+
+  it("converts unavailable generated media to a native diagram in the same blueprint pass", async () => {
+    const candidate = compactModelBlueprint();
+    (candidate.sections[0]!.pages[0]! as unknown as { resourceNeeds: Array<Record<string, unknown>> }).resourceNeeds = [{
+      kind: "video",
+      purpose: "展示动作和传感器数值的同步变化",
+      required: true,
+      prompt: "学生把手靠近传感器，数值同步变小",
+      durationSec: 12,
+    }];
+    const blueprint = await generateTeachingBlueprint(
+      input(),
+      async () => JSON.stringify(candidate),
+      { resourceCapabilities: { imageGenerationEnabled: true, videoGenerationEnabled: false } },
+    );
+    expect(blueprint.sections[0]?.pages[0]?.resourceNeeds).toEqual([{
+      kind: "diagram",
+      purpose: "展示动作和传感器数值的同步变化",
+      required: true,
+      prompt: "用可编辑的分步、状态对照或关系示意图表达以下动态过程：学生把手靠近传感器，数值同步变小",
+    }]);
+    expect(adaptTeachingBlueprintResourceCapabilities(blueprint, {
+      imageGenerationEnabled: false,
+      videoGenerationEnabled: false,
+    })).toEqual(blueprint);
   });
 
   it("does not accept authoring tasks as completed explanatory content", async () => {

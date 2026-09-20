@@ -82,7 +82,7 @@ describe('formal course teaching enhancement', () => {
 
     expect(briefs.get('actual-outline-id')).toMatchObject({
       explanation: '教学模式需要按学习目标、内容性质和课堂条件选择。',
-      designVersion: 'substantive-section-brief-v6',
+      designVersion: 'substantive-section-brief-v10-case-evidence',
     });
   });
 
@@ -261,7 +261,9 @@ describe('formal course teaching enhancement', () => {
     expect(ai.mock.calls[0]?.[0]).toBe(ai.mock.calls[1]?.[0]);
     expect(ai.mock.calls[0]?.[0]).not.toContain('解释一');
     expect(ai.mock.calls[0]?.[1]).toContain('解释一');
-    expect(ai.mock.calls[0]?.[1]).toContain('do not place every classification, standard answer');
+    expect(ai.mock.calls[0]?.[1]).toContain('do not reduce them to definitions plus classification conclusions');
+    expect(ai.mock.calls[0]?.[1]).toContain('conditions held constant in this comparison');
+    expect(ai.mock.calls[0]?.[1]).toContain('Do not present held-constant conditions as generally unchangeable');
     expect(ai.mock.calls[1]?.[1]).toContain('解释二');
   });
 });
@@ -290,6 +292,19 @@ describe('formal course teaching enhancement', () => {
     expect(prompt.user).toContain('p2');
     expect(prompt.user).toContain('概览页可以先命名概念和展示关系，后续再解释');
     expect(prompt.user).toContain('只有教学确需持续案例时才填写案例字段');
+    expect(prompt.user).toContain('定义＋案例＋归类结论');
+    expect(prompt.user).toContain('案例学习目标—师生具体行为—已观察或明确标注的预期结果');
+    expect(prompt.user).toContain('不能把它们命名为未经资料定义的同级“层”');
+    expect(prompt.user).toContain('不能只凭缺少顺序、出现若干步骤');
+    expect(prompt.user).toContain('应把该事实补入 caseFacts');
+    expect(prompt.user).toContain('使判断不依赖该未知项');
+    expect(prompt.system).toContain('teachingPlan 只是上游材料投影');
+    expect(prompt.user).toContain('caseUse=independent 时');
+    expect(prompt.user).toContain('分类任务缩减到必要应用或交给节末小测');
+    expect(prompt.user).toContain('不得把这些事实只留在 sharedContext');
+    expect(prompt.system).toContain('活动怎样前后依赖并支持学习结果');
+    expect(prompt.user).toContain('返回前在同一次作答中静默做依赖检查');
+    expect(prompt.user).toContain('不以字数、条目数或关键词命中判断充分性');
     expect(prompt.system).toContain('Write for hearing once');
   });
 
@@ -324,5 +339,34 @@ describe('formal course teaching enhancement', () => {
     expect(result[0]?.teachingBrief).toEqual(completed.teachingBrief);
     expect(result[1]?.teachingBrief?.sharedContext).toEqual(sharedContext);
     expect(result[1]?.teachingBrief?.pageTask).toEqual(existingTask);
+  });
+
+  it('adds supported missing case facts while preserving adopted wording and terms', () => {
+    const adopted = {
+      ...sharedContext,
+      caseId: '',
+      caseFacts: [],
+    };
+    const generated = {
+      ...sharedContext,
+      caseId: 'school-history-check',
+      caseFacts: ['目标：判断校史年份是否有独立来源支持', '行为：先标出年份主张，再核对校志', '预期结果：能识别同源转载'],
+      fixedWording: ['模型不应替换这句话'],
+      stableTerms: ['模型新造术语'],
+    };
+    const brief = normalizeTeachingEnhancement({
+      sharedContext: generated,
+      pages: [{
+        outlineId: 'p1', explanation: '来源关系决定证据是否独立。', examples: [], conditions: [],
+        assessmentFocus: '说明来源关系和判断理由。', teachingPlan, evidenceQuotes: [],
+      }],
+    }, [page('p1', 0)], '', { sharedContext: adopted }).get('p1')!;
+
+    expect(brief.sharedContext).toMatchObject({
+      caseId: 'school-history-check',
+      caseFacts: generated.caseFacts,
+      fixedWording: sharedContext.fixedWording,
+      stableTerms: sharedContext.stableTerms,
+    });
   });
 });

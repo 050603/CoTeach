@@ -20,7 +20,7 @@ function outline(): SceneOutline {
     teachingBrief: {
       schemaVersion: 1, designVersion: TEACHING_ENHANCEMENT_VERSION, explanation: '记录需要与具体说法相关', examples: ['建校年份'], conditions: ['记录相关'], evidence: [], assessmentFocus: '查什么',
       sharedContext: { learningPurpose: '决定AI写的小报内容能否使用', caseId: 'school-paper',
-        caseFacts: ['AI写出一个具体建校年份'], fixedWording: ['我校创办于1958年'],
+        caseFacts: ['目标：判断校史年份能否用于小报', '行为：标出AI给出的年份并查阅校志', '预期结果：能说明记录是否支持该年份'], fixedWording: ['我校创办于1958年'],
         stableTerms: ['待查说法', '可靠记录'], conceptBoundaries: ['语气肯定不等于事实正确'] },
       pageTask: { learnerAction: '判断要核对什么以及去哪里核对', newContribution: '建立核验链', reasoningFocus: '记录与说法是否直接相关',
         caseUse: 'introduce', changedConditions: [], preservedConditions: [] },
@@ -65,6 +65,15 @@ describe('independent first-pass teaching narration', () => {
     expect(prompt.pages[0].actualSlide.elements[0].content).toContain('语气肯定');
     expect(aiCall.mock.calls[0][0]).toContain('actual slide is the authority only for what is visible');
     expect(aiCall.mock.calls[0][0]).toContain('Advance one argument across pages');
+    expect(aiCall.mock.calls[0][0]).toContain('Complete the explanation of the core concepts and their relationships');
+    expect(aiCall.mock.calls[0][0]).toContain('A condition held constant in one comparison is not generally forbidden to change');
+    expect(aiCall.mock.calls[0][0]).toContain('Give positive reasons for classifications');
+    expect(aiCall.mock.calls[0][0]).toContain('goal, actions, and observed or intended result explicit');
+    expect(aiCall.mock.calls[0][0]).toContain('On the first page that introduces a case');
+    expect(aiCall.mock.calls[0][0]).toContain('silently trace each claimed relationship');
+    expect(aiCall.mock.calls[0][0]).toContain('activity functions and dependencies');
+    expect(prompt.pages[0].explanation).toContain('记录需要与具体说法相关');
+    expect(prompt.pages[0].teachingPlan.visibleContent).toEqual(['语气肯定 ≠ 事实正确']);
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0], response.pages[0]] }, 'section-a', [first, second])).toThrow('重复返回页面');
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0]] }, 'section-a', [first, second])).toThrow('缺少页面');
   });
@@ -191,5 +200,11 @@ describe('independent first-pass teaching narration', () => {
     expect(call.mock.calls[0][0]).toContain('original slide schema');
     expect(call.mock.calls[0][1]).toContain('original user prompt');
     expect(call.mock.calls[0][1]).toContain(JSON.stringify(buildTeachingNarrationSemantics(outline()).visible));
+    expect(call.mock.calls[0][1]).toContain('Case evidence required for this page');
+    expect(call.mock.calls[0][1]).toContain('目标：判断校史年份能否用于小报');
+    expect(call.mock.calls[0][0]).toContain('a list of category conclusions is not a substitute');
+    expect(call.mock.calls[0][0]).toContain('goal-action-result chain');
+    expect(call.mock.calls[0][0]).toContain('not covered by titles, subtitles, decorations');
+    expect(call.mock.calls[0][0]).toContain('Shorten optional subtitle and decorative copy');
   });
 });

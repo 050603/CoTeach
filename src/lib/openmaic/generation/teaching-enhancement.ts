@@ -10,7 +10,7 @@ import { isAbortError } from './generation-retry';
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from './generated-output-retry';
 import { fingerprintGenerationValue } from '@/lib/course-generation/page-checkpoints';
 
-export const TEACHING_ENHANCEMENT_VERSION = 'substantive-section-brief-v6';
+export const TEACHING_ENHANCEMENT_VERSION = 'substantive-section-brief-v10-case-evidence';
 const TEACHING_SOURCE_LIMIT = 12_000;
 
 function strings(value: unknown): string[] {
@@ -149,9 +149,20 @@ export function normalizeTeachingEnhancement(
     const normalized = normalizeSharedContext(page.teachingBrief?.sharedContext);
     return normalized ? [normalized] : [];
   });
-  const sharedContext = normalizeSharedContext(options?.sharedContext)
+  const adoptedSharedContext = normalizeSharedContext(options?.sharedContext)
     ?? existingContexts[0]
-    ?? normalizeSharedContext(root.sharedContext);
+    ?? undefined;
+  const generatedSharedContext = normalizeSharedContext(root.sharedContext);
+  const sharedContext = adoptedSharedContext
+    ? {
+        ...adoptedSharedContext,
+        caseId: adoptedSharedContext.caseId || generatedSharedContext?.caseId || '',
+        caseFacts: unique([
+          ...adoptedSharedContext.caseFacts,
+          ...(generatedSharedContext?.caseFacts ?? []),
+        ]),
+      }
+    : generatedSharedContext;
   if (!sharedContext) throw new Error('教学增强结果缺少小节共享教学上下文');
   const expectedIds = new Set(pages.map((page) => page.id));
   const result = new Map<string, TeachingBrief>();
@@ -237,6 +248,9 @@ export function buildTeachingEnhancementPrompt(input: {
       'JSON 结构中的逗号、冒号、引号和括号必须使用半角 ASCII 字符；中文全角标点只能出现在字符串正文内。',
       '为每个已确认页面补充可直接制作的实质教学内容，使 PPT、教师讲稿和节末题使用同一套解释、示例、适用条件、误区和考查重点。',
       '不得只写“解释某概念”“说明区别”“举例说明”等待办语句。必须写出实际解释、推理连接、具体事实与判断理由。按知识特点组织，不强制先讲案例，也不强制每页安排任务。',
+      '先完成概念定义内部术语和概念关系的解释，再处理案例承接、应用任务和语言过渡。不得用案例归类代替概念讲解，不得因已有页面摘要简短而降低解释深度。',
+      '不得把蓝图中更完整的 explanation 或 mechanism 降格为表面分类。涉及“具体化”等转化关系时，写清原理或关系怎样成为活动功能、活动怎样前后依赖并支持学习结果；涉及“相对稳定”时，写清稳定对象、可变对象和稳定部分的用途；具体话语或动作只能作为方法实例，说明它改变学生的注意、思考或操作后怎样支持目标。',
+      '蓝图编译出的 teachingPlan 只是上游材料投影，不是已经定稿的页面简报。必须重新组织本节页面分工：把单元 explanation 和 mechanism 中已经形成的解释连接保留下来，不能直接照抄较短的 page.keyPoints 或 takeaway。不得更改页面数量、ID、顺序和知识边界。',
       '不得改变页数、页面 ID、页面顺序或知识边界；资料没有支持的事实必须保留未知。',
       loadSnippet('adaptive-narration-policy'),
       loadSnippet('teaching-accuracy-policy'),
@@ -261,16 +275,19 @@ ${input.pages.map((page, index) => `${index + 1}. [${page.id}] ${page.title}
 ${selected.text || '未提供额外资料；只能使用已确认页面中的事实，不得补充外部事实。'}
 
 设计要求：
-1. 先形成一次小节 sharedContext。已有蓝图提供 sharedContext 时逐项原样继承；没有时补充学习用途、稳定术语和必要概念边界。只有教学确需持续案例时才填写案例字段；案例事实必须是支持判断的具体行动、观察或结果。
-2. explanation 写清本页必须让学生理解的属性、边界、因果关系、机制、证据关系或推理链，不能只是主题名称。概念、原理、技能和比较判断应按各自知识特点解释。
+1. 先形成一次小节 sharedContext。已有蓝图中的稳定事实、术语和边界必须原样继承；若当前判断依赖的具体学习目标、行动或结果在 sharedContext 中缺失，但已在蓝图单元、页面或权威资料中明确出现，应把该事实补入 caseFacts。若全部输入都不支持某项事实，保留未知并改写页面推理，使判断不依赖该未知项，不能编造。只有教学确需持续案例时才填写案例字段。
+2. explanation 写清本页必须让学生理解的属性、边界、因果关系、机制、证据关系或推理链，并把定义里初学者难懂的用语展开为可理解的关系。概念、原理、技能和比较判断应按各自知识特点解释；“定义＋案例＋归类结论”不算完整解释。
 3. examples 按学情和知识难点选择。需要示范才能完成的应用目标，给出关键选择及其理由；已有页面讲透的例子只承接，不重讲。无需例子时返回空数组，不为每页凑数。
 4. conditions 只写会改变当前理解或判断的条件、边界或误区；无新增必要条件时返回空数组，不强制每页追加免责声明。
 5. assessmentFocus 说明学生应能解释或应用什么，以及合格答案必须包含的理由。
 6. evidenceQuotes 只能逐字摘录上面的权威教学资料；没有可核对原文时返回空数组。资料原文与教学推论分别处理，原文准确不代表附加推论得到资料支持。
-7. 相邻页面分工互补，不重复同一段定义、分类理由和结论。已有蓝图 pageTask 时原样继承；没有时仅在确有学习任务时补充。复用案例必须保持 fixedWording、stableTerms 一致；变式只改变 changedConditions，并写明 preservedConditions。
+7. 相邻页面分工互补，不重复同一段定义、分类理由和结论。已有蓝图 pageTask 时原样继承；没有时仅在确有学习任务时补充。复用案例必须保持 fixedWording、stableTerms 一致；变式只改变 changedConditions，并写明 preservedConditions。preservedConditions 只是本次比较保持的条件，不得写成普遍不能调整。
 8. teachingPlan 明确本页目的、已知基础与新增认识；learnerQuestion 表示理解难点而不是必须朗读的问题，reasoningSteps 按内容需要展开推理，数量不限；takeaway 是自然得到的认识，不要求另讲一次总结。
-9. visibleContent 只列必须看见的命题、关系、事实或证据；narrationFocus 安排听觉上需要讲开的理由、关键选择和解释，不要求两边逐字重复。概览页可以先命名概念和展示关系，后续再解释；不得把无说明的树状关系当成唯一对应。variant 或 independent 任务应呈现待判断材料与条件，但不得同时公布完整答案。
-10. examples、conditions 和推理步骤的数量、顺序均按学习需要决定；围绕整节目标覆盖，不为每页套完整流程。
+9. visibleContent 只列必须看见的命题、推理关系、事实、原文或对照证据；narrationFocus 安排听觉上需要讲开的理由、关键选择和解释，不要求两边逐字重复。概览页可以先命名概念和展示关系，后续再解释；讲解页应把学生跟随推理所需的关键关系放到画面，不能只展示分类结论。只要 introduce、reuse 或 variant 页面要根据案例作出判断，visibleContent 就必须先用紧凑的“案例学习目标—师生具体行为—已观察或明确标注的预期结果”片段建立判断对象，再展示相关原文、改变项、本次保持项或结论；不得把这些事实只留在 sharedContext、examples、explanation 或讲稿中。独立练习只展示作答所需原始材料，不得同时公布完整答案。
+   caseUse=independent 时，visibleContent 必须只保留题干和推理材料，不得出现类别答案或完整判断理由；相关答案仅进入 narrationFocus，并明确安排在学习者作答之后反馈。若该页标题偏向辨认或判断，但本节核心解释尚未完成，仍应利用该页完成尚缺的概念关系，分类任务缩减到必要应用或交给节末小测。
+10. 保持核心概念集合前后一致。目标、条件和结果是分析变量时要说明它们与核心概念的关系，不能把它们命名为未经资料定义的同级“层”。归类必须说明正面依据；不能只凭缺少顺序、出现若干步骤、栏目名或关键词得出结论。
+11. examples、conditions 和推理步骤的数量、顺序均按学习需要决定；围绕整节目标覆盖，不为每页套完整流程。
+12. 返回前在同一次作答中静默做依赖检查：每页新增认识是否由 explanation 或 mechanism 支撑；visibleContent 是否在判断前展示所需的中间关系或案例目标、行为和结果；narrationFocus 是否负责讲开“为什么”而非只重复结论；局部比较条件是否仍被表述为局部条件。发现缺口先修正当前 JSON 草稿，不输出检查过程，也不以字数、条目数或关键词命中判断充分性。
 
 返回结构：
 {"sharedContext":{"learningPurpose":"自然说明用途","caseId":"稳定ID或空字符串","caseFacts":[],"fixedWording":[],"stableTerms":[],"conceptBoundaries":[]},"pages":[{"outlineId":"原页面 ID","pageTask":{"learnerAction":"学习动作","newContribution":"本页新增认识","reasoningFocus":"理由焦点","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"explanation":"完整解释","examples":["完整推演"],"conditions":["条件或误区辨析"],"assessmentFocus":"理解与应用检验重点","evidenceQuotes":["资料中的逐字原句"],"teachingPlan":{"purpose":"本页职责","priorKnowledge":"已有基础和已讲内容","newContent":"新增认识","learnerQuestion":"理解难点，可为空","reasoningSteps":[],"takeaway":"理解结果","visibleContent":[],"narrationFocus":[]}}]}`,
@@ -413,8 +430,8 @@ export type TeachingEnhancementPhase = 'content' | 'actions';
 
 function phaseRequirement(phase: TeachingEnhancementPhase): string {
   return phase === 'content'
-    ? 'Use teachingPlan.visibleContent to show the evidence or relationship required for the current learning task. For a discrimination, variant, or independent task, show the prompt, original arrangement, changed condition, and preserved conditions, but do not place every classification, standard answer, or complete reasoning chain in visibleContent. Preserve sharedContext.fixedWording and stableTerms exactly. Leave the answer and reasoning to teachingPlan.narrationFocus; examples and conditions may be empty. Do not print design field names as labels.'
-    : 'Use teachingPlan to complete only this page\'s new contribution from the learner\'s prior knowledge. Explain the purpose naturally when needed, establish the concrete case before naming unfamiliar categories, and avoid naming several new concepts in one compressed passage. Follow the reasoning where needed, with no fixed step count. Do not repeat prior pages\' explanations or read planning fields aloud. Preserve shared case wording and explicitly identify changed versus preserved conditions. Explain why consequential choices follow and state only conditions that affect the judgment. Speak like a teacher addressing this class: never announce slide structure or say “这一页／本页／上一页／下一页／PPT／课件／核心观点／核心命题／资料1”. Use short, breath-friendly sentences and natural transitions instead of reading captions or reporting a document outline.';
+    ? 'Use teachingPlan.visibleContent to show the propositions, intermediate relationships, source wording, or comparison evidence learners need to follow the current reasoning. Preserve the adopted explanation chain: when one concept is made concrete in another, make the relevant principle, activity functions, dependencies, and supported learning result visible instead of showing only stage names. Explanation pages may show key reasoning relationships; do not reduce them to definitions plus classification conclusions. For a discrimination or variant, show the specific goal, original actions, observed or intended result, changed condition, and conditions held constant in this comparison before the requested judgment. For an independent task, show only its prompt and evidence; never render the category answer or complete rationale before the learner response. Do not present held-constant conditions as generally unchangeable. Preserve sharedContext.fixedWording and stableTerms exactly. Keep all required semantic statements legible with non-overlapping elements; shorten decorative copy before compressing or dropping teaching evidence. Do not print design field names as labels.'
+    : 'Use teachingPlan to complete only this page\'s new contribution from the learner\'s prior knowledge. Explain unfamiliar terms and concept relationships before optimizing case continuity or transitions; a definition followed by a classified excerpt is not enough. Establish the concrete goal, actions, and observed or intended result before asking for a case judgment. Follow the positive reasoning that makes each conclusion hold, with no fixed step count; absence of sequence, a list of steps, a heading, or a keyword is never sufficient by itself. Keep the section\'s core concept set stable: goals and conditions remain related variables unless the source defines them as peer concepts. Treat preserved conditions as local comparison settings, not universal prohibitions. Do not repeat prior pages\' explanations or read planning fields aloud. Speak like a teacher addressing this class: never announce slide structure or say “这一页／本页／上一页／下一页／PPT／课件／核心观点／核心命题／资料1”. Use short, breath-friendly sentences and natural transitions instead of reading captions or reporting a document outline.';
 }
 
 export function formatTeachingEnhancementBlock(

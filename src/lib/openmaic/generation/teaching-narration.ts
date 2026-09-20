@@ -7,7 +7,7 @@ import { hasCurrentTeachingBrief } from './teaching-enhancement';
 import { compileActionBindings, type ActionCompilationResult, type VisualActionCue } from './action-bindings';
 import type { NarrationModuleOutput, SlideElementBinding } from './action-binding-types';
 
-export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v7';
+export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v11-case-evidence';
 
 export interface TeachingSectionNarrationOutput {
   sectionId: string;
@@ -40,11 +40,15 @@ export function withTeachingSlideGuidance(
   aiCall: AICallFn, outline: SceneOutline, onRawResponse?: (response: string) => void,
 ): AICallFn {
   const { visible } = buildTeachingNarrationSemantics(outline);
+  const caseUse = outline.teachingBrief?.pageTask?.caseUse;
+  const caseEvidence = caseUse && caseUse !== 'independent'
+    ? outline.teachingBrief?.sharedContext?.caseFacts ?? []
+    : [];
   return async (system, prompt, images) => {
     const response = await aiCall([
     system,
-    'Shared teaching semantics: preserve these visible statements and their meaning in the slide. The adopted design owns knowledge correctness and boundaries. Do not turn a judging aid into a definition, omit required comparison material, or imply a unique one-to-one hierarchy with an unexplained tree. Choose layout from the knowledge relationship; do not default to three columns, a card wall, A/B/C labels, or an activity worksheet. Use each supplied semantic ID as the ID of the text element carrying that statement when the schema permits. Keep all baseline visual/layout requirements. IDs are backstage metadata, never learner-visible labels. Do not add narration or visual actions to this response.',
-  ].join('\n'), `${prompt}\n\nShared visible teaching requirements:\n${JSON.stringify(visible)}`, images);
+    'Shared teaching semantics: preserve these visible statements and their meaning in the slide. The adopted design owns knowledge correctness and boundaries. Do not turn a judging aid into a definition, omit required comparison material, or imply a unique one-to-one hierarchy with an unexplained tree. When this page judges or compares a case, make a compact goal → teacher/student actions → observed or explicitly intended result fragment visible before the verdict; a list of category conclusions is not a substitute for the case evidence. Choose layout from the knowledge relationship; use connectors or aligned groups when the supplied content describes a transformation, dependency, causal path, or goal-action-result chain. Do not default to three columns, a card wall, A/B/C labels, or an activity worksheet. Use each supplied semantic ID as the ID of the text element carrying that statement when the schema permits. Before returning the same first draft, check that every required semantic statement is inside the canvas, readable at the baseline minimum font size, and not covered by titles, subtitles, decorations, or other teaching elements. Shorten optional subtitle and decorative copy before compressing, clipping, or dropping required teaching material. Keep all baseline visual/layout requirements. IDs are backstage metadata, never learner-visible labels. Do not add narration or visual actions to this response.',
+  ].join('\n'), `${prompt}\n\nShared visible teaching requirements:\n${JSON.stringify(visible)}${caseEvidence.length ? `\n\nCase evidence required for this page (preserve its meaning; combine it into a compact goal-action-result fragment before any case verdict):\n${JSON.stringify(caseEvidence)}` : ''}`, images);
     onRawResponse?.(response);
     return response;
   };
@@ -147,11 +151,15 @@ export async function generateTeachingSectionNarration(input: {
     loadSnippet('adaptive-narration-policy'),
     loadSnippet('teaching-accuracy-policy'),
     'The adopted teaching design is the authority for knowledge, concept boundaries, stable example facts, core reasoning and understanding criteria. The actual slide is the authority only for what is visible and what can be pointed to. Never preserve a slide error or delete a required explanation merely to make words agree with the slide.',
+    'Complete the explanation of the core concepts and their relationships before spending words on case continuity or transitions. Unpack unfamiliar terms inside a definition, state how the relationship works and why it supports a teaching choice, and never substitute a definition plus an example plus a classification verdict for that explanation.',
     'Advance one argument across pages. State each new concept or relation where its page owns that contribution. On later pages use only the shortest needed bridge; do not restart, redefine everything, repeat the same case introduction, or add a separate opening and recap to every page.',
     'Use actual slide content for concrete visual references. Name the referent in speech. If a required visible item is absent or conflicts with the adopted design, do not invent that it is visible and do not silently weaken the explanation. Keep the correct explanation self-contained so the resource gap can be reported separately.',
     'Do not invent core claims, change concept boundaries, replace stable case facts, or turn a heuristic into a definition. Do not read internal field names, diagnostics, evidence status, review notes, learner profiles, or authoring instructions aloud.',
+    'Keep the named concept set stable across the section. Treat goals, conditions, actions and results as related variables unless the adopted source defines them as peer concepts. A condition held constant in one comparison is not generally forbidden to change; say that this comparison keeps it fixed. Give positive reasons for classifications instead of relying on missing sequence, a list of steps, headings or keywords.',
     'Examples are optional and serve understanding. Project tasks do not become knowledge goals. Interaction questions are optional. Do not force a definition-example-counterexample routine, a three-column classification, or repeated A/B/C labels.',
-    'Give the reasoning needed for the predeclared understanding criteria. The final quiz is authored later and must not be previewed with answers. Do not lower the learning standard because a slide is terse.',
+    'Give the reasoning needed for the predeclared understanding criteria. When a judgment depends on a case, first make its goal, actions, and observed or intended result explicit, and distinguish observed results from predictions or expectations. The final quiz is authored later and must not be previewed with answers. Do not lower the learning standard because a slide is terse.',
+    'On the first page that introduces a case, establish the case as an understandable object before classifying any of its sentences: state the case lesson’s subject learning goal, what the teacher and learners actually do, and the observed or explicitly intended result. If the actual slide omitted one of these supplied facts, keep the spoken explanation self-contained instead of jumping straight to layer labels. On later case pages, restate only the facts needed for the current comparison.',
+    'Before returning this same first draft, silently trace each claimed relationship from premise through intermediate connection to conclusion. Confirm that a concept described as a concretization names what the principle becomes in activity functions and dependencies; that relative stability names both what stays stable and what may vary; and that a method example explains how the concrete interaction supports the goal. If a case-dependent judgment lacks its goal, action, or observed/intended result in the supplied design, do not invent it or rely on it. Correct the draft before returning and do not output the check.',
     'Each requested teaching page must appear exactly once. Keep the requested pageId. Each segment must use only that page’s supplied semantic IDs. Segment boundaries are playback units and may follow natural explanation paragraphs.',
     'Respect the section position in the complete course. A test-generation scope does not make this the end of the course. Do not add a course farewell unless the progression says this is the final teaching responsibility.',
     input.languageDirective ?? '',

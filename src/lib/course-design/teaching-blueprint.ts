@@ -7,7 +7,6 @@ import { formatTeachingConstraintsForChinesePrompt, type TeachingConstraints } f
 import { loadSnippet } from "@/lib/openmaic/prompts";
 import type { PageLearningTask, SharedTeachingContext, TeachingResourceNeed, TeachingUnderstandingCriteria } from "@/lib/course-quality-review/types";
 import type { MediaGenerationRequest } from "@/lib/openmaic/media/types";
-import { TEACHING_ENHANCEMENT_VERSION } from "@/lib/openmaic/generation/teaching-enhancement";
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic/generation/generated-output-retry";
 import type {
   KnowledgeGraph,
@@ -20,7 +19,8 @@ import type {
 } from "@/lib/session/types";
 
 export const TEACHING_BLUEPRINT_SCHEMA_VERSION = 2 as const;
-export const TEACHING_BLUEPRINT_POLICY_VERSION = "substantive-section-design-v6";
+export const TEACHING_BLUEPRINT_POLICY_VERSION = "substantive-section-design-v12-resource-aware";
+export const TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION = "teaching-blueprint-v2-compiled-v1";
 /** Kept as a compatibility export for callers being migrated away from ratio budgeting. */
 export const MAX_ASSESSMENT_RATIO = 0.2;
 const MIN_TEACHING_PAGE_SEC = 1;
@@ -69,6 +69,11 @@ export type TeachingBlueprintSectionPlan = {
 export type TeachingBlueprintValidation = {
   issues: readonly string[];
   responseCharacters: number;
+};
+
+export type TeachingBlueprintResourceCapabilities = {
+  imageGenerationEnabled: boolean;
+  videoGenerationEnabled: boolean;
 };
 
 function clean(value: unknown, maxLength = 4_000): string {
@@ -207,11 +212,24 @@ export function buildTeachingBlueprintPrompt(
     "你是把粗粒度知识节点编译为可执行课堂的教学设计师。只返回合法 JSON，不使用 Markdown。",
     "这是经过教师审阅后可直接制作资源的小节内容设计，不是下游待办清单，也不是逐字讲稿。",
     "explanation、mechanism、workedExample、conceptBoundaries、keyPoints 必须写出实际要讲的知识、推理连接、案例事实与边界。禁止只写‘解释……’‘说明区别’‘举例说明’‘澄清误区’等生成任务。",
+    "教学主线先完成核心概念及其关系的解释，再安排必要应用。explanation 要展开定义中初学者可能不懂的用语及其具体含义；mechanism 要写清前提、关系如何发生、为什么能支持结论。不得用‘定义＋案例＋归类结论’代替中间解释，也不得把归类、修改方案或答题步骤变成本节的知识主线。",
+    "把解释主线落实到所有设计层级：learningPurpose、learningObjective、understandingCriteria、页面顺序、teachingObjective 和 newContribution 都应先指向学生真正理解并能解释的概念、机制与关系。learningPurpose 要说明理解这些知识能解决什么认识问题，不能把编写、归类或修改材料的便利当成首要学习意义。‘能把材料分到各类’‘能判断改了哪一类’只能是概念解释之后的应用证据，不能成为小节目的、首页任务或多数页面的新增认识。页面容量紧张时优先保留解释，应用可以缩减或只进入节末短测。",
+    "‘看到教案时不再混淆类别’‘知道修改哪一层’仍然是材料处理用途，不能冒充核心概念的认识意义。若一小节用有限页面讲多个相互关联的概念，应把页面用于逐步展开概念内部含义和关系；不要第一页压缩罗列全部定义、第二页整页公布分类练习答案。独立分类与迁移优先放入已有节末短测；只有它承担新的知识应用目标时才单独占用讲解页。",
+    "在要求学生分类、比较或调整之前，前序可见内容必须已经讲清每个核心概念的内部含义、概念间的作用关系及判断依据；不得让学生先靠拖拽、猜测或栏目对应来建立概念。第一页的标题、keyPoints 顺序与 description 应先表达要理解的概念关系，再引入支持该关系的材料；学生可见标题不得只写‘哪一句属于什么’‘怎么判断’等任务外壳。解释页的学生行动可以是观察关系、复述因果、沿图说明或对照推理，不必强行设计分类互动。",
+    "案例只服务一个明确理解难点，不强制贯穿。需要后续判断或比较时，caseFacts 或 workedExample 必须先给出案例自身的具体教学目标（学生要形成的学科认识）、师生行为以及已观察或预期的学习结果；‘学生要给材料归类’只是当前分析任务，不能冒充案例中的教学目标。预期、假设和实际观察必须明确区分。页面使用该案例进行比较时，相关目标、原做法、改后做法和结果要进入此前或当前的 keyPoints，不能只藏在讲稿或简报。",
+    "workedExample 中的‘目标’必须是例子所描述课堂的学科学习目标，例如学生最终要理解或会做什么；‘让当前学生看出这是理论层、辨认模式、分清类别’只是本课程对例子的分析任务，不是例子课堂的目标。若无法说明例子自身的目标和结果，就不要用该例子支撑方法有效性或模式关系。",
+    "keyPoints 是学生必须看见才能跟随推理的命题、关系、原文或对照材料，优先展示推理依据，不重复堆放分类结论。讲解页可以展示关键推理关系；独立练习页才保留答案。",
+    "caseUse=independent 时，keyPoints 只提供题干、原始材料、改变项和本次保持条件，不得写出分类名称、标准答案或完整理由；答案进入讲稿中学习者作答后的反馈，或进入节末小测解析。",
+    "保持本节核心概念集合前后一致。学习目标、课堂条件等相关变量必须说明与核心概念的关系，不能未经解释替换其中一个概念或被命名为新的同级层次。当前例子中被保持的条件只表示本次比较不改变它，不得推成普遍不能调整；页面标题、提问和结论也不得用‘哪些不能动’‘必须保持不变’概括这种局部设定。只有资料明确给出一般禁令时，才可使用不能、禁止等绝对表述。",
+    "分类或判断必须给出正面的成立依据及关系解释。没有写顺序、列出若干步骤、出现某个栏目或关键词，都不能单独证明归类结论；步骤构成结构时还要说明它们怎样组织并共同支持学习。",
+    "解释概念间的转化关系时，必须写出转化前保留的原理或关系、它在课堂活动中变成什么功能安排、各安排怎样前后依赖，以及这些依赖怎样支持学习结果。‘具体化’不能只解释成列出先后步骤。解释‘相对稳定’时必须同时说明稳定的对象、可以变化的对象及稳定部分为何有用。具体话语或动作只能作为某种方法的实例，还要说明它通过改变学生的注意、思考或操作怎样支持目标。",
+    "返回前在同一次作答中静默检查每个小节：概念内部难词是否已经展开；每条概念关系是否有中间推理连接；每个案例判断依赖的目标、师生行为和观察或预期结果是否已进入 sharedContext.caseFacts，并在作出判断前进入相应页面 keyPoints；标题、目标和新增认识是否仍以概念理解为主；局部保持条件是否被误写成普遍禁令。发现缺项时先修正当前 JSON 草稿再返回，不输出检查过程。这个检查不以字数、页数、例子数量或关键词命中代替教学判断。",
     "严格保留给定 knowledgePointId。每个 unit 必须列出真实对应的 knowledgePointId，每个 page 必须列出真实对应的 unitId；禁止按位置猜测或为覆盖率随意挂载。",
     "必须沿用已经确认的小节边界与顺序。每个知识点只归属一个 unit；页面可以组合多个 unit，不得为了换例子或换说法重复创建同一知识点的 unit。",
     "可用适龄的通行学科知识补足解释与例子，但不得扩大课程目标、捏造资料出处或把内部证据状态写给学生。",
     "sourceKind=course-source 时 evidenceQuotes 必须逐字来自给定资料；通行知识写 general-knowledge 且 evidenceQuotes=[]。",
     "项目情境只规定用途和约束，不能自动变成知识目标。小节先建立整体认识，再按知识特点形成连续进展；纯解释页合法，不强制案例、互动或统一页面套路。",
+    "resourceNeeds 必须遵守教师补充中给出的系统资源能力。未启用图片或视频时不得请求对应种类；动态过程可改为原生分步图、状态对照或因果图，不能让课程因不可用媒体而无法生成。",
     "同一材料再次出现时，后页必须增加新的推理、改变一个明确条件或要求独立应用；不得换一种说法重复同一分类、理由和结论。",
     "assessmentFocus 只写学生应独立完成的判断、解释或操作及其理由要求，不得复写讲授案例里已经公布的题目和答案。考查迁移或应用时，必须要求使用一个未在讲授中直接解答过的简短新片段，并保持在已讲知识边界内。判断理由必须回到表述的主要功能、证据关系或适用条件，不得要求学生靠圈出某几个词或复述表面线索证明答案。",
     loadSnippet('adaptive-narration-policy'),
@@ -272,9 +290,9 @@ ${JSON.stringify(graphEdges)}
 ${input.sourceContext?.trim() || "没有额外资料；可使用适龄的通行学科知识细化，但不能编造来源。"}
 
 返回结构：
-{"sections":[{"title":"小节标题","learningObjective":"学生完成后能做什么","sharedContext":{"learningPurpose":"学习本节内容能解决什么实际问题","caseId":"确需复用案例时填写，否则为空","caseFacts":["已确定且后页可引用的具体事实"],"fixedWording":["跨页保持一致的关键事实"],"stableTerms":["核心术语"],"conceptBoundaries":["具体误解、正确边界以及为什么不能那样推断"]},"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID；每个ID在全部units中只出现一次"],"learningOutcome":"可观察结果","explanation":"实际核心解释，不写生成任务","mechanism":"前提、关系、推理连接及结论为何成立","workedExample":"需要例子时写具体事实、对应关系、判断理由和推广边界；不需要时为空","conditions":["适用条件或边界及理由"],"misconceptions":["具体误解及纠正理由"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["能逐字核对时才填写资料原句，否则为空"]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题","type":"slide|interactive","unitIds":["本节 unit id"],"description":"本页新增认识及与前后页的关系","keyPoints":["必须展示的具体命题、事实或关系"],"teachingObjective":"本页达成目标","learningTask":{"learnerAction":"确有必要时学生要做什么","newContribution":"相比前页新增的认识","reasoningFocus":"判断理由","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"resourceNeeds":[{"kind":"diagram|image|video|interactive","purpose":"对理解的具体作用","required":true,"prompt":"图像或视频的明确内容要求","durationSec":8}],"widgetType":"仅互动页需要","widgetOutline":{}}],"assessmentFocus":["只考本节已讲内容的可观察目标"],"understandingCriteria":{"goals":["理解或迁移目标"],"answerEssentials":["合格回答必须包含的认识和理由"],"misconceptions":["典型错误表现及对应误解"],"supportingUnitIds":["支撑标准的本节 unit id"]}}]}
+{"sections":[{"title":"小节标题","learningObjective":"学生完成后能解释的概念、关系或机制；归类或调整只能作为解释之后的必要迁移","sharedContext":{"learningPurpose":"理解这些概念与关系能解决什么认识问题，不把编写或修改材料本身写成知识主线","caseId":"确需复用案例时填写，否则为空","caseFacts":["按当前判断依赖分别写出案例自身的具体学习目标、师生行为、观察结果或明确标注的预期结果；缺一项时不得让后页依赖该项判断"],"fixedWording":["跨页保持一致的关键事实"],"stableTerms":["核心术语"],"conceptBoundaries":["具体误解、正确边界以及为什么不能那样推断"]},"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID；每个ID在全部units中只出现一次"],"learningOutcome":"可观察的解释或推理结果；识别类别不能代替概念理解","explanation":"展开定义内部难懂用语的实际核心解释，不写生成任务","mechanism":"前提、关系如何发生、中间推理连接及结论为何成立；转化关系写清原理怎样成为功能安排和依赖关系","workedExample":"确有助于一个明确理解难点时，写出目标、行为、结果、对应关系、判断理由和推广边界；不需要时为空","conditions":["适用条件或边界及理由"],"misconceptions":["具体误解及纠正理由"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["能逐字核对时才填写资料原句，否则为空"]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题，准确表达本页要理解的关系，不用能不能动概括局部比较","type":"slide|interactive","unitIds":["本节 unit id"],"description":"本页实际展开的概念含义或关系，以及与前后页的解释进展","keyPoints":["学生跟随推理必须看见的命题、中间关系、原文或对照材料；案例判断前可见目标、行为及观察或预期结果"],"teachingObjective":"本页先达成概念或关系理解；应用页再写迁移目标","learningTask":{"learnerAction":"只在概念与依据已呈现后安排必要观察、解释、判断或操作","newContribution":"相比前页新增的概念含义、关系或迁移认识，不能只是新的分类答案","reasoningFocus":"判断理由","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":["只表示本次比较保持，不表示普遍不能调整"]},"resourceNeeds":[{"kind":"diagram|image|video|interactive","purpose":"对理解的具体作用","required":true,"prompt":"图像或视频的明确内容要求","durationSec":8}],"widgetType":"仅互动页需要","widgetOutline":{}}],"assessmentFocus":["只考本节已讲内容的可观察目标"],"understandingCriteria":{"goals":["能解释概念内部含义、关系或机制；分类仅可作为迁移表现"],"answerEssentials":["合格回答必须包含的认识和理由"],"misconceptions":["典型错误表现及对应误解"],"supportingUnitIds":["支撑标准的本节 unit id"]}}]}
 
-约束：每个知识点必须且只能进入一个 unit，并至少进入一个 page；页面的知识点映射由系统根据 unitIds 计算，不要输出 page.knowledgePointIds 或 section.knowledgePointIds；每页必须引用本节 unit 且 keyPoints 至少包含一个可直接制作的实质信息单元；每个 unit 必须被页面使用；learningTask 仅在学生确实需要观察、判断或操作时提供；variant 必须写清 changedConditions 与 preservedConditions；required-prerequisite 的 source 必须早于 target；不得超过已确认的小节与页数上限；理解标准先于题目确定，不得用只背名称的标准替代解释、理由和迁移。`;
+约束：每个知识点必须且只能进入一个 unit，并至少进入一个 page；页面的知识点映射由系统根据 unitIds 计算，不要输出 page.knowledgePointIds 或 section.knowledgePointIds；每页必须引用本节 unit 且 keyPoints 至少包含一个可直接制作的实质信息单元；每个 unit 必须被页面使用；learningTask 仅在学生确实需要观察、判断或操作时提供；variant 必须写清 changedConditions 与 preservedConditions，并把它们表述为本次比较条件而非普遍禁令；required-prerequisite 的 source 必须早于 target；不得超过已确认的小节与页数上限；理解标准先于题目确定，不得用只背名称的标准替代解释、理由和迁移。若时间容量不足以承载核心解释，返回不能满足要求的明确容量说明，不得静默删除解释、降低理解标准或自行增加时长。`;
   return { system, user };
 }
 
@@ -530,6 +548,7 @@ export async function generateTeachingBlueprint(
   options: {
     onValidation?: (validation: TeachingBlueprintValidation) => void | Promise<void>;
     retrySleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+    resourceCapabilities?: TeachingBlueprintResourceCapabilities;
   } = {},
 ): Promise<TeachingBlueprint> {
   const prompt = buildTeachingBlueprintPrompt(input);
@@ -548,7 +567,9 @@ export async function generateTeachingBlueprint(
       issues: normalized.issues,
       responseCharacters: response.length,
     });
-    if (normalized.blueprint) return normalized.blueprint;
+    if (normalized.blueprint) {
+      return adaptTeachingBlueprintResourceCapabilities(normalized.blueprint, options.resourceCapabilities);
+    }
     throw invalidGeneratedOutput(
       new Error(normalized.issues.join("；")),
       "教学蓝图缺少可用结构",
@@ -558,6 +579,39 @@ export async function generateTeachingBlueprint(
     maxRetries: 2,
     sleep: options.retrySleep,
   });
+}
+
+/**
+ * Keep one-pass blueprint output executable with the media capabilities that
+ * were fixed before generation started. Native diagrams stay available to the
+ * slide generator and preserve the instructional purpose of an unavailable
+ * generated image or video without adding another model pass.
+ */
+export function adaptTeachingBlueprintResourceCapabilities(
+  blueprint: TeachingBlueprint,
+  capabilities?: TeachingBlueprintResourceCapabilities,
+): TeachingBlueprint {
+  if (!capabilities) return blueprint;
+  const next = structuredClone(blueprint);
+  for (const section of next.sections) {
+    for (const page of section.pages) {
+      page.resourceNeeds = page.resourceNeeds?.map((need) => {
+        const unavailable = (need.kind === "video" && !capabilities.videoGenerationEnabled)
+          || (need.kind === "image" && !capabilities.imageGenerationEnabled);
+        if (!unavailable) return need;
+        const originalKind = need.kind === "video" ? "动态过程" : "画面内容";
+        return {
+          kind: "diagram" as const,
+          purpose: need.purpose,
+          required: need.required,
+          ...(need.prompt
+            ? { prompt: `用可编辑的分步、状态对照或关系示意图表达以下${originalKind}：${need.prompt}` }
+            : {}),
+        };
+      });
+    }
+  }
+  return next;
 }
 
 function sectionTeachingBrief(section: TeachingBlueprintSection, page?: TeachingBlueprintPage) {
@@ -572,9 +626,21 @@ function sectionTeachingBrief(section: TeachingBlueprintSection, page?: Teaching
     ...unit.conditions.map((condition) => `适用边界：${condition}`),
     ...unit.misconceptions.map((misconception) => `误解辨析：${misconception}`),
   ]).filter(Boolean);
+  const independentVisibleContent = page?.learningTask?.caseUse === "independent"
+    ? [
+        page.keyPoints[0],
+        page.learningTask.learnerAction,
+        ...page.learningTask.changedConditions,
+        ...page.learningTask.preservedConditions,
+      ].filter((item): item is string => Boolean(item?.trim()))
+    : undefined;
   return {
     schemaVersion: 1 as const,
-    designVersion: TEACHING_ENHANCEMENT_VERSION,
+    // A compiled blueprint is complete source material, but it has not yet
+    // passed through the existing section-level teaching-enhancement call.
+    // Keep the versions distinct so the classroom generator cannot mistake a
+    // direct page projection for the adopted downstream teaching brief.
+    designVersion: TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION,
     sharedContext: section.sharedContext,
     ...(page?.learningTask ? { pageTask: page.learningTask } : {}),
     ...(page ? { teachingPlan: {
@@ -585,9 +651,11 @@ function sectionTeachingBrief(section: TeachingBlueprintSection, page?: Teaching
       newContent: explanation.join("\n"),
       learnerQuestion: page.learningTask?.reasoningFocus ?? "",
       reasoningSteps,
-      takeaway: page.keyPoints.join("；"),
-      visibleContent: page.keyPoints,
-      narrationFocus: [...explanation, ...reasoningSteps],
+      takeaway: page.learningTask?.caseUse === "independent"
+        ? page.learningTask.newContribution
+        : page.keyPoints.join("；"),
+      visibleContent: independentVisibleContent ?? page.keyPoints,
+      narrationFocus: [...explanation, ...reasoningSteps, ...(page.learningTask?.caseUse === "independent" ? page.keyPoints.slice(1) : [])],
     } } : {}),
     explanation: [...explanation, ...reasoningSteps].join("\n"),
     examples: units.map((unit) => unit.workedExample).filter(Boolean),

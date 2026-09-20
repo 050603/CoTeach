@@ -70,10 +70,10 @@ export function formatOpenMaicWebsiteReferenceProfile(): string {
   return [
     '## OpenMAIC website course-deck reference profile',
     '- Keep the whole deck in one professional editorial system: white or very light slate-blue canvas; deep navy #1E3A8A/#1E40AF for page titles and structural anchors; slate #334155/#475569 for body text; #64748B for subtitles; pale #F1F5F9/#F8FAFC/#EFF6FF content surfaces. Orange #ED7D31 or semantic red may appear once for a genuine emphasis, not as a competing page theme. Keep defaultColor and every inline HTML color consistent with the same role. Do not invent green, purple, yellow, or per-page palettes for decoration.',
-    '- Every ordinary lecture page needs a clear title, a distinct explanatory subtitle, and enough visible teaching content to stand on its own: normally 5-7 meaningful content units that develop the supplied description and key points with concise definitions, relationships, conditions, examples, contrasts, or conclusions. Concise must not mean sparse, and topic labels alone are not sufficient.',
-    '- Required pre-output structure check for an ordinary lecture page: emit the title as its own navy text element; emit a one-line 18-20px slate subtitle as a second, separate text element directly below it; organize the body into at least three separately positioned groups; and use at least eight editable elements in total across text, meaningful surfaces, dividers, connectors, charts, or tables. Do not place all body content in one oversized text box or paragraph.',
-    '- Required pre-output density check for an ordinary text-led lecture page: count meaningful visible Chinese characters and Latin letters after stripping HTML. The complete page must contain 160-230. If it has fewer than 160, add compact supporting explanation, a condition, a contrast, or a concrete example grounded in the supplied key points; do not return a sparse page. Formula-, media-, or diagram-led pages may use less text only when the visible semantic elements themselves carry the missing teaching information.',
-    '- Required projection-legibility check: every visible body, label, and native-table cell must render at 16px or larger; only a short, non-essential source note may use 14-15px. If 160-230 meaningful characters do not fit at that size, tighten redundant wording or choose a roomier semantic composition. Never solve fit by shrinking teaching text below 16px.',
+    '- Every ordinary lecture page needs a clear title, a distinct explanatory subtitle when it adds useful orientation, and enough visible teaching content to support the supplied reasoning. Choose the number of content units from the definitions, relationships, conditions, evidence, or comparisons learners must see; topic labels and repeated conclusions are not sufficient.',
+    '- Required pre-output structure check for an ordinary lecture page: emit the title as its own navy text element; when a subtitle is useful, emit it as a separate 18-20px slate text element directly below the title. Organize the body into separately positioned groups that match the knowledge relationship, and use editable elements for meaningful surfaces, dividers, connectors, charts, or tables. Do not place all body content in one oversized text box or paragraph.',
+    '- Required pre-output semantic-fit check: trace every supplied visible requirement to a legible element and make transformations, dependencies, causal paths, or goal-action-result relations spatially explicit. Do not pad the page to a character or element quota, and do not omit a premise, condition, or comparison item merely to simplify the composition.',
+    '- Required projection-legibility check: every visible body, label, and native-table cell must render at 16px or larger; only a short, non-essential source note may use 14-15px. If required teaching content does not fit, tighten redundant labels or optional subtitle copy and choose a roomier semantic composition. Never solve fit by shrinking teaching text below 16px, clipping text, or overlapping elements.',
     '- Choose the composition from the meaning of this page. Use editorial split panels for definition plus example, connectors for mappings and causal/process relations, hierarchy for levels, charts for quantitative data, and native tables only for a genuine two-dimensional comparison or matrix. Never use a table merely as a grid, card substitute, or default layout.',
     '- Vary the semantic composition across pages while keeping typography, colour roles, spacing rhythm, and line treatment recognizably one deck. Do not repeat a uniform card grid on every page.',
     '- A bottom conclusion/path band is useful only when it summarizes a real takeaway or sequence. When two or more content units have a sequence, mapping, hierarchy, contrast, or causal relation, make that relation visually explicit with aligned groups, dividers, or connectors rather than leaving unrelated cards. Shapes, lines, tables, charts, and colour must communicate meaning rather than fill empty space.',
@@ -159,7 +159,7 @@ export type CourseVisualConsistencyAudit = {
   averageVisibleTextCharacters: number;
   averageElementCount: number;
   averageSemanticElementCount: number;
-  referenceProfileVersion: 'openmaic-v1.0.2-export-blue-editorial-v2';
+  referenceProfileVersion: 'openmaic-v1.0.2-export-blue-editorial-v3-semantic-fit';
 };
 
 function layoutSignature(scene: Scene): string | undefined {
@@ -253,7 +253,7 @@ export function auditCourseVisualConsistency(
     averageVisibleTextCharacters: average(metrics.map((metric) => metric.visibleTextCharacters)),
     averageElementCount: average(metrics.map((metric) => metric.elementCount)),
     averageSemanticElementCount: average(metrics.map((metric) => metric.semanticElementCount)),
-    referenceProfileVersion: 'openmaic-v1.0.2-export-blue-editorial-v2',
+    referenceProfileVersion: 'openmaic-v1.0.2-export-blue-editorial-v3-semantic-fit',
     passed: slideCount === 0 || (
       matchingBackgroundCount >= threshold
       && deepBlueTitleCount >= threshold

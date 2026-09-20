@@ -846,6 +846,16 @@ function teacherGenerationBrief(request: QuickDesignRequest): string {
   return [...new Set([request.teacherBrief, request.supplementalAnswers?.brief ?? ""].map((text) => text.trim()).filter(Boolean))].join("\n");
 }
 
+function blueprintResourceCapabilityBrief(request: QuickDesignRequest): string {
+  const image = request.options?.enableImageGeneration === true;
+  const video = request.options?.enableVideoGeneration === true;
+  return [
+    "系统资源能力（生成前固定约束）：原生可编辑图表可用。",
+    image ? "图片生成已启用。" : "图片生成未启用，不得设计 image 资源；需要画面时使用原生可编辑示意图。",
+    video ? "视频生成已启用。" : "视频生成未启用，不得设计 video 资源；动态过程使用分步图、状态对照或因果图。",
+  ].join("");
+}
+
 /** Downstream reviewers bound the context, so confirmed facts must precede long source documents. */
 export function buildCourseTeachingSourceContext(
   resourcePackage: CourseResourcePackage | undefined,
@@ -1502,7 +1512,7 @@ function buildTeachingBlueprintInput(
     totalDurationSec,
     assessmentMode: request.assessmentMode ?? "adaptive",
     generationMode: request.generationMode ?? "standard",
-    teacherBrief: teacherGenerationBrief(request),
+    teacherBrief: [teacherGenerationBrief(request), blueprintResourceCapabilityBrief(request)].filter(Boolean).join("\n"),
     sourceContext: buildCourseTeachingSourceContext(
       request.resourcePackage,
       teacherGenerationBrief(request),
@@ -1598,6 +1608,10 @@ async function generateNewSystemTeachingBlueprintOutlines(
     }
     try {
       blueprint = await generateTeachingBlueprint(input, aiCall, {
+        resourceCapabilities: {
+          imageGenerationEnabled: request.options?.enableImageGeneration === true,
+          videoGenerationEnabled: request.options?.enableVideoGeneration === true,
+        },
         onValidation: async ({ issues, responseCharacters }) => {
           if (issues.length) {
             log.warn(`[teaching-blueprint] unusable output (${responseCharacters} chars): ${issues.join("；")}`);
