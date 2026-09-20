@@ -1,4 +1,5 @@
 import type { GeneratedSlideContent } from "@openmaic/lib/types/generation";
+import type { LaserWaypoint, VisualTargetSelector } from "@openmaic/lib/types/action";
 
 export type ActionSupport = "none" | "helpful" | "essential";
 
@@ -21,6 +22,13 @@ export interface NarrationAnchor {
   visualCue?: {
     type: "spotlight" | "laser";
     necessity: Exclude<ActionSupport, "none">;
+    /** Exact rendered target when narration is authored from the actual slide. */
+    target?: {
+      elementId: string;
+      selector?: VisualTargetSelector;
+    };
+    /** Ordered rendered targets visited by one continuous laser sweep. */
+    waypoints?: LaserWaypoint[];
     durationMs?: number;
   };
 }

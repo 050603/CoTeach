@@ -222,7 +222,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       audience: 'student',
       teachingBrief: {
         schemaVersion: 1,
-        designVersion: 'shared-page-contract-v12-learner-entry',
+        designVersion: 'shared-page-contract-v13-complete-lesson-arc',
         sharedContext,
         teachingPlan,
         explanation: '证据支持结论，语言流畅不能证明事实正确。',
@@ -265,7 +265,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.ai.mock.calls.some(([system]) => system.includes('中文课堂讲稿编辑'))).toBe(false);
     expect(result.scenes[0]?.id).not.toBe('legacy-first-draft');
-    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v14-comprehensible-instruction');
+    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v17-section-assessment-modes');
   });
 
   it('restores a structurally complete slide without running layout review', async () => {
@@ -332,7 +332,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         },
       },
       actions: [{ id: 'saved-speech', type: 'speech', text: '已保存讲稿。' }],
-      narrationRevision: 'course-first-pass-v14-comprehensible-instruction',
+      narrationRevision: 'course-first-pass-v17-section-assessment-modes',
       createdAt: 1,
       updatedAt: 1,
     } as unknown as Scene;
@@ -424,7 +424,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     const knowledgeOutline: SceneOutline = {
       ...outline, generationPurpose: 'knowledge-teaching',
       teachingBrief: {
-        schemaVersion: 1, designVersion: 'shared-page-contract-v12-learner-entry', sharedContext, teachingPlan,
+        schemaVersion: 1, designVersion: 'shared-page-contract-v13-complete-lesson-arc', sharedContext, teachingPlan,
         explanation: '证据支持结论。', examples: [], conditions: [], evidence: [], assessmentFocus: '说明判断理由。',
       },
     };
@@ -452,7 +452,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       generationPurpose: 'knowledge-teaching',
       teachingBrief: {
         schemaVersion: 1,
-        designVersion: 'shared-page-contract-v12-learner-entry',
+        designVersion: 'shared-page-contract-v13-complete-lesson-arc',
         sharedContext,
         teachingPlan,
         explanation: '语言流畅不能单独证明事实正确，需要核对独立来源。',
@@ -583,11 +583,11 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(result.scenes[0]?.actions).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'speech', text: '短讲稿。' }),
     ]));
-    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v14-comprehensible-instruction');
-    expect(result.qualityReport.teachingEnhancementVersion).toBe('shared-page-contract-v12-learner-entry');
-    expect(result.qualityReport.narrationEnhancementVersion).toBe('section-continuous-narration-v13-learner-entry');
+    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v17-section-assessment-modes');
+    expect(result.qualityReport.teachingEnhancementVersion).toBe('shared-page-contract-v13-complete-lesson-arc');
+    expect(result.qualityReport.narrationEnhancementVersion).toBe('section-continuous-narration-v15-complete-lesson-arc');
     expect(result.qualityReport.reviewMode).toBeUndefined();
-    expect(result.qualityReport.reviewPolicyVersion).toBe('course-first-pass-v14-comprehensible-instruction');
+    expect(result.qualityReport.reviewPolicyVersion).toBe('course-first-pass-v17-section-assessment-modes');
   });
 
   it('preserves the initial playable speech without a style review pass', async () => {
@@ -604,8 +604,11 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.ai.mock.calls.some(([system]) => system.includes('中文课堂讲稿编辑'))).toBe(false);
     expect(result.scenes[0].actions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'speech', text: originalText }),
+      expect.objectContaining({ type: 'speech', text: expect.stringContaining(originalText) }),
     ]));
+    expect(result.scenes[0]!.actions?.find((action) => action.type === 'speech')).toMatchObject({
+      type: 'speech', text: expect.stringMatching(/感谢大家的认真参与，同学们再见。$/),
+    });
     expect(result.qualityReport.warnings).toEqual([]);
     expect(mocks.persist).toHaveBeenCalledOnce();
   });

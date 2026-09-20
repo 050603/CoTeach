@@ -39,6 +39,7 @@ import { whiteboardBlocks } from '@openmaic/lib/edit/whiteboard-blocks';
 import { parseActionsFromStructuredOutput } from '@openmaic/lib/generation/action-parser';
 import { calibrateGeneratedVisualCues } from '@openmaic/lib/generation/semantic-visual-cues';
 import { withTeachingEnhancement } from '@openmaic/lib/generation/teaching-enhancement';
+import { buildNarrationContext } from '@openmaic/lib/generation/narration-continuity';
 
 // ── Scene context shape (client-sourced, injected via deps) ──────────────────
 
@@ -253,15 +254,12 @@ export function makeRegenerateSceneActionsTool(
       void stageId;
 
       // ── Build cross-scene context (mirrors route.ts logic) ─────────────
-      const allTitles: string[] = allOutlines.map((o) => o.title);
       const pageIndex = allOutlines.findIndex((o) => o.id === outline.id);
       const actualPreviousSpeeches = (sectionNarrations ?? [])
         .slice(0, Math.max(0, (sectionNarrations ?? []).findIndex((item) => item.current)))
         .flatMap((item) => item.speeches.map((speech) => speech.text));
       const ctx: SceneGenerationContext = {
-        pageIndex: (pageIndex >= 0 ? pageIndex : 0) + 1,
-        totalPages: allOutlines.length,
-        allTitles,
+        ...buildNarrationContext(allOutlines, pageIndex >= 0 ? pageIndex : 0),
         previousSpeeches: actualPreviousSpeeches.length ? actualPreviousSpeeches : previousSpeeches ?? [],
       };
 

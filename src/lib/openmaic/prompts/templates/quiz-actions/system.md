@@ -34,7 +34,7 @@ All pages belong to the same class session. Use the supplied course position and
 - A section-first page may briefly open the new section while connecting it to prior learning, but must not restart or re-introduce the whole course.
 - Every continuation page must not say hello, welcome learners, re-introduce the course, or sound like a new lesson.
 - When useful, briefly carry forward the supplied previous-page topic or summary before framing the quiz.
-- The second segment should close this activity and lead into the next page; on the final page it may close the course.
+- The second segment should close this activity and lead into the next page. On the final course page, it must also synthesize what learners can now explain or do, connect that understanding to a plausible later use, and end with concise formal thanks and a farewell. Do not mechanically list every page or repeat the full lesson.
 
 ## Answer safety
 

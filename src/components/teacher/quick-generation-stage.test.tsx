@@ -171,6 +171,92 @@ describe("QuickGenerationStage", () => {
     expect(screen.getByTestId("quick-generation-card-scroll").getAttribute("tabindex")).toBeNull();
   });
 
+  it("switches through generated cards one page at a time from the side cards", () => {
+    const cards: CourseDesignGenerationArtifact[] = [
+      {
+        id: "positioning",
+        kind: "facts",
+        eyebrow: "课程生成 · 课程定位",
+        title: "确认课程定位",
+        summary: "第一张卡片",
+        accent: "orange",
+        items: [{ label: "对象", value: "七年级学生" }],
+      },
+      {
+        id: "knowledge-graph",
+        kind: "graph",
+        eyebrow: "课程生成 · 知识图谱",
+        title: "构建知识图谱",
+        summary: "第二张卡片",
+        accent: "blue",
+        items: [{ label: "核心", value: "生成式人工智能" }],
+      },
+      outlineArtifact,
+    ];
+    const commonProps = {
+      backgroundEnabled: true,
+      brief: "设计一节项目课",
+      cancelling: false,
+      completed: false,
+      confirmCancel: false,
+      message: "正在制作课堂页面",
+      onCancel: vi.fn(),
+      onOpenCourse: vi.fn(),
+      onReview: vi.fn(),
+      paused: false,
+      progress: 72,
+      remainingLabel: "预计还需约 3 分钟",
+      reviewAvailable: false,
+      startedAt: null,
+    };
+    const { rerender } = render(
+      <QuickGenerationStage
+        {...commonProps}
+        activeArtifactId="course-outline"
+        artifacts={cards}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "课程大纲" })).toBeTruthy();
+    expect(screen.getByTestId("quick-generation-main-card-stage").getAttribute("aria-label")).toBe("第 3 张，共 3 张");
+    expect(screen.queryByRole("button", { name: /查看下一张/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看上一张：构建知识图谱" }));
+    expect(screen.getByRole("heading", { name: "构建知识图谱" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看上一张：确认课程定位" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看下一张：课程大纲" })).toBeTruthy();
+
+    const newestCard: CourseDesignGenerationArtifact = {
+      id: "page-production",
+      kind: "timeline",
+      eyebrow: "课程生成 · 页面制作",
+      title: "制作课堂页面",
+      summary: "第四张卡片",
+      accent: "violet",
+      items: [{ label: "进度", value: "正在生成" }],
+    };
+    rerender(
+      <QuickGenerationStage
+        {...commonProps}
+        activeArtifactId="page-production"
+        artifacts={[...cards, newestCard]}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "构建知识图谱" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看下一张：课程大纲" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看上一张：确认课程定位" }));
+    expect(screen.getByRole("heading", { name: "确认课程定位" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /查看上一张/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看下一张：构建知识图谱" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看下一张：课程大纲" }));
+    expect(screen.getByRole("heading", { name: "课程大纲" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "查看下一张：制作课堂页面" }));
+    expect(screen.getByRole("heading", { name: "制作课堂页面" })).toBeTruthy();
+    expect(screen.getByTestId("quick-generation-main-card-stage").getAttribute("aria-label")).toBe("第 4 张，共 4 张");
+  });
+
   it("updates aggregate page progress and stops live effects during recovery or reduced motion", () => {
     const snapshot: QuickClassroomGenerationSnapshot = {
       status: "running", step: "generating_scenes", progress: 40,

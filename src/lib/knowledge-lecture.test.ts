@@ -72,7 +72,7 @@ describe("knowledge lecture sections", () => {
     })).toThrow("时间预算");
   });
 
-  it("merges a one-page tail into a teaching section before appending its quiz", () => {
+  it("keeps a concise one-page knowledge group and tests it immediately", () => {
     const result = organizeKnowledgeLectureOutlines([
       outline("page-1", ["kp-1"]),
       outline("page-2", ["kp-2"]),
@@ -90,9 +90,12 @@ describe("knowledge lecture sections", () => {
       },
     });
 
-    expect(result.sections).toHaveLength(1);
-    expect(result.sections.every((section) => section.sceneOutlineIds.length >= 2)).toBe(true);
-    expect(result.outlines.filter((item) => item.type === "quiz")).toHaveLength(1);
+    expect(result.sections).toHaveLength(2);
+    expect(result.sections.map((section) => section.knowledgePointIds)).toEqual([
+      ["kp-1", "kp-2"],
+      ["kp-3"],
+    ]);
+    expect(result.outlines.filter((item) => item.type === "quiz")).toHaveLength(2);
     expect(result.outlines.filter((item) => item.type !== "quiz").map((item) => item.id)).toEqual([
       "page-1",
       "page-2",
@@ -108,7 +111,7 @@ describe("knowledge lecture sections", () => {
     expect(deriveKnowledgeLectureSectionsFromOutlines(result.outlines)).toEqual(result.sections);
   });
 
-  it("creates one quiz per multi-page section instead of one quiz per slide", () => {
+  it("creates one immediate quiz per explicitly independent knowledge group", () => {
     const points = ["a", "b", "c", "d"].map((id, index) => ({
       id,
       name: `知识${index + 1}`,
@@ -120,10 +123,10 @@ describe("knowledge lecture sections", () => {
       points.map((point) => outline(`page-${point.id}`, [point.id])),
       { totalDurationSec: 1_200, knowledgePoints: points },
     );
-    expect(result.sections).toHaveLength(2);
-    expect(result.sections.map((section) => section.sceneOutlineIds.length)).toEqual([2, 2]);
+    expect(result.sections).toHaveLength(4);
+    expect(result.sections.map((section) => section.sceneOutlineIds.length)).toEqual([1, 1, 1, 1]);
     expect(result.outlines.map((item) => item.type)).toEqual([
-      "slide", "slide", "quiz", "slide", "slide", "quiz",
+      "slide", "quiz", "slide", "quiz", "slide", "quiz", "slide", "quiz",
     ]);
   });
 

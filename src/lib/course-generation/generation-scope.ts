@@ -24,6 +24,29 @@ export function isTestLessonPromotion(
 }
 
 /**
+ * Recover the canonical full outline from the persisted generation request.
+ * A completed test run intentionally exposes only its selected section on the
+ * course preview, so the preview snapshot cannot be used as the promotion
+ * source of truth.
+ */
+export function resolveFullCoursePromotionOutlines<T extends { id: string }>(input: {
+  persistedOutlines: readonly T[] | undefined;
+  expectedFullSceneCount: number | undefined;
+  testLesson: TestLessonGenerationTarget | undefined;
+}): T[] | null {
+  const outlines = input.persistedOutlines ?? [];
+  const testIds = input.testLesson?.sceneOutlineIds ?? [];
+  if (!Number.isInteger(input.expectedFullSceneCount)
+    || (input.expectedFullSceneCount ?? 0) <= testIds.length
+    || outlines.length !== input.expectedFullSceneCount
+    || new Set(outlines.map((outline) => outline.id)).size !== outlines.length
+    || testIds.length === 0) return null;
+  const fullIds = new Set(outlines.map((outline) => outline.id));
+  if (new Set(testIds).size !== testIds.length || testIds.some((id) => !fullIds.has(id))) return null;
+  return [...outlines];
+}
+
+/**
  * Test mode is a bounded selection over the confirmed production outline. It
  * deliberately does not create alternate prompts, page schemas, or a second
  * generator. The selected lesson is passed to the same classroom pipeline as

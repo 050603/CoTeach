@@ -23,6 +23,7 @@ export interface SceneGenerationContext {
   totalPages: number; // Total number of pages
   allTitles: string[]; // All page titles in order
   previousSpeeches: string[]; // Speech texts from the previous page only
+  courseTitle?: string;
   sectionPosition?: 'course-first' | 'section-first' | 'continuation';
   previousPageTitle?: string;
   previousPageSummary?: string;

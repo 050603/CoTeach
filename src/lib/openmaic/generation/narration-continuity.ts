@@ -22,6 +22,7 @@ function summarizeOutline(outline: SceneOutline | undefined): string | undefined
 export function buildNarrationContext(
   outlines: ReadonlyArray<SceneOutline>,
   index: number,
+  options?: { courseTitle?: string },
 ): SceneGenerationContext {
   const safeIndex = Math.max(0, Math.min(index, Math.max(0, outlines.length - 1)));
   const current = outlines[safeIndex];
@@ -37,6 +38,7 @@ export function buildNarrationContext(
     totalPages: outlines.length,
     allTitles: outlines.map((outline) => outline.title),
     previousSpeeches: [],
+    ...(options?.courseTitle?.trim() ? { courseTitle: options.courseTitle.trim() } : {}),
     sectionPosition,
     previousPageTitle: previous?.title,
     previousPageSummary: summarizeOutline(previous),
@@ -57,15 +59,30 @@ const FALSE_FUTURE_SESSION_REFERENCE = /(?:在)?(?:下(?:一)?节课|下(?:一)?
 const FALSE_FUTURE_SESSION_REFERENCE_EN = /\b(?:in\s+)?(?:the\s+)?next\s+(?:class|lesson|session)\b/gi;
 const FALSE_PREVIOUS_PAGE_LEARNING = /(?:在)?(?:上一页|前一页)(?:中|里)?[，,\s]*我们(?:已经)?(?:看到了?|了解了?|学习了?|认识了?|回顾了?)/g;
 const FALSE_PREVIOUS_PAGE_REFERENCE = /(?:在)?(?:上一页|前一页)(?:中|里)?/g;
-const COURSE_GREETING = /(?:大家好|同学们好|各位同学好|欢迎(?:大家|各位同学|同学们)?来到)/i;
+const COURSE_GREETING = /(?:大家好|同学们好|各位同学好|欢迎(?:大家|各位同学|同学们)?来到|\b(?:hello|hi)\s+(?:everyone|class|students)\b|\bwelcome(?:\s+everyone|\s+class|\s+students)?\b)/i;
+const FORMAL_COURSE_CLOSING = /(?:(?:今天|本节|本次|这节)(?:的)?(?:课程|课|学习)(?:就)?(?:到这里|告一段落|结束)|感谢(?:大家|同学们)?(?:的)?(?:聆听|观看|参与)|谢谢(?:大家|同学们)?|同学们再见|(?:下次课|下节课|下次|下一堂课)再见|\bgoodbye\b|\bsee you\b)[。！？!?.\s]*$/i;
 
-export function normalizeCourseFirstOpening(text: string): string {
+export function normalizeCourseFirstOpening(text: string, courseTitle?: string): string {
   const independentOpening = text
     .replace(FALSE_PREVIOUS_PAGE_LEARNING, '这节课我们先来了解')
     .replace(FALSE_PREVIOUS_PAGE_REFERENCE, '在本节课中');
+  const normalizedTitle = courseTitle?.trim().replace(/^[《“"]|[》”"]$/g, '');
+  const chineseDelivery = /[\u3400-\u9fff]/.test(`${normalizedTitle ?? ''}${independentOpening}`);
   return COURSE_GREETING.test(independentOpening)
     ? independentOpening
-    : `同学们好，欢迎来到今天的课堂。${independentOpening.trimStart()}`;
+    : chineseDelivery
+      ? `同学们好，欢迎来到${normalizedTitle ? `《${normalizedTitle}》课程` : '今天的课堂'}。${independentOpening.trimStart()}`
+      : `Hello everyone, welcome to ${normalizedTitle || 'today\'s class'}. ${independentOpening.trimStart()}`;
+}
+
+/** Add a formal resource ending when the final authored speech omitted one. */
+export function normalizeCourseFinalClosing(text: string): string {
+  const trimmed = text.trimEnd();
+  if (FORMAL_COURSE_CLOSING.test(trimmed)) return trimmed;
+  const separator = !trimmed || endsCompleteNarrationSentence(trimmed) ? '' : '。';
+  return /[\u3400-\u9fff]/.test(trimmed)
+    ? `${trimmed}${separator}${trimmed ? ' ' : ''}请把今天形成的认识带到后续的判断与实践中。今天的课程就到这里，感谢大家的认真参与，同学们再见。`
+    : `${trimmed}${trimmed && !endsCompleteNarrationSentence(trimmed) ? '.' : ''}${trimmed ? ' ' : ''}Carry today’s understanding into your next judgment or practice. That concludes today’s course. Thank you for your participation, and goodbye.`;
 }
 
 export function stripFormalNarrationFarewell(text: string): string {
@@ -135,7 +152,9 @@ export function enforceNarrationContinuity(
   context?: SceneGenerationContext,
 ): Action[] {
   if (!context) return actions.map((action) => ({ ...action }));
-  const speechIndexes = actions.flatMap((action, index) => action.type === 'speech' ? [index] : []);
+  const speechIndexes = actions.flatMap((action, index) => (
+    action.type === 'speech' && action.text.trim() ? [index] : []
+  ));
   const firstSpeechIndex = speechIndexes[0];
   const lastSpeechIndex = speechIndexes.at(-1);
   const shouldStripOpening = context.narrationMode === 'embedded-segment'
@@ -150,7 +169,7 @@ export function enforceNarrationContinuity(
       && context.sectionPosition === 'course-first'
       && context.narrationMode === 'standalone-course'
     ) {
-      cleaned = normalizeCourseFirstOpening(cleaned);
+      cleaned = normalizeCourseFirstOpening(cleaned, context.courseTitle);
     }
     if (index === firstSpeechIndex && shouldStripOpening) {
       cleaned = stripRepeatedNarrationOpening(cleaned);
@@ -162,6 +181,13 @@ export function enforceNarrationContinuity(
           ? `${withoutFarewell} 接下来，让我们继续后面的学习。`
           : '接下来，让我们继续后面的学习。';
       }
+    }
+    if (
+      index === lastSpeechIndex
+      && context.narrationMode === 'standalone-course'
+      && context.pageIndex === context.totalPages
+    ) {
+      cleaned = normalizeCourseFinalClosing(cleaned);
     }
     if (
       context.narrationMode === 'embedded-segment'

@@ -71,10 +71,6 @@ interface ValidFocusCue {
   sourceAction?: Extract<Action, { type: 'spotlight' | 'laser' }>;
 }
 
-const MAX_VISUAL_CUES = 8;
-const MAX_LASER_CUES = 2;
-const MIN_DIFFERENT_TARGET_GAP_SEC = 10;
-
 function decodeHtmlText(value: string): string {
   return value
     .replace(/&nbsp;|&#160;|&#xa0;/gi, ' ')
@@ -334,6 +330,19 @@ function validateTarget(
   return occurrenceCount(inventoryTarget.visibleText ?? '', targetValue.selector.quote) > occurrence;
 }
 
+/** Shared exact-target check for authored cues and post-TTS calibration. */
+export function isValidSlideVisualTarget(
+  elements: readonly PPTElement[],
+  target: { elementId: string; selector?: VisualTargetSelector },
+): boolean {
+  const inventory = buildSlideTargetInventory(elements);
+  return validateTarget(
+    'spotlight',
+    target,
+    new Map(inventory.map((item) => [item.elementId, item])),
+  );
+}
+
 function targetKey(cue: ValidFocusCue): string {
   if (!cue.target) return 'none';
   const selector = cue.target.selector;
@@ -417,6 +426,7 @@ function mergeAdjacentSpotlights(
       && cue.action === 'spotlight'
       && targetKey(previous) === targetKey(cue)
       && cue.startIndex <= previous.endIndex + 1
+      && cue.startOffsetMs === 0
       && !crossesPlaybackBoundary(previous.startIndex, cue.endIndex, narration)
     ) {
       const stronger = comparePriority(cue, previous) > 0 ? cue : previous;
@@ -451,129 +461,6 @@ function suppressOverlappingSameTarget(cues: readonly ValidFocusCue[]): ValidFoc
   return stable;
 }
 
-function capByPriority(
-  cues: readonly ValidFocusCue[],
-  maximum: number,
-  applies: (cue: ValidFocusCue) => boolean = () => true,
-): ValidFocusCue[] {
-  const candidates = cues.filter(applies);
-  if (candidates.length <= maximum) return [...cues];
-  const retained = new Set(
-    [...candidates]
-      .sort((left, right) => comparePriority(right, left) || left.startIndex - right.startIndex)
-      .slice(0, maximum),
-  );
-  return cues.filter((cue) => !applies(cue) || retained.has(cue));
-}
-
-function suppressTargetBounce(
-  cues: readonly ValidFocusCue[],
-  narration: readonly NarrationSource[],
-): ValidFocusCue[] {
-  const stable = [...cues];
-  let index = 1;
-  while (index < stable.length - 1) {
-    const before = stable[index - 1]!;
-    const middle = stable[index]!;
-    const after = stable[index + 1]!;
-    if (targetKey(before) !== targetKey(after) || targetKey(before) === targetKey(middle)) {
-      index += 1;
-      continue;
-    }
-    if (crossesPlaybackBoundary(before.startIndex, after.endIndex, narration)) {
-      index += 1;
-      continue;
-    }
-    if (comparePriority(middle, before) > 0 && comparePriority(middle, after) > 0) {
-      stable.splice(index + 1, 1);
-    } else {
-      if (before.action === 'spotlight' && after.action === 'spotlight') {
-        stable[index - 1] = {
-          ...before,
-          endSpeechId: after.endSpeechId,
-          endIndex: after.endIndex,
-          necessity: comparePriority(after, before) > 0 ? after.necessity : before.necessity,
-          omissionRisk: combineOmissionRisk(before.omissionRisk, after.omissionRisk),
-        };
-        stable.splice(index, 2);
-      } else {
-        stable.splice(index, 2);
-      }
-    }
-    index = Math.max(1, index - 1);
-  }
-  return stable;
-}
-
-const EXPLICIT_CONTRAST = /(?:对比|相比|比较|区别|不同于|相反|一方面[^。！？!?]{0,80}另一方面|\bversus\b|\bvs\.?\b|\bcontrast\b|\bcompare\b)/iu;
-const EXPLICIT_SEQUENCE = /(?:分别|依次|包括|三个|四个|五个|第一|第二|第三|首先|其次|然后|接着|最后|一头[^。！？!?]{0,100}另一头)/iu;
-
-function hasExplicitEssentialContrast(
-  left: ValidFocusCue,
-  right: ValidFocusCue,
-  narration: readonly NarrationSource[],
-): boolean {
-  if (left.necessity !== 'essential' || right.necessity !== 'essential') return false;
-  const text = narration
-    .slice(Math.min(left.startIndex, right.startIndex), Math.max(left.startIndex, right.startIndex) + 1)
-    .map((source) => source.text)
-    .join(' ');
-  return EXPLICIT_CONTRAST.test(text);
-}
-
-function hasExplicitEssentialSequence(
-  left: ValidFocusCue,
-  right: ValidFocusCue,
-  narration: readonly NarrationSource[],
-): boolean {
-  if (
-    left.necessity !== 'essential'
-    || right.necessity !== 'essential'
-    || right.startSec <= left.startSec
-  ) return false;
-  const text = narration
-    .slice(Math.min(left.startIndex, right.startIndex), Math.max(left.endIndex, right.endIndex) + 1)
-    .map((source) => source.text)
-    .join(' ');
-  return EXPLICIT_SEQUENCE.test(text);
-}
-
-function enforceDifferentTargetSpacing(
-  cues: readonly ValidFocusCue[],
-  narration: readonly NarrationSource[],
-): ValidFocusCue[] {
-  const stable: ValidFocusCue[] = [];
-  for (const cue of cues) {
-    let keep = true;
-    while (keep && stable.length > 0) {
-      const previous = stable.at(-1)!;
-      if (
-        targetKey(previous) === targetKey(cue)
-        || crossesPlaybackBoundary(previous.startIndex, cue.startIndex, narration)
-        || cue.startSec - previous.startSec >= MIN_DIFFERENT_TARGET_GAP_SEC
-        || (
-          cue.startIndex > previous.endIndex
-          && cue.startIndex > previous.startIndex
-          && hasExplicitEssentialContrast(previous, cue, narration)
-        )
-        || (
-          cue.startOffsetMs > 0
-          && hasExplicitEssentialSequence(previous, cue, narration)
-        )
-      ) {
-        break;
-      }
-      if (comparePriority(cue, previous) > 0) {
-        stable.pop();
-      } else {
-        keep = false;
-      }
-    }
-    if (keep) stable.push(cue);
-  }
-  return stable;
-}
-
 function stabilizeFocusCues(
   cues: readonly ValidFocusCue[],
   narration: readonly NarrationSource[],
@@ -593,13 +480,10 @@ function stabilizeFocusCues(
   stable = preferPreciseTargets(stable);
   stable = mergeAdjacentSpotlights(stable, narration);
   stable = suppressOverlappingSameTarget(stable);
-  stable = capByPriority(stable, MAX_LASER_CUES, (cue) => cue.action === 'laser');
-  stable = capByPriority(stable, MAX_VISUAL_CUES);
-  stable = suppressTargetBounce(stable, narration);
-  stable = mergeAdjacentSpotlights(stable, narration);
-  stable = enforceDifferentTargetSpacing(stable, narration);
-  stable = mergeAdjacentSpotlights(stable, narration);
-  return stable.slice(0, MAX_VISUAL_CUES);
+  // Preserve intentional target changes and later returns to a prior object.
+  // The narration author chooses cue count from teaching need; calibration only
+  // verifies references, removes duplicates and attaches measured timing.
+  return mergeAdjacentSpotlights(stable, narration);
 }
 
 function cueAction(cue: ValidFocusCue): Action | undefined {

@@ -47,7 +47,15 @@ function raw(text = '先看看学校简介。它有没有写出这个年份？',
 
 describe('independent first-pass teaching narration', () => {
   it('authors a complete section after seeing every actual slide and returns each page once', async () => {
-    const first = { ...outline(), lectureSectionId: 'section-a', teachingUnitIds: ['unit-a'] };
+    const first = {
+      ...outline(), lectureSectionId: 'section-a', teachingUnitIds: ['unit-a'],
+      teachingToolPlan: [{
+        tool: 'laser-pointer' as const,
+        trigger: '沿核验步骤讲解时',
+        purpose: '依次指示步骤',
+        content: ['明确说法', '查相关记录'],
+      }],
+    };
     const second: SceneOutline = {
       ...outline(), id: 'page-b', title: '相关记录怎样支持说法', order: 1, lectureSectionId: 'section-a',
       teachingUnitIds: ['unit-a'],
@@ -63,7 +71,7 @@ describe('independent first-pass teaching narration', () => {
     const aiCall = vi.fn().mockResolvedValue(JSON.stringify(response));
     const generated = await generateTeachingSectionNarration({
       sectionId: 'section-a', pages: [{ outline: first, content: content() }, { outline: second, content: content('记录与说法必须直接相关') }],
-      requirements: { requirement: '讲清核验方法' }, courseProgression: [first, second],
+      requirements: { requirement: '讲清核验方法' }, courseTitle: 'AI信息核验', courseProgression: [first, second],
       agents: [{ id: 'teacher', name: '林老师', role: 'teacher', persona: '温暖、清楚地逐步解释。' }], aiCall,
     });
     expect(generated.pages.map((page) => page.pageId)).toEqual(['page-a', 'page-b']);
@@ -76,14 +84,22 @@ describe('independent first-pass teaching narration', () => {
     expect(aiCall.mock.calls[0][0]).toContain('introduces, deepens, and references as page ownership');
     expect(aiCall.mock.calls[0][0]).toContain('actual relationship on the slide');
     expect(aiCall.mock.calls[0][0]).toContain('local explanatory value, learner familiarity');
+    expect(aiCall.mock.calls[0][0]).toContain('standalone AI resource must feel complete');
+    expect(aiCall.mock.calls[0][0]).toContain('synthesize what the learner can now explain or do');
     expect(aiCall.mock.calls[0][0]).toContain('温暖、清楚地逐步解释');
     expect(aiCall.mock.calls[0][0]).toContain('copied as one contiguous substring from that exact finalized segment text');
+    expect(aiCall.mock.calls[0][0]).toContain('a spotlight that starts inside a segment remains until that segment ends');
+    expect(aiCall.mock.calls[0][0]).toContain('Choose laser for an ordered scan');
+    expect(aiCall.mock.calls[0][0]).toContain('remaining ordered objects as waypoints');
+    expect(prompt.visualCueExamples.orderedPath.waypoints[0].elementId).toContain('actualSlide');
     expect(prompt.pages[0].explanation).toContain('记录需要与具体说法相关');
     expect(prompt.pages[0].teachingPlan.visibleContent).toEqual(['语气肯定 ≠ 事实正确']);
-    expect(prompt.pages[0].deliveryContext).toMatchObject({ sectionPosition: 'course-first', pageIndex: 1 });
+    expect(prompt.pages[0].deliveryContext).toMatchObject({ sectionPosition: 'course-first', pageIndex: 1, courseTitle: 'AI信息核验' });
     expect(prompt.pages[0].teachingPlan.entryPoint.object).toContain('班级小报');
+    expect(prompt.pages[0].visualActionIntent[0]).toMatchObject({ tool: 'laser-pointer', purpose: '依次指示步骤' });
     expect(prompt.teacherVoice).toEqual({ name: '林老师', role: 'teacher' });
-    expect(generated.pages[0]?.segments[0]?.text).toMatch(/^同学们好/);
+    expect(generated.pages[0]?.segments[0]?.text).toMatch(/^同学们好，欢迎来到《AI信息核验》课程。/);
+    expect(generated.pages[1]?.segments.at(-1)?.text).toMatch(/感谢大家的认真参与，同学们再见。$/);
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0], response.pages[0]] }, 'section-a', [first, second])).toThrow('重复返回页面');
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0]] }, 'section-a', [first, second])).toThrow('缺少页面');
   });
@@ -130,7 +146,8 @@ describe('independent first-pass teaching narration', () => {
     });
 
     expect(aiCall).toHaveBeenCalledOnce();
-    expect(generated.pages[0]?.segments[0]?.text).toBe('同学们好，欢迎来到今天的课堂。先明确具体说法，再查找能够直接回答它的记录。');
+    expect(generated.pages[0]?.segments[0]?.text).toMatch(/^同学们好，欢迎来到今天的课堂。先明确具体说法，再查找能够直接回答它的记录。/);
+    expect(generated.pages[0]?.segments[0]?.text).toMatch(/感谢大家的认真参与，同学们再见。$/);
     expect(generated.pages[0]?.segments[0]?.anchors).toBeUndefined();
   });
 
@@ -213,7 +230,8 @@ describe('independent first-pass teaching narration', () => {
     expect(input.progression[0].newContent).toBe('按相关记录核验');
     expect(input.progression[0]).not.toHaveProperty('evidence');
     expect(input.semanticUnits.visible[0].id).toBe('page-a:visible-1');
-    expect(result.segments[0].text).toBe(`同学们好，欢迎来到今天的课堂。${raw().segments[0].text}`);
+    expect(result.segments[0].text).toMatch(new RegExp(`^同学们好，欢迎来到今天的课堂。${raw().segments[0].text}`));
+    expect(result.segments[0].text).toMatch(/感谢大家的认真参与，同学们再见。$/);
   });
 
   it('keeps generated words intact and binds a supported visual without a model action call', () => {
@@ -229,6 +247,59 @@ describe('independent first-pass teaching narration', () => {
       expect.objectContaining({ type: 'spotlight', elementId: 'rendered-text', necessity: 'helpful', speechId: 'page-a:speech-1' }),
       { id: 'page-a:speech-1', type: 'speech', text },
     ]);
+  });
+
+  it('binds narration directly to actual slide elements and compiles an ordered laser sweep', () => {
+    const slide = content('理论');
+    slide.elements[0].id = 'theory-node';
+    slide.elements.push(
+      { ...content('模式').elements[0], id: 'mode-node', left: 360 },
+      { ...content('方法').elements[0], id: 'method-node', left: 710 },
+    );
+    const narration = normalizeTeachingNarration({ segments: [{
+      text: '沿着这条关系看：理论先具体化为模式，模式再转化为方法。',
+      semanticIds: ['page-a:teaching', 'page-a:visible-1'],
+      anchors: [{
+        semanticId: 'page-a:visible-1',
+        quote: '理论先具体化为模式',
+        visualCue: {
+          type: 'laser',
+          necessity: 'helpful',
+          target: { elementId: 'theory-node', selector: { quote: '理论' } },
+          waypoints: [{ elementId: 'mode-node' }, { elementId: 'method-node', selector: { quote: '方法' } }],
+          durationMs: 6000,
+        },
+      }],
+    }] }, outline());
+
+    const result = compileTeachingNarrationActions({ outline: outline(), content: slide, narration });
+
+    expect(result.issues).toEqual([]);
+    expect(result.actions[0]).toMatchObject({
+      type: 'laser',
+      elementId: 'theory-node',
+      selector: { quote: '理论' },
+      waypoints: [{ elementId: 'mode-node' }, { elementId: 'method-node', selector: { quote: '方法' } }],
+      duration: 6000,
+      speechAnchor: { quote: '理论先具体化为模式', occurrence: 0 },
+    });
+  });
+
+  it('omits an invalid direct visual target without rejecting valid narration', () => {
+    const narration = normalizeTeachingNarration({ segments: [{
+      text: '现在看这一条关系。',
+      semanticIds: ['page-a:teaching', 'page-a:visible-1'],
+      anchors: [{
+        semanticId: 'page-a:visible-1', quote: '这一条关系',
+        visualCue: { type: 'spotlight', necessity: 'helpful', target: { elementId: 'missing-node' } },
+      }],
+    }] }, outline());
+
+    const result = compileTeachingNarrationActions({ outline: outline(), content: content(), narration });
+
+    expect(result.actions).toEqual([{ id: 'page-a:speech-1', type: 'speech', text: '现在看这一条关系。' }]);
+    expect(result.issues.some((issue) => issue.code === 'unknown-element')).toBe(true);
+    expect(result.issues.every((issue) => issue.severity === 'warning')).toBe(true);
   });
 
   it('omits unbound or ambiguous optional cues with warnings, never guesses or rewrites speech', () => {
@@ -278,7 +349,8 @@ describe('independent first-pass teaching narration', () => {
   it('corrects malformed structure once but leaves valid narration and transport faults alone', async () => {
     const aiCall = vi.fn().mockResolvedValueOnce('{"segments":[]}').mockResolvedValueOnce(JSON.stringify(raw()));
     const result = await generateTeachingNarration({ outline: outline(), requirements: { requirement: '讲课' }, aiCall });
-    expect(result.segments[0].text).toBe(`同学们好，欢迎来到今天的课堂。${raw().segments[0].text}`);
+    expect(result.segments[0].text).toMatch(new RegExp(`^同学们好，欢迎来到今天的课堂。${raw().segments[0].text}`));
+    expect(result.segments[0].text).toMatch(/感谢大家的认真参与，同学们再见。$/);
     expect(aiCall).toHaveBeenCalledTimes(2);
     expect(aiCall.mock.calls[1][1]).toContain('Technical JSON/schema correction only');
     const transport = vi.fn().mockRejectedValue(new Error('connection reset'));
@@ -319,6 +391,10 @@ describe('independent first-pass teaching narration', () => {
     expect(call.mock.calls[0][1]).toContain('Shared page contract');
     expect(call.mock.calls[0][0]).toContain('Choose the visual form from the stated relationship');
     expect(call.mock.calls[0][0]).toContain('Do not default to cards');
+    expect(call.mock.calls[0][0]).toContain('distinct targetable element');
+    expect(call.mock.calls[0][0]).toContain('rather than assigning it arbitrarily to the first label');
     expect(call.mock.calls[0][0]).toContain('remove decorative copy before shrinking');
+    expect(call.mock.calls[0][0]).toContain('opening page of a standalone AI course resource');
+    expect(call.mock.calls[0][0]).toContain('abstract definition alone is not an adequate knowledge entry');
   });
 });

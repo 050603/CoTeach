@@ -69,10 +69,74 @@ describe("quick positioning generation", () => {
     expect(shorterPlans.reduce((sum, plan) => sum + (plan.teachingBudgetSec ?? 0), 0)).toBe(792);
     expect(shorterPlans.reduce((sum, plan) => sum + (plan.suggestedMaxPages ?? 0), 0))
       .toBeLessThan(plans.reduce((sum, plan) => sum + (plan.suggestedMaxPages ?? 0), 0));
+    expect(plans.every((plan) => (
+      (plan.teachingBudgetSec ?? 0) / Math.max(1, plan.suggestedMinPages ?? 1) <= 180
+    ))).toBe(true);
     expect(plans.flatMap((plan) => plan.knowledgePointIds)).toEqual(
       knowledgePoints.map((point) => point.id),
     );
     expect(new Set(plans.flatMap((plan) => plan.knowledgePointIds)).size).toBe(20);
+  }, 15_000);
+
+  it("keeps missing groups separate and splits an overlong group at knowledge boundaries", async () => {
+    const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
+    const ungrouped = buildTeachingBlueprintSectionPlans({
+      knowledgePoints: [
+        { id: "a", name: "概念 A", description: "", level: "core" as const },
+        { id: "b", name: "概念 B", description: "", level: "core" as const },
+      ],
+    }, 20 * 60);
+    expect(ungrouped.map((plan) => plan.knowledgePointIds)).toEqual([["a"], ["b"]]);
+
+    const grouped = buildTeachingBlueprintSectionPlans({
+      knowledgePoints: ["a", "b", "c", "d"].map((id) => ({
+        id,
+        name: `知识 ${id.toUpperCase()}`,
+        description: "",
+        level: "core" as const,
+        groupId: "whole-lesson",
+        groupName: "整节课",
+      })),
+    }, 30 * 60);
+    expect(grouped).toHaveLength(4);
+    expect(grouped.flatMap((plan) => plan.knowledgePointIds)).toEqual(["a", "b", "c", "d"]);
+    expect(grouped.every((plan) => (plan.suggestedMinPages ?? 0) >= 2)).toBe(true);
+  }, 15_000);
+
+  it("restores every full-course outline field after a one-section test preview", async () => {
+    const { restoreCourseOutlineSnapshotForFullPromotion } = await import("./job-runner");
+    const fullOutlines = [
+      {
+        id: "section-1-page", type: "slide" as const, title: "第一节讲解", description: "讲解第一节",
+        keyPoints: ["第一节知识"], order: 0, lectureSectionId: "section-1", lectureSectionTitle: "第一节", knowledgePointIds: ["kp-1"], targetDurationSec: 120,
+      },
+      {
+        id: "section-1-check", type: "quiz" as const, title: "第一节检测", description: "检测第一节",
+        keyPoints: ["第一节检测"], order: 1, lectureSectionId: "section-1", lectureSectionTitle: "第一节", knowledgePointIds: ["kp-1"], targetDurationSec: 60,
+      },
+      {
+        id: "section-2-page", type: "slide" as const, title: "第二节讲解", description: "讲解第二节",
+        keyPoints: ["第二节知识"], order: 2, lectureSectionId: "section-2", lectureSectionTitle: "第二节", knowledgePointIds: ["kp-2"], targetDurationSec: 120,
+      },
+      {
+        id: "section-2-check", type: "quiz" as const, title: "第二节检测", description: "检测第二节",
+        keyPoints: ["第二节检测"], order: 3, lectureSectionId: "section-2", lectureSectionTitle: "第二节", knowledgePointIds: ["kp-2"], targetDurationSec: 60,
+      },
+    ];
+    const preview = {
+      id: "course-1",
+      content: {
+        lessonOutline: [{ id: "section-1-page" }],
+        _openmaicSceneOutlines: [fullOutlines[0], fullOutlines[1]],
+        knowledgeLectureSections: [{ id: "section-1" }],
+      },
+    } as unknown as Course;
+
+    const restored = restoreCourseOutlineSnapshotForFullPromotion(preview, fullOutlines);
+
+    expect(restored.content._openmaicSceneOutlines?.map((item) => item.id)).toEqual(fullOutlines.map((item) => item.id));
+    expect(restored.content.lessonOutline.map((item) => item.id)).toEqual(fullOutlines.map((item) => item.id));
+    expect(restored.content.knowledgeLectureSections?.map((item) => item.id)).toEqual(["section-1", "section-2"]);
   }, 15_000);
 
   it("moves the fixed teaching budget ahead of knowledge-scope generation", async () => {

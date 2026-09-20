@@ -73,6 +73,8 @@ describe('teacher-guided narration edits', () => {
     const { tool, aiCall } = setup([{ type: 'text', content: '新的基础讲解。' }], false);
     const result = await tool.execute('edit', { sceneId: 'scene' });
     expect(aiCall).toHaveBeenCalledTimes(1);
-    expect(result.details.actions).toEqual([expect.objectContaining({ type: 'speech', text: '新的基础讲解。' })]);
+    expect(result.details.actions).toEqual([expect.objectContaining({
+      type: 'speech', text: expect.stringMatching(/^同学们好，欢迎来到今天的课堂。新的基础讲解。.*同学们再见。$/),
+    })]);
   });
 });

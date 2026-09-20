@@ -1,42 +1,41 @@
-import { describe, expect, it } from "vitest";
-import { isTestLessonPromotion, selectClassroomGenerationOutlines } from "./generation-scope";
+import { describe, expect, it } from 'vitest';
+import {
+  resolveFullCoursePromotionOutlines,
+  selectClassroomGenerationOutlines,
+} from './generation-scope';
 
-const outlines = [
-  { id: "s1-a", type: "slide", title: "概念", lectureSectionId: "section-1", lectureSectionTitle: "第一节", targetDurationSec: 180 },
-  { id: "s1-b", type: "quiz", title: "检测", lectureSectionId: "section-1", lectureSectionTitle: "第一节", targetDurationSec: 60 },
-  { id: "s2-a", type: "interactive", title: "练习", lectureSectionId: "section-2", lectureSectionTitle: "第二节", targetDurationSec: 240 },
-  { id: "s2-b", type: "quiz", title: "检测", lectureSectionId: "section-2", lectureSectionTitle: "第二节", targetDurationSec: 60 },
+const fullOutline = [
+  { id: 's1-p1', type: 'slide', title: '第一节讲解', lectureSectionId: 's1', lectureSectionTitle: '第一节', targetDurationSec: 120 },
+  { id: 's1-check', type: 'quiz', title: '第一节检测', lectureSectionId: 's1', lectureSectionTitle: '第一节', targetDurationSec: 60 },
+  { id: 's2-p1', type: 'slide', title: '第二节讲解', lectureSectionId: 's2', lectureSectionTitle: '第二节', targetDurationSec: 120 },
+  { id: 's2-check', type: 'quiz', title: '第二节检测', lectureSectionId: 's2', lectureSectionTitle: '第二节', targetDurationSec: 60 },
 ] as const;
 
-describe("classroom generation scope", () => {
-  it("only promotes retained test pages when moving from test to the full course", () => {
-    expect(isTestLessonPromotion("test-lesson", "full-course")).toBe(true);
-    expect(isTestLessonPromotion("full-course", "test-lesson")).toBe(false);
-    expect(isTestLessonPromotion(undefined, "full-course")).toBe(false);
-  });
-  it("keeps the complete confirmed outline for a formal generation", () => {
-    const result = selectClassroomGenerationOutlines(outlines, "full-course");
-    expect(result.outlines.map((scene) => scene.id)).toEqual(["s1-a", "s1-b", "s2-a", "s2-b"]);
-    expect(result.testLesson).toBeUndefined();
-  });
+describe('test lesson promotion scope', () => {
+  it('recovers the canonical full outline after the course preview has been narrowed to one test section', () => {
+    const selected = selectClassroomGenerationOutlines(fullOutline, 'test-lesson');
+    expect(selected.outlines.map((outline) => outline.id)).toEqual(['s1-p1', 's1-check']);
 
-  it("selects one complete formal lesson without changing its pages", () => {
-    const result = selectClassroomGenerationOutlines(outlines, "test-lesson");
-    expect(result.outlines).toEqual([outlines[0], outlines[1]]);
-    expect(result).toMatchObject({
-      fullSceneCount: 4,
-      testLesson: {
-        sectionId: "section-1",
-        sectionTitle: "第一节",
-        sceneOutlineIds: ["s1-a", "s1-b"],
-        durationSeconds: 240,
-      },
+    const restored = resolveFullCoursePromotionOutlines({
+      persistedOutlines: fullOutline,
+      expectedFullSceneCount: fullOutline.length,
+      testLesson: selected.testLesson,
     });
+
+    expect(restored?.map((outline) => outline.id)).toEqual(fullOutline.map((outline) => outline.id));
   });
 
-  it("does not silently turn a loose page into a test lesson", () => {
-    expect(() => selectClassroomGenerationOutlines([
-      { id: "only", type: "slide", title: "孤立页面", targetDurationSec: 60 },
-    ], "test-lesson")).toThrow(/完整知识小节/);
+  it('rejects a truncated, duplicate, or mismatched persisted outline', () => {
+    const testLesson = selectClassroomGenerationOutlines(fullOutline, 'test-lesson').testLesson;
+    expect(resolveFullCoursePromotionOutlines({
+      persistedOutlines: fullOutline.slice(0, 2), expectedFullSceneCount: 4, testLesson,
+    })).toBeNull();
+    expect(resolveFullCoursePromotionOutlines({
+      persistedOutlines: [fullOutline[0], fullOutline[0], fullOutline[2], fullOutline[3]], expectedFullSceneCount: 4, testLesson,
+    })).toBeNull();
+    expect(resolveFullCoursePromotionOutlines({
+      persistedOutlines: fullOutline, expectedFullSceneCount: 4,
+      testLesson: testLesson ? { ...testLesson, sceneOutlineIds: ['missing-page'] } : undefined,
+    })).toBeNull();
   });
 });

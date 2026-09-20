@@ -1491,7 +1491,12 @@ async function generateClassroomInternal(
         );
         const narration = await generateTeachingNarration({
           outline: safeOutline, requirements, courseTitle, languageDirective,
-          outlineContext: buildNarrationContext(outlines, index), courseProgression: outlines, agents, aiCall: narrationCall,
+          outlineContext: buildNarrationContext(
+            outlineContext,
+            Math.max(0, outlineContext.findIndex((candidate) => candidate.id === safeOutline.id)),
+            { courseTitle },
+          ),
+          courseProgression: outlineContext, agents, aiCall: narrationCall,
         });
         await saveStage('narration', { teachingNarration: narration }, narrationFingerprint);
         return narration;
@@ -1571,7 +1576,11 @@ async function generateClassroomInternal(
       throwIfAborted(options.signal);
       const actionAiCall = await getSceneActionsAiCall();
       const actionOptions = {
-        ctx: buildNarrationContext(outlines, index),
+        ctx: buildNarrationContext(
+          outlineContext,
+          Math.max(0, outlineContext.findIndex((candidate) => candidate.id === safeOutline.id)),
+          { courseTitle },
+        ),
         agents,
         pblProfile: requirements.pblProfile,
         teachingConstraints: requirements.teachingConstraints,

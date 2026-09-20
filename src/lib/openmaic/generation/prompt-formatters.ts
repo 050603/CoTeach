@@ -29,11 +29,16 @@ export function buildCourseContext(ctx?: SceneGenerationContext): string {
     lines.push('Continuity: Start directly with the knowledge or task. Never greet, welcome learners, introduce a new course, or describe this as a separate lesson. Never use “last class/previous lesson” for the immediately preceding main-course page.');
     lines.push('Ending: Do not thank the audience, say goodbye, or formally close a course. End with a concise learning takeaway or a natural bridge such as “Now let us continue with the next part.”');
   } else if (ctx.pageIndex === 1) {
-    lines.push('Position: This is the FIRST page. Open with a greeting and course introduction.');
+    lines.push(`Position: This is the FIRST${ctx.totalPages === 1 ? ' AND LAST' : ''} page of the standalone AI course resource.`);
+    if (ctx.courseTitle) lines.push(`Course title for a natural welcome: ${ctx.courseTitle}`);
+    lines.push('Opening: Give a brief natural greeting, then use the planned familiar experience, observable contrast, object, or question as a real knowledge entry. Guide attention to its relevant feature and explicitly bridge into the first idea. The resource must make sense on its own even if a teacher introduced the wider lesson earlier. Do not merely attach a greeting to a definition, recite objectives, or invent learner responses.');
+    if (ctx.totalPages === 1) {
+      lines.push('Ending: After the page responsibility is complete, synthesize what learners can now explain or do, connect it to later use, and formally thank the class and say goodbye.');
+    }
   } else if (ctx.sectionPosition === 'section-first') {
     lines.push('Position: This is the FIRST page of a new section. Briefly open the section and connect it to prior learning; do not restart the whole course.');
   } else if (ctx.pageIndex === ctx.totalPages) {
-    lines.push('Position: This is the LAST page. Conclude the course with a summary and closing.');
+    lines.push('Position: This is the LAST page. Complete the page responsibility, synthesize what learners can now explain or do without mechanically repeating every point, connect it to a plausible later use, and formally close the course with thanks and a farewell.');
     lines.push(
       'Transition: Continue naturally from the previous page. Do NOT greet or re-introduce.',
     );

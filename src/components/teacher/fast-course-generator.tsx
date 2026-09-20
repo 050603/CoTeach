@@ -963,7 +963,7 @@ export function FastCourseGenerator({
               <div className="flex flex-wrap items-center gap-1.5">
                 <OptionToggle
                   active={assessmentMode === "constructed-response"}
-                  description="开启后小节检测全部使用简答；关闭时以选择、判断为主，仅保留极少量短答"
+                  description="开启后每小节设置 1 道综合简答题；关闭时每小节设置 2–4 道选择、判断、填空或拖拽配对题"
                   icon={PenLine}
                   label="深度作答"
                   onClick={() => setAssessmentMode((current) => current === "constructed-response" ? "adaptive" : "constructed-response")}
@@ -1003,7 +1003,7 @@ export function FastCourseGenerator({
                         : "text-stone-500 hover:bg-white hover:text-blue-700",
                     )}
                     onClick={() => setAssessmentMode((current) => current === "constructed-response" ? "adaptive" : "constructed-response")}
-                    title="开启后小节检测全部使用简答题；默认使用更易上手的灵活题型"
+                    title="开启后每小节设置 1 道综合简答题；默认每小节使用 2–4 道选择、判断、填空或拖拽配对题"
                     type="button"
                   >
                     <PenLine className="size-3.5" />

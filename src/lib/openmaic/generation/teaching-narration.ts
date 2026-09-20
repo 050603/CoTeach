@@ -1,6 +1,7 @@
 import { loadSnippet } from '@openmaic/lib/prompts';
 import { createLogger } from '@openmaic/lib/logger';
 import type { GeneratedSlideContent, SceneOutline, UserRequirements } from '@openmaic/lib/types/generation';
+import type { LaserWaypoint, VisualTargetSelector } from '@openmaic/lib/types/action';
 import { formatTeachingConstraintsForPrompt } from '@openmaic/lib/pedagogy/teaching-constraints';
 import type { AICallFn, AgentInfo, SceneGenerationContext } from './pipeline-types';
 import { parseJsonResponse } from './json-repair';
@@ -9,18 +10,19 @@ import { compileActionBindings, type ActionCompilationResult, type VisualActionC
 import type { NarrationModuleOutput, SlideElementBinding } from './action-binding-types';
 import {
   buildNarrationContext,
+  normalizeCourseFinalClosing,
   normalizeCourseFirstOpening,
   rewriteFalseFutureSessionReferences,
   stripFormalNarrationFarewell,
   stripRepeatedNarrationOpening,
 } from './narration-continuity';
 
-export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v13-learner-entry';
+export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v15-complete-lesson-arc';
 /**
  * Changes to local normalization invalidate narration attempt checkpoints
  * without invalidating the already generated slide-content checkpoints.
  */
-export const TEACHING_NARRATION_NORMALIZATION_VERSION = 'verified-anchor-recovery-v4-continuity';
+export const TEACHING_NARRATION_NORMALIZATION_VERSION = 'verified-anchor-recovery-v5-direct-targets';
 
 const log = createLogger('TeachingNarration');
 
@@ -38,10 +40,15 @@ function pageNarrationContext(
   sectionIndex: number,
   sectionOutlines: readonly SceneOutline[],
   courseProgression?: readonly SceneOutline[],
+  courseTitle?: string,
 ): SceneGenerationContext {
   const progression = courseProgression?.length ? courseProgression : sectionOutlines;
   const courseIndex = progression.findIndex((candidate) => candidate.id === outline.id);
-  return buildNarrationContext(progression, courseIndex >= 0 ? courseIndex : sectionIndex);
+  return buildNarrationContext(
+    progression,
+    courseIndex >= 0 ? courseIndex : sectionIndex,
+    { courseTitle },
+  );
 }
 
 /**
@@ -54,24 +61,31 @@ function applyPageNarrationContinuity(
   narration: NarrationModuleOutput,
   context: SceneGenerationContext,
 ): NarrationModuleOutput {
-  const lastIndex = narration.segments.length - 1;
+  const lastSpokenIndex = narration.segments.findLastIndex((segment) => segment.text.trim().length > 0);
   const segments = narration.segments.map((segment, index) => {
     let text = segment.text;
     if (index === 0) {
       text = context.sectionPosition === 'course-first' && context.narrationMode === 'standalone-course'
-        ? normalizeCourseFirstOpening(text)
+        ? normalizeCourseFirstOpening(text, context.courseTitle)
         : stripRepeatedNarrationOpening(text);
     }
     if (context.narrationMode === 'embedded-segment' || context.pageIndex < context.totalPages) {
       text = rewriteFalseFutureSessionReferences(text);
     }
-    if (index === lastIndex && context.narrationMode === 'embedded-segment') {
+    if (index === lastSpokenIndex && context.narrationMode === 'embedded-segment') {
       const withoutFarewell = stripFormalNarrationFarewell(text);
       text = withoutFarewell === text
         ? text
         : withoutFarewell
           ? `${withoutFarewell} 接下来，让我们继续后面的学习。`
           : '接下来，让我们继续后面的学习。';
+    }
+    if (
+      index === lastSpokenIndex
+      && context.narrationMode === 'standalone-course'
+      && context.pageIndex === context.totalPages
+    ) {
+      text = normalizeCourseFinalClosing(text);
     }
     const anchors = (segment.anchors ?? []).filter((anchor) => (
       quoteOccurrenceExists(text, anchor.quote, anchor.occurrence)
@@ -86,12 +100,13 @@ function applySectionNarrationContinuity(
   output: TeachingSectionNarrationOutput,
   outlines: readonly SceneOutline[],
   courseProgression?: readonly SceneOutline[],
+  courseTitle?: string,
 ): TeachingSectionNarrationOutput {
   return {
     ...output,
     pages: output.pages.map((page, index) => applyPageNarrationContinuity(
       page,
-      pageNarrationContext(outlines[index]!, index, outlines, courseProgression),
+      pageNarrationContext(outlines[index]!, index, outlines, courseProgression, courseTitle),
     )),
   };
 }
@@ -201,10 +216,14 @@ export function withTeachingSlideGuidance(
 ): AICallFn {
   const { visible } = buildTeachingNarrationSemantics(outline);
   const plan = outline.teachingBrief?.teachingPlan;
+  const isStandaloneCourseOpening = outline.order === 0 && outline.narrationMode !== 'embedded-segment';
   return async (system, prompt, images) => {
     const response = await aiCall([
     system,
-    'Use the shared page contract below as the teaching meaning of this slide. Preserve the required visible statements, but do not copy the oral explanation onto the canvas. Choose the visual form from the stated relationship: aligned comparison for differences, connected stages for a process, a relationship diagram for causes or systems, a chart for quantities, a sequence for derivation, an illustration for a concrete scene, or concise text when no stronger visual relation exists. These are choices, not a fixed template. Do not default to cards, equal columns, question titles, or an activity worksheet. Use each supplied semantic ID as the ID of the element carrying that statement when the schema permits. Keep required material readable and within the canvas; remove decorative copy before shrinking or dropping teaching evidence. Internal IDs and authoring fields must never be learner-visible. Return only the original slide response contract; do not add narration, source status, review notes, or visual actions.',
+    'Use the shared page contract below as the teaching meaning of this slide. Preserve the required visible statements, but do not copy the oral explanation onto the canvas. Choose the visual form from the stated relationship: aligned comparison for differences, connected stages for a process, a relationship diagram for causes or systems, a chart for quantities, a sequence for derivation, an illustration for a concrete scene, or concise text when no stronger visual relation exists. These are choices, not a fixed template. Do not default to cards, equal columns, question titles, or an activity worksheet. Keep every independently referenced comparison item, process stage, diagram node, and worked step as a distinct targetable element; do not merge an entire sequence into one text box. Use each supplied semantic ID on the element that best represents the complete visible statement, rather than assigning it arbitrarily to the first label in a multi-object relationship. Keep required material readable and within the canvas; remove decorative copy before shrinking or dropping teaching evidence. Internal IDs and authoring fields must never be learner-visible. Return only the original slide response contract; do not add narration, source status, review notes, or visual actions.',
+    isStandaloneCourseOpening
+      ? 'This is the opening page of a standalone AI course resource. Make the adopted entryPoint visible through its concrete object, familiar situation, meaningful contrast, or question so narration can begin from something learners can inspect or recall. The slide may also begin the first concept when time is short, but a course title, objectives list, or abstract definition alone is not an adequate knowledge entry.'
+      : '',
   ].join('\n'), `${prompt}\n\nShared page contract:\n${JSON.stringify({
       understanding: plan?.purpose,
       introduces: plan?.introduces,
@@ -219,6 +238,38 @@ export function withTeachingSlideGuidance(
     onRawResponse?.(response);
     return response;
   };
+}
+
+function normalizeVisualTargetSelector(value: unknown): VisualTargetSelector | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const occurrence = Number.isInteger(record.occurrence) && Number(record.occurrence) >= 0
+    ? Number(record.occurrence) : undefined;
+  const quote = typeof record.quote === 'string' && record.quote.trim()
+    ? record.quote.trim() : undefined;
+  const cellId = typeof record.cellId === 'string' && record.cellId.trim()
+    ? record.cellId.trim() : undefined;
+  if (cellId) return { cellId, ...(quote ? { quote } : {}), ...(occurrence !== undefined ? { occurrence } : {}) };
+  if (quote) return { quote, ...(occurrence !== undefined ? { occurrence } : {}) };
+  return undefined;
+}
+
+function normalizeVisualTarget(value: unknown): { elementId: string; selector?: VisualTargetSelector } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const elementId = typeof record.elementId === 'string' ? record.elementId.trim() : '';
+  if (!elementId) return undefined;
+  const selector = normalizeVisualTargetSelector(record.selector);
+  return { elementId, ...(selector ? { selector } : {}) };
+}
+
+function normalizeLaserWaypoints(value: unknown): LaserWaypoint[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const waypoints = value.flatMap((item) => {
+    const target = normalizeVisualTarget(item);
+    return target ? [target] : [];
+  });
+  return waypoints.length ? waypoints : undefined;
 }
 
 /** Structural checks only. Never rewrite the teacher's generated words. */
@@ -276,6 +327,8 @@ export function normalizeTeachingNarration(value: unknown, outline: SceneOutline
           ? anchor.visualCue as Record<string, unknown> : undefined;
         const cueType: 'laser' | 'spotlight' | undefined = rawCue?.type === 'laser' || rawCue?.type === 'spotlight'
           ? rawCue.type : undefined;
+        const target = normalizeVisualTarget(rawCue?.target);
+        const waypoints = cueType === 'laser' ? normalizeLaserWaypoints(rawCue?.waypoints) : undefined;
         return [{
           id: `${id}:anchor-${anchorIndex + 1}`,
           semanticId,
@@ -284,6 +337,8 @@ export function normalizeTeachingNarration(value: unknown, outline: SceneOutline
           ...(cueType ? { visualCue: {
             type: cueType,
             necessity: rawCue?.necessity === 'essential' ? 'essential' as const : 'helpful' as const,
+            ...(target ? { target } : {}),
+            ...(waypoints ? { waypoints } : {}),
             ...(Number.isFinite(Number(rawCue?.durationMs))
               ? { durationMs: Math.max(200, Math.min(20_000, Math.round(Number(rawCue?.durationMs)))) }
               : {}),
@@ -387,7 +442,7 @@ export async function generateTeachingSectionNarration(input: {
     'The adopted teaching design is the authority for knowledge, concept boundaries, stable example facts, core reasoning and understanding criteria. The actual slide is the authority only for what is visible and what can be pointed to. Never preserve a slide error or delete a required explanation merely to make words agree with the slide.',
     'Explain the section at the depth this learner and time budget require. Define unfamiliar terms on first use, make intermediate causal or inferential links explicit, and explain how a result follows instead of repeating conclusions.',
     'Advance one line of understanding across pages. Use introduces, deepens, and references as page ownership: teach new nodes where introduced, add the planned relation or application where deepened, and use only a short bridge where referenced.',
-    'Use each page entryPoint as the real way into its reasoning. On the first course page, greet the class briefly and naturally, then move directly into the concrete experience, observable object, question, or direct proposition. Do not recite lesson objectives or announce an abstract agenda. On later pages, connect from the exact idea already established instead of restarting the lesson.',
+    'Use each page entryPoint as the real way into its reasoning. The standalone AI resource must feel complete even when a teacher-led phase may have introduced the wider lesson earlier. On the first course page, give a brief natural greeting, identify the course or immediate learning focus when useful, and establish the entryPoint through a concrete familiar experience, observable contrast, question, or direct proposition. Let learners notice the relevant feature before explicitly bridging from it to the first new idea. Do not merely prepend a greeting to a definition, recite objectives, announce an abstract agenda, or claim that learners answered. On later pages, connect from the exact idea already established instead of restarting the lesson.',
     'When an abstract or unfamiliar term has a familiar example or visible contrast, establish that object first, let the learner notice the relevant feature, and only then name and define the concept. A direct definition is still appropriate when the term is already familiar or the content calls for it.',
     'Use actual slide content for concrete visual references. Name the referent in speech. If a required visible item is absent or conflicts with the adopted design, do not invent that it is visible and do not silently weaken the explanation. Keep the correct explanation self-contained so the resource gap can be reported separately.',
     'Do not invent core claims, change concept boundaries, replace stable case facts, or turn a heuristic into a definition. Do not read internal field names, diagnostics, evidence status, review notes, learner profiles, or authoring instructions aloud.',
@@ -395,9 +450,11 @@ export async function generateTeachingSectionNarration(input: {
     'Use the actual relationship on the slide and its reading structure to guide attention: name what learners should observe, compare items in a meaningful order, and follow a process or derivation in sequence. Spoken explanation should add meaning rather than read every label. If the teaching entry and slide begin with a concrete contrast, speak from that contrast before stating the abstract definition.',
     'Write connected spoken language for listening: each sentence should make the next step feel motivated by what the learner has just understood. Avoid a repeated definition–example–summary routine, stacked slogans, compressed label lists, and abrupt topic switches.',
     'Give the reasoning needed for the declared understanding criteria. The final quiz is authored later and must not be previewed with answers. Do not lower the learning standard because a slide is terse.',
-    'Each requested teaching page must appear exactly once. Keep the requested pageId and stable segment id. Each segment must use only that page’s supplied semantic IDs. Segment boundaries are natural explanation paragraphs, with no fixed count.',
-    'Finish each segment text before authoring anchors. Every anchor semanticId must also appear in that segment’s semanticIds. Every anchor quote must be copied as one contiguous substring from that exact finalized segment text; never paraphrase it, copy it from the slide, or include nearby words that are absent from the segment. Omit the anchor when no reliable substring exists. Add a visualCue only when pointing helps learners locate, compare, trace, or hold attention on a visible object. Use separate anchors for targets mentioned at different points. A segment may have no cue, and the same object may be cued again when later reasoning needs it.',
-    'Respect the section position in the complete course. A test-generation scope does not make this the end of the course. Do not add a course farewell unless the progression says this is the final teaching responsibility.',
+    'Each requested teaching page must appear exactly once. Keep the requested pageId and stable segment id. Each segment must use only that page’s supplied semantic IDs. Segment boundaries are natural explanation paragraphs, with no fixed count. They also bound visual focus: a spotlight that starts inside a segment remains until that segment ends. End the segment when attention should leave that object, then continue the next reasoning unit in a new segment with its own cue or no cue. Do not let one long segment move across several unrelated visible objects under the first spotlight.',
+    'Finish each segment text before authoring anchors. Every anchor semanticId must also appear in that segment’s semanticIds. Every anchor quote must be copied as one contiguous substring from that exact finalized segment text; never paraphrase it, copy it from the slide, or include nearby words that are absent from the segment. Omit the anchor when no reliable substring exists. Put the anchor on the first spoken phrase that actually asks learners to attend to the target, not at the paragraph start by default. Add a visualCue only when pointing helps learners locate, compare, trace, or hold attention on a visible object. Use separate anchors for targets mentioned at different points. A segment may have no cue, and the same object may be cued again when later reasoning needs it.',
+    'For every visualCue authored from an actual slide, copy target.elementId exactly from that page’s actualSlide.elements. Use target.selector only when a text phrase or table cell is more precise than the whole element. Choose spotlight for one bounded object that should stay emphasized during its explanation. Choose laser for an ordered scan across comparison rows, process stages, derivation steps, arrows, or related objects; set the first visited object as target and the remaining ordered objects as waypoints, each with an exact actual elementId, and give the sweep enough duration to follow the spoken sequence. Do not use a spotlight as a substitute for an ordered trace, and do not add cues to transitions or reasoning that does not depend on the screen. Mark a cue essential only when the explanation is genuinely hard to follow without pointing; an invalid optional cue is omitted without changing the speech.',
+    'The page visualActionIntent, when present, is the adopted teaching intent from earlier planning. Realize it in the narration anchors when the required visible target exists, choosing exact targets from actualSlide. Do not invent a target when the slide does not contain one.',
+    'Respect the section position in the complete course. A test-generation scope does not make this the end of the course. If the final requested page is also the final course page, synthesize what the learner can now explain or do, connect it to a plausible later use, and end with a concise formal thanks and farewell. Otherwise do not add a course farewell; a final teaching page followed by an assessment should bridge into that assessment instead.',
     input.languageDirective ?? '',
     teacher?.persona ? `Teacher voice to follow for tone only; do not create extra speakers or fictional student replies:\n${teacher.persona}` : '',
   ].join('\n');
@@ -417,6 +474,9 @@ export async function generateTeachingSectionNarration(input: {
       sharedContext: outline.teachingBrief?.sharedContext,
       learningTask: outline.teachingBrief?.pageTask,
       teachingPlan: outline.teachingBrief?.teachingPlan,
+      visualActionIntent: outline.teachingToolPlan?.filter((item) => (
+        item.tool === 'spotlight' || item.tool === 'laser-pointer'
+      )),
       explanation: outline.teachingBrief?.explanation,
       examples: outline.teachingBrief?.examples,
       conditions: outline.teachingBrief?.conditions,
@@ -430,7 +490,7 @@ export async function generateTeachingSectionNarration(input: {
       targetDurationSec: outline.targetDurationSec,
       timingPlan: outline.timingPlan,
       semanticUnits: buildTeachingNarrationSemantics(outline),
-      deliveryContext: pageNarrationContext(outline, index, outlines, input.courseProgression),
+      deliveryContext: pageNarrationContext(outline, index, outlines, input.courseProgression, input.courseTitle),
     })),
     courseProgression: input.courseProgression?.map((outline) => ({
       id: outline.id,
@@ -440,6 +500,20 @@ export async function generateTeachingSectionNarration(input: {
       newContent: outline.teachingBrief?.teachingPlan?.newContent,
       takeaway: outline.teachingBrief?.teachingPlan?.takeaway,
     })),
+    visualCueExamples: {
+      singleTarget: {
+        type: 'spotlight',
+        necessity: 'helpful',
+        target: { elementId: 'copy the semantically correct exact ID from this page actualSlide.elements' },
+      },
+      orderedPath: {
+        type: 'laser',
+        necessity: 'helpful',
+        target: { elementId: 'first exact actualSlide element ID', selector: { quote: 'optional exact phrase inside that element' } },
+        waypoints: [{ elementId: 'next exact actualSlide element ID' }],
+        durationMs: 5000,
+      },
+    },
     requiredOutputShape: {
       pages: input.pages.map(({ outline }) => ({
         pageId: outline.id,
@@ -451,7 +525,7 @@ export async function generateTeachingSectionNarration(input: {
             semanticId: buildTeachingNarrationSemantics(outline).visible[0]?.id ?? buildTeachingNarrationSemantics(outline).teaching.id,
             quote: 'Exact short quote from text',
             occurrence: 0,
-            visualCue: { type: 'spotlight', necessity: 'helpful' },
+            visualCue: { type: 'spotlight', necessity: 'helpful', target: { elementId: 'exact-id-from-actualSlide' } },
           }],
         }],
       })),
@@ -463,6 +537,7 @@ export async function generateTeachingSectionNarration(input: {
       normalizeTeachingSectionNarration(parseJsonResponse(response), input.sectionId, outlines),
       outlines,
       input.courseProgression,
+      input.courseTitle,
     );
   } catch (error) {
     log.warn(`Section narration requires one technical correction: ${error instanceof Error ? error.message : String(error)}`);
@@ -473,6 +548,7 @@ export async function generateTeachingSectionNarration(input: {
       normalizeTeachingSectionNarration(parseJsonResponse(corrected), input.sectionId, outlines),
       outlines,
       input.courseProgression,
+      input.courseTitle,
     );
   }
 }
@@ -498,7 +574,7 @@ export async function generateTeachingNarration(input: {
     loadSnippet('teaching-accuracy-policy'),
     'The course-wide request is background, not a command to perform every lesson task on this page. Generate only the current page’s teaching responsibility. Other pages in progression define boundaries: do not execute their quizzes, reveal their answers, or introduce unplanned activities. End this page after its own explanation rather than adding a quiz or announcing another page’s full teaching.',
     'Use the shared teaching plan as the explanation responsibility. Complete only this page’s introduced and deepened nodes, and keep referenced material to the shortest bridge needed. Explain unfamiliar terms, relations, intermediate steps, and reasons at the depth required by the learner and time budget. Do not read planning fields aloud. Segment boundaries are natural speech units with no fixed count.',
-    'Follow teachingPlan.entryPoint. A standalone course-first page starts with a brief natural greeting and immediately enters its concrete object, familiar experience, question or direct proposition; later pages bridge from what has already been understood. Do not recite objectives or restart the lesson.',
+    'Follow teachingPlan.entryPoint. A standalone course-first page must make this AI resource complete: greet naturally, name the course or immediate focus when useful, establish a concrete familiar experience, visible contrast, question or direct proposition, and explicitly bridge that observation to the first new idea. Do not merely attach a greeting to a definition, recite objectives, claim a student response, or restart the lesson. Later pages bridge from what has already been understood. A standalone final course page briefly synthesizes the usable understanding and ends with a formal thanks and farewell; only the actual final page may do this.',
     'Give primary concepts and likely misconceptions the needed depth; keep known background and transitions brief. Preserve precise terms, negation, necessary conditions and the evidence status. Not yet verified is different from false; a recommended method is not the only possible method.',
     'Use the class’s stated prior knowledge and familiar contexts. Choose an example for explanatory value and learner familiarity; project linkage is optional. Do not invent individual learner histories, test results or responses. Do not recite the learner profile. Enter examples directly without announcing whether they are real or illustrative.',
     'Respect the lesson position: no repeated welcome on continuation pages, no premature course ending. Do not repeat neighboring pages’ explanations. A full explanation can span several speech segments; do not restate its conclusion after every segment.',
@@ -541,7 +617,7 @@ export async function generateTeachingNarration(input: {
   try {
     return applyPageNarrationContinuity(
       normalizeTeachingNarration(parseJsonResponse(response), input.outline),
-      input.outlineContext ?? pageNarrationContext(input.outline, 0, [input.outline], input.courseProgression),
+      input.outlineContext ?? pageNarrationContext(input.outline, 0, [input.outline], input.courseProgression, input.courseTitle),
     );
   } catch (error) {
     log.warn(`Page narration requires one technical correction: ${error instanceof Error ? error.message : String(error)}`);
@@ -553,7 +629,7 @@ export async function generateTeachingNarration(input: {
     })}`);
     return applyPageNarrationContinuity(
       normalizeTeachingNarration(parseJsonResponse(corrected), input.outline),
-      input.outlineContext ?? pageNarrationContext(input.outline, 0, [input.outline], input.courseProgression),
+      input.outlineContext ?? pageNarrationContext(input.outline, 0, [input.outline], input.courseProgression, input.courseTitle),
     );
   }
 }
@@ -580,7 +656,7 @@ export function compileTeachingNarrationActions(input: {
     return matches.length === 1 ? [{ semanticId: unit.id, elementIds: [matches[0].id] }] : [];
   });
   const cues: VisualActionCue[] = narration.segments.flatMap((segment) => (segment.anchors ?? []).flatMap((anchor) => {
-    if (!anchor.visualCue || anchor.semanticId === semantics.teaching.id) return [];
+    if (!anchor.visualCue || (anchor.semanticId === semantics.teaching.id && !anchor.visualCue.target)) return [];
     return [{
       id: `${anchor.id}:focus`,
       type: anchor.visualCue.type,
@@ -588,6 +664,12 @@ export function compileTeachingNarrationActions(input: {
       narrationSegmentId: segment.id,
       anchorId: anchor.id,
       necessity: anchor.visualCue.necessity,
+      ...(anchor.visualCue.target ? {
+        elementId: anchor.visualCue.target.elementId,
+        ...(anchor.visualCue.target.selector ? { selector: anchor.visualCue.target.selector } : {}),
+      } : {}),
+      ...(anchor.visualCue.type === 'laser' && anchor.visualCue.waypoints?.length
+        ? { waypoints: anchor.visualCue.waypoints } : {}),
       ...(anchor.visualCue.durationMs ? { durationMs: anchor.visualCue.durationMs } : {}),
     }];
   }));

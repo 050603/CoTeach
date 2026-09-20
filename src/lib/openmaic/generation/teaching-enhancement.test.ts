@@ -292,10 +292,13 @@ describe('formal course teaching enhancement', () => {
     expect(prompt.user).toContain('需要区分转载和独立证据');
     expect(prompt.user).toContain('校史调查');
     expect(prompt.user).toContain('p2');
+    expect(prompt.user).toContain('"resourcePosition":"course-opening"');
     expect(prompt.user).toContain('不同知识适合不同例子时可以自然更换');
     expect(prompt.user).toContain('entryPoint、introduces、deepens、references 和 visualRelationship');
     expect(prompt.user).toContain('不要求连接项目任务或后续活动');
     expect(prompt.system).toContain('实际学习者由学段、专业和 learner profile 决定');
+    expect(prompt.system).toContain('即使课程前面存在教师导入阶段');
+    expect(prompt.system).toContain('测验后的反馈完成收束');
     expect(prompt.user).toContain('差异可对照，过程可用连续状态或流程');
     expect(prompt.user).toContain('后台字段不得进入学生页面或讲稿');
     expect(prompt.user).toContain('每页新增认识是否有充分解释支撑');

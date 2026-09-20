@@ -202,7 +202,7 @@ describe("new-system course contract", () => {
     expect(hasExactKnowledgeLecturePageBudget([], 24)).toBe(false);
   });
 
-  it("requires a reasoned response in adaptive and constructed-response readiness", () => {
+  it("requires light questions in normal mode and one short answer in deep-response mode", () => {
     const course = readyCourse();
     course.content.knowledgeLectureSections = [{
       id: "section-1", title: "第一节", order: 0, knowledgePointIds: ["kp-1"],
@@ -211,7 +211,7 @@ describe("new-system course contract", () => {
     course.content._openmaicSceneOutlines = [
       { id: "teach-1", type: "slide", title: "讲解", stageKey: "ai-learning", audience: "student", targetDurationSec: 1_300 },
       { id: "quiz-1", type: "quiz", title: "检测", stageKey: "ai-learning", audience: "student", targetDurationSec: 320,
-        quizConfig: { questionCount: 1, questionTypes: ["single", "true_false", "short_answer"], minShortAnswerQuestions: 1, maxShortAnswerQuestions: 1 } },
+        quizConfig: { questionCount: 2, questionTypes: ["single", "true_false", "fill_blank", "matching"], minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0 } },
     ];
     course.content.teachingBlueprint = { assessmentMode: "adaptive" } as Course["content"]["teachingBlueprint"];
     course.content.teachingTimingAudit = {
@@ -222,14 +222,14 @@ describe("new-system course contract", () => {
       generatedAt: "2026-09-17T00:00:00Z",
     };
     expect(getNewSystemCourseReadiness(course).find((check) => check.id === "ai-outline")?.ok).toBe(true);
-    (course.content._openmaicSceneOutlines[1]!.quizConfig as { minShortAnswerQuestions: number }).minShortAnswerQuestions = 0;
+    (course.content._openmaicSceneOutlines[1]!.quizConfig as { questionTypes: string[] }).questionTypes.push("short_answer");
     expect(getNewSystemCourseReadiness(course).find((check) => check.id === "ai-outline")?.ok).toBe(false);
     course.content.teachingBlueprint = { assessmentMode: "constructed-response" } as Course["content"]["teachingBlueprint"];
     course.content._openmaicSceneOutlines[1]!.quizConfig = { questionCount: 1, questionTypes: ["short_answer"], minShortAnswerQuestions: 1, maxShortAnswerQuestions: 1 };
     expect(getNewSystemCourseReadiness(course).find((check) => check.id === "ai-outline")?.ok).toBe(true);
   });
 
-  it("accepts more than two adaptive questions when explicit teaching targets require them", () => {
+  it("accepts two to four normal-mode questions when teaching targets require them", () => {
     const course = readyCourse();
     course.content.knowledgeLectureSections = [{
       id: "section-1", title: "第一节", order: 0, knowledgePointIds: ["kp-1", "kp-2", "kp-3"],
@@ -245,7 +245,7 @@ describe("new-system course contract", () => {
           { unitId: "unit-2", knowledgePointId: "kp-2", unitTitle: "二", learningOutcome: "识别二" },
           { unitId: "unit-3", knowledgePointId: "kp-3", unitTitle: "三", learningOutcome: "识别三" },
         ],
-        quizConfig: { questionCount: 3, questionTypes: ["single", "matching", "true_false", "short_answer"], minShortAnswerQuestions: 1, maxShortAnswerQuestions: 1 },
+        quizConfig: { questionCount: 3, questionTypes: ["single", "matching", "true_false", "fill_blank"], minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0 },
       },
     ];
     course.content.teachingBlueprint = { assessmentMode: "adaptive" } as Course["content"]["teachingBlueprint"];
@@ -259,6 +259,8 @@ describe("new-system course contract", () => {
 
     expect(getNewSystemCourseReadiness(course).find((check) => check.id === "ai-outline")?.ok).toBe(true);
     (course.content._openmaicSceneOutlines[1]!.quizConfig as { questionCount: number }).questionCount = 4;
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "ai-outline")?.ok).toBe(true);
+    (course.content._openmaicSceneOutlines[1]!.quizConfig as { questionCount: number }).questionCount = 5;
     expect(getNewSystemCourseReadiness(course).find((check) => check.id === "ai-outline")?.ok).toBe(false);
   });
 });

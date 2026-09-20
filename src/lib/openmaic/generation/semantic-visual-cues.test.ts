@@ -172,7 +172,25 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
     expect(result.filter((action) => action.type === 'speech')).toEqual([s1, s2, s3]);
   });
 
-  it('caps the page at eight cues and lasers at two', () => {
+  it('does not extend an earlier spotlight across speech before a later anchored return', () => {
+    const first = speech('s1', '先说明判断依据，再观察小学学段。');
+    const second = speech('s2', '完成推理以后，再次回到小学学段。');
+    const result = calibrate([
+      cue('c1', 's1', 'stage-table', {
+        selector: { cellId: 'primary-stage' }, speechAnchor: { quote: '观察小学学段' },
+      }),
+      first,
+      cue('c2', 's2', 'stage-table', {
+        selector: { cellId: 'primary-stage' }, speechAnchor: { quote: '再次回到小学学段' },
+      }),
+      second,
+    ]);
+
+    expect(visualActions(result)).toHaveLength(2);
+    expect(visualActions(result)[1].speechOffsetMs).toBeGreaterThan(0);
+  });
+
+  it('preserves the authored cue count instead of applying fixed page or laser caps', () => {
     const pageElements = Array.from({ length: 10 }, (_unused, index) => ({
       id: `element-${index}`, type: 'text', left: index * 20, top: 50, width: 100, height: 40,
       content: `<p>目标${index}</p>`, defaultFontName: 'Microsoft YaHei', defaultColor: '#111111',
@@ -185,19 +203,19 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
     ]).flat();
     const result = calibrate(actions, pageElements);
 
-    expect(visualActions(result)).toHaveLength(8);
-    expect(visualActions(result).filter((action) => action.type === 'laser')).toHaveLength(2);
+    expect(visualActions(result)).toHaveLength(10);
+    expect(visualActions(result).filter((action) => action.type === 'laser')).toHaveLength(4);
     expect(result.filter((action) => action.type === 'speech')).toHaveLength(10);
   });
 
-  it('enforces spacing and suppresses A-B-A target bounce', () => {
+  it('preserves close target changes and later returns to a prior object', () => {
     const close = calibrate([
       cue('a', 's1', 'stage-table', { necessity: 'helpful' } as Partial<RuntimeCue>),
       speech('s1', '先看第一个目标。'),
       cue('b', 's2', 'pbl-title', { necessity: 'helpful' } as Partial<RuntimeCue>),
       speech('s2', '马上切换到另一个目标。'),
     ]);
-    expect(visualActions(close)).toHaveLength(1);
+    expect(visualActions(close)).toHaveLength(2);
 
     const longText = '这是一段足够长的讲解，用来确保相邻提示不会被十秒间隔提前移除。'.repeat(4);
     const bounced = calibrate([
@@ -205,10 +223,9 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
       cue('b1', 'l2', 'pbl-title', { necessity: 'helpful' } as Partial<RuntimeCue>), speech('l2', longText),
       cue('a2', 'l3', 'stage-table'), speech('l3', longText),
     ]);
-    expect(visualActions(bounced)).toHaveLength(1);
-    expect(visualActions(bounced)[0]).toMatchObject({
-      elementId: 'stage-table', speechId: 'l1', endSpeechId: 'l3',
-    });
+    expect(visualActions(bounced)).toHaveLength(3);
+    expect(visualActions(bounced).map((action) => action.elementId))
+      .toEqual(['stage-table', 'pbl-title', 'stage-table']);
   });
 
   it('prefers a precise selector and verifies quote evidence inside a cell', () => {

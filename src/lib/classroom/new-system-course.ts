@@ -216,13 +216,15 @@ export function getNewSystemCourseReadiness(
   const blueprintCourseAssessmentValid = !blueprintMode
     || (blueprintQuizConfigs.length === lectureSections.length
       && (blueprintMode === "constructed-response"
-        ? blueprintQuizConfigs.every((config) => (config.questionTypes ?? []).length === 1
+        ? blueprintQuizConfigs.every((config) => config.questionCount === 1
+          && (config.questionTypes ?? []).length === 1
           && config.questionTypes?.[0] === "short_answer"
-          && config.minShortAnswerQuestions === config.questionCount
-          && config.maxShortAnswerQuestions === config.questionCount)
-        : blueprintQuizConfigs.every((config) => (config.minShortAnswerQuestions ?? 0) >= 1
-          && (config.maxShortAnswerQuestions ?? 0) >= (config.minShortAnswerQuestions ?? 0)
-          && (config.maxShortAnswerQuestions ?? 0) <= (config.questionCount ?? 0))));
+          && config.minShortAnswerQuestions === 1
+          && config.maxShortAnswerQuestions === 1)
+        : blueprintQuizConfigs.every((config) => (config.questionCount ?? 0) >= 2
+          && (config.questionCount ?? 0) <= 4
+          && (config.minShortAnswerQuestions ?? 0) === 0
+          && (config.maxShortAnswerQuestions ?? 0) === 0)));
   const hasSectionChecks = lectureSections.length > 0 && lectureSections.every((section) => {
     const quiz = outlines.find((outline) => outline.id === section.quizOutlineId);
     const quizConfig = quiz?.quizConfig as { questionCount?: number; questionTypes?: string[]; minShortAnswerQuestions?: number; maxShortAnswerQuestions?: number } | undefined;
@@ -231,13 +233,13 @@ export function getNewSystemCourseReadiness(
       ? (quizConfig?.questionCount ?? 0) >= 1
         && questionTypes.length > 0
         && (blueprintMode === "constructed-response"
-          ? (quizConfig?.questionCount ?? 0) <= 2
+          ? quizConfig?.questionCount === 1
             && questionTypes.every((type) => type === "short_answer")
-          : (quizConfig?.questionCount ?? 0) <= 3
-            && questionTypes.every((type) => ["single", "multiple", "matching", "true_false", "short_answer"].includes(type))
-            && (quizConfig?.minShortAnswerQuestions ?? 0) >= 1
-            && (quizConfig?.maxShortAnswerQuestions ?? 0) >= (quizConfig?.minShortAnswerQuestions ?? 0)
-            && (quizConfig?.maxShortAnswerQuestions ?? 0) <= (quizConfig?.questionCount ?? 0))
+          : (quizConfig?.questionCount ?? 0) >= 2
+            && (quizConfig?.questionCount ?? 0) <= 4
+            && questionTypes.every((type) => ["single", "multiple", "matching", "true_false", "fill_blank"].includes(type))
+            && (quizConfig?.minShortAnswerQuestions ?? 0) === 0
+            && (quizConfig?.maxShortAnswerQuestions ?? 0) === 0)
       : (quizConfig?.questionCount ?? 0) >= 2
         && (quizConfig?.questionCount ?? 0) <= 3
         && questionTypes.every((type) => type === "short_answer");

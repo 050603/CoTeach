@@ -1,5 +1,6 @@
 import type {
   Action,
+  LaserWaypoint,
   VisualTargetSelector,
 } from "@openmaic/lib/types/action";
 import type {
@@ -8,6 +9,7 @@ import type {
   NarrationSegment,
   SlideModuleOutput,
 } from "./action-binding-types";
+import { isValidSlideVisualTarget } from "./semantic-visual-cues";
 
 export interface VisualActionCue {
   id: string;
@@ -19,6 +21,7 @@ export interface VisualActionCue {
   necessity: Exclude<ActionSupport, "none">;
   omissionRisk?: string;
   elementId?: string;
+  waypoints?: LaserWaypoint[];
   durationMs?: number;
 }
 
@@ -75,7 +78,10 @@ function resolveCue(
   slide: SlideModuleOutput,
   narrationById: ReadonlyMap<string, NarrationSegment>,
 ): { action?: Action; issues: ActionBindingIssue[] } {
-  const severity = cue.necessity === "essential" ? "blocking" : "warning";
+  // Visual guidance can improve comprehension but cannot invalidate otherwise
+  // playable speech. Target omissions stay diagnostic instead of starting a
+  // separate action-generation fallback.
+  const targetSeverity = "warning" as const;
   const issues: ActionBindingIssue[] = [];
   const elementIds = new Set(slide.content.elements.map((element) => element.id));
   const binding = slide.bindings.find((candidate) => candidate.semanticId === cue.semanticId);
@@ -84,14 +90,41 @@ function resolveCue(
     issues.push(issue(
       "missing-element-binding",
       `Cue ${cue.id} has no element binding for semantic unit ${cue.semanticId}`,
-      { cueId: cue.id, severity },
+      { cueId: cue.id, severity: targetSeverity },
     ));
   } else if (!elementIds.has(elementId)) {
     issues.push(issue(
       "unknown-element",
       `Cue ${cue.id} references missing slide element ${elementId}`,
-      { cueId: cue.id, severity: "blocking" },
+      { cueId: cue.id, severity: targetSeverity },
     ));
+  } else if (!isValidSlideVisualTarget(slide.content.elements, {
+    elementId,
+    ...(cue.selector ? { selector: cue.selector } : {}),
+  })) {
+    issues.push(issue(
+      "selector-quote-missing",
+      `Cue ${cue.id} selector no longer matches element ${elementId}`,
+      { cueId: cue.id, severity: targetSeverity },
+    ));
+  }
+
+  if (cue.type === "laser") {
+    for (const waypoint of cue.waypoints ?? []) {
+      if (!elementIds.has(waypoint.elementId)) {
+        issues.push(issue(
+          "unknown-element",
+          `Cue ${cue.id} waypoint references missing element ${waypoint.elementId}`,
+          { cueId: cue.id, severity: targetSeverity },
+        ));
+      } else if (!isValidSlideVisualTarget(slide.content.elements, waypoint)) {
+        issues.push(issue(
+          "selector-quote-missing",
+          `Cue ${cue.id} waypoint selector no longer matches ${waypoint.elementId}`,
+          { cueId: cue.id, severity: targetSeverity },
+        ));
+      }
+    }
   }
 
   const segment = narrationById.get(cue.narrationSegmentId);
@@ -121,7 +154,9 @@ function resolveCue(
     ));
   }
 
-  if (issues.some((candidate) => candidate.severity === "blocking") || !elementId || !segment) {
+  // A malformed optional cue is omitted locally. It must never poison the
+  // valid narration or trigger a separate action-generation retry.
+  if (issues.length > 0 || !elementId || !segment) {
     return { issues };
   }
   const base = {
@@ -136,7 +171,12 @@ function resolveCue(
     ...(cue.omissionRisk ? { omissionRisk: cue.omissionRisk } : {}),
   };
   const action: Action = cue.type === "laser"
-    ? { ...base, type: "laser", ...(cue.durationMs ? { duration: cue.durationMs } : {}) }
+    ? {
+      ...base,
+      type: "laser",
+      ...(cue.waypoints?.length ? { waypoints: cue.waypoints } : {}),
+      ...(cue.durationMs ? { duration: cue.durationMs } : {}),
+    }
     : { ...base, type: "spotlight" };
   return { action, issues };
 }
@@ -180,14 +220,6 @@ export function compileActionBindings(input: {
   };
 }
 
-function selectorMatchesElement(
-  selector: VisualTargetSelector | undefined,
-  elementText: string,
-): boolean {
-  return !selector?.quote
-    || quoteOccurrenceExists(elementText, selector.quote, selector.occurrence);
-}
-
 export function validateActionReferences(input: {
   actions: readonly Action[];
   slide: SlideModuleOutput;
@@ -195,9 +227,7 @@ export function validateActionReferences(input: {
   requiredCues?: readonly VisualActionCue[];
 }): ActionBindingIssue[] {
   const issues: ActionBindingIssue[] = [];
-  const elementById = new Map(
-    input.slide.content.elements.map((element) => [element.id, JSON.stringify(element)]),
-  );
+  const elementIds = new Set(input.slide.content.elements.map((element) => element.id));
   const segmentById = new Map(input.narration.segments.map((segment) => [segment.id, segment]));
   const seenIds = new Set<string>();
   for (const action of input.actions) {
@@ -221,14 +251,16 @@ export function validateActionReferences(input: {
       continue;
     }
     if (action.type !== "spotlight" && action.type !== "laser") continue;
-    const elementText = elementById.get(action.elementId);
-    if (!elementText) {
+    if (!elementIds.has(action.elementId)) {
       issues.push(issue(
         "unknown-element",
         `Action ${action.id} references missing slide element ${action.elementId}`,
         { actionId: action.id, severity: "blocking" },
       ));
-    } else if (!selectorMatchesElement(action.selector, elementText)) {
+    } else if (!isValidSlideVisualTarget(input.slide.content.elements, {
+      elementId: action.elementId,
+      ...(action.selector ? { selector: action.selector } : {}),
+    })) {
       issues.push(issue(
         "selector-quote-missing",
         `Action ${action.id} selector no longer matches element ${action.elementId}`,
@@ -236,14 +268,13 @@ export function validateActionReferences(input: {
       ));
     }
     for (const waypoint of action.type === "laser" ? action.waypoints ?? [] : []) {
-      const waypointText = elementById.get(waypoint.elementId);
-      if (!waypointText) {
+      if (!elementIds.has(waypoint.elementId)) {
         issues.push(issue(
           "unknown-element",
           `Action ${action.id} waypoint references missing element ${waypoint.elementId}`,
           { actionId: action.id, severity: "blocking" },
         ));
-      } else if (!selectorMatchesElement(waypoint.selector, waypointText)) {
+      } else if (!isValidSlideVisualTarget(input.slide.content.elements, waypoint)) {
         issues.push(issue(
           "selector-quote-missing",
           `Action ${action.id} waypoint selector no longer matches ${waypoint.elementId}`,
@@ -286,7 +317,7 @@ export function validateActionReferences(input: {
       `Declared ${cue.necessity} cue ${cue.id} was not compiled`,
       {
         cueId: cue.id,
-        severity: cue.necessity === "essential" ? "blocking" : "warning",
+        severity: "warning",
       },
     ));
   }

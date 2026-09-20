@@ -44,6 +44,8 @@ describe("reviewed knowledge structure generation", () => {
     const result = await generateKnowledgeStructureOnce(input, {}, { modelCall });
     expect(result.knowledgeGraph?.edges).toEqual([]);
     expect(result.knowledgePoints.every((point) => !point.objectiveIndexes?.length)).toBe(true);
+    expect(new Set(result.knowledgePoints.map((point) => point.groupId)).size).toBe(result.knowledgePoints.length);
+    expect(result.knowledgePoints.every((point) => point.groupName === point.name)).toBe(true);
   });
 
   it("keeps exact source ids while allowing an additional objective-owned target", async () => {

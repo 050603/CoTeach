@@ -37,6 +37,9 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("概念辨析、因果机制、数学推导、操作技能、历史材料和综合应用");
   expect(prompt.system).toContain("introducesNodeIds、deepensNodeIds、referencesNodeIds");
   expect(prompt.system).toContain("entryPoint 写出实际开场对象");
+  expect(prompt.system).toContain("即使前一教学阶段已经由教师导入，也不能省略这一资源内入口");
+  expect(prompt.system).toContain("导入是否独立成页由总时长、知识难度和视觉价值动态决定");
+  expect(prompt.system).toContain("正式致谢和告别");
   expect(prompt.system).toContain("案例首先按解释力、学习者熟悉度和学段适切性选择");
   expect(prompt.system).toContain("项目情境只规定用途和约束，不能自动变成知识目标或每页案例");
   expect(prompt.system).toContain("具体场景中的人物、物体、空间状态或可见差异本身是推理依据时");
@@ -47,13 +50,16 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.user).toContain('"sharedContext"');
   expect(prompt.user).toContain('"learningTask"');
   expect(prompt.user).toContain("必须严格按以下 2 个小节及其顺序生成");
-  expect(prompt.user).toContain("默认容量判断");
+  expect(prompt.user).toContain("下限用于避免单页过载，必须满足");
   expect(prompt.user).not.toContain('"maxPages"');
   expect(prompt.system).toContain("可直接制作资源的小节内容设计");
   expect(prompt.system).toContain("禁止只写");
   expect(prompt.user).toContain('"understandingCriteria"');
   expect(prompt.system).toContain("优先展示推理依据");
+  expect(prompt.system).toContain("一个知识点可以跨多页");
+  expect(prompt.system).toContain("知识结论+完整案例+练习");
   expect(prompt.user).toContain("输入时间无法承载必需解释");
+  expect(prompt.user).toContain("完整课程开场、必要解释、推理、例子、操作、短测和正式收束估时");
   expect(prompt.system).not.toContain("relative stability");
   expect(prompt.system).not.toContain("concretization");
   expect(prompt.user).not.toContain("4-6个完整");
@@ -289,15 +295,15 @@ describe("teaching blueprint compiler", () => {
     const quizzes = outlines.filter((outline) => outline.type === "quiz");
     expect(quizzes[0]?.description).toContain("预定理解标准");
     expect(quizzes).toHaveLength(2);
-    expect(quizzes.map((quiz) => quiz.quizConfig?.questionCount)).toEqual(
-      blueprint.sections.map((section) => Math.min(
-        Math.max(1, section.understandingCriteria.goals.length, section.assessmentFocus.length),
-        Math.max(1, Math.floor(section.assessmentDurationSec / 45)),
-      )),
-    );
     expect(quizzes.every((quiz) => (
-      (quiz.quizConfig?.minShortAnswerQuestions ?? 0) <= (quiz.quizConfig?.questionCount ?? 0)
-      && quiz.quizConfig?.maxShortAnswerQuestions === quiz.quizConfig?.minShortAnswerQuestions
+      (quiz.quizConfig?.questionCount ?? 0) >= 2
+      && (quiz.quizConfig?.questionCount ?? 0) <= 4
+    ))).toBe(true);
+    expect(quizzes.every((quiz) => (
+      quiz.quizConfig?.minShortAnswerQuestions === 0
+      && quiz.quizConfig?.maxShortAnswerQuestions === 0
+      && quiz.quizConfig?.questionTypes.includes("fill_blank")
+      && !quiz.quizConfig?.questionTypes.includes("short_answer")
     ))).toBe(true);
     expect(deriveKnowledgeLectureSectionsFromOutlines(outlines)).toHaveLength(2);
     expect(quizzes.every((quiz) => quiz.assessmentUnitIds?.length === 1 && quiz.assessmentUnitMap?.length === 1)).toBe(true);
@@ -457,11 +463,13 @@ describe("teaching blueprint compiler", () => {
       .toThrow("新增、删除或重复页面必须先回到内容设计");
   });
 
-  it("uses one or two short answers only when deep-response mode is enabled", async () => {
+  it("uses exactly one comprehensive short answer per section when deep-response mode is enabled", async () => {
     const blueprint = await generateTeachingBlueprint(input("constructed-response"), async () => JSON.stringify(modelBlueprint()));
     const quizzes = teachingBlueprintToOutlines(blueprint, "使用简体中文").filter((outline) => outline.type === "quiz");
     expect(quizzes.every((quiz) => quiz.quizConfig?.questionTypes.join(",") === "short_answer")).toBe(true);
-    expect(quizzes.every((quiz) => (quiz.quizConfig?.questionCount ?? 0) >= 1 && (quiz.quizConfig?.questionCount ?? 0) <= 2)).toBe(true);
+    expect(quizzes.every((quiz) => quiz.quizConfig?.questionCount === 1)).toBe(true);
+    expect(quizzes.every((quiz) => quiz.quizConfig?.minShortAnswerQuestions === 1
+      && quiz.quizConfig?.maxShortAnswerQuestions === 1)).toBe(true);
   });
 
   it("keeps a parseable first draft without semantic review or regeneration", async () => {
@@ -542,6 +550,27 @@ describe("teaching blueprint compiler", () => {
     });
   });
 
+  it("rejects a structurally complete section that still overloads one slide", async () => {
+    const ai = vi.fn(async () => JSON.stringify(compactModelBlueprint()));
+    const onValidation = vi.fn();
+    await expect(generateTeachingBlueprint({
+      ...input(),
+      sectionPlans: [{
+        title: "训练、测试与可靠评估",
+        knowledgePointIds: ["kp-train", "kp-test", "kp-split", "kp-leak"],
+        teachingBudgetSec: 1_584,
+        suggestedMinPages: 4,
+        suggestedMaxPages: 8,
+        maxPages: 20,
+      }],
+    }, ai, {
+      onValidation,
+      retrySleep: async () => undefined,
+    })).rejects.toThrow("教学蓝图缺少可用结构");
+    expect(ai).toHaveBeenCalledTimes(3);
+    expect(onValidation.mock.calls.at(-1)?.[0].issues.join("；")).toContain("至少需要 4 个教学页面");
+  });
+
   it("accepts the next complete result after a hard-output retry", async () => {
     const ai = vi.fn()
       .mockResolvedValueOnce(JSON.stringify({ sections: [] }))
@@ -606,6 +635,8 @@ describe("teaching blueprint compiler", () => {
       + blueprint.budget.learnerActivityDurationSec).toBe(300);
     expect(validateTeachingBlueprintBudget(blueprint, outlines)).toEqual([]);
     if (assessmentMode === "adaptive") {
+      expect(outlines.find((outline) => outline.type === "quiz")?.quizConfig?.questionCount).toBe(2);
+    } else {
       expect(outlines.find((outline) => outline.type === "quiz")?.quizConfig?.questionCount).toBe(1);
     }
   });

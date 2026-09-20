@@ -10,7 +10,7 @@ import { isAbortError } from './generation-retry';
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from './generated-output-retry';
 import { fingerprintGenerationValue } from '@/lib/course-generation/page-checkpoints';
 
-export const TEACHING_ENHANCEMENT_VERSION = 'shared-page-contract-v12-learner-entry';
+export const TEACHING_ENHANCEMENT_VERSION = 'shared-page-contract-v13-complete-lesson-arc';
 const TEACHING_SOURCE_LIMIT = 60_000;
 const ENTRY_POINT_KINDS = new Set([
   'familiar-experience', 'concrete-observation', 'problem', 'direct-explanation', 'continuation',
@@ -302,12 +302,18 @@ export function buildTeachingEnhancementPrompt(input: {
     TEACHING_SOURCE_LIMIT,
   );
   const requestedSections = new Set(input.pages.map(sectionIdentity));
-  const progression = (input.courseProgression ?? input.pages).map((page) => ({
+  const fullProgression = input.courseProgression ?? input.pages;
+  const progression = fullProgression.map((page, index) => ({
     id: page.id,
     section: sectionIdentity(page),
     title: page.title,
     purpose: page.description,
     objective: page.teachingObjective,
+    resourcePosition: index === 0
+      ? 'course-opening'
+      : index === fullProgression.length - 1
+        ? 'course-closing'
+        : 'course-middle',
     ...(requestedSections.has(sectionIdentity(page))
       ? { existingTeachingBrief: page.teachingBrief }
       : { existingTeachingPlan: page.teachingBrief?.teachingPlan }),
@@ -320,7 +326,9 @@ export function buildTeachingEnhancementPrompt(input: {
       '写出实际解释、必要前提、中间连接和判断理由，不得只写“解释概念”“说明区别”“举例说明”等待办语句。根据知识类型选择讲法，不强制案例、固定流程或每页活动。',
       '概念与区别可从熟悉对象、定义展开或对应比较进入；因果与机制要补足条件、过程和结果间的连接；数学推导要写出已知、步骤、理由和检验；操作技能要说明对象、步骤、观察和常见错误；历史人文要连接背景、材料与解释；综合应用要说明条件、方法选择、过程和结果。按内容组合，不把这些选项变成固定栏目。',
       '继承蓝图的解释节点和页面职责。页面可以首次解释、深化或必要承接，但不能把完整 explanation、mechanism 或推导压缩成标签，也不能在相邻页面重新讲同一段。不得更改页面数量、ID、顺序和知识边界。',
-      '继承 entryPoint 中已经确定的理解入口，并把它展开成学生能听懂的具体对象与过渡。不要把入口重新改成项目任务，不要用抽象定义、页面标题或“今天我们来学习”替代实际对象。',
+      '继承 entryPoint 中已经确定的理解入口，并把它展开成学生能听懂的具体对象、观察重点与过渡。不要把入口重新改成项目任务，不要用抽象定义、页面标题或“今天我们来学习”替代实际对象。',
+      'resourcePosition=course-opening 的页面必须支持一个独立完整的 AI 课程开场，即使课程前面存在教师导入阶段：简短问候由讲稿承担，页面与教学设计负责给出适龄、熟悉、可观察或可比较的切入对象，并写清从这个对象到首个知识的自然桥梁。时长较短时与首个知识合并，不能因此省略，也不能假装学生已经回答。',
+      'resourcePosition=course-closing 的页面要为课程收束提供已经讲过的核心认识和后续应用方向；正式致谢与告别由讲稿承担。若最后一页是测验，前一教学页只自然引向测验，测验后的反馈完成收束，不提前告别。',
       '实际学习者由学段、专业和 learner profile 决定；资料中出现的小学生、客户、机器人或教师只是案例角色。选择例子时先看它能否解释当前难点以及实际学习者是否熟悉，与项目任务的联系是可选条件。',
       '不得改变页数、页面 ID、页面顺序或知识边界。允许为了教学构造案例、类比、图表和示意数据；不得捏造出处。所有构造内容和来源待核实主张都写入 reviewItems，只供教师在生成结束后确认，不写进学生页面或讲稿。',
       loadSnippet('adaptive-narration-policy'),
@@ -348,7 +356,7 @@ ${selected.text || '未提供额外资料；只能使用已确认页面中的事
 设计要求：
 1. sharedContext 只保存整节确需复用的学习用途、稳定事实、术语和边界。只有确需贯穿案例时才填写案例字段；不同知识适合不同例子时可以自然更换。项目情境不能自动变成每页案例。
 2. explanation 写清本页拥有的核心含义、首次出现术语、关系、机制、推理步骤、理解障碍和应用条件。细致程度以补足理解为准，不以字数、案例数或段落数衡量。
-3. teachingPlan 继承 entryPoint、introduces、deepens、references 和 visualRelationship。entryPoint 要保留具体对象及其通向新知识的理由；introduces 负责首次建立认识，deepens 增加关系、机制或应用，references 只作最短承接。reasoningSteps 按实际过程展开，数量不限。
+3. teachingPlan 继承 entryPoint、introduces、deepens、references 和 visualRelationship。entryPoint 要保留具体对象、需要注意的特征及其通向新知识的理由；introduces 负责首次建立认识，deepens 增加关系、机制或应用，references 只作最短承接。reasoningSteps 按实际过程展开，数量不限。course-opening 页的 visibleContent 应优先呈现需要观察、回想或比较的实际对象，不能只放课程标题、目标或抽象定义。
 4. examples 先按当前难点的解释力、实际学习者的熟悉度和学段适切性选择。类比、对比、示范或独立案例均可，不要求连接项目任务或后续活动；无需例子时返回空数组，不为每页凑数。跨页复用案例时保持事实、术语和数量一致。
 5. conditions 只写会改变理解、推导或应用的条件、边界和常见错误。无新增必要内容时返回空数组。
 6. visibleContent 只列学生必须看见、观察、比较或定位的对象；visualRelationship 说明页面要表达的实际关系和阅读顺序。narrationFocus 保存需要口头讲开的原因、中间过程和关键选择，不与画面逐字重复。

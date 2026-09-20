@@ -35,6 +35,7 @@ import {
 } from "@/lib/course-generation/job-runner";
 import {
   isTestLessonPromotion,
+  resolveFullCoursePromotionOutlines,
   selectClassroomGenerationOutlines,
   type ClassroomGenerationScope,
 } from "@/lib/course-generation/generation-scope";
@@ -796,6 +797,22 @@ function sceneOutlineToLessonSection(
   };
 }
 
+/** Restore all outline-derived course fields after a one-section preview. */
+export function restoreCourseOutlineSnapshotForFullPromotion(
+  course: Course,
+  fullSceneOutlines: readonly (SceneOutline & OpenMaicSceneOutlineSnapshot)[],
+): Course {
+  return {
+    ...course,
+    content: {
+      ...course.content,
+      lessonOutline: fullSceneOutlines.map(sceneOutlineToLessonSection),
+      _openmaicSceneOutlines: [...fullSceneOutlines],
+      knowledgeLectureSections: deriveKnowledgeLectureSectionsFromOutlines(fullSceneOutlines),
+    },
+  };
+}
+
 function resourcePackageTeachingContext(resourcePackage?: CourseResourcePackage): string {
   if (!resourcePackage) return "";
   const draft = resourcePackage.draft;
@@ -1468,13 +1485,17 @@ export function buildOpenMaicKnowledgeLectureRequirement(
   request: QuickDesignRequest,
   aiDurationMin: number,
 ): string {
-  const sectionMap = new Map<string, string[]>();
+  const sectionMap = new Map<string, { title: string; pointNames: string[] }>();
   for (const point of content.knowledgePoints) {
-    const section = point.groupName?.trim() || "核心知识";
-    sectionMap.set(section, [...(sectionMap.get(section) ?? []), point.name]);
+    const key = point.groupId?.trim() || point.groupName?.trim() || point.id;
+    const title = point.groupName?.trim() || point.name.trim() || "核心知识";
+    const current = sectionMap.get(key);
+    sectionMap.set(key, current
+      ? { ...current, pointNames: [...current.pointNames, point.name] }
+      : { title, pointNames: [point.name] });
   }
-  const sections = [...sectionMap.entries()].map(([title, points], index) =>
-    `${index + 1}. ${title}：${points.join("、")}`,
+  const sections = [...sectionMap.values()].map(({ title, pointNames }, index) =>
+    `${index + 1}. ${title}：${pointNames.join("、")}`,
   );
   const quizReserveMinutes = Math.min(
     aiDurationMin * 0.2,
@@ -1486,13 +1507,13 @@ export function buildOpenMaicKnowledgeLectureRequirement(
   );
   return [
     `请为《${course.name}》生成面向${course.grade}学生的知识讲授课程大纲。`,
-    `学科：${course.subject}；AI 授知阶段总时长约 ${aiDurationMin} 分钟，其中本次需要规划的 PPT 讲授与必要互动约 ${lectureMinutes} 分钟，其余时间由系统按小节安排简答检测。`,
+    `学科：${course.subject}；AI 授知阶段总时长约 ${aiDurationMin} 分钟，其中本次需要规划的 PPT 讲授与必要互动约 ${lectureMinutes} 分钟，其余时间由系统按教师选择的测验模式安排小节检测。`,
     `课程目标：${(course.learningObjectives ?? []).join("；") || course.summary}。`,
     formatTeachingConstraintsForChinesePrompt(buildCourseTeachingConstraints(course, content)),
     `教师补充要求：${teacherGenerationBrief(request) || "无"}。`,
     sections.length ? `内容按以下小节组织：\n${sections.join("\n")}` : "",
     "以教师提供的课程资料作为事实依据。",
-    "本步骤只规划知识讲授 slide，以及确有必要且配置完整的通用 interactive；不要生成 quiz 或 PBL。将紧密相关的定义、关系、条件、例证和结论组织成信息充分的一页，不要把一个完整概念机械拆成多张稀疏页面。每个 slide 的 keyPoints 根据本页职责、学生已有基础与知识难度选择互补且必要的信息单元；保留理解所需的关系和条件，不设条目配额，不用泛化口号凑数，也不要为排版而默认添加 Table。",
+    "本步骤只规划知识讲授 slide，以及确有必要且配置完整的通用 interactive；不要生成 quiz 或 PBL。每个页面只承担一个主要认知任务：紧密相关且共用同一视觉焦点的定义与关系可同页；完整例子、反例/边界、操作步骤或学生练习若需独立说明就应拆页。一页预计连续讲授超过约 4 分钟时必须在自然理解转折处继续拆分，也不要把一个完整概念机械拆成多张稀疏页面。每个 slide 的 keyPoints 根据本页职责、学生已有基础与知识难度选择互补且必要的信息单元；保留理解所需的关系和条件，不设条目配额，不用泛化口号凑数，也不要为排版而默认添加 Table。",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -1500,51 +1521,94 @@ export function buildTeachingBlueprintSectionPlans(
   content: Pick<CourseContent, "knowledgePoints" | "moduleTimingPlan">,
   totalDurationSec: number,
 ): TeachingBlueprintSectionPlan[] {
-  const groups = new Map<string, string[]>();
+  const groups = new Map<string, { title: string; knowledgePointIds: string[] }>();
   for (const point of content.knowledgePoints) {
-    const title = point.groupName?.trim() || "核心知识";
-    groups.set(title, [...(groups.get(title) ?? []), point.id]);
+    // Missing group metadata must not collapse the whole course into one
+    // lesson-sized section. A standalone point is the safest recoverable
+    // boundary; generated structures normally provide semantic group ids.
+    const key = point.groupId?.trim() || point.groupName?.trim() || point.id;
+    const title = point.groupName?.trim() || point.name.trim() || "核心知识";
+    const existing = groups.get(key);
+    groups.set(key, existing
+      ? { ...existing, knowledgePointIds: [...existing.knowledgePointIds, point.id] }
+      : { title, knowledgePointIds: [point.id] });
   }
-  const entries = [...groups.entries()];
-  if (!entries.length) return [];
+  const groupedEntries = [...groups.values()];
+  if (!groupedEntries.length) return [];
   const durationByPoint = new Map(
     (content.moduleTimingPlan?.allocations ?? []).flatMap((allocation) =>
       (allocation.knowledgePointIds ?? []).map((id) => [id, Math.max(0, allocation.durationMin)] as const)),
   );
   const pointById = new Map(content.knowledgePoints.map((point) => [point.id, point]));
-  const weights = entries.map(([, ids]) => ids.reduce((sum, id) => {
+  const pointWeight = (id: string) => {
     const point = pointById.get(id);
     const allocated = durationByPoint.get(id);
     const conceptualEffort = point?.level === "core" ? 1.5 : point?.level === "application" ? 1.25 : 1;
     const relationEffort = point?.masteryBoundary?.trim() ? 0.35 : 0;
-    return sum + (allocated && allocated > 0 ? allocated : conceptualEffort + relationEffort);
-  }, 0));
+    return allocated && allocated > 0 ? allocated : conceptualEffort + relationEffort;
+  };
   const assessmentReserveSec = Math.min(
     Math.floor(totalDurationSec * 0.2),
-    Math.max(Math.min(entries.length, totalDurationSec), Math.round(totalDurationSec * 0.12)),
+    Math.max(Math.min(groupedEntries.length, totalDurationSec), Math.round(totalDurationSec * 0.12)),
   );
-  const explanationBudgetSec = Math.max(entries.length, totalDurationSec - assessmentReserveSec);
+  const explanationBudgetSec = Math.max(groupedEntries.length, totalDurationSec - assessmentReserveSec);
+  const groupedWeights = groupedEntries.map((entry) =>
+    entry.knowledgePointIds.reduce((sum, id) => sum + pointWeight(id), 0));
+  const groupedBudgets = allocateLectureBudget(explanationBudgetSec, groupedWeights, 1);
+  const maxSectionTeachingSec = 9 * 60;
+  const entries = groupedEntries.flatMap((entry, groupIndex) => {
+    const groupBudgetSec = groupedBudgets[groupIndex] ?? 1;
+    const groupWeight = Math.max(0.01, groupedWeights[groupIndex] ?? 1);
+    const chunks: string[][] = [];
+    let current: string[] = [];
+    let currentProjectedSec = 0;
+    for (const id of entry.knowledgePointIds) {
+      const projectedSec = groupBudgetSec * pointWeight(id) / groupWeight;
+      if (current.length && currentProjectedSec + projectedSec > maxSectionTeachingSec) {
+        chunks.push(current);
+        current = [];
+        currentProjectedSec = 0;
+      }
+      current.push(id);
+      currentProjectedSec += projectedSec;
+    }
+    if (current.length) chunks.push(current);
+    return chunks.map((knowledgePointIds) => {
+      if (chunks.length === 1) return { title: entry.title, knowledgePointIds };
+      const names = knowledgePointIds.map((id) => pointById.get(id)?.name.trim()).filter(Boolean);
+      const focus = names.length <= 2 ? names.join("与") : `${names[0]}等`;
+      return { title: focus ? `${entry.title}·${focus}` : entry.title, knowledgePointIds };
+    });
+  });
+  const weights = entries.map((entry) =>
+    entry.knowledgePointIds.reduce((sum, id) => sum + pointWeight(id), 0));
   const sectionBudgets = allocateLectureBudget(explanationBudgetSec, weights, 1);
-  return entries.map(([title, knowledgePointIds], index) => {
+  return entries.map(({ title, knowledgePointIds }, index) => {
     const teachingBudgetSec = sectionBudgets[index] ?? 1;
     const contentPageNeed = Math.ceil(knowledgePointIds.reduce((sum, id) => {
       const point = pointById.get(id);
-      return sum + 1 + (point?.level === "core" ? 0.5 : 0) + (point?.masteryBoundary?.trim() ? 0.25 : 0);
+      return sum
+        + 1.5
+        + (point?.level === "core" ? 0.75 : point?.level === "application" ? 0.5 : 0.25)
+        + (point?.masteryBoundary?.trim() ? 0.5 : 0);
     }, 0));
-    const timeSupportedPages = Math.max(1, Math.floor(teachingBudgetSec / 75));
+    // A lower bound prevents a long narration from being poured into one
+    // crowded slide. The upper suggestion still leaves the planner freedom to
+    // keep tightly coupled relations together.
+    const suggestedMinPages = Math.max(1, Math.ceil(teachingBudgetSec / 180));
+    const timeSupportedPages = Math.max(suggestedMinPages, Math.floor(teachingBudgetSec / 60));
     return {
       title,
       knowledgePointIds,
       teachingBudgetSec,
-      suggestedMinPages: 1,
-      suggestedMaxPages: Math.max(1, Math.min(
-        knowledgePointIds.length + 1,
-        contentPageNeed,
+      suggestedMinPages,
+      suggestedMaxPages: Math.max(suggestedMinPages, Math.min(
+        Math.max(suggestedMinPages, contentPageNeed),
         timeSupportedPages,
       )),
       // A generous technical guard for malformed output; it is not included in
       // the model prompt and is never described as teacher-confirmed capacity.
-      maxPages: Math.max(1, Math.floor(teachingBudgetSec / 20)),
+      maxPages: Math.max(suggestedMinPages, Math.floor(teachingBudgetSec / 30)),
     };
   });
 }
@@ -1997,9 +2061,13 @@ export async function promoteTestLessonToFullCourse(
       409,
     );
   }
-  const fullOutlineCount = course.content._openmaicSceneOutlines?.length ?? 0;
   const testOutlineCount = contentRequest.testLesson?.sceneOutlineIds.length ?? 0;
-  if (!testOutlineCount || fullOutlineCount <= testOutlineCount) {
+  const fullSceneOutlines = resolveFullCoursePromotionOutlines({
+    persistedOutlines: contentRequest.sceneOutlines as Array<SceneOutline & OpenMaicSceneOutlineSnapshot> | undefined,
+    expectedFullSceneCount: contentRequest.fullSceneCount,
+    testLesson: contentRequest.testLesson,
+  });
+  if (!testOutlineCount || !fullSceneOutlines) {
     throw new TestLessonPromotionError(
       "FULL_COURSE_OUTLINE_MISSING",
       "完整课程大纲缺失或没有剩余页面，请先检查课程设计。",
@@ -2020,23 +2088,20 @@ export async function promoteTestLessonToFullCourse(
     );
   }
 
-  const fullSceneOutlines = course.content._openmaicSceneOutlines ?? [];
-  const promotionCourse = course.content.lessonOutline.length === fullSceneOutlines.length
-    ? course
-    : {
-        ...course,
-        content: {
-          ...course.content,
-          lessonOutline: fullSceneOutlines.map(sceneOutlineToLessonSection),
-          knowledgeLectureSections: deriveKnowledgeLectureSectionsFromOutlines(fullSceneOutlines),
-        },
-      };
-  if (promotionCourse !== course) {
-    await updateCourse(courseId, (current) => ({
-      ...current,
-      content: promotionCourse.content,
-    }));
-  }
+  // A completed test run exposes only the selected section on the course
+  // preview. Restore every outline-backed field before enqueueing, otherwise
+  // enqueueClassroomGeneration would read the narrowed preview again and
+  // create another one-section job.
+  const promotionCourse = restoreCourseOutlineSnapshotForFullPromotion(course, fullSceneOutlines);
+  await updateCourse(courseId, (current) => ({
+    ...current,
+    content: {
+      ...current.content,
+      lessonOutline: promotionCourse.content.lessonOutline,
+      _openmaicSceneOutlines: promotionCourse.content._openmaicSceneOutlines,
+      knowledgeLectureSections: promotionCourse.content.knowledgeLectureSections,
+    },
+  }));
 
   await enqueueClassroomGeneration(
     promotionCourse,
@@ -2709,7 +2774,7 @@ async function runNewSystemCourseDesign(
         "课程大纲",
         `${sceneOutlines.length} 个页面`,
         usesTeachingBlueprint
-          ? `本大纲先将粗粒度知识细化为可讲授单元，再按小节组织页面；${request.assessmentMode === "constructed-response" ? "深度作答采用简答题" : "默认以选择、判断为主并保留极少量短答"}。`
+          ? `本大纲先将粗粒度知识细化为可讲授单元，再按小节组织页面；${request.assessmentMode === "constructed-response" ? "深度作答为每小节 1 道综合简答题" : "普通检测为每小节 2–4 道选择、判断、填空或拖拽配对题"}。`
           : "本大纲按知识小节组织讲解、互动练习与 2—3 道简短主观题小测。",
         "green",
         sceneOutlines.map((scene) => ({

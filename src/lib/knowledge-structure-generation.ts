@@ -138,6 +138,21 @@ function prepareKnowledgeStructureForTeacherReview(
     while (usedPointIds.has(id)) id = `${id}-next`;
     const description = firstText(source, ["description", "summary", "explanation"])
       || confirmed?.description || pointDescription(name);
+    const inheritedGroup = sourceKnowledgePoints.length
+      && (sourceKnowledgePoints[0]?.groupId?.trim() || sourceKnowledgePoints[0]?.groupName?.trim())
+      && sourceKnowledgePoints.every((point) => (
+        point.groupId === sourceKnowledgePoints[0]?.groupId
+        && point.groupName === sourceKnowledgePoints[0]?.groupName
+      ))
+      ? sourceKnowledgePoints[0]
+      : undefined;
+    const requestedGroupName = firstText(source, ["groupName", "group_name", "sectionTitle", "section_title"]);
+    const groupName = requestedGroupName
+      || inheritedGroup?.groupName
+      || name;
+    const groupId = firstText(source, ["groupId", "group_id", "sectionId", "section_id"])
+      || inheritedGroup?.groupId
+      || (requestedGroupName ? `section-${normalizeKnowledgePointName(requestedGroupName)}` : `section-${id}`);
     const objectiveIndexes = Array.isArray(source.objectiveIndexes)
       ? [...new Set(source.objectiveIndexes.filter((value): value is number =>
           typeof value === "number"
@@ -162,13 +177,12 @@ function prepareKnowledgeStructureForTeacherReview(
         ? source.relatedIds.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
         : undefined,
       level: validLevel(source.level),
+      groupId,
+      groupName,
       ...(sourceKnowledgePointIds.length ? {
         sourceKnowledgePointIds,
         sourceKnowledgePointNames: sourceKnowledgePoints.map((point) => point.name),
       } : {}),
-      ...(sourceKnowledgePoints.length && sourceKnowledgePoints.every((point) => point.groupId === sourceKnowledgePoints[0]?.groupId)
-        ? { groupId: sourceKnowledgePoints[0]?.groupId, groupName: sourceKnowledgePoints[0]?.groupName }
-        : {}),
     });
   };
   pointSources.forEach(addPoint);

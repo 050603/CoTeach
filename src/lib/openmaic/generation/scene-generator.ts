@@ -1044,6 +1044,11 @@ async function generateQuizContent(
     questionCount: quizConfig.questionCount,
     requested: quizConfig.questionTypes,
   });
+  const coverageInstruction = shortAnswerOnly
+    ? quizConfig.questionCount === 1
+      ? 'the single comprehensive short-answer question must require and carry every allowed knowledgePointId for this section'
+      : 'across the complete short-answer set, cover every allowed knowledgePointId at least once'
+    : 'across the complete question set, cover every allowed knowledgePointId at least once; a question may carry multiple IDs when it genuinely combines them';
 
   const prompts = buildPrompt(PROMPT_IDS.QUIZ_CONTENT, {
     title: outline.title,
@@ -1052,8 +1057,8 @@ async function generateQuizContent(
     questionCount: quizConfig.questionCount,
     difficulty: quizConfig.difficulty,
     questionTypes: shortAnswerOnly
-      ? 'short_answer only; every generated question must use type="short_answer" and have no options'
-      : `${questionFormats.join(', ')} only; return exactly ${quizConfig.questionCount} questions; ${quizConfig.coveragePolicy === 'each-target' ? 'generate one question for each ordered assessment target' : 'cover the section as a synthesis'}; use at least ${quizConfig.minShortAnswerQuestions ?? 0} and at most ${quizConfig.maxShortAnswerQuestions ?? 0} explanation-style short_answer/scenario_task questions; explanation questions must require a conclusion and a brief reason`,
+      ? `short_answer only; every generated question must use type="short_answer" and have no options; ${coverageInstruction}`
+      : `${questionFormats.join(', ')} only; return exactly ${quizConfig.questionCount} questions; ${quizConfig.coveragePolicy === 'each-target' ? 'generate one question for each ordered assessment target' : coverageInstruction}; use at least ${quizConfig.minShortAnswerQuestions ?? 0} and at most ${quizConfig.maxShortAnswerQuestions ?? 0} explanation-style short_answer/scenario_task questions; explanation questions must require a conclusion and a brief reason`,
     knowledgePointIds: (outline.knowledgePointIds ?? []).join(', '),
     assessmentTargets: JSON.stringify(outline.assessmentTargets ?? []),
     languageDirective: languageDirective || '',
@@ -1179,6 +1184,11 @@ async function generateQuizContent(
           };
         });
       })();
+  const coveredKnowledgePointIds = new Set(questions.flatMap((question) => question.knowledgePointIds ?? []));
+  const missingKnowledgePointIds = (outline.knowledgePointIds ?? []).filter((id) => !coveredKnowledgePointIds.has(id));
+  if (missingKnowledgePointIds.length > 0) {
+    throw new Error(`Quiz "${outline.title}" does not cover knowledge points: ${missingKnowledgePointIds.join(', ')}`);
+  }
   if (questions.length === 0) {
     log.error(`Quiz generation produced no usable questions for: ${outline.title}`);
     return null;

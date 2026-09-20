@@ -22,7 +22,7 @@
 import { Type, type Static } from 'typebox';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { generateSceneContent, generateSceneActions } from '@openmaic/lib/generation/scene-generator';
-import type { SceneGenerationContext } from '@openmaic/lib/generation/generation-pipeline';
+import { buildNarrationContext } from '@openmaic/lib/generation/narration-continuity';
 import type { Action } from '@openmaic/lib/types/action';
 import type { GeneratedSlideContent, PdfImage, ImageMapping } from '@openmaic/lib/types/generation';
 import type { SceneContent } from '@openmaic/lib/types/stage';
@@ -282,14 +282,8 @@ export function makeRegenerateSceneTool(
       // were refused above, so the returned background is kept as-is.
 
       // ── Step 2: regenerate actions to match the new content ────────────────
-      const allTitles = allOutlines.map((o) => o.title);
       const pageIndex = allOutlines.findIndex((o) => o.id === outline.id);
-      const ctx: SceneGenerationContext = {
-        pageIndex: (pageIndex >= 0 ? pageIndex : 0) + 1,
-        totalPages: allOutlines.length,
-        allTitles,
-        previousSpeeches: [],
-      };
+      const ctx = buildNarrationContext(allOutlines, pageIndex >= 0 ? pageIndex : 0);
 
       let actions: Action[];
       if (canUseIndependentTeachingNarration(outline)) {

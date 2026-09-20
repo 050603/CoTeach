@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowLeft,
   ArrowRight,
   BookOpenCheck,
   BrainCircuit,
@@ -107,8 +108,15 @@ export function QuickGenerationStage({
   const reducedMotion = useReducedMotion();
   const artifactIds = artifacts.map((item) => item.id).join("|");
   const [activeIndex, setActiveIndex] = useState(() => artifacts.length - 1);
+  const [navigationDirection, setNavigationDirection] = useState<1 | -1>(1);
   const [now, setNow] = useState(() => Date.now());
+  const activeIndexRef = useRef(activeIndex);
   const cardShownAt = useRef<number | null>(null);
+  const browsingHistory = useRef(false);
+
+  useEffect(() => {
+    activeIndexRef.current = activeIndex;
+  }, [activeIndex]);
 
   useEffect(() => {
     cardShownAt.current ??= Date.now();
@@ -118,22 +126,27 @@ export function QuickGenerationStage({
     if (!activeArtifactId) return;
     const preferredIndex = artifacts.findIndex((item) => item.id === activeArtifactId);
     if (preferredIndex < 0) return;
+    if (browsingHistory.current && activeIndexRef.current < artifacts.length - 1) return;
     cardShownAt.current = Date.now();
+    setNavigationDirection(preferredIndex >= activeIndexRef.current ? 1 : -1);
     queueMicrotask(() => setActiveIndex(preferredIndex));
   }, [activeArtifactId, artifactIds, artifacts]);
 
   useEffect(() => {
     if (!artifacts.length) {
+      browsingHistory.current = false;
       queueMicrotask(() => setActiveIndex(-1));
       return;
     }
     if (activeIndex >= artifacts.length) {
+      browsingHistory.current = false;
       queueMicrotask(() => setActiveIndex(artifacts.length - 1));
     }
   }, [activeIndex, artifactIds, artifacts.length]);
 
   useEffect(() => {
     if (!artifacts.length || activeIndex >= artifacts.length - 1) return;
+    if (browsingHistory.current) return;
     if (activeArtifactId && artifacts[activeIndex]?.id === activeArtifactId) return;
     const visibleFor = cardShownAt.current === null ? 0 : Date.now() - cardShownAt.current;
     const delay = activeIndex < 0 || reducedMotion
@@ -184,6 +197,23 @@ export function QuickGenerationStage({
     : activeReviewKind === "capacity"
       ? "查看时间冲突并决定"
       : "查看课程大纲并确认";
+
+  function showPreviousArtifact() {
+    if (safeActiveIndex <= 0) return;
+    browsingHistory.current = true;
+    cardShownAt.current = Date.now();
+    setNavigationDirection(-1);
+    setActiveIndex(safeActiveIndex - 1);
+  }
+
+  function showNextArtifact() {
+    if (safeActiveIndex < 0 || safeActiveIndex >= artifacts.length - 1) return;
+    const nextIndex = safeActiveIndex + 1;
+    browsingHistory.current = nextIndex < artifacts.length - 1;
+    cardShownAt.current = Date.now();
+    setNavigationDirection(1);
+    setActiveIndex(nextIndex);
+  }
 
   return (
     <div className="fixed inset-0 z-[70] overflow-y-auto bg-[var(--pbl-bg)] text-[var(--pbl-text-strong)]">
@@ -260,31 +290,57 @@ export function QuickGenerationStage({
                 className="absolute -bottom-7 left-[9%] right-[9%] h-20 rounded-[50%] bg-[radial-gradient(ellipse,rgba(30,64,175,.18),rgba(15,23,42,.06)_48%,transparent_72%)] blur-xl"
                 transition={{ duration: 5.8, repeat: Infinity, ease: "easeInOut" }}
               />
-              <motion.div
-                aria-hidden
+              {previousArtifact ? <motion.button
+                aria-label={`查看上一张：${previousArtifact.title}`}
                 animate={reducedMotion ? undefined : { opacity: [.72, .9, .72], x: [-14, 3, -14], y: [11, -5, 11], rotate: [-4.2, -2, -4.2], scale: [.94, .955, .94] }}
+                className="group absolute -left-14 top-8 z-0 h-[calc(100%-50px)] w-[95%] cursor-pointer overflow-hidden rounded-[var(--radius-xl)] border border-orange-200/80 bg-[linear-gradient(145deg,#fff7ed,#fff_72%)] text-left shadow-[0_26px_58px_-42px_rgba(124,45,18,.46)] transition-colors hover:border-orange-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
+                onClick={showPreviousArtifact}
+                transition={{ duration: 6.2, repeat: Infinity, ease: "easeInOut" }}
+                type="button"
+              >
+                <span className="absolute inset-y-8 right-2 w-px bg-gradient-to-b from-transparent via-orange-200 to-transparent" />
+                <span className="absolute left-3 top-4 grid size-7 place-items-center rounded-full border border-orange-200 bg-white/90 text-[var(--pbl-accent)] shadow-sm transition-transform group-hover:-translate-x-0.5"><ArrowLeft className="size-3.5" /></span>
+                <span className="absolute bottom-5 left-3 max-h-36 overflow-hidden text-[8px] font-semibold tracking-[.12em] text-[var(--pbl-accent)] [writing-mode:vertical-rl]">{compactSideTitle(previousArtifact.title, "课程轮廓")}</span>
+              </motion.button> : <motion.div
+                aria-hidden
+                animate={reducedMotion ? undefined : { opacity: [.42, .65, .42], x: [-14, 3, -14], y: [11, -5, 11], rotate: [-4.2, -2, -4.2], scale: [.94, .955, .94] }}
                 className="absolute -left-14 top-8 z-0 h-[calc(100%-50px)] w-[95%] overflow-hidden rounded-[var(--radius-xl)] border border-orange-200/80 bg-[linear-gradient(145deg,#fff7ed,#fff_72%)] shadow-[0_26px_58px_-42px_rgba(124,45,18,.46)]"
                 transition={{ duration: 6.2, repeat: Infinity, ease: "easeInOut" }}
               >
                 <span className="absolute inset-y-8 right-2 w-px bg-gradient-to-b from-transparent via-orange-200 to-transparent" />
-                <span className="absolute bottom-5 left-3 max-h-36 overflow-hidden text-[8px] font-semibold tracking-[.12em] text-[var(--pbl-accent)] [writing-mode:vertical-rl]">{compactSideTitle(previousArtifact?.title, "课程轮廓")}</span>
-              </motion.div>
-              <motion.div
-                aria-hidden
+                <span className="absolute bottom-5 left-3 max-h-36 overflow-hidden text-[8px] font-semibold tracking-[.12em] text-[var(--pbl-accent)] [writing-mode:vertical-rl]">课程轮廓</span>
+              </motion.div>}
+              {nextArtifact ? <motion.button
+                aria-label={`查看下一张：${nextArtifact.title}`}
                 animate={reducedMotion ? undefined : { opacity: [.76, .94, .76], x: [1, 17, 1], y: [-9, 8, -9], rotate: [4, 1.6, 4], scale: [.945, .96, .945] }}
+                className="group absolute -right-14 top-5 z-[1] h-[calc(100%-34px)] w-[95%] cursor-pointer overflow-hidden rounded-[var(--radius-xl)] border border-blue-200/80 bg-[linear-gradient(145deg,#fff_28%,#eff6ff)] text-left shadow-[0_28px_62px_-42px_rgba(30,64,175,.45)] transition-colors hover:border-blue-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+                onClick={showNextArtifact}
+                transition={{ duration: 7.1, repeat: Infinity, ease: "easeInOut" }}
+                type="button"
+              >
+                <span className="absolute inset-y-8 left-2 w-px bg-gradient-to-b from-transparent via-blue-200 to-transparent" />
+                <span className="absolute right-3 top-4 grid size-7 place-items-center rounded-full border border-blue-200 bg-white/90 text-[var(--pbl-teacher)] shadow-sm transition-transform group-hover:translate-x-0.5"><ArrowRight className="size-3.5" /></span>
+                <span className="absolute bottom-5 right-3 max-h-36 overflow-hidden text-[8px] font-semibold tracking-[.12em] text-[var(--pbl-teacher)] [writing-mode:vertical-rl]">{compactSideTitle(nextArtifact.title, "继续生成")}</span>
+              </motion.button> : <motion.div
+                aria-hidden
+                animate={reducedMotion ? undefined : { opacity: [.42, .65, .42], x: [1, 17, 1], y: [-9, 8, -9], rotate: [4, 1.6, 4], scale: [.945, .96, .945] }}
                 className="absolute -right-14 top-5 z-[1] h-[calc(100%-34px)] w-[95%] overflow-hidden rounded-[var(--radius-xl)] border border-blue-200/80 bg-[linear-gradient(145deg,#fff_28%,#eff6ff)] shadow-[0_28px_62px_-42px_rgba(30,64,175,.45)]"
                 transition={{ duration: 7.1, repeat: Infinity, ease: "easeInOut" }}
               >
                 <span className="absolute inset-y-8 left-2 w-px bg-gradient-to-b from-transparent via-blue-200 to-transparent" />
-                <span className="absolute right-3 top-5 max-h-36 overflow-hidden text-[8px] font-semibold tracking-[.12em] text-[var(--pbl-teacher)] [writing-mode:vertical-rl]">{compactSideTitle(nextArtifact?.title, "继续生成")}</span>
-              </motion.div>
-              <div className="absolute inset-0 z-10" data-testid="quick-generation-main-card-stage">
+                <span className="absolute right-3 top-5 max-h-36 overflow-hidden text-[8px] font-semibold tracking-[.12em] text-[var(--pbl-teacher)] [writing-mode:vertical-rl]">继续生成</span>
+              </motion.div>}
+              <div
+                aria-label={safeActiveIndex >= 0 ? `第 ${safeActiveIndex + 1} 张，共 ${artifacts.length} 张` : "课程生成卡片"}
+                className="absolute inset-0 z-10"
+                data-testid="quick-generation-main-card-stage"
+              >
                 <AnimatePresence initial={false} mode="sync">
                   <motion.article
                     animate={{ opacity: 1, scale: 1, x: 0 }}
                     className="absolute inset-0 overflow-hidden rounded-[var(--radius-xl)] border border-stone-200/90 bg-[var(--pbl-surface)] p-5 shadow-[0_38px_86px_-40px_rgba(15,23,42,.38),0_17px_36px_-27px_rgba(37,99,235,.28),inset_0_1px_0_rgba(255,255,255,.98)] [backface-visibility:hidden] sm:p-7"
-                    exit={{ opacity: 0, scale: .985, x: -96 }}
-                    initial={reducedMotion ? false : { opacity: 0, scale: .985, x: 96 }}
+                    exit={{ opacity: 0, scale: .985, x: navigationDirection > 0 ? -96 : 96 }}
+                    initial={reducedMotion ? false : { opacity: 0, scale: .985, x: navigationDirection > 0 ? 96 : -96 }}
                     key={displayed.id}
                     transition={reducedMotion ? { duration: 0 } : { duration: .5, ease: [.22, 1, .36, 1] }}
                   >

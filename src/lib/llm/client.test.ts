@@ -316,6 +316,9 @@ describe("buildTeachingOutlinePrompt", () => {
     expect(prompt).toContain("完全相同的 name");
     expect(prompt).toContain("不得删除、合并、偷换概念或改名");
     expect(prompt).toContain("不得自环、重复或形成有向循环");
+    expect(prompt).toContain("一组紧密相关知识学完后立即小测");
+    expect(prompt).toContain("不得默认把整门课或整个 AI 授知阶段放进一组");
+    expect(prompt).toContain('"groupId": "section-1"');
   });
 
   it("separates lesson targets from curriculum prerequisites before building progression", () => {
