@@ -92,9 +92,9 @@ describe("confirmed resource package generation", () => {
     const messages = buildNewSystemAiDurationMessages(input);
     expect(messages[0].content).toContain("固定 80 分钟");
     expect(messages[0].content).not.toContain("20%–40%");
-    const recommendation = normalizeNewSystemAiDurationRecommendation({ durationMin: 20, rationale: "按教案分配", knowledgePointBudgets: [{ knowledgePointId: "kp-1", durationMin: 1 }, { knowledgePointId: "kp-2", durationMin: 3 }] }, input);
+    const recommendation = normalizeNewSystemAiDurationRecommendation({ durationMin: 20, rationale: "按教案分配", teachingClusterBudgets: [{ clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 1 }, { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 3 }] }, input);
     expect(recommendation.durationMin).toBe(80);
-    expect(recommendation.knowledgePointBudgets.map((item) => item.durationMin)).toEqual([20, 60]);
+    expect(recommendation.teachingClusterBudgets.map((item) => item.durationMin)).toEqual([20, 60]);
     expect(isNewSystemAiTimingPlan(buildNewSystemTimingPlan(80), 140 / 60, stagePlan)).toBe(true);
     expect(isNewSystemAiTimingPlan(buildNewSystemTimingPlan(40), 140 / 60, stagePlan)).toBe(false);
   });

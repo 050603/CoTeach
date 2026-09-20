@@ -20,8 +20,8 @@ import type {
 } from "@/lib/session/types";
 
 export const TEACHING_BLUEPRINT_SCHEMA_VERSION = 3 as const;
-export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v21-complete-knowledge-coverage";
-export const TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION = "teaching-blueprint-v3-compiled-v7-knowledge-responsibility";
+export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v22-assessment-intent-compilation";
+export const TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION = "teaching-blueprint-v3-compiled-v8-assessment-intents";
 /** Kept as a compatibility export for callers being migrated away from ratio budgeting. */
 export const MAX_ASSESSMENT_RATIO = 0.2;
 const MIN_TEACHING_PAGE_SEC = 1;
@@ -278,6 +278,50 @@ function sectionQuestionCount(section: TeachingBlueprintSection, mode: Assessmen
   return Math.max(2, Math.min(4, targetCount, timeCapacity));
 }
 
+type PlannedQuizQuestionType = NonNullable<SceneOutline["quizConfig"]>["questionTypes"][number];
+
+type PlannedAssessmentQuestion = {
+  intent: string;
+  type: PlannedQuizQuestionType;
+};
+
+function inferAssessmentQuestionType(items: readonly string[]): PlannedQuizQuestionType {
+  const text = items.join("；");
+  if (/填空|补全|填写/.test(text)) return "fill_blank";
+  if (/配对|匹配|拖拽|连线|对应关系/.test(text)) return "matching";
+  if (/多选|多项|选择所有|全部选出/.test(text)) return "multiple";
+  if (/判断|正误|是否正确/.test(text)) return "true_false";
+  return "single";
+}
+
+function sectionAssessmentQuestionPlan(
+  section: TeachingBlueprintSection,
+  questionCount: number,
+  mode: AssessmentMode,
+): PlannedAssessmentQuestion[] {
+  const focusItems = [...new Set(section.assessmentFocus.map((item) => item.trim()).filter(Boolean))];
+  const supplementalItems = [
+    ...section.understandingCriteria.goals,
+    ...section.understandingCriteria.answerEssentials,
+  ].map((item) => item.trim()).filter((item) => item && !focusItems.includes(item));
+  const baseItems = focusItems.length > 0 ? [...focusItems] : [section.learningObjective];
+  while (baseItems.length < questionCount && supplementalItems.length > 0) {
+    baseItems.push(supplementalItems.shift()!);
+  }
+  while (baseItems.length < questionCount) {
+    baseItems.push(`在新材料中应用：${baseItems[baseItems.length - 1] ?? section.learningObjective}`);
+  }
+  const groups = Array.from({ length: questionCount }, () => [] as string[]);
+  baseItems.forEach((item, index) => {
+    const groupIndex = Math.min(questionCount - 1, Math.floor(index * questionCount / baseItems.length));
+    groups[groupIndex]!.push(item);
+  });
+  return groups.map((items, index) => ({
+    intent: `第 ${index + 1} 题综合考查：${items.join("；")}`,
+    type: mode === "constructed-response" ? "short_answer" : inferAssessmentQuestionType(items),
+  }));
+}
+
 export function teachingBlueprintInputFingerprint(input: TeachingBlueprintInput): string {
   return fingerprintGenerationValue({
     schemaVersion: TEACHING_BLUEPRINT_SCHEMA_VERSION,
@@ -349,7 +393,7 @@ export function buildTeachingBlueprintPrompt(
     "resourceNeeds 必须遵守教师补充中给出的系统资源能力。未启用图片或视频时不得请求对应种类；动态过程可改为原生分步图、状态对照或因果图，不能让课程因不可用媒体而无法生成。",
     "具体场景中的人物、物体、空间状态或可见差异本身是推理依据时，若图片能力可用，应在 resourceNeeds 请求 image，并写清学生需要观察的细节；概念关系、因果或步骤则优先用 diagram。不要用抽象卡片替代本应观察的场景，也不要为装饰而请求媒体。",
     "同一材料再次出现时，后页必须增加新的关系、机制、条件、推导步骤或应用任务；不得只换一种说法重复同一结论。",
-    "assessmentFocus 只写学生应独立完成的解释、推导、判断、操作或应用及其理由要求。不得考未讲内容，也不得把讲授中已公布答案的原题直接当作迁移检测。题干必须提供足够条件，反馈要能解释错误原因。",
+    "assessmentFocus 只写本小节测验需要共同覆盖的理解责任，例如学生应独立完成的解释、推导、判断、操作或应用及其理由要求；它不是逐题题目清单，条目数量不等于最终题数，也不要在其中指定选择、判断、填空等题型。系统会按本轮时间和覆盖要求把这些责任合并编译为 2–4 道题。不得考未讲内容，也不得把讲授中已公布答案的原题直接当作迁移检测。题干必须提供足够条件，反馈要能解释错误原因。",
     loadSnippet('adaptive-narration-policy'),
     loadSnippet('teaching-accuracy-policy'),
     input.generationMode === "deep-interaction"
@@ -392,7 +436,7 @@ ${formatTeachingConstraintsForChinesePrompt(input.teachingConstraints)}
 讲授要求：先按完整课程开场、必要解释、推理、例子、操作、短测和正式收束估时；不套用固定讲解比例，也不按知识点数量机械分配题目或分钟。开场和结尾使用本次输入预算，短课将它们整合得更简洁，但不得删除；时间不足时先减少重复铺垫和可选扩展。
 测验模式：${input.assessmentMode === "constructed-response" ? "深度作答：每个小节恰好设置 1 道综合简答题，覆盖该小节全部知识点并要求给出结论与理由" : "普通检测：每个小节设置 2–4 道选择、判断、填空或拖拽配对等轻量题，不设置开放式简答；全部题目合计覆盖该小节所有知识点"}
 
-容量边界：总计 ${Math.round(input.totalDurationSec)} 秒，其中节末短测预留约 ${assessmentDurationSec} 秒，其余时间由实际解释和必要操作共享。${plannedSections ? `必须严格按以下 ${plannedSections.length} 个小节及其顺序生成，不得合并、拆分或移动知识点。teachingBudgetSec 是当前输入动态得到的小节讲授预算；suggestedPageRange 是系统根据该预算和解释工作量作出的容量判断，下限用于避免单页过载，必须满足；上限是建议值，只有新增页面仍有足够时间完成一项实质解释时才可超出。紧密相关且能共用一个视觉焦点的定义与关系可同页；需要独立分析的例子、反例、操作或练习应拆页，不能把每个术语机械拆成一页：\n${JSON.stringify(plannedSections)}` : "尚未提供固定小节边界，请按知识组组织紧凑小节。"}
+容量边界：总计 ${Math.round(input.totalDurationSec)} 秒，其中节末短测预留约 ${assessmentDurationSec} 秒，其余时间由实际解释和必要操作共享。${plannedSections ? `必须严格按以下 ${plannedSections.length} 个小节及其顺序生成，不得合并、拆分或移动知识点。teachingBudgetSec 是整个相关知识簇共享的讲授预算，不是其中每个知识点各自拥有或必须相加的时间；不得用知识点数量乘以单点最低分钟数判断冲突。suggestedPageRange 是系统根据该预算和解释工作量作出的容量判断，下限用于避免单页过载，必须满足；上限是建议值，只有新增页面仍有足够时间完成一项实质解释时才可超出。紧密相关且能共用一个视觉焦点的定义与关系可同页；需要独立分析的例子、反例、操作或练习应拆页，不能把每个术语机械拆成一页：\n${JSON.stringify(plannedSections)}` : "尚未提供固定小节边界，请按知识组组织紧凑小节。"}
 
 必须覆盖的知识点：
 ${plannedSections ? "已完整列在上述已确认小节中；不得增加其他知识点。" : JSON.stringify(input.knowledgePoints.filter((point) => !plannedPointIds.size || plannedPointIds.has(point.id)).map((point) => ({
@@ -413,7 +457,7 @@ ${input.sourceContext?.trim() || "没有额外资料；可使用适龄的通行�
 
 illustrative-data 类型的 reviewItems 还必须填写 values（原始数值、单位和含义）以及 comparisonObjects（比较对象）；其他类型无对应内容时可省略。
 返回结构：
-{"capacityConflict":"仅在输入时间确实无法容纳必需内容时说明冲突，否则省略","sections":[{"title":"小节标题","learningObjective":"学生完成后能解释或完成的核心认识与技能","sharedContext":{"learningPurpose":"理解这些知识能解决什么认识或实践问题","caseId":"确需复用案例时填写，否则为空","caseFacts":["跨页稳定的必要案例事实"],"fixedWording":["跨页保持一致的关键事实"],"stableTerms":["核心术语"],"conceptBoundaries":["具体误解、正确边界及理由"]},"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID；每个ID在全部units中只出现一次"],"learningOutcome":"可观察的解释、推理或操作结果","explanation":"实际核心解释","mechanism":"前提、中间连接与结论","workedExample":"确有帮助时提供，否则为空","conditions":["适用条件或边界"],"misconceptions":["具体误解及纠正理由"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["可逐字核对时填写"],"estimatedTeachingWeight":1,"explanationNodes":[{"id":"单元内稳定ID","kind":"term|concept|relation|mechanism|example|condition|misconception","content":"一项可被页面引用的实际解释责任","knowledgePointIds":["该节点实际解释的本单元知识点ID"],"prerequisiteNodeIds":["同节中需要先理解的节点ID"],"provenance":"course-source|derived|general-knowledge|constructed|unverified"}],"reviewItems":[{"kind":"illustrative-data|constructed-example|unverified-claim","provenance":"derived|general-knowledge|constructed|unverified","content":"需要教师确认的具体内容","teachingPurpose":"它帮助学生理解什么","source":"已有来源或空字符串"}]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题","type":"slide|interactive","unitIds":["本节 unit id"],"introducesNodeIds":["本页首次建立的解释节点"],"deepensNodeIds":["本页继续展开的解释节点"],"referencesNodeIds":["只为承接而简短引用的已讲节点"],"estimatedTeachingWeight":1,"description":"本页实际展开的认识及前后进展","keyPoints":["学生必须看见才能跟随本页解释的信息"],"teachingObjective":"本页新增理解或技能","taskConnection":{"mode":"none|helpful-context|direct-application","rationale":"为什么连接或不连接最终任务更有利于本页理解"},"entryPoint":{"kind":"familiar-experience|concrete-observation|problem|direct-explanation|continuation","object":"学生实际能回想、观察或理解的对象／问题／直接命题","bridge":"该对象怎样自然引出本页新知识"},"visualRelationship":{"kind":"comparison|process|causal|system|quantitative|sequence|spatial|statement","description":"画面应帮助看清的关系，不规定模板","readingOrder":["建议观察顺序"],"preferredForm":"text|table|chart|diagram|illustration|mixed","rationale":"为什么这种形式最能帮助当前学习者看懂，不是版式配额"},"learningTask":{"learnerAction":"确有必要时填写","newContribution":"本页新增认识","reasoningFocus":"理由焦点","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"resourceNeeds":[{"kind":"diagram|image|video|interactive","purpose":"对理解的作用","required":true,"prompt":"内容要求","durationSec":8}],"widgetType":"仅互动页需要","widgetOutline":{},"reviewItems":[]}],"assessmentFocus":["只考已经讲解的内容"],"understandingCriteria":{"goals":["可观察理解目标"],"answerEssentials":["合格回答要点"],"misconceptions":["典型错误"],"supportingUnitIds":["本节 unit id"]}}]}
+{"capacityConflict":"仅在输入时间确实无法容纳必需内容时说明冲突，否则省略","sections":[{"title":"小节标题","learningObjective":"学生完成后能解释或完成的核心认识与技能","sharedContext":{"learningPurpose":"理解这些知识能解决什么认识或实践问题","caseId":"确需复用案例时填写，否则为空","caseFacts":["跨页稳定的必要案例事实"],"fixedWording":["跨页保持一致的关键事实"],"stableTerms":["核心术语"],"conceptBoundaries":["具体误解、正确边界及理由"]},"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID；每个ID在全部units中只出现一次"],"learningOutcome":"可观察的解释、推理或操作结果","explanation":"实际核心解释","mechanism":"前提、中间连接与结论","workedExample":"确有帮助时提供，否则为空","conditions":["适用条件或边界"],"misconceptions":["具体误解及纠正理由"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["可逐字核对时填写"],"estimatedTeachingWeight":1,"explanationNodes":[{"id":"单元内稳定ID","kind":"term|concept|relation|mechanism|example|condition|misconception","content":"一项可被页面引用的实际解释责任","knowledgePointIds":["该节点实际解释的本单元知识点ID"],"prerequisiteNodeIds":["同节中需要先理解的节点ID"],"provenance":"course-source|derived|general-knowledge|constructed|unverified"}],"reviewItems":[{"kind":"illustrative-data|constructed-example|unverified-claim","provenance":"derived|general-knowledge|constructed|unverified","content":"需要教师确认的具体内容","teachingPurpose":"它帮助学生理解什么","source":"已有来源或空字符串"}]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题","type":"slide|interactive","unitIds":["本节 unit id"],"introducesNodeIds":["本页首次建立的解释节点"],"deepensNodeIds":["本页继续展开的解释节点"],"referencesNodeIds":["只为承接而简短引用的已讲节点"],"estimatedTeachingWeight":1,"description":"本页实际展开的认识及前后进展","keyPoints":["学生必须看见才能跟随本页解释的信息"],"teachingObjective":"本页新增理解或技能","taskConnection":{"mode":"none|helpful-context|direct-application","rationale":"为什么连接或不连接最终任务更有利于本页理解"},"entryPoint":{"kind":"familiar-experience|concrete-observation|problem|direct-explanation|continuation","object":"学生实际能回想、观察或理解的对象／问题／直接命题","bridge":"该对象怎样自然引出本页新知识"},"visualRelationship":{"kind":"comparison|process|causal|system|quantitative|sequence|spatial|statement","description":"画面应帮助看清的关系，不规定模板","readingOrder":["建议观察顺序"],"preferredForm":"text|table|chart|diagram|illustration|mixed","rationale":"为什么这种形式最能帮助当前学习者看懂，不是版式配额"},"learningTask":{"learnerAction":"确有必要时填写","newContribution":"本页新增认识","reasoningFocus":"理由焦点","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"resourceNeeds":[{"kind":"diagram|image|video|interactive","purpose":"对理解的作用","required":true,"prompt":"内容要求","durationSec":8}],"widgetType":"仅互动页需要","widgetOutline":{},"reviewItems":[]}],"assessmentFocus":["本节测验必须覆盖的理解责任；不是逐题清单且不要指定题型"],"understandingCriteria":{"goals":["可观察理解目标"],"answerEssentials":["合格回答要点"],"misconceptions":["典型错误"],"supportingUnitIds":["本节 unit id"]}}]}
 
 约束：每个知识点必须且只能进入一个 unit，并至少进入一个 page；每个 explanationNode 至少被一页 introduces 或 deepens，且只能首次 introduces 一次；references 不能携带完整重复解释；页面映射由系统计算，不输出 page.knowledgePointIds 或 section.knowledgePointIds；estimatedTeachingWeight 是同层相对权重，不是秒数，并须包含该页承担的导入、解释或收束工作量；learningTask 仅在确有学习价值时提供；理解标准先于题目确定。若输入时间无法承载必需解释，返回明确容量说明，不得静默漏讲或自行增加时长。`;
   return { system, user };
@@ -1146,6 +1190,11 @@ export function teachingBlueprintToOutlines(
     });
     const assessmentTargets = sectionAssessmentTargets(section);
     const questionCount = sectionQuestionCount(section, blueprint.assessmentMode);
+    const assessmentQuestionPlan = sectionAssessmentQuestionPlan(
+      section,
+      questionCount,
+      blueprint.assessmentMode,
+    );
     const allowShortAnswer = blueprint.assessmentMode === "constructed-response" ? 1 : 0;
     const quizOutlineId = `${section.id}-check`;
     section.quizOutlineId = quizOutlineId;
@@ -1168,8 +1217,8 @@ export function teachingBlueprintToOutlines(
       title: `${section.title} · 节末小测`,
       description: blueprint.assessmentMode === "constructed-response"
         ? "依据预定理解标准，使用未在讲授示例中直接公布答案的新情境设置 1 道综合简答题，要求学生运用本小节全部知识给出结论和理由。"
-        : `依据预定理解标准，使用未在讲授示例中直接公布答案的简短新材料设置 ${questionCount} 道选择、判断、填空或拖拽配对题；题目合计覆盖本小节全部知识点。`,
-      keyPoints: section.assessmentFocus,
+        : `依据预定理解标准，使用未在讲授示例中直接公布答案的简短新材料设置 ${questionCount} 道轻量题；每条题目意图对应一道最终题，题目合计覆盖本小节全部知识点。`,
+      keyPoints: assessmentQuestionPlan.map((question) => question.intent),
       teachingObjective: section.assessmentFocus.join("；"),
       teachingBrief: sectionTeachingBrief(section),
       order: result.length,
@@ -1205,9 +1254,8 @@ export function teachingBlueprintToOutlines(
         difficulty: "medium",
         questionCount,
         coveragePolicy: "section-synthesis",
-        questionTypes: blueprint.assessmentMode === "constructed-response"
-          ? ["short_answer"]
-          : ["single", "multiple", "matching", "true_false", "fill_blank"],
+        questionTypes: [...new Set(assessmentQuestionPlan.map((question) => question.type))],
+        questionTypePlan: assessmentQuestionPlan.map((question) => question.type),
         minShortAnswerQuestions: allowShortAnswer,
         maxShortAnswerQuestions: allowShortAnswer,
       },

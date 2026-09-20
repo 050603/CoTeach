@@ -52,6 +52,8 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("没有每节必须使用几种形式的配额");
   expect(prompt.system).toContain("具有完整、可比较数值并需要看趋势");
   expect(prompt.system).toContain("不得考未讲内容");
+  expect(prompt.system).toContain("条目数量不等于最终题数");
+  expect(prompt.system).toContain("不要在其中指定选择、判断、填空等题型");
   expect(prompt.system).toContain("Constructed examples or data must not be given a fabricated institution");
   expect(prompt.system).toContain("未启用图片或视频时不得请求对应种类");
   expect(prompt.user).toContain('"sharedContext"');
@@ -215,6 +217,13 @@ function modelBlueprint() {
               mode: "direct-application",
               rationale: "本页目标就是把划分原则应用到分类器的数据准备。",
             },
+            visualRelationship: {
+              kind: "process",
+              description: "按识别对象、整体分组、划分集合和最终测试的顺序呈现修正过程。",
+              readingOrder: ["识别泛化对象", "按对象分组", "划分集合", "最终测试"],
+              preferredForm: "diagram",
+              rationale: "连续步骤图能直接显示信息泄漏在哪一步被阻断。",
+            },
             learningTask: {
               learnerAction: "比较随机按照片划分与按植物个体划分。",
               newContribution: "识别近重复记录造成的泄漏。",
@@ -345,8 +354,12 @@ describe("teaching blueprint compiler", () => {
     expect(quizzes.every((quiz) => (
       quiz.quizConfig?.minShortAnswerQuestions === 0
       && quiz.quizConfig?.maxShortAnswerQuestions === 0
-      && quiz.quizConfig?.questionTypes.includes("fill_blank")
       && !quiz.quizConfig?.questionTypes.includes("short_answer")
+    ))).toBe(true);
+    expect(quizzes.every((quiz) => (
+      quiz.keyPoints.length === quiz.quizConfig?.questionCount
+      && quiz.quizConfig.questionTypePlan?.length === quiz.quizConfig.questionCount
+      && new Set(quiz.quizConfig.questionTypePlan).size === quiz.quizConfig.questionTypes.length
     ))).toBe(true);
     expect(deriveKnowledgeLectureSectionsFromOutlines(outlines)).toHaveLength(2);
     expect(quizzes.every((quiz) => quiz.assessmentUnitIds?.length === 1 && quiz.assessmentUnitMap?.length === 1)).toBe(true);
@@ -359,6 +372,25 @@ describe("teaching blueprint compiler", () => {
       "teaching-section-2-unit-1/kp-split",
       "teaching-section-2-unit-1/kp-leak",
     ]);
+  });
+
+  it("compiles assessment responsibilities into the timed question count and preserves an explicit fill-blank intent", async () => {
+    const candidate = compactModelBlueprint();
+    candidate.sections[0]!.assessmentFocus = [
+      "判断新流程中的数据角色",
+      "辨析错误的数据划分结论",
+      "填空补全训练集与测试集的职责",
+      "说明数据泄漏如何影响评估可信度",
+    ];
+    const blueprint = await generateTeachingBlueprint({ ...input(), totalDurationSec: 300 }, async () => JSON.stringify(candidate));
+    const quiz = teachingBlueprintToOutlines(blueprint, "使用简体中文").find((outline) => outline.type === "quiz")!;
+
+    expect(quiz.quizConfig?.questionCount).toBe(2);
+    expect(quiz.keyPoints).toHaveLength(2);
+    expect(quiz.keyPoints[0]).toContain("判断新流程中的数据角色；辨析错误的数据划分结论");
+    expect(quiz.keyPoints[1]).toContain("填空补全训练集与测试集的职责；说明数据泄漏如何影响评估可信度");
+    expect(quiz.quizConfig?.questionTypePlan).toEqual(["true_false", "fill_blank"]);
+    expect(quiz.quizConfig?.questionTypes).toEqual(["true_false", "fill_blank"]);
   });
 
   it("accepts one substantive key point and preserves a changed-condition task without padding", async () => {

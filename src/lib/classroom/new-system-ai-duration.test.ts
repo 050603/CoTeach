@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildNewSystemAiDurationMessages,
+  deriveKnowledgeTeachingClusters,
   generateNewSystemAiDurationRecommendation,
   normalizeNewSystemAiDurationRecommendation,
   type NewSystemAiDurationInput,
@@ -44,7 +45,8 @@ describe("new-system AI duration judgment", () => {
     const messages = buildNewSystemAiDurationMessages(durationInput());
     expect(messages[0].content).toContain("20%–40%");
     expect(messages[0].content).toContain("24–48 分钟");
-    expect(messages[0].content).toContain("确定总时长后再分配知识点预算");
+    expect(messages[0].content).toContain("确定总时长后再分配知识簇预算");
+    expect(messages[0].content).toContain("不得输出逐知识点时间表");
     expect(messages[0].content).toContain("不得套用固定讲解比例");
     expect(messages[0].content).not.toContain("68%");
     expect(messages[1].content).toContain('"availableMinutes":120');
@@ -55,9 +57,9 @@ describe("new-system AI duration judgment", () => {
       durationMin: 42,
       rationale: "概念讲解较短，方案比较需要完整练习与反馈。",
       confidence: "high",
-      knowledgePointBudgets: [
-        { knowledgePointId: "kp-1", durationMin: 12, rationale: "概念与例证" },
-        { knowledgePointId: "kp-2", durationMin: 30, rationale: "比较、练习与检测" },
+      teachingClusterBudgets: [
+        { clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 12, rationale: "概念与例证" },
+        { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 30, rationale: "比较、练习与检测" },
       ],
       evidence: ["知识图谱包含一条从概念到应用的依赖"],
       assumptions: ["学生已认识常见电器"],
@@ -66,7 +68,7 @@ describe("new-system AI duration judgment", () => {
     const result = await generateNewSystemAiDurationRecommendation(durationInput(), { modelCall });
 
     expect(result.durationMin).toBe(42);
-    expect(result.knowledgePointBudgets.map((item) => item.durationMin)).toEqual([12, 30]);
+    expect(result.teachingClusterBudgets.map((item) => item.durationMin)).toEqual([12, 30]);
     expect(modelCall).toHaveBeenCalledOnce();
   });
 
@@ -75,9 +77,9 @@ describe("new-system AI duration judgment", () => {
       durationMin: 42,
       rationale: "概念讲解与方案比较需要完整练习。",
       confidence: "high",
-      knowledgePointBudgets: [
-        { knowledgePointId: "kp-1", durationMin: 12, rationale: "概念" },
-        { knowledgePointId: "kp-2", durationMin: 30, rationale: "应用" },
+      teachingClusterBudgets: [
+        { clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 12, rationale: "概念" },
+        { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 30, rationale: "应用" },
       ],
     });
     const aiCall = vi.fn().mockResolvedValue(payload);
@@ -89,7 +91,7 @@ describe("new-system AI duration judgment", () => {
     });
 
     expect(result.durationMin).toBe(42);
-    expect(result.knowledgePointBudgets.map((item) => item.durationMin)).toEqual([12, 30]);
+    expect(result.teachingClusterBudgets.map((item) => item.durationMin)).toEqual([12, 30]);
     expect(aiCall).toHaveBeenCalledOnce();
     expect(modelCall).not.toHaveBeenCalled();
   });
@@ -101,9 +103,9 @@ describe("new-system AI duration judgment", () => {
         durationMin: 36,
         rationale: "概念讲解和应用判断均需要课堂时间。",
         confidence: "medium",
-        knowledgePointBudgets: [
-          { knowledgePointId: "kp-1", durationMin: 12, rationale: "概念" },
-          { knowledgePointId: "kp-2", durationMin: 24, rationale: "应用" },
+        teachingClusterBudgets: [
+          { clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 12, rationale: "概念" },
+          { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 24, rationale: "应用" },
         ],
       }));
 
@@ -121,17 +123,18 @@ describe("new-system AI duration judgment", () => {
       durationMin,
       rationale: "完整展开需要更长时间。",
       confidence: "medium",
-      knowledgePointBudgets: [
-        { knowledgePointId: "kp-1", durationMin: 50, rationale: "概念" },
-        { knowledgePointId: "kp-2", durationMin: 100, rationale: "应用" },
+      teachingClusterBudgets: [
+        { clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 50, rationale: "概念" },
+        { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 100, rationale: "应用" },
       ],
       evidence: [],
       assumptions: [],
     }, durationInput());
 
     expect(result.durationMin).toBe(48);
-    expect(result.scopeWarning).toContain("压缩至 48 分钟");
-    expect(result.knowledgePointBudgets.reduce((sum, item) => sum + item.durationMin, 0)).toBe(48);
+    expect(result.scopeWarning).toBeUndefined();
+    expect(result.assumptions.join(" ")).toContain("已按整课 40% 上限调整为 48 分钟");
+    expect(result.teachingClusterBudgets.reduce((sum, item) => sum + item.durationMin, 0)).toBe(48);
   });
 
   it("fills missing point budgets without dropping a confirmed knowledge point", () => {
@@ -139,15 +142,15 @@ describe("new-system AI duration judgment", () => {
       durationMin: 36,
       rationale: "需要讲解、练习和检测。",
       confidence: "low",
-      knowledgePointBudgets: [
-        { knowledgePointId: "kp-1", durationMin: 10, rationale: "概念" },
+      teachingClusterBudgets: [
+        { clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 10, rationale: "概念" },
       ],
     }, durationInput());
 
-    expect(result.knowledgePointBudgets.map((item) => item.knowledgePointId))
-      .toEqual(["kp-1", "kp-2"]);
-    expect(result.knowledgePointBudgets[1]?.durationMin).toBeGreaterThan(0);
-    expect(result.knowledgePointBudgets.reduce((sum, item) => sum + item.durationMin, 0)).toBe(36);
+    expect(result.teachingClusterBudgets.map((item) => item.clusterId))
+      .toEqual(["teaching-cluster-1", "teaching-cluster-2"]);
+    expect(result.teachingClusterBudgets[1]?.durationMin).toBeGreaterThan(0);
+    expect(result.teachingClusterBudgets.reduce((sum, item) => sum + item.durationMin, 0)).toBe(36);
   });
 
   it("raises too-short advice to 20 percent, not a knowledge-count-based floor", () => {
@@ -155,7 +158,61 @@ describe("new-system AI duration judgment", () => {
     input.knowledgePoints = Array.from({ length: 30 }, (_, i) => ({ id: `kp-${i}`, name: `知识${i}`, description: "" }));
     const result = normalizeNewSystemAiDurationRecommendation({ durationMin: 5, rationale: "精简讲解" }, input);
     expect(result.durationMin).toBe(24);
-    expect(result.knowledgePointBudgets.reduce((sum, item) => sum + item.durationMin, 0)).toBeCloseTo(24);
+    expect(result.teachingClusterBudgets.reduce((sum, item) => sum + item.durationMin, 0)).toBeCloseTo(24);
     expect(result.assumptions.join(" ")).toContain("20% 下限");
+  });
+
+  it("assigns one shared budget to several related knowledge points", () => {
+    const input = durationInput();
+    input.knowledgePoints = Array.from({ length: 4 }, (_, index) => ({
+      id: `related-${index + 1}`,
+      name: `相关概念 ${index + 1}`,
+      description: "共同解释同一机制",
+      groupId: "shared-mechanism",
+      groupName: "同一机制",
+    }));
+    const clusters = deriveKnowledgeTeachingClusters(input.knowledgePoints);
+    const result = normalizeNewSystemAiDurationRecommendation({
+      durationMin: 24,
+      rationale: "四个概念通过一张关系图和同一个案例共同讲解。",
+      teachingClusterBudgets: [{
+        clusterId: "teaching-cluster-1",
+        knowledgePointIds: input.knowledgePoints.map((point) => point.id),
+        durationMin: 24,
+        rationale: "共享引入、关系解释、案例与检测。",
+      }],
+      scopeWarning: "平均每个知识点只有 6 分钟，因此讲不完。",
+    }, input);
+
+    expect(clusters).toEqual([{
+      id: "teaching-cluster-1",
+      title: "同一机制",
+      knowledgePointIds: input.knowledgePoints.map((point) => point.id),
+    }]);
+    expect(result.teachingClusterBudgets).toEqual([expect.objectContaining({
+      knowledgePointIds: input.knowledgePoints.map((point) => point.id),
+      durationMin: 24,
+    })]);
+    expect(result.scopeWarning).toBeUndefined();
+  });
+
+  it("keeps a structured cluster-level capacity conflict for teacher resolution", () => {
+    const result = normalizeNewSystemAiDurationRecommendation({
+      durationMin: 30,
+      rationale: "先合并共同讲解，再检查最低掌握边界。",
+      teachingClusterBudgets: [
+        { clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 10, rationale: "共享概念讲解" },
+        { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 20, rationale: "应用练习" },
+      ],
+      capacityConflict: {
+        unresolvedClusterIds: ["teaching-cluster-2"],
+        reason: "仍缺少一次完整的方案判断与反馈",
+        compressionTried: "合并概念引入并取消第二个扩展示例",
+      },
+    }, durationInput());
+
+    expect(result.scopeWarning).toContain("仍缺少一次完整的方案判断与反馈");
+    expect(result.scopeWarning).toContain("节能判断");
+    expect(result.scopeWarning).toContain("合并概念引入并取消第二个扩展示例");
   });
 });

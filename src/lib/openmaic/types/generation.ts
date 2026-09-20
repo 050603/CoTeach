@@ -325,6 +325,8 @@ export interface SceneOutline {
     questionCount: number;
     difficulty: 'easy' | 'medium' | 'hard';
     questionTypes: ('single' | 'multiple' | 'matching' | 'short_answer' | 'true_false' | 'fill_blank' | 'scenario_task')[];
+    /** Exact ordered formats compiled from the reviewed assessment intents. */
+    questionTypePlan?: ('single' | 'multiple' | 'matching' | 'short_answer' | 'true_false' | 'fill_blank' | 'scenario_task')[];
     coveragePolicy?: 'each-target' | 'section-synthesis';
     /** Minimum explanation-style responses required by the adopted understanding standard. */
     minShortAnswerQuestions?: number;

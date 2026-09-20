@@ -305,6 +305,7 @@ describe("buildTeachingOutlinePrompt", () => {
       expect(prompt).toContain("理解分类与简单统计图");
     }
     expect(prompts[0]).toContain("知识点数量范围：5-8");
+    expect(prompts[2]).toContain("禁止按“知识点数量 × 单点分钟数”分配或判断冲突");
   });
 
   it("treats teacher-specified knowledge points as non-optional graph constraints", () => {

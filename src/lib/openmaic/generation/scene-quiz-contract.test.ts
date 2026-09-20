@@ -111,6 +111,64 @@ describe('section short-answer quiz contract', () => {
     expect(questions.filter((question) => question.format === 'short_answer' || question.format === 'scenario_task')).toHaveLength(0);
   });
 
+  it('follows the compiled ordered question plan instead of treating fill-blank as an optional format', async () => {
+    const adaptive: SceneOutline = {
+      ...outline,
+      keyPoints: [
+        '第 1 题综合考查：识别训练数据的职责',
+        '第 2 题综合考查：填空补全独立测试的作用',
+      ],
+      quizConfig: {
+        difficulty: 'medium',
+        questionCount: 2,
+        questionTypes: ['single', 'fill_blank'],
+        questionTypePlan: ['single', 'fill_blank'],
+        minShortAnswerQuestions: 0,
+        maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([
+      {
+        id: 'q1', type: 'single', question: '哪一组数据用于学习参数？',
+        options: [{ label: '训练集', value: 'A' }, { label: '测试集', value: 'B' }],
+        answer: ['A'], analysis: '训练集用于学习参数。', knowledgePointIds: ['kp-sampling'], points: 10,
+      },
+      {
+        id: 'q2', type: 'fill_blank', format: 'fill_blank', question: '测试集用于____模型在新数据上的表现。',
+        analysis: '应填独立检验。', knowledgePointIds: ['kp-sampling'], points: 10,
+      },
+    ]));
+
+    const result = await generateSceneContent(adaptive, ai);
+    const questions = result && 'questions' in result ? result.questions : [];
+    expect(ai.mock.calls[0][1]).toContain('question 1 must use type="single"; question 2 must use type="fill_blank"');
+    expect(ai.mock.calls[0][1]).toContain('Each numbered Test Point maps to the same-numbered question');
+    expect(questions.map((question) => question.format)).toEqual(['single_choice', 'fill_blank']);
+  });
+
+  it('rejects a provider response that replaces a compiled fill-blank question with another format', async () => {
+    const adaptive: SceneOutline = {
+      ...outline,
+      keyPoints: ['第 1 题综合考查：识别职责', '第 2 题综合考查：填空补全作用'],
+      quizConfig: {
+        difficulty: 'medium', questionCount: 2,
+        questionTypes: ['single', 'fill_blank'],
+        questionTypePlan: ['single', 'fill_blank'],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([
+      { id: 'q1', type: 'single', question: '训练集用于什么？', options: [{ label: '学习参数', value: 'A' }, { label: '最终评分', value: 'B' }], answer: ['A'], analysis: '学习参数。', knowledgePointIds: ['kp-sampling'], points: 10 },
+      { id: 'q2', type: 'single', question: '测试集用于什么？', options: [{ label: '独立检验', value: 'A' }, { label: '反复调参', value: 'B' }], answer: ['A'], analysis: '独立检验。', knowledgePointIds: ['kp-sampling'], points: 10 },
+    ]));
+
+    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow(
+      'returned question formats single_choice, single_choice; expected exact plan single_choice, fill_blank',
+    );
+  });
+
   it('rejects an incomplete quiz result so the affected page can be retried', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify([]));
     await expect(generateSceneContent(outline, ai)).rejects.toThrow('returned 0/1 usable questions');

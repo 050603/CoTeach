@@ -33,6 +33,36 @@ export type NewSystemAiDurationInput = {
   stagePlan?: CourseStagePlan;
 };
 
+export type KnowledgeTeachingCluster = {
+  id: string;
+  title: string;
+  knowledgePointIds: string[];
+};
+
+/**
+ * Time belongs to a shared explanation sequence, not to each knowledge label.
+ * Knowledge generation already provides semantic group ids; preserve those
+ * groups here so related definitions, relations and examples can share time.
+ */
+export function deriveKnowledgeTeachingClusters(
+  knowledgePoints: readonly KnowledgePoint[],
+): KnowledgeTeachingCluster[] {
+  const groups = new Map<string, { title: string; knowledgePointIds: string[] }>();
+  for (const point of knowledgePoints) {
+    const key = point.groupId?.trim() || point.groupName?.trim() || point.id;
+    const title = point.groupName?.trim() || point.name.trim() || "相关知识";
+    const current = groups.get(key);
+    groups.set(key, current
+      ? { ...current, knowledgePointIds: [...current.knowledgePointIds, point.id] }
+      : { title, knowledgePointIds: [point.id] });
+  }
+  return [...groups.values()].map((group, index) => ({
+    id: `teaching-cluster-${index + 1}`,
+    title: group.title,
+    knowledgePointIds: group.knowledgePointIds,
+  }));
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -74,9 +104,28 @@ function knowledgePointWeight(
   return (point.level ? levelWeight[point.level] : 4) + Math.min(3, incidentEdges * 0.4);
 }
 
+function teachingClusterWeight(
+  cluster: KnowledgeTeachingCluster,
+  pointsById: ReadonlyMap<string, KnowledgePoint>,
+  graph: KnowledgeGraph | undefined,
+): number {
+  const memberWeights = cluster.knowledgePointIds
+    .map((id) => pointsById.get(id))
+    .filter((point): point is KnowledgePoint => Boolean(point))
+    .map((point) => knowledgePointWeight(point, graph));
+  const members = new Set(cluster.knowledgePointIds);
+  const internalRelations = graph?.edges.filter((edge) => (
+    members.has(edge.source) && members.has(edge.target)
+  )).length ?? 0;
+  return Math.max(1, ...memberWeights)
+    + Math.log2(cluster.knowledgePointIds.length + 1) * 0.75
+    + Math.min(2, internalRelations * 0.25);
+}
+
 export function buildNewSystemAiDurationMessages(input: NewSystemAiDurationInput) {
   const { courseMinutes: availableMinutes, minMinutes, maxMinutes, source } = knowledgeLectureBudgetBounds(input.course.hours, input.stagePlan);
   const fixed = source === "resource-package";
+  const teachingClusters = deriveKnowledgeTeachingClusters(input.knowledgePoints);
   return [
     {
       role: "system" as const,
@@ -84,22 +133,22 @@ export function buildNewSystemAiDurationMessages(input: NewSystemAiDurationInput
 
 关键规则：
 1. ${fixed ? `教师确认的资源包教案规定整课 ${availableMinutes} 分钟，第二阶段知识讲授固定 ${minMinutes} 分钟。不得修改总时长，不得另按比例缩放。` : `教师填写的 ${availableMinutes} 分钟是整节 PBL 课程总时长。第二阶段知识讲授必须占总时长的 20%–40%，即 ${minMinutes}–${maxMinutes} 分钟，这是不可突破的硬约束；其他阶段必须保留充足时间。`}
-2. 上游知识图谱已经完整保留资源包规定的全部必授知识点，并可能增加必要的桥接或拓展节点。${fixed ? "总 durationMin 已锁定，只根据这些节点的层级、抽象度、依赖深度、可组合关系与学生基础分配时间。" : "在上述范围内选择总 durationMin，用更多时间深化已确认结构，不要在这个阶段删除或扩张知识点。"}确定总时长后再分配知识点预算，最后才生成课程；不要根据页数反推或扩大总时长。
-3. 时间分配以解释工作量和知识关系为依据。多个紧密相关知识点可共用概念引入、关系图、案例和判断过程，共享讲解只计一次；每个知识点仍须获得可识别的讲授责任。不得按知识点数量机械平均，也不得以“定义＋一个例子”的最低配置冒充完整覆盖。
+2. 上游知识图谱已经完整保留资源包规定的全部必授知识点，并已按 groupId/groupName 形成可共同讲解的 teachingClusters。时间分配的最小单位是知识簇，不是单个知识点。${fixed ? "总 durationMin 已锁定，只根据各知识簇的共同解释主线、抽象度、依赖深度与学生基础分配时间。" : "在上述范围内选择总 durationMin，用更多时间深化已确认结构，不要在这个阶段删除或扩张知识点。"}确定总时长后再分配知识簇预算，最后才生成课程；不要根据页数反推或扩大总时长。
+3. 多个紧密相关知识点共用一次概念引入、关系图、案例和判断过程，共享讲解只计一次。不得先给每个知识点设置最低分钟数再相加，不得输出逐知识点时间表，也不得用“知识点数量 × 单点分钟数”判断容量冲突。知识簇内每个知识点仍须获得可识别的解释责任，但不各自占用互斥时间。
 4. 普通模式只安排教学必要的互动；深度交互模式需给真实操作、观察反馈与修正留出时间，但不得用“点击下一步/查看详情”一类伪互动凑时长。
-5. durationMin 必须为 ${minMinutes}–${maxMinutes} 范围内的整数。按必要解释、可共享的关系讲解、例子分析、操作或思考、小节检测的实际需要分别估时；小测及反馈合计不超过 20%，不得套用固定讲解比例或在总预算外追加时间。scopeWarning 只用于“在合理组合讲授并减少可选扩展后，必授知识仍无法达到最低掌握边界”的真实冲突，不能仅因知识点数量多或简单计算平均分钟数而报警。
-6. knowledgePointId 必须逐项使用输入中已有的精确 ID；每个本课知识点恰好出现一次；各项 durationMin 之和必须等于总 durationMin。
+5. durationMin 必须为 ${minMinutes}–${maxMinutes} 范围内的整数。按知识簇共同解释、例子分析、操作或思考、小节检测的实际需要分别估时；小测及反馈合计不超过 20%，不得套用固定讲解比例或在总预算外追加时间。
+6. teachingClusterBudgets 必须逐项使用输入 teachingClusters 的精确 clusterId 和完整 knowledgePointIds；每个知识簇恰好出现一次，各簇 durationMin 之和必须等于总 durationMin。只有在共享引入、共享案例、减少重复和取消可选扩展后，某个完整知识簇仍无法达到最低掌握边界时，才返回 capacityConflict；必须列出真实 unresolvedClusterIds。按单个知识点平均分钟数得出的冲突无效。
 
 只返回 JSON：{
   "durationMin": ${Math.round((minMinutes + maxMinutes) / 2)},
   "rationale": "为什么该时长足以讲清且没有注水",
   "confidence": "low|medium|high",
-  "knowledgePointBudgets": [
-    { "knowledgePointId": "精确ID", "durationMin": 8, "rationale": "本知识点为何需要这些时间" }
+  "teachingClusterBudgets": [
+    { "clusterId": "精确知识簇ID", "knowledgePointIds": ["该簇全部知识点ID"], "durationMin": 8, "rationale": "这组相关知识如何共享讲解以及为何需要这些时间" }
   ],
   "evidence": ["影响时长的可观察依据"],
   "assumptions": ["无法从输入确认但规划时采用的假设"],
-  "scopeWarning": "可选；只有容量不足时填写"
+  "capacityConflict": { "unresolvedClusterIds": ["确实无法达到最低掌握边界的知识簇ID"], "reason": "共享讲解和缩减可选扩展后仍缺少哪些必要教学动作", "compressionTried": "已经采用的组合与压缩方式" }
 }。`,
     },
     {
@@ -121,6 +170,7 @@ export function buildNewSystemAiDurationMessages(input: NewSystemAiDurationInput
         teachingRequirements: input.stagePlan?.stages.find((stage) => stage.key === "ai-learning"),
         generationMode: input.generationMode,
         assessmentMode: input.assessmentMode ?? "constructed-response",
+        teachingClusters,
         knowledgePoints: input.knowledgePoints,
         knowledgeScopePlan: input.knowledgeScopePlan,
         knowledgeGraph: input.knowledgeGraph
@@ -152,40 +202,69 @@ export function normalizeNewSystemAiDurationRecommendation(
     maxMinutes,
     Math.max(minMinutes, Math.round(requestedDuration)),
   );
-  const rawBudgets = Array.isArray(raw.knowledgePointBudgets)
-    ? raw.knowledgePointBudgets.map(asRecord)
+  const teachingClusters = deriveKnowledgeTeachingClusters(input.knowledgePoints);
+  const pointsById = new Map(input.knowledgePoints.map((point) => [point.id, point]));
+  const rawBudgets = Array.isArray(raw.teachingClusterBudgets)
+    ? raw.teachingClusterBudgets.map(asRecord)
     : [];
   const budgetById = new Map<string, Record<string, unknown>>();
   rawBudgets.forEach((budget) => {
-    const id = text(budget.knowledgePointId);
+    const id = text(budget.clusterId);
     if (id && !budgetById.has(id)) budgetById.set(id, budget);
   });
-  const knowledgePointBudgets = input.knowledgePoints.map((point) => {
-    const budget = budgetById.get(point.id);
+  // Accept an old completed response only as weight evidence. It is folded
+  // into canonical semantic groups and never restored as per-point timing.
+  const legacyPointBudgets = Array.isArray(raw.knowledgePointBudgets)
+    ? raw.knowledgePointBudgets.map(asRecord)
+    : [];
+  const legacyWeightByPointId = new Map(legacyPointBudgets.flatMap((budget) => {
+    const id = text(budget.knowledgePointId);
+    const duration = finitePositive(budget.durationMin);
+    return id && duration ? [[id, duration] as const] : [];
+  }));
+  const teachingClusterBudgets = teachingClusters.map((cluster) => {
+    const budget = budgetById.get(cluster.id);
+    const legacyWeight = cluster.knowledgePointIds.reduce(
+      (sum, id) => sum + (legacyWeightByPointId.get(id) ?? 0),
+      0,
+    );
     return {
-      knowledgePointId: point.id,
+      clusterId: cluster.id,
+      title: cluster.title,
+      knowledgePointIds: cluster.knowledgePointIds,
       durationMin: finitePositive(budget?.durationMin)
-        ?? knowledgePointWeight(point, input.knowledgeGraph),
+        ?? (legacyWeight > 0 ? legacyWeight : teachingClusterWeight(cluster, pointsById, input.knowledgeGraph)),
       rationale: text(budget?.rationale)
-        || `${point.level ?? "core"} 层级，并结合其在知识图谱中的依赖关系分配。`,
+        || `围绕“${cluster.title}”共享引入、关系解释与案例，覆盖 ${cluster.knowledgePointIds.length} 个相关知识点。`,
     };
   });
-  // Fine-grained budgets must also add up to the chosen total, even when the
-  // model's original recommendation was clamped or omitted a knowledge point.
-  const unit = knowledgePointBudgets.length > durationMin ? 60 : 1;
-  const allocations = allocateLectureBudget(durationMin * unit, knowledgePointBudgets.map((budget) => budget.durationMin));
-  knowledgePointBudgets.forEach((budget, index) => { budget.durationMin = allocations[index]! / unit; });
+  // Shared cluster budgets add up to the chosen total. Knowledge points inside
+  // a cluster intentionally do not receive mutually exclusive sub-budgets.
+  const unit = teachingClusterBudgets.length > durationMin ? 60 : 1;
+  const allocations = allocateLectureBudget(
+    durationMin * unit,
+    teachingClusterBudgets.map((budget) => budget.durationMin),
+  );
+  teachingClusterBudgets.forEach((budget, index) => { budget.durationMin = allocations[index]! / unit; });
   const confidenceValue = text(raw.confidence);
   const confidence = confidenceValue === "low" || confidenceValue === "high"
     ? confidenceValue
     : "medium";
-  const modelScopeWarning = text(raw.scopeWarning);
-  const scopeWarning = fixed
-    ? modelScopeWarning || undefined
-    : requestedDuration > maxMinutes
-    ? [`模型原建议 ${Math.round(requestedDuration)} 分钟超出整课 40% 上限，已压缩至 ${maxMinutes} 分钟；后续按此预算生成内容，合并关联知识并缩减非核心拓展。`, modelScopeWarning].filter(Boolean).join(" ")
-    : modelScopeWarning || undefined;
+  const rawConflict = asRecord(raw.capacityConflict);
+  const validClusterIds = new Set(teachingClusters.map((cluster) => cluster.id));
+  const unresolvedClusterIds = textArray(rawConflict.unresolvedClusterIds)
+    .filter((id) => validClusterIds.has(id));
+  const conflictReason = text(rawConflict.reason);
+  const compressionTried = text(rawConflict.compressionTried);
+  const scopeWarning = unresolvedClusterIds.length > 0 && conflictReason && compressionTried
+    ? `${conflictReason}（涉及：${unresolvedClusterIds.map((id) => (
+        teachingClusters.find((cluster) => cluster.id === id)?.title ?? id
+      )).join("、")}；已尝试：${compressionTried}）`
+    : undefined;
   const assumptions = textArray(raw.assumptions);
+  if (!fixed && requestedDuration > maxMinutes) {
+    assumptions.push(`模型原建议 ${Math.round(requestedDuration)} 分钟，已按整课 40% 上限调整为 ${maxMinutes} 分钟；相关知识继续使用共享知识簇预算。`);
+  }
   if (!fixed && requestedDuration < minMinutes) {
     assumptions.push(`原始建议低于整课 20% 下限，已调整为 ${durationMin} 分钟；讲解与节末小测均包含在此预算内。`);
   }
@@ -197,7 +276,7 @@ export function normalizeNewSystemAiDurationRecommendation(
     durationMin,
     rationale,
     confidence,
-    knowledgePointBudgets,
+    teachingClusterBudgets,
     evidence: textArray(raw.evidence).length > 0
       ? textArray(raw.evidence)
       : [

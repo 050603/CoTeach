@@ -77,6 +77,7 @@ import {
   buildNewSystemAiTimingPlan,
   buildNewSystemAiTeachingOutline,
   isNewSystemAiTimingPlan,
+  NEW_SYSTEM_AI_TIMING_POLICY_VERSION,
 } from "@/lib/classroom/new-system-course";
 import {
   generateNewSystemAiDurationRecommendation,
@@ -1573,35 +1574,48 @@ export function buildTeachingBlueprintSectionPlans(
   }
   const groupedEntries = [...groups.values()];
   if (!groupedEntries.length) return [];
-  const durationByPoint = new Map(
-    (content.moduleTimingPlan?.allocations ?? []).flatMap((allocation) =>
-      (allocation.knowledgePointIds ?? []).map((id) => [id, Math.max(0, allocation.durationMin)] as const)),
-  );
+  const clusterAllocations = (content.moduleTimingPlan?.allocations ?? [])
+    .filter((allocation) => allocation.stageKey === "ai-learning" && allocation.durationMin > 0);
   const pointById = new Map(content.knowledgePoints.map((point) => [point.id, point]));
   const pointWeight = (id: string) => {
     const point = pointById.get(id);
-    const allocated = durationByPoint.get(id);
     const conceptualEffort = point?.level === "core" ? 1.5 : point?.level === "application" ? 1.25 : 1;
     const relationEffort = point?.masteryBoundary?.trim() ? 0.35 : 0;
-    return allocated && allocated > 0 ? allocated : conceptualEffort + relationEffort;
+    return conceptualEffort + relationEffort;
   };
   const assessmentReserveSec = Math.min(
     Math.floor(totalDurationSec * 0.2),
     Math.max(Math.min(groupedEntries.length, totalDurationSec), Math.round(totalDurationSec * 0.12)),
   );
   const explanationBudgetSec = Math.max(groupedEntries.length, totalDurationSec - assessmentReserveSec);
-  const groupedWeights = groupedEntries.map((entry) =>
-    entry.knowledgePointIds.reduce((sum, id) => sum + pointWeight(id), 0));
+  const groupedWeights = groupedEntries.map((entry) => {
+    const ids = new Set(entry.knowledgePointIds);
+    // A cluster duration is shared by all of its knowledge points. Attribute
+    // it once to an overlapping section instead of copying the full duration
+    // to every member and accidentally multiplying the budget by point count.
+    const allocatedWeight = clusterAllocations.reduce((sum, allocation) => {
+      const members = allocation.knowledgePointIds ?? [];
+      if (!members.length) return sum;
+      const overlap = members.filter((id) => ids.has(id)).length;
+      return sum + allocation.durationMin * overlap / members.length;
+    }, 0);
+    return allocatedWeight > 0
+      ? allocatedWeight
+      : entry.knowledgePointIds.reduce((sum, id) => sum + pointWeight(id), 0);
+  });
   const groupedBudgets = allocateLectureBudget(explanationBudgetSec, groupedWeights, 1);
   const maxSectionTeachingSec = 9 * 60;
   const entries = groupedEntries.flatMap((entry, groupIndex) => {
     const groupBudgetSec = groupedBudgets[groupIndex] ?? 1;
-    const groupWeight = Math.max(0.01, groupedWeights[groupIndex] ?? 1);
+    const groupPointEffort = Math.max(
+      0.01,
+      entry.knowledgePointIds.reduce((sum, id) => sum + pointWeight(id), 0),
+    );
     const chunks: string[][] = [];
     let current: string[] = [];
     let currentProjectedSec = 0;
     for (const id of entry.knowledgePointIds) {
-      const projectedSec = groupBudgetSec * pointWeight(id) / groupWeight;
+      const projectedSec = groupBudgetSec * pointWeight(id) / groupPointEffort;
       if (current.length && currentProjectedSec + projectedSec > maxSectionTeachingSec) {
         chunks.push(current);
         current = [];
@@ -1612,14 +1626,22 @@ export function buildTeachingBlueprintSectionPlans(
     }
     if (current.length) chunks.push(current);
     return chunks.map((knowledgePointIds) => {
-      if (chunks.length === 1) return { title: entry.title, knowledgePointIds };
+      const chunkEffort = knowledgePointIds.reduce((sum, id) => sum + pointWeight(id), 0);
+      // Keep the cluster's already-normalized budget when a long cluster is
+      // split into several blueprint sections. Point effort only divides that
+      // shared budget between chunks; it must not replace the cluster budget.
+      const planningWeight = groupBudgetSec * chunkEffort / groupPointEffort;
+      if (chunks.length === 1) return { title: entry.title, knowledgePointIds, planningWeight };
       const names = knowledgePointIds.map((id) => pointById.get(id)?.name.trim()).filter(Boolean);
       const focus = names.length <= 2 ? names.join("与") : `${names[0]}等`;
-      return { title: focus ? `${entry.title}·${focus}` : entry.title, knowledgePointIds };
+      return {
+        title: focus ? `${entry.title}·${focus}` : entry.title,
+        knowledgePointIds,
+        planningWeight,
+      };
     });
   });
-  const weights = entries.map((entry) =>
-    entry.knowledgePointIds.reduce((sum, id) => sum + pointWeight(id), 0));
+  const weights = entries.map((entry) => entry.planningWeight);
   const sectionBudgets = allocateLectureBudget(explanationBudgetSec, weights, 1);
   return entries.map(({ title, knowledgePointIds }, index) => {
     const teachingBudgetSec = sectionBudgets[index] ?? 1;
@@ -2562,7 +2584,7 @@ async function runNewSystemCourseDesign(
     && request.capacityDecisionAccepted === true
     && Boolean(timingPlan);
   if (!timingPlan) {
-    await beginStep(job, "aiDurationPlanning", 2, 58, course.content.stagePlan ? "正在按教案固定时长分配知识点预算" : "正在整课 20%–40% 范围内确定知识讲授总时长");
+    await beginStep(job, "aiDurationPlanning", 2, 58, course.content.stagePlan ? "正在按教案固定时长分配知识簇预算" : "正在整课 20%–40% 范围内确定知识讲授总时长");
     const durationInput: NewSystemAiDurationInput = {
       course,
       knowledgePoints: course.content.knowledgePoints,
@@ -2574,7 +2596,11 @@ async function runNewSystemCourseDesign(
       referenceMaterials: request.referenceMaterials,
       stagePlan: course.content.stagePlan,
     };
-    const durationInputFingerprint = fingerprintGenerationValue({ schemaVersion: 1, input: durationInput });
+    const durationInputFingerprint = fingerprintGenerationValue({
+      schemaVersion: 2,
+      policyVersion: NEW_SYSTEM_AI_TIMING_POLICY_VERSION,
+      input: durationInput,
+    });
     const durationModelFingerprint = await courseDesignModelFingerprint(request);
     const storedCheckpoints = await loadGenerationCheckpoints(job.id);
     const storedDuration = checkpointRecord(storedCheckpoints.aiDuration);
@@ -2659,9 +2685,9 @@ async function runNewSystemCourseDesign(
       summary: `${course.content.stagePlan ? "教案锁定" : "AI 确定"}知识讲授 ${timingPlan.totalMinutes} 分钟（占整课 ${Math.round(timingPlan.totalMinutes / (course.hours * 60) * 100)}%）`,
       status: durationRecommendation.scopeWarning ? "warning" : "completed",
       checks: [
-        "已按知识点层级、依赖关系与学情动态判断",
+        "已按知识簇的共同解释主线、依赖关系与学情动态判断",
         course.content.stagePlan ? `按教案确认的 ${timingPlan.totalMinutes} 分钟生成，讲解、互动和小测不再额外加时` : `已在整课 ${Math.round(course.hours * 60)} 分钟的 20%–40% 范围内确定预算，讲解、互动和小测不再额外加时`,
-        `已为 ${timingPlan.allocations.length} 个知识点生成时间预算`,
+        `已为 ${timingPlan.allocations.length} 个知识簇生成共享时间预算，覆盖 ${course.content.knowledgePoints.length} 个知识点`,
         ...(durationRecommendation.scopeWarning
           ? [`范围提醒：${durationRecommendation.scopeWarning}`]
           : []),
@@ -2675,9 +2701,9 @@ async function runNewSystemCourseDesign(
         "violet",
         timingPlan.allocations.map((allocation) => ({
           label: `${allocation.durationMin} 分钟`,
-          value: allocation.title ?? "知识点",
-          meta: durationRecommendation.knowledgePointBudgets.find(
-            (budget) => allocation.knowledgePointIds?.includes(budget.knowledgePointId),
+          value: allocation.title ?? "知识簇",
+          meta: durationRecommendation.teachingClusterBudgets.find(
+            (budget) => budget.knowledgePointIds.some((id) => allocation.knowledgePointIds?.includes(id)),
           )?.rationale,
         })),
       )],

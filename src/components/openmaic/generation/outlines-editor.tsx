@@ -1454,7 +1454,7 @@ function QuizConfigDisclosure({
             value={config.questionCount ?? 3}
             min={1}
             max={10}
-            onChange={(next) => updateConfig({ questionCount: next })}
+            onChange={(next) => updateConfig({ questionCount: next, questionTypePlan: undefined })}
           />
         </div>
         {/* Difficulty: label left, segmented right */}
@@ -1499,7 +1499,7 @@ function QuizConfigDisclosure({
                       ? current.filter((t) => t !== type)
                       : Array.from(new Set([...current, type]));
                     if (next.length === 0) return;
-                    updateConfig({ questionTypes: next });
+                    updateConfig({ questionTypes: next, questionTypePlan: undefined });
                   }}
                   className={cn(
                     'min-h-9 flex-1 rounded-[6px] px-2 py-1.5 text-xs font-medium transition-all',

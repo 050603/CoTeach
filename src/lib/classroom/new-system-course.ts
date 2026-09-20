@@ -6,6 +6,8 @@ import type { Course, KnowledgePoint, OpenMaicSceneOutlineSnapshot, TeachingOutl
 import { allocateLectureBudget, isKnowledgeLectureBudgetInRange } from "./knowledge-lecture-budget";
 import type { CourseStagePlan } from "@/lib/resource-package/types";
 
+export const NEW_SYSTEM_AI_TIMING_POLICY_VERSION = "shared-knowledge-cluster-budget-v1";
+
 export const NEW_SYSTEM_STAGE_KEYS = [
   "launch",
   "ai-learning",
@@ -25,8 +27,10 @@ export type NewSystemAiDurationRecommendation = {
   durationMin: number;
   rationale: string;
   confidence: PblTimingRecommendationConfidence;
-  knowledgePointBudgets: Array<{
-    knowledgePointId: string;
+  teachingClusterBudgets: Array<{
+    clusterId: string;
+    title: string;
+    knowledgePointIds: string[];
     durationMin: number;
     rationale: string;
   }>;
@@ -46,11 +50,12 @@ export function buildNewSystemAiTimingPlan(
   generatedAt: string = new Date().toISOString(),
 ): PblModuleTimingPlan {
   const totalMinutes = Math.max(1, Math.round(recommendation.durationMin));
-  const budgetById = new Map(recommendation.knowledgePointBudgets.map((budget) => [
-    budget.knowledgePointId,
-    budget,
-  ]));
-  const weights = knowledgePoints.map((point) => budgetById.get(point.id)?.durationMin ?? 1);
+  const knownPointIds = new Set(knowledgePoints.map((point) => point.id));
+  const clusterBudgets = recommendation.teachingClusterBudgets.flatMap((budget) => {
+    const knowledgePointIds = [...new Set(budget.knowledgePointIds.filter((id) => knownPointIds.has(id)))];
+    return knowledgePointIds.length ? [{ ...budget, knowledgePointIds }] : [];
+  });
+  const weights = clusterBudgets.map((budget) => budget.durationMin);
   const distributed = distributeIntegerMinutes(totalMinutes, weights);
   const recommendedStageTotals = {
     launch: 0,
@@ -65,17 +70,18 @@ export function buildNewSystemAiTimingPlan(
     schemaVersion: 1,
     totalMinutes,
     status: "confirmed",
-    allocations: knowledgePoints.map((point, index) => ({
-      id: `new-system-ai-learning-${point.id}`,
-      title: point.name,
+    allocations: clusterBudgets.map((budget, index) => ({
+      id: `new-system-ai-learning-${budget.clusterId}`,
+      title: budget.title,
       stageKey: "ai-learning",
       activityKind: "knowledge",
       durationMin: distributed[index] ?? 1,
       recommendedDurationMin: distributed[index] ?? 1,
-      knowledgePointIds: [point.id],
+      knowledgePointIds: budget.knowledgePointIds,
     })),
     recommendedStageTotals,
     recommendationSource: "llm",
+    planningPolicyVersion: NEW_SYSTEM_AI_TIMING_POLICY_VERSION,
     confidence: recommendation.confidence,
     rationaleByStage: {
       "ai-learning": recommendation.rationale,
@@ -84,9 +90,12 @@ export function buildNewSystemAiTimingPlan(
     evidence: [
       ...recommendation.evidence,
       ...(recommendation.scopeWarning ? [`范围提醒：${recommendation.scopeWarning}`] : []),
-      ...knowledgePoints.map((point, index) => {
-        const budget = budgetById.get(point.id);
-        return `${point.name}：${distributed[index] ?? 1} 分钟${budget?.rationale ? `（${budget.rationale}）` : ""}`;
+      ...clusterBudgets.map((budget, index) => {
+        const pointNames = budget.knowledgePointIds
+          .map((id) => knowledgePoints.find((point) => point.id === id)?.name)
+          .filter(Boolean)
+          .join("、");
+        return `${budget.title}：${distributed[index] ?? 1} 分钟，覆盖${pointNames}${budget.rationale ? `（${budget.rationale}）` : ""}`;
       }),
     ],
     generatedAt,
@@ -103,10 +112,12 @@ export function buildNewSystemTimingPlan(
     durationMin: aiDurationMinutes,
     rationale: "按当前知识结构为知识讲授预留分节讲解、练习与节末小测时间。",
     confidence: "medium",
-    knowledgePointBudgets: [{
-      knowledgePointId: "all-knowledge",
+    teachingClusterBudgets: [{
+      clusterId: "all-knowledge",
+      title: "知识讲授",
+      knowledgePointIds: ["all-knowledge"],
       durationMin: aiDurationMinutes,
-      rationale: "尚未提供逐知识点时间判断。",
+      rationale: "尚未提供知识分组，使用单一共享讲授预算。",
     }],
     evidence: ["知识讲授总时长"],
     assumptions: ["该计划只描述第二阶段知识讲授，不分配其他 PBL 阶段时间。"],
@@ -127,7 +138,8 @@ export function isNewSystemAiTimingPlan(
   courseHours?: number,
   stagePlan?: CourseStagePlan,
 ): timing is PblModuleTimingPlan {
-  if (!timing || timing.status !== "confirmed") return false;
+  if (!timing || timing.status !== "confirmed"
+    || timing.planningPolicyVersion !== NEW_SYSTEM_AI_TIMING_POLICY_VERSION) return false;
   const aiAllocations = timing.allocations.filter(
     (allocation) => allocation.stageKey === "ai-learning",
   );

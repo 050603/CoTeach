@@ -1025,6 +1025,18 @@ export async function generateLegacyCustomizedSlideContent(
 /**
  * Generate quiz content
  */
+type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['questionTypes'][number];
+
+const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
+  single: 'single_choice',
+  multiple: 'multiple_choice',
+  matching: 'matching',
+  short_answer: 'short_answer',
+  true_false: 'true_false',
+  fill_blank: 'fill_blank',
+  scenario_task: 'scenario_task',
+};
+
 async function generateQuizContent(
   outline: SceneOutline,
   aiCall: AICallFn,
@@ -1038,12 +1050,15 @@ async function generateQuizContent(
   };
   const shortAnswerOnly = quizConfig.questionTypes.length === 1
     && quizConfig.questionTypes[0] === 'short_answer';
-  const questionFormats = shortAnswerOnly ? ['short_answer'] : selectQuizFormats({
-    objectiveText: [outline.teachingObjective, outline.title, outline.description, ...(outline.keyPoints ?? [])].filter(Boolean).join(' '),
-    difficulty: quizConfig.difficulty,
-    questionCount: quizConfig.questionCount,
-    requested: quizConfig.questionTypes,
-  });
+  const exactQuestionTypePlan = quizConfig.questionTypePlan?.length === quizConfig.questionCount
+    ? [...quizConfig.questionTypePlan]
+    : undefined;
+  const questionFormats = exactQuestionTypePlan ?? (shortAnswerOnly ? ['short_answer'] : selectQuizFormats({
+      objectiveText: [outline.teachingObjective, outline.title, outline.description, ...(outline.keyPoints ?? [])].filter(Boolean).join(' '),
+      difficulty: quizConfig.difficulty,
+      questionCount: quizConfig.questionCount,
+      requested: quizConfig.questionTypes,
+    }));
   const coverageInstruction = shortAnswerOnly
     ? quizConfig.questionCount === 1
       ? 'the single comprehensive short-answer question must require and carry every allowed knowledgePointId for this section'
@@ -1058,7 +1073,9 @@ async function generateQuizContent(
     difficulty: quizConfig.difficulty,
     questionTypes: shortAnswerOnly
       ? `short_answer only; every generated question must use type="short_answer" and have no options; ${coverageInstruction}`
-      : `${questionFormats.join(', ')} only; return exactly ${quizConfig.questionCount} questions; ${quizConfig.coveragePolicy === 'each-target' ? 'generate one question for each ordered assessment target' : coverageInstruction}; use at least ${quizConfig.minShortAnswerQuestions ?? 0} and at most ${quizConfig.maxShortAnswerQuestions ?? 0} explanation-style short_answer/scenario_task questions; explanation questions must require a conclusion and a brief reason`,
+      : exactQuestionTypePlan
+        ? `follow this exact ordered question plan: ${exactQuestionTypePlan.map((type, index) => `question ${index + 1} must use type="${type}"`).join('; ')}. Each numbered Test Point maps to the same-numbered question. Return exactly ${quizConfig.questionCount} questions; ${coverageInstruction}; do not replace one planned format with another`
+        : `${questionFormats.join(', ')} only; return exactly ${quizConfig.questionCount} questions; ${quizConfig.coveragePolicy === 'each-target' ? 'generate one question for each ordered assessment target' : coverageInstruction}; use at least ${quizConfig.minShortAnswerQuestions ?? 0} and at most ${quizConfig.maxShortAnswerQuestions ?? 0} explanation-style short_answer/scenario_task questions; explanation questions must require a conclusion and a brief reason`,
     knowledgePointIds: (outline.knowledgePointIds ?? []).join(', '),
     assessmentTargets: JSON.stringify(outline.assessmentTargets ?? []),
     languageDirective: languageDirective || '',
@@ -1184,6 +1201,14 @@ async function generateQuizContent(
           };
         });
       })();
+  if (exactQuestionTypePlan) {
+    const actualFormats = questions.map((question) => question.format);
+    const expectedFormats = exactQuestionTypePlan.map((type) => QUIZ_FORMAT_BY_PLANNED_TYPE[type]);
+    const mismatched = expectedFormats.some((format, index) => actualFormats[index] !== format);
+    if (mismatched) {
+      throw new Error(`Quiz "${outline.title}" returned question formats ${actualFormats.join(', ') || 'none'}; expected exact plan ${expectedFormats.join(', ')}`);
+    }
+  }
   const coveredKnowledgePointIds = new Set(questions.flatMap((question) => question.knowledgePointIds ?? []));
   const missingKnowledgePointIds = (outline.knowledgePointIds ?? []).filter((id) => !coveredKnowledgePointIds.has(id));
   if (missingKnowledgePointIds.length > 0) {

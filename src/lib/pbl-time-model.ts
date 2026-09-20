@@ -78,6 +78,8 @@ export type PblTimingRecommendationAudit = {
   rationaleByStage?: Partial<Record<PblStageKey, string>>;
   evidence?: string[];
   assumptions?: string[];
+  /** Contract identity for specialized planning flows such as shared knowledge-cluster timing. */
+  planningPolicyVersion?: string;
 };
 
 /** The only course-level timing state used by the teacher workflow. */

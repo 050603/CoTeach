@@ -120,7 +120,7 @@ describe("new-system course contract", () => {
     expect(plan.recommendedStageTotals.proposal).toBe(0);
   });
 
-  it("turns the AI judgment into exact per-knowledge-point budgets", () => {
+  it("turns the AI judgment into exact shared knowledge-cluster budgets", () => {
     const points = [
       { id: "kp-1", name: "概念", description: "理解概念", level: "foundation" as const },
       { id: "kp-2", name: "应用", description: "完成应用", level: "application" as const },
@@ -129,9 +129,9 @@ describe("new-system course contract", () => {
       durationMin: 42,
       rationale: "第二个知识点需要操作与反馈。",
       confidence: "high",
-      knowledgePointBudgets: [
-        { knowledgePointId: "kp-1", durationMin: 12, rationale: "建立概念" },
-        { knowledgePointId: "kp-2", durationMin: 30, rationale: "操作与检测" },
+      teachingClusterBudgets: [
+        { clusterId: "foundation", title: "概念基础", knowledgePointIds: ["kp-1"], durationMin: 12, rationale: "建立概念" },
+        { clusterId: "application", title: "应用判断", knowledgePointIds: ["kp-2"], durationMin: 30, rationale: "操作与检测" },
       ],
       evidence: ["一条依赖链"],
       assumptions: [],
@@ -141,6 +141,37 @@ describe("new-system course contract", () => {
     expect(plan.allocations.map((item) => item.durationMin)).toEqual([12, 30]);
     expect(plan.allocations.every((item) => item.stageKey === "ai-learning")).toBe(true);
     expect(plan.recommendedStageTotals.knowledge).toBe(42);
+  });
+
+  it("stores several related knowledge points in one non-additive timing allocation", () => {
+    const points = Array.from({ length: 4 }, (_, index) => ({
+      id: `kp-${index + 1}`,
+      name: `相关知识 ${index + 1}`,
+      description: "共同解释同一关系",
+      groupId: "shared-group",
+      groupName: "共同关系",
+    }));
+    const plan = buildNewSystemAiTimingPlan({
+      durationMin: 10,
+      rationale: "使用同一关系图共同讲解。",
+      confidence: "high",
+      teachingClusterBudgets: [{
+        clusterId: "teaching-cluster-1",
+        title: "共同关系",
+        knowledgePointIds: points.map((point) => point.id),
+        durationMin: 10,
+        rationale: "共享引入、关系图和案例。",
+      }],
+      evidence: [],
+      assumptions: [],
+    }, points);
+
+    expect(plan.allocations).toHaveLength(1);
+    expect(plan.allocations[0]).toMatchObject({
+      durationMin: 10,
+      knowledgePointIds: points.map((point) => point.id),
+    });
+    expect(plan.totalMinutes).toBe(10);
   });
 
   it("creates only the AI授知 teaching outline during preparation", () => {

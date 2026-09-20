@@ -99,6 +99,41 @@ describe("quick positioning generation", () => {
       .toBeLessThan(knowledgePoints.length);
   }, 15_000);
 
+  it("attributes a shared cluster duration once instead of multiplying it by member count", async () => {
+    const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
+    const knowledgePoints = [
+      ...Array.from({ length: 4 }, (_, index) => ({
+        id: `shared-${index + 1}`,
+        name: `共享知识 ${index + 1}`,
+        description: "共同解释一个关系",
+        level: "core" as const,
+        groupId: "shared",
+        groupName: "共享关系",
+      })),
+      {
+        id: "independent",
+        name: "独立应用",
+        description: "单独完成一次应用",
+        level: "application" as const,
+        groupId: "application",
+        groupName: "独立应用",
+      },
+    ];
+    const moduleTimingPlan = {
+      allocations: [
+        { stageKey: "ai-learning", durationMin: 6, knowledgePointIds: knowledgePoints.slice(0, 4).map((point) => point.id) },
+        { stageKey: "ai-learning", durationMin: 4, knowledgePointIds: ["independent"] },
+      ],
+    } as never;
+
+    const plans = buildTeachingBlueprintSectionPlans({ knowledgePoints, moduleTimingPlan }, 10 * 60);
+    const ratio = (plans[0]?.teachingBudgetSec ?? 0) / (plans[1]?.teachingBudgetSec ?? 1);
+
+    expect(plans).toHaveLength(2);
+    expect(ratio).toBeGreaterThan(1.4);
+    expect(ratio).toBeLessThan(1.6);
+  }, 15_000);
+
   it("keeps missing groups separate and splits an overlong group at knowledge boundaries", async () => {
     const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
     const ungrouped = buildTeachingBlueprintSectionPlans({
