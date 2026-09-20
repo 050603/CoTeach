@@ -1683,6 +1683,28 @@ function usesAlibabaModelStudioEndpoint(baseUrl?: string): boolean {
   }
 }
 
+function createHttpProxyFetch(proxyUrl: string): typeof fetch {
+  let agent: unknown;
+
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const { ProxyAgent, fetch: undiciFetch } = (await import(
+      /* webpackIgnore: true */ 'undici'
+    )) as {
+      ProxyAgent: new (url: string) => unknown;
+      fetch: (
+        input: string | URL | Request,
+        init?: Record<string, unknown>,
+      ) => Promise<unknown>;
+    };
+    agent ??= new ProxyAgent(proxyUrl);
+    const response = await undiciFetch(input, {
+      ...(init as Record<string, unknown>),
+      dispatcher: agent,
+    });
+    return response as Response;
+  }) as typeof fetch;
+}
+
 /** Returns true if the provider requires an API key (defaults to true for unknown providers). */
 export function isProviderKeyRequired(providerId: string): boolean {
   return getProviderConfig(providerId as ProviderId)?.requiresApiKey ?? true;
@@ -1744,6 +1766,9 @@ export function getModel(config: ModelConfig): ModelWithInfo {
         apiKey: effectiveApiKey,
         baseURL: effectiveBaseUrl,
       };
+      const transportFetch = config.proxy
+        ? createHttpProxyFetch(config.proxy)
+        : config.fetchImpl;
 
       // For OpenAI-compatible providers (not native OpenAI), add a fetch
       // wrapper that injects vendor-specific thinking params into the HTTP
@@ -1796,7 +1821,7 @@ export function getModel(config: ModelConfig): ModelWithInfo {
               /* leave body as-is */
             }
           }
-          const response = await (config.fetchImpl ?? globalThis.fetch)(url, init);
+          const response = await (transportFetch ?? globalThis.fetch)(url, init);
 
           // Recover reasoning that @ai-sdk/openai's chat schema drops: rewrite
           // streamed `reasoning_content` deltas into an inline <think> block
@@ -1856,6 +1881,8 @@ export function getModel(config: ModelConfig): ModelWithInfo {
           return response;
         };
         openaiOptions.fetch = compatFetch as typeof globalThis.fetch;
+      } else if (transportFetch) {
+        openaiOptions.fetch = transportFetch;
       }
 
       const openai = createOpenAI(openaiOptions);
@@ -1945,25 +1972,7 @@ export function getModel(config: ModelConfig): ModelWithInfo {
         baseURL: effectiveBaseUrl,
       };
       if (config.proxy) {
-        const proxy = config.proxy;
-        let agent: unknown;
-        googleOptions.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-          const { ProxyAgent, fetch: undiciFetch } = (await import(
-            /* webpackIgnore: true */ 'undici'
-          )) as {
-            ProxyAgent: new (proxyUrl: string) => unknown;
-            fetch: (
-              input: string | URL | Request,
-              init?: Record<string, unknown>,
-            ) => Promise<unknown>;
-          };
-          agent ??= new ProxyAgent(proxy);
-          const response = await undiciFetch(input, {
-            ...(init as Record<string, unknown>),
-            dispatcher: agent,
-          });
-          return response as Response;
-        }) as typeof fetch;
+        googleOptions.fetch = createHttpProxyFetch(config.proxy);
       } else if (config.fetchImpl) {
         googleOptions.fetch = config.fetchImpl;
       }

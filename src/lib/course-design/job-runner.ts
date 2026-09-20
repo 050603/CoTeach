@@ -10,7 +10,7 @@ import { createCourseOutputBudget, resolveCourseExecutionBudgetOptions, COURSE_O
 import { buildCourseGenerationInput } from "@/lib/teacher/course-generation-input";
 import { formatTeachingConstraintsForChinesePrompt } from "@/lib/openmaic/pedagogy/teaching-constraints";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
-import { generateKnowledgeStructureOnce } from "@/lib/knowledge-structure-generation";
+import { generateKnowledgeStructureOnce, type KnowledgeStructureGenerationContext } from "@/lib/knowledge-structure-generation";
 import { resourcePackageTeachingPoints } from "./resource-package-knowledge";
 import {
   buildPblActivityCatalog,
@@ -90,6 +90,7 @@ import {
   deriveKnowledgeLectureSectionsFromOutlines,
   organizeKnowledgeLectureOutlines,
 } from "@/lib/knowledge-lecture";
+import { allocateLectureBudget, knowledgeLectureBudgetBounds } from "@/lib/classroom/knowledge-lecture-budget";
 import { adaptPersonalProjectText, stagePlanFromResourcePackage, type CourseResourcePackage } from "@/lib/resource-package/types";
 import { canResumeCourseDesignWithPackageState } from "./resume-policy";
 import {
@@ -106,6 +107,7 @@ import { fingerprintGenerationValue } from "@/lib/course-generation/page-checkpo
 import {
   applyReviewedOutlinesToTeachingBlueprint,
   generateTeachingBlueprint,
+  TEACHING_BLUEPRINT_SCHEMA_VERSION,
   teachingBlueprintInputFingerprint,
   teachingBlueprintToOutlines,
   type TeachingBlueprintInput,
@@ -580,26 +582,43 @@ export async function resumeCourseDesignAfterOutlineReview(
   }
 
   if (reviewKind === "knowledge" && (review?.knowledgePoints || review?.knowledgeGraph)) {
-    await updateCourse(courseId, (course) => ({
-      ...course,
-      content: {
-        ...course.content,
-        ...(review.knowledgePoints ? { knowledgePoints: review.knowledgePoints } : {}),
-        ...(review.knowledgeGraph
-          ? { knowledgeGraph: { ...review.knowledgeGraph, semanticReview: undefined } }
-          : {}),
-      },
-    }));
+    await updateCourse(courseId, (course) => {
+      const knowledgePoints = review.knowledgePoints ?? course.content.knowledgePoints;
+      const knowledgeScopePlan = course.content.knowledgeScopePlan
+        ? {
+            ...course.content.knowledgeScopePlan,
+            targetPointCount: knowledgePoints.length,
+            decisions: course.content.knowledgeScopePlan.decisions.map((decision) => {
+              const target = knowledgePoints.find((point) => point.sourceKnowledgePointIds?.includes(decision.sourceKnowledgePointId));
+              return target
+                ? { ...decision, disposition: target.sourceKnowledgePointIds?.length === 1 ? "standalone" as const : "embedded" as const,
+                    targetKnowledgePointId: target.id }
+                : { ...decision, disposition: "deferred" as const, targetKnowledgePointId: undefined };
+            }),
+          }
+        : undefined;
+      return {
+        ...course,
+        content: {
+          ...course.content,
+          ...(review.knowledgePoints ? { knowledgePoints: review.knowledgePoints } : {}),
+          ...(knowledgeScopePlan ? { knowledgeScopePlan } : {}),
+          ...(review.knowledgeGraph
+            ? { knowledgeGraph: { ...review.knowledgeGraph, semanticReview: undefined } }
+            : {}),
+        },
+      };
+    });
   } else if (reviewKind === "outline" && (review?.lessonOutline || review?.sceneOutlines)) {
     await updateCourse(courseId, (course) => {
-      if (review.sceneOutlines && course.content.teachingBlueprint?.schemaVersion === 2) {
+      if (review.sceneOutlines && (course.content.teachingBlueprint?.schemaVersion ?? 0) >= 2) {
         if (review.sceneOutlines.some((outline) => !outline.id || !outline.title
           || (outline.type !== "slide" && outline.type !== "interactive" && outline.type !== "quiz" && outline.type !== "pbl"))) {
           throw new Error("课程大纲包含无效页面，未应用本次修改。");
         }
         const reviewedOutlines = review.sceneOutlines as unknown as SceneOutline[];
         const teachingBlueprint = applyReviewedOutlinesToTeachingBlueprint(
-          course.content.teachingBlueprint,
+          course.content.teachingBlueprint!,
           reviewedOutlines,
         );
         const languageDirective = review.sceneOutlines.find((outline) => outline.courseLanguageDirective)
@@ -872,8 +891,12 @@ export function buildCourseTeachingSourceContext(
 export function applyResourcePackageGenerationInput(course: Course, resourcePackage: CourseResourcePackage): Course {
   const draft = resourcePackage.draft;
   const stagePlan = stagePlanFromResourcePackage(draft);
-  const requiredKnowledge = resourcePackageTeachingPoints(resourcePackage).map((point) => point.name);
+  const samePackageRevision = course.content.resourcePackage?.id === resourcePackage.id
+    && course.content.resourcePackage.revision === resourcePackage.revision;
   const leafPoints = resourcePackageTeachingPoints(resourcePackage);
+  const packageNames = new Set(leafPoints.map((point) => point.name.trim()));
+  const explicitlyRequiredKnowledge = (course.content.teacherRequiredKnowledgePoints ?? [])
+    .filter((name) => !packageNames.has(name.trim()));
   return {
     ...course,
     name: draft.courseName,
@@ -899,11 +922,36 @@ export function applyResourcePackageGenerationInput(course: Course, resourcePack
       ...course.content,
       resourcePackage,
       stagePlan,
-      teacherRequiredKnowledgePoints: requiredKnowledge,
+      knowledgeScopePlan: samePackageRevision ? course.content.knowledgeScopePlan : undefined,
+      teacherRequiredKnowledgePoints: explicitlyRequiredKnowledge,
       knowledgeGroups: draft.knowledgePoints.map((group) => ({ id: group.id || leafPoints.find((point) => point.groupName === group.name)?.groupId || leafPoints.find((point) => point.name === group.name)?.id || group.name,
         name: group.name, description: group.description, knowledgePointIds: leafPoints.filter((point) => point.groupName === group.name || point.name === group.name).map((point) => point.id) })),
       evaluationPlan: { ...course.content.evaluationPlan, overallRubric: stagePlan.evaluationCriteria || course.content.evaluationPlan.overallRubric },
     },
+  };
+}
+
+export function buildKnowledgePlanningCapacity(input: {
+  courseHours: number;
+  stagePlan?: CourseContent["stagePlan"];
+  assessmentMode?: AssessmentMode;
+}): NonNullable<KnowledgeStructureGenerationContext["teachingCapacity"]> {
+  const bounds = knowledgeLectureBudgetBounds(input.courseHours, input.stagePlan);
+  // Plan against the guaranteed budget. If the later duration judgment chooses
+  // more time, it may deepen these targets instead of creating late new ones.
+  const planningDurationMin = bounds.minMinutes;
+  const assessmentRatio = input.assessmentMode === "constructed-response" ? 0.18 : 0.12;
+  const assessmentReserveMin = Math.min(
+    planningDurationMin * 0.2,
+    Math.max(1, Math.round(planningDurationMin * assessmentRatio)),
+  );
+  return {
+    durationRangeMin: bounds.minMinutes,
+    durationRangeMax: bounds.maxMinutes,
+    planningDurationMin,
+    durationSource: bounds.source === "resource-package" ? "resource-package" : "course-range",
+    assessmentReserveMin,
+    explanationAndActivityMin: Math.max(1, planningDurationMin - assessmentReserveMin),
   };
 }
 
@@ -1367,7 +1415,7 @@ export function normalizeNewSystemAiOutlines(
         && (outline.targetDurationSec ?? outline.estimatedDuration ?? 0) > 0
         ? outline.targetDurationSec ?? outline.estimatedDuration : targetDurationSec,
       ttsPolicy: "target-duration",
-      narrationMode: "embedded-segment",
+      narrationMode: "standalone-course",
       resourceTypes: type === "slide"
         ? ["ppt"]
         : type === "interactive"
@@ -1428,14 +1476,13 @@ export function buildOpenMaicKnowledgeLectureRequirement(
   const sections = [...sectionMap.entries()].map(([title, points], index) =>
     `${index + 1}. ${title}：${points.join("、")}`,
   );
-  const quizReserveMinutes = [...sectionMap.values()].reduce(
-    (sum, points) => sum + (points.length >= 3 ? 4 : 3),
-    0,
+  const quizReserveMinutes = Math.min(
+    aiDurationMin * 0.2,
+    Math.max(sectionMap.size / 60, aiDurationMin * 0.12),
   );
-  const minimumLectureMinutes = Math.max(2, sectionMap.size * 1.5);
   const lectureMinutes = Math.max(
     1,
-    Math.round(Math.max(minimumLectureMinutes, aiDurationMin - quizReserveMinutes)),
+    Math.round(aiDurationMin - quizReserveMinutes),
   );
   return [
     `请为《${course.name}》生成面向${course.grade}学生的知识讲授课程大纲。`,
@@ -1464,32 +1511,42 @@ export function buildTeachingBlueprintSectionPlans(
     (content.moduleTimingPlan?.allocations ?? []).flatMap((allocation) =>
       (allocation.knowledgePointIds ?? []).map((id) => [id, Math.max(0, allocation.durationMin)] as const)),
   );
-  const weights = entries.map(([, ids]) => ids.reduce(
-    (sum, id) => sum + (durationByPoint.get(id) ?? 1),
-    0,
-  ));
+  const pointById = new Map(content.knowledgePoints.map((point) => [point.id, point]));
+  const weights = entries.map(([, ids]) => ids.reduce((sum, id) => {
+    const point = pointById.get(id);
+    const allocated = durationByPoint.get(id);
+    const conceptualEffort = point?.level === "core" ? 1.5 : point?.level === "application" ? 1.25 : 1;
+    const relationEffort = point?.masteryBoundary?.trim() ? 0.35 : 0;
+    return sum + (allocated && allocated > 0 ? allocated : conceptualEffort + relationEffort);
+  }, 0));
   const assessmentReserveSec = Math.min(
     Math.floor(totalDurationSec * 0.2),
-    Math.max(entries.length * 45, Math.round(totalDurationSec * 0.12)),
+    Math.max(Math.min(entries.length, totalDurationSec), Math.round(totalDurationSec * 0.12)),
   );
   const explanationBudgetSec = Math.max(entries.length, totalDurationSec - assessmentReserveSec);
-  const pageCapacity = Math.max(entries.length, Math.ceil(explanationBudgetSec / 120));
-  const extraCapacity = Math.max(0, pageCapacity - entries.length);
-  const weightTotal = weights.reduce((sum, weight) => sum + Math.max(1, weight), 0);
-  const exactExtras = weights.map((weight) => extraCapacity * Math.max(1, weight) / weightTotal);
-  const extras = exactExtras.map(Math.floor);
-  let remaining = extraCapacity - extras.reduce((sum, value) => sum + value, 0);
-  for (const item of exactExtras
-    .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
-    .sort((left, right) => right.fraction - left.fraction || left.index - right.index)) {
-    if (remaining-- <= 0) break;
-    extras[item.index] += 1;
-  }
-  return entries.map(([title, knowledgePointIds], index) => ({
-    title,
-    knowledgePointIds,
-    maxPages: 1 + (extras[index] ?? 0),
-  }));
+  const sectionBudgets = allocateLectureBudget(explanationBudgetSec, weights, 1);
+  return entries.map(([title, knowledgePointIds], index) => {
+    const teachingBudgetSec = sectionBudgets[index] ?? 1;
+    const contentPageNeed = Math.ceil(knowledgePointIds.reduce((sum, id) => {
+      const point = pointById.get(id);
+      return sum + 1 + (point?.level === "core" ? 0.5 : 0) + (point?.masteryBoundary?.trim() ? 0.25 : 0);
+    }, 0));
+    const timeSupportedPages = Math.max(1, Math.floor(teachingBudgetSec / 75));
+    return {
+      title,
+      knowledgePointIds,
+      teachingBudgetSec,
+      suggestedMinPages: 1,
+      suggestedMaxPages: Math.max(1, Math.min(
+        knowledgePointIds.length + 1,
+        contentPageNeed,
+        timeSupportedPages,
+      )),
+      // A generous technical guard for malformed output; it is not included in
+      // the model prompt and is never described as teacher-confirmed capacity.
+      maxPages: Math.max(1, Math.floor(teachingBudgetSec / 20)),
+    };
+  });
 }
 
 function buildTeachingBlueprintInput(
@@ -1556,7 +1613,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
         blueprint?: unknown;
       }
     : undefined;
-  let blueprint = content.teachingBlueprint?.schemaVersion === 2
+  let blueprint = content.teachingBlueprint?.schemaVersion === TEACHING_BLUEPRINT_SCHEMA_VERSION
     && content.teachingBlueprint.inputFingerprint === expectedFingerprint
     ? content.teachingBlueprint
     : undefined;
@@ -1565,7 +1622,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
       && checkpoint.inputFingerprint === expectedFingerprint
       && checkpoint.modelFingerprint === modelFingerprint
       && checkpoint.blueprint && typeof checkpoint.blueprint === "object"
-      && (checkpoint.blueprint as { schemaVersion?: unknown }).schemaVersion === 2) {
+      && (checkpoint.blueprint as { schemaVersion?: unknown }).schemaVersion === TEACHING_BLUEPRINT_SCHEMA_VERSION) {
       blueprint = checkpoint.blueprint as TeachingBlueprint;
     }
   }
@@ -2127,6 +2184,7 @@ async function runNewSystemCourseDesign(
       entry.step === "knowledgePoints" && (entry.status === "completed" || entry.status === "warning")
     ))
     && initialCourse.content.knowledgePoints.length > 0
+    && initialCourse.content.knowledgeScopePlan?.schemaVersion === 1
     && (initialCourse.content.knowledgeGraph?.nodes.length ?? 0) >= initialCourse.content.knowledgePoints.length;
 
   let course: Course = initialCourse;
@@ -2184,13 +2242,23 @@ async function runNewSystemCourseDesign(
 
     await beginStep(job, "knowledgePoints", 1, 28, "正在生成知识讲授知识图谱");
     const knowledgeInput = stageSummaryInput(course, request, false);
+    const teachingCapacity = buildKnowledgePlanningCapacity({
+      courseHours: course.hours,
+      stagePlan: course.content.stagePlan,
+      assessmentMode: request.assessmentMode
+        ?? (request.generationContractVersion && request.generationContractVersion >= 2 ? "adaptive" : "constructed-response"),
+    });
+    const packageKnowledgePoints = resourcePackageTeachingPoints(request.resourcePackage);
+    const packageKnowledgeNames = new Set(packageKnowledgePoints.map((point) => point.name.trim()));
     const knowledgeContext = {
-      teacherRequiredKnowledgePoints: course.content.teacherRequiredKnowledgePoints,
-      teacherKnowledgePoints: resourcePackageTeachingPoints(request.resourcePackage),
+      teacherRequiredKnowledgePoints: (course.content.teacherRequiredKnowledgePoints ?? [])
+        .filter((name) => !packageKnowledgeNames.has(name.trim())),
+      teacherKnowledgePoints: packageKnowledgePoints,
       referenceMaterials: request.referenceMaterials,
+      teachingCapacity,
     };
     const knowledgeInputFingerprint = fingerprintGenerationValue({
-      schemaVersion: 1,
+      schemaVersion: 2,
       input: knowledgeInput,
       context: knowledgeContext,
     });
@@ -2210,10 +2278,12 @@ async function runNewSystemCourseDesign(
       && storedKnowledge.knowledgePoints.length > 0
       && checkpointRecord(storedKnowledge.knowledgeGraph)
       && Array.isArray(checkpointRecord(storedKnowledge.knowledgeGraph)?.nodes)
-      && Array.isArray(checkpointRecord(storedKnowledge.knowledgeGraph)?.edges)) {
+      && Array.isArray(checkpointRecord(storedKnowledge.knowledgeGraph)?.edges)
+      && checkpointRecord(storedKnowledge.knowledgeScopePlan)?.schemaVersion === 1) {
       generated = {
         knowledgePoints: storedKnowledge.knowledgePoints as KnowledgePoint[],
         knowledgeGraph: storedKnowledge.knowledgeGraph as unknown as KnowledgeGraph,
+        knowledgeScopePlan: storedKnowledge.knowledgeScopePlan as unknown as NonNullable<CourseContent["knowledgeScopePlan"]>,
         revisionCount: Number(storedKnowledge.revisionCount ?? 0),
       };
     } else if (storedKnowledgeResponse) {
@@ -2266,6 +2336,7 @@ async function runNewSystemCourseDesign(
       modelFingerprint: knowledgeModelFingerprint,
       knowledgePoints: generated.knowledgePoints,
       knowledgeGraph: generatedGraph,
+      knowledgeScopePlan: generated.knowledgeScopePlan,
       revisionCount: generated.revisionCount,
     });
     const content: CourseContent = {
@@ -2273,6 +2344,13 @@ async function runNewSystemCourseDesign(
       pblOutline: "",
       knowledgePoints: generated.knowledgePoints,
       knowledgeGraph: generatedGraph,
+      knowledgeScopePlan: generated.knowledgeScopePlan,
+      knowledgeGroups: (course.content.knowledgeGroups ?? []).map((group) => ({
+        ...group,
+        knowledgePointIds: generated.knowledgePoints
+          .filter((point) => point.groupId === group.id || point.groupName === group.name)
+          .map((point) => point.id),
+      })),
       projectMainline: undefined,
       teachingOutline: [],
       lessonOutline: [],
@@ -2311,9 +2389,11 @@ async function runNewSystemCourseDesign(
       stepIndex: 1,
       progress: 52,
       label: "知识图谱",
-      summary: `已生成 ${content.knowledgePoints.length} 个知识点，等待教师确认`,
+      summary: `已按 ${content.knowledgeScopePlan?.planningDurationMin ?? teachingCapacity.planningDurationMin} 分钟容量编译为 ${content.knowledgePoints.length} 个可讲透目标，等待教师确认`,
       status: "completed",
       checks: [
+        `先按知识讲授预算完成范围规划：${content.knowledgeScopePlan?.explanationAndActivityMin ?? teachingCapacity.explanationAndActivityMin} 分钟用于解释与必要活动，${content.knowledgeScopePlan?.assessmentReserveMin ?? teachingCapacity.assessmentReserveMin} 分钟预留检测反馈`,
+        `资源目录 ${content.knowledgeScopePlan?.sourcePointCount ?? packageKnowledgePoints.length} 项已分别决定独立讲授、并入核心目标或后续承接`,
         "已完成字段、引用和关系元数据的确定性整理，未调用第二个 AI 审校",
         "知识图谱已具备可查看、可编辑的完整结构",
         ...(request.referenceMaterials?.length ? [`已参考 ${request.referenceMaterials.length} 份教师知识资料`] : []),
@@ -2323,15 +2403,19 @@ async function runNewSystemCourseDesign(
         "new-system-knowledge",
         "graph",
         "知识图谱",
-        `${content.knowledgePoints.length} 个知识点`,
-        "知识讲解、互动练习与学习检测将采用这份知识结构。",
+        `${content.knowledgePoints.length} 个独立教学目标`,
+        content.knowledgeScopePlan?.rationale ?? "知识讲解、互动练习与学习检测将采用这份知识结构。",
         "blue",
         content.knowledgePoints.slice(0, 8).map((point) => ({
           label: point.level ?? "知识点",
           value: point.name,
           meta: point.description,
         })),
-        { knowledgeGraph: content.knowledgeGraph, knowledgePoints: content.knowledgePoints },
+        {
+          knowledgeGraph: content.knowledgeGraph,
+          knowledgePoints: content.knowledgePoints,
+          knowledgeScopePlan: content.knowledgeScopePlan,
+        },
       )],
     });
     const knowledgeAdoption = await awaitTeacherReviewCheckpoint(job, controller, {
@@ -2377,6 +2461,7 @@ async function runNewSystemCourseDesign(
       course,
       knowledgePoints: course.content.knowledgePoints,
       knowledgeGraph: course.content.knowledgeGraph,
+      knowledgeScopePlan: course.content.knowledgeScopePlan,
       generationMode: request.generationMode ?? "standard",
       assessmentMode: request.assessmentMode ?? (request.generationContractVersion && request.generationContractVersion >= 2 ? "adaptive" : "constructed-response"),
       teacherBrief: teacherGenerationBrief(request),

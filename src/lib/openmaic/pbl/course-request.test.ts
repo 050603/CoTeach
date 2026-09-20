@@ -29,6 +29,31 @@ describe("course generation requirements", () => {
     expect(requirement).toContain("理解分类的直观含义");
   });
 
+  it("uses the adopted AI-learning allocation instead of the whole project duration", () => {
+    const constraints = buildCourseTeachingConstraints({ ...course, hours: 2.25 }, {
+      moduleTimingPlan: {
+        schemaVersion: 1,
+        totalMinutes: 135,
+        status: "confirmed",
+        allocations: [{
+          id: "knowledge",
+          stageKey: "ai-learning",
+          activityKind: "knowledge",
+          durationMin: 30,
+          recommendedDurationMin: 30,
+        }],
+        recommendedStageTotals: {
+          launch: 0, knowledge: 30, proposal: 0, practice: 0, showcase: 0, reflection: 0, other: 0,
+        },
+        generatedAt: "2026-09-20T00:00:00.000Z",
+      },
+    });
+
+    expect(constraints.courseHours).toBe(0.5);
+    expect(constraints.totalMinutes).toBe(30);
+    expect(constraints.recommendedKnowledgePointRange).toEqual({ min: 2, max: 5 });
+  });
+
   it("removes legacy resource selections before serializing confirmed modules", () => {
     const requirement = buildPblCourseRequirement(course, {
       teachingOutline: [

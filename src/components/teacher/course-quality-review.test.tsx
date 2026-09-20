@@ -8,6 +8,7 @@ import { CourseQualityReview } from './course-quality-review';
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 const snapshot = {
   required: true, signature: 'a'.repeat(64), quality: null, renderReview: null, teacherReview: null,
+  teacherReviewItems: [], teacherReviewSummary: null,
   classroom: { id: 'classroom', scenes: [{ id: 'slide', type: 'slide', content: { type: 'slide', canvas: { elements: [] } } }] },
 };
 
@@ -34,6 +35,18 @@ describe('optional course review panel', () => {
     fireEvent.click(screen.getByRole('button', { name: '检查内容' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ method: 'POST', body: JSON.stringify({ action: 'check' }) })));
     expect(mocks.canvas).not.toHaveBeenCalled();
+    view.unmount();
+  });
+  it('shows generation-time confirmation notes only in the teacher review panel', async () => {
+    const withReview = {
+      ...snapshot,
+      teacherReviewItems: [{ id: 'review-1', kind: 'illustrative-data', provenance: 'constructed', content: '67% 为示意数值', teachingPurpose: '比较差异' }],
+      teacherReviewSummary: '本次课程有 1 项内容建议授课前确认：\n1. 67% 为示意数值。',
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => withReview }));
+    const view = render(<CourseQualityReview courseId="course" onDecisionChange={vi.fn()} onOpenPage={vi.fn()} />);
+    expect(await screen.findByText('授课前待确认信息（1 项）')).toBeTruthy();
+    expect(screen.getByText(/67% 为示意数值/)).toBeTruthy();
     view.unmount();
   });
 });

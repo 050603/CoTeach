@@ -1,6 +1,6 @@
 import { callLLM, parseLLMJson } from "@/lib/llm/client";
 import { DURABLE_GENERATION_TRANSIENT_RETRIES } from "@/lib/llm/request-policy";
-import type { Course, KnowledgeGraph, KnowledgePoint } from "@/lib/session/types";
+import type { Course, KnowledgeGraph, KnowledgePoint, KnowledgeScopePlan } from "@/lib/session/types";
 import type { AssessmentMode, CourseGenerationMode } from "@/lib/openmaic/types/generation";
 import type { GenerationReferenceMaterial } from "@/lib/course-design/generation-references";
 import type { NewSystemAiDurationRecommendation } from "@/lib/classroom/new-system-course";
@@ -25,6 +25,7 @@ export type NewSystemAiDurationInput = {
   >;
   knowledgePoints: readonly KnowledgePoint[];
   knowledgeGraph?: KnowledgeGraph;
+  knowledgeScopePlan?: KnowledgeScopePlan;
   generationMode: CourseGenerationMode;
   assessmentMode?: AssessmentMode;
   teacherBrief: string;
@@ -83,10 +84,10 @@ export function buildNewSystemAiDurationMessages(input: NewSystemAiDurationInput
 
 关键规则：
 1. ${fixed ? `教师确认的资源包教案规定整课 ${availableMinutes} 分钟，第二阶段知识讲授固定 ${minMinutes} 分钟。不得修改总时长，不得另按比例缩放。` : `教师填写的 ${availableMinutes} 分钟是整节 PBL 课程总时长。第二阶段知识讲授必须占总时长的 20%–40%，即 ${minMinutes}–${maxMinutes} 分钟，这是不可突破的硬约束；其他阶段必须保留充足时间。`}
-2. ${fixed ? "总 durationMin 已锁定，只根据知识点数量、层级、概念抽象度、依赖深度与学生基础分配逐知识点时间；rationale 说明怎样在该预算内完成教学。" : "先在上述范围内根据知识点数量、层级、概念抽象度、依赖深度与学生基础选择一个总 durationMin，说明为何选择该时长，而不是默认取上限。"}确定总时长后再分配知识点预算，最后才生成课程；不要根据页数反推或扩大总时长。
-3. 每个知识点预算应覆盖必要的讲解、例证、思考或练习；共享讲解只计一次，避免重复和注水。
+2. 上游已经先按保证可用的知识讲授时间完成知识范围编译；knowledgePoints 是需要独立讲透的目标，来源目录中其余概念已经并入核心目标或留给后续实践。${fixed ? "总 durationMin 已锁定，只根据这些目标的层级、抽象度、依赖深度与学生基础分配时间。" : "在上述范围内选择总 durationMin，用更多时间深化已选目标，不要在这个阶段重新扩张知识点。"}确定总时长后再分配知识点预算，最后才生成课程；不要根据页数反推或扩大总时长。
+3. 每个知识点预算应覆盖必要的解释、例证、思考或练习；共享讲解只计一次。不得按知识点数量机械平均，也不得以“定义＋一个例子”的最低配置为容量不足辩护。
 4. 普通模式只安排教学必要的互动；深度交互模式需给真实操作、观察反馈与修正留出时间，但不得用“点击下一步/查看详情”一类伪互动凑时长。
-5. durationMin 必须为 ${minMinutes}–${maxMinutes} 范围内的整数。按必要解释、例子分析、操作或思考、小节检测的实际需要分别估时；小测及反馈合计不超过 20%，不得套用固定讲解比例或在总预算外追加时间。若内容过多，在 scopeWarning 中列出具体容量缺口和可选调整，不能暗中删除核心解释、降低理解标准或自动增加总时长。
+5. durationMin 必须为 ${minMinutes}–${maxMinutes} 范围内的整数。按必要解释、例子分析、操作或思考、小节检测的实际需要分别估时；小测及反馈合计不超过 20%，不得套用固定讲解比例或在总预算外追加时间。scopeWarning 只用于“已经筛选出的关键目标仍无法达到掌握边界”的真实冲突，不能因为来源目录条目多、存在 embedded/deferred 项或简单计算平均分钟数而报警。
 6. knowledgePointId 必须逐项使用输入中已有的精确 ID；每个本课知识点恰好出现一次；各项 durationMin 之和必须等于总 durationMin。
 
 只返回 JSON：{
@@ -121,6 +122,7 @@ export function buildNewSystemAiDurationMessages(input: NewSystemAiDurationInput
         generationMode: input.generationMode,
         assessmentMode: input.assessmentMode ?? "constructed-response",
         knowledgePoints: input.knowledgePoints,
+        knowledgeScopePlan: input.knowledgeScopePlan,
         knowledgeGraph: input.knowledgeGraph
           ? { nodes: input.knowledgeGraph.nodes, edges: input.knowledgeGraph.edges }
           : undefined,

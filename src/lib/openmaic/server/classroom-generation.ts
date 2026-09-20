@@ -34,6 +34,7 @@ import {
   canUseIndependentTeachingNarration,
   normalizeTeachingNarration,
   compileTeachingNarrationActions,
+  TEACHING_NARRATION_NORMALIZATION_VERSION,
   TEACHING_NARRATION_VERSION,
   withTeachingSlideGuidance,
   restoreTeachingSemanticElementIds,
@@ -117,6 +118,11 @@ import {
   fingerprintGenerationValue,
   type SceneGenerationCheckpointStage,
 } from '@/lib/course-generation/page-checkpoints';
+import {
+  collectGeneratedTeacherReviewItems,
+  teacherReviewSummary,
+} from '@/lib/course-generation/teacher-review-items';
+import type { TeacherReviewItem, TeacherReviewVersion } from '@/lib/course-quality-review/types';
 
 const log = createLogger('Classroom');
 type GeneratedSceneContent = GeneratedSlideContent
@@ -198,6 +204,9 @@ export interface GenerateClassroomResult {
   scenesCount: number;
   createdAt: string;
   qualityReport: CourseQualityReport;
+  teacherReviewItems: TeacherReviewItem[];
+  teacherReviewSummary: string;
+  teacherReviewVersion: TeacherReviewVersion;
   /** Server-only context consumed by the post-response media task. */
   assetContext: {
     outlines: SceneOutline[];
@@ -389,6 +398,14 @@ export function normalizeSceneOutlinesForGeneration(outlines?: SceneOutline[]): 
         raw.ttsPolicy === 'none' || raw.ttsPolicy === 'target-duration'
           ? raw.ttsPolicy
           : undefined,
+      narrationMode:
+        raw.generationPurpose === 'knowledge-teaching'
+          && typeof raw.lectureSectionId === 'string'
+          && raw.lectureSectionId.trim()
+          ? 'standalone-course'
+          : raw.narrationMode === 'embedded-segment' || raw.narrationMode === 'standalone-course'
+            ? raw.narrationMode
+            : undefined,
       order: index,
     };
   });
@@ -517,6 +534,14 @@ export function attachTtsTimingPlans(
           ],
         }
       : inferredPageTiming;
+    const teachingEntry = outline.teachingBrief?.teachingPlan?.entryPoint;
+    const paragraphRoleWeights = outline.teachingBrief?.teachingPlan
+      ? {
+          introduction: teachingEntry && teachingEntry.kind !== 'continuation' ? 1 : 0,
+          explanation: 6,
+          example: (outline.teachingBrief.examples?.length ?? 0) > 0 ? 3 : 0,
+        }
+      : undefined;
     return {
       ...outline,
       timingPlan: buildTtsTimingPlan({
@@ -542,6 +567,7 @@ export function attachTtsTimingPlans(
         recommendedStudentActivitySec: pageTiming.recommendedStudentActivitySec,
         taskFitsBudget: pageTiming.taskFitsBudget,
         timingRationale: pageTiming.rationale,
+        ...(paragraphRoleWeights ? { paragraphRoleWeights } : {}),
       }),
     };
   });
@@ -738,6 +764,7 @@ async function generateClassroomInternal(
   options: GenerateClassroomOptions,
 ): Promise<GenerateClassroomResult> {
   const { requirement, pdfContent } = input;
+  const generationWarnings: string[] = [];
   assertRequestedClassroomMediaProviders(input);
 
   const reportProgress = async (progress: ClassroomGenerationProgress) => {
@@ -871,6 +898,20 @@ async function generateClassroomInternal(
     streamResponse: true,
     executionBudget,
   });
+  const teachingNarrationAiCall = createCourseGenerationAiCall({
+    model: languageModel,
+    vision: false,
+    source: 'teaching-narration',
+    signal: options.signal,
+    outputBudget: createCourseOutputBudget({
+      resource: 'narration', modelOutputWindow: modelInfo?.outputWindow, thinking: contentThinking,
+    }),
+    thinking: contentThinking,
+    timeoutMs: resolveLlmRequestTimeoutMs('long-generation'),
+    maxRetries: MAX_COURSE_STAGE_MODEL_REQUESTS - 1,
+    streamResponse: true,
+    executionBudget,
+  });
   const agentProfilesAiCall = createCourseGenerationAiCall({
     model: languageModel,
     vision: false,
@@ -895,6 +936,7 @@ async function generateClassroomInternal(
     thinking: contentThinking,
   });
   const getSceneActionsAiCall = async () => sceneActionsAiCall;
+  const getTeachingNarrationAiCall = async () => teachingNarrationAiCall;
   const getAgentProfilesAiCall = async () => agentProfilesAiCall;
 
   const searchQueryAiCall: AICallFn = (systemPrompt, userPrompt) => createCourseGenerationAiCall({
@@ -1444,12 +1486,12 @@ async function generateClassroomInternal(
           catch { log.warn(`Ignoring malformed narration checkpoint for "${safeOutline.title}"`); }
         }
         const narrationCall = withCourseGenerationAiCallContext(
-          await getSceneActionsAiCall(),
+          await getTeachingNarrationAiCall(),
           await pageCallContext(index, 'narration', narrationFingerprint),
         );
         const narration = await generateTeachingNarration({
           outline: safeOutline, requirements, courseTitle, languageDirective,
-          outlineContext: buildNarrationContext(outlines, index), courseProgression: outlines, aiCall: narrationCall,
+          outlineContext: buildNarrationContext(outlines, index), courseProgression: outlines, agents, aiCall: narrationCall,
         });
         await saveStage('narration', { teachingNarration: narration }, narrationFingerprint);
         return narration;
@@ -1564,7 +1606,13 @@ async function generateClassroomInternal(
       if (!actions && teachingNarration && 'elements' in content
         && !content.elements.some((element) => element.type === 'video')) {
         const compiled = compileTeachingNarrationActions({ outline: safeOutline, content, narration: teachingNarration });
-        if (isActionList(compiled.actions) && findMissingRequiredTeachingTools(safeOutline, {
+        const blockingIssues = compiled.issues.filter((issue) => issue.severity === 'blocking');
+        generationWarnings.push(...compiled.issues
+          .filter((issue) => issue.severity === 'warning')
+          .map((issue) => `${safeOutline.title}：${issue.message}`));
+        if (blockingIssues.length > 0) {
+          log.warn(`Compiled visual actions for "${safeOutline.title}" were rejected; using the existing action fallback: ${blockingIssues.map((issue) => issue.message).join('; ')}`);
+        } else if (isActionList(compiled.actions) && findMissingRequiredTeachingTools(safeOutline, {
           sceneType: safeOutline.type,
           content,
           actions: compiled.actions,
@@ -1725,6 +1773,7 @@ async function generateClassroomInternal(
     const sectionFingerprint = fingerprintGenerationValue({
       policy: COURSE_GENERATION_POLICY_VERSION,
       narrationPolicy: TEACHING_NARRATION_VERSION,
+      narrationNormalizationPolicy: TEACHING_NARRATION_NORMALIZATION_VERSION,
       generationModelFingerprint,
       sectionId,
       pages: orderedPages.map(({ outline, content }) => ({ outline, content })),
@@ -1748,9 +1797,40 @@ async function generateClassroomInternal(
     } else {
       const first = orderedPages[0]!;
       await reportPageStage(first.index, first.outline.title, 'narration');
+      const narrationProgressMessage = () => {
+        const current = activePages.get(first.index);
+        const activity = current?.outputKind === 'reasoning'
+          ? '模型正在组织整节讲解，连接仍正常'
+          : current?.outputKind === 'text'
+            ? '正在接收整节讲稿'
+            : '正在等待整节讲稿';
+        return `已保存 ${preparedByIndex.size}/${narratable.length} 页正文，${activity} · ${first.outline.title}`;
+      };
+      await reportProgress({
+        step: 'generating_scenes',
+        progress: completedSceneGenerationProgress(generatedSceneDrafts, outlines.length),
+        message: narrationProgressMessage(),
+        scenesGenerated: generatedSceneDrafts,
+        totalScenes: outlines.length,
+        stage: 'narration',
+        activePages: activePageSnapshot(),
+      });
+      const narrationHeartbeat = setInterval(() => {
+        void reportProgress({
+          step: 'generating_scenes',
+          progress: completedSceneGenerationProgress(generatedSceneDrafts, outlines.length),
+          message: narrationProgressMessage(),
+          scenesGenerated: generatedSceneDrafts,
+          totalScenes: outlines.length,
+          stage: 'narration',
+          activePages: activePageSnapshot(),
+        }).catch((error) => {
+          if (!options.signal?.aborted) log.warn(`Could not persist section narration heartbeat for "${first.outline.title}":`, error);
+        });
+      }, 15_000);
       try {
         const narrationCall = withCourseGenerationAiCallContext(
-          await getSceneActionsAiCall(),
+          await getTeachingNarrationAiCall(),
           await pageCallContext(first.index, 'narration', sectionFingerprint),
         );
         const sectionNarration = await generateTeachingSectionNarration({
@@ -1760,6 +1840,7 @@ async function generateClassroomInternal(
           courseTitle,
           languageDirective,
           courseProgression: outlineContext,
+          agents,
           aiCall: narrationCall,
         });
         narrations = sectionNarration.pages;
@@ -1771,6 +1852,7 @@ async function generateClassroomInternal(
           sectionFingerprint,
         )));
       } finally {
+        clearInterval(narrationHeartbeat);
         activePages.delete(first.index);
       }
     }
@@ -1817,11 +1899,13 @@ async function generateClassroomInternal(
   });
 
   const scenes = assembledScenes;
+  const teacherReviewItems = collectGeneratedTeacherReviewItems({ outlines, scenes });
+  const generatedTeacherReviewSummary = teacherReviewSummary(teacherReviewItems);
   const qualityReport: CourseQualityReport = {
     status: 'not-checked',
     ok: true,
     corrections: [],
-    warnings: [],
+    warnings: [...new Set(generationWarnings)],
     baselineVersion: `${OPENMAIC_GENERATION_BASELINE.release}@${OPENMAIC_GENERATION_BASELINE.releaseCommit.slice(0, 7)}/${OPENMAIC_GENERATION_BASELINE.package}@${OPENMAIC_GENERATION_BASELINE.version}`,
     generationMethod: 'classic-one-click',
     generationModelString: modelString,
@@ -1872,6 +1956,13 @@ async function generateClassroomInternal(
     scenesCount: scenes.length,
     createdAt: persisted.createdAt,
     qualityReport,
+    teacherReviewItems,
+    teacherReviewSummary: generatedTeacherReviewSummary,
+    teacherReviewVersion: {
+      generationPolicyVersion: COURSE_GENERATION_POLICY_VERSION,
+      classroomId: persisted.id,
+      generatedAt: new Date().toISOString(),
+    },
     assetContext: {
       outlines,
       enableImageGeneration: Boolean(input.enableImageGeneration),

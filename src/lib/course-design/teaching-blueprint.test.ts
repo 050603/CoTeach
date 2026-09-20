@@ -34,42 +34,28 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.user).toContain("需要图例支架");
   expect(prompt.user).toContain("校园植物");
   expect(prompt.system).toContain("同一材料再次出现时");
-  expect(prompt.system).toContain("不得复写讲授案例里已经公布的题目和答案");
-  expect(prompt.system).toContain("不得要求学生靠圈出某几个词");
-  expect(prompt.system).toContain("Replacement, deletion, scope-of-effect");
-  expect(prompt.system).toContain("定义＋案例＋归类结论");
-  expect(prompt.system).toContain("不能成为小节目的、首页任务或多数页面的新增认识");
-  expect(prompt.system).toContain("不能把编写、归类或修改材料的便利当成首要学习意义");
-  expect(prompt.system).toContain("在要求学生分类、比较或调整之前");
-  expect(prompt.system).toContain("学生可见标题不得只写");
-  expect(prompt.system).toContain("师生行为以及已观察或预期的学习结果");
-  expect(prompt.system).toContain("案例自身的具体教学目标");
-  expect(prompt.system).toContain("不能冒充案例中的教学目标");
-  expect(prompt.system).toContain("相关目标、原做法、改后做法和结果要进入此前或当前的 keyPoints");
-  expect(prompt.system).toContain("不能未经解释替换其中一个概念");
-  expect(prompt.system).toContain("当前例子中被保持的条件只表示本次比较不改变它");
-  expect(prompt.system).toContain("页面标题、提问和结论也不得用‘哪些不能动’");
-  expect(prompt.system).toContain("没有写顺序、列出若干步骤");
-  expect(prompt.system).toContain("‘具体化’不能只解释成列出先后步骤");
-  expect(prompt.system).toContain("稳定的对象、可以变化的对象及稳定部分为何有用");
-  expect(prompt.system).toContain("返回前在同一次作答中静默检查每个小节");
-  expect(prompt.system).toContain("不以字数、页数、例子数量或关键词命中代替教学判断");
-  expect(prompt.system).toContain("看到教案时不再混淆类别");
-  expect(prompt.system).toContain("不要第一页压缩罗列全部定义");
-  expect(prompt.system).toContain("workedExample 中的‘目标’必须是例子所描述课堂的学科学习目标");
-  expect(prompt.system).toContain("caseUse=independent 时");
+  expect(prompt.system).toContain("概念辨析、因果机制、数学推导、操作技能、历史材料和综合应用");
+  expect(prompt.system).toContain("introducesNodeIds、deepensNodeIds、referencesNodeIds");
+  expect(prompt.system).toContain("entryPoint 写出实际开场对象");
+  expect(prompt.system).toContain("案例首先按解释力、学习者熟悉度和学段适切性选择");
+  expect(prompt.system).toContain("项目情境只规定用途和约束，不能自动变成知识目标或每页案例");
+  expect(prompt.system).toContain("具体场景中的人物、物体、空间状态或可见差异本身是推理依据时");
+  expect(prompt.system).toContain("构造案例、类比和示意数据");
+  expect(prompt.system).toContain("不得考未讲内容");
+  expect(prompt.system).toContain("Constructed examples or data must not be given a fabricated institution");
   expect(prompt.system).toContain("未启用图片或视频时不得请求对应种类");
   expect(prompt.user).toContain('"sharedContext"');
   expect(prompt.user).toContain('"learningTask"');
   expect(prompt.user).toContain("必须严格按以下 2 个小节及其顺序生成");
-  expect(prompt.user).toContain('"maxPages":2');
+  expect(prompt.user).toContain("默认容量判断");
+  expect(prompt.user).not.toContain('"maxPages"');
   expect(prompt.system).toContain("可直接制作资源的小节内容设计");
   expect(prompt.system).toContain("禁止只写");
   expect(prompt.user).toContain('"understandingCriteria"');
-  expect(prompt.user).toContain("归类或调整只能作为解释之后的必要迁移");
   expect(prompt.system).toContain("优先展示推理依据");
-  expect(prompt.user).toContain("不得静默删除解释");
-  expect(prompt.user).toContain("缺一项时不得让后页依赖该项判断");
+  expect(prompt.user).toContain("输入时间无法承载必需解释");
+  expect(prompt.system).not.toContain("relative stability");
+  expect(prompt.system).not.toContain("concretization");
   expect(prompt.user).not.toContain("4-6个完整");
   expect(prompt.user).not.toContain("至少三个实质要点");
   expect(teachingBlueprintInputFingerprint(enriched)).not.toBe(teachingBlueprintInputFingerprint(base));
@@ -281,16 +267,17 @@ describe("teaching blueprint compiler", () => {
 
     expect(blueprint.budget).toMatchObject({
       totalDurationSec: 1_800,
-      teachingDurationSec: 1_554,
+      teachingDurationSec: 1_440,
       assessmentDurationSec: 216,
-      learnerActivityDurationSec: 30,
+      learnerActivityDurationSec: 144,
     });
     expect(outlines.reduce((sum, outline) => sum + (outline.targetDurationSec ?? 0), 0)).toBe(1_800);
     expect(outlines.filter((outline) => outline.type !== "quiz").reduce(
       (sum, outline) => sum + (outline.plannedTiming?.narrationSec ?? 0),
       0,
-    )).toBe(1_554);
+    )).toBe(1_440);
     expect(validateTeachingBlueprintBudget(blueprint, outlines)).toEqual([]);
+    expect(outlines.every((outline) => outline.narrationMode === "standalone-course")).toBe(true);
     expect(outlines.filter((outline) => outline.type !== "quiz").flatMap((outline) => outline.teachingUnitIds ?? [])).toEqual([
       "teaching-section-1-unit-1",
       "teaching-section-2-unit-1",
@@ -302,9 +289,16 @@ describe("teaching blueprint compiler", () => {
     const quizzes = outlines.filter((outline) => outline.type === "quiz");
     expect(quizzes[0]?.description).toContain("预定理解标准");
     expect(quizzes).toHaveLength(2);
-    expect(quizzes.map((quiz) => quiz.quizConfig?.questionCount)).toEqual([1, 1]);
-    expect(quizzes.every((quiz) => quiz.quizConfig?.minShortAnswerQuestions === 1)).toBe(true);
-    expect(quizzes.every((quiz) => quiz.quizConfig?.maxShortAnswerQuestions === 1)).toBe(true);
+    expect(quizzes.map((quiz) => quiz.quizConfig?.questionCount)).toEqual(
+      blueprint.sections.map((section) => Math.min(
+        Math.max(1, section.understandingCriteria.goals.length, section.assessmentFocus.length),
+        Math.max(1, Math.floor(section.assessmentDurationSec / 45)),
+      )),
+    );
+    expect(quizzes.every((quiz) => (
+      (quiz.quizConfig?.minShortAnswerQuestions ?? 0) <= (quiz.quizConfig?.questionCount ?? 0)
+      && quiz.quizConfig?.maxShortAnswerQuestions === quiz.quizConfig?.minShortAnswerQuestions
+    ))).toBe(true);
     expect(deriveKnowledgeLectureSectionsFromOutlines(outlines)).toHaveLength(2);
     expect(quizzes.every((quiz) => quiz.assessmentUnitIds?.length === 1 && quiz.assessmentUnitMap?.length === 1)).toBe(true);
     expect(quizzes.every((quiz) => quiz.quizConfig?.coveragePolicy === "section-synthesis")).toBe(true);
@@ -530,7 +524,7 @@ describe("teaching blueprint compiler", () => {
     const shortInput = { ...input(), totalDurationSec: 300 };
     const ai = vi.fn(async () => JSON.stringify(overloaded));
 
-    await expect(generateTeachingBlueprint(shortInput, ai)).resolves.toMatchObject({ schemaVersion: 2 });
+    await expect(generateTeachingBlueprint(shortInput, ai)).resolves.toMatchObject({ schemaVersion: 3 });
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
@@ -554,7 +548,7 @@ describe("teaching blueprint compiler", () => {
       .mockResolvedValueOnce(JSON.stringify(modelBlueprint()));
     await expect(generateTeachingBlueprint(input(), ai, {
       retrySleep: async () => undefined,
-    })).resolves.toMatchObject({ schemaVersion: 2 });
+    })).resolves.toMatchObject({ schemaVersion: 3 });
     expect(ai).toHaveBeenCalledTimes(2);
   });
 
@@ -604,7 +598,12 @@ describe("teaching blueprint compiler", () => {
     const blueprint = await generateTeachingBlueprint(shortInput, async () => JSON.stringify(compactModelBlueprint()));
     const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
     expect(outlines.reduce((sum, outline) => sum + (outline.targetDurationSec ?? 0), 0)).toBe(300);
-    expect(blueprint.budget).toMatchObject({ teachingDurationSec: 240, assessmentDurationSec: 45, learnerActivityDurationSec: 15 });
+    expect(blueprint.budget.totalDurationSec).toBe(300);
+    expect(blueprint.budget.assessmentDurationSec).toBe(assessmentMode === "adaptive" ? 36 : 54);
+    expect(blueprint.budget.learnerActivityDurationSec).toBeGreaterThan(0);
+    expect(blueprint.budget.teachingDurationSec
+      + blueprint.budget.assessmentDurationSec
+      + blueprint.budget.learnerActivityDurationSec).toBe(300);
     expect(validateTeachingBlueprintBudget(blueprint, outlines)).toEqual([]);
     if (assessmentMode === "adaptive") {
       expect(outlines.find((outline) => outline.type === "quiz")?.quizConfig?.questionCount).toBe(1);

@@ -720,6 +720,14 @@ function GraphPreview({ artifact }: { artifact: CourseDesignGenerationArtifact }
       level,
       points: artifact.visualization!.knowledgeGraph!.nodes.filter((node) => (node.level ?? pointById.get(node.id)?.level ?? "core") === level),
     })).filter((group) => group.points.length > 0);
+    const scopePlan = artifact.visualization.knowledgeScopePlan;
+    const scopeCounts = scopePlan
+      ? {
+          standalone: scopePlan.decisions.filter((decision) => decision.disposition === "standalone").length,
+          embedded: scopePlan.decisions.filter((decision) => decision.disposition === "embedded").length,
+          deferred: scopePlan.decisions.filter((decision) => decision.disposition === "deferred").length,
+        }
+      : undefined;
     return (
       <div className="flex min-h-[250px] flex-col">
         <div className="grid flex-1 divide-y divide-[var(--pbl-border)] sm:grid-cols-4 sm:divide-x sm:divide-y-0">
@@ -748,6 +756,13 @@ function GraphPreview({ artifact }: { artifact: CourseDesignGenerationArtifact }
           <span className="font-semibold text-[var(--pbl-teacher)]">学习逻辑</span>
           <span className="truncate">{artifact.visualization.knowledgeGraph.edges.slice(0, 4).map((edge) => edge.label).filter(Boolean).join(" · ") || `${artifact.visualization.knowledgeGraph.edges.length} 条知识关联`}</span>
         </div>
+        {scopePlan && scopeCounts ? (
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[9px] text-[var(--pbl-text-subtle)]">
+            <span className="font-semibold text-[var(--pbl-teacher)]">容量编译</span>
+            <span>{scopePlan.planningDurationMin} 分钟：形成 {scopePlan.targetPointCount} 个教学目标；来源概念独立 {scopeCounts.standalone} 项 · 并入 {scopeCounts.embedded} 项 · 后续承接 {scopeCounts.deferred} 项</span>
+            <span>解释与活动 {scopePlan.explanationAndActivityMin} 分钟 · 检测反馈 {scopePlan.assessmentReserveMin} 分钟</span>
+          </div>
+        ) : null}
       </div>
     );
   }

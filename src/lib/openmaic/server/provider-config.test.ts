@@ -6,6 +6,7 @@ import {
   getTtsConcurrencyLimit,
   initializeServerProviderConfig,
   resolveASRModel,
+  resolveProxy,
 } from '@openmaic/lib/server/provider-config';
 
 describe('server generation concurrency configuration', () => {
@@ -49,6 +50,16 @@ describe('server generation concurrency configuration', () => {
   it('falls back to the provider default for invalid TTS overrides', () => {
     vi.stubEnv('TTS_GLM_TTS_CONCURRENCY', 'not-a-number');
     expect(getTtsConcurrencyLimit('glm-tts')).toBe(2);
+  });
+
+  it('keeps the deployment proxy fallback scoped to DeepSeek', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', '');
+    vi.stubEnv('OPENPBL_DEEPSEEK_PROXY', 'http://127.0.0.1:9999');
+    await initializeServerProviderConfig();
+
+    expect(resolveProxy('deepseek')).toBe('http://127.0.0.1:9999');
+    expect(resolveProxy('qwen')).toBeUndefined();
   });
 
   it('uses the teacher-managed ASR model instead of a stale client model', async () => {

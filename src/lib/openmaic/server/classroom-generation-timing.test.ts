@@ -95,6 +95,27 @@ describe('attachTtsTimingPlans', () => {
     ).toBe(180);
   });
 
+  it('budgets only the narration roles present in the adopted page design', () => {
+    const [planned] = attachTtsTimingPlans([outline({
+      teachingBrief: {
+        schemaVersion: 1,
+        explanation: '解释一个机制',
+        examples: [],
+        conditions: [],
+        evidence: [],
+        assessmentFocus: '解释机制',
+        teachingPlan: {
+          purpose: '解释机制', priorKnowledge: '', newContent: '机制', learnerQuestion: '',
+          reasoningSteps: ['条件', '过程', '结果'], takeaway: '机制结论',
+          visibleContent: ['条件到结果'], narrationFocus: ['中间过程'],
+          entryPoint: { kind: 'continuation', object: '刚建立的条件', bridge: '继续追踪结果怎样发生' },
+        },
+      },
+    })], selection);
+
+    expect(planned.timingPlan?.paragraphBudgets?.map((part) => part.role)).toEqual(['explanation']);
+  });
+
   it('uses widget steps and type for an interactive page breakdown', () => {
     const [planned] = attachTtsTimingPlans([
       outline({
@@ -212,5 +233,18 @@ describe('attachTtsTimingPlans', () => {
     ], selection);
 
     expect(planned.timingPlan).toBeUndefined();
+  });
+
+  it('upgrades canonical teaching pages to course narration while preserving embedded resources', () => {
+    const [canonical, embedded] = normalizeSceneOutlinesForGeneration([
+      outline({
+        id: 'canonical', generationPurpose: 'knowledge-teaching', audience: 'student',
+        lectureSectionId: 'section-1', narrationMode: 'embedded-segment',
+      }),
+      outline({ id: 'branch-resource', narrationMode: 'embedded-segment' }),
+    ]);
+
+    expect(canonical.narrationMode).toBe('standalone-course');
+    expect(embedded.narrationMode).toBe('embedded-segment');
   });
 });

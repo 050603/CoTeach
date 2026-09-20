@@ -139,6 +139,20 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
     expect(visualActions(result)[1].speechOffsetMs).toBeGreaterThan(0);
   });
 
+  it('recalibrates anchored cues from measured TTS duration when audio is available', () => {
+    const text = '先说明前提。然后观察三个核心特征。';
+    const narration = { id: 's1', type: 'speech' as const, text, audioDurationSec: 20 };
+    const result = calibrate([
+      cue('features', 's1', 'stage-table', {
+        selector: { cellId: 'primary-form' },
+        speechAnchor: { quote: '三个核心特征' },
+      }),
+      narration,
+    ]);
+    expect(visualActions(result)[0].speechOffsetMs)
+      .toBe(Math.round((text.indexOf('三个核心特征') / text.length) * 20_000));
+  });
+
   it('merges adjacent same-target spotlight intervals', () => {
     const s1 = speech('s1', '先观察小学学段。');
     const s2 = speech('s2', '再看内容形态。');

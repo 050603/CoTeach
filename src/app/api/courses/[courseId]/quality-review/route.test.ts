@@ -24,7 +24,14 @@ describe('optional teacher checks', () => {
   it('GET is read-only and reports absent checks as null', async () => {
     const response = await GET(new Request(url), context);
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ quality: null, renderReview: null, teacherReview: null });
+    expect(await response.json()).toMatchObject({
+      quality: null,
+      renderReview: null,
+      teacherReview: null,
+      teacherReviewItems: [],
+      teacherReviewSummary: null,
+      teacherReviewVersion: null,
+    });
     expect(mocks.load).toHaveBeenCalledTimes(1);
     expect(mocks.enqueue).not.toHaveBeenCalled();
     expect(mocks.save).not.toHaveBeenCalled();

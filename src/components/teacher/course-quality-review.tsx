@@ -6,13 +6,23 @@ import { Button } from '@/components/ui';
 import { ReadonlySlideCanvas } from '@/components/openmaic/slide-renderer/Editor/ReadonlySlideCanvas';
 import type { PersistedClassroomData } from '@/lib/openmaic/server/classroom-storage';
 import type { CourseQualityReport } from '@/lib/course-quality-review/types';
+import type { TeacherReviewItem } from '@/lib/course-quality-review/types';
 import type { CourseRenderPageReview, CourseRenderReview, CourseTeacherReview } from '@/lib/course-quality-review/teacher-review';
 import { reviewableIssues } from '@/lib/course-quality-review/teacher-review';
 import { inspectRenderedSlide, measureSlideElements } from '@/lib/course-quality-review/render-measurements';
 import type { Scene } from '@openmaic/lib/types/stage';
 
 export type TeacherReviewDecision = { canConfirm: boolean; signature: string; acceptedIssueIds: string[]; acknowledgeFailedCheck: boolean };
-type ReviewSnapshot = { required: boolean; signature: string; classroom: PersistedClassroomData; quality: CourseQualityReport | null; renderReview: CourseRenderReview | null; teacherReview: CourseTeacherReview | null };
+type ReviewSnapshot = {
+  required: boolean;
+  signature: string;
+  classroom: PersistedClassroomData;
+  quality: CourseQualityReport | null;
+  renderReview: CourseRenderReview | null;
+  teacherReview: CourseTeacherReview | null;
+  teacherReviewItems: TeacherReviewItem[];
+  teacherReviewSummary: string | null;
+};
 
 async function responseJson<T>(response: Response): Promise<T> {
   const body = await response.json();
@@ -166,6 +176,12 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
       <span>{toReview.length} 项参考建议</span>
     </div>
     {error && <p role="alert" className="mt-3 text-sm text-rose-700">{error}</p>}
+    {snapshot?.teacherReviewSummary && <details className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3" open={snapshot.teacherReviewItems.length > 0}>
+      <summary className="cursor-pointer text-sm font-bold text-stone-900">
+        授课前待确认信息{snapshot.teacherReviewItems.length ? `（${snapshot.teacherReviewItems.length} 项）` : ''}
+      </summary>
+      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-stone-600">{snapshot.teacherReviewSummary}</p>
+    </details>}
     {snapshot?.quality?.status === 'failed' && <p className="mt-3 text-sm text-amber-900">内容检查未完成：{snapshot.quality.error || '服务暂时不可用'}。教师仍可根据实际预览确认发布。</p>}
     {issues.length > 0 && <div className="mt-4 max-h-96 space-y-3 overflow-y-auto">
       {issues.filter((issue) => issue.status !== 'resolved').map((issue) => {

@@ -33,8 +33,16 @@ export function deriveCourseScope(hours?: number): Pick<
   TeachingConstraints,
   'courseHours' | 'totalMinutes' | 'recommendedKnowledgePointRange' | 'scopeRule'
 > {
-  const courseHours = Number.isFinite(hours) ? Math.max(1, Number(hours)) : 1;
-  const totalMinutes = Math.round(courseHours * 60);
+  const courseHours = Number.isFinite(hours) ? Math.max(1 / 60, Number(hours)) : 1;
+  const totalMinutes = Math.max(1, Math.round(courseHours * 60));
+  if (courseHours <= 0.5) {
+    return {
+      courseHours,
+      totalMinutes,
+      recommendedKnowledgePointRange: { min: 2, max: 5 },
+      scopeRule: 'Use the short lesson for a few essential learning targets with sufficient explanation. Embed supporting terms inside those targets and defer optional expansion rather than naming many shallow targets.',
+    };
+  }
   if (courseHours <= 1) {
     return {
       courseHours,
@@ -84,11 +92,14 @@ function splitItems(value?: string): string[] {
 
 export function inferGradeBand(grade: string): LearnerGradeBand {
   const value = grade.trim().toLowerCase();
-  if (/小学|一年级|二年级|三年级|四年级|五年级|六年级|primary|elementary/.test(value)) return 'primary';
-  if (/初中|七年级|八年级|九年级|初一|初二|初三|middle|junior/.test(value)) return 'middle-school';
-  if (/高中|高一|高二|高三|high school|senior/.test(value)) return 'high-school';
+  // Match explicit education stages before bare year numbers. Otherwise
+  // "本科一年级" is incorrectly classified as primary school because it
+  // contains "一年级", which then corrupts examples, terminology and depth.
   if (/职高|中职|高职|技校|vocational/.test(value)) return 'vocational';
-  if (/大学|本科|研究生|college|university|higher/.test(value)) return 'higher-education';
+  if (/大学|本科|研究生|硕士|博士|college|university|higher/.test(value)) return 'higher-education';
+  if (/高中|高一|高二|高三|high school|senior/.test(value)) return 'high-school';
+  if (/初中|七年级|八年级|九年级|初一|初二|初三|middle|junior/.test(value)) return 'middle-school';
+  if (/小学|一年级|二年级|三年级|四年级|五年级|六年级|primary|elementary/.test(value)) return 'primary';
   return 'general';
 }
 
@@ -250,7 +261,8 @@ export function formatTeachingConstraintsForChinesePrompt(constraints?: Teaching
     '已确认的知识边界：',
     allowed,
     '术语与深度：专业术语首次出现时必须用中文准确解释；先从具体例子进入机制，再进行有限应用，不得把未列出的专业知识当作前置条件。',
-    '内容组织：按“激活已有经验—具体示例—解释机制—引导应用—独立检查—简要归纳”推进，不得仅为填满课时而增加难度或重复内容。',
+    '内容组织：根据知识类型和当前理解障碍选择进入方式与推进顺序。抽象或陌生内容通常先建立学生能感知的对象、现象或问题，再命名并解释；已经熟悉或适合直接定义的内容可以直接进入。不得把同一套讲授步骤复制到每页，也不得仅为填满课时而增加难度或重复内容。',
+    '案例选择：案例首先服务当前知识点的理解，优先使用实际学习者在其学段、专业和生活经验中能够理解的对象。与项目任务的关联只在确实帮助理解或迁移时使用，不能为了贯穿任务而放弃更清楚、更熟悉的例子。资料中出现的儿童、教师、客户或其他人物是案例角色，不自动等于实际学习者。',
     '评价边界：只评价当前课程目标和已确认知识点；空值表示未知或未填写，不表示学生不会、内容不存在或任务已经完成。',
   ].filter(Boolean).join('\n');
 }

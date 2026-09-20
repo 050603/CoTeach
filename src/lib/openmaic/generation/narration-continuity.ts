@@ -59,7 +59,7 @@ const FALSE_PREVIOUS_PAGE_LEARNING = /(?:在)?(?:上一页|前一页)(?:中|里)
 const FALSE_PREVIOUS_PAGE_REFERENCE = /(?:在)?(?:上一页|前一页)(?:中|里)?/g;
 const COURSE_GREETING = /(?:大家好|同学们好|各位同学好|欢迎(?:大家|各位同学|同学们)?来到)/i;
 
-function normalizeCourseFirstOpening(text: string): string {
+export function normalizeCourseFirstOpening(text: string): string {
   const independentOpening = text
     .replace(FALSE_PREVIOUS_PAGE_LEARNING, '这节课我们先来了解')
     .replace(FALSE_PREVIOUS_PAGE_REFERENCE, '在本节课中');

@@ -558,6 +558,8 @@ export function buildTtsTimingPlan(options: {
   recommendedStudentActivitySec?: number;
   taskFitsBudget?: boolean;
   timingRationale?: string[];
+  /** Relative shares for the authored speech roles that actually exist on this page. */
+  paragraphRoleWeights?: Partial<Record<TtsNarrationParagraphBudget['role'], number>>;
 }): TtsTimingPlan {
   const language = options.language || 'zh-CN';
   const naturalSpeedLocked = Boolean(options.naturalSpeedLocked);
@@ -578,8 +580,13 @@ export function buildTtsTimingPlan(options: {
   );
   const feedback = Math.min(budget.targetDurationSec, Math.max(0, options.feedbackSec ?? 0));
   const main = budget.targetDurationSec - feedback;
-  const introduction = Math.floor(main * 0.1);
-  const example = Math.floor(main * 0.3);
+  const suppliedWeights = options.paragraphRoleWeights;
+  const introductionWeight = Math.max(0, suppliedWeights?.introduction ?? 1);
+  const explanationWeight = Math.max(0, suppliedWeights?.explanation ?? 6);
+  const exampleWeight = Math.max(0, suppliedWeights?.example ?? 3);
+  const mainWeight = introductionWeight + explanationWeight + exampleWeight || 1;
+  const introduction = Math.floor(main * introductionWeight / mainWeight);
+  const example = Math.floor(main * exampleWeight / mainWeight);
   const paragraphDurations: Array<[TtsNarrationParagraphBudget['role'], number]> = [
     ['introduction', introduction], ['explanation', main - introduction - example],
     ['example', example], ['feedback', feedback],

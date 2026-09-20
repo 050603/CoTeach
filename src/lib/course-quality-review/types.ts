@@ -70,6 +70,34 @@ export type TeachingResourceNeed = {
   durationSec?: number;
 };
 
+/**
+ * Teacher-private provenance for content that may be useful in class but is
+ * not fully established by the supplied course material. These records never
+ * become learner-facing labels or narration.
+ */
+export type TeacherReviewItem = {
+  id: string;
+  kind: "illustrative-data" | "constructed-example" | "unverified-claim";
+  provenance: "course-source" | "derived" | "general-knowledge" | "constructed" | "unverified";
+  content: string;
+  teachingPurpose: string;
+  source?: string;
+  values?: Array<{ value: string; unit?: string; label?: string }>;
+  comparisonObjects?: string[];
+  sectionId?: string;
+  outlineId?: string;
+  sceneId?: string;
+  elementId?: string;
+  narrationSegmentId?: string;
+};
+
+export type TeacherReviewVersion = {
+  generationPolicyVersion: string;
+  classroomId: string;
+  classroomRevision?: number;
+  generatedAt: string;
+};
+
 /** Shared teaching meaning supplied by the existing outline call, not another generation step. */
 export type TeachingBrief = {
   schemaVersion: 1;
@@ -85,6 +113,22 @@ export type TeachingBrief = {
     takeaway: string;
     visibleContent: string[];
     narrationFocus: string[];
+    /** Actual learner-facing entry and the reasoning bridge into new content. */
+    entryPoint?: {
+      kind: "familiar-experience" | "concrete-observation" | "problem" | "direct-explanation" | "continuation";
+      object: string;
+      bridge: string;
+    };
+    /** Stable explanation ownership inherited from the teaching blueprint. */
+    introduces?: string[];
+    deepens?: string[];
+    references?: string[];
+    /** The relationship the slide should make visible, without prescribing a layout template. */
+    visualRelationship?: {
+      kind: "comparison" | "process" | "causal" | "system" | "quantitative" | "sequence" | "spatial" | "statement";
+      description: string;
+      readingOrder: string[];
+    };
   };
   explanation: string;
   examples: string[];
@@ -93,4 +137,6 @@ export type TeachingBrief = {
   assessmentFocus: string;
   understandingCriteria?: TeachingUnderstandingCriteria;
   resourceNeeds?: TeachingResourceNeed[];
+  /** Aggregated after generation and shown only in the teacher review flow. */
+  reviewItems?: TeacherReviewItem[];
 };

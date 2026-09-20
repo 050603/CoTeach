@@ -18,6 +18,11 @@ export interface NarrationAnchor {
   semanticId: string;
   quote: string;
   occurrence?: number;
+  visualCue?: {
+    type: "spotlight" | "laser";
+    necessity: Exclude<ActionSupport, "none">;
+    durationMs?: number;
+  };
 }
 
 export interface NarrationSegment {
@@ -32,4 +37,3 @@ export interface NarrationModuleOutput {
   pageId: string;
   segments: NarrationSegment[];
 }
-

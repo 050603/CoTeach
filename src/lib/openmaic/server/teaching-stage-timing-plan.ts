@@ -85,6 +85,11 @@ export function allocateTeachingStageTiming(outlines: SceneOutline[]): SceneOutl
         timingPlan: buildTtsTimingPlan({
           ...plan, targetDurationSec: seconds[index], activityTargetDurationSec: activityTarget,
           feedbackSec: Math.min(plan.feedbackSec ?? 0, seconds[index]),
+          paragraphRoleWeights: {
+            introduction: plan.paragraphBudgets?.find((part) => part.role === 'introduction')?.targetDurationSec ?? 0,
+            explanation: plan.paragraphBudgets?.find((part) => part.role === 'explanation')?.targetDurationSec ?? 0,
+            example: plan.paragraphBudgets?.find((part) => part.role === 'example')?.targetDurationSec ?? 0,
+          },
           timingRationale: [...(plan.timingRationale ?? []), '按教学内容量分配讲稿；仅知识讲授阶段总时长采用 ±10% 验收，页与段不单独判定。'],
         }),
       });

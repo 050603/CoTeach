@@ -1,6 +1,6 @@
 import { loadSnippet } from '@openmaic/lib/prompts';
 import { formatTeachingConstraintsForPrompt, type TeachingConstraints } from '@openmaic/lib/pedagogy/teaching-constraints';
-import type { PageLearningTask, SharedTeachingContext, TeachingBrief } from '@/lib/course-quality-review/types';
+import type { PageLearningTask, SharedTeachingContext, TeacherReviewItem, TeachingBrief } from '@/lib/course-quality-review/types';
 import { selectReviewSource } from '@/lib/course-quality-review/source-selection';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { AICallFn } from './pipeline-types';
@@ -10,8 +10,11 @@ import { isAbortError } from './generation-retry';
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from './generated-output-retry';
 import { fingerprintGenerationValue } from '@/lib/course-generation/page-checkpoints';
 
-export const TEACHING_ENHANCEMENT_VERSION = 'substantive-section-brief-v10-case-evidence';
-const TEACHING_SOURCE_LIMIT = 12_000;
+export const TEACHING_ENHANCEMENT_VERSION = 'shared-page-contract-v12-learner-entry';
+const TEACHING_SOURCE_LIMIT = 60_000;
+const ENTRY_POINT_KINDS = new Set([
+  'familiar-experience', 'concrete-observation', 'problem', 'direct-explanation', 'continuation',
+] as const);
 
 function strings(value: unknown): string[] {
   return Array.isArray(value)
@@ -75,17 +78,78 @@ function normalizePageTask(value: unknown): PageLearningTask | undefined {
   };
 }
 
-function normalizeTeachingPlan(value: unknown): TeachingBrief['teachingPlan'] {
+function normalizeReviewItems(value: unknown, outlineId: string): TeacherReviewItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    const kind = record.kind === 'illustrative-data' || record.kind === 'constructed-example'
+      || record.kind === 'unverified-claim' ? record.kind : undefined;
+    const provenance = record.provenance === 'derived' || record.provenance === 'general-knowledge'
+      || record.provenance === 'constructed' || record.provenance === 'unverified'
+      ? record.provenance : undefined;
+    const content = compact(record.content);
+    const teachingPurpose = compact(record.teachingPurpose);
+    if (!kind || !provenance || !content || !teachingPurpose) return [];
+    const values = Array.isArray(record.values) ? record.values.flatMap((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const raw = value as Record<string, unknown>;
+      const rawValue = compact(raw.value);
+      return rawValue ? [{
+        value: rawValue,
+        ...(compact(raw.unit) ? { unit: compact(raw.unit) } : {}),
+        ...(compact(raw.label) ? { label: compact(raw.label) } : {}),
+      }] : [];
+    }) : [];
+    const comparisonObjects = strings(record.comparisonObjects);
+    return [{
+      id: `${outlineId}:review-${index + 1}`,
+      kind,
+      provenance,
+      content,
+      teachingPurpose,
+      ...(compact(record.source) ? { source: compact(record.source) } : {}),
+      ...(values.length ? { values } : {}),
+      ...(comparisonObjects.length ? { comparisonObjects } : {}),
+      outlineId,
+    }];
+  });
+}
+
+function normalizeTeachingPlan(
+  value: unknown,
+  inherited?: TeachingBrief['teachingPlan'],
+): TeachingBrief['teachingPlan'] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const plan = value as Record<string, unknown>;
   if (!compact(plan.purpose) || !compact(plan.newContent) || !compact(plan.takeaway)
     || !Array.isArray(plan.reasoningSteps) || !Array.isArray(plan.visibleContent)
     || !Array.isArray(plan.narrationFocus)) return undefined;
+  const rawEntryPoint = plan.entryPoint && typeof plan.entryPoint === 'object' && !Array.isArray(plan.entryPoint)
+    ? plan.entryPoint as Record<string, unknown> : undefined;
+  const entryPoint = rawEntryPoint
+    && typeof rawEntryPoint.kind === 'string'
+    && ENTRY_POINT_KINDS.has(rawEntryPoint.kind as never)
+    && compact(rawEntryPoint.object)
+    && compact(rawEntryPoint.bridge)
+    ? {
+        kind: rawEntryPoint.kind as NonNullable<NonNullable<TeachingBrief['teachingPlan']>['entryPoint']>['kind'],
+        object: compact(rawEntryPoint.object),
+        bridge: compact(rawEntryPoint.bridge),
+      }
+    : inherited?.entryPoint;
   return {
     purpose: compact(plan.purpose), priorKnowledge: compact(plan.priorKnowledge),
     newContent: compact(plan.newContent), learnerQuestion: compact(plan.learnerQuestion),
     reasoningSteps: strings(plan.reasoningSteps), takeaway: compact(plan.takeaway),
     visibleContent: strings(plan.visibleContent), narrationFocus: strings(plan.narrationFocus),
+    introduces: strings(plan.introduces).length ? strings(plan.introduces) : inherited?.introduces ?? [],
+    deepens: strings(plan.deepens).length ? strings(plan.deepens) : inherited?.deepens ?? [],
+    references: strings(plan.references).length ? strings(plan.references) : inherited?.references ?? [],
+    ...(entryPoint ? { entryPoint } : {}),
+    ...((plan.visualRelationship && typeof plan.visualRelationship === 'object' && !Array.isArray(plan.visualRelationship))
+      ? { visualRelationship: plan.visualRelationship as NonNullable<TeachingBrief['teachingPlan']>['visualRelationship'] }
+      : inherited?.visualRelationship ? { visualRelationship: inherited.visualRelationship } : {}),
   };
 }
 
@@ -128,6 +192,8 @@ function synchronizeQuizTeachingBriefs(outlines: readonly SceneOutline[]): Scene
         assessmentFocus: unique(briefs.map((brief) => brief.assessmentFocus)).join('；'),
         understandingCriteria: briefs.find((brief) => brief.understandingCriteria)?.understandingCriteria,
         resourceNeeds: briefs.flatMap((brief) => brief.resourceNeeds ?? []),
+        reviewItems: [...new Map(briefs.flatMap((brief) => brief.reviewItems ?? [])
+          .map((item) => [item.id, item])).values()],
       },
     };
   });
@@ -185,8 +251,8 @@ export function normalizeTeachingEnhancement(
     const examples = strings(record.examples);
     const conditions = strings(record.conditions);
     const assessmentFocus = compact(record.assessmentFocus);
-    const teachingPlan = normalizeTeachingPlan(record.teachingPlan);
     const existingPage = pages.find((page) => page.id === outlineId);
+    const teachingPlan = normalizeTeachingPlan(record.teachingPlan, existingPage?.teachingBrief?.teachingPlan);
     const pageTask = normalizePageTask(existingPage?.teachingBrief?.pageTask)
       ?? normalizePageTask(record.pageTask);
     if (!explanation || !Array.isArray(record.examples) || !Array.isArray(record.conditions)
@@ -209,6 +275,10 @@ export function normalizeTeachingEnhancement(
         ? { understandingCriteria: existingPage.teachingBrief.understandingCriteria } : {}),
       ...(existingPage?.teachingBrief?.resourceNeeds
         ? { resourceNeeds: existingPage.teachingBrief.resourceNeeds } : {}),
+      reviewItems: [...new Map([
+        ...(existingPage?.teachingBrief?.reviewItems ?? []),
+        ...normalizeReviewItems(record.reviewItems, outlineId),
+      ].map((item) => [item.id, item])).values()],
     });
   }
   const missing = pages.filter((page) => !result.has(page.id));
@@ -246,12 +316,13 @@ export function buildTeachingEnhancementPrompt(input: {
     system: [
       '你是课程小节的教学设计师。只返回合法 JSON，不使用 Markdown。',
       'JSON 结构中的逗号、冒号、引号和括号必须使用半角 ASCII 字符；中文全角标点只能出现在字符串正文内。',
-      '为每个已确认页面补充可直接制作的实质教学内容，使 PPT、教师讲稿和节末题使用同一套解释、示例、适用条件、误区和考查重点。',
-      '不得只写“解释某概念”“说明区别”“举例说明”等待办语句。必须写出实际解释、推理连接、具体事实与判断理由。按知识特点组织，不强制先讲案例，也不强制每页安排任务。',
-      '先完成概念定义内部术语和概念关系的解释，再处理案例承接、应用任务和语言过渡。不得用案例归类代替概念讲解，不得因已有页面摘要简短而降低解释深度。',
-      '不得把蓝图中更完整的 explanation 或 mechanism 降格为表面分类。涉及“具体化”等转化关系时，写清原理或关系怎样成为活动功能、活动怎样前后依赖并支持学习结果；涉及“相对稳定”时，写清稳定对象、可变对象和稳定部分的用途；具体话语或动作只能作为方法实例，说明它改变学生的注意、思考或操作后怎样支持目标。',
-      '蓝图编译出的 teachingPlan 只是上游材料投影，不是已经定稿的页面简报。必须重新组织本节页面分工：把单元 explanation 和 mechanism 中已经形成的解释连接保留下来，不能直接照抄较短的 page.keyPoints 或 takeaway。不得更改页面数量、ID、顺序和知识边界。',
-      '不得改变页数、页面 ID、页面顺序或知识边界；资料没有支持的事实必须保留未知。',
+      '为每个已确认页面补足可直接制作的实质教学内容，使 PPT、教师讲稿和节末检测共享同一套含义、事实、数量和概念边界。',
+      '写出实际解释、必要前提、中间连接和判断理由，不得只写“解释概念”“说明区别”“举例说明”等待办语句。根据知识类型选择讲法，不强制案例、固定流程或每页活动。',
+      '概念与区别可从熟悉对象、定义展开或对应比较进入；因果与机制要补足条件、过程和结果间的连接；数学推导要写出已知、步骤、理由和检验；操作技能要说明对象、步骤、观察和常见错误；历史人文要连接背景、材料与解释；综合应用要说明条件、方法选择、过程和结果。按内容组合，不把这些选项变成固定栏目。',
+      '继承蓝图的解释节点和页面职责。页面可以首次解释、深化或必要承接，但不能把完整 explanation、mechanism 或推导压缩成标签，也不能在相邻页面重新讲同一段。不得更改页面数量、ID、顺序和知识边界。',
+      '继承 entryPoint 中已经确定的理解入口，并把它展开成学生能听懂的具体对象与过渡。不要把入口重新改成项目任务，不要用抽象定义、页面标题或“今天我们来学习”替代实际对象。',
+      '实际学习者由学段、专业和 learner profile 决定；资料中出现的小学生、客户、机器人或教师只是案例角色。选择例子时先看它能否解释当前难点以及实际学习者是否熟悉，与项目任务的联系是可选条件。',
+      '不得改变页数、页面 ID、页面顺序或知识边界。允许为了教学构造案例、类比、图表和示意数据；不得捏造出处。所有构造内容和来源待核实主张都写入 reviewItems，只供教师在生成结束后确认，不写进学生页面或讲稿。',
       loadSnippet('adaptive-narration-policy'),
       loadSnippet('teaching-accuracy-policy'),
     ].join('\n'),
@@ -275,22 +346,21 @@ ${input.pages.map((page, index) => `${index + 1}. [${page.id}] ${page.title}
 ${selected.text || '未提供额外资料；只能使用已确认页面中的事实，不得补充外部事实。'}
 
 设计要求：
-1. 先形成一次小节 sharedContext。已有蓝图中的稳定事实、术语和边界必须原样继承；若当前判断依赖的具体学习目标、行动或结果在 sharedContext 中缺失，但已在蓝图单元、页面或权威资料中明确出现，应把该事实补入 caseFacts。若全部输入都不支持某项事实，保留未知并改写页面推理，使判断不依赖该未知项，不能编造。只有教学确需持续案例时才填写案例字段。
-2. explanation 写清本页必须让学生理解的属性、边界、因果关系、机制、证据关系或推理链，并把定义里初学者难懂的用语展开为可理解的关系。概念、原理、技能和比较判断应按各自知识特点解释；“定义＋案例＋归类结论”不算完整解释。
-3. examples 按学情和知识难点选择。需要示范才能完成的应用目标，给出关键选择及其理由；已有页面讲透的例子只承接，不重讲。无需例子时返回空数组，不为每页凑数。
-4. conditions 只写会改变当前理解或判断的条件、边界或误区；无新增必要条件时返回空数组，不强制每页追加免责声明。
-5. assessmentFocus 说明学生应能解释或应用什么，以及合格答案必须包含的理由。
-6. evidenceQuotes 只能逐字摘录上面的权威教学资料；没有可核对原文时返回空数组。资料原文与教学推论分别处理，原文准确不代表附加推论得到资料支持。
-7. 相邻页面分工互补，不重复同一段定义、分类理由和结论。已有蓝图 pageTask 时原样继承；没有时仅在确有学习任务时补充。复用案例必须保持 fixedWording、stableTerms 一致；变式只改变 changedConditions，并写明 preservedConditions。preservedConditions 只是本次比较保持的条件，不得写成普遍不能调整。
-8. teachingPlan 明确本页目的、已知基础与新增认识；learnerQuestion 表示理解难点而不是必须朗读的问题，reasoningSteps 按内容需要展开推理，数量不限；takeaway 是自然得到的认识，不要求另讲一次总结。
-9. visibleContent 只列必须看见的命题、推理关系、事实、原文或对照证据；narrationFocus 安排听觉上需要讲开的理由、关键选择和解释，不要求两边逐字重复。概览页可以先命名概念和展示关系，后续再解释；讲解页应把学生跟随推理所需的关键关系放到画面，不能只展示分类结论。只要 introduce、reuse 或 variant 页面要根据案例作出判断，visibleContent 就必须先用紧凑的“案例学习目标—师生具体行为—已观察或明确标注的预期结果”片段建立判断对象，再展示相关原文、改变项、本次保持项或结论；不得把这些事实只留在 sharedContext、examples、explanation 或讲稿中。独立练习只展示作答所需原始材料，不得同时公布完整答案。
-   caseUse=independent 时，visibleContent 必须只保留题干和推理材料，不得出现类别答案或完整判断理由；相关答案仅进入 narrationFocus，并明确安排在学习者作答之后反馈。若该页标题偏向辨认或判断，但本节核心解释尚未完成，仍应利用该页完成尚缺的概念关系，分类任务缩减到必要应用或交给节末小测。
-10. 保持核心概念集合前后一致。目标、条件和结果是分析变量时要说明它们与核心概念的关系，不能把它们命名为未经资料定义的同级“层”。归类必须说明正面依据；不能只凭缺少顺序、出现若干步骤、栏目名或关键词得出结论。
-11. examples、conditions 和推理步骤的数量、顺序均按学习需要决定；围绕整节目标覆盖，不为每页套完整流程。
-12. 返回前在同一次作答中静默做依赖检查：每页新增认识是否由 explanation 或 mechanism 支撑；visibleContent 是否在判断前展示所需的中间关系或案例目标、行为和结果；narrationFocus 是否负责讲开“为什么”而非只重复结论；局部比较条件是否仍被表述为局部条件。发现缺口先修正当前 JSON 草稿，不输出检查过程，也不以字数、条目数或关键词命中判断充分性。
+1. sharedContext 只保存整节确需复用的学习用途、稳定事实、术语和边界。只有确需贯穿案例时才填写案例字段；不同知识适合不同例子时可以自然更换。项目情境不能自动变成每页案例。
+2. explanation 写清本页拥有的核心含义、首次出现术语、关系、机制、推理步骤、理解障碍和应用条件。细致程度以补足理解为准，不以字数、案例数或段落数衡量。
+3. teachingPlan 继承 entryPoint、introduces、deepens、references 和 visualRelationship。entryPoint 要保留具体对象及其通向新知识的理由；introduces 负责首次建立认识，deepens 增加关系、机制或应用，references 只作最短承接。reasoningSteps 按实际过程展开，数量不限。
+4. examples 先按当前难点的解释力、实际学习者的熟悉度和学段适切性选择。类比、对比、示范或独立案例均可，不要求连接项目任务或后续活动；无需例子时返回空数组，不为每页凑数。跨页复用案例时保持事实、术语和数量一致。
+5. conditions 只写会改变理解、推导或应用的条件、边界和常见错误。无新增必要内容时返回空数组。
+6. visibleContent 只列学生必须看见、观察、比较或定位的对象；visualRelationship 说明页面要表达的实际关系和阅读顺序。narrationFocus 保存需要口头讲开的原因、中间过程和关键选择，不与画面逐字重复。
+7. 页面表现形式由关系决定：差异可对照，过程可用连续状态或流程，因果和系统可用关系图，数量差异可用图表，场景可用插图或示意，推导可分步展开，少量命题可用简洁文字。这里只表达意图，不指定统一版式。
+8. 已有 pageTask 原样继承；没有时只在学习活动确实帮助理解时补充。独立练习的画面只给作答材料，答案及反馈放在作答之后的口头说明。
+9. assessmentFocus 说明学生应能解释、推导、操作或应用什么，以及合格回答需要的理由。只能检测本节实际解释过的内容。
+10. evidenceQuotes 只能逐字摘录权威资料；没有可核对原文时返回空数组。构造案例、类比、图表、示意数据和来源待核实主张写入 reviewItems，记录 kind、provenance、content、teachingPurpose 和已有 source；示意数据还要记录 values（原始数值、单位和含义）与 comparisonObjects（比较对象）。后台字段不得进入学生页面或讲稿。
+11. 保持术语、案例事实、单位和数值在 PPT、讲稿及检测间一致。不把构造数据包装成研究结论，不虚构机构、研究名称或引用。
+12. 返回前静默检查：每页新增认识是否有充分解释支撑，页面是否提供跟随推理所需的可见对象，口头重点是否补足“为什么”和“如何发生”，相邻页面是否真正增加认识。发现缺口直接修正当前 JSON，不输出检查过程。
 
 返回结构：
-{"sharedContext":{"learningPurpose":"自然说明用途","caseId":"稳定ID或空字符串","caseFacts":[],"fixedWording":[],"stableTerms":[],"conceptBoundaries":[]},"pages":[{"outlineId":"原页面 ID","pageTask":{"learnerAction":"学习动作","newContribution":"本页新增认识","reasoningFocus":"理由焦点","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"explanation":"完整解释","examples":["完整推演"],"conditions":["条件或误区辨析"],"assessmentFocus":"理解与应用检验重点","evidenceQuotes":["资料中的逐字原句"],"teachingPlan":{"purpose":"本页职责","priorKnowledge":"已有基础和已讲内容","newContent":"新增认识","learnerQuestion":"理解难点，可为空","reasoningSteps":[],"takeaway":"理解结果","visibleContent":[],"narrationFocus":[]}}]}`,
+{"sharedContext":{"learningPurpose":"自然说明用途","caseId":"稳定ID或空字符串","caseFacts":[],"fixedWording":[],"stableTerms":[],"conceptBoundaries":[]},"pages":[{"outlineId":"原页面 ID","pageTask":{"learnerAction":"学习动作","newContribution":"本页新增认识","reasoningFocus":"理由焦点","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"explanation":"完整解释","examples":["完整推演"],"conditions":["条件或误区辨析"],"assessmentFocus":"理解与应用检验重点","evidenceQuotes":["资料中的逐字原句"],"reviewItems":[{"kind":"illustrative-data|constructed-example|unverified-claim","provenance":"derived|general-knowledge|constructed|unverified","content":"待确认内容","teachingPurpose":"教学用途","source":"已有来源或空字符串"}],"teachingPlan":{"purpose":"本页职责","priorKnowledge":"已有基础和已讲内容","newContent":"新增认识","learnerQuestion":"理解难点，可为空","reasoningSteps":[],"takeaway":"理解结果","visibleContent":[],"narrationFocus":[],"entryPoint":{"kind":"familiar-experience|concrete-observation|problem|direct-explanation|continuation","object":"具体对象、经验、问题或承接命题","bridge":"怎样自然引到新知识"},"introduces":[],"deepens":[],"references":[],"visualRelationship":{"kind":"comparison|process|causal|system|quantitative|sequence|spatial|statement","description":"画面帮助看清的关系","readingOrder":[]}}}]}`,
     selectedSource: selected.text,
   };
 }
@@ -430,8 +500,8 @@ export type TeachingEnhancementPhase = 'content' | 'actions';
 
 function phaseRequirement(phase: TeachingEnhancementPhase): string {
   return phase === 'content'
-    ? 'Use teachingPlan.visibleContent to show the propositions, intermediate relationships, source wording, or comparison evidence learners need to follow the current reasoning. Preserve the adopted explanation chain: when one concept is made concrete in another, make the relevant principle, activity functions, dependencies, and supported learning result visible instead of showing only stage names. Explanation pages may show key reasoning relationships; do not reduce them to definitions plus classification conclusions. For a discrimination or variant, show the specific goal, original actions, observed or intended result, changed condition, and conditions held constant in this comparison before the requested judgment. For an independent task, show only its prompt and evidence; never render the category answer or complete rationale before the learner response. Do not present held-constant conditions as generally unchangeable. Preserve sharedContext.fixedWording and stableTerms exactly. Keep all required semantic statements legible with non-overlapping elements; shorten decorative copy before compressing or dropping teaching evidence. Do not print design field names as labels.'
-    : 'Use teachingPlan to complete only this page\'s new contribution from the learner\'s prior knowledge. Explain unfamiliar terms and concept relationships before optimizing case continuity or transitions; a definition followed by a classified excerpt is not enough. Establish the concrete goal, actions, and observed or intended result before asking for a case judgment. Follow the positive reasoning that makes each conclusion hold, with no fixed step count; absence of sequence, a list of steps, a heading, or a keyword is never sufficient by itself. Keep the section\'s core concept set stable: goals and conditions remain related variables unless the source defines them as peer concepts. Treat preserved conditions as local comparison settings, not universal prohibitions. Do not repeat prior pages\' explanations or read planning fields aloud. Speak like a teacher addressing this class: never announce slide structure or say “这一页／本页／上一页／下一页／PPT／课件／核心观点／核心命题／资料1”. Use short, breath-friendly sentences and natural transitions instead of reading captions or reporting a document outline.';
+    ? 'Use teachingPlan.visibleContent for what learners must inspect, compare, locate, or retain while listening. Use teachingPlan.visualRelationship to choose a fitting visual structure; it is an intended meaning, not a fixed layout template. Keep introduces/deepens/references as page ownership boundaries. Show enough evidence or intermediate relation for the page to support its conclusion, but leave oral explanation in explanationFocus. Preserve stable wording, examples, and quantities across the section. Constructed examples and illustrative data are allowed when the shared design supplies them; never invent a research name, institution, or citation. Keep required objects readable with non-overlapping elements and remove decorative copy before shrinking teaching content. Never print internal IDs, provenance, source status, review items, or design field names.'
+    : 'Use teachingPlan to complete this page\'s introduced and deepened explanation nodes. Referenced nodes get only the brief bridge needed. Explain unfamiliar terms on first use, make causal, procedural, comparative, or inferential links explicit, and state how the conclusion follows. Choose examples and analogies only when they help this content and learner; do not force one case or one routine across the course. Keep shared facts and quantities consistent. Do not repeat prior explanations or read planning fields aloud. Speak like a teacher addressing this class: directly and naturally, without announcing page structure or saying “这一页／本页／上一页／下一页／PPT／课件／核心观点／核心命题／资料1”.';
 }
 
 export function formatTeachingEnhancementBlock(

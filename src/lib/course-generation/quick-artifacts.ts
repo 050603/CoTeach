@@ -55,6 +55,8 @@ export type QuickClassroomGenerationSnapshot = {
     teacherSceneCount?: number;
     teacherClassroomId?: string;
     qualityReport?: { score?: number; summary?: string };
+    teacherReviewItems?: Array<{ id: string }>;
+    teacherReviewSummary?: string;
   } | null;
   preview?: {
     classroomId: string;
@@ -260,6 +262,9 @@ export function buildQuickClassroomArtifacts(
         ...(job.result?.qualityReport?.summary
           ? [{ label: "生成检查", value: job.result.qualityReport.summary }]
           : []),
+        ...(job.result?.teacherReviewSummary
+          ? [{ label: "授课前待确认", value: job.result.teacherReviewSummary }]
+          : []),
       ],
     });
   }
@@ -425,6 +430,9 @@ function buildAiLearningFinalArtifact(
       { label: "课程存档", value: completed ? "已自动保存" : "正在自动保存" },
       ...(job.result?.qualityReport?.summary
         ? [{ label: "生成检查", value: job.result.qualityReport.summary }]
+        : []),
+      ...(job.result?.teacherReviewSummary
+        ? [{ label: "授课前待确认", value: job.result.teacherReviewSummary }]
         : []),
     ],
   };

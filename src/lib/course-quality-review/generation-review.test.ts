@@ -147,7 +147,7 @@ describe("fast draft and section-wide teaching review", () => {
     const savedOutline = course.content._openmaicSceneOutlines![0]!;
     savedOutline.teachingBrief = {
       schemaVersion: 1,
-      designVersion: "substantive-section-brief-v10-case-evidence",
+      designVersion: "shared-page-contract-v11-dynamic-progression",
       explanation: "独立测试数据不参与学习，因此能检查模型面对新数据的表现。",
       examples: [], conditions: [], evidence: [], assessmentFocus: "解释独立性及理由",
       teachingPlan: {

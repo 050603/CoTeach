@@ -9,6 +9,10 @@ describe('teaching constraints', () => {
     expect(result.terminologyRule).toContain('Define, scaffold, or replace');
   });
 
+  it('does not mistake a university first-year cohort for primary school', () => {
+    expect(inferGradeBand('人工智能教育 本科一年级，26人')).toBe('higher-education');
+  });
+
   it('uses explicit teacher-provided prior knowledge over inferred defaults', () => {
     const result = deriveTeachingConstraints({
       grade: '高一',
@@ -33,6 +37,8 @@ describe('teaching constraints', () => {
     expect(oneHour.totalMinutes).toBe(60);
     expect(oneHour.recommendedKnowledgePointRange).toEqual({ min: 5, max: 8 });
     expect(oneHour.scopeRule).toContain('compact');
+    expect(deriveTeachingConstraints({ grade: '高二', hours: 0.5 }).recommendedKnowledgePointRange)
+      .toEqual({ min: 2, max: 5 });
     expect(fiveHours.totalMinutes).toBe(300);
     expect(fiveHours.recommendedKnowledgePointRange).toEqual({ min: 15, max: 22 });
     expect(fiveHours.scopeRule).toContain('iteration');

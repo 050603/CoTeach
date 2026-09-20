@@ -250,14 +250,17 @@ function narrationSources(
     }
     if (action.type === 'speech') {
       const timing = outline.timingPlan;
-      const estimatedDurationSec = estimateSpeechDurationSec(action.text, {
-        providerId: timing?.providerId,
-        modelId: timing?.modelId,
-        voiceId: timing?.voiceId,
-        language: timing?.language,
-        speed: action.speed ?? timing?.speed,
-        minSeconds: 0,
-      });
+      const estimatedDurationSec = typeof action.audioDurationSec === 'number'
+        && Number.isFinite(action.audioDurationSec) && action.audioDurationSec > 0
+        ? action.audioDurationSec
+        : estimateSpeechDurationSec(action.text, {
+            providerId: timing?.providerId,
+            modelId: timing?.modelId,
+            voiceId: timing?.voiceId,
+            language: timing?.language,
+            speed: action.speed ?? timing?.speed,
+            minSeconds: 0,
+          });
       sources.push({
         speechId: action.id,
         text: action.text,

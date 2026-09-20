@@ -888,6 +888,14 @@ export type KnowledgeLectureSection = {
 
 export type TeachingBlueprintSourceKind = "course-source" | "general-knowledge";
 
+export type TeachingExplanationNode = {
+  id: string;
+  kind: "term" | "concept" | "relation" | "mechanism" | "example" | "condition" | "misconception";
+  content: string;
+  prerequisiteNodeIds: string[];
+  provenance: "course-source" | "derived" | "general-knowledge" | "constructed" | "unverified";
+};
+
 export type TeachingBlueprintUnit = {
   id: string;
   title: string;
@@ -900,6 +908,11 @@ export type TeachingBlueprintUnit = {
   misconceptions: string[];
   sourceKind: TeachingBlueprintSourceKind;
   evidenceQuotes: string[];
+  /** Small, addressable explanation responsibilities used for page ownership. */
+  explanationNodes?: TeachingExplanationNode[];
+  /** Relative effort estimated by the planner; normalized against the real input budget. */
+  estimatedTeachingWeight?: number;
+  reviewItems?: import("@/lib/course-quality-review/types").TeacherReviewItem[];
 };
 
 export type TeachingBlueprintPage = {
@@ -918,6 +931,23 @@ export type TeachingBlueprintPage = {
   widgetType?: import("@/lib/openmaic/types/widgets").WidgetType;
   widgetOutline?: import("@/lib/openmaic/types/generation").WidgetOutline;
   outlineId?: string;
+  /** Nodes first established, developed further, or only bridged on this page. */
+  introducesNodeIds?: string[];
+  deepensNodeIds?: string[];
+  referencesNodeIds?: string[];
+  estimatedTeachingWeight?: number;
+  /** Concrete way into this page's reasoning; optional when a direct continuation is clearer. */
+  entryPoint?: {
+    kind: "familiar-experience" | "concrete-observation" | "problem" | "direct-explanation" | "continuation";
+    object: string;
+    bridge: string;
+  };
+  visualRelationship?: {
+    kind: "comparison" | "process" | "causal" | "system" | "quantitative" | "sequence" | "spatial" | "statement";
+    description: string;
+    readingOrder: string[];
+  };
+  reviewItems?: import("@/lib/course-quality-review/types").TeacherReviewItem[];
 };
 
 export type TeachingBlueprintSection = {
@@ -939,8 +969,8 @@ export type TeachingBlueprintSection = {
 
 /** Teacher-private, versioned intermediate artifact used to make classroom pages. */
 export type TeachingBlueprint = {
-  /** v1 remains readable for existing courses; only v2 may be reused by the new authoring pipeline. */
-  schemaVersion: 1 | 2;
+  /** Older versions remain readable; only the current version is generated. */
+  schemaVersion: 1 | 2 | 3;
   inputFingerprint: string;
   assessmentMode: import("@/lib/openmaic/types/generation").AssessmentMode;
   createdAt: string;
@@ -1439,6 +1469,8 @@ export type CourseContent = {
   pblOutline: string;
   /** 教师在生成知识图谱前指定、要求模型完整保留的知识点。 */
   teacherRequiredKnowledgePoints?: string[];
+  /** Teacher-private record of how the available teaching time shaped the lesson-owned knowledge scope. */
+  knowledgeScopePlan?: KnowledgeScopePlan;
   knowledgePoints: KnowledgePoint[];
   knowledgeGraph?: KnowledgeGraph;
   /** Private, traceable curriculum compilation artifact. Student projections remove it. */
@@ -1463,6 +1495,10 @@ export type CourseContent = {
   };
   /** Teacher-facing aggregate that distinguishes measured TTS from script estimates. */
   teachingTimingAudit?: TeachingTimingAudit;
+  /** Teacher-private items to verify before teaching; never projected to learners. */
+  teacherReviewItems?: import("@/lib/course-quality-review/types").TeacherReviewItem[];
+  teacherReviewSummary?: string;
+  teacherReviewVersion?: import("@/lib/course-quality-review/types").TeacherReviewVersion;
   /** Deterministic six-module timeline regenerated from the final teacher allocation. */
   projectMainline?: PblProjectMainline;
   /**
@@ -1532,6 +1568,7 @@ export type CourseDesignGenerationArtifact = {
   visualization?: {
     knowledgeGraph?: KnowledgeGraph;
     knowledgePoints?: KnowledgePoint[];
+    knowledgeScopePlan?: KnowledgeScopePlan;
     /** A scene-by-scene production plan for the AI-learning classroom. */
     generationPlan?: {
       scope: "ai-learning";
@@ -1661,6 +1698,9 @@ export type TeacherResourceScene = {
 
 export type KnowledgePoint = {
   sourceId?: string;
+  /** Source-package leaf concepts compiled into this teachable target. */
+  sourceKnowledgePointIds?: string[];
+  sourceKnowledgePointNames?: string[];
   groupId?: string;
   groupName?: string;
   id: string;
@@ -1673,6 +1713,27 @@ export type KnowledgePoint = {
   objectiveIndexes?: number[];
   relatedIds?: string[];
   level?: "foundation" | "core" | "application" | "extension";
+};
+
+export type KnowledgeScopePlan = {
+  schemaVersion: 1;
+  /** Guaranteed budget used while deciding the lesson-owned knowledge scope. */
+  planningDurationMin: number;
+  durationRangeMin: number;
+  durationRangeMax: number;
+  durationSource: "resource-package" | "course-range";
+  assessmentReserveMin: number;
+  explanationAndActivityMin: number;
+  sourcePointCount: number;
+  targetPointCount: number;
+  rationale: string;
+  decisions: Array<{
+    sourceKnowledgePointId: string;
+    sourceKnowledgePointName: string;
+    disposition: "standalone" | "embedded" | "deferred";
+    targetKnowledgePointId?: string;
+    rationale: string;
+  }>;
 };
 
 export type KnowledgeGraph = {

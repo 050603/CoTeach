@@ -84,7 +84,8 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
   if (!maxLength) return actions;
 
   let didSplit = false;
-  const nextActions: Action[] = actions.flatMap((action) => {
+  const splitBySpeechId = new Map<string, SpeechAction[]>();
+  const splitSpeech = (action: SpeechAction): SpeechAction[] => {
     if (action.type !== 'speech' || !action.text || action.text.length <= maxLength)
       return [action];
 
@@ -96,11 +97,46 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
     log.info(
       `Split speech for ${providerId}: action=${action.id}, len=${action.text.length}, chunks=${chunks.length}`,
     );
-    return chunks.map((chunk, i) => ({
+    const split = chunks.map((chunk, i) => ({
       ...baseAction,
       id: `${action.id}_tts_${i + 1}`,
       text: chunk,
-    }));
+    })) as SpeechAction[];
+    splitBySpeechId.set(action.id, split);
+    return split;
+  };
+  for (const action of actions) {
+    if (action.type === 'speech') splitSpeech(action);
+  }
+  const anchorChunk = (speechId: string | undefined, quote: string | undefined, occurrence = 0) => {
+    if (!speechId) return undefined;
+    const chunks = splitBySpeechId.get(speechId);
+    if (!chunks?.length) return undefined;
+    if (!quote) return { speechId: chunks[0]!.id, occurrence };
+    let remaining = occurrence;
+    for (const chunk of chunks) {
+      const count = chunk.text.split(quote).length - 1;
+      if (remaining < count) return { speechId: chunk.id, occurrence: remaining };
+      remaining -= count;
+    }
+    return { speechId: chunks[0]!.id, occurrence };
+  };
+  const nextActions: Action[] = actions.flatMap((action): Action[] => {
+    if (action.type === 'speech') return splitBySpeechId.get(action.id) ?? [action];
+    if (action.type !== 'spotlight' && action.type !== 'laser') return [action];
+    const anchored = anchorChunk(action.speechId, action.speechAnchor?.quote, action.speechAnchor?.occurrence ?? 0);
+    const endChunks = action.type === 'spotlight' && action.endSpeechId
+      ? splitBySpeechId.get(action.endSpeechId) : undefined;
+    return [{
+      ...action,
+      ...(anchored ? { speechId: anchored.speechId } : {}),
+      ...(anchored && action.speechAnchor
+        ? { speechAnchor: { ...action.speechAnchor, occurrence: anchored.occurrence } }
+        : {}),
+      ...(action.type === 'spotlight' && endChunks?.length
+        ? { endSpeechId: endChunks[endChunks.length - 1]!.id }
+        : {}),
+    }];
   });
   return didSplit ? nextActions : actions;
 }

@@ -78,7 +78,8 @@ describe("confirmed resource package generation", () => {
     const seed = await inferCourseSeed(course, { courseId: course.id, teacherBrief: "可选补充", resourcePackage }, new AbortController().signal);
     expect(seed).toMatchObject({ name: resourcePackage.draft.courseName, grade: "七年级", hours: 140 / 60, learningObjectives: resourcePackage.draft.learningObjectives });
     expect(modelCall).not.toHaveBeenCalled();
-    expect(course.content.teacherRequiredKnowledgePoints).toEqual(["训练样本", "测试样本"]);
+    expect(course.content.teacherRequiredKnowledgePoints).toEqual([]);
+    expect(course.content.knowledgeGroups?.[0]?.knowledgePointIds).toHaveLength(2);
     expect(course.drivingQuestion).toBe(resourcePackage.draft.drivingQuestion);
     expect(course.pblConfig?.projectMode).toBe("personal");
     expect(course.content.stagePlan?.totalMinutes).toBe(140);

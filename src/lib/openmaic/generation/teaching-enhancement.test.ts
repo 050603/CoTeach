@@ -29,7 +29,8 @@ const teachingPlan = {
   purpose: '解释事实核验依据', priorKnowledge: '会区分主张和证据', newContent: '判断来源是否独立',
   learnerQuestion: '多个网页为什么不一定是多份证据', reasoningSteps: ['检查是否转载同一来源'],
   takeaway: '判断来源独立性，而不是只数网页', visibleContent: ['转载来源之间的关系'],
-  narrationFocus: ['为什么同源转载不能相互证实'],
+  narrationFocus: ['为什么同源转载不能相互证实'], introduces: ['node-1'], deepens: [], references: [],
+  entryPoint: { kind: 'familiar-experience' as const, object: '搜索同一校史年份却看到多个相同网页', bridge: '从网页很多是否等于证据很多，引出来源独立性' },
 };
 const sharedContext = {
   learningPurpose: '判断信息能否作为可靠依据', caseId: 'school-history-check',
@@ -64,6 +65,7 @@ describe('formal course teaching enhancement', () => {
     const brief = briefs.get('p1');
     expect(brief?.examples).toHaveLength(1);
     expect(brief?.conditions).toHaveLength(1);
+    expect(brief?.teachingPlan?.entryPoint).toEqual(teachingPlan.entryPoint);
     expect(brief?.evidence).toEqual([
       { sourceId: 'course-source', quote: '学生需要核验生成内容的事实与来源' },
     ]);
@@ -82,7 +84,7 @@ describe('formal course teaching enhancement', () => {
 
     expect(briefs.get('actual-outline-id')).toMatchObject({
       explanation: '教学模式需要按学习目标、内容性质和课堂条件选择。',
-      designVersion: 'substantive-section-brief-v10-case-evidence',
+      designVersion: TEACHING_ENHANCEMENT_VERSION,
     });
   });
 
@@ -261,9 +263,9 @@ describe('formal course teaching enhancement', () => {
     expect(ai.mock.calls[0]?.[0]).toBe(ai.mock.calls[1]?.[0]);
     expect(ai.mock.calls[0]?.[0]).not.toContain('解释一');
     expect(ai.mock.calls[0]?.[1]).toContain('解释一');
-    expect(ai.mock.calls[0]?.[1]).toContain('do not reduce them to definitions plus classification conclusions');
-    expect(ai.mock.calls[0]?.[1]).toContain('conditions held constant in this comparison');
-    expect(ai.mock.calls[0]?.[1]).toContain('Do not present held-constant conditions as generally unchangeable');
+    expect(ai.mock.calls[0]?.[1]).toContain('Use teachingPlan.visualRelationship');
+    expect(ai.mock.calls[0]?.[1]).toContain('Keep introduces/deepens/references as page ownership boundaries');
+    expect(ai.mock.calls[0]?.[1]).toContain('Never print internal IDs, provenance, source status, review items');
     expect(ai.mock.calls[1]?.[1]).toContain('解释二');
   });
 });
@@ -290,21 +292,16 @@ describe('formal course teaching enhancement', () => {
     expect(prompt.user).toContain('需要区分转载和独立证据');
     expect(prompt.user).toContain('校史调查');
     expect(prompt.user).toContain('p2');
-    expect(prompt.user).toContain('概览页可以先命名概念和展示关系，后续再解释');
-    expect(prompt.user).toContain('只有教学确需持续案例时才填写案例字段');
-    expect(prompt.user).toContain('定义＋案例＋归类结论');
-    expect(prompt.user).toContain('案例学习目标—师生具体行为—已观察或明确标注的预期结果');
-    expect(prompt.user).toContain('不能把它们命名为未经资料定义的同级“层”');
-    expect(prompt.user).toContain('不能只凭缺少顺序、出现若干步骤');
-    expect(prompt.user).toContain('应把该事实补入 caseFacts');
-    expect(prompt.user).toContain('使判断不依赖该未知项');
-    expect(prompt.system).toContain('teachingPlan 只是上游材料投影');
-    expect(prompt.user).toContain('caseUse=independent 时');
-    expect(prompt.user).toContain('分类任务缩减到必要应用或交给节末小测');
-    expect(prompt.user).toContain('不得把这些事实只留在 sharedContext');
-    expect(prompt.system).toContain('活动怎样前后依赖并支持学习结果');
-    expect(prompt.user).toContain('返回前在同一次作答中静默做依赖检查');
-    expect(prompt.user).toContain('不以字数、条目数或关键词命中判断充分性');
+    expect(prompt.user).toContain('不同知识适合不同例子时可以自然更换');
+    expect(prompt.user).toContain('entryPoint、introduces、deepens、references 和 visualRelationship');
+    expect(prompt.user).toContain('不要求连接项目任务或后续活动');
+    expect(prompt.system).toContain('实际学习者由学段、专业和 learner profile 决定');
+    expect(prompt.user).toContain('差异可对照，过程可用连续状态或流程');
+    expect(prompt.user).toContain('后台字段不得进入学生页面或讲稿');
+    expect(prompt.user).toContain('每页新增认识是否有充分解释支撑');
+    expect(prompt.system).toContain('概念与区别可从熟悉对象');
+    expect(prompt.system).not.toContain('相对稳定');
+    expect(prompt.system).not.toContain('具体化');
     expect(prompt.system).toContain('Write for hearing once');
   });
 

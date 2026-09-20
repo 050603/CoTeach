@@ -38,6 +38,7 @@ import type { LlmStage } from '@openmaic/lib/server/model-routes';
 import { whiteboardBlocks } from '@openmaic/lib/edit/whiteboard-blocks';
 import { parseActionsFromStructuredOutput } from '@openmaic/lib/generation/action-parser';
 import { calibrateGeneratedVisualCues } from '@openmaic/lib/generation/semantic-visual-cues';
+import { withTeachingEnhancement } from '@openmaic/lib/generation/teaching-enhancement';
 
 // ── Scene context shape (client-sourced, injected via deps) ──────────────────
 
@@ -297,7 +298,8 @@ export function makeRegenerateSceneActionsTool(
       // function returns [] immediately.
       const generationContent = toGenerationContent(content);
 
-      const generatedActions = await generateSceneActions(outline, generationContent, aiCallFn, {
+      const generatedActions = await generateSceneActions(outline, generationContent,
+        withTeachingEnhancement(aiCallFn, outline, 'actions'), {
         ctx,
         agents,
         userProfile,

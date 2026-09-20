@@ -660,9 +660,19 @@ export function resolveBaseUrl(providerId: string, clientBaseUrl?: string): stri
   return resolveSectionBaseUrl('providers', providerId, clientBaseUrl);
 }
 
-/** Resolve proxy URL for a provider (server config only) */
+/** Resolve proxy URL for a provider (server config, then scoped deployment fallback). */
 export function resolveProxy(providerId: string): string | undefined {
-  return getConfig().providers[providerId]?.proxy;
+  const configuredProxy = getConfig().providers[providerId]?.proxy?.trim();
+  if (configuredProxy) return configuredProxy;
+
+  // The official DeepSeek endpoint is not reachable directly from every
+  // deployment region. Keep this fallback provider-scoped instead of applying
+  // a process-wide HTTPS proxy that could disrupt otherwise healthy vendors.
+  if (providerId === 'deepseek') {
+    return process.env.OPENPBL_DEEPSEEK_PROXY?.trim() || undefined;
+  }
+
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------

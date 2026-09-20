@@ -27,6 +27,14 @@ import type { Action } from '@openmaic/lib/types/action';
 import type { GeneratedSlideContent, PdfImage, ImageMapping } from '@openmaic/lib/types/generation';
 import type { SceneContent } from '@openmaic/lib/types/stage';
 import type { RegenerateActionsDeps, SceneContext } from './regenerate-scene-actions';
+import { withTeachingEnhancement } from '@openmaic/lib/generation/teaching-enhancement';
+import {
+  canUseIndependentTeachingNarration,
+  compileTeachingNarrationActions,
+  generateTeachingSectionNarration,
+  restoreTeachingSemanticElementIds,
+  withTeachingSlideGuidance,
+} from '@openmaic/lib/generation/teaching-narration';
 
 // ── Runtime SlideContent → generation GeneratedSlideContent (edit baseline) ──
 // The client sends runtime `SceneContent` ({ type:'slide', canvas: Slide }); the
@@ -239,7 +247,13 @@ export function makeRegenerateSceneTool(
         imageMapping,
       } = buildImageResources(slideBase);
 
-      const newContent = await generateSceneContent(outline, contentAiCall, {
+      let rawSlideResponse = '';
+      const teachingContentCall = withTeachingSlideGuidance(
+        withTeachingEnhancement(contentAiCall, outline, 'content'),
+        outline,
+        (response) => { rawSlideResponse = response; },
+      );
+      const generatedContent = await generateSceneContent(outline, teachingContentCall, {
         agents,
         languageDirective,
         editDirective: instruction,
@@ -248,7 +262,7 @@ export function makeRegenerateSceneTool(
         imageMapping,
       });
 
-      if (!newContent || !('elements' in newContent)) {
+      if (!generatedContent || !('elements' in generatedContent)) {
         return {
           content: [
             {
@@ -262,6 +276,7 @@ export function makeRegenerateSceneTool(
           isError: true,
         };
       }
+      const newContent = restoreTeachingSemanticElementIds(generatedContent, rawSlideResponse, outline);
 
       // The generator returns solid/gradient backgrounds; image-background slides
       // were refused above, so the returned background is kept as-is.
@@ -276,11 +291,38 @@ export function makeRegenerateSceneTool(
         previousSpeeches: [],
       };
 
-      const actions = await generateSceneActions(outline, newContent, actionsAiCall, {
-        ctx,
-        agents,
-        languageDirective,
-      });
+      let actions: Action[];
+      if (canUseIndependentTeachingNarration(outline)) {
+        const narration = await generateTeachingSectionNarration({
+          sectionId: outline.lectureSectionId || outline.parentActivityId || outline.activityId || '__single_page__',
+          pages: [{ outline, content: newContent }],
+          requirements: { requirement: instruction?.trim() || outline.description },
+          languageDirective,
+          courseProgression: allOutlines,
+          agents,
+          aiCall: actionsAiCall,
+        });
+        const compiled = compileTeachingNarrationActions({
+          outline,
+          content: newContent,
+          narration: narration.pages[0]!,
+        });
+        if (compiled.issues.some((issue) => issue.severity === 'blocking')) {
+          return {
+            content: [{ type: 'text', text: `The slide was not applied because its narration cues could not be bound to the regenerated visual objects: ${compiled.issues.map((issue) => issue.message).join('; ')}` }],
+            details: { sceneId, content: null, actions: [] },
+            isError: true,
+          };
+        }
+        actions = compiled.actions;
+      } else {
+        actions = await generateSceneActions(
+          outline,
+          newContent,
+          withTeachingEnhancement(actionsAiCall, outline, 'actions'),
+          { ctx, agents, languageDirective },
+        );
+      }
 
       const text =
         actions.length > 0

@@ -26,6 +26,7 @@ import type { TeachingTimingAudit } from '@/lib/session/types';
 import type { MediaGenerationRequest } from '@openmaic/lib/media/types';
 import { throwIfAborted } from '@openmaic/lib/generation/generation-retry';
 import { assertRequestedClassroomMediaProviders } from '@openmaic/lib/server/classroom-media-readiness';
+import { calibrateGeneratedVisualCues } from '@openmaic/lib/generation/semantic-visual-cues';
 
 const log = createLogger('ClassroomAssets');
 
@@ -367,6 +368,16 @@ export async function generateClassroomAssets(
           input.signal,
           input.ttsTimingSelection,
         );
+        const outlineById = new Map(input.outlines.map((outline) => [outline.id, outline]));
+        for (const scene of group.scenes) {
+          const outline = outlineById.get(scene.outlineId ?? scene.id);
+          if (!outline || scene.content.type !== 'slide') continue;
+          scene.actions = calibrateGeneratedVisualCues({
+            outline,
+            elements: scene.content.canvas.elements,
+            actions: scene.actions ?? [],
+          });
+        }
         await updatePersistedClassroomScenes(group.classroomId, group.scenes);
         log.info(
           `Classroom TTS backfilled [classroomId=${group.classroomId}, role=${group.role}]`,

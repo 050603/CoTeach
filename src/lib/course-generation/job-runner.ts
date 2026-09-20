@@ -993,6 +993,9 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           ...(request.testLesson ? { testLesson: request.testLesson } : {}),
           generatedAt: new Date().toISOString(),
         },
+        teacherReviewItems: generated.teacherReviewItems,
+        teacherReviewSummary: generated.teacherReviewSummary,
+        teacherReviewVersion: generated.teacherReviewVersion,
       },
     }));
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
@@ -1010,6 +1013,9 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       teacherResourceScenes: split.teacherResourceScenes,
       pblCoverage: split.pblCoverage,
       qualityReport: generated.qualityReport,
+      teacherReviewItems: generated.teacherReviewItems,
+      teacherReviewSummary: generated.teacherReviewSummary,
+      teacherReviewVersion: generated.teacherReviewVersion,
       stage: { id: generated.stage.id, name: generated.stage.name },
       generationScope: request.generationScope ?? "full-course",
       ...(request.testLesson ? { testLesson: request.testLesson } : {}),

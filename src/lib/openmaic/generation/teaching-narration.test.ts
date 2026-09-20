@@ -25,7 +25,8 @@ function outline(): SceneOutline {
       pageTask: { learnerAction: '判断要核对什么以及去哪里核对', newContribution: '建立核验链', reasoningFocus: '记录与说法是否直接相关',
         caseUse: 'introduce', changedConditions: [], preservedConditions: [] },
       teachingPlan: { purpose: '解释核验', priorKnowledge: '会搜索', newContent: '按相关记录核验', learnerQuestion: '肯定的语气可信吗',
-        reasoningSteps: ['明确说法', '查相关记录'], takeaway: '有相关依据再采用', visibleContent: ['语气肯定 ≠ 事实正确'], narrationFocus: ['解释为什么查证'] },
+        reasoningSteps: ['明确说法', '查相关记录'], takeaway: '有相关依据再采用', visibleContent: ['语气肯定 ≠ 事实正确'], narrationFocus: ['解释为什么查证'],
+        entryPoint: { kind: 'familiar-experience', object: '在班级小报中看到一个语气肯定的年份', bridge: '从是否敢直接采用，引出核验依据' } },
       understandingCriteria: { goals: ['能依据新说法选择核验记录'], answerEssentials: ['记录必须与说法直接相关'],
         misconceptions: ['语气肯定等于事实正确'], supportingUnitIds: ['unit-a'] },
     },
@@ -35,8 +36,13 @@ function content(text = '语气肯定 ≠ 事实正确'): GeneratedSlideContent 
   return { elements: [{ id: 'rendered-text', type: 'text', left: 10, top: 10, width: 300, height: 80, rotate: 0,
     content: `<p>${text}</p>`, defaultFontName: 'Arial', defaultColor: '#333333' }] };
 }
-function raw(text = '先看看学校简介。它有没有写出这个年份？') {
-  return { segments: [{ text, semanticIds: ['page-a:teaching', 'page-a:visible-1'] }] };
+function raw(text = '先看看学校简介。它有没有写出这个年份？', cue = false) {
+  return { segments: [{
+    text,
+    semanticIds: ['page-a:teaching', 'page-a:visible-1'],
+    ...(cue ? { anchors: [{ semanticId: 'page-a:visible-1', quote: '学校简介', occurrence: 0,
+      visualCue: { type: 'spotlight', necessity: 'helpful' } }] } : {}),
+  }] };
 }
 
 describe('independent first-pass teaching narration', () => {
@@ -57,25 +63,116 @@ describe('independent first-pass teaching narration', () => {
     const aiCall = vi.fn().mockResolvedValue(JSON.stringify(response));
     const generated = await generateTeachingSectionNarration({
       sectionId: 'section-a', pages: [{ outline: first, content: content() }, { outline: second, content: content('记录与说法必须直接相关') }],
-      requirements: { requirement: '讲清核验方法' }, courseProgression: [first, second], aiCall,
+      requirements: { requirement: '讲清核验方法' }, courseProgression: [first, second],
+      agents: [{ id: 'teacher', name: '林老师', role: 'teacher', persona: '温暖、清楚地逐步解释。' }], aiCall,
     });
     expect(generated.pages.map((page) => page.pageId)).toEqual(['page-a', 'page-b']);
     const prompt = JSON.parse(aiCall.mock.calls[0][1]);
     expect(prompt.pages).toHaveLength(2);
     expect(prompt.pages[0].actualSlide.elements[0].content).toContain('语气肯定');
     expect(aiCall.mock.calls[0][0]).toContain('actual slide is the authority only for what is visible');
-    expect(aiCall.mock.calls[0][0]).toContain('Advance one argument across pages');
-    expect(aiCall.mock.calls[0][0]).toContain('Complete the explanation of the core concepts and their relationships');
-    expect(aiCall.mock.calls[0][0]).toContain('A condition held constant in one comparison is not generally forbidden to change');
-    expect(aiCall.mock.calls[0][0]).toContain('Give positive reasons for classifications');
-    expect(aiCall.mock.calls[0][0]).toContain('goal, actions, and observed or intended result explicit');
-    expect(aiCall.mock.calls[0][0]).toContain('On the first page that introduces a case');
-    expect(aiCall.mock.calls[0][0]).toContain('silently trace each claimed relationship');
-    expect(aiCall.mock.calls[0][0]).toContain('activity functions and dependencies');
+    expect(aiCall.mock.calls[0][0]).toContain('Advance one line of understanding across pages');
+    expect(aiCall.mock.calls[0][0]).toContain('intermediate causal or inferential links explicit');
+    expect(aiCall.mock.calls[0][0]).toContain('introduces, deepens, and references as page ownership');
+    expect(aiCall.mock.calls[0][0]).toContain('actual relationship on the slide');
+    expect(aiCall.mock.calls[0][0]).toContain('local explanatory value, learner familiarity');
+    expect(aiCall.mock.calls[0][0]).toContain('温暖、清楚地逐步解释');
+    expect(aiCall.mock.calls[0][0]).toContain('copied as one contiguous substring from that exact finalized segment text');
     expect(prompt.pages[0].explanation).toContain('记录需要与具体说法相关');
     expect(prompt.pages[0].teachingPlan.visibleContent).toEqual(['语气肯定 ≠ 事实正确']);
+    expect(prompt.pages[0].deliveryContext).toMatchObject({ sectionPosition: 'course-first', pageIndex: 1 });
+    expect(prompt.pages[0].teachingPlan.entryPoint.object).toContain('班级小报');
+    expect(prompt.teacherVoice).toEqual({ name: '林老师', role: 'teacher' });
+    expect(generated.pages[0]?.segments[0]?.text).toMatch(/^同学们好/);
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0], response.pages[0]] }, 'section-a', [first, second])).toThrow('重复返回页面');
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0]] }, 'section-a', [first, second])).toThrow('缺少页面');
+  });
+
+  it('removes a repeated welcome from an embedded resource while keeping course-first pages welcoming', async () => {
+    const embedded = { ...outline(), narrationMode: 'embedded-segment' as const };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{
+      pageId: embedded.id,
+      segments: [{ text: '同学们好，欢迎来到今天的课堂。先观察这条记录。', semanticIds: ['page-a:teaching'] }],
+    }] }));
+
+    const generated = await generateTeachingSectionNarration({
+      sectionId: 'embedded-section',
+      pages: [{ outline: embedded, content: content() }],
+      requirements: { requirement: '作为课程中的补充资源' },
+      courseProgression: [embedded],
+      aiCall,
+    });
+
+    expect(generated.pages[0]?.segments[0]?.text).toBe('先观察这条记录。');
+  });
+
+  it('keeps valid narration and drops only optional visual anchors that cannot be compiled', async () => {
+    const page = { ...outline(), lectureSectionId: 'section-a', teachingUnitIds: ['unit-a'] };
+    const response = { pages: [{
+      pageId: page.id,
+      segments: [{
+        text: '先明确具体说法，再查找能够直接回答它的记录。',
+        semanticIds: ['page-a:teaching', 'page-a:visible-1'],
+        anchors: [
+          { semanticId: 'page-a:visible-1', quote: '原句中不存在的文字', visualCue: { type: 'spotlight' } },
+          { semanticId: 'unknown', quote: '具体说法', visualCue: { type: 'laser' } },
+          null,
+        ],
+      }],
+    }] };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(response));
+
+    const generated = await generateTeachingSectionNarration({
+      sectionId: 'section-a',
+      pages: [{ outline: page, content: content() }],
+      requirements: { requirement: '讲清核验方法' },
+      aiCall,
+    });
+
+    expect(aiCall).toHaveBeenCalledOnce();
+    expect(generated.pages[0]?.segments[0]?.text).toBe('同学们好，欢迎来到今天的课堂。先明确具体说法，再查找能够直接回答它的记录。');
+    expect(generated.pages[0]?.segments[0]?.anchors).toBeUndefined();
+  });
+
+  it('repairs only typographic anchor differences to the exact TTS substring', () => {
+    const narration = normalizeTeachingNarration({ segments: [{
+      text: '先看“理论”：它说明为什么，再看模式说明怎么组织。',
+      semanticIds: ['page-a:teaching', 'page-a:visible-1'],
+      anchors: [{
+        semanticId: 'page-a:visible-1',
+        quote: '理论: 它说明为什么',
+        occurrence: 3,
+        visualCue: { type: 'spotlight' },
+      }],
+    }] }, outline());
+
+    expect(narration.segments[0]?.anchors).toEqual([expect.objectContaining({
+      quote: '理论”：它说明为什么',
+      occurrence: 0,
+    })]);
+    const compiled = compileTeachingNarrationActions({ outline: outline(), content: content(), narration });
+    expect(compiled.issues).toEqual([]);
+    expect(compiled.actions[0]).toMatchObject({
+      type: 'spotlight',
+      speechAnchor: { quote: '理论”：它说明为什么', occurrence: 0 },
+    });
+  });
+
+  it('recovers a known segment semantic id only from a verified speech anchor', () => {
+    const narration = normalizeTeachingNarration({ segments: [{
+      text: '先比较语气很肯定这一表现，再判断事实是否正确。',
+      semanticIds: ['page-a:teaching'],
+      anchors: [
+        { semanticId: 'page-a:visible-1', quote: '语气很肯定', visualCue: { type: 'spotlight' } },
+        { semanticId: 'unknown', quote: '事实是否正确', visualCue: { type: 'laser' } },
+      ],
+    }] }, outline());
+
+    expect(narration.segments[0]?.semanticIds).toEqual(['page-a:teaching', 'page-a:visible-1']);
+    expect(narration.segments[0]?.anchors).toEqual([expect.objectContaining({
+      semanticId: 'page-a:visible-1',
+      quote: '语气很肯定',
+    })]);
   });
 
   it('preserves required whiteboard/widget and video action contracts on the native path', () => {
@@ -101,11 +198,11 @@ describe('independent first-pass teaching narration', () => {
       }) }, aiCall, languageDirective: 'Answer in Chinese', courseProgression: [outline()],
     });
     expect(aiCall).toHaveBeenCalledOnce();
-    expect(aiCall.mock.calls[0][0]).toContain('read aloud verbatim by TTS');
+    expect(aiCall.mock.calls[0][0]).toContain('read verbatim by TTS');
     expect(aiCall.mock.calls[0][0]).toContain('Answer in Chinese');
     expect(aiCall.mock.calls[0][0]).toContain('do not execute their quizzes, reveal their answers');
-    expect(aiCall.mock.calls[0][0]).toContain('Never open by listing all new category names');
-    expect(aiCall.mock.calls[0][0]).toContain('make the first segment state the changed and preserved conditions');
+    expect(aiCall.mock.calls[0][0]).toContain('introduced and deepened nodes');
+    expect(aiCall.mock.calls[0][0]).toContain('intermediate steps');
     expect(aiCall.mock.calls[0][0]).toContain('correct accidental missing or repeated words');
     const input = JSON.parse(aiCall.mock.calls[0][1]);
     expect(input.learners).toContain('会搜索但容易轻信AI');
@@ -116,12 +213,16 @@ describe('independent first-pass teaching narration', () => {
     expect(input.progression[0].newContent).toBe('按相关记录核验');
     expect(input.progression[0]).not.toHaveProperty('evidence');
     expect(input.semanticUnits.visible[0].id).toBe('page-a:visible-1');
-    expect(result.segments[0].text).toBe(raw().segments[0].text);
+    expect(result.segments[0].text).toBe(`同学们好，欢迎来到今天的课堂。${raw().segments[0].text}`);
   });
 
   it('keeps generated words intact and binds a supported visual without a model action call', () => {
     const text = '  语气很肯定，就一定正确吗？我们先查记录。  ';
-    const narration = normalizeTeachingNarration(raw(text), outline());
+    const narration = normalizeTeachingNarration({ segments: [{
+      text,
+      semanticIds: ['page-a:teaching', 'page-a:visible-1'],
+      anchors: [{ semanticId: 'page-a:visible-1', quote: '语气很肯定', visualCue: { type: 'spotlight' } }],
+    }] }, outline());
     const compiled = compileTeachingNarrationActions({ outline: outline(), content: content(), narration });
     expect(compiled.issues).toEqual([]);
     expect(compiled.actions).toEqual([
@@ -131,7 +232,7 @@ describe('independent first-pass teaching narration', () => {
   });
 
   it('omits unbound or ambiguous optional cues with warnings, never guesses or rewrites speech', () => {
-    const narration = normalizeTeachingNarration(raw(), outline());
+    const narration = normalizeTeachingNarration(raw(undefined, true), outline());
     for (const slide of [content('无关文字'), { elements: [...content().elements, { ...content().elements[0], id: 'duplicate-text' }] }]) {
       const result = compileTeachingNarrationActions({ outline: outline(), content: slide, narration });
       expect(result.actions).toEqual([{ id: 'page-a:speech-1', type: 'speech', text: raw().segments[0].text }]);
@@ -143,10 +244,25 @@ describe('independent first-pass teaching narration', () => {
   it('uses stable semantic IDs when text is paraphrased and does not require cues per segment', () => {
     const slide = content('说得自信，也可能出错');
     slide.elements[0].id = 'page-a:visible-1';
-    const narration = normalizeTeachingNarration({ segments: [...raw().segments, { text: '所以我们要先核对。', semanticIds: ['page-a:teaching'] }] }, outline());
+    const narration = normalizeTeachingNarration({ segments: [...raw(undefined, true).segments, { text: '所以我们要先核对。', semanticIds: ['page-a:teaching'] }] }, outline());
     const result = compileTeachingNarrationActions({ outline: outline(), content: slide, narration });
     expect(result.actions.filter((action) => action.type === 'spotlight')).toHaveLength(1);
     expect(result.actions.filter((action) => action.type === 'speech')).toHaveLength(2);
+  });
+
+  it('binds repeated attention to the same object at each authored phrase instead of only its first mention', () => {
+    const slide = content();
+    slide.elements[0].id = 'page-a:visible-1';
+    const narration = normalizeTeachingNarration({ segments: [
+      { text: '先比较这条判断。', semanticIds: ['page-a:visible-1'], anchors: [{ semanticId: 'page-a:visible-1', quote: '这条判断', visualCue: { type: 'spotlight' } }] },
+      { text: '推理结束后再回到这条判断。', semanticIds: ['page-a:visible-1'], anchors: [{ semanticId: 'page-a:visible-1', quote: '这条判断', visualCue: { type: 'laser' } }] },
+    ] }, outline());
+    const result = compileTeachingNarrationActions({ outline: outline(), content: slide, narration });
+    expect(result.issues).toEqual([]);
+    expect(result.actions.filter((action) => action.type === 'spotlight' || action.type === 'laser')).toHaveLength(2);
+    expect(result.actions.flatMap((action) => action.type === 'spotlight' || action.type === 'laser'
+      ? [action.speechAnchor?.quote] : []))
+      .toEqual(['这条判断', '这条判断']);
   });
 
   it('rejects invalid references and fails after one bounded technical correction', async () => {
@@ -162,7 +278,7 @@ describe('independent first-pass teaching narration', () => {
   it('corrects malformed structure once but leaves valid narration and transport faults alone', async () => {
     const aiCall = vi.fn().mockResolvedValueOnce('{"segments":[]}').mockResolvedValueOnce(JSON.stringify(raw()));
     const result = await generateTeachingNarration({ outline: outline(), requirements: { requirement: '讲课' }, aiCall });
-    expect(result.segments[0].text).toBe(raw().segments[0].text);
+    expect(result.segments[0].text).toBe(`同学们好，欢迎来到今天的课堂。${raw().segments[0].text}`);
     expect(aiCall).toHaveBeenCalledTimes(2);
     expect(aiCall.mock.calls[1][1]).toContain('Technical JSON/schema correction only');
     const transport = vi.fn().mockRejectedValue(new Error('connection reset'));
@@ -200,11 +316,9 @@ describe('independent first-pass teaching narration', () => {
     expect(call.mock.calls[0][0]).toContain('original slide schema');
     expect(call.mock.calls[0][1]).toContain('original user prompt');
     expect(call.mock.calls[0][1]).toContain(JSON.stringify(buildTeachingNarrationSemantics(outline()).visible));
-    expect(call.mock.calls[0][1]).toContain('Case evidence required for this page');
-    expect(call.mock.calls[0][1]).toContain('目标：判断校史年份能否用于小报');
-    expect(call.mock.calls[0][0]).toContain('a list of category conclusions is not a substitute');
-    expect(call.mock.calls[0][0]).toContain('goal-action-result chain');
-    expect(call.mock.calls[0][0]).toContain('not covered by titles, subtitles, decorations');
-    expect(call.mock.calls[0][0]).toContain('Shorten optional subtitle and decorative copy');
+    expect(call.mock.calls[0][1]).toContain('Shared page contract');
+    expect(call.mock.calls[0][0]).toContain('Choose the visual form from the stated relationship');
+    expect(call.mock.calls[0][0]).toContain('Do not default to cards');
+    expect(call.mock.calls[0][0]).toContain('remove decorative copy before shrinking');
   });
 });

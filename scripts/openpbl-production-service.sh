@@ -86,17 +86,18 @@ run_app() {
   # committed migrations; it never creates development migrations here.
   apply_database_migrations
 
-  # DashScope returns generated images from an OSS acceleration hostname that
-  # is not directly reachable on this server even though its API endpoint is.
-  # Keep this proxy media-scoped: exporting HTTP_PROXY/HTTPS_PROXY here would
-  # also route LLM calls through the optional local proxy, so a proxy outage
-  # would disable AI companions and course text generation together.
+  # Some external endpoints are not directly reachable from this server.
+  # Keep proxy use scoped instead of exporting HTTP_PROXY/HTTPS_PROXY, which
+  # would also reroute otherwise healthy providers and local dependencies.
   outbound_proxy="${OPENPBL_OUTBOUND_PROXY:-}"
   if [ -z "$outbound_proxy" ] && tcp_available "127.0.0.1" "9999"; then
     outbound_proxy="http://127.0.0.1:9999"
   fi
   if [ -n "$outbound_proxy" ]; then
     export OPENPBL_OUTBOUND_PROXY="$outbound_proxy"
+    # DeepSeek's official endpoint currently needs the same outbound route.
+    # Operators can override or disable it independently by setting this value.
+    export OPENPBL_DEEPSEEK_PROXY="${OPENPBL_DEEPSEEK_PROXY:-$outbound_proxy}"
   fi
 
   mkdir -p \

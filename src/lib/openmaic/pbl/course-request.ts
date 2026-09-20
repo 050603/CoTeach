@@ -16,11 +16,21 @@ export function buildCourseTeachingConstraints(
   course: Pick<Course, "name" | "subject" | "grade" | "hours" | "learningObjectives" | "pblConfig" | "learnerProfile">,
   content?: Partial<CourseContent>,
 ) {
+  const knowledgeTeachingMinutes = content?.moduleTimingPlan?.allocations
+    ?.filter((allocation) => allocation.stageKey === "ai-learning")
+    .reduce((sum, allocation) => sum + Math.max(0, allocation.durationMin), 0);
+  // Downstream knowledge design must use the time actually available to the
+  // generated AI lesson. A resource package can describe a 135-minute course
+  // while assigning only 30 minutes to this classroom; passing 135 here makes
+  // scope, examples and depth contradict the adopted teaching budget.
+  const teachingHours = knowledgeTeachingMinutes && knowledgeTeachingMinutes > 0
+    ? knowledgeTeachingMinutes / 60
+    : course.hours;
   return deriveTeachingConstraints({
     grade: course.grade,
     subject: course.subject,
     topic: course.name,
-    hours: course.hours,
+    hours: teachingHours,
     difficulty: course.pblConfig?.difficultyLevel,
     learnerProfile: course.learnerProfile,
     learningObjectives: course.learningObjectives,

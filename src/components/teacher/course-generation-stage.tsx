@@ -38,6 +38,8 @@ type GenerationResultSummary = {
     corrections: string[];
     warnings: string[];
   };
+  teacherReviewItems?: Array<{ id: string }>;
+  teacherReviewSummary?: string;
 };
 
 type Props = {
@@ -296,6 +298,15 @@ export function CourseGenerationStage({
         ) : (
           <p className="text-xs text-stone-500">正在连接生成服务，收到进展后会显示在这里。</p>
         )}
+
+        {status === "success" && result?.teacherReviewSummary ? (
+          <details className="mt-4 rounded-[10px] border border-amber-200 bg-amber-50 px-4 py-3" open={Boolean(result.teacherReviewItems?.length)}>
+            <summary className="cursor-pointer text-sm font-bold text-stone-800">
+              授课前待确认信息{result.teacherReviewItems?.length ? `（${result.teacherReviewItems.length} 项）` : ""}
+            </summary>
+            <p className="mt-3 whitespace-pre-wrap text-xs leading-6 text-stone-600">{result.teacherReviewSummary}</p>
+          </details>
+        ) : null}
 
         {status === "success" && result?.qualityReport &&
         (result.qualityReport.corrections.length > 0 || result.qualityReport.warnings.length > 0) ? (

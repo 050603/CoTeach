@@ -35,6 +35,9 @@ export async function GET(request: Request, context: { params: Promise<{ courseI
     return Response.json({ required, signature, quality: freshQualityReport(course, signature) ?? null,
       renderReview: course.content.renderReview?.signature === signature ? course.content.renderReview : null,
       teacherReview: course.content.teacherReview?.signature === signature ? course.content.teacherReview : null,
+      teacherReviewItems: course.content.teacherReviewItems ?? [],
+      teacherReviewSummary: course.content.teacherReviewSummary ?? null,
+      teacherReviewVersion: course.content.teacherReviewVersion ?? null,
       classroom });
   } catch (error) { return errorResponse(error); }
 }

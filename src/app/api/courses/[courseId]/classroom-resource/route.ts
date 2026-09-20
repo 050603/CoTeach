@@ -20,6 +20,11 @@ import {
   persistClassroomAudioUploads,
   prepareClassroomAudioUploads,
 } from '@openmaic/lib/server/classroom-edit-audio';
+import {
+  collectGeneratedTeacherReviewItems,
+  teacherReviewSummary,
+} from '@/lib/course-generation/teacher-review-items';
+import type { SceneOutline } from '@/lib/openmaic/types/generation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -258,6 +263,11 @@ export async function PATCH(
       if (classroomIdFor(current) !== sourceClassroomId) {
         throw new ClassroomRevisionConflictError(body.revision as number, actualRevision);
       }
+      const syncedOutlines = syncSceneOutlines(current, prepared.scenes);
+      const teacherReviewItems = collectGeneratedTeacherReviewItems({
+        outlines: syncedOutlines as unknown as SceneOutline[],
+        scenes: prepared.scenes,
+      });
       return {
         ...current,
         status: 'preparing',
@@ -267,12 +277,20 @@ export async function PATCH(
           teacherReview: undefined,
           renderReview: undefined,
           qualityReview: undefined,
+          teacherReviewItems,
+          teacherReviewSummary: teacherReviewSummary(teacherReviewItems),
+          teacherReviewVersion: {
+            generationPolicyVersion: 'teacher-edited-classroom-v1',
+            classroomId: targetClassroomId,
+            classroomRevision: classroom.revision,
+            generatedAt: new Date().toISOString(),
+          },
           teachingTimingAudit: revisionState.invalidated.includes('timing-audit')
             ? undefined : current.content.teachingTimingAudit,
           teachingRevisionState: revisionState,
           _openmaicClassroomId: targetClassroomId,
           _openmaicScenesCount: prepared.scenes.length,
-          _openmaicSceneOutlines: syncSceneOutlines(current, prepared.scenes),
+          _openmaicSceneOutlines: syncedOutlines,
         },
       };
     }, { actor: { id: requestedBy, role: 'teacher' } });

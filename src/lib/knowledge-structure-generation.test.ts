@@ -46,13 +46,73 @@ describe("reviewed knowledge structure generation", () => {
     expect(result.knowledgePoints.every((point) => !point.objectiveIndexes?.length)).toBe(true);
   });
 
-  it("uses confirmed leaf ids and keeps group headings out of the prerequisite catalog", async () => {
+  it("keeps exact source ids while allowing an additional objective-owned target", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify({ ...candidate, knowledgeGraph: { ...candidate.knowledgeGraph, nodes: [...candidate.knowledgeGraph.nodes, { id: "group", label: "语言理解", instructionalRole: "lesson" }] } }));
     const result = await generateKnowledgeStructureOnce(input, { teacherKnowledgePoints: [{ id: "stable-leaf", name: "自然语言处理基本任务", description: "原文说明", groupId: "group", groupName: "语言理解" }] }, { modelCall });
-    expect(result.knowledgePoints).toHaveLength(1);
+    expect(result.knowledgePoints).toHaveLength(2);
     expect(result.knowledgePoints[0]).toMatchObject({ id: "stable-leaf", groupId: "group", groupName: "语言理解" });
     expect(result.knowledgeGraph?.nodes.some((node) => node.id === "group")).toBe(false);
     expect(result.knowledgeGraph?.nodes.find((node) => node.id === "stable-leaf")?.groupName).toBe("语言理解");
+  });
+
+  it("compiles a large source catalog into a time-bounded set before duration allocation", async () => {
+    const teacherKnowledgePoints = Array.from({ length: 20 }, (_, index) => ({
+      id: `source-${index + 1}`,
+      name: `来源概念${index + 1}`,
+      description: `来源说明${index + 1}`,
+      groupId: `group-${Math.floor(index / 5) + 1}`,
+      groupName: `主题${Math.floor(index / 5) + 1}`,
+    }));
+    const compiledPoints = Array.from({ length: 4 }, (_, index) => ({
+      id: `target-${index + 1}`,
+      name: `核心目标${index + 1}`,
+      description: `讲清一组相关概念${index + 1}`,
+      keyInfo: `这一组的关键关系${index + 1}`,
+      masteryBoundary: `能够解释并判断核心目标${index + 1}`,
+      objectiveIndexes: [index % 2],
+      level: index < 2 ? "core" : "application",
+      sourceKnowledgePointIds: teacherKnowledgePoints.slice(index * 5, index * 5 + 5).map((point) => point.id),
+    }));
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+      knowledgeScopePlan: {
+        rationale: "30分钟只独立建立四个核心目标，其余术语并入关系讲解。",
+        decisions: teacherKnowledgePoints.map((point, index) => ({
+          sourceKnowledgePointId: point.id,
+          disposition: index % 5 === 0 ? "standalone" : "embedded",
+          targetKnowledgePointId: `target-${Math.floor(index / 5) + 1}`,
+          rationale: "按概念关系合并。",
+        })),
+      },
+      knowledgePoints: compiledPoints,
+      knowledgeGraph: {
+        nodes: compiledPoints.map((point) => ({ ...point, label: point.name, instructionalRole: "lesson" })),
+        edges: [],
+      },
+    }));
+
+    const result = await generateKnowledgeStructureOnce(input, {
+      teacherKnowledgePoints,
+      teachingCapacity: {
+        durationRangeMin: 30,
+        durationRangeMax: 30,
+        planningDurationMin: 30,
+        durationSource: "resource-package",
+        assessmentReserveMin: 4,
+        explanationAndActivityMin: 26,
+      },
+    }, { modelCall });
+
+    expect(result.knowledgePoints).toHaveLength(4);
+    expect(result.knowledgePoints.flatMap((point) => point.sourceKnowledgePointIds ?? [])).toHaveLength(20);
+    expect(result.knowledgeScopePlan).toMatchObject({
+      planningDurationMin: 30,
+      assessmentReserveMin: 4,
+      explanationAndActivityMin: 26,
+      sourcePointCount: 20,
+      targetPointCount: 4,
+    });
+    expect(result.knowledgeScopePlan?.decisions).toHaveLength(20);
+    expect(result.knowledgeScopePlan?.decisions.filter((decision) => decision.disposition === "embedded")).toHaveLength(20);
   });
   it("generates the new-system teacher checkpoint without an AI review call", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify(candidate));

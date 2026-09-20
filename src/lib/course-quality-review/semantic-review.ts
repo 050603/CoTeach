@@ -103,10 +103,10 @@ export function collectCourseStructureIssues(course: Course, scenes: readonly Sc
   }
   for (const point of course.content.knowledgePoints) if (!taught.has(point.id)) add({ origin: "structure", severity: "error", title: "必需知识缺少讲授页面", evidence: point.name, suggestion: "在现有时间预算内为该知识安排讲授内容。" });
   for (const outline of outlines) if (!scenes.some((scene) => scene.outlineId === outline.id || scene.id === outline.id)) add({ origin: "structure", severity: "error", title: "课堂页面未生成", evidence: outline.title, suggestion: "补齐该页面后重新检查。" });
-  if (course.content.teachingBlueprint?.schemaVersion === 2) {
+  if ((course.content.teachingBlueprint?.schemaVersion ?? 0) >= 2) {
     const sceneByOutline = new Map(scenes.map((scene) => [scene.outlineId ?? scene.id, scene]));
     const outlineById = new Map(outlines.map((outline) => [outline.id, outline]));
-    for (const section of course.content.teachingBlueprint.sections) {
+    for (const section of course.content.teachingBlueprint!.sections) {
       const criteria = section.understandingCriteria;
       if (!criteria?.goals.length || !criteria.answerEssentials.length || !criteria.misconceptions.length
         || !criteria.supportingUnitIds.length) {

@@ -48,7 +48,7 @@ describe("quick positioning generation", () => {
       .toBeNull();
   }, 15_000);
 
-  it("turns a 30-minute, 20-point course into fixed sections with a compact page capacity", async () => {
+  it("derives section teaching budgets and page suggestions from the actual duration", async () => {
     const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
     const groupSizes = [3, 5, 3, 3, 3, 3];
     const knowledgePoints = groupSizes.flatMap((size, groupIndex) =>
@@ -62,13 +62,50 @@ describe("quick positioning generation", () => {
     );
 
     const plans = buildTeachingBlueprintSectionPlans({ knowledgePoints }, 30 * 60);
+    const shorterPlans = buildTeachingBlueprintSectionPlans({ knowledgePoints }, 15 * 60);
 
     expect(plans).toHaveLength(6);
-    expect(plans.reduce((sum, plan) => sum + plan.maxPages, 0)).toBe(13);
+    expect(plans.reduce((sum, plan) => sum + (plan.teachingBudgetSec ?? 0), 0)).toBe(1_584);
+    expect(shorterPlans.reduce((sum, plan) => sum + (plan.teachingBudgetSec ?? 0), 0)).toBe(792);
+    expect(shorterPlans.reduce((sum, plan) => sum + (plan.suggestedMaxPages ?? 0), 0))
+      .toBeLessThan(plans.reduce((sum, plan) => sum + (plan.suggestedMaxPages ?? 0), 0));
     expect(plans.flatMap((plan) => plan.knowledgePointIds)).toEqual(
       knowledgePoints.map((point) => point.id),
     );
     expect(new Set(plans.flatMap((plan) => plan.knowledgePointIds)).size).toBe(20);
+  }, 15_000);
+
+  it("moves the fixed teaching budget ahead of knowledge-scope generation", async () => {
+    const { buildKnowledgePlanningCapacity } = await import("./job-runner");
+    const capacity = buildKnowledgePlanningCapacity({
+      courseHours: 2,
+      assessmentMode: "adaptive",
+      stagePlan: {
+        schemaVersion: 2,
+        source: "resource-package",
+        totalMinutes: 100,
+        lessonCount: null,
+        minutesPerLesson: null,
+        stages: [
+          { key: "launch", title: "启动", durationMin: 10, requirements: "", outputs: "", teacherActions: "", aiActions: "" },
+          { key: "ai-learning", title: "知识讲授", durationMin: 30, requirements: "", outputs: "", teacherActions: "", aiActions: "" },
+          { key: "make", title: "实践", durationMin: 45, requirements: "", outputs: "", teacherActions: "", aiActions: "" },
+          { key: "showcase", title: "展示", durationMin: 10, requirements: "", outputs: "", teacherActions: "", aiActions: "" },
+          { key: "reflection", title: "反思", durationMin: 5, requirements: "", outputs: "", teacherActions: "", aiActions: "" },
+        ],
+        evaluationCriteria: "",
+        reflectionQuestions: [],
+      },
+    });
+
+    expect(capacity).toEqual({
+      durationRangeMin: 30,
+      durationRangeMax: 30,
+      planningDurationMin: 30,
+      durationSource: "resource-package",
+      assessmentReserveMin: 4,
+      explanationAndActivityMin: 26,
+    });
   }, 15_000);
 
   it("forces every new-system outline into the student AI授知 stage", async () => {
@@ -305,7 +342,7 @@ describe("quick positioning generation", () => {
     } as never, { courseId: "course-1", teacherBrief: "" } as never, 30);
 
     expect(requirement).toContain("AI 授知阶段总时长约 30 分钟");
-    expect(requirement).toContain("PPT 讲授与必要互动约 12 分钟");
+    expect(requirement).toContain("PPT 讲授与必要互动约 26 分钟");
     expect(requirement).toContain("不要生成 quiz 或 PBL");
     expect(requirement).toContain("不要把一个完整概念机械拆成多张稀疏页面");
     expect(requirement).toContain("不设条目配额");

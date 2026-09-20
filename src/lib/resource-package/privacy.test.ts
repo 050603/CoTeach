@@ -4,7 +4,7 @@ import { emptyResourcePackageDraft, resourcePackageDraftErrors, stagePlanFromRes
 
 describe("resource package authoring boundary", () => {
   it("keeps private teacher inputs out of student snapshots without mutating the original", () => {
-    const content = { resourcePackage: { source: { url: "/api/uploads/private" }, raw: "private teacher requirements" }, teachingBlueprint: { internal: "private compilation" }, teachingTimingAudit: { internal: "private timing" }, teachingAdoptions: [{ mode: "teacher-confirmed", actorId: "private" }], teachingRevisionState: { request: "private correction" }, designGenerationTrace: { diagnostics: "private" }, teacherReview: { teacherId: "private" }, renderReview: { evidence: "private" }, qualityReview: { source: "private" }, qualityReviewRequired: true, stagePlan: { totalMinutes: 135 }, knowledgePoints: [] };
+  const content = { resourcePackage: { source: { url: "/api/uploads/private" }, raw: "private teacher requirements" }, teachingBlueprint: { internal: "private compilation" }, teachingTimingAudit: { internal: "private timing" }, teachingAdoptions: [{ mode: "teacher-confirmed", actorId: "private" }], teachingRevisionState: { request: "private correction" }, designGenerationTrace: { diagnostics: "private" }, teacherReviewItems: [{ content: "private claim" }], teacherReviewSummary: "private summary", teacherReviewVersion: { classroomId: "private" }, knowledgeScopePlan: { rationale: "private scope decision" }, teacherReview: { teacherId: "private" }, renderReview: { evidence: "private" }, qualityReview: { source: "private" }, qualityReviewRequired: true, stagePlan: { totalMinutes: 135 }, knowledgePoints: [] };
     const snapshot = { schemaVersion: 2, kind: "pbl-course", design: { content } };
     expect(publicResourcePackageSnapshot(snapshot).design.content).toEqual({ stagePlan: { totalMinutes: 135 }, knowledgePoints: [] });
     expect(withoutPrivatePackageContent(content)).not.toHaveProperty("resourcePackage");
@@ -13,6 +13,9 @@ describe("resource package authoring boundary", () => {
     expect(withoutPrivatePackageContent(content)).not.toHaveProperty("teachingAdoptions");
     expect(withoutPrivatePackageContent(content)).not.toHaveProperty("teachingRevisionState");
     expect(withoutPrivatePackageContent(content)).not.toHaveProperty("designGenerationTrace");
+    expect(withoutPrivatePackageContent(content)).not.toHaveProperty("teacherReviewItems");
+    expect(withoutPrivatePackageContent(content)).not.toHaveProperty("teacherReviewSummary");
+    expect(withoutPrivatePackageContent(content)).not.toHaveProperty("teacherReviewVersion");
     expect(content.resourcePackage.raw).toContain("private");
   });
   it("preserves exact lesson minutes and reports conflicts instead of silently scaling", () => {
