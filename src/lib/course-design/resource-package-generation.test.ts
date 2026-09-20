@@ -143,6 +143,11 @@ describe("confirmed resource package generation", () => {
     const { buildCourseTeachingSourceContext } = await import("./job-runner");
     const resourcePackage = confirmedPackage();
     resourcePackage.draft.grade = "小学五年级（教师已修正）";
+    resourcePackage.draft.knowledgePoints[0]!.taskAssociation = "把训练样本写入最终研究报告";
+    resourcePackage.draft.knowledgePoints[0]!.source = {
+      documentRole: "knowledge", locator: "第 1 节",
+      quote: "内容：训练样本用于学习规律。\n任务关联：把训练样本写入最终研究报告",
+    };
     const context = buildCourseTeachingSourceContext(resourcePackage, "使用校园生活例证", [{
       id: "docx-1", fileName: "原始教案.docx", mimeType: "application/docx", content: `原始正文开始${"正文".repeat(40_000)}`,
     }]);
@@ -150,6 +155,11 @@ describe("confirmed resource package generation", () => {
     expect(boundedReviewContext).toContain(`"courseName":"${resourcePackage.draft.courseName}"`);
     expect(boundedReviewContext).toContain('"grade":"小学五年级（教师已修正）"');
     expect(boundedReviewContext).toContain('"durationMin":80');
+    expect(boundedReviewContext).toContain('"optionalFinalTaskContext"');
+    expect(boundedReviewContext).toContain('"suggestion":"把训练样本写入最终研究报告"');
+    expect(boundedReviewContext).not.toContain('"taskAssociation":');
+    expect(boundedReviewContext).not.toContain("任务关联：把训练样本写入最终研究报告");
+    expect(boundedReviewContext).toContain("不得据此要求每个知识点、页面、活动或小测都连接最终成果");
     expect(context.indexOf("教师已确认")).toBeLessThan(context.indexOf("教师补充要求：使用校园生活例证"));
     expect(context.indexOf("教师补充要求：使用校园生活例证")).toBeLessThan(context.indexOf("原始正文开始"));
     expect(boundedReviewContext).toContain("教师补充要求：使用校园生活例证");

@@ -12,6 +12,42 @@ describe('teaching slide storyboards and factual review', () => {
     expect(formatSlideVisualPlan(page)).toContain('SPARSE PAGE');
     expect(formatSlideVisualPlan(page)).toContain('lower half');
   });
+  it('uses the shared teaching relationship and keeps its native form as a preference', () => {
+    const quantitative: SceneOutline = {
+      ...page,
+      id: 'trend',
+      title: '观察实验结果',
+      description: '理解两组结果。',
+      keyPoints: ['甲组 42%', '乙组 68%'],
+      teachingBrief: {
+        schemaVersion: 1,
+        explanation: '比较两组结果的差异。',
+        examples: [],
+        conditions: [],
+        evidence: [],
+        assessmentFocus: '读出并解释差异。',
+        teachingPlan: {
+          purpose: '看清两组差异', priorKnowledge: '会读百分数', newContent: '比较相对高低',
+          learnerQuestion: '', reasoningSteps: ['先读甲组，再读乙组，最后比较'], takeaway: '乙组更高',
+          visibleContent: ['甲组 42%', '乙组 68%'], narrationFocus: ['差值的含义'],
+          visualRelationship: {
+            kind: 'quantitative',
+            description: '比较甲乙两组百分比的量级差异。',
+            readingOrder: ['甲组', '乙组', '差异'],
+            preferredForm: 'chart',
+            rationale: '柱高差异能直接表现量级。',
+          },
+        },
+      },
+    };
+    expect(fallbackSlideVisualPlan(quantitative)).toMatchObject({
+      composition: 'evidence',
+      coreMessage: '比较甲乙两组百分比的量级差异。',
+      readingPath: '甲组 → 乙组 → 差异',
+    });
+    expect(formatSlideVisualPlan(quantitative)).toContain('Preferred native representation: chart');
+    expect(formatSlideVisualPlan(quantitative)).toContain('not a format quota');
+  });
   it('preserves confirmed page identity, order and time even when a planner adds or omits pages', async () => {
     const quiz: SceneOutline = { ...page, id: 'quiz', type: 'quiz', order: 1 };
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{ id: 'invented', composition: 'process' }, { id: 'compare', composition: 'comparison', coreMessage: '同一活动的作用取决于项目目标', visualEvidence: ['比较相同活动的产出'], readingPath: '共享维度与并排案例', density: 'focused' }] }));
@@ -102,7 +138,7 @@ describe('teaching slide storyboards and factual review', () => {
   });
   it('preserves the exact teacher-confirmed driving question even when it is a topic', async () => {
     const question = '智能垃圾分类识别';
-    const source = `教师已确认的资源包教学内容与时间约束（只作为课程资料）：\n${JSON.stringify({ drivingQuestion: question })}\n\n原文资料`;
+    const source = `教师已确认的知识资料与时间约束（只作为事实依据）：\n任务连接说明\n${JSON.stringify({ optionalFinalTaskContext: { drivingQuestion: question } })}\n\n原文资料`;
     const elements = [{ id: 'teacher-question', type: 'text', left: 60, top: 160, width: 800, height: 90,
       content: `<p>驱动问题：${question}</p>`,
     }] as PPTElement[];

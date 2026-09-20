@@ -7,10 +7,16 @@
 1. 备份 PostgreSQL、上传文件、课堂数据和 `deploy/.deploy.env`。保留原 `PROVIDER_ENCRYPTION_KEY` 与 `JWT_SECRET`。
 2. 在仓库根目录运行 `python3 scripts/setup-survey-nlp.py` 准备本地分词环境，再运行 `pnpm install --frozen-lockfile && pnpm build`。
 3. 运行 `pnpm exec prisma migrate deploy`。
-4. 安装或更新 `deploy/systemd/` 下的应用、代码运行器和 `openpbl-survey-nlp.service`，执行 `systemctl --user daemon-reload` 后重启服务。
-5. 检查应用 `/api/health/live` 和分词服务 `http://127.0.0.1:3003/health/live`，并完成教师登录、学生加入与五阶段课堂冒烟测试。
+4. 安装或更新 `deploy/systemd/` 下的应用、代码运行器、`openpbl-survey-nlp.service` 和 `openpbl-outbound-proxy.service`，执行 `systemctl --user daemon-reload` 后重启服务。
+5. 检查应用 `/api/health/live`、分词服务 `http://127.0.0.1:3003/health/live` 和出站代理 `http://127.0.0.1:19999/health/ready`，并完成教师登录、学生加入与五阶段课堂冒烟测试。
 
 `pnpm start` 会从 `.next-build` 创建 `.openpbl-runtime/releases/<BUILD_ID>` 不可变运行目录，避免下一次构建覆盖正在服务的版本。
+
+## IPv6 主机的模型出站
+
+当前生产宿主机只有可用的公网 IPv6，而 DeepSeek 等端点可能只发布 IPv4 地址。`openpbl-outbound-proxy.service` 是仅监听 `127.0.0.1:19999` 的 HTTPS CONNECT 代理：它通过多组 DNS64 节点解析并并行选择可用 NAT64 路径，连接内容仍由目标站点 TLS 端到端加密。应用服务显式依赖该代理，并在启动、部署和运行健康检查中验证到 `api.deepseek.com:443` 的 TLS 链路；不得再使用 Codex、SSH 会话或桌面进程临时开放的代理端口。
+
+默认 DNS64 节点可用 `OPENPBL_NAT64_DNS_SERVERS`（逗号分隔 IPv6 地址）替换为运营方自建节点；允许的 HTTPS 目标可用 `OPENPBL_NAT64_ALLOWED_HOSTS` 收窄为逗号分隔的域名或域名后缀。生产环境优先使用有可用性承诺的自建或运营商 NAT64，切换时无需修改应用代码。
 
 ## 正式与测试系统共用 AI 设置
 

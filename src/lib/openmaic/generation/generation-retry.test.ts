@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { LlmEmptyResponseError, LlmTimeoutError } from '@/lib/llm/errors';
 import {
   contextualizeGenerationError,
+  generationRetryAfterMs,
   isRetryableGenerationError,
   withGenerationRetry,
 } from './generation-retry';
@@ -71,6 +72,22 @@ describe('withGenerationRetry', () => {
       random: () => 0,
     })).resolves.toBe('complete outline');
 
+    expect(operation).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    new Error('terminated'),
+    new Error('Cannot connect to API: connect ECONNREFUSED 127.0.0.1:9999'),
+  ])('waits for an interrupted local proxy transport to recover: %s', async (transportError) => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const operation = vi.fn().mockRejectedValueOnce(transportError).mockResolvedValueOnce('complete');
+
+    expect(isRetryableGenerationError(transportError)).toBe(true);
+    expect(generationRetryAfterMs(transportError)).toBe(10_000);
+    await expect(withGenerationRetry(operation, {
+      label: 'proxied course generation', maxRetries: 1, sleep, random: () => 0,
+    })).resolves.toBe('complete');
+    expect(sleep).toHaveBeenCalledWith(10_000, undefined);
     expect(operation).toHaveBeenCalledTimes(2);
   });
 

@@ -1,0 +1,27 @@
+[Unit]
+Description=CoTeach IPv6-to-IPv4 outbound proxy (loopback port 19999)
+Wants=network-online.target
+After=network-online.target
+Before=openpbl.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/lkj/OpenPBL/openPBL
+Environment=OPENPBL_NAT64_PROXY_HOST=127.0.0.1
+Environment=OPENPBL_NAT64_PROXY_PORT=19999
+Environment=OPENPBL_OUTBOUND_PROXY=http://127.0.0.1:19999
+Environment=OPENPBL_NAT64_ALLOWED_HOSTS=*
+Environment=OPENPBL_NAT64_READINESS_TARGET=api.deepseek.com:443
+ExecStart=/usr/bin/node /home/lkj/OpenPBL/openPBL/scripts/openpbl-nat64-proxy.mjs serve
+ExecStartPost=/usr/bin/node /home/lkj/OpenPBL/openPBL/scripts/openpbl-nat64-proxy.mjs probe
+Restart=always
+RestartSec=3s
+TimeoutStartSec=45s
+TimeoutStopSec=15s
+KillMode=control-group
+SuccessExitStatus=143
+LimitNOFILE=65535
+
+[Install]
+WantedBy=default.target

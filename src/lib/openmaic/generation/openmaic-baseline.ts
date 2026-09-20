@@ -47,8 +47,8 @@ export const OPENMAIC_GENERATION_BASELINE = {
   promptHashes: {
     requirementsSystem: '813240c132acfe63007ddcf3dd764b47b5ad1d7b5005d47361ede3aa42614c65',
     requirementsUser: '79fe5ce9a64dc63f174bd1c99dd3e4f1feb2a00e2797edc2a11abc5ac2d6f9ff',
-    slideContentSystem: 'fac82e884070e71cf82ffca67fb1ee1c861e3cd90d4f9816c7085c428180aebd',
-    slideContentUser: '7d7486fed0d897a85273794359cd17383d7b9f2dbca7481134a1519687368c99',
+    slideContentSystem: '35770a73bee0459c0937f41e1240dedc48d40a9de542345c1a8f1ad129aa89b8',
+    slideContentUser: '232b0a611ae689daf83bcdf1211646d55e97c06d8c9d2d1f888617fcff79db81',
     upstreamSlideActionsSystem: '219e8da1eb3c854dbe6ee6fdedda1936e0092fff6c8984b9277c5c6cef2443b6',
     slideActionsSystem: 'ae39fbf2f6bb5bcb7c61cb05c723cecc81b1db1fa543ac5b91cb1d8cb6c7f4a7',
     slideActionsUser: '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
@@ -58,9 +58,10 @@ export const OPENMAIC_GENERATION_BASELINE = {
 /**
  * CoTeach keeps the v1.0.3 one-click semantic boundary: the official outline's
  * description/keyPoints are passed to the official page generator, while
- * orchestration metadata stays outside the prompt. Five unrelated prompt
- * assets remain byte-stable; the original slide-action prompt is deliberately
- * extended in place with precise sparse guidance. Production may opt into the
+ * orchestration metadata stays outside the prompt. Outline prompts remain
+ * byte-stable; the slide-content prompt now chooses native representations
+ * from the teaching need, and the slide-action prompt retains its precise
+ * sparse guidance. Production may opt into the
  * measured website reference profile, but never a page template, geometry
  * budget, timing appendix, or generated theme plan.
  */

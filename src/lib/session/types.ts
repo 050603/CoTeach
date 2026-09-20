@@ -942,11 +942,9 @@ export type TeachingBlueprintPage = {
     object: string;
     bridge: string;
   };
-  visualRelationship?: {
-    kind: "comparison" | "process" | "causal" | "system" | "quantitative" | "sequence" | "spatial" | "statement";
-    description: string;
-    readingOrder: string[];
-  };
+  visualRelationship?: import("@/lib/course-quality-review/types").TeachingVisualRelationship;
+  /** Whether this page benefits from using the course's final task as context. */
+  taskConnection?: import("@/lib/course-quality-review/types").TeachingTaskConnection;
   reviewItems?: import("@/lib/course-quality-review/types").TeacherReviewItem[];
 };
 

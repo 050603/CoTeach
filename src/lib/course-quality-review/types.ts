@@ -71,6 +71,31 @@ export type TeachingResourceNeed = {
 };
 
 /**
+ * Page-local decision about whether the final task is actually a useful
+ * teaching context. Historical briefs may omit it; current authoring always
+ * makes the decision explicitly so downstream generation cannot reintroduce
+ * the project merely because it is present in the course-level request.
+ */
+export type TeachingTaskConnection = {
+  mode: "none" | "helpful-context" | "direct-application";
+  rationale: string;
+};
+
+/**
+ * The meaning a page should make visible and the authoring form that is most
+ * likely to make that meaning easy to inspect. The form remains a preference:
+ * the slide generator may choose an equivalent native representation when the
+ * actual data or available media makes it clearer.
+ */
+export type TeachingVisualRelationship = {
+  kind: "comparison" | "process" | "causal" | "system" | "quantitative" | "sequence" | "spatial" | "statement";
+  description: string;
+  readingOrder: string[];
+  preferredForm?: "text" | "table" | "chart" | "diagram" | "illustration" | "mixed";
+  rationale?: string;
+};
+
+/**
  * Teacher-private provenance for content that may be useful in class but is
  * not fully established by the supplied course material. These records never
  * become learner-facing labels or narration.
@@ -124,11 +149,9 @@ export type TeachingBrief = {
     deepens?: string[];
     references?: string[];
     /** The relationship the slide should make visible, without prescribing a layout template. */
-    visualRelationship?: {
-      kind: "comparison" | "process" | "causal" | "system" | "quantitative" | "sequence" | "spatial" | "statement";
-      description: string;
-      readingOrder: string[];
-    };
+    visualRelationship?: TeachingVisualRelationship;
+    /** Internal authoring gate; never printed or narrated to learners. */
+    taskConnection?: TeachingTaskConnection;
   };
   explanation: string;
   examples: string[];

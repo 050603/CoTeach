@@ -1,6 +1,6 @@
 import { loadSnippet } from '@openmaic/lib/prompts';
 import { formatTeachingConstraintsForPrompt, type TeachingConstraints } from '@openmaic/lib/pedagogy/teaching-constraints';
-import type { PageLearningTask, SharedTeachingContext, TeacherReviewItem, TeachingBrief } from '@/lib/course-quality-review/types';
+import type { PageLearningTask, SharedTeachingContext, TeacherReviewItem, TeachingBrief, TeachingTaskConnection } from '@/lib/course-quality-review/types';
 import { selectReviewSource } from '@/lib/course-quality-review/source-selection';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { AICallFn } from './pipeline-types';
@@ -10,10 +10,16 @@ import { isAbortError } from './generation-retry';
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from './generated-output-retry';
 import { fingerprintGenerationValue } from '@/lib/course-generation/page-checkpoints';
 
-export const TEACHING_ENHANCEMENT_VERSION = 'shared-page-contract-v13-complete-lesson-arc';
+export const TEACHING_ENHANCEMENT_VERSION = 'shared-page-contract-v15-adaptive-visual-forms';
 const TEACHING_SOURCE_LIMIT = 60_000;
 const ENTRY_POINT_KINDS = new Set([
   'familiar-experience', 'concrete-observation', 'problem', 'direct-explanation', 'continuation',
+] as const);
+const VISUAL_RELATIONSHIP_KINDS = new Set([
+  'comparison', 'process', 'causal', 'system', 'quantitative', 'sequence', 'spatial', 'statement',
+] as const);
+const VISUAL_FORMS = new Set([
+  'text', 'table', 'chart', 'diagram', 'illustration', 'mixed',
 ] as const);
 
 function strings(value: unknown): string[] {
@@ -24,6 +30,49 @@ function strings(value: unknown): string[] {
 
 function compact(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+}
+
+function normalizeTaskConnection(
+  value: unknown,
+  inherited?: TeachingTaskConnection,
+): TeachingTaskConnection | undefined {
+  // The blueprint owns this decision. Enhancement may fill it only for
+  // legacy callers that do not yet carry a blueprint-authored gate; it may
+  // never promote a page from "none" into project work.
+  if (inherited) return inherited;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return inherited;
+  const record = value as Record<string, unknown>;
+  const mode = record.mode === 'none' || record.mode === 'helpful-context'
+    || record.mode === 'direct-application' ? record.mode : undefined;
+  const rationale = compact(record.rationale);
+  return mode && rationale ? { mode, rationale } : inherited;
+}
+
+function normalizeVisualRelationship(
+  value: unknown,
+  inherited?: NonNullable<TeachingBrief['teachingPlan']>['visualRelationship'],
+): NonNullable<TeachingBrief['teachingPlan']>['visualRelationship'] | undefined {
+  // Like page ownership, this decision is authored in the blueprint. Keep it
+  // stable through enhancement so page production and narration see the same
+  // relationship, form preference, data and reading order.
+  if (inherited) return inherited;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const relationship = value as Record<string, unknown>;
+  const kind = typeof relationship.kind === 'string' && VISUAL_RELATIONSHIP_KINDS.has(relationship.kind as never)
+    ? relationship.kind as NonNullable<NonNullable<TeachingBrief['teachingPlan']>['visualRelationship']>['kind']
+    : undefined;
+  const description = compact(relationship.description);
+  if (!kind || !description) return undefined;
+  const preferredForm = typeof relationship.preferredForm === 'string' && VISUAL_FORMS.has(relationship.preferredForm as never)
+    ? relationship.preferredForm as NonNullable<NonNullable<TeachingBrief['teachingPlan']>['visualRelationship']>['preferredForm']
+    : undefined;
+  return {
+    kind,
+    description,
+    readingOrder: strings(relationship.readingOrder),
+    ...(preferredForm ? { preferredForm } : {}),
+    ...(compact(relationship.rationale) ? { rationale: compact(relationship.rationale) } : {}),
+  };
 }
 
 export function hasCompleteTeachingBrief(outline: SceneOutline): boolean {
@@ -42,7 +91,8 @@ export function hasCurrentTeachingBrief(outline: SceneOutline): boolean {
   return hasCompleteTeachingBrief(outline)
     && outline.teachingBrief?.designVersion === TEACHING_ENHANCEMENT_VERSION
     && Boolean(normalizeSharedContext(outline.teachingBrief?.sharedContext))
-    && Boolean(normalizeTeachingPlan(outline.teachingBrief.teachingPlan));
+    && Boolean(normalizeTeachingPlan(outline.teachingBrief.teachingPlan))
+    && Boolean(normalizeTaskConnection(outline.teachingBrief?.teachingPlan?.taskConnection));
 }
 
 function normalizeSharedContext(value: unknown): SharedTeachingContext | undefined {
@@ -138,6 +188,8 @@ function normalizeTeachingPlan(
         bridge: compact(rawEntryPoint.bridge),
       }
     : inherited?.entryPoint;
+  const taskConnection = normalizeTaskConnection(plan.taskConnection, inherited?.taskConnection);
+  const visualRelationship = normalizeVisualRelationship(plan.visualRelationship, inherited?.visualRelationship);
   return {
     purpose: compact(plan.purpose), priorKnowledge: compact(plan.priorKnowledge),
     newContent: compact(plan.newContent), learnerQuestion: compact(plan.learnerQuestion),
@@ -147,9 +199,8 @@ function normalizeTeachingPlan(
     deepens: strings(plan.deepens).length ? strings(plan.deepens) : inherited?.deepens ?? [],
     references: strings(plan.references).length ? strings(plan.references) : inherited?.references ?? [],
     ...(entryPoint ? { entryPoint } : {}),
-    ...((plan.visualRelationship && typeof plan.visualRelationship === 'object' && !Array.isArray(plan.visualRelationship))
-      ? { visualRelationship: plan.visualRelationship as NonNullable<TeachingBrief['teachingPlan']>['visualRelationship'] }
-      : inherited?.visualRelationship ? { visualRelationship: inherited.visualRelationship } : {}),
+    ...(visualRelationship ? { visualRelationship } : {}),
+    ...(taskConnection ? { taskConnection } : {}),
   };
 }
 
@@ -330,6 +381,7 @@ export function buildTeachingEnhancementPrompt(input: {
       'resourcePosition=course-opening 的页面必须支持一个独立完整的 AI 课程开场，即使课程前面存在教师导入阶段：简短问候由讲稿承担，页面与教学设计负责给出适龄、熟悉、可观察或可比较的切入对象，并写清从这个对象到首个知识的自然桥梁。时长较短时与首个知识合并，不能因此省略，也不能假装学生已经回答。',
       'resourcePosition=course-closing 的页面要为课程收束提供已经讲过的核心认识和后续应用方向；正式致谢与告别由讲稿承担。若最后一页是测验，前一教学页只自然引向测验，测验后的反馈完成收束，不提前告别。',
       '实际学习者由学段、专业和 learner profile 决定；资料中出现的小学生、客户、机器人或教师只是案例角色。选择例子时先看它能否解释当前难点以及实际学习者是否熟悉，与项目任务的联系是可选条件。',
+      '最终任务、驱动问题和成果物是可选迁移情境，不是页面必须呼应的主线。严格继承 teachingPlan.taskConnection：none 时不得把页面入口、例子、活动或结论改成项目任务；helpful-context 时只使用与当前知识直接共享且能减少解释负担的部分；direct-application 时才把已学知识实际迁移到最终任务。不得因为资料的 taskAssociation 提到成果制作，就把成果物当成默认案例。',
       '不得改变页数、页面 ID、页面顺序或知识边界。允许为了教学构造案例、类比、图表和示意数据；不得捏造出处。所有构造内容和来源待核实主张都写入 reviewItems，只供教师在生成结束后确认，不写进学生页面或讲稿。',
       loadSnippet('adaptive-narration-policy'),
       loadSnippet('teaching-accuracy-policy'),
@@ -354,13 +406,13 @@ ${input.pages.map((page, index) => `${index + 1}. [${page.id}] ${page.title}
 ${selected.text || '未提供额外资料；只能使用已确认页面中的事实，不得补充外部事实。'}
 
 设计要求：
-1. sharedContext 只保存整节确需复用的学习用途、稳定事实、术语和边界。只有确需贯穿案例时才填写案例字段；不同知识适合不同例子时可以自然更换。项目情境不能自动变成每页案例。
+1. sharedContext 只保存整节确需复用的学习用途、稳定事实、术语和边界。learningPurpose 说明知识本身的理解或应用价值，不默认改写为完成最终成果。只有确需贯穿案例时才填写案例字段；不同知识适合不同例子时可以自然更换。项目情境不能自动变成每页案例，单页 taskConnection 允许的局部任务情境也不得升级为整节共享案例。
 2. explanation 写清本页拥有的核心含义、首次出现术语、关系、机制、推理步骤、理解障碍和应用条件。细致程度以补足理解为准，不以字数、案例数或段落数衡量。
 3. teachingPlan 继承 entryPoint、introduces、deepens、references 和 visualRelationship。entryPoint 要保留具体对象、需要注意的特征及其通向新知识的理由；introduces 负责首次建立认识，deepens 增加关系、机制或应用，references 只作最短承接。reasoningSteps 按实际过程展开，数量不限。course-opening 页的 visibleContent 应优先呈现需要观察、回想或比较的实际对象，不能只放课程标题、目标或抽象定义。
-4. examples 先按当前难点的解释力、实际学习者的熟悉度和学段适切性选择。类比、对比、示范或独立案例均可，不要求连接项目任务或后续活动；无需例子时返回空数组，不为每页凑数。跨页复用案例时保持事实、术语和数量一致。
+4. examples 先按当前难点的解释力、实际学习者的熟悉度和学段适切性选择。类比、对比、示范或独立案例均可，不要求连接项目任务或后续活动；无需例子时返回空数组，不为每页凑数。跨页复用案例时保持事实、术语和数量一致。teachingPlan.taskConnection 是硬边界，必须原样继承，不得由本步骤把 none 提升为项目关联。
 5. conditions 只写会改变理解、推导或应用的条件、边界和常见错误。无新增必要内容时返回空数组。
-6. visibleContent 只列学生必须看见、观察、比较或定位的对象；visualRelationship 说明页面要表达的实际关系和阅读顺序。narrationFocus 保存需要口头讲开的原因、中间过程和关键选择，不与画面逐字重复。
-7. 页面表现形式由关系决定：差异可对照，过程可用连续状态或流程，因果和系统可用关系图，数量差异可用图表，场景可用插图或示意，推导可分步展开，少量命题可用简洁文字。这里只表达意图，不指定统一版式。
+6. visibleContent 只列学生必须看见、观察、比较或定位的对象；visualRelationship 说明页面要表达的实际关系、阅读顺序、preferredForm 及其 rationale。narrationFocus 保存需要口头讲开的原因、中间过程和关键选择，不与画面逐字重复。
+7. 页面表现形式由关系决定：需要按共同维度逐项查读的差异可优先 table；具有完整数值且重点是趋势、比例或量级时可优先 chart；具体外观、人物、物体或空间状态本身是观察依据且图片可用时可优先 illustration；过程、因果、系统和概念关系可用 diagram；少量核心命题可用 text；两种形式确实互补时才用 mixed。preferredForm 是可调整的教学偏好，不是固定版式；整节没有展示形式配额，不为追求丰富而制造数据、添加装饰图片或把简洁内容表格化。
 8. 已有 pageTask 原样继承；没有时只在学习活动确实帮助理解时补充。独立练习的画面只给作答材料，答案及反馈放在作答之后的口头说明。
 9. assessmentFocus 说明学生应能解释、推导、操作或应用什么，以及合格回答需要的理由。只能检测本节实际解释过的内容。
 10. evidenceQuotes 只能逐字摘录权威资料；没有可核对原文时返回空数组。构造案例、类比、图表、示意数据和来源待核实主张写入 reviewItems，记录 kind、provenance、content、teachingPurpose 和已有 source；示意数据还要记录 values（原始数值、单位和含义）与 comparisonObjects（比较对象）。后台字段不得进入学生页面或讲稿。
@@ -368,7 +420,7 @@ ${selected.text || '未提供额外资料；只能使用已确认页面中的事
 12. 返回前静默检查：每页新增认识是否有充分解释支撑，页面是否提供跟随推理所需的可见对象，口头重点是否补足“为什么”和“如何发生”，相邻页面是否真正增加认识。发现缺口直接修正当前 JSON，不输出检查过程。
 
 返回结构：
-{"sharedContext":{"learningPurpose":"自然说明用途","caseId":"稳定ID或空字符串","caseFacts":[],"fixedWording":[],"stableTerms":[],"conceptBoundaries":[]},"pages":[{"outlineId":"原页面 ID","pageTask":{"learnerAction":"学习动作","newContribution":"本页新增认识","reasoningFocus":"理由焦点","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"explanation":"完整解释","examples":["完整推演"],"conditions":["条件或误区辨析"],"assessmentFocus":"理解与应用检验重点","evidenceQuotes":["资料中的逐字原句"],"reviewItems":[{"kind":"illustrative-data|constructed-example|unverified-claim","provenance":"derived|general-knowledge|constructed|unverified","content":"待确认内容","teachingPurpose":"教学用途","source":"已有来源或空字符串"}],"teachingPlan":{"purpose":"本页职责","priorKnowledge":"已有基础和已讲内容","newContent":"新增认识","learnerQuestion":"理解难点，可为空","reasoningSteps":[],"takeaway":"理解结果","visibleContent":[],"narrationFocus":[],"entryPoint":{"kind":"familiar-experience|concrete-observation|problem|direct-explanation|continuation","object":"具体对象、经验、问题或承接命题","bridge":"怎样自然引到新知识"},"introduces":[],"deepens":[],"references":[],"visualRelationship":{"kind":"comparison|process|causal|system|quantitative|sequence|spatial|statement","description":"画面帮助看清的关系","readingOrder":[]}}}]}`,
+{"sharedContext":{"learningPurpose":"自然说明用途","caseId":"稳定ID或空字符串","caseFacts":[],"fixedWording":[],"stableTerms":[],"conceptBoundaries":[]},"pages":[{"outlineId":"原页面 ID","pageTask":{"learnerAction":"学习动作","newContribution":"本页新增认识","reasoningFocus":"理由焦点","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"explanation":"完整解释","examples":["完整推演"],"conditions":["条件或误区辨析"],"assessmentFocus":"理解与应用检验重点","evidenceQuotes":["资料中的逐字原句"],"reviewItems":[{"kind":"illustrative-data|constructed-example|unverified-claim","provenance":"derived|general-knowledge|constructed|unverified","content":"待确认内容","teachingPurpose":"教学用途","source":"已有来源或空字符串"}],"teachingPlan":{"purpose":"本页职责","priorKnowledge":"已有基础和已讲内容","newContent":"新增认识","learnerQuestion":"理解难点，可为空","reasoningSteps":[],"takeaway":"理解结果","visibleContent":[],"narrationFocus":[],"taskConnection":{"mode":"none|helpful-context|direct-application","rationale":"继承蓝图的内部取舍依据"},"entryPoint":{"kind":"familiar-experience|concrete-observation|problem|direct-explanation|continuation","object":"具体对象、经验、问题或承接命题","bridge":"怎样自然引到新知识"},"introduces":[],"deepens":[],"references":[],"visualRelationship":{"kind":"comparison|process|causal|system|quantitative|sequence|spatial|statement","description":"画面帮助看清的关系","readingOrder":[],"preferredForm":"text|table|chart|diagram|illustration|mixed","rationale":"为什么该形式最便于当前学习者理解"}}}]}`,
     selectedSource: selected.text,
   };
 }
@@ -508,8 +560,8 @@ export type TeachingEnhancementPhase = 'content' | 'actions';
 
 function phaseRequirement(phase: TeachingEnhancementPhase): string {
   return phase === 'content'
-    ? 'Use teachingPlan.visibleContent for what learners must inspect, compare, locate, or retain while listening. Use teachingPlan.visualRelationship to choose a fitting visual structure; it is an intended meaning, not a fixed layout template. Keep introduces/deepens/references as page ownership boundaries. Show enough evidence or intermediate relation for the page to support its conclusion, but leave oral explanation in explanationFocus. Preserve stable wording, examples, and quantities across the section. Constructed examples and illustrative data are allowed when the shared design supplies them; never invent a research name, institution, or citation. Keep required objects readable with non-overlapping elements and remove decorative copy before shrinking teaching content. Never print internal IDs, provenance, source status, review items, or design field names.'
-    : 'Use teachingPlan to complete this page\'s introduced and deepened explanation nodes. Referenced nodes get only the brief bridge needed. Explain unfamiliar terms on first use, make causal, procedural, comparative, or inferential links explicit, and state how the conclusion follows. Choose examples and analogies only when they help this content and learner; do not force one case or one routine across the course. Keep shared facts and quantities consistent. Do not repeat prior explanations or read planning fields aloud. Speak like a teacher addressing this class: directly and naturally, without announcing page structure or saying “这一页／本页／上一页／下一页／PPT／课件／核心观点／核心命题／资料1”.';
+    ? 'Use teachingPlan.visibleContent for what learners must inspect, compare, locate, or retain while listening. Use teachingPlan.visualRelationship to choose a fitting native representation; preferredForm and rationale are pedagogical preferences, not a fixed layout or a format quota. There is no format-variety quota. Use a table when aligned dimensions and exact lookup matter, a chart when complete supplied values reveal a quantitative pattern, an illustration when visible appearance or spatial context is evidence and a valid image ID exists, an editable diagram for process or relations, and concise text when it is clearest. Mixed forms are useful only when each contributes different evidence. Do not invent values, media IDs, or extra claims to satisfy variety. When the shared design requests an image and a valid assigned/generated image is available, make it an observable teaching object rather than decoration. Keep introduces/deepens/references as page ownership boundaries. Respect teachingPlan.taskConnection as a hard gate: when mode is none, do not add the driving question, final artifact, project vocabulary, or a project-shaped example. Show enough evidence or intermediate relation for the page to support its conclusion, but leave oral explanation in explanationFocus. Preserve stable wording, examples, units, and quantities across the section. Constructed examples and illustrative data are allowed only when the shared design supplies and records them; never invent a research name, institution, or citation. Keep required objects readable with non-overlapping elements and remove decorative copy before shrinking teaching content. Never print internal IDs, provenance, source status, review items, or design field names.'
+    : 'Use teachingPlan to complete this page\'s introduced and deepened explanation nodes. Referenced nodes get only the brief bridge needed. Respect teachingPlan.taskConnection as a hard gate: mode none forbids adding the project or final artifact; helpful-context permits only the locally useful shared context; direct-application permits actual transfer work. Explain unfamiliar terms on first use, make causal, procedural, comparative, or inferential links explicit, and state how the conclusion follows. Choose examples and analogies only when they help this content and learner; do not force one case or one routine across the course. Keep shared facts and quantities consistent. Do not repeat prior explanations or read planning fields aloud. Speak like a teacher addressing this class: directly and naturally, without announcing page structure or saying “这一页／本页／上一页／下一页／PPT／课件／核心观点／核心命题／资料1”.';
 }
 
 export function formatTeachingEnhancementBlock(

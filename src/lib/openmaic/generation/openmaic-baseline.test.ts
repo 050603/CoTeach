@@ -13,9 +13,9 @@ import {
   OPENMAIC_GENERATION_BASELINE,
 } from './openmaic-baseline';
 
-const UNCHANGED_UPSTREAM_PROMPT_HASHES = {
-  'slide-content/system.md': 'fac82e884070e71cf82ffca67fb1ee1c861e3cd90d4f9816c7085c428180aebd',
-  'slide-content/user.md': '7d7486fed0d897a85273794359cd17383d7b9f2dbca7481134a1519687368c99',
+const PINNED_PROMPT_HASHES = {
+  'slide-content/system.md': '35770a73bee0459c0937f41e1240dedc48d40a9de542345c1a8f1ad129aa89b8',
+  'slide-content/user.md': '232b0a611ae689daf83bcdf1211646d55e97c06d8c9d2d1f888617fcff79db81',
   'slide-actions/user.md': '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
   'requirements-to-outlines/system.md': '813240c132acfe63007ddcf3dd764b47b5ad1d7b5005d47361ede3aa42614c65',
   'requirements-to-outlines/user.md': '79fe5ce9a64dc63f174bd1c99dd3e4f1feb2a00e2797edc2a11abc5ac2d6f9ff',
@@ -47,13 +47,13 @@ const outline: SceneOutline = {
 };
 
 describe('pinned OpenMAIC generation baseline', () => {
-  it('keeps five unrelated prompts pinned and records the in-place action-prompt improvement', async () => {
+  it('pins the adaptive content prompts and records the in-place action-prompt improvement', async () => {
     expect(OPENMAIC_GENERATION_BASELINE.release).toBe('v1.0.3');
     expect(OPENMAIC_GENERATION_BASELINE.releaseCommit).toBe(
       'e693e11a81644f84c258df73dbda378643520a62',
     );
     expect(OPENMAIC_GENERATION_BASELINE.version).toBe('0.3.7');
-    for (const [file, expected] of Object.entries(UNCHANGED_UPSTREAM_PROMPT_HASHES)) {
+    for (const [file, expected] of Object.entries(PINNED_PROMPT_HASHES)) {
       const body = await readFile(path.join(
         process.cwd(), 'packages', '@openmaic', 'generation', 'templates', file,
       ));
@@ -132,15 +132,35 @@ describe('pinned OpenMAIC generation baseline', () => {
       type: 'text', left: 60, top: 60, width: 800, height: 80,
       content: '<p><span style="font-size:32px">随机抽样</span></p>',
     }] }));
-    const result = await generateOpenMaicBaselineContent(outline, ai);
+    const result = await generateOpenMaicBaselineContent({
+      ...outline,
+      teachingBrief: {
+        ...outline.teachingBrief!,
+        teachingPlan: {
+          purpose: '比较两种抽样结果', priorKnowledge: '会读百分比', newContent: '样本构成会影响估计结果',
+          learnerQuestion: '两组比例差异怎样看得更清楚', reasoningSteps: ['对齐两组类别', '比较比例差异'],
+          takeaway: '随机抽样用于减少选择偏差', visibleContent: ['甲组 42%', '乙组 68%'],
+          narrationFocus: ['解释柱高差异对应的实际含义'],
+          visualRelationship: {
+            kind: 'quantitative', description: '比较两组比例的量级差异', readingOrder: ['甲组', '乙组', '差异'],
+            preferredForm: 'chart', rationale: '共同零点的柱高便于比较量级',
+          },
+        },
+      },
+    }, ai);
     expect(result && 'elements' in result && result.elements).toHaveLength(1);
     expect(ai).toHaveBeenCalledOnce();
     const [system, user] = ai.mock.calls[0];
     expect(system).toContain('# Slide Content Generator');
+    expect(system).toContain('Choose the representation from the teaching need');
+    expect(system).toContain('There is no requirement to use a certain number of formats');
     expect(system).toContain('CoTeach teaching enhancement adapter');
     expect(system).not.toContain('使用随机数表选择样本');
     expect(user).toContain('使用随机数表选择样本');
     expect(user).toContain('样本来自明确界定的目标总体');
+    expect(user).toContain('"preferredForm":"chart"');
+    expect(user).toContain('preferredForm and rationale are pedagogical preferences');
+    expect(user).toContain('Do not invent values, media IDs, or extra claims to satisfy variety');
     expect(`${system}\n${user}`).not.toContain('Semantic page and narration budget');
     expect(`${system}\n${user}`).not.toContain('Course visual system');
     expect(`${system}\n${user}`).not.toContain('spatial budget');

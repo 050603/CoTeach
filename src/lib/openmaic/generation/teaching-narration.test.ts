@@ -26,6 +26,7 @@ function outline(): SceneOutline {
         caseUse: 'introduce', changedConditions: [], preservedConditions: [] },
       teachingPlan: { purpose: '解释核验', priorKnowledge: '会搜索', newContent: '按相关记录核验', learnerQuestion: '肯定的语气可信吗',
         reasoningSteps: ['明确说法', '查相关记录'], takeaway: '有相关依据再采用', visibleContent: ['语气肯定 ≠ 事实正确'], narrationFocus: ['解释为什么查证'],
+        taskConnection: { mode: 'none', rationale: '先用独立核验例子讲清证据关系。' },
         entryPoint: { kind: 'familiar-experience', object: '在班级小报中看到一个语气肯定的年份', bridge: '从是否敢直接采用，引出核验依据' } },
       understandingCriteria: { goals: ['能依据新说法选择核验记录'], answerEssentials: ['记录必须与说法直接相关'],
         misconceptions: ['语气肯定等于事实正确'], supportingUnitIds: ['unit-a'] },
@@ -84,6 +85,7 @@ describe('independent first-pass teaching narration', () => {
     expect(aiCall.mock.calls[0][0]).toContain('introduces, deepens, and references as page ownership');
     expect(aiCall.mock.calls[0][0]).toContain('actual relationship on the slide');
     expect(aiCall.mock.calls[0][0]).toContain('local explanatory value, learner familiarity');
+    expect(aiCall.mock.calls[0][0]).toContain('teachingPlan.taskConnection as a hard page boundary');
     expect(aiCall.mock.calls[0][0]).toContain('standalone AI resource must feel complete');
     expect(aiCall.mock.calls[0][0]).toContain('synthesize what the learner can now explain or do');
     expect(aiCall.mock.calls[0][0]).toContain('温暖、清楚地逐步解释');

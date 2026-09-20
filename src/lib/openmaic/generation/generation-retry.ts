@@ -120,9 +120,9 @@ function messageFrom(value: unknown): string {
 
 function retryableByMessage(value: unknown): boolean {
   const message = messageFrom(value);
-  return /rate limit|too many requests|timeout|timed out|调用超时|请求超时|fetch failed|network|InternalError|batching backend|temporar(?:y|ily)|service unavailable|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EPIPE|socket hang up/i.test(
+  return /rate limit|too many requests|timeout|timed out|调用超时|请求超时|fetch failed|network|InternalError|batching backend|temporar(?:y|ily)|service unavailable|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EPIPE|socket hang up|premature close|stream (?:was )?terminated/i.test(
     message,
-  );
+  ) || /^terminated$/i.test(message.trim());
 }
 
 function unwrapErrors(value: unknown): unknown[] {
@@ -216,6 +216,15 @@ export function generationRetryAfterMs(error: unknown, seen = new Set<unknown>()
 
   const direct = numberField(error, 'retryAfterMs') ?? numberField(error, 'retry_after_ms');
   if (direct !== undefined && direct >= 0) return direct;
+
+  // A loopback outbound proxy can disappear briefly while its tunnel is
+  // reconciled. Retrying after the ordinary ~1s backoff exhausts both course
+  // attempts before the listener returns. An abruptly terminated stream is
+  // the same transport symptom and should receive the same recovery window.
+  const message = messageFrom(error).trim();
+  if (/ECONNREFUSED.*(?:127\.0\.0\.1|localhost)|(?:127\.0\.0\.1|localhost).*ECONNREFUSED/i.test(message)
+    || /^terminated$/i.test(message)
+    || /premature close|stream (?:was )?terminated/i.test(message)) return 10_000;
 
   // AI SDK API errors expose responseHeaders; fetch adapters may keep Headers.
   for (const headers of [error.responseHeaders, error.headers, isRecord(error.response) ? error.response.headers : undefined]) {

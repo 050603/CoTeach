@@ -17,21 +17,44 @@ export type SlideVisualPlan = {
   readingPath: string;
 };
 
+function compositionForTeachingRelationship(outline: SceneOutline): SlideComposition | undefined {
+  const relationship = outline.teachingBrief?.teachingPlan?.visualRelationship;
+  if (!relationship) return undefined;
+  if (relationship.preferredForm === 'chart') return 'evidence';
+  if (relationship.preferredForm === 'illustration') return 'annotated-example';
+  if (relationship.preferredForm === 'text') return 'concept-focus';
+  if (relationship.preferredForm === 'table' && relationship.kind === 'comparison') return 'comparison';
+  switch (relationship.kind) {
+    case 'comparison': return 'comparison';
+    case 'process':
+    case 'sequence': return 'process';
+    case 'causal':
+    case 'system': return 'relationship';
+    case 'quantitative': return 'evidence';
+    case 'spatial': return 'annotated-example';
+    case 'statement': return 'concept-focus';
+  }
+}
 
 export function fallbackSlideVisualPlan(outline: SceneOutline): SlideVisualPlan {
   const content = `${outline.title} ${outline.teachingObjective ?? ''} ${outline.description} ${(outline.keyPoints ?? []).join(' ')}`;
-  const composition: SlideComposition = /对比|比较|区别|差异|compare|contrast/i.test(content) ? 'comparison'
+  const inferredComposition: SlideComposition = /对比|比较|区别|差异|compare|contrast/i.test(content) ? 'comparison'
     : /步骤|流程|先后|阶段|过程|process|sequence/i.test(content) ? 'process'
       : /推导|计算|求解|演算|worked|calculate/i.test(content) ? 'worked-example'
         : /层级|分类|组成|体系|hierarchy|taxonomy/i.test(content) ? 'hierarchy'
           : /因果|关系|依赖|机制|relationship|causal/i.test(content) ? 'relationship'
             : /数据|统计|证据|百分|evidence|statistics/i.test(content) ? 'evidence'
               : /案例|示例|情境|example|scenario/i.test(content) ? 'annotated-example' : 'concept-focus';
+  const relationship = outline.teachingBrief?.teachingPlan?.visualRelationship;
+  const composition = compositionForTeachingRelationship(outline) ?? inferredComposition;
   return {
     schemaVersion: 1, composition,
     density: (outline.keyPoints?.length ?? 0) <= 2 ? 'focused' : 'regular',
-    coreMessage: outline.teachingObjective || outline.description || outline.title,
-    visualEvidence: [...(outline.keyPoints ?? [])], readingPath: DIRECTIONS[composition],
+    coreMessage: relationship?.description || outline.teachingObjective || outline.description || outline.title,
+    visualEvidence: [...(outline.keyPoints ?? [])],
+    readingPath: relationship?.readingOrder?.length
+      ? relationship.readingOrder.join(' → ')
+      : DIRECTIONS[composition],
   };
 }
 
@@ -110,10 +133,14 @@ Accuracy: preserve qualifications and boundary conditions. Distinguish illustrat
 
 export function formatSlideVisualPlan(outline: SceneOutline): string {
   const plan = outline.visualPlan ?? fallbackSlideVisualPlan(outline);
+  const relationship = outline.teachingBrief?.teachingPlan?.visualRelationship;
+  const representationPreference = relationship?.preferredForm
+    ? `Preferred native representation: ${relationship.preferredForm}${relationship.rationale ? ` (${relationship.rationale})` : ''}. This is a pedagogical preference, not a format quota or fixed template. Use an equivalent native form when the actual content or available media makes it clearer; never invent data or media to satisfy the preference.`
+    : 'Choose the simplest native representation that makes the intended relationship easier to inspect. There is no format-variety quota.';
   return [
     '## Page visual argument', `Composition: ${plan.composition}; density: ${plan.density}`,
     `Core message: ${plan.coreMessage}`, `Required visible evidence:\n${plan.visualEvidence.map((item) => `- ${item}`).join('\n')}`,
-    `Reading path: ${plan.readingPath}`, DIRECTIONS[plan.composition], TEACHING_NATIVE_EXAMPLES[plan.composition],
+    `Reading path: ${plan.readingPath}`, representationPreference, DIRECTIONS[plan.composition], TEACHING_NATIVE_EXAMPLES[plan.composition],
     plan.density === 'focused'
       ? 'SPARSE PAGE: use a larger focal model and 28–36px body type where practical. Balance the composition around y=300. Keep intentional whitespace on all sides; do not leave the lower half accidentally unused or add filler.'
       : 'Use the full safe body area (x=60–940, y=145–480) with a clear focal point. Body labels should normally be 22–28px. Separate explanations into visual relationships, not paragraph containers.',

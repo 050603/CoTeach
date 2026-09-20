@@ -24,6 +24,11 @@ describe('instructional presentation prompt contract', () => {
     expect(prompt?.system).toContain('one clear visual hierarchy');
     expect(prompt?.system).toContain('restrained course-wide palette');
     expect(prompt?.system).toContain('one strong visual idea');
+    expect(prompt?.system).toContain('Choose the representation from the teaching need');
+    expect(prompt?.system).toContain('Use a table when learners need to compare shared dimensions');
+    expect(prompt?.system).toContain('Use a chart only when complete supplied data');
+    expect(prompt?.system).toContain('There is no format-variety quota');
+    expect(prompt?.system).toContain('pedagogical preference rather than a fixed template');
     expect(prompt?.system).toContain('OpenMAIC baseline geometry contract');
     expect(prompt?.system).toContain("OpenMAIC's 75% safe-utilization rule");
     expect(prompt?.system).toContain('left x=60, width=430; right x=510, width=430');

@@ -52,7 +52,7 @@ describe("managed classroom-generation recovery", () => {
       isRetryable: false,
     });
     const teacherMessage = formatPersistedCourseGenerationErrorForTeacher(persisted);
-    expect(teacherMessage).toContain("已经生成的页面均已保留");
+    expect(teacherMessage).toContain("已经完成的阶段结果均已保留");
     expect(teacherMessage).not.toContain("Inference engine");
   });
 
@@ -72,6 +72,20 @@ describe("managed classroom-generation recovery", () => {
     expect(message).toContain("等待模型完整输出时超时");
     expect(message).toContain("可从断点继续生成");
     expect(message).not.toContain("连续多次");
+  });
+
+  it("reports a teaching-design transport failure at its real stage", () => {
+    const error = new Error(
+      "教学增强未完整生成，未进入页面制作：教学增强小节生成失败（Cannot connect to API: connect ECONNREFUSED 127.0.0.1:9999）",
+    );
+    const message = formatPersistedCourseGenerationErrorForTeacher(
+      serializeCourseGenerationFailure(error),
+    );
+
+    expect(message).toContain("分小节教学设计阶段");
+    expect(message).toContain("尚未进入 PPT 页面制作");
+    expect(message).toContain("请点击继续生成");
+    expect(message).not.toContain("最后的课堂页面");
   });
 
   it("keeps teaching-tool omissions terminal", () => {
@@ -97,7 +111,7 @@ describe("managed classroom-generation recovery", () => {
 
   it("does not expose raw model-serving diagnostics to teachers", () => {
     const message = formatCourseGenerationErrorForTeacher(inferenceAbort);
-    expect(message).toContain("已经生成的页面均已保留");
+    expect(message).toContain("已经完成的阶段结果均已保留");
     expect(message).not.toContain("Inference engine");
   });
 

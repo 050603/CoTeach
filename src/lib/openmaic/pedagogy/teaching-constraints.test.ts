@@ -63,5 +63,7 @@ describe('teaching constraints', () => {
     expect(text).toContain('理解分类的直观含义');
     expect(text).toContain('抽象算法需要图示支架');
     expect(text).toContain('使用证据比较两种文本分类方法');
+    expect(text).toContain('First choose the example, activity, and visual relationship');
+    expect(text).toContain('taskAssociation is an optional later use');
   });
 });

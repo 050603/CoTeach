@@ -83,7 +83,7 @@ describe('inquiry conclusion evidence review', () => {
     [grounding(pendingConclusion), grounding(pendingConclusion)]])('rejects missing, null or duplicate conclusion coverage: %j', async (entries) => {
     const ai = vi.fn().mockResolvedValue(response(entries));
     await expect(reviewSlideInstructionalContent(outline, elements(pendingConclusion), '', ai))
-      .rejects.toMatchObject({ isRetryable: true, message: expect.stringContaining('未逐项核查实验结论') });
+      .rejects.toMatchObject({ isRetryable: false, message: expect.stringContaining('未逐项核查实验结论') });
   });
 
   it('retains the existing review contract for pages without all three inquiry labels', async () => {

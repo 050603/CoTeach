@@ -37,8 +37,10 @@ describe('media prompt condition wiring', () => {
 
   test('slide content generation exposes only media element rules backed by outline media', async () => {
     let capturedPrompt = '';
+    let capturedUser = '';
     const aiCall: AICallFn = async (system, user) => {
       capturedPrompt = `${system}\n${user}`;
+      capturedUser = user;
       return JSON.stringify({
         background: { type: 'solid', color: '#ffffff' },
         elements: [
@@ -83,6 +85,12 @@ describe('media prompt condition wiring', () => {
     expect(capturedPrompt).not.toContain('"src": "gen_vid_1"');
     expect(capturedPrompt).not.toContain('ImageElement');
     expect(capturedPrompt).not.toContain('gen_img_');
+    expect(capturedPrompt).toContain('Choose the representation from the teaching need');
+    expect(capturedPrompt).toContain('Use a table when learners need to compare the same dimensions');
+    expect(capturedPrompt).toContain('Use a chart only when complete supplied data');
+    expect(capturedPrompt).toContain('There is no requirement to use a certain number of formats');
+    expect(capturedPrompt).toContain('Do not copy a fixed title-plus-bullets composition');
+    expect(capturedUser).not.toContain('Point One');
     expect(capturedPrompt).not.toContain('{{');
   });
 });

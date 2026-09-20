@@ -173,16 +173,21 @@ export function formatCourseGenerationErrorForTeacher(error: unknown): string {
   ) {
     return message;
   }
+  if (/教学增强未完整生成|教学增强小节生成失败|分小节教学设计/.test(message)) {
+    return isRetryableGenerationError(error)
+      ? "AI 课程在分小节教学设计阶段与模型服务的连接中断，尚未进入 PPT 页面制作；已完成的设计检查点均已保留，请点击继续生成。"
+      : "分小节教学设计未能完整生成，尚未进入 PPT 页面制作；已完成的设计检查点均已保留，请点击继续生成。";
+  }
   if (
     name === "TimeoutError"
     || /Course model (?:request|stream).*(?:timed out|maximum duration)/i.test(message)
   ) {
-    return "AI 页面生成在等待模型完整输出时超时；已经生成的页面均已保留，可从断点继续生成。";
+    return "AI 课程生成在等待模型完整输出时超时；已经完成的阶段结果均已保留，可从断点继续生成。";
   }
   if (isRetryableGenerationError(error)) {
-    return "AI 页面生成服务连续多次未能完成最后的课堂页面；已经生成的页面均已保留，请稍后继续。";
+    return "AI 课程生成服务连续多次未能完成当前生成阶段；已经完成的阶段结果均已保留，请稍后继续。";
   }
-  return "课程生成遇到无法继续的系统错误；已经生成的页面均已保留，请稍后继续。";
+  return "课程生成遇到无法继续的系统错误；已经完成的阶段结果均已保留，请稍后继续。";
 }
 
 export function formatPersistedCourseGenerationErrorForTeacher(value: string): string {

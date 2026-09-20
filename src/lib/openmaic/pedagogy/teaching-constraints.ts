@@ -222,6 +222,7 @@ export function formatTeachingConstraintsForPrompt(constraints?: TeachingConstra
     `Terminology rule: ${constraints.terminologyRule}`,
     `Abstraction/depth rule: ${constraints.abstractionRule}`,
     `Example rule: ${constraints.exampleRule}`,
+    'Task-connection rule: First choose the example, activity, and visual relationship that best explain the current knowledge. Connect the driving question or final artifact only when it shares the relevant object, relation, or operation and reduces explanation burden, or when this page is explicitly a transfer task. A source taskAssociation is an optional later use, never a requirement to make every page project-shaped.',
     `Progression rule: ${constraints.progressionRule}`,
     `Assessment rule: ${constraints.assessmentRule}`,
     'Hard rule: A concept outside the confirmed boundary may appear only as a brief analogy or context. It must be explained before use and must never become a hidden prerequisite, assessment target, or tangential extension.',
@@ -262,7 +263,7 @@ export function formatTeachingConstraintsForChinesePrompt(constraints?: Teaching
     allowed,
     '术语与深度：专业术语首次出现时必须用中文准确解释；先从具体例子进入机制，再进行有限应用，不得把未列出的专业知识当作前置条件。',
     '内容组织：根据知识类型和当前理解障碍选择进入方式与推进顺序。抽象或陌生内容通常先建立学生能感知的对象、现象或问题，再命名并解释；已经熟悉或适合直接定义的内容可以直接进入。不得把同一套讲授步骤复制到每页，也不得仅为填满课时而增加难度或重复内容。',
-    '案例选择：案例首先服务当前知识点的理解，优先使用实际学习者在其学段、专业和生活经验中能够理解的对象。与项目任务的关联只在确实帮助理解或迁移时使用，不能为了贯穿任务而放弃更清楚、更熟悉的例子。资料中出现的儿童、教师、客户或其他人物是案例角色，不自动等于实际学习者。',
+    '案例与任务连接：先独立判断什么例子、活动和视觉关系最能讲清当前知识，再判断是否连接最终任务。只有项目情境与当前知识共享同一关键对象、关系或操作且能减少理解负担，或本页目标本身就是迁移应用时才连接；否则保持独立。不得为了贯穿驱动问题或成果物而放弃更清楚、更熟悉的例子，也不得因资料中的“任务关联”或成果中出现某术语就强行匹配。资料中出现的儿童、教师、客户或其他人物是案例角色，不自动等于实际学习者。',
     '评价边界：只评价当前课程目标和已确认知识点；空值表示未知或未填写，不表示学生不会、内容不存在或任务已经完成。',
   ].filter(Boolean).join('\n');
 }

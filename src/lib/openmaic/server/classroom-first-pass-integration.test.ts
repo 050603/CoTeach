@@ -64,6 +64,8 @@ vi.mock('../generation/teaching-narration', async (original) => ({
 
 import { generateClassroom } from './classroom-generation';
 import { fingerprintSceneOutline, restoreSceneCheckpoint, type PageCheckpointSnapshot } from '@/lib/course-generation/page-checkpoints';
+import { TEACHING_ENHANCEMENT_VERSION } from '../generation/teaching-enhancement';
+import { TEACHING_NARRATION_VERSION } from '../generation/teaching-narration';
 
 const teachingPlan = {
   purpose: '理解证据与结论的关系', priorKnowledge: '学生知道资料可被引用',
@@ -71,6 +73,7 @@ const teachingPlan = {
   reasoningSteps: ['辨识主张', '追溯来源', '按证据范围判断'],
   visibleContent: ['首遍证据'], narrationFocus: ['解释为何需要独立来源'],
   takeaway: '表达流畅不能证明事实成立',
+  taskConnection: { mode: 'none' as const, rationale: '独立核验案例更直接，不需要连接最终任务。' },
 };
 const sharedContext = {
   learningPurpose: '判断一个结论能否由证据支持', caseId: 'evidence-check',
@@ -222,7 +225,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       audience: 'student',
       teachingBrief: {
         schemaVersion: 1,
-        designVersion: 'shared-page-contract-v13-complete-lesson-arc',
+        designVersion: TEACHING_ENHANCEMENT_VERSION,
         sharedContext,
         teachingPlan,
         explanation: '证据支持结论，语言流畅不能证明事实正确。',
@@ -265,7 +268,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.ai.mock.calls.some(([system]) => system.includes('中文课堂讲稿编辑'))).toBe(false);
     expect(result.scenes[0]?.id).not.toBe('legacy-first-draft');
-    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v17-section-assessment-modes');
+    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v18-adaptive-visual-forms');
   });
 
   it('restores a structurally complete slide without running layout review', async () => {
@@ -332,7 +335,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         },
       },
       actions: [{ id: 'saved-speech', type: 'speech', text: '已保存讲稿。' }],
-      narrationRevision: 'course-first-pass-v17-section-assessment-modes',
+      narrationRevision: 'course-first-pass-v18-adaptive-visual-forms',
       createdAt: 1,
       updatedAt: 1,
     } as unknown as Scene;
@@ -424,7 +427,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     const knowledgeOutline: SceneOutline = {
       ...outline, generationPurpose: 'knowledge-teaching',
       teachingBrief: {
-        schemaVersion: 1, designVersion: 'shared-page-contract-v13-complete-lesson-arc', sharedContext, teachingPlan,
+        schemaVersion: 1, designVersion: TEACHING_ENHANCEMENT_VERSION, sharedContext, teachingPlan,
         explanation: '证据支持结论。', examples: [], conditions: [], evidence: [], assessmentFocus: '说明判断理由。',
       },
     };
@@ -452,7 +455,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       generationPurpose: 'knowledge-teaching',
       teachingBrief: {
         schemaVersion: 1,
-        designVersion: 'shared-page-contract-v13-complete-lesson-arc',
+        designVersion: TEACHING_ENHANCEMENT_VERSION,
         sharedContext,
         teachingPlan,
         explanation: '语言流畅不能单独证明事实正确，需要核对独立来源。',
@@ -583,11 +586,11 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(result.scenes[0]?.actions).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'speech', text: '短讲稿。' }),
     ]));
-    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v17-section-assessment-modes');
-    expect(result.qualityReport.teachingEnhancementVersion).toBe('shared-page-contract-v13-complete-lesson-arc');
-    expect(result.qualityReport.narrationEnhancementVersion).toBe('section-continuous-narration-v15-complete-lesson-arc');
+    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v18-adaptive-visual-forms');
+    expect(result.qualityReport.teachingEnhancementVersion).toBe(TEACHING_ENHANCEMENT_VERSION);
+    expect(result.qualityReport.narrationEnhancementVersion).toBe(TEACHING_NARRATION_VERSION);
     expect(result.qualityReport.reviewMode).toBeUndefined();
-    expect(result.qualityReport.reviewPolicyVersion).toBe('course-first-pass-v17-section-assessment-modes');
+    expect(result.qualityReport.reviewPolicyVersion).toBe('course-first-pass-v18-adaptive-visual-forms');
   });
 
   it('preserves the initial playable speech without a style review pass', async () => {

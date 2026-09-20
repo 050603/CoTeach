@@ -30,7 +30,15 @@ const teachingPlan = {
   learnerQuestion: '多个网页为什么不一定是多份证据', reasoningSteps: ['检查是否转载同一来源'],
   takeaway: '判断来源独立性，而不是只数网页', visibleContent: ['转载来源之间的关系'],
   narrationFocus: ['为什么同源转载不能相互证实'], introduces: ['node-1'], deepens: [], references: [],
+  taskConnection: { mode: 'none' as const, rationale: '独立的校史核验例子比绑定最终项目更直接。' },
   entryPoint: { kind: 'familiar-experience' as const, object: '搜索同一校史年份却看到多个相同网页', bridge: '从网页很多是否等于证据很多，引出来源独立性' },
+  visualRelationship: {
+    kind: 'system' as const,
+    description: '显示多个网页回溯到同一原始来源，而不是彼此独立支持。',
+    readingOrder: ['多个网页', '转载关系', '同一原始来源'],
+    preferredForm: 'diagram' as const,
+    rationale: '连线能直接暴露来源并不独立。',
+  },
 };
 const sharedContext = {
   learningPurpose: '判断信息能否作为可靠依据', caseId: 'school-history-check',
@@ -66,6 +74,7 @@ describe('formal course teaching enhancement', () => {
     expect(brief?.examples).toHaveLength(1);
     expect(brief?.conditions).toHaveLength(1);
     expect(brief?.teachingPlan?.entryPoint).toEqual(teachingPlan.entryPoint);
+    expect(brief?.teachingPlan?.visualRelationship).toEqual(teachingPlan.visualRelationship);
     expect(brief?.evidence).toEqual([
       { sourceId: 'course-source', quote: '学生需要核验生成内容的事实与来源' },
     ]);
@@ -264,7 +273,10 @@ describe('formal course teaching enhancement', () => {
     expect(ai.mock.calls[0]?.[0]).not.toContain('解释一');
     expect(ai.mock.calls[0]?.[1]).toContain('解释一');
     expect(ai.mock.calls[0]?.[1]).toContain('Use teachingPlan.visualRelationship');
+    expect(ai.mock.calls[0]?.[1]).toContain('preferredForm and rationale are pedagogical preferences');
+    expect(ai.mock.calls[0]?.[1]).toContain('There is no format-variety quota');
     expect(ai.mock.calls[0]?.[1]).toContain('Keep introduces/deepens/references as page ownership boundaries');
+    expect(ai.mock.calls[0]?.[1]).toContain('Respect teachingPlan.taskConnection as a hard gate');
     expect(ai.mock.calls[0]?.[1]).toContain('Never print internal IDs, provenance, source status, review items');
     expect(ai.mock.calls[1]?.[1]).toContain('解释二');
   });
@@ -279,6 +291,45 @@ describe('formal course teaching enhancement', () => {
     expect(brief.teachingPlan).toEqual(teachingPlan);
     expect(hasCurrentTeachingBrief({ ...page('p1', 0), teachingBrief: brief })).toBe(true);
     expect(hasCurrentTeachingBrief({ ...page('p1', 0), teachingBrief: { ...brief, designVersion: 'old' } })).toBe(false);
+    expect(hasCurrentTeachingBrief({
+      ...page('p1', 0),
+      teachingBrief: { ...brief, teachingPlan: { ...teachingPlan, taskConnection: undefined } },
+    })).toBe(false);
+  });
+
+  it('does not let enhancement promote a blueprint page into project work', () => {
+    const adoptedPage = page('p1', 0);
+    adoptedPage.teachingBrief = {
+      schemaVersion: 1,
+      sharedContext,
+      teachingPlan,
+      explanation: '蓝图已经选择独立案例。',
+      examples: [],
+      conditions: [],
+      evidence: [],
+      assessmentFocus: '说明判断理由。',
+    };
+    const attemptedPlan = {
+      ...teachingPlan,
+      taskConnection: {
+        mode: 'direct-application' as const,
+        rationale: '模型试图把这一页改成最终任务。',
+      },
+    };
+    const brief = normalizeTeachingEnhancement({
+      sharedContext,
+      pages: [{
+        outlineId: 'p1',
+        explanation: '来源关系决定证据是否独立。',
+        examples: [],
+        conditions: [],
+        assessmentFocus: '说明来源关系和判断理由。',
+        teachingPlan: attemptedPlan,
+        evidenceQuotes: [],
+      }],
+    }, [adoptedPage]).get('p1')!;
+
+    expect(brief.teachingPlan?.taskConnection).toEqual(teachingPlan.taskConnection);
   });
   it('includes learner readiness and adjacent-page responsibilities in the authoring prompt', async () => {
     const { deriveTeachingConstraints } = await import('@openmaic/lib/pedagogy/teaching-constraints');
@@ -295,11 +346,16 @@ describe('formal course teaching enhancement', () => {
     expect(prompt.user).toContain('"resourcePosition":"course-opening"');
     expect(prompt.user).toContain('不同知识适合不同例子时可以自然更换');
     expect(prompt.user).toContain('entryPoint、introduces、deepens、references 和 visualRelationship');
+    expect(prompt.user).toContain('整节没有展示形式配额');
+    expect(prompt.user).toContain('"preferredForm":"text|table|chart|diagram|illustration|mixed"');
     expect(prompt.user).toContain('不要求连接项目任务或后续活动');
+    expect(prompt.user).toContain('teachingPlan.taskConnection 是硬边界');
+    expect(prompt.system).toContain('严格继承 teachingPlan.taskConnection');
+    expect(prompt.system).toContain('不得因为资料的 taskAssociation 提到成果制作');
     expect(prompt.system).toContain('实际学习者由学段、专业和 learner profile 决定');
     expect(prompt.system).toContain('即使课程前面存在教师导入阶段');
     expect(prompt.system).toContain('测验后的反馈完成收束');
-    expect(prompt.user).toContain('差异可对照，过程可用连续状态或流程');
+    expect(prompt.user).toContain('需要按共同维度逐项查读的差异可优先 table');
     expect(prompt.user).toContain('后台字段不得进入学生页面或讲稿');
     expect(prompt.user).toContain('每页新增认识是否有充分解释支撑');
     expect(prompt.system).toContain('概念与区别可从熟悉对象');

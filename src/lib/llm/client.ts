@@ -718,7 +718,7 @@ function validateLessonOutline(
     stageKey: "ai-learning",
     title: `知识点补充：${point.name}`,
     objectives: [point.description || point.name],
-    activities: [`通过一个短案例或检查题验证“${point.name}”与项目驱动问题的关系。`],
+    activities: [`通过一个最能体现“${point.name}”关键含义或应用边界的短案例或检查题验证理解；仅在确实有助于理解时连接项目任务。`],
     durationMin: 1,
     parentActivityId: parentId,
     detailKind: "knowledge-explanation",

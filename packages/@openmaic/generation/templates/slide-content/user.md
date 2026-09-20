@@ -37,5 +37,4 @@ Based on the scene information above, generate a complete Canvas/PPT component f
 {{/if}}
 5. All TextElement `height` values must be selected from the quick reference table in the system prompt
 
-**Output Structure Example**:
-{"background":{"type":"solid","color":"#ffffff"},"elements":[{"id":"title_001","type":"text","left":60,"top":50,"width":880,"height":76,"content":"<p style=\"font-size:32px;\"><strong>Title Content</strong></p>","defaultFontName":"","defaultColor":"#333333"},{"id":"content_001","type":"text","left":60,"top":150,"width":880,"height":130,"content":"<p style=\"font-size:18px;\">• Point One</p><p style=\"font-size:18px;\">• Point Two</p><p style=\"font-size:18px;\">• Point Three</p>","defaultFontName":"","defaultColor":"#333333"}]}
+Choose the page's native element types from the teaching need. Do not copy a fixed title-plus-bullets composition. Return one object with `background` and `elements`, using only the element contracts enabled in the system prompt.

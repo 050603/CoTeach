@@ -31,14 +31,20 @@ function visibleTextFragments(elements: readonly PPTElement[]): string[] {
 }
 
 function confirmedDrivingQuestion(sourceContext: string): string | undefined {
-  const marker = '教师已确认的资源包教学内容与时间约束';
-  const markerIndex = sourceContext.indexOf(marker);
+  const markers = ['教师已确认的知识资料与时间约束', '教师已确认的资源包教学内容与时间约束'];
+  const markerIndex = markers.map((marker) => sourceContext.indexOf(marker)).find((index) => index >= 0) ?? -1;
   // The generation input places the confirmed object on one line, before source documents.
-  const candidate = markerIndex >= 0 ? sourceContext.slice(markerIndex).split('\n')[1]?.trim() : sourceContext.trim();
+  const candidate = markerIndex >= 0
+    ? sourceContext.slice(markerIndex).split('\n').find((line) => line.trim().startsWith('{'))?.trim()
+    : sourceContext.trim();
   if (!candidate?.startsWith('{')) return undefined;
   try {
-    const confirmed = JSON.parse(candidate) as { drivingQuestion?: unknown };
-    return typeof confirmed?.drivingQuestion === 'string' ? confirmed.drivingQuestion : undefined;
+    const confirmed = JSON.parse(candidate) as {
+      drivingQuestion?: unknown;
+      optionalFinalTaskContext?: { drivingQuestion?: unknown };
+    };
+    const question = confirmed.optionalFinalTaskContext?.drivingQuestion ?? confirmed.drivingQuestion;
+    return typeof question === 'string' ? question : undefined;
   } catch {
     return undefined;
   }
@@ -99,7 +105,7 @@ function conclusionGroundingIssues(
   visibleData: string,
 ): string[] {
   if (!conclusions.length) return [];
-  const malformed = () => Object.assign(new Error('PPT 内容核查未逐项核查实验结论及其证据，请重试本页生成。'), { isRetryable: true });
+  const malformed = () => Object.assign(new Error('PPT 内容核查未逐项核查实验结论及其证据。'), { isRetryable: false });
   if (!Array.isArray(grounding)) throw malformed();
   const issues: string[] = [];
   for (const conclusion of conclusions) {
@@ -174,9 +180,9 @@ Block only concrete defects: a factual contradiction, wrong value/unit/formula, 
       visibleElements: slideReviewEvidence(elements) }),
   );
   const review = parseJsonResponse<{ blockingIssues?: Array<{ evidence?: unknown; repair?: unknown }>; keyPointCoverage?: Array<{ index?: unknown; covered?: unknown; quotes?: unknown; reason?: unknown }>; conclusionGrounding?: unknown; inquiryCaseConclusions?: unknown }>(response);
-  if (!Array.isArray(review?.blockingIssues) || !Array.isArray(review.keyPointCoverage)) throw Object.assign(new Error('PPT 内容核查未返回有效结果，请重试本页生成。'), { isRetryable: true });
+  if (!Array.isArray(review?.blockingIssues) || !Array.isArray(review.keyPointCoverage)) throw Object.assign(new Error('PPT 内容核查未返回有效结果。'), { isRetryable: false });
   if (review.blockingIssues.some((issue) => !issue || typeof issue !== 'object' || typeof issue.evidence !== 'string' || typeof issue.repair !== 'string' || !issue.evidence.trim() || !issue.repair.trim())) {
-    throw Object.assign(new Error('PPT 内容核查缺少具体证据或修正要求，请重试本页生成。'), { isRetryable: true });
+    throw Object.assign(new Error('PPT 内容核查缺少具体证据或修正要求。'), { isRetryable: false });
   }
   const issues = review.blockingIssues.slice(0, 6).map((issue) => `${issue.evidence} → ${issue.repair}`);
   const visible = normalizeVisibleText(visibleTextFragments(elements).join('\n'));
@@ -184,7 +190,7 @@ Block only concrete defects: a factual contradiction, wrong value/unit/formula, 
     const entries = review.keyPointCoverage.filter((item) => item && item.index === index);
     const item = entries[0];
     if (entries.length !== 1 || typeof item.covered !== 'boolean' || !Array.isArray(item.quotes) || typeof item.reason !== 'string' || !item.reason.trim()) {
-      throw Object.assign(new Error(`PPT 内容核查未逐项检查知识要点 ${index + 1}，请重试本页生成。`), { isRetryable: true });
+      throw Object.assign(new Error(`PPT 内容核查未逐项检查知识要点 ${index + 1}。`), { isRetryable: false });
     }
     const supported = item.quotes.length > 0 && item.quotes.every((quote) => typeof quote === 'string' && normalizeVisibleText(quote) && visible.includes(normalizeVisibleText(quote)));
     if (!item.covered || !supported) issues.push(`必需知识要点“${point}”缺少可见依据 → ${item.reason}；补充准确的核心解释或条件，保留可读字号和整页布局。`);

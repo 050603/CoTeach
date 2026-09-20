@@ -92,6 +92,8 @@ describe('PBL teaching outline normalization', () => {
       'showcase',
       'reflection',
     ]);
+    expect(result.find((activity) => activity.stageKey === 'ai-learning')?.studentActivity)
+      .toContain('只在有助于理解或迁移时连接驱动问题');
     expect(result.reduce((sum, activity) => sum + activity.durationMin, 0)).toBe(90);
   });
 

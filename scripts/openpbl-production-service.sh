@@ -44,17 +44,6 @@ wait_for_tcp() {
   return 1
 }
 
-tcp_available() {
-  /usr/bin/node -e '
-    const net = require("node:net");
-    const socket = net.connect(Number(process.argv[2]), process.argv[1]);
-    socket.setTimeout(800);
-    socket.once("connect", () => { socket.end(); process.exit(0); });
-    socket.once("error", () => process.exit(1));
-    socket.once("timeout", () => { socket.destroy(); process.exit(1); });
-  ' "$1" "$2"
-}
-
 load_shared_environment() {
   export DATABASE_URL="$(read_secret database_url.txt)"
   export JWT_SECRET="$(read_secret jwt_secret.txt)"
@@ -86,17 +75,12 @@ run_app() {
   # committed migrations; it never creates development migrations here.
   apply_database_migrations
 
-  # Some external endpoints are not directly reachable from this server.
-  # Keep proxy use scoped instead of exporting HTTP_PROXY/HTTPS_PROXY, which
-  # would also reroute otherwise healthy providers and local dependencies.
+  # External IPv4 endpoints are reached through the deployment-managed NAT64
+  # sidecar. Never auto-discover a desktop/session proxy: its lifetime is not
+  # tied to the production service and a later disconnect would strand jobs.
   outbound_proxy="${OPENPBL_OUTBOUND_PROXY:-}"
-  if [ -z "$outbound_proxy" ] && tcp_available "127.0.0.1" "9999"; then
-    outbound_proxy="http://127.0.0.1:9999"
-  fi
   if [ -n "$outbound_proxy" ]; then
     export OPENPBL_OUTBOUND_PROXY="$outbound_proxy"
-    # DeepSeek's official endpoint currently needs the same outbound route.
-    # Operators can override or disable it independently by setting this value.
     export OPENPBL_DEEPSEEK_PROXY="${OPENPBL_DEEPSEEK_PROXY:-$outbound_proxy}"
   fi
 

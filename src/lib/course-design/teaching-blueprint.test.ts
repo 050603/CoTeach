@@ -42,13 +42,21 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("正式致谢和告别");
   expect(prompt.system).toContain("案例首先按解释力、学习者熟悉度和学段适切性选择");
   expect(prompt.system).toContain("项目情境只规定用途和约束，不能自动变成知识目标或每页案例");
+  expect(prompt.system).toContain("最终任务、驱动问题和成果物只是一种可选的迁移情境");
+  expect(prompt.system).toContain("每页必须填写 taskConnection");
+  expect(prompt.system).toContain("不能用教案、报告、PPT 等成果物中的几句话");
   expect(prompt.system).toContain("具体场景中的人物、物体、空间状态或可见差异本身是推理依据时");
   expect(prompt.system).toContain("构造案例、类比和示意数据");
+  expect(prompt.system).toContain("preferredForm 是教学表达偏好");
+  expect(prompt.system).toContain("没有每节必须使用几种形式的配额");
+  expect(prompt.system).toContain("具有完整、可比较数值并需要看趋势");
   expect(prompt.system).toContain("不得考未讲内容");
   expect(prompt.system).toContain("Constructed examples or data must not be given a fabricated institution");
   expect(prompt.system).toContain("未启用图片或视频时不得请求对应种类");
   expect(prompt.user).toContain('"sharedContext"');
   expect(prompt.user).toContain('"learningTask"');
+  expect(prompt.user).toContain('"taskConnection"');
+  expect(prompt.user).toContain("可选最终任务情境");
   expect(prompt.user).toContain("必须严格按以下 2 个小节及其顺序生成");
   expect(prompt.user).toContain("下限用于避免单页过载，必须满足");
   expect(prompt.user).not.toContain('"maxPages"');
@@ -132,6 +140,17 @@ function modelBlueprint() {
             description: "从两个集合回答的不同问题建立独立评估的必要性。",
             keyPoints: ["训练集参与参数学习", "测试集在学习结束后使用", "独立性决定评估可信度", "难度不是两者的定义差异"],
             teachingObjective: "说明训练集与测试集职责不同的原因",
+            taskConnection: {
+              mode: "helpful-context",
+              rationale: "校园植物分类器与数据分工共享同一对象，且不需要额外解释项目流程。",
+            },
+            visualRelationship: {
+              kind: "comparison",
+              description: "沿相同维度比较训练集与测试集在流程中的位置和用途。",
+              readingOrder: ["训练集", "测试集", "独立性结论"],
+              preferredForm: "table",
+              rationale: "共同维度逐项对齐比两个独立卡片更便于比较。",
+            },
             learningTask: {
               learnerAction: "比较两组照片分别在训练和评估中的用途。",
               newContribution: "从用途差异理解独立评估。",
@@ -187,6 +206,10 @@ function modelBlueprint() {
             description: "沿用校园植物案例演示近重复泄漏及修正步骤。",
             keyPoints: ["先确定泛化对象", "识别近重复记录", "按对象整体分组", "最后一次使用测试集"],
             teachingObjective: "判断并修正数据泄漏",
+            taskConnection: {
+              mode: "direct-application",
+              rationale: "本页目标就是把划分原则应用到分类器的数据准备。",
+            },
             learningTask: {
               learnerAction: "比较随机按照片划分与按植物个体划分。",
               newContribution: "识别近重复记录造成的泄漏。",
@@ -245,6 +268,10 @@ function compactModelBlueprint() {
         description: "用同一株植物连拍照片的案例串联数据分工、划分规则与泄漏后果。",
         keyPoints: ["训练集用于学习", "测试集用于独立检验", "按最终泛化对象划分", "近重复记录可能造成泄漏"],
         teachingObjective: "解释独立测试与可靠评估的因果关系",
+        taskConnection: {
+          mode: "none",
+          rationale: "本页先建立通用评估机制，独立案例比提前展开最终任务更直接。",
+        },
         learningTask: {
           learnerAction: "判断两种数据划分是否保持独立评估。",
           newContribution: "把数据用途与泄漏风险连起来。",
@@ -290,6 +317,17 @@ describe("teaching blueprint compiler", () => {
     ]);
     expect(outlines[0]?.teachingBrief?.sharedContext?.caseId).toBe("campus-plant-classifier");
     expect(outlines[0]?.teachingBrief?.pageTask?.newContribution).toContain("用途差异");
+    expect(outlines[0]?.teachingBrief?.teachingPlan?.taskConnection).toEqual({
+      mode: "helpful-context",
+      rationale: "校园植物分类器与数据分工共享同一对象，且不需要额外解释项目流程。",
+    });
+    expect(outlines[0]?.teachingBrief?.teachingPlan?.visualRelationship).toEqual({
+      kind: "comparison",
+      description: "沿相同维度比较训练集与测试集在流程中的位置和用途。",
+      readingOrder: ["训练集", "测试集", "独立性结论"],
+      preferredForm: "table",
+      rationale: "共同维度逐项对齐比两个独立卡片更便于比较。",
+    });
     expect(outlines.find((item) => item.type === "quiz")?.teachingBrief?.sharedContext?.fixedWording)
       .toEqual(["同一批数据不能同时教与考"]);
     const quizzes = outlines.filter((outline) => outline.type === "quiz");

@@ -5,7 +5,7 @@ import { parseJsonResponse } from "@/lib/openmaic/generation/json-repair";
 import { fingerprintGenerationValue } from "@/lib/course-generation/page-checkpoints";
 import { formatTeachingConstraintsForChinesePrompt, type TeachingConstraints } from "@/lib/openmaic/pedagogy/teaching-constraints";
 import { loadSnippet } from "@/lib/openmaic/prompts";
-import type { PageLearningTask, SharedTeachingContext, TeacherReviewItem, TeachingResourceNeed, TeachingUnderstandingCriteria } from "@/lib/course-quality-review/types";
+import type { PageLearningTask, SharedTeachingContext, TeacherReviewItem, TeachingResourceNeed, TeachingTaskConnection, TeachingUnderstandingCriteria } from "@/lib/course-quality-review/types";
 import type { MediaGenerationRequest } from "@/lib/openmaic/media/types";
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic/generation/generated-output-retry";
 import type {
@@ -20,8 +20,8 @@ import type {
 } from "@/lib/session/types";
 
 export const TEACHING_BLUEPRINT_SCHEMA_VERSION = 3 as const;
-export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v17-section-paced-pages";
-export const TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION = "teaching-blueprint-v3-compiled-v3";
+export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v19-adaptive-visual-forms";
+export const TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION = "teaching-blueprint-v3-compiled-v5";
 /** Kept as a compatibility export for callers being migrated away from ratio budgeting. */
 export const MAX_ASSESSMENT_RATIO = 0.2;
 const MIN_TEACHING_PAGE_SEC = 1;
@@ -122,8 +122,14 @@ const PROVENANCE_KINDS = new Set([
 const VISUAL_RELATIONSHIP_KINDS = new Set([
   "comparison", "process", "causal", "system", "quantitative", "sequence", "spatial", "statement",
 ] as const);
+const VISUAL_FORMS = new Set([
+  "text", "table", "chart", "diagram", "illustration", "mixed",
+] as const);
 const ENTRY_POINT_KINDS = new Set([
   "familiar-experience", "concrete-observation", "problem", "direct-explanation", "continuation",
+] as const);
+const TASK_CONNECTION_MODES = new Set([
+  "none", "helpful-context", "direct-application",
 ] as const);
 
 function normalizeReviewItems(
@@ -320,7 +326,13 @@ export function buildTeachingBlueprintPrompt(
     "课程收束不强制新增专门页面。最后的教学与检测反馈要有可用于收束的核心认识：概括学生现在能解释、判断或完成什么，连接一种后续应用或思考，并为正式致谢和告别留出自然位置；不得把相邻内容机械重述成总结。",
     "案例首先按解释力、学习者熟悉度和学段适切性选择，项目相关性只是可选条件。课程资料中的儿童、教师、客户等人物属于案例角色，不能据此改变实际授课对象。",
     "案例不强制贯穿。案例用于推理或判断时，先提供完成当前推理真正需要的条件与事实，并区分观察、推测和预期结果。",
+    "最终任务、驱动问题和成果物只是一种可选的迁移情境，不是知识解释的默认主线。先在不依赖最终任务的前提下，为当前知识和学习者选择最清楚的解释、例子、活动与视觉关系，再判断任务连接是否真的增加理解价值。资料中的 taskAssociation 只表示可能的后续用途，不是事实依据、页面要求或必须采用的案例。",
+    "每页必须填写 taskConnection。mode=none 表示独立讲解更清楚，页面、活动和案例不得为了呼应项目而提及驱动问题或成果物；mode=helpful-context 仅在最终任务与当前知识共享同一对象、关系或操作，且不会引入额外背景时使用；mode=direct-application 仅在本页学习目标本身就是把已学知识迁移到最终任务时使用。rationale 写明取舍依据，但不得进入学生页面或讲稿。",
+    "sharedContext.learningPurpose 先说明这组知识本身能帮助学生理解、判断或完成什么，不默认写成‘为了完成最终成果’。只有同一最终任务情境确实服务本节多个页面时，才能把它放入 caseId/caseFacts/fixedWording；单页偶尔借用的任务情境留在该页，不得升级为整节共享案例。",
+    "不得因为最终成果恰好包含某个术语，就把成果制作过程当作该术语的默认例子。尤其不能用教案、报告、PPT 等成果物中的几句话，机械替代对概念本身更直观的现象、对比或操作；只有它比独立例子更能暴露当前理解难点时才可采用。",
     "keyPoints 是学生必须看见才能跟随推理的命题、关系、原文或对照材料，优先展示推理依据，不重复堆放分类结论。讲解页可以展示关键推理关系；独立练习页才保留答案。",
+    "visualRelationship 先写清学生需要看见的关系，再给出 preferredForm 和 rationale。对齐维度且需要逐项查读的比较可优先 table；具有完整、可比较数值并需要看趋势、比例或量级时可优先 chart；具体人物、物体、空间状态或外观差异本身是观察依据且图片可用时可优先 illustration；步骤、因果、系统和概念关系通常优先 diagram；少量核心命题或定义用 text 反而更清楚；同页只有在两种形式互相补足时才用 mixed。",
+    "preferredForm 是教学表达偏好，不是强制模板，也没有每节必须使用几种形式的配额。不能为了版式多样而制造数据、请求装饰图片或把本可直接说明的内容做成表格；选择能最直接降低理解负担的形式。图表只能使用输入资料或本轮教学设计已经登记的完整数据，单位、对象和数值必须与 reviewItems、讲稿及题目一致。",
     "独立练习页的 keyPoints 只提供题干和作答所需材料，不提前写出标准答案或完整理由；答案进入学习者作答后的讲稿反馈或节末小测解析。",
     "保持本节核心术语、概念边界、事实、单位和数值前后一致。例子中局部成立的条件不得扩大为普遍规则，绝对表述必须有资料或学科原理支持。",
     "分类、推导和判断必须给出成立依据及关系解释。标题、栏目、步骤数量或关键词不能单独代替理由；从前提到结论之间需要的中间连接不能省略。",
@@ -371,7 +383,7 @@ export function buildTeachingBlueprintPrompt(
 学科与学段：${input.subject}；${input.grade}
 学习目标：${input.learningObjectives.join("；")}
 ${formatTeachingConstraintsForChinesePrompt(input.teachingConstraints)}
-项目情境：${input.projectContext || "无"}
+可选最终任务情境（仅在通过逐页 taskConnection 判定时使用）：${input.projectContext || "无"}
 教师补充：${input.teacherBrief?.trim() || "无"}
 知识学习阶段总时长：${Math.round(input.totalDurationSec / 60)} 分钟
 讲授要求：先按完整课程开场、必要解释、推理、例子、操作、短测和正式收束估时；不套用固定讲解比例，也不按知识点数量机械分配题目或分钟。开场和结尾使用本次输入预算，短课将它们整合得更简洁，但不得删除；时间不足时先减少重复铺垫和可选扩展。
@@ -398,7 +410,7 @@ ${input.sourceContext?.trim() || "没有额外资料；可使用适龄的通行�
 
 illustrative-data 类型的 reviewItems 还必须填写 values（原始数值、单位和含义）以及 comparisonObjects（比较对象）；其他类型无对应内容时可省略。
 返回结构：
-{"capacityConflict":"仅在输入时间确实无法容纳必需内容时说明冲突，否则省略","sections":[{"title":"小节标题","learningObjective":"学生完成后能解释或完成的核心认识与技能","sharedContext":{"learningPurpose":"理解这些知识能解决什么认识或实践问题","caseId":"确需复用案例时填写，否则为空","caseFacts":["跨页稳定的必要案例事实"],"fixedWording":["跨页保持一致的关键事实"],"stableTerms":["核心术语"],"conceptBoundaries":["具体误解、正确边界及理由"]},"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID；每个ID在全部units中只出现一次"],"learningOutcome":"可观察的解释、推理或操作结果","explanation":"实际核心解释","mechanism":"前提、中间连接与结论","workedExample":"确有帮助时提供，否则为空","conditions":["适用条件或边界"],"misconceptions":["具体误解及纠正理由"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["可逐字核对时填写"],"estimatedTeachingWeight":1,"explanationNodes":[{"id":"单元内稳定ID","kind":"term|concept|relation|mechanism|example|condition|misconception","content":"一项可被页面引用的实际解释责任","prerequisiteNodeIds":["同节中需要先理解的节点ID"],"provenance":"course-source|derived|general-knowledge|constructed|unverified"}],"reviewItems":[{"kind":"illustrative-data|constructed-example|unverified-claim","provenance":"derived|general-knowledge|constructed|unverified","content":"需要教师确认的具体内容","teachingPurpose":"它帮助学生理解什么","source":"已有来源或空字符串"}]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题","type":"slide|interactive","unitIds":["本节 unit id"],"introducesNodeIds":["本页首次建立的解释节点"],"deepensNodeIds":["本页继续展开的解释节点"],"referencesNodeIds":["只为承接而简短引用的已讲节点"],"estimatedTeachingWeight":1,"description":"本页实际展开的认识及前后进展","keyPoints":["学生必须看见才能跟随本页解释的信息"],"teachingObjective":"本页新增理解或技能","entryPoint":{"kind":"familiar-experience|concrete-observation|problem|direct-explanation|continuation","object":"学生实际能回想、观察或理解的对象／问题／直接命题","bridge":"该对象怎样自然引出本页新知识"},"visualRelationship":{"kind":"comparison|process|causal|system|quantitative|sequence|spatial|statement","description":"画面应帮助看清的关系，不规定模板","readingOrder":["建议观察顺序"]},"learningTask":{"learnerAction":"确有必要时填写","newContribution":"本页新增认识","reasoningFocus":"理由焦点","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"resourceNeeds":[{"kind":"diagram|image|video|interactive","purpose":"对理解的作用","required":true,"prompt":"内容要求","durationSec":8}],"widgetType":"仅互动页需要","widgetOutline":{},"reviewItems":[]}],"assessmentFocus":["只考已经讲解的内容"],"understandingCriteria":{"goals":["可观察理解目标"],"answerEssentials":["合格回答要点"],"misconceptions":["典型错误"],"supportingUnitIds":["本节 unit id"]}}]}
+{"capacityConflict":"仅在输入时间确实无法容纳必需内容时说明冲突，否则省略","sections":[{"title":"小节标题","learningObjective":"学生完成后能解释或完成的核心认识与技能","sharedContext":{"learningPurpose":"理解这些知识能解决什么认识或实践问题","caseId":"确需复用案例时填写，否则为空","caseFacts":["跨页稳定的必要案例事实"],"fixedWording":["跨页保持一致的关键事实"],"stableTerms":["核心术语"],"conceptBoundaries":["具体误解、正确边界及理由"]},"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID；每个ID在全部units中只出现一次"],"learningOutcome":"可观察的解释、推理或操作结果","explanation":"实际核心解释","mechanism":"前提、中间连接与结论","workedExample":"确有帮助时提供，否则为空","conditions":["适用条件或边界"],"misconceptions":["具体误解及纠正理由"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["可逐字核对时填写"],"estimatedTeachingWeight":1,"explanationNodes":[{"id":"单元内稳定ID","kind":"term|concept|relation|mechanism|example|condition|misconception","content":"一项可被页面引用的实际解释责任","prerequisiteNodeIds":["同节中需要先理解的节点ID"],"provenance":"course-source|derived|general-knowledge|constructed|unverified"}],"reviewItems":[{"kind":"illustrative-data|constructed-example|unverified-claim","provenance":"derived|general-knowledge|constructed|unverified","content":"需要教师确认的具体内容","teachingPurpose":"它帮助学生理解什么","source":"已有来源或空字符串"}]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题","type":"slide|interactive","unitIds":["本节 unit id"],"introducesNodeIds":["本页首次建立的解释节点"],"deepensNodeIds":["本页继续展开的解释节点"],"referencesNodeIds":["只为承接而简短引用的已讲节点"],"estimatedTeachingWeight":1,"description":"本页实际展开的认识及前后进展","keyPoints":["学生必须看见才能跟随本页解释的信息"],"teachingObjective":"本页新增理解或技能","taskConnection":{"mode":"none|helpful-context|direct-application","rationale":"为什么连接或不连接最终任务更有利于本页理解"},"entryPoint":{"kind":"familiar-experience|concrete-observation|problem|direct-explanation|continuation","object":"学生实际能回想、观察或理解的对象／问题／直接命题","bridge":"该对象怎样自然引出本页新知识"},"visualRelationship":{"kind":"comparison|process|causal|system|quantitative|sequence|spatial|statement","description":"画面应帮助看清的关系，不规定模板","readingOrder":["建议观察顺序"],"preferredForm":"text|table|chart|diagram|illustration|mixed","rationale":"为什么这种形式最能帮助当前学习者看懂，不是版式配额"},"learningTask":{"learnerAction":"确有必要时填写","newContribution":"本页新增认识","reasoningFocus":"理由焦点","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"resourceNeeds":[{"kind":"diagram|image|video|interactive","purpose":"对理解的作用","required":true,"prompt":"内容要求","durationSec":8}],"widgetType":"仅互动页需要","widgetOutline":{},"reviewItems":[]}],"assessmentFocus":["只考已经讲解的内容"],"understandingCriteria":{"goals":["可观察理解目标"],"answerEssentials":["合格回答要点"],"misconceptions":["典型错误"],"supportingUnitIds":["本节 unit id"]}}]}
 
 约束：每个知识点必须且只能进入一个 unit，并至少进入一个 page；每个 explanationNode 至少被一页 introduces 或 deepens，且只能首次 introduces 一次；references 不能携带完整重复解释；页面映射由系统计算，不输出 page.knowledgePointIds 或 section.knowledgePointIds；estimatedTeachingWeight 是同层相对权重，不是秒数，并须包含该页承担的导入、解释或收束工作量；learningTask 仅在确有学习价值时提供；理解标准先于题目确定。若输入时间无法承载必需解释，返回明确容量说明，不得静默漏讲或自行增加时长。`;
   return { system, user };
@@ -569,6 +581,18 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
           ...(clean(rawNeed.prompt, 1_600) ? { prompt: clean(rawNeed.prompt, 1_600) } : {}),
           ...(kind === "video" && Number.isFinite(duration) ? { durationSec: Math.max(2, Math.min(30, Math.round(duration))) } : {}) }];
       });
+      const rawTaskConnection = rawPage.taskConnection && typeof rawPage.taskConnection === "object"
+        && !Array.isArray(rawPage.taskConnection)
+        ? rawPage.taskConnection as Record<string, unknown>
+        : undefined;
+      const taskConnectionMode = typeof rawTaskConnection?.mode === "string"
+        && TASK_CONNECTION_MODES.has(rawTaskConnection.mode as never)
+        ? rawTaskConnection.mode as TeachingTaskConnection["mode"]
+        : undefined;
+      const taskConnectionRationale = clean(rawTaskConnection?.rationale, 800);
+      const taskConnection = taskConnectionMode && taskConnectionRationale
+        ? { mode: taskConnectionMode, rationale: taskConnectionRationale }
+        : undefined;
       const page: TeachingBlueprintPage = {
         id: `teaching-section-${sectionIndex + 1}-page-${pageIndex + 1}`,
         title: clean(rawPage.title, 160),
@@ -599,6 +623,7 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
             } } : {}),
         ...(resourceNeeds.length ? { resourceNeeds } : {}),
         ...(learningTask ? { learningTask } : {}),
+        ...(taskConnection ? { taskConnection } : {}),
         ...(type === "interactive" ? { widgetType, widgetOutline } : {}),
         ...(rawPage.visualRelationship && typeof rawPage.visualRelationship === "object"
           && !Array.isArray(rawPage.visualRelationship)
@@ -609,6 +634,13 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
               kind: (rawPage.visualRelationship as Record<string, unknown>).kind as NonNullable<TeachingBlueprintPage["visualRelationship"]>["kind"],
               description: clean((rawPage.visualRelationship as Record<string, unknown>).description, 800),
               readingOrder: strings((rawPage.visualRelationship as Record<string, unknown>).readingOrder, 12, 300),
+              ...(typeof (rawPage.visualRelationship as Record<string, unknown>).preferredForm === "string"
+                && VISUAL_FORMS.has((rawPage.visualRelationship as Record<string, unknown>).preferredForm as never)
+                ? { preferredForm: (rawPage.visualRelationship as Record<string, unknown>).preferredForm as NonNullable<TeachingBlueprintPage["visualRelationship"]>["preferredForm"] }
+                : {}),
+              ...(clean((rawPage.visualRelationship as Record<string, unknown>).rationale, 800)
+                ? { rationale: clean((rawPage.visualRelationship as Record<string, unknown>).rationale, 800) }
+                : {}),
             } } : {}),
         reviewItems: normalizeReviewItems(rawPage.reviewItems, `teaching-section-${sectionIndex + 1}-page-${pageIndex + 1}`, {
           sectionId: `teaching-section-${sectionIndex + 1}`,
@@ -617,6 +649,9 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
       };
       if (!page.title || !page.description || page.keyPoints.length < 1 || !page.teachingObjective || !page.unitIds.length) {
         structuralIssues.push(`第 ${sectionIndex + 1} 节第 ${pageIndex + 1} 页缺少必要字段或单元映射`);
+      }
+      if (!page.taskConnection) {
+        structuralIssues.push(`第 ${sectionIndex + 1} 节第 ${pageIndex + 1} 页缺少最终任务连接判定`);
       }
       return page;
     });
@@ -924,6 +959,7 @@ function sectionTeachingBrief(section: TeachingBlueprintSection, page?: Teaching
       deepens: [...pageDeepens(page)],
       references: [...pageReferences(page)],
       ...(page.visualRelationship ? { visualRelationship: page.visualRelationship } : {}),
+      ...(page.taskConnection ? { taskConnection: page.taskConnection } : {}),
     } } : {}),
     explanation: [...explanation, ...reasoningSteps].join("\n"),
     examples: units.map((unit) => unit.workedExample).filter(Boolean),
@@ -984,6 +1020,8 @@ export function applyReviewedOutlinesToTeachingBlueprint(
       page.teachingObjective = outline.teachingObjective ?? page.teachingObjective;
       page.learningTask = brief.pageTask;
       page.resourceNeeds = brief.resourceNeeds;
+      page.taskConnection = plan.taskConnection ?? page.taskConnection;
+      page.visualRelationship = plan.visualRelationship ?? page.visualRelationship;
 
       if (page.unitIds.length === 1) {
         const unit = section.units.find((candidate) => candidate.id === page.unitIds[0]);

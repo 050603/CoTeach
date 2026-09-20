@@ -74,7 +74,7 @@ function defaultTeachingActivity(
       ? '生成知识讲解、测验或互动练习，并根据作答提供解释。'
       : '提供伴学提示、记录证据和提出澄清问题，不替学生完成项目。',
     studentActivity: isKnowledge
-      ? '学习核心知识，完成互动或测验，并把知识连接到驱动问题。'
+      ? '学习核心知识并完成必要的互动或测验；只在有助于理解或迁移时连接驱动问题。'
       : `围绕${definition.label}完成个人项目任务，保存相应过程证据。`,
     activityKind: definition.kind,
     knowledgePointIds,

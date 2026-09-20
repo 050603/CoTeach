@@ -139,6 +139,8 @@ describe("reviewed knowledge structure generation", () => {
     expect(streamed).toEqual(legacy);
     expect(aiCall).toHaveBeenCalledOnce();
     expect(aiCall).toHaveBeenCalledWith(expect.stringContaining("知识"), expect.any(String));
+    expect(aiCall.mock.calls[0]?.[1]).toContain("驱动问题、最终成果和资料中的“任务关联”不自动成为每个节点");
+    expect(aiCall.mock.calls[0]?.[1]).toContain("不能因为某知识将来可用于成果制作");
     expect(modelCall).not.toHaveBeenCalled();
   });
 

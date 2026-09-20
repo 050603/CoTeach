@@ -193,7 +193,7 @@ export function buildAuthoritativeCourseBasisPrompt(input: GenerateInput, option
       ? "必须先按知识讲授预算选择能讲清的目标；不能先尽量拆点，再用平均分配把每点压成定义和例子。"
       : chineseCourseScopeRule(constraints.courseHours)}`,
     formatChineseTeachingConstraints(constraintInput),
-    "硬约束：后续知识、活动与评价必须服务于已确认课程目标；不得把认知边界之外的概念变成隐藏前置知识或评价目标；内容深度、练习数量和成果复杂度必须与总课时匹配。",
+    "硬约束：整门课程的知识、活动与评价应共同覆盖已确认课程目标，但单个知识点、页面或活动只需完成它当前承担的局部目标，不得为了表面一致而逐项绑定驱动问题或最终成果。最终任务只在能帮助理解、迁移，或当前目标本身就是任务应用时进入教学；不得把认知边界之外的概念变成隐藏前置知识或评价目标；内容深度、练习数量和成果复杂度必须与总课时匹配。",
   ].join("\n");
 }
 
@@ -328,9 +328,10 @@ ${buildAuthoritativeCourseBasisPrompt(input, { teachingCapacity: context?.teachi
 课程阶段：
 ${stageList}
 
-要求：
-1. 先做容量规划，再建图。以知识讲授可用时间、学习者基础、课程目标和理解难点为依据，宏观决定本次真正能够讲清多少个独立目标。当前容量推导出的常见参考范围是 ${constraints.recommendedKnowledgePointRange.min}-${constraints.recommendedKnowledgePointRange.max} 个可独立评价目标；这不是固定配额，复杂机制可以更少，若明显更多则必须通过合并相关来源概念仍保证每个目标有完整解释过程。不得先把来源目录全部拆成独立知识点，再用平均分钟数压缩；不得以“每点给一个定义和例子”冒充讲清。
-2. knowledgePoints 只列本次会获得充分解释并在本节检测中评价的独立目标，不设固定数量。关键课程目标和教师明确指定项优先；教师指定项必须以完全相同的 name 保留，不得删除、合并、偷换概念或改名。资源包来源目录不是必须逐项成为 knowledgePoint 的清单：同一概念体系中的术语、特征、步骤、原则和应用应编译为少量完整目标，并通过 sourceKnowledgePointIds 保留映射；不影响本次关键目标达成的拓展可留给项目实践或后续课时。每项填写 masteryBoundary、objectiveIndexes，并用 sourceKnowledgePointIds 列出它编译了哪些来源概念。
+	要求：
+	1. 先做容量规划，再建图。以知识讲授可用时间、学习者基础、课程目标和理解难点为依据，宏观决定本次真正能够讲清多少个独立目标。当前容量推导出的常见参考范围是 ${constraints.recommendedKnowledgePointRange.min}-${constraints.recommendedKnowledgePointRange.max} 个可独立评价目标；这不是固定配额，复杂机制可以更少，若明显更多则必须通过合并相关来源概念仍保证每个目标有完整解释过程。不得先把来源目录全部拆成独立知识点，再用平均分钟数压缩；不得以“每点给一个定义和例子”冒充讲清。
+	2. knowledgePoints 只列本次会获得充分解释并在本节检测中评价的独立目标，不设固定数量。关键课程目标和教师明确指定项优先；教师指定项必须以完全相同的 name 保留，不得删除、合并、偷换概念或改名。资源包来源目录不是必须逐项成为 knowledgePoint 的清单：同一概念体系中的术语、特征、步骤、原则和应用应编译为少量完整目标，并通过 sourceKnowledgePointIds 保留映射；不影响本次关键目标达成的拓展可留给项目实践或后续课时。每项填写 masteryBoundary、objectiveIndexes，并用 sourceKnowledgePointIds 列出它编译了哪些来源概念。
+	2a. 知识结构先表达学科理解本身，再表达真实存在的应用迁移。驱动问题、最终成果和资料中的“任务关联”不自动成为每个节点的 keyInfo、masteryBoundary、groupName 或关系边；不能因为某知识将来可用于成果制作，就把它和最终任务强行合组或为它编造 application/transfer 边。只有当前知识目标本身要求任务应用，或存在可解释的真实迁移关系时才建立连接。
 3. 每个本课 knowledgePoint 必须填写 groupId 和 groupName。这不是章节目录，而是“一组紧密相关知识学完后立即小测”的学习小节：只有必须连续建构才能完成同一理解目标的知识点才共用一组。独立概念、新的方法/操作阶段、从原理转入应用的新理解关口应另立一组。不得默认把整门课或整个 AI 授知阶段放进一组；若一组预计需要连续讲授约 10 分钟以上，应在自然的理解关口拆组，以便学生学完就检测。
 4. 返回 knowledgeScopePlan：对来源目录每一项给出且只给出一条决策。standalone 表示独立讲透，embedded 表示作为某个核心目标的组成、条件或例证，deferred 表示不在本次知识讲授中展开而由后续实践、教师补充或更长课时承接。standalone/embedded 必须引用真实 targetKnowledgePointId；不得把教师明确指定项标为 deferred。
 5. knowledgeGraph.nodes 必须包含所有本课目标节点并标记 instructionalRole=lesson；另行输出 instructionalRole=prerequisite 的真实课前先修节点。数量与时间遵循本课程动态入口策略：${formatCourseEntryPolicy(entryPolicy)} 先修节点不进入 knowledgePoints，不占用本课知识点数量，也不成为课后达标测目标。
