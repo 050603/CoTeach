@@ -64,7 +64,7 @@ describe("quick positioning generation", () => {
     const plans = buildTeachingBlueprintSectionPlans({ knowledgePoints }, 30 * 60);
 
     expect(plans).toHaveLength(6);
-    expect(plans.reduce((sum, plan) => sum + plan.maxPages, 0)).toBe(16);
+    expect(plans.reduce((sum, plan) => sum + plan.maxPages, 0)).toBe(13);
     expect(plans.flatMap((plan) => plan.knowledgePointIds)).toEqual(
       knowledgePoints.map((point) => point.id),
     );

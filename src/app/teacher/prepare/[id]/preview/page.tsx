@@ -115,6 +115,7 @@ export default function PreviewCoursePage() {
   const [reviewDecision, setReviewDecision] = useState<TeacherReviewDecision>({ canConfirm: false, signature: "", acceptedIssueIds: [], acknowledgeFailedCheck: false });
   const [publishedHere, setPublishedHere] = useState(false);
   const [downloadingResources, setDownloadingResources] = useState(false);
+  const [continuingFullCourse, setContinuingFullCourse] = useState(false);
 
   useEffect(() => {
     if (!params?.id) return;
@@ -223,6 +224,29 @@ export default function PreviewCoursePage() {
     }
   }
 
+  async function continueFullCourse() {
+    if (!isTestLesson || continuingFullCourse) return;
+    setContinuingFullCourse(true);
+    try {
+      const response = await fetch(`/api/courses/${courseId}/design-generation`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "promote-test-lesson" }),
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: string; detail?: string };
+      if (!response.ok) throw new Error(payload.detail || payload.error || "无法继续生成完整课程");
+      toast.success("已开始生成完整课程", {
+        description: "测试小节会保留，系统将按已确认大纲补齐其余页面和资源。",
+      });
+      router.push(`/teacher/prepare/${encodeURIComponent(courseId)}/verify`);
+    } catch (error) {
+      toast.error("完整课程尚未开始生成", {
+        description: error instanceof Error ? error.message : "请稍后重试。",
+      });
+      setContinuingFullCourse(false);
+    }
+  }
+
   async function retryMissingResources() {
     setRepairingResources(true);
     try {
@@ -328,7 +352,7 @@ export default function PreviewCoursePage() {
               <div>
                 <h2 className="text-sm font-black">正在验收正式生成链路中的“{testLessonTitle}”</h2>
                 <p className="mt-1 text-xs leading-5 text-amber-900">
-                  本样本使用与完整课程相同的资源包解析、知识图谱、正式大纲、页面生成、审校、配图和语音逻辑，只把输出范围限制为 {studentOutlines.length} 页；完整大纲共 {classroomGenerationRun?.fullOutlineCount ?? studentOutlines.length} 页。测试通过后仍需返回生成完整课程，系统会继续使用同一套实现。
+                  本样本使用与完整课程相同的资源包解析、知识图谱、正式大纲、页面生成、审校、配图和语音逻辑，只把输出范围限制为 {studentOutlines.length} 页；完整大纲共 {classroomGenerationRun?.fullOutlineCount ?? studentOutlines.length} 页。确认效果后可直接继续生成，已完成的测试页面会保留并复用。
                 </p>
               </div>
             </div>
@@ -453,7 +477,9 @@ export default function PreviewCoursePage() {
         saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} state={session.saveState} onRetry={() => void session.retrySave()} />}
       >
         {isTestLesson ? (
-          <Link className="inline-flex min-h-11 items-center rounded-[7px] bg-[var(--pbl-teacher)] px-4 text-sm font-bold text-white" href={`/teacher/prepare/${encodeURIComponent(course.id)}/verify`}>返回生成页并切换“完整课程”</Link>
+          <Button loading={continuingFullCourse} onClick={() => void continueFullCourse()}>
+            {continuingFullCourse ? "正在启动完整课程" : "继续生成完整课程"}
+          </Button>
         ) : !isPublished ? (
           <Button disabled={!readyToPublish || publishing} loading={publishing} onClick={() => void publish()}>{reviewRequired ? "确认并发布" : "发布课程"}</Button>
         ) : (

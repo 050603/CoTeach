@@ -46,6 +46,20 @@ vi.mock('../generation/teaching-narration', async (original) => ({
       })),
     };
   },
+  generateTeachingSectionNarration: async ({ sectionId, pages, aiCall }: {
+    sectionId: string;
+    pages: Array<{ outline: SceneOutline; content: unknown }>;
+    aiCall: (system: string, user: string) => Promise<string>;
+  }) => {
+    const raw = JSON.parse(await aiCall('Section teaching narration', JSON.stringify(pages))) as Array<{ type: string; content: string }>;
+    return { sectionId, pages: pages.map(({ outline: saved }) => ({
+      pageId: saved.id,
+      segments: raw.filter((item) => item.type === 'text').map((item, index) => ({
+        id: `${saved.id}:speech-${index + 1}`, pageId: saved.id,
+        text: item.content, semanticIds: [`${saved.id}:teaching`],
+      })),
+    })) };
+  },
 }));
 
 import { generateClassroom } from './classroom-generation';
@@ -208,7 +222,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       audience: 'student',
       teachingBrief: {
         schemaVersion: 1,
-        designVersion: 'section-teaching-brief-v5',
+        designVersion: 'substantive-section-brief-v6',
         sharedContext,
         teachingPlan,
         explanation: '证据支持结论，语言流畅不能证明事实正确。',
@@ -239,7 +253,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     } as unknown as Scene;
     mocks.ai.mockImplementation(async (system: string) => {
       if (system.includes('# Slide Content Generator')) return JSON.stringify(content);
-      if (system.includes('Slide Action Generator') || system === 'Independent teaching narration') return JSON.stringify(narration);
+      if (system.includes('Slide Action Generator') || system === 'Section teaching narration') return JSON.stringify(narration);
       throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
     });
 
@@ -251,7 +265,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.ai.mock.calls.some(([system]) => system.includes('中文课堂讲稿编辑'))).toBe(false);
     expect(result.scenes[0]?.id).not.toBe('legacy-first-draft');
-    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v7-teacher-review');
+    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v8-section-narration');
   });
 
   it('restores a structurally complete slide without running layout review', async () => {
@@ -291,7 +305,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         }] });
       }
       if (system.includes('# Slide Content Generator')) return JSON.stringify(content);
-      if (system.includes('Slide Action Generator') || system === 'Independent teaching narration') return JSON.stringify(narration);
+      if (system.includes('Slide Action Generator') || system === 'Section teaching narration') return JSON.stringify(narration);
       throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
     });
     const checkpoint = {
@@ -318,7 +332,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         },
       },
       actions: [{ id: 'saved-speech', type: 'speech', text: '已保存讲稿。' }],
-      narrationRevision: 'course-first-pass-v7-teacher-review',
+      narrationRevision: 'course-first-pass-v8-section-narration',
       createdAt: 1,
       updatedAt: 1,
     } as unknown as Scene;
@@ -328,8 +342,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       loadSceneCheckpoint: () => checkpoint,
     });
 
-    expect(mocks.ai).toHaveBeenCalledOnce();
-    expect(mocks.ai.mock.calls[0][0]).toContain('课程小节的教学设计师');
+    expect(mocks.ai).not.toHaveBeenCalled();
     expect(result.scenes[0]?.id).toBe('sparse-checkpoint');
     expect(mocks.review).not.toHaveBeenCalled();
     expect(mocks.layout).not.toHaveBeenCalled();
@@ -407,11 +420,11 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.persist).toHaveBeenCalledOnce();
   });
 
-  it('starts independent narration before the slide response is available', async () => {
+  it('waits for the slide response before writing section narration', async () => {
     const knowledgeOutline: SceneOutline = {
       ...outline, generationPurpose: 'knowledge-teaching',
       teachingBrief: {
-        schemaVersion: 1, designVersion: 'section-teaching-brief-v5', sharedContext, teachingPlan,
+        schemaVersion: 1, designVersion: 'substantive-section-brief-v6', sharedContext, teachingPlan,
         explanation: '证据支持结论。', examples: [], conditions: [], evidence: [], assessmentFocus: '说明判断理由。',
       },
     };
@@ -419,20 +432,16 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     const slideResponse = new Promise<string>((resolve) => { finishSlide = resolve; });
     mocks.ai.mockImplementation(async (system: string) => {
       if (system.includes('# Slide Content Generator')) return slideResponse;
-      if (system === 'Independent teaching narration') return JSON.stringify(narration);
+      if (system === 'Section teaching narration') return JSON.stringify(narration);
       throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
     });
     const pending = generateClassroom(input, { preparedOutlines: [knowledgeOutline] });
-    try {
-      await vi.waitFor(() => {
-        expect(mocks.ai.mock.calls.some(([system]) => system.includes('# Slide Content Generator'))).toBe(true);
-        expect(mocks.ai.mock.calls.some(([system]) => system === 'Independent teaching narration')).toBe(true);
-      });
-    } finally {
-      finishSlide(JSON.stringify(content));
-    }
+    await vi.waitFor(() => expect(mocks.ai.mock.calls.some(([system]) => system.includes('# Slide Content Generator'))).toBe(true));
+    expect(mocks.ai.mock.calls.some(([system]) => system === 'Section teaching narration')).toBe(false);
+    finishSlide(JSON.stringify(content));
     const result = await pending;
     expect(mocks.ai).toHaveBeenCalledTimes(2);
+    expect(mocks.ai.mock.calls.some(([system]) => system === 'Section teaching narration')).toBe(true);
     expect(mocks.ai.mock.calls.some(([system]) => system.includes('Slide Action Generator'))).toBe(false);
     expect(result.scenes[0]?.actions?.some((action) => action.type === 'speech' && action.text.includes('短讲稿。'))).toBe(true);
   });
@@ -443,7 +452,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       generationPurpose: 'knowledge-teaching',
       teachingBrief: {
         schemaVersion: 1,
-        designVersion: 'section-teaching-brief-v5',
+        designVersion: 'substantive-section-brief-v6',
         sharedContext,
         teachingPlan,
         explanation: '语言流畅不能单独证明事实正确，需要核对独立来源。',
@@ -460,7 +469,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     let narrationAvailable = false;
     mocks.ai.mockImplementation(async (system: string) => {
       if (system.includes('# Slide Content Generator')) return JSON.stringify(content);
-      if (system === 'Independent teaching narration') {
+      if (system === 'Section teaching narration') {
         if (!narrationAvailable) throw Object.assign(new Error('Receive batching backend response failed'), { code: 'InternalError' });
         return JSON.stringify([{ type: 'text', content: '判断信息是否可靠，要回到独立来源核对事实、证据和适用条件。' }]);
       }
@@ -551,7 +560,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         }] });
       }
       if (system.includes('# Slide Content Generator')) return JSON.stringify(content);
-      if (system.includes('Slide Action Generator') || system === 'Independent teaching narration') return JSON.stringify(narration);
+      if (system.includes('Slide Action Generator') || system === 'Section teaching narration') return JSON.stringify(narration);
       throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
     });
 
@@ -564,7 +573,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
 
     expect(mocks.ai).toHaveBeenCalledTimes(3);
     const contentCall = mocks.ai.mock.calls.find(([system]) => system.includes('# Slide Content Generator'));
-    const narrationCall = mocks.ai.mock.calls.find(([system]) => system === 'Independent teaching narration');
+    const narrationCall = mocks.ai.mock.calls.find(([system]) => system === 'Section teaching narration');
     expect(contentCall?.[0]).toContain('CoTeach teaching enhancement adapter');
     expect(contentCall?.[1]).toContain('同源转载不能当作多个独立来源');
     expect(narrationCall?.[1]).toContain('说明核验步骤以及每一步的理由');
@@ -574,11 +583,11 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(result.scenes[0]?.actions).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'speech', text: '短讲稿。' }),
     ]));
-    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v7-teacher-review');
-    expect(result.qualityReport.teachingEnhancementVersion).toBe('section-teaching-brief-v5');
-    expect(result.qualityReport.narrationEnhancementVersion).toBe('independent-first-pass-narration-v6');
+    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v8-section-narration');
+    expect(result.qualityReport.teachingEnhancementVersion).toBe('substantive-section-brief-v6');
+    expect(result.qualityReport.narrationEnhancementVersion).toBe('section-continuous-narration-v7');
     expect(result.qualityReport.reviewMode).toBeUndefined();
-    expect(result.qualityReport.reviewPolicyVersion).toBe('course-first-pass-v7-teacher-review');
+    expect(result.qualityReport.reviewPolicyVersion).toBe('course-first-pass-v8-section-narration');
   });
 
   it('preserves the initial playable speech without a style review pass', async () => {

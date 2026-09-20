@@ -79,6 +79,19 @@ describe('classroom editing boundary', () => {
     expect(invalidateChangedSpeechAudio(before, before)).toBe(before);
   });
 
+  it('never lets a newly inserted speech reuse submitted legacy audio metadata', () => {
+    const before = slide();
+    const after = slide({
+      actions: [...(before.actions ?? []), {
+        id: 'speech-new', type: 'speech', text: '新增解释',
+        audioId: 'old.mp3', audioUrl: '/api/openmaic/classroom-media/classroom-1/audio/old.mp3',
+      }],
+    });
+    expect(invalidateChangedSpeechAudio(before, after).actions?.at(-1)).toEqual({
+      id: 'speech-new', type: 'speech', text: '新增解释', audioInvalidated: true,
+    });
+  });
+
   it('forks stage ids and media references while preserving valid content', () => {
     const prepared = prepareClassroomEdit({
       existing: classroom(),

@@ -29,7 +29,7 @@ describe('assessment teaching dependencies', () => {
     expect(context.pages[0].narration).toEqual(['先讲清概念']);
     expect(context.answerAuthority.conceptBoundaries[0]).toContain('不能证明设计没有依据');
     expect(context.answerAuthority.evidence[0].quote).toContain('底层逻辑支持');
-    expect(context.instruction).toContain('不得把讲稿里的简化线索');
+    expect(context.instruction).toContain('不得因讲稿解释不足而降低标准');
     expect(JSON.stringify(context)).not.toContain('planned but not taught');
   });
 
@@ -46,7 +46,7 @@ describe('assessment teaching dependencies', () => {
     const first = taught(page('a', { lectureSectionId: 'a', teachingUnitIds: ['unit-a'] }));
     const second = taught(page('b', { lectureSectionId: 'b', teachingUnitIds: ['unit-b'] }));
     expect(JSON.parse(buildAssessmentContext(finalQuiz, [first, second])).pages).toHaveLength(2);
-    expect(() => buildAssessmentContext(finalQuiz, [first])).toThrow('缺少');
+    expect(() => buildAssessmentContext(finalQuiz, [first])).toThrow('不能降低题目标准');
     expect(() => buildAssessmentContext({ ...finalQuiz, assessmentUnitIds: [] }, [first, second])).toThrow('缺少');
   });
 
@@ -60,5 +60,15 @@ describe('assessment teaching dependencies', () => {
       }
     }
     expect(buildAssessmentContext(page('ordinary'), [])).toBe('');
+  });
+
+  it('keeps the predeclared understanding standard when actual narration misses a supporting unit', () => {
+    const assessed = { ...quiz, teachingBrief: { ...quiz.teachingBrief!, understandingCriteria: {
+      goals: ['说明两个概念如何共同作用'], answerEssentials: ['关系与理由'],
+      misconceptions: ['只背名称'], supportingUnitIds: ['unit-a', 'unit-b'],
+    } } };
+    expect(() => buildAssessmentContext(assessed, [
+      taught(page('a', { lectureSectionId: 'section-a', teachingUnitIds: ['unit-a'] })),
+    ])).toThrow('不能降低题目标准');
   });
 });

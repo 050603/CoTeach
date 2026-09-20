@@ -12,7 +12,8 @@ describe('course resource scripts', () => {
       scenes: [
         {
           id: 'scene-1', stageId: 'stage-1', title: '概念导入', type: 'slide', order: 0,
-          content: { type: 'slide', canvas: { id: 'canvas-1', viewportSize: 1000, viewportRatio: 0.5625, elements: [] } },
+          content: { type: 'slide', canvas: { id: 'canvas-1', viewportSize: 1000, viewportRatio: 0.5625,
+            theme: { backgroundColor: '#fff', themeColors: [], fontColor: '#000', fontName: 'Arial' }, elements: [] } },
           actions: [
             { id: 'speech-1', type: 'speech', text: '第一段讲稿。' },
             { id: 'speech-2', type: 'speech', text: '第二段讲稿。' },

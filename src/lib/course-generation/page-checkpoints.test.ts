@@ -152,6 +152,15 @@ describe("course-generation page checkpoints", () => {
     )).toBeNull();
   });
 
+  it("does not let a legacy completed page impersonate the current contract cache", () => {
+    const legacy: PageCheckpointSnapshot = {
+      pageKey: outline.id,
+      outlineFingerprint: fingerprintSceneOutline(outline),
+      scene,
+    };
+    expect(restoreSceneCheckpoint(outline, legacy, "stage", "model-a", "contract-v3")).toBeNull();
+  });
+
   it("restores only the matching persisted stage attempt budget", () => {
     const checkpoint: SceneStageAttemptSnapshot = {
       schemaVersion: SCENE_STAGE_CHECKPOINT_VERSION,

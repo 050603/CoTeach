@@ -104,10 +104,10 @@ import {
 } from "@/lib/course-generation/checkpoint-storage";
 import { fingerprintGenerationValue } from "@/lib/course-generation/page-checkpoints";
 import {
+  applyReviewedOutlinesToTeachingBlueprint,
   generateTeachingBlueprint,
   teachingBlueprintInputFingerprint,
   teachingBlueprintToOutlines,
-  TEACHING_NARRATION_RATIO,
   type TeachingBlueprintInput,
   type TeachingBlueprintSectionPlan,
 } from "./teaching-blueprint";
@@ -123,7 +123,7 @@ const NEW_SYSTEM_STEP_ESTIMATES = [180, 720, 360];
 const NEW_SYSTEM_REVIEW_WINDOW_MS = 20_000;
 const log = createLogger("CourseDesign");
 
-export type QuickDesignReviewKind = "knowledge" | "outline";
+export type QuickDesignReviewKind = "knowledge" | "capacity" | "outline";
 
 export type QuickDesignRequest = {
   courseId: string;
@@ -134,7 +134,9 @@ export type QuickDesignRequest = {
   /** Course-page planning strategy selected by the teacher. */
   generationMode?: CourseGenerationMode;
   /** New submissions use the blueprint compiler; missing means legacy in-flight work. */
-  generationContractVersion?: 2;
+  generationContractVersion?: 2 | 3;
+  /** Set only when a teacher explicitly resumes a review checkpoint. */
+  reviewActorId?: string;
   /** Independent policy for section checks. Missing legacy jobs keep their old behavior. */
   assessmentMode?: AssessmentMode;
   /** Full output or one complete lesson selected from the formal outline. */
@@ -151,6 +153,8 @@ export type QuickDesignRequest = {
   };
   resumeFromOutlineReview?: boolean;
   resumeReviewKind?: QuickDesignReviewKind;
+  /** Explicit teacher decision for a persisted scope/time conflict. */
+  capacityDecisionAccepted?: boolean;
   /** Internal durable retry count for transient network/provider failures. */
   transientRecoveryCount?: number;
 };
@@ -171,6 +175,17 @@ class CourseDesignCancelledError extends Error {
     super("课程生成已由教师中断");
     this.name = "CourseDesignCancelledError";
   }
+}
+
+class CourseDesignReviewPendingError extends Error {
+  constructor(readonly reviewKind: QuickDesignReviewKind) {
+    super(`课程设计正在等待教师确认：${reviewKind}`);
+    this.name = "CourseDesignReviewPendingError";
+  }
+}
+
+export function isPersistentCourseDesignReview(windowMs: number | null): boolean {
+  return windowMs === null;
 }
 
 function traceEvents(value: Prisma.JsonValue): QuickDesignTraceEvent[] {
@@ -436,15 +451,15 @@ async function awaitTeacherReviewCheckpoint(
   controller: AbortController,
   checkpoint: {
     kind: QuickDesignReviewKind;
-    step: "knowledgeReview" | "outlineReview" | "lessonOutline";
+    step: "knowledgeReview" | "capacityReview" | "outlineReview" | "lessonOutline";
     stepIndex: number;
     progress: number;
-    windowMs: number;
+    windowMs: number | null;
     availableMessage: string;
     autoContinueMessage: string;
   },
-): Promise<void> {
-  const reviewAvailableUntil = new Date(Date.now() + checkpoint.windowMs);
+): Promise<{ mode: "auto-adopted" | "teacher-confirmed"; actorId?: string }> {
+  const reviewAvailableUntil = checkpoint.windowMs === null ? null : new Date(Date.now() + checkpoint.windowMs);
   const updated = await designGenerationJobs.update({
     where: { id: job.id },
     data: {
@@ -460,19 +475,26 @@ async function awaitTeacherReviewCheckpoint(
     },
   });
   Object.assign(job, updated);
+  // A decision without a deadline is a durable queue state, not active work.
+  // Release the single design worker so other teachers' queued courses can
+  // start while this course waits for an explicit decision.
+  if (isPersistentCourseDesignReview(checkpoint.windowMs)) {
+    throw new CourseDesignReviewPendingError(checkpoint.kind);
+  }
   let heartbeatAt = Date.now();
 
   while (true) {
     if (controller.signal.aborted) throw controller.signal.reason ?? new CourseDesignCancelledError();
     const current = await designGenerationJobs.findUnique({
       where: { id: job.id },
-      select: { status: true, reviewStatus: true, reviewAvailableUntil: true },
+      select: { status: true, reviewStatus: true, reviewAvailableUntil: true, request: true },
     });
     if (!current || current.status === "cancelling" || current.status === "cancelled") {
       throw new CourseDesignCancelledError();
     }
     if (current.reviewStatus === "approved" && (current.status === "running" || current.status === "queued")) {
-      return;
+      const approvedRequest = current.request as unknown as QuickDesignRequest;
+      return { mode: "teacher-confirmed", ...(approvedRequest.reviewActorId ? { actorId: approvedRequest.reviewActorId } : {}) };
     }
     if (current.status === "paused") {
       if (Date.now() - heartbeatAt >= 2_000) {
@@ -485,8 +507,8 @@ async function awaitTeacherReviewCheckpoint(
       await wait(650);
       continue;
     }
-    const deadline = current.reviewAvailableUntil?.getTime() ?? reviewAvailableUntil.getTime();
-    if (current.status === "review_available" && Date.now() >= deadline) {
+    const deadline = current.reviewAvailableUntil?.getTime() ?? reviewAvailableUntil?.getTime();
+    if (current.status === "review_available" && deadline !== undefined && Date.now() >= deadline) {
       const resumed = await designGenerationJobs.updateMany({
         where: { id: job.id, status: "review_available", reviewStatus: "available" },
         data: {
@@ -501,7 +523,7 @@ async function awaitTeacherReviewCheckpoint(
       if (resumed.count === 1) {
         const latest = await designGenerationJobs.findUnique({ where: { id: job.id } });
         if (latest) Object.assign(job, latest);
-        return;
+        return { mode: "auto-adopted" };
       }
       continue;
     }
@@ -510,7 +532,7 @@ async function awaitTeacherReviewCheckpoint(
 }
 
 function reviewKindForStep(step: string): QuickDesignReviewKind {
-  return step === "knowledgeReview" ? "knowledge" : "outline";
+  return step === "knowledgeReview" ? "knowledge" : step === "capacityReview" ? "capacity" : "outline";
 }
 
 export async function pauseCourseDesignForOutlineReview(
@@ -527,6 +549,8 @@ export async function pauseCourseDesignForOutlineReview(
       reviewAvailableUntil: null,
       message: reviewKind === "knowledge"
         ? "生成已暂停，等待教师确认知识图谱"
+        : reviewKind === "capacity"
+          ? "生成已暂停，等待教师决定知识范围与时间冲突"
         : "生成已暂停，等待教师确认课程大纲",
       lastHeartbeatAt: new Date(),
       version: { increment: 1 },
@@ -541,6 +565,7 @@ export async function resumeCourseDesignAfterOutlineReview(
   courseId: string,
   review?: {
     reviewKind?: QuickDesignReviewKind;
+    actorId?: string;
     knowledgePoints?: KnowledgePoint[];
     knowledgeGraph?: KnowledgeGraph;
     lessonOutline?: LessonOutlineSection[];
@@ -565,23 +590,50 @@ export async function resumeCourseDesignAfterOutlineReview(
           : {}),
       },
     }));
-  } else if (review?.lessonOutline || review?.sceneOutlines) {
-    await updateCourse(courseId, (course) => ({
-      ...course,
-      content: {
-        ...course.content,
-        ...(review.lessonOutline
-          ? { lessonOutline: review.lessonOutline }
-          : review.sceneOutlines
-            ? { lessonOutline: review.sceneOutlines.map(sceneOutlineToLessonSection) }
-            : {}),
-        ...(review.sceneOutlines ? { _openmaicSceneOutlines: review.sceneOutlines } : {}),
-      },
-    }));
+  } else if (reviewKind === "outline" && (review?.lessonOutline || review?.sceneOutlines)) {
+    await updateCourse(courseId, (course) => {
+      if (review.sceneOutlines && course.content.teachingBlueprint?.schemaVersion === 2) {
+        if (review.sceneOutlines.some((outline) => !outline.id || !outline.title
+          || (outline.type !== "slide" && outline.type !== "interactive" && outline.type !== "quiz" && outline.type !== "pbl"))) {
+          throw new Error("课程大纲包含无效页面，未应用本次修改。");
+        }
+        const reviewedOutlines = review.sceneOutlines as unknown as SceneOutline[];
+        const teachingBlueprint = applyReviewedOutlinesToTeachingBlueprint(
+          course.content.teachingBlueprint,
+          reviewedOutlines,
+        );
+        const languageDirective = review.sceneOutlines.find((outline) => outline.courseLanguageDirective)
+          ?.courseLanguageDirective ?? ZH_CN_COURSE_LANGUAGE_DIRECTIVE;
+        const compiled = teachingBlueprintToOutlines(teachingBlueprint, languageDirective);
+        return {
+          ...course,
+          content: {
+            ...course.content,
+            teachingBlueprint,
+            lessonOutline: compiled.map(sceneOutlineToLessonSection),
+            _openmaicSceneOutlines: compiled,
+            _openmaicScenesCount: compiled.length,
+            knowledgeLectureSections: deriveKnowledgeLectureSectionsFromOutlines(compiled),
+          },
+        };
+      }
+      return {
+        ...course,
+        content: {
+          ...course.content,
+          ...(review.lessonOutline
+            ? { lessonOutline: review.lessonOutline }
+            : review.sceneOutlines
+              ? { lessonOutline: review.sceneOutlines.map(sceneOutlineToLessonSection) }
+              : {}),
+          ...(review.sceneOutlines ? { _openmaicSceneOutlines: review.sceneOutlines } : {}),
+        },
+      };
+    });
   }
 
   const request = job.request as unknown as QuickDesignRequest;
-  const hasLiveRunner = Boolean(
+  const hasLiveRunner = reviewKind !== "capacity" && Boolean(
     job.lastHeartbeatAt && Date.now() - job.lastHeartbeatAt.getTime() < 5_000,
   );
   return designGenerationJobs.update({
@@ -594,9 +646,13 @@ export async function resumeCourseDesignAfterOutlineReview(
         ...request,
         resumeFromOutlineReview: true,
         resumeReviewKind: reviewKind,
+        ...(review?.actorId ? { reviewActorId: review.actorId } : {}),
+        ...(reviewKind === "capacity" ? { capacityDecisionAccepted: true } : {}),
       } as unknown as Prisma.InputJsonValue,
       message: reviewKind === "knowledge"
         ? "已采用教师确认的知识图谱，正在生成课程大纲"
+        : reviewKind === "capacity"
+          ? "教师已决定按当前范围与时长继续，正在生成实质教学设计"
         : "已采用教师确认的课程大纲，正在继续生成",
       lastHeartbeatAt: new Date(),
       version: { increment: 1 },
@@ -1383,8 +1439,6 @@ export function buildOpenMaicKnowledgeLectureRequirement(
   ].filter(Boolean).join("\n\n");
 }
 
-const BLUEPRINT_PLANNING_SECONDS_PER_PAGE = 75;
-
 export function buildTeachingBlueprintSectionPlans(
   content: Pick<CourseContent, "knowledgePoints" | "moduleTimingPlan">,
   totalDurationSec: number,
@@ -1404,10 +1458,12 @@ export function buildTeachingBlueprintSectionPlans(
     (sum, id) => sum + (durationByPoint.get(id) ?? 1),
     0,
   ));
-  const teachingDurationSec = Math.round(totalDurationSec * TEACHING_NARRATION_RATIO);
-  const pageCapacity = Math.max(entries.length, Math.floor(
-    teachingDurationSec / BLUEPRINT_PLANNING_SECONDS_PER_PAGE,
-  ));
+  const assessmentReserveSec = Math.min(
+    Math.floor(totalDurationSec * 0.2),
+    Math.max(entries.length * 45, Math.round(totalDurationSec * 0.12)),
+  );
+  const explanationBudgetSec = Math.max(entries.length, totalDurationSec - assessmentReserveSec);
+  const pageCapacity = Math.max(entries.length, Math.ceil(explanationBudgetSec / 120));
   const extraCapacity = Math.max(0, pageCapacity - entries.length);
   const weightTotal = weights.reduce((sum, weight) => sum + Math.max(1, weight), 0);
   const exactExtras = weights.map((weight) => extraCapacity * Math.max(1, weight) / weightTotal);
@@ -1490,7 +1546,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
         blueprint?: unknown;
       }
     : undefined;
-  let blueprint = content.teachingBlueprint?.schemaVersion === 1
+  let blueprint = content.teachingBlueprint?.schemaVersion === 2
     && content.teachingBlueprint.inputFingerprint === expectedFingerprint
     ? content.teachingBlueprint
     : undefined;
@@ -1498,7 +1554,8 @@ async function generateNewSystemTeachingBlueprintOutlines(
     if (checkpoint?.schemaVersion === 1
       && checkpoint.inputFingerprint === expectedFingerprint
       && checkpoint.modelFingerprint === modelFingerprint
-      && checkpoint.blueprint && typeof checkpoint.blueprint === "object") {
+      && checkpoint.blueprint && typeof checkpoint.blueprint === "object"
+      && (checkpoint.blueprint as { schemaVersion?: unknown }).schemaVersion === 2) {
       blueprint = checkpoint.blueprint as TeachingBlueprint;
     }
   }
@@ -1688,7 +1745,7 @@ async function enqueueClassroomGeneration(
   teacherBrief = "",
   generationModelString?: string,
   assessmentMode?: AssessmentMode,
-  generationContractVersion?: 2,
+  generationContractVersion?: 2 | 3,
   generationScope: ClassroomGenerationScope = "full-course",
 ): Promise<void> {
   const confirmedSceneOutlines = (course.content._openmaicSceneOutlines ?? []).map((scene, index) => ({
@@ -1798,6 +1855,147 @@ async function enqueueClassroomGeneration(
       version: { increment: 1 },
     },
   });
+}
+
+export class TestLessonPromotionError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "TestLessonPromotionError";
+  }
+}
+
+/**
+ * Promote a completed single-section test run to the already approved full
+ * outline. The content job keeps compatible page checkpoints, so the accepted
+ * test section is reused while only the remaining course pages are produced.
+ */
+export async function promoteTestLessonToFullCourse(
+  courseId: string,
+): Promise<{
+  designJob: CourseDesignGenerationJob;
+  contentJob: NonNullable<Awaited<ReturnType<typeof contentGenerationJobs.findUnique>>>;
+}> {
+  const [designJob, contentJob, course] = await Promise.all([
+    designGenerationJobs.findUnique({ where: { courseId } }),
+    contentGenerationJobs.findUnique({ where: { courseId } }),
+    getCourse(courseId),
+  ]);
+  if (!designJob || !contentJob || !course) {
+    throw new TestLessonPromotionError(
+      "TEST_LESSON_NOT_FOUND",
+      "没有找到已完成的测试小节，无法继续生成完整课程。",
+      404,
+    );
+  }
+
+  const designRequest = designJob.request as unknown as QuickDesignRequest;
+  const contentRequest = contentJob.request as unknown as PersistedCourseGenerationRequest;
+
+  // A repeated click after promotion is idempotent and returns the live job.
+  if (contentRequest.generationScope === "full-course") {
+    const retainedDesignJob = designRequest.generationScope === "full-course"
+      ? designJob
+      : await designGenerationJobs.update({
+          where: { id: designJob.id },
+          data: {
+            request: { ...designRequest, generationScope: "full-course" } as unknown as Prisma.InputJsonValue,
+            message: "测试小节已通过验收，正在继续生成完整课程",
+            version: { increment: 1 },
+          },
+        });
+    return { designJob: retainedDesignJob, contentJob };
+  }
+
+  if (designJob.status !== "completed" || contentJob.status !== "completed") {
+    throw new TestLessonPromotionError(
+      "TEST_LESSON_NOT_COMPLETED",
+      "测试小节尚未完整生成，请等待页面、讲稿和资源全部完成后再继续。",
+      409,
+    );
+  }
+  if (designRequest.generationScope !== "test-lesson"
+    || contentRequest.generationScope !== "test-lesson"
+    || course.content.classroomGenerationRun?.scope !== "test-lesson") {
+    throw new TestLessonPromotionError(
+      "NOT_A_TEST_LESSON",
+      "当前课程不是可晋级的测试小节。",
+      409,
+    );
+  }
+  const fullOutlineCount = course.content._openmaicSceneOutlines?.length ?? 0;
+  const testOutlineCount = contentRequest.testLesson?.sceneOutlineIds.length ?? 0;
+  if (!testOutlineCount || fullOutlineCount <= testOutlineCount) {
+    throw new TestLessonPromotionError(
+      "FULL_COURSE_OUTLINE_MISSING",
+      "完整课程大纲缺失或没有剩余页面，请先检查课程设计。",
+      409,
+    );
+  }
+
+  const packageJob = await resourcePackageJobs.findUnique({ where: { courseId } });
+  if (!canResumeCourseDesignWithPackageState(designRequest, packageJob)
+    || (designRequest.resourcePackage
+      && (!course.content.resourcePackage?.confirmedAt
+        || course.content.resourcePackage.id !== designRequest.resourcePackage.id
+        || course.content.resourcePackage.revision !== designRequest.resourcePackage.revision))) {
+    throw new TestLessonPromotionError(
+      "RESOURCE_PACKAGE_CHANGED",
+      "课程资源包已经更新，请按最新确认的教学要求重新生成。",
+      409,
+    );
+  }
+
+  const fullSceneOutlines = course.content._openmaicSceneOutlines ?? [];
+  const promotionCourse = course.content.lessonOutline.length === fullSceneOutlines.length
+    ? course
+    : {
+        ...course,
+        content: {
+          ...course.content,
+          lessonOutline: fullSceneOutlines.map(sceneOutlineToLessonSection),
+          knowledgeLectureSections: deriveKnowledgeLectureSectionsFromOutlines(fullSceneOutlines),
+        },
+      };
+  if (promotionCourse !== course) {
+    await updateCourse(courseId, (current) => ({
+      ...current,
+      content: promotionCourse.content,
+    }));
+  }
+
+  await enqueueClassroomGeneration(
+    promotionCourse,
+    designRequest.options,
+    "new",
+    designRequest.generationMode ?? "standard",
+    designRequest.referenceMaterials,
+    teacherGenerationBrief(designRequest),
+    designRequest.generationModelString,
+    designRequest.assessmentMode,
+    designRequest.generationContractVersion,
+    "full-course",
+  );
+  const promotedContentJob = await contentGenerationJobs.findUnique({ where: { courseId } });
+  if (!promotedContentJob) {
+    throw new TestLessonPromotionError(
+      "FULL_COURSE_JOB_NOT_CREATED",
+      "完整课程生成任务没有成功建立，请稍后重试。",
+      503,
+    );
+  }
+  const promotedDesignJob = await designGenerationJobs.update({
+    where: { id: designJob.id },
+    data: {
+      request: { ...designRequest, generationScope: "full-course" } as unknown as Prisma.InputJsonValue,
+      message: "测试小节已通过验收，完整课程已进入生成队列",
+      version: { increment: 1 },
+    },
+  });
+  return { designJob: promotedDesignJob, contentJob: promotedContentJob };
 }
 
 function sceneOutlinesFromContent(content: CourseContent): Array<SceneOutline & OpenMaicSceneOutlineSnapshot> {
@@ -2122,7 +2320,7 @@ async function runNewSystemCourseDesign(
         { knowledgeGraph: content.knowledgeGraph, knowledgePoints: content.knowledgePoints },
       )],
     });
-    await awaitTeacherReviewCheckpoint(job, controller, {
+    const knowledgeAdoption = await awaitTeacherReviewCheckpoint(job, controller, {
       kind: "knowledge",
       step: "knowledgeReview",
       stepIndex: 1,
@@ -2132,13 +2330,33 @@ async function runNewSystemCourseDesign(
       autoContinueMessage: "未收到修改，正在按当前知识图谱生成课程大纲",
     });
     const reviewedCourse = await getCourse(request.courseId);
-    if (!reviewedCourse) throw new Error("教师确认后的知识图谱读取失败");
-    course = reviewedCourse;
+    if (!reviewedCourse) throw new Error("已采用的知识图谱读取失败");
+    course = {
+      ...reviewedCourse,
+      content: {
+        ...reviewedCourse.content,
+        teachingAdoptions: [...(reviewedCourse.content.teachingAdoptions ?? []), {
+          kind: "knowledge",
+          mode: knowledgeAdoption.mode,
+          contentRevision: fingerprintGenerationValue({
+            knowledgePoints: reviewedCourse.content.knowledgePoints,
+            knowledgeGraph: reviewedCourse.content.knowledgeGraph,
+          }),
+          adoptedAt: new Date().toISOString(),
+          ...(knowledgeAdoption.actorId ? { actorId: knowledgeAdoption.actorId } : {}),
+        }],
+      },
+    };
+    await updateCourse(request.courseId, () => course);
   }
 
   let timingPlan = isNewSystemAiTimingPlan(course.content.moduleTimingPlan, course.hours, course.content.stagePlan)
     ? course.content.moduleTimingPlan
     : undefined;
+  const resumeAtCapacity = request.resumeFromOutlineReview
+    && request.resumeReviewKind === "capacity"
+    && request.capacityDecisionAccepted === true
+    && Boolean(timingPlan);
   if (!timingPlan) {
     await beginStep(job, "aiDurationPlanning", 2, 58, course.content.stagePlan ? "正在按教案固定时长分配知识点预算" : "正在整课 20%–40% 范围内确定知识讲授总时长");
     const durationInput: NewSystemAiDurationInput = {
@@ -2146,7 +2364,7 @@ async function runNewSystemCourseDesign(
       knowledgePoints: course.content.knowledgePoints,
       knowledgeGraph: course.content.knowledgeGraph,
       generationMode: request.generationMode ?? "standard",
-      assessmentMode: request.assessmentMode ?? (request.generationContractVersion === 2 ? "adaptive" : "constructed-response"),
+      assessmentMode: request.assessmentMode ?? (request.generationContractVersion && request.generationContractVersion >= 2 ? "adaptive" : "constructed-response"),
       teacherBrief: teacherGenerationBrief(request),
       referenceMaterials: request.referenceMaterials,
       stagePlan: course.content.stagePlan,
@@ -2259,6 +2477,60 @@ async function runNewSystemCourseDesign(
         })),
       )],
     });
+    if (durationRecommendation.scopeWarning) {
+      const capacityAdoption = await awaitTeacherReviewCheckpoint(job, controller, {
+        kind: "capacity",
+        step: "capacityReview",
+        stepIndex: 2,
+        progress: 67,
+        windowMs: null,
+        availableMessage: `知识范围与 ${timingPlan.totalMinutes} 分钟预算存在冲突：${durationRecommendation.scopeWarning}。请明确决定后再制作课件。`,
+        autoContinueMessage: "",
+      });
+      await updateCourse(request.courseId, (current) => ({
+        ...current,
+        content: {
+          ...current.content,
+          teachingAdoptions: [...(current.content.teachingAdoptions ?? []), {
+            kind: "capacity",
+            mode: capacityAdoption.mode,
+            contentRevision: fingerprintGenerationValue({
+              totalMinutes: timingPlan!.totalMinutes,
+              allocations: timingPlan!.allocations,
+              scopeWarning: durationRecommendation.scopeWarning,
+            }),
+            adoptedAt: new Date().toISOString(),
+            ...(capacityAdoption.actorId ? { actorId: capacityAdoption.actorId } : {}),
+          }],
+        },
+      }));
+    }
+  }
+  if (resumeAtCapacity && timingPlan) {
+    const contentRevision = fingerprintGenerationValue({
+      totalMinutes: timingPlan.totalMinutes,
+      allocations: timingPlan.allocations,
+    });
+    await updateCourse(request.courseId, (current) => ({
+      ...current,
+      content: {
+        ...current.content,
+        teachingAdoptions: (current.content.teachingAdoptions ?? []).some(
+          (adoption) => adoption.kind === "capacity" && adoption.contentRevision === contentRevision,
+        )
+          ? current.content.teachingAdoptions
+          : [...(current.content.teachingAdoptions ?? []), {
+              kind: "capacity",
+              mode: "teacher-confirmed",
+              contentRevision,
+              adoptedAt: new Date().toISOString(),
+              ...(request.reviewActorId ? { actorId: request.reviewActorId } : {}),
+            }],
+      },
+    }));
+    const resumedCourse = await getCourse(request.courseId);
+    if (!resumedCourse) throw new Error("教师容量决定保存后课程读取失败");
+    course = resumedCourse;
   }
   let content: CourseContent = {
     ...course.content,
@@ -2269,7 +2541,7 @@ async function runNewSystemCourseDesign(
     moduleTimingPlan: timingPlan,
   };
   let sceneOutlines: Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
-  const usesTeachingBlueprint = request.generationContractVersion === 2;
+  const usesTeachingBlueprint = Boolean(request.generationContractVersion && request.generationContractVersion >= 2);
   if (resumeAtOutline && isNewSystemAiTimingPlan(initialCourse.content.moduleTimingPlan, course.hours, initialCourse.content.stagePlan)) {
     if (usesTeachingBlueprint) {
       if (!content.teachingBlueprint) throw new Error("教学蓝图检查点缺失，无法复用新版课程大纲。");
@@ -2348,7 +2620,7 @@ async function runNewSystemCourseDesign(
         })),
       )],
     });
-    await awaitTeacherReviewCheckpoint(job, controller, {
+    const outlineAdoption = await awaitTeacherReviewCheckpoint(job, controller, {
       kind: "outline",
       step: "outlineReview",
       stepIndex: 2,
@@ -2358,11 +2630,24 @@ async function runNewSystemCourseDesign(
       autoContinueMessage: "未收到修改，正在按当前课程大纲生成课堂页面",
     });
     const reviewedCourse = await getCourse(request.courseId);
-    if (!reviewedCourse) throw new Error("教师确认后的课程大纲读取失败");
-    course = reviewedCourse;
-    content = reviewedCourse.content;
+    if (!reviewedCourse) throw new Error("已采用的课程大纲读取失败");
+    content = {
+      ...reviewedCourse.content,
+      teachingAdoptions: [...(reviewedCourse.content.teachingAdoptions ?? []), {
+        kind: "outline",
+        mode: outlineAdoption.mode,
+        contentRevision: fingerprintGenerationValue({
+          teachingBlueprint: reviewedCourse.content.teachingBlueprint,
+          sceneOutlines: reviewedCourse.content._openmaicSceneOutlines,
+        }),
+        adoptedAt: new Date().toISOString(),
+        ...(outlineAdoption.actorId ? { actorId: outlineAdoption.actorId } : {}),
+      }],
+    };
+    course = { ...reviewedCourse, content };
+    await updateCourse(request.courseId, () => course);
     if (usesTeachingBlueprint) {
-      if (!content.teachingBlueprint) throw new Error("教师确认后的教学蓝图缺失。");
+      if (!content.teachingBlueprint) throw new Error("已采用的教学蓝图缺失。");
       sceneOutlines = sceneOutlinesFromContent(content) as Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
     } else {
       sceneOutlines = normalizeNewSystemAiOutlines(sceneOutlinesFromContent(content), {
@@ -2466,6 +2751,9 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
   try {
     await runNewSystemCourseDesign(job, { ...request, systemMode: "new" }, controller);
   } catch (error) {
+    if (error instanceof CourseDesignReviewPendingError) {
+      return;
+    }
     if (stopping && controller.signal.aborted) {
       await designGenerationJobs.updateMany({
         where: { id: job.id, status: { in: ["running", "review_available"] } },
@@ -2650,7 +2938,11 @@ export async function startCourseDesignWorker(): Promise<void> {
     data: { status: "queued", step: "queued", message: "等待服务器继续生成" },
   });
   await designGenerationJobs.updateMany({
-    where: { status: "review_available", OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: new Date(Date.now() - STALE_AFTER_MS) } }] },
+    where: {
+      status: "review_available",
+      step: { not: "capacityReview" },
+      OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: new Date(Date.now() - STALE_AFTER_MS) } }],
+    },
     data: {
       status: "queued",
       reviewStatus: "auto-continued",

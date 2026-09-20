@@ -98,6 +98,47 @@ function syncSceneOutlines(
   });
 }
 
+function sceneVisualMeaning(scene: Scene): unknown {
+  if (scene.content.type !== 'slide') return scene.content;
+  return scene.content.canvas.elements.map((element) => {
+    const record = element as unknown as Record<string, unknown>;
+    return Object.fromEntries(['id', 'type', 'content', 'text', 'src', 'latex', 'path', 'start', 'end', 'chartType', 'data']
+      .filter((key) => record[key] !== undefined).map((key) => [key, record[key]]));
+  });
+}
+
+function deriveRevisionState(before: Scene[], after: Scene[], nextRevision: number) {
+  const previous = new Map(before.map((scene) => [scene.id, scene]));
+  const narrationIds: string[] = [];
+  const visualIds: string[] = [];
+  const layoutIds: string[] = [];
+  for (const scene of after) {
+    const prior = previous.get(scene.id);
+    if (!prior) { visualIds.push(scene.id); narrationIds.push(scene.id); continue; }
+    const beforeSpeech = (prior.actions ?? []).filter((action) => action.type === 'speech').map((action) => [action.id, action.text]);
+    const afterSpeech = (scene.actions ?? []).filter((action) => action.type === 'speech').map((action) => [action.id, action.text]);
+    if (JSON.stringify(beforeSpeech) !== JSON.stringify(afterSpeech)) narrationIds.push(scene.id);
+    if (JSON.stringify(sceneVisualMeaning(prior)) !== JSON.stringify(sceneVisualMeaning(scene))) visualIds.push(scene.id);
+    else if (JSON.stringify(prior.content) !== JSON.stringify(scene.content)) layoutIds.push(scene.id);
+  }
+  const afterIds = new Set(after.map((scene) => scene.id));
+  for (const scene of before) if (!afterIds.has(scene.id)) {
+    visualIds.push(scene.id);
+    narrationIds.push(scene.id);
+  }
+  const affectedSceneIds = [...new Set([...narrationIds, ...visualIds, ...layoutIds])];
+  const changeType: 'narration' | 'layout' | 'visual-content' | 'mixed' = narrationIds.length && (visualIds.length || layoutIds.length) ? 'mixed'
+    : narrationIds.length ? 'narration'
+      : visualIds.length ? 'visual-content' : 'layout';
+  const invalidated = [...new Set([
+    ...(narrationIds.length ? ['audio', 'narration-anchors', 'timing-audit', 'assessment-opportunity'] as const : []),
+    ...(visualIds.length ? ['actions', 'narration-anchors', 'assessment-opportunity'] as const : []),
+    ...(layoutIds.length ? ['actions'] as const : []),
+  ])];
+  return { schemaVersion: 1 as const, baseClassroomRevision: nextRevision - 1, classroomRevision: nextRevision,
+    changeType, affectedSceneIds, invalidated, updatedAt: new Date().toISOString() };
+}
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ courseId: string }> },
@@ -185,6 +226,7 @@ export async function PATCH(
       classroomId: targetClassroomId,
     });
     prepared.scenes = audio.scenes;
+    const revisionState = deriveRevisionState(existing.scenes, prepared.scenes, actualRevision + 1);
     const previousSpeech = new Map(existing.scenes.flatMap((scene) => (scene.actions ?? [])
       .filter((action) => action.type === 'speech')
       .map((action) => [JSON.stringify([scene.id, action.id]), action])));
@@ -225,6 +267,9 @@ export async function PATCH(
           teacherReview: undefined,
           renderReview: undefined,
           qualityReview: undefined,
+          teachingTimingAudit: revisionState.invalidated.includes('timing-audit')
+            ? undefined : current.content.teachingTimingAudit,
+          teachingRevisionState: revisionState,
           _openmaicClassroomId: targetClassroomId,
           _openmaicScenesCount: prepared.scenes.length,
           _openmaicSceneOutlines: syncSceneOutlines(current, prepared.scenes),
@@ -237,6 +282,7 @@ export async function PATCH(
       classroom,
       forkedDraft: forkPublishedClassroom,
       narrationChanged,
+      dependencyInvalidation: revisionState,
     });
   } catch (error) {
     if (error instanceof ClassroomRevisionConflictError) {

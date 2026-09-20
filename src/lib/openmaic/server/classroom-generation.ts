@@ -30,6 +30,7 @@ import {
 } from '@openmaic/lib/generation/course-output-budget';
 import {
   generateTeachingNarration,
+  generateTeachingSectionNarration,
   canUseIndependentTeachingNarration,
   normalizeTeachingNarration,
   compileTeachingNarrationActions,
@@ -37,6 +38,7 @@ import {
   withTeachingSlideGuidance,
   restoreTeachingSemanticElementIds,
 } from '@openmaic/lib/generation/teaching-narration';
+import type { NarrationModuleOutput } from '@openmaic/lib/generation/action-binding-types';
 import type { AgentInfo } from '@openmaic/lib/generation/pipeline-types';
 import { getDefaultAgents } from '@openmaic/lib/orchestration/registry/store';
 import { createLogger } from '@openmaic/lib/logger';
@@ -1061,11 +1063,18 @@ async function generateClassroomInternal(
     ),
     input,
   );
-  const shouldEnhanceTeaching = preparedOutlines.length === 0 || outlines.some((outline) => (
+  const missingAdoptedTeachingDesign = outlines.filter((outline) => (
     outline.generationPurpose === 'knowledge-teaching'
     && (outline.type === 'slide' || outline.type === 'interactive')
     && !hasCurrentTeachingBrief(outline)
   ));
+  if (preparedOutlines.length > 0 && missingAdoptedTeachingDesign.some((outline) => (
+    Boolean(outline.teachingBrief) || Boolean(outline.lectureSectionId)
+  ))) {
+    throw new Error(`已采用大纲缺少可制作的实质解释，必须先修订内容设计：${missingAdoptedTeachingDesign.map((outline) => outline.title).join('、')}`);
+  }
+  const shouldEnhanceTeaching = preparedOutlines.length === 0
+    && (confirmedOutlines.length > 0 || missingAdoptedTeachingDesign.length > 0);
   if (shouldEnhanceTeaching) {
     let teachingDesignProgress = { completedSections: 0, totalSections: 0 };
     const reportTeachingDesignProgress = () => reportProgress({
@@ -1301,10 +1310,20 @@ async function generateClassroomInternal(
     };
   };
 
-  // Teaching slides author visuals and narration independently from one plan.
-  // Provider slots still bound concurrency; deterministic actions join both.
-  // Other scene types retain their content-dependent interaction contracts.
-  const generateSceneDraft = async (outline: SceneOutline, index: number, actualTaughtContext = '') => {
+  type PreparedTeachingPage = {
+    content?: GeneratedSceneContent;
+    narration?: NarrationModuleOutput;
+    contentOnly?: boolean;
+  };
+  // Ordinary teaching slides are prepared in two phases below: all visuals in
+  // a section first, then one continuous narration call. Specialized resource
+  // pages retain their native action contract.
+  const generateSceneDraft = async (
+    outline: SceneOutline,
+    index: number,
+    actualTaughtContext = '',
+    prepared: PreparedTeachingPage = {},
+  ): Promise<{ outline: SceneOutline; content: GeneratedSceneContent; scene?: Scene; index: number }> => {
       throwIfAborted(options.signal);
       const safeOutline = applyOutlineFallbacks(outline, true, {
         allowProceduralSkill: vocationalActive,
@@ -1349,7 +1368,12 @@ async function generateClassroomInternal(
         });
       }, 15_000);
 
-      const checkpoint = await options.loadSceneCheckpoint?.(
+      // A section narration fingerprint includes every actual slide. Once a
+      // page participates in that section pass, restoring its older complete
+      // scene here could reintroduce narration authored against a stale
+      // neighboring slide. Restore the independently fingerprinted stages
+      // below instead.
+      const checkpoint = prepared.contentOnly || prepared.content || prepared.narration ? null : await options.loadSceneCheckpoint?.(
         safeOutline,
         index,
         stageId,
@@ -1371,7 +1395,7 @@ async function generateClassroomInternal(
             message: `Restored ${generatedSceneDrafts}/${outlines.length} completed scenes`,
             scenesGenerated: generatedSceneDrafts, totalScenes: outlines.length,
           });
-          return { outline: safeOutline, scene: checkpoint, index };
+          return { outline: safeOutline, content: checkpoint.content as GeneratedSceneContent, scene: checkpoint, index };
         } else {
           log.warn(`Ignoring malformed checkpoint "${safeOutline.title}"`);
         }
@@ -1410,6 +1434,8 @@ async function generateClassroomInternal(
         independentNarration: TEACHING_NARRATION_VERSION,
       });
       const generateNarrationDraft = async () => {
+        if (prepared.narration) return normalizeTeachingNarration(prepared.narration, safeOutline);
+        if (prepared.contentOnly) return null;
         if (!independentNarration) return null;
         await reportPageStage(index, safeOutline.title, 'narration');
         const restored = await loadStage('narration', narrationFingerprint);
@@ -1430,15 +1456,15 @@ async function generateClassroomInternal(
       };
       const generateContentDraft = async () => {
         await reportPageStage(index, safeOutline.title, 'content');
-        const restoredContentPayload = await loadStage('content', pageInputFingerprint);
-        let content = restoredContentPayload
+        const restoredContentPayload = prepared.content ? null : await loadStage('content', pageInputFingerprint);
+        let content = prepared.content ?? (restoredContentPayload
           && typeof restoredContentPayload === 'object'
           && isGeneratedSceneContent(
             (restoredContentPayload as { content?: unknown }).content,
             safeOutline.type,
           )
           ? (restoredContentPayload as { content: GeneratedSceneContent }).content
-          : null;
+          : null);
         if (!content) {
           const pageContentCall = withCourseGenerationAiCallContext(
             contentCall.aiCall,
@@ -1499,6 +1525,7 @@ async function generateClassroomInternal(
       if (narrationResult.status === 'rejected') throw narrationResult.reason;
       const content = contentResult.value;
       const teachingNarration = narrationResult.value;
+      if (prepared.contentOnly) return { outline: safeOutline, content, index };
       throwIfAborted(options.signal);
       const actionAiCall = await getSceneActionsAiCall();
       const actionOptions = {
@@ -1639,7 +1666,7 @@ async function generateClassroomInternal(
         scenesGenerated: generatedSceneDrafts,
         totalScenes: outlines.length,
       });
-      return { outline: safeOutline, scene, index };
+      return { outline: safeOutline, content, scene, index };
       } catch (error) {
         if (options.signal?.aborted) throw error;
         const message = error instanceof Error ? error.message : String(error);
@@ -1665,14 +1692,98 @@ async function generateClassroomInternal(
       }
     };
   // A quiz depends on completed speech, not merely on the intention to teach.
-  // Preserve page parallelism within each wave and final outline ordering.
+  // First create every ordinary slide in a section, then write that section's
+  // narration as one continuous unit and split it back into page checkpoints.
   const indexed = outlines.map((outline, index) => ({ outline, index }));
-  const teachingDrafts = await mapWithConcurrencySettledOnError(
-    indexed.filter(({ outline }) => outline.type !== 'quiz'), sceneConcurrency,
-    ({ outline, index }) => generateSceneDraft(outline, index),
+  const narratable = indexed.filter(({ outline }) => {
+    if (outline.type === 'quiz') return false;
+    const safe = applyOutlineFallbacks(outline, true, {
+      allowProceduralSkill: vocationalActive,
+      personalProject: requirements.pblProfile?.projectMode === 'personal',
+    });
+    return canUseIndependentTeachingNarration(safe);
+  });
+  const preparedContentDrafts = await mapWithConcurrencySettledOnError(
+    narratable,
+    sceneConcurrency,
+    ({ outline, index }) => generateSceneDraft(outline, index, '', { contentOnly: true }),
     { shouldContinue: () => !options.signal?.aborted },
   );
-  const completedTeaching = teachingDrafts.flatMap((draft) => draft ? [{
+  const preparedByIndex = new Map<number, PreparedTeachingPage>();
+  for (const draft of preparedContentDrafts) {
+    if (draft) preparedByIndex.set(draft.index, { content: draft.content });
+  }
+  const sectionGroups = new Map<string, Array<{ outline: SceneOutline; index: number; content: GeneratedSlideContent }>>();
+  for (const { outline, index } of narratable) {
+    const prepared = preparedByIndex.get(index)?.content;
+    if (!prepared || !('elements' in prepared)) continue;
+    const sectionId = outline.lectureSectionId || outline.parentActivityId || outline.activityId || outline.stageKey || '__course__';
+    sectionGroups.set(sectionId, [...(sectionGroups.get(sectionId) ?? []), { outline, index, content: prepared }]);
+  }
+  for (const [sectionId, pages] of sectionGroups) {
+    const orderedPages = [...pages].sort((left, right) => left.index - right.index);
+    const sectionFingerprint = fingerprintGenerationValue({
+      policy: COURSE_GENERATION_POLICY_VERSION,
+      narrationPolicy: TEACHING_NARRATION_VERSION,
+      generationModelFingerprint,
+      sectionId,
+      pages: orderedPages.map(({ outline, content }) => ({ outline, content })),
+      progression: outlineContext.map((outline) => ({
+        id: outline.id, sectionId: outline.lectureSectionId, teachingPlan: outline.teachingBrief?.teachingPlan,
+      })),
+      languageDirective,
+      requirements,
+    });
+    const restored = await Promise.all(orderedPages.map(async ({ outline }) => {
+      const payload = await options.loadSceneStageCheckpoint?.(
+        outline, 'narration', generationModelFingerprint, sectionFingerprint,
+      );
+      if (!payload || typeof payload !== 'object' || !('teachingNarration' in payload)) return null;
+      try { return normalizeTeachingNarration(payload.teachingNarration, outline); }
+      catch { return null; }
+    }));
+    let narrations: NarrationModuleOutput[];
+    if (restored.every((item): item is NarrationModuleOutput => Boolean(item))) {
+      narrations = restored;
+    } else {
+      const first = orderedPages[0]!;
+      await reportPageStage(first.index, first.outline.title, 'narration');
+      try {
+        const narrationCall = withCourseGenerationAiCallContext(
+          await getSceneActionsAiCall(),
+          await pageCallContext(first.index, 'narration', sectionFingerprint),
+        );
+        const sectionNarration = await generateTeachingSectionNarration({
+          sectionId,
+          pages: orderedPages.map(({ outline, content }) => ({ outline, content })),
+          requirements,
+          courseTitle,
+          languageDirective,
+          courseProgression: outlineContext,
+          aiCall: narrationCall,
+        });
+        narrations = sectionNarration.pages;
+        await Promise.all(orderedPages.map(({ outline }, pageIndex) => options.onSceneStageCompleted?.(
+          outline,
+          'narration',
+          { teachingNarration: narrations[pageIndex] },
+          generationModelFingerprint,
+          sectionFingerprint,
+        )));
+      } finally {
+        activePages.delete(first.index);
+      }
+    }
+    orderedPages.forEach(({ index }, pageIndex) => {
+      preparedByIndex.set(index, { ...preparedByIndex.get(index), narration: narrations[pageIndex] });
+    });
+  }
+  const teachingDrafts = await mapWithConcurrencySettledOnError(
+    indexed.filter(({ outline }) => outline.type !== 'quiz'), sceneConcurrency,
+    ({ outline, index }) => generateSceneDraft(outline, index, '', preparedByIndex.get(index)),
+    { shouldContinue: () => !options.signal?.aborted },
+  );
+  const completedTeaching = teachingDrafts.flatMap((draft) => draft?.scene ? [{
     outline: draft.outline,
     speech: (draft.scene.actions ?? []).flatMap((action) => action.type === 'speech' ? [{ text: action.text }] : []),
   }] : []);
@@ -1681,7 +1792,7 @@ async function generateClassroomInternal(
     ({ outline, index }) => generateSceneDraft(outline, index, buildAssessmentContext(outline, completedTeaching)),
     { shouldContinue: () => !options.signal?.aborted },
   );
-  const draftsByIndex = new Map([...teachingDrafts, ...quizDrafts].flatMap((draft) => draft ? [[draft.index, draft] as const] : []));
+  const draftsByIndex = new Map([...teachingDrafts, ...quizDrafts].flatMap((draft) => draft?.scene ? [[draft.index, draft] as const] : []));
   const sceneDrafts = outlines.map((_, index) => draftsByIndex.get(index));
 
   throwIfAborted(options.signal);
@@ -1694,7 +1805,7 @@ async function generateClassroomInternal(
     failedTitles: failedContentTitles,
     phase: 'content',
   });
-  const assembledScenes = sceneDrafts.flatMap((draft) => draft ? [draft.scene] : []);
+  const assembledScenes = sceneDrafts.flatMap((draft) => draft?.scene ? [draft.scene] : []);
 
   assertCompleteSceneGeneration({
     expectedCount: outlines.length,

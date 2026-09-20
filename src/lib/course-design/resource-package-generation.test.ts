@@ -25,6 +25,51 @@ function confirmedPackage(): CourseResourcePackage {
 }
 
 describe("confirmed resource package generation", () => {
+  it("releases the design worker only for reviews without a deadline", async () => {
+    const { isPersistentCourseDesignReview } = await import("./job-runner");
+    expect(isPersistentCourseDesignReview(null)).toBe(true);
+    expect(isPersistentCourseDesignReview(20_000)).toBe(false);
+  }, 15_000);
+
+  it("requeues a confirmed capacity decision even when its review heartbeat is fresh", async () => {
+    const { resumeCourseDesignAfterOutlineReview } = await import("./job-runner");
+    const { designGenerationJobs } = await import("@/lib/course-generation/job-storage");
+    const job = {
+      id: "capacity-review",
+      courseId: "course-1",
+      status: "review_available",
+      step: "capacityReview",
+      request: { courseId: "course-1", teacherBrief: "", generationContractVersion: 3 },
+      lastHeartbeatAt: new Date(),
+    };
+    const find = vi.spyOn(designGenerationJobs, "findUnique").mockResolvedValue(job as never);
+    const update = vi.spyOn(designGenerationJobs, "update").mockImplementation(async (input) => ({
+      ...job,
+      ...input.data,
+    }) as never);
+    try {
+      await resumeCourseDesignAfterOutlineReview("course-1", {
+        reviewKind: "capacity",
+        actorId: "teacher-1",
+      });
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: "capacity-review" },
+        data: expect.objectContaining({
+          status: "queued",
+          reviewStatus: "approved",
+          request: expect.objectContaining({
+            capacityDecisionAccepted: true,
+            resumeReviewKind: "capacity",
+            reviewActorId: "teacher-1",
+          }),
+        }),
+      }));
+    } finally {
+      find.mockRestore();
+      update.mockRestore();
+    }
+  });
+
   it("preserves teacher facts and required subpoints without asking the model to infer them", async () => {
     const { applyResourcePackageGenerationInput, inferCourseSeed } = await import("./job-runner");
     const resourcePackage = confirmedPackage();

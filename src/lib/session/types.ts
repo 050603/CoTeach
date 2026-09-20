@@ -911,6 +911,8 @@ export type TeachingBlueprintPage = {
   description: string;
   keyPoints: string[];
   teachingObjective: string;
+  /** Chosen during content design; empty is valid for a text/shape explanation page. */
+  resourceNeeds?: import("@/lib/course-quality-review/types").TeachingResourceNeed[];
   /** Optional student-facing intellectual work; omit for a pure explanation page. */
   learningTask?: import("@/lib/course-quality-review/types").PageLearningTask;
   widgetType?: import("@/lib/openmaic/types/widgets").WidgetType;
@@ -928,6 +930,7 @@ export type TeachingBlueprintSection = {
   units: TeachingBlueprintUnit[];
   pages: TeachingBlueprintPage[];
   assessmentFocus: string[];
+  understandingCriteria: import("@/lib/course-quality-review/types").TeachingUnderstandingCriteria;
   teachingDurationSec: number;
   learnerActivityDurationSec: number;
   assessmentDurationSec: number;
@@ -936,7 +939,8 @@ export type TeachingBlueprintSection = {
 
 /** Teacher-private, versioned intermediate artifact used to make classroom pages. */
 export type TeachingBlueprint = {
-  schemaVersion: 1;
+  /** v1 remains readable for existing courses; only v2 may be reused by the new authoring pipeline. */
+  schemaVersion: 1 | 2;
   inputFingerprint: string;
   assessmentMode: import("@/lib/openmaic/types/generation").AssessmentMode;
   createdAt: string;
@@ -1439,6 +1443,24 @@ export type CourseContent = {
   knowledgeGraph?: KnowledgeGraph;
   /** Private, traceable curriculum compilation artifact. Student projections remove it. */
   teachingBlueprint?: TeachingBlueprint;
+  /** Durable authoring decisions; an elapsed intervention window is never represented as teacher confirmation. */
+  teachingAdoptions?: Array<{
+    kind: "knowledge" | "capacity" | "outline";
+    mode: "auto-adopted" | "teacher-confirmed";
+    contentRevision: string;
+    adoptedAt: string;
+    actorId?: string;
+  }>;
+  /** Teacher-private dependency state after a bounded classroom edit. */
+  teachingRevisionState?: {
+    schemaVersion: 1;
+    baseClassroomRevision: number;
+    classroomRevision: number;
+    changeType: "narration" | "layout" | "visual-content" | "mixed";
+    affectedSceneIds: string[];
+    invalidated: Array<"audio" | "narration-anchors" | "timing-audit" | "actions" | "assessment-opportunity">;
+    updatedAt: string;
+  };
   /** Teacher-facing aggregate that distinguishes measured TTS from script estimates. */
   teachingTimingAudit?: TeachingTimingAudit;
   /** Deterministic six-module timeline regenerated from the final teacher allocation. */

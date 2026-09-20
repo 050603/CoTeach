@@ -45,6 +45,8 @@ describe("new-system AI duration judgment", () => {
     expect(messages[0].content).toContain("20%–40%");
     expect(messages[0].content).toContain("24–48 分钟");
     expect(messages[0].content).toContain("确定总时长后再分配知识点预算");
+    expect(messages[0].content).toContain("不得套用固定讲解比例");
+    expect(messages[0].content).not.toContain("68%");
     expect(messages[1].content).toContain('"availableMinutes":120');
   });
 

@@ -326,6 +326,8 @@ export interface SceneOutline {
     difficulty: 'easy' | 'medium' | 'hard';
     questionTypes: ('single' | 'multiple' | 'matching' | 'short_answer' | 'true_false' | 'fill_blank' | 'scenario_task')[];
     coveragePolicy?: 'each-target' | 'section-synthesis';
+    /** Minimum explanation-style responses required by the adopted understanding standard. */
+    minShortAnswerQuestions?: number;
     /** Maximum explanation-style responses. `fill_blank` is not counted. */
     maxShortAnswerQuestions?: number;
   };

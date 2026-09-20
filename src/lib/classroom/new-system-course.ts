@@ -210,33 +210,33 @@ export function getNewSystemCourseReadiness(
   const blueprintQuizConfigs = lectureSections.flatMap((section) => {
     const quiz = outlines.find((outline) => outline.id === section.quizOutlineId);
     return quiz?.quizConfig && typeof quiz.quizConfig === "object"
-      ? [quiz.quizConfig as { questionCount?: number; questionTypes?: string[]; maxShortAnswerQuestions?: number }]
+      ? [quiz.quizConfig as { questionCount?: number; questionTypes?: string[]; minShortAnswerQuestions?: number; maxShortAnswerQuestions?: number }]
       : [];
   });
-  const blueprintQuestionCount = blueprintQuizConfigs.reduce((sum, config) => sum + Math.max(0, config.questionCount ?? 0), 0);
-  const blueprintShortAnswerLimit = blueprintQuizConfigs.reduce((sum, config) => sum + Math.max(0, config.maxShortAnswerQuestions ?? 0), 0);
   const blueprintCourseAssessmentValid = !blueprintMode
     || (blueprintQuizConfigs.length === lectureSections.length
       && (blueprintMode === "constructed-response"
         ? blueprintQuizConfigs.every((config) => (config.questionTypes ?? []).length === 1
           && config.questionTypes?.[0] === "short_answer"
+          && config.minShortAnswerQuestions === config.questionCount
           && config.maxShortAnswerQuestions === config.questionCount)
-        : blueprintShortAnswerLimit <= Math.floor(blueprintQuestionCount * 0.2)));
+        : blueprintQuizConfigs.every((config) => (config.minShortAnswerQuestions ?? 0) >= 1
+          && (config.maxShortAnswerQuestions ?? 0) >= (config.minShortAnswerQuestions ?? 0)
+          && (config.maxShortAnswerQuestions ?? 0) <= (config.questionCount ?? 0))));
   const hasSectionChecks = lectureSections.length > 0 && lectureSections.every((section) => {
     const quiz = outlines.find((outline) => outline.id === section.quizOutlineId);
-    const quizConfig = quiz?.quizConfig as { questionCount?: number; questionTypes?: string[]; maxShortAnswerQuestions?: number } | undefined;
+    const quizConfig = quiz?.quizConfig as { questionCount?: number; questionTypes?: string[]; minShortAnswerQuestions?: number; maxShortAnswerQuestions?: number } | undefined;
     const questionTypes = quizConfig?.questionTypes ?? [];
-    const adaptiveTargetCount = Array.isArray(quiz?.assessmentTargets)
-      ? quiz.assessmentTargets.length
-      : Math.max(1, quiz?.knowledgePointIds?.length ?? 0);
     const blueprintCheck = blueprintMode
       ? (quizConfig?.questionCount ?? 0) >= 1
         && questionTypes.length > 0
         && (blueprintMode === "constructed-response"
           ? (quizConfig?.questionCount ?? 0) <= 2
             && questionTypes.every((type) => type === "short_answer")
-          : (quizConfig?.questionCount ?? 0) >= adaptiveTargetCount
+          : (quizConfig?.questionCount ?? 0) <= 3
             && questionTypes.every((type) => ["single", "multiple", "matching", "true_false", "short_answer"].includes(type))
+            && (quizConfig?.minShortAnswerQuestions ?? 0) >= 1
+            && (quizConfig?.maxShortAnswerQuestions ?? 0) >= (quizConfig?.minShortAnswerQuestions ?? 0)
             && (quizConfig?.maxShortAnswerQuestions ?? 0) <= (quizConfig?.questionCount ?? 0))
       : (quizConfig?.questionCount ?? 0) >= 2
         && (quizConfig?.questionCount ?? 0) <= 3

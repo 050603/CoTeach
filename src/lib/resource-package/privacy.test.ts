@@ -4,12 +4,14 @@ import { emptyResourcePackageDraft, resourcePackageDraftErrors, stagePlanFromRes
 
 describe("resource package authoring boundary", () => {
   it("keeps private teacher inputs out of student snapshots without mutating the original", () => {
-    const content = { resourcePackage: { source: { url: "/api/uploads/private" }, raw: "private teacher requirements" }, teachingBlueprint: { internal: "private compilation" }, teachingTimingAudit: { internal: "private timing" }, designGenerationTrace: { diagnostics: "private" }, teacherReview: { teacherId: "private" }, renderReview: { evidence: "private" }, qualityReview: { source: "private" }, qualityReviewRequired: true, stagePlan: { totalMinutes: 135 }, knowledgePoints: [] };
+    const content = { resourcePackage: { source: { url: "/api/uploads/private" }, raw: "private teacher requirements" }, teachingBlueprint: { internal: "private compilation" }, teachingTimingAudit: { internal: "private timing" }, teachingAdoptions: [{ mode: "teacher-confirmed", actorId: "private" }], teachingRevisionState: { request: "private correction" }, designGenerationTrace: { diagnostics: "private" }, teacherReview: { teacherId: "private" }, renderReview: { evidence: "private" }, qualityReview: { source: "private" }, qualityReviewRequired: true, stagePlan: { totalMinutes: 135 }, knowledgePoints: [] };
     const snapshot = { schemaVersion: 2, kind: "pbl-course", design: { content } };
     expect(publicResourcePackageSnapshot(snapshot).design.content).toEqual({ stagePlan: { totalMinutes: 135 }, knowledgePoints: [] });
     expect(withoutPrivatePackageContent(content)).not.toHaveProperty("resourcePackage");
     expect(withoutPrivatePackageContent(content)).not.toHaveProperty("teachingBlueprint");
     expect(withoutPrivatePackageContent(content)).not.toHaveProperty("teachingTimingAudit");
+    expect(withoutPrivatePackageContent(content)).not.toHaveProperty("teachingAdoptions");
+    expect(withoutPrivatePackageContent(content)).not.toHaveProperty("teachingRevisionState");
     expect(withoutPrivatePackageContent(content)).not.toHaveProperty("designGenerationTrace");
     expect(content.resourcePackage.raw).toContain("private");
   });

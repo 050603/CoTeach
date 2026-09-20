@@ -7,7 +7,12 @@ import { hasCurrentTeachingBrief } from './teaching-enhancement';
 import { compileActionBindings, type ActionCompilationResult, type VisualActionCue } from './action-bindings';
 import type { NarrationModuleOutput, SlideElementBinding } from './action-binding-types';
 
-export const TEACHING_NARRATION_VERSION = 'independent-first-pass-narration-v6';
+export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v7';
+
+export interface TeachingSectionNarrationOutput {
+  sectionId: string;
+  pages: NarrationModuleOutput[];
+}
 
 /** Keep explicit whiteboard/widget/video playback contracts on their native path. */
 export function canUseIndependentTeachingNarration(outline: SceneOutline): boolean {
@@ -38,7 +43,7 @@ export function withTeachingSlideGuidance(
   return async (system, prompt, images) => {
     const response = await aiCall([
     system,
-    'Shared teaching semantics: preserve these visible statements and their meaning in the slide. Use each supplied semantic ID as the ID of the text element carrying that statement when the schema permits. Keep all baseline visual/layout requirements. IDs are backstage metadata, never learner-visible labels. Do not add narration or visual actions to this response.',
+    'Shared teaching semantics: preserve these visible statements and their meaning in the slide. The adopted design owns knowledge correctness and boundaries. Do not turn a judging aid into a definition, omit required comparison material, or imply a unique one-to-one hierarchy with an unexplained tree. Choose layout from the knowledge relationship; do not default to three columns, a card wall, A/B/C labels, or an activity worksheet. Use each supplied semantic ID as the ID of the text element carrying that statement when the schema permits. Keep all baseline visual/layout requirements. IDs are backstage metadata, never learner-visible labels. Do not add narration or visual actions to this response.',
   ].join('\n'), `${prompt}\n\nShared visible teaching requirements:\n${JSON.stringify(visible)}`, images);
     onRawResponse?.(response);
     return response;
@@ -76,7 +81,131 @@ export function normalizeTeachingNarration(value: unknown, outline: SceneOutline
   };
 }
 
-/** Independent of slide output: both resources consume the same teaching plan. */
+/** A section response is complete only when every requested page appears exactly once. */
+export function normalizeTeachingSectionNarration(
+  value: unknown,
+  sectionId: string,
+  outlines: readonly SceneOutline[],
+): TeachingSectionNarrationOutput {
+  const root = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+  const rawPages = root?.pages;
+  if (!Array.isArray(rawPages)) throw new Error('整节讲稿缺少 pages 数组');
+  const expected = new Map(outlines.map((outline) => [outline.id, outline]));
+  const result = new Map<string, NarrationModuleOutput>();
+  for (const rawPage of rawPages) {
+    if (!rawPage || typeof rawPage !== 'object' || Array.isArray(rawPage)) {
+      throw new Error('整节讲稿包含无效页面结果');
+    }
+    const pageId = (rawPage as Record<string, unknown>).pageId;
+    if (typeof pageId !== 'string' || !expected.has(pageId)) throw new Error(`整节讲稿包含未知页面：${String(pageId)}`);
+    if (result.has(pageId)) throw new Error(`整节讲稿重复返回页面：${pageId}`);
+    result.set(pageId, normalizeTeachingNarration(rawPage, expected.get(pageId)!));
+  }
+  const missing = outlines.filter((outline) => !result.has(outline.id));
+  if (missing.length) throw new Error(`整节讲稿缺少页面：${missing.map((outline) => outline.title).join('、')}`);
+  return { sectionId, pages: outlines.map((outline) => result.get(outline.id)!) };
+}
+
+function actualSlideForNarration(content: GeneratedSlideContent) {
+  return {
+    elements: content.elements.map((element) => {
+      const record = element as unknown as Record<string, unknown>;
+      return {
+        id: element.id,
+        type: element.type,
+        content: typeof record.content === 'string' ? plainText(record.content) : undefined,
+        text: typeof record.text === 'string' ? plainText(record.text) : undefined,
+        alt: typeof record.alt === 'string' ? record.alt : undefined,
+      };
+    }),
+  };
+}
+
+/**
+ * Write one continuous explanation after the section's actual slides exist,
+ * then split the authored result by page for the existing playback pipeline.
+ */
+export async function generateTeachingSectionNarration(input: {
+  sectionId: string;
+  pages: ReadonlyArray<{ outline: SceneOutline; content: GeneratedSlideContent }>;
+  requirements: UserRequirements;
+  courseTitle?: string;
+  languageDirective?: string;
+  courseProgression?: readonly SceneOutline[];
+  aiCall: AICallFn;
+}): Promise<TeachingSectionNarrationOutput> {
+  if (!input.pages.length) throw new Error('整节讲稿生成缺少页面');
+  for (const page of input.pages) {
+    if (!page.outline.teachingBrief?.teachingPlan) throw new Error(`页面“${page.outline.title}”缺少已采用的实质教学设计`);
+  }
+  const outlines = input.pages.map((page) => page.outline);
+  const sharedCriteria = outlines.find((outline) => outline.teachingBrief?.understandingCriteria)
+    ?.teachingBrief?.understandingCriteria;
+  const system = [
+    'Write one continuous classroom micro-lecture for the complete section, then return it as page-scoped segments. Return only valid JSON.',
+    loadSnippet('adaptive-narration-policy'),
+    loadSnippet('teaching-accuracy-policy'),
+    'The adopted teaching design is the authority for knowledge, concept boundaries, stable example facts, core reasoning and understanding criteria. The actual slide is the authority only for what is visible and what can be pointed to. Never preserve a slide error or delete a required explanation merely to make words agree with the slide.',
+    'Advance one argument across pages. State each new concept or relation where its page owns that contribution. On later pages use only the shortest needed bridge; do not restart, redefine everything, repeat the same case introduction, or add a separate opening and recap to every page.',
+    'Use actual slide content for concrete visual references. Name the referent in speech. If a required visible item is absent or conflicts with the adopted design, do not invent that it is visible and do not silently weaken the explanation. Keep the correct explanation self-contained so the resource gap can be reported separately.',
+    'Do not invent core claims, change concept boundaries, replace stable case facts, or turn a heuristic into a definition. Do not read internal field names, diagnostics, evidence status, review notes, learner profiles, or authoring instructions aloud.',
+    'Examples are optional and serve understanding. Project tasks do not become knowledge goals. Interaction questions are optional. Do not force a definition-example-counterexample routine, a three-column classification, or repeated A/B/C labels.',
+    'Give the reasoning needed for the predeclared understanding criteria. The final quiz is authored later and must not be previewed with answers. Do not lower the learning standard because a slide is terse.',
+    'Each requested teaching page must appear exactly once. Keep the requested pageId. Each segment must use only that page’s supplied semantic IDs. Segment boundaries are playback units and may follow natural explanation paragraphs.',
+    'Respect the section position in the complete course. A test-generation scope does not make this the end of the course. Do not add a course farewell unless the progression says this is the final teaching responsibility.',
+    input.languageDirective ?? '',
+  ].join('\n');
+  const prompt = JSON.stringify({
+    course: input.courseTitle,
+    requirement: input.requirements.requirement,
+    learners: input.requirements.teachingConstraints
+      ? formatTeachingConstraintsForPrompt(input.requirements.teachingConstraints) : undefined,
+    sectionId: input.sectionId,
+    understandingCriteria: sharedCriteria,
+    pages: input.pages.map(({ outline, content }, index) => ({
+      order: index,
+      pageId: outline.id,
+      title: outline.title,
+      objective: outline.teachingObjective,
+      sharedContext: outline.teachingBrief?.sharedContext,
+      learningTask: outline.teachingBrief?.pageTask,
+      teachingPlan: outline.teachingBrief?.teachingPlan,
+      explanation: outline.teachingBrief?.explanation,
+      examples: outline.teachingBrief?.examples,
+      conditions: outline.teachingBrief?.conditions,
+      actualSlide: actualSlideForNarration(content),
+      targetDurationSec: outline.targetDurationSec,
+      timingPlan: outline.timingPlan,
+      semanticUnits: buildTeachingNarrationSemantics(outline),
+    })),
+    courseProgression: input.courseProgression?.map((outline) => ({
+      id: outline.id,
+      sectionId: outline.lectureSectionId ?? outline.parentActivityId,
+      title: outline.title,
+      purpose: outline.teachingBrief?.teachingPlan?.purpose,
+      newContent: outline.teachingBrief?.teachingPlan?.newContent,
+      takeaway: outline.teachingBrief?.teachingPlan?.takeaway,
+    })),
+    requiredOutputShape: {
+      pages: input.pages.map(({ outline }) => ({
+        pageId: outline.id,
+        segments: [{ text: 'Direct classroom speech', semanticIds: [buildTeachingNarrationSemantics(outline).teaching.id] }],
+      })),
+    },
+  });
+  const response = await input.aiCall(system, prompt);
+  try {
+    return normalizeTeachingSectionNarration(parseJsonResponse(response), input.sectionId, outlines);
+  } catch (error) {
+    const corrected = await input.aiCall(system, `${prompt}\n\nTechnical JSON/schema correction only. Preserve every valid spoken sentence. Return every requested page exactly once and correct only serialization, page IDs, and semantic references.\n${JSON.stringify({
+      structureError: error instanceof Error ? error.message : String(error), invalidResponse: response,
+    })}`);
+    return normalizeTeachingSectionNarration(parseJsonResponse(corrected), input.sectionId, outlines);
+  }
+}
+
+/** Legacy/special-resource fallback. Ordinary knowledge pages use the section generator above. */
 export async function generateTeachingNarration(input: {
   outline: SceneOutline;
   requirements: UserRequirements;

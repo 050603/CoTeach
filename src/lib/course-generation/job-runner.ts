@@ -229,7 +229,7 @@ export type PersistedCourseGenerationRequest = GenerateClassroomInput & {
   fullSceneCount?: number;
   testLesson?: TestLessonGenerationTarget;
   systemMode?: "new";
-  generationContractVersion?: 2;
+  generationContractVersion?: 2 | 3;
   assessmentMode?: AssessmentMode;
   courseTitle?: string;
   moduleTimingPlan?: unknown;

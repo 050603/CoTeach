@@ -159,12 +159,12 @@ describe("QuickGenerationStage", () => {
     expect(screen.getByText("检查核心概念")).toBeTruthy();
     expect(screen.getByText("理解使用边界")).toBeTruthy();
     expect(screen.getByText("检查版式与知识覆盖")).toBeTruthy();
-    expect(screen.getByText("生成讲稿与教学动作")).toBeTruthy();
-    expect(screen.getByText("校验课堂口语")).toBeTruthy();
+    expect(screen.getByText("绑定讲稿与教学动作")).toBeTruthy();
+    expect(screen.getByText("编写整节连贯讲稿")).toBeTruthy();
     expect(screen.getByText("预计授课 约 16 分钟")).toBeTruthy();
     expect(screen.getByRole("progressbar", { name: "第 2 页制作进度" }).getAttribute("aria-valuenow")).toBe("3");
-    expect(screen.getByRole("progressbar", { name: "第 3 页制作进度" }).getAttribute("aria-valuenow")).toBe("4");
-    expect(screen.getByRole("progressbar", { name: "第 4 页制作进度" }).getAttribute("aria-valuenow")).toBe("5");
+    expect(screen.getByRole("progressbar", { name: "第 3 页制作进度" }).getAttribute("aria-valuenow")).toBe("5");
+    expect(screen.getByRole("progressbar", { name: "第 4 页制作进度" }).getAttribute("aria-valuenow")).toBe("4");
     expect(screen.queryByText("每一行均来自后台正在执行的真实步骤")).toBeNull();
     expect(screen.getByTestId("quick-generation-card-scroll").className).toContain("overflow-hidden");
     expect(screen.getByTestId("quick-generation-card-scroll").className).not.toContain("overflow-y-auto");
@@ -193,8 +193,8 @@ describe("QuickGenerationStage", () => {
     rerender(<QuickGenerationStage {...props} artifacts={artifacts(2)} />);
     expect(screen.getByRole("progressbar", { name: "课堂页面制作进度" }).getAttribute("aria-valuenow")).toBe("2");
     const pageProgress = screen.getByRole("progressbar", { name: "第 1 页制作进度" });
-    expect(pageProgress.getAttribute("aria-valuenow")).toBe("4");
-    expect(pageProgress.getAttribute("aria-valuetext")).toBe("生成讲稿与教学动作");
+    expect(pageProgress.getAttribute("aria-valuenow")).toBe("5");
+    expect(pageProgress.getAttribute("aria-valuetext")).toBe("绑定讲稿与教学动作");
 
     rerender(<QuickGenerationStage {...props} artifacts={artifacts(2)} recovering />);
     expect(screen.queryByTestId("ai-plan-shimmer")).toBeNull();

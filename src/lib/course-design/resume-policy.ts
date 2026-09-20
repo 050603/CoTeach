@@ -70,7 +70,7 @@ function normalizedRequest(value: unknown): {
   systemMode: "new";
   generationMode: "standard" | "deep-interaction";
   generationScope: "full-course" | "test-lesson";
-  generationContractVersion: 2 | null;
+  generationContractVersion: 2 | 3 | null;
   assessmentMode: "adaptive" | "constructed-response";
   teacherBrief: string;
   enableImageGeneration: boolean;
@@ -102,7 +102,8 @@ function normalizedRequest(value: unknown): {
     generationScope: request.generationScope === "test-lesson"
       ? "test-lesson"
       : "full-course",
-    generationContractVersion: request.generationContractVersion === 2 ? 2 : null,
+    generationContractVersion: request.generationContractVersion === 3 ? 3
+      : request.generationContractVersion === 2 ? 2 : null,
     assessmentMode: request.assessmentMode === "adaptive"
       ? "adaptive"
       : "constructed-response",

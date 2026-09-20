@@ -290,9 +290,6 @@ export function evaluateLessonOutlines(
       ? ""
       : `知识点尚未通过讲解页完整教学：${unexplainedAssessmentIds.join("、")}`,
     assessmentShare <= 0.2 ? "" : `测验时长占比过高（${Math.round(assessmentShare * 100)}%），应优先保证讲解与互动`,
-    !hasPlannedTiming || (teachingShare >= 0.65 && teachingShare <= 0.7)
-      ? ""
-      : `实质讲授占比为 ${Math.round(teachingShare * 100)}%，必须保持在 65%–70%`,
     ...knowledgeIssues,
   ].filter(Boolean);
   return {

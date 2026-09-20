@@ -63,7 +63,7 @@ describe("courseForTeacherReviewSnapshot", () => {
         templateVersionId: "version",
       },
       resources: [
-        ...authored.resources,
+        ...(authored.resources ?? []),
         {
           id: "offering-resource",
           title: "教学班补充视频",
@@ -80,7 +80,7 @@ describe("courseForTeacherReviewSnapshot", () => {
     );
 
     expect(reviewCourse.id).toBe("template");
-    expect(reviewCourse.resources.map((resource) => resource.id)).toEqual([
+    expect((reviewCourse.resources ?? []).map((resource) => resource.id)).toEqual([
       "authored-resource",
     ]);
   });

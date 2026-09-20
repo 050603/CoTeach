@@ -71,6 +71,33 @@ describe('section short-answer quiz contract', () => {
     });
   });
 
+  it('repairs one adaptive item into a reasoned response when the model omits it', async () => {
+    const adaptive = {
+      ...outline,
+      quizConfig: {
+        difficulty: 'medium' as const,
+        questionCount: 2,
+        questionTypes: ['single' as const, 'true_false' as const, 'short_answer' as const],
+        minShortAnswerQuestions: 1,
+        maxShortAnswerQuestions: 1,
+        coveragePolicy: 'section-synthesis' as const,
+      },
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([
+      { id: 'q1', type: 'single', question: '哪项做法能减少选择偏差？', options: [{ label: '随机抽样', value: 'A' }, { label: '方便抽样', value: 'B' }], answer: ['A'], analysis: '随机抽样提供公平入样机会。', knowledgePointIds: ['kp-sampling'], points: 10 },
+      { id: 'q2', type: 'single', question: '哪项描述正确？', options: [{ label: '样本应代表总体', value: 'A' }, { label: '只选方便样本', value: 'B' }], answer: ['A'], analysis: '代表性影响推断。', knowledgePointIds: ['kp-sampling'], points: 10 },
+    ]));
+
+    const result = await generateSceneContent(adaptive, ai);
+    const questions = result && 'questions' in result ? result.questions : [];
+    expect(ai.mock.calls[0][1]).toContain('use at least 1 and at most 1');
+    expect(questions.filter((question) => question.type === 'short_answer' && question.format === 'short_answer')).toHaveLength(1);
+    expect(questions[0]).toMatchObject({ type: 'short_answer', hasAnswer: false });
+    expect(questions[0]?.question).toContain('简短说明理由');
+    expect(questions[0]).not.toHaveProperty('options');
+    expect(questions[0]).not.toHaveProperty('answer');
+  });
+
   it('rejects an incomplete quiz result so the affected page can be retried', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify([{
       id: 'q1', type: 'short_answer', question: '解释随机抽样。', analysis: '公平入样。',

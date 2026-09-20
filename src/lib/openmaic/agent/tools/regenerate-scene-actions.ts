@@ -50,6 +50,14 @@ export interface SceneContext {
   content: SceneContent;
   /** Current playback actions, including teacher-authored whiteboard segments. */
   actions?: Action[];
+  /** Actual narration for sibling pages in this section, in classroom order. */
+  sectionNarrations?: Array<{
+    sceneId: string;
+    outlineId: string;
+    title: string;
+    current: boolean;
+    speeches: Array<{ id: string; text: string }>;
+  }>;
   /** The stage id that owns this scene. */
   stageId: string;
   /** Optional agent info for multi-agent stages. */
@@ -206,7 +214,7 @@ export function makeRegenerateSceneActionsTool(
         };
       }
 
-      const { outline, allOutlines, content, stageId, agents, languageDirective } = ctxData;
+      const { outline, allOutlines, content, stageId, agents, languageDirective, sectionNarrations } = ctxData;
       const originalActions = ctxData.actions;
       const boardIndexes = new Set(whiteboardBlocks(originalActions ?? []).flatMap((block) =>
         Array.from({ length: block.end - block.start + 1 }, (_item, index) => block.start + index),
@@ -233,8 +241,11 @@ export function makeRegenerateSceneActionsTool(
         originalActions?.length
           ? 'For this edit, return a JSON array using this exact narration format: [{"type":"action","name":"speech","action_id":"ORIGINAL_SPEECH_ID","params":{"text":"edited narration"}}]. Keep unchanged lines out of the response. For a whole-narration rewrite, include every editable speech id, without changing the number or position of speech slots.'
           : 'Return narration in the usual JSON array format: [{"type":"text","content":"narration"}].',
+        sectionNarrations?.length
+          ? `Actual narration for this complete section (read-only context; pages outside the target cannot be edited):\n${JSON.stringify(sectionNarrations)}`
+          : '',
         `Current actions (reference only; binary assets omitted):\n${referenceActions}`,
-      ].join('\n');
+      ].filter(Boolean).join('\n');
 
       // Suppress unused variable — stageId is part of the context contract and
       // may be needed by future tool logic (e.g. quota checks, audit logging).
@@ -243,11 +254,14 @@ export function makeRegenerateSceneActionsTool(
       // ── Build cross-scene context (mirrors route.ts logic) ─────────────
       const allTitles: string[] = allOutlines.map((o) => o.title);
       const pageIndex = allOutlines.findIndex((o) => o.id === outline.id);
+      const actualPreviousSpeeches = (sectionNarrations ?? [])
+        .slice(0, Math.max(0, (sectionNarrations ?? []).findIndex((item) => item.current)))
+        .flatMap((item) => item.speeches.map((speech) => speech.text));
       const ctx: SceneGenerationContext = {
         pageIndex: (pageIndex >= 0 ? pageIndex : 0) + 1,
         totalPages: allOutlines.length,
         allTitles,
-        previousSpeeches: previousSpeeches ?? [],
+        previousSpeeches: actualPreviousSpeeches.length ? actualPreviousSpeeches : previousSpeeches ?? [],
       };
 
       // Wrap deps.aiCall to match AICallFn (adds optional images param). Actions

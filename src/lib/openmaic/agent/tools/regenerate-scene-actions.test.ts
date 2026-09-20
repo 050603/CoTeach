@@ -20,6 +20,11 @@ function setup(response: unknown, withActions = true) {
   const ctx = {
     stageId: 'stage', outline, allOutlines: [outline],
     content: { type: 'slide', canvas: { elements: [{ id: 'slide-title', type: 'text', content: '关系' }] } },
+    sectionNarrations: [
+      { sceneId: 'previous', outlineId: 'previous', title: '前页', current: false, speeches: [{ id: 'previous-speech', text: '前页已经解释概念含义。' }] },
+      { sceneId: 'scene', outlineId: 'scene', title: '观察关系', current: true, speeches: [{ id: 'intro', text: '原来的讲稿。' }] },
+      { sceneId: 'next', outlineId: 'next', title: '后页', current: false, speeches: [{ id: 'next-speech', text: '后页将分析适用边界。' }] },
+    ],
     ...(withActions ? { actions: structuredClone(original) } : {}),
   } as unknown as SceneContext;
   const aiCall = vi.fn().mockResolvedValue(JSON.stringify(response));
@@ -35,6 +40,9 @@ describe('teacher-guided narration edits', () => {
     const [stage, system, user] = aiCall.mock.calls[0];
     expect(stage).toBe('scene-actions');
     expect(system).toContain(instruction);
+    expect(system).toContain('Actual narration for this complete section');
+    expect(system).toContain('前页已经解释概念含义。');
+    expect(system).toContain('后页将分析适用边界。');
     expect(user).toContain('原来的讲稿。');
     expect(user).toContain('"id":"image"');
     expect(user).not.toContain('UNIQUEIMAGEBYTES');

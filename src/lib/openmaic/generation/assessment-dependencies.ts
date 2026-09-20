@@ -1,6 +1,6 @@
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 
-export const ASSESSMENT_DEPENDENCY_VERSION = 'actual-taught-assessment-v2';
+export const ASSESSMENT_DEPENDENCY_VERSION = 'predeclared-understanding-standard-v3';
 
 export type CompletedTeachingEvidence = {
   outline: SceneOutline;
@@ -41,20 +41,26 @@ export function buildAssessmentContext(
   ));
   const local = eligible.filter(({ outline }) => sectionIdentity(outline) === sectionIdentity(assessment));
   let evidence = local;
+  const requiredUnits = new Set([
+    ...(assessment.teachingBrief?.understandingCriteria?.supportingUnitIds ?? []),
+    ...(assessment.assessmentUnitIds ?? []),
+    ...(assessment.assessmentTargets ?? []).map((target) => target.unitId),
+    ...(assessment.assessmentUnitMap ?? []).map((target) => target.unitId),
+  ].filter((unit) => unit.trim().length > 0));
   if (evidence.length === 0) {
-    const requiredUnits = new Set([
-      ...(assessment.assessmentUnitIds ?? []),
-      ...(assessment.assessmentTargets ?? []).map((target) => target.unitId),
-      ...(assessment.assessmentUnitMap ?? []).map((target) => target.unitId),
-    ].filter((unit) => unit.trim().length > 0));
     if (requiredUnits.size === 0) throw missingDependency(assessment);
     evidence = eligible.filter(({ outline }) => (
       outline.teachingUnitIds?.some((unit) => requiredUnits.has(unit))
     ));
-    const coveredUnits = new Set(evidence.flatMap(({ outline }) => outline.teachingUnitIds ?? []));
-    if ([...requiredUnits].some((unit) => !coveredUnits.has(unit))) throw missingDependency(assessment);
   }
   if (evidence.length === 0) throw missingDependency(assessment);
+  const coveredUnits = new Set(evidence.flatMap(({ outline }) => outline.teachingUnitIds ?? []));
+  const uncoveredUnits = [...requiredUnits].filter((unit) => !coveredUnits.has(unit));
+  if (uncoveredUnits.length) {
+    throw Object.assign(new Error(
+      `测验“${assessment.title}”对应的实际讲稿未覆盖预定理解标准所需单元：${uncoveredUnits.join('、')}。请先补足讲授，不能降低题目标准。`,
+    ), { code: 'ASSESSMENT_TEACHING_COVERAGE_INSUFFICIENT', isRetryable: false });
+  }
   const seen = new Set<string>();
   const pages = [...evidence].sort((a, b) => a.outline.order - b.outline.order)
     .filter(({ outline }) => {
@@ -70,11 +76,12 @@ export function buildAssessmentContext(
     }));
   return JSON.stringify({
     kind: 'completed-student-teaching',
-    instruction: '以下讲稿只限定学生已经学过、可以考查的范围。答案是否正确仍由已确认资料、概念边界和适用条件决定；不得把讲稿里的简化线索、替换检验、删除检验或案例特征升级为定义、充分条件或通用规则。规划目标或资料中出现但尚未讲清的内容不能视为已教。',
+    instruction: '以下讲稿只限定学生已经获得的学习机会。答案是否正确和怎样算理解由已采用的资料、概念边界与预定理解标准决定。不得把简化线索或案例特征升级为定义，也不得因讲稿解释不足而降低标准或只考名称识别；发现缺口应保留为教学覆盖不足。至少一道题要求学生简短说明理由，讲评不能承担未讲核心内容的补课职责。',
     answerAuthority: {
       evidence: assessment.teachingBrief?.evidence ?? [],
       conditions: assessment.teachingBrief?.conditions ?? [],
       conceptBoundaries: assessment.teachingBrief?.sharedContext?.conceptBoundaries ?? [],
+      understandingCriteria: assessment.teachingBrief?.understandingCriteria,
     },
     pages,
   });

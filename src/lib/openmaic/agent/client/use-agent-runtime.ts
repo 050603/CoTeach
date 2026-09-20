@@ -526,14 +526,31 @@ export function useAgentRuntime(opts: UseAgentRuntimeOptions) {
         // raw would give regenerate-scene/-actions a stale page index / order /
         // title list. See resolveSceneOutline.
         const allOutlines = scenes.map((s) => resolveSceneOutline(s, outlines));
+        const sectionIdentity = (outline: (typeof allOutlines)[number]) => (
+          outline.lectureSectionId ?? outline.parentActivityId ?? outline.activityId ?? outline.id
+        );
         const sceneContextMap: SceneContextMap = {};
-        for (const scene of scenes) {
-          const outline = resolveSceneOutline(scene, outlines);
+        for (let sceneIndex = 0; sceneIndex < scenes.length; sceneIndex++) {
+          const scene = scenes[sceneIndex]!;
+          const outline = allOutlines[sceneIndex]!;
+          const currentSection = sectionIdentity(outline);
           sceneContextMap[scene.id] = {
             outline,
             allOutlines,
             content: scene.content,
             actions: scene.actions ?? [],
+            sectionNarrations: scenes.flatMap((sibling, siblingIndex) => {
+              const siblingOutline = allOutlines[siblingIndex]!;
+              if (sectionIdentity(siblingOutline) !== currentSection) return [];
+              return [{
+                sceneId: sibling.id,
+                outlineId: siblingOutline.id,
+                title: sibling.title,
+                current: sibling.id === scene.id,
+                speeches: (sibling.actions ?? []).flatMap((action) => action.type === 'speech'
+                  ? [{ id: action.id, text: action.text }] : []),
+              }];
+            }),
             stageId: scene.stageId,
             languageDirective: stage?.languageDirective,
             // Runtime errors the interactive iframe reported, so read_scene_content

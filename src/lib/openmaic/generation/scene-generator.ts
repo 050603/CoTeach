@@ -1053,7 +1053,7 @@ async function generateQuizContent(
     difficulty: quizConfig.difficulty,
     questionTypes: shortAnswerOnly
       ? 'short_answer only; every generated question must use type="short_answer" and have no options'
-      : `${questionFormats.join(', ')} only; return exactly ${quizConfig.questionCount} questions; ${quizConfig.coveragePolicy === 'each-target' ? 'generate one question for each ordered assessment target' : 'cover the section as a synthesis'}; use at most ${quizConfig.maxShortAnswerQuestions ?? 0} explanation-style short_answer/scenario_task questions`,
+      : `${questionFormats.join(', ')} only; return exactly ${quizConfig.questionCount} questions; ${quizConfig.coveragePolicy === 'each-target' ? 'generate one question for each ordered assessment target' : 'cover the section as a synthesis'}; use at least ${quizConfig.minShortAnswerQuestions ?? 0} and at most ${quizConfig.maxShortAnswerQuestions ?? 0} explanation-style short_answer/scenario_task questions; explanation questions must require a conclusion and a brief reason`,
     knowledgePointIds: (outline.knowledgePointIds ?? []).join(', '),
     assessmentTargets: JSON.stringify(outline.assessmentTargets ?? []),
     languageDirective: languageDirective || '',
@@ -1121,8 +1121,31 @@ async function generateQuizContent(
             : [...(outline.assessmentUnitIds ?? [])],
         };
       });
+  const withRequiredShortAnswers = shortAnswerOnly ? withTeachingUnitIds : (() => {
+    let needed = Math.max(0, Math.min(
+      Math.floor(quizConfig.minShortAnswerQuestions ?? 0),
+      Math.floor(quizConfig.maxShortAnswerQuestions ?? 0),
+    )) - withTeachingUnitIds.filter((question) => question.type === 'short_answer'
+      && (question.format === 'short_answer' || question.format === 'scenario_task')).length;
+    return withTeachingUnitIds.map((question): QuizQuestion => {
+      if (needed <= 0 || (question.type === 'short_answer'
+        && (question.format === 'short_answer' || question.format === 'scenario_task'))) return question;
+      needed -= 1;
+      const { options, answer, ...base } = question;
+      const choiceContext = options?.map((option) => option.label).filter(Boolean).join('；');
+      void answer;
+      return {
+        ...base,
+        type: 'short_answer',
+        format: 'short_answer',
+        question: `${question.question}\n请写出结论并简短说明理由。${choiceContext ? `可参考原题材料：${choiceContext}` : ''}`,
+        commentPrompt: '评分规则：结论准确占40%；理由依据符合本节知识占50%；表达清楚占10%。',
+        hasAnswer: false,
+      };
+    });
+  })();
   const questions = shortAnswerOnly
-    ? withTeachingUnitIds.map((question): QuizQuestion => {
+    ? withRequiredShortAnswers.map((question): QuizQuestion => {
         if (question.type === 'short_answer') return question;
         const choiceContext = question.options?.map((option) => option.label).filter(Boolean).join('；');
         return {
@@ -1140,7 +1163,7 @@ async function generateQuizContent(
       }).slice(0, quizConfig.questionCount)
     : (() => {
         let remainingShortAnswers = Math.max(0, Math.floor(quizConfig.maxShortAnswerQuestions ?? 0));
-        return withTeachingUnitIds.slice(0, quizConfig.questionCount).map((question): QuizQuestion => {
+        return withRequiredShortAnswers.slice(0, quizConfig.questionCount).map((question): QuizQuestion => {
           const explanationStyle = question.type === 'short_answer'
             && (question.format === 'short_answer' || question.format === 'scenario_task');
           if (!explanationStyle) return question;

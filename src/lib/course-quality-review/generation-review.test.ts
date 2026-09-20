@@ -141,4 +141,55 @@ describe("fast draft and section-wide teaching review", () => {
       expect.objectContaining({ origin: "structure", severity: "error", evidence: expect.stringContaining("too small") }),
     ]));
   });
+
+  it("keeps adopted understanding criteria and required visible resources as publish blockers", () => {
+    const course = confirmedCourse();
+    const savedOutline = course.content._openmaicSceneOutlines![0]!;
+    savedOutline.teachingBrief = {
+      schemaVersion: 1,
+      designVersion: "substantive-section-brief-v6",
+      explanation: "独立测试数据不参与学习，因此能检查模型面对新数据的表现。",
+      examples: [], conditions: [], evidence: [], assessmentFocus: "解释独立性及理由",
+      teachingPlan: {
+        purpose: "解释独立测试",
+        priorKnowledge: "知道训练用于学习",
+        newContent: "测试数据不参与模型学习，并在模型确定后检查新数据表现。",
+        learnerQuestion: "为什么不能反复据此调参",
+        reasoningSteps: ["测试结果一旦用于调参，测试信息就进入了开发过程。"],
+        takeaway: "独立性来自测试信息不参与学习与选择",
+        visibleContent: ["测试数据不参与模型学习"],
+        narrationFocus: ["说明信息回流为何破坏独立性"],
+      },
+      understandingCriteria: {
+        goals: ["解释独立测试解决的问题"],
+        answerEssentials: ["指出测试信息不参与学习并说明理由"],
+        misconceptions: ["把更难的数据当成测试集定义"],
+        supportingUnitIds: ["unit-1"],
+      },
+      resourceNeeds: [{ kind: "image", purpose: "展示训练信息与测试信息分离", required: true }],
+    };
+    const teachingBlueprint: NonNullable<typeof course.content.teachingBlueprint> = {
+      schemaVersion: 2, inputFingerprint: "input", assessmentMode: "adaptive", createdAt: "2026-09-12T00:00:00Z",
+      budget: { totalDurationSec: 300, teachingDurationSec: 240, learnerActivityDurationSec: 0, assessmentDurationSec: 60, teachingRatio: 0.8, assessmentRatio: 0.2 },
+      sections: [{
+        id: "section-1", title: "独立测试", order: 0, learningObjective: "解释独立测试", knowledgePointIds: ["kp"],
+        sharedContext: { learningPurpose: "判断评估是否可信", caseId: "", caseFacts: [], fixedWording: [], stableTerms: ["独立测试"], conceptBoundaries: ["难度不是定义"] },
+        units: [{ id: "unit-1", title: "独立性", knowledgePointIds: ["kp"], learningOutcome: "解释独立性", explanation: "测试不参与学习。", mechanism: "信息回流会破坏独立性。", workedExample: "", conditions: [], misconceptions: ["难度不是定义"], sourceKind: "general-knowledge", evidenceQuotes: [] }],
+        pages: [{ id: savedOutline.id, outlineId: savedOutline.id, title: savedOutline.title, type: "slide", unitIds: ["unit-1"], knowledgePointIds: ["kp"], description: savedOutline.description ?? "", keyPoints: savedOutline.keyPoints ?? [], teachingObjective: "解释独立性", resourceNeeds: savedOutline.teachingBrief.resourceNeeds }],
+        assessmentFocus: ["解释理由"], understandingCriteria: savedOutline.teachingBrief.understandingCriteria!,
+        teachingDurationSec: 240, learnerActivityDurationSec: 0, assessmentDurationSec: 60,
+      }],
+    };
+    course.content.teachingBlueprint = teachingBlueprint;
+
+    const issues = collectCourseStructureIssues(course, [scene]);
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "课件缺少设计规定的必要材料", blocking: true }),
+      expect.objectContaining({ title: "必要教学资源尚未落到实际页面", blocking: true }),
+    ]));
+    teachingBlueprint.sections[0]!.understandingCriteria.answerEssentials = [];
+    expect(collectCourseStructureIssues(course, [scene])).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "小节缺少预定理解标准", blocking: true }),
+    ]));
+  });
 });

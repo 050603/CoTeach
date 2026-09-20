@@ -112,8 +112,8 @@ export function restoreSceneCheckpoint(
 ): Scene | null {
   if (!checkpoint || checkpoint.pageKey !== outline.id) return null;
   if (checkpoint.outlineFingerprint !== fingerprintSceneOutline(outline)) return null;
-  if (checkpoint.modelFingerprint !== undefined && checkpoint.modelFingerprint !== modelFingerprint) return null;
-  if (checkpoint.inputFingerprint !== undefined && checkpoint.inputFingerprint !== inputFingerprint) return null;
+  if (modelFingerprint !== undefined && checkpoint.modelFingerprint !== modelFingerprint) return null;
+  if (inputFingerprint !== undefined && checkpoint.inputFingerprint !== inputFingerprint) return null;
   if (!isScene(checkpoint.scene)) return null;
   if (checkpoint.scene.type !== outline.type || checkpoint.scene.content.type !== outline.type) return null;
   return {

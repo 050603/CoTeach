@@ -10,6 +10,8 @@ export type CourseQualityIssue = {
   evidence: string;
   suggestion: string;
   status?: "open" | "resolved" | "accepted";
+  /** Deterministic, teacher-visible problem that prevents publishing the current revision. */
+  blocking?: boolean;
 };
 
 export type CourseQualityReport = {
@@ -52,6 +54,22 @@ export type PageLearningTask = {
   preservedConditions: string[];
 };
 
+/** Defined during section design and kept stable while concrete quiz items are authored later. */
+export type TeachingUnderstandingCriteria = {
+  goals: string[];
+  answerEssentials: string[];
+  misconceptions: string[];
+  supportingUnitIds: string[];
+};
+
+export type TeachingResourceNeed = {
+  kind: "diagram" | "image" | "video" | "interactive";
+  purpose: string;
+  required: boolean;
+  prompt?: string;
+  durationSec?: number;
+};
+
 /** Shared teaching meaning supplied by the existing outline call, not another generation step. */
 export type TeachingBrief = {
   schemaVersion: 1;
@@ -73,4 +91,6 @@ export type TeachingBrief = {
   conditions: string[];
   evidence: Array<{ sourceId: string; quote: string }>;
   assessmentFocus: string;
+  understandingCriteria?: TeachingUnderstandingCriteria;
+  resourceNeeds?: TeachingResourceNeed[];
 };

@@ -47,7 +47,12 @@ function containsAuthoringMetadata(value: unknown): boolean {
 /** Only concrete structure is a hard error; semantic questions remain teacher-reviewable. */
 export function collectCourseStructureIssues(course: Course, scenes: readonly Scene[], options: { includePresentation?: boolean } = {}): CourseQualityIssue[] {
   const issues: CourseQualityIssue[] = [];
-  const add = (issue: Omit<CourseQualityIssue, "id">) => issues.push({ ...issue, id: `structure-${issues.length + 1}` });
+  const add = (issue: Omit<CourseQualityIssue, "id">) => issues.push({
+    ...issue,
+    ...(issue.origin === "structure" && issue.severity === "error" && issue.blocking === undefined
+      ? { blocking: true } : {}),
+    id: `structure-${issues.length + 1}`,
+  });
   const outlines = course.content._openmaicSceneOutlines ?? [];
   const taught = new Set(outlines.filter((page) => page.type !== "quiz").flatMap((page) => page.knowledgePointIds ?? []));
   const pack = course.content.resourcePackage;
@@ -98,6 +103,52 @@ export function collectCourseStructureIssues(course: Course, scenes: readonly Sc
   }
   for (const point of course.content.knowledgePoints) if (!taught.has(point.id)) add({ origin: "structure", severity: "error", title: "必需知识缺少讲授页面", evidence: point.name, suggestion: "在现有时间预算内为该知识安排讲授内容。" });
   for (const outline of outlines) if (!scenes.some((scene) => scene.outlineId === outline.id || scene.id === outline.id)) add({ origin: "structure", severity: "error", title: "课堂页面未生成", evidence: outline.title, suggestion: "补齐该页面后重新检查。" });
+  if (course.content.teachingBlueprint?.schemaVersion === 2) {
+    const sceneByOutline = new Map(scenes.map((scene) => [scene.outlineId ?? scene.id, scene]));
+    const outlineById = new Map(outlines.map((outline) => [outline.id, outline]));
+    for (const section of course.content.teachingBlueprint.sections) {
+      const criteria = section.understandingCriteria;
+      if (!criteria?.goals.length || !criteria.answerEssentials.length || !criteria.misconceptions.length
+        || !criteria.supportingUnitIds.length) {
+        add({ origin: "structure", severity: "error", title: "小节缺少预定理解标准", evidence: section.title,
+          suggestion: "先补齐理解目标、合格回答要点、典型误解及支撑教学单元，再制作题目。" });
+      }
+      for (const page of section.pages) {
+        const outline = outlineById.get(page.outlineId ?? page.id);
+        const plan = outline?.teachingBrief?.teachingPlan;
+        if (!plan?.newContent.trim() || !plan.reasoningSteps.length || !plan.visibleContent.length
+          || !plan.narrationFocus.length) {
+          add({ origin: "structure", severity: "error", sceneId: sceneByOutline.get(page.outlineId ?? page.id)?.id,
+            title: "页面设计仍是任务清单或缺少核心论证", evidence: `${section.title} / ${page.title}`,
+            suggestion: "回到内容设计，写出实际解释、推理连接、必须展示的材料和口头展开重点。" });
+          continue;
+        }
+        const scene = sceneByOutline.get(page.outlineId ?? page.id);
+        if (scene && scene.content.type === "slide") {
+          const elements = scene.content.canvas.elements;
+          const slideText = elements.map((element) => {
+            const record = element as unknown as Record<string, unknown>;
+            return [record.content, record.text].filter((value): value is string => typeof value === "string").join(" ");
+          }).join(" ").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+          const missingVisible = plan.visibleContent.filter((required, index) => {
+            const normalized = required.replace(/\s+/g, " ").trim();
+            return normalized && !slideText.includes(normalized)
+              && !elements.some((element) => element.id === `${outline?.id}:visible-${index + 1}`);
+          });
+          if (missingVisible.length) add({ origin: "structure", severity: "error", sceneId: scene.id,
+            title: "课件缺少设计规定的必要材料", evidence: missingVisible.join("；"),
+            suggestion: "补齐该页实际可见材料后更新相关指代与动作；不要让讲稿同步删去原定解释。" });
+          const requiredMedia = (outline?.teachingBrief?.resourceNeeds ?? []).filter((need) => (
+            need.required && (need.kind === "image" || need.kind === "video")
+          ));
+          const missingMedia = requiredMedia.filter((need) => !elements.some((element) => element.type === need.kind));
+          if (missingMedia.length) add({ origin: "structure", severity: "error", sceneId: scene.id,
+            title: "必要教学资源尚未落到实际页面", evidence: missingMedia.map((need) => need.purpose).join("；"),
+            suggestion: "生成或恢复设计指定的必要资源及其动作后再发布；只能使用设计中已有的等效替代方案。" });
+        }
+      }
+    }
+  }
   // Publication validates required content only; presentation checks are teacher-triggered.
   if (options.includePresentation === false) return issues;
   for (const scene of scenes) if (scene.content.type === "slide") {

@@ -59,7 +59,7 @@ type DesignJob = {
   status: JobStatus;
   step: string;
   reviewStatus: "unavailable" | "available" | "paused" | "approved" | "auto-continued";
-  reviewKind?: "knowledge" | "outline" | null;
+  reviewKind?: "knowledge" | "capacity" | "outline" | null;
   reviewAvailableUntil?: string | null;
   stepIndex: number;
   progress: number;
@@ -239,18 +239,19 @@ function liveDesignArtifact(
       ],
     };
   }
-  if (job.step === "aiDurationPlanning") {
+  if (["aiDurationPlanning", "capacityReview"].includes(job.step)) {
     return {
       id: "new-system-ai-duration",
       kind: "facts",
       eyebrow: "课程生成 · 时长规划",
-      title: "正在规划知识讲授时长",
+      title: job.step === "capacityReview" ? "知识范围与时间存在冲突" : "正在规划知识讲授时长",
       ...common,
       accent: "violet",
       items: [
         { label: "课程容量", value: `${Math.round(course.hours * 60)} 分钟` },
         { label: "规划依据", value: "知识层级、依赖关系与学情" },
         { label: "时间范围", value: course.content.stagePlan ? "采用教师确认的教案时长" : "整课时长的 20%–40%" },
+        ...(job.step === "capacityReview" ? [{ label: "处理方式", value: "等待教师决定，不会倒计时继续" }] : []),
       ],
     };
   }
@@ -598,6 +599,9 @@ export function FastCourseGenerator({
           knowledgeGraph: { nodes: [], edges: [] },
         });
         setKnowledgeReviewOpen(true);
+      } else if (latest.job?.reviewKind === "capacity") {
+        const accepted = window.confirm(`${latest.job.message}\n\n选择“确定”表示按当前知识范围与时长继续；选择“取消”会保持暂停，便于先调整课程资料或时间。`);
+        if (accepted) await resumeAfterCapacityReview();
       } else {
         setOutlinePreview(latest.outlinePreview ?? []);
         setOutlineReviewOpen(true);
@@ -605,6 +609,18 @@ export function FastCourseGenerator({
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法打开待确认内容");
     }
+  }
+
+  async function resumeAfterCapacityReview() {
+    setError(undefined);
+    const response = await fetch(`/api/courses/${course.id}/design-generation`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "resume", reviewKind: "capacity" }),
+    });
+    const payload = await readJsonResponse<ResponsePayload>(response, "保存容量决定后未收到响应，请稍后重试。");
+    if (!response.ok) throw new Error(payload.detail || payload.error || "无法按当前范围与时长继续生成");
+    applyPayload(payload);
   }
 
   async function resumeAfterKnowledgeReview(

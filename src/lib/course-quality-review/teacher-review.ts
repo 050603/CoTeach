@@ -31,9 +31,11 @@ export type CourseTeacherReview = {
 };
 
 export function unresolvedHardIssues(issues: readonly CourseQualityIssue[]): CourseQualityIssue[] {
-  return issues.filter((issue) => issue.origin === 'structure' && issue.severity === 'error' && issue.status !== 'resolved');
+  return issues.filter((issue) => issue.severity === 'error' && issue.status !== 'resolved'
+    && (issue.blocking === true || issue.origin === 'structure'));
 }
 
 export function reviewableIssues(issues: readonly CourseQualityIssue[]): CourseQualityIssue[] {
-  return issues.filter((issue) => issue.status !== 'resolved' && !(issue.origin === 'structure' && issue.severity === 'error'));
+  return issues.filter((issue) => issue.status !== 'resolved'
+    && !(issue.severity === 'error' && (issue.blocking === true || issue.origin === 'structure')));
 }

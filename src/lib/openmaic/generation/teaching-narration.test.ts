@@ -6,8 +6,10 @@ import {
   buildTeachingNarrationSemantics,
   canUseIndependentTeachingNarration,
   compileTeachingNarrationActions,
+  generateTeachingSectionNarration,
   generateTeachingNarration,
   normalizeTeachingNarration,
+  normalizeTeachingSectionNarration,
   withTeachingSlideGuidance,
   restoreTeachingSemanticElementIds,
 } from './teaching-narration';
@@ -24,6 +26,8 @@ function outline(): SceneOutline {
         caseUse: 'introduce', changedConditions: [], preservedConditions: [] },
       teachingPlan: { purpose: '解释核验', priorKnowledge: '会搜索', newContent: '按相关记录核验', learnerQuestion: '肯定的语气可信吗',
         reasoningSteps: ['明确说法', '查相关记录'], takeaway: '有相关依据再采用', visibleContent: ['语气肯定 ≠ 事实正确'], narrationFocus: ['解释为什么查证'] },
+      understandingCriteria: { goals: ['能依据新说法选择核验记录'], answerEssentials: ['记录必须与说法直接相关'],
+        misconceptions: ['语气肯定等于事实正确'], supportingUnitIds: ['unit-a'] },
     },
   };
 }
@@ -36,6 +40,35 @@ function raw(text = '先看看学校简介。它有没有写出这个年份？')
 }
 
 describe('independent first-pass teaching narration', () => {
+  it('authors a complete section after seeing every actual slide and returns each page once', async () => {
+    const first = { ...outline(), lectureSectionId: 'section-a', teachingUnitIds: ['unit-a'] };
+    const second: SceneOutline = {
+      ...outline(), id: 'page-b', title: '相关记录怎样支持说法', order: 1, lectureSectionId: 'section-a',
+      teachingUnitIds: ['unit-a'],
+      teachingBrief: { ...outline().teachingBrief!, teachingPlan: {
+        ...outline().teachingBrief!.teachingPlan!, priorKnowledge: '已经明确待查说法',
+        newContent: '只有直接记录该事实的材料才能支持结论', visibleContent: ['记录与说法必须直接相关'],
+      } },
+    };
+    const response = { pages: [
+      { pageId: 'page-a', segments: [{ text: '先明确我们要核验的具体说法。', semanticIds: ['page-a:teaching'] }] },
+      { pageId: 'page-b', segments: [{ text: '接着判断记录是否直接回答这个说法。', semanticIds: ['page-b:teaching', 'page-b:visible-1'] }] },
+    ] };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(response));
+    const generated = await generateTeachingSectionNarration({
+      sectionId: 'section-a', pages: [{ outline: first, content: content() }, { outline: second, content: content('记录与说法必须直接相关') }],
+      requirements: { requirement: '讲清核验方法' }, courseProgression: [first, second], aiCall,
+    });
+    expect(generated.pages.map((page) => page.pageId)).toEqual(['page-a', 'page-b']);
+    const prompt = JSON.parse(aiCall.mock.calls[0][1]);
+    expect(prompt.pages).toHaveLength(2);
+    expect(prompt.pages[0].actualSlide.elements[0].content).toContain('语气肯定');
+    expect(aiCall.mock.calls[0][0]).toContain('actual slide is the authority only for what is visible');
+    expect(aiCall.mock.calls[0][0]).toContain('Advance one argument across pages');
+    expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0], response.pages[0]] }, 'section-a', [first, second])).toThrow('重复返回页面');
+    expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0]] }, 'section-a', [first, second])).toThrow('缺少页面');
+  });
+
   it('preserves required whiteboard/widget and video action contracts on the native path', () => {
     const page: SceneOutline = { ...outline(), generationPurpose: 'knowledge-teaching', audience: 'student' };
     expect(canUseIndependentTeachingNarration(page)).toBe(true);

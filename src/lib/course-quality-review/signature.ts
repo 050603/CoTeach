@@ -12,14 +12,16 @@ function canonical(value: unknown): unknown {
 export function computeCourseQualitySignature(course: Course, classroom: PersistedClassroomData): string {
   const content = course.content;
   return createHash("sha256").update(JSON.stringify(canonical({
-    schemaVersion: 1,
+    schemaVersion: 2,
     course: { id: course.id, name: course.name, grade: course.grade, subject: course.subject,
       drivingQuestion: course.drivingQuestion, learningObjectives: course.learningObjectives,
       expectedOutcome: course.expectedOutcome, hours: course.hours, pblConfig: course.pblConfig,
       resources: course.resources?.map(({ downloadedBy: _downloadedBy, ...resource }) => { void _downloadedBy; return resource; }),
       resourcePackage: content.resourcePackage, stagePlan: content.stagePlan,
       knowledgePoints: content.knowledgePoints, knowledgeGroups: content.knowledgeGroups, knowledgeGraph: content.knowledgeGraph,
-      moduleTimingPlan: content.moduleTimingPlan, evaluationPlan: content.evaluationPlan, outlines: content._openmaicSceneOutlines },
+      moduleTimingPlan: content.moduleTimingPlan, evaluationPlan: content.evaluationPlan,
+      teachingBlueprint: content.teachingBlueprint, teachingAdoptions: content.teachingAdoptions,
+      outlines: content._openmaicSceneOutlines },
     classroom: { id: classroom.id, revision: classroom.revision ?? 1, stage: classroom.stage, scenes: classroom.scenes },
   }))).digest("hex");
 }

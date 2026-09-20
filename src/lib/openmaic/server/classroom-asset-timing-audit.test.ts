@@ -66,6 +66,15 @@ describe("classroom teaching timing audit", () => {
     expect(audit.teachingRatioValid).toBe(true);
   });
 
+  it("does not reintroduce a fixed narration ratio for legacy outlines without a planned split", () => {
+    const legacyOutlines = outlines.map(({ plannedTiming: _plannedTiming, ...item }) => item);
+    const audit = summarizeTeachingTimingAudit({ outlines: legacyOutlines, studentScenes: scenes, enableTTS: true });
+
+    expect(audit.plannedSubstantiveTeachingSec).toBe(0);
+    expect(audit.substantiveTeachingRatio).toBeCloseTo(0.6613, 4);
+    expect(audit.teachingRatioValid).toBe(true);
+  });
+
   it("still reports a material actual-audio deviation without requesting automatic regeneration", () => {
     const muchLongerTeaching = scenes.map((scene) => scene.outlineId === "teach"
       ? { ...scene, actions: [{ id: "speech-1", type: "speech" as const, text: "讲授", audioDurationSec: 230 }] }

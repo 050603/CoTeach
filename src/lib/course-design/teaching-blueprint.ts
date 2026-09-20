@@ -5,7 +5,9 @@ import { parseJsonResponse } from "@/lib/openmaic/generation/json-repair";
 import { fingerprintGenerationValue } from "@/lib/course-generation/page-checkpoints";
 import { formatTeachingConstraintsForChinesePrompt, type TeachingConstraints } from "@/lib/openmaic/pedagogy/teaching-constraints";
 import { loadSnippet } from "@/lib/openmaic/prompts";
-import type { PageLearningTask, SharedTeachingContext } from "@/lib/course-quality-review/types";
+import type { PageLearningTask, SharedTeachingContext, TeachingResourceNeed, TeachingUnderstandingCriteria } from "@/lib/course-quality-review/types";
+import type { MediaGenerationRequest } from "@/lib/openmaic/media/types";
+import { TEACHING_ENHANCEMENT_VERSION } from "@/lib/openmaic/generation/teaching-enhancement";
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic/generation/generated-output-retry";
 import type {
   KnowledgeGraph,
@@ -17,14 +19,12 @@ import type {
   TeachingBlueprintUnit,
 } from "@/lib/session/types";
 
-export const TEACHING_BLUEPRINT_SCHEMA_VERSION = 1 as const;
-export const TEACHING_BLUEPRINT_POLICY_VERSION = "teacher-checkpoint-blueprint-v5";
-export const TEACHING_NARRATION_RATIO = 0.68;
+export const TEACHING_BLUEPRINT_SCHEMA_VERSION = 2 as const;
+export const TEACHING_BLUEPRINT_POLICY_VERSION = "substantive-section-design-v6";
+/** Kept as a compatibility export for callers being migrated away from ratio budgeting. */
 export const MAX_ASSESSMENT_RATIO = 0.2;
-const MIN_TEACHING_PAGE_SEC = 45;
+const MIN_TEACHING_PAGE_SEC = 1;
 const MIN_SECTION_ASSESSMENT_SEC = 45;
-/** Objective checks are intentionally brief; this includes answering and feedback. */
-const MIN_ADAPTIVE_QUESTION_SEC = 15;
 const MANAGEMENT_METADATA_PATTERN = /(?:证据状态|总体状态|证据缺口|审查记录|确认记录|evidenceStatus|evidenceGap|knowledgeEvidenceSummary|planningIssues|planningAcknowledgement)\s*[：:]\s*(?:SUPPORTED|PARTIAL|UNSUPPORTED)?|"(?:evidenceStatus|evidenceGap|knowledgeEvidenceSummary|planningIssues|planningAcknowledgement)"\s*:|\*\*\s*(?:SUPPORTED|PARTIAL|UNSUPPORTED)\s*\*\*/i;
 const WIDGET_TYPES = new Set<WidgetType>([
   "simulation",
@@ -91,6 +91,20 @@ function records(value: unknown): Array<Record<string, unknown>> {
     : [];
 }
 
+/**
+ * Recognizes direct authoring imperatives where the contract requires actual
+ * explanatory content. This is deliberately narrow: it catches missing
+ * content, but does not pretend that prose length proves teaching quality.
+ */
+function isAuthoringTaskOnly(value: string): boolean {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text) return true;
+  const startsWithDraftingTask = /^(?:请|需要|应当|应该|要|将|通过|使用|用)?(?:解释|说明|介绍|讲解|阐述|分析|比较|区分|澄清|展示|呈现|举例说明|用例子说明|指出|列出|注意)(?:一下|清楚)?[：:，, ]*/.test(text);
+  if (!startsWithDraftingTask) return false;
+  const containsActualRelation = /[：:]|(?:因为|所以|因此|由于|意味着|是指|指的是|描述了|提供了|用于|参与|导致|取决于|不能把|并非|并不|而不是|从而|这会|同一种|不同的|具体事实)/.test(text);
+  return !containsActualRelation;
+}
+
 function comparableSourceText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -148,10 +162,9 @@ function sectionAssessmentTargets(section: TeachingBlueprintSection): BlueprintA
 }
 
 function sectionQuestionCount(section: TeachingBlueprintSection, mode: AssessmentMode): number {
-  if (mode === "constructed-response") {
-    return section.assessmentDurationSec >= 180 && section.assessmentFocus.length > 1 ? 2 : 1;
-  }
-  return Math.max(1, sectionAssessmentTargets(section).length);
+  if (mode === "constructed-response") return section.assessmentDurationSec >= 150 ? 2 : 1;
+  const criteria = section.understandingCriteria;
+  return Math.max(1, Math.min(3, criteria.goals.length > 2 || criteria.answerEssentials.length > 3 ? 2 : 1));
 }
 
 export function teachingBlueprintInputFingerprint(input: TeachingBlueprintInput): string {
@@ -159,10 +172,9 @@ export function teachingBlueprintInputFingerprint(input: TeachingBlueprintInput)
     schemaVersion: TEACHING_BLUEPRINT_SCHEMA_VERSION,
     authoringPolicy: TEACHING_BLUEPRINT_POLICY_VERSION,
     budgetPolicy: {
-      teachingRatio: TEACHING_NARRATION_RATIO,
       assessmentMaxRatio: MAX_ASSESSMENT_RATIO,
-      assessmentCoveragePolicy: 2,
-      minAdaptiveQuestionSec: MIN_ADAPTIVE_QUESTION_SEC,
+      assessmentCoveragePolicy: 3,
+      capacityPolicy: "explanation-first-dynamic-seconds-v1",
     },
     generationModelFingerprint: input.generationModelFingerprint,
     courseTitle: input.courseTitle,
@@ -193,12 +205,13 @@ export function buildTeachingBlueprintPrompt(
   }));
   const system = [
     "你是把粗粒度知识节点编译为可执行课堂的教学设计师。只返回合法 JSON，不使用 Markdown。",
-    "这是供下游小节设计继续展开的紧凑教学蓝图，不是逐字讲稿。用简洁但完整的设计说明写清机制、推理、案例动作、适用条件与误区，避免长篇复述资料。",
+    "这是经过教师审阅后可直接制作资源的小节内容设计，不是下游待办清单，也不是逐字讲稿。",
+    "explanation、mechanism、workedExample、conceptBoundaries、keyPoints 必须写出实际要讲的知识、推理连接、案例事实与边界。禁止只写‘解释……’‘说明区别’‘举例说明’‘澄清误区’等生成任务。",
     "严格保留给定 knowledgePointId。每个 unit 必须列出真实对应的 knowledgePointId，每个 page 必须列出真实对应的 unitId；禁止按位置猜测或为覆盖率随意挂载。",
     "必须沿用已经确认的小节边界与顺序。每个知识点只归属一个 unit；页面可以组合多个 unit，不得为了换例子或换说法重复创建同一知识点的 unit。",
     "可用适龄的通行学科知识补足解释与例子，但不得扩大课程目标、捏造资料出处或把内部证据状态写给学生。",
     "sourceKind=course-source 时 evidenceQuotes 必须逐字来自给定资料；通行知识写 general-knowledge 且 evidenceQuotes=[]。",
-    "每个小节先说明学习这些内容将帮助学生解决什么实际问题，再安排页面。页面之间形成连续的认识进展，每页只承担一个清晰贡献。",
+    "项目情境只规定用途和约束，不能自动变成知识目标。小节先建立整体认识，再按知识特点形成连续进展；纯解释页合法，不强制案例、互动或统一页面套路。",
     "同一材料再次出现时，后页必须增加新的推理、改变一个明确条件或要求独立应用；不得换一种说法重复同一分类、理由和结论。",
     "assessmentFocus 只写学生应独立完成的判断、解释或操作及其理由要求，不得复写讲授案例里已经公布的题目和答案。考查迁移或应用时，必须要求使用一个未在讲授中直接解答过的简短新片段，并保持在已讲知识边界内。判断理由必须回到表述的主要功能、证据关系或适用条件，不得要求学生靠圈出某几个词或复述表面线索证明答案。",
     loadSnippet('adaptive-narration-policy'),
@@ -224,9 +237,11 @@ export function buildTeachingBlueprintPrompt(
       }] : [];
     }),
   }));
-  const assessmentDurationSec = Math.floor(Math.max(1, Math.round(input.totalDurationSec)) * MAX_ASSESSMENT_RATIO);
-  const teachingDurationSec = Math.round(Math.max(1, Math.round(input.totalDurationSec)) * TEACHING_NARRATION_RATIO);
-  const globalMaxPages = Math.floor(teachingDurationSec / MIN_TEACHING_PAGE_SEC);
+  const estimatedSectionCount = Math.max(1, sectionPlans?.length ?? 1);
+  const assessmentDurationSec = Math.min(
+    Math.floor(Math.max(1, Math.round(input.totalDurationSec)) * MAX_ASSESSMENT_RATIO),
+    Math.max(MIN_SECTION_ASSESSMENT_SEC * estimatedSectionCount, Math.round(input.totalDurationSec * 0.12)),
+  );
   const user = `课程：${input.courseTitle}
 学科与学段：${input.subject}；${input.grade}
 学习目标：${input.learningObjectives.join("；")}
@@ -234,10 +249,10 @@ ${formatTeachingConstraintsForChinesePrompt(input.teachingConstraints)}
 项目情境：${input.projectContext || "无"}
 教师补充：${input.teacherBrief?.trim() || "无"}
 知识学习阶段总时长：${Math.round(input.totalDurationSec / 60)} 分钟
-讲授要求：自然语速的实质解释与例子占总时长 65%–70%，本次目标 68%；全部小测与反馈合计不超过 20%。
-测验模式：${input.assessmentMode === "constructed-response" ? "深度作答，节末以一题简答为默认" : "灵活题型，以选择、判断和拖拽匹配为主；每个教学单元中的每个原始知识点都必须形成一个独立检测目标，仅在必要时安排极少量一句话短答"}
+讲授要求：先按必要解释、推理、例子、操作和短测估时；不套用固定讲解比例，也不按知识点数量机械分配题目或分钟。
+测验模式：${input.assessmentMode === "constructed-response" ? "深度作答，节末默认一至两道综合简答" : "节末一至三道短题，可综合检测多个知识点；至少一道要求学生给出简短理由"}
 
-已确认的蓝图容量：讲授 ${teachingDurationSec} 秒；小测与反馈 ${assessmentDurationSec} 秒；讲授页面总数不得超过 ${globalMaxPages}。${plannedSections ? `必须严格按以下 ${plannedSections.length} 个小节及其顺序生成，不得合并、拆分或移动知识点；maxPages 是各小节动态上限：\n${JSON.stringify(plannedSections)}` : "尚未提供固定小节边界，请按知识组组织紧凑小节。"}
+容量边界：总计 ${Math.round(input.totalDurationSec)} 秒，其中节末短测预留约 ${assessmentDurationSec} 秒，其余时间由实际解释和必要操作共享。${plannedSections ? `必须严格按以下 ${plannedSections.length} 个小节及其顺序生成，不得合并、拆分或移动知识点；maxPages 是已确认的页面上限：\n${JSON.stringify(plannedSections)}` : "尚未提供固定小节边界，请按知识组组织紧凑小节。"}
 
 必须覆盖的知识点：
 ${plannedSections ? "已完整列在上述已确认小节中；不得增加其他知识点。" : JSON.stringify(input.knowledgePoints.filter((point) => !plannedPointIds.size || plannedPointIds.has(point.id)).map((point) => ({
@@ -257,9 +272,9 @@ ${JSON.stringify(graphEdges)}
 ${input.sourceContext?.trim() || "没有额外资料；可使用适龄的通行学科知识细化，但不能编造来源。"}
 
 返回结构：
-{"sections":[{"title":"小节标题","learningObjective":"学生完成后能做什么","sharedContext":{"learningPurpose":"学习本节内容能解决什么实际问题","caseId":"复用案例的稳定ID，无案例时为空","caseFacts":["支持判断的动作、观察或结果"],"fixedWording":["跨页保持一致的案例关键句"],"stableTerms":["固定步骤名称或核心术语"],"conceptBoundaries":["必要边界或不能推出的结论"]},"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID；每个ID在全部units中只出现一次"],"learningOutcome":"可观察结果","explanation":"支持后续展开的简洁解释","mechanism":"必要的因果、过程或推理链","workedExample":"案例条件、关键动作、观察结果与理由","conditions":["适用条件或边界"],"misconceptions":["常见误区及辨析"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["能逐字核对时才填写资料原句，否则为空"]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题","type":"slide|interactive","unitIds":["本节 unit id"],"description":"页面教学意图与内容关系","keyPoints":["按教学需要给出非空、互补的信息单元"],"teachingObjective":"本页达成目标","learningTask":{"learnerAction":"学生要观察、判断或完成什么","newContribution":"相比前页新增的认识","reasoningFocus":"理由应涉及什么","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"widgetType":"仅互动页需要","widgetOutline":{}}],"assessmentFocus":["只考本节已讲内容的可观察目标"]}]}
+{"sections":[{"title":"小节标题","learningObjective":"学生完成后能做什么","sharedContext":{"learningPurpose":"学习本节内容能解决什么实际问题","caseId":"确需复用案例时填写，否则为空","caseFacts":["已确定且后页可引用的具体事实"],"fixedWording":["跨页保持一致的关键事实"],"stableTerms":["核心术语"],"conceptBoundaries":["具体误解、正确边界以及为什么不能那样推断"]},"units":[{"id":"局部唯一ID","title":"可讲授单元","knowledgePointIds":["原始ID；每个ID在全部units中只出现一次"],"learningOutcome":"可观察结果","explanation":"实际核心解释，不写生成任务","mechanism":"前提、关系、推理连接及结论为何成立","workedExample":"需要例子时写具体事实、对应关系、判断理由和推广边界；不需要时为空","conditions":["适用条件或边界及理由"],"misconceptions":["具体误解及纠正理由"],"sourceKind":"course-source|general-knowledge","evidenceQuotes":["能逐字核对时才填写资料原句，否则为空"]}],"pages":[{"id":"局部唯一ID","title":"学生可见标题","type":"slide|interactive","unitIds":["本节 unit id"],"description":"本页新增认识及与前后页的关系","keyPoints":["必须展示的具体命题、事实或关系"],"teachingObjective":"本页达成目标","learningTask":{"learnerAction":"确有必要时学生要做什么","newContribution":"相比前页新增的认识","reasoningFocus":"判断理由","caseUse":"introduce|reuse|variant|independent","changedConditions":[],"preservedConditions":[]},"resourceNeeds":[{"kind":"diagram|image|video|interactive","purpose":"对理解的具体作用","required":true,"prompt":"图像或视频的明确内容要求","durationSec":8}],"widgetType":"仅互动页需要","widgetOutline":{}}],"assessmentFocus":["只考本节已讲内容的可观察目标"],"understandingCriteria":{"goals":["理解或迁移目标"],"answerEssentials":["合格回答必须包含的认识和理由"],"misconceptions":["典型错误表现及对应误解"],"supportingUnitIds":["支撑标准的本节 unit id"]}}]}
 
-约束：每个知识点必须且只能进入一个 unit，并至少进入一个 page；页面的知识点映射由系统根据 unitIds 计算，不要输出 page.knowledgePointIds 或 section.knowledgePointIds；每页必须引用本节 unit 且 keyPoints 至少包含一个实质信息单元；每个 unit 必须被页面使用；learningTask 仅在学生确实需要观察、判断或操作时提供，不为每页强设任务；variant 必须写清 changedConditions 与 preservedConditions；required-prerequisite 的 source 必须早于 target；不得超过已确认的小节与总页数上限；小节测验至少获得 ${MIN_SECTION_ASSESSMENT_SEC} 秒，灵活题型还要为每个知识点检测目标至少保留 ${MIN_ADAPTIVE_QUESTION_SEC} 秒。`;
+约束：每个知识点必须且只能进入一个 unit，并至少进入一个 page；页面的知识点映射由系统根据 unitIds 计算，不要输出 page.knowledgePointIds 或 section.knowledgePointIds；每页必须引用本节 unit 且 keyPoints 至少包含一个可直接制作的实质信息单元；每个 unit 必须被页面使用；learningTask 仅在学生确实需要观察、判断或操作时提供；variant 必须写清 changedConditions 与 preservedConditions；required-prerequisite 的 source 必须早于 target；不得超过已确认的小节与页数上限；理解标准先于题目确定，不得用只背名称的标准替代解释、理由和迁移。`;
   return { system, user };
 }
 
@@ -320,6 +335,14 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
       if (!unit.title || !unit.learningOutcome || !unit.explanation || !unit.knowledgePointIds.length) {
         structuralIssues.push(`第 ${sectionIndex + 1} 节第 ${unitIndex + 1} 个单元缺少必要字段或知识点映射`);
       }
+      if (isAuthoringTaskOnly(unit.explanation)) {
+        structuralIssues.push(`第 ${sectionIndex + 1} 节第 ${unitIndex + 1} 个单元的核心解释仍是待办任务，未写出实际教学内容`);
+      }
+      const supportingExplanations = [unit.mechanism, unit.workedExample, ...unit.conditions,
+        ...unit.misconceptions, ...sharedContext.conceptBoundaries].filter(Boolean);
+      if (!supportingExplanations.some((item) => !isAuthoringTaskOnly(item))) {
+        structuralIssues.push(`第 ${sectionIndex + 1} 节第 ${unitIndex + 1} 个单元只有结论，缺少推理连接、例子分析或概念边界`);
+      }
       return unit;
     });
     const unitById = new Map(units.map((unit) => [unit.id, unit]));
@@ -364,6 +387,16 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
       const learningTask = candidateLearningTask?.caseUse !== "variant"
         || candidateLearningTask.changedConditions.length > 0
         ? candidateLearningTask : undefined;
+      const resourceNeeds: TeachingResourceNeed[] = records(rawPage.resourceNeeds).flatMap((rawNeed) => {
+        const kind = rawNeed.kind === "diagram" || rawNeed.kind === "image" || rawNeed.kind === "video"
+          || rawNeed.kind === "interactive" ? rawNeed.kind : undefined;
+        const purpose = clean(rawNeed.purpose, 800);
+        if (!kind || !purpose) return [];
+        const duration = Number(rawNeed.durationSec);
+        return [{ kind, purpose, required: rawNeed.required !== false,
+          ...(clean(rawNeed.prompt, 1_600) ? { prompt: clean(rawNeed.prompt, 1_600) } : {}),
+          ...(kind === "video" && Number.isFinite(duration) ? { durationSec: Math.max(2, Math.min(30, Math.round(duration))) } : {}) }];
+      });
       const page: TeachingBlueprintPage = {
         id: `teaching-section-${sectionIndex + 1}-page-${pageIndex + 1}`,
         title: clean(rawPage.title, 160),
@@ -373,6 +406,7 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
         description: clean(rawPage.description, 1_600),
         keyPoints: strings(rawPage.keyPoints, 8, 500),
         teachingObjective: clean(rawPage.teachingObjective, 800),
+        ...(resourceNeeds.length ? { resourceNeeds } : {}),
         ...(learningTask ? { learningTask } : {}),
         ...(type === "interactive" ? { widgetType, widgetOutline } : {}),
       };
@@ -385,6 +419,22 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
     const sectionTitle = clean(rawSection.title, 160) || sectionPlan?.title || `第 ${sectionIndex + 1} 节`;
     const learningObjective = clean(rawSection.learningObjective, 1_000) || sharedContext.learningPurpose;
     const assessmentFocus = strings(rawSection.assessmentFocus, 6, 800);
+    const rawCriteria = rawSection.understandingCriteria && typeof rawSection.understandingCriteria === "object"
+      && !Array.isArray(rawSection.understandingCriteria)
+      ? rawSection.understandingCriteria as Record<string, unknown> : {};
+    const understandingCriteria: TeachingUnderstandingCriteria = {
+      goals: strings(rawCriteria.goals, 6, 800),
+      answerEssentials: strings(rawCriteria.answerEssentials, 12, 800),
+      misconceptions: strings(rawCriteria.misconceptions, 12, 800),
+      supportingUnitIds: strings(rawCriteria.supportingUnitIds, 30, 160).flatMap((id) => {
+        const normalized = rawUnitIdMap.get(id) ?? (unitById.has(id) ? id : undefined);
+        return normalized ? [normalized] : [];
+      }),
+    };
+    if (!understandingCriteria.goals.length || !understandingCriteria.answerEssentials.length
+      || !understandingCriteria.misconceptions.length || !understandingCriteria.supportingUnitIds.length) {
+      structuralIssues.push(`第 ${sectionIndex + 1} 节缺少完整的理解目标、回答要点、典型误解或支撑单元`);
+    }
     if (!units.length || !pages.length) {
       structuralIssues.push(`第 ${sectionIndex + 1} 节缺少教学单元或页面`);
     }
@@ -398,6 +448,7 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
       units,
       pages,
       assessmentFocus: assessmentFocus.length ? assessmentFocus : [learningObjective],
+      understandingCriteria,
       teachingDurationSec: 0,
       learnerActivityDurationSec: 0,
       assessmentDurationSec: 0,
@@ -405,12 +456,16 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
   });
 
   const totalDurationSec = Math.max(1, Math.round(input.totalDurationSec));
-  const teachingDurationSec = Math.round(totalDurationSec * TEACHING_NARRATION_RATIO);
-  const assessmentDurationSec = Math.floor(totalDurationSec * MAX_ASSESSMENT_RATIO);
-  const learnerActivityDurationSec = totalDurationSec - teachingDurationSec - assessmentDurationSec;
-  const sectionAssessmentMinimums = sections.map((section) => input.assessmentMode === "adaptive"
-    ? Math.max(MIN_SECTION_ASSESSMENT_SEC, sectionAssessmentTargets(section).length * MIN_ADAPTIVE_QUESTION_SEC)
-    : MIN_SECTION_ASSESSMENT_SEC);
+  const assessmentDurationSec = Math.min(
+    Math.floor(totalDurationSec * MAX_ASSESSMENT_RATIO),
+    Math.max(sections.length * MIN_SECTION_ASSESSMENT_SEC, Math.round(totalDurationSec * 0.12)),
+  );
+  const requestedActivitySec = sections.reduce((sum, section) => sum + section.pages.reduce((pageSum, page) => (
+    pageSum + (page.type === "interactive" ? 45 : page.learningTask ? 15 : 0)
+  ), 0), 0);
+  const learnerActivityDurationSec = Math.min(requestedActivitySec, Math.floor(totalDurationSec * 0.18));
+  const teachingDurationSec = totalDurationSec - assessmentDurationSec - learnerActivityDurationSec;
+  const sectionAssessmentMinimums = sections.map(() => MIN_SECTION_ASSESSMENT_SEC);
 
   const pointWeights = new Map(input.knowledgePoints.map((point) => [point.id, point]));
   const sectionWeights = sections.map((section) => section.units.reduce((sum, unit) => sum + unitWeight(unit, pointWeights), 0));
@@ -421,9 +476,7 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
   );
   let sectionAssessment = allocateExactWithMinimums(
     assessmentDurationSec,
-    sections.map((section) => input.assessmentMode === "adaptive"
-      ? Math.max(1, sectionAssessmentTargets(section).length)
-      : Math.max(1, section.assessmentFocus.length)),
+    sections.map((section) => Math.max(1, section.understandingCriteria.goals.length)),
     sectionAssessmentMinimums,
   );
   let sectionActivity = allocateExact(learnerActivityDurationSec, sections.map((section) =>
@@ -433,7 +486,7 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
     sectionTeaching = allocateExact(teachingDurationSec, sectionWeights, 1);
   }
   if (sectionAssessment.length !== sections.length) {
-    sectionAssessment = allocateExact(assessmentDurationSec, sections.map((section) => Math.max(1, sectionAssessmentTargets(section).length)), 1);
+    sectionAssessment = allocateExact(assessmentDurationSec, sections.map((section) => Math.max(1, section.understandingCriteria.goals.length)), 1);
   }
   if (sectionActivity.length !== sections.length) {
     sectionActivity = allocateExact(learnerActivityDurationSec, sections.map(() => 1));
@@ -510,27 +563,120 @@ export async function generateTeachingBlueprint(
 function sectionTeachingBrief(section: TeachingBlueprintSection, page?: TeachingBlueprintPage) {
   const ids = new Set(page?.unitIds ?? section.units.map((unit) => unit.id));
   const units = section.units.filter((unit) => ids.has(unit.id));
+  const pageIndex = page ? section.pages.findIndex((candidate) => candidate.id === page.id) : -1;
+  const priorPages = pageIndex > 0 ? section.pages.slice(0, pageIndex) : [];
+  const explanation = units.map((unit) => unit.explanation).filter(Boolean);
+  const reasoningSteps = units.flatMap((unit) => [
+    unit.mechanism,
+    unit.workedExample ? `例子分析：${unit.workedExample}` : "",
+    ...unit.conditions.map((condition) => `适用边界：${condition}`),
+    ...unit.misconceptions.map((misconception) => `误解辨析：${misconception}`),
+  ]).filter(Boolean);
   return {
     schemaVersion: 1 as const,
+    designVersion: TEACHING_ENHANCEMENT_VERSION,
     sharedContext: section.sharedContext,
     ...(page?.learningTask ? { pageTask: page.learningTask } : {}),
-    explanation: units.map((unit) => `${unit.explanation}\n${unit.mechanism}`).join("\n"),
-    examples: units.map((unit) => unit.workedExample),
+    ...(page ? { teachingPlan: {
+      purpose: page.teachingObjective,
+      priorKnowledge: priorPages.length
+        ? priorPages.flatMap((item) => item.keyPoints).join("；")
+        : section.sharedContext.learningPurpose,
+      newContent: explanation.join("\n"),
+      learnerQuestion: page.learningTask?.reasoningFocus ?? "",
+      reasoningSteps,
+      takeaway: page.keyPoints.join("；"),
+      visibleContent: page.keyPoints,
+      narrationFocus: [...explanation, ...reasoningSteps],
+    } } : {}),
+    explanation: [...explanation, ...reasoningSteps].join("\n"),
+    examples: units.map((unit) => unit.workedExample).filter(Boolean),
     conditions: [...new Set(units.flatMap((unit) => [...unit.conditions, ...unit.misconceptions]))],
     evidence: units.flatMap((unit) => unit.evidenceQuotes.map((quote) => ({ sourceId: "course-source", quote }))),
     assessmentFocus: section.assessmentFocus.join("；"),
+    understandingCriteria: section.understandingCriteria,
+    ...(page?.resourceNeeds?.length ? { resourceNeeds: page.resourceNeeds } : {}),
   };
+}
+
+/**
+ * Apply the bounded fields exposed by the outline review UI back to the
+ * teacher-private design, then let callers compile resources from that single
+ * source again. A v2 review may refine existing pages, but cannot smuggle in a
+ * page without teaching units or silently remove a required unit.
+ */
+export function applyReviewedOutlinesToTeachingBlueprint(
+  blueprint: TeachingBlueprint,
+  reviewedOutlines: readonly SceneOutline[],
+): TeachingBlueprint {
+  if (blueprint.schemaVersion !== 2) return blueprint;
+  const expectedIds = new Set(blueprint.sections.flatMap((section) => [
+    ...section.pages.map((page) => page.outlineId ?? page.id),
+    ...(section.quizOutlineId ? [section.quizOutlineId] : []),
+  ]));
+  const reviewedById = new Map(reviewedOutlines.map((outline) => [outline.id, outline]));
+  const unexpected = reviewedOutlines.filter((outline) => !expectedIds.has(outline.id));
+  const missing = [...expectedIds].filter((id) => !reviewedById.has(id));
+  if (unexpected.length || missing.length || reviewedById.size !== reviewedOutlines.length) {
+    throw new Error("新版课程大纲只能定点修改已有设计页面；新增、删除或重复页面必须先回到内容设计。");
+  }
+
+  const next = structuredClone(blueprint);
+  next.sections.forEach((section) => {
+    section.pages.sort((left, right) => (
+      (reviewedById.get(left.outlineId ?? left.id)?.order ?? 0)
+      - (reviewedById.get(right.outlineId ?? right.id)?.order ?? 0)
+    ));
+    for (const page of section.pages) {
+      const outline = reviewedById.get(page.outlineId ?? page.id)!;
+      if (outline.type !== page.type) {
+        throw new Error(`页面“${page.title}”的资源类型不能在大纲审阅中改写；请按内容设计修订。`);
+      }
+      const brief = outline.teachingBrief;
+      const plan = brief?.teachingPlan;
+      if (!brief || !plan?.newContent.trim() || !plan.reasoningSteps.length || !plan.visibleContent.length
+        || !plan.narrationFocus.length) {
+        throw new Error(`页面“${outline.title}”缺少实质解释、推理连接、可见材料或讲解重点，不能继续制作。`);
+      }
+      page.title = outline.title;
+      page.description = outline.description;
+      page.keyPoints = [...outline.keyPoints];
+      page.teachingObjective = outline.teachingObjective ?? page.teachingObjective;
+      page.learningTask = brief.pageTask;
+      page.resourceNeeds = brief.resourceNeeds;
+
+      if (page.unitIds.length === 1) {
+        const unit = section.units.find((candidate) => candidate.id === page.unitIds[0]);
+        if (unit) {
+          unit.explanation = plan.newContent;
+          const mechanism = plan.reasoningSteps.filter((item) => !/^(?:例子分析|适用边界|误解辨析)：/.test(item));
+          const example = plan.reasoningSteps.find((item) => item.startsWith("例子分析："))?.slice("例子分析：".length)
+            ?? brief.examples[0];
+          const conditions = plan.reasoningSteps.filter((item) => item.startsWith("适用边界："))
+            .map((item) => item.slice("适用边界：".length));
+          const misconceptions = plan.reasoningSteps.filter((item) => item.startsWith("误解辨析："))
+            .map((item) => item.slice("误解辨析：".length));
+          if (mechanism.length) unit.mechanism = mechanism.join("\n");
+          if (example !== undefined) unit.workedExample = example;
+          if (conditions.length) unit.conditions = conditions;
+          if (misconceptions.length) unit.misconceptions = misconceptions;
+        }
+      }
+      if (brief.understandingCriteria) section.understandingCriteria = structuredClone(brief.understandingCriteria);
+    }
+  });
+  next.sections.sort((left, right) => {
+    const leftOrder = Math.min(...left.pages.map((page) => reviewedById.get(page.outlineId ?? page.id)?.order ?? Number.MAX_SAFE_INTEGER));
+    const rightOrder = Math.min(...right.pages.map((page) => reviewedById.get(page.outlineId ?? page.id)?.order ?? Number.MAX_SAFE_INTEGER));
+    return leftOrder - rightOrder;
+  }).forEach((section, index) => { section.order = index; });
+  return next;
 }
 
 export function teachingBlueprintToOutlines(
   blueprint: TeachingBlueprint,
   languageDirective: string,
 ): Array<SceneOutline & OpenMaicSceneOutlineSnapshot> {
-  const totalQuestions = blueprint.sections.reduce((sum, section) =>
-    sum + sectionQuestionCount(section, blueprint.assessmentMode), 0);
-  let remainingShortAnswers = blueprint.assessmentMode === "adaptive"
-    ? Math.floor(totalQuestions * 0.2)
-    : totalQuestions;
   const result: Array<SceneOutline & OpenMaicSceneOutlineSnapshot> = [];
   blueprint.sections.forEach((section) => {
     const transitionTotal = Math.min(section.learnerActivityDurationSec, section.pages.length * 5);
@@ -548,6 +694,11 @@ export function teachingBlueprintToOutlines(
       const outlineId = page.id;
       page.outlineId = outlineId;
       pageOutlineIds.push(outlineId);
+      const mediaGenerations: MediaGenerationRequest[] = (page.resourceNeeds ?? []).flatMap((need, resourceIndex) => {
+        if ((need.kind !== "image" && need.kind !== "video") || !need.prompt) return [];
+        return [{ type: need.kind, prompt: need.prompt, elementId: `${outlineId}:media-${resourceIndex + 1}`,
+          aspectRatio: "16:9" as const, ...(need.kind === "video" && need.durationSec ? { duration: need.durationSec } : {}) }];
+      });
       result.push({
         id: outlineId,
         type: page.type,
@@ -581,16 +732,14 @@ export function teachingBlueprintToOutlines(
         resourceTypes: page.type === "interactive"
           ? [page.widgetType === "code" ? "code-interactive" : "interactive-demo"]
           : ["ppt"],
+        ...(mediaGenerations.length ? { mediaGenerations } : {}),
         courseLanguageDirective: languageDirective,
         ...(page.type === "interactive" ? { widgetType: page.widgetType, widgetOutline: page.widgetOutline } : {}),
       });
     });
     const assessmentTargets = sectionAssessmentTargets(section);
     const questionCount = sectionQuestionCount(section, blueprint.assessmentMode);
-    const allowShortAnswer = blueprint.assessmentMode === "constructed-response"
-      ? questionCount
-      : Math.min(remainingShortAnswers, 1);
-    remainingShortAnswers -= allowShortAnswer;
+    const allowShortAnswer = blueprint.assessmentMode === "constructed-response" ? questionCount : 1;
     const quizOutlineId = `${section.id}-check`;
     section.quizOutlineId = quizOutlineId;
     const assessmentTransitionSec = Math.min(8, Math.max(2, Math.round(section.assessmentDurationSec * 0.04)));
@@ -604,8 +753,8 @@ export function teachingBlueprintToOutlines(
       type: "quiz",
       title: `${section.title} · 节末小测`,
       description: blueprint.assessmentMode === "constructed-response"
-        ? `使用未在讲授示例中直接公布答案的简短新片段进行独立判断，不复述共享案例的原题答案。围绕${section.assessmentFocus.join("、")}设置 ${questionCount} 道简答题，要求用关键词和简洁理由作答。`
-        : `使用未在讲授示例中直接公布答案的简短新片段进行独立检测，不复述共享案例的原题答案。围绕${section.assessmentFocus.join("、")}设置 ${questionCount} 道低负担检测，逐一覆盖实际讲授的教学单元—知识点目标，并选择最合适的选择、判断或拖拽匹配交互。`,
+        ? `使用未在讲授示例中直接公布答案的简短新片段进行独立判断。依据预定理解标准设置 ${questionCount} 道综合简答，要求给出结论和简洁理由。`
+        : `使用未在讲授示例中直接公布答案的简短新片段进行独立检测。依据预定理解标准设置 ${questionCount} 道短题，可以综合多个知识点；至少一道要求给出简短理由。`,
       keyPoints: section.assessmentFocus,
       teachingObjective: section.assessmentFocus.join("；"),
       teachingBrief: sectionTeachingBrief(section),
@@ -641,12 +790,13 @@ export function teachingBlueprintToOutlines(
       quizConfig: {
         difficulty: "medium",
         questionCount,
-        coveragePolicy: blueprint.assessmentMode === "constructed-response" ? "section-synthesis" : "each-target",
+        coveragePolicy: "section-synthesis",
         questionTypes: blueprint.assessmentMode === "constructed-response"
           ? ["short_answer"]
           : allowShortAnswer > 0
             ? ["single", "multiple", "matching", "true_false", "short_answer"]
             : ["single", "multiple", "matching", "true_false"],
+        minShortAnswerQuestions: blueprint.assessmentMode === "constructed-response" ? questionCount : 1,
         maxShortAnswerQuestions: allowShortAnswer,
       },
     });
@@ -675,8 +825,6 @@ export function validateTeachingBlueprintBudget(
   let blueprintTeaching = 0;
   let blueprintActivity = 0;
   let blueprintAssessment = 0;
-  let totalQuestions = 0;
-  let totalAllowedShortAnswers = 0;
   for (const section of blueprint.sections) {
     blueprintTeaching += section.teachingDurationSec;
     blueprintActivity += section.learnerActivityDurationSec;
@@ -727,25 +875,23 @@ export function validateTeachingBlueprintBudget(
     }
     const questionCount = Math.round(quiz.quizConfig?.questionCount ?? 0);
     const questionTypes = quiz.quizConfig?.questionTypes ?? [];
+    const minShortAnswers = Math.max(0, Math.round(quiz.quizConfig?.minShortAnswerQuestions ?? 0));
     const maxShortAnswers = Math.max(0, Math.round(quiz.quizConfig?.maxShortAnswerQuestions ?? 0));
-    totalQuestions += questionCount;
-    totalAllowedShortAnswers += maxShortAnswers;
     if (blueprint.assessmentMode === "constructed-response") {
       if (questionCount < 1 || questionCount > 2) issues.push(`小节“${section.title}”深度作答题量必须为 1–2 题`);
-      if (questionTypes.length !== 1 || questionTypes[0] !== "short_answer" || maxShortAnswers !== questionCount) {
+      if (questionTypes.length !== 1 || questionTypes[0] !== "short_answer"
+        || minShortAnswers !== questionCount || maxShortAnswers !== questionCount) {
         issues.push(`小节“${section.title}”未遵循深度作答的全简答规则`);
       }
     } else {
       const targets = sectionAssessmentTargets(section);
-      if (questionCount < targets.length) {
-        issues.push(`小节“${section.title}”只有 ${questionCount} 题，无法逐一覆盖 ${targets.length} 个教学单元—知识点目标`);
+      if (questionCount < 1 || questionCount > 3) issues.push(`小节“${section.title}”节末短测题量必须为 1–3 题`);
+      if (minShortAnswers < 1 || maxShortAnswers < minShortAnswers || !questionTypes.includes("short_answer")) {
+        issues.push(`小节“${section.title}”至少需要一道要求说明理由的短答题`);
       }
-      if (questionCount * MIN_ADAPTIVE_QUESTION_SEC > section.assessmentDurationSec) {
-        issues.push(`小节“${section.title}”的 ${questionCount} 道客观题超出 ${section.assessmentDurationSec} 秒测验预算`);
-      }
-      if (quiz.quizConfig?.coveragePolicy !== "each-target"
+      if (quiz.quizConfig?.coveragePolicy !== "section-synthesis"
         || !quiz.assessmentTargets || quiz.assessmentTargets.length !== targets.length) {
-        issues.push(`小节“${section.title}”缺少逐教学单元—知识点的显式检测目标`);
+        issues.push(`小节“${section.title}”缺少综合题与教学单元—知识点的显式映射`);
       }
       if (!questionTypes.length || questionTypes.some((type) => !["single", "multiple", "matching", "true_false", "short_answer"].includes(type))) {
         issues.push(`小节“${section.title}”包含灵活题型模式不允许的题型`);
@@ -758,17 +904,13 @@ export function validateTeachingBlueprintBudget(
     || blueprintAssessment !== blueprint.budget.assessmentDurationSec) {
     issues.push("小节预算合计与教学蓝图总预算不一致");
   }
-  if (blueprint.assessmentMode === "adaptive" && totalAllowedShortAnswers > Math.floor(totalQuestions * 0.2)) {
-    issues.push(`灵活题型模式短答上限超过全课题数的 20%（${totalAllowedShortAnswers}/${totalQuestions}）`);
-  }
   const total = outlines.reduce((sum, outline) => sum + Math.max(0, Math.round(outline.targetDurationSec ?? 0)), 0);
   const teaching = outlines.filter((outline) => outline.plannedTiming?.role === "teaching")
     .reduce((sum, outline) => sum + (outline.plannedTiming?.narrationSec ?? 0), 0);
   const assessment = outlines.filter((outline) => outline.type === "quiz")
     .reduce((sum, outline) => sum + Math.max(0, Math.round(outline.targetDurationSec ?? 0)), 0);
   if (total !== blueprint.budget.totalDurationSec) issues.push(`页面总时长 ${total} 秒不等于蓝图 ${blueprint.budget.totalDurationSec} 秒`);
-  const teachingRatio = teaching / Math.max(1, blueprint.budget.totalDurationSec);
-  if (teachingRatio < 0.65 || teachingRatio > 0.7) issues.push(`实质讲授占比 ${Math.round(teachingRatio * 100)}% 不在 65%–70%`);
+  if (teaching !== blueprint.budget.teachingDurationSec) issues.push("页面讲授秒数与按内容规划的蓝图预算不一致");
   if (assessment / Math.max(1, blueprint.budget.totalDurationSec) > MAX_ASSESSMENT_RATIO + 0.0001) issues.push("小测与反馈超过知识学习阶段的 20%");
   if (MANAGEMENT_METADATA_PATTERN.test(JSON.stringify(outlines))) issues.push("学生页面大纲包含证据状态或审查管理字段");
   return issues;

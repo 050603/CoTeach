@@ -171,7 +171,7 @@ export function summarizeTeachingTimingAudit(input: Pick<ClassroomAssetGeneratio
     : Number.POSITIVE_INFINITY;
   const teachingRatioValid = plannedSubstantiveTeachingSec > 0
     ? teachingDurationDeviationRatio <= TEACHING_DURATION_TOLERANCE_RATIO
-    : substantiveTeachingRatio >= 0.65 && substantiveTeachingRatio <= 0.7;
+    : substantiveTeachingDurationSec > 0 && substantiveTeachingDurationSec <= totalBudgetSec;
   return {
     schemaVersion: 1,
     totalBudgetSec: Math.round(totalBudgetSec),

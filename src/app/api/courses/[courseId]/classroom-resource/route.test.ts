@@ -159,6 +159,13 @@ describe('teacher classroom resource route', () => {
     expect(mocks.persistAudio).toHaveBeenCalledWith('classroom-1', [expect.objectContaining({ filename: expect.stringMatching(/^edit-.*\.wav$/) })]);
     await expect(response.json()).resolves.toMatchObject({
       narrationChanged: false,
+      dependencyInvalidation: {
+        baseClassroomRevision: 4,
+        classroomRevision: 5,
+        changeType: 'narration',
+        affectedSceneIds: ['scene-1'],
+        invalidated: expect.arrayContaining(['audio', 'narration-anchors', 'timing-audit', 'assessment-opportunity']),
+      },
       classroom: { scenes: [{ actions: [{ text: '新讲稿', audioUrl: expect.stringContaining('/classroom-media/classroom-1/audio/') }] }] },
     });
   });

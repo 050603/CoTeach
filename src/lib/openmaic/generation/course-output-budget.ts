@@ -20,7 +20,7 @@ const VISIBLE_OUTPUT_ALLOWANCE: Record<CourseOutputResource, number> = {
   'search-query': 1_024,
   planning: 16_384,
   'teaching-design': 16_384,
-  narration: 8_192,
+  narration: 32_768,
   interactive: 32_768,
   slide: 24_576,
   actions: 16_384,

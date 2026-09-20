@@ -2,12 +2,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { emptyResourcePackageDraft } from "@/lib/resource-package/types";
 
-const mocks = vi.hoisted(() => ({ find: vi.fn(), packageJob: vi.fn(), create: vi.fn(), update: vi.fn(), resolve: vi.fn(), references: vi.fn() }));
+const mocks = vi.hoisted(() => {
+  class TestLessonPromotionError extends Error {
+    constructor(readonly code: string, message: string, readonly status: number) { super(message); }
+  }
+  return { find: vi.fn(), packageJob: vi.fn(), create: vi.fn(), update: vi.fn(), resolve: vi.fn(), references: vi.fn(), promote: vi.fn(), TestLessonPromotionError };
+});
 vi.mock("@/lib/platform/template-access", () => ({ authorizeTemplateRequest: vi.fn().mockResolvedValue("teacher-1") }));
 vi.mock("@/lib/platform/pbl-template-repository", () => ({ loadPblTemplateCourse: vi.fn().mockResolvedValue({ id: "course-1" }) }));
 vi.mock("@/lib/course-generation/job-storage", () => ({ designGenerationJobs: { findUnique: mocks.find, create: mocks.create, update: mocks.update }, resourcePackageJobs: { findUnique: mocks.packageJob } }));
 vi.mock("@/lib/course-generation/capability", () => ({ isBackgroundCourseGenerationEnabled: () => true }));
-vi.mock("@/lib/course-design/job-runner", () => ({ initialQuickGenerationEstimateSeconds: () => 60, cancelCourseDesignJob: vi.fn(), pauseCourseDesignForOutlineReview: vi.fn(), resumeCourseDesignAfterOutlineReview: vi.fn(), runCourseDesignJob: vi.fn(), resumeRecoverableCourseDesignJob: vi.fn() }));
+vi.mock("@/lib/course-design/job-runner", () => ({
+  initialQuickGenerationEstimateSeconds: () => 60,
+  cancelCourseDesignJob: vi.fn(),
+  pauseCourseDesignForOutlineReview: vi.fn(),
+  promoteTestLessonToFullCourse: mocks.promote,
+  resumeCourseDesignAfterOutlineReview: vi.fn(),
+  runCourseDesignJob: vi.fn(),
+  resumeRecoverableCourseDesignJob: vi.fn(),
+  TestLessonPromotionError: mocks.TestLessonPromotionError,
+}));
 vi.mock("@/lib/session/server-store", () => ({ getCourse: vi.fn() }));
 vi.mock("@/lib/course-design/generation-references", () => ({ GenerationReferenceError: class extends Error {}, resolveGenerationReferenceMaterials: mocks.references }));
 vi.mock("@/lib/resource-package/server", () => ({ ResourcePackageError: class extends Error {}, resolveConfirmedResourcePackage: mocks.resolve }));
@@ -16,11 +30,14 @@ vi.mock("@/lib/openmaic/server/provider-config", () => ({
   findServerDefaultModelString: () => "deepseek:deepseek-v4-flash",
 }));
 
-import { GET, POST } from "./route";
+import { GET, PATCH, POST } from "./route";
 
 const context = { params: Promise.resolve({ courseId: "course-1" }) };
 function request(body: unknown) {
   return new NextRequest("http://localhost/api/courses/course-1/design-generation", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+}
+function patchRequest(body: unknown) {
+  return new NextRequest("http://localhost/api/courses/course-1/design-generation", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 }
 function storedJob(request: unknown, status = "completed") {
   return { id: "job-1", courseId: "course-1", status, step: "completed", progress: 100, request, trace: [], updatedAt: new Date("2026-09-12T00:00:00Z") };
@@ -78,7 +95,7 @@ describe("resource-package design generation admission", () => {
       resourcePackage,
       referenceMaterials: [material],
       supplementalAnswers: { brief: "" },
-      generationContractVersion: 2,
+      generationContractVersion: 3,
       assessmentMode: "adaptive",
     });
     expect(await response.json()).toMatchObject({ job: { requestPreview: { resourcePackageId: "package-1", resourcePackageRevision: 3, assessmentMode: "adaptive" } } });
@@ -91,7 +108,7 @@ describe("resource-package design generation admission", () => {
     const accepted = await POST(request({ resourcePackageId: "package-1", resourcePackageRevision: 3, assessmentMode: "constructed-response" }), context);
     expect(accepted.status).toBe(202);
     expect(mocks.create.mock.calls[0][0].data.request).toMatchObject({
-      generationContractVersion: 2,
+      generationContractVersion: 3,
       assessmentMode: "constructed-response",
     });
     const rejected = await POST(request({ resourcePackageId: "package-1", resourcePackageRevision: 3, assessmentMode: "essay" }), context);
@@ -112,6 +129,39 @@ describe("resource-package design generation admission", () => {
     const rejected = await POST(request({ resourcePackageId: "package-1", resourcePackageRevision: 3, generationScope: "shortcut" }), context);
     expect(rejected.status).toBe(400);
     expect(await rejected.json()).toMatchObject({ error: "INVALID_GENERATION_SCOPE" });
+  });
+
+  it("promotes a completed test lesson through the dedicated continuation action", async () => {
+    const promotedJob = storedJob({
+      courseId: "course-1",
+      teacherBrief: "",
+      generationScope: "full-course",
+    });
+    mocks.promote.mockResolvedValue({ designJob: promotedJob, contentJob: { id: "content-1" } });
+
+    const response = await PATCH(patchRequest({ action: "promote-test-lesson" }), context);
+
+    expect(response.status).toBe(202);
+    expect(mocks.promote).toHaveBeenCalledWith("course-1");
+    expect(await response.json()).toMatchObject({
+      job: { requestPreview: { generationScope: "full-course" } },
+    });
+  });
+
+  it("keeps the test lesson unchanged when it is not ready for full-course promotion", async () => {
+    mocks.promote.mockRejectedValue(new mocks.TestLessonPromotionError(
+      "TEST_LESSON_NOT_COMPLETED",
+      "测试小节尚未完整生成",
+      409,
+    ));
+
+    const response = await PATCH(patchRequest({ action: "promote-test-lesson" }), context);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "TEST_LESSON_NOT_COMPLETED",
+      detail: "测试小节尚未完整生成",
+    });
   });
 
   it("only allows legacy requests to resume with the same parameters", async () => {

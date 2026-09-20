@@ -5,9 +5,11 @@ import { isBackgroundCourseGenerationEnabled } from "@/lib/course-generation/cap
 import {
   cancelCourseDesignJob,
   pauseCourseDesignForOutlineReview,
+  promoteTestLessonToFullCourse,
   resumeCourseDesignAfterOutlineReview,
   runCourseDesignJob,
   resumeRecoverableCourseDesignJob,
+  TestLessonPromotionError,
   initialQuickGenerationEstimateSeconds,
   type QuickDesignRequest,
 } from "@/lib/course-design/job-runner";
@@ -49,6 +51,8 @@ function responseJob(job: Awaited<ReturnType<typeof designGenerationJobs.findUni
     reviewStatus: job.reviewStatus,
     reviewKind: job.step === "knowledgeReview"
       ? "knowledge"
+      : job.step === "capacityReview"
+        ? "capacity"
       : job.step === "outlineReview" || job.step === "lessonOutline"
         ? "outline"
         : null,
@@ -111,6 +115,9 @@ async function structuredResponse(work: () => Promise<Response>): Promise<Respon
   try {
     return await work();
   } catch (error) {
+    if (error instanceof TestLessonPromotionError) {
+      return Response.json({ error: error.code, detail: error.message }, { status: error.status });
+    }
     const migrationMissing = error instanceof Prisma.PrismaClientKnownRequestError
       && (error.code === "P2021" || error.code === "P2022");
     return Response.json({
@@ -235,21 +242,16 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       generationMode: body?.generationMode === "deep-interaction"
         ? "deep-interaction"
         : "standard",
-      ...(resourcePackage
-        ? {
-            generationContractVersion: 2 as const,
-            assessmentMode: body?.assessmentMode === "constructed-response"
-              ? "constructed-response" as const
-              : "adaptive" as const,
-          }
-        : {
-            ...(previousRequest?.generationContractVersion
-              ? { generationContractVersion: previousRequest.generationContractVersion }
-              : {}),
-            ...(previousRequest?.assessmentMode
-              ? { assessmentMode: previousRequest.assessmentMode }
-              : {}),
-          }),
+      ...(!previousRequest
+        ? { generationContractVersion: 3 as const }
+        : previousRequest.generationContractVersion
+          ? { generationContractVersion: previousRequest.generationContractVersion }
+          : {}),
+      assessmentMode: body?.assessmentMode === "constructed-response"
+        ? "constructed-response"
+        : previousRequest
+          ? previousRequest.assessmentMode ?? "constructed-response"
+          : "adaptive",
       options: {
         enableImageGeneration: body?.options?.enableImageGeneration !== false,
         enableTTS: body?.options?.enableTTS !== false,
@@ -364,14 +366,27 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
       lessonOutline?: unknown;
       sceneOutlines?: unknown;
     } | null;
-    if (body?.action !== "pause" && body?.action !== "resume") {
+    if (body?.action !== "pause" && body?.action !== "resume" && body?.action !== "promote-test-lesson") {
       return Response.json({ error: "INVALID_REVIEW_ACTION" }, { status: 400 });
+    }
+
+    if (body.action === "promote-test-lesson") {
+      const promoted = await promoteTestLessonToFullCourse(courseId);
+      return Response.json({
+        backgroundEnabled: isBackgroundCourseGenerationEnabled(),
+        job: responseJob(promoted.designJob),
+      }, { status: 202 });
     }
 
     let job = body.action === "pause"
       ? await pauseCourseDesignForOutlineReview(courseId)
-      : await resumeCourseDesignAfterOutlineReview(courseId, {
-          reviewKind: body.reviewKind === "knowledge" ? "knowledge" : "outline",
+        : await resumeCourseDesignAfterOutlineReview(courseId, {
+          actorId: requestedBy,
+          reviewKind: body.reviewKind === "knowledge"
+            ? "knowledge"
+            : body.reviewKind === "capacity"
+              ? "capacity"
+              : "outline",
           knowledgePoints: Array.isArray(body.knowledgePoints)
             ? body.knowledgePoints.slice(0, 120) as KnowledgePoint[]
             : undefined,
@@ -394,7 +409,11 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
         where: { id: job.id },
         data: {
           status: "running",
-          message: "正在按教师确认的大纲继续生成",
+          message: body.reviewKind === "capacity"
+            ? "正在按教师决定的范围与时长继续生成"
+            : body.reviewKind === "knowledge"
+              ? "正在按教师确认的知识图谱继续生成"
+              : "正在按教师确认的大纲继续生成",
           startedAt: job.startedAt ?? startedAt,
           lastHeartbeatAt: startedAt,
           attempt: { increment: 1 },

@@ -88,7 +88,7 @@ export function QuickGenerationStage({
   paused: boolean;
   reviewAvailable: boolean;
   reviewAvailableUntil?: string | null;
-  reviewKind?: "knowledge" | "outline" | null;
+  reviewKind?: "knowledge" | "capacity" | "outline" | null;
   backgroundEnabled: boolean | null;
   cancelling: boolean;
   confirmCancel: boolean;
@@ -173,13 +173,17 @@ export function QuickGenerationStage({
   const activeReviewKind = reviewKind ?? "outline";
   const reviewMatchesCard = activeReviewKind === "knowledge"
     ? displayed.kind === "graph"
-    : displayed.kind === "pages";
+    : activeReviewKind === "capacity"
+      ? displayed.kind === "timeline"
+      : displayed.kind === "pages";
   const reviewCountdown = reviewAvailableUntil
     ? Math.max(0, Math.ceil((new Date(reviewAvailableUntil).getTime() - now) / 1_000))
     : null;
   const reviewButtonLabel = activeReviewKind === "knowledge"
     ? "查看知识图谱并确认"
-    : "查看课程大纲并确认";
+    : activeReviewKind === "capacity"
+      ? "查看时间冲突并决定"
+      : "查看课程大纲并确认";
 
   return (
     <div className="fixed inset-0 z-[70] overflow-y-auto bg-[var(--pbl-bg)] text-[var(--pbl-text-strong)]">
@@ -461,24 +465,26 @@ function ArtifactBody({ artifact, active, suspendedLabel }: { artifact: CourseDe
 const PAGE_TASK_LABELS: Record<string, string> = {
   restoring: "恢复断点",
   content: "制作页面正文",
-  "reviewed-content": "恢复旧版页面断点",
-  actions: "生成讲稿与教学动作",
-  narration: "编写课堂讲稿",
+  "reviewed-content": "检查版式与知识覆盖",
+  actions: "绑定讲稿与教学动作",
+  narration: "编写整节连贯讲稿",
   assembling: "组装并保存页面",
 };
 
 const PAGE_TASK_STAGES = [
   "restoring",
-  "narration",
   "content",
+  "reviewed-content",
+  "narration",
   "actions",
   "assembling",
 ] as const;
 
 const PAGE_TASK_SHORT_LABELS: Record<typeof PAGE_TASK_STAGES[number], string> = {
   restoring: "恢复",
-  narration: "讲稿",
   content: "正文",
+  "reviewed-content": "版式",
+  narration: "整节讲稿",
   actions: "动作",
   assembling: "保存",
 };

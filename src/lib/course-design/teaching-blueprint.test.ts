@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyReviewedOutlinesToTeachingBlueprint,
   generateTeachingBlueprint,
   buildTeachingBlueprintPrompt,
   teachingBlueprintInputFingerprint,
@@ -37,7 +38,9 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.user).toContain('"learningTask"');
   expect(prompt.user).toContain("必须严格按以下 2 个小节及其顺序生成");
   expect(prompt.user).toContain('"maxPages":2');
-  expect(prompt.system).toContain("紧凑教学蓝图，不是逐字讲稿");
+  expect(prompt.system).toContain("可直接制作资源的小节内容设计");
+  expect(prompt.system).toContain("禁止只写");
+  expect(prompt.user).toContain('"understandingCriteria"');
   expect(prompt.user).not.toContain("4-6个完整");
   expect(prompt.user).not.toContain("至少三个实质要点");
   expect(teachingBlueprintInputFingerprint(enriched)).not.toBe(teachingBlueprintInputFingerprint(base));
@@ -119,6 +122,12 @@ function modelBlueprint() {
           },
         ],
         assessmentFocus: ["识别训练数据和独立测试数据"],
+        understandingCriteria: {
+          goals: ["解释训练与测试各自回答的问题", "依据新材料判断数据角色"],
+          answerEssentials: ["指出是否参与参数学习", "说明独立性为何影响可信度"],
+          misconceptions: ["把难度当成训练集与测试集的定义差异"],
+          supportingUnitIds: ["roles"],
+        },
       },
       {
         title: "怎样划分并避免泄漏",
@@ -168,6 +177,12 @@ function modelBlueprint() {
           },
         ],
         assessmentFocus: ["判断划分方案是否造成泄漏", "说明修正原则"],
+        understandingCriteria: {
+          goals: ["依据新流程判断是否泄漏", "说明划分单位为什么要对应泛化对象"],
+          answerEssentials: ["识别信息是否跨集合", "说明分数高估的原因"],
+          misconceptions: ["认为随机划分必然安全"],
+          supportingUnitIds: ["split"],
+        },
       },
     ],
   };
@@ -219,27 +234,33 @@ function compactModelBlueprint() {
         },
       }],
       assessmentFocus: ["判断一个具体流程是否发生数据泄漏"],
+      understandingCriteria: {
+        goals: ["解释数据分工", "迁移判断一个新流程"],
+        answerEssentials: ["指出测试信息是否进入训练", "说明对评估可信度的影响"],
+        misconceptions: ["只背训练与测试名称而不说明独立性"],
+        supportingUnitIds: ["reliable-evaluation"],
+      },
     }],
   };
 }
 
 describe("teaching blueprint compiler", () => {
-  it("allocates a 30-minute lesson to 68% substantive teaching and at most 20% assessment", async () => {
+  it("allocates a 30-minute lesson from actual explanation, activity, and short-check needs", async () => {
     const ai = vi.fn(async () => JSON.stringify(modelBlueprint()));
     const blueprint = await generateTeachingBlueprint(input(), ai);
     const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
 
     expect(blueprint.budget).toMatchObject({
       totalDurationSec: 1_800,
-      teachingDurationSec: 1_224,
-      assessmentDurationSec: 360,
-      learnerActivityDurationSec: 216,
+      teachingDurationSec: 1_554,
+      assessmentDurationSec: 216,
+      learnerActivityDurationSec: 30,
     });
     expect(outlines.reduce((sum, outline) => sum + (outline.targetDurationSec ?? 0), 0)).toBe(1_800);
     expect(outlines.filter((outline) => outline.type !== "quiz").reduce(
       (sum, outline) => sum + (outline.plannedTiming?.narrationSec ?? 0),
       0,
-    )).toBe(1_224);
+    )).toBe(1_554);
     expect(validateTeachingBlueprintBudget(blueprint, outlines)).toEqual([]);
     expect(outlines.filter((outline) => outline.type !== "quiz").flatMap((outline) => outline.teachingUnitIds ?? [])).toEqual([
       "teaching-section-1-unit-1",
@@ -250,13 +271,14 @@ describe("teaching blueprint compiler", () => {
     expect(outlines.find((item) => item.type === "quiz")?.teachingBrief?.sharedContext?.fixedWording)
       .toEqual(["同一批数据不能同时教与考"]);
     const quizzes = outlines.filter((outline) => outline.type === "quiz");
-    expect(quizzes[0]?.description).toContain("未在讲授示例中直接公布答案的简短新片段");
+    expect(quizzes[0]?.description).toContain("预定理解标准");
     expect(quizzes).toHaveLength(2);
-    expect(quizzes.map((quiz) => quiz.quizConfig?.questionCount)).toEqual([2, 2]);
-    expect(quizzes.reduce((sum, quiz) => sum + (quiz.quizConfig?.maxShortAnswerQuestions ?? 0), 0)).toBeLessThanOrEqual(1);
+    expect(quizzes.map((quiz) => quiz.quizConfig?.questionCount)).toEqual([1, 1]);
+    expect(quizzes.every((quiz) => quiz.quizConfig?.minShortAnswerQuestions === 1)).toBe(true);
+    expect(quizzes.every((quiz) => quiz.quizConfig?.maxShortAnswerQuestions === 1)).toBe(true);
     expect(deriveKnowledgeLectureSectionsFromOutlines(outlines)).toHaveLength(2);
     expect(quizzes.every((quiz) => quiz.assessmentUnitIds?.length === 1 && quiz.assessmentUnitMap?.length === 1)).toBe(true);
-    expect(quizzes.every((quiz) => quiz.quizConfig?.coveragePolicy === "each-target")).toBe(true);
+    expect(quizzes.every((quiz) => quiz.quizConfig?.coveragePolicy === "section-synthesis")).toBe(true);
     expect(quizzes.flatMap((quiz) => quiz.assessmentTargets ?? []).map((target) =>
       `${target.unitId}/${target.knowledgePointId}`,
     )).toEqual([
@@ -296,6 +318,55 @@ describe("teaching blueprint compiler", () => {
     const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
     expect(outline.teachingBrief?.pageTask).toBeUndefined();
     expect(outline.description).toContain("为何不再独立");
+  });
+
+  it("does not accept authoring tasks as completed explanatory content", async () => {
+    const candidate = compactModelBlueprint();
+    const unit = candidate.sections[0]!.units[0]!;
+    candidate.sections[0]!.sharedContext.conceptBoundaries = ["注意不要混淆。"];
+    unit.explanation = "说明教学模式与具体教案的区别。";
+    unit.mechanism = "解释二者之间的联系。";
+    unit.workedExample = "用例子说明三者联系。";
+    unit.conditions = ["列出适用条件。"];
+    unit.misconceptions = ["澄清常见误区。"];
+    const ai = vi.fn(async () => JSON.stringify(candidate));
+
+    await expect(generateTeachingBlueprint(input(), ai, { retrySleep: async () => undefined }))
+      .rejects.toThrow("教学蓝图缺少可用结构");
+    expect(ai).toHaveBeenCalledTimes(3);
+  });
+
+  it("applies bounded outline edits back to the design before recompiling resources", async () => {
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(compactModelBlueprint()));
+    const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
+    const first = outlines.find((outline) => outline.type === "slide")!;
+    const reviewed = outlines.map((outline) => outline.id === first.id ? {
+      ...outline,
+      title: "教师修订后的解释页",
+      description: "先说明数据是否参与学习，再解释这为什么影响评估可信度。",
+      keyPoints: ["参与参数学习的数据用于训练", "未参与学习的新数据承担独立检验"],
+      teachingBrief: {
+        ...outline.teachingBrief!,
+        teachingPlan: {
+          ...outline.teachingBrief!.teachingPlan!,
+          newContent: "训练数据参与模型学习；测试数据不参与学习，并在模型确定后检查它面对新对象的表现。",
+          reasoningSteps: ["测试信息若反向影响模型选择，评估就不再独立。"],
+          visibleContent: ["训练数据参与学习", "测试数据用于独立检验"],
+          narrationFocus: ["解释是否参与学习为何决定评估独立性"],
+        },
+      },
+    } : outline);
+
+    const updated = applyReviewedOutlinesToTeachingBlueprint(blueprint, reviewed);
+    const recompiled = teachingBlueprintToOutlines(updated, "使用简体中文");
+    expect(updated.sections[0]?.units[0]?.explanation).toContain("测试数据不参与学习");
+    expect(recompiled.find((outline) => outline.id === first.id)).toMatchObject({
+      title: "教师修订后的解释页",
+      description: "先说明数据是否参与学习，再解释这为什么影响评估可信度。",
+      keyPoints: ["参与参数学习的数据用于训练", "未参与学习的新数据承担独立检验"],
+    });
+    expect(() => applyReviewedOutlinesToTeachingBlueprint(blueprint, reviewed.slice(1)))
+      .toThrow("新增、删除或重复页面必须先回到内容设计");
   });
 
   it("uses one or two short answers only when deep-response mode is enabled", async () => {
@@ -365,7 +436,7 @@ describe("teaching blueprint compiler", () => {
     const shortInput = { ...input(), totalDurationSec: 300 };
     const ai = vi.fn(async () => JSON.stringify(overloaded));
 
-    await expect(generateTeachingBlueprint(shortInput, ai)).resolves.toMatchObject({ schemaVersion: 1 });
+    await expect(generateTeachingBlueprint(shortInput, ai)).resolves.toMatchObject({ schemaVersion: 2 });
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
@@ -389,7 +460,7 @@ describe("teaching blueprint compiler", () => {
       .mockResolvedValueOnce(JSON.stringify(modelBlueprint()));
     await expect(generateTeachingBlueprint(input(), ai, {
       retrySleep: async () => undefined,
-    })).resolves.toMatchObject({ schemaVersion: 1 });
+    })).resolves.toMatchObject({ schemaVersion: 2 });
     expect(ai).toHaveBeenCalledTimes(2);
   });
 
@@ -439,10 +510,10 @@ describe("teaching blueprint compiler", () => {
     const blueprint = await generateTeachingBlueprint(shortInput, async () => JSON.stringify(compactModelBlueprint()));
     const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
     expect(outlines.reduce((sum, outline) => sum + (outline.targetDurationSec ?? 0), 0)).toBe(300);
-    expect(blueprint.budget).toMatchObject({ teachingDurationSec: 204, assessmentDurationSec: 60, learnerActivityDurationSec: 36 });
+    expect(blueprint.budget).toMatchObject({ teachingDurationSec: 240, assessmentDurationSec: 45, learnerActivityDurationSec: 15 });
     expect(validateTeachingBlueprintBudget(blueprint, outlines)).toEqual([]);
     if (assessmentMode === "adaptive") {
-      expect(outlines.find((outline) => outline.type === "quiz")?.quizConfig?.questionCount).toBe(4);
+      expect(outlines.find((outline) => outline.type === "quiz")?.quizConfig?.questionCount).toBe(1);
     }
   });
 

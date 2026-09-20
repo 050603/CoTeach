@@ -82,7 +82,7 @@ describe('formal course teaching enhancement', () => {
 
     expect(briefs.get('actual-outline-id')).toMatchObject({
       explanation: '教学模式需要按学习目标、内容性质和课堂条件选择。',
-      designVersion: 'section-teaching-brief-v5',
+      designVersion: 'substantive-section-brief-v6',
     });
   });
 
@@ -288,8 +288,8 @@ describe('formal course teaching enhancement', () => {
     expect(prompt.user).toContain('需要区分转载和独立证据');
     expect(prompt.user).toContain('校史调查');
     expect(prompt.user).toContain('p2');
-    expect(prompt.user).toContain('不得在案例前列出全部术语及一句话释义');
-    expect(prompt.user).toContain('不得同时列出全部分类结果、标准答案或完整推理');
+    expect(prompt.user).toContain('概览页可以先命名概念和展示关系，后续再解释');
+    expect(prompt.user).toContain('只有教学确需持续案例时才填写案例字段');
     expect(prompt.system).toContain('Write for hearing once');
   });
 

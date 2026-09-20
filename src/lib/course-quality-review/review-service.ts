@@ -110,4 +110,6 @@ export async function assertCourseTeacherReview(course: Course, teacherId?: stri
   // A copied template may retain a valid review of exactly the same teaching
   // content. Its stamp keeps the original authoring course id in the hash.
   if (!classroom || computeCourseQualitySignature({ ...course, id: review.courseId }, classroom) !== review.signature) throw new CourseReviewError('REVIEW_STALE', '课程内容已变更，请重新进行教师终审。');
+  const hard = unresolvedHardIssues(collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false }));
+  if (hard.length) throw new CourseReviewError('COURSE_HARD_ERRORS', hard.map((issue) => issue.title).join('；'));
 }
