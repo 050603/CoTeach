@@ -85,14 +85,24 @@ describe("student public discussion overlay", () => {
     expect(mocks.playbackBlock).toHaveBeenCalledWith({ blocked: true, source: "public-discussion" });
   });
 
-  it("shows the public conversation without exposing recording controls to other students", async () => {
+  it("does not render discussion UI for students who were not selected", async () => {
     vi.mocked(fetch).mockResolvedValue(Response.json(snapshot("awaiting-student", false)));
     render(<PublicDiscussionStudentOverlay courseId="course-1" />);
 
-    expect(await screen.findByRole("dialog", { name: "全班公开讨论" })).toBeVisible();
-    expect(screen.getByText("请关注教师大屏和现场发言。当前由被点名同学的设备负责收音。")).toBeVisible();
-    expect(screen.queryByRole("button", { name: /点击回答|重新回答|结束回答/ })).toBeNull();
     await waitFor(() => expect(mocks.subscribe).toHaveBeenCalledWith("course-1", expect.any(Function)));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: /点击回答|重新回答|结束回答/ })).toBeNull();
+    await waitFor(() => expect(mocks.playbackBlock).toHaveBeenCalledWith({ blocked: true, source: "public-discussion" }));
+  });
+
+  it("shows only the question and answer controls in a lightweight selected-student dialog", async () => {
+    vi.mocked(fetch).mockResolvedValue(Response.json(snapshot("inviting")));
+    render(<PublicDiscussionStudentOverlay courseId="course-1" />);
+
+    expect(await screen.findByRole("dialog", { name: "回答课堂提问" })).toBeVisible();
+    expect(screen.getByText("你的判断依据是什么？")).toBeVisible();
+    expect(screen.getByRole("button", { name: "接受并打开麦克风" })).toBeVisible();
+    expect(screen.queryByText(/文字记录|关键结论|误解澄清/)).toBeNull();
   });
 
   it.each(["awaiting-retry", "awaiting-confirmation"] as const)(

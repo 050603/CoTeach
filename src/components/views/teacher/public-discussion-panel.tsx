@@ -64,9 +64,11 @@ const statusLabels: Record<string, string> = {
 export function PublicDiscussionTeacherPanel({
   course,
   recommendedKnowledgePointIds,
+  immersive = false,
 }: {
   course: Course;
   recommendedKnowledgePointIds: string[];
+  immersive?: boolean;
 }) {
   const defaultPointId = recommendedKnowledgePointIds[0] ?? course.content.knowledgePoints[0]?.id ?? "";
   const [snapshot, setSnapshot] = useState<PublicDiscussionSnapshot>();
@@ -259,11 +261,19 @@ export function PublicDiscussionTeacherPanel({
           ttsModelId: settings.ttsModelId,
           ttsVoice: settings.ttsVoice,
           ttsSpeed: settings.ttsSpeed,
+          ttsScenario: "realtime-interaction",
         }),
       });
-      const payload = await response.json().catch(() => ({})) as { base64?: string; format?: string; data?: { base64?: string; format?: string } };
+      const payload = await response.json().catch(() => ({})) as {
+        base64?: string;
+        format?: string;
+        data?: { base64?: string; format?: string };
+        error?: string;
+      };
       const base64 = payload.base64 ?? payload.data?.base64;
-      if (!response.ok || !base64) throw new Error("AI 语音生成失败");
+      if (!response.ok || !base64) {
+        throw new Error(payload.error ? `AI 语音生成失败：${payload.error}` : "AI 语音生成失败");
+      }
       const audio = new Audio(`data:audio/${payload.format ?? payload.data?.format ?? "mp3"};base64,${base64}`);
       audioRef.current = audio;
       setAudioState("playing");
@@ -346,16 +356,26 @@ export function PublicDiscussionTeacherPanel({
   if (snapshot && !snapshot.enabled) return null;
 
   return (
-    <Card className="mx-4 mt-4 overflow-hidden border-stone-200 bg-[var(--pbl-surface)] p-0">
-      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-stone-200 bg-white px-5 py-4">
+    <Card
+      className={cn(
+        "overflow-hidden border-stone-200 bg-[var(--pbl-surface)] p-0",
+        immersive
+          ? "mx-0 mt-0 rounded-2xl border-stone-300 shadow-[0_18px_50px_rgba(28,25,23,.12)]"
+          : "mx-4 mt-4",
+      )}
+    >
+      <header className={cn(
+        "flex flex-wrap items-start justify-between gap-4 border-b px-5 py-4",
+        immersive ? "border-stone-800 bg-stone-950 px-6 py-5 text-white" : "border-stone-200 bg-white",
+      )}>
         <div className="flex items-start gap-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-[10px] bg-[var(--pbl-teacher)] text-white"><MessageSquareText size={19} /></span>
+          <span className={cn("grid size-10 shrink-0 place-items-center rounded-[10px] text-white", immersive ? "bg-cyan-600" : "bg-[var(--pbl-teacher)]")}><MessageSquareText size={19} /></span>
           <div>
-            <div className="flex flex-wrap items-center gap-2"><h4 className="font-bold text-stone-950">全班公开讨论</h4><Pill tone={active ? "blue" : "gray"}>{active ? statusLabels[session!.status] : "尚未开始"}</Pill></div>
-            <p className="mt-1 text-xs leading-5 text-stone-500">选择共性问题并点名学生，由学生设备收音，教师端统一播放 AI 回应。</p>
+            <div className="flex flex-wrap items-center gap-2"><h4 className={cn("font-bold", immersive ? "text-lg text-white" : "text-stone-950")}>{immersive ? "全屏讨论控制台" : "全班公开讨论"}</h4><Pill tone={active ? "blue" : "gray"}>{active ? statusLabels[session!.status] : "尚未开始"}</Pill></div>
+            <p className={cn("mt-1 text-xs leading-5", immersive ? "text-stone-300" : "text-stone-500")}>选择共性问题并点名学生，由学生设备收音，教师端统一播放 AI 回应。</p>
           </div>
         </div>
-        <button aria-expanded={showSettings} className="flex min-h-11 items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 text-xs font-bold text-stone-700 hover:bg-stone-50" onClick={() => setShowSettings((value) => !value)} type="button"><Settings2 size={15} />语音识别设置<ChevronDown className={cn("transition", showSettings && "rotate-180")} size={14} /></button>
+        {!immersive ? <button aria-expanded={showSettings} className="flex min-h-11 items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 text-xs font-bold text-stone-700 hover:bg-stone-50" onClick={() => setShowSettings((value) => !value)} type="button"><Settings2 size={15} />语音识别设置<ChevronDown className={cn("transition", showSettings && "rotate-180")} size={14} /></button> : null}
       </header>
 
       {showSettings && settings ? (
@@ -386,8 +406,8 @@ export function PublicDiscussionTeacherPanel({
             <SetupStep complete={Boolean(selectedStudentId)} label="选择学生" number={2} />
             <SetupStep complete={Boolean(openingPrompt.trim())} label="确认开场" number={3} />
           </ol>
-          <div className="grid lg:grid-cols-3">
-            <section className="space-y-4 border-b border-stone-200 p-5 lg:border-b-0 lg:border-r">
+          <div className={cn("grid lg:grid-cols-3", immersive && "min-h-[32rem]")}>
+            <section className={cn("space-y-4 border-b border-stone-200 p-5 lg:border-b-0 lg:border-r", immersive && "p-6")}>
               <SectionHeading icon={<MessageCircleQuestion size={17} />} number="01" title="讨论什么" />
               <label className="block text-xs font-bold text-stone-600">知识点
                 <select className="mt-1.5 h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm" onChange={(event) => { setSelectedPointId(event.target.value); setRecommendation(undefined); setSelectedStudentId(""); }} value={selectedPointId}>
@@ -405,7 +425,7 @@ export function PublicDiscussionTeacherPanel({
               <p className="text-xs leading-5 text-stone-500">{mode === "debate" ? "围绕可讨论命题检查观点、论据与适用条件。" : "通过解释、举例和迁移逐步澄清共性问题。"}</p>
             </section>
 
-            <section className="space-y-4 border-b border-stone-200 p-5 lg:border-b-0 lg:border-r">
+            <section className={cn("space-y-4 border-b border-stone-200 p-5 lg:border-b-0 lg:border-r", immersive && "p-6")}>
               <SectionHeading icon={<UsersRound size={17} />} number="02" title="请谁回答" />
               <button className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-[var(--pbl-teacher)] bg-white px-3 text-sm font-bold text-[var(--pbl-teacher)] disabled:opacity-50" disabled={busy || !selectedPointId} onClick={() => void recommend()} type="button">{busy ? <Loader2 className="animate-spin" size={16} /> : <UsersRound size={16} />}推荐合适的在线学生</button>
               {recommendation ? (
@@ -423,7 +443,7 @@ export function PublicDiscussionTeacherPanel({
               </label>
             </section>
 
-            <section className="flex flex-col gap-4 p-5">
+            <section className={cn("flex flex-col gap-4 p-5", immersive && "p-6")}>
               <SectionHeading icon={<AudioLines size={17} />} number="03" title="如何开场" />
               <label className="block text-xs font-bold text-stone-600">公开问题
                 <textarea className="mt-1.5 min-h-32 w-full resize-y rounded-lg border border-stone-300 bg-white p-3 text-sm leading-6 outline-none focus:border-[var(--pbl-teacher)]" maxLength={2_000} onChange={(event) => setOpeningPrompt(event.target.value)} placeholder="输入开场问题，或先使用学生推荐自动生成" value={openingPrompt} />
@@ -437,20 +457,20 @@ export function PublicDiscussionTeacherPanel({
           {session?.summary ? <div className="border-t border-stone-200 p-5"><SummaryBlock snapshot={snapshot!} /></div> : null}
         </div>
       ) : session ? (
-        <div className="grid lg:grid-cols-[minmax(0,1fr)_21rem]">
-          <section className="border-b border-stone-200 p-5 lg:border-b-0 lg:border-r">
+        <div className={cn("grid lg:grid-cols-[minmax(0,1fr)_21rem]", immersive && "min-h-[min(42rem,calc(100dvh-12rem))] lg:grid-cols-[minmax(0,1fr)_24rem]")}>
+          <section className={cn("border-b border-stone-200 p-5 lg:border-b-0 lg:border-r", immersive && "flex min-h-0 flex-col p-7")}>
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0"><p className="text-xs font-bold text-[var(--pbl-teacher)]">{session.mode === "debate" ? "观点辩论" : "公开追问"}</p><h5 className="mt-1 text-lg font-bold text-stone-950">{session.topic}</h5><p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">{session.openingPrompt}</p></div>
+              <div className="min-w-0"><p className="text-xs font-bold text-[var(--pbl-teacher)]">{session.mode === "debate" ? "观点辩论" : "公开追问"}</p><h5 className={cn("mt-1 font-bold text-stone-950", immersive ? "text-2xl" : "text-lg")}>{session.topic}</h5><p className={cn("mt-2 max-w-3xl text-stone-600", immersive ? "text-base leading-7" : "text-sm leading-6")}>{session.openingPrompt}</p></div>
               <Pill tone={session.status === "ai-failed" || session.status === "awaiting-replacement" ? "red" : session.status === "paused" ? "orange" : "blue"}>{statusLabels[session.status]}</Pill>
             </div>
             <RoundProgress roundCount={session.roundCount} />
-            <div className="mt-4 max-h-[28rem] min-h-56 space-y-4 overflow-y-auto border-y border-stone-200 py-4 pr-2" aria-label="公开讨论记录" aria-live="polite">
+            <div className={cn("mt-4 min-h-56 space-y-4 overflow-y-auto border-y border-stone-200 py-4 pr-2", immersive ? "max-h-none flex-1" : "max-h-[28rem]")} aria-label="公开讨论记录" aria-live="polite">
               {session.turns.length ? session.turns.map((turn) => <DiscussionTurn key={turn.id} turn={turn} />) : <div className="grid min-h-40 place-items-center text-center"><div><MessageSquareText className="mx-auto text-stone-300" size={28} /><p className="mt-2 text-sm font-semibold text-stone-700">等待 {session.currentStudent?.name ?? "学生"} 接受邀请</p><p className="mt-1 text-xs text-stone-500">接受后，学生端会负责采集回答。</p></div></div>}
               {session.status === "ai-generating" || session.status === "summarizing" ? <p className="flex items-center gap-2 text-sm text-stone-500"><Loader2 className="animate-spin" size={15} />{session.status === "summarizing" ? "正在形成课堂总结…" : "AI 正在组织回应…"}</p> : null}
             </div>
             {session.shouldSuggestSummary ? <p className="mt-3 rounded-lg bg-emerald-50 p-3 text-xs font-semibold leading-5 text-emerald-800">3 轮回答已完成，可以结束讨论并生成全班总结。</p> : null}
           </section>
-          <aside className="space-y-4 bg-stone-50/70 p-5">
+          <aside className={cn("space-y-4 bg-stone-50/70 p-5", immersive && "border-l border-stone-200 bg-stone-100/80 p-6")} aria-label="教师讨论控制">
             <div><p className="text-[11px] font-bold uppercase tracking-[.12em] text-stone-400">课堂控制</p><div className="mt-2 flex items-center gap-3"><span className="grid size-9 place-items-center rounded-full bg-[var(--pbl-student)] text-sm font-bold text-white">{session.currentStudent?.name?.slice(0, 1) ?? "?"}</span><div><p className="text-xs text-stone-500">当前发言学生</p><p className="font-bold text-stone-950">{session.currentStudent?.name ?? "未选择"}</p></div></div></div>
             {!soundEnabled ? <button className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-[var(--pbl-teacher)] text-sm font-bold text-white" onClick={() => void acquireSound()} type="button"><Volume2 size={17} />启用此页面的课堂声音</button> : <p className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs font-semibold text-blue-900"><Volume2 size={16} />课堂声音已连接{audioState === "loading" ? " · 正在生成" : audioState === "playing" ? " · 正在播放" : ""}</p>}
             {soundEnabled && !snapshot.teacher?.soundOwner ? <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800"><VolumeX className="mr-1 inline" size={14} />声音控制权已由其他页面取得。</p> : null}

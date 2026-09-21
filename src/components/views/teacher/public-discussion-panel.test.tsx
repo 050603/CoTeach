@@ -82,6 +82,21 @@ afterEach(() => {
 });
 
 describe("teacher public discussion voice loop", () => {
+  it("uses the dedicated discussion console layout in immersive mode", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input) => {
+      if (String(input).endsWith("/settings")) {
+        return Response.json({ settings: { asrLanguage: "zh", ttsProviderId: "browser-native-tts", ttsSpeed: 1 } });
+      }
+      return Response.json(snapshot("awaiting-student"));
+    }));
+
+    render(<PublicDiscussionTeacherPanel course={course} immersive recommendedKnowledgePointIds={["kp-1"]} />);
+
+    expect(await screen.findByText("全屏讨论控制台")).toBeVisible();
+    expect(screen.getByRole("complementary", { name: "教师讨论控制" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /语音识别设置/ })).toBeNull();
+  });
+
   it("plays an AI turn once and advances only after playback completes", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input, init) => {
       const url = String(input);

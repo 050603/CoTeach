@@ -93,6 +93,9 @@ run_app() {
   # Keep durable generation owned by the server lifecycle so navigation or a
   # completed route response cannot terminate the task that started it.
   export COURSE_GENERATION_BACKGROUND_ENABLED="true"
+  # Whole-class AI discussion is enabled for the formal classroom service.
+  # Operators can still disable it without rebuilding the application.
+  export ENABLE_PUBLIC_DISCUSSION="${OPENPBL_ENABLE_PUBLIC_DISCUSSION:-true}"
   # Resource/page/media controls use the dedicated realtime channel. Durable
   # course-event polling remains enabled as a one-second outage fallback.
   export ENABLE_WEBSOCKET="true"

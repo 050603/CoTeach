@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
 import { DEFAULT_STAGES } from "@/lib/session/types";
@@ -202,8 +202,9 @@ describe("AiLearningTeacherView", () => {
 
     render(<AiLearningTeacherView course={{ ...course, students, learningEvents: [], learningSignals: [] }} />);
 
-    expect(screen.getByLabelText("学生状态总览").querySelectorAll("li")).toHaveLength(40);
-    expect(screen.getByText("学生40")).toBeTruthy();
+    const overview = screen.getByLabelText("学生状态总览");
+    expect(overview.querySelectorAll("li")).toHaveLength(40);
+    expect(within(overview).getByText("学生40")).toBeTruthy();
     expect(screen.getByDisplayValue("按学习进度")).toBeTruthy();
     expect(screen.getByRole("button", { name: "当前倒序，点击改为正序" })).toBeTruthy();
     expect(screen.queryByText("课程未启用")).toBeNull();

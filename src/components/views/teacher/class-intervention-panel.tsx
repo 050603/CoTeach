@@ -70,9 +70,11 @@ function strategyFor(code?: string): string {
 export function ClassInterventionPanel({
   course,
   commonIssues,
+  immersive = false,
 }: {
   course: Course;
   commonIssues: ClassCommonIssue[];
+  immersive?: boolean;
 }) {
   const { addActivity, setUiState } = useSession();
   const progress = useMemo(() => course.aiLearningProgress ?? {}, [course.aiLearningProgress]);
@@ -250,8 +252,8 @@ export function ClassInterventionPanel({
   }
 
   return (
-    <Card className="overflow-hidden p-0">
-      <header className="border-b border-stone-100 bg-white px-4 py-4">
+    <Card className={cn("overflow-hidden p-0", immersive && "border-0 bg-transparent shadow-none")}>
+      {!immersive ? <header className="border-b border-stone-100 bg-white px-4 py-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
             <span className="grid size-10 shrink-0 place-items-center rounded-[11px] bg-[var(--pbl-teacher)] text-white"><Presentation size={18} /></span>
@@ -261,14 +263,15 @@ export function ClassInterventionPanel({
             </div>
           </div>
         </div>
-      </header>
+      </header> : null}
 
       <PublicDiscussionTeacherPanel
         course={course}
+        immersive={immersive}
         recommendedKnowledgePointIds={recommendations.map((item) => item.id)}
       />
 
-      <div className="grid xl:grid-cols-[minmax(0,.9fr)_minmax(460px,1.1fr)]">
+      <div className={cn("grid xl:grid-cols-[minmax(0,.9fr)_minmax(460px,1.1fr)]", immersive && "mt-5 overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm")}>
         <section className="border-b border-stone-100 p-4 xl:border-b-0 xl:border-r">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div><h4 className="text-sm font-bold text-stone-900">建议优先补讲</h4><p className="mt-0.5 text-[11px] text-stone-500">样本量充足，且至少 2 人、30% 作答学生未达 80%</p></div>
