@@ -38,6 +38,8 @@ export type ShowcaseQueueConfig = {
   presentationSec?: number;
   discussionSec?: number;
   transitionSec?: number;
+  /** Presenter count explicitly requested by the confirmed resource package. */
+  presenterCount?: number;
   orderedStudentIds: string[];
   minutesPerStudent: number;
   updatedAt: string;
@@ -88,6 +90,7 @@ export type ShowcaseAction =
       presentationSec?: number;
       discussionSec?: number;
       transitionSec?: number;
+      presenterCount?: number;
     }
   | {
       action: "start";

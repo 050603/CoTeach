@@ -21,11 +21,19 @@ import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic
 
 type ModelCall = typeof callLLM;
 
-export const KNOWLEDGE_STRUCTURE_POLICY_VERSION = "textbook-evidence-mapping-v2";
+export const KNOWLEDGE_STRUCTURE_POLICY_VERSION = "textbook-evidence-mapping-v3-concept-responsibility";
 
 export type KnowledgeStructureGenerationContext = {
   /** Upstream teacher requirements; textbook-driven courses may map, split, or merge them into lesson-owned nodes. */
-  teacherKnowledgePoints?: Array<{ id: string; name: string; description: string; groupId?: string; groupName?: string }>;
+  teacherKnowledgePoints?: Array<{
+    id: string;
+    name: string;
+    description: string;
+    groupId?: string;
+    groupName?: string;
+    teachingRole?: "core-concept" | "detail-concept";
+    parentKnowledgePointId?: string;
+  }>;
   pblOutline?: string;
   teacherRequiredKnowledgePoints?: string[];
   referenceMaterials?: GenerationReferenceMaterial[];
@@ -196,6 +204,11 @@ function prepareKnowledgeStructureForTeacherReview(
         sourceKnowledgePointIds,
         sourceKnowledgePointNames: sourceKnowledgePoints.map((point) => point.name),
       } : {}),
+      ...(sourceKnowledgePoints.some((point) => point.teachingRole === "core-concept")
+        ? { teachingRole: "core-concept" as const }
+        : sourceKnowledgePoints.some((point) => point.teachingRole === "detail-concept")
+          ? { teachingRole: "detail-concept" as const }
+          : {}),
     });
   };
   if (sourcePointById.size > 0 && textbookDriven) {
@@ -274,6 +287,17 @@ function prepareKnowledgeStructureForTeacherReview(
   // Missing objective mappings remain visible in the teacher report. Array order
   // is never evidence that a knowledge point serves a learning objective.
 
+  const targetsBySourceId = new Map<string, string[]>();
+  for (const point of knowledgePoints) for (const sourceId of point.sourceKnowledgePointIds ?? []) {
+    targetsBySourceId.set(sourceId, [...(targetsBySourceId.get(sourceId) ?? []), point.id]);
+  }
+  for (const point of knowledgePoints) {
+    const parentTargetIds = [...new Set((point.sourceKnowledgePointIds ?? []).flatMap((sourceId) => {
+      const parentSourceId = sourcePointById.get(sourceId)?.parentKnowledgePointId;
+      return parentSourceId ? targetsBySourceId.get(parentSourceId) ?? [] : [];
+    }))].filter((id) => id !== point.id);
+    if (parentTargetIds.length) point.parentKnowledgePointIds = parentTargetIds;
+  }
   const pointById = new Map(knowledgePoints.map((point) => [point.id, point]));
   const pointIdByName = new Map(
     knowledgePoints.map((point) => [normalizeKnowledgePointName(point.name), point.id]),
@@ -294,6 +318,8 @@ function prepareKnowledgeStructureForTeacherReview(
       groupName: point.groupName,
       evidenceItemIds: point.evidenceItemIds,
       teachingDepth: point.teachingDepth,
+      teachingRole: point.teachingRole,
+      parentKnowledgePointIds: point.parentKnowledgePointIds,
       relatedLessonIds: Array.isArray(source.relatedLessonIds)
         ? source.relatedLessonIds.filter((value): value is string => typeof value === "string")
         : undefined,
@@ -497,7 +523,7 @@ export async function generateKnowledgeStructureOnce(
 ): Promise<ReviewedKnowledgeStructure> {
   const prompt = buildKnowledgeGraphPrompt(input, context);
   const messages = [
-    { role: "system", content: prompt.system },
+    { role: "system", content: `${prompt.system}\n上游节点中的 teachingRole=core-concept 表示该父概念自身具有教学含义，必须作为基本含义、核心主张及其与下位知识关系的解释责任保留，不能降为分组标签。parentKnowledgePointId 指出的下位机制、原则或应用必须在上位概念建立之后或同页展开。纯目录不会带 core-concept 标记，不得为目录机械新增课程节点。` },
     { role: "user", content: [prompt.user, context.teacherKnowledgePoints?.length
       ? context.textbookEvidence?.items.length
         ? `教师资料中的上游知识要求（每个精确 id 都必须通过 sourceKnowledgePointIds 映射到一个或多个教材化课程节点，并报告实际覆盖或缺口；允许拆分、合并和多对多映射，不要求节点名称与上游相同）：\n${JSON.stringify(context.teacherKnowledgePoints)}`

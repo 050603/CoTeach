@@ -17,6 +17,11 @@ export function normalizeTeachingBrief(outline: SceneOutline): TeachingBrief {
     conditions: strings(raw?.conditions),
     evidence: Array.isArray(raw?.evidence) ? raw.evidence.filter((item) => item && typeof item.sourceId === "string" && typeof item.quote === "string" && item.quote.trim()) : [],
     assessmentFocus: typeof raw?.assessmentFocus === "string" ? raw.assessmentFocus : outline.teachingObjective ?? "",
+    ...(raw?.understandingCriteria ? { understandingCriteria: raw.understandingCriteria } : {}),
+    ...(raw?.resourceNeeds?.length ? { resourceNeeds: raw.resourceNeeds } : {}),
+    ...(raw?.requirementIds?.length ? { requirementIds: strings(raw.requirementIds) } : {}),
+    ...(raw?.difficultyStrategies?.length ? { difficultyStrategies: raw.difficultyStrategies } : {}),
+    ...(raw?.reviewItems?.length ? { reviewItems: raw.reviewItems } : {}),
   };
 }
 

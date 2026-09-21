@@ -10,7 +10,7 @@ import { isAbortError } from './generation-retry';
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from './generated-output-retry';
 import { fingerprintGenerationValue } from '@/lib/course-generation/page-checkpoints';
 
-export const TEACHING_ENHANCEMENT_VERSION = 'shared-page-contract-v17-teacher-review-boundary';
+export const TEACHING_ENHANCEMENT_VERSION = 'shared-page-contract-v18-requirement-strategy';
 const TEACHING_SOURCE_LIMIT = 60_000;
 const ENTRY_POINT_KINDS = new Set([
   'familiar-experience', 'concrete-observation', 'problem', 'direct-explanation', 'continuation',
@@ -248,6 +248,9 @@ function synchronizeQuizTeachingBriefs(outlines: readonly SceneOutline[]): Scene
         assessmentFocus: unique(briefs.map((brief) => brief.assessmentFocus)).join('；'),
         understandingCriteria: briefs.find((brief) => brief.understandingCriteria)?.understandingCriteria,
         resourceNeeds: briefs.flatMap((brief) => brief.resourceNeeds ?? []),
+        requirementIds: unique(briefs.flatMap((brief) => brief.requirementIds ?? [])),
+        difficultyStrategies: [...new Map(briefs.flatMap((brief) => brief.difficultyStrategies ?? [])
+          .map((strategy) => [strategy.requirementId, strategy])).values()],
         reviewItems: [...new Map(briefs.flatMap((brief) => brief.reviewItems ?? [])
           .map((item) => [item.id, item])).values()],
       },
@@ -331,6 +334,10 @@ export function normalizeTeachingEnhancement(
         ? { understandingCriteria: existingPage.teachingBrief.understandingCriteria } : {}),
       ...(existingPage?.teachingBrief?.resourceNeeds
         ? { resourceNeeds: existingPage.teachingBrief.resourceNeeds } : {}),
+      ...(existingPage?.teachingBrief?.requirementIds?.length
+        ? { requirementIds: existingPage.teachingBrief.requirementIds } : {}),
+      ...(existingPage?.teachingBrief?.difficultyStrategies?.length
+        ? { difficultyStrategies: existingPage.teachingBrief.difficultyStrategies } : {}),
       reviewItems: [...new Map([
         ...(existingPage?.teachingBrief?.reviewItems ?? []),
         ...normalizeReviewItems(record.reviewItems, outlineId),
@@ -382,6 +389,7 @@ export function buildTeachingEnhancementPrompt(input: {
       '写出实际解释、必要前提、中间连接和判断理由，不得只写“解释概念”“说明区别”“举例说明”等待办语句。根据知识类型选择讲法，不强制案例、固定流程或每页活动。',
       '概念与区别可从熟悉对象、定义展开或对应比较进入；因果与机制要补足条件、过程和结果间的连接；数学推导要写出已知、步骤、理由和检验；操作技能要说明对象、步骤、观察和常见错误；历史人文要连接背景、材料与解释；综合应用要说明条件、方法选择、过程和结果。按内容组合，不把这些选项变成固定栏目。',
       '继承蓝图的解释节点和页面职责。页面可以首次解释、深化或必要承接，但不能把完整 explanation、mechanism 或推导压缩成标签，也不能在相邻页面重新讲同一段。entryPoint.kind=continuation 时只能承接紧邻上一页 existingTeachingBrief.teachingPlan.visibleContent/takeaway 中已经建立的内容；后页才出现的术语、案例或问题必须在其所属页面作为新内容引入。不得更改页面数量、ID、顺序和知识边界。',
+      '原样保留 existingTeachingBrief.requirementIds 和 difficultyStrategies，并在 explanation、reasoningSteps、visibleContent 与 narrationFocus 中实际执行其中的重点深度和具体难点讲法；不得用空泛标签替换既定障碍、讲法或理解证据。',
       '继承 entryPoint 中已经确定的理解入口，并把它展开成学生能听懂的具体对象、观察重点与过渡。不要把入口重新改成项目任务，不要用抽象定义、页面标题或“今天我们来学习”替代实际对象。',
       'resourcePosition=course-opening 的页面必须支持一个独立完整的 AI 课程开场，即使课程前面存在教师导入阶段：简短问候由讲稿承担，页面与教学设计负责给出适龄、熟悉、可观察或可比较的切入对象，并写清从这个对象到首个知识的自然桥梁。时长较短时与首个知识合并，不能因此省略，也不能假装学生已经回答。',
       'resourcePosition=course-closing 的页面要为课程收束提供已经讲过的核心认识和后续应用方向；正式致谢与告别由讲稿承担。若最后一页是测验，前一教学页只自然引向测验，测验后的反馈完成收束，不提前告别。',

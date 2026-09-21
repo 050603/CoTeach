@@ -17,6 +17,11 @@ import {
 } from "@/lib/knowledge-structure-generation";
 import { resourcePackageTeachingPoints } from "./resource-package-knowledge";
 import {
+  buildCourseTeachingRequirements,
+  formatCourseTeachingRequirements,
+  mergeTeacherRequirementBriefs,
+} from "./teaching-requirements";
+import {
   buildPblActivityCatalog,
   buildCourseTeachingConstraints,
 } from "@/lib/openmaic/pbl/course-request";
@@ -955,7 +960,7 @@ function teachingReferenceMaterials(
 }
 
 function teacherGenerationBrief(request: QuickDesignRequest): string {
-  return [...new Set([request.teacherBrief, request.supplementalAnswers?.brief ?? ""].map((text) => text.trim()).filter(Boolean))].join("\n");
+  return mergeTeacherRequirementBriefs([request.teacherBrief, request.supplementalAnswers?.brief]);
 }
 
 function blueprintResourceCapabilityBrief(request: QuickDesignRequest): string {
@@ -981,7 +986,11 @@ export function buildCourseTeachingSourceContext(
   ].filter(Boolean).join("\n\n");
 }
 
-export function applyResourcePackageGenerationInput(course: Course, resourcePackage: CourseResourcePackage): Course {
+export function applyResourcePackageGenerationInput(
+  course: Course,
+  resourcePackage: CourseResourcePackage,
+  teacherBrief = "",
+): Course {
   const draft = resourcePackage.draft;
   const stagePlan = stagePlanFromResourcePackage(draft);
   const samePackageRevision = course.content.resourcePackage?.id === resourcePackage.id
@@ -1015,6 +1024,7 @@ export function applyResourcePackageGenerationInput(course: Course, resourcePack
       ...course.content,
       resourcePackage,
       stagePlan,
+      teachingRequirements: buildCourseTeachingRequirements({ resourcePackage, teacherBrief }),
       knowledgeScopePlan: samePackageRevision ? course.content.knowledgeScopePlan : undefined,
       teacherRequiredKnowledgePoints: explicitlyRequiredKnowledge,
       knowledgeGroups: draft.knowledgePoints.map((group) => ({ id: group.id || leafPoints.find((point) => point.groupName === group.name)?.groupId || leafPoints.find((point) => point.name === group.name)?.id || group.name,
@@ -1071,6 +1081,10 @@ function stageSummaryInput(
     ...course,
     summary: [
       course.summary,
+      formatCourseTeachingRequirements(course.content.teachingRequirements),
+      !includeReferenceMaterials && teacherGenerationBrief(request).trim()
+        ? `教师补充要求：${teacherGenerationBrief(request).trim()}`
+        : "",
       referenceContext,
       textbookTeachingSourceContext(request),
       "按学习目标和先决依赖组织知识，区分主题分组与可教可测的知识点；保留资源包指定知识，不把同义表述拆成重复节点。先讲清概念与适用条件，用例证及必要操作巩固，再按知识小节检测理解。",
@@ -1452,6 +1466,7 @@ export function normalizeNewSystemAiOutlines(
     knowledgePoints?: readonly KnowledgePoint[];
     knowledgeGraph?: KnowledgeGraph;
     courseLanguageDirective?: string;
+    assessmentMode?: AssessmentMode;
   },
 ): Array<SceneOutline & OpenMaicSceneOutlineSnapshot> {
   if (outlines.length === 0) return [];
@@ -1553,6 +1568,7 @@ export function normalizeNewSystemAiOutlines(
     totalDurationSec: input.totalDurationSec,
     knowledgePoints,
     knowledgeGraph: input.knowledgeGraph,
+    assessmentMode: input.assessmentMode ?? "adaptive",
   }).outlines;
 }
 
@@ -1732,6 +1748,7 @@ function buildTeachingBlueprintInput(
     assessmentMode: request.assessmentMode ?? "adaptive",
     generationMode: request.generationMode ?? "standard",
     teacherBrief: [teacherGenerationBrief(request), blueprintResourceCapabilityBrief(request)].filter(Boolean).join("\n"),
+    teachingRequirements: content.teachingRequirements,
     sourceContext: [
       buildCourseTeachingSourceContext(
         request.resourcePackage,
@@ -1776,6 +1793,22 @@ async function generateNewSystemTeachingBlueprintOutlines(
         modelFingerprint?: unknown;
         rawResponse?: unknown;
         blueprint?: unknown;
+        validationIssues?: unknown;
+      }
+    : undefined;
+  const persistedInvalidRepair = checkpoint?.schemaVersion === 1
+    && checkpoint.status === "invalid-output"
+    && checkpoint.inputFingerprint === expectedFingerprint
+    && checkpoint.modelFingerprint === modelFingerprint
+    && typeof checkpoint.rawResponse === "string"
+    && checkpoint.rawResponse.length > 0
+    && Array.isArray(checkpoint.validationIssues)
+    && checkpoint.validationIssues.some((issue) => typeof issue === "string" && issue.trim())
+    ? {
+        response: checkpoint.rawResponse,
+        issues: checkpoint.validationIssues.filter((issue): issue is string => (
+          typeof issue === "string" && Boolean(issue.trim())
+        )),
       }
     : undefined;
   let blueprint = content.teachingBlueprint?.schemaVersion === TEACHING_BLUEPRINT_SCHEMA_VERSION
@@ -1811,7 +1844,10 @@ async function generateNewSystemTeachingBlueprintOutlines(
         signal,
         inputFingerprint: expectedFingerprint,
         attemptCheckpointStep: TEACHING_BLUEPRINT_ATTEMPT_STEP,
-        storedAttempt: stored.teachingBlueprintAttempt,
+        // An explicit retry after structural repair exhaustion is a new,
+        // bounded repair run. Keep the audited draft, but do not carry the
+        // already-consumed provider-attempt budget into that run.
+        storedAttempt: persistedInvalidRepair ? null : stored.teachingBlueprintAttempt,
         maxOutputTokens: 65_536,
         temperature: 0.2,
       });
@@ -1848,6 +1884,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
             responseCharacters,
           });
         },
+        repairFrom: persistedInvalidRepair,
       });
     } finally {
       if (clearStreaming) {
@@ -1925,6 +1962,7 @@ async function generateNewSystemAiOutlines(
     knowledgePoints: content.knowledgePoints,
     knowledgeGraph: content.knowledgeGraph,
     courseLanguageDirective: result.data.languageDirective,
+    assessmentMode: request.assessmentMode ?? "adaptive",
   });
   return normalized;
 }
@@ -2345,8 +2383,16 @@ async function runNewSystemCourseDesign(
         || current.content.resourcePackage.revision !== request.resourcePackage.revision)) {
       throw new Error("资源包版本已变更，请按最新确认的教案重新开始生成，原任务不会覆盖新包。");
     }
-    return reconcileCourseGenerationMode(request.resourcePackage
-      ? applyResourcePackageGenerationInput(current, request.resourcePackage) : current, "new");
+    const prepared = request.resourcePackage
+      ? applyResourcePackageGenerationInput(current, request.resourcePackage, teacherGenerationBrief(request))
+      : {
+          ...current,
+          content: {
+            ...current.content,
+            teachingRequirements: buildCourseTeachingRequirements({ teacherBrief: teacherGenerationBrief(request) }),
+          },
+        };
+    return reconcileCourseGenerationMode(prepared, "new");
   });
   const initialCourse = await getCourse(request.courseId);
   if (!initialCourse) throw new Error("课程不存在");
@@ -2429,8 +2475,7 @@ async function runNewSystemCourseDesign(
     const teachingCapacity = buildKnowledgePlanningCapacity({
       courseHours: course.hours,
       stagePlan: course.content.stagePlan,
-      assessmentMode: request.assessmentMode
-        ?? (request.generationContractVersion && request.generationContractVersion >= 2 ? "adaptive" : "constructed-response"),
+      assessmentMode: request.assessmentMode ?? "adaptive",
     });
     const packageKnowledgePoints = resourcePackageTeachingPoints(request.resourcePackage);
     const packageKnowledgeNames = new Set(packageKnowledgePoints.map((point) => point.name.trim()));
@@ -2654,8 +2699,9 @@ async function runNewSystemCourseDesign(
       knowledgeGraph: course.content.knowledgeGraph,
       knowledgeScopePlan: course.content.knowledgeScopePlan,
       generationMode: request.generationMode ?? "standard",
-      assessmentMode: request.assessmentMode ?? (request.generationContractVersion && request.generationContractVersion >= 2 ? "adaptive" : "constructed-response"),
+      assessmentMode: request.assessmentMode ?? "adaptive",
       teacherBrief: [teacherGenerationBrief(request), textbookTeachingSourceContext(request)].filter(Boolean).join("\n\n"),
+      teachingRequirements: course.content.teachingRequirements,
       referenceMaterials: request.referenceMaterials,
       stagePlan: course.content.stagePlan,
     };
@@ -2846,6 +2892,7 @@ async function runNewSystemCourseDesign(
         knowledgePointIds: content.knowledgePoints.map((point) => point.id),
         knowledgePoints: content.knowledgePoints,
         knowledgeGraph: content.knowledgeGraph,
+        assessmentMode: request.assessmentMode ?? "adaptive",
       });
     }
     content = {
@@ -2905,7 +2952,7 @@ async function runNewSystemCourseDesign(
         `${sceneOutlines.length} 个页面`,
         usesTeachingBlueprint
           ? `本大纲先将粗粒度知识细化为可讲授单元，再按小节组织页面；${request.assessmentMode === "constructed-response" ? "深度作答为每小节 1 道综合简答题" : "普通检测为每小节 2–4 道选择、判断、填空或拖拽配对题"}。`
-          : "本大纲按知识小节组织讲解、互动练习与 2—3 道简短主观题小测。",
+          : `本大纲按知识小节组织讲解与互动练习；${request.assessmentMode === "constructed-response" ? "深度作答为每小节 1 道综合简答题" : "普通检测为每小节 2–4 道选择、判断、填空或必要的配对题"}。`,
         "green",
         sceneOutlines.map((scene) => ({
           label: scene.type === "quiz" ? "学习检测" : scene.type === "interactive" ? "互动练习" : "知识讲解",
@@ -2949,6 +2996,7 @@ async function runNewSystemCourseDesign(
         knowledgePointIds: content.knowledgePoints.map((point) => point.id),
         knowledgePoints: content.knowledgePoints,
         knowledgeGraph: content.knowledgeGraph,
+        assessmentMode: request.assessmentMode ?? "adaptive",
       });
     }
     content = {

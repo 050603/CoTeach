@@ -1,6 +1,6 @@
 import { callLLM, parseLLMJson } from "@/lib/llm/client";
 import { DURABLE_GENERATION_TRANSIENT_RETRIES } from "@/lib/llm/request-policy";
-import type { Course, KnowledgeGraph, KnowledgePoint, KnowledgeScopePlan } from "@/lib/session/types";
+import type { Course, CourseTeachingRequirements, KnowledgeGraph, KnowledgePoint, KnowledgeScopePlan } from "@/lib/session/types";
 import type { AssessmentMode, CourseGenerationMode } from "@/lib/openmaic/types/generation";
 import type { GenerationReferenceMaterial } from "@/lib/course-design/generation-references";
 import type { NewSystemAiDurationRecommendation } from "@/lib/classroom/new-system-course";
@@ -29,6 +29,7 @@ export type NewSystemAiDurationInput = {
   generationMode: CourseGenerationMode;
   assessmentMode?: AssessmentMode;
   teacherBrief: string;
+  teachingRequirements?: CourseTeachingRequirements;
   referenceMaterials?: readonly GenerationReferenceMaterial[];
   stagePlan?: CourseStagePlan;
 };
@@ -38,6 +39,27 @@ export type KnowledgeTeachingCluster = {
   title: string;
   knowledgePointIds: string[];
 };
+
+function clusterRequirementIds(cluster: KnowledgeTeachingCluster, input: NewSystemAiDurationInput): string[] {
+  const sourceIds = new Set(cluster.knowledgePointIds.flatMap((id) => {
+    const point = input.knowledgePoints.find((candidate) => candidate.id === id);
+    return point ? [point.id, ...(point.sourceKnowledgePointIds ?? [])] : [];
+  }));
+  return (input.teachingRequirements?.items ?? []).flatMap((requirement) => (
+    (requirement.kind === "highlight" || requirement.kind === "difficulty")
+    && requirement.appliesTo !== "other-stage"
+    && requirement.sourceKnowledgePointIds.some((id) => sourceIds.has(id))
+      ? [requirement.id]
+      : []
+  ));
+}
+
+function priorityRequirements(input: NewSystemAiDurationInput) {
+  return (input.teachingRequirements?.items ?? []).filter((requirement) => (
+    (requirement.kind === "highlight" || requirement.kind === "difficulty")
+    && requirement.appliesTo !== "other-stage"
+  ));
+}
 
 /**
  * Time belongs to a shared explanation sequence, not to each knowledge label.
@@ -138,13 +160,14 @@ export function buildNewSystemAiDurationMessages(input: NewSystemAiDurationInput
 4. 普通模式只安排教学必要的互动；深度交互模式需给真实操作、观察反馈与修正留出时间，但不得用“点击下一步/查看详情”一类伪互动凑时长。
 5. durationMin 必须为 ${minMinutes}–${maxMinutes} 范围内的整数。按知识簇共同解释、例子分析、操作或思考、小节检测的实际需要分别估时；小测及反馈合计不超过 20%，不得套用固定讲解比例或在总预算外追加时间。
 6. teachingClusterBudgets 必须逐项使用输入 teachingClusters 的精确 clusterId 和完整 knowledgePointIds；每个知识簇恰好出现一次，各簇 durationMin 之和必须等于总 durationMin。只有在共享引入、共享案例、减少重复和取消可选扩展后，某个完整知识簇仍无法达到最低掌握边界时，才返回 capacityConflict；必须列出真实 unresolvedClusterIds。按单个知识点平均分钟数得出的冲突无效。
+7. 每个知识簇必须原样返回 applicableRequirementIds。unassignedPriorityRequirements 是没有点名具体知识节点的全局重点或难点，必须按内容选择最相关的一个知识簇落实且只出现一次。highlight 要体现在时长理由和讲解深度中；每个 difficulty 必须返回一项 difficultyStrategies，写清 learnerObstacle、针对该障碍的具体 teachingApproach 和可观察的 understandingEvidence。不得只写“举例讲解”“加强理解”。优先压缩重复总结、冗余导入和可选扩展，不能压掉核心概念定义或难点所需的解释过程。
 
 只返回 JSON：{
   "durationMin": ${Math.round((minMinutes + maxMinutes) / 2)},
   "rationale": "为什么该时长足以讲清且没有注水",
   "confidence": "low|medium|high",
   "teachingClusterBudgets": [
-    { "clusterId": "精确知识簇ID", "knowledgePointIds": ["该簇全部知识点ID"], "durationMin": 8, "rationale": "这组相关知识如何共享讲解以及为何需要这些时间" }
+    { "clusterId": "精确知识簇ID", "knowledgePointIds": ["该簇全部知识点ID"], "durationMin": 8, "rationale": "这组相关知识如何共享讲解、如何照顾重点以及为何需要这些时间", "requirementIds": ["applicableRequirementIds 中的全部ID"], "difficultyStrategies": [{"requirementId":"difficulty要求ID","learnerObstacle":"具体卡点","teachingApproach":"具体讲法","understandingEvidence":"可观察表现"}] }
   ],
   "evidence": ["影响时长的可观察依据"],
   "assumptions": ["无法从输入确认但规划时采用的假设"],
@@ -167,10 +190,23 @@ export function buildNewSystemAiDurationMessages(input: NewSystemAiDurationInput
           difficultyLevel: input.course.pblConfig?.difficultyLevel,
         },
         teacherBrief: input.teacherBrief,
-        teachingRequirements: input.stagePlan?.stages.find((stage) => stage.key === "ai-learning"),
+        aiLearningStage: input.stagePlan?.stages.find((stage) => stage.key === "ai-learning"),
         generationMode: input.generationMode,
-        assessmentMode: input.assessmentMode ?? "constructed-response",
-        teachingClusters,
+        assessmentMode: input.assessmentMode ?? "adaptive",
+        teachingRequirements: input.teachingRequirements,
+        unassignedPriorityRequirements: priorityRequirements(input).filter((requirement) => (
+          !teachingClusters.some((cluster) => clusterRequirementIds(cluster, input).includes(requirement.id))
+        )),
+        teachingClusters: teachingClusters.map((cluster) => {
+          const applicableRequirementIds = clusterRequirementIds(cluster, input);
+          return {
+            ...cluster,
+            applicableRequirementIds,
+            applicableRequirements: (input.teachingRequirements?.items ?? []).filter((requirement) => (
+              applicableRequirementIds.includes(requirement.id)
+            )),
+          };
+        }),
         knowledgePoints: input.knowledgePoints,
         knowledgeScopePlan: input.knowledgeScopePlan,
         knowledgeGraph: input.knowledgeGraph
@@ -203,6 +239,12 @@ export function normalizeNewSystemAiDurationRecommendation(
     Math.max(minMinutes, Math.round(requestedDuration)),
   );
   const teachingClusters = deriveKnowledgeTeachingClusters(input.knowledgePoints);
+  const priorityRequirementList = priorityRequirements(input);
+  const requirementById = new Map(priorityRequirementList.map((item) => [item.id, item]));
+  const mappedClustersByRequirementId = new Map(priorityRequirementList.map((requirement) => [
+    requirement.id,
+    teachingClusters.filter((cluster) => clusterRequirementIds(cluster, input).includes(requirement.id)).map((cluster) => cluster.id),
+  ]));
   const pointsById = new Map(input.knowledgePoints.map((point) => [point.id, point]));
   const rawBudgets = Array.isArray(raw.teachingClusterBudgets)
     ? raw.teachingClusterBudgets.map(asRecord)
@@ -224,6 +266,48 @@ export function normalizeNewSystemAiDurationRecommendation(
   }));
   const teachingClusterBudgets = teachingClusters.map((cluster) => {
     const budget = budgetById.get(cluster.id);
+    const applicableRequirementIds = clusterRequirementIds(cluster, input);
+    const requirementRationale = text(budget?.rationale);
+    const returnedRequirementIds = [...new Set(textArray(budget?.requirementIds).filter((id) => requirementById.has(id)))];
+    const difficultyStrategies = (Array.isArray(budget?.difficultyStrategies)
+      ? budget.difficultyStrategies.map(asRecord)
+      : []).flatMap((strategy) => {
+      const requirementId = text(strategy.requirementId);
+      const learnerObstacle = text(strategy.learnerObstacle);
+      const teachingApproach = text(strategy.teachingApproach);
+      const understandingEvidence = text(strategy.understandingEvidence);
+      if (requirementById.get(requirementId)?.kind !== "difficulty"
+        || !learnerObstacle || !teachingApproach || !understandingEvidence) return [];
+      return [{ requirementId, learnerObstacle, teachingApproach, understandingEvidence }];
+    });
+    for (const requirementId of applicableRequirementIds) {
+      const requirement = requirementById.get(requirementId)!;
+      if (!returnedRequirementIds.includes(requirementId)) {
+        throw new Error(`知识讲授时长判断失败：知识簇“${cluster.title}”未落实教学${requirement.kind === "highlight" ? "重点" : "难点"}。`);
+      }
+      if (requirement.kind === "difficulty") {
+        const strategy = difficultyStrategies.find((item) => item.requirementId === requirementId);
+        if (!strategy || /^(?:举例讲解|加强理解|详细讲解|重点讲解)$/u.test(strategy.teachingApproach.replace(/\s+/g, ""))) {
+          throw new Error(`知识讲授时长判断失败：知识簇“${cluster.title}”缺少教学难点的具体障碍、讲法或理解证据。`);
+        }
+      }
+    }
+    for (const requirementId of returnedRequirementIds) {
+      const mappedClusterIds = mappedClustersByRequirementId.get(requirementId) ?? [];
+      if (mappedClusterIds.length && !mappedClusterIds.includes(cluster.id)) {
+        throw new Error(`知识讲授时长判断失败：教学重点或难点被安排到不相关的知识簇“${cluster.title}”。`);
+      }
+      const requirement = requirementById.get(requirementId)!;
+      if (requirement.kind === "difficulty") {
+        const strategy = difficultyStrategies.find((item) => item.requirementId === requirementId);
+        if (!strategy || /^(?:举例讲解|加强理解|详细讲解|重点讲解)$/u.test(strategy.teachingApproach.replace(/\s+/g, ""))) {
+          throw new Error(`知识讲授时长判断失败：知识簇“${cluster.title}”缺少教学难点的具体障碍、讲法或理解证据。`);
+        }
+      }
+    }
+    if (returnedRequirementIds.length && !requirementRationale) {
+      throw new Error(`知识讲授时长判断失败：知识簇“${cluster.title}”未说明重点或难点如何影响投入。`);
+    }
     const legacyWeight = cluster.knowledgePointIds.reduce(
       (sum, id) => sum + (legacyWeightByPointId.get(id) ?? 0),
       0,
@@ -232,12 +316,27 @@ export function normalizeNewSystemAiDurationRecommendation(
       clusterId: cluster.id,
       title: cluster.title,
       knowledgePointIds: cluster.knowledgePointIds,
-      durationMin: finitePositive(budget?.durationMin)
-        ?? (legacyWeight > 0 ? legacyWeight : teachingClusterWeight(cluster, pointsById, input.knowledgeGraph)),
-      rationale: text(budget?.rationale)
+      durationMin: (finitePositive(budget?.durationMin)
+        ?? (legacyWeight > 0 ? legacyWeight : teachingClusterWeight(cluster, pointsById, input.knowledgeGraph)))
+        * (1 + returnedRequirementIds.reduce((sum, id) => (
+          sum + (requirementById.get(id)?.kind === "difficulty" ? 0.35 : 0.25)
+        ), 0)),
+      rationale: requirementRationale
         || `围绕“${cluster.title}”共享引入、关系解释与案例，覆盖 ${cluster.knowledgePointIds.length} 个相关知识点。`,
+      ...(returnedRequirementIds.length ? { requirementIds: returnedRequirementIds } : {}),
+      ...(difficultyStrategies.length ? { difficultyStrategies } : {}),
     };
   });
+  for (const requirement of priorityRequirementList) {
+    const assignedBudgets = teachingClusterBudgets.filter((budget) => budget.requirementIds?.includes(requirement.id));
+    const mappedClusterIds = mappedClustersByRequirementId.get(requirement.id) ?? [];
+    if (!assignedBudgets.length) {
+      throw new Error(`知识讲授时长判断失败：教学${requirement.kind === "highlight" ? "重点" : "难点"}“${requirement.text}”未进入任何知识簇预算。`);
+    }
+    if (!mappedClusterIds.length && assignedBudgets.length !== 1) {
+      throw new Error(`知识讲授时长判断失败：全局教学${requirement.kind === "highlight" ? "重点" : "难点"}“${requirement.text}”必须只安排到一个最相关的知识簇。`);
+    }
+  }
   // Shared cluster budgets add up to the chosen total. Knowledge points inside
   // a cluster intentionally do not receive mutually exclusive sub-budgets.
   const unit = teachingClusterBudgets.length > durationMin ? 60 : 1;

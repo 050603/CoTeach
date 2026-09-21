@@ -32,6 +32,7 @@ import {
   showcaseRemainingSeconds,
 } from "./queue";
 import { deriveClassroomTimingSnapshot, type ClassroomTimingState } from "@/lib/classroom/timing";
+import { inferResourcePackageShowcasePlan } from "@/lib/resource-package/types";
 
 export class ShowcasePresentationError extends Error {
   constructor(
@@ -189,11 +190,23 @@ async function loadCourseGate(courseId: string): Promise<CourseGate | null> {
 
 function parseShowcaseQueueConfig(value: unknown, content?: CourseContent): Partial<ShowcaseQueueConfig> | undefined {
   const raw = asRecord(asRecord(value).showcaseReporting);
+  const packagePlan = content?.stagePlan?.showcasePlan
+    ?? inferResourcePackageShowcasePlan(content?.stagePlan?.stages.find((stage) => stage.key === "showcase"));
   if (raw.schemaVersion === 2 || (!raw.schemaVersion && Number(content?.stagePlan?.schemaVersion ?? 0) >= 2)) {
     const ids = (value: unknown) => Array.isArray(value) ? [...new Set(value.filter((item): item is string => typeof item === "string"))] : [];
     const seconds = (value: unknown, fallback: number) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
+    const hasPackageTiming = packagePlan && [packagePlan.presentationSec, packagePlan.discussionSec, packagePlan.transitionSec].some((item) => item !== undefined);
+    const presentationFallback = packagePlan?.presentationSec ?? 180;
+    const discussionFallback = packagePlan?.discussionSec ?? (hasPackageTiming ? 0 : 60);
+    const transitionFallback = packagePlan?.transitionSec ?? (hasPackageTiming ? 0 : 20);
+    const presentationSec = seconds(raw.presentationSec, presentationFallback);
+    const discussionSec = seconds(raw.discussionSec, discussionFallback);
+    const transitionSec = seconds(raw.transitionSec, transitionFallback);
+    const presenterCount = typeof raw.presenterCount === "number" && Number.isInteger(raw.presenterCount) && raw.presenterCount > 0
+      ? raw.presenterCount : packagePlan?.presenterCount;
     return { schemaVersion: 2, selectionMode: "teacher-selected", selectedStudentIds: ids(raw.selectedStudentIds), orderedStudentIds: ids(raw.orderedStudentIds),
-      presentationSec: seconds(raw.presentationSec, 180), discussionSec: seconds(raw.discussionSec, 60), transitionSec: seconds(raw.transitionSec, 20), minutesPerStudent: (seconds(raw.presentationSec, 180) + seconds(raw.discussionSec, 60) + seconds(raw.transitionSec, 20)) / 60,
+      presentationSec, discussionSec, transitionSec, minutesPerStudent: (presentationSec + discussionSec + transitionSec) / 60,
+      ...(presenterCount ? { presenterCount } : {}),
       updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "" };
   }
   const orderedStudentIds = Array.isArray(raw.orderedStudentIds)
@@ -612,11 +625,13 @@ async function saveShowcaseQueue(
     if (selectedMode ? oldLockedOrder.some((id, i) => id !== nextLockedOrder[i]) : [...lockedStudentIds].some((id) => previousOrder.indexOf(id) !== nextOrder.indexOf(id))) {
       throw new ShowcasePresentationError("QUEUE_LOCKED", "已开始或完成的汇报顺序不能改变。", 409);
     }
+    const presenterCount = action.presenterCount ?? previousConfig?.presenterCount;
     const nextConfig: ShowcaseQueueConfig = selectedMode ? {
       schemaVersion: 2, selectionMode: "teacher-selected", selectedStudentIds: selectedIds!, orderedStudentIds: nextOrder,
       presentationSec: action.presentationSec ?? previousConfig?.presentationSec ?? 180,
       discussionSec: action.discussionSec ?? previousConfig?.discussionSec ?? 60,
       transitionSec: action.transitionSec ?? previousConfig?.transitionSec ?? 20,
+      ...(presenterCount ? { presenterCount } : {}),
       minutesPerStudent: 0, updatedAt: new Date().toISOString(),
     } : { schemaVersion: 1, orderedStudentIds: nextOrder, minutesPerStudent: normalizeMinutesPerStudent(action.minutesPerStudent), updatedAt: new Date().toISOString() };
     if (selectedMode) {

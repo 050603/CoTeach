@@ -106,9 +106,9 @@ function normalizedRequest(value: unknown): {
       : "full-course",
     generationContractVersion: request.generationContractVersion === 3 ? 3
       : request.generationContractVersion === 2 ? 2 : null,
-    assessmentMode: request.assessmentMode === "adaptive"
-      ? "adaptive"
-      : "constructed-response",
+    assessmentMode: request.assessmentMode === "constructed-response"
+      ? "constructed-response"
+      : "adaptive",
     teacherBrief: request.teacherBrief.trim(),
     supplementalBrief: typeof answers.brief === "string" ? answers.brief.trim() : "",
     resourcePackageSignature: resourcePackage ? JSON.stringify({

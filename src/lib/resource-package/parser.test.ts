@@ -89,6 +89,15 @@ describe("resource package document parsing", () => {
       expect.objectContaining({ archivePath: "教案.md", quote: "- 用学生语言解释抽象机制" }),
     ]);
   });
+  it("extracts presenter count and per-student timing from the showcase stage", () => {
+    const fixture = markdownHandoffFixture();
+    const lesson = fixture.lesson.replace("教师行动4", "教师行动4\n- 随机选取五名同学现场汇报，每位同学汇报3分钟，提问1分钟，衔接10秒。");
+    const result = parseMarkdownResourcePackageDraft(
+      readMarkdown(Buffer.from(fixture.knowledge), "知识点.md"),
+      readMarkdown(Buffer.from(lesson), "教案.md"),
+    );
+    expect(result.draft.showcasePlan).toEqual({ presenterCount: 5, presentationSec: 180, discussionSec: 60, transitionSec: 10 });
+  });
   it("rejects mismatched handoff metadata", () => {
     const fixture = markdownHandoffFixture();
     const otherProject = fixture.lesson.replace('projectId: "project-1"', 'projectId: "project-2"');

@@ -29,6 +29,7 @@ const ActionSchema = z.discriminatedUnion("action", [
     presentationSec: z.number().int().min(15).max(3600).optional(),
     discussionSec: z.number().int().min(0).max(1800).optional(),
     transitionSec: z.number().int().min(0).max(600).optional(),
+    presenterCount: z.number().int().min(1).max(500).optional(),
   }).strict(),
   z.object({
     action: z.literal("start"),

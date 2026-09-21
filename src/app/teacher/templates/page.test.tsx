@@ -39,6 +39,23 @@ describe("teacher course library", () => {
     expect(screen.getByRole("link", { name: "继续备课" }).getAttribute("href")).toBe("/teacher/prepare/pbl/preview");
     expect(screen.queryByRole("link", { name: "完整五阶段备课" })).toBeNull();
   });
+  it("returns generating courses to the generation workspace", async () => {
+    const snapshot = encodePblTemplate(createPblTemplateCourse("pbl", { name: "生成中的项目" }));
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{
+      ...template,
+      id: "pbl",
+      title: "生成中的项目",
+      generationStatus: "running",
+      versions: [{ version: 1, snapshot }],
+    }] }) });
+    render(<TeacherTemplatesPage />);
+
+    expect((await screen.findByRole("link", { name: "打开课程 生成中的项目" })).getAttribute("href"))
+      .toBe("/teacher/prepare/pbl/verify");
+    expect(screen.getByRole("link", { name: "查看生成进度" }).getAttribute("href"))
+      .toBe("/teacher/prepare/pbl/verify");
+    expect(screen.getByText("生成中")).toBeTruthy();
+  });
   it("shows the latest generated classroom cover on its course-library card", async () => {
     const coverImageUrl = "/api/openmaic/classroom-media/template-cover-pbl/media/classroom-cover-v2.webp";
     const snapshot = encodePblTemplate(createPblTemplateCourse("pbl", {

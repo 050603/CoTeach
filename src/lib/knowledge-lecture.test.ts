@@ -105,10 +105,29 @@ describe("knowledge lecture sections", () => {
       expect(quiz.targetDurationSec).toBeGreaterThanOrEqual(120);
       expect(quiz.targetDurationSec).toBeLessThanOrEqual(300);
       expect(quiz.quizConfig?.questionCount).toBeGreaterThanOrEqual(2);
-      expect(quiz.quizConfig?.questionCount).toBeLessThanOrEqual(3);
-      expect(quiz.quizConfig?.questionTypes).toEqual(["short_answer"]);
+      expect(quiz.quizConfig?.questionCount).toBeLessThanOrEqual(4);
+      expect(quiz.quizConfig?.questionTypes).toEqual(["single", "multiple", "true_false", "fill_blank", "matching"]);
+      expect(quiz.quizConfig?.minShortAnswerQuestions).toBe(0);
+      expect(quiz.quizConfig?.maxShortAnswerQuestions).toBe(0);
     }
     expect(deriveKnowledgeLectureSectionsFromOutlines(result.outlines)).toEqual(result.sections);
+  });
+
+  it("keeps the explicitly selected deep-response mode as one synthesis question", () => {
+    const result = organizeKnowledgeLectureOutlines([outline("page", ["kp-1", "kp-2"])], {
+      totalDurationSec: 600,
+      knowledgePoints: [
+        { id: "kp-1", name: "概念", description: "" },
+        { id: "kp-2", name: "应用", description: "" },
+      ],
+      assessmentMode: "constructed-response",
+    });
+    expect(result.outlines.at(-1)?.quizConfig).toMatchObject({
+      questionCount: 1,
+      questionTypes: ["short_answer"],
+      minShortAnswerQuestions: 1,
+      maxShortAnswerQuestions: 1,
+    });
   });
 
   it("creates one immediate quiz per explicitly independent knowledge group", () => {

@@ -62,7 +62,10 @@ describe("resource-package design generation admission", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      job: { currentCall: { status: "reasoning", attempt: 2, maxAttempts: 3 } },
+      job: {
+        currentCall: { status: "reasoning", attempt: 2, maxAttempts: 3 },
+        requestPreview: { assessmentMode: "adaptive" },
+      },
     });
   });
 
@@ -114,6 +117,36 @@ describe("resource-package design generation admission", () => {
     const rejected = await POST(request({ resourcePackageId: "package-1", resourcePackageRevision: 3, assessmentMode: "essay" }), context);
     expect(rejected.status).toBe(400);
     expect(await rejected.json()).toMatchObject({ error: "INVALID_ASSESSMENT_MODE" });
+  });
+
+  it("lets an explicit ordinary check replace a saved deep-response preference", async () => {
+    const resourcePackage = { schemaVersion: 1, id: "package-1", revision: 3, source: { id: "zip-1", fileName: "教学.zip", url: "/private/zip" }, documents: {}, draft: emptyResourcePackageDraft(), confirmedAt: "2026-09-12T00:00:00Z" };
+    const previous = {
+      courseId: "course-1",
+      teacherBrief: "",
+      generationModelString: "deepseek:deepseek-v4-flash",
+      resourcePackage,
+      referenceMaterials: [],
+      textbookSelections: [],
+      generationScope: "full-course",
+      generationMode: "standard",
+      generationContractVersion: 3,
+      assessmentMode: "constructed-response",
+      options: { enableImageGeneration: true, enableTTS: true, enableVideoGeneration: false },
+    };
+    mocks.find.mockResolvedValue(storedJob(previous));
+    mocks.resolve.mockResolvedValue({ resourcePackage, referenceMaterials: [] });
+    mocks.update.mockImplementation(({ data }: { data: { request: unknown } }) => Promise.resolve(storedJob(data.request, "queued")));
+
+    const response = await POST(request({
+      resourcePackageId: "package-1",
+      resourcePackageRevision: 3,
+      assessmentMode: "adaptive",
+    }), context);
+
+    expect(response.status).toBe(202);
+    expect(mocks.update.mock.calls[0][0].data.request).toMatchObject({ assessmentMode: "adaptive" });
+    expect(await response.json()).toMatchObject({ job: { requestPreview: { assessmentMode: "adaptive" } } });
   });
 
   it("persists the bounded test scope and rejects unknown generation scopes", async () => {

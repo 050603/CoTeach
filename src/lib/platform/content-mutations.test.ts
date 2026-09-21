@@ -3,10 +3,10 @@ import type { AuthClaims } from "@/lib/auth/session";
 
 const mocks = vi.hoisted(() => {
   const model = () => ({ findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), aggregate: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), upsert: vi.fn() });
-  const tx = { $queryRaw: vi.fn(), courseTeacher: model(), courseOffering: model(), chapter: model(), activity: model(), resource: model(), classroomTemplate: model(), classroomTemplateVersion: model(), classroomInstance: model(), activityProgress: model(), courseInvitation: model() };
+  const tx = { $queryRaw: vi.fn(), courseTeacher: model(), courseOffering: model(), chapter: model(), activity: model(), resource: model(), classroomTemplate: model(), classroomTemplateVersion: model(), classroomInstance: model(), activityProgress: model(), courseInvitation: model(), generationJob: model() };
   return { tx, transaction: vi.fn(), teacher: vi.fn(), student: vi.fn(), activity: vi.fn(), enrollment: vi.fn(), offerings: vi.fn() };
 });
-vi.mock("@/lib/db/client", () => ({ prisma: { activity: { findUnique: mocks.activity }, enrollment: { findUnique: mocks.enrollment }, courseOffering: { findMany: mocks.offerings }, classroomTemplate: mocks.tx.classroomTemplate } }));
+vi.mock("@/lib/db/client", () => ({ prisma: { activity: { findUnique: mocks.activity }, enrollment: { findUnique: mocks.enrollment }, courseOffering: { findMany: mocks.offerings }, classroomTemplate: mocks.tx.classroomTemplate, generationJob: mocks.tx.generationJob } }));
 vi.mock("@/lib/db/transaction-retry", () => ({ runMutationTransaction: mocks.transaction }));
 vi.mock("./learning-events", () => ({ appendValidatedLearningEvents: vi.fn().mockResolvedValue([]) }));
 vi.mock("./access", () => ({ requireTeacherUser: mocks.teacher, requireStudentUser: mocks.student, normalizeUsername: (value: string) => value }));
@@ -191,6 +191,22 @@ describe("course library lifecycle", () => {
     mocks.tx.classroomTemplate.findMany.mockResolvedValue([]);
     await listPrivateTemplates(teacherClaims);
     expect(mocks.tx.classroomTemplate.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { ownerId: "teacher", status: { notIn: ["DELETED", "deleted"] } } }));
+  });
+
+  it("includes the latest active generation status for each course", async () => {
+    mocks.tx.classroomTemplate.findMany.mockResolvedValue([{ id: "template", versions: [] }]);
+    mocks.tx.generationJob.findMany.mockResolvedValue([
+      { targetId: "template", status: "RUNNING" },
+      { targetId: "template", status: "QUEUED" },
+    ]);
+
+    await expect(listPrivateTemplates(teacherClaims)).resolves.toEqual([
+      expect.objectContaining({ id: "template", generationStatus: "running" }),
+    ]);
+    expect(mocks.tx.generationJob.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ targetId: { in: ["template"] } }),
+      orderBy: { updatedAt: "desc" },
+    }));
   });
 
   it("restores archived templates and logically deletes only archived templates", async () => {

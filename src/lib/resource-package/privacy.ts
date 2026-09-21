@@ -7,6 +7,10 @@ export function withoutPrivatePackageContent<T extends object>(content: T): T {
       if (!value || typeof value !== "object" || Array.isArray(value)) return value;
       const point = { ...value } as Record<string, unknown>;
       delete point.evidenceItemIds;
+      delete point.sourceKnowledgePointIds;
+      delete point.sourceKnowledgePointNames;
+      delete point.teachingRole;
+      delete point.parentKnowledgePointIds;
       return point;
     });
   }
@@ -18,6 +22,8 @@ export function withoutPrivatePackageContent<T extends object>(content: T): T {
         if (!value || typeof value !== "object" || Array.isArray(value)) return value;
         const node = { ...value } as Record<string, unknown>;
         delete node.evidenceItemIds;
+        delete node.teachingRole;
+        delete node.parentKnowledgePointIds;
         return node;
       }) : graph.nodes,
     };

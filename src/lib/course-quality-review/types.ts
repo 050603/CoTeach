@@ -1,4 +1,4 @@
-export const COURSE_QUALITY_REVIEW_POLICY_VERSION = "textbook-guidance-v2";
+export const COURSE_QUALITY_REVIEW_POLICY_VERSION = "textbook-guidance-v3-concept-responsibility";
 
 /** Teacher-private authoring diagnostics. A completed check is not a quality score. */
 export type CourseQualityIssue = {
@@ -64,6 +64,13 @@ export type TeachingUnderstandingCriteria = {
   answerEssentials: string[];
   misconceptions: string[];
   supportingUnitIds: string[];
+};
+
+export type TeachingDifficultyStrategy = {
+  requirementId: string;
+  learnerObstacle: string;
+  teachingApproach: string;
+  understandingEvidence: string;
 };
 
 export type TeachingResourceNeed = {
@@ -164,6 +171,9 @@ export type TeachingBrief = {
   assessmentFocus: string;
   understandingCriteria?: TeachingUnderstandingCriteria;
   resourceNeeds?: TeachingResourceNeed[];
+  /** Teacher-private trace from unified requirements into this page. */
+  requirementIds?: string[];
+  difficultyStrategies?: TeachingDifficultyStrategy[];
   /** Aggregated after generation and shown only in the teacher review flow. */
   reviewItems?: TeacherReviewItem[];
 };

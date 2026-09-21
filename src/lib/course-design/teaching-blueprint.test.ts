@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyReviewedOutlinesToTeachingBlueprint,
   adaptTeachingBlueprintResourceCapabilities,
+  buildTeachingBlueprintRepairPrompt,
   generateTeachingBlueprint,
   buildTeachingBlueprintPrompt,
   TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION,
@@ -74,6 +75,7 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("一个知识点可以跨多页");
   expect(prompt.system).toContain("知识点、讲授单元和 PPT 页面不是一一对应关系");
   expect(prompt.system).toContain("每个 explanationNode 用 knowledgePointIds 声明");
+  expect(prompt.user).toContain("机器结构验收合同");
   expect(prompt.user).toContain('"knowledgePointIds":["该节点实际解释的本单元知识点ID"]');
   expect(prompt.system).toContain("知识结论+完整案例+练习");
   expect(prompt.user).toContain("输入时间无法承载必需解释");
@@ -570,6 +572,168 @@ describe("teaching blueprint compiler", () => {
       .toContain("只挂载但未由解释节点承担的知识点：kp-split、kp-leak");
   });
 
+  it("rejects child coverage when the substantive parent concept has no explicit definition", async () => {
+    const coreInput = input();
+    coreInput.knowledgePoints = coreInput.knowledgePoints.map((point) => point.id === "kp-train"
+      ? { ...point, teachingRole: "core-concept" as const }
+      : point.id === "kp-test"
+        ? { ...point, teachingRole: "detail-concept" as const, parentKnowledgePointIds: ["kp-train"] }
+        : point);
+    const candidate = compactModelBlueprint();
+    candidate.sections[0]!.units[0]!.explanationNodes[0]!.content = "训练数据参与模型学习，独立数据用于检查新对象表现。";
+    const ai = vi.fn(async () => JSON.stringify(candidate));
+    const onValidation = vi.fn();
+
+    await expect(generateTeachingBlueprint(coreInput, ai, { onValidation, retrySleep: async () => undefined }))
+      .rejects.toThrow("教学蓝图缺少可用结构");
+    expect(onValidation.mock.calls.at(-1)?.[0].issues.join("；")).toContain("核心概念“训练集”缺少");
+    expect(ai).toHaveBeenCalledTimes(3);
+  });
+
+  it("puts exact core concepts and prerequisite order into the first-draft acceptance contract", () => {
+    const contractInput = input();
+    contractInput.knowledgePoints = contractInput.knowledgePoints.map((point) => point.id === "kp-train"
+      ? { ...point, teachingRole: "core-concept" as const }
+      : point.id === "kp-test"
+        ? { ...point, parentKnowledgePointIds: ["kp-train"] }
+        : point);
+
+    const prompt = buildTeachingBlueprintPrompt(contractInput);
+
+    expect(prompt.user).toContain('"knowledgePointId":"kp-train","exactName":"训练集"');
+    expect(prompt.user).toContain('"parentKnowledgePointId":"kp-train"');
+    expect(prompt.user).toContain('"上位知识点必须在下位知识点之前或同页首次讲授"');
+  });
+
+  it("feeds deterministic audit findings and the current blueprint into a targeted repair", async () => {
+    const repairInput = input();
+    repairInput.knowledgePoints = repairInput.knowledgePoints.map((point) => point.id === "kp-train"
+      ? { ...point, teachingRole: "core-concept" as const }
+      : point);
+    const invalid = compactModelBlueprint();
+    invalid.sections[0]!.units[0]!.explanationNodes[0]!.content = "训练数据参与模型学习，独立数据用于检查新对象表现。";
+    const repaired = structuredClone(invalid);
+    repaired.sections[0]!.units[0]!.explanationNodes[0]!.content = "训练集是参与模型参数学习的数据，其核心作用是让模型从已知样本中学习规律。";
+    const ai = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify(invalid))
+      .mockResolvedValueOnce(JSON.stringify(repaired));
+
+    await expect(generateTeachingBlueprint(repairInput, ai, {
+      retrySleep: async () => undefined,
+    })).resolves.toMatchObject({ schemaVersion: 3 });
+
+    expect(ai).toHaveBeenCalledTimes(2);
+    expect(ai.mock.calls[1]?.[0]).toContain("教学蓝图结构修订 Agent");
+    expect(ai.mock.calls[1]?.[0]).toContain("而不是重新构思整门课程");
+    expect(ai.mock.calls[1]?.[1]).toContain("核心概念“训练集”缺少");
+    expect(ai.mock.calls[1]?.[1]).toContain("训练数据参与模型学习");
+  });
+
+  it("re-audits a revision and sends only the latest findings to the final repair", async () => {
+    const repairInput = input();
+    repairInput.knowledgePoints = repairInput.knowledgePoints.map((point) => point.id === "kp-train"
+      ? { ...point, teachingRole: "core-concept" as const }
+      : point);
+    const first = compactModelBlueprint();
+    first.sections[0]!.units[0]!.explanationNodes[0]!.content = "训练数据参与模型学习。";
+    const second = structuredClone(first);
+    second.sections[0]!.units[0]!.explanationNodes[0]!.content = "训练集是用于学习模型参数的数据，核心主张是用已知样本形成可迁移规律。";
+    delete (second.sections[0]!.pages[0]! as { taskConnection?: unknown }).taskConnection;
+    const third = structuredClone(second);
+    third.sections[0]!.pages[0]!.taskConnection = {
+      mode: "none",
+      rationale: "本页先建立通用数据分工，不引入额外项目背景更清楚。",
+    };
+    const ai = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify(first))
+      .mockResolvedValueOnce(JSON.stringify(second))
+      .mockResolvedValueOnce(JSON.stringify(third));
+
+    await expect(generateTeachingBlueprint(repairInput, ai, {
+      retrySleep: async () => undefined,
+    })).resolves.toMatchObject({ schemaVersion: 3 });
+
+    expect(ai).toHaveBeenCalledTimes(3);
+    expect(ai.mock.calls[2]?.[1]).toContain("缺少最终任务连接判定");
+    expect(ai.mock.calls[2]?.[1]).not.toContain("核心概念“训练集”缺少");
+  });
+
+  it("resumes a persisted invalid blueprint directly as a bounded repair", async () => {
+    const repairInput = input();
+    repairInput.knowledgePoints = repairInput.knowledgePoints.map((point) => point.id === "kp-train"
+      ? { ...point, teachingRole: "core-concept" as const }
+      : point);
+    const invalid = compactModelBlueprint();
+    invalid.sections[0]!.units[0]!.explanationNodes[0]!.content = "训练数据参与模型学习。";
+    const repaired = structuredClone(invalid);
+    repaired.sections[0]!.units[0]!.explanationNodes[0]!.content = "训练集是用于学习模型参数的数据，核心主张是从已知样本中归纳可迁移规律。";
+    const issue = "第 1 节核心概念“训练集”缺少 term/concept 解释节点";
+    const ai = vi.fn().mockResolvedValue(JSON.stringify(repaired));
+
+    await expect(generateTeachingBlueprint(repairInput, ai, {
+      repairFrom: { response: JSON.stringify(invalid), issues: [issue] },
+      retrySleep: async () => undefined,
+    })).resolves.toMatchObject({ schemaVersion: 3 });
+
+    expect(ai).toHaveBeenCalledTimes(1);
+    expect(ai.mock.calls[0]?.[0]).toContain("教学蓝图结构修订 Agent");
+    expect(ai.mock.calls[0]?.[1]).toContain(issue);
+    expect(ai.mock.calls[0]?.[1]).toContain('"repairAttempt":1');
+  });
+
+  it("keeps repair instructions bounded to the audited draft and immutable contract", () => {
+    const current = compactModelBlueprint();
+    const prompt = buildTeachingBlueprintRepairPrompt(
+      input(),
+      current,
+      ["第 1 节缺少完整的理解目标"],
+      2,
+    );
+
+    expect(prompt.system).toContain("只修改问题字段及其必要关联");
+    expect(prompt.system).toContain("返回与 current 相同外层结构的完整修订 JSON");
+    expect(prompt.user).toContain('"repairAttempt":1');
+    expect(prompt.user).toContain("第 1 节缺少完整的理解目标");
+    expect(prompt.user).toContain("为什么测试必须保持独立");
+  });
+
+  it("traces teacher requirements and concrete difficulty strategies into page briefs", async () => {
+    const requirementInput = input();
+    requirementInput.knowledgePoints = requirementInput.knowledgePoints.map((point) => point.id === "kp-train"
+      ? { ...point, sourceKnowledgePointIds: ["source-train"] }
+      : point);
+    requirementInput.teachingRequirements = {
+      schemaVersion: 1,
+      items: [
+        { id: "teacher-case", kind: "teacher-directive", source: "teacher", text: "使用学生熟悉的例子。", sourceKnowledgePointIds: [] },
+        { id: "highlight-role", kind: "highlight", source: "resource-package", text: "数据角色是重点。", sourceKnowledgePointIds: ["source-train"] },
+        { id: "difficulty-role", kind: "difficulty", source: "resource-package", text: "容易混淆训练与测试。", sourceKnowledgePointIds: ["source-train"] },
+      ],
+      conflicts: [],
+    };
+    const candidate = compactModelBlueprint();
+    Object.assign(candidate.sections[0]!.units[0]!, {
+      requirementIds: ["teacher-case", "highlight-role", "difficulty-role"],
+      difficultyStrategies: [{
+        requirementId: "difficulty-role",
+        learnerObstacle: "只按数据难易区分训练集与测试集",
+        teachingApproach: "用同一批难度相同的数据对比是否参与参数学习",
+        understandingEvidence: "能依据是否参与学习判断数据角色",
+      }],
+    });
+    const blueprint = await generateTeachingBlueprint(requirementInput, async () => JSON.stringify(candidate));
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文").find((item) => item.type === "slide")!;
+
+    expect(blueprint.sections[0]?.units[0]).toMatchObject({
+      requirementIds: ["teacher-case", "highlight-role", "difficulty-role"],
+      difficultyStrategies: [expect.objectContaining({ requirementId: "difficulty-role" })],
+    });
+    expect(outline.teachingBrief).toMatchObject({
+      requirementIds: ["teacher-case", "highlight-role", "difficulty-role"],
+      difficultyStrategies: [expect.objectContaining({ requirementId: "difficulty-role" })],
+    });
+  });
+
   it("applies bounded outline edits back to the design before recompiling resources", async () => {
     const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(compactModelBlueprint()));
     const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
@@ -698,6 +862,50 @@ describe("teaching blueprint compiler", () => {
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts a prerequisite taught in an earlier confirmed section without repair", async () => {
+    const base = input();
+    base.knowledgePoints = base.knowledgePoints.map((point) => point.id === "kp-split"
+      ? { ...point, parentKnowledgePointIds: ["kp-train"] } : point);
+    base.sectionPlans = modelBlueprint().sections.map((section) => ({
+      title: section.title, knowledgePointIds: section.knowledgePointIds, maxPages: 2,
+    }));
+    const ai = vi.fn(async () => JSON.stringify(modelBlueprint()));
+    await expect(generateTeachingBlueprint(base, ai, { retrySleep: async () => undefined }))
+      .resolves.toMatchObject({ schemaVersion: 3 });
+    expect(ai).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a prerequisite that is only taught in a later section", async () => {
+    const base = input();
+    base.knowledgePoints = base.knowledgePoints.map((point) => point.id === "kp-train"
+      ? { ...point, parentKnowledgePointIds: ["kp-split"] } : point);
+    const ai = vi.fn(async () => JSON.stringify(modelBlueprint()));
+    await expect(generateTeachingBlueprint(base, ai, { retrySleep: async () => undefined }))
+      .rejects.toThrow("尚未建立上位概念“数据划分”");
+  });
+
+  it("does not count a reference-only earlier page as teaching a prerequisite", async () => {
+    const base = input();
+    base.knowledgePoints = base.knowledgePoints.map((point) => point.id === "kp-split"
+      ? { ...point, parentKnowledgePointIds: ["kp-train"] } : point);
+    const candidate = modelBlueprint();
+    candidate.sections[0]!.pages[0]!.introducesNodeIds = [];
+    candidate.sections[0]!.pages[0]!.referencesNodeIds = ["roles-concept"];
+    const ai = vi.fn(async () => JSON.stringify(candidate));
+    await expect(generateTeachingBlueprint(base, ai, { retrySleep: async () => undefined }))
+      .rejects.toThrow("尚未建立上位概念“训练集”");
+  });
+
+  it("accepts a prerequisite first taught on the same page", async () => {
+    const base = input();
+    base.knowledgePoints = base.knowledgePoints.map((point) => point.id === "kp-test"
+      ? { ...point, parentKnowledgePointIds: ["kp-train"] } : point);
+    const ai = vi.fn(async () => JSON.stringify(modelBlueprint()));
+    await expect(generateTeachingBlueprint(base, ai, { retrySleep: async () => undefined }))
+      .resolves.toMatchObject({ schemaVersion: 3 });
+    expect(ai).toHaveBeenCalledTimes(1);
+  });
+
   it("retries only when completed output has no usable structure", async () => {
     const ai = vi.fn(async () => JSON.stringify({ sections: [] }));
     const onValidation = vi.fn();
@@ -778,6 +986,8 @@ describe("teaching blueprint compiler", () => {
     expect(teachingBlueprintInputFingerprint({ ...base, totalDurationSec: 1_740 })).not.toBe(fingerprint);
     expect(teachingBlueprintInputFingerprint({ ...base, sourceContext: `${base.sourceContext}\n新增材料` })).not.toBe(fingerprint);
     expect(teachingBlueprintInputFingerprint({ ...base, generationModelFingerprint: "another:model" })).not.toBe(fingerprint);
+    expect(teachingBlueprintInputFingerprint({ ...base, teachingRequirements: { schemaVersion: 1, items: [{ id: "focus", kind: "highlight", source: "teacher", text: "重点比较数据角色", sourceKnowledgePointIds: ["kp-train"] }], conflicts: [] } })).not.toBe(fingerprint);
+    expect(teachingBlueprintInputFingerprint({ ...base, knowledgePoints: base.knowledgePoints.map((point) => point.id === "kp-train" ? { ...point, teachingRole: "core-concept" as const } : point) })).not.toBe(fingerprint);
   });
 
   it.each(["adaptive", "constructed-response"] as const)("keeps a five-minute deep-interaction lesson budget exact in %s mode", async (assessmentMode) => {

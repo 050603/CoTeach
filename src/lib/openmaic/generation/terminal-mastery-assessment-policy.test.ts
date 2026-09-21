@@ -13,7 +13,7 @@ function scene(id: string, type: SceneOutline["type"], knowledgePointIds: string
 }
 
 describe("ensureTerminalMasteryAssessment", () => {
-  it("keeps one concise subjective assessment after every knowledge section", () => {
+  it("keeps one lightweight objective assessment after every knowledge section by default", () => {
     const result = ensureTerminalMasteryAssessment([
       scene("explain-1", "slide", ["kp-1"]),
       scene("check-1", "quiz", ["kp-1"]),
@@ -27,16 +27,36 @@ describe("ensureTerminalMasteryAssessment", () => {
         title: "第 1 节 · 节末小测",
         knowledgePointIds: ["kp-1"],
         targetDurationSec: 180,
-        quizConfig: expect.objectContaining({ questionCount: 2, questionTypes: ["short_answer"] }),
+        quizConfig: expect.objectContaining({
+          questionCount: 2,
+          questionTypes: ["single", "multiple", "true_false", "fill_blank", "matching"],
+          maxShortAnswerQuestions: 0,
+        }),
       }),
       expect.objectContaining({
         id: "check-2",
         title: "第 2 节 · 节末小测",
         knowledgePointIds: ["kp-2"],
         targetDurationSec: 180,
-        quizConfig: expect.objectContaining({ questionCount: 2, questionTypes: ["short_answer"] }),
+        quizConfig: expect.objectContaining({
+          questionCount: 2,
+          questionTypes: ["single", "multiple", "true_false", "fill_blank", "matching"],
+          maxShortAnswerQuestions: 0,
+        }),
       }),
     ]);
+  });
+
+  it("uses one synthesis response only when deep response was explicitly selected", () => {
+    const result = ensureTerminalMasteryAssessment([
+      scene("explain", "slide", ["kp-1", "kp-2"]),
+    ], "constructed-response");
+    expect(result.at(-1)?.quizConfig).toMatchObject({
+      questionCount: 1,
+      questionTypes: ["short_answer"],
+      minShortAnswerQuestions: 1,
+      maxShortAnswerQuestions: 1,
+    });
   });
 
   it("adds one section assessment when the model omitted it", () => {

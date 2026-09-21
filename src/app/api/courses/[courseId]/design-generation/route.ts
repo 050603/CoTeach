@@ -94,9 +94,9 @@ function responseJob(job: Awaited<ReturnType<typeof designGenerationJobs.findUni
       generationMode: request.generationMode === "deep-interaction"
         ? "deep-interaction"
         : "standard",
-      assessmentMode: request.assessmentMode === "adaptive"
-        ? "adaptive"
-        : "constructed-response",
+      assessmentMode: request.assessmentMode === "constructed-response"
+        ? "constructed-response"
+        : "adaptive",
       options: request.options ?? null,
       referenceMaterials: (request.referenceMaterials ?? []).filter((material) => ![...packageDocumentIds].some((id) => material.id === id || material.id.startsWith(`${id}:part-`))).map((material) => ({
         id: material.id,
@@ -298,9 +298,11 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
           : {}),
       assessmentMode: body?.assessmentMode === "constructed-response"
         ? "constructed-response"
-        : previousRequest
-          ? previousRequest.assessmentMode ?? "constructed-response"
-          : "adaptive",
+        : body?.assessmentMode === "adaptive"
+          ? "adaptive"
+          : previousRequest?.assessmentMode === "constructed-response"
+            ? "constructed-response"
+            : "adaptive",
       options: {
         enableImageGeneration: body?.options?.enableImageGeneration !== false,
         enableTTS: body?.options?.enableTTS !== false,

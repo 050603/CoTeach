@@ -201,7 +201,11 @@ export function DocumentAiCollaboration({
     : stageKey === "proposal"
       ? "项目方案协作文档"
       : "项目成果协作文档";
-  const projectTitle = group?.topic || course?.drivingQuestion || course?.name || documentTitle;
+  const projectTitle = (course ? getCourseStageRequirements(course, stageKey)?.drivingQuestion : "")
+    || course?.drivingQuestion
+    || group?.topic
+    || course?.name
+    || documentTitle;
   const canSubmitFinal = stageKey === "make" && !isExternalArtifact;
   const onlineCount = course
     ? course.students.filter((student) => presence.onlineStudentIds.has(student.id)).length

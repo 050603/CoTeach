@@ -83,8 +83,11 @@ export async function resolveCourseEvidenceSnapshot(input: {
   const points = input.upstreamKnowledgePoints.length
     ? input.upstreamKnowledgePoints.slice(0, 120)
     : [{ id: "teacher-brief", name: input.teacherBrief?.trim().slice(0, 200) || "课程核心知识", description: input.teacherBrief?.trim().slice(0, 1_000) || "教师课程要求" }];
+  const pointById = new Map(points.map((point) => [point.id, point]));
   const retrievals = await Promise.all(points.map(async (point) => {
-    const query = [point.name, point.description, input.teacherBrief].filter(Boolean).join("\n").slice(0, 2_000);
+    const parent = point.parentKnowledgePointId ? pointById.get(point.parentKnowledgePointId) : undefined;
+    const query = [point.name, point.description, point.groupName, parent?.name, parent?.description, input.teacherBrief]
+      .filter(Boolean).join("\n").slice(0, 2_000);
     const scoped = await Promise.all(input.selections.map(async (selection) => ({
       selection,
       result: await searchTextbookEvidence({

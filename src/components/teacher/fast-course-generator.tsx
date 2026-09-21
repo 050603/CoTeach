@@ -335,7 +335,7 @@ export function FastCourseGenerator({
     && brief === (savedRequest?.teacherBrief ?? "")
     && generationMode === (savedRequest?.generationMode ?? "standard")
     && generationScope === (savedRequest?.generationScope ?? "full-course")
-    && assessmentMode === (savedRequest?.assessmentMode ?? "constructed-response")
+    && assessmentMode === (savedRequest?.assessmentMode ?? "adaptive")
     && options.enableImageGeneration === (savedRequest?.options?.enableImageGeneration !== false)
     && options.enableTTS === (savedRequest?.options?.enableTTS !== false)
     && options.enableVideoGeneration === (savedRequest?.options?.enableVideoGeneration === true)
@@ -354,7 +354,7 @@ export function FastCourseGenerator({
       setGenerationScope(payload.job.requestPreview.generationScope);
     }
     if (payload.job?.requestPreview) {
-      setAssessmentMode(payload.job.requestPreview.assessmentMode ?? "constructed-response");
+      setAssessmentMode(payload.job.requestPreview.assessmentMode ?? "adaptive");
     }
     const savedOptions = payload.job?.requestPreview?.options;
     if (savedOptions) {
@@ -1013,7 +1013,7 @@ export function FastCourseGenerator({
                     测试一节
                   </button>
                   <button
-                    aria-label={assessmentMode === "constructed-response" ? "关闭深度作答，使用灵活题型" : "开启深度作答模式"}
+                    aria-label={assessmentMode === "constructed-response" ? "关闭深度作答，使用普通检测" : "开启深度作答模式"}
                     aria-pressed={assessmentMode === "constructed-response"}
                     className={cn(
                       QUICK_TOOLBAR_CONTROL_CLASS,

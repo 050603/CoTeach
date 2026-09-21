@@ -50,6 +50,7 @@ describe("new-system AI duration judgment", () => {
     expect(messages[0].content).toContain("不得套用固定讲解比例");
     expect(messages[0].content).not.toContain("68%");
     expect(messages[1].content).toContain('"availableMinutes":120');
+    expect(messages[1].content).toContain('"assessmentMode":"adaptive"');
   });
 
   it("uses the model judgment as the AI classroom duration", async () => {
@@ -214,5 +215,80 @@ describe("new-system AI duration judgment", () => {
     expect(result.scopeWarning).toContain("仍缺少一次完整的方案判断与反馈");
     expect(result.scopeWarning).toContain("节能判断");
     expect(result.scopeWarning).toContain("合并概念引入并取消第二个扩展示例");
+  });
+
+  it("keeps the fixed budget while tracing highlights and concrete difficulty strategies", () => {
+    const input = durationInput();
+    input.knowledgePoints[0]!.sourceKnowledgePointIds = ["source-energy"];
+    input.teachingRequirements = {
+      schemaVersion: 1,
+      items: [
+        { id: "highlight-energy", kind: "highlight", source: "resource-package", text: "能耗的含义与计算是教学重点。", sourceKnowledgePointIds: ["source-energy"] },
+        { id: "difficulty-energy", kind: "difficulty", source: "resource-package", text: "学生容易把功率和能耗混为一谈。", sourceKnowledgePointIds: ["source-energy"] },
+      ],
+      conflicts: [],
+    };
+    const result = normalizeNewSystemAiDurationRecommendation({
+      durationMin: 36,
+      rationale: "保持总预算，在概念簇中增加对比和判断证据。",
+      teachingClusterBudgets: [
+        {
+          clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 16,
+          rationale: "用相同设备的功率与运行时间对比，展开重点概念。",
+          requirementIds: ["highlight-energy", "difficulty-energy"],
+          difficultyStrategies: [{ requirementId: "difficulty-energy", learnerObstacle: "把瞬时功率当成累计能耗", teachingApproach: "固定功率，分步比较运行一小时与两小时的累计用电量", understandingEvidence: "能说明运行时间改变时功率不变但能耗增加" }],
+        },
+        { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 20, rationale: "比较方案并检测" },
+      ],
+    }, input);
+
+    expect(result.durationMin).toBe(36);
+    expect(result.teachingClusterBudgets[0]).toMatchObject({
+      requirementIds: ["highlight-energy", "difficulty-energy"],
+      difficultyStrategies: [expect.objectContaining({ requirementId: "difficulty-energy" })],
+    });
+    expect(result.teachingClusterBudgets[0]!.durationMin).toBeGreaterThan(16);
+    expect(result.teachingClusterBudgets.reduce((sum, item) => sum + item.durationMin, 0)).toBe(36);
+    expect(() => normalizeNewSystemAiDurationRecommendation({
+      durationMin: 36,
+      rationale: "缺少重点落实。",
+      teachingClusterBudgets: [
+        { clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 16, rationale: "概念" },
+        { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 20, rationale: "应用" },
+      ],
+    }, input)).toThrow("未落实教学重点");
+  });
+
+  it("assigns a global priority requirement to exactly one relevant cluster", () => {
+    const input = durationInput();
+    input.teachingRequirements = {
+      schemaVersion: 1,
+      items: [{
+        id: "highlight-global",
+        kind: "highlight",
+        source: "resource-package",
+        text: "重点比较两种方案的判断依据。",
+        sourceKnowledgePointIds: [],
+      }],
+      conflicts: [],
+    };
+    const raw = {
+      durationMin: 36,
+      rationale: "在方案判断知识簇中落实全局重点。",
+      teachingClusterBudgets: [
+        { clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 16, rationale: "概念解释" },
+        { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 20, rationale: "比较两种方案并说明判断依据", requirementIds: ["highlight-global"] },
+      ],
+    };
+
+    const result = normalizeNewSystemAiDurationRecommendation(raw, input);
+    expect(result.teachingClusterBudgets[1]?.requirementIds).toEqual(["highlight-global"]);
+    expect(() => normalizeNewSystemAiDurationRecommendation({
+      ...raw,
+      teachingClusterBudgets: raw.teachingClusterBudgets.map((budget) => ({
+        ...budget,
+        requirementIds: ["highlight-global"],
+      })),
+    }, input)).toThrow("必须只安排到一个最相关的知识簇");
   });
 });

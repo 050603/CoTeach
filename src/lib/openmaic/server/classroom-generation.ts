@@ -20,6 +20,7 @@ import {
   createSceneWithActions,
   generateSceneActions,
   generateSceneContent,
+  QUIZ_GENERATION_POLICY_VERSION,
 } from '@openmaic/lib/generation/scene-generator';
 import type { AICallFn } from '@openmaic/lib/generation/pipeline-types';
 import {
@@ -1385,6 +1386,7 @@ async function generateClassroomInternal(
         outlineContext,
         actualTaughtContext,
         assessmentPolicy: ASSESSMENT_DEPENDENCY_VERSION,
+        quizPolicy: safeOutline.type === 'quiz' ? QUIZ_GENERATION_POLICY_VERSION : null,
         generationVision,
         narrationPolicy: usesFirstPassNarration ? COURSE_GENERATION_POLICY_VERSION : null,
         pipeline: 'adaptive-course-page-v4',
@@ -1546,7 +1548,7 @@ async function generateClassroomInternal(
                 },
               );
             } catch (error) {
-              if (error instanceof Error && /(?:Quiz .* (?:returned|has|cannot cover)|table (?:data|cell|column))/i.test(error.message)) {
+              if (error instanceof Error && /(?:Quiz .* (?:returned|has|cannot cover|does not cover)|table (?:data|cell|column))/i.test(error.message)) {
                 throw invalidGeneratedOutput(error, `Scene "${safeOutline.title}" returned invalid content`);
               }
               throw error;

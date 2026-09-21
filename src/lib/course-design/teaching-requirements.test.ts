@@ -39,8 +39,22 @@ describe("course teaching requirements", () => {
     });
     expect(requirements.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "teacher-directive", source: "teacher" }),
-      expect.objectContaining({ kind: "highlight", sourceKnowledgePointIds: ["constructivism"] }),
-      expect.objectContaining({ kind: "difficulty", sourceKnowledgePointIds: ["assimilation"] }),
+      expect.objectContaining({ kind: "highlight", appliesTo: "ai-learning", sourceKnowledgePointIds: ["constructivism"] }),
+      expect.objectContaining({ kind: "difficulty", appliesTo: "ai-learning", sourceKnowledgePointIds: ["assimilation"] }),
+    ]));
+  });
+
+  it("keeps later-stage supplements out of AI teaching and exposes substantive conflicts", () => {
+    const pack = resourcePackage();
+    pack.draft.grade = "初中一年级";
+    pack.draft.totalMinutes = 90;
+    const requirements = buildCourseTeachingRequirements({
+      resourcePackage: pack,
+      teacherBrief: "面向小学五年级，整课 45 分钟。项目实践采用四人小组完成成果展示。",
+    });
+    expect(requirements.items.find((item) => item.kind === "teacher-directive")?.appliesTo).toBe("other-stage");
+    expect(requirements.conflicts.map((item) => item.id)).toEqual(expect.arrayContaining([
+      "teacher-total-minutes", "teacher-audience", "teacher-organization",
     ]));
   });
 });

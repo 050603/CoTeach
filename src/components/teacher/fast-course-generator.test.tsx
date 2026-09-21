@@ -154,7 +154,7 @@ describe("FastCourseGenerator knowledge references", () => {
     expect(screen.getByRole("button", { name: "关闭深度交互，使用普通模式" }).getAttribute("aria-pressed")).toBe("true");
     expect(responseToggle.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(responseToggle);
-    expect(screen.getByRole("button", { name: "关闭深度作答，使用灵活题型" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "关闭深度作答，使用普通检测" }).getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.change(screen.getByLabelText("补充课程生成要求（可选）"), { target: { value: "设计一节交互式 AI 课程" } });
     fireEvent.click(send);
@@ -204,7 +204,7 @@ describe("FastCourseGenerator knowledge references", () => {
     expect((retry as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText("补充课程生成要求（可选）"), { target: { value: "旧的课程要求" } });
     fireEvent.click(retry);
-    await waitFor(() => expect(post).toHaveBeenCalledWith({ teacherBrief: "旧的课程要求", generationMode: "standard", generationScope: "full-course", assessmentMode: "constructed-response", options: { enableImageGeneration: true, enableTTS: true, enableVideoGeneration: false }, referenceIds: [] }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ teacherBrief: "旧的课程要求", generationMode: "standard", generationScope: "full-course", assessmentMode: "adaptive", options: { enableImageGeneration: true, enableTTS: true, enableVideoGeneration: false }, referenceIds: [], textbookSelections: [] }));
   });
 
   it("submits the single-lesson test scope independently from teaching style options", async () => {

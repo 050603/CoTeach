@@ -1027,6 +1027,8 @@ export async function generateLegacyCustomizedSlideContent(
  */
 type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['questionTypes'][number];
 
+export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v2';
+
 const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
   single: 'single_choice',
   multiple: 'multiple_choice',
@@ -1043,7 +1045,7 @@ async function generateQuizContent(
   languageDirective?: string,
   pblContext?: string,
 ): Promise<GeneratedQuizContent | null> {
-  const quizConfig = outline.quizConfig || {
+  const quizConfig: NonNullable<SceneOutline['quizConfig']> = outline.quizConfig || {
     questionCount: 3,
     difficulty: 'medium',
     questionTypes: ['single'],
@@ -1053,12 +1055,15 @@ async function generateQuizContent(
   const exactQuestionTypePlan = quizConfig.questionTypePlan?.length === quizConfig.questionCount
     ? [...quizConfig.questionTypePlan]
     : undefined;
-  const questionFormats = exactQuestionTypePlan ?? (shortAnswerOnly ? ['short_answer'] : selectQuizFormats({
-      objectiveText: [outline.teachingObjective, outline.title, outline.description, ...(outline.keyPoints ?? [])].filter(Boolean).join(' '),
-      difficulty: quizConfig.difficulty,
-      questionCount: quizConfig.questionCount,
-      requested: quizConfig.questionTypes,
-    }));
+  const questionFormats = exactQuestionTypePlan ?? (shortAnswerOnly
+    ? ['short_answer']
+    : quizConfig.questionTypes.length > 0
+      ? [...quizConfig.questionTypes]
+      : selectQuizFormats({
+          objectiveText: [outline.teachingObjective, outline.title, outline.description, ...(outline.keyPoints ?? [])].filter(Boolean).join(' '),
+          difficulty: quizConfig.difficulty,
+          questionCount: quizConfig.questionCount,
+        }));
   const coverageInstruction = shortAnswerOnly
     ? quizConfig.questionCount === 1
       ? 'the single comprehensive short-answer question must require and carry every allowed knowledgePointId for this section'
@@ -1086,140 +1091,151 @@ async function generateQuizContent(
     return null;
   }
 
-  log.debug(`Generating quiz content for: ${outline.title}`);
-  const response = await aiCall(prompts.system, prompts.user);
-  const generatedQuestions = parseJsonResponse<unknown[]>(response);
+  const validateResponse = (generatedQuestions: unknown[]): GeneratedQuizContent => {
+    if (generatedQuestions.length !== quizConfig.questionCount) {
+      throw new Error(`Quiz "${outline.title}" returned ${generatedQuestions.length}/${quizConfig.questionCount} questions`);
+    }
+    const normalized = normalizeQuizQuestions(generatedQuestions, outline.knowledgePointIds?.length
+      ? { allowedKnowledgePointIds: outline.knowledgePointIds }
+      : {});
+    const attributionIssues = normalized.issues.filter((issue) => issue.includes('knowledgePointIds'));
+    if (attributionIssues.length > 0 || (!shortAnswerOnly && normalized.issues.length > 0)) {
+      throw new Error(`Quiz "${outline.title}" returned invalid questions: ${normalized.issues.join('; ')}`);
+    }
+    if (normalized.questions.length !== quizConfig.questionCount) {
+      throw new Error(`Quiz "${outline.title}" returned ${normalized.questions.length}/${quizConfig.questionCount} usable questions`);
+    }
+    if (normalized.questions.some((question) => !question.knowledgePointIds?.length)) {
+      throw new Error(`Quiz "${outline.title}" returned a question without explicit knowledgePointIds`);
+    }
 
-  if (!generatedQuestions || !Array.isArray(generatedQuestions)) {
-    log.error(`Failed to parse AI response for: ${outline.title}`);
-    return null;
-  }
-
-  log.debug(`Got ${generatedQuestions.length} questions for: ${outline.title}`);
-
-  const normalized = normalizeQuizQuestions(generatedQuestions, {
-    allowedKnowledgePointIds: outline.knowledgePointIds ?? [],
-    fallbackKnowledgePointIds: quizConfig.coveragePolicy === 'each-target' ? [] : outline.knowledgePointIds ?? [],
-  });
-  if (normalized.issues.length > 0) {
-    log.warn(`Quiz quality repairs for "${outline.title}": ${normalized.issues.join('; ')}`);
-  }
-  if (normalized.questions.length < quizConfig.questionCount) {
-    throw new Error(`Quiz "${outline.title}" returned ${normalized.questions.length}/${quizConfig.questionCount} usable questions`);
-  }
-  const withTeachingUnitIds = quizConfig.coveragePolicy === 'each-target'
-    ? (() => {
-        const targets = outline.assessmentTargets ?? [];
-        if (targets.length !== quizConfig.questionCount) {
-          throw new Error(`Quiz "${outline.title}" has ${targets.length}/${quizConfig.questionCount} explicit assessment targets`);
-        }
-        const unused = new Set(normalized.questions.slice(0, quizConfig.questionCount).map((_, index) => index));
-        return targets.map((target): QuizQuestion => {
-          const exactIndex = [...unused].find((index) => {
-            const question = normalized.questions[index];
-            return question?.teachingUnitIds?.includes(target.unitId)
-              && question.knowledgePointIds?.includes(target.knowledgePointId);
+    const withTeachingUnitIds = quizConfig.coveragePolicy === 'each-target'
+      ? (() => {
+          const targets = outline.assessmentTargets ?? [];
+          if (targets.length !== quizConfig.questionCount) {
+            throw new Error(`Quiz "${outline.title}" has ${targets.length}/${quizConfig.questionCount} explicit assessment targets`);
+          }
+          const unused = new Set(normalized.questions.map((_, index) => index));
+          return targets.map((target): QuizQuestion => {
+            const selectedIndex = [...unused].find((index) => {
+              const question = normalized.questions[index];
+              return question?.teachingUnitIds?.includes(target.unitId)
+                && question.knowledgePointIds?.includes(target.knowledgePointId);
+            });
+            if (typeof selectedIndex !== 'number') {
+              throw new Error(`Quiz "${outline.title}" cannot cover assessment target ${target.unitId}/${target.knowledgePointId}`);
+            }
+            unused.delete(selectedIndex);
+            return normalized.questions[selectedIndex]!;
           });
-          const selectedIndex = exactIndex ?? unused.values().next().value;
-          if (typeof selectedIndex !== 'number') {
-            throw new Error(`Quiz "${outline.title}" cannot cover assessment target ${target.unitId}/${target.knowledgePointId}`);
-          }
-          unused.delete(selectedIndex);
-          return {
-            ...normalized.questions[selectedIndex]!,
-            knowledgePointIds: [target.knowledgePointId],
-            teachingUnitIds: [target.unitId],
-          };
-        });
-      })()
-    : normalized.questions.map((question): QuizQuestion => {
-        const mappedUnitIds = (outline.assessmentUnitMap ?? [])
-          .filter((unit) => unit.knowledgePointIds.some((id) => question.knowledgePointIds?.includes(id)))
-          .map((unit) => unit.unitId);
-        return {
-          ...question,
-          teachingUnitIds: mappedUnitIds.length
-            ? mappedUnitIds
-            : [...(outline.assessmentUnitIds ?? [])],
-        };
-      });
-  const withRequiredShortAnswers = shortAnswerOnly ? withTeachingUnitIds : (() => {
-    let needed = Math.max(0, Math.min(
-      Math.floor(quizConfig.minShortAnswerQuestions ?? 0),
-      Math.floor(quizConfig.maxShortAnswerQuestions ?? 0),
-    )) - withTeachingUnitIds.filter((question) => question.type === 'short_answer'
-      && (question.format === 'short_answer' || question.format === 'scenario_task')).length;
-    return withTeachingUnitIds.map((question): QuizQuestion => {
-      if (needed <= 0 || (question.type === 'short_answer'
-        && (question.format === 'short_answer' || question.format === 'scenario_task'))) return question;
-      needed -= 1;
-      const { options, answer, ...base } = question;
-      const choiceContext = options?.map((option) => option.label).filter(Boolean).join('；');
-      void answer;
-      return {
-        ...base,
-        type: 'short_answer',
-        format: 'short_answer',
-        question: `${question.question}\n请写出结论并简短说明理由。${choiceContext ? `可参考原题材料：${choiceContext}` : ''}`,
-        commentPrompt: '评分规则：结论准确占40%；理由依据符合本节知识占50%；表达清楚占10%。',
-        hasAnswer: false,
-      };
-    });
-  })();
-  const questions = shortAnswerOnly
-    ? withRequiredShortAnswers.map((question): QuizQuestion => {
-        if (question.type === 'short_answer') return question;
-        const choiceContext = question.options?.map((option) => option.label).filter(Boolean).join('；');
-        return {
-          id: question.id,
-          knowledgePointIds: question.knowledgePointIds,
-          teachingUnitIds: question.teachingUnitIds,
-          type: 'short_answer',
-          format: 'short_answer',
-          question: `${question.question}\n请直接写出正确结论并说明理由。${choiceContext ? `可参考这些原题信息：${choiceContext}` : ''}`,
-          analysis: question.analysis,
-          commentPrompt: '评分规则：结论准确占40%；理由或证据符合本节知识点占50%；表达清楚占10%。',
-          hasAnswer: false,
-          points: question.points,
-        };
-      }).slice(0, quizConfig.questionCount)
-    : (() => {
-        let remainingShortAnswers = Math.max(0, Math.floor(quizConfig.maxShortAnswerQuestions ?? 0));
-        return withRequiredShortAnswers.slice(0, quizConfig.questionCount).map((question): QuizQuestion => {
-          const explanationStyle = question.type === 'short_answer'
-            && (question.format === 'short_answer' || question.format === 'scenario_task');
-          if (!explanationStyle) return question;
-          if (remainingShortAnswers > 0) {
-            remainingShortAnswers -= 1;
-            return question;
-          }
+        })()
+      : normalized.questions.map((question): QuizQuestion => {
+          const mappedUnitIds = (outline.assessmentUnitMap ?? [])
+            .filter((unit) => unit.knowledgePointIds.some((id) => question.knowledgePointIds?.includes(id)))
+            .map((unit) => unit.unitId);
           return {
             ...question,
-            format: 'fill_blank',
-            question: `${question.question}\n请只填写关键词或一句话结论。`,
-            commentPrompt: '评分规则：关键概念或结论准确占80%；语义等价占20%。不要求展开论述。',
+            teachingUnitIds: mappedUnitIds.length
+              ? mappedUnitIds
+              : [...(outline.assessmentUnitIds ?? [])],
           };
         });
-      })();
-  if (exactQuestionTypePlan) {
-    const actualFormats = questions.map((question) => question.format);
-    const expectedFormats = exactQuestionTypePlan.map((type) => QUIZ_FORMAT_BY_PLANNED_TYPE[type]);
-    const mismatched = expectedFormats.some((format, index) => actualFormats[index] !== format);
-    if (mismatched) {
-      throw new Error(`Quiz "${outline.title}" returned question formats ${actualFormats.join(', ') || 'none'}; expected exact plan ${expectedFormats.join(', ')}`);
+    const withRequiredShortAnswers = shortAnswerOnly ? withTeachingUnitIds : (() => {
+      let needed = Math.max(0, Math.min(
+        Math.floor(quizConfig.minShortAnswerQuestions ?? 0),
+        Math.floor(quizConfig.maxShortAnswerQuestions ?? 0),
+      )) - withTeachingUnitIds.filter((question) => question.type === 'short_answer'
+        && (question.format === 'short_answer' || question.format === 'scenario_task')).length;
+      return withTeachingUnitIds.map((question): QuizQuestion => {
+        if (needed <= 0 || (question.type === 'short_answer'
+          && (question.format === 'short_answer' || question.format === 'scenario_task'))) return question;
+        needed -= 1;
+        const { options, answer, ...base } = question;
+        const choiceContext = options?.map((option) => option.label).filter(Boolean).join('；');
+        void answer;
+        return {
+          ...base,
+          type: 'short_answer',
+          format: 'short_answer',
+          question: `${question.question}\n请写出结论并简短说明理由。${choiceContext ? `可参考原题材料：${choiceContext}` : ''}`,
+          commentPrompt: '评分规则：结论准确占40%；理由依据符合本节知识占50%；表达清楚占10%。',
+          hasAnswer: false,
+        };
+      });
+    })();
+    const questions = shortAnswerOnly
+      ? withRequiredShortAnswers.map((question): QuizQuestion => {
+          if (question.type === 'short_answer') return question;
+          const choiceContext = question.options?.map((option) => option.label).filter(Boolean).join('；');
+          return {
+            id: question.id,
+            knowledgePointIds: question.knowledgePointIds,
+            teachingUnitIds: question.teachingUnitIds,
+            type: 'short_answer',
+            format: 'short_answer',
+            question: `${question.question}\n请直接写出正确结论并说明理由。${choiceContext ? `可参考这些原题信息：${choiceContext}` : ''}`,
+            analysis: question.analysis,
+            commentPrompt: '评分规则：结论准确占40%；理由或证据符合本节知识点占50%；表达清楚占10%。',
+            hasAnswer: false,
+            points: question.points,
+          };
+        })
+      : withRequiredShortAnswers;
+
+    const explanationQuestions = questions.filter((question) => question.type === 'short_answer'
+      && (question.format === 'short_answer' || question.format === 'scenario_task'));
+    const maxShortAnswers = Math.max(0, Math.floor(quizConfig.maxShortAnswerQuestions ?? 0));
+    if (!shortAnswerOnly && explanationQuestions.length > maxShortAnswers) {
+      throw new Error(`Quiz "${outline.title}" returned ${explanationQuestions.length} open-response questions; maximum is ${maxShortAnswers}`);
+    }
+    const choiceWithWrittenExplanation = questions.find((question) => question.type !== 'short_answer'
+      && /(?:请|并).*?(?:说明|解释|写出).*?(?:理由|原因)|\b(?:explain|justify)\b/iu.test(question.question));
+    if (choiceWithWrittenExplanation) {
+      throw new Error(`Quiz "${outline.title}" returned a choice or true/false item that also requires a written explanation: ${choiceWithWrittenExplanation.id}`);
+    }
+    if (exactQuestionTypePlan) {
+      const actualFormats = questions.map((question) => question.format);
+      const expectedFormats = exactQuestionTypePlan.map((type) => QUIZ_FORMAT_BY_PLANNED_TYPE[type]);
+      const mismatched = expectedFormats.some((format, index) => actualFormats[index] !== format);
+      if (mismatched) {
+        throw new Error(`Quiz "${outline.title}" returned question formats ${actualFormats.join(', ') || 'none'}; expected exact plan ${expectedFormats.join(', ')}`);
+      }
+    } else {
+      const allowedFormats = new Set(questionFormats.map((type) => QUIZ_FORMAT_BY_PLANNED_TYPE[type as PlannedQuizQuestionType]));
+      const unsupported = questions.find((question) => !question.format || !allowedFormats.has(question.format));
+      if (unsupported) {
+        throw new Error(`Quiz "${outline.title}" returned unrequested question format ${unsupported.format ?? 'unknown'} for ${unsupported.id}`);
+      }
+    }
+    const coveredKnowledgePointIds = new Set(questions.flatMap((question) => question.knowledgePointIds ?? []));
+    const missingKnowledgePointIds = (outline.knowledgePointIds ?? []).filter((id) => !coveredKnowledgePointIds.has(id));
+    if (missingKnowledgePointIds.length > 0) {
+      throw new Error(`Quiz "${outline.title}" does not cover knowledge points: ${missingKnowledgePointIds.join(', ')}`);
+    }
+    return { questions };
+  };
+
+  let correction = '';
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    log.debug(`Generating quiz content for: ${outline.title}${attempt ? ' (correction)' : ''}`);
+    const response = await aiCall(prompts.system, `${prompts.user}${correction}`);
+    const generatedQuestions = parseJsonResponse<unknown[]>(response);
+    try {
+      if (!generatedQuestions || !Array.isArray(generatedQuestions)) {
+        throw new Error(`Quiz "${outline.title}" returned invalid JSON instead of a question array`);
+      }
+      log.debug(`Got ${generatedQuestions.length} questions for: ${outline.title}`);
+      return validateResponse(generatedQuestions);
+    } catch (error) {
+      lastError = error;
+      if (attempt > 0) throw error;
+      const detail = error instanceof Error ? error.message : String(error);
+      log.warn(`Quiz quality correction for "${outline.title}": ${detail}`);
+      correction = `\n\n## Correction required\nYour previous response was rejected: ${detail}\nReturn a complete replacement JSON array. Fix every stated problem, preserve the exact requested question count and formats, explicitly attribute each question to the knowledge it genuinely assesses, and do not include commentary.`;
     }
   }
-  const coveredKnowledgePointIds = new Set(questions.flatMap((question) => question.knowledgePointIds ?? []));
-  const missingKnowledgePointIds = (outline.knowledgePointIds ?? []).filter((id) => !coveredKnowledgePointIds.has(id));
-  if (missingKnowledgePointIds.length > 0) {
-    throw new Error(`Quiz "${outline.title}" does not cover knowledge points: ${missingKnowledgePointIds.join(', ')}`);
-  }
-  if (questions.length === 0) {
-    log.error(`Quiz generation produced no usable questions for: ${outline.title}`);
-    return null;
-  }
-
-  return { questions };
+  throw lastError instanceof Error ? lastError : new Error(`Quiz "${outline.title}" returned invalid questions`);
 }
 
 /**

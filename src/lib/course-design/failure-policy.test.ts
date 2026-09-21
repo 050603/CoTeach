@@ -49,6 +49,23 @@ describe("course design failure policy", () => {
     expect(formatFatalCourseDesignError(error)).toContain("前测题选项重复");
   });
 
+  it("reports exhausted blueprint repair as a quality failure with its actionable detail", () => {
+    const error = new Error("教学蓝图缺少可用结构: 第 2 节核心概念缺少 term/concept 解释节点");
+
+    expect(classifyCourseDesignFailure(error)).toBe("terminal-quality");
+    const formatted = formatFatalCourseDesignError(error);
+    expect(formatted).toContain("不会整项重跑");
+    expect(formatted).toContain("第 2 节核心概念缺少");
+    expect(formatFatalCourseDesignError(new Error(formatted))).toBe(formatted);
+  });
+
+  it("reports exhausted blueprint JSON repair without mislabeling it as infrastructure", () => {
+    const error = new Error("教学蓝图 JSON 无法解析: Unexpected end of JSON input");
+
+    expect(classifyCourseDesignFailure(error)).toBe("terminal-quality");
+    expect(formatFatalCourseDesignError(error)).toContain("JSON 无法解析");
+  });
+
   it("recovers transient network failures without treating credential errors as retryable", () => {
     const network = new Error("fetch failed: ECONNRESET");
     expect(classifyCourseDesignFailure(network)).toBe("transient-infrastructure");

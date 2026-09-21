@@ -19,7 +19,7 @@ describe("resource-package classroom requirements", () => {
   it("projects the exact authored stage time, tasks and evidence criteria into individual AI collaboration", () => {
     const course = resourceCourse();
     const requirements = getCourseStageRequirements(course, "make");
-    expect(requirements).toMatchObject({ durationMin: 60, outputs: "个人教案和理由说明", evaluationCriteria: "用理论解释设计选择，并提供学习证据" });
+    expect(requirements).toMatchObject({ drivingQuestion: "如何设计课程？", durationMin: 60, outputs: "个人教案和理由说明", evaluationCriteria: "用理论解释设计选择，并提供学习证据" });
     expect(requirements?.requirements).toContain("每位学生与自己的 AI 伙伴");
     expect(requirements?.requirements).not.toContain("4-6人");
     expect(requirements?.requirements).toContain("比较教学理论后设计一节课");
@@ -29,6 +29,7 @@ describe("resource-package classroom requirements", () => {
   it("feeds document and code shared context without raw package files or teacher private actions", () => {
     const context = buildAuthoritativeCourseContext(resourceCourse(), "student-1", "make");
     expect(context).toContain("计划时长：60 分钟");
+    expect(context).toContain("资源包驱动问题：如何设计课程？");
     expect(context).toContain("交付要求：个人教案和理由说明");
     expect(context).toContain("课程评价标准：用理论解释设计选择");
     expect(context).not.toContain("教师私有资料原文");

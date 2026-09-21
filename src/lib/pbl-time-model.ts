@@ -56,6 +56,10 @@ export type PblTimeActivity = {
   activityKind?: PblTimeActivityKind;
   durationMin: number;
   knowledgePointIds?: string[];
+  /** Teacher-private requirement trace and planning explanation. */
+  requirementIds?: string[];
+  difficultyStrategies?: import("@/lib/course-quality-review/types").TeachingDifficultyStrategy[];
+  notes?: string;
 };
 
 export type PblModuleTimingStatus = 'suggested' | 'confirmed';

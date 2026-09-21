@@ -58,6 +58,32 @@ describe("reviewed knowledge structure generation", () => {
     expect(result.knowledgeGraph?.nodes.find((node) => node.id === "stable-leaf")?.groupName).toBe("语言理解");
   });
 
+  it("preserves a substantive parent concept and its prerequisite relation to detail concepts", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+      knowledgePoints: [
+        { id: "constructivism", name: "建构主义学习理论", description: "学习者主动建构意义。" },
+        { id: "assimilation", name: "同化与顺应", description: "认知结构通过同化和顺应发生变化。" },
+      ],
+      knowledgeGraph: { nodes: [], edges: [] },
+    }));
+    const result = await generateKnowledgeStructureOnce(input, {
+      teacherKnowledgePoints: [
+        { id: "constructivism", name: "建构主义学习理论", description: "学习者主动建构意义。", groupId: "constructivism", groupName: "建构主义学习理论", teachingRole: "core-concept" },
+        { id: "assimilation", name: "同化与顺应", description: "认知结构的变化机制。", groupId: "constructivism", groupName: "建构主义学习理论", teachingRole: "detail-concept", parentKnowledgePointId: "constructivism" },
+      ],
+    }, { modelCall });
+
+    expect(result.knowledgePoints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "constructivism", teachingRole: "core-concept" }),
+      expect.objectContaining({ id: "assimilation", teachingRole: "detail-concept", parentKnowledgePointIds: ["constructivism"] }),
+    ]));
+    expect(result.knowledgeGraph?.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "constructivism", teachingRole: "core-concept" }),
+      expect.objectContaining({ id: "assimilation", parentKnowledgePointIds: ["constructivism"] }),
+    ]));
+    expect(modelCall.mock.calls[0][0][0].content).toContain("core-concept");
+  });
+
   it("keeps every resource-package leaf even when the model tries to collapse the catalog", async () => {
     const teacherKnowledgePoints = Array.from({ length: 20 }, (_, index) => ({
       id: `source-${index + 1}`,

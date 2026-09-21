@@ -274,4 +274,37 @@ describe("fast draft and section-wide teaching review", () => {
       expect.objectContaining({ title: "小节缺少预定理解标准", blocking: true }),
     ]));
   });
+
+  it("requires actual narration to name a core parent concept on its definition page", () => {
+    const course = confirmedCourse();
+    const savedOutline = course.content._openmaicSceneOutlines![0]!;
+    course.content.knowledgePoints = [{ id: "kp", name: "建构主义学习理论", description: "学习者主动建构意义。", teachingRole: "core-concept" }];
+    savedOutline.knowledgePointIds = ["kp"];
+    savedOutline.teachingBrief = normalizeTeachingBrief({ ...savedOutline, description: "解释学习者主动建构意义。", keyPoints: ["学习者主动建构意义"] } as SceneOutline);
+    savedOutline.teachingBrief.teachingPlan = {
+      purpose: "建立建构主义学习理论", priorKnowledge: "知道学习会改变已有认识",
+      newContent: "建构主义学习理论主张学习者主动建构意义。", learnerQuestion: "新经验怎样改变已有认知结构",
+      reasoningSteps: ["先建立理论，再说明同化与顺应。"], takeaway: "学习是主动建构意义的过程",
+      visibleContent: ["建构主义学习理论：学习者主动建构意义"], narrationFocus: ["解释基本含义和核心主张"],
+    };
+    course.content.teachingBlueprint = {
+      schemaVersion: 2, inputFingerprint: "input", assessmentMode: "adaptive", createdAt: "2026-09-12T00:00:00Z",
+      budget: { totalDurationSec: 300, teachingDurationSec: 240, learnerActivityDurationSec: 0, assessmentDurationSec: 60, teachingRatio: 0.8, assessmentRatio: 0.2 },
+      sections: [{
+        id: "section", title: "理论基础", order: 0, learningObjective: "解释建构主义学习理论", knowledgePointIds: ["kp"],
+        sharedContext: { learningPurpose: "理解教学原则", caseId: "", caseFacts: [], fixedWording: [], stableTerms: ["建构主义学习理论"], conceptBoundaries: [] },
+        units: [{ id: "unit", title: "理论定义", knowledgePointIds: ["kp"], learningOutcome: "解释理论", explanation: "学习者主动建构意义。", mechanism: "新经验与已有认知结构相互作用。", workedExample: "", conditions: [], misconceptions: [], sourceKind: "general-knowledge", evidenceQuotes: [], explanationNodes: [{ id: "definition", kind: "concept", content: "建构主义学习理论的基本含义与核心主张", knowledgePointIds: ["kp"], prerequisiteNodeIds: [], provenance: "general-knowledge" }] }],
+        pages: [{ id: savedOutline.id, outlineId: savedOutline.id, title: savedOutline.title, type: "slide", unitIds: ["unit"], knowledgePointIds: ["kp"], description: savedOutline.description ?? "", keyPoints: savedOutline.keyPoints ?? [], teachingObjective: "解释理论", introducesNodeIds: ["definition"] }],
+        assessmentFocus: ["解释理论"], understandingCriteria: { goals: ["解释理论"], answerEssentials: ["主动建构意义"], misconceptions: ["把学习看成被动接收"], supportingUnitIds: ["unit"] },
+        teachingDurationSec: 240, learnerActivityDurationSec: 0, assessmentDurationSec: 60,
+      }],
+    };
+    const actual = structuredClone(scene);
+    actual.actions = [{ id: "speech", type: "speech", text: "下面只讲同化和顺应两个机制。" }];
+    expect(collectCourseStructureIssues(course, [actual])).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "核心概念解释未进入实际讲稿", blocking: true }),
+    ]));
+    actual.actions = [{ id: "speech", type: "speech", text: "建构主义学习理论主张学习者主动建构意义，同化和顺应说明认知结构怎样变化。" }];
+    expect(collectCourseStructureIssues(course, [actual]).some((issue) => issue.title === "核心概念解释未进入实际讲稿")).toBe(false);
+  });
 });

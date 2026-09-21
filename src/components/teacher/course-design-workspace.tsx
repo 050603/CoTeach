@@ -529,6 +529,39 @@ function StageCard({ stage, index, update }: { stage: ResourcePackageStage; inde
   );
 }
 
+function RequirementTracePanel({ course }: { course: Course }) {
+  const requirements = course.content.teachingRequirements;
+  if (!requirements?.items.length && !requirements?.conflicts.length) return null;
+  const blueprintSections = course.content.teachingBlueprint?.sections ?? [];
+  return (
+    <div className="rounded-[10px] border border-violet-200 bg-violet-50 p-4">
+      <div className="flex items-center gap-2 text-sm font-black text-violet-950"><ShieldCheck size={17} />教学要求落实位置</div>
+      <div className="mt-3 space-y-3">
+        {requirements.items.map((requirement) => {
+          const mappedPoints = course.content.knowledgePoints.filter((point) => {
+            const sourceIds = new Set([point.id, ...(point.sourceKnowledgePointIds ?? [])]);
+            return requirement.sourceKnowledgePointIds.some((id) => sourceIds.has(id));
+          });
+          const matchedUnits = blueprintSections.flatMap((section) => section.units
+            .filter((unit) => unit.requirementIds?.includes(requirement.id))
+            .map((unit) => ({ section, unit })));
+          const pageNames = [...new Set(matchedUnits.flatMap(({ section, unit }) => section.pages
+            .filter((page) => page.unitIds.includes(unit.id)).map((page) => page.title)))];
+          return (
+            <article className="rounded-[8px] border border-violet-200 bg-white p-3 text-xs leading-5" key={requirement.id}>
+              <div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-violet-100 px-2 py-0.5 font-bold text-violet-800">{requirement.kind === "highlight" ? "教学重点" : requirement.kind === "difficulty" ? "教学难点" : requirement.kind === "teacher-directive" ? "教师补充" : "阶段要求"}</span><b className="text-stone-900">{requirement.text}</b></div>
+              <p className="mt-1 text-stone-600">知识：{mappedPoints.map((point) => point.name).join("、") || "全局要求"}</p>
+              <p className={matchedUnits.length || requirement.appliesTo === "other-stage" ? "text-emerald-700" : "font-bold text-amber-800"}>小节 / 单元：{matchedUnits.map(({ section, unit }) => `${section.title} / ${unit.title}`).join("、") || (requirement.appliesTo === "other-stage" ? "适用于项目实践、展示或反思阶段" : "尚未落实")}</p>
+              <p className="text-stone-600">页面：{pageNames.join("、") || (requirement.appliesTo === "other-stage" ? "不进入 AI 知识讲授页面" : "尚未定位")}</p>
+            </article>
+          );
+        })}
+        {requirements.conflicts.map((conflict) => <article className="rounded-[8px] border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-950" key={conflict.id}><b>未解决冲突：{conflict.summary}</b><p>{conflict.detail}</p></article>)}
+      </div>
+    </div>
+  );
+}
+
 function KnowledgeEditor({ course, edit }: { course: Course; edit: (fn: (course: Course) => void) => void }) {
   const points = course.content.knowledgePoints;
   if (!points.length) return <MissingArtifact courseId={course.id} label="知识结构" />;
@@ -583,6 +616,7 @@ function KnowledgeEditor({ course, edit }: { course: Course; edit: (fn: (course:
   }
   return (
     <div className="space-y-6 p-5 sm:p-7">
+      <RequirementTracePanel course={course} />
       {course.content.knowledgeScopePlan ? <div className="grid gap-3 rounded-[10px] border border-blue-200 bg-blue-50 p-4 text-sm sm:grid-cols-4"><div><b>{course.content.knowledgeScopePlan.planningDurationMin}</b><span className="block text-xs text-blue-700">规划分钟</span></div><div><b>{course.content.knowledgeScopePlan.sourcePointCount}</b><span className="block text-xs text-blue-700">来源知识点</span></div><div><b>{course.content.knowledgeScopePlan.targetPointCount}</b><span className="block text-xs text-blue-700">课程知识点</span></div><p className="leading-5 text-blue-900 sm:col-span-1">{course.content.knowledgeScopePlan.rationale}</p></div> : null}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><h3 className="text-sm font-black text-stone-900">知识点与分组</h3><p className="mt-1 text-xs text-stone-500">来源映射保留原始资料记录；修改分组或范围后会计算实际受影响的小节。</p></div>
@@ -597,6 +631,8 @@ function KnowledgeEditor({ course, edit }: { course: Course; edit: (fn: (course:
             <Field label="知识分组名称"><input className={INPUT} value={point.groupName ?? ""} onChange={(event) => updatePoint(index, (next) => { next.groupName = event.target.value; })} /></Field>
             <Field label="分组标识"><input className={INPUT} value={point.groupId ?? ""} onChange={(event) => updatePoint(index, (next) => { next.groupId = event.target.value; })} /></Field>
             <Field label="来源映射"><input className={`${INPUT} bg-stone-50`} readOnly value={(point.sourceKnowledgePointNames ?? []).join("、") || point.sourceId || "未记录来源映射"} /></Field>
+            <Field label="教学责任"><input className={`${INPUT} bg-stone-50`} readOnly value={point.teachingRole === "core-concept" ? "需先正式建立的核心概念" : point.teachingRole === "detail-concept" ? "下位机制、原则或应用" : "常规知识点"} /></Field>
+            <Field label="上位概念"><input className={`${INPUT} bg-stone-50`} readOnly value={(point.parentKnowledgePointIds ?? []).map((id) => points.find((item) => item.id === id)?.name ?? id).join("、") || "无"} /></Field>
             <div className="lg:col-span-2"><Field label="掌握边界"><input className={INPUT} value={point.masteryBoundary ?? ""} onChange={(event) => updatePoint(index, (next) => { next.masteryBoundary = event.target.value; })} /></Field></div>
             <div className="flex items-end justify-end"><button className="inline-flex min-h-11 items-center gap-2 rounded-[8px] px-3 text-xs font-bold text-red-700 disabled:opacity-40" disabled={points.length === 1} onClick={() => removePoint(point.id)} type="button"><Trash2 size={14} />删除知识点</button></div>
           </article>
@@ -624,7 +660,7 @@ function TimingEditor({ course, edit }: { course: Course; edit: (fn: (course: Co
       <div className="space-y-3">
         {plan.allocations.map((allocation, index) => (
           <article className="grid gap-4 rounded-[10px] border border-stone-200 p-4 md:grid-cols-[minmax(0,1fr)_150px]" key={allocation.id}>
-            <div><p className="text-sm font-bold text-stone-900">{allocation.title || `知识簇 ${index + 1}`}</p><p className="mt-1 text-xs leading-5 text-stone-500">{(allocation.knowledgePointIds ?? []).map((id) => course.content.knowledgePoints.find((point) => point.id === id)?.name ?? id).join("、")}</p></div>
+            <div><p className="text-sm font-bold text-stone-900">{allocation.title || `知识簇 ${index + 1}`}</p><p className="mt-1 text-xs leading-5 text-stone-500">{(allocation.knowledgePointIds ?? []).map((id) => course.content.knowledgePoints.find((point) => point.id === id)?.name ?? id).join("、")}</p>{allocation.notes ? <p className="mt-2 whitespace-pre-line text-xs leading-5 text-violet-800">{allocation.notes}</p> : null}</div>
             <Field label="时长（分钟）"><input className={INPUT} min="1" type="number" value={allocation.durationMin} onChange={(event) => edit((next) => { if (next.content.moduleTimingPlan) next.content.moduleTimingPlan.allocations[index]!.durationMin = Number(event.target.value); })} /></Field>
           </article>
         ))}
@@ -653,7 +689,7 @@ function BlueprintEditor({ course, edit }: { course: Course; edit: (fn: (course:
   });
   return (
     <div className="space-y-5 p-5 sm:p-7">
-      <div className="flex flex-wrap gap-2 text-xs"><span className="rounded-full border border-stone-200 px-3 py-1.5">{blueprint.sections.length} 个知识小节</span><span className="rounded-full border border-stone-200 px-3 py-1.5">{blueprint.sections.reduce((sum, section) => sum + section.pages.length, 0)} 个讲授页面</span><span className="rounded-full border border-stone-200 px-3 py-1.5">检测模式：{blueprint.assessmentMode === "adaptive" ? "灵活题型" : "综合简答"}</span></div>
+      <div className="flex flex-wrap gap-2 text-xs"><span className="rounded-full border border-stone-200 px-3 py-1.5">{blueprint.sections.length} 个知识小节</span><span className="rounded-full border border-stone-200 px-3 py-1.5">{blueprint.sections.reduce((sum, section) => sum + section.pages.length, 0)} 个讲授页面</span><span className="rounded-full border border-stone-200 px-3 py-1.5">检测模式：{blueprint.assessmentMode === "adaptive" ? "普通检测" : "综合简答"}</span></div>
       {blueprint.sections.map((section, sectionIndex) => (
         <article className="overflow-hidden rounded-[10px] border border-stone-200" key={section.id}>
           <div className="grid gap-4 border-b border-stone-200 bg-stone-50 p-4 md:grid-cols-[minmax(0,1fr)_150px_150px_150px]">

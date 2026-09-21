@@ -1,4 +1,4 @@
-import type { SceneOutline } from "@openmaic/lib/types/generation";
+import type { AssessmentMode, SceneOutline } from "@openmaic/lib/types/generation";
 
 function isStudentKnowledgeScene(outline: SceneOutline): boolean {
   return (
@@ -15,8 +15,12 @@ function normalizeSectionQuiz(
   quiz: SceneOutline | undefined,
   knowledgePointIds: string[],
   sectionIndex: number,
+  assessmentMode: AssessmentMode,
 ): SceneOutline {
-  const questionCount = knowledgePointIds.length >= 3 ? 3 : 2;
+  const constructedResponse = assessmentMode === "constructed-response";
+  const questionCount = constructedResponse
+    ? 1
+    : Math.max(2, Math.min(4, knowledgePointIds.length >= 3 ? 3 : 2));
   const plannedSeconds = quiz?.targetDurationSec ?? quiz?.estimatedDuration;
   const targetDurationSec = typeof plannedSeconds === "number" && Number.isFinite(plannedSeconds)
     ? Math.max(120, Math.min(300, Math.round(plannedSeconds)))
@@ -26,7 +30,9 @@ function normalizeSectionQuiz(
     id: quiz?.id || `section-${sectionIndex + 1}-check-${anchor.id || "knowledge"}`,
     type: "quiz",
     title: `第 ${sectionIndex + 1} 节 · 节末小测`,
-    description: `围绕本小节设置 ${questionCount} 道简短主观题。学生只需用关键词和一两句话作答，预计 ${Math.round(targetDurationSec / 60)} 分钟完成；每题必须标注对应知识点并提供 AI 评分要点。`,
+    description: constructedResponse
+      ? `围绕本小节设置 1 道综合简答题，要求学生给出结论与理由，预计 ${Math.round(targetDurationSec / 60)} 分钟完成。`
+      : `围绕本小节设置 ${questionCount} 道单选、多选、判断、填空或必要的配对题，全部题目合计覆盖本小节所有知识点，预计 ${Math.round(targetDurationSec / 60)} 分钟完成。`,
     keyPoints: unique([...(quiz?.keyPoints ?? []), ...(anchor.keyPoints ?? [])]),
     teachingObjective: "形成小节级知识点理解证据，并在提交后进入 AI 助教逐题讲解。",
     detailKind: "other",
@@ -36,8 +42,13 @@ function normalizeSectionQuiz(
     ttsPolicy: "target-duration",
     quizConfig: {
       difficulty: quiz?.quizConfig?.difficulty ?? "medium",
-      questionTypes: ["short_answer"],
+      questionTypes: constructedResponse
+        ? ["short_answer"]
+        : ["single", "multiple", "true_false", "fill_blank", "matching"],
       questionCount,
+      coveragePolicy: "section-synthesis",
+      minShortAnswerQuestions: constructedResponse ? 1 : 0,
+      maxShortAnswerQuestions: constructedResponse ? 1 : 0,
     },
     widgetType: undefined,
     widgetOutline: undefined,
@@ -53,11 +64,12 @@ function normalizeSectionQuiz(
 
 /**
  * Keeps generated knowledge sections intact and guarantees that each section
- * ends with a short subjective check. Older outlines with no section markers
- * remain one section for backward compatibility.
+ * ends with the selected assessment mode. Older outlines with no section
+ * markers remain one section for backward compatibility.
  */
 export function ensureTerminalMasteryAssessment(
   outlines: readonly SceneOutline[],
+  assessmentMode: AssessmentMode = "adaptive",
 ): SceneOutline[] {
   const studentKnowledge = outlines.filter(isStudentKnowledgeScene);
   if (studentKnowledge.length === 0) return [...outlines];
@@ -83,7 +95,7 @@ export function ensureTerminalMasteryAssessment(
     const anchor = section.teaching.at(-1)!;
     return [
       ...section.teaching,
-      normalizeSectionQuiz(anchor, section.quiz, knowledgePointIds, sectionIndex),
+      normalizeSectionQuiz(anchor, section.quiz, knowledgePointIds, sectionIndex, assessmentMode),
     ];
   });
 

@@ -918,6 +918,8 @@ export type TeachingBlueprintUnit = {
   explanationNodes?: TeachingExplanationNode[];
   /** Relative effort estimated by the planner; normalized against the real input budget. */
   estimatedTeachingWeight?: number;
+  requirementIds?: string[];
+  difficultyStrategies?: import("@/lib/course-quality-review/types").TeachingDifficultyStrategy[];
   reviewItems?: import("@/lib/course-quality-review/types").TeacherReviewItem[];
 };
 
@@ -1790,8 +1792,12 @@ export type CourseTeachingRequirement = {
   kind: "teacher-directive" | "highlight" | "difficulty" | "stage-requirement";
   source: "teacher" | "resource-package";
   text: string;
+  /** Whether this requirement belongs in AI knowledge teaching or a later PBL stage. */
+  appliesTo?: "ai-learning" | "other-stage" | "course-wide";
   /** Source-package responsibilities named or scoped by this requirement. */
   sourceKnowledgePointIds: string[];
+  /** Original resource-package location retained for teacher traceability. */
+  sourceEvidence?: import("@/lib/resource-package/types").ResourcePackageSource[];
 };
 
 export type CourseTeachingRequirements = {
@@ -1801,7 +1807,7 @@ export type CourseTeachingRequirements = {
     id: string;
     summary: string;
     detail: string;
-    source: "resource-package";
+    source: "teacher" | "resource-package";
   }>;
 };
 

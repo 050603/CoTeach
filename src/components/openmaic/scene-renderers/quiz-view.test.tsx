@@ -7,6 +7,51 @@ import { I18nProvider } from "@openmaic/lib/hooks/use-i18n";
 import { QuizView } from "./quiz-view";
 
 describe("QuizView single-attempt review", () => {
+  it("renders ordinary checks as direct choices and a one-line fill input", async () => {
+    const questions: QuizQuestion[] = [
+      {
+        id: "single-1",
+        type: "single",
+        format: "single_choice",
+        question: "训练集的主要用途是什么？",
+        options: [{ value: "A", label: "学习模型参数" }, { value: "B", label: "最终独立评估" }],
+        answer: ["A"],
+        points: 10,
+      },
+      {
+        id: "judge-1",
+        type: "single",
+        format: "true_false",
+        question: "测试集可以反复用于调参。",
+        options: [{ value: "true", label: "正确" }, { value: "false", label: "错误" }],
+        answer: ["false"],
+        points: 10,
+      },
+      {
+        id: "blank-1",
+        type: "short_answer",
+        format: "fill_blank",
+        question: "测试集用于____模型的泛化表现。",
+        commentPrompt: "填写一个短语即可。",
+        points: 10,
+      },
+    ];
+
+    render(
+      <I18nProvider>
+        <KnowledgeLectureQuizLockProvider attemptsBySceneId={new Map()}>
+          <QuizView questions={questions} quizOutlineId="quiz-objective" sceneId="scene-objective" />
+        </KnowledgeLectureQuizLockProvider>
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /开始答题|Start Quiz/ }));
+    expect(await screen.findByRole("button", { name: /学习模型参数/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /错误/ })).toBeTruthy();
+    expect(screen.getByPlaceholderText("填写关键概念或关系").tagName).toBe("INPUT");
+    expect(screen.queryByRole("textbox", { name: /理由/ })).toBeNull();
+  });
+
   it("restores the server submission as read-only and never renders a retry action", () => {
     const questions = [{
       id: "question-1",

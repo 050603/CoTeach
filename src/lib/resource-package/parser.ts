@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { readBoundedZip, ResourcePackageError, type ArchiveEntry } from "./archive";
-import { emptyResourcePackageDraft, RESOURCE_PACKAGE_STAGE_KEYS, type HandoffDocumentMetadata, type ResourcePackageDraft, type ResourcePackageHandoffMetadata, type ResourcePackagePlanningIssue, type ResourcePackageRole, type ResourcePackageSource } from "./types";
+import { emptyResourcePackageDraft, inferResourcePackageShowcasePlan, RESOURCE_PACKAGE_STAGE_KEYS, type HandoffDocumentMetadata, type ResourcePackageDraft, type ResourcePackageHandoffMetadata, type ResourcePackagePlanningIssue, type ResourcePackageRole, type ResourcePackageSource } from "./types";
 
 export { ResourcePackageError } from "./archive";
 export const RESOURCE_PACKAGE_ROLES: ResourcePackageRole[] = ["knowledge", "lessonPlan", "launchPresentation"];
@@ -22,6 +22,7 @@ export const resourcePackageDraftSchema = z.object({
   reflectionQuestionSet: z.object({ id: z.string().max(200), version: z.number().int().positive(), questions: z.array(z.object({ id: z.string().max(200), prompt: z.string().max(4000), required: z.boolean() })).max(100) }).optional(),
   preClassPreparation: z.array(z.string().max(4000)).max(100).optional(), organizationRequirements: z.array(z.string().max(4000)).max(100).optional(), aiUsagePolicy: z.string().max(8000).optional(),
   teachingHighlights: z.array(z.string().max(8000)).max(100).optional(), teachingDifficulties: z.array(z.string().max(8000)).max(100).optional(), facilitatorReference: z.array(z.string().max(8000)).max(100).optional(),
+  showcasePlan: z.object({ presenterCount: z.number().int().positive().max(500).optional(), presentationSec: z.number().int().min(0).max(3600).optional(), discussionSec: z.number().int().min(0).max(1800).optional(), transitionSec: z.number().int().min(0).max(600).optional() }).strict().optional(),
   knowledgeEvidenceSummary: z.object({ overallStatus: z.enum(["SUPPORTED", "PARTIAL", "UNSUPPORTED"]), gaps: z.array(z.string().max(8000)).max(100) }).optional(),
 }).strict();
 
@@ -192,6 +193,7 @@ export function parseResourcePackageDraft(knowledge: ReturnType<typeof readDocx>
     draft.sourceEvidence[`stages.${stage.key}`] = [...(draft.sourceEvidence[`stages.${stage.key}`] ?? []), source("lessonPlan", lines.indexOf(line), line)];
   }
   if (!draft.totalMinutes && draft.stages.every((stage) => stage.durationMin !== null)) draft.totalMinutes = draft.stages.reduce((total, stage) => total + stage.durationMin!, 0);
+  draft.showcasePlan = inferResourcePackageShowcasePlan(draft.stages.find((item) => item.key === "showcase"));
   draft.expectedOutcome = metadata(blocks, ["项目成果", "成果要求", "交付物"]) || draft.stages.find((stage) => stage.key === "make")?.outputs || "";
   const checkpoints = lines.filter((line) => /^第[一二三四五六七八九十\d]+课时[末中前后][：:]/.test(line));
   draft.stages.find((stage) => stage.key === "make")!.checkpoints = checkpoints;
@@ -395,6 +397,7 @@ export function parseMarkdownResourcePackageDraft(knowledge: MarkdownResourceDoc
     }
   }
   if (!draft.totalMinutes && draft.stages.every((stage) => stage.durationMin !== null)) draft.totalMinutes = draft.stages.reduce((sum, stage) => sum + stage.durationMin!, 0);
+  draft.showcasePlan = inferResourcePackageShowcasePlan(draft.stages.find((item) => item.key === "showcase"));
 
   const learningRange = sectionRange(knowledge.lines, "学习范围", 2);
   if (learningRange) {

@@ -13,8 +13,9 @@ import { readTemplateContent, templateContentSchema, type TemplateContent } from
 import { decodePblTemplate } from "@/lib/platform/pbl-template";
 import { teacherPlatformFetch } from "@/lib/platform/client";
 import { TeacherPlatformHeader, TeacherPlatformPage } from "@/components/platform/teacher-shell";
+import { coursePreparationHref, isCourseGenerationActive } from "@/lib/courses/preparation-navigation";
 
-type Template = { id: string; title: string; description: string | null; status: string; versions: Array<{ id: string; version: number; status: string; createdAt: string; snapshot: unknown }> };
+type Template = { id: string; title: string; description: string | null; status: string; generationStatus?: string | null; versions: Array<{ id: string; version: number; status: string; createdAt: string; snapshot: unknown }> };
 const field = "min-h-11 w-full rounded-[6px] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pbl-teacher)]";
 const primary = "inline-flex min-h-11 items-center justify-center gap-2 rounded-[6px] bg-[var(--pbl-teacher)] px-5 text-sm font-medium text-white disabled:opacity-50";
 const emptyContent = (): TemplateContent => ({ schemaVersion: 1, title: "", subject: "", grade: "", durationMinutes: 45, summary: "", learningObjectives: [""], outline: [{ title: "", durationMinutes: 45, description: "" }], resources: [] });
@@ -155,7 +156,8 @@ export default function TeacherTemplatesPage() {
         const detail = readTemplateContent(template.versions[0]?.snapshot);
         const pbl = decodePblTemplate(template.versions[0]?.snapshot);
         const archived = template.status.toLowerCase() === "archived";
-        const courseHref = `/teacher/prepare/${template.id}/preview`;
+        const generating = isCourseGenerationActive(template.generationStatus);
+        const courseHref = coursePreparationHref(template.id, template.generationStatus);
         const cardBody = <>
           <div className={"pbl-library-art" + (pbl?.coverImageUrl ? " pbl-library-art-cover" : "")}>
             {pbl?.coverImageUrl
@@ -163,7 +165,7 @@ export default function TeacherTemplatesPage() {
               : <LearningArt />}
             <span>{pbl ? "项目式学习" : "课程设计"}</span>
           </div>
-          <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-xs font-medium text-[var(--pbl-teacher)]"><BookOpen size={16}/>{detail?.subject || "课堂教学"}</span><span className="text-xs text-[var(--pbl-text-muted)]">第 {template.versions[0]?.version ?? 1} 版</span></div>
+          <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-xs font-medium text-[var(--pbl-teacher)]"><BookOpen size={16}/>{detail?.subject || "课堂教学"}</span><span className="text-xs text-[var(--pbl-text-muted)]">{generating ? "生成中" : `第 ${template.versions[0]?.version ?? 1} 版`}</span></div>
           <h2 className="pbl-template-card-title" title={template.title}>{template.title}</h2>
           <p className="pbl-template-card-description">{detail?.summary || template.description || "打开课程查看内容与版本信息。"}</p>
           <div className="pbl-template-card-meta">{detail && <><span><Clock3 size={14}/>{detail.durationMinutes} 分钟</span><span>{detail.outline.length} 个教学环节</span>{detail.grade && <span>{detail.grade}</span>}</>}</div>
@@ -177,7 +179,7 @@ export default function TeacherTemplatesPage() {
             <div className="pbl-template-card-main">{cardBody}</div>
           )}
           <div className="pbl-template-card-footer">
-            {!archived && pbl ? <Link className="flex min-h-11 items-center gap-2 text-sm font-medium text-[var(--pbl-teacher)]" href={courseHref}>继续备课<ArrowRight size={16}/></Link> : !pbl ? <button className="flex min-h-11 items-center gap-2 text-sm font-medium text-[var(--pbl-teacher)]" onClick={() => setPreview(template)}>查看课程<ArrowRight size={16}/></button> : <span className="text-xs text-[var(--pbl-text-muted)]">已归档，恢复后可继续备课</span>}
+            {!archived && pbl ? <Link className="flex min-h-11 items-center gap-2 text-sm font-medium text-[var(--pbl-teacher)]" href={courseHref}>{generating ? "查看生成进度" : "继续备课"}<ArrowRight size={16}/></Link> : !pbl ? <button className="flex min-h-11 items-center gap-2 text-sm font-medium text-[var(--pbl-teacher)]" onClick={() => setPreview(template)}>查看课程<ArrowRight size={16}/></button> : <span className="text-xs text-[var(--pbl-text-muted)]">已归档，恢复后可继续备课</span>}
             {archived ? <span className="flex items-center gap-1">
               <button className="grid min-h-11 min-w-11 place-items-center text-[var(--pbl-teacher)]" aria-label={`恢复 ${template.title}`} disabled={Boolean(busy)} onClick={() => void restore(template)}><RotateCcw size={16}/></button>
               <button className="grid min-h-11 min-w-11 place-items-center text-[var(--pbl-danger)]" aria-label={`删除 ${template.title}`} disabled={Boolean(busy)} onClick={() => setDeleteTarget(template)}><Trash2 size={16}/></button>

@@ -29,6 +29,14 @@ export type ResourcePackageEvaluationRubric = {
 };
 export type ResourcePackageReflectionQuestionSet = { id: string; version: number; questions: { id: string; prompt: string; required: boolean }[] };
 export type ResourcePackageDeliverable = { id: string; name: string; format: string; requirements: string; required: boolean };
+export type ResourcePackageShowcasePlan = {
+  /** Number of students the lesson plan asks the teacher to select for live reporting. */
+  presenterCount?: number;
+  /** Per-student live reporting time, excluding discussion and hand-off time. */
+  presentationSec?: number;
+  discussionSec?: number;
+  transitionSec?: number;
+};
 export type ResourcePackageConflict = { id: string; kind: "organization" | "evaluation" | "presentation"; summary: string; reason: string; suggestion: string; evidence: ResourcePackageSource[] };
 export type ResourcePackageStage = {
   key: ResourcePackageStageKey;
@@ -81,6 +89,7 @@ export type ResourcePackageDraft = {
   teachingHighlights?: string[];
   teachingDifficulties?: string[];
   facilitatorReference?: string[];
+  showcasePlan?: ResourcePackageShowcasePlan;
   knowledgeEvidenceSummary?: { overallStatus: "SUPPORTED" | "PARTIAL" | "UNSUPPORTED"; gaps: string[] };
 };
 /** Teacher-only authoring metadata. Never send this field in student snapshots. */
@@ -106,6 +115,7 @@ export type CourseResourcePackage = {
 export type CourseStagePlan = {
   schemaVersion: 1 | 2;
   source: "resource-package";
+  drivingQuestion?: string;
   totalMinutes: number;
   lessonCount: number | null;
   minutesPerLesson: number | null;
@@ -116,6 +126,7 @@ export type CourseStagePlan = {
   reflectionQuestionSet?: ResourcePackageReflectionQuestionSet;
   finalDeliverables?: ResourcePackageDeliverable[];
   aiUsagePolicy?: string;
+  showcasePlan?: ResourcePackageShowcasePlan;
 };
 export type ResourcePackageJobSnapshot = {
   id: string;
@@ -174,7 +185,7 @@ export function resourcePackageDraftErrors(draft: ResourcePackageDraft): string[
 export function stagePlanFromResourcePackage(draft: ResourcePackageDraft): CourseStagePlan {
   const errors = resourcePackageDraftErrors(draft);
   if (errors.length) throw new Error(errors.join("\n"));
-  return { schemaVersion: draft.parsingVersion === 2 ? 2 : 1, source: "resource-package", totalMinutes: draft.totalMinutes!,
+  return { schemaVersion: draft.parsingVersion === 2 ? 2 : 1, source: "resource-package", drivingQuestion: draft.drivingQuestion, totalMinutes: draft.totalMinutes!,
     lessonCount: draft.lessonCount, minutesPerLesson: draft.minutesPerLesson,
     stages: draft.stages.map((stage) => draft.parsingVersion === 2 ? { ...stage } : ({ ...stage,
       requirements: adaptPersonalProjectText(stage.requirements), outputs: adaptPersonalProjectText(stage.outputs),
@@ -182,7 +193,52 @@ export function stagePlanFromResourcePackage(draft: ResourcePackageDraft): Cours
     })), evaluationCriteria: draft.parsingVersion === 2 ? draft.evaluationCriteria : adaptPersonalProjectText(draft.evaluationCriteria),
     reflectionQuestions: draft.reflectionQuestionSet?.questions.map((question) => question.prompt) ?? draft.reflectionQuestions.map(adaptPersonalProjectText),
     evaluationRubric: draft.evaluationRubric, reflectionQuestionSet: draft.reflectionQuestionSet, finalDeliverables: draft.finalDeliverables,
-    aiUsagePolicy: draft.aiUsagePolicy };
+    aiUsagePolicy: draft.aiUsagePolicy, showcasePlan: draft.showcasePlan ?? inferResourcePackageShowcasePlan(draft.stages.find((stage) => stage.key === "showcase")) };
+}
+
+const CHINESE_NUMERALS: Record<string, number> = { "零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10 };
+
+function packageNumber(value: string): number | undefined {
+  if (/^\d+$/.test(value)) return Number(value);
+  if (value === "十") return 10;
+  if (value.startsWith("十")) return 10 + (CHINESE_NUMERALS[value.slice(1)] ?? 0);
+  if (value.endsWith("十")) return (CHINESE_NUMERALS[value.slice(0, -1)] ?? 0) * 10;
+  const tens = value.match(/^([一二两三四五六七八九])十([一二两三四五六七八九])$/);
+  if (tens) return (CHINESE_NUMERALS[tens[1]] ?? 0) * 10 + (CHINESE_NUMERALS[tens[2]] ?? 0);
+  return CHINESE_NUMERALS[value];
+}
+
+function durationSeconds(text: string, expressions: RegExp[], maximum: number): number | undefined {
+  for (const expression of expressions) {
+    const match = text.match(expression);
+    if (!match) continue;
+    const amount = Number(match[1]);
+    const seconds = match[2] === "分钟" ? amount * 60 : amount;
+    if (Number.isFinite(seconds) && seconds >= 0 && seconds <= maximum) return seconds;
+  }
+  return undefined;
+}
+
+/** Extract only explicit fourth-stage logistics; absent values stay absent instead of being invented. */
+export function inferResourcePackageShowcasePlan(stage?: ResourcePackageStage): ResourcePackageShowcasePlan | undefined {
+  if (!stage) return undefined;
+  const text = [stage.requirements, stage.teacherActions, stage.aiActions, stage.outputs].filter(Boolean).join("\n");
+  const countMatch = text.match(/(?:随机)?(?:抽取|选取|选择|邀请|安排|点名|推荐)\s*(?:约)?\s*([\d一二两三四五六七八九十]+)\s*(?:名|位|个)\s*(?:学生|同学|代表|个人|作品|小组)/)
+    ?? text.match(/([\d一二两三四五六七八九十]+)\s*(?:名|位)\s*(?:学生|同学|代表).{0,12}(?:展示|汇报|陈述)/);
+  const presenterCount = countMatch ? packageNumber(countMatch[1]) : undefined;
+  const presentationSec = durationSeconds(text, [
+    /(?:每(?:名|位)?(?:学生|同学|人|组)|每人|每组).{0,12}?(?:展示|汇报|陈述|限时|用时|时长).{0,8}?(\d+)\s*(分钟|秒)/,
+    /(?:展示|汇报|陈述)(?:时长|时间)?\s*(?:为|控制在|不超过|约|共|：|:)?\s*(\d+)\s*(分钟|秒)/,
+  ], 3600);
+  const discussionSec = durationSeconds(text, [/(?:提问|问答|答疑|讨论|点评)(?:时长|时间)?\s*(?:为|控制在|不超过|约|共|：|:)?\s*(\d+)\s*(分钟|秒)/], 1800);
+  const transitionSec = durationSeconds(text, [/(?:衔接|换场|切换)(?:时长|时间)?\s*(?:为|控制在|不超过|约|共|：|:)?\s*(\d+)\s*(分钟|秒)/], 600);
+  const plan = {
+    ...(presenterCount && presenterCount <= 500 ? { presenterCount } : {}),
+    ...(presentationSec === undefined ? {} : { presentationSec }),
+    ...(discussionSec === undefined ? {} : { discussionSec }),
+    ...(transitionSec === undefined ? {} : { transitionSec }),
+  };
+  return Object.keys(plan).length ? plan : undefined;
 }
 
 /** Upstream sample group logistics are never instructions to create real teams. */

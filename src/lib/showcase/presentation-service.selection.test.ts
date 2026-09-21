@@ -45,6 +45,11 @@ describe("selected showcase lifecycle", () => {
     expect(result).toMatchObject({ students: [{ studentId: "s1" }, { studentId: "s2" }], queue: [{ studentId: "s1" }], budget: { plannedRemainingSec: 120, stageRemainingSec: 180, overrunSec: 0 } });
     expect((await getShowcaseData("course", teacher)).queue.map((item) => item.studentId)).toEqual(["s1"]);
   });
+  it("uses the confirmed resource-package presenter count and timings before the teacher saves a queue", async () => {
+    mocks.course.content = { stagePlan: { schemaVersion: 2, stages: [{ key: "showcase", durationMin: 10, requirements: "每位学生汇报90秒，点评30秒，衔接5秒", teacherActions: "选取5名学生现场汇报", aiActions: "", outputs: "" }] } };
+    const result = await getShowcaseData("course", teacher);
+    expect(result.queueConfig).toMatchObject({ presenterCount: 5, presentationSec: 90, discussionSec: 30, transitionSec: 5, minutesPerStudent: 125 / 60 });
+  });
   it("rejects a shortlist exceeding the stage budget and rejects foreign students", async () => {
     await expect(executeShowcaseAction("course", { ...action, selectedStudentIds: ["s1", "s2"] }, teacher)).rejects.toMatchObject({ code: "SHOWCASE_BUDGET_EXCEEDED" });
     await expect(executeShowcaseAction("course", { ...action, selectedStudentIds: ["foreign"] }, teacher)).rejects.toMatchObject({ code: "INVALID_QUEUE" });

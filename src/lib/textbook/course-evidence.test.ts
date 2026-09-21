@@ -61,6 +61,20 @@ describe("course textbook evidence", () => {
     expect(snapshot.warnings.join(" ")).toContain("语义检索暂不可用");
   });
 
+  it("retrieves a child concept together with its substantive parent context", async () => {
+    await resolveCourseEvidenceSnapshot({
+      courseId: "course-1",
+      selections: [{ revisionId: "revision-1", primary: true, sectionIds: ["section-1"] }],
+      upstreamKnowledgePoints: [
+        { id: "theory", name: "建构主义学习理论", description: "学习者主动建构意义并调整认知结构。", teachingRole: "core-concept" },
+        { id: "assimilation", name: "同化", description: "把新经验纳入已有图式。", groupName: "建构主义学习理论", parentKnowledgePointId: "theory", teachingRole: "detail-concept" },
+      ],
+    });
+
+    expect(mocks.search).toHaveBeenCalledTimes(2);
+    expect(mocks.search.mock.calls[1]?.[0].query).toContain("同化\n把新经验纳入已有图式。\n建构主义学习理论\n建构主义学习理论\n学习者主动建构意义并调整认知结构。");
+  });
+
   it("turns only adopted evidence figures into protected course image references", async () => {
     mocks.figures.mockResolvedValue([{
       id: "figure-1", fileAssetId: "asset-1", position: 2, caption: "具身认知关系图", width: 800, height: 600,

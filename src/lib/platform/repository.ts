@@ -498,7 +498,29 @@ export async function getSurveyAnalytics(claims: AuthClaims, activityId: string)
 
 export async function listPrivateTemplates(claims: AuthClaims) {
   const teacher = await requireTeacherUser(claims);
-  return prisma.classroomTemplate.findMany({ where: { ownerId: teacher.id, status: { notIn: ["DELETED", "deleted"] } }, include: { versions: { orderBy: { version: "desc" } } }, orderBy: { updatedAt: "desc" } });
+  const templates = await prisma.classroomTemplate.findMany({ where: { ownerId: teacher.id, status: { notIn: ["DELETED", "deleted"] } }, include: { versions: { orderBy: { version: "desc" } } }, orderBy: { updatedAt: "desc" } });
+  if (!templates.length) return templates;
+
+  const activeJobs = await prisma.generationJob.findMany({
+    where: {
+      targetType: "CLASSROOM_TEMPLATE",
+      targetId: { in: templates.map((template) => template.id) },
+      jobType: { in: ["COURSE_DESIGN", "COURSE_CONTENT"] },
+      status: { in: ["QUEUED", "RUNNING", "REVIEW_AVAILABLE", "PAUSED", "CANCELLING"] },
+    },
+    select: { targetId: true, status: true },
+    orderBy: { updatedAt: "desc" },
+  });
+  const generationStatusByTemplate = new Map<string, string>();
+  for (const job of activeJobs) {
+    if (!generationStatusByTemplate.has(job.targetId)) {
+      generationStatusByTemplate.set(job.targetId, job.status.toLowerCase());
+    }
+  }
+  return templates.map((template) => ({
+    ...template,
+    generationStatus: generationStatusByTemplate.get(template.id) ?? null,
+  }));
 }
 
 export async function createPrivateTemplate(claims: AuthClaims, input: { title: string; description?: string; snapshot: unknown; mediaRefs?: unknown }) {

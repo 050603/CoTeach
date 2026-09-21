@@ -7,7 +7,7 @@ import { allocateLectureBudget, isKnowledgeLectureBudgetInRange } from "./knowle
 import type { CourseStagePlan } from "@/lib/resource-package/types";
 import { hasPendingCourseDesignUpdates } from "@/lib/course-design/workspace";
 
-export const NEW_SYSTEM_AI_TIMING_POLICY_VERSION = "shared-knowledge-cluster-budget-v1";
+export const NEW_SYSTEM_AI_TIMING_POLICY_VERSION = "shared-knowledge-cluster-budget-v2-priority-difficulty";
 
 export const NEW_SYSTEM_STAGE_KEYS = [
   "launch",
@@ -34,6 +34,13 @@ export type NewSystemAiDurationRecommendation = {
     knowledgePointIds: string[];
     durationMin: number;
     rationale: string;
+    requirementIds?: string[];
+    difficultyStrategies?: Array<{
+      requirementId: string;
+      learnerObstacle: string;
+      teachingApproach: string;
+      understandingEvidence: string;
+    }>;
   }>;
   evidence: string[];
   assumptions: string[];
@@ -79,6 +86,14 @@ export function buildNewSystemAiTimingPlan(
       durationMin: distributed[index] ?? 1,
       recommendedDurationMin: distributed[index] ?? 1,
       knowledgePointIds: budget.knowledgePointIds,
+      requirementIds: budget.requirementIds,
+      difficultyStrategies: budget.difficultyStrategies,
+      notes: [
+        budget.rationale,
+        ...(budget.difficultyStrategies ?? []).map((strategy) => (
+          `难点策略：${strategy.learnerObstacle}；${strategy.teachingApproach}；理解证据：${strategy.understandingEvidence}`
+        )),
+      ].filter(Boolean).join("\n"),
     })),
     recommendedStageTotals,
     recommendationSource: "llm",

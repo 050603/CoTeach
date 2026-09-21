@@ -108,8 +108,10 @@ describe("confirmed resource package generation", () => {
   it("preserves teacher facts and required subpoints without asking the model to infer them", async () => {
     const { applyResourcePackageGenerationInput, inferCourseSeed } = await import("./job-runner");
     const resourcePackage = confirmedPackage();
+    resourcePackage.draft.teachingHighlights = ["训练样本的作用是教学重点。"];
+    resourcePackage.draft.teachingDifficulties = ["学生容易混淆训练样本与测试样本。"];
     const original = createPblTemplateCourse("course-1", { name: "旧课程", hours: 2 });
-    const course = applyResourcePackageGenerationInput(original, resourcePackage);
+    const course = applyResourcePackageGenerationInput(original, resourcePackage, "用校园案例讲解，并给学生比较时间。");
     const seed = await inferCourseSeed(course, { courseId: course.id, teacherBrief: "可选补充", resourcePackage }, new AbortController().signal);
     expect(seed).toMatchObject({ name: resourcePackage.draft.courseName, grade: "七年级", hours: 140 / 60, learningObjectives: resourcePackage.draft.learningObjectives });
     expect(modelCall).not.toHaveBeenCalled();
@@ -118,6 +120,9 @@ describe("confirmed resource package generation", () => {
     expect(course.drivingQuestion).toBe(resourcePackage.draft.drivingQuestion);
     expect(course.pblConfig?.projectMode).toBe("personal");
     expect(course.content.stagePlan?.totalMinutes).toBe(140);
+    expect(course.content.teachingRequirements?.items.map((item) => item.kind)).toEqual(expect.arrayContaining([
+      "teacher-directive", "highlight", "difficulty", "stage-requirement",
+    ]));
   }, 15_000);
 
   it("locks teaching to the approved minutes even outside the legacy ratio", () => {

@@ -50,6 +50,7 @@ import {
   buildCourseTeachingConstraints,
   buildPblCourseRequirement,
 } from "@/lib/openmaic/pbl/course-request";
+import { buildCourseTeachingRequirements } from "@/lib/course-design/teaching-requirements";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -330,6 +331,15 @@ function applySectionSave(course: Course, section: CourseDesignWorkspaceSectionK
     };
   } else {
     throw new WorkspaceInputError("课堂内容请在课堂编辑器中修改。", "CLASSROOM_EDITOR_REQUIRED", 409);
+  }
+  if (section === "materials" || section === "stage-plan") {
+    const teacherBrief = course.content.teachingRequirements?.items
+      .filter((item) => item.kind === "teacher-directive")
+      .map((item) => item.text).join("\n") ?? "";
+    next.content.teachingRequirements = buildCourseTeachingRequirements({
+      resourcePackage: next.content.resourcePackage,
+      teacherBrief,
+    });
   }
   next.content.designWorkspaceRevision = recordCourseDesignEdit(next, section, {
     changedKnowledgePointIds,

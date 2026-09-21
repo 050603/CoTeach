@@ -46,7 +46,7 @@ describe('section short-answer quiz contract', () => {
     expect(result && 'questions' in result ? result.questions[0]?.teachingUnitIds : []).toEqual(['unit-sampling']);
   });
 
-  it('keeps normal-mode checks lightweight when the short-answer allowance is zero', async () => {
+  it('corrects an open response into lightweight objective items in normal mode', async () => {
     const adaptive = {
       ...outline,
       quizConfig: {
@@ -58,7 +58,8 @@ describe('section short-answer quiz contract', () => {
         coveragePolicy: 'section-synthesis' as const,
       },
     };
-    const ai = vi.fn().mockResolvedValue(JSON.stringify([
+    const ai = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify([
       {
         id: 'q1', type: 'short_answer', format: 'short_answer', question: '解释随机抽样。', analysis: '公平入样。',
         knowledgePointIds: ['kp-sampling'], points: 10,
@@ -68,14 +69,22 @@ describe('section short-answer quiz contract', () => {
         options: [{ label: '随机抽取学号', value: 'A' }, { label: '只问前排', value: 'B' }],
         answer: ['A'], analysis: '随机抽取学号让成员有公平机会。', knowledgePointIds: ['kp-sampling'], points: 10,
       },
-    ]));
+      ]))
+      .mockResolvedValueOnce(JSON.stringify([
+        {
+          id: 'q1', type: 'true_false', format: 'true_false', question: '随机抽样能减少人为选择造成的偏差。',
+          answer: true, analysis: '总体成员具有公平的入样机会。', knowledgePointIds: ['kp-sampling'], points: 10,
+        },
+        {
+          id: 'q2', type: 'single', question: '哪项属于随机抽样？',
+          options: [{ label: '随机抽取学号', value: 'A' }, { label: '只问前排', value: 'B' }],
+          answer: ['A'], analysis: '随机抽取学号让成员有公平机会。', knowledgePointIds: ['kp-sampling'], points: 10,
+        },
+      ]));
     const result = await generateSceneContent(adaptive, ai);
     expect(ai.mock.calls[0][1]).toContain('use at least 0 and at most 0');
-    expect(result && 'questions' in result ? result.questions[0] : undefined).toMatchObject({
-      type: 'short_answer',
-      format: 'fill_blank',
-      teachingUnitIds: ['unit-sampling'],
-    });
+    expect(ai).toHaveBeenCalledTimes(2);
+    expect(ai.mock.calls[1][1]).toContain('returned 1 open-response questions; maximum is 0');
     expect(result && 'questions' in result
       ? result.questions.filter((question) => question.format === 'short_answer' || question.format === 'scenario_task')
       : []).toHaveLength(0);
@@ -169,9 +178,73 @@ describe('section short-answer quiz contract', () => {
     );
   });
 
+  it('corrects a pseudo fill blank instead of merely relabeling an explanation prompt', async () => {
+    const adaptive: SceneOutline = {
+      ...outline,
+      quizConfig: {
+        difficulty: 'medium', questionCount: 2,
+        questionTypes: ['fill_blank', 'single'],
+        questionTypePlan: ['fill_blank', 'single'],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const ai = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify([
+        { id: 'q1', type: 'fill_blank', format: 'fill_blank', question: '解释随机抽样为什么公平。', analysis: '公平入样。', knowledgePointIds: ['kp-sampling'], points: 10 },
+        { id: 'q2', type: 'single', question: '哪项属于随机抽样？', options: [{ label: '随机抽取学号', value: 'A' }, { label: '只问前排', value: 'B' }], answer: ['A'], analysis: '公平入样。', knowledgePointIds: ['kp-sampling'], points: 10 },
+      ]))
+      .mockResolvedValueOnce(JSON.stringify([
+        { id: 'q1', type: 'fill_blank', format: 'fill_blank', question: '随机抽样让总体成员拥有____的入样机会。', analysis: '应填公平。', knowledgePointIds: ['kp-sampling'], points: 10 },
+        { id: 'q2', type: 'single', question: '哪项属于随机抽样？', options: [{ label: '随机抽取学号', value: 'A' }, { label: '只问前排', value: 'B' }], answer: ['A'], analysis: '公平入样。', knowledgePointIds: ['kp-sampling'], points: 10 },
+      ]));
+
+    const result = await generateSceneContent(adaptive, ai);
+    const questions = result && 'questions' in result ? result.questions : [];
+    expect(ai).toHaveBeenCalledTimes(2);
+    expect(ai.mock.calls[1][1]).toContain('fill_blank stem has no explicit blank slot');
+    expect(questions[0]?.question).toContain('____');
+  });
+
+  it('corrects missing attribution and permits one question to cover multiple section knowledge points', async () => {
+    const adaptive: SceneOutline = {
+      ...outline,
+      knowledgePointIds: ['kp-role', 'kp-leak'],
+      assessmentUnitIds: ['unit-role', 'unit-leak'],
+      assessmentUnitMap: [
+        { unitId: 'unit-role', knowledgePointIds: ['kp-role'] },
+        { unitId: 'unit-leak', knowledgePointIds: ['kp-leak'] },
+      ],
+      quizConfig: {
+        difficulty: 'medium', questionCount: 2,
+        questionTypes: ['single', 'true_false'],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const first = [
+      { id: 'q1', type: 'single', question: '哪项正确？', options: [{ label: '训练数据学习参数', value: 'A' }, { label: '测试数据学习参数', value: 'B' }], answer: ['A'], analysis: '训练集用于学习参数。', points: 10 },
+      { id: 'q2', type: 'true_false', format: 'true_false', question: '测试集用于独立评估。', answer: true, analysis: '正确。', knowledgePointIds: ['kp-role'], points: 10 },
+    ];
+    const corrected = [
+      { ...first[0], knowledgePointIds: ['kp-role', 'kp-leak'] },
+      { ...first[1], knowledgePointIds: ['kp-leak'] },
+    ];
+    const ai = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify(first))
+      .mockResolvedValueOnce(JSON.stringify(corrected));
+
+    const result = await generateSceneContent(adaptive, ai);
+    const questions = result && 'questions' in result ? result.questions : [];
+    expect(ai.mock.calls[1][1]).toContain('missing explicit knowledgePointIds');
+    expect(questions[0]?.knowledgePointIds).toEqual(['kp-role', 'kp-leak']);
+    expect(new Set(questions.flatMap((question) => question.knowledgePointIds ?? []))).toEqual(new Set(['kp-role', 'kp-leak']));
+  });
+
   it('rejects an incomplete quiz result so the affected page can be retried', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify([]));
-    await expect(generateSceneContent(outline, ai)).rejects.toThrow('returned 0/1 usable questions');
+    await expect(generateSceneContent(outline, ai)).rejects.toThrow('returned 0/1 questions');
+    expect(ai).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a normal-mode result that leaves a section knowledge point untested', async () => {

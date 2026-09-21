@@ -1,4 +1,4 @@
-import type { SceneOutline } from "@openmaic/lib/types/generation";
+import type { AssessmentMode, SceneOutline } from "@openmaic/lib/types/generation";
 import { allocateLectureBudget } from "@/lib/classroom/knowledge-lecture-budget";
 import { normalizeTeachingBrief } from "@/lib/openmaic/generation/teaching-brief";
 import type {
@@ -79,7 +79,8 @@ function sectionTitle(
 
 /**
  * Turns an AI-learning outline into a stable section sequence. Every section
- * ends in a 2–3 question short-answer check with a 2–5 minute budget.
+ * ends in a section check with a 2–5 minute budget. Ordinary checks use
+ * 2–4 lightweight questions; deep-response mode uses one synthesis response.
  */
 export function organizeKnowledgeLectureOutlines(
   outlines: readonly LectureOutline[],
@@ -87,6 +88,7 @@ export function organizeKnowledgeLectureOutlines(
     totalDurationSec: number;
     knowledgePoints: readonly KnowledgePoint[];
     knowledgeGraph?: KnowledgeGraph;
+    assessmentMode?: AssessmentMode;
   },
 ): { outlines: LectureOutline[]; sections: KnowledgeLectureSection[] } {
   const teaching = outlines.filter((outline) => outline.type !== "quiz");
@@ -162,7 +164,10 @@ export function organizeKnowledgeLectureOutlines(
         estimatedDuration: targetDurationSec,
       } as LectureOutline;
     });
-    const questionCount = knowledgePointIds.length >= 3 ? 3 : 2;
+    const constructedResponse = input.assessmentMode === "constructed-response";
+    const questionCount = constructedResponse
+      ? 1
+      : Math.max(2, Math.min(4, knowledgePointIds.length >= 3 ? 3 : 2));
     const quizDurationSec = quizDurations[sectionIndex] ?? 180;
     const quizOutlineId = `${sectionId}-check`;
     const keyPoints = knowledgePointIds.map((id) => pointNames.get(id)).filter(Boolean) as string[];
@@ -182,9 +187,13 @@ export function organizeKnowledgeLectureOutlines(
       id: quizOutlineId,
       type: "quiz",
       title: `${title} · 节末小测`,
-      description: `围绕本小节的${keyPoints.join("、") || "核心知识"}设置 ${questionCount} 道简短主观题。每题只需用关键词和一两句话说明判断或理由，预计 ${Math.round(quizDurationSec / 60)} 分钟完成；由 AI 自动批阅并进入助教讲解。`,
+      description: constructedResponse
+        ? `围绕本小节的${keyPoints.join("、") || "核心知识"}设置 1 道综合简答题，要求给出结论与理由，预计 ${Math.round(quizDurationSec / 60)} 分钟完成；由 AI 自动批阅并进入助教讲解。`
+        : `围绕本小节的${keyPoints.join("、") || "核心知识"}设置 ${questionCount} 道单选、多选、判断、填空或必要的配对题。全部题目合计覆盖本小节所有知识点，选择与判断直接作答，填空只填写关键词、数值或短语，预计 ${Math.round(quizDurationSec / 60)} 分钟完成。`,
       keyPoints,
-      teachingObjective: "用简短主观表达检查学生能否准确说出概念、依据或关键步骤，并为逐题讲解形成证据。",
+      teachingObjective: constructedResponse
+        ? "用综合简答检查学生能否整合本小节知识给出结论与理由，并为逐题讲解形成证据。"
+        : "用轻量题检查学生能否识别、判断或补全本小节核心知识，并为逐题讲解形成证据。",
       knowledgePointIds,
       lectureSectionId: sectionId,
       lectureSectionTitle: title,
@@ -198,8 +207,13 @@ export function organizeKnowledgeLectureOutlines(
       resourceTypes: [],
       quizConfig: {
         difficulty: "medium",
-        questionTypes: ["short_answer"],
+        questionTypes: constructedResponse
+          ? ["short_answer"]
+          : ["single", "multiple", "true_false", "fill_blank", "matching"],
         questionCount,
+        coveragePolicy: "section-synthesis",
+        minShortAnswerQuestions: constructedResponse ? 1 : 0,
+        maxShortAnswerQuestions: constructedResponse ? 1 : 0,
       },
       widgetType: undefined,
       widgetOutline: undefined,

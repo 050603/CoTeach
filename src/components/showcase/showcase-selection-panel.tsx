@@ -14,9 +14,10 @@ export function ShowcaseSelectionPanel({ data, busy, save }: {
   const [discussionSec, setDiscussionSec] = useState(config?.discussionSec ?? 60);
   const [transitionSec, setTransitionSec] = useState(config?.transitionSec ?? 20);
   const total = selected.length * (presentationSec + discussionSec + transitionSec);
+  const presenterTarget = config?.presenterCount;
   return <section aria-label="选择现场汇报学生" className="my-4 space-y-3 border-y border-stone-200 py-4">
     <p className="font-semibold">全班提交作品，教师选择现场汇报者</p>
-    <p className="text-sm text-stone-600">已选 {selected.length} 人 · 每人含点评与衔接 {presentationSec + discussionSec + transitionSec} 秒 · 完整安排 {total} 秒</p>
+    <p className="text-sm text-stone-600">{presenterTarget ? `资源包安排 ${presenterTarget} 人 · ` : ""}已选 {selected.length} 人 · 每人含点评与衔接 {presentationSec + discussionSec + transitionSec} 秒 · 完整安排 {total} 秒</p>
     {data.budget ? <p className="text-sm text-stone-600">本阶段剩余 {Math.floor(data.budget.stageRemainingSec)} 秒；已保存名单尚需 {data.budget.plannedRemainingSec} 秒{data.budget.overrunSec ? `，超出 ${data.budget.overrunSec} 秒，请调整安排` : ""}</p> : null}
     <div className="grid gap-2 sm:grid-cols-3">{([
       ["汇报秒数", presentationSec, setPresentationSec, 15, 3600],
@@ -29,7 +30,7 @@ export function ShowcaseSelectionPanel({ data, busy, save }: {
     </div>)}</div>
     <PrimaryButton disabled={busy} onClick={() => void save({ action: "save-queue", selectionMode: "teacher-selected", selectedStudentIds: selected,
       orderedStudentIds: [...data.queue.map((item) => item.studentId).filter((id) => selected.includes(id)), ...selected.filter((id) => !data.queue.some((item) => item.studentId === id))],
-      presentationSec, discussionSec, transitionSec, minutesPerStudent: Math.min(60, Math.max(1, Math.ceil((presentationSec + discussionSec + transitionSec) / 60))),
+      presentationSec, discussionSec, transitionSec, ...(presenterTarget ? { presenterCount: presenterTarget } : {}), minutesPerStudent: Math.min(60, Math.max(1, Math.ceil((presentationSec + discussionSec + transitionSec) / 60))),
     })} tone="blue">保存汇报名单与时间</PrimaryButton>
   </section>;
 }

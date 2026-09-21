@@ -150,9 +150,8 @@ describe("quick-design resume policy", () => {
     })).toBe(false);
     expect(isSameCourseDesignRequest(request, {
       ...request,
-      generationContractVersion: 2,
       assessmentMode: "adaptive",
-    })).toBe(false);
+    })).toBe(true);
     expect(isSameCourseDesignRequest({
       ...request,
       referenceMaterials: [{ id: "reference-1", fileName: "资料一.md" }],

@@ -46,17 +46,54 @@ describe('quiz quality normalization', () => {
     expect(result.questions[0]?.analysis?.length).toBeGreaterThan(12);
   });
 
-  it('preserves valid knowledge-point attribution and repairs missing attribution', () => {
+  it('flags ambiguous choice keys and invalid true-false answers', () => {
+    const result = normalizeQuizQuestions([
+      { type: 'single', question: '哪项正确？', options: [{ value: 'A', label: '甲' }, { value: 'A', label: '乙' }], answer: ['A', 'B'] },
+      { type: 'true_false', format: 'true_false', question: '该说法正确。', answer: '不确定' },
+    ]);
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining('choice options must have unique values and labels'),
+      expect.stringContaining('true_false must provide one explicit boolean answer'),
+    ]));
+  });
+
+  it('preserves valid knowledge-point attribution without synthesizing missing labels', () => {
     const result = normalizeQuizQuestions([
       { id: 'q1', type: 'single', question: '题目一', options: ['A', 'B'], answer: 'A', knowledgePointIds: ['kp-1', 'outside'] },
       { id: 'q2', type: 'single', question: '题目二', options: ['A', 'B'], answer: 'A' },
     ], {
       allowedKnowledgePointIds: ['kp-1', 'kp-2'],
-      fallbackKnowledgePointIds: ['kp-2'],
     });
 
     expect(result.questions[0]?.knowledgePointIds).toEqual(['kp-1']);
-    expect(result.questions[1]?.knowledgePointIds).toEqual(['kp-2']);
+    expect(result.questions[1]?.knowledgePointIds).toEqual([]);
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining('outside the allowed section: outside'),
+      expect.stringContaining('missing explicit knowledgePointIds'),
+    ]));
+  });
+
+  it('flags a fill-blank label that does not contain an actual blank', () => {
+    const result = normalizeQuizQuestions([{
+      id: 'q1',
+      type: 'fill_blank',
+      format: 'fill_blank',
+      question: '解释训练集与测试集的区别。',
+      knowledgePointIds: ['kp-role'],
+    }], { allowedKnowledgePointIds: ['kp-role'] });
+    expect(result.questions[0]?.format).toBe('fill_blank');
+    expect(result.issues).toContain('question 1: fill_blank stem has no explicit blank slot');
+  });
+
+  it('accepts a concise fill blank with an explicit slot', () => {
+    const result = normalizeQuizQuestions([{
+      id: 'q1',
+      type: 'fill_blank',
+      format: 'fill_blank',
+      question: '测试集用于____模型在新数据上的表现。',
+      knowledgePointIds: ['kp-role'],
+    }], { allowedKnowledgePointIds: ['kp-role'] });
+    expect(result.issues).toEqual([]);
   });
 
   it('preserves explicit teaching-unit attribution through later quality passes', () => {

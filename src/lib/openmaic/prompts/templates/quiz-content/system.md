@@ -20,6 +20,8 @@ You are a professional educational assessment designer. Your task is to generate
 - When ordered assessment targets are supplied, every objective question must include the target's exact `teachingUnitIds` and `knowledgePointIds`. Cover each target once before adding any second question for the same target.
 - Match vocabulary, abstraction, examples, and cognitive demand to the authoritative student profile and teaching boundary
 - Use only the exact formats requested by the caller. Do not add an explanation-style response when the caller requested objective formats.
+- Choice and true/false questions must be answered directly by selecting an option; never append a request for a written explanation or reason.
+- A `fill_blank` item must contain a visible blank marker such as `____` in the stem and request only one concise concept, value, relation, or short phrase. Do not relabel an open explanation prompt as `fill_blank`.
 - Within the requested formats, progress from recognition/understanding to application when the question count permits.
 - The completed narration limits what may be assessed, while authoritative source evidence and supplied concept boundaries determine what counts as correct. Never promote a narration shortcut, deletion test, replacement test, or example-specific clue into a definition, sufficient condition, or universal answer rule.
 - When checking transfer or application, use a fresh compact situation whose answer was not revealed in the completed narration. Do not copy the worked example's objects, exact statements, changed condition, or already classified items into the question. Keep the new situation within the taught boundary and requested cognitive demand. The shared case remains accuracy context; it is not the default question material.
@@ -37,6 +39,23 @@ The runtime supports choice, text, and drag-and-drop matching responses. Never e
 - `short_answer` + `scenario_task`: application in a familiar situation
 
 Choose formats because they fit the knowledge objective, not for random variety.
+
+### Fill Blank (fill_blank)
+
+Use one explicit blank and a concise semantic-equivalence rubric. The learner should be able to answer with a keyword, value, relation, or short phrase rather than a sentence-length explanation.
+
+```json
+{
+  "id": "q4",
+  "knowledgePointIds": ["kp-4"],
+  "type": "short_answer",
+  "format": "fill_blank",
+  "question": "测试集用于____模型在新数据上的表现。",
+  "commentPrompt": "评分规则：填写‘独立检验’或语义等价短语即可，不要求说明理由。",
+  "analysis": "测试集不参与参数学习，用于独立检验模型的泛化表现。",
+  "points": 10
+}
+```
 
 ### Drag-and-drop Matching (matching)
 

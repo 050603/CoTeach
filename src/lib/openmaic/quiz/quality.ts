@@ -86,6 +86,10 @@ function semanticFormat(rawType: string, rawFormat: string): SupportedQuizFormat
   return 'single_choice';
 }
 
+export function hasExplicitFillBlankSlot(question: string): boolean {
+  return /_{2,}|＿{2,}|\[\s*(?:blank|空)\s*\]|【\s*(?:blank|空)\s*】|\(\s*\)|（\s*）|<\s*blank\s*>/iu.test(question);
+}
+
 function unsupportedStructuredType(rawType: string): boolean {
   return /connect|line|order|sort|排序|连线/.test(rawType.toLowerCase());
 }
@@ -142,7 +146,6 @@ export function normalizeQuizQuestions(
   input: unknown,
   config: {
     allowedKnowledgePointIds?: readonly string[];
-    fallbackKnowledgePointIds?: readonly string[];
   } = {},
 ): QuizNormalizationResult {
   const issues: string[] = [];
@@ -162,14 +165,19 @@ export function normalizeQuizQuestions(
     const requestedKnowledgePointIds = Array.isArray(record.knowledgePointIds)
       ? record.knowledgePointIds.map(text).filter(Boolean)
       : [];
+    if (allowedKnowledgePointIds && requestedKnowledgePointIds.length === 0) {
+      issues.push(`question ${index + 1}: missing explicit knowledgePointIds`);
+    }
+    const invalidKnowledgePointIds = allowedKnowledgePointIds
+      ? requestedKnowledgePointIds.filter((knowledgePointId) => !allowedKnowledgePointIds.has(knowledgePointId))
+      : [];
+    if (invalidKnowledgePointIds.length > 0) {
+      issues.push(`question ${index + 1}: knowledgePointIds outside the allowed section: ${Array.from(new Set(invalidKnowledgePointIds)).join(', ')}`);
+    }
     const validKnowledgePointIds = Array.from(new Set(requestedKnowledgePointIds.filter((knowledgePointId) =>
       !allowedKnowledgePointIds || allowedKnowledgePointIds.has(knowledgePointId),
     )));
-    const knowledgePointIds = validKnowledgePointIds.length > 0
-      ? validKnowledgePointIds
-      : Array.from(new Set(config.fallbackKnowledgePointIds ?? [])).filter((knowledgePointId) =>
-          !allowedKnowledgePointIds || allowedKnowledgePointIds.has(knowledgePointId),
-        );
+    const knowledgePointIds = validKnowledgePointIds;
     const teachingUnitIds = Array.isArray(record.teachingUnitIds)
       ? Array.from(new Set(record.teachingUnitIds.map(text).filter(Boolean)))
       : [];
@@ -228,6 +236,9 @@ export function normalizeQuizQuestions(
     }
 
     if (format === 'fill_blank' || format === 'short_answer' || format === 'scenario_task') {
+      if (format === 'fill_blank' && !hasExplicitFillBlankSlot(question)) {
+        issues.push(`question ${index + 1}: fill_blank stem has no explicit blank slot`);
+      }
       return [{
         id,
         knowledgePointIds,
@@ -246,7 +257,14 @@ export function normalizeQuizQuestions(
 
     let options = normalizeOptions(record.options);
     let answers = answerArray(record);
+    if (new Set(options.map((option) => option.value)).size !== options.length
+      || new Set(options.map((option) => option.label)).size !== options.length) {
+      issues.push(`question ${index + 1}: choice options must have unique values and labels`);
+    }
     if (format === 'true_false') {
+      if (answers.length !== 1 || !/^(?:true|false|正确|错误|对|错|是|否|0|1)$/iu.test(answers[0] ?? '')) {
+        issues.push(`question ${index + 1}: true_false must provide one explicit boolean answer`);
+      }
       options = [{ value: 'true', label: '正确' }, { value: 'false', label: '错误' }];
       answers = answers.map((answer) => /^(true|正确|对|是|1)$/i.test(answer) ? 'true' : 'false').slice(0, 1);
     } else {
@@ -257,6 +275,10 @@ export function normalizeQuizQuestions(
       });
     }
     answers = Array.from(new Set(answers.filter((answer) => options.some((option) => option.value === answer))));
+
+    if (format === 'single_choice' && answers.length > 1) {
+      issues.push(`question ${index + 1}: single choice must provide exactly one correct answer`);
+    }
 
     if (options.length < 2 || answers.length === 0) {
       issues.push(`question ${index + 1}: invalid choice structure repaired as fill_blank`);

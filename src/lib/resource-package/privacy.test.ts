@@ -24,13 +24,17 @@ describe("resource package authoring boundary", () => {
     const projected = withoutPrivatePackageContent({
       textbookSelections: [{ revisionId: "private-revision" }],
       courseEvidence: { items: [{ quote: "private source" }] },
-      knowledgePoints: [{ id: "point", name: "公开知识点", evidenceItemIds: ["private-evidence"] }],
-      knowledgeGraph: { nodes: [{ id: "point", label: "公开知识点", evidenceItemIds: ["private-evidence"] }], edges: [] },
+      knowledgePoints: [{ id: "point", name: "公开知识点", evidenceItemIds: ["private-evidence"], sourceKnowledgePointIds: ["private-source"], sourceKnowledgePointNames: ["内部来源"], teachingRole: "core-concept", parentKnowledgePointIds: ["private-parent"] }],
+      knowledgeGraph: { nodes: [{ id: "point", label: "公开知识点", evidenceItemIds: ["private-evidence"], teachingRole: "core-concept", parentKnowledgePointIds: ["private-parent"] }], edges: [] },
     });
     expect(projected).not.toHaveProperty("textbookSelections");
     expect(projected).not.toHaveProperty("courseEvidence");
     expect(projected.knowledgePoints[0]).not.toHaveProperty("evidenceItemIds");
+    expect(projected.knowledgePoints[0]).not.toHaveProperty("sourceKnowledgePointIds");
+    expect(projected.knowledgePoints[0]).not.toHaveProperty("teachingRole");
+    expect(projected.knowledgePoints[0]).not.toHaveProperty("parentKnowledgePointIds");
     expect(projected.knowledgeGraph.nodes[0]).not.toHaveProperty("evidenceItemIds");
+    expect(projected.knowledgeGraph.nodes[0]).not.toHaveProperty("teachingRole");
   });
   it("preserves exact lesson minutes and reports conflicts instead of silently scaling", () => {
     const draft = { ...emptyResourcePackageDraft(), courseName: "AI教学设计", grade: "本科一年级", drivingQuestion: "如何设计合适的AI课程？",
@@ -43,5 +47,14 @@ describe("resource package authoring boundary", () => {
     expect(plan.stages.map((stage) => stage.durationMin)).toEqual([15, 30, 60, 20, 10]);
     expect(plan.stages[0].requirements).toContain("AI 伙伴");
     expect(resourcePackageDraftErrors({ ...draft, totalMinutes: 180 })).toContain("五阶段时长之和必须等于课程总分钟数，请修正教案时间。");
+  });
+  it("carries explicit showcase logistics into the student-safe stage plan", () => {
+    const draft = { ...emptyResourcePackageDraft(), courseName: "项目课", grade: "六年级", drivingQuestion: "如何改善校园环境？",
+      learningObjectives: ["提出改进方案"], expectedOutcome: "改进方案", knowledgePoints: [{ name: "调查", description: "", subPoints: [] }],
+      lessonCount: 1, minutesPerLesson: 50, totalMinutes: 50 };
+    draft.stages = draft.stages.map((stage, index) => ({ ...stage, durationMin: [5, 10, 20, 10, 5][index],
+      teacherActions: stage.key === "showcase" ? "教师选取5名学生汇报" : "",
+      requirements: stage.key === "showcase" ? "每位学生汇报90秒，点评30秒" : "" }));
+    expect(stagePlanFromResourcePackage(draft).showcasePlan).toEqual({ presenterCount: 5, presentationSec: 90, discussionSec: 30 });
   });
 });
