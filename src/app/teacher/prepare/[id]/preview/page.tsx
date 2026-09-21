@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRight,
   BookOpenCheck,
   Check,
   Clock3,
@@ -34,6 +35,7 @@ import { useCourse, useHydrated, useSession } from "@/lib/session/store";
 import type {
   AdaptiveBranchOutline,
   Course,
+  CourseDesignWorkspaceSectionKey,
   OpenMaicSceneOutlineSnapshot,
 } from "@/lib/session/types";
 import { normalizeTeachingToolPlan } from "@/lib/openmaic/generation/teaching-tool-plan";
@@ -44,14 +46,15 @@ import { CourseQualityReview, type TeacherReviewDecision } from "@/components/te
 import { downloadCourseResources } from "@/lib/course-resources/download-course-resources";
 
 const STEPS = [
-  { key: "verify", label: "备课阶段" },
-  { key: "generate", label: "生成课程" },
-  { key: "preview", label: "预览发布" },
+  { key: "generate", label: "一键生成" },
+  { key: "design", label: "课程设计" },
+  { key: "publish", label: "发布中心" },
 ];
 
 type PreviewView = "director" | "student";
 
 type PublishCheck = {
+  id: string;
   label: string;
   done: boolean;
   detail: string;
@@ -59,7 +62,7 @@ type PublishCheck = {
 
 type ResourceRepairIssue = {
   id: string;
-  type: "adaptive-resource" | "teaching-tool" | "tts" | "media";
+  type: "classroom" | "adaptive-resource" | "teaching-tool" | "tts" | "media";
   title: string;
   detail: string;
 };
@@ -67,6 +70,12 @@ type ResourceRepairIssue = {
 type ResourceRepairStatus = {
   status: "idle" | "running" | "completed" | "failed";
   error?: string;
+};
+
+type PublicationState = {
+  latestVersion: number | null;
+  publishedVersion: number | null;
+  draftVersion: number | null;
 };
 
 const SCENE_TYPE_LABEL: Record<string, string> = {
@@ -94,6 +103,7 @@ function pageTypeClass(type?: string): string {
 
 function buildPublishChecks(course: Course): PublishCheck[] {
   return getNewSystemCourseReadiness(course).map((check) => ({
+    id: check.id,
     label: check.label,
     done: check.ok,
     detail: check.ok ? "已完成。" : check.message,
@@ -109,7 +119,7 @@ export default function PreviewCoursePage() {
   const course = useCourse(params?.id);
   const hydrated = useHydrated();
   const [publishing, setPublishing] = useState(false);
-  const [view, setView] = useState<PreviewView>("director");
+  const [view, setView] = useState<PreviewView>(searchParams.get("view") === "student" ? "student" : "director");
   const [selectedOutlineId, setSelectedOutlineId] = useState<string>();
   const [studentSidebarCollapsed, setStudentSidebarCollapsed] = useState(false);
   const [previewBranch, setPreviewBranch] = useState<AdaptiveBranchOutline>();
@@ -121,6 +131,17 @@ export default function PreviewCoursePage() {
   const [publishedHere, setPublishedHere] = useState(false);
   const [downloadingResources, setDownloadingResources] = useState(false);
   const [continuingFullCourse, setContinuingFullCourse] = useState(false);
+  const [publicationState, setPublicationState] = useState<PublicationState | null>(null);
+
+  useEffect(() => {
+    if (!params?.id) return;
+    const controller = new AbortController();
+    void fetch(`/api/courses/${params.id}/design-workspace`, { cache: "no-store", signal: controller.signal })
+      .then(async (response) => response.ok ? response.json() as Promise<{ publication?: PublicationState }> : null)
+      .then((payload) => { if (payload?.publication && !controller.signal.aborted) setPublicationState(payload.publication); })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [params?.id]);
 
   useEffect(() => {
     if (!params?.id) return;
@@ -235,6 +256,8 @@ export default function PreviewCoursePage() {
   const isPublished = publishedHere || course.status === "ready"
     || course.status === "teaching"
     || course.status === "finished";
+  const hasDesignDraft = course.status === "preparing" && Boolean(course.content.designWorkspaceRevision);
+  const hasPublishedVersion = Boolean(publicationState?.publishedVersion);
   const totalStudentSeconds = studentOutlines.reduce(
     (sum, item) => sum + (item.targetDurationSec ?? item.estimatedDuration ?? 0),
     0,
@@ -380,9 +403,7 @@ export default function PreviewCoursePage() {
               </p>
             </div>
             <div className="col-span-2 flex flex-wrap items-center gap-2">
-              <Pill tone={isPublished && !isTestLesson ? "green" : readyToPublish ? "blue" : "amber"}>
-                {isTestLesson ? "测试一节 · 不可发布" : isPublished ? "已发布" : readyToPublish ? "可以发布" : resourceAuditLoaded ? `待完成 ${pendingPublishCount} 项` : "正在核对资源"}
-              </Pill>
+              {isTestLesson ? <Pill tone="amber">测试一节 · 不可发布</Pill> : isPublished ? <Pill tone="green">当前发布版本{publicationState?.publishedVersion ? ` v${publicationState.publishedVersion}` : ""}</Pill> : hasDesignDraft && hasPublishedVersion ? <><Pill tone="green">当前发布 v{publicationState!.publishedVersion}</Pill><Pill tone="amber">有修改的草稿{publicationState?.draftVersion ? ` v${publicationState.draftVersion}` : ""} · 待完成 {pendingPublishCount} 项</Pill></> : <Pill tone={readyToPublish ? "blue" : "amber"}>{readyToPublish ? "未发布草稿 · 可以发布" : resourceAuditLoaded ? `未发布草稿 · 待完成 ${pendingPublishCount} 项` : "正在核对资源"}</Pill>}
               <Link
                 className="inline-flex h-10 items-center gap-1.5 rounded-[7px] border border-stone-200 bg-white px-3.5 text-sm font-semibold text-stone-600 shadow-sm transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)]"
                 href={courseDetailedEditHref(course.id)}
@@ -468,7 +489,14 @@ export default function PreviewCoursePage() {
                   <div>
                     <h2 className="text-sm font-black text-amber-950">还有 {resourceIssues.length} 项课程资源需要补充</h2>
                     <ul className="mt-2 space-y-1 text-xs leading-5 text-amber-900">
-                      {resourceIssues.map((issue) => <li key={issue.id}>• {issue.title}：{issue.detail}</li>)}
+                      {resourceIssues.map((issue) => (
+                        <li className="flex flex-wrap items-center gap-x-2" key={issue.id}>
+                          <span>• {issue.title}：{issue.detail}</span>
+                          <Link className="font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=classroom`}>
+                            定位并修改
+                          </Link>
+                        </li>
+                      ))}
                     </ul>
                   </div>
                   <Button loading={resourceRepairStatus.status === "running"} onClick={() => void retryMissingResources()}>
@@ -477,6 +505,8 @@ export default function PreviewCoursePage() {
                 </div>
               </section>
             ) : null}
+
+            <CoursePublicationOverview course={course} />
 
             {reviewRequired && !isTestLesson ? <CourseQualityReview
               courseId={courseId}
@@ -495,7 +525,7 @@ export default function PreviewCoursePage() {
                 outline={selectedOutline}
                 toolPlan={selectedToolPlan}
               />
-              <PublishReadiness checks={publishChecks} />
+              <PublishReadiness checks={publishChecks} course={course} />
             </section>
 
             <TeachingToolRunbook
@@ -709,7 +739,52 @@ function SelectedPageBrief({
   );
 }
 
-function PublishReadiness({ checks }: { checks: PublishCheck[] }) {
+const PUBLISH_SECTION_BY_CHECK: Record<string, CourseDesignWorkspaceSectionKey | undefined> = {
+  basics: "materials",
+  stages: "stage-plan",
+  timing: "timing",
+  "ai-outline": "blueprint",
+  "ai-classroom": "classroom",
+  "full-classroom-generation": "classroom",
+  "design-workspace-freshness": "classroom",
+};
+
+function CoursePublicationOverview({ course }: { course: Course }) {
+  const stagePlan = course.content.stagePlan;
+  const lectureSections = course.content.knowledgeLectureSections ?? [];
+  const timing = course.content.moduleTimingPlan;
+  const audit = course.content.teachingTimingAudit;
+  const review = course.content.teacherReview;
+  return (
+    <section className="mt-5 overflow-hidden rounded-[12px] border border-stone-200 bg-white">
+      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-stone-200 px-5 py-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-stone-400">课程发布总览</p>
+          <h2 className="mt-1 text-base font-black text-stone-900">教学安排、知识小节与资源状态</h2>
+        </div>
+        <Link className="inline-flex min-h-10 items-center gap-2 rounded-[8px] border border-stone-300 px-3 text-xs font-bold text-stone-700" href={`${courseDetailedEditHref(course.id)}?section=stage-plan`}><Edit3 size={14} />定位并修改</Link>
+      </header>
+      <div className="grid gap-px bg-stone-200 lg:grid-cols-[1.25fr_0.75fr]">
+        <div className="bg-white p-5">
+          <h3 className="text-xs font-black text-stone-500">五阶段课堂安排</h3>
+          {stagePlan?.stages.length ? <ol className="mt-4 grid gap-2 sm:grid-cols-5">{stagePlan.stages.map((stage, index) => <li className="rounded-[8px] border border-stone-200 p-3" key={stage.key}><span className="text-[10px] font-black text-[var(--pbl-teacher)]">{String(index + 1).padStart(2, "0")}</span><p className="mt-1 text-xs font-bold text-stone-900">{stage.title}</p><p className="mt-2 text-[11px] text-stone-500">{stage.durationMin ?? 0} 分钟</p></li>)}</ol> : <p className="mt-4 text-sm text-stone-500">五阶段安排尚未生成。</p>}
+          <div className="mt-6 flex items-center justify-between gap-3"><h3 className="text-xs font-black text-stone-500">知识讲授小节</h3><Link className="text-xs font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=blueprint`}>查看教学蓝图</Link></div>
+          {lectureSections.length ? <div className="mt-3 divide-y divide-stone-100 border-y border-stone-100">{lectureSections.map((section, index) => <div className="flex items-center gap-3 py-3" key={section.id}><span className="grid size-7 shrink-0 place-items-center rounded-full bg-stone-100 text-[10px] font-black text-stone-600">{index + 1}</span><div className="min-w-0 flex-1"><p className="truncate text-xs font-bold text-stone-900">{section.title}</p><p className="mt-1 text-[11px] text-stone-500">{section.sceneOutlineIds.length} 个讲授页面 + 1 个检测 · 约 {section.estimatedMinutes} 分钟</p></div><Link className="text-[11px] font-bold text-[var(--pbl-teacher)]" href={`${courseDetailedEditHref(course.id)}?section=classroom&lectureSectionId=${encodeURIComponent(section.id)}`}>定位</Link></div>)}</div> : <p className="mt-3 text-sm text-stone-500">知识讲授小节尚未生成。</p>}
+        </div>
+        <aside className="bg-stone-50 p-5">
+          <h3 className="text-xs font-black text-stone-500">时长与终审</h3>
+          <dl className="mt-4 space-y-4">
+            <div><dt className="text-[11px] text-stone-500">知识讲授规划</dt><dd className="mt-1 text-lg font-black text-stone-900">{timing ? `${timing.totalMinutes} 分钟` : "未规划"}</dd></div>
+            <div><dt className="text-[11px] text-stone-500">实际讲授音频</dt><dd className="mt-1 text-sm font-bold text-stone-900">{audit ? secondsLabel(audit.substantiveTeachingDurationSec) : "尚未形成完整测量"}</dd><p className="mt-1 text-[11px] text-stone-500">{audit?.narrationDurationSource === "actual-audio" ? "来自实际音频" : audit ? "来自讲稿估算" : "生成或修改音频后更新"}</p></div>
+            <div><dt className="text-[11px] text-stone-500">教师终审</dt><dd className={cn("mt-1 text-sm font-bold", review ? "text-emerald-700" : "text-amber-700")}>{review ? `已确认 · ${new Date(review.confirmedAt).toLocaleDateString("zh-CN")}` : "等待教师确认"}</dd></div>
+          </dl>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function PublishReadiness({ checks, course }: { checks: PublishCheck[]; course: Course }) {
   const readyCount = checks.filter((item) => item.done).length;
   const percentage = Math.round((readyCount / Math.max(1, checks.length)) * 100);
   return (
@@ -727,7 +802,11 @@ function PublishReadiness({ checks }: { checks: PublishCheck[] }) {
         </div>
       </header>
       <ul className="divide-y divide-stone-100">
-        {checks.map((item) => (
+        {checks.map((item) => {
+          const section = item.id === "design-workspace-freshness"
+            ? course.content.designWorkspaceRevision?.pendingUpdates[0]?.target ?? "classroom"
+            : PUBLISH_SECTION_BY_CHECK[item.id];
+          return (
           <li className="flex gap-3 px-5 py-3.5" key={item.label}>
             <span className={cn(
               "mt-0.5 grid size-5 shrink-0 place-items-center rounded-full",
@@ -735,12 +814,14 @@ function PublishReadiness({ checks }: { checks: PublishCheck[] }) {
             )}>
               {item.done ? <Check size={12} /> : <AlertTriangle size={11} />}
             </span>
-            <div>
+            <div className="min-w-0 flex-1">
               <p className="text-xs font-bold text-stone-900">{item.label}</p>
               <p className="mt-1 text-[11px] leading-5 text-stone-500">{item.detail}</p>
+              {!item.done && section ? <Link className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=${section}`}>定位并修改 <ArrowRight size={11} /></Link> : null}
             </div>
           </li>
-        ))}
+          );
+        })}
       </ul>
     </aside>
   );

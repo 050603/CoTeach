@@ -56,8 +56,9 @@ describe("resource package persistence and authorization", () => {
     expect(course.content.stagePlan?.stages[1].durationMin).toBe(30);
     expect(course.content.resourcePackage?.revision).toBe(3);
     expect(course.content.resourcePackage?.confirmedAt).toBeTruthy();
-    expect(course.aiLearningClassroomId).toBeUndefined();
-    expect(course.status).toBe("draft");
+    expect(course.aiLearningClassroomId).toBe("old-classroom");
+    expect(course.status).toBe("preparing");
+    expect(course.content.designWorkspaceRevision?.pendingUpdates.some((item) => item.target === "classroom")).toBe(true);
     expect(job.message).toContain("已确认");
   });
   it("requires acknowledgement bound to the current planning issue version", async () => {
@@ -105,12 +106,13 @@ describe("resource package persistence and authorization", () => {
     await expect(submitResourcePackage("course", "teacher", "source")).rejects.toMatchObject({ status: 404 });
     expect(mocks.upsert).not.toHaveBeenCalled();
   });
-  it("changing the source invalidates old classroom readiness and confirmation", async () => {
+  it("changing the source preserves the classroom and marks dependent content stale", async () => {
     course.content.resourcePackage!.confirmedAt = new Date().toISOString();
     const job = await submitResourcePackage("course", "teacher", "source");
     expect(job.status).toBe("queued");
     expect(course.content.resourcePackage?.confirmedAt).toBeUndefined();
-    expect(course.aiLearningClassroomId).toBeUndefined();
+    expect(course.aiLearningClassroomId).toBe("old-classroom");
+    expect(course.content.designWorkspaceRevision?.pendingUpdates.some((item) => item.target === "classroom")).toBe(true);
   });
   it("requires explicit version-bound adaptation before confirming a conflicting package", async () => {
     const pkg = modernPackage();

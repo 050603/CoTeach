@@ -43,9 +43,51 @@ describe("resource package document parsing", () => {
     expect(result.draft.expectedOutcome).toContain("初步教案");
     expect(result.draft.finalDeliverables).toEqual([expect.objectContaining({ name: "初步教案文档", format: "document" })]);
     expect(result.draft.aiUsagePolicy).toContain("严禁直接生成完整教案");
+    expect(result.draft.teachingHighlights).toBeUndefined();
+    expect(result.draft.teachingDifficulties).toBeUndefined();
+    expect(result.draft.sourceEvidence?.teachingHighlights).toBeUndefined();
+    expect(result.draft.sourceEvidence?.teachingDifficulties).toBeUndefined();
     expect(result.draft.knowledgeEvidenceSummary?.overallStatus).toBe("PARTIAL");
     expect(result.planningIssues.map((item) => item.id)).toEqual(expect.arrayContaining(["organization-title-personal-work", "make-duration-description-mismatch", "knowledge-evidence-topic-2"]));
     expect(resourcePackageDraftErrors(result.draft)).toEqual([]);
+  });
+  it("accepts standard and common teaching emphasis headings while retaining their source locations", () => {
+    const fixture = markdownHandoffFixture();
+    const lesson = fixture.lesson.replace("\n\n## 课堂实施", `
+
+## 教学设计提示
+
+### AI知识教学重点
+
+- 准确解释核心理论
+
+### 教学重点：
+
+1. 将理论用于活动设计
+
+### AI知识理解难点
+
+区分相近概念
+
+### 教学难点
+
+- 用学生语言解释抽象机制
+
+## 课堂实施`);
+    const result = parseMarkdownResourcePackageDraft(
+      readMarkdown(Buffer.from(fixture.knowledge), "知识点.md"),
+      readMarkdown(Buffer.from(lesson), "教案.md"),
+    );
+    expect(result.draft.teachingHighlights).toEqual(["准确解释核心理论", "将理论用于活动设计"]);
+    expect(result.draft.teachingDifficulties).toEqual(["区分相近概念", "用学生语言解释抽象机制"]);
+    expect(result.draft.sourceEvidence?.teachingHighlights).toEqual([
+      expect.objectContaining({ archivePath: "教案.md", quote: "- 准确解释核心理论" }),
+      expect.objectContaining({ archivePath: "教案.md", quote: "1. 将理论用于活动设计" }),
+    ]);
+    expect(result.draft.sourceEvidence?.teachingDifficulties).toEqual([
+      expect.objectContaining({ archivePath: "教案.md", quote: "区分相近概念" }),
+      expect.objectContaining({ archivePath: "教案.md", quote: "- 用学生语言解释抽象机制" }),
+    ]);
   });
   it("rejects mismatched handoff metadata", () => {
     const fixture = markdownHandoffFixture();

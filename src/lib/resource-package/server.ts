@@ -10,6 +10,7 @@ import type { Course } from "@/lib/session/types";
 import { normalizePackageStructure, readDocx, readMarkdown, ResourcePackageError, resourcePackageDraftSchema, type ResourcePackageSelections } from "./parser";
 import { adaptResourcePackageDraft, inspectPackageCompatibility, packageDraftSignature, stablePackageSignature } from "./compatibility";
 import { resourcePackageDraftErrors, stagePlanFromResourcePackage, type CourseResourcePackage, type ResourcePackageDraft, type ResourcePackageFile, type ResourcePackageJobSnapshot, type ResourcePackageRole } from "./types";
+import { recordCourseDesignEdit } from "@/lib/course-design/workspace";
 
 export { ResourcePackageError } from "./archive";
 export const resourcePackageDataDir = () => process.env.UPLOAD_DIR?.trim() || path.resolve(".openpbl-data", "uploads");
@@ -46,6 +47,50 @@ function invalidateGeneratedClassroom(course: Course): Course {
       knowledgeGraph: undefined, knowledgePoints: [], lessonOutline: [], knowledgeLectureSections: undefined,
       teacherReview: undefined, qualityReview: undefined, renderReview: undefined,
       designGenerationTrace: undefined, classroomGenerationRun: undefined } };
+}
+function applyResourcePackageChange(
+  course: Course,
+  resourcePackage: CourseResourcePackage | undefined,
+  stagePlan?: ReturnType<typeof stagePlanFromResourcePackage>,
+): Course {
+  const hasGeneratedCourse = Boolean(
+    course.aiLearningClassroomId
+    || course.content._openmaicClassroomId
+    || course.content._openmaicSceneOutlines?.length,
+  );
+  if (!hasGeneratedCourse) {
+    const invalidated = invalidateGeneratedClassroom(course);
+    return { ...invalidated, content: { ...invalidated.content, resourcePackage, ...(stagePlan ? { stagePlan } : {}) } };
+  }
+  let next: Course = {
+    ...course,
+    status: "preparing",
+    content: {
+      ...course.content,
+      resourcePackage,
+      ...(stagePlan ? { stagePlan } : {}),
+      teacherReview: undefined,
+      renderReview: undefined,
+      qualityReview: undefined,
+    },
+  };
+  next = {
+    ...next,
+    content: {
+      ...next.content,
+      designWorkspaceRevision: recordCourseDesignEdit(next, "materials"),
+    },
+  };
+  if (stagePlan) {
+    next = {
+      ...next,
+      content: {
+        ...next.content,
+        designWorkspaceRevision: recordCourseDesignEdit(next, "stage-plan"),
+      },
+    };
+  }
+  return next;
 }
 export async function assertResourcePackageEditable(courseId: string): Promise<void> {
   const active = ["queued", "running", "review_available", "paused", "cancelling"];
@@ -91,10 +136,10 @@ export async function submitResourcePackage(courseId: string, userId: string, up
   }
   // Invalidate confirmation as soon as a new input has been accepted.
   await updateCourse(courseId, (current) => {
-    const invalidated = invalidateGeneratedClassroom(current);
     const latest = current.content.resourcePackage;
     const preserved = latest && latest.revision >= request.revision ? latest : previousPackage;
-    return { ...invalidated, resources: (current.resources ?? []).filter((resource) => resource.id !== previousPackage?.launchResourceId), content: { ...invalidated.content, resourcePackage: preserved ? { ...preserved, confirmedAt: undefined } : undefined } };
+    const changed = applyResourcePackageChange(current, preserved ? { ...preserved, confirmedAt: undefined } : undefined);
+    return { ...changed, resources: (current.resources ?? []).filter((resource) => resource.id !== previousPackage?.launchResourceId) };
   });
   return job;
 }
@@ -108,7 +153,7 @@ export async function retryResourcePackage(courseId: string, userId: string, sel
   // Conversion retries preserve parsed material; changed candidate selection requires re-extraction.
   const changedSelection = selections && Object.entries(selections).some(([key, value]) => input.selections[key as ResourcePackageRole] !== value);
   if (!["failed", "needs_selection"].includes(job.status) && !(changedSelection && ["blocked", "ready"].includes(job.status))) throw new ResourcePackageError("当前资源包无需重试。", "RESOURCE_PACKAGE_BUSY", 409);
-  if (changedSelection) await updateCourse(courseId, (course) => { const invalidated = invalidateGeneratedClassroom(course); return { ...invalidated, resources: (course.resources ?? []).filter((item) => item.id !== result.package?.launchResourceId), content: { ...invalidated.content, resourcePackage: course.content.resourcePackage ? { ...course.content.resourcePackage, confirmedAt: undefined, adaptation: undefined, launchResourceId: undefined } : undefined } }; });
+  if (changedSelection) await updateCourse(courseId, (course) => { const changed = applyResourcePackageChange(course, course.content.resourcePackage ? { ...course.content.resourcePackage, confirmedAt: undefined, adaptation: undefined, launchResourceId: undefined } : undefined); return { ...changed, resources: (course.resources ?? []).filter((item) => item.id !== result.package?.launchResourceId) }; });
   try { return await resourcePackageJobs.update({ where: { id: job.id, version: job.version, status: job.status }, data: { status: "queued", step: "queued", version: { increment: 1 }, progress: result.package && !changedSelection ? 65 : 0,
     message: result.package && !changedSelection ? "等待重试项目启动课件转换" : "等待重新解析资源包", error: null, completedAt: null, lastHeartbeatAt: null,
     request: JSON.parse(JSON.stringify({ ...input, ...(changedSelection ? { revision: (result.package?.revision ?? input.revision) + 1, previousLaunchResourceId: result.package?.launchResourceId } : {}), selections: { ...input.selections, ...selections } })),
@@ -148,7 +193,7 @@ export async function confirmResourcePackage(courseId: string, userId: string, r
   const editedConflicts = inspectPackageCompatibility(normalized.stages.map((stage) => [stage.title, stage.requirements, stage.teacherActions, stage.outputs].join('\n')).join('\n'), []);
   if (current.draft.parsingVersion === 2 && ((current.conflicts?.length && (!current.adaptation || changed)) || job.status === "blocked" || editedConflicts.conflicts.length)) {
     const pending = { ...current, ...(editedConflicts.conflicts.length && !current.conflicts?.length ? editedConflicts : {}), draft: normalized, revision: changed ? revision + 1 : revision, confirmedAt: undefined, adaptation: undefined, launchResourceId: undefined, classroomPresentation: undefined };
-    await updateCourse(courseId, (course) => ({ ...invalidateGeneratedClassroom(course), resources: (course.resources ?? []).filter((item) => item.id !== current.launchResourceId), content: { ...invalidateGeneratedClassroom(course).content, resourcePackage: pending } }));
+    await updateCourse(courseId, (course) => { const changedCourse = applyResourcePackageChange(course, pending); return { ...changedCourse, resources: (course.resources ?? []).filter((item) => item.id !== current.launchResourceId) }; });
     return resourcePackageJobs.update({ where: { id: job.id, version: job.version }, data: { status: "blocked", message: "教学要求已保存；请修正上游资源包，或明确授权按系统流程统一适配。", request: JSON.parse(JSON.stringify({ ...(job.request as unknown as ResourcePackageRequest), revision: pending.revision })), result: JSON.parse(JSON.stringify({ ...result, package: pending })) } });
   }
   if (!current.launchResourceId) throw new ResourcePackageError("请等待启动课件处理完成。", "RESOURCE_PACKAGE_NOT_READY", 409);
@@ -158,10 +203,10 @@ export async function confirmResourcePackage(courseId: string, userId: string, r
   const draft = resourcePackage.draft;
   await updateCourse(courseId, (course) => {
     if (course.content.resourcePackage?.revision !== revision) throw new ResourcePackageError("资源包内容已更新，请刷新后重新确认。", "RESOURCE_PACKAGE_REVISION_CONFLICT", 409);
-    const invalidated = invalidateGeneratedClassroom(course);
-    return { ...invalidated, name: draft.courseName, subject: draft.subject, grade: draft.grade,
+    const changedCourse = applyResourcePackageChange(course, resourcePackage, stagePlanFromResourcePackage(draft));
+    return { ...changedCourse, name: draft.courseName, subject: draft.subject, grade: draft.grade,
       hours: draft.totalMinutes! / 60, drivingQuestion: draft.drivingQuestion, learningObjectives: draft.learningObjectives, expectedOutcome: draft.expectedOutcome,
-      content: { ...invalidated.content, resourcePackage, stagePlan: stagePlanFromResourcePackage(draft) } };
+      content: changedCourse.content };
   });
   return resourcePackageJobs.update({ where: { id: job.id, status: "ready", version: job.version }, data: { message: "资源包信息已确认，可以生成课堂", result: JSON.parse(JSON.stringify({ ...result, package: resourcePackage })) } });
 }
@@ -179,7 +224,7 @@ export async function authorizeResourcePackageAdaptation(courseId: string, userI
   const adapted = adaptResourcePackageDraft(normalizePackageStructure(parsed.data));
   const next: CourseResourcePackage = { ...current, draft: adapted.draft, revision: revision + 1, confirmedAt: undefined, launchResourceId: undefined, classroomPresentation: undefined,
     adaptation: { sourceRevision: revision, conflictVersion, authorizedBy: userId, authorizedAt: new Date().toISOString(), draftSignature: packageDraftSignature(adapted.draft), changes: adapted.changes } };
-  await updateCourse(courseId, (course) => { const invalidated = invalidateGeneratedClassroom(course); return { ...invalidated, resources: (course.resources ?? []).filter((item) => item.id !== current.launchResourceId), content: { ...invalidated.content, resourcePackage: next } }; });
+  await updateCourse(courseId, (course) => { const changedCourse = applyResourcePackageChange(course, next); return { ...changedCourse, resources: (course.resources ?? []).filter((item) => item.id !== current.launchResourceId) }; });
   return resourcePackageJobs.update({ where: { id: job.id, status: job.status, version: job.version }, data: { status: "queued", step: "adapt", progress: 65, error: null, completedAt: null, message: "已记录教师授权，正在统一适配课堂要求和启动课件", request: JSON.parse(JSON.stringify({ ...(job.request as unknown as ResourcePackageRequest), revision: next.revision })), result: JSON.parse(JSON.stringify({ ...result, package: next })) } });
 }
 

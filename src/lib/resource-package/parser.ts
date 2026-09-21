@@ -267,6 +267,29 @@ function markdownSource(documentRole: ResourcePackageRole, document: MarkdownRes
 function cleanSectionText(lines: string[]): string {
   return lines.filter((line) => line.trim() && !heading(line)).map((line) => bulletText(line) ?? line.trim()).join("\n");
 }
+function teachingRequirementSections(document: MarkdownResourceDocument, titles: string[]): { items: string[]; sources: ResourcePackageSource[] } {
+  const acceptedTitles = new Set(titles);
+  const items: string[] = [];
+  const sources: ResourcePackageSource[] = [];
+  for (let start = 0; start < document.lines.length; start++) {
+    const sectionHeading = heading(document.lines[start]);
+    if (!sectionHeading || !acceptedTitles.has(sectionHeading.title.replace(/[：:]$/, "").trim())) continue;
+    let end = document.lines.length;
+    for (let index = start + 1; index < document.lines.length; index++) {
+      const nextHeading = heading(document.lines[index]);
+      if (nextHeading && nextHeading.level <= sectionHeading.level) { end = index; break; }
+    }
+    for (let index = start + 1; index < end; index++) {
+      const line = document.lines[index].trim();
+      if (!line || heading(line)) continue;
+      const item = bulletText(line) ?? line.match(/^\d+[.、]\s*(.+)$/)?.[1]?.trim() ?? line;
+      if (!item || items.includes(item)) continue;
+      items.push(item);
+      sources.push(markdownSource("lessonPlan", document, index, line));
+    }
+  }
+  return { items, sources };
+}
 const STAGE_ID_TO_KEY = { INTRODUCTION: "launch", AI_LEARNING: "ai-learning", PROJECT_WORK: "make", SHOWCASE: "showcase", REFLECTION: "reflection" } as const;
 
 function parsePlanningIssues(lesson: MarkdownResourceDocument, draft: ResourcePackageDraft): ResourcePackagePlanningIssue[] {
@@ -332,8 +355,16 @@ export function parseMarkdownResourcePackageDraft(knowledge: MarkdownResourceDoc
   draft.aiUsagePolicy = draft.organizationRequirements.find((item) => /^AI使用原则[：:]/i.test(item))?.replace(/^AI使用原则[：:]\s*/i, "") ?? "";
   draft.learnerContext = cleanSectionText(sectionBody(lesson.lines, "学情参考", 2));
   draft.facilitatorReference = listItems(sectionBody(lesson.lines, "教师主持要点", 3));
-  draft.teachingHighlights = listItems(sectionBody(lesson.lines, "AI知识教学重点", 3));
-  draft.teachingDifficulties = listItems(sectionBody(lesson.lines, "AI知识理解难点", 3));
+  const highlights = teachingRequirementSections(lesson, ["AI知识教学重点", "教学重点"]);
+  const difficulties = teachingRequirementSections(lesson, ["AI知识理解难点", "教学难点"]);
+  if (highlights.items.length) {
+    draft.teachingHighlights = highlights.items;
+    draft.sourceEvidence.teachingHighlights = highlights.sources;
+  }
+  if (difficulties.items.length) {
+    draft.teachingDifficulties = difficulties.items;
+    draft.sourceEvidence.teachingDifficulties = difficulties.sources;
+  }
 
   const classroom = sectionRange(lesson.lines, "课堂实施", 2);
   if (classroom) {

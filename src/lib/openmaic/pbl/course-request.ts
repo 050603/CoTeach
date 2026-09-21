@@ -121,7 +121,7 @@ export function buildPblCourseRequirement(
       ? `已确认知识结构：\n${JSON.stringify({ knowledgePoints: content.knowledgePoints ?? [], knowledgeGraph: content.knowledgeGraph ?? null }, null, 2)}`
       : "",
     confirmedTeachingOutline?.length
-      ? `已确认课程模块（每个模块可独立展开多个课程大纲资源）：\n${JSON.stringify(confirmedTeachingOutline, null, 2)}\n课程总时长：${totalMinutes} 分钟；当前模块合计：${timeAssessment.allocatedMinutes} 分钟；六模块建议：${JSON.stringify(timeAssessment.recommendedStageTotals)}\n项目主线：${JSON.stringify(projectMainline, null, 2)}`
+      ? `已确认课程模块（每个模块可独立展开多个课程大纲资源）：\n${JSON.stringify(confirmedTeachingOutline, null, 2)}\n课程总时长：${totalMinutes} 分钟；当前模块合计：${timeAssessment.allocatedMinutes} 分钟；阶段时长建议：${JSON.stringify(timeAssessment.recommendedStageTotals)}\n项目主线：${JSON.stringify(projectMainline, null, 2)}`
       : "",
     content?.teachingOutline?.length
       ? `课程模块目录（用于校验课程大纲 parentActivityId）：\n${JSON.stringify(buildPblActivityCatalog(content), null, 2)}`

@@ -33,12 +33,30 @@ describe('narration continuity', () => {
     expect(context.pageIndex).toBe(3);
   });
 
+  it('greets when the AI lecture begins after a teacher-led launch page', () => {
+    const progression: SceneOutline[] = [
+      { ...outlines[0], id: 'launch', order: 0, stageKey: 'launch', audience: 'teacher' },
+      { ...outlines[0], id: 'ai-first', order: 1, stageKey: 'ai-learning', audience: 'student' },
+    ];
+    const context = buildNarrationContext(progression, 1, { courseTitle: '变量与关系' });
+    expect(context.sectionPosition).toBe('course-first');
+    expect(enforceNarrationContinuity([
+      { id: 's1', type: 'speech', text: '先从一个会变化的量开始。' },
+    ], context)[0]).toMatchObject({
+      type: 'speech',
+      text: expect.stringMatching(/^同学们好，欢迎来到《变量与关系》课程。/),
+    });
+  });
+
   it('removes repeated greetings and course restarts after page one', () => {
     expect(stripRepeatedNarrationOpening('大家好，欢迎来到今天的课堂。下面看变量关系。')).toBe('下面看变量关系。');
     expect(stripRepeatedNarrationOpening('同学们，今天我们来学习变量关系。先看这个式子。')).toBe('先看这个式子。');
     const actions: Action[] = [{ id: 's1', type: 'speech', text: '欢迎同学们来到变量课堂。现在观察关系式。' }];
     const result = enforceNarrationContinuity(actions, buildNarrationContext(outlines, 1));
-    expect(result[0]).toMatchObject({ type: 'speech', text: '现在观察关系式。' });
+    expect(result[0]).toMatchObject({
+      type: 'speech',
+      text: '现在观察关系式。 接下来进入项目实践，把刚才形成的认识用于具体任务。',
+    });
   });
 
   it('keeps the course-first greeting intact', () => {
@@ -125,7 +143,7 @@ describe('narration continuity', () => {
     const actions: Action[] = [{ id: 's1', type: 'speech', text: '上一节课我们认识了变量，现在继续看关系。' }];
     expect(enforceNarrationContinuity(actions, buildNarrationContext(outlines, 1))[0]).toMatchObject({
       type: 'speech',
-      text: '刚才我们认识了变量，现在继续看关系。',
+      text: '刚才我们认识了变量，现在继续看关系。 接下来进入项目实践，把刚才形成的认识用于具体任务。',
     });
   });
 
@@ -155,12 +173,65 @@ describe('narration continuity', () => {
       .toMatch(/感谢大家的认真参与，同学们再见。$/);
   });
 
+  it('hands the AI-learning stage into project practice without saying goodbye', () => {
+    const aiOnly = outlines.slice(0, 2);
+    const result = enforceNarrationContinuity([
+      { id: 's1', type: 'speech', text: '现在已经能依据变量关系作出判断。今天的课程就到这里，谢谢大家，同学们再见。' },
+    ], buildNarrationContext(aiOnly, 1));
+    const text = (result[0] as Extract<Action, { type: 'speech' }>).text;
+    expect(text).toContain('接下来进入项目实践');
+    expect(text).not.toMatch(/课程就到这里|谢谢大家|再见/);
+  });
+
+  it('invalidates changed audio and removes a visual cue whose speech anchor was trimmed', () => {
+    const actions: Action[] = [
+      {
+        id: 'focus', type: 'spotlight', elementId: 'summary', speechId: 's1',
+        speechAnchor: { quote: '谢谢大家', occurrence: 0 },
+      },
+      { id: 's1', type: 'speech', text: '记住这个判断。谢谢大家，同学们再见。', audioUrl: '/stale.mp3', audioDurationSec: 8 },
+    ];
+    const result = enforceNarrationContinuity(actions, buildNarrationContext(outlines.slice(0, 2), 1));
+    expect(result).toEqual([expect.objectContaining({
+      id: 's1',
+      type: 'speech',
+      audioInvalidated: true,
+      text: expect.stringContaining('接下来进入项目实践'),
+    })]);
+    expect(result[0]).not.toHaveProperty('audioUrl');
+    expect(result[0]).not.toHaveProperty('audioDurationSec');
+  });
+
+  it('bridges into an actual quiz and does not announce mastery or a course ending', () => {
+    const quiz: SceneOutline = {
+      id: 'quiz', type: 'quiz', title: '理解检测', description: '检查理解', keyPoints: [], order: 2, stageKey: 'ai-learning',
+    };
+    const progression = [...outlines.slice(0, 2), quiz];
+    const result = enforceNarrationContinuity([
+      { id: 's1', type: 'speech', text: '这一页讲清了判断依据。感谢大家，同学们再见。' },
+    ], buildNarrationContext(progression, 1));
+    const text = (result[0] as Extract<Action, { type: 'speech' }>).text;
+    expect(text).toContain('接下来通过“理解检测”检验理解');
+    expect(text).not.toMatch(/已经掌握|再见/);
+  });
+
+  it('does not treat a single later-page preview as the course ending', () => {
+    const preview = [{ ...outlines[0], stageKey: undefined, order: 4 }];
+    const context = buildNarrationContext(preview, 0);
+    expect(context.endingDisposition).toBe('partial-preview');
+    expect(enforceNarrationContinuity([
+      { id: 's1', type: 'speech', text: '先完成这一页的比较。谢谢大家，同学们再见。' },
+    ], context)[0]).toMatchObject({ type: 'speech', text: '先完成这一页的比较。' });
+  });
+
   it('preserves an authored formal ending and fills a missing one once', () => {
     expect(normalizeCourseFinalClosing('今天的课程就到这里，感谢大家参与，同学们再见。'))
       .toBe('今天的课程就到这里，感谢大家参与，同学们再见。');
     const filled = normalizeCourseFinalClosing('现在你已经能依据变化判断变量关系。');
     expect(filled).toContain('带到后续的判断与实践中');
     expect(filled.match(/同学们再见/g)).toHaveLength(1);
+    const deduplicated = normalizeCourseFinalClosing('记住判断依据。谢谢大家，同学们再见。谢谢大家，同学们再见。');
+    expect(deduplicated.match(/同学们再见/g)).toHaveLength(1);
   });
 
   it('recognizes formal farewells without removing the learning takeaway', () => {

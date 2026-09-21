@@ -63,6 +63,7 @@ import {
 import { summarizeGeneratedMediaReadiness } from "@/lib/course-generation/resource-readiness";
 import { estimateRemainingSeconds } from "@/lib/course-generation/progress-estimate";
 import { deriveKnowledgeLectureSectionsFromOutlines } from "@/lib/knowledge-lecture";
+import { COURSE_DESIGN_WORKSPACE_SECTIONS } from "@/lib/course-design/workspace";
 import type {
   ClassroomGenerationScope,
   TestLessonGenerationTarget,
@@ -266,6 +267,13 @@ export type PersistedCourseGenerationRequest = GenerateClassroomInput & {
   adaptiveBranchCount?: number;
   /** Internal checkpoint-recovery state; never supplied by the teacher UI. */
   managedRecoveryCount?: number;
+  /** Bounded post-generation update. It produces a candidate classroom and never replaces the live draft automatically. */
+  updateTarget?: {
+    baseDesignRevision: number;
+    baseClassroomId: string;
+    affectedSectionIds: string[];
+    affectedOutlineIds: string[];
+  };
 };
 
 export type CourseGenerationJobEvent = {
@@ -991,6 +999,103 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       pblMode: false,
       signal: controller.signal,
     });
+    if (request.updateTarget) {
+      const baseUrl = process.env.PUBLIC_BASE_URL?.trim() || "";
+      const assetInput = {
+        ...generated.assetContext,
+        baseUrl,
+        studentClassroomId: split.studentClassroomId,
+        studentScenes: split.studentScenes,
+        teacherClassroomId: split.teacherClassroomId || undefined,
+        teacherScenes: split.teacherScenes,
+        signal: controller.signal,
+        onProgress: (progress: ClassroomAssetGenerationProgress) => serializeWorkerWrite(() => persistWorkerPhase(job, {
+          step: assetPhaseStep(progress),
+          progress: progress.status === "completed" ? 99 : 96,
+          message: progress.message,
+          estimatedRemainingSeconds: progress.phase === "persisting" ? 20 : 60,
+          assetPhaseStatus: progress.status,
+          assetCompleted: progress.completed,
+          assetTotal: progress.total,
+        })),
+      };
+      try {
+        await generateClassroomAssets(assetInput);
+      } catch (assetError) {
+        if (controller.signal.aborted || isAbortError(assetError)) throw assetError;
+        log.error("Bounded classroom candidate asset generation failed", assetError);
+      }
+      const candidateId = `candidate-${job.id}-${Date.now()}`;
+      await updateCourse(courseId, (current) => {
+        const revision = current.content.designWorkspaceRevision;
+        const currentClassroomId = current.aiLearningClassroomId || current.content._openmaicClassroomId;
+        if ((revision?.revision ?? 0) !== request.updateTarget!.baseDesignRevision
+          || currentClassroomId !== request.updateTarget!.baseClassroomId) {
+          throw new Error("局部更新完成前课程设计已经变化，候选结果未被采用，请按最新内容重新生成。");
+        }
+        const previousCandidates = revision?.candidateUpdates ?? [];
+        return {
+          ...current,
+          content: {
+            ...current.content,
+            designWorkspaceRevision: {
+              ...(revision ?? {
+                schemaVersion: 1 as const,
+                revision: 0,
+                updatedAt: new Date().toISOString(),
+                sections: {},
+                pendingUpdates: [],
+              }),
+              candidateUpdates: [
+                ...previousCandidates.filter((candidate) => candidate.target !== "classroom"),
+                {
+                  id: candidateId,
+                  target: "classroom" as const,
+                  classroomId: split.studentClassroomId,
+                  baseClassroomId: request.updateTarget!.baseClassroomId,
+                  baseRevision: request.updateTarget!.baseDesignRevision,
+                  affectedSectionIds: request.updateTarget!.affectedSectionIds,
+                  affectedOutlineIds: request.updateTarget!.affectedOutlineIds,
+                  generatedAt: new Date().toISOString(),
+                },
+              ],
+            },
+          },
+        };
+      });
+      const completedAt = new Date();
+      const message = `已生成 ${split.studentSceneCount} 个页面的局部更新候选，等待教师确认采用`;
+      await contentGenerationJobs.update({
+        where: { id: job.id },
+        data: {
+          status: "completed",
+          step: "candidate_ready",
+          progress: 100,
+          message,
+          scenesGenerated: split.studentSceneCount,
+          totalScenes: split.studentSceneCount,
+          estimatedRemainingSeconds: 0,
+          result: {
+            id: split.studentClassroomId,
+            candidateId,
+            updateTarget: request.updateTarget,
+          } as unknown as Prisma.InputJsonValue,
+          qualityReport: generated.qualityReport as unknown as Prisma.InputJsonValue,
+          events: [...asEvents(job.events), {
+            step: "candidate_ready",
+            progress: 100,
+            message,
+            scenesGenerated: split.studentSceneCount,
+            totalScenes: split.studentSceneCount,
+            ts: completedAt.getTime(),
+          }].slice(-MAX_STORED_EVENTS) as unknown as Prisma.InputJsonValue,
+          completedAt,
+          lastHeartbeatAt: completedAt,
+          version: { increment: 1 },
+        },
+      });
+      return;
+    }
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
       step: "saving_classrooms",
       progress: 93,
@@ -1026,6 +1131,19 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         teacherReviewItems: generated.teacherReviewItems,
         teacherReviewSummary: generated.teacherReviewSummary,
         teacherReviewVersion: generated.teacherReviewVersion,
+        designWorkspaceRevision: {
+          schemaVersion: 1,
+          revision: (current.content.designWorkspaceRevision?.revision ?? 0) + 1,
+          updatedAt: new Date().toISOString(),
+          sections: Object.fromEntries(COURSE_DESIGN_WORKSPACE_SECTIONS.map((section) => [section.key, {
+            status: "ready" as const,
+            revision: (current.content.designWorkspaceRevision?.revision ?? 0) + 1,
+            manuallyEdited: current.content.designWorkspaceRevision?.sections[section.key]?.manuallyEdited ?? false,
+            updatedAt: new Date().toISOString(),
+          }])),
+          pendingUpdates: [],
+          candidateUpdates: [],
+        },
       },
     }));
     await serializeWorkerWrite(() => persistWorkerPhase(job, {

@@ -47,6 +47,29 @@ function readyCourse(): Course {
 }
 
 describe("new-system course contract", () => {
+  it("blocks publishing while a downstream design artifact is stale", () => {
+    const course = readyCourse();
+    course.content.designWorkspaceRevision = {
+      schemaVersion: 1,
+      revision: 2,
+      updatedAt: "2026-09-20T00:00:00.000Z",
+      sections: {},
+      pendingUpdates: [{
+        id: "2:knowledge:classroom",
+        source: "knowledge",
+        target: "classroom",
+        reason: "知识结构已修改",
+        affectedSectionIds: ["section-1"],
+        affectedOutlineIds: ["scene-ai"],
+        includesManualEdits: true,
+        createdAt: "2026-09-20T00:00:00.000Z",
+      }],
+    };
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "design-workspace-freshness"))
+      .toMatchObject({ ok: false, label: "课程设计依赖" });
+    expect(isNewSystemCourseReady(course)).toBe(false);
+  });
+
   it("keeps measured duration deviation advisory while requiring complete usable audio evidence", () => {
     const course = readyCourse();
     course.content.teachingBlueprint = { assessmentMode: "adaptive" } as Course["content"]["teachingBlueprint"];

@@ -1457,6 +1457,8 @@ export type CourseContent = {
   resourcePackage?: import("@/lib/resource-package/types").CourseResourcePackage;
   /** Authoritative five-stage teaching requirements and minute budgets. */
   stagePlan?: import("@/lib/resource-package/types").CourseStagePlan;
+  /** Unified, teacher-private requirements shared by knowledge, timing and page planning. */
+  teachingRequirements?: CourseTeachingRequirements;
   qualityReview?: import("@/lib/course-quality-review/types").CourseQualityReport;
   qualityReviewRequired?: boolean;
   renderReview?: import("@/lib/course-quality-review/teacher-review").CourseRenderReview;
@@ -1501,6 +1503,8 @@ export type CourseContent = {
     invalidated: Array<"audio" | "narration-anchors" | "timing-audit" | "actions" | "assessment-opportunity">;
     updatedAt: string;
   };
+  /** Teacher-private dependency state for the post-generation design workspace. */
+  designWorkspaceRevision?: CourseDesignWorkspaceRevision;
   /** Teacher-facing aggregate that distinguishes measured TTS from script estimates. */
   teachingTimingAudit?: TeachingTimingAudit;
   /** Teacher-private items to verify before teaching; never projected to learners. */
@@ -1545,6 +1549,57 @@ export type CourseContent = {
   adaptiveLearningPlan?: AdaptiveLearningPlan;
   /** Traceable outputs and quality gates produced by the quick-design mode. */
   designGenerationTrace?: CourseDesignGenerationTrace;
+};
+
+export type CourseDesignWorkspaceSectionKey =
+  | "materials"
+  | "stage-plan"
+  | "knowledge"
+  | "timing"
+  | "blueprint"
+  | "classroom";
+
+export type CourseDesignWorkspaceArtifactStatus =
+  | "missing"
+  | "ready"
+  | "stale"
+  | "generating"
+  | "failed";
+
+export type CourseDesignWorkspacePendingUpdate = {
+  id: string;
+  source: CourseDesignWorkspaceSectionKey;
+  target: CourseDesignWorkspaceSectionKey;
+  reason: string;
+  affectedSectionIds: string[];
+  affectedOutlineIds: string[];
+  includesManualEdits: boolean;
+  createdAt: string;
+};
+
+export type CourseDesignWorkspaceRevision = {
+  schemaVersion: 1;
+  revision: number;
+  updatedAt: string;
+  lastEditedSection?: CourseDesignWorkspaceSectionKey;
+  sections: Partial<Record<CourseDesignWorkspaceSectionKey, {
+    status: CourseDesignWorkspaceArtifactStatus;
+    revision: number;
+    manuallyEdited: boolean;
+    updatedAt: string;
+    error?: string;
+  }>>;
+  pendingUpdates: CourseDesignWorkspacePendingUpdate[];
+  candidateUpdates?: Array<{
+    id: string;
+    target: "classroom";
+    classroomId: string;
+    baseClassroomId: string;
+    baseRevision: number;
+    affectedSectionIds: string[];
+    affectedOutlineIds: string[];
+    generatedAt: string;
+  }>;
 };
 
 export type CourseDesignGenerationTraceEntry = {
@@ -1712,6 +1767,10 @@ export type KnowledgePoint = {
   /** Textbook evidence selected for this lesson node; details live in CourseContent.courseEvidence. */
   evidenceItemIds?: string[];
   teachingDepth?: "detailed" | "brief" | "extension";
+  /** A core concept needs an explicit definition before its detail concepts. */
+  teachingRole?: "core-concept" | "detail-concept";
+  /** Lesson-owned parent targets that must be established first or on the same page. */
+  parentKnowledgePointIds?: string[];
   groupId?: string;
   groupName?: string;
   id: string;
@@ -1724,6 +1783,26 @@ export type KnowledgePoint = {
   objectiveIndexes?: number[];
   relatedIds?: string[];
   level?: "foundation" | "core" | "application" | "extension";
+};
+
+export type CourseTeachingRequirement = {
+  id: string;
+  kind: "teacher-directive" | "highlight" | "difficulty" | "stage-requirement";
+  source: "teacher" | "resource-package";
+  text: string;
+  /** Source-package responsibilities named or scoped by this requirement. */
+  sourceKnowledgePointIds: string[];
+};
+
+export type CourseTeachingRequirements = {
+  schemaVersion: 1;
+  items: CourseTeachingRequirement[];
+  conflicts: Array<{
+    id: string;
+    summary: string;
+    detail: string;
+    source: "resource-package";
+  }>;
 };
 
 export type KnowledgeScopePlan = {
@@ -1790,6 +1869,8 @@ export type KnowledgeGraphNode = {
   keyInfo?: string;
   evidenceItemIds?: string[];
   teachingDepth?: "detailed" | "brief" | "extension";
+  teachingRole?: "core-concept" | "detail-concept";
+  parentKnowledgePointIds?: string[];
   level?: "foundation" | "core" | "application" | "extension";
   /** Lesson targets and curriculum prerequisites share one graph but not one teaching scope. */
   instructionalRole?: "lesson" | "prerequisite";

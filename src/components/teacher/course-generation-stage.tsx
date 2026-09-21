@@ -54,7 +54,7 @@ type Props = {
 };
 
 const BASE_PHASES = [
-  { label: "理解课程设计", detail: "读取目标、课时与六阶段安排", threshold: 8 },
+  { label: "理解课程设计", detail: "读取目标、课时与五阶段安排", threshold: 8 },
   { label: "规划课堂结构", detail: "安排知识、活动与评价顺序", threshold: 28 },
   { label: "制作教学内容", detail: "生成课件、讲稿与互动内容", threshold: 54 },
   { label: "补充媒体素材", detail: "处理配图、语音与可选媒体", threshold: 82 },

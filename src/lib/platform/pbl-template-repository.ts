@@ -7,6 +7,29 @@ import type { PlatformDb } from "./access";
 import { PlatformError } from "./repository";
 import { createPblTemplateCourse, decodePblTemplate, encodePblTemplate } from "./pbl-template";
 
+export type PblTemplatePublicationState = {
+  latestVersion: number | null;
+  publishedVersion: number | null;
+  draftVersion: number | null;
+};
+
+export async function getPblTemplatePublicationState(
+  id: string,
+  db: PlatformDb = prisma,
+): Promise<PblTemplatePublicationState> {
+  const template = await db.classroomTemplate.findUnique({
+    where: { id },
+    select: { versions: { orderBy: { version: "desc" }, select: { version: true, status: true } } },
+  });
+  const latest = template?.versions[0];
+  const published = template?.versions.find((version) => version.status.toUpperCase() === "PUBLISHED");
+  return {
+    latestVersion: latest?.version ?? null,
+    publishedVersion: published?.version ?? null,
+    draftVersion: latest?.status.toUpperCase() === "DRAFT" ? latest.version : null,
+  };
+}
+
 export async function loadPblTemplateCourse(id: string, db: PlatformDb = prisma): Promise<Course | null> {
   const template = await db.classroomTemplate.findUnique({ where: { id }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
   if (!template || template.status.toUpperCase() === "DELETED") return null;

@@ -146,8 +146,8 @@ describe('independent first-pass teaching narration', () => {
       anchors: [{ id: 'a1', semanticId: 'page-b:visible-1', quote, occurrence: 0 }],
     }, previous, current);
 
-    expect(grounded).toContain('刚才我们已经明确：有相关依据再采用');
     expect(grounded).toContain('从已经建立的核验要求进入第一条判断依据');
+    expect(grounded).not.toContain('有相关依据再采用');
     expect(grounded).toContain(quote);
     expect(grounded).not.toContain('项目式学习');
     expect(grounded).not.toContain('建构主义');
@@ -160,6 +160,54 @@ describe('independent first-pass teaching narration', () => {
     }, previous, current);
     expect(withoutAnchor).toContain('判断一段表述是否规定稳定结构');
     expect(withoutAnchor).not.toContain('并未讲过的项目问题');
+  });
+
+  it('uses the full progression when a section preview is followed by a quiz', async () => {
+    const page = { ...outline(), order: 4, lectureSectionId: 'section-a' };
+    const quiz: SceneOutline = {
+      id: 'quiz-a', type: 'quiz', title: '小节检测', description: '检查本节理解', keyPoints: [], order: 5,
+      stageKey: 'ai-learning', lectureSectionId: 'section-a',
+    };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{
+      pageId: page.id,
+      segments: [{
+        text: '现在已经掌握了本节方法。今天的课程就到这里，谢谢大家，同学们再见。',
+        semanticIds: ['page-a:teaching'],
+      }],
+    }] }));
+
+    const generated = await generateTeachingSectionNarration({
+      sectionId: 'section-a',
+      pages: [{ outline: page, content: content() }],
+      requirements: { requirement: '讲清核验方法' },
+      courseProgression: [page, quiz],
+      aiCall,
+    });
+
+    const text = generated.pages[0]?.segments[0]?.text ?? '';
+    expect(text).toContain('接下来通过“小节检测”检验理解');
+    expect(text).not.toMatch(/已经掌握|课程就到这里|谢谢大家|再见/);
+  });
+
+  it('keeps only one farewell when the draft closes in consecutive segments', async () => {
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{
+      pageId: 'page-a',
+      segments: [
+        { text: '谢谢大家，同学们再见。', semanticIds: ['page-a:teaching'] },
+        { text: '最后记住：先找到与说法直接相关的记录。', semanticIds: ['page-a:teaching'] },
+      ],
+    }] }));
+
+    const generated = await generateTeachingSectionNarration({
+      sectionId: 'standalone',
+      pages: [{ outline: outline(), content: content() }],
+      requirements: { requirement: '讲清核验方法' },
+      aiCall,
+    });
+
+    const text = generated.pages[0]?.segments.map((segment) => segment.text).join(' ') ?? '';
+    expect(text).toContain('最后记住');
+    expect(text.match(/同学们再见/g)).toHaveLength(1);
   });
 
   it('removes a repeated welcome from an embedded resource while keeping course-first pages welcoming', async () => {

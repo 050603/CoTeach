@@ -13,7 +13,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, ...overrides, default: { ...actual, ...overrides } };
 });
 import { PresentationConversionError } from "@/lib/uploads/presentation-converter";
-import { runResourcePackageJob } from "./job-runner";
+import { mergeTeachingRequirementExtraction, runResourcePackageJob } from "./job-runner";
 import type { Course } from "@/lib/session/types";
 
 let course: Course;
@@ -36,6 +36,27 @@ beforeEach(() => {
   mocks.save.mockImplementation(async (_id: string, updater: (course: Course) => Course) => { course = updater(course); });
 });
 describe("resource package presentation jobs", () => {
+  it("preserves parsed teaching emphasis and only fills missing arrays from cited source text", () => {
+    const current = emptyResourcePackageDraft();
+    current.teachingHighlights = ["教师原文重点"];
+    current.sourceEvidence = { teachingHighlights: [{ documentRole: "lessonPlan", locator: "第8行", quote: "教师原文重点" }] };
+    const inferred = emptyResourcePackageDraft();
+    inferred.teachingHighlights = ["模型提取重点"];
+    inferred.teachingDifficulties = ["辨析相近概念"];
+    inferred.sourceEvidence = {
+      teachingHighlights: [{ documentRole: "lessonPlan", locator: "教学重点", quote: "模型提取重点" }],
+      teachingDifficulties: [{ documentRole: "lessonPlan", locator: "教学难点", quote: "辨析相近概念" }],
+    };
+    const merged = mergeTeachingRequirementExtraction(current, inferred, "教学重点：模型提取重点\n教学难点：辨析相近概念");
+    expect(merged.teachingHighlights).toEqual(["教师原文重点"]);
+    expect(merged.sourceEvidence?.teachingHighlights).toEqual(current.sourceEvidence.teachingHighlights);
+    expect(merged.teachingDifficulties).toEqual(["辨析相近概念"]);
+    expect(merged.sourceEvidence?.teachingDifficulties).toEqual(inferred.sourceEvidence.teachingDifficulties);
+
+    const withoutCitedDifficulty = mergeTeachingRequirementExtraction(emptyResourcePackageDraft(), inferred, "资料没有教学重难点");
+    expect(withoutCitedDifficulty.teachingHighlights).toBeUndefined();
+    expect(withoutCitedDifficulty.teachingDifficulties).toBeUndefined();
+  });
   it("retains parsed inputs after conversion failure and binds one launch resource after retry", async () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     mocks.convert.mockRejectedValueOnce(new PresentationConversionError("CONVERSION_FAILED", "failed"));

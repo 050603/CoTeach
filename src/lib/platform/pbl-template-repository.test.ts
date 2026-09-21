@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ template: vi.fn(), createTemplate: vi.fn(), updateTemplate: vi.fn(), createVersion: vi.fn(), updateVersion: vi.fn(), files: vi.fn(), transaction: vi.fn(), lock: vi.fn() }));
 vi.mock("@/lib/db/client", () => ({ prisma: { $transaction: mocks.transaction } }));
 import { createPblTemplateCourse, encodePblTemplate } from "./pbl-template";
-import { savePblTemplateCourse } from "./pbl-template-repository";
+import { getPblTemplatePublicationState, savePblTemplateCourse } from "./pbl-template-repository";
 const now = new Date("2026-09-01T00:00:00Z");
 const course = createPblTemplateCourse("template", { name: "Original" });
 function template(status = "DRAFT") { return { id: "template", ownerId: "teacher", status: "ACTIVE", createdAt: now, updatedAt: now, versions: [{ id: "v1", version: 1, status, snapshot: encodePblTemplate(course) }] }; }
@@ -14,6 +14,20 @@ beforeEach(() => {
   }));
 });
 describe("V2 PBL template persistence", () => {
+  it("reports the immutable published version separately from the editable draft", async () => {
+    const state = await getPblTemplatePublicationState("template", {
+      classroomTemplate: {
+        findUnique: vi.fn().mockResolvedValue({
+          versions: [
+            { version: 3, status: "DRAFT" },
+            { version: 2, status: "PUBLISHED" },
+          ],
+        }),
+      },
+    } as never);
+    expect(state).toEqual({ latestVersion: 3, publishedVersion: 2, draftVersion: 3 });
+  });
+
   it("uses the immutable published snapshot as the source of a new editable draft", async () => {
     mocks.template.mockResolvedValue(template("PUBLISHED"));
     await savePblTemplateCourse({ ...course, name: "Revised", version: now.getTime(), status: "ready" }, "teacher");

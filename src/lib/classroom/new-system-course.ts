@@ -5,6 +5,7 @@ import type {
 import type { Course, KnowledgePoint, OpenMaicSceneOutlineSnapshot, TeachingOutlineSection } from "@/lib/session/types";
 import { allocateLectureBudget, isKnowledgeLectureBudgetInRange } from "./knowledge-lecture-budget";
 import type { CourseStagePlan } from "@/lib/resource-package/types";
+import { hasPendingCourseDesignUpdates } from "@/lib/course-design/workspace";
 
 export const NEW_SYSTEM_AI_TIMING_POLICY_VERSION = "shared-knowledge-cluster-budget-v1";
 
@@ -261,6 +262,12 @@ export function getNewSystemCourseReadiness(
   }) && blueprintCourseAssessmentValid;
 
   return [
+    ...(course.content.designWorkspaceRevision ? [{
+      id: "design-workspace-freshness",
+      label: "课程设计依赖",
+      ok: !hasPendingCourseDesignUpdates(course),
+      message: "课程设计仍有受上游修改影响的内容，请在课程设计工作台完成或确认相关更新。",
+    }] : []),
     ...(course.content.classroomGenerationRun ? [{
       id: "full-classroom-generation",
       label: "完整课程生成",

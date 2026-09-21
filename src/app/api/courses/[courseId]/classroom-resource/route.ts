@@ -25,6 +25,7 @@ import {
   teacherReviewSummary,
 } from '@/lib/course-generation/teacher-review-items';
 import type { SceneOutline } from '@/lib/openmaic/types/generation';
+import { resolveCourseDesignUpdate } from '@/lib/course-design/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -268,6 +269,9 @@ export async function PATCH(
         outlines: syncedOutlines as unknown as SceneOutline[],
         scenes: prepared.scenes,
       });
+      const workspaceRevision = current.content.designWorkspaceRevision
+        ? resolveCourseDesignUpdate(current.content, 'classroom')
+        : undefined;
       return {
         ...current,
         status: 'preparing',
@@ -288,6 +292,12 @@ export async function PATCH(
           teachingTimingAudit: revisionState.invalidated.includes('timing-audit')
             ? undefined : current.content.teachingTimingAudit,
           teachingRevisionState: revisionState,
+          ...(workspaceRevision ? {
+            designWorkspaceRevision: {
+              ...workspaceRevision,
+              candidateUpdates: [],
+            },
+          } : {}),
           _openmaicClassroomId: targetClassroomId,
           _openmaicScenesCount: prepared.scenes.length,
           _openmaicSceneOutlines: syncedOutlines,

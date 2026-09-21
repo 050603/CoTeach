@@ -1,7 +1,7 @@
 /** Remove private authoring input without changing the stored template. */
 export function withoutPrivatePackageContent<T extends object>(content: T): T {
   const copy = { ...content } as Record<string, unknown>;
-  for (const key of ["resourcePackage", "textbookSelections", "courseEvidence", "teachingBlueprint", "teachingTimingAudit", "teachingAdoptions", "teachingRevisionState", "designGenerationTrace", "teacherReviewItems", "teacherReviewSummary", "teacherReviewVersion", "knowledgeScopePlan", "teacherReview", "renderReview", "qualityReview", "qualityReviewRequired"]) delete copy[key];
+  for (const key of ["resourcePackage", "textbookSelections", "courseEvidence", "teachingRequirements", "teachingBlueprint", "teachingTimingAudit", "teachingAdoptions", "teachingRevisionState", "designWorkspaceRevision", "designGenerationTrace", "teacherReviewItems", "teacherReviewSummary", "teacherReviewVersion", "knowledgeScopePlan", "teacherReview", "renderReview", "qualityReview", "qualityReviewRequired"]) delete copy[key];
   if (Array.isArray(copy.knowledgePoints)) {
     copy.knowledgePoints = copy.knowledgePoints.map((value) => {
       if (!value || typeof value !== "object" || Array.isArray(value)) return value;
