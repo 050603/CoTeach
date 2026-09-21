@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { WorkspaceNav } from "./workspace-nav";
 
 type TeacherPlatformHeaderProps = {
-  active?: "classes" | "templates" | "settings";
+  active?: "classes" | "templates" | "textbooks" | "settings";
   /** @deprecated Breadcrumb content is retained for call-site compatibility. Use backHref/backLabel. */
   leading?: ReactNode;
   backHref?: string;

@@ -364,7 +364,9 @@ describe('formal course teaching enhancement', () => {
     expect(prompt.system).toContain('后页才出现的术语、案例或问题必须在其所属页面作为新内容引入');
     expect(prompt.system).toContain('测验后的反馈完成收束');
     expect(prompt.user).toContain('需要按共同维度逐项查读的差异可优先 table');
-    expect(prompt.user).toContain('后台字段不得进入学生页面或讲稿');
+    expect(prompt.system).toContain('同一案例明确分成两个输出通道');
+    expect(prompt.user).toContain('examples、explanation、visibleContent 和 narrationFocus 直接写实际课堂内容');
+    expect(prompt.user).toContain('不得出现“教材原例”“教学改编”“AI 补充”');
     expect(prompt.user).toContain('每页新增认识是否有充分解释支撑');
     expect(prompt.user).toContain('完整基本定义');
     expect(prompt.system).toContain('概念与区别可从熟悉对象');

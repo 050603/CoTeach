@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Minimize2, Network, Plus, Trash2 } from "lucide-react";
+import { BookOpen, Check, Minimize2, Network, Plus, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useMemo, useState } from "react";
 import { KnowledgeGraphFlow } from "@/components/knowledge-graph-flow";
@@ -10,6 +10,7 @@ import type {
   KnowledgeGraphNode,
   KnowledgePoint,
 } from "@/lib/session/types";
+import type { CourseEvidenceSnapshot } from "@/lib/textbook/course-evidence-types";
 
 const LEVELS = [
   ["foundation", "基础"],
@@ -45,11 +46,13 @@ function prepareGraph(points: KnowledgePoint[], graph: KnowledgeGraph): Knowledg
 export function QuickKnowledgeReviewDialog({
   initialKnowledgePoints,
   initialKnowledgeGraph,
+  courseEvidence,
   onClose,
   onConfirm,
 }: {
   initialKnowledgePoints: KnowledgePoint[];
   initialKnowledgeGraph: KnowledgeGraph;
+  courseEvidence?: CourseEvidenceSnapshot;
   onClose: () => void;
   onConfirm: (knowledgePoints: KnowledgePoint[], knowledgeGraph: KnowledgeGraph) => Promise<void>;
 }) {
@@ -69,6 +72,13 @@ export function QuickKnowledgeReviewDialog({
 
   const selectedNode = graph.nodes.find((node) => node.id === selectedId) ?? null;
   const selectedPoint = points.find((point) => point.id === selectedId) ?? null;
+  const selectedEvidence = useMemo(() => {
+    const evidenceIds = new Set([
+      ...(selectedPoint?.evidenceItemIds ?? []),
+      ...(selectedNode?.evidenceItemIds ?? []),
+    ]);
+    return (courseEvidence?.items ?? []).filter((item) => evidenceIds.has(item.id));
+  }, [courseEvidence?.items, selectedNode?.evidenceItemIds, selectedPoint?.evidenceItemIds]);
   const selectedEdges = useMemo(
     () => graph.edges.filter((edge) => edge.source === selectedId || edge.target === selectedId),
     [graph.edges, selectedId],
@@ -253,6 +263,26 @@ export function QuickKnowledgeReviewDialog({
                 {selectedPoint ? <label className="block text-xs font-semibold text-stone-600">掌握标准
                   <textarea className="mt-1 min-h-16 w-full resize-y rounded-[7px] border border-stone-300 px-3 py-2 text-sm leading-5 outline-none focus:border-blue-600" onChange={(event) => updateNode({ masteryBoundary: event.target.value })} value={selectedNode.masteryBoundary ?? ""} />
                 </label> : null}
+                {selectedNode.teachingDepth ? (
+                  <div className="rounded-[8px] bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">
+                    <span className="font-bold">讲授深度：</span>{selectedNode.teachingDepth}
+                  </div>
+                ) : null}
+                {selectedEvidence.length ? (
+                  <div className="space-y-2 border-t border-stone-100 pt-3">
+                    <p className="flex items-center gap-1.5 text-xs font-bold text-stone-700"><BookOpen className="size-3.5 text-blue-700" />教材依据</p>
+                    {selectedEvidence.map((item) => (
+                      <article className="rounded-[8px] border border-blue-100 bg-blue-50/50 p-2.5" key={item.id}>
+                        <p className="text-xs font-bold text-stone-900">{item.title}</p>
+                        <p className="mt-1 text-xs leading-5 text-stone-700">{item.content}</p>
+                        {item.source.quote ? <blockquote className="mt-2 border-l-2 border-blue-300 pl-2 text-[11px] leading-5 text-stone-600">{item.source.quote}</blockquote> : null}
+                        <p className="mt-1.5 text-[10px] text-stone-500">{item.source.textbookTitle} · {item.source.sectionPath.join(" / ") || "正文"}</p>
+                      </article>
+                    ))}
+                  </div>
+                ) : courseEvidence && selectedPoint ? (
+                  <p className="rounded-[8px] bg-stone-50 px-3 py-2 text-xs leading-5 text-stone-500">该节点尚未绑定教材证据，应在确认前检查是否属于明确标识的 AI 补充。</p>
+                ) : null}
               </div>
             ) : null}
 

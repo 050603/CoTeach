@@ -57,7 +57,13 @@ services:
       - classrooms:/app/data/classrooms
 
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: ./deploy/postgres
+      dockerfile: Dockerfile
+      network: host
+      args:
+        PGVECTOR_BASE_IMAGE: ${OPENPBL_PGVECTOR_BASE_IMAGE:-pgvector/pgvector:0.8.6-pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b}
+    image: openpbl-postgres:16-pgvector0.8.6
     environment:
       POSTGRES_DB: openpbl
       POSTGRES_USER: openpbl

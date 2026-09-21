@@ -83,6 +83,15 @@ describe("platform workspace shells", () => {
     expect(screen.getByRole("link", { name: "返回教学班" })).toHaveAttribute("href", "/teacher/classes");
   });
 
+  it("links the shared textbook library and returns textbook details to it", () => {
+    route.pathname = "/teacher/textbooks/book-1";
+    render(<TeacherPlatformHeader active="textbooks" />);
+
+    expect(screen.getByRole("link", { name: "教材库" })).toHaveAttribute("href", "/teacher/textbooks");
+    expect(screen.getByRole("link", { name: "教材库" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "返回教材库" })).toHaveAttribute("href", "/teacher/textbooks");
+  });
+
   it("returns from course members to the owning course", () => {
     route.pathname = "/teacher/classes/course-1/students";
     render(<TeacherPlatformHeader active="classes" />);

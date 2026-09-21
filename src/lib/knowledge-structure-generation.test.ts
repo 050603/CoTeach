@@ -133,6 +133,34 @@ describe("reviewed knowledge structure generation", () => {
     ))).toBe(true);
     expect(result.knowledgeScopePlan?.rationale).toContain("完整保留资源包规定的知识点");
   });
+  it("allows textbook concepts to split one upstream requirement while preserving evidence and coverage", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+      knowledgePoints: [
+        { id: "target-body", name: "身体参与认知", description: "身体经验参与概念形成", sourceKnowledgePointIds: ["source-embodied"], evidenceItemIds: ["evidence-1"], teachingDepth: "detailed" },
+        { id: "target-environment", name: "环境互动认知", description: "环境互动影响认知", sourceKnowledgePointIds: ["source-embodied"], evidenceItemIds: ["evidence-2"], teachingDepth: "brief" },
+      ],
+      knowledgeGraph: { nodes: [], edges: [] },
+      knowledgeScopePlan: { decisions: [{ sourceKnowledgePointId: "source-embodied", rationale: "教材分为身体和环境两个角度。" }] },
+    }));
+    const result = await generateKnowledgeStructureOnce(input, {
+      teacherKnowledgePoints: [{ id: "source-embodied", name: "具身认知", description: "理解具身认知" }],
+      textbookEvidence: {
+        schemaVersion: 1, version: 1, fingerprint: "f", createdAt: new Date(0).toISOString(), retrievalMode: "hybrid",
+        selections: [], warnings: [], mappings: [], items: [
+          { id: "evidence-1", kind: "concept", title: "身体经验", content: "身体经验", source: { textbookId: "b", textbookTitle: "教材", revisionId: "r", revisionVersion: 1, sectionPath: [] } },
+          { id: "evidence-2", kind: "concept", title: "环境互动", content: "环境互动", source: { textbookId: "b", textbookTitle: "教材", revisionId: "r", revisionVersion: 1, sectionPath: [] } },
+        ],
+      },
+      teachingCapacity: { durationRangeMin: 30, durationRangeMax: 30, planningDurationMin: 30, durationSource: "resource-package", assessmentReserveMin: 4, explanationAndActivityMin: 26 },
+    }, { modelCall });
+    expect(result.knowledgePoints).toHaveLength(2);
+    expect(result.knowledgePoints.every((point) => point.sourceKnowledgePointIds?.includes("source-embodied"))).toBe(true);
+    expect(result.knowledgePoints.map((point) => point.evidenceItemIds)).toEqual([["evidence-1"], ["evidence-2"]]);
+    expect(result.knowledgeScopePlan?.decisions[0]).toMatchObject({
+      disposition: "mapped", targetKnowledgePointIds: ["target-body", "target-environment"],
+    });
+    expect(modelCall.mock.calls[0][0][1].content).toContain("允许拆分、合并和多对多映射");
+  });
   it("generates the new-system teacher checkpoint without an AI review call", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify(candidate));
 

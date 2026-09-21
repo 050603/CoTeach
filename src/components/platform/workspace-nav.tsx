@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, BookOpen, ChevronDown, Layers3, LogOut, Settings2, UserPlus } from "lucide-react";
+import { ArrowLeft, BookMarked, BookOpen, ChevronDown, Layers3, LogOut, Settings2, UserPlus } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { CoTeachLogo } from "@/components/brand/coteach-logo";
@@ -16,7 +16,7 @@ import {
 
 type WorkspaceNavProps = {
   role: "teacher" | "student";
-  active?: "classes" | "templates" | "settings";
+  active?: "classes" | "templates" | "textbooks" | "settings";
   backHref?: string;
   backLabel?: string;
   compact?: boolean;
@@ -114,7 +114,10 @@ function defaultBackTarget(pathname: string, role: WorkspaceNavProps["role"]) {
   if (pathname.startsWith("/teacher/templates/") || pathname.startsWith("/teacher/teach/")) {
     return { href: "/teacher/templates", label: "返回课程库" };
   }
-  if (pathname === "/teacher/templates" || pathname === "/teacher/settings") {
+  if (pathname.startsWith("/teacher/textbooks/")) {
+    return { href: "/teacher/textbooks", label: "返回教材库" };
+  }
+  if (pathname === "/teacher/templates" || pathname === "/teacher/textbooks" || pathname === "/teacher/settings") {
     return { href: "/teacher/classes", label: "返回教学班" };
   }
   const memberPage = pathname.match(/^\/teacher\/classes\/([^/]+)\/students$/);
@@ -135,6 +138,7 @@ export function WorkspaceNav({ role, active = "classes", backHref, backLabel, co
   const items = teacher ? [
     { href: "/teacher/classes", label: "教学班", icon: Layers3, id: "classes" },
     { href: "/teacher/templates", label: "课程库", icon: BookOpen, id: "templates" },
+    { href: "/teacher/textbooks", label: "教材库", icon: BookMarked, id: "textbooks" },
   ] : [{ href: "/student?all=1", label: "我的课程", icon: BookOpen, id: "classes" }];
   return <header className="pbl-platform-topbar" data-role={role} data-compact={compact || undefined}>
     <div className="pbl-platform-topbar-inner">

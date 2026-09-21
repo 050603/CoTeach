@@ -77,6 +77,8 @@ function normalizedRequest(value: unknown): {
   enableTTS: boolean;
   enableVideoGeneration: boolean;
   referenceIds: string[];
+  textbookSelections: Array<{ revisionId: string; primary: boolean; sectionIds: string[] }>;
+  textbookEvidenceFingerprint: string | null;
   resourcePackageSignature: string | null;
   supplementalBrief: string;
 } | null {
@@ -125,6 +127,24 @@ function normalizedRequest(value: unknown): {
           return typeof id === "string" ? [id] : [];
         }).sort()
       : [],
+    textbookSelections: Array.isArray(request.textbookSelections)
+      ? request.textbookSelections.flatMap((selection) => {
+          if (!selection || typeof selection !== "object") return [];
+          const item = selection as Record<string, unknown>;
+          if (typeof item.revisionId !== "string") return [];
+          return [{
+            revisionId: item.revisionId,
+            primary: item.primary === true,
+            sectionIds: Array.isArray(item.sectionIds)
+              ? item.sectionIds.filter((id): id is string => typeof id === "string").sort()
+              : [],
+          }];
+        }).sort((a, b) => a.revisionId.localeCompare(b.revisionId))
+      : [],
+    textbookEvidenceFingerprint: request.textbookEvidence && typeof request.textbookEvidence === "object"
+      && typeof (request.textbookEvidence as Record<string, unknown>).fingerprint === "string"
+      ? (request.textbookEvidence as Record<string, unknown>).fingerprint as string
+      : null,
   };
 }
 

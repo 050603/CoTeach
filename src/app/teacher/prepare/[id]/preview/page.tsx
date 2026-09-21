@@ -64,6 +64,11 @@ type ResourceRepairIssue = {
   detail: string;
 };
 
+type ResourceRepairStatus = {
+  status: "idle" | "running" | "completed" | "failed";
+  error?: string;
+};
+
 const SCENE_TYPE_LABEL: Record<string, string> = {
   slide: "AI 讲解",
   interactive: "互动探究",
@@ -110,7 +115,7 @@ export default function PreviewCoursePage() {
   const [previewBranch, setPreviewBranch] = useState<AdaptiveBranchOutline>();
   const [resourceIssues, setResourceIssues] = useState<ResourceRepairIssue[]>([]);
   const [resourceAuditLoaded, setResourceAuditLoaded] = useState(false);
-  const [repairingResources, setRepairingResources] = useState(false);
+  const [resourceRepairStatus, setResourceRepairStatus] = useState<ResourceRepairStatus>({ status: "idle" });
   const [resourceRepairVersion, setResourceRepairVersion] = useState(0);
   const [reviewDecision, setReviewDecision] = useState<TeacherReviewDecision>({ canConfirm: false, signature: "", acceptedIssueIds: [], acknowledgeFailedCheck: false });
   const [publishedHere, setPublishedHere] = useState(false);
@@ -125,13 +130,55 @@ export default function PreviewCoursePage() {
       signal: controller.signal,
     }).then(async (response) => {
       if (!response.ok) return;
-      const payload = await response.json() as { issues?: ResourceRepairIssue[] };
+      const payload = await response.json() as { issues?: ResourceRepairIssue[]; repair?: ResourceRepairStatus };
       setResourceIssues(payload.issues ?? []);
+      setResourceRepairStatus((current) =>
+        current.status === "running" ? current : payload.repair ?? { status: "idle" },
+      );
     }).catch(() => undefined).finally(() => {
       if (!controller.signal.aborted) setResourceAuditLoaded(true);
     });
     return () => controller.abort();
   }, [params?.id, resourceRepairVersion]);
+
+  useEffect(() => {
+    if (!params?.id || resourceRepairStatus.status !== "running") return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/courses/${params.id}/resource-repair`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("无法读取资源修复进度");
+        const payload = await response.json() as { issues?: ResourceRepairIssue[]; repair?: ResourceRepairStatus };
+        if (controller.signal.aborted) return;
+        const issues = payload.issues ?? [];
+        const repair = payload.repair ?? { status: "completed" };
+        setResourceIssues(issues);
+        setResourceRepairStatus(repair);
+        if (repair.status === "running") {
+          timer = setTimeout(poll, 2_500);
+        } else if (repair.status === "failed") {
+          toast.error("资源重试失败", { description: repair.error || "请稍后重试" });
+        } else {
+          setResourceRepairVersion((value) => value + 1);
+          if (issues.length === 0) toast.success("缺失资源已经补齐");
+          else toast.warning("部分资源仍未生成", { description: `还剩 ${issues.length} 项，可稍后再次重试。` });
+        }
+      } catch {
+        if (!controller.signal.aborted) timer = setTimeout(poll, 2_500);
+      }
+    };
+
+    timer = setTimeout(poll, 1_000);
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [params?.id, resourceRepairStatus.status]);
 
   if (!hydrated) {
     return (
@@ -248,25 +295,19 @@ export default function PreviewCoursePage() {
   }
 
   async function retryMissingResources() {
-    setRepairingResources(true);
+    setResourceRepairStatus({ status: "running" });
     try {
       const response = await fetch(`/api/courses/${courseId}/resource-repair`, { method: "POST" });
-      const payload = await response.json() as { issues?: ResourceRepairIssue[]; error?: string };
+      const payload = await response.json() as { issues?: ResourceRepairIssue[]; repair?: ResourceRepairStatus; error?: string };
       if (!response.ok) throw new Error(payload.error || "缺失资源重试失败");
-      const issues = payload.issues ?? [];
-      setResourceIssues(issues);
-      setResourceRepairVersion((value) => value + 1);
-      if (issues.length === 0) {
-        toast.success("缺失资源已经补齐");
-      } else {
-        toast.warning("部分资源仍未生成", { description: `还剩 ${issues.length} 项，可稍后再次重试。` });
-      }
+      setResourceIssues(payload.issues ?? []);
+      setResourceRepairStatus(payload.repair ?? { status: "running" });
+      toast.info("已开始补齐缺失资源", { description: "音频会在后台继续生成，完成后此页面会自动更新。" });
     } catch (error) {
+      setResourceRepairStatus({ status: "idle" });
       toast.error("资源重试失败", {
         description: error instanceof Error ? error.message : "请稍后重试",
       });
-    } finally {
-      setRepairingResources(false);
     }
   }
 
@@ -414,7 +455,7 @@ export default function PreviewCoursePage() {
                       {resourceIssues.map((issue) => <li key={issue.id}>• {issue.title}：{issue.detail}</li>)}
                     </ul>
                   </div>
-                  <Button loading={repairingResources} onClick={() => void retryMissingResources()}>
+                  <Button loading={resourceRepairStatus.status === "running"} onClick={() => void retryMissingResources()}>
                     <RotateCcw size={14} />一键重试缺失资源
                   </Button>
                 </div>

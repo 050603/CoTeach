@@ -1,4 +1,7 @@
+import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/db/client";
 import type { CourseGenerationJob } from "@/lib/course-generation/job-storage";
 import { loadGenerationCheckpoints, saveGenerationCheckpoint, resetGenerationCheckpoints, resetPreparedOutlinesCheckpoint, countGenerationPageCheckpoints } from "./checkpoint-storage";
 import { contentGenerationJobs } from "@/lib/course-generation/job-storage";
@@ -68,6 +71,32 @@ import type {
 const log = createLogger("CourseGenerationWorker");
 const POLL_INTERVAL_MS = 1_500;
 const MAX_STORED_EVENTS = 80;
+
+async function hydrateTextbookFigureBytes(
+  images: NonNullable<GenerateClassroomInput["textbookImages"]> | undefined,
+): Promise<NonNullable<GenerateClassroomInput["textbookImages"]> | undefined> {
+  if (!images?.length) return undefined;
+  const assetIds = [...new Set(images.map((image) => image.assetId))];
+  const assets = await prisma.fileAsset.findMany({
+    where: { id: { in: assetIds }, deletedAt: null },
+    select: { id: true, storageKey: true, mimeType: true, size: true },
+  });
+  const assetById = new Map(assets.map((asset) => [asset.id, asset]));
+  const uploadDir = process.env.UPLOAD_DIR?.trim() || path.resolve(".openpbl-data", "uploads");
+  const hydrated = await Promise.all(images.map(async (image) => {
+    const asset = assetById.get(image.assetId);
+    if (!asset || !asset.mimeType.startsWith("image/") || path.basename(asset.storageKey) !== asset.storageKey
+      || Number(asset.size) > 16 * 1024 * 1024) return image;
+    const bytes = await readFile(/* turbopackIgnore: true */ path.join(uploadDir, asset.storageKey)).catch(() => null);
+    if (!bytes || bytes.byteLength !== Number(asset.size)) return image;
+    return {
+      ...image,
+      publicSrc: image.src,
+      src: `data:${asset.mimeType};base64,${bytes.toString("base64")}`,
+    };
+  }));
+  return hydrated;
+}
 function mediaFailuresFromAudit(issues: CourseResourceIssue[]): Array<{
   elementId: string;
   type: "image" | "video";
@@ -824,6 +853,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
   };
 
   try {
+    generationInput.textbookImages = await hydrateTextbookFigureBytes(generationInput.textbookImages);
     const checkpointState = await loadCheckpointState(job.id);
     const course = await getCourse(courseId);
     const currentPackage = course?.content.resourcePackage;

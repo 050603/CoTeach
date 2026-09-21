@@ -14,6 +14,7 @@ import { PDF_PROVIDERS } from '@openmaic/lib/pdf/constants';
 import type { PDFProviderId } from '@openmaic/lib/pdf/types';
 import { getProviderEntry, type ProviderSection } from '@/lib/openmaic-bridge/provider-config-editor';
 import { validateUrlForSSRF } from '@openmaic/lib/server/ssrf-guard';
+import { isLocalOllamaEmbeddingEndpoint } from '@/lib/textbook/embedding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -101,7 +102,10 @@ export async function POST(request: NextRequest) {
     const baseUrl = body.baseUrl?.trim() || saved?.baseUrl;
     const model = body.model?.trim() || saved?.defaultModel || saved?.models?.[0];
 
-    if (baseUrl && process.env.NODE_ENV === 'production') {
+    const allowedLocalEmbedding = body.section === 'embedding'
+      && baseUrl
+      && isLocalOllamaEmbeddingEndpoint(body.providerId, baseUrl);
+    if (baseUrl && process.env.NODE_ENV === 'production' && !allowedLocalEmbedding) {
       const ssrfError = await validateUrlForSSRF(baseUrl);
       if (ssrfError) return apiError('INVALID_URL', 403, ssrfError);
     }
@@ -183,6 +187,25 @@ export async function POST(request: NextRequest) {
       });
       result = { success: true, message: `搜索服务返回 ${response.sources.length} 条可解析结果` };
       detail = `搜索服务 ${provider.name}；地址 ${baseUrl || provider.defaultBaseUrl || '默认'}`;
+    } else if (body.section === 'embedding') {
+      const keylessLocal = body.providerId === 'ollama-embedding';
+      if ((!apiKey && !keylessLocal) || !baseUrl || !model) {
+        return apiError('MISSING_REQUIRED_FIELD', 400, '教材向量服务需要服务地址、模型 ID，以及远程服务所需的密钥。');
+      }
+      const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/embeddings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+        body: JSON.stringify({ model, input: ['建构主义学习理论'], dimensions: 1024, encoding_format: 'float' }),
+        signal: request.signal,
+      });
+      const payload = await response.json().catch(() => null) as { data?: Array<{ embedding?: unknown }>; error?: { message?: string } } | null;
+      if (!response.ok) throw new Error(payload?.error?.message || `向量服务返回 ${response.status}`);
+      const vector = payload?.data?.[0]?.embedding;
+      if (!Array.isArray(vector) || vector.length !== 1024 || vector.some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
+        throw new Error(`向量服务返回错误维度；预期 1024 维，实际 ${Array.isArray(vector) ? vector.length : 0} 维。`);
+      }
+      result = { success: true, message: '教材向量模型测试成功。' };
+      detail = `模型 ${model}；返回 1024 维有限数值向量。`;
     } else {
       return apiError(
         'INVALID_REQUEST',

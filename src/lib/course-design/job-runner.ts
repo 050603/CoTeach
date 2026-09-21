@@ -93,6 +93,12 @@ import {
   type GenerationReferenceMaterial,
 } from "@/lib/course-design/generation-references";
 import {
+  formatCourseEvidenceContext,
+  type CourseEvidenceSnapshot,
+  type CourseTextbookSelection,
+} from "@/lib/textbook/course-evidence-types";
+import { resolveCourseTextbookFigures } from "@/lib/textbook/course-evidence";
+import {
   deriveKnowledgeLectureSectionsFromOutlines,
   organizeKnowledgeLectureOutlines,
 } from "@/lib/knowledge-lecture";
@@ -154,6 +160,9 @@ export type QuickDesignRequest = {
   supplementalAnswers?: { brief: string };
   /** Teacher-uploaded source material, extracted and bounded at submission. */
   referenceMaterials?: GenerationReferenceMaterial[];
+  textbookSelections?: CourseTextbookSelection[];
+  /** Frozen retrieval and provenance used by every downstream generation stage. */
+  textbookEvidence?: CourseEvidenceSnapshot;
   options?: {
     enableImageGeneration: boolean;
     enableTTS: boolean;
@@ -166,6 +175,10 @@ export type QuickDesignRequest = {
   /** Internal durable retry count for transient network/provider failures. */
   transientRecoveryCount?: number;
 };
+
+function textbookTeachingSourceContext(request: Pick<QuickDesignRequest, "textbookEvidence">): string {
+  return formatCourseEvidenceContext(request.textbookEvidence);
+}
 
 export type QuickDesignTraceEvent = CourseDesignGenerationTraceEntry & {
   progress: number;
@@ -1035,6 +1048,7 @@ function stageSummaryInput(
     summary: [
       course.summary,
       referenceContext,
+      textbookTeachingSourceContext(request),
       "按学习目标和先决依赖组织知识，区分主题分组与可教可测的知识点；保留资源包指定知识，不把同义表述拆成重复节点。先讲清概念与适用条件，用例证及必要操作巩固，再按知识小节检测理解。",
     ].filter(Boolean).join("\n"),
   });
@@ -1694,11 +1708,14 @@ function buildTeachingBlueprintInput(
     assessmentMode: request.assessmentMode ?? "adaptive",
     generationMode: request.generationMode ?? "standard",
     teacherBrief: [teacherGenerationBrief(request), blueprintResourceCapabilityBrief(request)].filter(Boolean).join("\n"),
-    sourceContext: buildCourseTeachingSourceContext(
-      request.resourcePackage,
-      teacherGenerationBrief(request),
-      request.referenceMaterials ?? [],
-    ),
+    sourceContext: [
+      buildCourseTeachingSourceContext(
+        request.resourcePackage,
+        teacherGenerationBrief(request),
+        request.referenceMaterials ?? [],
+      ),
+      textbookTeachingSourceContext(request),
+    ].filter(Boolean).join("\n\n"),
     sectionPlans: buildTeachingBlueprintSectionPlans(content, totalDurationSec),
   };
 }
@@ -1849,11 +1866,14 @@ async function generateNewSystemAiOutlines(
     {
       requirement: buildOpenMaicKnowledgeLectureRequirement(course, content, request, aiDurationMin),
     },
-    buildCourseTeachingSourceContext(
-      request.resourcePackage,
-      teacherGenerationBrief(request),
-      request.referenceMaterials ?? [],
-    ),
+    [
+      buildCourseTeachingSourceContext(
+        request.resourcePackage,
+        teacherGenerationBrief(request),
+        request.referenceMaterials ?? [],
+      ),
+      textbookTeachingSourceContext(request),
+    ].filter(Boolean).join("\n\n"),
     undefined,
     createCourseGenerationAiCall({
       model: resolved.model,
@@ -1942,7 +1962,15 @@ async function enqueueClassroomGeneration(
   assessmentMode?: AssessmentMode,
   generationContractVersion?: 2 | 3,
   generationScope: ClassroomGenerationScope = "full-course",
+  textbookEvidence?: CourseEvidenceSnapshot,
 ): Promise<void> {
+  const textbookImages = await resolveCourseTextbookFigures(textbookEvidence);
+  const textbookFigureContext = textbookImages.length
+    ? [
+        "本课已授权使用的教材原图（页面需要插图时优先从这些资源选择；资源 ID 必须原样保留）：",
+        ...textbookImages.map((image) => `${image.id}：${image.description ?? "教材原图"}；figureId=${image.figureId}`),
+      ].join("\n")
+    : "";
   const confirmedSceneOutlines = (course.content._openmaicSceneOutlines ?? []).map((scene, index) => ({
     ...scene,
     id: scene.id,
@@ -1967,7 +1995,11 @@ async function enqueueClassroomGeneration(
     ...(generationContractVersion ? { generationContractVersion } : {}),
     ...(assessmentMode ? { assessmentMode } : {}),
     generationModelString: generationModelString ?? findServerDefaultModelString(),
-    teachingSourceContext: buildCourseTeachingSourceContext(course.content.resourcePackage, teacherBrief, referenceMaterials),
+    teachingSourceContext: [
+      buildCourseTeachingSourceContext(course.content.resourcePackage, teacherBrief, referenceMaterials),
+      formatCourseEvidenceContext(textbookEvidence),
+      textbookFigureContext,
+    ].filter(Boolean).join("\n\n"),
     systemMode,
     courseTitle: course.name,
     requirement: [
@@ -1976,7 +2008,7 @@ async function enqueueClassroomGeneration(
       formatTeachingConstraintsForChinesePrompt(buildCourseTeachingConstraints(course, course.content)),
       "只根据已确认 sceneOutlines 制作第二阶段知识讲授的学生课堂。",
       "不得新增其他阶段页面，不得生成教师课堂或教师资源。",
-      buildCourseTeachingSourceContext(course.content.resourcePackage, teacherBrief, referenceMaterials),
+      [buildCourseTeachingSourceContext(course.content.resourcePackage, teacherBrief, referenceMaterials), formatCourseEvidenceContext(textbookEvidence), textbookFigureContext].filter(Boolean).join("\n\n"),
       "页面内容须解释已确认知识点，提供具体且适龄的例证、必要推理和常见误解；练习与检测对齐页面已讲内容及学习目标，不可用空泛口号或重复概念填充预算。",
     ].join("\n"),
     generationMode,
@@ -1991,6 +2023,7 @@ async function enqueueClassroomGeneration(
     knowledgePoints: course.content.knowledgePoints,
     teachingConstraints: buildCourseTeachingConstraints(course, course.content),
     sceneOutlines,
+    ...(textbookImages.length ? { textbookImages } : {}),
     adaptiveBranchCount: 0,
     enableWebSearch: false,
     enableImageGeneration: options?.enableImageGeneration ?? true,
@@ -2174,6 +2207,7 @@ export async function promoteTestLessonToFullCourse(
     designRequest.assessmentMode,
     designRequest.generationContractVersion,
     "full-course",
+    designRequest.textbookEvidence,
   );
   const promotedContentJob = await contentGenerationJobs.findUnique({ where: { courseId } });
   if (!promotedContentJob) {
@@ -2381,6 +2415,7 @@ async function runNewSystemCourseDesign(
         .filter((name) => !packageKnowledgeNames.has(name.trim())),
       teacherKnowledgePoints: packageKnowledgePoints,
       referenceMaterials: request.referenceMaterials,
+      textbookEvidence: request.textbookEvidence,
       teachingCapacity,
     };
     const knowledgeInputFingerprint = fingerprintGenerationValue({
@@ -2465,10 +2500,14 @@ async function runNewSystemCourseDesign(
       knowledgePoints: generated.knowledgePoints,
       knowledgeGraph: generatedGraph,
       knowledgeScopePlan: generated.knowledgeScopePlan,
+      textbookSelections: request.textbookSelections,
+      courseEvidence: request.textbookEvidence,
       revisionCount: generated.revisionCount,
     });
     const content: CourseContent = {
       ...course.content,
+      textbookSelections: request.textbookSelections,
+      courseEvidence: request.textbookEvidence,
       pblOutline: "",
       knowledgePoints: generated.knowledgePoints,
       knowledgeGraph: generatedGraph,
@@ -2592,7 +2631,7 @@ async function runNewSystemCourseDesign(
       knowledgeScopePlan: course.content.knowledgeScopePlan,
       generationMode: request.generationMode ?? "standard",
       assessmentMode: request.assessmentMode ?? (request.generationContractVersion && request.generationContractVersion >= 2 ? "adaptive" : "constructed-response"),
-      teacherBrief: teacherGenerationBrief(request),
+      teacherBrief: [teacherGenerationBrief(request), textbookTeachingSourceContext(request)].filter(Boolean).join("\n\n"),
       referenceMaterials: request.referenceMaterials,
       stagePlan: course.content.stagePlan,
     };
@@ -2948,6 +2987,7 @@ async function runNewSystemCourseDesign(
     request.assessmentMode,
     request.generationContractVersion,
     request.generationScope ?? "full-course",
+    request.textbookEvidence,
   );
   const isTestLesson = request.generationScope === "test-lesson";
   await designGenerationJobs.update({

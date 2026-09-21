@@ -60,6 +60,7 @@ model User {
   reflections            Reflection[]            @relation("ReflectionAuthor")
   providerCredentials    ProviderCredential[]    @relation("CredentialOwner")
   loadTestRuns           LoadTestRun[]           @relation("LoadTestInitiator")
+  maintainedTextbooks    Textbook[]              @relation("TextbookMaintainer")
 }
 
 model PasswordResetToken {
@@ -209,7 +210,7 @@ model Activity {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  chapter            Chapter             @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  chapter            Chapter              @relation(fields: [chapterId], references: [id], onDelete: Cascade)
   submissions        ActivitySubmission[]
   progress           ActivityProgress[]
   classroomInstances ClassroomInstance[]
@@ -273,8 +274,10 @@ model ClassroomTemplate {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  owner    User                       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  versions ClassroomTemplateVersion[]
+  owner             User                       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  versions          ClassroomTemplateVersion[]
+  textbookBindings  CourseTextbookBinding[]
+  evidenceSnapshots CourseEvidenceSnapshot[]
 
   @@index([ownerId, status])
 }
@@ -399,6 +402,388 @@ model GenerationCheckpoint {
   job GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@unique([jobId, step])
+}
+
+// ---------------------------------------------------------------------------
+// Durable textbook library, evidence graph, and course evidence snapshots
+// ---------------------------------------------------------------------------
+
+model Textbook {
+  id                String    @id @default(uuid())
+  title             String
+  author            String?
+  description       String?   @db.Text
+  maintainerId      String
+  status            String    @default("ACTIVE")
+  currentRevisionId String?   @unique
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  archivedAt        DateTime?
+
+  maintainer      User               @relation("TextbookMaintainer", fields: [maintainerId], references: [id], onDelete: Restrict)
+  revisions       TextbookRevision[] @relation("TextbookRevisions")
+  currentRevision TextbookRevision?  @relation("CurrentTextbookRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+
+  @@index([status, updatedAt])
+  @@index([maintainerId, status])
+}
+
+model TextbookRevision {
+  id                String    @id @default(uuid())
+  textbookId        String
+  revision          Int
+  fileAssetId       String    @unique
+  sha256            String    @unique
+  status            String    @default("PENDING")
+  parseVersion      String
+  extractionVersion String
+  error             String?   @db.Text
+  metadata          Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  readyAt           DateTime?
+
+  textbook         Textbook                  @relation("TextbookRevisions", fields: [textbookId], references: [id], onDelete: Cascade)
+  currentFor       Textbook[]                @relation("CurrentTextbookRevision")
+  fileAsset        FileAsset                 @relation("TextbookRevisionSource", fields: [fileAssetId], references: [id], onDelete: Restrict)
+  sections         TextbookSection[]
+  sourceBlocks     TextbookSourceBlock[]
+  concepts         TextbookConcept[]
+  conceptRelations TextbookConceptRelation[]
+  examples         TextbookExample[]
+  figures          TextbookFigure[]
+  retrievalItems   TextbookRetrievalItem[]
+  courseBindings   CourseTextbookBinding[]
+
+  @@unique([textbookId, revision])
+  @@index([textbookId, status, createdAt])
+  @@index([status, updatedAt])
+}
+
+model TextbookSection {
+  id         String   @id @default(uuid())
+  revisionId String
+  parentId   String?
+  title      String
+  path       String
+  kind       String   @default("FRONT_MATTER")
+  level      Int
+  position   Int
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  revision       TextbookRevision        @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  parent         TextbookSection?        @relation("TextbookSectionTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children       TextbookSection[]       @relation("TextbookSectionTree")
+  sourceBlocks   TextbookSourceBlock[]
+  concepts       TextbookConcept[]
+  examples       TextbookExample[]
+  figures        TextbookFigure[]
+  retrievalItems TextbookRetrievalItem[]
+  courseBindings CourseTextbookSection[]
+
+  @@unique([revisionId, path])
+  @@unique([revisionId, position])
+  @@index([revisionId, parentId, position])
+  @@index([revisionId, kind, position])
+}
+
+model TextbookSourceBlock {
+  id                String   @id @default(uuid())
+  revisionId        String
+  sectionId         String
+  blockKey          String
+  blockType         String
+  position          Int
+  content           String   @db.Text
+  normalizedContent String?  @db.Text
+  metadata          Json?
+  createdAt         DateTime @default(now())
+
+  revision         TextbookRevision          @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  section          TextbookSection           @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  conceptEvidence  TextbookConceptEvidence[]
+  relationEvidence TextbookConceptRelation[]
+  examples         TextbookExample[]
+  figures          TextbookFigure[]
+  retrievalItems   TextbookRetrievalItem[]
+
+  @@unique([revisionId, blockKey])
+  @@unique([revisionId, position])
+  @@index([sectionId, position])
+}
+
+model TextbookConcept {
+  id             String   @id @default(uuid())
+  revisionId     String
+  sectionId      String
+  name           String
+  normalizedName String
+  aliases        String[] @default([])
+  kind           String
+  explanation    String   @db.Text
+  status         String   @default("ACTIVE")
+  origin         String   @default("TEXTBOOK")
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  revision          TextbookRevision          @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  section           TextbookSection           @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  evidence          TextbookConceptEvidence[]
+  outgoingRelations TextbookConceptRelation[] @relation("TextbookRelationSource")
+  incomingRelations TextbookConceptRelation[] @relation("TextbookRelationTarget")
+  examples          TextbookConceptExample[]
+  figures           TextbookConceptFigure[]
+  retrievalItems    TextbookRetrievalItem[]
+
+  @@unique([revisionId, normalizedName, sectionId])
+  @@index([revisionId, status, normalizedName])
+  @@index([sectionId, status])
+}
+
+model TextbookConceptEvidence {
+  id            String   @id @default(uuid())
+  conceptId     String
+  sourceBlockId String
+  quoteStart    Int
+  quoteEnd      Int
+  createdAt     DateTime @default(now())
+
+  concept     TextbookConcept     @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  sourceBlock TextbookSourceBlock @relation(fields: [sourceBlockId], references: [id], onDelete: Cascade)
+
+  @@unique([conceptId, sourceBlockId, quoteStart, quoteEnd])
+  @@index([sourceBlockId])
+}
+
+model TextbookConceptRelation {
+  id              String   @id @default(uuid())
+  revisionId      String
+  sourceConceptId String
+  targetConceptId String
+  relationType    String
+  origin          String   @default("TEXTBOOK")
+  sourceBlockId   String?
+  confidence      Float?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  revision      TextbookRevision     @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  sourceConcept TextbookConcept      @relation("TextbookRelationSource", fields: [sourceConceptId], references: [id], onDelete: Cascade)
+  targetConcept TextbookConcept      @relation("TextbookRelationTarget", fields: [targetConceptId], references: [id], onDelete: Cascade)
+  sourceBlock   TextbookSourceBlock? @relation(fields: [sourceBlockId], references: [id], onDelete: SetNull)
+
+  @@unique([sourceConceptId, targetConceptId, relationType])
+  @@index([revisionId, relationType])
+  @@index([targetConceptId, relationType])
+  @@index([sourceBlockId])
+}
+
+model TextbookExample {
+  id            String   @id @default(uuid())
+  revisionId    String
+  sectionId     String
+  sourceBlockId String?
+  title         String?
+  content       String   @db.Text
+  origin        String   @default("TEXTBOOK")
+  metadata      Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  revision       TextbookRevision         @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  section        TextbookSection          @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  sourceBlock    TextbookSourceBlock?     @relation(fields: [sourceBlockId], references: [id], onDelete: SetNull)
+  concepts       TextbookConceptExample[]
+  retrievalItems TextbookRetrievalItem[]
+
+  @@index([revisionId, sectionId])
+  @@index([sourceBlockId])
+}
+
+model TextbookConceptExample {
+  conceptId String
+  exampleId String
+
+  concept TextbookConcept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  example TextbookExample @relation(fields: [exampleId], references: [id], onDelete: Cascade)
+
+  @@id([conceptId, exampleId])
+  @@index([exampleId])
+}
+
+model TextbookFigure {
+  id            String   @id @default(uuid())
+  revisionId    String
+  sectionId     String?
+  sourceBlockId String?
+  fileAssetId   String
+  caption       String?  @db.Text
+  position      Int
+  width         Int?
+  height        Int?
+  status        String   @default("AVAILABLE")
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  revision    TextbookRevision        @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  section     TextbookSection?        @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  sourceBlock TextbookSourceBlock?    @relation(fields: [sourceBlockId], references: [id], onDelete: SetNull)
+  fileAsset   FileAsset               @relation("TextbookFigureAsset", fields: [fileAssetId], references: [id], onDelete: Restrict)
+  concepts    TextbookConceptFigure[]
+
+  @@unique([revisionId, position])
+  @@index([sectionId, position])
+  @@index([sourceBlockId])
+  @@index([fileAssetId])
+}
+
+model TextbookConceptFigure {
+  conceptId String
+  figureId  String
+
+  concept TextbookConcept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  figure  TextbookFigure  @relation(fields: [figureId], references: [id], onDelete: Cascade)
+
+  @@id([conceptId, figureId])
+  @@index([figureId])
+}
+
+model TextbookRetrievalItem {
+  id                 String                   @id @default(uuid())
+  revisionId         String
+  sectionId          String?
+  sourceBlockId      String?
+  conceptId          String?
+  exampleId          String?
+  kind               String
+  title              String?
+  content            String                   @db.Text
+  searchTokens       String                   @db.Text
+  searchVector       Unsupported("tsvector")? @default(dbgenerated("to_tsvector('simple'::regconfig, COALESCE(\"searchTokens\", ''::text))"))
+  contentFingerprint String
+  position           Int
+  metadata           Json?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  revision    TextbookRevision     @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  section     TextbookSection?     @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  sourceBlock TextbookSourceBlock? @relation(fields: [sourceBlockId], references: [id], onDelete: Cascade)
+  concept     TextbookConcept?     @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  example     TextbookExample?     @relation(fields: [exampleId], references: [id], onDelete: Cascade)
+  embeddings  TextbookEmbedding[]
+
+  @@unique([revisionId, kind, position])
+  @@index([revisionId, sectionId, kind])
+  @@index([contentFingerprint])
+  @@index([sourceBlockId])
+  @@index([conceptId])
+  @@index([exampleId])
+  @@index([searchVector], type: Gin)
+}
+
+model EmbeddingProfile {
+  id                    String   @id @default(uuid())
+  name                  String
+  provider              String
+  baseUrl               String?
+  model                 String
+  dimensions            Int      @default(1024)
+  textProcessingVersion String
+  configFingerprint     String   @unique
+  status                String   @default("ACTIVE")
+  isActive              Boolean  @default(false)
+  credentialId          String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  credential ProviderCredential? @relation("EmbeddingCredential", fields: [credentialId], references: [id], onDelete: SetNull)
+  embeddings TextbookEmbedding[]
+
+  @@index([status, isActive])
+  @@index([credentialId])
+}
+
+model TextbookEmbedding {
+  id                 String                       @id @default(uuid())
+  retrievalItemId    String
+  profileId          String
+  contentFingerprint String
+  status             String                       @default("PENDING")
+  embedding          Unsupported("vector(1024)")?
+  error              String?                      @db.Text
+  attempt            Int                          @default(0)
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+  embeddedAt         DateTime?
+
+  retrievalItem TextbookRetrievalItem @relation(fields: [retrievalItemId], references: [id], onDelete: Cascade)
+  profile       EmbeddingProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([retrievalItemId, profileId, contentFingerprint])
+  @@index([profileId, status])
+  @@index([retrievalItemId, status])
+}
+
+model CourseTextbookBinding {
+  id         String   @id @default(uuid())
+  templateId String
+  revisionId String
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  template  ClassroomTemplate               @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  revision  TextbookRevision                @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  sections  CourseTextbookSection[]
+  snapshots CourseEvidenceSnapshotBinding[]
+
+  @@unique([templateId, revisionId])
+  @@index([templateId, isPrimary])
+  @@index([revisionId])
+}
+
+model CourseTextbookSection {
+  bindingId String
+  sectionId String
+
+  binding CourseTextbookBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+  section TextbookSection       @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+
+  @@id([bindingId, sectionId])
+  @@index([sectionId])
+}
+
+model CourseEvidenceSnapshot {
+  id          String   @id @default(uuid())
+  templateId  String
+  version     Int
+  status      String   @default("DRAFT")
+  isCurrent   Boolean  @default(false)
+  fingerprint String
+  payload     Json
+  createdAt   DateTime @default(now())
+
+  template ClassroomTemplate               @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  bindings CourseEvidenceSnapshotBinding[]
+
+  @@unique([templateId, version])
+  @@unique([templateId, fingerprint])
+  @@index([templateId, isCurrent])
+  @@index([status, createdAt])
+}
+
+model CourseEvidenceSnapshotBinding {
+  snapshotId String
+  bindingId  String
+
+  snapshot CourseEvidenceSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  binding  CourseTextbookBinding  @relation(fields: [bindingId], references: [id], onDelete: Restrict)
+
+  @@id([snapshotId, bindingId])
+  @@index([bindingId])
 }
 
 // ---------------------------------------------------------------------------
@@ -693,23 +1078,23 @@ model Resource {
 }
 
 model FileAsset {
-  id                   String    @id @default(uuid())
-  storageKey           String    @unique
-  originalName         String
-  mimeType             String
-  size                 BigInt
-  sha256               String?
+  id                 String    @id @default(uuid())
+  storageKey         String    @unique
+  originalName       String
+  mimeType           String
+  size               BigInt
+  sha256             String?
   // SOURCE is irreplaceable user/course data. Derived roles describe bytes
   // that can be rebuilt from sourceAsset + regenerationRecipe after restore.
-  assetRole            String    @default("SOURCE")
-  backupPolicy         String    @default("REQUIRED")
-  sourceAssetId        String?
-  regenerationRecipe   Json?
-  uploadedById         String
-  offeringId           String?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-  deletedAt            DateTime?
+  assetRole          String    @default("SOURCE")
+  backupPolicy       String    @default("REQUIRED")
+  sourceAssetId      String?
+  regenerationRecipe Json?
+  uploadedById       String
+  offeringId         String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
 
   uploadedBy       User              @relation("FileUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
   offering         CourseOffering?   @relation(fields: [offeringId], references: [id], onDelete: SetNull)
@@ -717,6 +1102,8 @@ model FileAsset {
   artifactVersions ArtifactVersion[]
   sourceAsset      FileAsset?        @relation("DerivedAssetSource", fields: [sourceAssetId], references: [id], onDelete: Restrict)
   derivedAssets    FileAsset[]       @relation("DerivedAssetSource")
+  textbookRevision TextbookRevision? @relation("TextbookRevisionSource")
+  textbookFigures  TextbookFigure[]  @relation("TextbookFigureAsset")
 
   @@index([offeringId, createdAt])
   @@index([sha256])
@@ -968,7 +1355,7 @@ model AiInteractionEvent {
 
 model DomainEvent {
   id                  String   @id @default(uuid())
-  researchKey     String?
+  researchKey         String?
   idempotencyKey      String   @unique
   actorId             String?
   offeringId          String?
@@ -1005,7 +1392,8 @@ model ProviderCredential {
   updatedAt DateTime  @updatedAt
   rotatedAt DateTime?
 
-  owner User? @relation("CredentialOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  owner             User?              @relation("CredentialOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  embeddingProfiles EmbeddingProfile[] @relation("EmbeddingCredential")
 
   @@unique([ownerId, provider, name])
   @@index([provider, status])

@@ -18,7 +18,8 @@
 # 其他差异:
 #   - PUBLIC_BASE_URL 根据 deploy/.deploy.env 的 PUBLIC_HOST 生成 HTTPS 地址
 #   - Nginx 使用 HTTPS 模板和宿主机 Certbot 证书目录
-#   - postgres 使用官方镜像且不启用 WAL 云归档；精简备份仅由管理员手动触发
+#   - postgres 复用生产编排的 PostgreSQL 16 + pgvector 0.8.6 自建镜像；
+#     未启用 pgBackRest WAL 云归档，精简备份仅由管理员手动触发
 services:
   nginx:
     network_mode: host

@@ -268,7 +268,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.ai.mock.calls.some(([system]) => system.includes('中文课堂讲稿编辑'))).toBe(false);
     expect(result.scenes[0]?.id).not.toBe('legacy-first-draft');
-    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v18-adaptive-visual-forms');
+    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v19-teacher-review-boundary');
   });
 
   it('restores a structurally complete slide without running layout review', async () => {
@@ -335,7 +335,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         },
       },
       actions: [{ id: 'saved-speech', type: 'speech', text: '已保存讲稿。' }],
-      narrationRevision: 'course-first-pass-v18-adaptive-visual-forms',
+      narrationRevision: 'course-first-pass-v19-teacher-review-boundary',
       createdAt: 1,
       updatedAt: 1,
     } as unknown as Scene;
@@ -586,11 +586,11 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(result.scenes[0]?.actions).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'speech', text: '短讲稿。' }),
     ]));
-    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v18-adaptive-visual-forms');
+    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v19-teacher-review-boundary');
     expect(result.qualityReport.teachingEnhancementVersion).toBe(TEACHING_ENHANCEMENT_VERSION);
     expect(result.qualityReport.narrationEnhancementVersion).toBe(TEACHING_NARRATION_VERSION);
     expect(result.qualityReport.reviewMode).toBeUndefined();
-    expect(result.qualityReport.reviewPolicyVersion).toBe('course-first-pass-v18-adaptive-visual-forms');
+    expect(result.qualityReport.reviewPolicyVersion).toBe('course-first-pass-v19-teacher-review-boundary');
   });
 
   it('preserves the initial playable speech without a style review pass', async () => {

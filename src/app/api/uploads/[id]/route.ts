@@ -30,14 +30,15 @@ export async function GET(
   if (!parsed.success) return new Response(null, { status: 404 });
 
   const file = await prisma.fileAsset.findFirst({
-    where: { id: parsed.data.id, deletedAt: null }, include: { resource: true, artifactVersions: { select: { artifact: { select: { participation: { select: { enrollment: { select: { userId: true } } } } } } } } },
+    where: { id: parsed.data.id, deletedAt: null }, include: { resource: true, textbookFigures: { select: { id: true } }, artifactVersions: { select: { artifact: { select: { participation: { select: { enrollment: { select: { userId: true } } } } } } } } },
   });
   if (!file) return new Response(null, { status: 404 });
   const owns = file.uploadedById === auth.claims.sub;
   const courseAccess = file.offeringId && await canAccessLegacyCourse(auth.claims, file.offeringId, 'read');
   const templateAccess = !file.offeringId && !owns && auth.claims.role === 'student' && auth.claims.sub
     && await canReadTemplateAsset(auth.claims.sub, file.id);
-  if (!owns && !templateAccess && (!courseAccess || (!file.resource && auth.claims.role !== 'teacher'))) return new Response(null, { status: 404 });
+  const sharedTextbookFigure = auth.claims.role === "teacher" && Boolean(file.textbookFigures?.length);
+  if (!owns && !templateAccess && !sharedTextbookFigure && (!courseAccess || (!file.resource && auth.claims.role !== 'teacher'))) return new Response(null, { status: 404 });
   if (file.offeringId && !courseAccess) return new Response(null, { status: 404 });
   // Student outcomes remain private; teachers with offering access may review them.
   if (auth.claims.role === 'student' && file.artifactVersions.some((version) => version.artifact.participation.enrollment.userId !== auth.claims.sub)) return new Response(null, { status: 404 });

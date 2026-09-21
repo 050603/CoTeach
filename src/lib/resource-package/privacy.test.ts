@@ -18,6 +18,18 @@ describe("resource package authoring boundary", () => {
     expect(withoutPrivatePackageContent(content)).not.toHaveProperty("teacherReviewVersion");
     expect(content.resourcePackage.raw).toContain("private");
   });
+  it("removes textbook selections, evidence, and per-node evidence ids from student content", () => {
+    const projected = withoutPrivatePackageContent({
+      textbookSelections: [{ revisionId: "private-revision" }],
+      courseEvidence: { items: [{ quote: "private source" }] },
+      knowledgePoints: [{ id: "point", name: "公开知识点", evidenceItemIds: ["private-evidence"] }],
+      knowledgeGraph: { nodes: [{ id: "point", label: "公开知识点", evidenceItemIds: ["private-evidence"] }], edges: [] },
+    });
+    expect(projected).not.toHaveProperty("textbookSelections");
+    expect(projected).not.toHaveProperty("courseEvidence");
+    expect(projected.knowledgePoints[0]).not.toHaveProperty("evidenceItemIds");
+    expect(projected.knowledgeGraph.nodes[0]).not.toHaveProperty("evidenceItemIds");
+  });
   it("preserves exact lesson minutes and reports conflicts instead of silently scaling", () => {
     const draft = { ...emptyResourcePackageDraft(), courseName: "AI教学设计", grade: "本科一年级", drivingQuestion: "如何设计合适的AI课程？",
       learningObjectives: ["选择适合的教学方法"], expectedOutcome: "课程方案", knowledgePoints: [{ name: "教学模式", description: "", subPoints: ["项目式学习"] }],

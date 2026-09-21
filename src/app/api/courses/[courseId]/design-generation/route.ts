@@ -35,6 +35,9 @@ import {
 } from "@openmaic/lib/server/classroom-media-readiness";
 import { ResourcePackageError, resolveConfirmedResourcePackage } from "@/lib/resource-package/server";
 import { findServerDefaultModelString } from "@/lib/openmaic/server/provider-config";
+import { CourseEvidenceError, resolveCourseEvidenceSnapshot } from "@/lib/textbook/course-evidence";
+import type { CourseTextbookSelection } from "@/lib/textbook/course-evidence-types";
+import { resourcePackageTeachingPoints } from "@/lib/course-design/resource-package-knowledge";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -100,6 +103,7 @@ function responseJob(job: Awaited<ReturnType<typeof designGenerationJobs.findUni
         fileName: material.fileName,
         mimeType: material.mimeType,
       })),
+      textbookSelections: request.textbookSelections ?? [],
     },
   };
 }
@@ -111,11 +115,43 @@ function persistedJobMode(
   return "new";
 }
 
+function parseTextbookSelections(value: unknown): CourseTextbookSelection[] | Response {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 5) {
+    return Response.json({ error: "INVALID_TEXTBOOK_SELECTION", detail: "每门课程最多选择 5 本教材。" }, { status: 400 });
+  }
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const selections: CourseTextbookSelection[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      return Response.json({ error: "INVALID_TEXTBOOK_SELECTION", detail: "教材选择格式无效。" }, { status: 400 });
+    }
+    const record = item as Record<string, unknown>;
+    const revisionId = typeof record.revisionId === "string" ? record.revisionId.trim() : "";
+    const sectionIds = Array.isArray(record.sectionIds)
+      ? [...new Set(record.sectionIds.filter((id): id is string => typeof id === "string" && uuid.test(id)))].slice(0, 200)
+      : [];
+    if (!uuid.test(revisionId) || seen.has(revisionId)) {
+      return Response.json({ error: "INVALID_TEXTBOOK_SELECTION", detail: "教材版本不存在或选择重复。" }, { status: 400 });
+    }
+    seen.add(revisionId);
+    selections.push({ revisionId, primary: record.primary === true, sectionIds });
+  }
+  if (selections.length && selections.filter((item) => item.primary).length !== 1) {
+    return Response.json({ error: "INVALID_TEXTBOOK_SELECTION", detail: "请选择且只选择一本主教材。" }, { status: 400 });
+  }
+  return selections;
+}
+
 async function structuredResponse(work: () => Promise<Response>): Promise<Response> {
   try {
     return await work();
   } catch (error) {
     if (error instanceof TestLessonPromotionError) {
+      return Response.json({ error: error.code, detail: error.message }, { status: error.status });
+    }
+    if (error instanceof CourseEvidenceError) {
       return Response.json({ error: error.code, detail: error.message }, { status: error.status });
     }
     const migrationMissing = error instanceof Prisma.PrismaClientKnownRequestError
@@ -156,6 +192,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ cou
         ? {
             knowledgePoints: course.content.knowledgePoints,
             knowledgeGraph: course.content.knowledgeGraph ?? { nodes: [], edges: [] },
+            courseEvidence: course.content.courseEvidence,
           }
         : null,
       outlinePreview: course?.content._openmaicSceneOutlines ?? [],
@@ -180,6 +217,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       assessmentMode?: unknown;
       options?: Partial<NonNullable<QuickDesignRequest["options"]>>;
       referenceIds?: unknown;
+      textbookSelections?: unknown;
     } | null;
     const answers = body?.supplementalAnswers && typeof body.supplementalAnswers === "object"
       ? body.supplementalAnswers as Record<string, unknown> : {};
@@ -205,6 +243,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
     const referenceIds = Array.isArray(body?.referenceIds)
       ? body.referenceIds.filter((id): id is string => typeof id === "string").slice(0, 4)
       : [];
+    const textbookSelections = parseTextbookSelections(body?.textbookSelections);
+    if (textbookSelections instanceof Response) return textbookSelections;
     let referenceMaterials: QuickDesignRequest["referenceMaterials"] = [];
     let resourcePackage: QuickDesignRequest["resourcePackage"];
     try {
@@ -236,6 +276,15 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       teacherBrief,
       ...(resourcePackage ? { resourcePackage, supplementalAnswers: { brief: supplementalBrief || teacherBrief } } : {}),
       referenceMaterials,
+      textbookSelections,
+      ...(textbookSelections.length ? {
+        textbookEvidence: await resolveCourseEvidenceSnapshot({
+          courseId,
+          selections: textbookSelections,
+          upstreamKnowledgePoints: resourcePackageTeachingPoints(resourcePackage),
+          teacherBrief,
+        }),
+      } : {}),
       generationScope: body?.generationScope === "test-lesson"
         ? "test-lesson"
         : "full-course",

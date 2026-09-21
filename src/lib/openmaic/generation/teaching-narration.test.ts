@@ -86,6 +86,8 @@ describe('independent first-pass teaching narration', () => {
     expect(aiCall.mock.calls[0][0]).toContain('introduces, deepens, and references as page ownership');
     expect(aiCall.mock.calls[0][0]).toContain('actual relationship on the slide');
     expect(aiCall.mock.calls[0][0]).toContain('local explanatory value, learner familiarity');
+    expect(aiCall.mock.calls[0][0]).toContain('Provenance classifications and review notes are teacher-only');
+    expect(aiCall.mock.calls[0][0]).toContain('Present the knowledge, example, image, or activity directly');
     expect(aiCall.mock.calls[0][0]).toContain('teachingPlan.taskConnection as a hard page boundary');
     expect(aiCall.mock.calls[0][0]).toContain('standalone AI resource must feel complete');
     expect(aiCall.mock.calls[0][0]).toContain('synthesize what the learner can now explain or do');
@@ -450,6 +452,7 @@ describe('independent first-pass teaching narration', () => {
     expect(call.mock.calls[0][0]).toContain('distinct targetable element');
     expect(call.mock.calls[0][0]).toContain('rather than assigning it arbitrarily to the first label');
     expect(call.mock.calls[0][0]).toContain('remove decorative copy before shrinking');
+    expect(call.mock.calls[0][0]).toContain('textbook original example, teaching adaptation, and AI supplement');
     expect(call.mock.calls[0][0]).toContain('opening page of a standalone AI course resource');
     expect(call.mock.calls[0][0]).toContain('abstract definition alone is not an adequate knowledge entry');
   });

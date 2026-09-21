@@ -22,7 +22,7 @@ import { normalizeManagedProviderCatalog } from '@openmaic/lib/provider-catalog-
 import type { TtsScenarioConfigs } from '@openmaic/lib/audio/tts-scenarios';
 import type { LlmThinkingScenarioConfigs } from '@openmaic/lib/ai/thinking-scenarios';
 
-export type ProviderSection = 'providers' | 'tts' | 'asr' | 'pdf' | 'image' | 'video' | 'web-search';
+export type ProviderSection = 'providers' | 'tts' | 'asr' | 'pdf' | 'image' | 'video' | 'web-search' | 'embedding';
 
 export interface ProviderEntry {
   apiKey: string;
@@ -36,6 +36,8 @@ export interface ProviderEntry {
    * 仅用于 LLM providers；其他 Provider 分区会忽略此字段。
    */
   defaultModel?: string;
+  /** Fixed output dimensions for embedding providers. */
+  dimensions?: number;
   thinkingScenarioConfigs?: LlmThinkingScenarioConfigs;
   defaultVoice?: string;
   scenarioConfigs?: TtsScenarioConfigs;
@@ -52,6 +54,7 @@ interface ServerProvidersYaml {
   image?: Record<string, Partial<ProviderEntry>>;
   video?: Record<string, Partial<ProviderEntry>>;
   'web-search'?: Record<string, Partial<ProviderEntry>>;
+  embedding?: Record<string, Partial<ProviderEntry>>;
 }
 
 async function readYaml(): Promise<ServerProvidersYaml> {
@@ -177,6 +180,11 @@ export async function saveProviderEntry(
         : existing.defaultModel
           ? { defaultModel: existing.defaultModel }
           : {}),
+      ...(typeof entry.dimensions === 'number'
+        ? { dimensions: entry.dimensions }
+        : typeof existing.dimensions === 'number'
+          ? { dimensions: existing.dimensions }
+          : {}),
       ...(entry.thinkingScenarioConfigs
         ? { thinkingScenarioConfigs: entry.thinkingScenarioConfigs }
         : existing.thinkingScenarioConfigs
@@ -248,6 +256,7 @@ export async function getProviderEntry(
     enabled: entry.enabled,
     priority: typeof entry.priority === 'number' ? entry.priority : undefined,
     defaultModel: entry.defaultModel,
+    dimensions: entry.dimensions,
     thinkingScenarioConfigs: entry.thinkingScenarioConfigs,
     defaultVoice: entry.defaultVoice,
     scenarioConfigs: entry.scenarioConfigs,
@@ -282,6 +291,7 @@ export async function listProviders(
       enabled: entry.enabled,
       priority: typeof entry.priority === 'number' ? entry.priority : undefined,
       defaultModel: entry.defaultModel,
+      dimensions: entry.dimensions,
       thinkingScenarioConfigs: entry.thinkingScenarioConfigs,
       defaultVoice: entry.defaultVoice,
       scenarioConfigs: entry.scenarioConfigs,
@@ -306,6 +316,7 @@ function providerConfigJson(
     ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
     ...(entry.priority !== undefined ? { priority: entry.priority } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
+    ...(entry.dimensions !== undefined ? { dimensions: entry.dimensions } : {}),
     ...(entry.thinkingScenarioConfigs
       ? { thinkingScenarioConfigs: entry.thinkingScenarioConfigs }
       : {}),

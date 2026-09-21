@@ -20,8 +20,8 @@ import type {
 } from "@/lib/session/types";
 
 export const TEACHING_BLUEPRINT_SCHEMA_VERSION = 3 as const;
-export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v22-assessment-intent-compilation";
-export const TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION = "teaching-blueprint-v3-compiled-v8-assessment-intents";
+export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v23-teacher-review-boundary";
+export const TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION = "teaching-blueprint-v3-compiled-v9-teacher-review-boundary";
 /** Kept as a compatibility export for callers being migrated away from ratio budgeting. */
 export const MAX_ASSESSMENT_RATIO = 0.2;
 const MIN_TEACHING_PAGE_SEC = 1;
@@ -388,6 +388,7 @@ export function buildTeachingBlueprintPrompt(
     "知识点、讲授单元和 PPT 页面不是一一对应关系。先按定义—关系—机制—应用等真实知识联系，把可以共享解释主线、视觉关系或案例的多个知识点编入同一个 unit，也可以让一个页面组合多个紧密相关 unit；只有认知任务或视觉焦点发生实质变化时才拆页。不得为了凑覆盖率机械制作‘一个知识点一页’，也不得用一个概括名称吞掉各知识点应有的具体解释责任。",
     "必须沿用已经确认的小节边界与顺序。页面可以组合多个 unit，不得为了换例子或换说法重复创建同一知识点的 unit。时间不足时先压缩重复铺垫、共享相关点的引入与案例并减少可选扩展，仍无法完成必授内容才报告 capacityConflict，不能静默漏讲。",
     "可用适龄的通行学科知识补足解释，也可为教学构造案例、类比和示意数据。不得捏造资料出处、研究机构或引用。所有 constructed 或 unverified 内容必须写入 reviewItems，供课程完成后集中反馈教师；这些状态不得进入学生页面和讲稿。",
+    "教材案例采用双通道设计：workedExample、explanation、mechanism、keyPoints、页面标题、页面 description 和 learningTask 只写学生实际要理解、观察或完成的内容；sourceKind、evidenceQuotes、explanationNode.provenance 和 reviewItems 承担来源、改编范围与待确认说明。若在教材案例上增加步骤、角色、互动或条件，把新增部分写入 reviewItems 并标记 derived/constructed，同时在学生内容字段中直接写成连贯案例，不出现‘教材原例’‘教学改编’‘AI 补充’‘来自教材’‘保留原例核心含义’等审查话术，也不把这些话术换成脚注、括注或口头免责声明。",
     "sourceKind=course-source 时 evidenceQuotes 必须逐字来自给定资料；通行知识写 general-knowledge 且 evidenceQuotes=[]。",
     "项目情境只规定用途和约束，不能自动变成知识目标或每页案例。小节先建立整体认识，再按知识特点形成连续进展；纯解释页合法，不强制案例、互动或统一页面套路。",
     "resourceNeeds 必须遵守教师补充中给出的系统资源能力。未启用图片或视频时不得请求对应种类；动态过程可改为原生分步图、状态对照或因果图，不能让课程因不可用媒体而无法生成。",

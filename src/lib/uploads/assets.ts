@@ -15,6 +15,8 @@ export async function hasSnapshotReference(tx: Prisma.TransactionClient, fileId:
     UNION ALL SELECT 1 FROM "ClassroomTemplateVersion" WHERE "snapshot"::text LIKE ${needle} OR "mediaRefs"::text LIKE ${needle}
     UNION ALL SELECT 1 FROM "StudentProjectWorkspace" WHERE "projectState"::text LIKE ${needle}
     UNION ALL SELECT 1 FROM "GenerationJob" WHERE "request"::text LIKE ${needle} OR "result"::text LIKE ${needle}
+    UNION ALL SELECT 1 FROM "TextbookRevision" WHERE "fileAssetId" = ${fileId}
+    UNION ALL SELECT 1 FROM "TextbookFigure" WHERE "fileAssetId" = ${fileId}
   ) AS referenced`;
   return rows[0]?.referenced ?? false;
 }

@@ -56,6 +56,7 @@ interface ServerProviderEntry {
    * 当生成调用未携带 x-model 时，resolveModel 会回退到此值。
    */
   defaultModel?: string;
+  dimensions?: number;
   thinkingScenarioConfigs?: LlmThinkingScenarioConfigs;
   defaultVoice?: string;
   scenarioConfigs?: TtsScenarioConfigs;
@@ -70,6 +71,7 @@ interface ServerConfig {
   image: Record<string, ServerProviderEntry>;
   video: Record<string, ServerProviderEntry>;
   webSearch: Record<string, ServerProviderEntry>;
+  embedding: Record<string, ServerProviderEntry>;
   /** TTS provider IDs the operator force-disabled (server precedence). */
   ttsDisabled: Set<string>;
 }
@@ -165,6 +167,14 @@ const WEB_SEARCH_ENV_MAP: Record<string, string> = {
   WEB_SEARCH_MINIMAX: 'minimax',
 };
 
+const EMBEDDING_ENV_MAP: Record<string, string> = {
+  EMBEDDING_OLLAMA: 'ollama-embedding',
+  EMBEDDING_QWEN: 'qwen-embedding',
+  EMBEDDING_OPENAI: 'openai-embedding',
+};
+
+const KEYLESS_EMBEDDING_PROVIDERS = new Set(['ollama-embedding']);
+
 // ---------------------------------------------------------------------------
 // YAML loading
 // ---------------------------------------------------------------------------
@@ -177,6 +187,7 @@ type YamlData = Partial<{
   image: Record<string, Partial<ServerProviderEntry>>;
   video: Record<string, Partial<ServerProviderEntry>>;
   'web-search': Record<string, Partial<ServerProviderEntry>>;
+  embedding: Record<string, Partial<ServerProviderEntry>>;
 }>;
 
 function loadDefaultYamlFile(): YamlData {
@@ -355,7 +366,7 @@ export async function initializeServerProviderConfig(): Promise<void> {
     const data: YamlData = {};
     for (const row of rows) {
       const section = row.name as keyof YamlData;
-      if (!['providers', 'tts', 'asr', 'pdf', 'image', 'video', 'web-search'].includes(section)) {
+      if (!['providers', 'tts', 'asr', 'pdf', 'image', 'video', 'web-search', 'embedding'].includes(section)) {
         continue;
       }
       const config =
@@ -480,6 +491,10 @@ function buildConfig(yamlData: YamlData): ServerConfig {
     image,
     video: loadEnvSection(VIDEO_ENV_MAP, yamlData.video),
     webSearch: loadEnvSection(WEB_SEARCH_ENV_MAP, yamlData['web-search']),
+    embedding: loadEnvSection(EMBEDDING_ENV_MAP, yamlData.embedding, {
+      requiresBaseUrl: true,
+      keylessProviders: KEYLESS_EMBEDDING_PROVIDERS,
+    }),
     ttsDisabled: collectDisabledTTS(yamlData.tts),
   };
 }
@@ -493,10 +508,11 @@ function logConfig(config: ServerConfig, label: string): void {
     Object.keys(config.image).length,
     Object.keys(config.video).length,
     Object.keys(config.webSearch).length,
+    Object.keys(config.embedding).length,
   ];
   if (counts.some((c) => c > 0)) {
     log.info(
-      `[ServerProviderConfig] Loaded (${label}): ${counts[0]} LLM, ${counts[1]} TTS, ${counts[2]} ASR, ${counts[3]} PDF, ${counts[4]} Image, ${counts[5]} Video, ${counts[6]} WebSearch providers`,
+      `[ServerProviderConfig] Loaded (${label}): ${counts[0]} LLM, ${counts[1]} TTS, ${counts[2]} ASR, ${counts[3]} PDF, ${counts[4]} Image, ${counts[5]} Video, ${counts[6]} WebSearch, ${counts[7]} Embedding providers`,
     );
   }
 }
@@ -916,6 +932,32 @@ export function resolveServerWebSearchProviderId(preferredProviderId?: string): 
   if (webSearch.baidu?.apiKey) return 'baidu';
   if (webSearch.minimax?.apiKey) return 'minimax';
   return Object.keys(webSearch)[0];
+}
+
+export type ServerEmbeddingProvider = {
+  providerId: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  dimensions: 1024;
+};
+
+/** Resolve the single active embedding profile used to build a comparable vector space. */
+export function resolveServerEmbeddingProvider(): ServerEmbeddingProvider | undefined {
+  const configured = sortProviderEntries(Object.entries(getConfig().embedding)).find(([providerId, entry]) =>
+    entry.enabled !== false
+      && Boolean(entry.baseUrl && (entry.defaultModel || entry.models?.[0]))
+      && Boolean(entry.apiKey || KEYLESS_EMBEDDING_PROVIDERS.has(providerId)),
+  );
+  if (!configured) return undefined;
+  const [providerId, entry] = configured;
+  return {
+    providerId,
+    apiKey: entry.apiKey,
+    baseUrl: entry.baseUrl!,
+    model: entry.defaultModel || entry.models![0],
+    dimensions: 1024,
+  };
 }
 
 /**

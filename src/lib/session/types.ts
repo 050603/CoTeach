@@ -17,6 +17,10 @@ import type {
   LearningEvidence,
   StudentAiDecision,
 } from "@/lib/learning-evidence/types";
+import type {
+  CourseEvidenceSnapshot,
+  CourseTextbookSelection,
+} from "@/lib/textbook/course-evidence-types";
 
 export type {
   AiAssessmentSuggestion,
@@ -1469,6 +1473,10 @@ export type CourseContent = {
   pblOutline: string;
   /** 教师在生成知识图谱前指定、要求模型完整保留的知识点。 */
   teacherRequiredKnowledgePoints?: string[];
+  /** Immutable textbook revisions/sections selected for this course. Teacher-private authoring input. */
+  textbookSelections?: CourseTextbookSelection[];
+  /** Versioned evidence chosen from the permanent textbook library. Removed from student projections. */
+  courseEvidence?: CourseEvidenceSnapshot;
   /** Teacher-private record of how the available teaching time shaped the lesson-owned knowledge scope. */
   knowledgeScopePlan?: KnowledgeScopePlan;
   knowledgePoints: KnowledgePoint[];
@@ -1701,6 +1709,9 @@ export type KnowledgePoint = {
   /** Source-package leaf represented by this lesson node. Package-owned nodes use exactly one source ID. */
   sourceKnowledgePointIds?: string[];
   sourceKnowledgePointNames?: string[];
+  /** Textbook evidence selected for this lesson node; details live in CourseContent.courseEvidence. */
+  evidenceItemIds?: string[];
+  teachingDepth?: "detailed" | "brief" | "extension";
   groupId?: string;
   groupName?: string;
   id: string;
@@ -1733,8 +1744,10 @@ export type KnowledgeScopePlan = {
     sourceKnowledgePointId: string;
     sourceKnowledgePointName: string;
     /** Legacy snapshots may contain embedded/deferred; new resource-package generations require standalone. */
-    disposition: "standalone" | "embedded" | "deferred";
+    disposition: "standalone" | "mapped" | "embedded" | "deferred";
     targetKnowledgePointId?: string;
+    /** Textbook-driven planning may split or merge an upstream responsibility. */
+    targetKnowledgePointIds?: string[];
     rationale: string;
   }>;
 };
@@ -1775,6 +1788,8 @@ export type KnowledgeGraphNode = {
   label: string;
   description: string;
   keyInfo?: string;
+  evidenceItemIds?: string[];
+  teachingDepth?: "detailed" | "brief" | "extension";
   level?: "foundation" | "core" | "application" | "extension";
   /** Lesson targets and curriculum prerequisites share one graph but not one teaching scope. */
   instructionalRole?: "lesson" | "prerequisite";

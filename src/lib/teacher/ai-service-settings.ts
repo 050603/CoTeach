@@ -70,6 +70,16 @@ export function getProviderConnectionPresentation({
   const officialUrl = normalizedEndpoint(defaultBaseUrl);
   const host = endpointHost(effectiveUrl);
 
+  if (providerId === "ollama-embedding") {
+    return {
+      mode: "official",
+      label: "本机 Ollama",
+      protocol: "OpenAI 兼容 Embeddings",
+      tone: effectiveUrl ? "success" : "info",
+      credentialHint: "教材文字在本机生成向量，不需要外部 API 密钥；向量由 PostgreSQL pgvector 保存和检索。",
+    };
+  }
+
   if (providerId === "bedrock") {
     return {
       mode: "official",

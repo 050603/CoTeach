@@ -27,6 +27,7 @@ import { QuickOutlineReviewDialog } from "@/components/teacher/quick-outline-rev
 import { QuickGenerationStage } from "@/components/teacher/quick-generation-stage";
 import { StudentStageHost } from "@/components/openmaic-bridge/student-stage-host";
 import { ResourcePackageForm } from "@/components/teacher/resource-package-form";
+import { CourseTextbookSelector } from "@/components/teacher/course-textbook-selector";
 import type { CourseResourcePackage } from "@/lib/resource-package/types";
 import {
   buildQuickClassroomArtifacts,
@@ -51,6 +52,7 @@ import {
   MAX_GENERATION_REFERENCE_FILES,
 } from "@/lib/course-design/generation-reference-policy";
 import type { ClassroomGenerationScope } from "@/lib/course-generation/generation-scope";
+import type { CourseEvidenceSnapshot, CourseTextbookSelection } from "@/lib/textbook/course-evidence-types";
 
 type JobStatus = "queued" | "running" | "review_available" | "paused" | "cancelling" | "cancelled" | "completed" | "failed";
 
@@ -99,6 +101,7 @@ type DesignJob = {
     assessmentMode?: AssessmentMode;
     options?: GenerationOptions | null;
     referenceMaterials?: UploadedKnowledgeReference[];
+    textbookSelections?: CourseTextbookSelection[];
   };
 };
 
@@ -108,6 +111,7 @@ type ResponsePayload = {
   knowledgePreview?: {
     knowledgePoints: KnowledgePoint[];
     knowledgeGraph: KnowledgeGraph;
+    courseEvidence?: CourseEvidenceSnapshot;
   } | null;
   outlinePreview?: SceneOutline[];
   error?: string;
@@ -295,12 +299,14 @@ export function FastCourseGenerator({
   const [submitting, setSubmitting] = useState(false);
   const [uploadingReference, setUploadingReference] = useState(false);
   const [referenceMaterials, setReferenceMaterials] = useState<UploadedKnowledgeReference[]>([]);
+  const [textbookSelections, setTextbookSelections] = useState<CourseTextbookSelection[]>([]);
   const [classroomRetrying, setClassroomRetrying] = useState(false);
   const [error, setError] = useState<string>();
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [knowledgePreview, setKnowledgePreview] = useState<{
     knowledgePoints: KnowledgePoint[];
     knowledgeGraph: KnowledgeGraph;
+    courseEvidence?: CourseEvidenceSnapshot;
   }>({ knowledgePoints: [], knowledgeGraph: { nodes: [], edges: [] } });
   const [knowledgeReviewOpen, setKnowledgeReviewOpen] = useState(false);
   const [outlinePreview, setOutlinePreview] = useState<SceneOutline[]>([]);
@@ -333,7 +339,8 @@ export function FastCourseGenerator({
     && options.enableImageGeneration === (savedRequest?.options?.enableImageGeneration !== false)
     && options.enableTTS === (savedRequest?.options?.enableTTS !== false)
     && options.enableVideoGeneration === (savedRequest?.options?.enableVideoGeneration === true)
-    && JSON.stringify(referenceMaterials.map((item) => item.id).sort()) === JSON.stringify((savedRequest?.referenceMaterials ?? []).map((item) => item.id).sort());
+    && JSON.stringify(referenceMaterials.map((item) => item.id).sort()) === JSON.stringify((savedRequest?.referenceMaterials ?? []).map((item) => item.id).sort())
+    && JSON.stringify(textbookSelections) === JSON.stringify(savedRequest?.textbookSelections ?? []);
 
   const applyPayload = useCallback((payload: ResponsePayload) => {
     setBackgroundEnabled(payload.backgroundEnabled);
@@ -360,6 +367,9 @@ export function FastCourseGenerator({
     const savedReferences = payload.job?.requestPreview?.referenceMaterials;
     if (savedReferences?.length) {
       setReferenceMaterials((current) => current.length > 0 ? current : savedReferences);
+    }
+    if (payload.job?.requestPreview?.textbookSelections?.length) {
+      setTextbookSelections((current) => current.length ? current : payload.job!.requestPreview!.textbookSelections!);
     }
     if (payload.knowledgePreview) setKnowledgePreview(payload.knowledgePreview);
     if (payload.outlinePreview) setOutlinePreview(payload.outlinePreview);
@@ -474,6 +484,7 @@ export function FastCourseGenerator({
           assessmentMode,
           options,
           referenceIds: referenceMaterials.map((material) => material.id),
+          textbookSelections,
         }),
       });
       const payload = await readJsonResponse<ResponsePayload>(
@@ -768,6 +779,7 @@ export function FastCourseGenerator({
       <AnimatePresence>
         {knowledgeReviewOpen ? (
           <QuickKnowledgeReviewDialog
+            courseEvidence={knowledgePreview.courseEvidence ?? course.content.courseEvidence}
             initialKnowledgeGraph={knowledgePreview.knowledgeGraph}
             initialKnowledgePoints={knowledgePreview.knowledgePoints}
             onClose={() => setKnowledgeReviewOpen(false)}
@@ -820,6 +832,13 @@ export function FastCourseGenerator({
         </div>
 
         <ResourcePackageForm courseId={course.id} disabled={submitting || running || classroomRunning} onConfirmed={setConfirmedPackage} onPackagePresent={setHasResourcePackage} />
+        <div className="mb-4">
+          <CourseTextbookSelector
+            disabled={submitting || running || classroomRunning}
+            onChange={setTextbookSelections}
+            value={textbookSelections}
+          />
+        </div>
         {legacyResumeAvailable ? <p className="mb-4 text-sm leading-6 text-stone-600">此旧任务可使用原有要求继续生成；修改教学要求或创建新课堂时，请上传资源包。</p> : null}
         <div className="overflow-visible rounded-[14px] border border-stone-300 bg-white">
           <textarea

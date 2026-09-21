@@ -7,6 +7,7 @@ import {
 } from "@/lib/openmaic/pedagogy/teaching-constraints";
 import { JSON_TEACHER_PROMPT_CONTRACT } from "@/lib/prompt-quality/policy";
 import { deriveCourseEntryPolicy, formatCourseEntryPolicy } from "@/lib/course-entry-policy";
+import { formatCourseEvidenceContext, type CourseEvidenceSnapshot } from "@/lib/textbook/course-evidence-types";
 
 const GRADE_BAND_LABELS: Record<string, string> = {
   primary: "小学",
@@ -265,6 +266,7 @@ export function buildKnowledgeGraphPrompt(input: GenerateInput, context?: {
   teacherRequiredKnowledgePoints?: string[];
   teacherKnowledgePoints?: Array<{ id: string; name: string; description: string; groupId?: string; groupName?: string }>;
   referenceMaterials?: Array<{ fileName: string; content: string }>;
+  textbookEvidence?: CourseEvidenceSnapshot;
   teachingCapacity?: {
     durationRangeMin: number;
     durationRangeMax: number;
@@ -312,6 +314,8 @@ export function buildKnowledgeGraphPrompt(input: GenerateInput, context?: {
       fileName: material.fileName.trim(),
       content: material.content.trim(),
     }));
+  const textbookEvidence = formatCourseEvidenceContext(context?.textbookEvidence);
+  const textbookDriven = Boolean(context?.textbookEvidence?.items.length);
   const user = `请基于以下课程信息，生成“课程体系先修 → 本课知识建构 → 应用迁移”的知识结构。必须先划定本课负责教会什么，再逆向分析学生进入本课前必须已经掌握什么；不得把二者混为一谈。
 
 课程名称：${input.name}
@@ -324,16 +328,17 @@ ${buildAuthoritativeCourseBasisPrompt(input, { teachingCapacity: context?.teachi
 教师指定、必须保留的知识点：${teacherRequiredKnowledgePoints.length > 0 ? JSON.stringify(teacherRequiredKnowledgePoints) : "（无额外指定）"}
 资源包提供的来源概念目录：${teacherKnowledgePoints.length > 0 ? JSON.stringify(teacherKnowledgePoints) : "（无结构化来源目录）"}
 教师上传的知识参考资料：${referenceMaterials.length > 0 ? JSON.stringify(referenceMaterials) : "（未上传；不要因此降低知识结构质量）"}
+${textbookEvidence || "未选择永久教材；继续采用兼容的资源包知识规划规则。"}
 
 课程阶段：
 ${stageList}
 
 	要求：
 	1. 先做容量规划，再建图。资源包来源目录是教师确认的本课必授范围，其每个条目都必须保留为一个可追踪的 lesson knowledgePoint，不能因课时紧张而删除、合并成不可见的少数目标或留给后续阶段。以知识讲授可用时间、学习者基础、知识关系和理解难点决定解释深度、分组方式、哪些相关点共用一个讲授单元或页面，以及是否增加真正必要的桥接或拓展节点。当前 ${constraints.recommendedKnowledgePointRange.min}-${constraints.recommendedKnowledgePointRange.max} 仅供没有资源包目录时估计独立目标容量，不是资源包知识点的数量上限。不得按知识点数量机械平均分钟，也不得以“每点给一个定义和例子”冒充讲清；若必授范围与输入时长确实无法兼容，应明确报告容量冲突而不是静默删点。
-	2. knowledgePoints 至少逐项包含资源包来源目录和教师明确指定项。资源包条目必须保留精确 id、name、groupId、groupName，每个来源条目的 sourceKnowledgePointIds 只填写它自己的来源 ID；同组或强关联知识点可以在后续蓝图中进入同一个 unit/page，这不影响它们在图谱中保持独立、可检查的知识责任。教师指定项必须以完全相同的 name 分别保留，不得删除、合并、偷换概念或改名；这里禁止的是把多个知识责任压成一个不可追踪节点，不妨碍后续组合讲授。若课程目标、依赖关系或理解完整性确实需要，可增加少量桥接、关系、应用或拓展知识点，但不能用新增概括节点替换来源条目。每项填写 masteryBoundary 和 objectiveIndexes。
+	2. ${textbookDriven ? "已选择永久教材：按教材概念体系组织本课 knowledgePoints，允许把一个上游知识责任拆成多个教材节点，也允许一个教材节点覆盖多个上游责任。每个课程节点通过 sourceKnowledgePointIds 保留全部对应的上游 ID，并通过 evidenceItemIds 只引用上面提供的合法教材证据 ID；全部上游责任必须至少被一个本课节点映射。无法获得教材支持的内容必须明确作为 AI 补充，不得伪造教材出处。每项填写 teachingDepth（detailed|brief|extension）。" : "knowledgePoints 至少逐项包含资源包来源目录和教师明确指定项。资源包条目必须保留精确 id、name、groupId、groupName，每个来源条目的 sourceKnowledgePointIds 只填写它自己的来源 ID；同组或强关联知识点可以在后续蓝图中进入同一个 unit/page。教师指定项必须以完全相同的 name 分别保留。"} 每项填写 masteryBoundary 和 objectiveIndexes。
 	2a. 知识结构先表达学科理解本身，再表达真实存在的应用迁移。驱动问题、最终成果和资料中的“任务关联”不自动成为每个节点的 keyInfo、masteryBoundary、groupName 或关系边；不能因为某知识将来可用于成果制作，就把它和最终任务强行合组或为它编造 application/transfer 边。只有当前知识目标本身要求任务应用，或存在可解释的真实迁移关系时才建立连接。
 3. 每个本课 knowledgePoint 必须填写 groupId 和 groupName。这不是章节目录，而是“一组紧密相关知识学完后立即小测”的学习小节：只有必须连续建构才能完成同一理解目标的知识点才共用一组。独立概念、新的方法/操作阶段、从原理转入应用的新理解关口应另立一组。不得默认把整门课或整个 AI 授知阶段放进一组；若一组预计需要连续讲授约 10 分钟以上，应在自然的理解关口拆组，以便学生学完就检测。
-4. 返回 knowledgeScopePlan：对来源目录每一项给出且只给出一条 standalone 决策，并引用与来源 ID 相同的真实 targetKnowledgePointId。这里的 standalone 表示它在知识图谱和覆盖检查中保有独立责任，不表示必须单独占用一个讲授单元、一道题或一页 PPT；相关节点仍可组合讲授。资源包来源项不得标为 embedded 或 deferred。
+4. 返回 knowledgeScopePlan：对来源目录每一项给出且只给出一条决策。${textbookDriven ? "disposition 使用 mapped，并用 targetKnowledgePointIds 列出承担该要求的全部真实课程节点。" : "disposition 使用 standalone，并引用与来源 ID 相同的真实 targetKnowledgePointId。"} 资源包来源项不得标为 embedded 或 deferred。
 5. knowledgeGraph.nodes 必须包含所有本课目标节点并标记 instructionalRole=lesson；另行输出 instructionalRole=prerequisite 的真实课前先修节点。数量与时间遵循本课程动态入口策略：${formatCourseEntryPolicy(entryPolicy)} 先修节点不进入 knowledgePoints，不占用本课知识点数量，也不成为课后达标测目标。
 6. 本平台主要服务小学、初中、高中学生，也覆盖大学学习者。“知识启蒙”不代表课程主题没有前序知识。先按学段定位，再反推缺失会直接阻断本课目标的具体先修能力；填写 priorKnowledgeEvidence 和 diagnosticBoundary。高中自然语言处理等较深主题需要按实际目标核对训练集、验证集、测试集等真实前序概念，但不得机械照抄示例。不得虚构具体文件条款。
 7. 不得把本课准备讲授的基础层内容标成课前先修。foundation 表示本课内部基础层，不等于 prerequisite；常识、激趣背景和仅有帮助的内容不进入前测。
@@ -344,8 +349,8 @@ ${stageList}
 12. 输出前检查：资源包每个精确 ID 是否都成为本课节点且没有被概括节点替代；关键目标是否有足够时间讲清；相关知识能否组合讲授；本课目标覆盖课程目标但不超预算；先修与新授边界清晰；教师指定项完整；图无伪因果、无环、无模糊关系。仅输出 JSON。
 
 仅返回 JSON：{
-  "knowledgeScopePlan": { "rationale": "如何在完整覆盖来源目录的前提下按时间决定分组与深度", "decisions": [{ "sourceKnowledgePointId": "来源ID", "disposition": "standalone", "targetKnowledgePointId": "与来源ID相同的本课节点ID", "rationale": "该点的讲授责任及与相关点的组合方式" }] },
-  "knowledgePoints": [{ "id": "kp-1", "name": "string", "description": "string", "keyInfo": "string", "masteryBoundary": "string", "objectiveIndexes": [0], "level": "foundation", "relatedIds": ["kp-2"], "sourceKnowledgePointIds": ["来源ID"], "groupId": "section-1", "groupName": "一组相关知识的小节名" }],
+  "knowledgeScopePlan": { "rationale": "如何在完整覆盖来源目录的前提下按时间决定分组与深度", "decisions": [{ "sourceKnowledgePointId": "来源ID", "disposition": "${textbookDriven ? "mapped" : "standalone"}", "targetKnowledgePointId": "主要本课节点ID", "targetKnowledgePointIds": ["承担此要求的本课节点ID"], "rationale": "该点的讲授责任及与相关点的组合方式" }] },
+  "knowledgePoints": [{ "id": "kp-1", "name": "string", "description": "string", "keyInfo": "string", "masteryBoundary": "string", "objectiveIndexes": [0], "level": "foundation", "teachingDepth": "detailed", "evidenceItemIds": ["合法教材证据ID"], "relatedIds": ["kp-2"], "sourceKnowledgePointIds": ["来源ID"], "groupId": "section-1", "groupName": "一组相关知识的小节名" }],
   "knowledgeGraph": {
     "nodes": [
       { "id": "kp-1", "label": "string", "description": "string", "keyInfo": "string", "masteryBoundary": "string", "objectiveIndexes": [0], "level": "foundation", "instructionalRole": "lesson", "groupId": "section-1", "groupName": "小节名" },

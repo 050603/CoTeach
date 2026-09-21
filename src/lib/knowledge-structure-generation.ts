@@ -15,12 +15,13 @@ import {
 import { deriveCourseEntryPolicy, formatCourseEntryPolicy } from "@/lib/course-entry-policy";
 import { DURABLE_GENERATION_TRANSIENT_RETRIES } from "@/lib/llm/request-policy";
 import type { GenerationReferenceMaterial } from "@/lib/course-design/generation-references";
+import type { CourseEvidenceSnapshot } from "@/lib/textbook/course-evidence-types";
 import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic/generation/generated-output-retry";
 
 type ModelCall = typeof callLLM;
 
-export const KNOWLEDGE_STRUCTURE_POLICY_VERSION = "resource-package-complete-coverage-v1";
+export const KNOWLEDGE_STRUCTURE_POLICY_VERSION = "textbook-evidence-mapping-v2";
 
 export type KnowledgeStructureGenerationContext = {
   /** Resource-package leaves are required lesson nodes; downstream units/pages may teach related nodes together. */
@@ -28,6 +29,7 @@ export type KnowledgeStructureGenerationContext = {
   pblOutline?: string;
   teacherRequiredKnowledgePoints?: string[];
   referenceMaterials?: GenerationReferenceMaterial[];
+  textbookEvidence?: CourseEvidenceSnapshot;
   teachingCapacity?: {
     durationRangeMin: number;
     durationRangeMax: number;
@@ -111,10 +113,12 @@ function prepareKnowledgeStructureForTeacherReview(
   const usedPointIds = new Set<string>();
   const usedPointNames = new Set<string>();
   const usedSourcePointIds = new Set<string>();
+  const textbookDriven = Boolean(context.textbookEvidence?.items.length);
   const knowledgePoints: CourseContent["knowledgePoints"] = [];
   const objectiveCount = input.learningObjectives?.length ?? 0;
   const sourcePointById = new Map((context.teacherKnowledgePoints ?? []).map((point) => [point.id, point]));
   const sourcePointByName = new Map((context.teacherKnowledgePoints ?? []).map((point) => [normalizeKnowledgePointName(point.name), point]));
+  const validEvidenceIds = new Set(context.textbookEvidence?.items.map((item) => item.id) ?? []);
   const addPoint = (source: JsonRecord, fallbackIndex: number) => {
     const name = firstText(source, ["name", "label", "title", "knowledgePoint"])
       || fallbackNames[fallbackIndex]
@@ -129,7 +133,7 @@ function prepareKnowledgeStructureForTeacherReview(
     const sourceKnowledgePointIds = [...new Set([
       ...suppliedSourceIds,
       ...(confirmed ? [confirmed.id] : []),
-    ])].filter((id) => !usedSourcePointIds.has(id));
+    ])].filter((id) => textbookDriven || !usedSourcePointIds.has(id));
     const sourceKnowledgePoints = sourceKnowledgePointIds.map((id) => sourcePointById.get(id)!).filter(Boolean);
     const requestedId = (confirmed && sourceKnowledgePointIds.length === 1)
       ? confirmed.id
@@ -179,6 +183,13 @@ function prepareKnowledgeStructureForTeacherReview(
         ? source.relatedIds.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
         : undefined,
       level: validLevel(source.level),
+      ...(textbookDriven ? { teachingDepth: source.teachingDepth === "detailed" || source.teachingDepth === "extension"
+        ? source.teachingDepth : "brief" as const } : {}),
+      evidenceItemIds: Array.isArray(source.evidenceItemIds)
+        ? [...new Set(source.evidenceItemIds.filter((value): value is string =>
+            typeof value === "string" && validEvidenceIds.has(value)
+          ))]
+        : undefined,
       groupId,
       groupName,
       ...(sourceKnowledgePointIds.length ? {
@@ -187,7 +198,19 @@ function prepareKnowledgeStructureForTeacherReview(
       } : {}),
     });
   };
-  if (sourcePointById.size > 0) {
+  if (sourcePointById.size > 0 && textbookDriven) {
+    pointSources.forEach(addPoint);
+    for (const sourcePoint of sourcePointById.values()) {
+      if (knowledgePoints.some((point) => point.sourceKnowledgePointIds?.includes(sourcePoint.id))) continue;
+      addPoint({
+        name: sourcePoint.name,
+        description: sourcePoint.description,
+        sourceKnowledgePointIds: [sourcePoint.id],
+        groupId: sourcePoint.groupId,
+        groupName: sourcePoint.groupName,
+      }, knowledgePoints.length);
+    }
+  } else if (sourcePointById.size > 0) {
     // Resource-package leaves are the teacher-confirmed content floor. A model
     // may enrich them or recommend that related leaves share one explanation,
     // but a composite target must never replace the individual source nodes.
@@ -270,6 +293,8 @@ function prepareKnowledgeStructureForTeacherReview(
       masteryBoundary: point.masteryBoundary,
       groupId: point.groupId,
       groupName: point.groupName,
+      evidenceItemIds: point.evidenceItemIds,
+      teachingDepth: point.teachingDepth,
       relatedLessonIds: Array.isArray(source.relatedLessonIds)
         ? source.relatedLessonIds.filter((value): value is string => typeof value === "string")
         : undefined,
@@ -397,9 +422,9 @@ function prepareKnowledgeStructureForTeacherReview(
   // An unconnected proposed prerequisite is a review question. Never invent a
   // "required" relation by cycling through lesson targets to make a graph pass.
 
-  const sourceTarget = new Map<string, CourseContent["knowledgePoints"][number]>();
+  const sourceTargets = new Map<string, Array<CourseContent["knowledgePoints"][number]>>();
   knowledgePoints.forEach((point) => point.sourceKnowledgePointIds?.forEach((sourceId) => {
-    if (!sourceTarget.has(sourceId)) sourceTarget.set(sourceId, point);
+    sourceTargets.set(sourceId, [...(sourceTargets.get(sourceId) ?? []), point]);
   }));
   const rawScopePlan = record(firstValue(nested, ["knowledgeScopePlan", "scopePlan", "scope"]));
   const rawDecisions = Array.isArray(rawScopePlan.decisions) ? rawScopePlan.decisions.map(record) : [];
@@ -410,8 +435,10 @@ function prepareKnowledgeStructureForTeacherReview(
   const sourcePoints = context.teacherKnowledgePoints ?? [];
   const rawScopePreservesEverySource = sourcePoints.every((sourcePoint) => {
     const decision = rawDecisionById.get(sourcePoint.id);
-    return firstText(decision ?? {}, ["disposition"]) === "standalone"
-      && firstText(decision ?? {}, ["targetKnowledgePointId", "targetId"]) === sourcePoint.id;
+    return textbookDriven
+      ? Boolean(decision && sourceTargets.get(sourcePoint.id)?.length)
+      : firstText(decision ?? {}, ["disposition"]) === "standalone"
+        && firstText(decision ?? {}, ["targetKnowledgePointId", "targetId"]) === sourcePoint.id;
   });
   const capacity = context.teachingCapacity;
   const knowledgeScopePlan: KnowledgeScopePlan | undefined = capacity || sourcePoints.length
@@ -427,18 +454,23 @@ function prepareKnowledgeStructureForTeacherReview(
         sourcePointCount: sourcePoints.length,
         targetPointCount: knowledgePoints.length,
         rationale: (rawScopePreservesEverySource ? firstText(rawScopePlan, ["rationale", "reason"]) : "")
-          || "完整保留资源包规定的知识点，再按知识关系和可用时间组合讲授、调整解释深度并选择必要拓展。",
+          || (textbookDriven
+            ? "按教材概念体系组织本课节点，并用多对多映射逐项核对资源包知识要求的覆盖和缺口。"
+            : "完整保留资源包规定的知识点，再按知识关系和可用时间组合讲授、调整解释深度并选择必要拓展。"),
         decisions: sourcePoints.map((sourcePoint) => {
-          const target = sourceTarget.get(sourcePoint.id);
+          const targets = sourceTargets.get(sourcePoint.id) ?? [];
           const rawDecision = rawDecisionById.get(sourcePoint.id);
-          const rawDecisionPreservesSource = firstText(rawDecision ?? {}, ["disposition"]) === "standalone"
-            && firstText(rawDecision ?? {}, ["targetKnowledgePointId", "targetId"]) === sourcePoint.id;
-          const disposition = "standalone" as const;
+          const rawDecisionPreservesSource = textbookDriven
+            ? Boolean(rawDecision && targets.length)
+            : firstText(rawDecision ?? {}, ["disposition"]) === "standalone"
+              && firstText(rawDecision ?? {}, ["targetKnowledgePointId", "targetId"]) === sourcePoint.id;
+          const disposition = textbookDriven ? "mapped" as const : "standalone" as const;
           return {
             sourceKnowledgePointId: sourcePoint.id,
             sourceKnowledgePointName: sourcePoint.name,
             disposition,
-            targetKnowledgePointId: target?.id ?? sourcePoint.id,
+            targetKnowledgePointId: targets[0]?.id ?? sourcePoint.id,
+            ...(textbookDriven ? { targetKnowledgePointIds: targets.map((target) => target.id) } : {}),
             rationale: (rawDecisionPreservesSource ? firstText(rawDecision ?? {}, ["rationale", "reason"]) : "")
               || "作为资源包规定的本课知识责任保留；可与同组相关知识共享讲授单元、页面、案例和检测情境。",
           };
@@ -468,7 +500,10 @@ export async function generateKnowledgeStructureOnce(
   const messages = [
     { role: "system", content: prompt.system },
     { role: "user", content: [prompt.user, context.teacherKnowledgePoints?.length
-      ? `教师资料中的来源概念目录（每个精确 id/name 都是本课必须覆盖的 lesson knowledgePoint，不得合并替代、删除或 deferred。相关知识可以共享 unit、页面、案例和时间；groupId/groupName 用于保留原始知识体系与讲授分组）：\n${JSON.stringify(context.teacherKnowledgePoints)}` : "",
+      ? context.textbookEvidence?.items.length
+        ? `教师资料中的上游知识要求（每个精确 id 都必须通过 sourceKnowledgePointIds 映射到一个或多个教材化课程节点，并报告实际覆盖或缺口；允许拆分、合并和多对多映射，不要求节点名称与上游相同）：\n${JSON.stringify(context.teacherKnowledgePoints)}`
+        : `教师资料中的来源概念目录（每个精确 id/name 都是本课必须覆盖的 lesson knowledgePoint，不得合并替代、删除或 deferred。相关知识可以共享 unit、页面、案例和时间；groupId/groupName 用于保留原始知识体系与讲授分组）：\n${JSON.stringify(context.teacherKnowledgePoints)}`
+      : "",
     "缺乏明确依据的先修关系保留待核对，不能按节点顺序或为了连通图谱编造必要关系。课程目标映射也必须有实质依据。"].filter(Boolean).join("\n\n") },
   ] as const;
   return withGeneratedOutputRetry(async () => {

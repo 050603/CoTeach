@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { z } from "zod";
 import {
   deleteProviderEntry,
@@ -8,6 +9,9 @@ import {
 } from "@/lib/openmaic-bridge/provider-config-editor";
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
 import { validateUrlForSSRF } from "@/lib/openmaic/server/ssrf-guard";
+import { embeddingProfile, isLocalOllamaEmbeddingEndpoint } from "@/lib/textbook/embedding";
+import { queueTextbookEmbeddingReindex } from "@/lib/textbook/service";
+import { runTextbookIngestJob } from "@/lib/textbook/worker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +24,7 @@ const SectionSchema = z.enum([
   "image",
   "video",
   "web-search",
+  "embedding",
 ]);
 const ProviderIdSchema = z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9_-]*$/i);
 const TtsScenarioConfigSchema = z.object({
@@ -52,6 +57,7 @@ const SaveSchema = z.object({
   models: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
   enabled: z.boolean().optional(),
   defaultModel: z.string().trim().max(200).optional(),
+  dimensions: z.literal(1024).optional(),
   thinkingScenarioConfigs: ThinkingScenarioConfigsSchema.optional(),
   priority: z.number().int().min(0).max(10_000).optional(),
   defaultVoice: z.string().trim().max(200).optional(),
@@ -90,10 +96,14 @@ export async function POST(request: Request) {
   if ("response" in auth) return auth.response;
   const parsed = SaveSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return apiError(request, "INVALID_PROVIDER", "Provider configuration is invalid.", 400);
-  if (parsed.data.baseUrl) {
+  const allowedLocalEmbedding = parsed.data.section === "embedding"
+    && parsed.data.baseUrl
+    && isLocalOllamaEmbeddingEndpoint(parsed.data.providerId, parsed.data.baseUrl);
+  if (parsed.data.baseUrl && !allowedLocalEmbedding) {
     const ssrfError = await validateUrlForSSRF(parsed.data.baseUrl);
     if (ssrfError) return apiError(request, "INVALID_PROVIDER_URL", "Provider URL is not allowed.", 400);
   }
+  const previousEmbeddingFingerprint = parsed.data.section === "embedding" ? embeddingProfile()?.fingerprint : undefined;
   await saveProviderEntry(parsed.data.section, parsed.data.providerId, {
     ...parsed.data,
     timingCalibrations: parsed.data.timingCalibrations as never,
@@ -101,12 +111,20 @@ export async function POST(request: Request) {
   });
   const saved = await getProviderEntry(parsed.data.section, parsed.data.providerId);
   if (!saved) return apiError(request, "PROVIDER_SAVE_UNCONFIRMED", "配置保存后未能读取，请重试。", 503);
+  const nextEmbeddingFingerprint = parsed.data.section === "embedding" ? embeddingProfile()?.fingerprint : undefined;
+  if (nextEmbeddingFingerprint && nextEmbeddingFingerprint !== previousEmbeddingFingerprint) {
+    after(async () => {
+      const revisionIds = await queueTextbookEmbeddingReindex(auth.claims.sub!);
+      for (const revisionId of revisionIds) await runTextbookIngestJob(revisionId);
+    });
+  }
   return Response.json({ ok: true, section: parsed.data.section, providerId: parsed.data.providerId, provider: publicEntry(saved) }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 function publicEntry(entry: ProviderEntry) {
   return { hasApiKey: Boolean(entry.apiKey), baseUrl: entry.baseUrl, models: entry.models,
     enabled: entry.enabled, defaultModel: entry.defaultModel, priority: entry.priority,
+    dimensions: entry.dimensions,
     thinkingScenarioConfigs: entry.thinkingScenarioConfigs,
     defaultVoice: entry.defaultVoice, scenarioConfigs: entry.scenarioConfigs,
     timingCalibrations: entry.timingCalibrations };

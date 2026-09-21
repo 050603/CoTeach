@@ -48,6 +48,9 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("不能用教案、报告、PPT 等成果物中的几句话");
   expect(prompt.system).toContain("具体场景中的人物、物体、空间状态或可见差异本身是推理依据时");
   expect(prompt.system).toContain("构造案例、类比和示意数据");
+  expect(prompt.system).toContain("教材案例采用双通道设计");
+  expect(prompt.system).toContain("学生内容字段中直接写成连贯案例");
+  expect(prompt.system).toContain("不出现‘教材原例’‘教学改编’‘AI 补充’");
   expect(prompt.system).toContain("preferredForm 是教学表达偏好");
   expect(prompt.system).toContain("没有每节必须使用几种形式的配额");
   expect(prompt.system).toContain("具有完整、可比较数值并需要看趋势");

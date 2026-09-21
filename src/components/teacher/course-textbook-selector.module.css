@@ -1,0 +1,372 @@
+.selector {
+  overflow: hidden;
+  border: 1px solid #dedbd4;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.header {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  min-height: 70px;
+  border-bottom: 1px solid #ebe8e2;
+  padding: 12px 15px;
+}
+
+.headerIcon {
+  display: grid;
+  width: 36px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid #cbd7e7;
+  border-radius: 4px 8px 8px 4px;
+  background: #edf2f8;
+  color: #365f8b;
+}
+
+.headerCopy {
+  min-width: 0;
+}
+
+.headerCopy h3 {
+  color: #292524;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.headerCopy p {
+  margin-top: 3px;
+  color: #78716c;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.manageLink {
+  min-height: 36px;
+  border-radius: 7px;
+  padding: 9px 10px;
+  color: #315c9b;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.manageLink:hover {
+  background: #eef3f9;
+}
+
+.loading,
+.error {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 8px;
+  color: #78716c;
+  font-size: 12px;
+}
+
+.error {
+  color: #b13e48;
+}
+
+.empty {
+  display: grid;
+  gap: 4px;
+  padding: 18px 15px;
+}
+
+.empty p {
+  color: #44403c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.empty span {
+  color: #78716c;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.bookList {
+  display: grid;
+}
+
+.bookItem {
+  position: relative;
+  border-bottom: 1px solid #ebe8e2;
+}
+
+.bookItem:last-child {
+  border-bottom: 0;
+}
+
+.bookItem::before {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 3px;
+  background: transparent;
+  content: "";
+}
+
+.bookItem[data-selected="true"]::before {
+  background: #365f8b;
+}
+
+.bookRow {
+  display: flex;
+  min-height: 60px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+}
+
+.bookCheckbox {
+  position: relative;
+  display: grid;
+  width: 30px;
+  height: 42px;
+  flex: 0 0 30px;
+  place-items: center;
+  cursor: pointer;
+}
+
+.bookCheckbox input {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  opacity: 0;
+}
+
+.bookCheckbox span {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  border: 1px solid #a8a29e;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.bookCheckbox input:checked + span {
+  border-color: #365f8b;
+  background: #365f8b;
+}
+
+.bookCheckbox input:checked + span::after {
+  width: 7px;
+  height: 4px;
+  border-bottom: 2px solid #fff;
+  border-left: 2px solid #fff;
+  content: "";
+  transform: translateY(-1px) rotate(-45deg);
+}
+
+.bookCheckbox input:focus-visible + span {
+  outline: 2px solid #315c9b;
+  outline-offset: 2px;
+}
+
+.bookCheckbox input:disabled + span {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.bookIdentity {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 7px;
+  padding: 4px 6px;
+  text-align: left;
+}
+
+.bookIdentity:not(:disabled):hover {
+  background: #f8f7f4;
+}
+
+.bookIdentity > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.bookIdentity strong,
+.bookIdentity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookIdentity strong {
+  color: #292524;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.bookIdentity small {
+  color: #78716c;
+  font-size: 10px;
+}
+
+.bookIdentity:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.chevron {
+  flex: 0 0 auto;
+  color: #78716c;
+  transition: transform .18s;
+}
+
+.chevron[data-open="true"] {
+  transform: rotate(180deg);
+}
+
+.primaryChoice {
+  display: inline-flex;
+  min-height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border-left: 1px solid #e7e5e4;
+  padding-left: 12px;
+  color: #57534e;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.primaryChoice input,
+.sectionChoice input {
+  accent-color: #365f8b;
+}
+
+.sectionPanel {
+  border-top: 1px solid #ebe8e2;
+  background: #faf9f7;
+  padding: 12px 15px 14px 54px;
+}
+
+.sectionPanelHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.sectionPanelHeading p {
+  color: #44403c;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sectionPanelHeading span {
+  color: #78716c;
+  font-size: 10px;
+}
+
+.sectionGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 18px;
+}
+
+.sectionChoice {
+  display: grid;
+  grid-template-columns: 16px 24px minmax(0, 1fr);
+  min-height: 37px;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid #ebe8e2;
+  color: #57534e;
+  cursor: pointer;
+}
+
+.sectionChoice:hover {
+  color: #292524;
+}
+
+.sectionChoice small {
+  color: #a8a29e;
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sectionChoice span {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.noSections {
+  color: #a8a29e;
+  font-size: 11px;
+}
+
+.selectionSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  border-top: 1px solid #dbe4ef;
+  background: #f3f6fa;
+  padding: 9px 15px;
+  color: #52657d;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.selectionSummary strong {
+  color: #315c9b;
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  .header {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .manageLink {
+    grid-column: 2;
+    justify-self: start;
+    padding-inline: 0;
+  }
+
+  .bookRow {
+    flex-wrap: wrap;
+  }
+
+  .bookIdentity {
+    min-width: calc(100% - 40px);
+  }
+
+  .primaryChoice {
+    margin-left: 40px;
+    border-left: 0;
+    padding-left: 0;
+  }
+
+  .sectionPanel {
+    padding-left: 15px;
+  }
+
+  .sectionGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+}

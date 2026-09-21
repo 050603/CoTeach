@@ -107,6 +107,7 @@ import type {
   GeneratedPBLContent,
   GeneratedQuizContent,
   GeneratedSlideContent,
+  PdfImage,
   SceneOutline,
   UserRequirements,
 } from '@openmaic/lib/types/generation';
@@ -147,6 +148,8 @@ export interface GenerateClassroomInput {
   languageDirective?: string;
   sceneOutlines?: SceneOutline[];
   pdfContent?: { text: string; images: string[] };
+  /** Textbook figures are permanent assets. src may be temporary vision bytes while publicSrc is the protected course URL. */
+  textbookImages?: Array<PdfImage & { figureId: string; assetId: string; publicSrc?: string }>;
   enableWebSearch?: boolean;
   webSearchProviderId?: WebSearchProviderId;
   webSearchApiKey?: string;
@@ -1532,6 +1535,10 @@ async function generateClassroomInternal(
                 }) : groundedContentCall,
                 {
                 agents, languageDirective, userRequirements: requirements,
+                assignedImages: input.textbookImages,
+                imageMapping: input.textbookImages?.length
+                  ? Object.fromEntries(input.textbookImages.map((image) => [image.id, image.src]))
+                  : undefined,
                 pblProfile: requirements.pblProfile, allowProceduralSkill: vocationalActive,
                 signal: options.signal, visionEnabled: contentCall.vision,
                 languageModel: contentCall.model, thinkingConfig: contentCall.thinking,
@@ -1556,6 +1563,21 @@ async function generateClassroomInternal(
             signal: options.signal,
             maxRetries: 1,
           });
+          if (input.textbookImages?.length && content && 'elements' in content) {
+            const publicByTemporarySource = new Map(input.textbookImages.flatMap((image) =>
+              image.publicSrc && image.publicSrc !== image.src ? [[image.src, image.publicSrc] as const] : [],
+            ));
+            if (publicByTemporarySource.size) {
+              content = {
+                ...content,
+                elements: content.elements.map((element) => element.type === 'image'
+                  && typeof element.src === 'string'
+                  && publicByTemporarySource.has(element.src)
+                  ? { ...element, src: publicByTemporarySource.get(element.src)! }
+                  : element),
+              };
+            }
+          }
           if (independentNarration && rawTeachingSlide && 'elements' in content) {
             content = restoreTeachingSemanticElementIds(content, rawTeachingSlide, safeOutline);
           }

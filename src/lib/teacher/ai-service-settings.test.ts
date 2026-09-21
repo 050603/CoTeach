@@ -56,6 +56,19 @@ describe("getProviderStatePresentation", () => {
 });
 
 describe("getProviderConnectionPresentation", () => {
+  it("explains the local Ollama embedding path without asking for a key", () => {
+    expect(getProviderConnectionPresentation({
+      providerId: "ollama-embedding",
+      providerType: "embedding",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      defaultBaseUrl: "http://127.0.0.1:11434/v1",
+    })).toMatchObject({
+      label: "本机 Ollama",
+      protocol: "OpenAI 兼容 Embeddings",
+      tone: "success",
+    });
+  });
+
   it("recognizes the official DeepSeek endpoint", () => {
     expect(getProviderConnectionPresentation({
       providerId: "deepseek",

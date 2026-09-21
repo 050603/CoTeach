@@ -14,7 +14,7 @@ export function PlatformSessionBoundary({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   if (pathname === "/internal/slide-layout-audit") return children;
   const platformPage = pathname === "/student" || pathname === "/student/profile" || pathname === "/teacher" ||
-    ["/student/login", "/student/register", "/student/reset-password", "/student/courses", "/student/activities", "/student/participations", "/teacher/participations", "/teacher/classrooms", "/teacher/classes", "/teacher/surveys", "/teacher/templates", "/teacher/login", "/teacher/register"].some((path) => pathname === path || pathname.startsWith(`${path}/`));
+    ["/student/login", "/student/register", "/student/reset-password", "/student/courses", "/student/activities", "/student/participations", "/teacher/participations", "/teacher/classrooms", "/teacher/classes", "/teacher/surveys", "/teacher/templates", "/teacher/textbooks", "/teacher/login", "/teacher/register"].some((path) => pathname === path || pathname.startsWith(`${path}/`));
   if (pathname === "/teacher/settings" || pathname.startsWith("/teacher/settings/")) {
     return <SessionProvider><div className="pbl-platform-theme">{children}</div></SessionProvider>;
   }

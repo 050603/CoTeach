@@ -83,7 +83,7 @@ import { ServerProvidersInit } from "@openmaic/components/server-providers-init"
 import { I18nProvider } from "@openmaic/lib/hooks/use-i18n";
 import { ThemeProvider } from "@openmaic/lib/hooks/use-theme";
 
-type TabKey = "llm" | "tts" | "asr" | "image" | "video" | "web-search" | "pdf" | "agent-voice" | "knowledge-tutor" | "quality-review";
+type TabKey = "llm" | "tts" | "asr" | "image" | "video" | "web-search" | "pdf" | "embedding" | "agent-voice" | "knowledge-tutor" | "quality-review";
 type SettingsSection = "account" | "teaching" | "ai";
 type AiServiceView = "overview" | "detail";
 
@@ -150,6 +150,7 @@ type SavedConfig = {
   defaultVoice?: string;
   scenarioConfigs?: TtsScenarioConfigs;
   timingCalibrations?: TtsVoiceTimingCalibration[];
+  dimensions?: number;
 };
 
 function getInitialTtsScenarioConfigs(
@@ -174,6 +175,7 @@ function getProviderRequestPreview(provider: ProviderMeta, baseUrl: string): str
 
   const endpoint = (baseUrl.trim() || provider.defaultBaseUrl || "").replace(/\/+$/, "");
   if (!endpoint) return "保存服务地址后显示";
+  if (provider.id.includes("embedding")) return `${endpoint}/embeddings`;
 
   switch (provider.type) {
     case "anthropic":
@@ -235,6 +237,7 @@ const TABS: Array<{
   { key: "video", label: "视频生成", shortLabel: "视频", section: "video", icon: Video },
   { key: "web-search", label: "联网搜索", shortLabel: "搜索", section: "web-search", icon: Search },
   { key: "pdf", label: "PDF 解析", shortLabel: "PDF", section: "pdf", icon: FileText },
+  { key: "embedding", label: "教材语义检索", shortLabel: "向量检索", section: "embedding", icon: Server },
   { key: "agent-voice", label: "智能体音色", shortLabel: "音色", section: "tts", icon: Users },
   { key: "knowledge-tutor", label: "知识讲授助教", shortLabel: "知识助教", section: "providers", icon: GraduationCap },
   { key: "quality-review", label: "课程质量检验", shortLabel: "质量检验", section: "providers", icon: Eye },
@@ -295,6 +298,11 @@ const AI_SERVICE_DETAILS: Record<TabKey, {
     related: ["教学资料", "文档解析", "课程资源"],
     group: "content",
   },
+  embedding: {
+    description: "为永久教材库建立 1024 维语义索引，用于匹配表述和粒度不同的课程知识要求。",
+    related: ["教材库", "知识图谱", "课程知识匹配"],
+    group: "content",
+  },
 };
 
 const AI_SERVICE_GROUPS: Array<{
@@ -326,7 +334,7 @@ const AI_SERVICE_GROUPS: Array<{
     eyebrow: "03 · 内容扩展",
     title: "素材与信息处理",
     description: "按课程需要接入图像、视频、联网搜索和 PDF 解析能力。",
-    tabs: ["image", "video", "web-search", "pdf"],
+    tabs: ["image", "video", "web-search", "pdf", "embedding"],
     links: [{ label: "查看课程资源", href: "/teacher/templates" }],
   },
 ];
@@ -403,6 +411,27 @@ function getProvidersForTab(tab: TabKey): ProviderMeta[] {
         models: [],
         description: (provider as { features?: string[] }).features?.join("、"),
       }));
+    case "embedding":
+      return [
+        {
+          id: "ollama-embedding",
+          name: "本地 Ollama 向量服务",
+          requiresApiKey: false,
+          defaultBaseUrl: "http://127.0.0.1:11434/v1",
+          models: [{ id: "qwen3-embedding:0.6b", name: "Qwen3 Embedding 0.6B（本地，1024 维）" }],
+          defaultModelId: "qwen3-embedding:0.6b",
+          description: "在本机生成教材向量，由 PostgreSQL pgvector 保存和检索，不需要外部 API 密钥。",
+        },
+        {
+          id: "qwen-embedding",
+          name: "OpenAI 兼容向量服务",
+          requiresApiKey: true,
+          defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          models: [{ id: "text-embedding-v4", name: "text-embedding-v4（1024 维）" }],
+          defaultModelId: "text-embedding-v4",
+          description: "使用远程兼容接口生成教材向量，固定输出 1024 维。",
+        },
+      ];
     case "agent-voice":
     case "knowledge-tutor":
     case "quality-review":
@@ -1325,7 +1354,7 @@ export default function TeacherSettingsPage() {
       return false;
     }
 
-    if (activeTab === "llm" && modelIds.length === 0) {
+    if ((activeTab === "llm" || activeTab === "embedding") && modelIds.length === 0) {
       setSaveResult({ ok: false, message: "请至少保留一个模型。" });
       return false;
     }
@@ -1346,6 +1375,7 @@ export default function TeacherSettingsPage() {
           defaultModel: activeTab === "tts"
             ? realtimeTtsConfig?.modelId || editDefaultModel || modelIds[0] || undefined
             : editDefaultModel || modelIds[0] || undefined,
+          ...(activeTab === "embedding" ? { dimensions: 1024 } : {}),
           ...(activeTab === "llm" ? {
             thinkingScenarioConfigs: editThinkingScenarioConfigs,
           } : {}),
@@ -1394,6 +1424,7 @@ export default function TeacherSettingsPage() {
                     item.defaultModelId ||
                     undefined,
                   priority: 100,
+                  ...(activeTab === "embedding" ? { dimensions: 1024 } : {}),
                   ...(activeTab === "tts"
                     ? {
                         defaultVoice: otherSaved?.defaultVoice,
@@ -1627,7 +1658,8 @@ export default function TeacherSettingsPage() {
       || activeTab === "image"
       || activeTab === "video"
       || activeTab === "web-search"
-      || activeTab === "pdf";
+      || activeTab === "pdf"
+      || activeTab === "embedding";
     setTestingProviderId(provider.id);
     setTestResult(null);
 

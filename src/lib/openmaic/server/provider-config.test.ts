@@ -6,6 +6,7 @@ import {
   getTtsConcurrencyLimit,
   initializeServerProviderConfig,
   resolveASRModel,
+  resolveServerEmbeddingProvider,
   resolveProxy,
 } from '@openmaic/lib/server/provider-config';
 
@@ -76,5 +77,21 @@ describe('server generation concurrency configuration', () => {
       'qwen-audio-3.0-asr-flash',
     );
     expect(resolveASRModel('unmanaged-asr', 'client-model')).toBe('client-model');
+  });
+
+  it('supports a keyless local Ollama embedding provider', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', '');
+    vi.stubEnv('EMBEDDING_OLLAMA_BASE_URL', 'http://127.0.0.1:11434/v1');
+    vi.stubEnv('EMBEDDING_OLLAMA_MODELS', 'qwen3-embedding:0.6b');
+    await initializeServerProviderConfig();
+
+    expect(resolveServerEmbeddingProvider()).toMatchObject({
+      providerId: 'ollama-embedding',
+      apiKey: '',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      model: 'qwen3-embedding:0.6b',
+      dimensions: 1024,
+    });
   });
 });
