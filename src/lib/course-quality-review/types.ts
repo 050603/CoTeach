@@ -1,3 +1,5 @@
+export const COURSE_QUALITY_REVIEW_POLICY_VERSION = "textbook-guidance-v2";
+
 /** Teacher-private authoring diagnostics. A completed check is not a quality score. */
 export type CourseQualityIssue = {
   id: string;
@@ -16,6 +18,8 @@ export type CourseQualityIssue = {
 
 export type CourseQualityReport = {
   schemaVersion: 1;
+  /** Invalidates reports produced by obsolete literal-coverage rules. */
+  reviewPolicyVersion?: string;
   signature: string;
   courseId: string;
   classroomId: string;

@@ -9,7 +9,7 @@ import { migrateScene } from '@openmaic/lib/edit/slide-schema';
 import { preloadEditor } from '@openmaic/lib/edit/preload-editor';
 import { I18nProvider } from '@openmaic/lib/hooks/use-i18n';
 import { ThemeProvider } from '@openmaic/lib/hooks/use-theme';
-import { useStageStore } from '@openmaic/lib/store';
+import { useCanvasStore, useStageStore } from '@openmaic/lib/store';
 import { useSlideEditSession } from '@openmaic/components/edit/surfaces/slide/slide-edit-session';
 import { useQuizEditSession } from '@openmaic/components/edit/surfaces/quiz/quiz-edit-session';
 import type { Scene, Stage as StageType } from '@openmaic/lib/types/stage';
@@ -31,10 +31,14 @@ export function TeacherClassroomEditor({
   courseId,
   courseName,
   backHref,
+  initialSceneId,
+  initialElementId,
 }: {
   courseId: string;
   courseName: string;
   backHref: string;
+  initialSceneId?: string;
+  initialElementId?: string;
 }) {
   const [state, setState] = useState<EditorState>('loading');
   const [error, setError] = useState<string>();
@@ -81,10 +85,13 @@ export function TeacherClassroomEditor({
       const classroom = payload.classroom;
       const scenes = classroom.scenes.map(migrateScene);
       if (!scenes.length) throw new Error('课堂中没有可编辑页面');
+      const requestedScene = initialSceneId
+        ? scenes.find((scene) => scene.id === initialSceneId)
+        : undefined;
       const currentSceneId = useStageStore.getState().currentSceneId;
-      const nextSceneId = scenes.some((scene) => scene.id === currentSceneId)
+      const nextSceneId = requestedScene?.id ?? (scenes.some((scene) => scene.id === currentSceneId)
         ? currentSceneId
-        : scenes[0].id;
+        : scenes[0].id);
       useStageStore.setState({
         stage: classroom.stage,
         scenes,
@@ -96,6 +103,12 @@ export function TeacherClassroomEditor({
         generationStatus: 'completed',
         failedOutlines: [],
       });
+      const canvas = useCanvasStore.getState();
+      canvas.clearSelection();
+      if (requestedScene?.content.type === 'slide' && initialElementId
+        && requestedScene.content.canvas.elements.some((element) => element.id === initialElementId)) {
+        canvas.setActiveElementIdList([initialElementId]);
+      }
       setClassroomId(classroom.id);
       setRevision(classroom.revision ?? 0);
       savedFingerprintRef.current = classroomFingerprint(classroom.stage, scenes);
@@ -109,7 +122,7 @@ export function TeacherClassroomEditor({
     } finally {
       if (loadRequestRef.current === abort) loadRequestRef.current = null;
     }
-  }, [courseId]);
+  }, [courseId, initialElementId, initialSceneId]);
 
   useEffect(() => {
     // Opening a new course is the external synchronization boundary for this
@@ -123,6 +136,7 @@ export function TeacherClassroomEditor({
       loadRequestRef.current = null;
       saveRequestRef.current = null;
       hydratedRef.current = false;
+      useCanvasStore.getState().clearSelection();
       useStageStore.getState().clearStore();
     };
   }, [hydrate]);

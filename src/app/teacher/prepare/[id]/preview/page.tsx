@@ -334,6 +334,22 @@ export default function PreviewCoursePage() {
     }
   }
 
+  function openReviewPage(outlineId: string) {
+    if (!studentOutlines.some((outline) => outline.id === outlineId)) {
+      toast.warning("该检查项不属于学生发布页", {
+        description: "请使用问题卡片中的“定位并修改”进入课堂编辑器。",
+      });
+      return;
+    }
+    setSelectedOutlineId(outlineId);
+    setView("director");
+    requestAnimationFrame(() => {
+      const workspace = document.getElementById("course-page-review");
+      workspace?.scrollIntoView({ behavior: "smooth", block: "start" });
+      workspace?.focus({ preventScroll: true });
+    });
+  }
+
   return (
     <DashboardShell
       role="teacher"
@@ -462,7 +478,13 @@ export default function PreviewCoursePage() {
               </section>
             ) : null}
 
-            <section className="mt-5 grid min-h-[620px] overflow-hidden rounded-[12px] border border-stone-200 bg-white xl:grid-cols-[280px_minmax(0,1fr)_330px]">
+            {reviewRequired && !isTestLesson ? <CourseQualityReview
+              courseId={courseId}
+              onDecisionChange={setReviewDecision}
+              onOpenPage={openReviewPage}
+            /> : null}
+
+            <section className="mt-5 grid min-h-[620px] scroll-mt-24 overflow-hidden rounded-[12px] border border-stone-200 bg-white outline-none xl:grid-cols-[280px_minmax(0,1fr)_330px]" id="course-page-review" tabIndex={-1}>
               <LessonPageRail
                 onSelect={setSelectedOutlineId}
                 outlines={studentOutlines}
@@ -504,13 +526,6 @@ export default function PreviewCoursePage() {
           onClose={closeBranchPreview}
         />
       ) : null}
-
-      {reviewRequired && !isTestLesson && <div className="mx-auto w-full max-w-[1600px] px-4 pb-24 sm:px-6">
-        <CourseQualityReview courseId={courseId} onDecisionChange={setReviewDecision} onOpenPage={(sceneId) => {
-          setSelectedOutlineId(sceneId);
-          setView("director");
-        }} />
-      </div>}
 
       <FlowActionBar
         persistent

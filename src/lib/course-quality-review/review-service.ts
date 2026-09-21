@@ -6,7 +6,7 @@ import { getNewSystemCourseReadiness } from '@/lib/classroom/new-system-course';
 import { auditCourseGeneratedResources } from '@/lib/course-generation/resource-audit-server';
 import { computeCourseQualitySignature } from './signature';
 import { collectCourseStructureIssues } from './semantic-review';
-import type { CourseQualityReport } from './types';
+import { COURSE_QUALITY_REVIEW_POLICY_VERSION, type CourseQualityReport } from './types';
 import { unresolvedHardIssues, type CourseRenderPageReview, type CourseTeacherReview } from './teacher-review';
 
 export class CourseReviewError extends Error {
@@ -46,7 +46,10 @@ export function renderableSceneIds(classroom: PersistedClassroomData): string[] 
 }
 
 export function freshQualityReport(course: Course, signature: string): CourseQualityReport | undefined {
-  return course.content.qualityReview?.signature === signature ? course.content.qualityReview : undefined;
+  return course.content.qualityReview?.signature === signature
+    && course.content.qualityReview.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION
+    ? course.content.qualityReview
+    : undefined;
 }
 
 export async function saveCourseRenderPage(courseId: string, signature: string, page: CourseRenderPageReview) {

@@ -3,7 +3,7 @@ import { createPblTemplateCourse } from "@/lib/platform/pbl-template";
 import { emptyResourcePackageDraft } from "@/lib/resource-package/types";
 import type { Course } from "@/lib/session/types";
 import type { PersistedClassroomData } from "@/lib/openmaic/server/classroom-storage";
-import type { CourseQualityIssue, CourseQualityReport } from "./types";
+import { COURSE_QUALITY_REVIEW_POLICY_VERSION, type CourseQualityIssue, type CourseQualityReport } from "./types";
 import { computeCourseQualitySignature } from "./signature";
 
 const mocks = vi.hoisted(() => ({
@@ -75,7 +75,7 @@ describe("durable background quality review", () => {
     const course = mocks.course as Course;
     const classroom = mocks.classroom as PersistedClassroomData;
     const signature = computeCourseQualitySignature(course, classroom);
-    const report: CourseQualityReport = { schemaVersion: 1, courseId: course.id, classroomId: classroom.id, classroomRevision: 3, signature, status: "completed", issues: [] };
+    const report: CourseQualityReport = { schemaVersion: 1, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, courseId: course.id, classroomId: classroom.id, classroomRevision: 3, signature, status: "completed", issues: [] };
     mocks.job = { id: "job", status: "completed", request: { signature }, result: report };
     expect(await enqueueCourseQualityReview("course")).toEqual(report);
     expect((mocks.course as Course).content.qualityReview).toEqual(report);
@@ -150,6 +150,7 @@ describe("durable background quality review", () => {
     const result = (mocks.job as { result: CourseQualityReport }).result;
     expect(mocks.review).toHaveBeenCalledOnce();
     expect(mocks.review.mock.calls[0][0].scenes.map((scene: { id: string }) => scene.id)).toEqual(["b"]);
+    expect(mocks.review.mock.calls[0][0].includeKnowledgeGraph).toBe(true);
     expect(result.status).toBe("completed");
     expect(result.issues.filter((entry) => entry.id === issue.id)).toHaveLength(1);
     expect(result.sections!.every((section) => section.status === "completed")).toBe(true);

@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { authorizeTemplateRequest } from '@/lib/platform/template-access';
 import { enqueueCourseQualityReview } from '@/lib/course-quality-review/job-runner';
 import { confirmCourseTeacherReview, CourseReviewError, freshQualityReport, loadCourseReviewContext, requiresCourseTeacherReview, saveCourseRenderPage } from '@/lib/course-quality-review/review-service';
+import { collectCourseStructureIssues } from '@/lib/course-quality-review/semantic-review';
+import { unresolvedHardIssues } from '@/lib/course-quality-review/teacher-review';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,7 +34,9 @@ export async function GET(request: Request, context: { params: Promise<{ courseI
   try {
     const { course, classroom, signature } = await loadCourseReviewContext(courseId);
     const required = requiresCourseTeacherReview(course);
+    const blockingIssues = unresolvedHardIssues(collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false }));
     return Response.json({ required, signature, quality: freshQualityReport(course, signature) ?? null,
+      blockingIssues,
       renderReview: course.content.renderReview?.signature === signature ? course.content.renderReview : null,
       teacherReview: course.content.teacherReview?.signature === signature ? course.content.teacherReview : null,
       teacherReviewItems: course.content.teacherReviewItems ?? [],

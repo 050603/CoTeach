@@ -13,7 +13,7 @@ import { findServerDefaultModelString } from "@/lib/openmaic/server/provider-con
 import { computeCourseQualitySignature } from "./signature";
 import { collectCourseStructureIssues, courseReviewSections, reviewCourseSection } from "./semantic-review";
 import { getCourseQualityReviewSettings } from "./settings";
-import type { CourseQualityReport } from "./types";
+import { COURSE_QUALITY_REVIEW_POLICY_VERSION, type CourseQualityReport } from "./types";
 import { REVIEW_SOURCE_LIMIT } from "./source-selection";
 
 type ReviewRequest = {
@@ -54,7 +54,8 @@ function sourceCoverageIssue(source: string): CourseQualityReport["issues"] {
 
 export async function readCourseQualityReview(courseId: string): Promise<CourseQualityReport | null> {
   const job = await qualityReviewJobs.findUnique({ where: { courseId } });
-  return job?.result ? job.result as unknown as CourseQualityReport : null;
+  const report = job?.result ? job.result as unknown as CourseQualityReport : null;
+  return report?.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION ? report : null;
 }
 
 export async function enqueueCourseQualityReview(courseId: string, options: { force?: boolean } = {}): Promise<CourseQualityReport | null> {
@@ -82,7 +83,10 @@ export async function enqueueCourseQualityReview(courseId: string, options: { fo
   const existingRequest = existing?.request as unknown as ReviewRequest | undefined;
   const sameInput = existingRequest?.signature === signature
     && existingRequest.reviewModelString === reviewModelString;
-  const previous = sameInput ? existing?.result as unknown as CourseQualityReport | undefined : undefined;
+  const savedReport = sameInput ? existing?.result as unknown as CourseQualityReport | undefined : undefined;
+  const previous = savedReport?.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION
+    ? savedReport
+    : undefined;
   if (existing && !sameInput) controllers.get(existing.id)?.abort();
   if (previous && (!options.force || existing?.status === "running")) {
     if (JSON.stringify(course.content.qualityReview) !== JSON.stringify(previous)) {
@@ -96,7 +100,8 @@ export async function enqueueCourseQualityReview(courseId: string, options: { fo
   const sourceContext = generationRequest?.teachingSourceContext
     ?? JSON.stringify({ teacherConfirmed: course.content.resourcePackage?.draft, knowledgePoints: course.content.knowledgePoints });
   const sections = initializeReviewSections(courseReviewSections(course, classroom.scenes), previous);
-  const report: CourseQualityReport = { schemaVersion: 1, signature, courseId, classroomId, classroomRevision: classroom.revision ?? 1, status: "pending",
+  const report: CourseQualityReport = { schemaVersion: 1, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION,
+    signature, courseId, classroomId, classroomRevision: classroom.revision ?? 1, status: "pending",
     ...(reviewModelString ? { reviewModelString } : {}),
     sections, sourceCoverage: { totalChars: sourceContext.length, perSectionLimit: REVIEW_SOURCE_LIMIT, partial: sourceContext.length > REVIEW_SOURCE_LIMIT },
     issues: mergeReviewIssues([...collectCourseStructureIssues(course, classroom.scenes), ...sourceCoverageIssue(sourceContext)], sections) };
@@ -119,7 +124,9 @@ export async function runCourseQualityReviewJob(jobId: string): Promise<void> {
   const owner = { id: jobId, version: job.version, status: "running" };
   const heartbeat = setInterval(() => { void qualityReviewJobs.updateMany({ where: owner, data: { lastHeartbeatAt: new Date() } }).catch(() => undefined); }, 10000);
   heartbeat.unref?.();
-  let report = { ...(job.result as unknown as CourseQualityReport), status: "running" as CourseQualityReport["status"] };
+  const storedReport = job.result as unknown as CourseQualityReport;
+  const reusableStoredSections = storedReport.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION;
+  let report = { ...storedReport, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, status: "running" as CourseQualityReport["status"] };
   const persist = async (next: CourseQualityReport, status: string) => {
     const currentJob = await qualityReviewJobs.findUnique({ where: { id: jobId } });
     const currentRequest = currentJob?.request as unknown as ReviewRequest | undefined;
@@ -143,7 +150,7 @@ export async function runCourseQualityReviewJob(jobId: string): Promise<void> {
       return;
     }
     const groups = courseReviewSections(course, classroom.scenes);
-    const sections = initializeReviewSections(groups, report);
+    const sections = initializeReviewSections(groups, reusableStoredSections ? report : undefined);
     const baseIssues = [...collectCourseStructureIssues(course, classroom.scenes), ...sourceCoverageIssue(request.sourceContext)];
     report = { ...report, sections, error: undefined, checkedAt: undefined, issues: mergeReviewIssues(baseIssues, sections) };
     await persist(report, "running");
@@ -176,7 +183,7 @@ export async function runCourseQualityReviewJob(jobId: string): Promise<void> {
       controller.signal.throwIfAborted();
       const batch = pendingIndexes.slice(index, index + 2);
       const result = await Promise.allSettled(batch.map((sectionIndex) => reviewCourseSection({ course, scenes: groups[sectionIndex],
-        outlines: (course.content._openmaicSceneOutlines ?? []) as SceneOutline[], sourceContext: request.sourceContext, includeKnowledgeGraph: sectionIndex === 0 },
+        outlines: (course.content._openmaicSceneOutlines ?? []) as SceneOutline[], sourceContext: request.sourceContext, includeKnowledgeGraph: true },
       reviewAiCall)));
       for (const [offset, item] of result.entries()) {
         const sectionIndex = batch[offset];

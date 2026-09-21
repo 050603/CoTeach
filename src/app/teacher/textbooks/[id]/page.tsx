@@ -3,12 +3,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { BookMarked, BookOpen, ImageIcon, Layers3, LoaderCircle, Network, Quote, RefreshCw, Route } from "lucide-react";
+import { BookMarked, BookOpen, ImageIcon, LoaderCircle, Network, PanelRightOpen, Quote, RefreshCw, Route, X } from "lucide-react";
 import { PlatformError, PlatformLoading } from "@/components/platform/platform-feedback";
 import { TeacherPlatformHeader, TeacherPlatformPage } from "@/components/platform/teacher-shell";
 import { ResilientImage } from "@/components/resilient-image";
 import { TextbookGraphExplorer } from "@/components/teacher/textbook-graph-explorer";
-import { DialogDescription, DialogTitle, Drawer, DrawerContent } from "@/components/ui";
+import { TextbookKnowledgeNavigator } from "@/components/teacher/textbook-knowledge-navigator";
 import { teacherPlatformFetch } from "@/lib/platform/client";
 import type {
   TextbookConcept,
@@ -43,7 +43,10 @@ function relationLabel(relation: TextbookRelation) {
     comparison: "对比",
     contrasts: "对比",
     contains: "包含",
+    parent_of: "包含",
     part_of: "属于",
+    child_of: "属于",
+    precedes: "先于",
     related: "相关",
   };
   return labels[value] || relation.relationType || relation.type || "相关";
@@ -66,22 +69,6 @@ function revisionStatus(payload: TextbookDetailPayload) {
   if (status.includes("WAITING") || status.includes("CONFIG")) return { label: "等待向量服务", tone: "waiting" as const };
   if (["FAILED", "ERROR", "CANCELLED"].some(value => status.includes(value))) return { label: "解析失败", tone: "failed" as const };
   return { label: "正在解析", tone: "working" as const };
-}
-
-function directAndDescendantSectionIds(sections: TextbookSection[], selectedId: string) {
-  if (selectedId === "all") return new Set(sections.map(section => section.id));
-  const ids = new Set([selectedId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const section of sections) {
-      if (section.parentId && ids.has(section.parentId) && !ids.has(section.id)) {
-        ids.add(section.id);
-        changed = true;
-      }
-    }
-  }
-  return ids;
 }
 
 function evidenceQuotes(concept: TextbookConcept, blocks: TextbookSourceBlock[]) {
@@ -132,8 +119,7 @@ export default function TeacherTextbookDetailPage() {
       setPayload(data);
       const concepts = data.concepts || [];
       const sections = data.sections || [];
-      const firstSectionId = sections.find(section => concepts.some(concept => concept.sectionId === section.id))?.id || "all";
-      setSelectedSectionId(current => current === "all" ? firstSectionId : current);
+      setSelectedSectionId(current => current === "all" || current === "unassigned" || sections.some(section => section.id === current) ? current : "all");
       setSelectedConceptId(current => concepts.some(concept => concept.id === current) ? current : null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "教材详情暂时无法加载");
@@ -171,35 +157,39 @@ export default function TeacherTextbookDetailPage() {
   const sections = useMemo(() => payload?.sections || [], [payload?.sections]);
   const concepts = useMemo(() => payload?.concepts || [], [payload?.concepts]);
   const relations = useMemo(() => payload?.relations || [], [payload?.relations]);
-  const allowedSections = useMemo(() => directAndDescendantSectionIds(sections, selectedSectionId), [sections, selectedSectionId]);
-  const sectionConcepts = useMemo(() => concepts.filter(concept => selectedSectionId === "all" || concept.sectionId && allowedSections.has(concept.sectionId)).slice(0, 24), [allowedSections, concepts, selectedSectionId]);
-  const graphConceptIds = useMemo(() => new Set(sectionConcepts.map(concept => concept.id)), [sectionConcepts]);
+  const graphConceptIds = useMemo(() => new Set(concepts.map(concept => concept.id)), [concepts]);
   const sectionRelations = useMemo(() => relations.filter(relation => {
     const ends = relationEnds(relation);
     return graphConceptIds.has(ends.source) && graphConceptIds.has(ends.target);
   }), [graphConceptIds, relations]);
-  const sectionConceptCounts = useMemo(() => new Map(sections.map(section => {
-    const ids = directAndDescendantSectionIds(sections, section.id);
-    return [section.id, concepts.filter(concept => concept.sectionId && ids.has(concept.sectionId)).length];
-  })), [concepts, sections]);
   const selectedConcept = concepts.find(concept => concept.id === selectedConceptId) || null;
   const selectedSection = sections.find(section => section.id === selectedConcept?.sectionId);
-  const filteredSection = sections.find(section => section.id === selectedSectionId);
   const quotes = selectedConcept ? evidenceQuotes(selectedConcept, payload?.sourceBlocks || []) : [];
   const examples = selectedConcept ? (payload?.examples || []).filter(item => item.conceptId === selectedConcept.id || item.conceptIds?.includes(selectedConcept.id)) : [];
   const figures = selectedConcept ? (payload?.figures || []).filter(item => item.conceptId === selectedConcept.id || item.conceptIds?.includes(selectedConcept.id)) : [];
-  const related = selectedConcept ? relations.flatMap(relation => {
+  const related = selectedConcept ? relations.flatMap<{
+    concept: TextbookConcept;
+    label: string;
+    inferred: boolean;
+    direction: "incoming" | "outgoing";
+  }>(relation => {
     const ends = relationEnds(relation);
     if (ends.source === selectedConcept.id) {
       const concept = concepts.find(item => item.id === ends.target);
-      return concept ? [{ concept, label: relationLabel(relation), inferred: relationIsInferred(relation) }] : [];
+      return concept ? [{ concept, label: relationLabel(relation), inferred: relationIsInferred(relation), direction: "outgoing" }] : [];
     }
     if (ends.target === selectedConcept.id) {
       const concept = concepts.find(item => item.id === ends.source);
-      return concept ? [{ concept, label: relationLabel(relation), inferred: relationIsInferred(relation) }] : [];
+      return concept ? [{ concept, label: relationLabel(relation), inferred: relationIsInferred(relation), direction: "incoming" }] : [];
     }
     return [];
   }) : [];
+
+  const activeSectionLabel = selectedSectionId === "all"
+    ? "全部章节"
+    : selectedSectionId === "unassigned"
+      ? "未归类知识点"
+      : sections.find(section => section.id === selectedSectionId)?.title || "全部章节";
 
   function selectSection(sectionId: string) {
     setSelectedSectionId(sectionId);
@@ -257,45 +247,60 @@ export default function TeacherTextbookDetailPage() {
         <button className={styles.secondaryButton} disabled={retrying} type="button" onClick={() => void retry()}>{retrying ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />}{retrying ? "正在重试…" : "重新解析"}</button>
       </div> : null}
 
-      <div className={styles.detailLayout}>
-        <nav className={styles.chapterNav} aria-label="教材章节">
-          <div className={styles.sectionTitle}><h2><Layers3 size={15} />章节目录</h2><span>{sections.length} 节</span></div>
-          <div className={styles.chapterList}>
-            <button className={styles.chapterButton} aria-pressed={selectedSectionId === "all"} data-active={selectedSectionId === "all"} type="button" onClick={() => selectSection("all")}>
-              <small>ALL</small><span className={styles.chapterCopy}><span>全部已解析知识</span><small>{concepts.length} 个知识点</small></span>
-            </button>
-            {sections.map((section, index) => <button
-              className={styles.chapterButton}
-              aria-pressed={selectedSectionId === section.id}
-              data-active={selectedSectionId === section.id}
-              key={section.id}
-              type="button"
-              style={{ paddingLeft: `${8 + Math.min(section.level || 0, 3) * 10}px` }}
-              onClick={() => selectSection(section.id)}
-            ><small>{String(index + 1).padStart(2, "0")}</small><span className={styles.chapterCopy}><span>{section.title}</span><small>{sectionConceptCounts.get(section.id) || 0} 个知识点</small></span></button>)}
-          </div>
-        </nav>
+      <div className={styles.detailLayout} data-detail-open={selectedConcept ? "true" : undefined} data-testid="textbook-workbench">
+        <TextbookKnowledgeNavigator
+          className={styles.chapterNav}
+          sections={sections}
+          concepts={concepts}
+          relations={relations}
+          selectedSectionId={selectedSectionId}
+          selectedConceptId={selectedConceptId}
+          onSelectSection={selectSection}
+          onSelectConcept={(conceptId, sectionId) => {
+            setSelectedSectionId(sectionId);
+            setSelectedConceptId(conceptId);
+          }}
+        />
 
         <section className={styles.graphPanel} aria-labelledby="textbook-graph-heading">
-          <div className={styles.sectionTitle}><h2 id="textbook-graph-heading"><Network size={15} />知识图谱</h2><span>{sectionConcepts.length} 个当前节点</span></div>
-          <div className={styles.graphToolbar}>
-            <div><small>当前范围</small><strong>{filteredSection?.title || "全部章节"}</strong></div>
-            <span className={styles.graphToolbarHint}>点击知识点查看教材依据与关联内容</span>
+          <div className={styles.graphPanelHeading}>
+            <div>
+              <span className={styles.moduleEyebrow}>GRAPH EXPLORER</span>
+              <h2 id="textbook-graph-heading"><Network size={16} />知识图谱</h2>
+            </div>
+            <span>{sections.length} 节目录 · {concepts.length} 个概念</span>
           </div>
-          <TextbookGraphExplorer concepts={sectionConcepts} relations={sectionRelations} selectedId={selectedConceptId} onSelect={setSelectedConceptId} />
-          <p className={styles.graphHint}><Route size={13} />关系按知识方向从左向右排列，选择节点后会突出直接关联；当前范围最多展示 24 个节点。</p>
+          <div className={styles.graphToolbar}>
+            <div><small>当前聚焦</small><strong>{activeSectionLabel}</strong></div>
+            <span className={styles.graphToolbarHint}>选择章节聚焦一组知识；折叠目录则同步隐藏该分支</span>
+          </div>
+          <TextbookGraphExplorer
+            concepts={concepts}
+            relations={sectionRelations}
+            sections={sections}
+            focusedSectionId={selectedSectionId}
+            selectedId={selectedConceptId}
+            onSelectSection={selectSection}
+            onSelect={conceptId => {
+              setSelectedConceptId(conceptId);
+              if (!conceptId) return;
+              const concept = concepts.find(item => item.id === conceptId);
+              setSelectedSectionId(concept?.sectionId || "unassigned");
+            }}
+          />
+          <p className={styles.graphHint}><Route size={13} />目录折叠只整理左侧浏览层级，不改变图谱；选择章节可聚焦该分支，选择知识节点可查看一跳关系与教材依据。</p>
         </section>
-      </div>
 
-      <Drawer open={Boolean(selectedConcept)} onOpenChange={open => { if (!open) setSelectedConceptId(null); }}>
-        <DrawerContent className={`pbl-platform-theme ${styles.conceptDrawer}`}>
-          {selectedConcept ? <>
+        <aside className={styles.detailSidebar} data-open={Boolean(selectedConcept) || undefined} aria-label="知识点详情">
+          {selectedConcept ? <div className={styles.detailSidebarInner}>
             <header className={styles.drawerHeader}>
               <span className={styles.drawerIcon} aria-hidden="true"><BookOpen size={18} /></span>
               <div>
-                <DialogTitle className={styles.drawerTitle}>{conceptName(selectedConcept)}</DialogTitle>
-                <DialogDescription className={styles.drawerDescription}>{sectionDisplay(selectedSection)}</DialogDescription>
+                <span className={styles.drawerEyebrow}>知识点详情</span>
+                <h2 className={styles.drawerTitle}>{conceptName(selectedConcept)}</h2>
+                <p className={styles.drawerDescription}>{sectionDisplay(selectedSection)}</p>
               </div>
+              <button aria-label="收起知识点详情" className={styles.drawerClose} type="button" onClick={() => setSelectedConceptId(null)}><X size={16} /></button>
             </header>
             <div className={styles.drawerBody}>
             <div className={styles.evidenceBody}>
@@ -333,13 +338,16 @@ export default function TeacherTextbookDetailPage() {
 
             {related.length ? <section className={styles.evidenceGroup}>
               <h4>知识关系 <span>{related.length}</span></h4>
-              <div className={styles.relationList}>{related.map(({ concept, label, inferred }, index) => <button className={styles.relationButton} key={`${concept.id}-${index}`} type="button" onClick={() => setSelectedConceptId(concept.id)}><span>{label}{inferred ? " · 推断" : ""}</span><strong>{conceptName(concept)}</strong></button>)}</div>
+              <div className={styles.relationList}>{related.map(({ concept, label, inferred, direction }, index) => <button className={styles.relationButton} key={`${concept.id}-${index}`} type="button" onClick={() => {
+                setSelectedConceptId(concept.id);
+                setSelectedSectionId(concept.sectionId || "unassigned");
+              }}><span>{direction === "outgoing" ? `${label} →` : `← ${label}`}{inferred ? <small>推断</small> : null}</span><strong>{conceptName(concept)}</strong></button>)}</div>
             </section> : null}
             </div>
             </div>
-          </> : null}
-        </DrawerContent>
-      </Drawer>
+          </div> : <div className={styles.detailRail} aria-hidden="true"><PanelRightOpen size={17} /><span>选择知识点后展开详情</span></div>}
+        </aside>
+      </div>
     </div>
   </TeacherPlatformPage>;
 }

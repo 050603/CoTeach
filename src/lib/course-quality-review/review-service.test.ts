@@ -6,8 +6,9 @@ vi.mock('@/lib/session/server-store', () => ({ getCourse: mocks.get, updateCours
 vi.mock('@/lib/openmaic/server/classroom-storage', () => ({ readClassroom: mocks.read, isValidClassroomId: (id: string) => /^[\w-]+$/.test(id) }));
 vi.mock('@/lib/classroom/new-system-course', () => ({ getNewSystemCourseReadiness: () => [] }));
 vi.mock('@/lib/course-generation/resource-audit-server', () => ({ auditCourseGeneratedResources: mocks.audit }));
-import { assertCourseTeacherReview, confirmCourseTeacherReview, saveCourseRenderPage } from './review-service';
+import { assertCourseTeacherReview, confirmCourseTeacherReview, freshQualityReport, saveCourseRenderPage } from './review-service';
 import { computeCourseQualitySignature } from './signature';
+import { COURSE_QUALITY_REVIEW_POLICY_VERSION } from './types';
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -19,7 +20,7 @@ beforeEach(() => {
   classroom = { id: 'classroom', revision: 1, stage: { id: 'stage' }, scenes: [], createdAt: '2026-09-12' } as unknown as PersistedClassroomData;
   course = { id: 'course', name: '课程', grade: '本科一年级', hours: 2.25, aiLearningClassroomId: 'classroom', content: { qualityReviewRequired: true, knowledgePoints: [], _openmaicSceneOutlines: [] } } as unknown as Course;
   const signature = computeCourseQualitySignature(course, classroom);
-  course.content.qualityReview = { schemaVersion: 1, signature, courseId: 'course', classroomId: 'classroom', classroomRevision: 1, status: 'completed', issues: [] };
+  course.content.qualityReview = { schemaVersion: 1, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, signature, courseId: 'course', classroomId: 'classroom', classroomRevision: 1, status: 'completed', issues: [] };
   mocks.get.mockImplementation(async () => course);
   mocks.read.mockImplementation(async () => classroom);
   mocks.save.mockImplementation(async (_id: string, updater: (current: Course) => Course) => { course = updater(course); return course; });
@@ -63,9 +64,14 @@ describe('teacher confirmation of an exact teaching draft', () => {
     expect(review.manualContentReview).toBe(true);
     await expect(assertCourseTeacherReview(course, 'teacher')).resolves.toBeUndefined();
   });
+  it('hides reports produced by obsolete literal-coverage rules', () => {
+    const signature = computeCourseQualitySignature(course, classroom);
+    course.content.qualityReview!.reviewPolicyVersion = 'literal-coverage-v1';
+    expect(freshQualityReport(course, signature)).toBeUndefined();
+  });
   it('retains actual required-content errors independently of optional reports', async () => {
     course.content.knowledgePoints = [{ id: 'required', name: '必需知识' }] as Course['content']['knowledgePoints'];
-    await expect(confirmCourseTeacherReview('course', 'teacher', computeCourseQualitySignature(course, classroom), [])).rejects.toThrow('必需知识缺少讲授页面');
+    await expect(confirmCourseTeacherReview('course', 'teacher', computeCourseQualitySignature(course, classroom), [])).rejects.toThrow('课程体系知识节点缺少讲授页面');
   });
   it.each([undefined, 'pending', 'running', 'failed', 'completed'] as const)('allows teacher publication with optional report status %s and no layout report', async (status) => {
     if (status) {

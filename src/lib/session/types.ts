@@ -1743,7 +1743,7 @@ export type KnowledgeScopePlan = {
   decisions: Array<{
     sourceKnowledgePointId: string;
     sourceKnowledgePointName: string;
-    /** Legacy snapshots may contain embedded/deferred; new resource-package generations require standalone. */
+    /** Textbook-driven generations use mapped; compatible non-textbook generations use standalone. */
     disposition: "standalone" | "mapped" | "embedded" | "deferred";
     targetKnowledgePointId?: string;
     /** Textbook-driven planning may split or merge an upstream responsibility. */

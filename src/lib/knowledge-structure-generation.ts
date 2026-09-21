@@ -24,7 +24,7 @@ type ModelCall = typeof callLLM;
 export const KNOWLEDGE_STRUCTURE_POLICY_VERSION = "textbook-evidence-mapping-v2";
 
 export type KnowledgeStructureGenerationContext = {
-  /** Resource-package leaves are required lesson nodes; downstream units/pages may teach related nodes together. */
+  /** Upstream teacher requirements; textbook-driven courses may map, split, or merge them into lesson-owned nodes. */
   teacherKnowledgePoints?: Array<{ id: string; name: string; description: string; groupId?: string; groupName?: string }>;
   pblOutline?: string;
   teacherRequiredKnowledgePoints?: string[];
@@ -200,15 +200,14 @@ function prepareKnowledgeStructureForTeacherReview(
   };
   if (sourcePointById.size > 0 && textbookDriven) {
     pointSources.forEach(addPoint);
-    for (const sourcePoint of sourcePointById.values()) {
-      if (knowledgePoints.some((point) => point.sourceKnowledgePointIds?.includes(sourcePoint.id))) continue;
-      addPoint({
-        name: sourcePoint.name,
-        description: sourcePoint.description,
-        sourceKnowledgePointIds: [sourcePoint.id],
-        groupId: sourcePoint.groupId,
-        groupName: sourcePoint.groupName,
-      }, knowledgePoints.length);
+    const unmappedSourcePoints = [...sourcePointById.values()].filter((sourcePoint) => (
+      !knowledgePoints.some((point) => point.sourceKnowledgePointIds?.includes(sourcePoint.id))
+    ));
+    if (unmappedSourcePoints.length) {
+      throw invalidGeneratedOutput(
+        new Error(unmappedSourcePoints.map((point) => `${point.id}（${point.name}）`).join("、")),
+        "教材化知识结构缺少上游要求映射",
+      );
     }
   } else if (sourcePointById.size > 0) {
     // Resource-package leaves are the teacher-confirmed content floor. A model

@@ -27,6 +27,7 @@ import type {
   CourseDesignGenerationTraceEntry,
   KnowledgeGraph,
   KnowledgePoint,
+  KnowledgeScopePlan,
   LessonOutlineSection,
   OpenMaicSceneOutlineSnapshot,
   TeachingBlueprint,
@@ -582,6 +583,39 @@ export async function pauseCourseDesignForOutlineReview(
     : designGenerationJobs.findUnique({ where: { id: job.id } });
 }
 
+export function reconcileReviewedKnowledgeScopePlan(
+  plan: KnowledgeScopePlan | undefined,
+  knowledgePoints: readonly KnowledgePoint[],
+  textbookDriven: boolean,
+): KnowledgeScopePlan | undefined {
+  if (!plan) return undefined;
+  return {
+    ...plan,
+    targetPointCount: knowledgePoints.length,
+    decisions: plan.decisions.map((decision) => {
+      const targets = knowledgePoints.filter((point) => (
+        point.id === decision.sourceKnowledgePointId
+        || point.sourceKnowledgePointIds?.includes(decision.sourceKnowledgePointId)
+      ));
+      if (!targets.length) return decision;
+      const next = { ...decision };
+      delete next.targetKnowledgePointIds;
+      return textbookDriven
+        ? {
+            ...next,
+            disposition: "mapped" as const,
+            targetKnowledgePointId: targets[0]!.id,
+            targetKnowledgePointIds: targets.map((target) => target.id),
+          }
+        : {
+            ...next,
+            disposition: "standalone" as const,
+            targetKnowledgePointId: targets[0]!.id,
+          };
+    }),
+  };
+}
+
 export async function resumeCourseDesignAfterOutlineReview(
   courseId: string,
   review?: {
@@ -608,23 +642,13 @@ export async function resumeCourseDesignAfterOutlineReview(
         point.id === required.id || point.sourceKnowledgePointIds?.includes(required.id)
       )));
       if (missingRequiredPoints.length) {
-        throw new Error(`知识图谱不能删除资源包规定的必授知识点：${missingRequiredPoints.map((point) => point.name).join("、")}`);
+        throw new Error(`知识图谱不能移除资源包知识要求的课程映射：${missingRequiredPoints.map((point) => point.name).join("、")}`);
       }
-      const knowledgeScopePlan = course.content.knowledgeScopePlan
-        ? {
-            ...course.content.knowledgeScopePlan,
-            targetPointCount: knowledgePoints.length,
-            decisions: course.content.knowledgeScopePlan.decisions.map((decision) => {
-              const target = knowledgePoints.find((point) => (
-                point.id === decision.sourceKnowledgePointId
-                || point.sourceKnowledgePointIds?.includes(decision.sourceKnowledgePointId)
-              ));
-              return target
-                ? { ...decision, disposition: "standalone" as const, targetKnowledgePointId: target.id }
-                : decision;
-            }),
-          }
-        : undefined;
+      const knowledgeScopePlan = reconcileReviewedKnowledgeScopePlan(
+        course.content.knowledgeScopePlan,
+        knowledgePoints,
+        Boolean(course.content.courseEvidence?.items.length),
+      );
       return {
         ...course,
         content: {
@@ -2556,11 +2580,11 @@ async function runNewSystemCourseDesign(
       stepIndex: 1,
       progress: 52,
       label: "知识图谱",
-      summary: `已完整保留资源包必授范围并组织为 ${content.knowledgePoints.length} 个课程知识点，讲授分组与深度按 ${content.knowledgeScopePlan?.planningDurationMin ?? teachingCapacity.planningDurationMin} 分钟容量规划，等待教师确认`,
+      summary: `已将资源包知识要求映射并组织为 ${content.knowledgePoints.length} 个课程知识点，讲授分组与深度按 ${content.knowledgeScopePlan?.planningDurationMin ?? teachingCapacity.planningDurationMin} 分钟容量规划，等待教师确认`,
       status: "completed",
       checks: [
         `先按知识讲授预算完成范围规划：${content.knowledgeScopePlan?.explanationAndActivityMin ?? teachingCapacity.explanationAndActivityMin} 分钟用于解释与必要活动，${content.knowledgeScopePlan?.assessmentReserveMin ?? teachingCapacity.assessmentReserveMin} 分钟预留检测反馈`,
-        `资源目录 ${content.knowledgeScopePlan?.sourcePointCount ?? packageKnowledgePoints.length} 项已全部保留为本课知识节点，相关知识可组合讲授`,
+        `资源目录 ${content.knowledgeScopePlan?.sourcePointCount ?? packageKnowledgePoints.length} 项要求均已建立可追踪课程映射；教材化节点可重命名、拆分或合并讲授`,
         "已完成字段、引用和关系元数据的确定性整理，未调用第二个 AI 审校",
         "知识图谱已具备可查看、可编辑的完整结构",
         ...(request.referenceMaterials?.length ? [`已参考 ${request.referenceMaterials.length} 份教师知识资料`] : []),

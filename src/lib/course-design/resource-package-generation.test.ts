@@ -25,6 +25,41 @@ function confirmedPackage(): CourseResourcePackage {
 }
 
 describe("confirmed resource package generation", () => {
+  it("keeps textbook split mappings when the teacher confirms the knowledge structure", async () => {
+    const { reconcileReviewedKnowledgeScopePlan } = await import("./job-runner");
+    const plan = {
+      schemaVersion: 1 as const,
+      policyVersion: "textbook-evidence-mapping-v2",
+      planningDurationMin: 30,
+      durationRangeMin: 30,
+      durationRangeMax: 30,
+      durationSource: "resource-package" as const,
+      assessmentReserveMin: 4,
+      explanationAndActivityMin: 26,
+      sourcePointCount: 1,
+      targetPointCount: 1,
+      rationale: "按教材体系拆分。",
+      decisions: [{
+        sourceKnowledgePointId: "source-embodied",
+        sourceKnowledgePointName: "具身认知",
+        disposition: "mapped" as const,
+        targetKnowledgePointId: "old-target",
+        targetKnowledgePointIds: ["old-target"],
+        rationale: "教材分为两个角度。",
+      }],
+    };
+    const reconciled = reconcileReviewedKnowledgeScopePlan(plan, [
+      { id: "body", name: "身体参与认知", description: "身体经验", sourceKnowledgePointIds: ["source-embodied"] },
+      { id: "environment", name: "环境互动认知", description: "环境互动", sourceKnowledgePointIds: ["source-embodied"] },
+    ], true);
+    expect(reconciled?.targetPointCount).toBe(2);
+    expect(reconciled?.decisions[0]).toMatchObject({
+      disposition: "mapped",
+      targetKnowledgePointId: "body",
+      targetKnowledgePointIds: ["body", "environment"],
+    });
+  }, 15_000);
+
   it("releases the design worker only for reviews without a deadline", async () => {
     const { isPersistentCourseDesignReview } = await import("./job-runner");
     expect(isPersistentCourseDesignReview(null)).toBe(true);

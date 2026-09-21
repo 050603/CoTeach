@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
   return {
     fetch: vi.fn(),
     toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
+    canvas: { clearSelection: vi.fn(), setActiveElementIdList: vi.fn() },
     store: {
       getState: () => state,
       setState: (patch: Partial<TestState>) => {
@@ -31,7 +32,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock('@openmaic/lib/store', () => ({ useStageStore: mocks.store }));
+vi.mock('@openmaic/lib/store', () => ({ useStageStore: mocks.store, useCanvasStore: { getState: () => mocks.canvas } }));
 vi.mock('@openmaic/components/stage', () => ({ Stage: () => <div>课堂编辑区域</div> }));
 vi.mock('@openmaic/components/server-providers-init', () => ({ ServerProvidersInit: () => null }));
 vi.mock('@openmaic/lib/contexts/media-stage-context', () => ({ MediaStageProvider: ({ children }: { children: ReactNode }) => children }));
@@ -74,6 +75,24 @@ beforeEach(() => {
 });
 
 describe('teacher classroom save lifecycle', () => {
+  it('opens the requested review scene and selects a valid slide element', async () => {
+    const initial = classroom();
+    const reviewScene = initial.scenes[1];
+    if (reviewScene.content.type !== 'slide') throw new Error('Expected a slide fixture');
+    reviewScene.content.canvas.elements = [{ id: 'problem-element' }] as typeof reviewScene.content.canvas.elements;
+    mocks.fetch.mockResolvedValueOnce(Response.json({ success: true, classroom: initial }));
+    render(<TeacherClassroomEditor
+      backHref="/teacher"
+      courseId="course-1"
+      courseName="课程"
+      initialElementId="problem-element"
+      initialSceneId="s2"
+    />);
+    await screen.findByText('课堂编辑区域');
+    expect(mocks.store.getState().currentSceneId).toBe('s2');
+    expect(mocks.canvas.setActiveElementIdList).toHaveBeenCalledWith(['problem-element']);
+  });
+
   it('keeps editing and the selected page while a save response is pending', async () => {
     const initial = classroom();
     const pending = deferred<Response>();

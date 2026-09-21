@@ -1,12 +1,23 @@
 'use client';
 
+import Link from 'next/link';
 import { Component, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Check, Loader2, RotateCcw } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  ChevronRight,
+  CircleAlert,
+  ExternalLink,
+  FileSearch,
+  Loader2,
+  MonitorCheck,
+  RotateCcw,
+  ShieldCheck,
+} from 'lucide-react';
 import { Button } from '@/components/ui';
 import { ReadonlySlideCanvas } from '@/components/openmaic/slide-renderer/Editor/ReadonlySlideCanvas';
 import type { PersistedClassroomData } from '@/lib/openmaic/server/classroom-storage';
-import type { CourseQualityReport } from '@/lib/course-quality-review/types';
-import type { TeacherReviewItem } from '@/lib/course-quality-review/types';
+import type { CourseQualityIssue, CourseQualityReport, TeacherReviewItem } from '@/lib/course-quality-review/types';
 import type { CourseRenderPageReview, CourseRenderReview, CourseTeacherReview } from '@/lib/course-quality-review/teacher-review';
 import { reviewableIssues } from '@/lib/course-quality-review/teacher-review';
 import { inspectRenderedSlide, measureSlideElements } from '@/lib/course-quality-review/render-measurements';
@@ -17,12 +28,59 @@ type ReviewSnapshot = {
   required: boolean;
   signature: string;
   classroom: PersistedClassroomData;
+  blockingIssues?: CourseQualityIssue[];
   quality: CourseQualityReport | null;
   renderReview: CourseRenderReview | null;
   teacherReview: CourseTeacherReview | null;
   teacherReviewItems: TeacherReviewItem[];
   teacherReviewSummary: string | null;
 };
+
+type ReviewFilter = 'all' | 'blocking' | 'attention' | 'reviewed';
+type CheckScope = 'all' | 'content' | 'pages';
+
+const ORIGIN_LABEL: Record<CourseQualityIssue['origin'], string> = {
+  structure: '课程结构',
+  semantic: '内容一致性',
+  render: 'PPT 页面呈现',
+};
+
+const REVIEW_KIND_LABEL: Record<TeacherReviewItem['kind'], string> = {
+  'illustrative-data': '示意数据',
+  'constructed-example': '构造示例',
+  'unverified-claim': '待核事实',
+};
+
+const PROVENANCE_LABEL: Record<TeacherReviewItem['provenance'], string> = {
+  'course-source': '课程资料',
+  derived: '资料推导',
+  'general-knowledge': '通用知识',
+  constructed: '教学构造',
+  unverified: '尚未核实',
+};
+
+function isBlockingIssue(issue: CourseQualityIssue): boolean {
+  return issue.severity === 'error' && issue.blocking === true;
+}
+
+function checkedAtLabel(value?: string): string | undefined {
+  if (!value) return undefined;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return undefined;
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(timestamp);
+}
+
+function editorIssueHref(courseId: string, sceneId: string, elementId?: string, questionId?: string): string {
+  const params = new URLSearchParams({ sceneId });
+  if (elementId) params.set('elementId', elementId);
+  if (questionId) params.set('questionId', questionId);
+  return `/teacher/prepare/${encodeURIComponent(courseId)}/classroom-editor?${params.toString()}`;
+}
 
 async function responseJson<T>(response: Response): Promise<T> {
   const body = await response.json();
@@ -78,8 +136,9 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
   const [snapshot, setSnapshot] = useState<ReviewSnapshot | null>(null);
   const [error, setError] = useState('');
   const [accepted, setAccepted] = useState<string[]>([]);
+  const [filter, setFilter] = useState<ReviewFilter>('all');
   const [renderRequested, setRenderRequested] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<CheckScope | null>(null);
   const [savingPage, setSavingPage] = useState(false);
   const [localPages, setLocalPages] = useState<CourseRenderPageReview[]>([]);
   const [retryPageIds, setRetryPageIds] = useState<string[]>([]);
@@ -96,6 +155,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
         setAccepted(next.teacherReview?.acceptedIssueIds ?? []);
         setRenderRequested(false);
         setRetryPageIds([]);
+        setFilter('all');
       }
       // Keep stable scene references while polling the same content version.
       setSnapshot((previous) => previous?.signature === next.signature ? { ...next, classroom: previous.classroom } : next);
@@ -116,13 +176,44 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
   const slides = useMemo(() => snapshot?.classroom.scenes.filter((scene) => scene.type === 'slide' && scene.content.type === 'slide') ?? [], [snapshot?.classroom]);
   const nextScene = renderRequested && !savingPage && !error ? slides.find((scene) => !pages.some((page) => page.sceneId === scene.id)) : undefined;
   const allRendered = slides.every((scene) => pages.some((page) => page.sceneId === scene.id && page.status === 'completed'));
-  const issues = useMemo(() => [...(snapshot?.quality?.issues ?? []), ...pages.flatMap((page) => page.issues)], [snapshot?.quality?.issues, pages]);
-  const toReview = reviewableIssues(issues);
+  const issues = useMemo(() => {
+    const byId = new Map<string, CourseQualityIssue>();
+    for (const issue of [
+      ...(snapshot?.blockingIssues ?? []),
+      ...(snapshot?.quality?.issues ?? []),
+      ...pages.flatMap((page) => page.issues),
+    ]) byId.set(issue.id, issue);
+    return [...byId.values()];
+  }, [snapshot?.blockingIssues, snapshot?.quality?.issues, pages]);
+  const openIssues = useMemo(() => issues.filter((issue) => issue.status !== 'resolved'), [issues]);
+  const blockingIssues = useMemo(() => openIssues.filter(isBlockingIssue), [openIssues]);
+  const toReview = useMemo(() => reviewableIssues(openIssues), [openIssues]);
+  const acceptedSet = useMemo(() => new Set(accepted), [accepted]);
+  const reviewedCount = toReview.filter((issue) => acceptedSet.has(issue.id) || issue.status === 'accepted').length;
+  const attentionCount = toReview.length - reviewedCount;
+  const filteredIssues = useMemo(() => openIssues.filter((issue) => {
+    if (filter === 'blocking') return isBlockingIssue(issue);
+    const reviewed = acceptedSet.has(issue.id) || issue.status === 'accepted';
+    if (filter === 'attention') return !isBlockingIssue(issue) && !reviewed;
+    if (filter === 'reviewed') return !isBlockingIssue(issue) && reviewed;
+    return true;
+  }), [acceptedSet, filter, openIssues]);
   const qualityRunning = snapshot?.quality?.status === 'running' || snapshot?.quality?.status === 'pending';
-  const canConfirm = Boolean(snapshot && snapshot.classroom.assetGeneration?.status !== 'running');
+  const canConfirm = Boolean(snapshot && snapshot.classroom.assetGeneration?.status !== 'running' && blockingIssues.length === 0);
+  const completedPageCount = pages.filter((page) => page.status === 'completed').length;
+  const contentCheckedAt = checkedAtLabel(snapshot?.quality?.checkedAt);
+  const pageCheckedAt = checkedAtLabel(snapshot?.renderReview?.updatedAt);
+  const teacherConfirmedAt = checkedAtLabel(snapshot?.teacherReview?.confirmedAt);
+  const completedSectionCount = snapshot?.quality?.sections?.filter((section) => section.status === 'completed').length ?? 0;
+  const sectionCount = snapshot?.quality?.sections?.length ?? 0;
   useEffect(() => {
-    onDecisionChange({ canConfirm, signature: snapshot?.signature ?? '', acceptedIssueIds: accepted, acknowledgeFailedCheck: true });
-  }, [canConfirm, snapshot?.signature, accepted, onDecisionChange]);
+    onDecisionChange({
+      canConfirm,
+      signature: snapshot?.signature ?? '',
+      acceptedIssueIds: accepted,
+      acknowledgeFailedCheck: snapshot?.quality?.status !== 'completed',
+    });
+  }, [canConfirm, snapshot?.signature, snapshot?.quality?.status, accepted, onDecisionChange]);
 
   const savePage = useCallback(async (page: CourseRenderPageReview) => {
     if (inFlightPage.current) return;
@@ -139,61 +230,271 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
     finally { inFlightPage.current = false; if (mounted.current) setSavingPage(false); }
   }, [courseId]);
   const onRenderComplete = useCallback((page: CourseRenderPageReview) => { void savePage(page); }, [savePage]);
-  async function checkContent() {
-    setBusy(true);
-    try {
-      await fetch(`/api/courses/${courseId}/quality-review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'check' }) }).then(responseJson);
-      await load();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '内容检查未启动。'); }
-    finally { setBusy(false); }
+  function preparePageCheck() {
+    setRenderRequested(true);
+    // A teacher-triggered recheck measures every current slide again.
+    setRetryPageIds(slides.map((scene) => scene.id));
+    setLocalPages([]);
+    setSnapshot((current) => current ? {
+      ...current,
+      renderReview: current.renderReview ? {
+        ...current.renderReview,
+        pages: [],
+      } : null,
+    } : current);
   }
-  async function checkPages() {
-    setBusy(true);
+
+  async function runCheck(scope: CheckScope) {
+    setBusy(scope);
+    setError('');
     try {
-      setRenderRequested(true);
-      // Recheck failed browser pages without throwing away successful pages.
-      setRetryPageIds(pages.filter((page) => page.status === 'failed').map((page) => page.sceneId));
-      setLocalPages((current) => current.filter((page) => page.status === 'completed'));
-      setSnapshot((current) => current ? { ...current, renderReview: current.renderReview ? { ...current.renderReview, pages: current.renderReview.pages.filter((page) => page.status === 'completed') } : null } : current);
+      if (scope === 'all' || scope === 'content') {
+        await fetch(`/api/courses/${courseId}/quality-review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'check' }) }).then(responseJson);
+      }
+      if (scope === 'all' || scope === 'pages') preparePageCheck();
       await load();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '重试失败。'); }
-    finally { setBusy(false); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '检查未能启动，请稍后重试。'); }
+    finally { setBusy(null); }
   }
-  return <section className="mt-5 rounded-xl border border-stone-200 bg-white p-5" aria-label="课程质量与教师终审">
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h2 className="font-bold text-stone-900">课程检查与教师终审</h2>
-        <p className="mt-1 text-sm leading-6 text-stone-600">教师预览后可直接确认发布，也可主动运行内容或页面检查，作为授课前的参考。</p></div>
-      <div className="flex flex-wrap gap-2">
-        <Button loading={busy} disabled={!snapshot || qualityRunning} onClick={() => void checkContent()}><RotateCcw size={14} />检查内容</Button>
-        <Button disabled={!snapshot || Boolean(nextScene) || savingPage} onClick={() => void checkPages()}>检查页面</Button>
-        {error && <Button onClick={() => void load()}>刷新状态</Button>}
+
+  const filterOptions: Array<{ id: ReviewFilter; label: string; count: number }> = [
+    { id: 'all', label: '全部问题', count: openIssues.length },
+    { id: 'blocking', label: '必须处理', count: blockingIssues.length },
+    { id: 'attention', label: '待教师核对', count: attentionCount },
+    { id: 'reviewed', label: '已核对', count: reviewedCount },
+  ];
+  const pageCheckActive = Boolean(nextScene) || savingPage;
+  const fullCheckDisabled = !snapshot || qualityRunning || pageCheckActive;
+
+  return <section className="mt-5 overflow-hidden rounded-[14px] border border-stone-200 bg-white" aria-label="课程质量与教师终审">
+    <header className="border-b border-stone-200 bg-stone-50/55 px-4 py-5 sm:px-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="max-w-3xl">
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--pbl-teacher)]">发布前质量把关</p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-black text-stone-950">课程检查与教师终审</h2>
+            {snapshot?.teacherReview ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-800">当前版本已终审</span> : null}
+          </div>
+          <p className="mt-1 text-sm leading-6 text-stone-600">先处理会阻止发布的结构问题，再核对内容与页面建议。辅助检查不会替代教师对实际课堂效果的判断。</p>
+        </div>
+        <Button
+          className="min-h-11 bg-[var(--pbl-teacher)] px-4 text-white hover:bg-[var(--pbl-teacher-hover)]"
+          disabled={fullCheckDisabled}
+          loading={busy === 'all'}
+          onClick={() => void runCheck('all')}
+        >
+          <RotateCcw size={15} />
+          {snapshot?.quality || pages.length ? '重新检查全部' : '开始完整检查'}
+        </Button>
       </div>
-    </div>
-    <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-sm text-stone-600">
-      <span className="inline-flex items-center gap-2">{snapshot?.quality?.status === 'completed' ? <Check size={15} /> : qualityRunning ? <Loader2 className="animate-spin" size={15} /> : null}
-        内容检查：{snapshot?.quality?.status === 'completed' ? '已完成' : snapshot?.quality?.status === 'failed' ? '未完成' : qualityRunning ? '正在检查' : '未检查'}</span>
-      <span>页面呈现：{!pages.length && !renderRequested ? '未检查' : `${pages.filter((page) => page.status === 'completed').length} / ${slides.length} 页${allRendered && snapshot ? '，已检查' : renderRequested && nextScene ? '，正在检查' : '，未完成'}`}</span>
-      <span>{toReview.length} 项参考建议</span>
-    </div>
-    {error && <p role="alert" className="mt-3 text-sm text-rose-700">{error}</p>}
-    {snapshot?.teacherReviewSummary && <details className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3" open={snapshot.teacherReviewItems.length > 0}>
-      <summary className="cursor-pointer text-sm font-bold text-stone-900">
-        授课前待确认信息{snapshot.teacherReviewItems.length ? `（${snapshot.teacherReviewItems.length} 项）` : ''}
-      </summary>
-      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-stone-600">{snapshot.teacherReviewSummary}</p>
-    </details>}
-    {snapshot?.quality?.status === 'failed' && <p className="mt-3 text-sm text-amber-900">内容检查未完成：{snapshot.quality.error || '服务暂时不可用'}。教师仍可根据实际预览确认发布。</p>}
-    {issues.length > 0 && <div className="mt-4 max-h-96 space-y-3 overflow-y-auto">
-      {issues.filter((issue) => issue.status !== 'resolved').map((issue) => {
-        const blocking = issue.origin === 'structure' && issue.severity === 'error';
-        return <div key={issue.id} className={`rounded-lg border p-3 text-sm ${blocking ? 'border-rose-200 bg-rose-50' : 'border-stone-200 bg-stone-50'}`}>
-          <div className="flex flex-wrap items-center justify-between gap-2"><strong className="inline-flex items-center gap-2"><AlertTriangle size={14} />{issue.title}{blocking ? ' · 请核对' : ''}</strong>
-            {issue.sceneId && <button type="button" className="font-semibold text-blue-700 underline" onClick={() => onOpenPage(snapshot?.classroom.scenes.find((scene) => scene.id === issue.sceneId)?.outlineId ?? issue.sceneId!)}>查看对应页面</button>}</div>
-          <p className="mt-2 whitespace-pre-wrap leading-6 text-stone-600">{issue.evidence}</p><p className="mt-1 leading-6">{issue.suggestion}</p>
-          {!blocking && <label className="mt-2 flex items-start gap-2"><input type="checkbox" className="mt-1" checked={accepted.includes(issue.id)} onChange={(event) => setAccepted((current) => event.target.checked ? [...new Set([...current, issue.id])] : current.filter((id) => id !== issue.id))} /><span>已核对，这一项可以用于本次授课</span></label>}
-        </div>;
-      })}
-    </div>}
+    </header>
+
+    {!snapshot ? <div className="grid min-h-40 place-items-center px-6 py-10 text-sm text-stone-500"><span className="inline-flex items-center gap-2"><Loader2 className="animate-spin" size={16} />正在读取当前课程版本…</span></div> : <>
+      <div aria-live="polite" className="grid border-b border-stone-200 md:grid-cols-3 md:divide-x md:divide-stone-200">
+        <ReviewStatusCard
+          actionLabel={qualityRunning ? '检查进行中' : snapshot.quality ? '仅重查内容' : '检查内容'}
+          actionDisabled={qualityRunning || busy !== null}
+          actionLoading={busy === 'content'}
+          detail={snapshot.quality?.status === 'completed'
+            ? `${snapshot.quality.issues.filter((issue) => issue.status !== 'resolved').length} 项内容或结构提示${contentCheckedAt ? ` · ${contentCheckedAt}` : ''}`
+            : snapshot.quality?.status === 'failed'
+              ? '检查服务未完成，仍可由教师手动核对'
+              : qualityRunning ? `正在分段核对课程内容${sectionCount ? ` · ${completedSectionCount} / ${sectionCount} 个小节完成` : ''}` : '尚未运行，可按需启动'}
+          icon={qualityRunning ? <Loader2 className="animate-spin" size={18} /> : <FileSearch size={18} />}
+          label="内容一致性"
+          onAction={() => void runCheck('content')}
+          status={snapshot.quality?.status === 'completed' ? '已检查' : snapshot.quality?.status === 'failed' ? '未完成' : qualityRunning ? '检查中' : '未检查'}
+          tone={snapshot.quality?.status === 'failed' ? 'warning' : snapshot.quality?.status === 'completed' ? 'success' : 'neutral'}
+        />
+        <ReviewStatusCard
+          actionLabel={pageCheckActive ? '检查进行中' : pages.length ? '重新检查页面' : '检查页面'}
+          actionDisabled={pageCheckActive || busy !== null}
+          actionLoading={busy === 'pages'}
+          detail={!slides.length ? '当前课程没有需要测量的课件页'
+            : !pages.length && !renderRequested ? '尚未运行，使用实际浏览器测量'
+              : `${completedPageCount} / ${slides.length} 页完成${pageCheckedAt ? ` · ${pageCheckedAt}` : ''}`}
+          icon={pageCheckActive ? <Loader2 className="animate-spin" size={18} /> : <MonitorCheck size={18} />}
+          label="PPT 页面呈现"
+          onAction={() => void runCheck('pages')}
+          status={!slides.length ? '无需检查' : allRendered && pages.length ? '已检查' : pageCheckActive ? '检查中' : pages.length ? '未完成' : '未检查'}
+          tone={allRendered && pages.length ? 'success' : 'neutral'}
+        />
+        <ReviewStatusCard
+          detail={blockingIssues.length
+            ? `${blockingIssues.length} 项必须先修正，暂不能确认发布`
+            : snapshot.teacherReview && teacherConfirmedAt ? `当前版本已于 ${teacherConfirmedAt} 完成教师终审`
+            : attentionCount ? `${reviewedCount} / ${toReview.length} 项参考建议已核对`
+              : toReview.length ? `${toReview.length} 项建议均已核对` : '当前没有待教师处理的检查项'}
+          icon={blockingIssues.length ? <CircleAlert size={18} /> : <ShieldCheck size={18} />}
+          label="教师确认"
+          status={blockingIssues.length ? '有阻断项' : attentionCount ? '待核对' : '可确认'}
+          tone={blockingIssues.length ? 'danger' : attentionCount ? 'warning' : 'success'}
+        />
+      </div>
+
+      {error ? <div className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 sm:mx-6" role="alert">
+        <span>{error}</span>
+        <button className="min-h-11 font-bold underline underline-offset-4" onClick={() => void load()} type="button">刷新状态</button>
+      </div> : null}
+
+      {snapshot.quality?.status === 'failed' ? <div className="mx-4 mt-4 flex items-start gap-2 rounded-[10px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950 sm:mx-6">
+        <AlertTriangle className="mt-0.5 shrink-0" size={16} />
+        <p><strong>内容检查未完成：</strong>{snapshot.quality.error || '检查服务暂时不可用'}。你仍可根据课程资料和实际预览完成人工终审。</p>
+      </div> : null}
+
+      {(snapshot.teacherReviewItems.length > 0 || snapshot.teacherReviewSummary) ? <section className="border-b border-stone-200 px-4 py-5 sm:px-6" aria-labelledby="generation-review-title">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-stone-950" id="generation-review-title">授课前来源与构造说明{snapshot.teacherReviewItems.length ? `（${snapshot.teacherReviewItems.length} 项）` : ''}</h3>
+            <p className="mt-1 text-xs leading-5 text-stone-500">这里只记录课程中采用的示意数据、构造案例或待核事实，不再把教师知识图谱的原始名称和解释当作逐字覆盖清单。</p>
+          </div>
+          <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-800">教师私有参考 · 不阻断发布</span>
+        </div>
+        {snapshot.teacherReviewItems.length ? <ul className="mt-4 grid gap-3 lg:grid-cols-2">
+          {snapshot.teacherReviewItems.map((item) => {
+            const scene = item.sceneId
+              ? snapshot.classroom.scenes.find((entry) => entry.id === item.sceneId)
+              : item.outlineId ? snapshot.classroom.scenes.find((entry) => entry.outlineId === item.outlineId || entry.id === item.outlineId) : undefined;
+            const outlineId = scene?.outlineId ?? item.outlineId ?? scene?.id;
+            const sceneIndex = scene ? snapshot.classroom.scenes.findIndex((entry) => entry.id === scene.id) : -1;
+            return <li className="border-l-2 border-amber-300 bg-amber-50/45 px-4 py-3" key={item.id}>
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+                <span className="text-amber-900">{REVIEW_KIND_LABEL[item.kind]}</span>
+                <span className="text-stone-300">/</span>
+                <span className="text-stone-500">{PROVENANCE_LABEL[item.provenance]}</span>
+                {scene ? <span className="text-stone-500">第 {sceneIndex + 1} 页 · {scene.title}</span> : null}
+              </div>
+              <p className="mt-2 text-sm font-bold leading-6 text-stone-900">{item.content}</p>
+              <p className="mt-1 text-xs leading-5 text-stone-600"><strong>教学用途：</strong>{item.teachingPurpose}</p>
+              {item.source ? <p className="mt-1 text-xs leading-5 text-stone-500"><strong>相关来源：</strong>{item.source}</p> : null}
+              {scene && outlineId ? <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                <button className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" onClick={() => onOpenPage(outlineId)} type="button">在发布页查看 <ChevronRight size={14} /></button>
+                <Link className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" href={editorIssueHref(courseId, scene.id, item.elementId)}>定位并修改 <ExternalLink size={13} /></Link>
+              </div> : null}
+            </li>;
+          })}
+        </ul> : <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-stone-600">{snapshot.teacherReviewSummary}</p>}
+      </section> : null}
+
+      <section className="px-4 py-5 sm:px-6" aria-labelledby="review-issues-title">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-stone-950" id="review-issues-title">检查结果</h3>
+            <p className="mt-1 text-xs leading-5 text-stone-500">红色项目必须处理；其余项目可结合教学意图逐项核对并留痕。</p>
+          </div>
+          <p className="text-xs font-semibold text-stone-500">{blockingIssues.length} 项阻断 · {attentionCount} 项待核对 · {reviewedCount} 项已核对</p>
+        </div>
+
+        <div className="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="检查结果筛选">
+          {filterOptions.map((option) => <button
+            aria-pressed={filter === option.id}
+            className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-[8px] border px-3 text-xs font-bold transition ${filter === option.id ? 'border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]' : 'border-stone-200 bg-white text-stone-600 hover:border-stone-300 hover:bg-stone-50'}`}
+            key={option.id}
+            onClick={() => setFilter(option.id)}
+            type="button"
+          >{option.label}<span className="tabular-nums text-[10px] opacity-70">{option.count}</span></button>)}
+        </div>
+
+        {filteredIssues.length ? <ol className="mt-4 space-y-3">
+          {filteredIssues.map((issue) => {
+            const blocking = isBlockingIssue(issue);
+            const reviewed = acceptedSet.has(issue.id) || issue.status === 'accepted';
+            const scene = issue.sceneId ? snapshot.classroom.scenes.find((entry) => entry.id === issue.sceneId) : undefined;
+            const outlineId = scene?.outlineId ?? scene?.id;
+            const sceneIndex = scene ? snapshot.classroom.scenes.findIndex((entry) => entry.id === scene.id) : -1;
+            return <li className={`border-l-4 px-4 py-4 ${blocking ? 'border-rose-500 bg-rose-50/65' : reviewed ? 'border-emerald-400 bg-emerald-50/35' : 'border-amber-400 bg-stone-50/80'}`} key={issue.id}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+                    <span className={blocking ? 'text-rose-800' : 'text-stone-500'}>{blocking ? '必须处理' : ORIGIN_LABEL[issue.origin]}</span>
+                    {scene ? <><span className="text-stone-300">/</span><span className="text-stone-500">第 {sceneIndex + 1} 页 · {scene.title}</span></> : null}
+                    {issue.elementId ? <span className="rounded-full bg-white px-2 py-0.5 text-stone-500">页内元素</span> : null}
+                    {issue.questionId ? <span className="rounded-full bg-white px-2 py-0.5 text-stone-500">题目</span> : null}
+                  </div>
+                  <h4 className="mt-1.5 flex items-start gap-2 text-sm font-black leading-6 text-stone-950">
+                    {blocking ? <CircleAlert className="mt-1 shrink-0 text-rose-700" size={15} /> : <AlertTriangle className="mt-1 shrink-0 text-amber-700" size={15} />}
+                    <span>{issue.title}</span>
+                  </h4>
+                </div>
+                {!blocking ? <label className={`inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-[8px] border px-3 text-xs font-bold ${reviewed ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-stone-200 bg-white text-stone-600 hover:border-stone-300'}`}>
+                  <input
+                    checked={reviewed}
+                    className="sr-only"
+                    onChange={(event) => setAccepted((current) => event.target.checked ? [...new Set([...current, issue.id])] : current.filter((id) => id !== issue.id))}
+                    type="checkbox"
+                  />
+                  <span className={`grid size-4 place-items-center rounded-full border ${reviewed ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-stone-300'}`}>{reviewed ? <Check size={11} /> : null}</span>
+                  {reviewed ? '已核对' : '标记为已核对'}
+                </label> : null}
+              </div>
+
+              <div className="mt-3 grid gap-3 text-sm leading-6 lg:grid-cols-2">
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-[0.1em] text-stone-400">发现依据</p>
+                  <p className="mt-1 whitespace-pre-wrap text-stone-600">{issue.evidence}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-[0.1em] text-stone-400">建议处理</p>
+                  <p className="mt-1 whitespace-pre-wrap text-stone-800">{issue.suggestion}</p>
+                </div>
+              </div>
+
+              {scene && outlineId ? <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-black/5 pt-2">
+                <button className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" onClick={() => onOpenPage(outlineId)} type="button">在发布页查看 <ChevronRight size={14} /></button>
+                <Link className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" href={editorIssueHref(courseId, scene.id, issue.elementId, issue.questionId)}>
+                  {issue.elementId ? '在编辑器中定位元素' : issue.questionId ? '打开题目所在页' : '打开本页并修改'} <ExternalLink size={13} />
+                </Link>
+              </div> : null}
+            </li>;
+          })}
+        </ol> : <div className="mt-4 border border-dashed border-stone-300 px-5 py-8 text-center">
+          <span className="mx-auto grid size-10 place-items-center rounded-full bg-emerald-50 text-emerald-700"><Check size={18} /></span>
+          <p className="mt-3 text-sm font-bold text-stone-900">{openIssues.length ? '此筛选下没有检查项' : snapshot.quality?.status === 'completed' || pages.length ? '当前检查未发现需要特别处理的问题' : '尚未生成检查结果'}</p>
+          <p className="mt-1 text-xs leading-5 text-stone-500">{openIssues.length ? '切换其他筛选条件查看结果。' : snapshot.quality?.status === 'completed' || pages.length ? '仍建议按实际教学流程完成一次人工预览。' : '点击“开始完整检查”，或分别运行内容和页面检查。'}</p>
+        </div>}
+      </section>
+    </>}
+
     {nextScene && <RenderCheckBoundary key={`${snapshot?.signature}:${nextScene.id}`} sceneId={nextScene.id} onComplete={onRenderComplete}><RenderPageCheck scene={nextScene} onComplete={onRenderComplete} /></RenderCheckBoundary>}
   </section>;
+}
+
+function ReviewStatusCard({
+  actionDisabled = false,
+  actionLabel,
+  actionLoading = false,
+  detail,
+  icon,
+  label,
+  onAction,
+  status,
+  tone,
+}: {
+  actionDisabled?: boolean;
+  actionLabel?: string;
+  actionLoading?: boolean;
+  detail: string;
+  icon: ReactNode;
+  label: string;
+  onAction?: () => void;
+  status: string;
+  tone: 'neutral' | 'success' | 'warning' | 'danger';
+}) {
+  const toneClass = tone === 'success' ? 'bg-emerald-50 text-emerald-800'
+    : tone === 'warning' ? 'bg-amber-50 text-amber-900'
+      : tone === 'danger' ? 'bg-rose-50 text-rose-800' : 'bg-stone-100 text-stone-600';
+  return <div className="flex min-h-40 flex-col border-b border-stone-200 px-4 py-4 last:border-b-0 md:border-b-0 sm:px-6">
+    <div className="flex items-start justify-between gap-3">
+      <span className={`grid size-9 place-items-center rounded-[8px] ${toneClass}`}>{icon}</span>
+      <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${toneClass}`}>{status}</span>
+    </div>
+    <p className="mt-3 text-sm font-black text-stone-950">{label}</p>
+    <p className="mt-1 flex-1 text-xs leading-5 text-stone-500">{detail}</p>
+    {actionLabel && onAction ? <button
+      className="mt-2 inline-flex min-h-11 items-center gap-1 self-start text-xs font-bold text-[var(--pbl-teacher)] hover:underline disabled:cursor-not-allowed disabled:text-stone-400 disabled:no-underline"
+      disabled={actionDisabled}
+      onClick={onAction}
+      type="button"
+    >{actionLoading ? <Loader2 className="animate-spin" size={13} /> : null}{actionLabel}<ChevronRight size={13} /></button> : null}
+  </div>;
 }

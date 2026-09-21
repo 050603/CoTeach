@@ -161,6 +161,33 @@ describe("reviewed knowledge structure generation", () => {
     });
     expect(modelCall.mock.calls[0][0][1].content).toContain("允许拆分、合并和多对多映射");
   });
+  it("retries instead of silently restoring an unmapped upstream node in textbook mode", async () => {
+    const incomplete = {
+      knowledgePoints: [{ id: "textbook-target", name: "教材概念", description: "教材解释", evidenceItemIds: ["evidence-1"] }],
+      knowledgeGraph: { nodes: [], edges: [] },
+    };
+    const complete = {
+      ...incomplete,
+      knowledgePoints: [{ ...incomplete.knowledgePoints[0], sourceKnowledgePointIds: ["source-requirement"] }],
+    };
+    const modelCall = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify(incomplete))
+      .mockResolvedValueOnce(JSON.stringify(complete));
+    const result = await generateKnowledgeStructureOnce(input, {
+      teacherKnowledgePoints: [{ id: "source-requirement", name: "教师要求", description: "需要实质覆盖" }],
+      textbookEvidence: {
+        schemaVersion: 1, version: 1, fingerprint: "f", createdAt: new Date(0).toISOString(), retrievalMode: "hybrid",
+        selections: [], warnings: [], mappings: [], items: [
+          { id: "evidence-1", kind: "concept", title: "教材概念", content: "教材解释", source: { textbookId: "book", textbookTitle: "教材", revisionId: "revision", revisionVersion: 1, sectionPath: [] } },
+        ],
+      },
+    }, { modelCall, retrySleep: async () => undefined });
+    expect(modelCall).toHaveBeenCalledTimes(2);
+    expect(result.knowledgePoints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "textbook-target", sourceKnowledgePointIds: ["source-requirement"] }),
+    ]));
+    expect(result.knowledgePoints.some((point) => point.id === "source-requirement")).toBe(false);
+  });
   it("generates the new-system teacher checkpoint without an AI review call", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify(candidate));
 

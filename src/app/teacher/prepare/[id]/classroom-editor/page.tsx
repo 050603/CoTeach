@@ -1,13 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { TeacherClassroomEditor } from '@/components/openmaic-bridge/teacher-classroom-editor';
 import { useCourse, useHydrated, useSession } from '@/lib/session/store';
 
 export default function TeacherClassroomEditorPage() {
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const session = useSession();
   const hydrated = useHydrated();
   const course = useCourse(params?.id);
@@ -39,6 +40,8 @@ export default function TeacherClassroomEditorPage() {
       backHref={`/teacher/prepare/${course.id}/preview`}
       courseId={course.id}
       courseName={course.name}
+      initialElementId={searchParams.get('elementId')?.trim() || undefined}
+      initialSceneId={searchParams.get('sceneId')?.trim() || undefined}
     />
   );
 }
