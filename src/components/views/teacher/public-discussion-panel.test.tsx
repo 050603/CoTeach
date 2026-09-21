@@ -92,7 +92,9 @@ describe("teacher public discussion voice loop", () => {
 
     render(<PublicDiscussionTeacherPanel course={course} immersive recommendedKnowledgePointIds={["kp-1"]} />);
 
-    expect(await screen.findByText("全屏讨论控制台")).toBeVisible();
+    const title = await screen.findByText("AI 公开讨论");
+    expect(title).toBeVisible();
+    expect(title.closest("header")).not.toHaveClass("bg-stone-950");
     expect(screen.getByRole("complementary", { name: "教师讨论控制" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: /语音识别设置/ }));
     expect(screen.getByLabelText("服务端 ASR")).toBeVisible();

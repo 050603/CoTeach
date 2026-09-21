@@ -355,24 +355,25 @@ export function PublicDiscussionTeacherPanel({
 
   if (snapshot && !snapshot.enabled) return null;
 
+  const Shell = immersive ? "section" : Card;
+
   return (
-    <Card
+    <Shell
       className={cn(
-        "overflow-hidden border-stone-200 bg-[var(--pbl-surface)] p-0",
         immersive
-          ? "mx-0 mt-0 rounded-2xl border-stone-300 shadow-[0_18px_50px_rgba(28,25,23,.12)]"
-          : "mx-4 mt-4",
+          ? "h-full min-h-0 overflow-auto"
+          : "mx-4 mt-4 overflow-hidden border-stone-200 bg-[var(--pbl-surface)] p-0",
       )}
     >
       <header className={cn(
-        "flex flex-wrap items-start justify-between gap-4 border-b px-5 py-4",
-        immersive ? "border-stone-800 bg-stone-950 px-6 py-5 text-white" : "border-stone-200 bg-white",
+        "flex flex-wrap items-start justify-between gap-4",
+        immersive ? "px-1 pb-4 pt-1" : "border-b border-stone-200 bg-white px-5 py-4",
       )}>
         <div className="flex items-start gap-3">
-          <span className={cn("grid size-10 shrink-0 place-items-center rounded-[10px] text-white", immersive ? "bg-cyan-600" : "bg-[var(--pbl-teacher)]")}><MessageSquareText size={19} /></span>
+          <span className={cn("grid size-10 shrink-0 place-items-center rounded-[10px]", immersive ? "bg-cyan-100 text-cyan-800" : "bg-[var(--pbl-teacher)] text-white")}><MessageSquareText size={19} /></span>
           <div>
-            <div className="flex flex-wrap items-center gap-2"><h4 className={cn("font-bold", immersive ? "text-lg text-white" : "text-stone-950")}>{immersive ? "全屏讨论控制台" : "全班公开讨论"}</h4><Pill tone={active ? "blue" : "gray"}>{active ? statusLabels[session!.status] : "尚未开始"}</Pill></div>
-            <p className={cn("mt-1 text-xs leading-5", immersive ? "text-stone-300" : "text-stone-500")}>选择共性问题并点名学生，由学生设备收音，教师端统一播放 AI 回应。</p>
+            <div className="flex flex-wrap items-center gap-2"><h4 className={cn("font-bold text-stone-950", immersive && "text-lg")}>{immersive ? "AI 公开讨论" : "全班公开讨论"}</h4><Pill tone={active ? "blue" : "gray"}>{active ? statusLabels[session!.status] : "尚未开始"}</Pill></div>
+            <p className="mt-1 text-xs leading-5 text-stone-500">选择共性问题并点名学生，由学生设备收音，教师端统一播放 AI 回应。</p>
           </div>
         </div>
         <button
@@ -380,7 +381,7 @@ export function PublicDiscussionTeacherPanel({
           className={cn(
             "flex min-h-11 items-center gap-1.5 rounded-lg border px-3 text-xs font-bold transition",
             immersive
-              ? "border-stone-700 bg-stone-900 text-stone-100 hover:bg-stone-800"
+              ? "border-stone-300 bg-white text-stone-700 hover:bg-stone-50"
               : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50",
           )}
           onClick={() => setShowSettings((value) => !value)}
@@ -391,7 +392,7 @@ export function PublicDiscussionTeacherPanel({
       </header>
 
       {showSettings && settings ? (
-        <div className="grid gap-3 border-b border-stone-200 bg-stone-50 px-5 py-4 md:grid-cols-[1fr_1fr_8rem_auto]">
+        <div className={cn("grid gap-3 border-stone-200 px-5 py-4 md:grid-cols-[1fr_1fr_8rem_auto]", immersive ? "mb-4 border-y bg-white" : "border-b bg-stone-50")}>
           <label className="text-xs font-bold text-stone-600">服务端 ASR
             <select className="mt-1 h-9 w-full rounded-lg border border-stone-300 bg-white px-2 text-xs" onChange={(event) => {
               const providerId = event.target.value;
@@ -412,7 +413,7 @@ export function PublicDiscussionTeacherPanel({
       ) : null}
 
       {!active ? (
-        <div>
+        <div className={cn(immersive && "border-y border-stone-200 bg-white")}>
           <ol aria-label="启动公开讨论步骤" className="grid border-b border-stone-200 bg-stone-50 sm:grid-cols-3">
             <SetupStep complete={Boolean(selectedPointId)} label="确定主题" number={1} />
             <SetupStep complete={Boolean(selectedStudentId)} label="选择学生" number={2} />
@@ -469,7 +470,7 @@ export function PublicDiscussionTeacherPanel({
           {session?.summary ? <div className="border-t border-stone-200 p-5"><SummaryBlock snapshot={snapshot!} /></div> : null}
         </div>
       ) : session ? (
-        <div className={cn("grid lg:grid-cols-[minmax(0,1fr)_21rem]", immersive && "min-h-[min(42rem,calc(100dvh-12rem))] lg:grid-cols-[minmax(0,1fr)_24rem]")}>
+        <div className={cn("grid lg:grid-cols-[minmax(0,1fr)_21rem]", immersive && "min-h-[min(42rem,calc(100dvh-12rem))] border-y border-stone-200 bg-white lg:grid-cols-[minmax(0,1fr)_24rem]")}>
           <section className={cn("border-b border-stone-200 p-5 lg:border-b-0 lg:border-r", immersive && "flex min-h-0 flex-col p-7")}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0"><p className="text-xs font-bold text-[var(--pbl-teacher)]">{session.mode === "debate" ? "观点辩论" : "公开追问"}</p><h5 className={cn("mt-1 font-bold text-stone-950", immersive ? "text-2xl" : "text-lg")}>{session.topic}</h5><p className={cn("mt-2 max-w-3xl text-stone-600", immersive ? "text-base leading-7" : "text-sm leading-6")}>{session.openingPrompt}</p></div>
@@ -515,7 +516,7 @@ export function PublicDiscussionTeacherPanel({
         </div>
       ) : <p className="p-4 text-sm text-stone-500"><Loader2 className="mr-2 inline animate-spin" size={15} />正在读取公开讨论状态…</p>}
       {error ? <p className="mx-4 mb-4 flex items-start gap-2 rounded-lg bg-rose-50 p-3 text-xs leading-5 text-rose-800" role="alert"><CircleAlert className="mt-0.5 shrink-0" size={14} />{error}</p> : null}
-    </Card>
+    </Shell>
   );
 }
 
