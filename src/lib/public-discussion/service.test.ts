@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Course, KnowledgeLectureAttempt, StudentAiProgress } from "@/lib/session/types";
-import { canApplyDiscussionAsyncResult, rankDiscussionCandidates } from "./service";
+import {
+  canApplyDiscussionAsyncResult,
+  canStartDiscussionRecording,
+  discussionStatusAfterPlayback,
+  parseAssistantDecision,
+  rankDiscussionCandidates,
+} from "./service";
 
 function attempt(studentId: string, earned: number, answer: string): StudentAiProgress {
   const quiz: KnowledgeLectureAttempt = {
@@ -112,5 +118,39 @@ describe("public discussion stale async result guard", () => {
       status: "AI_GENERATING",
       studentId: "student-b",
     })).toBe(false);
+  });
+});
+
+describe("public discussion voice-loop state helpers", () => {
+  it("allows a second recording after ASR failure and for legacy confirmation sessions", () => {
+    expect(canStartDiscussionRecording("AWAITING_STUDENT")).toBe(true);
+    expect(canStartDiscussionRecording("AWAITING_RETRY")).toBe(true);
+    expect(canStartDiscussionRecording("AWAITING_CONFIRMATION")).toBe(true);
+    expect(canStartDiscussionRecording("AI_GENERATING")).toBe(false);
+  });
+
+  it("waits for the student after a follow-up and for the teacher after a completion recommendation", () => {
+    expect(discussionStatusAfterPlayback("AI_READY")).toBe("AWAITING_STUDENT");
+    expect(discussionStatusAfterPlayback("AI_COMPLETION_READY")).toBe("AWAITING_TEACHER_CONFIRMATION");
+    expect(discussionStatusAfterPlayback("AI_FAILED")).toBeUndefined();
+  });
+
+  it("parses the model decision and enforces the third-round limit", () => {
+    expect(parseAssistantDecision('{"reply":"再举一个例子。","decision":"continue"}', 1)).toEqual({
+      reply: "再举一个例子。",
+      decision: "continue",
+    });
+    expect(parseAssistantDecision('{"reply":"你的解释已经完整。","decision":"recommend_end"}', 2)).toEqual({
+      reply: "你的解释已经完整。",
+      decision: "recommend_end",
+    });
+    expect(parseAssistantDecision('{"reply":"还可以继续。","decision":"continue"}', 3)).toEqual({
+      reply: "还可以继续。",
+      decision: "recommend_end",
+    });
+    expect(parseAssistantDecision('{"reply":"继续做迁移说明。","decision":"recommend_end"}', 2, true)).toEqual({
+      reply: "继续做迁移说明。",
+      decision: "continue",
+    });
   });
 });

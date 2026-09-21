@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   snapshot: vi.fn(),
   submit: vi.fn(),
   start: vi.fn(),
+  continueQuestioning: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/request-guards", () => ({
@@ -27,6 +28,7 @@ vi.mock("@/lib/public-discussion/service", () => ({
   acquireDiscussionSound: vi.fn(),
   addTeacherGuidance: vi.fn(),
   completeDiscussionPlayback: vi.fn(),
+  continueDiscussionQuestioning: mocks.continueQuestioning,
   finishPublicDiscussion: vi.fn(),
   inviteDiscussionStudent: vi.fn(),
   pausePublicDiscussion: vi.fn(),
@@ -58,6 +60,7 @@ beforeEach(() => {
   mocks.authenticate.mockResolvedValue({ claims: { sub: "student-a", role: "student" } });
   mocks.snapshot.mockResolvedValue({ enabled: true });
   mocks.submit.mockResolvedValue({ enabled: true, session: { version: 4 } });
+  mocks.continueQuestioning.mockResolvedValue({ enabled: true, session: { version: 8 } });
 });
 
 describe("public discussion classroom API", () => {
@@ -109,6 +112,30 @@ describe("public discussion classroom API", () => {
       expectedVersion: 3,
       content: "实验记录能让判断被复核。",
       source: "voice",
+    });
+  });
+
+  it("allows only a teacher to continue after an AI completion recommendation", async () => {
+    const denied = await POST(post({
+      action: "continue-questioning",
+      requestId,
+      expectedVersion: 7,
+    }), context);
+    expect(denied.status).toBe(403);
+    expect(mocks.continueQuestioning).not.toHaveBeenCalled();
+
+    mocks.authenticate.mockResolvedValue({ claims: { sub: "teacher-a", role: "teacher" } });
+    const accepted = await POST(post({
+      action: "continue-questioning",
+      requestId,
+      expectedVersion: 7,
+    }), context);
+    expect(accepted.status).toBe(200);
+    expect(mocks.continueQuestioning).toHaveBeenCalledWith({
+      courseId: "course-1",
+      claims: { sub: "teacher-a", role: "teacher" },
+      requestId,
+      expectedVersion: 7,
     });
   });
 });

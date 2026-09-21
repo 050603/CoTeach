@@ -7,6 +7,7 @@ import {
   acquireDiscussionSound,
   addTeacherGuidance,
   completeDiscussionPlayback,
+  continueDiscussionQuestioning,
   finishPublicDiscussion,
   getPublicDiscussionSnapshot,
   inviteDiscussionStudent,
@@ -59,7 +60,7 @@ const ActionSchema = z.discriminatedUnion("action", [
     source: z.enum(["voice", "text"]),
   }).strict(),
   z.object({ action: z.literal("invite"), requestId, expectedVersion, studentId: z.string().min(1).max(160) }).strict(),
-  z.object({ action: z.enum(["pause", "resume", "retry-ai", "finish"]), requestId, expectedVersion }).strict(),
+  z.object({ action: z.enum(["pause", "resume", "retry-ai", "continue-questioning", "finish"]), requestId, expectedVersion }).strict(),
   z.object({ action: z.literal("teacher-guide"), requestId, expectedVersion, content: z.string().trim().min(1).max(1_500) }).strict(),
   z.object({ action: z.literal("acquire-sound"), clientId: z.string().min(8).max(160) }).strict(),
   z.object({ action: z.literal("complete-playback"), requestId, expectedVersion, clientId: z.string().min(8).max(160) }).strict(),
@@ -100,7 +101,7 @@ export async function POST(
     return Response.json({ code: "INVALID_ACTION", message: "讨论操作参数无效。", details: parsed.error.flatten() }, { status: 400 });
   }
   const action = parsed.data;
-  if (["recommend", "start", "invite", "pause", "resume", "retry-ai", "finish", "teacher-guide", "acquire-sound", "complete-playback"].includes(action.action) && auth.claims.role !== "teacher") {
+  if (["recommend", "start", "invite", "pause", "resume", "retry-ai", "continue-questioning", "finish", "teacher-guide", "acquire-sound", "complete-playback"].includes(action.action) && auth.claims.role !== "teacher") {
     return Response.json({ code: "TEACHER_REQUIRED", message: "只有教师可以执行此操作。" }, { status: 403 });
   }
   const rate = await checkDistributedRateLimit({
@@ -161,6 +162,12 @@ export async function POST(
     }
     if (action.action === "retry-ai") {
       return Response.json(await retryAssistantReply({
+        courseId, claims: auth.claims, requestId: action.requestId,
+        expectedVersion: action.expectedVersion,
+      }));
+    }
+    if (action.action === "continue-questioning") {
+      return Response.json(await continueDiscussionQuestioning({
         courseId, claims: auth.claims, requestId: action.requestId,
         expectedVersion: action.expectedVersion,
       }));

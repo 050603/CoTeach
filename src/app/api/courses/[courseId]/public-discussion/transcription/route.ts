@@ -1,9 +1,13 @@
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { transcribeAudio } from "@openmaic/lib/audio/asr-providers";
-import { ASR_PROVIDERS } from "@openmaic/lib/audio/constants";
 import type { ASRProviderId } from "@openmaic/lib/audio/types";
-import { resolveASRApiKey, resolveASRBaseUrl } from "@openmaic/lib/server/provider-config";
+import {
+  initializeServerProviderConfig,
+  resolveASRApiKey,
+  resolveASRBaseUrl,
+  resolveASRModel,
+} from "@openmaic/lib/server/provider-config";
 import {
   beginTranscription,
   finishTranscription,
@@ -52,15 +56,15 @@ export async function POST(
       requestId,
       expectedVersion,
     });
+    await initializeServerProviderConfig();
     const settings = await getPublicDiscussionSettings();
     const providerId = settings.asrProviderId;
     if (!providerId || providerId === "browser-native") {
       throw new PublicDiscussionError("ASR_NOT_CONFIGURED", "服务器尚未配置可用的语音识别服务。", 503);
     }
-    const registry = ASR_PROVIDERS[providerId as keyof typeof ASR_PROVIDERS];
     const result = await transcribeAudio({
       providerId: providerId as ASRProviderId,
-      modelId: settings.asrModelId ?? registry?.defaultModelId,
+      modelId: resolveASRModel(providerId, settings.asrModelId),
       language: settings.asrLanguage,
       apiKey: resolveASRApiKey(providerId),
       baseUrl: resolveASRBaseUrl(providerId),
@@ -73,12 +77,14 @@ export async function POST(
       sessionId: generation.sessionId,
       generationVersion: generation.generationVersion,
       success: Boolean(text),
+      text,
     });
     if (!text) return Response.json({ code: "NO_SPEECH", message: "没有识别到清晰语音，请重录或改用文字。", snapshot }, { status: 422 });
     return Response.json({ text, snapshot });
   } catch (error) {
+    let snapshot: Awaited<ReturnType<typeof finishTranscription>> | undefined;
     if (generation) {
-      await finishTranscription({
+      snapshot = await finishTranscription({
         courseId,
         claims: auth.claims,
         requestId,
@@ -88,9 +94,9 @@ export async function POST(
       }).catch(() => undefined);
     }
     if (error instanceof PublicDiscussionError) {
-      return Response.json({ code: error.code, message: error.message }, { status: error.status });
+      return Response.json({ code: error.code, message: error.message, snapshot }, { status: error.status });
     }
     console.error("[public-discussion] transcription failed", error);
-    return Response.json({ code: "TRANSCRIPTION_FAILED", message: "语音识别失败，请重录或改用文字。" }, { status: 502 });
+    return Response.json({ code: "TRANSCRIPTION_FAILED", message: "语音识别失败，请重新回答或改用文字。", snapshot }, { status: 502 });
   }
 }

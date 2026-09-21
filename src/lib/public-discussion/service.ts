@@ -25,9 +25,12 @@ const ACTIVE_STATUSES = [
   "AWAITING_STUDENT",
   "RECORDING",
   "TRANSCRIBING",
+  "AWAITING_RETRY",
   "AWAITING_CONFIRMATION",
   "AI_GENERATING",
   "AI_READY",
+  "AI_COMPLETION_READY",
+  "AWAITING_TEACHER_CONFIRMATION",
   "AI_FAILED",
   "AWAITING_REPLACEMENT",
   "PAUSED",
@@ -458,6 +461,18 @@ export function canApplyDiscussionAsyncResult(
     && (expected.studentId === undefined || current.currentStudentId === expected.studentId);
 }
 
+export function canStartDiscussionRecording(status: string): boolean {
+  return ["AWAITING_STUDENT", "AWAITING_RETRY", "AWAITING_CONFIRMATION"].includes(status);
+}
+
+export function discussionStatusAfterPlayback(
+  status: string,
+): "AWAITING_STUDENT" | "AWAITING_TEACHER_CONFIRMATION" | undefined {
+  if (status === "AI_READY") return "AWAITING_STUDENT";
+  if (status === "AI_COMPLETION_READY") return "AWAITING_TEACHER_CONFIRMATION";
+  return undefined;
+}
+
 async function activeSessionLocked(
   db: Prisma.TransactionClient,
   courseId: string,
@@ -634,16 +649,25 @@ async function updateSessionState(
 export async function respondToInvitation(
   input: SimpleMutationInput & { response: "accept" | "decline" },
 ): Promise<PublicDiscussionSnapshot> {
-  return updateSessionState({ ...input, action: input.response }, (row) => {
+  return updateSessionState({ ...input, action: input.response }, async (row, tx) => {
     if (input.claims.role !== "student" || row.currentStudentId !== input.claims.sub) {
       throw new PublicDiscussionError("NOT_CURRENT_STUDENT", "当前未点名你参与讨论。", 403);
     }
     if (row.status !== "INVITING") {
       throw new PublicDiscussionError("INVALID_STATE", "当前邀请已经处理。", 409);
     }
-    return input.response === "accept"
-      ? { status: "AWAITING_STUDENT" }
-      : { status: "AWAITING_REPLACEMENT" };
+    if (input.response === "decline") return { status: "AWAITING_REPLACEMENT" };
+    await tx.publicDiscussionTurn.create({
+      data: {
+        sessionId: row.id,
+        clientRequestId: `${input.requestId}:opening`,
+        sequence: (row.turns.at(-1)?.sequence ?? 0) + 1,
+        role: "ASSISTANT",
+        content: row.openingPrompt,
+        source: "SYSTEM",
+      },
+    });
+    return { status: "AI_READY" };
   });
 }
 
@@ -654,7 +678,7 @@ export async function setRecordingState(
     if (input.claims.role !== "student" || row.currentStudentId !== input.claims.sub) {
       throw new PublicDiscussionError("NOT_CURRENT_STUDENT", "当前未点名你发言。", 403);
     }
-    if (input.recording && row.status !== "AWAITING_STUDENT") {
+    if (input.recording && !canStartDiscussionRecording(row.status)) {
       throw new PublicDiscussionError("INVALID_STATE", "当前不能开始录音。", 409);
     }
     if (!input.recording && row.status !== "RECORDING") {
@@ -707,6 +731,7 @@ export async function finishTranscription(input: {
   sessionId: string;
   generationVersion: number;
   success: boolean;
+  text?: string;
 }): Promise<PublicDiscussionSnapshot> {
   const result = await runMutationTransaction(async (tx) => {
     await lockCourse(tx, input.courseId);
@@ -722,17 +747,33 @@ export async function finishTranscription(input: {
       status: "TRANSCRIBING",
       studentId: input.claims.sub!,
     })) {
-      return { row: current };
+      return { row: current, shouldGenerate: false as const };
+    }
+    const content = input.text?.trim().slice(0, 3_000) ?? "";
+    const succeeded = input.success && Boolean(content);
+    if (succeeded) {
+      await tx.publicDiscussionTurn.create({
+        data: {
+          sessionId: current.id,
+          studentId: input.claims.sub,
+          clientRequestId: `${input.requestId}:transcript:${input.generationVersion}`,
+          sequence: (current.turns.at(-1)?.sequence ?? 0) + 1,
+          role: "STUDENT",
+          content,
+          source: "VOICE",
+        },
+      });
     }
     const updated = await tx.publicDiscussionSession.update({
       where: { id: current.id },
       data: {
-        status: input.success ? "AWAITING_CONFIRMATION" : "AWAITING_STUDENT",
+        status: succeeded ? "AI_GENERATING" : "AWAITING_RETRY",
+        ...(succeeded ? { roundCount: { increment: 1 } } : {}),
         version: { increment: 1 },
       },
       include: sessionInclude,
     });
-    const action = input.success ? "transcription-ready" : "transcription-failed";
+    const action = succeeded ? "student-answer" : "transcription-failed";
     const event = await writeDomainEvent(tx, {
       courseId: input.courseId,
       actorId: input.claims.sub!,
@@ -742,7 +783,7 @@ export async function finishTranscription(input: {
       version: updated.version,
       status: updated.status,
     });
-    return { row: updated, event, action };
+    return { row: updated, event, action, shouldGenerate: succeeded };
   });
   if (result.event && result.action) {
     await publishDiscussionEvent(input.courseId, result.event, {
@@ -752,43 +793,81 @@ export async function finishTranscription(input: {
       status: result.row.status,
     });
   }
+  if (result.shouldGenerate) {
+    return completeAssistantGeneration({
+      courseId: input.courseId,
+      claims: input.claims,
+      sessionId: result.row.id,
+      expectedGenerationVersion: result.row.version,
+      requestId: `${input.requestId}:voice-answer`,
+      studentId: input.claims.sub!,
+    });
+  }
   return snapshotFromRow(result.row, input.claims);
 }
 
-function parseAssistantReply(raw: string): string {
+type AssistantDecision = {
+  reply: string;
+  decision: "continue" | "recommend_end";
+};
+
+export function parseAssistantDecision(
+  raw: string,
+  roundCount: number,
+  forceContinue = false,
+): AssistantDecision {
+  let reply = raw.trim().slice(0, 3_000);
+  let decision: AssistantDecision["decision"] = "continue";
   try {
     const match = raw.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(match?.[0] ?? "{}") as { reply?: unknown };
+    const parsed = JSON.parse(match?.[0] ?? "{}") as { reply?: unknown; decision?: unknown };
     if (typeof parsed.reply === "string" && parsed.reply.trim()) {
-      return parsed.reply.trim().slice(0, 3_000);
+      reply = parsed.reply.trim().slice(0, 3_000);
+    }
+    if (parsed.decision === "recommend_end") {
+      decision = "recommend_end";
     }
   } catch {
     // Accept plain-text provider responses below.
   }
-  return raw.trim().slice(0, 3_000);
+  if (forceContinue) decision = "continue";
+  if (roundCount >= 3) decision = "recommend_end";
+  return { reply, decision };
 }
 
-async function generateAssistantReply(row: SessionRow): Promise<string> {
-  const settings = await getPublicDiscussionSettings();
-  const { model, thinkingConfig } = await resolveModel({
+async function generateAssistantReply(
+  row: SessionRow,
+  options: { forceContinue?: boolean } = {},
+): Promise<AssistantDecision> {
+  const [settings, course] = await Promise.all([
+    getPublicDiscussionSettings(),
+    getCourse(row.classroomInstanceId),
+  ]);
+  const { model } = await resolveModel({
     modelString: settings.modelString,
     stage: "quiz-grade",
   });
   const mode = modeFromDb(row.mode);
+  const point = course?.content.knowledgePoints.find((item) => item.id === row.knowledgePointId);
   const transcript = row.turns.slice(-10).map((turn) => {
     const label = turn.role === "STUDENT" ? "学生" : turn.role === "TEACHER" ? "教师" : "AI";
     return `${label}：${turn.content}`;
   }).join("\n");
+  const decisionRule = options.forceContinue
+    ? "教师已决定继续追问。必须返回 continue，并针对尚可深化之处提出一个新的短问题。"
+    : row.roundCount >= 3
+      ? "这是第3轮回答，已达到轮次上限。必须返回 recommend_end，用简短肯定和概念总结收尾，不得再提出问题。"
+      : "如果学生已准确解释核心概念，并给出与问题匹配的充分理由或例证，返回 recommend_end，用简短肯定和概念总结收尾且不要再提问；否则返回 continue，只追问一个最关键的理解缺口。";
   const result = await callLLM({
     model,
     system: mode === "inquiry"
-      ? "你正在主持一场面向全班的公开追问。每轮只回应一个核心点，然后提出一个短问题，依次帮助学生解释概念、举出例子、迁移应用。尊重学生，不公开成绩，不直接宣布全班已经掌握。回答适合口头播报，控制在180字内。严格返回 JSON：{\"reply\":\"回应和下一问\"}。"
-      : "你正在主持一场面向全班的公开辩论。先准确复述学生观点，再提出反例或检验其论据，帮助全班区分事实、立场和适用条件。尊重学生，不公开成绩。回答适合口头播报，控制在180字内。严格返回 JSON：{\"reply\":\"回应和下一问\"}。",
-    prompt: `讨论主题：${row.topic}\n开场问题：${row.openingPrompt}\n当前轮次：${row.roundCount}\n公开对话：\n${transcript}`,
-  }, "quiz-grade", undefined, thinkingConfig);
-  const reply = parseAssistantReply(result.text);
-  if (!reply) throw new Error("AI returned an empty public-discussion reply");
-  return reply;
+      ? `你正在主持一场面向全班的公开追问。根据知识点目标判断当前学生是否已理解；继续时先回应一个核心点，再提出一个短问题，依次帮助学生解释概念、举出例子、迁移应用。${decisionRule}尊重学生，不公开成绩，不声称全班已经掌握。回答适合口头播报，控制在180字内。严格返回 JSON：{\"reply\":\"口头回应\",\"decision\":\"continue或recommend_end\"}。`
+      : `你正在主持一场面向全班的公开辩论。根据知识点目标判断当前学生是否已形成有依据的观点；继续时先准确复述学生观点，再提出一个反例或检验问题。${decisionRule}尊重学生，不公开成绩，不声称全班已经掌握。回答适合口头播报，控制在180字内。严格返回 JSON：{\"reply\":\"口头回应\",\"decision\":\"continue或recommend_end\"}。`,
+    prompt: `知识点：${point?.name ?? row.topic}\n知识点说明：${point?.description || "未提供，请结合主题与开场问题判断"}\n讨论主题：${row.topic}\n开场问题：${row.openingPrompt}\n当前学生回答轮次：${row.roundCount}\n公开对话：\n${transcript}`,
+  }, "quiz-grade");
+  const decision = parseAssistantDecision(result.text, row.roundCount, options.forceContinue);
+  if (!decision.reply) throw new Error("AI returned an empty public-discussion reply");
+  return decision;
 }
 
 async function completeAssistantGeneration(input: {
@@ -798,15 +877,16 @@ async function completeAssistantGeneration(input: {
   expectedGenerationVersion: number;
   requestId: string;
   studentId: string;
+  forceContinue?: boolean;
 }): Promise<PublicDiscussionSnapshot> {
   const source = await prisma.publicDiscussionSession.findUnique({
     where: { id: input.sessionId },
     include: sessionInclude,
   });
   if (!source) throw new PublicDiscussionError("NO_ACTIVE_SESSION", "讨论已经结束。", 404);
-  let reply: string;
+  let assistant: AssistantDecision;
   try {
-    reply = await generateAssistantReply(source);
+    assistant = await generateAssistantReply(source, { forceContinue: input.forceContinue });
   } catch (error) {
     console.error("[public-discussion] assistant reply failed", error);
     const failed = await runMutationTransaction(async (tx) => {
@@ -870,20 +950,24 @@ async function completeAssistantGeneration(input: {
         clientRequestId: `${input.requestId}:assistant:${input.expectedGenerationVersion}`,
         sequence,
         role: "ASSISTANT",
-        content: reply,
+        content: assistant.reply,
         source: "SYSTEM",
       },
     });
+    const completionRecommended = assistant.decision === "recommend_end";
     const updated = await tx.publicDiscussionSession.update({
       where: { id: current.id },
-      data: { status: "AI_READY", version: { increment: 1 } },
+      data: {
+        status: completionRecommended ? "AI_COMPLETION_READY" : "AI_READY",
+        version: { increment: 1 },
+      },
       include: sessionInclude,
     });
     const event = await writeDomainEvent(tx, {
       courseId: input.courseId,
       actorId: input.claims.sub!,
       requestId: `${input.requestId}:ai:${input.expectedGenerationVersion}`,
-      action: "ai-ready",
+      action: completionRecommended ? "ai-completion-ready" : "ai-ready",
       sessionId: updated.id,
       version: updated.version,
       status: updated.status,
@@ -892,7 +976,7 @@ async function completeAssistantGeneration(input: {
   });
   if (result.event) {
     await publishDiscussionEvent(input.courseId, result.event, {
-      action: "ai-ready",
+      action: assistant.decision === "recommend_end" ? "ai-completion-ready" : "ai-ready",
       sessionId: result.row.id,
       version: result.row.version,
       status: result.row.status,
@@ -922,7 +1006,7 @@ export async function submitStudentAnswer(input: SimpleMutationInput & {
     if (input.claims.role !== "student" || row.currentStudentId !== input.claims.sub) {
       throw new PublicDiscussionError("NOT_CURRENT_STUDENT", "当前未点名你发言。", 403);
     }
-    if (!["AWAITING_STUDENT", "AWAITING_CONFIRMATION"].includes(row.status)) {
+    if (!["AWAITING_STUDENT", "AWAITING_RETRY", "AWAITING_CONFIRMATION"].includes(row.status)) {
       throw new PublicDiscussionError("INVALID_STATE", "当前不能提交回答。", 409);
     }
     const content = input.content.trim().slice(0, 3_000);
@@ -1019,6 +1103,55 @@ export async function retryAssistantReply(input: SimpleMutationInput): Promise<P
   });
 }
 
+export async function continueDiscussionQuestioning(
+  input: SimpleMutationInput,
+): Promise<PublicDiscussionSnapshot> {
+  const prepared = await runMutationTransaction(async (tx) => {
+    await lockCourse(tx, input.courseId);
+    const replay = await idempotentSnapshot(tx, input.requestId, input.courseId, input.claims);
+    if (replay) return { replay };
+    const row = await activeSessionLocked(tx, input.courseId);
+    validateVersion(row.version, input.expectedVersion);
+    if (row.status !== "AWAITING_TEACHER_CONFIRMATION" || !row.currentStudentId) {
+      throw new PublicDiscussionError("INVALID_STATE", "当前没有等待教师决定的 AI 建议。", 409);
+    }
+    if (row.roundCount >= 3) {
+      throw new PublicDiscussionError("ROUND_LIMIT_REACHED", "本次对话已达到三轮上限，请结束并生成总结。", 409);
+    }
+    const updated = await tx.publicDiscussionSession.update({
+      where: { id: row.id },
+      data: { status: "AI_GENERATING", version: { increment: 1 } },
+      include: sessionInclude,
+    });
+    const event = await writeDomainEvent(tx, {
+      courseId: input.courseId,
+      actorId: input.claims.sub!,
+      requestId: input.requestId,
+      action: "continue-questioning",
+      sessionId: updated.id,
+      version: updated.version,
+      status: updated.status,
+    });
+    return { row: updated, event };
+  });
+  if ("replay" in prepared) return prepared.replay!;
+  await publishDiscussionEvent(input.courseId, prepared.event!, {
+    action: "continue-questioning",
+    sessionId: prepared.row!.id,
+    version: prepared.row!.version,
+    status: prepared.row!.status,
+  });
+  return completeAssistantGeneration({
+    courseId: input.courseId,
+    claims: input.claims,
+    sessionId: prepared.row!.id,
+    expectedGenerationVersion: prepared.row!.version,
+    requestId: input.requestId,
+    studentId: prepared.row!.currentStudentId!,
+    forceContinue: true,
+  });
+}
+
 export async function inviteDiscussionStudent(input: SimpleMutationInput & {
   studentId: string;
 }): Promise<PublicDiscussionSnapshot> {
@@ -1092,7 +1225,8 @@ export async function completeDiscussionPlayback(
   input: SimpleMutationInput & { clientId: string },
 ): Promise<PublicDiscussionSnapshot> {
   return updateSessionState({ ...input, action: "complete-playback", soundClientId: input.clientId }, (row) => {
-    if (row.status !== "AI_READY") {
+    const nextStatus = discussionStatusAfterPlayback(row.status);
+    if (!nextStatus) {
       throw new PublicDiscussionError("INVALID_STATE", "当前没有等待播放的 AI 回答。", 409);
     }
     const now = Date.now();
@@ -1104,7 +1238,9 @@ export async function completeDiscussionPlayback(
     ) {
       throw new PublicDiscussionError("SOUND_LEASE_REQUIRED", "此教师页面没有课堂声音控制权。", 409);
     }
-    return { status: "AWAITING_STUDENT" };
+    return {
+      status: nextStatus,
+    };
   });
 }
 
