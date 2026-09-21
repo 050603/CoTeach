@@ -58,6 +58,8 @@
 .controls .stageActions select { width: min(180px, 16vw); max-width: min(180px, 16vw); }
 .controls .stageControls select { width: min(160px, 14vw); max-width: min(160px, 14vw); }
 .views { display: flex; flex: 0 0 auto; gap: 4px; }
+.views .discussionEntry:not([aria-pressed="true"]) { color: #075985; border-color: #67e8f9; background: #ecfeff; }
+.views .discussionEntry:not([aria-pressed="true"]):hover { background: #cffafe; }
 .views button[aria-pressed="true"] { color: #fff; background: #344a6a; border-color: #344a6a; }
 .stageActions { display: flex; flex: 0 0 auto; align-items: center; min-width: 0; max-width: none; flex-wrap: nowrap; gap: 4px; }
 .stageActions:empty { display: none; }

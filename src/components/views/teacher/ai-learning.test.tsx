@@ -68,6 +68,7 @@ describe("AiLearningTeacherView", () => {
     expect(screen.queryByText("有学习记录的学生")).toBeNull();
     expect(screen.queryByText(/存在先决缺口/)).toBeNull();
     expect(screen.queryByText(/已学额外资源/)).toBeNull();
+    expect(screen.queryByRole("heading", { name: "全班公开讨论" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "查看张三的学习轨迹" }));
     expect(screen.getByRole("tab", { name: "学习轨迹" }).getAttribute("aria-selected")).toBe("true");

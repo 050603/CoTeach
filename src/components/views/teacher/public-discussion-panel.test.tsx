@@ -94,7 +94,8 @@ describe("teacher public discussion voice loop", () => {
 
     expect(await screen.findByText("全屏讨论控制台")).toBeVisible();
     expect(screen.getByRole("complementary", { name: "教师讨论控制" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: /语音识别设置/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /语音识别设置/ }));
+    expect(screen.getByLabelText("服务端 ASR")).toBeVisible();
   });
 
   it("plays an AI turn once and advances only after playback completes", async () => {

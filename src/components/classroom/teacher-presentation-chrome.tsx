@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode, Ref } from "react";
-import { BarChart3, ChevronLeft, ChevronRight, Lightbulb, Minimize2, MonitorUp, PanelTop, Users, Wrench } from "lucide-react";
+import { BarChart3, ChevronLeft, ChevronRight, Lightbulb, MessagesSquare, Minimize2, MonitorUp, PanelTop, Users, Wrench } from "lucide-react";
 import type { Course } from "@/lib/session/types";
 import styles from "./teacher-presentation.module.css";
 
@@ -26,9 +26,10 @@ export function TeacherPresentationHeader({ course, degraded, onlineCount, onExi
   </header>;
 }
 
-export function TeacherPresentationControls({ course, view, details, onView, onWorkspace, onDetailsClose, onStage, onTools, onAdvice, onEnd, stageActionsRef }: {
-  course: Course; view: "teaching" | "analytics"; details: boolean;
+export function TeacherPresentationControls({ course, view, details, discussion, discussionAvailable, onView, onDiscussion, onWorkspace, onDetailsClose, onStage, onTools, onAdvice, onEnd, stageActionsRef }: {
+  course: Course; view: "teaching" | "analytics"; details: boolean; discussion: boolean; discussionAvailable: boolean;
   onView: (view: "teaching" | "analytics") => void; onWorkspace: () => void; onDetailsClose: () => void;
+  onDiscussion: () => void;
   onStage: (index: number) => void; onTools: () => void; onAdvice: () => void; onEnd: () => void;
   stageActionsRef?: Ref<HTMLDivElement>;
 }) {
@@ -36,8 +37,9 @@ export function TeacherPresentationControls({ course, view, details, onView, onW
   return <footer aria-label="全屏课堂操作栏" className={styles.controls} data-layout="single-row">
     <div className={styles.controlsLeft} role="group" aria-label="左侧展示操作">
       {!isReflection ? <div className={styles.views} aria-label="大屏视图">
-        <button aria-pressed={view === "teaching"} onClick={() => onView("teaching")} type="button"><MonitorUp size={20} />授课展示</button>
-        <button aria-pressed={view === "analytics"} onClick={() => onView("analytics")} type="button"><BarChart3 size={20} />班级学情</button>
+        <button aria-pressed={!discussion && view === "teaching"} onClick={() => onView("teaching")} type="button"><MonitorUp size={20} />授课展示</button>
+        <button aria-pressed={!discussion && view === "analytics"} onClick={() => onView("analytics")} type="button"><BarChart3 size={20} />班级学情</button>
+        {discussionAvailable ? <button aria-pressed={discussion} className={styles.discussionEntry} onClick={onDiscussion} type="button"><MessagesSquare size={20} />AI 公开讨论</button> : null}
       </div> : null}
       <div className={styles.stageActions} ref={stageActionsRef} role="group" aria-label="当前阶段常用操作" />
     </div>

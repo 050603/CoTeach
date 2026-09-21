@@ -375,7 +375,19 @@ export function PublicDiscussionTeacherPanel({
             <p className={cn("mt-1 text-xs leading-5", immersive ? "text-stone-300" : "text-stone-500")}>选择共性问题并点名学生，由学生设备收音，教师端统一播放 AI 回应。</p>
           </div>
         </div>
-        {!immersive ? <button aria-expanded={showSettings} className="flex min-h-11 items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 text-xs font-bold text-stone-700 hover:bg-stone-50" onClick={() => setShowSettings((value) => !value)} type="button"><Settings2 size={15} />语音识别设置<ChevronDown className={cn("transition", showSettings && "rotate-180")} size={14} /></button> : null}
+        <button
+          aria-expanded={showSettings}
+          className={cn(
+            "flex min-h-11 items-center gap-1.5 rounded-lg border px-3 text-xs font-bold transition",
+            immersive
+              ? "border-stone-700 bg-stone-900 text-stone-100 hover:bg-stone-800"
+              : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50",
+          )}
+          onClick={() => setShowSettings((value) => !value)}
+          type="button"
+        >
+          <Settings2 size={15} />语音识别设置<ChevronDown className={cn("transition", showSettings && "rotate-180")} size={14} />
+        </button>
       </header>
 
       {showSettings && settings ? (

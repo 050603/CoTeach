@@ -30,6 +30,9 @@ vi.mock("@/components/dashboard-shell", () => ({
 vi.mock("@/components/views/teacher/stage-dispatcher", () => ({
   TeacherStageView: ({ presentation, immersive }: { presentation: TeacherPresentationMode; immersive: boolean }) => <div data-testid="stage" data-presentation={presentation} data-immersive={immersive}><input aria-label="阶段编辑草稿" defaultValue="" />{presentation === "workspace" ? <button type="button">原有阶段操作</button> : null}</div>,
 }));
+vi.mock("@/components/views/teacher/public-discussion-workspace", () => ({
+  PublicDiscussionTeacherWorkspace: ({ hidden }: { hidden: boolean }) => <section aria-label="AI 公开讨论工作台" hidden={hidden}>讨论工作台内容<input aria-label="讨论临时记录" defaultValue="" /></section>,
+}));
 vi.mock("@/components/classroom/teacher-classroom-pulse", () => ({ TeacherClassroomPulse: () => null }));
 vi.mock("@/components/classroom/teacher-stage-dashboard", () => ({ TeacherStageDashboard: () => null, RealtimeTeachingActions: () => <div>当前教学建议</div> }));
 vi.mock("@/components/classroom/teacher-presentation-analytics", () => ({
@@ -105,6 +108,38 @@ describe("teacher full-screen classroom integration", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.getByTestId("shell").dataset.immersive).toBe("false");
     expect(mocks.updateCourse).not.toHaveBeenCalled();
+  });
+
+  it("opens public discussion from its own footer entry and keeps it separate from classroom operations", () => {
+    mocks.course = { ...makeCourse(), currentStageIndex: 1 };
+    render(<TeachClassroomPage />);
+    fireEvent.change(screen.getByLabelText("阶段编辑草稿"), { target: { value: "保留课堂操作草稿" } });
+    enterPresentation();
+
+    const discussionButton = screen.getByRole("button", { name: "AI 公开讨论" });
+    fireEvent.click(discussionButton);
+    expect(discussionButton).toHaveAttribute("aria-pressed", "true");
+    const discussionWorkspace = screen.getByRole("region", { name: "AI 公开讨论工作台" });
+    expect(discussionWorkspace).not.toHaveAttribute("hidden");
+    expect(screen.getByTestId("stage").closest("section")).toHaveAttribute("hidden");
+    fireEvent.change(screen.getByLabelText("讨论临时记录"), { target: { value: "保留讨论状态" } });
+    expect(screen.queryByRole("button", { name: "原有阶段操作" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "课堂操作" }));
+    expect(screen.getByTestId("stage").dataset.presentation).toBe("workspace");
+    expect(screen.getByTestId("stage").closest("section")).not.toHaveAttribute("hidden");
+    expect((screen.getByLabelText("阶段编辑草稿") as HTMLInputElement).value).toBe("保留课堂操作草稿");
+    expect(discussionWorkspace).toHaveAttribute("hidden");
+
+    fireEvent.click(screen.getByRole("button", { name: "AI 公开讨论" }));
+    expect((screen.getByLabelText("讨论临时记录") as HTMLInputElement).value).toBe("保留讨论状态");
+    expect(screen.getByTestId("stage").closest("section")).toHaveAttribute("hidden");
+  });
+
+  it("only shows the public discussion entry during knowledge teaching", () => {
+    render(<TeachClassroomPage />);
+    enterPresentation();
+    expect(screen.queryByRole("button", { name: "AI 公开讨论" })).toBeNull();
   });
 
   it("keeps reflection in a single-row footer without teaching and analytics toggles", () => {

@@ -23,6 +23,7 @@ import { RealtimeTeachingActions, TeacherStageDashboard } from "@/components/cla
 import { TeacherPresentationAnalytics } from "@/components/classroom/teacher-presentation-analytics";
 import { TeacherPresentationControls, TeacherPresentationHeader } from "@/components/classroom/teacher-presentation-chrome";
 import { TeacherPresentationActionsProvider } from "@/components/classroom/teacher-presentation-actions";
+import { PublicDiscussionTeacherWorkspace } from "@/components/views/teacher/public-discussion-workspace";
 import presentationStyles from "@/components/classroom/teacher-presentation.module.css";
 import { useTeacherPresentation } from "@/hooks/use-teacher-presentation";
 import { TeacherClassroomPulse } from "@/components/classroom/teacher-classroom-pulse";
@@ -84,6 +85,7 @@ export default function TeachClassroomPage() {
   const presentation = useTeacherPresentation();
   const [presentationView, setPresentationView] = useState<"teaching" | "analytics">("teaching");
   const [presentationDetails, setPresentationDetails] = useState(false);
+  const [presentationDiscussion, setPresentationDiscussion] = useState(false);
   const [stageActionsTarget, setStageActionsTarget] = useState<HTMLDivElement | null>(null);
   const [presentationTool, setPresentationTool] = useState<"timer" | "advice" | "tools" | "invite" | "students" | null>(null);
   const displayScope = `${course?.id}:${course?.currentStageIndex}:${presentation.active}:${presentationView}`;
@@ -91,6 +93,7 @@ export default function TeachClassroomPage() {
   if (appliedDisplayScope !== displayScope) {
     setAppliedDisplayScope(displayScope);
     setPresentationDetails(false);
+    setPresentationDiscussion(false);
     setPresentationTool(null);
   }
   const showcaseController = useShowcasePresentation(
@@ -179,6 +182,7 @@ export default function TeachClassroomPage() {
     setToolPanel(null);
     setDashboardFocus(undefined);
     setPresentationDetails(false);
+    setPresentationDiscussion(false);
     setPresentationTool(null);
     setPresentationView("teaching");
     void presentation.enter();
@@ -298,7 +302,7 @@ export default function TeachClassroomPage() {
   ) : null;
 
   return (
-    <TeacherPresentationActionsProvider target={presentation.active ? stageActionsTarget : null}>
+    <TeacherPresentationActionsProvider target={presentation.active && !presentationDiscussion ? stageActionsTarget : null}>
     <DashboardShell
       role="teacher"
       userName={user.name}
@@ -442,7 +446,11 @@ export default function TeachClassroomPage() {
             />
           ) : null}
 
-          {currentStage && currentStage.key !== "reflection" && presentation.active && presentationView === "analytics" && !presentationDetails ? <TeacherPresentationAnalytics course={course} stageKey={currentStage.key} showcaseData={showcaseController.data} degraded={presence.degraded} onDetails={() => setPresentationDetails(true)} /> : null}
+          {currentStage?.key === "ai-learning" && presentation.active ? (
+            <PublicDiscussionTeacherWorkspace course={course} hidden={!presentationDiscussion} />
+          ) : null}
+
+          {currentStage && currentStage.key !== "reflection" && presentation.active && !presentationDiscussion && presentationView === "analytics" && !presentationDetails ? <TeacherPresentationAnalytics course={course} stageKey={currentStage.key} showcaseData={showcaseController.data} degraded={presence.degraded} onDetails={() => setPresentationDetails(true)} /> : null}
 
           {currentStage ? (
             <section
@@ -454,7 +462,7 @@ export default function TeachClassroomPage() {
                 ),
               )}
               data-details={presentation.active && presentationDetails}
-              hidden={currentStage.key !== "reflection" && presentation.active && presentationView === "analytics" && !presentationDetails}
+              hidden={presentationDiscussion || (currentStage.key !== "reflection" && presentation.active && presentationView === "analytics" && !presentationDetails)}
               key={currentStage.key}
             >
               <TeacherStageView
@@ -511,9 +519,12 @@ export default function TeachClassroomPage() {
         course={course}
         view={presentationView}
         details={presentationDetails}
-        onView={(view) => { setPresentationDetails(false); setDashboardFocus(undefined); setPresentationView(view); }}
-        onWorkspace={() => setPresentationDetails(true)}
-        onDetailsClose={() => { setPresentationDetails(false); setDashboardFocus(undefined); }}
+        discussion={presentationDiscussion}
+        discussionAvailable={currentStage?.key === "ai-learning"}
+        onView={(view) => { setPresentationDetails(false); setPresentationDiscussion(false); setDashboardFocus(undefined); setPresentationView(view); }}
+        onDiscussion={() => { setPresentationDetails(false); setPresentationDiscussion(true); setDashboardFocus(undefined); }}
+        onWorkspace={() => { setPresentationDiscussion(false); setPresentationDetails(true); }}
+        onDetailsClose={() => { setPresentationDetails(false); setPresentationDiscussion(false); setDashboardFocus(undefined); }}
         onStage={requestStage}
         onTools={() => setPresentationTool("tools")}
         onAdvice={() => setPresentationTool("advice")}
