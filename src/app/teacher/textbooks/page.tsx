@@ -101,7 +101,6 @@ export default function TeacherTextbooksPage() {
     return {
       active: active.length,
       ready: active.filter(item => statusView(item).group === "ready").length,
-      processing: active.filter(item => ["working", "waiting"].includes(statusView(item).group)).length,
     };
   }, [items]);
 
@@ -152,40 +151,40 @@ export default function TeacherTextbooksPage() {
   return <TeacherPlatformPage>
     <TeacherPlatformHeader active="textbooks" />
     <div className={`pbl-workspace-content ${styles.page}`}>
-      <header className={`pbl-page-heading ${styles.heading}`}>
+      <header className={`pbl-page-heading pbl-library-heading pbl-teacher-dashboard-heading ${styles.heading}`}>
         <div className={styles.headingCopy}>
           <p className={styles.eyebrow}>教学资源</p>
           <h1>教材库</h1>
           <p>集中管理教材版本、章节结构与知识依据，解析完成后可在不同课程中直接复用。</p>
         </div>
-        <div className={styles.uploadArea}>
-          <label className={styles.uploadControl}>
-            <span className={styles.primaryButton} aria-hidden="true">
-              {uploading ? <LoaderCircle className="animate-spin" size={17} /> : <FileUp size={17} />}
-              {uploading ? "正在上传…" : "导入教材"}
-            </span>
-            <input
-              aria-label="上传 DOCX 教材"
-              accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              className="sr-only"
-              disabled={uploading}
-              type="file"
-              onChange={event => {
-                const file = event.target.files?.[0];
-                event.target.value = "";
-                if (file) void upload(file);
-              }}
-            />
-          </label>
-          <small>支持 DOCX，单文件不超过 80 MiB</small>
+        <div className="pbl-classes-heading-actions">
+          <dl className="pbl-heading-metrics" aria-label="教材库概况">
+            <div><dt>在库教材</dt><dd>{loading ? "—" : librarySummary.active}</dd></div>
+            <div><dt>已就绪</dt><dd>{loading ? "—" : librarySummary.ready}</dd></div>
+          </dl>
+          <div className={styles.uploadArea}>
+            <label className={styles.uploadControl}>
+              <span className={styles.primaryButton} aria-hidden="true">
+                {uploading ? <LoaderCircle className="animate-spin" size={17} /> : <FileUp size={17} />}
+                {uploading ? "正在上传…" : "导入教材"}
+              </span>
+              <input
+                aria-label="上传 DOCX 教材"
+                accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                className="sr-only"
+                disabled={uploading}
+                type="file"
+                onChange={event => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void upload(file);
+                }}
+              />
+            </label>
+            <small>支持 DOCX，单文件不超过 80 MiB</small>
+          </div>
         </div>
       </header>
-
-      <dl className={styles.librarySummary} aria-label="教材库概况">
-        <div><dt>在库教材</dt><dd>{loading ? "—" : librarySummary.active}</dd><small>当前可管理的教材</small></div>
-        <div><dt>已就绪</dt><dd>{loading ? "—" : librarySummary.ready}</dd><small>章节与知识索引可用于课程</small></div>
-        <div><dt>处理中</dt><dd>{loading ? "—" : librarySummary.processing}</dd><small>解析进度会自动更新</small></div>
-      </dl>
 
       <div className={styles.toolbar}>
         <label className={styles.search}>

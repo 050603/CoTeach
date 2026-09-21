@@ -58,6 +58,13 @@ describe("TeacherTextbooksPage", () => {
     render(<TeacherTextbooksPage />);
 
     expect(await screen.findByRole("heading", { name: "人工智能学科教师素养提升" })).toBeInTheDocument();
+    const summary = screen.getByLabelText("教材库概况");
+    expect(summary.querySelectorAll("dt")).toHaveLength(2);
+    expect(within(summary).getByText("在库教材")).toBeInTheDocument();
+    expect(within(summary).getByText("已就绪")).toBeInTheDocument();
+    expect(within(summary).getByText("2")).toBeInTheDocument();
+    expect(within(summary).getByText("1")).toBeInTheDocument();
+    expect(within(summary).queryByText("处理中")).not.toBeInTheDocument();
     expect(screen.getAllByText("可用于课程")).toHaveLength(2);
     expect(screen.getByText("章节、图谱和检索索引已就绪")).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "查看教材" })[0]).toHaveAttribute("href", "/teacher/textbooks/book-1");

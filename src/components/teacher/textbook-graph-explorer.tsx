@@ -67,6 +67,7 @@ function compactTitle(value: string, max = 18) {
 }
 
 type TextbookGraphExplorerProps = {
+  className?: string;
   concepts: TextbookConcept[];
   relations: TextbookRelation[];
   sections: TextbookSection[];
@@ -562,9 +563,11 @@ export function TextbookGraphExplorer(props: TextbookGraphExplorerProps) {
     };
   }, [fullscreen]);
 
-  if (!props.concepts.length) return <div className={styles.empty}>左侧目录当前已全部折叠，展开章节即可恢复对应知识节点。</div>;
+  const rootClassName = [styles.explorer, props.className].filter(Boolean).join(" ");
 
-  const explorer = <div className={styles.explorer} data-fullscreen={fullscreen || undefined}>
+  if (!props.concepts.length) return <div className={[styles.empty, props.className].filter(Boolean).join(" ")}>左侧目录当前已全部折叠，展开章节即可恢复对应知识节点。</div>;
+
+  const explorer = <div className={rootClassName} data-fullscreen={fullscreen || undefined}>
     <GraphCanvas {...props} fullscreen={fullscreen} onToggleFullscreen={() => setFullscreen(value => !value)} />
   </div>;
   return fullscreen && typeof document !== "undefined" ? createPortal(explorer, document.body) : explorer;

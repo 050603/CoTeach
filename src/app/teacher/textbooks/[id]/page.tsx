@@ -275,6 +275,7 @@ export default function TeacherTextbookDetailPage() {
             <span className={styles.graphToolbarHint}>选择章节聚焦一组知识；折叠目录则同步隐藏该分支</span>
           </div>
           <TextbookGraphExplorer
+            className={styles.graphExplorer}
             concepts={concepts}
             relations={sectionRelations}
             sections={sections}
