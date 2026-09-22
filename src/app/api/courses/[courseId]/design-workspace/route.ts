@@ -34,7 +34,6 @@ import { buildNewSystemAiTeachingOutline } from "@/lib/classroom/new-system-cour
 import { contentGenerationJobs, designGenerationJobs } from "@/lib/course-generation/job-storage";
 import {
   estimatePersistedCourseGenerationSeconds,
-  resetCourseGenerationCheckpoints,
   runQueuedCourseGenerationToCompletion,
   type PersistedCourseGenerationRequest,
 } from "@/lib/course-generation/job-runner";
@@ -417,7 +416,6 @@ async function queueClassroomCandidate(
       affectedOutlineIds: affected.map((outline) => outline.id),
     },
   };
-  await resetCourseGenerationCheckpoints(job.id);
   const estimate = estimatePersistedCourseGenerationSeconds({
     totalScenes: affected.length,
     adaptiveBranchCount: 0,
@@ -426,26 +424,30 @@ async function queueClassroomCandidate(
     enableTTS: request.enableTTS,
   });
   try {
-    await contentGenerationJobs.update({
+    await contentGenerationJobs.replace({
       where: { id: job.id, version: job.version, status: job.status },
+      checkpointPolicy: "all",
       data: {
-      status: "queued",
-      step: "queued",
-      progress: 0,
-      message: `等待更新 ${sectionIds.length} 个知识小节`,
-      scenesGenerated: 0,
-      totalScenes: affected.length,
-      estimatedRemainingSeconds: estimate,
-      tokenUsage: 0,
-      tokenUsageCalls: 0,
-      request: request as unknown as Prisma.InputJsonValue,
-      result: Prisma.JsonNull,
-      qualityReport: Prisma.JsonNull,
-      events: [],
-      error: null,
-      startedAt: null,
-      completedAt: null,
-      lastHeartbeatAt: null,
+        status: "queued",
+        step: "queued",
+        progress: 0,
+        message: `等待更新 ${sectionIds.length} 个知识小节`,
+        scenesGenerated: 0,
+        totalScenes: affected.length,
+        estimatedRemainingSeconds: estimate,
+        tokenUsage: 0,
+        tokenUsageCalls: 0,
+        request: request as unknown as Prisma.InputJsonValue,
+        result: Prisma.JsonNull,
+        qualityReport: Prisma.JsonNull,
+        events: [],
+        error: null,
+        startedAt: null,
+        completedAt: null,
+        lastHeartbeatAt: null,
+        executionId: null,
+        executionOwner: null,
+        leaseExpiresAt: null,
         version: { increment: 1 },
       },
     });

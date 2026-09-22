@@ -40,19 +40,24 @@ export function buildAssessmentContext(
     && speech.some(({ text }) => text.trim().length > 0)
   ));
   const local = eligible.filter(({ outline }) => sectionIdentity(outline) === sectionIdentity(assessment));
-  let evidence = local;
   const requiredUnits = new Set([
     ...(assessment.teachingBrief?.understandingCriteria?.supportingUnitIds ?? []),
     ...(assessment.assessmentUnitIds ?? []),
     ...(assessment.assessmentTargets ?? []).map((target) => target.unitId),
     ...(assessment.assessmentUnitMap ?? []).map((target) => target.unitId),
   ].filter((unit) => unit.trim().length > 0));
-  if (evidence.length === 0) {
-    if (requiredUnits.size === 0) throw missingDependency(assessment);
-    evidence = eligible.filter(({ outline }) => (
-      outline.teachingUnitIds?.some((unit) => requiredUnits.has(unit))
-    ));
-  }
+  // A quiz can assess both the current section and explicitly referenced
+  // teaching from an earlier section. Keep all local teaching, then add only
+  // prior pages whose declared teaching units are required by this quiz.
+  // Previously, finding any local page prevented the cross-section evidence
+  // from being considered, so a valid mixed quiz was reported as uncovered.
+  const referencedPrior = requiredUnits.size === 0
+    ? []
+    : eligible.filter(({ outline }) => (
+        sectionIdentity(outline) !== sectionIdentity(assessment)
+        && outline.teachingUnitIds?.some((unit) => requiredUnits.has(unit))
+      ));
+  const evidence = [...local, ...referencedPrior];
   if (evidence.length === 0) throw missingDependency(assessment);
   const coveredUnits = new Set(evidence.flatMap(({ outline }) => outline.teachingUnitIds ?? []));
   const uncoveredUnits = [...requiredUnits].filter((unit) => !coveredUnits.has(unit));

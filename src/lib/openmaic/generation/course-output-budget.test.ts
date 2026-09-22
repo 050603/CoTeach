@@ -20,7 +20,10 @@ describe('course request output budgets', () => {
     const defaults = createCourseOutputBudget({ resource: 'narration' });
     const off = createCourseOutputBudget({ resource: 'narration', thinking: { mode: 'disabled' } });
     const legacyOff = createCourseOutputBudget({ resource: 'narration', thinking: { enabled: false } });
-    expect(defaults('', '') - off('', '')).toBe(16_384);
+    // Unknown provider defaults reserve one visible-output allowance for
+    // reasoning. Narration currently has a 32K visible allowance, so the
+    // default budget is exactly one such allowance above explicit-off.
+    expect(defaults('', '') - off('', '')).toBe(32_768);
     expect(legacyOff('', '')).toBe(off('', ''));
   });
 

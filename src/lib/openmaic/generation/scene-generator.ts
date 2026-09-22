@@ -43,6 +43,7 @@ import { buildPrompt, PROMPT_IDS } from '@openmaic/lib/prompts';
 import { DEFAULT_LANGUAGE_DIRECTIVE } from './outline-generator';
 import { postProcessInteractiveHtml } from './interactive-post-processor';
 import { extractInteractiveElements } from './interactive-element-inventory';
+import { auditInteractiveHtml } from './interactive-quality';
 import {
   formatCourseVisualStyle,
   resolveCourseVisualStyle,
@@ -89,6 +90,19 @@ function withClassroomReadiness(aiCall: AICallFn, constraints?: UserRequirements
   const context = formatTeachingConstraintsForPrompt(constraints);
   if (!context) return aiCall;
   return (system, user, images) => aiCall(system, `${user}\n\n${context}\nUse this class-level context to choose prerequisite explanations, familiar examples, vocabulary and scaffolding. Do not recite this profile, label students by their difficulties, invent individual histories or assessment results, or treat absent information as demonstrated mastery.`, images);
+}
+
+/** Production widgets must participate in the player's activity lifecycle.
+ * The iframe host injects this API before generated scripts execute. */
+function withInteractiveActivityContract(aiCall: AICallFn): AICallFn {
+  const contract = [
+    '## Player activity lifecycle (mandatory)',
+    '- Call `window.__maicActivity.complete()` only after the learner has completed the meaningful exploration or produced the intended evidence. The player waits for this signal and otherwise reaches its bounded safety timeout.',
+    '- Call `window.__maicActivity.reset()` whenever a full reset clears the learner\'s exploration/attempt state.',
+    '- Add `data-activity-complete` to the final completion control and `data-activity-reset` to the full reset control when those controls exist.',
+    '- The host defines `window.__maicActivity`; call it from executable interaction code. Do not define, replace, mock, or merely display these API calls as text.',
+  ].join('\n');
+  return (system, user, images) => aiCall(system, `${user}\n\n${contract}`, images);
 }
 import { normalizeQuizQuestions, selectQuizFormats } from '@openmaic/lib/quiz/quality';
 import { normalizeWhiteboardActionLifecycle } from './whiteboard-action-lifecycle';
@@ -473,7 +487,10 @@ export async function generateSceneContent(
   ].filter(Boolean).join('\n\n');
   // Unified path for interactive scenes (both normal and ultra mode)
   if (outline.type === 'interactive') {
-    return generateOpenMaicBaselineContent(outline, withClassroomReadiness(aiCall, userRequirements?.teachingConstraints), {
+    const interactiveAiCall = withInteractiveActivityContract(
+      withClassroomReadiness(aiCall, userRequirements?.teachingConstraints),
+    );
+    const generated = await generateOpenMaicBaselineContent(outline, interactiveAiCall, {
       assignedImages,
       imageMapping,
       visionEnabled,
@@ -482,6 +499,16 @@ export async function generateSceneContent(
       languageDirective,
       allowProceduralSkill,
     });
+    if (!generated || !('html' in generated)) return null;
+    const audit = auditInteractiveHtml(
+      generated.html,
+      generated.widgetType ?? outline.widgetType ?? 'simulation',
+    );
+    if (!audit.passed) {
+      log.warn(`Interactive output for "${outline.title}" failed the activity contract: ${audit.reasons.join('; ')}`);
+      return null;
+    }
+    return generated;
   }
 
   switch (outline.type) {

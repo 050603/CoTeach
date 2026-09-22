@@ -1,9 +1,10 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import type { CourseGenerationJob } from "@/lib/course-generation/job-storage";
-import { loadGenerationCheckpoints, saveGenerationCheckpoint, resetGenerationCheckpoints, resetPreparedOutlinesCheckpoint, countGenerationPageCheckpoints } from "./checkpoint-storage";
+import { COURSE_FINALIZATION_STEP, loadGenerationCheckpoints, saveGenerationCheckpoint, resetGenerationCheckpoints, resetPreparedOutlinesCheckpoint, countGenerationPageCheckpoints } from "./checkpoint-storage";
 import { contentGenerationJobs } from "@/lib/course-generation/job-storage";
 import { createLogger } from "@openmaic/lib/logger";
 import {
@@ -33,6 +34,7 @@ import { runWithCourseGenerationLlmContext } from "@/lib/course-generation/llm-c
 import type { Scene } from "@openmaic/lib/types/stage";
 import {
   fingerprintSceneOutline,
+  fingerprintGenerationValue,
   restoreSceneCheckpoint,
   restoreSceneStageAttemptCount,
   restoreSceneStageCheckpoint,
@@ -71,6 +73,9 @@ import type {
 
 const log = createLogger("CourseGenerationWorker");
 const POLL_INTERVAL_MS = 1_500;
+const HEARTBEAT_INTERVAL_MS = 5_000;
+const LEASE_DURATION_MS = 30_000;
+const WORKER_ID = `course-content:${process.pid}:${randomUUID()}`;
 const MAX_STORED_EVENTS = 80;
 
 async function hydrateTextbookFigureBytes(
@@ -117,6 +122,7 @@ type StoredCheckpointState = {
   stageCheckpoints: Map<string, SceneStageCheckpointSnapshot>;
   stageAttemptCheckpoints: Map<string, SceneStageAttemptSnapshot>;
   teachingSectionCheckpoints: Map<string, TeachingSectionCheckpointSnapshot>;
+  courseFinalization: unknown;
 };
 
 type TeachingSectionCheckpointSnapshot = {
@@ -127,8 +133,57 @@ type TeachingSectionCheckpointSnapshot = {
   briefs: Array<[string, unknown]>;
 };
 
+type GeneratedClassroomSnapshot = Awaited<ReturnType<typeof generateClassroom>>;
+type SplitClassroomSnapshot = Awaited<ReturnType<typeof splitGeneratedClassroom>>;
+type CourseFinalizationCheckpoint = {
+  schemaVersion: 1;
+  inputFingerprint: string;
+  generated: GeneratedClassroomSnapshot;
+  split?: SplitClassroomSnapshot;
+  courseLinkedAt?: string;
+  assetsCompletedAt?: string;
+  teachingTimingAudit?: Awaited<ReturnType<typeof generateClassroomAssets>>;
+};
+
+function restoreCourseFinalizationCheckpoint(
+  value: unknown,
+  inputFingerprint: string,
+): CourseFinalizationCheckpoint | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const checkpoint = value as Partial<CourseFinalizationCheckpoint>;
+  if (checkpoint.schemaVersion !== 1 || checkpoint.inputFingerprint !== inputFingerprint) return null;
+  if (!checkpoint.generated || !Array.isArray(checkpoint.generated.scenes)
+    || !checkpoint.generated.stage || typeof checkpoint.generated.stage.id !== "string") return null;
+  if (checkpoint.split && (typeof checkpoint.split.studentClassroomId !== "string"
+    || !Array.isArray(checkpoint.split.studentScenes)
+    || !Array.isArray(checkpoint.split.teacherScenes))) return null;
+  return checkpoint as CourseFinalizationCheckpoint;
+}
+
 function stageCheckpointKey(pageKey: string, stage: SceneGenerationCheckpointStage): string {
   return `${pageKey}:${stage}`;
+}
+
+export function hasExactUpdateTargetBudget(
+  outlines: readonly SceneOutline[],
+  confirmedOutlines: readonly SceneOutline[],
+  affectedOutlineIds: readonly string[],
+): boolean {
+  const affected = new Set(affectedOutlineIds);
+  const expected = confirmedOutlines.filter((outline) => affected.has(outline.id));
+  const actualIds = new Set(outlines.map((outline) => outline.id));
+  return affected.size === affectedOutlineIds.length
+    && expected.length === affected.size
+    && outlines.length === affected.size
+    && actualIds.size === outlines.length
+    && affectedOutlineIds.every((id) => actualIds.has(id))
+    && hasExactKnowledgeLecturePageBudget(
+      outlines,
+      expected.reduce(
+        (sum, outline) => sum + (outline.targetDurationSec ?? outline.estimatedDuration ?? 0),
+        0,
+      ) / 60,
+    );
 }
 
 async function loadCheckpointState(jobId: string): Promise<StoredCheckpointState> {
@@ -169,11 +224,12 @@ async function loadCheckpointState(jobId: string): Promise<StoredCheckpointState
     stageCheckpoints,
     stageAttemptCheckpoints,
     teachingSectionCheckpoints,
+    courseFinalization: stored.courseFinalization,
   };
 }
 
-async function persistPreparedOutlines(jobId: string, outlines: SceneOutline[]): Promise<void> {
-  await saveGenerationCheckpoint(jobId, "prepared-outlines", outlines);
+async function persistPreparedOutlines(jobId: string, executionId: string, outlines: SceneOutline[]): Promise<void> {
+  await saveGenerationCheckpoint(jobId, "prepared-outlines", outlines, { executionId });
 }
 
 async function persistSceneCheckpoint(
@@ -182,6 +238,7 @@ async function persistSceneCheckpoint(
   scene: Scene,
   modelFingerprint: string,
   inputFingerprint: string,
+  executionId: string,
 ): Promise<PageCheckpointSnapshot> {
   const checkpoint: PageCheckpointSnapshot = {
     pageKey: outline.id,
@@ -190,7 +247,7 @@ async function persistSceneCheckpoint(
     inputFingerprint,
     scene,
   };
-  await saveGenerationCheckpoint(jobId, `page:${checkpoint.pageKey}`, checkpoint);
+  await saveGenerationCheckpoint(jobId, `page:${checkpoint.pageKey}`, checkpoint, { executionId });
   return checkpoint;
 }
 
@@ -201,6 +258,7 @@ async function persistSceneStageCheckpoint(input: {
   modelFingerprint: string;
   inputFingerprint?: string;
   payload: unknown;
+  executionId: string;
 }): Promise<SceneStageCheckpointSnapshot> {
   const checkpoint: SceneStageCheckpointSnapshot = {
     schemaVersion: SCENE_STAGE_CHECKPOINT_VERSION,
@@ -215,6 +273,7 @@ async function persistSceneStageCheckpoint(input: {
     input.jobId,
     `stage:${input.outline.id}:${input.stage}`,
     checkpoint,
+    { executionId: input.executionId },
   );
   return checkpoint;
 }
@@ -226,6 +285,7 @@ async function persistSceneStageAttempt(input: {
   attemptsStarted: number;
   modelFingerprint: string;
   inputFingerprint?: string;
+  executionId: string;
 }): Promise<SceneStageAttemptSnapshot> {
   const checkpoint: SceneStageAttemptSnapshot = {
     schemaVersion: SCENE_STAGE_CHECKPOINT_VERSION,
@@ -240,6 +300,7 @@ async function persistSceneStageAttempt(input: {
     input.jobId,
     `stage-attempt:${input.outline.id}:${input.stage}`,
     checkpoint,
+    { executionId: input.executionId },
   );
   return checkpoint;
 }
@@ -295,7 +356,27 @@ let stopping = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let activeController: AbortController | null = null;
 let activeCourseId: string | null = null;
+const activeRuns = new Set<Promise<void>>();
 const cancellationRequested = new Set<string>();
+
+class CourseGenerationExecutionLostError extends Error {
+  constructor() {
+    super("Course generation execution lease was lost");
+    this.name = "CourseGenerationExecutionLostError";
+  }
+}
+
+function leaseDeadline(now = Date.now()): Date {
+  return new Date(now + LEASE_DURATION_MS);
+}
+
+async function assertCourseGenerationExecution(job: CourseGenerationJob): Promise<void> {
+  if (!job.executionId) throw new CourseGenerationExecutionLostError();
+  const current = await contentGenerationJobs.findUnique({ where: { id: job.id } });
+  if (current?.status !== "running" || current.executionId !== job.executionId) {
+    throw new CourseGenerationExecutionLostError();
+  }
+}
 
 function asEvents(value: Prisma.JsonValue): CourseGenerationJobEvent[] {
   return Array.isArray(value)
@@ -385,7 +466,7 @@ async function persistProgress(
     }),
   });
   const updated = await contentGenerationJobs.update({
-    where: { id: job.id },
+    where: { id: job.id, status: "running", executionId: job.executionId },
     data: {
       step: event.step,
       progress: event.progress,
@@ -397,6 +478,7 @@ async function persistProgress(
       currentStage: progress.stage ?? null,
       events: events as unknown as Prisma.InputJsonValue,
       lastHeartbeatAt: new Date(),
+      leaseExpiresAt: leaseDeadline(),
       version: { increment: 1 },
     },
   });
@@ -420,7 +502,7 @@ async function persistAdaptiveProgress(
   };
   const events = [...asEvents(job.events), event].slice(-MAX_STORED_EVENTS);
   const updated = await contentGenerationJobs.update({
-    where: { id: job.id },
+    where: { id: job.id, status: "running", executionId: job.executionId },
     data: {
       step: event.step,
       progress,
@@ -431,6 +513,7 @@ async function persistAdaptiveProgress(
       ),
       events: events as unknown as Prisma.InputJsonValue,
       lastHeartbeatAt: new Date(),
+      leaseExpiresAt: leaseDeadline(),
       version: { increment: 1 },
     },
   });
@@ -461,7 +544,7 @@ async function persistWorkerPhase(
     assetTotal: input.assetTotal,
   };
   const updated = await contentGenerationJobs.update({
-    where: { id: job.id },
+    where: { id: job.id, status: "running", executionId: job.executionId },
     data: {
       step: input.step,
       progress: event.progress,
@@ -469,6 +552,7 @@ async function persistWorkerPhase(
       estimatedRemainingSeconds: input.estimatedRemainingSeconds ?? job.estimatedRemainingSeconds,
       events: [...asEvents(job.events), event].slice(-MAX_STORED_EVENTS) as unknown as Prisma.InputJsonValue,
       lastHeartbeatAt: new Date(),
+      leaseExpiresAt: leaseDeadline(),
       version: { increment: 1 },
     },
   });
@@ -686,20 +770,43 @@ async function prepareAdaptiveResources(
 }
 
 async function claimNextJob(): Promise<CourseGenerationJob | null> {
+  const now = new Date();
   const candidate = await contentGenerationJobs.findFirst({
-    where: { status: "queued" },
+    where: {
+      OR: [
+        { status: "queued" },
+        { status: "running", OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] },
+      ],
+    },
     orderBy: { createdAt: "asc" },
   });
   if (!candidate) return null;
-  const now = new Date();
+  return claimCourseGenerationJob(candidate, now);
+}
+
+async function claimCourseGenerationJob(
+  candidate: CourseGenerationJob,
+  now = new Date(),
+): Promise<CourseGenerationJob | null> {
+  const executionId = randomUUID();
+  const recovering = candidate.status === "running";
   const claimed = await contentGenerationJobs.updateMany({
-    where: { id: candidate.id, status: "queued" },
+    where: {
+      id: candidate.id,
+      version: candidate.version,
+      ...(recovering
+        ? { status: "running", executionId: candidate.executionId, OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] }
+        : { status: "queued" }),
+    },
     data: {
       status: "running",
-      step: "initializing",
-      message: "正在启动课程生成任务",
-      startedAt: now,
+      step: recovering ? "recovering_scenes" : "initializing",
+      message: recovering ? "检测到执行租约已过期，正在从已保存进度继续" : "正在启动课程生成任务",
+      startedAt: candidate.startedAt ?? now,
       lastHeartbeatAt: now,
+      executionId,
+      executionOwner: WORKER_ID,
+      leaseExpiresAt: leaseDeadline(now.getTime()),
       error: null,
       attempt: { increment: 1 },
       version: { increment: 1 },
@@ -718,22 +825,8 @@ async function claimNextJob(): Promise<CourseGenerationJob | null> {
 export async function startQueuedCourseGeneration(courseId: string): Promise<CourseGenerationJob | null> {
   const candidate = await contentGenerationJobs.findUnique({ where: { courseId } });
   if (!candidate || candidate.status !== "queued") return candidate;
-  const now = new Date();
-  const claimed = await contentGenerationJobs.updateMany({
-    where: { id: candidate.id, status: "queued" },
-    data: {
-      status: "running",
-      step: "initializing",
-      message: "正在启动课程生成任务",
-      startedAt: now,
-      lastHeartbeatAt: now,
-      error: null,
-      attempt: { increment: 1 },
-      version: { increment: 1 },
-    },
-  });
-  const job = await contentGenerationJobs.findUnique({ where: { id: candidate.id } });
-  if (claimed.count === 1 && job) void runJob(job);
+  const job = await claimCourseGenerationJob(candidate);
+  if (job) void runJob(job);
   return job;
 }
 
@@ -748,22 +841,8 @@ export async function runQueuedCourseGenerationToCompletion(
 ): Promise<CourseGenerationJob | null> {
   const candidate = await contentGenerationJobs.findUnique({ where: { courseId } });
   if (!candidate || candidate.status !== "queued") return candidate;
-  const now = new Date();
-  const claimed = await contentGenerationJobs.updateMany({
-    where: { id: candidate.id, status: "queued" },
-    data: {
-      status: "running",
-      step: "initializing",
-      message: "正在启动课程生成任务",
-      startedAt: now,
-      lastHeartbeatAt: now,
-      error: null,
-      attempt: { increment: 1 },
-      version: { increment: 1 },
-    },
-  });
-  const job = await contentGenerationJobs.findUnique({ where: { id: candidate.id } });
-  if (claimed.count === 1 && job) await runJob(job);
+  const job = await claimCourseGenerationJob(candidate);
+  if (job) await runJob(job);
   return contentGenerationJobs.findUnique({ where: { id: candidate.id } });
 }
 
@@ -792,8 +871,9 @@ export async function requeueCourseGenerationFromCheckpoints(
     ? `正在从 ${completedPageCount} 个已完成页面继续生成`
     : "正在重新开始课程内容生成（此前尚无已完成的页面）";
   const request = job.request as unknown as PersistedCourseGenerationRequest;
-  await contentGenerationJobs.updateMany({
-    where: { id: job.id, status: "failed" },
+  await contentGenerationJobs.replace({
+    where: { id: job.id, status: "failed", version: job.version },
+    checkpointPolicy: { prefixes: ["stage-attempt:"] },
     data: {
       status: "queued",
       step: "recovering_scenes",
@@ -806,20 +886,23 @@ export async function requeueCourseGenerationFromCheckpoints(
       completedAt: null,
       estimatedRemainingSeconds: 600,
       lastHeartbeatAt: new Date(),
+      executionId: null,
+      executionOwner: null,
+      leaseExpiresAt: null,
       version: { increment: 1 },
     },
   });
   return contentGenerationJobs.findUnique({ where: { id: job.id } });
 }
 
-async function runJob(job: CourseGenerationJob): Promise<void> {
-  return runWithCourseGenerationLlmContext(
+function runJob(job: CourseGenerationJob): Promise<void> {
+  const execution = runWithCourseGenerationLlmContext(
     () => runJobWithCourseGenerationContext(job),
     {
       onTokenUsage: async (totalTokens) => {
         try {
           await contentGenerationJobs.update({
-            where: { id: job.id },
+            where: { id: job.id, status: "running", executionId: job.executionId },
             data: {
               tokenUsage: { increment: totalTokens },
               tokenUsageCalls: { increment: 1 },
@@ -831,9 +914,13 @@ async function runJob(job: CourseGenerationJob): Promise<void> {
       },
     },
   );
+  activeRuns.add(execution);
+  return execution.finally(() => activeRuns.delete(execution));
 }
 
 async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Promise<void> {
+  const executionId = job.executionId;
+  if (!executionId) throw new CourseGenerationExecutionLostError();
   const request = job.request as unknown as PersistedCourseGenerationRequest;
   const generationInput = { ...request };
   const courseId = generationInput.courseId;
@@ -848,6 +935,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).resourcePackageIdentity;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).adaptiveBranchCount;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).managedRecoveryCount;
+  delete (generationInput as Partial<PersistedCourseGenerationRequest>).updateTarget;
   const controller = new AbortController();
   activeController = controller;
   activeCourseId = courseId;
@@ -859,6 +947,18 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
     workerWriteChain = result.then(() => undefined, () => undefined);
     return result;
   };
+  const heartbeatTimer = setInterval(() => {
+    const now = new Date();
+    void contentGenerationJobs.updateMany({
+      where: { id: job.id, status: "running", executionId },
+      data: { lastHeartbeatAt: now, leaseExpiresAt: leaseDeadline(now.getTime()) },
+    }).then(({ count }) => {
+      if (count === 0 && !controller.signal.aborted) {
+        controller.abort(new CourseGenerationExecutionLostError());
+      }
+    }).catch((error) => log.warn("Unable to renew course-generation lease", error));
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref?.();
 
   try {
     generationInput.textbookImages = await hydrateTextbookFigureBytes(generationInput.textbookImages);
@@ -887,16 +987,27 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         (request.testLesson?.durationSeconds ?? 0) / 60,
       )
     );
+    const updateBudgetMatches = !request.updateTarget || hasExactUpdateTargetBudget(
+      outlines,
+      course?.content._openmaicSceneOutlines as SceneOutline[] ?? [],
+      request.updateTarget.affectedOutlineIds,
+    );
     if (!course || !isNewSystemAiTimingPlan(timing, course.hours, course.content.stagePlan)
       || !testLessonIdsMatch
-      || !hasExactKnowledgeLecturePageBudget(outlines, timing?.totalMinutes ?? 0)) {
+      || !updateBudgetMatches
+      || (!request.updateTarget && !hasExactKnowledgeLecturePageBudget(outlines, timing?.totalMinutes ?? 0))) {
       throw new Error("知识讲授必须符合已确认的课程时间预算，且讲解与小测合计必须等于该预算。资源包课程以教案分钟数为准，请重新规划后生成，不可继续使用不匹配的页面或检查点。");
     }
-    const generated = await generateClassroom(generationInput, {
+    const finalizationFingerprint = fingerprintGenerationValue({ request, outlines });
+    const restoredFinalization = restoreCourseFinalizationCheckpoint(
+      checkpointState.courseFinalization,
+      finalizationFingerprint,
+    );
+    const generated = restoredFinalization?.generated ?? await generateClassroom(generationInput, {
       signal: controller.signal,
       generationOutlineIds: isTestLesson ? request.testLesson?.sceneOutlineIds : undefined,
       preparedOutlines: checkpointState.preparedOutlines,
-      onOutlinesPrepared: (outlines) => persistPreparedOutlines(job.id, outlines),
+      onOutlinesPrepared: (outlines) => persistPreparedOutlines(job.id, executionId, outlines),
       loadTeachingSectionCheckpoint: (sectionKey, inputFingerprint, modelFingerprint) => {
         const checkpoint = checkpointState.teachingSectionCheckpoints.get(sectionKey);
         if (
@@ -915,7 +1026,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           modelFingerprint,
           briefs,
         };
-        await saveGenerationCheckpoint(job.id, `teaching-section:${sectionKey}`, checkpoint);
+        await saveGenerationCheckpoint(job.id, `teaching-section:${sectionKey}`, checkpoint, { executionId });
         checkpointState.teachingSectionCheckpoints.set(sectionKey, checkpoint);
       },
       loadSceneCheckpoint: (outline, _index, stageId, modelFingerprint, inputFingerprint) => restoreSceneCheckpoint(
@@ -941,6 +1052,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           payload,
           modelFingerprint,
           inputFingerprint,
+          executionId,
         });
         checkpointState.stageCheckpoints.set(stageCheckpointKey(outline.id, stage), checkpoint);
       },
@@ -960,6 +1072,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           attemptsStarted,
           modelFingerprint,
           inputFingerprint,
+          executionId,
         });
         checkpointState.stageAttemptCheckpoints.set(stageCheckpointKey(outline.id, stage), checkpoint);
       },
@@ -970,6 +1083,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           scene,
           modelFingerprint,
           inputFingerprint,
+          executionId,
         );
         checkpointState.checkpoints.set(outline.id, checkpoint);
       },
@@ -986,20 +1100,36 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         ));
       },
     });
+    if (!restoredFinalization) {
+      await saveGenerationCheckpoint(job.id, COURSE_FINALIZATION_STEP, {
+        schemaVersion: 1,
+        inputFingerprint: finalizationFingerprint,
+        generated,
+      } satisfies CourseFinalizationCheckpoint, { executionId });
+    }
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
       step: "separating_classrooms",
       progress: 91,
       message: "正在拆分学生课堂与教师授课资源",
       estimatedRemainingSeconds: 180,
     }));
-    const split = await splitGeneratedClassroom({
+    const split = restoredFinalization?.split ?? await splitGeneratedClassroom({
       stage: generated.stage,
       scenes: generated.scenes,
       courseName: request.courseTitle,
       pblMode: false,
       signal: controller.signal,
     });
+    if (!restoredFinalization?.split) {
+      await saveGenerationCheckpoint(job.id, COURSE_FINALIZATION_STEP, {
+        schemaVersion: 1,
+        inputFingerprint: finalizationFingerprint,
+        generated,
+        split,
+      } satisfies CourseFinalizationCheckpoint, { executionId });
+    }
     if (request.updateTarget) {
+      await assertCourseGenerationExecution(job);
       const baseUrl = process.env.PUBLIC_BASE_URL?.trim() || "";
       const assetInput = {
         ...generated.assetContext,
@@ -1066,7 +1196,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       const completedAt = new Date();
       const message = `已生成 ${split.studentSceneCount} 个页面的局部更新候选，等待教师确认采用`;
       await contentGenerationJobs.update({
-        where: { id: job.id },
+        where: { id: job.id, status: "running", executionId },
         data: {
           status: "completed",
           step: "candidate_ready",
@@ -1091,6 +1221,9 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           }].slice(-MAX_STORED_EVENTS) as unknown as Prisma.InputJsonValue,
           completedAt,
           lastHeartbeatAt: completedAt,
+          leaseExpiresAt: null,
+          executionId: null,
+          executionOwner: null,
           version: { increment: 1 },
         },
       });
@@ -1102,6 +1235,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       message: "正在关联并保存学生课堂与教师资源",
       estimatedRemainingSeconds: 150,
     }));
+    await assertCourseGenerationExecution(job);
     await linkClassroomToCourse(courseId, split.studentClassroomId, {
       scenesCount: split.studentSceneCount,
       stageName: generated.stage.name,
@@ -1112,9 +1246,18 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
     }, { signal: controller.signal });
     const generatedOutlineIds = generated.assetContext.outlines.map((outline) => outline.id);
     const generatedOutlineIdSet = new Set(generatedOutlineIds);
-    await updateCourse(courseId, (current) => ({
-      ...current,
-      content: {
+    await updateCourse(courseId, (current) => {
+      const alreadyApplied = (current.aiLearningClassroomId || current.content._openmaicClassroomId)
+        === split.studentClassroomId
+        && current.content.classroomGenerationRun?.status === "completed"
+        && current.content.classroomGenerationRun.generatedOutlineIds.length === generatedOutlineIds.length
+        && current.content.classroomGenerationRun.generatedOutlineIds.every(
+          (id, index) => id === generatedOutlineIds[index],
+        );
+      if (alreadyApplied) return current;
+      return {
+        ...current,
+        content: {
         ...current.content,
         lessonOutline: current.content.lessonOutline.filter((outline) => generatedOutlineIdSet.has(outline.id)),
         knowledgeLectureSections: deriveKnowledgeLectureSectionsFromOutlines(
@@ -1144,8 +1287,22 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           pendingUpdates: [],
           candidateUpdates: [],
         },
-      },
-    }));
+        },
+      };
+    });
+    await saveGenerationCheckpoint(job.id, COURSE_FINALIZATION_STEP, {
+      schemaVersion: 1,
+      inputFingerprint: finalizationFingerprint,
+      generated,
+      split,
+      courseLinkedAt: restoredFinalization?.courseLinkedAt ?? new Date().toISOString(),
+      ...(restoredFinalization?.assetsCompletedAt
+        ? {
+            assetsCompletedAt: restoredFinalization.assetsCompletedAt,
+            teachingTimingAudit: restoredFinalization.teachingTimingAudit,
+          }
+        : {}),
+    } satisfies CourseFinalizationCheckpoint, { executionId });
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
       step: "checking_adaptive_resources",
       progress: 94,
@@ -1175,7 +1332,9 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       controller.signal,
       serializeWorkerWrite,
     );
-    const assetPromise = (async () => {
+    const assetPromise = restoredFinalization?.assetsCompletedAt
+      ? Promise.resolve(restoredFinalization.teachingTimingAudit)
+      : (async () => {
       const assetInput = {
         ...generated.assetContext,
         baseUrl,
@@ -1203,14 +1362,24 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         log.error("Background classroom asset generation failed", assetError);
         return summarizeTeachingTimingAudit(assetInput);
       }
-    })();
+        })();
     const [, teachingTimingAudit] = await Promise.all([adaptivePromise, assetPromise]);
     if (teachingTimingAudit) {
+      await assertCourseGenerationExecution(job);
       await updateCourse(courseId, (current) => ({
         ...current,
         content: { ...current.content, teachingTimingAudit },
       }));
     }
+    await saveGenerationCheckpoint(job.id, COURSE_FINALIZATION_STEP, {
+      schemaVersion: 1,
+      inputFingerprint: finalizationFingerprint,
+      generated,
+      split,
+      courseLinkedAt: restoredFinalization?.courseLinkedAt ?? new Date().toISOString(),
+      assetsCompletedAt: restoredFinalization?.assetsCompletedAt ?? new Date().toISOString(),
+      teachingTimingAudit,
+    } satisfies CourseFinalizationCheckpoint, { executionId });
     const coverStatus = await generateAndPersistCourseCover(
       job,
       courseId,
@@ -1271,8 +1440,9 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       totalScenes: Math.max(job.totalScenes, split.studentSceneCount),
       ts: Date.now(),
     };
+    await assertCourseGenerationExecution(job);
     await contentGenerationJobs.update({
-      where: { id: job.id },
+      where: { id: job.id, status: "running", executionId },
       data: {
         status: "completed",
         step: "completed",
@@ -1289,15 +1459,21 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         events: [...asEvents(job.events), finalEvent].slice(-MAX_STORED_EVENTS) as unknown as Prisma.InputJsonValue,
         completedAt: new Date(),
         lastHeartbeatAt: new Date(),
+        leaseExpiresAt: null,
+        executionId: null,
+        executionOwner: null,
         version: { increment: 1 },
       },
     });
 
 
   } catch (error) {
-    if (cancellationRequested.has(courseId)) {
-      await contentGenerationJobs.update({
-        where: { id: job.id },
+    const currentStatus = await contentGenerationJobs.findUnique({ where: { id: job.id } });
+    if (cancellationRequested.has(courseId)
+      || currentStatus?.status === "cancelling"
+      || currentStatus?.status === "cancelled") {
+      await contentGenerationJobs.updateMany({
+        where: { id: job.id, status: { in: ["running", "cancelling"] }, executionId },
         data: {
           status: "cancelled",
           step: "cancelled",
@@ -1306,21 +1482,36 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           estimatedRemainingSeconds: null,
           completedAt: new Date(),
           lastHeartbeatAt: new Date(),
+          leaseExpiresAt: null,
+          executionId: null,
+          executionOwner: null,
           version: { increment: 1 },
         },
       });
       return;
     }
+    if (error instanceof CourseGenerationExecutionLostError
+      || currentStatus?.executionId !== executionId) {
+      return;
+    }
     if (stopping && (controller.signal.aborted || isAbortError(error))) {
       await contentGenerationJobs.updateMany({
-        where: { id: job.id, status: "running" },
-        data: { status: "queued", step: "queued", message: "等待服务器继续生成", lastHeartbeatAt: new Date() },
+        where: { id: job.id, status: "running", executionId },
+        data: {
+          status: "queued",
+          step: "queued",
+          message: "等待服务器继续生成",
+          lastHeartbeatAt: new Date(),
+          leaseExpiresAt: null,
+          executionId: null,
+          executionOwner: null,
+        },
       });
       return;
     }
     log.error(`Course generation job ${job.id} failed`, error);
-    await contentGenerationJobs.update({
-      where: { id: job.id },
+    await contentGenerationJobs.updateMany({
+      where: { id: job.id, status: "running", executionId },
       data: {
         status: "failed",
         step: "failed",
@@ -1329,10 +1520,14 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         estimatedRemainingSeconds: null,
         completedAt: new Date(),
         lastHeartbeatAt: new Date(),
+        leaseExpiresAt: null,
+        executionId: null,
+        executionOwner: null,
         version: { increment: 1 },
       },
     });
   } finally {
+    clearInterval(heartbeatTimer);
     if (activeController === controller) activeController = null;
     if (activeCourseId === courseId) activeCourseId = null;
     cancellationRequested.delete(courseId);
@@ -1344,20 +1539,23 @@ export async function cancelCourseGeneration(courseId: string): Promise<CourseGe
   if (!job || ["completed", "failed", "cancelled"].includes(job.status)) return job;
   if (job.status === "queued") {
     return contentGenerationJobs.update({
-      where: { id: job.id },
+      where: { id: job.id, status: "queued", version: job.version },
       data: {
         status: "cancelled",
         step: "cancelled",
         message: "课程生成已中断",
         completedAt: new Date(),
         estimatedRemainingSeconds: null,
+        leaseExpiresAt: null,
+        executionId: null,
+        executionOwner: null,
         version: { increment: 1 },
       },
     });
   }
   cancellationRequested.add(courseId);
   const cancelling = await contentGenerationJobs.update({
-    where: { id: job.id },
+    where: { id: job.id, status: job.status, version: job.version },
     data: {
       status: "cancelling",
       message: "正在安全中断课程生成",
@@ -1387,14 +1585,17 @@ export async function startCourseGenerationWorker(): Promise<void> {
   if (workerStarted) return;
   workerStarted = true;
   stopping = false;
-  // This deployment owns exactly one durable course worker. Any RUNNING row
-  // present before this process starts belonged to the previous process and
-  // no longer has an executor, even when its last heartbeat is recent. Requeue
-  // immediately so a service restart resumes page checkpoints without a
-  // misleading 30-minute frozen state.
   await contentGenerationJobs.updateMany({
-    where: { status: "running" },
-    data: { status: "queued", step: "queued", message: "等待服务器继续生成" },
+    where: { status: "cancelling" },
+    data: {
+      status: "cancelled",
+      step: "cancelled",
+      message: "课程生成已中断",
+      completedAt: new Date(),
+      leaseExpiresAt: null,
+      executionId: null,
+      executionOwner: null,
+    },
   });
   void tick();
 }
@@ -1404,4 +1605,6 @@ export async function stopCourseGenerationWorker(): Promise<void> {
   if (timer) clearTimeout(timer);
   timer = null;
   activeController?.abort(new Error("Server shutting down"));
+  await Promise.allSettled([...activeRuns]);
+  workerStarted = false;
 }

@@ -79,7 +79,7 @@ export async function resolveGenerationReferenceMaterials(input: {
     }
     const buffer = await readFile(/* turbopackIgnore: true */ path.join(dataDir, record.storageKey));
     const extracted = await extractGenerationReferenceText(record.originalName, record.mimeType, buffer);
-    const content = compactReferenceText(extracted, perFileLimit);
+    const content = compactGenerationReferenceText(extracted, perFileLimit);
     if (!content) {
       throw new GenerationReferenceError(
         `无法从“${record.originalName}”中读取文字，请上传包含可选择文本的 PDF、Word、PPT、TXT 或 Markdown 文件。`,
@@ -187,7 +187,7 @@ function normalizeExtractedText(value: string): string {
     .trim();
 }
 
-function compactReferenceText(value: string, maxChars: number): string {
+export function compactGenerationReferenceText(value: string, maxChars: number): string {
   const text = normalizeExtractedText(value);
   if (text.length <= maxChars) return text;
   const chunkCount = 6;
@@ -197,7 +197,8 @@ function compactReferenceText(value: string, maxChars: number): string {
   const chunks = Array.from({ length: chunkCount }, (_, index) => {
     const start = Math.round(maxStart * index / (chunkCount - 1));
     const raw = text.slice(start, start + chunkSize);
-    return raw.replace(/^\S*\s/, "").replace(/\s\S*$/, "").trim();
+    const withWholeStart = start === 0 ? raw : raw.replace(/^\S*\s/, "");
+    return (start + chunkSize >= text.length ? withWholeStart : withWholeStart.replace(/\s\S*$/, "")).trim();
   });
   return chunks.map((chunk, index) => `【节选 ${index + 1}/${chunkCount}】\n${chunk}`).join("\n\n");
 }

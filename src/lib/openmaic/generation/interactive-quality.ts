@@ -27,10 +27,6 @@ export function auditInteractiveHtml(
   html: string,
   widgetType: WidgetType,
 ): InteractiveQualityAudit {
-  if (widgetType === 'procedural-skill') {
-    return { passed: true, reasons: [] };
-  }
-
   const reasons: string[] = [];
   if (!COMPLETION_PATTERN.test(html)) {
     reasons.push('missing meaningful activity completion signal');
@@ -43,7 +39,8 @@ export function auditInteractiveHtml(
   const onlyPseudoNavigation = buttons.length > 0
     && buttons.every((label) => PSEUDO_INTERACTION_LABEL.test(label));
   if (
-    onlyPseudoNavigation
+    widgetType !== 'procedural-skill'
+    && onlyPseudoNavigation
     && !DIRECT_MANIPULATION_PATTERN.test(html)
     && !EXPLORATION_STATE_PATTERN.test(html)
   ) {

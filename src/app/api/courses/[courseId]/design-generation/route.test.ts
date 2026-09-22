@@ -6,11 +6,11 @@ const mocks = vi.hoisted(() => {
   class TestLessonPromotionError extends Error {
     constructor(readonly code: string, message: string, readonly status: number) { super(message); }
   }
-  return { find: vi.fn(), packageJob: vi.fn(), create: vi.fn(), update: vi.fn(), resolve: vi.fn(), references: vi.fn(), promote: vi.fn(), TestLessonPromotionError };
+  return { find: vi.fn(), packageJob: vi.fn(), create: vi.fn(), update: vi.fn(), replace: vi.fn(), resolve: vi.fn(), references: vi.fn(), promote: vi.fn(), TestLessonPromotionError };
 });
 vi.mock("@/lib/platform/template-access", () => ({ authorizeTemplateRequest: vi.fn().mockResolvedValue("teacher-1") }));
 vi.mock("@/lib/platform/pbl-template-repository", () => ({ loadPblTemplateCourse: vi.fn().mockResolvedValue({ id: "course-1" }) }));
-vi.mock("@/lib/course-generation/job-storage", () => ({ designGenerationJobs: { findUnique: mocks.find, create: mocks.create, update: mocks.update }, resourcePackageJobs: { findUnique: mocks.packageJob } }));
+vi.mock("@/lib/course-generation/job-storage", () => ({ designGenerationJobs: { findUnique: mocks.find, create: mocks.create, update: mocks.update, replace: mocks.replace }, resourcePackageJobs: { findUnique: mocks.packageJob } }));
 vi.mock("@/lib/course-generation/capability", () => ({ isBackgroundCourseGenerationEnabled: () => true }));
 vi.mock("@/lib/course-design/job-runner", () => ({
   initialQuickGenerationEstimateSeconds: () => 60,
@@ -136,7 +136,7 @@ describe("resource-package design generation admission", () => {
     };
     mocks.find.mockResolvedValue(storedJob(previous));
     mocks.resolve.mockResolvedValue({ resourcePackage, referenceMaterials: [] });
-    mocks.update.mockImplementation(({ data }: { data: { request: unknown } }) => Promise.resolve(storedJob(data.request, "queued")));
+    mocks.replace.mockImplementation(({ data }: { data: { request: unknown } }) => Promise.resolve(storedJob(data.request, "queued")));
 
     const response = await POST(request({
       resourcePackageId: "package-1",
@@ -145,8 +145,47 @@ describe("resource-package design generation admission", () => {
     }), context);
 
     expect(response.status).toBe(202);
-    expect(mocks.update.mock.calls[0][0].data.request).toMatchObject({ assessmentMode: "adaptive" });
+    expect(mocks.replace.mock.calls[0][0]).toMatchObject({
+      checkpointPolicy: "all",
+      data: { request: expect.objectContaining({ assessmentMode: "adaptive" }) },
+    });
     expect(await response.json()).toMatchObject({ job: { requestPreview: { assessmentMode: "adaptive" } } });
+  });
+
+  it("atomically resets only unfinished-stage attempts for an explicit same-request retry", async () => {
+    const resourcePackage = { schemaVersion: 1, id: "package-1", revision: 3, source: { id: "zip-1", fileName: "教学.zip", url: "/private/zip" }, documents: {}, draft: emptyResourcePackageDraft(), confirmedAt: "2026-09-12T00:00:00Z" };
+    const previous = {
+      courseId: "course-1",
+      teacherBrief: "",
+      generationModelString: "deepseek:deepseek-v4-flash",
+      resourcePackage,
+      referenceMaterials: [],
+      textbookSelections: [],
+      generationScope: "full-course",
+      generationMode: "standard",
+      generationContractVersion: 3,
+      assessmentMode: "adaptive",
+      options: { enableImageGeneration: true, enableTTS: true, enableVideoGeneration: false },
+    };
+    const failed = { ...storedJob(previous, "failed"), version: 9, tokenUsage: 12_345, tokenUsageCalls: 2 };
+    mocks.find.mockResolvedValue(failed);
+    mocks.resolve.mockResolvedValue({ resourcePackage, referenceMaterials: [] });
+    mocks.replace.mockImplementation(({ data }: { data: { request: unknown } }) => Promise.resolve({ ...failed, ...data, status: "queued" }));
+
+    const response = await POST(request({ resourcePackageId: "package-1", resourcePackageRevision: 3 }), context);
+
+    expect(response.status).toBe(202);
+    expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "job-1", status: "failed", version: 9 },
+      checkpointPolicy: { prefixes: ["course-design-attempt:"] },
+      data: expect.objectContaining({
+        tokenUsage: 12_345,
+        tokenUsageCalls: 2,
+        executionId: null,
+        executionOwner: null,
+        leaseExpiresAt: null,
+      }),
+    }));
   });
 
   it("persists the bounded test scope and rejects unknown generation scopes", async () => {

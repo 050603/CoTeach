@@ -3,7 +3,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Archive, ArrowRight, BookOpen, CheckCircle2, FileUp, LoaderCircle, RotateCcw, Search } from "lucide-react";
+import { Archive, ArrowRight, BookOpen, CheckCircle2, FileUp, LayoutGrid, List, LoaderCircle, MoreHorizontal, RotateCcw, Search } from "lucide-react";
 import { PlatformEmpty, PlatformError, PlatformLoading } from "@/components/platform/platform-feedback";
 import { TeacherPlatformHeader, TeacherPlatformPage } from "@/components/platform/teacher-shell";
 import {
@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { teacherPlatformFetch } from "@/lib/platform/client";
 import type { TextbookListItem } from "./textbook-view-types";
-import styles from "./textbooks.module.css";
+import styles from "./library.module.css";
 
 type TextbookListResponse = { items?: TextbookListItem[]; textbooks?: TextbookListItem[]; total?: number; message?: string; error?: string };
 
@@ -52,6 +52,8 @@ export default function TeacherTextbooksPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [mutating, setMutating] = useState(false);
+  const [layout, setLayout] = useState<"grid" | "list">("grid");
+  const [sort, setSort] = useState("updated");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("active");
   const [error, setError] = useState("");
@@ -93,8 +95,10 @@ export default function TeacherTextbooksPage() {
       if (!matchesFilter) return false;
       if (!normalizedQuery) return true;
       return `${item.title} ${item.author || item.authors || ""}`.toLocaleLowerCase("zh-CN").includes(normalizedQuery);
-    });
-  }, [filter, items, query]);
+    }).sort((a, b) => sort === "title"
+      ? a.title.localeCompare(b.title, "zh-CN")
+      : (Date.parse(b.updatedAt || b.createdAt || "") || 0) - (Date.parse(a.updatedAt || a.createdAt || "") || 0));
+  }, [filter, items, query, sort]);
 
   const librarySummary = useMemo(() => {
     const active = items.filter(item => !item.archivedAt);
@@ -151,14 +155,14 @@ export default function TeacherTextbooksPage() {
   return <TeacherPlatformPage>
     <TeacherPlatformHeader active="textbooks" />
     <div className={`pbl-workspace-content ${styles.page}`}>
-      <header className={`pbl-page-heading pbl-library-heading pbl-teacher-dashboard-heading ${styles.heading}`}>
+      <header className={styles.heading}>
         <div className={styles.headingCopy}>
-          <p className={styles.eyebrow}>教学资源</p>
+          <p className={styles.eyebrow}>DIGITAL LIBRARY</p>
           <h1>教材库</h1>
-          <p>集中管理教材版本、章节结构与知识依据，解析完成后可在不同课程中直接复用。</p>
+          <p>从章节开始阅读，在知识之间探索。</p>
         </div>
-        <div className="pbl-classes-heading-actions">
-          <dl className="pbl-heading-metrics" aria-label="教材库概况">
+        <div className={styles.headingActions}>
+          <dl className={styles.metrics} aria-label="教材库概况">
             <div><dt>在库教材</dt><dd>{loading ? "—" : librarySummary.active}</dd></div>
             <div><dt>已就绪</dt><dd>{loading ? "—" : librarySummary.ready}</dd></div>
           </dl>
@@ -202,27 +206,33 @@ export default function TeacherTextbooksPage() {
             <option value="archived">已归档</option>
             <option value="all">全部教材</option>
           </select>
+          <select aria-label="教材排序" className={styles.filter} value={sort} onChange={event => setSort(event.target.value)}>
+            <option value="updated">最近更新</option><option value="title">书名排序</option>
+          </select>
+          <div className={styles.viewSwitch} role="group" aria-label="教材展示方式">
+            <button type="button" aria-label="封面网格" aria-pressed={layout === "grid"} onClick={() => setLayout("grid")}><LayoutGrid size={18} /></button>
+            <button type="button" aria-label="紧凑列表" aria-pressed={layout === "list"} onClick={() => setLayout("list")}><List size={19} /></button>
+          </div>
         </div>
       </div>
 
       {notice ? <p role="status" className={styles.notice}><CheckCircle2 size={16} />{notice}</p> : null}
       {error && !loading ? <PlatformError message={error} onRetry={() => void load()} /> : null}
 
-      {loading ? <PlatformLoading label="正在加载教材库…" /> : visible.length ? <div className={styles.libraryList}>
-        <div className={styles.listHeader} aria-hidden="true"><span>教材</span><span>解析状态</span><span>操作</span></div>
-        {visible.map((item, index) => {
+      {loading ? <PlatformLoading label="正在加载教材库…" /> : visible.length ? <div className={styles.libraryList} data-layout={layout}>
+        {visible.map(item => {
           const status = statusView(item);
           const progress = progressPercent(item.currentRevision?.progress);
+          const palette = Array.from(item.id).reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 0) % 5;
           return <article className={styles.bookRow} key={item.id}>
-            <span className={styles.bookMark} aria-hidden="true" data-tone={status.tone}>
-              <span className={styles.bookSpine} />
-              <BookOpen size={24} strokeWidth={1.55} />
-              <small>{String(index + 1).padStart(2, "0")}</small>
-            </span>
+            <Link className={styles.bookCover} data-palette={palette} href={`/teacher/textbooks/${item.id}`}>
+              <span className={styles.coverTop}><BookOpen size={19} /><span>数字教材 · VOL. {String(item.currentRevision?.version ?? 1).padStart(2, "0")}</span></span>
+              <div className={styles.coverTitle}><h2>{item.title}</h2><p>{item.author || item.authors || "作者信息待补充"}</p></div>
+              <span className={styles.geometry} aria-hidden="true"><i /><i /><i /></span>
+              <span className={styles.coverFooter} aria-hidden="true">CoTeach <span>阅读 · 发现 · 连接</span></span>
+            </Link>
             <div className={styles.bookIdentity}>
-              <h2><Link href={`/teacher/textbooks/${item.id}`}>{item.title}</Link></h2>
-              <p>{item.author || item.authors || "作者信息待补充"}</p>
-              <small><span>版本 {item.currentRevision?.version ?? 1}</span><span>更新于 {displayDate(item.updatedAt || item.createdAt)}</span></small>
+              <span>版本 {item.currentRevision?.version ?? 1}</span><small>更新于 {displayDate(item.updatedAt || item.createdAt)}</small>
             </div>
             <div className={styles.statusCopy}>
               <div className={styles.statusLine}>
@@ -235,9 +245,14 @@ export default function TeacherTextbooksPage() {
             </div>
             <div className={styles.rowActions}>
               <Link aria-label="查看教材" className={styles.openBookButton} href={`/teacher/textbooks/${item.id}`}><span>打开教材</span><ArrowRight size={15} /></Link>
-              <button className={styles.quietButton} type="button" aria-label={item.archivedAt ? `恢复 ${item.title}` : `归档 ${item.title}`} onClick={() => setArchiveTarget(item)}>
-                {item.archivedAt ? <RotateCcw size={16} /> : <Archive size={16} />}
-              </button>
+              <details className={styles.moreMenu}>
+                <summary aria-label={`更多操作 ${item.title}`}><MoreHorizontal size={20} /></summary>
+                <div className={styles.menuPopover}>
+                  <button type="button" onClick={event => { event.currentTarget.closest("details")?.removeAttribute("open"); setArchiveTarget(item); }}>
+                    {item.archivedAt ? <RotateCcw size={16} /> : <Archive size={16} />}{item.archivedAt ? `恢复 ${item.title}` : `归档 ${item.title}`}
+                  </button>
+                </div>
+              </details>
             </div>
           </article>;
         })}

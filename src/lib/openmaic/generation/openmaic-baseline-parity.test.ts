@@ -23,6 +23,55 @@ function interactiveOutline(overrides: Partial<SceneOutline> = {}): SceneOutline
 }
 
 describe('current OpenMAIC generation baseline parity', () => {
+  it('injects and validates the player completion/reset contract in the production interactive path', async () => {
+    let capturedPrompt = '';
+    const generated = await generateSceneContent(interactiveOutline(), async (_system, user) => {
+      capturedPrompt = user;
+      return `<html><body>
+        <input id="choice" type="range" />
+        <button data-activity-complete onclick="finish()">完成比较</button>
+        <button data-activity-reset onclick="resetAll()">重置</button>
+        <script>
+          const observations = new Set();
+          function finish() { observations.add('compared'); window.__maicActivity.complete(); }
+          function resetAll() { observations.clear(); window.__maicActivity.reset(); }
+        </script>
+      </body></html>`;
+    });
+
+    expect(capturedPrompt).toContain('window.__maicActivity.complete()');
+    expect(capturedPrompt).toContain('window.__maicActivity.reset()');
+    expect(capturedPrompt).toContain('bounded safety timeout');
+    expect(generated).toMatchObject({ html: expect.stringContaining('data-activity-complete') });
+  });
+
+  it('rejects a production interaction that cannot reset the player activity state', async () => {
+    const generated = await generateSceneContent(interactiveOutline(), async () => `
+      <html><body><input type="range" /><script>
+        const observations = new Set();
+        function finish() { window.__maicActivity.complete(); }
+      </script></body></html>
+    `);
+
+    expect(generated).toBeNull();
+  });
+
+  it('audits a legacy interaction through the deterministic simulation fallback', async () => {
+    const generated = await generateSceneContent(interactiveOutline({
+      widgetType: undefined,
+      widgetOutline: undefined,
+      interactiveConfig: undefined,
+    }), async () => `
+      <html><body><input type="range" /><script>
+        const observations = new Set();
+        function finish() { window.__maicActivity.complete(); }
+        function resetAll() { observations.clear(); window.__maicActivity.reset(); }
+      </script></body></html>
+    `);
+
+    expect(generated).toMatchObject({ widgetType: 'simulation' });
+  });
+
   it('forwards diagram count and prescribed-node constraints into generation', async () => {
     let capturedPrompt = '';
     const aiCall: AICallFn = async (system, user) => {

@@ -51,7 +51,7 @@ describe('video manifest wiring', () => {
     expect(Object.prototype.hasOwnProperty.call(video, 'src')).toBe(false);
   });
 
-  test('removes hallucinated generated video refs when no generated videos are available', async () => {
+  test('rejects a slide that becomes blank after removing a hallucinated generated video', async () => {
     const outline: SceneOutline = {
       id: 'scene_1',
       type: 'slide',
@@ -78,11 +78,13 @@ describe('video manifest wiring', () => {
         ],
       });
 
-    const content = await generateSceneContent(outline, aiCall);
+    const failures: unknown[] = [];
+    const content = await generateSceneContent(outline, aiCall, {
+      onFailure: (failure) => failures.push(failure),
+    });
 
-    expect(content).not.toBeNull();
-    const slideContent = content as GeneratedSlideContent;
-    expect(slideContent.elements.some((el) => el.type === 'video')).toBe(false);
+    expect(content).toBeNull();
+    expect(failures).toEqual([{ code: 'invalid-model-output' }]);
   });
 
   test('preserves direct video src and drops generated mediaRef', async () => {

@@ -50,6 +50,27 @@ describe('assessment teaching dependencies', () => {
     expect(() => buildAssessmentContext({ ...finalQuiz, assessmentUnitIds: [] }, [first, second])).toThrow('缺少');
   });
 
+  it('merges current-section teaching with explicitly referenced prior teaching', () => {
+    const mixedQuiz = {
+      ...quiz,
+      assessmentUnitIds: ['unit-local', 'unit-prior'],
+    };
+    const prior = taught(page('prior', {
+      lectureSectionId: 'section-before', order: 1, teachingUnitIds: ['unit-prior'],
+    }), '前一节已经讲清的依据');
+    const local = taught(page('local', {
+      lectureSectionId: 'section-a', order: 2, teachingUnitIds: ['unit-local'],
+    }), '本节补充的判断方法');
+    const unrelated = taught(page('unrelated-prior', {
+      lectureSectionId: 'section-before', order: 0, teachingUnitIds: ['unit-other'],
+    }), '没有被测验引用的内容');
+
+    const context = JSON.parse(buildAssessmentContext(mixedQuiz, [local, unrelated, prior]));
+
+    expect(context.pages.map((item: { pageId: string }) => item.pageId)).toEqual(['prior', 'local']);
+    expect(JSON.stringify(context)).not.toContain('没有被测验引用的内容');
+  });
+
   it('fails explicitly for quiz-only or unspoken teaching instead of inventing taught context', () => {
     for (const evidence of [[], [taught(page('empty', { lectureSectionId: 'section-a' }), '  ')]]) {
       try {

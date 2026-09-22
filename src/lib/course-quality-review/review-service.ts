@@ -78,7 +78,7 @@ export async function confirmCourseTeacherReview(courseId: string, teacherId: st
   const readiness = getNewSystemCourseReadiness(course).filter((check) => check.id !== 'teacher-review' && !check.ok);
   if (readiness.length) throw new CourseReviewError('COURSE_NOT_READY', readiness.map((check) => check.message).join('\n'));
   if (publish) {
-    const resources = await auditCourseGeneratedResources(courseId);
+    const resources = await auditCourseGeneratedResources(courseId, { course, classroom });
     if (resources.issues.length) throw new CourseReviewError('RESOURCES_NOT_READY', '部分教学资源尚未就绪，请在预览页补齐后发布。');
   }
   const quality = freshQualityReport(course, signature);
@@ -115,4 +115,8 @@ export async function assertCourseTeacherReview(course: Course, teacherId?: stri
   if (!classroom || computeCourseQualitySignature({ ...course, id: review.courseId }, classroom) !== review.signature) throw new CourseReviewError('REVIEW_STALE', '课程内容已变更，请重新进行教师终审。');
   const hard = unresolvedHardIssues(collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false }));
   if (hard.length) throw new CourseReviewError('COURSE_HARD_ERRORS', hard.map((issue) => issue.title).join('；'));
+  const resources = await auditCourseGeneratedResources(course.id, { course, classroom });
+  if (resources.issues.length) {
+    throw new CourseReviewError('RESOURCES_NOT_READY', '部分教学资源尚未就绪，请在预览页补齐后发布。');
+  }
 }

@@ -16,11 +16,14 @@ import { packageResult, readPrivatePackageFile, resourcePackageDataDir, type Res
 import type { CourseResourcePackage, ResourcePackageDraft, ResourcePackageFile, ResourcePackageRole } from "./types";
 
 const POLL_MS = 1500;
-const STALE_MS = 2 * 60 * 1000;
+const HEARTBEAT_MS = 5_000;
+const LEASE_MS = 30_000;
+const WORKER_OWNER = `${process.pid}:${randomUUID()}`;
 let started = false;
 let stopping = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 const controllers = new Map<string, AbortController>();
+const activeRuns = new Map<string, Promise<void>>();
 function json(value: unknown): Prisma.InputJsonValue { return JSON.parse(JSON.stringify(value)); }
 function stableId(value: string): string {
   const digest = createHash("sha256").update(value).digest("hex");
@@ -159,14 +162,32 @@ async function ensureLaunchPreview(resourcePackage: CourseResourcePackage, reque
 }
 
 export async function runResourcePackageJob(jobId: string): Promise<void> {
-  const claimed = await resourcePackageJobs.updateMany({ where: { id: jobId, status: "queued" }, data: { status: "running", step: "extract", startedAt: new Date(), lastHeartbeatAt: new Date(), attempt: { increment: 1 }, error: null, message: "正在识别资源包中的知识点、教案与启动课件" } });
+  const executionId = randomUUID();
+  const claimed = await resourcePackageJobs.updateMany({ where: { id: jobId, status: "queued" }, data: {
+    status: "running", step: "extract", startedAt: new Date(), lastHeartbeatAt: new Date(),
+    executionId, executionOwner: WORKER_OWNER, leaseExpiresAt: new Date(Date.now() + LEASE_MS),
+    attempt: { increment: 1 }, error: null, message: "正在识别资源包中的知识点、教案与启动课件",
+  } });
   if (!claimed.count) return;
   const job = await resourcePackageJobs.findUnique({ where: { id: jobId } });
-  if (!job) return;
+  if (!job || job.executionId !== executionId) return;
   const request = job.request as unknown as ResourcePackageRequest;
   const controller = new AbortController();
   controllers.set(jobId, controller);
-  const heartbeat = setInterval(() => { void resourcePackageJobs.updateMany({ where: { id: jobId, status: "running" }, data: { lastHeartbeatAt: new Date() } }).catch(() => undefined); }, 10000);
+  const owner = { id: jobId, status: "running", executionId } as const;
+  const writeOwned = async (data: Parameters<typeof resourcePackageJobs.updateMany>[0]["data"]): Promise<boolean> => {
+    const updated = await resourcePackageJobs.updateMany({ where: owner, data });
+    if (updated.count === 0 && !controller.signal.aborted) {
+      controller.abort(new Error("RESOURCE_PACKAGE_EXECUTION_LEASE_LOST"));
+    }
+    return updated.count === 1;
+  };
+  const heartbeat = setInterval(() => {
+    void writeOwned({
+      lastHeartbeatAt: new Date(),
+      leaseExpiresAt: new Date(Date.now() + LEASE_MS),
+    }).catch(() => controller.abort(new Error("RESOURCE_PACKAGE_HEARTBEAT_FAILED")));
+  }, HEARTBEAT_MS);
   heartbeat.unref?.();
   let result: ResourcePackageResult = packageResult(job);
   try {
@@ -175,7 +196,7 @@ export async function runResourcePackageJob(jobId: string): Promise<void> {
       const identified = identifyResourcePackage(readBoundedZip(bytes), request.selections);
       result = { candidates: identified.candidates };
       if (identified.needsSelection) {
-        await resourcePackageJobs.update({ where: { id: jobId }, data: { status: "needs_selection", progress: 15, message: "发现多个候选文件，请为各类资料选择对应文件", result: json(result), completedAt: new Date() } });
+        await writeOwned({ status: "needs_selection", progress: 15, message: "发现多个候选文件，请为各类资料选择对应文件", result: json(result), completedAt: new Date(), executionId: null, executionOwner: null, leaseExpiresAt: null });
         return;
       }
       const documents: CourseResourcePackage["documents"] = {};
@@ -192,7 +213,7 @@ export async function runResourcePackageJob(jobId: string): Promise<void> {
         documents[role] = await persistDocument(request, role, entry, data);
         if (role !== "launchPresentation") materials.push({ id: documents[role]!.id, fileName: entry.name, mimeType: "text/markdown", content: parsed[role]!.text });
       }
-      await resourcePackageJobs.update({ where: { id: jobId }, data: { progress: 40, message: "正在提取课程目标、知识点与五阶段时间安排" } });
+      if (!await writeOwned({ progress: 40, message: "正在提取课程目标、知识点与五阶段时间安排" })) return;
       const deterministic = parseMarkdownResourcePackageDraft(parsed.knowledge!, parsed.lessonPlan!);
       const draft = await enrichMissingStructure(deterministic.draft, materials, controller.signal);
       const compatibility = inspectPackageCompatibility(parsed.lessonPlan!.text, readPresentationEvidence(identified.selected.launchPresentation!.read()));
@@ -200,24 +221,24 @@ export async function runResourcePackageJob(jobId: string): Promise<void> {
       result = { ...result, package: { schemaVersion: 2, id: request.uploadId, revision: request.revision, source: request.source, documents, draft,
         handoff: deterministic.handoff, planningIssues: deterministic.planningIssues, planningIssueVersion, ...compatibility }, referenceMaterials: materials };
       await updateCourse(request.courseId, (course) => ({ ...course, content: { ...course.content, resourcePackage: result.package } }));
-      await resourcePackageJobs.update({ where: { id: jobId }, data: { progress: 65, step: "convert", message: "正在将项目启动 PPT 转换为课堂 PDF", result: json(result) } });
+      if (!await writeOwned({ progress: 65, step: "convert", message: "正在将项目启动 PPT 转换为课堂 PDF", result: json(result) })) return;
     }
     if (result.package!.conflicts?.length && !result.package!.adaptation) {
-      await resourcePackageJobs.update({ where: { id: jobId }, data: { status: "blocked", step: "compatibility", progress: 60, message: "发现课堂流程冲突，请查看来源证据并修正资源包，或明确授权统一适配后继续。", result: json(result), completedAt: new Date() } });
+      await writeOwned({ status: "blocked", step: "compatibility", progress: 60, message: "发现课堂流程冲突，请查看来源证据并修正资源包，或明确授权统一适配后继续。", result: json(result), completedAt: new Date(), executionId: null, executionOwner: null, leaseExpiresAt: null });
       return;
     }
     controller.signal.throwIfAborted();
     await ensureLaunchPreview(result.package!, request, controller.signal);
     controller.signal.throwIfAborted();
-    await resourcePackageJobs.update({ where: { id: jobId }, data: { status: "ready", step: "ready", progress: 100, message: "资源包已解析，请核对信息并补齐关键问题", result: json(result), completedAt: new Date(), lastHeartbeatAt: new Date() } });
+    await writeOwned({ status: "ready", step: "ready", progress: 100, message: "资源包已解析，请核对信息并补齐关键问题", result: json(result), completedAt: new Date(), lastHeartbeatAt: new Date(), executionId: null, executionOwner: null, leaseExpiresAt: null });
   } catch (error) {
     if (controller.signal.aborted) {
-      await resourcePackageJobs.updateMany({ where: { id: jobId, status: "running" }, data: { status: "queued", message: "服务恢复后继续处理资源包", result: json(result) } });
+      await resourcePackageJobs.updateMany({ where: owner, data: { status: "queued", message: "服务恢复后继续处理资源包", result: json(result), executionId: null, executionOwner: null, leaseExpiresAt: null } });
     } else {
       const message = error instanceof PresentationConversionError ? "项目启动 PPT 的课堂 PDF 转换失败，原始文件和已解析信息已保留，请重试转换。"
         : error instanceof ResourcePackageError ? error.message : "资源包暂时无法处理，已上传的原始文件已保留，请稍后重试。";
       console.error("[resource-package] Processing failed", { jobId, code: error instanceof ResourcePackageError || error instanceof PresentationConversionError ? error.code : "INTERNAL_ERROR" });
-      await resourcePackageJobs.update({ where: { id: jobId }, data: { status: "failed", error: message, message, result: json(result), completedAt: new Date(), lastHeartbeatAt: new Date() } });
+      await writeOwned({ status: "failed", error: message, message, result: json(result), completedAt: new Date(), lastHeartbeatAt: new Date(), executionId: null, executionOwner: null, leaseExpiresAt: null });
     }
   } finally { clearInterval(heartbeat); controllers.delete(jobId); }
 }
@@ -225,9 +246,19 @@ export async function runResourcePackageJob(jobId: string): Promise<void> {
 async function tick(): Promise<void> {
   if (stopping) return;
   try {
-    await resourcePackageJobs.updateMany({ where: { status: "running", OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: new Date(Date.now() - STALE_MS) } }] }, data: { status: "queued", message: "服务恢复后继续处理资源包" } });
+    await resourcePackageJobs.updateMany({ where: {
+      status: "running",
+      OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lt: new Date() } }],
+    }, data: {
+      status: "queued", message: "服务恢复后继续处理资源包",
+      executionId: null, executionOwner: null, leaseExpiresAt: null,
+    } });
     const job = await resourcePackageJobs.findFirst({ where: { status: "queued" }, orderBy: { createdAt: "asc" } });
-    if (job) await runResourcePackageJob(job.id);
+    if (job) {
+      const run = runResourcePackageJob(job.id);
+      activeRuns.set(job.id, run);
+      try { await run; } finally { if (activeRuns.get(job.id) === run) activeRuns.delete(job.id); }
+    }
   } catch { console.warn("[resource-package] Queue temporarily unavailable; will retry"); }
   finally { if (!stopping) { timer = setTimeout(() => void tick(), POLL_MS); timer.unref?.(); } }
 }
@@ -240,5 +271,10 @@ export async function stopResourcePackageWorker(): Promise<void> {
   stopping = true; started = false;
   if (timer) clearTimeout(timer);
   for (const controller of controllers.values()) controller.abort();
-  if (controllers.size) await resourcePackageJobs.updateMany({ where: { id: { in: [...controllers.keys()] }, status: "running" }, data: { status: "queued", message: "服务恢复后继续处理资源包" } });
+  if (activeRuns.size) {
+    await Promise.race([
+      Promise.allSettled([...activeRuns.values()]),
+      new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+    ]);
+  }
 }

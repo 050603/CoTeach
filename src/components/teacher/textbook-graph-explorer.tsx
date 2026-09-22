@@ -1,574 +1,157 @@
 "use client";
 
-import * as echarts from "echarts/core";
-import { GraphChart, type GraphSeriesOption } from "echarts/charts";
-import { TooltipComponent, type TooltipComponentOption } from "echarts/components";
-import { CanvasRenderer } from "echarts/renderers";
-import { Focus, Maximize2, Minimize2, RotateCcw, Search, ZoomIn, ZoomOut } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import type { ComposeOption, ECharts } from "echarts/core";
+import { Focus, Maximize2, Minimize2, ZoomIn, ZoomOut } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Dialog as DialogPrimitive } from "radix-ui";
+import type { Graph } from "@antv/g6";
 import type { TextbookConcept, TextbookRelation, TextbookSection } from "@/app/teacher/textbooks/textbook-view-types";
+import { cachedGraphView, conceptName, createGraphModel, graphFocusedSectionIds, relationLabel, resolveGraphFocus, type ViewOptions, type GraphView } from "@/lib/textbook/graph-model";
 import styles from "./textbook-graph-explorer.module.css";
 
-echarts.use([GraphChart, TooltipComponent, CanvasRenderer]);
-
-type GraphOption = ComposeOption<GraphSeriesOption | TooltipComponentOption>;
-
-const LEVEL_COLORS = [
-  "#315f8d", "#4f7f9f", "#4f8b7d", "#8b744f", "#7a6f9f",
-  "#9a6670", "#687f58", "#5e7f8a",
-];
-const UNASSIGNED_COLOR = "#8794a2";
-const GRAPH_NODE_SIZE = 18;
-
-function conceptName(concept: TextbookConcept) {
-  return concept.name || concept.title || "未命名知识点";
-}
-
-function relationEnds(relation: TextbookRelation) {
-  return {
-    source: relation.sourceConceptId || relation.sourceId || "",
-    target: relation.targetConceptId || relation.targetId || "",
-  };
-}
-
-export function graphRelationEnds(relation: TextbookRelation) {
-  const ends = relationEnds(relation);
-  const kind = (relation.relationType || relation.type || "related").toLocaleLowerCase();
-  if (kind === "part_of" || kind === "child_of" || kind === "requires") {
-    return { source: ends.target, target: ends.source };
-  }
-  return ends;
-}
-
-function relationLabel(relation: TextbookRelation) {
-  const value = (relation.relationType || relation.type || "related").toLocaleLowerCase();
-  const labels: Record<string, string> = {
-    prerequisite: "先修", requires: "先修", supports: "支持", application: "应用",
-    applies: "应用", comparison: "对比", contrasts: "对比", contains: "包含",
-    parent_of: "包含", part_of: "包含", child_of: "包含", precedes: "先于", related: "相关",
-  };
-  return labels[value] || relation.relationType || relation.type || "相关";
-}
-
-function relationIsInferred(relation: TextbookRelation) {
-  return relation.inferred ?? (Boolean(relation.origin) && relation.origin !== "TEXTBOOK");
-}
-
-function escapeHtml(value: string) {
-  return value.replace(/[&<>'"]/g, character => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
-  })[character] || character);
-}
-
-function compactTitle(value: string, max = 18) {
-  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
-}
-
-type TextbookGraphExplorerProps = {
-  className?: string;
-  concepts: TextbookConcept[];
-  relations: TextbookRelation[];
-  sections: TextbookSection[];
-  focusedSectionId: string;
-  selectedId: string | null;
-  onSelect: (id: string | null) => void;
-  onSelectSection: (sectionId: string) => void;
+export type TextbookGraphExplorerProps = {
+  className?: string; concepts: TextbookConcept[]; relations: TextbookRelation[]; sections: TextbookSection[];
+  focusedSectionId: string; selectedId: string | null; onSelect: (id: string | null) => void; onSelectSection: (id: string) => void; detail?: ReactNode;
 };
 
-type GraphData = {
-  option: GraphOption;
-  categories: Array<{ id: string; name: string; color: string; count: number; focused: boolean }>;
-  indexById: Map<string, number>;
-  nodeCount: number;
-  relationCount: number;
-};
-
-type GraphEntity = {
-  id: string;
-  name: string;
-  sectionId: string;
-  level: number | null;
-  nodeKind: "concept" | "section";
-};
-
-export function graphFocusedSectionIds(sections: TextbookSection[], focusedSectionId: string) {
-  if (focusedSectionId === "all") return null;
-  if (focusedSectionId === "unassigned") return new Set(["unassigned"]);
-  const result = new Set([focusedSectionId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const section of sections) {
-      if (section.parentId && result.has(section.parentId) && !result.has(section.id)) {
-        result.add(section.id);
-        changed = true;
-      }
-    }
-  }
-  return result;
+function chapterFill(color: string) {
+  return ({ "#2563eb": "#eef4ff", "#0d9488": "#eaf9f5", "#d97706": "#fff6e8", "#8b5cf6": "#f3eeff", "#db2777": "#fff0f6", "#0284c7": "#eaf7ff" } as Record<string, string>)[color] || "#f1f5f9";
 }
+const narrowQuery = "(max-width: 900px)";
+function subscribeNarrow(onChange: () => void) { const query = window.matchMedia(narrowQuery); query.addEventListener("change", onChange); return () => query.removeEventListener("change", onChange); }
+const getNarrow = () => window.matchMedia(narrowQuery).matches;
+const getServerNarrow = () => false;
 
-export function graphLevelColor(sectionLevel: number | null) {
-  if (sectionLevel == null) return UNASSIGNED_COLOR;
-  const level = Math.max(0, Math.floor(sectionLevel));
-  return LEVEL_COLORS[level % LEVEL_COLORS.length];
-}
+export function TextbookGraphExplorer({ concepts, relations, sections, focusedSectionId, selectedId, onSelect, onSelectSection, className, detail }: TextbookGraphExplorerProps) {
+  const host = useRef<HTMLDivElement>(null); const canvas = useRef<HTMLDivElement>(null); const graph = useRef<Graph | null>(null);
+  const [portalHost, setPortalHost] = useState<HTMLDivElement | null>(null);
+  const mountHost = useCallback((node: HTMLDivElement | null) => { host.current = node; setPortalHost(node); }, []);
+  const narrow = useSyncExternalStore(subscribeNarrow, getNarrow, getServerNarrow);
+  const [completedView, setCompletedView] = useState<GraphView | null>(null);
+  const [fullscreen, setFullscreen] = useState(false); const [error, setError] = useState("");
+  const [focusId, setFocusId] = useState<string | null>(null); const [focusSection, setFocusSection] = useState<string | null>(null); const [direction, setDirection] = useState<ViewOptions["direction"]>("neighbors"); const [hops, setHops] = useState(1);
+  const [page, setPage] = useState(0); const [textbook, setTextbook] = useState(true); const [inferred, setInferred] = useState(true); const [kind, setKind] = useState("all");
+  const model = useMemo(() => createGraphModel(concepts, relations, sections), [concepts, relations, sections]);
+  // External search selection opens its chapter. Selecting an already visible node only changes its state.
+  const requestedFocus = focusSection === focusedSectionId ? focusId : null;
+  const activeFocus = useMemo(() => resolveGraphFocus(model, {
+    sectionId: focusedSectionId, focusId: requestedFocus, direction, hops, page, textbook, inferred, kind,
+  }, selectedId), [model, focusedSectionId, requestedFocus, direction, hops, page, textbook, inferred, kind, selectedId]);
+  // Commit the automatic exit so a later click on an old neighbor cannot resurrect stale focus.
+  if (requestedFocus && !activeFocus) setFocusId(null);
+  const sectionId = focusedSectionId === "all" && selectedId && !activeFocus ? model.conceptById.get(selectedId)?.sectionId || "unassigned" : focusedSectionId;
+  const scopeIds = useMemo(() => graphFocusedSectionIds(model.sections, sectionId), [model, sectionId]);
+  const selectedIndex = !activeFocus && selectedId ? model.concepts.filter(c => sectionId === "unassigned" ? model.rootOf(c.id) === "unassigned" : !scopeIds || scopeIds.has(c.sectionId || "")).findIndex(c => c.id === selectedId) : -1;
+  const visiblePage = selectedIndex >= 0 ? Math.floor(selectedIndex / 200) : page;
+  const view = useMemo(() => cachedGraphView(model, { sectionId, focusId: activeFocus, direction, hops, page: visiblePage, textbook, inferred, kind }), [model, sectionId, activeFocus, direction, hops, visiblePage, textbook, inferred, kind]);
+  const callbacks = useRef({ onSelect, onSelectSection, selectedId });
+  useEffect(() => { callbacks.current = { onSelect, onSelectSection, selectedId }; }, [onSelect, onSelectSection, selectedId]);
+  const selection = useRef<string | null>(null);
 
-function normalizedKnowledgeLabel(value: string) {
-  return value.trim().replace(/\s+/g, "").toLocaleLowerCase();
-}
-
-export function graphStructuralSectionIds(sections: TextbookSection[], concepts: TextbookConcept[]) {
-  const conceptNamesBySection = new Map<string, Set<string>>();
-  for (const concept of concepts) {
-    if (!concept.sectionId) continue;
-    const names = conceptNamesBySection.get(concept.sectionId) || new Set<string>();
-    names.add(normalizedKnowledgeLabel(conceptName(concept)));
-    conceptNamesBySection.set(concept.sectionId, names);
-  }
-  return new Set(sections
-    .filter(section => !conceptNamesBySection.get(section.id)?.has(normalizedKnowledgeLabel(section.title)))
-    .map(section => section.id));
-}
-
-function buildGraphData(
-  concepts: TextbookConcept[],
-  relations: TextbookRelation[],
-  sections: TextbookSection[],
-  focusedSectionId: string,
-  selectedId: string | null,
-): GraphData {
-  const sectionById = new Map(sections.map(section => [section.id, section]));
-  const focusedIds = graphFocusedSectionIds(sections, focusedSectionId);
-  const sectionLevelCache = new Map<string, number>();
-  const sectionLevel = (sectionId: string, visited = new Set<string>()): number => {
-    const cached = sectionLevelCache.get(sectionId);
-    if (cached != null) return cached;
-    const section = sectionById.get(sectionId);
-    if (!section || visited.has(sectionId)) return 0;
-    const explicitLevel = Number(section.level);
-    if (Number.isFinite(explicitLevel) && explicitLevel >= 0) {
-      const level = Math.floor(explicitLevel);
-      sectionLevelCache.set(sectionId, level);
-      return level;
-    }
-    const level = section.parentId
-      ? sectionLevel(section.parentId, new Set(visited).add(sectionId)) + 1
-      : 0;
-    sectionLevelCache.set(sectionId, level);
-    return level;
-  };
-  const conceptsBySection = new Map<string, TextbookConcept[]>();
-  for (const concept of concepts) {
-    if (!concept.sectionId || !sectionById.has(concept.sectionId)) continue;
-    conceptsBySection.set(concept.sectionId, [...(conceptsBySection.get(concept.sectionId) || []), concept]);
-  }
-  const representativeBySection = new Map<string, string>();
-  const structuralSectionIds = graphStructuralSectionIds(sections, concepts);
-  for (const section of sections) {
-    const matchingConcept = (conceptsBySection.get(section.id) || [])
-      .find(concept => normalizedKnowledgeLabel(conceptName(concept)) === normalizedKnowledgeLabel(section.title));
-    representativeBySection.set(section.id, matchingConcept?.id || `section:${section.id}`);
-  }
-  const entities: GraphEntity[] = [
-    ...concepts.map(concept => ({
-      id: concept.id,
-      name: conceptName(concept),
-      sectionId: concept.sectionId && sectionById.has(concept.sectionId) ? concept.sectionId : "unassigned",
-      level: concept.sectionId && sectionById.has(concept.sectionId) ? sectionLevel(concept.sectionId) : null,
-      nodeKind: "concept" as const,
-    })),
-    ...sections.filter(section => structuralSectionIds.has(section.id)).map(section => ({
-      id: `section:${section.id}`,
-      name: section.title,
-      sectionId: section.id,
-      level: sectionLevel(section.id),
-      nodeKind: "section" as const,
-    })),
-  ];
-  const entityById = new Map(entities.map(entity => [entity.id, entity]));
-  const conceptIds = new Set(concepts.map(concept => concept.id));
-  const visibleRelations = relations.filter(relation => {
-    const { source, target } = graphRelationEnds(relation);
-    return source !== target && conceptIds.has(source) && conceptIds.has(target);
-  });
-  const linkPairs = new Set(visibleRelations.map(relation => {
-    const ends = graphRelationEnds(relation);
-    return `${ends.source}->${ends.target}`;
-  }));
-  const hierarchyRelations: Array<{ id: string; source: string; target: string }> = [];
-  const addHierarchyRelation = (source: string | undefined, target: string | undefined, id: string) => {
-    if (!source || !target || source === target || !entityById.has(source) || !entityById.has(target)) return;
-    const pair = `${source}->${target}`;
-    if (linkPairs.has(pair)) return;
-    linkPairs.add(pair);
-    hierarchyRelations.push({ id, source, target });
-  };
-  for (const section of sections) {
-    const sectionRepresentative = representativeBySection.get(section.id);
-    if (section.parentId) {
-      addHierarchyRelation(representativeBySection.get(section.parentId), sectionRepresentative, `section-edge:${section.parentId}:${section.id}`);
-    }
-    for (const concept of conceptsBySection.get(section.id) || []) {
-      if (concept.id !== sectionRepresentative) {
-        addHierarchyRelation(sectionRepresentative, concept.id, `section-concept:${section.id}:${concept.id}`);
-      }
-    }
-  }
-  const degree = new Map(entities.map(entity => [entity.id, 0]));
-  visibleRelations.forEach(relation => {
-    const { source, target } = graphRelationEnds(relation);
-    degree.set(source, (degree.get(source) || 0) + 1);
-    degree.set(target, (degree.get(target) || 0) + 1);
-  });
-  hierarchyRelations.forEach(relation => {
-    degree.set(relation.source, (degree.get(relation.source) || 0) + 1);
-    degree.set(relation.target, (degree.get(relation.target) || 0) + 1);
-  });
-
-  const categoryKeys: string[] = [];
-  entities.forEach(entity => {
-    const key = entity.level == null ? "unassigned" : `level:${entity.level}`;
-    if (!categoryKeys.includes(key)) categoryKeys.push(key);
-  });
-  categoryKeys.sort((left, right) => {
-    if (left === "unassigned") return 1;
-    if (right === "unassigned") return -1;
-    return Number(left.slice("level:".length)) - Number(right.slice("level:".length));
-  });
-  const categoryIndex = new Map(categoryKeys.map((key, index) => [key, index]));
-  const categories = categoryKeys.map(key => {
-    const level = key === "unassigned" ? null : Number(key.slice("level:".length));
-    return {
-      id: key,
-      name: level == null ? "未归类" : `第 ${level + 1} 层知识`,
-      color: graphLevelColor(level),
-      count: entities.filter(entity => (entity.level == null ? "unassigned" : `level:${entity.level}`) === key).length,
-      focused: !focusedIds || entities.some(entity => (entity.level == null ? "unassigned" : `level:${entity.level}`) === key && focusedIds.has(entity.sectionId)),
-    };
-  });
-  const labelLimit = entities.length <= 48 ? entities.length : Math.min(48, Math.max(26, Math.ceil(Math.sqrt(entities.length) * 3)));
-  const labelledIds = new Set([
-    ...entities.filter(entity => entity.nodeKind === "section").map(entity => entity.id),
-    ...[...entities]
-      .sort((left, right) => (degree.get(right.id) || 0) - (degree.get(left.id) || 0))
-      .map(entity => entity.id),
-  ].slice(0, labelLimit));
-  const bucketOffsets = new Map<string, number>();
-  const categoryCount = Math.max(1, categories.length);
-  const orbit = Math.min(520, Math.max(230, 130 + categoryCount * 64));
-  const indexById = new Map<string, number>();
-  const data = entities.map((entity, index) => {
-    indexById.set(entity.id, index);
-    const key = entity.level == null ? "unassigned" : `level:${entity.level}`;
-    const category = categoryIndex.get(key) || 0;
-    const localIndex = bucketOffsets.get(key) || 0;
-    bucketOffsets.set(key, localIndex + 1);
-    const centerAngle = categoryCount === 1 ? 0 : Math.PI * 2 * category / categoryCount - Math.PI / 2;
-    const localAngle = localIndex * 2.399963229728653;
-    const localRadius = 48 + Math.sqrt(localIndex) * 52;
-    const count = degree.get(entity.id) || 0;
-    const focused = !focusedIds || focusedIds.has(entity.sectionId);
-    return {
-      id: entity.id,
-      name: entity.name,
-      nodeKind: entity.nodeKind,
-      sectionId: entity.sectionId,
-      value: count,
-      category,
-      x: Math.cos(centerAngle) * orbit + Math.cos(localAngle) * localRadius,
-      y: Math.sin(centerAngle) * orbit * .68 + Math.sin(localAngle) * localRadius,
-      symbol: "circle",
-      symbolSize: [GRAPH_NODE_SIZE, GRAPH_NODE_SIZE],
-      symbolKeepAspect: true,
-      selected: entity.nodeKind === "concept" && entity.id === selectedId,
-      draggable: true,
-      label: { show: focused && labelledIds.has(entity.id) },
-      itemStyle: {
-        color: categories[category]?.color || LEVEL_COLORS[0],
-        opacity: focused ? 1 : .16,
-        borderColor: "rgba(255,255,255,.96)",
-        borderWidth: 2,
-        shadowBlur: focused ? 13 : 0,
-        shadowColor: "rgba(35,54,74,.2)",
-      },
-    };
-  });
-
-  const nodeNameById = new Map(entities.map(entity => [entity.id, entity.name]));
-  const focusedNodeIds = new Set(entities.filter(entity => !focusedIds || focusedIds.has(entity.sectionId)).map(entity => entity.id));
-
-  const links = visibleRelations.map((relation, index) => {
-    const { source, target } = graphRelationEnds(relation);
-    const inFocus = focusedNodeIds.has(source) || focusedNodeIds.has(target);
-    const inferred = relationIsInferred(relation);
-    return {
-      id: relation.id || `${source}-${target}-${index}`,
-      source,
-      target,
-      sourceName: nodeNameById.get(source) || "未知知识点",
-      targetName: nodeNameById.get(target) || "未知知识点",
-      relationName: relationLabel(relation),
-      inferred,
-      lineStyle: {
-        color: inferred ? "#a5805c" : "#718aa2",
-        width: entities.length > 100 ? .75 : 1.15,
-        opacity: inFocus ? (entities.length > 100 ? .28 : .48) : .055,
-        type: inferred ? "dashed" as const : "solid" as const,
-        curveness: .07,
-      },
-    };
-  });
-  const structuralLinks = hierarchyRelations.map(relation => {
-    const inFocus = focusedNodeIds.has(relation.source) || focusedNodeIds.has(relation.target);
-    return {
-      ...relation,
-      sourceName: nodeNameById.get(relation.source) || "知识层级",
-      targetName: nodeNameById.get(relation.target) || "知识点",
-      relationName: "包含",
-      inferred: false,
-      structural: true,
-      lineStyle: {
-        color: "#8ca0b3",
-        width: 1,
-        opacity: inFocus ? .42 : .055,
-        type: "solid" as const,
-        curveness: .04,
-      },
-    };
-  });
-  const graphLinks = [...links, ...structuralLinks];
-
-  const option: GraphOption = {
-    animationDurationUpdate: 420,
-    animationEasingUpdate: "cubicOut",
-    tooltip: {
-      trigger: "item",
-      enterable: false,
-      confine: true,
-      padding: 0,
-      borderWidth: 0,
-      backgroundColor: "transparent",
-      extraCssText: "box-shadow:none",
-      formatter: rawParams => {
-        const params = Array.isArray(rawParams) ? rawParams[0] : rawParams;
-        if (!params) return "";
-        const raw = params.data as { name?: string; value?: number; nodeKind?: "concept" | "section"; relationName?: string; inferred?: boolean; structural?: boolean; sourceName?: string; targetName?: string } | undefined;
-        if (!raw) return "";
-        if (params.dataType === "edge") {
-          return `<div class=\"${styles.chartTooltip}\"><small>${raw.structural ? "知识层级关系" : raw.inferred ? "AI 推断关系" : "教材关系"}</small><strong>${escapeHtml(raw.sourceName || "知识点")} <b>—${escapeHtml(raw.relationName || "相关")}→</b> ${escapeHtml(raw.targetName || "知识点")}</strong></div>`;
+  useEffect(() => {
+    let cancelled = false; let instance: Graph | null = null; let observer: ResizeObserver | null = null;
+    const container = canvas.current; if (!container) return;
+    void import("@antv/g6").then(async ({ Graph: GraphClass }) => {
+      if (cancelled) return;
+      setError("");
+      instance = new GraphClass({
+        container, width: container.clientWidth, height: container.clientHeight || 600, animation: false, padding: [48, 56, 48, 56],
+        data: {
+          nodes: view.nodes.map(node => ({ id: node.id, data: { ...node }, style: { x: node.x, y: node.y, fill: chapterFill(model.colorOf(node.root)), stroke: model.colorOf(node.root), labelText: node.label } })),
+          edges: view.edges.map(edge => ({ id: edge.id, source: edge.source, target: edge.target, style: { labelText: edge.count ? `${edge.count} 条关系汇总` : relationLabel(edge.kind), lineDash: edge.inferred ? [5, 4] : undefined } })),
+        },
+        node: { type: "rect", style: { size: view.overview ? [280, 86] : [224, 72], radius: 14, zIndex: 2, lineWidth: 1.3, labelPlacement: "center", labelFill: "#18334d", labelFontSize: 15, labelFontWeight: 550, labelWordWrap: true, labelMaxWidth: view.overview ? 256 : 204, labelMaxLines: 3, labelTextOverflow: "ellipsis" }, state: { selected: { lineWidth: 3, shadowColor: "#2563eb44", shadowBlur: 14 }, active: { lineWidth: 2.5 } } },
+        edge: { type: "quadratic", style: { stroke: "#c7d5e6", lineWidth: 1.1, endArrow: true, zIndex: 1, labelOpacity: 0, labelFill: "#526680", labelFontSize: 13, labelBackground: true, labelBackgroundFill: "#ffffff", labelPadding: [3, 5] }, state: { active: { stroke: "#2563eb", lineWidth: 2, labelOpacity: 1 } } },
+        behaviors: ["drag-canvas", "zoom-canvas", "drag-element", { type: "hover-activate", degree: 1 }],
+      });
+      graph.current = instance;
+      instance.on("node:click", event => {
+        const id = "target" in event && event.target && "id" in event.target ? String(event.target.id) : ""; const node = view.nodes.find(n => n.id === id);
+        if (node?.kind === "section") { setFocusId(null); setPage(0); callbacks.current.onSelect(null); callbacks.current.onSelectSection(node.sectionId!); }
+        else callbacks.current.onSelect(id);
+      });
+      await instance.render();
+      if (cancelled) return;
+      await instance.fitView({ when: "always" }, false);
+      if (cancelled) return;
+      const minimumZoom = view.overview ? .85 : .9;
+      const fittedZoom = instance.getZoom();
+      const initialZoom = Math.min(1, Math.max(minimumZoom, fittedZoom));
+      if (initialZoom !== fittedZoom) { await instance.zoomTo(initialZoom, false); if (cancelled) return; }
+      if (fittedZoom < minimumZoom) {
+        if (view.nodes.length) {
+          const topLeft = instance.getViewportByCanvas([
+            Math.min(...view.nodes.map(node => node.x)) - (view.overview ? 140 : 112),
+            Math.min(...view.nodes.map(node => node.y)) - (view.overview ? 43 : 36),
+          ]);
+          await instance.translateBy([48 - topLeft[0], 48 - topLeft[1]], false);
         }
-        return `<div class=\"${styles.chartTooltip}\"><small>${raw.nodeKind === "section" ? "知识层级" : "知识点"} · ${raw.value || 0} 条关联</small><strong>${escapeHtml(raw.name || "未命名知识点")}</strong><span>${raw.nodeKind === "section" ? "点击聚焦这一知识分支" : "点击查看教材依据"}</span></div>`;
-      },
-    },
-    series: [{
-      type: "graph",
-      layout: "force",
-      left: 86,
-      right: 86,
-      top: 96,
-      bottom: 96,
-      data,
-      links: graphLinks,
-      categories: categories.map(category => ({ name: category.name, itemStyle: { color: category.color } })),
-      roam: true,
-      draggable: true,
-      edgeSymbol: ["none", "arrow"],
-      edgeSymbolSize: [0, 10],
-      cursor: "pointer",
-      selectedMode: "single",
-      scaleLimit: { min: .24, max: 4.5 },
-      force: {
-        repulsion: entities.length > 120 ? 520 : entities.length > 50 ? 450 : 380,
-        edgeLength: entities.length > 100 ? 148 : entities.length > 45 ? 138 : 128,
-        gravity: entities.length > 100 ? .08 : .065,
-        friction: .64,
-        layoutAnimation: entities.length < 650,
-      },
-      lineStyle: { color: "source", opacity: .24, width: .8, curveness: .07 },
-      label: {
-        show: true,
-        position: "right",
-        distance: 8,
-        formatter: params => compactTitle(String(params.name || ""), 18),
-        color: "#3f5266",
-        fontSize: 10,
-        fontWeight: 650,
-        textBorderColor: "rgba(255,255,255,.96)",
-        textBorderWidth: 4,
-      },
-      labelLayout: { hideOverlap: true },
-      edgeLabel: { show: false },
-      emphasis: {
-        focus: "adjacency",
-        scale: 1.16,
-        label: { show: true, color: "#1f3f5e", fontSize: 11, fontWeight: 750 },
-        lineStyle: { width: 2, opacity: .86 },
-        itemStyle: { borderColor: "#ffffff", borderWidth: 3, shadowBlur: 18, shadowColor: "rgba(35,76,112,.3)" },
-      },
-      blur: {
-        itemStyle: { opacity: .32 },
-        lineStyle: { opacity: .05 },
-        label: { opacity: .38 },
-      },
-      select: {
-        itemStyle: { borderColor: "#173f65", borderWidth: 3, shadowBlur: 18, shadowColor: "rgba(35,76,112,.36)" },
-      },
-    }],
-  };
-
-  return { option, categories, indexById, nodeCount: entities.length, relationCount: graphLinks.length };
-}
-
-function GraphSearch({ concepts, onLocate }: { concepts: TextbookConcept[]; onLocate: (id: string) => void }) {
-  const [query, setQuery] = useState("");
-  const results = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
-    if (!normalized) return [];
-    return concepts.filter(concept => conceptName(concept).toLocaleLowerCase().includes(normalized)).slice(0, 8);
-  }, [concepts, query]);
-
-  return <div className={styles.searchBox}>
-    <Search aria-hidden="true" size={14} />
-    <input aria-label="搜索知识点" value={query} onChange={event => setQuery(event.target.value)} placeholder={`搜索 ${concepts.length} 个知识点`} />
-    {query ? <div className={styles.searchResults}>
-      {results.length ? results.map(concept => <button key={concept.id} type="button" onClick={() => {
-        onLocate(concept.id);
-        setQuery("");
-      }}>{conceptName(concept)}</button>) : <p>没有匹配的知识点</p>}
-    </div> : null}
-  </div>;
-}
-
-function GraphCanvas({ concepts, relations, sections, focusedSectionId, selectedId, onSelect, onSelectSection, fullscreen, onToggleFullscreen }: TextbookGraphExplorerProps & { fullscreen: boolean; onToggleFullscreen: () => void }) {
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const chartRef = useRef<ECharts | null>(null);
-  const graphData = useMemo(() => buildGraphData(concepts, relations, sections, focusedSectionId, selectedId), [concepts, focusedSectionId, relations, sections, selectedId]);
-
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    const chart = echarts.init(host, undefined, { renderer: "canvas", devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2) });
-    chartRef.current = chart;
-    const observer = new ResizeObserver(() => chart.resize());
-    observer.observe(host);
-    return () => {
-      observer.disconnect();
-      chart.dispose();
-      chartRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    chartRef.current?.setOption(graphData.option, { notMerge: true, lazyUpdate: false });
-  }, [graphData.option]);
-
-  useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    chart.dispatchAction({ type: "downplay", seriesIndex: 0 });
-    chart.dispatchAction({ type: "unselect", seriesIndex: 0 });
-    const dataIndex = selectedId ? graphData.indexById.get(selectedId) : undefined;
-    if (dataIndex == null) return;
-    chart.dispatchAction({ type: "select", seriesIndex: 0, dataIndex });
-    chart.dispatchAction({ type: "highlight", seriesIndex: 0, dataIndex });
-  }, [graphData.indexById, selectedId]);
-
-  useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    const handler = (params: unknown) => {
-      const event = params as { dataType?: string; data?: { id?: string; nodeKind?: "concept" | "section"; sectionId?: string } | null };
-      if (event.dataType !== "node" || !event.data?.id) return;
-      if (event.data.nodeKind === "section" && event.data.sectionId) {
-        onSelectSection(event.data.sectionId);
-        return;
       }
-      onSelect(event.data.id);
-    };
-    chart.on("click", handler);
-    return () => {
-      chart.off("click", handler);
-    };
-  }, [onSelect, onSelectSection]);
+      if (cancelled) return;
+      const selected = callbacks.current.selectedId;
+      if (selected && view.nodes.some(n => n.id === selected)) { selection.current = selected; await instance.setElementState(selected, "selected", false); await instance.focusElement(selected, false); }
+      if (cancelled) return;
+      setCompletedView(view);
+      observer = new ResizeObserver(() => { if (!cancelled && instance) instance.setSize(container.clientWidth, container.clientHeight); });
+      observer.observe(container);
+    }).catch(() => { if (!cancelled) setError("图谱加载失败，请切换章节或刷新后重试。"); });
+    return () => { cancelled = true; observer?.disconnect(); if (graph.current === instance) graph.current = null; instance?.destroy(); selection.current = null; };
+  }, [model, view]);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => chartRef.current?.resize());
-    return () => window.cancelAnimationFrame(frame);
-  }, [fullscreen]);
+    const instance = graph.current; if (!instance) return;
+    const states: Record<string, string[]> = {};
+    if (selection.current && view.nodes.some(n => n.id === selection.current)) states[selection.current] = [];
+    if (selectedId && view.nodes.some(n => n.id === selectedId)) states[selectedId] = ["selected"];
+    selection.current = selectedId;
+    void instance.setElementState(states, false).then(() => { if (graph.current === instance && selectedId && view.nodes.some(n => n.id === selectedId)) return instance.focusElement(selectedId, false); }).catch(() => {});
+  }, [selectedId, view]);
+  useEffect(() => { const changed = () => setFullscreen(document.fullscreenElement === host.current); document.addEventListener("fullscreenchange", changed); return () => document.removeEventListener("fullscreenchange", changed); }, []);
 
-  const roam = useCallback((zoom: number) => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    chart.dispatchAction({ type: "graphRoam", seriesIndex: 0, zoom, originX: chart.getWidth() / 2, originY: chart.getHeight() / 2 });
-  }, []);
-
-  const reset = useCallback(() => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    chart.clear();
-    chart.setOption(graphData.option, { notMerge: true, lazyUpdate: false });
-  }, [graphData.option]);
-
-  const locate = useCallback((id: string) => {
-    onSelect(id);
-    const chart = chartRef.current;
-    const dataIndex = graphData.indexById.get(id);
-    if (!chart || dataIndex == null) return;
-    chart.dispatchAction({ type: "downplay", seriesIndex: 0 });
-    chart.dispatchAction({ type: "highlight", seriesIndex: 0, dataIndex });
-  }, [graphData.indexById, onSelect]);
-
-  return <>
-    <div ref={hostRef} className={styles.canvas} role="img" aria-label={`教材知识图谱，共 ${graphData.nodeCount} 个节点、${graphData.relationCount} 条关系`} />
-    <GraphSearch concepts={concepts} onLocate={locate} />
-    <div className={styles.networkMeta} aria-hidden="true"><i /><span>知识关系网络</span><small>{graphData.nodeCount} 点 · {graphData.relationCount} 关系</small></div>
-    <div className={styles.actions} aria-label="图谱视图控制">
-      <button aria-label="放大图谱" title="放大" type="button" onClick={() => roam(1.22)}><ZoomIn size={16} /></button>
-      <button aria-label="缩小图谱" title="缩小" type="button" onClick={() => roam(.82)}><ZoomOut size={16} /></button>
-      <button aria-label="适配全部节点" title="适配全部节点" type="button" onClick={reset}><Focus size={16} /></button>
-      <button aria-label="重新整理图谱" title="重新运行布局" type="button" onClick={reset}><RotateCcw size={15} /></button>
-      <span aria-hidden="true" />
-      <button aria-label={fullscreen ? "退出全屏图谱" : "全屏查看图谱"} title={fullscreen ? "退出全屏" : "全屏查看"} type="button" onClick={onToggleFullscreen}>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>
-    </div>
-    <div className={styles.legendPanel} aria-label="图谱图例">
-      <div className={styles.categoryLegend} aria-label="知识层级颜色">
-        {graphData.categories.slice(0, 5).map(category => <span data-focused={category.focused || undefined} key={category.id} title={category.name}><i style={{ backgroundColor: category.color }} /><em>{compactTitle(category.name, 9)}</em><small>{category.count}</small></span>)}
-        {graphData.categories.length > 5 ? <b>+{graphData.categories.length - 5} 层</b> : null}
+  const reset = () => { setFocusId(null); setPage(0); onSelect(null); onSelectSection("all"); };
+  const selected = selectedId ? model.conceptById.get(selectedId) : null;
+  const title = activeFocus && model.conceptById.has(activeFocus) ? `聚焦 · ${conceptName(model.conceptById.get(activeFocus)!)}` : view.overview ? "整书知识地图" : model.sectionById.get(sectionId)?.title || "未归类知识";
+  return <div ref={mountHost} data-ready={completedView === view ? "true" : "false"} data-graph-ready={completedView === view ? "true" : "false"} data-visible-node-count={view.nodes.length} data-total-node-count={view.total} data-edge-count={view.edges.length} aria-busy={completedView !== view} className={[styles.explorer, className].filter(Boolean).join(" ")} data-fullscreen={fullscreen || undefined}>
+    <div className={styles.main}>
+      <header className={styles.header}><div><span className={styles.eyebrow}>KNOWLEDGE ATLAS</span><h2>{title}</h2><p>{view.overview ? "从章节出发，逐层探索知识之间的联系" : `${view.total} 个知识点 · 当前 ${view.nodes.length} 个 · ${view.edges.length} 条可见关系`}</p></div><button type="button" onClick={reset}>返回整书</button></header>
+      <div className={styles.filters}>
+        <label><input type="checkbox" checked={textbook} onChange={e => setTextbook(e.target.checked)} />教材关系</label>
+        <label><input type="checkbox" checked={inferred} onChange={e => setInferred(e.target.checked)} />推断关系</label>
+        <select aria-label="筛选关系类型" value={kind} onChange={e => setKind(e.target.value)}><option value="all">所有关系</option>{[...new Set(model.edges.map(e => e.kind))].map(k => <option key={k} value={k}>{relationLabel(k)}</option>)}</select>
+        <button type="button" disabled={!selected} onClick={() => { setFocusId(selectedId); setFocusSection(focusedSectionId); setPage(0); }}>聚焦所选知识点</button>
+        {activeFocus && <><select aria-label="探索方向" value={direction} onChange={e => { setDirection(e.target.value as ViewOptions["direction"]); setPage(0); }}><option value="neighbors">相邻知识</option><option value="upstream">上游先修</option><option value="downstream">下游应用与支持</option></select>{direction === "neighbors" && <select aria-label="关系跳数" value={hops} onChange={e => { setHops(Number(e.target.value)); setPage(0); }}><option value={1}>一跳关系</option><option value={2}>两跳关系</option></select>}<button type="button" onClick={() => { setFocusId(null); setPage(0); }}>返回章节</button></>}
       </div>
-      <div className={styles.relationLegend} aria-label="关系类型">
-        <span><i />教材关系</span><span><i data-structure="true" />层级关系</span><span><i data-inferred="true" />推断关系</span><small>箭头表示知识方向</small>
+      <div className={styles.stage}>
+        <div ref={canvas} className={styles.canvas} role="img" aria-label={`${title}，${view.nodes.length} 个可见节点，${view.edges.length} 条关系`} />
+        {completedView !== view && !error && <div className={styles.loading} role="status">正在整理知识地图…</div>}
+        {!view.nodes.length && <div className={styles.empty}>此范围还没有知识点，请选择其他章节。</div>}
+        {error && <div role="alert" className={styles.error}>{error}</div>}
+        <div className={styles.actions}>
+          <button type="button" aria-label="放大图谱" onClick={() => { void graph.current?.zoomBy(1.2, false); }}><ZoomIn size={18} /></button>
+          <button type="button" aria-label="缩小图谱" onClick={() => { void graph.current?.zoomBy(.8, false); }}><ZoomOut size={18} /></button>
+          <button type="button" aria-label="适配当前范围" onClick={() => { void graph.current?.fitView({ when: "always" }, false); }}><Focus size={18} /></button>
+          <button type="button" aria-label={fullscreen ? "退出全屏图谱" : "全屏查看图谱"} onClick={() => { void (fullscreen ? document.exitFullscreen() : host.current?.requestFullscreen())?.catch(() => setError("浏览器未允许全屏，可继续在当前页面浏览。")); }}>{fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</button>
+        </div>
       </div>
+      <footer className={styles.footer}>
+        <div className={styles.legend}>{[...new Set(view.nodes.map(n => n.root))].map(root => <span key={root} title={model.sectionById.get(root)?.title || "未归类"}><i style={{ background: model.colorOf(root) }} />{model.sectionById.get(root)?.title || "未归类"}</span>)}</div>
+        {view.pages > 1 && <div className={styles.pagination}><button type="button" disabled={view.page === 0} onClick={() => { onSelect(null); setPage(view.page - 1); }}>上一组</button><span>{view.page + 1} / {view.pages} · 共 {view.total} 个知识点</span><button type="button" disabled={view.page + 1 === view.pages} onClick={() => { onSelect(null); setPage(view.page + 1); }}>更多知识点</button></div>}
+        {activeFocus && direction === "downstream" && <p>沿实际先修、应用和支持关系向后追踪，不根据章节顺序推断。</p>}
+        {view.overview && <p>连线汇总章节之间的真实关系数量，不代表章节的先修或包含关系。悬停章节查看相邻汇总。</p>}
+        {!view.overview && <p>关系按层级排列；长链折行后继续沿箭头阅读。</p>}
+        <p>拖动平移 · 滚轮缩放 · 点击节点查看详情 · 实线为教材关系，虚线为推断 · 箭头表示关系方向</p>
+        <details className={styles.accessible}><summary>以列表浏览当前节点</summary><div>{view.nodes.map(node => <button key={node.id} type="button" onClick={() => { if (node.kind === "section") { setFocusId(null); setPage(0); onSelect(null); onSelectSection(node.sectionId!); } else onSelect(node.id); }}>{node.label}</button>)}</div></details>
+      </footer>
     </div>
-    <div className={styles.gestureHint}>拖动画布浏览 · 滚轮缩放 · 节点可拖动 · 悬停查看邻接关系</div>
-  </>;
-}
-
-export function TextbookGraphExplorer(props: TextbookGraphExplorerProps) {
-  const [fullscreen, setFullscreen] = useState(false);
-
-  useEffect(() => {
-    if (!fullscreen) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFullscreen(false);
-    };
-    window.addEventListener("keydown", close);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", close);
-    };
-  }, [fullscreen]);
-
-  const rootClassName = [styles.explorer, props.className].filter(Boolean).join(" ");
-
-  if (!props.concepts.length) return <div className={[styles.empty, props.className].filter(Boolean).join(" ")}>左侧目录当前已全部折叠，展开章节即可恢复对应知识节点。</div>;
-
-  const explorer = <div className={rootClassName} data-fullscreen={fullscreen || undefined}>
-    <GraphCanvas {...props} fullscreen={fullscreen} onToggleFullscreen={() => setFullscreen(value => !value)} />
+    {detail && !narrow && <aside className={styles.detail}>{detail}</aside>}
+    {narrow && <DialogPrimitive.Root open={Boolean(detail)} onOpenChange={open => { if (!open) onSelect(null); }}>
+      <DialogPrimitive.Portal container={portalHost}>
+        <DialogPrimitive.Overlay className={styles.drawerOverlay} />
+        <DialogPrimitive.Content className={styles.drawer} aria-describedby={undefined} onCloseAutoFocus={event => { event.preventDefault(); host.current?.querySelector<HTMLButtonElement>("button")?.focus(); }}>
+          <DialogPrimitive.Title className={styles.drawerTitle}>知识点详情</DialogPrimitive.Title>
+          <DialogPrimitive.Close className={styles.drawerClose} aria-label="关闭知识点详情">关闭</DialogPrimitive.Close>
+          {detail}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>}
   </div>;
-  return fullscreen && typeof document !== "undefined" ? createPortal(explorer, document.body) : explorer;
 }

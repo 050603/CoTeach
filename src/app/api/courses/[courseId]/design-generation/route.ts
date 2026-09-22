@@ -352,33 +352,44 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       || (job.status === "completed" && !isSameCourseDesignRequest(job.request, quickRequest))
     ) {
       const preserveValidatedStages = isSameCourseDesignRequest(job.request, quickRequest);
-      job = await designGenerationJobs.update({
-        where: { id: job.id },
-        data: {
-          status: "queued",
-          step: "queued",
-          reviewStatus: "unavailable",
-          reviewAvailableUntil: null,
-          stepIndex: 0,
-          progress: 0,
-          message: "快速生成任务已重新提交",
-          currentCall: null,
-          estimatedRemainingSeconds: estimate,
-          tokenUsage: preserveValidatedStages ? job.tokenUsage : 0,
-          tokenUsageCalls: preserveValidatedStages ? job.tokenUsageCalls : 0,
-          request: requestJson,
-          trace: preserveValidatedStages
-            ? job.trace as Prisma.InputJsonValue
-            : [],
-          qualityReport: Prisma.JsonNull,
-          error: null,
-          startedAt: null,
-          completedAt: null,
-          lastHeartbeatAt: null,
-          retryAt: null,
-          version: { increment: 1 },
-        },
-      });
+      try {
+        job = await designGenerationJobs.replace({
+          where: { id: job.id, status: job.status, version: job.version },
+          checkpointPolicy: preserveValidatedStages
+            ? { prefixes: ["course-design-attempt:"] }
+            : "all",
+          data: {
+            status: "queued",
+            step: "queued",
+            reviewStatus: "unavailable",
+            reviewAvailableUntil: null,
+            stepIndex: 0,
+            progress: 0,
+            message: "快速生成任务已重新提交",
+            currentCall: null,
+            estimatedRemainingSeconds: estimate,
+            tokenUsage: preserveValidatedStages ? job.tokenUsage : 0,
+            tokenUsageCalls: preserveValidatedStages ? job.tokenUsageCalls : 0,
+            request: requestJson,
+            trace: preserveValidatedStages
+              ? job.trace as Prisma.InputJsonValue
+              : [],
+            qualityReport: Prisma.JsonNull,
+            error: null,
+            startedAt: null,
+            completedAt: null,
+            lastHeartbeatAt: null,
+            retryAt: null,
+            executionId: null,
+            executionOwner: null,
+            leaseExpiresAt: null,
+            version: { increment: 1 },
+          },
+        });
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== "GENERATION_JOB_NOT_FOUND") throw error;
+        return Response.json({ error: "GENERATION_JOB_CONFLICT" }, { status: 409 });
+      }
     }
 
     const backgroundEnabled = isBackgroundCourseGenerationEnabled();

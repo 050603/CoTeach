@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import type { CourseDesignGenerationJob } from "@/lib/course-generation/job-storage";
 import { contentGenerationJobs, designGenerationJobs, resourcePackageJobs } from "@/lib/course-generation/job-storage";
@@ -39,8 +40,6 @@ import type {
 } from "@/lib/session/types";
 import {
   estimatePersistedCourseGenerationSeconds,
-  prepareCourseGenerationCheckpointsForFullPromotion,
-  resetCourseGenerationCheckpoints,
   type PersistedCourseGenerationRequest,
 } from "@/lib/course-generation/job-runner";
 import {
@@ -133,7 +132,9 @@ import {
 } from "./teaching-blueprint";
 
 const POLL_INTERVAL_MS = 1_500;
-const STALE_AFTER_MS = 30 * 60 * 1_000;
+const HEARTBEAT_INTERVAL_MS = 5_000;
+const LEASE_DURATION_MS = 30_000;
+const WORKER_ID = `course-design:${process.pid}:${randomUUID()}`;
 const MAX_TRACE_ENTRIES = 24;
 // Deep-reasoning providers can spend several minutes on graph construction
 // and page planning. Estimates are deliberately
@@ -196,6 +197,38 @@ let stopping = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let activeController: AbortController | null = null;
 let activeCourseId: string | null = null;
+const activeRuns = new Set<Promise<void>>();
+
+class CourseDesignExecutionLostError extends Error {
+  constructor() {
+    super("Course design execution lease was lost");
+    this.name = "CourseDesignExecutionLostError";
+  }
+}
+
+function designLeaseDeadline(now = Date.now()): Date {
+  return new Date(now + LEASE_DURATION_MS);
+}
+
+function designCheckpointOptions(job: CourseDesignGenerationJob): { executionId?: string } {
+  return job.executionId ? { executionId: job.executionId } : {};
+}
+
+async function assertCourseDesignExecution(job: CourseDesignGenerationJob): Promise<void> {
+  const current = await designGenerationJobs.findUnique({ where: { id: job.id } });
+  if (!job.executionId || current?.status !== "running" || current.executionId !== job.executionId) {
+    throw new CourseDesignExecutionLostError();
+  }
+}
+
+async function updateCourseForDesignExecution(
+  job: CourseDesignGenerationJob,
+  courseId: string,
+  update: Parameters<typeof updateCourse>[1],
+): Promise<void> {
+  await assertCourseDesignExecution(job);
+  await updateCourse(courseId, update);
+}
 
 class CourseDesignCancelledError extends Error {
   constructor() {
@@ -315,14 +348,16 @@ async function courseDesignModelFingerprint(request: QuickDesignRequest): Promis
 
 async function updateDesignCurrentCall(
   jobId: string,
+  executionId: string | null,
   currentCall: DesignCallSnapshot | null,
 ): Promise<void> {
   await designGenerationJobs.updateMany({
-    where: { id: jobId, status: "running" },
+    where: { id: jobId, status: "running", ...(executionId ? { executionId } : {}) },
     data: {
       currentCall,
       ...(currentCall ? { estimatedRemainingSeconds: null } : {}),
       lastHeartbeatAt: new Date(),
+      leaseExpiresAt: designLeaseDeadline(),
       version: { increment: 1 },
     },
   });
@@ -361,7 +396,7 @@ async function createDesignStreamingAiCall(input: {
   const enqueueProgressWrite = (next: DesignCallSnapshot) => {
     progressWrite = progressWrite
       .catch(() => undefined)
-      .then(() => updateDesignCurrentCall(input.job.id, next));
+      .then(() => updateDesignCurrentCall(input.job.id, input.job.executionId, next));
     return progressWrite;
   };
   const heartbeatTimer = setInterval(() => {
@@ -417,7 +452,7 @@ async function createDesignStreamingAiCall(input: {
         inputFingerprint: input.inputFingerprint,
         modelFingerprint,
         attemptsStarted: totalAttempt,
-      });
+      }, designCheckpointOptions(input.job));
     },
     onStarted: ({ totalAttempt, queueMs, startedAt }) => {
       persistActivity({
@@ -454,7 +489,7 @@ async function createDesignStreamingAiCall(input: {
     clear: async () => {
       clearInterval(heartbeatTimer);
       await progressWrite.catch(() => undefined);
-      await updateDesignCurrentCall(input.job.id, null);
+      await updateDesignCurrentCall(input.job.id, input.job.executionId, null);
     },
   };
 }
@@ -488,7 +523,7 @@ async function awaitTeacherReviewCheckpoint(
 ): Promise<{ mode: "auto-adopted" | "teacher-confirmed"; actorId?: string }> {
   const reviewAvailableUntil = checkpoint.windowMs === null ? null : new Date(Date.now() + checkpoint.windowMs);
   const updated = await designGenerationJobs.update({
-    where: { id: job.id },
+    where: { id: job.id, status: "running", executionId: job.executionId },
     data: {
       status: "review_available",
       reviewStatus: "available",
@@ -498,6 +533,7 @@ async function awaitTeacherReviewCheckpoint(
       progress: Math.max(job.progress, checkpoint.progress),
       message: checkpoint.availableMessage,
       lastHeartbeatAt: new Date(),
+      leaseExpiresAt: designLeaseDeadline(),
       version: { increment: 1 },
     },
   });
@@ -506,6 +542,10 @@ async function awaitTeacherReviewCheckpoint(
   // Release the single design worker so other teachers' queued courses can
   // start while this course waits for an explicit decision.
   if (isPersistentCourseDesignReview(checkpoint.windowMs)) {
+    await designGenerationJobs.updateMany({
+      where: { id: job.id, status: "review_available", executionId: job.executionId },
+      data: { executionId: null, executionOwner: null, leaseExpiresAt: null },
+    });
     throw new CourseDesignReviewPendingError(checkpoint.kind);
   }
   let heartbeatAt = Date.now();
@@ -519,6 +559,7 @@ async function awaitTeacherReviewCheckpoint(
     if (!current || current.status === "cancelling" || current.status === "cancelled") {
       throw new CourseDesignCancelledError();
     }
+    if (current.executionId !== job.executionId) throw new CourseDesignExecutionLostError();
     if (current.reviewStatus === "approved" && (current.status === "running" || current.status === "queued")) {
       const approvedRequest = current.request as unknown as QuickDesignRequest;
       return { mode: "teacher-confirmed", ...(approvedRequest.reviewActorId ? { actorId: approvedRequest.reviewActorId } : {}) };
@@ -526,8 +567,8 @@ async function awaitTeacherReviewCheckpoint(
     if (current.status === "paused") {
       if (Date.now() - heartbeatAt >= 2_000) {
         await designGenerationJobs.updateMany({
-          where: { id: job.id, status: "paused" },
-          data: { lastHeartbeatAt: new Date() },
+          where: { id: job.id, status: "paused", executionId: job.executionId },
+          data: { lastHeartbeatAt: new Date(), leaseExpiresAt: designLeaseDeadline() },
         });
         heartbeatAt = Date.now();
       }
@@ -537,13 +578,14 @@ async function awaitTeacherReviewCheckpoint(
     const deadline = current.reviewAvailableUntil?.getTime() ?? reviewAvailableUntil?.getTime();
     if (current.status === "review_available" && deadline !== undefined && Date.now() >= deadline) {
       const resumed = await designGenerationJobs.updateMany({
-        where: { id: job.id, status: "review_available", reviewStatus: "available" },
+        where: { id: job.id, status: "review_available", reviewStatus: "available", executionId: job.executionId },
         data: {
           status: "running",
           reviewStatus: "auto-continued",
           reviewAvailableUntil: null,
           message: checkpoint.autoContinueMessage,
           lastHeartbeatAt: new Date(),
+          leaseExpiresAt: designLeaseDeadline(),
           version: { increment: 1 },
         },
       });
@@ -731,6 +773,7 @@ export async function resumeCourseDesignAfterOutlineReview(
           ? "教师已决定按当前范围与时长继续，正在生成实质教学设计"
         : "已采用教师确认的课程大纲，正在继续生成",
       lastHeartbeatAt: new Date(),
+      leaseExpiresAt: designLeaseDeadline(),
       version: { increment: 1 },
     },
   });
@@ -741,16 +784,14 @@ async function recordStep(
   input: Omit<QuickDesignTraceEvent, "completedAt">,
 ): Promise<QuickDesignTraceEvent> {
   const status = await designGenerationJobs.findUnique({
-    where: { id: job.id },
+    where: { id: job.id, status: "running", executionId: job.executionId },
     select: { status: true },
   });
-  if (status?.status === "cancelling" || status?.status === "cancelled") {
-    throw new CourseDesignCancelledError();
-  }
+  if (!status) throw new CourseDesignExecutionLostError();
   const event: QuickDesignTraceEvent = { ...input, completedAt: new Date().toISOString() };
   const trace = [...traceEvents(job.trace), event].slice(-MAX_TRACE_ENTRIES);
   const updated = await designGenerationJobs.update({
-    where: { id: job.id },
+    where: { id: job.id, status: "running", executionId: job.executionId },
     data: {
       step: event.step,
       stepIndex: event.stepIndex,
@@ -764,6 +805,7 @@ async function recordStep(
       ),
       trace: trace as unknown as Prisma.InputJsonValue,
       lastHeartbeatAt: new Date(),
+      leaseExpiresAt: designLeaseDeadline(),
       version: { increment: 1 },
     },
   });
@@ -779,7 +821,7 @@ async function beginStep(
   message: string,
 ): Promise<void> {
   const updated = await designGenerationJobs.update({
-    where: { id: job.id },
+    where: { id: job.id, status: "running", executionId: job.executionId },
     data: {
       step,
       stepIndex,
@@ -1860,7 +1902,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
           inputFingerprint: expectedFingerprint,
           modelFingerprint,
           rawResponse,
-        });
+        }, designCheckpointOptions(job));
         return rawResponse;
       };
     }
@@ -1882,7 +1924,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
             rawResponse,
             validationIssues: issues,
             responseCharacters,
-          });
+          }, designCheckpointOptions(job));
         },
         repairFrom: persistedInvalidRepair,
       });
@@ -1897,7 +1939,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
       inputFingerprint: expectedFingerprint,
       modelFingerprint,
       blueprint,
-    });
+    }, designCheckpointOptions(job));
   }
   const outlines = teachingBlueprintToOutlines(blueprint, ZH_CN_COURSE_LANGUAGE_DIRECTIVE);
   return { blueprint, outlines };
@@ -2104,17 +2146,43 @@ async function enqueueClassroomGeneration(
     enableTTS: request.enableTTS,
   });
   const existingGenerationJob = await contentGenerationJobs.findUnique({ where: { courseId: course.id } });
+  const queuedUpdate = {
+    status: "queued",
+    step: "queued",
+    progress: 0,
+    message: selection.scope === "test-lesson"
+      ? `正式课程设计已完成，等待生成测试小节“${selection.testLesson?.sectionTitle ?? "第一知识小节"}”`
+      : "课程设计已完成，等待生成课堂内容",
+    scenesGenerated: 0,
+    totalScenes,
+    estimatedRemainingSeconds: initialEstimate,
+    tokenUsage: 0,
+    tokenUsageCalls: 0,
+    request: request as unknown as Prisma.InputJsonValue,
+    result: Prisma.JsonNull,
+    events: [] as Prisma.InputJsonValue[],
+    error: null,
+    startedAt: null,
+    completedAt: null,
+    lastHeartbeatAt: null,
+    executionId: null,
+    executionOwner: null,
+    leaseExpiresAt: null,
+    version: { increment: 1 },
+  };
   if (existingGenerationJob) {
     const previousRequest = existingGenerationJob.request as unknown as Partial<PersistedCourseGenerationRequest>;
-    if (isTestLessonPromotion(previousRequest.generationScope, selection.scope)) {
-      await prepareCourseGenerationCheckpointsForFullPromotion(existingGenerationJob.id);
-    } else {
-      await resetCourseGenerationCheckpoints(existingGenerationJob.id);
-    }
+    await contentGenerationJobs.replace({
+      where: { id: existingGenerationJob.id, version: existingGenerationJob.version, status: existingGenerationJob.status },
+      checkpointPolicy: isTestLessonPromotion(previousRequest.generationScope, selection.scope)
+        ? "prepared-outlines"
+        : "all",
+      data: queuedUpdate,
+    });
+    return;
   }
-  await contentGenerationJobs.upsert({
-    where: { courseId: course.id },
-    create: {
+  await contentGenerationJobs.create({
+    data: {
       courseId: course.id,
       request: request as unknown as Prisma.InputJsonValue,
       totalScenes,
@@ -2122,27 +2190,6 @@ async function enqueueClassroomGeneration(
       message: selection.scope === "test-lesson"
         ? `正式课程设计已完成，等待生成测试小节“${selection.testLesson?.sectionTitle ?? "第一知识小节"}”`
         : "课程设计已完成，等待生成课堂内容",
-    },
-    update: {
-      status: "queued",
-      step: "queued",
-      progress: 0,
-      message: selection.scope === "test-lesson"
-        ? `正式课程设计已完成，等待生成测试小节“${selection.testLesson?.sectionTitle ?? "第一知识小节"}”`
-        : "课程设计已完成，等待生成课堂内容",
-      scenesGenerated: 0,
-      totalScenes,
-      estimatedRemainingSeconds: initialEstimate,
-      tokenUsage: 0,
-      tokenUsageCalls: 0,
-      request: request as unknown as Prisma.InputJsonValue,
-      result: Prisma.JsonNull,
-      events: [],
-      error: null,
-      startedAt: null,
-      completedAt: null,
-      lastHeartbeatAt: null,
-      version: { increment: 1 },
     },
   });
 }
@@ -2306,14 +2353,37 @@ function sceneOutlinesFromContent(content: CourseContent): Array<SceneOutline & 
   })) as Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
 }
 
+async function ensureCourseDesignExecution(
+  job: CourseDesignGenerationJob,
+): Promise<CourseDesignGenerationJob | null> {
+  if (job.executionId) return job;
+  const now = new Date();
+  const executionId = randomUUID();
+  const claimed = await designGenerationJobs.updateMany({
+    where: { id: job.id, status: "running", version: job.version, executionId: null },
+    data: {
+      executionId,
+      executionOwner: WORKER_ID,
+      leaseExpiresAt: designLeaseDeadline(now.getTime()),
+      lastHeartbeatAt: now,
+      version: { increment: 1 },
+    },
+  });
+  return claimed.count === 1
+    ? designGenerationJobs.findUnique({ where: { id: job.id } })
+    : null;
+}
+
 export async function runCourseDesignJob(job: CourseDesignGenerationJob): Promise<void> {
-  return runWithCourseGenerationLlmContext(
-    () => runCourseDesignJobWithGenerationContext(job),
+  const claimed = await ensureCourseDesignExecution(job);
+  if (!claimed) return;
+  const execution = runWithCourseGenerationLlmContext(
+    () => runCourseDesignJobWithGenerationContext(claimed),
     {
       onTokenUsage: async (totalTokens) => {
         try {
           await designGenerationJobs.update({
-            where: { id: job.id },
+            where: { id: claimed.id, executionId: claimed.executionId },
             data: {
               tokenUsage: { increment: totalTokens },
               tokenUsageCalls: { increment: 1 },
@@ -2325,6 +2395,8 @@ export async function runCourseDesignJob(job: CourseDesignGenerationJob): Promis
       },
     },
   );
+  activeRuns.add(execution);
+  await execution.finally(() => activeRuns.delete(execution));
 }
 
 /** Resume only interrupted infrastructure work from durable checkpoints. */
@@ -2342,8 +2414,12 @@ export async function resumeRecoverableCourseDesignJob(
   );
   if (!transientRecoveryRequest) return job;
   const recoveryCount = transientRecoveryRequest.transientRecoveryCount ?? 1;
-  await designGenerationJobs.updateMany({
-    where: { id: job.id, status: "failed" },
+  await designGenerationJobs.replace({
+    where: { id: job.id, status: "failed", version: job.version },
+    // This path is automatic infrastructure recovery. Keep both the consumed
+    // stage-attempt budget and the recovery counter. Only an explicit teacher
+    // retry may open a fresh bounded attempt budget for the unfinished stage.
+    checkpointPolicy: {},
     data: {
       status: "queued",
       step: "infrastructure_retry",
@@ -2358,6 +2434,9 @@ export async function resumeRecoverableCourseDesignJob(
         request.systemMode,
       ),
       lastHeartbeatAt: new Date(),
+      executionId: null,
+      executionOwner: null,
+      leaseExpiresAt: null,
       version: { increment: 1 },
     },
   });
@@ -2373,7 +2452,7 @@ async function runNewSystemCourseDesign(
   if (!canResumeCourseDesignWithPackageState(request, packageJob)) {
     throw new Error("课程已开始导入或修改资源包，请完成资源包确认后重新生成，旧输入不会继续运行。");
   }
-  await updateCourse(request.courseId, (current) => {
+  await updateCourseForDesignExecution(job, request.courseId, (current) => {
     if (!request.resourcePackage && current.content.resourcePackage) {
       throw new Error("课程已接入资源包，请使用已确认资源包重新开始生成，不能继续旧的无包任务。");
     }
@@ -2439,7 +2518,7 @@ async function runNewSystemCourseDesign(
           activeGenerationMode: "new",
         },
       };
-      await updateCourse(request.courseId, (current) => ({
+      await updateCourseForDesignExecution(job, request.courseId, (current) => ({
         ...current,
         ...mergeGeneratedCourseSnapshot(current, course),
         stages: generationStages(course),
@@ -2548,7 +2627,7 @@ async function runNewSystemCourseDesign(
             inputFingerprint: knowledgeInputFingerprint,
             modelFingerprint: knowledgeModelFingerprint,
             rawResponse,
-          });
+          }, designCheckpointOptions(job));
           return rawResponse;
         };
         generated = await generateKnowledgeStructureOnce(
@@ -2572,7 +2651,7 @@ async function runNewSystemCourseDesign(
       textbookSelections: request.textbookSelections,
       courseEvidence: request.textbookEvidence,
       revisionCount: generated.revisionCount,
-    });
+    }, designCheckpointOptions(job));
     const content: CourseContent = {
       ...course.content,
       textbookSelections: request.textbookSelections,
@@ -2606,7 +2685,7 @@ async function runNewSystemCourseDesign(
       dynamicFacilitationScaffolds: [],
       content,
     };
-    await updateCourse(request.courseId, (current) => ({
+    await updateCourseForDesignExecution(job, request.courseId, (current) => ({
       ...current,
       ...mergeGeneratedCourseSnapshot(current, course),
       content,
@@ -2681,7 +2760,7 @@ async function runNewSystemCourseDesign(
         }],
       },
     };
-    await updateCourse(request.courseId, () => course);
+    await updateCourseForDesignExecution(job, request.courseId, () => course);
   }
 
   let timingPlan = isNewSystemAiTimingPlan(course.content.moduleTimingPlan, course.hours, course.content.stagePlan)
@@ -2752,7 +2831,7 @@ async function runNewSystemCourseDesign(
             inputFingerprint: durationInputFingerprint,
             modelFingerprint: durationModelFingerprint,
             rawResponse,
-          });
+          }, designCheckpointOptions(job));
           return rawResponse;
         };
         durationRecommendation = await generateNewSystemAiDurationRecommendation(durationInput, {
@@ -2768,14 +2847,14 @@ async function runNewSystemCourseDesign(
         inputFingerprint: durationInputFingerprint,
         modelFingerprint: durationModelFingerprint,
         recommendation: durationRecommendation,
-      });
+      }, designCheckpointOptions(job));
     }
     timingPlan = buildNewSystemAiTimingPlan(
       durationRecommendation,
       course.content.knowledgePoints,
     );
     if (course.content.stagePlan) timingPlan = { ...timingPlan, recommendationSource: "teacher" };
-    await updateCourse(request.courseId, (current) => ({
+    await updateCourseForDesignExecution(job, request.courseId, (current) => ({
       ...current,
       content: {
         ...current.content,
@@ -2827,7 +2906,7 @@ async function runNewSystemCourseDesign(
         availableMessage: `知识范围与 ${timingPlan.totalMinutes} 分钟预算存在冲突：${durationRecommendation.scopeWarning}。请明确决定后再制作课件。`,
         autoContinueMessage: "",
       });
-      await updateCourse(request.courseId, (current) => ({
+      await updateCourseForDesignExecution(job, request.courseId, (current) => ({
         ...current,
         content: {
           ...current.content,
@@ -2851,7 +2930,7 @@ async function runNewSystemCourseDesign(
       totalMinutes: timingPlan.totalMinutes,
       allocations: timingPlan.allocations,
     });
-    await updateCourse(request.courseId, (current) => ({
+    await updateCourseForDesignExecution(job, request.courseId, (current) => ({
       ...current,
       content: {
         ...current.content,
@@ -2903,7 +2982,7 @@ async function runNewSystemCourseDesign(
       knowledgeLectureSections: deriveKnowledgeLectureSectionsFromOutlines(sceneOutlines),
     };
   } else {
-    await updateCourse(request.courseId, (current) => ({
+    await updateCourseForDesignExecution(job, request.courseId, (current) => ({
       ...current,
       content,
     }));
@@ -2933,7 +3012,7 @@ async function runNewSystemCourseDesign(
       _openmaicScenesCount: sceneOutlines.length,
       knowledgeLectureSections: deriveKnowledgeLectureSectionsFromOutlines(sceneOutlines),
     };
-    await updateCourse(request.courseId, (current) => ({
+    await updateCourseForDesignExecution(job, request.courseId, (current) => ({
       ...current,
       content,
     }));
@@ -2986,7 +3065,7 @@ async function runNewSystemCourseDesign(
       }],
     };
     course = { ...reviewedCourse, content };
-    await updateCourse(request.courseId, () => course);
+    await updateCourseForDesignExecution(job, request.courseId, () => course);
     if (usesTeachingBlueprint) {
       if (!content.teachingBlueprint) throw new Error("已采用的教学蓝图缺失。");
       sceneOutlines = sceneOutlinesFromContent(content) as Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
@@ -3010,7 +3089,7 @@ async function runNewSystemCourseDesign(
   }
 
   const completedAt = new Date().toISOString();
-  await updateCourse(request.courseId, (current) => ({
+  await updateCourseForDesignExecution(job, request.courseId, (current) => ({
     ...current,
     pblConfig: normalizePblCourseConfig({
       ...current.pblConfig,
@@ -3048,6 +3127,7 @@ async function runNewSystemCourseDesign(
 
   const completedCourse = await getCourse(request.courseId);
   if (!completedCourse) throw new Error("课程保存失败");
+  await assertCourseDesignExecution(job);
   await enqueueClassroomGeneration(
     completedCourse,
     request.options,
@@ -3063,7 +3143,7 @@ async function runNewSystemCourseDesign(
   );
   const isTestLesson = request.generationScope === "test-lesson";
   await designGenerationJobs.update({
-    where: { id: job.id },
+    where: { id: job.id, status: "running", executionId: job.executionId },
     data: {
       status: "completed",
       step: "completed",
@@ -3081,6 +3161,9 @@ async function runNewSystemCourseDesign(
       } as unknown as Prisma.InputJsonValue,
       completedAt: new Date(),
       lastHeartbeatAt: new Date(),
+      leaseExpiresAt: null,
+      executionId: null,
+      executionOwner: null,
       version: { increment: 1 },
     },
   });
@@ -3088,33 +3171,34 @@ async function runNewSystemCourseDesign(
 
 async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerationJob): Promise<void> {
   const request = job.request as unknown as QuickDesignRequest;
+  const executionId = job.executionId;
+  if (!executionId) throw new CourseDesignExecutionLostError();
   const controller = new AbortController();
   activeController = controller;
   activeCourseId = request.courseId;
+  const heartbeatTimer = setInterval(() => {
+    const now = new Date();
+    void designGenerationJobs.updateMany({
+      where: {
+        id: job.id,
+        status: { in: ["running", "review_available", "paused"] },
+        executionId,
+      },
+      data: { lastHeartbeatAt: now, leaseExpiresAt: designLeaseDeadline(now.getTime()) },
+    }).then(({ count }) => {
+      if (count === 0 && !controller.signal.aborted) {
+        controller.abort(new CourseDesignExecutionLostError());
+      }
+    }).catch((error) => log.warn("Unable to renew course-design lease", error));
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref?.();
   try {
     await runNewSystemCourseDesign(job, { ...request, systemMode: "new" }, controller);
   } catch (error) {
     if (error instanceof CourseDesignReviewPendingError) {
       return;
     }
-    if (stopping && controller.signal.aborted) {
-      await designGenerationJobs.updateMany({
-        where: { id: job.id, status: { in: ["running", "review_available"] } },
-        data: {
-          status: "queued",
-          step: "queued",
-          reviewStatus: "auto-continued",
-          reviewAvailableUntil: null,
-          message: "等待服务器继续生成",
-          lastHeartbeatAt: new Date(),
-        },
-      });
-      return;
-    }
-    const currentStatus = await designGenerationJobs.findUnique({
-      where: { id: job.id },
-      select: { status: true },
-    });
+    const currentStatus = await designGenerationJobs.findUnique({ where: { id: job.id } });
     if (
       error instanceof CourseDesignCancelledError
       || currentStatus?.status === "cancelling"
@@ -3122,7 +3206,7 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
       || (controller.signal.aborted && !stopping)
     ) {
       await designGenerationJobs.updateMany({
-        where: { id: job.id, status: { in: ["running", "review_available", "paused", "cancelling"] } },
+        where: { id: job.id, status: { in: ["running", "review_available", "paused", "cancelling"] }, executionId },
         data: {
           status: "cancelled",
           step: "cancelled",
@@ -3131,7 +3215,33 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
           estimatedRemainingSeconds: null,
           completedAt: new Date(),
           lastHeartbeatAt: new Date(),
+          leaseExpiresAt: null,
+          executionId: null,
+          executionOwner: null,
         },
+      });
+      return;
+    }
+    if (error instanceof CourseDesignExecutionLostError
+      || currentStatus?.executionId !== executionId) return;
+    if (stopping && controller.signal.aborted) {
+      await designGenerationJobs.updateMany({
+        where: { id: job.id, status: { in: ["running", "review_available"] }, executionId },
+        data: {
+          status: "queued",
+          step: "queued",
+          reviewStatus: "auto-continued",
+          reviewAvailableUntil: null,
+          message: "等待服务器继续生成",
+          lastHeartbeatAt: new Date(),
+          leaseExpiresAt: null,
+          executionId: null,
+          executionOwner: null,
+        },
+      });
+      await designGenerationJobs.updateMany({
+        where: { id: job.id, status: "paused", executionId },
+        data: { leaseExpiresAt: null, executionId: null, executionOwner: null },
       });
       return;
     }
@@ -3143,8 +3253,8 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
         `Transient infrastructure recovery ${recoveryCount} queued for ${request.courseId} in ${delayMs}ms`,
         error,
       );
-      await designGenerationJobs.update({
-        where: { id: job.id },
+      await designGenerationJobs.updateMany({
+        where: { id: job.id, status: "running", executionId },
         data: {
           status: "queued",
           step: "infrastructure_retry",
@@ -3159,14 +3269,17 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
           ) + Math.ceil(delayMs / 1_000),
           completedAt: null,
           lastHeartbeatAt: new Date(),
+          leaseExpiresAt: null,
+          executionId: null,
+          executionOwner: null,
           version: { increment: 1 },
         },
       });
       return;
     }
     log.error(`Course design failed for ${request.courseId}`, error);
-    await designGenerationJobs.update({
-      where: { id: job.id },
+    await designGenerationJobs.updateMany({
+      where: { id: job.id, status: "running", executionId },
       data: {
         status: "failed",
         step: "failed",
@@ -3176,10 +3289,14 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
         estimatedRemainingSeconds: null,
         completedAt: new Date(),
         lastHeartbeatAt: new Date(),
+        leaseExpiresAt: null,
+        executionId: null,
+        executionOwner: null,
         version: { increment: 1 },
       },
     });
   } finally {
+    clearInterval(heartbeatTimer);
     if (activeController === controller) activeController = null;
     if (activeCourseId === request.courseId) activeCourseId = null;
   }
@@ -3188,9 +3305,9 @@ async function runCourseDesignJobWithGenerationContext(job: CourseDesignGenerati
 export async function cancelCourseDesignJob(courseId: string): Promise<CourseDesignGenerationJob | null> {
   const job = await designGenerationJobs.findUnique({ where: { courseId } });
   if (!job) return null;
-  if (job.status === "queued") {
+  if (job.status === "queued" || (!job.executionId && ["review_available", "paused"].includes(job.status))) {
     return designGenerationJobs.update({
-      where: { id: job.id },
+      where: { id: job.id, status: job.status, version: job.version },
       data: {
         status: "cancelled",
         step: "cancelled",
@@ -3198,13 +3315,16 @@ export async function cancelCourseDesignJob(courseId: string): Promise<CourseDes
         estimatedRemainingSeconds: null,
         completedAt: new Date(),
         lastHeartbeatAt: new Date(),
+        leaseExpiresAt: null,
+        executionId: null,
+        executionOwner: null,
         version: { increment: 1 },
       },
     });
   }
   if (["running", "review_available", "paused", "cancelling"].includes(job.status)) {
     const updated = await designGenerationJobs.update({
-      where: { id: job.id },
+      where: { id: job.id, status: job.status, version: job.version },
       data: {
         status: "cancelling",
         step: "cancelling",
@@ -3223,25 +3343,43 @@ async function claimNextJob(): Promise<CourseDesignGenerationJob | null> {
   const now = new Date();
   const candidate = await designGenerationJobs.findFirst({
     where: {
-      status: "queued",
-      OR: [{ retryAt: null }, { retryAt: { lte: now } }],
+      OR: [
+        { status: "queued", OR: [{ retryAt: null }, { retryAt: { lte: now } }] },
+        { status: "running", OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] },
+        {
+          status: "review_available",
+          step: { not: "capacityReview" },
+          OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }],
+        },
+      ],
     },
     orderBy: { createdAt: "asc" },
   });
   if (!candidate) return null;
   const isInfrastructureRecovery = candidate.step === "infrastructure_retry";
+  const recovering = candidate.status !== "queued";
+  const executionId = randomUUID();
   const claimed = await designGenerationJobs.updateMany({
     where: {
       id: candidate.id,
-      status: "queued",
-      OR: [{ retryAt: null }, { retryAt: { lte: now } }],
+      version: candidate.version,
+      status: candidate.status,
+      executionId: candidate.executionId,
+      ...(candidate.status === "queued"
+        ? { OR: [{ retryAt: null }, { retryAt: { lte: now } }] }
+        : { OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] }),
     },
     data: {
       status: "running",
-      step: isInfrastructureRecovery ? "resuming" : "base",
-      message: isInfrastructureRecovery ? "模型服务连接已恢复，正在从已保存阶段继续" : "正在分析课程信息",
-      startedAt: now,
+      step: recovering || isInfrastructureRecovery ? "resuming" : "base",
+      message: recovering || isInfrastructureRecovery ? "正在从已保存阶段继续课程设计" : "正在分析课程信息",
+      reviewStatus: candidate.status === "review_available" ? "auto-continued" : candidate.reviewStatus,
+      reviewAvailableUntil: candidate.status === "review_available" ? null : candidate.reviewAvailableUntil,
+      startedAt: candidate.startedAt ?? now,
       lastHeartbeatAt: now,
+      leaseExpiresAt: designLeaseDeadline(now.getTime()),
+      executionId,
+      executionOwner: WORKER_ID,
       retryAt: null,
       error: null,
       attempt: { increment: 1 },
@@ -3271,27 +3409,15 @@ export async function startCourseDesignWorker(): Promise<void> {
   workerStarted = true;
   stopping = false;
   await designGenerationJobs.updateMany({
-    where: {
-      status: "running",
-      OR: [
-        { lastHeartbeatAt: null },
-        { lastHeartbeatAt: { lt: new Date(Date.now() - STALE_AFTER_MS) } },
-      ],
-    },
-    data: { status: "queued", step: "queued", message: "等待服务器继续生成" },
-  });
-  await designGenerationJobs.updateMany({
-    where: {
-      status: "review_available",
-      step: { not: "capacityReview" },
-      OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: new Date(Date.now() - STALE_AFTER_MS) } }],
-    },
+    where: { status: "cancelling" },
     data: {
-      status: "queued",
-      reviewStatus: "auto-continued",
-      reviewAvailableUntil: null,
-      step: "queued",
-      message: "服务恢复后继续生成课程",
+      status: "cancelled",
+      step: "cancelled",
+      message: "课程生成已中断",
+      completedAt: new Date(),
+      leaseExpiresAt: null,
+      executionId: null,
+      executionOwner: null,
     },
   });
   void tick();
@@ -3302,5 +3428,6 @@ export async function stopCourseDesignWorker(): Promise<void> {
   if (timer) clearTimeout(timer);
   timer = null;
   activeController?.abort();
+  await Promise.allSettled([...activeRuns]);
   workerStarted = false;
 }

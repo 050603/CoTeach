@@ -19,11 +19,10 @@ vi.mock("@/lib/platform/pbl-template-repository", () => ({
 vi.mock("@/lib/session/server-store", () => ({ updateCourse: mocks.updateCourse }));
 vi.mock("@/lib/course-generation/job-storage", () => ({
   designGenerationJobs: { findUnique: mocks.designJob },
-  contentGenerationJobs: { findUnique: mocks.contentJob, update: vi.fn() },
+  contentGenerationJobs: { findUnique: mocks.contentJob, replace: vi.fn() },
 }));
 vi.mock("@/lib/course-generation/job-runner", () => ({
   estimatePersistedCourseGenerationSeconds: vi.fn(() => 10),
-  resetCourseGenerationCheckpoints: vi.fn(),
   runQueuedCourseGenerationToCompletion: vi.fn(),
 }));
 vi.mock("@/lib/course-generation/capability", () => ({ isBackgroundCourseGenerationEnabled: vi.fn(() => true) }));

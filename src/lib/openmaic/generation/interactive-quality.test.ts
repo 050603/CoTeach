@@ -35,10 +35,20 @@ describe('interactive HTML quality audit', () => {
     expect(result).toEqual({ passed: true, reasons: [] });
   });
 
-  it('leaves procedural-skill validation to its stricter task contract', () => {
+  it('requires player lifecycle signals for procedural skills while leaving agency checks to their task contract', () => {
     expect(auditInteractiveHtml('<html></html>', 'procedural-skill')).toEqual({
-      passed: true,
-      reasons: [],
+      passed: false,
+      reasons: [
+        'missing meaningful activity completion signal',
+        'missing full activity reset signal',
+      ],
     });
+    expect(auditInteractiveHtml(`
+      <button>下一步</button>
+      <script>
+        function finishTask() { window.__maicActivity.complete(); }
+        function restartTask() { window.__maicActivity.reset(); }
+      </script>
+    `, 'procedural-skill')).toEqual({ passed: true, reasons: [] });
   });
 });

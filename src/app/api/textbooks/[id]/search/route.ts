@@ -1,7 +1,9 @@
 import { z } from "zod";
+import { prisma } from "@/lib/db/client";
+import { TextbookError } from "@/lib/textbook/errors";
 import { authenticateRequest } from "@/lib/auth/request-guards";
 import { textbookApiError } from "@/lib/textbook/http";
-import { getTextbookDetails, searchTextbookEvidence } from "@/lib/textbook/service";
+import { searchTextbookEvidence } from "@/lib/textbook/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,9 +19,17 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   const query = QuerySchema.safeParse({ q: url.searchParams.get("q") ?? "", sectionIds: url.searchParams.getAll("sectionId"), limit: Number(url.searchParams.get("limit") ?? 20) });
   if (!query.success) return Response.json({ code: "INVALID_TEXTBOOK_SEARCH", message: "教材检索条件无效。" }, { status: 400 });
   try {
-    const detail = await getTextbookDetails(params.data.id);
-    if (!detail.revision) return Response.json({ query: query.data.q, degraded: true, degradationReason: "教材尚未完成结构解析。", hits: [] });
-    return Response.json(await searchTextbookEvidence({ revisionIds: [detail.revision.id], sectionIds: query.data.sectionIds, query: query.data.q, limit: query.data.limit }), { headers: { "Cache-Control": "no-store" } });
+    const textbook = await prisma.textbook.findUnique({
+      where: { id: params.data.id },
+      select: {
+        currentRevision: { select: { id: true } },
+        revisions: { orderBy: { revision: "desc" }, take: 1, select: { id: true } },
+      },
+    });
+    if (!textbook) throw new TextbookError("TEXTBOOK_NOT_FOUND", "教材不存在。", 404);
+    const revision = textbook.currentRevision ?? textbook.revisions[0] ?? null;
+    if (!revision) return Response.json({ query: query.data.q, degraded: true, degradationReason: "教材尚未完成结构解析。", hits: [] });
+    return Response.json(await searchTextbookEvidence({ revisionIds: [revision.id], sectionIds: query.data.sectionIds, query: query.data.q, limit: query.data.limit }), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return textbookApiError(request, error, "TEXTBOOK_SEARCH_FAILED", "暂时无法检索教材。 ");
   }

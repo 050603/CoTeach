@@ -22,6 +22,10 @@ function stableUuid(value: string): string {
   return `${compact.slice(0, 8)}-${compact.slice(8, 12)}-${compact.slice(12, 16)}-${compact.slice(16, 20)}-${compact.slice(20)}`;
 }
 
+export function textbookConceptEvidenceId(revisionId: string, conceptKey: string, blockKey: string): string {
+  return stableUuid(`${revisionId}:evidence:${conceptKey}:${blockKey}`);
+}
+
 function fingerprint(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -106,7 +110,7 @@ async function persistStructure(revisionId: string, document: ParsedTextbookDocu
     const evidence = knowledge.concepts.flatMap((concept) => concept.evidenceBlockKeys.flatMap((blockKey) => {
       const blockId = blockIds.get(blockKey);
       const block = document.blocks.find((candidate) => candidate.key === blockKey);
-      return blockId && block ? [{ id: stableUuid(`${concept.key}:${blockKey}`), conceptId: conceptIds.get(concept.key)!, sourceBlockId: blockId, quoteStart: 0, quoteEnd: block.content.length }] : [];
+      return blockId && block ? [{ id: textbookConceptEvidenceId(revisionId, concept.key, blockKey), conceptId: conceptIds.get(concept.key)!, sourceBlockId: blockId, quoteStart: 0, quoteEnd: block.content.length }] : [];
     }));
     if (evidence.length) await tx.textbookConceptEvidence.createMany({ data: evidence });
     if (knowledge.relations.length) await tx.textbookConceptRelation.createMany({ data: knowledge.relations.map((relation) => ({

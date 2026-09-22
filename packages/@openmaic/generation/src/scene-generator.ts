@@ -124,6 +124,20 @@ export interface SceneActionsOptions {
   userProfile?: string;
   languageDirective?: string;
   logger?: GenerationLogger;
+  /**
+   * Fail when the model returns no parseable actions instead of substituting
+   * the compatibility narration fallback. Host applications use this for
+   * retryable production authoring; package consumers keep the historical
+   * fallback unless they opt in.
+   */
+  requireStructuredOutput?: boolean;
+}
+
+function invalidActionsOutput(outline: SceneOutline): Error {
+  return Object.assign(
+    new Error(`Invalid or empty teaching actions for ${outline.id}`),
+    { code: 'INVALID_ACTION_OUTPUT' as const },
+  );
 }
 
 // ==================== Backward Compatibility Helpers ====================
@@ -774,7 +788,7 @@ async function generateSlideContent(
   const response = await aiCall(prompts.system, userPrompt, visionImages);
   const generatedData = parseJsonResponse<GeneratedSlideData>(response);
 
-  if (!generatedData || !generatedData.elements || !Array.isArray(generatedData.elements)) {
+  if (!generatedData || !Array.isArray(generatedData.elements)) {
     log.error(`Failed to parse AI response for: ${outline.title}`);
     onFailure?.({ code: 'invalid-model-output' });
     return null;
@@ -782,8 +796,18 @@ async function generateSlideContent(
 
   log.debug(`Got ${generatedData.elements.length} elements for: ${outline.title}`);
 
+  // Normalize the untrusted array before reading any element property. Model
+  // output such as `elements: [null]` must become a recognizable content
+  // failure rather than escaping as a TypeError from `el.type`.
+  const fixedElements = fixElementDefaults(generatedData.elements, assignedImages, log);
+  if (fixedElements.length === 0) {
+    log.error(`Generated slide has no renderable elements for: ${outline.title}`);
+    onFailure?.({ code: 'invalid-model-output' });
+    return null;
+  }
+
   // Debug: Log image elements before resolution
-  const imageElements = generatedData.elements.filter((el) => el.type === 'image');
+  const imageElements = fixedElements.filter((el) => el.type === 'image');
   if (imageElements.length > 0) {
     log.debug(
       `Image elements before resolution:`,
@@ -797,8 +821,7 @@ async function generateSlideContent(
     log.debug(`imageMapping keys:`, imageMapping ? Object.keys(imageMapping).length : '0 keys');
   }
 
-  // Fix elements with missing required fields + aspect ratio correction (while src is still img_id)
-  const fixedElements = fixElementDefaults(generatedData.elements, assignedImages, log);
+  // Elements now have required defaults + aspect ratio correction (while src is still img_id).
   log.debug(`After element fixing: ${fixedElements.length} elements`);
 
   // Process LaTeX elements: render latex string → HTML via KaTeX
@@ -827,6 +850,12 @@ async function generateSlideContent(
     id: `${el.type}_${nanoid(8)}`,
     rotate: 0,
   })) as PPTElement[];
+
+  if (processedElements.length === 0) {
+    log.error(`Generated slide became empty after technical normalization for: ${outline.title}`);
+    onFailure?.({ code: 'invalid-model-output' });
+    return null;
+  }
 
   // Process background
   let background: SlideBackground | undefined;
@@ -1645,7 +1674,7 @@ export async function generateSceneActions(
   aiCall: AICallFn,
   options: SceneActionsOptions = {},
 ): Promise<Action[]> {
-  const { ctx, agents, userProfile, languageDirective } = options;
+  const { ctx, agents, userProfile, languageDirective, requireStructuredOutput = false } = options;
   const log = options.logger ?? noopGenerationLogger;
   const agentsText = formatAgentsForPrompt(agents);
 
@@ -1684,6 +1713,7 @@ export async function generateSceneActions(
       return processActions(actions, content.elements, agents, log);
     }
 
+    if (requireStructuredOutput) throw invalidActionsOutput(outline);
     return generateDefaultSlideActions(outline, content.elements);
   }
 
@@ -1712,6 +1742,7 @@ export async function generateSceneActions(
       return processActions(actions, [], agents, log);
     }
 
+    if (requireStructuredOutput) throw invalidActionsOutput(outline);
     return generateDefaultQuizActions(outline);
   }
 
@@ -1754,6 +1785,7 @@ export async function generateSceneActions(
       return processActions(actions, [], agents, log);
     }
 
+    if (requireStructuredOutput) throw invalidActionsOutput(outline);
     return generateDefaultInteractiveActions(outline);
   }
 
@@ -1784,6 +1816,7 @@ export async function generateSceneActions(
       return processActions(actions, [], agents, log);
     }
 
+    if (requireStructuredOutput) throw invalidActionsOutput(outline);
     return generateDefaultPBLActions(outline);
   }
 

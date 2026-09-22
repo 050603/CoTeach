@@ -15,6 +15,7 @@ afterEach(() => vi.unstubAllEnvs());
 let course: Course;
 let classroom: PersistedClassroomData;
 beforeEach(() => {
+  mocks.audit.mockReset();
   mocks.audit.mockResolvedValue({ issues: [] });
   vi.stubEnv('JWT_SECRET', 'test-course-review-secret-more-than-thirty-two-characters');
   classroom = { id: 'classroom', revision: 1, stage: { id: 'stage' }, scenes: [], createdAt: '2026-09-12' } as unknown as PersistedClassroomData;
@@ -83,7 +84,10 @@ describe('teacher confirmation of an exact teaching draft', () => {
     if (course.content.qualityReview) course.content.qualityReview.signature = signature;
     await expect(confirmCourseTeacherReview('course', 'teacher', signature, [], false, true)).resolves.toBeTruthy();
     expect(course.status).toBe('ready');
-    expect(mocks.audit).toHaveBeenCalledWith('course');
+    expect(mocks.audit).toHaveBeenCalledWith('course', {
+      course: expect.objectContaining({ id: 'course' }),
+      classroom,
+    });
     await expect(assertCourseTeacherReview(course, 'teacher')).resolves.toBeUndefined();
   });
   it('retains resource-integrity and asset-generation gates', async () => {
@@ -92,6 +96,17 @@ describe('teacher confirmation of an exact teaching draft', () => {
     await expect(confirmCourseTeacherReview('course', 'teacher', signature, [], false, true)).rejects.toThrow('资源尚未就绪');
     classroom.assetGeneration = { status: 'running' } as PersistedClassroomData['assetGeneration'];
     await expect(confirmCourseTeacherReview('course', 'teacher', computeCourseQualitySignature(course, classroom), [])).rejects.toThrow('仍在生成');
+  });
+  it('rechecks resources when a saved confirmation is published through another entry point', async () => {
+    const signature = computeCourseQualitySignature(course, classroom);
+    await confirmCourseTeacherReview('course', 'teacher', signature, [], false, false);
+    expect(mocks.audit).not.toHaveBeenCalled();
+
+    mocks.audit.mockResolvedValue({ issues: [{ id: 'tts:slide:speech', type: 'tts' }] });
+    await expect(assertCourseTeacherReview(course, 'teacher')).rejects.toMatchObject({
+      code: 'RESOURCES_NOT_READY',
+    });
+    expect(mocks.audit).toHaveBeenCalledWith('course', { course, classroom });
   });
   it('optional browser checks preserve an existing teacher confirmation', async () => {
     classroom.scenes = [{ id: 'slide', type: 'slide', content: { type: 'slide', canvas: { elements: [] } } }] as unknown as PersistedClassroomData['scenes'];

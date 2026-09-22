@@ -143,6 +143,25 @@ describe('scene generation primitives', () => {
     expect(actions.map((action) => action.type)).toEqual(['speech']);
   });
 
+  it('can require parseable action output while keeping compatibility fallback by default', async () => {
+    const outline = slideOutline();
+    const content = {
+      elements: [{
+        id: 'visible-text', type: 'text', left: 0, top: 0, width: 100, height: 30,
+        content: 'Visible', defaultFontName: 'Arial', defaultColor: '#000000',
+      } as PPTElement],
+    };
+
+    await expect(generateSceneActions(outline, content, async () => 'not-json', {
+      requireStructuredOutput: true,
+    })).rejects.toMatchObject({
+      code: 'INVALID_ACTION_OUTPUT',
+      message: expect.stringContaining('Invalid or empty teaching actions'),
+    });
+    await expect(generateSceneActions(outline, content, async () => 'not-json'))
+      .resolves.toEqual([expect.objectContaining({ type: 'speech' })]);
+  });
+
   it('generates PBL content with the re-seated single-call planner', async () => {
     const content = await generateSceneContent(pblOutline(), async () => validPBLResponse(), {
       targetLanguage: 'en-US',

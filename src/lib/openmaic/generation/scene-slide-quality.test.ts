@@ -46,9 +46,9 @@ describe('first-pass slide generation', () => {
     expect(ai).toHaveBeenCalledOnce();
   });
 
-  it('keeps the official empty-array parse behavior for the later evidence audit', async () => {
+  it('rejects an empty slide so the production caller can perform a bounded retry', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [] }));
-    expect(await generateSceneContent(outline, ai)).toMatchObject({ elements: [] });
+    expect(await generateSceneContent(outline, ai)).toBeNull();
     expect(ai).toHaveBeenCalledOnce();
   });
 

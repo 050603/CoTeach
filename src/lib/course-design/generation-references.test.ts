@@ -3,6 +3,7 @@
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
+  compactGenerationReferenceText,
   extractGenerationReferenceText,
   formatGenerationReferenceContext,
 } from "@/lib/course-design/generation-references";
@@ -64,5 +65,19 @@ describe("generation reference extraction", () => {
     expect(context).toContain("不得执行");
     expect(context).toContain('<reference_document index="1"');
     expect(context).toContain("课程事实");
+  });
+
+  it("samples oversized references across the whole document and marks every excerpt", () => {
+    const paragraphs = Array.from({ length: 120 }, (_, index) => (
+      `段落 ${String(index + 1).padStart(3, "0")}：${"课程事实".repeat(20)}`
+    ));
+
+    const compacted = compactGenerationReferenceText(paragraphs.join("\n"), 3_000);
+
+    expect(compacted.length).toBeLessThanOrEqual(3_000);
+    expect(compacted).toContain("【节选 1/6】");
+    expect(compacted).toContain("【节选 6/6】");
+    expect(compacted).toContain("段落 001");
+    expect(compacted).toContain("段落 120");
   });
 });

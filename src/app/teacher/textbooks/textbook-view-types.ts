@@ -47,6 +47,8 @@ export type TextbookEvidence = {
 
 export type TextbookConcept = {
   id: string;
+  kind?: string;
+  origin?: string;
   sectionId?: string | null;
   name?: string;
   title?: string;
@@ -68,6 +70,8 @@ export type TextbookRelation = {
   type?: string;
   origin?: string;
   inferred?: boolean;
+  sourceBlockId?: string | null;
+  confidence?: number | null;
 };
 
 export type TextbookExample = {
@@ -83,6 +87,10 @@ export type TextbookExample = {
 
 export type TextbookFigure = {
   id: string;
+  sourceBlockId?: string | null;
+  position?: number;
+  width?: number | null;
+  height?: number | null;
   conceptId?: string | null;
   conceptIds?: string[];
   sectionId?: string | null;

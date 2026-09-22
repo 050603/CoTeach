@@ -11,6 +11,7 @@ export type CourseGenerationJob = {
   activePages: Json; currentStage: string | null; currentCall: Json;
   events: Json; trace: Json; request: Json; result: Json; qualityReport: Json; preparedOutlines: Json;
   reviewStatus: string; reviewAvailableUntil: Date | null; stepIndex: number; version: number; attempt: number;
+  executionId: string | null; executionOwner: string | null; leaseExpiresAt: Date | null;
   error: string | null; startedAt: Date | null; completedAt: Date | null; lastHeartbeatAt: Date | null; retryAt: Date | null;
   createdAt: Date; updatedAt: Date;
 };
@@ -19,6 +20,10 @@ type Filter = string | number | Date | null | { in?: string[]; not?: string; lt?
 export type JobWhere = { [K in keyof CourseGenerationJob]?: Filter } & { OR?: JobWhere[]; AND?: JobWhere[] };
 type Patch = Partial<{ [K in keyof CourseGenerationJob]: CourseGenerationJob[K] | null | { increment: number } | Prisma.InputJsonValue | typeof Prisma.JsonNull }>;
 type Find = { where: JobWhere; select?: Record<string, boolean>; orderBy?: { createdAt?: "asc" | "desc" } };
+export type GenerationCheckpointPolicy =
+  | "all"
+  | "prepared-outlines"
+  | { steps?: readonly string[]; prefixes?: readonly string[] };
 function object(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function json(value: unknown): Prisma.InputJsonValue { return JSON.parse(JSON.stringify(value === Prisma.JsonNull ? null : value)); }
 function date(value: unknown): Date | null { return typeof value === "string" ? new Date(value) : null; }
@@ -35,6 +40,9 @@ export function projectGenerationJob(row: GenerationJob): CourseGenerationJob {
     events: (state.events ?? []) as Json, trace: (envelope.entries ?? []) as Json, request: row.request, result: row.result, qualityReport: row.qualityReport,
     preparedOutlines: (state.preparedOutlines ?? null) as Json,
     reviewStatus: String(state.reviewStatus ?? "unavailable"), reviewAvailableUntil: date(state.reviewAvailableUntil), stepIndex: Number(state.stepIndex ?? 0), version: Number(state.version ?? 1),
+    executionId: typeof state.executionId === "string" ? state.executionId : null,
+    executionOwner: typeof state.executionOwner === "string" ? state.executionOwner : null,
+    leaseExpiresAt: date(state.leaseExpiresAt),
     attempt: row.attempt, error: row.error, startedAt: row.startedAt, completedAt: row.completedAt, lastHeartbeatAt: row.heartbeatAt, retryAt: row.retryAt, createdAt: row.createdAt, updatedAt: row.updatedAt,
   };
 }
@@ -78,8 +86,35 @@ function updateData(row: CourseGenerationJob, patch: Patch): Prisma.GenerationJo
       activePages: next.activePages, currentStage: next.currentStage,
       currentCall: next.currentCall,
       reviewAvailableUntil: next.reviewAvailableUntil, stepIndex: next.stepIndex, version: next.version, preparedOutlines: next.preparedOutlines,
+      executionId: next.executionId, executionOwner: next.executionOwner, leaseExpiresAt: next.leaseExpiresAt,
     } }),
   };
+}
+async function deleteCheckpoints(
+  tx: Prisma.TransactionClient,
+  jobId: string,
+  policy: GenerationCheckpointPolicy,
+): Promise<void> {
+  if (policy === "all") {
+    await tx.generationCheckpoint.deleteMany({ where: { jobId } });
+    return;
+  }
+  if (policy === "prepared-outlines") {
+    await tx.generationCheckpoint.deleteMany({ where: { jobId, step: "prepared-outlines" } });
+    return;
+  }
+  const steps = [...new Set(policy.steps ?? [])];
+  const prefixes = [...new Set(policy.prefixes ?? [])];
+  if (steps.length === 0 && prefixes.length === 0) return;
+  await tx.generationCheckpoint.deleteMany({
+    where: {
+      jobId,
+      OR: [
+        ...(steps.length ? [{ step: { in: steps } }] : []),
+        ...prefixes.map((prefix) => ({ step: { startsWith: prefix } })),
+      ],
+    },
+  });
 }
 function storage(kind: JobKind) {
   async function findIn(db: Prisma.TransactionClient, input: Find) {
@@ -111,6 +146,22 @@ function storage(kind: JobKind) {
         await lock(tx); const rows = await findIn(tx, { where: input.where });
         for (const row of rows) await tx.generationJob.update({ where: { id: row.id }, data: updateData(row, input.data) });
         return { count: rows.length };
+      });
+    },
+    async replace(input: {
+      where: JobWhere;
+      data: Patch;
+      checkpointPolicy: GenerationCheckpointPolicy;
+    }) {
+      return runMutationTransaction(async (tx) => {
+        await lock(tx);
+        const row = (await findIn(tx, { where: input.where }))[0];
+        if (!row) throw new Error("GENERATION_JOB_NOT_FOUND");
+        await deleteCheckpoints(tx, row.id, input.checkpointPolicy);
+        return projectGenerationJob(await tx.generationJob.update({
+          where: { id: row.id },
+          data: updateData(row, input.data),
+        }));
       });
     },
     async upsert(input: { where: JobWhere; create: Patch; update: Patch; rejectStatuses?: readonly string[] }) {

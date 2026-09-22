@@ -7,7 +7,6 @@ import {
   estimatePersistedCourseGenerationSeconds,
   requeueCourseGenerationFromCheckpoints,
   resumeRecoverableCourseGenerationJob,
-  resetCourseGenerationCheckpoints,
   runQueuedCourseGenerationToCompletion,
   type PersistedCourseGenerationRequest,
 } from "@/lib/course-generation/job-runner";
@@ -202,29 +201,37 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
   } else if (job.status === "failed") {
     // A newly submitted request must never reuse pages prepared for the old
     // request. Worker restarts keep checkpoints; explicit retries reset them.
-    await resetCourseGenerationCheckpoints(job.id);
-    job = await contentGenerationJobs.update({
-      where: { id: job.id },
-      data: {
-        status: "queued",
-        step: "queued",
-        progress: 0,
-        message: "课程生成任务已重新提交",
-        scenesGenerated: 0,
-        totalScenes,
-        estimatedRemainingSeconds: initialEstimate,
-        tokenUsage: 0,
-        tokenUsageCalls: 0,
-        request: requestJson,
-        result: Prisma.JsonNull,
-        events: [],
-        error: null,
-        startedAt: null,
-        completedAt: null,
-        lastHeartbeatAt: null,
-        version: { increment: 1 },
-      },
-    });
+    try {
+      job = await contentGenerationJobs.replace({
+        where: { id: job.id, version: job.version, status: "failed" },
+        checkpointPolicy: "all",
+        data: {
+          status: "queued",
+          step: "queued",
+          progress: 0,
+          message: "课程生成任务已重新提交",
+          scenesGenerated: 0,
+          totalScenes,
+          estimatedRemainingSeconds: initialEstimate,
+          tokenUsage: 0,
+          tokenUsageCalls: 0,
+          request: requestJson,
+          result: Prisma.JsonNull,
+          events: [],
+          error: null,
+          startedAt: null,
+          completedAt: null,
+          lastHeartbeatAt: null,
+          executionId: null,
+          executionOwner: null,
+          leaseExpiresAt: null,
+          version: { increment: 1 },
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "GENERATION_JOB_NOT_FOUND") throw error;
+      return Response.json({ error: "GENERATION_JOB_CONFLICT" }, { status: 409 });
+    }
   }
 
   return Response.json({ backgroundEnabled, job: responseJob(job) }, { status: 202 });

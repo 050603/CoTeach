@@ -76,6 +76,20 @@ describe("TeacherTextbooksPage", () => {
     expect(screen.getByText("没有找到匹配的教材")).toBeInTheDocument();
   });
 
+  it("switches layout and sorts or filters without losing the selected search", async () => {
+    render(<TeacherTextbooksPage />);
+    await screen.findByRole("heading", { name: "人工智能学科教师素养提升" });
+    expect(screen.getByRole("button", { name: "封面网格" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "紧凑列表" }));
+    expect(screen.getByRole("button", { name: "紧凑列表" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.change(screen.getByLabelText("教材排序"), { target: { value: "title" } });
+    expect(screen.getAllByRole("article")[0]).toHaveTextContent("具身智能教学设计");
+    fireEvent.change(screen.getByLabelText("搜索教材"), { target: { value: "张老师" } });
+    expect(screen.getAllByRole("article")).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText("教材状态"), { target: { value: "working" } });
+    expect(screen.getByText("没有找到匹配的教材")).toBeInTheDocument();
+  });
+
   it("uploads a DOCX as multipart form data and reports background parsing", async () => {
     render(<TeacherTextbooksPage />);
     await screen.findByText("人工智能学科教师素养提升");
@@ -94,6 +108,7 @@ describe("TeacherTextbooksPage", () => {
     render(<TeacherTextbooksPage />);
     await screen.findByText("人工智能学科教师素养提升");
 
+    fireEvent.click(screen.getByLabelText("更多操作 人工智能学科教师素养提升"));
     fireEvent.click(screen.getByRole("button", { name: "归档 人工智能学科教师素养提升" }));
     expect(await screen.findByText(/已有课程引用、教材原文和解析结果会继续保留/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认归档" }));

@@ -1,78 +1,89 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
-vi.mock("next/navigation", () => ({ useParams: () => ({ id: "book-1" }) }));
-vi.mock("@/components/platform/teacher-shell", () => ({
-  TeacherPlatformHeader: () => <div data-testid="teacher-header" />,
-  TeacherPlatformPage: ({ children }: { children: ReactNode }) => <main>{children}</main>,
-}));
-vi.mock("@/components/teacher/textbook-graph-explorer", () => ({
-  TextbookGraphExplorer: ({ concepts, focusedSectionId, onSelect }: {
-    concepts: Array<{ id: string; name?: string; title?: string }>;
-    focusedSectionId: string;
-    onSelect: (id: string | null) => void;
-  }) => <div aria-label="教材知识图谱"><output data-testid="graph-node-count">{concepts.length}</output><output data-testid="graph-focus">{focusedSectionId}</output>{concepts.map(concept => <button key={concept.id} type="button" onClick={() => onSelect(concept.id)}>查看知识点：{concept.name || concept.title}</button>)}</div>,
-}));
-
+const routeParams = vi.hoisted(() => ({ id: "book-1" }));
+vi.mock("next/navigation", () => ({ useParams: () => routeParams }));
+vi.mock("@/components/platform/teacher-shell", () => ({ TeacherPlatformHeader: () => <div />, TeacherPlatformPage: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
+vi.mock("next/dynamic", () => ({ default: () => ({ concepts, onSelect, detail }: { concepts: Array<{ id: string; name: string }>; onSelect: (id: string) => void; detail: ReactNode }) => <div aria-label="教材知识图谱">{concepts.map(c => <button key={c.id} onClick={() => onSelect(c.id)}>{c.name}图谱节点</button>)}{detail}</div> }));
 import TeacherTextbookDetailPage from "./page";
-
-describe("TeacherTextbookDetailPage", () => {
+const fixture = {
+  textbook: { id: "book-1", title: "人工智能学科教师素养提升", author: "编写组" }, revision: { id: "revision-1", version: 1, status: "READY" },
+  sections: [{ id: "section-1", title: "第三章 人工智能教学方法", position: 1 }, { id: "section-2", parentId: "section-1", title: "教学支架", position: 2 }],
+  sourceBlocks: [{ id: "block-1", sectionId: "section-2", blockType: "PARAGRAPH", content: "教学支架是教师为学习者提供的暂时性支持，并随着能力提升逐步撤除。" }],
+  concepts: [{ id: "concept-1", sectionId: "section-2", name: "教学支架", explanation: "通过阶段性支持帮助学生逐步独立完成任务。", aliases: ["学习支架"], evidence: [{ sourceBlockId: "block-1", quote: "教学支架是教师为学习者提供的暂时性支持" }] }, { id: "concept-2", sectionId: "section-2", name: "项目式学习", explanation: "以真实项目组织学习。" }],
+  relations: [{ id: "r1", sourceConceptId: "concept-1", targetConceptId: "concept-2", relationType: "supports" }],
+  examples: [{ id: "e1", conceptId: "concept-1", title: "分类游戏", content: "学生观察分类规则。" }],
+  figures: [{ id: "f1", conceptId: "concept-1", sectionId: "section-2", sourceBlockId: "block-1", caption: "支架示意图", url: "/api/uploads/a1" }],
+};
+function mockFetch(data: unknown = fixture) {
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    if (input === "/api/auth/me") return Response.json({ user: { id: "teacher-1" } });
+    if (input.includes("/search?")) return Response.json({ hits: [] });
+    if (init?.method === "POST") return Response.json({});
+    return Response.json(data);
+  }));
+}
+describe("textbook reading and graph workspace", () => {
   beforeEach(() => {
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
-      textbook: { id: "book-1", title: "人工智能学科教师素养提升", author: "编写组", status: "ACTIVE" },
-      revision: { id: "revision-1", version: 1, status: "READY", progress: 1 },
-      sections: [
-        { id: "section-1", title: "第三章 人工智能教学方法", level: 0, position: 1 },
-      ],
-      sourceBlocks: [
-        { id: "block-1", sectionId: "section-1", blockKey: "3.2-p4", blockType: "paragraph", position: 4, content: "教学支架是教师为学习者提供的暂时性支持，并随着能力提升逐步撤除。" },
-      ],
-      concepts: [
-        { id: "concept-1", sectionId: "section-1", name: "教学支架", explanation: "通过阶段性支持帮助学生逐步独立完成任务。", aliases: ["学习支架"], evidence: [{ sourceBlockId: "block-1", quote: "教学支架是教师为学习者提供的暂时性支持" }] },
-        { id: "concept-2", sectionId: "section-1", name: "项目式学习", explanation: "以真实项目组织学习。" },
-        ...Array.from({ length: 24 }, (_, index) => ({ id: `extra-${index + 1}`, sectionId: "section-1", name: `扩展知识点 ${index + 1}` })),
-      ],
-      relations: [{ id: "relation-1", sourceConceptId: "concept-1", targetConceptId: "concept-2", relationType: "supports", inferred: false }],
-      examples: [{ id: "example-1", conceptId: "concept-1", title: "分类游戏体验机器学习", content: "学生通过分类游戏观察模型如何从样例中形成规则。" }],
-      figures: [{ id: "figure-1", conceptId: "concept-1", caption: "教学支架示意图", fileAssetId: "asset-1", url: "/api/uploads/asset-1" }],
-      job: { status: "COMPLETED", progress: 1 },
-    })));
+    routeParams.id = "book-1";
+    window.history.replaceState(null, "", "/teacher/textbooks/book-1"); localStorage.clear();
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    mockFetch();
   });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("keeps the graph spacious and opens textbook evidence only after selecting a node", async () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("starts with the complete chapter overview and loads the graph only on request", async () => {
     render(<TeacherTextbookDetailPage />);
-
-    expect(await screen.findByRole("heading", { name: "人工智能学科教师素养提升" })).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "教材知识目录" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: fixture.textbook.title })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "章节阅读" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "从一个章节开始探索" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("教材知识图谱")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "知识图谱" }));
     expect(screen.getByLabelText("教材知识图谱")).toBeInTheDocument();
-    expect(screen.getByLabelText("知识点详情")).toHaveTextContent("选择知识点后展开详情");
-    expect(screen.getByTestId("graph-node-count")).toHaveTextContent("26");
-    expect(screen.getByTestId("graph-focus")).toHaveTextContent("all");
-    expect(screen.getByTestId("textbook-workbench")).not.toHaveAttribute("data-detail-open");
-    expect(screen.queryByRole("heading", { name: "教学支架" })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "教学支架" }));
-    expect(screen.getByTestId("graph-node-count")).toHaveTextContent("26");
-    expect(screen.getByTestId("graph-focus")).toHaveTextContent("section-1");
-    expect(screen.getByTestId("textbook-workbench")).toHaveAttribute("data-detail-open", "true");
-    expect(screen.getByRole("heading", { name: "教学支架" })).toBeInTheDocument();
-    expect(screen.getByText("教学支架是教师为学习者提供的暂时性支持")).toBeInTheDocument();
-    expect(screen.getByText("分类游戏体验机器学习")).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "教学支架示意图" })).toHaveAttribute("src", expect.stringContaining("asset-1"));
-
-    fireEvent.click(screen.getByRole("button", { name: /支持.*项目式学习/ }));
-    expect(screen.getByRole("heading", { name: "项目式学习" })).toBeInTheDocument();
-    expect(screen.getByText("以真实项目组织学习。")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "收起知识点详情" }));
-    expect(screen.queryByRole("heading", { name: "项目式学习" })).not.toBeInTheDocument();
-    expect(screen.getByTestId("textbook-workbench")).not.toHaveAttribute("data-detail-open");
-    expect(screen.getByLabelText("知识点详情")).toHaveTextContent("选择知识点后展开详情");
+  });
+  it("opens knowledge evidence and jumps back to the exact source paragraph", async () => {
+    window.history.replaceState(null, "", "/teacher/textbooks/book-1?view=read&section=section-2");
+    render(<TeacherTextbookDetailPage />);
+    await screen.findByRole("region", { name: "本节知识点" });
+    fireEvent.click(within(screen.getByRole("region", { name: "本节知识点" })).getByRole("button", { name: "教学支架" }));
+    const detail = screen.getByLabelText("知识点详情");
+    expect(within(detail).getByText("分类游戏")).toBeInTheDocument();
+    expect(within(detail).getByRole("img", { name: "支架示意图" })).toBeInTheDocument();
+    fireEvent.click(within(detail).getByRole("button", { name: "查看原文" }));
+    expect(screen.queryByLabelText("知识点详情")).not.toBeInTheDocument();
+    expect(document.getElementById("source-block-1")).toHaveAttribute("data-highlighted", "true");
+    expect(window.location.search).toContain("block=block-1");
+  });
+  it("keeps a same-name chapter distinct and follows related concepts", async () => {
+    window.history.replaceState(null, "", "/teacher/textbooks/book-1?view=read&section=section-2&concept=concept-1");
+    render(<TeacherTextbookDetailPage />);
+    const detail = await screen.findByLabelText("知识点详情");
+    expect(screen.getByRole("navigation", { name: "教材章节目录" })).toHaveTextContent("教学支架");
+    fireEvent.click(within(detail).getByRole("button", { name: /支持.*项目式学习/ }));
+    expect(within(screen.getByLabelText("知识点详情")).getByRole("heading", { name: "项目式学习" })).toBeInTheDocument();
+  });
+  it("ignores an older book response after switching textbook routes", async () => {
+    let finishOld: (response: Response) => void = () => {};
+    vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+      if (input === "/api/auth/me") return Response.json({ user: { sub: "teacher-1" } });
+      if (input.endsWith("book-1")) return new Promise<Response>(resolve => { finishOld = resolve; });
+      return Response.json({ ...fixture, textbook: { ...fixture.textbook, id: "book-2", title: "第二本教材" } });
+    }));
+    const view = render(<TeacherTextbookDetailPage />);
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/textbooks/book-1", expect.objectContaining({ signal: expect.any(AbortSignal) })));
+    routeParams.id = "book-2";
+    view.rerender(<TeacherTextbookDetailPage />);
+    await screen.findByRole("heading", { name: "第二本教材" });
+    await act(async () => { finishOld(Response.json(fixture)); });
+    expect(screen.queryByRole("heading", { name: fixture.textbook.title })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "第二本教材" })).toBeInTheDocument();
+  });
+  it("shows failed parsing with a retry action", async () => {
+    mockFetch({ ...fixture, revision: { ...fixture.revision, status: "FAILED" }, job: { error: "解析中断" } });
+    render(<TeacherTextbookDetailPage />);
+    expect(await screen.findByText("解析中断")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新解析" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/textbooks/book-1/retry", { method: "POST" }));
   });
 });

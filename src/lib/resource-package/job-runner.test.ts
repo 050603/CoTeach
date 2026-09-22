@@ -25,7 +25,12 @@ beforeEach(() => {
   job = { id: "job", status: "queued", request: { courseId: "course", requestedBy: "teacher", uploadId: "source", revision: 1, selections: {} }, result: { package: resourcePackage } };
   course = { id: "course", resources: [], content: { resourcePackage } } as unknown as Course;
   mocks.find.mockImplementation(async () => job);
-  mocks.updateMany.mockResolvedValue({ count: 1 });
+  mocks.updateMany.mockImplementation(async ({ where, data }) => {
+    if (where.status && job.status !== where.status) return { count: 0 };
+    if (where.executionId && job.executionId !== where.executionId) return { count: 0 };
+    job = { ...job, ...data };
+    return { count: 1 };
+  });
   mocks.update.mockImplementation(async ({ data }) => { job = { ...job, ...data }; return job; });
   mocks.file.mockResolvedValue(null);
   mocks.privateFile.mockResolvedValue({ file: { id: "launch", size: BigInt(1000), originalName: "项目启动.pptx" }, filePath: "/private/uploads/launch.pptx" });
@@ -87,6 +92,21 @@ describe("resource package presentation jobs", () => {
     await runResourcePackageJob("job");
     expect(mocks.convert).not.toHaveBeenCalled();
     expect(mocks.privateFile).not.toHaveBeenCalled();
+  });
+  it("does not publish a terminal status after its execution lease is replaced", async () => {
+    mocks.updateMany
+      .mockImplementationOnce(async ({ data }) => {
+        job = { ...job, ...data };
+        return { count: 1 };
+      })
+      .mockResolvedValue({ count: 0 });
+
+    await runResourcePackageJob("job");
+
+    expect(job.status).toBe("running");
+    expect(mocks.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ executionId: expect.any(String) }),
+    }));
   });
   it("pauses for source conflicts before conversion or binding the original launch PPT", async () => {
     const result = job.result as { package: Record<string, unknown> };

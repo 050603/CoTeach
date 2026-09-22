@@ -25,6 +25,21 @@ describe('scene content model-output failures', () => {
     },
   );
 
+  it.each([
+    ['an empty element list', { elements: [] }],
+    ['a null element', { elements: [null] }],
+    ['an unknown element type', { elements: [{ type: 'mystery' }] }],
+  ])('classifies %s as invalid slide output without throwing a raw error', async (_label, payload) => {
+    const failures: SceneContentFailure[] = [];
+
+    const content = await generateSceneContent(slideOutline(), async () => JSON.stringify(payload), {
+      onFailure: (failure) => failures.push(failure),
+    });
+
+    expect(content).toBeNull();
+    expect(failures).toEqual([{ code: 'invalid-model-output' }]);
+  });
+
   it('does not classify capability gates, PBL failures, or provider exceptions', async () => {
     const gateFailures: SceneContentFailure[] = [];
     const gateAiCall: AICallFn = vi.fn();

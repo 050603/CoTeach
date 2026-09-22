@@ -4,10 +4,10 @@ import { buildTtsTimingPlan } from '../audio/tts-timing';
 import type { SceneOutline } from '../types/generation';
 
 describe('first-pass teaching actions', () => {
-  it('uses the official one-call fallback when an action script is unparseable', async () => {
+  it('reports an unparseable formal action script instead of disguising it as a summary', async () => {
     const ai = vi.fn().mockResolvedValue('not valid actions');
     await expect(generateSceneActions({ id: 'broken', type: 'slide', title: 't', description: 'd', keyPoints: [], order: 0 }, { elements: [] }, ai))
-      .resolves.toEqual([expect.objectContaining({ type: 'speech', text: 'd' })]);
+      .rejects.toMatchObject({ code: 'INVALID_ACTION_OUTPUT' });
     expect(ai).toHaveBeenCalledOnce();
   });
   it('provides paragraph budgets before authoring, without rewriting a short script or broken board', async () => {

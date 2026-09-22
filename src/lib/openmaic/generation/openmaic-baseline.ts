@@ -337,6 +337,10 @@ export async function generateOpenMaicBaselineSlideActions(
       agents: options.agents as OpenMaicAgentInfo[] | undefined,
       userProfile: options.userProfile,
       languageDirective: options.languageDirective,
+      // Course authoring has a bounded generated-output retry around this
+      // adapter. Do not let the package's compatibility summary disguise an
+      // unparseable action response as a successful formal lesson page.
+      requireStructuredOutput: true,
     },
   );
   const finalized = enforceNarrationContinuity(

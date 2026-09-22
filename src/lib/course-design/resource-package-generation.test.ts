@@ -179,6 +179,39 @@ describe("confirmed resource package generation", () => {
     }
   });
 
+  it("keeps consumed attempt checkpoints and recovery count during automatic infrastructure recovery", async () => {
+    const { resumeRecoverableCourseDesignJob } = await import("./job-runner");
+    const { designGenerationJobs, resourcePackageJobs } = await import("@/lib/course-generation/job-storage");
+    const job = {
+      id: "recoverable-design",
+      courseId: "course-1",
+      status: "failed",
+      version: 7,
+      stepIndex: 1,
+      error: "network connection timed out",
+      request: { courseId: "course-1", teacherBrief: "保留已有阶段", transientRecoveryCount: 1 },
+    };
+    const find = vi.spyOn(designGenerationJobs, "findUnique")
+      .mockResolvedValueOnce(job as never)
+      .mockResolvedValueOnce({ ...job, status: "queued" } as never);
+    const replace = vi.spyOn(designGenerationJobs, "replace").mockResolvedValue({ ...job, status: "queued" } as never);
+    const packageFind = vi.spyOn(resourcePackageJobs, "findUnique").mockResolvedValue(null);
+    try {
+      await resumeRecoverableCourseDesignJob("course-1");
+      expect(replace).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: "recoverable-design", status: "failed", version: 7 },
+        checkpointPolicy: {},
+        data: expect.objectContaining({
+          request: expect.objectContaining({ transientRecoveryCount: 2 }),
+        }),
+      }));
+    } finally {
+      find.mockRestore();
+      replace.mockRestore();
+      packageFind.mockRestore();
+    }
+  });
+
   it("keeps confirmed audience and supplementary instructions before long DOCX evidence in real generation context", async () => {
     const { buildCourseTeachingSourceContext } = await import("./job-runner");
     const resourcePackage = confirmedPackage();

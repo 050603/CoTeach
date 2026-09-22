@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GenerationJob } from "@prisma/client";
-const mocks = vi.hoisted(() => ({ find: vi.fn(), create: vi.fn(), update: vi.fn(), template: vi.fn(), transaction: vi.fn(), lock: vi.fn() }));
+const mocks = vi.hoisted(() => ({ find: vi.fn(), create: vi.fn(), update: vi.fn(), template: vi.fn(), transaction: vi.fn(), lock: vi.fn(), deleteCheckpoints: vi.fn() }));
 vi.mock("@/lib/db/client", () => ({ prisma: { generationJob: { findMany: mocks.find }, $transaction: mocks.transaction } }));
 import { contentGenerationJobs, designGenerationJobs, resourcePackageJobs, projectGenerationJob } from "./job-storage";
 const now = new Date("2026-09-01T00:00:00Z");
@@ -9,7 +9,7 @@ beforeEach(() => {
   vi.resetAllMocks(); mocks.find.mockResolvedValue([row()]); mocks.template.mockResolvedValue({ id: "template" });
   mocks.update.mockImplementation(async ({ data }) => ({ ...row(), ...data, updatedAt: now }));
   mocks.create.mockResolvedValue(row());
-  mocks.transaction.mockImplementation((fn) => fn({ $executeRaw: mocks.lock, generationJob: { findMany: mocks.find, create: mocks.create, update: mocks.update }, classroomTemplate: { findUnique: mocks.template } }));
+  mocks.transaction.mockImplementation((fn) => fn({ $executeRaw: mocks.lock, generationJob: { findMany: mocks.find, create: mocks.create, update: mocks.update }, generationCheckpoint: { deleteMany: mocks.deleteCheckpoints }, classroomTemplate: { findUnique: mocks.template } }));
 });
 describe("V2 generation job persistence", () => {
   it("scopes content and design workers to distinct job types", async () => {
@@ -65,5 +65,31 @@ describe("V2 generation job persistence", () => {
     mocks.find.mockResolvedValue([{ ...row(), status: "READY", trace: { state: { version: 3 } } }]);
     await expect(resourcePackageJobs.update({ where: { id: "job", status: "ready", version: 2 }, data: { result: { package: "stale" } } })).rejects.toThrow("GENERATION_JOB_NOT_FOUND");
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it("stores execution ownership and lease metadata inside the durable JSON state", async () => {
+    const leaseExpiresAt = new Date(now.getTime() + 30_000);
+    await contentGenerationJobs.update({
+      where: { id: "job" },
+      data: { executionId: "execution-1", executionOwner: "worker-1", leaseExpiresAt },
+    });
+    const data = mocks.update.mock.calls[0][0].data;
+    expect(data.trace.state).toMatchObject({ executionId: "execution-1", executionOwner: "worker-1" });
+    expect(projectGenerationJob({ ...row(), ...data })).toMatchObject({
+      executionId: "execution-1",
+      executionOwner: "worker-1",
+      leaseExpiresAt,
+    });
+  });
+  it("replaces a job and its selected checkpoints under the same CAS transaction", async () => {
+    await contentGenerationJobs.replace({
+      where: { id: "job", status: "queued", version: 1 },
+      checkpointPolicy: { prefixes: ["stage-attempt:"] },
+      data: { status: "running" },
+    });
+    expect(mocks.deleteCheckpoints).toHaveBeenCalledWith({
+      where: { jobId: "job", OR: [{ step: { startsWith: "stage-attempt:" } }] },
+    });
+    expect(mocks.deleteCheckpoints.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.update.mock.invocationCallOrder[0]!);
   });
 });
