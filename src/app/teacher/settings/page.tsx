@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   AlertCircle,
   ArrowLeft,
@@ -44,6 +45,7 @@ import {
   TextInput,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { resolveTeacherReturnHref } from "@/lib/navigation/teacher-return";
 import {
   getProviderConnectionPresentation,
   getProviderStatePresentation,
@@ -1754,7 +1756,7 @@ export default function TeacherSettingsPage() {
   }
 
   return (
-    <TeacherPlatformPage><TeacherPlatformHeader active="settings" backHref="/teacher/classes" backLabel="返回教学班" /><div className="pbl-workspace-content pbl-settings-layout">
+    <TeacherPlatformPage><Suspense fallback={<TeacherPlatformHeader active="settings" backHref="/" backLabel="返回平台首页" />}><TeacherSettingsHeader /></Suspense><div className="pbl-workspace-content pbl-settings-layout">
       <header className="pbl-settings-masthead flex min-w-0 flex-wrap items-center justify-between gap-4 border-b border-[var(--pbl-border)] pb-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -1974,6 +1976,11 @@ export default function TeacherSettingsPage() {
       ) : null}
     </div></TeacherPlatformPage>
   );
+}
+
+function TeacherSettingsHeader() {
+  const returnHref = resolveTeacherReturnHref(useSearchParams().get("returnTo"));
+  return <TeacherPlatformHeader active="settings" backHref={returnHref ?? "/"} backLabel={returnHref ? "返回上一层" : "返回平台首页"} />;
 }
 
 function ProviderEditor({

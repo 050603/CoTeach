@@ -94,6 +94,7 @@ describe("project launch readiness", () => {
         projectMode: "personal",
         difficultyLevel: "standard",
         resourceInquiryMode: "llm",
+        practiceWebSearchEnabled: true,
         makeArtifactMode: "document",
         evidenceRequirements: [],
         outcome: { artifact: "", presentation: "", reflection: "" },

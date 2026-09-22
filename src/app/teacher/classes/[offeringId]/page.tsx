@@ -18,6 +18,7 @@ import { LearningArt } from "@/components/platform/learning-art";
 import { CoTeachLogo } from "@/components/brand/coteach-logo";
 import { clientUUID } from "@/lib/uuid";
 import { copyTextToClipboard } from "@/lib/browser/copy-text";
+import { courseReferenceCode, formatCourseTimestamp } from "@/lib/platform/course-identity";
 const STUDENT_ACCESS_ADDRESS = "coteach.cn";
 type Instance = {
     id: string;
@@ -82,6 +83,7 @@ type Template = {
     id: string;
     title: string;
     status?: string;
+    createdAt?: string;
     versions: Array<{
         id: string;
         version: number;
@@ -753,7 +755,7 @@ export default function TeacherClassEditorPage() {
                   <div className="pbl-dialog-section-heading"><div><h3>{activity.type === "Classroom" ? "关联课堂" : "学习要求"}</h3><p>{activity.type === "Classroom" ? "选择备课阶段已发布的教案，进入课堂后仍由原工作台完成配置。" : "填写学生进入内容后需要理解和完成的信息。"}</p></div><span>02</span></div>
                   {activity.type === "Classroom" ? (
                     <>
-                      <label className="pbl-dialog-field" htmlFor="template"><span>课程库教案 <small>必填</small></span><select id="template" required disabled={Boolean(editActivity?.instances?.[0] && editActivity.instances[0].status !== "finished")} className={field} value={activity.templateVersionId} onChange={(event) => { const template = availableTemplates.find((item) => readyVersion(item)?.id === event.target.value); setActivity({ ...activity, templateVersionId: event.target.value, title: template?.title || activity.title }); }}><option value="">选择已发布的课堂教案</option>{availableTemplates.map((template) => { const version = readyVersion(template)!; return <option key={version.id} value={version.id}>{template.title} · v{version.version}</option>; })}</select></label>
+                      <label className="pbl-dialog-field" htmlFor="template"><span>课程库教案 <small>必填</small></span><select id="template" required disabled={Boolean(editActivity?.instances?.[0] && editActivity.instances[0].status !== "finished")} className={field} value={activity.templateVersionId} onChange={(event) => { const template = availableTemplates.find((item) => readyVersion(item)?.id === event.target.value); setActivity({ ...activity, templateVersionId: event.target.value, title: template?.title || activity.title }); }}><option value="">选择已发布的课堂教案</option>{availableTemplates.map((template) => { const version = readyVersion(template)!; return <option key={version.id} value={version.id}>{template.title} · 编号 {courseReferenceCode(template.id)} · 首次生成 {formatCourseTimestamp(template.createdAt)} · v{version.version}</option>; })}</select></label>
                       {availableTemplates.length ? <p className="pbl-dialog-inline-note"><Check size={15}/>只显示未归档且已有发布版本的教案。关联后不会自动开始课堂。</p> : <div className="pbl-dialog-empty-notice"><BookOpen size={19}/><div><strong>课程库暂无可用教案</strong><p>请先完成备课并发布教案，再返回当前章节进行关联。</p><Link href="/teacher/templates">前往课程库 <ArrowUpRight size={14}/></Link></div></div>}
                     </>
                   ) : (

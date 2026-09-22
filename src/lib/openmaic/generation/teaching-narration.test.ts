@@ -20,6 +20,12 @@ function outline(): SceneOutline {
     id: 'page-a', type: 'slide', title: '核验AI回答', description: '解释核验', keyPoints: ['查相关记录'], order: 0,
     teachingBrief: {
       schemaVersion: 1, designVersion: TEACHING_ENHANCEMENT_VERSION, explanation: '记录需要与具体说法相关', examples: ['建校年份'], conditions: ['记录相关'], evidence: [], assessmentFocus: '查什么',
+      learningBoundary: {
+        prerequisiteKnowledge: [],
+        previouslyTaughtKnowledge: [],
+        currentKnowledge: [{ id: 'claim-check', name: '说法核验' }],
+        futureKnowledge: [{ id: 'source-independence', name: '来源独立性' }],
+      },
       sharedContext: { learningPurpose: '决定AI写的小报内容能否使用', caseId: 'school-paper',
         caseFacts: ['目标：判断校史年份能否用于小报', '行为：标出AI给出的年份并查阅校志', '预期结果：能说明记录是否支持该年份'], fixedWording: ['我校创办于1958年'],
         stableTerms: ['待查说法', '可靠记录'], conceptBoundaries: ['语气肯定不等于事实正确'] },
@@ -100,6 +106,10 @@ describe('independent first-pass teaching narration', () => {
     expect(prompt.visualCueExamples.orderedPath.waypoints[0].elementId).toContain('actualSlide');
     expect(prompt.pages[0].explanation).toContain('记录需要与具体说法相关');
     expect(prompt.pages[0].teachingPlan.visibleContent).toEqual(['语气肯定 ≠ 事实正确']);
+    expect(prompt.pages[0].learningBoundary.futureKnowledge).toEqual([
+      { id: 'source-independence', name: '来源独立性' },
+    ]);
+    expect(aiCall.mock.calls[0][0]).toContain('futureKnowledge may be named only in an agenda or goal');
     expect(prompt.pages[0].deliveryContext).toMatchObject({ sectionPosition: 'course-first', pageIndex: 1, courseTitle: 'AI信息核验' });
     expect(prompt.pages[1].continuityContract).toMatchObject({
       position: 'continuation',

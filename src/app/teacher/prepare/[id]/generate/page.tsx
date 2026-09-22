@@ -25,7 +25,7 @@ export default function GenerateCourseRedirectPage() {
   }, [course?.id, hydrated, router]);
 
   return (
-    <DashboardShell role="teacher" userName={user.name} variant="bare">
+    <DashboardShell backHref={`/teacher/prepare/${encodeURIComponent(params.id)}/verify`} backLabel="返回备课页面" role="teacher" userName={user.name} variant="bare">
       <div className="grid place-items-center py-20 text-stone-500">
         {hydrated && !course ? (
           <>

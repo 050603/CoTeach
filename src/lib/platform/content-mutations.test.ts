@@ -133,6 +133,7 @@ describe("serialized content changes", () => {
     await createTemplateVersion(teacherClaims, "template", { snapshot: {} });
     expectLockedBefore(mocks.tx.classroomTemplate.findFirst, "ClassroomTemplate");
     expect(mocks.tx.classroomTemplateVersion.create).toHaveBeenCalledWith({ data: expect.objectContaining({ version: 6 }) });
+    expect(mocks.tx.classroomTemplate.update).toHaveBeenCalledWith({ where: { id: "template" }, data: { updatedAt: expect.any(Date) } });
     mocks.tx.$queryRaw.mockClear();
     mocks.tx.activity.findUnique.mockResolvedValue({ id: "activity", chapter: { offeringId: "offering" } });
     mocks.tx.classroomTemplateVersion.findUnique.mockResolvedValue({ status: "PUBLISHED", template: { ownerId: "teacher", status: "ACTIVE" } });

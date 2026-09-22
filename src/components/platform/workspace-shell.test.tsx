@@ -43,7 +43,10 @@ describe("platform workspace shells", () => {
     expect(screen.queryByRole("link", { name: "AI 设置" })).toBeNull();
     fireEvent.pointerDown(account, { button: 0, ctrlKey: false });
     expect(await screen.findByText("账号：teacher.li")).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "个人中心" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "个人中心" })).toHaveAttribute(
+      "href",
+      "/teacher/settings?returnTo=%2Fteacher%2Fclasses",
+    );
     expect(screen.getByRole("menuitem", { name: "创建教师账号" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "退出登录" }));
     await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/auth/logout", expect.objectContaining({ method: "POST", headers: { "X-OpenPBL-Role": "teacher" } })));
@@ -76,11 +79,16 @@ describe("platform workspace shells", () => {
     expect(screen.queryByRole("link", { name: "平台首页" })).not.toBeInTheDocument();
   });
 
-  it("returns from the teacher course library to course management", () => {
-    route.pathname = "/teacher/templates";
-    render(<TeacherPlatformHeader active="templates" />);
+  it.each([
+    ["/teacher/classes", "classes"],
+    ["/teacher/templates", "templates"],
+    ["/teacher/textbooks", "textbooks"],
+    ["/teacher/settings", "settings"],
+  ] as const)("returns from the top-level teacher page %s to the platform home", (pathname, active) => {
+    route.pathname = pathname;
+    render(<TeacherPlatformHeader active={active} />);
 
-    expect(screen.getByRole("link", { name: "返回教学班" })).toHaveAttribute("href", "/teacher/classes");
+    expect(screen.getByRole("link", { name: "返回平台首页" })).toHaveAttribute("href", "/");
   });
 
   it("links the shared textbook library and returns textbook details to it", () => {

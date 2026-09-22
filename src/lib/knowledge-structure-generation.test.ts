@@ -84,6 +84,118 @@ describe("reviewed knowledge structure generation", () => {
     expect(modelCall.mock.calls[0][0][0].content).toContain("core-concept");
   });
 
+  it("stably orders parent concepts before their children while preserving group boundaries", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+      knowledgePoints: [
+        { id: "independent", name: "独立分支", description: "独立内容", groupId: "independent-group", groupName: "独立分支" },
+        { id: "child", name: "下位机制", description: "依赖上位概念", parentKnowledgePointIds: ["parent"], groupId: "child-group", groupName: "机制" },
+        { id: "child-peer", name: "机制边界", description: "同组独立内容", groupId: "child-group", groupName: "机制" },
+        { id: "parent", name: "上位概念", description: "先建立基本含义", groupId: "parent-group", groupName: "概念" },
+        { id: "parent-peer", name: "概念背景", description: "同组独立内容", groupId: "parent-group", groupName: "概念" },
+      ],
+      knowledgeGraph: { nodes: [], edges: [] },
+    }));
+
+    const result = await generateKnowledgeStructureOnce(input, {}, { modelCall });
+
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual([
+      "independent",
+      "parent",
+      "parent-peer",
+      "child",
+      "child-peer",
+    ]);
+    expect(result.knowledgeGraph?.nodes
+      .filter((node) => node.instructionalRole === "lesson")
+      .map((node) => node.id)).toEqual(result.knowledgePoints.map((point) => point.id));
+    expect(result.knowledgePoints.find((point) => point.id === "child")?.parentKnowledgePointIds)
+      .toEqual(["parent"]);
+  });
+
+  it("keeps the original order for helpful relationships", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+      knowledgePoints: [
+        { id: "application", name: "应用", description: "应用练习", groupId: "application", groupName: "应用" },
+        { id: "concept", name: "概念", description: "概念说明", groupId: "concept", groupName: "概念" },
+      ],
+      knowledgeGraph: {
+        nodes: [],
+        edges: [{
+          id: "helpful",
+          source: "concept",
+          target: "application",
+          label: "有助于理解",
+          type: "supports",
+          strength: "helpful",
+          rationale: "仅提供辅助说明",
+        }],
+      },
+    }));
+
+    const result = await generateKnowledgeStructureOnce(input, {}, { modelCall });
+
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["application", "concept"]);
+  });
+
+  it("rejects a necessary parent cycle through the existing invalid-output path", async () => {
+    const cyclic = {
+      knowledgePoints: [
+        { id: "a", name: "概念 A", description: "A", parentKnowledgePointIds: ["b"] },
+        { id: "b", name: "概念 B", description: "B", parentKnowledgePointIds: ["a"] },
+      ],
+      knowledgeGraph: { nodes: [], edges: [] },
+    };
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify(cyclic));
+
+    await expect(generateKnowledgeStructureOnce(input, {}, {
+      modelCall,
+      retrySleep: async () => undefined,
+    })).rejects.toThrow("知识结构存在必要依赖循环");
+    expect(modelCall).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a cycle made entirely of required prerequisite edges", async () => {
+    const cyclic = {
+      knowledgePoints: [{ id: "lesson", name: "本课概念", description: "本课内容" }],
+      knowledgeGraph: {
+        nodes: [
+          { id: "lesson", label: "本课概念", instructionalRole: "lesson" },
+          { id: "prereq-a", label: "先修 A", instructionalRole: "prerequisite" },
+          { id: "prereq-b", label: "先修 B", instructionalRole: "prerequisite" },
+        ],
+        edges: [
+          { id: "a-b", source: "prereq-a", target: "prereq-b", type: "required-prerequisite", strength: "required" },
+          { id: "b-a", source: "prereq-b", target: "prereq-a", type: "required-prerequisite", strength: "required" },
+        ],
+      },
+    };
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify(cyclic));
+
+    await expect(generateKnowledgeStructureOnce(input, {}, {
+      modelCall,
+      retrySleep: async () => undefined,
+    })).rejects.toThrow("知识图谱存在必要先修循环");
+    expect(modelCall).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects dependencies that make contiguous knowledge groups cyclic", async () => {
+    const cyclicGroups = {
+      knowledgePoints: [
+        { id: "a-parent", name: "A 上位概念", description: "A", groupId: "group-a", groupName: "A" },
+        { id: "a-child", name: "A 下位概念", description: "A2", parentKnowledgePointIds: ["b-parent"], groupId: "group-a", groupName: "A" },
+        { id: "b-parent", name: "B 上位概念", description: "B", groupId: "group-b", groupName: "B" },
+        { id: "b-child", name: "B 下位概念", description: "B2", parentKnowledgePointIds: ["a-parent"], groupId: "group-b", groupName: "B" },
+      ],
+      knowledgeGraph: { nodes: [], edges: [] },
+    };
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify(cyclicGroups));
+
+    await expect(generateKnowledgeStructureOnce(input, {}, {
+      modelCall,
+      retrySleep: async () => undefined,
+    })).rejects.toThrow("知识结构的必要依赖与知识分组边界冲突");
+  });
+
   it("keeps every resource-package leaf even when the model tries to collapse the catalog", async () => {
     const teacherKnowledgePoints = Array.from({ length: 20 }, (_, index) => ({
       id: `source-${index + 1}`,
@@ -240,6 +352,9 @@ describe("reviewed knowledge structure generation", () => {
     expect(aiCall.mock.calls[0]?.[1]).toContain("驱动问题、最终成果和资料中的“任务关联”不自动成为每个节点");
     expect(aiCall.mock.calls[0]?.[1]).toContain("不能因为某知识将来可用于成果制作");
     expect(aiCall.mock.calls[0]?.[1]).toContain("资源包来源项不得标为 embedded 或 deferred");
+    expect(aiCall.mock.calls[0]?.[0]).toContain("masteryBoundary 表示学生完成本课后");
+    expect(aiCall.mock.calls[0]?.[0]).toContain("跨概念综合判断只能安排在相关概念均已建立之后");
+    expect(aiCall.mock.calls[0]?.[1]).toContain("讲解、例子、比较、练习不得依赖尚未讲授的后续概念");
     expect(modelCall).not.toHaveBeenCalled();
   });
 

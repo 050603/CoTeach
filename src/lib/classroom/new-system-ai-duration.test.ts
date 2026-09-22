@@ -53,6 +53,116 @@ describe("new-system AI duration judgment", () => {
     expect(messages[1].content).toContain('"assessmentMode":"adaptive"');
   });
 
+  it("gives each teaching cluster a deterministic learning boundary instead of treating mastery as prior knowledge", () => {
+    const input = durationInput();
+    input.course.learnerProfile = { priorKnowledge: "能观察并描述熟悉的课堂活动" };
+    input.knowledgePoints = [
+      {
+        id: "kp-framework",
+        name: "教学理论、模式与方法",
+        description: "根据课堂安排辨析三个层次",
+        masteryBoundary: "能将建构主义与项目式学习分别归类",
+        level: "foundation",
+      },
+      {
+        id: "kp-constructivism",
+        name: "建构主义",
+        description: "理解学习者如何主动建构意义",
+        masteryBoundary: "能判断教学安排是否体现主动建构",
+        level: "core",
+      },
+      {
+        id: "kp-pbl",
+        name: "项目式学习",
+        description: "理解围绕真实问题完成项目的教学模式",
+        masteryBoundary: "能判断一项完整课堂任务是否属于项目式学习",
+        level: "application",
+      },
+    ];
+    input.knowledgeGraph = {
+      nodes: [
+        {
+          id: "pre-observation",
+          label: "描述熟悉的课堂活动",
+          description: "用日常语言描述教师和学生做了什么",
+          instructionalRole: "prerequisite",
+          priorKnowledgeEvidence: "学生有课堂活动经验",
+          diagnosticBoundary: "能说出课堂片段中的具体行为",
+        },
+        ...input.knowledgePoints.map((point) => ({
+          id: point.id,
+          label: point.name,
+          description: point.description,
+          instructionalRole: "lesson" as const,
+          masteryBoundary: point.masteryBoundary,
+        })),
+      ],
+      edges: [
+        {
+          id: "pre-framework",
+          source: "pre-observation",
+          target: "kp-framework",
+          label: "为层次辨析提供具体对象",
+          type: "required-prerequisite",
+          strength: "required",
+          rationale: "先能描述行为，才能辨析抽象层次",
+        },
+        {
+          id: "framework-constructivism",
+          source: "kp-framework",
+          target: "kp-constructivism",
+          label: "提供理论层次",
+          type: "required-prerequisite",
+          strength: "required",
+          rationale: "先区分概念层次，再学习具体理论",
+        },
+        {
+          id: "constructivism-pbl",
+          source: "kp-constructivism",
+          target: "kp-pbl",
+          label: "支持比较",
+          type: "supports",
+          strength: "helpful",
+          rationale: "课后可比较理论与教学模式",
+        },
+      ],
+    };
+
+    const messages = buildNewSystemAiDurationMessages(input);
+    const payload = JSON.parse(messages[1].content) as {
+      teachingClusters: Array<{ title: string; learningBoundary: Record<string, unknown> }>;
+    };
+
+    expect(payload.teachingClusters).toHaveLength(3);
+    expect(payload.teachingClusters[0]).toMatchObject({
+      title: "教学理论、模式与方法",
+      learningBoundary: {
+        prerequisiteKnowledge: [{
+          id: "pre-observation",
+          name: "描述熟悉的课堂活动",
+          priorKnowledgeEvidence: "学生有课堂活动经验",
+          diagnosticBoundary: "能说出课堂片段中的具体行为",
+        }],
+        previouslyTaughtKnowledge: [],
+        currentKnowledge: [{ id: "kp-framework", name: "教学理论、模式与方法" }],
+        futureKnowledge: [
+          { id: "kp-constructivism", name: "建构主义" },
+          { id: "kp-pbl", name: "项目式学习" },
+        ],
+      },
+    });
+    expect(payload.teachingClusters[1]?.learningBoundary).toMatchObject({
+      prerequisiteKnowledge: [],
+      previouslyTaughtKnowledge: [{ id: "kp-framework", name: "教学理论、模式与方法" }],
+      currentKnowledge: [{ id: "kp-constructivism", name: "建构主义" }],
+      futureKnowledge: [{ id: "kp-pbl", name: "项目式学习" }],
+    });
+    expect(messages[0].content).toContain("masteryBoundary");
+    expect(messages[0].content).toContain("课程完成后");
+    expect(messages[0].content).toContain("futureKnowledge");
+    expect(messages[0].content).toContain("不得作为当前理解前提");
+  });
+
   it("uses the model judgment as the AI classroom duration", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
       durationMin: 42,
@@ -189,6 +299,12 @@ describe("new-system AI duration judgment", () => {
       id: "teaching-cluster-1",
       title: "同一机制",
       knowledgePointIds: input.knowledgePoints.map((point) => point.id),
+      learningBoundary: {
+        prerequisiteKnowledge: [],
+        previouslyTaughtKnowledge: [],
+        currentKnowledge: input.knowledgePoints.map((point) => ({ id: point.id, name: point.name })),
+        futureKnowledge: [],
+      },
     }]);
     expect(result.teachingClusterBudgets).toEqual([expect.objectContaining({
       knowledgePointIds: input.knowledgePoints.map((point) => point.id),

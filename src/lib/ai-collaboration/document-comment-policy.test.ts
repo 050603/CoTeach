@@ -121,6 +121,20 @@ describe('document comment collaboration policy', () => {
     expect(prompts.system).toContain('项目目标');
   });
 
+  it('combines language and reasoning checks into one batch model request', () => {
+    const prompts = buildBatchProactiveDocumentCommentPrompts({
+      course,
+      studentId: 'student-1',
+      stageKey: 'make',
+      documentText: '我们讨论决定了选择这个方案，因为它肯定最好。',
+      candidates: [{ candidateId: 'p-1', blockIndex: 0, targetText: '我们讨论决定了选择这个方案，因为它肯定最好。' }],
+      reviewFocus: 'comprehensive',
+    });
+    expect(prompts.system).toContain('搭配不当');
+    expect(prompts.system).toContain('方案取舍');
+    expect(prompts.user).toContain('在一次审阅中完成');
+  });
+
   it('rejects empty proactive comments and bounds replies', () => {
     expect(normalizeProactiveDocumentComment({ shouldComment: true, comment: '' }))
       .toEqual({ shouldComment: false, comment: '' });

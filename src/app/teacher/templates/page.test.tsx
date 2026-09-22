@@ -5,7 +5,7 @@ import TeacherTemplatesPage from "./page";
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation, usePathname: () => "/teacher/templates" }));
 const content = { schemaVersion: 1, title: "雨水收集", subject: "科学", grade: "七年级", durationMinutes: 45, summary: "设计校园雨水收集装置。", learningObjectives: ["计算集水面积"], outline: [{ title: "调查与设计", durationMinutes: 45, description: "测量集水区并提出方案。" }], resources: [] };
-const template = { id: "template-1", title: content.title, description: content.summary, status: "ACTIVE", versions: [{ id: "version-1", version: 1, snapshot: content }] };
+const template = { id: "template-1", title: content.title, description: content.summary, status: "ACTIVE", createdAt: "2026-09-20T01:02:03.000Z", updatedAt: "2026-09-21T04:05:06.000Z", versions: [{ id: "version-1", version: 1, snapshot: content }] };
 const fetchMock = vi.fn();
 describe("teacher course library", () => {
   beforeEach(() => { vi.clearAllMocks(); vi.stubGlobal("fetch", fetchMock); fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [template] }) }); });
@@ -35,7 +35,7 @@ describe("teacher course library", () => {
     const snapshot = encodePblTemplate(createPblTemplateCourse("pbl", { name: "五阶段项目" }));
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{ ...template, id: "pbl", title: "五阶段项目", versions: [{ version: 1, snapshot }] }] }) });
     render(<TeacherTemplatesPage />);
-    expect((await screen.findByRole("link", { name: "打开课程 五阶段项目" })).getAttribute("href")).toBe("/teacher/prepare/pbl/preview");
+    expect((await screen.findByRole("link", { name: /打开课程 五阶段项目/ })).getAttribute("href")).toBe("/teacher/prepare/pbl/preview");
     expect(screen.getByRole("link", { name: "继续备课" }).getAttribute("href")).toBe("/teacher/prepare/pbl/preview");
     expect(screen.queryByRole("link", { name: "完整五阶段备课" })).toBeNull();
   });
@@ -50,7 +50,7 @@ describe("teacher course library", () => {
     }] }) });
     render(<TeacherTemplatesPage />);
 
-    expect((await screen.findByRole("link", { name: "打开课程 生成中的项目" })).getAttribute("href"))
+    expect((await screen.findByRole("link", { name: /打开课程 生成中的项目/ })).getAttribute("href"))
       .toBe("/teacher/prepare/pbl/verify");
     expect(screen.getByRole("link", { name: "查看生成进度" }).getAttribute("href"))
       .toBe("/teacher/prepare/pbl/verify");
@@ -74,9 +74,27 @@ describe("teacher course library", () => {
     expect(await screen.findByRole("img", { name: "人工智能教学法课程封面" }))
       .toHaveProperty("src", new URL(coverImageUrl, window.location.href).href);
   });
+  it("keeps same-name courses visibly distinct and routes each card by its own id", async () => {
+    const snapshot = encodePblTemplate(createPblTemplateCourse("source", { name: "相同资源课" }));
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [
+      { ...template, id: "11111111-1111-4111-8111-111111111111", title: "相同资源课", createdAt: "2026-09-20T01:02:03.000Z", updatedAt: "2026-09-20T02:03:04.000Z", versions: [{ version: 1, snapshot }] },
+      { ...template, id: "22222222-2222-4222-8222-222222222222", title: "相同资源课", createdAt: "2026-09-21T01:02:03.000Z", updatedAt: "2026-09-22T02:03:04.000Z", versions: [{ version: 1, snapshot }] },
+    ] }) });
+
+    const { container } = render(<TeacherTemplatesPage />);
+
+    expect((await screen.findByRole("link", { name: /打开课程 相同资源课（课程编号 11111111）/ })).getAttribute("href"))
+      .toBe("/teacher/prepare/11111111-1111-4111-8111-111111111111/preview");
+    expect(screen.getByRole("link", { name: /打开课程 相同资源课（课程编号 22222222）/ }).getAttribute("href"))
+      .toBe("/teacher/prepare/22222222-2222-4222-8222-222222222222/preview");
+    expect(screen.getAllByText("首次生成时间")).toHaveLength(2);
+    expect(screen.getAllByText("最近修改时间")).toHaveLength(2);
+    expect(container.querySelectorAll('time[datetime="2026-09-20T01:02:03.000Z"]')).toHaveLength(1);
+    expect(container.querySelectorAll('time[datetime="2026-09-22T02:03:04.000Z"]')).toHaveLength(1);
+  });
   it("requires confirmation before archiving a reusable course", async () => {
     render(<TeacherTemplatesPage />); await screen.findByRole("heading", { name: "雨水收集" });
-    fireEvent.click(screen.getByRole("button", { name: "归档 雨水收集" }));
+    fireEvent.click(screen.getByRole("button", { name: /归档 雨水收集/ }));
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "确认归档" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/platform/templates/template-1/versions", { method: "DELETE" }));
@@ -85,14 +103,14 @@ describe("teacher course library", () => {
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{ ...template, status: "ARCHIVED" }] }) });
     render(<TeacherTemplatesPage />);
     fireEvent.click(await screen.findByRole("button", { name: "已归档" }));
-    fireEvent.click(await screen.findByRole("button", { name: "恢复 雨水收集" }));
+    fireEvent.click(await screen.findByRole("button", { name: /恢复 雨水收集/ }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/platform/templates/template-1", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ action: "restore" }) })));
   });
   it("requires confirmation before deleting an archived course", async () => {
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{ ...template, status: "ARCHIVED" }] }) });
     render(<TeacherTemplatesPage />);
     fireEvent.click(await screen.findByRole("button", { name: "已归档" }));
-    fireEvent.click(await screen.findByRole("button", { name: "删除 雨水收集" }));
+    fireEvent.click(await screen.findByRole("button", { name: /删除 雨水收集/ }));
     expect(fetchMock.mock.calls.some(([url]) => url === "/api/platform/templates/template-1")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/platform/templates/template-1", { method: "DELETE" }));

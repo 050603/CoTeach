@@ -22,6 +22,7 @@ import {
   normalizeBatchProactiveDocumentComments,
   normalizeDocumentCommentReply,
   normalizeProactiveDocumentComment,
+  DOCUMENT_COMMENT_REVIEW_BATCH_SIZE,
   DOCUMENT_COMMENT_REVIEW_VERSION,
 } from "@/lib/ai-collaboration/document-comment-policy";
 import type {
@@ -37,8 +38,6 @@ import {
   normalizeDelegatedWorkAssessment,
   normalizeDelegatedWorkDelivery,
   normalizeDelegatedWorkStarters,
-  researchTemporarilyUnavailableResponse,
-  unavailableResearchResponse,
 } from "@/lib/ai-collaboration/delegated-work-policy";
 import {
   activeConversationId,
@@ -73,13 +72,23 @@ import { authenticateLegacyAiStudent } from "@/lib/ai-collaboration/legacy-scope
 import type { AiCompanionId } from "@/lib/ai-companions";
 import { normalizePblCourseConfig } from "@/lib/pbl-course-config";
 import type { CompanionMessage, Course, Student } from "@/lib/session/types";
-import { resolveClassroomWebSearchConfig } from "@openmaic/lib/server/web-search-config";
-import { formatSearchResultsAsContext, searchWeb } from "@openmaic/lib/web-search";
+import { normalizeProjectSupportOutput, type ProjectMemoryCandidate } from "@/lib/ai-collaboration/project-support-types";
+import {
+  dismissProjectMemories,
+  listProjectMemories,
+  projectMemoryContinuation,
+  resolveProjectSupportContext,
+  saveProjectMemoryCandidates,
+} from "@/lib/ai-collaboration/project-support-server";
 import {
   collaborationWorkspaceInstruction,
   normalizeCollaborationWorkspaceKind,
   type CollaborationWorkspaceKind,
 } from "@/lib/ai-collaboration/workspace-kind";
+import {
+  ProactiveReviewCapacityError,
+  withProactiveReviewCapacity,
+} from "@/lib/ai-collaboration/proactive-review-capacity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -145,7 +154,7 @@ type ProactiveParagraph = {
 function parseProactiveParagraphs(value: unknown): ProactiveParagraph[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
-  return value.slice(0, 40).flatMap((item, index) => {
+  return value.slice(0, DOCUMENT_COMMENT_REVIEW_BATCH_SIZE).flatMap((item, index) => {
     if (!item || typeof item !== "object") return [];
     const record = item as Record<string, unknown>;
     const blockId = boundedString(record.blockId, 160) || undefined;
@@ -386,6 +395,7 @@ async function executeDelegatedWork(input: {
   signal: AbortSignal;
   revisionOf?: DelegatedWorkRevision;
   workspaceKind: CollaborationWorkspaceKind;
+  projectSupportContext: Awaited<ReturnType<typeof resolveProjectSupportContext>>;
 }): Promise<DocumentCollaborationResponse> {
   const assessmentPrompts = buildDelegatedWorkAssessmentPrompts({
     course: input.course,
@@ -408,40 +418,15 @@ async function executeDelegatedWork(input: {
     return assessmentToBoundaryResponse(assessment);
   }
 
-  let researchContext = "";
-  let sources: Array<{ title: string; url: string; note: string }> = [];
-  let researchMode: "web" | "model" | "none" = "model";
-  if (assessment.needsWebResearch) {
-    const courseMode = normalizePblCourseConfig(input.course.pblConfig).resourceInquiryMode;
-    const searchConfig = courseMode === "web-search"
-      ? resolveClassroomWebSearchConfig({})
-      : undefined;
-    if (!searchConfig || !assessment.searchQuery) {
-      return unavailableResearchResponse(assessment);
-    }
-    let searchResult: Awaited<ReturnType<typeof searchWeb>>;
-    try {
-      searchResult = await searchWeb({
-        ...searchConfig,
-        query: assessment.searchQuery,
-        maxResults: 6,
-        signal: input.signal,
-      });
-    } catch (error) {
-      if (input.signal.aborted) throw error;
-      return researchTemporarilyUnavailableResponse(assessment);
-    }
-    if (!searchResult.sources.length) {
-      return researchTemporarilyUnavailableResponse(assessment);
-    }
-    researchContext = formatSearchResultsAsContext(searchResult);
-    sources = searchResult.sources.slice(0, 8).map((source) => ({
-      title: boundedString(source.title, 180) || "资料来源",
-      url: boundedString(source.url, 800),
-      note: boundedString(source.content, 320),
-    })).filter((source) => /^https?:\/\//i.test(source.url));
-    researchMode = "web";
-  }
+  const sources = input.projectSupportContext.sources.flatMap((source) =>
+    source.type === "web" && source.url
+      ? [{ title: source.title, url: source.url, note: source.excerpt }]
+      : []);
+  const researchMode: "web" | "model" | "none" = sources.length
+    ? "web"
+    : assessment.needsWebResearch
+      ? "none"
+      : "model";
 
   const executionPrompts = buildDelegatedWorkExecutionPrompts({
     course: input.course,
@@ -451,7 +436,7 @@ async function executeDelegatedWork(input: {
     documentText: input.documentText,
     assessment,
     history: input.history,
-    researchContext,
+    researchContext: input.projectSupportContext.promptContext,
     revisionOf: input.revisionOf,
   });
   const deliveryRaw = await callDelegatedWorkModel([
@@ -585,7 +570,7 @@ async function authenticateStudent(
   request: Request,
   courseId: string,
   requestedStudentId: string,
-): Promise<{ claims: StudentClaims | null; studentId: string } | Response> {
+): Promise<{ claims: StudentClaims | null; studentId: string; participationId: string } | Response> {
   return authenticateLegacyAiStudent(request, courseId, requestedStudentId);
 }
 
@@ -668,8 +653,11 @@ export async function GET(request: NextRequest) {
   const conversationId = activeConversationId(thread?.messages ?? []);
   const messages = visibleConversationMessages(thread?.messages ?? [], conversationId)
     .slice(-40);
+  const memories = await listProjectMemories(scope.authentication.participationId);
   return Response.json({
     messages,
+    memories,
+    continuation: projectMemoryContinuation(memories),
     conversationId,
     workspaceKind,
     commentThreads: documentCommentThreads(commentStore?.messages ?? []),
@@ -713,6 +701,12 @@ export async function DELETE(request: NextRequest) {
     messageId,
     conversationId: currentConversationId,
   });
+  if (changed) {
+    await dismissProjectMemories({
+      participationId: scope.authentication.participationId,
+      sourceMessageId: messageId,
+    });
+  }
   return Response.json({ ok: true, changed });
 }
 
@@ -890,31 +884,24 @@ export async function POST(request: NextRequest) {
     if (!candidates.length) return Response.json({ commentThreads: [] });
 
     try {
-      const reviewResults: ReturnType<typeof normalizeBatchProactiveDocumentComments> = [];
-      const reviewErrors: unknown[] = [];
-      for (const reviewFocus of ["language", "reasoning"] as const) {
-        const prompts = buildBatchProactiveDocumentCommentPrompts({
-          course: scope.course,
-          studentId: scope.student.id,
-          stageKey,
-          documentText: documentHtmlToPlainText(documentHtml),
-          candidates,
-          reviewFocus,
-        });
-        try {
-          const raw = await callCollaborationModel([
-            { role: "system", content: withWorkspaceInstruction(prompts.system, workspaceKind) },
-            { role: "user", content: prompts.user },
-          ], request.signal);
-          reviewResults.push(...normalizeBatchProactiveDocumentComments(
-            parseLLMJson(raw),
-            candidates,
-          ));
-        } catch (error) {
-          reviewErrors.push(error);
-        }
-      }
-      if (reviewErrors.length === 2) throw reviewErrors[0];
+      const prompts = buildBatchProactiveDocumentCommentPrompts({
+        course: scope.course,
+        studentId: scope.student.id,
+        stageKey,
+        documentText: documentHtmlToPlainText(documentHtml),
+        candidates,
+        reviewFocus: "comprehensive",
+      });
+      const raw = await withProactiveReviewCapacity(() =>
+        callCollaborationModel([
+          { role: "system", content: withWorkspaceInstruction(prompts.system, workspaceKind) },
+          { role: "user", content: prompts.user },
+        ], request.signal)
+      );
+      const reviewResults = normalizeBatchProactiveDocumentComments(
+        parseLLMJson(raw),
+        candidates,
+      );
 
       const seenResults = new Set<string>();
       const resultsById = new Map<string, typeof reviewResults>();
@@ -981,26 +968,24 @@ export async function POST(request: NextRequest) {
           });
         });
       });
-      if (!reviewErrors.length) {
-        candidates.forEach((candidate) => {
-          const fingerprint = documentParagraphVersionFingerprint(candidate.targetText);
-          messages.push(companionMessage({
-            role: "system-trigger",
-            content: encodeDocumentReviewCheckpoint({
-              fingerprint,
-              blockId: candidate.blockId,
-              blockIndex: candidate.blockIndex,
-              reviewedAt: new Date().toISOString(),
-              reviewVersion: DOCUMENT_COMMENT_REVIEW_VERSION,
-            }),
-            visibility: "teacher-only",
-            triggerKind: "document-saved",
-            conversationId: `review-${fingerprint}`,
-            authorName: "系统",
-          }));
-          reviewedFingerprints.add(fingerprint);
-        });
-      }
+      candidates.forEach((candidate) => {
+        const fingerprint = documentParagraphVersionFingerprint(candidate.targetText);
+        messages.push(companionMessage({
+          role: "system-trigger",
+          content: encodeDocumentReviewCheckpoint({
+            fingerprint,
+            blockId: candidate.blockId,
+            blockIndex: candidate.blockIndex,
+            reviewedAt: new Date().toISOString(),
+            reviewVersion: DOCUMENT_COMMENT_REVIEW_VERSION,
+          }),
+          visibility: "teacher-only",
+          triggerKind: "document-saved",
+          conversationId: `review-${fingerprint}`,
+          authorName: "系统",
+        }));
+        reviewedFingerprints.add(fingerprint);
+      });
       if (messages.length) {
         await appendCompanionMessages({
           courseId,
@@ -1039,6 +1024,19 @@ export async function POST(request: NextRequest) {
         reviewedParagraphFingerprints: [...reviewedFingerprints],
       });
     } catch (error) {
+      if (error instanceof ProactiveReviewCapacityError) {
+        const retryAfterSeconds = Math.max(1, Math.ceil(error.retryAfterMs / 1_000));
+        return Response.json(
+          {
+            error: "AI_PROACTIVE_REVIEW_BUSY",
+            message: "当前主动审阅任务较多，系统会自动稍后重试。",
+          },
+          {
+            status: 503,
+            headers: { "Retry-After": String(retryAfterSeconds) },
+          },
+        );
+      }
       if (request.signal.aborted) {
         return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
       }
@@ -1354,7 +1352,17 @@ export async function POST(request: NextRequest) {
   const protectedBoundary = protectedBoundaryForPolicy(policyDecision, message);
 
   try {
+    const projectSupportContext = await resolveProjectSupportContext({
+      course: scope.course,
+      studentId: scope.student.id,
+      participationId: scope.authentication.participationId,
+      message,
+      history,
+      allowRetrieval: !proactive && ["discuss", "check", "delegate"].includes(effectiveIntent),
+      signal: request.signal,
+    });
     let result: DocumentCollaborationResponse;
+    let memoryCandidates: ProjectMemoryCandidate[] = [];
     if (effectiveIntent === "delegate" && !protectedBoundary) {
       result = await executeDelegatedWork({
         course: scope.course,
@@ -1366,7 +1374,14 @@ export async function POST(request: NextRequest) {
         signal: request.signal,
         revisionOf,
         workspaceKind,
+        projectSupportContext,
       });
+      result.support = normalizeProjectSupportOutput(
+        undefined,
+        projectSupportContext.sources,
+        projectSupportContext,
+        projectSupportContext.knowledgePointLabels,
+      ).details;
     } else {
       const prompts = buildDocumentCollaborationPrompts({
         course: scope.course,
@@ -1380,6 +1395,7 @@ export async function POST(request: NextRequest) {
         history,
         protectedBoundary,
         proactive,
+        projectSupportContext: projectSupportContext.promptContext,
       });
       let llmMessages = [
         { role: "system" as const, content: withWorkspaceInstruction(prompts.system, workspaceKind) },
@@ -1406,6 +1422,7 @@ export async function POST(request: NextRequest) {
           protectedBoundary,
           proactive,
           compact: true,
+          projectSupportContext: projectSupportContext.promptContext,
         });
         llmMessages = [
           { role: "system" as const, content: withWorkspaceInstruction(compactPrompts.system, workspaceKind) },
@@ -1417,12 +1434,21 @@ export async function POST(request: NextRequest) {
           maxTransientRetries: COLLABORATION_TRANSIENT_RETRIES,
         });
       }
+      const parsed = parseLLMJson(raw) as Record<string, unknown>;
       result = normalizeDocumentCollaborationResponse(
-        parseLLMJson(raw) as Record<string, unknown>,
+        parsed,
         selectedText,
         protectedBoundary,
         effectiveIntent,
       );
+      const normalizedSupport = normalizeProjectSupportOutput(
+        parsed.support,
+        projectSupportContext.sources,
+        projectSupportContext,
+        projectSupportContext.knowledgePointLabels,
+      );
+      result.support = normalizedSupport.details;
+      memoryCandidates = normalizedSupport.memoryCandidates;
     }
     const companionId = companionForIntent(effectiveIntent);
     const assistantRecord = assistantRecordForResult(result);
@@ -1442,6 +1468,7 @@ export async function POST(request: NextRequest) {
         companionId,
         authorName: "AI 组员",
         conversationId: currentConversationId,
+        projectSupport: result.support,
       }),
     ];
     await appendCompanionMessages({
@@ -1450,6 +1477,21 @@ export async function POST(request: NextRequest) {
       stageKey: collaborationThreadKey(stageKey, workspaceKind),
       messages: persistedMessages,
     });
+    let memories = await listProjectMemories(scope.authentication.participationId);
+    if (!proactive && memoryCandidates.length) {
+      try {
+        memories = await saveProjectMemoryCandidates({
+          participationId: scope.authentication.participationId,
+          stageKey,
+          studentId: scope.student.id,
+          studentMessage: message,
+          sourceMessageIds: persistedMessages.map((item) => item.id),
+          candidates: memoryCandidates,
+        });
+      } catch (memoryError) {
+        console.error("[ai-collaboration] project memory write failed", memoryError);
+      }
+    }
     const source = selectedText || intent === "edit" ? "selection" : "sidebar";
     await recordInteractionEvents([
       {
@@ -1492,6 +1534,7 @@ export async function POST(request: NextRequest) {
           contributionId,
           suggestion: result.suggestion ?? null,
           deliverable: result.deliverable ?? null,
+          support: result.support ?? null,
         },
         requestId,
       },
@@ -1502,6 +1545,7 @@ export async function POST(request: NextRequest) {
       conversationId: currentConversationId,
       workspaceKind,
       messages: persistedMessages,
+      memories,
     });
   } catch (error) {
     if (request.signal.aborted) {

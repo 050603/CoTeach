@@ -15,7 +15,14 @@ export class ClassroomProjectionError extends Error {
 }
 export function assertImmutableClassroomDesign(before: Course, after: Course) {
   const { resources: _beforeResources, ...original } = encodePblTemplate(before).design;
-  const { resources: _afterResources, ...updated } = encodePblTemplate({ ...after, pblConfig: { ...after.pblConfig, makeArtifactMode: before.pblConfig?.makeArtifactMode } as Course["pblConfig"] }).design;
+  const { resources: _afterResources, ...updated } = encodePblTemplate({
+    ...after,
+    pblConfig: {
+      ...after.pblConfig,
+      makeArtifactMode: before.pblConfig?.makeArtifactMode,
+      practiceWebSearchEnabled: before.pblConfig?.practiceWebSearchEnabled,
+    } as Course["pblConfig"],
+  }).design;
   void _beforeResources; void _afterResources;
   // Every session action passes through normalizeCourse. Generated templates can
   // still contain their authored stage descriptions and a pre-normalized
@@ -104,7 +111,11 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
     name: instance.activity.title, version: Number(runtime.version ?? 1),
     status: instance.status.toUpperCase() === "TEACHING" ? "teaching" : instance.status.toUpperCase() === "FINISHED" ? "finished" : "ready",
     currentStageIndex: Number(runtime.currentStageIndex ?? 0),
-    pblConfig: { ...base.pblConfig, ...(runtime.makeArtifactMode ? { makeArtifactMode: runtime.makeArtifactMode } : {}) } as Course["pblConfig"],
+    pblConfig: {
+      ...base.pblConfig,
+      ...(runtime.makeArtifactMode ? { makeArtifactMode: runtime.makeArtifactMode } : {}),
+      ...(typeof runtime.practiceWebSearchEnabled === "boolean" ? { practiceWebSearchEnabled: runtime.practiceWebSearchEnabled } : {}),
+    } as Course["pblConfig"],
     classConfig: runtime.classConfig as Course["classConfig"], uiState: runtime.uiState as Course["uiState"],
     presentingStudentId: runtime.presentingStudentId as string | undefined, presentingGroupId: runtime.presentingGroupId as string | undefined,
     inviteCode: instance.activity.chapter.offering.invitations[0]?.code,
@@ -149,7 +160,11 @@ export async function persistInstanceCourse(db: Prisma.TransactionClient, before
       throw new ClassroomProjectionError("CLASSROOM_READ_ONLY", "课堂或选课状态已改变，当前仅可查看记录", 409);
     }
   }
-  if (instance.status.toUpperCase() === "FINISHED" && (!isDeepStrictEqual(before.classConfig, after.classConfig) || before.pblConfig?.makeArtifactMode !== after.pblConfig?.makeArtifactMode)) throw new ClassroomProjectionError("CLASSROOM_READ_ONLY", "已结束场次的运行配置不可修改");
+  if (instance.status.toUpperCase() === "FINISHED" && (
+    !isDeepStrictEqual(before.classConfig, after.classConfig)
+    || before.pblConfig?.makeArtifactMode !== after.pblConfig?.makeArtifactMode
+    || before.pblConfig?.practiceWebSearchEnabled !== after.pblConfig?.practiceWebSearchEnabled
+  )) throw new ClassroomProjectionError("CLASSROOM_READ_ONLY", "已结束场次的运行配置不可修改");
   if (before.status !== after.status && after.status === "teaching" && instance.activity.chapter.offering.status.toUpperCase() !== "OPEN") throw new ClassroomProjectionError("CLASSROOM_READ_ONLY", "课程当前不可开始授课");
   assertImmutableClassroomDesign(before, after);
   const storedGroupId = (groupId: string) => projectGroupStorageId(offeringId, groupId);
@@ -182,7 +197,7 @@ export async function persistInstanceCourse(db: Prisma.TransactionClient, before
   const meta = (collection: string, row: unknown) => json({ instanceId: instance.id, collection, provenance: actor ? { actorId: actor.id, actorRole: actor.role } : { actorRole: "system" }, view: row });
   const current = object(instance.runtimeConfig);
   const transitionAt = new Date();
-  await db.classroomInstance.update({ where: { id: instance.id }, data: { runtimeConfig: json({ ...current, version: (before.version ?? 1) + 1, currentStageIndex: after.currentStageIndex, classConfig: after.classConfig, makeArtifactMode: after.pblConfig?.makeArtifactMode, uiState: after.uiState, presentingStudentId: after.presentingStudentId, presentingGroupId: after.presentingGroupId, resolvedInterventionSignalIds: after.resolvedInterventionSignalIds, courseSummaryPresentation: after.content.courseSummaryPresentation }), status: after.status === "teaching" ? "TEACHING" : after.status === "finished" ? "FINISHED" : "SCHEDULED", ...(after.status === "teaching" && !instance.startedAt ? { startedAt: transitionAt } : {}), ...(after.status === "finished" && !instance.endedAt ? { endedAt: transitionAt } : {}) } });
+  await db.classroomInstance.update({ where: { id: instance.id }, data: { runtimeConfig: json({ ...current, version: (before.version ?? 1) + 1, currentStageIndex: after.currentStageIndex, classConfig: after.classConfig, makeArtifactMode: after.pblConfig?.makeArtifactMode, practiceWebSearchEnabled: after.pblConfig?.practiceWebSearchEnabled, uiState: after.uiState, presentingStudentId: after.presentingStudentId, presentingGroupId: after.presentingGroupId, resolvedInterventionSignalIds: after.resolvedInterventionSignalIds, courseSummaryPresentation: after.content.courseSummaryPresentation }), status: after.status === "teaching" ? "TEACHING" : after.status === "finished" ? "FINISHED" : "SCHEDULED", ...(after.status === "teaching" && !instance.startedAt ? { startedAt: transitionAt } : {}), ...(after.status === "finished" && !instance.endedAt ? { endedAt: transitionAt } : {}) } });
   if (before.status !== after.status) {
     const action = after.status === "teaching" ? "start" : "finish";
     if (action === "finish") await db.classroomParticipation.updateMany({ where: { instanceId: instance.id, completedAt: null }, data: { completedAt: transitionAt } });

@@ -12,17 +12,18 @@ export default function TeacherClassroomEditorPage() {
   const session = useSession();
   const hydrated = useHydrated();
   const course = useCourse(params?.id);
+  const previewHref = `/teacher/prepare/${encodeURIComponent(params.id)}/preview`;
 
   if (!hydrated) {
     return (
-      <DashboardShell role="teacher" userName={session.user.name} variant="bare">
+      <DashboardShell backHref={previewHref} backLabel="返回发布中心" role="teacher" userName={session.user.name} variant="bare">
         <div className="grid min-h-72 place-items-center text-sm text-stone-500">正在打开课堂编辑器…</div>
       </DashboardShell>
     );
   }
   if (!course) {
     return (
-      <DashboardShell role="teacher" userName={session.user.name} variant="bare">
+      <DashboardShell backHref="/teacher/templates" backLabel="返回课程库" role="teacher" userName={session.user.name} variant="bare">
         <div className="grid min-h-72 place-items-center text-center text-sm text-stone-500">
           <div>
             <p>未找到可编辑课程。</p>

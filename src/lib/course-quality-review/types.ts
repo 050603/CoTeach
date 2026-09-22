@@ -73,6 +73,32 @@ export type TeachingDifficultyStrategy = {
   understandingEvidence: string;
 };
 
+export type TeachingKnowledgeReference = {
+  id: string;
+  name: string;
+};
+
+export type TeachingPrerequisiteReference = TeachingKnowledgeReference & {
+  /** Evidence that this capability may be treated as pre-course knowledge. */
+  priorKnowledgeEvidence?: string;
+  /** Observable boundary used when the teacher needs to diagnose the prerequisite. */
+  diagnosticBoundary?: string;
+};
+
+/**
+ * Deterministic learner-state boundary for one cluster or page.
+ *
+ * Future knowledge may be named in an agenda, but it cannot be used as an
+ * explanation dependency, example, comparison target, exercise, or assessment
+ * premise until it moves into current/previously taught knowledge.
+ */
+export type TeachingLearningBoundary = {
+  prerequisiteKnowledge: TeachingPrerequisiteReference[];
+  previouslyTaughtKnowledge: TeachingKnowledgeReference[];
+  currentKnowledge: TeachingKnowledgeReference[];
+  futureKnowledge: TeachingKnowledgeReference[];
+};
+
 export type TeachingResourceNeed = {
   kind: "diagram" | "image" | "video" | "interactive";
   purpose: string;
@@ -140,6 +166,8 @@ export type TeachingBrief = {
   designVersion?: string;
   sharedContext?: SharedTeachingContext;
   pageTask?: PageLearningTask;
+  /** Compiled from the confirmed course order; models may consume but never rewrite it. */
+  learningBoundary?: TeachingLearningBoundary;
   teachingPlan?: {
     purpose: string;
     priorKnowledge: string;

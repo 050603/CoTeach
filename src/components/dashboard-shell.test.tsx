@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("next/navigation", () => ({ usePathname: () => "/teacher/prepare/course-1/verify" }));
+
 const sessionMocks = vi.hoisted(() => ({
   courses: [] as Array<Record<string, unknown>>,
   studentId: "student-1",
@@ -76,6 +78,16 @@ describe("DashboardShell immersive mode", () => {
     expect(container.querySelector("main")?.firstElementChild?.className).toContain(
       "pbl-dashboard-container",
     );
+  });
+
+  it("uses the supplied parent route for the teacher workspace return action", () => {
+    render(
+      <DashboardShell backHref="/teacher/templates" backLabel="返回课程库" role="teacher">
+        <div>课程编辑</div>
+      </DashboardShell>,
+    );
+
+    expect(screen.getByRole("link", { name: "返回课程库" })).toHaveAttribute("href", "/teacher/templates");
   });
 
   it("anchors the notification menu to its button and clears the unread badge when opened", () => {

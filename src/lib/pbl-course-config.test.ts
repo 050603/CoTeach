@@ -8,8 +8,11 @@ import {
 describe("PBL course configuration", () => {
   it("defaults legacy courses to LLM resource inquiry and preserves the teacher web-search choice", () => {
     expect(normalizePblCourseConfig().resourceInquiryMode).toBe("llm");
+    expect(normalizePblCourseConfig().practiceWebSearchEnabled).toBe(true);
     expect(normalizePblCourseConfig({ resourceInquiryMode: "web-search" }).resourceInquiryMode)
       .toBe("web-search");
+    expect(normalizePblCourseConfig({ practiceWebSearchEnabled: false }).practiceWebSearchEnabled)
+      .toBe(false);
   });
 
   it("defaults to a personal project with a process recorder", () => {

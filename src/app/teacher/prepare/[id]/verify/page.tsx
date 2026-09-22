@@ -23,7 +23,7 @@ export default function VerifyCoursePage() {
 
   if (!hydrated) {
     return (
-      <DashboardShell role="teacher" userName={user.name} variant="bare">
+      <DashboardShell backHref="/teacher/templates" backLabel="返回课程库" role="teacher" userName={user.name} variant="bare">
         <div className="grid place-items-center py-20 text-stone-500">加载中…</div>
       </DashboardShell>
     );
@@ -31,7 +31,7 @@ export default function VerifyCoursePage() {
 
   if (!course) {
     return (
-      <DashboardShell role="teacher" userName={user.name} variant="bare">
+      <DashboardShell backHref="/teacher/templates" backLabel="返回课程库" role="teacher" userName={user.name} variant="bare">
         <div className="grid place-items-center py-20 text-stone-500">
           未找到课程。
           <Link className="mt-4 text-[var(--pbl-teacher)] hover:underline" href="/teacher/templates">
@@ -44,6 +44,8 @@ export default function VerifyCoursePage() {
 
   return (
     <DashboardShell
+      backHref="/teacher/templates"
+      backLabel="返回课程库"
       role="teacher"
       userName={user.name}
       variant="bare"

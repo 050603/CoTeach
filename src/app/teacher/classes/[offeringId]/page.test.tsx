@@ -220,6 +220,21 @@ describe("课程章节管理", () => {
     expect(screen.queryByRole("option", { name: /已归档教案/ })).toBeNull();
     expect(screen.getByText("课程库暂无可用教案")).toBeInTheDocument();
   });
+  it("distinguishes same-name courses in the classroom selector", async () => {
+    fetcher.mockImplementation(async (url: string) => new Response(JSON.stringify(
+      url === "/api/platform/templates"
+        ? { templates: [
+          { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: "同名课程", status: "ACTIVE", createdAt: "2026-09-20T01:02:03.000Z", versions: [{ id: "version-a", version: 1, status: "published" }] },
+          { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", title: "同名课程", status: "ACTIVE", createdAt: "2026-09-21T01:02:03.000Z", versions: [{ id: "version-b", version: 1, status: "published" }] },
+        ] }
+        : { offerings: [offering] },
+    )));
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("button", { name: "添加学习内容" }));
+
+    expect(screen.getByRole("option", { name: /同名课程 · 编号 AAAAAAAA · 首次生成 .+ · v1/ })).toHaveValue("version-a");
+    expect(screen.getByRole("option", { name: /同名课程 · 编号 BBBBBBBB · 首次生成 .+ · v1/ })).toHaveValue("version-b");
+  });
   it("keeps the exact course version selected before choosing a teaching class", async () => {
     window.history.replaceState({}, "", "/teacher/classes/course-1?templateVersionId=new-version");
     fetcher.mockImplementation(async (url: string, options?: RequestInit) => {

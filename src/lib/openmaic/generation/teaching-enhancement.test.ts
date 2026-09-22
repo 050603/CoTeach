@@ -62,6 +62,21 @@ describe('formal course teaching enhancement', () => {
 
   it('accepts complete page designs and keeps only exact source evidence', () => {
     const source = '指导文件要求：学生需要核验生成内容的事实与来源。';
+    const inputPage = page('p1', 0);
+    inputPage.teachingBrief = {
+      schemaVersion: 1,
+      explanation: '已有蓝图解释',
+      examples: [],
+      conditions: [],
+      evidence: [],
+      assessmentFocus: '已有重点',
+      learningBoundary: {
+        prerequisiteKnowledge: [],
+        previouslyTaughtKnowledge: [],
+        currentKnowledge: [{ id: 'source-check', name: '来源核验' }],
+        futureKnowledge: [{ id: 'independent-source', name: '独立来源' }],
+      },
+    };
     const briefs = normalizeTeachingEnhancement({ sharedContext, pages: [{
       outlineId: 'p1',
       explanation: '表达流畅来自语言模式，不能证明事实成立。',
@@ -69,7 +84,7 @@ describe('formal course teaching enhancement', () => {
       conditions: ['官网转载同一错误时，不能算作独立来源。'],
       assessmentFocus: '说明核验步骤以及每一步的理由。',
       teachingPlan, evidenceQuotes: ['学生需要核验生成内容的事实与来源', '并不存在的原句'],
-    }] }, [page('p1', 0)], source);
+    }] }, [inputPage], source);
     const brief = briefs.get('p1');
     expect(brief?.examples).toHaveLength(1);
     expect(brief?.conditions).toHaveLength(1);
@@ -78,6 +93,34 @@ describe('formal course teaching enhancement', () => {
     expect(brief?.evidence).toEqual([
       { sourceId: 'course-source', quote: '学生需要核验生成内容的事实与来源' },
     ]);
+    expect(brief?.learningBoundary).toEqual(inputPage.teachingBrief!.learningBoundary);
+  });
+
+  it('exposes the compiled learning boundary to slide, interaction, and action prompts', async () => {
+    const inputPage = page('p1', 0);
+    inputPage.teachingBrief = {
+      schemaVersion: 1,
+      explanation: '先建立教学模式的一般含义。',
+      examples: [],
+      conditions: [],
+      evidence: [],
+      assessmentFocus: '区分结构与技巧',
+      learningBoundary: {
+        prerequisiteKnowledge: [],
+        previouslyTaughtKnowledge: [],
+        currentKnowledge: [{ id: 'teaching-mode', name: '教学模式' }],
+        futureKnowledge: [{ id: 'pbl', name: '项目式学习' }],
+      },
+    };
+    const calls: Array<{ system: string; user: string }> = [];
+    const wrapped = withTeachingEnhancement(async (system, user) => {
+      calls.push({ system, user });
+      return '{}';
+    }, inputPage, 'content');
+    await wrapped('base system', 'base user');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.user).toContain('"futureKnowledge":[{"id":"pbl","name":"项目式学习"}]');
+    expect(calls[0]?.user).toContain('futureKnowledge may be named only in an agenda or goal');
   });
 
   it('recovers a single-page section when the model returns a placeholder outline id', () => {

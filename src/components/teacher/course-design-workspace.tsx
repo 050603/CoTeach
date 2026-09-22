@@ -325,14 +325,14 @@ export function CourseDesignWorkspace() {
     }
   }
 
-  if (loading) return <DashboardShell role="teacher" userName={user.name} variant="bare"><div className="grid min-h-[60vh] place-items-center text-sm text-stone-500"><LoaderCircle className="mr-2 animate-spin" size={18} />正在打开课程设计工作台…</div></DashboardShell>;
-  if (!draft || !payload || !statuses) return <DashboardShell role="teacher" userName={user.name} variant="bare"><div className="grid min-h-[60vh] place-items-center px-6 text-center text-sm text-red-700">{error || "课程设计无法打开"}</div></DashboardShell>;
+  if (loading) return <DashboardShell backHref="/teacher/templates" backLabel="返回课程库" role="teacher" userName={user.name} variant="bare"><div className="grid min-h-[60vh] place-items-center text-sm text-stone-500"><LoaderCircle className="mr-2 animate-spin" size={18} />正在打开课程设计工作台…</div></DashboardShell>;
+  if (!draft || !payload || !statuses) return <DashboardShell backHref="/teacher/templates" backLabel="返回课程库" role="teacher" userName={user.name} variant="bare"><div className="grid min-h-[60vh] place-items-center px-6 text-center text-sm text-red-700">{error || "课程设计无法打开"}</div></DashboardShell>;
 
   const current = COURSE_DESIGN_WORKSPACE_SECTIONS.find((item) => item.key === active)!;
   const currentPending = payload.pendingUpdates.filter((item) => item.target === active);
 
   return (
-    <DashboardShell role="teacher" userName={user.name} variant="bare" currentCourse={{ id: draft.id, name: draft.name, status: draft.status }}>
+    <DashboardShell backHref="/teacher/templates" backLabel="返回课程库" role="teacher" userName={user.name} variant="bare" currentCourse={{ id: draft.id, name: draft.name, status: draft.status }}>
       <main className="mx-auto w-full max-w-[1500px] pb-28">
         <header className="mb-5 flex flex-wrap items-start justify-between gap-4 border-b border-stone-200 pb-5">
           <div className="flex min-w-0 items-start gap-3">

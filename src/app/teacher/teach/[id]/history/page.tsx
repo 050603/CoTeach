@@ -103,12 +103,12 @@ export default async function CourseHistoryPage({
 
   if (!course) {
     return (
-      <DashboardShell role="teacher" userName={teacherName} variant="bare">
+      <DashboardShell backHref="/teacher/classes" backLabel="返回教学班" role="teacher" userName={teacherName} variant="bare">
         <div className="grid place-items-center py-20 text-stone-500">
           未找到课程。
           <Link
             className="mt-4 text-blue-700 hover:underline"
-            href="/teacher"
+            href="/teacher/classes"
           >
             返回课程列表
           </Link>
@@ -121,6 +121,8 @@ export default async function CourseHistoryPage({
   if (!isDatabaseConfigured()) {
     return (
       <DashboardShell
+        backHref={`/teacher/teach/${encodeURIComponent(courseId)}/setup`}
+        backLabel="返回教学工作台"
         role="teacher"
         userName={teacherName}
         variant="bare"
@@ -158,6 +160,8 @@ export default async function CourseHistoryPage({
 
   return (
     <DashboardShell
+      backHref={`/teacher/teach/${encodeURIComponent(courseId)}/setup`}
+      backLabel="返回教学工作台"
       role="teacher"
       userName={teacherName}
       variant="bare"

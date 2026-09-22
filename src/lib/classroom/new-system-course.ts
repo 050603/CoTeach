@@ -7,7 +7,7 @@ import { allocateLectureBudget, isKnowledgeLectureBudgetInRange } from "./knowle
 import type { CourseStagePlan } from "@/lib/resource-package/types";
 import { hasPendingCourseDesignUpdates } from "@/lib/course-design/workspace";
 
-export const NEW_SYSTEM_AI_TIMING_POLICY_VERSION = "shared-knowledge-cluster-budget-v2-priority-difficulty";
+export const NEW_SYSTEM_AI_TIMING_POLICY_VERSION = "shared-knowledge-cluster-budget-v3-learning-boundary";
 
 export const NEW_SYSTEM_STAGE_KEYS = [
   "launch",

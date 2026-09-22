@@ -560,6 +560,8 @@ export type CompanionMessage = {
   hiddenFromStudentAt?: string;
   /** Soft deletion: retained for learning analysis but excluded from future model context. */
   excludedFromAiAt?: string;
+  /** Student-visible evidence and next-step metadata for project-practice support. */
+  projectSupport?: import("@/lib/ai-collaboration/project-support-types").ProjectSupportDetails;
 };
 
 export type CompanionThread = {
@@ -988,6 +990,12 @@ export type TeachingBlueprint = {
     teachingRatio: number;
     assessmentRatio: number;
   };
+  /** Confirmed lesson concepts and evidenced pre-course prerequisites. */
+  knowledgeLearningSequence?: Array<{
+    id: string;
+    name: string;
+    prerequisiteKnowledge: import("@/lib/course-quality-review/types").TeachingPrerequisiteReference[];
+  }>;
   sections: TeachingBlueprintSection[];
 };
 

@@ -15,6 +15,7 @@ import type { ClassroomSubmission, Course, ProjectPdfVersion } from "@/lib/sessi
 import { cn } from "@/lib/utils";
 import { StageEmptyState, StagePageHeader } from "@/components/classroom/classroom-ui";
 import { MakeArtifactModeSetting } from "@/components/teacher/make-artifact-mode-setting";
+import { PracticeAiSettings } from "@/components/teacher/practice-ai-settings";
 import { normalizePblCourseConfig } from "@/lib/pbl-course-config";
 import { inferStageCollectionMode } from "@/lib/system-mode";
 import type { TeacherStageFocus } from "@/lib/classroom/teacher-dashboard-metrics";
@@ -243,6 +244,7 @@ export function AiCollaborationTeacherMonitor({ course, focus, presentation = "w
         action={(
           <div className="flex flex-wrap items-center justify-end gap-2">
             <MakeArtifactModeSetting course={course} />
+            <PracticeAiSettings course={course} />
             <a
               className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-white px-3 text-xs font-semibold text-[var(--pbl-text-muted)] transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)]"
               download

@@ -545,7 +545,9 @@ export async function createTemplateVersion(claims: AuthClaims, templateId: stri
     if (!template) throw new PlatformError("NOT_FOUND", "课堂模板不存在", 404);
     await assertTemplateReviewForPublication(input.snapshot, teacher.id);
     const version = (template.versions[0]?.version ?? 0) + 1;
-    return tx.classroomTemplateVersion.create({ data: { templateId, version, status: "PUBLISHED", snapshot: jsonValue(input.snapshot), mediaRefs: input.mediaRefs === undefined ? undefined : jsonValue(input.mediaRefs) } });
+    const created = await tx.classroomTemplateVersion.create({ data: { templateId, version, status: "PUBLISHED", snapshot: jsonValue(input.snapshot), mediaRefs: input.mediaRefs === undefined ? undefined : jsonValue(input.mediaRefs) } });
+    await tx.classroomTemplate.update({ where: { id: templateId }, data: { updatedAt: new Date() } });
+    return created;
   });
 }
 

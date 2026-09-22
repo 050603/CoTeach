@@ -18,7 +18,7 @@ import {
 } from './narration-continuity';
 import { normalizeNarrationPunctuation } from './narration-punctuation';
 
-export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v19-learner-facing-quiz-handoff';
+export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v20-learning-boundary';
 /**
  * Changes to local normalization invalidate narration attempt checkpoints
  * without invalidating the already generated slide-content checkpoints.
@@ -568,6 +568,7 @@ export async function generateTeachingSectionNarration(input: {
     'The adopted teaching design is the authority for knowledge, concept boundaries, stable example facts, core reasoning and understanding criteria. The actual slide is the authority only for what is visible and what can be pointed to. Never preserve a slide error or delete a required explanation merely to make words agree with the slide.',
     'Explain the section at the depth this learner and time budget require. Define unfamiliar terms on first use, make intermediate causal or inferential links explicit, and explain how a result follows instead of repeating conclusions.',
     'Advance one line of understanding across pages. Use introduces, deepens, and references as page ownership: teach new nodes where introduced, add the planned relation or application where deepened, and use only a short bridge where referenced.',
+    'Treat every page learningBoundary as authoritative learner state. You may rely on prerequisiteKnowledge and previouslyTaughtKnowledge. Establish currentKnowledge before using it in an example, comparison, judgment, or exercise. futureKnowledge may be named only in an agenda or goal; never use it as an explanation premise, example, option, task, or assumed student knowledge.',
     'Treat each page continuityContract as a closed-world handoff. A later page may say the previous page established only a proposition present in establishedVisibleStatements, establishedTakeaway, or previousActualVisibleEvidence. Never claim that the previous page raised, showed, discussed, or left a question, example, term, project or conclusion that is absent from that evidence. Material listed under currentNewContent or notYetEstablishedOnPreviousPage must be introduced as new at its own page. Follow transitionContract with at most one or two short linking sentences; do not paste or restate the full establishedTakeaway at the start of the next page. When no retrospective wording adds value, continue directly from the adopted bridge or current content instead of saying “上一页”.',
     'Use each page entryPoint as the real way into its reasoning. The standalone AI resource must feel complete even when a teacher-led phase may have introduced the wider lesson earlier. On the first course page, give a brief natural greeting, identify the course or immediate learning focus when useful, and establish the entryPoint through a concrete familiar experience, observable contrast, question, or direct proposition. Let learners notice the relevant feature before explicitly bridging from it to the first new idea. Do not merely prepend a greeting to a definition, recite objectives, announce an abstract agenda, or claim that learners answered. On later pages, connect from the exact idea already established instead of restarting the lesson.',
     'When an abstract or unfamiliar term has a familiar example or visible contrast, establish that object first, let the learner notice the relevant feature, and only then name and define the concept. A direct definition is still appropriate when the term is already familiar or the content calls for it.',
@@ -603,6 +604,7 @@ export async function generateTeachingSectionNarration(input: {
       sharedContext: outline.teachingBrief?.sharedContext,
       learningTask: outline.teachingBrief?.pageTask,
       teachingPlan: outline.teachingBrief?.teachingPlan,
+      learningBoundary: outline.teachingBrief?.learningBoundary,
       visualActionIntent: outline.teachingToolPlan?.filter((item) => (
         item.tool === 'spotlight' || item.tool === 'laser-pointer'
       )),
@@ -710,6 +712,7 @@ export async function generateTeachingNarration(input: {
     loadSnippet('teaching-accuracy-policy'),
     'The course-wide request is background, not a command to perform every lesson task on this page. Generate only the current page’s teaching responsibility. Other pages in progression define boundaries: do not execute their quizzes, reveal their answers, or introduce unplanned activities. End this page after its own explanation rather than adding a quiz or announcing another page’s full teaching.',
     'Use the shared teaching plan as the explanation responsibility. Complete only this page’s introduced and deepened nodes, and keep referenced material to the shortest bridge needed. Explain unfamiliar terms, relations, intermediate steps, and reasons at the depth required by the learner and time budget. Do not read planning fields aloud. Segment boundaries are natural speech units with no fixed count.',
+    'Treat learningBoundary as authoritative learner state. Rely only on evidenced prerequisiteKnowledge and previouslyTaughtKnowledge. Establish currentKnowledge before applying it. futureKnowledge may be named only as an agenda preview and must not become an example, comparison target, judgment option, exercise premise, or assumed student knowledge.',
     'Follow teachingPlan.entryPoint. A standalone course-first page must make this AI resource complete: greet naturally, name the course or immediate focus when useful, establish a concrete familiar experience, visible contrast, question or direct proposition, and explicitly bridge that observation to the first new idea. Do not merely attach a greeting to a definition, recite objectives, claim a student response, or restart the lesson. Later pages bridge from what has already been understood. Follow continuity.endingDisposition: only verified-course-end may end with one formal thanks and farewell; pbl-stage-handoff leads into the named next stage without saying goodbye; continues and partial-preview do not announce course completion.',
     'Give primary concepts and likely misconceptions the needed depth; keep known background and transitions brief. Preserve precise terms, negation, necessary conditions and the evidence status. Not yet verified is different from false; a recommended method is not the only possible method.',
     'Use the class’s stated prior knowledge and familiar contexts. Choose an example for explanatory value and learner familiarity; project linkage is optional. Do not invent individual learner histories, test results or responses. Do not recite the learner profile. Enter examples directly without announcing whether they are real or illustrative.',
@@ -733,6 +736,7 @@ export async function generateTeachingNarration(input: {
       sharedContext: input.outline.teachingBrief?.sharedContext,
       learningTask: input.outline.teachingBrief?.pageTask,
       teachingPlan: plan,
+      learningBoundary: input.outline.teachingBrief?.learningBoundary,
     },
     continuity: input.outlineContext,
     progression: input.courseProgression?.map((outline) => ({

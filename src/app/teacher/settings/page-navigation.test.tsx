@@ -7,6 +7,8 @@ vi.mock("@/components/platform/teacher-shell", () => ({
   TeacherPlatformPage: ({ children }: { children: ReactNode }) => <main>{children}</main>,
 }));
 
+vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams() }));
+
 vi.mock("./teacher-profile-panel", () => ({
   TeacherProfilePanel: () => <div>账号设置内容</div>,
 }));

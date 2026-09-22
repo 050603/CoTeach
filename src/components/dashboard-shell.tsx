@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Bell,
+  ArrowLeft,
   CalendarDays,
   ChevronDown,
   ClipboardList,
@@ -19,6 +21,7 @@ import {
 } from "lucide-react";
 import { CoTeachLogoMark } from "@/components/brand/coteach-logo";
 import { cn } from "@/lib/utils";
+import { teacherSettingsHref } from "@/lib/navigation/teacher-return";
 import { COURSE_STATUS_LABEL } from "@/lib/session/types";
 import type { CourseStatus } from "@/lib/session/types";
 import { useSession } from "@/lib/session/store";
@@ -53,6 +56,8 @@ export type DashboardShellProps = {
   userName?: string;
   currentTask?: string;
   leadRole?: "AI" | "教师" | "学生";
+  backHref?: string;
+  backLabel?: string;
 };
 
 export type DashboardTopBarProps = Pick<
@@ -71,6 +76,8 @@ export type DashboardTopBarProps = Pick<
   | "userName"
   | "currentTask"
   | "leadRole"
+  | "backHref"
+  | "backLabel"
 >;
 
 type OpenPanel = "courses" | "notifications" | "profile" | null;
@@ -111,7 +118,10 @@ export function DashboardTopBar({
   userName,
   currentTask,
   leadRole,
+  backHref,
+  backLabel,
 }: DashboardTopBarProps) {
+  const pathname = usePathname();
   const session = useSession();
   const [openPanel, setOpenPanel] = useState<OpenPanel>(null);
   const readStorageKey = notificationReadStorageKey(role, session.studentId);
@@ -128,7 +138,8 @@ export function DashboardTopBar({
   const displayName = isTeacher
     ? (userName ?? session.user.name ?? "教师")
     : (session.studentName || (userName && userName !== "教师" ? userName : ""));
-  const homeHref = isTeacher ? "/teacher" : "/student";
+  const homeHref = backHref ?? (isTeacher ? "/teacher" : "/student");
+  const homeLabel = backLabel ?? "返回课程空间";
   const courseName = currentCourse?.name ?? course;
   const stageLabel = currentStage
     ? `阶段 ${currentStage.index + 1}/${currentStage.total} · ${currentStage.label}`
@@ -200,7 +211,8 @@ export function DashboardTopBar({
   return (
     <header className="fixed inset-x-0 top-0 z-[70] border-b border-[var(--pbl-border)] bg-[color-mix(in_srgb,var(--pbl-surface)_96%,transparent)] backdrop-blur-sm">
       <div className="pbl-wide-container flex min-h-16 items-center px-3 py-2 md:px-5">
-        <Link aria-label="返回课程空间" className="flex min-h-11 min-w-0 shrink-0 items-center gap-2.5" href={homeHref}>
+        <Link aria-label={homeLabel} className="flex min-h-11 min-w-0 shrink-0 items-center gap-2.5" href={homeHref} title={homeLabel}>
+          {backHref ? <ArrowLeft aria-hidden="true" className="shrink-0 text-[var(--pbl-text-muted)]" size={18} /> : null}
           <LogoMark role={role} />
           <div className="hidden min-w-0 lg:block">
             <div className="flex items-baseline gap-1"><span className="truncate text-sm font-bold tracking-tight text-[var(--pbl-text-strong)]">CoTeach</span></div>
@@ -227,7 +239,7 @@ export function DashboardTopBar({
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5 md:gap-2">
           <div className="hidden lg:block"><SaveStatus lastSavedAt={session.lastSavedAt} onRetry={() => void session.retrySave()} state={session.saveState} /></div>
-          {isTeacher ? <Link className="hidden h-9 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-white/80 px-3 text-[13px] font-semibold text-[var(--pbl-text-muted)] transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)] md:inline-flex" href="/teacher/settings"><Settings size={14} /> AI 设置</Link> : null}
+          {isTeacher ? <Link className="hidden h-9 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-white/80 px-3 text-[13px] font-semibold text-[var(--pbl-text-muted)] transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)] md:inline-flex" href={teacherSettingsHref(pathname)}><Settings size={14} /> AI 设置</Link> : null}
           <div className="relative">
             <button aria-label="通知中心" className="relative grid h-11 w-11 place-items-center rounded-[var(--radius-sm)] border border-transparent text-[var(--pbl-text-muted)] transition hover:border-[var(--pbl-border)] hover:bg-[var(--pbl-surface)]" onClick={() => toggle("notifications")} type="button">
               <Bell size={18} strokeWidth={1.8} />
@@ -246,7 +258,7 @@ export function DashboardTopBar({
                 <div className="space-y-3.5">
                   <div><div className="text-base font-bold text-[var(--pbl-text-strong)]">个人信息</div><p className="mt-0.5 text-[13px] text-[var(--pbl-text-muted)]">当前身份：{isTeacher ? "教师端" : "学生端"}</p></div>
                   <label className="block text-[13px] font-semibold text-[var(--pbl-text)]">显示姓名<TextInput className="mt-1.5 h-10" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} /></label>
-                  <div className="grid grid-cols-2 gap-2"><PrimaryButton className="h-10 text-sm" onClick={saveProfile}>保存</PrimaryButton><Link className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] text-[13px] font-semibold text-[var(--pbl-text-muted)] transition hover:bg-[var(--pbl-surface-soft)]" href={isTeacher ? "/teacher/settings" : "/student"} onClick={() => setOpenPanel(null)}><UserRound size={15} /> 个人中心</Link></div>
+                  <div className="grid grid-cols-2 gap-2"><PrimaryButton className="h-10 text-sm" onClick={saveProfile}>保存</PrimaryButton><Link className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] text-[13px] font-semibold text-[var(--pbl-text-muted)] transition hover:bg-[var(--pbl-surface-soft)]" href={isTeacher ? teacherSettingsHref(pathname) : "/student"} onClick={() => setOpenPanel(null)}><UserRound size={15} /> 个人中心</Link></div>
                   {isTeacher ? <Link className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)] text-[13px] font-semibold text-[var(--pbl-teacher)] transition hover:bg-white" href="/teacher/register" onClick={() => setOpenPanel(null)}><UserPlusIcon /> 创建其他教师</Link> : null}
                   <button className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--pbl-danger-border)] bg-[var(--pbl-danger-soft)] text-[13px] font-semibold text-[var(--pbl-danger)] transition hover:bg-[var(--pbl-danger-soft)]" onClick={() => void logout()} type="button"><LogOut size={15} /> 退出登录</button>
                 </div>
@@ -280,6 +292,8 @@ export function DashboardShell({
   userName,
   currentTask,
   leadRole,
+  backHref,
+  backLabel,
 }: DashboardShellProps) {
   const isTeacher = role === "teacher";
   return (
@@ -294,7 +308,7 @@ export function DashboardShell({
         isTeacher ? "pbl-app-bg-role-teacher" : "pbl-app-bg-role-student",
       )}
     >
-      {!immersive ? <DashboardTopBar classroomBar={classroomBar} course={course} currentCourse={currentCourse} currentStage={currentStage} currentTask={currentTask} headerSlot={headerSlot} hideCourseSwitcher={hideCourseSwitcher} leadRole={leadRole} onSelectStage={onSelectStage} phase={phase} role={role} stageOptions={stageOptions} title={title} userName={userName} /> : null}
+      {!immersive ? <DashboardTopBar backHref={backHref} backLabel={backLabel} classroomBar={classroomBar} course={course} currentCourse={currentCourse} currentStage={currentStage} currentTask={currentTask} headerSlot={headerSlot} hideCourseSwitcher={hideCourseSwitcher} leadRole={leadRole} onSelectStage={onSelectStage} phase={phase} role={role} stageOptions={stageOptions} title={title} userName={userName} /> : null}
 
       <main className={immersive
         ? "h-full min-h-0 overflow-hidden p-0"

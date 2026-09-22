@@ -60,6 +60,8 @@ import { collaborationBackHref } from "@/lib/system-mode";
 import { DashboardTopBar } from "@/components/dashboard-shell";
 import { StudentClassroomHeaderStatus } from "@/components/classroom/student-classroom-header-status";
 import { useCoursePresence } from "@/hooks/use-course-presence";
+import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
+import { useProjectMemory } from "@/components/views/student/use-project-memory";
 
 loader.config({
   paths: { vs: "/api/openmaic/interactive-runtime/monaco" },
@@ -120,6 +122,9 @@ function collaborationMessage(value: unknown): CodeAiWorkspaceMessage | null {
     role,
     content,
     createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString(),
+    support: record.projectSupport && typeof record.projectSupport === "object"
+      ? record.projectSupport as ProjectSupportDetails
+      : undefined,
   };
 }
 
@@ -188,6 +193,12 @@ export function CodeAiCollaboration({
   });
   const stageKey = stage?.key ?? "";
   const supportedStage = stageKey === "make" && course?.status === "teaching";
+  const projectMemory = useProjectMemory({
+    courseId,
+    studentId,
+    enabled: Boolean(course && studentId && supportedStage),
+  });
+  const replaceProjectMemories = projectMemory.replaceMemories;
   const onlineCount = course
     ? course.students.filter((student) => presence.onlineStudentIds.has(student.id)).length
     : 0;
@@ -432,15 +443,16 @@ export function CodeAiCollaboration({
     const query = new URLSearchParams({ courseId, studentId, stageKey, language });
     void fetch(`/api/ai-collaboration/code?${query.toString()}`, { cache: "no-store" })
       .then(async (response) => {
-        const payload = await response.json() as { messages?: unknown[]; conversationId?: string; commentThreads?: CodeAiCommentThread[]; message?: string };
+        const payload = await response.json() as { messages?: unknown[]; conversationId?: string; commentThreads?: CodeAiCommentThread[]; memories?: ProjectMemoryEntry[]; message?: string };
         if (!response.ok) throw new Error(payload.message || "无法加载代码协作记录。");
         setMessages((payload.messages ?? []).map(collaborationMessage).filter((item): item is CodeAiWorkspaceMessage => Boolean(item)));
         setConversationId(payload.conversationId || "legacy");
         setCommentThreads(payload.commentThreads ?? []);
+        if (payload.memories) replaceProjectMemories(payload.memories);
       })
       .catch((error) => setAiError(error instanceof Error ? error.message : "无法加载代码协作记录。"))
       .finally(() => setHistoryLoaded(true));
-  }, [artifactReady, course, courseId, language, stageKey, studentId, supportedStage]);
+  }, [artifactReady, course, courseId, language, replaceProjectMemories, stageKey, studentId, supportedStage]);
 
   const captureSelection = useCallback((editor = editorRef.current): CodeSelection | undefined => {
     const model = editor?.getModel();
@@ -818,6 +830,7 @@ export function CodeAiCollaboration({
         messages?: unknown[];
         conversationId?: string;
         message?: string;
+        memories?: ProjectMemoryEntry[];
       };
       if (!response.ok || !payload.result) throw new Error(payload.message || "AI 组员暂时无法回应。");
       const serverMessages = (payload.messages ?? []).map(collaborationMessage).filter((item): item is CodeAiWorkspaceMessage => Boolean(item));
@@ -832,8 +845,10 @@ export function CodeAiCollaboration({
           content: payload.result!.message,
           createdAt: serverAgent?.createdAt ?? new Date().toISOString(),
           kind: payload.result!.kind,
+          support: payload.result!.support,
         },
       ]);
+      if (payload.memories) projectMemory.replaceMemories(payload.memories);
       setConversationId(payload.conversationId || conversationId);
       if (payload.result.changeSet) {
         setPendingChangeSet(payload.result.changeSet);
@@ -878,6 +893,8 @@ export function CodeAiCollaboration({
       const response = await fetch(`/api/ai-collaboration/code?${query.toString()}`, { method: "DELETE" });
       if (!response.ok) throw new Error();
       setMessages((current) => current.filter((item) => item.id !== messageId));
+      projectMemory.replaceMemories((current) => current.filter((memory) =>
+        !memory.sourceMessageIds.includes(messageId)));
     } catch {
       setAiError("这条消息暂时无法移除，请稍后重试。");
     }
@@ -1292,6 +1309,8 @@ export function CodeAiCollaboration({
           error={aiError}
           historyLoaded={historyLoaded}
           messages={messages}
+          memories={projectMemory.memories}
+          memoryContinuation={projectMemory.continuation}
           mode={memberMode}
           onAcceptChangeSet={acceptChangeSet}
           onChangeDraft={setAiDraft}
@@ -1304,6 +1323,9 @@ export function CodeAiCollaboration({
           onPreviewChange={setPreviewChangeIndex}
           onRejectChangeSet={rejectChangeSet}
           onSubmit={() => { void submitAiRequest(); }}
+          onUpdateMemory={projectMemory.updateMemory}
+          onDeleteMemory={projectMemory.deleteMemory}
+          onClearMemories={projectMemory.clearMemories}
           previewChangeIndex={previewChangeIndex}
           projectTitle={projectTitle}
           selection={selection}

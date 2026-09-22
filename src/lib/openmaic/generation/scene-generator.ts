@@ -1027,7 +1027,7 @@ export async function generateLegacyCustomizedSlideContent(
  */
 type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['questionTypes'][number];
 
-export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v3';
+export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v4-first-pass';
 
 const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
   single: 'single_choice',
@@ -1272,27 +1272,14 @@ async function generateQuizContent(
     return { questions };
   };
 
-  let correction = '';
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    log.debug(`Generating quiz content for: ${outline.title}${attempt ? ' (correction)' : ''}`);
-    const response = await aiCall(prompts.system, `${prompts.user}${correction}`);
-    const generatedQuestions = parseJsonResponse<unknown[]>(response);
-    try {
-      if (!generatedQuestions || !Array.isArray(generatedQuestions)) {
-        throw new Error(`Quiz "${outline.title}" returned invalid JSON instead of a question array`);
-      }
-      log.debug(`Got ${generatedQuestions.length} questions for: ${outline.title}`);
-      return validateResponse(generatedQuestions);
-    } catch (error) {
-      lastError = error;
-      if (attempt > 0) throw error;
-      const detail = error instanceof Error ? error.message : String(error);
-      log.warn(`Quiz quality correction for "${outline.title}": ${detail}`);
-      correction = `\n\n## Correction required\nYour previous response was rejected: ${detail}\nReturn a complete replacement JSON array. Fix every stated problem, preserve the exact requested question count and formats, explicitly attribute each question to the knowledge it genuinely assesses, and do not include commentary.`;
-    }
+  log.debug(`Generating quiz content in one pass for: ${outline.title}`);
+  const response = await aiCall(prompts.system, prompts.user);
+  const generatedQuestions = parseJsonResponse<unknown[]>(response);
+  if (!generatedQuestions || !Array.isArray(generatedQuestions)) {
+    throw new Error(`Quiz "${outline.title}" returned invalid JSON instead of a question array`);
   }
-  throw lastError instanceof Error ? lastError : new Error(`Quiz "${outline.title}" returned invalid questions`);
+  log.debug(`Got ${generatedQuestions.length} questions for: ${outline.title}`);
+  return validateResponse(generatedQuestions);
 }
 
 /**

@@ -59,11 +59,11 @@ describe("V2 classroom projection writes", () => {
     expect(delegates.domainEvent.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { idempotencyKey: "classroom:instance:start" }, create: expect.objectContaining({ eventType: "classroom_started" }) }));
     expect(delegates.classroomParticipation.updateMany).not.toHaveBeenCalled();
   });
-  it("persists the artifact mode as a runtime override while keeping other design immutable", async () => {
+  it("persists project-practice settings as runtime overrides while keeping other design immutable", async () => {
     const before = normalizeCourse(fixture());
-    const after = { ...before, pblConfig: { ...before.pblConfig!, makeArtifactMode: "python" as const } };
+    const after = { ...before, pblConfig: { ...before.pblConfig!, makeArtifactMode: "python" as const, practiceWebSearchEnabled: false } };
     await persistInstanceCourse(db, before, after, teacher);
-    expect(delegates.classroomInstance.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ runtimeConfig: expect.objectContaining({ makeArtifactMode: "python" }) }) }));
+    expect(delegates.classroomInstance.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ runtimeConfig: expect.objectContaining({ makeArtifactMode: "python", practiceWebSearchEnabled: false }) }) }));
     expect(() => assertImmutableClassroomDesign(before, { ...after, name: "Changed" })).toThrow();
   });
   it("rejects a queued student write when the classroom closes before its transaction", async () => {

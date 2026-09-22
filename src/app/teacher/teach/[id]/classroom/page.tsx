@@ -149,7 +149,7 @@ export default function TeachClassroomPage() {
 
   if (!hydrated) {
     return (
-      <DashboardShell role="teacher" userName={user.name} variant="bare">
+      <DashboardShell backHref={`/teacher/teach/${encodeURIComponent(params.id)}/setup`} backLabel="返回教学工作台" role="teacher" userName={user.name} variant="bare">
         <div className="grid place-items-center py-20 text-stone-500">加载中...</div>
       </DashboardShell>
     );
@@ -157,10 +157,10 @@ export default function TeachClassroomPage() {
 
   if (!course) {
     return (
-      <DashboardShell role="teacher" userName={user.name} variant="bare">
+      <DashboardShell backHref="/teacher/classes" backLabel="返回教学班" role="teacher" userName={user.name} variant="bare">
         <div className="grid place-items-center py-20 text-stone-500">
           未找到课程。
-          <Link className="mt-4 text-blue-700 hover:underline" href="/teacher">返回课程列表</Link>
+          <Link className="mt-4 text-blue-700 hover:underline" href="/teacher/classes">返回教学班</Link>
         </div>
       </DashboardShell>
     );
@@ -304,6 +304,8 @@ export default function TeachClassroomPage() {
   return (
     <TeacherPresentationActionsProvider target={presentation.active && !presentationDiscussion ? stageActionsTarget : null}>
     <DashboardShell
+      backHref={`/teacher/teach/${encodeURIComponent(course.id)}/setup`}
+      backLabel="返回教学工作台"
       role="teacher"
       userName={user.name}
       variant="bare"

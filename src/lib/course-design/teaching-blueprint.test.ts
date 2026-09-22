@@ -14,6 +14,7 @@ import {
 import { deriveKnowledgeLectureSectionsFromOutlines } from "@/lib/knowledge-lecture";
 import { deriveTeachingConstraints } from "@/lib/openmaic/pedagogy/teaching-constraints";
 import { hasCurrentTeachingBrief } from "@/lib/openmaic/generation/teaching-enhancement";
+import type { TeachingBlueprintUnit, TeachingExplanationNode } from "@/lib/session/types";
 
 it("uses confirmed class readiness in planning and invalidates cached plans when it changes", () => {
   const base = input();
@@ -476,6 +477,216 @@ describe("teaching blueprint compiler", () => {
     expect(blueprint.sections[0]?.units[0]?.explanationNodes?.every((node) => (
       node.knowledgePointIds?.length === 4
     ))).toBe(true);
+  });
+
+  it("projects only the explanation, mechanism, and example owned by the current page", async () => {
+    const candidate = compactModelBlueprint();
+    const section = candidate.sections[0]!;
+    const unit = section.units[0]!;
+    const firstPage = section.pages[0]!;
+    unit.explanation = "教学理论、教学模式和教学方法是不同层次的课堂设计概念。";
+    unit.mechanism = "建构主义强调学习者主动建构意义，因此项目式学习可以用真实任务支持主动探究。";
+    unit.workedExample = "学生围绕校园节能问题收集证据并制作方案，这是项目式学习的完整案例。";
+    (unit as unknown as TeachingBlueprintUnit).explanationNodes = [
+      {
+        id: "framework-concept",
+        kind: "concept",
+        content: unit.explanation,
+        knowledgePointIds: ["kp-train", "kp-test", "kp-split", "kp-leak"],
+        prerequisiteNodeIds: [],
+        provenance: "general-knowledge",
+      },
+      {
+        id: "constructivism-mechanism",
+        kind: "mechanism",
+        content: unit.mechanism,
+        knowledgePointIds: ["kp-train", "kp-test", "kp-split", "kp-leak"],
+        prerequisiteNodeIds: ["framework-concept"],
+        provenance: "general-knowledge",
+      },
+      {
+        id: "pbl-example",
+        kind: "example",
+        content: unit.workedExample,
+        knowledgePointIds: ["kp-train", "kp-test", "kp-split", "kp-leak"],
+        prerequisiteNodeIds: ["constructivism-mechanism"],
+        provenance: "constructed",
+      },
+    ] satisfies TeachingExplanationNode[];
+    Object.assign(firstPage, {
+      title: "先看三个设计层次",
+      introducesNodeIds: ["framework-concept"],
+      deepensNodeIds: [],
+      referencesNodeIds: [],
+      description: "用学生熟悉的课堂安排区分理论、模式和方法。",
+      keyPoints: ["教学理论解释学习观", "教学模式组织整体活动", "教学方法是具体做法"],
+      teachingObjective: "根据具体课堂行为区分三个层次",
+    });
+    section.pages.push({
+      ...firstPage,
+      id: "future-concepts-page",
+      title: "再认识建构主义与项目式学习",
+      introducesNodeIds: ["constructivism-mechanism", "pbl-example"],
+      referencesNodeIds: ["framework-concept"],
+      description: "建立具体概念后，再完成命名归类与综合比较。",
+      keyPoints: ["建构主义强调主动建构", "项目式学习围绕真实问题组织完整项目"],
+      teachingObjective: "建立两个概念并进行综合比较",
+    });
+
+    const ai = vi.fn(async () => JSON.stringify(candidate));
+    const blueprint = await generateTeachingBlueprint(input(), ai);
+    const pages = teachingBlueprintToOutlines(blueprint, "使用简体中文")
+      .filter((outline) => outline.type !== "quiz");
+    const firstBrief = pages[0]!.teachingBrief!;
+    const secondBrief = pages[1]!.teachingBrief!;
+
+    expect(firstBrief.teachingPlan?.newContent).toContain("教学理论、教学模式和教学方法");
+    expect(firstBrief.teachingPlan?.reasoningSteps.join("\n")).not.toContain("建构主义");
+    expect(firstBrief.examples.join("\n")).not.toContain("项目式学习");
+    expect(firstBrief.explanation).not.toContain("项目式学习");
+    expect(secondBrief.teachingPlan?.reasoningSteps.join("\n")).toContain("建构主义");
+    expect(secondBrief.examples.join("\n")).toContain("项目式学习");
+    expect(ai).toHaveBeenCalledOnce();
+  });
+
+  it("carries the same learning boundary into page and section assessment briefs", async () => {
+    const boundaryInput = input();
+    boundaryInput.knowledgeGraph = {
+      nodes: [
+        {
+          id: "pre-classification",
+          label: "使用日常经验分类",
+          description: "按可观察特征将对象分类",
+          instructionalRole: "prerequisite",
+          priorKnowledgeEvidence: "已有生活分类经验",
+          diagnosticBoundary: "能说出一项分类依据",
+        },
+        ...boundaryInput.knowledgePoints.map((point) => ({
+          id: point.id,
+          label: point.name,
+          description: point.description,
+          instructionalRole: "lesson" as const,
+        })),
+      ],
+      edges: [
+        {
+          id: "pre-train",
+          source: "pre-classification",
+          target: "kp-train",
+          label: "提供分类经验",
+          type: "required-prerequisite",
+          strength: "required",
+          rationale: "先能按特征分类，再理解模型如何学习分类规律",
+        },
+      ],
+    };
+    const ai = vi.fn(async () => JSON.stringify(modelBlueprint()));
+    const blueprint = await generateTeachingBlueprint(boundaryInput, ai);
+    const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
+    const firstPage = outlines.find((outline) => outline.id === "teaching-section-1-page-1")!;
+    const secondPage = outlines.find((outline) => outline.id === "teaching-section-2-page-1")!;
+    const secondQuiz = outlines.find((outline) => outline.id === "teaching-section-2-check")!;
+
+    expect(firstPage.teachingBrief?.learningBoundary).toEqual({
+      prerequisiteKnowledge: [{
+        id: "pre-classification",
+        name: "使用日常经验分类",
+        priorKnowledgeEvidence: "已有生活分类经验",
+        diagnosticBoundary: "能说出一项分类依据",
+      }],
+      previouslyTaughtKnowledge: [],
+      currentKnowledge: [
+        { id: "kp-train", name: "训练集" },
+        { id: "kp-test", name: "测试集" },
+      ],
+      futureKnowledge: [
+        { id: "kp-split", name: "数据划分" },
+        { id: "kp-leak", name: "数据泄漏" },
+      ],
+    });
+    expect(secondPage.teachingBrief?.learningBoundary).toMatchObject({
+      prerequisiteKnowledge: [],
+      previouslyTaughtKnowledge: [
+        { id: "kp-train", name: "训练集" },
+        { id: "kp-test", name: "测试集" },
+      ],
+      currentKnowledge: [
+        { id: "kp-split", name: "数据划分" },
+        { id: "kp-leak", name: "数据泄漏" },
+      ],
+      futureKnowledge: [],
+    });
+    expect(secondQuiz.teachingBrief?.learningBoundary).toEqual({
+      prerequisiteKnowledge: [],
+      previouslyTaughtKnowledge: [
+        { id: "kp-train", name: "训练集" },
+        { id: "kp-test", name: "测试集" },
+        { id: "kp-split", name: "数据划分" },
+        { id: "kp-leak", name: "数据泄漏" },
+      ],
+      currentKnowledge: [],
+      futureKnowledge: [],
+    });
+    expect(ai).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a forward cross-unit prerequisite node reference with two-pass node resolution", async () => {
+    const candidate = modelBlueprint();
+    const section = candidate.sections[0]!;
+    const roles = section.units[0]!;
+    ((roles as unknown as TeachingBlueprintUnit).explanationNodes![0]!.prerequisiteNodeIds) = ["independence-boundary"];
+    section.units.push({
+      ...roles,
+      id: "independence",
+      title: "独立评估的边界",
+      knowledgePointIds: ["kp-test"],
+      learningOutcome: "能说明独立评估的最小条件",
+      explanation: "独立评估要求承担最终检验的数据未参与模型或参数的确定。",
+      mechanism: "如果先看测试结果再改模型，测试信息就进入了学习过程。",
+      workedExample: "比较一次性测试和根据测试分数反复调参的两个流程。",
+      explanationNodes: [{
+        id: "independence-boundary",
+        kind: "concept",
+        content: "独立评估要求承担最终检验的数据未参与模型或参数的确定。",
+        knowledgePointIds: ["kp-test"],
+        prerequisiteNodeIds: [],
+        provenance: "general-knowledge",
+      }],
+    });
+    section.pages = [
+      {
+        ...section.pages[0]!,
+        id: "independence-page",
+        title: "先建立独立评估边界",
+        unitIds: ["independence"],
+        knowledgePointIds: ["kp-test"],
+        introducesNodeIds: ["independence-boundary"],
+        description: "明确测试数据不得参与模型确定。",
+        keyPoints: ["测试数据不参与学习", "模型确定后才最终测试"],
+        teachingObjective: "建立独立评估的条件",
+      },
+      {
+        ...section.pages[0]!,
+        id: "roles-page",
+        title: "再解释训练与测试的职责",
+        unitIds: ["roles"],
+        introducesNodeIds: ["roles-concept"],
+        referencesNodeIds: ["independence-boundary"],
+        description: "依据已建立的独立边界解释两类数据的职责。",
+        keyPoints: ["训练集参与学习", "测试集承担独立检验"],
+        teachingObjective: "解释训练集与测试集的不同职责",
+      },
+    ];
+
+    const ai = vi.fn(async () => JSON.stringify(candidate));
+    const blueprint = await generateTeachingBlueprint(input(), ai);
+    const firstUnit = blueprint.sections[0]!.units[0]!;
+    const secondUnit = blueprint.sections[0]!.units[1]!;
+
+    expect(firstUnit.explanationNodes?.[0]?.prerequisiteNodeIds)
+      .toEqual([secondUnit.explanationNodes?.[0]?.id]);
+    expect(firstUnit.explanationNodes?.[0]?.prerequisiteNodeIds[0]).toBe("teaching-section-1-unit-2-node-1");
+    expect(ai).toHaveBeenCalledOnce();
   });
 
   it("keeps an independent page answer out of the compiled visible projection", async () => {

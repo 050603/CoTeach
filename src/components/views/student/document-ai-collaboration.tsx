@@ -38,6 +38,7 @@ import type {
 } from "@/lib/ai-collaboration/document-comment-types";
 import {
   documentParagraphVersionFingerprint,
+  DOCUMENT_COMMENT_REVIEW_BATCH_SIZE,
   DOCUMENT_COMMENT_REVIEW_VERSION,
   isReviewableDocumentParagraph,
 } from "@/lib/ai-collaboration/document-comment-policy";
@@ -52,6 +53,8 @@ import {
   EXTERNAL_ARTIFACT_COLLABORATION_TEMPLATE,
   type CollaborationWorkspaceKind,
 } from "@/lib/ai-collaboration/workspace-kind";
+import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
+import { useProjectMemory } from "@/components/views/student/use-project-memory";
 
 type CollaborationMessage = AiMemberWorkspaceMessage;
 
@@ -97,6 +100,10 @@ type EditNotice = {
 };
 
 const MODIFICATION_INTENTS = new Set<DocumentCollaborationIntent>(["edit"]);
+const PROACTIVE_REVIEW_SETTLE_MS = 20_000;
+const PROACTIVE_REVIEW_JITTER_MS = 10_000;
+const PROACTIVE_REVIEW_RETRY_BASE_MS = 30_000;
+const PROACTIVE_REVIEW_RETRY_MAX_MS = 5 * 60_000;
 
 function plainTextLength(html: string): number {
   if (typeof window === "undefined") return html.replace(/<[^>]*>/g, " ").trim().length;
@@ -146,6 +153,11 @@ export function DocumentAiCollaboration({
   const isExternalArtifact = workspaceKind === "external-artifact";
   const workspaceNoun = isExternalArtifact ? "成果协作稿" : "文档";
   const supportedStage = stageKey === "make" && course?.status === "teaching";
+  const projectMemory = useProjectMemory({
+    courseId: resolvedCourseId ?? "",
+    studentId,
+    enabled: Boolean(resolvedCourseId && studentId && supportedStage),
+  });
   const editorRef = useRef<PlateDocumentEditorHandle>(null);
   const submissionIdRef = useRef<string | undefined>(undefined);
   const submissionVersionRef = useRef(1);
@@ -153,6 +165,7 @@ export function DocumentAiCollaboration({
   const proactiveRequestRef = useRef<Set<string>>(new Set());
   const analyzedParagraphsRef = useRef<Set<string>>(new Set());
   const proactiveRetryTimerRef = useRef<number | null>(null);
+  const proactiveRetryAttemptRef = useRef(0);
   const taskStarterContextRef = useRef<{ signature: string; length: number; at: number } | null>(null);
   const savedContentRef = useRef("");
   const [documentHtml, setDocumentHtml] = useState("");
@@ -222,13 +235,26 @@ export function DocumentAiCollaboration({
     return () => window.clearTimeout(timer);
   }, [editNotice]);
 
-  const scheduleProactiveReviewRetry = useCallback(() => {
+  const scheduleProactiveReviewWake = useCallback((delayMs: number) => {
     if (proactiveRetryTimerRef.current !== null) return;
     proactiveRetryTimerRef.current = window.setTimeout(() => {
       proactiveRetryTimerRef.current = null;
       setProactiveReviewRetry((current) => current + 1);
-    }, 5_000);
+    }, delayMs);
   }, []);
+
+  const scheduleProactiveReviewRetry = useCallback((minimumDelayMs = 0) => {
+    if (proactiveRetryTimerRef.current !== null) return;
+    const exponentialDelay = Math.min(
+      PROACTIVE_REVIEW_RETRY_MAX_MS,
+      PROACTIVE_REVIEW_RETRY_BASE_MS * (2 ** proactiveRetryAttemptRef.current),
+    );
+    proactiveRetryAttemptRef.current = Math.min(proactiveRetryAttemptRef.current + 1, 4);
+    scheduleProactiveReviewWake(
+      Math.max(minimumDelayMs, exponentialDelay)
+      + Math.floor(Math.random() * PROACTIVE_REVIEW_JITTER_MS),
+    );
+  }, [scheduleProactiveReviewWake]);
 
   useEffect(() => () => {
     if (proactiveRetryTimerRef.current !== null) {
@@ -267,6 +293,7 @@ export function DocumentAiCollaboration({
     taskStarterContextRef.current = null;
     proactiveRequestRef.current = new Set();
     analyzedParagraphsRef.current = new Set();
+    proactiveRetryAttemptRef.current = 0;
     setAiCommentThreads([]);
     setUndoableEdit(null);
   }, [course, existingDocument, existingDocument?.content, existingDocument?.id, existingDocument?.version, isExternalArtifact, stageKey, studentId, supportedStage, workspaceKind]);
@@ -300,6 +327,7 @@ export function DocumentAiCollaboration({
           role: string;
           content: string;
           createdAt: string;
+          projectSupport?: ProjectSupportDetails;
         }>;
         commentThreads?: DocumentAiCommentThread[];
         reviewedParagraphFingerprints?: string[];
@@ -311,6 +339,7 @@ export function DocumentAiCollaboration({
         role: message.role === "student" ? "user" : "assistant",
         content: message.content,
         createdAt: message.createdAt,
+        support: message.projectSupport,
       })));
       const commentThreads = payload.commentThreads ?? [];
       setAiCommentThreads(commentThreads);
@@ -416,9 +445,13 @@ export function DocumentAiCollaboration({
 
   useEffect(() => {
     if (!documentReady || !historyLoaded || !course || !studentId || !supportedStage) return;
-    if (busy || pendingSuggestion || pendingDelivery) return;
+    if (saveStatus !== "saved" || busy || pendingSuggestion || pendingDelivery) return;
     const scopeKey = `${course.id}:${studentId}:${stageKey}:${workspaceKind}`;
     const storageKey = `openpbl:ai-collaboration:paragraph-review:v${DOCUMENT_COMMENT_REVIEW_VERSION}:${scopeKey}`;
+    const stableJitterMs = [...scopeKey].reduce(
+      (hash, character) => (hash * 31 + character.charCodeAt(0)) % PROACTIVE_REVIEW_JITTER_MS,
+      0,
+    );
     const timer = window.setTimeout(() => {
       const candidates = editorRef.current?.getBlockCandidates() ?? [];
 
@@ -448,10 +481,11 @@ export function DocumentAiCollaboration({
       });
       if (!candidatesToReview.length) return;
 
-      const requests = candidatesToReview.map((candidate) => ({
+      const requests = candidatesToReview.slice(0, DOCUMENT_COMMENT_REVIEW_BATCH_SIZE).map((candidate) => ({
         candidate,
         signature: documentParagraphVersionFingerprint(candidate.text),
       }));
+      const hasMoreCandidates = candidatesToReview.length > requests.length;
       requests.forEach(({ signature }) => proactiveRequestRef.current.add(signature));
       void fetch("/api/ai-collaboration/document", {
         method: "POST",
@@ -477,7 +511,13 @@ export function DocumentAiCollaboration({
           commentThreads?: DocumentAiCommentThread[];
           reviewedParagraphFingerprints?: string[];
         };
-        if (!response.ok) throw new Error("PROACTIVE_COMMENT_BATCH_FAILED");
+        if (!response.ok) {
+          const retryAfterSeconds = Number(response.headers.get("Retry-After"));
+          scheduleProactiveReviewRetry(
+            Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1_000 : 0,
+          );
+          return;
+        }
         const confirmedFingerprints = new Set(payload.reviewedParagraphFingerprints ?? []);
         const confirmedRequests = requests.filter(({ signature }) =>
           confirmedFingerprints.has(signature)
@@ -487,7 +527,14 @@ export function DocumentAiCollaboration({
           storageKey,
           JSON.stringify([...analyzedParagraphsRef.current].slice(-200)),
         );
-        if (confirmedRequests.length < requests.length) scheduleProactiveReviewRetry();
+        if (confirmedRequests.length < requests.length) {
+          scheduleProactiveReviewRetry();
+        } else {
+          proactiveRetryAttemptRef.current = 0;
+          if (hasMoreCandidates) {
+            scheduleProactiveReviewWake(Math.floor(Math.random() * PROACTIVE_REVIEW_JITTER_MS));
+          }
+        }
         const incoming = payload.commentThreads ?? [];
         if (!incoming.length) return;
         const incomingIds = new Set(incoming.map((thread) => thread.id));
@@ -498,9 +545,9 @@ export function DocumentAiCollaboration({
       }).catch(() => scheduleProactiveReviewRetry()).finally(() => {
         requests.forEach(({ signature }) => proactiveRequestRef.current.delete(signature));
       });
-    }, 5_000);
+    }, PROACTIVE_REVIEW_SETTLE_MS + stableJitterMs);
     return () => window.clearTimeout(timer);
-  }, [aiCommentThreads, busy, course, documentHtml, documentReady, historyLoaded, pendingDelivery, pendingSuggestion, proactiveReviewRetry, scheduleProactiveReviewRetry, stageKey, studentId, supportedStage, workspaceKind]);
+  }, [aiCommentThreads, busy, course, documentHtml, documentReady, historyLoaded, pendingDelivery, pendingSuggestion, proactiveReviewRetry, saveStatus, scheduleProactiveReviewRetry, scheduleProactiveReviewWake, stageKey, studentId, supportedStage, workspaceKind]);
 
   const replyToDocumentComment = useCallback(async ({
     threadId,
@@ -757,6 +804,7 @@ export function DocumentAiCollaboration({
         message?: string;
         conversationId?: string;
         messages?: Array<{ id: string; role: string }>;
+        memories?: ProjectMemoryEntry[];
       };
       if (payload.conversationId) setConversationId(payload.conversationId);
       if (!response.ok || !payload.result) {
@@ -769,6 +817,7 @@ export function DocumentAiCollaboration({
         content: payload.result.message,
         createdAt: new Date().toISOString(),
         kind: payload.result.kind,
+        support: payload.result.support,
       };
       const persistedStudentId = payload.messages?.find((message) => message.role === "student")?.id;
       setMessages((current) => [
@@ -780,6 +829,7 @@ export function DocumentAiCollaboration({
         },
         assistantMessage,
       ]);
+      if (payload.memories) projectMemory.replaceMemories(payload.memories);
       const contribution: AiContribution = {
         id: contributionId,
         courseId: course.id,
@@ -982,6 +1032,9 @@ export function DocumentAiCollaboration({
     });
     if (!response.ok) {
       setError("这条记录暂时无法从当前对话中移除，请刷新后重试。");
+    } else {
+      projectMemory.replaceMemories((current) => current.filter((memory) =>
+        !memory.sourceMessageIds.includes(messageId)));
     }
   }
 
@@ -1456,6 +1509,8 @@ export function DocumentAiCollaboration({
             error={error}
             historyLoaded={historyLoaded}
             messages={messages}
+            memories={projectMemory.memories}
+            memoryContinuation={projectMemory.continuation}
             mode={memberMode}
             taskStarters={taskStarters}
             taskStartersBusy={taskStartersBusy}
@@ -1475,6 +1530,9 @@ export function DocumentAiCollaboration({
             onRejectDelivery={() => resolveDelivery("rejected")}
             onReviseDelivery={() => resolveDelivery("revision")}
             onSubmit={submitMemberRequest}
+            onUpdateMemory={projectMemory.updateMemory}
+            onDeleteMemory={projectMemory.deleteMemory}
+            onClearMemories={projectMemory.clearMemories}
             workspaceLabel={isExternalArtifact ? "成果协作稿" : "文档"}
             pendingChange={pendingSuggestion && !pendingSuggestion.sourceThreadId ? {
               title: pendingSuggestion.suggestion.title,

@@ -7,6 +7,7 @@ import type {
 } from './document-comment-types';
 
 export const DOCUMENT_COMMENT_REVIEW_VERSION = 4;
+export const DOCUMENT_COMMENT_REVIEW_BATCH_SIZE = 8;
 export const DOCUMENT_COMMENT_MAX_PARAGRAPH_LENGTH = 2_000;
 export const DOCUMENT_COMMENT_MIN_MEANINGFUL_CHARACTERS = 6;
 
@@ -132,7 +133,7 @@ export type ProactiveDocumentCommentResult = {
   comment: string;
 };
 
-export type ProactiveDocumentReviewFocus = 'language' | 'reasoning';
+export type ProactiveDocumentReviewFocus = 'language' | 'reasoning' | 'comprehensive';
 
 const LANGUAGE_REVIEW_RULES = [
   '本轮只做中文语言与表达质量审阅，必须逐句检查，不能因为内容大意可理解就跳过基础问题。',
@@ -157,7 +158,14 @@ export function buildBatchProactiveDocumentCommentPrompts(input: {
 }): { system: string; user: string } {
   const focusRules = input.reviewFocus === 'language'
     ? LANGUAGE_REVIEW_RULES
-    : REASONING_REVIEW_RULES;
+    : input.reviewFocus === 'reasoning'
+      ? REASONING_REVIEW_RULES
+      : [...LANGUAGE_REVIEW_RULES, ...REASONING_REVIEW_RULES];
+  const focusLabel = input.reviewFocus === 'language'
+    ? '中文语法与表达准确性'
+    : input.reviewFocus === 'reasoning'
+      ? '逻辑、证据与项目任务'
+      : '中文语言、逻辑证据与项目任务；在一次审阅中完成，不要遗漏基础语病';
   return {
     system: [
       ...PROACTIVE_COMMENT_STYLE_RULES,
@@ -187,7 +195,7 @@ export function buildBatchProactiveDocumentCommentPrompts(input: {
           .map((comment) => clean(comment, 600)),
       }))),
       '',
-      `【本轮审阅重点】${input.reviewFocus === 'language' ? '中文语法与表达准确性' : '逻辑、证据与项目任务'}`,
+      `【本轮审阅重点】${focusLabel}`,
       '请一次完成所有候选段落的判断，只返回能够精确引用原文、确有必要显示的批注。',
     ].join('\n'),
   };

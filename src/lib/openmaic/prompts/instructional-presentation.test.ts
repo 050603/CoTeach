@@ -51,6 +51,10 @@ describe('instructional presentation prompt contract', () => {
     expect(prompt?.system).toContain('fresh compact situation');
     expect(prompt?.system).toContain("Do not copy the worked example's objects, exact statements, changed condition");
     expect(prompt?.system).toContain('not sufficient definitions or universal decision rules');
+    expect(prompt?.system).toContain('There is no later model review or rewrite');
+    expect(prompt?.system).toContain('private design card');
+    expect(prompt?.system).toContain('answer-blind check');
+    expect(prompt?.user).toContain('This request has one model-generation pass');
   });
 
   it('gives slide action generation a cross-discipline whiteboard decision and tools', () => {

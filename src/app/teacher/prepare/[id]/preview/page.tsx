@@ -253,7 +253,7 @@ export default function PreviewCoursePage() {
 
   if (!hydrated) {
     return (
-      <DashboardShell role="teacher" userName={user.name} variant="bare">
+      <DashboardShell backHref={courseDetailedEditHref(params.id)} backLabel="返回课程编辑" role="teacher" userName={user.name} variant="bare">
         <div className="grid min-h-72 place-items-center text-sm text-stone-500">正在打开课程发布中心…</div>
       </DashboardShell>
     );
@@ -261,7 +261,7 @@ export default function PreviewCoursePage() {
 
   if (!course) {
     return (
-      <DashboardShell role="teacher" userName={user.name} variant="bare">
+      <DashboardShell backHref={courseDetailedEditHref(params.id)} backLabel="返回课程编辑" role="teacher" userName={user.name} variant="bare">
         <div className="grid min-h-72 place-items-center text-sm text-stone-500">
           <div className="text-center">
             <p>未找到课程。</p>
@@ -452,6 +452,8 @@ export default function PreviewCoursePage() {
 
   return (
     <DashboardShell
+      backHref={courseDetailedEditHref(course.id)}
+      backLabel="返回课程编辑"
       role="teacher"
       userName={user.name}
       variant="bare"

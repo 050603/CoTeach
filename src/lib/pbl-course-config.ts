@@ -60,6 +60,8 @@ export type PblCourseConfig = {
   companionIds: PblCompanionId[];
   /** Controls how the student resource corner answers newly entered questions. */
   resourceInquiryMode: ResourceInquiryMode;
+  /** Allows project-practice AI to use web search only after textbook retrieval is insufficient. */
+  practiceWebSearchEnabled: boolean;
   /** Students follow this setting and cannot switch the project-practice format. */
   makeArtifactMode: MakeArtifactMode;
   /** Teacher-authored open PBL questions students can choose as their project focus. */
@@ -135,6 +137,7 @@ export const DEFAULT_PBL_COURSE_CONFIG: PblCourseConfig = {
   outcome: DEFAULT_PBL_OUTCOME,
   companionIds: PBL_COMPANION_ORDER,
   resourceInquiryMode: "llm",
+  practiceWebSearchEnabled: true,
   makeArtifactMode: "document",
   inquiryQuestions: [],
   evaluationModel: "tri-party",
@@ -216,6 +219,7 @@ export function normalizePblCourseConfig(
     },
     companionIds,
     resourceInquiryMode: input?.resourceInquiryMode === "web-search" ? "web-search" : "llm",
+    practiceWebSearchEnabled: input?.practiceWebSearchEnabled !== false,
     makeArtifactMode:
       input?.makeArtifactMode === "other"
       || input?.makeArtifactMode === "python"

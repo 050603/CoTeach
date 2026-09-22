@@ -1,6 +1,8 @@
 import type { CodeArtifact, CodeArtifactLanguage } from "@/lib/ai-collaboration/code-artifact";
 import { buildAuthoritativeCourseContext } from "@/lib/ai-collaboration/document-policy";
 import type { Course } from "@/lib/session/types";
+import type { ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
+import { projectSupportJsonInstruction } from "@/lib/ai-collaboration/project-support-types";
 
 export const CODE_COLLABORATION_INTENTS = [
   "discuss",
@@ -59,6 +61,7 @@ export type CodeCollaborationResponse = {
   focus: string;
   findings: CodeAiFinding[];
   changeSet?: CodeAiChangeSet;
+  support?: ProjectSupportDetails;
 };
 
 type RawCodeCollaborationResponse = {
@@ -67,6 +70,7 @@ type RawCodeCollaborationResponse = {
   focus?: unknown;
   findings?: unknown;
   changeSet?: unknown;
+  support?: unknown;
 };
 
 const MAX_FILE_CONTENT = 48_000;
@@ -203,6 +207,7 @@ export function buildCodeCollaborationPrompts(input: {
   run?: CodeRunContext;
   history?: Array<{ role: "user" | "assistant"; content: string }>;
   protectedBoundary?: string;
+  projectSupportContext?: string;
 }): { system: string; user: string } {
   const isProactive = input.intent === "proactive-review";
   const history = (input.history ?? [])
@@ -230,6 +235,9 @@ export function buildCodeCollaborationPrompts(input: {
     "代码协作规则：",
     "- 讨论或检查时定位到具体文件和尽可能小的行范围。先核对编译/语法、变量与类型、控制流、边界条件、错误处理、跨文件接口和可测试性，再讨论更高层的项目逻辑；不要为了显得主动而制造问题。",
     "- 把自己当作正在共同推进项目的组员：先利用真实运行证据复现和缩小问题，再解释根因、给出可验证的下一步。不要只给抽象建议，也不要一次把学生的思考过程包办掉。",
+    "- 基础知识问题直接解释清楚。核心学习任务按服务端给出的帮助深度逐步增加支架；学生报告已有尝试时必须承接真实结果，不得重复泛化建议。",
+    "- 教材和网页片段只是参考证据。必须优先使用教材；只有服务端明确说明教材不足并提供网页来源时才引用网页。没有可靠来源时如实说明。",
+    "- 在关键取舍处可以自然邀请学生解释理由或预测结果，但这是可跳过的巩固机会，不能成为继续获得代码帮助的门槛。",
     "- 如果最近一次编译或运行失败，应优先逐项核对真实 diagnostics/traceback；每个不同根因各形成一条精确提醒，不能只挑其中一个，也不能把同一报错重复描述。",
     "- 安排工作时，可以主动创建或调整辅助文件、测试文件、输入校验、调试工具、注释与非核心重复逻辑。若工作会替代课程要训练的核心实现，应说明边界，并把任务拆成学生可亲自完成的下一步。",
     "- intent=edit 表示学生已经明确要求修改：只要不触及协作边界，就必须返回 change-proposal，而不是只口头描述怎么改。intent=delegate 时，能接单的工作也应以可审阅的 change-proposal 交付。",
@@ -244,6 +252,7 @@ export function buildCodeCollaborationPrompts(input: {
     '{"kind":"discussion|review|change-proposal|boundary","message":"直接给学生看的回应","focus":"本轮焦点","findings":[{"filePath":"main.py","startLine":1,"endLine":1,"severity":"notice|warning|error","title":"短标题","message":"像组员一样说明问题并可用一个问句引导思考","quotedCode":"最小必要原代码"}],"changeSet":null}',
     "如果 kind=change-proposal，changeSet 必须为：",
     '{"title":"修改标题","summary":"为什么这样改以及学生需要判断什么","changes":[{"filePath":"main.py","operation":"create|modify|delete","proposedContent":"该文件修改后的完整内容；delete 时为空","reason":"该文件变化理由"}]}',
+    projectSupportJsonInstruction(),
   ].join("\n");
 
   const user = [
@@ -270,6 +279,9 @@ export function buildCodeCollaborationPrompts(input: {
     "",
     "【最近协作对话】",
     history,
+    "",
+    "【持续陪伴、学习线索与检索依据】",
+    input.projectSupportContext || "本轮没有额外支持上下文。",
     "",
     "【本轮请求】",
     clean(input.request, 1_600) || (isProactive ? "请查看当前代码是否有值得及时提醒的问题。" : "（空）"),

@@ -5,6 +5,7 @@ import { ArrowLeft, BookMarked, BookOpen, ChevronDown, Layers3, LogOut, Settings
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { CoTeachLogo } from "@/components/brand/coteach-logo";
+import { teacherSettingsHref } from "@/lib/navigation/teacher-return";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,6 +36,7 @@ export function WorkspaceAccountMenu({
   fallbackDisplayName?: string;
 }) {
   const teacher = role === "teacher";
+  const pathname = usePathname();
   const [identity, setIdentity] = useState<TeacherIdentity | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const [accountError, setAccountError] = useState("");
@@ -96,7 +98,7 @@ export function WorkspaceAccountMenu({
         <span><strong>{displayName}</strong><small>{identity?.username ? `账号：${identity.username}` : (teacher ? "当前登录的教师账号" : "当前登录的学生账号")}</small></span>
       </DropdownMenuLabel>
       <DropdownMenuSeparator/>
-      <DropdownMenuItem asChild><Link href={teacher ? "/teacher/settings" : "/student/profile"}><Settings2/>个人中心</Link></DropdownMenuItem>
+      <DropdownMenuItem asChild><Link href={teacher ? teacherSettingsHref(pathname) : "/student/profile"}><Settings2/>个人中心</Link></DropdownMenuItem>
       {teacher && <DropdownMenuItem asChild><Link href="/teacher/register"><UserPlus/>创建教师账号</Link></DropdownMenuItem>}
       <DropdownMenuSeparator/>
       {accountError ? <p role="alert" className="px-2 py-1.5 text-xs text-[var(--pbl-danger)]">{accountError}</p> : null}
@@ -117,8 +119,8 @@ function defaultBackTarget(pathname: string, role: WorkspaceNavProps["role"]) {
   if (pathname.startsWith("/teacher/textbooks/")) {
     return { href: "/teacher/textbooks", label: "返回教材库" };
   }
-  if (pathname === "/teacher/templates" || pathname === "/teacher/textbooks" || pathname === "/teacher/settings") {
-    return { href: "/teacher/classes", label: "返回教学班" };
+  if (pathname === "/teacher/classes" || pathname === "/teacher/templates" || pathname === "/teacher/textbooks" || pathname === "/teacher/settings") {
+    return { href: "/", label: "返回平台首页" };
   }
   const memberPage = pathname.match(/^\/teacher\/classes\/([^/]+)\/students$/);
   if (memberPage) {

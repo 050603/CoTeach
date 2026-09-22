@@ -23,6 +23,8 @@ import type {
 } from "@/lib/ai-collaboration/code-policy";
 import { cn } from "@/lib/utils";
 import { AiMemberMarkdown } from "./ai-member-markdown";
+import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
+import { ProjectMemoryPanel, ProjectSupportCard } from "./project-support-cards";
 
 export type CodeAiWorkspaceMessage = {
   id: string;
@@ -30,6 +32,7 @@ export type CodeAiWorkspaceMessage = {
   content: string;
   createdAt: string;
   kind?: "discussion" | "review" | "change-proposal" | "boundary";
+  support?: ProjectSupportDetails;
 };
 
 type Props = {
@@ -39,6 +42,8 @@ type Props = {
   error: string | null;
   historyLoaded: boolean;
   messages: CodeAiWorkspaceMessage[];
+  memories: ProjectMemoryEntry[];
+  memoryContinuation?: string;
   mode: "discuss" | "task";
   previewChangeIndex: number;
   projectTitle: string;
@@ -55,6 +60,9 @@ type Props = {
   onPreviewChange: (index: number) => void;
   onRejectChangeSet: () => void;
   onSubmit: () => void;
+  onUpdateMemory: (id: string, content: string) => void;
+  onDeleteMemory: (id: string) => void;
+  onClearMemories: () => void;
 };
 
 function timeLabel(value: string): string {
@@ -70,6 +78,8 @@ export function CodeAiMemberWorkspace({
   error,
   historyLoaded,
   messages,
+  memories,
+  memoryContinuation,
   mode,
   previewChangeIndex,
   projectTitle,
@@ -86,6 +96,9 @@ export function CodeAiMemberWorkspace({
   onPreviewChange,
   onRejectChangeSet,
   onSubmit,
+  onUpdateMemory,
+  onDeleteMemory,
+  onClearMemories,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -134,13 +147,21 @@ export function CodeAiMemberWorkspace({
         {confirmReset ? (
           <div className="absolute right-3 top-11 z-30 w-[min(320px,calc(100vw-40px))] rounded-xl border border-stone-200 bg-white p-3 text-xs leading-5 text-stone-600 shadow-xl">
             <p className="font-semibold text-stone-900">开始一段新对话？</p>
-            <p className="mt-0.5">当前消息将从这里清空，不再发送给 AI；系统仍保留过程记录。</p>
+            <p className="mt-0.5">当前消息将从这里清空，不再发送给 AI；项目记忆会继续保留，可在记忆面板中修改或清除。</p>
             <div className="mt-2 flex justify-end gap-2">
               <button className="rounded-lg px-2.5 py-1.5 font-medium hover:bg-stone-200" onClick={() => setConfirmReset(false)} type="button">取消</button>
               <button className="rounded-lg bg-stone-950 px-2.5 py-1.5 font-semibold text-white" onClick={() => { setConfirmReset(false); onNewConversation(); }} type="button">开始新对话</button>
             </div>
           </div>
         ) : null}
+
+        <ProjectMemoryPanel
+          continuation={memoryContinuation}
+          memories={memories}
+          onClear={onClearMemories}
+          onDelete={onDeleteMemory}
+          onUpdate={onUpdateMemory}
+        />
 
         <div className="mt-2 grid grid-cols-2 gap-1 rounded-lg bg-stone-100 p-1">
           <button
@@ -191,13 +212,14 @@ export function CodeAiMemberWorkspace({
                     : "rounded-bl-md border-stone-200 bg-white text-stone-800",
               )}
               key={message.id}
+              id={message.id}
             >
               <div className={cn("mb-1 flex items-center justify-between gap-3 text-[10px] font-medium", message.role === "user" ? "text-stone-300" : "text-stone-500")}>
                 <span>{message.role === "user" ? "我" : message.kind === "boundary" ? "AI 组员 · 协作边界" : "AI 组员"}</span>
                 <span className="flex items-center gap-1.5"><time>{timeLabel(message.createdAt)}</time><button aria-label="从当前对话移除" className={cn("grid size-5 place-items-center rounded opacity-60 transition hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100", message.role === "user" ? "hover:bg-white/15 hover:text-white" : "hover:bg-stone-100 hover:text-stone-900")} onClick={() => onDeleteMessage(message.id)} title="移除后不再发送给 AI，后台仍保留" type="button"><Trash2 size={11} /></button></span>
               </div>
               {message.role === "assistant" ? (
-                <AiMemberMarkdown content={message.content} />
+                <><AiMemberMarkdown content={message.content} /><ProjectSupportCard support={message.support} /></>
               ) : (
                 <p className="whitespace-pre-wrap">{message.content}</p>
               )}

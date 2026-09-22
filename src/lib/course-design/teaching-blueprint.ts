@@ -5,7 +5,8 @@ import { parseJsonResponse } from "@/lib/openmaic/generation/json-repair";
 import { fingerprintGenerationValue } from "@/lib/course-generation/page-checkpoints";
 import { formatTeachingConstraintsForChinesePrompt, type TeachingConstraints } from "@/lib/openmaic/pedagogy/teaching-constraints";
 import { loadSnippet } from "@/lib/openmaic/prompts";
-import type { PageLearningTask, SharedTeachingContext, TeacherReviewItem, TeachingDifficultyStrategy, TeachingResourceNeed, TeachingTaskConnection, TeachingUnderstandingCriteria } from "@/lib/course-quality-review/types";
+import type { PageLearningTask, SharedTeachingContext, TeacherReviewItem, TeachingDifficultyStrategy, TeachingLearningBoundary, TeachingResourceNeed, TeachingTaskConnection, TeachingUnderstandingCriteria } from "@/lib/course-quality-review/types";
+import { deriveTeachingLearningBoundaries } from "@/lib/course-design/learning-boundary";
 import type { MediaGenerationRequest } from "@/lib/openmaic/media/types";
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic/generation/generated-output-retry";
 import type {
@@ -21,8 +22,8 @@ import type {
 } from "@/lib/session/types";
 
 export const TEACHING_BLUEPRINT_SCHEMA_VERSION = 3 as const;
-export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v26-guided-local-repair";
-export const TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION = "teaching-blueprint-v3-compiled-v11-objective-section-quizzes";
+export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v27-learning-boundary";
+export const TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION = "teaching-blueprint-v3-compiled-v12-learning-boundary";
 /** Kept as a compatibility export for callers being migrated away from ratio budgeting. */
 export const MAX_ASSESSMENT_RATIO = 0.2;
 const MIN_TEACHING_PAGE_SEC = 1;
@@ -432,10 +433,26 @@ export function buildTeachingBlueprintRepairPrompt(
 export function buildTeachingBlueprintPrompt(
   input: TeachingBlueprintInput,
 ): { system: string; user: string } {
+  const boundaryGroups = input.sectionPlans?.length
+    ? input.sectionPlans
+    : input.knowledgePoints.map((point) => ({ knowledgePointIds: [point.id] }));
+  const learningBoundaries = deriveTeachingLearningBoundaries(
+    input.knowledgePoints,
+    input.knowledgeGraph,
+    boundaryGroups,
+  );
+  const graphNodes = (input.knowledgeGraph?.nodes ?? []).map((node) => ({
+    id: node.id,
+    label: node.label,
+    instructionalRole: node.instructionalRole,
+    priorKnowledgeEvidence: node.priorKnowledgeEvidence,
+    diagnosticBoundary: node.diagnosticBoundary,
+  }));
   const graphEdges = (input.knowledgeGraph?.edges ?? []).map((edge) => ({
     source: edge.source,
     target: edge.target,
     type: edge.type,
+    strength: edge.strength,
     rationale: edge.rationale,
   }));
   const system = [
@@ -469,6 +486,7 @@ export function buildTeachingBlueprintPrompt(
     "统一教学要求中 appliesTo=ai-learning 或 course-wide 的 highlight 必须落实到对应 unit 的 requirementIds，并在时间内给予更充分的定义、关系、案例分析或练习；difficulty 还必须落实为 difficultyStrategies，逐项写清 learnerObstacle、针对该障碍的具体 teachingApproach，以及可观察的 understandingEvidence。适用于 AI 知识讲授的 teacher-directive 和 stage-requirement 至少要有一个落实单元；other-stage 只保留追踪，不得强塞进本阶段。‘举例讲解’‘加强理解’等空泛写法不合格。",
     "知识点、讲授单元和 PPT 页面不是一一对应关系。先按定义—关系—机制—应用等真实知识联系，把可以共享解释主线、视觉关系或案例的多个知识点编入同一个 unit，也可以让一个页面组合多个紧密相关 unit；只有认知任务或视觉焦点发生实质变化时才拆页。不得为了凑覆盖率机械制作‘一个知识点一页’，也不得用一个概括名称吞掉各知识点应有的具体解释责任。",
     "必须沿用已经确认的小节边界与顺序。页面可以组合多个 unit，不得为了换例子或换说法重复创建同一知识点的 unit。时间不足时先压缩重复铺垫、共享相关点的引入与案例并减少可选扩展，仍无法完成必授内容才报告 capacityConflict，不能静默漏讲。",
+    "learningBoundaries 是按教师已确认顺序确定的权威学习边界。masteryBoundary 描述课程结束后的达成表现，不表示学生开课时已经具备。每节的例子、比较、分类、练习和理解证据只能依赖 prerequisiteKnowledge、previouslyTaughtKnowledge，或先在本节 currentKnowledge 中完整建立再使用的内容。futureKnowledge 只允许在目录或目标中预告名称，不得成为当前理解前提、例子对象、选项或任务材料。跨概念综合判断必须放到相关概念均已讲授之后；如果既有难点要求使用后续概念，换成学生熟悉的具体行为、现象或课堂片段。",
     "可用适龄的通行学科知识补足解释，也可为教学构造案例、类比和示意数据。不得捏造资料出处、研究机构或引用。所有 constructed 或 unverified 内容必须写入 reviewItems，供课程完成后集中反馈教师；这些状态不得进入学生页面和讲稿。",
     "教材案例采用双通道设计：workedExample、explanation、mechanism、keyPoints、页面标题、页面 description 和 learningTask 只写学生实际要理解、观察或完成的内容；sourceKind、evidenceQuotes、explanationNode.provenance 和 reviewItems 承担来源、改编范围与待确认说明。若在教材案例上增加步骤、角色、互动或条件，把新增部分写入 reviewItems 并标记 derived/constructed，同时在学生内容字段中直接写成连贯案例，不出现‘教材原例’‘教学改编’‘AI 补充’‘来自教材’‘保留原例核心含义’等审查话术，也不把这些话术换成脚注、括注或口头免责声明。",
     "sourceKind=course-source 时 evidenceQuotes 必须逐字来自给定资料；通行知识写 general-knowledge 且 evidenceQuotes=[]。",
@@ -537,7 +555,13 @@ ${plannedSections ? "已完整列在上述已确认小节中；不得增加其�
   })))}
 
 已确认依赖与关系：
-${JSON.stringify(graphEdges)}
+${JSON.stringify({ nodes: graphNodes, edges: graphEdges })}
+
+按已确认小节顺序编译的学习边界（不得改写此前已讲与后续待授的归属）：
+${JSON.stringify(boundaryGroups.map((group, index) => ({
+    knowledgePointIds: [...group.knowledgePointIds],
+    learningBoundary: learningBoundaries[index],
+  })))}
 
 机器结构验收合同（这些是首稿必须通过的硬条件；返回前逐项检查）：
 ${JSON.stringify(teachingBlueprintAcceptanceContract(input))}
@@ -600,11 +624,25 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
     const rawUnits = records(rawSection.units);
     const rawUnitIdMap = new Map<string, string>();
     const rawNodeIdMap = new Map<string, string>();
+    // Register every explicit unit/node ID before resolving dependencies. A
+    // single-pass map silently discarded a prerequisite that referred to a
+    // node declared in a later unit of the same section.
+    rawUnits.forEach((rawUnit, unitIndex) => {
+      const unitId = `teaching-section-${sectionIndex + 1}-unit-${unitIndex + 1}`;
+      const rawUnitId = clean(rawUnit.id, 160);
+      if (rawUnitId && !rawUnitIdMap.has(rawUnitId)) rawUnitIdMap.set(rawUnitId, unitId);
+      records(rawUnit.explanationNodes).forEach((node, nodeIndex) => {
+        const rawNodeId = clean(node.id, 160);
+        if (rawNodeId && !rawNodeIdMap.has(rawNodeId)) {
+          rawNodeIdMap.set(rawNodeId, `${unitId}-node-${nodeIndex + 1}`);
+        }
+      });
+    });
     const units = rawUnits.map((rawUnit: RawUnit, unitIndex): TeachingBlueprintUnit => {
       const id = `teaching-section-${sectionIndex + 1}-unit-${unitIndex + 1}`;
       const unitKnowledgePointIds = stableIds(rawUnit.knowledgePointIds, sectionAllowedIds);
       const rawId = clean(rawUnit.id, 160);
-      if (rawId) rawUnitIdMap.set(rawId, id);
+      if (rawId && !rawUnitIdMap.has(rawId)) rawUnitIdMap.set(rawId, id);
       // Provenance is derived from quotes we can actually verify. Formatting
       // differences introduced by PDF extraction do not invalidate teaching
       // content, and an unverifiable quote is never retained as source proof.
@@ -634,13 +672,20 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
           ? node.provenance as TeachingExplanationNode["provenance"]
           : sourceKind;
         if (!kind || !content) return [];
+        const requestedPrerequisiteNodeIds = strings(node.prerequisiteNodeIds, 20, 160);
+        const prerequisiteNodeIds = requestedPrerequisiteNodeIds
+          .flatMap((nodeId) => localNodeIds.get(nodeId) ?? rawNodeIdMap.get(nodeId) ?? []);
+        if (prerequisiteNodeIds.length !== requestedPrerequisiteNodeIds.length) {
+          structuralIssues.push(
+            `第 ${sectionIndex + 1} 节第 ${unitIndex + 1} 个单元的解释节点“${clean(node.id, 160) || nodeIndex + 1}”引用了不存在的先备解释节点`,
+          );
+        }
         return [{
           id: `${id}-node-${nodeIndex + 1}`,
           kind,
           content,
           knowledgePointIds: stableIds(node.knowledgePointIds, new Set(unitKnowledgePointIds)),
-          prerequisiteNodeIds: strings(node.prerequisiteNodeIds, 20, 160)
-            .flatMap((nodeId) => localNodeIds.get(nodeId) ?? rawNodeIdMap.get(nodeId) ?? []),
+          prerequisiteNodeIds,
           provenance,
         }];
       });
@@ -909,6 +954,32 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
     }
     const sectionKnowledgePoints = input.knowledgePoints.filter((point) => knowledgePointIds.includes(point.id));
     const nodes = units.flatMap((unit) => unitExplanationNodes(unit));
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const visiting = new Set<string>();
+    const visited = new Set<string>();
+    const visit = (nodeId: string): boolean => {
+      if (visiting.has(nodeId)) return true;
+      if (visited.has(nodeId)) return false;
+      visiting.add(nodeId);
+      const cyclic = (nodeById.get(nodeId)?.prerequisiteNodeIds ?? []).some(visit);
+      visiting.delete(nodeId);
+      visited.add(nodeId);
+      return cyclic;
+    };
+    if (nodes.some((node) => visit(node.id))) {
+      structuralIssues.push(`第 ${sectionIndex + 1} 节的解释节点存在循环先备依赖`);
+    }
+    for (const node of nodes) {
+      const nodePage = firstDevelopment.get(node.id);
+      for (const prerequisiteId of node.prerequisiteNodeIds) {
+        const prerequisitePage = firstDevelopment.get(prerequisiteId);
+        if (nodePage !== undefined && (prerequisitePage === undefined || prerequisitePage > nodePage)) {
+          structuralIssues.push(
+            `第 ${sectionIndex + 1} 节在解释节点“${node.content}”之前尚未建立其先备解释“${nodeById.get(prerequisiteId)?.content ?? prerequisiteId}”`,
+          );
+        }
+      }
+    }
     const firstPageForKnowledgePoint = (knowledgePointId: string): number | undefined => {
       const indexes = nodes.filter((node) => node.knowledgePointIds?.includes(knowledgePointId)).flatMap((node) => {
         const index = firstDevelopment.get(node.id);
@@ -1025,6 +1096,11 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
     learnerActivityDurationSec: sectionActivity[index] ?? 0,
     assessmentDurationSec: sectionAssessment[index] ?? 0,
   }));
+  const pointBoundaries = deriveTeachingLearningBoundaries(
+    input.knowledgePoints,
+    input.knowledgeGraph,
+    input.knowledgePoints.map((point) => ({ knowledgePointIds: [point.id] })),
+  );
   // Semantic preferences and quality findings are intentionally not a
   // generation gate. A structurally usable first draft proceeds to the
   // teacher checkpoint without an automatic audit or rewrite.
@@ -1044,6 +1120,11 @@ function normalizeRawBlueprint(value: unknown, input: TeachingBlueprintInput): {
         teachingRatio: teachingDurationSec / totalDurationSec,
         assessmentRatio: assessmentDurationSec / totalDurationSec,
       },
+      knowledgeLearningSequence: input.knowledgePoints.map((point, index) => ({
+        id: point.id,
+        name: point.name,
+        prerequisiteKnowledge: pointBoundaries[index]?.prerequisiteKnowledge ?? [],
+      })),
       sections: timedSections,
     },
   };
@@ -1146,7 +1227,11 @@ export function adaptTeachingBlueprintResourceCapabilities(
   return next;
 }
 
-function sectionTeachingBrief(section: TeachingBlueprintSection, page?: TeachingBlueprintPage) {
+function sectionTeachingBrief(
+  section: TeachingBlueprintSection,
+  page?: TeachingBlueprintPage,
+  learningBoundary?: TeachingLearningBoundary,
+) {
   const ids = new Set(page?.unitIds ?? section.units.map((unit) => unit.id));
   const units = section.units.filter((unit) => ids.has(unit.id));
   const pageIndex = page ? section.pages.findIndex((candidate) => candidate.id === page.id) : -1;
@@ -1164,9 +1249,6 @@ function sectionTeachingBrief(section: TeachingBlueprintSection, page?: Teaching
     .map((node) => node.content);
   if (!explanation.length) {
     explanation.push(...ownedNodes.map((node) => node.content));
-  }
-  if (!reasoningSteps.length) {
-    reasoningSteps.push(...units.flatMap((unit) => [unit.mechanism]).filter(Boolean));
   }
   const independentVisibleContent = page?.learningTask?.caseUse === "independent"
     ? [
@@ -1198,6 +1280,7 @@ function sectionTeachingBrief(section: TeachingBlueprintSection, page?: Teaching
     // direct page projection for the adopted downstream teaching brief.
     designVersion: TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION,
     sharedContext: section.sharedContext,
+    ...(learningBoundary ? { learningBoundary } : {}),
     ...([...new Set(units.flatMap((unit) => unit.requirementIds ?? []))].length
       ? { requirementIds: [...new Set(units.flatMap((unit) => unit.requirementIds ?? []))] }
       : {}),
@@ -1227,8 +1310,14 @@ function sectionTeachingBrief(section: TeachingBlueprintSection, page?: Teaching
       ...(page.taskConnection ? { taskConnection: page.taskConnection } : {}),
     } } : {}),
     explanation: [...explanation, ...reasoningSteps].join("\n"),
-    examples: units.map((unit) => unit.workedExample).filter(Boolean),
-    conditions: [...new Set(units.flatMap((unit) => [...unit.conditions, ...unit.misconceptions]))],
+    examples: page
+      ? ownedNodes.filter((node) => node.kind === "example").map((node) => node.content)
+      : [],
+    conditions: page
+      ? ownedNodes
+        .filter((node) => node.kind === "condition" || node.kind === "misconception")
+        .map((node) => node.content)
+      : [],
     evidence: units.flatMap((unit) => unit.evidenceQuotes.map((quote) => ({ sourceId: "course-source", quote }))),
     assessmentFocus: section.assessmentFocus.join("；"),
     understandingCriteria: section.understandingCriteria,
@@ -1238,6 +1327,60 @@ function sectionTeachingBrief(section: TeachingBlueprintSection, page?: Teaching
       ...(page?.reviewItems ?? []),
     ].map((item) => [item.id, item])).values()],
   };
+}
+
+function compilePageLearningBoundaries(
+  blueprint: TeachingBlueprint,
+): Map<string, TeachingLearningBoundary> {
+  const result = new Map<string, TeachingLearningBoundary>();
+  const sequence = blueprint.knowledgeLearningSequence;
+  if (!sequence?.length) return result;
+  const referenceById = new Map(sequence.map((item) => [
+    item.id,
+    { id: item.id, name: item.name },
+  ] as const));
+  const prerequisitesById = new Map(sequence.map((item) => [
+    item.id,
+    item.prerequisiteKnowledge,
+  ] as const));
+  const pages = blueprint.sections.flatMap((section) => [
+    ...section.pages.map((page) => ({
+      id: page.id,
+      knowledgePointIds: page.knowledgePointIds,
+    })),
+    {
+      id: section.quizOutlineId ?? `${section.id}-check`,
+      knowledgePointIds: [] as string[],
+    },
+  ]);
+  const firstTeachingPage = new Map<string, number>();
+  pages.forEach((page, index) => {
+    page.knowledgePointIds.forEach((id) => {
+      if (!firstTeachingPage.has(id)) firstTeachingPage.set(id, index);
+    });
+  });
+  const taught = new Set<string>();
+  pages.forEach((page, pageIndex) => {
+    const currentIds = page.knowledgePointIds.filter((id) => (
+      firstTeachingPage.get(id) === pageIndex
+    ));
+    const futureIds = sequence
+      .map((item) => item.id)
+      .filter((id) => (firstTeachingPage.get(id) ?? Number.MAX_SAFE_INTEGER) > pageIndex);
+    result.set(page.id, {
+      prerequisiteKnowledge: [...new Map(page.knowledgePointIds
+        .flatMap((id) => prerequisitesById.get(id) ?? [])
+        .map((item) => [item.id, item] as const)).values()],
+      previouslyTaughtKnowledge: [...taught]
+        .flatMap((id) => referenceById.get(id) ?? []),
+      currentKnowledge: currentIds
+        .flatMap((id) => referenceById.get(id) ?? []),
+      futureKnowledge: futureIds
+        .flatMap((id) => referenceById.get(id) ?? []),
+    });
+    page.knowledgePointIds.forEach((id) => taught.add(id));
+  });
+  return result;
 }
 
 /**
@@ -1321,6 +1464,7 @@ export function teachingBlueprintToOutlines(
   languageDirective: string,
 ): Array<SceneOutline & OpenMaicSceneOutlineSnapshot> {
   const result: Array<SceneOutline & OpenMaicSceneOutlineSnapshot> = [];
+  const learningBoundaries = compilePageLearningBoundaries(blueprint);
   blueprint.sections.forEach((section) => {
     const transitionTotal = Math.min(section.learnerActivityDurationSec, section.pages.length * 5);
     const learnerTotal = section.learnerActivityDurationSec - transitionTotal;
@@ -1352,7 +1496,7 @@ export function teachingBlueprintToOutlines(
         description: page.description,
         keyPoints: page.keyPoints,
         teachingObjective: page.teachingObjective,
-        teachingBrief: sectionTeachingBrief(section, page),
+        teachingBrief: sectionTeachingBrief(section, page, learningBoundaries.get(outlineId)),
         order: result.length,
         stageKey: "ai-learning",
         stageLabel: "知识讲授",
@@ -1415,7 +1559,11 @@ export function teachingBlueprintToOutlines(
         : `依据预定理解标准，使用未在讲授示例中直接公布答案的简短新材料设置 ${questionCount} 道轻量题；每条题目意图对应一道最终题，题目合计覆盖本小节全部知识点。`,
       keyPoints: assessmentQuestionPlan.map((question) => question.intent),
       teachingObjective: section.assessmentFocus.join("；"),
-      teachingBrief: sectionTeachingBrief(section),
+      teachingBrief: sectionTeachingBrief(
+        section,
+        undefined,
+        learningBoundaries.get(quizOutlineId),
+      ),
       order: result.length,
       stageKey: "ai-learning",
       stageLabel: "知识讲授",

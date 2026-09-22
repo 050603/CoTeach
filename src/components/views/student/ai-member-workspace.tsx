@@ -24,6 +24,8 @@ import type {
 } from "@/lib/ai-collaboration/document-policy";
 import { cn } from "@/lib/utils";
 import { AiMemberMarkdown } from "./ai-member-markdown";
+import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
+import { ProjectMemoryPanel, ProjectSupportCard } from "./project-support-cards";
 
 export type AiMemberWorkspaceMessage = {
   id: string;
@@ -31,6 +33,7 @@ export type AiMemberWorkspaceMessage = {
   content: string;
   createdAt: string;
   kind?: DocumentCollaborationResponse["kind"];
+  support?: ProjectSupportDetails;
 };
 
 export type AiMemberPendingChange = {
@@ -63,6 +66,8 @@ type AiMemberWorkspaceProps = {
   projectTitle: string;
   taskStarters: string[];
   taskStartersBusy: boolean;
+  memories: ProjectMemoryEntry[];
+  memoryContinuation?: string;
   onAcceptChange: () => void;
   onAdoptDelivery: () => void;
   onChangeDraft: (value: string) => void;
@@ -75,6 +80,9 @@ type AiMemberWorkspaceProps = {
   onRejectChange: () => void;
   onReviseDelivery: () => void;
   onSubmit: () => void;
+  onUpdateMemory: (id: string, content: string) => void;
+  onDeleteMemory: (id: string) => void;
+  onClearMemories: () => void;
   /** Label for the editable proxy ("文档" for document mode). */
   workspaceLabel?: string;
 };
@@ -105,6 +113,8 @@ export function AiMemberWorkspace({
   projectTitle,
   taskStarters,
   taskStartersBusy,
+  memories,
+  memoryContinuation,
   onAcceptChange,
   onAdoptDelivery,
   onChangeDraft,
@@ -116,6 +126,9 @@ export function AiMemberWorkspace({
   onRejectChange,
   onReviseDelivery,
   onSubmit,
+  onUpdateMemory,
+  onDeleteMemory,
+  onClearMemories,
   workspaceLabel = "文档",
 }: AiMemberWorkspaceProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -175,13 +188,21 @@ export function AiMemberWorkspace({
         {confirmNewConversation ? (
           <div className="absolute right-3 top-11 z-30 w-[min(320px,calc(100vw-40px))] rounded-xl border border-stone-200 bg-white p-3 text-xs leading-5 text-stone-600 shadow-xl">
             <p className="font-semibold text-stone-900">开始一段新对话？</p>
-            <p className="mt-0.5">当前消息将从这里清空，不再发送给 AI；系统仍保留过程记录。</p>
+            <p className="mt-0.5">当前消息将从这里清空，不再发送给 AI；项目记忆会继续保留，可在记忆面板中修改或清除。</p>
             <div className="mt-2 flex justify-end gap-2">
               <button className="rounded-lg px-2.5 py-1.5 font-medium hover:bg-stone-200" onClick={() => setConfirmNewConversation(false)} type="button">取消</button>
               <button className="rounded-lg bg-stone-950 px-2.5 py-1.5 font-semibold text-white hover:bg-stone-800" onClick={() => { setConfirmNewConversation(false); onNewConversation(); }} type="button">开始新对话</button>
             </div>
           </div>
         ) : null}
+
+        <ProjectMemoryPanel
+          continuation={memoryContinuation}
+          memories={memories}
+          onClear={onClearMemories}
+          onDelete={onDeleteMemory}
+          onUpdate={onUpdateMemory}
+        />
 
       </header>
 
@@ -218,6 +239,7 @@ export function AiMemberWorkspace({
                     : "rounded-bl-md border-stone-200 bg-white text-stone-800",
               )}
               key={message.id}
+              id={message.id}
             >
               <div className={cn(
                 "mb-1 flex items-center justify-between gap-3 text-[10px] font-medium",
@@ -241,7 +263,7 @@ export function AiMemberWorkspace({
                 </span>
               </div>
               {message.role === "assistant" ? (
-                <AiMemberMarkdown content={message.content} />
+                <><AiMemberMarkdown content={message.content} /><ProjectSupportCard support={message.support} /></>
               ) : (
                 <p className="whitespace-pre-wrap">{message.content}</p>
               )}

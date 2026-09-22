@@ -8,6 +8,8 @@ import { allocateLectureBudget, knowledgeLectureBudgetBounds } from "./knowledge
 import type { CourseStagePlan } from "@/lib/resource-package/types";
 import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic/generation/generated-output-retry";
+import { deriveTeachingLearningBoundaries } from "@/lib/course-design/learning-boundary";
+import type { TeachingLearningBoundary } from "@/lib/course-quality-review/types";
 
 type ModelCall = typeof callLLM;
 
@@ -38,6 +40,7 @@ export type KnowledgeTeachingCluster = {
   id: string;
   title: string;
   knowledgePointIds: string[];
+  learningBoundary: TeachingLearningBoundary;
 };
 
 function clusterRequirementIds(cluster: KnowledgeTeachingCluster, input: NewSystemAiDurationInput): string[] {
@@ -68,6 +71,7 @@ function priorityRequirements(input: NewSystemAiDurationInput) {
  */
 export function deriveKnowledgeTeachingClusters(
   knowledgePoints: readonly KnowledgePoint[],
+  knowledgeGraph?: KnowledgeGraph,
 ): KnowledgeTeachingCluster[] {
   const groups = new Map<string, { title: string; knowledgePointIds: string[] }>();
   for (const point of knowledgePoints) {
@@ -78,10 +82,17 @@ export function deriveKnowledgeTeachingClusters(
       ? { ...current, knowledgePointIds: [...current.knowledgePointIds, point.id] }
       : { title, knowledgePointIds: [point.id] });
   }
-  return [...groups.values()].map((group, index) => ({
+  const orderedGroups = [...groups.values()];
+  const learningBoundaries = deriveTeachingLearningBoundaries(
+    knowledgePoints,
+    knowledgeGraph,
+    orderedGroups,
+  );
+  return orderedGroups.map((group, index) => ({
     id: `teaching-cluster-${index + 1}`,
     title: group.title,
     knowledgePointIds: group.knowledgePointIds,
+    learningBoundary: learningBoundaries[index],
   }));
 }
 
@@ -147,7 +158,7 @@ function teachingClusterWeight(
 export function buildNewSystemAiDurationMessages(input: NewSystemAiDurationInput) {
   const { courseMinutes: availableMinutes, minMinutes, maxMinutes, source } = knowledgeLectureBudgetBounds(input.course.hours, input.stagePlan);
   const fixed = source === "resource-package";
-  const teachingClusters = deriveKnowledgeTeachingClusters(input.knowledgePoints);
+  const teachingClusters = deriveKnowledgeTeachingClusters(input.knowledgePoints, input.knowledgeGraph);
   return [
     {
       role: "system" as const,
@@ -161,6 +172,7 @@ export function buildNewSystemAiDurationMessages(input: NewSystemAiDurationInput
 5. durationMin 必须为 ${minMinutes}–${maxMinutes} 范围内的整数。按知识簇共同解释、例子分析、操作或思考、小节检测的实际需要分别估时；小测及反馈合计不超过 20%，不得套用固定讲解比例或在总预算外追加时间。
 6. teachingClusterBudgets 必须逐项使用输入 teachingClusters 的精确 clusterId 和完整 knowledgePointIds；每个知识簇恰好出现一次，各簇 durationMin 之和必须等于总 durationMin。只有在共享引入、共享案例、减少重复和取消可选扩展后，某个完整知识簇仍无法达到最低掌握边界时，才返回 capacityConflict；必须列出真实 unresolvedClusterIds。按单个知识点平均分钟数得出的冲突无效。
 7. 每个知识簇必须原样返回 applicableRequirementIds。unassignedPriorityRequirements 是没有点名具体知识节点的全局重点或难点，必须按内容选择最相关的一个知识簇落实且只出现一次。highlight 要体现在时长理由和讲解深度中；每个 difficulty 必须返回一项 difficultyStrategies，写清 learnerObstacle、针对该障碍的具体 teachingApproach 和可观察的 understandingEvidence。不得只写“举例讲解”“加强理解”。优先压缩重复总结、冗余导入和可选扩展，不能压掉核心概念定义或难点所需的解释过程。
+8. learningBoundary 是该知识簇开讲时的权威学习边界。masteryBoundary 描述课程完成后的达成表现，绝不代表学生在开课时已经掌握。教学例子、比较、分类、练习和 understandingEvidence 只能依赖 prerequisiteKnowledge、previouslyTaughtKnowledge，或先在本簇 currentKnowledge 中完整建立再使用的概念。futureKnowledge 只可在目录或学习目标中预告名称，不得作为当前理解前提、例子对象、判断选项或练习材料。跨概念综合判断必须安排到相关概念都进入 previouslyTaughtKnowledge/currentKnowledge 之后；若当前重点或难点原文使用了未来概念，应换成学生熟悉的具体行为、现象或课堂片段，不得据此提前搬入未来概念。
 
 只返回 JSON：{
   "durationMin": ${Math.round((minMinutes + maxMinutes) / 2)},
@@ -238,7 +250,7 @@ export function normalizeNewSystemAiDurationRecommendation(
     maxMinutes,
     Math.max(minMinutes, Math.round(requestedDuration)),
   );
-  const teachingClusters = deriveKnowledgeTeachingClusters(input.knowledgePoints);
+  const teachingClusters = deriveKnowledgeTeachingClusters(input.knowledgePoints, input.knowledgeGraph);
   const priorityRequirementList = priorityRequirements(input);
   const requirementById = new Map(priorityRequirementList.map((item) => [item.id, item]));
   const mappedClustersByRequirementId = new Map(priorityRequirementList.map((requirement) => [
