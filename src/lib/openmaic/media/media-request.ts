@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 import { generationRetryAfterMs, withGenerationRetry } from '../generation/generation-retry';
 
 /** A completed media operation must never be retried by its enclosing page/job. */
@@ -16,7 +17,7 @@ export async function fetchMediaRequest(
       const timeout = AbortSignal.timeout(options.timeoutMs ?? 120_000);
       const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
       let response: Response;
-      try { response = await fetch(input, { ...init, signal }); }
+      try { response = await proxyFetch(input, { ...init, signal }); }
       catch (error) {
         if (!init.signal?.aborted && timeout.aborted) throw new DOMException('Media HTTP request timed out', 'TimeoutError');
         throw error;

@@ -53,6 +53,10 @@ interface NarrationSource {
   estimatedDurationSec: number;
   startSec: number;
   barrierBefore: boolean;
+  alignment?: {
+    status: string;
+    spans?: Array<{ startChar: number; endChar: number; startMs: number; endMs: number }>;
+  };
 }
 
 type CueNecessity = 'essential' | 'helpful' | 'none';
@@ -68,6 +72,7 @@ interface ValidFocusCue {
   endIndex: number;
   startOffsetMs: number;
   startSec: number;
+  endSec: number;
   sourceAction?: Extract<Action, { type: 'spotlight' | 'laser' }>;
 }
 
@@ -264,6 +269,8 @@ function narrationSources(
         estimatedDurationSec,
         startSec,
         barrierBefore: sources.length > 0 && barrierBeforeNextSpeech,
+        alignment: (action as typeof action & { speechAlignment?: NarrationSource['alignment'] })
+          .speechAlignment,
       });
       startSec += estimatedDurationSec;
       barrierBeforeNextSpeech = false;
@@ -305,6 +312,43 @@ function occurrenceIndex(text: string, quote: string, occurrence: number): numbe
   return -1;
 }
 
+function alignedOffsetAt(
+  source: NarrationSource,
+  charIndex: number,
+  edge: 'start' | 'end',
+): number | undefined {
+  if (source.alignment?.status !== 'aligned' || !source.alignment.spans?.length) return undefined;
+  const bounded = Math.max(0, Math.min(source.text.length, charIndex));
+  const containing = source.alignment.spans.find((span) => (
+    edge === 'start'
+      ? span.startChar <= bounded && span.endChar > bounded
+      : span.startChar < bounded && span.endChar >= bounded
+  ));
+  if (containing) return edge === 'start' ? containing.startMs : containing.endMs;
+  const nearest = edge === 'start'
+    ? source.alignment.spans.find((span) => span.startChar >= bounded)
+    : [...source.alignment.spans].reverse().find((span) => span.endChar <= bounded);
+  return nearest ? (edge === 'start' ? nearest.startMs : nearest.endMs) : undefined;
+}
+
+function sentenceEndIndex(text: string, anchorEnd: number): number {
+  for (let index = Math.max(0, anchorEnd); index < text.length; index += 1) {
+    if ('。！？!?；;\n'.includes(text[index]!)) return index + 1;
+    if (text[index] === '.' && (!text[index + 1] || /\s/.test(text[index + 1]!))) return index + 1;
+  }
+  return text.length;
+}
+
+function resolveAlignedAnchorOffset(
+  source: NarrationSource,
+  anchor: { quote: string; occurrence?: number },
+  edge: 'start' | 'end' = 'start',
+): number | undefined {
+  const anchorIndex = occurrenceIndex(source.text, anchor.quote, anchor.occurrence ?? 0);
+  if (anchorIndex < 0) return undefined;
+  return alignedOffsetAt(source, edge === 'start' ? anchorIndex : anchorIndex + anchor.quote.length, edge);
+}
+
 function validateTarget(
   action: ValidFocusCue['action'],
   targetValue: ValidFocusCue['target'],
@@ -324,6 +368,15 @@ function validateTarget(
     if (!cell) return false;
     if (!targetValue.selector.quote) return true;
     return occurrenceCount(cell.text, targetValue.selector.quote)
+      > (targetValue.selector.occurrence ?? 0);
+  }
+  if ('rowIndex' in targetValue.selector) {
+    if (inventoryTarget.type !== 'table') return false;
+    const row = inventoryTarget.table?.rows[targetValue.selector.rowIndex];
+    if (!row) return false;
+    if (!targetValue.selector.quote) return true;
+    const rowText = row.cells.map((cell) => cell.text).join('\n');
+    return occurrenceCount(rowText, targetValue.selector.quote)
       > (targetValue.selector.occurrence ?? 0);
   }
   const occurrence = targetValue.selector.occurrence ?? 0;
@@ -350,6 +403,8 @@ function targetKey(cue: ValidFocusCue): string {
     ? `${cue.target.elementId}:whole`
     : 'cellId' in selector
     ? `${cue.target.elementId}:cell:${selector.cellId}:${selector.quote ?? ''}:${selector.occurrence ?? 0}`
+    : 'rowIndex' in selector
+    ? `${cue.target.elementId}:row:${selector.rowIndex}:${selector.quote ?? ''}:${selector.occurrence ?? 0}`
     : `${cue.target.elementId}:quote:${selector.quote}:${selector.occurrence ?? 0}`;
   const waypoints = cue.sourceAction?.type === 'laser'
     ? cue.sourceAction.waypoints?.map((waypoint) => JSON.stringify(waypoint)).join('>')
@@ -390,7 +445,7 @@ function comparePriority(left: ValidFocusCue, right: ValidFocusCue): number {
 }
 
 function intervalsOverlap(left: ValidFocusCue, right: ValidFocusCue): boolean {
-  return left.startIndex <= right.endIndex && right.startIndex <= left.endIndex;
+  return left.startSec < right.endSec && right.startSec < left.endSec;
 }
 
 function preferPreciseTargets(cues: readonly ValidFocusCue[]): ValidFocusCue[] {
@@ -525,6 +580,296 @@ function applyCuePlan(actions: readonly Action[], cues: readonly ValidFocusCue[]
   return result;
 }
 
+type AuthoredVisualTarget = {
+  elementId: string;
+  selector?: VisualTargetSelector;
+  speechAnchor?: { quote: string; occurrence?: number };
+};
+
+function actionTargets(action: Extract<Action, { type: 'laser' }>): AuthoredVisualTarget[] {
+  return [
+    {
+      elementId: action.elementId,
+      ...(action.selector ? { selector: action.selector } : {}),
+      ...(action.speechAnchor ? { speechAnchor: action.speechAnchor } : {}),
+    },
+    ...(action.waypoints ?? []),
+  ];
+}
+
+function isTextualTarget(
+  target: AuthoredVisualTarget,
+  inventory: ReadonlyMap<string, SlideTargetInventoryItem>,
+): boolean {
+  const item = inventory.get(target.elementId);
+  return Boolean(
+    target.selector
+    || item?.type === 'text'
+    || item?.type === 'table'
+    || item?.type === 'latex'
+    || (item?.type === 'shape' && item.visibleText),
+  );
+}
+
+function sequenceStartIndex(text: string): number {
+  const markers = ['顺序', '流程', '步骤', '依次', '路径', '先'];
+  const indexes = markers.map((marker) => text.indexOf(marker)).filter((index) => index >= 0);
+  return indexes.length ? Math.min(...indexes) : -1;
+}
+
+function anchorIndex(text: string, anchor: { quote: string; occurrence?: number } | undefined): number {
+  return anchor ? occurrenceIndex(text, anchor.quote, anchor.occurrence ?? 0) : -1;
+}
+
+function hasStrongOrderedPath(action: Extract<Action, { type: 'laser' }>, speechText: string): boolean {
+  const targets = actionTargets(action);
+  // A text path needs at least three stages. This prevents an ordinary
+  // two-item comparison from being mistaken for a process animation.
+  if (targets.length < 3) return false;
+  const sequenceStart = sequenceStartIndex(speechText);
+  if (sequenceStart < 0) return false;
+  let previous = sequenceStart - 1;
+  return targets.every((target) => {
+    const index = anchorIndex(speechText, target.speechAnchor);
+    if (index < sequenceStart || index <= previous) return false;
+    previous = index;
+    return true;
+  });
+}
+
+function spotlightFromLaserTarget(
+  action: Extract<Action, { type: 'laser' }>,
+  target: AuthoredVisualTarget,
+  index: number,
+): Extract<Action, { type: 'spotlight' }> | undefined {
+  if (!action.speechId) return undefined;
+  return {
+    id: index === 0 ? action.id : `${action.id}:focus-${index + 1}`,
+    type: 'spotlight',
+    elementId: target.elementId,
+    ...(target.selector ? { selector: target.selector } : {}),
+    speechId: action.speechId,
+    ...(target.speechAnchor ? { speechAnchor: target.speechAnchor } : {}),
+    endSpeechId: action.speechId,
+    necessity: action.necessity ?? 'helpful',
+    omissionRisk: action.omissionRisk ?? '框选当前文字内容可避免激光点遮挡并保持阅读焦点。',
+    description: action.description,
+  };
+}
+
+function rowLabel(row: NonNullable<SlideTargetInventoryItem['table']>['rows'][number]): string | undefined {
+  return row.cells.map((cell) => cell.text.trim()).find(Boolean);
+}
+
+function hasHeaderRow(table: NonNullable<SlideTargetInventoryItem['table']>): boolean {
+  const headers = /^(?:层级|学段|定义|定义与作用|作用|名称|项目|维度|指标|阶段|步骤|类别|类型|特征|稳定性|可调整性|对应例子|内容|说明|对象|标准)$/u;
+  return table.rows[0]?.cells.some((cell) => headers.test(cell.text.trim())) ?? false;
+}
+
+function occurrenceAt(text: string, quote: string, foundIndex: number): number {
+  let occurrence = 0;
+  let offset = 0;
+  while (offset < foundIndex) {
+    const found = text.indexOf(quote, offset);
+    if (found < 0 || found >= foundIndex) break;
+    occurrence += 1;
+    offset = found + Math.max(1, quote.length);
+  }
+  return occurrence;
+}
+
+function sequenceQuoteCandidates(visibleText: string): string[] {
+  const compact = visibleText.replace(/^[①②③④⑤⑥⑦⑧⑨⑩\d.、)）\s]+/u, '').trim();
+  const candidates = [compact];
+  if (/^教学[\p{Script=Han}]{2,6}$/u.test(compact)) candidates.push(compact.slice(2));
+  return Array.from(new Set(candidates.filter((candidate) => {
+    const meaningful = candidate.replace(/[\s\p{P}\p{S}]+/gu, '');
+    const han = meaningful.match(/\p{Script=Han}/gu)?.length ?? 0;
+    const alphaNumeric = meaningful.match(/[\p{L}\p{N}]/gu)?.length ?? 0;
+    return han >= 2 || alphaNumeric >= 3;
+  }))).sort((left, right) => right.length - left.length);
+}
+
+function synthesizeOrderedLaser(
+  speech: Extract<Action, { type: 'speech' }>,
+  inventory: readonly SlideTargetInventoryItem[],
+): Extract<Action, { type: 'laser' }> | undefined {
+  const sequenceStart = sequenceStartIndex(speech.text);
+  if (sequenceStart < 0) return undefined;
+  const matches = inventory.flatMap((item) => {
+    if (!item.visibleText || !['text', 'shape'].includes(item.type)) return [];
+    const visibleText = item.visibleText.trim();
+    if (!visibleText || visibleText.length > 18) return [];
+    const candidates = sequenceQuoteCandidates(visibleText)
+      .flatMap((quote) => {
+        const index = speech.text.indexOf(quote, sequenceStart);
+        return index >= 0 ? [{ quote, index }] : [];
+      });
+    const match = candidates.sort((left, right) => left.index - right.index || right.quote.length - left.quote.length)[0];
+    return match ? [{ item, ...match }] : [];
+  }).sort((left, right) => left.index - right.index || left.item.geometry.top - right.item.geometry.top);
+
+  const unique = matches.filter((match, index, all) => (
+    all.findIndex((candidate) => candidate.index === match.index) === index
+  )).slice(0, 5);
+  if (unique.length < 3) return undefined;
+  const [first, ...rest] = unique;
+  const speechAnchor = {
+    quote: first!.quote,
+    occurrence: occurrenceAt(speech.text, first!.quote, first!.index),
+  };
+  return {
+    id: `${speech.id}:ordered-path`,
+    type: 'laser',
+    elementId: first!.item.elementId,
+    speechId: speech.id,
+    speechAnchor,
+    waypoints: rest.map((match) => ({
+      elementId: match.item.elementId,
+      speechAnchor: {
+        quote: match.quote,
+        occurrence: occurrenceAt(speech.text, match.quote, match.index),
+      },
+    })),
+    necessity: 'helpful',
+    omissionRisk: '顺序或流程需要沿着页面节点依次指示。',
+    description: '按朗读顺序短暂移动激光笔。',
+  };
+}
+
+/**
+ * Normalize tool choice before timing calibration. Text and table explanation
+ * uses a stable frame; laser paths are reserved for real ordered traversal.
+ * Missing table-row and process cues are recovered from exact visible labels
+ * and exact narration substrings, without asking a model to guess coordinates.
+ */
+export function refineVisualCueDesign(input: {
+  elements: readonly PPTElement[];
+  actions: readonly Action[];
+}): Action[] {
+  const inventory = buildSlideTargetInventory(input.elements);
+  const inventoryById = new Map(inventory.map((item) => [item.elementId, item]));
+  const speechById = new Map(input.actions.flatMap((action) => (
+    action.type === 'speech' ? [[action.id, action] as const] : []
+  )));
+
+  const followingSpeechId = (actionIndex: number): string | undefined => {
+    for (let index = actionIndex + 1; index < input.actions.length; index += 1) {
+      const candidate = input.actions[index]!;
+      if (candidate.type === 'spotlight' || candidate.type === 'laser') continue;
+      return candidate.type === 'speech' && candidate.text.trim() ? candidate.id : undefined;
+    }
+    return undefined;
+  };
+
+  let actions = input.actions.flatMap((action, actionIndex): Action[] => {
+    if (action.type !== 'laser') return [action];
+    const speechId = action.speechId ?? followingSpeechId(actionIndex);
+    const boundAction = speechId ? { ...action, speechId } : action;
+    const targets = actionTargets(boundAction);
+    if (!targets.every((target) => isTextualTarget(target, inventoryById))) return [action];
+    const speech = speechId ? speechById.get(speechId) : undefined;
+    if (speech && hasStrongOrderedPath(boundAction, speech.text)) return [boundAction];
+    const spotlights = targets.flatMap((target, index) => {
+      const spotlight = spotlightFromLaserTarget(boundAction, target, index);
+      return spotlight ? [spotlight] : [];
+    });
+    return spotlights.length ? spotlights : [];
+  });
+
+  const synthesizedRows: Extract<Action, { type: 'spotlight' }>[] = [];
+  for (const item of inventory) {
+    if (item.type !== 'table' || !item.table || item.table.rows.length < 3 || !hasHeaderRow(item.table)) continue;
+    const existingRows = new Set(actions.flatMap((action) => {
+      if (action.type !== 'spotlight' || action.elementId !== item.elementId || !action.selector) return [];
+      if ('rowIndex' in action.selector) return [action.selector.rowIndex];
+      if ('cellId' in action.selector) {
+        const cellId = action.selector.cellId;
+        const row = item.table?.rows.find((candidate) => (
+          candidate.cells.some((cell) => cell.cellId === cellId)
+        ));
+        return row ? [row.rowIndex] : [];
+      }
+      return [];
+    }));
+    for (const row of item.table.rows.slice(1)) {
+      if (existingRows.has(row.rowIndex)) continue;
+      const label = rowLabel(row);
+      if (!label || label.length > 40) continue;
+      const match = input.actions.flatMap((action, actionIndex) => {
+        if (action.type !== 'speech') return [];
+        const index = action.text.indexOf(label);
+        return index >= 0 ? [{ speech: action, actionIndex, index }] : [];
+      }).sort((left, right) => left.actionIndex - right.actionIndex || left.index - right.index)[0];
+      if (!match) continue;
+      synthesizedRows.push({
+        id: `${match.speech.id}:table-${item.elementId}-row-${row.rowIndex}`,
+        type: 'spotlight',
+        elementId: item.elementId,
+        selector: { rowIndex: row.rowIndex },
+        speechId: match.speech.id,
+        speechAnchor: {
+          quote: label,
+          occurrence: occurrenceAt(match.speech.text, label, match.index),
+        },
+        endSpeechId: match.speech.id,
+        necessity: 'helpful',
+        omissionRisk: `讲解“${label}”时需要框选对应表格整行。`,
+        description: '随讲解逐行框选表格。',
+      });
+    }
+    if (synthesizedRows.some((action) => action.elementId === item.elementId)) {
+      actions = actions.filter((action) => !(
+        action.type === 'spotlight'
+        && action.elementId === item.elementId
+        && !action.selector
+      ));
+    }
+  }
+  actions.push(...synthesizedRows);
+
+  for (const speech of speechById.values()) {
+    const existingPath = actions.some((action) => (
+      action.type === 'laser'
+      && action.speechId === speech.id
+      && (action.waypoints?.length ?? 0) >= 2
+    ));
+    if (existingPath) continue;
+    const path = synthesizeOrderedLaser(speech, inventory);
+    if (!path) continue;
+    const pathStart = anchorIndex(speech.text, path.speechAnchor);
+    const latestPriorSpotlightStart = Math.max(-1, ...actions.flatMap((action) => (
+      action.type === 'spotlight'
+      && action.speechId === speech.id
+      && action.speechAnchor
+      && anchorIndex(speech.text, action.speechAnchor) < pathStart
+        ? [anchorIndex(speech.text, action.speechAnchor)]
+        : []
+    )));
+    actions = actions.map((action) => (
+      action.type === 'spotlight'
+      && action.speechId === speech.id
+      && action.speechAnchor
+      && anchorIndex(speech.text, action.speechAnchor) === latestPriorSpotlightStart
+      && sentenceEndIndex(
+        speech.text,
+        latestPriorSpotlightStart + action.speechAnchor.quote.length,
+      ) > pathStart
+      && !action.endSpeechAnchor
+        ? { ...action, endSpeechAnchor: path.speechAnchor }
+        : action
+    )).filter((action) => !(
+      action.type === 'spotlight'
+      && action.speechId === speech.id
+      && action.speechAnchor
+      && anchorIndex(speech.text, action.speechAnchor) >= pathStart
+      && !(action.selector && 'rowIndex' in action.selector)
+    ));
+    actions.push(path);
+  }
+  return actions;
+}
+
 /**
  * Calibrate visual actions already interleaved by the original OpenMAIC action
  * generator. This performs no model call and never rewrites narration.
@@ -534,18 +879,19 @@ export function calibrateGeneratedVisualCues(input: {
   elements: readonly PPTElement[];
   actions: readonly Action[];
 }): Action[] {
-  const narration = narrationSources(input.actions, input.outline);
+  const refinedActions = refineVisualCueDesign({ elements: input.elements, actions: input.actions });
+  const narration = narrationSources(refinedActions, input.outline);
   const inventory = buildSlideTargetInventory(input.elements);
   if (narration.length === 0 || inventory.length === 0) {
-    return removeUncalibratedVisualCues(input.actions);
+    return removeUncalibratedVisualCues(refinedActions);
   }
   const narrationIndex = new Map(narration.map((source, index) => [source.speechId, index]));
   const inventoryById = new Map(inventory.map((item) => [item.elementId, item]));
   const candidates: ValidFocusCue[] = [];
 
   const nextSpeechId = (actionIndex: number): string | undefined => {
-    for (let index = actionIndex + 1; index < input.actions.length; index += 1) {
-      const candidate = input.actions[index]!;
+    for (let index = actionIndex + 1; index < refinedActions.length; index += 1) {
+      const candidate = refinedActions[index]!;
       if (candidate.type === 'spotlight' || candidate.type === 'laser') continue;
       if (candidate.type === 'speech') return candidate.text.trim() ? candidate.id : undefined;
       return undefined;
@@ -553,7 +899,7 @@ export function calibrateGeneratedVisualCues(input: {
     return undefined;
   };
 
-  input.actions.forEach((action, actionIndex) => {
+  refinedActions.forEach((action, actionIndex) => {
     if (action.type !== 'spotlight' && action.type !== 'laser') return;
     const startSpeechId = action.speechId ?? nextSpeechId(actionIndex);
     const endSpeechId = action.type === 'spotlight'
@@ -600,17 +946,46 @@ export function calibrateGeneratedVisualCues(input: {
       log.warn(`Dropped generated visual cue ${action.id} with a missing narration anchor`);
       return;
     }
+    const startSource = narration[startIndex]!;
     const startOffsetMs = speechAnchor
-      ? Math.round(
-          (anchorIndex / narration[startIndex]!.text.length)
-          * narration[startIndex]!.estimatedDurationSec
-          * 1000,
-        )
+      ? resolveAlignedAnchorOffset(startSource, speechAnchor)
       : Math.max(0, action.speechOffsetMs ?? 0);
-    if (startOffsetMs >= narration[startIndex]!.estimatedDurationSec * 1000) {
+    if (startOffsetMs === undefined) {
+      log.warn(`Dropped generated visual cue ${action.id} because its narration is not precisely aligned`);
+      return;
+    }
+    if (startOffsetMs >= startSource.estimatedDurationSec * 1000) {
       log.warn(`Dropped generated visual cue ${action.id} with an out-of-range speech offset`);
       return;
     }
+    const endSource = narration[endIndex]!;
+    const explicitEndAnchor = action.endSpeechAnchor;
+    const defaultEndChar = speechAnchor
+      ? sentenceEndIndex(startSource.text, anchorIndex + speechAnchor.quote.length)
+      : startSource.text.length;
+    const endSpeechOffsetMs = explicitEndAnchor
+      ? resolveAlignedAnchorOffset(endSource, explicitEndAnchor, 'end')
+      : alignedOffsetAt(endSource, endIndex === startIndex ? defaultEndChar : endSource.text.length, 'end');
+    const timedWaypoints = action.type === 'laser'
+      ? (action.waypoints ?? []).map((waypoint) => {
+          if (!waypoint.speechAnchor) return undefined;
+          const speechOffsetMs = resolveAlignedAnchorOffset(startSource, waypoint.speechAnchor);
+          return speechOffsetMs === undefined ? undefined : { ...waypoint, speechOffsetMs };
+        })
+      : [];
+    if (action.type === 'laser' && (action.waypoints?.length ?? 0) !== timedWaypoints.length) {
+      log.warn(`Dropped generated visual cue ${action.id} because a laser waypoint lacks precise narration timing`);
+      return;
+    }
+    const timedAction = {
+      ...action,
+      speechOffsetMs: startOffsetMs,
+      ...(endSpeechOffsetMs !== undefined ? { endSpeechOffsetMs } : {}),
+      ...(action.type === 'laser' && timedWaypoints.length ? { waypoints: timedWaypoints } : {}),
+    } as typeof action;
+    const endSec = endSource.startSec + (
+      endSpeechOffsetMs ?? endSource.estimatedDurationSec * 1000
+    ) / 1000;
     candidates.push({
       startSpeechId,
       endSpeechId,
@@ -623,9 +998,181 @@ export function calibrateGeneratedVisualCues(input: {
       endIndex,
       startOffsetMs,
       startSec: narration[startIndex]!.startSec + startOffsetMs / 1000,
-      sourceAction: action,
+      endSec,
+      sourceAction: timedAction,
     });
   });
 
-  return applyCuePlan(input.actions, stabilizeFocusCues(candidates, narration));
+  return applyCuePlan(refinedActions, stabilizeFocusCues(candidates, narration));
+}
+
+export type VisualCueAnchorRepairIssue = {
+  actionId: string;
+  speechId?: string;
+  reason: string;
+};
+
+function exactOccurrenceCount(text: string, quote: string): number {
+  return occurrenceCount(text, quote);
+}
+
+function usableRecoveredQuote(value: string): boolean {
+  const compact = value.replace(/[\s\p{P}\p{S}]+/gu, '');
+  if (/^(?:我们|这个|这里|可以|看到|来看|然后|接下来)$/u.test(compact)) return false;
+  const hanCount = (compact.match(/\p{Script=Han}/gu) ?? []).length;
+  const wordCount = (compact.match(/[\p{L}\p{N}]/gu) ?? []).length;
+  return hanCount >= 2 || wordCount >= 3;
+}
+
+/** Find a conservative exact quote from narration that is visibly supported by the target. */
+function recoverExactQuote(narration: string, targetText: string): string | undefined {
+  if (!narration || !targetText) return undefined;
+  const source = narration.toLocaleLowerCase();
+  const target = targetText.toLocaleLowerCase();
+  let previous = new Array<number>(target.length + 1).fill(0);
+  let bestLength = 0;
+  let bestEnd = 0;
+  for (let sourceIndex = 1; sourceIndex <= source.length; sourceIndex += 1) {
+    const current = new Array<number>(target.length + 1).fill(0);
+    for (let targetIndex = 1; targetIndex <= target.length; targetIndex += 1) {
+      if (source[sourceIndex - 1] !== target[targetIndex - 1]) continue;
+      current[targetIndex] = previous[targetIndex - 1]! + 1;
+      if (current[targetIndex]! > bestLength) {
+        bestLength = current[targetIndex]!;
+        bestEnd = sourceIndex;
+      }
+    }
+    previous = current;
+  }
+  if (!bestLength) return undefined;
+  const raw = narration.slice(bestEnd - bestLength, bestEnd);
+  const leading = raw.match(/^[\s\p{P}\p{S}]+/u)?.[0].length ?? 0;
+  const trailing = raw.match(/[\s\p{P}\p{S}]+$/u)?.[0].length ?? 0;
+  const quote = raw.slice(leading, raw.length - trailing);
+  return quote && usableRecoveredQuote(quote) ? quote : undefined;
+}
+
+function targetEvidenceText(
+  inventory: ReadonlyMap<string, SlideTargetInventoryItem>,
+  target: { elementId: string; selector?: VisualTargetSelector },
+): string | undefined {
+  const item = inventory.get(target.elementId);
+  if (!item) return undefined;
+  if (target.selector && 'cellId' in target.selector) {
+    const cellId = target.selector.cellId;
+    const cell = item.table?.rows.flatMap((row) => row.cells)
+      .find((candidate) => candidate.cellId === cellId);
+    if (!cell) return undefined;
+    const directEvidence = [target.selector.quote, cell.text]
+      .filter((value): value is string => Boolean(value?.trim()))
+      .join('\n');
+    return directEvidence || [...cell.rowContext, ...cell.columnContext]
+      .filter((value) => Boolean(value.trim()))
+      .join('\n');
+  }
+  if (target.selector && 'rowIndex' in target.selector) {
+    const row = item.table?.rows[target.selector.rowIndex];
+    if (!row) return undefined;
+    return [target.selector.quote, ...row.cells.map((cell) => cell.text)]
+      .filter((value): value is string => Boolean(value?.trim()))
+      .join('\n');
+  }
+  return [target.selector?.quote, item.visibleText, item.name]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join('\n');
+}
+
+/**
+ * Recover missing anchors in an old course without rewriting its narration.
+ * Only exact overlap between the fixed script and actual target text is used;
+ * ambiguous or stale targets are removed so repair cannot re-enable guessed cues.
+ */
+export function recoverLegacyVisualCueAnchors(input: {
+  elements: readonly PPTElement[];
+  actions: readonly Action[];
+}): { actions: Action[]; issues: VisualCueAnchorRepairIssue[] } {
+  const speechById = new Map(input.actions.flatMap((action) => (
+    action.type === 'speech' ? [[action.id, action] as const] : []
+  )));
+  const inventory = new Map(buildSlideTargetInventory(input.elements)
+    .map((item) => [item.elementId, item]));
+  const consumed = new Map<string, number>();
+  const issues: VisualCueAnchorRepairIssue[] = [];
+
+  const nextSpeechId = (actionIndex: number): string | undefined => {
+    for (let index = actionIndex + 1; index < input.actions.length; index += 1) {
+      const candidate = input.actions[index]!;
+      if (candidate.type === 'spotlight' || candidate.type === 'laser') continue;
+      return candidate.type === 'speech' && candidate.text.trim() ? candidate.id : undefined;
+    }
+    return undefined;
+  };
+  const anchorFor = (
+    speechId: string,
+    target: { elementId: string; selector?: VisualTargetSelector },
+    existing?: { quote: string; occurrence?: number },
+  ) => {
+    const speech = speechById.get(speechId);
+    if (!speech) return undefined;
+    if (existing && occurrenceIndex(speech.text, existing.quote, existing.occurrence ?? 0) >= 0) {
+      const key = `${speechId}\u0000${existing.quote}`;
+      consumed.set(key, Math.max(consumed.get(key) ?? 0, (existing.occurrence ?? 0) + 1));
+      return existing;
+    }
+    const evidence = targetEvidenceText(inventory, target);
+    if (!evidence) return undefined;
+    const preferred = target.selector?.quote;
+    const quote = preferred && speech.text.includes(preferred)
+      ? preferred
+      : recoverExactQuote(speech.text, evidence);
+    if (!quote) return undefined;
+    const key = `${speechId}\u0000${quote}`;
+    const occurrence = consumed.get(key) ?? 0;
+    if (occurrence >= exactOccurrenceCount(speech.text, quote)) return undefined;
+    consumed.set(key, occurrence + 1);
+    return { quote, occurrence };
+  };
+
+  const actions = input.actions.flatMap((action, actionIndex): Action[] => {
+    if (action.type !== 'spotlight' && action.type !== 'laser') return [action];
+    const speechId = action.speechId ?? nextSpeechId(actionIndex);
+    const target = { elementId: action.elementId, ...(action.selector ? { selector: action.selector } : {}) };
+    if (!speechId || !isValidSlideVisualTarget(input.elements, target)) {
+      issues.push({ actionId: action.id, speechId, reason: '指示目标已失效，自动指示已停用' });
+      return [];
+    }
+    const speechAnchor = anchorFor(speechId, target, action.speechAnchor);
+    if (!speechAnchor) {
+      issues.push({ actionId: action.id, speechId, reason: '讲稿中找不到与页面目标可靠对应的词句，自动指示已停用' });
+      return [];
+    }
+    if (action.endSpeechAnchor) {
+      const endSpeechId = action.type === 'spotlight' ? action.endSpeechId ?? speechId : speechId;
+      const endSpeech = speechById.get(endSpeechId);
+      if (!endSpeech || occurrenceIndex(
+        endSpeech.text,
+        action.endSpeechAnchor.quote,
+        action.endSpeechAnchor.occurrence ?? 0,
+      ) < 0) {
+        issues.push({ actionId: action.id, speechId, reason: '指示结束词句已失效，自动指示已停用' });
+        return [];
+      }
+    }
+    if (action.type === 'spotlight') return [{ ...action, speechId, speechAnchor }];
+    const waypoints = (action.waypoints ?? []).map((waypoint) => {
+      const waypointTarget = {
+        elementId: waypoint.elementId,
+        ...(waypoint.selector ? { selector: waypoint.selector } : {}),
+      };
+      if (!isValidSlideVisualTarget(input.elements, waypointTarget)) return undefined;
+      const anchor = anchorFor(speechId, waypointTarget, waypoint.speechAnchor);
+      return anchor ? { ...waypoint, speechAnchor: anchor } : undefined;
+    });
+    if (waypoints.some((waypoint) => waypoint === undefined)) {
+      issues.push({ actionId: action.id, speechId, reason: '激光路径中有目标无法对应到讲稿词句，整条路径已停用' });
+      return [];
+    }
+    return [{ ...action, speechId, speechAnchor, waypoints: waypoints as NonNullable<typeof action.waypoints> }];
+  });
+  return { actions, issues };
 }

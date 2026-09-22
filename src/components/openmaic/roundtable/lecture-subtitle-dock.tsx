@@ -29,8 +29,26 @@ import {
   DialogTitle,
 } from '@/components/ui/overlays';
 import { useTeachingKnowledgeGraph } from '@/components/openmaic-bridge/knowledge-graph-context';
+import { normalizeNarrationPunctuation } from '@openmaic/lib/generation/narration-punctuation';
 
-export type LectureCue = { actionIndex: number; text: string; actionIndexes?: number[] };
+export type LectureCueAlignment = {
+  status: 'pending' | 'aligned' | 'failed';
+  spans: ReadonlyArray<{
+    text: string;
+    startChar: number;
+    endChar: number;
+    startMs: number;
+    endMs: number;
+  }>;
+};
+
+export type LectureCue = {
+  actionIndex: number;
+  text: string;
+  actionIndexes?: number[];
+  alignment?: LectureCueAlignment;
+  audioDurationMs?: number;
+};
 
 interface LectureSubtitleDockProps {
   readonly cues: ReadonlyArray<LectureCue>;
@@ -71,6 +89,9 @@ export type SubtitleLine = {
   text: string;
   start: number;
   end: number;
+  startMs?: number;
+  endMs?: number;
+  durationMs?: number;
 };
 
 function isCompleteSubtitleSentence(text: string): boolean {
@@ -96,6 +117,8 @@ export function mergeFragmentedLectureCues(cues: ReadonlyArray<LectureCue>): Lec
       && previousLastAction !== undefined
       && cue.actionIndex === previousLastAction + 1
       && !isCompleteSubtitleSentence(previous.text)
+      && previous.alignment?.status !== 'aligned'
+      && cue.alignment?.status !== 'aligned'
     ) {
       merged[merged.length - 1] = {
         ...previous,
@@ -111,9 +134,14 @@ export function mergeFragmentedLectureCues(cues: ReadonlyArray<LectureCue>): Lec
 
 /** Split narration into readable, progress-addressable display units. */
 export function splitSubtitleText(text: string): string[] {
+  return splitSubtitleSegments(text).map((segment) => segment.text);
+}
+
+function splitSubtitleSegments(text: string): Array<{ text: string; start: number; end: number }> {
   const source = text.trim();
   if (!source) return [];
-  const sentences: string[] = [];
+  const sourceOffset = text.indexOf(source);
+  const sentences: Array<{ text: string; start: number; end: number }> = [];
   const closingMarks = new Set(['”', '’', '"', "'", '）', ')', '】', ']', '》', '」', '』']);
   let sentenceStart = 0;
 
@@ -135,8 +163,16 @@ export function splitSubtitleText(text: string): string[] {
     if (!isStrongEnding && !isWesternPeriod && !isParagraphBreak) continue;
 
     const sentenceEnd = punctuationEnd;
-    const sentence = source.slice(sentenceStart, sentenceEnd).trim();
-    if (sentence) sentences.push(sentence);
+    const rawSentence = source.slice(sentenceStart, sentenceEnd);
+    const sentence = rawSentence.trim();
+    if (sentence) {
+      const leading = rawSentence.length - rawSentence.trimStart().length;
+      sentences.push({
+        text: normalizeNarrationPunctuation(sentence),
+        start: sourceOffset + sentenceStart + leading,
+        end: sourceOffset + sentenceStart + leading + sentence.length,
+      });
+    }
     sentenceStart = sentenceEnd;
     while (sentenceStart < source.length && /\s/.test(source[sentenceStart])) {
       sentenceStart += 1;
@@ -144,8 +180,16 @@ export function splitSubtitleText(text: string): string[] {
     index = sentenceStart - 1;
   }
 
-  const remainder = source.slice(sentenceStart).trim();
-  if (remainder) sentences.push(remainder);
+  const rawRemainder = source.slice(sentenceStart);
+  const remainder = rawRemainder.trim();
+  if (remainder) {
+    const leading = rawRemainder.length - rawRemainder.trimStart().length;
+    sentences.push({
+      text: normalizeNarrationPunctuation(remainder),
+      start: sourceOffset + sentenceStart + leading,
+      end: sourceOffset + sentenceStart + leading + remainder.length,
+    });
+  }
   // Long complete sentences wrap inside one card. Never cut them at an
   // arbitrary character: doing so separates predicates and objects from the
   // clause the learner is actually hearing.
@@ -154,11 +198,44 @@ export function splitSubtitleText(text: string): string[] {
 
 export function buildSubtitleLines(cues: ReadonlyArray<LectureCue>): SubtitleLine[] {
   return cues.flatMap((cue, cueIndex) => {
-    let offset = 0;
-    return splitSubtitleText(cue.text).map((text) => {
-      const start = offset;
-      offset += text.length;
-      return { actionIndex: cue.actionIndex, cueIndex, text, start, end: offset };
+    const candidateSpans = cue.alignment?.status === 'aligned'
+      ? cue.alignment.spans
+      : [];
+    let previousChar = 0;
+    let previousMs = 0;
+    const alignmentValid = candidateSpans.length > 0 && candidateSpans.every((span) => {
+      const valid = Number.isFinite(span.startChar)
+        && Number.isFinite(span.endChar)
+        && Number.isFinite(span.startMs)
+        && Number.isFinite(span.endMs)
+        && span.startChar >= previousChar
+        && span.endChar > span.startChar
+        && span.endChar <= cue.text.length
+        && span.startMs >= previousMs
+        && span.endMs >= span.startMs;
+      previousChar = span.endChar;
+      previousMs = span.endMs;
+      return valid;
+    });
+    const alignmentSpans = alignmentValid ? candidateSpans : [];
+    const alignedDuration = alignmentSpans.at(-1)?.endMs ?? 0;
+    const durationMs = Math.max(cue.audioDurationMs ?? 0, alignedDuration);
+    return splitSubtitleSegments(cue.text).map(({ text, start, end }) => {
+      const matchingSpans = alignmentSpans.filter(
+        (span) => span.endChar > start && span.startChar < end,
+      );
+      const firstSpan = matchingSpans[0];
+      const lastSpan = matchingSpans.at(-1);
+      return {
+        actionIndex: cue.actionIndex,
+        cueIndex,
+        text,
+        start,
+        end,
+        ...(firstSpan && lastSpan && durationMs > 0
+          ? { startMs: firstSpan.startMs, endMs: lastSpan.endMs, durationMs }
+          : {}),
+      };
     });
   });
 }
@@ -170,6 +247,18 @@ export function resolveActiveSubtitleLineIndex(
 ): number {
   const cueLines = lines.filter((line) => line.cueIndex === activeCueIndex);
   if (!cueLines.length) return 0;
+  const timedLines = cueLines.filter(
+    (line) => line.startMs !== undefined && line.endMs !== undefined && line.durationMs,
+  );
+  if (timedLines.length === cueLines.length) {
+    const durationMs = timedLines[0]?.durationMs ?? 1;
+    const currentMs = Math.max(0, Math.min(1, progress)) * durationMs;
+    const active = timedLines.find((line) => (
+      currentMs >= (line.startMs ?? 0) && currentMs < (line.endMs ?? 0)
+    )) ?? [...timedLines].reverse().find((line) => currentMs >= (line.startMs ?? 0))
+      ?? timedLines[0]!;
+    return Math.max(0, lines.indexOf(active));
+  }
   const total = cueLines.at(-1)?.end ?? 1;
   const target = Math.min(total - Number.EPSILON, Math.max(0, progress) * total);
   const active = cueLines.find((line) => target < line.end) ?? cueLines.at(-1)!;
@@ -428,7 +517,10 @@ export function LectureSubtitleDock({
                       if (didDragRef.current) return;
                       if (line.actionIndex < 0) return;
                       const cueLength = Math.max(1, displayCues[line.cueIndex]?.text.length ?? line.end);
-                      if (onCueSelect?.(line.actionIndex, line.start / cueLength)) {
+                      const startRatio = line.startMs !== undefined && line.durationMs
+                        ? line.startMs / line.durationMs
+                        : line.start / cueLength;
+                      if (onCueSelect?.(line.actionIndex, startRatio)) {
                         setIsBrowsingSubtitles(false);
                       }
                     }}

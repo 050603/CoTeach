@@ -5,8 +5,9 @@
  * Used by any API route that fetches a user-supplied URL server-side.
  */
 import { promises as dns } from 'node:dns';
-import { isIP } from 'node:net';
-import { Agent } from 'undici';
+import { connect as connectTcp, isIP, type Socket } from 'node:net';
+import { connect as connectTls, checkServerIdentity } from 'node:tls';
+import { Agent, type buildConnector } from 'undici';
 
 function normalizeAddress(value: string): string {
   let normalized = value.trim().toLowerCase();
@@ -252,6 +253,82 @@ export async function validateUrlForSSRF(url: string): Promise<string | null> {
   return null;
 }
 
+/** Only operator-supplied /96 networks may translate already validated IPv4. */
+function configuredNat64Prefixes(): string[] {
+  const entries = process.env.OPENPBL_NAT64_PREFIXES?.split(',').map((entry) => entry.trim()).filter(Boolean) ?? [];
+  return Array.from(new Set(entries.map((entry) => {
+    const [address, length, extra] = entry.split('/');
+    const parts = expandIPv6(address);
+    if (length !== '96' || extra !== undefined || isIP(address) !== 6 || !parts
+      || parts[6] !== 0 || parts[7] !== 0 || isPrivateIP(address)
+      || (parts[0] & 0xe000) !== 0x2000) {
+      throw new Error('OPENPBL_NAT64_PREFIXES must contain public IPv6 /96 networks');
+    }
+    return parts.slice(0, 6).map((part) => part.toString(16)).join(':');
+  })));
+}
+
+function createPinnedConnector(hostname: string, candidates: string[]) {
+  const pending = new Set<() => void>();
+  let disposed = false;
+  const connect: buildConnector.connector = (options, callback) => {
+    if (disposed || normalizeAddress(options.hostname) !== hostname) {
+      callback(new Error('Media connection target changed or connection closed'), null);
+      return;
+    }
+    const sockets = new Set<Socket>();
+    const failures: Error[] = [];
+    let settled = false;
+    let remaining = candidates.length;
+    const finish = (error: Error | null, winner?: Socket) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      pending.delete(abort);
+      for (const socket of sockets) if (socket !== winner) socket.destroy();
+      if (error) callback(error, null);
+      else callback(null, winner!);
+    };
+    const abort = () => finish(new Error('Media connection closed'));
+    const timer = setTimeout(() => finish(new Error('Media connection timed out')), 8_000);
+    pending.add(abort);
+    for (const address of candidates) {
+      const secure = options.protocol === 'https:';
+      const port = Number(options.port || (secure ? 443 : 80));
+      const onFailure = (error: Error) => {
+        failures.push(error);
+        remaining -= 1;
+        if (remaining === 0) finish(new AggregateError(failures, 'All pinned media routes failed'));
+      };
+      try {
+        const socket = secure ? connectTls({
+          host: address,
+          port,
+          // Routing uses the pinned IP, while TLS authenticates the URL identity.
+          servername: isIP(hostname) ? undefined : hostname,
+          rejectUnauthorized: true,
+          checkServerIdentity: (_name, cert) => checkServerIdentity(hostname, cert),
+          ALPNProtocols: ['http/1.1'],
+        }) : connectTcp({ host: address, port });
+        sockets.add(socket);
+        socket.setNoDelay(true);
+        socket.setKeepAlive(true, 30_000);
+        socket.once('error', onFailure);
+        socket.once(secure ? 'secureConnect' : 'connect', () => finish(null, socket));
+      } catch (error) {
+        onFailure(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+  };
+  return {
+    connect,
+    dispose: () => {
+      disposed = true;
+      for (const abort of pending) abort();
+    },
+  };
+}
+
 /**
  * Resolve once, validate every result, then pin the outbound connection to a
  * validated address. This closes the DNS-rebinding gap between validation and
@@ -272,6 +349,32 @@ export async function createSsrfSafeDispatcher(
   if (resolved.length === 0 || resolved.some(({ address }) => isPrivateIP(address))) {
     throw new Error(LOCAL_NETWORK_BLOCK_MESSAGE);
   }
+  const prefixes = configuredNat64Prefixes();
+  if (prefixes.length > 0) {
+    for (const { address, family } of resolved) {
+      if (family !== 6) continue;
+      const parts = expandIPv6(address)!;
+      if (prefixes.includes(parts.slice(0, 6).map((part) => part.toString(16)).join(':'))) {
+        const embedded = `${parts[6] >> 8}.${parts[6] & 255}.${parts[7] >> 8}.${parts[7] & 255}`;
+        if (isPrivateIP(embedded)) throw new Error(LOCAL_NETWORK_BLOCK_MESSAGE);
+      }
+    }
+    const candidates = Array.from(new Set(resolved.flatMap(({ address, family }) => {
+      if (family === 6) return [address];
+      const [a, b, c, d] = parseIPv4(address)!;
+      const suffix = `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+      return prefixes.map((prefix) => `${prefix}:${suffix}`);
+    })));
+    const connector = createPinnedConnector(hostname, candidates);
+    const dispatcher = new Agent({ connect: connector.connect });
+    return {
+      dispatcher,
+      close: async () => {
+        connector.dispose();
+        await dispatcher.destroy();
+      },
+    };
+  }
   const selected = resolved[0];
   const dispatcher = new Agent({
     connect: {
@@ -283,7 +386,7 @@ export async function createSsrfSafeDispatcher(
   return {
     dispatcher,
     close: async () => {
-      await dispatcher.close();
+      await dispatcher.destroy();
     },
   };
 }

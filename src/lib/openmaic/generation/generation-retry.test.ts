@@ -78,6 +78,12 @@ describe('withGenerationRetry', () => {
   it.each([
     new Error('terminated'),
     new Error('Cannot connect to API: connect ECONNREFUSED 127.0.0.1:9999'),
+    new Error('Cannot connect to API: other side closed'),
+    Object.assign(new Error('Cannot connect to API: other side closed'), {
+      name: 'AI_APICallError', isRetryable: true,
+      cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+    }),
+    { cause: { code: 'UND_ERR_SOCKET' } },
   ])('waits for an interrupted local proxy transport to recover: %s', async (transportError) => {
     const sleep = vi.fn().mockResolvedValue(undefined);
     const operation = vi.fn().mockRejectedValueOnce(transportError).mockResolvedValueOnce('complete');
@@ -103,6 +109,35 @@ describe('withGenerationRetry', () => {
       random: () => 0,
     })).rejects.toBeInstanceOf(LlmEmptyResponseError);
     expect(operation).toHaveBeenCalledOnce();
+  });
+
+  it.each(['UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'ECONNRESET', 'EAI_AGAIN'])(
+    'recognizes structured transport code %s through an SDK wrapper', (code) => {
+      expect(isRetryableGenerationError({ isRetryable: true, cause: { code } })).toBe(true);
+    },
+  );
+
+  it.each([
+    { isRetryable: true, cause: { statusCode: 401 } },
+    { isRetryable: true, cause: { isRetryable: false, code: 'UND_ERR_SOCKET' } },
+    { statusCode: 403, cause: { code: 'UND_ERR_SOCKET' } },
+    { name: 'AbortError', cause: { code: 'UND_ERR_SOCKET' } },
+    { code: 'UND_ERR_INVALID_ARG' },
+  ])('keeps terminal errors authoritative: %j', (error) => {
+    expect(isRetryableGenerationError(error)).toBe(false);
+  });
+
+  it('caps repeated SDK socket failures at the configured request budget', async () => {
+    const error = Object.assign(new Error('Cannot connect to API: other side closed'), {
+      isRetryable: true, cause: { code: 'UND_ERR_SOCKET' },
+    });
+    const operation = vi.fn().mockRejectedValue(error);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    await expect(withGenerationRetry(operation, {
+      label: 'scene-content', maxRetries: 1, sleep,
+    })).rejects.toBe(error);
+    expect(operation).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(10_000, undefined);
   });
 
   it('does not infer a network failure from an unknown finish reason', () => {

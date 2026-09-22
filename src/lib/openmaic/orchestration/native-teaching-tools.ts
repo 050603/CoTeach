@@ -14,6 +14,14 @@ const visualSelector = z.union([
     '`occurrence` requires `quote`',
   ),
   z.object({
+    rowIndex: z.number().int().nonnegative(),
+    quote: z.string().min(1).optional(),
+    occurrence: z.number().int().nonnegative().optional(),
+  }).strict().refine(
+    (selector) => selector.occurrence === undefined || selector.quote !== undefined,
+    '`occurrence` requires `quote`',
+  ),
+  z.object({
     quote: z.string().min(1),
     occurrence: z.number().int().nonnegative().optional(),
   }).strict(),

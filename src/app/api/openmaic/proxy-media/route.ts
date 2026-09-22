@@ -38,66 +38,71 @@ export async function POST(request: Request) {
   }
 
   let currentUrl = parsed.data.url;
+  let upstreamStarted = false;
   try {
     for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+      upstreamStarted = false;
       const connection = await createSsrfSafeDispatcher(currentUrl);
-      const upstream = await fetch(currentUrl, {
-        dispatcher: connection.dispatcher,
-        redirect: "manual",
-        headers: {
-          Accept: "image/*,video/*,audio/*,application/pdf,application/octet-stream",
-          "User-Agent": "CoTeach-MediaProxy/1.0",
-        },
-        signal: AbortSignal.timeout(30_000),
-      });
+      upstreamStarted = true;
+      let handedToStream = false;
+      try {
+        const upstream = await fetch(currentUrl, {
+          dispatcher: connection.dispatcher,
+          redirect: "manual",
+          headers: {
+            Accept: "image/*,video/*,audio/*,application/pdf,application/octet-stream",
+            "User-Agent": "CoTeach-MediaProxy/1.0",
+          },
+          signal: AbortSignal.any([request.signal, AbortSignal.timeout(30_000)]),
+        });
 
-      if (upstream.status >= 300 && upstream.status < 400) {
-        const location = upstream.headers.get("location");
-        await upstream.body?.cancel();
-        await connection.close();
-        if (!location) return apiError(request, "UPSTREAM_ERROR", "Invalid upstream redirect.", 502);
-        if (hop === MAX_REDIRECTS) {
-          return apiError(request, "TOO_MANY_REDIRECTS", "Too many upstream redirects.", 502);
+        if (upstream.status >= 300 && upstream.status < 400) {
+          const location = upstream.headers.get("location");
+          await upstream.body?.cancel();
+          if (!location) return apiError(request, "UPSTREAM_ERROR", "Invalid upstream redirect.", 502);
+          if (hop === MAX_REDIRECTS) {
+            return apiError(request, "TOO_MANY_REDIRECTS", "Too many upstream redirects.", 502);
+          }
+          currentUrl = new URL(location, currentUrl).href;
+          continue;
         }
-        currentUrl = new URL(location, currentUrl).href;
-        continue;
-      }
 
-      if (!upstream.ok) {
-        await upstream.body?.cancel();
-        await connection.close();
-        return apiError(request, "UPSTREAM_ERROR", "The upstream media request failed.", 502);
-      }
+        if (!upstream.ok) {
+          await upstream.body?.cancel();
+          return apiError(request, "UPSTREAM_ERROR", "The upstream media request failed.", 502);
+        }
 
-      const contentType = upstream.headers.get("content-type")?.trim() ?? "";
-      if (!ALLOWED_CONTENT_TYPE.test(contentType)) {
-        await upstream.body?.cancel();
-        await connection.close();
-        return apiError(request, "UNSUPPORTED_MEDIA_TYPE", "Unsupported upstream media type.", 415);
-      }
-      const contentLength = Number(upstream.headers.get("content-length") ?? "");
-      if (Number.isFinite(contentLength) && contentLength > MAX_PROXY_BYTES) {
-        await upstream.body?.cancel();
-        await connection.close();
-        return apiError(request, "MEDIA_TOO_LARGE", "Upstream media exceeds 25 MiB.", 413);
-      }
-      if (!upstream.body) {
-        await connection.close();
-        return apiError(request, "UPSTREAM_ERROR", "Upstream returned an empty body.", 502);
-      }
+        const contentType = upstream.headers.get("content-type")?.trim() ?? "";
+        if (!ALLOWED_CONTENT_TYPE.test(contentType)) {
+          await upstream.body?.cancel();
+          return apiError(request, "UNSUPPORTED_MEDIA_TYPE", "Unsupported upstream media type.", 415);
+        }
+        const contentLength = Number(upstream.headers.get("content-length") ?? "");
+        if (Number.isFinite(contentLength) && contentLength > MAX_PROXY_BYTES) {
+          await upstream.body?.cancel();
+          return apiError(request, "MEDIA_TOO_LARGE", "Upstream media exceeds 25 MiB.", 413);
+        }
+        if (!upstream.body) {
+          return apiError(request, "UPSTREAM_ERROR", "Upstream returned an empty body.", 502);
+        }
 
-      const body = boundedStream(
-        upstream.body as unknown as ReadableStream<Uint8Array>,
-        connection.close,
-      );
-      return new Response(body, {
-        status: 200,
-        headers: {
-          "Content-Type": contentType,
-          "Cache-Control": "private, max-age=3600",
-          "X-Content-Type-Options": "nosniff",
-        },
-      });
+        const body = boundedStream(
+          upstream.body as unknown as ReadableStream<Uint8Array>,
+          connection.close,
+        );
+        const response = new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": "private, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+          },
+        });
+        handedToStream = true;
+        return response;
+      } finally {
+        if (!handedToStream) await connection.close();
+      }
     }
   } catch (error) {
     logger.warn(
@@ -109,7 +114,9 @@ export async function POST(request: Request) {
       "media proxy request rejected",
     );
   }
-  return apiError(request, "INVALID_URL", "The media URL is not allowed.", 403);
+  return upstreamStarted
+    ? apiError(request, "UPSTREAM_ERROR", "The upstream media request failed.", 502)
+    : apiError(request, "INVALID_URL", "The media URL is not allowed.", 403);
 }
 
 function boundedStream(

@@ -75,7 +75,7 @@ export class AudioPlayer {
         await this.seekToRatioWhenReady(this.audio, startRatio);
         const audio = this.audio;
         audio.addEventListener('ended', () => {
-          if (this.warmupAudio === audio) return;
+          if (this.warmupAudio === audio || this.audio !== audio) return;
           this.onEndedCallback?.();
         });
         if (!await this.warmupIfNeeded(audio, startRatio)) return false;
@@ -99,7 +99,7 @@ export class AudioPlayer {
           await this.seekToRatioWhenReady(this.audio, startRatio);
           const fallbackAudio = this.audio;
           fallbackAudio.addEventListener('ended', () => {
-            if (this.warmupAudio === fallbackAudio) return;
+            if (this.warmupAudio === fallbackAudio || this.audio !== fallbackAudio) return;
             this.revokeObjectUrl();
             this.onEndedCallback?.();
           });
@@ -148,7 +148,7 @@ export class AudioPlayer {
 
       // Set ended callback
       audio.addEventListener('ended', () => {
-        if (this.warmupAudio === audio) return;
+        if (this.warmupAudio === audio || this.audio !== audio) return;
         this.revokeObjectUrl();
         this.onEndedCallback?.();
       });

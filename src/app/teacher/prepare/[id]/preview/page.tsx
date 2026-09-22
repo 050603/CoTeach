@@ -62,7 +62,7 @@ type PublishCheck = {
 
 type ResourceRepairIssue = {
   id: string;
-  type: "classroom" | "adaptive-resource" | "teaching-tool" | "tts" | "media";
+  type: "classroom" | "adaptive-resource" | "teaching-tool" | "tts" | "media" | "speech-sync";
   title: string;
   detail: string;
 };
@@ -70,6 +70,9 @@ type ResourceRepairIssue = {
 type ResourceRepairStatus = {
   status: "idle" | "running" | "completed" | "failed";
   error?: string;
+  completed?: number;
+  total?: number;
+  failed?: number;
 };
 
 type PublicationState = {
@@ -126,6 +129,7 @@ export default function PreviewCoursePage() {
   const [resourceIssues, setResourceIssues] = useState<ResourceRepairIssue[]>([]);
   const [resourceAuditLoaded, setResourceAuditLoaded] = useState(false);
   const [resourceRepairStatus, setResourceRepairStatus] = useState<ResourceRepairStatus>({ status: "idle" });
+  const [speechSyncStatus, setSpeechSyncStatus] = useState<ResourceRepairStatus>({ status: "idle" });
   const [resourceRepairVersion, setResourceRepairVersion] = useState(0);
   const [reviewDecision, setReviewDecision] = useState<TeacherReviewDecision>({ canConfirm: false, signature: "", acceptedIssueIds: [], acknowledgeFailedCheck: false });
   const [publishedHere, setPublishedHere] = useState(false);
@@ -151,10 +155,17 @@ export default function PreviewCoursePage() {
       signal: controller.signal,
     }).then(async (response) => {
       if (!response.ok) return;
-      const payload = await response.json() as { issues?: ResourceRepairIssue[]; repair?: ResourceRepairStatus };
+      const payload = await response.json() as {
+        issues?: ResourceRepairIssue[];
+        repair?: ResourceRepairStatus;
+        syncRepair?: ResourceRepairStatus;
+      };
       setResourceIssues(payload.issues ?? []);
       setResourceRepairStatus((current) =>
         current.status === "running" ? current : payload.repair ?? { status: "idle" },
+      );
+      setSpeechSyncStatus((current) =>
+        current.status === "running" ? current : payload.syncRepair ?? { status: "idle" },
       );
     }).catch(() => undefined).finally(() => {
       if (!controller.signal.aborted) setResourceAuditLoaded(true);
@@ -200,6 +211,45 @@ export default function PreviewCoursePage() {
       if (timer) clearTimeout(timer);
     };
   }, [params?.id, resourceRepairStatus.status]);
+
+  useEffect(() => {
+    if (!params?.id || speechSyncStatus.status !== "running") return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/courses/${params.id}/resource-repair`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("无法读取同步修复进度");
+        const payload = await response.json() as {
+          issues?: ResourceRepairIssue[];
+          syncRepair?: ResourceRepairStatus;
+        };
+        if (controller.signal.aborted) return;
+        setResourceIssues(payload.issues ?? []);
+        const status = payload.syncRepair ?? { status: "completed" as const };
+        setSpeechSyncStatus(status);
+        if (status.status === "running") timer = setTimeout(poll, 2_500);
+        else if (status.status === "failed") {
+          toast.error("朗读与动作同步修复失败", { description: status.error || "请检查本机对齐服务后重试" });
+        } else {
+          setResourceRepairVersion((value) => value + 1);
+          if ((status.failed ?? 0) > 0) {
+            toast.warning("部分讲稿仍待同步", { description: `${status.failed} 段对齐失败，可稍后再次修复。` });
+          } else toast.success("朗读、字幕与指示动作已经同步");
+        }
+      } catch {
+        if (!controller.signal.aborted) timer = setTimeout(poll, 2_500);
+      }
+    };
+    timer = setTimeout(poll, 1_000);
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [params?.id, speechSyncStatus.status]);
 
   if (!hydrated) {
     return (
@@ -329,6 +379,33 @@ export default function PreviewCoursePage() {
     } catch (error) {
       setResourceRepairStatus({ status: "idle" });
       toast.error("资源重试失败", {
+        description: error instanceof Error ? error.message : "请稍后重试",
+      });
+    }
+  }
+
+  async function repairSpeechSynchronization() {
+    setSpeechSyncStatus({ status: "running", completed: 0, total: 0, failed: 0 });
+    try {
+      const response = await fetch(`/api/courses/${courseId}/resource-repair`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "speech-sync" }),
+      });
+      const payload = await response.json() as {
+        issues?: ResourceRepairIssue[];
+        syncRepair?: ResourceRepairStatus;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(payload.error || "同步修复未能开始");
+      setResourceIssues(payload.issues ?? []);
+      setSpeechSyncStatus(payload.syncRepair ?? { status: "running" });
+      toast.info("已开始修复朗读与动作同步", {
+        description: "系统会复用现有语音，只补齐字幕和动作时间线。",
+      });
+    } catch (error) {
+      setSpeechSyncStatus({ status: "idle" });
+      toast.error("同步修复未能开始", {
         description: error instanceof Error ? error.message : "请稍后重试",
       });
     }
@@ -483,13 +560,13 @@ export default function PreviewCoursePage() {
               <Metric icon={<Sparkles size={17} />} label="互动探究页面" value={`${interactionCount} 页`} />
             </section>
 
-            {resourceIssues.length > 0 ? (
+            {resourceIssues.some((issue) => issue.type !== "speech-sync") ? (
               <section className="mt-5 rounded-[12px] border border-amber-200 bg-amber-50/70 px-5 py-4">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <h2 className="text-sm font-black text-amber-950">还有 {resourceIssues.length} 项课程资源需要补充</h2>
+                    <h2 className="text-sm font-black text-amber-950">还有 {resourceIssues.filter((issue) => issue.type !== "speech-sync").length} 项课程资源需要补充</h2>
                     <ul className="mt-2 space-y-1 text-xs leading-5 text-amber-900">
-                      {resourceIssues.map((issue) => (
+                      {resourceIssues.filter((issue) => issue.type !== "speech-sync").map((issue) => (
                         <li className="flex flex-wrap items-center gap-x-2" key={issue.id}>
                           <span>• {issue.title}：{issue.detail}</span>
                           <Link className="font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=classroom`}>
@@ -501,6 +578,37 @@ export default function PreviewCoursePage() {
                   </div>
                   <Button loading={resourceRepairStatus.status === "running"} onClick={() => void retryMissingResources()}>
                     <RotateCcw size={14} />一键重试缺失资源
+                  </Button>
+                </div>
+              </section>
+            ) : null}
+
+            {classroomId ? (
+              <section className={cn(
+                "mt-5 rounded-[12px] border px-5 py-4",
+                resourceIssues.some((issue) => issue.type === "speech-sync")
+                  ? "border-violet-200 bg-violet-50/70"
+                  : "border-emerald-200 bg-emerald-50/70",
+              )}>
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-sm font-black text-stone-950">朗读、字幕与指示动作同步</h2>
+                    {speechSyncStatus.status === "running" ? (
+                      <p className="mt-2 text-xs leading-5 text-violet-900">
+                        正在对齐语音 {speechSyncStatus.completed ?? 0} / {speechSyncStatus.total || "…"}
+                      </p>
+                    ) : resourceIssues.some((issue) => issue.type === "speech-sync") ? (
+                      <ul className="mt-2 space-y-1 text-xs leading-5 text-violet-900">
+                        {resourceIssues.filter((issue) => issue.type === "speech-sync").map((issue) => (
+                          <li key={issue.id}>• {issue.title}：{issue.detail}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-xs leading-5 text-emerald-900">现有语音已建立音频时间线。</p>
+                    )}
+                  </div>
+                  <Button loading={speechSyncStatus.status === "running"} onClick={() => void repairSpeechSynchronization()}>
+                    <RotateCcw size={14} />修复朗读与动作同步
                   </Button>
                 </div>
               </section>

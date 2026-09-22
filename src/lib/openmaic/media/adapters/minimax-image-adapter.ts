@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * MiniMax Image Generation Adapter
  * Supports: text-to-image with aspect ratio control
@@ -86,7 +87,7 @@ export async function testMiniMaxImageConnectivity(
 ): Promise<{ success: boolean; message: string }> {
   try {
     const baseUrl = (config.baseUrl || BASE_URL).replace(/\/$/, '');
-    const response = await fetch(`${baseUrl}/v1/image_generation`, {
+    const response = await proxyFetch(`${baseUrl}/v1/image_generation`, {
       method: 'POST',
       redirect: 'manual',
       headers: {

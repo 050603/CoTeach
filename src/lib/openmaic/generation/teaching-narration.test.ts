@@ -94,8 +94,9 @@ describe('independent first-pass teaching narration', () => {
     expect(aiCall.mock.calls[0][0]).toContain('温暖、清楚地逐步解释');
     expect(aiCall.mock.calls[0][0]).toContain('copied as one contiguous substring from that exact finalized segment text');
     expect(aiCall.mock.calls[0][0]).toContain('a spotlight that starts inside a segment remains until that segment ends');
-    expect(aiCall.mock.calls[0][0]).toContain('Choose laser for an ordered scan');
-    expect(aiCall.mock.calls[0][0]).toContain('remaining ordered objects as waypoints');
+    expect(aiCall.mock.calls[0][0]).toContain('Choose spotlight for sustained explanation of text');
+    expect(aiCall.mock.calls[0][0]).toContain('multi-target laser only to trace an explicit order');
+    expect(aiCall.mock.calls[0][0]).toContain('A comparison of prose blocks or table rows is not a laser path');
     expect(prompt.visualCueExamples.orderedPath.waypoints[0].elementId).toContain('actualSlide');
     expect(prompt.pages[0].explanation).toContain('记录需要与具体说法相关');
     expect(prompt.pages[0].teachingPlan.visibleContent).toEqual(['语气肯定 ≠ 事实正确']);

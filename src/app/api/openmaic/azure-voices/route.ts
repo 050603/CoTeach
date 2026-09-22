@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@openmaic/lib/logger';
 import { validateUrlForSSRF } from '@openmaic/lib/server/ssrf-guard';
@@ -32,7 +33,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Call Azure voices list endpoint; disable redirect following to prevent SSRF via redirect
-    const response = await fetch(`${baseUrl}/cognitiveservices/voices/list`, {
+    const response = await proxyFetch(`${baseUrl}/cognitiveservices/voices/list`, {
       method: 'GET',
       headers: {
         'Ocp-Apim-Subscription-Key': apiKey,

@@ -52,6 +52,10 @@ function distributeIntegerMinutes(totalMinutes: number, weights: readonly number
   return allocateLectureBudget(totalMinutes * unit, weights).map((value) => value / unit);
 }
 
+function teachingStrategyClause(value: string): string {
+  return value.trim().replace(/[。．.；;]+$/u, '');
+}
+
 export function buildNewSystemAiTimingPlan(
   recommendation: NewSystemAiDurationRecommendation,
   knowledgePoints: readonly KnowledgePoint[],
@@ -91,7 +95,7 @@ export function buildNewSystemAiTimingPlan(
       notes: [
         budget.rationale,
         ...(budget.difficultyStrategies ?? []).map((strategy) => (
-          `难点策略：${strategy.learnerObstacle}；${strategy.teachingApproach}；理解证据：${strategy.understandingEvidence}`
+          `难点策略：${teachingStrategyClause(strategy.learnerObstacle)}；${teachingStrategyClause(strategy.teachingApproach)}；理解证据：${strategy.understandingEvidence.trim()}`
         )),
       ].filter(Boolean).join("\n"),
     })),

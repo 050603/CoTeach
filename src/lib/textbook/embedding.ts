@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 import { createHash } from "node:crypto";
 import { resolveServerEmbeddingProvider } from "@/lib/openmaic/server/provider-config";
 
@@ -82,7 +83,7 @@ export async function embedTextbookTexts(
   const onAbort = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    const response = await fetch(endpoint(provider.baseUrl), {
+    const response = await proxyFetch(endpoint(provider.baseUrl), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

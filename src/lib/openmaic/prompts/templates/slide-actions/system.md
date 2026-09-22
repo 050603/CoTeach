@@ -42,8 +42,8 @@ You MUST output a JSON array directly. Each element is an object with a `type` f
 
 ### Ordering Principles
 
-- spotlight actions should appear BEFORE the corresponding text object (point first, then speak)
-- Multiple spotlight+text pairs create a natural "focus then explain" flow
+- Visual actions appear before their corresponding text object, but every action must include `speechAnchor:{quote,occurrence}` copied from the exact phrase that discusses its target.
+- Keep natural paragraphs intact. A paragraph may have multiple independently anchored actions and laser targets.
 
 ---
 
@@ -61,24 +61,26 @@ Highlight a specific element on the slide, used in conjunction with narration.
 {
   "type": "action",
   "name": "spotlight",
-  "params": { "elementId": "text_abc123" }
+  "params": { "elementId": "text_abc123", "speechAnchor": { "quote": "exact spoken phrase", "occurrence": 0 } }
 }
 ```
 
 - `elementId`: ID of element to focus on, **must** be selected from the provided element list
 - One spotlight action can only focus on **one** element
+- Use spotlight for sustained explanation of ordinary text, concept blocks, and complete table rows. Use `selector:{"rowIndex":1}` to frame one zero-based table row and switch when the next concept begins.
 
 ### laser (Laser Pointer)
 
 Briefly point at an element with a laser dot to draw attention, lighter than spotlight.
 
 ```json
-{ "type": "action", "name": "laser", "params": { "elementId": "text_abc123" } }
+{ "type": "action", "name": "laser", "params": { "elementId": "text_abc123", "speechAnchor": { "quote": "exact spoken phrase", "occurrence": 0 } } }
 ```
 
 - `elementId`: ID of element to point at, **must** be from the provided element list
-- Use for quick, transient emphasis — e.g. "notice this value here"
-- Prefer laser for brief references; use spotlight for extended discussion
+- Use a stationary laser mainly for an image, diagram region, arrow, or isolated visual detail. Do not leave it over ordinary text.
+- Use a waypoint path only for an explicit order, process, route, or derivation across at least three distinct nodes. Comparisons and table rows use separately timed spotlights.
+- Every laser target, including each waypoint, must have its own exact `speechAnchor`. The pointer moves briefly when that phrase starts, then stays at the target.
 
 ### play_video (Play Video)
 

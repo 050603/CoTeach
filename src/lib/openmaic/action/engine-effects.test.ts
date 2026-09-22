@@ -74,4 +74,34 @@ describe('ActionEngine visual cue lifecycle', () => {
     });
     engine.dispose();
   });
+
+  it('places the first laser immediately and moves between narration targets in 150ms', async () => {
+    const engine = new ActionEngine(createStore());
+    await engine.execute({
+      id: 'point-title',
+      type: 'laser',
+      elementId: 'title',
+      selector: { quote: '核心概念' },
+    });
+    expect(useCanvasStore.getState().laserOptions).toMatchObject({
+      transitionDurationMs: 0,
+    });
+    expect(useCanvasStore.getState().laserOptions?.previousTarget).toBeUndefined();
+
+    await engine.execute({
+      id: 'point-chart',
+      type: 'laser',
+      elementId: 'chart',
+      selector: { quote: '增长率' },
+    });
+    expect(useCanvasStore.getState().laserOptions).toMatchObject({
+      previousTarget: { elementId: 'title', selector: { quote: '核心概念' } },
+      transitionDurationMs: 150,
+    });
+
+    engine.clearEffects();
+    await engine.execute({ id: 'seek-chart', type: 'laser', elementId: 'chart' });
+    expect(useCanvasStore.getState().laserOptions).toMatchObject({ transitionDurationMs: 0 });
+    engine.dispose();
+  });
 });

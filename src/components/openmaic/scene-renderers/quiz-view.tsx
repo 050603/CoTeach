@@ -1,15 +1,15 @@
 'use client';
 
 import { memo, useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, MotionConfig, useReducedMotion } from 'motion/react';
 import {
-  PieChart,
   CheckCircle2,
   XCircle,
   LockKeyhole,
   ChevronRight,
   Check,
   BookOpenText,
+  ClipboardCheck,
   Loader2,
   MessageCircleQuestion,
   ArrowRight,
@@ -100,10 +100,10 @@ function startMatchingDrag(event: React.DragEvent<HTMLElement>, rightId: string)
     width: `${Math.max(160, bounds.width)}px`,
     margin: '0',
     opacity: '1',
-    background: '#ffffff',
-    border: '1px solid #8b5cf6',
-    borderRadius: '12px',
-    boxShadow: '0 12px 28px rgba(76, 29, 149, 0.22)',
+    background: 'var(--pbl-surface)',
+    border: '1px solid var(--pbl-student)',
+    borderRadius: '10px',
+    color: 'var(--pbl-text)',
   });
   preview.setAttribute('aria-hidden', 'true');
   document.body.appendChild(preview);
@@ -125,70 +125,39 @@ function QuizCover({
   const { t } = useI18n();
 
   return (
-    <div className="w-full h-full flex flex-col items-center justify-center gap-4 relative overflow-hidden">
-      {/* Background decoration */}
-      <div className="absolute top-0 right-0 p-6 opacity-[0.03]">
-        <PieChart className="w-52 h-52 text-violet-500" />
-      </div>
-      <div className="absolute bottom-0 left-0 p-6 opacity-[0.02]">
-        <BookOpenText className="w-40 h-40 text-violet-500 rotate-12" />
-      </div>
-
-      <motion.div
-        initial={{ scale: 0.8, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ type: 'spring', stiffness: 200, damping: 20 }}
-        className="w-16 h-16 bg-gradient-to-br from-violet-100 to-purple-50 dark:from-violet-900/50 dark:to-purple-900/30 rounded-2xl flex items-center justify-center shadow-lg shadow-violet-100 dark:shadow-violet-900/30 ring-1 ring-violet-200/50 dark:ring-violet-700/50"
-      >
-        <PieChart className="w-8 h-8 text-violet-500" />
-      </motion.div>
-
+    <div className="flex h-full w-full items-center justify-center overflow-y-auto px-5 py-8 sm:px-8">
       <motion.div
         initial={{ y: 10, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.1 }}
-        className="text-center z-10"
+        className="flex w-full max-w-xl flex-col items-center text-center"
       >
-        <h3 className="text-xl font-bold text-gray-800 dark:text-gray-100">{t('quiz.title')}</h3>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{t('quiz.subtitle')}</p>
-      </motion.div>
+        <span className="grid size-14 place-items-center rounded-[14px] border border-[var(--pbl-student-border)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]">
+          <ClipboardCheck className="size-7" aria-hidden="true" />
+        </span>
+        <h3 className="mt-5 text-2xl font-semibold text-[var(--pbl-text-strong)]">{t('quiz.title')}</h3>
+        <p className="mt-2 max-w-md text-sm leading-6 text-[var(--pbl-text-muted)]">{t('quiz.subtitle')}</p>
 
-      <motion.div
-        initial={{ y: 10, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.2 }}
-        className="flex gap-5 text-sm z-10"
-      >
-        <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-          <div className="w-7 h-7 rounded-lg bg-violet-50 dark:bg-violet-900/30 flex items-center justify-center">
-            <BookOpenText className="w-3.5 h-3.5 text-violet-500" />
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 border-y border-[var(--pbl-border)] py-4 text-sm text-[var(--pbl-text-muted)]">
+          <div className="flex items-center gap-2">
+            <BookOpenText className="size-4 text-[var(--pbl-student)]" aria-hidden="true" />
+            <span>{questionCount} {t('quiz.questionsCount')}</span>
           </div>
-          <span>
-            {questionCount} {t('quiz.questionsCount')}
-          </span>
-        </div>
-        <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-          <div className="w-7 h-7 rounded-lg bg-violet-50 dark:bg-violet-900/30 flex items-center justify-center">
-            <PieChart className="w-3.5 h-3.5 text-violet-500" />
+          <div className="flex items-center gap-2">
+            <ClipboardCheck className="size-4 text-[var(--pbl-student)]" aria-hidden="true" />
+            <span>{t('quiz.totalPrefix')} {totalPoints} {t('quiz.pointsSuffix')}</span>
           </div>
-          <span>
-            {t('quiz.totalPrefix')} {totalPoints} {t('quiz.pointsSuffix')}
-          </span>
         </div>
-      </motion.div>
 
-      <motion.button
-        initial={{ y: 10, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.3 }}
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
-        onClick={onStart}
-        className="mt-1 px-8 py-2.5 bg-gradient-to-r from-violet-500 to-purple-500 text-white rounded-full font-medium shadow-lg shadow-violet-200/50 dark:shadow-violet-900/50 hover:shadow-violet-300/50 transition-shadow z-10 flex items-center gap-2"
-      >
-        {t('quiz.startQuiz')}
-        <ChevronRight className="w-4 h-4" />
-      </motion.button>
+        <button
+          type="button"
+          onClick={onStart}
+          className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-[10px] bg-[var(--pbl-student)] px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[var(--pbl-student-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pbl-student)] focus-visible:ring-offset-2"
+        >
+          {t('quiz.startQuiz')}
+          <ChevronRight className="size-4" aria-hidden="true" />
+        </button>
+        <p className="mt-3 text-xs text-[var(--pbl-text-subtle)]">提交后将进入逐题回顾，本小节仅可作答一次。</p>
+      </motion.div>
     </div>
   );
 }
@@ -223,62 +192,59 @@ function SingleChoiceQuestion({
           return (
             <button
               key={opt.value}
+              type="button"
               disabled={disabled}
+              aria-pressed={!isReview ? selected : undefined}
               onClick={() => !disabled && onChange(opt.value)}
               className={cn(
-                'flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all text-sm',
-                // Default state
+                'flex min-h-11 items-center gap-3 rounded-[10px] border px-4 py-3 text-left text-sm leading-6 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pbl-student)] focus-visible:ring-inset',
                 !isReview &&
                   !selected &&
-                  'border-gray-200 dark:border-gray-600 hover:border-violet-200 dark:hover:border-violet-700 hover:bg-violet-50/50 dark:hover:bg-violet-900/30',
+                  'border-[var(--pbl-border)] bg-[var(--pbl-surface)] text-[var(--pbl-text)] hover:border-[var(--pbl-student-border)] hover:bg-[var(--pbl-student-soft)]',
                 !isReview &&
                   selected &&
-                  'border-violet-400 bg-violet-50 dark:bg-violet-900/30 ring-1 ring-violet-200 dark:ring-violet-700',
-                // Review states
+                  'border-[var(--pbl-student)] bg-[var(--pbl-student-soft)] text-[var(--pbl-text-strong)]',
                 isReview &&
                   isCorrectOpt &&
-                  'border-emerald-400 bg-emerald-50 dark:bg-emerald-900/30',
+                  'border-[var(--pbl-success-border)] bg-[var(--pbl-success-soft)] text-[var(--pbl-text)]',
                 isReview &&
                   isWrong &&
                   !isCorrectOpt &&
-                  'border-red-300 bg-red-50 dark:bg-red-900/30',
+                  'border-[var(--pbl-danger-border)] bg-[var(--pbl-danger-soft)] text-[var(--pbl-text)]',
                 isReview &&
                   !isCorrectOpt &&
                   !selected &&
-                  'border-gray-100 dark:border-gray-700 opacity-60',
+                  'border-[var(--pbl-border-soft)] bg-[var(--pbl-surface)] text-[var(--pbl-text-muted)]',
                 disabled && !isReview && 'cursor-default',
               )}
             >
               <span
                 className={cn(
-                  'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-colors',
+                  'flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors',
                   !isReview &&
                     !selected &&
-                    'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400',
-                  !isReview && selected && 'bg-violet-500 text-white',
+                    'bg-[var(--pbl-surface-soft)] text-[var(--pbl-text-muted)]',
+                  !isReview && selected && 'bg-[var(--pbl-student)] text-white',
                   isReview && isCorrectOpt && 'bg-[var(--pbl-success)] text-white',
-                  isReview && isWrong && !isCorrectOpt && 'bg-red-400 text-white',
+                  isReview && isWrong && !isCorrectOpt && 'bg-[var(--pbl-danger)] text-white',
                   isReview &&
                     !isCorrectOpt &&
                     !selected &&
-                    'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500',
+                    'bg-[var(--pbl-surface-soft)] text-[var(--pbl-text-subtle)]',
                 )}
               >
                 {opt.value}
               </span>
               <span
                 className={cn(
-                  'flex-1',
-                  isReview && !isCorrectOpt && !selected && 'text-gray-400 dark:text-gray-500',
+                  'min-w-0 flex-1 break-words',
                 )}
               >
                 <QuizMathText text={opt.label} />
               </span>
-              {isReview && isCorrectOpt && (
-                <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
-              )}
+              {isReview && isCorrectOpt && <span className="shrink-0 text-xs font-semibold text-[var(--pbl-success)]">正确答案</span>}
               {isReview && isWrong && !isCorrectOpt && (
-                <XCircle className="w-5 h-5 text-red-400 shrink-0" />
+                <span className="shrink-0 text-xs font-semibold text-[var(--pbl-danger)]">你的选择</span>
               )}
             </button>
           );
@@ -322,7 +288,7 @@ function MultipleChoiceQuestion({
   return (
     <QuestionCard question={question} index={index} result={result} onExplain={onExplain}>
       {!isReview && (
-        <p className="text-xs text-gray-400 dark:text-gray-500 mb-2">
+        <p className="mb-2 text-xs text-[var(--pbl-text-muted)]">
           {t('quiz.multipleChoiceHint')}
         </p>
       )}
@@ -335,56 +301,55 @@ function MultipleChoiceQuestion({
           return (
             <button
               key={opt.value}
+              type="button"
               disabled={disabled}
+              aria-pressed={!isReview ? isSelected : undefined}
               onClick={() => toggle(opt.value)}
               className={cn(
-                'flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all text-sm',
+                'flex min-h-11 items-center gap-3 rounded-[10px] border px-4 py-3 text-left text-sm leading-6 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pbl-student)] focus-visible:ring-inset',
                 !isReview &&
                   !isSelected &&
-                  'border-gray-200 dark:border-gray-600 hover:border-violet-200 dark:hover:border-violet-700 hover:bg-violet-50/50 dark:hover:bg-violet-900/30',
+                  'border-[var(--pbl-border)] bg-[var(--pbl-surface)] text-[var(--pbl-text)] hover:border-[var(--pbl-student-border)] hover:bg-[var(--pbl-student-soft)]',
                 !isReview &&
                   isSelected &&
-                  'border-violet-400 bg-violet-50 dark:bg-violet-900/30 ring-1 ring-violet-200 dark:ring-violet-700',
+                  'border-[var(--pbl-student)] bg-[var(--pbl-student-soft)] text-[var(--pbl-text-strong)]',
                 isReview &&
                   isCorrectOpt &&
-                  'border-emerald-400 bg-emerald-50 dark:bg-emerald-900/30',
-                isReview && isWrong && 'border-red-300 bg-red-50 dark:bg-red-900/30',
+                  'border-[var(--pbl-success-border)] bg-[var(--pbl-success-soft)] text-[var(--pbl-text)]',
+                isReview && isWrong && 'border-[var(--pbl-danger-border)] bg-[var(--pbl-danger-soft)] text-[var(--pbl-text)]',
                 isReview &&
                   !isCorrectOpt &&
                   !isSelected &&
-                  'border-gray-100 dark:border-gray-700 opacity-60',
+                  'border-[var(--pbl-border-soft)] bg-[var(--pbl-surface)] text-[var(--pbl-text-muted)]',
                 disabled && !isReview && 'cursor-default',
               )}
             >
               <span
                 className={cn(
-                  'w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 transition-colors',
+                  'flex size-7 shrink-0 items-center justify-center rounded-[6px] text-xs font-semibold transition-colors',
                   !isReview &&
                     !isSelected &&
-                    'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400',
-                  !isReview && isSelected && 'bg-violet-500 text-white',
+                    'bg-[var(--pbl-surface-soft)] text-[var(--pbl-text-muted)]',
+                  !isReview && isSelected && 'bg-[var(--pbl-student)] text-white',
                   isReview && isCorrectOpt && 'bg-[var(--pbl-success)] text-white',
-                  isReview && isWrong && 'bg-red-400 text-white',
+                  isReview && isWrong && 'bg-[var(--pbl-danger)] text-white',
                   isReview &&
                     !isCorrectOpt &&
                     !isSelected &&
-                    'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500',
+                    'bg-[var(--pbl-surface-soft)] text-[var(--pbl-text-subtle)]',
                 )}
               >
                 {!isReview && isSelected ? <Check className="w-3.5 h-3.5" /> : opt.value}
               </span>
               <span
                 className={cn(
-                  'flex-1',
-                  isReview && !isCorrectOpt && !isSelected && 'text-gray-400 dark:text-gray-500',
+                  'min-w-0 flex-1 break-words',
                 )}
               >
                 <QuizMathText text={opt.label} />
               </span>
-              {isReview && isCorrectOpt && (
-                <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
-              )}
-              {isReview && isWrong && <XCircle className="w-5 h-5 text-red-400 shrink-0" />}
+              {isReview && isCorrectOpt && <span className="shrink-0 text-xs font-semibold text-[var(--pbl-success)]">正确答案</span>}
+              {isReview && isWrong && <span className="shrink-0 text-xs font-semibold text-[var(--pbl-danger)]">你的选择</span>}
             </button>
           );
         })}
@@ -443,7 +408,7 @@ function MatchingQuestion({
   return (
     <QuestionCard question={question} index={index} result={result} onExplain={onExplain}>
       {!review && (
-        <p className="mb-3 text-xs text-gray-400 dark:text-gray-500">
+        <p className="mb-3 text-xs leading-5 text-[var(--pbl-text-muted)]">
           拖动右侧卡片到对应项，也可以依次点击右侧卡片和左侧目标。
         </p>
       )}
@@ -476,32 +441,33 @@ function MatchingQuestion({
                   if (draggedRightId) assign(pair.leftId, draggedRightId);
                 }}
                 className={cn(
-                  'grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-3 rounded-xl border px-3 py-2 text-left text-sm transition',
-                  !review && 'border-gray-200 hover:border-violet-300 hover:bg-violet-50/40 dark:border-gray-600 dark:hover:border-violet-700',
-                  !review && selectedRightId && 'border-dashed border-violet-400 bg-violet-50/60 dark:bg-violet-900/20',
-                  isCorrect && 'border-emerald-400 bg-emerald-50 dark:bg-emerald-900/30',
-                  isWrong && 'border-red-300 bg-red-50 dark:bg-red-900/30',
+                  'grid min-h-11 w-full grid-cols-1 items-center gap-2 rounded-[10px] border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pbl-student)] focus-visible:ring-inset sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] sm:gap-3',
+                  !review && 'border-[var(--pbl-border)] bg-[var(--pbl-surface)] hover:border-[var(--pbl-student-border)]',
+                  !review && selectedRightId && 'border-dashed border-[var(--pbl-student)] bg-[var(--pbl-student-soft)]',
+                  isCorrect && 'border-[var(--pbl-success-border)] bg-[var(--pbl-success-soft)]',
+                  isWrong && 'border-[var(--pbl-danger-border)] bg-[var(--pbl-danger-soft)]',
                 )}
               >
-                <span className="font-medium text-gray-800 dark:text-gray-100">{pair.left}</span>
+                <span className="font-medium text-[var(--pbl-text-strong)]">{pair.left}</span>
                 {rightId && !review ? (
                   <div
                     draggable={!disabled}
                     aria-label={`移动匹配项 ${rightById.get(rightId)}`}
                     onClick={(event) => event.stopPropagation()}
                     onDragStart={(event) => startMatchingDrag(event, rightId)}
-                    className="flex cursor-grab select-none items-center gap-2 rounded-lg border border-violet-300 bg-white px-3 py-2 text-violet-800 shadow-sm active:cursor-grabbing dark:border-violet-600 dark:bg-gray-800 dark:text-violet-200"
+                    className="flex min-h-11 cursor-grab select-none items-center gap-2 rounded-[8px] border border-[var(--pbl-student-border)] bg-[var(--pbl-surface)] px-3 py-2 text-[var(--pbl-student)] active:cursor-grabbing"
                   >
-                    <GripVertical className="h-4 w-4 shrink-0 text-violet-400" />
+                    <GripVertical className="size-4 shrink-0" aria-hidden="true" />
                     <span className="min-w-0 flex-1">{rightById.get(rightId)}</span>
                   </div>
                 ) : (
                   <span className={cn(
-                    'rounded-lg border border-dashed px-3 py-2 text-gray-500 dark:border-gray-600 dark:text-gray-300',
-                    rightId && 'border-solid border-violet-200 bg-white dark:border-violet-700 dark:bg-gray-800',
+                    'min-h-11 rounded-[8px] border border-dashed border-[var(--pbl-border-strong)] px-3 py-2 text-[var(--pbl-text-muted)]',
+                    rightId && 'border-solid border-[var(--pbl-border)] bg-[var(--pbl-surface)]',
                   )}>
                     <span className="block">{rightId ? rightById.get(rightId) : '放置匹配项'}</span>
-                    {isWrong && <span className="mt-1 block text-xs font-medium text-emerald-700 dark:text-emerald-300">正确：{pair.right}</span>}
+                    {isCorrect && <span className="mt-1 block text-xs font-semibold text-[var(--pbl-success)]">匹配正确</span>}
+                    {isWrong && <span className="mt-1 block text-xs font-semibold text-[var(--pbl-danger)]">正确匹配：{pair.right}</span>}
                   </span>
                 )}
               </div>
@@ -519,9 +485,9 @@ function MatchingQuestion({
               const draggedRightId = event.dataTransfer.getData(MATCH_DRAG_MIME);
               if (draggedRightId) unassign(draggedRightId);
             }}
-            className="min-h-24 space-y-2 rounded-xl border border-dashed border-violet-200 bg-violet-50/30 p-2 dark:border-violet-800 dark:bg-violet-950/20"
+            className="min-h-24 space-y-2 rounded-[10px] border border-dashed border-[var(--pbl-student-border)] bg-[var(--pbl-student-soft)] p-2"
           >
-            <p className="px-1 text-[11px] font-medium text-violet-500">待选项</p>
+            <p className="px-1 text-[11px] font-semibold text-[var(--pbl-student)]">待选项</p>
             {shuffledRight.filter((pair) => ![...relationMap.values()].includes(pair.rightId)).map((pair) => {
               return (
                 <button
@@ -533,19 +499,19 @@ function MatchingQuestion({
                   onClick={() => !disabled && setSelectedRightId(pair.rightId)}
                   onDragStart={(event) => startMatchingDrag(event, pair.rightId)}
                   className={cn(
-                    'flex w-full cursor-grab select-none items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition active:cursor-grabbing',
+                    'flex min-h-11 w-full cursor-grab select-none items-center gap-2 rounded-[8px] border px-3 py-2 text-left text-sm transition-colors active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pbl-student)] focus-visible:ring-inset',
                     selectedRightId === pair.rightId
-                      ? 'border-violet-400 bg-violet-50 text-violet-800 ring-1 ring-violet-200 dark:bg-violet-900/30 dark:text-violet-200'
-                      : 'border-gray-200 bg-white text-gray-700 hover:border-violet-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200',
+                      ? 'border-[var(--pbl-student)] bg-[var(--pbl-surface)] text-[var(--pbl-student)]'
+                      : 'border-[var(--pbl-border)] bg-[var(--pbl-surface)] text-[var(--pbl-text)] hover:border-[var(--pbl-student)]',
                   )}
                 >
-                  <GripVertical className="h-4 w-4 shrink-0 text-gray-400" />
-                  <span>{pair.right}</span>
+                  <GripVertical className="size-4 shrink-0 text-[var(--pbl-text-subtle)]" aria-hidden="true" />
+                  <span className="break-words">{pair.right}</span>
                 </button>
               );
             })}
             {relationMap.size === pairs.length && (
-              <p className="px-2 py-3 text-center text-xs text-gray-400">所有卡片已放置</p>
+              <p className="px-2 py-3 text-center text-xs text-[var(--pbl-text-muted)]">所有卡片已放置</p>
             )}
           </div>
         )}
@@ -589,7 +555,7 @@ function ShortAnswerQuestion({
               onChange={(e) => onChange(e.target.value)}
               disabled={disabled}
               placeholder="填写关键概念或关系"
-              className="w-full h-12 px-3 pr-24 rounded-xl border border-gray-200 dark:border-gray-600 text-sm focus:outline-none focus:border-violet-300 dark:focus:border-violet-600 focus:ring-2 focus:ring-violet-100 dark:focus:ring-violet-900/50 transition-all disabled:bg-gray-50 dark:disabled:bg-gray-800 disabled:text-gray-500 dark:bg-gray-800/50 dark:text-gray-200 dark:placeholder:text-gray-500"
+              className="h-14 w-full rounded-[10px] border border-[var(--pbl-border-strong)] bg-[var(--pbl-surface)] py-2 pl-14 pr-24 text-sm text-[var(--pbl-text)] transition-colors placeholder:text-[var(--pbl-text-subtle)] focus:border-[var(--pbl-student)] focus:outline-none focus:ring-2 focus:ring-[var(--pbl-student-border)] disabled:bg-[var(--pbl-surface-soft)] disabled:text-[var(--pbl-text-muted)]"
             />
           ) : (
             <textarea
@@ -597,45 +563,45 @@ function ShortAnswerQuestion({
               onChange={(e) => onChange(e.target.value)}
               disabled={disabled}
               placeholder={question.format === 'scenario_task' ? '写出你的判断、依据和解决思路' : t('quiz.inputPlaceholder')}
-              className="w-full min-h-[100px] p-3 pb-10 rounded-xl border border-gray-200 dark:border-gray-600 text-sm resize-none focus:outline-none focus:border-violet-300 dark:focus:border-violet-600 focus:ring-2 focus:ring-violet-100 dark:focus:ring-violet-900/50 transition-all disabled:bg-gray-50 dark:disabled:bg-gray-800 disabled:text-gray-500 dark:bg-gray-800/50 dark:text-gray-200 dark:placeholder:text-gray-500"
+              className="min-h-28 w-full resize-y rounded-[10px] border border-[var(--pbl-border-strong)] bg-[var(--pbl-surface)] p-3 pb-14 text-sm leading-6 text-[var(--pbl-text)] transition-colors placeholder:text-[var(--pbl-text-subtle)] focus:border-[var(--pbl-student)] focus:outline-none focus:ring-2 focus:ring-[var(--pbl-student-border)] disabled:bg-[var(--pbl-surface-soft)] disabled:text-[var(--pbl-text-muted)]"
             />
           )}
           <SpeechButton
             size="sm"
             disabled={disabled}
-            className="absolute bottom-3 left-3"
+            className="absolute bottom-1.5 left-1.5 min-h-11 min-w-11"
             onTranscription={(text) => {
               const cur = valueRef.current ?? '';
               onChange(cur + (cur ? ' ' : '') + text);
             }}
           />
-          <span className="absolute bottom-3 right-3 text-xs text-gray-300 dark:text-gray-600">
+          <span className="absolute bottom-3 right-3 text-xs text-[var(--pbl-text-subtle)]">
             {(value ?? '').length} {t('quiz.charCount')}
           </span>
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700 text-sm text-gray-700 dark:text-gray-300">
-            <p className="text-xs text-gray-400 dark:text-gray-500 mb-1">{t('quiz.yourAnswer')}</p>
+          <div className="rounded-[10px] border border-[var(--pbl-border)] bg-[var(--pbl-surface-soft)] p-3 text-sm leading-6 text-[var(--pbl-text)]">
+            <p className="mb-1 text-xs text-[var(--pbl-text-muted)]">{t('quiz.yourAnswer')}</p>
             {value ? (
               <QuizMathText text={value} />
             ) : (
-              <span className="text-gray-400 dark:text-gray-500 italic">
+              <span className="italic text-[var(--pbl-text-subtle)]">
                 {t('quiz.notAnswered')}
               </span>
             )}
           </div>
           {result.aiComment && (
-            <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-violet-50 dark:bg-violet-900/30 border border-violet-100 dark:border-violet-800">
+            <div className="flex items-start gap-2 rounded-[8px] border border-[var(--pbl-ai-border)] bg-[var(--pbl-ai-soft)] px-3 py-2">
               <div>
-                <p className="text-xs font-medium text-violet-600 dark:text-violet-400 mb-0.5">
+                <p className="mb-0.5 text-xs font-semibold text-[var(--pbl-ai)]">
                   {t('quiz.aiComment')}
                 </p>
-                <p className="text-xs text-violet-600/80 dark:text-violet-400/80">
+                <p className="text-xs leading-5 text-[var(--pbl-text-muted)]">
                   <QuizMathText text={result.aiComment} />
                 </p>
               </div>
-              <span className="ml-auto text-xs font-bold text-violet-600 dark:text-violet-400 shrink-0">
+              <span className="ml-auto shrink-0 text-xs font-bold text-[var(--pbl-ai)]">
                 {result.earned}/{question.points ?? 1}
                 {t('quiz.pointsSuffix')}
               </span>
@@ -670,49 +636,39 @@ function QuestionCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.05 }}
       className={cn(
-        'bg-white dark:bg-gray-800 rounded-2xl border p-5 relative overflow-hidden',
-        !isReview && 'border-gray-150 dark:border-gray-700 shadow-sm',
+        'relative overflow-hidden rounded-[14px] border bg-[var(--pbl-surface)] p-4 sm:p-5',
+        !isReview && 'border-[var(--pbl-border)]',
         isReview &&
           result.status === 'correct' &&
-          'border-emerald-200 dark:border-emerald-800 shadow-sm shadow-emerald-50 dark:shadow-emerald-900/20',
+          'border-[var(--pbl-success-border)]',
         isReview &&
           result.status === 'incorrect' &&
-          'border-red-200 dark:border-red-800 shadow-sm shadow-red-50 dark:shadow-red-900/20',
+          'border-[var(--pbl-danger-border)]',
       )}
     >
-      {/* Left accent */}
-      <div
-        className={cn(
-          'absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl',
-          !isReview && 'bg-violet-400',
-          isReview && result.status === 'correct' && 'bg-emerald-400',
-          isReview && result.status === 'incorrect' && 'bg-red-400',
-        )}
-      />
-
       {/* Header */}
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex items-start gap-3">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
           <span
             className={cn(
-              'w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold shrink-0',
+              'flex size-8 shrink-0 items-center justify-center rounded-[8px] text-xs font-bold',
               !isReview &&
-                'bg-violet-100 dark:bg-violet-900/50 text-violet-600 dark:text-violet-400',
+                'bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]',
               isReview &&
                 result.status === 'correct' &&
-                'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-600 dark:text-emerald-400',
+                'bg-[var(--pbl-success-soft)] text-[var(--pbl-success)]',
               isReview &&
                 result.status === 'incorrect' &&
-                'bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400',
+                'bg-[var(--pbl-danger-soft)] text-[var(--pbl-danger)]',
             )}
           >
             {index + 1}
           </span>
-          <div>
-            <div className="text-sm font-medium text-gray-800 dark:text-gray-100 leading-relaxed">
+          <div className="min-w-0">
+            <div className="break-words text-[15px] font-medium leading-7 text-[var(--pbl-text-strong)]">
               <QuizMathText text={question.question} allowDisplayMode />
             </div>
-            <p className="text-xs text-gray-400 mt-0.5">
+            <p className="mt-1 text-xs text-[var(--pbl-text-muted)]">
               {question.format === 'matching'
                 ? '拖拽匹配题'
                 : question.format === 'true_false'
@@ -732,9 +688,14 @@ function QuestionCard({
           </div>
         </div>
         {isReview && (
-          <div className="shrink-0 ml-2">
-            {result.status === 'correct' && <CheckCircle2 className="w-6 h-6 text-emerald-500" />}
-            {result.status === 'incorrect' && <XCircle className="w-6 h-6 text-red-400" />}
+          <div className={cn(
+            'ml-2 inline-flex min-h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold',
+            result.status === 'correct'
+              ? 'bg-[var(--pbl-success-soft)] text-[var(--pbl-success)]'
+              : 'bg-[var(--pbl-danger-soft)] text-[var(--pbl-danger)]',
+          )}>
+            {result.status === 'correct' ? <CheckCircle2 className="size-3.5" aria-hidden="true" /> : <XCircle className="size-3.5" aria-hidden="true" />}
+            {result.status === 'correct' ? '回答正确' : '需要复习'}
           </div>
         )}
       </div>
@@ -744,17 +705,17 @@ function QuestionCard({
 
       {/* Analysis (review only) */}
       {isReview && (question.analysis || onExplain) && (
-        <div className="mt-3 rounded-xl border border-cyan-100 bg-cyan-50/70 p-3 text-xs leading-relaxed text-cyan-950 dark:border-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-200">
-          <div className="flex items-start justify-between gap-3">
+        <div className="mt-4 rounded-[10px] border border-[var(--pbl-ai-border)] bg-[var(--pbl-ai-soft)] p-3 text-xs leading-6 text-[var(--pbl-text)]">
+          <div className="flex flex-col items-start justify-between gap-3 sm:flex-row">
             <div className="min-w-0">
               {question.analysis ? (
-                <><span className="font-bold">{t('quiz.analysis')}</span><QuizMathText text={question.analysis} allowDisplayMode /></>
+                <><span className="mr-1 font-bold text-[var(--pbl-ai)]">{t('quiz.analysis')}</span><QuizMathText text={question.analysis} allowDisplayMode /></>
               ) : (
-                <span className="text-stone-500">需要进一步梳理这道题？</span>
+                <span className="text-[var(--pbl-text-muted)]">需要进一步梳理这道题？</span>
               )}
             </div>
             {onExplain ? (
-              <button className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-cyan-950 px-3 font-bold text-white transition hover:bg-cyan-900" onClick={onExplain} type="button">
+              <button className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-[8px] border border-[var(--pbl-ai-border)] bg-[var(--pbl-surface)] px-3 font-semibold text-[var(--pbl-ai)] transition-colors hover:bg-[var(--pbl-ai-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pbl-ai)] focus-visible:ring-inset" onClick={onExplain} type="button">
                 <MessageCircleQuestion className="size-3.5" />助教讲解
               </button>
             ) : null}
@@ -779,61 +740,40 @@ function ScoreBanner({
   const correctCount = results.filter((r) => r.status === 'correct').length;
   const incorrectCount = results.filter((r) => r.status === 'incorrect').length;
 
-  const color = pct >= 80 ? 'emerald' : pct >= 60 ? 'amber' : 'red';
-  const colorMap = {
-    emerald: {
-      bg: 'from-emerald-500 to-teal-500',
-      shadow: 'shadow-emerald-200/50 dark:shadow-emerald-900/50',
-      ring: 'bg-emerald-400/30',
-      text: t('quiz.excellent'),
-    },
-    amber: {
-      bg: 'from-amber-500 to-yellow-500',
-      shadow: 'shadow-amber-200/50 dark:shadow-amber-900/50',
-      ring: 'bg-amber-400/30',
-      text: t('quiz.keepGoing'),
-    },
-    red: {
-      bg: 'from-red-500 to-rose-500',
-      shadow: 'shadow-red-200/50 dark:shadow-red-900/50',
-      ring: 'bg-red-400/30',
-      text: t('quiz.needsReview'),
-    },
-  };
-  const c = colorMap[color];
+  const summary = pct >= 80 ? t('quiz.excellent') : pct >= 60 ? t('quiz.keepGoing') : t('quiz.needsReview');
 
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
-      className={cn('rounded-2xl p-6 bg-gradient-to-r text-white shadow-lg', c.bg, c.shadow)}
+      className="rounded-[14px] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-5 sm:p-6"
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-5">
         <div>
-          <p className="text-white/80 text-sm font-medium">{c.text}</p>
-          <div className="flex items-baseline gap-1 mt-1">
+          <p className="text-sm font-semibold text-[var(--pbl-student)]">{summary}</p>
+          <div className="mt-1 flex items-baseline gap-1 text-[var(--pbl-text-strong)]">
             <span className="text-4xl font-bold">{score}</span>
-            <span className="text-white/60 text-lg">/ {total}</span>
+            <span className="text-lg text-[var(--pbl-text-muted)]">/ {total}</span>
           </div>
-          <div className="flex gap-3 mt-3 text-xs">
-            <span className="flex items-center gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5" /> {correctCount} {t('quiz.correct')}
+          <div className="mt-3 flex flex-wrap gap-3 text-xs">
+            <span className="flex items-center gap-1 text-[var(--pbl-success)]">
+              <CheckCircle2 className="size-3.5" aria-hidden="true" /> {correctCount} {t('quiz.correct')}
             </span>
-            <span className="flex items-center gap-1">
-              <XCircle className="w-3.5 h-3.5" /> {incorrectCount} {t('quiz.incorrect')}
+            <span className="flex items-center gap-1 text-[var(--pbl-danger)]">
+              <XCircle className="size-3.5" aria-hidden="true" /> {incorrectCount} {t('quiz.incorrect')}
             </span>
           </div>
         </div>
 
         {/* Percentage ring */}
-        <div className="relative w-20 h-20">
-          <svg className="w-20 h-20 -rotate-90" viewBox="0 0 80 80">
+        <div className="relative size-20 shrink-0" aria-label={`${pct}%`} role="img">
+          <svg className="size-20 -rotate-90" viewBox="0 0 80 80" aria-hidden="true">
             <circle
               cx="40"
               cy="40"
               r="34"
               fill="none"
-              stroke="rgba(255,255,255,0.2)"
+              stroke="var(--pbl-border)"
               strokeWidth="6"
             />
             <motion.circle
@@ -841,7 +781,7 @@ function ScoreBanner({
               cy="40"
               r="34"
               fill="none"
-              stroke="white"
+              stroke="var(--pbl-student)"
               strokeWidth="6"
               strokeLinecap="round"
               strokeDasharray={`${2 * Math.PI * 34}`}
@@ -851,7 +791,7 @@ function ScoreBanner({
             />
           </svg>
           <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-lg font-bold">{pct}%</span>
+            <span className="text-lg font-bold text-[var(--pbl-text-strong)]">{pct}%</span>
           </div>
         </div>
       </div>
@@ -861,8 +801,21 @@ function ScoreBanner({
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
+function isQuestionAnswered(question: QuizQuestion, answer: string | string[] | undefined): boolean {
+  if (!answer) return false;
+  if (!Array.isArray(answer)) return answer.trim().length > 0;
+  if (question.format !== 'matching') return answer.length > 0;
+
+  const expectedLeftIds = new Set((question.matchingPairs ?? []).map((pair) => pair.leftId));
+  const answeredLeftIds = new Set(answer.map((relation) => relation.split(':', 1)[0]).filter(Boolean));
+  return expectedLeftIds.size >= 2
+    && expectedLeftIds.size === answeredLeftIds.size
+    && [...expectedLeftIds].every((id) => answeredLeftIds.has(id));
+}
+
 export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
   const { t, locale } = useI18n();
+  const prefersReducedMotion = useReducedMotion();
   const lockedAttempt = useLockedKnowledgeLectureAttempt(sceneId, quizOutlineId);
   const lockedSubmitted = useMemo<SubmittedState>(() => {
     if (!lockedAttempt) return null;
@@ -934,23 +887,12 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
     [questions],
   );
 
-  const allAnswered = useMemo(() => {
-    return questions.every((q) => {
-      const a = answers[q.id];
-      if (!a) return false;
-      if (Array.isArray(a)) {
-        if (q.format === 'matching') {
-          const expectedLeftIds = new Set((q.matchingPairs ?? []).map((pair) => pair.leftId));
-          const answeredLeftIds = new Set(a.map((relation) => relation.split(':', 1)[0]).filter(Boolean));
-          return expectedLeftIds.size >= 2
-            && expectedLeftIds.size === answeredLeftIds.size
-            && [...expectedLeftIds].every((id) => answeredLeftIds.has(id));
-        }
-        return a.length > 0;
-      }
-      return (a as string).trim().length > 0;
-    });
-  }, [questions, answers]);
+  const answeredCount = useMemo(
+    () => questions.filter((question) => isQuestionAnswered(question, answers[question.id])).length,
+    [questions, answers],
+  );
+  const allAnswered = answeredCount === questions.length && questions.length > 0;
+  const remainingCount = questions.length - answeredCount;
 
   const handleSetAnswer = useCallback(
     (questionId: string, value: string | string[]) => {
@@ -1041,266 +983,258 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
   }, [results]);
 
   return (
-    <div className="w-full h-full bg-gradient-to-b from-gray-50 to-white dark:from-gray-900 dark:to-gray-900 overflow-hidden flex flex-col">
-      <AnimatePresence mode="wait">
-        {phase === 'not_started' && (
-          <motion.div
-            key="cover"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0, x: -20 }}
-            className="flex-1"
-          >
-            <QuizCover
-              questionCount={questions.length}
-              totalPoints={totalPoints}
-              onStart={() => setPhase('answering')}
-            />
-          </motion.div>
-        )}
-
-        {phase === 'answering' && (
-          <motion.div
-            key="answering"
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            className="flex-1 flex flex-col min-h-0"
-          >
-            {/* Header bar */}
-            <div className="flex items-center justify-between px-6 py-3 border-b border-gray-100 dark:border-gray-700 bg-white/80 dark:bg-gray-900/80 backdrop-blur shrink-0">
-              <div className="flex items-center gap-2">
-                <PieChart className="w-4 h-4 text-violet-500" />
-                <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">
-                  {t('quiz.answering')}
-                </span>
-                <span className="text-xs text-gray-400 ml-1">
-                  {
-                    questions.filter((question) => {
-                      const answer = answers[question.id];
-                      if (Array.isArray(answer) && question.format === 'matching') {
-                        return answer.length === (question.matchingPairs?.length ?? 0) && answer.length >= 2;
-                      }
-                      if (Array.isArray(answer)) return answer.length > 0;
-                      return typeof answer === 'string' && answer.trim().length > 0;
-                    }).length
-                  }{' '}
-                  / {questions.length}
-                </span>
-              </div>
-              <button
-                onClick={handleSubmit}
-                disabled={!allAnswered}
-                className={cn(
-                  'px-4 py-1.5 rounded-lg text-xs font-medium transition-all',
-                  allAnswered
-                    ? 'bg-gradient-to-r from-violet-500 to-purple-500 text-white shadow-sm hover:shadow-md hover:shadow-violet-200/50 dark:hover:shadow-violet-900/50 active:scale-[0.97]'
-                    : 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed',
-                )}
-              >
-                {t('quiz.submitAnswers')}
-              </button>
-            </div>
-
-            {/* Questions */}
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-              {questions.map((q, i) => {
-                if (q.format === 'matching') {
-                  return (
-                    <MatchingQuestion
-                      key={q.id}
-                      question={q}
-                      index={i}
-                      value={answers[q.id] as string[] | undefined}
-                      onChange={(v) => handleSetAnswer(q.id, v)}
-                    />
-                  );
-                }
-                if (q.type === 'single') {
-                  return (
-                    <SingleChoiceQuestion
-                      key={q.id}
-                      question={q}
-                      index={i}
-                      value={answers[q.id] as string | undefined}
-                      onChange={(v) => handleSetAnswer(q.id, v)}
-                    />
-                  );
-                }
-                if (q.type === 'multiple') {
-                  return (
-                    <MultipleChoiceQuestion
-                      key={q.id}
-                      question={q}
-                      index={i}
-                      value={answers[q.id] as string[] | undefined}
-                      onChange={(v) => handleSetAnswer(q.id, v)}
-                    />
-                  );
-                }
-                return (
-                  <ShortAnswerQuestion
-                    key={q.id}
-                    question={q}
-                    index={i}
-                    value={answers[q.id] as string | undefined}
-                    onChange={(v) => handleSetAnswer(q.id, v)}
-                  />
-                );
-              })}
-            </div>
-          </motion.div>
-        )}
-
-        {phase === 'grading' && (
-          <motion.div
-            key="grading"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="flex-1 flex flex-col items-center justify-center gap-5"
-          >
+    <MotionConfig reducedMotion={prefersReducedMotion ? 'always' : 'user'}>
+      <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--pbl-bg)] text-[var(--pbl-text)]">
+        <AnimatePresence mode="wait">
+          {phase === 'not_started' && (
             <motion.div
-              animate={{ rotate: 360 }}
-              transition={{ repeat: Infinity, duration: 1.5, ease: 'linear' }}
+              key="cover"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="min-h-0 flex-1"
             >
-              <Loader2 className="w-10 h-10 text-violet-500" />
+              <QuizCover
+                questionCount={questions.length}
+                totalPoints={totalPoints}
+                onStart={() => setPhase('answering')}
+              />
             </motion.div>
-            <div className="text-center">
-              <p className="text-base font-semibold text-gray-700 dark:text-gray-200">
-                正在批阅
-              </p>
-              <p className="text-sm text-gray-400 mt-1">{t('quiz.aiGradingWait')}</p>
-            </div>
-            <div className="flex gap-1 mt-2">
-              {[0, 1, 2].map((i) => (
-                <motion.div
-                  key={i}
-                  className="w-2 h-2 rounded-full bg-violet-400"
-                  animate={{ opacity: [0.3, 1, 0.3] }}
-                  transition={{
-                    repeat: Infinity,
-                    duration: 1.2,
-                    delay: i * 0.2,
-                  }}
-                />
-              ))}
-            </div>
-          </motion.div>
-        )}
+          )}
 
-        {phase === 'reviewing' && (
-          <motion.div
-            key="reviewing"
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="flex-1 flex flex-col min-h-0"
-          >
-            {/* Header bar */}
-            <div className="flex items-center justify-between px-6 py-3 border-b border-gray-100 dark:border-gray-700 bg-white/80 dark:bg-gray-900/80 backdrop-blur shrink-0">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">
-                  {t('quiz.quizReport')}
-                </span>
-              </div>
-              <span className="flex items-center gap-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">
-                <LockKeyhole className="w-3.5 h-3.5" />
-                本小节测验仅可作答一次
-              </span>
-            </div>
-
-            {/* Results */}
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-              <ScoreBanner score={earnedScore} total={totalPoints} results={results} />
-
-              {questions.map((q, i) => {
-                const r = resultMap[q.id];
-                if (q.format === 'matching') {
-                  return (
-                    <MatchingQuestion
-                      key={q.id}
-                      question={q}
-                      index={i}
-                      value={answers[q.id] as string[] | undefined}
-                      onChange={() => {}}
-                      disabled
-                      result={r}
-                      onExplain={() => handleExplain(q.id)}
-                    />
-                  );
-                }
-                if (q.type === 'single') {
-                  return (
-                    <SingleChoiceQuestion
-                      key={q.id}
-                      question={q}
-                      index={i}
-                      value={answers[q.id] as string | undefined}
-                      onChange={() => {}}
-                      disabled
-                      result={r}
-                      onExplain={() => handleExplain(q.id)}
-                    />
-                  );
-                }
-                if (q.type === 'multiple') {
-                  return (
-                    <MultipleChoiceQuestion
-                      key={q.id}
-                      question={q}
-                      index={i}
-                      value={answers[q.id] as string[] | undefined}
-                      onChange={() => {}}
-                      disabled
-                      result={r}
-                      onExplain={() => handleExplain(q.id)}
-                    />
-                  );
-                }
-                return (
-                  <ShortAnswerQuestion
-                    key={q.id}
-                    question={q}
-                    index={i}
-                    value={answers[q.id] as string | undefined}
-                    onChange={() => {}}
-                    disabled
-                    result={r}
-                    onExplain={() => handleExplain(q.id)}
-                  />
-                );
-              })}
-
-              <div className="sticky bottom-4 z-10 ml-auto max-w-xl rounded-2xl border border-cyan-200 bg-white/95 p-4 shadow-[0_14px_36px_rgba(8,51,68,.16)] backdrop-blur dark:border-cyan-800 dark:bg-gray-900/95">
-                  <div className="flex items-start gap-3">
-                    <span className="grid size-9 shrink-0 place-items-center rounded-full bg-cyan-950 text-white">
-                      <MessageCircleQuestion className="size-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-bold text-stone-900 dark:text-stone-100">完成查看后，再继续课程</p>
-                      <p className="mt-1 text-xs leading-5 text-stone-500">
-                        {hasIncorrectAnswer
-                          ? '请先查看错题解析，需要时打开助教讲解。只有点击下方按钮后，课程才会继续。'
-                          : '请确认本次小测结果。只有点击下方按钮后，课程才会继续。'}
-                      </p>
-                      <button
-                        className="mt-3 inline-flex h-10 items-center gap-2 rounded-[10px] bg-cyan-950 px-4 text-sm font-bold text-white transition hover:bg-cyan-900 disabled:cursor-default disabled:bg-emerald-600"
-                        disabled={reviewReleased}
-                        onClick={handleContinueAfterReview}
-                        type="button"
-                      >
-                        {reviewReleased ? <CheckCircle2 className="size-4" /> : null}
-                        {reviewReleased ? '已确认理解' : '我已经理解，可以继续'}
-                        {!reviewReleased ? <ArrowRight className="size-4" /> : null}
-                      </button>
+          {phase === 'answering' && (
+            <motion.div
+              key="answering"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <header className="shrink-0 border-b border-[var(--pbl-border)] bg-[var(--pbl-surface)] px-4 py-3 sm:px-6">
+                <div className="mx-auto flex max-w-4xl items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <ClipboardCheck className="size-4 shrink-0 text-[var(--pbl-student)]" aria-hidden="true" />
+                      <h3 className="truncate text-sm font-semibold text-[var(--pbl-text-strong)]">{t('quiz.answering')}</h3>
                     </div>
+                    <p className="mt-1 text-xs text-[var(--pbl-text-muted)]" aria-live="polite">
+                      已完成 {answeredCount} / {questions.length}
+                    </p>
                   </div>
+                  <span className="shrink-0 text-xs font-medium text-[var(--pbl-text-muted)]">
+                    {remainingCount > 0 ? `还剩 ${remainingCount} 题` : '已全部完成'}
+                  </span>
                 </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+                <div className="mx-auto mt-3 h-1 max-w-4xl overflow-hidden rounded-full bg-[var(--pbl-surface-soft)]" aria-hidden="true">
+                  <div
+                    className="h-full rounded-full bg-[var(--pbl-student)] transition-[width] duration-200 motion-reduce:transition-none"
+                    style={{ width: `${questions.length > 0 ? (answeredCount / questions.length) * 100 : 0}%` }}
+                  />
+                </div>
+              </header>
+
+              <main className="flex-1 overflow-y-auto">
+                <div className="mx-auto max-w-4xl space-y-4 px-3 py-4 sm:px-6 sm:py-6">
+                  {questions.map((q, i) => {
+                    if (q.format === 'matching') {
+                      return (
+                        <MatchingQuestion
+                          key={q.id}
+                          question={q}
+                          index={i}
+                          value={answers[q.id] as string[] | undefined}
+                          onChange={(v) => handleSetAnswer(q.id, v)}
+                        />
+                      );
+                    }
+                    if (q.type === 'single') {
+                      return (
+                        <SingleChoiceQuestion
+                          key={q.id}
+                          question={q}
+                          index={i}
+                          value={answers[q.id] as string | undefined}
+                          onChange={(v) => handleSetAnswer(q.id, v)}
+                        />
+                      );
+                    }
+                    if (q.type === 'multiple') {
+                      return (
+                        <MultipleChoiceQuestion
+                          key={q.id}
+                          question={q}
+                          index={i}
+                          value={answers[q.id] as string[] | undefined}
+                          onChange={(v) => handleSetAnswer(q.id, v)}
+                        />
+                      );
+                    }
+                    return (
+                      <ShortAnswerQuestion
+                        key={q.id}
+                        question={q}
+                        index={i}
+                        value={answers[q.id] as string | undefined}
+                        onChange={(v) => handleSetAnswer(q.id, v)}
+                      />
+                    );
+                  })}
+                </div>
+              </main>
+
+              <footer className="shrink-0 border-t border-[var(--pbl-border)] bg-[var(--pbl-surface)] px-4 py-3 sm:px-6">
+                <div className="mx-auto flex max-w-4xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs leading-5 text-[var(--pbl-text-muted)]" aria-live="polite">
+                    {allAnswered ? '所有题目均已作答，请检查后提交。' : `完成剩余 ${remainingCount} 题后即可提交。`}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleSubmit}
+                    disabled={!allAnswered}
+                    className={cn(
+                      'inline-flex min-h-11 items-center justify-center rounded-[10px] px-5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pbl-student)] focus-visible:ring-offset-2',
+                      allAnswered
+                        ? 'bg-[var(--pbl-student)] text-white hover:bg-[var(--pbl-student-hover)]'
+                        : 'cursor-not-allowed bg-[var(--pbl-surface-soft)] text-[var(--pbl-text-subtle)]',
+                    )}
+                  >
+                    {t('quiz.submitAnswers')}
+                  </button>
+                </div>
+              </footer>
+            </motion.div>
+          )}
+
+          {phase === 'grading' && (
+            <motion.div
+              key="grading"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex flex-1 flex-col items-center justify-center gap-4 px-6"
+              role="status"
+              aria-live="polite"
+            >
+              <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.5, ease: 'linear' }}>
+                <Loader2 className="size-9 text-[var(--pbl-student)]" aria-hidden="true" />
+              </motion.div>
+              <div className="text-center">
+                <p className="text-base font-semibold text-[var(--pbl-text-strong)]">正在批阅</p>
+                <p className="mt-1 text-sm text-[var(--pbl-text-muted)]">{t('quiz.aiGradingWait')}</p>
+              </div>
+            </motion.div>
+          )}
+
+          {phase === 'reviewing' && (
+            <motion.div
+              key="reviewing"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <header className="shrink-0 border-b border-[var(--pbl-border)] bg-[var(--pbl-surface)] px-4 py-3 sm:px-6">
+                <div className="mx-auto flex max-w-4xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="size-4 text-[var(--pbl-success)]" aria-hidden="true" />
+                    <h3 className="text-sm font-semibold text-[var(--pbl-text-strong)]">{t('quiz.quizReport')}</h3>
+                  </div>
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--pbl-text-muted)]">
+                    <LockKeyhole className="size-3.5" aria-hidden="true" />
+                    本小节测验仅可作答一次
+                  </span>
+                </div>
+              </header>
+
+              <main className="flex-1 overflow-y-auto">
+                <div className="mx-auto max-w-4xl space-y-4 px-3 py-4 sm:px-6 sm:py-6">
+                  <ScoreBanner score={earnedScore} total={totalPoints} results={results} />
+
+                  {questions.map((q, i) => {
+                    const r = resultMap[q.id];
+                    if (q.format === 'matching') {
+                      return (
+                        <MatchingQuestion
+                          key={q.id}
+                          question={q}
+                          index={i}
+                          value={answers[q.id] as string[] | undefined}
+                          onChange={() => {}}
+                          disabled
+                          result={r}
+                          onExplain={() => handleExplain(q.id)}
+                        />
+                      );
+                    }
+                    if (q.type === 'single') {
+                      return (
+                        <SingleChoiceQuestion
+                          key={q.id}
+                          question={q}
+                          index={i}
+                          value={answers[q.id] as string | undefined}
+                          onChange={() => {}}
+                          disabled
+                          result={r}
+                          onExplain={() => handleExplain(q.id)}
+                        />
+                      );
+                    }
+                    if (q.type === 'multiple') {
+                      return (
+                        <MultipleChoiceQuestion
+                          key={q.id}
+                          question={q}
+                          index={i}
+                          value={answers[q.id] as string[] | undefined}
+                          onChange={() => {}}
+                          disabled
+                          result={r}
+                          onExplain={() => handleExplain(q.id)}
+                        />
+                      );
+                    }
+                    return (
+                      <ShortAnswerQuestion
+                        key={q.id}
+                        question={q}
+                        index={i}
+                        value={answers[q.id] as string | undefined}
+                        onChange={() => {}}
+                        disabled
+                        result={r}
+                        onExplain={() => handleExplain(q.id)}
+                      />
+                    );
+                  })}
+                </div>
+              </main>
+
+              <footer className="shrink-0 border-t border-[var(--pbl-border)] bg-[var(--pbl-surface)] px-4 py-3 sm:px-6">
+                <div className="mx-auto flex max-w-4xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-[var(--pbl-text-strong)]">完成查看后，再继续课程</p>
+                    <p className="mt-1 text-xs leading-5 text-[var(--pbl-text-muted)]">
+                      {hasIncorrectAnswer
+                        ? '请查看错题解析，需要时打开助教讲解。确认理解后课程才会继续。'
+                        : '请确认本次小测结果，确认理解后课程才会继续。'}
+                    </p>
+                  </div>
+                  <button
+                    className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-[10px] bg-[var(--pbl-student)] px-5 text-sm font-semibold text-white transition-colors hover:bg-[var(--pbl-student-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pbl-student)] focus-visible:ring-offset-2 disabled:cursor-default disabled:bg-[var(--pbl-success)]"
+                    disabled={reviewReleased}
+                    onClick={handleContinueAfterReview}
+                    type="button"
+                  >
+                    {reviewReleased ? <CheckCircle2 className="size-4" aria-hidden="true" /> : null}
+                    {reviewReleased ? '已确认理解' : '我已经理解，可以继续'}
+                    {!reviewReleased ? <ArrowRight className="size-4" aria-hidden="true" /> : null}
+                  </button>
+                </div>
+              </footer>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </MotionConfig>
   );
 }

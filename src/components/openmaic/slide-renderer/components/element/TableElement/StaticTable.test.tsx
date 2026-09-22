@@ -38,6 +38,8 @@ describe('StaticTable visual target anchors', () => {
     expect(html).toContain('data-slide-cell-id="secondary"');
     expect(html).toContain('data-cell-id="primary"');
     expect(html).toContain('data-cell-id="secondary"');
+    expect(html).toContain('data-slide-row-index="0"');
+    expect(html).toContain('data-slide-row-index="1"');
   });
 
   it('keeps single-line body text within the default 30px row contract', () => {

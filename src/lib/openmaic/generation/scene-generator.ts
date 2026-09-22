@@ -1027,7 +1027,7 @@ export async function generateLegacyCustomizedSlideContent(
  */
 type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['questionTypes'][number];
 
-export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v2';
+export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v3';
 
 const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
   single: 'single_choice',
@@ -1038,6 +1038,62 @@ const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
   fill_blank: 'fill_blank',
   scenario_task: 'scenario_task',
 };
+
+function generatedQuizText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function validateGeneratedQuizQuality(questions: unknown[], title: string): void {
+  const issues: string[] = [];
+  const seenIds = new Set<string>();
+
+  questions.forEach((value, index) => {
+    const questionNumber = index + 1;
+    const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+    const id = generatedQuizText(record.id) || `q_${questionNumber}`;
+    if (seenIds.has(id)) issues.push(`duplicate question id "${id}"`);
+    seenIds.add(id);
+
+    const analysis = generatedQuizText(record.analysis) || generatedQuizText(record.explanation);
+    if (!analysis) issues.push(`question ${questionNumber} has empty analysis`);
+
+    if (!Array.isArray(record.options)) return;
+    const optionRecords = record.options.map((option, optionIndex) => {
+      if (typeof option === 'string') {
+        return { value: String.fromCharCode(65 + optionIndex), label: option.trim() };
+      }
+      const optionRecord = option && typeof option === 'object' ? option as Record<string, unknown> : {};
+      return {
+        value: generatedQuizText(optionRecord.value) || String.fromCharCode(65 + optionIndex),
+        label: generatedQuizText(optionRecord.label)
+          || generatedQuizText(optionRecord.text)
+          || generatedQuizText(optionRecord.value),
+      };
+    });
+    const labels = optionRecords.map((option) => option.label);
+    if (new Set(labels).size !== labels.length) {
+      issues.push(`question ${questionNumber} has duplicate trimmed option labels`);
+    }
+
+    const rawType = generatedQuizText(record.format) || generatedQuizText(record.type);
+    if (!/multiple|multi_choice|多选/iu.test(rawType)) return;
+    const rawAnswer = record.answer ?? record.correctAnswer ?? record.correct_answer;
+    const answerTokens = (Array.isArray(rawAnswer) ? rawAnswer : [rawAnswer])
+      .map((answer) => generatedQuizText(String(answer ?? '')))
+      .filter(Boolean);
+    const correctValues = new Set(answerTokens.flatMap((answer) => {
+      const option = optionRecords.find((candidate) => candidate.value === answer || candidate.label === answer);
+      return option ? [option.value] : [];
+    }));
+    if (optionRecords.length > 0 && correctValues.size === optionRecords.length) {
+      issues.push(`question ${questionNumber} marks every multiple-choice option as correct`);
+    }
+  });
+
+  if (issues.length > 0) {
+    throw new Error(`Quiz "${title}" failed deterministic quality checks: ${issues.join('; ')}`);
+  }
+}
 
 async function generateQuizContent(
   outline: SceneOutline,
@@ -1095,6 +1151,7 @@ async function generateQuizContent(
     if (generatedQuestions.length !== quizConfig.questionCount) {
       throw new Error(`Quiz "${outline.title}" returned ${generatedQuestions.length}/${quizConfig.questionCount} questions`);
     }
+    validateGeneratedQuizQuality(generatedQuestions, outline.title);
     const normalized = normalizeQuizQuestions(generatedQuestions, outline.knowledgePointIds?.length
       ? { allowedKnowledgePointIds: outline.knowledgePointIds }
       : {});

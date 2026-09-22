@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * TTS (Text-to-Speech) Provider Implementation
  *
@@ -46,7 +47,7 @@
  *    ): Promise<TTSGenerationResult> {
  *      const baseUrl = config.baseUrl || TTS_PROVIDERS['elevenlabs-tts'].defaultBaseUrl;
  *
- *      const response = await fetch(`${baseUrl}/text-to-speech/${config.voice}`, {
+ *      const response = await proxyFetch(`${baseUrl}/text-to-speech/${config.voice}`, {
  *        method: 'POST',
  *        headers: {
  *          'xi-api-key': config.apiKey!,
@@ -217,7 +218,7 @@ async function generateOpenAITTS(
   const baseUrl = config.baseUrl || TTS_PROVIDERS['openai-tts'].defaultBaseUrl;
 
   // Use gpt-4o-mini-tts for best quality and intelligent realtime applications
-  const response = await fetch(`${baseUrl}/audio/speech`, {
+  const response = await proxyFetch(`${baseUrl}/audio/speech`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
@@ -261,7 +262,7 @@ async function generateLemonadeTTS(
   const modelId = config.modelId || TTS_PROVIDERS['lemonade-tts'].defaultModelId;
   const voice = config.voice || 'af_heart';
 
-  const response = await fetch(`${baseUrl}/audio/speech`, {
+  const response = await proxyFetch(`${baseUrl}/audio/speech`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -444,7 +445,7 @@ async function postVoxCPMVLLMOmni(
     }
   }
 
-  return fetch(getVLLMOmniSpeechUrl(baseUrl), {
+  return proxyFetch(getVLLMOmniSpeechUrl(baseUrl), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -511,7 +512,7 @@ async function postVoxCPMPythonAPI(
     }
   }
 
-  return fetch(`${baseUrl}/tts/upload`, {
+  return proxyFetch(`${baseUrl}/tts/upload`, {
     method: 'POST',
     headers: getBackendAuthHeaders(apiKey),
     body: formData,
@@ -546,7 +547,7 @@ async function postVoxCPMNanoVLLM(
     }
   }
 
-  return fetch(`${baseUrl}/generate`, {
+  return proxyFetch(`${baseUrl}/generate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -589,7 +590,7 @@ async function generateAzureTTS(
     </speak>
   `.trim();
 
-  const response = await fetch(`${baseUrl}/cognitiveservices/v1`, {
+  const response = await proxyFetch(`${baseUrl}/cognitiveservices/v1`, {
     method: 'POST',
     headers: {
       'Ocp-Apim-Subscription-Key': config.apiKey!,
@@ -617,7 +618,7 @@ async function generateAzureTTS(
 async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTSGenerationResult> {
   const baseUrl = config.baseUrl || TTS_PROVIDERS['glm-tts'].defaultBaseUrl;
 
-  const response = await fetch(`${baseUrl}/audio/speech`, {
+  const response = await proxyFetch(`${baseUrl}/audio/speech`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
@@ -686,7 +687,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   // 返回,无需再从 OSS 结果 CDN 下载完整音频。部分网络环境(如仅 IPv6 出站
   // 的校园网)无法访问 IPv4-only 的 dashscope-result CDN,会拿到门户劫持页
   // 而非音频字节,导致客户端"音频无法解码"。
-  const response = await fetch(endpoint, {
+  const response = await proxyFetch(endpoint, {
     method: 'POST',
     signal: config.signal,
     headers: {
@@ -739,7 +740,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
     };
   }
   return {
-    audio: normalizePlayableWav(await downloadQwenAudio(data)),
+    audio: normalizePlayableWav(await downloadQwenAudio(data, config.signal)),
     format: 'wav', // Qwen3 TTS returns WAV format
   };
 }
@@ -823,7 +824,7 @@ function decodeBase64(base64: string): Uint8Array {
 }
 
 /** 从 DashScope 响应提取 OSS 音频 URL 并下载,校验确为音频字节。 */
-async function downloadQwenAudio(data: unknown): Promise<Uint8Array> {
+async function downloadQwenAudio(data: unknown, signal?: AbortSignal): Promise<Uint8Array> {
   const audioUrl = (data as { output?: { audio?: { url?: unknown } } })?.output?.audio?.url;
   if (!audioUrl) {
     throw new Error(`Qwen TTS error: No audio URL in response. Response: ${JSON.stringify(data)}`);
@@ -833,12 +834,12 @@ async function downloadQwenAudio(data: unknown): Promise<Uint8Array> {
   let arrayBuffer: ArrayBuffer;
   try {
     arrayBuffer = await withGenerationRetry(async () => {
-      const audioResponse = await fetch(audioUrl as string);
+      const audioResponse = await proxyFetch(audioUrl as string, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) });
       if (!audioResponse.ok) throw Object.assign(new Error(`Failed to download audio: HTTP ${audioResponse.status}`), {
         statusCode: audioResponse.status, retryAfterMs: retryAfterMilliseconds(audioResponse.headers),
       });
       return audioResponse.arrayBuffer();
-    }, { label: 'TTS audio download', maxRetries: 2 });
+    }, { label: 'TTS audio download', maxRetries: 2, signal });
   } catch (error) {
     throw Object.assign(new Error('TTS 音频下载失败，不能通过重新合成恢复', { cause: error }), { isRetryable: false });
   }
@@ -866,7 +867,7 @@ async function generateMiniMaxTTS(
     '',
   );
   const endpoint = baseUrl.endsWith('/v1/t2a_v2') ? baseUrl : `${baseUrl}/v1/t2a_v2`;
-  const response = await fetch(endpoint, {
+  const response = await proxyFetch(endpoint, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
@@ -939,7 +940,7 @@ async function generateElevenLabsTTS(
   };
   const outputFormat = outputFormatMap[requestedFormat] || outputFormatMap.mp3;
 
-  const response = await fetch(
+  const response = await proxyFetch(
     `${baseUrl}/text-to-speech/${encodeURIComponent(config.voice)}?output_format=${outputFormat}`,
     {
       method: 'POST',
@@ -1022,7 +1023,7 @@ async function generateDoubaoTTS(
   const baseUrl = config.baseUrl || TTS_PROVIDERS['doubao-tts'].defaultBaseUrl;
   const speechRate = Math.round(((config.speed || 1.0) - 1.0) * 100);
 
-  const response = await fetch(`${baseUrl}/unidirectional`, {
+  const response = await proxyFetch(`${baseUrl}/unidirectional`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

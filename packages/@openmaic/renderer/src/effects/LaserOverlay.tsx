@@ -5,56 +5,53 @@ import type { PercentageGeometry } from '../utils/geometry';
 
 export interface LaserOverlayProps {
   geometry: PercentageGeometry;
+  /** Origin for a newly mounted target transition. Omit for immediate placement. */
+  previousGeometry?: PercentageGeometry | null;
+  /** @deprecated Waypoint timing belongs to narration playback. */
   waypointGeometries?: PercentageGeometry[];
   color?: string;
+  /** @deprecated Visibility lifetime is controlled by playback. */
   duration?: number;
+  transitionDurationMs?: number;
+  /** Place the dot just before text instead of covering its glyphs. */
+  avoidCoveringTarget?: boolean;
+  /** Apply the same placement rule to the previous transition origin. */
+  previousAvoidCoveringTarget?: boolean;
+}
+
+function pointerPosition(geometry: PercentageGeometry, avoidCoveringTarget: boolean) {
+  return avoidCoveringTarget
+    ? { x: Math.max(0.8, geometry.x - 0.8), y: geometry.centerY }
+    : { x: geometry.centerX, y: geometry.centerY };
 }
 
 export function LaserOverlay({
   geometry,
-  waypointGeometries = [],
+  previousGeometry,
+  waypointGeometries: _waypointGeometries = [],
   color = '#ff3b30',
   duration: _duration = 2500,
+  transitionDurationMs = 150,
+  avoidCoveringTarget = false,
+  previousAvoidCoveringTarget = false,
 }: LaserOverlayProps) {
-  const { centerX, centerY } = geometry;
-  const path = [geometry, ...waypointGeometries];
-
-  const startPos = {
-    x: centerX > 50 ? 105 : -5,
-    y: centerY > 50 ? 105 : -5,
-  };
-  const travelDuration = waypointGeometries.length > 0
-    ? Math.max(0.8, (_duration - 300) / 1000)
-    : 0.45;
-  const entryRatio = waypointGeometries.length > 0
-    ? Math.min(0.25, 0.45 / travelDuration)
-    : 1;
-  const times = waypointGeometries.length > 0
-    ? [
-        0,
-        entryRatio,
-        ...waypointGeometries.map((_point, index) => (
-          entryRatio + ((index + 1) / waypointGeometries.length) * (1 - entryRatio)
-        )),
-      ]
-    : [0, 1];
-  const leftPath = [`${startPos.x}%`, ...path.map((point) => `${point.centerX}%`)];
-  const topPath = [`${startPos.y}%`, ...path.map((point) => `${point.centerY}%`)];
+  const position = pointerPosition(geometry, avoidCoveringTarget);
+  const previousPosition = previousGeometry
+    ? pointerPosition(previousGeometry, previousAvoidCoveringTarget)
+    : position;
+  const travelDuration = Math.max(0, transitionDurationMs) / 1000;
 
   return (
     <motion.div
-      key={`laser-${centerX}-${centerY}`}
-      initial={{ opacity: 0, left: `${startPos.x}%`, top: `${startPos.y}%` }}
-      animate={{ opacity: 1, left: leftPath, top: topPath }}
+      initial={{ opacity: 0, left: `${previousPosition.x}%`, top: `${previousPosition.y}%` }}
+      animate={{ opacity: 1, left: `${position.x}%`, top: `${position.y}%` }}
       exit={{
         opacity: 0,
-        left: `${startPos.x}%`,
-        top: `${startPos.y}%`,
         transition: { duration: 0.25, ease: [0.4, 0, 1, 1] },
       }}
       transition={{
-        left: { duration: travelDuration, ease: 'easeInOut', times },
-        top: { duration: travelDuration, ease: 'easeInOut', times },
+        left: { duration: travelDuration, ease: 'easeInOut' },
+        top: { duration: travelDuration, ease: 'easeInOut' },
         opacity: { duration: 0.15 },
       }}
       style={{ position: 'absolute', zIndex: 101, pointerEvents: 'none' }}

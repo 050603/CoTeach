@@ -184,6 +184,11 @@ export function formatCourseGenerationErrorForTeacher(error: unknown): string {
   ) {
     return "AI 课程生成在等待模型完整输出时超时；已经完成的阶段结果均已保留，可从断点继续生成。";
   }
+  // Also explain historical socket failures persisted with retryable=false by
+  // older builds. This changes the diagnostic, not the durable retry budget.
+  if (/other side closed|UND_ERR_SOCKET/i.test(message)) {
+    return "AI 课程生成与模型服务的网络连接中断；已经完成的阶段结果均已保留，请点击继续生成。";
+  }
   if (isRetryableGenerationError(error)) {
     return "AI 课程生成服务连续多次未能完成当前生成阶段；已经完成的阶段结果均已保留，请稍后继续。";
   }

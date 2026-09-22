@@ -26,6 +26,7 @@
  */
 
 import { createOpenAI } from '@ai-sdk/openai';
+import { shouldBypassProxy } from '@/lib/network/proxy-routing';
 import { createAzure } from '@ai-sdk/azure';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
@@ -1687,16 +1688,22 @@ function createHttpProxyFetch(proxyUrl: string): typeof fetch {
   let agent: unknown;
 
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    if (shouldBypassProxy(url)) return globalThis.fetch(input, init);
     const { ProxyAgent, fetch: undiciFetch } = (await import(
       /* webpackIgnore: true */ 'undici'
     )) as {
-      ProxyAgent: new (url: string) => unknown;
+      ProxyAgent: new (options: { uri: string; pipelining: number }) => unknown;
       fetch: (
         input: string | URL | Request,
         init?: Record<string, unknown>,
       ) => Promise<unknown>;
     };
-    agent ??= new ProxyAgent(proxyUrl);
+    // Long model responses can keep a NAT64 tunnel alive across many pages.
+    // Do not start a new generation on a tunnel whose upstream lifetime may
+    // already be exhausted. Undici's pipelining=0 closes after the complete
+    // response (including its stream), so every request gets a fresh tunnel.
+    agent ??= new ProxyAgent({ uri: proxyUrl, pipelining: 0 });
     const response = await undiciFetch(input, {
       ...(init as Record<string, unknown>),
       dispatcher: agent,
@@ -1749,13 +1756,19 @@ export function getModel(config: ModelConfig): ModelWithInfo {
   );
 
   let model: LanguageModel;
+  const managedProxy = typeof window === 'undefined'
+    ? process.env.OPENPBL_OUTBOUND_PROXY?.trim()
+    : undefined;
+  const transportFetch = config.proxy
+    ? createHttpProxyFetch(config.proxy)
+    : config.fetchImpl ?? (managedProxy ? createHttpProxyFetch(managedProxy) : undefined);
 
   switch (providerType) {
     case 'azure': {
       const azure = createAzure({
         apiKey: effectiveApiKey,
         baseURL: normalizeAzureBaseUrl(effectiveBaseUrl),
-        ...(config.fetchImpl ? { fetch: config.fetchImpl } : {}),
+        ...(transportFetch ? { fetch: transportFetch } : {}),
       });
       model = azure(config.modelId);
       break;
@@ -1766,9 +1779,6 @@ export function getModel(config: ModelConfig): ModelWithInfo {
         apiKey: effectiveApiKey,
         baseURL: effectiveBaseUrl,
       };
-      const transportFetch = config.proxy
-        ? createHttpProxyFetch(config.proxy)
-        : config.fetchImpl;
 
       // For OpenAI-compatible providers (not native OpenAI), add a fetch
       // wrapper that injects vendor-specific thinking params into the HTTP
@@ -1946,10 +1956,10 @@ export function getModel(config: ModelConfig): ModelWithInfo {
             }
           }
 
-          return (config.fetchImpl ?? globalThis.fetch)(url, init);
+          return (transportFetch ?? globalThis.fetch)(url, init);
         }) as typeof globalThis.fetch;
-      } else if (config.fetchImpl) {
-        anthropicOptions.fetch = config.fetchImpl;
+      } else if (transportFetch) {
+        anthropicOptions.fetch = transportFetch;
       }
 
       const anthropic = createAnthropic(anthropicOptions);
@@ -1960,6 +1970,7 @@ export function getModel(config: ModelConfig): ModelWithInfo {
     case 'bedrock': {
       const bedrock = createAmazonBedrock({
         region: resolveBedrockRegion(),
+        ...(transportFetch ? { fetch: transportFetch } : {}),
         ...(effectiveApiKey ? { apiKey: effectiveApiKey } : { credentialProvider: createBedrockCredentialProvider() }),
       });
       model = bedrock(config.modelId);
@@ -1971,11 +1982,7 @@ export function getModel(config: ModelConfig): ModelWithInfo {
         apiKey: effectiveApiKey,
         baseURL: effectiveBaseUrl,
       };
-      if (config.proxy) {
-        googleOptions.fetch = createHttpProxyFetch(config.proxy);
-      } else if (config.fetchImpl) {
-        googleOptions.fetch = config.fetchImpl;
-      }
+      if (transportFetch) googleOptions.fetch = transportFetch;
       const google = createGoogleGenerativeAI(googleOptions);
       model = google.chat(config.modelId);
       break;

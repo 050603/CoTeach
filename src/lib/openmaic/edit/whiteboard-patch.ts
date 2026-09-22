@@ -124,7 +124,11 @@ export function prepareWhiteboardPatch(
         if (before.audioId !== undefined) candidate.audioId = before.audioId;
         if (before.audioUrl !== undefined) candidate.audioUrl = before.audioUrl;
         if (before.audioInvalidated !== undefined) candidate.audioInvalidated = before.audioInvalidated;
-      } else candidate.audioInvalidated = true;
+        if (before.speechAlignment !== undefined) candidate.speechAlignment = before.speechAlignment;
+      } else {
+        delete candidate.speechAlignment;
+        candidate.audioInvalidated = true;
+      }
     }
     if (candidate.type === 'wb_draw_chart' && (candidate.data.series.length !== candidate.data.legends.length || candidate.data.series.some((series) => series.length !== candidate.data.labels.length))) {
       throw new Error(`第 ${index + 1} 步的图表标签、图例和数据数量不一致。`);

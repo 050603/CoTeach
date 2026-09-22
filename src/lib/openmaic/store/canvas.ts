@@ -37,6 +37,8 @@ export interface LaserOptions {
   duration?: number; // Duration (milliseconds)
   selector?: VisualTargetSelector; // Optional table-cell or exact-text target
   waypoints?: LaserWaypoint[]; // Optional ordered sweep targets
+  previousTarget?: LaserWaypoint; // Origin for a narration-timed target change
+  transitionDurationMs?: number; // 0 on initial placement/seek, 150ms between targets
 }
 
 /**

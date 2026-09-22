@@ -80,4 +80,23 @@ describe('AudioPlayer playback warmup', () => {
     expect(audio.play).toHaveBeenCalledTimes(2);
     expect(audio.volume).toBe(1);
   });
+
+  it('ignores a late ended event from audio replaced by a seek or page change', async () => {
+    const player = new AudioPlayer();
+    const onEnded = vi.fn();
+    player.onEnded(onEnded);
+
+    const firstPlayback = player.play('', '/first.mp3');
+    await vi.advanceTimersByTimeAsync(320);
+    await firstPlayback;
+    const firstAudio = (player as unknown as { audio: FakeAudio }).audio;
+
+    await player.play('', '/second.mp3');
+    const secondAudio = (player as unknown as { audio: FakeAudio }).audio;
+    firstAudio.dispatchEvent(new Event('ended'));
+    expect(onEnded).not.toHaveBeenCalled();
+
+    secondAudio.dispatchEvent(new Event('ended'));
+    expect(onEnded).toHaveBeenCalledOnce();
+  });
 });

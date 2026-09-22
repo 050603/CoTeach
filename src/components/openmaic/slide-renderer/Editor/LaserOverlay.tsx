@@ -5,9 +5,9 @@ import type { PercentageGeometry } from '@openmaic/lib/types/action';
 
 interface LaserOverlayProps {
   geometry: PercentageGeometry;
-  waypointGeometries?: PercentageGeometry[];
   color?: string;
-  duration?: number;
+  transitionDurationMs?: number;
+  avoidCoveringTarget?: boolean;
 }
 
 /**
@@ -20,57 +20,32 @@ interface LaserOverlayProps {
  */
 export function LaserOverlay({
   geometry,
-  waypointGeometries = [],
   color = '#ff3b30',
-  duration: _duration = 3000,
+  transitionDurationMs = 150,
+  avoidCoveringTarget = false,
 }: LaserOverlayProps) {
-  const { centerX, centerY } = geometry;
-  const path = [geometry, ...waypointGeometries];
-
-  const startPos = {
-    x: centerX > 50 ? 105 : -5,
-    y: centerY > 50 ? 105 : -5,
-  };
-  const travelDuration = waypointGeometries.length > 0
-    ? Math.max(0.8, (_duration - 300) / 1000)
-    : 0.45;
-  const entryRatio = waypointGeometries.length > 0
-    ? Math.min(0.25, 0.45 / travelDuration)
-    : 1;
-  const times = waypointGeometries.length > 0
-    ? [
-        0,
-        entryRatio,
-        ...waypointGeometries.map((_point, index) => (
-          entryRatio + ((index + 1) / waypointGeometries.length) * (1 - entryRatio)
-        )),
-      ]
-    : [0, 1];
-  const leftPath = [`${startPos.x}%`, ...path.map((point) => `${point.centerX}%`)];
-  const topPath = [`${startPos.y}%`, ...path.map((point) => `${point.centerY}%`)];
+  const pointerX = avoidCoveringTarget ? Math.max(0.8, geometry.x - 0.8) : geometry.centerX;
+  const pointerY = geometry.centerY;
 
   return (
     <motion.div
-      key={`laser-${centerX}-${centerY}`}
       initial={{
         opacity: 0,
-        left: `${startPos.x}%`,
-        top: `${startPos.y}%`,
+        left: `${pointerX}%`,
+        top: `${pointerY}%`,
       }}
       animate={{
         opacity: 1,
-        left: leftPath,
-        top: topPath,
+        left: `${pointerX}%`,
+        top: `${pointerY}%`,
       }}
       exit={{
         opacity: 0,
-        left: `${startPos.x}%`,
-        top: `${startPos.y}%`,
         transition: { duration: 0.25, ease: [0.4, 0, 1, 1] },
       }}
       transition={{
-        left: { duration: travelDuration, ease: 'easeInOut', times },
-        top: { duration: travelDuration, ease: 'easeInOut', times },
+        left: { duration: Math.max(0, transitionDurationMs) / 1000, ease: 'easeOut' },
+        top: { duration: Math.max(0, transitionDurationMs) / 1000, ease: 'easeOut' },
         opacity: { duration: 0.15 },
       }}
       className="absolute z-[101] pointer-events-none"

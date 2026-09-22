@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * Grok (xAI) Video Generation Adapter
  *
@@ -88,7 +89,7 @@ export async function testGrokVideoConnectivity(
 ): Promise<{ success: boolean; message: string }> {
   const baseUrl = config.baseUrl || DEFAULT_BASE_URL;
   try {
-    const response = await fetch(`${baseUrl}/videos/generations`, {
+    const response = await proxyFetch(`${baseUrl}/videos/generations`, {
       method: 'POST',
       redirect: 'manual',
       headers: apiHeaders(config.apiKey),

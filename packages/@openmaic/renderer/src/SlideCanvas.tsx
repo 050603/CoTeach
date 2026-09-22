@@ -13,10 +13,9 @@ import type {
 import type { SlideEffects } from './types/effects';
 import { findElementGeometry, type PercentageGeometry } from './utils/geometry';
 import {
+  useVisualTargetFragmentGeometries,
   useVisualTargetGeometry,
-  useVisualTargetPathGeometry,
 } from './hooks/useVisualTargetGeometry';
-import { visualTargetKey } from './utils/visualTarget';
 import { useSlideBackgroundStyle } from './hooks/useSlideBackgroundStyle';
 import { useViewportSize } from './hooks/useViewportSize';
 import { SlideElement } from './SlideElement';
@@ -96,12 +95,31 @@ export function SlideCanvas(props: SlideCanvasProps) {
 
   // Plain derivations: when this package is consumed in a React Compiler build
   // these are auto-memoized; otherwise the cost (O(elements) lookups) is trivial.
-  const laserGeometry = useVisualTargetGeometry(slideRootRef, effects?.laser);
-  const laserWaypointGeometries = useVisualTargetPathGeometry(
+  const laserGeometry = useVisualTargetGeometry(
     slideRootRef,
-    effects?.laser?.waypoints,
+    effects?.laser,
+    { quoteRect: 'first-fragment' },
+  );
+  const previousLaserGeometry = useVisualTargetGeometry(
+    slideRootRef,
+    effects?.laser?.previousTarget,
+    { quoteRect: 'first-fragment' },
+  );
+  const laserElement = effects?.laser
+    ? elements.find((element) => element.id === effects.laser!.elementId)
+    : undefined;
+  const previousLaserElement = effects?.laser?.previousTarget
+    ? elements.find((element) => element.id === effects.laser!.previousTarget!.elementId)
+    : undefined;
+  const avoidsText = (element: PPTElement | undefined, hasSelector: boolean) => Boolean(
+    hasSelector
+    || element?.type === 'text'
+    || element?.type === 'table'
+    || element?.type === 'latex'
+    || (element?.type === 'shape' && element.text?.content),
   );
   const spotlightGeometry = useVisualTargetGeometry(slideRootRef, effects?.spotlight);
+  const spotlightGeometries = useVisualTargetFragmentGeometries(slideRootRef, effects?.spotlight);
 
   const zoomGeometry: PercentageGeometry | null = effects?.zoom
     ? findElementGeometry(elements, effects.zoom.elementId, slide.viewportSize)
@@ -188,7 +206,11 @@ export function SlideCanvas(props: SlideCanvasProps) {
           )}
         </div>
 
-        <SpotlightOverlay options={effects?.spotlight} geometry={spotlightGeometry} />
+        <SpotlightOverlay
+          options={effects?.spotlight}
+          geometry={spotlightGeometry}
+          geometries={spotlightGeometries}
+        />
 
         <div
           style={{
@@ -199,13 +221,19 @@ export function SlideCanvas(props: SlideCanvasProps) {
         >
           <div style={{ position: 'relative', width: '100%', height: '100%' }}>
             <AnimatePresence>
-              {effects?.laser && laserGeometry && laserWaypointGeometries && (
+              {effects?.laser && laserGeometry && (
                 <LaserOverlay
-                  key={`laser-${visualTargetKey(effects.laser)}`}
+                  key="laser"
                   geometry={laserGeometry}
-                  waypointGeometries={laserWaypointGeometries}
+                  previousGeometry={previousLaserGeometry}
                   color={effects.laser.color}
                   duration={effects.laser.duration}
+                  transitionDurationMs={effects.laser.transitionDurationMs}
+                  avoidCoveringTarget={avoidsText(laserElement, Boolean(effects.laser.selector))}
+                  previousAvoidCoveringTarget={avoidsText(
+                    previousLaserElement,
+                    Boolean(effects.laser.previousTarget?.selector),
+                  )}
                 />
               )}
             </AnimatePresence>

@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * PDF Parsing Provider Implementation
  *
@@ -333,7 +334,7 @@ export async function parseWithMinerUDocument(
   }
 
   // POST /file_parse
-  const response = await fetch(`${config.baseUrl}/file_parse`, {
+  const response = await proxyFetch(`${config.baseUrl}/file_parse`, {
     method: 'POST',
     headers,
     body: formData,

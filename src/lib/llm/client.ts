@@ -31,6 +31,7 @@ import type {
 } from "../session/types";
 import { DEFAULT_EVALUATION_FLOWS } from "../session/types";
 import { getActiveAiSettings } from "./settings";
+import { proxyFetch } from "@openmaic/lib/server/proxy-fetch";
 import { validatePblKnowledgeAlignment } from "@/lib/pbl-outline-validation";
 import {
   assessKnowledgeGraphQuality,
@@ -153,6 +154,7 @@ export async function* callLLMStream(
   messages: ChatMessage[],
   opts: { abortSignal?: AbortSignal; requestClass?: LlmRequestClass } = {},
 ): AsyncGenerator<string, void, void> {
+  opts.abortSignal?.throwIfAborted();
   if (isLlmCoolingDown()) {
     throw new LlmRateLimitError(Math.max(0, llmCooldownUntil - Date.now()));
   }
@@ -170,7 +172,7 @@ export async function* callLLMStream(
 
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await proxyFetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -183,8 +185,9 @@ export async function* callLLMStream(
         stream: true,
       }),
       signal,
-    });
+    }, settings.proxy);
   } catch (err) {
+    opts.abortSignal?.throwIfAborted();
     if (timeoutSignal.aborted) throw new LlmTimeoutError(timeoutMs);
     throw err;
   }
@@ -204,35 +207,35 @@ export async function* callLLMStream(
   const decoder = new TextDecoder();
   let buffer = "";
   let malformedChunkCount = 0;
+  let finishReason: string | undefined;
 
   try {
     while (true) {
+      opts.abortSignal?.throwIfAborted();
       let readResult: ReadableStreamReadResult<Uint8Array>;
       try {
         readResult = await reader.read();
       } catch (err) {
+        opts.abortSignal?.throwIfAborted();
         if (timeoutSignal.aborted) throw new LlmTimeoutError(timeoutMs);
         throw err;
       }
       const { done, value } = readResult;
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
+      opts.abortSignal?.throwIfAborted();
+      buffer += done ? `${decoder.decode()}\n` : decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
       for (const line of lines) {
+        opts.abortSignal?.throwIfAborted();
         const trimmed = line.trim();
-        if (!trimmed.startsWith("data: ")) continue;
-        const data = trimmed.slice(6);
+        if (!trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice(5).trimStart();
         if (data === "[DONE]") return;
 
+        let parsed: { choices?: { delta?: { content?: string }; finish_reason?: string | null }[] };
         try {
-          const parsed = JSON.parse(data) as {
-            choices?: { delta?: { content?: string } }[];
-          };
-          const delta = parsed.choices?.[0]?.delta?.content;
-          if (delta) yield delta;
+          parsed = JSON.parse(data);
         } catch {
           // Record malformed chunk instead of silently skipping. Once the
           // stream exceeds the malformed-chunk budget the response is
@@ -246,10 +249,24 @@ export async function* callLLMStream(
           if (malformedChunkCount > MAX_MALFORMED_STREAM_CHUNKS) {
             throw new LlmStreamCorruptedError(malformedChunkCount);
           }
+          continue;
         }
+        const choice = parsed?.choices?.[0];
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
+        if (finishReason === "length" || finishReason === "content_filter") {
+          throw new LlmCallFailedError(`LLM 流式回答未完成（${finishReason}）`);
+        }
+        if (choice?.delta?.content) yield choice.delta.content;
+      }
+      if (done) {
+        if (!finishReason) throw new LlmCallFailedError("LLM 流式连接提前结束，回答未完成");
+        return;
       }
     }
   } finally {
+    // Releasing the lock alone leaves an unfinished response occupying its
+    // connection when a consumer stops iterating or a terminal SSE event arrives.
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }
@@ -322,7 +339,7 @@ async function callChatCompletionsWithoutCourseLimit(
   const { signal, timeoutSignal } = withTimeout(opts.abortSignal, opts.timeoutMs);
 
   async function doFetch(useJsonMode: boolean): Promise<Response> {
-    return fetch(url, {
+    return proxyFetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -335,7 +352,7 @@ async function callChatCompletionsWithoutCourseLimit(
         ...(useJsonMode ? { response_format: { type: "json_object" } } : {}),
       }),
       signal,
-    });
+    }, settings.proxy);
   }
 
   let res: Response;

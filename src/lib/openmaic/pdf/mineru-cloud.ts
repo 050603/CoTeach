@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * MinerU Cloud API (v4) — https://mineru.net/api/v4
  *
@@ -118,7 +119,7 @@ async function parseMinerUZip(zipUrl: string): Promise<ParsedPdfContent> {
   log.info('[MinerU Cloud] Downloading result ZIP...');
 
   const zipRes = await fetchWithRetry(
-    () => fetch(zipUrl, { signal: AbortSignal.timeout(TIMEOUTS.zip) }),
+    () => proxyFetch(zipUrl, { signal: AbortSignal.timeout(TIMEOUTS.zip) }),
     'ZIP download',
   );
   if (!zipRes.ok) {
@@ -241,7 +242,7 @@ export async function parseWithMinerUCloud(
 
   // Step 1: Create batch — request presigned upload URL
   const batchData = await fetchWithRetry(async () => {
-    const res = await fetch(`${apiRoot}/file-urls/batch`, {
+    const res = await proxyFetch(`${apiRoot}/file-urls/batch`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -272,7 +273,7 @@ export async function parseWithMinerUCloud(
   // Step 2: Upload document to presigned URL
   const putRes = await fetchWithRetry(
     () =>
-      fetch(uploadUrls[0], {
+      proxyFetch(uploadUrls[0], {
         method: 'PUT',
         body: new Blob([
           documentBuffer.buffer.slice(
@@ -302,7 +303,7 @@ export async function parseWithMinerUCloud(
   while (Date.now() < deadline) {
     const statusData = await fetchWithRetry(
       async () => {
-        const res = await fetch(`${apiRoot}/extract-results/batch/${batchData.batch_id}`, {
+        const res = await proxyFetch(`${apiRoot}/extract-results/batch/${batchData.batch_id}`, {
           headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
           signal: AbortSignal.timeout(TIMEOUTS.poll),
         });

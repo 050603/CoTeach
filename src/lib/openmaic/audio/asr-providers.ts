@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * ASR (Automatic Speech Recognition) Provider Implementation
  *
@@ -52,7 +53,7 @@
  *        blob = audioBuffer;
  *      }
  *
- *      const uploadResponse = await fetch(`${baseUrl}/upload`, {
+ *      const uploadResponse = await proxyFetch(`${baseUrl}/upload`, {
  *        method: 'POST',
  *        headers: {
  *          'authorization': config.apiKey!,
@@ -67,7 +68,7 @@
  *      const { upload_url } = await uploadResponse.json();
  *
  *      // Step 2: Request transcription
- *      const transcriptResponse = await fetch(`${baseUrl}/transcript`, {
+ *      const transcriptResponse = await proxyFetch(`${baseUrl}/transcript`, {
  *        method: 'POST',
  *        headers: {
  *          'authorization': config.apiKey!,
@@ -83,7 +84,7 @@
  *
  *      // Step 3: Poll for completion
  *      while (true) {
- *        const statusResponse = await fetch(`${baseUrl}/transcript/${id}`, {
+ *        const statusResponse = await proxyFetch(`${baseUrl}/transcript/${id}`, {
  *          headers: { 'authorization': config.apiKey! },
  *        });
  *        const result = await statusResponse.json();
@@ -225,7 +226,7 @@ async function transcribeLemonadeASR(
     formData.set('language', config.language);
   }
 
-  const response = await fetch(`${baseUrl}/audio/transcriptions`, {
+  const response = await proxyFetch(`${baseUrl}/audio/transcriptions`, {
     method: 'POST',
     headers: getOptionalBearerAuthHeaders(config.apiKey),
     body: formData,
@@ -299,6 +300,7 @@ async function transcribeOpenAIWhisper(
   audioBuffer: Buffer | Blob,
 ): Promise<ASRTranscriptionResult> {
   const openai = createOpenAI({
+    fetch: proxyFetch,
     apiKey: config.apiKey!,
     baseURL: config.baseUrl || ASR_PROVIDERS['openai-whisper'].defaultBaseUrl,
   });
@@ -386,7 +388,7 @@ async function transcribeQwenASR(
         },
       };
 
-  const response = await fetch(`${baseUrl}/services/aigc/multimodal-generation/generation`, {
+  const response = await proxyFetch(`${baseUrl}/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
@@ -537,7 +539,7 @@ async function transcribeAzureASR(
     formData.append('definition', JSON.stringify({ locales: [locale] }));
   }
 
-  const response = await fetch(url.toString(), {
+  const response = await proxyFetch(url.toString(), {
     method: 'POST',
     headers: { 'Ocp-Apim-Subscription-Key': config.apiKey! },
     body: formData,

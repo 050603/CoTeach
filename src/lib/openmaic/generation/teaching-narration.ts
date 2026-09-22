@@ -16,13 +16,14 @@ import {
   stripPrematureCourseClosing,
   stripRepeatedNarrationOpening,
 } from './narration-continuity';
+import { normalizeNarrationPunctuation } from './narration-punctuation';
 
 export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v18-teacher-review-boundary';
 /**
  * Changes to local normalization invalidate narration attempt checkpoints
  * without invalidating the already generated slide-content checkpoints.
  */
-export const TEACHING_NARRATION_NORMALIZATION_VERSION = 'verified-anchor-recovery-v7-stage-aware-boundaries';
+export const TEACHING_NARRATION_NORMALIZATION_VERSION = 'verified-anchor-recovery-v8-punctuation';
 
 const log = createLogger('TeachingNarration');
 
@@ -312,6 +313,11 @@ function normalizeVisualTargetSelector(value: unknown): VisualTargetSelector | u
   const cellId = typeof record.cellId === 'string' && record.cellId.trim()
     ? record.cellId.trim() : undefined;
   if (cellId) return { cellId, ...(quote ? { quote } : {}), ...(occurrence !== undefined ? { occurrence } : {}) };
+  const rowIndex = Number.isInteger(record.rowIndex) && Number(record.rowIndex) >= 0
+    ? Number(record.rowIndex) : undefined;
+  if (rowIndex !== undefined) {
+    return { rowIndex, ...(quote ? { quote } : {}), ...(occurrence !== undefined ? { occurrence } : {}) };
+  }
   if (quote) return { quote, ...(occurrence !== undefined ? { occurrence } : {}) };
   return undefined;
 }
@@ -325,11 +331,26 @@ function normalizeVisualTarget(value: unknown): { elementId: string; selector?: 
   return { elementId, ...(selector ? { selector } : {}) };
 }
 
-function normalizeLaserWaypoints(value: unknown): LaserWaypoint[] | undefined {
+function normalizeSpeechAnchor(value: unknown, text: string): { quote: string; occurrence: number } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const quote = typeof record.quote === 'string'
+    ? normalizeNarrationPunctuation(record.quote.trim())
+    : '';
+  const occurrence = Number.isInteger(record.occurrence) && Number(record.occurrence) >= 0
+    ? Number(record.occurrence) : 0;
+  if (!quote) return undefined;
+  return resolveNarrationAnchor(text, quote, occurrence) ?? undefined;
+}
+
+function normalizeLaserWaypoints(value: unknown, text: string): LaserWaypoint[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const waypoints = value.flatMap((item) => {
     const target = normalizeVisualTarget(item);
-    return target ? [target] : [];
+    if (!target) return [];
+    const record = item as Record<string, unknown>;
+    const speechAnchor = normalizeSpeechAnchor(record.speechAnchor, text);
+    return [{ ...target, ...(speechAnchor ? { speechAnchor } : {}) }];
   });
   return waypoints.length ? waypoints : undefined;
 }
@@ -360,7 +381,7 @@ export function normalizeTeachingNarration(value: unknown, outline: SceneOutline
         ? segment.id : `${outline.id}:speech-${index + 1}`;
       const id = usedSegmentIds.has(proposedId) ? `${outline.id}:speech-${index + 1}` : proposedId;
       usedSegmentIds.add(id);
-      const text = segment.text;
+      const text = normalizeNarrationPunctuation(segment.text);
       const semanticIds = new Set(segment.semanticIds as string[]);
       const anchors = Array.isArray(segment.anchors) ? segment.anchors.flatMap((rawAnchor, anchorIndex) => {
         if (!rawAnchor || typeof rawAnchor !== 'object' || Array.isArray(rawAnchor)) {
@@ -369,7 +390,9 @@ export function normalizeTeachingNarration(value: unknown, outline: SceneOutline
         }
         const anchor = rawAnchor as Record<string, unknown>;
         const semanticId = typeof anchor.semanticId === 'string' ? anchor.semanticId : '';
-        const quote = typeof anchor.quote === 'string' ? anchor.quote.trim() : '';
+        const quote = typeof anchor.quote === 'string'
+          ? normalizeNarrationPunctuation(anchor.quote.trim())
+          : '';
         const occurrence = Number.isInteger(anchor.occurrence) && Number(anchor.occurrence) >= 0
           ? Number(anchor.occurrence) : 0;
         if (!knownIds.has(semanticId)) {
@@ -390,7 +413,8 @@ export function normalizeTeachingNarration(value: unknown, outline: SceneOutline
         const cueType: 'laser' | 'spotlight' | undefined = rawCue?.type === 'laser' || rawCue?.type === 'spotlight'
           ? rawCue.type : undefined;
         const target = normalizeVisualTarget(rawCue?.target);
-        const waypoints = cueType === 'laser' ? normalizeLaserWaypoints(rawCue?.waypoints) : undefined;
+        const waypoints = cueType === 'laser' ? normalizeLaserWaypoints(rawCue?.waypoints, text) : undefined;
+        const endSpeechAnchor = normalizeSpeechAnchor(rawCue?.endSpeechAnchor, text);
         return [{
           id: `${id}:anchor-${anchorIndex + 1}`,
           semanticId,
@@ -401,6 +425,7 @@ export function normalizeTeachingNarration(value: unknown, outline: SceneOutline
             necessity: rawCue?.necessity === 'essential' ? 'essential' as const : 'helpful' as const,
             ...(target ? { target } : {}),
             ...(waypoints ? { waypoints } : {}),
+            ...(endSpeechAnchor ? { endSpeechAnchor } : {}),
             ...(Number.isFinite(Number(rawCue?.durationMs))
               ? { durationMs: Math.max(200, Math.min(20_000, Math.round(Number(rawCue?.durationMs)))) }
               : {}),
@@ -556,7 +581,7 @@ export async function generateTeachingSectionNarration(input: {
     'Give the reasoning needed for the declared understanding criteria. The final quiz is authored later and must not be previewed with answers. Do not lower the learning standard because a slide is terse.',
     'Each requested teaching page must appear exactly once. Keep the requested pageId and stable segment id. Each segment must use only that page’s supplied semantic IDs. Segment boundaries are natural explanation paragraphs, with no fixed count. They also bound visual focus: a spotlight that starts inside a segment remains until that segment ends. End the segment when attention should leave that object, then continue the next reasoning unit in a new segment with its own cue or no cue. Do not let one long segment move across several unrelated visible objects under the first spotlight.',
     'Finish each segment text before authoring anchors. Every anchor semanticId must also appear in that segment’s semanticIds. Every anchor quote must be copied as one contiguous substring from that exact finalized segment text; never paraphrase it, copy it from the slide, or include nearby words that are absent from the segment. Omit the anchor when no reliable substring exists. Put the anchor on the first spoken phrase that actually asks learners to attend to the target, not at the paragraph start by default. Add a visualCue only when pointing helps learners locate, compare, trace, or hold attention on a visible object. Use separate anchors for targets mentioned at different points. A segment may have no cue, and the same object may be cued again when later reasoning needs it.',
-    'For every visualCue authored from an actual slide, copy target.elementId exactly from that page’s actualSlide.elements. Use target.selector only when a text phrase or table cell is more precise than the whole element. Choose spotlight for one bounded object that should stay emphasized during its explanation. Choose laser for an ordered scan across comparison rows, process stages, derivation steps, arrows, or related objects; set the first visited object as target and the remaining ordered objects as waypoints, each with an exact actual elementId, and give the sweep enough duration to follow the spoken sequence. Do not use a spotlight as a substitute for an ordered trace, and do not add cues to transitions or reasoning that does not depend on the screen. Mark a cue essential only when the explanation is genuinely hard to follow without pointing; an invalid optional cue is omitted without changing the speech.',
+    'For every visualCue authored from an actual slide, copy target.elementId exactly from that page’s actualSlide.elements. Use target.selector only when a text phrase, complete table row, or table cell is more precise than the whole element. Choose spotlight for sustained explanation of text, a concept block, or one complete table row; use selector.rowIndex to frame that row and switch rows when the narration starts the next concept. Choose a stationary laser mainly for an image, diagram region, arrow, or isolated visual detail. Choose a multi-target laser only to trace an explicit order, process, route, or derivation across at least three distinct rendered nodes; set the first node as target and each later node as a waypoint with its own speechAnchor. A comparison of prose blocks or table rows is not a laser path. Set endSpeechAnchor to the exact spoken phrase where a spotlight should end; omit it to end at the containing sentence. Do not use a laser for sustained ordinary text explanation because the dot obscures glyphs. Do not add cues to transitions or reasoning that does not depend on the screen. Mark a cue essential only when the explanation is genuinely hard to follow without pointing; an invalid optional cue is omitted without changing the speech.',
     'The page visualActionIntent, when present, is the adopted teaching intent from earlier planning. Realize it in the narration anchors when the required visible target exists, choosing exact targets from actualSlide. Do not invent a target when the slide does not contain one.',
     'Respect each deliveryContext endingDisposition and the section position in the complete course. A test-generation scope does not make this the end of the course. Only verified-course-end may synthesize what the learner can now explain or do, connect that understanding to later use, and use one concise formal thanks and farewell. A pbl-stage-handoff must lead into its named next stage without saying the class is over or goodbye. A final teaching page followed by an assessment should bridge into that assessment without claiming the learner has already mastered the content.',
     input.languageDirective ?? '',
@@ -618,8 +643,11 @@ export async function generateTeachingSectionNarration(input: {
         type: 'laser',
         necessity: 'helpful',
         target: { elementId: 'first exact actualSlide element ID', selector: { quote: 'optional exact phrase inside that element' } },
-        waypoints: [{ elementId: 'next exact actualSlide element ID' }],
-        durationMs: 5000,
+        waypoints: [{
+          elementId: 'next exact actualSlide element ID',
+          speechAnchor: { quote: 'exact spoken phrase for this target', occurrence: 0 },
+        }],
+        endSpeechAnchor: { quote: 'exact final spoken phrase for this path', occurrence: 0 },
       },
     },
     requiredOutputShape: {
@@ -787,6 +815,8 @@ export function compileTeachingNarrationActions(input: {
       } : {}),
       ...(anchor.visualCue.type === 'laser' && anchor.visualCue.waypoints?.length
         ? { waypoints: anchor.visualCue.waypoints } : {}),
+      ...(anchor.visualCue.endSpeechAnchor
+        ? { endSpeechAnchor: anchor.visualCue.endSpeechAnchor } : {}),
       ...(anchor.visualCue.durationMs ? { durationMs: anchor.visualCue.durationMs } : {}),
     }];
   }));

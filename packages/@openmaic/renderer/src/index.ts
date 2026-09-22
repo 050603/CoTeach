@@ -22,6 +22,7 @@ export {
 export { useSlideBackgroundStyle } from './hooks/useSlideBackgroundStyle';
 export {
   useVisualTargetGeometry,
+  useVisualTargetFragmentGeometries,
   useVisualTargetPathGeometry,
 } from './hooks/useVisualTargetGeometry';
 export {
@@ -42,6 +43,7 @@ export {
   resolveVisualTargetGeometry,
   visualTargetRectToPercentageGeometry,
   visualTargetKey,
+  type ResolveVisualTargetGeometryOptions,
   type ResolvedVisualTarget,
   type VisualTarget,
 } from './utils/visualTarget';

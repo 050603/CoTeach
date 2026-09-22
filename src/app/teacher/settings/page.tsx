@@ -75,8 +75,8 @@ import {
 } from "@openmaic/lib/audio/tts-scenarios";
 import { useSettingsStore } from "@openmaic/lib/store/settings";
 import { AI_COMPANIONS } from "@/lib/ai-companions";
-import { IMAGE_PROVIDERS } from "@openmaic/lib/media/image-providers";
-import { VIDEO_PROVIDERS } from "@openmaic/lib/media/video-providers";
+import { IMAGE_PROVIDERS } from "@openmaic/lib/media/image-provider-config";
+import { VIDEO_PROVIDERS } from "@openmaic/lib/media/video-provider-config";
 import { PDF_PROVIDERS } from "@openmaic/lib/pdf/constants";
 import { WEB_SEARCH_PROVIDERS } from "@openmaic/lib/web-search/constants";
 import { ServerProvidersInit } from "@openmaic/components/server-providers-init";

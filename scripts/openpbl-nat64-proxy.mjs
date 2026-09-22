@@ -51,30 +51,67 @@ export function hostMatchesAllowlist(hostname, allowlist) {
   });
 }
 
-function createDns64Resolver({ servers, cacheTtlMs = 60_000 }) {
+export function createDns64Resolver({
+  servers,
+  cacheTtlMs = 60_000,
+  timeoutMs = 2_000,
+  createResolver = (options) => new dns.Resolver(options),
+}) {
   const cache = new Map();
+  const pending = new Map();
+  const queryTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.max(1, Math.floor(timeoutMs)) : 2_000;
+
+  const query = async (server, hostname) => {
+    const resolver = createResolver({ timeout: queryTimeoutMs, tries: 1 });
+    resolver.setServers([server]);
+    let timer;
+    try {
+      // Bound wall time as well as c-ares retries. An unresponsive DNS server
+      // must not hold up successful results from the other parallel routes.
+      return await Promise.race([
+        resolver.resolve6(hostname, { ttl: true }),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`DNS64 query timed out after ${queryTimeoutMs}ms (${server})`));
+            resolver.cancel();
+          }, queryTimeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   return async function resolveDns64(hostname) {
-    const cached = cache.get(hostname);
+    const key = hostname.toLowerCase();
+    const cached = cache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.addresses;
+    if (pending.has(key)) return pending.get(key);
 
-    const results = await Promise.allSettled(servers.map(async (server) => {
-      const resolver = new dns.Resolver();
-      resolver.setServers([server]);
-      const records = await resolver.resolve6(hostname, { ttl: true });
-      return records.map((record) => typeof record === 'string' ? record : record.address);
-    }));
-    const addresses = Array.from(new Set(results.flatMap((result) =>
-      result.status === 'fulfilled' ? result.value : [],
-    ).filter(isPublicIpv6)));
-    if (addresses.length === 0) {
-      const reasons = results.flatMap((result) =>
-        result.status === 'rejected' ? [String(result.reason)] : [],
-      );
-      throw new Error(`DNS64 resolution failed for ${hostname}: ${reasons.join('; ') || 'no public IPv6 address'}`);
+    const lookup = (async () => {
+      const results = await Promise.allSettled(servers.map((server) => query(server, key)));
+      const addresses = Array.from(new Set(results.flatMap((result) =>
+        result.status === 'fulfilled'
+          ? result.value.map((record) => typeof record === 'string' ? record : record.address)
+          : [],
+      ).filter(isPublicIpv6)));
+      if (addresses.length === 0) {
+        const reasons = results.flatMap((result) =>
+          result.status === 'rejected' ? [String(result.reason)] : [],
+        );
+        throw new Error(`DNS64 resolution failed for ${key}: ${reasons.join('; ') || 'no public IPv6 address'}`);
+      }
+      cache.set(key, { addresses, expiresAt: Date.now() + cacheTtlMs });
+      return addresses;
+    })();
+    pending.set(key, lookup);
+    try {
+      return await lookup;
+    } finally {
+      // Failed lookups are never cached, so the next request can recover.
+      pending.delete(key);
     }
-    cache.set(hostname, { addresses, expiresAt: Date.now() + cacheTtlMs });
-    return addresses;
   };
 }
 
@@ -133,6 +170,7 @@ export function createNat64Proxy(options = {}) {
   const resolveDns64 = options.resolveDns64 ?? createDns64Resolver({
     servers: dns64Servers,
     cacheTtlMs: dnsCacheTtlMs,
+    timeoutMs: options.dnsTimeoutMs ?? Number(process.env.OPENPBL_NAT64_DNS_TIMEOUT_MS || 2_000),
   });
   const connect = options.connect ?? ((addresses, port) => connectFirst(addresses, port, connectTimeoutMs));
 
@@ -189,26 +227,77 @@ export function createNat64Proxy(options = {}) {
   });
 
   server.on('connect', async (request, client, head) => {
+    const startedAt = Date.now();
     const target = parseAuthority(request.url);
+    let upstream;
+    let closeSource;
+    let errorCode;
+    let connectionErrorCodes;
+    let upstreamAddress;
+    let established = false;
+    const markClose = (source, error) => {
+      closeSource ??= source;
+      if (error?.code) errorCode ??= error.code;
+    };
+    const abort = (source, error) => {
+      markClose(source, error);
+      client.destroy();
+      upstream?.destroy();
+    };
+    // Register before DNS/connect: a caller can cancel while either is pending.
+    client.setKeepAlive(true, 30_000);
+    client.once('error', (error) => abort('client-error', error));
+    client.once('end', () => {
+      markClose('client-end');
+      if (!established) client.destroy();
+    });
+    client.once('close', () => {
+      markClose('client-close');
+      upstream?.destroy();
+      const record = {
+        target: target ? `${target.hostname}:${target.port}` : 'invalid',
+        source: closeSource,
+        durationMs: Date.now() - startedAt,
+        established,
+        upstreamAddress,
+        errorCode,
+        connectionErrorCodes,
+        upstreamBytesRead: upstream?.bytesRead ?? 0,
+        upstreamBytesWritten: upstream?.bytesWritten ?? 0,
+      };
+      (options.log ?? console.log)(`[NAT64Proxy] tunnel closed ${JSON.stringify(record)}`);
+    });
     if (!target) {
+      markClose('invalid-authority');
       client.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
       return;
     }
     try {
-      const upstream = await openTunnel(target.hostname, target.port);
+      upstream = await openTunnel(target.hostname, target.port);
+      upstreamAddress = upstream.remoteAddress;
+      upstream.once('error', (error) => abort('upstream-error', error));
+      upstream.once('end', () => markClose('upstream-end'));
+      upstream.once('close', () => {
+        // pipe() ends the client after all response bytes have been flushed.
+        // Destroying it on normal EOF can truncate a large buffered response.
+        if (!upstream.readableEnded) abort('upstream-close');
+      });
+      if (client.destroyed || client.readableEnded) {
+        upstream.destroy();
+        return;
+      }
+      upstream.setKeepAlive(true, 30_000);
+      established = true;
       client.write('HTTP/1.1 200 Connection Established\r\nProxy-Agent: CoTeach-NAT64\r\n\r\n');
       if (head.length > 0) upstream.write(head);
       upstream.pipe(client);
       client.pipe(upstream);
-      const closeBoth = () => {
-        client.destroy();
-        upstream.destroy();
-      };
-      client.once('error', closeBoth);
-      upstream.once('error', closeBoth);
     } catch (error) {
-      console.error(`[NAT64Proxy] CONNECT ${target.hostname}:${target.port} failed:`, error);
-      client.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+      markClose('connect-error', error);
+      connectionErrorCodes = error?.errors?.map((cause) => cause.code ?? cause.name);
+      if (!client.destroyed) {
+        client.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+      }
     }
   });
 

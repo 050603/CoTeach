@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * OpenAI Image Generation Adapter
  *
@@ -29,7 +30,7 @@ export async function testOpenAIImageConnectivity(
   const baseUrl = normalizeBaseUrl(config.baseUrl);
 
   try {
-    const response = await fetch(
+    const response = await proxyFetch(
       `${baseUrl}/models/${encodeURIComponent(config.model || DEFAULT_MODEL)}`,
       {
         redirect: 'manual',

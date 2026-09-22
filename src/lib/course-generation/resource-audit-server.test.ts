@@ -86,4 +86,79 @@ describe("final course resource audit", () => {
     expect(`${mediaIssue?.title}${mediaIssue?.detail}`).not.toContain("cover-1");
     expect(`${mediaIssue?.title}${mediaIssue?.detail}`).not.toContain("provider unavailable");
   });
+
+  it("reports narration that has audio but no precise alignment", async () => {
+    getCourse.mockResolvedValue({
+      id: "course-1",
+      aiLearningClassroomId: "classroom-1",
+      content: { _openmaicSceneOutlines: [] },
+    } as unknown as Course);
+    readClassroom.mockResolvedValue({
+      id: "classroom-1",
+      createdAt: "2026-08-17T00:00:00.000Z",
+      stage: {},
+      scenes: [{
+        id: "scene-1",
+        title: "概念讲解",
+        type: "slide",
+        order: 0,
+        actions: [{
+          id: "speech-1",
+          type: "speech",
+          text: "请观察这个概念。",
+          audioUrl: "/api/openmaic/classroom-media/classroom-1/audio/speech.mp3",
+        }],
+      }],
+    } as unknown as PersistedClassroomData);
+
+    const { auditCourseGeneratedResources } = await import("./resource-audit-server");
+    const audit = await auditCourseGeneratedResources("course-1");
+
+    expect(audit.issues).toContainEqual(expect.objectContaining({
+      type: "speech-sync",
+      title: "概念讲解",
+      detail: expect.stringContaining("尚未建立字幕与动作的音频时间线"),
+    }));
+  });
+
+  it("reports a precise timeline whose visual binding could not be repaired", async () => {
+    getCourse.mockResolvedValue({
+      id: "course-1",
+      aiLearningClassroomId: "classroom-1",
+      content: { _openmaicSceneOutlines: [] },
+    } as unknown as Course);
+    readClassroom.mockResolvedValue({
+      id: "classroom-1",
+      createdAt: "2026-08-17T00:00:00.000Z",
+      stage: {},
+      scenes: [{
+        id: "scene-1",
+        title: "概念讲解",
+        type: "slide",
+        order: 0,
+        actions: [{
+          id: "speech-1",
+          type: "speech",
+          text: "请观察这个概念。",
+          audioUrl: "/api/openmaic/classroom-media/classroom-1/audio/speech.mp3",
+          speechAlignment: {
+            version: "test-v1",
+            status: "aligned",
+            textHash: "text",
+            audioHash: "audio",
+            spans: [{ text: "请", startChar: 0, endChar: 1, startMs: 0, endMs: 100 }],
+            error: "讲稿中找不到与页面目标可靠对应的词句，自动指示已停用",
+          },
+        }],
+      }],
+    } as unknown as PersistedClassroomData);
+
+    const { auditCourseGeneratedResources } = await import("./resource-audit-server");
+    const audit = await auditCourseGeneratedResources("course-1");
+
+    expect(audit.issues).toContainEqual(expect.objectContaining({
+      type: "speech-sync",
+      detail: "讲稿中找不到与页面目标可靠对应的词句，自动指示已停用",
+    }));
+  });
 });

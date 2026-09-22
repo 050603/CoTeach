@@ -1,0 +1,21 @@
+[Unit]
+Description=CoTeach Qwen3 speech forced aligner (loopback port 3004)
+PartOf=openpbl.service
+Before=openpbl.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/lkj/OpenPBL/openPBL
+Environment=OPENPBL_ALIGNMENT_PORT=3004
+ExecStart=/home/lkj/OpenPBL/openPBL/scripts/openpbl-production-service.sh run-speech-alignment
+ExecStartPost=/usr/bin/curl --fail --silent --show-error --retry 120 --retry-connrefused --retry-delay 2 --max-time 2 http://127.0.0.1:3004/health/live
+Restart=always
+RestartSec=5s
+TimeoutStartSec=300s
+TimeoutStopSec=30s
+KillMode=control-group
+SuccessExitStatus=143
+
+[Install]
+WantedBy=default.target

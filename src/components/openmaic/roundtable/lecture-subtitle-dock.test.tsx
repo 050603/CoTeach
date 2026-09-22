@@ -91,6 +91,13 @@ describe('long subtitle paging', () => {
     ]);
   });
 
+  it('hides contradictory period-semicolon pairs from legacy subtitles', () => {
+    expect(splitSubtitleText('先观察共同特征。；再比较关键差异；。')).toEqual([
+      '先观察共同特征；',
+      '再比较关键差异。',
+    ]);
+  });
+
   it('maps speech progress to the matching line including the final line', () => {
     const lines = buildSubtitleLines([{
       actionIndex: 3,
@@ -110,6 +117,42 @@ describe('long subtitle paging', () => {
     const activeIndex = resolveActiveSubtitleLineIndex(lines, 1, 0);
 
     expect(lines[activeIndex]?.actionIndex).toBe(2);
+  });
+
+  it('uses forced-alignment time ranges instead of character proportions', () => {
+    const lines = buildSubtitleLines([{
+      actionIndex: 3,
+      text: '短句。第二句明显更长。',
+      audioDurationMs: 5000,
+      alignment: {
+        status: 'aligned',
+        spans: [
+          { text: '短句。', startChar: 0, endChar: 3, startMs: 0, endMs: 3500 },
+          { text: '第二句明显更长。', startChar: 3, endChar: 11, startMs: 3500, endMs: 5000 },
+        ],
+      },
+    }]);
+
+    expect(resolveActiveSubtitleLineIndex(lines, 0, 0.6)).toBe(0);
+    expect(resolveActiveSubtitleLineIndex(lines, 0, 0.8)).toBe(1);
+    expect(lines[1]).toMatchObject({ startMs: 3500, endMs: 5000, durationMs: 5000 });
+  });
+
+  it('keeps the preceding subtitle active through an alignment gap', () => {
+    const lines = buildSubtitleLines([{
+      actionIndex: 3,
+      text: '第一句。第二句。',
+      audioDurationMs: 5000,
+      alignment: {
+        status: 'aligned',
+        spans: [
+          { text: '第一句。', startChar: 0, endChar: 4, startMs: 0, endMs: 1800 },
+          { text: '第二句。', startChar: 4, endChar: 8, startMs: 3000, endMs: 5000 },
+        ],
+      },
+    }]);
+
+    expect(resolveActiveSubtitleLineIndex(lines, 0, 0.5)).toBe(0);
   });
 });
 
@@ -301,5 +344,49 @@ describe('teaching rail layout', () => {
     expect(setPointerCapture).not.toHaveBeenCalled();
     fireEvent.click(target);
     expect(onCueSelect).toHaveBeenCalledWith(3, 0);
+  });
+
+  it('seeks an aligned subtitle sentence to its audio timestamp', () => {
+    const onCueSelect = vi.fn().mockReturnValue(true);
+    render(
+      <TeachingKnowledgeGraphProvider graph={undefined} points={[]}>
+        <LectureSubtitleDock
+          activeActionIndex={0}
+          autoPlay
+          canGoNext={false}
+          canGoNextCue={false}
+          canGoPrevious={false}
+          canGoPreviousCue={false}
+          cues={[{
+            actionIndex: 0,
+            text: '第一句。第二句。',
+            audioDurationMs: 4000,
+            alignment: {
+              status: 'aligned',
+              spans: [
+                { text: '第一句。', startChar: 0, endChar: 4, startMs: 0, endMs: 2500 },
+                { text: '第二句。', startChar: 4, endChar: 8, startMs: 2500, endMs: 4000 },
+              ],
+            },
+          }]}
+          currentText="第一句。第二句。"
+          engineMode="paused"
+          muted={false}
+          onCueSelect={onCueSelect}
+          onCycleSpeed={vi.fn()}
+          onToggleAutoPlay={vi.fn()}
+          onToggleMute={vi.fn()}
+          playbackSpeed={1}
+          sceneIndex={0}
+          scenesCount={1}
+          teacherAvatar="/teacher.webp"
+          teacherName="知知"
+        />
+      </TeachingKnowledgeGraphProvider>,
+    );
+
+    fireEvent.wheel(screen.getByLabelText('讲解字幕，可滚动浏览或拖动查看'));
+    fireEvent.click(screen.getByRole('button', { name: '从此处重新播放：第二句。' }));
+    expect(onCueSelect).toHaveBeenCalledWith(0, 0.625);
   });
 });

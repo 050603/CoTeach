@@ -42,7 +42,7 @@ function reconcile(sent: unknown, live: unknown, saved: unknown): unknown {
       || live.audioId !== sent.audioId || live.audioUrl !== sent.audioUrl)) {
       // Text and its synthesized clip form one value. Do not attach a URL
       // returned for the submitted text to a newer, locally edited sentence.
-      for (const key of ['audioId', 'audioUrl', 'audioInvalidated']) {
+      for (const key of ['audioId', 'audioUrl', 'audioInvalidated', 'speechAlignment']) {
         if (live[key] !== undefined) result[key] = live[key];
         else delete result[key];
       }

@@ -10,7 +10,7 @@ import { userFacingName } from "@/lib/user-facing-labels";
 
 export type CourseResourceIssue = {
   id: string;
-  type: "classroom" | "adaptive-resource" | "teaching-tool" | "tts" | "media";
+  type: "classroom" | "adaptive-resource" | "teaching-tool" | "tts" | "media" | "speech-sync";
   title: string;
   detail: string;
 };
@@ -51,6 +51,37 @@ export async function auditCourseGeneratedResources(courseId: string): Promise<{
         detail: "配置语音未生成",
       }))
     : [];
+  const speechSyncIssues = classroom
+    ? classroom.scenes.flatMap((scene) => {
+        const speech = (scene.actions ?? []).filter((action) => (
+          action.type === "speech" && Boolean(action.text.trim()) && Boolean(action.audioUrl)
+        ));
+        const unresolved = speech.filter((action) => (
+          action.type === "speech" && (
+            action.speechAlignment?.status !== "aligned" || Boolean(action.speechAlignment.error)
+          )
+        ));
+        if (!unresolved.length) return [];
+        const failed = unresolved.filter((action) => (
+          action.type === "speech" && action.speechAlignment?.status === "failed"
+        )).length;
+        const bindingWarning = unresolved.find((action) => (
+          action.type === "speech"
+          && action.speechAlignment?.status === "aligned"
+          && action.speechAlignment.error
+        ));
+        return [{
+          id: `speech-sync:${scene.id}`,
+          type: "speech-sync" as const,
+          title: userFacingName(scene.title, "课程讲解页面"),
+          detail: bindingWarning?.type === "speech" && bindingWarning.speechAlignment?.error
+            ? bindingWarning.speechAlignment.error
+            : failed > 0
+            ? `${failed} 段语音对齐失败，按音频同步的字幕定位与指示动作已停用`
+            : `${unresolved.length} 段语音尚未建立字幕与动作的音频时间线`,
+        }];
+      })
+    : [];
   const adaptiveIssues = course.content.adaptiveLearningPlan?.enabled
     ? course.content.adaptiveLearningPlan.branches.flatMap((branch) =>
         branch.enabled !== false
@@ -89,5 +120,15 @@ export async function auditCourseGeneratedResources(courseId: string): Promise<{
         }]
       : [],
   );
-  return { classroomId, issues: [...classroomIssues, ...adaptiveIssues, ...toolIssues, ...ttsIssues, ...mediaIssues] };
+  return {
+    classroomId,
+    issues: [
+      ...classroomIssues,
+      ...adaptiveIssues,
+      ...toolIssues,
+      ...ttsIssues,
+      ...speechSyncIssues,
+      ...mediaIssues,
+    ],
+  };
 }

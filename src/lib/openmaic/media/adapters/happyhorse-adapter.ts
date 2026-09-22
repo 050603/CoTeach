@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * HappyHorse (Alibaba Cloud Model Studio / DashScope) Video Generation Adapter
  *
@@ -193,7 +194,7 @@ export async function testHappyHorseConnectivity(
 ): Promise<{ success: boolean; message: string }> {
   try {
     const baseUrl = normalizeBaseUrl(config.baseUrl);
-    const response = await fetch(`${baseUrl}/api/v1/tasks/connectivity-test-nonexistent`, {
+    const response = await proxyFetch(`${baseUrl}/api/v1/tasks/connectivity-test-nonexistent`, {
       method: 'GET',
       redirect: 'manual',
       headers: authHeaders(config.apiKey),

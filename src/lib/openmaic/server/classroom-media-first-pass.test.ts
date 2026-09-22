@@ -5,13 +5,23 @@ import type { Scene } from '@openmaic/lib/types/stage';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import { buildTtsTimingPlan } from '@openmaic/lib/audio/tts-timing';
 
-const mocks = vi.hoisted(() => ({ generateImage: vi.fn(), generateVideo: vi.fn(), generateTTS: vi.fn(), download: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  generateImage: vi.fn(),
+  generateVideo: vi.fn(),
+  generateTTS: vi.fn(),
+  download: vi.fn(),
+  alignSpeech: vi.fn(),
+}));
 vi.mock('@openmaic/lib/media/video-providers', async (original) => ({
   ...await original<typeof import('@openmaic/lib/media/video-providers')>(), generateVideo: mocks.generateVideo,
 }));
 vi.mock('@openmaic/lib/audio/tts-providers', () => ({ generateTTS: mocks.generateTTS }));
 vi.mock('@openmaic/lib/media/image-providers', () => ({ generateImage: mocks.generateImage, IMAGE_PROVIDERS: { 'openai-image': { models: [{ id: 'image-model' }] } } }));
 vi.mock('@openmaic/lib/server/proxy-fetch', () => ({ proxyFetch: mocks.download }));
+vi.mock('@openmaic/lib/server/speech-alignment', async (original) => ({
+  ...await original<typeof import('@openmaic/lib/server/speech-alignment')>(),
+  alignSpeechFile: mocks.alignSpeech,
+}));
 vi.mock('@openmaic/lib/server/provider-config', () => ({
   getServerImageProviders: () => ({ 'openai-image': {} }), getServerVideoProviders: () => ({ veo: {}, seedance: {} }),
   resolveVideoApiKey: () => 'test-key', resolveVideoBaseUrl: () => undefined,
@@ -35,6 +45,15 @@ beforeEach(() => {
   vi.spyOn(fs, 'writeFile').mockResolvedValue(undefined);
   vi.spyOn(fs, 'unlink').mockResolvedValue(undefined);
   vi.spyOn(fs, 'readFile').mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+  mocks.alignSpeech.mockImplementation(async ({ text, language }) => ({
+    version: 'test-align-v1',
+    textHash: 'text-hash',
+    audioHash: 'audio-hash',
+    inputHash: 'input-hash',
+    language: language ?? 'English',
+    durationMs: 1_000,
+    spans: [{ text, startChar: 0, endChar: text.length, startMs: 0, endMs: 1_000 }],
+  }));
 });
 
 const outlines = [{ mediaGenerations: [{ type: 'image', elementId: 'image-1', prompt: 'Observe water', aspectRatio: '16:9' }] }] as unknown as SceneOutline[];
@@ -135,6 +154,12 @@ describe('first-pass media request boundaries', () => {
     expect(classroomScenes[0].actions?.[0]).toMatchObject({
       audioId: 'tts_s0_a1',
       audioUrl: '/api/openmaic/classroom-media/test/audio/tts_s0_a1.wav',
+      speechAlignment: {
+        version: 'test-align-v1',
+        status: 'aligned',
+        textHash: 'text-hash',
+        audioHash: 'audio-hash',
+      },
     });
     expect(classroomScenes[0].actions?.[0]).not.toHaveProperty('audioInvalidated');
   });

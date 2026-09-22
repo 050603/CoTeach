@@ -106,6 +106,172 @@ function done(errors: ValidationIssue[]): ValidationResult {
   return errors.length === 0 ? { valid: true } : { valid: false, errors };
 }
 
+function checkSpeechAnchor(
+  value: unknown,
+  path: string,
+  errors: ValidationIssue[],
+): void {
+  if (!isObject(value) || typeof value.quote !== 'string' || !value.quote.trim()) {
+    errors.push({ path, message: 'speech anchor must contain a non-empty quote' });
+    return;
+  }
+  if (
+    value.occurrence !== undefined
+    && (
+      typeof value.occurrence !== 'number'
+      || !Number.isInteger(value.occurrence)
+      || value.occurrence < 0
+    )
+  ) {
+    errors.push({
+      path: `${path}/occurrence`,
+      message: 'speech anchor occurrence must be a non-negative integer',
+    });
+  }
+}
+
+function checkMediaOffset(value: unknown, path: string, errors: ValidationIssue[]): void {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    errors.push({ path, message: 'media offset must be a non-negative finite number' });
+  }
+}
+
+function checkSpeechAlignment(
+  value: unknown,
+  narrationText: string,
+  path: string,
+  errors: ValidationIssue[],
+): void {
+  if (!isObject(value)) {
+    errors.push({ path, message: 'speech alignment must be an object' });
+    return;
+  }
+
+  for (const field of ['version', 'textHash', 'audioHash'] as const) {
+    if (typeof value[field] !== 'string' || !value[field].trim()) {
+      errors.push({
+        path: `${path}/${field}`,
+        message: `speech alignment ${field} must be a non-empty string`,
+      });
+    }
+  }
+  if (value.language !== undefined && (
+    typeof value.language !== 'string' || !value.language.trim()
+  )) {
+    errors.push({
+      path: `${path}/language`,
+      message: 'speech alignment language must be a non-empty string when present',
+    });
+  }
+  if (!['pending', 'aligned', 'failed'].includes(String(value.status))) {
+    errors.push({
+      path: `${path}/status`,
+      message: 'speech alignment status must be `pending`, `aligned`, or `failed`',
+    });
+  }
+  if (value.error !== undefined && (typeof value.error !== 'string' || !value.error.trim())) {
+    errors.push({
+      path: `${path}/error`,
+      message: 'speech alignment error must be a non-empty string when present',
+    });
+  }
+  if (!Array.isArray(value.spans)) {
+    errors.push({ path: `${path}/spans`, message: 'speech alignment spans must be an array' });
+    return;
+  }
+  if (value.status === 'aligned' && value.spans.length === 0) {
+    errors.push({
+      path: `${path}/spans`,
+      message: 'an aligned speech timeline must contain at least one span',
+    });
+  }
+
+  let previousEndChar = 0;
+  let previousEndMs = 0;
+  value.spans.forEach((span, index) => {
+    const spanPath = `${path}/spans/${index}`;
+    if (!isObject(span)) {
+      errors.push({ path: spanPath, message: 'speech alignment span must be an object' });
+      return;
+    }
+    if (typeof span.text !== 'string' || span.text.length === 0) {
+      errors.push({ path: `${spanPath}/text`, message: 'aligned span text must be non-empty' });
+    }
+    const startChar = typeof span.startChar === 'number'
+      && Number.isInteger(span.startChar)
+      && span.startChar >= 0
+      ? span.startChar
+      : null;
+    const endChar = typeof span.endChar === 'number'
+      && Number.isInteger(span.endChar)
+      && span.endChar > 0
+      ? span.endChar
+      : null;
+    if (startChar === null) {
+      errors.push({
+        path: `${spanPath}/startChar`,
+        message: 'aligned span startChar must be a non-negative integer',
+      });
+    }
+    if (endChar === null || (startChar !== null && endChar <= startChar)) {
+      errors.push({
+        path: `${spanPath}/endChar`,
+        message: 'aligned span endChar must be an integer greater than startChar',
+      });
+    }
+
+    const startMs = typeof span.startMs === 'number'
+      && Number.isFinite(span.startMs)
+      && span.startMs >= 0
+      ? span.startMs
+      : null;
+    const endMs = typeof span.endMs === 'number'
+      && Number.isFinite(span.endMs)
+      && span.endMs >= 0
+      ? span.endMs
+      : null;
+    if (startMs === null) {
+      errors.push({
+        path: `${spanPath}/startMs`,
+        message: 'aligned span startMs must be a non-negative finite number',
+      });
+    }
+    if (endMs === null || (startMs !== null && endMs < startMs)) {
+      errors.push({
+        path: `${spanPath}/endMs`,
+        message: 'aligned span endMs must be finite and no earlier than startMs',
+      });
+    }
+
+    if (startChar !== null && endChar !== null && endChar > startChar) {
+      if (startChar < previousEndChar) {
+        errors.push({ path: `${spanPath}/startChar`, message: 'aligned spans must not overlap' });
+      }
+      if (endChar > narrationText.length) {
+        errors.push({
+          path: `${spanPath}/endChar`,
+          message: 'aligned span character range exceeds narration text',
+        });
+      } else if (
+        typeof span.text === 'string'
+        && narrationText.slice(startChar, endChar) !== span.text
+      ) {
+        errors.push({
+          path: `${spanPath}/text`,
+          message: 'aligned span text must equal its original narration slice',
+        });
+      }
+      previousEndChar = Math.max(previousEndChar, endChar);
+    }
+    if (startMs !== null && endMs !== null && endMs >= startMs) {
+      if (startMs < previousEndMs) {
+        errors.push({ path: `${spanPath}/startMs`, message: 'aligned span times must not overlap' });
+      }
+      previousEndMs = Math.max(previousEndMs, endMs);
+    }
+  });
+}
+
 /**
  * Check a table of root-level envelope fields against their declared runtime
  * kinds, pushing one {@link ValidationIssue} per violation at path `/<field>`.
@@ -186,39 +352,17 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
         message: `${doc.type} action field \`speechId\` must be a non-empty string`,
       });
     }
-    if (
-      doc.speechOffsetMs !== undefined
-      && (
-        typeof doc.speechOffsetMs !== 'number'
-        || !Number.isFinite(doc.speechOffsetMs)
-        || doc.speechOffsetMs < 0
-      )
-    ) {
-      errors.push({
-        path: `${path}/speechOffsetMs`,
-        message: `${doc.type} action field \`speechOffsetMs\` must be a non-negative finite number`,
-      });
+    if (doc.speechOffsetMs !== undefined) {
+      checkMediaOffset(doc.speechOffsetMs, `${path}/speechOffsetMs`, errors);
     }
     if (doc.speechAnchor !== undefined) {
-      const anchor = doc.speechAnchor;
-      if (!isObject(anchor) || typeof anchor.quote !== 'string' || !anchor.quote) {
-        errors.push({
-          path: `${path}/speechAnchor`,
-          message: `${doc.type} action field \`speechAnchor\` must contain a non-empty quote`,
-        });
-      } else if (
-        anchor.occurrence !== undefined
-        && (
-          typeof anchor.occurrence !== 'number'
-          || !Number.isInteger(anchor.occurrence)
-          || anchor.occurrence < 0
-        )
-      ) {
-        errors.push({
-          path: `${path}/speechAnchor/occurrence`,
-          message: 'speech anchor occurrence must be a non-negative integer',
-        });
-      }
+      checkSpeechAnchor(doc.speechAnchor, `${path}/speechAnchor`, errors);
+    }
+    if (doc.endSpeechAnchor !== undefined) {
+      checkSpeechAnchor(doc.endSpeechAnchor, `${path}/endSpeechAnchor`, errors);
+    }
+    if (doc.endSpeechOffsetMs !== undefined) {
+      checkMediaOffset(doc.endSpeechOffsetMs, `${path}/endSpeechOffsetMs`, errors);
     }
     if (
       doc.necessity !== undefined
@@ -270,6 +414,26 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
             message: '`quote` must be a non-empty string when present',
           });
         }
+      } else if ('rowIndex' in doc.selector) {
+        if (
+          typeof doc.selector.rowIndex !== 'number'
+          || !Number.isInteger(doc.selector.rowIndex)
+          || doc.selector.rowIndex < 0
+        ) {
+          errors.push({
+            path: `${selectorPath}/rowIndex`,
+            message: 'row selector requires a non-negative integer `rowIndex`',
+          });
+        }
+        if (
+          doc.selector.quote !== undefined
+          && (typeof doc.selector.quote !== 'string' || !doc.selector.quote)
+        ) {
+          errors.push({
+            path: `${selectorPath}/quote`,
+            message: '`quote` must be a non-empty string when present',
+          });
+        }
       } else if ('quote' in doc.selector) {
         if (typeof doc.selector.quote !== 'string' || !doc.selector.quote) {
           errors.push({
@@ -280,7 +444,7 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
       } else {
         errors.push({
           path: selectorPath,
-          message: 'selector requires either `cellId` or `quote`',
+          message: 'selector requires `cellId`, `rowIndex`, or `quote`',
         });
       }
 
@@ -339,9 +503,31 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
             };
             checkAction(probe, waypointPath, errors);
           }
+          if (waypoint.speechAnchor !== undefined) {
+            checkSpeechAnchor(
+              waypoint.speechAnchor,
+              `${waypointPath}/speechAnchor`,
+              errors,
+            );
+          }
+          if (waypoint.speechOffsetMs !== undefined) {
+            checkMediaOffset(
+              waypoint.speechOffsetMs,
+              `${waypointPath}/speechOffsetMs`,
+              errors,
+            );
+          }
         });
       }
     }
+  }
+  if (doc.type === 'speech' && doc.speechAlignment !== undefined) {
+    checkSpeechAlignment(
+      doc.speechAlignment,
+      typeof doc.text === 'string' ? doc.text : '',
+      `${path}/speechAlignment`,
+      errors,
+    );
   }
   if (doc.type === 'wb_draw_line') {
     for (const key of ['startAnchor', 'endAnchor']) {

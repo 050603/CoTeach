@@ -35,21 +35,60 @@ export interface WhiteboardAnchor {
 
 // ==================== Fire-and-forget actions ====================
 
+/** Select one complete rendered table row by its zero-based row index. */
+export interface TableRowVisualTargetSelector {
+  /** @minimum 0 */
+  rowIndex: number;
+  quote?: string;
+  occurrence?: number;
+}
+
 /** Select a precise region inside a slide element. `occurrence` is zero-based. */
 export type VisualTargetSelector =
   | { cellId: string; quote?: string; occurrence?: number }
+  | TableRowVisualTargetSelector
   | { quote: string; occurrence?: number };
 
-/** A precise target visited after the laser's primary `elementId`. */
+/** A precise target activated at its own narration anchor after the primary target. */
 export interface LaserWaypoint {
   elementId: string;
   selector?: VisualTargetSelector;
+  /** Phrase that activates this target inside the laser's bound narration. */
+  speechAnchor?: SpeechAnchor;
+  /** Compiled media time for `speechAnchor`, in milliseconds. */
+  speechOffsetMs?: number;
 }
 
 /** Stable semantic start point inside the cue's bound narration paragraph. */
 export interface SpeechAnchor {
   quote: string;
   occurrence?: number;
+}
+
+/** One aligned text span. Character offsets are UTF-16 and `endChar` is exclusive. */
+export interface SpeechAlignmentSpan {
+  /** Exact slice of the original narration, including punctuation or whitespace when aligned. */
+  text: string;
+  startChar: number;
+  endChar: number;
+  startMs: number;
+  endMs: number;
+}
+
+export type SpeechAlignmentStatus = 'pending' | 'aligned' | 'failed';
+
+/** Cached forced-alignment result for one narration audio asset and its original text. */
+export interface SpeechAlignment {
+  /** Aligner data-contract/model version used to produce the spans. */
+  version: string;
+  status: SpeechAlignmentStatus;
+  /** Fingerprints invalidate this timeline when narration text or audio changes. */
+  textHash: string;
+  audioHash: string;
+  language?: string;
+  spans: SpeechAlignmentSpan[];
+  /** Stable, teacher-facing reason when alignment could not be produced. */
+  error?: string;
 }
 
 export type VisualCueNecessity = 'essential' | 'helpful';
@@ -65,6 +104,10 @@ export interface SpotlightAction extends ActionBase {
   speechOffsetMs?: number;
   /** Phrase whose position is converted locally to `speechOffsetMs`. */
   speechAnchor?: SpeechAnchor;
+  /** Phrase at which this cue stops being active. */
+  endSpeechAnchor?: SpeechAnchor;
+  /** Compiled media time for `endSpeechAnchor`, in milliseconds. */
+  endSpeechOffsetMs?: number;
   necessity?: VisualCueNecessity;
   omissionRisk?: string;
   /** Optional final narration segment through which the spotlight remains active. */
@@ -77,7 +120,7 @@ export interface LaserAction extends ActionBase {
   type: 'laser';
   elementId: string;
   selector?: VisualTargetSelector;
-  /** Optional ordered targets for one continuous laser sweep. */
+  /** Ordered targets activated by their individual narration anchors. */
   waypoints?: LaserWaypoint[];
   /** Narration segment whose lifetime owns this visual cue. */
   speechId?: string;
@@ -85,6 +128,10 @@ export interface LaserAction extends ActionBase {
   speechOffsetMs?: number;
   /** Phrase whose position is converted locally to `speechOffsetMs`. */
   speechAnchor?: SpeechAnchor;
+  /** Phrase at which this cue stops being active. */
+  endSpeechAnchor?: SpeechAnchor;
+  /** Compiled media time for `endSpeechAnchor`, in milliseconds. */
+  endSpeechOffsetMs?: number;
   necessity?: VisualCueNecessity;
   omissionRisk?: string;
   color?: string; // default '#ff0000'
@@ -112,6 +159,8 @@ export interface SpeechAction extends ActionBase {
   audioDurationSec?: number;
   /** Prevent legacy derived-id fallback after an edit invalidates old narration. */
   audioInvalidated?: boolean;
+  /** Word/character timing tied to the exact `text` and audio fingerprints. */
+  speechAlignment?: SpeechAlignment;
   voice?: string;
   speed?: number; // default 1.0
 }

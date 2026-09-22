@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * Grok (xAI) Image Generation Adapter
  *
@@ -32,7 +33,7 @@ export async function testGrokImageConnectivity(
 ): Promise<{ success: boolean; message: string }> {
   const baseUrl = config.baseUrl || DEFAULT_BASE_URL;
   try {
-    const response = await fetch(`${baseUrl}/images/generations`, {
+    const response = await proxyFetch(`${baseUrl}/images/generations`, {
       method: 'POST',
       redirect: 'manual',
       headers: {

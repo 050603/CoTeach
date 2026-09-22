@@ -54,23 +54,25 @@ interface DiscussionContext {
 
 // ==================== Per-variant string constants ====================
 
-const FORMAT_EXAMPLE_SLIDE = `[{"type":"action","name":"spotlight","params":{"elementId":"img_1"}},{"type":"text","content":"Your natural speech to students"}]`;
+const FORMAT_EXAMPLE_SLIDE = `[{"type":"action","name":"spotlight","params":{"elementId":"img_1","speechAnchor":{"quote":"this diagram","occurrence":0}}},{"type":"text","content":"Look at this diagram as we compare the two stages."}]`;
 const FORMAT_EXAMPLE_WB = `[{"type":"action","name":"wb_open","params":{}},{"type":"text","content":"Your natural speech to students"}]`;
 
 const ORDERING_SLIDE = `- spotlight/laser actions should appear BEFORE the corresponding text object (point first, then speak)
+- Every visual action and laser waypoint must bind to an exact phrase in that text with speechAnchor:{quote,occurrence}
 - whiteboard actions can interleave WITH text objects (draw while speaking)`;
 const ORDERING_WB = `- whiteboard actions can interleave WITH text objects (draw while speaking)`;
 
-const SPOTLIGHT_EXAMPLES = `[{"type":"action","name":"spotlight","params":{"elementId":"img_1"}},{"type":"text","content":"Photosynthesis is the process by which plants convert light energy into chemical energy. Take a look at this diagram."},{"type":"text","content":"During this process, plants absorb carbon dioxide and water to produce glucose and oxygen."}]
+const SPOTLIGHT_EXAMPLES = `[{"type":"action","name":"spotlight","params":{"elementId":"img_1","speechAnchor":{"quote":"this diagram","occurrence":0}}},{"type":"text","content":"Photosynthesis is the process by which plants convert light energy into chemical energy. Take a look at this diagram."},{"type":"text","content":"During this process, plants absorb carbon dioxide and water to produce glucose and oxygen."}]
 
-[{"type":"action","name":"spotlight","params":{"elementId":"table_1","selector":{"cellId":"row2-col3"}}},{"type":"text","content":"This cell gives the content form for middle-school learners."},{"type":"action","name":"laser","params":{"elementId":"text_1","selector":{"quote":"PBL","occurrence":0}}},{"type":"text","content":"Project-based learning is often abbreviated as PBL."}]
+[{"type":"action","name":"spotlight","params":{"elementId":"table_1","selector":{"cellId":"row2-col3"},"speechAnchor":{"quote":"This cell","occurrence":0}}},{"type":"text","content":"This cell gives the content form for middle-school learners."},{"type":"action","name":"laser","params":{"elementId":"text_1","selector":{"quote":"PBL","occurrence":0},"speechAnchor":{"quote":"PBL","occurrence":0}}},{"type":"text","content":"Project-based learning is often abbreviated as PBL."}]
 
 `;
 
-const SLIDE_ACTION_GUIDELINES = `- spotlight: Sustain focus while explaining ONE visible content block or table cell.
-- laser: Briefly point to ONE term, value, process node, or cell detail.
-- For an explicit comparison, ordered list, or process, one laser may slide through up to four additional precise targets with waypoints:[{elementId,selector?},...]. Use one continuous sweep instead of separate laser actions.
-- Use selector.cellId for a table cell, selector.cellId + quote for exact text inside it, and selector.quote + zero-based occurrence for other exact visible text. Never aim at a whole table when discussing one cell.
+const SLIDE_ACTION_GUIDELINES = `- spotlight: Frame ONE text block, concept block, complete table row, or cell while it is being explained. Use selector.rowIndex for a whole row and switch at the next row's spoken concept.
+- laser: Point mainly to an image, diagram region, arrow, or isolated visual detail. Do not leave a laser dot over ordinary text.
+- For an explicit order, process, route, or derivation across at least three distinct nodes, use one timed laser path with an independently anchored target and waypoints. Comparisons and table rows use separate spotlights instead.
+- Every visual action must include speechAnchor copied from its finalized narration. Every waypoint needs an independent speechAnchor; omit the cue when no exact phrase exists.
+- Use selector.rowIndex for a table row, selector.cellId for a table cell, selector.cellId + quote for exact text inside it, and selector.quote + zero-based occurrence for other exact visible text. Never aim at a whole table when discussing one row or cell.
 - Visual cues are scarce attention aids. Use no visual action for transitions, title restatements, broad narration, or content whose layout is already clear. Keep one stable focus through a semantic block and do not point through every process node.
 - Choose the action by teaching necessity, not for variety.
 `;

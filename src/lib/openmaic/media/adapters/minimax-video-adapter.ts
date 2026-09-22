@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * MiniMax Video Generation Adapter
  * Supports: text-to-video with camera control commands
@@ -206,7 +207,7 @@ export async function testMiniMaxVideoConnectivity(
   try {
     const baseUrl = (config.baseUrl || BASE_URL).replace(/\/$/, '');
     // Submit a minimal task and immediately check if it returns a task_id
-    const response = await fetch(`${baseUrl}/v1/video_generation`, {
+    const response = await proxyFetch(`${baseUrl}/v1/video_generation`, {
       method: 'POST',
       redirect: 'manual',
       headers: {

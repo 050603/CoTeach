@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * Lemonade Image Generation Adapter
  *
@@ -33,7 +34,7 @@ export async function testLemonadeImageConnectivity(
   const baseUrl = normalizeBaseUrl(config.baseUrl);
 
   try {
-    const response = await fetch(`${baseUrl}/models`, {
+    const response = await proxyFetch(`${baseUrl}/models`, {
       redirect: 'manual',
       headers: authHeaders(config.apiKey),
     });

@@ -147,6 +147,10 @@ describe('course generation model input', () => {
 
   it.each([
     ['provider InternalError', Object.assign(new Error('Receive batching backend response failed'), { code: 'InternalError' })],
+    ['SDK wrapped proxy socket close', Object.assign(new Error('Cannot connect to API: other side closed'), {
+      name: 'AI_APICallError', isRetryable: true,
+      cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+    })],
     ['HTTP 429', Object.assign(new Error('rate limit'), { statusCode: 429, responseHeaders: { 'retry-after': '2' } })],
     ['HTTP 503', Object.assign(new Error('service unavailable'), { statusCode: 503 })],
     ['response header timeout', new DOMException('Headers Timeout Error', 'TimeoutError')],

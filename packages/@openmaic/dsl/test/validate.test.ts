@@ -151,6 +151,8 @@ describe('validateAction', () => {
       speechId: 'speech-2',
       speechOffsetMs: 3200,
       speechAnchor: { quote: '三个核心特征', occurrence: 0 },
+      endSpeechAnchor: { quote: '因此需要综合判断', occurrence: 0 },
+      endSpeechOffsetMs: 5700,
       necessity: 'essential',
       omissionRisk: '不指引会混淆当前讲解的表格单元格',
       endSpeechId: 'speech-4',
@@ -162,13 +164,24 @@ describe('validateAction', () => {
       selector: { cellId: 'r2c3', quote: '低代码', occurrence: 0 },
     })).toEqual({ valid: true });
     expect(validateAction({
+      id: 'a-row',
+      type: 'spotlight',
+      elementId: 'table',
+      selector: { rowIndex: 2 },
+    })).toEqual({ valid: true });
+    expect(validateAction({
       id: 'a-quote',
       type: 'laser',
       elementId: 'text',
       selector: { quote: 'PBL', occurrence: 1 },
       waypoints: [
-        { elementId: 'feature-a', selector: { quote: '成果导向' } },
-        { elementId: 'feature-b' },
+        {
+          elementId: 'feature-a',
+          selector: { quote: '成果导向' },
+          speechAnchor: { quote: '先看成果导向' },
+          speechOffsetMs: 720,
+        },
+        { elementId: 'feature-b', speechAnchor: { quote: '再看真实问题' } },
       ],
       duration: 2500,
     })).toEqual({ valid: true });
@@ -187,6 +200,9 @@ describe('validateAction', () => {
       id: 'a', type: 'laser', elementId: 'e', selector: { cellId: 'cell', occurrence: -1 },
     }))).toContain('/selector/occurrence');
     expect(errors(validateAction({
+      id: 'a', type: 'spotlight', elementId: 'table', selector: { rowIndex: -1 },
+    }))).toContain('/selector/rowIndex');
+    expect(errors(validateAction({
       id: 'a', type: 'laser', elementId: 'e', speechId: '',
     }))).toContain('/speechId');
     expect(errors(validateAction({
@@ -199,6 +215,12 @@ describe('validateAction', () => {
       id: 'a', type: 'laser', elementId: 'e',
       speechAnchor: { quote: '第二次出现', occurrence: -1 },
     }))).toContain('/speechAnchor/occurrence');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', endSpeechAnchor: { quote: '' },
+    }))).toContain('/endSpeechAnchor');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e', endSpeechOffsetMs: -1,
+    }))).toContain('/endSpeechOffsetMs');
     expect(errors(validateAction({
       id: 'a', type: 'laser', elementId: 'e', necessity: 'always',
     }))).toContain('/necessity');
@@ -215,8 +237,59 @@ describe('validateAction', () => {
       id: 'a', type: 'laser', elementId: 'e', waypoints: [{ elementId: '' }],
     }))).toContain('/waypoints/0/elementId');
     expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e',
+      waypoints: [{ elementId: 'next', speechAnchor: { quote: '', occurrence: -1 } }],
+    }))).toContain('/waypoints/0/speechAnchor');
+    expect(errors(validateAction({
+      id: 'a', type: 'laser', elementId: 'e',
+      waypoints: [{ elementId: 'next', speechOffsetMs: Number.NaN }],
+    }))).toContain('/waypoints/0/speechOffsetMs');
+    expect(errors(validateAction({
       id: 'a', type: 'spotlight', elementId: 'e', endSpeechId: '',
     }))).toContain('/endSpeechId');
+  });
+  it('validates forced-alignment fingerprints and original-text span mappings', () => {
+    const speech = {
+      id: 'speech-1',
+      type: 'speech',
+      text: '你好，OpenPBL！',
+      speechAlignment: {
+        version: 'qwen3-forced-aligner-0.6b@1',
+        status: 'aligned',
+        textHash: 'sha256:text',
+        audioHash: 'sha256:audio',
+        language: 'zh-CN',
+        spans: [
+          { text: '你好', startChar: 0, endChar: 2, startMs: 80, endMs: 430 },
+          { text: '，', startChar: 2, endChar: 3, startMs: 430, endMs: 430 },
+          { text: 'OpenPBL', startChar: 3, endChar: 10, startMs: 510, endMs: 1280 },
+          { text: '！', startChar: 10, endChar: 11, startMs: 1280, endMs: 1280 },
+        ],
+      },
+    };
+    expect(validateAction(speech)).toEqual({ valid: true });
+
+    expect(errors(validateAction({
+      ...speech,
+      speechAlignment: { ...speech.speechAlignment, status: 'ready' },
+    }))).toContain('/speechAlignment/status');
+    expect(errors(validateAction({
+      ...speech,
+      speechAlignment: {
+        ...speech.speechAlignment,
+        spans: [{ text: 'Open', startChar: 3, endChar: 10, startMs: 510, endMs: 1280 }],
+      },
+    }))).toContain('/speechAlignment/spans/0/text');
+    expect(errors(validateAction({
+      ...speech,
+      speechAlignment: {
+        ...speech.speechAlignment,
+        spans: [
+          { text: '你好', startChar: 0, endChar: 2, startMs: 300, endMs: 500 },
+          { text: 'OpenPBL', startChar: 3, endChar: 10, startMs: 450, endMs: 1280 },
+        ],
+      },
+    }))).toContain('/speechAlignment/spans/1/startMs');
   });
   it('rejects an unknown action type', () => {
     const r = validateAction({ id: 'a', type: 'frobnicate' });

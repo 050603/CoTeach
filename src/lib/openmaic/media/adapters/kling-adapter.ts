@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * Kling (Kuaishou) Video Generation Adapter
  *
@@ -133,7 +134,7 @@ export async function testKlingConnectivity(
     const { accessKey, secretKey } = parseApiKey(config.apiKey);
     const token = generateJWT(accessKey, secretKey);
     // Use a GET to a non-existent task to validate auth
-    const response = await fetch(`${baseUrl}/v1/videos/text2video/connectivity-test`, {
+    const response = await proxyFetch(`${baseUrl}/v1/videos/text2video/connectivity-test`, {
       method: 'GET',
       redirect: 'manual',
       headers: { Authorization: `Bearer ${token}` },

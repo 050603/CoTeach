@@ -1,14 +1,14 @@
 # CoTeach 单系统生产部署
 
-生产环境只运行当前系统。Next.js 应用、代码运行器和本地问卷分词服务由 systemd 用户服务托管；Docker Compose 只负责 PostgreSQL、Redis、Nginx、数据库迁移以及可选的监控和备份服务。
+生产环境只运行当前系统。Next.js 应用、代码运行器、本地问卷分词服务和语音强制对齐服务由 systemd 用户服务托管；Docker Compose 只负责 PostgreSQL、Redis、Nginx、数据库迁移以及可选的监控和备份服务。
 
 ## 更新流程
 
 1. 备份 PostgreSQL、上传文件、课堂数据和 `deploy/.deploy.env`。保留原 `PROVIDER_ENCRYPTION_KEY` 与 `JWT_SECRET`。
-2. 在仓库根目录运行 `python3 scripts/setup-survey-nlp.py` 准备本地分词环境，再运行 `pnpm install --frozen-lockfile && pnpm build`。
+2. 在仓库根目录运行 `python3 scripts/setup-survey-nlp.py` 和 `python3 scripts/setup-speech-alignment.py` 准备本地模型环境，再运行 `pnpm install --frozen-lockfile && pnpm build`。
 3. 运行 `pnpm exec prisma migrate deploy`。
-4. 安装或更新 `deploy/systemd/` 下的应用、代码运行器、`openpbl-survey-nlp.service` 和 `openpbl-outbound-proxy.service`，执行 `systemctl --user daemon-reload` 后重启服务。
-5. 检查应用 `/api/health/live`、分词服务 `http://127.0.0.1:3003/health/live` 和出站代理 `http://127.0.0.1:19999/health/ready`，并完成教师登录、学生加入与五阶段课堂冒烟测试。
+4. 安装或更新 `deploy/systemd/` 下的应用、代码运行器、`openpbl-survey-nlp.service`、`openpbl-speech-alignment.service` 和 `openpbl-outbound-proxy.service`，执行 `systemctl --user daemon-reload` 后重启服务。
+5. 检查应用 `/api/health/live`、分词服务 `http://127.0.0.1:3003/health/live`、语音对齐服务 `http://127.0.0.1:3004/health/live` 和出站代理 `http://127.0.0.1:19999/health/ready`，并完成教师登录、学生加入与五阶段课堂冒烟测试。
 
 `pnpm start` 会从 `.next-build` 创建 `.openpbl-runtime/releases/<BUILD_ID>` 不可变运行目录，避免下一次构建覆盖正在服务的版本。
 
@@ -17,6 +17,14 @@
 当前生产宿主机只有可用的公网 IPv6，而 DeepSeek 等端点可能只发布 IPv4 地址。`openpbl-outbound-proxy.service` 是仅监听 `127.0.0.1:19999` 的 HTTPS CONNECT 代理：它通过多组 DNS64 节点解析并并行选择可用 NAT64 路径，连接内容仍由目标站点 TLS 端到端加密。应用服务显式依赖该代理，并在启动、部署和运行健康检查中验证到 `api.deepseek.com:443` 的 TLS 链路；不得再使用 Codex、SSH 会话或桌面进程临时开放的代理端口。
 
 默认 DNS64 节点可用 `OPENPBL_NAT64_DNS_SERVERS`（逗号分隔 IPv6 地址）替换为运营方自建节点；允许的 HTTPS 目标可用 `OPENPBL_NAT64_ALLOWED_HOSTS` 收窄为逗号分隔的域名或域名后缀。生产环境优先使用有可用性承诺的自建或运营商 NAT64，切换时无需修改应用代码。
+
+经显式代理发送的模型请求使用独立 CONNECT 隧道，接收完整流式响应后关闭，避免后续页面复用已老化的上游连接。不要改回默认长连接复用而只增加生成重试次数。代理为每条隧道记录关闭来源、持续时间、上游地址、传输字节数和错误码；用 `journalctl --user -u openpbl-outbound-proxy.service` 对照应用错误时间排查 `connect-error`、`upstream-error`、`upstream-end` 或 `client-end`。日志不包含请求正文或密钥。`/health/ready` 只证明当前能建立 TLS 链路，不代表完整长课程生成已通过验证。
+
+教师与学生共用的文本模型、TTS/ASR、图片/视频、PDF 和教材向量请求统一使用服务器托管出口；本机地址与 `NO_PROXY` 排除项保持直连。应用服务清除会话继承的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`，生产出口使用 `OPENPBL_OUTBOUND_PROXY` 或服务商显式代理配置。DNS64 查询默认有 2 秒上限（`OPENPBL_NAT64_DNS_TIMEOUT_MS`），相同域名的并发查询合并，失败不会进入缓存。
+
+浏览器媒体下载保留独立 SSRF 校验与 DNS 地址绑定，使用 `OPENPBL_NAT64_PREFIXES` 配置运营者信任的 NAT64 `/96` 前缀，将已经校验的公网 IPv4 合成为固定 IPv6；TLS 仍校验原始媒体域名。服务模板列出的前缀属于当前公网 NAT64 出口，迁移到原生双栈服务器时可移除，切换自有 NAT64 时应同步替换。不能用普通代理转发替代此接口的地址安全校验。
+
+脱离 SSH 运行需确保用户已启用 linger（`loginctl show-user "$USER" -p Linger`），`openpbl.service` 已启用开机启动，依赖端口由 systemd 服务托管；本地 Ollama 也应由系统服务托管。AI 设置不应引用电脑上的端口或 SSH 临时转发。验收除健康检查外还应包含文本流式回答、语音合成/识别、媒体下载和教材向量调用；认证失败应修正相应服务商的 API Key 与 Base URL，不能靠增加重试修复。
 
 ## 正式与测试系统共用 AI 设置
 
@@ -44,6 +52,14 @@ AI 模式复用 AI 服务设置中的默认语言模型及连接配置。第一�
 
 主题云展示全部经过排序和验证的词条，并围绕中心紧凑排布；不同学生的提及人数决定字号，同频词保持相同字号。常规数量使用碰撞布局，词数过多导致字号低于可读阈值时直接改为可滚动的完整词条并跳过碰撞计算，避免高密度场景拖慢页面。词云上方不显示状态或说明提示；看板默认显示全部原回答，点击 AI 归并后的原词主题时按已验证的学生映射筛选，题目右上角的“全部回答”按钮可清除筛选。
 
+## 朗读时间对齐
+
+`scripts/setup-speech-alignment.py` 建立独立的 `.openpbl-runtime/speech-alignment-venv`，安装 `deploy/speech-alignment-requirements.txt` 固定的运行版本，并下载固定提交的 `Qwen3-ForcedAligner-0.6B` 到 `.openpbl-runtime/speech-alignment-models`。服务启动后完全离线，只监听 `127.0.0.1:3004`，不经 Nginx 暴露；输入限制为本机音频绝对路径、原讲稿和模型支持的语言，音频统一解码为 16 kHz 单声道且不得超过五分钟。
+
+生产 TITAN Xp 使用 PyTorch CUDA 11.8 wheel 中与 `sm_61` 二进制兼容的 Pascal `sm_60` 内核、普通 attention 和 FP32。安装校验会执行真实 FP32 CUDA 运算并加载固定模型；CUDA 不可用、wheel 不支持当前架构或模型加载失败时自动改用 CPU。推理严格单并发，应用侧按音频内容、讲稿、语言和对齐版本写入 `.openpbl-data/speech-alignment-cache`。可用 `OPENPBL_ALIGNMENT_FORCE_CPU=1` 强制 CPU，或用 `OPENPBL_SPEECH_ALIGNMENT_CACHE_DIR` 更换缓存目录。
+
+真实课程验收使用 `pnpm exec tsx scripts/evaluate-speech-alignment.ts <人工标注.json> --no-cache`。JSON 包含 `audioPath`、原始 `text`、可选 `language`，以及至少 20 个 `{ "quote", "occurrence", "expectedStartMs" }` 人工听音标注。命令输出每个触发误差、P95、推理耗时和实时率；P95 超过 300 毫秒时以失败状态退出。
+
 ## 基础设施
 
 IP/HTTP 部署使用：
@@ -62,7 +78,7 @@ HTTPS 环境可按需启用 certificate 和 observability profile。阿里云只
 
 手动触发 `.github/workflows/deploy.yml`，先执行共享验证，再通过 SSH 在服务器的专用 Git checkout 中部署本次 workflow 对应的完整提交 SHA。服务器自行构建应用，由已有 systemd 用户服务运行；不再发布旧应用容器或调用蓝绿脚本。
 
-每个 GitHub environment 配置 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、`DEPLOY_HOST_KEY` secrets，以及绝对路径变量 `DEPLOY_PATH`。服务器需具备 Node.js、pnpm、Python 3.10+、Git、flock、curl，能够从 origin 拉取提交，并已安装指向该路径的三个用户服务及所需 secrets。不同环境使用独立用户或主机，不能共用同一组生产服务。
+每个 GitHub environment 配置 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、`DEPLOY_HOST_KEY` secrets，以及绝对路径变量 `DEPLOY_PATH`。服务器需具备 Node.js、pnpm、Python 3.10+、Git、flock、curl，能够从 origin 拉取提交，并已安装指向该路径的用户服务及所需 secrets。不同环境使用独立用户或主机，不能共用同一组生产服务。
 
 首次安装服务时，将 `deploy/systemd/` 模板中的路径、域名与端口改成目标环境配置，再安装到用户 systemd 目录。CI 更新不覆盖这些环境配置。默认健康检查访问 3000 端口；非默认端口通过 GitHub environment 变量 `DEPLOY_PORT` 设置，并与服务配置一致。
 

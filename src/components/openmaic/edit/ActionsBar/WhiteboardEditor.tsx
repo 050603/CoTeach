@@ -238,6 +238,7 @@ function StepFields({
       if (next.type === 'speech' && current.type === 'speech' && next.text !== current.text) {
         delete next.audioId;
         delete next.audioUrl;
+        delete next.speechAlignment;
         next.audioInvalidated = true;
       }
       return next;

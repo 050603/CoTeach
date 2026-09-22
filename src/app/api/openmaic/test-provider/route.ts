@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 import { type NextRequest } from 'next/server';
 import { apiError, apiSuccess } from '@openmaic/lib/server/api-response';
 import { generateImage, IMAGE_PROVIDERS } from '@openmaic/lib/media/image-providers';
@@ -192,7 +193,7 @@ export async function POST(request: NextRequest) {
       if ((!apiKey && !keylessLocal) || !baseUrl || !model) {
         return apiError('MISSING_REQUIRED_FIELD', 400, '教材向量服务需要服务地址、模型 ID，以及远程服务所需的密钥。');
       }
-      const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/embeddings`, {
+      const response = await proxyFetch(`${baseUrl.replace(/\/+$/, '')}/embeddings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
         body: JSON.stringify({ model, input: ['建构主义学习理论'], dimensions: 1024, encoding_format: 'float' }),

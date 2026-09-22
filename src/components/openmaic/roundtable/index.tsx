@@ -32,7 +32,10 @@ import { DEFAULT_TEACHER_AVATAR, DEFAULT_USER_AVATAR } from '@openmaic/component
 import type { DiscussionAction } from '@openmaic/lib/types/action';
 import type { EngineMode, PlaybackView } from '@openmaic/lib/playback';
 import type { Participant } from '@openmaic/lib/types/roundtable';
-import { LectureSubtitleDock } from '@openmaic/components/roundtable/lecture-subtitle-dock';
+import {
+  LectureSubtitleDock,
+  type LectureCue,
+} from '@openmaic/components/roundtable/lecture-subtitle-dock';
 import { useDisplayScale } from '@/hooks/use-display-scale';
 import { useInstructorIdentity } from '@/components/openmaic-bridge/instructor-identity-context';
 
@@ -55,7 +58,7 @@ interface RoundtableProps {
   readonly currentSpeech?: string | null; // Live SSE speech (from StreamBuffer — discussion/QA)
   readonly lectureSpeech?: string | null; // Active lecture speech (from PlaybackEngine, full text)
   readonly lectureSpeechProgress?: number;
-  readonly lectureCues?: ReadonlyArray<{ actionIndex: number; text: string }>;
+  readonly lectureCues?: ReadonlyArray<LectureCue>;
   readonly activeLectureActionIndex?: number;
   readonly idleText?: string | null; // Static idle text (first speech action)
   readonly playbackCompleted?: boolean; // True when engine finished all actions (show restart icon)

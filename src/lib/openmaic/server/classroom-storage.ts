@@ -243,6 +243,30 @@ export async function updatePersistedClassroomScenes(
   });
 }
 
+/** Replace generated scene data only when the classroom has not been edited meanwhile. */
+export async function updatePersistedClassroomScenesIfRevision(
+  classroomId: string,
+  scenes: Scene[],
+  expectedRevision: number,
+): Promise<PersistedClassroomData> {
+  return withClassroomLock(classroomId, async () => {
+    const existing = await readClassroom(classroomId);
+    if (!existing) throw new Error(`Classroom not found while updating scenes: ${classroomId}`);
+    const actualRevision = existing.revision ?? 0;
+    if (actualRevision !== expectedRevision) {
+      throw new ClassroomRevisionConflictError(expectedRevision, actualRevision);
+    }
+    const updated: PersistedClassroomData = {
+      ...existing,
+      scenes,
+      revision: actualRevision + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeJsonFileAtomic(path.join(CLASSROOMS_DIR, `${classroomId}.json`), updated);
+    return updated;
+  });
+}
+
 export async function updatePersistedClassroomAssetStatus(
   classroomId: string,
   assetGeneration: ClassroomAssetGenerationStatus,

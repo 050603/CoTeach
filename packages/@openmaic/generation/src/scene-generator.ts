@@ -1829,8 +1829,8 @@ function formatElementsForPrompt(elements: PPTElement[]): string {
             columnIndex += Math.max(1, cell.colspan);
             return {
               cellId: cell.id,
-              row: rowIndex + 1,
-              column: anchorColumn + 1,
+              rowIndex,
+              columnIndex: anchorColumn,
               rowspan: cell.rowspan,
               colspan: cell.colspan,
               text: cell.text.replace(/<[^>]*>/g, '').trim(),

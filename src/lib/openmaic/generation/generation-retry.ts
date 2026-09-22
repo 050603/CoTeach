@@ -25,6 +25,13 @@ const DEFAULT_BASE_DELAY_MS = 1000;
 const DEFAULT_MAX_DELAY_MS = 16000;
 const RETRYABLE_STATUS_CODES = new Set([408, 429]);
 const NON_RETRYABLE_STATUS_CODES = new Set([400, 401, 403, 404, 422]);
+// Match structured transport codes as well as human-readable messages. Undici
+// socket failures can arrive as an SDK cause with only `code` and no message.
+const RETRYABLE_TRANSPORT_CODES = new Set([
+  'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT', 'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED',
+  'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE',
+]);
 
 const defaultSleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -120,7 +127,7 @@ function messageFrom(value: unknown): string {
 
 function retryableByMessage(value: unknown): boolean {
   const message = messageFrom(value);
-  return /rate limit|too many requests|timeout|timed out|调用超时|请求超时|fetch failed|network|InternalError|batching backend|temporar(?:y|ily)|service unavailable|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EPIPE|socket hang up|premature close|stream (?:was )?terminated/i.test(
+  return /rate limit|too many requests|timeout|timed out|调用超时|请求超时|fetch failed|network|InternalError|batching backend|temporar(?:y|ily)|service unavailable|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EPIPE|UND_ERR_SOCKET|other side closed|socket hang up|premature close|stream (?:was )?terminated/i.test(
     message,
   ) || /^terminated$/i.test(message.trim());
 }
@@ -173,6 +180,8 @@ export function isRetryableGenerationError(error: unknown, seen = new Set<unknow
   // provider errors, so a wrapped 401/403 still remains terminal.
   if (explicitRetryable === true) return true;
 
+  if (isRecord(error) && RETRYABLE_TRANSPORT_CODES.has(stringField(error, 'code') ?? '')) return true;
+
   const errorName = isRecord(error) ? stringField(error, 'name') : undefined;
   if (
     errorName === 'TimeoutError'
@@ -224,6 +233,8 @@ export function generationRetryAfterMs(error: unknown, seen = new Set<unknown>()
   const message = messageFrom(error).trim();
   if (/ECONNREFUSED.*(?:127\.0\.0\.1|localhost)|(?:127\.0\.0\.1|localhost).*ECONNREFUSED/i.test(message)
     || /^terminated$/i.test(message)
+    || stringField(error, 'code') === 'UND_ERR_SOCKET'
+    || /other side closed|UND_ERR_SOCKET/i.test(message)
     || /premature close|stream (?:was )?terminated/i.test(message)) return 10_000;
 
   // AI SDK API errors expose responseHeaders; fetch adapters may keep Headers.

@@ -1,5 +1,5 @@
 import type { GeneratedSlideContent } from "@openmaic/lib/types/generation";
-import type { LaserWaypoint, VisualTargetSelector } from "@openmaic/lib/types/action";
+import type { LaserWaypoint, SpeechAnchor, VisualTargetSelector } from "@openmaic/lib/types/action";
 
 export type ActionSupport = "none" | "helpful" | "essential";
 
@@ -29,6 +29,8 @@ export interface NarrationAnchor {
     };
     /** Ordered rendered targets visited by one continuous laser sweep. */
     waypoints?: LaserWaypoint[];
+    /** Spoken phrase after which this cue should be removed. */
+    endSpeechAnchor?: SpeechAnchor;
     durationMs?: number;
   };
 }

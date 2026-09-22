@@ -230,7 +230,7 @@ export function makeRegenerateSceneActionsTool(
       }
       const withoutImageBytes = (value: string) => value.replace(/data:[^,\s"']*;base64,[A-Za-z0-9+/=]+/gi, '[embedded asset preserved by id]');
       const referenceActions = JSON.stringify(originalActions ?? [], (key, value) => {
-        if (['audioId', 'audioUrl', 'audioInvalidated'].includes(key)) return undefined;
+        if (['audioId', 'audioUrl', 'audioInvalidated', 'speechAlignment'].includes(key)) return undefined;
         return typeof value === 'string' && /^data:/i.test(value) ? '[embedded asset preserved by id]' : value;
       });
       const editInstructions = [
@@ -330,6 +330,7 @@ export function makeRegenerateSceneActionsTool(
           const edited = prior?.type === 'speech' ? { ...prior, text, audioInvalidated: true } : { id: action.id, type: 'speech' as const, text, audioInvalidated: true };
           delete (edited as { audioId?: string }).audioId;
           delete (edited as { audioUrl?: string }).audioUrl;
+          delete (edited as { speechAlignment?: unknown }).speechAlignment;
           return [action.id, edited];
         }));
         actions = originalActions.length

@@ -42,8 +42,8 @@ You MUST output a JSON array directly. Each element is an object with a `type` f
 
 ### Ordering Principles
 
-- Visual actions appear BEFORE the corresponding text object (point first, then speak)
-- More than one visual action may precede one natural text paragraph. Keep the paragraph intact and use `speechAnchor` on later actions to identify the exact phrase where they should start.
+- Visual actions appear BEFORE the corresponding text object, but their `speechAnchor` determines when they become visible during that narration.
+- More than one visual action may precede one natural text paragraph. Keep the paragraph intact and give every action an exact `speechAnchor` copied from the first phrase that discusses its target.
 - Do not add an action merely to create a repeated "focus then explain" pattern. First decide whether omitting the cue would make learners look at the wrong place.
 
 ---
@@ -58,28 +58,27 @@ Highlight a specific element on the slide, used in conjunction with narration.
 {
   "type": "action",
   "name": "spotlight",
-  "params": { "elementId": "text_abc123" }
+  "params": { "elementId": "text_abc123", "speechAnchor": { "quote": "exact spoken phrase", "occurrence": 0 } }
 }
 ```
 
 - `elementId`: ID of element to focus on, **must** be selected from the provided element list
 - One spotlight action can only focus on **one** element
-- `selector` (optional): `{ "cellId": "..." }` for one table cell, `{ "cellId": "...", "quote": "...", "occurrence": 0 }` for text inside that cell, or `{ "quote": "...", "occurrence": 0 }` for exact text elsewhere
-- Use spotlight for sustained explanation of one content block, concept, or cell. Keep one spotlight stable across a continuous explanation instead of repeating or bouncing between targets.
+- `selector` (optional): `{ "rowIndex": 1 }` for one complete zero-based table row, `{ "cellId": "..." }` for one table cell, `{ "cellId": "...", "quote": "...", "occurrence": 0 }` for text inside that cell, or `{ "quote": "...", "occurrence": 0 }` for exact text elsewhere
+- Use spotlight for sustained explanation of one text block, concept, complete table row, or cell. Switch table rows when narration starts the next row's concept.
 
 ### laser (Laser Pointer)
 
 Briefly point at an element with a laser dot to draw attention, lighter than spotlight.
 
 ```json
-{ "type": "action", "name": "laser", "params": { "elementId": "text_abc123" } }
+{ "type": "action", "name": "laser", "params": { "elementId": "text_abc123", "speechAnchor": { "quote": "exact spoken phrase", "occurrence": 0 } } }
 ```
 
 - `elementId`: ID of element to point at, **must** be from the provided element list
-- Use for quick, transient emphasis — e.g. "notice this value here"
-- Prefer laser for brief references; use spotlight for extended discussion
-- Use the same optional `selector` forms as spotlight so the dot lands beside the exact term or cell detail.
-- For one explicit comparison, ordered list, or process, add `waypoints` with 1-4 more `{ "elementId": "...", "selector": {...} }` targets. This creates one continuous sweep; do not emit a separate laser action for every item.
+- Use a stationary laser mainly for an image, diagram region, arrow, or isolated visual detail. Do not leave it over ordinary text.
+- For one explicit order, process, route, or derivation across at least three distinct rendered nodes, add `waypoints` with 2-4 more `{ "elementId": "...", "selector": {...}, "speechAnchor": {"quote":"exact spoken phrase","occurrence":0} }` targets. Every waypoint must bind to the first phrase that discusses that stage.
+- A comparison of prose blocks or table rows is not a laser path; use separately timed spotlights.
 
 ### Visual action metadata
 
@@ -87,7 +86,8 @@ Every spotlight or laser must include:
 
 - `necessity`: `"essential"` when omission would create a likely visual misunderstanding, otherwise `"helpful"`. Omit the entire action when the layout is already clear.
 - `omissionRisk`: one concise, concrete reason why this cue helps.
-- `speechAnchor` (optional): `{ "quote": "exact phrase in the following text", "occurrence": 0 }`. Use this on a later cue when several necessary cues belong to one unsplit text paragraph. Local calibration converts the phrase to playback timing.
+- `speechAnchor`: `{ "quote": "exact phrase in the following text", "occurrence": 0 }`. It is required for every visual action and must be copied from the finalized narration text. Local forced alignment converts it to media time.
+- `endSpeechAnchor` (optional): the exact phrase where a spotlight should stop. Omit it to stop at the end of the sentence containing `speechAnchor`.
 
 ### play_video (Play Video)
 
@@ -170,7 +170,7 @@ Structure:
 Judge necessity before choosing a target or action:
 
 - Use no visual action for transitions, title repetition, broad narration, or a layout whose reading target is already obvious.
-- Prefer the smallest reliable rendered target. When narration discusses one table cell, select that cell; never point at the whole table or its center.
+- Prefer the smallest reliable rendered target. When narration introduces one table-row concept, frame the complete row with `rowIndex`; when it discusses one cell, select that cell. Never point at the whole table or its center.
 - A target ID being valid does not prove semantic relevance. The visible text or cell context must directly support the narration.
 - Do not guess a location inside an image. Images without a structured local target may only receive whole-image spotlight.
 - Video elements: use `play_video` instead of spotlight for video elements

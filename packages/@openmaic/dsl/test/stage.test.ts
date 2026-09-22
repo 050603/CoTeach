@@ -75,6 +75,26 @@ describe('OpenPBL legacy media compatibility', () => {
     };
     expect(speech.audioUrl).toContain('welcome.mp3');
   });
+
+  it('carries an indexed forced-alignment timeline with the speech action', () => {
+    const speech: SpeechAction = {
+      id: 'speech-aligned',
+      type: 'speech',
+      text: '先看结果，再看过程。',
+      speechAlignment: {
+        version: 'qwen3-forced-aligner-0.6b@1',
+        status: 'aligned',
+        textHash: 'text-hash',
+        audioHash: 'audio-hash',
+        language: 'zh-CN',
+        spans: [
+          { text: '结果', startChar: 2, endChar: 4, startMs: 350, endMs: 720 },
+          { text: '过程', startChar: 7, endChar: 9, startMs: 980, endMs: 1360 },
+        ],
+      },
+    };
+    expect(speech.speechAlignment?.spans[1].startChar).toBe(7);
+  });
 });
 
 describe('discriminant guards', () => {

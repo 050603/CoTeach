@@ -13,6 +13,29 @@ const inferenceAbort = new Error(
 );
 
 describe("managed classroom-generation recovery", () => {
+  it.each([true, false])('explains persisted socket disconnections with retryable=%s', (retryable) => {
+    const persisted = 'OPENPBL_COURSE_GENERATION_FAILURE_V1:' + JSON.stringify({
+      version: 1, retryable, name: 'Error',
+      message: 'Scene 20/22 failed: Cannot connect to API: other side closed',
+    });
+    expect(deserializeCourseGenerationFailure(persisted)).toMatchObject({ isRetryable: retryable });
+    const message = formatPersistedCourseGenerationErrorForTeacher(persisted);
+    expect(message).toContain('网络连接中断');
+    expect(message).toContain('请点击继续生成');
+    expect(message).not.toContain('无法继续的系统错误');
+    expect(message).not.toContain('连续多次');
+  });
+
+  it('preserves SDK socket retryability through scene context and persistence', () => {
+    const error = new Error('Scene 20/22 failed: Cannot connect to API: other side closed', {
+      cause: Object.assign(new Error('Cannot connect to API: other side closed'), {
+        isRetryable: true, cause: { code: 'UND_ERR_SOCKET' },
+      }),
+    });
+    expect(deserializeCourseGenerationFailure(serializeCourseGenerationFailure(error)))
+      .toMatchObject({ isRetryable: true });
+  });
+
   it("does not layer job recovery over exhausted request retries", () => {
     expect(createManagedCourseGenerationRecoveryRequest(
       { courseId: "course-1" },

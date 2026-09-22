@@ -12,7 +12,7 @@ const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 
 export interface PreparedClassroomAudio {
   scenes: Scene[];
-  files: Array<{ filename: string; bytes: Buffer }>;
+  files: Array<{ filename: string; bytes: Buffer; sceneId: string; actionId: string }>;
 }
 
 /** Match uploaded clips to validated narration before touching disk. Filenames
@@ -54,7 +54,7 @@ export function prepareClassroomAudioUploads(input: {
       audioUrl: `/api/openmaic/classroom-media/${input.classroomId}/audio/${filename}`,
       audioDurationSec: audioDurationSec(bytes, format),
     });
-    files.push({ filename, bytes });
+    files.push({ filename, bytes, sceneId: upload.sceneId, actionId: upload.actionId });
   }
   const scenes = input.scenes.map((scene) => ({
     ...scene,
@@ -64,6 +64,7 @@ export function prepareClassroomAudioUploads(input: {
       if (uploaded) {
         const next = { ...action, ...uploaded };
         delete next.audioInvalidated;
+        delete next.speechAlignment;
         return next;
       }
       // An IndexedDB id alone is not a resource another browser can play.
@@ -71,6 +72,7 @@ export function prepareClassroomAudioUploads(input: {
         const next = { ...action };
         delete next.audioId;
         delete next.audioDurationSec;
+        delete next.speechAlignment;
         next.audioInvalidated = true;
         return next;
       }

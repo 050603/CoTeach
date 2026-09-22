@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   persistClassroom: vi.fn(),
   copyMedia: vi.fn(),
   persistAudio: vi.fn(),
+  alignSpeech: vi.fn(),
 }));
 
 vi.mock('@/lib/course-quality-review/job-runner', () => ({ enqueueCourseQualityReview: mocks.enqueueReview }));
@@ -28,6 +29,9 @@ vi.mock('nanoid', () => ({ nanoid: () => 'draft123' }));
 vi.mock('@openmaic/lib/server/classroom-edit-audio', async (importOriginal) => ({
   ...await importOriginal<typeof import('@openmaic/lib/server/classroom-edit-audio')>(),
   persistClassroomAudioUploads: mocks.persistAudio,
+}));
+vi.mock('@openmaic/lib/server/classroom-media-generation', () => ({
+  alignClassroomSpeechActions: mocks.alignSpeech,
 }));
 vi.mock('@openmaic/lib/server/classroom-storage', async (importOriginal) => {
   const original = await importOriginal<typeof import('@openmaic/lib/server/classroom-storage')>();
@@ -104,6 +108,7 @@ beforeEach(() => {
     revision: 1,
   }));
   mocks.updateCourse.mockImplementation(async (_id, updater) => updater(course));
+  mocks.alignSpeech.mockResolvedValue({ aligned: 1, failed: 0, total: 1 });
 });
 
 describe('teacher classroom resource route', () => {
@@ -157,6 +162,10 @@ describe('teacher classroom resource route', () => {
     expect(response.status).toBe(200);
     expect(mocks.enqueueReview).not.toHaveBeenCalled();
     expect(mocks.persistAudio).toHaveBeenCalledWith('classroom-1', [expect.objectContaining({ filename: expect.stringMatching(/^edit-.*\.wav$/) })]);
+    expect(mocks.alignSpeech).toHaveBeenCalledWith(expect.objectContaining({
+      classroomId: 'classroom-1',
+      actionKeys: new Set(['["scene-1","speech-1"]']),
+    }));
     await expect(response.json()).resolves.toMatchObject({
       narrationChanged: false,
       dependencyInvalidation: {

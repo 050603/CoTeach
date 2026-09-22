@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+vi.mock("@openmaic/lib/server/proxy-fetch", () => ({
+  proxyFetch: (input: string | URL, init?: RequestInit) => fetch(input, init),
+}));
 import { DEFAULT_PBL_COURSE_CONFIG } from "@/lib/pbl-course-config";
 import type { GenerateInput } from "./types";
 import {

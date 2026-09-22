@@ -5,6 +5,7 @@ import { auditCourseGeneratedResources } from "@/lib/course-generation/resource-
 import {
   getCourseResourceRepairStatus,
   startCourseResourceRepair,
+  type CourseResourceRepairMode,
 } from "@/lib/course-generation/resource-repair-job";
 
 export const runtime = "nodejs";
@@ -22,6 +23,7 @@ export async function GET(
   return Response.json({
     ...await auditCourseGeneratedResources(courseId),
     repair: getCourseResourceRepairStatus(courseId),
+    syncRepair: getCourseResourceRepairStatus(courseId, "speech-sync"),
   });
 }
 
@@ -34,13 +36,19 @@ export async function POST(
   if (auth instanceof Response) return auth;
   const course = await getCourse(courseId);
   if (!course) return Response.json({ error: "Course not found" }, { status: 404 });
+  const body = await request.json().catch(() => ({})) as { mode?: unknown };
+  const mode: CourseResourceRepairMode = body.mode === "speech-sync"
+    ? "speech-sync"
+    : "missing-resources";
   const job = startCourseResourceRepair(
     courseId,
     process.env.PUBLIC_BASE_URL || new URL(request.url).origin,
+    mode,
   );
   after(() => job.completion);
   return Response.json({
     ...await auditCourseGeneratedResources(courseId),
     repair: job.status,
+    syncRepair: getCourseResourceRepairStatus(courseId, "speech-sync"),
   }, { status: 202 });
 }

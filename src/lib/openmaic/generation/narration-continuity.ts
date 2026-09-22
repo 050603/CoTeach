@@ -1,6 +1,7 @@
 import type { Action } from '@openmaic/lib/types/action';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import type { SceneGenerationContext } from './pipeline-types';
+import { normalizeNarrationPunctuation } from './narration-punctuation';
 
 type CourseEndingDisposition = 'verified-course-end' | 'continues' | 'pbl-stage-handoff' | 'partial-preview';
 
@@ -228,6 +229,22 @@ function joinNarrationFragments(left: string, right: string): string {
   return `${trimmedLeft}${needsSpace ? ' ' : ''}${trimmedRight}`;
 }
 
+function normalizeSpeechActionPunctuation(action: Action): Action {
+  if (action.type !== 'speech') return { ...action };
+  const text = normalizeNarrationPunctuation(action.text);
+  const normalizedAction = { ...action, text };
+  if (text === action.text) return normalizedAction;
+
+  delete normalizedAction.speechAlignment;
+  if (action.audioId || action.audioUrl || action.audioDurationSec) {
+    delete normalizedAction.audioId;
+    delete normalizedAction.audioUrl;
+    delete normalizedAction.audioDurationSec;
+    normalizedAction.audioInvalidated = true;
+  }
+  return normalizedAction;
+}
+
 function contextExtension(context: SceneGenerationContext): NarrationContinuityContext {
   if ('endingDisposition' in context) return context as NarrationContinuityContext;
   return {
@@ -342,15 +359,16 @@ export function enforceNarrationContinuity(
   actions: ReadonlyArray<Action>,
   context?: SceneGenerationContext,
 ): Action[] {
-  if (!context) return actions.map((action) => ({ ...action }));
-  const speechIndexes = actions.flatMap((action, index) => (
+  const punctuationNormalized = actions.map(normalizeSpeechActionPunctuation);
+  if (!context) return punctuationNormalized;
+  const speechIndexes = punctuationNormalized.flatMap((action, index) => (
     action.type === 'speech' && action.text.trim() ? [index] : []
   ));
   const firstSpeechIndex = speechIndexes[0];
   const lastSpeechIndex = speechIndexes.at(-1);
   const shouldStripOpening = context.narrationMode === 'embedded-segment'
     || context.sectionPosition !== 'course-first';
-  const normalized = actions.map((action, index) => {
+  const normalized = punctuationNormalized.map((action, index) => {
     if (action.type !== 'speech') return { ...action };
     let cleaned = context.pageIndex > 1
       ? action.text.replace(FALSE_SESSION_REFERENCE, '刚才')
@@ -388,6 +406,7 @@ export function enforceNarrationContinuity(
       delete normalizedAction.audioId;
       delete normalizedAction.audioUrl;
       delete normalizedAction.audioDurationSec;
+      delete normalizedAction.speechAlignment;
       normalizedAction.audioInvalidated = true;
     }
     return normalizedAction;

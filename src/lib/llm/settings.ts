@@ -5,6 +5,9 @@ import type { AiProviderSettings, PublicAiProviderSettings } from "@/lib/session
 const DATA_DIR = path.join(process.cwd(), ".openpbl-data");
 const SETTINGS_FILE = path.join(DATA_DIR, "ai-settings.json");
 
+// Transport configuration is server-owned and never persisted by the legacy UI.
+type ActiveAiSettings = AiProviderSettings & { proxy?: string };
+
 async function ensureDataDir() {
   await mkdir(DATA_DIR, { recursive: true });
 }
@@ -65,10 +68,11 @@ export function toPublicAiSettings(settings: AiProviderSettings): PublicAiProvid
  * 设置页配置 provider 但未通过 legacy 路径保存 ai-settings.json 时，
  * 由此桥接层让 legacy 路径也能读到设置页的配置。
  */
-async function readSettingsFromServerProviders(): Promise<AiProviderSettings | null> {
+async function readSettingsFromServerProviders(): Promise<ActiveAiSettings | null> {
   try {
     const { listProviders } = await import("@/lib/openmaic-bridge/provider-config-editor");
     const { PROVIDERS } = await import("@openmaic/lib/ai/providers");
+    const { resolveProxy } = await import("@openmaic/lib/server/provider-config");
     const providers = await listProviders("providers");
     for (const [providerId, entry] of Object.entries(providers)) {
       if (entry.enabled === false) continue;
@@ -91,6 +95,7 @@ async function readSettingsFromServerProviders(): Promise<AiProviderSettings | n
         endpoint: baseUrl,
         model,
         apiKey: entry.apiKey,
+        proxy: resolveProxy(providerId),
       };
     }
     return null;
@@ -118,7 +123,7 @@ function defaultBaseUrlForProvider(providerId: string): string | undefined {
   return map[providerId];
 }
 
-export async function getActiveAiSettings(): Promise<AiProviderSettings> {
+export async function getActiveAiSettings(): Promise<ActiveAiSettings> {
   // 优先级：legacy ai-settings.json > OPENPBL_LLM_* env > server-providers.yml（设置页配置）
   const legacy = await readAiSettings();
   if (legacy.endpoint && legacy.apiKey) {

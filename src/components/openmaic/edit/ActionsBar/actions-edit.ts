@@ -158,9 +158,14 @@ export function setSpeechTextClearAudioById(actions: Action[], id: string, text:
   const a = actions[index];
   if (!a || a.type !== 'speech') return actions;
   const next = actions.slice();
-  const cleaned = { ...a, text } as Action & { audioId?: string; audioUrl?: string };
+  const cleaned = { ...a, text } as Action & {
+    audioId?: string;
+    audioUrl?: string;
+    speechAlignment?: unknown;
+  };
   delete cleaned.audioId;
   delete cleaned.audioUrl;
+  delete cleaned.speechAlignment;
   if (cleaned.type === 'speech') cleaned.audioInvalidated = true;
   next[index] = cleaned;
   return next;
@@ -216,6 +221,7 @@ export function setAudioId(actions: Action[], index: number, audioId: string): A
   // A newly synthesized local clip replaces the previously published URL.
   delete updated.audioUrl;
   delete updated.audioInvalidated;
+  delete updated.speechAlignment;
   next[index] = updated;
   return next;
 }

@@ -49,6 +49,11 @@ function delay(ms: number): Promise<void> {
 /** A laser is a short pointer cue; spotlights are cleared by narration lifecycle. */
 const LASER_DEFAULT_DURATION_MS = 2500;
 
+type RuntimeLaserAction = LaserAction & {
+  /** Playback owns this cue's lifetime through the narration clock. */
+  timelineControlled?: boolean;
+};
+
 function laserDuration(action: LaserAction): number {
   if (action.duration !== undefined) return action.duration;
   return action.waypoints?.length
@@ -187,12 +192,18 @@ export class ActionEngine {
   resumeEffects(): void {
     const effect = this.activeEffect;
     if (!effect) return;
-    if (effect.type === 'laser' && this.effectTimerRemaining <= 0) {
+    if (
+      effect.type === 'laser'
+      && !(effect as RuntimeLaserAction).timelineControlled
+      && this.effectTimerRemaining <= 0
+    ) {
       this.clearEffects();
       return;
     }
     this.renderEffect(effect);
-    if (effect.type === 'laser') this.scheduleLaserClear(this.effectTimerRemaining);
+    if (effect.type === 'laser' && !(effect as RuntimeLaserAction).timelineControlled) {
+      this.scheduleLaserClear(this.effectTimerRemaining);
+    }
   }
 
   /**
@@ -247,22 +258,37 @@ export class ActionEngine {
   }
 
   private executeLaser(action: LaserAction): void {
-    this.replaceEffect(action);
+    const previousTarget = this.activeEffect?.type === 'laser'
+      ? {
+          elementId: this.activeEffect.elementId,
+          selector: this.activeEffect.selector,
+        }
+      : undefined;
+    this.replaceEffect(action, previousTarget);
   }
 
-  private replaceEffect(action: SpotlightAction | LaserAction): void {
+  private replaceEffect(
+    action: SpotlightAction | LaserAction,
+    previousTarget?: { elementId: string; selector?: LaserAction['selector'] },
+  ): void {
     if (this.effectTimer) clearTimeout(this.effectTimer);
     this.effectTimer = null;
     this.effectGeneration++;
     this.activeEffect = { ...action };
     this.effectTimerRemaining = action.type === 'laser'
+      && !(action as RuntimeLaserAction).timelineControlled
       ? laserDuration(action)
       : 0;
-    this.renderEffect(action);
-    if (action.type === 'laser') this.scheduleLaserClear(this.effectTimerRemaining);
+    this.renderEffect(action, previousTarget);
+    if (action.type === 'laser' && !(action as RuntimeLaserAction).timelineControlled) {
+      this.scheduleLaserClear(this.effectTimerRemaining);
+    }
   }
 
-  private renderEffect(action: SpotlightAction | LaserAction): void {
+  private renderEffect(
+    action: SpotlightAction | LaserAction,
+    previousTarget?: { elementId: string; selector?: LaserAction['selector'] },
+  ): void {
     if (action.type === 'spotlight') {
       useCanvasStore.getState().setSpotlight(action.elementId, {
         dimness: action.dimOpacity ?? 0.5,
@@ -275,6 +301,8 @@ export class ActionEngine {
       duration: laserDuration(action),
       selector: action.selector,
       waypoints: action.waypoints,
+      previousTarget,
+      transitionDurationMs: previousTarget ? 150 : 0,
     });
   }
 

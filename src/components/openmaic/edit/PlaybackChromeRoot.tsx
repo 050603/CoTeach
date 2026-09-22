@@ -19,7 +19,11 @@ import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import { SceneSidebar } from '@openmaic/components/stage/scene-sidebar';
 import { CanvasArea } from '@openmaic/components/canvas/canvas-area';
 import { Roundtable } from '@openmaic/components/roundtable';
-import { mergeFragmentedLectureCues } from '@openmaic/components/roundtable/lecture-subtitle-dock';
+import {
+  mergeFragmentedLectureCues,
+  type LectureCue,
+  type LectureCueAlignment,
+} from '@openmaic/components/roundtable/lecture-subtitle-dock';
 import { PlaybackEngine, computePlaybackView } from '@openmaic/lib/playback';
 import type { ActivityGate, EngineMode, TriggerEvent, Effect } from '@openmaic/lib/playback';
 import { ActionEngine } from '@openmaic/lib/action/engine';
@@ -887,25 +891,6 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       audioPlayerRef.current.setPlaybackRate(playbackSpeed);
     }, [playbackSpeed]);
 
-    // Pre-generated audio exposes a precise clock. Browser-native speech sends
-    // equivalent boundary events through PlaybackEngine, so both paths drive
-    // the same subtitle progress value without changing course narration.
-    useEffect(() => {
-      if (engineMode !== 'playing' || !lectureSpeech) return;
-      const updateFromAudio = () => {
-        const audioPlayer = audioPlayerRef.current;
-        if (!audioPlayer.isPlaying()) return;
-        const duration = audioPlayer.getDuration();
-        if (duration <= 0) return;
-        setLectureSpeechProgress(
-          Math.max(0, Math.min(1, audioPlayer.getCurrentTime() / duration)),
-        );
-      };
-      updateFromAudio();
-      const timer = window.setInterval(updateFromAudio, 120);
-      return () => window.clearInterval(timer);
-    }, [engineMode, lectureSpeech]);
-
     /**
      * Handle discussion SSE — POST /api/chat and push events to engine
      */
@@ -939,7 +924,19 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
         mergeFragmentedLectureCues(
           (currentScene?.actions ?? []).flatMap((action, actionIndex) =>
             action.type === 'speech' && action.text.trim()
-              ? [{ actionIndex, text: action.text.trim() }]
+              ? (() => {
+                  const alignment = (action as SpeechAction & {
+                    speechAlignment?: LectureCueAlignment;
+                  }).speechAlignment;
+                  return [{
+                    actionIndex,
+                    text: alignment?.status === 'aligned' ? action.text : action.text.trim(),
+                    alignment,
+                    audioDurationMs: action.audioDurationSec
+                      ? action.audioDurationSec * 1000
+                      : undefined,
+                  } satisfies LectureCue];
+                })()
               : [],
           ),
         ),

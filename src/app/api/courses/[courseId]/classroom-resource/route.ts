@@ -20,6 +20,7 @@ import {
   persistClassroomAudioUploads,
   prepareClassroomAudioUploads,
 } from '@openmaic/lib/server/classroom-edit-audio';
+import { alignClassroomSpeechActions } from '@openmaic/lib/server/classroom-media-generation';
 import {
   collectGeneratedTeacherReviewItems,
   teacherReviewSummary,
@@ -240,17 +241,25 @@ export async function PATCH(
       scene.actions?.some((action) => action.type === 'speech'
         && previousSpeech.get(JSON.stringify([scene.id, action.id]))?.text !== action.text
         && !action.audioUrl));
-    let classroom;
     if (forkPublishedClassroom) {
       await copyClassroomMedia(sourceClassroomId, targetClassroomId);
-      await persistClassroomAudioUploads(targetClassroomId, audio.files);
+    }
+    await persistClassroomAudioUploads(targetClassroomId, audio.files);
+    if (audio.files.length) {
+      await alignClassroomSpeechActions({
+        scenes: prepared.scenes,
+        classroomId: targetClassroomId,
+        actionKeys: new Set(audio.files.map((file) => JSON.stringify([file.sceneId, file.actionId]))),
+      });
+    }
+    let classroom;
+    if (forkPublishedClassroom) {
       classroom = await persistClassroom({
         id: targetClassroomId,
         stage: prepared.stage,
         scenes: prepared.scenes,
       });
     } else {
-      await persistClassroomAudioUploads(targetClassroomId, audio.files);
       classroom = await updatePersistedClassroomForEditing(
         sourceClassroomId,
         { stage: prepared.stage, scenes: prepared.scenes },

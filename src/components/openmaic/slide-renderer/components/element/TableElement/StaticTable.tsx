@@ -87,7 +87,7 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
       </colgroup>
       <tbody>
         {data.map((row, rowIdx) => (
-          <tr key={rowIdx} style={{ height: `${cellMinHeight}px` }}>
+          <tr key={rowIdx} data-slide-row-index={rowIdx} style={{ height: `${cellMinHeight}px` }}>
             {row.map((cell, colIdx) => {
               if (hiddenCells.has(`${rowIdx}_${colIdx}`)) return null;
 

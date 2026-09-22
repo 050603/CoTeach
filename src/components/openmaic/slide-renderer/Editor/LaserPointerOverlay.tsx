@@ -7,9 +7,7 @@ import { useCanvasStore } from '@openmaic/lib/store/canvas';
 import type { SlideContent } from '@openmaic/lib/types/stage';
 import type { PPTElement } from '@openmaic/dsl';
 import { LaserOverlay } from './LaserOverlay';
-import { visualTargetKey } from '@openmaic/lib/utils/visual-target';
 import { useVisualTargetGeometry } from './useVisualTargetGeometry';
-import { useVisualTargetPathGeometry } from '@openmaic/renderer';
 
 interface LaserPointerOverlayProps {
   /** Explicit rendered slide root used to isolate duplicate element ids. */
@@ -43,9 +41,14 @@ export function LaserPointerOverlay({
   );
 
   const selector = laserOptions?.selector;
-  const targetKey = laserElementId
-    ? visualTargetKey({ elementId: laserElementId, selector })
-    : 'inactive';
+  const targetElement = elements.find((element) => element.id === laserElementId);
+  const avoidCoveringTarget = Boolean(
+    selector
+    || targetElement?.type === 'text'
+    || targetElement?.type === 'table'
+    || targetElement?.type === 'latex'
+    || (targetElement?.type === 'shape' && targetElement.text?.content),
+  );
   const geometry = useVisualTargetGeometry({
     containerRef,
     rootRef,
@@ -54,22 +57,17 @@ export function LaserPointerOverlay({
     canvasScale,
     contentRevision: elements,
   });
-  const waypointGeometries = useVisualTargetPathGeometry(
-    rootRef,
-    laserOptions?.waypoints,
-  );
-
   return (
     // No overflow-hidden: the laser flies in from just outside the frame.
     <div ref={containerRef} className="absolute inset-0 z-[101] pointer-events-none">
       <AnimatePresence>
-        {laserElementId && geometry && waypointGeometries && (
+        {laserElementId && geometry && (
           <LaserOverlay
-            key={`laser-${targetKey}`}
+            key="laser-active"
             geometry={geometry}
-            waypointGeometries={waypointGeometries}
             color={laserOptions?.color}
-            duration={laserOptions?.duration}
+            transitionDurationMs={laserOptions?.transitionDurationMs}
+            avoidCoveringTarget={avoidCoveringTarget}
           />
         )}
       </AnimatePresence>

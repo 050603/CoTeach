@@ -77,7 +77,11 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
       </colgroup>
       <tbody>
         {data.map((row, rowIdx) => (
-          <tr key={rowIdx} style={{ height: `${rowHeights?.[rowIdx] ?? cellMinHeight}px` }}>
+          <tr
+            key={rowIdx}
+            data-slide-row-index={rowIdx}
+            style={{ height: `${rowHeights?.[rowIdx] ?? cellMinHeight}px` }}
+          >
             {row.map((cell, colIdx) => {
               // parser side (transformParsedToSlides) 已经把 hMerge/vMerge
               // continuation 单元格剔除了，data[r] 只剩 top-left cells；浏览器

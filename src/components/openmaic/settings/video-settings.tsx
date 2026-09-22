@@ -7,7 +7,7 @@ import { Button } from '@openmaic/components/ui/button';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@openmaic/components/ui/dialog';
 import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import { useSettingsStore } from '@openmaic/lib/store/settings';
-import { VIDEO_PROVIDERS } from '@openmaic/lib/media/video-providers';
+import { VIDEO_PROVIDERS } from '@openmaic/lib/media/video-provider-config';
 import {
   Loader2,
   CheckCircle2,

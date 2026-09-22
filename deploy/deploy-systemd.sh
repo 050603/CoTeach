@@ -18,7 +18,7 @@ exec 9>"$(git rev-parse --git-path openpbl-deploy.lock)"
 flock -n 9 || { echo 'Another deployment is running' >&2; exit 1; }
 [[ -z "$(git status --porcelain)" ]] || { echo 'Deployment checkout has local changes' >&2; exit 1; }
 for executable in pnpm node python3 systemctl curl; do command -v "$executable" >/dev/null; done
-for service in openpbl.service openpbl-code-runner.service openpbl-survey-nlp.service openpbl-outbound-proxy.service; do
+for service in openpbl.service openpbl-code-runner.service openpbl-survey-nlp.service openpbl-speech-alignment.service openpbl-outbound-proxy.service; do
   [[ "$(systemctl --user show "$service" --property=WorkingDirectory --value)" = "$(pwd -P)" ]] || {
     echo "$service must be installed for $project_path before deployment" >&2; exit 1;
   }
@@ -30,17 +30,19 @@ git checkout --detach "$revision"
 printf 'Deploying %s (previous commit %s)\n' "$revision" "$previous_revision"
 
 python3 scripts/setup-survey-nlp.py
+python3 scripts/setup-speech-alignment.py
 pnpm install --frozen-lockfile
 pnpm build
 # The application service applies committed migrations before it starts.
 # Failed builds never restart the currently serving immutable release.
 systemctl --user daemon-reload
-systemctl --user restart openpbl-outbound-proxy.service openpbl-code-runner.service openpbl-survey-nlp.service openpbl.service
+systemctl --user restart openpbl-outbound-proxy.service openpbl-code-runner.service openpbl-survey-nlp.service openpbl-speech-alignment.service openpbl.service
 
 for attempt in {1..60}; do
-  if systemctl --user is-active --quiet openpbl.service openpbl-code-runner.service openpbl-survey-nlp.service openpbl-outbound-proxy.service &&
+  if systemctl --user is-active --quiet openpbl.service openpbl-code-runner.service openpbl-survey-nlp.service openpbl-speech-alignment.service openpbl-outbound-proxy.service &&
     curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:19999/health/ready" >/dev/null 2>&1 &&
     curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:3003/health/live" >/dev/null 2>&1 &&
+    curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:3004/health/live" >/dev/null 2>&1 &&
     curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:$app_port/api/health/live" >/dev/null 2>&1; then
     printf 'Healthy deployment: %s\n' "$revision"
     exit 0

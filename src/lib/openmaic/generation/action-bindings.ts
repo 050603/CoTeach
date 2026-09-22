@@ -167,6 +167,9 @@ function resolveCue(
     ...(anchor ? {
       speechAnchor: { quote: anchor.quote, occurrence: anchor.occurrence },
     } : {}),
+    ...(anchor?.visualCue?.endSpeechAnchor ? {
+      endSpeechAnchor: anchor.visualCue.endSpeechAnchor,
+    } : {}),
     necessity: cue.necessity,
     ...(cue.omissionRisk ? { omissionRisk: cue.omissionRisk } : {}),
   };

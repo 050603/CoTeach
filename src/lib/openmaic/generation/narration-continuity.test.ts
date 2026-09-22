@@ -18,6 +18,34 @@ const outlines: SceneOutline[] = [
 ];
 
 describe('narration continuity', () => {
+  it('normalizes contradictory punctuation and invalidates mismatched audio', () => {
+    const [speech] = enforceNarrationContinuity([{
+      id: 's1',
+      type: 'speech',
+      text: '先观察共同特征。；再比较差异；。',
+      audioId: 'old-audio',
+      audioUrl: '/old.wav',
+      audioDurationSec: 3,
+      speechAlignment: {
+        version: 'test-v1',
+        status: 'pending',
+        textHash: 'old-text',
+        audioHash: 'old-audio',
+        spans: [],
+      },
+    }]);
+
+    expect(speech).toMatchObject({
+      type: 'speech',
+      text: '先观察共同特征；再比较差异。',
+      audioInvalidated: true,
+    });
+    expect(speech).not.toHaveProperty('audioId');
+    expect(speech).not.toHaveProperty('audioUrl');
+    expect(speech).not.toHaveProperty('audioDurationSec');
+    expect(speech).not.toHaveProperty('speechAlignment');
+  });
+
   it('builds previous-page context before concurrent generation', () => {
     const context = buildNarrationContext(outlines, 1);
     expect(context.pageIndex).toBe(2);

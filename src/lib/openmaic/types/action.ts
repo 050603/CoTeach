@@ -13,6 +13,7 @@
 export type {
   ActionBase,
   WhiteboardAnchor,
+  TableRowVisualTargetSelector,
   VisualTargetSelector,
   LaserWaypoint,
   SpeechAnchor,

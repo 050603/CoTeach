@@ -80,6 +80,32 @@ describe('resolveVisualTargetGeometry', () => {
     });
   });
 
+  it('targets a complete table row and never expands a stale row selector', () => {
+    document.body.innerHTML = `
+      <div id="canvas">
+        <div data-slide-element-id="table"><div class="element-content">
+          <table><tbody>
+            <tr data-slide-row-index="0"><td>Header</td></tr>
+            <tr data-slide-row-index="1"><td>Concept</td><td>Explanation</td></tr>
+          </tbody></table>
+        </div></div>
+      </div>
+    `;
+    const root = document.querySelector<HTMLElement>('#canvas')!;
+    const row = root.querySelector<HTMLElement>('[data-slide-row-index="1"]')!;
+    setRect(root, rect(0, 0, 1000, 500));
+    setRect(row, rect(80, 160, 840, 55));
+
+    expect(resolveVisualTargetGeometry(root, {
+      elementId: 'table',
+      selector: { rowIndex: 1 },
+    })).toMatchObject({ x: 8, y: 32, w: 84, h: 11 });
+    expect(resolveVisualTarget(root, {
+      elementId: 'table',
+      selector: { rowIndex: 9 },
+    })).toBeNull();
+  });
+
   it('resolves a quote inside its cell before measuring the text range', () => {
     document.body.innerHTML = `
       <div id="canvas"><div data-slide-element-id="table"><div class="element-content">
@@ -144,5 +170,51 @@ describe('resolveVisualTargetGeometry', () => {
       elementId: 'text',
       selector: { quote: 'PBL', occurrence: 2 },
     })).toBeNull();
+  });
+
+  it('places a quote laser inside its first rendered line fragment', () => {
+    document.body.innerHTML = `
+      <div id="canvas"><div data-slide-element-id="text"><div class="element-content">
+        <span>第一行关键词跨到第二行</span>
+      </div></div></div>
+    `;
+    const root = document.querySelector<HTMLElement>('#canvas')!;
+    setRect(root, rect(100, 50, 1000, 500));
+    Object.defineProperties(Range.prototype, {
+      getBoundingClientRect: {
+        configurable: true,
+        value: () => rect(300, 150, 500, 80),
+      },
+      getClientRects: {
+        configurable: true,
+        value: () => [
+          rect(300, 150, 180, 30),
+          rect(300, 200, 320, 30),
+        ],
+      },
+    });
+
+    const target = {
+      elementId: 'text',
+      selector: { quote: '关键词跨到第二行' },
+    } as const;
+    expect(resolveVisualTargetGeometry(root, target)).toMatchObject({
+      x: 20,
+      y: 20,
+      w: 50,
+      h: 16,
+      centerX: 45,
+      centerY: 28,
+    });
+    expect(resolveVisualTargetGeometry(root, target, {
+      quoteRect: 'first-fragment',
+    })).toMatchObject({
+      x: 20,
+      y: 20,
+      w: 18,
+      h: 6,
+      centerX: 29,
+      centerY: 23,
+    });
   });
 });

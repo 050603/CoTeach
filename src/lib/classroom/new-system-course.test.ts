@@ -166,6 +166,34 @@ describe("new-system course contract", () => {
     expect(plan.recommendedStageTotals.knowledge).toBe(42);
   });
 
+  it("does not add a semicolon after a strategy sentence's period", () => {
+    const plan = buildNewSystemAiTimingPlan({
+      durationMin: 10,
+      rationale: "共同讲解。",
+      confidence: "high",
+      teachingClusterBudgets: [{
+        clusterId: "cluster-1",
+        title: "共同关系",
+        knowledgePointIds: ["kp-1"],
+        durationMin: 10,
+        rationale: "建立概念。",
+        difficultyStrategies: [{
+          requirementId: "req-1",
+          learnerObstacle: "容易混淆两个概念。",
+          teachingApproach: "用正反例对照。",
+          understandingEvidence: "能够说明差异。",
+        }],
+      }],
+      evidence: [],
+      assumptions: [],
+    }, [{ id: "kp-1", name: "概念", description: "理解概念", level: "foundation" }]);
+
+    expect(plan.allocations[0]?.notes).toContain(
+      "难点策略：容易混淆两个概念；用正反例对照；理解证据：能够说明差异。",
+    );
+    expect(plan.allocations[0]?.notes).not.toContain("。；");
+  });
+
   it("stores several related knowledge points in one non-additive timing allocation", () => {
     const points = Array.from({ length: 4 }, (_, index) => ({
       id: `kp-${index + 1}`,

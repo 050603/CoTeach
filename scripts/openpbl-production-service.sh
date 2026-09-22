@@ -130,6 +130,13 @@ run_survey_nlp() {
   exec "$nlp_python" scripts/survey-nlp-server.py
 }
 
+run_speech_alignment() {
+  export OPENPBL_ALIGNMENT_MODEL_PATH="$PROJECT_ROOT/.openpbl-runtime/speech-alignment-models/Qwen3-ForcedAligner-0.6B"
+  alignment_python="${OPENPBL_ALIGNMENT_PYTHON:-$PROJECT_ROOT/.openpbl-runtime/speech-alignment-venv/bin/python}"
+  cd "$PROJECT_ROOT"
+  exec "$alignment_python" scripts/speech-alignment-server.py
+}
+
 cleanup_data() {
   load_shared_environment
   wait_for_tcp "PostgreSQL" "127.0.0.1" "15432"
@@ -158,6 +165,9 @@ case "${1:-}" in
   run-survey-nlp)
     run_survey_nlp
     ;;
+  run-speech-alignment)
+    run_speech_alignment
+    ;;
   cleanup-data)
     cleanup_data
     ;;
@@ -166,7 +176,7 @@ case "${1:-}" in
     rehydrate_data "$@"
     ;;
   *)
-    echo "用法：$0 {run-app|run-code-runner|run-survey-nlp|cleanup-data|rehydrate-data [参数]}" >&2
+    echo "用法：$0 {run-app|run-code-runner|run-survey-nlp|run-speech-alignment|cleanup-data|rehydrate-data [参数]}" >&2
     exit 2
     ;;
 esac

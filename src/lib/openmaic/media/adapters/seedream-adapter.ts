@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * Seedream (ByteDance / Doubao / Ark) Image Generation Adapter
  *
@@ -55,7 +56,7 @@ export async function testSeedreamConnectivity(
   try {
     // Send a request with empty prompt — auth failure (401/403) means bad key,
     // any other error (400) means key is valid but request is intentionally bad
-    const response = await fetch(`${baseUrl}/api/v3/images/generations`, {
+    const response = await proxyFetch(`${baseUrl}/api/v3/images/generations`, {
       method: 'POST',
       redirect: 'manual',
       headers: {

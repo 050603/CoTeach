@@ -7,7 +7,10 @@ import { useCanvasStore } from '@openmaic/lib/store/canvas';
 import type { SlideContent } from '@openmaic/lib/types/stage';
 import type { PPTElement } from '@openmaic/dsl';
 import { visualTargetKey } from '@openmaic/lib/utils/visual-target';
-import { useVisualTargetGeometry } from './useVisualTargetGeometry';
+import {
+  useVisualTargetFragmentGeometries,
+  useVisualTargetGeometry,
+} from './useVisualTargetGeometry';
 
 /**
  * Spotlight overlay component
@@ -48,6 +51,15 @@ export function SpotlightOverlay({ rootRef }: SpotlightOverlayProps) {
     canvasScale,
     contentRevision: elements,
   });
+  const fragments = useVisualTargetFragmentGeometries({
+    containerRef,
+    rootRef,
+    elementId: spotlightElementId,
+    selector,
+    canvasScale,
+    contentRevision: elements,
+  });
+  const rects = fragments.length ? fragments : rect ? [rect] : [];
 
   const active = !!spotlightElementId && !!spotlightOptions && !!rect;
   const dimness = spotlightOptions?.dimness ?? 0.7;
@@ -78,27 +90,15 @@ export function SpotlightOverlay({ rootRef }: SpotlightOverlayProps) {
                   {/* White background = show mask layer (dimmed) */}
                   <rect x="0" y="0" width="100" height="100" fill="white" />
                   {/* Black rectangle = hide mask layer (highlighted area / cutout) */}
-                  <motion.rect
-                    fill="black"
-                    initial={{
-                      x: rect.x - 8,
-                      y: rect.y - 8,
-                      width: rect.w + 16,
-                      height: rect.h + 16,
-                      rx: 4,
-                    }}
-                    animate={{
-                      x: rect.x - 0.4,
-                      y: rect.y - 0.6,
-                      width: rect.w + 0.8,
-                      height: rect.h + 1.2,
-                      rx: 1,
-                    }}
-                    transition={{
-                      duration: 0.6,
-                      ease: [0.16, 1, 0.3, 1],
-                    }}
-                  />
+                  {rects.map((fragment, index) => (
+                    <motion.rect
+                      key={index}
+                      fill="black"
+                      initial={{ x: fragment.x - 2, y: fragment.y - 2, width: fragment.w + 4, height: fragment.h + 4, rx: 2 }}
+                      animate={{ x: fragment.x - 0.4, y: fragment.y - 0.6, width: fragment.w + 0.8, height: fragment.h + 1.2, rx: 1 }}
+                      transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+                    />
+                  ))}
                 </mask>
               </defs>
 
@@ -116,33 +116,18 @@ export function SpotlightOverlay({ rootRef }: SpotlightOverlayProps) {
               />
 
               {/* THE ONE BORDER - white border */}
-              <motion.rect
-                initial={{
-                  x: rect.x - 4,
-                  y: rect.y - 4,
-                  width: rect.w + 8,
-                  height: rect.h + 8,
-                  opacity: 0,
-                  rx: 2,
-                }}
-                animate={{
-                  x: rect.x - 0.4,
-                  y: rect.y - 0.6,
-                  width: rect.w + 0.8,
-                  height: rect.h + 1.2,
-                  opacity: 1,
-                  rx: 1,
-                }}
-                fill="none"
-                stroke="rgba(255,255,255,0.7)"
-                strokeWidth="1.2"
-                style={{ vectorEffect: 'non-scaling-stroke' } as React.CSSProperties}
-                transition={{
-                  duration: 0.5,
-                  delay: 0.05,
-                  ease: [0.16, 1, 0.3, 1],
-                }}
-              />
+              {rects.map((fragment, index) => (
+                <motion.rect
+                  key={index}
+                  initial={{ x: fragment.x - 2, y: fragment.y - 2, width: fragment.w + 4, height: fragment.h + 4, opacity: 0, rx: 2 }}
+                  animate={{ x: fragment.x - 0.4, y: fragment.y - 0.6, width: fragment.w + 0.8, height: fragment.h + 1.2, opacity: 1, rx: 1 }}
+                  fill="none"
+                  stroke="rgba(255,255,255,0.7)"
+                  strokeWidth="1.2"
+                  style={{ vectorEffect: 'non-scaling-stroke' } as React.CSSProperties}
+                  transition={{ duration: 0.35, delay: 0.03, ease: [0.16, 1, 0.3, 1] }}
+                />
+              ))}
             </svg>
           </motion.div>
         )}

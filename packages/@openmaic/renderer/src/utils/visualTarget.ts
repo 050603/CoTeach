@@ -10,12 +10,20 @@ export interface VisualTarget {
 export interface ResolvedVisualTarget {
   /** Actual element or text-range bounds in viewport coordinates. */
   rect: DOMRect;
+  /** Individual rendered line fragments for a quote target. */
+  textRects?: DOMRect[];
   /** Element whose layout changes can invalidate `rect`. */
   observeElement: HTMLElement;
 }
 
+export interface ResolveVisualTargetGeometryOptions {
+  /** Use the first rendered quote fragment so a pointer never lands between lines. */
+  quoteRect?: 'bounds' | 'first-fragment';
+}
+
 const ELEMENT_ID_ATTRIBUTE = 'data-slide-element-id';
 const CELL_ID_ATTRIBUTE = 'data-slide-cell-id';
+const ROW_INDEX_ATTRIBUTE = 'data-slide-row-index';
 
 function findByDataAttribute(
   root: HTMLElement,
@@ -103,6 +111,14 @@ export function resolveVisualTarget(
     const cell = findByDataAttribute(element, CELL_ID_ATTRIBUTE, target.selector.cellId);
     if (!cell) return null;
     targetElement = cell;
+  } else if (target.selector && 'rowIndex' in target.selector) {
+    const row = findByDataAttribute(
+      element,
+      ROW_INDEX_ATTRIBUTE,
+      String(target.selector.rowIndex),
+    );
+    if (!row) return null;
+    targetElement = row;
   } else {
     targetElement = element.querySelector<HTMLElement>('.element-content') ?? element;
   }
@@ -115,7 +131,14 @@ export function resolveVisualTarget(
       target.selector.occurrence ?? 0,
     );
     if (!range) return null;
-    return { rect: range.getBoundingClientRect(), observeElement: quoteScope };
+    const textRects = typeof range.getClientRects === 'function'
+      ? Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0)
+      : [];
+    return {
+      rect: range.getBoundingClientRect(),
+      textRects,
+      observeElement: quoteScope,
+    };
   }
 
   return { rect: targetElement.getBoundingClientRect(), observeElement: targetElement };
@@ -125,10 +148,14 @@ export function resolveVisualTarget(
 export function resolveVisualTargetGeometry(
   root: HTMLElement,
   target: VisualTarget,
+  options: ResolveVisualTargetGeometryOptions = {},
 ): PercentageGeometry | null {
   const resolved = resolveVisualTarget(root, target);
   if (!resolved) return null;
-  return visualTargetRectToPercentageGeometry(root.getBoundingClientRect(), resolved.rect);
+  const targetRect = options.quoteRect === 'first-fragment'
+    ? (resolved.textRects?.[0] ?? resolved.rect)
+    : resolved.rect;
+  return visualTargetRectToPercentageGeometry(root.getBoundingClientRect(), targetRect);
 }
 
 export function visualTargetKey(target: VisualTarget): string {
@@ -139,6 +166,12 @@ export function visualTargetKey(target: VisualTarget): string {
       ? ''
       : `:quote:${selector.occurrence ?? 0}:${selector.quote}`;
     return `${target.elementId}:cell:${selector.cellId}${quoteKey}`;
+  }
+  if ('rowIndex' in selector) {
+    const quoteKey = selector.quote === undefined
+      ? ''
+      : `:quote:${selector.occurrence ?? 0}:${selector.quote}`;
+    return `${target.elementId}:row:${selector.rowIndex}${quoteKey}`;
   }
   return `${target.elementId}:quote:${selector.occurrence ?? 0}:${selector.quote}`;
 }

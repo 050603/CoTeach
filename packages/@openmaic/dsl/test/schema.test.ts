@@ -97,17 +97,48 @@ describe('generated JSON Schema — Action', () => {
       endSpeechId: 'speech-3',
     })).toBe(true);
     expect(v({
+      id: 'row',
+      type: 'spotlight',
+      elementId: 'table',
+      selector: { rowIndex: 2 },
+    })).toBe(true);
+    expect(v({
       id: 'quote',
       type: 'laser',
       elementId: 'text',
       selector: { quote: 'PBL', occurrence: 0 },
+      endSpeechAnchor: { quote: '下一项' },
+      waypoints: [
+        { elementId: 'next', speechAnchor: { quote: '然后看这里' }, speechOffsetMs: 1800 },
+      ],
       duration: 2500,
+    })).toBe(true);
+    expect(v({
+      id: 'speech',
+      type: 'speech',
+      text: '你好，OpenPBL！',
+      speechAlignment: {
+        version: 'qwen3-forced-aligner-0.6b@1',
+        status: 'aligned',
+        textHash: 'sha256:text',
+        audioHash: 'sha256:audio',
+        language: 'zh-CN',
+        spans: [
+          { text: '你好', startChar: 0, endChar: 2, startMs: 80, endMs: 430 },
+        ],
+      },
     })).toBe(true);
   });
   it('accepts cell-scoped quotes and rejects malformed fine-grained visual selectors', () => {
     expect(v({
       id: 'a', type: 'spotlight', elementId: 'e', selector: { cellId: 'c', quote: 'q' },
     })).toBe(true);
+    expect(v({
+      id: 'row', type: 'spotlight', elementId: 'e', selector: { rowIndex: 1 },
+    })).toBe(true);
+    expect(v({
+      id: 'bad-row', type: 'spotlight', elementId: 'e', selector: { rowIndex: -1 },
+    })).toBe(false);
     expect(v({
       id: 'empty', type: 'spotlight', elementId: 'e', selector: {},
     })).toBe(false);

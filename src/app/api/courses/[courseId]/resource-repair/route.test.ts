@@ -58,11 +58,36 @@ describe("course resource repair route", () => {
     }) as never, context);
 
     expect(response.status).toBe(202);
-    expect(mocks.start).toHaveBeenCalledWith("course-1", "http://localhost");
+    expect(mocks.start).toHaveBeenCalledWith("course-1", "http://localhost", "missing-resources");
     expect(mocks.after).toHaveBeenCalledOnce();
     await expect(response.json()).resolves.toMatchObject({
       issues: [{ id: "tts:a1" }],
       repair: { status: "running" },
+    });
+  });
+
+  it("starts speech synchronization independently from missing resource repair", async () => {
+    const completion = new Promise<void>(() => undefined);
+    mocks.start.mockReturnValue({
+      started: true,
+      status: { status: "running", mode: "speech-sync", completed: 0, total: 4 },
+      completion,
+    });
+    mocks.getStatus.mockImplementation((_courseId: string, mode?: string) => ({
+      status: mode === "speech-sync" ? "running" : "idle",
+      mode,
+    }));
+
+    const response = await POST(new Request("http://localhost/api/courses/course-1/resource-repair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "speech-sync" }),
+    }) as never, context);
+
+    expect(response.status).toBe(202);
+    expect(mocks.start).toHaveBeenCalledWith("course-1", "http://localhost", "speech-sync");
+    await expect(response.json()).resolves.toMatchObject({
+      syncRepair: { status: "running" },
     });
   });
 

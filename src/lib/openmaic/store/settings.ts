@@ -23,8 +23,8 @@ import { DEFAULT_VOXCPM_BACKEND, VOXCPM_MODEL_ID, VOXCPM_VLLM_MODEL_ID } from '@
 import { PDF_PROVIDERS } from '@openmaic/lib/pdf/constants';
 import type { PDFProviderId } from '@openmaic/lib/pdf/types';
 import type { ImageProviderId, VideoProviderId } from '@openmaic/lib/media/types';
-import { IMAGE_PROVIDERS } from '@openmaic/lib/media/image-providers';
-import { VIDEO_PROVIDERS } from '@openmaic/lib/media/video-providers';
+import { IMAGE_PROVIDERS } from '@openmaic/lib/media/image-provider-config';
+import { VIDEO_PROVIDERS } from '@openmaic/lib/media/video-provider-config';
 import { WEB_SEARCH_PROVIDERS } from '@openmaic/lib/web-search/constants';
 import type { BaiduSubSources, WebSearchProviderId } from '@openmaic/lib/web-search/types';
 import { createLogger } from '@openmaic/lib/logger';

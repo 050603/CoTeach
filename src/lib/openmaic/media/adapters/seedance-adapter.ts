@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * Seedance (ByteDance / Doubao / Ark) Video Generation Adapter
  *
@@ -114,7 +115,7 @@ export async function testSeedanceConnectivity(
 ): Promise<{ success: boolean; message: string }> {
   const baseUrl = config.baseUrl || DEFAULT_BASE_URL;
   try {
-    const response = await fetch(
+    const response = await proxyFetch(
       `${baseUrl}/api/v3/contents/generations/tasks/connectivity-test-nonexistent`,
       {
         method: 'GET',

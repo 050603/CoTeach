@@ -28,76 +28,13 @@ import { createLogger } from '@openmaic/lib/logger';
 
 const log = createLogger('ProxyFetch');
 
-export function resolveProxyUrl(
-  environment: Record<string, string | undefined> = process.env,
-): string | undefined {
-  return (
-    environment.OPENPBL_OUTBOUND_PROXY ||
-    environment.https_proxy ||
-    environment.HTTPS_PROXY ||
-    environment.http_proxy ||
-    environment.HTTP_PROXY ||
-    undefined
-  );
-}
-
-function getNoProxyEntries(): string[] {
-  const raw = process.env.no_proxy || process.env.NO_PROXY || '';
-  return raw
-    .split(',')
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  // URL.hostname strips the brackets from IPv6 literals on parse, but be
-  // lenient and accept both forms.
-  if (host === '::1' || host === '[::1]') return true;
-  return /^127(\.\d{1,3}){3}$/.test(host);
-}
-
-function matchesNoProxyEntry(hostname: string, port: string, entry: string): boolean {
-  if (entry === '*') return true;
-
-  let entryHost = entry;
-  let entryPort = '';
-  // Split a trailing `:port`. Skip IPv6 literals (multiple colons).
-  const colonIndex = entry.lastIndexOf(':');
-  if (colonIndex !== -1 && entry.indexOf(':') === colonIndex) {
-    entryHost = entry.slice(0, colonIndex);
-    entryPort = entry.slice(colonIndex + 1);
-  }
-  if (entryPort && entryPort !== port) return false;
-
-  // A leading dot (`.example.com`) means the same as `example.com`:
-  // match the host itself and any subdomain.
-  entryHost = entryHost.replace(/^\./, '');
-  if (!entryHost) return false;
-  return hostname === entryHost || hostname.endsWith(`.${entryHost}`);
-}
-
-/**
- * Whether a request to `url` should skip the configured proxy.
- * Exported for tests.
- */
-export function shouldBypassProxy(url: URL): boolean {
-  const hostname = url.hostname.toLowerCase();
-  if (isLoopbackHost(hostname)) return true;
-
-  const entries = getNoProxyEntries();
-  if (entries.length === 0) return false;
-
-  const port = url.port || (url.protocol === 'https:' ? '443' : '80');
-  return entries.some((entry) => matchesNoProxyEntry(hostname, port, entry));
-}
+import { resolveProxyUrl, shouldBypassProxy } from '@/lib/network/proxy-routing';
+export { resolveProxyUrl, shouldBypassProxy } from '@/lib/network/proxy-routing';
 
 let cachedAgent: ProxyAgent | null = null;
 let cachedProxyUrl: string | undefined;
 
-function getProxyAgent(): ProxyAgent | undefined {
-  const proxyUrl = resolveProxyUrl();
+function getProxyAgent(proxyUrl: string | undefined): ProxyAgent | undefined {
   if (!proxyUrl) return undefined;
 
   // Reuse agent if proxy URL hasn't changed
@@ -105,7 +42,10 @@ function getProxyAgent(): ProxyAgent | undefined {
     return cachedAgent;
   }
 
-  cachedAgent = new ProxyAgent(proxyUrl);
+  const previousAgent = cachedAgent;
+  cachedAgent = new ProxyAgent({ uri: proxyUrl, pipelining: 0 });
+  // Drain active responses when settings change; do not strand old pools.
+  if (previousAgent) void previousAgent.close().catch(() => {});
   cachedProxyUrl = proxyUrl;
   return cachedAgent;
 }
@@ -115,33 +55,39 @@ function getProxyAgent(): ProxyAgent | undefined {
  * Falls back to global fetch when no proxy is configured, when the target
  * is a loopback address, or when the target matches no_proxy / NO_PROXY.
  */
-export async function proxyFetch(input: string | URL, init?: RequestInit): Promise<Response> {
-  const agent = getProxyAgent();
-  const url = typeof input === 'string' ? input : input.toString();
-
-  if (!agent) {
-    log.info('No proxy configured, using direct fetch for:', url.slice(0, 80));
-    return fetch(input, init);
-  }
-
+export async function proxyFetch(
+  input: string | URL | Request,
+  init?: RequestInit,
+  proxyUrl?: string,
+): Promise<Response> {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   let parsed: URL | undefined;
-  try {
-    parsed = new URL(url);
-  } catch {
-    // Unparseable input — let fetch surface the real error below.
-  }
-  if (parsed && shouldBypassProxy(parsed)) {
-    log.info('Bypassing proxy (loopback/NO_PROXY) for:', url.slice(0, 80));
+  try { parsed = new URL(url); } catch { /* fetch reports invalid URLs */ }
+  // Decide bypass before constructing an agent: a broken proxy setting must
+  // not prevent local Ollama, speech or other on-host services from working.
+  if (!parsed || !['http:', 'https:'].includes(parsed.protocol) || shouldBypassProxy(parsed)) {
     return fetch(input, init);
   }
+  const agent = getProxyAgent(proxyUrl?.trim() || resolveProxyUrl());
+  if (!agent) return fetch(input, init);
 
-  log.info('Using proxy', cachedProxyUrl, 'for:', url.slice(0, 80));
-  // Use undici's fetch with the proxy dispatcher
-  const res = await undiciFetch(input, {
+  // Never log signed URL queries, request paths, or proxy credentials.
+  log.debug('Using configured proxy for:', parsed.origin);
+  // SDKs may supply a native Request, which is not an instance of the external
+  // Undici package's Request. Preserve its options while crossing that boundary.
+  const requestOptions: UndiciRequestInit = typeof input !== 'string' && !(input instanceof URL)
+    ? {
+        method: input.method, headers: input.headers,
+        body: input.body, signal: input.signal, redirect: input.redirect,
+        credentials: input.credentials, cache: input.cache, integrity: input.integrity,
+        keepalive: input.keepalive, mode: input.mode, referrer: input.referrer,
+        referrerPolicy: input.referrerPolicy, duplex: 'half',
+      } as UndiciRequestInit
+    : {};
+  const res = await undiciFetch(url, {
+    ...requestOptions,
     ...(init as UndiciRequestInit),
     dispatcher: agent,
   });
-
-  // undici's Response is compatible with the global Response
   return res as unknown as Response;
 }

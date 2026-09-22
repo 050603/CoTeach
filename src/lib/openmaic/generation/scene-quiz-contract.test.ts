@@ -313,4 +313,68 @@ describe('section short-answer quiz contract', () => {
     ]);
     expect(questions[0]).toMatchObject({ id: 'q-role', type: 'matching', format: 'matching' });
   });
+
+  it('corrects deterministic quality failures without adding a separate review call', async () => {
+    const qualityOutline: SceneOutline = {
+      ...outline,
+      quizConfig: {
+        difficulty: 'medium',
+        questionCount: 2,
+        questionTypes: ['single', 'multiple'],
+        minShortAnswerQuestions: 0,
+        maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const invalid = [
+      {
+        id: 'q1', type: 'single', format: 'single_choice', question: '哪种抽样更合理？',
+        options: [{ label: '随机抽样', value: 'A' }, { label: ' 随机抽样 ', value: 'B' }],
+        answer: ['A'], analysis: ' ', knowledgePointIds: ['kp-sampling'], points: 10,
+      },
+      {
+        id: 'q1', type: 'multiple', format: 'multiple_choice', question: '哪些做法正确？',
+        options: [{ label: '随机抽取', value: 'A' }, { label: '分层抽取', value: 'B' }],
+        answer: ['A', 'B'], analysis: '两种做法都正确。', knowledgePointIds: ['kp-sampling'], points: 10,
+      },
+    ];
+    const corrected = [
+      {
+        id: 'q1', type: 'single', format: 'single_choice', question: '哪种抽样更能减少人为选择偏差？',
+        options: [{ label: '按学号随机抽取学生', value: 'A' }, { label: '请教师推荐活跃学生', value: 'B' }],
+        answer: ['A'], analysis: 'A 不依赖教师判断；B 会引入推荐标准造成的选择偏差。', knowledgePointIds: ['kp-sampling'], points: 10,
+      },
+      {
+        id: 'q2', type: 'multiple', format: 'multiple_choice', question: '哪些做法有助于获得更有代表性的样本？',
+        options: [{ label: '覆盖不同年级后随机抽取', value: 'A' }, { label: '只调查最容易接触的人', value: 'B' }, { label: '按总体结构分层抽取', value: 'C' }],
+        answer: ['A', 'C'], analysis: 'A 和 C 改善群体覆盖；B 属于方便抽样，容易遗漏难以接触的人群。', knowledgePointIds: ['kp-sampling'], points: 10,
+      },
+    ];
+    const ai = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify(invalid))
+      .mockResolvedValueOnce(JSON.stringify(corrected));
+
+    const result = await generateSceneContent(qualityOutline, ai);
+    expect(ai).toHaveBeenCalledTimes(2);
+    expect(ai.mock.calls[0][0]).toContain('The correct option must not be the only careful');
+    expect(ai.mock.calls[0][0]).toContain('silently inspect the entire set and revise it in the same response');
+    expect(ai.mock.calls[1][1]).toContain('duplicate question id "q1"');
+    expect(ai.mock.calls[1][1]).toContain('empty analysis');
+    expect(ai.mock.calls[1][1]).toContain('duplicate trimmed option labels');
+    expect(ai.mock.calls[1][1]).toContain('marks every multiple-choice option as correct');
+    expect(result && 'questions' in result ? result.questions.map((question) => question.id) : []).toEqual(['q1', 'q2']);
+  });
+
+  it('stops after the existing correction budget when analysis remains empty', async () => {
+    const missingAnalysis = JSON.stringify([{
+      id: 'q1', type: 'short_answer', format: 'short_answer', question: '解释随机抽样如何减少选择偏差。',
+      analysis: ' ', knowledgePointIds: ['kp-sampling'], points: 10,
+    }]);
+    const ai = vi.fn().mockResolvedValue(missingAnalysis);
+
+    await expect(generateSceneContent(outline, ai)).rejects.toThrow(
+      'failed deterministic quality checks: question 1 has empty analysis',
+    );
+    expect(ai).toHaveBeenCalledTimes(2);
+  });
 });

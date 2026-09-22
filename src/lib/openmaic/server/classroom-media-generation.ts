@@ -51,6 +51,10 @@ import { auditNarrationLanguage } from '@openmaic/lib/generation/course-language
 import { mapWithConcurrency } from '@openmaic/lib/utils/concurrency';
 import { runWithGlobalTtsProviderSlot } from '@openmaic/lib/server/tts-provider-limiter';
 import { audioDurationSec } from '@openmaic/lib/audio/audio-duration';
+import {
+  alignSpeechFile,
+  SPEECH_ALIGNMENT_VERSION,
+} from '@openmaic/lib/server/speech-alignment';
 import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 import {
   hasPblRoutingMetadata,
@@ -869,6 +873,12 @@ export async function generateTTSForClassroom(
   });
 
   const failedActionIds = speechTasks.flatMap((task, index) => outcomes[index] ? [] : [task.actionId]);
+  await alignClassroomSpeechActions({
+    scenes: eligibleScenes,
+    classroomId,
+    signal,
+    language: timingOptions.language,
+  });
   if (failedActionIds.length > 0) {
     const error = new Error(
       `课堂语音仍有 ${failedActionIds.length} 段未生成：${failedActionIds.join(', ')}`,
@@ -877,4 +887,96 @@ export async function generateTTSForClassroom(
     error.isRetryable = false;
     throw error;
   }
+}
+
+export type SpeechAlignmentProgress = {
+  completed: number;
+  total: number;
+  actionId: string;
+  status: 'aligned' | 'failed';
+};
+
+function classroomSpeechAudioPath(classroomId: string, audioUrl: string): string | undefined {
+  let pathname: string;
+  try {
+    pathname = new URL(audioUrl, 'http://localhost').pathname;
+  } catch {
+    return undefined;
+  }
+  const marker = `/api/openmaic/classroom-media/${encodeURIComponent(classroomId)}/audio/`;
+  const markerIndex = pathname.indexOf(marker);
+  if (markerIndex < 0) return undefined;
+  const filename = decodeURIComponent(pathname.slice(markerIndex + marker.length));
+  if (!filename || filename !== path.basename(filename)) return undefined;
+  return path.join(CLASSROOMS_DIR, classroomId, 'audio', filename);
+}
+
+/** Align persisted narration without regenerating either its audio or wording. */
+export async function alignClassroomSpeechActions(input: {
+  scenes: Scene[];
+  classroomId: string;
+  language?: string;
+  /** Restrict work to newly generated clips; keys are JSON `[sceneId, actionId]` tuples. */
+  actionKeys?: ReadonlySet<string>;
+  signal?: AbortSignal;
+  onProgress?: (progress: SpeechAlignmentProgress) => void | Promise<void>;
+}): Promise<{ aligned: number; failed: number; total: number }> {
+  const tasks = input.scenes.flatMap((scene) => (scene.actions ?? []).flatMap((action) => {
+    if (action.type !== 'speech' || !action.text.trim() || !action.audioUrl) return [];
+    if (input.actionKeys && !input.actionKeys.has(JSON.stringify([scene.id, action.id]))) return [];
+    const audioPath = classroomSpeechAudioPath(input.classroomId, action.audioUrl);
+    return audioPath ? [{ action, audioPath, language: scene.timingPlan?.language ?? input.language }] : [];
+  }));
+  let aligned = 0;
+  let failed = 0;
+  for (const [index, task] of tasks.entries()) {
+    throwIfAborted(input.signal);
+    task.action.speechAlignment = {
+      version: SPEECH_ALIGNMENT_VERSION,
+      status: 'pending',
+      textHash: '',
+      audioHash: '',
+      spans: [],
+    };
+    try {
+      const result = await alignSpeechFile({
+        audioPath: task.audioPath,
+        text: task.action.text,
+        language: task.language,
+        signal: input.signal,
+      });
+      task.action.speechAlignment = {
+        version: result.version,
+        status: 'aligned',
+        textHash: result.textHash,
+        audioHash: result.audioHash,
+        language: result.language,
+        spans: result.spans,
+      };
+      aligned += 1;
+      await input.onProgress?.({
+        completed: index + 1,
+        total: tasks.length,
+        actionId: task.action.id,
+        status: 'aligned',
+      });
+    } catch (error) {
+      if (input.signal?.aborted) throw error;
+      const previous = task.action.speechAlignment;
+      task.action.speechAlignment = {
+        ...previous,
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      };
+      failed += 1;
+      log.warn(`Speech alignment failed for ${task.action.id}; visual cues will be disabled`, error);
+      await input.onProgress?.({
+        completed: index + 1,
+        total: tasks.length,
+        actionId: task.action.id,
+        status: 'failed',
+      });
+    }
+  }
+  return { aligned, failed, total: tasks.length };
 }

@@ -35,6 +35,23 @@ describe("QuizView single-attempt review", () => {
         commentPrompt: "填写一个短语即可。",
         points: 10,
       },
+      {
+        id: "multiple-1",
+        type: "multiple",
+        format: "multiple_choice",
+        question: "哪些做法能保持测试集独立？",
+        options: [{ value: "A", label: "只在最终评估时使用" }, { value: "B", label: "每轮调参后都查看结果" }, { value: "C", label: "调参阶段使用验证集" }],
+        answer: ["A", "C"],
+        points: 10,
+      },
+      {
+        id: "scenario-1",
+        type: "short_answer",
+        format: "scenario_task",
+        question: "为一个小型研究设计数据划分方案。",
+        commentPrompt: "说明判断和依据。",
+        points: 10,
+      },
     ];
 
     render(
@@ -48,8 +65,41 @@ describe("QuizView single-attempt review", () => {
     fireEvent.click(screen.getByRole("button", { name: /开始答题|Start Quiz/ }));
     expect(await screen.findByRole("button", { name: /学习模型参数/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /错误/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /只在最终评估时使用/ })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByPlaceholderText("填写关键概念或关系").tagName).toBe("INPUT");
+    expect(screen.getByPlaceholderText("写出你的判断、依据和解决思路").tagName).toBe("TEXTAREA");
     expect(screen.queryByRole("textbox", { name: /理由/ })).toBeNull();
+  });
+
+  it("shows answered progress, keeps the answer key hidden, and restores a saved draft", async () => {
+    const questions: QuizQuestion[] = [{
+      id: "progress-1",
+      type: "single",
+      format: "single_choice",
+      question: "哪组数据用于学习模型参数？",
+      options: [{ value: "A", label: "训练集" }, { value: "B", label: "测试集" }],
+      answer: ["A"],
+      analysis: "训练集用于学习参数，测试集用于独立评估。",
+      points: 10,
+    }];
+    localStorage.setItem("quizDraft:scene-draft", JSON.stringify({ "progress-1": "A" }));
+
+    render(
+      <I18nProvider>
+        <KnowledgeLectureQuizLockProvider attemptsBySceneId={new Map()}>
+          <QuizView questions={questions} quizOutlineId="quiz-draft" sceneId="scene-draft" />
+        </KnowledgeLectureQuizLockProvider>
+      </I18nProvider>,
+    );
+
+    expect(screen.queryByText("训练集用于学习参数，测试集用于独立评估。")).toBeNull();
+    expect(screen.queryByText("正确答案")).toBeNull();
+    expect(await screen.findByText("已完成 1 / 1")).toBeTruthy();
+    expect(screen.getByText("已全部完成")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /训练集/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /Submit Answers|提交答案/ })).not.toBeDisabled();
+
+    localStorage.removeItem("quizDraft:scene-draft");
   });
 
   it("restores the server submission as read-only and never renders a retry action", () => {
@@ -82,6 +132,8 @@ describe("QuizView single-attempt review", () => {
       }],
     };
     const attempts = new Map([["quiz-1", attempt]]);
+    const completionListener = vi.fn();
+    window.addEventListener("openmaic:playback-activity-complete", completionListener);
 
     render(
       <I18nProvider>
@@ -95,6 +147,10 @@ describe("QuizView single-attempt review", () => {
     expect(screen.getByText("本小节测验仅可作答一次")).toBeTruthy();
     expect(screen.queryByText("重做")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "我已经理解，可以继续" }));
+    expect(completionListener).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "已确认理解" })).toBeDisabled();
+    window.removeEventListener("openmaic:playback-activity-complete", completionListener);
   });
 
   it("supports dragging an assigned card back to the pool before grading", async () => {

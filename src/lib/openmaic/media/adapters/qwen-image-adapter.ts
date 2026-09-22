@@ -1,3 +1,4 @@
+import { proxyFetch } from '@openmaic/lib/server/proxy-fetch';
 /**
  * Qwen Image (Alibaba Cloud / DashScope) Image Generation Adapter
  *
@@ -57,7 +58,7 @@ export async function testQwenImageConnectivity(
 ): Promise<{ success: boolean; message: string }> {
   const baseUrl = resolveBaseUrl(config.baseUrl);
   try {
-    const response = await fetch(
+    const response = await proxyFetch(
       `${baseUrl}/api/v1/services/aigc/multimodal-generation/generation`,
       {
         method: 'POST',

@@ -7,7 +7,7 @@ import { Button } from '@openmaic/components/ui/button';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@openmaic/components/ui/dialog';
 import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import { useSettingsStore } from '@openmaic/lib/store/settings';
-import { IMAGE_PROVIDERS } from '@openmaic/lib/media/image-providers';
+import { IMAGE_PROVIDERS } from '@openmaic/lib/media/image-provider-config';
 import {
   Loader2,
   CheckCircle2,
