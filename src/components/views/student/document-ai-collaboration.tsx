@@ -39,6 +39,7 @@ import type {
 import {
   documentParagraphVersionFingerprint,
   DOCUMENT_COMMENT_REVIEW_VERSION,
+  isReviewableDocumentParagraph,
 } from "@/lib/ai-collaboration/document-comment-policy";
 import type { AiContribution } from "@/lib/learning-evidence/types";
 import { useCourse, useHydrated, useSession } from "@/lib/session/store";
@@ -151,7 +152,7 @@ export function DocumentAiCollaboration({
   const loadedScopeRef = useRef("");
   const proactiveRequestRef = useRef<Set<string>>(new Set());
   const analyzedParagraphsRef = useRef<Set<string>>(new Set());
-  const paragraphSnapshotRef = useRef<Map<string, string>>(new Map());
+  const proactiveRetryTimerRef = useRef<number | null>(null);
   const taskStarterContextRef = useRef<{ signature: string; length: number; at: number } | null>(null);
   const savedContentRef = useRef("");
   const [documentHtml, setDocumentHtml] = useState("");
@@ -177,6 +178,7 @@ export function DocumentAiCollaboration({
   const [taskStarters, setTaskStarters] = useState<string[]>([]);
   const [taskStartersBusy, setTaskStartersBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [proactiveReviewRetry, setProactiveReviewRetry] = useState(0);
   const [submittedVersion, setSubmittedVersion] = useState<{
     sequence: number;
     submittedAt?: string;
@@ -220,6 +222,20 @@ export function DocumentAiCollaboration({
     return () => window.clearTimeout(timer);
   }, [editNotice]);
 
+  const scheduleProactiveReviewRetry = useCallback(() => {
+    if (proactiveRetryTimerRef.current !== null) return;
+    proactiveRetryTimerRef.current = window.setTimeout(() => {
+      proactiveRetryTimerRef.current = null;
+      setProactiveReviewRetry((current) => current + 1);
+    }, 5_000);
+  }, []);
+
+  useEffect(() => () => {
+    if (proactiveRetryTimerRef.current !== null) {
+      window.clearTimeout(proactiveRetryTimerRef.current);
+    }
+  }, []);
+
   useEffect(() => {
     if (!hydrated) return;
     if (session.joinedCourseId && session.joinedCourseId !== courseId) {
@@ -251,7 +267,6 @@ export function DocumentAiCollaboration({
     taskStarterContextRef.current = null;
     proactiveRequestRef.current = new Set();
     analyzedParagraphsRef.current = new Set();
-    paragraphSnapshotRef.current = new Map();
     setAiCommentThreads([]);
     setUndoableEdit(null);
   }, [course, existingDocument, existingDocument?.content, existingDocument?.id, existingDocument?.version, isExternalArtifact, stageKey, studentId, supportedStage, workspaceKind]);
@@ -401,22 +416,11 @@ export function DocumentAiCollaboration({
 
   useEffect(() => {
     if (!documentReady || !historyLoaded || !course || !studentId || !supportedStage) return;
-    if (plainTextLength(documentHtml) < 120 || busy || pendingSuggestion || pendingDelivery) return;
+    if (busy || pendingSuggestion || pendingDelivery) return;
     const scopeKey = `${course.id}:${studentId}:${stageKey}:${workspaceKind}`;
     const storageKey = `openpbl:ai-collaboration:paragraph-review:v${DOCUMENT_COMMENT_REVIEW_VERSION}:${scopeKey}`;
     const timer = window.setTimeout(() => {
       const candidates = editorRef.current?.getBlockCandidates() ?? [];
-      const snapshot = new Map(candidates.map((candidate) => [
-        candidate.blockId ?? `index:${candidate.blockIndex}`,
-        candidate.text,
-      ]));
-      const previousSnapshot = paragraphSnapshotRef.current;
-      const changedCandidates = previousSnapshot.size
-        ? candidates.filter((candidate) =>
-            previousSnapshot.get(candidate.blockId ?? `index:${candidate.blockIndex}`) !== candidate.text
-          )
-        : candidates;
-      paragraphSnapshotRef.current = snapshot;
 
       try {
         const stored = JSON.parse(window.sessionStorage.getItem(storageKey) ?? "[]") as unknown;
@@ -428,10 +432,10 @@ export function DocumentAiCollaboration({
         window.sessionStorage.removeItem(storageKey);
       }
 
-      const candidatesToReview = changedCandidates.filter((item) => {
+      const candidatesToReview = candidates.filter((item) => {
         const type = item.type.toLowerCase();
         if (!["p", "blockquote", "h1", "h2", "h3"].includes(type)) return false;
-        if (item.text.length < 40 || item.text.length > 2_000) return false;
+        if (!isReviewableDocumentParagraph(item.text)) return false;
         const signature = documentParagraphVersionFingerprint(item.text);
         const hasCompletedReview = aiCommentThreads.some((thread) =>
           thread.reviewVersion === DOCUMENT_COMMENT_REVIEW_VERSION
@@ -471,13 +475,19 @@ export function DocumentAiCollaboration({
       }).then(async (response) => {
         const payload = await response.json().catch(() => ({})) as {
           commentThreads?: DocumentAiCommentThread[];
+          reviewedParagraphFingerprints?: string[];
         };
         if (!response.ok) throw new Error("PROACTIVE_COMMENT_BATCH_FAILED");
-        requests.forEach(({ signature }) => analyzedParagraphsRef.current.add(signature));
+        const confirmedFingerprints = new Set(payload.reviewedParagraphFingerprints ?? []);
+        const confirmedRequests = requests.filter(({ signature }) =>
+          confirmedFingerprints.has(signature)
+        );
+        confirmedRequests.forEach(({ signature }) => analyzedParagraphsRef.current.add(signature));
         window.sessionStorage.setItem(
           storageKey,
           JSON.stringify([...analyzedParagraphsRef.current].slice(-200)),
         );
+        if (confirmedRequests.length < requests.length) scheduleProactiveReviewRetry();
         const incoming = payload.commentThreads ?? [];
         if (!incoming.length) return;
         const incomingIds = new Set(incoming.map((thread) => thread.id));
@@ -485,12 +495,12 @@ export function DocumentAiCollaboration({
           ...current.filter((thread) => !incomingIds.has(thread.id)),
           ...incoming,
         ]);
-      }).catch(() => undefined).finally(() => {
+      }).catch(() => scheduleProactiveReviewRetry()).finally(() => {
         requests.forEach(({ signature }) => proactiveRequestRef.current.delete(signature));
       });
-    }, 12_000);
+    }, 5_000);
     return () => window.clearTimeout(timer);
-  }, [aiCommentThreads, busy, course, documentHtml, documentReady, historyLoaded, pendingDelivery, pendingSuggestion, stageKey, studentId, supportedStage, workspaceKind]);
+  }, [aiCommentThreads, busy, course, documentHtml, documentReady, historyLoaded, pendingDelivery, pendingSuggestion, proactiveReviewRetry, scheduleProactiveReviewRetry, stageKey, studentId, supportedStage, workspaceKind]);
 
   const replyToDocumentComment = useCallback(async ({
     threadId,

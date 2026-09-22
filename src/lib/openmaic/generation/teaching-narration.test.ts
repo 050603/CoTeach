@@ -186,8 +186,11 @@ describe('independent first-pass teaching narration', () => {
     });
 
     const text = generated.pages[0]?.segments[0]?.text ?? '';
-    expect(text).toContain('接下来通过“小节检测”检验理解');
+    expect(text).toContain('接下来用几道小题检验一下理解');
+    expect(text).not.toContain('小节检测');
     expect(text).not.toMatch(/已经掌握|课程就到这里|谢谢大家|再见/);
+    const [, prompt] = aiCall.mock.calls[0] ?? [];
+    expect(prompt).not.toContain('"title":"小节检测"');
   });
 
   it('keeps only one farewell when the draft closes in consecutive segments', async () => {

@@ -54,6 +54,10 @@ function naturalTitle(title: string): string {
   return title.replace(/^[《“\"]|[》”\"]$/g, '').trim();
 }
 
+function learnerFacingOutlineLabel(outline: SceneOutline): string {
+  return outline.type === 'quiz' ? '完成几道小题' : outline.title;
+}
+
 function nextStepHandoff(current: SceneOutline | undefined, next: SceneOutline | undefined): {
   disposition: CourseEndingDisposition;
   handoff?: string;
@@ -64,7 +68,7 @@ function nextStepHandoff(current: SceneOutline | undefined, next: SceneOutline |
     if (next.type === 'quiz') {
       return {
         disposition: 'continues',
-        handoff: `接下来通过“${naturalTitle(next.title)}”检验理解，再根据反馈继续学习。`,
+        handoff: '接下来用几道小题检验一下理解。',
         ...(next.stageKey ? { nextStageKey: next.stageKey } : {}),
         ...(stageLabel(next) ? { nextStageLabel: stageLabel(next) } : {}),
       };
@@ -125,7 +129,9 @@ export function buildNarrationContext(
   return {
     pageIndex: safeIndex + 1,
     totalPages: outlines.length,
-    allTitles: outlines.map((outline) => outline.title),
+    // Quiz titles describe an authoring/analytics resource. Narration only
+    // needs the learner-facing action and must not read that internal name.
+    allTitles: outlines.map(learnerFacingOutlineLabel),
     previousSpeeches: [],
     ...(options?.courseTitle?.trim() ? { courseTitle: options.courseTitle.trim() } : {}),
     sectionPosition,
@@ -133,7 +139,7 @@ export function buildNarrationContext(
     previousPageSummary: summarizeOutline(previous),
     currentTeachingObjective: summarizeOutline(current),
     narrationMode: current?.narrationMode ?? 'standalone-course',
-    ...(next?.title ? { nextPageTitle: next.title } : {}),
+    ...(next?.title && next.type !== 'quiz' ? { nextPageTitle: next.title } : {}),
     ...(next ? { nextPageType: next.type } : {}),
     ...(nextStep.nextStageKey ? { nextStageKey: nextStep.nextStageKey } : {}),
     ...(nextStep.nextStageLabel ? { nextStageLabel: nextStep.nextStageLabel } : {}),
@@ -259,7 +265,7 @@ function hasOutgoingHandoff(text: string, context: NarrationContinuityContext): 
   const tail = text.slice(-180);
   const target = context.nextStageLabel || context.nextPageTitle;
   if (target && tail.includes(naturalTitle(target))) return true;
-  if (context.nextPageType === 'quiz' && /(?:接下来|下面|随后).{0,20}(?:小测|测验|检测|练习)/.test(tail)) return true;
+  if (context.nextPageType === 'quiz' && /(?:接下来|下面|随后|现在).{0,24}(?:小题|题目|小测|测验|检测|练习)/.test(tail)) return true;
   if (context.nextStageKey === 'make' && /(?:接下来|下面|随后).{0,20}(?:项目实践|实践|具体任务)/.test(tail)) return true;
   return false;
 }

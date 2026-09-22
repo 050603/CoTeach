@@ -18,6 +18,7 @@ import {
   buildProactiveDocumentCommentPrompts,
   areDocumentCommentIssuesEquivalent,
   documentParagraphVersionFingerprint,
+  isReviewableDocumentParagraph,
   normalizeBatchProactiveDocumentComments,
   normalizeDocumentCommentReply,
   normalizeProactiveDocumentComment,
@@ -158,7 +159,7 @@ function parseProactiveParagraphs(value: unknown): ProactiveParagraph[] {
       || seen.has(candidateId)
       || !Number.isInteger(blockIndex)
       || blockIndex < 0
-      || targetText.length < 40
+      || !isReviewableDocumentParagraph(targetText)
     ) return [];
     seen.add(candidateId);
     return [{ candidateId, blockId, blockIndex, targetText }];

@@ -11,8 +11,10 @@ import { createLogger } from '@openmaic/lib/logger';
 import { hasWavHeader, normalizePlayableWav } from '@openmaic/lib/audio/wav-container';
 
 const log = createLogger('AudioPlayer');
-const PLAYBACK_WARMUP_MS = 320;
+const PLAYBACK_WARMUP_MS = 650;
 const PLAYBACK_WARMUP_VOLUME = 0.001;
+const PLAYBACK_REWIND_TIMEOUT_MS = 1_000;
+const PLAYBACK_REWIND_EPSILON_SECONDS = 0.01;
 
 function isWavAudio(blob: Blob, format?: string): boolean {
   const lowerFormat = format?.toLowerCase();
@@ -181,14 +183,16 @@ export class AudioPlayer {
    * Pause playback
    */
   public pause(): void {
-    if (this.audio && !this.audio.paused) {
-      this.audio.pause();
-      if (this.warmupAudio === this.audio) {
-        this.audio.currentTime = 0;
-        this.audio.volume = this.muted ? 0 : this.volume;
-        this.warmupAudio = null;
-        this.warmupNextPlayback = false;
-      }
+    if (!this.audio) return;
+    if (!this.audio.paused) this.audio.pause();
+    // Rewinding the pre-roll is asynchronous and happens while the element is
+    // already paused. A user pause during that small window must still cancel
+    // the pending audible restart.
+    if (this.warmupAudio === this.audio) {
+      this.audio.currentTime = 0;
+      this.audio.volume = this.muted ? 0 : this.volume;
+      this.warmupAudio = null;
+      this.warmupNextPlayback = false;
     }
   }
 
@@ -325,11 +329,52 @@ export class AudioPlayer {
     if (this.audio !== audio || this.warmupAudio !== audio) return false;
 
     audio.pause();
-    audio.currentTime = 0;
+    await this.rewindAfterWarmup(audio);
+    if (this.audio !== audio || this.warmupAudio !== audio) return false;
     audio.volume = this.muted ? 0 : this.volume;
     this.warmupAudio = null;
     this.warmupNextPlayback = false;
     return true;
+  }
+
+  /**
+   * Setting currentTime starts an asynchronous seek in real browsers. Starting
+   * playback again before `seeked` can continue from the quiet pre-roll and
+   * permanently skip the first words, so wait until the media pipeline has
+   * actually returned to the beginning.
+   */
+  private async rewindAfterWarmup(audio: HTMLAudioElement): Promise<void> {
+    audio.currentTime = 0;
+    if (!audio.seeking) return;
+
+    await new Promise<void>((resolve) => {
+      const timeout = window.setTimeout(() => {
+        cleanup();
+        resolve();
+      }, PLAYBACK_REWIND_TIMEOUT_MS);
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        audio.removeEventListener('seeked', onSeeked);
+        audio.removeEventListener('error', onError);
+      };
+      const onSeeked = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = () => {
+        cleanup();
+        resolve();
+      };
+      audio.addEventListener('seeked', onSeeked, { once: true });
+      audio.addEventListener('error', onError, { once: true });
+    });
+
+    // Some media implementations report a completed seek slightly above zero.
+    // Re-assert the exact beginning before the audible play without starting a
+    // second wait for harmless floating-point drift.
+    if (audio.currentTime > PLAYBACK_REWIND_EPSILON_SECONDS) {
+      audio.currentTime = 0;
+    }
   }
 
   /** Seek after metadata is available so subtitle clicks start at that sentence. */

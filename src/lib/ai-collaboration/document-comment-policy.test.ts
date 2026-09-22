@@ -5,6 +5,7 @@ import {
   buildBatchProactiveDocumentCommentPrompts,
   buildProactiveDocumentCommentPrompts,
   documentParagraphVersionFingerprint,
+  isReviewableDocumentParagraph,
   normalizeBatchProactiveDocumentComments,
   normalizeDocumentCommentReply,
   normalizeProactiveDocumentComment,
@@ -26,6 +27,12 @@ describe('document comment collaboration policy', () => {
       .toBe(documentParagraphVersionFingerprint('我们选择这个方案。 因为成本更低。'));
     expect(documentParagraphVersionFingerprint('我们选择这个方案，因为成本更低。'))
       .not.toBe(documentParagraphVersionFingerprint('我们选择这个方案，因为效果更好。'));
+  });
+
+  it('reviews short meaningful sentences instead of requiring a 40-character paragraph', () => {
+    expect(isReviewableDocumentParagraph('我们讨论决定了选择这个方案。')).toBe(true);
+    expect(isReviewableDocumentParagraph('项目背景')).toBe(false);
+    expect(isReviewableDocumentParagraph('……！？')).toBe(false);
   });
 
   it('recognizes the same issue when the model changes its label or quoted range', () => {
@@ -83,6 +90,7 @@ describe('document comment collaboration policy', () => {
     expect(prompts.system).toContain('不能只检查最后一段');
     expect(prompts.system).toContain('同一个 candidateId 返回多条记录');
     expect(prompts.system).toContain('动宾');
+    expect(prompts.system).toContain('就应当介入');
     expect(prompts.system).toContain('quotedText');
     expect(prompts.user).toContain('p-1');
     expect(prompts.user).toContain('p-2');

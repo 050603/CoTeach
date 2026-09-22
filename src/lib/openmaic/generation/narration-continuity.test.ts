@@ -239,8 +239,26 @@ describe('narration continuity', () => {
       { id: 's1', type: 'speech', text: '这一页讲清了判断依据。感谢大家，同学们再见。' },
     ], buildNarrationContext(progression, 1));
     const text = (result[0] as Extract<Action, { type: 'speech' }>).text;
-    expect(text).toContain('接下来通过“理解检测”检验理解');
+    expect(text).toContain('接下来用几道小题检验一下理解');
+    expect(text).not.toContain('理解检测');
     expect(text).not.toMatch(/已经掌握|再见/);
+  });
+
+  it('keeps one authored quiz bridge without appending the internal quiz title', () => {
+    const quiz: SceneOutline = {
+      id: 'quiz', type: 'quiz', title: '第 1 节 · 节末小测', description: '检查理解', keyPoints: [], order: 2, stageKey: 'ai-learning',
+    };
+    const progression = [...outlines.slice(0, 2), quiz];
+    const context = buildNarrationContext(progression, 1);
+    const result = enforceNarrationContinuity([
+      { id: 's1', type: 'speech', text: '接下来我们用几道小题检验一下。' },
+    ], context);
+    const text = (result[0] as Extract<Action, { type: 'speech' }>).text;
+
+    expect(text).toBe('接下来我们用几道小题检验一下。');
+    expect(context.nextPageTitle).toBeUndefined();
+    expect(context.allTitles).toContain('完成几道小题');
+    expect(text).not.toMatch(/节末小测|接下来.*接下来/);
   });
 
   it('does not treat a single later-page preview as the course ending', () => {

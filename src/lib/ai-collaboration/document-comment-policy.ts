@@ -6,7 +6,9 @@ import type {
   DocumentAiCommentReplyResult,
 } from './document-comment-types';
 
-export const DOCUMENT_COMMENT_REVIEW_VERSION = 3;
+export const DOCUMENT_COMMENT_REVIEW_VERSION = 4;
+export const DOCUMENT_COMMENT_MAX_PARAGRAPH_LENGTH = 2_000;
+export const DOCUMENT_COMMENT_MIN_MEANINGFUL_CHARACTERS = 6;
 
 export function normalizeDocumentParagraphText(value: string): string {
   return value
@@ -14,6 +16,13 @@ export function normalizeDocumentParagraphText(value: string): string {
     .replace(/[\u0000-\u001F]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+export function isReviewableDocumentParagraph(value: string): boolean {
+  const normalized = normalizeDocumentParagraphText(value);
+  if (normalized.length > DOCUMENT_COMMENT_MAX_PARAGRAPH_LENGTH) return false;
+  const meaningfulCharacters = normalized.replace(/[\p{P}\p{S}\s]/gu, '');
+  return meaningfulCharacters.length >= DOCUMENT_COMMENT_MIN_MEANINGFUL_CHARACTERS;
 }
 
 /** Stable across Plate remounts: paragraph IDs are intentionally not included. */
@@ -128,6 +137,7 @@ export type ProactiveDocumentReviewFocus = 'language' | 'reasoning';
 const LANGUAGE_REVIEW_RULES = [
   '本轮只做中文语言与表达质量审阅，必须逐句检查，不能因为内容大意可理解就跳过基础问题。',
   '按以下清单在内部静默检查，不要把清单或分类标签写给学生：错别字与标点；标题语序和并列结构；主谓、动宾、定中搭配；成分残缺或赘余；语序错乱；句式杂糅；指代不明；修饰语位置不当；时间表达重复或矛盾；方位词堆叠；重复比较；成语堆砌、误用或语体不合；同义反复；术语、数字、单位和时态不一致。',
+  '只要存在能够引用原文并明确说明的错别字、搭配不当、语序问题、成分残缺等基础语病，就应当介入。“宁可不介入”只适用于没有客观依据的个人风格偏好，不得用来忽略可定位的语言错误。',
   '也检查虽然不算硬性语法错误、但明显妨碍清楚、准确、简洁表达的句子。仅仅是另一种个人写作偏好时不要介入。',
   '基础语病与明显表达问题不得让位于项目逻辑点评；能明确指出依据的都应在本轮一次找全。',
 ];

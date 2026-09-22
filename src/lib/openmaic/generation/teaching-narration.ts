@@ -18,12 +18,12 @@ import {
 } from './narration-continuity';
 import { normalizeNarrationPunctuation } from './narration-punctuation';
 
-export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v18-teacher-review-boundary';
+export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v19-learner-facing-quiz-handoff';
 /**
  * Changes to local normalization invalidate narration attempt checkpoints
  * without invalidating the already generated slide-content checkpoints.
  */
-export const TEACHING_NARRATION_NORMALIZATION_VERSION = 'verified-anchor-recovery-v8-punctuation';
+export const TEACHING_NARRATION_NORMALIZATION_VERSION = 'verified-anchor-recovery-v9-quiz-handoff';
 
 const log = createLogger('TeachingNarration');
 
@@ -583,7 +583,7 @@ export async function generateTeachingSectionNarration(input: {
     'Finish each segment text before authoring anchors. Every anchor semanticId must also appear in that segment’s semanticIds. Every anchor quote must be copied as one contiguous substring from that exact finalized segment text; never paraphrase it, copy it from the slide, or include nearby words that are absent from the segment. Omit the anchor when no reliable substring exists. Put the anchor on the first spoken phrase that actually asks learners to attend to the target, not at the paragraph start by default. Add a visualCue only when pointing helps learners locate, compare, trace, or hold attention on a visible object. Use separate anchors for targets mentioned at different points. A segment may have no cue, and the same object may be cued again when later reasoning needs it.',
     'For every visualCue authored from an actual slide, copy target.elementId exactly from that page’s actualSlide.elements. Use target.selector only when a text phrase, complete table row, or table cell is more precise than the whole element. Choose spotlight for sustained explanation of text, a concept block, or one complete table row; use selector.rowIndex to frame that row and switch rows when the narration starts the next concept. Choose a stationary laser mainly for an image, diagram region, arrow, or isolated visual detail. Choose a multi-target laser only to trace an explicit order, process, route, or derivation across at least three distinct rendered nodes; set the first node as target and each later node as a waypoint with its own speechAnchor. A comparison of prose blocks or table rows is not a laser path. Set endSpeechAnchor to the exact spoken phrase where a spotlight should end; omit it to end at the containing sentence. Do not use a laser for sustained ordinary text explanation because the dot obscures glyphs. Do not add cues to transitions or reasoning that does not depend on the screen. Mark a cue essential only when the explanation is genuinely hard to follow without pointing; an invalid optional cue is omitted without changing the speech.',
     'The page visualActionIntent, when present, is the adopted teaching intent from earlier planning. Realize it in the narration anchors when the required visible target exists, choosing exact targets from actualSlide. Do not invent a target when the slide does not contain one.',
-    'Respect each deliveryContext endingDisposition and the section position in the complete course. A test-generation scope does not make this the end of the course. Only verified-course-end may synthesize what the learner can now explain or do, connect that understanding to later use, and use one concise formal thanks and farewell. A pbl-stage-handoff must lead into its named next stage without saying the class is over or goodbye. A final teaching page followed by an assessment should bridge into that assessment without claiming the learner has already mastered the content.',
+    'Respect each deliveryContext endingDisposition and the section position in the complete course. A test-generation scope does not make this the end of the course. Only verified-course-end may synthesize what the learner can now explain or do, connect that understanding to later use, and use one concise formal thanks and farewell. A pbl-stage-handoff must lead into its named next stage without saying the class is over or goodbye. A final teaching page followed by an assessment should use at most one short learner-facing bridge such as “接下来用几道小题检验一下理解”, without claiming mastery. Never read an assessment page title or an internal name such as “第X节·节末小测” aloud. If the page already ends with a natural quiz bridge, do not add or paraphrase a second one.',
     input.languageDirective ?? '',
     teacher?.persona ? `Teacher voice to follow for tone only; do not create extra speakers or fictional student replies:\n${teacher.persona}` : '',
   ].join('\n');
@@ -628,7 +628,7 @@ export async function generateTeachingSectionNarration(input: {
       stageKey: outline.stageKey,
       stageLabel: outline.stageLabel,
       sectionId: outline.lectureSectionId ?? outline.parentActivityId,
-      title: outline.title,
+      title: outline.type === 'quiz' ? undefined : outline.title,
       purpose: outline.teachingBrief?.teachingPlan?.purpose,
       newContent: outline.teachingBrief?.teachingPlan?.newContent,
       takeaway: outline.teachingBrief?.teachingPlan?.takeaway,
@@ -737,7 +737,9 @@ export async function generateTeachingNarration(input: {
     continuity: input.outlineContext,
     progression: input.courseProgression?.map((outline) => ({
       id: outline.id, type: outline.type, stageKey: outline.stageKey, stageLabel: outline.stageLabel,
-      currentPage: outline.id === input.outline.id, title: outline.title, purpose: outline.teachingBrief?.teachingPlan?.purpose,
+      currentPage: outline.id === input.outline.id,
+      title: outline.type === 'quiz' ? undefined : outline.title,
+      purpose: outline.teachingBrief?.teachingPlan?.purpose,
       newContent: outline.teachingBrief?.teachingPlan?.newContent,
       learningTask: outline.teachingBrief?.pageTask,
       sharedContext: outline.teachingBrief?.sharedContext,
