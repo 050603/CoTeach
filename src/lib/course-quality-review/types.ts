@@ -100,10 +100,14 @@ export type TeachingLearningBoundary = {
 };
 
 export type TeachingResourceNeed = {
-  kind: "diagram" | "image" | "video" | "interactive";
+  kind: "diagram" | "image" | "video" | "interactive" | "source-image";
   purpose: string;
   required: boolean;
+  /** Stable existing/textbook asset selected before page generation. */
+  assetId?: string;
   prompt?: string;
+  /** Optional image framing selected during the teaching design pass. */
+  aspectRatio?: "16:9" | "4:3" | "1:1" | "9:16";
   durationSec?: number;
 };
 
@@ -129,6 +133,8 @@ export type TeachingVisualRelationship = {
   description: string;
   readingOrder: string[];
   preferredForm?: "text" | "table" | "chart" | "diagram" | "illustration" | "mixed";
+  /** Planned topology and meaning, without layout coordinates. */
+  diagram?: import("@openmaic/generation").DiagramPlan;
   rationale?: string;
 };
 

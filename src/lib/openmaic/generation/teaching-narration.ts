@@ -18,7 +18,7 @@ import {
 } from './narration-continuity';
 import { normalizeNarrationPunctuation } from './narration-punctuation';
 
-export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v20-learning-boundary';
+export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v21-semantic-focus';
 /**
  * Changes to local normalization invalidate narration attempt checkpoints
  * without invalidating the already generated slide-content checkpoints.
@@ -415,12 +415,16 @@ export function normalizeTeachingNarration(value: unknown, outline: SceneOutline
         const target = normalizeVisualTarget(rawCue?.target);
         const waypoints = cueType === 'laser' ? normalizeLaserWaypoints(rawCue?.waypoints, text) : undefined;
         const endSpeechAnchor = normalizeSpeechAnchor(rawCue?.endSpeechAnchor, text);
+        const invalidEndSpeechAnchor = rawCue?.endSpeechAnchor != null && !endSpeechAnchor;
+        if (invalidEndSpeechAnchor) {
+          log.warn(`Dropping optional visual cue whose end anchor does not match segment ${index + 1}, anchor ${anchorIndex + 1}`);
+        }
         return [{
           id: `${id}:anchor-${anchorIndex + 1}`,
           semanticId,
           quote: resolvedAnchor.quote,
           occurrence: resolvedAnchor.occurrence,
-          ...(cueType ? { visualCue: {
+          ...(cueType && !invalidEndSpeechAnchor ? { visualCue: {
             type: cueType,
             necessity: rawCue?.necessity === 'essential' ? 'essential' as const : 'helpful' as const,
             ...(target ? { target } : {}),
@@ -580,10 +584,10 @@ export async function generateTeachingSectionNarration(input: {
     'Use the actual relationship on the slide and its reading structure to guide attention: name what learners should observe, compare items in a meaningful order, and follow a process or derivation in sequence. Spoken explanation should add meaning rather than read every label. If the teaching entry and slide begin with a concrete contrast, speak from that contrast before stating the abstract definition.',
     'Write connected spoken language for listening: each sentence should make the next step feel motivated by what the learner has just understood. Avoid a repeated definition–example–summary routine, stacked slogans, compressed label lists, and abrupt topic switches.',
     'Give the reasoning needed for the declared understanding criteria. The final quiz is authored later and must not be previewed with answers. Do not lower the learning standard because a slide is terse.',
-    'Each requested teaching page must appear exactly once. Keep the requested pageId and stable segment id. Each segment must use only that page’s supplied semantic IDs. Segment boundaries are natural explanation paragraphs, with no fixed count. They also bound visual focus: a spotlight that starts inside a segment remains until that segment ends. End the segment when attention should leave that object, then continue the next reasoning unit in a new segment with its own cue or no cue. Do not let one long segment move across several unrelated visible objects under the first spotlight.',
+    'Each requested teaching page must appear exactly once. Keep the requested pageId and stable segment id. Each segment must use only that page’s supplied semantic IDs. Segment boundaries are natural explanation paragraphs, with no fixed count. One natural segment may contain several visual focus changes: add a separate anchor exactly where attention moves from an example, image, definition, conclusion, or other visible object to the next one. Reasoning that does not depend on the screen may continue with no cue. Do not split fluent speech merely to end a visual cue.',
     'Finish each segment text before authoring anchors. Every anchor semanticId must also appear in that segment’s semanticIds. Every anchor quote must be copied as one contiguous substring from that exact finalized segment text; never paraphrase it, copy it from the slide, or include nearby words that are absent from the segment. Omit the anchor when no reliable substring exists. Put the anchor on the first spoken phrase that actually asks learners to attend to the target, not at the paragraph start by default. Add a visualCue only when pointing helps learners locate, compare, trace, or hold attention on a visible object. Use separate anchors for targets mentioned at different points. A segment may have no cue, and the same object may be cued again when later reasoning needs it.',
     'For every visualCue authored from an actual slide, copy target.elementId exactly from that page’s actualSlide.elements. Use target.selector only when a text phrase, complete table row, or table cell is more precise than the whole element. Choose spotlight for sustained explanation of text, a concept block, or one complete table row; use selector.rowIndex to frame that row and switch rows when the narration starts the next concept. Choose a stationary laser mainly for an image, diagram region, arrow, or isolated visual detail. Choose a multi-target laser only to trace an explicit order, process, route, or derivation across at least three distinct rendered nodes; set the first node as target and each later node as a waypoint with its own speechAnchor. A comparison of prose blocks or table rows is not a laser path. Set endSpeechAnchor to the exact spoken phrase where a spotlight should end; omit it to end at the containing sentence. Do not use a laser for sustained ordinary text explanation because the dot obscures glyphs. Do not add cues to transitions or reasoning that does not depend on the screen. Mark a cue essential only when the explanation is genuinely hard to follow without pointing; an invalid optional cue is omitted without changing the speech.',
-    'The page visualActionIntent, when present, is the adopted teaching intent from earlier planning. Realize it in the narration anchors when the required visible target exists, choosing exact targets from actualSlide. Do not invent a target when the slide does not contain one.',
+    'The page visualIntent and visualActionIntent, when present, are the adopted teaching intent from earlier planning. Use their observation goal to decide which actual visible object deserves attention, then realize that intent in narration anchors with exact targets from actualSlide. Do not invent a target when the slide does not contain one.',
     'Respect each deliveryContext endingDisposition and the section position in the complete course. A test-generation scope does not make this the end of the course. Only verified-course-end may synthesize what the learner can now explain or do, connect that understanding to later use, and use one concise formal thanks and farewell. A pbl-stage-handoff must lead into its named next stage without saying the class is over or goodbye. A final teaching page followed by an assessment should use at most one short learner-facing bridge such as “接下来用几道小题检验一下理解”, without claiming mastery. Never read an assessment page title or an internal name such as “第X节·节末小测” aloud. If the page already ends with a natural quiz bridge, do not add or paraphrase a second one.',
     input.languageDirective ?? '',
     teacher?.persona ? `Teacher voice to follow for tone only; do not create extra speakers or fictional student replies:\n${teacher.persona}` : '',
@@ -605,6 +609,7 @@ export async function generateTeachingSectionNarration(input: {
       learningTask: outline.teachingBrief?.pageTask,
       teachingPlan: outline.teachingBrief?.teachingPlan,
       learningBoundary: outline.teachingBrief?.learningBoundary,
+      visualIntent: outline.visualIntent,
       visualActionIntent: outline.teachingToolPlan?.filter((item) => (
         item.tool === 'spotlight' || item.tool === 'laser-pointer'
       )),

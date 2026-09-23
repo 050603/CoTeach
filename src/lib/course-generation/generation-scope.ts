@@ -53,13 +53,22 @@ export function resolveFullCoursePromotionOutlines<T extends { id: string }>(inp
  * a full course.
  */
 export function selectClassroomGenerationOutlines<
-  T extends Pick<
-    OpenMaicSceneOutlineSnapshot,
-    "id" | "type" | "title" | "lectureSectionId" | "lectureSectionTitle" | "targetDurationSec" | "estimatedDuration"
-  >,
+  T extends {
+    id: string;
+    type: OpenMaicSceneOutlineSnapshot["type"];
+    title: string;
+    description?: string;
+    keyPoints?: readonly string[];
+    teachingObjective?: string;
+    lectureSectionId?: string;
+    lectureSectionTitle?: string;
+    targetDurationSec?: number;
+    estimatedDuration?: number;
+  },
 >(
   outlines: readonly T[],
   scope: ClassroomGenerationScope,
+  preferredFocus = "",
 ): ClassroomGenerationSelection<T> {
   if (scope === "full-course") {
     return { scope, outlines: [...outlines], fullSceneCount: outlines.length };
@@ -71,10 +80,33 @@ export function selectClassroomGenerationOutlines<
     if (!sectionId) continue;
     sections.set(sectionId, [...(sections.get(sectionId) ?? []), outline]);
   }
-  const selected = [...sections.entries()].find(([, scenes]) =>
+  const completeSections = [...sections.entries()].filter(([, scenes]) =>
     scenes.some((scene) => scene.type === "quiz")
     && scenes.some((scene) => scene.type !== "quiz"),
   );
+  const normalizedFocus = preferredFocus.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  const focusNgrams = new Set<string>();
+  for (let size = 3; size <= Math.min(10, normalizedFocus.length); size += 1) {
+    for (let index = 0; index + size <= normalizedFocus.length; index += 1) {
+      focusNgrams.add(normalizedFocus.slice(index, index + size));
+    }
+  }
+  const relevance = (scenes: readonly T[]): number => {
+    if (!focusNgrams.size) return 0;
+    const text = scenes.map((scene) => [
+      scene.lectureSectionTitle,
+      scene.title,
+      scene.description,
+      scene.teachingObjective,
+      ...(scene.keyPoints ?? []),
+    ].filter(Boolean).join(" ")).join(" ").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+    return [...focusNgrams].reduce((score, phrase) => (
+      text.includes(phrase) ? score + phrase.length * phrase.length : score
+    ), 0);
+  };
+  const selected = completeSections
+    .map((entry, index) => ({ entry, index, score: relevance(entry[1]) }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)[0]?.entry;
   if (!selected) {
     throw new Error("测试模式需要正式大纲中至少有一个包含讲授页面和节末检测的完整知识小节，请先检查课程大纲。");
   }

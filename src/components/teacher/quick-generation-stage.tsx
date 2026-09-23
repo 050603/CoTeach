@@ -223,7 +223,7 @@ export function QuickGenerationStage({
         <motion.div className="absolute -bottom-20 right-[8%] h-64 w-[460px] rounded-full bg-[linear-gradient(100deg,transparent,rgba(249,115,22,.08),rgba(59,130,246,.07))] blur-[78px]" animate={reducedMotion ? undefined : { x: [90, -140, 90], y: [20, -36, 20], scale: [1.05, .92, 1.05] }} transition={{ duration: 17, repeat: Infinity, ease: "easeInOut" }} />
       </div>
 
-      <div className="relative flex min-h-full flex-col px-5 py-5 sm:px-8 sm:py-7">
+      <div className="relative flex min-h-full flex-col px-5 py-3 sm:px-8 sm:py-4">
         <header className="mx-auto flex w-full max-w-[1120px] justify-end" data-testid="quick-generation-command-bar">
           <div className="inline-flex flex-wrap items-center gap-1.5 rounded-[var(--radius-lg)] border border-stone-200/90 bg-white/88 p-1.5 shadow-[0_14px_34px_-25px_rgba(15,23,42,.42)] backdrop-blur-xl">
               <span
@@ -281,7 +281,7 @@ export function QuickGenerationStage({
           </div>
         </header>
 
-        <main className="mx-auto grid w-full max-w-[1120px] flex-1 place-items-center py-7 sm:py-9">
+        <main className="mx-auto grid w-full max-w-[1120px] flex-1 place-items-center py-4 sm:py-5">
           <div className="w-full max-w-[820px]">
             <div className="relative isolate mx-auto h-[min(520px,calc(100vh-250px))] min-h-[430px] [perspective:1800px]">
               <motion.div
@@ -380,7 +380,7 @@ export function QuickGenerationStage({
               </div>
             </div>
 
-            <div className="mx-auto mt-7 flex max-w-[760px] items-center gap-4">
+            <div className="mx-auto mt-4 flex max-w-[760px] items-center gap-4">
               <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--pbl-border)]">
                 <motion.div
                   animate={{ width: `${progress}%` }}
@@ -479,12 +479,12 @@ function ArtifactCard({ artifact, active, suspendedLabel }: { artifact: CourseDe
           className={cn(
             "absolute inset-0",
             isPageProduction
-              ? "overflow-hidden"
+              ? "overflow-hidden max-md:overflow-y-auto"
               : "overflow-y-auto overscroll-contain pr-2 [scrollbar-gutter:stable]",
           )}
           data-testid="quick-generation-card-scroll"
           aria-label="课程生成内容详情"
-          tabIndex={isPageProduction ? undefined : 0}
+          tabIndex={0}
           ref={scrollAreaRef}
           onScroll={(event) => {
             const target = event.currentTarget;
@@ -518,32 +518,90 @@ function ArtifactBody({ artifact, active, suspendedLabel }: { artifact: CourseDe
   return <FactsPreview artifact={artifact} />;
 }
 
-const PAGE_TASK_LABELS: Record<string, string> = {
-  restoring: "恢复断点",
-  content: "制作页面正文",
-  "reviewed-content": "检查版式与知识覆盖",
-  actions: "绑定讲稿与教学动作",
-  narration: "编写整节连贯讲稿",
-  assembling: "组装并保存页面",
-};
+type PageStageProgress = NonNullable<NonNullable<NonNullable<CourseDesignGenerationArtifact["visualization"]>["generationPlan"]>["stageProgress"]>[number];
+type PageStageId = PageStageProgress["stage"];
 
-const PAGE_TASK_STAGES = [
-  "restoring",
-  "content",
-  "reviewed-content",
-  "narration",
-  "actions",
-  "assembling",
-] as const;
+const PAGE_STAGE_CONFIG: Array<{
+  id: PageStageId;
+  label: string;
+  detail: string;
+  icon: typeof BookOpenCheck;
+}> = [
+  { id: "content", label: "页面正文与版式", detail: "正文与视觉排布在同一阶段完成", icon: BookOpenCheck },
+  { id: "narration", label: "整节连贯讲稿", detail: "按知识小节统一组织讲授", icon: Mic2 },
+  { id: "actions", label: "讲授动作", detail: "绑定讲稿、媒体与教学工具", icon: Route },
+  { id: "assembling", label: "组装保存", detail: "校验页面并写入课堂", icon: CheckCircle2 },
+];
 
-const PAGE_TASK_SHORT_LABELS: Record<typeof PAGE_TASK_STAGES[number], string> = {
-  restoring: "恢复",
-  content: "正文",
-  "reviewed-content": "版式",
-  narration: "整节讲稿",
-  actions: "动作",
-  assembling: "保存",
-};
+function activePageStage(stage: string): PageStageId {
+  if (stage === "narration" || stage === "actions" || stage === "assembling") return stage;
+  return "content";
+}
+
+function resolvedStageProgress(
+  plan: NonNullable<NonNullable<CourseDesignGenerationArtifact["visualization"]>["generationPlan"]>,
+): PageStageProgress[] {
+  if (plan.stageProgress?.length) {
+    return PAGE_STAGE_CONFIG.map(({ id }) => plan.stageProgress?.find((stage) => stage.stage === id) ?? {
+      stage: id,
+      total: id === "narration" ? plan.scenes.filter((scene) => scene.type !== "quiz").length : plan.totalScenes,
+      completedPages: [],
+      activePages: [],
+      failedPages: [],
+    });
+  }
+
+  const stageOrder: PageStageId[] = ["content", "narration", "actions", "assembling"];
+  return PAGE_STAGE_CONFIG.map(({ id }) => {
+    const total = id === "narration" ? plan.scenes.filter((scene) => scene.type !== "quiz").length : plan.totalScenes;
+    const completedPages = new Set(Array.from({ length: Math.min(plan.completedScenes, total) }, (_, index) => index + 1));
+    const activePages: PageStageProgress["activePages"] = [];
+    for (const page of plan.activePages ?? []) {
+      const currentStage = activePageStage(page.stage);
+      if (currentStage === id) {
+        activePages.push({ index: page.index, title: page.title, retryCount: page.retryCount });
+      } else if (stageOrder.indexOf(currentStage) > stageOrder.indexOf(id)) {
+        completedPages.add(page.index);
+      }
+    }
+    return {
+      stage: id,
+      total,
+      completedPages: [...completedPages].filter((page) => page <= plan.totalScenes).sort((left, right) => left - right),
+      activePages,
+      failedPages: [],
+    };
+  });
+}
+
+function compactPageNumbers(pages: number[]): string {
+  const ordered = [...new Set(pages)].sort((left, right) => left - right);
+  if (!ordered.length) return "暂无";
+  const ranges: string[] = [];
+  let start = ordered[0]!;
+  let end = start;
+  for (const page of ordered.slice(1)) {
+    if (page === end + 1) {
+      end = page;
+      continue;
+    }
+    ranges.push(start === end ? `${start}` : `${start}–${end}`);
+    start = page;
+    end = page;
+  }
+  ranges.push(start === end ? `${start}` : `${start}–${end}`);
+  return `第 ${ranges.join("、")} 页`;
+}
+
+function stageState(stage: PageStageProgress, planStatus: string): { label: string; tone: "waiting" | "active" | "retry" | "done" | "failed" } {
+  if (stage.failedPages.length) return { label: "有失败", tone: "failed" };
+  if (stage.activePages.some((page) => (page.retryCount ?? 0) > 0)) return { label: "正在重试", tone: "retry" };
+  if (stage.activePages.length) return { label: "进行中", tone: "active" };
+  if (stage.total === 0) return { label: "无需生成", tone: "done" };
+  if (stage.completedPages.length >= stage.total) return { label: "已完成", tone: "done" };
+  if (planStatus === "failed") return { label: "等待继续", tone: "retry" };
+  return { label: stage.completedPages.length ? "等待后续" : "等待开始", tone: "waiting" };
+}
 
 function AiLearningPageProductionPreview({ artifact, active, suspendedLabel }: { artifact: CourseDesignGenerationArtifact; active: boolean; suspendedLabel?: string }) {
   const reducedMotion = useReducedMotion();
@@ -557,141 +615,133 @@ function AiLearningPageProductionPreview({ artifact, active, suspendedLabel }: {
   const statusLabels = { queued: "等待开始", running: "正在生成", recovering: "正在恢复", cancelling: "正在中断", cancelled: "已中断", completed: "已完成", failed: "等待重试" };
   const statusLabel = suspendedLabel ?? statusLabels[plan.status];
   const isRunning = active && plan.status === "running";
-  const pageProgress = plan.totalScenes > 0 ? Math.min(100, (plan.completedScenes / plan.totalScenes) * 100) : 0;
-  const activePages = (plan.activePages ?? []).slice(0, 4);
-  const nextScene = plan.scenes[Math.min(plan.completedScenes, Math.max(0, plan.scenes.length - 1))];
+  const stages = resolvedStageProgress(plan);
+  const completedUnits = stages.reduce((total, stage) => total + Math.min(stage.completedPages.length, stage.total), 0);
+  const totalUnits = stages.reduce((total, stage) => total + stage.total, 0);
+  const stageProgress = totalUnits > 0 ? Math.min(100, (completedUnits / totalUnits) * 100) : 0;
+  const runningPages = new Set(stages.flatMap((stage) => stage.activePages.map((page) => page.index))).size;
+  const retryingPages = new Set(stages.flatMap((stage) => stage.activePages.filter((page) => (page.retryCount ?? 0) > 0).map((page) => page.index))).size;
 
   return (
-    <div className="grid h-full min-h-0 sm:grid-cols-[200px_minmax(0,1fr)]">
+    <div className="grid h-auto min-h-full grid-rows-[auto_auto] md:h-full md:min-h-0 md:grid-cols-[220px_minmax(0,1fr)] md:grid-rows-1">
       <motion.section
         animate={{ opacity: 1, x: 0 }}
-        className="relative isolate min-h-0 overflow-hidden border-l-2 border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)]/55 px-4 py-3.5 text-[var(--pbl-text)]"
+        className="relative isolate min-h-0 overflow-hidden border-l-2 border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)]/55 px-4 py-3 text-[var(--pbl-text)]"
         initial={false}
       >
         {isRunning ? <span aria-hidden className="quick-plan-shimmer absolute inset-y-0 w-20 bg-gradient-to-r from-transparent via-white/80 to-transparent motion-reduce:hidden" data-testid="ai-plan-shimmer" /> : null}
         <div className="relative flex h-full flex-col">
-          <div className="flex items-center justify-between gap-3">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--pbl-teacher-border)] bg-white px-2.5 py-1 text-[9px] font-semibold tracking-[.12em] text-[var(--pbl-teacher)]">
-              <BookOpenCheck className="size-3" />页面制作
+          <div className="flex flex-nowrap items-center justify-between gap-2">
+            <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--pbl-teacher-border)] bg-white px-2.5 py-1 text-[9px] font-semibold tracking-[.08em] text-[var(--pbl-teacher)]">
+              <BookOpenCheck className="size-3 shrink-0" />页面制作
             </span>
-            <span className="text-[10px] font-medium text-[var(--pbl-text-subtle)]">并行任务</span>
+            <span className="shrink-0 whitespace-nowrap text-[10px] font-medium tabular-nums text-[var(--pbl-text-subtle)]">{plan.totalScenes || "—"} 个页面</span>
           </div>
 
           <div className="mt-3 flex items-end gap-2 sm:mt-4">
-            <strong className="font-editorial text-[40px] font-semibold leading-none tabular-nums sm:text-[46px]">{plan.completedScenes}</strong>
-            <span className="pb-1 text-[13px] font-semibold tabular-nums text-[var(--pbl-text-muted)]">/ {plan.totalScenes || "—"} 页已完成</span>
+            <strong className="font-editorial text-[36px] font-semibold leading-none tabular-nums sm:text-[42px]">{completedUnits}</strong>
+            <span className="pb-1 text-[12px] font-semibold tabular-nums text-[var(--pbl-text-muted)]">/ {totalUnits || "—"} 项已完成</span>
           </div>
-          <div aria-label="课堂页面制作进度" aria-valuemax={plan.totalScenes || 100} aria-valuemin={0} aria-valuenow={plan.completedScenes} aria-valuetext={plan.totalScenes > 0 ? `已完成 ${plan.completedScenes} / ${plan.totalScenes} 页` : "等待页面计划"} className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--pbl-border)]" role="progressbar">
-            <motion.div animate={{ width: `${pageProgress}%` }} className="h-full rounded-full bg-[var(--pbl-teacher)]" initial={false} transition={{ duration: reducedMotion ? 0 : .5 }} />
+          <div aria-label="课堂页面阶段任务进度" aria-valuemax={totalUnits || 100} aria-valuemin={0} aria-valuenow={completedUnits} aria-valuetext={totalUnits > 0 ? `已完成 ${completedUnits} / ${totalUnits} 项阶段任务` : "等待页面计划"} className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--pbl-border)]" role="progressbar">
+            <motion.div animate={{ width: `${stageProgress}%` }} className="h-full rounded-full bg-[var(--pbl-teacher)]" initial={false} transition={{ duration: reducedMotion ? 0 : .5 }} />
           </div>
           <p className="mt-2 text-[11px] leading-4 text-[var(--pbl-text-muted)]">
-            预计授课 {formatPlanDuration(plan.estimatedDuration)}
+            每个阶段独立计数，不必等整页保存
           </p>
 
-          <div className="mt-auto grid grid-cols-3 gap-1.5 pt-3">
+          <div className="mt-auto grid grid-cols-3 gap-0 pt-3">
             {[
-              { label: "讲解", value: sceneCounts.slide ?? 0 },
-              { label: "互动", value: sceneCounts.interactive ?? 0 },
-              { label: "检测", value: sceneCounts.quiz ?? 0 },
+              { label: "执行中", value: runningPages },
+              { label: "重试中", value: retryingPages },
+              { label: "已保存页", value: plan.completedScenes },
             ].map((stat) => (
-              <div className="border-l border-[var(--pbl-border)] px-2 py-1.5 text-center first:border-l-0" key={stat.label}>
+              <div className="min-w-0 border-l border-[var(--pbl-border)] px-1 py-1.5 text-center first:border-l-0" key={stat.label}>
                 <strong className="block text-[15px] leading-none tabular-nums">{stat.value}</strong>
-                <span className="mt-1 block text-[10px] text-[var(--pbl-text-muted)]">{stat.label}</span>
+                <span className="mt-1 block whitespace-nowrap text-[10px] text-[var(--pbl-text-muted)]">{stat.label}</span>
               </div>
             ))}
           </div>
-          <p className="mt-2 text-center text-[10px] text-[var(--pbl-text-subtle)]">按已确认大纲统计</p>
+          <p className="mt-2 text-center text-[10px] text-[var(--pbl-text-subtle)]">预计授课 {formatPlanDuration(plan.estimatedDuration)} · 讲解 {sceneCounts.slide ?? 0} 页</p>
         </div>
       </motion.section>
 
-      <section className="min-w-0 border-t border-[var(--pbl-border)] px-4 py-3 sm:border-l sm:border-t-0 sm:pl-5">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-xs font-semibold tracking-[.06em] text-[var(--pbl-teacher)]">当前页面任务</p>
+      <section className="flex min-h-0 min-w-0 flex-col border-t border-[var(--pbl-border)] px-3 py-3 md:border-l md:border-t-0 md:pl-4">
+        <div className="flex shrink-0 items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold tracking-[.06em] text-[var(--pbl-teacher)]">分阶段制作进度</p>
+            <p className="mt-0.5 text-[9px] text-[var(--pbl-text-subtle)]">成功、执行、排队与失败分别归入对应阶段</p>
+          </div>
           <span className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold", suspendedLabel || ["failed", "cancelled", "cancelling", "recovering"].includes(plan.status) ? "bg-amber-50 text-amber-800" : "bg-blue-50 text-blue-700")}>
             <span className={cn("size-1.5 rounded-full bg-current", isRunning && "motion-safe:animate-pulse")} />{statusLabel}
           </span>
         </div>
 
-        <div className="mt-2.5 divide-y divide-[var(--pbl-border-soft)] border-y border-[var(--pbl-border)]" aria-label="当前并行页面任务">
-          {activePages.map((page, index) => {
-            const currentStageIndex = PAGE_TASK_STAGES.indexOf(page.stage as typeof PAGE_TASK_STAGES[number]);
-            const progressValue = Math.max(0, currentStageIndex + 1);
+        <div className="mt-2 grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-2" aria-label="页面制作阶段进度">
+          {stages.map((stage, index) => {
+            const config = PAGE_STAGE_CONFIG.find((item) => item.id === stage.stage)!;
+            const Icon = config.icon;
+            const state = stageState(stage, plan.status);
+            const percentage = stage.total > 0 ? Math.min(100, (stage.completedPages.length / stage.total) * 100) : 100;
+            const activeNumbers = stage.activePages.map((page) => page.index);
+            const failedNumbers = stage.failedPages.map((page) => page.index);
+            const pending = Math.max(0, stage.total - new Set([...stage.completedPages, ...activeNumbers, ...failedNumbers]).size);
+            const retrying = stage.activePages.some((page) => (page.retryCount ?? 0) > 0);
             return (
               <motion.section
-                animate={{ opacity: 1, x: 0 }}
-                className="py-2"
+                animate={{ opacity: 1, y: 0 }}
+                className="flex min-h-0 min-w-0 flex-col border border-[var(--pbl-border)] bg-white/65 px-3 py-2"
                 initial={false}
-                key={`${page.index}-${page.stage}`}
+                key={stage.stage}
                 transition={{ delay: index * .06 }}
               >
-                <div className="grid grid-cols-[54px_minmax(0,1fr)_auto] items-center gap-3">
-                  <span className="text-[10px] font-semibold tabular-nums text-[var(--pbl-text-subtle)]">第 {String(page.index).padStart(2, "0")} 页</span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-[11px] font-semibold text-[var(--pbl-text)]" title={page.title}>{page.title}</span>
-                    <span className="mt-0.5 block text-[9px] text-[var(--pbl-text-subtle)]">{pageTaskRuntime(page)}</span>
-                  </span>
-                  <span className="max-w-28 text-right text-[10px] font-semibold leading-4 text-[var(--pbl-teacher)]">{PAGE_TASK_LABELS[page.stage] ?? "处理页面内容"}</span>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] text-[var(--pbl-teacher)]"><Icon className="size-3.5" /></span>
+                    <div className="min-w-0">
+                      <p className="truncate text-[10px] font-semibold text-[var(--pbl-text)]"><span className="mr-1.5 text-[8px] tabular-nums text-[var(--pbl-text-subtle)]">0{index + 1}</span>{config.label}</p>
+                      <p className="mt-0.5 truncate text-[8px] text-[var(--pbl-text-subtle)]" title={config.detail}>{config.detail}</p>
+                    </div>
+                  </div>
+                  <span className={cn(
+                    "shrink-0 rounded-full px-2 py-0.5 text-[8px] font-semibold",
+                    state.tone === "done" && "bg-emerald-50 text-emerald-700",
+                    state.tone === "active" && "bg-blue-50 text-blue-700",
+                    state.tone === "retry" && "bg-amber-50 text-amber-800",
+                    state.tone === "failed" && "bg-red-50 text-red-700",
+                    state.tone === "waiting" && "bg-stone-100 text-stone-500",
+                  )}>{state.label}</span>
                 </div>
 
                 <div
-                  aria-label={`第 ${page.index} 页制作进度`}
-                  aria-valuemax={PAGE_TASK_STAGES.length}
+                  aria-label={`${config.label}进度`}
+                  aria-valuemax={stage.total || 100}
                   aria-valuemin={0}
-                  aria-valuenow={progressValue}
-                  aria-valuetext={PAGE_TASK_LABELS[page.stage] ?? "处理页面内容"}
-                  className="mt-1.5 pl-[66px]"
+                  aria-valuenow={stage.completedPages.length}
+                  aria-valuetext={stage.total > 0 ? `已完成 ${stage.completedPages.length} / ${stage.total} 页` : "无需生成"}
+                  className="mt-2"
                   role="progressbar"
                 >
-                  <div className="grid grid-cols-5 gap-1" aria-hidden>
-                    {PAGE_TASK_STAGES.map((stage, stageIndex) => (
-                      <motion.span
-                        animate={stageIndex === currentStageIndex && isRunning && !reducedMotion ? { opacity: [.55, 1, .55] } : undefined}
-                        className={cn(
-                          "h-1 rounded-full",
-                          stageIndex < currentStageIndex && "bg-blue-400",
-                          stageIndex === currentStageIndex && "bg-[var(--pbl-teacher)] shadow-[0_0_0_2px_var(--pbl-teacher-soft)]",
-                          stageIndex > currentStageIndex && "bg-[var(--pbl-border)]",
-                        )}
-                        key={stage}
-                        transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
-                      />
-                    ))}
+                  <div className="flex items-center gap-2">
+                    <div className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--pbl-border-soft)]">
+                      <motion.span animate={{ width: `${percentage}%` }} className={cn("block h-full rounded-full", state.tone === "failed" ? "bg-red-500" : state.tone === "retry" ? "bg-amber-500" : "bg-[var(--pbl-teacher)]")} initial={false} transition={{ duration: reducedMotion ? 0 : .45 }} />
+                    </div>
+                    <span className="shrink-0 text-[9px] font-semibold tabular-nums text-[var(--pbl-text-muted)]">{stage.completedPages.length}/{stage.total}</span>
                   </div>
-                  <div className="mt-1 grid grid-cols-5 gap-1" aria-hidden>
-                    {PAGE_TASK_STAGES.map((stage, stageIndex) => (
-                      <span
-                        className={cn(
-                          "truncate text-center text-[7px] font-medium leading-none",
-                          stageIndex <= currentStageIndex ? "text-[var(--pbl-text-muted)]" : "text-[var(--pbl-text-subtle)]",
-                        )}
-                        key={stage}
-                      >
-                        {PAGE_TASK_SHORT_LABELS[stage]}
-                      </span>
-                    ))}
-                  </div>
+                </div>
+
+                <div className="mt-auto space-y-1 border-t border-[var(--pbl-border-soft)] pt-1.5 text-[8px] leading-3">
+                  <p className="flex min-w-0 items-center gap-1.5"><span className="shrink-0 font-semibold text-emerald-700">成功</span><span className="truncate text-[var(--pbl-text-muted)]" title={compactPageNumbers(stage.completedPages)}>{compactPageNumbers(stage.completedPages)}</span></p>
+                  {activeNumbers.length ? <p className="flex min-w-0 items-center gap-1.5"><span className={cn("shrink-0 font-semibold", retrying ? "text-amber-700" : "text-blue-700")}>{retrying ? "重试" : "生成"}</span><span className="truncate text-[var(--pbl-text-muted)]" title={compactPageNumbers(activeNumbers)}>{compactPageNumbers(activeNumbers)}</span></p> : null}
+                  {failedNumbers.length ? <p className="flex min-w-0 items-center gap-1.5"><span className="shrink-0 font-semibold text-red-700">失败</span><span className="truncate text-[var(--pbl-text-muted)]" title={compactPageNumbers(failedNumbers)}>{compactPageNumbers(failedNumbers)}</span></p> : null}
+                  <p className="text-[var(--pbl-text-subtle)]">队列中 {pending} 页</p>
                 </div>
               </motion.section>
             );
           })}
-          {activePages.length === 0 ? (
-            <div className="px-3 py-4 text-center">
-              <p className="text-[11px] font-semibold text-[var(--pbl-text)]">{plan.message || statusLabel}</p>
-              {nextScene ? <p className="mt-1 text-[10px] text-[var(--pbl-text-muted)]">下一页：{nextScene.title}</p> : null}
-            </div>
-          ) : null}
         </div>
       </section>
     </div>
   );
-}
-
-function pageTaskRuntime(page: NonNullable<NonNullable<NonNullable<CourseDesignGenerationArtifact["visualization"]>["generationPlan"]>["activePages"]>[number]): string {
-  const details: string[] = [];
-  if ((page.queueMs ?? 0) >= 1_000) details.push(`排队 ${Math.ceil(page.queueMs! / 1_000)} 秒`);
-  if ((page.executionMs ?? 0) >= 1_000) details.push(`已处理 ${Math.ceil(page.executionMs! / 1_000)} 秒`);
-  if ((page.retryCount ?? 0) > 0) details.push(`已重试 ${page.retryCount} 次`);
-  return details.join(" · ") || "任务正在执行";
 }
 
 function AiLearningResourcePreview({ artifact, active }: { artifact: CourseDesignGenerationArtifact; active: boolean }) {
@@ -777,6 +827,38 @@ function GraphPreview({ artifact }: { artifact: CourseDesignGenerationArtifact }
       points: artifact.visualization!.knowledgeGraph!.nodes.filter((node) => (node.level ?? pointById.get(node.id)?.level ?? "core") === level),
     })).filter((group) => group.points.length > 0);
     const scopePlan = artifact.visualization.knowledgeScopePlan;
+    const teachingOrder = scopePlan?.teachingOrder;
+    if (teachingOrder) {
+      const anchors = new Map(teachingOrder.anchors.map((anchor) => [anchor.knowledgePointId, anchor]));
+      return (
+        <div>
+          <p className="pb-2 text-[10px] text-[var(--pbl-text-muted)]">课堂按主教材相关概念的原文顺序展开；必要调整会说明原因。</p>
+          <ol aria-label="教材教学顺序" className="divide-y divide-[var(--pbl-border-soft)] border-y border-[var(--pbl-border)]">
+            {teachingOrder.knowledgePointIds.map((id, index) => {
+              const point = pointById.get(id);
+              const anchor = anchors.get(id);
+              const adjustments = teachingOrder.adjustments.filter((item) => item.knowledgePointId === id);
+              return (
+                <li className="grid grid-cols-[26px_minmax(0,1fr)] gap-2 py-2.5" key={id}>
+                  <span className="text-[11px] font-semibold tabular-nums text-[var(--pbl-teacher)]">{index + 1}.</span>
+                  <div className="min-w-0">
+                    <p className="text-[12px] font-semibold text-[var(--pbl-text)]">{point?.name ?? id}</p>
+                    <p className="mt-0.5 text-[10px] leading-4 text-[var(--pbl-text-muted)]">{anchor?.status === "primary-textbook"
+                      ? `主教材：${anchor.sectionPath.join(" › ") || "已定位正文"}`
+                      : "主教材中暂无可定位的本课解释；按知识依赖衔接"}</p>
+                    {adjustments.map((adjustment) => (
+                      <p className="mt-1 text-[10px] leading-4 text-[var(--pbl-warning)]" key={`${adjustment.knowledgePointId}-${adjustment.beforeKnowledgePointId}`}>
+                        调整至“{pointById.get(adjustment.beforeKnowledgePointId)?.name ?? adjustment.beforeKnowledgePointId}”之前：{adjustment.obstacle}；{adjustment.basis}
+                      </p>
+                    ))}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      );
+    }
     const scopeCounts = scopePlan
       ? {
           standalone: scopePlan.decisions.filter((decision) => decision.disposition === "standalone").length,

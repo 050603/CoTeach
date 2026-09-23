@@ -55,6 +55,8 @@ Produce a **`courseTitle`** (required): a concise, human-readable name for the *
 - **Do NOT** include: quotes, numbering, leading emojis, the teacher's name/role, or words like "Course"/"课程"/"A course about".
 - If the requirement is already a crisp title, you may reuse it (trimmed to the limit). If it is a long prompt, distill it to its essence.
 
+{{snippet:slide-title-guidelines}}
+
 ---
 
 ## Widget Types
@@ -273,9 +275,9 @@ Rules:
     {
       "id": "scene_1",
       "type": "slide",
-      "title": "Introduction to Projectile Motion",
-      "description": "Introduce the concept and learning objectives",
-      "keyPoints": ["What is projectile motion", "Real-world examples", "Key variables"],
+      "title": "Projectile Motion Variables",
+      "description": "Establish the variables that determine a projectile's trajectory",
+      "keyPoints": ["Launch angle", "Initial velocity", "Gravity"],
       "order": 1
     },
     {

@@ -40,6 +40,7 @@ import { resolveLatestCompletedArtifactId } from "@/lib/course-design/active-art
 import { readJsonResponse } from "@/lib/http/read-json-response";
 import type {
   Course,
+  CourseContent,
   CourseDesignGenerationArtifact,
   CourseDesignGenerationTraceEntry,
   KnowledgeGraph,
@@ -111,6 +112,7 @@ type ResponsePayload = {
   knowledgePreview?: {
     knowledgePoints: KnowledgePoint[];
     knowledgeGraph: KnowledgeGraph;
+    knowledgeScopePlan?: CourseContent["knowledgeScopePlan"];
     courseEvidence?: CourseEvidenceSnapshot;
   } | null;
   outlinePreview?: SceneOutline[];
@@ -306,6 +308,7 @@ export function FastCourseGenerator({
   const [knowledgePreview, setKnowledgePreview] = useState<{
     knowledgePoints: KnowledgePoint[];
     knowledgeGraph: KnowledgeGraph;
+    knowledgeScopePlan?: CourseContent["knowledgeScopePlan"];
     courseEvidence?: CourseEvidenceSnapshot;
   }>({ knowledgePoints: [], knowledgeGraph: { nodes: [], edges: [] } });
   const [knowledgeReviewOpen, setKnowledgeReviewOpen] = useState(false);
@@ -604,6 +607,9 @@ export function FastCourseGenerator({
         applyPayload(payload);
       }
       const latest = await fetchJob();
+      if (latest.job?.status !== "review_available" && latest.job?.status !== "paused") {
+        throw new Error("确认窗口已结束，任务正在自动继续。请查看当前生成进度。");
+      }
       if (latest.job?.reviewKind === "knowledge") {
         setKnowledgePreview(latest.knowledgePreview ?? {
           knowledgePoints: [],
@@ -665,6 +671,10 @@ export function FastCourseGenerator({
     });
     const payload = await readJsonResponse<ResponsePayload>(response, "保存大纲后未收到响应，请稍后重试。");
     if (!response.ok) throw new Error(payload.detail || payload.error || "无法保存大纲并继续生成");
+    if (payload.job?.reviewStatus !== "approved"
+      || !["queued", "running", "completed"].includes(payload.job.status)) {
+      throw new Error("大纲未被采用，确认窗口可能已结束。请返回生成进度查看最新状态。");
+    }
     setOutlinePreview(outlines);
     setOutlineReviewOpen(false);
     applyPayload(payload);
@@ -782,6 +792,7 @@ export function FastCourseGenerator({
             courseEvidence={knowledgePreview.courseEvidence ?? course.content.courseEvidence}
             initialKnowledgeGraph={knowledgePreview.knowledgeGraph}
             initialKnowledgePoints={knowledgePreview.knowledgePoints}
+            knowledgeScopePlan={knowledgePreview.knowledgeScopePlan ?? course.content.knowledgeScopePlan}
             onClose={() => setKnowledgeReviewOpen(false)}
             onConfirm={resumeAfterKnowledgeReview}
           />

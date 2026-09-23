@@ -9,7 +9,7 @@ import { parseTextbookDocx, TEXTBOOK_DOCX_LIMITS } from "./docx-parser";
 import { chineseSearchTokens } from "./text";
 import type { TextbookEvidenceSearchHit, TextbookEvidenceSearchResult, TextbookJobSnapshot } from "./types";
 
-export const TEXTBOOK_PARSE_VERSION = "docx-ooxml-v1";
+export const TEXTBOOK_PARSE_VERSION = "docx-ooxml-v2-heading-markers";
 export const TEXTBOOK_EXTRACTION_VERSION = "deterministic-headings-v1";
 export const textbookDataDir = () => process.env.UPLOAD_DIR?.trim() || path.resolve(".openpbl-data", "uploads");
 

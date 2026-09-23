@@ -29,6 +29,9 @@ describe("PBL course prompt", () => {
     expect(prompt?.system).toContain("parentActivityId");
     expect(prompt?.system).toContain("targetDurationSec");
     expect(prompt?.system).toContain("one semantic PPT page");
+    expect(prompt?.system).toContain("Instructional Slide Title Contract");
+    expect(prompt?.system).toContain("A case, practice, or recap page must name its concrete subject and purpose");
+    expect(prompt?.system).not.toContain("{{snippet:slide-title-guidelines}}");
     expect(prompt?.system).toContain("fixed seconds-per-page rule");
     expect(prompt?.system).toContain("companionStagePolicies[stageKey]");
     expect(prompt?.system).toContain("reflection");

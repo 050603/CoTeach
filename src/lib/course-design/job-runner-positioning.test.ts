@@ -44,6 +44,12 @@ describe("quick positioning generation", () => {
       .toBe(completedResponse.rawResponse);
     expect(restoreCourseDesignStageResponse(completedResponse, "input-b", "model-a")).toBeNull();
     expect(restoreCourseDesignStageResponse(completedResponse, "input-a", "model-b")).toBeNull();
+    expect(restoreCourseDesignStageResponse({ ...completedResponse, rawResponse: '{"knowledgePoints":[' }, "input-a", "model-a")).toBeNull();
+    const repairable = '{"knowledgePoints":[],"knowledgeGraph":{"nodes":[],"edges":[],}}';
+    const { parseKnowledgeStructureJson } = await import("@/lib/knowledge-structure-generation");
+    expect(restoreCourseDesignStageResponse(
+      { ...completedResponse, rawResponse: repairable }, "input-a", "model-a", parseKnowledgeStructureJson,
+    )).toBe(repairable);
     expect(restoreCourseDesignStageResponse({ ...completedResponse, status: "validated" }, "input-a", "model-a"))
       .toBeNull();
   }, 15_000);
@@ -97,6 +103,17 @@ describe("quick positioning generation", () => {
     );
     expect(plans.reduce((sum, plan) => sum + (plan.suggestedMaxPages ?? 0), 0))
       .toBeLessThan(knowledgePoints.length);
+  }, 15_000);
+
+  it("splits an interleaved knowledge group without changing textbook order", async () => {
+    const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
+    const knowledgePoints = [
+      { id: "first", name: "概念", description: "认识对象", groupId: "shared", groupName: "关联知识", level: "foundation" as const },
+      { id: "middle", name: "机制", description: "解释机制", groupId: "mechanism", groupName: "机制", level: "core" as const },
+      { id: "last", name: "应用", description: "尝试应用", groupId: "shared", groupName: "关联知识", level: "application" as const },
+    ];
+    const plans = buildTeachingBlueprintSectionPlans({ knowledgePoints }, 900);
+    expect(plans.map((plan) => plan.knowledgePointIds)).toEqual([["first"], ["middle"], ["last"]]);
   }, 15_000);
 
   it("attributes a shared cluster duration once instead of multiplying it by member count", async () => {
@@ -472,6 +489,9 @@ describe("quick positioning generation", () => {
     expect(requirement).toContain("不要为排版而默认添加 Table");
     expect(requirement).toContain("内容按以下小节组织");
     expect(requirement).toContain("以教师提供的课程资料作为事实依据");
+    expect(requirement).toContain("Instructional Slide Title Contract");
+    expect(requirement).toContain("教学目标层级辨析");
+    expect(requirement).toContain("Keep hooks, opening questions, learner commands, and activity instructions");
     expect(requirement).not.toContain("全课规划约");
     expect(requirement).not.toContain("OpenMAIC v1.0.2");
     expect(requirement).not.toContain("keyPoints 保留");

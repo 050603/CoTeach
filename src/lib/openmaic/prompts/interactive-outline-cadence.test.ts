@@ -2,6 +2,26 @@ import { describe, expect, it } from 'vitest';
 import { buildPrompt, PROMPT_IDS } from './index';
 
 describe('interactive-first outline strategy', () => {
+  it.each([
+    PROMPT_IDS.REQUIREMENTS_TO_OUTLINES,
+    PROMPT_IDS.INTERACTIVE_OUTLINES,
+    PROMPT_IDS.TASK_ENGINE_OUTLINES,
+  ])('%s applies the shared instructional slide title contract', (promptId) => {
+    const prompt = buildPrompt(promptId, {
+      requirement: 'Teach instructional design',
+      userProfile: '',
+      pdfContent: 'None',
+      availableImages: 'None',
+      researchContext: 'None',
+      teacherContext: '',
+    });
+    const combined = `${prompt?.system ?? ''}\n${prompt?.user ?? ''}`;
+
+    expect(combined).toContain('Instructional Slide Title Contract');
+    expect(combined).toContain('教学目标层级辨析');
+    expect(combined).not.toContain('{{snippet:slide-title-guidelines}}');
+  });
+
   it('keeps standard mode dynamic instead of enforcing a widget or page-density formula', () => {
     const prompt = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
       requirement: 'Teach a short concept course',

@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({ proxyFetch: vi.fn() }));
+vi.mock('@openmaic/lib/server/proxy-fetch', () => ({ proxyFetch: mocks.proxyFetch }));
+
 import { generateTTS } from './tts-providers';
 
 function pcmWav(payload: Uint8Array): Uint8Array {
@@ -34,12 +38,12 @@ function qwenSseResponse(audio: Uint8Array): Response {
   );
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => mocks.proxyFetch.mockReset());
 
 describe('Qwen TTS WAV handling', () => {
   it('does not wrap an upstream WAV header as audible PCM', async () => {
     const pcm = Uint8Array.from([0xfe, 0xff, 0xfd, 0xff, 0x02, 0x00]);
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(qwenSseResponse(pcmWav(pcm))));
+    mocks.proxyFetch.mockResolvedValue(qwenSseResponse(pcmWav(pcm)));
 
     const result = await generateTTS(
       { providerId: 'qwen-tts', voice: 'longanfengyue', apiKey: 'test' },
@@ -54,7 +58,7 @@ describe('Qwen TTS WAV handling', () => {
 
   it('still wraps genuine raw PCM exactly once', async () => {
     const pcm = Uint8Array.from([0, 0, 1, 0]);
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(qwenSseResponse(pcm)));
+    mocks.proxyFetch.mockResolvedValue(qwenSseResponse(pcm));
 
     const result = await generateTTS(
       { providerId: 'qwen-tts', voice: 'longanfengyue', apiKey: 'test' },
@@ -63,5 +67,17 @@ describe('Qwen TTS WAV handling', () => {
 
     expect(result.audio.byteLength).toBe(44 + pcm.byteLength);
     expect(result.audio.slice(44)).toEqual(pcm);
+  });
+
+  it('marks an empty successful SSE response as retryable', async () => {
+    mocks.proxyFetch.mockResolvedValue(new Response(
+      'data: [DONE]\n\n',
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    ));
+
+    await expect(generateTTS(
+      { providerId: 'qwen-tts', voice: 'longanfengyue', apiKey: 'test' },
+      '这是一段需要重试的语音。',
+    )).rejects.toMatchObject({ isRetryable: true });
   });
 });

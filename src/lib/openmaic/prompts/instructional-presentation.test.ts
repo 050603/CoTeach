@@ -1,7 +1,19 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildPrompt, loadSnippet, PROMPT_IDS } from './index';
 
 describe('instructional presentation prompt contract', () => {
+  it('keeps the app and generation-package title contracts identical', () => {
+    const appContract = loadSnippet('slide-title-guidelines');
+    const packageContract = readFileSync(path.join(
+      process.cwd(),
+      'packages/@openmaic/generation/snippets/slide-title-guidelines.md',
+    ), 'utf8').trim();
+
+    expect(appContract).toBe(packageContract);
+  });
+
   it('requires substantive PPT evidence instead of directory-style labels', () => {
     const prompt = buildPrompt(PROMPT_IDS.SLIDE_CONTENT, {
       canvas_width: 1000,
@@ -22,6 +34,8 @@ describe('instructional presentation prompt contract', () => {
     expect(prompt?.system).toContain('durable summary');
     expect(prompt?.system).toContain('hard to understand by listening alone');
     expect(prompt?.system).toContain('one clear visual hierarchy');
+    expect(prompt?.system).toContain('Instructional Slide Title Contract');
+    expect(prompt?.user).toContain('render `A lesson page` verbatim as the visible primary heading');
     expect(prompt?.system).toContain('restrained course-wide palette');
     expect(prompt?.system).toContain('one strong visual idea');
     expect(prompt?.system).toContain('Choose the representation from the teaching need');

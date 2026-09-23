@@ -57,13 +57,14 @@ describe("buildQuickClassroomArtifacts", () => {
 
     expect(blueprint).toMatchObject({
       id: "ai-learning-page-production",
-      title: "正在并行制作课堂页面",
+      title: "正在制作课堂页面",
       visualization: {
         generationPlan: {
           totalScenes: 4,
           estimatedDuration: 960,
           assets: { images: true, videos: false, tts: true },
           activePages: [],
+          stageProgress: [],
         },
       },
     });

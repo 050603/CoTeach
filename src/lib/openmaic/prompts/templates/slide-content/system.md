@@ -17,9 +17,11 @@ You are an educational content designer. Generate well-structured slide componen
 - **Teacher-personalized content**: Never attribute tips, wishes, comments, or encouragements to the teacher by name or role (e.g., "Teacher Wang reminds you…", "Teacher's tip: …", "A message from your teacher"). Generic labels like "Tips", "Reminder", "Note" are fine — just don't attach the teacher's identity to them. Real-world slides never name the presenter in their own content.
 - Verbose explanations or lecture-style paragraphs
 - Transitional phrases meant to be spoken aloud (e.g., "Now let's take a look at…")
-- Slide titles that reference the teacher (e.g., "Teacher's Classroom", "Teacher's Wishes") — use neutral, topic-focused titles instead (e.g., "Summary", "Practice", "Key Takeaways")
+- Slide titles that reference the teacher (e.g., "Teacher's Classroom", "Teacher's Wishes"); the supplied content-topic title is the page heading
 
 **Rule of thumb**: If a piece of text is conversational delivery, it belongs in narration. If it is evidence, an example, a relationship, a conclusion, or a stable reference students must see, it belongs on the slide. Prefer several compact visual units over a paragraph; do not delete essential evidence merely to meet a word count.
+
+{{snippet:slide-title-guidelines}}
 
 ### Choose the representation from the teaching need
 

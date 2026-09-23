@@ -53,6 +53,11 @@ import {
   normalizeSlideActivityPause,
   normalizeStudentActivityPause,
 } from '@openmaic/lib/generation/activity-gate';
+import {
+  findSpeechCueAnchorRange,
+  resolveSpeechCueEnd,
+  speechCueSentenceEnd,
+} from '@openmaic/lib/generation/speech-cue-boundaries';
 
 const MAX_PASSIVE_TIMELINE_PAUSE_MS = 400;
 
@@ -207,17 +212,7 @@ function findQuoteRange(
   text: string,
   anchor: { quote: string; occurrence?: number },
 ): { start: number; end: number } | null {
-  const quote = anchor.quote.trim();
-  if (!quote) return null;
-  const wantedOccurrence = Math.max(0, Math.trunc(anchor.occurrence ?? 0));
-  let fromIndex = 0;
-  for (let occurrence = 0; occurrence <= wantedOccurrence; occurrence += 1) {
-    const start = text.indexOf(quote, fromIndex);
-    if (start < 0) return null;
-    if (occurrence === wantedOccurrence) return { start, end: start + quote.length };
-    fromIndex = start + Math.max(1, quote.length);
-  }
-  return null;
+  return findSpeechCueAnchorRange(text, anchor);
 }
 
 function validAlignmentSpans(speech: AlignedSpeechAction): SpeechAlignmentSpan[] | null {
@@ -257,6 +252,30 @@ function resolveAnchorPosition(
   }
   const span = [...spans].reverse().find((candidate) => candidate.startChar < range.end);
   return span ? { char: range.end, ms: span.endMs } : null;
+}
+
+function resolveCharacterPosition(
+  speech: AlignedSpeechAction,
+  charIndex: number,
+  edge: 'start' | 'end',
+): { char: number; ms: number } | null {
+  const spans = validAlignmentSpans(speech);
+  if (!spans) return null;
+  const char = Math.max(0, Math.min(speech.text.length, charIndex));
+  const containing = spans.find((span) => (
+    edge === 'start'
+      ? span.startChar <= char && span.endChar > char
+      : span.startChar < char && span.endChar >= char
+  ));
+  if (containing) {
+    return { char, ms: edge === 'start' ? containing.startMs : containing.endMs };
+  }
+  const nearest = edge === 'start'
+    ? spans.find((span) => span.startChar >= char)
+    : [...spans].reverse().find((span) => span.endChar <= char);
+  return nearest
+    ? { char, ms: edge === 'start' ? nearest.startMs : nearest.endMs }
+    : null;
 }
 
 export class PlaybackEngine {
@@ -853,11 +872,24 @@ export class PlaybackEngine {
       const characterEnd = cue.endSpeechAnchor && allowCharacterBoundary
         ? findQuoteRange(speech.text, cue.endSpeechAnchor)?.end ?? null
         : null;
-      const explicitEnd = Number(cue.endSpeechOffsetMs);
+      const explicitEndOffset = Number(cue.endSpeechOffsetMs);
       const nextStart = points[index + 1]?.startMs;
-      let endMs = Number.isFinite(explicitEnd) && explicitEnd > point.startMs
-        ? explicitEnd
-        : endAnchor?.ms ?? nextStart ?? durationMs;
+      const startAnchorRange = cue.speechAnchor
+        ? findQuoteRange(speech.text, cue.speechAnchor)
+        : null;
+      const defaultEndChar = startAnchorRange
+        ? speechCueSentenceEnd(speech.text, startAnchorRange.end)
+        : speech.text.length;
+      const defaultEndPosition = resolveCharacterPosition(speech, defaultEndChar, 'end');
+      const defaultEndMs = Number.isFinite(explicitEndOffset) && explicitEndOffset > point.startMs
+        ? explicitEndOffset
+        : defaultEndPosition?.ms ?? durationMs;
+      let endMs = resolveSpeechCueEnd({
+        start: point.startMs,
+        defaultEnd: defaultEndMs,
+        explicitEnd: endAnchor?.ms,
+        nextStart,
+      });
       if (
         cue.type === 'laser'
         && point.startChar === null
@@ -870,7 +902,14 @@ export class PlaybackEngine {
       return {
         ...point,
         endMs: Math.max(point.startMs, endMs),
-        endChar: endAnchor?.char ?? characterEnd ?? points[index + 1]?.startChar ?? null,
+        endChar: point.startChar === null
+          ? null
+          : resolveSpeechCueEnd({
+              start: point.startChar,
+              defaultEnd: defaultEndChar,
+              explicitEnd: endAnchor?.char ?? characterEnd,
+              nextStart: points[index + 1]?.startChar,
+            }),
       };
     });
   }

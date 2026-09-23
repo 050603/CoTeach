@@ -92,4 +92,20 @@ describe("V2 generation job persistence", () => {
     expect(mocks.deleteCheckpoints.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.update.mock.invocationCallOrder[0]!);
   });
+  it("can clear completed-but-unvalidated model responses without deleting validated stages", async () => {
+    await contentGenerationJobs.replace({
+      where: { id: "job", status: "queued", version: 1 },
+      checkpointPolicy: { prefixes: ["course-design-attempt:"], unvalidatedResponses: true },
+      data: { status: "running" },
+    });
+    expect(mocks.deleteCheckpoints).toHaveBeenCalledWith({
+      where: {
+        jobId: "job",
+        OR: [
+          { step: { startsWith: "course-design-attempt:" } },
+          { state: { path: ["status"], equals: "response-complete" } },
+        ],
+      },
+    });
+  });
 });

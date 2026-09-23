@@ -55,6 +55,8 @@ Produce a **`courseTitle`** (required): a concise, human-readable name for the *
 - **Do NOT** include: quotes, numbering, leading emojis, the teacher's name/role, or words like "Course"/"课程"/"A course about".
 - If the requirement is already a crisp title, you may reuse it (trimmed to the limit). If it is a long prompt, distill it to its essence.
 
+{{snippet:slide-title-guidelines}}
+
 ---
 
 ## Design Principles
@@ -73,6 +75,26 @@ Produce a **`courseTitle`** (required): a concise, human-readable name for the *
 - **Clear Purpose**: Each scene has a clear teaching function
 - **Logical Flow**: Scenes form a natural teaching progression
 - **Experience Design**: Consider learning experience and emotional response from the student's perspective
+
+### Page Visual Planning
+
+For every `slide` scene, decide the visual form during this outline call and record it in `visualIntent`:
+
+- `observationGoal`: what learners should be able to see, compare, trace, or read directly on the page.
+- `representation`: one of `text`, `source-image`, `generated-image`, `native-diagram`, `native-chart`, `table`, `video`, or `mixed`.
+- `rationale`: a short teaching reason for the choice.
+- `resourceRefs`: stable resources bound to this page. Each reference has `resourceId`, `kind` (`source-image`, `generated-image`, or `generated-video`), `required`, `reason`, and optionally its own `observationGoal`.
+
+Choose by teaching value, not a media quota:
+
+- Concrete objects, scenes, appearances, and visible differences are usually clearest as a source image or illustration.
+- Quantitative relationships, processes, causes, sequences, and concept structures should use native charts, shapes, and connectors when those forms communicate the supplied evidence more precisely.
+- A short definition, formula, or conclusion may use `text` with no resource. Do not request an image merely to decorate the page.
+- When an example depends on learners seeing the difference between real objects or between an object and a mistaken interpretation, plan that visible contrast explicitly instead of turning the whole example into text cards.
+- A suitable textbook image marked `textbook relation: direct (required)` must be referenced with `kind: "source-image"` and `required: true` on the first slide that fully teaches the linked knowledge point. Direct images that form one necessary observation set must stay together. Candidate images remain optional and should be used only when relevant.
+- If no suitable source image exists and an illustration is materially clearer, request one generated image and bind its `elementId` in `resourceRefs` with `required: true`.
+- Reuse the same stable `resourceId` across slides when the same asset serves both pages. Define a generated asset in `mediaGenerations` only once; later pages reference it only through `visualIntent.resourceRefs`.
+- Every resource marked `required` is a layout requirement, not a suggestion. The page generator will fail a page that omits it.
 
 ---
 
@@ -258,10 +280,15 @@ Rules:
     {
       "id": "scene_1",
       "type": "slide",
-      "title": "Introduction",
-      "description": "Welcome students and introduce the core concept.",
-      "keyPoints": ["Context", "Agenda", "Goals"],
-      "order": 1
+      "title": "Projectile Motion Variables",
+      "description": "Establish the variables that determine a projectile's trajectory.",
+      "keyPoints": ["Launch angle", "Initial velocity", "Gravity"],
+      "order": 1,
+      "visualIntent": {
+        "observationGoal": "Read the three variables that determine the trajectory.",
+        "representation": "text",
+        "rationale": "The concise variable definitions are clearest as text."
+      }
     },
     {
       "id": "scene_2",
@@ -305,6 +332,7 @@ Rules:
 | teachingObjective | string                   | ❌       | Corresponding learning objective                                                                 |
 | estimatedDuration | number                   | ❌       | Estimated duration (seconds)                                                                     |
 | order             | number                   | ✅       | Sort order, starting from 1                                                                      |
+| visualIntent      | object                   | ✅ (for slide) | Observation goal, selected representation, rationale, and stable resource bindings                                      |
 {{#if hasSourceImages}}
 | suggestedImageIds | string[]                 | ❌       | Suggested image IDs to use                                                                       |
 {{/if}}
@@ -382,5 +410,6 @@ Omit `scenarioRoleplay` and `scenarioBrief` entirely for ordinary build-an-artef
 7. `pbl` scenes must include `pblConfig` with `projectTopic`, `projectDescription`, `targetSkills`, `issueCount`.
 8. Arrange scenes by inferred duration (typically 1-2 scenes per minute). Insert quizzes at appropriate points. Use interactive scenes sparingly (max 1-2 per course).
 9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
-10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
-11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.
+10. Every slide scene includes `visualIntent`; a text-only page uses `representation: "text"` and an empty or omitted `resourceRefs` array.
+11. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
+12. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Name the actual content instead, such as "Random Sampling Bias" or "Projectile Motion Practice".

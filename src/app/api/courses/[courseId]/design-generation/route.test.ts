@@ -152,7 +152,7 @@ describe("resource-package design generation admission", () => {
     expect(await response.json()).toMatchObject({ job: { requestPreview: { assessmentMode: "adaptive" } } });
   });
 
-  it("atomically resets only unfinished-stage attempts for an explicit same-request retry", async () => {
+  it("atomically resets unfinished-stage attempts and unvalidated responses for an explicit same-request retry", async () => {
     const resourcePackage = { schemaVersion: 1, id: "package-1", revision: 3, source: { id: "zip-1", fileName: "教学.zip", url: "/private/zip" }, documents: {}, draft: emptyResourcePackageDraft(), confirmedAt: "2026-09-12T00:00:00Z" };
     const previous = {
       courseId: "course-1",
@@ -177,7 +177,7 @@ describe("resource-package design generation admission", () => {
     expect(response.status).toBe(202);
     expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: "job-1", status: "failed", version: 9 },
-      checkpointPolicy: { prefixes: ["course-design-attempt:"] },
+      checkpointPolicy: { prefixes: ["course-design-attempt:"], unvalidatedResponses: true },
       data: expect.objectContaining({
         tokenUsage: 12_345,
         tokenUsageCalls: 2,

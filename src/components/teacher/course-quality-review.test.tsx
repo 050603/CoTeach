@@ -17,8 +17,11 @@ describe('optional course review panel', () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => snapshot });
     vi.stubGlobal('fetch', fetchMock);
     const onDecisionChange = vi.fn();
-    const view = render(<CourseQualityReview courseId="course" onDecisionChange={onDecisionChange} onOpenPage={vi.fn()} />);
+    const onOpenPage = vi.fn();
+    const onSummaryChange = vi.fn();
+    const view = render(<CourseQualityReview courseId="course" onDecisionChange={onDecisionChange} onOpenPage={onOpenPage} onSummaryChange={onSummaryChange} />);
     await waitFor(() => expect(onDecisionChange).toHaveBeenLastCalledWith(expect.objectContaining({ canConfirm: true, signature: snapshot.signature })));
+    await waitFor(() => expect(onSummaryChange).toHaveBeenLastCalledWith({ attentionCount: 0, blockingCount: 0, status: 'ready' }));
     expect(screen.getByText('内容一致性')).toBeTruthy();
     expect(screen.getByText('PPT 页面呈现')).toBeTruthy();
     expect(screen.getAllByText('未检查')).toHaveLength(2);
@@ -26,6 +29,9 @@ describe('optional course review panel', () => {
     expect(fetchMock.mock.calls.every((call) => call[1]?.method !== 'POST')).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: '检查页面' }));
     await waitFor(() => expect(mocks.canvas).toHaveBeenCalled());
+    view.rerender(<CourseQualityReview courseId="course" onDecisionChange={onDecisionChange} onOpenPage={onOpenPage} onSummaryChange={onSummaryChange} visible={false} />);
+    expect(view.container.querySelector('#publish-panel-checks')?.hasAttribute('hidden')).toBe(true);
+    expect(mocks.canvas).toHaveBeenCalled();
     view.unmount();
   });
   it('sends the content check only after the teacher requests it', async () => {
@@ -46,8 +52,35 @@ describe('optional course review panel', () => {
     };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => withReview }));
     const view = render(<CourseQualityReview courseId="course" onDecisionChange={vi.fn()} onOpenPage={vi.fn()} />);
-    expect(await screen.findByText('授课前来源与构造说明（1 项）')).toBeTruthy();
+    await screen.findByRole('button', { name: /来源说明/ });
+    expect(screen.queryByText('授课前来源与构造说明（1 项）')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /来源说明/ }));
+    expect(screen.getByText('授课前来源与构造说明（1 项）')).toBeTruthy();
     expect(screen.getByText(/67% 为示意数值/)).toBeTruthy();
+    view.unmount();
+  });
+  it('groups content and page hints so only the selected category is shown', async () => {
+    const categorized = {
+      ...snapshot,
+      quality: {
+        status: 'completed', checkedAt: new Date().toISOString(), sections: [],
+        issues: [{ id: 'content-1', origin: 'semantic', severity: 'suggestion', sceneId: 'slide', title: '内容表述需要确认', evidence: '表述可能产生歧义。', suggestion: '结合授课目标确认。' }],
+      },
+      renderReview: {
+        status: 'completed', updatedAt: new Date().toISOString(),
+        pages: [{ sceneId: 'slide', status: 'completed', checkedAt: new Date().toISOString(), issues: [{ id: 'page-1', origin: 'render', severity: 'suggestion', sceneId: 'slide', title: '页面文字较密', evidence: '页面信息密度偏高。', suggestion: '精简文字。' }] }],
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => categorized }));
+    const view = render(<CourseQualityReview courseId="course" onDecisionChange={vi.fn()} onOpenPage={vi.fn()} />);
+    expect(await screen.findByText('内容表述需要确认')).toBeTruthy();
+    expect(screen.getByText('页面文字较密')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /内容提示/ }));
+    expect(screen.getByText('内容表述需要确认')).toBeTruthy();
+    expect(screen.queryByText('页面文字较密')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /页面提示/ }));
+    expect(screen.queryByText('内容表述需要确认')).toBeNull();
+    expect(screen.getByText('页面文字较密')).toBeTruthy();
     view.unmount();
   });
   it('surfaces deterministic blockers and disables publication before optional checks run', async () => {
@@ -69,7 +102,7 @@ describe('optional course review panel', () => {
     expect(await screen.findByText('课件缺少必要材料')).toBeTruthy();
     await waitFor(() => expect(onDecisionChange).toHaveBeenLastCalledWith(expect.objectContaining({ canConfirm: false })));
     expect(screen.getByText('有阻断项')).toBeTruthy();
-    const editorLink = screen.getByRole('link', { name: /在编辑器中定位元素/ });
+    const editorLink = screen.getByRole('link', { name: /定位并修改/ });
     expect(editorLink.getAttribute('href')).toContain('sceneId=slide');
     expect(editorLink.getAttribute('href')).toContain('elementId=element-1');
     view.unmount();

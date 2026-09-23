@@ -8,7 +8,7 @@ export type CourseGenerationJob = {
   id: string; courseId: string; requestedBy: string | null; status: string; step: string; progress: number;
   message: string; scenesGenerated: number; totalScenes: number; estimatedRemainingSeconds: number | null;
   tokenUsage: number; tokenUsageCalls: number;
-  activePages: Json; currentStage: string | null; currentCall: Json;
+  activePages: Json; stageProgress: Json; currentStage: string | null; currentCall: Json;
   events: Json; trace: Json; request: Json; result: Json; qualityReport: Json; preparedOutlines: Json;
   reviewStatus: string; reviewAvailableUntil: Date | null; stepIndex: number; version: number; attempt: number;
   executionId: string | null; executionOwner: string | null; leaseExpiresAt: Date | null;
@@ -23,7 +23,7 @@ type Find = { where: JobWhere; select?: Record<string, boolean>; orderBy?: { cre
 export type GenerationCheckpointPolicy =
   | "all"
   | "prepared-outlines"
-  | { steps?: readonly string[]; prefixes?: readonly string[] };
+  | { steps?: readonly string[]; prefixes?: readonly string[]; unvalidatedResponses?: boolean };
 function object(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function json(value: unknown): Prisma.InputJsonValue { return JSON.parse(JSON.stringify(value === Prisma.JsonNull ? null : value)); }
 function date(value: unknown): Date | null { return typeof value === "string" ? new Date(value) : null; }
@@ -35,7 +35,8 @@ export function projectGenerationJob(row: GenerationJob): CourseGenerationJob {
     scenesGenerated: Number(state.scenesGenerated ?? 0), totalScenes: Number(state.totalScenes ?? 0),
     estimatedRemainingSeconds: state.estimatedRemainingSeconds == null ? null : Number(state.estimatedRemainingSeconds),
     tokenUsage: Number(state.tokenUsage ?? 0), tokenUsageCalls: Number(state.tokenUsageCalls ?? 0),
-    activePages: (state.activePages ?? []) as Json, currentStage: typeof state.currentStage === "string" ? state.currentStage : null,
+    activePages: (state.activePages ?? []) as Json, stageProgress: (state.stageProgress ?? []) as Json,
+    currentStage: typeof state.currentStage === "string" ? state.currentStage : null,
     currentCall: (state.currentCall ?? null) as Json,
     events: (state.events ?? []) as Json, trace: (envelope.entries ?? []) as Json, request: row.request, result: row.result, qualityReport: row.qualityReport,
     preparedOutlines: (state.preparedOutlines ?? null) as Json,
@@ -83,7 +84,7 @@ function updateData(row: CourseGenerationJob, patch: Patch): Prisma.GenerationJo
       requestedBy: next.requestedBy, message: next.message, scenesGenerated: next.scenesGenerated, totalScenes: next.totalScenes,
       estimatedRemainingSeconds: next.estimatedRemainingSeconds, tokenUsage: next.tokenUsage, tokenUsageCalls: next.tokenUsageCalls,
       events: next.events, reviewStatus: next.reviewStatus,
-      activePages: next.activePages, currentStage: next.currentStage,
+      activePages: next.activePages, stageProgress: next.stageProgress, currentStage: next.currentStage,
       currentCall: next.currentCall,
       reviewAvailableUntil: next.reviewAvailableUntil, stepIndex: next.stepIndex, version: next.version, preparedOutlines: next.preparedOutlines,
       executionId: next.executionId, executionOwner: next.executionOwner, leaseExpiresAt: next.leaseExpiresAt,
@@ -105,13 +106,14 @@ async function deleteCheckpoints(
   }
   const steps = [...new Set(policy.steps ?? [])];
   const prefixes = [...new Set(policy.prefixes ?? [])];
-  if (steps.length === 0 && prefixes.length === 0) return;
+  if (steps.length === 0 && prefixes.length === 0 && !policy.unvalidatedResponses) return;
   await tx.generationCheckpoint.deleteMany({
     where: {
       jobId,
       OR: [
         ...(steps.length ? [{ step: { in: steps } }] : []),
         ...prefixes.map((prefix) => ({ step: { startsWith: prefix } })),
+        ...(policy.unvalidatedResponses ? [{ state: { path: ["status"], equals: "response-complete" } }] : []),
       ],
     },
   });

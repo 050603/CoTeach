@@ -192,6 +192,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ cou
         ? {
             knowledgePoints: course.content.knowledgePoints,
             knowledgeGraph: course.content.knowledgeGraph ?? { nodes: [], edges: [] },
+            knowledgeScopePlan: course.content.knowledgeScopePlan,
             courseEvidence: course.content.courseEvidence,
           }
         : null,
@@ -356,7 +357,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
         job = await designGenerationJobs.replace({
           where: { id: job.id, status: job.status, version: job.version },
           checkpointPolicy: preserveValidatedStages
-            ? { prefixes: ["course-design-attempt:"] }
+            ? { prefixes: ["course-design-attempt:"], unvalidatedResponses: true }
             : "all",
           data: {
             status: "queued",

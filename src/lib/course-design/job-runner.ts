@@ -14,6 +14,7 @@ import { getCourse, updateCourse } from "@/lib/session/server-store";
 import {
   generateKnowledgeStructureOnce,
   KNOWLEDGE_STRUCTURE_POLICY_VERSION,
+  parseKnowledgeStructureJson,
   type KnowledgeStructureGenerationContext,
 } from "@/lib/knowledge-structure-generation";
 import { resourcePackageTeachingPoints } from "./resource-package-knowledge";
@@ -52,6 +53,7 @@ import type { SceneOutline } from "@/lib/openmaic/types/generation";
 import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
 import { generateOpenMaicBaselineOutlines } from "@/lib/openmaic/generation/openmaic-baseline";
 import { ZH_CN_COURSE_LANGUAGE_DIRECTIVE } from "@/lib/openmaic/generation/course-language";
+import { loadSnippet } from "@/lib/openmaic/prompts";
 import { findServerDefaultModelString } from "@/lib/openmaic/server/provider-config";
 import { resolveModel } from "@/lib/openmaic/server/resolve-model";
 import {
@@ -103,6 +105,11 @@ import {
   type CourseTextbookSelection,
 } from "@/lib/textbook/course-evidence-types";
 import { resolveCourseTextbookFigures } from "@/lib/textbook/course-evidence";
+import type { CourseTextbookFigureResource } from "@/lib/textbook/course-evidence-types";
+import {
+  assertRequiredTextbookFiguresAvailable,
+  bindRequiredTextbookFiguresToOutlines,
+} from "@/lib/textbook/course-visual-binding";
 import {
   deriveKnowledgeLectureSectionsFromOutlines,
   organizeKnowledgeLectureOutlines,
@@ -129,6 +136,7 @@ import {
   teachingBlueprintToOutlines,
   type TeachingBlueprintInput,
   type TeachingBlueprintSectionPlan,
+  type TeachingBlueprintTextbookFigure,
 } from "./teaching-blueprint";
 
 const POLL_INTERVAL_MS = 1_500;
@@ -185,6 +193,22 @@ export type QuickDesignRequest = {
 
 function textbookTeachingSourceContext(request: Pick<QuickDesignRequest, "textbookEvidence">): string {
   return formatCourseEvidenceContext(request.textbookEvidence);
+}
+
+function availableTextbookFigures(
+  resources: readonly CourseTextbookFigureResource[],
+): Array<CourseTextbookFigureResource & { assetId: string; src: string; textbookRelation: "direct" | "candidate" }> {
+  return resources.flatMap((resource) => (
+    resource.status === "available" && resource.assetId && resource.src
+      ? [{
+          ...resource,
+          assetId: resource.assetId,
+          src: resource.src,
+          textbookRelation: resource.relation,
+          relationReason: resource.description,
+        }]
+      : []
+  ));
 }
 
 export type QuickDesignTraceEvent = CourseDesignGenerationTraceEntry & {
@@ -313,9 +337,10 @@ export function restoreCourseDesignStageResponse(
   value: unknown,
   inputFingerprint: string,
   modelFingerprint: string,
+  parseResponse: (raw: string) => unknown = parseLLMJson,
 ): string | null {
   const checkpoint = checkpointRecord(value);
-  return checkpoint?.schemaVersion === 1
+  const rawResponse = checkpoint?.schemaVersion === 1
     && checkpoint.status === "response-complete"
     && checkpoint.inputFingerprint === inputFingerprint
     && checkpoint.modelFingerprint === modelFingerprint
@@ -323,6 +348,14 @@ export function restoreCourseDesignStageResponse(
     && checkpoint.rawResponse.length > 0
     ? checkpoint.rawResponse
     : null;
+  if (!rawResponse) return null;
+  try {
+    parseResponse(rawResponse);
+    return rawResponse;
+  } catch {
+    // A completed stream is not a reusable artifact if its JSON is broken.
+    return null;
+  }
 }
 
 function courseDesignModelString(request: QuickDesignRequest): string | undefined {
@@ -636,8 +669,28 @@ export function reconcileReviewedKnowledgeScopePlan(
   textbookDriven: boolean,
 ): KnowledgeScopePlan | undefined {
   if (!plan) return undefined;
+  const reviewedIds = knowledgePoints.map((point) => point.id);
+  const reviewedIdSet = new Set(reviewedIds);
+  const previousOrder = plan.teachingOrder;
+  const teachingOrder = previousOrder ? {
+    ...previousOrder,
+    baselineKnowledgePointIds: [
+      ...previousOrder.baselineKnowledgePointIds.filter((id) => reviewedIdSet.has(id)),
+      ...reviewedIds.filter((id) => !previousOrder.baselineKnowledgePointIds.includes(id)),
+    ],
+    knowledgePointIds: reviewedIds,
+    anchors: [
+      ...previousOrder.anchors.filter((anchor) => reviewedIdSet.has(anchor.knowledgePointId)),
+      ...reviewedIds.filter((id) => !previousOrder.anchors.some((anchor) => anchor.knowledgePointId === id))
+        .map((knowledgePointId) => ({ knowledgePointId, sectionPath: [], status: "unlocated" as const })),
+    ],
+    adjustments: previousOrder.adjustments.filter((item) => (
+      reviewedIdSet.has(item.knowledgePointId) && reviewedIdSet.has(item.beforeKnowledgePointId)
+    )),
+  } : undefined;
   return {
     ...plan,
+    ...(teachingOrder ? { teachingOrder } : {}),
     targetPointCount: knowledgePoints.length,
     decisions: plan.decisions.map((decision) => {
       const targets = knowledgePoints.filter((point) => (
@@ -1128,7 +1181,7 @@ function stageSummaryInput(
         ? `教师补充要求：${teacherGenerationBrief(request).trim()}`
         : "",
       referenceContext,
-      textbookTeachingSourceContext(request),
+      includeReferenceMaterials ? textbookTeachingSourceContext(request) : "",
       "按学习目标和先决依赖组织知识，区分主题分组与可教可测的知识点；保留资源包指定知识，不把同义表述拆成重复节点。先讲清概念与适用条件，用例证及必要操作巩固，再按知识小节检测理解。",
     ].filter(Boolean).join("\n"),
   });
@@ -1648,6 +1701,7 @@ export function buildOpenMaicKnowledgeLectureRequirement(
     `教师补充要求：${teacherGenerationBrief(request) || "无"}。`,
     sections.length ? `内容按以下小节组织：\n${sections.join("\n")}` : "",
     "以教师提供的课程资料作为事实依据。",
+    loadSnippet("slide-title-guidelines"),
     "本步骤只规划知识讲授 slide，以及确有必要且配置完整的通用 interactive；不要生成 quiz 或 PBL。每个页面只承担一个主要认知任务：紧密相关且共用同一视觉焦点的定义与关系可同页；完整例子、反例/边界、操作步骤或学生练习若需独立说明就应拆页。一页预计连续讲授超过约 4 分钟时必须在自然理解转折处继续拆分，也不要把一个完整概念机械拆成多张稀疏页面。每个 slide 的 keyPoints 根据本页职责、学生已有基础与知识难度选择互补且必要的信息单元；保留理解所需的关系和条件，不设条目配额，不用泛化口号凑数，也不要为排版而默认添加 Table。",
   ].filter(Boolean).join("\n\n");
 }
@@ -1656,19 +1710,17 @@ export function buildTeachingBlueprintSectionPlans(
   content: Pick<CourseContent, "knowledgePoints" | "moduleTimingPlan">,
   totalDurationSec: number,
 ): TeachingBlueprintSectionPlan[] {
-  const groups = new Map<string, { title: string; knowledgePointIds: string[] }>();
+  const groupedEntries: Array<{ key: string; title: string; knowledgePointIds: string[] }> = [];
   for (const point of content.knowledgePoints) {
     // Missing group metadata must not collapse the whole course into one
     // lesson-sized section. A standalone point is the safest recoverable
     // boundary; generated structures normally provide semantic group ids.
     const key = point.groupId?.trim() || point.groupName?.trim() || point.id;
     const title = point.groupName?.trim() || point.name.trim() || "核心知识";
-    const existing = groups.get(key);
-    groups.set(key, existing
-      ? { ...existing, knowledgePointIds: [...existing.knowledgePointIds, point.id] }
-      : { title, knowledgePointIds: [point.id] });
+    const last = groupedEntries.at(-1);
+    if (last?.key === key) last.knowledgePointIds.push(point.id);
+    else groupedEntries.push({ key, title, knowledgePointIds: [point.id] });
   }
-  const groupedEntries = [...groups.values()];
   if (!groupedEntries.length) return [];
   const clusterAllocations = (content.moduleTimingPlan?.allocations ?? [])
     .filter((allocation) => allocation.stageKey === "ai-learning" && allocation.durationMin > 0);
@@ -1774,6 +1826,7 @@ function buildTeachingBlueprintInput(
   content: CourseContent,
   request: QuickDesignRequest,
   aiDurationMin: number,
+  textbookFigures: readonly TeachingBlueprintTextbookFigure[] = [],
 ): TeachingBlueprintInput {
   const totalDurationSec = aiDurationMin * 60;
   return {
@@ -1786,6 +1839,7 @@ function buildTeachingBlueprintInput(
     projectContext: [course.drivingQuestion, course.expectedOutcome].filter(Boolean).join("；"),
     knowledgePoints: content.knowledgePoints,
     knowledgeGraph: content.knowledgeGraph,
+    teachingOrder: content.knowledgeScopePlan?.teachingOrder,
     totalDurationSec,
     assessmentMode: request.assessmentMode ?? "adaptive",
     generationMode: request.generationMode ?? "standard",
@@ -1799,6 +1853,7 @@ function buildTeachingBlueprintInput(
       ),
       textbookTeachingSourceContext(request),
     ].filter(Boolean).join("\n\n"),
+    textbookFigures,
     sectionPlans: buildTeachingBlueprintSectionPlans(content, totalDurationSec),
   };
 }
@@ -1819,12 +1874,32 @@ async function generateNewSystemTeachingBlueprintOutlines(
   if (!isNewSystemAiTimingPlan(content.moduleTimingPlan, course.hours, content.stagePlan) || aiDurationMin <= 0) {
     throw new Error("请先确认知识讲授时间预算，再生成教学蓝图。");
   }
+  const textbookFigureResources = await resolveCourseTextbookFigures(request.textbookEvidence, content.knowledgePoints);
+  assertRequiredTextbookFiguresAvailable(textbookFigureResources);
+  const textbookFigures: TeachingBlueprintTextbookFigure[] = textbookFigureResources
+    .filter((resource) => resource.status === "available")
+    .map((resource) => ({
+      resourceId: resource.id,
+      figureId: resource.figureId,
+      ...(resource.description ? { description: resource.description } : {}),
+      knowledgePointIds: resource.knowledgePointIds,
+      relation: resource.relation,
+      required: resource.required,
+      ...(resource.groupKey ? { groupKey: resource.groupKey } : {}),
+      sourceTitle: resource.sourceTitle,
+      relationReason: resource.relation === "direct"
+        ? "教材证据直接关联到本课知识点"
+        : "同章节候选图，仅在观察细节能提升理解时使用",
+    }));
   const resolved = await resolveModel({
     modelString: request.generationModelString ?? findServerDefaultModelString(),
     stage: "scene-outlines-stream",
   });
   const modelFingerprint = resolvedCourseDesignModelFingerprint(resolved);
-  const input = { ...buildTeachingBlueprintInput(course, content, request, aiDurationMin), generationModelFingerprint: modelFingerprint };
+  const input = {
+    ...buildTeachingBlueprintInput(course, content, request, aiDurationMin, textbookFigures),
+    generationModelFingerprint: modelFingerprint,
+  };
   const expectedFingerprint = teachingBlueprintInputFingerprint(input);
   const stored = await loadGenerationCheckpoints(job.id);
   const checkpoint = stored.teachingBlueprint && typeof stored.teachingBlueprint === "object" && !Array.isArray(stored.teachingBlueprint)
@@ -1838,6 +1913,23 @@ async function generateNewSystemTeachingBlueprintOutlines(
         validationIssues?: unknown;
       }
     : undefined;
+  // Existing completed blueprints used source-package IDs in textbook figure
+  // metadata. The page plan itself is still valid; only the figure binding
+  // needs the mapped lesson IDs. Preserve that expensive completed artifact.
+  let legacyFigureFingerprint: string | undefined;
+  if (checkpoint?.status === "validated"
+    && checkpoint.inputFingerprint !== expectedFingerprint
+    && checkpoint.modelFingerprint === modelFingerprint) {
+    const legacyResources = await resolveCourseTextbookFigures(request.textbookEvidence);
+    const legacyIdsByResourceId = new Map(legacyResources.map((resource) => [resource.id, resource.knowledgePointIds]));
+    legacyFigureFingerprint = teachingBlueprintInputFingerprint({
+      ...input,
+      textbookFigures: textbookFigures.map((figure) => ({
+        ...figure,
+        knowledgePointIds: legacyIdsByResourceId.get(figure.resourceId) ?? figure.knowledgePointIds,
+      })),
+    });
+  }
   const persistedInvalidRepair = checkpoint?.schemaVersion === 1
     && checkpoint.status === "invalid-output"
     && checkpoint.inputFingerprint === expectedFingerprint
@@ -1859,12 +1951,28 @@ async function generateNewSystemTeachingBlueprintOutlines(
     : undefined;
   if (!blueprint) {
     if (checkpoint?.schemaVersion === 1
-      && checkpoint.inputFingerprint === expectedFingerprint
+      && (checkpoint.inputFingerprint === expectedFingerprint
+        || (legacyFigureFingerprint !== undefined
+          && checkpoint.inputFingerprint === legacyFigureFingerprint))
       && checkpoint.modelFingerprint === modelFingerprint
       && checkpoint.blueprint && typeof checkpoint.blueprint === "object"
       && (checkpoint.blueprint as { schemaVersion?: unknown }).schemaVersion === TEACHING_BLUEPRINT_SCHEMA_VERSION) {
-      blueprint = checkpoint.blueprint as TeachingBlueprint;
+      blueprint = {
+        ...(checkpoint.blueprint as TeachingBlueprint),
+        inputFingerprint: expectedFingerprint,
+      };
     }
+  }
+  if (blueprint && legacyFigureFingerprint !== undefined
+    && checkpoint?.inputFingerprint === legacyFigureFingerprint
+    && legacyFigureFingerprint !== expectedFingerprint) {
+    await saveGenerationCheckpoint(job.id, TEACHING_BLUEPRINT_STEP, {
+      schemaVersion: 1,
+      status: "validated",
+      inputFingerprint: expectedFingerprint,
+      modelFingerprint,
+      blueprint,
+    }, designCheckpointOptions(job));
   }
   if (!blueprint) {
     const storedResponse = restoreCourseDesignStageResponse(
@@ -1890,7 +1998,10 @@ async function generateNewSystemTeachingBlueprintOutlines(
         // bounded repair run. Keep the audited draft, but do not carry the
         // already-consumed provider-attempt budget into that run.
         storedAttempt: persistedInvalidRepair ? null : stored.teachingBlueprintAttempt,
-        maxOutputTokens: 65_536,
+        // The blueprint carries every section in one durable JSON document.
+        // Let the model-aware output budget grow beyond the former 64K cap so
+        // a complete first pass is not truncated after expensive reasoning.
+        maxOutputTokens: 131_072,
         temperature: 0.2,
       });
       clearStreaming = streaming.clear;
@@ -1941,7 +2052,10 @@ async function generateNewSystemTeachingBlueprintOutlines(
       blueprint,
     }, designCheckpointOptions(job));
   }
-  const outlines = teachingBlueprintToOutlines(blueprint, ZH_CN_COURSE_LANGUAGE_DIRECTIVE);
+  const outlines = bindRequiredTextbookFiguresToOutlines(
+    teachingBlueprintToOutlines(blueprint, ZH_CN_COURSE_LANGUAGE_DIRECTIVE),
+    textbookFigureResources,
+  );
   return { blueprint, outlines };
 }
 
@@ -1951,6 +2065,9 @@ async function generateNewSystemAiOutlines(
   request: QuickDesignRequest,
   signal: AbortSignal,
 ): Promise<Array<SceneOutline & OpenMaicSceneOutlineSnapshot>> {
+  const textbookFigureResources = await resolveCourseTextbookFigures(request.textbookEvidence, content.knowledgePoints);
+  assertRequiredTextbookFiguresAvailable(textbookFigureResources);
+  const textbookImages = availableTextbookFigures(textbookFigureResources);
   const aiAllocations = content.moduleTimingPlan?.allocations.filter(
     (allocation) => allocation.stageKey === "ai-learning",
   ) ?? [];
@@ -1977,7 +2094,7 @@ async function generateNewSystemAiOutlines(
       ),
       textbookTeachingSourceContext(request),
     ].filter(Boolean).join("\n\n"),
-    undefined,
+    textbookImages,
     createCourseGenerationAiCall({
       model: resolved.model,
       vision: false,
@@ -1991,6 +2108,7 @@ async function generateNewSystemAiOutlines(
       streamResponse: true,
     }),
     {
+      visionEnabled: false,
       imageGenerationEnabled: request.options?.enableImageGeneration === true,
       videoGenerationEnabled: request.options?.enableVideoGeneration === true,
     },
@@ -2006,7 +2124,7 @@ async function generateNewSystemAiOutlines(
     courseLanguageDirective: result.data.languageDirective,
     assessmentMode: request.assessmentMode ?? "adaptive",
   });
-  return normalized;
+  return bindRequiredTextbookFiguresToOutlines(normalized, textbookFigureResources);
 }
 
 export function assertAiOutlineKnowledgeCoverage(outlines: readonly SceneOutline[], points: readonly KnowledgePoint[]): void {
@@ -2068,11 +2186,13 @@ async function enqueueClassroomGeneration(
   generationScope: ClassroomGenerationScope = "full-course",
   textbookEvidence?: CourseEvidenceSnapshot,
 ): Promise<void> {
-  const textbookImages = await resolveCourseTextbookFigures(textbookEvidence);
+  const textbookFigureResources = await resolveCourseTextbookFigures(textbookEvidence, course.content.knowledgePoints);
+  assertRequiredTextbookFiguresAvailable(textbookFigureResources);
+  const textbookImages = availableTextbookFigures(textbookFigureResources);
   const textbookFigureContext = textbookImages.length
     ? [
-        "本课已授权使用的教材原图（页面需要插图时优先从这些资源选择；资源 ID 必须原样保留）：",
-        ...textbookImages.map((image) => `${image.id}：${image.description ?? "教材原图"}；figureId=${image.figureId}`),
+        "本课已授权使用的教材原图（required=true 的资源必须出现在对应知识点首次完整讲解页；候选图只在确有教学帮助时使用；资源 ID 必须原样保留）：",
+        ...textbookImages.map((image) => `${image.id}：${image.description ?? "教材原图"}；figureId=${image.figureId}；required=${image.required}；knowledgePointIds=${image.knowledgePointIds.join(",") || "none"}`),
       ].join("\n")
     : "";
   const confirmedSceneOutlines = (course.content._openmaicSceneOutlines ?? []).map((scene, index) => ({
@@ -2085,7 +2205,7 @@ async function enqueueClassroomGeneration(
     estimatedDuration: scene.estimatedDuration ?? scene.targetDurationSec ?? 300,
     order: scene.order ?? index,
   })) as Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
-  const selection = selectClassroomGenerationOutlines(confirmedSceneOutlines, generationScope);
+  const selection = selectClassroomGenerationOutlines(confirmedSceneOutlines, generationScope, teacherBrief);
   const sceneOutlines = confirmedSceneOutlines;
   const generatedLanguageDirective = sceneOutlines.find(
     (scene) => typeof scene.courseLanguageDirective === "string"
@@ -2579,6 +2699,7 @@ async function runNewSystemCourseDesign(
       storedKnowledge,
       knowledgeInputFingerprint,
       knowledgeModelFingerprint,
+      parseKnowledgeStructureJson,
     );
     let generated: Awaited<ReturnType<typeof generateKnowledgeStructureOnce>>;
     if (storedKnowledge?.schemaVersion === 1
@@ -2617,6 +2738,13 @@ async function runNewSystemCourseDesign(
       try {
         const durableAiCall: AICallFn = async (system, prompt, images) => {
           const rawResponse = await streaming.aiCall(system, prompt, images);
+          if (!rawResponse.trim()) return rawResponse;
+          try {
+            parseKnowledgeStructureJson(rawResponse);
+          } catch {
+            // Do not persist malformed output as a recoverable checkpoint.
+            return rawResponse;
+          }
           // Persist the completed visible response before parsing it. If the
           // process exits between stream completion and graph normalization,
           // recovery parses this exact response instead of paying for another

@@ -67,6 +67,7 @@ export type ResourcePackageDraft = {
   subject: string;
   grade: string;
   drivingQuestion: string;
+  projectTask?: string;
   learningObjectives: string[];
   expectedOutcome: string;
   learnerContext: string;
@@ -116,6 +117,7 @@ export type CourseStagePlan = {
   schemaVersion: 1 | 2;
   source: "resource-package";
   drivingQuestion?: string;
+  projectTask?: string;
   totalMinutes: number;
   lessonCount: number | null;
   minutesPerLesson: number | null;
@@ -131,11 +133,19 @@ export type CourseStagePlan = {
 export type ResourcePackageJobSnapshot = {
   id: string;
   status: string;
+  step?: string;
   message: string;
   error?: string | null;
   progress: number;
   candidates?: Partial<Record<ResourcePackageRole, string[]>>;
   package?: CourseResourcePackage | null;
+};
+
+export type ResourcePackageDraftIssueSection = "overview" | "schedule" | "knowledge" | "stages" | "assessment";
+export type ResourcePackageDraftIssue = {
+  id: string;
+  section: ResourcePackageDraftIssueSection;
+  message: string;
 };
 
 export function emptyResourcePackageDraft(): ResourcePackageDraft {
@@ -148,44 +158,49 @@ export function emptyResourcePackageDraft(): ResourcePackageDraft {
   };
 }
 
-export function resourcePackageDraftErrors(draft: ResourcePackageDraft): string[] {
-  const errors: string[] = [];
-  if (!draft.courseName.trim()) errors.push("请补充课程名称。");
-  if (!draft.grade.trim()) errors.push("请补充教学对象 / 学段。");
-  if (!draft.drivingQuestion.trim()) errors.push("请补充项目学习驱动问题。");
-  if (!draft.learningObjectives.some((item) => item.trim())) errors.push("请补充学习目标。");
-  if (!draft.expectedOutcome.trim()) errors.push("请补充项目成果要求。");
-  if (!draft.knowledgePoints.length || draft.knowledgePoints.some((item) => !item.name.trim())) errors.push("请补充课程必须覆盖的知识点。");
-  if (draft.finalDeliverables?.some((item) => !item.name?.trim() || !item.requirements?.trim() || !item.format?.trim())) errors.push("请填写每项最终交付物的名称、格式与具体要求。");
-  if (draft.reflectionQuestionSet?.questions.some((item) => !item.id.trim() || !item.prompt.trim())) errors.push("请补充完整的反思题目。");
-  if (draft.reflectionQuestionSet && new Set(draft.reflectionQuestionSet.questions.map((item) => item.id)).size !== draft.reflectionQuestionSet.questions.length) errors.push("反思题标识重复，请重新添加重复题目。");
-  if (draft.evaluationRubric && new Set(draft.evaluationRubric.dimensions.map((item) => item.id)).size !== draft.evaluationRubric.dimensions.length) errors.push("评价维度标识重复，请重新添加重复维度。");
+export function resourcePackageDraftIssues(draft: ResourcePackageDraft): ResourcePackageDraftIssue[] {
+  const issues: ResourcePackageDraftIssue[] = [];
+  const add = (id: string, section: ResourcePackageDraftIssueSection, message: string) => issues.push({ id, section, message });
+  if (!draft.courseName.trim()) add("course-name", "overview", "请补充课程名称。");
+  if (!draft.grade.trim()) add("grade", "overview", "请补充教学对象 / 学段。");
+  if (!draft.drivingQuestion.trim()) add("driving-question", "overview", "请补充项目学习驱动问题。");
+  if (!draft.learningObjectives.some((item) => item.trim())) add("learning-objectives", "overview", "请补充学习目标。");
+  if (!draft.expectedOutcome.trim()) add("expected-outcome", "overview", "请补充项目成果要求。");
+  if (!draft.knowledgePoints.length || draft.knowledgePoints.some((item) => !item.name.trim())) add("knowledge-points", "knowledge", "请补充课程必须覆盖的知识点。");
+  if (draft.finalDeliverables?.some((item) => !item.name?.trim() || !item.requirements?.trim() || !item.format?.trim())) add("final-deliverables", "assessment", "请填写每项最终交付物的名称、格式与具体要求。");
+  if (draft.reflectionQuestionSet?.questions.some((item) => !item.id.trim() || !item.prompt.trim())) add("reflection-questions", "assessment", "请补充完整的反思题目。");
+  if (draft.reflectionQuestionSet && new Set(draft.reflectionQuestionSet.questions.map((item) => item.id)).size !== draft.reflectionQuestionSet.questions.length) add("reflection-question-ids", "assessment", "反思题标识重复，请重新添加重复题目。");
+  if (draft.evaluationRubric && new Set(draft.evaluationRubric.dimensions.map((item) => item.id)).size !== draft.evaluationRubric.dimensions.length) add("evaluation-dimension-ids", "assessment", "评价维度标识重复，请重新添加重复维度。");
   if (draft.evaluationRubric) {
     const rubric = draft.evaluationRubric;
     if (rubric.dimensions.some((item) => !item.name.trim() || !Number.isFinite(item.weight) || item.weight <= 0)
-      || Math.abs(rubric.dimensions.reduce((sum, item) => sum + item.weight, 0) - 100) > 0.01) errors.push("评价维度权重之和必须为100%。");
+      || Math.abs(rubric.dimensions.reduce((sum, item) => sum + item.weight, 0) - 100) > 0.01) add("evaluation-dimension-weights", "assessment", "评价维度权重之和必须为100%。");
     if ([rubric.sourceWeights.teacher, rubric.sourceWeights.ai].some((weight) => !Number.isFinite(weight) || weight < 0)
-      || Math.abs(rubric.sourceWeights.teacher + rubric.sourceWeights.ai - 100) > 0.01) errors.push("教师和AI评价来源权重之和必须为100%。");
+      || Math.abs(rubric.sourceWeights.teacher + rubric.sourceWeights.ai - 100) > 0.01) add("evaluation-source-weights", "assessment", "教师和AI评价来源权重之和必须为100%。");
   }
-  if (!Number.isInteger(draft.totalMinutes) || (draft.totalMinutes ?? 0) <= 0) errors.push("请填写有效的课程总分钟数。");
+  if (!Number.isInteger(draft.totalMinutes) || (draft.totalMinutes ?? 0) <= 0) add("total-minutes", "schedule", "请填写有效的课程总分钟数。");
   if (draft.stages.length !== 5 || RESOURCE_PACKAGE_STAGE_KEYS.some((key) => draft.stages.filter((stage) => stage.key === key).length !== 1)) {
-    errors.push("教案必须包含完整的五阶段安排。");
+    add("stage-structure", "stages", "教案必须包含完整的五阶段安排。");
   }
   if (draft.stages.some((stage) => !Number.isInteger(stage.durationMin) || (stage.durationMin ?? 0) <= 0)) {
-    errors.push("请填写五个阶段的正整数分钟数。");
+    add("stage-durations", "stages", "请填写五个阶段的正整数分钟数。");
   } else if (draft.stages.reduce((sum, stage) => sum + (stage.durationMin ?? 0), 0) !== draft.totalMinutes) {
-    errors.push("五阶段时长之和必须等于课程总分钟数，请修正教案时间。");
+    add("stage-duration-total", "stages", "五阶段时长之和必须等于课程总分钟数，请修正教案时间。");
   }
-  if (draft.lessonCount !== null && (!Number.isInteger(draft.lessonCount) || draft.lessonCount <= 0)) errors.push("课次数必须为正整数。");
-  if (draft.minutesPerLesson !== null && (!Number.isInteger(draft.minutesPerLesson) || draft.minutesPerLesson <= 0)) errors.push("每课次分钟数必须为正整数。");
-  if (draft.lessonCount && draft.minutesPerLesson && draft.lessonCount * draft.minutesPerLesson !== draft.totalMinutes) errors.push("课次数乘以每课次分钟数必须等于课程总分钟数。");
-  return errors;
+  if (draft.lessonCount !== null && (!Number.isInteger(draft.lessonCount) || draft.lessonCount <= 0)) add("lesson-count", "schedule", "课次数必须为正整数。");
+  if (draft.minutesPerLesson !== null && (!Number.isInteger(draft.minutesPerLesson) || draft.minutesPerLesson <= 0)) add("minutes-per-lesson", "schedule", "每课次分钟数必须为正整数。");
+  if (draft.lessonCount && draft.minutesPerLesson && draft.lessonCount * draft.minutesPerLesson !== draft.totalMinutes) add("lesson-duration-total", "schedule", "课次数乘以每课次分钟数必须等于课程总分钟数。");
+  return issues;
+}
+
+export function resourcePackageDraftErrors(draft: ResourcePackageDraft): string[] {
+  return resourcePackageDraftIssues(draft).map((issue) => issue.message);
 }
 
 export function stagePlanFromResourcePackage(draft: ResourcePackageDraft): CourseStagePlan {
   const errors = resourcePackageDraftErrors(draft);
   if (errors.length) throw new Error(errors.join("\n"));
-  return { schemaVersion: draft.parsingVersion === 2 ? 2 : 1, source: "resource-package", drivingQuestion: draft.drivingQuestion, totalMinutes: draft.totalMinutes!,
+  return { schemaVersion: draft.parsingVersion === 2 ? 2 : 1, source: "resource-package", drivingQuestion: draft.drivingQuestion, projectTask: draft.projectTask, totalMinutes: draft.totalMinutes!,
     lessonCount: draft.lessonCount, minutesPerLesson: draft.minutesPerLesson,
     stages: draft.stages.map((stage) => draft.parsingVersion === 2 ? { ...stage } : ({ ...stage,
       requirements: adaptPersonalProjectText(stage.requirements), outputs: adaptPersonalProjectText(stage.outputs),
@@ -230,7 +245,7 @@ export function inferResourcePackageShowcasePlan(stage?: ResourcePackageStage): 
     /(?:每(?:名|位)?(?:学生|同学|人|组)|每人|每组).{0,12}?(?:展示|汇报|陈述|限时|用时|时长).{0,8}?(\d+)\s*(分钟|秒)/,
     /(?:展示|汇报|陈述)(?:时长|时间)?\s*(?:为|控制在|不超过|约|共|：|:)?\s*(\d+)\s*(分钟|秒)/,
   ], 3600);
-  const discussionSec = durationSeconds(text, [/(?:提问|问答|答疑|讨论|点评)(?:时长|时间)?\s*(?:为|控制在|不超过|约|共|：|:)?\s*(\d+)\s*(分钟|秒)/], 1800);
+  const discussionSec = durationSeconds(text, [/(?:提问|问答|答疑|讨论|交流|点评)(?:时长|时间)?\s*(?:为|控制在|不超过|约|共|：|:)?\s*(\d+)\s*(分钟|秒)/], 1800);
   const transitionSec = durationSeconds(text, [/(?:衔接|换场|切换)(?:时长|时间)?\s*(?:为|控制在|不超过|约|共|：|:)?\s*(\d+)\s*(分钟|秒)/], 600);
   const plan = {
     ...(presenterCount && presenterCount <= 500 ? { presenterCount } : {}),

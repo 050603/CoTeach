@@ -2,10 +2,12 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import type { ResourcePackageTeachingPoint } from "@/lib/course-design/resource-package-knowledge";
+import type { KnowledgePoint } from "@/lib/session/types";
 import { searchTextbookEvidence } from "@/lib/textbook/service";
 import {
   COURSE_EVIDENCE_SCHEMA_VERSION,
   type CourseEvidenceItem,
+  type CourseEvidenceFigureReference,
   type CourseEvidenceMapping,
   type CourseEvidenceSnapshot,
   type CourseTextbookSelection,
@@ -60,7 +62,7 @@ export async function resolveCourseEvidenceSnapshot(input: {
   const revisionIds = input.selections.map((selection) => selection.revisionId);
   const revisions = await prisma.textbookRevision.findMany({
     where: { id: { in: revisionIds } },
-    include: { textbook: true, sections: { select: { id: true, title: true, path: true, kind: true } } },
+    include: { textbook: true, sections: { select: { id: true, title: true, path: true, kind: true, position: true } } },
   });
   if (revisions.length !== revisionIds.length) {
     throw new CourseEvidenceError("TEXTBOOK_REVISION_NOT_FOUND", "部分教材版本不存在，请重新选择。", 404);
@@ -119,7 +121,7 @@ export async function resolveCourseEvidenceSnapshot(input: {
       revision: { include: { textbook: true } },
       section: { include: { figures: { select: { id: true } } } },
       sourceBlock: { include: { figures: { select: { id: true } } } },
-      concept: { include: { evidence: { include: { sourceBlock: { include: { figures: { select: { id: true } } } } }, orderBy: { createdAt: "asc" }, take: 1 }, figures: true } },
+      concept: { include: { evidence: { include: { sourceBlock: { include: { figures: { select: { id: true } } } } }, orderBy: { sourceBlock: { position: "asc" } }, take: 1 }, figures: true } },
       example: { include: { concepts: { include: { concept: { include: { figures: true } } } } } },
     },
   }) : [];
@@ -129,13 +131,41 @@ export async function resolveCourseEvidenceSnapshot(input: {
     const record = recordById.get(id);
     if (!record) return [];
     const evidenceBlock = record.concept?.evidence[0]?.sourceBlock ?? record.sourceBlock;
-    const figureIds = new Set([
-      ...(record.concept?.figures.map((link) => link.figureId) ?? []),
-      ...(record.example?.concepts.flatMap((link) => link.concept.figures.map((figure) => figure.figureId)) ?? []),
-      ...(record.sourceBlock?.figures.map((figure) => figure.id) ?? []),
-      ...(record.concept?.evidence.flatMap((evidence) => evidence.sourceBlock.figures.map((figure) => figure.id)) ?? []),
-      ...(record.section?.figures.map((figure) => figure.id) ?? []),
-    ]);
+    const figureRefsById = new Map<string, CourseEvidenceFigureReference>();
+    const addFigure = (reference: CourseEvidenceFigureReference) => {
+      const existing = figureRefsById.get(reference.figureId);
+      if (!existing || (!existing.direct && reference.direct)) {
+        figureRefsById.set(reference.figureId, reference);
+      }
+    };
+    record.concept?.figures.forEach((link) => addFigure({
+      figureId: link.figureId,
+      relation: "concept-direct",
+      direct: true,
+    }));
+    record.sourceBlock?.figures.forEach((figure) => addFigure({
+      figureId: figure.id,
+      relation: "source-block-direct",
+      direct: true,
+      groupKey: `source-block:${record.sourceBlock!.id}`,
+    }));
+    record.concept?.evidence.forEach((evidence) => evidence.sourceBlock.figures.forEach((figure) => addFigure({
+      figureId: figure.id,
+      relation: "concept-evidence-direct",
+      direct: true,
+      groupKey: `source-block:${evidence.sourceBlock.id}`,
+    })));
+    record.example?.concepts.forEach((link) => link.concept.figures.forEach((figure) => addFigure({
+      figureId: figure.figureId,
+      relation: "example-concept",
+      direct: false,
+    })));
+    record.section?.figures.forEach((figure) => addFigure({
+      figureId: figure.id,
+      relation: "section-candidate",
+      direct: false,
+    }));
+    const figureRefs = [...figureRefsById.values()];
     return [{
       id: record.id,
       kind: record.kind === "CONCEPT" ? "concept" : record.kind === "EXAMPLE" ? "example" : "source-block",
@@ -149,10 +179,14 @@ export async function resolveCourseEvidenceSnapshot(input: {
         revisionVersion: record.revision.revision,
         sectionId: record.sectionId ?? undefined,
         sectionPath: record.section ? sectionPath(record.section.path, record.section.title) : [],
+        sectionPosition: record.section?.position,
         sourceBlockId: evidenceBlock?.id,
+        sourceBlockPosition: evidenceBlock?.position,
+        quoteStart: record.concept?.evidence[0]?.quoteStart,
         quote: evidenceBlock?.content,
       },
-      figureIds: [...figureIds],
+      figureRefs,
+      figureIds: figureRefs.map((reference) => reference.figureId),
       retrievalScore: scoreById.get(record.id),
     } satisfies CourseEvidenceItem];
   });
@@ -239,31 +273,123 @@ export async function resolveCourseEvidenceSnapshot(input: {
 
 export async function resolveCourseTextbookFigures(
   snapshot?: CourseEvidenceSnapshot,
+  lessonKnowledgePoints?: readonly Pick<KnowledgePoint, "id" | "sourceId" | "sourceKnowledgePointIds" | "evidenceItemIds">[],
 ): Promise<CourseTextbookFigureResource[]> {
-  const figureIds = [...new Set(snapshot?.items.flatMap((item) => item.figureIds ?? []) ?? [])].slice(0, 24);
+  const items = snapshot?.items ?? [];
+  const referencesByFigure = new Map<string, Array<{
+    item: CourseEvidenceItem;
+    reference: CourseEvidenceFigureReference;
+  }>>();
+  for (const item of items) {
+    const references = item.figureRefs ?? (item.figureIds ?? []).map((figureId) => ({
+      figureId,
+      relation: "section-candidate" as const,
+      direct: false,
+    }));
+    for (const reference of references) {
+      const values = referencesByFigure.get(reference.figureId) ?? [];
+      values.push({ item, reference });
+      referencesByFigure.set(reference.figureId, values);
+    }
+  }
+  const figureIds = [...referencesByFigure.keys()];
   if (!figureIds.length) return [];
+
+  const requiredFigureIds = new Set<string>();
+  for (const mapping of snapshot?.mappings ?? []) {
+    if (mapping.status !== "direct") continue;
+    const firstDirectItem = mapping.evidenceItemIds
+      .map((evidenceId) => items.find((item) => item.id === evidenceId))
+      .find((item) => item?.figureRefs?.some((reference) => reference.direct));
+    const direct = firstDirectItem?.figureRefs?.filter((reference) => reference.direct) ?? [];
+    if (!direct.length) continue;
+    const groupKey = direct[0]?.groupKey;
+    for (const reference of groupKey
+      ? direct.filter((candidate) => candidate.groupKey === groupKey)
+      : direct.slice(0, 1)) {
+      requiredFigureIds.add(reference.figureId);
+    }
+  }
   const figures = await prisma.textbookFigure.findMany({
-    where: { id: { in: figureIds }, status: "AVAILABLE", fileAsset: { deletedAt: null } },
+    where: { id: { in: figureIds } },
     include: { fileAsset: true, revision: { include: { textbook: true } }, section: true },
   });
   const byId = new Map(figures.map((figure) => [figure.id, figure]));
-  return figureIds.flatMap((figureId, index) => {
+  return figureIds.map((figureId, index): CourseTextbookFigureResource => {
     const figure = byId.get(figureId);
-    if (!figure || !figure.fileAsset.mimeType.startsWith("image/")) return [];
-    return [{
-      id: `img_${index + 1}`,
+    const references = referencesByFigure.get(figureId) ?? [];
+    const direct = references.some(({ reference }) => reference.direct);
+    const required = requiredFigureIds.has(figureId);
+    const evidenceItemIds = [...new Set(references.map(({ item }) => item.id))];
+    const sourceKnowledgePointIds = [...new Set((snapshot?.mappings ?? []).flatMap((mapping) => (
+      mapping.evidenceItemIds.some((evidenceId) => evidenceItemIds.includes(evidenceId))
+        ? [mapping.sourceKnowledgePointId]
+        : []
+    )))];
+    const sourceIds = new Set(sourceKnowledgePointIds);
+    const sourceTargets = lessonKnowledgePoints?.filter((point) => (
+      [point.id, point.sourceId, ...(point.sourceKnowledgePointIds ?? [])]
+        .some((id) => id && sourceIds.has(id))
+    )) ?? [];
+    const evidenceTargets = lessonKnowledgePoints?.filter((point) => (
+      point.evidenceItemIds?.some((id) => evidenceItemIds.includes(id))
+    )) ?? [];
+    const evidenceTargetIds = new Set(evidenceTargets.map((point) => point.id));
+    const preciseTargets = sourceTargets.filter((point) => evidenceTargetIds.has(point.id));
+    const knowledgePointIds = lessonKnowledgePoints
+      ? (preciseTargets.length ? preciseTargets : sourceTargets.length ? sourceTargets : evidenceTargets)
+          .map((point) => point.id)
+      : sourceKnowledgePointIds;
+    const sourceTitle = figure?.revision.textbook.title
+      ?? references[0]?.item.source.textbookTitle
+      ?? "教材";
+    const relation = direct ? "direct" as const : "candidate" as const;
+    const groupKey = references.find(({ reference }) => reference.direct && reference.groupKey)?.reference.groupKey;
+    const base = {
+      id: `textbook_fig_${createHash("sha256").update(figureId).digest("hex").slice(0, 12)}`,
       figureId,
+      pageNumber: (figure?.position ?? index) + 1,
+      relation,
+      required,
+      ...(groupKey ? { groupKey } : {}),
+      evidenceItemIds,
+      knowledgePointIds,
+      sourceTitle,
+    };
+    if (!figure) {
+      return {
+        ...base,
+        status: "unavailable" as const,
+        failureReason: "教材图片记录不存在",
+      };
+    }
+    const unavailableReason = figure.status !== "AVAILABLE"
+      ? `教材图片状态为 ${figure.status}`
+      : figure.fileAsset.deletedAt
+        ? "教材图片文件已删除"
+        : !figure.fileAsset.mimeType.startsWith("image/")
+          ? `教材图片文件类型无效：${figure.fileAsset.mimeType}`
+          : undefined;
+    if (unavailableReason) {
+      return {
+        ...base,
+        status: "unavailable" as const,
+        failureReason: unavailableReason,
+      };
+    }
+    return {
+      ...base,
+      status: "available" as const,
       assetId: figure.fileAssetId,
       src: `/api/uploads/${figure.fileAssetId}`,
-      pageNumber: figure.position + 1,
       description: [
-        "教材原图",
+        required ? "知识点首次完整讲解必须使用的教材原图" : direct ? "知识点直接关联教材原图" : "同章节候选教材图",
         figure.caption,
         figure.section?.title,
-        `来源：《${figure.revision.textbook.title}》`,
+        `来源：《${sourceTitle}》`,
       ].filter(Boolean).join("；"),
       ...(figure.width ? { width: figure.width } : {}),
       ...(figure.height ? { height: figure.height } : {}),
-    }];
+    };
   });
 }

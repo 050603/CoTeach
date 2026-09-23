@@ -52,6 +52,7 @@ function responseJob(job: Awaited<ReturnType<typeof contentGenerationJobs.findUn
       approximate: true,
     },
     activePages: job.activePages,
+    stageProgress: job.stageProgress,
     currentStage: job.currentStage,
     events: job.events,
     result: job.result,

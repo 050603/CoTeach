@@ -51,6 +51,7 @@ import { auditNarrationLanguage } from '@openmaic/lib/generation/course-language
 import { mapWithConcurrency } from '@openmaic/lib/utils/concurrency';
 import { runWithGlobalTtsProviderSlot } from '@openmaic/lib/server/tts-provider-limiter';
 import { audioDurationSec } from '@openmaic/lib/audio/audio-duration';
+import { normalizePlayableWav } from '@openmaic/lib/audio/wav-container';
 import {
   alignSpeechFile,
   SPEECH_ALIGNMENT_VERSION,
@@ -63,6 +64,9 @@ import {
 
 const log = createLogger('ClassroomMedia');
 const TTS_SEGMENT_RETRIES = 2;
+const PLAYABLE_CLASSROOM_AUDIO_FORMATS = new Set([
+  'aac', 'flac', 'm4a', 'mp3', 'ogg', 'opus', 'wav', 'webm',
+]);
 
 const imageProviderQueue = new Map<ImageProviderId, Promise<void>>();
 const imageProviderLastStartedAt = new Map<ImageProviderId, number>();
@@ -124,6 +128,47 @@ type ServerTTSRuntime = {
   voice: string;
   format: string;
 };
+
+function normalizedClassroomAudioFormat(format: string | undefined): string {
+  const normalized = (format ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/^audio\//, '')
+    .split(/[;.]/, 1)[0];
+  const canonical = normalized === 'mpeg' || normalized === 'mpga'
+    ? 'mp3'
+    : normalized === 'wave' || normalized === 'x-wav'
+      ? 'wav'
+      : normalized === 'mp4'
+        ? 'm4a'
+        : normalized;
+  if (!PLAYABLE_CLASSROOM_AUDIO_FORMATS.has(canonical)) {
+    throw Object.assign(
+      new Error(`TTS 返回了不受课堂播放器支持的音频格式：${format || 'unknown'}`),
+      { isRetryable: false },
+    );
+  }
+  return canonical;
+}
+
+function prepareGeneratedClassroomAudio(
+  audio: Uint8Array,
+  format: string | undefined,
+): { audio: Uint8Array; format: string; durationSec?: number; storageId: string } {
+  const normalizedFormat = normalizedClassroomAudioFormat(format);
+  const normalizedAudio = normalizedFormat === 'wav' ? normalizePlayableWav(audio) : audio;
+  const durationSec = audioDurationSec(normalizedAudio, normalizedFormat);
+  if (normalizedFormat === 'wav' && !durationSec) {
+    throw Object.assign(new Error('TTS 返回的 WAV 音频容器无效'), { isRetryable: true });
+  }
+  const digest = createHash('sha256').update(normalizedAudio).digest('hex');
+  return {
+    audio: normalizedAudio,
+    format: normalizedFormat,
+    durationSec,
+    storageId: `tts-${digest}`,
+  };
+}
 
 export type ServerTtsTimingSelection = {
   providerId: string;
@@ -788,7 +833,6 @@ export async function generateTTSForClassroom(
   const speechTasks: Array<{
     speechAction: SpeechAction;
     actionId: string;
-    audioId: string;
     runtime: ServerTTSRuntime;
     timing: Partial<ServerTtsTimingSelection>;
   }> = [];
@@ -808,8 +852,6 @@ export async function generateTTSForClassroom(
     // Split long speech actions into multiple shorter ones before TTS generation,
     // mirroring the client-side approach. Each sub-action gets its own audio file.
     scene.actions = splitLongSpeechActions(scene.actions, runtime.providerId);
-    // Use scene order to make audio IDs unique across scenes
-    const sceneOrder = scene.order;
 
     for (const action of scene.actions) {
       if (
@@ -818,9 +860,7 @@ export async function generateTTSForClassroom(
         || (action as SpeechAction).audioUrl
       ) continue;
       const speechAction = action as SpeechAction;
-      // Include scene order in audioId to prevent collision across scenes
-      const audioId = `tts_s${sceneOrder}_${action.id}`;
-      speechTasks.push({ speechAction, actionId: action.id, audioId, runtime, timing });
+      speechTasks.push({ speechAction, actionId: action.id, runtime, timing });
     }
   }
 
@@ -837,33 +877,42 @@ export async function generateTTSForClassroom(
   const outcomes = await mapWithConcurrency(speechTasks, concurrency, async (task) => {
     try {
       const { runtime, timing } = task;
-      const result = await withGenerationRetry(
-        () => runWithGlobalTtsProviderSlot(
-          runtime.providerId,
-          getTtsConcurrencyLimit(runtime.providerId),
-          () => generateTTS({
-            providerId: runtime.providerId,
-            modelId: timing.modelId || runtime.modelId,
-            apiKey: runtime.apiKey,
-            baseUrl: runtime.baseUrl,
-            voice: timing.voiceId || runtime.voice,
-            speed: timing.speed ?? 1,
-            language: timing.language,
+      const prepared = await withGenerationRetry(
+        async () => {
+          const result = await runWithGlobalTtsProviderSlot(
+            runtime.providerId,
+            getTtsConcurrencyLimit(runtime.providerId),
+            () => generateTTS({
+              providerId: runtime.providerId,
+              modelId: timing.modelId || runtime.modelId,
+              apiKey: runtime.apiKey,
+              baseUrl: runtime.baseUrl,
+              voice: timing.voiceId || runtime.voice,
+              speed: timing.speed ?? 1,
+              language: timing.language,
+              signal,
+            }, task.speechAction.text),
             signal,
-          }, task.speechAction.text),
-          signal,
-        ),
+          );
+          if (!result.audio.length) {
+            throw Object.assign(new Error('TTS 返回了空音频文件'), { isRetryable: true });
+          }
+          return prepareGeneratedClassroomAudio(result.audio, result.format || runtime.format);
+        },
         { label: `tts action ${task.actionId}`, maxRetries: TTS_SEGMENT_RETRIES, signal },
       );
       throwIfAborted(signal);
-      if (!result.audio.length) throw new Error('TTS 返回了空音频文件');
-      const filename = `${task.audioId}.${result.format || runtime.format}`;
-      await fs.writeFile(path.join(audioDir, filename), result.audio);
-      task.speechAction.audioId = task.audioId;
+      // Content-addressed filenames are immutable and contain only the path
+      // characters accepted by audit/recovery. Action IDs remain metadata and
+      // may contain blueprint separators such as `:` without leaking into a
+      // filesystem path.
+      const filename = `${prepared.storageId}.${prepared.format}`;
+      await fs.writeFile(path.join(audioDir, filename), prepared.audio);
+      task.speechAction.audioId = prepared.storageId;
       task.speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${filename}`);
-      task.speechAction.audioDurationSec = audioDurationSec(result.audio, result.format || runtime.format);
+      task.speechAction.audioDurationSec = prepared.durationSec;
       delete task.speechAction.audioInvalidated;
-      log.info(`Generated TTS via ${runtime.providerId}: ${filename} (${result.audio.length} bytes)`);
+      log.info(`Generated TTS via ${runtime.providerId}: ${filename} (${prepared.audio.length} bytes)`);
       return true;
     } catch (error) {
       if (signal?.aborted) throw error;

@@ -29,6 +29,8 @@ export interface SceneGenerationContext {
  * Used to parse AI responses
  */
 export interface GeneratedSlideData {
+  /** First-pass authoring components, compiled to editable native elements. */
+  components?: unknown[];
   elements: Array<{
     type: 'text' | 'image' | 'video' | 'shape' | 'chart' | 'latex' | 'line';
     left: number;

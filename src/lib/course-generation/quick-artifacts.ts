@@ -47,6 +47,13 @@ export type QuickClassroomGenerationSnapshot = {
     retryCount?: number;
     lastOutputAt?: number;
   }>;
+  stageProgress?: Array<{
+    stage: "content" | "narration" | "actions" | "assembling";
+    total: number;
+    completedPages: number[];
+    activePages: Array<{ index: number; title: string; retryCount?: number }>;
+    failedPages: Array<{ index: number; title: string; retryCount?: number }>;
+  }>;
   events: QuickClassroomGenerationEvent[];
   result?: {
     id: string;
@@ -581,7 +588,7 @@ function buildAiLearningGenerationPlan(
     : job.step === "recovering_scenes" ? "正在恢复课堂页面制作"
     : ["queued", "initializing", "researching", "generating_outlines"].includes(job.step)
       ? "正在准备课堂页面制作"
-      : "正在并行制作课堂页面";
+      : "正在制作课堂页面";
 
   return {
     id: "ai-learning-page-production",
@@ -620,6 +627,7 @@ function buildAiLearningGenerationPlan(
           tts: job.requestPreview?.enableTTS === true,
         },
         activePages: job.activePages ?? [],
+        stageProgress: job.stageProgress ?? [],
       },
     },
   };

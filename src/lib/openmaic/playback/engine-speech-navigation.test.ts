@@ -339,6 +339,55 @@ describe('PlaybackEngine speech navigation', () => {
     expect(onSpeechProgress).toHaveBeenLastCalledWith(0.625);
   });
 
+  it('ends an implicit cue at its sentence boundary and caps it at the next focus', () => {
+    const text = '先看小鱼和青蛙怎样理解牛，接着看顺应的定义。后面继续解释原因。';
+    const first = {
+      id: 'focus-example', type: 'spotlight', elementId: 'animal-example', speechId: 'speech',
+      speechAnchor: { quote: '小鱼和青蛙' },
+    } as Action;
+    const second = {
+      id: 'focus-definition', type: 'spotlight', elementId: 'accommodation-definition', speechId: 'speech',
+      speechAnchor: { quote: '顺应的定义' },
+    } as Action;
+    const speechAction = {
+      id: 'speech', type: 'speech', text,
+      speechAlignment: {
+        version: 'test', status: 'aligned', textHash: 'text', audioHash: 'audio', language: 'zh',
+        spans: Array.from(text, (character, index) => ({
+          text: character,
+          startChar: index,
+          endChar: index + 1,
+          startMs: index * 100,
+          endMs: (index + 1) * 100,
+        })),
+      },
+    } as Action;
+    const scene = {
+      id: 'lesson', stageId: 'stage', order: 0, title: 'Lesson', type: 'slide',
+      content: { type: 'slide', elements: [] }, actions: [first, second, speechAction],
+    } as unknown as Scene;
+    const engine = new PlaybackEngine(
+      [scene],
+      { clearEffects: vi.fn() } as unknown as ActionEngine,
+      {} as AudioPlayer,
+    );
+    const internals = engine as unknown as {
+      sceneIndex: number;
+      buildSpeechCuePoints: (
+        value: Action,
+        durationMs: number,
+        browserBoundary?: boolean,
+      ) => Array<{ key: string; startMs: number; endMs: number; endChar: number | null }>;
+    };
+    internals.sceneIndex = 0;
+
+    const points = internals.buildSpeechCuePoints(speechAction, text.length * 100);
+
+    expect(points).toHaveLength(2);
+    expect(points[0]?.endMs).toBe(points[1]?.startMs);
+    expect(points[1]?.endMs).toBe((text.indexOf('。') + 1) * 100);
+  });
+
   it('does not fire anchored visual cues without a valid alignment', async () => {
     vi.useFakeTimers();
     const actionEngine = {

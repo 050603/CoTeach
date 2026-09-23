@@ -1,10 +1,11 @@
 "use client";
 
-import { Minimize2 } from "lucide-react";
+import { Check, Minimize2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useMemo, useState } from "react";
 import { OutlinesEditor } from "@/components/openmaic/generation/outlines-editor";
 import { I18nProvider } from "@/lib/openmaic/hooks/use-i18n";
+import { countBlockingOutlines, validateOutline } from "@/lib/openmaic/edit/content-validation";
 import type { SceneOutline } from "@/lib/openmaic/types/generation";
 
 export function QuickOutlineReviewDialog({
@@ -18,6 +19,8 @@ export function QuickOutlineReviewDialog({
 }) {
   const [outlines, setOutlines] = useState(initialOutlines);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  const blockingCount = countBlockingOutlines(outlines);
   const sectionSummaries = useMemo(() => {
     const groups = new Map<string, SceneOutline[]>();
     for (const outline of outlines) {
@@ -41,12 +44,21 @@ export function QuickOutlineReviewDialog({
   }, [outlines]);
 
   async function confirm() {
+    if (saving || outlines.length === 0 || blockingCount > 0) return;
     setSaving(true);
+    setError(undefined);
     try {
       await onConfirm(outlines);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法保存大纲，请稍后重试。");
     } finally {
       setSaving(false);
     }
+  }
+
+  function jumpToFirstInvalidOutline() {
+    const first = outlines.find((outline) => validateOutline(outline).length > 0);
+    if (first) document.getElementById(`outline-scene-${first.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   return (
@@ -58,11 +70,11 @@ export function QuickOutlineReviewDialog({
             <h2 className="mt-1 font-editorial text-xl font-semibold text-stone-950">课程详细大纲</h2>
             <p className="mt-1 text-xs text-stone-500">保存后，后续课堂资源将严格按照这里确认的页面、互动与教师资源继续生成。</p>
           </div>
-          <button className="grid size-9 shrink-0 place-items-center rounded-full border border-stone-200 bg-white text-stone-500 transition hover:border-stone-400 hover:text-stone-900" onClick={onClose} type="button" aria-label="缩小并返回快速生成卡片">
+          <button className="grid size-9 shrink-0 place-items-center rounded-full border border-stone-200 bg-white text-stone-500 transition hover:border-stone-400 hover:text-stone-900 disabled:opacity-50" disabled={saving} onClick={onClose} type="button" aria-label="缩小并返回快速生成卡片">
             <Minimize2 size={16} />
           </button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6" data-testid="outline-review-scroll-area">
           <section className="mb-5 space-y-3" aria-label="小节知识主线与理解标准">
             <div>
               <h3 className="text-sm font-semibold text-stone-950">先审阅整节讲授内容</h3>
@@ -105,6 +117,7 @@ export function QuickOutlineReviewDialog({
               alwaysReview
               bare
               distinguishAudience
+              hideFooter
               hideHeader
               isLoading={saving}
               naturalFlow
@@ -115,8 +128,28 @@ export function QuickOutlineReviewDialog({
               scriptWorkspace
             />
           </I18nProvider>
-          {saving ? <p className="mt-3 text-center text-xs font-semibold text-blue-700">正在保存修改并恢复生成…</p> : null}
         </div>
+        <footer className="shrink-0 border-t border-stone-200 bg-white px-4 py-3 sm:px-6" aria-label="大纲确认操作">
+          {error ? <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{error}</p> : null}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs text-stone-500">
+              {blockingCount > 0 ? (
+                <button className="font-semibold text-amber-700 underline underline-offset-2" onClick={jumpToFirstInvalidOutline} type="button">
+                  {blockingCount} 个页面缺少标题，点击定位
+                </button>
+              ) : `${outlines.length} 个页面可确认`}
+            </div>
+            <button
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[var(--pbl-teacher)] px-5 text-sm font-semibold text-white transition hover:bg-[var(--pbl-teacher-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={saving || outlines.length === 0 || blockingCount > 0}
+              onClick={() => void confirm()}
+              type="button"
+            >
+              <Check size={16} />
+              {saving ? "正在保存并继续生成…" : "确认大纲并继续生成"}
+            </button>
+          </div>
+        </footer>
       </motion.div>
     </motion.div>
   );

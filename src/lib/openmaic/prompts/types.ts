@@ -35,6 +35,7 @@ export type PromptId =
  */
 export type SnippetId =
   | 'json-output-rules'
+  | 'slide-title-guidelines'
   | 'element-types'
   | 'action-types'
   | 'image-instructions'

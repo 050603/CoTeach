@@ -36,10 +36,14 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.user).toContain("需要图例支架");
   expect(prompt.user).toContain("校园植物");
   expect(prompt.system).toContain("同一材料再次出现时");
+  expect(prompt.system).toContain("必须在一次 JSON 输出中完整结束");
   expect(prompt.system).toContain("概念辨析、因果机制、数学推导、操作技能、历史材料和综合应用");
   expect(prompt.system).toContain("introducesNodeIds、deepensNodeIds、referencesNodeIds");
   expect(prompt.system).toContain("不得把后页才出现的术语、案例、问题或任务伪装成上一页已经讲过");
   expect(prompt.system).toContain("entryPoint 写出实际开场对象");
+  expect(prompt.system).toContain("Instructional Slide Title Contract");
+  expect(prompt.system).toContain("A case, practice, or recap page must name its concrete subject and purpose");
+  expect(prompt.system).toContain("导入问题留在 entryPoint，课堂动作留在 learningTask");
   expect(prompt.system).toContain("即使前一教学阶段已经由教师导入，也不能省略这一资源内入口");
   expect(prompt.system).toContain("导入是否独立成页由总时长、知识难度和视觉价值动态决定");
   expect(prompt.system).toContain("正式致谢和告别");
@@ -48,7 +52,15 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("最终任务、驱动问题和成果物只是一种可选的迁移情境");
   expect(prompt.system).toContain("每页必须填写 taskConnection");
   expect(prompt.system).toContain("不能用教案、报告、PPT 等成果物中的几句话");
-  expect(prompt.system).toContain("具体场景中的人物、物体、空间状态或可见差异本身是推理依据时");
+  expect(prompt.system).toContain("人物、物体、空间状态、错误心象或现实与想象的可见差异");
+  expect(prompt.system).toContain("不能因已规划关系图就漏掉案例插图");
+  expect(prompt.system).toContain("没有每页配图或全课图片比例的要求");
+  expect(prompt.system).toContain("不在图内绘制文字、标签、精确数值或关系箭头");
+  expect(prompt.system).toContain("带牛角、腿和花斑等特征的鱼形身体");
+  expect(prompt.system).toContain("七步闭环就写七个实际步骤节点");
+  expect(prompt.system).toContain("不能因为文字出现‘反馈’就强行画成循环");
+  expect(prompt.user).toContain('"topology":"sequence|cycle"');
+  expect(prompt.user).toContain('"aspectRatio":"image 可选 16:9|4:3|1:1|9:16"');
   expect(prompt.system).toContain("构造案例、类比和示意数据");
   expect(prompt.system).toContain("教材案例采用双通道设计");
   expect(prompt.system).toContain("学生内容字段中直接写成连贯案例");
@@ -63,6 +75,8 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("未启用图片或视频时不得请求对应种类");
   expect(prompt.user).toContain('"sharedContext"');
   expect(prompt.user).toContain('"learningTask"');
+  expect(prompt.user).toContain('"title":"本页核心知识对象＋具体讲解侧面的内容主题短语"');
+  expect(prompt.user).not.toContain('"title":"学生可见标题"');
   expect(prompt.user).toContain('"taskConnection"');
   expect(prompt.user).toContain("可选最终任务情境");
   expect(prompt.user).toContain("必须严格按以下 2 个小节及其顺序生成");
@@ -430,6 +444,27 @@ describe("teaching blueprint compiler", () => {
     expect(quiz.keyPoints[1]).toContain("填空补全训练集与测试集的职责；说明数据泄漏如何影响评估可信度");
     expect(quiz.quizConfig?.questionTypePlan).toEqual(["true_false", "fill_blank"]);
     expect(quiz.quizConfig?.questionTypes).toEqual(["true_false", "fill_blank"]);
+    expect(quiz.keyPoints[0]).toContain("只让学生判断正误");
+    expect(quiz.keyPoints[1]).toContain("只留一个可用关键词");
+  });
+
+  it("converts compound explanation and construction goals into selectable evidence", async () => {
+    const candidate = compactModelBlueprint();
+    candidate.sections[0]!.assessmentFocus = [
+      "能判断一个方案是否满足标准，并指出缺少条件会带来的后果",
+      "能写出一个开放问题并分解为可探究的子问题",
+    ];
+    const blueprint = await generateTeachingBlueprint(
+      { ...input(), totalDurationSec: 300 },
+      async () => JSON.stringify(candidate),
+    );
+    const quiz = teachingBlueprintToOutlines(blueprint, "使用简体中文")
+      .find((outline) => outline.type === "quiz")!;
+
+    expect(quiz.quizConfig?.questionTypePlan).toEqual(["single", "single"]);
+    expect(quiz.keyPoints).toHaveLength(2);
+    expect(quiz.keyPoints.every((point) => point.includes("提供包含完整结论与依据的候选作答"))).toBe(true);
+    expect(quiz.keyPoints.join("\n")).toContain("写出一个开放问题");
   });
 
   it("accepts one substantive key point and preserves a changed-condition task without padding", async () => {
@@ -744,6 +779,245 @@ describe("teaching blueprint compiler", () => {
     })).toEqual(blueprint);
   });
 
+  it("plans an available textbook original before layout and keeps it when AI image generation is disabled", async () => {
+    const textbookFigure = {
+      resourceId: "textbook_fig_123456789abc",
+      figureId: "figure-1",
+      description: "同一株植物的连拍照片与按植株分组示意",
+      knowledgePointIds: ["kp-split", "kp-leak"],
+      relation: "direct" as const,
+      required: true,
+      sourceTitle: "信息科技教材",
+      relationReason: "教材证据直接关联到数据划分知识点",
+    };
+    const planInput = { ...input(), textbookFigures: [textbookFigure] };
+    const candidate = compactModelBlueprint();
+    (candidate.sections[0]!.pages[0]! as unknown as { resourceNeeds: Array<Record<string, unknown>> }).resourceNeeds = [{
+      kind: "source-image",
+      assetId: textbookFigure.resourceId,
+      purpose: "观察同一对象的近重复照片为什么不能跨训练集和测试集",
+      required: true,
+    }];
+
+    const prompt = buildTeachingBlueprintPrompt(planInput);
+    expect(prompt.user).toContain(textbookFigure.resourceId);
+    expect(prompt.user).toContain('"relation":"direct"');
+    expect(prompt.system).toContain("首次完整讲解页使用");
+
+    const blueprint = await generateTeachingBlueprint(
+      planInput,
+      async () => JSON.stringify(candidate),
+      { resourceCapabilities: { imageGenerationEnabled: false, videoGenerationEnabled: false } },
+    );
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
+
+    expect(blueprint.sections[0]?.pages[0]?.resourceNeeds).toEqual([{
+      kind: "source-image",
+      assetId: textbookFigure.resourceId,
+      purpose: "观察同一对象的近重复照片为什么不能跨训练集和测试集",
+      required: true,
+    }]);
+    expect(outline.suggestedImageIds).toEqual([textbookFigure.resourceId]);
+    expect(outline.visualIntent).toMatchObject({
+      representation: "source-image",
+      resourceRefs: [{
+        resourceId: textbookFigure.resourceId,
+        kind: "source-image",
+        required: true,
+      }],
+    });
+    expect(outline.mediaGenerations).toBeUndefined();
+  });
+
+  it("shares one stable generated asset across pages and leaves a clear text page image-free", async () => {
+    const candidate = modelBlueprint();
+    const sharedNeed = {
+      kind: "image",
+      purpose: "观察相同场景中的对象差异",
+      required: true,
+      prompt: "同一校园植物在训练照片和新测试照片中的可见差别",
+    };
+    (candidate.sections[0]!.pages[0]! as unknown as { resourceNeeds: Array<Record<string, unknown>> }).resourceNeeds = [sharedNeed];
+    (candidate.sections[1]!.pages[0]! as unknown as { resourceNeeds: Array<Record<string, unknown>> }).resourceNeeds = [sharedNeed];
+    const blueprint = await generateTeachingBlueprint(
+      input(),
+      async () => JSON.stringify(candidate),
+      { resourceCapabilities: { imageGenerationEnabled: true, videoGenerationEnabled: false } },
+    );
+    const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文").filter((outline) => outline.type === "slide");
+    const generatedIds = outlines.map((outline) => outline.mediaGenerations?.[0]?.elementId);
+
+    expect(generatedIds[0]).toMatch(/^generated_[a-f0-9]{20}$/);
+    expect(generatedIds[1]).toBe(generatedIds[0]);
+    expect(outlines[0]?.visualIntent?.resourceRefs?.[0]?.resourceId).toBe(generatedIds[0]);
+
+    const textCandidate = compactModelBlueprint();
+    const textBlueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(textCandidate));
+    const textOutline = teachingBlueprintToOutlines(textBlueprint, "使用简体中文")[0]!;
+    expect(textOutline.visualIntent).toMatchObject({ representation: "text" });
+    expect(textOutline.mediaGenerations).toBeUndefined();
+  });
+
+  it("keeps concept structure and two observation images together with their chosen framing", async () => {
+    const candidate = compactModelBlueprint();
+    const page = candidate.sections[0]!.pages[0]!;
+    (page as unknown as { visualRelationship: Record<string, unknown> }).visualRelationship = {
+      kind: "comparison",
+      description: "先看同化与顺应的关系，再比较鱼想象的牛与真实牛。",
+      readingOrder: ["关系图", "鱼想象的牛", "真实牛"],
+      preferredForm: "mixed",
+      rationale: "关系与具体可见差异都需要呈现。",
+    };
+    (page as unknown as { resourceNeeds: Array<Record<string, unknown>> }).resourceNeeds = [
+      { kind: "diagram", purpose: "说明同化与顺应的概念关系", required: true },
+      {
+        kind: "image", purpose: "观察鱼如何按自身身体想象牛", required: true,
+        prompt: "想象示意：鱼形身体带牛角、腿、花斑；与真实牛同视角对照，无文字标签",
+        aspectRatio: "1:1",
+      },
+      {
+        kind: "image", purpose: "观察真实牛的身体轮廓", required: true,
+        prompt: "真实牛的完整身体轮廓，清晰可见牛角、四肢与花斑，无文字标签",
+        aspectRatio: "4:3",
+      },
+    ];
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
+
+    expect(outline.visualIntent?.representation).toBe("mixed");
+    expect(outline.mediaGenerations).toHaveLength(2);
+    expect(outline.mediaGenerations?.map((request) => request.aspectRatio)).toEqual(["1:1", "4:3"]);
+    expect(outline.visualIntent?.resourceRefs?.map((reference) => reference.resourceId))
+      .toEqual(outline.mediaGenerations?.map((request) => request.elementId));
+  });
+
+  it("carries a seven-step cycle with a separate annotation to the first slide pass", async () => {
+    const candidate = compactModelBlueprint();
+    const page = candidate.sections[0]!.pages[0]!;
+    (page as unknown as { visualRelationship: Record<string, unknown> }).visualRelationship = {
+      kind: "process",
+      description: "七个实际教学步骤形成完整循环。",
+      readingOrder: ["目标", "导入", "讲解", "示范", "练习", "反馈", "强化"],
+      preferredForm: "diagram",
+      rationale: "学生需要看清每一步的前后关系。",
+      diagram: {
+        topology: "cycle",
+        nodes: ["目标", "导入", "讲解", "示范", "练习", "反馈", "强化"]
+          .map((label, index) => ({ id: `step-${index + 1}`, label })),
+        annotation: "教学闭环",
+      },
+    };
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
+
+    expect(outline.visualIntent?.representation).toBe("native-diagram");
+    expect(outline.visualIntent?.diagram).toMatchObject({ topology: "cycle", annotation: "教学闭环" });
+    expect(outline.visualIntent?.diagram?.nodes).toHaveLength(7);
+    expect(outline.visualIntent?.diagram?.nodes.map((node) => node.label)).not.toContain("教学闭环");
+  });
+
+  it("keeps an ordinary process sequential even when it includes a feedback edge", async () => {
+    const candidate = compactModelBlueprint();
+    const page = candidate.sections[0]!.pages[0]!;
+    (page as unknown as { visualRelationship: Record<string, unknown> }).visualRelationship = {
+      kind: "process", description: "先处理再复查。", readingOrder: ["收集", "处理", "复查"],
+      preferredForm: "diagram", rationale: "复查提供对处理步骤的反馈。",
+      diagram: {
+        topology: "sequence",
+        nodes: [
+          { id: "collect", label: "收集" },
+          { id: "process", label: "处理" },
+          { id: "review", label: "复查" },
+        ],
+        edges: [{ from: "review", to: "process", label: "反馈" }],
+        annotation: "按结果改进处理方式",
+      },
+    };
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+    const diagram = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]?.visualIntent?.diagram;
+    expect(diagram?.topology).toBe("sequence");
+    expect(diagram?.edges).toEqual([{ from: "review", to: "process", label: "反馈" }]);
+    expect(diagram?.annotation).toBe("按结果改进处理方式");
+  });
+
+  it("rejects a diagram whose explanatory annotation was also made a step", async () => {
+    const candidate = compactModelBlueprint();
+    const page = candidate.sections[0]!.pages[0]!;
+    (page as unknown as { visualRelationship: Record<string, unknown> }).visualRelationship = {
+      kind: "process", description: "讲解和练习形成循环。", readingOrder: ["讲解", "练习"],
+      preferredForm: "diagram", rationale: "需要看清环路。",
+      diagram: {
+        topology: "cycle",
+        nodes: [
+          { id: "teach", label: "讲解" },
+          { id: "practice", label: "练习" },
+          { id: "loop", label: "闭环" },
+        ],
+        annotation: "闭环",
+      },
+    };
+    const validation = vi.fn();
+    await expect(generateTeachingBlueprint(input(), async () => JSON.stringify(candidate), {
+      onValidation: validation,
+      retrySleep: async () => undefined,
+    })).rejects.toThrow("教学蓝图缺少可用结构");
+    expect(validation.mock.calls[0]?.[0].issues).toContain("第 1 节第 1 页整体说明不能重复作为流程节点");
+  });
+
+  it("rejects an image request without an executable description in the existing blueprint retry", async () => {
+    const candidate = compactModelBlueprint();
+    (candidate.sections[0]!.pages[0]! as unknown as { resourceNeeds: Array<Record<string, unknown>> }).resourceNeeds = [{
+      kind: "image", purpose: "观察想象中的动物", required: true,
+    }];
+    const ai = vi.fn(async () => JSON.stringify(candidate));
+    const validation = vi.fn();
+
+    await expect(generateTeachingBlueprint(input(), ai, {
+      onValidation: validation,
+      retrySleep: async () => undefined,
+    })).rejects.toThrow("教学蓝图缺少可用结构");
+    expect(ai).toHaveBeenCalledTimes(3);
+    expect(validation.mock.calls[0]?.[0].issues).toContain("第 1 节第 1 页第 1 项图片需求缺少观察目的或可执行的生成描述");
+  });
+
+  it("uses the default 16:9 framing and keeps image-disabled lessons executable", async () => {
+    const candidate = compactModelBlueprint();
+    (candidate.sections[0]!.pages[0]! as unknown as { resourceNeeds: Array<Record<string, unknown>> }).resourceNeeds = [{
+      kind: "image", purpose: "观察同一植物在晴天和雨天的外观", required: true,
+      prompt: "同视角的校园植物晴天和雨天状态对照，无文字",
+    }];
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+    expect(teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]?.mediaGenerations?.[0]?.aspectRatio).toBe("16:9");
+
+    const disabled = adaptTeachingBlueprintResourceCapabilities(blueprint, {
+      imageGenerationEnabled: false,
+      videoGenerationEnabled: false,
+    });
+    const disabledOutline = teachingBlueprintToOutlines(disabled, "使用简体中文")[0]!;
+    expect(disabledOutline.mediaGenerations).toBeUndefined();
+    expect(disabledOutline.visualIntent?.representation).toBe("native-diagram");
+  });
+
+  it("keeps different crops of one example as distinct generated resources", async () => {
+    const candidate = modelBlueprint();
+    const sharedPrompt = "同一株校园植物的完整轮廓，浅色背景，无文字标签";
+    const first = candidate.sections[0]!.pages[0]!;
+    const second = candidate.sections[1]!.pages[0]!;
+    (first as unknown as { resourceNeeds: Array<Record<string, unknown>> }).resourceNeeds = [{
+      kind: "image", purpose: "观察植物整体形态", required: true,
+      prompt: sharedPrompt, aspectRatio: "1:1",
+    }];
+    (second as unknown as { resourceNeeds: Array<Record<string, unknown>> }).resourceNeeds = [{
+      kind: "image", purpose: "观察植物纵向结构", required: true,
+      prompt: sharedPrompt, aspectRatio: "9:16",
+    }];
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+    const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文").filter((outline) => outline.type === "slide");
+    expect(outlines[0]?.mediaGenerations?.[0]?.aspectRatio).toBe("1:1");
+    expect(outlines[1]?.mediaGenerations?.[0]?.aspectRatio).toBe("9:16");
+    expect(outlines[0]?.mediaGenerations?.[0]?.elementId).not.toBe(outlines[1]?.mediaGenerations?.[0]?.elementId);
+  });
+
   it("does not accept authoring tasks as completed explanatory content", async () => {
     const candidate = compactModelBlueprint();
     const unit = candidate.sections[0]!.units[0]!;
@@ -978,6 +1252,24 @@ describe("teaching blueprint compiler", () => {
       .toThrow("新增、删除或重复页面必须先回到内容设计");
   });
 
+  it("accepts a confirmed concept page without separate reasoning steps", async () => {
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(compactModelBlueprint()));
+    const outlines = teachingBlueprintToOutlines(blueprint, "使用简体中文");
+    const first = outlines.find((outline) => outline.type === "slide")!;
+    const reviewed = outlines.map((outline) => outline.id === first.id ? {
+      ...outline,
+      teachingBrief: {
+        ...outline.teachingBrief!,
+        teachingPlan: {
+          ...outline.teachingBrief!.teachingPlan!,
+          reasoningSteps: [],
+        },
+      },
+    } : outline);
+
+    expect(() => applyReviewedOutlinesToTeachingBlueprint(blueprint, reviewed)).not.toThrow();
+  });
+
   it("uses exactly one comprehensive short answer per section when deep-response mode is enabled", async () => {
     const blueprint = await generateTeachingBlueprint(input("constructed-response"), async () => JSON.stringify(modelBlueprint()));
     const quizzes = teachingBlueprintToOutlines(blueprint, "使用简体中文").filter((outline) => outline.type === "quiz");
@@ -1084,6 +1376,28 @@ describe("teaching blueprint compiler", () => {
     await expect(generateTeachingBlueprint(base, ai, { retrySleep: async () => undefined }))
       .resolves.toMatchObject({ schemaVersion: 3 });
     expect(ai).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks first substantive teaching against the textbook order and allows same-page concepts", async () => {
+    const base = input();
+    base.teachingOrder = {
+      primaryRevisionId: "main", baselineKnowledgePointIds: ["kp-train", "kp-test", "kp-split", "kp-leak"],
+      knowledgePointIds: ["kp-train", "kp-test", "kp-split", "kp-leak"], anchors: [], adjustments: [],
+    };
+    const candidate = modelBlueprint();
+    await expect(generateTeachingBlueprint(base, async () => JSON.stringify(candidate)))
+      .resolves.toMatchObject({ schemaVersion: 3 });
+
+    const reversed = { ...base, teachingOrder: {
+      ...base.teachingOrder, knowledgePointIds: ["kp-split", "kp-leak", "kp-train", "kp-test"],
+    } };
+    const onValidation = vi.fn();
+    await expect(generateTeachingBlueprint(reversed, async () => JSON.stringify(candidate), {
+      onValidation, retrySleep: async () => undefined,
+    })).rejects.toThrow("教材教学顺序倒置");
+    expect(onValidation.mock.calls.flatMap(([result]) => result.issues).join("；"))
+      .toContain("教材教学顺序倒置");
+    expect(buildTeachingBlueprintPrompt(base).user).toContain("主教材教学顺序与局部调整");
   });
 
   it("rejects a prerequisite that is only taught in a later section", async () => {

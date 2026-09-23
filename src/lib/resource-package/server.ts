@@ -26,7 +26,7 @@ export const packageResult = (job: CourseGenerationJob): ResourcePackageResult =
 export function resourcePackageSnapshot(job: CourseGenerationJob | null): ResourcePackageJobSnapshot | null {
   if (!job) return null;
   const result = packageResult(job);
-  return { id: job.id, status: job.status, message: job.message, error: job.error, progress: job.progress,
+  return { id: job.id, status: job.status, step: job.step, message: job.message, error: job.error, progress: job.progress,
     candidates: result.candidates, package: result.package ?? null };
 }
 /** Finish a confirmation whose durable template save succeeded before a worker/process exit. */

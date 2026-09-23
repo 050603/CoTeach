@@ -29,13 +29,22 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error ?? "");
 }
 
+function isInvalidGeneratedOutput(error: unknown): boolean {
+  return Boolean(error && typeof error === "object"
+    && "generationFailureKind" in error
+    && error.generationFailureKind === "invalid-generated-output");
+}
+
 const TRANSIENT_INFRASTRUCTURE_ERROR = /(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE|调用超时|请求超时|fetch failed|network|网络|socket hang up|429|rate.?limit|database (?:is )?(?:temporarily )?unavailable|P1001|P1002|P2024)/i;
 const FATAL_INFRASTRUCTURE_ERROR = /(?:quota|API.?key|unauthori[sz]ed|forbidden|invalid credential|401|403|P20(?:00|01|02|03|10|11|12|21|22))/i;
 const RECOVERABLE_GENERATION_ERROR = /(?:代理无法生成结构完整的数据|无法通过独立审校|未通过(?:独立)?(?:审校|质量门|校验)|未能补齐必要结构|未返回可保存的数据|Failed to parse scene outlines response|无法解析.*JSON|生成的数据结构不完整)/i;
-const EXHAUSTED_LOCAL_REPAIR = /(?:目标与知识结构无法通过独立审校|课程入口学习包无法通过发布校验|编辑 Agent 无法完成审校修订|教学蓝图(?:缺少可用结构| JSON 无法解析))/i;
+const EXHAUSTED_LOCAL_REPAIR = /(?:目标与知识结构无法通过独立审校|课程入口学习包无法通过发布校验|编辑 Agent 无法完成审校修订|教学蓝图(?:缺少可用结构| JSON 无法解析)|必用教材原图.*没有可绑定的首次知识讲解页)/i;
 
 export function classifyCourseDesignFailure(error: unknown): CourseDesignFailureKind {
   const chain = errorChain(error);
+  if (chain.some(isInvalidGeneratedOutput)) {
+    return "terminal-quality";
+  }
   if (chain.some((item) => FATAL_INFRASTRUCTURE_ERROR.test(messageOf(item)))) {
     return "fatal-infrastructure";
   }
@@ -84,8 +93,13 @@ export function createManagedRecoveryRequest<T extends RecoverableRequest>(
 }
 
 export function formatFatalCourseDesignError(error: unknown): string {
-  const chainMessages = errorChain(error).map(messageOf).filter(Boolean);
+  const chain = errorChain(error);
+  const chainMessages = chain.map(messageOf).filter(Boolean);
   const messages = chainMessages.join(" ");
+  if (chain.some(isInvalidGeneratedOutput)) {
+    const detail = [...chainMessages].reverse().find(Boolean) ?? "本阶段输出结构不完整";
+    return `当前课程阶段连续返回无法保存的结构，生成已停止且不会整项重跑；此前已经完成的内容仍会保留。具体原因：${detail.slice(0, 1_000)}`;
+  }
   if (TRANSIENT_INFRASTRUCTURE_ERROR.test(messages)) {
     return "网络或 AI 模型服务连接在多轮自动恢复后仍不可用，快速生成已安全停止；已完成的课程设计阶段均已保留，可在服务恢复后直接重试。";
   }

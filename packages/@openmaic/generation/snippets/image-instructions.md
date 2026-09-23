@@ -1,17 +1,17 @@
 ### AI-Generated Image Requests
 
-Use image generation only for slide scenes that need a static visual and have no suitable source image.
+Request generated images when a static visual helps students directly observe an object, situation, spatial state, imagined mental model, or visible contrast and no suitable source image exists. Decide separately whether the same slide also needs an editable concept or process diagram. There is no per-slide or course image quota.
 
-- Prefer `suggestedImageIds` when a suitable source/PDF image exists
-- Add a `mediaGenerations` entry only when a generated image genuinely enhances the content
+- Prefer `suggestedImageIds` and a `visualIntent.resourceRefs` source-image binding when a suitable source/PDF image exists
+- Add a `mediaGenerations` entry when seeing the example materially improves understanding; a definition, formula, or precise relationship can remain entirely editable slide elements
 - Use `type: "image"`
 - Each image request specifies: `prompt` (description for the generation model), `elementId` (unique placeholder), and optionally `aspectRatio` (default "16:9") and `style`
-- **Image IDs**: use `"gen_img_1"`, `"gen_img_2"`, etc. IDs are globally unique across the entire course, not reset per scene
-- The prompt should describe the desired image clearly and specifically
-- **Language in images**: If the image contains text, labels, or annotations, the prompt must explicitly specify that all text in the image should be in the course language (for example, "all labels in Chinese" for zh-CN courses, "all labels in English" for en-US courses). For purely visual images without text, language does not matter
+- **Image IDs**: use stable semantic IDs such as `"gen_img_water-cycle"`. IDs are global across the course and must not be reset or renamed on later pages
+- The prompt should specify the subject, what students should observe, the visible contrast when comparison matters, and the composition. State clearly when a scene is imagined rather than real
+- Request images without embedded text, labels, numbers, arrows, or annotations. Put terminology, exact values, and relationship labels in editable slide elements in the course language
 - **Avoid duplicate images across slides**: Each generated image must be visually distinct. Do not request near-identical images for different slides. If multiple slides cover the same topic, vary the visual angle, scope, or style
-- **Cross-scene reuse**: To reuse a generated image in a different scene, reference the same `elementId` in the later scene's content without adding a new `mediaGenerations` entry. Only the scene that first defines the `elementId` in its `mediaGenerations` should include the generation request
-- Use generated images for static content: diagrams, charts, illustrations, portraits, landscapes
+- **Cross-scene reuse**: To reuse a generated image in another scene, add the same ID to that scene's `visualIntent.resourceRefs` without adding another `mediaGenerations` entry. Only the first scene defines the generation request
+- Use generated images for observable examples and illustrations; use editable elements for diagrams, charts, exact data, and relationships
 
 Image example:
 
@@ -19,9 +19,9 @@ Image example:
 "mediaGenerations": [
   {
     "type": "image",
-    "prompt": "A colorful diagram showing the water cycle with evaporation, condensation, and precipitation arrows",
-    "elementId": "gen_img_1",
-    "aspectRatio": "16:9"
+    "prompt": "A clear side-by-side illustration of the same pond in dry and rainy conditions, with matching viewpoint and visible changes in water level and surrounding ground, no text or labels",
+    "elementId": "gen_img_pond-seasons",
+    "aspectRatio": "4:3"
   }
 ]
 ```

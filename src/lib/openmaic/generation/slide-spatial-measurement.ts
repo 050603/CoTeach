@@ -4,6 +4,7 @@ import path from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import type { SlideTeachingRegion } from './slide-spatial-types';
 import { SLIDE_RENDERER_STYLES } from '../../../../packages/@openmaic/renderer/src/styles';
+import type { TextMeasure, TextMeasureInput, TextMeasureResult } from '../../../../packages/@openmaic/generation/src/text-layout-compiler';
 
 export const SPATIAL_FONT = 'Noto Sans SC';
 export const SPATIAL_PADDING = 10;
@@ -19,6 +20,7 @@ let queue: Promise<unknown> = Promise.resolve();
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
 let warnedAboutFallback = false;
 const cache = new Map<string, SpatialMeasurement>();
+const authoredTextCache = new Map<string, TextMeasureResult>();
 const assets = new Map<string, { body: Buffer; contentType: string }>();
 
 export class SpatialMeasurementUnavailableError extends Error {
@@ -231,6 +233,63 @@ export const measureSlideRegion: SpatialMeasureFn = async (region, width, fontSi
   return result;
 };
 measureSlideRegion.measurementMode = 'browser-renderer-fonts-v1';
+
+/** Measure first-draft editable text with the same font assets and CSS as playback. */
+export const measureAuthoredSlideText: TextMeasure = async (input: TextMeasureInput) => {
+  const key = JSON.stringify(input);
+  const cached = authoredTextCache.get(key);
+  if (cached) return cached;
+  const measured = await serialized(async (target) => target.evaluate(async (spec) => {
+    const node = document.getElementById('measure')!;
+    node.style.width = `${spec.width}px`;
+    node.style.fontSize = `${spec.fontSize}px`;
+    node.style.fontWeight = String(spec.fontWeight);
+    node.style.fontFamily = spec.fontFamily;
+    node.style.padding = `${spec.padding}px`;
+    node.style.lineHeight = String(spec.lineHeight);
+    node.style.textAlign = spec.align;
+    node.style.setProperty('--paragraphSpace', `${spec.paragraphSpace}px`);
+    const parsed = new DOMParser().parseFromString(spec.html, 'text/html');
+    const allowed = new Set(['P', 'BR', 'B', 'STRONG', 'I', 'EM', 'SPAN']);
+    for (const element of [...parsed.body.querySelectorAll('*')].reverse()) {
+      if (!allowed.has(element.tagName)) element.replaceWith(document.createTextNode(element.textContent ?? ''));
+      else for (const attribute of [...element.attributes]) element.removeAttribute(attribute.name);
+    }
+    node.innerHTML = parsed.body.innerHTML;
+    await Promise.all([400, 700].map((weight) => document.fonts.load(`${weight} ${spec.fontSize}px "Noto Sans SC"`, spec.text || '教学')));
+    await document.fonts.ready;
+    if (!document.fonts.check(`${spec.fontWeight} ${spec.fontSize}px "Noto Sans SC"`, spec.text || '教学')) throw new Error('Slide authoring font did not load');
+
+    const natural = node.cloneNode(true) as HTMLElement;
+    natural.style.width = 'max-content';
+    natural.style.whiteSpace = 'nowrap';
+    natural.style.position = 'absolute';
+    natural.style.left = '-10000px';
+    document.body.appendChild(natural);
+    const naturalWidth = Math.max(0, natural.getBoundingClientRect().width - 2 * spec.padding);
+    natural.remove();
+
+    const lineMap = new Map<number, string>();
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const textNode = walker.currentNode;
+      const value = textNode.textContent ?? '';
+      for (let index = 0; index < value.length; index += 1) {
+        const range = document.createRange();
+        range.setStart(textNode, index);
+        range.setEnd(textNode, index + 1);
+        const rect = range.getClientRects()[0];
+        if (!rect) continue;
+        const row = Math.round(rect.top * 2) / 2;
+        lineMap.set(row, (lineMap.get(row) ?? '') + value[index]);
+      }
+    }
+    const lines = [...lineMap.entries()].sort(([a], [b]) => a - b).map(([, text]) => text.trim()).filter(Boolean);
+    return { naturalWidth, height: Math.ceil(node.getBoundingClientRect().height), lines };
+  }, input));
+  authoredTextCache.set(key, measured);
+  return measured;
+};
 
 /** Programmatic schematic, not model-generated artwork. */
 export async function renderSpatialSketchSvg(svg: string): Promise<string> {

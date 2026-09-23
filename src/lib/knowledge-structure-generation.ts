@@ -16,12 +16,14 @@ import { deriveCourseEntryPolicy, formatCourseEntryPolicy } from "@/lib/course-e
 import { DURABLE_GENERATION_TRANSIENT_RETRIES } from "@/lib/llm/request-policy";
 import type { GenerationReferenceMaterial } from "@/lib/course-design/generation-references";
 import type { CourseEvidenceSnapshot } from "@/lib/textbook/course-evidence-types";
+import { textbookTeachingBaseline, type TeachingOrderAdjustment } from "@/lib/textbook/teaching-order";
 import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic/generation/generated-output-retry";
+import { jsonrepair } from "jsonrepair";
 
 type ModelCall = typeof callLLM;
 
-export const KNOWLEDGE_STRUCTURE_POLICY_VERSION = "textbook-evidence-mapping-v4-teaching-order";
+export const KNOWLEDGE_STRUCTURE_POLICY_VERSION = "textbook-evidence-mapping-v5-source-sequence";
 
 export type KnowledgeStructureGenerationContext = {
   /** Upstream teacher requirements; textbook-driven courses may map, split, or merge them into lesson-owned nodes. */
@@ -53,6 +55,61 @@ export type ReviewedKnowledgeStructure = Pick<CourseContent, "knowledgePoints" |
 };
 
 type JsonRecord = Record<string, unknown>;
+
+function hasCompleteJsonDelimiters(value: string): boolean {
+  const stack: string[] = [];
+  let quoted = false;
+  let escaped = false;
+  for (const char of value) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (quoted) continue;
+    if (char === "{" || char === "[") stack.push(char);
+    if (char === "}" || char === "]") {
+      const expected = char === "}" ? "{" : "[";
+      if (stack.pop() !== expected) return false;
+    }
+  }
+  return !quoted && stack.length === 0;
+}
+
+/** Repair syntax only when the model returned a complete JSON object. */
+export function parseKnowledgeStructureJson(raw: string): JsonRecord {
+  try {
+    const parsed = parseLLMJson<unknown>(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as JsonRecord;
+    }
+    throw new Error("知识结构必须是 JSON 对象");
+  } catch (originalError) {
+    const trimmed = raw.trim();
+    const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1]?.trim();
+    const candidate = fenced ?? trimmed;
+    // jsonrepair can invent a closing structure for a truncated response.
+    // A missing beginning or ending must be regenerated instead.
+    if (!candidate.startsWith("{") || !candidate.endsWith("}")
+      || !hasCompleteJsonDelimiters(candidate)) throw originalError;
+    try {
+      const repaired = JSON.parse(jsonrepair(candidate)) as unknown;
+      if (repaired && typeof repaired === "object" && !Array.isArray(repaired)) {
+        return repaired as JsonRecord;
+      }
+    } catch {
+      // Preserve the normal invalid-output retry path.
+    }
+    throw originalError;
+  }
+}
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -142,6 +199,8 @@ function stableTopologicalOrder(
 function orderKnowledgeStructureForTeaching(
   knowledgePoints: CourseContent["knowledgePoints"],
   knowledgeGraph: KnowledgeGraph,
+  textbookBaseline?: readonly string[],
+  extraDependencies: readonly TeachingOrderAdjustment[] = [],
 ): OrderedKnowledgeStructure {
   const pointById = new Map(knowledgePoints.map((point) => [point.id, point]));
   const groupIds: string[] = [];
@@ -164,9 +223,13 @@ function orderKnowledgeStructureForTeaching(
     for (const parentId of point.parentKnowledgePointIds ?? []) addDependency(parentId, point.id);
   }
   for (const edge of knowledgeGraph.edges) {
-    if (edge.type === "required-prerequisite" && edge.strength === "required") {
+    if (edge.strength === "required" && (edge.type === "required-prerequisite"
+      || (textbookBaseline && (edge.type === "supports" || edge.type === "application" || edge.type === "transfer")))) {
       addDependency(edge.source, edge.target);
     }
+  }
+  for (const adjustment of extraDependencies) {
+    addDependency(adjustment.knowledgePointId, adjustment.beforeKnowledgePointId);
   }
 
   // Detect the actual necessary-dependency cycle before collapsing points to
@@ -178,6 +241,12 @@ function orderKnowledgeStructureForTeaching(
     "知识结构存在必要依赖循环",
   );
 
+  // A primary textbook is an order of explanations, not a requirement that
+  // every generated group stay contiguous. Split interleaved groups later.
+  const orderedPointIds = textbookBaseline
+    ? stableTopologicalOrder(textbookBaseline, pointDependencies, "教材顺序与必要教学依赖冲突")
+    : orderGroupedPoints();
+  function orderGroupedPoints(): string[] {
   const groupDependencies = new Map<string, Set<string>>();
   for (const [targetId, sources] of pointDependencies) {
     const target = pointById.get(targetId);
@@ -199,7 +268,7 @@ function orderKnowledgeStructureForTeaching(
     groupDependencies,
     "知识结构的必要依赖与知识分组边界冲突",
   );
-  const orderedPointIds = orderedGroupIds.flatMap((groupId) => {
+  return orderedGroupIds.flatMap((groupId) => {
     const ids = pointIdsByGroup.get(groupId) ?? [];
     const withinGroupDependencies = new Map<string, Set<string>>();
     for (const id of ids) {
@@ -213,6 +282,7 @@ function orderKnowledgeStructureForTeaching(
       "知识分组内存在必要依赖循环",
     );
   });
+  }
   const orderedPoints = orderedPointIds.map((id) => pointById.get(id)!).filter(Boolean);
   const lessonNodeById = new Map(knowledgeGraph.nodes
     .filter((node) => pointById.has(node.id))
@@ -439,7 +509,7 @@ function prepareKnowledgeStructureForTeacherReview(
     const parentTargetIds = [...new Set((point.sourceKnowledgePointIds ?? []).flatMap((sourceId) => {
       const parentSourceId = sourcePointById.get(sourceId)?.parentKnowledgePointId;
       return parentSourceId ? targetsBySourceId.get(parentSourceId) ?? [] : [];
-    }))];
+    }))].filter((parentId) => parentId !== point.id);
     if (parentTargetIds.length) point.parentKnowledgePointIds = parentTargetIds;
   }
   const pointById = new Map(knowledgePoints.map((point) => [point.id, point]));
@@ -469,7 +539,7 @@ function prepareKnowledgeStructureForTeacherReview(
     const parentKnowledgePointIds = [...new Set([
       ...(point.parentKnowledgePointIds ?? []),
       ...resolvedParents,
-    ])];
+    ])].filter((parentId) => parentId !== point.id);
     if (parentKnowledgePointIds.length) point.parentKnowledgePointIds = parentKnowledgePointIds;
   }
   const lessonNodes: KnowledgeGraph["nodes"] = knowledgePoints.map((point) => {
@@ -647,7 +717,7 @@ function prepareKnowledgeStructureForTeacherReview(
         && firstText(decision ?? {}, ["targetKnowledgePointId", "targetId"]) === sourcePoint.id;
   });
   const capacity = context.teachingCapacity;
-  const knowledgeScopePlan: KnowledgeScopePlan | undefined = capacity || sourcePoints.length
+  const knowledgeScopePlan: KnowledgeScopePlan | undefined = capacity || sourcePoints.length || textbookDriven
       ? {
         schemaVersion: 1,
         policyVersion: KNOWLEDGE_STRUCTURE_POLICY_VERSION,
@@ -684,8 +754,59 @@ function prepareKnowledgeStructureForTeacherReview(
       }
     : undefined;
 
-  const ordered = orderKnowledgeStructureForTeaching(knowledgePoints, { nodes, edges });
-  return { ...ordered, ...(knowledgeScopePlan ? { knowledgeScopePlan } : {}) };
+  const baseline = textbookDriven && context.textbookEvidence
+    ? textbookTeachingBaseline(knowledgePoints, context.textbookEvidence)
+    : undefined;
+  const pointIds = new Set(knowledgePoints.map((point) => point.id));
+  const requestedAdjustments = Array.isArray(rawScopePlan.teachingOrderAdjustments)
+    ? rawScopePlan.teachingOrderAdjustments.map(record) : [];
+  const learnerAdjustments: TeachingOrderAdjustment[] = baseline
+    ? requestedAdjustments.flatMap((candidate) => {
+      const knowledgePointId = firstText(candidate, ["knowledgePointId"]);
+      const beforeKnowledgePointId = firstText(candidate, ["beforeKnowledgePointId"]);
+      const obstacle = firstText(candidate, ["obstacle"]);
+      const basis = firstText(candidate, ["basis"]);
+      if (!pointIds.has(knowledgePointId) || !pointIds.has(beforeKnowledgePointId)
+        || knowledgePointId === beforeKnowledgePointId || obstacle.length < 8 || basis.length < 8
+        || /^(?:更符合教学逻辑|更自然|更合理|便于理解)[。！!\s]*$/u.test(obstacle)) return [];
+      return [{ knowledgePointId, beforeKnowledgePointId, kind: "learner-obstacle" as const, obstacle, basis }];
+    }) : [];
+  const ordered = orderKnowledgeStructureForTeaching(
+    knowledgePoints, { nodes, edges }, baseline?.baselineKnowledgePointIds, learnerAdjustments,
+  );
+  const baselineIndex = new Map(baseline?.baselineKnowledgePointIds.map((id, index) => [id, index]) ?? []);
+  const finalIndex = new Map(ordered.knowledgePoints.map((point, index) => [point.id, index]));
+  const parentAdjustments: TeachingOrderAdjustment[] = baseline ? knowledgePoints.flatMap((point) =>
+    (point.parentKnowledgePointIds ?? []).flatMap((parentId) => (
+      pointIds.has(parentId)
+      && (baselineIndex.get(parentId) ?? -1) > (baselineIndex.get(point.id) ?? -1)
+      ? [{ knowledgePointId: parentId, beforeKnowledgePointId: point.id,
+        kind: "necessary-dependency" as const,
+        obstacle: `讲授“${point.name}”前必须先建立上位概念`,
+        basis: `知识结构标明“${ordered.knowledgePoints.find((candidate) => candidate.id === parentId)?.name ?? parentId}”是其上位概念`,
+      }] : []
+    ))) : [];
+  const edgeAdjustments: TeachingOrderAdjustment[] = baseline ? edges.flatMap((edge) => (
+    edge.strength === "required" && (edge.type === "supports" || edge.type === "application" || edge.type === "transfer")
+    && pointIds.has(edge.source) && pointIds.has(edge.target)
+    && (baselineIndex.get(edge.source) ?? -1) > (baselineIndex.get(edge.target) ?? -1)
+      ? [{ knowledgePointId: edge.source, beforeKnowledgePointId: edge.target,
+        kind: "necessary-dependency" as const,
+        obstacle: `讲授“${ordered.knowledgePoints.find((point) => point.id === edge.target)?.name ?? edge.target}”前需要先建立相应知识`,
+        basis: edge.rationale?.trim() || edge.label,
+      }] : []
+  )) : [];
+  const teachingOrder = baseline ? {
+    ...baseline,
+    knowledgePointIds: ordered.knowledgePoints.map((point) => point.id),
+    adjustments: [...parentAdjustments, ...edgeAdjustments, ...learnerAdjustments.filter((adjustment) => (
+      (baselineIndex.get(adjustment.knowledgePointId) ?? -1) > (baselineIndex.get(adjustment.beforeKnowledgePointId) ?? -1)
+      && (finalIndex.get(adjustment.knowledgePointId) ?? -1) < (finalIndex.get(adjustment.beforeKnowledgePointId) ?? -1)
+    ))],
+  } : undefined;
+  return { ...ordered, ...(knowledgeScopePlan ? { knowledgeScopePlan: {
+    ...knowledgeScopePlan, ...(teachingOrder ? { teachingOrder } : {}),
+  } } : {}) };
 }
 
 /**
@@ -706,12 +827,8 @@ export async function generateKnowledgeStructureOnce(
   const prompt = buildKnowledgeGraphPrompt(input, context);
   const messages = [
     { role: "system", content: `${prompt.system}\n上游节点中的 teachingRole=core-concept 表示该父概念自身具有教学含义，必须作为基本含义、核心主张及其与下位知识关系的解释责任保留，不能降为分组标签。parentKnowledgePointId 指出的下位机制、原则或应用必须在上位概念建立之后或同页展开。纯目录不会带 core-concept 标记，不得为目录机械新增课程节点。masteryBoundary 表示学生完成本课后应达到的可观察表现，不代表学生在课程开始前已经掌握。目录和学习目标可以预告后续概念名称，但前段讲解、例子、比较和练习不得把尚未讲授的概念当作已知；跨概念综合判断只能安排在相关概念均已建立之后。` },
-    { role: "user", content: [prompt.user, context.teacherKnowledgePoints?.length
-      ? context.textbookEvidence?.items.length
-        ? `教师资料中的上游知识要求（每个精确 id 都必须通过 sourceKnowledgePointIds 映射到一个或多个教材化课程节点，并报告实际覆盖或缺口；允许拆分、合并和多对多映射，不要求节点名称与上游相同）：\n${JSON.stringify(context.teacherKnowledgePoints)}`
-        : `教师资料中的来源概念目录（每个精确 id/name 都是本课必须覆盖的 lesson knowledgePoint，不得合并替代、删除或 deferred。相关知识可以共享 unit、页面、案例和时间；groupId/groupName 用于保留原始知识体系与讲授分组）：\n${JSON.stringify(context.teacherKnowledgePoints)}`
-      : "",
-    "缺乏明确依据的先修关系保留待核对，不能按节点顺序或为了连通图谱编造必要关系。课程目标映射也必须有实质依据。"].filter(Boolean).join("\n\n") },
+    { role: "user", content: [prompt.user,
+      "缺乏明确依据的先修关系保留待核对，不能按节点顺序或为了连通图谱编造必要关系。课程目标映射也必须有实质依据。"].join("\n\n") },
   ] as const;
   return withGeneratedOutputRetry(async () => {
     const raw = options.aiCall
@@ -722,9 +839,12 @@ export async function generateKnowledgeStructureOnce(
           requestClass: "long-generation",
           maxTransientRetries: DURABLE_GENERATION_TRANSIENT_RETRIES,
         });
+    if (!raw.trim()) {
+      throw invalidGeneratedOutput(new Error("模型仅返回推理过程，没有可用正文"), "知识结构模型输出为空");
+    }
     let parsed: Record<string, unknown>;
     try {
-      parsed = parseLLMJson<Record<string, unknown>>(raw);
+      parsed = parseKnowledgeStructureJson(raw);
     } catch (error) {
       throw invalidGeneratedOutput(error, "知识结构 JSON 无法解析");
     }

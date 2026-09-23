@@ -21,6 +21,7 @@ export type PromptId =
 /** Snippets referenced by generation-owned prompt templates. */
 export type SnippetId =
   | 'json-output-rules'
+  | 'slide-title-guidelines'
   | 'image-instructions'
   | 'video-instructions'
   | 'media-safety-guidelines'

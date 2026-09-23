@@ -108,13 +108,81 @@ describe("ResourcePackageForm", () => {
     const callback = vi.fn();
     const view = render(<ResourcePackageForm courseId="course-1" disabled={false} onConfirmed={callback} />);
     await screen.findByDisplayValue("本科一年级");
-    fireEvent.change(screen.getByLabelText("教学对象 / 学段（必填）"), { target: { value: "本科二年级" } });
+    fireEvent.change(screen.getByLabelText("授课对象（专业、年级或学段，必填）"), { target: { value: "本科二年级" } });
     expect(callback).toHaveBeenLastCalledWith(null);
     view.unmount();
     render(<ResourcePackageForm courseId="course-1" disabled={false} onConfirmed={callback} />);
     expect(await screen.findByDisplayValue("本科二年级")).toBeTruthy();
     expect(callback).toHaveBeenLastCalledWith(null);
-    expect(screen.getByText("有修改待确认，草稿已保留")).toBeTruthy();
+    expect(screen.getByText("有修改待确认，草稿已在本机保留")).toBeTruthy();
+  });
+
+  it("preserves parsed knowledge provenance when a child description is edited", async () => {
+    const pack = makePackage();
+    pack.draft.knowledgePoints[0] = {
+      ...pack.draft.knowledgePoints[0],
+      subPoints: ["建构主义：主动建构", "认知主义：信息加工"],
+      children: [
+        { id: "knowledge-1", name: "建构主义", description: "主动建构", taskAssociation: "课堂案例分析", sources: ["KB:1"], source: { documentRole: "knowledge", locator: "第12行", quote: "建构主义" } },
+        { id: "knowledge-2", name: "认知主义", description: "信息加工", taskAssociation: "课堂设计", sources: ["KB:2"] },
+      ],
+    };
+    const mutation = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body)); mutation(body);
+        return Response.json({ job: ready({ ...pack, revision: 2, draft: body.draft, confirmedAt: new Date().toISOString() }) });
+      }
+      return Response.json({ job: ready(pack) });
+    }));
+    render(<ResourcePackageForm courseId="course-1" disabled={false} onConfirmed={vi.fn()} />);
+    const knowledgeSummary = await screen.findByText(/^4\. 知识与证据 ·/);
+    (knowledgeSummary.closest("details") as HTMLDetailsElement).open = true;
+    const field = await screen.findByLabelText(/^知识点 1 子知识点（每行一项，名称：说明）/);
+    fireEvent.change(field, { target: { value: "建构主义：由学生主动建构\n认知主义：信息加工" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认并保存教学要求" }));
+    await waitFor(() => expect(mutation).toHaveBeenCalled());
+    expect(mutation.mock.calls[0][0].draft.knowledgePoints[0].children[0]).toMatchObject({
+      id: "knowledge-1", description: "由学生主动建构", taskAssociation: "课堂案例分析", sources: ["KB:1"],
+      source: { documentRole: "knowledge", locator: "第12行", quote: "建构主义" },
+    });
+  });
+
+  it("refreshes structured showcase logistics when the showcase text changes", async () => {
+    const pack = makePackage();
+    pack.draft.showcasePlan = { presenterCount: 8, presentationSec: 60 };
+    pack.draft.stages[3].teacherActions = "选取学生现场汇报";
+    const mutation = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body)); mutation(body);
+        return Response.json({ job: ready({ ...pack, revision: 2, draft: body.draft, confirmedAt: new Date().toISOString() }) });
+      }
+      return Response.json({ job: ready(pack) });
+    }));
+    render(<ResourcePackageForm courseId="course-1" disabled={false} onConfirmed={vi.fn()} />);
+    await screen.findByDisplayValue("本科一年级");
+    fireEvent.change(screen.getByLabelText("成果展示：教师行动"), { target: { value: "随机选取3名同学现场汇报，每位同学汇报2分钟，提问30秒，衔接10秒。" } });
+    await waitFor(() => expect((screen.getByLabelText("每人展示（秒）") as HTMLInputElement).value).toBe("120"));
+    fireEvent.click(screen.getByRole("button", { name: "确认并保存教学要求" }));
+    await waitFor(() => expect(mutation).toHaveBeenCalled());
+    expect(mutation.mock.calls[0][0].draft.showcasePlan).toEqual({ presenterCount: 3, presentationSec: 120, discussionSec: 30, transitionSec: 10 });
+  });
+
+  it("shows sourced teaching priorities and omits fields absent from the handoff", async () => {
+    const pack = makePackage();
+    pack.draft.projectTask = "个人完成初步教案";
+    pack.draft.teachingHighlights = ["辨析教学理论与方法"];
+    pack.draft.teachingDifficulties = ["把抽象机制转化为活动"];
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ job: ready(pack) })));
+    render(<ResourcePackageForm courseId="course-1" disabled={false} onConfirmed={vi.fn()} />);
+    expect(await screen.findByLabelText("项目任务")).toHaveProperty("value", "个人完成初步教案");
+    expect(screen.getByLabelText("AI知识教学重点（每行一项）")).toHaveProperty("value", "辨析教学理论与方法");
+    expect(screen.getByLabelText("AI知识理解难点（每行一项）")).toHaveProperty("value", "把抽象机制转化为活动");
+    expect(screen.queryByLabelText("学情参考")).toBeNull();
+    expect(screen.queryByLabelText("项目启动：阶段产出")).toBeNull();
+    expect(screen.queryByLabelText("项目启动：AI职责")).toBeNull();
+    expect(screen.queryByLabelText("项目启动：课次检查点（每行一项）")).toBeNull();
   });
 
   it("requires an explicit choice for ambiguous files and submits the selected paths", async () => {

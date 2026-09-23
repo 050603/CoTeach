@@ -725,7 +725,11 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
         format: 'wav',
       };
     }
-    throw Object.assign(new Error('Qwen TTS returned an empty audio stream'), { isRetryable: false });
+    // DashScope can occasionally terminate an otherwise successful SSE
+    // response before emitting its audio chunk. Treat that as a transient
+    // incomplete stream so the bounded classroom retry can request the same
+    // narration again instead of leaving a permanent missing clip.
+    throw Object.assign(new Error('Qwen TTS returned an empty audio stream'), { isRetryable: true });
   }
 
   const data = await response.json();

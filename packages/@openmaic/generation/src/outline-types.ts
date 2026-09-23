@@ -16,6 +16,18 @@ export interface PdfImage {
   sourceDocumentName?: string;
   sourceDocumentOrder?: number;
   visionPriority?: number;
+  /** How strongly the textbook image is related to the knowledge being taught. */
+  textbookRelation?: 'direct' | 'candidate';
+  /** Knowledge points this image provides evidence for. */
+  knowledgePointIds?: string[];
+  /** Source-evidence records that selected this image. */
+  evidenceItemIds?: string[];
+  /** Human-readable source title shown to the planning model. */
+  sourceTitle?: string;
+  /** A direct source image that must be used on its first full teaching page. */
+  required?: boolean;
+  /** Why the image is related to the knowledge point. */
+  relationReason?: string;
 }
 
 export type ImageMapping = Record<string, string>;
@@ -66,6 +78,52 @@ export interface MediaGenerationRequest {
   style?: string;
 }
 
+export type VisualRepresentation =
+  | 'text'
+  | 'source-image'
+  | 'generated-image'
+  | 'native-diagram'
+  | 'native-chart'
+  | 'table'
+  | 'video'
+  | 'mixed';
+
+export interface VisualResourceReference {
+  /** Stable source or generated-media ID shared by planning, layout, and recovery. */
+  resourceId: string;
+  kind: 'source-image' | 'generated-image' | 'generated-video';
+  /** Required resources must appear in the generated page; omission fails the page generation. */
+  required: boolean;
+  /** Pedagogical reason for spending or reusing this resource. */
+  reason: string;
+  /** The concrete feature or contrast learners should inspect in this resource. */
+  observationGoal?: string;
+}
+
+/** A semantic relationship selected during instructional planning. Geometry is added at slide authoring time. */
+export interface DiagramPlan {
+  topology: 'sequence' | 'cycle';
+  /** Reading order; a cycle also closes from the last node to the first. */
+  nodes: Array<{ id: string; label: string }>;
+  /** Directed relationships. Adjacent edges may be omitted and are then inferred. */
+  edges?: Array<{ from: string; to: string; label?: string }>;
+  /** Explains the whole diagram; it is never a step or an edge. */
+  annotation?: string;
+}
+
+export interface SceneVisualIntent {
+  /** What learners should be able to observe directly on this page. */
+  observationGoal: string;
+  /** Native visual form chosen for the teaching need. */
+  representation: VisualRepresentation;
+  /** Stable resource bindings. Generated resources can be reused across scenes by ID. */
+  resourceRefs?: VisualResourceReference[];
+  /** Optional structure for a diagram made from editable native elements. */
+  diagram?: DiagramPlan;
+  /** Short rationale for why this representation is worth its cost. */
+  rationale?: string;
+}
+
 /** A generation-ready description of one course scene. */
 export interface SceneOutline {
   id: string;
@@ -77,6 +135,7 @@ export interface SceneOutline {
   estimatedDuration?: number;
   order: number;
   languageNote?: string;
+  visualIntent?: SceneVisualIntent;
   suggestedImageIds?: string[];
   mediaGenerations?: MediaGenerationRequest[];
   quizConfig?: {

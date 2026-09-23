@@ -25,7 +25,7 @@ function markdownHandoffFixture() {
   const metadata = (resourceType: "KNOWLEDGE" | "LESSON_PLAN") => `---\nhandoffFormatVersion: 1\nprojectId: "project-1"\nresourceType: ${resourceType}\nresourceVersion: 1\npackageId: "package-1"\npresentationVersion: 1\n---`;
   const knowledgeGroups = Array.from({ length: 6 }, (_, group) => `### ${group + 1} 主题${group + 1}\n\n- ID：topic-${group + 1}\n- 范围：主题范围${group + 1}\n- 证据状态：${group === 1 ? "PARTIAL" : "SUPPORTED"}\n${group === 1 ? "- 证据缺口：部分内容尚待核对。\n" : ""}\n${Array.from({ length: 3 }, (_, child) => `#### 子知识点${group + 1}-${child + 1}\n\n- ID：topic-${group + 1}-item-${child + 1}\n- 内容：内容${group + 1}-${child + 1}\n- 任务关联：用于初步教案设计\n- 来源：KB:${group + 1}-${child + 1}`).join("\n\n")}`).join("\n\n");
   const knowledge = `${metadata("KNOWLEDGE")}\n\n# 中小学人工智能教育的教学理论与方法\n\n## 学习范围\n\n${knowledgeGroups}\n\n## 证据状态\n\n- 总体状态：PARTIAL\n- 主题2：部分内容尚待核对。`;
-  const stage = (number: number, title: string, id: string, duration: number, extra = "") => `### ${number} ${title}\n\n- ID：${id}\n- 时间与课次：第${Math.min(number, 3)}课时，${duration}分钟\n\n#### 教师行动\n\n- 教师行动${number}\n${extra}\n#### 学生行动\n\n- 学生活动${number}\n\n#### AI职责\n\n- AI支持${number}`;
+  const stage = (number: number, title: string, id: string, duration: number, extra = "") => `### ${number}. ${title}\n\n- ID：${id}\n- 时间与课次：第${Math.min(number, 3)}课时，${duration}分钟\n\n#### 教师行动\n\n- 教师行动${number}\n${extra}\n#### 学生行动\n\n- 学生活动${number}\n\n#### AI职责\n\n- AI支持${number}\n\n#### 阶段产出\n\n- 阶段成果${number}\n\n#### 课次检查点\n\n- 检查点${number}\n\n#### 观察与介入\n\n- 观察点${number}`;
   const lesson = `${metadata("LESSON_PLAN")}\n\n# 中小学人工智能教育的教学理论与方法：初步教案设计\n\n## 本课概览\n\n- 课程：人工智能教育导论\n- 授课对象：人工智能教育 本科一年级，25人\n- 项目周期：3节课\n- 授课时间：3课时，每课时45分钟\n- 驱动问题：如何设计一节人工智能课？\n- 成果形式：初步教案文档；包含理论依据、目标和核心活动流程。\n- 完成方式：个人独立完成\n\n## 教学目标\n\n- 能辨析教学理论与方法\n\n## 组织安排\n\n- 建议人数：每人独立完成\n- AI使用原则：仅用于查询和活动灵感，严禁直接生成完整教案。\n\n## 课堂实施\n\n${stage(1, "教师导入", "INTRODUCTION", 15)}\n\n${stage(2, "学生与AI讲师学习", "AI_LEARNING", 30)}\n\n${stage(3, "小组项目实践", "PROJECT_WORK", 59, "\n- 在第2课时剩余时间及第3课时前40分钟持续监控进度。\n")}\n\n${stage(4, "成果展示", "SHOWCASE", 21)}\n\n${stage(5, "反思评价", "REFLECTION", 10)}\n\n## 评价安排\n\n依据量规评价。\n\n- 理论应用准确性（40%）：正确应用理论。\n- 活动设计合理性（30%）：活动与目标匹配。\n- 学段适切性（20%）：符合目标学段。\n- 独立完成（10%）：说明个人判断。\n\n## 学生反思\n\n1. 问题一？\n2. 问题二？\n3. 问题三？\n4. 问题四？\n5. 问题五？`;
   return { knowledge, lesson };
 }
@@ -36,6 +36,7 @@ describe("resource package document parsing", () => {
     expect(result.handoff).toMatchObject({ handoffFormatVersion: 1, projectId: "project-1", packageId: "package-1", presentationVersion: 1 });
     expect(result.draft).toMatchObject({ courseName: "中小学人工智能教育的教学理论与方法", subject: "人工智能教育导论", grade: "人工智能教育 本科一年级，25人", lessonCount: 3, minutesPerLesson: 45, totalMinutes: 135 });
     expect(result.draft.stages.map((item) => item.durationMin)).toEqual([15, 30, 59, 21, 10]);
+    expect(result.draft.stages[0]).toMatchObject({ title: "教师导入", outputs: "阶段成果1", checkpoints: ["检查点1"], observationPoints: ["观察点1"] });
     expect(result.draft.knowledgePoints).toHaveLength(6);
     expect(result.draft.knowledgePoints.flatMap((item) => item.children ?? [])).toHaveLength(18);
     expect(result.draft.evaluationRubric?.dimensions.map((item) => item.weight)).toEqual([40, 30, 20, 10]);
@@ -43,6 +44,7 @@ describe("resource package document parsing", () => {
     expect(result.draft.expectedOutcome).toContain("初步教案");
     expect(result.draft.finalDeliverables).toEqual([expect.objectContaining({ name: "初步教案文档", format: "document" })]);
     expect(result.draft.aiUsagePolicy).toContain("严禁直接生成完整教案");
+    expect(result.draft.organizationRequirements).toContain("完成方式：个人独立完成");
     expect(result.draft.teachingHighlights).toBeUndefined();
     expect(result.draft.teachingDifficulties).toBeUndefined();
     expect(result.draft.sourceEvidence?.teachingHighlights).toBeUndefined();
@@ -88,6 +90,46 @@ describe("resource package document parsing", () => {
       expect.objectContaining({ archivePath: "教案.md", quote: "区分相近概念" }),
       expect.objectContaining({ archivePath: "教案.md", quote: "- 用学生语言解释抽象机制" }),
     ]);
+  });
+  it("maps the fixed handoff's project task and separate showcase schedule with source evidence", () => {
+    const fixture = markdownHandoffFixture();
+    const lesson = fixture.lesson
+      .replace("- 驱动问题：如何设计一节人工智能课？", "- 驱动问题：如何设计一节人工智能课？\n- 项目任务：个人完成一份初步教案")
+      .replace("\n\n## 评价安排", `
+
+## 成果展示
+
+教师选取5名学生依次展示。每人展示5分钟、交流1分钟、衔接0分钟。
+
+## 知识教学与主持参考
+
+### 教师主持要点
+
+- 教师导入：引导学生辨析两种课堂形态。
+
+### AI知识教学重点
+
+- 辨析教学理论、模式与方法的层级。
+
+### AI知识理解难点
+
+- 将抽象认知机制转化为教学活动。
+
+## 学情参考
+
+- 已知情况：学生已有基础尚待了解。
+
+## 评价安排`);
+    const draft = parseMarkdownResourcePackageDraft(readMarkdown(Buffer.from(fixture.knowledge)), readMarkdown(Buffer.from(lesson), "教案.md")).draft;
+    expect(draft.projectTask).toBe("个人完成一份初步教案");
+    expect(draft.teachingHighlights).toEqual(["辨析教学理论、模式与方法的层级。"]);
+    expect(draft.teachingDifficulties).toEqual(["将抽象认知机制转化为教学活动。"]);
+    expect(draft.facilitatorReference).toEqual(["教师导入：引导学生辨析两种课堂形态。"]);
+    expect(draft.showcasePlan).toEqual({ presenterCount: 5, presentationSec: 300, discussionSec: 60, transitionSec: 0 });
+    expect(draft.sourceEvidence?.projectTask?.[0]).toMatchObject({ archivePath: "教案.md", quote: "- 项目任务：个人完成一份初步教案" });
+    expect(draft.sourceEvidence?.showcasePlan?.[0].quote).toContain("每人展示5分钟");
+    expect(draft.sourceEvidence?.learnerContext?.[0].quote).toContain("已知情况");
+    expect(resourcePackageDraftSchema.safeParse(draft).success).toBe(true);
   });
   it("extracts presenter count and per-student timing from the showcase stage", () => {
     const fixture = markdownHandoffFixture();

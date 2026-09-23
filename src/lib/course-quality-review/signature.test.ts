@@ -22,7 +22,7 @@ describe("course quality signature", () => {
       decisions: [{ sourceKnowledgePointId: "source", sourceKnowledgePointName: "教师要求", disposition: "mapped", targetKnowledgePointId: "target", targetKnowledgePointIds: ["target"], rationale: "教材化改写" }],
     };
     course.content.courseEvidence = {
-      schemaVersion: 1, version: 1, fingerprint: "evidence-v1", createdAt: "2026-09-21T00:00:00.000Z", retrievalMode: "hybrid",
+      schemaVersion: 2, version: 1, fingerprint: "evidence-v1", createdAt: "2026-09-21T00:00:00.000Z", retrievalMode: "hybrid",
       selections: [], items: [], warnings: [],
       mappings: [{ sourceKnowledgePointId: "source", sourceKnowledgePointName: "教师要求", status: "direct", evidenceItemIds: ["evidence"], rationale: "教材支持" }],
     };

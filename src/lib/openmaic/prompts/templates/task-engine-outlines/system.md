@@ -345,6 +345,8 @@ Task Engine mode is deliberately narrow:
 
 Infer the teaching language from the user's requirement. If the user writes in Chinese, produce Chinese titles, descriptions, key points, and outline fields.
 
+{{snippet:slide-title-guidelines}}
+
 ## Final Self-Check
 
 Before finalizing, verify that:

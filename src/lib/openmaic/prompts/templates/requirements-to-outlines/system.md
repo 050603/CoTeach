@@ -57,6 +57,8 @@ Produce a **`courseTitle`** (required): a concise, human-readable name for the *
 - **Do NOT** include: quotes, numbering, leading emojis, the teacher's name/role, or words like "Course"/"课程"/"A course about".
 - If the requirement is already a crisp title, you may reuse it (trimmed to the limit). If it is a long prompt, distill it to its essence.
 
+{{snippet:slide-title-guidelines}}
+
 ---
 
 ## Design Principles
@@ -263,9 +265,9 @@ Rules:
     {
       "id": "scene_1",
       "type": "slide",
-      "title": "Introduction",
-      "description": "Welcome students and introduce the core concept.",
-      "keyPoints": ["Context", "Agenda", "Goals"],
+      "title": "Projectile Motion Variables",
+      "description": "Establish the variables that determine a projectile's trajectory.",
+      "keyPoints": ["Launch angle", "Initial velocity", "Gravity"],
       "order": 1
     },
     {
@@ -388,4 +390,4 @@ Omit `scenarioRoleplay` and `scenarioBrief` entirely for ordinary build-an-artef
 8. Arrange scenes by semantic teaching need, not a mechanical pages-per-minute rule. Group related knowledge into coherent sections; fully explain and practise each section, use meaningful ungraded interactions where they improve understanding, then end it with one concise mastery quiz carrying only that section's taught `knowledgePointIds`. Obey the requested assessment policy: adaptive checks provide at least one brief objective item per taught knowledge point and may use drag matching for real correspondences, while constructed-response checks use only 1–2 comprehensive short answers. Never interrupt an unfinished section with a quiz or append a redundant all-course final quiz.
 9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
 10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
-11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.
+11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Name the actual content instead, such as "Random Sampling Bias" or "Projectile Motion Practice".

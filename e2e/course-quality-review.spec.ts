@@ -22,6 +22,8 @@ for (const manualCheck of [false, true]) test(`teacher publishes ${manualCheck ?
   const classroom = { id: classroomId, revision: 1, stage: { id: 'stage', name: '学习证据' }, scenes: [scene], createdAt: new Date().toISOString() };
   const quality = null;
   let renderReview: unknown = null;
+  let resourceRepairStarted = false, resourcePolls = 0;
+  const resourceIssue = { id: 'missing-audio', type: 'tts', title: '讲稿语音', detail: '第 1 页语音尚未生成' };
   const writes: Array<Record<string, unknown>> = [], errors: string[] = [], unexpected: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const secret = process.env.OPENPBL_E2E_JWT_SECRET_FILE ? readFileSync(process.env.OPENPBL_E2E_JWT_SECRET_FILE, 'utf8').trim() : process.env.JWT_SECRET;
@@ -34,38 +36,79 @@ for (const manualCheck of [false, true]) test(`teacher publishes ${manualCheck ?
     const request = route.request(), path = new URL(request.url()).pathname;
     const json = (value: unknown) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(value) });
     if (path === '/api/auth/me') return json({ user: { id: 'e2e-teacher', role: 'teacher', name: '终审验收', displayName: '终审验收' } });
+    if (path === '/api/server-providers') return json({ providers: {}, tts: {}, asr: {}, pdf: {}, image: {}, video: {}, webSearch: {} });
     if (path === '/api/courses') return json({ courses: [course], user: { role: 'teacher', name: '终审验收' }, hydrated: true, updatedAt: course.updatedAt });
     if (path.endsWith('/state')) return json({ course, eventCursor: '0' });
     if (path.endsWith('/events')) return json({ events: [], nextCursor: '0', hasMore: false, courseVersion: 1 });
     if (path.endsWith('/presence')) return json({ members: [], degraded: false });
-    if (path.endsWith('/resource-repair')) return json({ issues: [] });
+    if (path.endsWith('/design-workspace')) return json({ publication: { latestVersion: 1, publishedVersion: null, draftVersion: 1 } });
+    if (path.endsWith('/resource-repair')) {
+      if (manualCheck) return json({ issues: [] });
+      if (request.method() === 'POST') {
+        resourceRepairStarted = true;
+        return json({ issues: [resourceIssue], repair: { status: 'running', completed: 0, total: 1 } });
+      }
+      if (!resourceRepairStarted) return json({ issues: [resourceIssue], repair: { status: 'failed', error: '上次资源补齐失败，请重试。' } });
+      resourcePolls += 1;
+      return resourcePolls < 2
+        ? json({ issues: [resourceIssue], repair: { status: 'running', completed: 0, total: 1 } })
+        : json({ issues: [], repair: { status: 'completed', completed: 1, total: 1 } });
+    }
     if (path.endsWith('/quality-review')) {
       if (request.method() === 'POST') {
         const body = request.postDataJSON(); writes.push(body);
         if (body.action === 'render-page') renderReview = { schemaVersion: 1, signature, classroomId, status: 'completed', pages: [body.page], updatedAt: new Date().toISOString() };
         return json({ ok: true });
       }
-      return json({ required: true, signature, classroom, quality, renderReview, teacherReview: null });
+      return json({ required: true, signature, classroom, quality, renderReview, teacherReview: null, teacherReviewItems: [], teacherReviewSummary: null });
     }
     if (path.includes(classroomId) || path === '/api/openmaic/classroom') return json(classroom);
     unexpected.push(`${request.method()} ${path}`);
     return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
   });
   await page.goto(`/teacher/prepare/${courseId}/preview`, { waitUntil: 'domcontentloaded' });
-  const review = page.getByRole('region', { name: '课程质量与教师终审' });
+  await expect(page.getByRole('tab', { name: '课程总览' })).toHaveAttribute('aria-selected', 'true');
+  if (!manualCheck) {
+    const resourceStatus = page.getByRole('complementary', { name: '课程发布状态' });
+    await expect(resourceStatus.getByText('课程资源需要处理')).toBeVisible();
+    await expect(resourceStatus.getByText('补齐失败', { exact: true })).toBeVisible();
+    await expect(resourceStatus.getByText('上次资源补齐失败，请重试。')).toBeVisible();
+    await resourceStatus.getByRole('button', { name: '重试缺失资源' }).click();
+    await expect(resourceStatus.getByRole('button', { name: '重试缺失资源' })).toBeDisabled();
+    await expect(resourceStatus.getByText('完整')).toBeVisible({ timeout: 15_000 });
+    for (const viewport of [{ width: 820, height: 1180 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+      const overviewBox = await page.getByRole('tabpanel', { name: '课程总览' }).boundingBox();
+      const statusBox = await page.getByRole('complementary', { name: '课程发布状态' }).boundingBox();
+      expect(statusBox?.y).toBeLessThan(overviewBox?.y ?? 0);
+    }
+    await page.setViewportSize({ width: 1280, height: 720 });
+  }
+  await page.getByRole('tab', { name: '逐页审阅' }).click();
+  await expect(page).toHaveURL(/view=pages/);
+  await expect(page.getByText('逐页检查课程节奏')).toBeVisible();
+  await page.getByRole('tab', { name: '学生课堂预览' }).click();
+  await expect(page.getByRole('complementary', { name: '课程发布状态' })).toHaveCount(0);
+  const studentPreview = page.getByRole('tabpanel', { name: '学生课堂预览' });
+  await expect(studentPreview).toBeVisible();
+  expect((await studentPreview.boundingBox())?.width).toBeGreaterThan(1100);
+  await page.getByRole('tab', { name: '检查与终审' }).click();
+  const review = page.getByRole('tabpanel', { name: '检查与终审' });
   await expect(review).toBeVisible({ timeout: 60_000 });
-  await expect(review.getByText('内容检查：未检查')).toBeVisible();
-  await expect(review.getByText('页面呈现：未检查')).toBeVisible();
+  await expect(review.getByText('内容一致性')).toBeVisible();
+  await expect(review.getByText('PPT 页面呈现')).toBeVisible();
+  await expect(review.getByText('未检查')).toHaveCount(2);
   await expect(page.getByRole('button', { name: '确认并发布', exact: true })).toBeEnabled();
   expect(writes).toHaveLength(0);
   if (manualCheck) {
     await review.getByRole('button', { name: '检查页面', exact: true }).click();
-    await expect(review.getByText('页面呈现：1 / 1 页，已检查')).toBeVisible({ timeout: 30_000 });
+    await expect(review.getByText('1 / 1 页完成')).toBeVisible({ timeout: 30_000 });
     await expect.poll(() => writes.filter((write) => write.action === 'render-page').length).toBe(1);
     const result = writes.find((write) => write.action === 'render-page') as { page: { issues: Array<{ id: string }> } };
     expect(result.page.issues.some((issue) => issue.id.includes('top-heavy'))).toBe(true);
     await page.reload();
-    await expect(review.getByText('页面呈现：1 / 1 页，已检查')).toBeVisible({ timeout: 30_000 });
+    await expect(review.getByText('1 / 1 页完成')).toBeVisible({ timeout: 30_000 });
     expect(writes.filter((write) => write.action === 'render-page')).toHaveLength(1);
     await expect(page.getByRole('button', { name: '确认并发布', exact: true })).toBeEnabled();
   }

@@ -8,6 +8,11 @@ import type { Action } from '@openmaic/lib/types/action';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import { createLogger } from '@openmaic/lib/logger';
 import { estimateSpeechDurationSec } from '@openmaic/lib/audio/tts-timing';
+import {
+  findSpeechCueAnchorRange,
+  resolveSpeechCueEnd,
+  speechCueSentenceEnd,
+} from './speech-cue-boundaries';
 
 const log = createLogger('SemanticVisualCues');
 
@@ -329,14 +334,6 @@ function alignedOffsetAt(
     ? source.alignment.spans.find((span) => span.startChar >= bounded)
     : [...source.alignment.spans].reverse().find((span) => span.endChar <= bounded);
   return nearest ? (edge === 'start' ? nearest.startMs : nearest.endMs) : undefined;
-}
-
-function sentenceEndIndex(text: string, anchorEnd: number): number {
-  for (let index = Math.max(0, anchorEnd); index < text.length; index += 1) {
-    if ('。！？!?；;\n'.includes(text[index]!)) return index + 1;
-    if (text[index] === '.' && (!text[index + 1] || /\s/.test(text[index + 1]!))) return index + 1;
-  }
-  return text.length;
 }
 
 function resolveAlignedAnchorOffset(
@@ -851,7 +848,7 @@ export function refineVisualCueDesign(input: {
       && action.speechId === speech.id
       && action.speechAnchor
       && anchorIndex(speech.text, action.speechAnchor) === latestPriorSpotlightStart
-      && sentenceEndIndex(
+      && speechCueSentenceEnd(
         speech.text,
         latestPriorSpotlightStart + action.speechAnchor.quote.length,
       ) > pathStart
@@ -958,14 +955,29 @@ export function calibrateGeneratedVisualCues(input: {
       log.warn(`Dropped generated visual cue ${action.id} with an out-of-range speech offset`);
       return;
     }
-    const endSource = narration[endIndex]!;
     const explicitEndAnchor = action.endSpeechAnchor;
+    const implicitAnchoredEnd = Boolean(speechAnchor && !explicitEndAnchor);
+    const effectiveEndIndex = implicitAnchoredEnd ? startIndex : endIndex;
+    const effectiveEndSpeechId = narration[effectiveEndIndex]!.speechId;
+    const endSource = narration[effectiveEndIndex]!;
     const defaultEndChar = speechAnchor
-      ? sentenceEndIndex(startSource.text, anchorIndex + speechAnchor.quote.length)
+      ? speechCueSentenceEnd(
+          startSource.text,
+          findSpeechCueAnchorRange(startSource.text, speechAnchor)?.end
+            ?? anchorIndex + speechAnchor.quote.length,
+        )
       : startSource.text.length;
     const endSpeechOffsetMs = explicitEndAnchor
       ? resolveAlignedAnchorOffset(endSource, explicitEndAnchor, 'end')
-      : alignedOffsetAt(endSource, endIndex === startIndex ? defaultEndChar : endSource.text.length, 'end');
+      : alignedOffsetAt(
+          endSource,
+          effectiveEndIndex === startIndex ? defaultEndChar : endSource.text.length,
+          'end',
+        );
+    if (explicitEndAnchor && endSpeechOffsetMs === undefined) {
+      log.warn(`Dropped generated visual cue ${action.id} with a missing narration end anchor`);
+      return;
+    }
     const timedWaypoints = action.type === 'laser'
       ? (action.waypoints ?? []).map((waypoint) => {
           if (!waypoint.speechAnchor) return undefined;
@@ -979,6 +991,9 @@ export function calibrateGeneratedVisualCues(input: {
     }
     const timedAction = {
       ...action,
+      ...(action.type === 'spotlight' && implicitAnchoredEnd
+        ? { endSpeechId: effectiveEndSpeechId }
+        : {}),
       speechOffsetMs: startOffsetMs,
       ...(endSpeechOffsetMs !== undefined ? { endSpeechOffsetMs } : {}),
       ...(action.type === 'laser' && timedWaypoints.length ? { waypoints: timedWaypoints } : {}),
@@ -988,7 +1003,7 @@ export function calibrateGeneratedVisualCues(input: {
     ) / 1000;
     candidates.push({
       startSpeechId,
-      endSpeechId,
+      endSpeechId: effectiveEndSpeechId,
       action: action.type,
       necessity: action.necessity === 'essential' ? 'essential' : 'helpful',
       omissionRisk: action.omissionRisk?.trim() || action.description?.trim()
@@ -1003,7 +1018,32 @@ export function calibrateGeneratedVisualCues(input: {
     });
   });
 
-  return applyCuePlan(refinedActions, stabilizeFocusCues(candidates, narration));
+  const ordered = [...stabilizeFocusCues(candidates, narration)].sort((left, right) => (
+    left.startIndex - right.startIndex || left.startOffsetMs - right.startOffsetMs
+  ));
+  const boundedCandidates = ordered.map((cue, index) => {
+    if (cue.sourceAction?.endSpeechAnchor) return cue;
+    const next = ordered.slice(index + 1).find((candidate) => (
+      candidate.startIndex === cue.startIndex
+      && candidate.startOffsetMs >= cue.startOffsetMs
+    ));
+    if (!next || !cue.sourceAction) return cue;
+    const defaultEnd = cue.sourceAction.endSpeechOffsetMs
+      ?? Math.max(cue.startOffsetMs, (cue.endSec - narration[cue.startIndex]!.startSec) * 1000);
+    const endSpeechOffsetMs = resolveSpeechCueEnd({
+      start: cue.startOffsetMs,
+      defaultEnd,
+      nextStart: next.startOffsetMs,
+    });
+    if (endSpeechOffsetMs === cue.sourceAction.endSpeechOffsetMs) return cue;
+    return {
+      ...cue,
+      endSec: narration[cue.startIndex]!.startSec + endSpeechOffsetMs / 1000,
+      sourceAction: { ...cue.sourceAction, endSpeechOffsetMs },
+    };
+  });
+
+  return applyCuePlan(refinedActions, boundedCandidates);
 }
 
 export type VisualCueAnchorRepairIssue = {

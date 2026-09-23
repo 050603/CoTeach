@@ -71,7 +71,7 @@ Use this provider/model/voice rate before deciding student AI-learning narration
 - Keep `launch` teacher-only and keep `proposal`, `make`, `showcase`, and `reflection` out of the student knowledge-teaching classroom.
 - Use the selected companion IDs from the configuration. Do not create real student roles, groups, issue-board assignments, or peer scoring.
 - Make process evidence visible in scene descriptions or companion prompts: the configured evidence is collected by the student's activity, not fabricated by the model.
-- Use concise Chinese titles. Titles are labels only; routing must remain in the explicit metadata fields.
+- Apply the instructional slide title contract to every PPT detail. Keep routing only in the explicit metadata fields.
 
 {{teacherContext}}
 {{researchContext}}

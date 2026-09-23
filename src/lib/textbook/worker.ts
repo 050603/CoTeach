@@ -7,7 +7,7 @@ import { parseTextbookDocx } from "./docx-parser";
 import { embeddingProfile, embedTextbookTexts, vectorSqlLiteral } from "./embedding";
 import { extractTextbookKnowledge } from "./extraction";
 import { buildRetrievalChunks, normalizeTextbookText, textbookSearchTokenText } from "./text";
-import { readTextbookSourceFile, textbookDataDir } from "./service";
+import { readTextbookSourceFile, TEXTBOOK_EXTRACTION_VERSION, TEXTBOOK_PARSE_VERSION, textbookDataDir } from "./service";
 import type { ParsedTextbookDocument } from "./types";
 
 function json(value: unknown): Prisma.InputJsonValue {
@@ -162,7 +162,8 @@ async function persistStructure(revisionId: string, document: ParsedTextbookDocu
       ...(!metadata.authorProvided && document.author ? { author: document.author } : {}),
     } });
     await tx.textbookRevision.update({ where: { id: revisionId }, data: {
-      status: "WAITING_EMBEDDING", error: null, metadata: json({ ...metadata, warnings: document.warnings, counts: { sections: document.sections.length, blocks: persistedBlocks.length, concepts: knowledge.concepts.length, examples: knowledge.examples.length, figures: document.figures.length, retrievalItems: retrievalData.length } }),
+      status: "WAITING_EMBEDDING", error: null, parseVersion: TEXTBOOK_PARSE_VERSION, extractionVersion: TEXTBOOK_EXTRACTION_VERSION,
+      metadata: json({ ...metadata, warnings: document.warnings, counts: { sections: document.sections.length, blocks: persistedBlocks.length, concepts: knowledge.concepts.length, examples: knowledge.examples.length, figures: document.figures.length, retrievalItems: retrievalData.length } }),
     } });
     return { sections: document.sections.length, blocks: persistedBlocks.length, concepts: knowledge.concepts.length, examples: knowledge.examples.length, figures: document.figures.length, retrievalItems: retrievalData.length };
   }, { timeout: 60_000, maxWait: 10_000 });

@@ -3,6 +3,16 @@ import { describe, expect, test } from 'vitest';
 import { buildOutlinePrompt } from '@openmaic/generation';
 
 describe('buildOutlinePrompt golden output', () => {
+  test('authors slide titles as core content topic phrases', () => {
+    const prompt = buildOutlinePrompt({ requirement: '设计一节教学目标分类课' });
+
+    expect(prompt.system).toContain('Instructional Slide Title Contract');
+    expect(prompt.system).toContain('教学设计的层次与职责');
+    expect(prompt.system).toContain('Keep hooks, opening questions, learner commands, and activity instructions');
+    expect(prompt.system).not.toContain('{{snippet:slide-title-guidelines}}');
+    expect(prompt.user).toContain('Core content topic and the specific facet taught on this page');
+  });
+
   test('pins every conditional off', () => {
     expect(
       buildOutlinePrompt(
@@ -58,8 +68,7 @@ describe('buildOutlinePrompt golden output', () => {
   });
 
   test('pins source-image conditionals on with generated media off', () => {
-    expect(
-      buildOutlinePrompt(
+    const prompt = buildOutlinePrompt(
         { requirement: 'Explain the labeled anatomy diagram' },
         {
           pdfImages: [
@@ -71,12 +80,22 @@ describe('buildOutlinePrompt golden output', () => {
               height: 900,
               description: 'Labeled cross-section of a plant cell',
               sourceDocumentName: 'cell-biology.pdf',
+              sourceTitle: 'Biology Textbook, Unit 3',
+              textbookRelation: 'direct',
+              required: true,
+              knowledgePointIds: ['kp_cell_structure'],
+              evidenceItemIds: ['evidence_cell_figure'],
+              relationReason: 'Learners must inspect the labeled organelles.',
             },
           ],
           imageGenerationEnabled: false,
           videoGenerationEnabled: false,
         },
-      ),
-    ).toMatchSnapshot();
+      );
+    expect(prompt).toMatchSnapshot();
+    expect(prompt.user).toContain('textbook relation: direct (required)');
+    expect(prompt.user).toContain('knowledge points: kp_cell_structure');
+    expect(prompt.user).toContain('evidence: evidence_cell_figure');
+    expect(prompt.user).toContain('from Biology Textbook, Unit 3');
   });
 });

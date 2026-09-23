@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
-import { parseTextbookDocx } from "./docx-parser";
+import { parseTextbookDocx, splitTextbookHeading } from "./docx-parser";
 import { extractTextbookKnowledge } from "./extraction";
 import { buildRetrievalChunks, chineseSearchTokens } from "./text";
 
@@ -18,9 +18,26 @@ async function fixtureDocx() {
 describe("textbook DOCX parsing", () => {
   it("keeps TOC entries out of sections and retrieval chunks", async () => {
     const parsed = parseTextbookDocx(await fixtureDocx());
-    expect(parsed.sections.map((section) => section.title)).toEqual(["第一章 正文"]);
+    expect(parsed.sections.map((section) => section.title)).toEqual(["正文"]);
+    expect(parsed.blocks.find((block) => block.type === "TITLE")).toMatchObject({
+      content: "正文",
+      metadata: { headingMarker: "第一章", rawHeading: "第一章 正文" },
+    });
     expect(parsed.blocks.find((block) => block.content.includes("不存在的章节"))?.metadata.isDirectory).toBe(true);
     expect(buildRetrievalChunks(parsed.blocks, parsed.sections).map((chunk) => chunk.content).join("\n")).not.toContain("不存在的章节");
+  });
+
+  it.each([
+    ["第七章 人工智能教师能力提升", "人工智能教师能力提升", "第七章"],
+    ["第一节 中小学人工智能教育", "中小学人工智能教育", "第一节"],
+    ["一、人工智能意识", "人工智能意识", "一、"],
+    ["（一）课程定位模糊", "课程定位模糊", "(一)"],
+    ["1.2.3 模型训练", "模型训练", "1.2.3"],
+    ["一带一路", "一带一路", null],
+    ["第一性原理", "第一性原理", null],
+    ["3D 打印", "3D 打印", null],
+  ])("separates heading markers from %s", (value, title, marker) => {
+    expect(splitTextbookHeading(value)).toEqual({ title, marker });
   });
 
   it("segments Chinese search text into stable bigrams", () => {

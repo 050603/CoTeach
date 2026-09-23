@@ -2,11 +2,9 @@
 
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
-  ArrowLeft,
   ArrowRight,
   BookOpenCheck,
   Check,
@@ -20,14 +18,15 @@ import {
   MonitorPlay,
   PlayCircle,
   Presentation,
+  Route,
   ShieldCheck,
-  Sparkles,
   RotateCcw,
   X,
 } from "lucide-react";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { WizardStepper } from "@/components/wizard-stepper";
 import { Button, FlowActionBar, Pill, SaveStatus, toast } from "@/components/ui";
+import { buttonVariants } from "@/components/ui/button";
 import { CoursePublishPathPreview } from "@/components/teacher/course-publish-path-preview";
 import { TeachingToolRunbook } from "@/components/teacher/teaching-tool-runbook";
 import { StudentStageHost } from "@/components/openmaic-bridge/student-stage-host";
@@ -42,8 +41,13 @@ import { normalizeTeachingToolPlan } from "@/lib/openmaic/generation/teaching-to
 import { courseDetailedEditHref } from "@/lib/courses/preparation-navigation";
 import { cn } from "@/lib/utils";
 import { getNewSystemCourseReadiness } from "@/lib/classroom/new-system-course";
-import { CourseQualityReview, type TeacherReviewDecision } from "@/components/teacher/course-quality-review";
+import {
+  CourseQualityReview,
+  type CourseQualityReviewSummary,
+  type TeacherReviewDecision,
+} from "@/components/teacher/course-quality-review";
 import { downloadCourseResources } from "@/lib/course-resources/download-course-resources";
+import styles from "./page.module.css";
 
 const STEPS = [
   { key: "generate", label: "一键生成" },
@@ -51,7 +55,14 @@ const STEPS = [
   { key: "publish", label: "发布中心" },
 ];
 
-type PreviewView = "director" | "student";
+type PreviewView = "overview" | "pages" | "checks" | "student";
+
+const PREVIEW_VIEWS: PreviewView[] = ["overview", "pages", "checks", "student"];
+
+function parsePreviewView(value: string | null): PreviewView {
+  if (value === "director" || !value) return "overview";
+  return PREVIEW_VIEWS.includes(value as PreviewView) ? value as PreviewView : "overview";
+}
 
 type PublishCheck = {
   id: string;
@@ -122,12 +133,13 @@ export default function PreviewCoursePage() {
   const course = useCourse(params?.id);
   const hydrated = useHydrated();
   const [publishing, setPublishing] = useState(false);
-  const [view, setView] = useState<PreviewView>(searchParams.get("view") === "student" ? "student" : "director");
+  const view = parsePreviewView(searchParams.get("view"));
   const [selectedOutlineId, setSelectedOutlineId] = useState<string>();
   const [studentSidebarCollapsed, setStudentSidebarCollapsed] = useState(false);
   const [previewBranch, setPreviewBranch] = useState<AdaptiveBranchOutline>();
   const [resourceIssues, setResourceIssues] = useState<ResourceRepairIssue[]>([]);
   const [resourceAuditLoaded, setResourceAuditLoaded] = useState(false);
+  const [resourceAuditError, setResourceAuditError] = useState("");
   const [resourceRepairStatus, setResourceRepairStatus] = useState<ResourceRepairStatus>({ status: "idle" });
   const [speechSyncStatus, setSpeechSyncStatus] = useState<ResourceRepairStatus>({ status: "idle" });
   const [resourceRepairVersion, setResourceRepairVersion] = useState(0);
@@ -136,6 +148,7 @@ export default function PreviewCoursePage() {
   const [downloadingResources, setDownloadingResources] = useState(false);
   const [continuingFullCourse, setContinuingFullCourse] = useState(false);
   const [publicationState, setPublicationState] = useState<PublicationState | null>(null);
+  const [reviewSummary, setReviewSummary] = useState<CourseQualityReviewSummary | null>(null);
 
   useEffect(() => {
     if (!params?.id) return;
@@ -154,7 +167,7 @@ export default function PreviewCoursePage() {
       cache: "no-store",
       signal: controller.signal,
     }).then(async (response) => {
-      if (!response.ok) return;
+      if (!response.ok) throw new Error("课程资源状态暂时无法读取");
       const payload = await response.json() as {
         issues?: ResourceRepairIssue[];
         repair?: ResourceRepairStatus;
@@ -167,7 +180,12 @@ export default function PreviewCoursePage() {
       setSpeechSyncStatus((current) =>
         current.status === "running" ? current : payload.syncRepair ?? { status: "idle" },
       );
-    }).catch(() => undefined).finally(() => {
+      setResourceAuditError("");
+    }).catch((error) => {
+      if (!controller.signal.aborted) {
+        setResourceAuditError(error instanceof Error ? error.message : "课程资源状态暂时无法读取");
+      }
+    }).finally(() => {
       if (!controller.signal.aborted) setResourceAuditLoaded(true);
     });
     return () => controller.abort();
@@ -296,13 +314,18 @@ export default function PreviewCoursePage() {
   const publishChecks = buildPublishChecks(course);
   const reviewRequired = course.content.qualityReviewRequired === true || Number(course.content.resourcePackage?.schemaVersion ?? 0) >= 2 || Number(course.content.stagePlan?.schemaVersion ?? 0) >= 2;
   const prerequisiteChecks = getNewSystemCourseReadiness(course).filter((check) => check.id !== "teacher-review");
+  const prerequisitePublishChecks = publishChecks.filter((check) => check.id !== "teacher-review");
   const readyCount = prerequisiteChecks.filter((item) => item.ok).length;
   const readyToPublish = resourceAuditLoaded
+    && !resourceAuditError
     && !isTestLesson
     && readyCount === prerequisiteChecks.length
     && resourceIssues.length === 0
     && (!reviewRequired || reviewDecision.canConfirm);
-  const pendingPublishCount = prerequisiteChecks.length - readyCount + resourceIssues.length + (reviewRequired && !reviewDecision.canConfirm ? 1 : 0);
+  const pendingPublishCount = prerequisiteChecks.length - readyCount
+    + resourceIssues.length
+    + (resourceAuditError ? 1 : 0)
+    + (reviewRequired && !reviewDecision.canConfirm ? 1 : 0);
   const isPublished = publishedHere || course.status === "ready"
     || course.status === "teaching"
     || course.status === "finished";
@@ -316,7 +339,20 @@ export default function PreviewCoursePage() {
     (item) => normalizeTeachingToolPlan(item.teachingToolPlan).length > 0,
   ).length;
   const interactionCount = studentOutlines.filter((item) => item.type === "interactive").length;
+  const missingResourceIssues = resourceIssues.filter((issue) => issue.type !== "speech-sync");
+  const speechSyncIssues = resourceIssues.filter((issue) => issue.type === "speech-sync");
   const courseId = course.id;
+  const publishBlockReason = !resourceAuditLoaded
+    ? "正在核对课程资源"
+    : resourceAuditError
+      ? "资源状态读取失败，请重试"
+      : prerequisiteChecks.length !== readyCount
+        ? `还有 ${prerequisiteChecks.length - readyCount} 项发布条件未完成`
+        : resourceIssues.length
+          ? `还有 ${resourceIssues.length} 项课程资源需要处理`
+          : reviewRequired && !reviewDecision.canConfirm
+            ? reviewSummary?.status === "blocked" ? "终审存在必须处理的问题" : "等待教师确认当前版本"
+            : undefined;
 
   async function publish() {
     if (isTestLesson) {
@@ -368,6 +404,7 @@ export default function PreviewCoursePage() {
   }
 
   async function retryMissingResources() {
+    setResourceAuditError("");
     setResourceRepairStatus({ status: "running" });
     try {
       const response = await fetch(`/api/courses/${courseId}/resource-repair`, { method: "POST" });
@@ -430,8 +467,16 @@ export default function PreviewCoursePage() {
   function closeBranchPreview() {
     setPreviewBranch(undefined);
     if (requestedPreviewBranch) {
-      router.replace(`/teacher/prepare/${courseId}/preview`, { scroll: false });
+      const next = new URLSearchParams(searchParams.toString());
+      next.delete("adaptiveBranchId");
+      router.replace(`/teacher/prepare/${courseId}/preview?${next.toString()}`, { scroll: false });
     }
+  }
+
+  function selectView(nextView: PreviewView) {
+    const next = new URLSearchParams(searchParams.toString());
+    next.set("view", nextView);
+    router.replace(`/teacher/prepare/${courseId}/preview?${next.toString()}`, { scroll: false });
   }
 
   function openReviewPage(outlineId: string) {
@@ -442,7 +487,7 @@ export default function PreviewCoursePage() {
       return;
     }
     setSelectedOutlineId(outlineId);
-    setView("director");
+    selectView("pages");
     requestAnimationFrame(() => {
       const workspace = document.getElementById("course-page-review");
       workspace?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -459,45 +504,38 @@ export default function PreviewCoursePage() {
       variant="bare"
       currentCourse={{ id: course.id, name: course.name, status: course.status }}
       headerSlot={<div className="ml-4 hidden min-w-0 lg:block"><WizardStepper current={2} steps={STEPS} /></div>}
+      wide
     >
       <main>
-        <header className="relative overflow-hidden rounded-[16px] border border-stone-200 bg-[radial-gradient(circle_at_92%_0%,rgba(254,215,170,0.34),transparent_34%),linear-gradient(120deg,#ffffff_0%,#fffdf8_100%)] px-5 py-5 shadow-[0_10px_32px_rgba(87,74,58,0.06)] sm:px-6">
-          <div aria-hidden className="absolute bottom-0 left-16 right-0 h-px bg-gradient-to-r from-transparent via-amber-200 to-transparent" />
-          <div className="relative grid grid-cols-[auto_minmax(0,1fr)] items-start gap-4 sm:flex sm:flex-wrap">
-            <Link
-              aria-label="返回课程编辑"
-              className="grid size-10 shrink-0 place-items-center rounded-full border border-stone-200 bg-white text-stone-500 shadow-sm transition hover:-translate-x-0.5 hover:border-[var(--pbl-teacher)] hover:text-[var(--pbl-teacher)] motion-reduce:transform-none"
-              href={courseDetailedEditHref(course.id)}
-            >
-              <ArrowLeft size={17} />
-            </Link>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--pbl-accent)]">
-                <BookOpenCheck size={14} />
-                <span>{isTestLesson ? "正式链路测试结果" : "课程发布中心 · 第 3 步"}</span>
+        <header className="rounded-[12px] border border-stone-200 bg-white px-4 py-3 sm:px-5">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+            <div className="min-w-[240px] flex-1">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--pbl-teacher)]">
+                  <BookOpenCheck size={13} />
+                  {isTestLesson ? "正式链路测试结果" : "课程发布中心"}
+                </span>
+                <span className="text-xs text-stone-400">{[course.subject, course.grade].filter(Boolean).join(" · ")}</span>
               </div>
-              <h1 className="mt-1 break-words font-editorial text-xl font-semibold leading-snug tracking-[-0.02em] text-stone-950 sm:truncate sm:text-[30px]" title={course.name}>{course.name}</h1>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-stone-500">
-                {[course.subject, course.grade].filter(Boolean).join(" · ")}
-              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <h1 className="min-w-0 break-words text-lg font-bold leading-snug text-stone-950 sm:text-xl" title={course.name}>{course.name}</h1>
+                {isTestLesson ? <Pill tone="amber">测试一节 · 不可发布</Pill> : isPublished ? <Pill tone="green">当前发布版本{publicationState?.publishedVersion ? ` v${publicationState.publishedVersion}` : ""}</Pill> : hasDesignDraft && hasPublishedVersion ? <><Pill tone="green">当前发布 v{publicationState!.publishedVersion}</Pill><Pill tone="amber">草稿{publicationState?.draftVersion ? ` v${publicationState.draftVersion}` : ""} · 待完成 {pendingPublishCount} 项</Pill></> : <Pill tone={readyToPublish ? "blue" : "amber"}>{readyToPublish ? "未发布 · 可以发布" : resourceAuditLoaded ? `待完成 ${pendingPublishCount} 项` : "正在核对资源"}</Pill>}
+              </div>
             </div>
-            <div className="col-span-2 flex flex-wrap items-center gap-2">
-              {isTestLesson ? <Pill tone="amber">测试一节 · 不可发布</Pill> : isPublished ? <Pill tone="green">当前发布版本{publicationState?.publishedVersion ? ` v${publicationState.publishedVersion}` : ""}</Pill> : hasDesignDraft && hasPublishedVersion ? <><Pill tone="green">当前发布 v{publicationState!.publishedVersion}</Pill><Pill tone="amber">有修改的草稿{publicationState?.draftVersion ? ` v${publicationState.draftVersion}` : ""} · 待完成 {pendingPublishCount} 项</Pill></> : <Pill tone={readyToPublish ? "blue" : "amber"}>{readyToPublish ? "未发布草稿 · 可以发布" : resourceAuditLoaded ? `未发布草稿 · 待完成 ${pendingPublishCount} 项` : "正在核对资源"}</Pill>}
-              <Link
-                className="inline-flex h-10 items-center gap-1.5 rounded-[7px] border border-stone-200 bg-white px-3.5 text-sm font-semibold text-stone-600 shadow-sm transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)]"
-                href={courseDetailedEditHref(course.id)}
-              >
-                <Edit3 size={15} /> 返回修改
-              </Link>
-              <button
-                className="inline-flex h-10 items-center gap-1.5 rounded-[7px] border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)] px-3.5 text-sm font-semibold text-[var(--pbl-teacher)] shadow-sm transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
+            <div className="flex flex-wrap items-center gap-2 lg:ml-auto lg:justify-end">
+              <Link className={buttonVariants({ variant: "outline", className: "min-h-11" })} href={courseDetailedEditHref(course.id)}><Edit3 size={15} />编辑课程设计</Link>
+              {classroomId ? <Link className={buttonVariants({ variant: "outline", className: "min-h-11" })} href={`/teacher/prepare/${course.id}/classroom-editor`}><Presentation size={15} />编辑 AI 课堂</Link> : null}
+              <Button
+                className="min-h-11"
                 disabled={downloadingResources || !hasDownloadableResources}
+                loading={downloadingResources}
                 onClick={() => void downloadResources()}
+                variant="outline"
                 type="button"
               >
-                <Download className={downloadingResources ? "animate-bounce" : ""} size={15} />
+                <Download size={15} />
                 {downloadingResources ? "正在打包…" : "下载课程资源"}
-              </button>
+              </Button>
             </div>
           </div>
         </header>
@@ -516,147 +554,94 @@ export default function PreviewCoursePage() {
           </section>
         ) : null}
 
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-[12px] border border-stone-200 bg-white px-2 py-2 shadow-sm">
-          <div aria-label="发布中心视图" className="flex flex-wrap gap-1" role="tablist">
-            <ViewTab
-              active={view === "director"}
-              icon={<Layers3 size={16} />}
-              label="教学编排与发布检查"
-              onClick={() => setView("director")}
-            />
-            <ViewTab
-              active={view === "student"}
-              icon={<PlayCircle size={16} />}
-              label="学生 AI 课堂实景"
-              onClick={() => setView("student")}
-              student
-            />
-            {classroomId ? (
-              <Link
-                className="inline-flex min-h-10 items-center gap-2 rounded-[8px] px-4 text-sm font-semibold text-[var(--pbl-teacher)] transition hover:bg-[var(--pbl-teacher-soft)]"
-                href={`/teacher/prepare/${course.id}/classroom-editor`}
-              >
-                <Edit3 size={16} /> 编辑 AI 课堂
-              </Link>
-            ) : null}
+        <div className="mt-3 overflow-x-auto border-b border-stone-200" onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
+          const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+          const current = tabs.indexOf(document.activeElement as HTMLButtonElement);
+          const target = event.key === "Home" ? 0
+            : event.key === "End" ? tabs.length - 1
+              : event.key === "ArrowRight" ? (current + 1) % tabs.length
+                : (current - 1 + tabs.length) % tabs.length;
+          event.preventDefault();
+          tabs[target]?.focus();
+          tabs[target]?.click();
+        }}>
+          <div aria-label="发布中心视图" className="flex min-w-max gap-1" role="tablist">
+            <ViewTab active={view === "overview"} icon={<Layers3 size={16} />} id="overview" label="课程总览" onClick={() => selectView("overview")} />
+            <ViewTab active={view === "pages"} icon={<BookOpenCheck size={16} />} id="pages" label="逐页审阅" onClick={() => selectView("pages")} />
+            <ViewTab active={view === "checks"} icon={<ShieldCheck size={16} />} id="checks" label="检查与终审" onClick={() => selectView("checks")} />
+            <ViewTab active={view === "student"} icon={<PlayCircle size={16} />} id="student" label="学生课堂预览" onClick={() => selectView("student")} student />
           </div>
-          <p className="hidden pr-3 text-xs text-stone-500 lg:block">
-            {view === "director" ? "发布前总览" : "学生端完整课堂预览"}
-          </p>
         </div>
 
-        {view === "student" ? (
-          <StudentClassroomExperience
-            classroomId={classroomId}
-            course={course}
-            onBackToDirector={() => setView("director")}
-            onSidebarCollapsedChange={setStudentSidebarCollapsed}
-            sidebarCollapsed={studentSidebarCollapsed}
-          />
-        ) : (
-          <>
-            <section className="mt-5 grid gap-px overflow-hidden rounded-[12px] border border-stone-200 bg-stone-200 shadow-sm sm:grid-cols-2 xl:grid-cols-4">
-              <Metric icon={<BookOpenCheck size={17} />} label="学生学习页面" value={`${studentOutlines.length} 页`} />
-              <Metric icon={<Clock3 size={17} />} label="AI 课堂估时" value={secondsLabel(totalStudentSeconds)} />
-              <Metric icon={<Presentation size={17} />} label="已规划工具页面" value={`${toolPageCount} 页`} />
-              <Metric icon={<Sparkles size={17} />} label="互动探究页面" value={`${interactionCount} 页`} />
-            </section>
-
-            {resourceIssues.some((issue) => issue.type !== "speech-sync") ? (
-              <section className="mt-5 rounded-[12px] border border-amber-200 bg-amber-50/70 px-5 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-sm font-black text-amber-950">还有 {resourceIssues.filter((issue) => issue.type !== "speech-sync").length} 项课程资源需要补充</h2>
-                    <ul className="mt-2 space-y-1 text-xs leading-5 text-amber-900">
-                      {resourceIssues.filter((issue) => issue.type !== "speech-sync").map((issue) => (
-                        <li className="flex flex-wrap items-center gap-x-2" key={issue.id}>
-                          <span>• {issue.title}：{issue.detail}</span>
-                          <Link className="font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=classroom`}>
-                            定位并修改
-                          </Link>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <Button loading={resourceRepairStatus.status === "running"} onClick={() => void retryMissingResources()}>
-                    <RotateCcw size={14} />一键重试缺失资源
-                  </Button>
-                </div>
+        <div className={view === "student" ? "mt-5" : styles.workspace}>
+          <div className={view === "student" ? "min-w-0" : styles.mainPanel}>
+            {view === "overview" ? <div aria-labelledby="publish-tab-overview" id="publish-panel-overview" role="tabpanel">
+              <section className="grid gap-px overflow-hidden rounded-[12px] border border-stone-200 bg-stone-200 sm:grid-cols-2 xl:grid-cols-4">
+                <Metric icon={<BookOpenCheck size={17} />} label="学生学习页面" value={`${studentOutlines.length} 页`} />
+                <Metric icon={<Clock3 size={17} />} label="AI 课堂估时" value={secondsLabel(totalStudentSeconds)} />
+                <Metric icon={<Presentation size={17} />} label="已规划工具页面" value={`${toolPageCount} 页`} />
+                <Metric icon={<Route size={17} />} label="互动探究页面" value={`${interactionCount} 页`} />
               </section>
-            ) : null}
-
-            {classroomId ? (
-              <section className={cn(
-                "mt-5 rounded-[12px] border px-5 py-4",
-                resourceIssues.some((issue) => issue.type === "speech-sync")
-                  ? "border-violet-200 bg-violet-50/70"
-                  : "border-emerald-200 bg-emerald-50/70",
-              )}>
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-sm font-black text-stone-950">朗读、字幕与指示动作同步</h2>
-                    {speechSyncStatus.status === "running" ? (
-                      <p className="mt-2 text-xs leading-5 text-violet-900">
-                        正在对齐语音 {speechSyncStatus.completed ?? 0} / {speechSyncStatus.total || "…"}
-                      </p>
-                    ) : resourceIssues.some((issue) => issue.type === "speech-sync") ? (
-                      <ul className="mt-2 space-y-1 text-xs leading-5 text-violet-900">
-                        {resourceIssues.filter((issue) => issue.type === "speech-sync").map((issue) => (
-                          <li key={issue.id}>• {issue.title}：{issue.detail}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="mt-2 text-xs leading-5 text-emerald-900">现有语音已建立音频时间线。</p>
-                    )}
-                  </div>
-                  <Button loading={speechSyncStatus.status === "running"} onClick={() => void repairSpeechSynchronization()}>
-                    <RotateCcw size={14} />修复朗读与动作同步
-                  </Button>
+              <CoursePublicationOverview course={course} />
+              {adaptivePlan ? <details className="mt-5 overflow-hidden rounded-[12px] border border-stone-200 bg-white">
+                <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-5 py-3 text-sm font-bold text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--pbl-teacher)]">
+                  <span>个性化学习路径</span>
+                  <span className="text-xs font-semibold text-stone-500">{activeAdaptiveBranches.length} 条分支 · 展开查看</span>
+                </summary>
+                <div className="border-t border-stone-200">
+                  <CoursePublishPathPreview mainScenes={studentOutlines} onPreviewBranch={setPreviewBranch} plan={adaptivePlan} />
                 </div>
-              </section>
-            ) : null}
+              </details> : null}
+            </div> : null}
 
-            <CoursePublicationOverview course={course} />
+            {view === "pages" ? <section aria-labelledby="publish-tab-pages" className="grid min-h-[560px] scroll-mt-24 overflow-hidden rounded-[12px] border border-stone-200 bg-white outline-none lg:grid-cols-[260px_minmax(0,1fr)]" id="course-page-review" role="tabpanel" tabIndex={-1}>
+              <LessonPageRail onSelect={setSelectedOutlineId} outlines={studentOutlines} selectedId={selectedOutline?.id} />
+              <SelectedPageBrief onOpenStudentView={() => selectView("student")} outline={selectedOutline} toolPlan={selectedToolPlan} />
+            </section> : null}
 
             {reviewRequired && !isTestLesson ? <CourseQualityReview
               courseId={courseId}
               onDecisionChange={setReviewDecision}
               onOpenPage={openReviewPage}
-            /> : null}
+              onSummaryChange={setReviewSummary}
+              visible={view === "checks"}
+            /> : view === "checks" ? <section className="rounded-[12px] border border-stone-200 bg-white px-6 py-10 text-center text-sm text-stone-500">当前课程无需单独完成教师终审。</section> : null}
 
-            <section className="mt-5 grid min-h-[620px] scroll-mt-24 overflow-hidden rounded-[12px] border border-stone-200 bg-white outline-none xl:grid-cols-[280px_minmax(0,1fr)_330px]" id="course-page-review" tabIndex={-1}>
-              <LessonPageRail
-                onSelect={setSelectedOutlineId}
-                outlines={studentOutlines}
-                selectedId={selectedOutline?.id}
-              />
-              <SelectedPageBrief
-                onOpenStudentView={() => setView("student")}
-                outline={selectedOutline}
-                toolPlan={selectedToolPlan}
-              />
-              <PublishReadiness checks={publishChecks} course={course} />
-            </section>
+            {view === "checks" ? <details className="mt-5 overflow-hidden rounded-[12px] border border-stone-200 bg-white">
+              <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-5 py-3 text-sm font-bold text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--pbl-teacher)]">
+                <span>AI 教学工具执行核对</span>
+                <span className="text-xs font-semibold text-stone-500">按需展开</span>
+              </summary>
+              <TeachingToolRunbook classroomId={classroomId} key={resourceRepairVersion} outlines={studentOutlines} title="AI 教学工具执行核对" />
+            </details> : null}
 
-            <TeachingToolRunbook
+            {view === "student" ? <StudentClassroomExperience
               classroomId={classroomId}
-              className="mt-5"
-              key={resourceRepairVersion}
-              outlines={studentOutlines}
-              title="AI 教学工具执行核对"
-            />
+              course={course}
+              onBackToDirector={() => selectView("overview")}
+              onSidebarCollapsedChange={setStudentSidebarCollapsed}
+              sidebarCollapsed={studentSidebarCollapsed}
+            /> : null}
+          </div>
 
-            {adaptivePlan ? (
-              <div className="mt-5">
-                <CoursePublishPathPreview
-                  mainScenes={studentOutlines}
-                  onPreviewBranch={setPreviewBranch}
-                  plan={adaptivePlan}
-                />
-              </div>
-            ) : null}
-          </>
-        )}
+          {view !== "student" ? <PublicationStatusRail
+            auditLoaded={resourceAuditLoaded}
+            auditError={resourceAuditError}
+            checks={prerequisitePublishChecks}
+            course={course}
+            missingResourceIssues={missingResourceIssues}
+            onOpenReview={() => selectView("checks")}
+            onRepairResources={() => void retryMissingResources()}
+            onRepairSpeech={() => void repairSpeechSynchronization()}
+            onRetryAudit={() => setResourceRepairVersion((value) => value + 1)}
+            repairStatus={resourceRepairStatus}
+            reviewRequired={reviewRequired}
+            reviewSummary={reviewSummary}
+            speechStatus={speechSyncStatus}
+            speechSyncIssues={speechSyncIssues}
+          /> : null}
+        </div>
       </main>
 
       {activePreviewBranch?.preparedResource?.classroomId ? (
@@ -670,7 +655,10 @@ export default function PreviewCoursePage() {
       <FlowActionBar
         persistent
         back={<Link className="inline-flex min-h-11 items-center text-sm font-semibold text-[var(--pbl-text-muted)]" href={courseDetailedEditHref(course.id)}>上一步</Link>}
-        saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} state={session.saveState} onRetry={() => void session.retrySave()} />}
+        saveStatus={<div className="flex min-w-0 items-center gap-3">
+          <SaveStatus lastSavedAt={session.lastSavedAt} state={session.saveState} onRetry={() => void session.retrySave()} />
+          {!isPublished && publishBlockReason ? <span className="truncate text-xs text-amber-700">{publishBlockReason}</span> : null}
+        </div>}
       >
         {isTestLesson ? (
           <Button loading={continuingFullCourse} onClick={() => void continueFullCourse()}>
@@ -689,29 +677,34 @@ export default function PreviewCoursePage() {
 function ViewTab({
   active,
   icon,
+  id,
   label,
   onClick,
   student = false,
 }: {
   active: boolean;
   icon: React.ReactNode;
+  id: PreviewView;
   label: string;
   onClick: () => void;
   student?: boolean;
 }) {
   return (
     <button
+      aria-controls={`publish-panel-${id}`}
       aria-selected={active}
       className={cn(
-        "relative inline-flex min-h-10 items-center gap-2 rounded-[8px] px-4 text-sm font-semibold transition",
+        "relative inline-flex min-h-11 items-center gap-2 rounded-t-[8px] border-b-2 px-4 text-sm font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--pbl-teacher)]",
         active
           ? student
-            ? "bg-[var(--pbl-student-soft)] text-[var(--pbl-student)] shadow-sm"
-            : "bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)] shadow-sm"
-          : "text-stone-500 hover:bg-stone-50 hover:text-stone-800",
+            ? "border-[var(--pbl-student)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]"
+            : "border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]"
+          : "border-transparent text-stone-500 hover:bg-stone-50 hover:text-stone-800",
       )}
+      id={`publish-tab-${id}`}
       onClick={onClick}
       role="tab"
+      tabIndex={active ? 0 : -1}
       type="button"
     >
       {icon}{label}
@@ -862,9 +855,6 @@ const PUBLISH_SECTION_BY_CHECK: Record<string, CourseDesignWorkspaceSectionKey |
 function CoursePublicationOverview({ course }: { course: Course }) {
   const stagePlan = course.content.stagePlan;
   const lectureSections = course.content.knowledgeLectureSections ?? [];
-  const timing = course.content.moduleTimingPlan;
-  const audit = course.content.teachingTimingAudit;
-  const review = course.content.teacherReview;
   return (
     <section className="mt-5 overflow-hidden rounded-[12px] border border-stone-200 bg-white">
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-stone-200 px-5 py-4">
@@ -874,66 +864,142 @@ function CoursePublicationOverview({ course }: { course: Course }) {
         </div>
         <Link className="inline-flex min-h-10 items-center gap-2 rounded-[8px] border border-stone-300 px-3 text-xs font-bold text-stone-700" href={`${courseDetailedEditHref(course.id)}?section=stage-plan`}><Edit3 size={14} />定位并修改</Link>
       </header>
-      <div className="grid gap-px bg-stone-200 lg:grid-cols-[1.25fr_0.75fr]">
-        <div className="bg-white p-5">
+      <div className="bg-white p-5">
           <h3 className="text-xs font-black text-stone-500">五阶段课堂安排</h3>
           {stagePlan?.stages.length ? <ol className="mt-4 grid gap-2 sm:grid-cols-5">{stagePlan.stages.map((stage, index) => <li className="rounded-[8px] border border-stone-200 p-3" key={stage.key}><span className="text-[10px] font-black text-[var(--pbl-teacher)]">{String(index + 1).padStart(2, "0")}</span><p className="mt-1 text-xs font-bold text-stone-900">{stage.title}</p><p className="mt-2 text-[11px] text-stone-500">{stage.durationMin ?? 0} 分钟</p></li>)}</ol> : <p className="mt-4 text-sm text-stone-500">五阶段安排尚未生成。</p>}
           <div className="mt-6 flex items-center justify-between gap-3"><h3 className="text-xs font-black text-stone-500">知识讲授小节</h3><Link className="text-xs font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=blueprint`}>查看教学蓝图</Link></div>
           {lectureSections.length ? <div className="mt-3 divide-y divide-stone-100 border-y border-stone-100">{lectureSections.map((section, index) => <div className="flex items-center gap-3 py-3" key={section.id}><span className="grid size-7 shrink-0 place-items-center rounded-full bg-stone-100 text-[10px] font-black text-stone-600">{index + 1}</span><div className="min-w-0 flex-1"><p className="truncate text-xs font-bold text-stone-900">{section.title}</p><p className="mt-1 text-[11px] text-stone-500">{section.sceneOutlineIds.length} 个讲授页面 + 1 个检测 · 约 {section.estimatedMinutes} 分钟</p></div><Link className="text-[11px] font-bold text-[var(--pbl-teacher)]" href={`${courseDetailedEditHref(course.id)}?section=classroom&lectureSectionId=${encodeURIComponent(section.id)}`}>定位</Link></div>)}</div> : <p className="mt-3 text-sm text-stone-500">知识讲授小节尚未生成。</p>}
-        </div>
-        <aside className="bg-stone-50 p-5">
-          <h3 className="text-xs font-black text-stone-500">时长与终审</h3>
-          <dl className="mt-4 space-y-4">
-            <div><dt className="text-[11px] text-stone-500">知识讲授规划</dt><dd className="mt-1 text-lg font-black text-stone-900">{timing ? `${timing.totalMinutes} 分钟` : "未规划"}</dd></div>
-            <div><dt className="text-[11px] text-stone-500">实际讲授音频</dt><dd className="mt-1 text-sm font-bold text-stone-900">{audit ? secondsLabel(audit.substantiveTeachingDurationSec) : "尚未形成完整测量"}</dd><p className="mt-1 text-[11px] text-stone-500">{audit?.narrationDurationSource === "actual-audio" ? "来自实际音频" : audit ? "来自讲稿估算" : "生成或修改音频后更新"}</p></div>
-            <div><dt className="text-[11px] text-stone-500">教师终审</dt><dd className={cn("mt-1 text-sm font-bold", review ? "text-emerald-700" : "text-amber-700")}>{review ? `已确认 · ${new Date(review.confirmedAt).toLocaleDateString("zh-CN")}` : "等待教师确认"}</dd></div>
-          </dl>
-        </aside>
       </div>
     </section>
   );
 }
 
-function PublishReadiness({ checks, course }: { checks: PublishCheck[]; course: Course }) {
-  const readyCount = checks.filter((item) => item.done).length;
-  const percentage = Math.round((readyCount / Math.max(1, checks.length)) * 100);
-  return (
-    <aside className="bg-white">
-      <header className="border-b border-stone-200 px-5 py-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-stone-400">发布门槛</p>
-            <h2 className="mt-1 text-sm font-black text-stone-900">{readyCount}/{checks.length} 项已通过</h2>
-          </div>
-          <span className={cn(
-            "grid size-11 place-items-center rounded-full text-xs font-black ring-4",
-            percentage === 100 ? "bg-emerald-100 text-emerald-800 ring-emerald-50" : "bg-amber-100 text-amber-800 ring-amber-50",
-          )}>{percentage}%</span>
+function PublicationStatusRail({
+  auditError,
+  auditLoaded,
+  checks,
+  course,
+  missingResourceIssues,
+  onOpenReview,
+  onRepairResources,
+  onRepairSpeech,
+  onRetryAudit,
+  repairStatus,
+  reviewRequired,
+  reviewSummary,
+  speechStatus,
+  speechSyncIssues,
+}: {
+  auditError: string;
+  auditLoaded: boolean;
+  checks: PublishCheck[];
+  course: Course;
+  missingResourceIssues: ResourceRepairIssue[];
+  onOpenReview: () => void;
+  onRepairResources: () => void;
+  onRepairSpeech: () => void;
+  onRetryAudit: () => void;
+  repairStatus: ResourceRepairStatus;
+  reviewRequired: boolean;
+  reviewSummary: CourseQualityReviewSummary | null;
+  speechStatus: ResourceRepairStatus;
+  speechSyncIssues: ResourceRepairIssue[];
+}) {
+  const hasClassroom = Boolean(course.aiLearningClassroomId || course.content._openmaicClassroomId);
+  const timing = course.content.moduleTimingPlan;
+  const timingAudit = course.content.teachingTimingAudit;
+  const savedReview = course.content.teacherReview;
+  const reviewStatus = savedReview || reviewSummary?.status === "confirmed" ? "confirmed"
+    : reviewSummary?.status ?? "loading";
+  const reviewLabel = !reviewRequired ? "无需单独终审"
+    : reviewStatus === "confirmed" ? "当前版本已终审"
+      : reviewStatus === "blocked" ? `存在 ${reviewSummary?.blockingCount ?? 0} 项阻断问题`
+        : reviewStatus === "attention" ? `还有 ${reviewSummary?.attentionCount ?? 0} 项建议待核对`
+          : reviewStatus === "ready" ? "可以确认当前版本"
+            : reviewStatus === "error" ? "终审状态读取失败" : "正在读取终审状态";
+  const incompleteChecks = checks.filter((item) => !item.done);
+  const resourceNeedsAttention = Boolean(auditError || repairStatus.status === "failed" || missingResourceIssues.length);
+  const speechNeedsAttention = !hasClassroom || speechStatus.status === "failed" || speechSyncIssues.length > 0;
+  const reviewNeedsAttention = reviewRequired && ["blocked", "attention", "error"].includes(reviewStatus);
+
+  return <aside aria-label="课程发布状态" className={styles.statusRail}>
+    <div className="space-y-3">
+      {resourceNeedsAttention ? <section className={cn("rounded-[12px] border px-4 py-4", auditError || repairStatus.status === "failed" ? "border-rose-200 bg-rose-50/60" : "border-amber-200 bg-amber-50/55")} role="alert">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2"><AlertTriangle className={auditError || repairStatus.status === "failed" ? "text-rose-700" : "text-amber-700"} size={17} /><h2 className="text-sm font-black text-stone-950">课程资源需要处理</h2></div>
+          <StatusBadge tone={auditError || repairStatus.status === "failed" ? "danger" : "warning"}>{auditError ? "读取失败" : repairStatus.status === "failed" ? "补齐失败" : repairStatus.status === "running" ? "补齐中" : `${missingResourceIssues.length} 项缺失`}</StatusBadge>
         </div>
-      </header>
-      <ul className="divide-y divide-stone-100">
-        {checks.map((item) => {
-          const section = item.id === "design-workspace-freshness"
-            ? course.content.designWorkspaceRevision?.pendingUpdates[0]?.target ?? "classroom"
-            : PUBLISH_SECTION_BY_CHECK[item.id];
-          return (
-          <li className="flex gap-3 px-5 py-3.5" key={item.label}>
-            <span className={cn(
-              "mt-0.5 grid size-5 shrink-0 place-items-center rounded-full",
-              item.done ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700",
-            )}>
-              {item.done ? <Check size={12} /> : <AlertTriangle size={11} />}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-bold text-stone-900">{item.label}</p>
-              <p className="mt-1 text-[11px] leading-5 text-stone-500">{item.detail}</p>
-              {!item.done && section ? <Link className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=${section}`}>定位并修改 <ArrowRight size={11} /></Link> : null}
-            </div>
-          </li>
-          );
-        })}
-      </ul>
-    </aside>
+        {auditError ? <p className="mt-2 text-xs leading-5 text-rose-800">{auditError}</p> : <>
+          {repairStatus.status === "failed" ? <p className="mt-2 text-xs leading-5 text-rose-800">{repairStatus.error || "上次资源补齐失败，请重试。"}</p> : null}
+          {missingResourceIssues.length ? <ul className="mt-3 space-y-2 text-xs leading-5 text-stone-700">{missingResourceIssues.map((issue) => <li key={issue.id}><strong className="text-stone-950">{issue.title}</strong>：{issue.detail}</li>)}</ul> : null}
+        </>}
+        {auditError ? <Button className="mt-3 min-h-11 w-full" onClick={onRetryAudit} variant="outline"><RotateCcw size={14} />重新读取</Button> : <>
+          <Button className="mt-3 min-h-11 w-full" loading={repairStatus.status === "running"} onClick={onRepairResources} variant="outline"><RotateCcw size={14} />重试缺失资源</Button>
+          <Link className="mt-1 inline-flex min-h-11 w-full items-center justify-center text-xs font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=classroom`}>定位并修改</Link>
+        </>}
+      </section> : <StatusSummaryRow label="课程资源" status={!auditLoaded ? "核对中" : repairStatus.status === "running" ? "补齐中" : "完整"} tone={auditLoaded && repairStatus.status !== "running" ? "success" : "neutral"} />}
+
+      {speechNeedsAttention ? <section className={cn("rounded-[12px] border px-4 py-4", speechStatus.status === "failed" ? "border-rose-200 bg-rose-50/60" : "border-amber-200 bg-amber-50/55")} role={speechStatus.status === "failed" ? "alert" : undefined}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2"><AlertTriangle className={speechStatus.status === "failed" ? "text-rose-700" : "text-amber-700"} size={17} /><h2 className="text-sm font-black text-stone-950">朗读与动作同步</h2></div>
+          <StatusBadge tone={speechStatus.status === "failed" ? "danger" : "warning"}>{!hasClassroom ? "待生成" : speechStatus.status === "running" ? `${speechStatus.completed ?? 0}/${speechStatus.total || "…"}` : speechStatus.status === "failed" ? "修复失败" : `${speechSyncIssues.length} 项待处理`}</StatusBadge>
+        </div>
+        {!hasClassroom ? <p className="mt-2 text-xs leading-5 text-stone-600">生成 AI 课堂后可以核对字幕和指示动作时间线。</p>
+          : speechStatus.status === "failed" ? <p className="mt-2 text-xs leading-5 text-rose-800">{speechStatus.error || "同步修复未完成，请稍后重试。"}</p>
+            : <ul className="mt-3 space-y-2 text-xs leading-5 text-stone-700">{speechSyncIssues.map((issue) => <li key={issue.id}><strong className="text-stone-950">{issue.title}</strong>：{issue.detail}</li>)}</ul>}
+        {hasClassroom ? <Button className="mt-3 min-h-11 w-full" loading={speechStatus.status === "running"} onClick={onRepairSpeech} variant="outline"><RotateCcw size={14} />修复朗读与动作同步</Button> : null}
+      </section> : <StatusSummaryRow label="朗读与动作同步" status={speechStatus.status === "running" ? `${speechStatus.completed ?? 0}/${speechStatus.total || "…"}` : "已同步"} tone={speechStatus.status === "running" ? "neutral" : "success"} />}
+
+      {incompleteChecks.length ? <section className="rounded-[12px] border border-amber-200 bg-amber-50/55 px-4 py-4">
+        <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-black text-stone-950">还需完成 {incompleteChecks.length} 项</h2><StatusBadge tone="warning">影响发布</StatusBadge></div>
+        <ul className="mt-3 divide-y divide-amber-200/70">{incompleteChecks.map((item) => {
+          const section = item.id === "design-workspace-freshness" ? course.content.designWorkspaceRevision?.pendingUpdates[0]?.target ?? "classroom" : PUBLISH_SECTION_BY_CHECK[item.id];
+          return <li className="py-2.5 first:pt-0 last:pb-0" key={item.id}><p className="text-xs font-bold text-stone-950">{item.label}</p><p className="mt-0.5 text-[11px] leading-5 text-stone-600">{item.detail}</p>{section ? <Link className="mt-1 inline-flex min-h-8 items-center gap-1 text-[11px] font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=${section}`}>定位并修改 <ArrowRight size={11} /></Link> : null}</li>;
+        })}</ul>
+      </section> : null}
+
+      {reviewNeedsAttention ? <section className={cn("rounded-[12px] border px-4 py-4", reviewStatus === "blocked" || reviewStatus === "error" ? "border-rose-200 bg-rose-50/60" : "border-amber-200 bg-amber-50/55")}>
+        <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-black text-stone-950">教师终审</h2><StatusBadge tone={reviewStatus === "blocked" || reviewStatus === "error" ? "danger" : "warning"}>{reviewStatus === "blocked" ? "有阻断" : reviewStatus === "error" ? "读取失败" : "待核对"}</StatusBadge></div>
+        <p className="mt-2 text-xs leading-5 text-stone-700">{reviewLabel}</p>
+        <Button className="mt-3 min-h-11 w-full" onClick={onOpenReview} variant="outline">查看并处理检查结果</Button>
+      </section> : <section className="rounded-[12px] border border-stone-200 bg-white px-4 py-3">
+        <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-bold text-stone-900">教师终审</h2><StatusBadge tone={reviewStatus === "confirmed" || reviewStatus === "ready" ? "success" : "neutral"}>{reviewStatus === "confirmed" ? "已确认" : reviewStatus === "ready" ? "可确认" : "读取中"}</StatusBadge></div>
+        <p className="mt-1 text-xs leading-5 text-stone-500">{reviewLabel}{savedReview ? ` · ${new Date(savedReview.confirmedAt).toLocaleDateString("zh-CN")}` : ""}</p>
+        {reviewRequired ? <button className="mt-1 min-h-9 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" onClick={onOpenReview} type="button">打开检查与终审</button> : null}
+      </section>}
+
+      <section className="rounded-[12px] border border-stone-200 bg-white px-4 py-3">
+        <h2 className="text-sm font-bold text-stone-900">讲授时长</h2>
+        <dl className="mt-2 grid grid-cols-2 gap-3">
+          <div><dt className="text-[11px] text-stone-500">教案规划</dt><dd className="mt-1 text-sm font-bold text-stone-900">{timing ? `${timing.totalMinutes} 分钟` : "未规划"}</dd></div>
+          <div><dt className="text-[11px] text-stone-500">讲授音频</dt><dd className="mt-1 text-sm font-bold text-stone-900">{timingAudit ? secondsLabel(timingAudit.substantiveTeachingDurationSec) : "待测量"}</dd></div>
+        </dl>
+        <p className="mt-1 text-[11px] leading-5 text-stone-500">{timingAudit?.narrationDurationSource === "actual-audio" ? "音频时长来自实际语音。" : timingAudit ? "当前按讲稿估算。" : "生成音频后更新实际时长。"}</p>
+      </section>
+
+      <PublishReadiness checks={checks} />
+    </div>
+  </aside>;
+}
+
+function StatusSummaryRow({ label, status, tone }: { label: string; status: string; tone: "neutral" | "success" }) {
+  return <section className="flex min-h-12 items-center justify-between gap-3 rounded-[12px] border border-stone-200 bg-white px-4 py-2.5"><h2 className="text-sm font-bold text-stone-900">{label}</h2><StatusBadge tone={tone}>{status}</StatusBadge></section>;
+}
+
+function StatusBadge({ children, tone }: { children: React.ReactNode; tone: "neutral" | "success" | "warning" | "danger" }) {
+  return <span className={cn(
+    "shrink-0 rounded-full px-2 py-1 text-[10px] font-bold",
+    tone === "success" ? "bg-emerald-50 text-emerald-700" : tone === "warning" ? "bg-amber-100 text-amber-900" : tone === "danger" ? "bg-rose-100 text-rose-800" : "bg-stone-100 text-stone-600",
+  )}>{children}</span>;
+}
+
+function PublishReadiness({ checks }: { checks: PublishCheck[] }) {
+  const readyCount = checks.filter((item) => item.done).length;
+  return (
+    <details className="overflow-hidden rounded-[12px] border border-stone-200 bg-white">
+      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-2.5 text-sm font-bold text-stone-700 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--pbl-teacher)]"><span>查看全部发布条件</span><span className="text-xs font-semibold text-stone-500">{readyCount}/{checks.length}</span></summary>
+      <ul className="divide-y divide-stone-100 border-t border-stone-200">{checks.map((item) => <li className="flex gap-2.5 px-4 py-3" key={item.id}><span className={cn("mt-0.5 grid size-5 shrink-0 place-items-center rounded-full", item.done ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>{item.done ? <Check size={12} /> : <AlertTriangle size={11} />}</span><div><p className="text-xs font-bold text-stone-900">{item.label}</p><p className="mt-0.5 text-[11px] leading-5 text-stone-500">{item.detail}</p></div></li>)}</ul>
+    </details>
   );
 }
 
@@ -951,7 +1017,7 @@ function StudentClassroomExperience({
   sidebarCollapsed: boolean;
 }) {
   return (
-    <section className="mt-5 overflow-hidden rounded-[12px] border border-stone-200 bg-white shadow-sm">
+    <section aria-labelledby="publish-tab-student" className="overflow-hidden rounded-[12px] border border-stone-200 bg-white" id="publish-panel-student" role="tabpanel">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 bg-[var(--pbl-surface-soft)]/55 px-4 py-3">
         <div className="flex items-center gap-3">
           <span className="grid size-9 place-items-center rounded-[8px] border border-[var(--pbl-student-border)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]"><MonitorPlay size={18} /></span>

@@ -21,6 +21,11 @@ export type {
   SceneContentFailureCode,
   SceneContentOptions,
 } from './scene-generator.js';
+export { compileTextComponents, TextLayoutError } from './text-layout-compiler.js';
+export type { TextMeasure, TextMeasureInput, TextMeasureResult, TextBoxComponent, LabelGridComponent } from './text-layout-compiler.js';
+export { compileDiagramComponent, isDiagramComponent } from './diagram-compiler.js';
+export type { DiagramComponent, DiagramCompilerOptions } from './diagram-compiler.js';
+export type { DiagramPlan } from './outline-types.js';
 export { buildCompleteScene } from './scene-builder.js';
 export type { BuildCompleteSceneOptions } from './scene-builder.js';
 export {
@@ -105,8 +110,11 @@ export type {
   ImageMapping,
   MediaGenerationRequest,
   PdfImage,
+  SceneVisualIntent,
   SceneOutline,
   UserRequirements,
+  VisualRepresentation,
+  VisualResourceReference,
   WidgetOutline,
   WidgetType,
 } from './outline-types.js';

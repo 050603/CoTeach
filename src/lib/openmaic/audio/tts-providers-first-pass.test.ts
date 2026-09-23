@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({ proxyFetch: vi.fn() }));
+vi.mock('@openmaic/lib/server/proxy-fetch', () => ({ proxyFetch: mocks.proxyFetch }));
+
 import {
   generateTTS,
   qwenSpeechLanguage,
@@ -6,14 +10,14 @@ import {
   throwIfTtsRateLimited,
 } from './tts-providers';
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => mocks.proxyFetch.mockReset());
 
 describe('TTS provider first-pass requests', () => {
-  it('does not request a second synthesis when a Qwen stream has no audio', async () => {
+  it('marks an empty Qwen stream for the bounded caller retry without issuing a second request itself', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"output":{}}\n\ndata: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } }));
-    vi.stubGlobal('fetch', fetchMock);
+    mocks.proxyFetch.mockImplementation(fetchMock);
     await expect(generateTTS({ providerId: 'qwen-tts', voice: 'loongmary', language: 'en-US', apiKey: 'test' }, 'Observe this leaf.'))
-      .rejects.toMatchObject({ isRetryable: false });
+      .rejects.toMatchObject({ isRetryable: true });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe(
       'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer',

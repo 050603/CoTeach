@@ -10,6 +10,7 @@ import type {
   SlideModuleOutput,
 } from "./action-binding-types";
 import { isValidSlideVisualTarget } from "./semantic-visual-cues";
+import { findSpeechCueAnchorRange } from "./speech-cue-boundaries";
 
 export interface VisualActionCue {
   id: string;
@@ -49,14 +50,8 @@ export interface ActionCompilationResult {
 }
 
 function quoteOccurrenceExists(text: string, quote: string, occurrence = 0): boolean {
-  if (!quote || occurrence < 0 || !Number.isInteger(occurrence)) return false;
-  let offset = 0;
-  for (let index = 0; index <= occurrence; index += 1) {
-    const found = text.indexOf(quote, offset);
-    if (found < 0) return false;
-    offset = found + quote.length;
-  }
-  return true;
+  if (occurrence < 0 || !Number.isInteger(occurrence)) return false;
+  return findSpeechCueAnchorRange(text, { quote, occurrence }) !== null;
 }
 
 function issue(
@@ -150,6 +145,17 @@ function resolveCue(
     issues.push(issue(
       "anchor-quote-missing",
       `Anchor ${anchor.id} no longer matches narration segment ${segment.id}`,
+      { cueId: cue.id, severity: "blocking" },
+    ));
+  } else if (anchor?.visualCue?.endSpeechAnchor && segment
+    && !quoteOccurrenceExists(
+      segment.text,
+      anchor.visualCue.endSpeechAnchor.quote,
+      anchor.visualCue.endSpeechAnchor.occurrence,
+    )) {
+    issues.push(issue(
+      "anchor-quote-missing",
+      `Anchor ${anchor.id} has an end anchor that no longer matches narration segment ${segment.id}`,
       { cueId: cue.id, severity: "blocking" },
     ));
   }
@@ -307,6 +313,23 @@ export function validateActionReferences(input: {
         issues.push(issue(
           "anchor-quote-missing",
           `Action ${action.id} speech anchor no longer matches ${action.speechId}`,
+          { actionId: action.id, severity: "blocking" },
+        ));
+      }
+    }
+    if (action.endSpeechAnchor && action.speechId) {
+      const endSpeechId = action.type === "spotlight"
+        ? action.endSpeechId ?? action.speechId
+        : action.speechId;
+      const segment = segmentById.get(endSpeechId);
+      if (segment && !quoteOccurrenceExists(
+        segment.text,
+        action.endSpeechAnchor.quote,
+        action.endSpeechAnchor.occurrence,
+      )) {
+        issues.push(issue(
+          "anchor-quote-missing",
+          `Action ${action.id} end anchor no longer matches ${endSpeechId}`,
           { actionId: action.id, severity: "blocking" },
         ));
       }

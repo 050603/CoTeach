@@ -34,7 +34,10 @@ export type CourseResourceAuditSnapshot = {
 };
 
 const MANAGED_MEDIA_PREFIX = "/api/openmaic/classroom-media/";
-const SAFE_PATH_PART = /^[a-zA-Z0-9_.-]+$/;
+// New assets use content-addressed `[a-zA-Z0-9_.-]` names. `:` remains
+// readable only for classrooms generated before that filename contract was
+// enforced, where blueprint action IDs were embedded in the filename.
+const SAFE_PATH_PART = /^[a-zA-Z0-9_.:-]+$/;
 const REMOTE_RESOURCE_TIMEOUT_MS = 8_000;
 const MAX_REMOTE_RESOURCE_BYTES = 25 * 1024 * 1024;
 const MAX_REMOTE_REDIRECTS = 3;

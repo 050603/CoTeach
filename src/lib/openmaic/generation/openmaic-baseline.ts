@@ -10,6 +10,7 @@ import {
   type PdfImage as OpenMaicPdfImage,
   type SceneOutline as OpenMaicSceneOutline,
   type UserRequirements as OpenMaicUserRequirements,
+  type TextMeasure,
 } from '@openmaic/generation';
 import type { Action } from '@openmaic/lib/types/action';
 import type {
@@ -45,10 +46,10 @@ export const OPENMAIC_GENERATION_BASELINE = {
   planningMethod: 'classic-one-click',
   referenceProfileVersion: 'openmaic-v1.0.2-export-blue-editorial-v3-semantic-fit',
   promptHashes: {
-    requirementsSystem: '813240c132acfe63007ddcf3dd764b47b5ad1d7b5005d47361ede3aa42614c65',
-    requirementsUser: '79fe5ce9a64dc63f174bd1c99dd3e4f1feb2a00e2797edc2a11abc5ac2d6f9ff',
-    slideContentSystem: '35770a73bee0459c0937f41e1240dedc48d40a9de542345c1a8f1ad129aa89b8',
-    slideContentUser: '232b0a611ae689daf83bcdf1211646d55e97c06d8c9d2d1f888617fcff79db81',
+    requirementsSystem: '9c32d03f0ee824aeca8514d7e332cac18d58f1983b2ae8c94f7fc67d2887bb3c',
+    requirementsUser: 'd2ccf25101ce1f161d7eab2c2cc9b896702e01c3dbb378e69b53d1b6a6bc0188',
+    slideContentSystem: 'a721801549bb40f3ae49a7e3890c767b29d0f24033902c46adb31ed7f34cc6de',
+    slideContentUser: '933706ff5efa04a63abe5627636ac348d7a0f74c28d1eef2b68ff2034ef705ab',
     upstreamSlideActionsSystem: '219e8da1eb3c854dbe6ee6fdedda1936e0092fff6c8984b9277c5c6cef2443b6',
     slideActionsSystem: 'dab3ca7bce6c96c3bb6542e601c1fdbcd9e6a663a0c58ffd7ffb2dff7e5a65b4',
     slideActionsUser: '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
@@ -58,10 +59,10 @@ export const OPENMAIC_GENERATION_BASELINE = {
 /**
  * CoTeach keeps the v1.0.3 one-click semantic boundary: the official outline's
  * description/keyPoints are passed to the official page generator, while
- * orchestration metadata stays outside the prompt. Outline prompts remain
- * byte-stable; the slide-content prompt now chooses native representations
- * from the teaching need, and the slide-action prompt retains its precise
- * sparse guidance. Production may opt into the
+ * orchestration metadata stays outside the prompt. The first-pass outline
+ * contract now authors content-topic page titles and visual intent, while the
+ * slide-content prompt preserves the supplied title and chooses native
+ * representations from the teaching need. Production may opt into the
  * measured website reference profile, but never a page template, geometry
  * budget, timing appendix, or generated theme plan.
  */
@@ -85,6 +86,10 @@ export function adaptOutlineToOpenMaicBaseline(outline: SceneOutline): OpenMaicS
     estimatedDuration: outline.estimatedDuration,
     order: outline.order,
     languageNote: outline.languageNote,
+    visualIntent: outline.visualIntent ? {
+      ...outline.visualIntent,
+      resourceRefs: outline.visualIntent.resourceRefs?.map((reference) => ({ ...reference })),
+    } : undefined,
     suggestedImageIds: outline.suggestedImageIds ? [...outline.suggestedImageIds] : undefined,
     mediaGenerations: outline.mediaGenerations?.map((item) => ({
       type: item.type,
@@ -206,6 +211,9 @@ export async function generateOpenMaicBaselineOutlines(
 }
 
 export interface BaselineContentOptions {
+  /** First-draft components compile into editable native slide elements. */
+  componentAuthoring?: boolean;
+  textMeasure?: TextMeasure;
   assignedImages?: PdfImage[];
   imageMapping?: Record<string, string>;
   visionEnabled?: boolean;
@@ -269,6 +277,8 @@ export async function generateOpenMaicBaselineContent(
       allowProceduralSkill: options.allowProceduralSkill,
       editDirective: options.editDirective,
       baselineContent: options.baselineContent as OpenMaicSlideContent | undefined,
+      componentAuthoring: options.componentAuthoring,
+      textMeasure: options.textMeasure,
     },
   );
   if (!generated) return null;

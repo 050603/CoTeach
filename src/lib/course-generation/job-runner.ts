@@ -91,10 +91,25 @@ async function hydrateTextbookFigureBytes(
   const uploadDir = process.env.UPLOAD_DIR?.trim() || path.resolve(".openpbl-data", "uploads");
   const hydrated = await Promise.all(images.map(async (image) => {
     const asset = assetById.get(image.assetId);
-    if (!asset || !asset.mimeType.startsWith("image/") || path.basename(asset.storageKey) !== asset.storageKey
-      || Number(asset.size) > 16 * 1024 * 1024) return image;
+    const invalidReason = !asset
+      ? "文件记录不存在或已删除"
+      : !asset.mimeType.startsWith("image/")
+        ? `文件类型无效：${asset.mimeType}`
+        : path.basename(asset.storageKey) !== asset.storageKey
+          ? "存储路径无效"
+          : Number(asset.size) > 16 * 1024 * 1024
+            ? "文件超过 16MB"
+            : undefined;
+    if (invalidReason) {
+      if (image.required) throw new Error(`必用教材原图 ${image.figureId} 不可读取：${invalidReason}`);
+      return image;
+    }
+    if (!asset) return image;
     const bytes = await readFile(/* turbopackIgnore: true */ path.join(uploadDir, asset.storageKey)).catch(() => null);
-    if (!bytes || bytes.byteLength !== Number(asset.size)) return image;
+    if (!bytes || bytes.byteLength !== Number(asset.size)) {
+      if (image.required) throw new Error(`必用教材原图 ${image.figureId} 不可读取：文件缺失或大小不一致`);
+      return image;
+    }
     return {
       ...image,
       publicSrc: image.src,
@@ -348,6 +363,7 @@ export type CourseGenerationJobEvent = {
   assetCompleted?: number;
   assetTotal?: number;
   activePages?: ClassroomGenerationProgress["activePages"];
+  stageProgress?: ClassroomGenerationProgress["stageProgress"];
   stageDetail?: ClassroomGenerationProgress["stage"];
 };
 
@@ -446,6 +462,7 @@ async function persistProgress(
     totalScenes: progress.totalScenes ?? job.totalScenes,
     ts: Date.now(),
     activePages: progress.activePages,
+    stageProgress: progress.stageProgress,
     stageDetail: progress.stage,
   };
   const events = [...asEvents(job.events), event].slice(-MAX_STORED_EVENTS);
@@ -475,6 +492,7 @@ async function persistProgress(
       totalScenes: event.totalScenes,
       estimatedRemainingSeconds: remaining,
       activePages: (progress.activePages ?? []) as unknown as Prisma.InputJsonValue,
+      stageProgress: (progress.stageProgress ?? job.stageProgress ?? []) as unknown as Prisma.InputJsonValue,
       currentStage: progress.stage ?? null,
       events: events as unknown as Prisma.InputJsonValue,
       lastHeartbeatAt: new Date(),
@@ -1005,6 +1023,9 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
     );
     const generated = restoredFinalization?.generated ?? await generateClassroom(generationInput, {
       signal: controller.signal,
+      initialStageProgress: Array.isArray(job.stageProgress)
+        ? job.stageProgress as unknown as NonNullable<ClassroomGenerationProgress["stageProgress"]>
+        : undefined,
       generationOutlineIds: isTestLesson ? request.testLesson?.sceneOutlineIds : undefined,
       preparedOutlines: checkpointState.preparedOutlines,
       onOutlinesPrepared: (outlines) => persistPreparedOutlines(job.id, executionId, outlines),

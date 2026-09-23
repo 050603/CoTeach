@@ -32,6 +32,7 @@ import { getModel } from './providers';
 describe('OpenAI-compatible provider proxy transport', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.undiciFetch.mockReset();
     mocks.proxyAgentUrls.length = 0;
     mocks.createOpenAI.mockImplementation(() => ({
       chat: (modelId: string) => ({ modelId }),
@@ -96,5 +97,43 @@ describe('OpenAI-compatible provider proxy transport', () => {
         dispatcher: expect.anything(),
       }),
     );
+  });
+
+  it('recovers an empty-response DeepSeek socket reset within the first model call', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const socketClose = Object.assign(new Error('fetch failed'), {
+      cause: Object.assign(new Error('other side closed'), {
+        code: 'UND_ERR_SOCKET', socket: { bytesRead: 0 },
+      }),
+    });
+    mocks.undiciFetch.mockRejectedValueOnce(socketClose)
+      .mockResolvedValueOnce(new Response('{}', { status: 200 }));
+    getModel({ providerId: 'deepseek', modelId: 'deepseek-v4-flash', apiKey: 'test', proxy: 'http://127.0.0.1:19999' });
+    const transport = mocks.createOpenAI.mock.calls[0]?.[0].fetch as typeof fetch;
+
+    const response = await transport('https://api.deepseek.com/chat/completions', {
+      method: 'POST', body: '{}',
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.undiciFetch).toHaveBeenCalledTimes(2);
+    expect(warning).toHaveBeenCalledOnce();
+    warning.mockRestore();
+  });
+
+  it('does not replay a request after response bytes were received', async () => {
+    const socketClose = Object.assign(new Error('fetch failed'), {
+      cause: Object.assign(new Error('other side closed'), {
+        code: 'UND_ERR_SOCKET', socket: { bytesRead: 1 },
+      }),
+    });
+    mocks.undiciFetch.mockRejectedValueOnce(socketClose);
+    getModel({ providerId: 'deepseek', modelId: 'deepseek-v4-flash', apiKey: 'test', proxy: 'http://127.0.0.1:19999' });
+    const transport = mocks.createOpenAI.mock.calls[0]?.[0].fetch as typeof fetch;
+
+    await expect(transport('https://api.deepseek.com/chat/completions', {
+      method: 'POST', body: '{}',
+    })).rejects.toBe(socketClose);
+    expect(mocks.undiciFetch).toHaveBeenCalledOnce();
   });
 });

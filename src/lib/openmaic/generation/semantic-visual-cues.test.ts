@@ -158,6 +158,44 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
     expect(visualActions(result)[1].speechOffsetMs).toBeGreaterThan(0);
   });
 
+  it('moves focus from an animal example to the definition inside one sentence', () => {
+    const pageElements = [
+      {
+        id: 'animal-example', type: 'text', left: 60, top: 150, width: 420, height: 180,
+        content: '<p>小鱼：牛是在地上吃草的大鱼<br>青蛙：牛是不会跳的大青蛙</p>',
+        defaultFontName: 'Microsoft YaHei', defaultColor: '#111111',
+      },
+      {
+        id: 'accommodation-definition', type: 'text', left: 540, top: 150, width: 400, height: 180,
+        content: '<p>顺应：调整原有认知结构，形成新的认识</p>',
+        defaultFontName: 'Microsoft YaHei', defaultColor: '#111111',
+      },
+    ] as PPTElement[];
+    const text = '小鱼、青蛙看到牛时，会先用自己熟悉的样子去理解它，接着看顺应的定义：顺应是调整原有认知结构，形成新的认识。然后我们再思考它为什么必要。';
+    const narration = speech('s1', text);
+    const result = calibrate([
+      cue('focus-example', 's1', 'animal-example', {
+        speechAnchor: { quote: '小鱼、青蛙看到牛时' },
+      }),
+      cue('focus-definition', 's1', 'accommodation-definition', {
+        speechAnchor: { quote: '顺应的定义' },
+      }),
+      narration,
+    ], pageElements);
+
+    const [exampleCue, definitionCue] = visualActions(result);
+    expect(exampleCue).toMatchObject({
+      id: 'focus-example', elementId: 'animal-example',
+      speechAnchor: { quote: '小鱼、青蛙看到牛时' },
+    });
+    expect(definitionCue).toMatchObject({
+      id: 'focus-definition', elementId: 'accommodation-definition',
+      speechAnchor: { quote: '顺应的定义' },
+    });
+    expect(exampleCue.endSpeechOffsetMs).toBe(definitionCue.speechOffsetMs);
+    expect(definitionCue.endSpeechOffsetMs).toBe((text.indexOf('。') + 1) * 100);
+  });
+
   it('uses forced-alignment timestamps instead of proportional text duration', () => {
     const text = '先说明前提。然后观察三个核心特征。';
     const narration = speech('s1', text);
@@ -179,6 +217,20 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
       cue('target', 's1', 'pbl-title', { speechAnchor: { quote: '观察目标' } }),
       narration,
     ]);
+    expect(visualActions(result)).toEqual([]);
+    expect(result).toEqual([narration]);
+  });
+
+  it('drops a cue whose explicit end anchor is stale instead of guessing an end', () => {
+    const narration = speech('s1', '先观察PBL，再解释它的特征。');
+    const result = calibrate([
+      cue('stale-end', 's1', 'pbl-title', {
+        speechAnchor: { quote: '观察PBL' },
+        endSpeechAnchor: { quote: '不存在的结束语' },
+      }),
+      narration,
+    ]);
+
     expect(visualActions(result)).toEqual([]);
     expect(result).toEqual([narration]);
   });

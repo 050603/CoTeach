@@ -22,6 +22,14 @@ export interface PdfImage {
   storageId?: string; // Reference to IndexedDB (session_xxx_img_1)
   width?: number; // Image width (px or normalized)
   height?: number; // Image height (px or normalized)
+  /** Evidence relationship used by course-level visual planning. */
+  textbookRelation?: 'direct' | 'candidate';
+  relationReason?: string;
+  knowledgePointIds?: string[];
+  evidenceItemIds?: string[];
+  sourceTitle?: string;
+  /** A required source image must be placed on its bound teaching page. */
+  required?: boolean;
 }
 
 /**
@@ -219,6 +227,32 @@ export type CourseVisualTheme = {
   editorialStyle: string;
 };
 
+export type VisualRepresentation =
+  | 'text'
+  | 'source-image'
+  | 'generated-image'
+  | 'native-diagram'
+  | 'native-chart'
+  | 'table'
+  | 'video'
+  | 'mixed';
+
+export type VisualResourceReference = {
+  resourceId: string;
+  kind: 'source-image' | 'generated-image' | 'generated-video';
+  required: boolean;
+  reason: string;
+  observationGoal?: string;
+};
+
+export type SceneVisualIntent = {
+  observationGoal: string;
+  representation: VisualRepresentation;
+  resourceRefs?: VisualResourceReference[];
+  diagram?: import("@openmaic/generation").DiagramPlan;
+  rationale?: string;
+};
+
 /**
  * Simplified scene outline
  * Gives AI more freedom, only requiring intent description and key points
@@ -235,6 +269,8 @@ export interface SceneOutline {
   courseVisualDirection?: string;
   /** Machine-checkable companion to courseVisualDirection. */
   courseVisualTheme?: CourseVisualTheme;
+  /** Adopted visual decision produced by the active outline planner. */
+  visualIntent?: SceneVisualIntent;
   visualPlan?: import("@openmaic/lib/generation/slide-visual-plan").SlideVisualPlan;
   spatialBudget?: import("@openmaic/lib/generation/slide-spatial-types").SlideSpatialBudget;
   /** Original confirmed page when spatial preparation splits it. */

@@ -59,6 +59,18 @@ Produce a **\`courseTitle\`** (required): a concise, human-readable name for the
 - **Do NOT** include: quotes, numbering, leading emojis, the teacher's name/role, or words like "Course"/"课程"/"A course about".
 - If the requirement is already a crisp title, you may reuse it (trimmed to the limit). If it is a long prompt, distill it to its essence.
 
+## Instructional Slide Title Contract
+
+Apply these rules to every \`slide\` scene. They do not constrain the names of games, simulations, interactive tasks, or projects.
+
+1. Decide the page's core knowledge object and the specific facet taught on that page before writing its title. The title must be a concise content-topic phrase that identifies both, so a learner can tell what the page teaches when the title is read on its own.
+2. Prefer forms such as “object + concept / relationship / mechanism / method / application”. Examples: “教学设计的层次与职责”, “教学目标层级辨析”, “Projectile Motion Variables”, and “Training and Test Set Roles”.
+3. Keep hooks, opening questions, learner commands, and activity instructions in the page content, \`entryPoint\`, task, question stem, or narration. Do not turn them into the title.
+4. A case, practice, or recap page must name its concrete subject and purpose, such as “数据集划分案例分析”, “教学目标层级辨析练习”, or “抛体运动变量总结”. Generic labels by themselves, including “案例分析”, “练习”, “总结”, “Introduction”, “Practice”, and “Key Takeaways”, are invalid slide titles.
+5. Do not use a complete question, conversational transition, suspense slogan, classroom command, or arbitrary numerical teaser as a slide title. A number is valid when it belongs to the formal content being taught, such as a recognized three-stage model.
+
+When rendering a supplied outline, use its \`title\` verbatim as the visible primary heading; line wrapping is allowed, but paraphrasing is not. Only an explicit current edit instruction may change it.
+
 ---
 
 ## Design Principles
@@ -77,6 +89,26 @@ Produce a **\`courseTitle\`** (required): a concise, human-readable name for the
 - **Clear Purpose**: Each scene has a clear teaching function
 - **Logical Flow**: Scenes form a natural teaching progression
 - **Experience Design**: Consider learning experience and emotional response from the student's perspective
+
+### Page Visual Planning
+
+For every \`slide\` scene, decide the visual form during this outline call and record it in \`visualIntent\`:
+
+- \`observationGoal\`: what learners should be able to see, compare, trace, or read directly on the page.
+- \`representation\`: one of \`text\`, \`source-image\`, \`generated-image\`, \`native-diagram\`, \`native-chart\`, \`table\`, \`video\`, or \`mixed\`.
+- \`rationale\`: a short teaching reason for the choice.
+- \`resourceRefs\`: stable resources bound to this page. Each reference has \`resourceId\`, \`kind\` (\`source-image\`, \`generated-image\`, or \`generated-video\`), \`required\`, \`reason\`, and optionally its own \`observationGoal\`.
+
+Choose by teaching value, not a media quota:
+
+- Concrete objects, scenes, appearances, and visible differences are usually clearest as a source image or illustration.
+- Quantitative relationships, processes, causes, sequences, and concept structures should use native charts, shapes, and connectors when those forms communicate the supplied evidence more precisely.
+- A short definition, formula, or conclusion may use \`text\` with no resource. Do not request an image merely to decorate the page.
+- When an example depends on learners seeing the difference between real objects or between an object and a mistaken interpretation, plan that visible contrast explicitly instead of turning the whole example into text cards.
+- A suitable textbook image marked \`textbook relation: direct (required)\` must be referenced with \`kind: "source-image"\` and \`required: true\` on the first slide that fully teaches the linked knowledge point. Direct images that form one necessary observation set must stay together. Candidate images remain optional and should be used only when relevant.
+- If no suitable source image exists and an illustration is materially clearer, request one generated image and bind its \`elementId\` in \`resourceRefs\` with \`required: true\`.
+- Reuse the same stable \`resourceId\` across slides when the same asset serves both pages. Define a generated asset in \`mediaGenerations\` only once; later pages reference it only through \`visualIntent.resourceRefs\`.
+- Every resource marked \`required\` is a layout requirement, not a suggestion. The page generator will fail a page that omits it.
 
 ---
 
@@ -256,10 +288,15 @@ Rules:
     {
       "id": "scene_1",
       "type": "slide",
-      "title": "Introduction",
-      "description": "Welcome students and introduce the core concept.",
-      "keyPoints": ["Context", "Agenda", "Goals"],
-      "order": 1
+      "title": "Projectile Motion Variables",
+      "description": "Establish the variables that determine a projectile's trajectory.",
+      "keyPoints": ["Launch angle", "Initial velocity", "Gravity"],
+      "order": 1,
+      "visualIntent": {
+        "observationGoal": "Read the three variables that determine the trajectory.",
+        "representation": "text",
+        "rationale": "The concise variable definitions are clearest as text."
+      }
     },
     {
       "id": "scene_2",
@@ -303,6 +340,7 @@ Rules:
 | teachingObjective | string                   | ❌       | Corresponding learning objective                                                                 |
 | estimatedDuration | number                   | ❌       | Estimated duration (seconds)                                                                     |
 | order             | number                   | ✅       | Sort order, starting from 1                                                                      |
+| visualIntent      | object                   | ✅ (for slide) | Observation goal, selected representation, rationale, and stable resource bindings                                      |
 
 
 | quizConfig        | object                   | ❌       | Required for quiz type, contains questionCount/difficulty/questionTypes                          |
@@ -376,8 +414,9 @@ Omit \`scenarioRoleplay\` and \`scenarioBrief\` entirely for ordinary build-an-a
 7. \`pbl\` scenes must include \`pblConfig\` with \`projectTopic\`, \`projectDescription\`, \`targetSkills\`, \`issueCount\`.
 8. Arrange scenes by inferred duration (typically 1-2 scenes per minute). Insert quizzes at appropriate points. Use interactive scenes sparingly (max 1-2 per course).
 9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
-10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
-11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.",
+10. Every slide scene includes \`visualIntent\`; a text-only page uses \`representation: "text"\` and an empty or omitted \`resourceRefs\` array.
+11. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
+12. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Name the actual content instead, such as "Random Sampling Bias" or "Projectile Motion Practice".",
   "user": "Please generate scene outlines based on the following course requirements.
 
 ---
@@ -439,6 +478,8 @@ Then output your response as a single JSON object.
 }
 \`\`\`
 
+Every slide also includes a decision-complete \`visualIntent\`. Use text alone when that is clearest; do not manufacture an image request for every page. When visible appearance, a concrete scene, or an object-to-object difference is needed, bind a suitable source image or a generated illustration. Use native diagrams/charts for relationships, flows, and supplied quantitative data.
+
 Never return a bare array. Never omit \`languageDirective\` or \`courseTitle\`. All three keys are required.
 
 **Each scene inside the \`outlines\` array has this minimum shape:**
@@ -447,10 +488,24 @@ Never return a bare array. Never omit \`languageDirective\` or \`courseTitle\`. 
 {
   "id": "scene_1",
   "type": "slide" | "quiz" | "interactive" | "pbl",
-  "title": "Scene Title",
+  "title": "Core content topic and the specific facet taught on this page",
   "description": "Teaching purpose description",
   "keyPoints": ["Point 1", "Point 2", "Point 3"],
-  "order": 1
+  "order": 1,
+  "visualIntent": {
+    "observationGoal": "What learners inspect on this page",
+    "representation": "text" | "source-image" | "generated-image" | "native-diagram" | "native-chart" | "table" | "video" | "mixed",
+    "rationale": "Why this form best supports the teaching goal",
+    "resourceRefs": [
+      {
+        "resourceId": "a stable source or generated-media ID",
+        "kind": "source-image" | "generated-image" | "generated-video",
+        "required": true,
+        "reason": "Why this resource is needed",
+        "observationGoal": "What to inspect in this resource"
+      }
+    ]
+  }
 }
 \`\`\`
 
@@ -536,6 +591,18 @@ Produce a **\`courseTitle\`** (required): a concise, human-readable name for the
 - **Do NOT** include: quotes, numbering, leading emojis, the teacher's name/role, or words like "Course"/"课程"/"A course about".
 - If the requirement is already a crisp title, you may reuse it (trimmed to the limit). If it is a long prompt, distill it to its essence.
 
+## Instructional Slide Title Contract
+
+Apply these rules to every \`slide\` scene. They do not constrain the names of games, simulations, interactive tasks, or projects.
+
+1. Decide the page's core knowledge object and the specific facet taught on that page before writing its title. The title must be a concise content-topic phrase that identifies both, so a learner can tell what the page teaches when the title is read on its own.
+2. Prefer forms such as “object + concept / relationship / mechanism / method / application”. Examples: “教学设计的层次与职责”, “教学目标层级辨析”, “Projectile Motion Variables”, and “Training and Test Set Roles”.
+3. Keep hooks, opening questions, learner commands, and activity instructions in the page content, \`entryPoint\`, task, question stem, or narration. Do not turn them into the title.
+4. A case, practice, or recap page must name its concrete subject and purpose, such as “数据集划分案例分析”, “教学目标层级辨析练习”, or “抛体运动变量总结”. Generic labels by themselves, including “案例分析”, “练习”, “总结”, “Introduction”, “Practice”, and “Key Takeaways”, are invalid slide titles.
+5. Do not use a complete question, conversational transition, suspense slogan, classroom command, or arbitrary numerical teaser as a slide title. A number is valid when it belongs to the formal content being taught, such as a recognized three-stage model.
+
+When rendering a supplied outline, use its \`title\` verbatim as the visible primary heading; line wrapping is allowed, but paraphrasing is not. Only an explicit current edit instruction may change it.
+
 ---
 
 ## Design Principles
@@ -554,6 +621,26 @@ Produce a **\`courseTitle\`** (required): a concise, human-readable name for the
 - **Clear Purpose**: Each scene has a clear teaching function
 - **Logical Flow**: Scenes form a natural teaching progression
 - **Experience Design**: Consider learning experience and emotional response from the student's perspective
+
+### Page Visual Planning
+
+For every \`slide\` scene, decide the visual form during this outline call and record it in \`visualIntent\`:
+
+- \`observationGoal\`: what learners should be able to see, compare, trace, or read directly on the page.
+- \`representation\`: one of \`text\`, \`source-image\`, \`generated-image\`, \`native-diagram\`, \`native-chart\`, \`table\`, \`video\`, or \`mixed\`.
+- \`rationale\`: a short teaching reason for the choice.
+- \`resourceRefs\`: stable resources bound to this page. Each reference has \`resourceId\`, \`kind\` (\`source-image\`, \`generated-image\`, or \`generated-video\`), \`required\`, \`reason\`, and optionally its own \`observationGoal\`.
+
+Choose by teaching value, not a media quota:
+
+- Concrete objects, scenes, appearances, and visible differences are usually clearest as a source image or illustration.
+- Quantitative relationships, processes, causes, sequences, and concept structures should use native charts, shapes, and connectors when those forms communicate the supplied evidence more precisely.
+- A short definition, formula, or conclusion may use \`text\` with no resource. Do not request an image merely to decorate the page.
+- When an example depends on learners seeing the difference between real objects or between an object and a mistaken interpretation, plan that visible contrast explicitly instead of turning the whole example into text cards.
+- A suitable textbook image marked \`textbook relation: direct (required)\` must be referenced with \`kind: "source-image"\` and \`required: true\` on the first slide that fully teaches the linked knowledge point. Direct images that form one necessary observation set must stay together. Candidate images remain optional and should be used only when relevant.
+- If no suitable source image exists and an illustration is materially clearer, request one generated image and bind its \`elementId\` in \`resourceRefs\` with \`required: true\`.
+- Reuse the same stable \`resourceId\` across slides when the same asset serves both pages. Define a generated asset in \`mediaGenerations\` only once; later pages reference it only through \`visualIntent.resourceRefs\`.
+- Every resource marked \`required\` is a layout requirement, not a suggestion. The page generator will fail a page that omits it.
 
 ---
 
@@ -607,15 +694,15 @@ When comparing or listing information, specify in keyPoints:
 
 Use image generation only for slide scenes that need a static visual and have no suitable source image.
 
-- Prefer \`suggestedImageIds\` when a suitable source/PDF image exists
+- Prefer \`suggestedImageIds\` and a \`visualIntent.resourceRefs\` source-image binding when a suitable source/PDF image exists
 - Add a \`mediaGenerations\` entry only when a generated image genuinely enhances the content
 - Use \`type: "image"\`
 - Each image request specifies: \`prompt\` (description for the generation model), \`elementId\` (unique placeholder), and optionally \`aspectRatio\` (default "16:9") and \`style\`
-- **Image IDs**: use \`"gen_img_1"\`, \`"gen_img_2"\`, etc. IDs are globally unique across the entire course, not reset per scene
+- **Image IDs**: use stable semantic IDs such as \`"gen_img_water-cycle"\`. IDs are global across the course and must not be reset or renamed on later pages
 - The prompt should describe the desired image clearly and specifically
 - **Language in images**: If the image contains text, labels, or annotations, the prompt must explicitly specify that all text in the image should be in the course language (for example, "all labels in Chinese" for zh-CN courses, "all labels in English" for en-US courses). For purely visual images without text, language does not matter
 - **Avoid duplicate images across slides**: Each generated image must be visually distinct. Do not request near-identical images for different slides. If multiple slides cover the same topic, vary the visual angle, scope, or style
-- **Cross-scene reuse**: To reuse a generated image in a different scene, reference the same \`elementId\` in the later scene's content without adding a new \`mediaGenerations\` entry. Only the scene that first defines the \`elementId\` in its \`mediaGenerations\` should include the generation request
+- **Cross-scene reuse**: To reuse a generated image in another scene, add the same ID to that scene's \`visualIntent.resourceRefs\` without adding another \`mediaGenerations\` entry. Only the first scene defines the generation request
 - Use generated images for static content: diagrams, charts, illustrations, portraits, landscapes
 
 Image example:
@@ -799,10 +886,15 @@ Rules:
     {
       "id": "scene_1",
       "type": "slide",
-      "title": "Introduction",
-      "description": "Welcome students and introduce the core concept.",
-      "keyPoints": ["Context", "Agenda", "Goals"],
-      "order": 1
+      "title": "Projectile Motion Variables",
+      "description": "Establish the variables that determine a projectile's trajectory.",
+      "keyPoints": ["Launch angle", "Initial velocity", "Gravity"],
+      "order": 1,
+      "visualIntent": {
+        "observationGoal": "Read the three variables that determine the trajectory.",
+        "representation": "text",
+        "rationale": "The concise variable definitions are clearest as text."
+      }
     },
     {
       "id": "scene_2",
@@ -846,6 +938,7 @@ Rules:
 | teachingObjective | string                   | ❌       | Corresponding learning objective                                                                 |
 | estimatedDuration | number                   | ❌       | Estimated duration (seconds)                                                                     |
 | order             | number                   | ✅       | Sort order, starting from 1                                                                      |
+| visualIntent      | object                   | ✅ (for slide) | Observation goal, selected representation, rationale, and stable resource bindings                                      |
 
 | suggestedImageIds | string[]                 | ❌       | Suggested image IDs to use                                                                       |
 
@@ -923,8 +1016,9 @@ Omit \`scenarioRoleplay\` and \`scenarioBrief\` entirely for ordinary build-an-a
 7. \`pbl\` scenes must include \`pblConfig\` with \`projectTopic\`, \`projectDescription\`, \`targetSkills\`, \`issueCount\`.
 8. Arrange scenes by inferred duration (typically 1-2 scenes per minute). Insert quizzes at appropriate points. Use interactive scenes sparingly (max 1-2 per course).
 9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
-10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
-11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.",
+10. Every slide scene includes \`visualIntent\`; a text-only page uses \`representation: "text"\` and an empty or omitted \`resourceRefs\` array.
+11. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
+12. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Name the actual content instead, such as "Random Sampling Bias" or "Projectile Motion Practice".",
   "user": "Please generate scene outlines based on the following course requirements.
 
 ---
@@ -993,6 +1087,8 @@ Then output your response as a single JSON object.
 }
 \`\`\`
 
+Every slide also includes a decision-complete \`visualIntent\`. Use text alone when that is clearest; do not manufacture an image request for every page. When visible appearance, a concrete scene, or an object-to-object difference is needed, bind a suitable source image or a generated illustration. Use native diagrams/charts for relationships, flows, and supplied quantitative data.
+
 Never return a bare array. Never omit \`languageDirective\` or \`courseTitle\`. All three keys are required.
 
 **Each scene inside the \`outlines\` array has this minimum shape:**
@@ -1001,10 +1097,24 @@ Never return a bare array. Never omit \`languageDirective\` or \`courseTitle\`. 
 {
   "id": "scene_1",
   "type": "slide" | "quiz" | "interactive" | "pbl",
-  "title": "Scene Title",
+  "title": "Core content topic and the specific facet taught on this page",
   "description": "Teaching purpose description",
   "keyPoints": ["Point 1", "Point 2", "Point 3"],
-  "order": 1
+  "order": 1,
+  "visualIntent": {
+    "observationGoal": "What learners inspect on this page",
+    "representation": "text" | "source-image" | "generated-image" | "native-diagram" | "native-chart" | "table" | "video" | "mixed",
+    "rationale": "Why this form best supports the teaching goal",
+    "resourceRefs": [
+      {
+        "resourceId": "a stable source or generated-media ID",
+        "kind": "source-image" | "generated-image" | "generated-video",
+        "required": true,
+        "reason": "Why this resource is needed",
+        "observationGoal": "What to inspect in this resource"
+      }
+    ]
+  }
 }
 \`\`\`
 
@@ -1019,7 +1129,7 @@ Never return a bare array. Never omit \`languageDirective\` or \`courseTitle\`. 
    }
    \`\`\`
 
-- **If source images are available**, add \`suggestedImageIds\` to relevant slide scenes. Only use image IDs listed under Available Images.
+- **If source images are available**, preserve \`suggestedImageIds\` for compatibility and also bind selected IDs in \`visualIntent.resourceRefs\`. Only use IDs listed under Available Images. Images marked \`textbook relation: direct (required)\` are mandatory on the first full teaching page for their linked knowledge point; \`candidate\` images are not mandatory.
 
 - **Interactive scenes**: If a concept benefits from hands-on simulation/visualization, use \`"type": "interactive"\` with \`widgetType\` and \`widgetOutline\` fields. Limit to 1-2 per course.
    - Select widgetType based on concept: simulation (physics/chem), diagram (processes), code (programming), game (practice), visualization3d (3D models)
@@ -1092,6 +1202,18 @@ Produce a **\`courseTitle\`** (required): a concise, human-readable name for the
 - **Do NOT** include: quotes, numbering, leading emojis, the teacher's name/role, or words like "Course"/"课程"/"A course about".
 - If the requirement is already a crisp title, you may reuse it (trimmed to the limit). If it is a long prompt, distill it to its essence.
 
+## Instructional Slide Title Contract
+
+Apply these rules to every \`slide\` scene. They do not constrain the names of games, simulations, interactive tasks, or projects.
+
+1. Decide the page's core knowledge object and the specific facet taught on that page before writing its title. The title must be a concise content-topic phrase that identifies both, so a learner can tell what the page teaches when the title is read on its own.
+2. Prefer forms such as “object + concept / relationship / mechanism / method / application”. Examples: “教学设计的层次与职责”, “教学目标层级辨析”, “Projectile Motion Variables”, and “Training and Test Set Roles”.
+3. Keep hooks, opening questions, learner commands, and activity instructions in the page content, \`entryPoint\`, task, question stem, or narration. Do not turn them into the title.
+4. A case, practice, or recap page must name its concrete subject and purpose, such as “数据集划分案例分析”, “教学目标层级辨析练习”, or “抛体运动变量总结”. Generic labels by themselves, including “案例分析”, “练习”, “总结”, “Introduction”, “Practice”, and “Key Takeaways”, are invalid slide titles.
+5. Do not use a complete question, conversational transition, suspense slogan, classroom command, or arbitrary numerical teaser as a slide title. A number is valid when it belongs to the formal content being taught, such as a recognized three-stage model.
+
+When rendering a supplied outline, use its \`title\` verbatim as the visible primary heading; line wrapping is allowed, but paraphrasing is not. Only an explicit current edit instruction may change it.
+
 ---
 
 ## Design Principles
@@ -1110,6 +1232,26 @@ Produce a **\`courseTitle\`** (required): a concise, human-readable name for the
 - **Clear Purpose**: Each scene has a clear teaching function
 - **Logical Flow**: Scenes form a natural teaching progression
 - **Experience Design**: Consider learning experience and emotional response from the student's perspective
+
+### Page Visual Planning
+
+For every \`slide\` scene, decide the visual form during this outline call and record it in \`visualIntent\`:
+
+- \`observationGoal\`: what learners should be able to see, compare, trace, or read directly on the page.
+- \`representation\`: one of \`text\`, \`source-image\`, \`generated-image\`, \`native-diagram\`, \`native-chart\`, \`table\`, \`video\`, or \`mixed\`.
+- \`rationale\`: a short teaching reason for the choice.
+- \`resourceRefs\`: stable resources bound to this page. Each reference has \`resourceId\`, \`kind\` (\`source-image\`, \`generated-image\`, or \`generated-video\`), \`required\`, \`reason\`, and optionally its own \`observationGoal\`.
+
+Choose by teaching value, not a media quota:
+
+- Concrete objects, scenes, appearances, and visible differences are usually clearest as a source image or illustration.
+- Quantitative relationships, processes, causes, sequences, and concept structures should use native charts, shapes, and connectors when those forms communicate the supplied evidence more precisely.
+- A short definition, formula, or conclusion may use \`text\` with no resource. Do not request an image merely to decorate the page.
+- When an example depends on learners seeing the difference between real objects or between an object and a mistaken interpretation, plan that visible contrast explicitly instead of turning the whole example into text cards.
+- A suitable textbook image marked \`textbook relation: direct (required)\` must be referenced with \`kind: "source-image"\` and \`required: true\` on the first slide that fully teaches the linked knowledge point. Direct images that form one necessary observation set must stay together. Candidate images remain optional and should be used only when relevant.
+- If no suitable source image exists and an illustration is materially clearer, request one generated image and bind its \`elementId\` in \`resourceRefs\` with \`required: true\`.
+- Reuse the same stable \`resourceId\` across slides when the same asset serves both pages. Define a generated asset in \`mediaGenerations\` only once; later pages reference it only through \`visualIntent.resourceRefs\`.
+- Every resource marked \`required\` is a layout requirement, not a suggestion. The page generator will fail a page that omits it.
 
 ---
 
@@ -1163,15 +1305,15 @@ When comparing or listing information, specify in keyPoints:
 
 Use image generation only for slide scenes that need a static visual and have no suitable source image.
 
-- Prefer \`suggestedImageIds\` when a suitable source/PDF image exists
+- Prefer \`suggestedImageIds\` and a \`visualIntent.resourceRefs\` source-image binding when a suitable source/PDF image exists
 - Add a \`mediaGenerations\` entry only when a generated image genuinely enhances the content
 - Use \`type: "image"\`
 - Each image request specifies: \`prompt\` (description for the generation model), \`elementId\` (unique placeholder), and optionally \`aspectRatio\` (default "16:9") and \`style\`
-- **Image IDs**: use \`"gen_img_1"\`, \`"gen_img_2"\`, etc. IDs are globally unique across the entire course, not reset per scene
+- **Image IDs**: use stable semantic IDs such as \`"gen_img_water-cycle"\`. IDs are global across the course and must not be reset or renamed on later pages
 - The prompt should describe the desired image clearly and specifically
 - **Language in images**: If the image contains text, labels, or annotations, the prompt must explicitly specify that all text in the image should be in the course language (for example, "all labels in Chinese" for zh-CN courses, "all labels in English" for en-US courses). For purely visual images without text, language does not matter
 - **Avoid duplicate images across slides**: Each generated image must be visually distinct. Do not request near-identical images for different slides. If multiple slides cover the same topic, vary the visual angle, scope, or style
-- **Cross-scene reuse**: To reuse a generated image in a different scene, reference the same \`elementId\` in the later scene's content without adding a new \`mediaGenerations\` entry. Only the scene that first defines the \`elementId\` in its \`mediaGenerations\` should include the generation request
+- **Cross-scene reuse**: To reuse a generated image in another scene, add the same ID to that scene's \`visualIntent.resourceRefs\` without adding another \`mediaGenerations\` entry. Only the first scene defines the generation request
 - Use generated images for static content: diagrams, charts, illustrations, portraits, landscapes
 
 Image example:
@@ -1328,10 +1470,15 @@ Rules:
     {
       "id": "scene_1",
       "type": "slide",
-      "title": "Introduction",
-      "description": "Welcome students and introduce the core concept.",
-      "keyPoints": ["Context", "Agenda", "Goals"],
-      "order": 1
+      "title": "Projectile Motion Variables",
+      "description": "Establish the variables that determine a projectile's trajectory.",
+      "keyPoints": ["Launch angle", "Initial velocity", "Gravity"],
+      "order": 1,
+      "visualIntent": {
+        "observationGoal": "Read the three variables that determine the trajectory.",
+        "representation": "text",
+        "rationale": "The concise variable definitions are clearest as text."
+      }
     },
     {
       "id": "scene_2",
@@ -1375,6 +1522,7 @@ Rules:
 | teachingObjective | string                   | ❌       | Corresponding learning objective                                                                 |
 | estimatedDuration | number                   | ❌       | Estimated duration (seconds)                                                                     |
 | order             | number                   | ✅       | Sort order, starting from 1                                                                      |
+| visualIntent      | object                   | ✅ (for slide) | Observation goal, selected representation, rationale, and stable resource bindings                                      |
 
 
 | mediaGenerations  | MediaGenerationRequest[] | ❌       | AI-generated media requests when generated media would enhance a slide scene                     |
@@ -1450,8 +1598,9 @@ Omit \`scenarioRoleplay\` and \`scenarioBrief\` entirely for ordinary build-an-a
 7. \`pbl\` scenes must include \`pblConfig\` with \`projectTopic\`, \`projectDescription\`, \`targetSkills\`, \`issueCount\`.
 8. Arrange scenes by inferred duration (typically 1-2 scenes per minute). Insert quizzes at appropriate points. Use interactive scenes sparingly (max 1-2 per course).
 9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
-10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
-11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.",
+10. Every slide scene includes \`visualIntent\`; a text-only page uses \`representation: "text"\` and an empty or omitted \`resourceRefs\` array.
+11. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
+12. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Name the actual content instead, such as "Random Sampling Bias" or "Projectile Motion Practice".",
   "user": "Please generate scene outlines based on the following course requirements.
 
 ---
@@ -1513,6 +1662,8 @@ Then output your response as a single JSON object.
 }
 \`\`\`
 
+Every slide also includes a decision-complete \`visualIntent\`. Use text alone when that is clearest; do not manufacture an image request for every page. When visible appearance, a concrete scene, or an object-to-object difference is needed, bind a suitable source image or a generated illustration. Use native diagrams/charts for relationships, flows, and supplied quantitative data.
+
 Never return a bare array. Never omit \`languageDirective\` or \`courseTitle\`. All three keys are required.
 
 **Each scene inside the \`outlines\` array has this minimum shape:**
@@ -1521,10 +1672,24 @@ Never return a bare array. Never omit \`languageDirective\` or \`courseTitle\`. 
 {
   "id": "scene_1",
   "type": "slide" | "quiz" | "interactive" | "pbl",
-  "title": "Scene Title",
+  "title": "Core content topic and the specific facet taught on this page",
   "description": "Teaching purpose description",
   "keyPoints": ["Point 1", "Point 2", "Point 3"],
-  "order": 1
+  "order": 1,
+  "visualIntent": {
+    "observationGoal": "What learners inspect on this page",
+    "representation": "text" | "source-image" | "generated-image" | "native-diagram" | "native-chart" | "table" | "video" | "mixed",
+    "rationale": "Why this form best supports the teaching goal",
+    "resourceRefs": [
+      {
+        "resourceId": "a stable source or generated-media ID",
+        "kind": "source-image" | "generated-image" | "generated-video",
+        "required": true,
+        "reason": "Why this resource is needed",
+        "observationGoal": "What to inspect in this resource"
+      }
+    ]
+  }
 }
 \`\`\`
 
@@ -1610,6 +1775,18 @@ Produce a **\`courseTitle\`** (required): a concise, human-readable name for the
 - **Do NOT** include: quotes, numbering, leading emojis, the teacher's name/role, or words like "Course"/"课程"/"A course about".
 - If the requirement is already a crisp title, you may reuse it (trimmed to the limit). If it is a long prompt, distill it to its essence.
 
+## Instructional Slide Title Contract
+
+Apply these rules to every \`slide\` scene. They do not constrain the names of games, simulations, interactive tasks, or projects.
+
+1. Decide the page's core knowledge object and the specific facet taught on that page before writing its title. The title must be a concise content-topic phrase that identifies both, so a learner can tell what the page teaches when the title is read on its own.
+2. Prefer forms such as “object + concept / relationship / mechanism / method / application”. Examples: “教学设计的层次与职责”, “教学目标层级辨析”, “Projectile Motion Variables”, and “Training and Test Set Roles”.
+3. Keep hooks, opening questions, learner commands, and activity instructions in the page content, \`entryPoint\`, task, question stem, or narration. Do not turn them into the title.
+4. A case, practice, or recap page must name its concrete subject and purpose, such as “数据集划分案例分析”, “教学目标层级辨析练习”, or “抛体运动变量总结”. Generic labels by themselves, including “案例分析”, “练习”, “总结”, “Introduction”, “Practice”, and “Key Takeaways”, are invalid slide titles.
+5. Do not use a complete question, conversational transition, suspense slogan, classroom command, or arbitrary numerical teaser as a slide title. A number is valid when it belongs to the formal content being taught, such as a recognized three-stage model.
+
+When rendering a supplied outline, use its \`title\` verbatim as the visible primary heading; line wrapping is allowed, but paraphrasing is not. Only an explicit current edit instruction may change it.
+
 ---
 
 ## Design Principles
@@ -1628,6 +1805,26 @@ Produce a **\`courseTitle\`** (required): a concise, human-readable name for the
 - **Clear Purpose**: Each scene has a clear teaching function
 - **Logical Flow**: Scenes form a natural teaching progression
 - **Experience Design**: Consider learning experience and emotional response from the student's perspective
+
+### Page Visual Planning
+
+For every \`slide\` scene, decide the visual form during this outline call and record it in \`visualIntent\`:
+
+- \`observationGoal\`: what learners should be able to see, compare, trace, or read directly on the page.
+- \`representation\`: one of \`text\`, \`source-image\`, \`generated-image\`, \`native-diagram\`, \`native-chart\`, \`table\`, \`video\`, or \`mixed\`.
+- \`rationale\`: a short teaching reason for the choice.
+- \`resourceRefs\`: stable resources bound to this page. Each reference has \`resourceId\`, \`kind\` (\`source-image\`, \`generated-image\`, or \`generated-video\`), \`required\`, \`reason\`, and optionally its own \`observationGoal\`.
+
+Choose by teaching value, not a media quota:
+
+- Concrete objects, scenes, appearances, and visible differences are usually clearest as a source image or illustration.
+- Quantitative relationships, processes, causes, sequences, and concept structures should use native charts, shapes, and connectors when those forms communicate the supplied evidence more precisely.
+- A short definition, formula, or conclusion may use \`text\` with no resource. Do not request an image merely to decorate the page.
+- When an example depends on learners seeing the difference between real objects or between an object and a mistaken interpretation, plan that visible contrast explicitly instead of turning the whole example into text cards.
+- A suitable textbook image marked \`textbook relation: direct (required)\` must be referenced with \`kind: "source-image"\` and \`required: true\` on the first slide that fully teaches the linked knowledge point. Direct images that form one necessary observation set must stay together. Candidate images remain optional and should be used only when relevant.
+- If no suitable source image exists and an illustration is materially clearer, request one generated image and bind its \`elementId\` in \`resourceRefs\` with \`required: true\`.
+- Reuse the same stable \`resourceId\` across slides when the same asset serves both pages. Define a generated asset in \`mediaGenerations\` only once; later pages reference it only through \`visualIntent.resourceRefs\`.
+- Every resource marked \`required\` is a layout requirement, not a suggestion. The page generator will fail a page that omits it.
 
 ---
 
@@ -1807,10 +2004,15 @@ Rules:
     {
       "id": "scene_1",
       "type": "slide",
-      "title": "Introduction",
-      "description": "Welcome students and introduce the core concept.",
-      "keyPoints": ["Context", "Agenda", "Goals"],
-      "order": 1
+      "title": "Projectile Motion Variables",
+      "description": "Establish the variables that determine a projectile's trajectory.",
+      "keyPoints": ["Launch angle", "Initial velocity", "Gravity"],
+      "order": 1,
+      "visualIntent": {
+        "observationGoal": "Read the three variables that determine the trajectory.",
+        "representation": "text",
+        "rationale": "The concise variable definitions are clearest as text."
+      }
     },
     {
       "id": "scene_2",
@@ -1854,6 +2056,7 @@ Rules:
 | teachingObjective | string                   | ❌       | Corresponding learning objective                                                                 |
 | estimatedDuration | number                   | ❌       | Estimated duration (seconds)                                                                     |
 | order             | number                   | ✅       | Sort order, starting from 1                                                                      |
+| visualIntent      | object                   | ✅ (for slide) | Observation goal, selected representation, rationale, and stable resource bindings                                      |
 
 | suggestedImageIds | string[]                 | ❌       | Suggested image IDs to use                                                                       |
 
@@ -1929,8 +2132,9 @@ Omit \`scenarioRoleplay\` and \`scenarioBrief\` entirely for ordinary build-an-a
 7. \`pbl\` scenes must include \`pblConfig\` with \`projectTopic\`, \`projectDescription\`, \`targetSkills\`, \`issueCount\`.
 8. Arrange scenes by inferred duration (typically 1-2 scenes per minute). Insert quizzes at appropriate points. Use interactive scenes sparingly (max 1-2 per course).
 9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
-10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
-11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.",
+10. Every slide scene includes \`visualIntent\`; a text-only page uses \`representation: "text"\` and an empty or omitted \`resourceRefs\` array.
+11. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
+12. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Name the actual content instead, such as "Random Sampling Bias" or "Projectile Motion Practice".",
   "user": "Please generate scene outlines based on the following course requirements.
 
 ---
@@ -1960,7 +2164,7 @@ None
 
 ### Available Images
 
-- **source_1**: from cell-biology.pdf page 4 | size: 1200×900 (aspect ratio 1.33) | Labeled cross-section of a plant cell
+- **source_1**: from Biology Textbook, Unit 3 page 4 | size: 1200×900 (aspect ratio 1.33) | Labeled cross-section of a plant cell | textbook relation: direct (required) | knowledge points: kp_cell_structure | evidence: evidence_cell_figure | relation reason: Learners must inspect the labeled organelles.
 
 ### Web Search Results
 
@@ -1992,6 +2196,8 @@ Then output your response as a single JSON object.
 }
 \`\`\`
 
+Every slide also includes a decision-complete \`visualIntent\`. Use text alone when that is clearest; do not manufacture an image request for every page. When visible appearance, a concrete scene, or an object-to-object difference is needed, bind a suitable source image or a generated illustration. Use native diagrams/charts for relationships, flows, and supplied quantitative data.
+
 Never return a bare array. Never omit \`languageDirective\` or \`courseTitle\`. All three keys are required.
 
 **Each scene inside the \`outlines\` array has this minimum shape:**
@@ -2000,10 +2206,24 @@ Never return a bare array. Never omit \`languageDirective\` or \`courseTitle\`. 
 {
   "id": "scene_1",
   "type": "slide" | "quiz" | "interactive" | "pbl",
-  "title": "Scene Title",
+  "title": "Core content topic and the specific facet taught on this page",
   "description": "Teaching purpose description",
   "keyPoints": ["Point 1", "Point 2", "Point 3"],
-  "order": 1
+  "order": 1,
+  "visualIntent": {
+    "observationGoal": "What learners inspect on this page",
+    "representation": "text" | "source-image" | "generated-image" | "native-diagram" | "native-chart" | "table" | "video" | "mixed",
+    "rationale": "Why this form best supports the teaching goal",
+    "resourceRefs": [
+      {
+        "resourceId": "a stable source or generated-media ID",
+        "kind": "source-image" | "generated-image" | "generated-video",
+        "required": true,
+        "reason": "Why this resource is needed",
+        "observationGoal": "What to inspect in this resource"
+      }
+    ]
+  }
 }
 \`\`\`
 
@@ -2018,7 +2238,7 @@ Never return a bare array. Never omit \`languageDirective\` or \`courseTitle\`. 
    }
    \`\`\`
 
-- **If source images are available**, add \`suggestedImageIds\` to relevant slide scenes. Only use image IDs listed under Available Images.
+- **If source images are available**, preserve \`suggestedImageIds\` for compatibility and also bind selected IDs in \`visualIntent.resourceRefs\`. Only use IDs listed under Available Images. Images marked \`textbook relation: direct (required)\` are mandatory on the first full teaching page for their linked knowledge point; \`candidate\` images are not mandatory.
 
 - **Interactive scenes**: If a concept benefits from hands-on simulation/visualization, use \`"type": "interactive"\` with \`widgetType\` and \`widgetOutline\` fields. Limit to 1-2 per course.
    - Select widgetType based on concept: simulation (physics/chem), diagram (processes), code (programming), game (practice), visualization3d (3D models)

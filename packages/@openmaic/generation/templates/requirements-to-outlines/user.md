@@ -59,6 +59,8 @@ Then output your response as a single JSON object.
 }
 ```
 
+Every slide also includes a decision-complete `visualIntent`. Use text alone when that is clearest; do not manufacture an image request for every page. When visible appearance, a concrete scene, or an object-to-object difference is needed, bind a suitable source image or a generated illustration. Use native diagrams/charts for relationships, flows, and supplied quantitative data.
+
 Never return a bare array. Never omit `languageDirective` or `courseTitle`. All three keys are required.
 
 **Each scene inside the `outlines` array has this minimum shape:**
@@ -67,10 +69,24 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
 {
   "id": "scene_1",
   "type": "slide" | "quiz" | "interactive" | "pbl",
-  "title": "Scene Title",
+  "title": "Core content topic and the specific facet taught on this page",
   "description": "Teaching purpose description",
   "keyPoints": ["Point 1", "Point 2", "Point 3"],
-  "order": 1
+  "order": 1,
+  "visualIntent": {
+    "observationGoal": "What learners inspect on this page",
+    "representation": "text" | "source-image" | "generated-image" | "native-diagram" | "native-chart" | "table" | "video" | "mixed",
+    "rationale": "Why this form best supports the teaching goal",
+    "resourceRefs": [
+      {
+        "resourceId": "a stable source or generated-media ID",
+        "kind": "source-image" | "generated-image" | "generated-video",
+        "required": true,
+        "reason": "Why this resource is needed",
+        "observationGoal": "What to inspect in this resource"
+      }
+    ]
+  }
 }
 ```
 
@@ -85,7 +101,7 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
    }
    ```
 {{#if hasSourceImages}}
-- **If source images are available**, add `suggestedImageIds` to relevant slide scenes. Only use image IDs listed under Available Images.
+- **If source images are available**, preserve `suggestedImageIds` for compatibility and also bind selected IDs in `visualIntent.resourceRefs`. Only use IDs listed under Available Images. Images marked `textbook relation: direct (required)` are mandatory on the first full teaching page for their linked knowledge point; `candidate` images are not mandatory.
 {{/if}}
 - **Interactive scenes**: If a concept benefits from hands-on simulation/visualization, use `"type": "interactive"` with `widgetType` and `widgetOutline` fields. Limit to 1-2 per course.
    - Select widgetType based on concept: simulation (physics/chem), diagram (processes), code (programming), game (practice), visualization3d (3D models)

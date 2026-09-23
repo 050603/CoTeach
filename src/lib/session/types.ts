@@ -795,6 +795,7 @@ export type OpenMaicSceneOutlineSnapshot = {
   visualPlan?: import("@/lib/openmaic/generation/slide-visual-plan").SlideVisualPlan;
   courseVisualDirection?: string;
   courseVisualTheme?: import("@/lib/openmaic/types/generation").CourseVisualTheme;
+  visualIntent?: import("@/lib/openmaic/types/generation").SceneVisualIntent;
   id: string;
   type?: string;
   title: string;
@@ -1676,6 +1677,14 @@ export type CourseDesignGenerationArtifact = {
         retryCount?: number;
         lastOutputAt?: number;
       }>;
+      /** Durable per-stage page queues for the generation workbench. */
+      stageProgress?: Array<{
+        stage: "content" | "narration" | "actions" | "assembling";
+        total: number;
+        completedPages: number[];
+        activePages: Array<{ index: number; title: string; retryCount?: number }>;
+        failedPages: Array<{ index: number; title: string; retryCount?: number }>;
+      }>;
     };
     /** Parallel post-page work shown together instead of as competing cards. */
     resourcePlan?: {
@@ -1843,6 +1852,8 @@ export type KnowledgeScopePlan = {
     targetKnowledgePointIds?: string[];
     rationale: string;
   }>;
+  /** Present only when a selected primary textbook provided an ordering baseline. */
+  teachingOrder?: import("@/lib/textbook/teaching-order").TextbookTeachingOrder;
 };
 
 export type KnowledgeGraph = {

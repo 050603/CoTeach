@@ -786,6 +786,12 @@
 .pbl-platform-theme .pbl-template-card-main { display: block; width: 100%; min-height: 0; flex: 1; }
 .pbl-platform-theme .pbl-template-card .pbl-library-art { height: 154px; margin: 0 0 16px; border-radius: 13px 13px 0 0; }
 .pbl-platform-theme .pbl-template-card .pbl-library-art .pbl-learning-art { width: 62%; right: 3%; top: -8%; }
+.pbl-platform-theme .pbl-template-card .pbl-library-art .pbl-template-status-badge { top: 14px; right: 14px; bottom: auto; left: auto; padding: 5px 9px; border: 1px solid #ffffffa8; border-radius: 7px; background: #fffffff0; color: var(--pbl-text-muted); font-size: 11px; font-weight: 650; letter-spacing: 0; backdrop-filter: blur(6px); }
+.pbl-platform-theme .pbl-template-card .pbl-library-art .pbl-template-status-badge[data-status=published] { color: #17734b; }
+.pbl-platform-theme .pbl-template-card .pbl-library-art .pbl-template-status-badge[data-status=completed-unpublished] { color: var(--pbl-teacher); }
+.pbl-platform-theme .pbl-template-card .pbl-library-art .pbl-template-status-badge[data-status=incomplete] { color: #9a5d14; }
+.pbl-platform-theme .pbl-template-card .pbl-library-art .pbl-template-status-badge[data-status=generating] { color: #6840a8; }
+.pbl-platform-theme .pbl-template-card .pbl-library-art .pbl-template-status-badge[data-status=archived] { color: var(--pbl-danger); }
 .pbl-platform-theme .pbl-template-card-main > :not(.pbl-library-art) { margin-right: 18px; margin-left: 18px; }
 .pbl-platform-theme .pbl-template-card-title { overflow: hidden; margin-top: 12px; color: var(--pbl-text-strong); font-size: 19px; font-weight: 650; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .pbl-platform-theme .pbl-template-card:hover .pbl-template-card-title { color: var(--pbl-teacher); }

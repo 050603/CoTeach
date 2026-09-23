@@ -9,6 +9,7 @@ import type {
   KnowledgeGraphEdge,
   KnowledgeGraphNode,
   KnowledgePoint,
+  KnowledgeScopePlan,
 } from "@/lib/session/types";
 import type { CourseEvidenceSnapshot } from "@/lib/textbook/course-evidence-types";
 
@@ -47,12 +48,14 @@ export function QuickKnowledgeReviewDialog({
   initialKnowledgePoints,
   initialKnowledgeGraph,
   courseEvidence,
+  knowledgeScopePlan,
   onClose,
   onConfirm,
 }: {
   initialKnowledgePoints: KnowledgePoint[];
   initialKnowledgeGraph: KnowledgeGraph;
   courseEvidence?: CourseEvidenceSnapshot;
+  knowledgeScopePlan?: KnowledgeScopePlan;
   onClose: () => void;
   onConfirm: (knowledgePoints: KnowledgePoint[], knowledgeGraph: KnowledgeGraph) => Promise<void>;
 }) {
@@ -230,6 +233,27 @@ export function QuickKnowledgeReviewDialog({
           </section>
 
           <aside className="min-h-0 overflow-y-auto p-4 sm:p-5">
+            {knowledgeScopePlan?.teachingOrder ? (
+              <section className="mb-4 border-b border-stone-200 pb-4" aria-label="本课教学顺序">
+                <p className="text-sm font-bold text-stone-900">本课教学顺序</p>
+                <p className="mt-1 text-xs text-stone-500">按主教材相关概念的正文位置展开；局部调整列出依据。</p>
+                <ol className="mt-2 space-y-2">
+                  {points.map((point, index) => {
+                    const anchor = knowledgeScopePlan.teachingOrder?.anchors.find((item) => item.knowledgePointId === point.id);
+                    const adjustments = knowledgeScopePlan.teachingOrder?.adjustments.filter((item) => item.knowledgePointId === point.id) ?? [];
+                    return <li className="border-l-2 border-blue-200 pl-2.5 text-xs" key={point.id}>
+                      <p className="font-semibold text-stone-900">{index + 1}. {point.name}</p>
+                      <p className="mt-0.5 text-stone-500">{anchor?.status === "primary-textbook"
+                        ? `主教材：${anchor.sectionPath.join(" › ") || "已定位正文"}`
+                        : "主教材未定位；按知识依赖衔接"}</p>
+                      {adjustments.map((adjustment) => <p className="mt-1 text-amber-800" key={`${adjustment.knowledgePointId}-${adjustment.beforeKnowledgePointId}`}>
+                        调整至“{points.find((candidate) => candidate.id === adjustment.beforeKnowledgePointId)?.name ?? adjustment.beforeKnowledgePointId}”之前：{adjustment.obstacle}；{adjustment.basis}
+                      </p>)}
+                    </li>;
+                  })}
+                </ol>
+              </section>
+            ) : null}
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-sm font-bold text-stone-900"><Network className="size-4 text-blue-700" />节点与关系</div>
               <button className="inline-flex h-8 items-center gap-1.5 rounded-[7px] border border-blue-200 bg-blue-50 px-2.5 text-xs font-semibold text-blue-800 hover:bg-blue-100" onClick={addKnowledgePoint} type="button"><Plus className="size-3.5" />添加知识点</button>

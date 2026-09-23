@@ -14,11 +14,11 @@ import {
 } from './openmaic-baseline';
 
 const PINNED_PROMPT_HASHES = {
-  'slide-content/system.md': '35770a73bee0459c0937f41e1240dedc48d40a9de542345c1a8f1ad129aa89b8',
-  'slide-content/user.md': '232b0a611ae689daf83bcdf1211646d55e97c06d8c9d2d1f888617fcff79db81',
+  'slide-content/system.md': 'a721801549bb40f3ae49a7e3890c767b29d0f24033902c46adb31ed7f34cc6de',
+  'slide-content/user.md': '933706ff5efa04a63abe5627636ac348d7a0f74c28d1eef2b68ff2034ef705ab',
   'slide-actions/user.md': '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
-  'requirements-to-outlines/system.md': '813240c132acfe63007ddcf3dd764b47b5ad1d7b5005d47361ede3aa42614c65',
-  'requirements-to-outlines/user.md': '79fe5ce9a64dc63f174bd1c99dd3e4f1feb2a00e2797edc2a11abc5ac2d6f9ff',
+  'requirements-to-outlines/system.md': '9c32d03f0ee824aeca8514d7e332cac18d58f1983b2ae8c94f7fc67d2887bb3c',
+  'requirements-to-outlines/user.md': 'd2ccf25101ce1f161d7eab2c2cc9b896702e01c3dbb378e69b53d1b6a6bc0188',
 } as const;
 
 const outline: SceneOutline = {
@@ -155,6 +155,9 @@ describe('pinned OpenMAIC generation baseline', () => {
     expect(system).toContain('Choose the representation from the teaching need');
     expect(system).toContain('There is no requirement to use a certain number of formats');
     expect(system).toContain('CoTeach teaching enhancement adapter');
+    expect(system).toContain('Instructional Slide Title Contract');
+    expect(user).toContain('- **Title**: 随机抽样');
+    expect(user).toContain('render `随机抽样` verbatim as the visible primary heading');
     expect(system).not.toContain('使用随机数表选择样本');
     expect(user).toContain('使用随机数表选择样本');
     expect(user).toContain('样本来自明确界定的目标总体');

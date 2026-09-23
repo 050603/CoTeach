@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
-import { generateSceneContent } from './scene-generator';
+import {
+  generateSceneContent,
+  objectiveQuestionRequiresWrittenExplanation,
+} from './scene-generator';
 
 const outline: SceneOutline = {
   id: 'section-check',
@@ -23,6 +26,103 @@ const outline: SceneOutline = {
 };
 
 describe('section short-answer quiz contract', () => {
+  it('distinguishes a selection stem about reasons from an added written response', () => {
+    expect(objectiveQuestionRequiresWrittenExplanation(
+      '请从下列选项中选择最能说明这种现象原因的一项。',
+    )).toBe(false);
+    expect(objectiveQuestionRequiresWrittenExplanation(
+      'Which option best explains why the observation changed?',
+    )).toBe(false);
+    expect(objectiveQuestionRequiresWrittenExplanation(
+      '请选择一项，并简要说明你的理由。',
+    )).toBe(true);
+    expect(objectiveQuestionRequiresWrittenExplanation(
+      'Choose one option and justify your answer.',
+    )).toBe(true);
+  });
+
+  it('accepts an objective item whose selected option explains a reason', async () => {
+    const adaptive: SceneOutline = {
+      ...outline,
+      quizConfig: {
+        difficulty: 'medium', questionCount: 1,
+        questionTypes: ['single'], questionTypePlan: ['single'],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([{
+      id: 'q1', type: 'single', format: 'single_choice',
+      question: '请从下列选项中选择最能说明抽样偏差产生原因的一项。',
+      options: [
+        { label: '样本选择依赖了研究者的便利条件', value: 'A' },
+        { label: '总体中的每个成员都有随机入样机会', value: 'B' },
+      ],
+      answer: ['A'], analysis: 'A 使入样机会取决于便利条件。',
+      knowledgePointIds: ['kp-sampling'], points: 10,
+    }]));
+
+    const result = await generateSceneContent(adaptive, ai);
+    const questions = result && 'questions' in result ? result.questions : [];
+    expect(questions[0]?.format).toBe('single_choice');
+    expect(ai.mock.calls[0][1]).toContain('responseMode is selection_only');
+    expect(ai.mock.calls[0][1]).toContain('put complete candidate responses with their reasoning in the options');
+    expect(ai).toHaveBeenCalledTimes(1);
+  });
+
+  it('adapts a planned true-false item with an open assessment verb to selection-only evidence', async () => {
+    const adaptive: SceneOutline = {
+      ...outline,
+      keyPoints: ['能写出一个开放问题并分解为可探究的子问题'],
+      quizConfig: {
+        difficulty: 'medium', questionCount: 1,
+        questionTypes: ['true_false'], questionTypePlan: ['true_false'],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([{
+      id: 'q1', type: 'single', format: 'true_false',
+      question: '“怎样让校园垃圾分类更准确”没有固定答案，并可拆成资料调查与对照实验两个子问题，因此是可探究的开放问题。',
+      answer: true, analysis: '该候选问题同时满足开放性与可分解性。',
+      knowledgePointIds: ['kp-sampling'], points: 10,
+    }]));
+
+    const result = await generateSceneContent(adaptive, ai);
+    const questions = result && 'questions' in result ? result.questions : [];
+    expect(questions[0]?.format).toBe('true_false');
+    expect(ai.mock.calls[0][1]).toContain('Present one complete candidate conclusion as the proposition');
+    expect(ai.mock.calls[0][1]).toContain('The learner only marks true or false');
+    expect(ai).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an objective item that truly adds a written explanation', async () => {
+    const adaptive: SceneOutline = {
+      ...outline,
+      quizConfig: {
+        difficulty: 'medium', questionCount: 1,
+        questionTypes: ['single'], questionTypePlan: ['single'],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([{
+      id: 'q1', type: 'single', format: 'single_choice',
+      question: '请选择能减少抽样偏差的一项，并简要说明你的理由。',
+      options: [
+        { label: '随机抽取不同年级的学号', value: 'A' },
+        { label: '只询问最先离场的学生', value: 'B' },
+      ],
+      answer: ['A'], analysis: 'A 减少人为选择。',
+      knowledgePointIds: ['kp-sampling'], points: 10,
+    }]));
+
+    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow(
+      'choice or true/false item that also requires a written explanation',
+    );
+    expect(ai).toHaveBeenCalledTimes(1);
+  });
+
   it('prompts for short answers only and repairs a provider type violation', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify([{
       id: 'q1',

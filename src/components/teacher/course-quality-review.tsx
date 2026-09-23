@@ -24,6 +24,11 @@ import { inspectRenderedSlide, measureSlideElements } from '@/lib/course-quality
 import type { Scene } from '@openmaic/lib/types/stage';
 
 export type TeacherReviewDecision = { canConfirm: boolean; signature: string; acceptedIssueIds: string[]; acknowledgeFailedCheck: boolean };
+export type CourseQualityReviewSummary = {
+  attentionCount: number;
+  blockingCount: number;
+  status: 'loading' | 'ready' | 'attention' | 'blocked' | 'confirmed' | 'error';
+};
 type ReviewSnapshot = {
   required: boolean;
   signature: string;
@@ -36,7 +41,7 @@ type ReviewSnapshot = {
   teacherReviewSummary: string | null;
 };
 
-type ReviewFilter = 'all' | 'blocking' | 'attention' | 'reviewed';
+type ReviewFilter = 'action' | 'blocking' | 'content' | 'pages' | 'sources' | 'reviewed';
 type CheckScope = 'all' | 'content' | 'pages';
 
 const ORIGIN_LABEL: Record<CourseQualityIssue['origin'], string> = {
@@ -130,13 +135,17 @@ function RenderPageCheck({ scene, onComplete }: { scene: Scene; onComplete: (pag
   </div>;
 }
 
-export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: {
-  courseId: string; onDecisionChange: (value: TeacherReviewDecision) => void; onOpenPage: (sceneId: string) => void;
+export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, onSummaryChange, visible = true }: {
+  courseId: string;
+  onDecisionChange: (value: TeacherReviewDecision) => void;
+  onOpenPage: (sceneId: string) => void;
+  onSummaryChange?: (summary: CourseQualityReviewSummary) => void;
+  visible?: boolean;
 }) {
   const [snapshot, setSnapshot] = useState<ReviewSnapshot | null>(null);
   const [error, setError] = useState('');
   const [accepted, setAccepted] = useState<string[]>([]);
-  const [filter, setFilter] = useState<ReviewFilter>('all');
+  const [filter, setFilter] = useState<ReviewFilter>('action');
   const [renderRequested, setRenderRequested] = useState(false);
   const [busy, setBusy] = useState<CheckScope | null>(null);
   const [savingPage, setSavingPage] = useState(false);
@@ -155,7 +164,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
         setAccepted(next.teacherReview?.acceptedIssueIds ?? []);
         setRenderRequested(false);
         setRetryPageIds([]);
-        setFilter('all');
+        setFilter('action');
       }
       // Keep stable scene references while polling the same content version.
       setSnapshot((previous) => previous?.signature === next.signature ? { ...next, classroom: previous.classroom } : next);
@@ -194,9 +203,11 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
   const filteredIssues = useMemo(() => openIssues.filter((issue) => {
     if (filter === 'blocking') return isBlockingIssue(issue);
     const reviewed = acceptedSet.has(issue.id) || issue.status === 'accepted';
-    if (filter === 'attention') return !isBlockingIssue(issue) && !reviewed;
     if (filter === 'reviewed') return !isBlockingIssue(issue) && reviewed;
-    return true;
+    if (filter === 'content') return !isBlockingIssue(issue) && !reviewed && issue.origin !== 'render';
+    if (filter === 'pages') return !isBlockingIssue(issue) && !reviewed && issue.origin === 'render';
+    if (filter === 'sources') return false;
+    return !reviewed;
   }), [acceptedSet, filter, openIssues]);
   const qualityRunning = snapshot?.quality?.status === 'running' || snapshot?.quality?.status === 'pending';
   const canConfirm = Boolean(snapshot && snapshot.classroom.assetGeneration?.status !== 'running' && blockingIssues.length === 0);
@@ -214,6 +225,18 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
       acknowledgeFailedCheck: snapshot?.quality?.status !== 'completed',
     });
   }, [canConfirm, snapshot?.signature, snapshot?.quality?.status, accepted, onDecisionChange]);
+  useEffect(() => {
+    if (!onSummaryChange) return;
+    onSummaryChange({
+      attentionCount,
+      blockingCount: blockingIssues.length,
+      status: !snapshot
+        ? error ? 'error' : 'loading'
+        : snapshot.teacherReview ? 'confirmed'
+          : blockingIssues.length ? 'blocked'
+            : attentionCount ? 'attention' : 'ready',
+    });
+  }, [attentionCount, blockingIssues.length, error, onSummaryChange, snapshot]);
 
   const savePage = useCallback(async (page: CourseRenderPageReview) => {
     if (inFlightPage.current) return;
@@ -257,25 +280,30 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
     finally { setBusy(null); }
   }
 
+  const contentIssueCount = openIssues.filter((issue) => !isBlockingIssue(issue) && issue.origin !== 'render' && !acceptedSet.has(issue.id) && issue.status !== 'accepted').length;
+  const pageIssueCount = openIssues.filter((issue) => !isBlockingIssue(issue) && issue.origin === 'render' && !acceptedSet.has(issue.id) && issue.status !== 'accepted').length;
+  const sourceCount = snapshot?.teacherReviewItems.length || (snapshot?.teacherReviewSummary ? 1 : 0) || 0;
   const filterOptions: Array<{ id: ReviewFilter; label: string; count: number }> = [
-    { id: 'all', label: '全部问题', count: openIssues.length },
+    { id: 'action', label: '当前待处理', count: blockingIssues.length + attentionCount },
     { id: 'blocking', label: '必须处理', count: blockingIssues.length },
-    { id: 'attention', label: '待教师核对', count: attentionCount },
+    { id: 'content', label: '内容提示', count: contentIssueCount },
+    { id: 'pages', label: '页面提示', count: pageIssueCount },
+    { id: 'sources', label: '来源说明', count: sourceCount },
     { id: 'reviewed', label: '已核对', count: reviewedCount },
   ];
   const pageCheckActive = Boolean(nextScene) || savingPage;
   const fullCheckDisabled = !snapshot || qualityRunning || pageCheckActive;
 
-  return <section className="mt-5 overflow-hidden rounded-[14px] border border-stone-200 bg-white" aria-label="课程质量与教师终审">
-    <header className="border-b border-stone-200 bg-stone-50/55 px-4 py-5 sm:px-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+  return <>
+  <section aria-label="课程质量与教师终审" aria-labelledby="publish-tab-checks" className="overflow-hidden rounded-[14px] border border-stone-200 bg-white" hidden={!visible} id="publish-panel-checks" role="tabpanel">
+    <header className="border-b border-stone-200 bg-stone-50/55 px-4 py-3 sm:px-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="max-w-3xl">
-          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--pbl-teacher)]">发布前质量把关</p>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-black text-stone-950">课程检查与教师终审</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-base font-black text-stone-950">课程检查与教师终审</h2>
             {snapshot?.teacherReview ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-800">当前版本已终审</span> : null}
           </div>
-          <p className="mt-1 text-sm leading-6 text-stone-600">先处理会阻止发布的结构问题，再核对内容与页面建议。辅助检查不会替代教师对实际课堂效果的判断。</p>
+          <p className="mt-0.5 text-xs leading-5 text-stone-500">按类别查看提示；红色项目需要先修正，其余建议由教师结合课堂意图核对。</p>
         </div>
         <Button
           className="min-h-11 bg-[var(--pbl-teacher)] px-4 text-white hover:bg-[var(--pbl-teacher-hover)]"
@@ -290,7 +318,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
     </header>
 
     {!snapshot ? <div className="grid min-h-40 place-items-center px-6 py-10 text-sm text-stone-500"><span className="inline-flex items-center gap-2"><Loader2 className="animate-spin" size={16} />正在读取当前课程版本…</span></div> : <>
-      <div aria-live="polite" className="grid border-b border-stone-200 md:grid-cols-3 md:divide-x md:divide-stone-200">
+      <div aria-live="polite" className="grid gap-px border-b border-stone-200 bg-stone-200 md:grid-cols-3">
         <ReviewStatusCard
           actionLabel={qualityRunning ? '检查进行中' : snapshot.quality ? '仅重查内容' : '检查内容'}
           actionDisabled={qualityRunning || busy !== null}
@@ -327,7 +355,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
               : toReview.length ? `${toReview.length} 项建议均已核对` : '当前没有待教师处理的检查项'}
           icon={blockingIssues.length ? <CircleAlert size={18} /> : <ShieldCheck size={18} />}
           label="教师确认"
-          status={blockingIssues.length ? '有阻断项' : attentionCount ? '待核对' : '可确认'}
+          status={blockingIssues.length ? '有阻断项' : snapshot.teacherReview ? '已终审' : attentionCount ? '待核对' : '可确认'}
           tone={blockingIssues.length ? 'danger' : attentionCount ? 'warning' : 'success'}
         />
       </div>
@@ -342,60 +370,26 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
         <p><strong>内容检查未完成：</strong>{snapshot.quality.error || '检查服务暂时不可用'}。你仍可根据课程资料和实际预览完成人工终审。</p>
       </div> : null}
 
-      {(snapshot.teacherReviewItems.length > 0 || snapshot.teacherReviewSummary) ? <section className="border-b border-stone-200 px-4 py-5 sm:px-6" aria-labelledby="generation-review-title">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-black text-stone-950" id="generation-review-title">授课前来源与构造说明{snapshot.teacherReviewItems.length ? `（${snapshot.teacherReviewItems.length} 项）` : ''}</h3>
-            <p className="mt-1 text-xs leading-5 text-stone-500">这里只记录课程中采用的示意数据、构造案例或待核事实，不再把教师知识图谱的原始名称和解释当作逐字覆盖清单。</p>
-          </div>
-          <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-800">教师私有参考 · 不阻断发布</span>
-        </div>
-        {snapshot.teacherReviewItems.length ? <ul className="mt-4 grid gap-3 lg:grid-cols-2">
-          {snapshot.teacherReviewItems.map((item) => {
-            const scene = item.sceneId
-              ? snapshot.classroom.scenes.find((entry) => entry.id === item.sceneId)
-              : item.outlineId ? snapshot.classroom.scenes.find((entry) => entry.outlineId === item.outlineId || entry.id === item.outlineId) : undefined;
-            const outlineId = scene?.outlineId ?? item.outlineId ?? scene?.id;
-            const sceneIndex = scene ? snapshot.classroom.scenes.findIndex((entry) => entry.id === scene.id) : -1;
-            return <li className="border-l-2 border-amber-300 bg-amber-50/45 px-4 py-3" key={item.id}>
-              <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
-                <span className="text-amber-900">{REVIEW_KIND_LABEL[item.kind]}</span>
-                <span className="text-stone-300">/</span>
-                <span className="text-stone-500">{PROVENANCE_LABEL[item.provenance]}</span>
-                {scene ? <span className="text-stone-500">第 {sceneIndex + 1} 页 · {scene.title}</span> : null}
-              </div>
-              <p className="mt-2 text-sm font-bold leading-6 text-stone-900">{item.content}</p>
-              <p className="mt-1 text-xs leading-5 text-stone-600"><strong>教学用途：</strong>{item.teachingPurpose}</p>
-              {item.source ? <p className="mt-1 text-xs leading-5 text-stone-500"><strong>相关来源：</strong>{item.source}</p> : null}
-              {scene && outlineId ? <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-                <button className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" onClick={() => onOpenPage(outlineId)} type="button">在发布页查看 <ChevronRight size={14} /></button>
-                <Link className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" href={editorIssueHref(courseId, scene.id, item.elementId)}>定位并修改 <ExternalLink size={13} /></Link>
-              </div> : null}
-            </li>;
-          })}
-        </ul> : <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-stone-600">{snapshot.teacherReviewSummary}</p>}
-      </section> : null}
-
-      <section className="px-4 py-5 sm:px-6" aria-labelledby="review-issues-title">
+      <section className="px-4 py-4 sm:px-5" aria-labelledby="review-issues-title">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h3 className="text-sm font-black text-stone-950" id="review-issues-title">检查结果</h3>
-            <p className="mt-1 text-xs leading-5 text-stone-500">红色项目必须处理；其余项目可结合教学意图逐项核对并留痕。</p>
+            <h3 className="text-sm font-black text-stone-950" id="review-issues-title">按类别查看检查结果</h3>
+            <p className="mt-1 text-xs leading-5 text-stone-500">一次只显示一类提示，数量为 0 的类别也会保留，便于快速确认。</p>
           </div>
           <p className="text-xs font-semibold text-stone-500">{blockingIssues.length} 项阻断 · {attentionCount} 项待核对 · {reviewedCount} 项已核对</p>
         </div>
 
-        <div className="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="检查结果筛选">
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6" aria-label="检查结果分类">
           {filterOptions.map((option) => <button
             aria-pressed={filter === option.id}
-            className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-[8px] border px-3 text-xs font-bold transition ${filter === option.id ? 'border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]' : 'border-stone-200 bg-white text-stone-600 hover:border-stone-300 hover:bg-stone-50'}`}
+            className={`inline-flex min-h-11 items-center justify-between gap-2 rounded-[8px] border px-3 text-xs font-bold transition ${filter === option.id ? 'border-[var(--pbl-teacher)] bg-[var(--pbl-teacher-soft)] text-[var(--pbl-teacher)]' : option.count ? 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50' : 'border-stone-200 bg-stone-50 text-stone-400'}`}
             key={option.id}
             onClick={() => setFilter(option.id)}
             type="button"
-          >{option.label}<span className="tabular-nums text-[10px] opacity-70">{option.count}</span></button>)}
+          >{option.label}<span className="grid min-w-5 place-items-center rounded-full bg-black/5 px-1.5 py-0.5 tabular-nums text-[10px]">{option.count}</span></button>)}
         </div>
 
-        {filteredIssues.length ? <ol className="mt-4 space-y-3">
+        {filter === 'sources' ? <SourceReviewList courseId={courseId} items={snapshot.teacherReviewItems} onOpenPage={onOpenPage} scenes={snapshot.classroom.scenes} summary={snapshot.teacherReviewSummary} /> : filteredIssues.length ? <ol className="mt-4 space-y-3">
           {filteredIssues.map((issue) => {
             const blocking = isBlockingIssue(issue);
             const reviewed = acceptedSet.has(issue.id) || issue.status === 'accepted';
@@ -440,22 +434,51 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage }: 
               </div>
 
               {scene && outlineId ? <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-black/5 pt-2">
-                <button className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" onClick={() => onOpenPage(outlineId)} type="button">在发布页查看 <ChevronRight size={14} /></button>
+                <button className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" onClick={() => onOpenPage(outlineId)} type="button">查看页面 <ChevronRight size={14} /></button>
                 <Link className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" href={editorIssueHref(courseId, scene.id, issue.elementId, issue.questionId)}>
-                  {issue.elementId ? '在编辑器中定位元素' : issue.questionId ? '打开题目所在页' : '打开本页并修改'} <ExternalLink size={13} />
+                  定位并修改 <ExternalLink size={13} />
                 </Link>
               </div> : null}
             </li>;
           })}
         </ol> : <div className="mt-4 border border-dashed border-stone-300 px-5 py-8 text-center">
           <span className="mx-auto grid size-10 place-items-center rounded-full bg-emerald-50 text-emerald-700"><Check size={18} /></span>
-          <p className="mt-3 text-sm font-bold text-stone-900">{openIssues.length ? '此筛选下没有检查项' : snapshot.quality?.status === 'completed' || pages.length ? '当前检查未发现需要特别处理的问题' : '尚未生成检查结果'}</p>
-          <p className="mt-1 text-xs leading-5 text-stone-500">{openIssues.length ? '切换其他筛选条件查看结果。' : snapshot.quality?.status === 'completed' || pages.length ? '仍建议按实际教学流程完成一次人工预览。' : '点击“开始完整检查”，或分别运行内容和页面检查。'}</p>
+          <p className="mt-3 text-sm font-bold text-stone-900">{filter === 'action' && !openIssues.length && snapshot.quality?.status !== 'completed' && !pages.length ? '尚未生成检查结果' : '这一类当前没有提示'}</p>
+          <p className="mt-1 text-xs leading-5 text-stone-500">{filter === 'action' && !openIssues.length && snapshot.quality?.status !== 'completed' && !pages.length ? '可按需运行完整检查，也可以直接完成人工终审。' : '可切换上方类别继续查看。'}</p>
         </div>}
       </section>
     </>}
 
-    {nextScene && <RenderCheckBoundary key={`${snapshot?.signature}:${nextScene.id}`} sceneId={nextScene.id} onComplete={onRenderComplete}><RenderPageCheck scene={nextScene} onComplete={onRenderComplete} /></RenderCheckBoundary>}
+  </section>
+  {nextScene && <RenderCheckBoundary key={`${snapshot?.signature}:${nextScene.id}`} sceneId={nextScene.id} onComplete={onRenderComplete}><RenderPageCheck scene={nextScene} onComplete={onRenderComplete} /></RenderCheckBoundary>}
+  </>;
+}
+
+function SourceReviewList({ courseId, items, onOpenPage, scenes, summary }: {
+  courseId: string;
+  items: TeacherReviewItem[];
+  onOpenPage: (sceneId: string) => void;
+  scenes: Scene[];
+  summary: string | null;
+}) {
+  if (!items.length && !summary) return <div className="mt-4 border border-dashed border-stone-300 px-5 py-8 text-center"><span className="mx-auto grid size-10 place-items-center rounded-full bg-emerald-50 text-emerald-700"><Check size={18} /></span><p className="mt-3 text-sm font-bold text-stone-900">当前没有来源或构造说明</p></div>;
+  return <section className="mt-4" aria-labelledby="generation-review-title">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <div><h4 className="text-sm font-black text-stone-950" id="generation-review-title">授课前来源与构造说明{items.length ? `（${items.length} 项）` : ''}</h4><p className="mt-1 text-xs leading-5 text-stone-500">示意数据、构造案例与待核事实集中列在这里。</p></div>
+      <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-800">教师参考 · 不阻断发布</span>
+    </div>
+    {items.length ? <ul className="mt-3 grid gap-3 lg:grid-cols-2">{items.map((item) => {
+      const scene = item.sceneId ? scenes.find((entry) => entry.id === item.sceneId) : item.outlineId ? scenes.find((entry) => entry.outlineId === item.outlineId || entry.id === item.outlineId) : undefined;
+      const outlineId = scene?.outlineId ?? item.outlineId ?? scene?.id;
+      const sceneIndex = scene ? scenes.findIndex((entry) => entry.id === scene.id) : -1;
+      return <li className="border-l-2 border-amber-300 bg-amber-50/45 px-4 py-3" key={item.id}>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold"><span className="text-amber-900">{REVIEW_KIND_LABEL[item.kind]}</span><span className="text-stone-300">/</span><span className="text-stone-500">{PROVENANCE_LABEL[item.provenance]}</span>{scene ? <span className="text-stone-500">第 {sceneIndex + 1} 页 · {scene.title}</span> : null}</div>
+        <p className="mt-2 text-sm font-bold leading-6 text-stone-900">{item.content}</p>
+        <p className="mt-1 text-xs leading-5 text-stone-600"><strong>教学用途：</strong>{item.teachingPurpose}</p>
+        {item.source ? <p className="mt-1 text-xs leading-5 text-stone-500"><strong>相关来源：</strong>{item.source}</p> : null}
+        {scene && outlineId ? <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1"><button className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" onClick={() => onOpenPage(outlineId)} type="button">查看页面 <ChevronRight size={14} /></button><Link className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" href={editorIssueHref(courseId, scene.id, item.elementId)}>定位并修改 <ExternalLink size={13} /></Link></div> : null}
+      </li>;
+    })}</ul> : <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-stone-600">{summary}</p>}
   </section>;
 }
 
@@ -483,15 +506,15 @@ function ReviewStatusCard({
   const toneClass = tone === 'success' ? 'bg-emerald-50 text-emerald-800'
     : tone === 'warning' ? 'bg-amber-50 text-amber-900'
       : tone === 'danger' ? 'bg-rose-50 text-rose-800' : 'bg-stone-100 text-stone-600';
-  return <div className="flex min-h-40 flex-col border-b border-stone-200 px-4 py-4 last:border-b-0 md:border-b-0 sm:px-6">
-    <div className="flex items-start justify-between gap-3">
-      <span className={`grid size-9 place-items-center rounded-[8px] ${toneClass}`}>{icon}</span>
+  return <div className="flex flex-col bg-white px-4 py-3">
+    <div className="flex items-center gap-2">
+      <span className={`grid size-8 shrink-0 place-items-center rounded-[8px] ${toneClass}`}>{icon}</span>
+      <p className="min-w-0 flex-1 text-sm font-black text-stone-950">{label}</p>
       <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${toneClass}`}>{status}</span>
     </div>
-    <p className="mt-3 text-sm font-black text-stone-950">{label}</p>
-    <p className="mt-1 flex-1 text-xs leading-5 text-stone-500">{detail}</p>
+    <p className="mt-2 flex-1 text-xs leading-5 text-stone-500">{detail}</p>
     {actionLabel && onAction ? <button
-      className="mt-2 inline-flex min-h-11 items-center gap-1 self-start text-xs font-bold text-[var(--pbl-teacher)] hover:underline disabled:cursor-not-allowed disabled:text-stone-400 disabled:no-underline"
+      className="mt-1 inline-flex min-h-11 items-center gap-1 self-start text-xs font-bold text-[var(--pbl-teacher)] hover:underline disabled:cursor-not-allowed disabled:text-stone-400 disabled:no-underline"
       disabled={actionDisabled}
       onClick={onAction}
       type="button"

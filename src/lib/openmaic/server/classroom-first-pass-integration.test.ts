@@ -66,6 +66,7 @@ import { generateClassroom } from './classroom-generation';
 import { fingerprintSceneOutline, restoreSceneCheckpoint, type PageCheckpointSnapshot } from '@/lib/course-generation/page-checkpoints';
 import { TEACHING_ENHANCEMENT_VERSION } from '../generation/teaching-enhancement';
 import { TEACHING_NARRATION_VERSION } from '../generation/teaching-narration';
+import { COURSE_GENERATION_POLICY_VERSION } from '../generation/course-generation-policy';
 
 const teachingPlan = {
   purpose: '理解证据与结论的关系', priorKnowledge: '学生知道资料可被引用',
@@ -218,6 +219,64 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.ai).not.toHaveBeenCalled();
   });
 
+  it('enhances only the generically selected test section while preserving the full outline for promotion', async () => {
+    const first: SceneOutline = {
+      ...outline,
+      id: 'formal-section-a-page',
+      title: '第一小节概念讲解',
+      generationPurpose: 'knowledge-teaching',
+      lectureSectionId: 'section-a',
+      lectureSectionTitle: '第一小节',
+    };
+    const second: SceneOutline = {
+      ...outline,
+      id: 'formal-section-b-page',
+      title: '教师重点对应的小节',
+      order: 1,
+      generationPurpose: 'knowledge-teaching',
+      lectureSectionId: 'section-b',
+      lectureSectionTitle: '教师重点小节',
+    };
+    mocks.ai.mockImplementation(async (system: string, user: string) => {
+      if (system.includes('课程小节的教学设计师')) {
+        expect(user).toContain(second.id);
+        return JSON.stringify({ sharedContext, pages: [{
+          outlineId: second.id,
+          explanation: '只为所选完整小节补充可制作的实质解释。',
+          examples: ['用一个具体材料说明所选知识。'],
+          conditions: ['结论只适用于给定条件。'],
+          assessmentFocus: '说明判断及理由。',
+          evidenceQuotes: [],
+          teachingPlan,
+        }] });
+      }
+      if (system.includes('# Slide Content Generator')) return JSON.stringify(content);
+      if (system.includes('Slide Action Generator') || system === 'Section teaching narration') return JSON.stringify(narration);
+      throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
+    });
+    const onOutlinesPrepared = vi.fn();
+    const onProgress = vi.fn();
+
+    const result = await generateClassroom({ ...input, sceneOutlines: [first, second] }, {
+      generationOutlineIds: [second.id],
+      onOutlinesPrepared,
+      onProgress,
+      loadSceneCheckpoint: () => null,
+    });
+
+    expect(result.assetContext.outlines.map((item) => item.id)).toEqual([second.id]);
+    const persisted = onOutlinesPrepared.mock.calls[0]?.[0] as SceneOutline[];
+    expect(persisted.map((item) => item.id)).toEqual([first.id, second.id]);
+    expect(persisted[0]?.teachingBrief).toBeUndefined();
+    expect(persisted[1]?.teachingBrief?.explanation).toContain('所选完整小节');
+    expect(mocks.ai.mock.calls.filter(([system]) => system.includes('课程小节的教学设计师'))).toHaveLength(1);
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({
+      step: 'generating_outlines',
+      message: '正在生成分小节教学设计（1/1）',
+      totalScenes: 1,
+    }));
+  });
+
   it.each([undefined, 'natural-teacher-speech-v2'])('invalidates knowledge checkpoints carrying old narration policy %s', async (legacyPolicy) => {
     const enhancedOutline: SceneOutline = {
       ...outline,
@@ -268,7 +327,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.ai.mock.calls.some(([system]) => system.includes('中文课堂讲稿编辑'))).toBe(false);
     expect(result.scenes[0]?.id).not.toBe('legacy-first-draft');
-    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v19-teacher-review-boundary');
+    expect(result.scenes[0]?.narrationRevision).toBe(COURSE_GENERATION_POLICY_VERSION);
   });
 
   it('restores a structurally complete slide without running layout review', async () => {
@@ -335,7 +394,7 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
         },
       },
       actions: [{ id: 'saved-speech', type: 'speech', text: '已保存讲稿。' }],
-      narrationRevision: 'course-first-pass-v19-teacher-review-boundary',
+      narrationRevision: COURSE_GENERATION_POLICY_VERSION,
       createdAt: 1,
       updatedAt: 1,
     } as unknown as Scene;
@@ -478,9 +537,11 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       }
       throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
     });
+    const onProgress = vi.fn();
     const callbacks = {
       preparedOutlines: [resumableOutline],
       loadSceneCheckpoint: () => null,
+      onProgress,
       loadSceneStageCheckpoint: (_saved: SceneOutline, stage: string) => stages.get(stage) ?? null,
       onSceneStageCompleted: async (
         _saved: SceneOutline,
@@ -494,6 +555,14 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.ai).toHaveBeenCalledTimes(2);
     expect(mocks.review).not.toHaveBeenCalled();
     expect(mocks.persist).not.toHaveBeenCalled();
+    const failedNarration = [...onProgress.mock.calls]
+      .reverse()
+      .map(([progress]) => progress)
+      .find((progress) => progress.stageProgress?.some((stage: { stage: string; failedPages: unknown[] }) => stage.stage === 'narration' && stage.failedPages.length > 0));
+    expect(failedNarration?.stageProgress).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: 'content', completedPages: [1] }),
+      expect.objectContaining({ stage: 'narration', failedPages: [expect.objectContaining({ index: 1 })] }),
+    ]));
 
     narrationAvailable = true;
     const result = await generateClassroom(input, callbacks);
@@ -539,6 +608,15 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
       step: 'generating_outlines',
       message: '正在生成分小节教学设计（1/1）',
     }));
+    const completedProgress = [...onProgress.mock.calls]
+      .reverse()
+      .map(([progress]) => progress)
+      .find((progress) => progress.step === 'completed');
+    expect(completedProgress?.stageProgress).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: 'content', total: 1, completedPages: [1] }),
+      expect.objectContaining({ stage: 'actions', total: 1, completedPages: [1] }),
+      expect.objectContaining({ stage: 'assembling', total: 1, completedPages: [1] }),
+    ]));
     expect(mocks.prepare).not.toHaveBeenCalled();
   });
 
@@ -586,11 +664,11 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(result.scenes[0]?.actions).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'speech', text: '短讲稿。' }),
     ]));
-    expect(result.scenes[0]?.narrationRevision).toBe('course-first-pass-v19-teacher-review-boundary');
+    expect(result.scenes[0]?.narrationRevision).toBe(COURSE_GENERATION_POLICY_VERSION);
     expect(result.qualityReport.teachingEnhancementVersion).toBe(TEACHING_ENHANCEMENT_VERSION);
     expect(result.qualityReport.narrationEnhancementVersion).toBe(TEACHING_NARRATION_VERSION);
     expect(result.qualityReport.reviewMode).toBeUndefined();
-    expect(result.qualityReport.reviewPolicyVersion).toBe('course-first-pass-v19-teacher-review-boundary');
+    expect(result.qualityReport.reviewPolicyVersion).toBe(COURSE_GENERATION_POLICY_VERSION);
   });
 
   it('preserves the initial playable speech without a style review pass', async () => {

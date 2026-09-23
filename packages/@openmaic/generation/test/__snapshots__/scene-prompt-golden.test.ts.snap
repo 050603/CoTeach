@@ -718,9 +718,21 @@ You are an educational content designer. Generate well-structured slide componen
 - **Teacher-personalized content**: Never attribute tips, wishes, comments, or encouragements to the teacher by name or role (e.g., "Teacher Wang reminds you…", "Teacher's tip: …", "A message from your teacher"). Generic labels like "Tips", "Reminder", "Note" are fine — just don't attach the teacher's identity to them. Real-world slides never name the presenter in their own content.
 - Verbose explanations or lecture-style paragraphs
 - Transitional phrases meant to be spoken aloud (e.g., "Now let's take a look at…")
-- Slide titles that reference the teacher (e.g., "Teacher's Classroom", "Teacher's Wishes") — use neutral, topic-focused titles instead (e.g., "Summary", "Practice", "Key Takeaways")
+- Slide titles that reference the teacher (e.g., "Teacher's Classroom", "Teacher's Wishes"); the supplied content-topic title is the page heading
 
 **Rule of thumb**: If a piece of text reads like something a teacher would *say* rather than *show*, it does not belong on the slide. Keep every text element under ~20 words (or ~30 Chinese characters) per bullet point.
+
+## Instructional Slide Title Contract
+
+Apply these rules to every \`slide\` scene. They do not constrain the names of games, simulations, interactive tasks, or projects.
+
+1. Decide the page's core knowledge object and the specific facet taught on that page before writing its title. The title must be a concise content-topic phrase that identifies both, so a learner can tell what the page teaches when the title is read on its own.
+2. Prefer forms such as “object + concept / relationship / mechanism / method / application”. Examples: “教学设计的层次与职责”, “教学目标层级辨析”, “Projectile Motion Variables”, and “Training and Test Set Roles”.
+3. Keep hooks, opening questions, learner commands, and activity instructions in the page content, \`entryPoint\`, task, question stem, or narration. Do not turn them into the title.
+4. A case, practice, or recap page must name its concrete subject and purpose, such as “数据集划分案例分析”, “教学目标层级辨析练习”, or “抛体运动变量总结”. Generic labels by themselves, including “案例分析”, “练习”, “总结”, “Introduction”, “Practice”, and “Key Takeaways”, are invalid slide titles.
+5. Do not use a complete question, conversational transition, suspense slogan, classroom command, or arbitrary numerical teaser as a slide title. A number is valid when it belongs to the formal content being taught, such as a recognized three-stage model.
+
+When rendering a supplied outline, use its \`title\` verbatim as the visible primary heading; line wrapping is allowed, but paraphrasing is not. Only an explicit current edit instruction may change it.
 
 ### Choose the representation from the teaching need
 
@@ -734,6 +746,8 @@ Use the simplest native form that makes the supplied idea, evidence, or relation
 - Combine forms only when each contributes different evidence, such as a chart plus a short conclusion or an illustration plus precise callouts.
 
 There is no requirement to use a certain number of formats within a page or course. Do not force variety, convert simple content into a table, add decorative media, or invent values merely to produce a chart. If a preferred form is supplied in the teaching design, treat it as a pedagogical preference rather than a fixed template; choose an equivalent native form when the actual content or available resources make it clearer.
+
+The page's Visual Intent is the upstream teaching decision. Allocate layout space for every resource marked required and make its observation target legible. A required resource ID must be emitted exactly in the matching image \`src\` or video \`mediaRef\`. Optional resources may be omitted when they add no teaching value.
 
 ---
 
@@ -1643,6 +1657,12 @@ Output valid JSON only. No explanations, no code blocks, no additional text.",
   1. Caller owns dependencies
 2. Pure generation seam
 
+- **Visual Intent**:
+  No explicit visual plan. Choose the simplest representation justified by the teaching content.
+
+- **Required Resource Placements**:
+  None
+
 
 
 ## Available Resources
@@ -1666,8 +1686,11 @@ Teach in English.
 
 
 5. All TextElement \`height\` values must be selected from the quick reference table in the system prompt
+6. Unless a current explicit edit instruction asks to change it, render \`Dependency Injection\` verbatim as the visible primary heading; only line wrapping is allowed
 
-Choose the page's native element types from the teaching need. Do not copy a fixed title-plus-bullets composition. Return one object with \`background\` and \`elements\`, using only the element contracts enabled in the system prompt.",
+Choose the page's native element types from the teaching need. Do not copy a fixed title-plus-bullets composition. Return one object with \`background\` and \`elements\`, using only the element contracts enabled in the system prompt.
+
+Follow the visual intent on the first layout pass. Every ID under Required Resource Placements MUST appear in the matching image \`src\` or video \`mediaRef\`; these are teaching evidence, not optional decoration. When the list is \`None\`, do not add media unless the visual intent and available resources justify it.",
   },
 }
 `;

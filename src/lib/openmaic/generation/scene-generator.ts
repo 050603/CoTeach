@@ -33,6 +33,7 @@ import type { PromptId } from '@openmaic/lib/prompts/types';
 import type { PblCourseConfig } from '@/lib/pbl-course-config';
 import { formatPblSceneContext } from '@/lib/openmaic/pbl/course-template';
 import type { LanguageModel } from 'ai';
+import type { TextMeasure } from '@openmaic/generation';
 import type { StageStore } from '@openmaic/lib/api/stage-api';
 import { createStageAPI } from '@openmaic/lib/api/stage-api';
 import { generatePBLContent } from '@openmaic/lib/pbl/generate-pbl';
@@ -122,6 +123,8 @@ const INTERACTIVE_WIDGET_ACTIONS = [
 // ── Options interfaces for scene generation functions ──
 
 export interface SceneContentOptions {
+  componentAuthoring?: boolean;
+  textMeasure?: TextMeasure;
   /** @deprecated Content checks are now explicitly requested in teacher preview. */
   reviewSlideContent?: boolean;
   /** Program-drawn spatial plan, never a generated teaching image. */
@@ -477,6 +480,8 @@ export async function generateSceneContent(
     editDirective,
     baselineContent,
     websiteReferenceContext,
+    componentAuthoring,
+    textMeasure,
     signal,
   } = options;
   const pblContext = [
@@ -524,6 +529,8 @@ export async function generateSceneContent(
         editDirective,
         baselineContent,
         websiteReferenceContext,
+        componentAuthoring,
+        textMeasure,
       });
     case 'quiz':
       return generateQuizContent(outline, aiCall, languageDirective, pblContext);
@@ -1054,7 +1061,7 @@ export async function generateLegacyCustomizedSlideContent(
  */
 type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['questionTypes'][number];
 
-export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v4-first-pass';
+export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v6-adapted-evidence';
 
 const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
   single: 'single_choice',
@@ -1068,6 +1075,56 @@ const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
 
 function generatedQuizText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * Detect an additional written-response instruction on an objective item.
+ *
+ * Keep this deliberately narrower than searching for words such as “请”、
+ * “说明” or “原因” independently. Those words also appear in valid stems like
+ * “请选择最能说明该现象原因的一项”, where the only learner response is still
+ * an option selection.
+ */
+export function objectiveQuestionRequiresWrittenExplanation(stem: string): boolean {
+  const value = stem.replace(/\s+/g, ' ').trim();
+  if (!value) return false;
+  return [
+    /(?:并|同时|另外|还要)[，,\s]*(?:请)?(?:简要)?(?:写出|写下|说明|解释|阐述).{0,12}(?:理由|原因|依据|你的选择|所选(?:答案|选项)|作答思路)/u,
+    /(?:请)?(?:简要)?(?:写出|写下).{0,12}(?:理由|原因|依据)/u,
+    /(?:请)?(?:简要)?(?:说明|解释|阐述).{0,8}(?:你的选择|所选(?:答案|选项)|选择(?:该项|此项)|判断依据|作答思路)/u,
+    /\b(?:explain|justify)\s+(?:your\s+)?(?:answer|choice|reasoning)\b/iu,
+    /\b(?:give|provide|write)\s+(?:a\s+|your\s+)?(?:reason|explanation|justification)\b/iu,
+  ].some((pattern) => pattern.test(value));
+}
+
+function quizTestPointResponseContract(type: PlannedQuizQuestionType): string {
+  switch (type) {
+    case 'true_false':
+      return 'Present one complete candidate conclusion as the proposition. The learner only marks true or false. Put correction, reasons, and consequences in analysis after grading.';
+    case 'fill_blank':
+      return 'Use one explicit blank whose response is a keyword, value, relation, or short phrase. Do not ask for sentence-level reasoning.';
+    case 'matching':
+      return 'Convert the target into explicit object-to-object correspondences. The learner only submits the matches.';
+    case 'multiple':
+      return 'Put complete candidate conclusions, reasons, or plans in the options. The learner only selects every option that meets the supplied criteria.';
+    case 'single':
+    default:
+      return 'If the target says explain, write, design, or decompose, put complete candidate responses with their reasoning in the options. The learner only selects the one response that meets the same criteria and does not write a reason.';
+  }
+}
+
+function formatQuizTestPoints(
+  keyPoints: readonly string[],
+  exactPlan: readonly PlannedQuizQuestionType[] | undefined,
+  allowedFormats: readonly string[],
+): string {
+  return keyPoints.map((point, index) => {
+    const rawType = exactPlan?.[index] ?? allowedFormats[index % Math.max(1, allowedFormats.length)];
+    const type: PlannedQuizQuestionType = rawType && rawType in QUIZ_FORMAT_BY_PLANNED_TYPE
+      ? rawType as PlannedQuizQuestionType
+      : 'single';
+    return `${index + 1}. ${point}\n   Response evidence contract (${type}): ${quizTestPointResponseContract(type)}`;
+  }).join('\n');
 }
 
 function validateGeneratedQuizQuality(questions: unknown[], title: string): void {
@@ -1156,14 +1213,18 @@ async function generateQuizContent(
   const prompts = buildPrompt(PROMPT_IDS.QUIZ_CONTENT, {
     title: outline.title,
     description: outline.description,
-    keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
+    keyPoints: formatQuizTestPoints(
+      outline.keyPoints || [],
+      exactQuestionTypePlan,
+      questionFormats,
+    ),
     questionCount: quizConfig.questionCount,
     difficulty: quizConfig.difficulty,
     questionTypes: shortAnswerOnly
       ? `short_answer only; every generated question must use type="short_answer" and have no options; ${coverageInstruction}`
       : exactQuestionTypePlan
-        ? `follow this exact ordered question plan: ${exactQuestionTypePlan.map((type, index) => `question ${index + 1} must use type="${type}"`).join('; ')}. Each numbered Test Point maps to the same-numbered question. Return exactly ${quizConfig.questionCount} questions; ${coverageInstruction}; do not replace one planned format with another`
-        : `${questionFormats.join(', ')} only; return exactly ${quizConfig.questionCount} questions; ${quizConfig.coveragePolicy === 'each-target' ? 'generate one question for each ordered assessment target' : coverageInstruction}; use at least ${quizConfig.minShortAnswerQuestions ?? 0} and at most ${quizConfig.maxShortAnswerQuestions ?? 0} explanation-style short_answer/scenario_task questions; explanation questions must require a conclusion and a brief reason`,
+        ? `follow this exact ordered question plan: ${exactQuestionTypePlan.map((type, index) => `question ${index + 1} must use type="${type}"`).join('; ')}. Each numbered Test Point maps to the same-numbered question. Return exactly ${quizConfig.questionCount} questions; ${coverageInstruction}; do not replace one planned format with another. For single, multiple, matching, and true_false, responseMode is selection_only: the question stem must end after asking for the selection and must not request a written reason; put all reasoning feedback in analysis`
+        : `${questionFormats.join(', ')} only; return exactly ${quizConfig.questionCount} questions; ${quizConfig.coveragePolicy === 'each-target' ? 'generate one question for each ordered assessment target' : coverageInstruction}; use at least ${quizConfig.minShortAnswerQuestions ?? 0} and at most ${quizConfig.maxShortAnswerQuestions ?? 0} explanation-style short_answer/scenario_task questions; explanation questions must require a conclusion and a brief reason. For single, multiple, matching, and true_false, responseMode is selection_only: the question stem must end after asking for the selection and must not request a written reason; put all reasoning feedback in analysis`,
     knowledgePointIds: (outline.knowledgePointIds ?? []).join(', '),
     assessmentTargets: JSON.stringify(outline.assessmentTargets ?? []),
     languageDirective: languageDirective || '',
@@ -1273,7 +1334,7 @@ async function generateQuizContent(
       throw new Error(`Quiz "${outline.title}" returned ${explanationQuestions.length} open-response questions; maximum is ${maxShortAnswers}`);
     }
     const choiceWithWrittenExplanation = questions.find((question) => question.type !== 'short_answer'
-      && /(?:请|并).*?(?:说明|解释|写出).*?(?:理由|原因)|\b(?:explain|justify)\b/iu.test(question.question));
+      && objectiveQuestionRequiresWrittenExplanation(question.question));
     if (choiceWithWrittenExplanation) {
       throw new Error(`Quiz "${outline.title}" returned a choice or true/false item that also requires a written explanation: ${choiceWithWrittenExplanation.id}`);
     }

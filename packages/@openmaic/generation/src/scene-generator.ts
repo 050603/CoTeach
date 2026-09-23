@@ -57,6 +57,9 @@ import { noopGenerationLogger, type GenerationLogger } from './logger.js';
 import { isAbortError } from './generation-retry.js';
 import { generatePBLV2ProjectSingleCall } from './pbl/planner-single-call.js';
 import { PlannerV2Error } from './pbl/planner-core.js';
+import { componentAuthoringContract } from './component-authoring-contract.js';
+import { compileTextComponents, type LabelGridComponent, type TextBoxComponent, type TextMeasure } from './text-layout-compiler.js';
+import { compileDiagramComponent, isDiagramComponent } from './diagram-compiler.js';
 import type { PBLPlannerV2Input } from './pbl/types.js';
 
 function isGeneratedMediaPlaceholder(value: string | undefined): value is string {
@@ -79,6 +82,10 @@ export interface SceneContentFailure {
 }
 
 export interface SceneContentOptions {
+  /** Compile first-draft components before native slide normalization. */
+  componentAuthoring?: boolean;
+  /** Host browser measurement using the same fonts and CSS as playback. */
+  textMeasure?: TextMeasure;
   assignedImages?: PdfImage[];
   imageMapping?: ImageMapping;
   visionEnabled?: boolean;
@@ -263,6 +270,8 @@ export async function generateSceneContent(
     allowProceduralSkill = false,
     editDirective,
     baselineContent,
+    componentAuthoring,
+    textMeasure,
   } = options;
 
   // Unified path for interactive scenes (both normal and ultra mode)
@@ -307,6 +316,8 @@ export async function generateSceneContent(
         languageDirective,
         editDirective,
         baselineContent,
+        componentAuthoring,
+        textMeasure,
         log,
         options.onFailure,
       );
@@ -343,8 +354,8 @@ function isImageIdReference(value: string): boolean {
   if (value.startsWith('data:')) return false;
   if (value.startsWith('http://') || value.startsWith('https://')) return false;
   if (value.startsWith('/')) return false; // Relative paths
-  // Match image ID format: img_1, img_2, etc.
-  return /^img_\d+$/i.test(value);
+  // Match legacy PDF IDs and stable textbook evidence IDs.
+  return /^(?:img_\d+|textbook_fig_[\w-]+)$/i.test(value);
 }
 
 /**
@@ -381,7 +392,14 @@ export function resolveImageIds(
         }
         const src = el.src as string;
 
-        // If src is an image ID reference, replace with actual URL
+        // Mapping keys are authoritative so stable evidence IDs do not need to
+        // conform to the legacy img_N naming convention.
+        if (imageMapping && Object.prototype.hasOwnProperty.call(imageMapping, src)) {
+          log.debug(`Resolved image ID "${src}" to its mapped source`);
+          return { ...el, src: imageMapping[src] };
+        }
+
+        // If src looks like an unresolved source-image reference, fail closed.
         if (isImageIdReference(src)) {
           if (!imageMapping || !imageMapping[src]) {
             log.warn(`No mapping for image ID: ${src}, removing element`);
@@ -429,11 +447,15 @@ export function resolveImageIds(
 function normalizeGeneratedVideoRefs(
   elements: GeneratedSlideData['elements'],
   generatedVideoEntries: SceneOutline['mediaGenerations'] = [],
+  sharedVideoRefs: string[] = [],
   log: GenerationLogger = noopGenerationLogger,
 ): GeneratedSlideData['elements'] {
-  const validRefs = generatedVideoEntries
-    .filter((mg) => mg.type === 'video')
-    .map((mg) => mg.elementId);
+  const validRefs = Array.from(
+    new Set([
+      ...generatedVideoEntries.filter((mg) => mg.type === 'video').map((mg) => mg.elementId),
+      ...sharedVideoRefs,
+    ]),
+  );
 
   const validRefSet = new Set(validRefs);
   const onlyRef = validRefs.length === 1 ? validRefs[0] : undefined;
@@ -625,9 +647,32 @@ async function generateSlideContent(
   languageDirective?: string,
   editDirective?: string,
   baselineContent?: GeneratedSlideContent,
+  componentAuthoring = false,
+  textMeasure?: TextMeasure,
   log: GenerationLogger = noopGenerationLogger,
   onFailure?: (failure: SceneContentFailure) => void,
 ): Promise<GeneratedSlideContent | null> {
+  const visualResourceRefs = outline.visualIntent?.resourceRefs ?? [];
+  const requiredResourceRefs = visualResourceRefs.filter((reference) => reference.required);
+  const assignedImageIds = new Set((assignedImages ?? []).map((image) => image.id));
+  const missingRequiredSourceIds = requiredResourceRefs
+    .filter((reference) => reference.kind === 'source-image')
+    .map((reference) => reference.resourceId)
+    .filter(
+      (resourceId) =>
+        !assignedImageIds.has(resourceId) ||
+        !imageMapping ||
+        !Object.prototype.hasOwnProperty.call(imageMapping, resourceId) ||
+        !imageMapping[resourceId],
+    );
+  if (missingRequiredSourceIds.length > 0) {
+    log.error(
+      `Required source images are unavailable for ${outline.title}: ${missingRequiredSourceIds.join(', ')}`,
+    );
+    onFailure?.({ code: 'invalid-model-output' });
+    return null;
+  }
+
   // Build assigned images description for the prompt
   let assignedImagesText = '无可用图片，禁止插入任何 image 元素';
   let visionImages: Array<{ id: string; src: string }> | undefined;
@@ -680,28 +725,65 @@ async function generateSlideContent(
 
   const generatedImageEntries = outline.mediaGenerations?.filter((mg) => mg.type === 'image') ?? [];
   const generatedVideoEntries = outline.mediaGenerations?.filter((mg) => mg.type === 'video') ?? [];
+  const generatedImageRefs = visualResourceRefs.filter(
+    (reference) => reference.kind === 'generated-image',
+  );
+  const generatedVideoRefs = visualResourceRefs.filter(
+    (reference) => reference.kind === 'generated-video',
+  );
   const hasAssignedImages = (assignedImages?.length ?? 0) > 0;
-  const generatedImageEnabled = generatedImageEntries.length > 0;
-  const generatedVideoEnabled = generatedVideoEntries.length > 0;
+  const generatedImageEnabled = generatedImageEntries.length > 0 || generatedImageRefs.length > 0;
+  const generatedVideoEnabled = generatedVideoEntries.length > 0 || generatedVideoRefs.length > 0;
   const imageElementEnabled = hasAssignedImages || generatedImageEnabled;
   const mediaElementEnabled = imageElementEnabled || generatedVideoEnabled;
 
   // Add generated media placeholders info (images + videos)
-  if (outline.mediaGenerations && outline.mediaGenerations.length > 0) {
+  if (
+    (outline.mediaGenerations && outline.mediaGenerations.length > 0) ||
+    generatedImageRefs.length > 0 ||
+    generatedVideoRefs.length > 0
+  ) {
     const genImgDescs = generatedImageEntries
       .map((mg) => `- ${mg.elementId}: "${mg.prompt}" (aspect ratio: ${mg.aspectRatio || '16:9'})`)
       .join('\n');
     const genVidDescs = generatedVideoEntries
       .map((mg) => `- ${mg.elementId}: "${mg.prompt}" (aspect ratio: ${mg.aspectRatio || '16:9'})`)
       .join('\n');
+    const definedMediaIds = new Set(
+      (outline.mediaGenerations ?? []).map((mediaGeneration) => mediaGeneration.elementId),
+    );
+    const reusedImageDescs = generatedImageRefs
+      .filter((reference) => !definedMediaIds.has(reference.resourceId))
+      .map(
+        (reference) =>
+          `- ${reference.resourceId}: shared generated image; ${reference.reason}${reference.required ? ' (required)' : ''}`,
+      )
+      .join('\n');
+    const reusedVideoDescs = generatedVideoRefs
+      .filter((reference) => !definedMediaIds.has(reference.resourceId))
+      .map(
+        (reference) =>
+          `- ${reference.resourceId}: shared generated video; ${reference.reason}${reference.required ? ' (required)' : ''}`,
+      )
+      .join('\n');
 
     const mediaParts: string[] = [];
     if (genImgDescs) {
       mediaParts.push(`AI-Generated Images (use these IDs as image element src):\n${genImgDescs}`);
     }
+    if (reusedImageDescs) {
+      mediaParts.push(
+        `Shared AI-Generated Images (use these IDs as image element src; do not request generation again):\n${reusedImageDescs}`,
+      );
+    }
     if (genVidDescs) {
       mediaParts.push(
         `AI-Generated Videos (use these IDs as video element mediaRef):\n${genVidDescs}`,
+      );
+    }
+    if (reusedVideoDescs) {
+      mediaParts.push(
+        `Shared AI-Generated Videos (use these IDs as video element mediaRef; do not request generation again):\n${reusedVideoDescs}`,
       );
     }
 
@@ -731,6 +813,18 @@ async function generateSlideContent(
     canvas_height: canvasHeight,
     teacherContext,
     languageDirective: languageDirective || '',
+    visualIntent: outline.visualIntent
+      ? JSON.stringify(outline.visualIntent, null, 2)
+      : 'No explicit visual plan. Choose the simplest representation justified by the teaching content.',
+    requiredResourceIds:
+      requiredResourceRefs.length > 0
+        ? requiredResourceRefs
+            .map(
+              (reference) =>
+                `- ${reference.resourceId} (${reference.kind}): ${reference.observationGoal || reference.reason}`,
+            )
+            .join('\n')
+        : 'None',
     imageElementEnabled,
     generatedImageEnabled,
     generatedVideoEnabled,
@@ -785,7 +879,10 @@ async function generateSlideContent(
       `Return the full updated slide content in the same schema.`;
   }
 
-  const response = await aiCall(prompts.system, userPrompt, visionImages);
+  const useComponents = componentAuthoring && !editDirective && !baselineContent;
+  const authoring = useComponents ? componentAuthoringContract(outline) : undefined;
+  if (authoring) userPrompt += `\n\n${authoring.user}`;
+  const response = await aiCall(authoring ? `${prompts.system}\n\n${authoring.system}` : prompts.system, userPrompt, visionImages);
   const generatedData = parseJsonResponse<GeneratedSlideData>(response);
 
   if (!generatedData || !Array.isArray(generatedData.elements)) {
@@ -796,12 +893,69 @@ async function generateSlideContent(
 
   log.debug(`Got ${generatedData.elements.length} elements for: ${outline.title}`);
 
+  if (useComponents) {
+    if (!textMeasure || !Array.isArray(generatedData.components) || generatedData.components.length === 0
+      || generatedData.elements.some((element) => element?.type === 'text')) {
+      log.error(`Missing or invalid first-draft components for: ${outline.title}`);
+      onFailure?.({ code: 'invalid-model-output' });
+      return null;
+    }
+    try {
+      const compiled: GeneratedSlideData['elements'] = [];
+      let diagrams = 0;
+      let hasTitle = false;
+      for (const component of generatedData.components) {
+        if (isDiagramComponent(component)) {
+          diagrams += 1;
+          const planned = outline.visualIntent?.diagram;
+          // The teaching plan owns meaning; the page author chooses only its rectangle and styling.
+          const diagram = planned ? { ...component, ...planned } : component;
+          compiled.push(...compileDiagramComponent(diagram) as unknown as GeneratedSlideData['elements']);
+        } else if (component && typeof component === 'object'
+          && ('kind' in component)
+          && (component.kind === 'textBox' || component.kind === 'labelGrid')) {
+          const textComponent = component as TextBoxComponent | LabelGridComponent;
+          if (textComponent.kind === 'textBox' && textComponent.role === 'title') {
+            hasTitle ||= textComponent.text === outline.title;
+          }
+          compiled.push(...await compileTextComponents([textComponent], textMeasure) as unknown as GeneratedSlideData['elements']);
+        } else throw new Error('Unknown first-draft component');
+      }
+      if (!hasTitle) throw new Error('Missing exact page title component');
+      if (outline.visualIntent?.diagram && diagrams !== 1) throw new Error('Structured teaching diagram is missing or duplicated');
+      generatedData.elements = [...generatedData.elements, ...compiled];
+    } catch (error) {
+      log.error(`First-draft component compilation failed for ${outline.title}: ${error instanceof Error ? error.message : String(error)}`);
+      onFailure?.({ code: 'invalid-model-output' });
+      return null;
+    }
+  }
+
   // Normalize the untrusted array before reading any element property. Model
   // output such as `elements: [null]` must become a recognizable content
   // failure rather than escaping as a TypeError from `el.type`.
   const fixedElements = fixElementDefaults(generatedData.elements, assignedImages, log);
   if (fixedElements.length === 0) {
     log.error(`Generated slide has no renderable elements for: ${outline.title}`);
+    onFailure?.({ code: 'invalid-model-output' });
+    return null;
+  }
+
+  const missingRequiredLayoutRefs = requiredResourceRefs.filter((reference) => {
+    return !fixedElements.some((element) => {
+      if (reference.kind === 'generated-video') {
+        if (element.type !== 'video') return false;
+        const video = element as unknown as Record<string, unknown>;
+        return video.mediaRef === reference.resourceId || video.src === reference.resourceId;
+      }
+      if (element.type !== 'image') return false;
+      return (element as unknown as Record<string, unknown>).src === reference.resourceId;
+    });
+  });
+  if (missingRequiredLayoutRefs.length > 0) {
+    log.error(
+      `Generated slide omitted required visual resources for ${outline.title}: ${missingRequiredLayoutRefs.map((reference) => reference.resourceId).join(', ')}`,
+    );
     onFailure?.({ code: 'invalid-model-output' });
     return null;
   }
@@ -840,6 +994,7 @@ async function generateSlideContent(
   const videoNormalizedElements = normalizeGeneratedVideoRefs(
     resolvedElements,
     outline.mediaGenerations,
+    generatedVideoRefs.map((reference) => reference.resourceId),
     log,
   );
   log.debug(`After video reference normalization: ${videoNormalizedElements.length} elements`);

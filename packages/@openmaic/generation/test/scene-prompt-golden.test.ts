@@ -41,4 +41,7 @@ it('pins representative system and user prompts for every scene kind', async () 
   });
 
   expect(captured).toMatchSnapshot();
+  expect(captured.slide.system).toContain('Instructional Slide Title Contract');
+  expect(captured.slide.user).toContain('render `Dependency Injection` verbatim as the visible primary heading');
+  expect(`${captured.slide.system}\n${captured.slide.user}`).not.toContain('{{snippet:slide-title-guidelines}}');
 });

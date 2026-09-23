@@ -99,7 +99,8 @@ describe('independent first-pass teaching narration', () => {
     expect(aiCall.mock.calls[0][0]).toContain('synthesize what the learner can now explain or do');
     expect(aiCall.mock.calls[0][0]).toContain('温暖、清楚地逐步解释');
     expect(aiCall.mock.calls[0][0]).toContain('copied as one contiguous substring from that exact finalized segment text');
-    expect(aiCall.mock.calls[0][0]).toContain('a spotlight that starts inside a segment remains until that segment ends');
+    expect(aiCall.mock.calls[0][0]).toContain('One natural segment may contain several visual focus changes');
+    expect(aiCall.mock.calls[0][0]).toContain('Do not split fluent speech merely to end a visual cue');
     expect(aiCall.mock.calls[0][0]).toContain('Choose spotlight for sustained explanation of text');
     expect(aiCall.mock.calls[0][0]).toContain('multi-target laser only to trace an explicit order');
     expect(aiCall.mock.calls[0][0]).toContain('A comparison of prose blocks or table rows is not a laser path');
@@ -271,6 +272,28 @@ describe('independent first-pass teaching narration', () => {
     expect(generated.pages[0]?.segments[0]?.anchors).toBeUndefined();
   });
 
+  it('keeps speech but disables a cue whose explicit end anchor is invalid', () => {
+    const narration = normalizeTeachingNarration({ segments: [{
+      text: '先看小鱼和青蛙怎样理解牛，接着看顺应的定义。',
+      semanticIds: ['page-a:teaching', 'page-a:visible-1'],
+      anchors: [{
+        semanticId: 'page-a:visible-1',
+        quote: '小鱼和青蛙',
+        visualCue: {
+          type: 'spotlight',
+          endSpeechAnchor: { quote: '不存在的结束语' },
+        },
+      }],
+    }] }, outline());
+
+    expect(narration.segments[0]?.text).toContain('顺应的定义');
+    expect(narration.segments[0]?.anchors?.[0]?.visualCue).toBeUndefined();
+    const result = compileTeachingNarrationActions({ outline: outline(), content: content(), narration });
+    expect(result.actions).toEqual([
+      expect.objectContaining({ type: 'speech', text: narration.segments[0]?.text }),
+    ]);
+  });
+
   it('repairs only typographic anchor differences to the exact TTS substring', () => {
     const narration = normalizeTeachingNarration({ segments: [{
       text: '先看“理论”：它说明为什么，再看模式说明怎么组织。',
@@ -403,6 +426,50 @@ describe('independent first-pass teaching narration', () => {
       duration: 6000,
       speechAnchor: { quote: '理论先具体化为模式', occurrence: 0 },
     });
+  });
+
+  it('compiles multiple semantic focus changes in one natural narration segment', () => {
+    const slide = content('小鱼、青蛙和牛的例子');
+    slide.elements[0].id = 'animal-example';
+    slide.elements.push({
+      ...content('顺应：调整原有认知结构，形成新的认识').elements[0],
+      id: 'accommodation-definition',
+      left: 520,
+    });
+    const narration = normalizeTeachingNarration({ segments: [{
+      text: '先看小鱼、青蛙和牛的例子，接着看顺应的定义：顺应是调整原有认知结构，形成新的认识。',
+      semanticIds: ['page-a:teaching', 'page-a:visible-1'],
+      anchors: [{
+        semanticId: 'page-a:visible-1',
+        quote: '小鱼、青蛙和牛的例子',
+        visualCue: {
+          type: 'spotlight',
+          target: { elementId: 'animal-example' },
+        },
+      }, {
+        semanticId: 'page-a:visible-1',
+        quote: '顺应的定义',
+        visualCue: {
+          type: 'spotlight',
+          target: { elementId: 'accommodation-definition' },
+        },
+      }],
+    }] }, outline());
+
+    const result = compileTeachingNarrationActions({ outline: outline(), content: slide, narration });
+
+    expect(result.issues).toEqual([]);
+    expect(result.actions.filter((action) => action.type === 'spotlight')).toEqual([
+      expect.objectContaining({
+        elementId: 'animal-example',
+        speechAnchor: { quote: '小鱼、青蛙和牛的例子', occurrence: 0 },
+      }),
+      expect.objectContaining({
+        elementId: 'accommodation-definition',
+        speechAnchor: { quote: '顺应的定义', occurrence: 0 },
+      }),
+    ]);
+    expect(result.actions.filter((action) => action.type === 'speech')).toHaveLength(1);
   });
 
   it('omits an invalid direct visual target without rejecting valid narration', () => {

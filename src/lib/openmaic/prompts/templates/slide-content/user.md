@@ -44,6 +44,7 @@ The generated component must represent only this page's assigned subtopic. Follo
 - Use only the provided generated video media refs for video `mediaRef` fields
 {{/if}}
 5. Fit TextElement heights to the actual wrapped lines using the system prompt’s metrics; preserve readable text and separate non-overlapping boxes.
+6. Unless a current explicit edit instruction asks to change it, render `{{title}}` verbatim as the visible primary heading; only line wrapping is allowed.
 
 **Output structure**: {"background":{"type":"solid","color":"course background"},"elements":[/* native elements following the selected semantic composition */],"remark":"Expanded explanation grounded in the visible evidence; do not introduce unsupported claims."}
 

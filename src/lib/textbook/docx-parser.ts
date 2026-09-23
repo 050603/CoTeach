@@ -153,6 +153,30 @@ function inferSectionKind(level: number): TextbookSectionKind {
   return "SUBSECTION";
 }
 
+const headingOrdinal = String.raw`(?:[0-9]+|[零〇一二三四五六七八九十百千万两廿卅]+)`;
+const headingMarkerPatterns = [
+  new RegExp(String.raw`^第\s*${headingOrdinal}\s*(?:章|节|篇|编|部|单元|课)\s*(?:[、,，:：.．·—-]\s*)?`, "u"),
+  new RegExp(String.raw`^\(\s*(?:${headingOrdinal}|[A-Za-z])\s*\)\s*(?:[、,，:：.．·—-]\s*)?`, "u"),
+  new RegExp(String.raw`^[零〇一二三四五六七八九十百千万两廿卅]+\s*[、.．]\s*`, "u"),
+  /^(?:[0-9]+(?:\.[0-9]+){1,5}|[0-9]+)\s*(?:[、.)]|(?=\s))\s*/u,
+  /^(?:[A-Za-z]|[IVXLCDM]+)[、.)]\s*/u,
+];
+
+export function splitTextbookHeading(value: string): { title: string; marker: string | null } {
+  const original = normalizeTextbookText(value);
+  let title = original;
+  let marker = "";
+  for (let depth = 0; depth < 3; depth++) {
+    const match = headingMarkerPatterns.map((pattern) => title.match(pattern)).find(Boolean);
+    if (!match?.[0]) break;
+    const remainder = title.slice(match[0].length).trim();
+    if (!remainder) break;
+    marker += match[0];
+    title = remainder;
+  }
+  return { title, marker: marker.trim() || null };
+}
+
 function inferBlockType(text: string, headingLevel: number | null, styleName: string, hasNumbering: boolean): TextbookBlockType {
   if (headingLevel !== null) return headingLevel === 0 ? "TITLE" : "HEADING";
   if (/caption|题注/i.test(styleName) || /^图\s*\d+(?:[-—.．]\s*\d+)+/u.test(text)) return "CAPTION";
@@ -235,20 +259,22 @@ export function parseTextbookDocx(bytes: Buffer): ParsedTextbookDocument {
     const numberingLevel = isTable ? null : childAttribute(elementXml, "ilvl", "val");
     const hasNumbering = numberingId !== null;
     const type = isTable ? "TABLE" : inferBlockType(text, headingLevel, style?.name ?? "", hasNumbering);
+    const heading = !isDirectory && headingLevel !== null ? splitTextbookHeading(text) : { title: text, marker: null };
+    const content = heading.title;
     const blockKey = `block-${position}`;
     const imageIds = paragraphImageIds(elementXml);
 
     if (!isDirectory && (text || imageIds.length) && activeSection === null && headingLevel === null) activeSection = ensureFrontMatter();
 
-    if (!isDirectory && text && headingLevel !== null && headingLevel >= 0 && headingLevel <= 8) {
+    if (!isDirectory && content && headingLevel !== null && headingLevel >= 0 && headingLevel <= 8) {
       while (sectionStack.length && sectionStack[sectionStack.length - 1].level >= headingLevel) sectionStack.pop();
       const parent = sectionStack[sectionStack.length - 1] ?? null;
-      const basePath = parent ? `${parent.path} / ${text}` : text;
+      const basePath = parent ? `${parent.path} / ${content}` : content;
       const sectionPath = sectionPaths.has(basePath) ? `${basePath} · ${position}` : basePath;
       const section: ParsedTextbookSection = {
         key: `section-${position}`,
         parentKey: parent?.key ?? null,
-        title: text,
+        title: content,
         path: sectionPath,
         kind: inferSectionKind(headingLevel),
         level: headingLevel,
@@ -266,7 +292,7 @@ export function parseTextbookDocx(bytes: Buffer): ParsedTextbookDocument {
         sectionKey: isDirectory ? null : activeSection?.key ?? null,
         type,
         position,
-        content: text,
+        content,
         metadata: {
           styleId,
           styleName: style?.name ?? null,
@@ -275,6 +301,8 @@ export function parseTextbookDocx(bytes: Buffer): ParsedTextbookDocument {
           hasNumbering,
           numberingId,
           numberingLevel: numberingLevel !== null && /^\d+$/.test(numberingLevel) ? Number(numberingLevel) : null,
+          headingMarker: heading.marker,
+          rawHeading: heading.marker ? text : null,
           imageRelationshipIds: imageIds,
         },
       };

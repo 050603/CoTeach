@@ -1,9 +1,11 @@
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import {
+  CLASSROOMS_DIR,
   readClassroom,
   updatePersistedClassroomScenes,
   updatePersistedClassroomScenesIfRevision,
 } from "@/lib/openmaic/server/classroom-storage";
+import { planClassroomTtsRecovery } from "@/lib/openmaic/server/classroom-asset-recovery";
 import { generateClassroomAssets } from "@/lib/openmaic/server/classroom-asset-generation";
 import {
   findUnresolvedClassroomMedia,
@@ -82,8 +84,20 @@ async function repairCourseResources(courseId: string, baseUrl: string): Promise
 
   if (classroom && classroomId) {
     const repairedTools = repairMissingTeachingToolResources(outlines, classroom.scenes);
-    const scenes = repairedTools.scenes;
+    let scenes = repairedTools.scenes;
     if (repairedTools.changed) await updatePersistedClassroomScenes(classroomId, scenes);
+
+    // An audioUrl is not proof that its local file is still usable. Clear only
+    // missing/corrupt managed clips so the ordinary TTS pipeline can rebuild
+    // them while preserving all healthy and external narration.
+    const recovery = await planClassroomTtsRecovery(
+      { ...classroom, scenes },
+      CLASSROOMS_DIR,
+    );
+    scenes = recovery.classroom.scenes;
+    if (recovery.missingActionIds.length > 0) {
+      await updatePersistedClassroomScenes(classroomId, scenes);
+    }
 
     const recordedMediaFailures = classroom.assetGeneration?.failures.filter(
       (failure) => failure.type === "image" || failure.type === "video",

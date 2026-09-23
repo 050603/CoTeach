@@ -6,8 +6,10 @@ import {
   generateKnowledgeStructureOnce,
   generateReviewedKnowledgeStructure,
   KNOWLEDGE_STRUCTURE_POLICY_VERSION,
+  parseKnowledgeStructureJson,
 } from "@/lib/knowledge-structure-generation";
 import type { GenerateInput } from "@/lib/llm/types";
+import type { CourseEvidenceSnapshot } from "@/lib/textbook/course-evidence-types";
 
 const input: GenerateInput = {
   name: "自然语言处理",
@@ -39,7 +41,95 @@ const candidate = {
   },
 };
 
+const orderedTextbookEvidence: CourseEvidenceSnapshot = {
+  schemaVersion: 2, version: 1, fingerprint: "order", createdAt: "2026-01-01T00:00:00.000Z",
+  retrievalMode: "hybrid", warnings: [], mappings: [],
+  selections: [{ revisionId: "main", primary: true, sectionIds: [] }],
+  items: [1, 2, 3].map((index) => ({
+    id: `ev-${index}`, kind: "concept" as const, title: `知识${index}`, content: `正文${index}`,
+    source: { textbookId: "book", textbookTitle: "主教材", revisionId: "main", revisionVersion: 1,
+      sectionPath: ["第一章"], sectionPosition: 1, sourceBlockPosition: index * 10 },
+  })),
+};
+
 describe("reviewed knowledge structure generation", () => {
+  it("restores the primary textbook order even when the model returns interleaved groups in reverse", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+      knowledgePoints: [
+        { id: "third", name: "知识3", evidenceItemIds: ["ev-3"], groupId: "A", groupName: "组A" },
+        { id: "second", name: "知识2", evidenceItemIds: ["ev-2"], groupId: "B", groupName: "组B" },
+        { id: "first", name: "知识1", evidenceItemIds: ["ev-1"], groupId: "A", groupName: "组A" },
+      ], knowledgeGraph: { nodes: [], edges: [] },
+    }));
+    const result = await generateKnowledgeStructureOnce(input, { textbookEvidence: orderedTextbookEvidence }, { modelCall });
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["first", "second", "third"]);
+    expect(result.knowledgeScopePlan?.teachingOrder?.baselineKnowledgePointIds).toEqual(["first", "second", "third"]);
+    expect(result.knowledgeScopePlan?.teachingOrder?.adjustments).toEqual([]);
+  });
+
+  it("records a justified local adjustment and ignores a vague one", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+      knowledgePoints: [
+        { id: "first", name: "知识1", evidenceItemIds: ["ev-1"] },
+        { id: "second", name: "知识2", evidenceItemIds: ["ev-2"] },
+        { id: "third", name: "知识3", evidenceItemIds: ["ev-3"] },
+      ],
+      knowledgeScopePlan: { teachingOrderAdjustments: [
+        { knowledgePointId: "second", beforeKnowledgePointId: "first", obstacle: "更合理", basis: "教材内容" },
+        { knowledgePointId: "third", beforeKnowledgePointId: "second",
+          obstacle: "学生尚不能辨认第三步的观察对象，先看第三步的具体现象才能理解第二步的抽象比较",
+          basis: "主教材第一章相关示例给出了可先观察的具体现象，适合本学段学生" },
+      ] },
+      knowledgeGraph: { nodes: [], edges: [] },
+    }));
+    const result = await generateKnowledgeStructureOnce(input, { textbookEvidence: orderedTextbookEvidence }, { modelCall });
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["first", "third", "second"]);
+    expect(result.knowledgeScopePlan?.teachingOrder?.adjustments).toEqual([
+      expect.objectContaining({ knowledgePointId: "third", beforeKnowledgePointId: "second", kind: "learner-obstacle" }),
+    ]);
+  });
+
+  it("moves a required cross-group dependency ahead of its textbook location and records why", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+      knowledgePoints: [
+        { id: "application", name: "知识1", evidenceItemIds: ["ev-1"], groupId: "application", groupName: "应用" },
+        { id: "foundation", name: "知识3", evidenceItemIds: ["ev-3"], groupId: "foundation", groupName: "基础" },
+      ],
+      knowledgeGraph: { nodes: [], edges: [{ source: "foundation", target: "application",
+        type: "supports", strength: "required", label: "构成必要基础",
+        rationale: "没有先理解知识3的操作对象，就无法判断知识1的适用条件" }] },
+    }));
+    const result = await generateKnowledgeStructureOnce(input, { textbookEvidence: orderedTextbookEvidence }, { modelCall });
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["foundation", "application"]);
+    expect(result.knowledgeScopePlan?.teachingOrder?.adjustments).toEqual([
+      expect.objectContaining({ knowledgePointId: "foundation", beforeKnowledgePointId: "application",
+        kind: "necessary-dependency", basis: "没有先理解知识3的操作对象，就无法判断知识1的适用条件" }),
+    ]);
+  });
+  it("accepts a complete knowledge structure with a minor JSON syntax error on the first response", async () => {
+    const raw = '{"knowledgePoints":[{"id":"kp","name":"概念","description":"具体说明"}],"knowledgeGraph":{"nodes":[{"id":"kp","instructionalRole":"lesson"}],"edges":[],}}';
+    const aiCall = vi.fn().mockResolvedValue(raw);
+
+    const result = await generateKnowledgeStructureOnce(input, {}, { aiCall });
+
+    expect(result.knowledgePoints[0]?.name).toBe("概念");
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
+  it("does not turn a truncated response into a plausible structure", () => {
+    expect(() => parseKnowledgeStructureJson('{"knowledgePoints":[')).toThrow("LLM 返回非 JSON");
+    expect(() => parseKnowledgeStructureJson('{"knowledgePoints":[}')).toThrow("LLM 返回非 JSON");
+  });
+
+  it("does not repeat the source catalog in the knowledge structure request", async () => {
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify(candidate));
+    await generateKnowledgeStructureOnce(input, {
+      teacherKnowledgePoints: [{ id: "source-1", name: "自然语言处理基本任务", description: "唯一来源说明" }],
+    }, { aiCall });
+    const prompt = aiCall.mock.calls[0]?.[1] as string;
+    expect(prompt.split("唯一来源说明")).toHaveLength(2);
+  });
+
   it("does not fabricate prerequisite edges or objective mappings to make the draft look complete", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify({ ...candidate, knowledgePoints: candidate.knowledgePoints.map((point) => ({ ...point, objectiveIndexes: [] })), knowledgeGraph: { ...candidate.knowledgeGraph, edges: [] } }));
     const result = await generateKnowledgeStructureOnce(input, {}, { modelCall });
@@ -283,7 +373,7 @@ describe("reviewed knowledge structure generation", () => {
     const result = await generateKnowledgeStructureOnce(input, {
       teacherKnowledgePoints: [{ id: "source-embodied", name: "具身认知", description: "理解具身认知" }],
       textbookEvidence: {
-        schemaVersion: 1, version: 1, fingerprint: "f", createdAt: new Date(0).toISOString(), retrievalMode: "hybrid",
+        schemaVersion: 2, version: 1, fingerprint: "f", createdAt: new Date(0).toISOString(), retrievalMode: "hybrid",
         selections: [], warnings: [], mappings: [], items: [
           { id: "evidence-1", kind: "concept", title: "身体经验", content: "身体经验", source: { textbookId: "b", textbookTitle: "教材", revisionId: "r", revisionVersion: 1, sectionPath: [] } },
           { id: "evidence-2", kind: "concept", title: "环境互动", content: "环境互动", source: { textbookId: "b", textbookTitle: "教材", revisionId: "r", revisionVersion: 1, sectionPath: [] } },
@@ -314,7 +404,7 @@ describe("reviewed knowledge structure generation", () => {
     const result = await generateKnowledgeStructureOnce(input, {
       teacherKnowledgePoints: [{ id: "source-requirement", name: "教师要求", description: "需要实质覆盖" }],
       textbookEvidence: {
-        schemaVersion: 1, version: 1, fingerprint: "f", createdAt: new Date(0).toISOString(), retrievalMode: "hybrid",
+        schemaVersion: 2, version: 1, fingerprint: "f", createdAt: new Date(0).toISOString(), retrievalMode: "hybrid",
         selections: [], warnings: [], mappings: [], items: [
           { id: "evidence-1", kind: "concept", title: "教材概念", content: "教材解释", source: { textbookId: "book", textbookTitle: "教材", revisionId: "revision", revisionVersion: 1, sectionPath: [] } },
         ],
@@ -325,6 +415,37 @@ describe("reviewed knowledge structure generation", () => {
       expect.objectContaining({ id: "textbook-target", sourceKnowledgePointIds: ["source-requirement"] }),
     ]));
     expect(result.knowledgePoints.some((point) => point.id === "source-requirement")).toBe(false);
+  });
+  it("does not create a self dependency when a textbook target merges a parent and its child", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+      knowledgePoints: [{
+        id: "kp-concept-system",
+        name: "教学概念体系",
+        description: "统一解释理论、模式与方法的层级关系。",
+        sourceKnowledgePointIds: ["source-parent", "source-child"],
+        evidenceItemIds: ["evidence-1"],
+      }],
+      knowledgeGraph: { nodes: [], edges: [] },
+    }));
+    const result = await generateKnowledgeStructureOnce(input, {
+      teacherKnowledgePoints: [
+        { id: "source-parent", name: "教学概念体系", description: "上位概念" },
+        { id: "source-child", name: "教学方法", description: "下位概念", parentKnowledgePointId: "source-parent" },
+      ],
+      textbookEvidence: {
+        schemaVersion: 2, version: 1, fingerprint: "f", createdAt: new Date(0).toISOString(), retrievalMode: "hybrid",
+        selections: [], warnings: [], mappings: [], items: [
+          { id: "evidence-1", kind: "concept", title: "概念体系", content: "理论、模式与方法构成层级关系。", source: { textbookId: "book", textbookTitle: "教材", revisionId: "revision", revisionVersion: 1, sectionPath: [] } },
+        ],
+      },
+    }, { modelCall });
+
+    expect(modelCall).toHaveBeenCalledOnce();
+    expect(result.knowledgePoints).toHaveLength(1);
+    expect(result.knowledgePoints[0]).toMatchObject({ id: "kp-concept-system" });
+    expect(result.knowledgePoints[0]?.parentKnowledgePointIds).toBeUndefined();
+    expect(result.knowledgeGraph!.nodes[0]).toMatchObject({ id: "kp-concept-system" });
+    expect(result.knowledgeGraph!.nodes[0]?.parentKnowledgePointIds).toBeUndefined();
   });
   it("generates the new-system teacher checkpoint without an AI review call", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify(candidate));

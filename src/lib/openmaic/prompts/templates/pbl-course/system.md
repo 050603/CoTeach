@@ -26,6 +26,8 @@ The phase rules are contractual:
 16. Student `interactive` scenes are ungraded exploration or operation environments, never disguised questions. Use manipulation, simulation, inspection, construction, comparison, or rehearsal; reserve answer submission, correctness, scoring, matching/sorting/ordering, and pass/fail judgment for explicit `quiz` scenes.
 17. Plan teaching tools at page level. For every student `slide` or `interactive` detail, include `teachingToolPlan` only when a visible action materially improves comprehension. Use `whiteboard` for reasoning that genuinely benefits from unfolding in front of the learner: a causal/structural relationship, formula derivation, code evolution, worked example, transformation, comparison of evidence, or a purposeful annotation. Never use it for an agenda, learning objectives, a page-title list, a list of future topics, a recap already visible on the slide, decorative keywords, or simply because the subject contains words such as “model”, “process”, or “comparison”. Not every page needs a whiteboard. Each plan item must state the exact spoken-content trigger, learning purpose, and concrete visible reasoning; use `interactive-widget` for learner manipulation. Important visual reasoning plans use `required: true` so generation cannot silently omit them.
 
+{{snippet:slide-title-guidelines}}
+
 Return only valid JSON. The top-level object must match this shape:
 
 {

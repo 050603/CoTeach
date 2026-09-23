@@ -1684,6 +1684,17 @@ function usesAlibabaModelStudioEndpoint(baseUrl?: string): boolean {
   }
 }
 
+function isEmptyResponseSocketClose(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!current || typeof current !== 'object') return false;
+    const failure = current as { code?: unknown; socket?: { bytesRead?: unknown }; cause?: unknown };
+    if (failure.code === 'UND_ERR_SOCKET' && failure.socket?.bytesRead === 0) return true;
+    current = failure.cause;
+  }
+  return false;
+}
+
 function createHttpProxyFetch(proxyUrl: string): typeof fetch {
   let agent: unknown;
 
@@ -1704,11 +1715,26 @@ function createHttpProxyFetch(proxyUrl: string): typeof fetch {
     // already be exhausted. Undici's pipelining=0 closes after the complete
     // response (including its stream), so every request gets a fresh tunnel.
     agent ??= new ProxyAgent({ uri: proxyUrl, pipelining: 0 });
-    const response = await undiciFetch(input, {
+    const request = {
       ...(init as Record<string, unknown>),
       dispatcher: agent,
-    });
-    return response as Response;
+    };
+    try {
+      return await undiciFetch(input, request) as Response;
+    } catch (error) {
+      // A NAT64 tunnel can reset before DeepSeek sends any response bytes.
+      // Replay only a JSON POST with no response; malformed output and partial
+      // streams still follow the normal model/page retry policy.
+      if (url.hostname !== 'api.deepseek.com'
+        || init?.method?.toUpperCase() !== 'POST'
+        || typeof init?.body !== 'string'
+        || init.signal?.aborted
+        || !isEmptyResponseSocketClose(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      if (init.signal?.aborted) throw error;
+      console.warn('[ModelProxy] Empty-response DeepSeek socket closed; retrying on a new tunnel');
+      return await undiciFetch(input, request) as Response;
+    }
   }) as typeof fetch;
 }
 

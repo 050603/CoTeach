@@ -32,6 +32,44 @@ afterEach(() => {
 });
 
 describe("QuickGenerationStage", () => {
+  it("shows the actual textbook teaching sequence and explains local adjustments", () => {
+    render(<QuickGenerationStage
+      artifacts={[{
+        id: "knowledge-graph", kind: "graph", eyebrow: "知识图谱", title: "知识讲授知识图谱",
+        summary: "课堂顺序", accent: "blue", items: [],
+        visualization: {
+          knowledgeGraph: { nodes: [], edges: [] },
+          knowledgePoints: [
+            { id: "base", name: "基础概念", description: "先理解对象" },
+            { id: "application", name: "应用判断", description: "随后进行判断" },
+          ],
+          knowledgeScopePlan: {
+            schemaVersion: 1, planningDurationMin: 30, durationRangeMin: 30, durationRangeMax: 30,
+            durationSource: "course-range", assessmentReserveMin: 3, explanationAndActivityMin: 27,
+            sourcePointCount: 0, targetPointCount: 2, rationale: "按教材组织", decisions: [],
+            teachingOrder: {
+              primaryRevisionId: "main", baselineKnowledgePointIds: ["application", "base"],
+              knowledgePointIds: ["base", "application"],
+              anchors: [
+                { knowledgePointId: "base", status: "primary-textbook", sectionPath: ["第一章", "基础"] },
+                { knowledgePointId: "application", status: "primary-textbook", sectionPath: ["第一章", "应用"] },
+              ],
+              adjustments: [{ knowledgePointId: "base", beforeKnowledgePointId: "application",
+                kind: "necessary-dependency", obstacle: "需要先建立对象", basis: "教材关系" }],
+            },
+          },
+        },
+      }]}
+      backgroundEnabled brief="课堂设计" cancelling={false} completed={false} confirmCancel={false}
+      message="知识图谱已生成" onCancel={vi.fn()} onOpenCourse={vi.fn()} onReview={vi.fn()}
+      paused={false} progress={55} remainingLabel="预计还需约 5 分钟" reviewAvailable={false} startedAt={null}
+    />);
+    const sequence = screen.getByRole("list", { name: "教材教学顺序" });
+    expect(within(sequence).getAllByRole("listitem").map((item) => item.querySelector("p")?.textContent))
+      .toEqual(["基础概念", "应用判断"]);
+    expect(within(sequence).getByText(/需要先建立对象/)).toBeTruthy();
+    expect(within(sequence).getByText(/第一章 › 基础/)).toBeTruthy();
+  });
   it("shows a quiet approximate token counter in the generation header", () => {
     render(
       <QuickGenerationStage
@@ -96,7 +134,7 @@ describe("QuickGenerationStage", () => {
     expect(screen.getByRole("button", { name: "中断生成" })).toBeTruthy();
   });
 
-  it("shows live concurrent page work as a detailed production card", () => {
+  it("groups live page work into stage queues with independent progress", () => {
     render(
       <QuickGenerationStage
         activeArtifactId="ai-learning-page-production"
@@ -104,7 +142,7 @@ describe("QuickGenerationStage", () => {
           id: "ai-learning-page-production",
           kind: "timeline",
           eyebrow: "课程生成 · 页面制作",
-          title: "正在并行制作课堂页面",
+          title: "正在制作课堂页面",
           summary: "4 个课堂页面，将知识讲解、互动练习与节点检测编排成完整学习链路",
           accent: "blue",
           items: [
@@ -133,6 +171,12 @@ describe("QuickGenerationStage", () => {
                 { index: 3, title: "检查核心概念", stage: "actions", startedAt: 2, executionMs: 8_000 },
                 { index: 4, title: "理解使用边界", stage: "narration", startedAt: 3 },
               ],
+              stageProgress: [
+                { stage: "content", total: 4, completedPages: [1, 2], activePages: [{ index: 3, title: "检查核心概念" }], failedPages: [] },
+                { stage: "narration", total: 3, completedPages: [1], activePages: [{ index: 2, title: "观察模型如何预测", retryCount: 1 }], failedPages: [] },
+                { stage: "actions", total: 4, completedPages: [1], activePages: [], failedPages: [{ index: 2, title: "观察模型如何预测", retryCount: 2 }] },
+                { stage: "assembling", total: 4, completedPages: [], activePages: [], failedPages: [] },
+              ],
             },
           },
         }]}
@@ -153,22 +197,23 @@ describe("QuickGenerationStage", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "正在并行制作课堂页面" })).toBeTruthy();
-    expect(screen.getByLabelText("当前并行页面任务")).toBeTruthy();
-    expect(screen.getByText("观察模型如何预测")).toBeTruthy();
-    expect(screen.getByText("检查核心概念")).toBeTruthy();
-    expect(screen.getByText("理解使用边界")).toBeTruthy();
-    expect(screen.getByText("检查版式与知识覆盖")).toBeTruthy();
-    expect(screen.getByText("绑定讲稿与教学动作")).toBeTruthy();
-    expect(screen.getByText("编写整节连贯讲稿")).toBeTruthy();
-    expect(screen.getByText("预计授课 约 16 分钟")).toBeTruthy();
-    expect(screen.getByRole("progressbar", { name: "第 2 页制作进度" }).getAttribute("aria-valuenow")).toBe("3");
-    expect(screen.getByRole("progressbar", { name: "第 3 页制作进度" }).getAttribute("aria-valuenow")).toBe("5");
-    expect(screen.getByRole("progressbar", { name: "第 4 页制作进度" }).getAttribute("aria-valuenow")).toBe("4");
+    expect(screen.getByRole("heading", { name: "正在制作课堂页面" })).toBeTruthy();
+    expect(screen.getByLabelText("页面制作阶段进度")).toBeTruthy();
+    expect(screen.getByText("页面正文与版式")).toBeTruthy();
+    expect(screen.getByText("整节连贯讲稿")).toBeTruthy();
+    expect(screen.getByText("讲授动作")).toBeTruthy();
+    expect(screen.getByText("组装保存")).toBeTruthy();
+    expect(screen.getByText("正在重试")).toBeTruthy();
+    expect(screen.getByText("有失败")).toBeTruthy();
+    expect(screen.getByText(/预计授课 约 16 分钟/)).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "页面正文与版式进度" }).getAttribute("aria-valuenow")).toBe("2");
+    expect(screen.getByRole("progressbar", { name: "整节连贯讲稿进度" }).getAttribute("aria-valuenow")).toBe("1");
+    expect(screen.getByRole("progressbar", { name: "讲授动作进度" }).getAttribute("aria-valuenow")).toBe("1");
+    expect(screen.getAllByText("第 2 页").length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByText("每一行均来自后台正在执行的真实步骤")).toBeNull();
     expect(screen.getByTestId("quick-generation-card-scroll").className).toContain("overflow-hidden");
-    expect(screen.getByTestId("quick-generation-card-scroll").className).not.toContain("overflow-y-auto");
-    expect(screen.getByTestId("quick-generation-card-scroll").getAttribute("tabindex")).toBeNull();
+    expect(screen.getByTestId("quick-generation-card-scroll").className).toContain("max-md:overflow-y-auto");
+    expect(screen.getByTestId("quick-generation-card-scroll").getAttribute("tabindex")).toBe("0");
   });
 
   it("switches through generated cards one page at a time from the side cards", () => {
@@ -273,14 +318,23 @@ describe("QuickGenerationStage", () => {
       message: snapshot.message, onCancel: vi.fn(), onOpenCourse: vi.fn(), onReview: vi.fn(),
       paused: false, progress: 70, remainingLabel: "正在制作", reviewAvailable: false, startedAt: null,
     };
-    const artifacts = (completed: number) => buildQuickClassroomArtifacts({ ...snapshot, scenesGenerated: completed }, { aiLearningOnly: true });
+    const artifacts = (completed: number) => buildQuickClassroomArtifacts({
+      ...snapshot,
+      scenesGenerated: completed,
+      stageProgress: [
+        { stage: "content", total: 4, completedPages: Array.from({ length: completed }, (_, index) => index + 1), activePages: [], failedPages: [] },
+        { stage: "narration", total: 3, completedPages: [], activePages: [], failedPages: [] },
+        { stage: "actions", total: 4, completedPages: [], activePages: [{ index: 1, title: "第一节课" }], failedPages: [] },
+        { stage: "assembling", total: 4, completedPages: [], activePages: [], failedPages: [] },
+      ],
+    }, { aiLearningOnly: true });
     const { rerender } = render(<QuickGenerationStage {...props} artifacts={artifacts(0)} />);
     expect(screen.getByTestId("ai-plan-shimmer")).toBeTruthy();
     rerender(<QuickGenerationStage {...props} artifacts={artifacts(2)} />);
-    expect(screen.getByRole("progressbar", { name: "课堂页面制作进度" }).getAttribute("aria-valuenow")).toBe("2");
-    const pageProgress = screen.getByRole("progressbar", { name: "第 1 页制作进度" });
-    expect(pageProgress.getAttribute("aria-valuenow")).toBe("5");
-    expect(pageProgress.getAttribute("aria-valuetext")).toBe("绑定讲稿与教学动作");
+    expect(screen.getByRole("progressbar", { name: "课堂页面阶段任务进度" }).getAttribute("aria-valuenow")).toBe("2");
+    const contentProgress = screen.getByRole("progressbar", { name: "页面正文与版式进度" });
+    expect(contentProgress.getAttribute("aria-valuenow")).toBe("2");
+    expect(contentProgress.getAttribute("aria-valuetext")).toBe("已完成 2 / 4 页");
 
     rerender(<QuickGenerationStage {...props} artifacts={artifacts(2)} recovering />);
     expect(screen.queryByTestId("ai-plan-shimmer")).toBeNull();
@@ -289,7 +343,7 @@ describe("QuickGenerationStage", () => {
     motionPreference.reduced = true;
     rerender(<QuickGenerationStage {...props} artifacts={artifacts(2)} />);
     expect(screen.getByTestId("ai-plan-shimmer").className).toContain("motion-reduce:hidden");
-    expect(screen.getByRole("progressbar", { name: "课堂页面制作进度" }).getAttribute("aria-valuenow")).toBe("2");
+    expect(screen.getByRole("progressbar", { name: "课堂页面阶段任务进度" }).getAttribute("aria-valuenow")).toBe("2");
   });
 
   it("renders one scrollable course outline card with timing and flowing progress", () => {

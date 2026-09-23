@@ -66,6 +66,23 @@ describe("course design failure policy", () => {
     expect(formatFatalCourseDesignError(error)).toContain("JSON 无法解析");
   });
 
+  it("reports an unbound mandatory textbook figure as a concrete design failure", () => {
+    const error = new Error("必用教材原图 figure-1 没有可绑定的首次知识讲解页。");
+    expect(classifyCourseDesignFailure(error)).toBe("terminal-quality");
+    expect(formatFatalCourseDesignError(error)).toContain("figure-1 没有可绑定的首次知识讲解页");
+  });
+
+  it("reports exhausted invalid model output as a concrete structure failure", () => {
+    const error = Object.assign(new Error("知识结构存在必要依赖循环: kp-a、kp-b"), {
+      generationFailureKind: "invalid-generated-output",
+      isRetryable: true,
+    });
+
+    expect(classifyCourseDesignFailure(error)).toBe("terminal-quality");
+    expect(formatFatalCourseDesignError(error)).toContain("知识结构存在必要依赖循环");
+    expect(formatFatalCourseDesignError(error)).not.toContain("系统错误");
+  });
+
   it("recovers transient network failures without treating credential errors as retryable", () => {
     const network = new Error("fetch failed: ECONNRESET");
     expect(classifyCourseDesignFailure(network)).toBe("transient-infrastructure");

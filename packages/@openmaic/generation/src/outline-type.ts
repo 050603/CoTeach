@@ -29,6 +29,7 @@ export function changeOutlineType(outline: SceneOutline, newType: SceneType): Sc
       estimatedDuration: outline.estimatedDuration,
     }),
     ...(outline.languageNote !== undefined && { languageNote: outline.languageNote }),
+    ...(outline.visualIntent !== undefined && { visualIntent: outline.visualIntent }),
     ...(outline.suggestedImageIds !== undefined && {
       suggestedImageIds: outline.suggestedImageIds,
     }),

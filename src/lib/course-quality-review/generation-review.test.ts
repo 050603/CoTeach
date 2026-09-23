@@ -60,7 +60,7 @@ describe("fast draft and section-wide teaching review", () => {
       })),
     };
     course.content.courseEvidence = {
-      schemaVersion: 1, version: 1, fingerprint: "evidence-fingerprint", createdAt: new Date(0).toISOString(), retrievalMode: "hybrid",
+      schemaVersion: 2, version: 1, fingerprint: "evidence-fingerprint", createdAt: new Date(0).toISOString(), retrievalMode: "hybrid",
       selections: [], warnings: [],
       mappings: ["a", "b"].map((id) => ({ sourceKnowledgePointId: `source-${id}`, sourceKnowledgePointName: `来源 ${id}`, status: "direct" as const, evidenceItemIds: [`evidence-${id}`], rationale: "教材支持" })),
       items: ["a", "b"].map((id) => ({ id: `evidence-${id}`, kind: "concept" as const, title: `证据 ${id}`, content: `教材内容 ${id}`, source: { textbookId: "book", textbookTitle: "教材", revisionId: "revision", revisionVersion: 1, sectionPath: [] } })),

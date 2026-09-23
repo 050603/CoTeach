@@ -205,14 +205,14 @@ describe("final course resource audit", () => {
           id: "speech",
           type: "speech",
           text: "有效语音",
-          audioUrl: "/api/openmaic/classroom-media/snapshot-classroom/audio/speech.wav",
+          audioUrl: "/api/openmaic/classroom-media/snapshot-classroom/audio/page-1:speech-1.wav",
           speechAlignment: { version: "test", status: "aligned", textHash: "text", audioHash: "audio", spans: [] },
         }],
       }],
     } as unknown as PersistedClassroomData;
     const audioDir = path.join(CLASSROOMS_DIR, "snapshot-classroom", "audio");
     await mkdir(audioDir, { recursive: true });
-    await writeFile(path.join(audioDir, "speech.wav"), wavBytes());
+    await writeFile(path.join(audioDir, "page-1:speech-1.wav"), wavBytes());
 
     const { auditCourseGeneratedResources } = await import("./resource-audit-server");
     const audit = await auditCourseGeneratedResources(course.id, { course, classroom });

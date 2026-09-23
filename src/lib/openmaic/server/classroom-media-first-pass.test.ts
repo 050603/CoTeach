@@ -58,7 +58,23 @@ beforeEach(() => {
 
 const outlines = [{ mediaGenerations: [{ type: 'image', elementId: 'image-1', prompt: 'Observe water', aspectRatio: '16:9' }] }] as unknown as SceneOutline[];
 function scenes(): Scene[] {
-  return [{ id: 's1', order: 0, type: 'slide', actions: [{ id: 'a1', type: 'speech', text: 'Short narration.' }], timingPlan: buildTtsTimingPlan({ targetDurationSec: 10, providerId: 'qwen-tts', modelId: 'locked-model', voiceId: 'locked-voice', language: 'en-US' }) }] as unknown as Scene[];
+  return [{ id: 's1', order: 0, type: 'slide', actions: [{ id: 'page-1:speech-1', type: 'speech', text: 'Short narration.' }], timingPlan: buildTtsTimingPlan({ targetDurationSec: 10, providerId: 'qwen-tts', modelId: 'locked-model', voiceId: 'locked-voice', language: 'en-US' }) }] as unknown as Scene[];
+}
+
+function wavBytes(): Uint8Array {
+  const bytes = new Uint8Array(48);
+  const view = new DataView(bytes.buffer);
+  const ascii = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+  ascii(0, 'RIFF'); view.setUint32(4, 40, true); ascii(8, 'WAVE'); ascii(12, 'fmt ');
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, 8_000, true); view.setUint32(28, 8_000, true);
+  view.setUint16(32, 1, true); view.setUint16(34, 8, true); ascii(36, 'data');
+  view.setUint32(40, 4, true); bytes.set([128, 128, 128, 128], 44);
+  return bytes;
 }
 
 function chineseCourseWithEnglishNarration(): Scene[] {
@@ -147,13 +163,14 @@ describe('first-pass media request boundaries', () => {
     const classroomScenes = scenes();
     const speech = classroomScenes[0].actions?.[0];
     if (speech?.type === 'speech') speech.audioInvalidated = true;
-    mocks.generateTTS.mockResolvedValue({ audio: Buffer.from('RIFF replacement audio'), format: 'wav' });
+    mocks.generateTTS.mockResolvedValue({ audio: wavBytes(), format: 'wav' });
 
     await generateTTSForClassroom(classroomScenes, 'test', '');
 
-    expect(classroomScenes[0].actions?.[0]).toMatchObject({
-      audioId: 'tts_s0_a1',
-      audioUrl: '/api/openmaic/classroom-media/test/audio/tts_s0_a1.wav',
+    const generatedSpeech = classroomScenes[0].actions?.[0];
+    expect(generatedSpeech).toMatchObject({
+      audioId: expect.stringMatching(/^tts-[a-f0-9]{64}$/),
+      audioUrl: expect.stringMatching(/^\/api\/openmaic\/classroom-media\/test\/audio\/tts-[a-f0-9]{64}\.wav$/),
       speechAlignment: {
         version: 'test-align-v1',
         status: 'aligned',
@@ -161,7 +178,8 @@ describe('first-pass media request boundaries', () => {
         audioHash: 'audio-hash',
       },
     });
-    expect(classroomScenes[0].actions?.[0]).not.toHaveProperty('audioInvalidated');
+    expect(generatedSpeech?.type === 'speech' ? generatedSpeech.audioUrl : '').not.toContain(':');
+    expect(generatedSpeech).not.toHaveProperty('audioInvalidated');
   });
 
   it('stops wrong-language Chinese-course narration before sending any TTS request', async () => {

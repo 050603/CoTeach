@@ -9,7 +9,7 @@ export type ResourcePackageSelections = z.infer<typeof resourcePackageSelections
 const sourceSchema = z.object({ documentRole: z.enum(["knowledge", "lessonPlan", "launchPresentation"]), locator: z.string().max(500), quote: z.string().max(16000), archivePath: z.string().max(1024).optional() });
 const stageSchema = z.object({ key: z.enum(RESOURCE_PACKAGE_STAGE_KEYS), title: z.string().max(200), durationMin: z.number().int().positive().max(10000).nullable(), requirements: z.string().max(16000), outputs: z.string().max(8000), teacherActions: z.string().max(16000), aiActions: z.string().max(16000), checkpoints: z.array(z.string().max(4000)).max(100).optional(), observationPoints: z.array(z.string().max(4000)).max(100).optional() });
 export const resourcePackageDraftSchema = z.object({
-  courseName: z.string().max(300), subject: z.string().max(200), grade: z.string().max(300), drivingQuestion: z.string().max(4000),
+  courseName: z.string().max(300), subject: z.string().max(200), grade: z.string().max(300), drivingQuestion: z.string().max(4000), projectTask: z.string().max(8000).optional(),
   learningObjectives: z.array(z.string().max(4000)).max(100), expectedOutcome: z.string().max(8000), learnerContext: z.string().max(8000),
   lessonCount: z.number().int().positive().max(1000).nullable(), minutesPerLesson: z.number().int().positive().max(10000).nullable(), totalMinutes: z.number().int().positive().max(50000).nullable(),
   knowledgePoints: z.array(z.object({ id: z.string().max(200).optional(), name: z.string().max(400), description: z.string().max(8000), subPoints: z.array(z.string().max(8000)).max(100), source: sourceSchema.optional(),
@@ -249,8 +249,12 @@ function bulletText(line: string): string | null {
   return match?.[1].trim() ?? null;
 }
 function listItems(lines: string[]): string[] { return lines.map(bulletText).filter((line): line is string => Boolean(line)); }
-function numberedItems(lines: string[]): string[] {
-  return lines.map((line) => line.trim().match(/^\d+[.、]\s*(.+)$/)?.[1]?.trim()).filter((line): line is string => Boolean(line));
+function sectionItems(lines: string[]): string[] {
+  return lines.flatMap((line) => {
+    const value = line.trim();
+    if (!value || heading(value)) return [];
+    return [bulletText(value) ?? value.match(/^\d+[.、．)]\s*(.+)$/)?.[1]?.trim() ?? value];
+  });
 }
 function fieldValue(lines: string[], labels: string[]): string {
   for (const line of lines) {
@@ -344,6 +348,7 @@ export function parseMarkdownResourcePackageDraft(knowledge: MarkdownResourceDoc
   draft.subject = fieldValue(overview, ["课程", "学科"]);
   draft.grade = fieldValue(overview, ["授课对象", "教学对象", "专业与年级", "年级", "学段"]);
   draft.drivingQuestion = fieldValue(overview, ["驱动问题", "项目学习驱动问题"]);
+  draft.projectTask = fieldValue(overview, ["项目任务"]) || undefined;
   const period = fieldValue(overview, ["授课时间"]) || fieldValue(overview, ["项目周期"]);
   const lessonCount = period.match(/(\d+)\s*(?:课时|节课|课次)/);
   const minutesPerLesson = period.match(/每(?:课时|节课|课次)\s*(\d+)\s*分钟/);
@@ -351,12 +356,19 @@ export function parseMarkdownResourcePackageDraft(knowledge: MarkdownResourceDoc
   draft.minutesPerLesson = minutesPerLesson ? Number(minutesPerLesson[1]) : null;
   draft.totalMinutes = draft.lessonCount && draft.minutesPerLesson ? draft.lessonCount * draft.minutesPerLesson : null;
   draft.expectedOutcome = fieldValue(overview, ["成果形式", "项目成果", "成果要求"]);
-  draft.learningObjectives = listItems(sectionBody(lesson.lines, "教学目标", 2));
-  draft.preClassPreparation = listItems(sectionBody(lesson.lines, "课前准备", 2));
-  draft.organizationRequirements = listItems(sectionBody(lesson.lines, "组织安排", 2));
-  draft.aiUsagePolicy = draft.organizationRequirements.find((item) => /^AI使用原则[：:]/i.test(item))?.replace(/^AI使用原则[：:]\s*/i, "") ?? "";
+  draft.learningObjectives = sectionItems(sectionBody(lesson.lines, "教学目标", 2));
+  const preClassPreparation = sectionItems(sectionBody(lesson.lines, "课前准备", 2));
+  if (preClassPreparation.length) draft.preClassPreparation = preClassPreparation;
+  const completionMode = fieldValue(overview, ["完成方式", "学习方式", "组织方式"]);
+  const organizationRequirements = [...new Set([
+    ...sectionItems(sectionBody(lesson.lines, "组织安排", 2)),
+    ...(completionMode ? [`完成方式：${completionMode}`] : []),
+  ])];
+  if (organizationRequirements.length) draft.organizationRequirements = organizationRequirements;
+  draft.aiUsagePolicy = organizationRequirements.find((item) => /^AI使用原则[：:]/i.test(item))?.replace(/^AI使用原则[：:]\s*/i, "") ?? "";
   draft.learnerContext = cleanSectionText(sectionBody(lesson.lines, "学情参考", 2));
-  draft.facilitatorReference = listItems(sectionBody(lesson.lines, "教师主持要点", 3));
+  const facilitatorReference = listItems(sectionBody(lesson.lines, "教师主持要点", 3));
+  if (facilitatorReference.length) draft.facilitatorReference = facilitatorReference;
   const highlights = teachingRequirementSections(lesson, ["AI知识教学重点", "教学重点"]);
   const difficulties = teachingRequirementSections(lesson, ["AI知识理解难点", "教学难点"]);
   if (highlights.items.length) {
@@ -379,25 +391,46 @@ export function parseMarkdownResourcePackageDraft(knowledge: MarkdownResourceDoc
       const key = STAGE_ID_TO_KEY[upstreamId as keyof typeof STAGE_ID_TO_KEY];
       if (!key) continue;
       const stage = draft.stages.find((item) => item.key === key)!;
-      stage.title = heading(lesson.lines[start])!.title.replace(/^\d+\s+/, "");
+      stage.title = heading(lesson.lines[start])!.title.replace(/^\d+\s*[.、．)]?\s*/, "");
       const duration = fieldValue(stageLines, ["时间与课次", "时间", "时长"]).match(/(\d+)\s*分钟/);
       stage.durationMin = duration ? Number(duration[1]) : null;
-      const subsection = (name: string) => {
-        const relative = stageLines.findIndex((line) => heading(line)?.level === 4 && heading(line)?.title === name);
+      const subsection = (names: string[]) => {
+        const relative = stageLines.findIndex((line) => {
+          const value = heading(line);
+          return value?.level === 4 && names.includes(value.title.replace(/[：:]$/, "").trim());
+        });
         if (relative < 0) return [];
         let subsectionEnd = stageLines.length;
         for (let index = relative + 1; index < stageLines.length; index++) if ((heading(stageLines[index])?.level ?? 99) <= 4) { subsectionEnd = index; break; }
         return stageLines.slice(relative + 1, subsectionEnd);
       };
-      stage.teacherActions = listItems(subsection("教师行动")).join("\n");
-      stage.requirements = listItems(subsection("学生行动")).join("\n");
-      stage.aiActions = listItems(subsection("AI职责")).join("\n");
-      stage.outputs = "";
+      const subsectionValues = (names: string[]) => {
+        const values = sectionItems(subsection(names));
+        const inline = fieldValue(stageLines, names);
+        return values.length ? values : inline ? [inline] : [];
+      };
+      stage.teacherActions = subsectionValues(["教师行动", "教师活动", "教师指导"]).join("\n");
+      stage.requirements = subsectionValues(["学生行动", "学生活动", "学习活动", "任务与活动"]).join("\n");
+      stage.aiActions = subsectionValues(["AI职责", "AI 支持", "AI支持", "AI伙伴支持"]).join("\n");
+      stage.outputs = subsectionValues(["阶段产出", "阶段成果", "交付要求"]).join("\n");
+      const checkpoints = subsectionValues(["课次检查点", "检查点"]);
+      const observationPoints = subsectionValues(["观察与介入", "观察要点", "教师介入"]);
+      if (checkpoints.length) stage.checkpoints = checkpoints;
+      if (observationPoints.length) stage.observationPoints = observationPoints;
       draft.sourceEvidence[`stages.${key}`] = [markdownSource("lessonPlan", lesson, start, lesson.lines.slice(start, end).join("\n").slice(0, 16000))];
     }
   }
   if (!draft.totalMinutes && draft.stages.every((stage) => stage.durationMin !== null)) draft.totalMinutes = draft.stages.reduce((sum, stage) => sum + stage.durationMin!, 0);
-  draft.showcasePlan = inferResourcePackageShowcasePlan(draft.stages.find((item) => item.key === "showcase"));
+  const showcaseStage = draft.stages.find((item) => item.key === "showcase");
+  const showcaseSection = cleanSectionText(sectionBody(lesson.lines, "成果展示", 2));
+  draft.showcasePlan = inferResourcePackageShowcasePlan(showcaseStage && {
+    ...showcaseStage, requirements: [showcaseStage.requirements, showcaseSection].filter(Boolean).join("\n"),
+  });
+  const showcaseRange = sectionRange(lesson.lines, "成果展示", 2);
+  if (showcaseRange && draft.showcasePlan) {
+    draft.sourceEvidence.showcasePlan = lesson.lines.flatMap((line, index) => index > showcaseRange.start && index < showcaseRange.end && line.trim() && !heading(line)
+      ? [markdownSource("lessonPlan", lesson, index)] : []);
+  }
 
   const learningRange = sectionRange(knowledge.lines, "学习范围", 2);
   if (learningRange) {
@@ -406,7 +439,7 @@ export function parseMarkdownResourcePackageDraft(knowledge: MarkdownResourceDoc
     for (let position = 0; position < groups.length; position++) {
       const start = groups[position], end = groups[position + 1] ?? learningRange.end;
       const groupLines = knowledge.lines.slice(start, end);
-      const groupTitle = heading(knowledge.lines[start])!.title.replace(/^\d+\s+/, "");
+      const groupTitle = heading(knowledge.lines[start])!.title.replace(/^\d+\s*[.、．)]?\s*/, "");
       const id = fieldValue(groupLines, ["ID"]) || stablePackageId("group", groupTitle);
       const point: ResourcePackageDraft["knowledgePoints"][number] = { id, name: groupTitle, description: fieldValue(groupLines, ["范围"]), subPoints: [], children: [],
         evidenceStatus: (fieldValue(groupLines, ["证据状态"]) || "SUPPORTED") as "SUPPORTED" | "PARTIAL" | "UNSUPPORTED", evidenceGap: fieldValue(groupLines, ["证据缺口"]),
@@ -440,15 +473,34 @@ export function parseMarkdownResourcePackageDraft(knowledge: MarkdownResourceDoc
     return match ? [{ id: stablePackageId("dimension", match[1]), name: match[1].trim(), weight: Number(match[2]), description: match[3].trim() }] : [];
   });
   if (dimensions.length) draft.evaluationRubric = { id: stablePackageId("rubric", draft.courseName), version: 1, dimensions, sourceWeights: { teacher: 60, ai: 40 } };
-  draft.originalEvaluationSources = evaluationLines.map((line) => line.trim()).find((line) => /同伴互评|教师点评|AI评分|教师评分/.test(line)) ?? "";
-  draft.reflectionQuestions = numberedItems(sectionBody(lesson.lines, "学生反思", 2));
-  draft.reflectionQuestionSet = { id: stablePackageId("reflection", draft.courseName), version: 1,
+  draft.originalEvaluationSources = evaluationLines.map((line) => line.trim()).find((line) => /同伴互评|教师点评|AI评分|教师评分/.test(line));
+  draft.reflectionQuestions = sectionItems(sectionBody(lesson.lines, "学生反思", 2));
+  if (draft.reflectionQuestions.length) draft.reflectionQuestionSet = { id: stablePackageId("reflection", draft.courseName), version: 1,
     questions: draft.reflectionQuestions.map((prompt, index) => ({ id: stablePackageId("question", `${index}:${prompt}`), prompt, required: true })) };
   if (draft.expectedOutcome) draft.finalDeliverables = [{ id: "final-lesson-plan", name: draft.expectedOutcome.split(/[；;]/)[0].trim() || "初步教案文档", format: "document", requirements: draft.expectedOutcome, required: true }];
-  for (const field of ["courseName", "grade", "drivingQuestion", "expectedOutcome"] as const) {
+  for (const field of ["courseName", "grade", "drivingQuestion", "projectTask", "expectedOutcome"] as const) {
     const value = draft[field];
+    if (!value) continue;
     const index = lesson.lines.findIndex((line) => line.includes(value));
-    if (value) draft.sourceEvidence[field] = [markdownSource("lessonPlan", lesson, Math.max(0, index), value)];
+    if (index >= 0) draft.sourceEvidence[field] = [markdownSource("lessonPlan", lesson, index)];
+  }
+  for (const [field, values] of [
+    ["learningObjectives", draft.learningObjectives],
+    ["preClassPreparation", draft.preClassPreparation ?? []],
+    ["organizationRequirements", draft.organizationRequirements ?? []],
+    ["facilitatorReference", draft.facilitatorReference ?? []],
+  ] as const) {
+    const evidence = values.flatMap((value) => {
+      const normalized = value.replace(/^完成方式[：:]\s*/, "");
+      const index = lesson.lines.findIndex((line) => line.includes(normalized));
+      return index < 0 ? [] : [markdownSource("lessonPlan", lesson, index, lesson.lines[index].trim())];
+    });
+    if (evidence.length) draft.sourceEvidence[field] = evidence;
+  }
+  const learnerContextRange = sectionRange(lesson.lines, "学情参考", 2);
+  if (learnerContextRange && draft.learnerContext) {
+    draft.sourceEvidence.learnerContext = lesson.lines.flatMap((line, index) => index > learnerContextRange.start && index < learnerContextRange.end && line.trim() && !heading(line)
+      ? [markdownSource("lessonPlan", lesson, index)] : []);
   }
   const normalized = normalizePackageStructure(draft);
   return { draft: normalized, handoff, planningIssues: parsePlanningIssues(lesson, normalized) };

@@ -1,11 +1,14 @@
-import { access } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { SpeechAction } from '@openmaic/lib/types/action';
 import type { Scene } from '@openmaic/lib/types/stage';
 import type { PersistedClassroomData } from '@openmaic/lib/server/classroom-storage';
+import { audioDurationSec } from '@openmaic/lib/audio/audio-duration';
 
 const CLASSROOM_MEDIA_PREFIX = '/api/openmaic/classroom-media/';
-const SAFE_PATH_PART = /^[a-zA-Z0-9_.-]+$/;
+// Keep legacy `:` filenames readable for recovery. New generated clips use
+// content hashes and therefore stay within `[a-zA-Z0-9_.-]`.
+const SAFE_PATH_PART = /^[a-zA-Z0-9_.:-]+$/;
 
 export type ClassroomTtsRecoveryPlan = {
   classroom: PersistedClassroomData;
@@ -37,10 +40,14 @@ export function classroomAudioStoragePath(
   return path.join(rootDir, ...parts);
 }
 
-async function exists(filePath: string): Promise<boolean> {
+async function isReadableAudio(filePath: string): Promise<boolean> {
   try {
-    await access(filePath);
-    return true;
+    const bytes = await readFile(filePath);
+    if (!bytes.length) return false;
+    const format = path.extname(filePath).slice(1).toLowerCase();
+    return format === 'wav' || format === 'mp3'
+      ? Boolean(audioDurationSec(bytes, format))
+      : true;
   } catch {
     return false;
   }
@@ -68,7 +75,7 @@ export async function planClassroomTtsRecovery(
         : null;
       const audioMissing = speech.audioInvalidated
         || (!speech.audioUrl && !speech.audioId)
-        || Boolean(localPath && !await exists(localPath));
+        || Boolean(localPath && !await isReadableAudio(localPath));
       if (!audioMissing) continue;
 
       if (!speech.text.trim()) {

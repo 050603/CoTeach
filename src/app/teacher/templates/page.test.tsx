@@ -5,8 +5,20 @@ import TeacherTemplatesPage from "./page";
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation, usePathname: () => "/teacher/templates" }));
 const content = { schemaVersion: 1, title: "雨水收集", subject: "科学", grade: "七年级", durationMinutes: 45, summary: "设计校园雨水收集装置。", learningObjectives: ["计算集水面积"], outline: [{ title: "调查与设计", durationMinutes: 45, description: "测量集水区并提出方案。" }], resources: [] };
-const template = { id: "template-1", title: content.title, description: content.summary, status: "ACTIVE", createdAt: "2026-09-20T01:02:03.000Z", updatedAt: "2026-09-21T04:05:06.000Z", versions: [{ id: "version-1", version: 1, snapshot: content }] };
+const template = { id: "template-1", title: content.title, description: content.summary, status: "ACTIVE", createdAt: "2026-09-20T01:02:03.000Z", updatedAt: "2026-09-21T04:05:06.000Z", versions: [{ id: "version-1", version: 1, status: "PUBLISHED", snapshot: content }] };
 const fetchMock = vi.fn();
+
+function completedPblSnapshot(id: string, input: { name: string; coverImageUrl?: string }) {
+  const course = createPblTemplateCourse(id, input);
+  course.content.classroomGenerationRun = {
+    scope: "full-course",
+    status: "completed",
+    generatedOutlineIds: ["page-1"],
+    fullOutlineCount: 1,
+  };
+  return encodePblTemplate(course);
+}
+
 describe("teacher course library", () => {
   beforeEach(() => { vi.clearAllMocks(); vi.stubGlobal("fetch", fetchMock); fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [template] }) }); });
   afterEach(() => vi.unstubAllGlobals());
@@ -32,12 +44,29 @@ describe("teacher course library", () => {
     expect(screen.queryByRole("link", { name: "完整五阶段备课" })).toBeNull();
   });
   it("opens generated PBL courses and continue-preparation actions in the publish center", async () => {
-    const snapshot = encodePblTemplate(createPblTemplateCourse("pbl", { name: "五阶段项目" }));
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{ ...template, id: "pbl", title: "五阶段项目", versions: [{ version: 1, snapshot }] }] }) });
+    const snapshot = completedPblSnapshot("pbl", { name: "五阶段项目" });
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{ ...template, id: "pbl", title: "五阶段项目", versions: [{ version: 1, status: "DRAFT", snapshot }] }] }) });
     render(<TeacherTemplatesPage />);
     expect((await screen.findByRole("link", { name: /打开课程 五阶段项目/ })).getAttribute("href")).toBe("/teacher/prepare/pbl/preview");
-    expect(screen.getByRole("link", { name: "继续备课" }).getAttribute("href")).toBe("/teacher/prepare/pbl/preview");
+    expect(screen.getByRole("link", { name: "查看并发布" }).getAttribute("href")).toBe("/teacher/prepare/pbl/preview");
+    expect(screen.getByText("已完成未发布")).toBeTruthy();
     expect(screen.queryByRole("link", { name: "完整五阶段备课" })).toBeNull();
+  });
+  it("returns an incomplete PBL course to the generation card instead of opening partial details", async () => {
+    const snapshot = encodePblTemplate(createPblTemplateCourse("pbl", { name: "尚未完成的项目" }));
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{
+      ...template,
+      id: "pbl",
+      title: "尚未完成的项目",
+      versions: [{ version: 1, status: "DRAFT", snapshot }],
+    }] }) });
+    render(<TeacherTemplatesPage />);
+
+    expect((await screen.findByRole("link", { name: /打开课程 尚未完成的项目/ })).getAttribute("href"))
+      .toBe("/teacher/prepare/pbl/verify");
+    expect(screen.getByRole("link", { name: "继续生成" }).getAttribute("href"))
+      .toBe("/teacher/prepare/pbl/verify");
+    expect(screen.getByText("未完成")).toBeTruthy();
   });
   it("returns generating courses to the generation workspace", async () => {
     const snapshot = encodePblTemplate(createPblTemplateCourse("pbl", { name: "生成中的项目" }));
@@ -46,7 +75,7 @@ describe("teacher course library", () => {
       id: "pbl",
       title: "生成中的项目",
       generationStatus: "running",
-      versions: [{ version: 1, snapshot }],
+      versions: [{ version: 1, status: "DRAFT", snapshot }],
     }] }) });
     render(<TeacherTemplatesPage />);
 
@@ -56,12 +85,28 @@ describe("teacher course library", () => {
       .toBe("/teacher/prepare/pbl/verify");
     expect(screen.getByText("生成中")).toBeTruthy();
   });
+  it("marks a published course and opens its complete details", async () => {
+    const snapshot = completedPblSnapshot("pbl", { name: "已发布的项目" });
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{
+      ...template,
+      id: "pbl",
+      title: "已发布的项目",
+      versions: [{ version: 3, status: "PUBLISHED", snapshot }],
+    }] }) });
+    render(<TeacherTemplatesPage />);
+
+    expect((await screen.findByRole("link", { name: /打开课程 已发布的项目/ })).getAttribute("href"))
+      .toBe("/teacher/prepare/pbl/preview");
+    expect(screen.getByRole("link", { name: "查看课程" }).getAttribute("href"))
+      .toBe("/teacher/prepare/pbl/preview");
+    expect(screen.getByText("已发布")).toBeTruthy();
+  });
   it("shows the latest generated classroom cover on its course-library card", async () => {
     const coverImageUrl = "/api/openmaic/classroom-media/template-cover-pbl/media/classroom-cover-v2.webp";
-    const snapshot = encodePblTemplate(createPblTemplateCourse("pbl", {
+    const snapshot = completedPblSnapshot("pbl", {
       name: "人工智能教学法",
       coverImageUrl,
-    }));
+    });
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{
       ...template,
       id: "pbl",
@@ -75,10 +120,10 @@ describe("teacher course library", () => {
       .toHaveProperty("src", new URL(coverImageUrl, window.location.href).href);
   });
   it("keeps same-name courses visibly distinct and routes each card by its own id", async () => {
-    const snapshot = encodePblTemplate(createPblTemplateCourse("source", { name: "相同资源课" }));
+    const snapshot = completedPblSnapshot("source", { name: "相同资源课" });
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [
-      { ...template, id: "11111111-1111-4111-8111-111111111111", title: "相同资源课", createdAt: "2026-09-20T01:02:03.000Z", updatedAt: "2026-09-20T02:03:04.000Z", versions: [{ version: 1, snapshot }] },
-      { ...template, id: "22222222-2222-4222-8222-222222222222", title: "相同资源课", createdAt: "2026-09-21T01:02:03.000Z", updatedAt: "2026-09-22T02:03:04.000Z", versions: [{ version: 1, snapshot }] },
+      { ...template, id: "11111111-1111-4111-8111-111111111111", title: "相同资源课", createdAt: "2026-09-20T01:02:03.000Z", updatedAt: "2026-09-20T02:03:04.000Z", versions: [{ version: 1, status: "DRAFT", snapshot }] },
+      { ...template, id: "22222222-2222-4222-8222-222222222222", title: "相同资源课", createdAt: "2026-09-21T01:02:03.000Z", updatedAt: "2026-09-22T02:03:04.000Z", versions: [{ version: 1, status: "DRAFT", snapshot }] },
     ] }) });
 
     const { container } = render(<TeacherTemplatesPage />);

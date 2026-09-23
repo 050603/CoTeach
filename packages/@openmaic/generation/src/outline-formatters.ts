@@ -6,9 +6,22 @@ export function formatImageDescription(img: PdfImage): string {
     const ratio = (img.width / img.height).toFixed(2);
     dimInfo = ` | size: ${img.width}×${img.height} (aspect ratio ${ratio})`;
   }
-  const sourceInfo = img.sourceDocumentName ? ` from ${img.sourceDocumentName}` : ' from PDF';
+  const sourceName = img.sourceTitle || img.sourceDocumentName;
+  const sourceInfo = sourceName ? ` from ${sourceName}` : ' from PDF';
   const desc = img.description ? ` | ${img.description}` : '';
-  return `- **${img.id}**:${sourceInfo} page ${img.pageNumber}${dimInfo}${desc}`;
+  const relation = img.textbookRelation
+    ? ` | textbook relation: ${img.textbookRelation}${img.required ? ' (required)' : ''}`
+    : img.required
+      ? ' | required source image'
+      : '';
+  const knowledgePoints = img.knowledgePointIds?.length
+    ? ` | knowledge points: ${img.knowledgePointIds.join(', ')}`
+    : '';
+  const evidence = img.evidenceItemIds?.length
+    ? ` | evidence: ${img.evidenceItemIds.join(', ')}`
+    : '';
+  const reason = img.relationReason ? ` | relation reason: ${img.relationReason}` : '';
+  return `- **${img.id}**:${sourceInfo} page ${img.pageNumber}${dimInfo}${desc}${relation}${knowledgePoints}${evidence}${reason}`;
 }
 
 export function formatImagePlaceholder(img: PdfImage): string {
@@ -17,8 +30,21 @@ export function formatImagePlaceholder(img: PdfImage): string {
     const ratio = (img.width / img.height).toFixed(2);
     dimInfo = ` | size: ${img.width}×${img.height} (aspect ratio ${ratio})`;
   }
-  const sourceInfo = img.sourceDocumentName ? ` from ${img.sourceDocumentName}` : ' from PDF';
-  return `- **${img.id}**: image${sourceInfo} page ${img.pageNumber}${dimInfo} [see attached]`;
+  const sourceName = img.sourceTitle || img.sourceDocumentName;
+  const sourceInfo = sourceName ? ` from ${sourceName}` : ' from PDF';
+  const relation = img.textbookRelation
+    ? ` | textbook relation: ${img.textbookRelation}${img.required ? ' (required)' : ''}`
+    : img.required
+      ? ' | required source image'
+      : '';
+  const knowledgePoints = img.knowledgePointIds?.length
+    ? ` | knowledge points: ${img.knowledgePointIds.join(', ')}`
+    : '';
+  const evidence = img.evidenceItemIds?.length
+    ? ` | evidence: ${img.evidenceItemIds.join(', ')}`
+    : '';
+  const reason = img.relationReason ? ` | relation reason: ${img.relationReason}` : '';
+  return `- **${img.id}**: image${sourceInfo} page ${img.pageNumber}${dimInfo}${relation}${knowledgePoints}${evidence}${reason} [see attached]`;
 }
 
 export function sortDocumentImagesForVision<
