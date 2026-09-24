@@ -4,9 +4,9 @@ import type { AuthClaims } from "@/lib/auth/session";
 const mocks = vi.hoisted(() => {
   const model = () => ({ findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), aggregate: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), upsert: vi.fn() });
   const tx = { $queryRaw: vi.fn(), courseTeacher: model(), courseOffering: model(), chapter: model(), activity: model(), resource: model(), classroomTemplate: model(), classroomTemplateVersion: model(), classroomInstance: model(), activityProgress: model(), courseInvitation: model(), generationJob: model() };
-  return { tx, transaction: vi.fn(), teacher: vi.fn(), student: vi.fn(), activity: vi.fn(), enrollment: vi.fn(), offerings: vi.fn() };
+  return { tx, transaction: vi.fn(), teacher: vi.fn(), student: vi.fn(), activity: vi.fn(), enrollment: vi.fn(), offerings: vi.fn(), experiments: vi.fn(), assignments: vi.fn() };
 });
-vi.mock("@/lib/db/client", () => ({ prisma: { activity: { findUnique: mocks.activity }, enrollment: { findUnique: mocks.enrollment }, courseOffering: { findMany: mocks.offerings }, classroomTemplate: mocks.tx.classroomTemplate, generationJob: mocks.tx.generationJob } }));
+vi.mock("@/lib/db/client", () => ({ prisma: { activity: { findUnique: mocks.activity }, enrollment: { findUnique: mocks.enrollment }, courseOffering: { findMany: mocks.offerings }, classroomTemplate: mocks.tx.classroomTemplate, generationJob: mocks.tx.generationJob, experimentAssessmentSubmission: { findMany: mocks.experiments }, experimentAssessmentAssignment: { findMany: mocks.assignments } } }));
 vi.mock("@/lib/db/transaction-retry", () => ({ runMutationTransaction: mocks.transaction }));
 vi.mock("./learning-events", () => ({ appendValidatedLearningEvents: vi.fn().mockResolvedValue([]) }));
 vi.mock("./access", () => ({ requireTeacherUser: mocks.teacher, requireStudentUser: mocks.student, normalizeUsername: (value: string) => value }));
@@ -18,6 +18,8 @@ const release = { isOpen: true, opensAt: null, archivedAt: null };
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.experiments.mockResolvedValue([]);
+  mocks.assignments.mockResolvedValue([]);
   mocks.transaction.mockImplementation((operation) => operation(mocks.tx));
   mocks.teacher.mockResolvedValue({ id: "teacher" });
   mocks.student.mockResolvedValue({ id: "student" });
@@ -250,6 +252,26 @@ describe("activity access concurrent with completion", () => {
     const result = await getStudentActivity(studentClaims, "activity");
     expect(result.instances[0]).toMatchObject({ id: "instance", coverImageUrl: "/classroom-cover.webp" });
     expect(result.instance).toMatchObject({ id: "instance", coverImageUrl: "/classroom-cover.webp" });
+  });
+
+  it("uses each classroom run's saved experiment questions without exposing answer keys", async () => {
+    const savedExperiment = { enabled: true, pretest: [{ id: "old", type: "true-false", prompt: "原题", correctAnswer: "true" }], posttest: [{ id: "after", type: "short-answer", prompt: "反思" }] };
+    const currentExperiment = { enabled: true, pretest: [{ id: "new", type: "true-false", prompt: "新题", correctAnswer: "false" }], posttest: [{ id: "after", type: "short-answer", prompt: "反思" }] };
+    const snapshot = { schemaVersion: 2, kind: "pbl-course" };
+    mocks.activity.mockResolvedValue({
+      id: "activity", type: "CLASSROOM", config: { schemaVersion: 1, experiment: currentExperiment }, ...release,
+      chapterId: "chapter", chapter: { id: "chapter", ...release, offering: { id: "offering", status: "FINISHED" } },
+      classroomInstances: [{ id: "old-run", status: "FINISHED", templateVersion: { snapshot } }],
+    });
+    mocks.enrollment.mockResolvedValue({ id: "enrollment", status: "COMPLETED", activityProgress: [] });
+    mocks.experiments.mockResolvedValue([{ instanceId: "old-run", phase: "pretest" }]);
+    mocks.assignments.mockResolvedValue([{ instanceId: "old-run", pretestForm: savedExperiment.pretest, posttestForm: savedExperiment.posttest }]);
+    const result = await getStudentActivity(studentClaims, "activity");
+    expect(result.experiment?.pretest[0]).toMatchObject({ id: "old", prompt: "原题" });
+    expect(result.instance?.pretestSubmitted).toBe(true);
+    expect(result.config).toEqual({ schemaVersion: 1 });
+    expect(JSON.stringify(result)).not.toContain("correctAnswer");
+    expect(JSON.stringify(result)).not.toContain("新题");
   });
 });
 

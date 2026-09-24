@@ -448,8 +448,8 @@ describe("teaching blueprint compiler", () => {
     ))).toBe(true);
     expect(quizzes.every((quiz) => (
       quiz.keyPoints.length === quiz.quizConfig?.questionCount
-      && quiz.quizConfig.questionTypePlan?.length === quiz.quizConfig.questionCount
-      && new Set(quiz.quizConfig.questionTypePlan).size === quiz.quizConfig.questionTypes.length
+      && quiz.quizConfig.questionTypePlan === undefined
+      && quiz.quizConfig.questionTypes.join(",") === "single,multiple,matching,true_false,fill_blank"
     ))).toBe(true);
     expect(deriveKnowledgeLectureSectionsFromOutlines(outlines)).toHaveLength(2);
     expect(quizzes.every((quiz) => quiz.assessmentUnitIds?.length === 1 && quiz.assessmentUnitMap?.length === 1)).toBe(true);
@@ -464,7 +464,7 @@ describe("teaching blueprint compiler", () => {
     ]);
   });
 
-  it("compiles assessment responsibilities into the timed question count and preserves an explicit fill-blank intent", async () => {
+  it("compiles assessment responsibilities into the timed question count without preselecting formats", async () => {
     const candidate = compactModelBlueprint();
     candidate.sections[0]!.assessmentFocus = [
       "判断新流程中的数据角色",
@@ -479,13 +479,13 @@ describe("teaching blueprint compiler", () => {
     expect(quiz.keyPoints).toHaveLength(2);
     expect(quiz.keyPoints[0]).toContain("判断新流程中的数据角色；辨析错误的数据划分结论");
     expect(quiz.keyPoints[1]).toContain("填空补全训练集与测试集的职责；说明数据泄漏如何影响评估可信度");
-    expect(quiz.quizConfig?.questionTypePlan).toEqual(["true_false", "fill_blank"]);
-    expect(quiz.quizConfig?.questionTypes).toEqual(["true_false", "fill_blank"]);
-    expect(quiz.keyPoints[0]).toContain("只让学生判断正误");
-    expect(quiz.keyPoints[1]).toContain("只留一个可用关键词");
+    expect(quiz.quizConfig?.questionTypePlan).toBeUndefined();
+    expect(quiz.quizConfig?.questionTypes).toEqual(["single", "multiple", "matching", "true_false", "fill_blank"]);
+    expect(quiz.keyPoints[1]).toContain("填空补全训练集与测试集的职责");
+    expect(quiz.keyPoints.join("\n")).not.toContain("客观作答转换");
   });
 
-  it("converts compound explanation and construction goals into selectable evidence", async () => {
+  it("preserves compound learning goals without forcing four complete candidate responses", async () => {
     const candidate = compactModelBlueprint();
     candidate.sections[0]!.assessmentFocus = [
       "能判断一个方案是否满足标准，并指出缺少条件会带来的后果",
@@ -498,10 +498,11 @@ describe("teaching blueprint compiler", () => {
     const quiz = teachingBlueprintToOutlines(blueprint, "使用简体中文")
       .find((outline) => outline.type === "quiz")!;
 
-    expect(quiz.quizConfig?.questionTypePlan).toEqual(["single", "single"]);
+    expect(quiz.quizConfig?.questionTypePlan).toBeUndefined();
     expect(quiz.keyPoints).toHaveLength(2);
-    expect(quiz.keyPoints.every((point) => point.includes("提供包含完整结论与依据的候选作答"))).toBe(true);
+    expect(quiz.keyPoints.every((point) => !point.includes("候选作答"))).toBe(true);
     expect(quiz.keyPoints.join("\n")).toContain("写出一个开放问题");
+    expect(quiz.description).toContain("只有考查迁移或确实有助于判断时才使用简短新情境");
   });
 
   it("accepts one substantive key point and drops a slide-only changed-condition task", async () => {

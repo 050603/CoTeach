@@ -899,23 +899,38 @@ export async function generateTTSForClassroom(
   const outcomes = await mapWithConcurrency(speechTasks, concurrency, async (task) => {
     try {
       const { runtime, timing } = task;
+      let useQwenDownloadTransport = false;
       const prepared = await withGenerationRetry(
         async () => {
-          const result = await runWithGlobalTtsProviderSlot(
-            runtime.providerId,
-            getTtsConcurrencyLimit(runtime.providerId),
-            () => generateTTS({
-              providerId: runtime.providerId,
-              modelId: timing.modelId || runtime.modelId,
-              apiKey: runtime.apiKey,
-              baseUrl: runtime.baseUrl,
-              voice: timing.voiceId || runtime.voice,
-              speed: timing.speed ?? 1,
-              language: timing.language,
+          let result: Awaited<ReturnType<typeof generateTTS>>;
+          try {
+            result = await runWithGlobalTtsProviderSlot(
+              runtime.providerId,
+              getTtsConcurrencyLimit(runtime.providerId),
+              () => generateTTS({
+                providerId: runtime.providerId,
+                modelId: timing.modelId || runtime.modelId,
+                apiKey: runtime.apiKey,
+                baseUrl: runtime.baseUrl,
+                voice: timing.voiceId || runtime.voice,
+                speed: timing.speed ?? 1,
+                language: timing.language,
+                signal,
+                ...(useQwenDownloadTransport ? { providerOptions: { qwenTransport: 'download' } } : {}),
+              }, task.speechAction.text),
               signal,
-            }, task.speechAction.text),
-            signal,
-          );
+            );
+          } catch (error) {
+            // A second synthesis uses Qwen's URL response when its SSE stream
+            // ended without usable audio. Keep the existing three-call budget.
+            if (runtime.providerId === 'qwen-tts'
+              && error && typeof error === 'object'
+              && 'qwenUseNonStreamingOnRetry' in error
+              && error.qwenUseNonStreamingOnRetry === true) {
+              useQwenDownloadTransport = true;
+            }
+            throw error;
+          }
           if (!result.audio.length) {
             throw Object.assign(new Error('TTS 返回了空音频文件'), { isRetryable: true });
           }

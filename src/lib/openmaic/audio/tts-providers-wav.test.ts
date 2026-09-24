@@ -80,4 +80,65 @@ describe('Qwen TTS WAV handling', () => {
       '这是一段需要重试的语音。',
     )).rejects.toMatchObject({ isRetryable: true });
   });
+
+  it('downloads the completed audio when SSE ends with a URL but no audio chunks', async () => {
+    const wav = pcmWav(Uint8Array.from([1, 0, 2, 0]));
+    mocks.proxyFetch
+      .mockResolvedValueOnce(new Response(
+        `data: ${JSON.stringify({ request_id: 'req-url', output: { finish_reason: 'stop', audio: { data: '', url: 'https://audio.example.test/result.wav' } } })}\n\n`,
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      ))
+      .mockResolvedValueOnce(new Response(Uint8Array.from(wav).buffer));
+
+    const result = await generateTTS(
+      { providerId: 'qwen-tts', voice: 'longanfengyue', apiKey: 'test' },
+      '这是一段测试语音。',
+    );
+
+    expect(result.audio.slice(44)).toEqual(wav.slice(44));
+    expect(mocks.proxyFetch).toHaveBeenCalledTimes(2);
+    expect(mocks.proxyFetch.mock.calls[1][0]).toBe('https://audio.example.test/result.wav');
+  });
+
+  it('reports an upstream SSE error instead of treating it as an empty stream', async () => {
+    mocks.proxyFetch.mockResolvedValue(new Response(
+      `data: ${JSON.stringify({ request_id: 'req-error', code: 'DataInspectionFailed', message: 'Input rejected' })}\n\n`,
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    ));
+
+    await expect(generateTTS(
+      { providerId: 'qwen-tts', voice: 'longanfengyue', apiKey: 'test' },
+      '这是一段测试语音。',
+    )).rejects.toMatchObject({ code: 'DataInspectionFailed', isRetryable: false, message: expect.stringContaining('req-error') });
+  });
+
+  it('rejects a partial SSE audio stream without a completion event', async () => {
+    const audio = Buffer.from([0, 0, 1, 0]).toString('base64');
+    mocks.proxyFetch.mockResolvedValue(new Response(
+      `data: ${JSON.stringify({ request_id: 'req-partial', output: { audio: { data: audio } } })}\n\n`,
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    ));
+
+    await expect(generateTTS(
+      { providerId: 'qwen-tts', voice: 'longanfengyue', apiKey: 'test' },
+      '这是一段测试语音。',
+    )).rejects.toMatchObject({ isRetryable: true, qwenUseNonStreamingOnRetry: true, message: expect.stringContaining('req-partial') });
+  });
+
+  it('uses a URL response on a caller-selected non-streaming retry', async () => {
+    const wav = pcmWav(Uint8Array.from([1, 0, 2, 0]));
+    mocks.proxyFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: { audio: { url: 'https://audio.example.test/download.wav' } } }), {
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(Uint8Array.from(wav).buffer));
+
+    const result = await generateTTS(
+      { providerId: 'qwen-tts', voice: 'longanfengyue', apiKey: 'test', providerOptions: { qwenTransport: 'download' } },
+      '这是一段测试语音。',
+    );
+
+    expect(result.audio.slice(44)).toEqual(wav.slice(44));
+    expect(mocks.proxyFetch.mock.calls[0][1].headers).not.toHaveProperty('X-DashScope-SSE');
+  });
 });

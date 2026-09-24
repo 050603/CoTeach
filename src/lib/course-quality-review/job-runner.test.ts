@@ -75,8 +75,9 @@ describe("durable background quality review", () => {
     const course = mocks.course as Course;
     const classroom = mocks.classroom as PersistedClassroomData;
     const signature = computeCourseQualitySignature(course, classroom);
-    const report: CourseQualityReport = { schemaVersion: 1, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, courseId: course.id, classroomId: classroom.id, classroomRevision: 3, signature, status: "completed", issues: [] };
-    mocks.job = { id: "job", status: "completed", request: { signature }, result: report };
+    const report: CourseQualityReport = { schemaVersion: 1, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, reviewScope: { kind: 'full-course', checkedOutlineIds: [], uncheckedOutlineCount: 0 }, courseId: course.id, classroomId: classroom.id, classroomRevision: 3, signature, status: "completed", issues: [] };
+    report.runId = 'existing-run';
+    mocks.job = { id: "job", status: "completed", request: { signature, sourceContext: mocks.source, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, reviewScopeKind: 'full-course', runId: report.runId }, result: report };
     expect(await enqueueCourseQualityReview("course")).toEqual(report);
     expect((mocks.course as Course).content.qualityReview).toEqual(report);
     expect(mocks.upsert).not.toHaveBeenCalled();
@@ -176,9 +177,75 @@ describe("durable background quality review", () => {
     before.sections![1] = { ...before.sections![1], status: "failed", issues: [], error: "暂不可用" };
     (mocks.job as { result: CourseQualityReport; status: string }).result = before;
     (mocks.job as { status: string }).status = "failed";
-    const retry = await enqueueCourseQualityReview("course", { force: true });
+    const retry = await enqueueCourseQualityReview("course", { mode: "retry" });
     expect(retry!.sections!.map((section) => section.status)).toEqual(["completed", "pending"]);
+    expect(retry!.runId).not.toBe(before.runId);
     expect(mocks.upsert.mock.lastCall![0].update.progress).toBe(50);
+  });
+
+  it("reruns every section for a full check even when the content signature is unchanged", async () => {
+    const before = (await enqueueCourseQualityReview("course"))!;
+    before.status = "completed";
+    before.sections!.forEach((section) => { section.status = "completed"; });
+    (mocks.job as { result: CourseQualityReport; status: string }).result = before;
+    (mocks.job as { status: string }).status = "completed";
+    const after = (await enqueueCourseQualityReview("course", { mode: "check" }))!;
+    expect(after.runId).not.toBe(before.runId);
+    expect(after.sections!.map((section) => section.status)).toEqual(["pending", "pending"]);
+    expect(mocks.upsert.mock.lastCall![0].update.progress).toBe(0);
+  });
+
+  it("never reuses successful sections from an obsolete review policy", async () => {
+    const before = (await enqueueCourseQualityReview("course"))!;
+    before.reviewPolicyVersion = "obsolete";
+    before.sections![0].status = "completed";
+    (mocks.job as { result: CourseQualityReport; status: string }).result = before;
+    (mocks.job as { status: string }).status = "failed";
+    const after = (await enqueueCourseQualityReview("course", { mode: "retry" }))!;
+    expect(after.sections!.every((section) => section.status === "pending")).toBe(true);
+  });
+
+  it("does not reuse a test-lesson checkpoint after its checked outlines change", async () => {
+    const course = mocks.course as Course;
+    course.content.classroomGenerationRun = {
+      scope: "test-lesson", status: "completed", generatedOutlineIds: ["a"], fullOutlineCount: 2,
+      testLesson: { sectionId: "section", sectionTitle: "测试小节", sceneOutlineIds: ["a"], durationSeconds: 60 },
+      generatedAt: new Date(0).toISOString(),
+    };
+    const before = (await enqueueCourseQualityReview("course"))!;
+    before.status = "failed";
+    before.sections![0].status = "completed";
+    (mocks.job as { result: CourseQualityReport; status: string }).result = before;
+    (mocks.job as { status: string }).status = "failed";
+    course.content.classroomGenerationRun.testLesson!.sceneOutlineIds = ["b"];
+    const after = (await enqueueCourseQualityReview("course", { mode: "retry" }))!;
+    expect(after.signature).toBe(before.signature);
+    expect(after.reviewScope?.checkedOutlineIds).toEqual(["b"]);
+    expect(after.sections!.every((section) => section.status === "pending")).toBe(true);
+  });
+
+  it("cancels a queued legacy job rather than running it under the new policy", async () => {
+    const current = (await enqueueCourseQualityReview("course"))!;
+    (mocks.job as { request: Record<string, unknown> }).request = { courseId: 'course', classroomId: 'classroom', signature: current.signature, sourceContext: mocks.source };
+    mocks.claimable = true;
+    await runCourseQualityReviewJob("job");
+    expect((mocks.job as { status: string }).status).toBe('cancelled');
+    expect(mocks.review).not.toHaveBeenCalled();
+  });
+
+  it("does not let a late result from an earlier run replace the current report", async () => {
+    await enqueueCourseQualityReview("course");
+    mocks.claimable = true;
+    const resolvers: Array<(issues: CourseQualityIssue[]) => void> = [];
+    mocks.review.mockImplementation(() => new Promise<CourseQualityIssue[]>((resolve) => { resolvers.push(resolve); }));
+    const oldRun = runCourseQualityReviewJob("job");
+    await vi.waitFor(() => expect(resolvers).toHaveLength(2));
+    mocks.claimable = false;
+    const current = (await enqueueCourseQualityReview("course", { mode: "check" }))!;
+    resolvers.forEach((resolve) => resolve([]));
+    await oldRun;
+    expect((mocks.job as { result: CourseQualityReport }).result.runId).toBe(current.runId);
+    expect((mocks.course as Course).content.qualityReview?.runId).toBe(current.runId);
   });
 
   it("deduplicates reconstructed reports and matches checkpoints by scene identity", () => {

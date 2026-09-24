@@ -95,6 +95,18 @@ describe("course design failure policy", () => {
     expect(formatFatalCourseDesignError(network)).toContain("网络或 AI 模型服务");
   });
 
+  it("explains a terminated model stream and preserves credential failures as terminal", () => {
+    const disconnected = new TypeError("terminated", { cause: new Error("closed") });
+    const networkMessage = formatFatalCourseDesignError(disconnected);
+    expect(networkMessage).toContain("流式连接中断");
+    expect(formatFatalCourseDesignError(new Error(networkMessage))).toBe(networkMessage);
+    const credentialMessage = formatFatalCourseDesignError(new TypeError("terminated", {
+      cause: new Error("401 unauthorized"),
+    }));
+    expect(credentialMessage).toContain("访问权限异常");
+    expect(formatFatalCourseDesignError(new Error(credentialMessage))).toBe(credentialMessage);
+  });
+
   it("uses bounded durable backoff and stops after the infrastructure retry budget", () => {
     const network = new Error("fetch failed: ECONNREFUSED");
     expect(transientInfrastructureRetryDelayMs(1)).toBe(15_000);

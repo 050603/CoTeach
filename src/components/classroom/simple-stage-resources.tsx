@@ -1145,6 +1145,21 @@ function ResourceViewer({
   return <DownloadFallback resource={resource} />;
 }
 
+export function StudentPdfResourceViewer({
+  url,
+  title,
+  progressKey,
+  onReady,
+}: {
+  url: string;
+  title: string;
+  progressKey: string;
+  onReady: () => void;
+}) {
+  const resource: CourseResource = { id: progressKey, title, type: "PDF", size: "", url, downloadedBy: [] };
+  return <PdfViewer fullscreen={false} mode="self" onReady={onReady} progressKey={progressKey} resource={resource} />;
+}
+
 function PdfViewer({
   resource,
   mode,
@@ -1155,6 +1170,7 @@ function PdfViewer({
   initialReadingProgress,
   onReadingProgressChange,
   onResourceProgress,
+  onReady,
 }: {
   resource: CourseResource;
   mode: ViewerMode;
@@ -1165,6 +1181,7 @@ function PdfViewer({
   initialReadingProgress?: PdfReadingProgress;
   onReadingProgressChange?: (progress: PdfReadingProgress) => void;
   onResourceProgress?: (progressPercent: number) => void;
+  onReady?: () => void;
 }) {
   const storageKey = progressKey ? `openpbl:pdf-reading:${progressKey}` : undefined;
   const [pdf, setPdf] = useState<PdfDocument>();
@@ -1179,6 +1196,11 @@ function PdfViewer({
   const furthestReadRatioRef = useRef(0);
   const syncTimerRef = useRef<number | undefined>(undefined);
   const previewUrl = resourcePreviewUrl(resource);
+  const onReadyRef = useRef(onReady);
+
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1195,7 +1217,10 @@ function PdfViewer({
         ) as unknown as PdfJsModule;
         pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.mjs";
         loadedPdf = await pdfjs.getDocument({ data }).promise;
-        if (!controller.signal.aborted) setPdf(loadedPdf);
+        if (!controller.signal.aborted) {
+          setPdf(loadedPdf);
+          onReadyRef.current?.();
+        }
       })
       .catch((caught) => {
         if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "PDF 读取失败");

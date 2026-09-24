@@ -116,6 +116,12 @@ export async function createStudentRecordsArchive(
 
   if (sections.includes("classrooms")) {
     addJson("data/classroom-participations.json", "课堂场次参与时间与阶段进度", participations);
+    const experimentRecords = await db.experimentAssessmentSubmission.findMany({
+      where: { enrollmentId: { in: selectedIds }, instance: { activity: { chapter: { offeringId } } } },
+      orderBy: [{ enrollmentId: "asc" }, { submittedAt: "asc" }, { id: "asc" }],
+      select: { id: true, enrollmentId: true, instanceId: true, phase: true, questionnaire: true, answers: true, objectiveScore: true, objectiveTotal: true, submittedAt: true, assignment: { select: { variant: true } } },
+    });
+    addJson("data/classroom-experiment-assessments.json", "按课堂场次保存的前测与后测分组、题目快照、答案和客观题得分", experimentRecords.map(({ assignment, ...record }) => ({ ...record, variant: assignment.variant })));
     const records = participationIds.length ? await db.classroomSubmission.findMany({
       where: { participationId: { in: participationIds }, status: { in: FINAL_RECORD_STATUSES } },
       orderBy: [{ participationId: "asc" }, { submittedAt: "asc" }, { id: "asc" }],

@@ -38,6 +38,11 @@ function explanationText(attempt: KnowledgeLectureAttempt, questionIndex: number
   if (!question) return "";
   return [
     `我们来看第${questionIndex + 1}题。${question.prompt}`,
+    question.options?.length
+      ? `选项：${question.options.map((option) => `${option.value}. ${option.label}`).join("；")}`
+      : question.matchingOptions
+        ? `左侧项目：${question.matchingOptions.left.join("；")}。右侧候选：${question.matchingOptions.right.join("；")}`
+        : "",
     `你的回答是：${question.answer || "没有作答"}。`,
     question.feedback,
     question.referenceAnswer ? `参考思路是：${question.referenceAnswer}` : "",
@@ -135,6 +140,8 @@ export function KnowledgeLectureBoard({
         studentId,
         attemptId: attempt.id,
         questionId: question.questionId,
+        options: question.options,
+        matchingOptions: question.matchingOptions,
       }),
     }).then(async (response) => {
       const payload = await response.json() as { thread?: KnowledgeLectureTutorThread; error?: string };
@@ -309,6 +316,8 @@ export function KnowledgeLectureBoard({
           studentId,
           attemptId: attempt.id,
           questionId: question.questionId,
+          options: question.options,
+          matchingOptions: question.matchingOptions,
           message: content,
         }),
       });
@@ -392,7 +401,26 @@ export function KnowledgeLectureBoard({
               <div className="relative mx-auto max-w-5xl space-y-7 font-editorial">
                 <section className="border-b border-dashed border-white/30 pb-5">
                   <p className="text-xs font-bold tracking-[.16em] text-emerald-200">原始题目</p>
-                  <p className="mt-2 text-lg font-semibold leading-8 sm:text-xl">{question.prompt}</p>
+                  <p className="mt-2 whitespace-pre-wrap text-lg font-semibold leading-8 sm:text-xl">{question.prompt}</p>
+                  {question.options?.length ? (
+                    <ol aria-label="题目选项" className="mt-4 grid gap-2 text-sm leading-6 sm:text-base">
+                      {question.options.map((option) => (
+                        <li className="grid grid-cols-[2rem_minmax(0,1fr)] gap-2 rounded-lg border border-white/15 bg-white/5 px-3 py-2" key={option.value}>
+                          <span className="font-bold text-emerald-200">{option.value}</span>
+                          <span className="whitespace-pre-wrap text-white/90">{option.label}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : question.matchingOptions ? (
+                    <div aria-label="题目匹配项" className="mt-4 grid gap-3 text-sm leading-6 sm:grid-cols-2 sm:text-base">
+                      {(["left", "right"] as const).map((side) => (
+                        <div className="rounded-lg border border-white/15 bg-white/5 p-3" key={side}>
+                          <p className="mb-2 font-bold text-emerald-200">{side === "left" ? "左侧项目" : "右侧候选"}</p>
+                          <ol className="space-y-1.5">{question.matchingOptions![side].map((label, index) => <li className="whitespace-pre-wrap text-white/90" key={`${side}-${index}`}>{label}</li>)}</ol>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </section>
                 <section className="border-b border-dashed border-white/30 pb-5">
                   <p className="text-xs font-bold tracking-[.16em] text-amber-200">学生回答</p>

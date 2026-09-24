@@ -1,7 +1,11 @@
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
+import sharp from "sharp";
+import { fileTypeFromBuffer } from "file-type";
 import { fetch as undiciFetch } from "undici";
 import type { Course } from "@/lib/session/types";
+import { prisma } from "@/lib/db/client";
 import { getCourse } from "@/lib/session/server-store";
 import {
   CLASSROOMS_DIR,
@@ -16,6 +20,7 @@ import {
   findMissingTtsResources,
 } from "@/lib/course-generation/resource-readiness";
 import { findUnresolvedClassroomMedia } from "@/lib/openmaic/server/classroom-media-generation";
+import { isMediaPlaceholder } from "@/lib/openmaic/store/media-generation";
 import { resolveDurableCourseSceneOutlines } from "@/lib/course-generation/course-resource-outlines";
 import { userFacingName } from "@/lib/user-facing-labels";
 
@@ -34,6 +39,7 @@ export type CourseResourceAuditSnapshot = {
 };
 
 const MANAGED_MEDIA_PREFIX = "/api/openmaic/classroom-media/";
+const UPLOAD_MEDIA_PREFIX = "/api/uploads/";
 // New assets use content-addressed `[a-zA-Z0-9_.-]` names. `:` remains
 // readable only for classrooms generated before that filename contract was
 // enforced, where blueprint action IDs were embedded in the filename.
@@ -150,17 +156,53 @@ async function readResource(resourceUrl: string): Promise<ResourceBytes> {
     return { bytes: await fs.readFile(managedPath), format: resourceFormat(resourceUrl) };
   }
   if (/^https?:\/\//i.test(resourceUrl)) return readRemoteResource(resourceUrl);
+  if (resourceUrl.startsWith(UPLOAD_MEDIA_PREFIX)) {
+    const parsed = new URL(resourceUrl, "http://localhost");
+    const uploadId = parsed.pathname.slice(UPLOAD_MEDIA_PREFIX.length);
+    if (!/^[a-z\d-]+$/i.test(uploadId)) throw new Error("上传资源地址无效");
+    const asset = await prisma.fileAsset.findFirst({
+      where: { id: uploadId, deletedAt: null },
+      select: { storageKey: true, mimeType: true, size: true },
+    });
+    if (!asset || path.basename(asset.storageKey) !== asset.storageKey) throw new Error("上传资源不存在");
+    const uploadDir = process.env.UPLOAD_DIR?.trim() || path.resolve(".openpbl-data", "uploads");
+    const bytes = await fs.readFile(path.join(uploadDir, asset.storageKey));
+    if (BigInt(bytes.byteLength) !== asset.size) throw new Error("上传资源大小与记录不符");
+    return { bytes, format: asset.mimeType };
+  }
+  const inline = /^data:((?:image|video|audio)\/[\w.+-]+);base64,([a-z\d+/=]+)$/i.exec(resourceUrl);
+  if (inline) {
+    const encoded = inline[2]!;
+    if (encoded.length > Math.ceil(MAX_REMOTE_RESOURCE_BYTES * 4 / 3) + 4) {
+      throw new Error("内嵌资源文件超过检查大小限制");
+    }
+    return { bytes: Buffer.from(encoded, "base64"), format: inline[1]! };
+  }
   throw new Error("资源地址不属于可核验的课堂存储");
 }
 
-async function checkResourceIntegrity(resourceUrl: string, audio: boolean): Promise<ResourceIntegrity> {
+async function checkResourceIntegrity(resourceUrl: string, kind: "audio" | "image" | "video"): Promise<ResourceIntegrity> {
   try {
     const { bytes, format } = await readResource(resourceUrl);
-    if (bytes.byteLength === 0) return { ok: false, detail: audio ? "语音文件为空" : "媒体文件为空" };
-    if (audio && !audioDurationSec(bytes, format)) return { ok: false, detail: "语音文件损坏或时长无效" };
+    if (bytes.byteLength === 0) return { ok: false, detail: kind === "audio" ? "语音文件为空" : "媒体文件为空" };
+    if (kind === "audio" && !audioDurationSec(bytes, format)) {
+      return { ok: false, detail: "语音文件损坏或时长无效" };
+    }
+    if (kind === "image") {
+      try {
+        const metadata = await sharp(bytes).metadata();
+        if (!metadata.width || !metadata.height) return { ok: false, detail: "图片文件损坏或尺寸无效" };
+      } catch {
+        return { ok: false, detail: "图片文件损坏或尺寸无效" };
+      }
+    }
+    if (kind === "video") {
+      const detected = await fileTypeFromBuffer(bytes);
+      if (!detected?.mime.startsWith("video/")) return { ok: false, detail: "视频文件损坏或格式无效" };
+    }
     return { ok: true };
   } catch {
-    return { ok: false, detail: audio ? "语音文件不存在或无法读取" : "媒体文件不存在或无法读取" };
+    return { ok: false, detail: kind === "audio" ? "语音文件不存在或无法读取" : "媒体文件不存在或无法读取" };
   }
 }
 
@@ -173,10 +215,8 @@ function classroomMediaReferences(classroom: PersistedClassroomData): Array<{
   return classroom.scenes.flatMap((scene) => {
     if (scene.type !== "slide" || scene.content?.type !== "slide") return [];
     return (scene.content.canvas.elements ?? []).flatMap((element) => (
-      (element.type === "image" || element.type === "video")
-      && typeof element.src === "string"
-      && (element.src.startsWith(MANAGED_MEDIA_PREFIX) || /^https?:\/\//i.test(element.src))
-        ? [{ sceneId: scene.id, elementId: element.id, type: element.type, url: element.src }]
+      (element.type === "image" || element.type === "video") && !isMediaPlaceholder(element.src || "")
+        ? [{ sceneId: scene.id, elementId: element.id, type: element.type, url: element.src || "" }]
         : []
     ));
   });
@@ -186,16 +226,16 @@ async function auditClassroomFiles(
   classroom: PersistedClassroomData,
   cache: Map<string, Promise<ResourceIntegrity>>,
 ): Promise<{ tts: CourseResourceIssue[]; media: CourseResourceIssue[] }> {
-  const check = (url: string, audio: boolean) => {
-    const key = `${audio ? "audio" : "media"}:${url}`;
-    const pending = cache.get(key) ?? checkResourceIntegrity(url, audio);
+  const check = (url: string, kind: "audio" | "image" | "video") => {
+    const key = `${kind}:${url}`;
+    const pending = cache.get(key) ?? checkResourceIntegrity(url, kind);
     cache.set(key, pending);
     return pending;
   };
   const tts = (await Promise.all(classroom.scenes.flatMap((scene) => (
     (scene.actions ?? []).flatMap((action) => (
       action.type === "speech" && action.text.trim() && action.audioUrl
-        ? [check(action.audioUrl, true).then((result): CourseResourceIssue | null => result.ok ? null : ({
+        ? [check(action.audioUrl, "audio").then((result): CourseResourceIssue | null => result.ok ? null : ({
             id: `tts:${scene.id}:${action.id}`,
             type: "tts",
             title: userFacingName(scene.title, "课程讲解页面"),
@@ -205,7 +245,7 @@ async function auditClassroomFiles(
     ))
   )))).filter((issue): issue is CourseResourceIssue => Boolean(issue));
   const media = (await Promise.all(classroomMediaReferences(classroom).map((reference) => (
-    check(reference.url, false).then((result): CourseResourceIssue | null => result.ok ? null : ({
+    check(reference.url, reference.type).then((result): CourseResourceIssue | null => result.ok ? null : ({
       id: `media:${reference.type}:${reference.elementId}`,
       type: "media",
       title: reference.type === "image" ? "课程图片" : "课程视频",
@@ -213,6 +253,63 @@ async function auditClassroomFiles(
     }))
   )))).filter((issue): issue is CourseResourceIssue => Boolean(issue));
   return { tts, media };
+}
+
+async function auditRequiredTextbookImages(
+  course: Course,
+  outlines: NonNullable<Course["content"]["_openmaicSceneOutlines"]>,
+  classroom: PersistedClassroomData,
+): Promise<CourseResourceIssue[]> {
+  const pages = course.content.teachingBlueprint?.sections.flatMap((section) => section.pages) ?? [];
+  const required = pages.flatMap((page) => (page.resourceNeeds ?? []).flatMap((need) => (
+    need.required && need.kind === "source-image" && need.assetId
+      ? [{ page, need }]
+      : []
+  )));
+  if (!required.length) return [];
+
+  const figureIds = [...new Set(course.content.courseEvidence?.items.flatMap((item) => (
+    item.figureRefs?.map((reference) => reference.figureId) ?? item.figureIds ?? []
+  )) ?? [])];
+  const figures = figureIds.length ? await prisma.textbookFigure.findMany({
+    where: { id: { in: figureIds } },
+    select: { id: true, fileAssetId: true, status: true },
+  }) : [];
+  const figureByResourceId = new Map(figures.map((figure) => [
+    `textbook_fig_${createHash("sha256").update(figure.id).digest("hex").slice(0, 12)}`,
+    figure,
+  ]));
+  const outlineIdsByParent = new Map<string, Set<string>>();
+  for (const outline of outlines) {
+    const parentId = typeof outline.spatialParentId === "string" && outline.spatialParentId
+      ? outline.spatialParentId : outline.id;
+    const ids = outlineIdsByParent.get(parentId) ?? new Set<string>();
+    ids.add(outline.id);
+    outlineIdsByParent.set(parentId, ids);
+  }
+
+  return required.flatMap(({ page, need }): CourseResourceIssue[] => {
+    const outlineIds = outlineIdsByParent.get(page.outlineId ?? page.id);
+    // Missing pages are handled by the content review. This also keeps a
+    // single-section test from auditing resource plans outside its scope.
+    if (!outlineIds?.size) return [];
+    const pageScenes = classroom.scenes.filter((scene) => outlineIds.has(scene.outlineId ?? scene.id));
+    if (!pageScenes.length) return [];
+    const figure = figureByResourceId.get(need.assetId!);
+    const expectedSrc = figure ? `${UPLOAD_MEDIA_PREFIX}${figure.fileAssetId}` : undefined;
+    const present = expectedSrc && pageScenes.some((scene) => scene.content?.type === "slide"
+      && scene.content.canvas.elements.some((element) => element.type === "image"
+        && element.src === expectedSrc));
+    if (present && figure?.status === "AVAILABLE") return [];
+    return [{
+      id: `media:source-image:${page.id}:${need.assetId}`,
+      type: "media",
+      title: "指定教材图片",
+      detail: !figure || figure.status !== "AVAILABLE"
+        ? "绑定的教材原图记录不可用"
+        : "指定的教材原图未进入对应课堂页面",
+    }];
+  });
 }
 
 export async function auditCourseGeneratedResources(
@@ -304,8 +401,12 @@ export async function auditCourseGeneratedResources(
   const mainFileIssues = classroom
     ? await auditClassroomFiles(classroom, resourceChecks)
     : { tts: [], media: [] };
+  const textbookImageIssues = classroom
+    ? await auditRequiredTextbookImages(course, outlines, classroom)
+    : [];
   const adaptiveIssues: CourseResourceIssue[] = [];
-  if (course.content.adaptiveLearningPlan?.enabled) {
+  if (course.content.classroomGenerationRun?.scope !== "test-lesson"
+    && course.content.adaptiveLearningPlan?.enabled) {
     for (const branch of course.content.adaptiveLearningPlan.branches) {
       if (branch.enabled === false || branch.status !== "teacher-confirmed") continue;
       const prepared = branch.preparedResource;
@@ -333,9 +434,8 @@ export async function auditCourseGeneratedResources(
       }
       const adaptiveFiles = await auditClassroomFiles(adaptiveClassroom, resourceChecks);
       const missingTts = findMissingTtsResources(adaptiveClassroom.scenes);
-      const assetIncomplete = adaptiveClassroom.assetGeneration?.status === "running"
-        || Boolean(adaptiveClassroom.assetGeneration?.failures.length);
-      if (missingTts.length || adaptiveFiles.tts.length || adaptiveFiles.media.length || assetIncomplete) {
+      const unresolvedMedia = findUnresolvedClassroomMedia([], adaptiveClassroom.scenes);
+      if (missingTts.length || adaptiveFiles.tts.length || adaptiveFiles.media.length || unresolvedMedia.length) {
         adaptiveIssues.push({
           id: `adaptive:${branch.id}`,
           type: "adaptive-resource",
@@ -345,21 +445,12 @@ export async function auditCourseGeneratedResources(
       }
     }
   }
-  const recordedMediaFailures = classroom?.assetGeneration?.failures.filter((failure) =>
-    failure.type === "image" || failure.type === "video"
-  ) ?? [];
   const unresolvedMedia = classroom
     ? findUnresolvedClassroomMedia(outlines, classroom.scenes)
     : [];
-  const mediaFailures = Array.from(new Map(
-    // Deduplicate multiple diagnostics for the same generated media element.
-    // Internal element ids and provider errors remain diagnostic-only.
-    [...unresolvedMedia, ...recordedMediaFailures].map((failure) => [
-      `${failure.type}:${failure.elementId}`,
-      failure,
-    ]),
-  ).values());
-  const mediaIssues = mediaFailures.flatMap((failure) =>
+  // Generation diagnostics describe an earlier attempt. Once the slide no
+  // longer references that placeholder, only the current asset matters.
+  const mediaIssues = unresolvedMedia.flatMap((failure) =>
     failure.type === "image" || failure.type === "video"
       ? [{
           id: `media:${failure.type}:${failure.elementId}`,
@@ -369,14 +460,6 @@ export async function auditCourseGeneratedResources(
         }]
       : [],
   );
-  if (classroom?.assetGeneration?.status === "running") {
-    mediaIssues.unshift({
-      id: "media:generation-running",
-      type: "media",
-      title: "课程媒体",
-      detail: "课堂资源仍在生成",
-    });
-  }
   const dedupe = (issues: CourseResourceIssue[]) => Array.from(new Map(
     issues.map((issue) => [issue.id, issue]),
   ).values());
@@ -390,6 +473,7 @@ export async function auditCourseGeneratedResources(
       ...mainFileIssues.tts,
       ...speechSyncIssues,
       ...mediaIssues,
+      ...textbookImageIssues,
       ...mainFileIssues.media,
     ]),
   };

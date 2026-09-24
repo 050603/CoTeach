@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { contentGenerationJobs, qualityReviewJobs } from "@/lib/course-generation/job-storage";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import { readClassroom } from "@/lib/openmaic/server/classroom-storage";
@@ -22,6 +22,10 @@ type ReviewRequest = {
   signature: string;
   sourceContext: string;
   reviewModelString?: string;
+  reviewPolicyVersion?: string;
+  runId?: string;
+  reviewScopeKind?: "full-course" | "test-lesson";
+  checkedSectionId?: string;
 };
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value));
 let started = false;
@@ -54,11 +58,15 @@ function sourceCoverageIssue(source: string): CourseQualityReport["issues"] {
 
 export async function readCourseQualityReview(courseId: string): Promise<CourseQualityReport | null> {
   const job = await qualityReviewJobs.findUnique({ where: { courseId } });
+  const request = job?.request as unknown as ReviewRequest | undefined;
   const report = job?.result ? job.result as unknown as CourseQualityReport : null;
-  return report?.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION ? report : null;
+  return report?.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION
+    && request?.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION
+    && report.runId && report.runId === request.runId && report.signature === request.signature
+    ? report : null;
 }
 
-export async function enqueueCourseQualityReview(courseId: string, options: { force?: boolean } = {}): Promise<CourseQualityReport | null> {
+export async function enqueueCourseQualityReview(courseId: string, options: { mode?: "check" | "retry" } = {}): Promise<CourseQualityReport | null> {
   const course = await getCourse(courseId);
   const classroomId = course?.aiLearningClassroomId || course?.content._openmaicClassroomId;
   if (!course || !classroomId || (!course.content.qualityReviewRequired && course.content.resourcePackage?.schemaVersion !== 2 && course.content.stagePlan?.schemaVersion !== 2)) return null;
@@ -79,16 +87,27 @@ export async function enqueueCourseQualityReview(courseId: string, options: { fo
   const reviewModelString = reviewSettings.modelString
     ?? generationRequest?.generationModelString
     ?? findServerDefaultModelString();
+  const sourceContext = generationRequest?.teachingSourceContext
+    ?? JSON.stringify({ teacherConfirmed: course.content.resourcePackage?.draft, knowledgePoints: course.content.knowledgePoints });
+  const generationRun = course.content.classroomGenerationRun;
+  const reviewScopeKind = generationRun?.scope === "test-lesson" ? "test-lesson" : "full-course";
+  const checkedOutlineIds = reviewScopeKind === "test-lesson"
+    ? generationRun?.testLesson?.sceneOutlineIds ?? generationRun?.generatedOutlineIds ?? [] : [];
   const existing = await qualityReviewJobs.findUnique({ where: { courseId } });
   const existingRequest = existing?.request as unknown as ReviewRequest | undefined;
+  const existingReport = existing?.result as unknown as CourseQualityReport | undefined;
   const sameInput = existingRequest?.signature === signature
-    && existingRequest.reviewModelString === reviewModelString;
+    && existingRequest.reviewModelString === reviewModelString
+    && existingRequest.sourceContext === sourceContext
+    && existingRequest.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION
+    && existingRequest.reviewScopeKind === reviewScopeKind
+    && existingRequest.checkedSectionId === generationRun?.testLesson?.sectionId
+    && JSON.stringify(existingReport?.reviewScope?.checkedOutlineIds ?? []) === JSON.stringify(checkedOutlineIds);
   const savedReport = sameInput ? existing?.result as unknown as CourseQualityReport | undefined : undefined;
-  const previous = savedReport?.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION
+  const previous = savedReport?.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION && savedReport.runId === existingRequest?.runId
     ? savedReport
     : undefined;
-  if (existing && !sameInput) controllers.get(existing.id)?.abort();
-  if (previous && (!options.force || existing?.status === "running")) {
+  if (previous && options.mode === undefined) {
     if (JSON.stringify(course.content.qualityReview) !== JSON.stringify(previous)) {
       await updateCourse(courseId, (current) => computeCourseQualitySignature(current, classroom) !== signature ? current : ({
         ...current, content: { ...current.content, qualityReviewRequired: true, qualityReview: previous },
@@ -97,15 +116,21 @@ export async function enqueueCourseQualityReview(courseId: string, options: { fo
     if (existing?.status === "queued") void runCourseQualityReviewJob(existing.id).catch(() => undefined);
     return previous;
   }
-  const sourceContext = generationRequest?.teachingSourceContext
-    ?? JSON.stringify({ teacherConfirmed: course.content.resourcePackage?.draft, knowledgePoints: course.content.knowledgePoints });
-  const sections = initializeReviewSections(courseReviewSections(course, classroom.scenes), previous);
+  if (existing) controllers.get(existing.id)?.abort();
+  const sections = initializeReviewSections(courseReviewSections(course, classroom.scenes), options.mode === "retry" ? previous : undefined);
+  const reviewScope: NonNullable<CourseQualityReport["reviewScope"]> = generationRun?.scope === "test-lesson"
+    ? { kind: "test-lesson", checkedOutlineIds, uncheckedOutlineCount: Math.max(0, generationRun.fullOutlineCount - checkedOutlineIds.length),
+      checkedSectionId: generationRun.testLesson?.sectionId, checkedSectionTitle: generationRun.testLesson?.sectionTitle,
+      ...(course.content.teachingBlueprint?.sections?.length ? { unreviewedSectionCount: Math.max(0, course.content.teachingBlueprint.sections.length - 1) } : {}) }
+    : { kind: "full-course", checkedOutlineIds: [], uncheckedOutlineCount: 0 };
+  const runId = randomUUID();
   const report: CourseQualityReport = { schemaVersion: 1, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION,
-    signature, courseId, classroomId, classroomRevision: classroom.revision ?? 1, status: "pending",
+    runId, reviewScope, signature, courseId, classroomId, classroomRevision: classroom.revision ?? 1, status: "pending",
     ...(reviewModelString ? { reviewModelString } : {}),
     sections, sourceCoverage: { totalChars: sourceContext.length, perSectionLimit: REVIEW_SOURCE_LIMIT, partial: sourceContext.length > REVIEW_SOURCE_LIMIT },
     issues: mergeReviewIssues([...collectCourseStructureIssues(course, classroom.scenes), ...sourceCoverageIssue(sourceContext)], sections) };
-  const data = { courseId, status: "queued", request: json({ courseId, classroomId, signature, sourceContext, ...(reviewModelString ? { reviewModelString } : {}) }), result: json(report), qualityReport: json(report), error: null,
+  const data = { courseId, status: "queued", request: json({ courseId, classroomId, signature, sourceContext, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, runId, reviewScopeKind,
+    ...(generationRun?.testLesson?.sectionId ? { checkedSectionId: generationRun.testLesson.sectionId } : {}), ...(reviewModelString ? { reviewModelString } : {}) }), result: json(report), qualityReport: json(report), error: null,
     step: "queued", message: "课堂草稿已生成，正在后台核对讲授、练习与知识依据", progress: Math.round(sections.filter((section) => section.status === "completed").length / Math.max(1, sections.length) * 100), completedAt: null, startedAt: null, version: { increment: 1 } };
   const job = await qualityReviewJobs.upsert({ where: { courseId }, create: data, update: data });
   await updateCourse(courseId, (current) => computeCourseQualitySignature(current, classroom) !== signature ? current : ({ ...current, content: { ...current.content, qualityReviewRequired: true, qualityReview: report } }));
@@ -125,12 +150,21 @@ export async function runCourseQualityReviewJob(jobId: string): Promise<void> {
   const heartbeat = setInterval(() => { void qualityReviewJobs.updateMany({ where: owner, data: { lastHeartbeatAt: new Date() } }).catch(() => undefined); }, 10000);
   heartbeat.unref?.();
   const storedReport = job.result as unknown as CourseQualityReport;
+  if (request.reviewPolicyVersion !== COURSE_QUALITY_REVIEW_POLICY_VERSION
+    || !request.runId || !storedReport || storedReport.runId !== request.runId) {
+    clearInterval(heartbeat);
+    if (controllers.get(jobId) === controller) controllers.delete(jobId);
+    await qualityReviewJobs.updateMany({ where: owner, data: { status: "cancelled", message: "审核规则已更新，请重新运行内容检查" } });
+    return;
+  }
   const reusableStoredSections = storedReport.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION;
   let report = { ...storedReport, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, status: "running" as CourseQualityReport["status"] };
   const persist = async (next: CourseQualityReport, status: string) => {
     const currentJob = await qualityReviewJobs.findUnique({ where: { id: jobId } });
     const currentRequest = currentJob?.request as unknown as ReviewRequest | undefined;
-    if (currentRequest?.signature !== request.signature
+    if (currentRequest?.runId !== request.runId
+      || currentRequest?.reviewPolicyVersion !== request.reviewPolicyVersion
+      || currentRequest?.signature !== request.signature
       || currentRequest.reviewModelString !== request.reviewModelString) return;
     const completed = next.sections?.filter((section) => section.status === "completed").length ?? 0;
     const total = next.sections?.length ?? 1;
@@ -138,7 +172,7 @@ export async function runCourseQualityReviewJob(jobId: string): Promise<void> {
       message: next.status === "completed" ? "后台核查完成，请教师结合问题报告终审" : next.status === "failed" ? "部分内容尚未核查，请教师复核或重试检查" : "正在按知识小节核对课堂内容",
       completedAt: next.status === "running" ? null : new Date(), lastHeartbeatAt: new Date(), error: next.error ?? null } });
     if (!changed.count) return;
-    await updateCourse(request.courseId, (current) => current.content.qualityReview?.signature !== request.signature ? current : {
+    await updateCourse(request.courseId, (current) => current.content.qualityReview?.runId !== request.runId || current.content.qualityReview?.signature !== request.signature ? current : {
       ...current, content: { ...current.content, qualityReview: next },
     });
   };
@@ -209,7 +243,7 @@ export async function runCourseQualityReviewJob(jobId: string): Promise<void> {
 async function tick(): Promise<void> {
   if (stopping) return;
   try {
-    await qualityReviewJobs.updateMany({ where: { status: "running", OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: new Date(Date.now() - STALE_MS) } }] }, data: { status: "queued" } });
+    await qualityReviewJobs.updateMany({ where: { status: "running", OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: new Date(Date.now() - STALE_MS) } }] }, data: { status: "queued", version: { increment: 1 } } });
     const next = await qualityReviewJobs.findFirst({ where: { status: "queued" }, orderBy: { createdAt: "asc" } });
     if (next) await runCourseQualityReviewJob(next.id);
   } catch { /* A temporarily unavailable database will be retried. */ }
@@ -223,5 +257,5 @@ export async function stopCourseQualityReviewWorker(): Promise<void> {
   started = false; stopping = true;
   if (timer) clearTimeout(timer);
   for (const controller of controllers.values()) controller.abort();
-  if (controllers.size) await qualityReviewJobs.updateMany({ where: { id: { in: [...controllers.keys()] }, status: "running" }, data: { status: "queued", message: "服务恢复后继续核对已保存的小节" } });
+  if (controllers.size) await qualityReviewJobs.updateMany({ where: { id: { in: [...controllers.keys()] }, status: "running" }, data: { status: "queued", version: { increment: 1 }, message: "服务恢复后继续核对已保存的小节" } });
 }

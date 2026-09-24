@@ -454,7 +454,16 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
         } else if (part.type === 'error') {
           throw part.error;
         } else if (part.type === 'abort') {
-          throw new DOMException(part.reason || 'Model stream aborted', 'AbortError');
+          if (params.abortSignal?.aborted) {
+            throw new DOMException(part.reason || 'Model stream aborted', 'AbortError');
+          }
+          // The SDK also emits `abort` when an upstream stream ends without
+          // the caller cancelling it. Preserve the transport retry budget for
+          // that case instead of classifying it as a user cancellation.
+          throw Object.assign(new Error(part.reason || 'Model stream aborted unexpectedly'), {
+            code: 'LLM_STREAM_TRUNCATED',
+            isRetryable: true,
+          });
         } else if (part.type === 'finish') {
           finishReason = part.finishReason;
           reportedTotalTokens = part.totalUsage.totalTokens;

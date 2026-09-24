@@ -5,7 +5,7 @@ import { requireTeacherUser } from "./access";
 import { PlatformError } from "./repository";
 
 const timestamp = z.string().datetime({ offset: true });
-const exportType = z.enum(["events", "submissions", "outcomes", "ai", "domain"]);
+const exportType = z.enum(["events", "submissions", "experiments", "outcomes", "ai", "domain"]);
 const querySchema = z.object({
   type: exportType.default("events"),
   take: z.coerce.number().int().min(1).max(500).default(200),
@@ -161,6 +161,36 @@ export async function exportOfferingResearch(
       eventType: row.eventType, createdAt: row.createdAt,
       ...(includeContent ? { payload: row.payload } : {}),
     })), (row) => row.createdAt);
+  }
+
+  if (options.type === "experiments") {
+    const records = await prisma.experimentAssessmentSubmission.findMany({
+      where: {
+        enrollment: { offeringId },
+        instance: { activity: { chapter: { offeringId } } },
+        submittedAt: { gte: since, lte: until },
+        ...(cursor ? { OR: [
+          { submittedAt: { gt: new Date(cursor.at) } },
+          { submittedAt: new Date(cursor.at), id: { gt: cursor.id } },
+        ] } : {}),
+      },
+      orderBy: [{ submittedAt: "asc" }, { id: "asc" }],
+      take: options.take + 1,
+      select: {
+        id: true, researchKey: true, instanceId: true, phase: true,
+        objectiveScore: true, objectiveTotal: true, submittedAt: true,
+        instance: { select: { activityId: true, runNo: true } },
+        assignment: { select: { variant: true } },
+        ...(includeContent ? { questionnaire: true, answers: true } : {}),
+      },
+    });
+    return page(records.map((row) => ({
+      id: row.id, researchKey: row.researchKey, quality: row.researchKey ? "complete" : "missing_research_key",
+      classroomInstanceId: row.instanceId, activityId: row.instance.activityId, runNo: row.instance.runNo,
+      phase: row.phase, variant: row.assignment.variant, objectiveScore: row.objectiveScore, objectiveTotal: row.objectiveTotal,
+      submittedAt: row.submittedAt,
+      ...(includeContent ? { questionnaire: row.questionnaire, answers: row.answers } : {}),
+    })), (row) => row.submittedAt);
   }
 
   const records = await prisma.activitySubmission.findMany({

@@ -35,6 +35,7 @@ type ReviewSnapshot = {
   classroom: PersistedClassroomData;
   blockingIssues?: CourseQualityIssue[];
   quality: CourseQualityReport | null;
+  reviewScope?: CourseQualityReport['reviewScope'];
   renderReview: CourseRenderReview | null;
   teacherReview: CourseTeacherReview | null;
   teacherReviewItems: TeacherReviewItem[];
@@ -43,6 +44,7 @@ type ReviewSnapshot = {
 
 type ReviewFilter = 'action' | 'blocking' | 'content' | 'pages' | 'sources' | 'reviewed';
 type CheckScope = 'all' | 'content' | 'pages';
+type CheckMode = 'all' | 'retry';
 
 const ORIGIN_LABEL: Record<CourseQualityIssue['origin'], string> = {
   structure: '课程结构',
@@ -150,24 +152,35 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
   const [busy, setBusy] = useState<CheckScope | null>(null);
   const [savingPage, setSavingPage] = useState(false);
   const [localPages, setLocalPages] = useState<CourseRenderPageReview[]>([]);
-  const [retryPageIds, setRetryPageIds] = useState<string[]>([]);
   const mounted = useRef(true);
   const signature = useRef('');
+  const qualityRunId = useRef<string | undefined>(undefined);
+  const renderRunId = useRef<string | undefined>(undefined);
+  const loadVersion = useRef(0);
   const inFlightPage = useRef(false);
   const load = useCallback(async () => {
+    const version = loadVersion.current;
     try {
       const next = await fetch(`/api/courses/${courseId}/quality-review`, { cache: 'no-store' }).then(responseJson<ReviewSnapshot>);
-      if (!mounted.current) return;
+      if (!mounted.current || version !== loadVersion.current) return;
       if (signature.current !== next.signature) {
         signature.current = next.signature;
-        setLocalPages(next.renderReview?.pages ?? []);
+        qualityRunId.current = undefined;
+        renderRunId.current = undefined;
+        setLocalPages([]);
         setAccepted(next.teacherReview?.acceptedIssueIds ?? []);
         setRenderRequested(false);
-        setRetryPageIds([]);
         setFilter('action');
       }
       // Keep stable scene references while polling the same content version.
-      setSnapshot((previous) => previous?.signature === next.signature ? { ...next, classroom: previous.classroom } : next);
+      // An older poll must not restore pages from before a teacher's recheck.
+      setSnapshot((previous) => previous?.signature === next.signature ? {
+        ...next, classroom: previous.classroom,
+        quality: qualityRunId.current && next.quality?.runId !== qualityRunId.current
+          ? previous.quality : next.quality,
+        renderReview: renderRunId.current && next.renderReview?.runId !== renderRunId.current
+          ? previous.renderReview : next.renderReview,
+      } : next);
       setError('');
     } catch (reason) { if (mounted.current) setError(reason instanceof Error ? reason.message : '检查暂时不可用。'); }
   }, [courseId]);
@@ -180,18 +193,22 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
   const pages = useMemo(() => {
     const byId = new Map((snapshot?.renderReview?.pages ?? []).map((page) => [page.sceneId, page]));
     for (const page of localPages) byId.set(page.sceneId, page);
-    return [...byId.values()].filter((page) => page.status === 'completed' || !retryPageIds.includes(page.sceneId));
-  }, [snapshot?.renderReview?.pages, localPages, retryPageIds]);
+    return [...byId.values()];
+  }, [snapshot?.renderReview?.pages, localPages]);
   const slides = useMemo(() => snapshot?.classroom.scenes.filter((scene) => scene.type === 'slide' && scene.content.type === 'slide') ?? [], [snapshot?.classroom]);
   const nextScene = renderRequested && !savingPage && !error ? slides.find((scene) => !pages.some((page) => page.sceneId === scene.id)) : undefined;
   const allRendered = slides.every((scene) => pages.some((page) => page.sceneId === scene.id && page.status === 'completed'));
   const issues = useMemo(() => {
     const byId = new Map<string, CourseQualityIssue>();
     for (const issue of [
-      ...(snapshot?.blockingIssues ?? []),
       ...(snapshot?.quality?.issues ?? []),
       ...pages.flatMap((page) => page.issues),
-    ]) byId.set(issue.id, issue);
+    ]) {
+      // Cached diagnostics cannot add publication requirements. Current server
+      // blockers are applied last so a stale report cannot hide one either.
+      if (!isBlockingIssue(issue)) byId.set(issue.id, { ...issue, blocking: false });
+    }
+    for (const issue of snapshot?.blockingIssues ?? []) byId.set(issue.id, issue);
     return [...byId.values()];
   }, [snapshot?.blockingIssues, snapshot?.quality?.issues, pages]);
   const openIssues = useMemo(() => issues.filter((issue) => issue.status !== 'resolved'), [issues]);
@@ -232,8 +249,8 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
       blockingCount: blockingIssues.length,
       status: !snapshot
         ? error ? 'error' : 'loading'
-        : snapshot.teacherReview ? 'confirmed'
-          : blockingIssues.length ? 'blocked'
+        : blockingIssues.length ? 'blocked'
+            : snapshot.teacherReview ? 'confirmed'
             : attentionCount ? 'attention' : 'ready',
     });
   }, [attentionCount, blockingIssues.length, error, onSummaryChange, snapshot]);
@@ -242,39 +259,52 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
     if (inFlightPage.current) return;
     inFlightPage.current = true;
     const currentSignature = signature.current;
+    const currentRunId = renderRunId.current;
     setSavingPage(true);
     try {
-      await fetch(`/api/courses/${courseId}/quality-review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'render-page', signature: currentSignature, page }) }).then(responseJson);
-      if (signature.current === currentSignature && mounted.current) {
+      await fetch(`/api/courses/${courseId}/quality-review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'render-page', signature: currentSignature, runId: currentRunId, page }) }).then(responseJson);
+      if (signature.current === currentSignature && renderRunId.current === currentRunId && mounted.current) {
         setLocalPages((current) => [...current.filter((item) => item.sceneId !== page.sceneId), page]);
-        setRetryPageIds((current) => current.filter((id) => id !== page.sceneId));
       }
-    } catch (reason) { if (mounted.current) setError(reason instanceof Error ? reason.message : '页面检查未保存。'); }
+    } catch (reason) {
+      if (mounted.current && signature.current === currentSignature && renderRunId.current === currentRunId) {
+        renderRunId.current = undefined;
+        setRenderRequested(false);
+        setLocalPages([]);
+        setError(reason instanceof Error ? reason.message : '页面检查未保存。');
+      }
+    }
     finally { inFlightPage.current = false; if (mounted.current) setSavingPage(false); }
   }, [courseId]);
   const onRenderComplete = useCallback((page: CourseRenderPageReview) => { void savePage(page); }, [savePage]);
-  function preparePageCheck() {
+  async function preparePageCheck(mode: CheckMode) {
+    const currentSignature = signature.current;
+    loadVersion.current += 1;
+    const result = await fetch(`/api/courses/${courseId}/quality-review`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'render-start', signature: currentSignature, mode }),
+    }).then(responseJson<{ renderReview: CourseRenderReview }>);
+    if (!mounted.current || signature.current !== currentSignature) return;
+    loadVersion.current += 1;
+    renderRunId.current = result.renderReview.runId;
+    setLocalPages(result.renderReview.pages);
+    setSnapshot((current) => current ? { ...current, renderReview: result.renderReview } : current);
     setRenderRequested(true);
-    // A teacher-triggered recheck measures every current slide again.
-    setRetryPageIds(slides.map((scene) => scene.id));
-    setLocalPages([]);
-    setSnapshot((current) => current ? {
-      ...current,
-      renderReview: current.renderReview ? {
-        ...current.renderReview,
-        pages: [],
-      } : null,
-    } : current);
   }
 
-  async function runCheck(scope: CheckScope) {
+  async function runCheck(scope: CheckScope, mode: CheckMode = 'all') {
     setBusy(scope);
     setError('');
     try {
       if (scope === 'all' || scope === 'content') {
-        await fetch(`/api/courses/${courseId}/quality-review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'check' }) }).then(responseJson);
+        const result = await fetch(`/api/courses/${courseId}/quality-review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: mode === 'retry' ? 'retry' : 'check' }) }).then(responseJson<{ quality: CourseQualityReport | null }>);
+        if (result.quality?.runId && mounted.current) {
+          loadVersion.current += 1;
+          qualityRunId.current = result.quality.runId;
+          setSnapshot((current) => current ? { ...current, quality: result.quality } : current);
+        }
       }
-      if (scope === 'all' || scope === 'pages') preparePageCheck();
+      if (scope === 'all' || scope === 'pages') await preparePageCheck(mode);
       await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : '检查未能启动，请稍后重试。'); }
     finally { setBusy(null); }
@@ -283,6 +313,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
   const contentIssueCount = openIssues.filter((issue) => !isBlockingIssue(issue) && issue.origin !== 'render' && !acceptedSet.has(issue.id) && issue.status !== 'accepted').length;
   const pageIssueCount = openIssues.filter((issue) => !isBlockingIssue(issue) && issue.origin === 'render' && !acceptedSet.has(issue.id) && issue.status !== 'accepted').length;
   const sourceCount = snapshot?.teacherReviewItems.length || (snapshot?.teacherReviewSummary ? 1 : 0) || 0;
+  const reviewScope = snapshot?.reviewScope ?? snapshot?.quality?.reviewScope;
   const filterOptions: Array<{ id: ReviewFilter; label: string; count: number }> = [
     { id: 'action', label: '当前待处理', count: blockingIssues.length + attentionCount },
     { id: 'blocking', label: '必须处理', count: blockingIssues.length },
@@ -292,7 +323,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
     { id: 'reviewed', label: '已核对', count: reviewedCount },
   ];
   const pageCheckActive = Boolean(nextScene) || savingPage;
-  const fullCheckDisabled = !snapshot || qualityRunning || pageCheckActive;
+  const fullCheckDisabled = !snapshot || qualityRunning || pageCheckActive || busy !== null;
 
   return <>
   <section aria-label="课程质量与教师终审" aria-labelledby="publish-tab-checks" className="overflow-hidden rounded-[14px] border border-stone-200 bg-white" hidden={!visible} id="publish-panel-checks" role="tabpanel">
@@ -301,9 +332,9 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
         <div className="max-w-3xl">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base font-black text-stone-950">课程检查与教师终审</h2>
-            {snapshot?.teacherReview ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-800">当前版本已终审</span> : null}
+            {snapshot?.teacherReview && !blockingIssues.length ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-800">当前版本已终审</span> : null}
           </div>
-          <p className="mt-0.5 text-xs leading-5 text-stone-500">按类别查看提示；红色项目需要先修正，其余建议由教师结合课堂意图核对。</p>
+          <p className="mt-0.5 text-xs leading-5 text-stone-500">确定影响授课的故障需要先修正；教学疑点和页面建议由教师结合课堂意图核对。</p>
         </div>
         <Button
           className="min-h-11 bg-[var(--pbl-teacher)] px-4 text-white hover:bg-[var(--pbl-teacher-hover)]"
@@ -318,19 +349,25 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
     </header>
 
     {!snapshot ? <div className="grid min-h-40 place-items-center px-6 py-10 text-sm text-stone-500"><span className="inline-flex items-center gap-2"><Loader2 className="animate-spin" size={16} />正在读取当前课程版本…</span></div> : <>
+      {reviewScope?.kind === 'test-lesson' ? <p className="border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs leading-6 text-stone-600 sm:px-5">
+        当前检查范围：{reviewScope.checkedSectionTitle || '已生成的单节测试样本'}。
+        {reviewScope.unreviewedSectionCount !== undefined ? `其余 ${reviewScope.unreviewedSectionCount} 个小节未检查` : `其余 ${reviewScope.uncheckedOutlineCount} 个计划页面未检查`}，不计为缺失；生成完整课程后再终审发布。
+      </p> : null}
       <div aria-live="polite" className="grid gap-px border-b border-stone-200 bg-stone-200 md:grid-cols-3">
         <ReviewStatusCard
           actionLabel={qualityRunning ? '检查进行中' : snapshot.quality ? '仅重查内容' : '检查内容'}
           actionDisabled={qualityRunning || busy !== null}
           actionLoading={busy === 'content'}
           detail={snapshot.quality?.status === 'completed'
-            ? `${snapshot.quality.issues.filter((issue) => issue.status !== 'resolved').length} 项内容或结构提示${contentCheckedAt ? ` · ${contentCheckedAt}` : ''}`
+            ? `${toReview.filter((issue) => issue.origin !== 'render').length} 项内容或结构提示${contentCheckedAt ? ` · ${contentCheckedAt}` : ''}`
             : snapshot.quality?.status === 'failed'
               ? '检查服务未完成，仍可由教师手动核对'
               : qualityRunning ? `正在分段核对课程内容${sectionCount ? ` · ${completedSectionCount} / ${sectionCount} 个小节完成` : ''}` : '尚未运行，可按需启动'}
           icon={qualityRunning ? <Loader2 className="animate-spin" size={18} /> : <FileSearch size={18} />}
           label="内容一致性"
           onAction={() => void runCheck('content')}
+          retryLabel={snapshot.quality?.status === 'failed' ? '仅重试未完成小节' : undefined}
+          onRetry={() => void runCheck('content', 'retry')}
           status={snapshot.quality?.status === 'completed' ? '已检查' : snapshot.quality?.status === 'failed' ? '未完成' : qualityRunning ? '检查中' : '未检查'}
           tone={snapshot.quality?.status === 'failed' ? 'warning' : snapshot.quality?.status === 'completed' ? 'success' : 'neutral'}
         />
@@ -344,6 +381,8 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
           icon={pageCheckActive ? <Loader2 className="animate-spin" size={18} /> : <MonitorCheck size={18} />}
           label="PPT 页面呈现"
           onAction={() => void runCheck('pages')}
+          retryLabel={pages.some((page) => page.status === 'failed') ? '仅重试未完成页面' : undefined}
+          onRetry={() => void runCheck('pages', 'retry')}
           status={!slides.length ? '无需检查' : allRendered && pages.length ? '已检查' : pageCheckActive ? '检查中' : pages.length ? '未完成' : '未检查'}
           tone={allRendered && pages.length ? 'success' : 'neutral'}
         />
@@ -450,7 +489,7 @@ export function CourseQualityReview({ courseId, onDecisionChange, onOpenPage, on
     </>}
 
   </section>
-  {nextScene && <RenderCheckBoundary key={`${snapshot?.signature}:${nextScene.id}`} sceneId={nextScene.id} onComplete={onRenderComplete}><RenderPageCheck scene={nextScene} onComplete={onRenderComplete} /></RenderCheckBoundary>}
+  {nextScene && <RenderCheckBoundary key={`${snapshot?.signature}:${snapshot?.renderReview?.runId}:${nextScene.id}`} sceneId={nextScene.id} onComplete={onRenderComplete}><RenderPageCheck scene={nextScene} onComplete={onRenderComplete} /></RenderCheckBoundary>}
   </>;
 }
 
@@ -490,6 +529,8 @@ function ReviewStatusCard({
   icon,
   label,
   onAction,
+  retryLabel,
+  onRetry,
   status,
   tone,
 }: {
@@ -500,6 +541,8 @@ function ReviewStatusCard({
   icon: ReactNode;
   label: string;
   onAction?: () => void;
+  retryLabel?: string;
+  onRetry?: () => void;
   status: string;
   tone: 'neutral' | 'success' | 'warning' | 'danger';
 }) {
@@ -519,5 +562,11 @@ function ReviewStatusCard({
       onClick={onAction}
       type="button"
     >{actionLoading ? <Loader2 className="animate-spin" size={13} /> : null}{actionLabel}<ChevronRight size={13} /></button> : null}
+    {retryLabel && onRetry ? <button
+      className="inline-flex min-h-11 items-center gap-1 self-start text-xs font-bold text-[var(--pbl-teacher)] hover:underline disabled:cursor-not-allowed disabled:text-stone-400"
+      disabled={actionDisabled}
+      onClick={onRetry}
+      type="button"
+    >{retryLabel}<ChevronRight size={13} /></button> : null}
   </div>;
 }

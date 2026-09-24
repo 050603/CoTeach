@@ -13,7 +13,7 @@ describe("课堂学习记录入口", () => {
     ["teaching", "lesson", "继续授课", "/teacher/teach/instance-1/setup?enter=1"],
     ["finished", "pbl-course", "返回教学工作台", "/teacher/teach/instance-1/setup"],
   ])("routes %s %s to its supported workspace", async (status, kind, label, href) => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => classroom(status, kind) }));
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes("/experiment/results") ? { enabled: false, submissions: [] } : classroom(status, kind) })));
     render(<ClassroomMonitor/>);
     expect(await screen.findByRole("img", { name: "城市探索课堂封面" })).toBeTruthy();
     expect((await screen.findByRole("link", { name: label })).getAttribute("href")).toBe(href);
@@ -25,6 +25,7 @@ describe("课堂学习记录入口", () => {
     let attempts = 0;
     const fetcher = vi.fn(async (url: string) => {
       if (url === "/api/auth/me") return { ok: true, json: async () => ({ user: { role: "teacher", displayName: "李老师", username: "teacher.li" } }) };
+      if (url.includes("/experiment/results")) return { ok: true, json: async () => ({ enabled: false, submissions: [] }) };
       attempts += 1;
       return attempts === 1
         ? { ok: false, json: async () => ({ message: "读取暂时失败" }) }

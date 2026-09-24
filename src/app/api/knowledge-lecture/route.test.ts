@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import type { Course } from "@/lib/session/types";
+import { callLLM } from "@openmaic/lib/ai/llm";
+import { getKnowledgeLectureTutorSettings } from "@/lib/knowledge-lecture-settings";
+import { resolveModelFromRequest } from "@openmaic/lib/server/resolve-model";
 
 const store = vi.hoisted(() => ({ course: null as Course | null }));
 
@@ -33,6 +36,7 @@ function request(answer: string, questionCount = 2) {
       questions: Array.from({ length: questionCount }, (_, index) => index + 1).map((number) => ({
         questionId: `question-${number}`,
         prompt: `题目${number}`,
+        options: number === 1 ? [{ value: "A", label: "变量增加" }, { value: "B", label: "变量减少" }] : undefined,
         answer,
         points: 10,
         earned: 4,
@@ -51,6 +55,7 @@ describe("knowledge lecture single-attempt integrity", () => {
       id: "course-1",
       students: [{ id: "student-1" }],
       content: {
+        knowledgePoints: [{ id: "kp-1", name: "变量关系" }],
         knowledgeLectureSections: [{ id: "section-1", quizOutlineId: "quiz-1", knowledgePointIds: ["kp-1"] }],
         teachingBlueprint: {
           sections: [{ id: "section-1", units: [{ id: "unit-1" }] }],
@@ -79,5 +84,32 @@ describe("knowledge lecture single-attempt integrity", () => {
     await expect(response.json()).resolves.toMatchObject({
       attempt: { questions: [{ teachingUnitIds: ["unit-1"] }] },
     });
+  });
+
+  it("keeps question choices for the tutor board and includes them in the tutor prompt", async () => {
+    const response = await POST(request("B", 1));
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { attempt: { id: string; questions: Array<{ options: unknown }> } };
+    expect(payload.attempt.questions[0]?.options).toEqual([
+      { value: "A", label: "变量增加" },
+      { value: "B", label: "变量减少" },
+    ]);
+
+    vi.mocked(getKnowledgeLectureTutorSettings).mockResolvedValue({ modelString: "" } as never);
+    vi.mocked(resolveModelFromRequest).mockResolvedValue({ model: {} } as never);
+    vi.mocked(callLLM).mockResolvedValue({ text: '{"answer":"请对照选项判断","boardNotes":[]}' } as never);
+    const tutorResponse = await POST(new NextRequest("http://localhost/api/knowledge-lecture", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({
+        action: "tutor-explain",
+        courseId: "course-1",
+        studentId: "student-1",
+        attemptId: payload.attempt.id,
+        questionId: "question-1",
+      }),
+    }));
+    expect(tutorResponse.status).toBe(200);
+    expect(vi.mocked(callLLM).mock.calls.at(-1)?.[0].prompt).toContain("选项：\nA. 变量增加\nB. 变量减少");
   });
 });

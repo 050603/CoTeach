@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Course } from '@/lib/session/types';
 import { getCourse, updateCourse } from '@/lib/session/server-store';
 import { isValidClassroomId, readClassroom, type PersistedClassroomData } from '@/lib/openmaic/server/classroom-storage';
@@ -7,7 +8,7 @@ import { auditCourseGeneratedResources } from '@/lib/course-generation/resource-
 import { computeCourseQualitySignature } from './signature';
 import { collectCourseStructureIssues } from './semantic-review';
 import { COURSE_QUALITY_REVIEW_POLICY_VERSION, type CourseQualityReport } from './types';
-import { unresolvedHardIssues, type CourseRenderPageReview, type CourseTeacherReview } from './teacher-review';
+import { COURSE_RENDER_REVIEW_POLICY_VERSION, unresolvedHardIssues, type CourseRenderPageReview, type CourseRenderReview, type CourseTeacherReview } from './teacher-review';
 
 export class CourseReviewError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 409) { super(message); }
@@ -46,23 +47,56 @@ export function renderableSceneIds(classroom: PersistedClassroomData): string[] 
 }
 
 export function freshQualityReport(course: Course, signature: string): CourseQualityReport | undefined {
-  return course.content.qualityReview?.signature === signature
-    && course.content.qualityReview.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION
-    ? course.content.qualityReview
+  const report = course.content.qualityReview;
+  const generationRun = course.content.classroomGenerationRun;
+  const scopeKind = generationRun?.scope === 'test-lesson' ? 'test-lesson' : 'full-course';
+  const checkedOutlineIds = generationRun?.testLesson?.sceneOutlineIds ?? generationRun?.generatedOutlineIds ?? [];
+  return report?.signature === signature
+    && report.reviewPolicyVersion === COURSE_QUALITY_REVIEW_POLICY_VERSION
+    && Boolean(report.runId)
+    && report.reviewScope?.kind === scopeKind
+    && (scopeKind !== 'test-lesson' || report.reviewScope?.checkedSectionId === generationRun?.testLesson?.sectionId)
+    && (scopeKind !== 'test-lesson' || JSON.stringify(report.reviewScope?.checkedOutlineIds) === JSON.stringify(checkedOutlineIds))
+    ? report
     : undefined;
 }
 
-export async function saveCourseRenderPage(courseId: string, signature: string, page: CourseRenderPageReview) {
+export function freshRenderReview(course: Course, signature: string): CourseRenderReview | undefined {
+  const report = course.content.renderReview;
+  return report?.signature === signature && report.reviewPolicyVersion === COURSE_RENDER_REVIEW_POLICY_VERSION && Boolean(report.runId)
+    ? report : undefined;
+}
+
+export async function startCourseRenderReview(courseId: string, signature: string, mode: 'check' | 'retry' = 'check'): Promise<CourseRenderReview> {
+  const context = await loadCourseReviewContext(courseId);
+  if (context.signature !== signature) throw new CourseReviewError('REVIEW_STALE', '课程已经修改，请按最新版本重新检查。');
+  const ids = renderableSceneIds(context.classroom);
+  let report: CourseRenderReview | undefined;
+  await updateCourse(courseId, (current) => {
+    if (computeCourseQualitySignature(current, context.classroom) !== signature) throw new CourseReviewError('REVIEW_STALE', '课程已经修改，请重新检查。');
+    const previous = mode === 'retry' ? freshRenderReview(current, signature) : undefined;
+    const pages = previous?.pages.filter((page) => ids.includes(page.sceneId) && page.status === 'completed') ?? [];
+    report = { schemaVersion: 1, reviewPolicyVersion: COURSE_RENDER_REVIEW_POLICY_VERSION, runId: randomUUID(), signature,
+      classroomId: context.classroom.id, status: ids.every((id) => pages.some((page) => page.sceneId === id)) ? 'completed' : 'pending',
+      pages, updatedAt: new Date().toISOString() };
+    return { ...current, content: { ...current.content, renderReview: report } };
+  });
+  return report!;
+}
+
+export async function saveCourseRenderPage(courseId: string, signature: string, runId: string, page: CourseRenderPageReview) {
   const context = await loadCourseReviewContext(courseId);
   if (context.signature !== signature) throw new CourseReviewError('REVIEW_STALE', '课程已经修改，请按最新版本重新检查。');
   const ids = renderableSceneIds(context.classroom);
   if (!ids.includes(page.sceneId)) throw new CourseReviewError('INVALID_SCENE', '页面不属于当前课堂。', 400);
   await updateCourse(courseId, (current) => {
     if (computeCourseQualitySignature(current, context.classroom) !== signature) throw new CourseReviewError('REVIEW_STALE', '课程已经修改，请重新检查。');
-    const previous = current.content.renderReview?.signature === signature ? current.content.renderReview.pages : [];
+    const active = freshRenderReview(current, signature);
+    if (!active || active.runId !== runId) throw new CourseReviewError('RENDER_BATCH_STALE', '页面检查已开始新一轮，请按当前批次重新检查。');
+    const previous = active.pages;
     const pages = [...previous.filter((item) => item.sceneId !== page.sceneId && ids.includes(item.sceneId)), page];
     return { ...current, content: { ...current.content,
-      renderReview: { schemaVersion: 1, signature, classroomId: context.classroom.id,
+      renderReview: { ...active,
         status: ids.every((id) => pages.some((item) => item.sceneId === id && item.status === 'completed')) ? 'completed' : 'running',
         pages, updatedAt: new Date().toISOString() } } };
   });
@@ -86,8 +120,8 @@ export async function confirmCourseTeacherReview(courseId: string, teacherId: st
   // current required teaching structure, independently of optional reports.
   const hard = unresolvedHardIssues(collectCourseStructureIssues(course, classroom.scenes, { includePresentation: false }));
   if (hard.length) throw new CourseReviewError('COURSE_HARD_ERRORS', hard.map((issue) => issue.title).join('；'));
-  const render = course.content.renderReview?.signature === signature ? course.content.renderReview : undefined;
-  const issues = [...(quality?.issues ?? []), ...(render?.pages.flatMap((page) => page.issues) ?? [])];
+  const render = freshRenderReview(course, signature);
+  const issues = [...(quality?.issues.filter((issue) => issue.blocking !== true) ?? []), ...(render?.pages.flatMap((page) => page.issues.filter((issue) => issue.blocking !== true)) ?? [])];
   const accepted = new Set(acceptedIssueIds);
   const unsigned: Omit<CourseTeacherReview, 'seal'> = { schemaVersion: 1, courseId, classroomId: classroom.id,
     signature, teacherId, manualContentReview: quality?.status !== 'completed' || acknowledgeFailedCheck, confirmedAt: new Date().toISOString(), acceptedIssueIds: [...accepted].filter((id) => issues.some((issue) => issue.id === id)).sort() };

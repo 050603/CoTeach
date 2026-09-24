@@ -118,6 +118,10 @@ function normalizeOrder(outlines: SceneOutline[]): SceneOutline[] {
   }));
 }
 
+function scriptGroupId(outline: SceneOutline): string {
+  return outline.lectureSectionId || outline.parentActivityId || outline.stageKey || 'course';
+}
+
 function useSceneTypeLabel() {
   const { t } = useI18n();
   return (type: SceneType) => {
@@ -164,6 +168,7 @@ export function OutlinesEditor({
   const userScrolledAwayRef = useRef(false);
   const editingDisabled = isLoading || isStreaming;
   const lastOutlineId = outlines.length > 0 ? outlines[outlines.length - 1].id : null;
+  const scriptGroupIds = [...new Set(outlines.map(scriptGroupId))];
 
   // Generation gate: an outline with a blank title is meaningless to generate,
   // so block "Confirm & generate" until every section has a title. A neutral
@@ -289,6 +294,8 @@ export function OutlinesEditor({
         audience: owner.audience,
         generationPurpose: owner.generationPurpose,
         parentActivityId: owner.parentActivityId,
+        lectureSectionId: owner.lectureSectionId,
+        lectureSectionTitle: owner.lectureSectionTitle,
       } : {}),
     };
     const next = [...outlines];
@@ -411,15 +418,17 @@ export function OutlinesEditor({
                 const isStreamingTip = isStreaming && isLast;
                 const previousOutline = outlines[index - 1];
                 const parentChanged = !previousOutline
-                  || previousOutline.parentActivityId !== outline.parentActivityId;
+                  || scriptGroupId(previousOutline) !== scriptGroupId(outline);
                 const parentTitle = parentActivities?.find((item) => item.id === outline.parentActivityId)?.title;
+                const parentIndex = parentActivities?.findIndex((item) => item.id === outline.parentActivityId) ?? -1;
+                const groupNumber = parentIndex >= 0 ? parentIndex + 1 : scriptGroupIds.indexOf(scriptGroupId(outline)) + 1;
 
                 return (
                   <Fragment key={outline.id}>
                     {scriptWorkspace && parentChanged ? (
                       <li className="mt-6 flex items-center gap-3 rounded-[8px] border border-stone-200 bg-white px-3 py-3 first:mt-3">
-                        <span className="grid size-7 shrink-0 place-items-center rounded-[6px] bg-stone-800 text-[10px] font-bold tabular-nums text-white">{String((parentActivities?.findIndex((item) => item.id === outline.parentActivityId) ?? -1) + 1).padStart(2, '0')}</span>
-                        <span className="truncate text-sm font-bold text-stone-900">{parentTitle || outline.stageLabel || '补充内容'}</span>
+                        <span className="grid size-7 shrink-0 place-items-center rounded-[6px] bg-stone-800 text-[10px] font-bold tabular-nums text-white">{String(groupNumber).padStart(2, '0')}</span>
+                        <span className="truncate text-sm font-bold text-stone-900">{parentTitle || outline.lectureSectionTitle?.trim() || outline.title?.trim() || outline.stageLabel || '补充内容'}</span>
                       </li>
                     ) : null}
                     {scriptWorkspace && parentChanged && !isStreaming ? (

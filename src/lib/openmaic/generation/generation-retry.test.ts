@@ -77,6 +77,8 @@ describe('withGenerationRetry', () => {
 
   it.each([
     new Error('terminated'),
+    new Error('terminated', { cause: new Error('closed') }),
+    new TypeError('terminated', { cause: new Error('closed') }),
     new Error('Cannot connect to API: connect ECONNREFUSED 127.0.0.1:9999'),
     new Error('Cannot connect to API: other side closed'),
     Object.assign(new Error('Cannot connect to API: other side closed'), {
@@ -120,6 +122,10 @@ describe('withGenerationRetry', () => {
   it.each([
     { isRetryable: true, cause: { statusCode: 401 } },
     { isRetryable: true, cause: { isRetryable: false, code: 'UND_ERR_SOCKET' } },
+    new TypeError('terminated', { cause: { statusCode: 401 } }),
+    new TypeError('terminated', { cause: new Error('401 unauthorized') }),
+    new TypeError('terminated', { cause: { isRetryable: false } }),
+    new TypeError('terminated', { cause: { code: 'UND_ERR_INVALID_ARG' } }),
     { statusCode: 403, cause: { code: 'UND_ERR_SOCKET' } },
     { name: 'AbortError', cause: { code: 'UND_ERR_SOCKET' } },
     { code: 'UND_ERR_INVALID_ARG' },

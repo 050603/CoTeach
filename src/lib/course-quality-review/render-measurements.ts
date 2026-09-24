@@ -11,6 +11,7 @@ export type RenderedElement = {
   fontSize?: number;
   opacity?: number;
   imageLoaded?: boolean;
+  imageType?: 'pageFigure' | 'itemFigure' | 'background';
   opaque?: boolean;
 };
 
@@ -64,9 +65,16 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
   }
   const reservedTypes: PPTElement['type'][] = ['image', 'shape', 'table', 'chart', 'video', 'code', 'latex'];
   for (const item of textItems) {
-    for (const block of elements) {
+    const itemIndex = elements.indexOf(item);
+    for (let blockIndex = 0; blockIndex < elements.length; blockIndex++) {
+      const block = elements[blockIndex];
       if (block.id === item.id || !reservedTypes.includes(block.type)) continue;
       if (block.type === 'shape' && !block.opaque) continue;
+      // An earlier image that contains every visible glyph is a backdrop or
+      // labeled illustration. Its pixels cannot cover later-drawn text. Text
+      // crossing an image edge still indicates a likely layout collision.
+      if (block.type === 'image' && blockIndex < itemIndex
+        && item.textRects.every((rect) => contains(block.box, rect, 4))) continue;
       if (
         block.type === 'shape'
         && block.opaque
@@ -98,6 +106,7 @@ export function inspectRenderedSlide(sceneId: string, elements: RenderedElement[
   // Ignore title/footer and empty containers. Diagrams and photos count as
   // content; full-page backgrounds and decoration must not mask top-heavy text.
   const bodyRects = elements.flatMap((item) => {
+    if (item.type === 'image' && (item.imageType === 'background' || area(item.box) >= width * height * 0.65)) return [];
     const rects = item.textRects.length ? item.textRects : ['image', 'chart', 'table', 'latex', 'code', 'video'].includes(item.type) ? [item.box] : [];
     return rects.filter((rect) => rect.top >= height * 0.22 && rect.top < height * 0.85 && area(rect) < width * height * 0.8);
   });
@@ -146,6 +155,7 @@ export function measureSlideElements(root: HTMLElement, elements: readonly PPTEl
     const opaque = element.type === 'image' || (element.type === 'shape' && Boolean(element.fill && element.fill !== 'none' && element.fill !== 'transparent'));
     return { id: element.id, type: element.type, box, textRects, text: textRoot?.textContent ?? '', fontSize: sizes.length ? Math.min(...sizes) : undefined,
       opacity: 'opacity' in element ? element.opacity : 1, opaque,
+      imageType: element.type === 'image' ? element.imageType : undefined,
       imageLoaded: element.type === 'image' ? images.length > 0 && images.every((img) => img.complete && img.naturalWidth > 0) : undefined };
   });
 }

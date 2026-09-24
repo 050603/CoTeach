@@ -46,6 +46,7 @@ import { isStudentAiLearningScene } from '@openmaic/lib/pbl/scene-routing';
 import { estimateSpeechDurationSec } from '@openmaic/lib/audio/tts-timing';
 import type { PlaybackSyncState } from '@openmaic/components/stage-experience';
 import { isScenePlaybackExhausted } from '@openmaic/lib/playback/scene-completion';
+import { isPlaybackActivityComplete } from '@openmaic/lib/playback/activity-events';
 import { readSubmittedState } from '@openmaic/lib/quiz/persistence';
 import {
   AI_PROGRESS_COMPLETION_MODEL_VERSION,
@@ -1002,6 +1003,7 @@ export function StudentStageHost({
       const storeState = useStageStore.getState();
       const scene = storeState.scenes.find((item) => item.id === storeState.currentSceneId);
       if (!scene || !isScenePlaybackExhausted(scene, playbackState)) return;
+      if (scene.type === 'quiz' && !isPlaybackActivityComplete({ sceneId: scene.id, purpose: 'quiz' })) return;
       if (!settleScene(scene, storeState.scenes)) return;
       const adaptiveScene = scene as AdaptiveScene;
       if (adaptiveScene.openpblAdaptiveLastScene) {

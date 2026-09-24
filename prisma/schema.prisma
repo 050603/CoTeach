@@ -170,6 +170,8 @@ model Enrollment {
   submissions      ActivitySubmission[]
   activityProgress ActivityProgress[]
   participations   ClassroomParticipation[]
+  experimentSubmissions ExperimentAssessmentSubmission[]
+  experimentAssignments ExperimentAssessmentAssignment[]
   learningEvents   LearningEvent[]
   learningSignals  LearningSignal[]
   interventions    Intervention[]
@@ -317,6 +319,8 @@ model ClassroomInstance {
   activity        Activity                 @relation(fields: [activityId], references: [id], onDelete: Restrict)
   templateVersion ClassroomTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
   participations  ClassroomParticipation[]
+  experimentSubmissions ExperimentAssessmentSubmission[]
+  experimentAssignments ExperimentAssessmentAssignment[]
   announcements   Announcement[]
   learningEvents  LearningEvent[]
   domainEvents    DomainEvent[]
@@ -324,6 +328,47 @@ model ClassroomInstance {
 
   @@unique([activityId, runNo])
   @@index([status, startedAt])
+}
+
+// One immutable pretest and posttest response per student and classroom run.
+// The research key permits pairing without exporting student identities.
+model ExperimentAssessmentAssignment {
+  id           String   @id @default(uuid())
+  instanceId   String
+  enrollmentId String
+  variant      String
+  pretestForm  Json
+  posttestForm Json
+  assignedAt   DateTime @default(now())
+
+  instance    ClassroomInstance                @relation(fields: [instanceId], references: [id], onDelete: Restrict)
+  enrollment  Enrollment                       @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  submissions ExperimentAssessmentSubmission[]
+
+  @@unique([instanceId, enrollmentId])
+  @@index([instanceId, variant])
+}
+
+model ExperimentAssessmentSubmission {
+  id             String   @id @default(uuid())
+  instanceId     String
+  enrollmentId   String
+  assignmentId   String
+  phase          String
+  researchKey    String
+  questionnaire  Json
+  answers        Json
+  objectiveScore Int
+  objectiveTotal Int
+  submittedAt    DateTime @default(now())
+
+  instance   ClassroomInstance @relation(fields: [instanceId], references: [id], onDelete: Restrict)
+  enrollment Enrollment        @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  assignment ExperimentAssessmentAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+
+  @@unique([instanceId, enrollmentId, phase])
+  @@index([instanceId, phase, submittedAt])
+  @@index([enrollmentId, submittedAt])
 }
 
 // Whole-class AI discussions are separate from private student tutor chats.

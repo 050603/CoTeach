@@ -66,7 +66,7 @@ describe('section short-answer quiz contract', () => {
     const questions = result && 'questions' in result ? result.questions : [];
     expect(questions[0]?.format).toBe('single_choice');
     expect(ai.mock.calls[0][1]).toContain('responseMode is selection_only');
-    expect(ai.mock.calls[0][1]).toContain('put complete candidate responses with their reasoning in the options');
+    expect(ai.mock.calls[0][1]).toContain('Put shared facts in the stem');
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
@@ -202,6 +202,104 @@ describe('section short-answer quiz contract', () => {
     expect(ai.mock.calls[0][1]).toContain('cover every allowed knowledgePointId at least once');
     expect(new Set(questions.flatMap((question) => question.knowledgePointIds ?? []))).toEqual(new Set(['kp-role', 'kp-leak']));
     expect(questions.filter((question) => question.format === 'short_answer' || question.format === 'scenario_task')).toHaveLength(0);
+  });
+
+  it('accepts direct knowledge checks and passes the actual learner response time', async () => {
+    const adaptive: SceneOutline = {
+      ...outline,
+      plannedTiming: { role: 'assessment', narrationSec: 13, learnerActivitySec: 36, transitionSec: 2 },
+      targetDurationSec: 51,
+      keyPoints: ['判断测试集的职责', '识别测试信息进入调参的后果'],
+      quizConfig: {
+        difficulty: 'medium', questionCount: 2,
+        questionTypes: ['single', 'multiple', 'matching', 'true_false', 'fill_blank'],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([
+      {
+        id: 'q1', type: 'fill_blank', format: 'fill_blank',
+        question: '测试集用于____模型在新数据上的表现。',
+        analysis: '测试集用于独立检验模型的泛化表现。', knowledgePointIds: ['kp-sampling'], points: 10,
+      },
+      {
+        id: 'q2', type: 'true_false', format: 'true_false',
+        question: '根据测试集的结果反复调参会破坏最终测试的独立性。',
+        answer: true, analysis: '测试信息参与调参后就不能充当独立的最终评估。',
+        knowledgePointIds: ['kp-sampling'], points: 10,
+      },
+    ]));
+
+    const result = await generateSceneContent(adaptive, ai);
+    const questions = result && 'questions' in result ? result.questions : [];
+    expect(questions.map((question) => question.format)).toEqual(['fill_blank', 'true_false']);
+    expect(ai.mock.calls[0][1]).toContain('36 seconds for reading, thinking, and answering all 2 questions');
+    expect(ai.mock.calls[0][1]).not.toContain('Response evidence contract (single)');
+    expect(ai.mock.calls[0][0]).toContain('A basic concept, condition, or correspondence can be assessed directly');
+    expect(ai).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts concise correspondence evidence for the page-20 teaching-method goals', async () => {
+    const adaptive: SceneOutline = {
+      ...outline,
+      title: '三种教学法的核心要素与适用场景 · 节末小测',
+      description: '检查任务与知识融合、两级支架及教学法适用条件',
+      keyPoints: [
+        '判断任务是否必须调用目标知识；为学习难点选择由强到弱的支架，并依据学生独立表现撤除',
+        '依据学习阶段和任务复杂度选择支架式或抛锚式，并判断情境是否真的成为锚',
+      ],
+      knowledgePointIds: ['kp-11', 'kp-12', 'kp-13'],
+      assessmentUnitIds: ['unit-task', 'unit-scaffold', 'unit-anchor'],
+      assessmentUnitMap: [
+        { unitId: 'unit-task', knowledgePointIds: ['kp-11'] },
+        { unitId: 'unit-scaffold', knowledgePointIds: ['kp-12'] },
+        { unitId: 'unit-anchor', knowledgePointIds: ['kp-13'] },
+      ],
+      plannedTiming: { role: 'assessment', narrationSec: 13, learnerActivitySec: 36, transitionSec: 2 },
+      targetDurationSec: 51,
+      quizConfig: {
+        difficulty: 'medium', questionCount: 2,
+        questionTypes: ['single', 'multiple', 'matching', 'true_false', 'fill_blank'],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([
+      {
+        id: 'q1', type: 'matching', format: 'matching',
+        question: '水果图片自动分类任务中，匹配每项判断与对应的依据或做法。',
+        pairs: [
+          { left: '目标知识是否必要', right: '删去模型训练后，程序无法自动分类' },
+          { left: '较强支架', right: '提供标注表格和训练步骤清单' },
+          { left: '较弱支架', right: '只提示每张照片应告诉程序什么' },
+          { left: '撤除支架的依据', right: '学生不靠清单也能独立标注和训练' },
+        ],
+        analysis: '任务必须调用训练知识；支架只提供线索，并依独立表现逐步撤除。',
+        knowledgePointIds: ['kp-11', 'kp-12'], points: 15,
+      },
+      {
+        id: 'q2', type: 'matching', format: 'matching',
+        question: '匹配下列人工智能课的情境与教学判断。',
+        pairs: [
+          { left: '初学图像标注步骤', right: '支架式：逐步提示，降低认知负荷' },
+          { left: '独立掌握各步骤后解决完整分类问题', right: '抛锚式：以真实复杂问题统领学习' },
+          { left: '视频开场后仍照原计划授课', right: '只是导入：情境未决定知识与活动' },
+        ],
+        analysis: '先看学习阶段与任务复杂度；真正的锚会决定教学内容与活动，单纯视频导入不会。',
+        knowledgePointIds: ['kp-13'], points: 10,
+      },
+    ]));
+
+    const result = await generateSceneContent(adaptive, ai);
+    const questions = result && 'questions' in result ? result.questions : [];
+    expect(questions.map((question) => question.format)).toEqual(['matching', 'matching']);
+    expect(questions[0]?.teachingUnitIds).toEqual(['unit-task', 'unit-scaffold']);
+    expect(new Set(questions.flatMap((question) => question.knowledgePointIds ?? [])))
+      .toEqual(new Set(['kp-11', 'kp-12', 'kp-13']));
+    expect(ai.mock.calls[0][1]).toContain('36 seconds for reading, thinking, and answering all 2 questions');
+    expect(ai.mock.calls[0][1]).not.toContain('question 1 must use type=');
+    expect(ai).toHaveBeenCalledTimes(1);
   });
 
   it('follows the compiled ordered question plan instead of treating fill-blank as an optional format', async () => {

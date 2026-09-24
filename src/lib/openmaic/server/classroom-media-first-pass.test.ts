@@ -240,4 +240,16 @@ describe('first-pass media request boundaries', () => {
     expect(mocks.generateTTS).toHaveBeenCalledTimes(3);
     for (const [config] of mocks.generateTTS.mock.calls) expect(config).toMatchObject({ providerId: 'qwen-tts', modelId: 'locked-model', voice: 'locked-voice' });
   });
+
+  it('switches Qwen to its URL transport after an incomplete stream within the same retry budget', async () => {
+    mocks.generateTTS
+      .mockRejectedValueOnce(Object.assign(new Error('empty SSE'), { isRetryable: true, qwenUseNonStreamingOnRetry: true }))
+      .mockResolvedValueOnce({ audio: wavBytes(), format: 'wav' });
+
+    await generateTTSForClassroom(scenes(), 'test', '');
+
+    expect(mocks.generateTTS).toHaveBeenCalledTimes(2);
+    expect(mocks.generateTTS.mock.calls[0][0].providerOptions).toBeUndefined();
+    expect(mocks.generateTTS.mock.calls[1][0].providerOptions).toEqual({ qwenTransport: 'download' });
+  });
 });

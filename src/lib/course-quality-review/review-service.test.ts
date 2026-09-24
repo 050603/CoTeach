@@ -6,7 +6,7 @@ vi.mock('@/lib/session/server-store', () => ({ getCourse: mocks.get, updateCours
 vi.mock('@/lib/openmaic/server/classroom-storage', () => ({ readClassroom: mocks.read, isValidClassroomId: (id: string) => /^[\w-]+$/.test(id) }));
 vi.mock('@/lib/classroom/new-system-course', () => ({ getNewSystemCourseReadiness: () => [] }));
 vi.mock('@/lib/course-generation/resource-audit-server', () => ({ auditCourseGeneratedResources: mocks.audit }));
-import { assertCourseTeacherReview, confirmCourseTeacherReview, freshQualityReport, saveCourseRenderPage } from './review-service';
+import { assertCourseTeacherReview, confirmCourseTeacherReview, freshQualityReport, freshRenderReview, saveCourseRenderPage, startCourseRenderReview } from './review-service';
 import { computeCourseQualitySignature } from './signature';
 import { COURSE_QUALITY_REVIEW_POLICY_VERSION } from './types';
 
@@ -21,7 +21,7 @@ beforeEach(() => {
   classroom = { id: 'classroom', revision: 1, stage: { id: 'stage' }, scenes: [], createdAt: '2026-09-12' } as unknown as PersistedClassroomData;
   course = { id: 'course', name: '课程', grade: '本科一年级', hours: 2.25, aiLearningClassroomId: 'classroom', content: { qualityReviewRequired: true, knowledgePoints: [], _openmaicSceneOutlines: [] } } as unknown as Course;
   const signature = computeCourseQualitySignature(course, classroom);
-  course.content.qualityReview = { schemaVersion: 1, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, signature, courseId: 'course', classroomId: 'classroom', classroomRevision: 1, status: 'completed', issues: [] };
+  course.content.qualityReview = { schemaVersion: 1, reviewPolicyVersion: COURSE_QUALITY_REVIEW_POLICY_VERSION, runId: 'saved-run', reviewScope: { kind: 'full-course', checkedOutlineIds: [], uncheckedOutlineCount: 0 }, signature, courseId: 'course', classroomId: 'classroom', classroomRevision: 1, status: 'completed', issues: [] };
   mocks.get.mockImplementation(async () => course);
   mocks.read.mockImplementation(async () => classroom);
   mocks.save.mockImplementation(async (_id: string, updater: (current: Course) => Course) => { course = updater(course); return course; });
@@ -70,6 +70,12 @@ describe('teacher confirmation of an exact teaching draft', () => {
     course.content.qualityReview!.reviewPolicyVersion = 'literal-coverage-v1';
     expect(freshQualityReport(course, signature)).toBeUndefined();
   });
+  it('hides a report if the selected lesson scope changed without changing the draft', () => {
+    const signature = computeCourseQualitySignature(course, classroom);
+    course.content.classroomGenerationRun = { scope: 'test-lesson', status: 'completed', generatedOutlineIds: ['page-a'], fullOutlineCount: 3,
+      testLesson: { sectionId: 'section-a', sectionTitle: '小节 A', sceneOutlineIds: ['page-a'], durationSeconds: 60 } };
+    expect(freshQualityReport(course, signature)).toBeUndefined();
+  });
   it('retains actual required-content errors independently of optional reports', async () => {
     course.content.knowledgePoints = [{ id: 'required', name: '必需知识' }] as Course['content']['knowledgePoints'];
     await expect(confirmCourseTeacherReview('course', 'teacher', computeCourseQualitySignature(course, classroom), [])).rejects.toThrow('课程体系知识节点缺少讲授页面');
@@ -112,12 +118,47 @@ describe('teacher confirmation of an exact teaching draft', () => {
     classroom.scenes = [{ id: 'slide', type: 'slide', content: { type: 'slide', canvas: { elements: [] } } }] as unknown as PersistedClassroomData['scenes'];
     const signature = computeCourseQualitySignature(course, classroom);
     const review = await confirmCourseTeacherReview('course', 'teacher', signature, []);
-    await saveCourseRenderPage('course', signature, { sceneId: 'slide', status: 'completed', checkedAt: '', issues: [] });
+    const batch = await startCourseRenderReview('course', signature);
+    await saveCourseRenderPage('course', signature, batch.runId!, { sceneId: 'slide', status: 'completed', checkedAt: '', issues: [] });
     expect(course.content.teacherReview).toEqual(review);
     await expect(assertCourseTeacherReview(course, 'teacher')).resolves.toBeUndefined();
   });
   it('rejects stale or foreign-page browser reports', async () => {
-    await expect(saveCourseRenderPage('course', 'outdated', { sceneId: 'foreign', status: 'completed', checkedAt: '', issues: [] })).rejects.toThrow('最新版本');
-    await expect(saveCourseRenderPage('course', computeCourseQualitySignature(course, classroom), { sceneId: 'foreign', status: 'completed', checkedAt: '', issues: [] })).rejects.toThrow('不属于');
+    const signature = computeCourseQualitySignature(course, classroom);
+    const batch = await startCourseRenderReview('course', signature);
+    await expect(saveCourseRenderPage('course', 'outdated', batch.runId!, { sceneId: 'foreign', status: 'completed', checkedAt: '', issues: [] })).rejects.toThrow('最新版本');
+    await expect(saveCourseRenderPage('course', signature, batch.runId!, { sceneId: 'foreign', status: 'completed', checkedAt: '', issues: [] })).rejects.toThrow('不属于');
+  });
+  it('clears completed pages for a full recheck and rejects the previous batch result', async () => {
+    classroom.scenes = [{ id: 'slide', type: 'slide', content: { type: 'slide', canvas: { elements: [] } } }] as unknown as PersistedClassroomData['scenes'];
+    const signature = computeCourseQualitySignature(course, classroom);
+    const first = await startCourseRenderReview('course', signature);
+    const page = { sceneId: 'slide', status: 'completed' as const, checkedAt: '', issues: [] };
+    await saveCourseRenderPage('course', signature, first.runId!, page);
+    expect(freshRenderReview(course, signature)?.status).toBe('completed');
+    const second = await startCourseRenderReview('course', signature);
+    expect(second.runId).not.toBe(first.runId);
+    expect(second.pages).toEqual([]);
+    expect(second.status).toBe('pending');
+    await expect(saveCourseRenderPage('course', signature, first.runId!, page)).rejects.toMatchObject({ code: 'RENDER_BATCH_STALE' });
+    expect(freshRenderReview(course, signature)?.pages).toEqual([]);
+  });
+  it('retries failed pages while retaining current completed pages only', async () => {
+    classroom.scenes = ['a', 'b'].map((id) => ({ id, type: 'slide', content: { type: 'slide', canvas: { elements: [] } } })) as unknown as PersistedClassroomData['scenes'];
+    const signature = computeCourseQualitySignature(course, classroom);
+    const first = await startCourseRenderReview('course', signature);
+    await saveCourseRenderPage('course', signature, first.runId!, { sceneId: 'a', status: 'completed', checkedAt: '', issues: [] });
+    await saveCourseRenderPage('course', signature, first.runId!, { sceneId: 'b', status: 'failed', checkedAt: '', issues: [] });
+    const retry = await startCourseRenderReview('course', signature, 'retry');
+    expect(retry.pages.map((page) => page.sceneId)).toEqual(['a']);
+    expect(retry.status).toBe('pending');
+  });
+  it('hides obsolete render reports without invalidating a signed teacher confirmation', async () => {
+    const signature = computeCourseQualitySignature(course, classroom);
+    const review = await confirmCourseTeacherReview('course', 'teacher', signature, []);
+    course.content.renderReview = { schemaVersion: 1, signature, classroomId: classroom.id, status: 'completed', pages: [], updatedAt: new Date().toISOString() };
+    expect(freshRenderReview(course, signature)).toBeUndefined();
+    await expect(assertCourseTeacherReview(course, 'teacher')).resolves.toBeUndefined();
+    expect(course.content.teacherReview).toEqual(review);
   });
 });

@@ -3,7 +3,6 @@
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Clock3,
   FilePenLine,
   Hourglass,
   LogIn,
@@ -22,6 +21,7 @@ import { StageEmptyState } from "@/components/classroom/classroom-ui";
 import { StudentClassroomHeaderStatus } from "@/components/classroom/student-classroom-header-status";
 import { normalizePblCourseConfig, type MakeArtifactMode } from "@/lib/pbl-course-config";
 import { PublicDiscussionStudentOverlay } from "@/components/views/student/public-discussion-overlay";
+import { StudentClassroomFinishedState } from "@/components/classroom/student-classroom-finished-state";
 
 export default function StudentClassroomPage() {
   const params = useParams<{ id: string }>();
@@ -164,7 +164,7 @@ export default function StudentClassroomPage() {
         />
       ) : null}
       {course.status === "finished" ? (
-        <FinishedState course={course} />
+        <StudentClassroomFinishedState course={course} />
       ) : !isTeaching ? (
         <WaitingState status={course.status} />
       ) : currentStage ? (
@@ -244,8 +244,4 @@ function AiCollaborationExperimentEntry({
 function WaitingState({ status }: { status: string }) {
   const message = status === "ready" ? "教师尚未开始授课，请稍候。" : "课堂尚未开放，请稍候。";
   return <StageEmptyState description={message} icon={Hourglass} title="课堂暂未开始" tone="warning" />;
-}
-
-function FinishedState({ course }: { course: { name: string } }) {
-  return <StageEmptyState description={`《${course.name}》已结束授课。你可以留在这里回看作品、评价证据和反思记录。`} icon={Clock3} title="课堂已结束" tone="neutral" />;
 }

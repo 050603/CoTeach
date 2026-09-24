@@ -62,4 +62,19 @@ describe("student record export archive", () => {
     } as never;
     await expect(createStudentRecordsArchive(claims, "offering", ["foreign"], ["summary"], database, at)).rejects.toMatchObject({ code: "INVALID_INPUT", status: 400 });
   });
+
+  it("includes a pretest in classroom records even before the student enters the lesson", async () => {
+    const assessment = { id: "pretest", enrollmentId: "enrollment", instanceId: "run", phase: "pretest", questionnaire: { pretest: [{ id: "q" }] }, answers: { q: "乙" }, objectiveScore: 1, objectiveTotal: 1, submittedAt: at, assignment: { variant: "A_PRE_B_POST" } };
+    const database = {
+      courseTeacher: { findFirst: vi.fn().mockResolvedValue({ id: "link" }) },
+      courseOffering: { findUnique: vi.fn().mockResolvedValue(offering) },
+      classroomParticipation: { findMany: vi.fn().mockResolvedValue([]) },
+      experimentAssessmentSubmission: { findMany: vi.fn().mockResolvedValue([assessment]) },
+    } as never;
+    const archive = await createStudentRecordsArchive(claims, "offering", ["enrollment"], ["classrooms"], database, at);
+    const zip = await JSZip.loadAsync(archive.bytes);
+    const payload = JSON.parse(await zip.file("data/classroom-experiment-assessments.json")!.async("string"));
+    const { assignment, ...record } = assessment;
+    expect(payload.records).toEqual([{ ...record, variant: assignment.variant, submittedAt: at.toISOString() }]);
+  });
 });

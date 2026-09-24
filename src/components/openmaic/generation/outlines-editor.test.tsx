@@ -22,9 +22,36 @@ const outline: SceneOutline = {
 };
 
 describe('OutlinesEditor lesson script workspace', () => {
+  it('numbers knowledge sections in outline order and uses their topics as headings', () => {
+    const page = { type: 'slide' as const, description: '', keyPoints: [], order: 1, stageLabel: '知识讲授' };
+    const sectionOutlines = [
+      { ...page, id: 'scene-1', title: '认识样本', parentActivityId: 'section-a', lectureSectionId: 'section-a', lectureSectionTitle: '训练数据' },
+      { ...page, id: 'scene-2', title: '划分样本', parentActivityId: 'section-a', lectureSectionId: 'section-a', lectureSectionTitle: '训练数据' },
+      { ...page, id: 'scene-3', title: '检查指标', parentActivityId: 'section-b', lectureSectionId: 'section-b', lectureSectionTitle: '模型评估' },
+    ];
+    render(
+      <I18nProvider locale="zh-CN">
+        <OutlinesEditor
+          outlines={sectionOutlines}
+          onChange={vi.fn()}
+          onConfirm={vi.fn()}
+          onBack={vi.fn()}
+          hideHeader
+          hideFooter
+          scriptWorkspace
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getAllByText('训练数据')).toHaveLength(1);
+    expect(screen.getByText('训练数据').parentElement).toHaveTextContent('01训练数据');
+    expect(screen.getByText('模型评估').parentElement).toHaveTextContent('02模型评估');
+    expect(screen.queryByText('00')).toBeNull();
+  });
+
   it('renders each detail as a structured page card with a solid settings panel', () => {
     render(
-      <I18nProvider>
+      <I18nProvider locale="zh-CN">
         <OutlinesEditor
           outlines={[outline]}
           onChange={vi.fn()}
@@ -70,10 +97,11 @@ describe('OutlinesEditor lesson script workspace', () => {
 
   it('places add-page controls at both ends of a fixed stage and preserves stage ownership', () => {
     const onChange = vi.fn();
+    const sectionOutline = { ...outline, lectureSectionId: 'section-1', lectureSectionTitle: '函数关系' };
     render(
-      <I18nProvider>
+      <I18nProvider locale="zh-CN">
         <OutlinesEditor
-          outlines={[outline]}
+          outlines={[sectionOutline]}
           onChange={onChange}
           onConfirm={vi.fn()}
           onBack={vi.fn()}
@@ -97,6 +125,8 @@ describe('OutlinesEditor lesson script workspace', () => {
     expect(nextOutlines).toHaveLength(2);
     expect(nextOutlines[1]).toMatchObject({
       parentActivityId: outline.parentActivityId,
+      lectureSectionId: sectionOutline.lectureSectionId,
+      lectureSectionTitle: sectionOutline.lectureSectionTitle,
       stageKey: outline.stageKey,
       audience: outline.audience,
       type: 'slide',
@@ -112,7 +142,7 @@ describe('OutlinesEditor lesson script workspace', () => {
     });
 
     const { rerender } = render(
-      <I18nProvider>
+      <I18nProvider locale="zh-CN">
         <OutlinesEditor
           outlines={[outline]}
           onChange={vi.fn()}
@@ -135,7 +165,7 @@ describe('OutlinesEditor lesson script workspace', () => {
     );
 
     rerender(
-      <I18nProvider>
+      <I18nProvider locale="zh-CN">
         <OutlinesEditor
           outlines={[outline]}
           onChange={vi.fn()}

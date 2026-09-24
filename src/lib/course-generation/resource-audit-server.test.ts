@@ -1,5 +1,7 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
+import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
 import type { PersistedClassroomData } from "@/lib/openmaic/server/classroom-storage";
@@ -10,8 +12,14 @@ const resolveDurableCourseSceneOutlines = vi.fn();
 const remoteFetch = vi.fn();
 const createSsrfSafeDispatcher = vi.fn();
 const closeRemoteConnection = vi.fn();
+const fileAssetFindFirst = vi.fn();
+const textbookFigureFindMany = vi.fn();
 
 vi.mock("@/lib/session/server-store", () => ({ getCourse }));
+vi.mock("@/lib/db/client", () => ({ prisma: {
+  fileAsset: { findFirst: fileAssetFindFirst },
+  textbookFigure: { findMany: textbookFigureFindMany },
+} }));
 const CLASSROOMS_DIR = "/tmp/openpbl-resource-audit-tests";
 vi.mock("@/lib/openmaic/server/classroom-storage", () => ({
   CLASSROOMS_DIR,
@@ -36,11 +44,14 @@ describe("final course resource audit", () => {
     remoteFetch.mockReset();
     createSsrfSafeDispatcher.mockReset();
     closeRemoteConnection.mockReset();
+    fileAssetFindFirst.mockReset();
+    textbookFigureFindMany.mockReset();
     createSsrfSafeDispatcher.mockResolvedValue({ dispatcher: {}, close: closeRemoteConnection });
   });
 
   afterEach(async () => {
     await rm(CLASSROOMS_DIR, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   });
 
   it("reports adaptive, planned-action, TTS, and media gaps before completion", async () => {
@@ -84,13 +95,14 @@ describe("final course resource audit", () => {
         type: "slide",
         order: 0,
         ttsPolicy: "target-duration",
+        content: { type: "slide", canvas: { elements: [{ id: "cover-1", type: "image", src: "gen_img_1" }] } },
         actions: [{ id: "speech-1", type: "speech", text: "开始测验" }],
       }],
       assetGeneration: {
         status: "partial-failure",
         requested: 1,
         completed: 0,
-        failures: [{ elementId: "cover-1", type: "image", error: "provider unavailable" }],
+        failures: [{ elementId: "old-cover", type: "image", error: "provider unavailable" }],
         updatedAt: "2026-08-17T00:00:00.000Z",
       },
     } as unknown as PersistedClassroomData);
@@ -239,7 +251,10 @@ describe("final course resource audit", () => {
         order: 0,
         content: {
           type: "slide",
-          canvas: { elements: [{ id: "image", type: "image", src: "/api/openmaic/classroom-media/classroom-files/media/missing.png" }] },
+          canvas: { elements: [
+            { id: "image", type: "image", src: "/api/openmaic/classroom-media/classroom-files/media/missing.png" },
+            { id: "damaged", type: "image", src: "/api/openmaic/classroom-media/classroom-files/media/damaged.png" },
+          ] },
         },
         actions: [{
           id: "speech",
@@ -253,6 +268,9 @@ describe("final course resource audit", () => {
     const audioDir = path.join(CLASSROOMS_DIR, "classroom-files", "audio");
     await mkdir(audioDir, { recursive: true });
     await writeFile(path.join(audioDir, "broken.wav"), "not-a-wave-file");
+    const mediaDir = path.join(CLASSROOMS_DIR, "classroom-files", "media");
+    await mkdir(mediaDir, { recursive: true });
+    await writeFile(path.join(mediaDir, "damaged.png"), "not-an-image");
 
     const { auditCourseGeneratedResources } = await import("./resource-audit-server");
     const audit = await auditCourseGeneratedResources(course.id, { course, classroom });
@@ -265,6 +283,162 @@ describe("final course resource audit", () => {
       id: "media:image:image",
       detail: "媒体文件不存在或无法读取",
     }));
+    expect(audit.issues).toContainEqual(expect.objectContaining({
+      id: "media:image:damaged",
+      detail: "图片文件损坏或尺寸无效",
+    }));
+  });
+
+  it("ignores old media failures once the current page has a valid replacement or no media", async () => {
+    const course = {
+      id: "course-replaced", aiLearningClassroomId: "classroom-replaced",
+      content: { _openmaicSceneOutlines: [] },
+    } as unknown as Course;
+    const classroom = {
+      id: "classroom-replaced", createdAt: "2026-09-24", stage: {},
+      scenes: [{
+        id: "slide", type: "slide", order: 0, title: "替换后页面",
+        content: { type: "slide", canvas: { elements: [{
+          id: "replacement", type: "image",
+          src: "/api/openmaic/classroom-media/classroom-replaced/media/replacement.png",
+        }] } },
+        actions: [],
+      }],
+      assetGeneration: {
+        status: "partial-failure", requested: 2, completed: 1,
+        failures: [{ elementId: "old-image", type: "image", error: "旧提供商失败" }],
+        updatedAt: "2026-09-24",
+      },
+    } as unknown as PersistedClassroomData;
+    const mediaDir = path.join(CLASSROOMS_DIR, "classroom-replaced", "media");
+    await mkdir(mediaDir, { recursive: true });
+    await writeFile(path.join(mediaDir, "replacement.png"), await sharp({
+      create: { width: 4, height: 4, channels: 3, background: "#fff" },
+    }).png().toBuffer());
+
+    const { auditCourseGeneratedResources } = await import("./resource-audit-server");
+    expect((await auditCourseGeneratedResources(course.id, { course, classroom })).issues.filter((issue) => issue.type === "media"))
+      .toEqual([]);
+    const removed = structuredClone(classroom);
+    if (removed.scenes[0]?.content.type === "slide") removed.scenes[0].content.canvas.elements = [];
+    expect((await auditCourseGeneratedResources(course.id, { course, classroom: removed })).issues.filter((issue) => issue.type === "media"))
+      .toEqual([]);
+  });
+
+  it("checks the current adaptive classroom instead of its old generation failures", async () => {
+    const course = {
+      id: "course-adaptive-current", aiLearningClassroomId: "main-current",
+      content: { _openmaicSceneOutlines: [], adaptiveLearningPlan: { enabled: true, branches: [{
+        id: "branch", title: "补充学习", enabled: true, status: "teacher-confirmed",
+        preparedResource: { status: "ready", classroomId: "adaptive-current" },
+      }] } },
+    } as unknown as Course;
+    const slide = (id: string, src?: string) => ({
+      id, type: "slide", order: 0, title: "补充页",
+      content: { type: "slide", canvas: { elements: src ? [{ id: "picture", type: "image", src }] : [] } },
+      actions: [],
+    });
+    const classroom = {
+      id: "main-current", createdAt: "2026-09-24", stage: {}, scenes: [slide("main")],
+    } as unknown as PersistedClassroomData;
+    const adaptiveClassroom = {
+      id: "adaptive-current", createdAt: "2026-09-24", stage: {}, scenes: [slide("adaptive")],
+      assetGeneration: { status: "partial-failure", requested: 1, completed: 0,
+        failures: [{ elementId: "old-image", type: "image", error: "旧失败" }], updatedAt: "2026-09-24" },
+    } as unknown as PersistedClassroomData;
+    readClassroom.mockResolvedValue(adaptiveClassroom);
+    const { auditCourseGeneratedResources } = await import("./resource-audit-server");
+    expect((await auditCourseGeneratedResources(course.id, { course, classroom })).issues.filter((issue) => issue.type === "adaptive-resource"))
+      .toEqual([]);
+
+    const pending = structuredClone(adaptiveClassroom);
+    pending.scenes = [slide("adaptive", "gen_img_pending")] as unknown as PersistedClassroomData["scenes"];
+    readClassroom.mockResolvedValue(pending);
+    expect((await auditCourseGeneratedResources(course.id, { course, classroom })).issues)
+      .toContainEqual(expect.objectContaining({ id: "adaptive:branch" }));
+  });
+
+  it("does not count ungenerated adaptive branches outside a single-section test", async () => {
+    const course = {
+      id: "course-test-lesson", aiLearningClassroomId: "test-classroom",
+      content: {
+        _openmaicSceneOutlines: [],
+        classroomGenerationRun: { scope: "test-lesson", status: "completed", generatedOutlineIds: ["page"] },
+        adaptiveLearningPlan: { enabled: true, branches: [{
+          id: "outside-branch", title: "完整课程的自适应支线", enabled: true,
+          status: "teacher-confirmed", preparedResource: { status: "failed" },
+        }] },
+      },
+    } as unknown as Course;
+    const classroom = {
+      id: "test-classroom", createdAt: "2026-09-24", stage: {},
+      scenes: [{ id: "scene", type: "slide", order: 0, title: "当前测试页",
+        content: { type: "slide", canvas: { elements: [] } }, actions: [] }],
+    } as unknown as PersistedClassroomData;
+
+    const { auditCourseGeneratedResources } = await import("./resource-audit-server");
+    const result = await auditCourseGeneratedResources(course.id, { course, classroom });
+    expect(result.issues.filter((issue) => issue.type === "adaptive-resource")).toEqual([]);
+    expect(readClassroom).not.toHaveBeenCalled();
+  });
+
+  it("checks the exact required textbook image across split pages and its upload bytes", async () => {
+    const figureId = "textbook-figure-1";
+    const resourceId = `textbook_fig_${createHash("sha256").update(figureId).digest("hex").slice(0, 12)}`;
+    const assetId = "11111111-1111-4111-8111-111111111111";
+    const otherAssetId = "22222222-2222-4222-8222-222222222222";
+    const course = {
+      id: "course-textbook", aiLearningClassroomId: "classroom-textbook",
+      content: {
+        _openmaicSceneOutlines: [
+          { id: "parent-a", spatialParentId: "parent", type: "slide" },
+          { id: "parent-b", spatialParentId: "parent", type: "slide" },
+        ],
+        courseEvidence: { items: [{ figureRefs: [{ figureId }] }] },
+        teachingBlueprint: { sections: [{ pages: [{ id: "parent", outlineId: "parent", resourceNeeds: [{
+          kind: "source-image", assetId: resourceId, required: true, purpose: "观察教材原图",
+        }] }] }] },
+      },
+    } as unknown as Course;
+    const classroom = {
+      id: "classroom-textbook", createdAt: "2026-09-24", stage: {}, scenes: [
+        { id: "scene-a", outlineId: "parent-a", type: "slide", order: 0, title: "原图（1/2）",
+          content: { type: "slide", canvas: { elements: [] } }, actions: [] },
+        { id: "scene-b", outlineId: "parent-b", type: "slide", order: 1, title: "原图（2/2）",
+          content: { type: "slide", canvas: { elements: [{ id: "figure", type: "image", src: `/api/uploads/${assetId}` }] } }, actions: [] },
+      ],
+    } as unknown as PersistedClassroomData;
+    const png = await sharp({ create: { width: 4, height: 4, channels: 3, background: "#fff" } }).png().toBuffer();
+    const uploadDir = path.join(CLASSROOMS_DIR, "uploads");
+    await mkdir(uploadDir, { recursive: true });
+    await writeFile(path.join(uploadDir, "figure.png"), png);
+    vi.stubEnv("UPLOAD_DIR", uploadDir);
+    textbookFigureFindMany.mockResolvedValue([{ id: figureId, fileAssetId: assetId, status: "AVAILABLE" }]);
+    fileAssetFindFirst.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      storageKey: "figure.png", mimeType: "image/png", size: BigInt(png.length), id: where.id,
+    }));
+
+    const { auditCourseGeneratedResources } = await import("./resource-audit-server");
+    const valid = await auditCourseGeneratedResources(course.id, { course, classroom });
+    expect(valid.issues.filter((issue) => issue.type === "media")).toEqual([]);
+    expect(fileAssetFindFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: assetId, deletedAt: null } }));
+
+    const unrelated = structuredClone(classroom);
+    const currentElement = unrelated.scenes[1]?.content.type === "slide"
+      ? unrelated.scenes[1].content.canvas.elements[0] : undefined;
+    if (currentElement?.type === "image") currentElement.src = `/api/uploads/${otherAssetId}`;
+    expect((await auditCourseGeneratedResources(course.id, { course, classroom: unrelated })).issues)
+      .toContainEqual(expect.objectContaining({
+        id: `media:source-image:parent:${resourceId}`,
+        detail: "指定的教材原图未进入对应课堂页面",
+      }));
+
+    fileAssetFindFirst.mockResolvedValue(null);
+    expect((await auditCourseGeneratedResources(course.id, { course, classroom })).issues)
+      .toContainEqual(expect.objectContaining({
+        id: "media:image:figure",
+        detail: "媒体文件不存在或无法读取",
+      }));
   });
 
   it("checks that a ready adaptive resource points to a readable classroom", async () => {

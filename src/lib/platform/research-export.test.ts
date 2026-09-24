@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthClaims } from "@/lib/auth/session";
 import { exportOfferingResearch } from "./research-export";
 
-const mocks = vi.hoisted(() => ({ teacher: vi.fn(), link: vi.fn(), events: vi.fn(), submissions: vi.fn(), outcomes: vi.fn(), ai: vi.fn() }));
+const mocks = vi.hoisted(() => ({ teacher: vi.fn(), link: vi.fn(), events: vi.fn(), submissions: vi.fn(), experiments: vi.fn(), outcomes: vi.fn(), ai: vi.fn() }));
 vi.mock("./access", () => ({ requireTeacherUser: mocks.teacher }));
 vi.mock("@/lib/db/client", () => ({ prisma: {
-  aiInteractionEvent: { findMany: mocks.ai }, domainEvent: { findMany: mocks.outcomes }, courseTeacher: { findFirst: mocks.link }, learningEvent: { findMany: mocks.events }, activitySubmission: { findMany: mocks.submissions },
+  aiInteractionEvent: { findMany: mocks.ai }, domainEvent: { findMany: mocks.outcomes }, courseTeacher: { findFirst: mocks.link }, learningEvent: { findMany: mocks.events }, activitySubmission: { findMany: mocks.submissions }, experimentAssessmentSubmission: { findMany: mocks.experiments },
 } }));
 const claims = { sub: "teacher", role: "teacher" } as AuthClaims;
 const at = new Date("2026-09-01T10:00:00.000Z");
@@ -89,6 +89,18 @@ describe("offering research export", () => {
       where: { OR: [{ submittedAt: { gt: at } }, { submittedAt: at, id: { gt: ids[0] } }] },
       orderBy: [{ submittedAt: "asc" }, { id: "asc" }],
     });
+  });
+
+  it("exports paired experiment measurements without identities or answers by default", async () => {
+    mocks.experiments.mockResolvedValue([{ id: ids[0], researchKey: "research-key", instanceId: "run", phase: "pretest", objectiveScore: 2, objectiveTotal: 3, submittedAt: at, instance: { activityId: "activity", runNo: 2 }, assignment: { variant: "A_PRE_B_POST" }, questionnaire: { pretest: [{ id: "q", correctAnswer: "yes" }] }, answers: { q: "yes" } }]);
+    const result = await exportOfferingResearch(claims, "course", { type: "experiments" });
+    expect(result.rows[0]).toEqual({ id: ids[0], researchKey: "research-key", quality: "complete", classroomInstanceId: "run", activityId: "activity", runNo: 2, phase: "pretest", variant: "A_PRE_B_POST", objectiveScore: 2, objectiveTotal: 3, submittedAt: at });
+    expect(mocks.experiments.mock.calls[0][0]).toMatchObject({ where: { enrollment: { offeringId: "course" }, instance: { activity: { chapter: { offeringId: "course" } } } } });
+    expect(mocks.experiments.mock.calls[0][0].select).not.toHaveProperty("answers");
+    const content = await exportOfferingResearch(claims, "course", { type: "experiments", includeContent: "true" });
+    expect(content.rows[0]).toHaveProperty("answers.q", "yes");
+    expect(content.rows[0]).toHaveProperty("questionnaire.pretest.0.correctAnswer", "yes");
+    expect(content.rows[0]).not.toHaveProperty("enrollmentId");
   });
 
   it.each<Record<string, string>>([

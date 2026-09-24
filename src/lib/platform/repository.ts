@@ -9,6 +9,7 @@ import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { generateInviteCode, normalizeInviteCode } from "@/lib/session/invite-code";
 import { ActivityConfigSchema, type ActivityType } from "./activity";
 import { SurveyConfigSchema } from "./survey";
+import { ExperimentConfigSchema, ExperimentQuestionSchema, experimentConfigFromActivity, publicActivityConfig, publicExperimentQuestions } from "./experiment";
 import { buildSurveyAnalytics } from "./survey-analytics";
 import { classroomCoverImageUrl } from "./classroom-cover";
 import { CourseReferenceLinksSchema, type CourseReferenceLink } from "./course-reference";
@@ -78,9 +79,13 @@ function newToken(): string {
 function parsedActivityConfig(type: string, input: unknown) {
   try {
     const config = ActivityConfigSchema.parse(input);
+    if ("experiment" in config) {
+      if (type.toUpperCase() !== "CLASSROOM") throw new Error("experiment is only available for classrooms");
+      ExperimentConfigSchema.parse(config.experiment);
+    }
     return type.toUpperCase() === "FORM" ? SurveyConfigSchema.parse(config) : config;
   } catch {
-    throw new PlatformError("INVALID_ACTIVITY_CONFIG", type.toUpperCase() === "FORM" ? "请完善问卷题目与单选选项" : "活动配置无效", 400);
+    throw new PlatformError("INVALID_ACTIVITY_CONFIG", type.toUpperCase() === "FORM" ? "请完善问卷题目与单选选项" : type.toUpperCase() === "CLASSROOM" ? "请检查实验模式的前后测题目配置" : "活动配置无效", 400);
   }
 }
 
@@ -229,7 +234,7 @@ export async function listStudentOfferings(claims: AuthClaims) {
         activities: chapter.activities.map((activity) => {
           const progress = row.activityProgress.find((item) => item.activityId === activity.id);
           const open = courseReleased && isActivityOpen(chapter, activity, at);
-          return { id: activity.id, type: activityTypeForApi(activity.type), title: activity.title, description: activity.description, position: activity.position, opensAt: activity.opensAt, isOpen: open, progress: progress ? { status: normalizedStatus(progress.status), startedAt: progress.startedAt, completedAt: progress.completedAt, lastAccessedAt: progress.lastAccessedAt } : { status: "not_started" }, ...(open ? { config: activity.config } : {}) };
+          return { id: activity.id, type: activityTypeForApi(activity.type), title: activity.title, description: activity.description, position: activity.position, opensAt: activity.opensAt, isOpen: open, progress: progress ? { status: normalizedStatus(progress.status), startedAt: progress.startedAt, completedAt: progress.completedAt, lastAccessedAt: progress.lastAccessedAt } : { status: "not_started" }, ...(open ? { config: publicActivityConfig(activity.config) } : {}) };
         }),
       })),
     };
@@ -268,19 +273,45 @@ export async function getStudentActivity(claims: AuthClaims, activityId: string)
     });
     await appendLearningEvents(claims, [{ idempotencyKey: `activity-opened:${activity.id}:${enrollment.id}`, type: "activity_opened", occurredAt: accessedAt.toISOString(), offeringId: offering.id, chapterId: activity.chapterId, activityId, source: "platform" }]);
   }
+  if (activity.type.toUpperCase() === "CLASSROOM" && open && normalizedStatus(offering.status) === "open" && normalizedStatus(enrollment.status) === "active" && activity.classroomInstances[0] && ["scheduled", "teaching"].includes(normalizedStatus(activity.classroomInstances[0].status)) && experimentConfigFromActivity(activity.config)) {
+    const { ensureExperimentAssignment } = await import("./experiment-service");
+    await ensureExperimentAssignment(activity.classroomInstances[0].id, enrollment.id);
+  }
+  const instanceIds = activity.classroomInstances.map((instance) => instance.id);
+  const [experimentRows, assignments] = activity.type.toUpperCase() === "CLASSROOM" && instanceIds.length
+    ? await Promise.all([
+      prisma.experimentAssessmentSubmission.findMany({
+        where: { instanceId: { in: instanceIds }, enrollmentId: enrollment.id },
+        select: { instanceId: true, phase: true },
+      }),
+      prisma.experimentAssessmentAssignment.findMany({
+        where: { instanceId: { in: instanceIds }, enrollmentId: enrollment.id },
+        select: { instanceId: true, pretestForm: true, posttestForm: true },
+      }),
+    ]) : [[], []];
+  const instanceExperiment = (instance: typeof activity.classroomInstances[number]) => {
+    const assignment = assignments.find((row) => row.instanceId === instance.id);
+    if (!assignment) return null;
+    const pretest = ExperimentQuestionSchema.array().safeParse(assignment.pretestForm);
+    const posttest = ExperimentQuestionSchema.array().safeParse(assignment.posttestForm);
+    if (!pretest.success || !posttest.success) return null;
+    return { enabled: true, pretest: publicExperimentQuestions(pretest.data), posttest: normalizedStatus(instance.status) === "finished" && submitted(instance.id, "pretest") ? publicExperimentQuestions(posttest.data) : [] };
+  };
+  const submitted = (instanceId: string, phase: string) => experimentRows.some((row) => row.instanceId === instanceId && row.phase === phase);
   return {
     id: activity.id,
     type: activityTypeForApi(activity.type),
     title: activity.title,
     description: activity.description,
-    config: open ? activity.config : null,
+    config: open ? publicActivityConfig(activity.config) : null,
+    experiment: open && activity.classroomInstances[0] ? instanceExperiment(activity.classroomInstances[0]) : null,
     isOpen: open,
     chapter: { id: activity.chapter.id, title: activity.chapter.title, position: activity.chapter.position },
     offering: { id: offering.id, name: offering.name, status: normalizedStatus(offering.status) },
     enrollment: { id: enrollment.id },
     progress: progress ? { status: normalizedStatus(progress.status), startedAt: progress.startedAt, completedAt: progress.completedAt, lastAccessedAt: progress.lastAccessedAt, progressData: progress.progressData } : { status: "not_started", startedAt: null, completedAt: null, lastAccessedAt: null },
-    instances: activity.classroomInstances.map((instance) => ({ id: instance.id, status: normalizedStatus(instance.status), startedAt: instance.startedAt, endedAt: instance.endedAt, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) })),
-    instance: activity.classroomInstances[0] ? { ...activity.classroomInstances[0], templateVersion: { ...activity.classroomInstances[0].templateVersion, snapshot: publicResourcePackageSnapshot(activity.classroomInstances[0].templateVersion.snapshot) }, status: normalizedStatus(activity.classroomInstances[0].status), coverImageUrl: classroomCoverImageUrl(activity.classroomInstances[0].templateVersion.snapshot), canWrite: open && normalizedStatus(offering.status) === "open" && normalizedStatus(enrollment.status) === "active" && normalizedStatus(activity.classroomInstances[0].status) === "teaching" } : null,
+    instances: activity.classroomInstances.map((instance) => ({ id: instance.id, status: normalizedStatus(instance.status), startedAt: instance.startedAt, endedAt: instance.endedAt, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot), experiment: open ? instanceExperiment(instance) : null, pretestSubmitted: submitted(instance.id, "pretest"), posttestSubmitted: submitted(instance.id, "posttest") })),
+    instance: activity.classroomInstances[0] ? { ...activity.classroomInstances[0], templateVersion: { ...activity.classroomInstances[0].templateVersion, snapshot: publicResourcePackageSnapshot(activity.classroomInstances[0].templateVersion.snapshot) }, status: normalizedStatus(activity.classroomInstances[0].status), coverImageUrl: classroomCoverImageUrl(activity.classroomInstances[0].templateVersion.snapshot), canWrite: open && normalizedStatus(offering.status) === "open" && normalizedStatus(enrollment.status) === "active" && normalizedStatus(activity.classroomInstances[0].status) === "teaching", experiment: open ? instanceExperiment(activity.classroomInstances[0]) : null, pretestSubmitted: submitted(activity.classroomInstances[0].id, "pretest"), posttestSubmitted: submitted(activity.classroomInstances[0].id, "posttest") } : null,
   };
 }
 
@@ -417,6 +448,15 @@ export async function updateActivity(claims: AuthClaims, activityId: string, dat
     const activity = await activityForTeacher(claims, activityId, tx);
     if (data.version !== undefined && data.version !== activity.version) throw new PlatformError("VERSION_CONFLICT", "活动已被其他操作更新", 409);
     const config = data.config === undefined ? undefined : parsedActivityConfig(activity.type, data.config);
+    if (activity.type.toUpperCase() === "CLASSROOM" && config !== undefined) {
+      const previousExperiment = activity.config && typeof activity.config === "object" && !Array.isArray(activity.config) ? (activity.config as Record<string, unknown>).experiment : undefined;
+      if (JSON.stringify(previousExperiment) !== JSON.stringify(config.experiment)) {
+        const activeRuns = await tx.classroomInstance.findMany({ where: { activityId, status: { in: ["SCHEDULED", "scheduled", "TEACHING", "teaching"] } }, select: { id: true, status: true } });
+        if (activeRuns.some((run) => run.status.toLowerCase() === "teaching") || await tx.experimentAssessmentAssignment.count({ where: { instanceId: { in: activeRuns.map((run) => run.id) } } })) {
+          throw new PlatformError("EXPERIMENT_CONFIG_LOCKED", "本场课堂已开始或已有学生获取题目，请在结束后为下一场次修改实验题目", 409);
+        }
+      }
+    }
     const selectedVersion = data.templateVersionId ? await readyTemplateVersion(claims, data.templateVersionId, tx) : null;
     if (data.isOpen === true && !activity.chapter.isOpen) {
       await tx.chapter.update({
@@ -620,10 +660,15 @@ export async function enterClassroom(claims: AuthClaims, instanceId: string) {
   if (!isActivityOpen(instance.activity.chapter, instance.activity)) throw new PlatformError("ACTIVITY_LOCKED", "活动尚未开放学习", 403);
   const enrollment = await prisma.enrollment.findUnique({ where: { userId_offeringId: { userId: student.id, offeringId: offering.id } } });
   if (!enrollment || !ACTIVE_ENROLLMENT_STATUSES.includes(enrollment.status)) throw new PlatformError("ENROLLMENT_REQUIRED", "请先加入教学班", 403);
+  if (normalizedStatus(instance.status) !== "finished" && experimentConfigFromActivity(instance.activity.config)) {
+    const pretest = await prisma.experimentAssessmentSubmission.findUnique({ where: { instanceId_enrollmentId_phase: { instanceId, enrollmentId: enrollment.id, phase: "pretest" } }, select: { id: true } });
+    if (!pretest) throw new PlatformError("PRETEST_REQUIRED", "请先完成本场课堂前测", 409);
+  }
+  const studentInstance = { ...instance, activity: { ...instance.activity, config: publicActivityConfig(instance.activity.config) } };
   if (normalizedStatus(instance.status) === "finished") {
     const participation = await prisma.classroomParticipation.findUnique({ where: { instanceId_enrollmentId: { instanceId, enrollmentId: enrollment.id } } });
     if (!participation) throw new PlatformError("PARTICIPATION_NOT_FOUND", "没有本次课堂的参与记录", 404);
-    return { instance: { ...instance, templateVersion: { ...instance.templateVersion, snapshot: publicResourcePackageSnapshot(instance.templateVersion.snapshot) }, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) }, participation, student };
+    return { instance: { ...studentInstance, templateVersion: { ...instance.templateVersion, snapshot: publicResourcePackageSnapshot(instance.templateVersion.snapshot) }, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) }, participation, student };
   }
   const participation = await prisma.classroomParticipation.upsert({
     where: { instanceId_enrollmentId: { instanceId, enrollmentId: enrollment.id } },
@@ -631,7 +676,7 @@ export async function enterClassroom(claims: AuthClaims, instanceId: string) {
     update: { lastEnteredAt: new Date() },
   });
   await appendLearningEvents(claims, [{ idempotencyKey: `classroom-entered:${participation.id}:${Math.floor(Date.now() / 60_000)}`, type: "classroom_entered", offeringId: offering.id, activityId: instance.activityId, chapterId: instance.activity.chapterId, classroomInstanceId: instanceId, participationId: participation.id, source: "platform" }]);
-  return { instance: { ...instance, templateVersion: { ...instance.templateVersion, snapshot: publicResourcePackageSnapshot(instance.templateVersion.snapshot) }, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) }, participation, student };
+  return { instance: { ...studentInstance, templateVersion: { ...instance.templateVersion, snapshot: publicResourcePackageSnapshot(instance.templateVersion.snapshot) }, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) }, participation, student };
 }
 
 export async function appendLearningEvents(claims: AuthClaims, events: unknown) {

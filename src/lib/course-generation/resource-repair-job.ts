@@ -99,15 +99,9 @@ async function repairCourseResources(courseId: string, baseUrl: string): Promise
       await updatePersistedClassroomScenes(classroomId, scenes);
     }
 
-    const recordedMediaFailures = classroom.assetGeneration?.failures.filter(
-      (failure) => failure.type === "image" || failure.type === "video",
-    ) ?? [];
-    const mediaFailures = Array.from(new Map(
-      [...findUnresolvedClassroomMedia(outlines, scenes), ...recordedMediaFailures].map((failure) => [
-        `${failure.type}:${failure.elementId}`,
-        failure,
-      ]),
-    ).values());
+    // A persisted provider failure may refer to a placeholder that the teacher
+    // already replaced or removed. Only retry media still unresolved on a page.
+    const mediaFailures = findUnresolvedClassroomMedia(outlines, scenes);
     if (mediaFailures.length > 0) {
       const missingElementIds = new Set(mediaFailures.map((failure) => failure.elementId));
       const repairOutlines = outlines.flatMap((outline) => {
@@ -154,7 +148,7 @@ async function repairCourseResources(courseId: string, baseUrl: string): Promise
   }
 
   const plan = course.content.adaptiveLearningPlan;
-  const branchIds = plan?.enabled
+  const branchIds = course.content.classroomGenerationRun?.scope !== "test-lesson" && plan?.enabled
     ? plan.branches.flatMap((branch) =>
         branch.enabled !== false
         && branch.status === "teacher-confirmed"

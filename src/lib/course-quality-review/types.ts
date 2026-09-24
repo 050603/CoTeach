@@ -1,4 +1,4 @@
-export const COURSE_QUALITY_REVIEW_POLICY_VERSION = "textbook-guidance-v3-concept-responsibility";
+export const COURSE_QUALITY_REVIEW_POLICY_VERSION = "teaching-responsibility-v4-current-evidence";
 
 /** Teacher-private authoring diagnostics. A completed check is not a quality score. */
 export type CourseQualityIssue = {
@@ -20,6 +20,8 @@ export type CourseQualityReport = {
   schemaVersion: 1;
   /** Invalidates reports produced by obsolete literal-coverage rules. */
   reviewPolicyVersion?: string;
+  /** Distinguishes successive checks of the same teaching content. */
+  runId?: string;
   signature: string;
   courseId: string;
   classroomId: string;
@@ -27,6 +29,9 @@ export type CourseQualityReport = {
   /** Exact model used by the optional post-generation semantic reviewer. */
   reviewModelString?: string;
   status: "pending" | "running" | "completed" | "failed";
+  /** A bounded test checks its generated lesson only; other lessons remain unchecked. */
+  reviewScope?: { kind: "full-course" | "test-lesson"; checkedOutlineIds: string[]; uncheckedOutlineCount: number;
+    checkedSectionId?: string; checkedSectionTitle?: string; unreviewedSectionCount?: number };
   issues: CourseQualityIssue[];
   sections?: Array<{ id: string; sceneIds: string[]; status: "pending" | "completed" | "failed"; issues: CourseQualityIssue[]; checkedAt?: string; error?: string }>;
   sourceCoverage?: { totalChars: number; perSectionLimit: number; partial: boolean };

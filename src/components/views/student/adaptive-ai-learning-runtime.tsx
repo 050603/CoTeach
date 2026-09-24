@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BookOpenCheck, CheckCircle2, Clock3, Loader2 } from "lucide-react";
-import type { Scene } from "@openmaic/lib/types/stage";
+import type { QuizQuestion, Scene } from "@openmaic/lib/types/stage";
 import {
   StudentStageHost,
   prefetchAdaptiveClassroom,
@@ -39,6 +39,18 @@ type QueuedResource = {
   placement: AdaptiveSceneInsertion["placement"];
   anchorSceneId?: string;
 };
+
+function questionDisplaySnapshot(question: QuizQuestion) {
+  const pairs = question.matchingPairs;
+  return {
+    options: question.options,
+    matchingOptions: pairs ? {
+      left: pairs.map((pair) => pair.left),
+      right: (pairs.length > 1 ? [...pairs.slice(1), pairs[0]!] : pairs)
+        .map((pair) => pair.right),
+    } : undefined,
+  };
+}
 
 function hasUnqueuedPrerequisiteGap(
   plan: NonNullable<Course["content"]["adaptiveLearningPlan"]> | undefined,
@@ -364,6 +376,7 @@ export function AdaptiveAiLearningRuntime({
               return {
                 questionId: question.id,
                 prompt: question.question,
+                ...questionDisplaySnapshot(question),
                 answer: Array.isArray(answer) ? answer.join("、") : answer ?? "",
                 points: question.points ?? 1,
                 earned: result?.earned ?? 0,
@@ -405,7 +418,25 @@ export function AdaptiveAiLearningRuntime({
       const scene = sceneForEvent(detail.sceneId);
       if (!scene) return;
       void recordLectureAttempt(scene).then((attempt) => {
-        if (attempt) setReviewAttempt({ attempt, questionId: detail.questionId });
+        if (!attempt) return;
+        const sourceQuestions = new Map(scene.content?.type === "quiz"
+          ? scene.content.questions.map((question) => [question.id, question])
+          : []);
+        setReviewAttempt({
+          attempt: {
+            ...attempt,
+            questions: attempt.questions.map((review) => {
+              const source = sourceQuestions.get(review.questionId);
+              const snapshot = source ? questionDisplaySnapshot(source) : undefined;
+              return {
+                ...review,
+                options: review.options ?? snapshot?.options,
+                matchingOptions: review.matchingOptions ?? snapshot?.matchingOptions,
+              };
+            }),
+          },
+          questionId: detail.questionId,
+        });
       });
     };
     window.addEventListener(QUIZ_REVIEWED_EVENT, reviewed);

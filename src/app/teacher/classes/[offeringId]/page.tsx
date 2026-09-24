@@ -13,6 +13,7 @@ import { teacherPlatformFetch } from "@/lib/platform/client";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { publishedClassroomVersion, teacherClassroomEntry } from "@/lib/platform/classroom-entry";
 import { createEmptySurveyQuestion, SurveyBuilder } from "@/components/platform/survey-builder";
+import type { ExperimentConfig } from "@/lib/platform/experiment";
 import type { SurveyQuestion } from "@/lib/platform/survey";
 import { LearningArt } from "@/components/platform/learning-art";
 import { CoTeachLogo } from "@/components/brand/coteach-logo";
@@ -42,6 +43,7 @@ type Activity = {
         fileName?: string;
         fileSize?: string;
         questions?: SurveyQuestion[];
+        experiment?: ExperimentConfig;
     };
     instances?: Instance[];
 };
@@ -328,7 +330,7 @@ export default function TeacherClassEditorPage() {
                     if (!response.ok || !data.id || !data.url) throw new Error(data.message ?? "PDF 上传失败，请重试");
                     resource = { url: data.url, fileId: data.id, fileName: data.fileName ?? activity.file.name, fileSize: data.size ?? "" };
                 }
-                const config = { schemaVersion: activity.type === "Form" ? 2 : 1, content: activity.content, ...(activity.type === "Resource" ? { resourceKind: activity.resourceKind, ...(resource.url ? { url: resource.url } : {}), ...(activity.resourceKind === "file" && resource.fileId ? { fileId: resource.fileId, fileName: resource.fileName, fileSize: resource.fileSize } : {}) } : activity.url ? { url: activity.url } : {}), ...(activity.type === "Form" ? { questions: activity.surveyQuestions } : activity.type === "Quiz" ? { questions: activity.questions.split("\n").map((title) => title.trim()).filter(Boolean).map((title, index) => ({ id: editActivity?.config?.questions?.[index]?.id ?? `q${index + 1}`, title, required: true })) } : {}) };
+                const config = { ...(activity.type === "Classroom" ? editActivity?.config ?? {} : {}), schemaVersion: activity.type === "Form" ? 2 : 1, content: activity.content, ...(activity.type === "Resource" ? { resourceKind: activity.resourceKind, ...(resource.url ? { url: resource.url } : {}), ...(activity.resourceKind === "file" && resource.fileId ? { fileId: resource.fileId, fileName: resource.fileName, fileSize: resource.fileSize } : {}) } : activity.url ? { url: activity.url } : {}), ...(activity.type === "Form" ? { questions: activity.surveyQuestions } : activity.type === "Quiz" ? { questions: activity.questions.split("\n").map((title) => title.trim()).filter(Boolean).map((title, index) => ({ id: editActivity?.config?.questions?.[index]?.id ?? `q${index + 1}`, title, required: true })) } : {}) };
                 await mutate(editActivity ? `/api/platform/activities/${editActivity.id}/manage` : `/api/platform/offerings/${offeringId}/chapters/${chapterId}/activities`, { title: activity.title.trim(), description: activity.content, config, ...(editActivity ? { version: editActivity.version } : { type: activity.type }), ...(activity.type === "Classroom" ? { templateVersionId: activity.templateVersionId || undefined } : {}) }, editActivity ? "PATCH" : "POST");
             }
             setDialog(null);
@@ -546,6 +548,7 @@ export default function TeacherClassEditorPage() {
                               </button>
                             )}
                             <div className="pbl-teacher-activity-actions">
+                            {item.type === "Classroom" ? <Link className={rowAction} href={`/teacher/classes/${offeringId}/activities/${item.id}/experiment`}><ClipboardList size={14} />{item.config?.experiment?.enabled ? "编辑实验" : "实验配置"}</Link> : null}
                             {item.type === "Classroom" ? (
                               entry ? (
                                 <Link className={rowAction} href={entry.href}>
@@ -590,7 +593,8 @@ export default function TeacherClassEditorPage() {
                                 </button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="pbl-platform-theme pbl-platform-dialog">
-                                <DropdownMenuItem onSelect={() => openActivity(chapter, item)}>编辑名称与内容关联</DropdownMenuItem>
+                                <DropdownMenuItem onSelect={() => openActivity(chapter, item)}>{item.type === "Classroom" ? "编辑课堂设置" : "编辑名称与内容关联"}</DropdownMenuItem>
+                                {item.type === "Classroom" ? <DropdownMenuItem asChild><Link href={`/teacher/classes/${offeringId}/activities/${item.id}/experiment`}>设置实验前后测</Link></DropdownMenuItem> : null}
                                 {item.type === "Form" ? (
                                   <DropdownMenuItem asChild>
                                     <a href={`/api/platform/activities/${item.id}/survey-export`}>

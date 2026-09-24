@@ -1,5 +1,7 @@
 import type { CourseQualityIssue } from './types';
 
+export const COURSE_RENDER_REVIEW_POLICY_VERSION = 'render-visible-content-v2';
+
 /** A browser measurement is evidence for teacher review, never a server validation. */
 export type CourseRenderPageReview = {
   sceneId: string;
@@ -10,6 +12,8 @@ export type CourseRenderPageReview = {
 
 export type CourseRenderReview = {
   schemaVersion: 1;
+  reviewPolicyVersion?: string;
+  runId?: string;
   signature: string;
   classroomId: string;
   status: 'pending' | 'running' | 'completed';

@@ -149,6 +149,21 @@ function unwrapErrors(value: unknown): unknown[] {
   return nested;
 }
 
+function hasAuthoritativeTerminalCause(value: unknown, seen = new Set<unknown>()): boolean {
+  if (!value || seen.has(value)) return false;
+  seen.add(value);
+  if (isAbortError(value)) return true;
+  if (!isRecord(value)) return false;
+  if (booleanField(value, 'isRetryable') === false) return true;
+  const statusCode = statusCodeFrom(value);
+  if (statusCode !== undefined && statusCode >= 400
+    && !RETRYABLE_STATUS_CODES.has(statusCode)
+    && ![500, 502, 503, 504].includes(statusCode)) return true;
+  if (stringField(value, 'code') === 'UND_ERR_INVALID_ARG'
+    || /\b(?:401|403)\b|unauthori[sz]ed|forbidden|invalid credential/i.test(messageFrom(value))) return true;
+  return unwrapErrors(value).some((nested) => hasAuthoritativeTerminalCause(nested, seen));
+}
+
 export function isRetryableGenerationError(error: unknown, seen = new Set<unknown>()): boolean {
   if (!error || seen.has(error)) return false;
   seen.add(error);
@@ -171,7 +186,14 @@ export function isRetryableGenerationError(error: unknown, seen = new Set<unknow
 
   const nested = unwrapErrors(error);
   if (nested.length > 0) {
-    return nested.some((nestedError) => isRetryableGenerationError(nestedError, seen));
+    const interruptedStream = error instanceof Error && /^terminated$/i.test(error.message.trim());
+    if (interruptedStream && nested.some((nestedError) => hasAuthoritativeTerminalCause(nestedError))) return false;
+    if (nested.some((nestedError) => isRetryableGenerationError(nestedError, seen))) return true;
+    // Undici reports an interrupted response body as TypeError("terminated")
+    // with a cause that may have no recognizable transport code. The outer
+    // signal is still a broken stream unless the cause proves cancellation
+    // or a terminal provider response.
+    return interruptedStream;
   }
 
   // A transport adapter can identify a broken stream even when the provider

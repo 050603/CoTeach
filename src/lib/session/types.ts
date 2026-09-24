@@ -1037,6 +1037,10 @@ export type TeachingTimingAudit = {
 export type KnowledgeLectureQuestionReview = {
   questionId: string;
   prompt: string;
+  /** The choices shown to the student when this quiz was submitted. */
+  options?: Array<{ value: string; label: string }>;
+  /** The two candidate columns shown for a matching question. */
+  matchingOptions?: { left: string[]; right: string[] };
   answer: string;
   points: number;
   earned: number;

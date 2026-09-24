@@ -154,6 +154,48 @@ describe("课程章节管理", () => {
       expect.objectContaining({ title: "你有哪些相关经验？", type: "short-text", required: true, options: [] }),
     ]);
   });
+  it("keeps lesson creation separate from experimental question editing", async () => {
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (options?.method) return new Response(JSON.stringify({ activity: { id: "classroom-1" } }), { status: 201 });
+      return new Response(JSON.stringify(url === "/api/platform/templates"
+        ? { templates: [{ id: "template-1", title: "观察课堂", status: "ACTIVE", versions: [{ id: "version-1", version: 1, status: "published" }] }] }
+        : { offerings: [offering] }));
+    });
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("button", { name: "添加学习内容" }));
+    fireEvent.change(screen.getByLabelText(/课程库教案/), { target: { value: "version-1" } });
+    expect(screen.queryByRole("switch", { name: "开启实验模式" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "添加到章节" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/offerings/course-1/chapters/chapter-1/activities", expect.objectContaining({ method: "POST" })));
+    const request = fetcher.mock.calls.find(([url, options]) => url === "/api/platform/offerings/course-1/chapters/chapter-1/activities" && options?.method === "POST");
+    expect(JSON.parse(String(request?.[1]?.body)).config).not.toHaveProperty("experiment");
+  });
+  it("links classroom experimental configuration and preserves it during basic edits", async () => {
+    const experiment = {
+      enabled: true,
+      sharedQuestions: [],
+      pretest: [{ id: "pre-1", type: "short-answer", prompt: "已有前测" }],
+      posttest: [{ id: "post-1", type: "true-false", prompt: "已有后测", correctAnswer: "false" }],
+      randomizeQuestionOrder: true,
+      randomizeOptionOrder: true,
+    };
+    const existing = { id: "classroom-1", title: "观察课堂", type: "Classroom", isOpen: true, version: 4, templateVersionId: "version-1", config: { content: "既有说明", customSetting: { sample: "keep" }, experiment } };
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (options?.method) return new Response(JSON.stringify({ activity: existing }));
+      return new Response(JSON.stringify(url === "/api/platform/templates"
+        ? { templates: [{ id: "template-1", title: "观察课堂", status: "ACTIVE", versions: [{ id: "version-1", version: 1, status: "published" }] }] }
+        : { offerings: [{ ...offering, chapters: [{ ...offering.chapters[0], activities: [existing] }] }] }));
+    });
+    render(<Page />);
+    expect(await screen.findByRole("link", { name: "编辑实验" })).toHaveAttribute("href", "/teacher/classes/course-1/activities/classroom-1/experiment");
+    fireEvent.pointerDown(screen.getByRole("button", { name: "观察课堂更多操作" }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "编辑课堂设置" }));
+    expect(screen.queryByRole("switch", { name: "开启实验模式" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存内容修改" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/activities/classroom-1/manage", expect.objectContaining({ method: "PATCH" })));
+    const request = fetcher.mock.calls.find(([url, options]) => url === "/api/platform/activities/classroom-1/manage" && options?.method === "PATCH");
+    expect(JSON.parse(String(request?.[1]?.body)).config).toMatchObject({ customSetting: { sample: "keep" }, experiment });
+  });
   it("offers questionnaire CSV export from the resource more menu", async () => {
     fetcher.mockImplementation(async (url: string) => new Response(JSON.stringify(
       url === "/api/platform/templates"

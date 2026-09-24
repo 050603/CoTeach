@@ -2,10 +2,11 @@ import { useContext } from "react";
 import { PlaybackPreparationContext } from "@openmaic/lib/contexts/playback-preparation-context";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { dispatchPlaybackActivityComplete, dispatchPlaybackActivityReset } from "@openmaic/lib/playback/activity-events";
 
 const stageMock = vi.hoisted(() => {
   const state = {
-    scenes: [] as Array<{ id: string; title: string; actions: unknown[] }>,
+    scenes: [] as Array<{ id: string; title: string; type?: string; actions: unknown[] }>,
     currentSceneId: null as string | null,
     setStage: vi.fn(),
     clearStore: vi.fn(),
@@ -606,6 +607,35 @@ describe("StudentStageHost reporting modes", () => {
         completedScenes: ["scene-1"],
       });
     });
+  });
+
+  it("keeps a legacy quiz incomplete until the learner confirms its review", async () => {
+    const onSceneComplete = vi.fn();
+    render(
+      <StudentStageHost
+        backHref="/student"
+        classroomId="classroom-1"
+        courseId="course-1"
+        onSceneComplete={onSceneComplete}
+        studentId="student-1"
+      />,
+    );
+    await waitFor(() => expect(renderedStage.props?.onPlaybackStateChange).toBeTypeOf("function"));
+    act(() => stageMock.setState({
+      scenes: [{ ...stageMock.state.scenes[0], type: "quiz" }],
+    }));
+    const exhausted = {
+      engineMode: "idle" as const,
+      snapshot: { sceneIndex: 0, actionIndex: 1, consumedDiscussions: [], sceneId: "scene-1" },
+    };
+
+    act(() => renderedStage.props?.onPlaybackStateChange?.(exhausted));
+    expect(onSceneComplete).not.toHaveBeenCalled();
+
+    dispatchPlaybackActivityComplete({ sceneId: "scene-1", purpose: "quiz" });
+    act(() => renderedStage.props?.onPlaybackStateChange?.(exhausted));
+    await waitFor(() => expect(onSceneComplete).toHaveBeenCalledOnce());
+    dispatchPlaybackActivityReset({ sceneId: "scene-1", purpose: "quiz" });
   });
 
   it("settles a submitted assessment when the student changes page manually", async () => {

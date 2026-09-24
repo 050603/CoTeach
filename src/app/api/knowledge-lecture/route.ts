@@ -34,6 +34,8 @@ type KnowledgeLectureRequest = {
   questions?: IncomingReview[];
   attemptId?: string;
   questionId?: string;
+  options?: KnowledgeLectureQuestionReview["options"];
+  matchingOptions?: KnowledgeLectureQuestionReview["matchingOptions"];
   message?: string;
 };
 
@@ -50,6 +52,35 @@ function text(value: unknown, max = 4_000): string {
 function number(value: unknown, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function sanitizeQuestionOptions(value: unknown): KnowledgeLectureQuestionReview["options"] {
+  if (!Array.isArray(value)) return undefined;
+  const options = value.slice(0, 12).flatMap((option) => {
+    const label = text(option?.label, 500);
+    const key = text(option?.value, 40);
+    return label && key ? [{ label, value: key }] : [];
+  });
+  return options.length ? options : undefined;
+}
+
+function sanitizeMatchingOptions(value: unknown): KnowledgeLectureQuestionReview["matchingOptions"] {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as { left?: unknown; right?: unknown };
+  if (!Array.isArray(candidate.left) || !Array.isArray(candidate.right)) return undefined;
+  const left = candidate.left.slice(0, 12).map((item) => text(item, 500)).filter(Boolean);
+  const right = candidate.right.slice(0, 12).map((item) => text(item, 500)).filter(Boolean);
+  return left.length && right.length ? { left, right } : undefined;
+}
+
+function questionChoicesText(question: Pick<KnowledgeLectureQuestionReview, "options" | "matchingOptions">): string {
+  if (question.options?.length) {
+    return `选项：\n${question.options.map((option) => `${option.value}. ${option.label}`).join("\n")}`;
+  }
+  if (question.matchingOptions) {
+    return `匹配项：\n左侧：${question.matchingOptions.left.join("；")}\n右侧候选：${question.matchingOptions.right.join("；")}`;
+  }
+  return "";
 }
 
 function emptyProgress(studentId: string, classroomId: string): StudentAiProgress {
@@ -95,6 +126,8 @@ function sanitizeAttemptQuestions(
     return [{
       questionId,
       prompt,
+      options: sanitizeQuestionOptions(question.options),
+      matchingOptions: sanitizeMatchingOptions(question.matchingOptions),
       answer: text(question.answer, 2_000),
       points,
       earned,
@@ -238,6 +271,10 @@ export async function POST(request: NextRequest) {
   if (!attempt || !question || !message) {
     return Response.json({ error: "QUESTION_CONTEXT_NOT_FOUND" }, { status: 404 });
   }
+  const choices = questionChoicesText({
+    options: question.options ?? sanitizeQuestionOptions(body.options),
+    matchingOptions: question.matchingOptions ?? sanitizeMatchingOptions(body.matchingOptions),
+  });
   const threadId = `lecture-tutor-${attempt.id}-${question.questionId}`;
   const existingThread = progress?.knowledgeLectureTutorThreads?.find((thread) => thread.id === threadId);
   const recentConversation = (existingThread?.messages ?? []).slice(-8)
@@ -254,7 +291,7 @@ export async function POST(request: NextRequest) {
     model,
     abortSignal: request.signal,
     system: `你是知识讲授阶段的伴学助教。学生已经完成节末小测，你需要围绕具体题目进行清楚、短而有层次的讲解，并回应追问。不要长篇讲课；优先指出判断依据、纠正误区、补充一个最小例子。answer 是聊天区中自然完整的口头回答。boardNotes 不是回答全文，而是老师真正会留在黑板上的核心知识、关键判断依据、整体思路或可复用方法；普通问答、寒暄、重复题干和一次性细节不要写入板书。只有确实值得长期保留的内容才生成 boardNotes，可以返回空数组；每次最多2条，每条只写一个要点，并避免与已有板书重复。严格返回 JSON：{"answer":"给学生的回答","boardNotes":[{"title":"简短板书标题","body":"精炼的核心内容","kind":"concept|evidence|correction|example"}]}。`,
-    prompt: `知识点：${knowledgePointNames.join("、")}\n题目：${question.prompt}\n学生答案：${question.answer || "未作答"}\nAI批阅：${question.feedback}\n参考讲解：${question.referenceAnswer || "未提供"}\n已有对话：\n${recentConversation || "无"}\n学生追问：${message}`,
+    prompt: `知识点：${knowledgePointNames.join("、")}\n题目：${question.prompt}${choices ? `\n${choices}` : ""}\n学生答案：${question.answer || "未作答"}\nAI批阅：${question.feedback}\n参考讲解：${question.referenceAnswer || "未提供"}\n已有对话：\n${recentConversation || "无"}\n学生追问：${message}`,
   }, "quiz-grade", undefined, thinkingConfig);
   const now = new Date().toISOString();
   const tutorPayload = parseTutorPayload(result.text.trim(), now);

@@ -58,6 +58,7 @@ import {
   type PlaybackActivityEventDetail,
   type PlaybackModalBlockDetail,
 } from '@openmaic/lib/playback/activity-events';
+import { continueAfterActivityConfirmation } from '@openmaic/lib/playback/activity-continuation';
 
 /**
  * Imperative handle exposed via `ref` so the parent (`Stage`) can tear
@@ -276,12 +277,48 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     // Discussion buffer-level pause state (distinct from soft-pause which aborts SSE)
     const [isDiscussionPaused, setIsDiscussionPaused] = useState(false);
 
+    const advanceCompletedScene = useCallback((completedSceneId: string, confirmedQuiz = false) => {
+      setTimeout(() => {
+        if (modalPlaybackBlockedRef.current) return;
+        if (!confirmedQuiz && !useSettingsStore.getState().autoPlayLecture) return;
+        const stageState = useStageStore.getState();
+        if (stageState.currentSceneId !== completedSceneId) return;
+        const allScenes = stageState.scenes;
+        const index = allScenes.findIndex((scene) => scene.id === completedSceneId);
+        const scene = allScenes[index];
+        if (!scene || scene.type === 'pbl') return;
+        if (
+          (scene.type === 'quiz' || scene.type === 'interactive')
+          && !completedActivitySceneIdsRef.current.has(scene.id)
+        ) return;
+
+        if (index < allScenes.length - 1) {
+          autoStartRef.current = true;
+          stageState.setCurrentSceneId(allScenes[index + 1].id);
+          return;
+        }
+        const canShowPendingSlot = stageState.generatingOutlines.length > 0
+          || stageState.generationComplete
+          || (stageState.outlines.length > 0 && allScenes.length === stageState.outlines.length);
+        if (canShowPendingSlot) {
+          autoStartRef.current = true;
+          stageState.setCurrentSceneId(PENDING_SCENE_ID);
+        }
+      }, 350);
+    }, []);
+
     useEffect(() => {
       const onComplete = (event: Event) => {
         const detail = (event as CustomEvent<PlaybackActivityEventDetail>).detail;
         if (!detail?.sceneId) return;
         completedActivitySceneIdsRef.current.add(detail.sceneId);
-        engineRef.current?.completeActivity(detail.sceneId, detail.purpose);
+        continueAfterActivityConfirmation(
+          engineRef.current,
+          detail,
+          useStageStore.getState().currentSceneId,
+          modalPlaybackBlockedRef.current,
+          (sceneId) => advanceCompletedScene(sceneId, true),
+        );
       };
       const onReset = (event: Event) => {
         const detail = (event as CustomEvent<PlaybackActivityEventDetail>).detail;
@@ -307,7 +344,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
         window.removeEventListener(PLAYBACK_ACTIVITY_RESET_EVENT, onReset);
         window.removeEventListener(PLAYBACK_MODAL_BLOCK_EVENT, onModalBlock);
       };
-    }, [discussionTTS]);
+    }, [advanceCompletedScene, discussionTTS]);
 
     /**
      * Resume a soft-paused topic: re-call /chat with existing session messages.
@@ -730,50 +767,12 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             chatAreaRef.current?.endSession(lectureSessionIdRef.current);
             lectureSessionIdRef.current = null;
           }
-          // Auto-play: leave only a brief completion beat before advancing.
-          const { autoPlayLecture } = useSettingsStore.getState();
-          if (autoPlayLecture) {
-            const completedSceneId = currentScene?.id;
-            setTimeout(() => {
-              if (modalPlaybackBlockedRef.current) return;
-              const stageState = useStageStore.getState();
-              if (!useSettingsStore.getState().autoPlayLecture) return;
-              const allScenes = stageState.scenes;
-              const curId = stageState.currentSceneId;
-              if (!completedSceneId || curId !== completedSceneId) return;
-              const idx = allScenes.findIndex((s) => s.id === curId);
-              if (idx >= 0 && idx < allScenes.length - 1) {
-                const currentScene = allScenes[idx];
-                if (
-                  currentScene.type === 'pbl' ||
-                  ((currentScene.type === 'quiz' || currentScene.type === 'interactive') &&
-                    !completedActivitySceneIdsRef.current.has(currentScene.id))
-                ) {
-                  return;
-                }
-                autoStartRef.current = true;
-                stageState.setCurrentSceneId(allScenes[idx + 1].id);
-              } else if (idx === allScenes.length - 1) {
-                const currentScene = allScenes[idx];
-                if (
-                  currentScene.type === 'pbl' ||
-                  ((currentScene.type === 'quiz' || currentScene.type === 'interactive') &&
-                    !completedActivitySceneIdsRef.current.has(currentScene.id))
-                ) {
-                  return;
-                }
-                const canShowPendingSlot = stageState.generatingOutlines.length > 0
-                  || stageState.generationComplete
-                  || (
-                    stageState.outlines.length > 0
-                    && allScenes.length === stageState.outlines.length
-                  );
-                if (canShowPendingSlot) {
-                  autoStartRef.current = true;
-                  stageState.setCurrentSceneId(PENDING_SCENE_ID);
-                }
-              }
-            }, 350);
+          if (currentScene) {
+            advanceCompletedScene(
+              currentScene.id,
+              currentScene.type === 'quiz'
+                && completedActivitySceneIdsRef.current.has(currentScene.id),
+            );
           }
         },
       });

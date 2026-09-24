@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createPblTemplateCourse } from "@/lib/platform/pbl-template";
 import type { Scene } from "@/lib/openmaic/types/stage";
 import type { SceneOutline } from "@/lib/openmaic/types/generation";
-import { collectCourseStructureIssues, reviewCourseSection, reviewSceneEvidence } from "./semantic-review";
+import { collectCourseStructureIssues, courseReviewSections, reviewCourseSection, reviewSceneEvidence } from "./semantic-review";
 import { selectReviewSource } from "./source-selection";
 import { normalizeTeachingBrief } from "@/lib/openmaic/generation/teaching-brief";
 import { emptyResourcePackageDraft, stagePlanFromResourcePackage } from "@/lib/resource-package/types";
@@ -224,7 +224,7 @@ describe("fast draft and section-wide teaching review", () => {
     ]));
   });
 
-  it("keeps criteria and required media blockers without requiring visible wording verbatim", () => {
+  it("keeps missing design criteria and unbound media purposes reviewable without requiring a fixed layout", () => {
     const course = confirmedCourse();
     const savedOutline = course.content._openmaicSceneOutlines![0]!;
     savedOutline.teachingBrief = {
@@ -267,15 +267,15 @@ describe("fast draft and section-wide teaching review", () => {
     const issues = collectCourseStructureIssues(course, [scene]);
     expect(issues.some((issue) => issue.title === "课件缺少设计规定的必要材料")).toBe(false);
     expect(issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ title: "必要教学资源尚未落到实际页面", blocking: true }),
+      expect.objectContaining({ title: "必要视觉表达需要核对", severity: "suggestion" }),
     ]));
     teachingBlueprint.sections[0]!.understandingCriteria.answerEssentials = [];
     expect(collectCourseStructureIssues(course, [scene])).toEqual(expect.arrayContaining([
-      expect.objectContaining({ title: "小节缺少预定理解标准", blocking: true }),
+      expect.objectContaining({ title: "小节理解标准需要补全", severity: "suggestion" }),
     ]));
   });
 
-  it("requires actual narration to name a core parent concept on its definition page", () => {
+  it("does not demand a full core-concept title in narration, while still requiring actual narration", () => {
     const course = confirmedCourse();
     const savedOutline = course.content._openmaicSceneOutlines![0]!;
     course.content.knowledgePoints = [{ id: "kp", name: "建构主义学习理论", description: "学习者主动建构意义。", teachingRole: "core-concept" }];
@@ -301,10 +301,150 @@ describe("fast draft and section-wide teaching review", () => {
     };
     const actual = structuredClone(scene);
     actual.actions = [{ id: "speech", type: "speech", text: "下面只讲同化和顺应两个机制。" }];
-    expect(collectCourseStructureIssues(course, [actual])).toEqual(expect.arrayContaining([
-      expect.objectContaining({ title: "核心概念解释未进入实际讲稿", blocking: true }),
-    ]));
+    expect(collectCourseStructureIssues(course, [actual]).some((issue) => issue.blocking)).toBe(false);
     actual.actions = [{ id: "speech", type: "speech", text: "建构主义学习理论主张学习者主动建构意义，同化和顺应说明认知结构怎样变化。" }];
     expect(collectCourseStructureIssues(course, [actual]).some((issue) => issue.title === "核心概念解释未进入实际讲稿")).toBe(false);
+    actual.actions = [];
+    expect(collectCourseStructureIssues(course, [actual])).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "讲授页面缺少实际讲稿", blocking: true }),
+    ]));
+  });
+
+  it("checks only a generated test section while full-course review still finds missing pages", () => {
+    const course = confirmedCourse();
+    course.content.resourcePackage = undefined;
+    course.content.knowledgePoints = [
+      { id: "kp", name: "当前小节", description: "已讲" },
+      { id: "later", name: "后续小节", description: "尚未生成" },
+    ];
+    course.content._openmaicSceneOutlines = [
+      { ...outline, id: "outline", knowledgePointIds: ["kp"] },
+      { ...outline, id: "later-outline", title: "后续讲授", knowledgePointIds: ["later"] },
+    ];
+    course.content.classroomGenerationRun = {
+      scope: "test-lesson", status: "completed", generatedOutlineIds: ["outline"], fullOutlineCount: 2,
+      testLesson: { sectionId: "section-1", sectionTitle: "当前小节", sceneOutlineIds: ["outline"], durationSeconds: 60 },
+      generatedAt: new Date(0).toISOString(),
+    };
+    const testIssues = collectCourseStructureIssues(course, [scene], { includePresentation: false });
+    expect(testIssues.some((issue) => issue.evidence.includes("后续"))).toBe(false);
+    course.content.classroomGenerationRun.generatedOutlineIds = [];
+    const missingSelected = collectCourseStructureIssues(course, [], { includePresentation: false });
+    expect(missingSelected).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "课堂页面未生成", evidence: "边界条件", blocking: true }),
+    ]));
+    expect(missingSelected.some((issue) => issue.evidence.includes("后续"))).toBe(false);
+    course.content.classroomGenerationRun.scope = "full-course";
+    const fullIssues = collectCourseStructureIssues(course, [scene], { includePresentation: false });
+    expect(fullIssues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "课堂页面未生成", evidence: "后续讲授", blocking: true }),
+    ]));
+  });
+
+  it("checks split-page narration per child and a bound source image across the parent", () => {
+    const course = confirmedCourse();
+    course.content.resourcePackage = undefined;
+    const first = { ...outline, id: "outline--spatial-1", spatialParentId: "outline", knowledgePointIds: ["kp"] };
+    const second = { ...outline, id: "outline--spatial-2", spatialParentId: "outline", knowledgePointIds: ["kp"] };
+    course.content._openmaicSceneOutlines = [first, second];
+    course.content.teachingBlueprint = { schemaVersion: 2, sections: [{
+      id: "section", title: "边界条件", understandingCriteria: {
+        goals: ["能解释"], answerEssentials: ["独立测试"], misconceptions: ["训练数据不等于测试数据"], supportingUnitIds: ["unit"],
+      }, units: [], pages: [{ id: "outline", outlineId: "outline", title: "边界条件", type: "slide", resourceNeeds: [
+        { kind: "source-image", assetId: "figure-1", required: true, purpose: "观察教材图" },
+      ] }],
+    }] } as unknown as NonNullable<typeof course.content.teachingBlueprint>;
+    const partOne = { ...structuredClone(scene), outlineId: first.id };
+    const partTwo = { ...structuredClone(scene), id: "scene-2", outlineId: second.id };
+    course.content.knowledgeLectureSections = [{ id: "section", title: "边界条件", order: 0,
+      knowledgePointIds: ["kp"], sceneOutlineIds: ["outline"], quizOutlineId: "quiz", estimatedMinutes: 10 }];
+    expect(courseReviewSections(course, [partOne, partTwo])).toEqual([[partOne, partTwo]]);
+    if (partTwo.content.type !== "slide") throw new Error("fixture needs slide");
+    partTwo.content.canvas.elements.push({ id: "figure", type: "image", src: "/api/uploads/figure-1" } as never);
+    const issues = collectCourseStructureIssues(course, [partOne, partTwo], { includePresentation: false });
+    expect(issues.some((issue) => issue.blocking)).toBe(false);
+    partTwo.actions = [];
+    const missingSpeech = collectCourseStructureIssues(course, [partOne, partTwo], { includePresentation: false });
+    expect(missingSpeech.filter((issue) => issue.title === "讲授页面缺少实际讲稿")).toHaveLength(1);
+    partTwo.actions = structuredClone(scene.actions);
+    partTwo.content.canvas.elements.pop();
+    expect(collectCourseStructureIssues(course, [partOne, partTwo], { includePresentation: false })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "指定教材图片未进入课堂", blocking: true }),
+    ]));
+  });
+
+  it("keeps a five-part split page together during semantic review without lecture-section metadata", () => {
+    const course = confirmedCourse();
+    course.content._openmaicSceneOutlines = Array.from({ length: 5 }, (_, index) => ({
+      ...outline, id: `outline--spatial-${index + 1}`, spatialParentId: "outline",
+    }));
+    const parts = course.content._openmaicSceneOutlines.map((part, index) => ({
+      ...structuredClone(scene), id: `scene-${index}`, outlineId: part.id,
+    }));
+    expect(courseReviewSections(course, parts)).toEqual([parts]);
+  });
+
+  it("ignores internal attributes and code examples but catches visible teacher management labels", () => {
+    const course = confirmedCourse();
+    course.content.resourcePackage = undefined;
+    const actual = structuredClone(scene);
+    if (actual.content.type !== "slide" || actual.content.canvas.elements[0]?.type !== "text") throw new Error("fixture needs text slide");
+    actual.content.canvas.elements[0]!.content = '<p data-evidenceStatus="PARTIAL">解释测试边界</p><span hidden>证据状态：PARTIAL</span><script>const evidenceStatus="PARTIAL"</script>';
+    actual.content.canvas.elements.push({ id: "code", type: "code", lines: [{ content: 'const evidenceStatus = "PARTIAL"' }] } as never);
+    expect(collectCourseStructureIssues(course, [actual], { includePresentation: false }).some((issue) => issue.title === "教师侧管理字段进入学生内容")).toBe(false);
+    actual.content.canvas.elements[0]!.content = '<p>JSON 语法示例：<code>{"evidenceStatus":"SUPPORTED"}</code>，`"planningIssues": []`。</p>';
+    expect(collectCourseStructureIssues(course, [actual], { includePresentation: false }).some((issue) => issue.title === "教师侧管理字段进入学生内容")).toBe(false);
+    actual.content.canvas.elements[0]!.content = "<p>证据状态：PARTIAL</p>";
+    expect(collectCourseStructureIssues(course, [actual], { includePresentation: false })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "教师侧管理字段进入学生内容", blocking: true }),
+    ]));
+  });
+
+  it("keeps issue identities stable when unrelated issues are added", () => {
+    const course = confirmedCourse();
+    course.content.resourcePackage = undefined;
+    course.content._openmaicSceneOutlines = [{ ...outline }, { ...outline, id: "missing", title: "缺失页" }];
+    const original = collectCourseStructureIssues(course, [scene], { includePresentation: false })
+      .find((issue) => issue.title === "课堂页面未生成");
+    course.content.resourcePackage = confirmedCourse().content.resourcePackage;
+    course.grade = "不匹配的年级";
+    const withMore = collectCourseStructureIssues(course, [scene], { includePresentation: false })
+      .find((issue) => issue.title === "课堂页面未生成");
+    expect(withMore?.id).toBe(original?.id);
+  });
+
+  it("accepts a twelve-page lesson with nine definition pages and three abbreviated concept narrations", () => {
+    const course = createPblTemplateCourse("twelve-page-lesson");
+    const conceptNames = ["建构主义的知识建构观与同化—顺应机制", "具身认知的核心观点", "项目式教学模式的核心要素与实施要点"];
+    course.content.knowledgePoints = conceptNames.map((name, index) => ({
+      id: `concept-${index}`, name, description: "说明基本含义和机制", teachingRole: "core-concept" as const,
+    }));
+    course.content._openmaicSceneOutlines = Array.from({ length: 12 }, (_, index) => ({
+      ...outline, id: `page-${index}`, title: index < 9 ? `定义与关系 ${index + 1}` : conceptNames[index - 9]!,
+      knowledgePointIds: index < 9 ? [] : [`concept-${index - 9}`],
+      teachingBrief: {
+        ...normalizeTeachingBrief(outline),
+        teachingPlan: {
+          purpose: "解释概念", priorKnowledge: "", newContent: "给出概念定义与适用边界",
+          learnerQuestion: "", reasoningSteps: index < 9 ? [] : ["结合例子说明关系"],
+          takeaway: "理解概念", visibleContent: ["定义与边界"], narrationFocus: ["说明实际含义"],
+        },
+      },
+    }));
+    course.content.teachingBlueprint = { schemaVersion: 2, sections: [{
+      id: "section", title: "概念教学", units: [],
+      understandingCriteria: { goals: ["理解概念"], answerEssentials: ["说明依据"], misconceptions: ["只记名称"], supportingUnitIds: ["unit"] },
+      pages: course.content._openmaicSceneOutlines.map((page) => ({
+        id: page.id, outlineId: page.id, title: page.title, type: "slide", knowledgePointIds: page.knowledgePointIds,
+      })),
+    }] } as unknown as NonNullable<typeof course.content.teachingBlueprint>;
+    const lessonScenes = course.content._openmaicSceneOutlines.map((page, index) => ({
+      ...structuredClone(scene), id: `scene-${index}`, outlineId: page.id, title: page.title,
+      actions: [{ id: `speech-${index}`, type: "speech" as const, text: index < 9
+        ? "从具体例子解释这个定义为何成立，并说明它适用于什么情形。"
+        : ["先用已有经验理解新信息，再在冲突时调整结构。", "身体与环境互动共同参与认知形成。", "项目围绕核心知识组织探究，并交付作品。"][index - 9]! }],
+    }));
+    const issues = collectCourseStructureIssues(course, lessonScenes, { includePresentation: false });
+    expect(issues.filter((issue) => issue.blocking)).toEqual([]);
   });
 });

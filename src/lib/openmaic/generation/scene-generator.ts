@@ -1063,7 +1063,7 @@ export async function generateLegacyCustomizedSlideContent(
  */
 type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['questionTypes'][number];
 
-export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v6-adapted-evidence';
+export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v7-efficient-responses';
 
 const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
   single: 'single_choice',
@@ -1108,24 +1108,22 @@ function quizTestPointResponseContract(type: PlannedQuizQuestionType): string {
     case 'matching':
       return 'Convert the target into explicit object-to-object correspondences. The learner only submits the matches.';
     case 'multiple':
-      return 'Put complete candidate conclusions, reasons, or plans in the options. The learner only selects every option that meets the supplied criteria.';
+      return 'Ask for all conclusions that meet one clear criterion. Put shared facts in the stem and only the decisive differences in concise, parallel options; explain the reasoning after grading.';
     case 'single':
     default:
-      return 'If the target says explain, write, design, or decompose, put complete candidate responses with their reasoning in the options. The learner only selects the one response that meets the same criteria and does not write a reason.';
+      return 'Ask for one decision on one criterion. Put shared facts in the stem and only the decisive differences in concise, parallel options; explain the reasoning after grading. Do not turn several independent judgments into four complete written plans.';
   }
 }
 
 function formatQuizTestPoints(
   keyPoints: readonly string[],
   exactPlan: readonly PlannedQuizQuestionType[] | undefined,
-  allowedFormats: readonly string[],
 ): string {
   return keyPoints.map((point, index) => {
-    const rawType = exactPlan?.[index] ?? allowedFormats[index % Math.max(1, allowedFormats.length)];
-    const type: PlannedQuizQuestionType = rawType && rawType in QUIZ_FORMAT_BY_PLANNED_TYPE
-      ? rawType as PlannedQuizQuestionType
-      : 'single';
-    return `${index + 1}. ${point}\n   Response evidence contract (${type}): ${quizTestPointResponseContract(type)}`;
+    const type = exactPlan?.[index];
+    return type
+      ? `${index + 1}. ${point}\n   Response evidence contract (${type}): ${quizTestPointResponseContract(type)}`
+      : `${index + 1}. ${point}`;
   }).join('\n');
 }
 
@@ -1218,10 +1216,12 @@ async function generateQuizContent(
     keyPoints: formatQuizTestPoints(
       outline.keyPoints || [],
       exactQuestionTypePlan,
-      questionFormats,
     ),
     questionCount: quizConfig.questionCount,
     difficulty: quizConfig.difficulty,
+    learnerAnswerTime: outline.plannedTiming?.role === 'assessment'
+      ? `${outline.plannedTiming.learnerActivitySec} seconds for reading, thinking, and answering all ${quizConfig.questionCount} questions; narration and transition time are excluded`
+      : 'not specified; do not treat the total page duration as available answer time',
     questionTypes: shortAnswerOnly
       ? `short_answer only; every generated question must use type="short_answer" and have no options; ${coverageInstruction}`
       : exactQuestionTypePlan

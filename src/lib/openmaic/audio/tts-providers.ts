@@ -682,6 +682,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   const selection = normalizeQwenAudioTtsSelection(config.modelId, config.voice);
   const languageHint = qwenSpeechLanguage(config.language);
   const rate = Math.min(2, Math.max(0.5, config.speed || 1));
+  const stream = config.providerOptions?.qwenTransport !== 'download';
 
   // 优先使用 SSE 流式模式:音频以 Base64 PCM(24kHz/16bit/mono)直接随响应
   // 返回,无需再从 OSS 结果 CDN 下载完整音频。部分网络环境(如仅 IPv6 出站
@@ -693,7 +694,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json; charset=utf-8',
-      'X-DashScope-SSE': 'enable',
+      ...(stream ? { 'X-DashScope-SSE': 'enable' } : {}),
     },
     body: JSON.stringify({
       model: selection.modelId,
@@ -715,24 +716,31 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   }
 
   const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('text/event-stream') && response.body) {
-    const pcm = await collectQwenSsePcm(response.body);
-    if (pcm.length > 0) {
+  if (contentType.includes('text/event-stream')) {
+    if (!response.body) throw incompleteQwenStream('Qwen TTS returned an empty audio stream');
+    const result = await collectQwenSseAudio(response.body);
+    if (!result.finished) throw incompleteQwenStream(`Qwen TTS audio stream ended before completion${result.requestId ? ` (request_id=${result.requestId})` : ''}`);
+    if (result.audio.length > 0) {
       return {
         audio: normalizePlayableWav(
-          hasWavHeader(pcm) ? pcm : pcmToWav(pcm, 24000, 16, 1),
+          hasWavHeader(result.audio) ? result.audio : pcmToWav(result.audio, 24000, 16, 1),
         ),
         format: 'wav',
       };
     }
-    // DashScope can occasionally terminate an otherwise successful SSE
-    // response before emitting its audio chunk. Treat that as a transient
-    // incomplete stream so the bounded classroom retry can request the same
-    // narration again instead of leaving a permanent missing clip.
-    throw Object.assign(new Error('Qwen TTS returned an empty audio stream'), { isRetryable: true });
+    // The final SSE event may contain only the complete audio URL. Reuse the
+    // already generated file instead of paying for another synthesis request.
+    if (result.url) {
+      return {
+        audio: normalizePlayableWav(await downloadQwenAudio({ output: { audio: { url: result.url } } }, config.signal)),
+        format: 'wav',
+      };
+    }
+    throw incompleteQwenStream(`Qwen TTS returned an empty audio stream${result.requestId ? ` (request_id=${result.requestId})` : ''}`);
   }
 
   const data = await response.json();
+  throwIfQwenResponseError(data);
   const inline = data?.output?.audio?.data;
   if (typeof inline === 'string' && inline.length > 0) {
     const bytes = decodeBase64(inline);
@@ -749,24 +757,64 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   };
 }
 
-/** 解析 DashScope SSE 流,拼接所有 chunk 的 Base64 PCM 片段。 */
-async function collectQwenSsePcm(body: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+function incompleteQwenStream(message: string): Error {
+  return Object.assign(new Error(message), { isRetryable: true, qwenUseNonStreamingOnRetry: true });
+}
+
+function throwIfQwenResponseError(value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  const event = value as { code?: unknown; message?: unknown; request_id?: unknown; status_code?: unknown };
+  if (typeof event.code !== 'string' || !event.code) return;
+  const requestId = typeof event.request_id === 'string' ? event.request_id : undefined;
+  const message = typeof event.message === 'string'
+    ? event.message.slice(0, 300).replace(/https?:\/\/\S+/g, '[url]').replace(/sk-[\w-]+/gi, '[key]')
+    : '';
+  const statusCode = typeof event.status_code === 'number' ? event.status_code : undefined;
+  const isRetryable = statusCode === 429 || (statusCode !== undefined && statusCode >= 500)
+    || /(?:throttl|rate.?limit|internal|service.?unavailable|timeout)/i.test(event.code);
+  throw Object.assign(
+    new Error(`Qwen TTS error ${event.code}${requestId ? ` (request_id=${requestId})` : ''}${message ? `: ${message}` : ''}`),
+    { code: event.code, statusCode, isRetryable },
+  );
+}
+
+/** Parse SSE frames, preserving the terminal audio URL and completion marker. */
+async function collectQwenSseAudio(body: ReadableStream<Uint8Array>): Promise<{
+  audio: Uint8Array; url?: string; requestId?: string; finished: boolean;
+}> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const chunks: Uint8Array[] = [];
   let buffer = '';
+  let eventLines: string[] = [];
+  let url: string | undefined;
+  let requestId: string | undefined;
+  let finished = false;
 
-  const handleEvent = (payload: string) => {
-    if (!payload || payload === '[DONE]') return;
+  const handleEvent = () => {
+    const payload = eventLines.join('\n');
+    eventLines = [];
+    if (!payload) return;
+    if (payload === '[DONE]') {
+      finished = true;
+      return;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(payload);
     } catch {
-      return;
+      throw incompleteQwenStream('Qwen TTS returned a malformed audio stream event');
     }
-    const data = (parsed as { output?: { audio?: { data?: unknown } } })?.output?.audio?.data;
+    throwIfQwenResponseError(parsed);
+    const event = parsed as { request_id?: unknown; output?: { finish_reason?: unknown; audio?: { data?: unknown; url?: unknown } } };
+    if (typeof event.request_id === 'string') requestId = event.request_id;
+    if (event.output?.finish_reason === 'stop') finished = true;
+    if (typeof event.output?.audio?.url === 'string' && event.output.audio.url) url = event.output.audio.url;
+    const data = event.output?.audio?.data;
     if (typeof data === 'string' && data.length > 0) {
-      chunks.push(decodeBase64(data));
+      const chunk = decodeBase64(data);
+      if (!chunk.length) throw incompleteQwenStream(`Qwen TTS returned an invalid audio chunk${requestId ? ` (request_id=${requestId})` : ''}`);
+      chunks.push(chunk);
     }
   };
 
@@ -778,11 +826,13 @@ async function collectQwenSsePcm(body: ReadableStream<Uint8Array>): Promise<Uint
     while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, newlineIndex).replace(/\r$/, '');
       buffer = buffer.slice(newlineIndex + 1);
-      if (line.startsWith('data:')) handleEvent(line.slice(5).trim());
+      if (line === '') handleEvent();
+      else if (line.startsWith('data:')) eventLines.push(line.slice(5).trimStart());
     }
   }
   buffer += decoder.decode();
-  if (buffer.startsWith('data:')) handleEvent(buffer.slice(5).trim());
+  if (buffer.startsWith('data:')) eventLines.push(buffer.slice(5).trimStart());
+  handleEvent();
 
   let total = 0;
   for (const chunk of chunks) total += chunk.length;
@@ -792,7 +842,7 @@ async function collectQwenSsePcm(body: ReadableStream<Uint8Array>): Promise<Uint
     merged.set(chunk, offset);
     offset += chunk.length;
   }
-  return merged;
+  return { audio: merged, url, requestId, finished };
 }
 
 /** PCM 裸流封装为可播放的 WAV(小端)。 */

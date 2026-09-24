@@ -151,6 +151,39 @@ describe("teacher course library", () => {
     fireEvent.click(await screen.findByRole("button", { name: /恢复 雨水收集/ }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/platform/templates/template-1", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ action: "restore" }) })));
   });
+  it("opens an archived PBL course for read-only review without restoring it", async () => {
+    const snapshot = completedPblSnapshot("pbl", { name: "归档的项目课" });
+    snapshot.design.summary = "研究校园雨水收集方案";
+    snapshot.design.drivingQuestion = "怎样减少校园用水？";
+    snapshot.design.learningObjectives = ["估算集水量"];
+    snapshot.design.content._openmaicSceneOutlines = [{ id: "page-1", title: "认识雨水循环", audience: "student" }];
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{
+      ...template, id: "pbl", title: "归档的项目课", status: "ARCHIVED",
+      versions: [{ version: 2, status: "PUBLISHED", snapshot }],
+    }] }) });
+
+    render(<TeacherTemplatesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "已归档" }));
+    fireEvent.click(await screen.findByRole("button", { name: /打开课程 归档的项目课/ }));
+
+    expect(screen.getByText("怎样减少校园用水？")).toBeTruthy();
+    expect(screen.getByText("估算集水量")).toBeTruthy();
+    expect(screen.getByText("认识雨水循环")).toBeTruthy();
+    expect(screen.getByText("已归档，仅供查看。恢复后可继续备课或安排到教学班。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "编辑课程内容" })).toBeNull();
+    expect(screen.queryByRole("link", { name: /到教学班中安排/ })).toBeNull();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method && init.method !== "GET")).toBe(false);
+  });
+  it("keeps archived course-design details readable without offering edit or scheduling", async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{ ...template, status: "ARCHIVED" }] }) });
+    render(<TeacherTemplatesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "已归档" }));
+    fireEvent.click(await screen.findByRole("button", { name: /打开课程 雨水收集/ }));
+
+    expect(screen.getByText("计算集水面积")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "编辑课程内容" })).toBeNull();
+    expect(screen.queryByRole("link", { name: /到教学班中安排/ })).toBeNull();
+  });
   it("requires confirmation before deleting an archived course", async () => {
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ templates: [{ ...template, status: "ARCHIVED" }] }) });
     render(<TeacherTemplatesPage />);

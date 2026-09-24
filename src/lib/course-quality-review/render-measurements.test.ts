@@ -75,4 +75,28 @@ describe('actual rendered teaching content', () => {
       issue.id.includes('collision-node'),
     )).toBe(false);
   });
+
+  it('allows text drawn on an earlier background image', () => {
+    const background: RenderedElement = {
+      id: 'background', type: 'image', imageType: 'background',
+      box: { left: 0, top: 0, width: 1000, height: 562.5 },
+      textRects: [], text: '', opaque: true, imageLoaded: true,
+    };
+    const issues = inspectRenderedSlide('scene', [background, text('headline', 310)]);
+    expect(issues.some((issue) => issue.id.includes('collision-background') || issue.id.includes('occluded-background'))).toBe(false);
+  });
+
+  it('reports an image painted over text and text crossing a neighboring image edge', () => {
+    const image: RenderedElement = {
+      id: 'figure', type: 'image', box: { left: 250, top: 300, width: 280, height: 100 },
+      textRects: [], text: '', opaque: true, imageLoaded: true,
+    };
+    const overlay = { ...text('overlay', 300), textRects: [{ left: 300, top: 310, width: 180, height: 30 }] };
+    expect(inspectRenderedSlide('scene', [overlay, image]).map((issue) => issue.id))
+      .toContain('render:scene:occluded-figure:overlay');
+
+    const crossing = { ...text('crossing', 300), textRects: [{ left: 510, top: 310, width: 180, height: 30 }] };
+    expect(inspectRenderedSlide('scene', [image, crossing]).map((issue) => issue.id))
+      .toContain('render:scene:collision-figure:crossing');
+  });
 });

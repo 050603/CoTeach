@@ -31,7 +31,7 @@ import type {
 } from "@/lib/session/types";
 
 export const TEACHING_BLUEPRINT_SCHEMA_VERSION = 3 as const;
-export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v43-worked-examples-before-quiz";
+export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v44-efficient-assessment";
 import { TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION } from '@/lib/openmaic/generation/teaching-contract-version';
 export { TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION } from '@/lib/openmaic/generation/teaching-contract-version';
 /** Kept as a compatibility export for callers being migrated away from ratio budgeting. */
@@ -371,49 +371,10 @@ function sectionQuestionCount(section: TeachingBlueprintSection, mode: Assessmen
   return Math.max(2, Math.min(4, targetCount, timeCapacity));
 }
 
-type PlannedQuizQuestionType = NonNullable<SceneOutline["quizConfig"]>["questionTypes"][number];
-
-type PlannedAssessmentQuestion = {
-  intent: string;
-  type: PlannedQuizQuestionType;
-};
-
-function inferAssessmentQuestionType(items: readonly string[]): PlannedQuizQuestionType {
-  const text = items.join("；");
-  if (/填空|补全|填写/.test(text)) return "fill_blank";
-  if (/配对|匹配|拖拽|连线|对应关系/.test(text)) return "matching";
-  if (/多选|多项|选择所有|全部选出/.test(text)) return "multiple";
-  // A normal lightweight check can still test an explanation or construction
-  // goal by asking the learner to recognize a complete candidate response.
-  // Do not compile a compound “judge and explain/design” responsibility as a
-  // bare true/false item: that makes the requested response type contradict
-  // the assessment intent supplied to the item generator.
-  if (/写出|设计|解释|说明|阐述|分解|给出理由|指出.{0,20}(?:理由|原因|依据|后果)/.test(text)) return "single";
-  if (/判断|正误|是否正确/.test(text)) return "true_false";
-  return "single";
-}
-
-function objectiveAssessmentResponseContract(type: PlannedQuizQuestionType): string {
-  switch (type) {
-    case "true_false":
-      return "客观作答转换：把完整候选结论作为题干，只让学生判断正误；理由、纠正和后果放入提交后的解析，不要求学生另写。";
-    case "fill_blank":
-      return "客观作答转换：只留一个可用关键词、数值、关系或短语补全的明确空格，不要求句子级解释。";
-    case "matching":
-      return "客观作答转换：把理解责任改写为可见对象之间的明确配对，只提交配对结果。";
-    case "multiple":
-      return "客观作答转换：把完整结论、理由或方案分别写入候选项，学生只选择所有符合标准的项。";
-    case "single":
-    default:
-      return "客观作答转换：若目标原本要求解释、写出、设计或分解，提供包含完整结论与依据的候选作答，让学生只选择最符合相同标准的一项，不要求另写理由。";
-  }
-}
-
-function sectionAssessmentQuestionPlan(
+function sectionAssessmentIntents(
   section: TeachingBlueprintSection,
   questionCount: number,
-  mode: AssessmentMode,
-): PlannedAssessmentQuestion[] {
+): string[] {
   const focusItems = [...new Set(section.assessmentFocus.map((item) => item.trim()).filter(Boolean))];
   const supplementalItems = [
     ...section.understandingCriteria.goals,
@@ -424,23 +385,14 @@ function sectionAssessmentQuestionPlan(
     baseItems.push(supplementalItems.shift()!);
   }
   while (baseItems.length < questionCount) {
-    baseItems.push(`在新材料中应用：${baseItems[baseItems.length - 1] ?? section.learningObjective}`);
+    baseItems.push(`补充检测：${baseItems[baseItems.length - 1] ?? section.learningObjective}`);
   }
   const groups = Array.from({ length: questionCount }, () => [] as string[]);
   baseItems.forEach((item, index) => {
     const groupIndex = Math.min(questionCount - 1, Math.floor(index * questionCount / baseItems.length));
     groups[groupIndex]!.push(item);
   });
-  return groups.map((items, index) => {
-    const type = mode === "constructed-response" ? "short_answer" : inferAssessmentQuestionType(items);
-    const responseContract = mode === "constructed-response"
-      ? ""
-      : `；${objectiveAssessmentResponseContract(type)}`;
-    return {
-      intent: `第 ${index + 1} 题综合考查：${items.join("；")}${responseContract}`,
-      type,
-    };
-  });
+  return groups.map((items, index) => `第 ${index + 1} 题综合考查：${items.join("；")}`);
 }
 
 export function teachingBlueprintInputFingerprint(input: TeachingBlueprintInput): string {
@@ -626,7 +578,7 @@ export function buildTeachingBlueprintPrompt(
     "caseObservation 的 reason 写清观察对理解的作用，subjects、observableDifference 和 composition 共同描述对象、观察目标、对照差异、构图及想象示意的身份；已在 entryPoint、workedExample 或案例事实中给出的可见特征必须逐项保留，不得只分配给真实对象而漏掉想象对象。对于错误心象与真实对象的对照，明确哪一侧是想象、哪一侧是真实，并逐项保留可观察的身体结构、肢体数量、纹理和空间状态。规划图片即表示该图片有教学作用，页面必须使用；可按版面选择 aspectRatio=16:9、4:3、1:1 或 9:16，省略时用 16:9。AI 图片只表现对象和情境，不在图内绘制文字、标签、精确数值或关系箭头；这些由可编辑的页面元素呈现。",
     "同一材料再次出现时，后页必须增加新的关系、机制、条件、推导步骤或应用任务；不得只换一种说法重复同一结论。",
     "必须在一次 JSON 输出中完整结束。不同字段各司其职，不复制整段文字：unit.explanation 只写核心含义，mechanism 只写必要推理链，workedExample 只保留用于理解的具体事实；explanationNode.content、page.description、keyPoints、learningTask 和理解标准引用这些责任时用简洁表述，不逐字复述长段。单个字符串通常控制在 200 个汉字以内，资源 prompt 通常控制在 300 个汉字以内；在不丢失定义、机制、条件和案例关键事实的前提下优先简洁。",
-    "assessmentFocus 只写本小节测验需要共同覆盖的理解责任，例如学生应独立完成的解释、推导、判断、操作或应用及其理由要求；它不是逐题题目清单，条目数量不等于最终题数，也不要在其中指定选择、判断、填空等题型。系统会按本轮时间和覆盖要求把这些责任合并编译为 2–4 道题。不得考未讲内容，也不得把讲授中已公布答案的原题直接当作迁移检测。题干必须提供足够条件，反馈要能解释错误原因。",
+    "assessmentFocus 只写本小节测验需要共同覆盖的理解责任，例如学生应独立完成的解释、推导、判断、操作或应用及其理由要求；它不是逐题题目清单，条目数量不等于最终题数，也不要在其中指定选择、判断、填空等题型。系统会按本轮时间和覆盖要求把这些责任合并编译为 2–4 道题。基础概念、条件辨析和对应关系可以直接考查；只有应用目标确需背景或情境能帮助理解时才设置情境，不要求关联最终任务。不得考未讲内容，也不得把讲授中已公布答案的原题直接当作迁移检测。题干必须提供足够条件，反馈要能解释错误原因。",
     loadSnippet('adaptive-narration-policy'),
     loadSnippet('teaching-accuracy-policy'),
     input.generationMode === "deep-interaction"
@@ -1957,11 +1909,7 @@ export function teachingBlueprintToOutlines(
     });
     const assessmentTargets = sectionAssessmentTargets(section);
     const questionCount = sectionQuestionCount(section, blueprint.assessmentMode);
-    const assessmentQuestionPlan = sectionAssessmentQuestionPlan(
-      section,
-      questionCount,
-      blueprint.assessmentMode,
-    );
+    const assessmentIntents = sectionAssessmentIntents(section, questionCount);
     const allowShortAnswer = blueprint.assessmentMode === "constructed-response" ? 1 : 0;
     const quizOutlineId = `${section.id}-check`;
     section.quizOutlineId = quizOutlineId;
@@ -1984,8 +1932,8 @@ export function teachingBlueprintToOutlines(
       title: `${section.title} · 节末小测`,
       description: blueprint.assessmentMode === "constructed-response"
         ? "依据预定理解标准，使用未在讲授示例中直接公布答案的新情境设置 1 道综合简答题，要求学生运用本小节全部知识给出结论和理由。"
-        : `依据预定理解标准，使用未在讲授示例中直接公布答案的简短新材料设置 ${questionCount} 道轻量题；每条题目意图对应一道最终题，题目合计覆盖本小节全部知识点。`,
-      keyPoints: assessmentQuestionPlan.map((question) => question.intent),
+        : `依据预定理解标准设置 ${questionCount} 道轻量题；每条题目意图对应一道最终题，题目合计覆盖本小节全部知识点。直接考查已学知识；只有考查迁移或确实有助于判断时才使用简短新情境。`,
+      keyPoints: assessmentIntents,
       teachingObjective: section.assessmentFocus.join("；"),
       teachingBrief: sectionTeachingBrief(
         section,
@@ -2025,8 +1973,10 @@ export function teachingBlueprintToOutlines(
         difficulty: "medium",
         questionCount,
         coveragePolicy: "section-synthesis",
-        questionTypes: [...new Set(assessmentQuestionPlan.map((question) => question.type))],
-        questionTypePlan: assessmentQuestionPlan.map((question) => question.type),
+        questionTypes: blueprint.assessmentMode === "constructed-response"
+          ? ["short_answer"]
+          : ["single", "multiple", "matching", "true_false", "fill_blank"],
+        ...(blueprint.assessmentMode === "constructed-response" ? { questionTypePlan: ["short_answer" as const] } : {}),
         minShortAnswerQuestions: allowShortAnswer,
         maxShortAnswerQuestions: allowShortAnswer,
       },
