@@ -35,6 +35,7 @@ import {
   buildDelegatedWorkExecutionPrompts,
   buildDelegatedWorkStarterReviewPrompts,
   buildDelegatedWorkStarterPrompts,
+  generateDelegatedDeliveryWithRepair,
   normalizeDelegatedWorkAssessment,
   normalizeDelegatedWorkDelivery,
   normalizeDelegatedWorkStarters,
@@ -370,7 +371,7 @@ function parseDelegatedWorkRevision(value: unknown): DelegatedWorkRevision | und
 function assistantRecordForResult(result: DocumentCollaborationResponse): string {
   if (result.deliverable) {
     const sources = result.deliverable.sources.length
-      ? `\n来源：${result.deliverable.sources.map((source) => `${source.title} ${source.url}`).join("；")}`
+      ? `\n来源：${result.deliverable.sources.map((source) => [source.title, source.locator, source.url].filter(Boolean).join(" ")).join("；")}`
       : "";
     const actions = result.deliverable.documentActions
       .map((action) => action.description)
@@ -419,14 +420,9 @@ async function executeDelegatedWork(input: {
   }
 
   const sources = input.projectSupportContext.sources.flatMap((source) =>
-    source.type === "web" && source.url
-      ? [{ title: source.title, url: source.url, note: source.excerpt }]
+    source.type === "textbook"
+      ? [{ id: source.id, type: "textbook" as const, title: source.title, locator: source.locator, note: source.excerpt }]
       : []);
-  const researchMode: "web" | "model" | "none" = sources.length
-    ? "web"
-    : assessment.needsWebResearch
-      ? "none"
-      : "model";
 
   const executionPrompts = buildDelegatedWorkExecutionPrompts({
     course: input.course,
@@ -439,15 +435,21 @@ async function executeDelegatedWork(input: {
     researchContext: input.projectSupportContext.promptContext,
     revisionOf: input.revisionOf,
   });
-  const deliveryRaw = await callDelegatedWorkModel([
+  const deliveryMessages: Array<{ role: "system" | "user"; content: string }> = [
     { role: "system", content: withWorkspaceInstruction(executionPrompts.system, input.workspaceKind) },
     { role: "user", content: executionPrompts.user },
-  ], input.signal);
+  ];
+  const delivery = await generateDelegatedDeliveryWithRepair(
+    (repair) => callDelegatedWorkModel(repair
+      ? [...deliveryMessages, { role: "user", content: "上次没有返回完整的 deliverable.content。请保持已批准的任务范围，重新返回完整严格 JSON，并实际完成可交付内容；不要因缺少教材依据而放弃。" }]
+      : deliveryMessages, input.signal),
+    input.signal,
+  );
   return normalizeDelegatedWorkDelivery({
-    raw: parseLLMJson(deliveryRaw) as Record<string, unknown>,
+    raw: delivery,
     assessment,
     sources,
-    researchMode,
+    researchMode: sources.length ? "textbook" : "model",
   });
 }
 
@@ -1377,7 +1379,7 @@ export async function POST(request: NextRequest) {
         projectSupportContext,
       });
       result.support = normalizeProjectSupportOutput(
-        undefined,
+        { sourceIds: result.deliverable?.sources.map((source) => source.id).filter(Boolean) ?? [] },
         projectSupportContext.sources,
         projectSupportContext,
         projectSupportContext.knowledgePointLabels,
@@ -1448,6 +1450,9 @@ export async function POST(request: NextRequest) {
         projectSupportContext.knowledgePointLabels,
       );
       result.support = normalizedSupport.details;
+      if (normalizedSupport.details.replyBlocks?.length) {
+        result.message = normalizedSupport.details.replyBlocks.map((block) => block.content).join("\n\n");
+      }
       memoryCandidates = normalizedSupport.memoryCandidates;
     }
     const companionId = companionForIntent(effectiveIntent);

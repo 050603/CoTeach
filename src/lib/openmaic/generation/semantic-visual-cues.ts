@@ -10,6 +10,9 @@ import { createLogger } from '@openmaic/lib/logger';
 import { estimateSpeechDurationSec } from '@openmaic/lib/audio/tts-timing';
 import {
   findSpeechCueAnchorRange,
+  resolveAlignedSpeechCueAnchor,
+  resolveAlignedSpeechCueBoundary,
+  resolveAlignedSpeechCueRange,
   resolveSpeechCueEnd,
   speechCueSentenceEnd,
 } from './speech-cue-boundaries';
@@ -323,17 +326,7 @@ function alignedOffsetAt(
   edge: 'start' | 'end',
 ): number | undefined {
   if (source.alignment?.status !== 'aligned' || !source.alignment.spans?.length) return undefined;
-  const bounded = Math.max(0, Math.min(source.text.length, charIndex));
-  const containing = source.alignment.spans.find((span) => (
-    edge === 'start'
-      ? span.startChar <= bounded && span.endChar > bounded
-      : span.startChar < bounded && span.endChar >= bounded
-  ));
-  if (containing) return edge === 'start' ? containing.startMs : containing.endMs;
-  const nearest = edge === 'start'
-    ? source.alignment.spans.find((span) => span.startChar >= bounded)
-    : [...source.alignment.spans].reverse().find((span) => span.endChar <= bounded);
-  return nearest ? (edge === 'start' ? nearest.startMs : nearest.endMs) : undefined;
+  return resolveAlignedSpeechCueBoundary(source.text, source.alignment.spans, charIndex, edge) ?? undefined;
 }
 
 function resolveAlignedAnchorOffset(
@@ -341,9 +334,9 @@ function resolveAlignedAnchorOffset(
   anchor: { quote: string; occurrence?: number },
   edge: 'start' | 'end' = 'start',
 ): number | undefined {
-  const anchorIndex = occurrenceIndex(source.text, anchor.quote, anchor.occurrence ?? 0);
-  if (anchorIndex < 0) return undefined;
-  return alignedOffsetAt(source, edge === 'start' ? anchorIndex : anchorIndex + anchor.quote.length, edge);
+  if (source.alignment?.status !== 'aligned' || !source.alignment.spans?.length) return undefined;
+  const position = resolveAlignedSpeechCueAnchor(source.text, source.alignment.spans, anchor);
+  return position ? (edge === 'start' ? position.startMs : position.endMs) : undefined;
 }
 
 function validateTarget(
@@ -479,6 +472,10 @@ function mergeAdjacentSpotlights(
       && targetKey(previous) === targetKey(cue)
       && cue.startIndex <= previous.endIndex + 1
       && cue.startOffsetMs === 0
+      // A deliberate end phrase also marks a per-clip boundary after TTS
+      // splitting. Merging it would leave the later clip without a cue.
+      && !previous.sourceAction?.endSpeechAnchor
+      && !cue.sourceAction?.endSpeechAnchor
       && !crossesPlaybackBoundary(previous.startIndex, cue.endIndex, narration)
     ) {
       const stronger = comparePriority(cue, previous) > 0 ? cue : previous;
@@ -876,7 +873,9 @@ export function calibrateGeneratedVisualCues(input: {
   elements: readonly PPTElement[];
   actions: readonly Action[];
 }): Action[] {
-  const refinedActions = refineVisualCueDesign({ elements: input.elements, actions: input.actions });
+  // The authoring call already chose targets and spoken positions. Calibrate
+  // those choices without inferring new cues from visible labels or prose order.
+  const refinedActions = input.actions;
   const narration = narrationSources(refinedActions, input.outline);
   const inventory = buildSlideTargetInventory(input.elements);
   if (narration.length === 0 || inventory.length === 0) {
@@ -948,10 +947,14 @@ export function calibrateGeneratedVisualCues(input: {
     const startOffsetMs = speechAnchor
       ? resolveAlignedAnchorOffset(startSource, speechAnchor)
       : Math.max(0, action.speechOffsetMs ?? 0);
-    if (startOffsetMs === undefined) {
+    if (startOffsetMs === undefined && startSource.alignment?.status !== 'aligned') {
       // Preserve authored intent until audio alignment is available. Playback
       // already withholds anchored cues without verified timing.
       pending.push({ ...action, speechId: startSpeechId });
+      return;
+    }
+    if (startOffsetMs === undefined) {
+      log.warn(`Dropped generated visual cue ${action.id} with an unaligned spoken anchor`);
       return;
     }
     if (startOffsetMs >= startSource.estimatedDurationSec * 1000) {
@@ -972,13 +975,33 @@ export function calibrateGeneratedVisualCues(input: {
       : startSource.text.length;
     const endSpeechOffsetMs = explicitEndAnchor
       ? resolveAlignedAnchorOffset(endSource, explicitEndAnchor, 'end')
-      : alignedOffsetAt(
-          endSource,
-          effectiveEndIndex === startIndex ? defaultEndChar : endSource.text.length,
-          'end',
-        );
-    if (explicitEndAnchor && endSpeechOffsetMs === undefined) {
-      log.warn(`Dropped generated visual cue ${action.id} with a missing narration end anchor`);
+      : speechAnchor && effectiveEndIndex === startIndex && endSource.alignment?.status === 'aligned'
+        ? resolveAlignedSpeechCueRange(
+            endSource.text,
+            endSource.alignment.spans ?? [],
+            anchorIndex,
+            defaultEndChar,
+          )?.endMs
+        : alignedOffsetAt(
+            endSource,
+            effectiveEndIndex === startIndex ? defaultEndChar : endSource.text.length,
+            'end',
+          );
+    if (speechAnchor && explicitEndAnchor && endSource === startSource
+      && endSource.alignment?.status === 'aligned') {
+      const endRange = findSpeechCueAnchorRange(endSource.text, explicitEndAnchor);
+      if (!endRange || !resolveAlignedSpeechCueRange(
+        endSource.text,
+        endSource.alignment.spans ?? [],
+        anchorIndex,
+        endRange.end,
+      )) {
+        log.warn(`Dropped generated visual cue ${action.id} across unaligned narration`);
+        return;
+      }
+    }
+    if (endSpeechOffsetMs === undefined && endSource.alignment?.status === 'aligned') {
+      log.warn(`Dropped generated visual cue ${action.id} with an unaligned narration end`);
       return;
     }
     const timedWaypoints = action.type === 'laser'
@@ -988,7 +1011,7 @@ export function calibrateGeneratedVisualCues(input: {
           return speechOffsetMs === undefined ? undefined : { ...waypoint, speechOffsetMs };
         })
       : [];
-    if (action.type === 'laser' && (action.waypoints?.length ?? 0) !== timedWaypoints.length) {
+    if (action.type === 'laser' && timedWaypoints.some((waypoint) => waypoint === undefined)) {
       log.warn(`Dropped generated visual cue ${action.id} because a laser waypoint lacks precise narration timing`);
       return;
     }

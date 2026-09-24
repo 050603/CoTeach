@@ -29,7 +29,7 @@ export function selectQuizFormats(input: {
   const textValue = input.objectiveText.toLowerCase();
   const candidates: string[] = [];
   if (/判断|辨认|识别|概念|定义|recogn|identify|define/.test(textValue)) candidates.push('true_false', 'single');
-  if (/对应|配对|匹配|关系|术语.*含义|概念.*例子|match|pair|correspond|relation/.test(textValue)) candidates.push('matching');
+  if (/对应|配对|匹配|关系|术语.*含义|概念.*例子|match|pair|correspond|relation/.test(textValue)) candidates.push('single', 'true_false');
   if (/比较|分类|证据|多种|compare|classif|evidence/.test(textValue)) candidates.push('multiple');
   if (/解释|原因|机制|说明|explain|why|mechanism/.test(textValue)) candidates.push('short_answer');
   if (/应用|解决|设计|情境|案例|迁移|apply|solve|design|scenario|case/.test(textValue)) candidates.push('scenario_task');

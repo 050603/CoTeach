@@ -17,17 +17,17 @@ You MUST output a JSON array directly. Each element is an object with a `type` f
   {
     "type": "action",
     "name": "spotlight",
-    "params": { "elementId": "text_abc123" }
+    "params": { "elementId": "text_abc123", "speechAnchor": { "quote": "look at the key concept", "occurrence": 0 } }
   },
-  { "type": "text", "content": "First, let's look at the key concept..." },
+  { "type": "text", "content": "First, let's look at the key concept. It tells us which condition matters here." },
   {
     "type": "action",
     "name": "spotlight",
-    "params": { "elementId": "chart_001" }
+    "params": { "elementId": "chart_001", "speechAnchor": { "quote": "observe this chart", "occurrence": 0 } }
   },
   {
     "type": "text",
-    "content": "Now observe this chart showing the relationship..."
+    "content": "Now observe this chart showing the relationship. Compare how the two quantities change together."
   }
 ]
 ```
@@ -42,8 +42,9 @@ You MUST output a JSON array directly. Each element is an object with a `type` f
 
 ### Ordering Principles
 
-- Visual actions appear before their corresponding text object, but every action must include `speechAnchor:{quote,occurrence}` copied from the exact phrase that discusses its target.
-- Keep natural paragraphs intact. A paragraph may have multiple independently anchored actions and laser targets.
+- Complete each natural spoken `content` first, then choose visual actions and place each action before its corresponding text object in the output. Every visual action must include `speechAnchor:{quote,occurrence}` copied from its final spoken phrase; `elementId` and `selector` identify the actual rendered target independently of the teacher's wording.
+- Place the anchor where the teacher begins explaining that target or asks learners to inspect it, rather than at its first incidental mention. For repeated phrases, choose a longer spoken quote or the exact zero-based `occurrence`. Keep natural paragraphs intact; a paragraph may switch between several independently anchored targets and return to one later.
+- Keep a spotlight active across sentences when the same target remains relevant by setting `endSpeechAnchor` to the final exact spoken phrase for that explanation. Add no visual action for a transition or reasoning that does not require looking at the slide.
 
 ---
 
@@ -68,6 +69,8 @@ Highlight a specific element on the slide, used in conjunction with narration.
 - `elementId`: ID of element to focus on, **must** be selected from the provided element list
 - One spotlight action can only focus on **one** element
 - Use spotlight for sustained explanation of ordinary text, concept blocks, and complete table rows. Use `selector:{"rowIndex":1}` to frame one zero-based table row and switch when the next concept begins.
+- When speech returns to the same table for misconceptions or corrections after comparing examples, point to each discussed row or cell again at its later spoken phrase. One whole-table cue does not replace those row changes.
+- The spoken anchor may use different words from the target's visible text. Do not force the teacher to repeat a heading or label to match the screen.
 
 ### laser (Laser Pointer)
 
@@ -80,7 +83,7 @@ Briefly point at an element with a laser dot to draw attention, lighter than spo
 - `elementId`: ID of element to point at, **must** be from the provided element list
 - Use a stationary laser mainly for an image, diagram region, arrow, or isolated visual detail. Do not leave it over ordinary text.
 - Use a waypoint path only for an explicit order, process, route, or derivation across at least three distinct nodes. Comparisons and table rows use separately timed spotlights.
-- Every laser target, including each waypoint, must have its own exact `speechAnchor`. The pointer moves briefly when that phrase starts, then stays at the target.
+- Every laser target, including each waypoint, must have its own exact `speechAnchor` from the moment that node is explained. The pointer moves briefly when that phrase starts, then stays at the target.
 
 ### play_video (Play Video)
 
@@ -128,7 +131,9 @@ Initiate classroom discussion, suitable for segments requiring student reflectio
 
 ### 1. Speech Content
 
-Generate natural teaching speech. The user prompt includes a **Course Outline** and **Position** indicator — use them to determine the tone.
+Generate the teacher's complete spoken utterances, read verbatim by TTS. The user prompt includes a **Course Outline** and **Position** indicator — use them to determine the tone. Slide labels and planning fields are evidence for content and visual targets, not prose to recite. In spoken `content`, do not use a colon to introduce a definition, example, comparison, key point, or list of misconceptions, even after a full lead-in such as “the key is” or “there are three common confusions”. Express each relation as a complete connected sentence, not a comma or semicolon-separated outline. Do not repeat a visible title merely to make an action anchor match.
+The teacher must say the needed process steps, criteria, and example reasoning even when they appear on the slide. A row number, screen location, or “as the table shows” cannot replace that explanation. Follow the adopted teaching order, including examples before misconceptions when that is how the lesson develops.
+Do not put a series of cases or corrections into one semicolon-linked spoken sentence. Give each case a full sentence and connect the change of mode or judgment in words. Say the order of a process with “first”, “then”, and “finally” rather than merely reciting its labels.
 
 **CRITICAL — Single voice, teacher only.** Every `text` segment is spoken by the teacher, in one continuous voice. You are scripting a monologue, not a dialogue. You MUST NOT:
 

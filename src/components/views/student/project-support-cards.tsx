@@ -5,8 +5,10 @@ import { BookOpen, ChevronDown, ExternalLink, Globe2, Pencil, Save, Target, Tras
 import type {
   ProjectMemoryEntry,
   ProjectMemoryKind,
+  ProjectReplyBlock,
   ProjectSupportDetails,
 } from "@/lib/ai-collaboration/project-support-types";
+import { AiMemberMarkdown } from "./ai-member-markdown";
 
 const MEMORY_LABEL: Record<ProjectMemoryKind, string> = {
   "project-goal": "项目目标",
@@ -15,10 +17,57 @@ const MEMORY_LABEL: Record<ProjectMemoryKind, string> = {
   "open-question": "待解决问题",
 };
 
-export function ProjectSupportCard({ support }: { support?: ProjectSupportDetails }) {
+const BLOCK_LABEL: Record<ProjectReplyBlock["type"], string> = {
+  answer: "",
+  analysis: "现状分析",
+  reason: "为什么",
+  suggestion: "建议做法",
+  "next-step": "下一步",
+};
+
+/** Only split old messages when they clearly contain several template headings. */
+export function projectReplyBlocksForDisplay(content: string, support?: ProjectSupportDetails): ProjectReplyBlock[] | undefined {
+  if (support?.replyBlocks?.length) return support.replyBlocks;
+  if (content.includes("```")) return undefined;
+  const matches = [...content.matchAll(/(^|\n)[ \t]*(观察|具体观察|为什么重要|可执行支架|建议|下一步验证)[ \t]*[：:][ \t]*/gm)];
+  if (matches.length < 2) return undefined;
+  const typeFor = (label: string): ProjectReplyBlock["type"] => {
+    if (label === "为什么重要") return "reason";
+    if (label === "可执行支架" || label === "建议") return "suggestion";
+    if (label === "下一步验证") return "next-step";
+    return "analysis";
+  };
+  const blocks: ProjectReplyBlock[] = [];
+  const prefix = content.slice(0, matches[0].index).trim();
+  if (prefix) blocks.push({ type: "answer", content: prefix, sourceIds: [] });
+  matches.forEach((match, index) => {
+    const start = (match.index ?? 0) + match[0].length;
+    const body = content.slice(start, matches[index + 1]?.index ?? content.length).trim();
+    if (body) blocks.push({ type: typeFor(match[2]), content: body, sourceIds: [] });
+  });
+  return blocks.length ? blocks : undefined;
+}
+
+export function ProjectReplyContent({ content, support }: { content: string; support?: ProjectSupportDetails }) {
+  const blocks = projectReplyBlocksForDisplay(content, support);
+  if (!blocks?.length) return <AiMemberMarkdown content={content} />;
+  return (
+    <div className="min-w-0 space-y-3">
+      {blocks.map((block, index) => (
+        <section className={index ? "border-t border-stone-100 pt-2.5" : ""} key={`${block.type}-${index}`}>
+          {BLOCK_LABEL[block.type] ? <h4 className="mb-1 text-[11px] font-semibold text-slate-600">{BLOCK_LABEL[block.type]}</h4> : null}
+          <AiMemberMarkdown content={block.content} />
+        </section>
+      ))}
+    </div>
+  );
+}
+
+export function ProjectSupportCard({ support, replyContent }: { support?: ProjectSupportDetails; replyContent?: string }) {
   if (!support) return null;
   const knowledgePoints = support.knowledgePoints ?? (support.knowledgePointIds ?? []).map((id) => ({ id, label: id }));
-  const hasDetails = support.sources.length > 0 || knowledgePoints.length > 0 || support.nextStep || support.retrievalStatus === "unavailable";
+  const hasNextStepBlock = projectReplyBlocksForDisplay(replyContent ?? "", support)?.some((block) => block.type === "next-step") ?? false;
+  const hasDetails = support.sources.length > 0 || knowledgePoints.length > 0 || (!hasNextStepBlock && support.nextStep);
   if (!hasDetails) return null;
   const textbookCount = support.sources.filter((source) => source.type === "textbook").length;
   const webCount = support.sources.filter((source) => source.type === "web").length;
@@ -29,7 +78,7 @@ export function ProjectSupportCard({ support }: { support?: ProjectSupportDetail
           <summary className="flex cursor-pointer list-none items-center gap-1.5 font-semibold text-stone-700">
             {textbookCount ? <BookOpen size={13} /> : <Globe2 size={13} />}
             <span>
-              {textbookCount ? `${textbookCount} 条教材依据` : ""}
+              {textbookCount ? `${textbookCount} 条教材参考` : ""}
               {textbookCount && webCount ? " · " : ""}
               {webCount ? `${webCount} 条网页来源` : ""}
             </span>
@@ -55,9 +104,6 @@ export function ProjectSupportCard({ support }: { support?: ProjectSupportDetail
           </div>
         </details>
       ) : null}
-      {support.retrievalStatus === "unavailable" && support.retrievalNote ? (
-        <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-amber-800">{support.retrievalNote}</p>
-      ) : null}
       {knowledgePoints.length ? (
         <div className="rounded-lg bg-violet-50 px-2.5 py-2 text-violet-950">
           <p className="font-semibold">本轮关联知识</p>
@@ -67,7 +113,7 @@ export function ProjectSupportCard({ support }: { support?: ProjectSupportDetail
           <p className="mt-1 text-[10px] text-violet-700">如果这个关联不符合你当前的困难，可以在下一条消息中直接纠正 AI 组员。</p>
         </div>
       ) : null}
-      {support.nextStep ? (
+      {support.nextStep && !hasNextStepBlock ? (
         <div className="flex items-start gap-1.5 rounded-lg bg-blue-50 px-2.5 py-2 text-blue-900">
           <Target className="mt-0.5 shrink-0" size={12} />
           <span><strong className="font-semibold">下一步验证：</strong>{support.nextStep}</span>

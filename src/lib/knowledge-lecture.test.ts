@@ -106,7 +106,7 @@ describe("knowledge lecture sections", () => {
       expect(quiz.targetDurationSec).toBeLessThanOrEqual(300);
       expect(quiz.quizConfig?.questionCount).toBeGreaterThanOrEqual(2);
       expect(quiz.quizConfig?.questionCount).toBeLessThanOrEqual(4);
-      expect(quiz.quizConfig?.questionTypes).toEqual(["single", "multiple", "true_false", "fill_blank", "matching"]);
+      expect(quiz.quizConfig?.questionTypes).toEqual(["single", "multiple", "true_false"]);
       expect(quiz.quizConfig?.minShortAnswerQuestions).toBe(0);
       expect(quiz.quizConfig?.maxShortAnswerQuestions).toBe(0);
     }

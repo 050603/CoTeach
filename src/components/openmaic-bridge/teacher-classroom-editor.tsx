@@ -268,31 +268,34 @@ export function TeacherClassroomEditor({
       <I18nProvider locale="zh-CN">
         <ServerProvidersInit />
         <MediaStageProvider value={classroomId}>
-          <main className="flex h-dvh min-h-0 flex-col overflow-hidden bg-stone-100 text-stone-950">
-            <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-stone-200 bg-white px-3 sm:px-5">
+          <main className="flex h-dvh min-h-0 flex-col overflow-hidden bg-[#F4F2ED] text-[#1F2933]">
+            <header className="flex min-h-[76px] shrink-0 flex-wrap items-center gap-2 border-b border-[#D8D6D0] bg-[#FCFBF8] px-3 py-2 sm:flex-nowrap sm:gap-4 sm:px-6">
               <button
                 aria-label="返回预览发布"
-                className="grid size-10 shrink-0 place-items-center rounded-[8px] text-stone-500 hover:bg-stone-100 hover:text-stone-900"
+                className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-[8px] px-2 text-sm font-medium text-[#5F6B76] hover:bg-[#EFEEE8] hover:text-[#1F2933] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#344A6A]"
                 onClick={leaveEditor}
                 type="button"
               >
                 <ArrowLeft size={18} />
+                <span className="hidden lg:inline">预览与发布</span>
               </button>
+              <span className="hidden h-7 w-px bg-[#D8D6D0] sm:block" aria-hidden="true" />
               <div className="min-w-0 flex-1">
-                <h1 className="truncate text-sm font-black">编辑 AI 课堂 · {courseName}</h1>
-                <p className="mt-0.5 truncate text-[11px] text-stone-500">
-                  {dirty ? '有修改尚未保存' : '所有修改已保存'}
-                  {classroomId ? ` · 资源 ${classroomId}` : ''}
-                </p>
+                <p className="text-[11px] font-semibold tracking-[0.12em] text-[#344A6A]">编辑 AI 课堂</p>
+                <h1 className="mt-0.5 truncate text-base font-semibold leading-tight sm:text-lg">{courseName}</h1>
               </div>
+              <span className="order-3 inline-flex min-h-9 max-w-full items-center gap-2 rounded-[8px] bg-[#F0EEE8] px-3 text-xs font-medium text-[#5F6B76] sm:order-none">
+                <span className={`size-1.5 shrink-0 rounded-full ${state === 'loading' ? 'bg-[#9AA4AA]' : state === 'error' ? 'bg-[#A43B38]' : dirty ? 'bg-[#B17735]' : 'bg-[#2F6F65]'}`} aria-hidden="true" />
+                {state === 'loading' ? '正在读取课堂' : state === 'error' ? '课堂加载失败' : dirty ? '有修改尚未保存' : '所有修改已保存'}
+              </span>
               {error && state !== 'error' ? (
-                <p className="hidden max-w-md truncate text-xs font-semibold text-amber-700 md:block" title={error}>
+                <p className="order-4 max-w-full truncate text-xs font-medium text-[#8A6422] sm:order-none sm:max-w-48" title={error}>
                   {error}
                 </p>
               ) : null}
               {state === 'conflict' ? (
                 <button
-                  className="inline-flex min-h-10 items-center gap-2 rounded-[8px] border border-amber-300 bg-amber-50 px-3 text-xs font-bold text-amber-900 hover:bg-amber-100"
+                  className="inline-flex min-h-11 items-center gap-2 rounded-[8px] border border-[#D5B985] bg-[#FFF5E8] px-3 text-xs font-semibold text-[#8A6422] hover:bg-[#FCEBD4]"
                   onClick={() => void hydrate()}
                   type="button"
                 >
@@ -300,7 +303,7 @@ export function TeacherClassroomEditor({
                 </button>
               ) : (
                 <button
-                  className="inline-flex min-h-10 items-center gap-2 rounded-[8px] bg-[var(--pbl-teacher)] px-4 text-xs font-bold text-white hover:bg-[var(--pbl-teacher-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-[8px] bg-[#344A6A] px-4 text-sm font-semibold text-white hover:bg-[#263B58] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#344A6A] disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={!dirty || state === 'saving' || state === 'loading'}
                   onClick={() => void save()}
                   type="button"
@@ -313,11 +316,11 @@ export function TeacherClassroomEditor({
 
             <section className="relative flex min-h-0 flex-1">
               {state === 'loading' ? (
-                <div className="grid h-full place-items-center bg-white text-sm text-stone-500">
+                <div className="grid h-full w-full place-items-center bg-[#FCFBF8] text-sm text-[#5F6B76]">
                   <span className="inline-flex items-center gap-2"><Loader2 className="animate-spin" size={18} />正在打开课堂编辑器…</span>
                 </div>
               ) : state === 'error' ? (
-                <div className="grid h-full place-items-center bg-white p-6">
+                <div className="grid h-full w-full place-items-center bg-[#FCFBF8] p-6">
                   <div className="max-w-md text-center">
                     <AlertTriangle className="mx-auto text-rose-600" size={30} />
                     <h2 className="mt-4 text-lg font-black">无法打开课堂编辑器</h2>

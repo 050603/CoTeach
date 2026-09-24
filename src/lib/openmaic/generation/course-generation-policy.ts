@@ -5,7 +5,7 @@ import { narrationStyleIssues } from './narration-style';
 
 /** Shared by production and experiments: improve the initial authoring
  * contract, then report quality findings without requesting model rewrites. */
-export const COURSE_GENERATION_POLICY_VERSION = 'course-first-pass-v27-worked-examples-before-quiz';
+export const COURSE_GENERATION_POLICY_VERSION = 'course-first-pass-v34-addressable-table-rows';
 export const MAX_COURSE_STAGE_MODEL_REQUESTS = 2;
 
 export function auditGeneratedSlideLocally(

@@ -174,6 +174,59 @@ describe("reviewed knowledge structure generation", () => {
     expect(modelCall.mock.calls[0][0][0].content).toContain("core-concept");
   });
 
+  it("does not turn a shared textbook parent mapping into reciprocal prerequisites", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+      knowledgePoints: [
+        { id: "target-a", name: "概念的第一种机制", sourceKnowledgePointIds: ["source-parent", "source-a"], evidenceItemIds: ["ev-1"] },
+        { id: "target-b", name: "概念的第二种机制", sourceKnowledgePointIds: ["source-parent", "source-b"],
+          parentKnowledgePointIds: ["target-a"], evidenceItemIds: ["ev-2"] },
+      ],
+      knowledgeGraph: { nodes: [], edges: [] },
+    }));
+    const result = await generateKnowledgeStructureOnce(input, {
+      textbookEvidence: orderedTextbookEvidence,
+      teacherKnowledgePoints: [
+        { id: "source-parent", name: "上位概念", description: "有独立教学含义的上位概念", teachingRole: "core-concept" },
+        { id: "source-a", name: "第一种机制", description: "第一种机制", parentKnowledgePointId: "source-parent" },
+        { id: "source-b", name: "第二种机制", description: "第二种机制", parentKnowledgePointId: "source-parent" },
+      ],
+    }, { modelCall });
+
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["target-a", "target-b"]);
+    expect(result.knowledgePoints[0]?.parentKnowledgePointIds).toBeUndefined();
+    expect(result.knowledgePoints[1]?.parentKnowledgePointIds).toEqual(["target-a"]);
+    expect(result.knowledgePoints.every((point) => point.sourceKnowledgePointIds?.includes("source-parent"))).toBe(true);
+    expect(modelCall).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat a reorganized source parent as a prerequisite of its own foundations", async () => {
+    const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
+      knowledgePoints: [
+        { id: "target-a", name: "理论的含义", sourceKnowledgePointIds: ["source-a"], evidenceItemIds: ["ev-1"] },
+        { id: "target-b", name: "模式的含义", sourceKnowledgePointIds: ["source-b"], evidenceItemIds: ["ev-2"] },
+        { id: "target-c", name: "理论与模式的辨析", sourceKnowledgePointIds: ["source-parent"], evidenceItemIds: ["ev-3"] },
+      ],
+      knowledgeGraph: { nodes: [], edges: [
+        { source: "target-a", target: "target-b", type: "supports", strength: "required" },
+        { source: "target-b", target: "target-c", type: "supports", strength: "required" },
+      ] },
+    }));
+    const result = await generateKnowledgeStructureOnce(input, {
+      textbookEvidence: orderedTextbookEvidence,
+      teacherKnowledgePoints: [
+        { id: "source-parent", name: "教学概念体系", description: "理论与模式的关系", teachingRole: "core-concept" },
+        { id: "source-a", name: "教学理论", description: "理论的含义", parentKnowledgePointId: "source-parent" },
+        { id: "source-b", name: "教学模式", description: "模式的含义", parentKnowledgePointId: "source-parent" },
+      ],
+    }, { modelCall });
+
+    expect(result.knowledgePoints.map((point) => point.id)).toEqual(["target-a", "target-b", "target-c"]);
+    expect(result.knowledgePoints.every((point) => !point.parentKnowledgePointIds?.length)).toBe(true);
+    expect(result.knowledgeGraph!.edges.map((edge) => [edge.source, edge.target]))
+      .toEqual([["target-a", "target-b"], ["target-b", "target-c"]]);
+    expect(modelCall).toHaveBeenCalledOnce();
+  });
+
   it("stably orders parent concepts before their children while preserving group boundaries", async () => {
     const modelCall = vi.fn().mockResolvedValue(JSON.stringify({
       knowledgePoints: [

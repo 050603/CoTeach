@@ -242,8 +242,8 @@ describe('teaching rail layout', () => {
     expect(content.className).toContain(
       'xl:grid-rows-[minmax(0,3fr)_minmax(0,2fr)]',
     );
-    expect(screen.getByLabelText('当前课程知识图谱').className).toContain('h-full');
-    expect(screen.getByLabelText('当前课程知识图谱').className).not.toContain('h-[176px]');
+    expect(screen.getByLabelText('课程思维导图缩略图').className).toContain('h-full');
+    expect(screen.getByLabelText('课程思维导图缩略图').className).not.toContain('h-[176px]');
     const viewportFrame = document.querySelector('[data-subtitle-viewport-frame]') as HTMLElement;
     expect(viewportFrame.className).toContain('overflow-hidden');
     const subtitleViewport = screen.getByLabelText('讲解字幕，可滚动浏览或拖动查看');
@@ -256,6 +256,10 @@ describe('teaching rail layout', () => {
     const controls = document.querySelector('[data-subtitle-controls]') as HTMLElement;
     expect(controls.className).toContain('shrink-0');
     expect(controls.className).toContain('z-20');
+    expect(controls.parentElement?.className).not.toContain('px-5');
+
+    fireEvent.click(screen.getByRole('button', { name: '完整浏览课程思维导图' }));
+    expect(screen.getByRole('dialog', { name: '课程思维导图' })).toBeInTheDocument();
   });
 
   it('keeps context hidden during auto-follow and reveals it for manual browsing', () => {

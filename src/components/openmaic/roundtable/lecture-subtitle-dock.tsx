@@ -435,8 +435,8 @@ export function LectureSubtitleDock({
       aria-label="AI 授课字幕与播放控制"
       className={cn(responsiveStyles.dock, "relative z-10 flex min-h-0 w-full shrink-0 overflow-hidden border-t border-slate-200/80 bg-white/96 dark:border-white/10 dark:bg-slate-950/96 xl:h-full xl:w-[304px] xl:border-l xl:border-t-0 xl:bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(252,254,253,0.97)_48%,rgba(241,249,246,0.94)_76%,rgba(255,255,255,0.98)_100%)] xl:dark:bg-[linear-gradient(180deg,rgba(2,6,23,0.98)_0%,rgba(8,20,31,0.97)_52%,rgba(10,36,34,0.82)_76%,rgba(2,6,23,0.98)_100%)]")}
     >
-      <div className="grid h-full min-h-0 min-w-0 flex-1 grid-rows-[auto_auto_minmax(0,1fr)_auto_auto] overflow-hidden px-4 py-3 xl:px-5 xl:py-4">
-        <header className="flex items-center gap-3 xl:items-start">
+      <div className="grid h-full min-h-0 min-w-0 flex-1 grid-rows-[auto_auto_minmax(0,1fr)_auto_auto] overflow-hidden">
+        <header className="flex items-center gap-3 px-4 pt-3 xl:items-start xl:px-5 xl:pt-4" data-rail-header>
           <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-[14px] bg-[#edf5f2] ring-1 ring-slate-900/8 dark:ring-white/10 xl:h-12 xl:w-12">
             <img alt={teacherName} className="h-full w-full object-cover" src={teacherAvatar} />
             <span
@@ -470,11 +470,11 @@ export function LectureSubtitleDock({
           </span>
         </header>
 
-        <div className="my-3 h-px bg-slate-100 dark:bg-white/8 xl:my-4" />
+        <div className="my-3 h-px bg-slate-100 dark:bg-white/8 xl:my-4" data-rail-divider />
 
         <div
           className={cn(
-            'relative min-h-0 min-w-0 overflow-hidden',
+            'relative min-h-0 min-w-0 overflow-hidden px-4 xl:px-5',
             hasKnowledgeGraph && 'xl:grid xl:grid-rows-[minmax(0,3fr)_minmax(0,2fr)]',
           )}
           data-teaching-rail-content
@@ -537,10 +537,10 @@ export function LectureSubtitleDock({
           {hasKnowledgeGraph ? (
             <div className="hidden min-h-0 xl:-mx-5 xl:block xl:overflow-hidden">
               <div
-                aria-label="当前课程知识图谱"
-                className="relative h-full min-h-0 w-full overflow-hidden bg-[radial-gradient(ellipse_78%_70%_at_50%_50%,rgba(190,229,217,0.64)_0%,rgba(228,244,238,0.34)_52%,transparent_100%)] dark:bg-[radial-gradient(ellipse_78%_70%_at_50%_50%,rgba(35,111,94,0.3)_0%,rgba(15,54,51,0.16)_54%,transparent_100%)]"
+                aria-label="课程思维导图缩略图"
+                className={cn('relative h-full min-h-0 w-full overflow-hidden', responsiveStyles.mindMapPreview)}
               >
-                <div className="pointer-events-none absolute inset-0 [mask-image:radial-gradient(ellipse_88%_82%_at_50%_50%,black_48%,rgba(0,0,0,0.72)_68%,transparent_100%)]">
+                <div className={cn('pointer-events-none absolute inset-0', responsiveStyles.mindMapCanvas)}>
                   <KnowledgeGraphFlow
                     activeNodeId={activeKnowledgePointId}
                     activeZoom={0.76}
@@ -554,12 +554,8 @@ export function LectureSubtitleDock({
                     showMiniMap={false}
                   />
                 </div>
-                <div
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-white/82 to-transparent dark:from-slate-950/72"
-                />
                 <button
-                  aria-label="完整浏览知识图谱"
+                  aria-label="完整浏览课程思维导图"
                   className="absolute right-4 top-3 z-10 grid h-8 w-8 place-items-center rounded-full bg-white/58 text-slate-500 backdrop-blur-md transition hover:scale-105 hover:bg-white/90 hover:text-teal-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 dark:bg-slate-900/42 dark:text-slate-300 dark:hover:bg-slate-800/80 dark:hover:text-teal-300"
                   onClick={() => setGraphOpen(true)}
                   type="button"
@@ -574,7 +570,7 @@ export function LectureSubtitleDock({
         {interactionAssistance?.active ? (
           <div
             aria-live="polite"
-            className="mt-3 flex items-center gap-3 border-t border-slate-100 pt-3 dark:border-white/8 xl:mt-4 xl:pt-4"
+            className="mt-3 flex items-center gap-3 border-t border-slate-100 px-4 pt-3 dark:border-white/8 xl:mt-4 xl:px-5 xl:pt-4"
             role="status"
           >
             <span
@@ -598,7 +594,7 @@ export function LectureSubtitleDock({
         ) : null}
 
         <div
-          className="relative z-20 mt-3 flex shrink-0 items-center justify-between border-t border-slate-100 bg-white/98 pt-3 dark:border-white/8 dark:bg-slate-950/98 xl:mt-4 xl:flex-col xl:items-stretch xl:gap-4 xl:pt-4"
+          className="relative z-20 mt-3 flex shrink-0 items-center justify-between border-t border-slate-100 bg-white/98 px-4 pb-3 pt-3 dark:border-white/8 dark:bg-slate-950/98 xl:mt-4 xl:flex-col xl:items-stretch xl:gap-4 xl:px-5 xl:pb-4 xl:pt-4"
           data-subtitle-controls
         >
           <div className="flex items-center justify-center gap-1 xl:justify-between">
@@ -659,9 +655,9 @@ export function LectureSubtitleDock({
       <Dialog onOpenChange={setGraphOpen} open={graphOpen}>
         <DialogContent className="w-[min(960px,calc(100vw-24px))] max-w-none overflow-hidden p-0">
           <DialogHeader className="px-6 pt-6">
-            <DialogTitle>课程知识图谱</DialogTitle>
+            <DialogTitle>课程思维导图</DialogTitle>
             <DialogDescription>
-              知识沿真实依赖关系自动展开；当前讲授节点及其直接路径会保持清晰高亮。
+              沿课程知识脉络浏览各个概念；当前讲授内容及其关联会保持清晰高亮。
             </DialogDescription>
           </DialogHeader>
           <div className="h-[min(68vh,620px)] min-h-[420px] border-t border-slate-100 dark:border-white/8">

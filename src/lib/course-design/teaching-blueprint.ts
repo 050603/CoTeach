@@ -31,7 +31,7 @@ import type {
 } from "@/lib/session/types";
 
 export const TEACHING_BLUEPRINT_SCHEMA_VERSION = 3 as const;
-export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v44-efficient-assessment";
+export const TEACHING_BLUEPRINT_POLICY_VERSION = "shared-teaching-contract-v45-diagnostic-objective-quiz";
 import { TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION } from '@/lib/openmaic/generation/teaching-contract-version';
 export { TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION } from '@/lib/openmaic/generation/teaching-contract-version';
 /** Kept as a compatibility export for callers being migrated away from ratio budgeting. */
@@ -624,7 +624,7 @@ AI 讲授前已完成的教学阶段（只供承接，绝不能作为本次 PPT 
 统一教学要求（必须用 requirementIds 追踪落实；冲突只展示，不得自行覆盖教师已确认边界）：${JSON.stringify(input.teachingRequirements ?? { schemaVersion: 1, items: [], conflicts: [] })}
 知识学习阶段总时长：${Math.round(input.totalDurationSec / 60)} 分钟
 讲授要求：只为本次 AI 知识讲授的必要承接、新知识解释、推理、例子、操作、短测和正式收束估时；不套用固定讲解比例，也不按知识点数量机械分配题目或分钟。首个页面开始实质讲授，不重新制作前一阶段教师已经完成的导入。短课把承接和结尾整合得更简洁；时间不足时先减少重复铺垫和可选扩展。
-测验模式：${input.assessmentMode === "constructed-response" ? "深度作答：每个小节恰好设置 1 道综合简答题，覆盖该小节全部知识点并要求给出结论与理由" : "普通检测：每个小节设置 2–4 道选择、判断、填空或拖拽配对等轻量题，不设置开放式简答；全部题目合计覆盖该小节所有知识点"}
+测验模式：${input.assessmentMode === "constructed-response" ? "深度作答：每个小节恰好设置 1 道综合简答题，覆盖该小节全部知识点并要求给出结论与理由" : "普通检测：每个小节设置 2–4 道单选、多选或判断题，用可信的错误选项辨别学生是否真正掌握知识；全部题目合计覆盖该小节所有知识点"}
 
 容量边界：总计 ${Math.round(input.totalDurationSec)} 秒，其中节末短测预留约 ${assessmentDurationSec} 秒，其余时间由实际解释和必要操作共享。${plannedSections ? `必须严格按以下 ${plannedSections.length} 个小节及其顺序生成，不得合并、拆分或移动知识点。teachingBudgetSec 是整个相关知识簇共享的讲授预算，不是其中每个知识点各自拥有或必须相加的时间；不得用知识点数量乘以单点最低分钟数判断冲突。suggestedPageRange 是系统根据该预算和解释工作量作出的容量判断，下限用于避免单页过载，必须满足；上限是建议值，只有新增页面仍有足够时间完成一项实质解释时才可超出。紧密相关且能共用一个视觉焦点的定义与关系可同页；需要独立分析的例子、反例、操作或练习应拆页，不能把每个术语机械拆成一页：\n${JSON.stringify(plannedSections)}` : "尚未提供固定小节边界，请按知识组组织紧凑小节。"}
 
@@ -1975,7 +1975,7 @@ export function teachingBlueprintToOutlines(
         coveragePolicy: "section-synthesis",
         questionTypes: blueprint.assessmentMode === "constructed-response"
           ? ["short_answer"]
-          : ["single", "multiple", "matching", "true_false", "fill_blank"],
+          : ["single", "multiple", "true_false"],
         ...(blueprint.assessmentMode === "constructed-response" ? { questionTypePlan: ["short_answer" as const] } : {}),
         minShortAnswerQuestions: allowShortAnswer,
         maxShortAnswerQuestions: allowShortAnswer,

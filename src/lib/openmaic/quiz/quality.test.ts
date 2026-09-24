@@ -118,6 +118,9 @@ describe('quiz quality normalization', () => {
     })).toEqual(['multiple', 'scenario_task']);
     expect(selectQuizFormats({
       objectiveText: '匹配术语与对应含义', difficulty: 'easy', questionCount: 2, requested: ['single', 'matching'],
-    })).toEqual(['matching', 'single']);
+    })).toEqual(['single', 'matching']);
+    expect(selectQuizFormats({
+      objectiveText: '匹配术语与对应含义', difficulty: 'easy', questionCount: 2,
+    })).toEqual(['single', 'true_false']);
   });
 });

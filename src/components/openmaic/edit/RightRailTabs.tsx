@@ -40,6 +40,7 @@ export interface RightRailTabsProps {
   readonly refreshSessions: () => Promise<void>;
   /** Teacher preparation uses the AI workspace without the OpenMAIC roster tab. */
   readonly aiOnly?: boolean;
+  readonly teacherPreparation?: boolean;
   /** Increment when a canvas action sends a request to the AI workspace. */
   readonly openSignal?: number;
 }
@@ -70,6 +71,7 @@ export function RightRailTabs({
   deleteSessionAndRefresh,
   refreshSessions,
   aiOnly = false,
+  teacherPreparation = false,
   openSignal = 0,
 }: RightRailTabsProps) {
   const { t } = useI18n();
@@ -170,7 +172,7 @@ export function RightRailTabs({
       style={{ width: collapsed || narrow ? 44 : undefined }}
     >
       {collapsed && (
-        <div className="h-full border-l border-gray-100 bg-white/80 pt-1.5 dark:border-gray-800 dark:bg-stone-900/80">
+        <div className={cn('h-full border-l border-gray-100 bg-white/80 pt-1.5 dark:border-gray-800 dark:bg-stone-900/80', teacherPreparation && 'border-[#D8D6D0] bg-[#FCFBF8]')}>
           <button
             ref={expandRef}
             type="button"
@@ -196,6 +198,7 @@ export function RightRailTabs({
         }}
         className={cn(
           'relative h-full shrink-0 flex-col border-l border-gray-100 bg-white/95 backdrop-blur-xl dark:border-gray-800 dark:bg-stone-900/95 shadow-[-2px_0_24px_rgba(0,0,0,0.02)]',
+          teacherPreparation && 'border-[#D8D6D0] bg-[#FCFBF8] text-[#1F2933] shadow-none backdrop-blur-none',
           collapsed ? 'hidden' : 'flex',
           narrow && 'absolute inset-y-0 right-0 z-40 shadow-lg',
         )}
@@ -214,9 +217,10 @@ export function RightRailTabs({
         {/* Tab strip — single header row, no nested header */}
         <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-1 border-b border-gray-100 px-2 dark:border-gray-800">
           {aiOnly ? (
-            <span className="pl-1 text-xs font-semibold text-zinc-700 dark:text-zinc-200">
-              与 AI 一起编辑
-            </span>
+            <div className="min-w-0 py-1 pl-1">
+              <span className="block text-xs font-semibold text-[#344A6A]">AI 协作</span>
+              {teacherPreparation && <span className="block max-w-[310px] truncate text-[11px] text-[#5F6B76]">调整当前页面的内容与讲解</span>}
+            </div>
           ) : (
             <div
               role="tablist"

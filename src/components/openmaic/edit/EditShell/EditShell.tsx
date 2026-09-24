@@ -2,6 +2,7 @@
 
 import { motion, useReducedMotion } from 'motion/react';
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { cn } from '@openmaic/lib/utils/cn';
 import type { SceneEditorSurface, SurfaceState } from '@openmaic/lib/edit/scene-editor-surface';
 import { sceneEditorRegistry } from '@openmaic/lib/edit/scene-editor-registry';
 import { NOOP_SURFACE } from '@openmaic/lib/edit/noop-surface';
@@ -39,6 +40,8 @@ interface EditShellProps {
   readonly rightRail?: ReactNode;
   /** Optional bottom bar (under the canvas) — used for the actions timeline. */
   readonly bottomRail?: ReactNode;
+  /** CoTeach preparation workspace uses a calmer, task-led canvas frame. */
+  readonly teacherPreparation?: boolean;
 }
 
 const CHROME_TRANSITION = { duration: CHROME_DURATION, ease: CHROME_EASE } as const;
@@ -81,6 +84,7 @@ export function EditShell({
   rightRail,
   bottomRail,
   commandPlacement = 'top',
+  teacherPreparation = false,
 }: EditShellProps) {
   const surface = sceneEditorRegistry.resolve(scene.type) ?? NOOP_SURFACE;
   // Surface state is published from a child runner (keyed by sceneType so it
@@ -112,6 +116,7 @@ export function EditShell({
         trailing={commandTrailing}
         rightRail={rightRail}
         bottomRail={bottomRail}
+        teacherPreparation={teacherPreparation}
       >
         <SurfaceComponent />
         {state?.insertItems && state.insertItems.length > 0 && (
@@ -236,6 +241,7 @@ interface FrameProps {
   readonly trailing?: ReactNode;
   readonly rightRail?: ReactNode;
   readonly bottomRail?: ReactNode;
+  readonly teacherPreparation: boolean;
   readonly children: ReactNode;
 }
 
@@ -249,6 +255,7 @@ function Frame({
   bottomRail,
   children,
   commandPlacement,
+  teacherPreparation,
 }: FrameProps) {
   const prefersReducedMotion = useReducedMotion();
 
@@ -272,7 +279,9 @@ function Frame({
 
   return (
     <StageGrid
-      className="bg-gradient-to-b from-zinc-100 to-zinc-200 dark:from-zinc-950 dark:to-zinc-900"
+      className={teacherPreparation
+        ? 'bg-[#EFF0ED] text-[#1F2933]'
+        : 'bg-gradient-to-b from-zinc-100 to-zinc-200 dark:from-zinc-950 dark:to-zinc-900'}
       topSlot={commandPlacement === 'top' ? (
         <motion.div
           initial={cmdInitial}
@@ -301,8 +310,20 @@ function Frame({
         // layout jump when switching scene type). Children render
         // inside an inner ring/shadow card that the playback
         // CanvasArea visually mirrors.
-        <div className="relative h-full w-full p-3 sm:p-4">
-          <div className="relative h-full w-full overflow-hidden rounded-xl bg-white ring-1 ring-zinc-200/80 dark:bg-zinc-900 dark:ring-zinc-800/80 shadow-[0_10px_40px_-12px_rgba(15,23,42,0.18)] dark:shadow-[0_10px_40px_-12px_rgba(0,0,0,0.6)]">
+        <div className={cn('relative h-full w-full p-3 sm:p-4', teacherPreparation && 'flex flex-col gap-2.5 bg-[#EFF0ED]')}>
+          {teacherPreparation && (
+            <div className="flex min-h-7 shrink-0 items-center gap-2 overflow-hidden px-1 text-xs">
+              <span className="font-semibold text-[#344A6A]">课堂画布</span>
+              <span className="text-[#A9B1B3]">/</span>
+              <span className="truncate text-[#5F6B76]">{title}</span>
+            </div>
+          )}
+          <div className={cn(
+            'relative w-full overflow-hidden bg-white dark:bg-zinc-900',
+            teacherPreparation
+              ? 'min-h-0 flex-1 rounded-[10px] border border-[#D8D6D0] shadow-none dark:border-[#D8D6D0]'
+              : 'h-full rounded-xl ring-1 ring-zinc-200/80 shadow-[0_10px_40px_-12px_rgba(15,23,42,0.18)] dark:ring-zinc-800/80 dark:shadow-[0_10px_40px_-12px_rgba(0,0,0,0.6)]',
+          )}>
             {children}
           </div>
         </div>

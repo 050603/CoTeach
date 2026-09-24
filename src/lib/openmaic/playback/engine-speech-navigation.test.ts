@@ -500,6 +500,92 @@ describe('PlaybackEngine speech navigation', () => {
     }));
   });
 
+  it('keeps each cross-sentence laser target active through its own spoken sentence', () => {
+    const text = '先看标题。接着看图表。最后看结论。';
+    const speech = {
+      id: 'speech', type: 'speech', text, audioUrl: '/speech.mp3',
+      speechAlignment: {
+        version: 'test', status: 'aligned', textHash: 'text', audioHash: 'audio',
+        spans: [...text].map((character, index) => ({
+          text: character, startChar: index, endChar: index + 1,
+          startMs: index * 100, endMs: (index + 1) * 100,
+        })),
+      },
+    } as Action;
+    const scene = {
+      id: 'lesson', stageId: 'stage', order: 0, title: 'Lesson', type: 'slide',
+      content: { type: 'slide', elements: [] },
+      actions: [{
+        id: 'path', type: 'laser', elementId: 'title', speechId: 'speech',
+        speechAnchor: { quote: '标题' },
+        waypoints: [
+          { elementId: 'chart', speechAnchor: { quote: '图表' } },
+          { elementId: 'conclusion', speechAnchor: { quote: '结论' } },
+        ],
+      }, speech] as Action[],
+    } as unknown as Scene;
+    const engine = new PlaybackEngine([scene], { clearEffects: vi.fn() } as unknown as ActionEngine, {} as AudioPlayer);
+    const internals = engine as unknown as {
+      buildSpeechCuePoints: (value: Action, durationMs: number) => Array<{
+        action: Action; startMs: number; endMs: number;
+      }>;
+    };
+    const points = internals.buildSpeechCuePoints(speech, text.length * 100);
+    expect(points.map((point) => point.action.type === 'laser' ? point.action.elementId : '')).toEqual([
+      'title', 'chart', 'conclusion',
+    ]);
+    expect(points.every((point) => point.endMs > point.startMs)).toBe(true);
+    expect(points[1]!.endMs).toBeGreaterThan(text.indexOf('图表') * 100);
+    expect(points[2]!.endMs).toBeGreaterThan(text.indexOf('结论') * 100);
+  });
+
+  it('does not start a visual cue by skipping an unaligned spoken word', () => {
+    const text = '先看图表。';
+    const speech = {
+      id: 'speech', type: 'speech', text, audioUrl: '/speech.mp3',
+      speechAlignment: {
+        version: 'test', status: 'aligned', textHash: 'text', audioHash: 'audio',
+        spans: [
+          { text: '先看', startChar: 0, endChar: 2, startMs: 0, endMs: 400 },
+          { text: '表。', startChar: 3, endChar: 5, startMs: 600, endMs: 1100 },
+        ],
+      },
+    } as Action;
+    const scene = {
+      id: 'lesson', stageId: 'stage', order: 0, title: 'Lesson', type: 'slide',
+      content: { type: 'slide', elements: [] },
+      actions: [{ id: 'focus', type: 'spotlight', elementId: 'chart', speechId: 'speech',
+        speechAnchor: { quote: '图表' } }, speech] as Action[],
+    } as unknown as Scene;
+    const engine = new PlaybackEngine([scene], { clearEffects: vi.fn() } as unknown as ActionEngine, {} as AudioPlayer);
+    const internals = engine as unknown as { buildSpeechCuePoints: (value: Action, durationMs: number) => unknown[] };
+    expect(internals.buildSpeechCuePoints(speech, 1100)).toEqual([]);
+  });
+
+  it('does not extend a cue across an unaligned spoken word before the sentence end', () => {
+    const text = '先看图表。';
+    const completeSpans = Array.from(text, (character, index) => ({
+      text: character, startChar: index, endChar: index + 1,
+      startMs: index * 100, endMs: (index + 1) * 100,
+    }));
+    const speech = {
+      id: 'speech', type: 'speech', text, audioUrl: '/speech.mp3',
+      speechAlignment: {
+        version: 'test', status: 'aligned', textHash: 'text', audioHash: 'audio',
+        spans: completeSpans.filter((span) => span.text !== '表'),
+      },
+    } as Action;
+    const scene = {
+      id: 'lesson', stageId: 'stage', order: 0, title: 'Lesson', type: 'slide',
+      content: { type: 'slide', elements: [] },
+      actions: [{ id: 'focus', type: 'spotlight', elementId: 'chart', speechId: 'speech',
+        speechAnchor: { quote: '先看图' } }, speech] as Action[],
+    } as unknown as Scene;
+    const engine = new PlaybackEngine([scene], { clearEffects: vi.fn() } as unknown as ActionEngine, {} as AudioPlayer);
+    const internals = engine as unknown as { buildSpeechCuePoints: (value: Action, durationMs: number) => unknown[] };
+    expect(internals.buildSpeechCuePoints(speech, text.length * 100)).toEqual([]);
+  });
+
   it('ignores an ended callback from audio replaced by a seek', async () => {
     const endedCallbacks: Array<() => void> = [];
     const onSpeechEnd = vi.fn();

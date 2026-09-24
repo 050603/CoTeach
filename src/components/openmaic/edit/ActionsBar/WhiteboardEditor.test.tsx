@@ -261,3 +261,41 @@ describe('teacher whiteboard authoring', () => {
     expect(text().y).toBe(562.5);
   });
 });
+
+describe('teacher laser route authoring', () => {
+  it('shows every laser stop and saves an added timed waypoint through the route dialog', () => {
+    useStageStore.setState({ scenes: [{
+      id: 'scene', stageId: 'stage', type: 'slide', title: '流程', order: 0,
+      content: { type: 'slide', canvas: {
+        id: 'canvas', viewportSize: 1000, viewportRatio: 0.5625,
+        theme: { backgroundColor: '#fff', themeColors: [], fontColor: '#000', fontName: 'Arial' },
+        elements: [
+          { id: 'diagram', type: 'shape', name: '图示' },
+          { id: 'formula', type: 'shape', name: '公式' },
+          { id: 'result', type: 'shape', name: '结果' },
+        ],
+      } },
+      actions: [
+        { id: 'path', type: 'laser', elementId: 'diagram', speechId: 'speech', speechOffsetMs: 0, waypoints: [{ elementId: 'formula', speechOffsetMs: 1200 }] },
+        { id: 'speech', type: 'speech', text: '先看图示，再看公式，最后得到结果。' },
+      ],
+    } as unknown as Scene] });
+
+    render(<ActionsBar sceneId="scene" teacherPreparation />);
+    expect(screen.getByText('激光滑动 · 2 个目标')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '编辑路径与触发' }));
+    const dialog = screen.getByRole('dialog', { name: '编辑激光路径' });
+    expect(within(dialog).getByLabelText('激光滑动顺序')).toHaveTextContent('图示');
+    expect(within(dialog).getByLabelText('激光滑动顺序')).toHaveTextContent('公式');
+    fireEvent.click(within(dialog).getByRole('button', { name: '添加途经元素' }));
+    expect(within(dialog).getByLabelText('激光滑动顺序')).toHaveTextContent('结果');
+    fireEvent.click(within(dialog).getByRole('button', { name: '应用路径' }));
+
+    const actions = useStageStore.getState().getSceneById('scene')!.actions ?? [];
+    expect(actions[0]).toMatchObject({
+      type: 'laser', elementId: 'diagram',
+      waypoints: [{ elementId: 'formula', speechOffsetMs: 1200 }, { elementId: 'result', speechOffsetMs: 2400 }],
+    });
+    expect(screen.getByText('激光滑动 · 3 个目标')).toBeInTheDocument();
+  });
+});

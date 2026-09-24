@@ -41,9 +41,11 @@ const RAIL_MAX_PX = 360;
 export function SlideNavRail({
   brand,
   editorControls,
+  teacherPreparation = false,
 }: {
   readonly brand?: { src: string; iconSrc?: string; alt: string; href?: string };
   readonly editorControls?: EditorControlsProps;
+  readonly teacherPreparation?: boolean;
 } = {}) {
   const { t } = useI18n();
   const router = useRouter();
@@ -353,9 +355,9 @@ export function SlideNavRail({
         // arrive too late.
         className={cn(
           'relative flex h-full shrink-0 flex-col overflow-hidden',
-          'border-r border-gray-100 dark:border-gray-800',
-          'bg-white/80 dark:bg-stone-900/80 backdrop-blur-xl',
-          'shadow-[2px_0_24px_rgba(0,0,0,0.02)]',
+          teacherPreparation
+            ? 'border-r border-[#D8D6D0] bg-[#FCFBF8] text-[#1F2933]'
+            : 'border-r border-gray-100 bg-white/80 shadow-[2px_0_24px_rgba(0,0,0,0.02)] backdrop-blur-xl dark:border-gray-800 dark:bg-stone-900/80',
           narrow && !collapsed && 'absolute left-0 top-0 z-40 shadow-lg',
         )}
         style={{
@@ -442,6 +444,15 @@ export function SlideNavRail({
         {editorControls && (
           <div className={cn('shrink-0 border-b border-zinc-100 px-1.5 pb-1 dark:border-zinc-800', collapsed && 'flex justify-center')}>
             <EditorControls history={editorControls.history} commands={editorControls.commands} vertical={collapsed} />
+          </div>
+        )}
+        {teacherPreparation && !collapsed && (
+          <div className="shrink-0 border-b border-[#E5E3DD] px-4 py-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="text-xs font-semibold text-[#344A6A]">课堂页面</h2>
+              <span className="font-mono text-[11px] text-[#5F6B76]">{scenes.length}</span>
+            </div>
+            <p className="mt-0.5 text-[11px] text-[#5F6B76]">选择页面，拖动调整授课顺序</p>
           </div>
         )}
 

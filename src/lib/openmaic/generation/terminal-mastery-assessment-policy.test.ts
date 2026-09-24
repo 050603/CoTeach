@@ -29,7 +29,7 @@ describe("ensureTerminalMasteryAssessment", () => {
         targetDurationSec: 180,
         quizConfig: expect.objectContaining({
           questionCount: 2,
-          questionTypes: ["single", "multiple", "true_false", "fill_blank", "matching"],
+          questionTypes: ["single", "multiple", "true_false"],
           maxShortAnswerQuestions: 0,
         }),
       }),
@@ -40,7 +40,7 @@ describe("ensureTerminalMasteryAssessment", () => {
         targetDurationSec: 180,
         quizConfig: expect.objectContaining({
           questionCount: 2,
-          questionTypes: ["single", "multiple", "true_false", "fill_blank", "matching"],
+          questionTypes: ["single", "multiple", "true_false"],
           maxShortAnswerQuestions: 0,
         }),
       }),

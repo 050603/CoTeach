@@ -10,6 +10,7 @@ import { AvatarDisplay } from '@openmaic/components/ui/avatar-display';
 import { CircleStop } from 'lucide-react';
 import { InlineActionTag } from './inline-action-tag';
 import { useUserProfileStore } from '@openmaic/lib/store/user-profile';
+import { DEFAULT_TEACHER_AVATAR } from '@openmaic/components/roundtable/constants';
 
 /** Extended message part type covering standard + custom action parts */
 interface MessagePart {
@@ -29,7 +30,7 @@ interface ChatSessionProps {
 }
 
 const AVATARS = {
-  teacher: '/openmaic/avatars/openpbl-ai-teacher.webp',
+  teacher: DEFAULT_TEACHER_AVATAR,
   user: '/avatars/user.png',
 };
 

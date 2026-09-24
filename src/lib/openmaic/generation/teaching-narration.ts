@@ -18,12 +18,12 @@ import {
 } from './narration-continuity';
 import { normalizeNarrationPunctuation } from './narration-punctuation';
 
-export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v22-worked-examples-before-quiz';
+export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v29-addressable-table-rows';
 /**
  * Changes to local normalization invalidate narration attempt checkpoints
  * without invalidating the already generated slide-content checkpoints.
  */
-export const TEACHING_NARRATION_NORMALIZATION_VERSION = 'verified-anchor-recovery-v9-quiz-handoff';
+export const TEACHING_NARRATION_NORMALIZATION_VERSION = 'verified-anchor-recovery-v10-natural-page-bridges';
 
 const log = createLogger('TeachingNarration');
 
@@ -53,6 +53,7 @@ function pageNarrationContext(
 }
 
 const EXPLICIT_PREVIOUS_PAGE_LEAD = /(?:上一页|前一页|刚才我们|刚刚我们|前面我们)/;
+const EXPLICIT_TRANSITION_LEAD = /^(?:那么|接下来|接着|下面|现在|再来|再看)/u;
 
 function withoutTerminalPunctuation(value: string): string {
   return value.trim().replace(/[，,。.!！?？；;：:\s]+$/u, '');
@@ -71,7 +72,8 @@ function groundedPageTransition(_previous: SceneOutline, current: SceneOutline):
   // entryPoint.bridge is the adopted adjacent-page contract. Do not paste the
   // previous page's takeaway here: doing so repeats an entire conclusion at
   // the start of the next page and can detach visual anchors from speech.
-  return `${EXPLICIT_PREVIOUS_PAGE_LEAD.test(bridge) ? bridge : `接下来，${bridge}`}。`;
+  return `${EXPLICIT_PREVIOUS_PAGE_LEAD.test(bridge) || EXPLICIT_TRANSITION_LEAD.test(bridge)
+    ? bridge : `接下来，${bridge}`}。`;
 }
 
 /**
@@ -497,7 +499,19 @@ function actualSlideForNarration(content: GeneratedSlideContent) {
         alt: typeof record.alt === 'string' ? record.alt : undefined,
         name: typeof record.name === 'string' ? record.name : undefined,
         chart: element.type === 'chart' ? { chartType: record.chartType, data: record.data } : undefined,
-        table: element.type === 'table' ? record.data : undefined,
+        table: element.type === 'table' && Array.isArray(record.data)
+          ? {
+              // The header is row 0, matching the rendered selector contract.
+              rows: record.data.map((rawRow, rowIndex) => ({
+                rowIndex,
+                cells: Array.isArray(rawRow) ? rawRow.map((rawCell, columnIndex) => {
+                  const cell = rawCell && typeof rawCell === 'object'
+                    ? rawCell as Record<string, unknown> : {};
+                  return { columnIndex, text: typeof cell.text === 'string' ? plainText(cell.text) : '' };
+                }) : [],
+              })),
+            }
+          : undefined,
         line: element.type === 'line' ? { start: record.start, end: record.end } : undefined,
         latex: element.type === 'latex' ? record.latex : undefined,
       };
@@ -567,7 +581,7 @@ export async function generateTeachingSectionNarration(input: {
     ?.teachingBrief?.understandingCriteria;
   const teacher = teachingAgent(input.agents);
   const system = [
-    'Write one continuous classroom micro-lecture for the complete section, then return it as page-scoped segments. Return only valid JSON.',
+    'Write one continuous classroom micro-lecture for the complete section, then return it as page-scoped segments. Every segment text is the teacher’s complete spoken utterance, read verbatim by TTS to learners. Return only valid JSON.',
     loadSnippet('adaptive-narration-policy'),
     loadSnippet('teaching-accuracy-policy'),
     'The adopted teaching design is the authority for knowledge, concept boundaries, stable example facts, core reasoning and understanding criteria. The actual slide is the authority only for what is visible and what can be pointed to. Never preserve a slide error or delete a required explanation merely to make words agree with the slide.',
@@ -583,12 +597,13 @@ export async function generateTeachingSectionNarration(input: {
     'Choose examples, comparisons, analogies, demonstrations, or short self-questions for their local explanatory value, learner familiarity, and developmental fit. They do not need to connect to the project task or a later activity. Keep shared facts and quantities consistent. Do not present constructed quantities as named research findings or invent an institution or citation.',
     'Treat teachingPlan.taskConnection as a hard page boundary, not learner-facing content. With mode none, do not mention the driving question, final artifact, project workflow, or retrofit a project-shaped example. With helpful-context, use only the part that directly clarifies this page without adding project setup. With direct-application, guide the planned transfer but do not turn neighboring explanation pages into project work.',
     'Use the actual relationship on the slide and its reading structure to guide attention: name what learners should observe, compare items in a meaningful order, and follow a process or derivation in sequence. Spoken explanation should add meaning rather than read every label. If the teaching entry and slide begin with a concrete contrast, speak from that contrast before stating the abstract definition.',
-    'Write connected spoken language for listening: each sentence should make the next step feel motivated by what the learner has just understood. Avoid a repeated definition–example–summary routine, stacked slogans, compressed label lists, and abrupt topic switches.',
+    'Write connected spoken language for listening: each sentence should make the next step feel motivated by what the learner has just understood. Teaching-plan fields and slide labels are knowledge and visual sources, not narration wording. In every spoken segment, avoid colons introducing a definition, example, comparison, key point, or misconception list even when preceded by a full lead-in sentence. Never join successive case comparisons or misconception corrections with semicolons; each must become a separate complete spoken sentence with a natural bridge explaining what changes or why. A process list likewise needs spoken order such as first, next, and finally, rather than a copula followed by labels. Avoid stacked slogans, reading out “case” or “common misconception” labels, and abrupt topic switches. Do not merely replace a colon with a comma; explain each relationship in complete sentences while preserving its factual boundaries.',
     'Give the reasoning needed for the declared understanding criteria. The final quiz is authored later and must not be previewed with answers. Do not lower the learning standard because a slide is terse.',
+    'Follow the adopted teachingPlan.reasoningSteps and the entry-to-takeaway progression when deciding the order of spoken explanation. If worked examples precede misconceptions in that plan, finish the example comparison before returning to each misconception. A visual pointer may indicate a table row, but the teacher must still say the actual process steps, criteria, example reasoning, or correction in full; never replace needed speech with “it is in the second row” or another screen-location reference.',
     'A teaching slide is a worked explanation, not an answerable exercise. Do not end its speech by asking learners to judge true or false, write an answer, think silently, or wait to respond. If a page learningTask or visible question survives from an earlier plan, turn it into a narrated example and immediately explain the judgment, evidence, and conclusion without claiming a student response. Let the section-end quiz collect independent answers.',
     'Each requested teaching page must appear exactly once. Keep the requested pageId and stable segment id. Each segment must use only that page’s supplied semantic IDs. Segment boundaries are natural explanation paragraphs, with no fixed count. One natural segment may contain several visual focus changes: add a separate anchor exactly where attention moves from an example, image, definition, conclusion, or other visible object to the next one. Reasoning that does not depend on the screen may continue with no cue. Do not split fluent speech merely to end a visual cue.',
-    'Finish each segment text before authoring anchors. Every anchor semanticId must also appear in that segment’s semanticIds. Every anchor quote must be copied as one contiguous substring from that exact finalized segment text; never paraphrase it, copy it from the slide, or include nearby words that are absent from the segment. Omit the anchor when no reliable substring exists. Put the anchor on the first spoken phrase that actually asks learners to attend to the target, not at the paragraph start by default. Add a visualCue only when pointing helps learners locate, compare, trace, or hold attention on a visible object. Use separate anchors for targets mentioned at different points. A segment may have no cue, and the same object may be cued again when later reasoning needs it.',
-    'For every visualCue authored from an actual slide, copy target.elementId exactly from that page’s actualSlide.elements. Use target.selector only when a text phrase, complete table row, or table cell is more precise than the whole element. Choose spotlight for sustained explanation of text, a concept block, or one complete table row; use selector.rowIndex to frame that row and switch rows when the narration starts the next concept. Choose a stationary laser mainly for an image, diagram region, arrow, or isolated visual detail. Choose a multi-target laser only to trace an explicit order, process, route, or derivation across at least three distinct rendered nodes; set the first node as target and each later node as a waypoint with its own speechAnchor. A comparison of prose blocks or table rows is not a laser path. Set endSpeechAnchor to the exact spoken phrase where a spotlight should end; omit it to end at the containing sentence. Do not use a laser for sustained ordinary text explanation because the dot obscures glyphs. Do not add cues to transitions or reasoning that does not depend on the screen. Mark a cue essential only when the explanation is genuinely hard to follow without pointing; an invalid optional cue is omitted without changing the speech.',
+    'Finish each natural segment text before authoring anchors; do not alter the speech to make an anchor easier. Every anchor semanticId must also appear in that segment’s semanticIds. The speech quote and visual target are independent: copy each anchor quote as one contiguous substring from that exact finalized segment text, while taking elementId and selector only from the real actualSlide. The teacher need not repeat a slide label for the action to target its element. Never paraphrase a quote, copy it from the slide, or include absent nearby words. Omit the anchor when no reliable substring exists. Place it where the teacher begins explaining or explicitly invites inspection of that target, not at the first incidental mention of its name or at the paragraph start by default. If the same phrase recurs, use enough spoken context to distinguish the intended explanation or set the exact zero-based occurrence. Add a visualCue only when pointing helps learners locate, compare, trace, or hold attention on a visible object. A natural paragraph may switch targets more than once; anchor each meaningful switch, and cue the same object again if a later explanation returns to it. A segment may have no cue.',
+    'For every visualCue authored from an actual slide, copy target.elementId exactly from that page’s actualSlide.elements. A table in actualSlide gives addressable rows with zero-based rowIndex, including the header at 0, and cell texts with columnIndex. Use target.selector when a text phrase, complete table row, or table cell is more precise than the whole element. Choose spotlight for sustained explanation of text, a concept block, or one complete table row. When the teacher compares cases that occupy different table rows, add a separate anchor to each case sentence with the same table elementId and the matching selector.rowIndex; do not use one whole-table spotlight for the comparison. If the teacher later corrects misconceptions shown in those rows, repeat the row-specific cues at each correction sentence, even though the table element and semanticId are the same as before. Multiple anchors may share one semanticId within one segment. The introductory sentence about the table does not substitute for the row cues. Speech may use different words from the row label. Choose a stationary laser mainly for an image, diagram region, arrow, or isolated visual detail. Choose a multi-target laser only to trace an explicit order, process, route, or derivation across at least three distinct rendered nodes; set the first node as target and each later node as a waypoint with its own speechAnchor at that node’s actual spoken explanation. A comparison of prose blocks or table rows is not a laser path. Set endSpeechAnchor to the exact final spoken phrase for a spotlight that continues across sentences; omit it to end at the containing sentence. Do not use a laser for sustained ordinary text explanation because the dot obscures glyphs. Do not add cues to transitions or reasoning that does not depend on the screen. Mark a cue essential only when the explanation is genuinely hard to follow without pointing; an invalid optional cue is omitted without changing the speech.',
     'The page visualIntent and visualActionIntent, when present, are the adopted teaching intent from earlier planning. Use their observation goal to decide which actual visible object deserves attention, then realize that intent in narration anchors with exact targets from actualSlide. Do not invent a target when the slide does not contain one.',
     'Respect each deliveryContext endingDisposition and the section position in the complete course. A test-generation scope does not make this the end of the course. Only verified-course-end may synthesize what the learner can now explain or do, connect that understanding to later use, and use one concise formal thanks and farewell. A pbl-stage-handoff must lead into its named next stage without saying the class is over or goodbye. A final teaching page followed by an assessment should use at most one short learner-facing bridge such as “接下来用几道小题检验一下理解”, without claiming mastery. Never read an assessment page title or an internal name such as “第X节·节末小测” aloud. If the page already ends with a natural quiz bridge, do not add or paraphrase a second one.',
     input.languageDirective ?? '',
@@ -647,6 +662,15 @@ export async function generateTeachingSectionNarration(input: {
         type: 'spotlight',
         necessity: 'helpful',
         target: { elementId: 'copy the semantically correct exact ID from this page actualSlide.elements' },
+      },
+      tableRowReturn: {
+        explanation: 'For a comparison followed later by corrections in the same rendered table, place a distinct anchor on each spoken case and each spoken correction; the quote comes from speech, while rowIndex comes from actualSlide.table.rows.',
+        anchors: [
+          { quote: 'exact spoken phrase explaining first case', semanticId: 'same visible semantic ID', target: { elementId: 'exact table ID', selector: { rowIndex: 1 } } },
+          { quote: 'exact spoken phrase explaining second case', semanticId: 'same visible semantic ID', target: { elementId: 'exact table ID', selector: { rowIndex: 2 } } },
+          { quote: 'exact spoken phrase correcting first misconception', semanticId: 'same or later visible semantic ID', target: { elementId: 'exact table ID', selector: { rowIndex: 1 } } },
+          { quote: 'exact spoken phrase correcting second misconception', semanticId: 'same or later visible semantic ID', target: { elementId: 'exact table ID', selector: { rowIndex: 2 } } },
+        ],
       },
       orderedPath: {
         type: 'laser',
@@ -714,11 +738,12 @@ export async function generateTeachingNarration(input: {
   const semantics = buildTeachingNarrationSemantics(input.outline);
   const teacher = teachingAgent(input.agents);
   const system = [
-    'Write the classroom teacher’s actual spoken narration, read verbatim by TTS. Return only a JSON object with segments. Follow the requested course language.',
+    'Write the classroom teacher’s complete spoken narration, read verbatim by TTS to learners. Return only a JSON object with segments. Follow the requested course language.',
     loadSnippet('adaptive-narration-policy'),
     loadSnippet('teaching-accuracy-policy'),
     'The course-wide request is background, not a command to perform every lesson task on this page. Generate only the current page’s teaching responsibility. Other pages in progression define boundaries: do not execute their quizzes, reveal their answers, or introduce unplanned activities. End this page after its own explanation rather than adding a quiz or announcing another page’s full teaching.',
-    'Use the shared teaching plan as the explanation responsibility. Complete only this page’s introduced and deepened nodes, and keep referenced material to the shortest bridge needed. Explain unfamiliar terms, relations, intermediate steps, and reasons at the depth required by the learner and time budget. Do not read planning fields aloud. Segment boundaries are natural speech units with no fixed count.',
+    'Use the shared teaching plan as the explanation responsibility and source of knowledge, not as wording to read aloud. Complete only this page’s introduced and deepened nodes, and keep referenced material to the shortest bridge needed. Explain unfamiliar terms, relations, intermediate steps, and reasons at the depth required by the learner and time budget. Do not read planning fields aloud. Say examples and misconceptions in complete connected sentences, never as heading-colon-explanation or a heading followed by a comma and compressed notes. Segment boundaries are natural speech units with no fixed count.',
+    'Follow the adopted teachingPlan.reasoningSteps and explain required process steps and conditions in spoken words. Screen locations, row numbers, and headings cannot stand in for the explanation; keep examples before misconceptions when that is the planned reasoning order.',
     'Treat learningBoundary as authoritative learner state. Rely only on evidenced prerequisiteKnowledge and previouslyTaughtKnowledge. Establish currentKnowledge before applying it. futureKnowledge may be named only as an agenda preview and must not become an example, comparison target, judgment option, exercise premise, or assumed student knowledge.',
     'Follow teachingPlan.entryPoint. A standalone course-first page must make this AI resource complete: greet naturally, name the course or immediate focus when useful, establish a concrete familiar experience, visible contrast, question or direct proposition, and explicitly bridge that observation to the first new idea. Do not merely attach a greeting to a definition, recite objectives, claim a student response, or restart the lesson. Later pages bridge from what has already been understood. Follow continuity.endingDisposition: only verified-course-end may end with one formal thanks and farewell; pbl-stage-handoff leads into the named next stage without saying goodbye; continues and partial-preview do not announce course completion.',
     'Give primary concepts and likely misconceptions the needed depth; keep known background and transitions brief. Preserve precise terms, negation, necessary conditions and the evidence status. Not yet verified is different from false; a recommended method is not the only possible method.',

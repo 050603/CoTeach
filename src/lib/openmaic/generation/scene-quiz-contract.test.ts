@@ -212,15 +212,21 @@ describe('section short-answer quiz contract', () => {
       keyPoints: ['判断测试集的职责', '识别测试信息进入调参的后果'],
       quizConfig: {
         difficulty: 'medium', questionCount: 2,
-        questionTypes: ['single', 'multiple', 'matching', 'true_false', 'fill_blank'],
+        questionTypes: ['single', 'multiple', 'true_false'],
         minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
         coveragePolicy: 'section-synthesis',
       },
     };
     const ai = vi.fn().mockResolvedValue(JSON.stringify([
       {
-        id: 'q1', type: 'fill_blank', format: 'fill_blank',
-        question: '测试集用于____模型在新数据上的表现。',
+        id: 'q1', type: 'single', format: 'single_choice',
+        question: '哪种做法能独立检验模型在新数据上的表现？',
+        options: [
+          { value: 'A', label: '训练时反复查看测试结果' },
+          { value: 'B', label: '模型确定后用未参与调参的数据测试' },
+          { value: 'C', label: '把测试样本加入训练集' },
+        ],
+        answer: ['B'],
         analysis: '测试集用于独立检验模型的泛化表现。', knowledgePointIds: ['kp-sampling'], points: 10,
       },
       {
@@ -233,14 +239,15 @@ describe('section short-answer quiz contract', () => {
 
     const result = await generateSceneContent(adaptive, ai);
     const questions = result && 'questions' in result ? result.questions : [];
-    expect(questions.map((question) => question.format)).toEqual(['fill_blank', 'true_false']);
+    expect(questions.map((question) => question.format)).toEqual(['single_choice', 'true_false']);
     expect(ai.mock.calls[0][1]).toContain('36 seconds for reading, thinking, and answering all 2 questions');
     expect(ai.mock.calls[0][1]).not.toContain('Response evidence contract (single)');
     expect(ai.mock.calls[0][0]).toContain('A basic concept, condition, or correspondence can be assessed directly');
+    expect(ai.mock.calls[0][0]).toContain('A correct judgment about a situation must follow from facts actually stated in its stem');
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
-  it('accepts concise correspondence evidence for the page-20 teaching-method goals', async () => {
+  it('accepts discriminating choices for the page-20 teaching-method goals', async () => {
     const adaptive: SceneOutline = {
       ...outline,
       title: '三种教学法的核心要素与适用场景 · 节末小测',
@@ -260,32 +267,34 @@ describe('section short-answer quiz contract', () => {
       targetDurationSec: 51,
       quizConfig: {
         difficulty: 'medium', questionCount: 2,
-        questionTypes: ['single', 'multiple', 'matching', 'true_false', 'fill_blank'],
+        questionTypes: ['single', 'multiple', 'true_false'],
         minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
         coveragePolicy: 'section-synthesis',
       },
     };
     const ai = vi.fn().mockResolvedValue(JSON.stringify([
       {
-        id: 'q1', type: 'matching', format: 'matching',
-        question: '水果图片自动分类任务中，匹配每项判断与对应的依据或做法。',
-        pairs: [
-          { left: '目标知识是否必要', right: '删去模型训练后，程序无法自动分类' },
-          { left: '较强支架', right: '提供标注表格和训练步骤清单' },
-          { left: '较弱支架', right: '只提示每张照片应告诉程序什么' },
-          { left: '撤除支架的依据', right: '学生不靠清单也能独立标注和训练' },
+        id: 'q1', type: 'multiple', format: 'multiple_choice',
+        question: '学生要训练程序自动区分苹果和橘子。哪些做法符合任务驱动与支架式教学？（多选）',
+        options: [
+          { value: 'A', label: '删掉样本标注后程序仍能自动分类，说明标注不是必需知识' },
+          { value: 'B', label: '先给标注与训练清单，再只保留方向提示' },
+          { value: 'C', label: '教师先训练好模型，让学生照着运行' },
+          { value: 'D', label: '学生不靠清单能独立标注和训练时撤除强支架' },
         ],
+        answer: ['B', 'D'],
         analysis: '任务必须调用训练知识；支架只提供线索，并依独立表现逐步撤除。',
         knowledgePointIds: ['kp-11', 'kp-12'], points: 15,
       },
       {
-        id: 'q2', type: 'matching', format: 'matching',
-        question: '匹配下列人工智能课的情境与教学判断。',
-        pairs: [
-          { left: '初学图像标注步骤', right: '支架式：逐步提示，降低认知负荷' },
-          { left: '独立掌握各步骤后解决完整分类问题', right: '抛锚式：以真实复杂问题统领学习' },
-          { left: '视频开场后仍照原计划授课', right: '只是导入：情境未决定知识与活动' },
+        id: 'q2', type: 'single', format: 'single_choice',
+        question: '学生已能独立完成图像采集、标注和训练，现需解决完整分类问题。哪项安排符合抛锚式？',
+        options: [
+          { value: 'A', label: '细化每个步骤，再让学生重复单项操作' },
+          { value: 'B', label: '用真实分类问题决定学习内容、活动和评价' },
+          { value: 'C', label: '先播放趣味视频，其余教学照原计划进行' },
         ],
+        answer: ['B'],
         analysis: '先看学习阶段与任务复杂度；真正的锚会决定教学内容与活动，单纯视频导入不会。',
         knowledgePointIds: ['kp-13'], points: 10,
       },
@@ -293,12 +302,35 @@ describe('section short-answer quiz contract', () => {
 
     const result = await generateSceneContent(adaptive, ai);
     const questions = result && 'questions' in result ? result.questions : [];
-    expect(questions.map((question) => question.format)).toEqual(['matching', 'matching']);
+    expect(questions.map((question) => question.format)).toEqual(['multiple_choice', 'single_choice']);
     expect(questions[0]?.teachingUnitIds).toEqual(['unit-task', 'unit-scaffold']);
     expect(new Set(questions.flatMap((question) => question.knowledgePointIds ?? [])))
       .toEqual(new Set(['kp-11', 'kp-12', 'kp-13']));
     expect(ai.mock.calls[0][1]).toContain('36 seconds for reading, thinking, and answering all 2 questions');
+    expect(ai.mock.calls[0][1]).toContain('single, multiple, true_false only');
+    expect(ai.mock.calls[0][1]).not.toContain('matching only');
     expect(ai.mock.calls[0][1]).not.toContain('question 1 must use type=');
+    expect(ai).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an unplanned matching item even when a legacy allowlist contains matching', async () => {
+    const adaptive: SceneOutline = {
+      ...outline,
+      quizConfig: {
+        difficulty: 'medium', questionCount: 1,
+        questionTypes: ['single', 'matching', 'true_false'],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([{
+      id: 'q1', type: 'matching', format: 'matching', question: '匹配数据集与职责。',
+      pairs: [{ left: '训练集', right: '学习参数' }, { left: '测试集', right: '独立评估' }],
+      analysis: '训练与测试承担不同职责。', knowledgePointIds: ['kp-sampling'], points: 10,
+    }]));
+
+    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow('unrequested question format matching');
+    expect(ai.mock.calls[0][1]).not.toContain('matching only');
     expect(ai).toHaveBeenCalledTimes(1);
   });
 
@@ -448,6 +480,7 @@ describe('section short-answer quiz contract', () => {
         difficulty: 'medium',
         questionCount: 2,
         questionTypes: ['single', 'matching', 'true_false'],
+        questionTypePlan: ['matching', 'true_false'],
         maxShortAnswerQuestions: 0,
         coveragePolicy: 'each-target',
       },
@@ -471,7 +504,7 @@ describe('section short-answer quiz contract', () => {
 
     const result = await generateSceneContent(adaptive, ai);
     const questions = result && 'questions' in result ? result.questions : [];
-    expect(ai.mock.calls[0][1]).toContain('generate one question for each ordered assessment target');
+    expect(ai.mock.calls[0][1]).toContain('question 1 must use type="matching"; question 2 must use type="true_false"');
     expect(questions.map((question) => [question.teachingUnitIds, question.knowledgePointIds])).toEqual([
       [['unit-role'], ['kp-role']],
       [['unit-leak'], ['kp-leak']],
@@ -511,6 +544,36 @@ describe('section short-answer quiz contract', () => {
     expect(ai.mock.calls[0][0]).toContain('private design card');
     expect(ai.mock.calls[0][0]).toContain('about one third longer than the shortest');
     expect(ai.mock.calls[0][0]).toContain('Do not make a distractor wrong merely by inserting');
+  });
+
+  it('rejects an unplanned multiple-choice item with only one distractor', async () => {
+    const adaptive: SceneOutline = {
+      ...outline,
+      quizConfig: {
+        difficulty: 'medium', questionCount: 1,
+        questionTypes: ['single', 'multiple', 'true_false'],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+        coveragePolicy: 'section-synthesis',
+      },
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify([{
+      id: 'q1', type: 'multiple', format: 'multiple_choice',
+      question: '哪些抽样方式能减少选择偏差？',
+      options: [
+        { value: 'A', label: '随机抽取不同年级的学号' },
+        { value: 'B', label: '按各年级人数比例随机抽取' },
+        { value: 'C', label: '从完整名单随机抽取学号' },
+        { value: 'D', label: '只询问最先离场的学生' },
+      ],
+      answer: ['A', 'B', 'C'], analysis: '前三项都使用随机抽样，最后一项是便利抽样。',
+      knowledgePointIds: ['kp-sampling'], points: 10,
+    }]));
+
+    await expect(generateSceneContent(adaptive, ai)).rejects.toThrow(
+      'question 1 has fewer than two incorrect multiple-choice options',
+    );
+    expect(ai.mock.calls[0][0]).toContain('at least two plausible incorrect alternatives');
+    expect(ai).toHaveBeenCalledTimes(1);
   });
 
   it('does not retry when analysis is empty', async () => {

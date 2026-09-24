@@ -449,7 +449,7 @@ describe("teaching blueprint compiler", () => {
     expect(quizzes.every((quiz) => (
       quiz.keyPoints.length === quiz.quizConfig?.questionCount
       && quiz.quizConfig.questionTypePlan === undefined
-      && quiz.quizConfig.questionTypes.join(",") === "single,multiple,matching,true_false,fill_blank"
+      && quiz.quizConfig.questionTypes.join(",") === "single,multiple,true_false"
     ))).toBe(true);
     expect(deriveKnowledgeLectureSectionsFromOutlines(outlines)).toHaveLength(2);
     expect(quizzes.every((quiz) => quiz.assessmentUnitIds?.length === 1 && quiz.assessmentUnitMap?.length === 1)).toBe(true);
@@ -480,7 +480,7 @@ describe("teaching blueprint compiler", () => {
     expect(quiz.keyPoints[0]).toContain("判断新流程中的数据角色；辨析错误的数据划分结论");
     expect(quiz.keyPoints[1]).toContain("填空补全训练集与测试集的职责；说明数据泄漏如何影响评估可信度");
     expect(quiz.quizConfig?.questionTypePlan).toBeUndefined();
-    expect(quiz.quizConfig?.questionTypes).toEqual(["single", "multiple", "matching", "true_false", "fill_blank"]);
+    expect(quiz.quizConfig?.questionTypes).toEqual(["single", "multiple", "true_false"]);
     expect(quiz.keyPoints[1]).toContain("填空补全训练集与测试集的职责");
     expect(quiz.keyPoints.join("\n")).not.toContain("客观作答转换");
   });

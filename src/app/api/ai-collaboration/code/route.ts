@@ -657,6 +657,9 @@ export async function POST(request: NextRequest) {
       projectSupportContext.knowledgePointLabels,
     );
     result.support = normalizedSupport.details;
+    if (normalizedSupport.details.replyBlocks?.length) {
+      result.message = normalizedSupport.details.replyBlocks.map((block) => block.content).join("\n\n");
+    }
     if (intent === "proactive-review") {
       const commentStore = await getCompanionThread(courseId, scope.student.id, commentThreadKey(stageKey, language));
       const existingThreads = codeCommentThreads(commentStore?.messages ?? []);

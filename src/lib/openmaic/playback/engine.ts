@@ -55,6 +55,9 @@ import {
 } from '@openmaic/lib/generation/activity-gate';
 import {
   findSpeechCueAnchorRange,
+  resolveAlignedSpeechCueAnchor,
+  resolveAlignedSpeechCueBoundary,
+  resolveAlignedSpeechCueRange,
   resolveSpeechCueEnd,
   speechCueSentenceEnd,
 } from '@openmaic/lib/generation/speech-cue-boundaries';
@@ -246,12 +249,11 @@ function resolveAnchorPosition(
   const spans = validAlignmentSpans(speech);
   const range = findQuoteRange(speech.text, anchor);
   if (!spans || !range) return null;
-  if (edge === 'start') {
-    const span = spans.find((candidate) => candidate.endChar > range.start);
-    return span ? { char: range.start, ms: span.startMs } : null;
-  }
-  const span = [...spans].reverse().find((candidate) => candidate.startChar < range.end);
-  return span ? { char: range.end, ms: span.endMs } : null;
+  const position = resolveAlignedSpeechCueAnchor(speech.text, spans, anchor);
+  if (!position) return null;
+  return edge === 'start'
+    ? { char: range.start, ms: position.startMs }
+    : { char: range.end, ms: position.endMs };
 }
 
 function resolveCharacterPosition(
@@ -262,20 +264,8 @@ function resolveCharacterPosition(
   const spans = validAlignmentSpans(speech);
   if (!spans) return null;
   const char = Math.max(0, Math.min(speech.text.length, charIndex));
-  const containing = spans.find((span) => (
-    edge === 'start'
-      ? span.startChar <= char && span.endChar > char
-      : span.startChar < char && span.endChar >= char
-  ));
-  if (containing) {
-    return { char, ms: edge === 'start' ? containing.startMs : containing.endMs };
-  }
-  const nearest = edge === 'start'
-    ? spans.find((span) => span.startChar >= char)
-    : [...spans].reverse().find((span) => span.endChar <= char);
-  return nearest
-    ? { char, ms: edge === 'start' ? nearest.startMs : nearest.endMs }
-    : null;
+  const ms = resolveAlignedSpeechCueBoundary(speech.text, spans, char, edge);
+  return ms === null ? null : { char, ms };
 }
 
 export class PlaybackEngine {
@@ -854,6 +844,8 @@ export class PlaybackEngine {
               ...cue,
               elementId: waypoint.elementId,
               selector: waypoint.selector,
+              speechAnchor: waypoint.speechAnchor,
+              speechOffsetMs: waypoint.speechOffsetMs,
               waypoints: undefined,
             },
             startMs: waypointStart.ms,
@@ -880,7 +872,19 @@ export class PlaybackEngine {
       const defaultEndChar = startAnchorRange
         ? speechCueSentenceEnd(speech.text, startAnchorRange.end)
         : speech.text.length;
-      const defaultEndPosition = resolveCharacterPosition(speech, defaultEndChar, 'end');
+      const spans = validAlignmentSpans(speech);
+      const alignedRange = startAnchorRange && spans
+        ? resolveAlignedSpeechCueRange(
+            speech.text,
+            spans,
+            startAnchorRange.start,
+            endAnchor?.char ?? defaultEndChar,
+          )
+        : null;
+      if (startAnchorRange && !alignedRange && !allowCharacterBoundary) return null;
+      const defaultEndPosition = alignedRange
+        ? { char: defaultEndChar, ms: alignedRange.endMs }
+        : resolveCharacterPosition(speech, defaultEndChar, 'end');
       const defaultEndMs = Number.isFinite(explicitEndOffset) && explicitEndOffset > point.startMs
         ? explicitEndOffset
         : defaultEndPosition?.ms ?? durationMs;
@@ -911,7 +915,7 @@ export class PlaybackEngine {
               nextStart: points[index + 1]?.startChar,
             }),
       };
-    });
+    }).filter((point): point is SpeechCuePoint => point !== null);
   }
 
   private activateSpeechCuePoint(point: SpeechCuePoint, currentMs: number): void {

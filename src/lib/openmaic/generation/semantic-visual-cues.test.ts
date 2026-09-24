@@ -3,6 +3,7 @@ import type { PPTElement } from '@openmaic/dsl';
 import type { Action } from '@openmaic/lib/types/action';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import { generateSceneActions } from './scene-generator';
+import { splitLongSpeechActions } from '../audio/tts-utils';
 import {
   buildSlideTargetInventory,
   calibrateGeneratedVisualCues,
@@ -239,6 +240,33 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
     expect(result).toEqual([narration]);
   });
 
+  it('does not borrow a sentence end timestamp across an unaligned spoken word', () => {
+    const complete = speech('s1', '先看图表。') as Extract<Action, { type: 'speech' }>;
+    const missingWord = {
+      ...complete,
+      speechAlignment: {
+        ...complete.speechAlignment!,
+        spans: complete.speechAlignment!.spans.filter((span) => span.text !== '表'),
+      },
+    } as Action;
+    expect(visualActions(calibrate([
+      cue('chart', 's1', 'pbl-title', { speechAnchor: { quote: '先看图' } }),
+      missingWord,
+    ]))).toEqual([]);
+
+    const missingPunctuation = {
+      ...complete,
+      speechAlignment: {
+        ...complete.speechAlignment!,
+        spans: complete.speechAlignment!.spans.filter((span) => span.text !== '。'),
+      },
+    } as Action;
+    expect(visualActions(calibrate([
+      cue('chart', 's1', 'pbl-title', { speechAnchor: { quote: '先看图' } }),
+      missingPunctuation,
+    ]))).toHaveLength(1);
+  });
+
   it('assigns independent aligned offsets to laser waypoints', () => {
     const text = '先看PBL，再看小学，最后看低代码。';
     const narration = speech('s1', text);
@@ -265,6 +293,81 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
       text.indexOf('小学') * 100,
       text.indexOf('低代码') * 100,
     ]);
+  });
+
+  it('keeps an authored cue at the later explanation instead of the first table label', () => {
+    const text = '先说探究式和问题式两种模式。现在看问题式的案例，围绕真实问题组织学习。';
+    const narration = speech('s1', text);
+    const result = calibrate([
+      cue('problem-example', 's1', 'stage-table', {
+        selector: { rowIndex: 1 }, speechAnchor: { quote: '围绕真实问题组织学习' },
+      }),
+      narration,
+    ]);
+    expect(visualActions(result)).toHaveLength(1);
+    expect(visualActions(result)[0]).toMatchObject({
+      id: 'problem-example', selector: { rowIndex: 1 },
+      speechOffsetMs: text.indexOf('围绕真实问题组织学习') * 100,
+    });
+  });
+
+  it('keeps separate table-row cues when the teacher returns from cases to misconceptions', () => {
+    const table = {
+      ...elements[0], id: 'comparison',
+      data: [
+        [{ id: 'head', text: '模式', colspan: 1, rowspan: 1 }],
+        [{ id: 'project', text: '项目式', colspan: 1, rowspan: 1 }],
+        [{ id: 'inquiry', text: '探究式', colspan: 1, rowspan: 1 }],
+        [{ id: 'problem', text: '问题式', colspan: 1, rowspan: 1 }],
+      ],
+    } as PPTElement;
+    const phrases = ['项目案例', '探究案例', '问题案例', '项目误区', '探究误区', '问题误区'];
+    const text = `${phrases.join('。')}。`;
+    const result = calibrate([
+      ...phrases.map((phrase, index) => cue(`focus-${index}`, 's1', 'comparison', {
+        selector: { rowIndex: index % 3 + 1 },
+        speechAnchor: { quote: phrase },
+      })),
+      speech('s1', text),
+    ], [table]);
+    expect(visualActions(result).map((action) => action.selector)).toEqual([
+      { rowIndex: 1 }, { rowIndex: 2 }, { rowIndex: 3 },
+      { rowIndex: 1 }, { rowIndex: 2 }, { rowIndex: 3 },
+    ]);
+    expect(visualActions(result).map((action) => action.speechOffsetMs)).toEqual(
+      phrases.map((phrase) => text.indexOf(phrase) * 100),
+    );
+  });
+
+  it('drops a path with an unaligned spoken waypoint instead of saving an empty node', () => {
+    const text = '先看PBL，再看小学。';
+    const complete = speech('s1', text) as Extract<Action, { type: 'speech' }>;
+    const missingWord = {
+      ...complete,
+      speechAlignment: {
+        ...complete.speechAlignment!,
+        spans: complete.speechAlignment!.spans.filter((span) => span.text !== '小'),
+      },
+    } as Action;
+    expect(visualActions(calibrate([
+      cue('path', 's1', 'pbl-title', {
+        type: 'laser', speechAnchor: { quote: 'PBL' },
+        waypoints: [{ elementId: 'stage-table', speechAnchor: { quote: '小学' } }],
+      }), missingWord,
+    ]))).toEqual([]);
+
+    const missingPunctuation = {
+      ...complete,
+      speechAlignment: {
+        ...complete.speechAlignment!,
+        spans: complete.speechAlignment!.spans.filter((span) => span.text !== '，'),
+      },
+    } as Action;
+    expect(visualActions(calibrate([
+      cue('punctuation', 's1', 'pbl-title', {
+        speechAnchor: { quote: 'PBL，再看' },
+      }), missingPunctuation,
+    ]))).toHaveLength(1);
   });
 
   it('uses separately timed spotlights for ordinary text comparisons', () => {
@@ -410,6 +513,38 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
     expect(result.filter((action) => action.type === 'speech')).toEqual([s1, s2, s3]);
   });
 
+  it('retains separate same-target cues when each TTS clip has its own end anchor', () => {
+    const first = speech('first', '先看这个目标。');
+    const second = speech('second', '继续说明这个目标。');
+    const result = calibrate([
+      cue('clip-1', 'first', 'pbl-title', { endSpeechAnchor: { quote: '目标。' } }),
+      first,
+      cue('clip-2', 'second', 'pbl-title', { endSpeechAnchor: { quote: '目标。' } }),
+      second,
+    ]);
+    expect(visualActions(result).map((action) => action.id)).toEqual(['clip-1', 'clip-2']);
+    expect(visualActions(result).map((action) => action.speechId)).toEqual(['first', 'second']);
+  });
+
+  it('keeps every TTS chunk of a cross-chunk spotlight after media calibration', () => {
+    const text = '先观察目标。' + '甲'.repeat(1100) + '最后确认目标。';
+    const split = splitLongSpeechActions([
+      cue('focus', 'long', 'pbl-title', {
+        speechAnchor: { quote: '先观察目标' },
+        endSpeechAnchor: { quote: '最后确认目标' },
+      }),
+      { id: 'long', type: 'speech', text },
+    ], 'glm-tts');
+    const aligned = split.map((action) => action.type === 'speech'
+      ? speech(action.id, action.text)
+      : action);
+    const calibrated = calibrate(aligned);
+    expect(visualActions(calibrated).map((action) => action.speechId))
+      .toEqual(split.filter((action) => action.type === 'speech').map((action) => action.id));
+    expect(calibrated.filter((action) => action.type === 'speech').map((action) => action.text).join(''))
+      .toBe(text);
+  });
+
   it('does not extend an earlier spotlight across speech before a later anchored return', () => {
     const first = speech('s1', '先说明判断依据，再观察小学学段。');
     const second = speech('s2', '完成推理以后，再次回到小学学段。');
@@ -444,7 +579,7 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
       .toBeLessThan(visualActions(result)[1].speechOffsetMs ?? 0);
   });
 
-  it('preserves the authored cue count while replacing text-covering lasers with frames', () => {
+  it('preserves authored cue types and count during calibration', () => {
     const pageElements = Array.from({ length: 10 }, (_unused, index) => ({
       id: `element-${index}`, type: 'text', left: index * 20, top: 50, width: 100, height: 40,
       content: `<p>目标${index}</p>`, defaultFontName: 'Microsoft YaHei', defaultColor: '#111111',
@@ -458,8 +593,8 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
     const result = calibrate(actions, pageElements);
 
     expect(visualActions(result)).toHaveLength(10);
-    expect(visualActions(result).filter((action) => action.type === 'laser')).toHaveLength(0);
-    expect(visualActions(result).every((action) => action.type === 'spotlight')).toBe(true);
+    expect(visualActions(result).filter((action) => action.type === 'laser')).toHaveLength(4);
+    expect(visualActions(result).filter((action) => action.type === 'spotlight')).toHaveLength(6);
     expect(result.filter((action) => action.type === 'speech')).toHaveLength(10);
   });
 
@@ -499,9 +634,7 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
       }),
       narration,
     ]);
-    expect(visualActions(invalid)).toEqual([
-      expect.objectContaining({ type: 'spotlight', selector: { rowIndex: 1 } }),
-    ]);
+    expect(visualActions(invalid)).toEqual([]);
     expect(invalid.at(-1)).toEqual(narration);
   });
 
@@ -528,7 +661,7 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
     ])).toEqual([narration]);
   });
 
-  it('optimizes cues inside the original OpenMAIC interleaved action call', async () => {
+  it('preserves the original cue inside the OpenMAIC interleaved action call', async () => {
     const ai = vi.fn().mockResolvedValue(JSON.stringify([
       {
         type: 'action',
@@ -549,9 +682,9 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
     expect(ai.mock.calls[0][0]).toContain('# Slide Action Generator');
     expect(ai.mock.calls[0][0]).toContain('Judge necessity before choosing a target or action');
     expect(ai.mock.calls[0][0]).toContain('speechAnchor');
-    expect(result.map((action) => action.type)).toEqual(['spotlight', 'speech']);
+    expect(result.map((action) => action.type)).toEqual(['laser', 'speech']);
     expect(visualActions(result)[0]).toMatchObject({
-      type: 'spotlight',
+      type: 'laser',
       selector: { quote: 'PBL', occurrence: 1 },
       speechId: expect.any(String),
     });

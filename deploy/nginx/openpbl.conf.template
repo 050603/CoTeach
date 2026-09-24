@@ -167,6 +167,15 @@ server {
         gzip off;
     }
 
+    # Project-practice AI can require an assessment and a deliverable response.
+    # The ordinary 60-second page limit would close the request before it ends.
+    location ~ ^/api/ai-collaboration/(document|code)$ {
+        limit_req zone=general burst=1200 nodelay;
+        proxy_pass http://openpbl_app;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+
     location = /api/uploads {
         limit_req zone=uploads burst=20 nodelay;
         client_max_body_size 501m;

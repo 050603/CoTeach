@@ -22,9 +22,8 @@ import type {
   CodeSelection,
 } from "@/lib/ai-collaboration/code-policy";
 import { cn } from "@/lib/utils";
-import { AiMemberMarkdown } from "./ai-member-markdown";
 import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
-import { ProjectMemoryPanel, ProjectSupportCard } from "./project-support-cards";
+import { ProjectMemoryPanel, ProjectReplyContent, ProjectSupportCard } from "./project-support-cards";
 
 export type CodeAiWorkspaceMessage = {
   id: string;
@@ -219,7 +218,7 @@ export function CodeAiMemberWorkspace({
                 <span className="flex items-center gap-1.5"><time>{timeLabel(message.createdAt)}</time><button aria-label="从当前对话移除" className={cn("grid size-5 place-items-center rounded opacity-60 transition hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100", message.role === "user" ? "hover:bg-white/15 hover:text-white" : "hover:bg-stone-100 hover:text-stone-900")} onClick={() => onDeleteMessage(message.id)} title="移除后不再发送给 AI，后台仍保留" type="button"><Trash2 size={11} /></button></span>
               </div>
               {message.role === "assistant" ? (
-                <><AiMemberMarkdown content={message.content} /><ProjectSupportCard support={message.support} /></>
+                <><ProjectReplyContent content={message.content} support={message.support} /><ProjectSupportCard replyContent={message.content} support={message.support} /></>
               ) : (
                 <p className="whitespace-pre-wrap">{message.content}</p>
               )}

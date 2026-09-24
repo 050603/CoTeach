@@ -1,15 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
 import {
   assessmentToBoundaryResponse,
   buildDelegatedWorkAssessmentPrompts,
   buildDelegatedWorkStarterReviewPrompts,
   buildDelegatedWorkStarterPrompts,
+  generateDelegatedDeliveryWithRepair,
   normalizeDelegatedWorkAssessment,
   normalizeDelegatedWorkDelivery,
   normalizeDelegatedWorkStarters,
-  researchTemporarilyUnavailableResponse,
-  unavailableResearchResponse,
 } from "./delegated-work-policy";
 
 const course = {
@@ -42,6 +41,23 @@ const course = {
 } as unknown as Course;
 
 describe("delegated work policy", () => {
+  it("repairs malformed or empty delivery output only once", async () => {
+    const generate = vi.fn().mockResolvedValueOnce("not JSON")
+      .mockResolvedValueOnce(JSON.stringify({ deliverable: { content: "可审阅的术语表" } }));
+    const repaired = await generateDelegatedDeliveryWithRepair(generate);
+    expect((repaired.deliverable as { content: string }).content).toBe("可审阅的术语表");
+    expect(generate.mock.calls).toEqual([[false], [true]]);
+
+    const empty = vi.fn().mockResolvedValue(JSON.stringify({ deliverable: { content: "" } }));
+    expect(await generateDelegatedDeliveryWithRepair(empty)).toEqual({});
+    expect(empty).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps upstream model failures distinct from malformed output", async () => {
+    const generate = vi.fn().mockRejectedValue(new Error("upstream unavailable"));
+    await expect(generateDelegatedDeliveryWithRepair(generate)).rejects.toThrow("upstream unavailable");
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
   it("requires contextual judgment instead of a static task blacklist", () => {
     const prompts = buildDelegatedWorkAssessmentPrompts({
       course,
@@ -135,6 +151,27 @@ describe("delegated work policy", () => {
     });
   });
 
+  it("does not blame an empty model delivery on the student's scope", () => {
+    const assessment = normalizeDelegatedWorkAssessment({ decision: "accepted", taskTitle: "整理术语表" });
+    const result = normalizeDelegatedWorkDelivery({ raw: { deliverable: { content: "" } }, assessment, researchMode: "model" });
+    expect(result.message).toBe("这次内容生成未完成，请重试。");
+    expect(result.delegation?.decision).toBe("unavailable");
+  });
+
+  it("keeps only cited textbook sources in a delivery", () => {
+    const assessment = normalizeDelegatedWorkAssessment({ decision: "accepted", taskTitle: "整理术语表" });
+    const sources = [
+      { id: "textbook:one", type: "textbook" as const, title: "教材一", note: "定义", locator: "第一章" },
+      { id: "textbook:two", type: "textbook" as const, title: "教材二", note: "其他内容" },
+    ];
+    const result = normalizeDelegatedWorkDelivery({
+      raw: { deliverable: { content: "术语定义", sourceIds: ["textbook:one", "fake"] } },
+      assessment, sources, researchMode: "textbook",
+    });
+    expect(result.deliverable?.sources).toEqual([sources[0]]);
+    expect(result.deliverable?.researchMode).toBe("textbook");
+  });
+
   it("generates contextual quick tasks from the current document", () => {
     const prompts = buildDelegatedWorkStarterPrompts({
       course,
@@ -162,33 +199,4 @@ describe("delegated work policy", () => {
     expect(review.user).toContain("替我采集所有数据并得出最终结论");
   });
 
-  it("never pretends to have searched when the course has no search service", () => {
-    const response = unavailableResearchResponse(normalizeDelegatedWorkAssessment({
-      decision: "accepted",
-      taskTitle: "搜集最新数据",
-      reason: "这是辅助材料。",
-      protectedLearningWork: "方案设计",
-      studentResponsibility: "核验数据并完成设计",
-      proposedScope: "搜集三项公开数据",
-      needsWebResearch: true,
-      searchQuery: "校园节水 最新数据",
-    }));
-    expect(response.kind).toBe("task-clarification");
-    expect(response.message).toContain("不能假装已经搜索");
-  });
-
-  it("keeps a search outage distinct from an AI collaboration failure", () => {
-    const assessment = normalizeDelegatedWorkAssessment({
-      decision: "accepted",
-      taskTitle: "搜集公开数据",
-      protectedLearningWork: "形成研究结论",
-      studentResponsibility: "核验数据并作出判断",
-      proposedScope: "搜集三项公开数据并保留来源",
-      needsWebResearch: true,
-      searchQuery: "公开数据",
-    });
-    const response = researchTemporarilyUnavailableResponse(assessment);
-    expect(response.kind).toBe("task-clarification");
-    expect(response.message).toContain("没有编造数据或来源");
-  });
 });

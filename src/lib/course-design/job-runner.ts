@@ -3269,8 +3269,8 @@ async function runNewSystemCourseDesign(
         "课程大纲",
         `${sceneOutlines.length} 个页面`,
         usesTeachingBlueprint
-          ? `本大纲先将粗粒度知识细化为可讲授单元，再按小节组织页面；${request.assessmentMode === "constructed-response" ? "深度作答为每小节 1 道综合简答题" : "普通检测为每小节 2–4 道选择、判断、填空或拖拽配对题"}。`
-          : `本大纲按知识小节组织讲解与互动练习；${request.assessmentMode === "constructed-response" ? "深度作答为每小节 1 道综合简答题" : "普通检测为每小节 2–4 道选择、判断、填空或必要的配对题"}。`,
+          ? `本大纲先将粗粒度知识细化为可讲授单元，再按小节组织页面；${request.assessmentMode === "constructed-response" ? "深度作答为每小节 1 道综合简答题" : "普通检测为每小节 2–4 道单选、多选或判断题"}。`
+          : `本大纲按知识小节组织讲解与互动练习；${request.assessmentMode === "constructed-response" ? "深度作答为每小节 1 道综合简答题" : "普通检测为每小节 2–4 道单选、多选或判断题"}。`,
         "green",
         sceneOutlines.map((scene) => ({
           label: scene.type === "quiz" ? "学习检测" : scene.type === "interactive" ? "互动练习" : "知识讲解",

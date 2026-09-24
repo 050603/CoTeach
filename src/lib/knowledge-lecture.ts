@@ -189,7 +189,7 @@ export function organizeKnowledgeLectureOutlines(
       title: `${title} · 节末小测`,
       description: constructedResponse
         ? `围绕本小节的${keyPoints.join("、") || "核心知识"}设置 1 道综合简答题，要求给出结论与理由，预计 ${Math.round(quizDurationSec / 60)} 分钟完成；由 AI 自动批阅并进入助教讲解。`
-        : `围绕本小节的${keyPoints.join("、") || "核心知识"}设置 ${questionCount} 道单选、多选、判断、填空或必要的配对题。全部题目合计覆盖本小节所有知识点，选择与判断直接作答，填空只填写关键词、数值或短语，预计 ${Math.round(quizDurationSec / 60)} 分钟完成。`,
+        : `围绕本小节的${keyPoints.join("、") || "核心知识"}设置 ${questionCount} 道单选、多选或判断题，用可信的错误选项辨别常见误解。全部题目合计覆盖本小节所有知识点，预计 ${Math.round(quizDurationSec / 60)} 分钟完成。`,
       keyPoints,
       teachingObjective: constructedResponse
         ? "用综合简答检查学生能否整合本小节知识给出结论与理由，并为逐题讲解形成证据。"
@@ -209,7 +209,7 @@ export function organizeKnowledgeLectureOutlines(
         difficulty: "medium",
         questionTypes: constructedResponse
           ? ["short_answer"]
-          : ["single", "multiple", "true_false", "fill_blank", "matching"],
+          : ["single", "multiple", "true_false"],
         questionCount,
         coveragePolicy: "section-synthesis",
         minShortAnswerQuestions: constructedResponse ? 1 : 0,

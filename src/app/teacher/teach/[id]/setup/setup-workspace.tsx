@@ -19,7 +19,6 @@ import { useSession, useCourse, useHydrated } from "@/lib/session/store";
 import { useCoursePresence } from "@/hooks/use-course-presence";
 import { getNewSystemCourseReadiness } from "@/lib/classroom/new-system-course";
 import { MakeArtifactModeSetting } from "@/components/teacher/make-artifact-mode-setting";
-import { PracticeAiSettings } from "@/components/teacher/practice-ai-settings";
 
 export default function TeachSetupWorkspace({ activityId, offeringId, templateVersionId, templateId }: { activityId: string; offeringId: string; templateVersionId: string; templateId: string }) {
   const params = useParams<{ id: string }>();
@@ -153,7 +152,7 @@ export default function TeachSetupWorkspace({ activityId, offeringId, templateVe
           <Card>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <h2 className="text-xl font-bold">五阶段课堂</h2>
-              {course.status !== "finished" ? <><MakeArtifactModeSetting course={course} /><PracticeAiSettings course={course} /></> : null}
+              {course.status !== "finished" ? <MakeArtifactModeSetting course={course} /> : null}
             </div>
             <div className="mt-4 space-y-3">
               <p className="text-sm leading-6 text-stone-600">项目启动、成果汇报与评价、学习反思采用轻量资源授课；知识讲授采用分节学习、小测与助教讲解；项目实践的成果形式由教师在右上角统一设置。</p>

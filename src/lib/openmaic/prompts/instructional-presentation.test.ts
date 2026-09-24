@@ -95,6 +95,17 @@ describe('instructional presentation prompt contract', () => {
     expect(prompt?.system).toContain('not a fixed alternation quota');
     expect(prompt?.system).toContain('Adjacent segments may jointly establish');
     expect(prompt?.system).toContain('Warmth comes from recognizing a plausible difficulty');
+    expect(prompt?.system).toContain('read verbatim by TTS');
+    expect(prompt?.system).toContain('常见混淆：把探究式当自由看资料');
+    expect(prompt?.system).toContain('even after a full lead-in');
+    expect(prompt?.system).toContain('elementId` and `selector` identify the actual rendered target independently');
+    expect(prompt?.system).toContain('rather than at its first incidental mention');
+    expect(prompt?.system).toContain('exact zero-based `occurrence`');
+    expect(prompt?.system).toContain('`endSpeechAnchor` to the final exact spoken phrase');
+    expect(prompt?.system).toContain('One whole-table cue does not replace those row changes');
+    expect(prompt?.system).toContain('A row number, screen location');
+    expect(prompt?.system).toContain('Do not put a series of cases or corrections into one semicolon-linked spoken sentence');
+    expect(prompt?.user).toContain('copy each visual anchor from the exact final spoken words');
     expect(prompt?.system).not.toContain('5-10 objects');
     expect(prompt?.system).not.toContain('**Summary**: Brief recap');
     expect(prompt?.system).toContain('Every generated page, scene, chapter, activity, quiz, and system operation');

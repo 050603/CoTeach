@@ -1,4 +1,5 @@
 import type { Course } from "@/lib/session/types";
+import { parseLLMJson } from "@/lib/llm/client";
 import {
   buildAuthoritativeCourseContext,
   type DelegatedWorkDeliverable,
@@ -38,8 +39,41 @@ type RawDelivery = {
     summary?: unknown;
     content?: unknown;
     documentActions?: unknown;
+    sourceIds?: unknown;
   };
 };
+
+/** Repair a malformed delivery once while leaving upstream call failures to the route. */
+export async function generateDelegatedDeliveryWithRepair(
+  generate: (repair: boolean) => Promise<string>,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const parse = (raw: string): Record<string, unknown> => {
+    const parsed = parseLLMJson<Record<string, unknown>>(raw);
+    const deliverable = parsed?.deliverable;
+    if (!deliverable || typeof deliverable !== "object" || Array.isArray(deliverable)
+      || typeof (deliverable as Record<string, unknown>).content !== "string"
+      || !(deliverable as Record<string, string>).content.trim()) {
+      throw new Error("EMPTY_DELEGATED_DELIVERY");
+    }
+    return parsed;
+  };
+  const first = await generate(false);
+  try {
+    return parse(first);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    console.warn("[ai-collaboration] Delegated delivery needed one structure repair", error instanceof Error ? error.message : error);
+  }
+  const repaired = await generate(true);
+  try {
+    return parse(repaired);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    console.warn("[ai-collaboration] Delegated delivery structure repair failed", error instanceof Error ? error.message : error);
+    return {};
+  }
+}
 
 type RawDocumentAction = {
   operation?: unknown;
@@ -166,12 +200,12 @@ export function buildDelegatedWorkAssessmentPrompts(input: {
     "2. accepted：只有当任务是边缘性、支持性、可核验的子任务，且完成后学生仍需亲自进行核心分析、取舍、创作、验证或结论形成时，才可接单。明确限定 AI 只完成哪一小块，以及学生必须保留什么工作。",
     "3. clarify：项目上下文或任务范围不足以可靠判断，或任务混合了可委派部分与核心部分时，先要求学生缩小范围或澄清，不执行任务。",
     "4. 同一项工作在不同项目中结论可以不同。例如：若项目本身训练资料检索与信息汇总，‘搜集资料并汇总’属于 protected；若项目核心是代码设计、实验论证或研究结论，资料检索可能只是 accepted 的辅助子任务，但资料可信度核验与核心综合仍由学生负责。",
-    "5. needsWebResearch 只在任务必须获得外部事实、数据、网页或时效性信息时为 true；纯整理、格式化、基于现有材料的辅助写作应为 false。",
+    "5. needsWebResearch 是旧版兼容字段，本轮没有联网工具。一般知识可以基于模型知识完成；若任务必须核验实时事实或学生未提供的实测数据，只针对那项事实说明需要可靠材料，仍完成其余可交付部分。教材没有命中不能作为拒绝接单的理由。",
     "6. studentMessage 是唯一直接展示给学生的话。要像组员本人当面回应组长，使用‘我、你、我们’，不要使用‘学生、用户、评价模型、过程证据、protected、accepted、clarify’等后台或第三人称表达，不要复述内部判定过程。",
     "7. 若需要澄清，只问一个容易回答的具体问题，并提供 2—3 个贴合当前文档的选项；若拒绝核心任务，简短说明‘这部分需要由你完成’，随后提出一项我现在就能承担的辅助工作。",
     "",
     "只返回严格 JSON，不使用 Markdown 代码块：",
-    '{"decision":"accepted|protected|clarify","taskTitle":"简短任务名","reason":"供系统留痕的内部判断依据","studentMessage":"直接对学生说的自然回应","protectedLearningWork":"本项目必须由学生保留的核心学习工作","studentResponsibility":"AI 完成后学生仍须亲自完成的内容","proposedScope":"AI 可以承担的精确范围；拒绝时写可替代的辅助范围","needsWebResearch":false,"searchQuery":"需要联网时给出精准检索词，否则为空"}',
+    '{"decision":"accepted|protected|clarify","taskTitle":"简短任务名","reason":"供系统留痕的内部判断依据","studentMessage":"直接对学生说的自然回应","protectedLearningWork":"本项目必须由学生保留的核心学习工作","studentResponsibility":"AI 完成后学生仍须亲自完成的内容","proposedScope":"AI 可以承担的精确范围；拒绝时写可替代的辅助范围","needsWebResearch":false,"searchQuery":""}',
   ].join("\n");
   const user = [
     `学生：${input.studentName}`,
@@ -231,38 +265,6 @@ export function assessmentToBoundaryResponse(
   };
 }
 
-export function unavailableResearchResponse(
-  assessment: DelegatedWorkAssessment,
-): DocumentCollaborationResponse {
-  return {
-    kind: "task-clarification",
-    message: `这项辅助工作可以委派，但它需要真实的外部资料或数据。当前课程没有启用资料检索服务，我不能假装已经搜索或编造来源。\n\n你可以请教师开启资料检索，或把可靠材料放进文档后再安排我汇总。`,
-    focus: assessment.taskTitle,
-    delegation: {
-      decision: "unavailable",
-      reason: "当前课程未启用可核验的资料检索服务。",
-      protectedLearningWork: assessment.protectedLearningWork,
-      studentResponsibility: assessment.studentResponsibility,
-    },
-  };
-}
-
-export function researchTemporarilyUnavailableResponse(
-  assessment: DelegatedWorkAssessment,
-): DocumentCollaborationResponse {
-  return {
-    kind: "task-clarification",
-    message: "这项辅助工作可以委派，但资料检索服务刚才没有返回可靠结果。我没有编造数据或来源，也没有修改文档。你可以稍后重试，或把可靠材料放进文档后让我继续整理。",
-    focus: assessment.taskTitle,
-    delegation: {
-      decision: "unavailable",
-      reason: "资料检索服务暂时未返回可核验结果。",
-      protectedLearningWork: assessment.protectedLearningWork,
-      studentResponsibility: assessment.studentResponsibility,
-    },
-  };
-}
-
 export function buildDelegatedWorkExecutionPrompts(input: {
   course: Course;
   studentId: string;
@@ -277,14 +279,14 @@ export function buildDelegatedWorkExecutionPrompts(input: {
   const system = [
     "你是项目小组中的 AI 组员。任务协调员已经确认这是一项可委派的辅助工作。现在完成精确范围内的实际工作，并像真人组员一样向组长提交可审阅的交付物。",
     "不得扩大范围，不得触碰被保留给学生的核心学习工作，不得替学生形成最终判断或完整成果。输出应当能节省机械劳动，同时仍要求学生核验、取舍并决定是否纳入项目文档。",
-    "只能把提供的检索结果当作外部来源；没有检索结果时，不得声称浏览过网页，不得编造来源、链接、数据或时效性事实。无法确认的内容要明确标为‘待核验’。",
+    "可以运用模型已有知识完成辅助任务；教材片段是可选依据。只能引用提供的教材来源 ID，不得声称浏览过网页，不得编造来源、学生实测数据或实时事实。无法确认的具体事实要标为‘待核验’，但不要因教材缺失而放弃能完成的内容。",
     "交付内容使用简洁 Markdown，可包含标题、列表和表格。不要写成聊天回复，不要包含‘已写入文档’之类的表述。",
     "不要在交付内容末尾附加‘学生需核验、加入前核验、学习责任’等说教式模块；某项事实不确定时，只在对应内容旁简短标注‘待确认’。",
     "你还要像能独立工作的真实组员一样决定这份交付如何进入当前文档，而不是要求学生移动光标或帮你寻找位置。用 documentActions 给出最多 4 个可执行操作：append（文末追加）、insert-before/insert-after（在指定段落前后插入）、replace（替换整个指定段落）、delete（删除整个指定段落）、none（本次只交付资料，不改文档）。",
     "除 append 和 none 外，targetText 必须逐字复制当前文档中的一个完整段落，不能概括、截断或自行创造；content 使用 Markdown。replace/delete 只用于任务确实要求且不涉及学生核心判断的内容。找不到可靠位置时使用 append，不得把定位工作交回给学生。",
     "message 要直接对学生说话，使用‘我、你、我们’，不要出现‘学生需核验、评价模型、过程证据、accepted’等后台措辞。",
     "只返回严格 JSON，不使用 Markdown 代码块：",
-    '{"message":"像组员一样直接向学生说明完成了什么","focus":"本次交付焦点","deliverable":{"title":"交付物标题","summary":"一句话摘要","content":"可独立审阅的 Markdown 内容","documentActions":[{"operation":"append|insert-before|insert-after|replace|delete|none","targetText":"需要定位时逐字复制完整段落，否则为空","content":"该操作要写入的 Markdown；delete/none 时为空","description":"直接告诉学生将对文档做什么"}]}}',
+    '{"message":"像组员一样直接向学生说明完成了什么","focus":"本次交付焦点","deliverable":{"title":"交付物标题","summary":"一句话摘要","content":"可独立审阅的 Markdown 内容","sourceIds":["交付物实际使用的教材来源 ID；没有则为空"],"documentActions":[{"operation":"append|insert-before|insert-after|replace|delete|none","targetText":"需要定位时逐字复制完整段落，否则为空","content":"该操作要写入的 Markdown；delete/none 时为空","description":"直接告诉学生将对文档做什么"}]}}',
   ].join("\n");
   const user = [
     "【已批准的委派边界】",
@@ -308,8 +310,8 @@ export function buildDelegatedWorkExecutionPrompts(input: {
     "【当前对话最近内容】",
     boundedHistory(input.history),
     "",
-    "【外部资料检索结果】",
-    input.researchContext || "（未进行外部检索；不得虚构来源或最新数据）",
+    "【可选教材依据】",
+    input.researchContext || "（没有教材依据；运用已有知识完成可完成的部分）",
   ].filter(Boolean).join("\n");
   return { system, user };
 }
@@ -382,17 +384,22 @@ export function normalizeDelegatedWorkDelivery(input: {
   if (!content) {
     return {
       kind: "task-clarification",
-      message: "我没有形成可可靠交付的内容。请缩小任务范围或补充需要依据的材料。",
+      message: "这次内容生成未完成，请重试。",
       focus: input.assessment.taskTitle,
       delegation: {
-        decision: "clarify",
-        reason: "本次没有形成可核验的交付物。",
+        decision: "unavailable",
+        reason: "模型没有返回可审阅的交付内容。",
         protectedLearningWork: input.assessment.protectedLearningWork,
         studentResponsibility: input.assessment.studentResponsibility,
       },
     };
   }
   const title = cleanText(rawDelivery?.title, 120) || input.assessment.taskTitle;
+  const allowedSources = new Map((input.sources ?? []).filter((source) => source.id).map((source) => [source.id, source]));
+  const usedSourceIds = Array.isArray(rawDelivery?.sourceIds)
+    ? [...new Set(rawDelivery.sourceIds.filter((id): id is string => typeof id === "string" && allowedSources.has(id)))].slice(0, 5)
+    : [];
+  const usedSources = usedSourceIds.flatMap((id) => allowedSources.get(id) ?? []);
   const documentActions = normalizeDocumentActions(rawDelivery?.documentActions, content);
   const changesDocument = documentActions.some((action) => action.operation !== "none");
   return {
@@ -412,8 +419,8 @@ export function normalizeDelegatedWorkDelivery(input: {
       summary: studentFacingText(rawDelivery?.summary, 500) || "我已经完成这项辅助工作，等你决定是否采用。",
       content,
       documentActions,
-      sources: (input.sources ?? []).slice(0, 8),
-      researchMode: input.researchMode,
+      sources: usedSources,
+      researchMode: usedSources.length ? "textbook" : "model",
     },
   };
 }

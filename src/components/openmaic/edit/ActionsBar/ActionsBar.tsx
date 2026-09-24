@@ -27,6 +27,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  ArrowRight,
   Clock3,
   Flag,
   FoldVertical,
@@ -54,12 +55,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@openmaic/components/ui/select';
-import type { Action, DiscussionAction } from '@openmaic/lib/types/action';
+import type { Action, DiscussionAction, LaserAction } from '@openmaic/lib/types/action';
 import {
   getActionTriggerDiagnostic,
   isActivityPauseAction,
 } from './action-trigger-description';
-import { ELEMENT_BOUND, cueLabel, cueMeta } from './cue-meta';
+import { ELEMENT_BOUND, cueLabel, cueMeta, elementLabel } from './cue-meta';
 import { applyCuePreview, clearCuePreview, cuePreviewFor } from './cue-preview';
 import {
   appendDiscussion,
@@ -80,6 +81,8 @@ import {
   type AddableType,
 } from './actions-edit';
 import { WhiteboardEditor } from './WhiteboardEditor';
+import { LaserPathEditor } from './LaserPathEditor';
+import { setLaserPathById } from './laser-path';
 import { appendWhiteboardBlock, boardStepSummary, moveTimelineActionByIdDir, moveWhiteboardBlock, removeWhiteboardBlock, whiteboardBlocks, type WhiteboardBlock } from './whiteboard-edit';
 import {
   audioExists,
@@ -830,9 +833,12 @@ function DiscussionClip({
 function CueMarker({
   action,
   actionIndex,
+  teacherPreparation,
+  elements,
   onTip,
   onDelete,
   onPick,
+  onEditLaser,
   onMoveLeft,
   onMoveRight,
   canMoveLeft,
@@ -842,9 +848,12 @@ function CueMarker({
 }: {
   action: Action;
   actionIndex: number;
+  teacherPreparation: boolean;
+  elements: Array<{ id: string; type: string; name?: string; content?: string }>;
   onTip: React.Dispatch<React.SetStateAction<TooltipState | null>>;
   onDelete: () => void;
   onPick: () => void;
+  onEditLaser: () => void;
   onMoveLeft: () => void;
   onMoveRight: () => void;
   canMoveLeft: boolean;
@@ -860,6 +869,13 @@ function CueMarker({
   const bound = ELEMENT_BOUND.has(action.type);
   const elementId = (action as { elementId?: string }).elementId ?? '';
   const needsTarget = bound && !elementId;
+  const laserRoute = teacherPreparation && action.type === 'laser'
+    ? [action.elementId, ...(action.waypoints ?? []).map((waypoint) => waypoint.elementId)]
+    : null;
+  const routeName = (id: string) => {
+    const element = elements.find((item) => item.id === id);
+    return element ? element.name?.trim() || elementLabel(element, t) : '未选择元素';
+  };
 
   return (
     <div
@@ -876,10 +892,12 @@ function CueMarker({
         clearCuePreview();
       }}
       onClick={() => {
-        if (bound) onPick();
+        if (laserRoute) onEditLaser();
+        else if (bound) onPick();
       }}
       className={cn(
-        'group/cue relative flex h-full w-[108px] shrink-0 flex-col overflow-hidden rounded-xl border border-gray-200/80 bg-white/65 shadow-sm transition-colors dark:border-gray-700/60 dark:bg-stone-800/40',
+        'group/cue relative flex h-full shrink-0 flex-col overflow-hidden rounded-xl border border-gray-200/80 bg-white/65 shadow-sm transition-colors dark:border-gray-700/60 dark:bg-stone-800/40',
+        laserRoute ? 'w-[248px]' : 'w-[108px]',
         bound
           ? 'cursor-pointer hover:border-violet-300/70 dark:hover:border-violet-500/40'
           : 'cursor-grab active:cursor-grabbing',
@@ -909,7 +927,23 @@ function CueMarker({
           <DeleteButton onDelete={onDelete} />
         </span>
       </div>
-      <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-1 pb-1">
+      {laserRoute ? (
+        <div className="flex min-h-0 flex-1 flex-col justify-center gap-1.5 px-3 pb-2">
+          <div className="flex items-center gap-2 text-xs font-semibold text-[#8A3E3E]">
+            <Icon className="size-4" />
+            {laserRoute.length > 1 ? `激光滑动 · ${laserRoute.length} 个目标` : '定点激光'}
+          </div>
+          <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap text-[11px] text-[#5F6B76] [scrollbar-width:thin]" aria-label={`滑动顺序：${laserRoute.map(routeName).join('，然后')}`} title={laserRoute.map(routeName).join(' → ')}>
+            {laserRoute.map((id, index) => (
+              <span key={`${id}-${index}`} className="inline-flex shrink-0 items-center gap-1">
+                {index > 0 && <ArrowRight className="size-3 shrink-0 text-[#A43B38]" />}
+                <span className="max-w-16 truncate rounded bg-[#FFF2F0] px-1.5 py-0.5 text-[#8A3E3E]">{index + 1}. {routeName(id)}</span>
+              </span>
+            ))}
+          </div>
+          <button type="button" onClick={(event) => { event.stopPropagation(); onEditLaser(); }} className="inline-flex min-h-11 w-fit items-center rounded px-1 text-[11px] font-semibold text-[#344A6A] hover:bg-[#EEF1F3] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#344A6A]">编辑路径与触发</button>
+        </div>
+      ) : <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-1 pb-1">
         <span className={cn('flex size-8 items-center justify-center rounded-full', m.glyph)}>
           <Icon className="size-4" />
         </span>
@@ -926,7 +960,7 @@ function CueMarker({
             {needsTarget ? t('edit.timeline.pickElement') : t('edit.timeline.bound')}
           </span>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -1113,6 +1147,7 @@ export function ActionsBar({
   const [dragOver, setDragOver] = useState<number | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [editingBoard, setEditingBoard] = useState<{ sceneId: string; id: string } | null>(null);
+  const [editingLaserId, setEditingLaserId] = useState<string | null>(null);
   const [regenAll, setRegenAll] = useState(false);
   const [ttsRefresh, setTtsRefresh] = useState(0); // bump → speech clips re-check audio status
   const reduce = useReducedMotion();
@@ -1272,6 +1307,8 @@ export function ActionsBar({
   };
 
   const boards = teacherPreparation ? whiteboardBlocks(actions) : [];
+  const slideElements = scene?.content?.type === 'slide' ? scene.content.canvas.elements : [];
+  const editingLaser = actions.find((action): action is LaserAction => action.id === editingLaserId && action.type === 'laser');
   const items = actions.flatMap((action, index) => {
     if (boards.some((board) => index > board.start && index <= board.end)) return [];
     const block = boards.find((board) => board.start === index);
@@ -1285,7 +1322,10 @@ export function ActionsBar({
     <section
       ref={sectionRef}
       style={{ height: lineMode ? LINE_H : height }}
-      className="relative flex flex-col border-t border-gray-100 bg-white/80 backdrop-blur-xl dark:border-gray-800 dark:bg-stone-900/80"
+      className={cn(
+        'relative flex flex-col border-t border-gray-100 bg-white/80 backdrop-blur-xl dark:border-gray-800 dark:bg-stone-900/80',
+        teacherPreparation && 'border-[#D8D6D0] bg-[#FCFBF8] text-[#1F2933] backdrop-blur-none',
+      )}
     >
       {!lineMode && (
         <div
@@ -1307,7 +1347,7 @@ export function ActionsBar({
         >
           <span className="size-1.5 rounded-full bg-primary" />
           <span className="text-[12px] font-medium tracking-[0.18em] text-foreground/80">
-            {t('edit.timeline.title')}
+            {teacherPreparation ? '讲解流程' : t('edit.timeline.title')}
           </span>
         </button>
 
@@ -1315,7 +1355,7 @@ export function ActionsBar({
           <div className="min-w-0 flex-1 overflow-x-auto max-md:order-last max-md:basis-full [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <div className="flex min-w-max items-center gap-1.5 border-l border-gray-200/70 pl-3 dark:border-gray-700/60">
               <span className="text-[10px] text-muted-foreground/45">
-                {t('edit.timeline.dragToAdd')}
+                {teacherPreparation ? '按播放顺序添加' : t('edit.timeline.dragToAdd')}
               </span>
               {palette.map((pt) => {
                 const Icon = cueMeta(pt).icon;
@@ -1341,7 +1381,10 @@ export function ActionsBar({
                     className="inline-flex min-h-11 cursor-grab items-center gap-1 whitespace-nowrap rounded-[6px] border border-border bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground active:cursor-grabbing"
                   >
                     <Icon className="size-3" />
-                    {cueLabel(pt, t)}
+                    {teacherPreparation && pt === 'speech' ? '讲稿'
+                      : teacherPreparation && pt === 'spotlight' ? '聚焦元素'
+                        : teacherPreparation && pt === 'laser' ? '激光指引'
+                          : cueLabel(pt, t)}
                   </button>
                 );
               })}
@@ -1598,9 +1641,12 @@ export function ActionsBar({
                             <CueMarker
                               action={action}
                               actionIndex={index}
+                              teacherPreparation={teacherPreparation}
+                              elements={slideElements}
                               onTip={setTip}
                               onDelete={() => commit((cur) => removeById(cur, key))}
                               onPick={onPick}
+                              onEditLaser={() => { setTip(null); setEditingLaserId(key); }}
                               onMoveLeft={() => commit((cur) => nudge(cur, key, -1))}
                               onMoveRight={() => commit((cur) => nudge(cur, key, 1))}
                               canMoveLeft={index > 0}
@@ -1626,6 +1672,16 @@ export function ActionsBar({
       </div>
 
       {tip && <CueTooltip tip={tip} />}
+      {scene && editingLaser && <LaserPathEditor
+        key={`${sceneId}:${editingLaser.id}`}
+        action={editingLaser}
+        scene={scene}
+        onClose={() => setEditingLaserId(null)}
+        onSave={(draft) => {
+          commit((current) => setLaserPathById(current, editingLaser.id, draft));
+          setEditingLaserId(null);
+        }}
+      />}
       {editingBoard?.sceneId === sceneId && <WhiteboardEditor
         key={`${sceneId}:${editingBoard.id}`}
         sceneId={sceneId}

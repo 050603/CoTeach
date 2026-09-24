@@ -6,13 +6,15 @@ import {
 } from "./pbl-course-config";
 
 describe("PBL course configuration", () => {
-  it("defaults legacy courses to LLM resource inquiry and preserves the teacher web-search choice", () => {
+  it("defaults project-practice web search off while preserving old config values", () => {
     expect(normalizePblCourseConfig().resourceInquiryMode).toBe("llm");
-    expect(normalizePblCourseConfig().practiceWebSearchEnabled).toBe(true);
+    expect(normalizePblCourseConfig().practiceWebSearchEnabled).toBe(false);
     expect(normalizePblCourseConfig({ resourceInquiryMode: "web-search" }).resourceInquiryMode)
       .toBe("web-search");
     expect(normalizePblCourseConfig({ practiceWebSearchEnabled: false }).practiceWebSearchEnabled)
       .toBe(false);
+    expect(normalizePblCourseConfig({ practiceWebSearchEnabled: true }).practiceWebSearchEnabled)
+      .toBe(true);
   });
 
   it("defaults to a personal project with a process recorder", () => {

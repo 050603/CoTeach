@@ -103,7 +103,29 @@ try {
         const signature = `${sceneId}:${kind}:${targetId}:${audio?.src}`;
         if (observedNodes.get(node) === signature) continue;
         observedNodes.set(node, signature);
-        window.__visibleCues.push({ ...insertedNodes.get(node), kind, sceneId, targetId, phase: window.__previewPhase, at: performance.now(), width: rect.width, height: rect.height, audioTime: audio?.currentTime, audioUrl: audio?.src, playbackRate: audio?.playbackRate });
+        const observation = { ...insertedNodes.get(node), kind, sceneId, targetId, phase: window.__previewPhase, at: performance.now(), width: rect.width, height: rect.height, audioTime: audio?.currentTime, audioUrl: audio?.src, playbackRate: audio?.playbackRate };
+        window.__visibleCues.push(observation);
+        if (kind === 'spotlight') setTimeout(() => {
+          if (!node.isConnected) return;
+          const outline = node.querySelector('rect[stroke]');
+          if (!outline) return;
+          const outlineRect = outline.getBoundingClientRect();
+          const host = node.closest('[data-stage-host-mode]');
+          const table = [...(host?.querySelectorAll('[data-slide-element-id]') ?? [])]
+            .find((candidate) => candidate.getAttribute('data-slide-element-id') === targetId
+              && candidate.classList.contains('screen-element')
+              && candidate.querySelectorAll('tr').length > 0);
+          if (!table) return;
+          const focusY = outlineRect.top + outlineRect.height / 2;
+          const rows = [...table.querySelectorAll('tr')].map((row, rowIndex) => ({
+            rowIndex, centerY: row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2,
+          }));
+          const nearest = rows.sort((left, right) => Math.abs(left.centerY - focusY) - Math.abs(right.centerY - focusY))[0];
+          if (nearest) {
+            observation.rowIndex = nearest.rowIndex;
+            observation.rowDeltaPx = Math.abs(nearest.centerY - focusY);
+          }
+        }, 400);
       }
     }, 30);
   });
@@ -236,6 +258,74 @@ try {
     const required = [...new Set(scene.actions.flatMap((action) => ['laser', 'spotlight'].includes(action.type) ? [action.type] : action.type.startsWith('wb_draw_') ? ['whiteboard'] : []))];
     const duration = scene.actions.filter((action) => action.type === 'speech').reduce((sum, action) => sum + (action.audioDurationSec ?? 30), 0);
     if (required.length) await page.waitForFunction(({ id, kinds }) => kinds.every((kind) => window.__visibleCues.some((cue) => cue.sceneId === id && cue.kind === kind && (kind !== 'spotlight' || cue.phase === 'after-pause-resume-speed'))), { id: scene.id, kinds: required }, { timeout: Math.max(30_000, Math.ceil(duration * 1000 + 15_000)) });
+    if (process.argv.includes('--observe-all-spotlights')) {
+      const expected = scene.actions.filter((action) => action.type === 'spotlight' && action.selector?.rowIndex !== undefined);
+      if (expected.length) {
+        const speechById = new Map(scene.actions.filter((action) => action.type === 'speech').map((action) => [action.id, action]));
+        const targets = expected.map((action) => ({
+          rowIndex: action.selector.rowIndex,
+          audioUrl: new URL(speechById.get(action.speechId).audioUrl, baseUrl).href,
+          offsetMs: action.speechOffsetMs,
+        }));
+        await page.waitForFunction(({ id, targets }) => {
+          const cues = window.__visibleCues.filter((cue) => cue.sceneId === id && cue.kind === 'spotlight' && Number.isInteger(cue.rowIndex));
+          let cursor = 0;
+          return targets.every((target) => {
+            const index = cues.findIndex((cue, position) => position >= cursor
+              && cue.rowIndex === target.rowIndex && cue.audioUrl === target.audioUrl
+              && Math.abs(cue.audioTime * 1000 - target.offsetMs) <= 800);
+            if (index < cursor) return false;
+            cursor = index + 1;
+            return true;
+          });
+        }, { id: scene.id, targets }, { timeout: Math.max(30_000, Math.ceil(duration * 1000 + 15_000)) });
+        const observed = await page.evaluate((id) => window.__visibleCues.filter((cue) => cue.sceneId === id && cue.kind === 'spotlight' && Number.isInteger(cue.rowIndex)), scene.id);
+        report.rowObservations = observed.map((cue) => ({ targetId: cue.targetId, rowIndex: cue.rowIndex, rowDeltaPx: cue.rowDeltaPx, audioTime: cue.audioTime, audioUrl: cue.audioUrl }));
+        const speechesById = new Map(scene.actions.filter((action) => action.type === 'speech').map((action) => [action.id, action]));
+        let cursor = 0;
+        report.rowSwitches = expected.map((action) => {
+          const speech = speechesById.get(action.speechId);
+          const audioUrl = speech?.audioUrl ? new URL(speech.audioUrl, baseUrl).href : null;
+          const matchIndex = observed.findIndex((cue, index) => index >= cursor
+            && cue.rowIndex === action.selector.rowIndex && cue.audioUrl === audioUrl
+            && Math.abs(cue.audioTime * 1000 - action.speechOffsetMs) <= 800);
+          assert.ok(matchIndex >= cursor, `Missing rendered row ${action.selector.rowIndex} at ${action.speechAnchor?.quote ?? action.id}`);
+          cursor = matchIndex + 1;
+          return { actionId: action.id, rowIndex: action.selector.rowIndex,
+            expectedMs: action.speechOffsetMs, actualMs: observed[matchIndex].audioTime * 1000,
+            rowDeltaPx: observed[matchIndex].rowDeltaPx };
+        });
+      }
+    }
+    if (process.argv.includes('--seek-subtitle')) {
+      const subtitleViewport = host.getByLabel('讲解字幕，可滚动浏览或拖动查看');
+      const subtitleLine = host.getByRole('button', { name: /^从此处重新播放：/ }).first();
+      await subtitleLine.waitFor({ state: 'visible' });
+      const box = await subtitleViewport.boundingBox();
+      assert.ok(box, 'Subtitle viewport has no geometry');
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 - 70, { steps: 5 });
+      await page.mouse.up();
+      await subtitleViewport.dispatchEvent('wheel', { deltaY: -120 });
+      const seekAt = await page.evaluate(() => performance.now());
+      await subtitleLine.click();
+      const firstSpeech = scene.actions.find((action) => action.type === 'speech' && action.audioUrl);
+      assert.ok(firstSpeech, 'Scene has no first audio speech');
+      const firstAudioUrl = new URL(firstSpeech.audioUrl, baseUrl).href;
+      await page.waitForFunction((url) => {
+        const active = window.__previewAudio.findLast((audio) => !audio.paused && !audio.ended);
+        return active?.src === url && active.currentTime > 0.1 && active.currentTime < 4;
+      }, firstAudioUrl, { timeout: 15_000 });
+      const firstSpotlight = scene.actions.find((action) => action.type === 'spotlight'
+        && action.speechId === firstSpeech.id && action.selector?.rowIndex !== undefined);
+      if (firstSpotlight) {
+        await page.waitForFunction(({ id, since, rowIndex }) => window.__visibleCues.some((cue) => (
+          cue.sceneId === id && cue.kind === 'spotlight' && cue.at > since && cue.rowIndex === rowIndex
+        )), { id: scene.id, since: seekAt, rowIndex: firstSpotlight.selector.rowIndex }, { timeout: 30_000 });
+      }
+      report.controls.subtitleDragSeek = true;
+    }
     const visible = await page.evaluate((id) => window.__visibleCues.filter((cue) => cue.sceneId === id), scene.id);
     const synchronizedSpotlights = visible.filter((cue) => cue.kind === 'spotlight' && cue.audioUrl).flatMap((cue) => {
       const candidates = scene.actions.filter((action) => action.type === 'spotlight' && action.elementId === cue.targetId).flatMap((action) => {

@@ -97,9 +97,11 @@ export function EditChromeRoot({ scene, isEditable, onToggleEditMode, courseId }
   return (
     <EditShell
       scene={scene}
+      teacherPreparation={Boolean(courseId)}
       commandPlacement={courseId ? 'navigation' : 'top'}
       leftRail={(controls) => (
         <SlideNavRail
+          teacherPreparation={Boolean(courseId)}
           editorControls={courseId ? controls : undefined}
           brand={courseId ? {
             src: '/brand/coteach/horizontal-solid.png',
@@ -123,6 +125,7 @@ export function EditChromeRoot({ scene, isEditable, onToggleEditMode, courseId }
           deleteSessionAndRefresh={agentRuntime.deleteSessionAndRefresh}
           refreshSessions={agentRuntime.refreshSessions}
           aiOnly={Boolean(courseId)}
+          teacherPreparation={Boolean(courseId)}
           openSignal={aiOpenSignal}
         />
       }

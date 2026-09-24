@@ -20,12 +20,13 @@ import {
 } from "lucide-react";
 import type {
   DelegatedWorkDocumentAction,
+  DelegatedWorkSource,
   DocumentCollaborationResponse,
 } from "@/lib/ai-collaboration/document-policy";
 import { cn } from "@/lib/utils";
 import { AiMemberMarkdown } from "./ai-member-markdown";
 import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
-import { ProjectMemoryPanel, ProjectSupportCard } from "./project-support-cards";
+import { ProjectMemoryPanel, ProjectReplyContent, ProjectSupportCard } from "./project-support-cards";
 
 export type AiMemberWorkspaceMessage = {
   id: string;
@@ -49,8 +50,8 @@ export type AiMemberPendingDelivery = {
   summary: string;
   content: string;
   documentActions: DelegatedWorkDocumentAction[];
-  sources: Array<{ title: string; url: string; note: string }>;
-  researchMode: "web" | "model" | "none";
+  sources: DelegatedWorkSource[];
+  researchMode: "web" | "textbook" | "model" | "none";
   error?: string | null;
 };
 
@@ -263,7 +264,7 @@ export function AiMemberWorkspace({
                 </span>
               </div>
               {message.role === "assistant" ? (
-                <><AiMemberMarkdown content={message.content} /><ProjectSupportCard support={message.support} /></>
+                <><ProjectReplyContent content={message.content} support={message.support} /><ProjectSupportCard replyContent={message.content} support={message.support} /></>
               ) : (
                 <p className="whitespace-pre-wrap">{message.content}</p>
               )}
@@ -334,12 +335,16 @@ export function AiMemberWorkspace({
                   <div className="rounded-lg border border-stone-200 bg-white p-2.5">
                     <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-stone-500"><ExternalLink size={12} />使用的资料来源</p>
                     <div className="mt-2 space-y-2">
-                      {pendingDelivery.sources.map((source) => (
-                        <a className="block rounded-lg bg-stone-50 px-2.5 py-2 text-xs text-stone-700 transition hover:bg-stone-100" href={source.url} key={source.url} rel="noreferrer" target="_blank">
+                      {pendingDelivery.sources.map((source, index) => {
+                        const sourceContent = <>
                           <span className="font-semibold text-sky-700">{source.title}</span>
+                          {source.locator ? <span className="ml-1 text-[10px] text-stone-500">{source.locator}</span> : null}
                           {source.note ? <span className="mt-0.5 block line-clamp-2 text-[10px] leading-4 text-stone-500">{source.note}</span> : null}
-                        </a>
-                      ))}
+                        </>;
+                        return source.url
+                          ? <a className="block rounded-lg bg-stone-50 px-2.5 py-2 text-xs text-stone-700 transition hover:bg-stone-100" href={source.url} key={source.id ?? source.url} rel="noreferrer" target="_blank">{sourceContent}</a>
+                          : <div className="rounded-lg bg-stone-50 px-2.5 py-2 text-xs text-stone-700" key={source.id ?? index}>{sourceContent}</div>;
+                      })}
                     </div>
                   </div>
                 ) : null}

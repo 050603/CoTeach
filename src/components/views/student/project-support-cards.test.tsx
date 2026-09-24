@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ProjectMemoryPanel, ProjectSupportCard } from "./project-support-cards";
+import { ProjectMemoryPanel, ProjectReplyContent, ProjectSupportCard } from "./project-support-cards";
 
 describe("project support cards", () => {
   it("shows textbook evidence, web evidence, knowledge links, and the next verification step", () => {
@@ -16,9 +16,27 @@ describe("project support cards", () => {
       retrievalNote: "教材不足后补充联网资料。",
     }} />);
 
-    expect(screen.getByText("1 条教材依据 · 1 条网页来源")).toBeInTheDocument();
+    expect(screen.getByText("1 条教材参考 · 1 条网页来源")).toBeInTheDocument();
     expect(screen.getByText("控制变量")).toBeInTheDocument();
     expect(screen.getByText(/只改变一个变量/)).toBeInTheDocument();
+  });
+
+  it("renders structured and legacy sections without duplicate next steps", () => {
+    const support = {
+      sources: [], knowledgePointIds: [], knowledgePoints: [], retrievalStatus: "not-needed" as const,
+      nextStep: "对比结果。",
+      replyBlocks: [
+        { type: "answer" as const, content: "先确定变量。", sourceIds: [] },
+        { type: "next-step" as const, content: "对比结果。", sourceIds: [] },
+      ],
+    };
+    const { rerender } = render(<><ProjectReplyContent content="兼容文本" support={support} /><ProjectSupportCard replyContent="兼容文本" support={support} /></>);
+    expect(screen.getByText("下一步")).toBeInTheDocument();
+    expect(screen.getAllByText("对比结果。")).toHaveLength(1);
+    rerender(<ProjectReplyContent content={"观察：先记录现象。\n可执行支架：试两组输入。"} />);
+    expect(screen.getByText("现状分析")).toBeInTheDocument();
+    expect(screen.getByText("建议做法")).toBeInTheDocument();
+    expect(screen.queryByText(/观察：/)).not.toBeInTheDocument();
   });
 
   it("lets the student correct a remembered item", () => {

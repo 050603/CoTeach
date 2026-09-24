@@ -508,7 +508,13 @@ function prepareKnowledgeStructureForTeacherReview(
   for (const point of knowledgePoints) {
     const parentTargetIds = [...new Set((point.sourceKnowledgePointIds ?? []).flatMap((sourceId) => {
       const parentSourceId = sourcePointById.get(sourceId)?.parentKnowledgePointId;
-      return parentSourceId ? targetsBySourceId.get(parentSourceId) ?? [] : [];
+      if (!parentSourceId) return [];
+      const parentTargets = targetsBySourceId.get(parentSourceId) ?? [];
+      // Source hierarchy identifies a teach-first target only when the parent
+      // survives as its own lesson node. A mapped or shared source is evidence,
+      // not an ordering instruction for the model's reorganized lesson nodes.
+      return parentTargets.length === 1 && parentTargets[0] === parentSourceId
+        ? parentTargets : [];
     }))].filter((parentId) => parentId !== point.id);
     if (parentTargetIds.length) point.parentKnowledgePointIds = parentTargetIds;
   }

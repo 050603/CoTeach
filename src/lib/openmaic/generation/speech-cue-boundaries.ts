@@ -21,6 +21,62 @@ export function findSpeechCueAnchorRange(
   return null;
 }
 
+/** Resolve an authored phrase only when alignment covers all of its spoken words.
+ * A gap containing punctuation or whitespace is harmless; a missing word is not.
+ */
+export function resolveAlignedSpeechCueAnchor(
+  text: string,
+  spans: readonly { startChar: number; endChar: number; startMs: number; endMs: number }[],
+  anchor: SpeechCueAnchor,
+): { startMs: number; endMs: number } | null {
+  const range = findSpeechCueAnchorRange(text, anchor);
+  if (!range) return null;
+  return resolveAlignedSpeechCueRange(text, spans, range.start, range.end);
+}
+
+/** Resolve a spoken character interval only when every lexical character is aligned. */
+export function resolveAlignedSpeechCueRange(
+  text: string,
+  spans: readonly { startChar: number; endChar: number; startMs: number; endMs: number }[],
+  start: number,
+  end: number,
+): { startMs: number; endMs: number } | null {
+  if (start < 0 || end <= start || end > text.length) return null;
+  const relevant = spans.filter((span) => span.endChar > start && span.startChar < end);
+  if (!relevant.length) return null;
+  let coveredUntil = start;
+  for (const span of relevant) {
+    const gapEnd = Math.min(end, span.startChar);
+    if (gapEnd > coveredUntil && /[\p{L}\p{N}]/u.test(text.slice(coveredUntil, gapEnd))) return null;
+    coveredUntil = Math.max(coveredUntil, span.endChar);
+  }
+  if (coveredUntil < end && /[\p{L}\p{N}]/u.test(text.slice(coveredUntil, end))) return null;
+  return { startMs: relevant[0]!.startMs, endMs: relevant[relevant.length - 1]!.endMs };
+}
+
+/** Map a sentence boundary to audio without jumping across unaligned words. */
+export function resolveAlignedSpeechCueBoundary(
+  text: string,
+  spans: readonly { startChar: number; endChar: number; startMs: number; endMs: number }[],
+  charIndex: number,
+  edge: 'start' | 'end',
+): number | null {
+  const index = Math.max(0, Math.min(text.length, charIndex));
+  const containing = spans.find((span) => edge === 'start'
+    ? span.startChar <= index && span.endChar > index
+    : span.startChar < index && span.endChar >= index);
+  if (containing) return edge === 'start' ? containing.startMs : containing.endMs;
+  const nearest = edge === 'start'
+    ? spans.find((span) => span.startChar >= index)
+    : [...spans].reverse().find((span) => span.endChar <= index);
+  if (!nearest) return null;
+  const gap = edge === 'start'
+    ? text.slice(index, nearest.startChar)
+    : text.slice(nearest.endChar, index);
+  if (/[\p{L}\p{N}]/u.test(gap)) return null;
+  return edge === 'start' ? nearest.startMs : nearest.endMs;
+}
+
 /**
  * The implicit lifetime of an anchored cue ends with the sentence containing
  * its start anchor. Newlines and semicolons are intentional teaching pauses.

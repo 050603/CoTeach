@@ -54,6 +54,40 @@ function raw(text = '先看看学校简介。它有没有写出这个年份？',
 }
 
 describe('independent first-pass teaching narration', () => {
+  it('makes rendered table rows addressable for repeated case and correction cues in the first call', async () => {
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({
+      pages: [{ pageId: 'page-a', segments: [{
+        text: '如果学生做出作品，就需要交付。只看资料还不足以形成结论。',
+        semanticIds: ['page-a:teaching'],
+      }] }],
+    }));
+    const table = {
+      elements: [{
+        id: 'real-table', type: 'table', left: 20, top: 100, width: 600, height: 240, rotate: 0,
+        outline: {}, colWidths: [0.4, 0.6], cellMinHeight: 40,
+        data: [
+          [{ id: 'head', text: '模式', colspan: 1, rowspan: 1 }],
+          [{ id: 'case-a', text: '<b>交付作品</b>', colspan: 1, rowspan: 1 }],
+          [{ id: 'case-b', text: '收集证据', colspan: 1, rowspan: 1 }],
+        ],
+      }],
+    } as unknown as GeneratedSlideContent;
+    await generateTeachingSectionNarration({
+      sectionId: 'section-a', pages: [{ outline: outline(), content: table }],
+      requirements: { requirement: '讲清比较' }, aiCall,
+    });
+    const prompt = JSON.parse(aiCall.mock.calls[0][1]);
+    expect(prompt.pages[0].actualSlide.elements[0].table.rows).toEqual([
+      { rowIndex: 0, cells: [{ columnIndex: 0, text: '模式' }] },
+      { rowIndex: 1, cells: [{ columnIndex: 0, text: '交付作品' }] },
+      { rowIndex: 2, cells: [{ columnIndex: 0, text: '收集证据' }] },
+    ]);
+    expect(prompt.visualCueExamples.tableRowReturn.anchors.map((anchor: { target: { selector: { rowIndex: number } } }) => anchor.target.selector.rowIndex))
+      .toEqual([1, 2, 1, 2]);
+    expect(aiCall.mock.calls[0][0]).toContain('Multiple anchors may share one semanticId within one segment');
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
   it('authors a complete section after seeing every actual slide and returns each page once', async () => {
     const first = {
       ...outline(), lectureSectionId: 'section-a', teachingUnitIds: ['unit-a'],
@@ -99,10 +133,22 @@ describe('independent first-pass teaching narration', () => {
     expect(aiCall.mock.calls[0][0]).toContain('standalone AI resource must feel complete');
     expect(aiCall.mock.calls[0][0]).toContain('synthesize what the learner can now explain or do');
     expect(aiCall.mock.calls[0][0]).toContain('温暖、清楚地逐步解释');
-    expect(aiCall.mock.calls[0][0]).toContain('copied as one contiguous substring from that exact finalized segment text');
+    expect(aiCall.mock.calls[0][0]).toContain('copy each anchor quote as one contiguous substring from that exact finalized segment text');
     expect(aiCall.mock.calls[0][0]).toContain('One natural segment may contain several visual focus changes');
     expect(aiCall.mock.calls[0][0]).toContain('Do not split fluent speech merely to end a visual cue');
+    expect(aiCall.mock.calls[0][0]).toContain('read verbatim by TTS to learners');
+    expect(aiCall.mock.calls[0][0]).toContain('常见混淆：把探究式当自由看资料');
+    expect(aiCall.mock.calls[0][0]).toContain('even after a complete lead-in');
+    expect(aiCall.mock.calls[0][0]).toContain('放到同一个主题上');
+    expect(aiCall.mock.calls[0][0]).toContain('The speech quote and visual target are independent');
+    expect(aiCall.mock.calls[0][0]).toContain('not at the first incidental mention');
+    expect(aiCall.mock.calls[0][0]).toContain('exact zero-based occurrence');
+    expect(aiCall.mock.calls[0][0]).toContain('spotlight that continues across sentences');
     expect(aiCall.mock.calls[0][0]).toContain('Choose spotlight for sustained explanation of text');
+    expect(aiCall.mock.calls[0][0]).toContain('repeat the row-specific cues at each correction sentence');
+    expect(aiCall.mock.calls[0][0]).toContain('the teacher must still say the actual process steps');
+    expect(aiCall.mock.calls[0][0]).toContain('finish the example comparison before returning to each misconception');
+    expect(aiCall.mock.calls[0][0]).toContain('Never join successive case comparisons or misconception corrections with semicolons');
     expect(aiCall.mock.calls[0][0]).toContain('multi-target laser only to trace an explicit order');
     expect(aiCall.mock.calls[0][0]).toContain('A comparison of prose blocks or table rows is not a laser path');
     expect(prompt.visualCueExamples.orderedPath.waypoints[0].elementId).toContain('actualSlide');
@@ -124,6 +170,7 @@ describe('independent first-pass teaching narration', () => {
     expect(prompt.teacherVoice).toEqual({ name: '林老师', role: 'teacher' });
     expect(generated.pages[0]?.segments[0]?.text).toMatch(/^同学们好，欢迎来到《AI信息核验》课程。/);
     expect(generated.pages[1]?.segments.at(-1)?.text).toMatch(/感谢大家的认真参与，同学们再见。$/);
+    expect(aiCall).toHaveBeenCalledOnce();
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0], response.pages[0]] }, 'section-a', [first, second])).toThrow('重复返回页面');
     expect(() => normalizeTeachingSectionNarration({ pages: [response.pages[0]] }, 'section-a', [first, second])).toThrow('缺少页面');
   });
@@ -173,6 +220,31 @@ describe('independent first-pass teaching narration', () => {
     }, previous, current);
     expect(withoutAnchor).toContain('判断一段表述是否规定稳定结构');
     expect(withoutAnchor).not.toContain('并未讲过的项目问题');
+  });
+
+  it('does not prepend another transition to an adopted bridge that already starts with one', () => {
+    const previous = outline();
+    const current: SceneOutline = {
+      ...outline(), id: 'page-b',
+      teachingBrief: {
+        ...outline().teachingBrief!,
+        teachingPlan: {
+          ...outline().teachingBrief!.teachingPlan!,
+          entryPoint: {
+            kind: 'continuation', object: '项目式的成果要求',
+            bridge: '那么这里的作品为什么重要',
+          },
+        },
+      },
+    };
+    const quote = '项目式必须交付最终作品';
+    const grounded = groundPreviousPageNarrationLead({
+      id: 'page-b:speech-1', pageId: 'page-b',
+      text: `上一页已经说过作品。${quote}。`,
+      semanticIds: ['page-b:teaching'],
+      anchors: [{ id: 'a1', semanticId: 'page-b:teaching', quote, occurrence: 0 }],
+    }, previous, current);
+    expect(grounded).toBe(`那么这里的作品为什么重要。${quote}。`);
   });
 
   it('uses the full progression when a section preview is followed by a quiz', async () => {
@@ -360,6 +432,9 @@ describe('independent first-pass teaching narration', () => {
     });
     expect(aiCall).toHaveBeenCalledOnce();
     expect(aiCall.mock.calls[0][0]).toContain('read verbatim by TTS');
+    expect(aiCall.mock.calls[0][0]).toContain('Teaching-plan fields and slide text supply knowledge');
+    expect(aiCall.mock.calls[0][0]).toContain('常见混淆：把探究式当自由看资料');
+    expect(aiCall.mock.calls[0][0]).toContain('Do not use a Chinese or ASCII colon in spoken text');
     expect(aiCall.mock.calls[0][0]).toContain('Answer in Chinese');
     expect(aiCall.mock.calls[0][0]).toContain('do not execute their quizzes, reveal their answers');
     expect(aiCall.mock.calls[0][0]).toContain('introduced and deepened nodes');

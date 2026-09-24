@@ -1063,7 +1063,7 @@ export async function generateLegacyCustomizedSlideContent(
  */
 type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['questionTypes'][number];
 
-export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v7-efficient-responses';
+export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v8-diagnostic-choices';
 
 const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
   single: 'single_choice',
@@ -1108,7 +1108,7 @@ function quizTestPointResponseContract(type: PlannedQuizQuestionType): string {
     case 'matching':
       return 'Convert the target into explicit object-to-object correspondences. The learner only submits the matches.';
     case 'multiple':
-      return 'Ask for all conclusions that meet one clear criterion. Put shared facts in the stem and only the decisive differences in concise, parallel options; explain the reasoning after grading.';
+      return 'Ask for all conclusions that meet one clear criterion. Include at least two plausible incorrect alternatives; with four options, use two correct and two incorrect answers. Put shared facts in the stem and only the decisive differences in concise, parallel options; explain the reasoning after grading.';
     case 'single':
     default:
       return 'Ask for one decision on one criterion. Put shared facts in the stem and only the decisive differences in concise, parallel options; explain the reasoning after grading. Do not turn several independent judgments into four complete written plans.';
@@ -1127,7 +1127,11 @@ function formatQuizTestPoints(
   }).join('\n');
 }
 
-function validateGeneratedQuizQuality(questions: unknown[], title: string): void {
+function validateGeneratedQuizQuality(
+  questions: unknown[],
+  title: string,
+  requireTwoMultipleChoiceDistractors = false,
+): void {
   const issues: string[] = [];
   const seenIds = new Set<string>();
 
@@ -1171,6 +1175,9 @@ function validateGeneratedQuizQuality(questions: unknown[], title: string): void
     }));
     if (optionRecords.length > 0 && correctValues.size === optionRecords.length) {
       issues.push(`question ${questionNumber} marks every multiple-choice option as correct`);
+    } else if (requireTwoMultipleChoiceDistractors && correctValues.size > 0
+      && optionRecords.length - correctValues.size < 2) {
+      issues.push(`question ${questionNumber} has fewer than two incorrect multiple-choice options`);
     }
   });
 
@@ -1195,15 +1202,19 @@ async function generateQuizContent(
   const exactQuestionTypePlan = quizConfig.questionTypePlan?.length === quizConfig.questionCount
     ? [...quizConfig.questionTypePlan]
     : undefined;
+  const requestedFormats = quizConfig.questionTypes.length > 0
+    ? [...quizConfig.questionTypes]
+    : selectQuizFormats({
+        objectiveText: [outline.teachingObjective, outline.title, outline.description, ...(outline.keyPoints ?? [])].filter(Boolean).join(' '),
+        difficulty: quizConfig.difficulty,
+        questionCount: quizConfig.questionCount,
+      });
+  // Matching has no spare distractors. Keep explicitly planned legacy items
+  // readable, but do not select it automatically for new diagnostic quizzes.
+  const unplannedFormats = requestedFormats.filter((type) => type !== 'matching');
   const questionFormats = exactQuestionTypePlan ?? (shortAnswerOnly
     ? ['short_answer']
-    : quizConfig.questionTypes.length > 0
-      ? [...quizConfig.questionTypes]
-      : selectQuizFormats({
-          objectiveText: [outline.teachingObjective, outline.title, outline.description, ...(outline.keyPoints ?? [])].filter(Boolean).join(' '),
-          difficulty: quizConfig.difficulty,
-          questionCount: quizConfig.questionCount,
-        }));
+    : unplannedFormats.length > 0 ? unplannedFormats : ['single', 'multiple', 'true_false']);
   const coverageInstruction = shortAnswerOnly
     ? quizConfig.questionCount === 1
       ? 'the single comprehensive short-answer question must require and carry every allowed knowledgePointId for this section'
@@ -1241,7 +1252,7 @@ async function generateQuizContent(
     if (generatedQuestions.length !== quizConfig.questionCount) {
       throw new Error(`Quiz "${outline.title}" returned ${generatedQuestions.length}/${quizConfig.questionCount} questions`);
     }
-    validateGeneratedQuizQuality(generatedQuestions, outline.title);
+    validateGeneratedQuizQuality(generatedQuestions, outline.title, !exactQuestionTypePlan && !shortAnswerOnly);
     const normalized = normalizeQuizQuestions(generatedQuestions, outline.knowledgePointIds?.length
       ? { allowedKnowledgePointIds: outline.knowledgePointIds }
       : {});

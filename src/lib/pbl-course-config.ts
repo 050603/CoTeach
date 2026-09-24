@@ -137,7 +137,7 @@ export const DEFAULT_PBL_COURSE_CONFIG: PblCourseConfig = {
   outcome: DEFAULT_PBL_OUTCOME,
   companionIds: PBL_COMPANION_ORDER,
   resourceInquiryMode: "llm",
-  practiceWebSearchEnabled: true,
+  practiceWebSearchEnabled: false,
   makeArtifactMode: "document",
   inquiryQuestions: [],
   evaluationModel: "tri-party",
@@ -219,7 +219,7 @@ export function normalizePblCourseConfig(
     },
     companionIds,
     resourceInquiryMode: input?.resourceInquiryMode === "web-search" ? "web-search" : "llm",
-    practiceWebSearchEnabled: input?.practiceWebSearchEnabled !== false,
+    practiceWebSearchEnabled: input?.practiceWebSearchEnabled === true,
     makeArtifactMode:
       input?.makeArtifactMode === "other"
       || input?.makeArtifactMode === "python"

@@ -85,8 +85,8 @@ describe("document AI collaboration policy", () => {
       documentText: "已经观察了三个课间的用水情况。",
     });
     expect(discussion.user).toContain("具体观察");
-    expect(discussion.system).toContain("具体观察 → 为什么重要 → 可执行支架");
-    expect(discussion.system).toContain("不替学生给出最终答案");
+    expect(discussion.system).toContain("现状分析、原因、建议和下一步");
+    expect(discussion.system).toContain("不得替学生形成核心结论");
 
     const task = buildDocumentCollaborationPrompts({
       course,

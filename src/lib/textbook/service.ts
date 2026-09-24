@@ -317,13 +317,39 @@ export async function searchTextbookEvidence(input: {
   query: string;
   limit?: number;
 }): Promise<TextbookEvidenceSearchResult> {
+  return searchTextbookEvidenceWithScope(input);
+}
+
+/** Search the current, non-archived versions in the whole library without an ID cap. */
+export async function searchLibraryTextbookEvidence(input: {
+  query: string;
+  limit?: number;
+}): Promise<TextbookEvidenceSearchResult> {
+  return searchTextbookEvidenceWithScope({ ...input, revisionIds: [], library: true });
+}
+
+async function searchTextbookEvidenceWithScope(input: {
+  revisionIds: string[];
+  sectionIds?: string[];
+  query: string;
+  limit?: number;
+  library?: boolean;
+}): Promise<TextbookEvidenceSearchResult> {
   const revisionIds = [...new Set(input.revisionIds)].slice(0, 20);
   const sectionIds = [...new Set(input.sectionIds ?? [])].slice(0, 200);
   const query = input.query.normalize("NFC").trim().slice(0, 2_000);
   const limit = Math.min(100, Math.max(1, input.limit ?? 20));
-  if (!revisionIds.length || !query) return { query, degraded: true, degradationReason: "没有可检索的教材版本或查询内容。", hits: [] };
+  if ((!input.library && !revisionIds.length) || !query) return { query, degraded: true, degradationReason: "没有可检索的教材版本或查询内容。", hits: [] };
   const queryExpression = tsQuery(query);
   const sectionFilter = sectionIds.length ? Prisma.sql`AND ri."sectionId" IN (${Prisma.join(sectionIds)})` : Prisma.empty;
+  const revisionFilter = input.library
+    ? Prisma.sql`ri."revisionId" IN (
+      SELECT revision."id" FROM "TextbookRevision" revision
+      JOIN "Textbook" textbook ON textbook."currentRevisionId" = revision."id"
+      WHERE textbook."status" <> 'ARCHIVED'
+        AND revision."status" IN ('READY', 'WAITING_EMBEDDING')
+    )`
+    : Prisma.sql`ri."revisionId" IN (${Prisma.join(revisionIds)})`;
   const lexical = queryExpression ? await prisma.$queryRaw<RankedRow[]>(Prisma.sql`
     SELECT ri."id", ri."revisionId", ri."sectionId", ri."sourceBlockId", ri."conceptId", ri."exampleId",
       ri."kind", ri."title", ri."content",
@@ -332,7 +358,7 @@ export async function searchTextbookEvidence(input: {
         ts_rank_cd(ri."searchVector", to_tsquery('simple', ${queryExpression})) DESC,
         ri."position" ASC) AS rank
     FROM "TextbookRetrievalItem" ri
-    WHERE ri."revisionId" IN (${Prisma.join(revisionIds)})
+    WHERE ${revisionFilter}
       ${sectionFilter}
       AND ri."searchVector" @@ to_tsquery('simple', ${queryExpression})
     ORDER BY rank
@@ -356,7 +382,7 @@ export async function searchTextbookEvidence(input: {
       FROM "TextbookEmbedding" embedding
       JOIN "TextbookRetrievalItem" ri ON ri."id" = embedding."retrievalItemId"
       WHERE embedding."profileId" = ${profile.id} AND embedding."status" = 'READY'
-        AND ri."revisionId" IN (${Prisma.join(revisionIds)}) ${sectionFilter}
+        AND ${revisionFilter} ${sectionFilter}
       ORDER BY rank
       LIMIT 30
     `);

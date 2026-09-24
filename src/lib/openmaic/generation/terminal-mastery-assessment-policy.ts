@@ -32,7 +32,7 @@ function normalizeSectionQuiz(
     title: `第 ${sectionIndex + 1} 节 · 节末小测`,
     description: constructedResponse
       ? `围绕本小节设置 1 道综合简答题，要求学生给出结论与理由，预计 ${Math.round(targetDurationSec / 60)} 分钟完成。`
-      : `围绕本小节设置 ${questionCount} 道单选、多选、判断、填空或必要的配对题，全部题目合计覆盖本小节所有知识点，预计 ${Math.round(targetDurationSec / 60)} 分钟完成。`,
+      : `围绕本小节设置 ${questionCount} 道单选、多选或判断题，用可信的错误选项辨别常见误解，全部题目合计覆盖本小节所有知识点，预计 ${Math.round(targetDurationSec / 60)} 分钟完成。`,
     keyPoints: unique([...(quiz?.keyPoints ?? []), ...(anchor.keyPoints ?? [])]),
     teachingObjective: "形成小节级知识点理解证据，并在提交后进入 AI 助教逐题讲解。",
     detailKind: "other",
@@ -44,7 +44,7 @@ function normalizeSectionQuiz(
       difficulty: quiz?.quizConfig?.difficulty ?? "medium",
       questionTypes: constructedResponse
         ? ["short_answer"]
-        : ["single", "multiple", "true_false", "fill_blank", "matching"],
+        : ["single", "multiple", "true_false"],
       questionCount,
       coveragePolicy: "section-synthesis",
       minShortAnswerQuestions: constructedResponse ? 1 : 0,
