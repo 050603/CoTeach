@@ -6,8 +6,12 @@
  * has been persisted, updating each split classroom snapshot atomically.
  */
 
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { createLogger } from '@openmaic/lib/logger';
 import {
+  CLASSROOMS_DIR,
+  isValidClassroomId,
   updatePersistedClassroomScenes,
   updatePersistedClassroomAssetStatus,
 } from '@openmaic/lib/server/classroom-storage';
@@ -107,6 +111,35 @@ export function reconcileMediaFailures(
       error: '素材生成未返回可用文件',
     }];
   });
+}
+
+/** Reuse a generated asset only when the current slide still references its file. */
+export async function collectPersistedClassroomMedia(
+  requests: MediaGenerationRequest[],
+  scenes: Scene[],
+): Promise<Record<string, string>> {
+  const urls = scenes.flatMap((scene) => scene.content.type === 'slide'
+    ? scene.content.canvas.elements.flatMap((element) => element.type === 'image' || element.type === 'video' ? [element.src] : [])
+    : []);
+  const found: Record<string, string> = {};
+  for (const url of urls) {
+    if (!url) continue;
+    let parts: string[];
+    try {
+      const pathname = new URL(url, 'http://localhost').pathname;
+      const prefix = '/api/openmaic/classroom-media/';
+      if (!pathname.startsWith(prefix)) continue;
+      parts = pathname.slice(prefix.length).split('/').map(decodeURIComponent);
+    } catch { continue; }
+    if (parts.length !== 3 || !isValidClassroomId(parts[0]) || parts[1] !== 'media'
+      || parts.some((part) => part === '.' || part === '..' || !/^[a-zA-Z0-9_.:-]+$/.test(part))) continue;
+    const request = requests.find((item) => parts[2].slice(0, -path.extname(parts[2]).length) === item.elementId);
+    if (!request) continue;
+    const available = await fs.stat(path.join(CLASSROOMS_DIR, ...parts))
+      .then((stat) => stat.isFile() && stat.size > 0, () => false);
+    if (available) found[request.elementId] = url;
+  }
+  return found;
 }
 
 export interface ClassroomAssetGenerationInput {
@@ -248,19 +281,21 @@ export async function generateClassroomAssets(
   const hasMediaGeneration = input.enableImageGeneration || input.enableVideoGeneration;
   const capabilities = { image: input.enableImageGeneration, video: input.enableVideoGeneration };
   const requestedMedia = collectRequestedClassroomMedia(input.outlines, capabilities);
-  const ttsOnlyStatus = input.enableTTS && !hasMediaGeneration;
-  const trackedAssetCount = ttsOnlyStatus ? groups.length : requestedMedia.length;
+  const trackedAssetCount = requestedMedia.length + (input.enableTTS ? (input.isPblCourse ? 1 : groups.length) : 0);
+  const recordedFailures = new Map<string, AssetFailure>();
+  let assetsSettled = false;
 
   const updateAssetStatus = async (
     status: 'running' | 'completed' | 'partial-failure',
     completed: number,
     failures: AssetFailure[],
   ) => {
+    for (const failure of failures) recordedFailures.set(`${failure.type}:${failure.elementId}`, failure);
     await Promise.all(groups.map((group) => updatePersistedClassroomAssetStatus(group.classroomId, {
-      status,
+      status: recordedFailures.size > 0 ? 'partial-failure' : assetsSettled ? status : 'running',
       requested: trackedAssetCount,
       completed,
-      failures,
+      failures: [...recordedFailures.values()],
       updatedAt: new Date().toISOString(),
     })));
   };
@@ -293,13 +328,19 @@ export async function generateClassroomAssets(
         message: `正在生成并插入 ${requestedMedia.length} 项图片与视频资源`,
       });
       await updateAssetStatus('running', 0, []);
+      const retainedMedia = await collectPersistedClassroomMedia(requestedMedia, allScenes);
+      const pendingOutlines = input.outlines.map((outline) => ({
+        ...outline,
+        mediaGenerations: outline.mediaGenerations?.filter((request) => !retainedMedia[request.elementId]),
+      }));
       const result = await generateMediaForClassroom(
-        input.outlines, input.studentClassroomId, input.baseUrl, capabilities, input.signal,
+        pendingOutlines, input.studentClassroomId, input.baseUrl, capabilities, input.signal,
         async (item) => {
           await input.onProgress?.({ phase: 'media', status: 'running', completed: item.completed,
             total: item.total, message: formatClassroomMediaItemProgress(item) });
         },
       );
+      Object.assign(result.mediaMap, retainedMedia);
       replaceMediaPlaceholders(allScenes, result.mediaMap, input.outlines);
       await persistSceneGroups(groups);
       const failures = reconcileMediaFailures(requestedMedia, result.mediaMap, result.failures);
@@ -361,13 +402,16 @@ export async function generateClassroomAssets(
       const group = ttsGroups[index];
       throwIfAborted(input.signal);
       try {
-        await generateTTSForClassroom(
-          group.scenes,
-          group.classroomId,
-          input.baseUrl,
-          input.signal,
-          input.ttsTimingSelection,
-        );
+        let speechFailure: unknown;
+        try {
+          await generateTTSForClassroom(
+            group.scenes,
+            group.classroomId,
+            input.baseUrl,
+            input.signal,
+            input.ttsTimingSelection,
+          );
+        } catch (error) { speechFailure = error; }
         const outlineById = new Map(input.outlines.map((outline) => [outline.id, outline]));
         for (const scene of group.scenes) {
           const outline = outlineById.get(scene.outlineId ?? scene.id);
@@ -379,6 +423,7 @@ export async function generateClassroomAssets(
           });
         }
         await updatePersistedClassroomScenes(group.classroomId, group.scenes);
+        if (speechFailure) throw speechFailure;
         log.info(
           `Classroom TTS backfilled [classroomId=${group.classroomId}, role=${group.role}]`,
         );
@@ -398,13 +443,11 @@ export async function generateClassroomAssets(
           `Classroom TTS backfill failed [classroomId=${group.classroomId}]; content remains available:`,
           error,
         );
-        if (ttsOnlyStatus) {
-          await updateAssetStatus('partial-failure', 0, [{
-            elementId: 'tts-batch',
-            type: 'tts',
-            error: error instanceof Error ? error.message : String(error),
-          }]);
-        }
+        await updateAssetStatus('partial-failure', 0, [{
+          elementId: 'tts-batch',
+          type: 'tts',
+          error: error instanceof Error ? error.message : String(error),
+        }]);
         throw error;
       }
     }
@@ -414,7 +457,7 @@ export async function generateClassroomAssets(
   // bounded pipelines can overlap without changing prompts, retry policies,
   // provider concurrency, or quality checks. Persist once more after both have
   // finished so the shared scene snapshots contain the merged asset updates.
-  if (ttsOnlyStatus) await updateAssetStatus('running', 0, []);
+  await updateAssetStatus('running', 0, []);
   await runIndependentClassroomAssetTasks({
     media: generateMediaAssets,
     tts: generateSpeechAssets,
@@ -440,6 +483,11 @@ export async function generateClassroomAssets(
   // including every generated audioUrl — has been durably persisted. Keeping
   // this outside persistMergedState also prevents a rejected TTS task from
   // overwriting its partial-failure status with completed.
-  if (ttsOnlyStatus) await updateAssetStatus('completed', groups.length, []);
+  assetsSettled = true;
+  if (recordedFailures.size > 0) {
+    await updateAssetStatus('partial-failure', 0, []);
+    throw new Error(`课堂仍有 ${recordedFailures.size} 项资源未完成`);
+  }
+  await updateAssetStatus('completed', trackedAssetCount, []);
   return summarizeTeachingTimingAudit(input);
 }

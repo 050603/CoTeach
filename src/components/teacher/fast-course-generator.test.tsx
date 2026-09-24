@@ -225,4 +225,30 @@ describe("FastCourseGenerator knowledge references", () => {
       assessmentMode: "adaptive",
     })));
   });
+
+  it("opens the finished test lesson for teacher preview without starting the rest of the course", async () => {
+    const requests: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      requests.push({ url, method });
+      if (url.endsWith("/resource-package")) return Response.json({ job: confirmedPackageJob() });
+      if (url.endsWith("/design-generation")) return Response.json({ backgroundEnabled: true, job: {
+        id: "design-test", status: "completed", step: "completed", progress: 100,
+        trace: [], requestPreview: { generationScope: "test-lesson" },
+      } });
+      if (url.endsWith("/generation")) return Response.json({ backgroundEnabled: true, job: {
+        id: "content-test", status: "completed", step: "completed", progress: 100,
+        message: "测试小节已完成", events: [], scenesGenerated: 4, totalScenes: 4,
+        result: { id: "classroom-test", scenesCount: 4 },
+      } });
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    }));
+
+    render(<FastCourseGenerator course={{ id: "test-preview-course" } as Course} onOpenDetailed={vi.fn()} simplified />);
+    await waitFor(() => expect(push).toHaveBeenCalledWith(
+      "/teacher/prepare/test-preview-course/preview?view=student&classroomId=classroom-test",
+    ), { timeout: 3_000 });
+    expect(requests.every(({ method }) => method === "GET")).toBe(true);
+  });
 });

@@ -196,6 +196,7 @@ export async function persistClassroom(
     id: string;
     stage: Stage;
     scenes: Scene[];
+    assetGeneration?: ClassroomAssetGenerationStatus;
   },
 ): Promise<PersistedClassroomData> {
   return withClassroomLock(data.id, async () => {
@@ -207,6 +208,7 @@ export async function persistClassroom(
       createdAt: now,
       updatedAt: now,
       revision: 1,
+      ...(data.assetGeneration ? { assetGeneration: data.assetGeneration } : {}),
     };
 
     await ensureClassroomsDir();

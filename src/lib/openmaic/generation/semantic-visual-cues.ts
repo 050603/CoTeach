@@ -885,6 +885,7 @@ export function calibrateGeneratedVisualCues(input: {
   const narrationIndex = new Map(narration.map((source, index) => [source.speechId, index]));
   const inventoryById = new Map(inventory.map((item) => [item.elementId, item]));
   const candidates: ValidFocusCue[] = [];
+  const pending: Action[] = [];
 
   const nextSpeechId = (actionIndex: number): string | undefined => {
     for (let index = actionIndex + 1; index < refinedActions.length; index += 1) {
@@ -948,7 +949,9 @@ export function calibrateGeneratedVisualCues(input: {
       ? resolveAlignedAnchorOffset(startSource, speechAnchor)
       : Math.max(0, action.speechOffsetMs ?? 0);
     if (startOffsetMs === undefined) {
-      log.warn(`Dropped generated visual cue ${action.id} because its narration is not precisely aligned`);
+      // Preserve authored intent until audio alignment is available. Playback
+      // already withholds anchored cues without verified timing.
+      pending.push({ ...action, speechId: startSpeechId });
       return;
     }
     if (startOffsetMs >= startSource.estimatedDurationSec * 1000) {
@@ -1043,7 +1046,10 @@ export function calibrateGeneratedVisualCues(input: {
     };
   });
 
-  return applyCuePlan(refinedActions, boundedCandidates);
+  const calibrated = applyCuePlan(refinedActions, boundedCandidates);
+  return calibrated.flatMap((action) => action.type === 'speech'
+    ? [...pending.filter((cue) => (cue.type === 'spotlight' || cue.type === 'laser') && cue.speechId === action.id), action]
+    : [action]);
 }
 
 export type VisualCueAnchorRepairIssue = {

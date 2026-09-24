@@ -67,7 +67,7 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
 {
   "id": "scene_1",
   "type": "slide" | "quiz" | "interactive" | "pbl",
-  "title": "Core content topic and the specific facet taught on this page",
+  "title": "For slide: formal heading for its actual knowledge, e.g. 项目式学习 or 项目式学习的核心特征; for other scene types: a title suited to the activity",
   "description": "Teaching purpose description",
   "keyPoints": ["Point 1", "Point 2", "Point 3"],
   "teachingToolPlan": [{

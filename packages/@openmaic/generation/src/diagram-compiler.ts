@@ -1,5 +1,6 @@
 import type { PPTElement, PPTLineElement, PPTShapeElement, PPTTextElement } from '@openmaic/dsl';
 import type { DiagramPlan } from './outline-types.js';
+import { TextLayoutError } from './text-layout-compiler.js';
 
 /** A planned relationship with a slide-local container chosen during first-pass authoring. */
 export interface DiagramComponent extends DiagramPlan {
@@ -137,7 +138,7 @@ function makeText(
   const lines = value.split('\n').map(escapeHtml).join('<br>');
   return {
     id, type: 'text', ...rect, rotate: 0, defaultFontName: fontName, defaultColor: color,
-    content: `<p style="margin:0;text-align:center;font-family:${escapeHtml(fontName)};font-size:${fontSize}px;font-weight:${options.weight ?? 500};line-height:1.2">${lines}</p>`,
+    content: `<p style="margin:0;text-align:center;font-family:${escapeHtml(fontName)};font-size:${fontSize}px;font-weight:${(options.weight ?? 500) >= 600 ? 700 : 400};line-height:1.2">${lines}</p>`,
     lineHeight: 1.2, paragraphSpace: 0, vAlign: 'middle',
     ...(options.fill ? { fill: options.fill } : {}),
   };
@@ -150,7 +151,7 @@ function makeNode(node: PositionedNode, component: DiagramComponent, fontName: s
     fill: component.nodeFill ?? '#FFF4E8',
     outline: { color: component.accentColor ?? '#D97706', width: 2, style: 'solid' },
     text: {
-      content: `<p style="margin:0;text-align:center;font-family:${escapeHtml(fontName)};font-size:${NODE_FONT_SIZE}px;font-weight:600;line-height:1.25">${node.lines.map(escapeHtml).join('<br>')}</p>`,
+      content: `<p style="margin:0;text-align:center;font-family:${escapeHtml(fontName)};font-size:${NODE_FONT_SIZE}px;font-weight:700;line-height:1.25">${node.lines.map(escapeHtml).join('<br>')}</p>`,
       defaultFontName: fontName,
       defaultColor: component.textColor ?? '#30343A',
       align: 'middle', lineHeight: 1.25, paragraphSpace: 0,
@@ -242,75 +243,87 @@ function positionCycle(component: DiagramComponent, options: DiagramCompilerOpti
   return positioned;
 }
 
-function positionSequence(component: DiagramComponent, options: DiagramCompilerOptions, feedback: boolean): { nodes: PositionedNode[]; vertical: boolean } {
+function edgeLabelWidth(label: string, options: DiagramCompilerOptions): number {
+  return Math.max(52, measure(label, EDGE_FONT_SIZE, options, 500) + 24);
+}
+
+function positionSequence(component: DiagramComponent, options: DiagramCompilerOptions, edges: DirectedEdge[]): { nodes: PositionedNode[]; vertical: boolean } {
   const size = nodeSize(component, options);
-  const annotationReserve = component.annotation ? 58 : 0;
-  const horizontal = component.nodes.length * size.width + (component.nodes.length - 1) * 24 + NODE_MARGIN * 2 <= component.width;
-  const vertical = component.nodes.length * size.height + (component.nodes.length - 1) * 24 + NODE_MARGIN * 2 + annotationReserve <= component.height;
-  if (!horizontal && !vertical) fail('sequence nodes do not fit inside the container');
-  const useVertical = !horizontal;
-  const main: Rect = {
-    left: component.left + NODE_MARGIN,
-    top: component.top + NODE_MARGIN + annotationReserve,
-    width: component.width - NODE_MARGIN * 2 - (useVertical && feedback ? 58 : 0),
-    height: component.height - NODE_MARGIN * 2 - annotationReserve - (!useVertical && feedback ? 58 : 0),
-  };
-  if (main.width < size.width || main.height < size.height) fail('sequence nodes do not fit inside the container');
-  const gap = Math.min(62, Math.max(24, ((useVertical ? main.height : main.width) - component.nodes.length * (useVertical ? size.height : size.width)) / (component.nodes.length - 1)));
-  const total = component.nodes.length * (useVertical ? size.height : size.width) + (component.nodes.length - 1) * gap;
-  if (total > (useVertical ? main.height : main.width)) fail('sequence feedback and nodes do not fit inside the container');
-  const start = (useVertical ? main.top : main.left) + ((useVertical ? main.height : main.width) - total) / 2;
-  return {
-    vertical: useVertical,
-    nodes: component.nodes.map((node, index) => ({
-      ...node, lines: size.lines[index]!,
-      rect: {
-        left: useVertical ? main.left + (main.width - size.width) / 2 : start + index * (size.width + gap),
-        top: useVertical ? start + index * (size.height + gap) : main.top + (main.height - size.height) / 2,
-        width: size.width, height: size.height,
-      },
-    })),
-  };
+  const feedback = edges.some((edge) => edge.feedback);
+  const labels = component.nodes.slice(0, -1).map((node, index) => edges.find((edge) => !edge.feedback
+    && edge.from === node.id && edge.to === component.nodes[index + 1]!.id)?.label);
+  // Labels are part of the first-pass geometry, including their padding. A fixed
+  // connector gap can reject even a three-character condition after rendering.
+  for (const useVertical of [false, true]) {
+    const main: Rect = {
+      left: component.left + NODE_MARGIN,
+      top: component.top + NODE_MARGIN,
+      width: component.width - NODE_MARGIN * 2 - (useVertical && feedback ? 58 : 0),
+      height: component.height - NODE_MARGIN * 2 - (!useVertical && feedback ? 58 : 0),
+    };
+    if (main.width < size.width || main.height < size.height) continue;
+    const hasLabels = labels.some(Boolean);
+    if (!useVertical && hasLabels && main.height < 80) continue;
+    if (useVertical && labels.some((label) => label && edgeLabelWidth(label, options) > main.width)) continue;
+    const gaps = labels.map((label) => label ? (useVertical ? 48 : edgeLabelWidth(label, options) + 8) : 24);
+    const nodeExtent = useVertical ? size.height : size.width;
+    const available = useVertical ? main.height : main.width;
+    const minimum = component.nodes.length * nodeExtent + gaps.reduce((sum, gap) => sum + gap, 0);
+    if (minimum > available) continue;
+    const extra = Math.min(38, (available - minimum) / gaps.length);
+    const total = minimum + extra * gaps.length;
+    let cursor = (useVertical ? main.top : main.left) + (available - total) / 2;
+    return {
+      vertical: useVertical,
+      nodes: component.nodes.map((node, index) => {
+        const rect = {
+          left: useVertical ? main.left + (main.width - size.width) / 2 : cursor,
+          top: useVertical ? cursor : main.top + (main.height - size.height) / 2,
+          width: size.width, height: size.height,
+        };
+        cursor += nodeExtent + (gaps[index] ?? 0) + extra;
+        return { ...node, lines: size.lines[index]!, rect };
+      }),
+    };
+  }
+  fail('sequence nodes and edge labels do not fit inside the container');
 }
 
 function edgeLabel(id: string, label: string, at: Point, bounds: Rect, component: DiagramComponent, options: DiagramCompilerOptions): PPTTextElement {
-  const width = Math.min(150, Math.max(52, measure(label, EDGE_FONT_SIZE, options, 500) + 18));
-  if (measure(label, EDGE_FONT_SIZE, options, 500) > width - 14) fail(`edge label ${JSON.stringify(label)} is too long`);
-  const rect = { left: at.x - width / 2, top: at.y - 13, width, height: 26 };
+  const availableWidth = 2 * Math.min(at.x - bounds.left, bounds.left + bounds.width - at.x);
+  const width = Math.min(availableWidth, edgeLabelWidth(label, options));
+  if (measure(label, EDGE_FONT_SIZE, options, 500) > width - 20) fail(`edge label ${JSON.stringify(label)} is too long`);
+  const rect = { left: at.x - width / 2, top: at.y - 20, width, height: 40 };
   if (!within(rect, bounds)) fail('edge label exceeds the diagram container');
   return makeText(id, label, rect, EDGE_FONT_SIZE, component.textColor ?? '#30343A', options.fontName ?? 'Noto Sans SC', { fill: '#FFFFFF' });
 }
 
-function annotationElement(component: DiagramComponent, nodes: PositionedNode[], bounds: Rect, options: DiagramCompilerOptions): PPTTextElement | undefined {
-  if (component.annotation === undefined) return undefined;
+function outsideAnnotation(component: DiagramComponent, options: DiagramCompilerOptions): PPTTextElement {
   if (typeof component.annotation !== 'string' || !component.annotation.trim()) fail('annotation must be a nonempty string');
-  const label = component.annotation.trim();
-  const width = Math.min(component.width * (component.topology === 'cycle' ? 0.36 : 0.7), 330);
-  const innerWidth = width - 12;
-  const lines = label.split('\n');
-  if (lines.some((line) => !line.trim()) || lines.length > 2) fail('annotation must fit in one or two meaningful lines');
-  let wrapped = lines;
-  if (lines.length === 1 && measure(label, ANNOTATION_FONT_SIZE, options, 600) > innerWidth) {
-    const chars = Array.from(label);
-    let chosen: string[] | undefined;
-    for (let split = 2; split <= chars.length - 2; split += 1) {
-      const first = chars.slice(0, split).join('').trim();
-      const second = chars.slice(split).join('').trim();
-      if (measure(first, ANNOTATION_FONT_SIZE, options, 600) <= innerWidth && measure(second, ANNOTATION_FONT_SIZE, options, 600) <= innerWidth) {
-        if (!chosen || Math.abs(first.length - second.length) < Math.abs(chosen[0]!.length - chosen[1]!.length)) chosen = [first, second];
+  const width = component.width;
+  const wrapped: string[] = [];
+  for (const paragraph of component.annotation.trim().split('\n')) {
+    let line = '';
+    for (const char of paragraph) {
+      if (line && measure(line + char, ANNOTATION_FONT_SIZE, options, 700) > width - 20) {
+        wrapped.push(line);
+        line = '';
       }
+      line += char;
     }
-    if (!chosen) fail('annotation cannot fit inside the diagram container');
-    wrapped = chosen;
+    if (line) wrapped.push(line);
   }
-  if (wrapped.some((line) => measure(line, ANNOTATION_FONT_SIZE, options, 600) > innerWidth)) fail('annotation cannot fit inside the diagram container');
-  const height = wrapped.length * 23 + 12;
-  const rect = component.topology === 'cycle'
-    ? { left: component.left + (component.width - width) / 2, top: component.top + (component.height - height) / 2, width, height }
-    : { left: component.left + (component.width - width) / 2, top: component.top + 4, width, height };
-  if (!within(rect, bounds) || nodes.some((node) => overlap(rect, node.rect, 6))) fail('annotation overlaps a node or exceeds the container');
-  return makeText(`${component.id}-annotation`, wrapped.join('\n'), rect, ANNOTATION_FONT_SIZE,
-    component.textColor ?? '#30343A', options.fontName ?? 'Noto Sans SC', { weight: 600, fill: '#FFFFFF' });
+  if (!wrapped.length) fail('annotation must contain visible text');
+  if ([...wrapped.at(-1)!].length === 1 && wrapped.length > 1) {
+    const previous = [...wrapped[wrapped.length - 2]!];
+    if (previous.length > 2) {
+      wrapped[wrapped.length - 1] = previous.pop()! + wrapped.at(-1)!;
+      wrapped[wrapped.length - 2] = previous.join('');
+    }
+  }
+  return makeText(`${component.id}-annotation`, wrapped.join('\n'), {
+    left: component.left, top: component.top, width, height: wrapped.length * 23 + 20,
+  }, ANNOTATION_FONT_SIZE, component.textColor ?? '#30343A', options.fontName ?? 'Noto Sans SC', { weight: 700 });
 }
 
 /** Compile one first-pass diagram into editable DSL shapes, text, and directed lines. */
@@ -320,11 +333,18 @@ export function compileDiagramComponent(component: DiagramComponent, options: Di
   if (![component.left, component.top].every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)
     || !finitePositive(component.width) || !finitePositive(component.height)) fail('container coordinates must be finite and positive');
   const bounds: Rect = { left: component.left, top: component.top, width: component.width, height: component.height };
-  if (!within(bounds, { left: 0, top: 0, width: options.canvasWidth ?? 1000, height: options.canvasHeight ?? 562.5 })) fail('diagram container lies outside the slide');
+  if (!within(bounds, { left: 50, top: 50, width: (options.canvasWidth ?? 1000) - 100, height: (options.canvasHeight ?? 562.5) - 100 })) fail('diagram container lies outside the safe slide area');
+  if (component.annotation !== undefined) {
+    const annotation = outsideAnnotation(component, options);
+    const reserve = annotation.height + 12;
+    const diagram = compileDiagramComponent({ ...component, annotation: undefined,
+      top: component.top + reserve, height: component.height - reserve }, options);
+    return [...diagram, annotation];
+  }
   const edges = parseEdges(component);
   const position = component.topology === 'cycle'
     ? { nodes: positionCycle(component, options), vertical: false }
-    : positionSequence(component, options, edges.some((edge) => edge.feedback));
+    : positionSequence(component, options, edges);
   const byId = new Map(position.nodes.map((node) => [node.id, node]));
   const lines: PPTLineElement[] = [];
   const labels: PPTTextElement[] = [];
@@ -371,14 +391,92 @@ export function compileDiagramComponent(component: DiagramComponent, options: Di
       start = boundaryPoint(from.rect, center(to.rect));
       end = boundaryPoint(to.rect, center(from.rect));
       labelAt = position.vertical
-        ? { x: start.x + 45, y: (start.y + end.y) / 2 }
+        ? { x: start.x, y: (start.y + end.y) / 2 }
         : { x: (start.x + end.x) / 2, y: start.y - 20 };
     }
     if (controls?.some((point) => !within({ left: point.x, top: point.y, width: 0, height: 0 }, bounds))) fail('diagram edge exceeds the container');
     lines.push(makeLine(`${component.id}-edge-${index}`, start, end, color, controls, edge.feedback));
-    if (edge.label) labels.push(edgeLabel(`${component.id}-edge-label-${index}`, edge.label, labelAt, bounds, component, options));
+    if (edge.label) {
+      const label = edgeLabel(`${component.id}-edge-label-${index}`, edge.label, labelAt, bounds, component, options);
+      if (position.nodes.some((node) => overlap(label, node.rect))) fail('edge label overlaps a diagram node');
+      labels.push(label);
+    }
   }
 
-  const annotation = annotationElement(component, position.nodes, bounds, options);
-  return [...lines, ...position.nodes.map((node) => makeNode(node, component, options.fontName ?? 'Noto Sans SC')), ...labels, ...(annotation ? [annotation] : [])];
+  return [...lines, ...position.nodes.map((node) => makeNode(node, component, options.fontName ?? 'Noto Sans SC')), ...labels];
+}
+
+/** Use the host's renderer font measurements for every candidate node/annotation wrap. */
+export async function compileMeasuredDiagramComponent(
+  component: DiagramComponent,
+  textMeasure: import('./text-layout-compiler.js').TextMeasure,
+): Promise<PPTElement[]> {
+  if (component.annotation !== undefined) {
+    const { compileTextComponents } = await import('./text-layout-compiler.js');
+    const [annotation] = await compileTextComponents([{ kind: 'textBox', role: 'body', id: `${component.id}-annotation`,
+      left: component.left, top: component.top, width: component.width, maxHeight: component.height,
+      text: component.annotation, fontSize: ANNOTATION_FONT_SIZE, bold: true, align: 'left',
+      color: component.textColor ?? '#30343A',
+    }], textMeasure);
+    if (annotation.type !== 'text') fail('annotation must compile to editable text');
+    const reserve = annotation.height + 12;
+    const diagram = await compileMeasuredDiagramComponent({ ...component, annotation: undefined,
+      top: component.top + reserve, height: component.height - reserve }, textMeasure);
+    return [...diagram, annotation];
+  }
+  const widths = new Map<string, number>();
+  const requests = new Map<string, { text: string; size: number; weight: 400 | 700 }>();
+  const collect = (text: string, size: number, weight: 400 | 700) => {
+    const add = (value: string) => requests.set(`${size}:${weight}:${value}`, { text: value, size, weight });
+    add(text.replace(/\n/g, ''));
+    for (const line of text.split('\n')) add(line.trim());
+    const chars = [...text];
+    for (let index = 1; index < chars.length; index += 1) {
+      add(chars.slice(0, index).join('').trim());
+      add(chars.slice(index).join('').trim());
+    }
+  };
+  for (const node of component.nodes) collect(node.label, NODE_FONT_SIZE, 700);
+  if (component.annotation) collect(component.annotation, ANNOTATION_FONT_SIZE, 700);
+  for (const edge of component.edges ?? []) if (edge.label) collect(edge.label, EDGE_FONT_SIZE, 400);
+  await Promise.all([...requests.entries()].map(async ([key, request]) => {
+    const result = await textMeasure({ html: `<p>${escapeHtml(request.text)}</p>`, text: request.text, width: 10000,
+      fontSize: request.size, fontWeight: request.weight, fontFamily: 'Noto Sans SC', padding: 10,
+      lineHeight: 1.5, paragraphSpace: 5, align: 'center' });
+    widths.set(key, result.naturalWidth);
+  }));
+  return compileDiagramComponent(component, { measureText: (text, size, _font, weight) => {
+    const result = widths.get(`${size}:${weight >= 600 ? 700 : 400}:${text}`);
+    if (result === undefined) throw new Error(`Unmeasured diagram text: ${text}`);
+    return result;
+  } });
+}
+
+export interface DiagramAllocation { width: number; height: number }
+
+/** Give the page author measured local choices before its single content call. */
+export async function measureDiagramAllocations(
+  plan: DiagramPlan,
+  textMeasure: import('./text-layout-compiler.js').TextMeasure,
+): Promise<DiagramAllocation[]> {
+  const allocations: DiagramAllocation[] = [];
+  const heights = plan.topology === 'cycle' ? [220, 240, 260, 280, 300, 320, 340, 360] : [120, 160, 200, 240, 280, 320, 360];
+  // Include full-width and side-by-side choices when the actual plan permits.
+  for (const width of [900, 700, 600, 440]) {
+    for (const height of heights) {
+      try {
+        await compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'planned-allocation', left: 50, top: 140, width, height }, textMeasure);
+        allocations.push({ width, height });
+        break;
+      } catch (error) {
+        // The first candidate can be shorter than the outside annotation's
+        // measured text. That makes this rectangle infeasible, not the whole
+        // teaching plan invalid; continue through the larger candidates.
+        if (!(error instanceof TextLayoutError)
+          && (!(error instanceof Error) || !error.message.startsWith('Invalid diagram component:'))) throw error;
+      }
+    }
+  }
+  if (!allocations.length) fail('planned diagram has no feasible measured allocation below the page heading');
+  return allocations;
 }

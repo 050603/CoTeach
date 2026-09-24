@@ -92,6 +92,7 @@ describe('independent first-pass teaching narration', () => {
     expect(aiCall.mock.calls[0][0]).toContain('introduces, deepens, and references as page ownership');
     expect(aiCall.mock.calls[0][0]).toContain('actual relationship on the slide');
     expect(aiCall.mock.calls[0][0]).toContain('local explanatory value, learner familiarity');
+    expect(aiCall.mock.calls[0][0]).toContain('Do not end its speech by asking learners to judge true or false');
     expect(aiCall.mock.calls[0][0]).toContain('Provenance classifications and review notes are teacher-only');
     expect(aiCall.mock.calls[0][0]).toContain('Present the knowledge, example, image, or activity directly');
     expect(aiCall.mock.calls[0][0]).toContain('teachingPlan.taskConnection as a hard page boundary');
@@ -364,6 +365,7 @@ describe('independent first-pass teaching narration', () => {
     expect(aiCall.mock.calls[0][0]).toContain('introduced and deepened nodes');
     expect(aiCall.mock.calls[0][0]).toContain('intermediate steps');
     expect(aiCall.mock.calls[0][0]).toContain('correct accidental missing or repeated words');
+    expect(aiCall.mock.calls[0][0]).toContain('This static teaching page has no answer input');
     const input = JSON.parse(aiCall.mock.calls[0][1]);
     expect(input.learners).toContain('会搜索但容易轻信AI');
     expect(input.page.teachingPlan.reasoningSteps).toEqual(['明确说法', '查相关记录']);
@@ -578,6 +580,7 @@ describe('independent first-pass teaching narration', () => {
     expect(call.mock.calls[0][1]).toContain('Shared page contract');
     expect(call.mock.calls[0][0]).toContain('Choose the visual form from the stated relationship');
     expect(call.mock.calls[0][0]).toContain('Do not default to cards');
+    expect(call.mock.calls[0][0]).toContain('If the supplied page task or key points resemble an exercise');
     expect(call.mock.calls[0][0]).toContain('distinct targetable element');
     expect(call.mock.calls[0][0]).toContain('rather than assigning it arbitrarily to the first label');
     expect(call.mock.calls[0][0]).toContain('remove decorative copy before shrinking');

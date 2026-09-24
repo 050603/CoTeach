@@ -6,7 +6,11 @@ const mocks = vi.hoisted(() => {
   class TestLessonPromotionError extends Error {
     constructor(readonly code: string, message: string, readonly status: number) { super(message); }
   }
-  return { find: vi.fn(), packageJob: vi.fn(), create: vi.fn(), update: vi.fn(), replace: vi.fn(), resolve: vi.fn(), references: vi.fn(), promote: vi.fn(), TestLessonPromotionError };
+  class TestLessonSelectionError extends Error {
+    readonly code = "INVALID_TEST_LESSON_SELECTION";
+    readonly status = 400;
+  }
+  return { find: vi.fn(), packageJob: vi.fn(), create: vi.fn(), update: vi.fn(), replace: vi.fn(), resolve: vi.fn(), references: vi.fn(), promote: vi.fn(), resume: vi.fn(), TestLessonPromotionError, TestLessonSelectionError };
 });
 vi.mock("@/lib/platform/template-access", () => ({ authorizeTemplateRequest: vi.fn().mockResolvedValue("teacher-1") }));
 vi.mock("@/lib/platform/pbl-template-repository", () => ({ loadPblTemplateCourse: vi.fn().mockResolvedValue({ id: "course-1" }) }));
@@ -17,10 +21,11 @@ vi.mock("@/lib/course-design/job-runner", () => ({
   cancelCourseDesignJob: vi.fn(),
   pauseCourseDesignForOutlineReview: vi.fn(),
   promoteTestLessonToFullCourse: mocks.promote,
-  resumeCourseDesignAfterOutlineReview: vi.fn(),
+  resumeCourseDesignAfterOutlineReview: mocks.resume,
   runCourseDesignJob: vi.fn(),
   resumeRecoverableCourseDesignJob: vi.fn(),
   TestLessonPromotionError: mocks.TestLessonPromotionError,
+  TestLessonSelectionError: mocks.TestLessonSelectionError,
 }));
 vi.mock("@/lib/session/server-store", () => ({ getCourse: vi.fn() }));
 vi.mock("@/lib/course-design/generation-references", () => ({ GenerationReferenceError: class extends Error {}, resolveGenerationReferenceMaterials: mocks.references }));
@@ -45,6 +50,25 @@ function storedJob(request: unknown, status = "completed") {
 
 describe("resource-package design generation admission", () => {
   beforeEach(() => { vi.clearAllMocks(); mocks.find.mockResolvedValue(null); mocks.packageJob.mockResolvedValue(null); mocks.references.mockResolvedValue([]); });
+
+  it("passes the teacher-selected test section to the durable design task", async () => {
+    mocks.resume.mockResolvedValue({
+      ...storedJob({ courseId: "course-1", generationScope: "test-lesson", testSectionId: "section-b" }, "queued"),
+      reviewStatus: "approved",
+    });
+    const sceneOutlines = [{ id: "slide-b", title: "模型评估", type: "slide", lectureSectionId: "section-b" }];
+    const response = await PATCH(patchRequest({ action: "resume", reviewKind: "outline", sceneOutlines, testSectionId: "section-b" }), context);
+    expect(response.status).toBe(200);
+    expect(mocks.resume).toHaveBeenCalledWith("course-1", expect.objectContaining({ testSectionId: "section-b", sceneOutlines }));
+    expect(await response.json()).toMatchObject({ job: { requestPreview: { testSectionId: "section-b" } } });
+  });
+
+  it("returns a correction request for an invalid test-section selection", async () => {
+    mocks.resume.mockRejectedValue(new mocks.TestLessonSelectionError("请重新选择测试小节"));
+    const response = await PATCH(patchRequest({ action: "resume", reviewKind: "outline", testSectionId: "missing" }), context);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "INVALID_TEST_LESSON_SELECTION", detail: "请重新选择测试小节" });
+  });
 
   it("returns the current streamed-call phase for live progress", async () => {
     mocks.find.mockResolvedValue({

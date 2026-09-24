@@ -1,7 +1,7 @@
 import type { TeacherResourceScene } from "@/lib/session/types";
 import { checkPblStageCoverage, type PblStageCoverage } from "@/lib/openmaic/pbl/course-template";
 import { classifyScenes } from "@/lib/openmaic-bridge/scene-classifier";
-import { persistClassroom } from "@openmaic/lib/server/classroom-storage";
+import { persistClassroom, readClassroom } from "@openmaic/lib/server/classroom-storage";
 import { throwIfAborted } from "@openmaic/lib/generation/generation-retry";
 import type { Scene, Stage } from "@openmaic/lib/types/stage";
 
@@ -53,11 +53,15 @@ export async function splitGeneratedClassroom(input: {
   }
 
   throwIfAborted(input.signal);
+  // Splitting rewrites the original classroom before it is linked to the
+  // teacher preview. Keep its preparation state visible across that write.
+  const assetGeneration = (await readClassroom(input.stage.id))?.assetGeneration;
   await persistClassroom(
     {
       id: input.stage.id,
       stage: input.stage,
       scenes: studentScenes,
+      ...(assetGeneration ? { assetGeneration } : {}),
     },
   );
 
@@ -82,6 +86,7 @@ export async function splitGeneratedClassroom(input: {
         id: teacherStage.id,
         stage: teacherStage,
         scenes: normalizedTeacherScenes,
+        ...(assetGeneration ? { assetGeneration } : {}),
       },
     );
     throwIfAborted(input.signal);

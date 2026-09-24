@@ -30,6 +30,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { CoursePublishPathPreview } from "@/components/teacher/course-publish-path-preview";
 import { TeachingToolRunbook } from "@/components/teacher/teaching-tool-runbook";
 import { StudentStageHost } from "@/components/openmaic-bridge/student-stage-host";
+import { useCourseGenerationPreviewSync } from "@/hooks/use-course-generation-preview-sync";
 import { useCourse, useHydrated, useSession } from "@/lib/session/store";
 import type {
   AdaptiveBranchOutline,
@@ -132,6 +133,12 @@ export default function PreviewCoursePage() {
   const { user, publishCourse } = session;
   const course = useCourse(params?.id);
   const hydrated = useHydrated();
+  const { refreshKey: previewRefreshKey, previewClassroomId: livePreviewClassroomId } = useCourseGenerationPreviewSync({
+    courseId: course?.id,
+    courseVersion: course?.version,
+    classroomId: course?.aiLearningClassroomId || course?.content._openmaicClassroomId,
+    refreshCourse: () => session.refresh("teacher"),
+  });
   const [publishing, setPublishing] = useState(false);
   const view = parsePreviewView(searchParams.get("view"));
   const [selectedOutlineId, setSelectedOutlineId] = useState<string>();
@@ -617,8 +624,9 @@ export default function PreviewCoursePage() {
             </details> : null}
 
             {view === "student" ? <StudentClassroomExperience
-              classroomId={classroomId}
+              classroomId={livePreviewClassroomId || classroomId}
               course={course}
+              previewRefreshKey={previewRefreshKey}
               onBackToDirector={() => selectView("overview")}
               onSidebarCollapsedChange={setStudentSidebarCollapsed}
               sidebarCollapsed={studentSidebarCollapsed}
@@ -1006,12 +1014,14 @@ function PublishReadiness({ checks }: { checks: PublishCheck[] }) {
 function StudentClassroomExperience({
   classroomId,
   course,
+  previewRefreshKey,
   onBackToDirector,
   onSidebarCollapsedChange,
   sidebarCollapsed,
 }: {
   classroomId?: string;
   course: Course;
+  previewRefreshKey: string;
   onBackToDirector: () => void;
   onSidebarCollapsedChange: (collapsed: boolean) => void;
   sidebarCollapsed: boolean;
@@ -1038,6 +1048,7 @@ function StudentClassroomExperience({
             className="h-[min(820px,calc(100dvh-190px))] min-h-[520px] overflow-hidden rounded-[9px] border border-stone-200 bg-white lg:min-h-[650px]"
             classroomId={classroomId}
             courseId={course.id}
+            previewRefreshKey={previewRefreshKey}
             knowledgeGraph={course.content.knowledgeGraph}
             knowledgePoints={course.content.knowledgePoints}
             mode="teacher-preview"

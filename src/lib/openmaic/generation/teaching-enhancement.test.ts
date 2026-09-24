@@ -1,3 +1,4 @@
+import { TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION } from './teaching-contract-version';
 import { describe, expect, it, vi } from 'vitest';
 import type { AICallFn } from './pipeline-types';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
@@ -184,6 +185,34 @@ describe('formal course teaching enhancement', () => {
     expect(outlines[2]?.teachingBrief?.assessmentFocus).toContain('p1 的解释与应用');
   });
 
+  it('keeps an accepted quiz brief stable when its teaching page gains continuation slides', async () => {
+    const first = page('p1', 0);
+    first.teachingBrief = {
+      schemaVersion: 1,
+      designVersion: TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION,
+      sharedContext,
+      teachingPlan,
+      explanation: '先核验原始来源，再判断网页是否独立。',
+      examples: ['同一份校志被多个网页转载。'],
+      conditions: ['同源转载不能作为多份独立证据。'],
+      evidence: [],
+      assessmentFocus: '说明判断来源独立性的依据。',
+      resourceNeeds: [
+        { kind: 'image', prompt: '两张转载网页的可见对照', purpose: '观察来源差异', required: true },
+        { kind: 'diagram', prompt: '网页回溯原始来源', purpose: '说明来源关系', required: true },
+      ],
+    };
+    const quiz = { ...page('quiz', 2), type: 'quiz' as const };
+    const aiCall = vi.fn<AICallFn>();
+    const testOutlines = await enhanceTeachingBriefs({ outlines: [first, quiz], requirement: '判断来源', aiCall });
+    const continued = { ...first, id: 'p1--continuation-2', order: 1 };
+    const fullOutlines = await enhanceTeachingBriefs({ outlines: [first, continued, quiz], requirement: '判断来源', aiCall });
+
+    expect(aiCall).not.toHaveBeenCalled();
+    expect(fullOutlines[2]?.teachingBrief).toEqual(testOutlines[1]?.teachingBrief);
+    expect(fullOutlines[2]?.teachingBrief?.resourceNeeds).toHaveLength(2);
+  });
+
   it('splits teaching design by section and reports bounded progress', async () => {
     const first = page('p1', 0);
     const second = { ...page('p2', 1), parentActivityId: 'section-2' };
@@ -325,6 +354,41 @@ describe('formal course teaching enhancement', () => {
   });
 });
 
+describe('adopted historical teaching contracts', () => {
+  const brief = () => normalizeTeachingEnhancement({ sharedContext, pages: [{ outlineId: 'p1',
+    explanation: '检查页面的来源关系', examples: [], conditions: [], assessmentFocus: '识别同源转载',
+    evidenceQuotes: [], teachingPlan }] }, [page('p1', 0)]).get('p1')!;
+
+  it('preserves complete historical compiled and enhanced plans without model calls or version rewriting', async () => {
+    const outlines = ['teaching-blueprint-v3-compiled-v12-learning-boundary', 'shared-page-contract-v18-learning-boundary']
+      .map((designVersion, index) => ({ ...page(`p${index + 1}`, index), teachingBrief: { ...brief(), designVersion } }));
+    const original = structuredClone(outlines);
+    const ai = vi.fn<AICallFn>();
+    const restored = await enhanceTeachingBriefs({ outlines, requirement: '保留已确认教学设计', aiCall: ai });
+    expect(ai).not.toHaveBeenCalled();
+    expect(restored).toEqual(original);
+    expect(outlines).toEqual(original);
+    expect(restored.every(hasCurrentTeachingBrief)).toBe(true);
+  });
+
+  it.each(['old', 'unrelated-v12-learning-boundary', 'teaching-blueprint-v3-compiled-v999-learning-boundary',
+    'shared-page-contract-v999-learning-boundary', 'shared-page-contract-v0-learning-boundary'])
+  ('does not assume unknown or future contract semantics are supported: %s', (designVersion) => {
+    expect(hasCurrentTeachingBrief({ ...page('p1', 0), teachingBrief: { ...brief(), designVersion } })).toBe(false);
+  });
+
+  it('requires the full supported structure even when the version family is recognized', () => {
+    const valid = { ...brief(), designVersion: 'teaching-blueprint-v3-compiled-v12-learning-boundary' };
+    for (const invalid of [
+      { ...valid, schemaVersion: 2 }, { ...valid, explanation: '' }, { ...valid, examples: undefined },
+      { ...valid, sharedContext: { ...sharedContext, learningPurpose: '' } },
+      { ...valid, teachingPlan: { ...teachingPlan, taskConnection: undefined } },
+      { ...valid, teachingPlan: { ...teachingPlan, taskConnection: { mode: 'none', rationale: '' } } },
+      { ...valid, teachingPlan: { ...teachingPlan, narrationFocus: undefined } },
+    ]) expect(hasCurrentTeachingBrief({ ...page('p1', 0), teachingBrief: invalid as typeof valid })).toBe(false);
+  });
+});
+
  describe('adaptive teaching contracts', () => {
   it('allows a focused page with no extra example or boundary and preserves its explanation responsibilities', () => {
     const brief = normalizeTeachingEnhancement({ sharedContext, pages: [{ outlineId: 'p1', explanation: '检查多个页面是否转载同一来源',
@@ -334,6 +398,10 @@ describe('formal course teaching enhancement', () => {
     expect(brief.teachingPlan).toEqual(teachingPlan);
     expect(hasCurrentTeachingBrief({ ...page('p1', 0), teachingBrief: brief })).toBe(true);
     expect(hasCurrentTeachingBrief({ ...page('p1', 0), teachingBrief: { ...brief, designVersion: 'old' } })).toBe(false);
+    const compiled = { ...brief, designVersion: TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION };
+    expect(hasCurrentTeachingBrief({ ...page('p1', 0), teachingBrief: compiled })).toBe(true);
+    expect(hasCurrentTeachingBrief({ ...page('p1', 0), teachingBrief: { ...compiled, explanation: '' } })).toBe(false);
+    expect(hasCurrentTeachingBrief({ ...page('p1', 0), teachingBrief: { ...compiled, teachingPlan: { ...teachingPlan, taskConnection: undefined } } })).toBe(false);
     expect(hasCurrentTeachingBrief({
       ...page('p1', 0),
       teachingBrief: { ...brief, teachingPlan: { ...teachingPlan, taskConnection: undefined } },
@@ -403,9 +471,12 @@ describe('formal course teaching enhancement', () => {
     expect(prompt.system).toContain('严格继承 teachingPlan.taskConnection');
     expect(prompt.system).toContain('不得因为资料的 taskAssociation 提到成果制作');
     expect(prompt.system).toContain('实际学习者由学段、专业和 learner profile 决定');
-    expect(prompt.system).toContain('即使课程前面存在教师导入阶段');
+    expect(prompt.system).toContain('不表示重新执行整堂课的教师导入');
+    expect(prompt.system).toContain('不重做前一阶段的图片观察、课堂对比或提问');
     expect(prompt.system).toContain('后页才出现的术语、案例或问题必须在其所属页面作为新内容引入');
     expect(prompt.system).toContain('测验后的反馈完成收束');
+    expect(prompt.system).toContain('普通 slide 页用于讲解与示范，无法接收学生答案');
+    expect(prompt.user).toContain('slide 页不生成 pageTask');
     expect(prompt.user).toContain('需要按共同维度逐项查读的差异可优先 table');
     expect(prompt.system).toContain('同一案例明确分成两个输出通道');
     expect(prompt.user).toContain('examples、explanation、visibleContent 和 narrationFocus 直接写实际课堂内容');
@@ -448,7 +519,7 @@ describe('formal course teaching enhancement', () => {
     expect(ai.mock.calls[0]?.[1]).toContain('蓝图中的完整变式');
     expect(result[0]?.teachingBrief).toEqual(completed.teachingBrief);
     expect(result[1]?.teachingBrief?.sharedContext).toEqual(sharedContext);
-    expect(result[1]?.teachingBrief?.pageTask).toEqual(existingTask);
+    expect(result[1]?.teachingBrief?.pageTask).toBeUndefined();
   });
 
   it('adds supported missing case facts while preserving adopted wording and terms', () => {

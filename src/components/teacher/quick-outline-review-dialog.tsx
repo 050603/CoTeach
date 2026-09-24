@@ -10,14 +10,17 @@ import type { SceneOutline } from "@/lib/openmaic/types/generation";
 
 export function QuickOutlineReviewDialog({
   initialOutlines,
+  testMode = false,
   onClose,
   onConfirm,
 }: {
   initialOutlines: SceneOutline[];
+  testMode?: boolean;
   onClose: () => void;
-  onConfirm: (outlines: SceneOutline[]) => Promise<void>;
+  onConfirm: (outlines: SceneOutline[], testSectionId?: string) => Promise<void>;
 }) {
   const [outlines, setOutlines] = useState(initialOutlines);
+  const [selectedSectionId, setSelectedSectionId] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const blockingCount = countBlockingOutlines(outlines);
@@ -34,7 +37,12 @@ export function QuickOutlineReviewDialog({
       return {
         id,
         title: pages[0]?.lectureSectionTitle || pages[0]?.title || "知识小节",
-        minutes: Math.max(1, Math.round(pages.reduce((sum, page) => sum + (page.targetDurationSec ?? 0), 0) / 60)),
+        pageCount: pages.length,
+        selectable: pages.every((page) => page.lectureSectionId?.trim() === id)
+          && pages.some((page) => page.type === "quiz")
+          && teaching.length > 0
+          && pages.every((page) => (page.targetDurationSec ?? page.estimatedDuration ?? 0) > 0),
+        minutes: Math.max(1, Math.round(pages.reduce((sum, page) => sum + (page.targetDurationSec ?? page.estimatedDuration ?? 0), 0) / 60)),
         mainline: teaching.flatMap((page) => page.teachingBrief?.teachingPlan?.newContent ? [page.teachingBrief.teachingPlan.newContent] : []),
         reasoning: teaching.flatMap((page) => page.teachingBrief?.teachingPlan?.reasoningSteps ?? []),
         examples: [...new Set(teaching.flatMap((page) => page.teachingBrief?.examples ?? []))],
@@ -45,10 +53,15 @@ export function QuickOutlineReviewDialog({
 
   async function confirm() {
     if (saving || outlines.length === 0 || blockingCount > 0) return;
+    if (testMode && !sectionSummaries.some((section) => section.id === selectedSectionId && section.selectable)) {
+      setError("请先选择一个包含讲授页面和节末检测的完整知识小节。");
+      return;
+    }
     setSaving(true);
     setError(undefined);
     try {
-      await onConfirm(outlines);
+      if (testMode) await onConfirm(outlines, selectedSectionId);
+      else await onConfirm(outlines);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法保存大纲，请稍后重试。");
     } finally {
@@ -68,7 +81,9 @@ export function QuickOutlineReviewDialog({
           <div>
             <p className="text-xs font-bold uppercase tracking-[.14em] text-blue-700">快速生成已暂停</p>
             <h2 className="mt-1 font-editorial text-xl font-semibold text-stone-950">课程详细大纲</h2>
-            <p className="mt-1 text-xs text-stone-500">保存后，后续课堂资源将严格按照这里确认的页面、互动与教师资源继续生成。</p>
+            <p className="mt-1 text-xs text-stone-500">{testMode
+              ? "请在完整大纲中选择最关心的一个知识小节；确认后仅生成这一小节供预览。"
+              : "保存后，后续课堂资源将严格按照这里确认的页面、互动与教师资源继续生成。"}</p>
           </div>
           <button className="grid size-9 shrink-0 place-items-center rounded-full border border-stone-200 bg-white text-stone-500 transition hover:border-stone-400 hover:text-stone-900 disabled:opacity-50" disabled={saving} onClick={onClose} type="button" aria-label="缩小并返回快速生成卡片">
             <Minimize2 size={16} />
@@ -77,15 +92,31 @@ export function QuickOutlineReviewDialog({
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6" data-testid="outline-review-scroll-area">
           <section className="mb-5 space-y-3" aria-label="小节知识主线与理解标准">
             <div>
-              <h3 className="text-sm font-semibold text-stone-950">先审阅整节讲授内容</h3>
-              <p className="mt-1 text-xs text-stone-500">这里确认的是核心解释、推理与理解标准；下面再展开页面分工。</p>
+              <h3 className="text-sm font-semibold text-stone-950">{testMode ? "选择要测试的知识小节" : "先审阅整节讲授内容"}</h3>
+              <p className="mt-1 text-xs text-stone-500">{testMode
+                ? "完整课程大纲保留在下方；本次仅生成所选小节的讲授、互动和检测页面。"
+                : "这里确认的是核心解释、推理与理解标准；下面再展开页面分工。"}</p>
             </div>
             {sectionSummaries.map((section) => (
-              <article className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm" key={section.id}>
+              <article className={`rounded-xl border bg-white p-4 shadow-sm ${testMode && selectedSectionId === section.id ? "border-blue-500 ring-2 ring-blue-100" : "border-stone-200"}`} key={section.id}>
                 <div className="flex items-center justify-between gap-3">
-                  <h4 className="font-semibold text-stone-900">{section.title}</h4>
+                  {testMode ? (
+                    <label className="flex cursor-pointer items-center gap-3 font-semibold text-stone-900">
+                      <input
+                        checked={selectedSectionId === section.id}
+                        className="size-4 accent-blue-700"
+                        disabled={!section.selectable || saving}
+                        name="test-section"
+                        onChange={() => { setSelectedSectionId(section.id); setError(undefined); }}
+                        type="radio"
+                        value={section.id}
+                      />
+                      {section.title}
+                    </label>
+                  ) : <h4 className="font-semibold text-stone-900">{section.title}</h4>}
                   <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">约 {section.minutes} 分钟</span>
                 </div>
+                {testMode ? <p className="mt-1 text-xs text-stone-500">{section.pageCount} 页{section.selectable ? "，包含讲授与节末检测" : "，缺少小节归属、讲授、节末检测或页面时长，暂不可选择"}</p> : null}
                 <div className="mt-3 grid gap-3 lg:grid-cols-2">
                   <div>
                     <p className="text-[11px] font-bold uppercase tracking-wide text-stone-500">知识主线与关键解释</p>
@@ -146,7 +177,7 @@ export function QuickOutlineReviewDialog({
               type="button"
             >
               <Check size={16} />
-              {saving ? "正在保存并继续生成…" : "确认大纲并继续生成"}
+              {saving ? "正在保存并继续生成…" : testMode ? "生成所选小节" : "确认大纲并继续生成"}
             </button>
           </div>
         </footer>

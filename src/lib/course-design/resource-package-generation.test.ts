@@ -105,6 +105,50 @@ describe("confirmed resource package generation", () => {
     }
   });
 
+  it("persists the chosen test section and requeues a paused outline task", async () => {
+    const { resumeCourseDesignAfterOutlineReview, TestLessonSelectionError } = await import("./job-runner");
+    const { designGenerationJobs } = await import("@/lib/course-generation/job-storage");
+    const courseStore = await import("@/lib/session/server-store");
+    const job = {
+      id: "test-outline-review",
+      courseId: "course-1",
+      status: "paused",
+      step: "outlineReview",
+      executionId: null,
+      request: { courseId: "course-1", teacherBrief: "", generationScope: "test-lesson", generationContractVersion: 3 },
+      lastHeartbeatAt: new Date(),
+    };
+    const sceneOutlines = [
+      { id: "slide-a", title: "讲解", type: "slide", lectureSectionId: "section-a", targetDurationSec: 120 },
+      { id: "quiz-a", title: "检测", type: "quiz", lectureSectionId: "section-a", targetDurationSec: 60 },
+    ];
+    const find = vi.spyOn(designGenerationJobs, "findUnique").mockResolvedValue(job as never);
+    const update = vi.spyOn(designGenerationJobs, "update").mockImplementation(async (input) => ({ ...job, ...input.data }) as never);
+    const saveCourse = vi.spyOn(courseStore, "updateCourse").mockResolvedValue(undefined as never);
+    try {
+      await expect(resumeCourseDesignAfterOutlineReview("course-1", {
+        reviewKind: "outline", sceneOutlines: sceneOutlines as never, testSectionId: "missing",
+      })).rejects.toBeInstanceOf(TestLessonSelectionError);
+      expect(update).not.toHaveBeenCalled();
+
+      await resumeCourseDesignAfterOutlineReview("course-1", {
+        reviewKind: "outline", sceneOutlines: sceneOutlines as never, testSectionId: "section-a", actorId: "teacher-1",
+      });
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: "test-outline-review" },
+        data: expect.objectContaining({
+          status: "queued",
+          reviewStatus: "approved",
+          request: expect.objectContaining({ testSectionId: "section-a", reviewActorId: "teacher-1" }),
+        }),
+      }));
+    } finally {
+      find.mockRestore();
+      update.mockRestore();
+      saveCourse.mockRestore();
+    }
+  });
+
   it("preserves teacher facts and required subpoints without asking the model to infer them", async () => {
     const { applyResourcePackageGenerationInput, inferCourseSeed } = await import("./job-runner");
     const resourcePackage = confirmedPackage();

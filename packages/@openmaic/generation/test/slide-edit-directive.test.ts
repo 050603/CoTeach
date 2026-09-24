@@ -57,6 +57,17 @@ const BASELINE: GeneratedSlideContent = {
 };
 
 describe('slide content edit-mode directive', () => {
+  it.each([undefined, INSTRUCTION])('keeps native baseline editing compatible when new generation requires flow (%s)', async (editDirective) => {
+    const { aiCall, lastUser } = makeCapturingAiCall(JSON.stringify(BASELINE));
+    const content = await generateSceneContent(slideOutline(), aiCall, {
+      componentAuthoring: true, baselineContent: BASELINE, editDirective,
+    });
+    expect(content).not.toBeNull();
+    expect(content && 'elements' in content ? content.elements : []).toHaveLength(1);
+    expect(lastUser()).toContain('EDIT MODE');
+    expect(lastUser()).toContain('BASELINE-ELEMENT-SENTINEL');
+  });
+
   it('threads editDirective + baselineContent into the slide content prompt', async () => {
     const { aiCall, lastUser } = makeCapturingAiCall(
       JSON.stringify({ elements: [], background: null, remark: '' }),

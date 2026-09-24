@@ -69,13 +69,17 @@ export function SpotlightOverlay({ rootRef }: SpotlightOverlayProps) {
       ref={containerRef}
       className="absolute inset-0 z-[100] pointer-events-none overflow-hidden"
     >
-      <AnimatePresence mode="wait">
+      <AnimatePresence mode="sync">
         {active && rect && (
           <motion.div
             key={`spotlight-${targetKey}`}
-            initial={{ opacity: 0 }}
+            data-visual-cue="spotlight"
+            data-visual-target-id={spotlightElementId}
+            // Phrase-timed emphasis must be visible at its audio cue; waiting
+            // for the previous target's exit and a fade-in delays the lesson.
+            initial={{ opacity: 1 }}
             animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            exit={{ opacity: 0, transition: { duration: 0.08 } }}
             className="absolute inset-0"
           >
             <svg

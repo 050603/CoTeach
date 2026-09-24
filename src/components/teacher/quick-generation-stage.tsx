@@ -63,6 +63,7 @@ export function QuickGenerationStage({
   reviewAvailable,
   reviewAvailableUntil,
   reviewKind,
+  testMode = false,
   backgroundEnabled,
   cancelling,
   confirmCancel,
@@ -90,6 +91,7 @@ export function QuickGenerationStage({
   reviewAvailable: boolean;
   reviewAvailableUntil?: string | null;
   reviewKind?: "knowledge" | "capacity" | "outline" | null;
+  testMode?: boolean;
   backgroundEnabled: boolean | null;
   cancelling: boolean;
   confirmCancel: boolean;
@@ -196,7 +198,7 @@ export function QuickGenerationStage({
     ? "查看知识图谱并确认"
     : activeReviewKind === "capacity"
       ? "查看时间冲突并决定"
-      : "查看课程大纲并确认";
+      : testMode ? "选择测试小节" : "查看课程大纲并确认";
 
   function showPreviousArtifact() {
     if (safeActiveIndex <= 0) return;

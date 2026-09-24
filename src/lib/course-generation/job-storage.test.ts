@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GenerationJob } from "@prisma/client";
-const mocks = vi.hoisted(() => ({ find: vi.fn(), create: vi.fn(), update: vi.fn(), template: vi.fn(), transaction: vi.fn(), lock: vi.fn(), deleteCheckpoints: vi.fn() }));
+const mocks = vi.hoisted(() => ({ find: vi.fn(), create: vi.fn(), update: vi.fn(), template: vi.fn(), transaction: vi.fn(), lock: vi.fn(), deleteCheckpoints: vi.fn(), checkpoint: vi.fn(), saveCheckpoint: vi.fn() }));
 vi.mock("@/lib/db/client", () => ({ prisma: { generationJob: { findMany: mocks.find }, $transaction: mocks.transaction } }));
 import { contentGenerationJobs, designGenerationJobs, resourcePackageJobs, projectGenerationJob } from "./job-storage";
 const now = new Date("2026-09-01T00:00:00Z");
@@ -9,9 +9,34 @@ beforeEach(() => {
   vi.resetAllMocks(); mocks.find.mockResolvedValue([row()]); mocks.template.mockResolvedValue({ id: "template" });
   mocks.update.mockImplementation(async ({ data }) => ({ ...row(), ...data, updatedAt: now }));
   mocks.create.mockResolvedValue(row());
-  mocks.transaction.mockImplementation((fn) => fn({ $executeRaw: mocks.lock, generationJob: { findMany: mocks.find, create: mocks.create, update: mocks.update }, generationCheckpoint: { deleteMany: mocks.deleteCheckpoints }, classroomTemplate: { findUnique: mocks.template } }));
+  mocks.transaction.mockImplementation((fn) => fn({ $executeRaw: mocks.lock, generationJob: { findMany: mocks.find, create: mocks.create, update: mocks.update }, generationCheckpoint: { deleteMany: mocks.deleteCheckpoints, findUnique: mocks.checkpoint, upsert: mocks.saveCheckpoint }, classroomTemplate: { findUnique: mocks.template } }));
 });
 describe("V2 generation job persistence", () => {
+  it.each(['prepared-outlines', 'all'] as const)('archives trusted old classroom origins before %s replacement clears output', async (checkpointPolicy) => {
+    mocks.find.mockResolvedValue([{ ...row(), status: 'COMPLETED', result: { id: 'old-test' }, request: { id: 'foreign-injected' } }]);
+    mocks.checkpoint.mockResolvedValue({ state: { split: { studentClassroomId: 'old-test', teacherClassroomId: 'old-test-teacher' } } });
+    await contentGenerationJobs.replace({
+      where: { id: 'job', status: 'completed', version: 1 }, checkpointPolicy,
+      data: { status: 'queued', result: null },
+    });
+    expect(mocks.saveCheckpoint.mock.calls.map(([args]) => args.create)).toEqual([
+      { jobId: 'job', step: 'classroom-media-origin:old-test', state: { classroomId: 'old-test' } },
+      { jobId: 'job', step: 'classroom-media-origin:old-test-teacher', state: { classroomId: 'old-test-teacher' } },
+    ]);
+    expect(mocks.saveCheckpoint.mock.invocationCallOrder.at(-1)).toBeLessThan(mocks.deleteCheckpoints.mock.invocationCallOrder[0]);
+    expect(mocks.deleteCheckpoints).toHaveBeenCalledWith({ where: checkpointPolicy === 'all'
+      ? { jobId: 'job', NOT: { step: { startsWith: 'classroom-media-origin:' } } }
+      : { jobId: 'job', step: 'prepared-outlines' } });
+    expect(mocks.deleteCheckpoints.mock.invocationCallOrder[0]).toBeLessThan(mocks.update.mock.invocationCallOrder[0]);
+  });
+
+  it('does not turn user-controlled request IDs into trusted media origins', async () => {
+    mocks.find.mockResolvedValue([{ ...row(), request: { id: 'foreign', studentClassroomId: 'foreign' } }]);
+    mocks.checkpoint.mockResolvedValue(null);
+    await contentGenerationJobs.replace({ where: { id: 'job' }, checkpointPolicy: 'all', data: { result: null } });
+    expect(mocks.saveCheckpoint).not.toHaveBeenCalled();
+  });
+
   it("scopes content and design workers to distinct job types", async () => {
     await contentGenerationJobs.findUnique({ where: { courseId: "template" } });
     await designGenerationJobs.findUnique({ where: { courseId: "template" } });

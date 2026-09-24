@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStageStore } from './stage';
+import { useCanvasStore } from './canvas';
 import { createBlankSlideScene } from '@openmaic/lib/edit/slide-defaults';
 import { useDeletedSceneRecycle } from '@openmaic/lib/edit/deleted-scene-recycle';
 
@@ -54,5 +55,30 @@ describe('scene editing order and identity', () => {
     expect(useStageStore.getState().currentSceneId).toBe(second.id);
     useStageStore.getState().setScenes([]);
     expect(useStageStore.getState().currentSceneId).toBeNull();
+  });
+});
+
+
+describe('whiteboard page isolation', () => {
+  it('closes a paused board on page navigation but preserves it for same-page media updates', () => {
+    const first = createBlankSlideScene('c1', '第一', 0);
+    const second = createBlankSlideScene('c1', '第二', 1);
+    useStageStore.getState().setScenes([first, second]);
+    useStageStore.getState().setCurrentSceneId(first.id);
+    useCanvasStore.getState().setWhiteboardOpen(true);
+    useStageStore.getState().setScenes([{ ...first, actions: [{ id: 'audio', type: 'speech', text: '讲解', audioUrl: '/ready.wav' }] }, second]);
+    useStageStore.getState().setCurrentSceneId(first.id);
+    expect(useCanvasStore.getState().whiteboardOpen).toBe(true);
+    useStageStore.getState().setCurrentSceneId(second.id);
+    expect(useCanvasStore.getState().whiteboardOpen).toBe(false);
+  });
+
+  it('closes the board if replacing pages removes the selected page', () => {
+    const first = createBlankSlideScene('c1', '第一', 0);
+    const second = createBlankSlideScene('c1', '第二', 1);
+    useStageStore.getState().setScenes([first, second]);
+    useCanvasStore.getState().setWhiteboardOpen(true);
+    useStageStore.getState().setScenes([second]);
+    expect(useCanvasStore.getState().whiteboardOpen).toBe(false);
   });
 });

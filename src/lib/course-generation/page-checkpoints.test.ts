@@ -47,6 +47,11 @@ const scene = {
 } as unknown as Scene;
 
 describe("course-generation page checkpoints", () => {
+  it("reuses page content when preceding layout splits change only its display order", () => {
+    expect(fingerprintSceneOutline({ ...outline, order: 12 })).toBe(fingerprintSceneOutline(outline));
+    expect(fingerprintSceneOutline({ ...outline, title: "教学内容已改变" })).not.toBe(fingerprintSceneOutline(outline));
+  });
+
   it("uses a stable fingerprint independent of object key insertion order", () => {
     const reordered = {
       title: outline.title,

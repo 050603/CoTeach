@@ -8,6 +8,7 @@ import {
   classroomAudioStoragePath,
   classroomTtsTimingOptions,
   planClassroomTtsRecovery,
+  reusePersistedSceneAssets,
 } from './classroom-asset-recovery';
 
 const roots: string[] = [];
@@ -20,7 +21,7 @@ function classroom(actions: Array<Record<string, unknown>>): PersistedClassroomD
     stage: { id: 'lesson-1', name: '恢复课', createdAt: 1, updatedAt: 1 },
     scenes: [{
       id: 'scene-1', stageId: 'lesson-1', title: '讲解', type: 'slide', order: 0,
-      content: { type: 'slide', elements: [] },
+      content: { type: 'slide', canvas: { elements: [] } },
       actions,
       timingPlan: { providerId: 'qwen-tts', modelId: 'qwen3-tts-flash', voiceId: 'Ethan', language: 'zh-CN' },
     } as never],
@@ -91,5 +92,47 @@ describe('classroom TTS recovery planning', () => {
     expect(classroomTtsTimingOptions(classroom([]).scenes)).toMatchObject({
       providerId: 'qwen-tts', modelId: 'qwen3-tts-flash', voiceId: 'Ethan', language: 'zh-CN',
     });
+  });
+});
+
+describe('test lesson asset promotion', () => {
+  it('reattaches matching speech and media without accepting assets for changed narration', () => {
+    const restored = classroom([
+      { id: 'same', type: 'speech', text: '已经验收的讲稿' },
+      { id: 'changed', type: 'speech', text: '更新的讲稿' },
+    ]).scenes[0];
+    restored.content = { type: 'slide', canvas: { id: 'new-canvas', elements: [{ id: 'image', type: 'image', src: 'gen_img_1' }] } } as never;
+    const previous = structuredClone(restored);
+    previous.actions = [
+      { id: 'same', type: 'speech', text: '已经验收的讲稿', audioUrl: '/api/openmaic/classroom-media/test/audio/old.wav', audioDurationSec: 10 },
+      { id: 'changed', type: 'speech', text: '旧讲稿', audioUrl: '/old.wav' },
+    ];
+    previous.content = { type: 'slide', canvas: { id: 'accepted-canvas', elements: [{ id: 'image', type: 'image', resourceId: 'gen_img_1', src: '/api/openmaic/classroom-media/test/media/gen_img_1.png' }] } } as never;
+    const promoted = reusePersistedSceneAssets(restored, previous);
+    expect(promoted.actions?.[0]).toMatchObject({ audioUrl: '/api/openmaic/classroom-media/test/audio/old.wav', audioDurationSec: 10 });
+    expect(promoted.actions?.[1]).not.toHaveProperty('audioUrl');
+    expect(promoted.content).toMatchObject({ canvas: { id: 'accepted-canvas', elements: [{ src: '/api/openmaic/classroom-media/test/media/gen_img_1.png' }] } });
+    expect(restored.actions?.[0]).not.toHaveProperty('audioUrl');
+    expect(reusePersistedSceneAssets(restored, { ...previous, id: 'different-page' })).toBe(restored);
+  });
+
+  it('keeps a changed image resource pending even when its element slot is unchanged', () => {
+    const restored = classroom([]).scenes[0];
+    restored.content = { type: 'slide', canvas: { elements: [{ id: 'same-slot', type: 'image', resourceId: 'gen_img_B', src: 'gen_img_B' }] } } as never;
+    const previous = structuredClone(restored);
+    previous.content = { type: 'slide', canvas: { elements: [{ id: 'same-slot', type: 'image', resourceId: 'gen_img_A', src: '/api/openmaic/classroom-media/test/media/A.png' }] } } as never;
+    expect(reusePersistedSceneAssets(restored, previous).content).toMatchObject({ canvas: { elements: [{ src: 'gen_img_B' }] } });
+  });
+
+  it('does not resurrect checkpoint audio invalidated in the durable classroom', () => {
+    const restored = classroom([{ id: 'speech', type: 'speech', text: '相同文本', audioUrl: '/old.wav', audioId: 'old', audioDurationSec: 10, speechAlignment: { status: 'aligned' } }]).scenes[0];
+    const previous = structuredClone(restored);
+    previous.actions = [{ id: 'speech', type: 'speech', text: '相同文本', audioInvalidated: true }];
+    const result = reusePersistedSceneAssets(restored, previous).actions?.[0];
+    expect(result).toMatchObject({ audioInvalidated: true });
+    expect(result).not.toHaveProperty('audioUrl');
+    expect(result).not.toHaveProperty('audioId');
+    expect(result).not.toHaveProperty('speechAlignment');
+    expect(restored.actions?.[0]).toHaveProperty('audioUrl', '/old.wav');
   });
 });

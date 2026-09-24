@@ -5,16 +5,17 @@ const mocks = vi.hoisted(() => ({
   lockJob: vi.fn(),
   findJob: vi.fn(),
   upsert: vi.fn(),
+  deleteMany: vi.fn(),
 }));
 
 vi.mock("@/lib/db/client", () => ({
   prisma: {
     $transaction: mocks.transaction,
-    generationCheckpoint: { upsert: mocks.upsert },
+    generationCheckpoint: { upsert: mocks.upsert, deleteMany: mocks.deleteMany },
   },
 }));
 
-import { saveGenerationCheckpoint } from "./checkpoint-storage";
+import { resetGenerationCheckpoints, saveGenerationCheckpoint } from "./checkpoint-storage";
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -30,6 +31,13 @@ beforeEach(() => {
 });
 
 describe("generation checkpoint execution ownership", () => {
+  it("retains trusted media ownership when generation checkpoints are reset", async () => {
+    await resetGenerationCheckpoints('job-1');
+    expect(mocks.deleteMany).toHaveBeenCalledWith({
+      where: { jobId: 'job-1', NOT: { step: { startsWith: 'classroom-media-origin:' } } },
+    });
+  });
+
   it("persists a checkpoint while the execution lease is still owned", async () => {
     await saveGenerationCheckpoint("job-1", "page:one", { ready: true }, {
       executionId: "execution-current",

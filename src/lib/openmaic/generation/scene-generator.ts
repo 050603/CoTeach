@@ -125,6 +125,7 @@ const INTERACTIVE_WIDGET_ACTIONS = [
 export interface SceneContentOptions {
   componentAuthoring?: boolean;
   textMeasure?: TextMeasure;
+  onFailure?: (detail: string) => void;
   /** @deprecated Content checks are now explicitly requested in teacher preview. */
   reviewSlideContent?: boolean;
   /** Program-drawn spatial plan, never a generated teaching image. */
@@ -531,6 +532,7 @@ export async function generateSceneContent(
         websiteReferenceContext,
         componentAuthoring,
         textMeasure,
+        onFailure: options.onFailure,
       });
     case 'quiz':
       return generateQuizContent(outline, aiCall, languageDirective, pblContext);

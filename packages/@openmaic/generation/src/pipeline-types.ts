@@ -31,6 +31,7 @@ export interface SceneGenerationContext {
 export interface GeneratedSlideData {
   /** First-pass authoring components, compiled to editable native elements. */
   components?: unknown[];
+  layout?: import('./flow-layout-compiler.js').FlowLayout;
   elements: Array<{
     type: 'text' | 'image' | 'video' | 'shape' | 'chart' | 'latex' | 'line';
     left: number;

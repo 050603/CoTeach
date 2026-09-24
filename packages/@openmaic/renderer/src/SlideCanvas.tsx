@@ -105,19 +105,6 @@ export function SlideCanvas(props: SlideCanvasProps) {
     effects?.laser?.previousTarget,
     { quoteRect: 'first-fragment' },
   );
-  const laserElement = effects?.laser
-    ? elements.find((element) => element.id === effects.laser!.elementId)
-    : undefined;
-  const previousLaserElement = effects?.laser?.previousTarget
-    ? elements.find((element) => element.id === effects.laser!.previousTarget!.elementId)
-    : undefined;
-  const avoidsText = (element: PPTElement | undefined, hasSelector: boolean) => Boolean(
-    hasSelector
-    || element?.type === 'text'
-    || element?.type === 'table'
-    || element?.type === 'latex'
-    || (element?.type === 'shape' && element.text?.content),
-  );
   const spotlightGeometry = useVisualTargetGeometry(slideRootRef, effects?.spotlight);
   const spotlightGeometries = useVisualTargetFragmentGeometries(slideRootRef, effects?.spotlight);
 
@@ -229,11 +216,6 @@ export function SlideCanvas(props: SlideCanvasProps) {
                   color={effects.laser.color}
                   duration={effects.laser.duration}
                   transitionDurationMs={effects.laser.transitionDurationMs}
-                  avoidCoveringTarget={avoidsText(laserElement, Boolean(effects.laser.selector))}
-                  previousAvoidCoveringTarget={avoidsText(
-                    previousLaserElement,
-                    Boolean(effects.laser.previousTarget?.selector),
-                  )}
                 />
               )}
             </AnimatePresence>

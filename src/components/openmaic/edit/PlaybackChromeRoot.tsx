@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { usePlaybackPreparation } from '@openmaic/lib/contexts/playback-preparation-context';
 import { useStageStore } from '@openmaic/lib/store';
 import { PENDING_SCENE_ID } from '@openmaic/lib/store/stage';
 import { useCanvasStore } from '@openmaic/lib/store/canvas';
@@ -112,6 +113,9 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     onSidebarCollapsedChange,
   }, ref) {
     const { t } = useI18n();
+    const preparePlayback = usePlaybackPreparation();
+    const preparePlaybackRef = useRef(preparePlayback);
+    preparePlaybackRef.current = preparePlayback;
     const {
       mode,
       getCurrentScene,
@@ -781,12 +785,14 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       if (autoStartRef.current) {
         autoStartRef.current = false;
         (async () => {
+          if (preparePlaybackRef.current && !await preparePlaybackRef.current(currentScene.id)) return;
+          if (useStageStore.getState().currentSceneId !== currentScene.id) return;
           if (currentScene && chatAreaRef.current) {
             const sessionId = await chatAreaRef.current.startLecture(currentScene.id);
             lectureSessionIdRef.current = sessionId;
             lectureActionCounterRef.current = 0;
           }
-          engine.start();
+          if (useStageStore.getState().currentSceneId === currentScene.id) engineRef.current?.start();
         })();
       } else {
         // Load saved playback state and restore position (but never auto-play).
@@ -806,12 +812,14 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       handledAutoplaySceneIdRef.current = autoplaySceneId;
       setPlaybackCompleted(false);
       void (async () => {
+        if (preparePlaybackRef.current && !await preparePlaybackRef.current(currentScene.id)) return;
+        if (useStageStore.getState().currentSceneId !== currentScene.id) return;
         if (chatAreaRef.current) {
           const sessionId = await chatAreaRef.current.startLecture(currentScene.id);
           lectureSessionIdRef.current = sessionId;
           lectureActionCounterRef.current = 0;
         }
-        engine.start();
+        if (useStageStore.getState().currentSceneId === currentScene.id) engineRef.current?.start();
       })();
     }, [autoplaySceneId, currentScene]);
 
@@ -1038,10 +1046,16 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
     // play/pause toggle
     const handlePlayPause = useCallback(async () => {
-      const engine = engineRef.current;
+      let engine = engineRef.current;
       if (!engine) return;
 
       const mode = engine.getMode();
+      if (mode === 'idle' && currentScene && preparePlaybackRef.current) {
+        if (!await preparePlaybackRef.current(currentScene.id)) return;
+        if (useStageStore.getState().currentSceneId !== currentScene.id) return;
+        engine = engineRef.current;
+        if (!engine) return;
+      }
       if (mode === 'playing' || mode === 'live') {
         engine.pause();
         // Pause lecture buffer so text stops immediately
@@ -1062,6 +1076,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           const sessionId = await chatAreaRef.current.startLecture(currentScene.id);
           lectureSessionIdRef.current = sessionId;
         }
+        if (currentScene && useStageStore.getState().currentSceneId !== currentScene.id) return;
         if (wasCompleted) {
           // Restart from beginning (user clicked restart after completion)
           lectureActionCounterRef.current = 0;

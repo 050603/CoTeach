@@ -15,6 +15,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
+import type { GenerationPreviewStatus } from '@/lib/course-generation/preview-status';
+import { PlaybackPreparationContext } from '@openmaic/lib/contexts/playback-preparation-context';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { Stage } from '@openmaic/components/stage';
 import { ThemeProvider } from '@openmaic/lib/hooks/use-theme';
@@ -55,6 +58,7 @@ const log = createLogger('StudentStageHost');
 interface ClassroomPayload {
   stage: StageType;
   scenes: Scene[];
+  generationPreview?: GenerationPreviewStatus;
   assetGeneration?: {
     status?: 'running' | 'completed' | 'partial-failure';
     failures?: Array<{ type: string; error: string }>;
@@ -167,6 +171,8 @@ interface StudentStageHostProps {
    * uses this to open the rail without changing the student's saved setting. */
   sidebarCollapsed?: boolean;
   onSidebarCollapsedChange?: (collapsed: boolean) => void;
+  /** Parent job lifecycle changes wake a completed/failed preview without remounting it. */
+  previewRefreshKey?: string;
 }
 
 export type AdaptiveSceneInsertion = {
@@ -375,12 +381,21 @@ export function StudentStageHost({
   requirePreparedAudio = false,
   sidebarCollapsed,
   onSidebarCollapsedChange,
+  previewRefreshKey,
 }: StudentStageHostProps) {
   const [state, setState] = useState<LoadState>('loading');
   const [errorMsg, setErrorMsg] = useState<string | undefined>();
   const [loadingMessage, setLoadingMessage] = useState('正在加载知识讲授课堂...');
   const [activeMediaClassroomId, setActiveMediaClassroomId] = useState(classroomId);
   const [autoplaySceneId, setAutoplaySceneId] = useState<string>();
+  const [previewStatus, setPreviewStatus] = useState<GenerationPreviewStatus>();
+  const [previewSceneId, setPreviewSceneId] = useState<string>();
+  const [previewSyncError, setPreviewSyncError] = useState<string>();
+  const previewPlaybackModeRef = useRef('idle');
+  const previewRefreshRef = useRef<Promise<ClassroomPayload> | null>(null);
+  const previewEpochRef = useRef(0);
+  const lastPreviewRefreshKeyRef = useRef(previewRefreshKey);
+  const teacherPreviewCursorRef = useRef<{ courseId: string; sceneId: string } | null>(null);
 
   // 已完成的场景 ID 集合（在内存中维护，避免重复上报）
   const completedRef = useRef<Set<string>>(new Set());
@@ -529,6 +544,7 @@ export function StudentStageHost({
       if (!classroom || (requirePreparedAudio && !isClassroomAudioPrepared(classroom))) {
         throw new Error('微课讲解音频准备超时，请稍后重试');
       }
+      setPreviewStatus(classroom.generationPreview);
       const { stage, scenes } = classroom;
       if (!Array.isArray(scenes) || scenes.length === 0) {
         setErrorMsg('知识讲授课堂未包含任何页面');
@@ -546,6 +562,10 @@ export function StudentStageHost({
       // 2. 拉取已有进度（用于恢复 currentSceneIndex）
       let restoredIndex = 0;
       let restoredCompleted: string[] = [];
+      const previewCursor = teacherPreviewCursorRef.current;
+      if (mode === 'teacher-preview' && courseId && previewCursor?.courseId === courseId) {
+        restoredIndex = Math.max(0, studentScenes.findIndex((scene) => scene.id === previewCursor.sceneId));
+      }
       if (!standalone && mode === 'student' && courseId && studentId) {
         try {
           const progRes = await fetch(
@@ -627,6 +647,7 @@ export function StudentStageHost({
         generationComplete: true,
         generationStatus: 'completed',
       });
+      setPreviewSceneId(initialSceneId);
       const visibleInitialScene = initialQueue.scenes.find((scene) => scene.id === initialSceneId);
       if (visibleInitialScene) onActiveSceneChange?.(visibleInitialScene);
       const initialAdaptiveScene = initialQueue.scenes.find(
@@ -684,6 +705,102 @@ export function StudentStageHost({
       }
     }
   }, [classroomId, courseId, flushTelemetry, mode, onActiveSceneChange, queueTelemetry, requirePreparedAudio, standalone, studentId, trackingEnabled]);
+
+  const refreshGenerationPreview = useCallback(async (beforePlaybackSceneId?: string) => {
+    const epoch = previewEpochRef.current;
+    let request = previewRefreshRef.current;
+    if (!request) {
+      request = (async () => {
+        const response = await fetch(`/api/openmaic/classroom?id=${encodeURIComponent(classroomId)}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error('课堂更新暂时无法同步，请稍后重试');
+        const payload = await response.json() as { success: boolean; classroom?: ClassroomPayload };
+        if (!payload.success || !payload.classroom) throw new Error('课堂更新暂时无法同步，请稍后重试');
+        return payload.classroom;
+      })();
+      previewRefreshRef.current = request;
+    }
+    try {
+      const classroom = await request;
+      if (epoch !== previewEpochRef.current || !hydratedRef.current) return null;
+      const apply = () => {
+        setPreviewStatus(classroom.generationPreview);
+        setPreviewSyncError(undefined);
+        const current = useStageStore.getState();
+        const incoming = (standalone ? classroom.scenes : selectStudentLearningScenes(classroom.scenes)).map(migrateScene);
+        if (!incoming.length) return;
+        const oldById = new Map(current.scenes.map((scene) => [scene.id, scene]));
+        const scenes = incoming.map((scene) => {
+          const old = oldById.get(scene.id);
+          // Keep a playing/paused scene and its engine intact until its next start.
+          if (old && ((scene.id !== beforePlaybackSceneId && scene.id === current.currentSceneId && previewPlaybackModeRef.current !== 'idle')
+            || JSON.stringify(old) === JSON.stringify(scene))) return old;
+          return scene;
+        });
+        const currentSceneId = scenes.some((scene) => scene.id === current.currentSceneId)
+          ? current.currentSceneId : scenes[0].id;
+        if (scenes.length !== current.scenes.length || scenes.some((scene, index) => scene !== current.scenes[index])) {
+          useStageStore.setState({ scenes, currentSceneId });
+        }
+      };
+      // The playback callback must see the rebuilt engine, not the pre-refresh one.
+      if (beforePlaybackSceneId) flushSync(apply);
+      else apply();
+      return classroom;
+    } finally {
+      if (previewRefreshRef.current === request) previewRefreshRef.current = null;
+    }
+  }, [classroomId, standalone]);
+
+  const preparePreviewPlayback = useCallback(async (sceneId: string) => {
+    try {
+      const classroom = await refreshGenerationPreview(sceneId);
+      return classroom?.generationPreview?.scenes[sceneId]?.status === 'ready';
+    } catch (error) {
+      setPreviewSyncError(error instanceof Error ? error.message : '课堂更新失败，请稍后重试');
+      return false;
+    }
+  }, [refreshGenerationPreview]);
+
+  useEffect(() => {
+    if (state !== 'ready' || !previewStatus?.active) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const classroom = await refreshGenerationPreview();
+        if (!classroom?.generationPreview?.active) return;
+      } catch (error) {
+        if (!disposed) setPreviewSyncError(error instanceof Error ? error.message : '课堂更新失败，正在重试');
+      }
+      if (!disposed) timer = setTimeout(() => { void poll(); }, 3_000);
+    };
+    timer = setTimeout(() => { void poll(); }, 3_000);
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [previewStatus?.active, refreshGenerationPreview, state]);
+
+  useEffect(() => {
+    if (state !== 'ready' || !previewStatus || lastPreviewRefreshKeyRef.current === previewRefreshKey) return;
+    lastPreviewRefreshKeyRef.current = previewRefreshKey;
+    void refreshGenerationPreview().catch((error) => {
+      setPreviewSyncError(error instanceof Error ? error.message : '课堂更新失败，请稍后重试');
+    });
+  }, [previewRefreshKey, previewStatus, refreshGenerationPreview, state]);
+
+  useEffect(() => {
+    if (state !== 'ready' || !previewStatus) return;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'hidden') return;
+      void refreshGenerationPreview().catch((error) => {
+        setPreviewSyncError(error instanceof Error ? error.message : '课堂更新失败，请稍后重试');
+      });
+    };
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [previewStatus, refreshGenerationPreview, state]);
 
   const loadPreparedClassroom = useCallback(
     (preparedClassroomId: string) =>
@@ -880,6 +997,7 @@ export function StudentStageHost({
 
   const handlePlaybackStateChange = useCallback(
     (playbackState: Omit<PlaybackSyncState, 'version'>) => {
+      previewPlaybackModeRef.current = playbackState.engineMode;
       if (mode !== 'student') return;
       const storeState = useStageStore.getState();
       const scene = storeState.scenes.find((item) => item.id === storeState.currentSceneId);
@@ -910,6 +1028,7 @@ export function StudentStageHost({
       if (!hydratedRef.current) return;
       if (current.currentSceneId === prevSceneId) return;
       prevSceneId = current.currentSceneId;
+      setPreviewSceneId(current.currentSceneId ?? undefined);
       if (
         previous.currentSceneId &&
         previous.currentSceneId !== current.currentSceneId
@@ -987,7 +1106,12 @@ export function StudentStageHost({
     // 组件卸载时清空 store，避免跨课堂污染
     return () => {
       classroomLoadControllerRef.current?.abort();
+      previewEpochRef.current += 1;
+      previewRefreshRef.current = null;
       const currentSceneId = useStageStore.getState().currentSceneId;
+      if (mode === 'teacher-preview' && courseId && currentSceneId) {
+        teacherPreviewCursorRef.current = { courseId, sceneId: currentSceneId };
+      }
       queueTelemetry('scene-leave', currentSceneId, {
         durationMs: Math.max(0, Date.now() - (sceneEnteredAtRef.current ?? Date.now())),
         visible: typeof document === 'undefined' ? true : document.visibilityState === 'visible',
@@ -997,7 +1121,17 @@ export function StudentStageHost({
       useStageStore.getState().clearStore();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classroomId, flushTelemetry, queueTelemetry]);
+  }, [classroomId, courseId, mode, flushTelemetry, queueTelemetry]);
+
+  const activePreviewMedia = previewSceneId ? previewStatus?.scenes[previewSceneId] : undefined;
+  const mediaLabel = activePreviewMedia?.phase === 'alignment' ? '教学动作对齐' : '音频生成';
+  const previewMessage = previewSyncError ?? (activePreviewMedia?.status === 'preparing'
+    ? activePreviewMedia.phase === 'alignment'
+      ? '本页教学动作正在与音频对齐，可先浏览页面；完成后即可播放。'
+      : '本页音频准备中，可先浏览页面；准备完成后即可播放。'
+    : activePreviewMedia?.status === 'failed'
+      ? `本页${mediaLabel}未完成${activePreviewMedia.error ? `：${activePreviewMedia.error}` : '，请恢复生成后重试。'}`
+      : undefined);
 
   return (
     <ThemeProvider>
@@ -1007,6 +1141,7 @@ export function StudentStageHost({
           <div
             data-openpbl-embed
             data-stage-host-mode={mode}
+            data-active-scene-id={previewSceneId}
             data-back-href={backHref}
             className={cn(
               'relative flex flex-col overflow-hidden bg-background text-foreground',
@@ -1017,6 +1152,11 @@ export function StudentStageHost({
             )}
           >
 
+            {state === 'ready' && previewMessage && (
+              <div role="status" className="shrink-0 border-b border-stone-200 bg-stone-50 px-4 py-2 text-sm text-stone-700">
+                {previewMessage}
+              </div>
+            )}
             {state === 'loading' ? (
               <div className="flex flex-1 items-center justify-center">
                 <div className="text-center text-muted-foreground">
@@ -1039,6 +1179,7 @@ export function StudentStageHost({
             ) : (
               <InstructorIdentityProvider value={instructorIdentity}>
                 <TeachingKnowledgeGraphProvider graph={knowledgeGraph} points={knowledgePoints}>
+                  <PlaybackPreparationContext.Provider value={previewStatus ? preparePreviewPlayback : undefined}>
                   <Stage
                     autoplaySceneId={autoplaySceneId}
                     experience="student-course"
@@ -1046,6 +1187,7 @@ export function StudentStageHost({
                     sidebarCollapsed={sidebarCollapsed}
                     onSidebarCollapsedChange={onSidebarCollapsedChange}
                   />
+                  </PlaybackPreparationContext.Provider>
                 </TeachingKnowledgeGraphProvider>
               </InstructorIdentityProvider>
             )}

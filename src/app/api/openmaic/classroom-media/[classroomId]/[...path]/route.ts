@@ -3,7 +3,7 @@ import path from 'path';
 import { type NextRequest } from 'next/server';
 import { CLASSROOMS_DIR, isValidClassroomId } from '@openmaic/lib/server/classroom-storage';
 import { normalizePlayableWav } from '@openmaic/lib/audio/wav-container';
-import { authorizeLegacyClassroomRead } from '@/lib/platform/access';
+import { authorizeClassroomMediaRead } from '@/lib/platform/classroom-media-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,11 +33,12 @@ export async function GET(
   context: { params: Promise<{ classroomId: string; path: string[] }> },
 ) {
   const { classroomId, path: pathParts } = await context.params;
-  const authorization = await authorizeLegacyClassroomRead(_request, classroomId);
-  if (authorization) return authorization;
   if (!isValidClassroomId(classroomId) || !Array.isArray(pathParts) || pathParts.length === 0) {
     return new Response('Invalid classroom media path', { status: 400 });
   }
+
+  const authorization = await authorizeClassroomMediaRead(_request, classroomId, pathParts);
+  if (authorization) return authorization;
 
   const classroomDir = path.resolve(CLASSROOMS_DIR, classroomId);
   const filePath = path.resolve(classroomDir, ...pathParts);

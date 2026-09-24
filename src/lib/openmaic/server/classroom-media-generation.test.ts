@@ -171,12 +171,14 @@ describe('classroom media URL and placeholder backfill', () => {
       type: 'image',
       elementId: 'gen_img_1',
       prompt: '带有中文标签的教学流程图',
+      observationContext: '牛的四条腿和花斑属于本页需要观察的可见特征。',
       style: 'infographic',
       aspectRatio: '16:9',
     });
 
     expect(prompt).toContain('精确文字、数值、公式和关系标签由页面原生可编辑元素呈现');
     expect(prompt).toContain('不增加未经要求的事实');
+    expect(prompt).toContain('四条腿和花斑');
     expect(resolveCourseImageDimensions('16:9')).toEqual({ width: 1280, height: 720 });
   });
 

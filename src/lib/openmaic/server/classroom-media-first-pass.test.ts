@@ -182,6 +182,51 @@ describe('first-pass media request boundaries', () => {
     expect(generatedSpeech).not.toHaveProperty('audioInvalidated');
   });
 
+  it('promotes a test lesson by reusing its audio and aligning the original local file', async () => {
+    const classroomScenes = scenes();
+    const speech = classroomScenes[0].actions![0];
+    Object.assign(speech, { audioUrl: '/api/openmaic/classroom-media/test-lesson/audio/old.wav' });
+    vi.spyOn(fs, 'stat').mockResolvedValue({ isFile: () => true, size: 48 } as never);
+
+    await generateTTSForClassroom(classroomScenes, 'full-course', '');
+
+    expect(mocks.generateTTS).not.toHaveBeenCalled();
+    expect(mocks.alignSpeech).toHaveBeenCalledWith(expect.objectContaining({
+      audioPath: expect.stringContaining('/test-lesson/audio/old.wav'),
+    }));
+    expect(classroomScenes[0].actions![0]).toMatchObject({ speechAlignment: { status: 'aligned' } });
+  });
+
+  it('regenerates a missing local clip but preserves an existing sibling on recovery', async () => {
+    const classroomScenes = scenes();
+    classroomScenes[0].actions!.push({ id: 'second', type: 'speech', text: 'Another explanation.', audioUrl: '/api/openmaic/classroom-media/old/audio/available.wav' });
+    Object.assign(classroomScenes[0].actions![0], { audioUrl: '/api/openmaic/classroom-media/old/audio/missing.wav' });
+    vi.spyOn(fs, 'stat').mockImplementation(async (file) => {
+      if (String(file).includes('missing')) throw new Error('ENOENT');
+      return { isFile: () => true, size: 48 } as never;
+    });
+    mocks.generateTTS.mockResolvedValue({ audio: wavBytes(), format: 'wav' });
+
+    await generateTTSForClassroom(classroomScenes, 'full-course', '');
+
+    expect(mocks.generateTTS).toHaveBeenCalledTimes(1);
+    expect(mocks.alignSpeech).toHaveBeenCalledTimes(2);
+    expect(classroomScenes[0].actions![1]).toMatchObject({ audioUrl: '/api/openmaic/classroom-media/old/audio/available.wav' });
+  });
+
+  it('reports incomplete synchronization and retries alignment without resynthesizing speech', async () => {
+    const classroomScenes = scenes();
+    Object.assign(classroomScenes[0].actions![0], { audioUrl: '/api/openmaic/classroom-media/old/audio/available.wav' });
+    vi.spyOn(fs, 'stat').mockResolvedValue({ isFile: () => true, size: 48 } as never);
+    mocks.alignSpeech.mockRejectedValueOnce(new Error('alignment temporarily unavailable'));
+
+    await expect(generateTTSForClassroom(classroomScenes, 'full-course', '')).rejects.toThrow('未完成讲稿与动作对齐');
+    expect(classroomScenes[0].actions![0]).toMatchObject({ speechAlignment: { status: 'failed' } });
+    await generateTTSForClassroom(classroomScenes, 'full-course', '');
+    expect(mocks.generateTTS).not.toHaveBeenCalled();
+    expect(classroomScenes[0].actions![0]).toMatchObject({ speechAlignment: { status: 'aligned' } });
+  });
+
   it('stops wrong-language Chinese-course narration before sending any TTS request', async () => {
     await expect(generateTTSForClassroom(chineseCourseWithEnglishNarration(), 'test', ''))
       .rejects.toMatchObject({ name: 'ClassroomNarrationLanguageError', isRetryable: false });

@@ -10,6 +10,7 @@ import {
   runCourseDesignJob,
   resumeRecoverableCourseDesignJob,
   TestLessonPromotionError,
+  TestLessonSelectionError,
   initialQuickGenerationEstimateSeconds,
   type QuickDesignRequest,
 } from "@/lib/course-design/job-runner";
@@ -91,6 +92,7 @@ function responseJob(job: Awaited<ReturnType<typeof designGenerationJobs.findUni
       generationScope: request.generationScope === "test-lesson"
         ? "test-lesson"
         : "full-course",
+      testSectionId: typeof request.testSectionId === "string" ? request.testSectionId : undefined,
       generationMode: request.generationMode === "deep-interaction"
         ? "deep-interaction"
         : "standard",
@@ -148,7 +150,7 @@ async function structuredResponse(work: () => Promise<Response>): Promise<Respon
   try {
     return await work();
   } catch (error) {
-    if (error instanceof TestLessonPromotionError) {
+    if (error instanceof TestLessonPromotionError || error instanceof TestLessonSelectionError) {
       return Response.json({ error: error.code, detail: error.message }, { status: error.status });
     }
     if (error instanceof CourseEvidenceError) {
@@ -428,6 +430,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
       knowledgeGraph?: unknown;
       lessonOutline?: unknown;
       sceneOutlines?: unknown;
+      testSectionId?: unknown;
     } | null;
     if (body?.action !== "pause" && body?.action !== "resume" && body?.action !== "promote-test-lesson") {
       return Response.json({ error: "INVALID_REVIEW_ACTION" }, { status: 400 });
@@ -462,6 +465,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
           sceneOutlines: Array.isArray(body.sceneOutlines)
             ? body.sceneOutlines.slice(0, 240) as OpenMaicSceneOutlineSnapshot[]
             : undefined,
+          testSectionId: typeof body.testSectionId === "string" ? body.testSectionId : undefined,
         });
     if (!job) return Response.json({ error: "FAST_GENERATION_NOT_FOUND" }, { status: 404 });
 

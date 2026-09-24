@@ -59,7 +59,7 @@ Then output your response as a single JSON object.
 }
 ```
 
-Every slide also includes a decision-complete `visualIntent`. Use text alone when that is clearest; do not manufacture an image request for every page. When visible appearance, a concrete scene, or an object-to-object difference is needed, bind a suitable source image or a generated illustration. Use native diagrams/charts for relationships, flows, and supplied quantitative data.
+Every slide also includes a decision-complete `visualIntent`. Use text alone when that is clearest; do not manufacture an image request for every page. When visible appearance, a concrete scene, or an object-to-object difference is needed, bind a suitable source image or a generated image when image generation is enabled. Use native diagrams/charts for relationships, flows, and supplied quantitative data. A concept diagram and a concrete case illustration may coexist. Choose images by distinct teaching observations, with no image quota.
 
 Never return a bare array. Never omit `languageDirective` or `courseTitle`. All three keys are required.
 
@@ -69,7 +69,7 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
 {
   "id": "scene_1",
   "type": "slide" | "quiz" | "interactive" | "pbl",
-  "title": "Core content topic and the specific facet taught on this page",
+  "title": "For slide: formal heading for its actual knowledge, e.g. 项目式学习 or 项目式学习的核心特征; for other scene types: a title suited to the activity",
   "description": "Teaching purpose description",
   "keyPoints": ["Point 1", "Point 2", "Point 3"],
   "order": 1,
@@ -77,6 +77,12 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
     "observationGoal": "What learners inspect on this page",
     "representation": "text" | "source-image" | "generated-image" | "native-diagram" | "native-chart" | "table" | "video" | "mixed",
     "rationale": "Why this form best supports the teaching goal",
+    "diagram": {
+      "topology": "sequence",
+      "nodes": [{ "id": "step_1", "label": "First step" }, { "id": "step_2", "label": "Second step" }],
+      "edges": [{ "from": "step_1", "to": "step_2", "label": "Optional relationship label" }],
+      "annotation": "Optional explanation of the whole diagram, not another step"
+    },
     "resourceRefs": [
       {
         "resourceId": "a stable source or generated-media ID",

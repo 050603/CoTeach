@@ -10,7 +10,8 @@ import { isAbortError } from './generation-retry';
 import { invalidGeneratedOutput, withGeneratedOutputRetry } from './generated-output-retry';
 import { fingerprintGenerationValue } from '@/lib/course-generation/page-checkpoints';
 
-export const TEACHING_ENHANCEMENT_VERSION = 'shared-page-contract-v19-learning-boundary';
+import { TEACHING_ENHANCEMENT_VERSION, TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION } from './teaching-contract-version';
+export { TEACHING_ENHANCEMENT_VERSION } from './teaching-contract-version';
 const TEACHING_SOURCE_LIMIT = 60_000;
 const ENTRY_POINT_KINDS = new Set([
   'familiar-experience', 'concrete-observation', 'problem', 'direct-explanation', 'continuation',
@@ -87,11 +88,22 @@ export function hasCompleteTeachingBrief(outline: SceneOutline): boolean {
   );
 }
 
+/** Policy revisions do not invalidate a complete, adopted schema-v1 design. */
+function hasSupportedTeachingDesignVersion(version: string | undefined): boolean {
+  if (!version) return false;
+  const match = /^(teaching-blueprint-v3-compiled|shared-page-contract)-v([1-9]\d*)-[a-z][a-z0-9-]*$/.exec(version);
+  if (!match) return false;
+  const latest = match[1] === 'teaching-blueprint-v3-compiled'
+    ? TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION : TEACHING_ENHANCEMENT_VERSION;
+  const supportedVersion = /^(?:teaching-blueprint-v3-compiled|shared-page-contract)-v([1-9]\d*)-/.exec(latest)?.[1];
+  return Boolean(supportedVersion && Number(match[2]) <= Number(supportedVersion));
+}
+
 export function hasCurrentTeachingBrief(outline: SceneOutline): boolean {
   return hasCompleteTeachingBrief(outline)
-    && outline.teachingBrief?.designVersion === TEACHING_ENHANCEMENT_VERSION
+    && hasSupportedTeachingDesignVersion(outline.teachingBrief?.designVersion)
     && Boolean(normalizeSharedContext(outline.teachingBrief?.sharedContext))
-    && Boolean(normalizeTeachingPlan(outline.teachingBrief.teachingPlan))
+    && Boolean(normalizeTeachingPlan(outline.teachingBrief?.teachingPlan))
     && Boolean(normalizeTaskConnection(outline.teachingBrief?.teachingPlan?.taskConnection));
 }
 
@@ -249,7 +261,13 @@ function synchronizeQuizTeachingBriefs(outlines: readonly SceneOutline[]): Scene
           .map((item) => [`${item.sourceId}:${item.quote}`, item])).values()],
         assessmentFocus: unique(briefs.map((brief) => brief.assessmentFocus)).join('；'),
         understandingCriteria: briefs.find((brief) => brief.understandingCriteria)?.understandingCriteria,
-        resourceNeeds: briefs.flatMap((brief) => brief.resourceNeeds ?? []),
+        // Continuation slides inherit their parent's visual plan. A section
+        // quiz needs the shared teaching context once, regardless of how many
+        // pages the first-pass layout used. Duplicate resources would change
+        // the accepted quiz's outline fingerprint during full promotion and
+        // unnecessarily regenerate its questions, speech and audio.
+        resourceNeeds: [...new Map(briefs.flatMap((brief) => brief.resourceNeeds ?? [])
+          .map((need) => [JSON.stringify(need), need])).values()],
         requirementIds: unique(briefs.flatMap((brief) => brief.requirementIds ?? [])),
         difficultyStrategies: [...new Map(briefs.flatMap((brief) => brief.difficultyStrategies ?? [])
           .map((strategy) => [strategy.requirementId, strategy])).values()],
@@ -314,8 +332,9 @@ export function normalizeTeachingEnhancement(
     const assessmentFocus = compact(record.assessmentFocus);
     const existingPage = pages.find((page) => page.id === outlineId);
     const teachingPlan = normalizeTeachingPlan(record.teachingPlan, existingPage?.teachingBrief?.teachingPlan);
-    const pageTask = normalizePageTask(existingPage?.teachingBrief?.pageTask)
-      ?? normalizePageTask(record.pageTask);
+    const pageTask = existingPage?.type === 'interactive'
+      ? normalizePageTask(existingPage.teachingBrief?.pageTask) ?? normalizePageTask(record.pageTask)
+      : undefined;
     if (!explanation || !Array.isArray(record.examples) || !Array.isArray(record.conditions)
       || !assessmentFocus || !teachingPlan) continue;
     const evidence = strings(record.evidenceQuotes)
@@ -391,12 +410,13 @@ export function buildTeachingEnhancementPrompt(input: {
       'JSON 结构中的逗号、冒号、引号和括号必须使用半角 ASCII 字符；中文全角标点只能出现在字符串正文内。',
       '为每个已确认页面补足可直接制作的实质教学内容，使 PPT、教师讲稿和节末检测共享同一套含义、事实、数量和概念边界。',
       '写出实际解释、必要前提、中间连接和判断理由，不得只写“解释概念”“说明区别”“举例说明”等待办语句。根据知识类型选择讲法，不强制案例、固定流程或每页活动。',
+      '普通 slide 页用于讲解与示范，无法接收学生答案。不要在 visibleContent、narrationFocus 或本页末尾设置独立判断、思考、书面作答或等待回答的任务。把有助于理解的判断改为已讲透的具体案例：给出情境、判断依据、结论及理由；理解检测留给节末小测。只有确有作答控件的 interactive 页可先留题、作答后反馈。',
       '概念与区别可从熟悉对象、定义展开或对应比较进入；因果与机制要补足条件、过程和结果间的连接；数学推导要写出已知、步骤、理由和检验；操作技能要说明对象、步骤、观察和常见错误；历史人文要连接背景、材料与解释；综合应用要说明条件、方法选择、过程和结果。按内容组合，不把这些选项变成固定栏目。',
       '继承蓝图的解释节点和页面职责。页面可以首次解释、深化或必要承接，但不能把完整 explanation、mechanism 或推导压缩成标签，也不能在相邻页面重新讲同一段。entryPoint.kind=continuation 时只能承接紧邻上一页 existingTeachingBrief.teachingPlan.visibleContent/takeaway 中已经建立的内容；后页才出现的术语、案例或问题必须在其所属页面作为新内容引入。不得更改页面数量、ID、顺序和知识边界。',
       '原样保留 existingTeachingBrief.requirementIds 和 difficultyStrategies，并在 explanation、reasoningSteps、visibleContent 与 narrationFocus 中实际执行其中的重点深度和具体难点讲法；不得用空泛标签替换既定障碍、讲法或理解证据。',
       '原样保留并严格执行 existingTeachingBrief.learningBoundary。prerequisiteKnowledge 与 previouslyTaughtKnowledge 可以直接用于承接；currentKnowledge 必须在本页先建立含义再用于例子、比较、判断或练习；futureKnowledge 只可在目录或目标中预告名称，禁止出现在本页例子、选项、推理前提、活动或测验中。不得根据全课页面列表把后续概念改写成已知内容。',
       '继承 entryPoint 中已经确定的理解入口，并把它展开成学生能听懂的具体对象、观察重点与过渡。不要把入口重新改成项目任务，不要用抽象定义、页面标题或“今天我们来学习”替代实际对象。',
-      'resourcePosition=course-opening 的页面必须支持一个独立完整的 AI 课程开场，即使课程前面存在教师导入阶段：简短问候由讲稿承担，页面与教学设计负责给出适龄、熟悉、可观察或可比较的切入对象，并写清从这个对象到首个知识的自然桥梁。时长较短时与首个知识合并，不能因此省略，也不能假装学生已经回答。',
+      'resourcePosition=course-opening 只标记 AI 知识讲授资源的第一张页面，不表示重新执行整堂课的教师导入。简短问候由讲稿承担；页面从已确认的首个新知识开始，必要时用一句话承接学生已有经历，不重做前一阶段的图片观察、课堂对比或提问，也不把这些活动另编一页。首张页面须让学生看见完整的新定义、关系、机制或条件，不能只放标题和目标。',
       'resourcePosition=course-closing 的页面要为课程收束提供已经讲过的核心认识和后续应用方向；正式致谢与告别由讲稿承担。若最后一页是测验，前一教学页只自然引向测验，测验后的反馈完成收束，不提前告别。',
       '实际学习者由学段、专业和 learner profile 决定；资料中出现的小学生、客户、机器人或教师只是案例角色。选择例子时先看它能否解释当前难点以及实际学习者是否熟悉，与项目任务的联系是可选条件。',
       '最终任务、驱动问题和成果物是可选迁移情境，不是页面必须呼应的主线。严格继承 teachingPlan.taskConnection：none 时不得把页面入口、例子、活动或结论改成项目任务；helpful-context 时只使用与当前知识直接共享且能减少解释负担的部分；direct-application 时才把已学知识实际迁移到最终任务。不得因为资料的 taskAssociation 提到成果制作，就把成果物当成默认案例。',
@@ -427,12 +447,12 @@ ${selected.text || '未提供额外资料；只能使用已确认页面中的事
 设计要求：
 1. sharedContext 只保存整节确需复用的学习用途、稳定事实、术语和边界。learningPurpose 说明知识本身的理解或应用价值，不默认改写为完成最终成果。只有确需贯穿案例时才填写案例字段；不同知识适合不同例子时可以自然更换。项目情境不能自动变成每页案例，单页 taskConnection 允许的局部任务情境也不得升级为整节共享案例。
 2. explanation 写清本页拥有的核心含义、首次出现术语、关系、机制、推理步骤、理解障碍和应用条件。细致程度以补足理解为准，不以字数、案例数或段落数衡量。
-3. teachingPlan 原样继承 entryPoint、introduces、deepens、references 和 visualRelationship。entryPoint 要保留具体对象、需要注意的特征及其通向新知识的理由；continuation 只能引用紧邻上一页已可见或已明确得出的认识。introduces 负责首次建立认识，deepens 增加关系、机制或应用，references 只作最短承接。reasoningSteps 按实际过程展开，数量不限。course-opening 页的 visibleContent 应先呈现需要观察、回想或比较的实际对象，并在同页承担首次概念建立时继续完整呈现核心定义，不能只放课程标题、目标、概念名称或提问。
+3. teachingPlan 原样继承 entryPoint、introduces、deepens、references 和 visualRelationship。entryPoint 要保留具体对象、需要注意的特征及其通向新知识的理由；continuation 只能引用紧邻上一页已可见或已明确得出的认识。introduces 负责首次建立认识，deepens 增加关系、机制或应用，references 只作最短承接。reasoningSteps 按实际过程展开，数量不限。course-opening 页的 visibleContent 要呈现本阶段首次讲授的新知识和必要依据；若蓝图用先前经历作 entryPoint，只用简短承接，不重新制作已完成的教师活动，也不能只放课程标题、目标、概念名称或提问。
 4. examples 先按当前难点的解释力、实际学习者的熟悉度和学段适切性选择。类比、对比、示范或独立案例均可，不要求连接项目任务或后续活动；无需例子时返回空数组，不为每页凑数。跨页复用案例时保持事实、术语和数量一致。teachingPlan.taskConnection 是硬边界，必须原样继承，不得由本步骤把 none 提升为项目关联。
 5. conditions 只写会改变理解、推导或应用的条件、边界和常见错误。无新增必要内容时返回空数组。
 6. visibleContent 列出学生必须看见、观察、比较、定位或带走的对象与命题。首次出现的核心术语必须保留继承而来的完整基本定义，不能压缩成名称、关键词、问句或由讲稿代替；关键关系、条件和结论也应形成可独立阅读的短句。visualRelationship 说明页面要表达的实际关系、阅读顺序、preferredForm 及其 rationale。narrationFocus 保存需要口头讲开的原因、中间过程、例子展开和关键选择，不与画面逐字重复。
 7. 页面表现形式由关系决定：需要按共同维度逐项查读的差异可优先 table；具有完整数值且重点是趋势、比例或量级时可优先 chart；具体外观、人物、物体或空间状态本身是观察依据且图片可用时可优先 illustration；过程、因果、系统和概念关系可用 diagram；少量核心命题可用 text；两种形式确实互补时才用 mixed。preferredForm 是可调整的教学偏好，不是固定版式；整节没有展示形式配额，不为追求丰富而制造数据、添加装饰图片或把简洁内容表格化。
-8. 已有 pageTask 原样继承；没有时只在学习活动确实帮助理解时补充。独立练习的画面只给作答材料，答案及反馈放在作答之后的口头说明。
+8. 仅 interactive 页在具备真实作答控件时继承或补充 pageTask；slide 页不生成 pageTask，即使已有任务字段也只取其相关案例事实，改写为教师示范并在本页呈现依据和结论。互动页独立练习的画面只给作答材料，答案及反馈放在作答之后的口头说明。
 9. assessmentFocus 说明学生应能解释、推导、操作或应用什么，以及合格回答需要的理由。只能检测本节实际解释过的内容。
 10. evidenceQuotes 只能逐字摘录权威资料；没有可核对原文时返回空数组。构造案例、类比、图表、示意数据和来源待核实主张写入 reviewItems，记录 kind、provenance、content、teachingPurpose 和已有 source；示意数据还要记录 values（原始数值、单位和含义）与 comparisonObjects（比较对象）。教材原有部分、为教学增加的步骤以及生成补充必须在此处完成内部区分，供教师授课前确认；examples、explanation、visibleContent 和 narrationFocus 直接写实际课堂内容，不得出现“教材原例”“教学改编”“AI 补充”“来自教材”“保留原例核心含义”等标签、脚注、括注或说明。
 11. 保持术语、案例事实、单位和数值在 PPT、讲稿及检测间一致。不把构造数据包装成研究结论，不虚构机构、研究名称或引用。

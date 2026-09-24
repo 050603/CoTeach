@@ -16,6 +16,10 @@ type Assert<T extends true> = T;
 type _SceneContentKeys = Assert<
   Equal<
     keyof SceneContentOptions,
+    | 'componentAuthoring'
+    | 'slideAuthoring'
+    | 'allowLegacyComponents'
+    | 'textMeasure'
     | 'assignedImages'
     | 'imageMapping'
     | 'visionEnabled'

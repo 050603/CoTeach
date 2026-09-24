@@ -78,6 +78,13 @@ describe('packaged prompt assets', () => {
     expect(actualFiles).toEqual(expectedFiles);
   });
 
+  test('keeps newly introduced concept definitions visible on the first slide pass', () => {
+    const system = readFileSync(join(PACKAGE_ROOT, 'templates', 'slide-content', 'system.md'), 'utf8');
+    const user = readFileSync(join(PACKAGE_ROOT, 'templates', 'slide-content', 'user.md'), 'utf8');
+    expect(system).toContain('do not impose a character cutoff that deletes their meaning');
+    expect(user).toContain('display its complete basic meaning on this page');
+  });
+
   test('instructs Pyodide widgets to load micropip before importing it', () => {
     const source = readFileSync(
       join(PACKAGE_ROOT, 'templates', 'code-content', 'system.md'),

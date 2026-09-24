@@ -14,9 +14,10 @@ import {
 } from "@openmaic/lib/server/classroom-generation";
 import {
   generateClassroomAssets,
-  summarizeTeachingTimingAudit,
   type ClassroomAssetGenerationProgress,
 } from "@openmaic/lib/server/classroom-asset-generation";
+import { reusePersistedSceneAssets } from "@openmaic/lib/server/classroom-asset-recovery";
+import { readClassroom } from "@openmaic/lib/server/classroom-storage";
 import { splitGeneratedClassroom } from "@/lib/openmaic-bridge/server-classroom-split";
 import { linkClassroomToCourse } from "@/lib/openmaic-bridge/course-linker";
 import {
@@ -160,23 +161,105 @@ type CourseFinalizationCheckpoint = {
   teachingTimingAudit?: Awaited<ReturnType<typeof generateClassroomAssets>>;
 };
 
-function restoreCourseFinalizationCheckpoint(
+/** Finalized output belongs to the submitted teaching input, not its expanded pages. */
+export function fingerprintCourseFinalizationRequest(request: PersistedCourseGenerationRequest): string {
+  const teachingRequest = { ...request };
+  delete teachingRequest.managedRecoveryCount;
+  return fingerprintGenerationValue({ policy: "course-finalization-v2", request: teachingRequest });
+}
+
+export function restoreCourseFinalizationCheckpoint(
   value: unknown,
-  inputFingerprint: string,
+  request: PersistedCourseGenerationRequest,
+  preparedOutlines: readonly SceneOutline[],
 ): CourseFinalizationCheckpoint | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const checkpoint = value as Partial<CourseFinalizationCheckpoint>;
-  if (checkpoint.schemaVersion !== 1 || checkpoint.inputFingerprint !== inputFingerprint) return null;
+  if (checkpoint.schemaVersion !== 1) return null;
   if (!checkpoint.generated || !Array.isArray(checkpoint.generated.scenes)
     || !checkpoint.generated.stage || typeof checkpoint.generated.stage.id !== "string") return null;
   if (checkpoint.split && (typeof checkpoint.split.studentClassroomId !== "string"
     || !Array.isArray(checkpoint.split.studentScenes)
     || !Array.isArray(checkpoint.split.teacherScenes))) return null;
+  if (checkpoint.inputFingerprint === fingerprintCourseFinalizationRequest(request)) {
+    return checkpoint as CourseFinalizationCheckpoint;
+  }
+
+  // Legacy hashes included mutable recovery bookkeeping and the current
+  // preparation result. Accept only a reconstructable hash of this request,
+  // then verify the generated output covers exactly its selected parent pages.
+  const originalRequest = { ...request };
+  delete originalRequest.managedRecoveryCount;
+  const variants = [request, originalRequest, { ...originalRequest, managedRecoveryCount: 0 }];
+  const outlineVariants = [request.sceneOutlines ?? [], preparedOutlines];
+  const matchingInput = variants.some((candidate) => outlineVariants.some((outlines) =>
+    checkpoint.inputFingerprint === fingerprintGenerationValue({ request: candidate, outlines }),
+  ));
+  if (!matchingInput) return null;
+  const roots = (outline: SceneOutline) => outline.spatialParentId ?? outline.id;
+  const selected = request.generationScope === "test-lesson"
+    ? new Set(request.testLesson?.sceneOutlineIds ?? []) : null;
+  const expected = (request.sceneOutlines ?? []).filter((outline) => !selected || selected.has(roots(outline)));
+  const actual = checkpoint.generated.assetContext?.outlines;
+  if (!expected.length || !Array.isArray(actual) || !actual.length) return null;
+  const expectedRoots = new Set(expected.map(roots));
+  if (new Set(actual.map(roots)).size !== expectedRoots.size
+    || actual.some((outline) => !expectedRoots.has(roots(outline)))
+    || new Set(actual.map((outline) => outline.id)).size !== actual.length) return null;
+  const duration = (pages: readonly SceneOutline[]) => pages.reduce(
+    (sum, outline) => sum + (outline.targetDurationSec ?? outline.estimatedDuration ?? 0), 0,
+  );
+  for (const parent of expectedRoots) {
+    if (Math.abs(duration(expected.filter((outline) => roots(outline) === parent))
+      - duration(actual.filter((outline) => roots(outline) === parent))) > 0.001) return null;
+  }
+  const sceneOutlines = new Set(checkpoint.generated.scenes.map((scene) => scene.outlineId));
+  if (sceneOutlines.size !== actual.length || actual.some((outline) => !sceneOutlines.has(outline.id))) return null;
   return checkpoint as CourseFinalizationCheckpoint;
+}
+
+/** The resume boundary must be resolved before any content model is invoked. */
+export async function restoreOrGenerateFinalizedClassroom(input: {
+  checkpoint: unknown;
+  request: PersistedCourseGenerationRequest;
+  preparedOutlines: readonly SceneOutline[];
+  generate: () => Promise<GeneratedClassroomSnapshot>;
+  previousScenes?: ReadonlyMap<string, Scene>;
+}) {
+  const inputFingerprint = fingerprintCourseFinalizationRequest(input.request);
+  const restoredFinalization = restoreCourseFinalizationCheckpoint(input.checkpoint, input.request, input.preparedOutlines);
+  const authored = restoredFinalization?.generated ?? await input.generate();
+  // A grouped page can be rebuilt from stage checkpoints without passing through
+  // loadSceneCheckpoint. Promote its accepted assets at the common finalization
+  // boundary, before the new classroom is split and its media is generated.
+  const generated = input.previousScenes?.size ? {
+    ...authored,
+    scenes: authored.scenes.map((scene) => reusePersistedSceneAssets(scene, input.previousScenes?.get(scene.id))),
+  } : authored;
+  return { inputFingerprint, restoredFinalization, generated };
 }
 
 function stageCheckpointKey(pageKey: string, stage: SceneGenerationCheckpointStage): string {
   return `${pageKey}:${stage}`;
+}
+
+export function hasExactTestLessonBudget(
+  outlines: readonly SceneOutline[],
+  testLesson: { sceneOutlineIds: readonly string[]; durationSeconds: number } | undefined,
+  fullSceneCount: number | undefined,
+): boolean {
+  if (!testLesson) return false;
+  const requested = new Set(testLesson.sceneOutlineIds);
+  const parentId = (outline: SceneOutline) => outline.spatialParentId ?? outline.id;
+  const fullParents = new Set(outlines.map(parentId));
+  const selected = outlines.filter((outline) => requested.has(parentId(outline)));
+  const selectedParents = new Set(selected.map(parentId));
+  return requested.size > 0
+    && requested.size === testLesson.sceneOutlineIds.length
+    && selectedParents.size === requested.size
+    && fullParents.size === fullSceneCount
+    && new Set(selected.map((outline) => outline.id)).size === selected.length
+    && hasExactKnowledgeLecturePageBudget(selected, testLesson.durationSeconds / 60);
 }
 
 export function hasExactUpdateTargetBudget(
@@ -889,13 +972,19 @@ export async function requeueCourseGenerationFromCheckpoints(
     ? `正在从 ${completedPageCount} 个已完成页面继续生成`
     : "正在重新开始课程内容生成（此前尚无已完成的页面）";
   const request = job.request as unknown as PersistedCourseGenerationRequest;
-  await contentGenerationJobs.replace({
+  const queued = await contentGenerationJobs.replace({
     where: { id: job.id, status: "failed", version: job.version },
     checkpointPolicy: { prefixes: ["stage-attempt:"] },
     data: {
       status: "queued",
       step: "recovering_scenes",
       message,
+      // Stage counters are presentation state, not durable page evidence.
+      // Rebuild them from the retained stage/page checkpoints on this run.
+      activePages: [],
+      stageProgress: [],
+      currentStage: null,
+      currentCall: Prisma.JsonNull,
       request: {
         ...request,
         managedRecoveryCount: 0,
@@ -910,6 +999,11 @@ export async function requeueCourseGenerationFromCheckpoints(
       version: { increment: 1 },
     },
   });
+  // An open canonical preview has stopped polling a failed job. Publish the
+  // normal course-version invalidation only after the guarded requeue commits,
+  // so that preview can discover the new active lifecycle without a focus event.
+  // The identity updater preserves every adopted teaching field and classroom ID.
+  if (queued.status === "queued") await updateCourse(courseId, (current) => current);
   return contentGenerationJobs.findUnique({ where: { id: job.id } });
 }
 
@@ -991,19 +1085,8 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
     const timing = course?.content.moduleTimingPlan;
     const outlines = checkpointState.preparedOutlines.length ? checkpointState.preparedOutlines : generationInput.sceneOutlines ?? [];
     const isTestLesson = request.generationScope === "test-lesson";
-    const outlinesById = new Map(outlines.map((outline) => [outline.id, outline]));
-    const testOutlines = request.testLesson?.sceneOutlineIds.flatMap((id) => {
-      const outline = outlinesById.get(id);
-      return outline ? [outline] : [];
-    }) ?? [];
-    const testLessonIdsMatch = !isTestLesson || (
-      Boolean(request.testLesson)
-      && request.testLesson!.sceneOutlineIds.length === testOutlines.length
-      && (request.fullSceneCount ?? 0) === outlines.length
-      && hasExactKnowledgeLecturePageBudget(
-        testOutlines,
-        (request.testLesson?.durationSeconds ?? 0) / 60,
-      )
+    const testLessonIdsMatch = !isTestLesson || hasExactTestLessonBudget(
+      outlines, request.testLesson, request.fullSceneCount,
     );
     const updateBudgetMatches = !request.updateTarget || hasExactUpdateTargetBudget(
       outlines,
@@ -1016,12 +1099,15 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       || (!request.updateTarget && !hasExactKnowledgeLecturePageBudget(outlines, timing?.totalMinutes ?? 0))) {
       throw new Error("知识讲授必须符合已确认的课程时间预算，且讲解与小测合计必须等于该预算。资源包课程以教案分钟数为准，请重新规划后生成，不可继续使用不匹配的页面或检查点。");
     }
-    const finalizationFingerprint = fingerprintGenerationValue({ request, outlines });
-    const restoredFinalization = restoreCourseFinalizationCheckpoint(
-      checkpointState.courseFinalization,
-      finalizationFingerprint,
-    );
-    const generated = restoredFinalization?.generated ?? await generateClassroom(generationInput, {
+    const previousClassroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;
+    const previousClassroom = previousClassroomId ? await readClassroom(previousClassroomId) : null;
+    const previousScenes = new Map(previousClassroom?.scenes.map((scene) => [scene.id, scene]) ?? []);
+    const { inputFingerprint: finalizationFingerprint, restoredFinalization, generated } = await restoreOrGenerateFinalizedClassroom({
+      checkpoint: checkpointState.courseFinalization,
+      request,
+      preparedOutlines: outlines,
+      previousScenes,
+      generate: () => generateClassroom(generationInput, {
       signal: controller.signal,
       initialStageProgress: Array.isArray(job.stageProgress)
         ? job.stageProgress as unknown as NonNullable<ClassroomGenerationProgress["stageProgress"]>
@@ -1050,13 +1136,12 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         await saveGenerationCheckpoint(job.id, `teaching-section:${sectionKey}`, checkpoint, { executionId });
         checkpointState.teachingSectionCheckpoints.set(sectionKey, checkpoint);
       },
-      loadSceneCheckpoint: (outline, _index, stageId, modelFingerprint, inputFingerprint) => restoreSceneCheckpoint(
-        outline,
-        checkpointState.checkpoints.get(outline.id),
-        stageId,
-        modelFingerprint,
-        inputFingerprint,
-      ),
+      loadSceneCheckpoint: (outline, _index, stageId, modelFingerprint, inputFingerprint) => {
+        const restored = restoreSceneCheckpoint(
+          outline, checkpointState.checkpoints.get(outline.id), stageId, modelFingerprint, inputFingerprint,
+        );
+        return restored ? reusePersistedSceneAssets(restored, previousScenes.get(restored.id)) : null;
+      },
       loadSceneStageCheckpoint: (outline, stage, modelFingerprint, inputFingerprint) =>
         restoreSceneStageCheckpoint({
           outline,
@@ -1120,6 +1205,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           scenePhaseInitialGenerated,
         ));
       },
+      }),
     });
     if (!restoredFinalization) {
       await saveGenerationCheckpoint(job.id, COURSE_FINALIZATION_STEP, {
@@ -1141,6 +1227,16 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       pblMode: false,
       signal: controller.signal,
     });
+    // Asset writes are newer than pre-asset finalization checkpoints. Reuse
+    // their durable scenes instead of replacing successful clips on resume.
+    if (restoredFinalization?.split) {
+      const student = await readClassroom(split.studentClassroomId);
+      if (student) split.studentScenes = student.scenes;
+      if (split.teacherClassroomId) {
+        const teacher = await readClassroom(split.teacherClassroomId);
+        if (teacher) split.teacherScenes = teacher.scenes;
+      }
+    }
     if (!restoredFinalization?.split) {
       await saveGenerationCheckpoint(job.id, COURSE_FINALIZATION_STEP, {
         schemaVersion: 1,
@@ -1170,12 +1266,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           assetTotal: progress.total,
         })),
       };
-      try {
-        await generateClassroomAssets(assetInput);
-      } catch (assetError) {
-        if (controller.signal.aborted || isAbortError(assetError)) throw assetError;
-        log.error("Bounded classroom candidate asset generation failed", assetError);
-      }
+      await generateClassroomAssets(assetInput);
       const candidateId = `candidate-${job.id}-${Date.now()}`;
       await updateCourse(courseId, (current) => {
         const revision = current.content.designWorkspaceRevision;
@@ -1317,12 +1408,6 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       generated,
       split,
       courseLinkedAt: restoredFinalization?.courseLinkedAt ?? new Date().toISOString(),
-      ...(restoredFinalization?.assetsCompletedAt
-        ? {
-            assetsCompletedAt: restoredFinalization.assetsCompletedAt,
-            teachingTimingAudit: restoredFinalization.teachingTimingAudit,
-          }
-        : {}),
     } satisfies CourseFinalizationCheckpoint, { executionId });
     await serializeWorkerWrite(() => persistWorkerPhase(job, {
       step: "checking_adaptive_resources",
@@ -1353,9 +1438,9 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       controller.signal,
       serializeWorkerWrite,
     );
-    const assetPromise = restoredFinalization?.assetsCompletedAt
-      ? Promise.resolve(restoredFinalization.teachingTimingAudit)
-      : (async () => {
+    // Old completed markers did not guarantee complete speech assets. Always
+    // resume the idempotent asset pipeline, which reuses files and alignment cache.
+    const assetPromise = (async () => {
       const assetInput = {
         ...generated.assetContext,
         baseUrl,
@@ -1374,16 +1459,8 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           assetTotal: progress.total,
         })),
       };
-      try {
-        return await generateClassroomAssets(assetInput);
-      } catch (assetError) {
-        if (controller.signal.aborted || isAbortError(assetError)) throw assetError;
-        // Classroom content has already been durably linked. Optional provider
-        // failures must not discard a long-running successful generation.
-        log.error("Background classroom asset generation failed", assetError);
-        return summarizeTeachingTimingAudit(assetInput);
-      }
-        })();
+      return await generateClassroomAssets(assetInput);
+    })();
     const [, teachingTimingAudit] = await Promise.all([adaptivePromise, assetPromise]);
     if (teachingTimingAudit) {
       await assertCourseGenerationExecution(job);
@@ -1398,7 +1475,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       generated,
       split,
       courseLinkedAt: restoredFinalization?.courseLinkedAt ?? new Date().toISOString(),
-      assetsCompletedAt: restoredFinalization?.assetsCompletedAt ?? new Date().toISOString(),
+      assetsCompletedAt: new Date().toISOString(),
       teachingTimingAudit,
     } satisfies CourseFinalizationCheckpoint, { executionId });
     const coverStatus = await generateAndPersistCourseCover(

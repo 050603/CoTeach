@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'node:fs';
+import type { Scene } from '@openmaic/lib/types/stage';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
 import {
   buildMediaRepairOutlines,
   collectRequestedClassroomMedia,
+  collectPersistedClassroomMedia,
   formatClassroomMediaItemProgress,
   reconcileMediaFailures,
 } from './classroom-asset-generation';
@@ -34,7 +37,22 @@ const outlines: SceneOutline[] = [
   },
 ];
 
+afterEach(() => vi.restoreAllMocks());
+
 describe('classroom asset repair planning', () => {
+  it('reuses referenced media from the test classroom but does not trust missing files', async () => {
+    vi.spyOn(fs, 'stat').mockImplementation(async (file) => {
+      if (String(file).includes('image-detail')) throw new Error('missing');
+      return { isFile: () => true, size: 100 } as never;
+    });
+    const scenes = [{ content: { type: 'slide', canvas: { elements: [
+      { type: 'image', src: '/api/openmaic/classroom-media/old-test/media/image-intro.png' },
+      { type: 'image', src: '/api/openmaic/classroom-media/old-test/media/image-detail.png' },
+    ] } } }] as Scene[];
+    await expect(collectPersistedClassroomMedia(collectRequestedClassroomMedia(outlines, { image: true, video: false }), scenes))
+      .resolves.toEqual({ 'image-intro': '/api/openmaic/classroom-media/old-test/media/image-intro.png' });
+  });
+
   it('deduplicates media requests and respects enabled capabilities', () => {
     const requests = collectRequestedClassroomMedia(outlines, { image: true, video: false });
 

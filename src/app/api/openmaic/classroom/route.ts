@@ -11,6 +11,8 @@ import {
   loadCourseGenerationPreviewClassroom,
 } from '@/lib/course-generation/generation-preview';
 
+import { classroomPreviewStatus } from '@/lib/course-generation/classroom-preview-status';
+
 const log = createLogger('Classroom API');
 
 export async function GET(request: NextRequest) {
@@ -41,7 +43,12 @@ export async function GET(request: NextRequest) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Classroom not found');
     }
 
-    return apiSuccess({ classroom });
+    return apiSuccess({ classroom: {
+      ...classroom,
+      generationPreview: 'generationPreview' in classroom
+        ? classroom.generationPreview
+        : classroomPreviewStatus(classroom),
+    } });
   } catch (error) {
     log.error(
       `Classroom retrieval failed [id=${request.nextUrl.searchParams.get('id') ?? 'unknown'}]:`,

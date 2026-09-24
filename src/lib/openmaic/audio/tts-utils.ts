@@ -86,7 +86,7 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
   let didSplit = false;
   const splitBySpeechId = new Map<string, SpeechAction[]>();
   const splitSpeech = (action: SpeechAction): SpeechAction[] => {
-    if (action.type !== 'speech' || !action.text || action.text.length <= maxLength)
+    if (action.type !== 'speech' || !action.text || (action.audioUrl && !action.audioInvalidated) || action.text.length <= maxLength)
       return [action];
 
     const chunks = splitLongSpeechText(action.text, maxLength);

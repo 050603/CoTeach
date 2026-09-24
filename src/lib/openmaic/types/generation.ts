@@ -404,6 +404,10 @@ import type { QuizQuestion } from './stage';
  * AI-generated slide content
  */
 export interface GeneratedSlideContent {
+  /** Compiler-owned pagination metadata; stripped before scene assembly. */
+  continuationPages?: GeneratedSlideContent[];
+  sourceGroupIds?: string[];
+  teachingText?: string[];
   elements: PPTElement[];
   background?: SlideBackground;
   theme?: SlideTheme;

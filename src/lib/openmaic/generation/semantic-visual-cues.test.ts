@@ -211,14 +211,18 @@ describe('OpenMAIC interleaved visual cue calibration', () => {
     expect(visualActions(result)[0].endSpeechOffsetMs).toBe(text.length * 100);
   });
 
-  it('drops anchored actions when precise audio alignment is unavailable', () => {
+  it('preserves anchored intent until alignment is available, then calibrates it', () => {
     const narration = { id: 's1', type: 'speech' as const, text: '先说明，再观察目标。' };
     const result = calibrate([
       cue('target', 's1', 'pbl-title', { speechAnchor: { quote: '观察目标' } }),
       narration,
     ]);
-    expect(visualActions(result)).toEqual([]);
-    expect(result).toEqual([narration]);
+    expect(visualActions(result)).toHaveLength(1);
+    expect(visualActions(result)[0]).not.toHaveProperty('speechOffsetMs');
+    const aligned = calibrate(result.map((action) => action.type === 'speech'
+      ? speech(action.id, action.text) : action));
+    expect(visualActions(aligned)).toHaveLength(1);
+    expect(visualActions(aligned)[0]).toMatchObject({ id: 'target', speechOffsetMs: narration.text.indexOf('观察目标') * 100 });
   });
 
   it('drops a cue whose explicit end anchor is stale instead of guessing an end', () => {

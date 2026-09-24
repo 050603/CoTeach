@@ -57,9 +57,10 @@ import { noopGenerationLogger, type GenerationLogger } from './logger.js';
 import { isAbortError } from './generation-retry.js';
 import { generatePBLV2ProjectSingleCall } from './pbl/planner-single-call.js';
 import { PlannerV2Error } from './pbl/planner-core.js';
-import { componentAuthoringContract } from './component-authoring-contract.js';
-import { compileTextComponents, type LabelGridComponent, type TextBoxComponent, type TextMeasure } from './text-layout-compiler.js';
-import { compileDiagramComponent, isDiagramComponent } from './diagram-compiler.js';
+import { componentAuthoringContract, flowAuthoringContract } from './component-authoring-contract.js';
+import { compileTextComponents, compileNativeTextLayout, type LabelGridComponent, type TextBoxComponent, type TextMeasure } from './text-layout-compiler.js';
+import { compileMeasuredDiagramComponent, measureDiagramAllocations, isDiagramComponent } from './diagram-compiler.js';
+import { compileFlowLayout, type CompiledFlowPage } from './flow-layout-compiler.js';
 import type { PBLPlannerV2Input } from './pbl/types.js';
 
 function isGeneratedMediaPlaceholder(value: string | undefined): value is string {
@@ -79,11 +80,16 @@ export type SceneContentFailureCode = 'prompt-unavailable' | 'invalid-model-outp
 
 export interface SceneContentFailure {
   code: SceneContentFailureCode;
+  detail?: string;
 }
 
 export interface SceneContentOptions {
   /** Compile first-draft components before native slide normalization. */
   componentAuthoring?: boolean;
+  /** Explicit experimental alternative. Native editable elements remain the default. */
+  slideAuthoring?: 'native' | 'flow';
+  /** @deprecated Native components are supported by default. */
+  allowLegacyComponents?: boolean;
   /** Host browser measurement using the same fonts and CSS as playback. */
   textMeasure?: TextMeasure;
   assignedImages?: PdfImage[];
@@ -271,6 +277,7 @@ export async function generateSceneContent(
     editDirective,
     baselineContent,
     componentAuthoring,
+    slideAuthoring,
     textMeasure,
   } = options;
 
@@ -318,6 +325,7 @@ export async function generateSceneContent(
         baselineContent,
         componentAuthoring,
         textMeasure,
+        slideAuthoring,
         log,
         options.onFailure,
       );
@@ -649,6 +657,7 @@ async function generateSlideContent(
   baselineContent?: GeneratedSlideContent,
   componentAuthoring = false,
   textMeasure?: TextMeasure,
+  slideAuthoring: 'native' | 'flow' = 'native',
   log: GenerationLogger = noopGenerationLogger,
   onFailure?: (failure: SceneContentFailure) => void,
 ): Promise<GeneratedSlideContent | null> {
@@ -880,10 +889,24 @@ async function generateSlideContent(
   }
 
   const useComponents = componentAuthoring && !editDirective && !baselineContent;
-  const authoring = useComponents ? componentAuthoringContract(outline) : undefined;
+  const useFlow = useComponents && slideAuthoring === 'flow';
+  const diagramAllocations = useComponents && !useFlow && outline.visualIntent?.diagram && textMeasure
+    ? await measureDiagramAllocations(outline.visualIntent.diagram, textMeasure) : [];
+  const authoring = useComponents ? (useFlow ? flowAuthoringContract(outline) : componentAuthoringContract(outline, diagramAllocations)) : undefined;
   if (authoring) userPrompt += `\n\n${authoring.user}`;
   const response = await aiCall(authoring ? `${prompts.system}\n\n${authoring.system}` : prompts.system, userPrompt, visionImages);
   const generatedData = parseJsonResponse<GeneratedSlideData>(response);
+  if (useComponents && ((useFlow && !generatedData?.layout) || (!useFlow && generatedData?.layout))) {
+    onFailure?.({ code: 'invalid-model-output', detail: useFlow ? 'Explicit flow authoring requires layout.groups' : 'Native slide authoring requires editable elements; flow layout is opt-in' });
+    return null;
+  }
+
+  // The component-only case has no native media. Treat an omitted native array
+  // as empty, while retaining every declared component and all resource checks.
+  if (useComponents && generatedData && !Array.isArray(generatedData.elements)
+    && (Array.isArray(generatedData.components) || generatedData.layout)) {
+    generatedData.elements = [];
+  }
 
   if (!generatedData || !Array.isArray(generatedData.elements)) {
     log.error(`Failed to parse AI response for: ${outline.title}`);
@@ -893,40 +916,83 @@ async function generateSlideContent(
 
   log.debug(`Got ${generatedData.elements.length} elements for: ${outline.title}`);
 
-  if (useComponents) {
-    if (!textMeasure || !Array.isArray(generatedData.components) || generatedData.components.length === 0
-      || generatedData.elements.some((element) => element?.type === 'text')) {
-      log.error(`Missing or invalid first-draft components for: ${outline.title}`);
-      onFailure?.({ code: 'invalid-model-output' });
+  let flowPages: CompiledFlowPage[] | undefined;
+  if (useFlow && generatedData.layout) {
+    try {
+      if (!textMeasure) throw new Error('First-draft text measurement is required');
+      if (generatedData.elements.length) throw new Error('Flow authoring owns all media and text; use media blocks');
+      flowPages = await compileFlowLayout(generatedData.layout, { title: outline.title, id: outline.id, textMeasure, diagram: outline.visualIntent?.diagram,
+        resourceDescriptions: Object.fromEntries((outline.visualIntent?.resourceRefs ?? []).map((reference) => [reference.resourceId, reference.observationGoal || reference.reason || outline.title])),
+        observationGoal: outline.visualIntent?.observationGoal || outline.teachingObjective || outline.description || outline.title,
+      });
+      generatedData.elements = flowPages.flatMap((page) => page.elements) as unknown as GeneratedSlideData['elements'];
+    } catch (error) {
+      onFailure?.({ code: 'invalid-model-output', detail: error instanceof Error ? error.message : String(error) });
+      return null;
+    }
+  } else if (useComponents) {
+    if (!textMeasure) {
+      onFailure?.({ code: 'invalid-model-output', detail: 'First-draft text measurement is required' });
       return null;
     }
     try {
       const compiled: GeneratedSlideData['elements'] = [];
+      const allocated: Array<{ left: number; top: number; width: number; height: number }> = generatedData.elements
+        .filter((element) => element && element.type !== 'line' && (element.type !== 'shape' || Boolean(element.text)))
+        .map(({ left, top, width, height }) => ({ left, top, width, height }));
       let diagrams = 0;
-      let hasTitle = false;
-      for (const component of generatedData.components) {
+      for (const [componentIndex, rawComponent] of (generatedData.components ?? []).entries()) {
+        const component = rawComponent && typeof rawComponent === 'object' ? { ...rawComponent, id: `${outline.id}-component-${componentIndex}` } : rawComponent;
         if (isDiagramComponent(component)) {
           diagrams += 1;
           const planned = outline.visualIntent?.diagram;
           // The teaching plan owns meaning; the page author chooses only its rectangle and styling.
           const diagram = planned ? { ...component, ...planned } : component;
-          compiled.push(...compileDiagramComponent(diagram) as unknown as GeneratedSlideData['elements']);
+          try {
+            compiled.push(...await compileMeasuredDiagramComponent(diagram, textMeasure) as unknown as GeneratedSlideData['elements']);
+          } catch (error) {
+            throw new Error(`${error instanceof Error ? error.message : String(error)} (authored diagram allocation ${diagram.width}×${diagram.height}px at ${diagram.left},${diagram.top})`);
+          }
+          allocated.push({ left: diagram.left, top: diagram.top, width: diagram.width, height: diagram.height });
         } else if (component && typeof component === 'object'
           && ('kind' in component)
           && (component.kind === 'textBox' || component.kind === 'labelGrid')) {
           const textComponent = component as TextBoxComponent | LabelGridComponent;
-          if (textComponent.kind === 'textBox' && textComponent.role === 'title') {
-            hasTitle ||= textComponent.text === outline.title;
+          // A model-supplied textBox maximum is only an estimate at authoring
+          // time. Measure the real font first, then let the page's foreground
+          // collision and canvas-boundary checks decide whether it fits.
+          // Direct compileTextComponents callers still retain strict maxHeight.
+          const measuredComponent = textComponent.kind === 'textBox'
+            ? { ...textComponent, maxHeight: undefined }
+            : textComponent;
+          const textElements = await compileTextComponents([measuredComponent], textMeasure);
+          compiled.push(...textElements as unknown as GeneratedSlideData['elements']);
+          if (textComponent.kind === 'textBox') {
+            const text = textElements[0]!;
+            if (text.type !== 'text') throw new Error('textBox did not compile to editable text');
+            allocated.push({ left: text.left, top: text.top, width: text.width, height: text.height });
+          } else {
+            allocated.push({ left: textComponent.left ?? textComponent.x!, top: textComponent.top ?? textComponent.y!,
+              width: textComponent.width, height: textComponent.height });
           }
-          compiled.push(...await compileTextComponents([textComponent], textMeasure) as unknown as GeneratedSlideData['elements']);
         } else throw new Error('Unknown first-draft component');
       }
-      if (!hasTitle) throw new Error('Missing exact page title component');
+      const nativeAllocationCount = generatedData.elements.filter((element) => element && element.type !== 'line' && (element.type !== 'shape' || Boolean(element.text))).length;
+      for (let index = 0; index < allocated.length; index += 1) {
+        const box = allocated[index]!;
+        if (allocated.slice(index + 1).some((other) => (index >= nativeAllocationCount || allocated.indexOf(other) >= nativeAllocationCount) && box.left < other.left + other.width - 0.5
+          && box.left + box.width > other.left + 0.5
+          && box.top < other.top + other.height - 0.5
+          && box.top + box.height > other.top + 0.5)) {
+          throw new Error('First-draft component allocations overlap after measured text sizing');
+        }
+      }
       if (outline.visualIntent?.diagram && diagrams !== 1) throw new Error('Structured teaching diagram is missing or duplicated');
       generatedData.elements = [...generatedData.elements, ...compiled];
     } catch (error) {
-      log.error(`First-draft component compilation failed for ${outline.title}: ${error instanceof Error ? error.message : String(error)}`);
-      onFailure?.({ code: 'invalid-model-output' });
+      const detail = error instanceof Error ? error.message : String(error);
+      log.error(`First-draft component compilation failed for ${outline.title}: ${detail}`);
+      onFailure?.({ code: 'invalid-model-output', detail });
       return null;
     }
   }
@@ -934,11 +1000,21 @@ async function generateSlideContent(
   // Normalize the untrusted array before reading any element property. Model
   // output such as `elements: [null]` must become a recognizable content
   // failure rather than escaping as a TypeError from `el.type`.
-  const fixedElements = fixElementDefaults(generatedData.elements, assignedImages, log);
+  const authoredElements = useComponents ? generatedData.elements.map((element, index) => element && typeof element === 'object'
+    ? { ...element, id: typeof element.id === 'string' && element.id ? element.id : `${outline.id}-element-${index}` } : element) : generatedData.elements;
+  let fixedElements = fixElementDefaults(authoredElements, assignedImages, log);
   if (fixedElements.length === 0) {
     log.error(`Generated slide has no renderable elements for: ${outline.title}`);
     onFailure?.({ code: 'invalid-model-output' });
     return null;
+  }
+
+  if (useComponents && !useFlow && textMeasure) {
+    try { fixedElements = await compileNativeTextLayout(fixedElements as unknown as PPTElement[], textMeasure) as unknown as GeneratedSlideData['elements']; }
+    catch (error) {
+      onFailure?.({ code: 'invalid-model-output', detail: error instanceof Error ? error.message : String(error) });
+      return null;
+    }
   }
 
   const missingRequiredLayoutRefs = requiredResourceRefs.filter((reference) => {
@@ -999,12 +1075,21 @@ async function generateSlideContent(
   );
   log.debug(`After video reference normalization: ${videoNormalizedElements.length} elements`);
 
-  // Process elements, assign unique IDs
-  const processedElements: PPTElement[] = videoNormalizedElements.map((el) => ({
-    ...el,
-    id: `${el.type}_${nanoid(8)}`,
-    rotate: 0,
-  })) as PPTElement[];
+  // Keep valid authored IDs. Resolve duplicate IDs before narration/action
+  // generation so targets are unambiguous and the same draft compiles stably.
+  const reservedIds = new Set(videoNormalizedElements.flatMap((element) => typeof element.id === 'string' && element.id.trim() ? [element.id] : []));
+  const usedIds = new Set<string>();
+  const processedElements: PPTElement[] = videoNormalizedElements.map((el, index) => {
+    let id = useComponents ? (typeof el.id === 'string' && el.id.trim() ? el.id : `${outline.id}-element-${index}`) : `${el.type}_${nanoid(8)}`;
+    if (usedIds.has(id)) {
+      const base = `${outline.id}-element-${index}`;
+      id = base;
+      let suffix = 2;
+      while (reservedIds.has(id) || usedIds.has(id)) id = `${base}-${suffix++}`;
+    }
+    usedIds.add(id);
+    return { ...el, id, rotate: 0 };
+  }) as PPTElement[];
 
   if (processedElements.length === 0) {
     log.error(`Generated slide became empty after technical normalization for: ${outline.title}`);
@@ -1025,6 +1110,15 @@ async function generateSlideContent(
     }
   }
 
+  if (flowPages) {
+    const byId = new Map(processedElements.map((element) => [element.id, element]));
+    const pages = flowPages.map((page) => ({
+      elements: page.elements.flatMap((element) => byId.has(element.id) ? [byId.get(element.id)!] : []),
+      background, remark: generatedData.remark || outline.description,
+      sourceGroupIds: page.sourceGroupIds, teachingText: page.teachingText,
+    }));
+    return { ...pages[0], ...(pages.length > 1 ? { continuationPages: pages.slice(1) } : {}) };
+  }
   return {
     elements: processedElements,
     background,

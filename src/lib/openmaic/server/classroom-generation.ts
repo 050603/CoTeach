@@ -1,5 +1,7 @@
 import { buildAssessmentContext, ASSESSMENT_DEPENDENCY_VERSION } from '@openmaic/lib/generation/assessment-dependencies';
 import { nanoid } from 'nanoid';
+import { reusePersistedSceneAssets } from './classroom-asset-recovery';
+import { calibrateGeneratedVisualCues } from '../generation/semantic-visual-cues';
 import {
   createCourseGenerationAiCall,
   withCourseGenerationAiCallContext,
@@ -90,6 +92,7 @@ import { assertCompleteSceneGeneration } from '@openmaic/lib/generation/generati
 import {
   type CourseQualityReport,
 } from '@openmaic/lib/generation/course-quality';
+import { expandCompiledSlidePages } from '@openmaic/lib/generation/compiled-slide-pages';
 import { OPENMAIC_GENERATION_BASELINE } from '@openmaic/lib/generation/openmaic-baseline';
 import {
   resolveCourseLanguagePolicy,
@@ -806,7 +809,7 @@ Return a JSON object with this exact structure:
 /** Keep durable preparation alive while high-reasoning planning/search awaits output. */
 export async function generateClassroom(
   input: GenerateClassroomInput,
-  options: GenerateClassroomOptions,
+  options: GenerateClassroomOptions = {},
 ): Promise<GenerateClassroomResult> {
   let latest: ClassroomGenerationProgress | undefined;
   let pendingHeartbeat: Promise<void> | undefined;
@@ -1178,13 +1181,13 @@ async function generateClassroomInternal(
   const canonicalOutlines = outlines;
   if (options.generationOutlineIds) {
     const outlineById = new Map(canonicalOutlines.map((outline) => [outline.id, outline]));
-    const selected = options.generationOutlineIds.flatMap((id) => {
-      const outline = outlineById.get(id);
-      return outline ? [outline] : [];
-    });
+    const selectedIds = new Set(options.generationOutlineIds);
+    const selected = canonicalOutlines.filter((outline) => selectedIds.has(outline.id)
+      || Boolean(outline.spatialParentId && selectedIds.has(outline.spatialParentId)));
     if (selected.length === 0
-      || selected.length !== options.generationOutlineIds.length
-      || new Set(options.generationOutlineIds).size !== options.generationOutlineIds.length) {
+      || options.generationOutlineIds.some((id) => !outlineById.has(id)
+        && !canonicalOutlines.some((outline) => outline.spatialParentId === id))
+      || selectedIds.size !== options.generationOutlineIds.length) {
       throw new Error('测试生成范围与已确认的正式课程大纲不一致，不能继续生成。');
     }
     outlines = selected;
@@ -1248,7 +1251,7 @@ async function generateClassroomInternal(
   }
   throwIfAborted(options.signal);
   const enhancedById = new Map(outlines.map((outline) => [outline.id, outline]));
-  const outlineContext = options.generationOutlineIds
+  let outlineContext = options.generationOutlineIds
     ? canonicalOutlines.map((outline) => enhancedById.get(outline.id) ?? outline)
     : outlines;
   validateConfirmedPblDetails(outlineContext, input);
@@ -1495,6 +1498,30 @@ async function generateClassroomInternal(
     };
   };
 
+  const stableCourseProgression = (pages: SceneOutline[]) => [...new Map(pages.map((page) => [
+    page.spatialParentId ?? page.id,
+    { id: page.spatialParentId ?? page.id, sectionId: page.lectureSectionId,
+      title: page.title, description: page.spatialSourceContext?.description ?? page.description },
+  ])).values()];
+  const pageFingerprint = (safeOutline: SceneOutline, actualTaughtContext = '') => fingerprintGenerationValue({
+        courseTitle: courseTitle ?? null,
+        courseLanguage,
+        languageDirective,
+        requirements,
+        agents,
+        progression: stableCourseProgression(outlineContext),
+        actualTaughtContext,
+        assessmentPolicy: ASSESSMENT_DEPENDENCY_VERSION,
+        quizPolicy: safeOutline.type === 'quiz' ? QUIZ_GENERATION_POLICY_VERSION : null,
+        generationVision,
+        narrationPolicy: safeOutline.generationPurpose === 'knowledge-teaching' ? COURSE_GENERATION_POLICY_VERSION : null,
+        pipeline: 'adaptive-course-page-v4',
+        teachingNarrationPolicy: TEACHING_NARRATION_VERSION,
+    outputBudgetPolicy: COURSE_OUTPUT_BUDGET_VERSION,
+    executionBudgetPolicy: COURSE_EXECUTION_BUDGET_VERSION,
+    executionBudget,
+      });
+
   type PreparedTeachingPage = {
     content?: GeneratedSceneContent;
     narration?: NarrationModuleOutput;
@@ -1516,24 +1543,7 @@ async function generateClassroomInternal(
       });
       const independentNarration = canUseIndependentTeachingNarration(safeOutline);
       const usesFirstPassNarration = safeOutline.generationPurpose === 'knowledge-teaching';
-      const pageInputFingerprint = fingerprintGenerationValue({
-        courseTitle: courseTitle ?? null,
-        courseLanguage,
-        languageDirective,
-        requirements,
-        agents,
-        outlineContext,
-        actualTaughtContext,
-        assessmentPolicy: ASSESSMENT_DEPENDENCY_VERSION,
-        quizPolicy: safeOutline.type === 'quiz' ? QUIZ_GENERATION_POLICY_VERSION : null,
-        generationVision,
-        narrationPolicy: usesFirstPassNarration ? COURSE_GENERATION_POLICY_VERSION : null,
-        pipeline: 'adaptive-course-page-v4',
-        teachingNarrationPolicy: TEACHING_NARRATION_VERSION,
-    outputBudgetPolicy: COURSE_OUTPUT_BUDGET_VERSION,
-    executionBudgetPolicy: COURSE_EXECUTION_BUDGET_VERSION,
-    executionBudget,
-      });
+      const pageInputFingerprint = pageFingerprint(safeOutline, actualTaughtContext);
       let pageHeartbeat: ReturnType<typeof setInterval> | undefined;
       try {
       await reportPageStage(index, safeOutline.title, 'restoring');
@@ -1559,13 +1569,14 @@ async function generateClassroomInternal(
       // scene here could reintroduce narration authored against a stale
       // neighboring slide. Restore the independently fingerprinted stages
       // below instead.
-      const checkpoint = prepared.contentOnly || prepared.content || prepared.narration ? null : await options.loadSceneCheckpoint?.(
+      const identityCheckpoint = prepared.contentOnly ? null : await options.loadSceneCheckpoint?.(
         safeOutline,
         index,
         stageId,
         generationModelFingerprint,
         pageInputFingerprint,
       );
+      const checkpoint = prepared.content || prepared.narration ? null : identityCheckpoint;
       if (checkpoint) {
         if (
           usesFirstPassNarration
@@ -1679,6 +1690,7 @@ async function generateClassroomInternal(
             : pageContentCall;
           const pageTextbookImages = textbookImagesForOutline(safeOutline, input.textbookImages);
           let rawTeachingSlide: string | undefined;
+          let firstDraftFailure: string | undefined;
           content = await withGeneratedOutputRetry(async () => {
             let generated: GeneratedSceneContent | null;
             try {
@@ -1696,6 +1708,7 @@ async function generateClassroomInternal(
                 pblProfile: requirements.pblProfile, allowProceduralSkill: vocationalActive,
                 componentAuthoring: safeOutline.type === 'slide',
                 textMeasure: measureAuthoredSlideText,
+                onFailure: (detail) => { firstDraftFailure = detail; },
                 signal: options.signal, visionEnabled: contentCall.vision,
                 languageModel: contentCall.model, thinkingConfig: contentCall.thinking,
                 ...(websiteReferenceContext ? { websiteReferenceContext } : {}),
@@ -1709,12 +1722,12 @@ async function generateClassroomInternal(
             }
             if (!generated || !isGeneratedSceneContent(generated, safeOutline.type)) {
               throw invalidGeneratedOutput(
-                new Error('missing required page content structure'),
+                new Error(firstDraftFailure ?? 'missing required page content structure'),
                 `Scene "${safeOutline.title}" returned invalid content`,
               );
             }
             if (safeOutline.type === 'slide' && pageTextbookImages.some((image) => image.required)) {
-              const missing = missingRequiredTextbookImageIds(generated as GeneratedSlideContent, pageTextbookImages);
+              const missing = missingRequiredTextbookImageIds({ ...(generated as GeneratedSlideContent), elements: [(generated as GeneratedSlideContent), ...((generated as GeneratedSlideContent).continuationPages ?? [])].flatMap((page) => page.elements) }, pageTextbookImages);
               if (missing.length) {
                 throw invalidGeneratedOutput(
                   new Error(`missing required textbook source images: ${missing.join(', ')}`),
@@ -1738,14 +1751,14 @@ async function generateClassroomInternal(
               image.publicSrc && image.publicSrc !== image.src ? [[image.src, image.publicSrc] as const] : [],
             ));
             if (publicByTemporarySource.size) {
-              content = {
-                ...content,
-                elements: content.elements.map((element) => element.type === 'image'
-                  && typeof element.src === 'string'
-                  && publicByTemporarySource.has(element.src)
-                  ? { ...element, src: publicByTemporarySource.get(element.src)! }
-                  : element),
-              };
+              const resolveImages = (page: GeneratedSlideContent): GeneratedSlideContent => ({
+                ...page,
+                elements: page.elements.map((element) => element.type === 'image'
+                  && typeof element.src === 'string' && publicByTemporarySource.has(element.src)
+                  ? { ...element, src: publicByTemporarySource.get(element.src)! } : element),
+                ...(page.continuationPages ? { continuationPages: page.continuationPages.map(resolveImages) } : {}),
+              });
+              content = resolveImages(content);
             }
           }
           if (independentNarration && rawTeachingSlide && 'elements' in content) {
@@ -1886,9 +1899,19 @@ async function generateClassroomInternal(
         Object.assign(error, { isRetryable: false });
         throw error;
       }
-      const scene = usesFirstPassNarration
+      let scene = usesFirstPassNarration
         ? { ...assembledScene, narrationRevision: COURSE_GENERATION_POLICY_VERSION }
         : assembledScene;
+      // The section stages above validate the current content and narration.
+      // Reassembly still represents the same page. Retain its stable identity
+      // and reuse only media whose speech ID and exact text remain unchanged.
+      if (identityCheckpoint && isUsableCompletedScene(identityCheckpoint, safeOutline.type)
+        && (!usesFirstPassNarration || identityCheckpoint.narrationRevision === COURSE_GENERATION_POLICY_VERSION)) {
+        scene = reusePersistedSceneAssets({ ...scene, id: identityCheckpoint.id }, identityCheckpoint);
+        if (scene.content.type === 'slide') {
+          scene.actions = calibrateGeneratedVisualCues({ outline: safeOutline, elements: scene.content.canvas.elements, actions: scene.actions ?? [] });
+        }
+      }
       const assembledMissingTools = findMissingRequiredTeachingTools(safeOutline, {
         sceneType: scene.type,
         content: scene.content,
@@ -1947,8 +1970,8 @@ async function generateClassroomInternal(
   // A quiz depends on completed speech, not merely on the intention to teach.
   // First create every ordinary slide in a section, then write that section's
   // narration as one continuous unit and split it back into page checkpoints.
-  const indexed = outlines.map((outline, index) => ({ outline, index }));
-  const narratable = indexed.filter(({ outline }) => {
+  let indexed = outlines.map((outline, index) => ({ outline, index }));
+  let narratable = indexed.filter(({ outline }) => {
     if (outline.type === 'quiz') return false;
     const safe = applyOutlineFallbacks(outline, true, {
       allowProceduralSkill: vocationalActive,
@@ -1963,8 +1986,50 @@ async function generateClassroomInternal(
     { shouldContinue: () => !options.signal?.aborted },
   );
   const preparedByIndex = new Map<number, PreparedTeachingPage>();
-  for (const draft of preparedContentDrafts) {
-    if (draft) preparedByIndex.set(draft.index, { content: draft.content });
+  const contentById = new Map(preparedContentDrafts.flatMap((draft) => draft ? [[draft.outline.id, draft.content] as const] : []));
+  const expandedById = new Map<string, Array<{ outline: SceneOutline; content: GeneratedSlideContent }>>();
+  for (const outline of outlines) {
+    const content = contentById.get(outline.id);
+    if (content && 'elements' in content && content.continuationPages?.length) {
+      expandedById.set(outline.id, expandCompiledSlidePages(outline, content));
+    }
+  }
+  if (expandedById.size) {
+    const existingPages = new Map(outlines.map((outline) => [outline.id, outline]));
+    outlines = attachTtsTimingPlans(outlines.flatMap((outline) => {
+      const expanded = expandedById.get(outline.id);
+      if (!expanded) return [outline];
+      for (const page of expanded) contentById.set(page.outline.id, page.content);
+      return expanded.map((page) => page.outline);
+    }), ttsTimingSelection).map((outline) => {
+      // Promotion can split another section. Already compiled test pages keep
+      // their adopted timing plan, so unrelated expansion cannot invalidate
+      // their narration checkpoints or replace their recorded audio.
+      const existing = existingPages.get(outline.id);
+      return existing?.spatialParentId && !expandedById.has(existing.id) ? existing : outline;
+    });
+    const byId = new Map(outlines.map((outline) => [outline.id, outline]));
+    outlineContext = outlineContext.flatMap((outline) => expandedById.get(outline.id)?.map(
+      (page) => byId.get(page.outline.id)!,
+    ) ?? [byId.get(outline.id) ?? outline]).map((outline, order) => ({ ...outline, order }));
+    const ordered = new Map(outlineContext.map((outline) => [outline.id, outline]));
+    outlines = outlines.map((outline) => ordered.get(outline.id)!);
+    indexed = outlines.map((outline, index) => ({ outline, index }));
+    narratable = indexed.filter(({ outline }) => contentById.has(outline.id));
+    narrationPageNumbers.clear();
+    narratable.forEach(({ index }) => narrationPageNumbers.add(index + 1));
+    for (const stage of pageStageIds) {
+      stageTotals[stage] = stage === 'narration' ? narratable.length : outlines.length;
+      completedPageStages.get(stage)?.clear();
+      failedPageStages.get(stage)?.clear();
+    }
+  }
+  for (const { outline, index } of narratable) {
+    const content = contentById.get(outline.id);
+    if (content) {
+      preparedByIndex.set(index, { content });
+      completePageStage(index, 'content');
+    }
   }
   const sectionGroups = new Map<string, Array<{ outline: SceneOutline; index: number; content: GeneratedSlideContent }>>();
   for (const { outline, index } of narratable) {
@@ -1982,9 +2047,7 @@ async function generateClassroomInternal(
       generationModelFingerprint,
       sectionId,
       pages: orderedPages.map(({ outline, content }) => ({ outline, content })),
-      progression: outlineContext.map((outline) => ({
-        id: outline.id, sectionId: outline.lectureSectionId, teachingPlan: outline.teachingBrief?.teachingPlan,
-      })),
+      progression: stableCourseProgression(outlineContext),
       languageDirective,
       requirements,
     });
@@ -2160,11 +2223,29 @@ async function generateClassroomInternal(
   });
   throwIfAborted(options.signal);
 
+  if (expandedById.size) {
+    // Keep original content bundles recoverable throughout authoring. Only
+    // publish the expanded outline/checkpoint set once every page is complete.
+    for (const { outline, index } of narratable) {
+      const content = preparedByIndex.get(index)?.content;
+      if (content) await options.onSceneStageCompleted?.(outline, 'content', { content },
+        generationModelFingerprint, pageFingerprint(outline));
+    }
+    await options.onOutlinesPrepared?.(outlineContext);
+  }
+
   const persisted = await persistClassroom(
     {
       id: stageId,
       stage,
       scenes,
+      ...((input.enableTTS || outlines.some((outline) => outline.mediaGenerations?.length)) ? {
+        assetGeneration: { status: 'running' as const,
+          requested: outlines.reduce((sum, outline) => sum + (outline.mediaGenerations?.length ?? 0), 0)
+            + (input.enableTTS ? scenes.flatMap((scene) => scene.actions ?? []).filter((action) => action.type === 'speech' && action.text.trim()).length : 0),
+          completed: 0, failures: [], updatedAt: new Date().toISOString(),
+        },
+      } : {}),
     },
   );
   throwIfAborted(options.signal);

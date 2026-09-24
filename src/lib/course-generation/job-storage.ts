@@ -1,6 +1,7 @@
 import { Prisma, type GenerationJob } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
+import { CLASSROOM_MEDIA_ORIGIN_PREFIX, preserveClassroomMediaOrigins } from './classroom-media-origin';
 
 type JobKind = "COURSE_DESIGN" | "COURSE_CONTENT" | "COURSE_RESOURCE_PACKAGE" | "COURSE_QUALITY_REVIEW";
 type Json = Prisma.JsonValue;
@@ -97,7 +98,7 @@ async function deleteCheckpoints(
   policy: GenerationCheckpointPolicy,
 ): Promise<void> {
   if (policy === "all") {
-    await tx.generationCheckpoint.deleteMany({ where: { jobId } });
+    await tx.generationCheckpoint.deleteMany({ where: { jobId, NOT: { step: { startsWith: CLASSROOM_MEDIA_ORIGIN_PREFIX } } } });
     return;
   }
   if (policy === "prepared-outlines") {
@@ -159,6 +160,9 @@ function storage(kind: JobKind) {
         await lock(tx);
         const row = (await findIn(tx, { where: input.where }))[0];
         if (!row) throw new Error("GENERATION_JOB_NOT_FOUND");
+        if (kind === 'COURSE_CONTENT' && input.data.result !== undefined) {
+          await preserveClassroomMediaOrigins(tx, row);
+        }
         await deleteCheckpoints(tx, row.id, input.checkpointPolicy);
         return projectGenerationJob(await tx.generationJob.update({
           where: { id: row.id },

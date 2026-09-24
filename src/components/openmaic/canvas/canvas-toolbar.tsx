@@ -371,6 +371,7 @@ export function CanvasToolbar({
                         : 'text-gray-500 dark:text-gray-400',
                     )}
                     aria-label="Auto-play"
+                    aria-pressed={autoPlayLecture}
                   >
                     <Repeat className="w-3.5 h-3.5" />
                   </button>

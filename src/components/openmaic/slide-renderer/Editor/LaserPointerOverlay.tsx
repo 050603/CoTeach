@@ -41,14 +41,6 @@ export function LaserPointerOverlay({
   );
 
   const selector = laserOptions?.selector;
-  const targetElement = elements.find((element) => element.id === laserElementId);
-  const avoidCoveringTarget = Boolean(
-    selector
-    || targetElement?.type === 'text'
-    || targetElement?.type === 'table'
-    || targetElement?.type === 'latex'
-    || (targetElement?.type === 'shape' && targetElement.text?.content),
-  );
   const geometry = useVisualTargetGeometry({
     containerRef,
     rootRef,
@@ -67,7 +59,6 @@ export function LaserPointerOverlay({
             geometry={geometry}
             color={laserOptions?.color}
             transitionDurationMs={laserOptions?.transitionDurationMs}
-            avoidCoveringTarget={avoidCoveringTarget}
           />
         )}
       </AnimatePresence>

@@ -3,14 +3,14 @@ import { describe, expect, test } from 'vitest';
 import { buildOutlinePrompt } from '@openmaic/generation';
 
 describe('buildOutlinePrompt golden output', () => {
-  test('authors slide titles as core content topic phrases', () => {
+  test('plans formal knowledge headings on the first outline pass', () => {
     const prompt = buildOutlinePrompt({ requirement: '设计一节教学目标分类课' });
 
     expect(prompt.system).toContain('Instructional Slide Title Contract');
-    expect(prompt.system).toContain('教学设计的层次与职责');
-    expect(prompt.system).toContain('Keep hooks, opening questions, learner commands, and activity instructions');
+    expect(prompt.system).toContain('“项目式学习”, not “怎样让学生在真实任务中学习？”');
+    expect(prompt.system).toContain('Use its standard, formal subject name as the title');
     expect(prompt.system).not.toContain('{{snippet:slide-title-guidelines}}');
-    expect(prompt.user).toContain('Core content topic and the specific facet taught on this page');
+    expect(prompt.user).toContain('For slide: formal heading for its actual knowledge');
   });
 
   test('pins every conditional off', () => {

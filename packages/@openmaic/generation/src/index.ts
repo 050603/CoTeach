@@ -120,3 +120,7 @@ export type {
 } from './outline-types.js';
 
 export * from './prompts/index.js';
+
+export { compileFlowLayout } from './flow-layout-compiler.js';
+export type { FlowLayout, FlowBlock, FlowGroup, FlowLeaf, CompiledFlowPage } from './flow-layout-compiler.js';
+export { compileMeasuredDiagramComponent } from './diagram-compiler.js';

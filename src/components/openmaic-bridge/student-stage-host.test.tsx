@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { PlaybackPreparationContext } from "@openmaic/lib/contexts/playback-preparation-context";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -52,6 +54,7 @@ const settingsMock = vi.hoisted(() => ({
 }));
 
 const renderedStage = vi.hoisted(() => ({
+  prepare: undefined as ((sceneId: string) => Promise<boolean>) | undefined,
   props: null as null | {
     autoplaySceneId?: string;
     onPlaybackStateChange?: (state: {
@@ -64,6 +67,7 @@ const renderedStage = vi.hoisted(() => ({
 vi.mock("@openmaic/components/stage", () => ({
   Stage: (props: typeof renderedStage.props) => {
     renderedStage.props = props;
+    renderedStage.prepare = useContext(PlaybackPreparationContext);
     return <div>stage-ready</div>;
   },
 }));
@@ -215,7 +219,136 @@ describe("StudentStageHost reporting modes", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("updates same-ID assets, preserves the selected page, and stops polling when generation ends", async () => {
+    vi.useFakeTimers();
+    const makePayload = (ready: boolean) => ({
+      stage: { id: "preview", name: "预览" },
+      scenes: ["scene-1", "scene-2"].map((id) => ({
+        id, title: id, type: "slide", actions: [{ id: `${id}-speech`, type: "speech", text: "讲解",
+          ...(ready ? { audioUrl: `/audio/${id}.mp3`, audioDurationSec: 1 } : {}) }],
+      })),
+      generationPreview: { contentVersion: ready ? "2" : "1", active: !ready, jobStatus: ready ? "completed" : "running",
+        scenes: { "scene-1": { status: ready ? "ready" : "preparing" }, "scene-2": { status: ready ? "ready" : "preparing" } } },
+    });
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ success: true, classroom: makePayload(false) }) } as Response);
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ success: true, classroom: makePayload(true) }) } as Response);
+    await act(async () => { render(<StudentStageHost backHref="/teacher" classroomId="preview" mode="teacher-preview" />); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(stageMock.state.scenes).toHaveLength(2);
+    act(() => stageMock.setState({ currentSceneId: "scene-2" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(stageMock.state.currentSceneId).toBe("scene-2");
+    expect(stageMock.state.scenes[1].actions[0]).toMatchObject({ audioUrl: "/audio/scene-2.mp3" });
+    expect(stageMock.state.setStage).toHaveBeenCalledTimes(1);
+    const calls = fetchMock.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(9_000); });
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
+  });
+
+  it.each([
+    { mode: "teacher-preview" as const, nextCourse: "course-1", keepScene: true, includePrevious: true },
+    { mode: "teacher-preview" as const, nextCourse: "course-2", keepScene: false, includePrevious: true },
+    { mode: "teacher-preview" as const, nextCourse: "course-1", keepScene: false, includePrevious: false },
+    { mode: "student" as const, nextCourse: "course-1", keepScene: false, includePrevious: true },
+  ])("preserves only the same-course teacher cursor when replacing a classroom: $mode / $nextCourse / $includePrevious", async ({ mode, nextCourse, keepScene, includePrevious }) => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const replacement = String(input).includes("classroom-new");
+      return { ok: true, json: async () => ({ success: true, classroom: {
+        stage: { id: replacement ? "classroom-new" : "classroom-old" },
+        scenes: [{ id: "scene-1", title: "首页", actions: [] },
+          ...(!replacement || includePrevious ? [{ id: "scene-2", title: "当前页", actions: [] }] : [])],
+      } }) } as Response;
+    });
+    const view = render(<StudentStageHost backHref="/teacher" classroomId="classroom-old" courseId="course-1" mode={mode} />);
+    await waitFor(() => expect(stageMock.state.scenes).toHaveLength(2));
+    act(() => stageMock.setState({ currentSceneId: "scene-2" }));
+    view.rerender(<StudentStageHost backHref="/teacher" classroomId="classroom-new" courseId={nextCourse} mode={mode} />);
+    await waitFor(() => expect(stageMock.state.setStage).toHaveBeenCalledWith({ id: "classroom-new" }));
+    expect(stageMock.state.currentSceneId).toBe(keepScene ? "scene-2" : "scene-1");
+  });
+
+  it("wakes a completed preview on the parent job lifecycle change and restarts polling without remounting", async () => {
+    vi.useFakeTimers();
+    let active = false;
+    let ready = true;
+    vi.mocked(fetch).mockImplementation(async () => ({ ok: true, json: async () => ({ success: true, classroom: {
+      stage: { id: "preview" }, scenes: [{ id: "scene-1", title: "预览", actions: [] }],
+      generationPreview: { active, contentVersion: String(active), jobStatus: active ? "running" : "completed",
+        scenes: { "scene-1": { status: ready ? "ready" : "preparing" } } },
+    } }) }) as Response);
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(<StudentStageHost backHref="/teacher" classroomId="preview" mode="teacher-preview" previewRefreshKey="job:completed" />); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    active = true;
+    ready = false;
+    await act(async () => { view.rerender(<StudentStageHost backHref="/teacher" classroomId="preview" mode="teacher-preview" previewRefreshKey="job:running" />); });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(view.getByRole("status").textContent).toContain("音频准备中");
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(stageMock.state.setStage).toHaveBeenCalledTimes(1);
+    expect(stageMock.state.currentSceneId).toBe("scene-1");
+  });
+
+  it("refreshes a failed standalone preview on window focus and resumes only active polling", async () => {
+    vi.useFakeTimers();
+    let active = false;
+    vi.mocked(fetch).mockImplementation(async () => ({ ok: true, json: async () => ({ success: true, classroom: {
+      stage: { id: "preview" }, scenes: [{ id: "scene-1", title: "预览", actions: [] }],
+      generationPreview: { active, contentVersion: String(active), jobStatus: active ? "running" : "failed",
+        scenes: { "scene-1": { status: active ? "preparing" : "failed" } } },
+    } }) }) as Response);
+    await act(async () => { render(<StudentStageHost backHref="/teacher" classroomId="preview" mode="teacher-preview" />); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    active = true;
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(stageMock.state.setStage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the active scene engine stable during playback and applies new assets before the next start", async () => {
+    vi.useFakeTimers();
+    let ready = false;
+    vi.mocked(fetch).mockImplementation(async () => ({ ok: true, json: async () => ({ success: true, classroom: {
+      stage: { id: "preview" }, scenes: [{ id: "scene-1", title: "预览", actions: [{ id: "speech", type: "speech", text: "讲解",
+        audioUrl: ready ? "/audio/updated.mp3" : "/audio/original.mp3", audioDurationSec: 1 }] }],
+      generationPreview: { active: !ready, contentVersion: ready ? "2" : "1", jobStatus: ready ? "completed" : "running",
+        scenes: { "scene-1": { status: "ready" } } },
+    } }) }) as Response);
+    await act(async () => { render(<StudentStageHost backHref="/teacher" classroomId="preview" mode="teacher-preview" />); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const playingScene = stageMock.state.scenes[0];
+    act(() => renderedStage.props?.onPlaybackStateChange?.({ engineMode: "playing", snapshot: { sceneIndex: 0, actionIndex: 0, consumedDiscussions: [] } }));
+    ready = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(stageMock.state.scenes[0]).toBe(playingScene);
+    act(() => renderedStage.props?.onPlaybackStateChange?.({ engineMode: "idle", snapshot: { sceneIndex: 0, actionIndex: 1, consumedDiscussions: [] } }));
+    await act(async () => { expect(await renderedStage.prepare?.("scene-1")).toBe(true); });
+    expect(stageMock.state.scenes[0]).not.toBe(playingScene);
+    expect(stageMock.state.scenes[0].actions[0]).toMatchObject({ audioUrl: "/audio/updated.mp3" });
+  });
+
+  it("refreshes before playback and refuses unfinished narration without replacing the classroom", async () => {
+    const classroom = { stage: { id: "preview" }, scenes: [{ id: "scene-1", title: "预览", actions: [{ id: "speech", type: "speech", text: "讲解" }] }],
+      generationPreview: { contentVersion: "1", active: false, jobStatus: "failed", scenes: { "scene-1": { status: "failed" } } } };
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => ({ success: true, classroom }) } as Response);
+    const view = render(<StudentStageHost backHref="/teacher" classroomId="preview" mode="teacher-preview" />);
+    await waitFor(() => expect(renderedStage.prepare).toBeTypeOf("function"));
+    let allowed: boolean | undefined;
+    await act(async () => { allowed = await renderedStage.prepare?.("scene-1"); });
+    expect(allowed).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(view.getByRole("status").textContent).toContain("音频生成未完成");
+    expect(stageMock.state.setStage).toHaveBeenCalledTimes(1);
   });
 
   it("emits initial learning events in student mode", async () => {

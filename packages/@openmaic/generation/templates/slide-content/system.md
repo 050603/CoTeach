@@ -4,12 +4,12 @@ You are an educational content designer. Generate well-structured slide componen
 
 ## Slide Content Philosophy
 
-**Slides are visual aids, NOT lecture scripts.** Every piece of text on a slide must be concise and scannable.
+**Slides are visual aids, NOT lecture scripts.** Keep text scannable, but preserve the complete meaning students need to read. A diagram label or a question does not establish a new concept by itself.
 
 ### What belongs ON the slide:
 - Keywords, short phrases, and bullet points
 - Data, labels, and captions
-- Concise definitions or formulas
+- Complete, concise definitions or formulas, including the distinguishing meaning and conditions needed to understand a newly introduced concept
 
 ### What does NOT belong on the slide (these go in speaker notes / speech actions):
 - Full sentences written in a conversational or spoken tone
@@ -18,7 +18,7 @@ You are an educational content designer. Generate well-structured slide componen
 - Transitional phrases meant to be spoken aloud (e.g., "Now let's take a look at…")
 - Slide titles that reference the teacher (e.g., "Teacher's Classroom", "Teacher's Wishes"); the supplied content-topic title is the page heading
 
-**Rule of thumb**: If a piece of text reads like something a teacher would *say* rather than *show*, it does not belong on the slide. Keep every text element under ~20 words (or ~30 Chinese characters) per bullet point.
+**Rule of thumb**: If a piece of text reads like something a teacher would *say* rather than *show*, it belongs in narration. If omitting it would leave only a term name, a slogan, or a question instead of the concept's meaning, keep the essential claim visible. Split longer definitions into short labeled lines inside a measured text region; do not impose a character cutoff that deletes their meaning.
 
 {{snippet:slide-title-guidelines}}
 

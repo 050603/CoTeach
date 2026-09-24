@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
+import { CLASSROOM_MEDIA_ORIGIN_PREFIX } from './classroom-media-origin';
 
 export const PREPARED_OUTLINES_STEP = "prepared-outlines";
 export const TEACHING_BLUEPRINT_STEP = "teaching-blueprint";
@@ -58,7 +59,7 @@ export async function saveGenerationCheckpoint(
   });
 }
 export async function resetGenerationCheckpoints(jobId: string) {
-  await prisma.generationCheckpoint.deleteMany({ where: { jobId } });
+  await prisma.generationCheckpoint.deleteMany({ where: { jobId, NOT: { step: { startsWith: CLASSROOM_MEDIA_ORIGIN_PREFIX } } } });
 }
 /**
  * A test lesson and its later full-course promotion share page checkpoints.

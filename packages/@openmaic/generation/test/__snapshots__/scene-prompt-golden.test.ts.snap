@@ -706,12 +706,12 @@ You are an educational content designer. Generate well-structured slide componen
 
 ## Slide Content Philosophy
 
-**Slides are visual aids, NOT lecture scripts.** Every piece of text on a slide must be concise and scannable.
+**Slides are visual aids, NOT lecture scripts.** Keep text scannable, but preserve the complete meaning students need to read. A diagram label or a question does not establish a new concept by itself.
 
 ### What belongs ON the slide:
 - Keywords, short phrases, and bullet points
 - Data, labels, and captions
-- Concise definitions or formulas
+- Complete, concise definitions or formulas, including the distinguishing meaning and conditions needed to understand a newly introduced concept
 
 ### What does NOT belong on the slide (these go in speaker notes / speech actions):
 - Full sentences written in a conversational or spoken tone
@@ -720,17 +720,17 @@ You are an educational content designer. Generate well-structured slide componen
 - Transitional phrases meant to be spoken aloud (e.g., "Now let's take a look at…")
 - Slide titles that reference the teacher (e.g., "Teacher's Classroom", "Teacher's Wishes"); the supplied content-topic title is the page heading
 
-**Rule of thumb**: If a piece of text reads like something a teacher would *say* rather than *show*, it does not belong on the slide. Keep every text element under ~20 words (or ~30 Chinese characters) per bullet point.
+**Rule of thumb**: If a piece of text reads like something a teacher would *say* rather than *show*, it belongs in narration. If omitting it would leave only a term name, a slogan, or a question instead of the concept's meaning, keep the essential claim visible. Split longer definitions into short labeled lines inside a measured text region; do not impose a character cutoff that deletes their meaning.
 
 ## Instructional Slide Title Contract
 
-Apply these rules to every \`slide\` scene. They do not constrain the names of games, simulations, interactive tasks, or projects.
+Apply these rules to every \`slide\` scene. Preserve the teacher's chosen naming style and any already reviewed outline titles.
 
-1. Decide the page's core knowledge object and the specific facet taught on that page before writing its title. The title must be a concise content-topic phrase that identifies both, so a learner can tell what the page teaches when the title is read on its own.
-2. Prefer forms such as “object + concept / relationship / mechanism / method / application”. Examples: “教学设计的层次与职责”, “教学目标层级辨析”, “Projectile Motion Variables”, and “Training and Test Set Roles”.
-3. Keep hooks, opening questions, learner commands, and activity instructions in the page content, \`entryPoint\`, task, question stem, or narration. Do not turn them into the title.
-4. A case, practice, or recap page must name its concrete subject and purpose, such as “数据集划分案例分析”, “教学目标层级辨析练习”, or “抛体运动变量总结”. Generic labels by themselves, including “案例分析”, “练习”, “总结”, “Introduction”, “Practice”, and “Key Takeaways”, are invalid slide titles.
-5. Do not use a complete question, conversational transition, suspense slogan, classroom command, or arbitrary numerical teaser as a slide title. A number is valid when it belongs to the formal content being taught, such as a recognized three-stage model.
+1. Name the actual idea, case, relationship or question taught on the page in clear learner-facing language. A concise topic phrase, a concrete question, or a vivid statement can all work; choose the form that makes this page easiest to understand.
+2. Titles may invite observation or reasoning when they name the real learning object. For example, “Why did the two experiments differ?” or “证据与结论之间” can be more helpful than an abstract catalogue heading. Do not force every title into “object + concept / mechanism / method”.
+3. A case, practice, or recap page must name its concrete subject and purpose. Avoid generic labels alone, unrelated suspense slogans, teacher-personalized messages, or commands without a learning object. Activity-oriented wording is appropriate when the activity itself is the page's teaching purpose.
+4. Keep the title short enough to scan, while retaining the specific distinction or question. Put detailed instructions and extended explanations in the content or narration. A teacher's explicit preference for formal topic titles, questions, or another naming style takes precedence.
+5. Keep a coherent voice across the course without making every title use the same grammatical pattern. Do not rename reviewed titles or turn one planned page into several repeated-title fragments merely to simplify layout.
 
 When rendering a supplied outline, use its \`title\` verbatim as the visible primary heading; line wrapping is allowed, but paraphrasing is not. Only an explicit current edit instruction may change it.
 
@@ -1687,6 +1687,7 @@ Teach in English.
 
 5. All TextElement \`height\` values must be selected from the quick reference table in the system prompt
 6. Unless a current explicit edit instruction asks to change it, render \`Dependency Injection\` verbatim as the visible primary heading; only line wrapping is allowed
+7. When Key Points first define a concept, display its complete basic meaning on this page. A term name plus the question it answers is insufficient when the supplied definition also specifies what the concept is and how it works. Preserve the defining distinction for every introduced concept; organize longer statements into readable labeled lines and give them space before adding a duplicate diagram or a learner prompt.
 
 Choose the page's native element types from the teaching need. Do not copy a fixed title-plus-bullets composition. Return one object with \`background\` and \`elements\`, using only the element contracts enabled in the system prompt.
 

@@ -307,6 +307,8 @@ export interface MediaGenerationRequest {
   type: 'image' | 'video';
   /** Text prompt describing the desired media */
   prompt: string;
+  /** Source observation that may clarify visible details omitted by a concise composition prompt. */
+  observationContext?: string;
   /** Identifier for the target element on the canvas (e.g. "gen_img_1") */
   elementId: string;
   /** Desired aspect ratio */

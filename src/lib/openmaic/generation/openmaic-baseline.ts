@@ -46,10 +46,10 @@ export const OPENMAIC_GENERATION_BASELINE = {
   planningMethod: 'classic-one-click',
   referenceProfileVersion: 'openmaic-v1.0.2-export-blue-editorial-v3-semantic-fit',
   promptHashes: {
-    requirementsSystem: '9c32d03f0ee824aeca8514d7e332cac18d58f1983b2ae8c94f7fc67d2887bb3c',
-    requirementsUser: 'd2ccf25101ce1f161d7eab2c2cc9b896702e01c3dbb378e69b53d1b6a6bc0188',
-    slideContentSystem: 'a721801549bb40f3ae49a7e3890c767b29d0f24033902c46adb31ed7f34cc6de',
-    slideContentUser: '933706ff5efa04a63abe5627636ac348d7a0f74c28d1eef2b68ff2034ef705ab',
+    requirementsSystem: '344c33e57f72ee86056c12d072c337f609838eab209517a05cc9b57a90b02e32',
+    requirementsUser: 'f04381208fe2837b806a910579b43f0433e8e2d6bee5654b03ac5ded0530e16e',
+    slideContentSystem: 'd55f5967f839d1b072eadd674814d09565f57cac1e3bc2453738aa66042a5a6f',
+    slideContentUser: '6e4fd25ae1428a8d6f45000caa73f6b661044a5f12a6dbdd55fede10802ff77d',
     upstreamSlideActionsSystem: '219e8da1eb3c854dbe6ee6fdedda1936e0092fff6c8984b9277c5c6cef2443b6',
     slideActionsSystem: 'dab3ca7bce6c96c3bb6542e601c1fdbcd9e6a663a0c58ffd7ffb2dff7e5a65b4',
     slideActionsUser: '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
@@ -60,7 +60,7 @@ export const OPENMAIC_GENERATION_BASELINE = {
  * CoTeach keeps the v1.0.3 one-click semantic boundary: the official outline's
  * description/keyPoints are passed to the official page generator, while
  * orchestration metadata stays outside the prompt. The first-pass outline
- * contract now authors content-topic page titles and visual intent, while the
+ * contract preserves learner-facing title styles and visual intent, while the
  * slide-content prompt preserves the supplied title and chooses native
  * representations from the teaching need. Production may opt into the
  * measured website reference profile, but never a page template, geometry
@@ -214,6 +214,7 @@ export interface BaselineContentOptions {
   /** First-draft components compile into editable native slide elements. */
   componentAuthoring?: boolean;
   textMeasure?: TextMeasure;
+  onFailure?: (detail: string) => void;
   assignedImages?: PdfImage[];
   imageMapping?: Record<string, string>;
   visionEnabled?: boolean;
@@ -279,6 +280,7 @@ export async function generateOpenMaicBaselineContent(
       baselineContent: options.baselineContent as OpenMaicSlideContent | undefined,
       componentAuthoring: options.componentAuthoring,
       textMeasure: options.textMeasure,
+      onFailure: (failure) => { if (failure.detail) options.onFailure?.(failure.detail); },
     },
   );
   if (!generated) return null;

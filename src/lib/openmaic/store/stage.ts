@@ -168,12 +168,11 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       return next.order === order ? next : { ...next, order };
     });
     const currentSceneId = get().currentSceneId;
-    set({
-      scenes: migrated,
-      currentSceneId: migrated.some((scene) => scene.id === currentSceneId)
-        ? currentSceneId
-        : migrated[0]?.id ?? null,
-    });
+    const nextSceneId = migrated.some((scene) => scene.id === currentSceneId)
+      ? currentSceneId
+      : migrated[0]?.id ?? null;
+    if (nextSceneId !== currentSceneId) useCanvasStore.getState().setWhiteboardOpen(false);
+    set({ scenes: migrated, currentSceneId: nextSceneId });
     debouncedSave();
   },
 
@@ -253,6 +252,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
     // If deleted scene was current, select next or previous
     if (currentSceneId === sceneId) {
+      useCanvasStore.getState().setWhiteboardOpen(false);
       const index = get().getSceneIndex(sceneId);
       const newIndex = index < scenes.length ? index : scenes.length - 1;
       set({
@@ -269,6 +269,9 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   },
 
   setCurrentSceneId: (sceneId) => {
+    // A paused board belongs to the current page. Leaving it open hides the
+    // next slide and its teaching cues, even after its elements are cleared.
+    if (get().currentSceneId !== sceneId) useCanvasStore.getState().setWhiteboardOpen(false);
     set({ currentSceneId: sceneId });
     debouncedSave();
   },

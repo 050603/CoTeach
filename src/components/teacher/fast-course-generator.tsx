@@ -9,7 +9,6 @@ import {
   Mic2,
   Paperclip,
   PenLine,
-  RefreshCw,
   Send,
   Settings2,
   Sparkles,
@@ -98,6 +97,7 @@ type DesignJob = {
     resourcePackageRevision?: number;
     supplementalAnswers?: { brief?: string };
     generationScope?: ClassroomGenerationScope;
+    testSectionId?: string;
     generationMode?: CourseGenerationMode;
     assessmentMode?: AssessmentMode;
     options?: GenerationOptions | null;
@@ -662,12 +662,12 @@ export function FastCourseGenerator({
     applyPayload(payload);
   }
 
-  async function resumeAfterOutlineReview(outlines: SceneOutline[]) {
+  async function resumeAfterOutlineReview(outlines: SceneOutline[], testSectionId?: string) {
     setError(undefined);
     const response = await fetch(`/api/courses/${course.id}/design-generation`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "resume", reviewKind: "outline", sceneOutlines: outlines }),
+      body: JSON.stringify({ action: "resume", reviewKind: "outline", sceneOutlines: outlines, testSectionId }),
     });
     const payload = await readJsonResponse<ResponsePayload>(response, "保存大纲后未收到响应，请稍后重试。");
     if (!response.ok) throw new Error(payload.detail || payload.error || "无法保存大纲并继续生成");
@@ -737,7 +737,7 @@ export function FastCourseGenerator({
     if (!classroomCompleted || !classroomId || autoOpenedClassroomId.current === classroomId) return;
     const timer = window.setTimeout(() => {
       autoOpenedClassroomId.current = classroomId;
-      router.push(`/teacher/prepare/${course.id}/preview?classroomId=${classroomId}`);
+      router.push(`/teacher/prepare/${course.id}/preview?view=student&classroomId=${encodeURIComponent(classroomId)}`);
     }, 900);
     return () => window.clearTimeout(timer);
   }, [classroomCompleted, classroomJob?.result?.id, course.id, router]);
@@ -758,7 +758,7 @@ export function FastCourseGenerator({
         message={scopedActiveMessage}
         onCancel={() => void cancelGeneration()}
         onOpenCourse={() => {
-          if (classroomJob?.result?.id) router.push(`/teacher/prepare/${course.id}/preview?classroomId=${classroomJob.result.id}`);
+          if (classroomJob?.result?.id) router.push(`/teacher/prepare/${course.id}/preview?view=student&classroomId=${encodeURIComponent(classroomJob.result.id)}`);
         }}
         onPreviewGenerated={() => {
           if (!classroomJob?.preview) return;
@@ -783,6 +783,7 @@ export function FastCourseGenerator({
         reviewAvailable={job?.status === "review_available" || job?.status === "paused"}
         reviewAvailableUntil={job?.reviewAvailableUntil ?? null}
         reviewKind={job?.reviewKind ?? null}
+        testMode={generationScope === "test-lesson"}
         startedAt={activeStartedAt}
         tokenUsage={tokenUsage}
       />
@@ -800,6 +801,7 @@ export function FastCourseGenerator({
         {outlineReviewOpen ? (
           <QuickOutlineReviewDialog
             initialOutlines={outlinePreview}
+            testMode={generationScope === "test-lesson"}
             onClose={() => setOutlineReviewOpen(false)}
             onConfirm={resumeAfterOutlineReview}
           />
@@ -810,12 +812,8 @@ export function FastCourseGenerator({
           availableScenesCount={classroomJob?.preview?.scenesCount ?? generationPreview.loadedScenesCount}
           course={course}
           preview={generationPreview}
+          lifecycleKey={`${classroomJob?.id ?? ''}:${classroomJob?.status ?? ''}`}
           onClose={() => setGenerationPreview(null)}
-          onRefresh={(scenesCount) => setGenerationPreview((current) => current ? {
-            ...current,
-            loadedScenesCount: scenesCount,
-            revision: current.revision + 1,
-          } : null)}
         />
       ) : null}
       </LayoutGroup>
@@ -967,7 +965,7 @@ export function FastCourseGenerator({
                   />
                   <GenerationModeButton
                     active={generationScope === "test-lesson"}
-                    description="完整走正式链路，但只生成正式大纲中的第一个完整知识小节，不能直接发布"
+                    description="完整走正式链路；大纲生成后由教师选一节测试，不能直接发布"
                     icon={FlaskConical}
                     label="测试一节"
                     onClick={() => setGenerationScope("test-lesson")}
@@ -1017,7 +1015,7 @@ export function FastCourseGenerator({
                         : "text-stone-500 hover:bg-white hover:text-amber-700",
                     )}
                     onClick={() => setGenerationScope((current) => current === "test-lesson" ? "full-course" : "test-lesson")}
-                    title="沿用正式课程的全部输入、设计和页面生成逻辑，只生成第一个完整知识小节；测试样本不能直接发布"
+                    title="沿用正式课程的全部输入、设计和页面生成逻辑；大纲生成后由教师选择一个完整知识小节，测试样本不能直接发布"
                     type="button"
                   >
                     <FlaskConical className="size-3.5" />
@@ -1081,16 +1079,15 @@ function GenerationCheckpointPreview({
   availableScenesCount,
   course,
   onClose,
-  onRefresh,
   preview,
+  lifecycleKey,
 }: {
   availableScenesCount: number;
   course: Course;
   onClose: () => void;
-  onRefresh: (scenesCount: number) => void;
   preview: { classroomId: string; loadedScenesCount: number; revision: number };
+  lifecycleKey: string;
 }) {
-  const newScenesCount = Math.max(0, availableScenesCount - preview.loadedScenesCount);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -1111,19 +1108,10 @@ function GenerationCheckpointPreview({
         <div className="min-w-0">
           <p className="text-sm font-black text-stone-950">已生成页面预览</p>
           <p className="mt-0.5 text-xs text-stone-500">
-            当前载入 {preview.loadedScenesCount} 页 · 课程生成仍在后台继续
+            当前已生成 {availableScenesCount} 页 · 页面与音频自动同步
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {newScenesCount > 0 ? (
-            <button
-              className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-blue-200 bg-blue-50 px-3.5 text-xs font-bold text-blue-700 transition hover:border-blue-400"
-              onClick={() => onRefresh(availableScenesCount)}
-              type="button"
-            >
-              <RefreshCw className="size-3.5" />刷新新增 {newScenesCount} 页
-            </button>
-          ) : null}
           <button
             className="inline-flex h-10 items-center gap-2 rounded-[8px] bg-stone-950 px-4 text-xs font-bold text-white transition hover:bg-blue-700"
             onClick={onClose}
@@ -1139,10 +1127,11 @@ function GenerationCheckpointPreview({
           className="h-full min-h-[520px] overflow-hidden rounded-[10px] border border-stone-200 bg-white shadow-sm"
           classroomId={preview.classroomId}
           courseId={course.id}
-          key={`${preview.classroomId}:${preview.revision}`}
+          key={preview.classroomId}
           knowledgeGraph={course.content.knowledgeGraph}
           knowledgePoints={course.content.knowledgePoints}
           mode="teacher-preview"
+          previewRefreshKey={lifecycleKey}
           standalone
           variant="embedded"
         />

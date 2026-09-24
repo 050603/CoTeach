@@ -14,11 +14,11 @@ import {
 } from './openmaic-baseline';
 
 const PINNED_PROMPT_HASHES = {
-  'slide-content/system.md': 'a721801549bb40f3ae49a7e3890c767b29d0f24033902c46adb31ed7f34cc6de',
-  'slide-content/user.md': '933706ff5efa04a63abe5627636ac348d7a0f74c28d1eef2b68ff2034ef705ab',
+  'slide-content/system.md': 'd55f5967f839d1b072eadd674814d09565f57cac1e3bc2453738aa66042a5a6f',
+  'slide-content/user.md': '6e4fd25ae1428a8d6f45000caa73f6b661044a5f12a6dbdd55fede10802ff77d',
   'slide-actions/user.md': '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
-  'requirements-to-outlines/system.md': '9c32d03f0ee824aeca8514d7e332cac18d58f1983b2ae8c94f7fc67d2887bb3c',
-  'requirements-to-outlines/user.md': 'd2ccf25101ce1f161d7eab2c2cc9b896702e01c3dbb378e69b53d1b6a6bc0188',
+  'requirements-to-outlines/system.md': '344c33e57f72ee86056c12d072c337f609838eab209517a05cc9b57a90b02e32',
+  'requirements-to-outlines/user.md': 'f04381208fe2837b806a910579b43f0433e8e2d6bee5654b03ac5ded0530e16e',
 } as const;
 
 const outline: SceneOutline = {

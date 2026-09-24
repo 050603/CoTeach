@@ -1,11 +1,11 @@
 ## Instructional Slide Title Contract
 
-Apply these rules to every `slide` scene. They do not constrain the names of games, simulations, interactive tasks, or projects.
+Apply these rules when planning each `slide` scene, before slide content or layout is generated. They do not constrain the names of games, simulations, interactive tasks, or projects.
 
-1. Decide the page's core knowledge object and the specific facet taught on that page before writing its title. The title must be a concise content-topic phrase that identifies both, so a learner can tell what the page teaches when the title is read on its own.
-2. Prefer forms such as “object + concept / relationship / mechanism / method / application”. Examples: “教学设计的层次与职责”, “教学目标层级辨析”, “Projectile Motion Variables”, and “Training and Test Set Roles”.
-3. Keep hooks, opening questions, learner commands, and activity instructions in the page content, `entryPoint`, task, question stem, or narration. Do not turn them into the title.
-4. A case, practice, or recap page must name its concrete subject and purpose, such as “数据集划分案例分析”, “教学目标层级辨析练习”, or “抛体运动变量总结”. Generic labels by themselves, including “案例分析”, “练习”, “总结”, “Introduction”, “Practice”, and “Key Takeaways”, are invalid slide titles.
-5. Do not use a complete question, conversational transition, suspense slogan, classroom command, or arbitrary numerical teaser as a slide title. A number is valid when it belongs to the formal content being taught, such as a recognized three-stage model.
+1. First identify the main knowledge object actually taught on this page from its teaching goal and key points. Use its standard, formal subject name as the title. If the page first defines a concept, title it with that concept's name: “项目式学习”, not “怎样让学生在真实任务中学习？”.
+2. When a later page teaches a distinct facet, name the object and that facet concisely: “项目式学习的核心特征”, “项目式学习的实施流程”, “教学目标的层级关系”, or “Training and Test Set Roles”. If a page truly teaches two concepts together, name both; do not substitute a vague umbrella label.
+3. Name a case, practice, comparison, or recap page by its actual subject and purpose, such as “项目式学习案例分析” or “教学目标层级辨析练习”. Generic labels alone, including “案例分析”, “练习”, “总结”, “Introduction”, and “Key Takeaways”, are not slide titles.
+4. Keep questions, hooks, conclusions phrased as spoken sentences, learner commands, activity instructions, and transitions in the page content, `entryPoint`, task, or narration. Do not use them as the primary heading. Avoid suspense slogans and arbitrary numerical teasers.
+5. Before returning the first page plan, check each title against that page's new knowledge. Different pages with different teaching focuses should have distinct, specific headings. Preserve an exact title explicitly supplied by the teacher.
 
 When rendering a supplied outline, use its `title` verbatim as the visible primary heading; line wrapping is allowed, but paraphrasing is not. Only an explicit current edit instruction may change it.

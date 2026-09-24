@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SceneOutline } from "@/lib/openmaic/types/generation";
-import { hasExactUpdateTargetBudget } from "./job-runner";
+import { hasExactTestLessonBudget, hasExactUpdateTargetBudget } from "./job-runner";
 
 const confirmed = [
   { id: "section-a-slide", type: "slide", title: "A", description: "A", keyPoints: [], targetDurationSec: 480, order: 0 },
@@ -33,5 +33,23 @@ describe("partial classroom update budget", () => {
       confirmed,
       ["section-a-slide", "section-a-slide"],
     )).toBe(false);
+  });
+});
+
+describe("test lesson continuation budget", () => {
+  const testLesson = { sceneOutlineIds: ["section-a-slide", "section-a-quiz"], durationSeconds: 600 };
+  const expanded = [
+    { ...confirmed[0]!, spatialParentId: "section-a-slide", targetDurationSec: 240 },
+    { ...confirmed[0]!, id: "section-a-slide--continuation-2", spatialParentId: "section-a-slide", targetDurationSec: 240 },
+    ...confirmed.slice(1),
+  ];
+  it("counts adopted parent pages while summing all continuation durations", () => {
+    expect(hasExactTestLessonBudget(confirmed, testLesson, 3)).toBe(true);
+    expect(hasExactTestLessonBudget(expanded, testLesson, 3)).toBe(true);
+  });
+  it("rejects missing continuation time, duplicate pages, and unknown selected parents", () => {
+    expect(hasExactTestLessonBudget(expanded.filter((page) => !page.id.includes('continuation')), testLesson, 3)).toBe(false);
+    expect(hasExactTestLessonBudget([...expanded, expanded[0]!], testLesson, 3)).toBe(false);
+    expect(hasExactTestLessonBudget(expanded, { ...testLesson, sceneOutlineIds: ['unknown'] }, 3)).toBe(false);
   });
 });

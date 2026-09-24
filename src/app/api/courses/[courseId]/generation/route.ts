@@ -199,12 +199,12 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
       job = await contentGenerationJobs.findUnique({ where: { courseId } });
     }
-  } else if (job.status === "failed") {
+  } else if (job.status === "failed" || job.status === "cancelled") {
     // A newly submitted request must never reuse pages prepared for the old
     // request. Worker restarts keep checkpoints; explicit retries reset them.
     try {
       job = await contentGenerationJobs.replace({
-        where: { id: job.id, version: job.version, status: "failed" },
+        where: { id: job.id, version: job.version, status: job.status },
         checkpointPolicy: "all",
         data: {
           status: "queued",
@@ -216,8 +216,16 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
           estimatedRemainingSeconds: initialEstimate,
           tokenUsage: 0,
           tokenUsageCalls: 0,
+          activePages: [],
+          stageProgress: [],
+          currentStage: null,
+          currentCall: Prisma.JsonNull,
+          preparedOutlines: [],
+          trace: [],
+          stepIndex: 0,
           request: requestJson,
           result: Prisma.JsonNull,
+          qualityReport: Prisma.JsonNull,
           events: [],
           error: null,
           startedAt: null,

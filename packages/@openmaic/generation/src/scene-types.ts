@@ -18,6 +18,10 @@ export interface GeneratedSlideContent {
   elements: PPTElement[];
   background?: SlideBackground;
   remark?: string;
+  sourceGroupIds?: string[];
+  teachingText?: string[];
+  /** Host expands these pages before generating per-page actions and media. */
+  continuationPages?: GeneratedSlideContent[];
 }
 
 /** AI-generated quiz payload before it is assembled into a scene. */

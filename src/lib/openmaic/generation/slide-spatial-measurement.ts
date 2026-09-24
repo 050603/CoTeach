@@ -183,6 +183,8 @@ export const measureSlideRegion: SpatialMeasureFn = async (region, width, fontSi
   try {
     result = await serialized(async (target) => target.evaluate(async ({ region, width, fontSize, formulaHtml }) => {
     const node = document.getElementById('measure')!;
+    node.className = 'slide-renderer-prose';
+    node.style.cssText = '';
     node.style.width = `${width}px`;
     node.style.fontSize = `${fontSize}px`;
     node.replaceChildren();
@@ -241,19 +243,29 @@ export const measureAuthoredSlideText: TextMeasure = async (input: TextMeasureIn
   if (cached) return cached;
   const measured = await serialized(async (target) => target.evaluate(async (spec) => {
     const node = document.getElementById('measure')!;
+    node.className = spec.tableCell ? 'slide-renderer-prose slide-renderer-cell-text' : 'slide-renderer-prose';
+    node.style.cssText = '';
     node.style.width = `${spec.width}px`;
     node.style.fontSize = `${spec.fontSize}px`;
     node.style.fontWeight = String(spec.fontWeight);
     node.style.fontFamily = spec.fontFamily;
-    node.style.padding = `${spec.padding}px`;
+    node.style.padding = spec.paddingCss ?? `${spec.padding}px`;
     node.style.lineHeight = String(spec.lineHeight);
     node.style.textAlign = spec.align;
     node.style.setProperty('--paragraphSpace', `${spec.paragraphSpace}px`);
     const parsed = new DOMParser().parseFromString(spec.html, 'text/html');
-    const allowed = new Set(['P', 'BR', 'B', 'STRONG', 'I', 'EM', 'SPAN']);
+    const allowed = new Set(['P', 'BR', 'B', 'STRONG', 'I', 'EM', 'SPAN', 'U', 'SUB', 'SUP', 'UL', 'OL', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'PRE', 'CODE']);
+    const typography = new Set(['font-size', 'font-weight', 'font-family', 'font-style', 'color', 'text-align', 'line-height', 'text-decoration', 'letter-spacing', 'white-space']);
     for (const element of [...parsed.body.querySelectorAll('*')].reverse()) {
       if (!allowed.has(element.tagName)) element.replaceWith(document.createTextNode(element.textContent ?? ''));
-      else for (const attribute of [...element.attributes]) element.removeAttribute(attribute.name);
+      else {
+        const style = (element as HTMLElement).style;
+        const retained = spec.preserveRichText ? [...typography].filter((property) => Boolean(style.getPropertyValue(property)))
+          .map((property) => [property, style.getPropertyValue(property)] as const)
+          .filter(([, value]) => !/url\s*\(|expression\s*\(|@import/i.test(value)) : [];
+        for (const attribute of [...element.attributes]) element.removeAttribute(attribute.name);
+        for (const [property, value] of retained) style.setProperty(property, value);
+      }
     }
     node.innerHTML = parsed.body.innerHTML;
     await Promise.all([400, 700].map((weight) => document.fonts.load(`${weight} ${spec.fontSize}px "Noto Sans SC"`, spec.text || '教学')));
@@ -266,26 +278,42 @@ export const measureAuthoredSlideText: TextMeasure = async (input: TextMeasureIn
     natural.style.position = 'absolute';
     natural.style.left = '-10000px';
     document.body.appendChild(natural);
-    const naturalWidth = Math.max(0, natural.getBoundingClientRect().width - 2 * spec.padding);
+    const naturalStyle = getComputedStyle(natural);
+    const naturalWidth = Math.max(0, natural.getBoundingClientRect().width - parseFloat(naturalStyle.paddingLeft) - parseFloat(naturalStyle.paddingRight));
     natural.remove();
 
-    const lineMap = new Map<number, string>();
+    const rows: Array<{ top: number; bottom: number; text: string }> = [];
+    const box = node.getBoundingClientRect();
+    let inkBottom = 0;
+    let inkRight = 0;
     const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {
       const textNode = walker.currentNode;
       const value = textNode.textContent ?? '';
       for (let index = 0; index < value.length; index += 1) {
+        // A preserved newline's Range can span both adjacent line boxes.
+        // Only visible glyphs determine row grouping and ink bounds.
+        if (value[index] === '\n' || value[index] === '\r') continue;
         const range = document.createRange();
         range.setStart(textNode, index);
         range.setEnd(textNode, index + 1);
         const rect = range.getClientRects()[0];
         if (!rect) continue;
-        const row = Math.round(rect.top * 2) / 2;
-        lineMap.set(row, (lineMap.get(row) ?? '') + value[index]);
+        inkBottom = Math.max(inkBottom, rect.bottom - box.top);
+        inkRight = Math.max(inkRight, rect.right - box.left);
+        // Mixed-size spans share a baseline but have different top coordinates.
+        // Group overlapping glyph boxes, rather than reporting each font size as a new line.
+        const row = rows.find((line) => Math.min(line.bottom, rect.bottom) - Math.max(line.top, rect.top)
+          >= Math.min(line.bottom - line.top, rect.height) * 0.5);
+        if (row) {
+          row.top = Math.min(row.top, rect.top);
+          row.bottom = Math.max(row.bottom, rect.bottom);
+          row.text += value[index];
+        } else rows.push({ top: rect.top, bottom: rect.bottom, text: value[index] });
       }
     }
-    const lines = [...lineMap.entries()].sort(([a], [b]) => a - b).map(([, text]) => text.trim()).filter(Boolean);
-    return { naturalWidth, height: Math.ceil(node.getBoundingClientRect().height), lines };
+    const lines = rows.sort((a, b) => a.top - b.top).map((row) => row.text.trim()).filter(Boolean);
+    return { naturalWidth, height: Math.ceil(box.height), lines, inkBottom, inkRight };
   }, input));
   authoredTextCache.set(key, measured);
   return measured;

@@ -17,6 +17,37 @@ describe("quick positioning generation", () => {
     callLLM.mockReset();
   });
 
+  it("carries source-verified visual cases across knowledge regrouping without carrying stale cases", async () => {
+    const { collectPriorSourceExamples } = await import("./job-runner");
+    const oldPoints = [
+      { id: "old", name: "观察概念", sourceKnowledgePointIds: ["source-a"] },
+      { id: "stale", name: "过时概念", sourceKnowledgePointIds: ["source-b"] },
+    ] as never;
+    const newPoints = [
+      { id: "new", name: "重新分组的观察概念", sourceKnowledgePointIds: ["source-a"] },
+      { id: "other", name: "其他概念", sourceKnowledgePointIds: ["source-c"] },
+    ] as never;
+    const previous = { sections: [{
+      units: [
+        { id: "unit-a", knowledgePointIds: ["old"], sourceKind: "course-source", workedExample: "观察先前想象和实际对象的可见差异", evidenceQuotes: ["资料原文记载该对象具有两种可见状态。"] },
+        { id: "unit-b", knowledgePointIds: ["stale"], sourceKind: "course-source", workedExample: "已删除的旧例", evidenceQuotes: ["旧资料中的案例已不在本次来源中。"] },
+      ],
+      pages: [{ unitIds: ["unit-a"], caseObservation: { imageWouldHelp: true } }],
+    }] } as never;
+
+    expect(collectPriorSourceExamples(previous, oldPoints, newPoints,
+      "资料原文记载该对象具有两种可见状态。", true)).toEqual([{
+      knowledgePointIds: ["new"],
+      workedExample: "观察先前想象和实际对象的可见差异",
+      sourceQuote: "资料原文记载该对象具有两种可见状态。",
+      imagePlanned: true,
+    }]);
+    expect(collectPriorSourceExamples(previous, oldPoints, newPoints,
+      "资料原文记载该对象具有两种可见状态。", false)[0]?.imagePlanned).toBe(false);
+    expect(collectPriorSourceExamples(previous, oldPoints, newPoints,
+      "完全不同的新资料", true)).toEqual([]);
+  }, 15_000);
+
   it("restores a transport attempt budget only for the same input and model", async () => {
     const {
       restoreCourseDesignAttemptCount,
@@ -101,8 +132,17 @@ describe("quick positioning generation", () => {
     expect(plans.flatMap((plan) => plan.knowledgePointIds)).toEqual(
       knowledgePoints.map((point) => point.id),
     );
-    expect(plans.reduce((sum, plan) => sum + (plan.suggestedMaxPages ?? 0), 0))
-      .toBeLessThan(knowledgePoints.length);
+    expect(plans).toHaveLength(1);
+    const [plan] = plans;
+    // Related source concepts share one teaching budget; page capacity follows
+    // explanation time rather than imposing one page per knowledge point.
+    expect(plan!.teachingBudgetSec).toBe(317);
+    expect(plan!.suggestedMinPages).toBeGreaterThan(0);
+    expect(plan!.suggestedMaxPages).toBeGreaterThanOrEqual(plan!.suggestedMinPages!);
+    expect(plan!.teachingBudgetSec! / plan!.suggestedMaxPages!).toBeGreaterThanOrEqual(45);
+    const shorter = buildTeachingBlueprintSectionPlans({ knowledgePoints }, 3 * 60);
+    expect(shorter[0]!.knowledgePointIds).toEqual(plan!.knowledgePointIds);
+    expect(shorter[0]!.suggestedMaxPages).toBeLessThan(plan!.suggestedMaxPages!);
   }, 15_000);
 
   it("splits an interleaved knowledge group without changing textbook order", async () => {
@@ -490,8 +530,8 @@ describe("quick positioning generation", () => {
     expect(requirement).toContain("内容按以下小节组织");
     expect(requirement).toContain("以教师提供的课程资料作为事实依据");
     expect(requirement).toContain("Instructional Slide Title Contract");
-    expect(requirement).toContain("教学目标层级辨析");
-    expect(requirement).toContain("Keep hooks, opening questions, learner commands, and activity instructions");
+    expect(requirement).toContain("项目式学习的核心特征");
+    expect(requirement).toContain("Keep questions, hooks, conclusions phrased as spoken sentences");
     expect(requirement).not.toContain("全课规划约");
     expect(requirement).not.toContain("OpenMAIC v1.0.2");
     expect(requirement).not.toContain("keyPoints 保留");
@@ -503,6 +543,28 @@ describe("quick positioning generation", () => {
     expect(requirement).not.toContain("110–180");
     expect(requirement).not.toContain("Office 蓝橙");
     expect(requirement).not.toContain("1–2 scenes per minute");
+  });
+
+  it("passes completed teacher-stage activities into knowledge-lecture planning", async () => {
+    const { buildOpenMaicKnowledgeLectureRequirement, precedingAiLectureStages } = await import("./job-runner");
+    const content = {
+      stagePlan: { stages: [
+        { key: "launch", title: "教师导入", teacherActions: "展示两张课堂图片并让学生对比", requirements: "学生观察并说明差异" },
+        { key: "ai-learning", title: "AI 知识讲授", teacherActions: "巡视学习", requirements: "理解新概念" },
+        { key: "make", title: "项目实践", teacherActions: "指导教案", requirements: "制作成果" },
+      ] },
+      knowledgePoints: [{ id: "kp-1", name: "教学理论的含义", description: "理解原理" }],
+    } as never;
+    expect(precedingAiLectureStages(content)).toEqual([{
+      stageKey: "launch", title: "教师导入", teacherActions: "展示两张课堂图片并让学生对比",
+      studentRequirements: "学生观察并说明差异",
+    }]);
+    const requirement = buildOpenMaicKnowledgeLectureRequirement({
+      name: "教学设计", subject: "教育", grade: "大学", learningObjectives: ["理解理论"],
+    } as Course, content, { teacherBrief: "" } as never, 30);
+    expect(requirement).toContain("教师已经完成以下阶段");
+    expect(requirement).toContain("AI 第一页直接讲授本阶段首个新知识");
+    expect(requirement).not.toContain("制作成果");
   });
 
   it("repairs a blank target grade instead of letting unknown learner context flow downstream", async () => {

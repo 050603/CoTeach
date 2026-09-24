@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { SpeechAction } from '@openmaic/lib/types/action';
-import type { Scene } from '@openmaic/lib/types/stage';
+import { makeScene, type Scene } from '@openmaic/lib/types/stage';
 import type { PersistedClassroomData } from '@openmaic/lib/server/classroom-storage';
+import { isMediaPlaceholder } from '@openmaic/lib/store/media-generation';
 import { audioDurationSec } from '@openmaic/lib/audio/audio-duration';
 
 const CLASSROOM_MEDIA_PREFIX = '/api/openmaic/classroom-media/';
@@ -112,4 +113,51 @@ export function classroomTtsTimingOptions(scenes: Scene[]): {
     };
   }
   return {};
+}
+
+/** Reattach assets for the same stable page and matching speech/media identities. */
+export function reusePersistedSceneAssets(restored: Scene, previous?: Scene): Scene {
+  if (!previous || previous.id !== restored.id) return restored;
+  const priorActions = new Map((previous.actions ?? []).map((action) => [action.id, action]));
+  const actions = restored.actions?.map((action) => {
+    const prior = priorActions.get(action.id);
+    if (action.type !== 'speech' || prior?.type !== 'speech') return action;
+    if (prior.audioInvalidated) {
+      const invalidated = { ...action, audioInvalidated: true };
+      delete invalidated.audioId;
+      delete invalidated.audioUrl;
+      delete invalidated.audioDurationSec;
+      delete invalidated.speechAlignment;
+      return invalidated;
+    }
+    if (action.text !== prior.text || !prior.audioUrl) return action;
+    return { ...action, audioId: prior.audioId, audioUrl: prior.audioUrl,
+      audioDurationSec: prior.audioDurationSec, speechAlignment: prior.speechAlignment };
+  });
+  if (restored.content.type !== 'slide' || previous.content.type !== 'slide') return { ...restored, actions };
+  const resourceKey = (element: { id: string; src?: string; resourceId?: unknown; mediaRef?: unknown }) =>
+    typeof element.resourceId === 'string' ? element.resourceId
+      : typeof element.mediaRef === 'string' ? element.mediaRef
+        : element.src && isMediaPlaceholder(element.src) ? element.src
+          : isMediaPlaceholder(element.id) ? element.id : null;
+  const priorElements = new Map(previous.content.canvas.elements.map((element) => [element.id, element]));
+  const elements = restored.content.canvas.elements.map((element) => {
+    const prior = priorElements.get(element.id);
+    if ((element.type !== 'image' && element.type !== 'video') || prior?.type !== element.type
+      || !element.src || !isMediaPlaceholder(element.src) || !prior.src || isMediaPlaceholder(prior.src)) return element;
+    // A group can keep its element ID while switching from one planned image
+    // to another. Ambiguous legacy slots must not substitute the wrong image.
+    if (!resourceKey(element) || resourceKey(element) !== resourceKey(prior)) return element;
+    return { ...element, src: prior.src };
+  });
+  return makeScene({ ...restored, actions }, {
+    ...restored.content,
+    canvas: {
+      ...restored.content.canvas,
+      // The page keeps its identity when a test lesson is extended. A fresh
+      // generation stage must not rename the accepted canvas under that page.
+      id: previous.content.canvas.id ?? restored.content.canvas.id,
+      elements,
+    },
+  });
 }

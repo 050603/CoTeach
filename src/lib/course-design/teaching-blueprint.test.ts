@@ -14,6 +14,7 @@ import {
 import { deriveKnowledgeLectureSectionsFromOutlines } from "@/lib/knowledge-lecture";
 import { deriveTeachingConstraints } from "@/lib/openmaic/pedagogy/teaching-constraints";
 import { hasCurrentTeachingBrief } from "@/lib/openmaic/generation/teaching-enhancement";
+import { compileDiagramComponent } from "@openmaic/generation";
 import type { TeachingBlueprintUnit, TeachingExplanationNode } from "@/lib/session/types";
 
 it("uses confirmed class readiness in planning and invalidates cached plans when it changes", () => {
@@ -37,15 +38,16 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.user).toContain("校园植物");
   expect(prompt.system).toContain("同一材料再次出现时");
   expect(prompt.system).toContain("必须在一次 JSON 输出中完整结束");
+  expect(prompt.system).toContain("JSON 字符串内的英文双引号必须转义");
   expect(prompt.system).toContain("概念辨析、因果机制、数学推导、操作技能、历史材料和综合应用");
   expect(prompt.system).toContain("introducesNodeIds、deepensNodeIds、referencesNodeIds");
   expect(prompt.system).toContain("不得把后页才出现的术语、案例、问题或任务伪装成上一页已经讲过");
   expect(prompt.system).toContain("entryPoint 写出实际开场对象");
   expect(prompt.system).toContain("Instructional Slide Title Contract");
-  expect(prompt.system).toContain("A case, practice, or recap page must name its concrete subject and purpose");
-  expect(prompt.system).toContain("导入问题留在 entryPoint，课堂动作留在 learningTask");
-  expect(prompt.system).toContain("即使前一教学阶段已经由教师导入，也不能省略这一资源内入口");
-  expect(prompt.system).toContain("导入是否独立成页由总时长、知识难度和视觉价值动态决定");
+  expect(prompt.system).toContain("Name a case, practice, comparison, or recap page by its actual subject and purpose");
+  expect(prompt.system).toContain("不要把 entryPoint 的问题、口语化过渡、醒目结论句或 learningTask 的操作要求写成 slide 标题");
+  expect(prompt.system).toContain("课程第一页应在简短问候和必要承接后，直接讲授本阶段的第一个新知识");
+  expect(prompt.system).toContain("教师已制作并讲解的图片观察、课堂对比、提问和活动属于已完成的先前学习经历");
   expect(prompt.system).toContain("正式致谢和告别");
   expect(prompt.system).toContain("案例首先按解释力、学习者熟悉度和学段适切性选择");
   expect(prompt.system).toContain("项目情境只规定用途和约束，不能自动变成知识目标或每页案例");
@@ -53,10 +55,12 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("每页必须填写 taskConnection");
   expect(prompt.system).toContain("不能用教案、报告、PPT 等成果物中的几句话");
   expect(prompt.system).toContain("人物、物体、空间状态、错误心象或现实与想象的可见差异");
-  expect(prompt.system).toContain("不能因已规划关系图就漏掉案例插图");
-  expect(prompt.system).toContain("没有每页配图或全课图片比例的要求");
+  expect(prompt.system).toContain("关系图不能抵消案例配图");
+  expect(prompt.system).toContain("没有每页配图或全课图片比例要求");
+  expect(prompt.system).toContain("此前已经规划的教学图片在来源和知识目标未变时应继续落实");
+  expect(prompt.system).toContain("把第二个决定写入 caseObservation");
   expect(prompt.system).toContain("不在图内绘制文字、标签、精确数值或关系箭头");
-  expect(prompt.system).toContain("带牛角、腿和花斑等特征的鱼形身体");
+  expect(prompt.system).toContain("逐项保留可观察的身体结构、肢体数量、纹理和空间状态");
   expect(prompt.system).toContain("七步闭环就写七个实际步骤节点");
   expect(prompt.system).toContain("不能因为文字出现‘反馈’就强行画成循环");
   expect(prompt.user).toContain('"topology":"sequence|cycle"');
@@ -75,7 +79,8 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.system).toContain("未启用图片或视频时不得请求对应种类");
   expect(prompt.user).toContain('"sharedContext"');
   expect(prompt.user).toContain('"learningTask"');
-  expect(prompt.user).toContain('"title":"本页核心知识对象＋具体讲解侧面的内容主题短语"');
+  expect(prompt.system).toContain('type=slide 的概念首次讲解页用其规范名称作正式 PPT 标题，如‘项目式学习’');
+  expect(prompt.user).toContain('"title":"slide 页用知识对象的正式标题，首次定义概念时用规范名称如项目式学习；interactive 页用具体任务名称"');
   expect(prompt.user).not.toContain('"title":"学生可见标题"');
   expect(prompt.user).toContain('"taskConnection"');
   expect(prompt.user).toContain("可选最终任务情境");
@@ -87,14 +92,18 @@ it("uses confirmed class readiness in planning and invalidates cached plans when
   expect(prompt.user).toContain('"understandingCriteria"');
   expect(prompt.system).toContain("概念名称 + 完整基本含义");
   expect(prompt.system).toContain("不得为了让页面简洁而把核心概念只留在讲稿");
+  expect(prompt.system).toContain("type=slide 是讲授与示范页面，没有提交答案的入口");
+  expect(prompt.system).toContain("用具体案例展示事实、判断依据、推理过程和结论");
+  expect(prompt.user).toContain("learningTask 仅在具备实际作答控件的 interactive 页");
   expect(prompt.system).toContain("一个知识点可以跨多页");
   expect(prompt.system).toContain("知识点、讲授单元和 PPT 页面不是一一对应关系");
   expect(prompt.system).toContain("每个 explanationNode 用 knowledgePointIds 声明");
+  expect(prompt.system).toContain("explanationNodes 必须写在所属 unit 内");
   expect(prompt.user).toContain("机器结构验收合同");
   expect(prompt.user).toContain('"knowledgePointIds":["该节点实际解释的本单元知识点ID"]');
   expect(prompt.system).toContain("知识结论+完整案例+练习");
   expect(prompt.user).toContain("输入时间无法承载必需解释");
-  expect(prompt.user).toContain("完整课程开场、必要解释、推理、例子、操作、短测和正式收束估时");
+  expect(prompt.user).toContain("只为本次 AI 知识讲授的必要承接、新知识解释、推理、例子、操作、短测和正式收束估时");
   expect(prompt.system).not.toContain("relative stability");
   expect(prompt.system).not.toContain("concretization");
   expect(prompt.user).not.toContain("4-6个完整");
@@ -126,6 +135,28 @@ function input(assessmentMode: TeachingBlueprintInput["assessmentMode"] = "adapt
     sourceContext: "训练集用于学习模型参数。测试集只用于独立检验。",
   };
 }
+
+it("starts AI teaching with new knowledge after a teacher-led launch", async () => {
+  const priorStage = [{ stageKey: "launch", title: "教师导入", teacherActions: "展示两张课堂图片，让学生比较教师讲授和动手操作", studentRequirements: "观察并讨论两种课堂场景" }];
+  const scoped = { ...input(), precedingStageActivities: priorStage };
+  const prompt = buildTeachingBlueprintPrompt(scoped);
+  expect(prompt.user).toContain("展示两张课堂图片");
+  expect(prompt.user).toContain("只供承接，绝不能作为本次 PPT 的页面或讲解任务");
+  expect(prompt.system).toContain("不得重做、重画或单独编成 PPT 页面");
+  expect(teachingBlueprintInputFingerprint(scoped)).not.toBe(teachingBlueprintInputFingerprint(input()));
+  await expect(generateTeachingBlueprint(scoped, async () => JSON.stringify(modelBlueprint())))
+    .resolves.toMatchObject({ schemaVersion: 3 });
+
+  const repeatedLaunch = modelBlueprint();
+  (repeatedLaunch.sections[0]!.units[0]!.explanationNodes[0]! as { kind: string }).kind = "example";
+  const onValidation = vi.fn();
+  await expect(generateTeachingBlueprint(scoped, async () => JSON.stringify(repeatedLaunch), {
+    onValidation, retrySleep: async () => undefined,
+  })).rejects.toThrow("AI 知识讲授第一页必须建立新概念");
+  expect(onValidation.mock.calls[0]?.[0].issues).toContain(
+    "AI 知识讲授第一页必须建立新概念、关系、机制或适用条件，不能只重复前一阶段教师已完成的导入或案例观察",
+  );
+});
 
 function modelBlueprint() {
   return {
@@ -178,6 +209,7 @@ function modelBlueprint() {
             description: "从两个集合回答的不同问题建立独立评估的必要性。",
             keyPoints: ["训练集参与参数学习", "测试集在学习结束后使用", "独立性决定评估可信度", "难度不是两者的定义差异"],
             teachingObjective: "说明训练集与测试集职责不同的原因",
+            caseObservation: { imageWouldHelp: false, observableDifference: "", reason: "数据职责由可编辑关系说明即可。" },
             taskConnection: {
               mode: "helpful-context",
               rationale: "校园植物分类器与数据分工共享同一对象，且不需要额外解释项目流程。",
@@ -255,6 +287,7 @@ function modelBlueprint() {
             description: "沿用校园植物案例演示近重复泄漏及修正步骤。",
             keyPoints: ["先确定泛化对象", "识别近重复记录", "按对象整体分组", "最后一次使用测试集"],
             teachingObjective: "判断并修正数据泄漏",
+            caseObservation: { imageWouldHelp: false, observableDifference: "", reason: "信息泄漏是流程关系而非外观差异。" },
             taskConnection: {
               mode: "direct-application",
               rationale: "本页目标就是把划分原则应用到分类器的数据准备。",
@@ -335,6 +368,7 @@ function compactModelBlueprint() {
         description: "用同一株植物连拍照片的案例串联数据分工、划分规则与泄漏后果。",
         keyPoints: ["训练集用于学习", "测试集用于独立检验", "按最终泛化对象划分", "近重复记录可能造成泄漏"],
         teachingObjective: "解释独立测试与可靠评估的因果关系",
+        caseObservation: { imageWouldHelp: false, observableDifference: "", reason: "评估因果关系由可编辑流程说明即可。" },
         taskConnection: {
           mode: "none",
           rationale: "本页先建立通用评估机制，独立案例比提前展开最终任务更直接。",
@@ -367,15 +401,15 @@ describe("teaching blueprint compiler", () => {
 
     expect(blueprint.budget).toMatchObject({
       totalDurationSec: 1_800,
-      teachingDurationSec: 1_440,
+      teachingDurationSec: 1_584,
       assessmentDurationSec: 216,
-      learnerActivityDurationSec: 144,
+      learnerActivityDurationSec: 0,
     });
     expect(outlines.reduce((sum, outline) => sum + (outline.targetDurationSec ?? 0), 0)).toBe(1_800);
     expect(outlines.filter((outline) => outline.type !== "quiz").reduce(
       (sum, outline) => sum + (outline.plannedTiming?.narrationSec ?? 0),
       0,
-    )).toBe(1_440);
+    )).toBe(1_584);
     expect(validateTeachingBlueprintBudget(blueprint, outlines)).toEqual([]);
     expect(outlines.every((outline) => outline.narrationMode === "standalone-course")).toBe(true);
     expect(outlines.filter((outline) => outline.type !== "quiz").flatMap((outline) => outline.teachingUnitIds ?? [])).toEqual([
@@ -383,7 +417,10 @@ describe("teaching blueprint compiler", () => {
       "teaching-section-2-unit-1",
     ]);
     expect(outlines[0]?.teachingBrief?.sharedContext?.caseId).toBe("campus-plant-classifier");
-    expect(outlines[0]?.teachingBrief?.pageTask?.newContribution).toContain("用途差异");
+    expect(outlines[0]?.teachingBrief?.pageTask).toBeUndefined();
+    expect(outlines.filter((outline) => outline.type === "slide").every(
+      (outline) => outline.plannedTiming?.learnerActivitySec === 0,
+    )).toBe(true);
     expect(outlines[0]?.teachingBrief?.teachingPlan?.taskConnection).toEqual({
       mode: "helpful-context",
       rationale: "校园植物分类器与数据分工共享同一对象，且不需要额外解释项目流程。",
@@ -467,7 +504,7 @@ describe("teaching blueprint compiler", () => {
     expect(quiz.keyPoints.join("\n")).toContain("写出一个开放问题");
   });
 
-  it("accepts one substantive key point and preserves a changed-condition task without padding", async () => {
+  it("accepts one substantive key point and drops a slide-only changed-condition task", async () => {
     const candidate = compactModelBlueprint();
     candidate.sections[0]!.pages[0]!.keyPoints = ["测试信息进入训练会破坏独立评估"];
     candidate.sections[0]!.pages[0]!.learningTask = {
@@ -481,11 +518,30 @@ describe("teaching blueprint compiler", () => {
     const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
     const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
     expect(outline.keyPoints).toEqual(["测试信息进入训练会破坏独立评估"]);
-    expect(outline.teachingBrief?.pageTask).toMatchObject({
+    expect(outline.teachingBrief?.pageTask).toBeUndefined();
+    expect(blueprint.sections[0]?.pages[0]?.learningTask).toBeUndefined();
+  });
+
+  it("keeps an answerable interactive task separate from the section quiz", async () => {
+    const candidate = compactModelBlueprint();
+    const page = candidate.sections[0]!.pages[0]!;
+    page.type = "interactive";
+    Object.assign(page, { widgetType: "simulation", widgetOutline: { controls: ["选择划分单位"] } });
+    page.learningTask = {
+      learnerAction: "选择划分单位并查看数据是否跨集合。",
+      newContribution: "观察按植物个体划分如何阻断近重复泄漏。",
+      reasoningFocus: "同一对象的信息是否跨集合。",
       caseUse: "variant",
-      changedConditions: ["从按照片随机划分改为按植物个体划分"],
-      preservedConditions: ["照片总量、分类目标与模型保持不变"],
-    });
+      changedConditions: ["划分单位从照片改为植物个体"],
+      preservedConditions: ["照片内容和分类目标不变"],
+    };
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
+
+    expect(outline.type).toBe("interactive");
+    expect(outline.teachingBrief?.pageTask?.learnerAction).toBe("选择划分单位并查看数据是否跨集合。");
+    expect(outline.plannedTiming?.learnerActivitySec).toBeGreaterThan(0);
+    expect(teachingBlueprintToOutlines(blueprint, "使用简体中文").at(-1)?.type).toBe("quiz");
   });
 
   it("does not force a learner task onto a pure mechanism-explanation page", async () => {
@@ -498,13 +554,13 @@ describe("teaching blueprint compiler", () => {
     expect(outline.description).toContain("为何不再独立");
   });
 
-  it("marks compiled blueprint briefs for the existing downstream enhancement call", async () => {
+  it("adopts complete compiled blueprint briefs without another teaching-design call", async () => {
     const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(compactModelBlueprint()));
     const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")
       .find((item) => item.type === "slide")!;
 
     expect(outline.teachingBrief?.designVersion).toBe(TEACHING_BLUEPRINT_COMPILED_BRIEF_VERSION);
-    expect(hasCurrentTeachingBrief(outline)).toBe(false);
+    expect(hasCurrentTeachingBrief(outline)).toBe(true);
     expect(outline.teachingBrief?.teachingPlan?.newContent).toContain("训练集提供模型学习规律所需的信息");
     expect(outline.teachingBrief?.teachingPlan?.visibleContent).toContain(
       "训练集提供模型学习规律所需的信息，测试集在训练结束后独立检查这些规律能否用于新对象，划分规则必须服务于这种独立性。",
@@ -724,7 +780,7 @@ describe("teaching blueprint compiler", () => {
     expect(ai).toHaveBeenCalledOnce();
   });
 
-  it("keeps an independent page answer out of the compiled visible projection", async () => {
+  it("keeps the worked conclusion visible when a model proposes an independent task on a slide", async () => {
     const candidate = compactModelBlueprint();
     const page = candidate.sections[0]!.pages[0]!;
     page.keyPoints = [
@@ -743,14 +799,9 @@ describe("teaching blueprint compiler", () => {
     const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
     const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
 
-    expect(outline.teachingBrief?.teachingPlan?.visibleContent).toEqual([
-      "阅读两种划分流程并判断测试信息是否回流",
-      "先独立比较两种划分流程。",
-      "划分单位从照片改为植物个体",
-      "分类目标和照片内容保持不变",
-    ]);
-    expect(outline.teachingBrief?.teachingPlan?.visibleContent).not.toContain("因此第一种流程存在数据泄漏");
-    expect(outline.teachingBrief?.teachingPlan?.narrationFocus).toContain("因此第一种流程存在数据泄漏");
+    expect(outline.teachingBrief?.pageTask).toBeUndefined();
+    expect(outline.teachingBrief?.teachingPlan?.visibleContent).toContain("因此第一种流程存在数据泄漏");
+    expect(outline.plannedTiming?.learnerActivitySec).toBe(0);
   });
 
   it("converts unavailable generated media to a native diagram in the same blueprint pass", async () => {
@@ -891,6 +942,102 @@ describe("teaching blueprint compiler", () => {
       .toEqual(outline.mediaGenerations?.map((request) => request.elementId));
   });
 
+  it("uses the same compact cycle and observational image rules for a different subject", async () => {
+    const candidate = compactModelBlueprint();
+    const page = candidate.sections[0]!.pages[0]!;
+    page.title = "水循环中的蒸发、凝结与降水";
+    (page as unknown as { visualRelationship: Record<string, unknown> }).visualRelationship = {
+      kind: "process", description: "水在不同状态和位置之间循环。",
+      readingOrder: ["蒸发", "凝结", "降水", "汇集"], preferredForm: "mixed",
+      rationale: "环路说明关系，云与雨的外观帮助观察具体过程。",
+      diagram: {
+        topology: "cycle",
+        nodes: ["蒸发", "凝结", "降水", "汇集"]
+          .map((label, index) => ({ id: `water-${index + 1}`, label })),
+        annotation: "水循环",
+      },
+    };
+    (page as unknown as { resourceNeeds: Array<Record<string, unknown>> }).resourceNeeds = [{
+      kind: "image", purpose: "观察云层与雨滴的真实空间状态", required: true,
+      prompt: "剖面示意：湖面上方有云层与下落雨滴，表现可见外观，不含文字或箭头",
+      aspectRatio: "4:3",
+    }];
+    const blueprint = await generateTeachingBlueprint({ ...input(), courseTitle: "水循环" }, async () => JSON.stringify(candidate));
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
+    expect(outline.visualIntent?.representation).toBe("mixed");
+    expect(outline.mediaGenerations?.[0]?.aspectRatio).toBe("4:3");
+    expect(compileDiagramComponent({ ...outline.visualIntent!.diagram!, type: "diagram", id: "water-cycle",
+      left: 50, top: 130, width: 900, height: 360 }).filter((element) => element.type === "line")).toHaveLength(4);
+  });
+
+  it("keeps a planned observation image on the page and grounds its generation in the entry scene", async () => {
+    const candidate = compactModelBlueprint();
+    const page = candidate.sections[0]!.pages[0]!;
+    (page as unknown as { entryPoint: { kind: string; object: string; bridge: string } }).entryPoint = {
+      kind: "familiar-experience", object: "学生第一次使用智能音箱。",
+      bridge: "先观察学生如何理解新的对象。",
+    };
+    page.caseObservation = {
+      imageWouldHelp: true,
+      observableDifference: "想象中的动物保留鱼身、牛角、四条腿和花斑；右侧真实动物保持正常身体结构。",
+      reason: "必须直接观察想象和真实外观的差异。",
+    };
+    (page as unknown as { resourceNeeds: Array<Record<string, unknown>> }).resourceNeeds = [{
+      kind: "image", purpose: "比较想象动物和真实动物", required: false,
+      prompt: "鱼形的想象动物与真实牛并排，无文字。",
+    }];
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate), {
+      resourceCapabilities: { imageGenerationEnabled: true, videoGenerationEnabled: false },
+    });
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
+    expect(blueprint.sections[0]?.pages[0]?.resourceNeeds?.[0]?.required).toBe(true);
+    expect(outline.visualIntent?.resourceRefs?.[0]?.required).toBe(true);
+    expect(outline.mediaGenerations?.[0]?.observationContext).toContain("四条腿和花斑");
+  });
+
+  it.each([
+    ["菌落", "相同培养条件下两种菌落的边缘与颜色不同"],
+    ["机器人", "有轮子与机械臂的机器和带翅膀的错误心象对照"],
+    ["陶器", "不同时期陶器的口沿与纹样体现用途差异"],
+  ])("derives required evidence for %s from one observation even beside a concept diagram", async (subject, difference) => {
+    const candidate = compactModelBlueprint();
+    const page = candidate.sections[0]!.pages[0]!;
+    Object.assign(page, {
+      caseObservation: { kind: "generated-image", subjects: [subject], observableDifference: difference,
+        reason: "观察形态差异是本页判断依据", composition: "左右同视角并列对照", aspectRatio: "4:3" },
+      resourceNeeds: [{ kind: "diagram", purpose: "说明概念关系", required: true }],
+    });
+    const ai = vi.fn(async () => JSON.stringify(candidate));
+    const blueprint = await generateTeachingBlueprint(input(), ai, {
+      resourceCapabilities: { imageGenerationEnabled: true, videoGenerationEnabled: false },
+    });
+    const outline = teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]!;
+    expect(ai).toHaveBeenCalledTimes(1);
+    expect(blueprint.sections[0]?.pages[0]?.resourceNeeds?.map((need) => need.kind)).toEqual(["diagram", "image"]);
+    expect(outline.mediaGenerations?.[0]).toMatchObject({ aspectRatio: "4:3", observationContext: difference });
+    expect(outline.mediaGenerations?.[0]?.prompt).toContain(subject);
+    expect(outline.mediaGenerations?.[0]?.prompt).toContain(difference);
+    expect(outline.visualIntent?.resourceRefs?.[0]?.required).toBe(true);
+  });
+
+  it("keeps a no-image observation decision free of decorative legacy requests", async () => {
+    const candidate = compactModelBlueprint();
+    Object.assign(candidate.sections[0]!.pages[0]!, {
+      caseObservation: { kind: "none", subjects: [], observableDifference: "", reason: "只需比较定义边界" },
+      resourceNeeds: [{ kind: "image", purpose: "装饰", prompt: "装饰性背景", required: false }],
+    });
+    const blueprint = await generateTeachingBlueprint(input(), async () => JSON.stringify(candidate));
+    expect(teachingBlueprintToOutlines(blueprint, "使用简体中文")[0]?.mediaGenerations).toBeUndefined();
+  });
+
+  it("does not reject teaching content using a fixed character-count layout proxy", async () => {
+    const candidate = compactModelBlueprint();
+    candidate.sections[0]!.pages[0]!.keyPoints = ["保留必要的定义、条件与推理。".repeat(30)];
+    const ai = vi.fn(async () => JSON.stringify(candidate));
+    await generateTeachingBlueprint(input(), ai);
+    expect(ai).toHaveBeenCalledTimes(1);
+  });
+
   it("carries a seven-step cycle with a separate annotation to the first slide pass", async () => {
     const candidate = compactModelBlueprint();
     const page = candidate.sections[0]!.pages[0]!;
@@ -962,6 +1109,29 @@ describe("teaching blueprint compiler", () => {
       retrySleep: async () => undefined,
     })).rejects.toThrow("教学蓝图缺少可用结构");
     expect(validation.mock.calls[0]?.[0].issues).toContain("第 1 节第 1 页整体说明不能重复作为流程节点");
+  });
+
+  it("rejects a structurally valid diagram whose labels cannot fit on a slide", async () => {
+    const candidate = compactModelBlueprint();
+    const page = candidate.sections[0]!.pages[0]!;
+    (page as unknown as { visualRelationship: Record<string, unknown> }).visualRelationship = {
+      kind: "process", description: "七步流程", readingOrder: ["目标", "情境"],
+      preferredForm: "diagram", rationale: "需要看到完整环路。",
+      diagram: {
+        topology: "cycle",
+        nodes: Array.from({ length: 7 }, (_, index) => ({
+          id: `step-${index + 1}`,
+          label: `这是一个必须另写正文说明的第${index + 1}个流程节点的完整解释句`,
+        })),
+        annotation: "完整环路",
+      },
+    };
+    const validation = vi.fn();
+    await expect(generateTeachingBlueprint(input(), async () => JSON.stringify(candidate), {
+      onValidation: validation,
+      retrySleep: async () => undefined,
+    })).rejects.toThrow("教学蓝图缺少可用结构");
+    expect(validation.mock.calls[0]?.[0].issues.join("；")).toContain("图示节点、连接或说明无法在单页排下");
   });
 
   it("rejects an image request without an executable description in the existing blueprint retry", async () => {
@@ -1112,6 +1282,106 @@ describe("teaching blueprint compiler", () => {
     expect(ai.mock.calls[1]?.[0]).toContain("而不是重新构思整门课程");
     expect(ai.mock.calls[1]?.[1]).toContain("核心概念“训练集”缺少");
     expect(ai.mock.calls[1]?.[1]).toContain("训练数据参与模型学习");
+  });
+
+  it("requests a complete blueprint again when JSON parsing returns null", async () => {
+    const onValidation = vi.fn();
+    const ai = vi.fn()
+      .mockResolvedValueOnce("{这份蓝图不是可解析的 JSON}")
+      .mockResolvedValueOnce(JSON.stringify(compactModelBlueprint()));
+
+    await expect(generateTeachingBlueprint(input(), ai, {
+      onValidation,
+      retrySleep: async () => undefined,
+    })).resolves.toMatchObject({ schemaVersion: 3 });
+
+    expect(ai).toHaveBeenCalledTimes(2);
+    expect(onValidation.mock.calls[0]?.[0].issues).toEqual([
+      "JSON 解析失败：响应不是可解析的 JSON 对象",
+    ]);
+    expect(ai.mock.calls[1]?.[0]).toContain("JSON.parse 直接解析的完整 JSON");
+    expect(ai.mock.calls[1]?.[1]).toContain('"units"');
+    expect(ai.mock.calls[1]?.[1]).not.toContain('"current":null');
+  });
+
+  it("starts a full blueprint from a saved response with pages but no teaching units", async () => {
+    const incompatible = {
+      sections: [{
+        title: "数据角色",
+        understandingGoals: ["解释数据角色"],
+        pages: [{
+          title: "训练集",
+          unitMappings: [{ knowledgePointIds: ["kp-train"] }],
+          caseObservation: "案例观察：比较两组照片",
+          finalTaskConnection: "最终任务连接判定：无",
+        }],
+      }],
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify(compactModelBlueprint()));
+
+    await expect(generateTeachingBlueprint(input(), ai, {
+      repairFrom: {
+        response: JSON.stringify(incompatible),
+        issues: ["第 1 节缺少教学单元或页面"],
+      },
+    })).resolves.toMatchObject({ schemaVersion: 3 });
+
+    expect(ai).toHaveBeenCalledTimes(1);
+    expect(ai.mock.calls[0]?.[0]).toContain("JSON.parse 直接解析的完整 JSON");
+    expect(ai.mock.calls[0]?.[0]).not.toContain("教学蓝图结构修订 Agent");
+    expect(ai.mock.calls[0]?.[1]).toContain('"understandingCriteria"');
+  });
+
+  it("restores explicitly owned section nodes without another model call", async () => {
+    const draft = compactModelBlueprint();
+    const nodeId = "teaching-section-1-unit-1-node-1";
+    const section = draft.sections[0]!;
+    const misplaced = {
+      sections: [{
+        ...section,
+        explanationNodes: [{ ...section.units[0]!.explanationNodes[0]!, id: nodeId }],
+        units: section.units.map((unit) => ({ ...unit, explanationNodes: [] })),
+        pages: section.pages.map((page) => ({ ...page, introducesNodeIds: [nodeId] })),
+      }],
+    };
+    const ai = vi.fn();
+
+    const blueprint = await generateTeachingBlueprint(input(), ai, {
+      repairFrom: {
+        response: JSON.stringify(misplaced),
+        issues: ["第 1 节解释节点 teaching-section-1-unit-1-node-1 未分配给任何页面"],
+      },
+    });
+
+    expect(ai).not.toHaveBeenCalled();
+    expect(blueprint.sections[0]?.units[0]?.explanationNodes?.[0]?.id).toBe(nodeId);
+    expect(blueprint.sections[0]?.pages[0]?.introducesNodeIds).toEqual([nodeId]);
+  });
+
+  it("does not assign section nodes when their declared unit does not exist", async () => {
+    const draft = compactModelBlueprint();
+    const section = draft.sections[0]!;
+    const incompatible = {
+      sections: [{
+        ...section,
+        explanationNodes: [{
+          ...section.units[0]!.explanationNodes[0]!,
+          id: "teaching-section-1-unit-2-node-1",
+        }],
+        units: section.units.map((unit) => ({ ...unit, explanationNodes: [] })),
+      }],
+    };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify(compactModelBlueprint()));
+
+    await expect(generateTeachingBlueprint(input(), ai, {
+      repairFrom: {
+        response: JSON.stringify(incompatible),
+        issues: ["第 1 节解释节点未分配给页面"],
+      },
+    })).resolves.toMatchObject({ schemaVersion: 3 });
+
+    expect(ai).toHaveBeenCalledTimes(1);
+    expect(ai.mock.calls[0]?.[0]).not.toContain("教学蓝图结构修订 Agent");
   });
 
   it("re-audits a revision and sends only the latest findings to the final repair", async () => {
@@ -1510,6 +1780,9 @@ describe("teaching blueprint compiler", () => {
     expect(teachingBlueprintInputFingerprint({ ...base, assessmentMode: "constructed-response" })).not.toBe(fingerprint);
     expect(teachingBlueprintInputFingerprint({ ...base, totalDurationSec: 1_740 })).not.toBe(fingerprint);
     expect(teachingBlueprintInputFingerprint({ ...base, sourceContext: `${base.sourceContext}\n新增材料` })).not.toBe(fingerprint);
+    const priorSourceExamples = [{ knowledgePointIds: ["kp-train"], workedExample: "观察植物照片", sourceQuote: "训练集用于学习模型参数。", imagePlanned: true }];
+    expect(teachingBlueprintInputFingerprint({ ...base, priorSourceExamples })).not.toBe(fingerprint);
+    expect(buildTeachingBlueprintPrompt({ ...base, priorSourceExamples }).user).toContain("观察植物照片");
     expect(teachingBlueprintInputFingerprint({ ...base, generationModelFingerprint: "another:model" })).not.toBe(fingerprint);
     expect(teachingBlueprintInputFingerprint({ ...base, teachingRequirements: { schemaVersion: 1, items: [{ id: "focus", kind: "highlight", source: "teacher", text: "重点比较数据角色", sourceKnowledgePointIds: ["kp-train"] }], conflicts: [] } })).not.toBe(fingerprint);
     expect(teachingBlueprintInputFingerprint({ ...base, knowledgePoints: base.knowledgePoints.map((point) => point.id === "kp-train" ? { ...point, teachingRole: "core-concept" as const } : point) })).not.toBe(fingerprint);
@@ -1526,7 +1799,7 @@ describe("teaching blueprint compiler", () => {
     expect(outlines.reduce((sum, outline) => sum + (outline.targetDurationSec ?? 0), 0)).toBe(300);
     expect(blueprint.budget.totalDurationSec).toBe(300);
     expect(blueprint.budget.assessmentDurationSec).toBe(assessmentMode === "adaptive" ? 36 : 54);
-    expect(blueprint.budget.learnerActivityDurationSec).toBeGreaterThan(0);
+    expect(blueprint.budget.learnerActivityDurationSec).toBe(0);
     expect(blueprint.budget.teachingDurationSec
       + blueprint.budget.assessmentDurationSec
       + blueprint.budget.learnerActivityDurationSec).toBe(300);

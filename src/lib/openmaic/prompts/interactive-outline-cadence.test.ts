@@ -18,7 +18,7 @@ describe('interactive-first outline strategy', () => {
     const combined = `${prompt?.system ?? ''}\n${prompt?.user ?? ''}`;
 
     expect(combined).toContain('Instructional Slide Title Contract');
-    expect(combined).toContain('教学目标层级辨析');
+    expect(combined).toContain('Use its standard, formal subject name as the title');
     expect(combined).not.toContain('{{snippet:slide-title-guidelines}}');
   });
 

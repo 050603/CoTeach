@@ -13,16 +13,10 @@ export interface LaserOverlayProps {
   /** @deprecated Visibility lifetime is controlled by playback. */
   duration?: number;
   transitionDurationMs?: number;
-  /** Place the dot just before text instead of covering its glyphs. */
+  /** @deprecated Retained for callers; lasers always point to the target center. */
   avoidCoveringTarget?: boolean;
-  /** Apply the same placement rule to the previous transition origin. */
+  /** @deprecated Retained for callers; transition origins use the target center. */
   previousAvoidCoveringTarget?: boolean;
-}
-
-function pointerPosition(geometry: PercentageGeometry, avoidCoveringTarget: boolean) {
-  return avoidCoveringTarget
-    ? { x: Math.max(0.8, geometry.x - 0.8), y: geometry.centerY }
-    : { x: geometry.centerX, y: geometry.centerY };
 }
 
 export function LaserOverlay({
@@ -32,12 +26,10 @@ export function LaserOverlay({
   color = '#ff3b30',
   duration: _duration = 2500,
   transitionDurationMs = 150,
-  avoidCoveringTarget = false,
-  previousAvoidCoveringTarget = false,
 }: LaserOverlayProps) {
-  const position = pointerPosition(geometry, avoidCoveringTarget);
+  const position = { x: geometry.centerX, y: geometry.centerY };
   const previousPosition = previousGeometry
-    ? pointerPosition(previousGeometry, previousAvoidCoveringTarget)
+    ? { x: previousGeometry.centerX, y: previousGeometry.centerY }
     : position;
   const travelDuration = Math.max(0, transitionDurationMs) / 1000;
 

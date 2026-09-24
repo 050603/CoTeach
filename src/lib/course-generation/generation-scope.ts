@@ -29,21 +29,44 @@ export function isTestLessonPromotion(
  * course preview, so the preview snapshot cannot be used as the promotion
  * source of truth.
  */
-export function resolveFullCoursePromotionOutlines<T extends { id: string }>(input: {
+export function resolveFullCoursePromotionOutlines<T extends {
+  id: string; spatialParentId?: string; targetDurationSec?: number; estimatedDuration?: number;
+}>(input: {
   persistedOutlines: readonly T[] | undefined;
+  acceptedTestOutlines?: readonly T[];
   expectedFullSceneCount: number | undefined;
   testLesson: TestLessonGenerationTarget | undefined;
 }): T[] | null {
   const outlines = input.persistedOutlines ?? [];
   const testIds = input.testLesson?.sceneOutlineIds ?? [];
+  const parentId = (outline: T) => outline.spatialParentId ?? outline.id;
+  const fullIds = new Set(outlines.map(parentId));
   if (!Number.isInteger(input.expectedFullSceneCount)
     || (input.expectedFullSceneCount ?? 0) <= testIds.length
-    || outlines.length !== input.expectedFullSceneCount
+    || fullIds.size !== input.expectedFullSceneCount
     || new Set(outlines.map((outline) => outline.id)).size !== outlines.length
     || testIds.length === 0) return null;
-  const fullIds = new Set(outlines.map((outline) => outline.id));
   if (new Set(testIds).size !== testIds.length || testIds.some((id) => !fullIds.has(id))) return null;
-  return [...outlines];
+  if (!input.acceptedTestOutlines?.length) return [...outlines];
+  const accepted = input.acceptedTestOutlines;
+  const acceptedParents = new Set(accepted.map(parentId));
+  if (acceptedParents.size !== testIds.length || testIds.some((id) => !acceptedParents.has(id))
+    || new Set(accepted.map((outline) => outline.id)).size !== accepted.length) return null;
+  const duration = (pages: readonly T[]) => pages.reduce((sum, page) => sum + (page.targetDurationSec ?? page.estimatedDuration ?? 0), 0);
+  for (const id of testIds) {
+    const expected = duration(outlines.filter((outline) => parentId(outline) === id));
+    const actual = duration(accepted.filter((outline) => parentId(outline) === id));
+    if (Math.abs(actual - expected) > 0.001) return null;
+  }
+  const emitted = new Set<string>();
+  const promoted = outlines.flatMap((outline) => {
+    const parent = parentId(outline);
+    if (!acceptedParents.has(parent)) return [outline];
+    if (emitted.has(parent)) return [];
+    emitted.add(parent);
+    return accepted.filter((page) => parentId(page) === parent);
+  });
+  return new Set(promoted.map((outline) => outline.id)).size === promoted.length ? promoted : null;
 }
 
 /**
@@ -55,7 +78,8 @@ export function resolveFullCoursePromotionOutlines<T extends { id: string }>(inp
 export function selectClassroomGenerationOutlines<
   T extends {
     id: string;
-    type: OpenMaicSceneOutlineSnapshot["type"];
+    spatialParentId?: string;
+    type?: OpenMaicSceneOutlineSnapshot["type"];
     title: string;
     description?: string;
     keyPoints?: readonly string[];
@@ -69,9 +93,10 @@ export function selectClassroomGenerationOutlines<
   outlines: readonly T[],
   scope: ClassroomGenerationScope,
   preferredFocus = "",
+  selectedSectionId?: string,
 ): ClassroomGenerationSelection<T> {
   if (scope === "full-course") {
-    return { scope, outlines: [...outlines], fullSceneCount: outlines.length };
+    return { scope, outlines: [...outlines], fullSceneCount: new Set(outlines.map((outline) => outline.spatialParentId ?? outline.id)).size };
   }
 
   const sections = new Map<string, T[]>();
@@ -104,11 +129,15 @@ export function selectClassroomGenerationOutlines<
       text.includes(phrase) ? score + phrase.length * phrase.length : score
     ), 0);
   };
-  const selected = completeSections
-    .map((entry, index) => ({ entry, index, score: relevance(entry[1]) }))
-    .sort((left, right) => right.score - left.score || left.index - right.index)[0]?.entry;
+  const selected = selectedSectionId
+    ? completeSections.find(([sectionId]) => sectionId === selectedSectionId)
+    : completeSections
+      .map((entry, index) => ({ entry, index, score: relevance(entry[1]) }))
+      .sort((left, right) => right.score - left.score || left.index - right.index)[0]?.entry;
   if (!selected) {
-    throw new Error("测试模式需要正式大纲中至少有一个包含讲授页面和节末检测的完整知识小节，请先检查课程大纲。");
+    throw new Error(selectedSectionId
+      ? "所选测试小节不在当前大纲中，或缺少讲授页面和节末检测，请重新选择。"
+      : "测试模式需要正式大纲中至少有一个包含讲授页面和节末检测的完整知识小节，请先检查课程大纲。");
   }
 
   const [sectionId, scenes] = selected;
@@ -123,11 +152,11 @@ export function selectClassroomGenerationOutlines<
   return {
     scope,
     outlines: [...scenes],
-    fullSceneCount: outlines.length,
+    fullSceneCount: new Set(outlines.map((outline) => outline.spatialParentId ?? outline.id)).size,
     testLesson: {
       sectionId,
       sectionTitle: scenes[0]?.lectureSectionTitle?.trim() || scenes[0]?.title?.trim() || "第一知识小节",
-      sceneOutlineIds: scenes.map((scene) => scene.id),
+      sceneOutlineIds: [...new Set(scenes.map((scene) => scene.spatialParentId ?? scene.id))],
       durationSeconds,
     },
   };

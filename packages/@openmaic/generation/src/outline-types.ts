@@ -73,6 +73,7 @@ export interface WidgetOutline {
 export interface MediaGenerationRequest {
   type: 'image' | 'video';
   prompt: string;
+  observationContext?: string;
   elementId: string;
   aspectRatio?: '16:9' | '4:3' | '1:1' | '9:16';
   style?: string;

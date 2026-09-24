@@ -55,4 +55,25 @@ describe("QuickOutlineReviewDialog", () => {
     fireEvent.click(button);
     expect(onConfirm).not.toHaveBeenCalled();
   });
+
+  it("waits for the teacher to choose exactly one complete test section", async () => {
+    const outlines = [
+      { id: "a-slide", title: "训练数据", lectureSectionId: "a", lectureSectionTitle: "训练数据", type: "slide", targetDurationSec: 120 },
+      { id: "a-quiz", title: "训练数据检测", lectureSectionId: "a", lectureSectionTitle: "训练数据", type: "quiz", targetDurationSec: 60 },
+      { id: "b-slide", title: "模型评估", lectureSectionId: "b", lectureSectionTitle: "模型评估", type: "slide", targetDurationSec: 120 },
+      { id: "b-quiz", title: "模型评估检测", lectureSectionId: "b", lectureSectionTitle: "模型评估", type: "quiz", targetDurationSec: 60 },
+    ] as SceneOutline[];
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+    render(<QuickOutlineReviewDialog initialOutlines={outlines} testMode onClose={vi.fn()} onConfirm={onConfirm} />);
+
+    const confirm = screen.getByRole("button", { name: "生成所选小节" });
+    fireEvent.click(confirm);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("请先选择");
+
+    fireEvent.click(screen.getByRole("radio", { name: "模型评估" }));
+    fireEvent.click(confirm);
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith(outlines, "b"));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
 });

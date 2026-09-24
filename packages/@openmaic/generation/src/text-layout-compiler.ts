@@ -1,4 +1,3 @@
-import { nanoid } from 'nanoid';
 import type { PPTElement, PPTShapeElement, PPTTextElement } from '@openmaic/dsl';
 
 /** The layout compiler uses the same typography as BaseTextElement. */
@@ -16,16 +15,23 @@ export interface TextMeasureInput {
   width: number;
   fontSize: number;
   fontWeight: 400 | 700;
-  fontFamily: typeof TEXT_LAYOUT_FONT;
-  padding: typeof TEXT_LAYOUT_PADDING;
-  lineHeight: typeof TEXT_LAYOUT_LINE_HEIGHT;
-  paragraphSpace: typeof TEXT_LAYOUT_PARAGRAPH_SPACE;
+  fontFamily: string;
+  padding: number;
+  /** Preserve safe native rich text typography during host measurement. */
+  preserveRichText?: boolean;
+  tableCell?: boolean;
+  paddingCss?: string;
+  lineHeight: number;
+  paragraphSpace: number;
   align: TextAlign;
 }
 
 export interface TextMeasureResult {
   /** Widest unwrapped visible line in px, excluding horizontal padding. */
   naturalWidth: number;
+  /** Optional host-measured visible glyph extents, relative to the allocated box. */
+  inkBottom?: number;
+  inkRight?: number;
   /** Actual content-box height in px, including top and bottom padding. */
   height: number;
   /** Visible lines after browser layout, in their displayed order. */
@@ -43,11 +49,14 @@ interface ComponentBox {
   x?: number;
   y?: number;
   width: number;
-  height: number;
+  /** Legacy allocation hint. Text boxes are sized from measured content. */
+  height?: number;
 }
 
 export interface TextBoxComponent extends ComponentBox {
   kind: 'textBox';
+  /** Explicit hard vertical limit, when a neighboring visual reserves the space below. */
+  maxHeight?: number;
   /** Plain text; explicit newlines become editable HTML line breaks. */
   text?: string;
   /** Distinct paragraphs; cannot be combined with `text`. */
@@ -61,6 +70,7 @@ export interface TextBoxComponent extends ComponentBox {
 
 export interface LabelGridComponent extends ComponentBox {
   kind: 'labelGrid';
+  height: number;
   rows: Array<{ header?: string; cells: string[] }>;
   /** Defaults to the first row's cell count. */
   columnCount?: number;
@@ -104,6 +114,19 @@ interface LabelCell {
 }
 
 const EPSILON = 0.5;
+const SAFE_LEFT = 50;
+const SAFE_TOP = 50;
+const SAFE_RIGHT = 950;
+const SAFE_BOTTOM = 512.5;
+
+/** Punctuation does not turn a lone CJK glyph into a readable last line. */
+export function isOrphanTextLine(line: string): boolean {
+  const meaningful = line.replace(/[\s\p{P}\p{S}]/gu, '');
+  return /^[\u3400-\u9fff]$/.test(meaningful);
+}
+
+const FORBIDDEN_LINE_START = /^[,，、。.!！‼？?;；:：)）\]】〕〉》」』”’…—]/;
+const FORBIDDEN_LINE_END = /[(（\[【〔〈《「『“‘]$/;
 
 function finiteNumber(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -119,6 +142,9 @@ function componentBox(component: ComponentBox, name: string): Box {
   const height = finiteNumber(component.height, `${name}.height`);
   if (width <= 2 * TEXT_LAYOUT_PADDING || height <= 0) {
     throw new TextLayoutError(`${name} needs a positive area beyond text padding`);
+  }
+  if (left < SAFE_LEFT || top < SAFE_TOP || left + width > SAFE_RIGHT || top + height > SAFE_BOTTOM) {
+    throw new TextLayoutError(`${name} must stay inside the slide safe area (${SAFE_LEFT}, ${SAFE_TOP})–(${SAFE_RIGHT}, ${SAFE_BOTTOM})`);
   }
   if (component.left !== undefined && component.x !== undefined && component.left !== component.x) {
     throw new TextLayoutError(`${name}.left and x disagree`);
@@ -257,21 +283,23 @@ async function splitCandidates(text: string, style: TextStyle, measure: Measure)
   if (chars.length < 4) return [];
   const candidates: SplitCandidate[] = [];
   for (let index = 2; index <= chars.length - 2; index += 1) {
-    const first = chars.slice(0, index).join('').trimEnd();
-    const second = chars.slice(index).join('').trimStart();
-    if (Array.from(first).length < 2 || Array.from(second).length < 2) continue;
-    if (/[(（《“‘]$/.test(first) || /^[,，。.!！？?;；:：)）】》”’]/.test(second)) continue;
+    if (/[A-Za-z0-9]/.test(chars[index - 1]) && /[A-Za-z0-9]/.test(chars[index])) continue;
+    const first = chars.slice(0, index).join('');
+    const second = chars.slice(index).join('');
+    if (Array.from(first.trim()).length < 2 || Array.from(second.trim()).length < 2) continue;
+    if (FORBIDDEN_LINE_END.test(first.trimEnd()) || FORBIDDEN_LINE_START.test(second.trimStart())
+      || isOrphanTextLine(first) || isOrphanTextLine(second)) continue;
     const [firstWidth, secondWidth] = await Promise.all([
       naturalWidth(first, style, measure),
       naturalWidth(second, style, measure),
     ]);
     const max = Math.max(firstWidth, secondWidth);
     const whitespaceBoundary = /\s/.test(chars[index - 1] ?? '') || /\s/.test(chars[index] ?? '');
-    const punctuationBoundary = /[,，。;；:：]/.test(chars[index - 1] ?? '');
+    const punctuationBoundary = /[,，、。!！?？;；:：]/.test(chars[index - 1] ?? '');
     candidates.push({
       lines: [first, second],
       width: max + 2 * TEXT_LAYOUT_PADDING,
-      score: max + Math.abs(firstWidth - secondWidth) * 0.15 - (whitespaceBoundary ? 8 : punctuationBoundary ? 4 : 0),
+      score: max + Math.abs(firstWidth - secondWidth) * 0.15 + (whitespaceBoundary || punctuationBoundary ? 0 : style.fontSize * 4),
     });
   }
   return candidates.sort((a, b) => a.score - b.score);
@@ -286,6 +314,14 @@ async function minimumLabelWidth(text: string, style: TextStyle, measure: Measur
 async function fitLabel(text: string, width: number, style: TextStyle, measure: Measure): Promise<{ display: string; measurement: TextMeasureResult }> {
   const contentWidth = width - 2 * TEXT_LAYOUT_PADDING;
   if (contentWidth <= 0) throw new TextLayoutError(`label ${JSON.stringify(text)} has no text area`);
+  const explicit = text.split(/\r\n?|\n/);
+  for (let index = explicit.length - 1; index > 0; index -= 1) {
+    if (isOrphanTextLine(explicit[index]) || FORBIDDEN_LINE_START.test(explicit[index].trimStart())
+      || FORBIDDEN_LINE_END.test(explicit[index - 1].trimEnd())) {
+      explicit.splice(index - 1, 2, explicit[index - 1] + explicit[index]);
+    }
+  }
+  text = explicit.join('\n');
   const natural = await naturalWidth(text, style, measure);
   if (natural <= contentWidth + EPSILON) {
     const measurement = await measure([text], width, style);
@@ -299,13 +335,32 @@ async function fitLabel(text: string, width: number, style: TextStyle, measure: 
     if (candidate.width > width + EPSILON) continue;
     const display = candidate.lines.join('\n');
     const measurement = await measure([display], width, style);
-    if (measurement.lines.length === 2) return { display, measurement };
+    if (measurement.lines.length === 2 && measurement.lines.every((line) => !isOrphanTextLine(line) && !FORBIDDEN_LINE_START.test(line.trimStart()))) return { display, measurement };
+  }
+  // Trust actual browser wrapping, including CJK punctuation compression. Its
+  // measured height participates in flow; the two-line preference is not a cap.
+  const wrapped = await measure([text], width, style);
+  if (wrapped.lines.length > 1 && wrapped.lines.join('') === text.replace(/\r?\n/g, '')) {
+    if (wrapped.lines.every((line) => [...line.trim()].length > 1 && !isOrphanTextLine(line))) return { display: text, measurement: wrapped };
+    const head = wrapped.lines.slice(0, -2);
+    const tail = wrapped.lines.slice(-2).join('');
+    for (const candidate of await splitCandidates(tail, style, measure)) {
+      if (candidate.width > width + EPSILON) continue;
+      const display = [...head, ...candidate.lines].join('\n');
+      const measurement = await measure([display], width, style);
+      if (measurement.lines.length === wrapped.lines.length && measurement.lines.every((line) => !isOrphanTextLine(line) && !FORBIDDEN_LINE_START.test(line.trimStart()))) return { display, measurement };
+    }
   }
   throw new TextLayoutError(`label ${JSON.stringify(text)} cannot fit in ${width}px without an orphan line`);
 }
 
 async function compileTextBox(component: TextBoxComponent, measure: Measure): Promise<PPTElement[]> {
-  const box = componentBox(component, 'textBox');
+  const top = finiteNumber(component.top ?? component.y, 'textBox.top/y');
+  if (component.height !== undefined && finiteNumber(component.height, 'textBox.height') <= 0) {
+    throw new TextLayoutError('textBox.height must be positive when supplied');
+  }
+  const maximum = component.maxHeight === undefined ? SAFE_BOTTOM - top : finiteNumber(component.maxHeight, 'textBox.maxHeight');
+  const box = componentBox({ ...component, height: maximum }, 'textBox');
   if (component.text !== undefined && component.paragraphs !== undefined) {
     throw new TextLayoutError('textBox accepts text or paragraphs, not both');
   }
@@ -322,18 +377,37 @@ async function compileTextBox(component: TextBoxComponent, measure: Measure): Pr
     output = [fitted.display];
     measured = fitted.measurement;
   } else {
-    measured = await measure(paragraphs, box.width, style);
+    output = await Promise.all(paragraphs.map(async (paragraph) => {
+      const segments = paragraph.split(/\r\n?|\n/);
+      for (let index = segments.length - 1; index > 0; index -= 1) {
+        if (isOrphanTextLine(segments[index]) || FORBIDDEN_LINE_START.test(segments[index].trimStart())
+          || FORBIDDEN_LINE_END.test(segments[index - 1].trimEnd())) segments.splice(index - 1, 2, segments[index - 1] + segments[index]);
+      }
+      const balanced = await Promise.all(segments.map(async (segment) => {
+        const result = await measure([segment], box.width, style);
+        if (result.lines.length < 2 || !isOrphanTextLine(result.lines.at(-1)!)) return segment;
+        const lines = [...result.lines];
+        const tail = lines.splice(-2).join('');
+        const fitted = await fitLabel(tail, box.width, style, measure);
+        // Only introduce measured breaks when text identity is preserved, including Latin spaces.
+        const candidate = [...lines, fitted.display].join('\n');
+        if (candidate.replace(/\n/g, '') !== segment) return segment;
+        return candidate;
+      }));
+      return balanced.join('\n');
+    }));
+    measured = await measure(output, box.width, style);
   }
   if (measured.height > box.height + EPSILON) {
-    throw new TextLayoutError(`textBox content needs ${measured.height}px but its container is ${box.height}px high`);
+    throw new TextLayoutError(`textBox content needs ${measured.height}px but its maximum allocation is ${box.height}px high`);
   }
-  const element = textElement(component.id ?? nanoid(), box, output, style);
+  const element = textElement(component.id ?? 'text-box', { ...box, height: measured.height }, output, style);
   element.vAlign = 'top';
   element.textType = component.role === 'title' ? 'title' : 'content';
   return [element];
 }
 
-async function compileLabelGrid(component: LabelGridComponent, measure: Measure): Promise<PPTElement[]> {
+async function compileLabelGrid(component: LabelGridComponent, measure: Measure, naturalRows = false): Promise<PPTElement[]> {
   const box = componentBox(component, 'labelGrid');
   if (!Array.isArray(component.rows) || component.rows.length === 0) {
     throw new TextLayoutError('labelGrid needs at least one row');
@@ -373,11 +447,10 @@ async function compileLabelGrid(component: LabelGridComponent, measure: Measure)
     minimumWidths.push(Math.max(...minimum));
   }
   const minimumTotal = minimumWidths.reduce((sum, value) => sum + value, 0);
-  if (minimumTotal > availableWidth + EPSILON) {
-    throw new TextLayoutError(`labelGrid needs ${minimumTotal + (totalColumns - 1) * gapX}px but container is ${box.width}px wide`);
-  }
   const naturalTotal = naturalWidths.reduce((sum, value) => sum + value, 0);
-  const widths = naturalTotal <= availableWidth
+  const widths = minimumTotal > availableWidth + EPSILON
+    ? rows[0].map(() => availableWidth / totalColumns)
+    : naturalTotal <= availableWidth
     ? naturalWidths.map((value) => value + (availableWidth - naturalTotal) / totalColumns)
     : minimumWidths.map((minimum, index) => {
         const deficit = naturalWidths[index] - minimum;
@@ -388,10 +461,10 @@ async function compileLabelGrid(component: LabelGridComponent, measure: Measure)
   const naturalRowHeights = fittedRows.map((row) => Math.max(...row.map((cell) => cell.measurement.height)));
   const availableHeight = box.height - (rows.length - 1) * gapY;
   const neededHeight = naturalRowHeights.reduce((sum, value) => sum + value, 0);
-  if (neededHeight > availableHeight + EPSILON) {
+  if (!naturalRows && neededHeight > availableHeight + EPSILON) {
     throw new TextLayoutError(`labelGrid needs ${neededHeight + (rows.length - 1) * gapY}px but container is ${box.height}px high`);
   }
-  const extraPerRow = (availableHeight - neededHeight) / rows.length;
+  const extraPerRow = naturalRows ? 0 : (availableHeight - neededHeight) / rows.length;
   const elements: PPTElement[] = [];
   let top = box.top;
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
@@ -400,9 +473,9 @@ async function compileLabelGrid(component: LabelGridComponent, measure: Measure)
     for (let column = 0; column < totalColumns; column += 1) {
       const cell = rows[rowIndex][column];
       const cellBox = { left, top, width: widths[column], height };
-      const groupId = `${component.id ?? 'label-grid'}-${rowIndex}-${column}-${nanoid(4)}`;
-      const shape = shapeElement(nanoid(), cellBox, cell.header ? (component.headerFill ?? '#E8EEF6') : (component.cellFill ?? '#F4F7FA'));
-      const label = textElement(nanoid(), cellBox, [fittedRows[rowIndex][column].display], cell.style);
+      const groupId = `${component.id ?? 'label-grid'}-${rowIndex}-${column}`;
+      const shape = shapeElement(`${groupId}-shape`, cellBox, cell.header ? (component.headerFill ?? '#E8EEF6') : (component.cellFill ?? '#F4F7FA'));
+      const label = textElement(`${groupId}-text`, cellBox, [fittedRows[rowIndex][column].display], cell.style);
       shape.groupId = groupId;
       label.groupId = groupId;
       label.textType = cell.header ? 'header' : 'item';
@@ -414,6 +487,11 @@ async function compileLabelGrid(component: LabelGridComponent, measure: Measure)
   return elements;
 }
 
+/** Intermediate flow measurement, before pagination; all rows share the full table's column widths. */
+export async function measureLabelGrid(component: LabelGridComponent, textMeasure: TextMeasure): Promise<PPTElement[]> {
+  return compileLabelGrid(component, createMeasurer(textMeasure), true);
+}
+
 /** Compile generation-only layout components into ordinary editable PPT elements. */
 export async function compileTextComponents(
   components: readonly TextLayoutComponent[],
@@ -423,7 +501,8 @@ export async function compileTextComponents(
   if (typeof textMeasure !== 'function') throw new TextLayoutError('textMeasure is required');
   const measure = createMeasurer(textMeasure);
   const elements: PPTElement[] = [];
-  for (const component of components) {
+  for (const [index, rawComponent] of components.entries()) {
+    const component = { ...rawComponent, id: rawComponent.id ?? `component-${index}` };
     if (component?.kind === 'textBox') {
       elements.push(...(await compileTextBox(component, measure)));
     } else if (component?.kind === 'labelGrid') {
@@ -433,4 +512,145 @@ export async function compileTextComponents(
     }
   }
   return elements;
+}
+
+/** Native slides retain their authored HTML, styles, geometry, and semantic paragraphs. */
+function nativeHtmlText(html: string): string {
+  return html.replace(/<br\s*\/?\s*>/gi, '\n').replace(/<\/(?:p|li|div|h[1-6])\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '').replace(/&#(x[\da-f]+|\d+);/gi, (_, value: string) => String.fromCodePoint(value[0].toLowerCase() === 'x' ? parseInt(value.slice(1), 16) : Number(value)))
+    .replace(/&nbsp;/gi, ' ').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&apos;|&#39;/gi, "'").replace(/&amp;/gi, '&').trim();
+}
+
+function nativeBreakCandidates(html: string): string[] {
+  // Rebalance only one short paragraph. Never flatten multiple semantic paragraphs,
+  // lists or verse; unsupported markup remains intact and yields a precise failure.
+  if ((html.match(/<(?:p|li|div|h[1-6])\b/gi)?.length ?? 0) > 1) return [];
+  const compact = html.replace(/<br\s*\/?\s*>/gi, '');
+  const tokens = [...compact.matchAll(/<[^>]+>|&(?:#x[\da-f]+|#\d+|[a-z]+);|[^<&]|[<&]/giu)];
+  const visible = tokens.filter((token) => !token[0].startsWith('<'));
+  if (visible.length < 4 || visible.length > 80) return [];
+  const breaks: Array<{ html: string; score: number }> = [];
+  for (let index = 2; index <= visible.length - 2; index += 1) {
+    const before = nativeHtmlText(visible.slice(0, index).map((token) => token[0]).join(''));
+    const after = nativeHtmlText(visible.slice(index).map((token) => token[0]).join(''));
+    if (FORBIDDEN_LINE_START.test(after) || FORBIDDEN_LINE_END.test(before) || isOrphanTextLine(before) || isOrphanTextLine(after)) continue;
+    const offset = visible[index].index!;
+    const boundary = /[\s，。；：！？、,;:.!?]$/.test(before);
+    breaks.push({ html: compact.slice(0, offset) + '<br>' + compact.slice(offset), score: Math.abs(visible.length / 2 - index) + (boundary ? 0 : 4) });
+  }
+  return breaks.sort((a, b) => a.score - b.score).slice(0, 12).map((entry) => entry.html);
+}
+
+async function measureNativeHtml(
+  html: string,
+  allocation: { width: number; height: number; id: string },
+  spec: Omit<TextMeasureInput, 'html' | 'text' | 'width'>,
+  measure: TextMeasure,
+  maxHeightGrowth = 0,
+): Promise<{ content: string; requiredHeight: number }> {
+  const text = nativeHtmlText(html);
+  if (!text) return { content: html, requiredHeight: allocation.height };
+  const check = (candidate: string) => measure({ ...spec, html: candidate, text: nativeHtmlText(candidate), width: allocation.width, preserveRichText: true });
+  const fits = (result: TextMeasureResult) => (result.inkBottom ?? result.height) <= allocation.height + maxHeightGrowth + 1
+    && (result.inkRight === undefined || result.inkRight <= allocation.width + 1)
+    && (result.inkRight !== undefined || !/white-space\s*:\s*(?:nowrap|pre)\b/i.test(html) || result.naturalWidth + spec.padding * 2 <= allocation.width + 1);
+  const measured = await check(html);
+  const preservedBreaks = /<(?:pre|code)\b|white-space\s*:\s*(?:pre(?:-wrap|-line)?|break-spaces)\b/i.test(html);
+  const orphan = !preservedBreaks && measured.lines.length > 1 && measured.lines.some(isOrphanTextLine);
+  if (!orphan) {
+    if (!fits(measured)) throw new TextLayoutError(`native text ${allocation.id} exceeds its authored ${allocation.width}×${allocation.height}px allocation (visible bounds ${measured.inkRight ?? measured.naturalWidth}×${measured.inkBottom ?? measured.height}px)`);
+    return { content: html, requiredHeight: measured.inkBottom ?? measured.height };
+  }
+  for (const candidate of nativeBreakCandidates(html)) {
+    const result = await check(candidate);
+    if (fits(result) && !result.lines.some(isOrphanTextLine)
+      && result.lines.every((line) => !FORBIDDEN_LINE_START.test(line))) {
+      return { content: candidate, requiredHeight: result.inkBottom ?? result.height };
+    }
+  }
+  throw new TextLayoutError(`native text ${allocation.id} has a single-character wrapped line that cannot fit its authored allocation; widen the label without changing its text or font size`);
+}
+
+/** Measure native foreground text once, making only lossless short-label break edits. */
+export async function compileNativeTextLayout(elements: PPTElement[], measure: TextMeasure): Promise<PPTElement[]> {
+  const compiled = await Promise.all(elements.map(async (element): Promise<PPTElement> => {
+    if (element.type === 'text' || (element.type === 'shape' && element.text)) {
+      const text = element.type === 'text' ? element : element.text!;
+      const html = text.content;
+      const fontSizes = [...html.matchAll(/font-size\s*:\s*([\d.]+)px/gi)].map((match) => Number(match[1]));
+      const spec = { fontSize: Math.max(16, ...fontSizes), fontWeight: 400 as const, fontFamily: text.defaultFontName || TEXT_LAYOUT_FONT,
+        padding: element.type === 'text' ? 10 : 0, lineHeight: text.lineHeight ?? 1.5,
+        paragraphSpace: text.paragraphSpace ?? 5, align: 'left' as const };
+      // Browser glyph bounds can exceed a model's box by a fraction of one
+      // line. Grow that box in its available space before rejecting the page.
+      const maxHeightGrowth = element.type === 'text' ? Math.min(16, Math.ceil(spec.fontSize / 2)) : 0;
+      const result = await measureNativeHtml(html, element, spec, measure, maxHeightGrowth);
+      if (element.type === 'text') return {
+        ...element,
+        content: result.content,
+        height: Math.max(element.height, Math.ceil(result.requiredHeight)),
+      };
+      return result.content === html ? element : { ...element, text: { ...element.text!, content: result.content } };
+    }
+    if (element.type !== 'table') return element;
+    const widths = element.colWidths.map((width) => width * element.width);
+    const rowHeights = element.data.map((_, index) => element.rowHeights?.[index] ?? element.cellMinHeight ?? element.height / element.data.length);
+    const occupied = element.data.map(() => new Set<number>());
+    const data = [];
+    for (const [rowIndex, row] of element.data.entries()) {
+      const cells = [];
+      let column = 0;
+      for (const cell of row) {
+        while (occupied[rowIndex].has(column)) column += 1;
+        const colspan = Math.max(1, cell.colspan || 1);
+        const rowspan = Math.max(1, cell.rowspan || 1);
+        const width = widths.slice(column, column + colspan).reduce((sum, value) => sum + value, 0) - 2 * (element.outline?.width ?? 1);
+        const spanningHeight = rowHeights.slice(rowIndex, rowIndex + rowspan).reduce((sum, value) => sum + value, 0);
+        // Row heights are renderer minima, not fixed cell allocations. Allow a
+        // cell to grow its row only within the original whole-table rectangle.
+        const height = element.height - rowHeights.reduce((sum, value) => sum + value, 0) + spanningHeight - 2 * (element.outline?.width ?? 1);
+        const spec = { fontSize: Number.parseFloat(String(cell.style?.fontsize ?? 16)) || 16,
+          fontWeight: cell.style?.bold ? 700 as const : 400 as const, fontFamily: cell.style?.fontname || TEXT_LAYOUT_FONT,
+          padding: 0, paddingCss: cell.padding, tableCell: true, lineHeight: 1, paragraphSpace: 0,
+          align: cell.style?.align === 'center' || cell.style?.align === 'right' ? cell.style.align : 'left' as const };
+        let cellMeasurement: TextMeasureResult | undefined;
+        const text = await measureNativeHtml(cell.text, { width, height, id: `${element.id}:${cell.id}` }, spec, async (input) => {
+          cellMeasurement = await measure(input);
+          return cellMeasurement;
+        });
+        if (cellMeasurement) {
+          const required = Math.max(cellMeasurement.height, cellMeasurement.inkBottom ?? 0) + 2 * (element.outline?.width ?? 1);
+          if (required > spanningHeight) rowHeights[Math.min(rowIndex + rowspan - 1, rowHeights.length - 1)] += required - spanningHeight;
+        }
+        cells.push(text.content === cell.text ? cell : { ...cell, text: text.content });
+        for (let next = rowIndex + 1; next < Math.min(element.data.length, rowIndex + rowspan); next += 1) {
+          for (let col = column; col < column + colspan; col += 1) occupied[next].add(col);
+        }
+        column += colspan;
+      }
+      data.push(cells);
+    }
+    return { ...element, data };
+  }));
+  for (const [index, element] of compiled.entries()) {
+    const original = elements[index]!;
+    if (element.type !== 'text' || original.type !== 'text' || element.height <= original.height) continue;
+    if (element.top + element.height > 562.5) {
+      throw new TextLayoutError(`native text ${element.id} needs ${element.height}px but exceeds the slide canvas`);
+    }
+    const originalBottom = original.top + original.height;
+    const obstruction = compiled.find((other, otherIndex) => {
+      if (otherIndex === index || other.type === 'line') return false;
+      if (other.left <= element.left + 0.5 && other.left + other.width >= element.left + element.width - 0.5
+        && other.top <= element.top + 0.5 && other.top + other.height >= element.top + element.height - 0.5) return false;
+      return element.left < other.left + other.width - 0.5
+        && element.left + element.width > other.left + 0.5
+        && originalBottom < other.top + other.height - 0.5
+        && element.top + element.height > Math.max(originalBottom, other.top) + 0.5;
+    });
+    if (obstruction) {
+      throw new TextLayoutError(`native text ${element.id} needs ${element.height}px but would overlap ${obstruction.id}`);
+    }
+  }
+  return compiled;
 }

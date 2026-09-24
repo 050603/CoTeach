@@ -50,7 +50,11 @@ function canonicalize(value: unknown): unknown {
 }
 
 export function fingerprintSceneOutline(outline: SceneOutline): string {
-  return fingerprintGenerationValue(outline);
+  // Display order changes when an earlier page is split. It does not change
+  // this page's content, narration or resources; restore uses the new order.
+  const semanticOutline = { ...outline } as Partial<SceneOutline>;
+  delete semanticOutline.order;
+  return fingerprintGenerationValue(semanticOutline);
 }
 
 export function fingerprintGenerationValue(value: unknown): string {

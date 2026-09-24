@@ -7,14 +7,13 @@ interface LaserOverlayProps {
   geometry: PercentageGeometry;
   color?: string;
   transitionDurationMs?: number;
-  avoidCoveringTarget?: boolean;
 }
 
 /**
  * Laser pointer overlay component
  *
  * Features:
- * - Smoothly flies in from the nearest corner to the element center
+ * - Stays at the measured target center and moves there on target changes
  * - Elegant light dot with soft breathing glow
  * - Uses percentage positioning (0-100)
  */
@@ -22,13 +21,13 @@ export function LaserOverlay({
   geometry,
   color = '#ff3b30',
   transitionDurationMs = 150,
-  avoidCoveringTarget = false,
 }: LaserOverlayProps) {
-  const pointerX = avoidCoveringTarget ? Math.max(0.8, geometry.x - 0.8) : geometry.centerX;
+  const pointerX = geometry.centerX;
   const pointerY = geometry.centerY;
 
   return (
     <motion.div
+      data-visual-cue="laser"
       initial={{
         opacity: 0,
         left: `${pointerX}%`,

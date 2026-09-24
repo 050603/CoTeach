@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { createLogger } from '@openmaic/lib/logger';
 import { CLASSROOMS_DIR } from '@openmaic/lib/server/classroom-storage';
+import { classroomAudioStoragePath } from './classroom-asset-recovery';
 import { generateImage } from '@openmaic/lib/media/image-providers';
 import { generateVideo, normalizeVideoOptions } from '@openmaic/lib/media/video-providers';
 import { generateTTS } from '@openmaic/lib/audio/tts-providers';
@@ -277,6 +278,9 @@ export function buildInstructionalImagePrompt(request: MediaGenerationRequest): 
   return [
     '生成一张直接服务于课程讲解的高质量教学配图，呈现一个明确的情境或视觉示例。',
     `教学内容与构图要求：${request.prompt}`,
+    request.observationContext
+      ? `本页观察情境：${request.observationContext}。仅从中补全与上述构图同一对象的可见特征，不绘制无关问题或抽象术语。`
+      : undefined,
     request.style ? `视觉形式：${request.style}。` : undefined,
     `画幅：${request.aspectRatio || '16:9'}。主体、关键动作和对象关系必须位于画面中央 80% 安全区域，四周保留裁切余量。`,
     '严格遵守给定概念、关系、步骤和学习者年龄范围；不增加未经要求的事实或结论。',
@@ -814,6 +818,28 @@ export async function generateTTSForClassroom(
   const audioDir = path.join(CLASSROOMS_DIR, classroomId, 'audio');
   await ensureDir(audioDir);
 
+  // Check durable files before splitting or choosing a synthesis provider.
+  // A recovered clip keeps its original text and audio identity.
+  for (const scene of eligibleScenes) {
+    for (const action of scene.actions ?? []) {
+      if (action.type === 'speech' && action.audioUrl) {
+        const localPath = classroomSpeechAudioPath(action.audioUrl);
+        if (action.audioInvalidated || (localPath && !await fs.stat(localPath).then((stat) => stat.isFile() && stat.size > 0, () => false))) {
+          delete action.audioUrl;
+          delete action.audioId;
+          delete action.audioDurationSec;
+          delete action.speechAlignment;
+        }
+      }
+    }
+  }
+  if (!eligibleScenes.some((scene) => scene.actions?.some((action) =>
+    action.type === 'speech' && action.text.trim() && !action.audioUrl))) {
+    const alignment = await alignClassroomSpeechActions({ scenes: eligibleScenes, classroomId, signal, language: timingOptions.language });
+    if (alignment.failed > 0) throw new Error(`课堂语音仍有 ${alignment.failed} 段未完成讲稿与动作对齐`);
+    return;
+  }
+
   // Resolve TTS provider (exclude browser-native-tts and operator force-disabled
   // providers — server precedence, #665).
   const ttsProviderIds = Object.entries(getServerTTSProviders())
@@ -821,14 +847,12 @@ export async function generateTTSForClassroom(
     .map(([id]) => id);
   if (ttsProviderIds.length === 0) {
     if (timingOptions.providerId && timingOptions.providerId !== 'default') throw new Error('已锁定的 TTS 供应商不可用，请恢复原配置');
-    log.warn('No server TTS provider configured, skipping TTS generation');
-    return;
+    throw new Error('课堂语音供应商未配置，无法完成课堂音频');
   }
 
   const runtimes = resolveServerTTSRuntimes(ttsProviderIds);
   if (runtimes.length === 0) {
-    log.warn('No usable server TTS provider configured, skipping TTS generation');
-    return;
+    throw new Error('课堂语音供应商不可用，无法完成课堂音频');
   }
   const speechTasks: Array<{
     speechAction: SpeechAction;
@@ -863,8 +887,6 @@ export async function generateTTSForClassroom(
       speechTasks.push({ speechAction, actionId: action.id, runtime, timing });
     }
   }
-
-  if (speechTasks.length === 0) return;
 
   const concurrency = Math.min(
     speechTasks.length,
@@ -922,12 +944,15 @@ export async function generateTTSForClassroom(
   });
 
   const failedActionIds = speechTasks.flatMap((task, index) => outcomes[index] ? [] : [task.actionId]);
-  await alignClassroomSpeechActions({
+  const alignment = await alignClassroomSpeechActions({
     scenes: eligibleScenes,
     classroomId,
     signal,
     language: timingOptions.language,
   });
+  if (alignment.failed > 0 && failedActionIds.length === 0) {
+    throw new Error(`课堂语音仍有 ${alignment.failed} 段未完成讲稿与动作对齐`);
+  }
   if (failedActionIds.length > 0) {
     const error = new Error(
       `课堂语音仍有 ${failedActionIds.length} 段未生成：${failedActionIds.join(', ')}`,
@@ -945,19 +970,16 @@ export type SpeechAlignmentProgress = {
   status: 'aligned' | 'failed';
 };
 
-function classroomSpeechAudioPath(classroomId: string, audioUrl: string): string | undefined {
+function classroomSpeechAudioPath(audioUrl: string): string | undefined {
   let pathname: string;
   try {
     pathname = new URL(audioUrl, 'http://localhost').pathname;
   } catch {
     return undefined;
   }
-  const marker = `/api/openmaic/classroom-media/${encodeURIComponent(classroomId)}/audio/`;
-  const markerIndex = pathname.indexOf(marker);
-  if (markerIndex < 0) return undefined;
-  const filename = decodeURIComponent(pathname.slice(markerIndex + marker.length));
-  if (!filename || filename !== path.basename(filename)) return undefined;
-  return path.join(CLASSROOMS_DIR, classroomId, 'audio', filename);
+  // Promotion reuses valid clips owned by the test classroom. Resolve their
+  // actual local owner rather than requiring the newly generated classroom ID.
+  return classroomAudioStoragePath(CLASSROOMS_DIR, pathname) ?? undefined;
 }
 
 /** Align persisted narration without regenerating either its audio or wording. */
@@ -973,7 +995,7 @@ export async function alignClassroomSpeechActions(input: {
   const tasks = input.scenes.flatMap((scene) => (scene.actions ?? []).flatMap((action) => {
     if (action.type !== 'speech' || !action.text.trim() || !action.audioUrl) return [];
     if (input.actionKeys && !input.actionKeys.has(JSON.stringify([scene.id, action.id]))) return [];
-    const audioPath = classroomSpeechAudioPath(input.classroomId, action.audioUrl);
+    const audioPath = classroomSpeechAudioPath(action.audioUrl);
     return audioPath ? [{ action, audioPath, language: scene.timingPlan?.language ?? input.language }] : [];
   }));
   let aligned = 0;

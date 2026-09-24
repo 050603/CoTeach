@@ -84,6 +84,28 @@ For every `slide` scene, decide the visual form during this outline call and rec
 - `representation`: one of `text`, `source-image`, `generated-image`, `native-diagram`, `native-chart`, `table`, `video`, or `mixed`.
 - `rationale`: a short teaching reason for the choice.
 - `resourceRefs`: stable resources bound to this page. Each reference has `resourceId`, `kind` (`source-image`, `generated-image`, or `generated-video`), `required`, `reason`, and optionally its own `observationGoal`.
+- `diagram` (optional, for a native process or relationship diagram): `topology` is `sequence` or `cycle`; `nodes` is an ordered array of `{id, label}`; `edges` is an array of directed `{from, to, label?}` relationships; `annotation` explains the whole diagram separately from its steps. Omitted adjacent edges are inferred. A cycle closes from the last node to the first; a sequence may have an explicitly named backward feedback edge without becoming a cycle. Never make an overall note such as "闭环" a node or connect it as a step.
+
+Example of a structured cycle within `visualIntent` (geometry is chosen during slide authoring):
+
+```json
+"diagram": {
+  "topology": "cycle",
+  "nodes": [
+    {"id": "goal", "label": "教学目标"},
+    {"id": "teach", "label": "新知讲解"},
+    {"id": "practice", "label": "强化练习"},
+    {"id": "feedback", "label": "学习反馈"}
+  ],
+  "edges": [
+    {"from": "goal", "to": "teach"},
+    {"from": "teach", "to": "practice"},
+    {"from": "practice", "to": "feedback"},
+    {"from": "feedback", "to": "goal"}
+  ],
+  "annotation": "依据反馈调整教学"
+}
+```
 
 Choose by teaching value, not a media quota:
 
@@ -91,8 +113,12 @@ Choose by teaching value, not a media quota:
 - Quantitative relationships, processes, causes, sequences, and concept structures should use native charts, shapes, and connectors when those forms communicate the supplied evidence more precisely.
 - A short definition, formula, or conclusion may use `text` with no resource. Do not request an image merely to decorate the page.
 - When an example depends on learners seeing the difference between real objects or between an object and a mistaken interpretation, plan that visible contrast explicitly instead of turning the whole example into text cards.
+- Decide the abstract relationship and the concrete example independently. A native concept diagram may coexist with generated or source illustrations showing what students need to observe. Use `representation: "mixed"` when both are required.
 - A suitable textbook image marked `textbook relation: direct (required)` must be referenced with `kind: "source-image"` and `required: true` on the first slide that fully teaches the linked knowledge point. Direct images that form one necessary observation set must stay together. Candidate images remain optional and should be used only when relevant.
-- If no suitable source image exists and an illustration is materially clearer, request one generated image and bind its `elementId` in `resourceRefs` with `required: true`.
+{{#if imageEnabled}}
+- If no suitable source image exists and an illustration is materially clearer, request generated images for the distinct observations needed on the page and bind each `elementId` in `resourceRefs` with `required: true`. There is no per-page or course image quota. Each request must specify the subject, what to inspect, the essential contrast, and composition; choose `aspectRatio` for the intended layout. Do not add images to pages where they do not help understanding.
+{{/if}}
+- Generated images depict objects and situations. Put exact terms, numbers, definitions, and relationship labels in editable slide text or native diagrams, not inside image prompts.
 - Reuse the same stable `resourceId` across slides when the same asset serves both pages. Define a generated asset in `mediaGenerations` only once; later pages reference it only through `visualIntent.resourceRefs`.
 - Every resource marked `required` is a layout requirement, not a suggestion. The page generator will fail a page that omits it.
 

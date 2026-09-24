@@ -953,6 +953,18 @@ export type TeachingBlueprintPage = {
     object: string;
     bridge: string;
   };
+  /** Independent first-draft decision about whether the page's concrete case needs visual observation. */
+  caseObservation?: {
+    /** Authoring decision; imageWouldHelp is derived for older readers. */
+    kind?: "none" | "generated-image" | "source-image";
+    subjects?: string[];
+    composition?: string;
+    aspectRatio?: "16:9" | "4:3" | "1:1" | "9:16";
+    resourceIds?: string[];
+    imageWouldHelp: boolean;
+    observableDifference: string;
+    reason: string;
+  };
   visualRelationship?: import("@/lib/course-quality-review/types").TeachingVisualRelationship;
   /** Whether this page benefits from using the course's final task as context. */
   taskConnection?: import("@/lib/course-quality-review/types").TeachingTaskConnection;

@@ -170,6 +170,8 @@ export type QuickDesignRequest = {
   assessmentMode?: AssessmentMode;
   /** Full output or one complete lesson selected from the formal outline. */
   generationScope?: ClassroomGenerationScope;
+  /** Exact knowledge section explicitly chosen at the outline review checkpoint. */
+  testSectionId?: string;
   teacherBrief: string;
   resourcePackage?: CourseResourcePackage;
   supplementalAnswers?: { brief: string };
@@ -555,18 +557,20 @@ async function awaitTeacherReviewCheckpoint(
   },
 ): Promise<{ mode: "auto-adopted" | "teacher-confirmed"; actorId?: string }> {
   const reviewAvailableUntil = checkpoint.windowMs === null ? null : new Date(Date.now() + checkpoint.windowMs);
+  const waitsForTestSection = checkpoint.kind === "outline" && checkpoint.windowMs === null;
   const updated = await designGenerationJobs.update({
     where: { id: job.id, status: "running", executionId: job.executionId },
     data: {
-      status: "review_available",
-      reviewStatus: "available",
+      status: waitsForTestSection ? "paused" : "review_available",
+      reviewStatus: waitsForTestSection ? "paused" : "available",
       reviewAvailableUntil,
       step: checkpoint.step,
       stepIndex: checkpoint.stepIndex,
       progress: Math.max(job.progress, checkpoint.progress),
       message: checkpoint.availableMessage,
       lastHeartbeatAt: new Date(),
-      leaseExpiresAt: designLeaseDeadline(),
+      leaseExpiresAt: waitsForTestSection ? null : designLeaseDeadline(),
+      ...(waitsForTestSection ? { executionId: null, executionOwner: null } : {}),
       version: { increment: 1 },
     },
   });
@@ -575,10 +579,12 @@ async function awaitTeacherReviewCheckpoint(
   // Release the single design worker so other teachers' queued courses can
   // start while this course waits for an explicit decision.
   if (isPersistentCourseDesignReview(checkpoint.windowMs)) {
-    await designGenerationJobs.updateMany({
-      where: { id: job.id, status: "review_available", executionId: job.executionId },
-      data: { executionId: null, executionOwner: null, leaseExpiresAt: null },
-    });
+    if (!waitsForTestSection) {
+      await designGenerationJobs.updateMany({
+        where: { id: job.id, status: "review_available", executionId: job.executionId },
+        data: { executionId: null, executionOwner: null, leaseExpiresAt: null },
+      });
+    }
     throw new CourseDesignReviewPendingError(checkpoint.kind);
   }
   let heartbeatAt = Date.now();
@@ -725,6 +731,7 @@ export async function resumeCourseDesignAfterOutlineReview(
     knowledgeGraph?: KnowledgeGraph;
     lessonOutline?: LessonOutlineSection[];
     sceneOutlines?: OpenMaicSceneOutlineSnapshot[];
+    testSectionId?: string;
   },
 ): Promise<CourseDesignGenerationJob | null> {
   const job = await designGenerationJobs.findUnique({ where: { courseId } });
@@ -732,6 +739,18 @@ export async function resumeCourseDesignAfterOutlineReview(
   const reviewKind = reviewKindForStep(job.step);
   if (review?.reviewKind && review.reviewKind !== reviewKind) {
     throw new Error("待确认内容已经更新，请重新打开后再提交");
+  }
+  const request = job.request as unknown as QuickDesignRequest;
+  const testSectionId = review?.testSectionId?.trim();
+  if (reviewKind === "outline" && request.generationScope === "test-lesson") {
+    if (!testSectionId || !review?.sceneOutlines?.length) {
+      throw new TestLessonSelectionError("请在完整大纲中选择一个知识小节后再生成。");
+    }
+    try {
+      selectClassroomGenerationOutlines(review.sceneOutlines, "test-lesson", "", testSectionId);
+    } catch (error) {
+      throw new TestLessonSelectionError(error instanceof Error ? error.message : "测试小节无效，请重新选择。");
+    }
   }
 
   if (reviewKind === "knowledge" && (review?.knowledgePoints || review?.knowledgeGraph)) {
@@ -776,6 +795,13 @@ export async function resumeCourseDesignAfterOutlineReview(
         const languageDirective = review.sceneOutlines.find((outline) => outline.courseLanguageDirective)
           ?.courseLanguageDirective ?? ZH_CN_COURSE_LANGUAGE_DIRECTIVE;
         const compiled = teachingBlueprintToOutlines(teachingBlueprint, languageDirective);
+        if (request.generationScope === "test-lesson") {
+          try {
+            selectClassroomGenerationOutlines(compiled, "test-lesson", "", testSectionId);
+          } catch (error) {
+            throw new TestLessonSelectionError(error instanceof Error ? error.message : "测试小节无效，请重新选择。");
+          }
+        }
         return {
           ...course,
           content: {
@@ -803,8 +829,7 @@ export async function resumeCourseDesignAfterOutlineReview(
     });
   }
 
-  const request = job.request as unknown as QuickDesignRequest;
-  const hasLiveRunner = reviewKind !== "capacity" && Boolean(
+  const hasLiveRunner = reviewKind !== "capacity" && Boolean(job.executionId &&
     job.lastHeartbeatAt && Date.now() - job.lastHeartbeatAt.getTime() < 5_000,
   );
   return designGenerationJobs.update({
@@ -819,6 +844,7 @@ export async function resumeCourseDesignAfterOutlineReview(
         resumeReviewKind: reviewKind,
         ...(review?.actorId ? { reviewActorId: review.actorId } : {}),
         ...(reviewKind === "capacity" ? { capacityDecisionAccepted: true } : {}),
+        ...(reviewKind === "outline" && request.generationScope === "test-lesson" ? { testSectionId } : {}),
       } as unknown as Prisma.InputJsonValue,
       message: reviewKind === "knowledge"
         ? "已采用教师确认的知识图谱，正在生成课程大纲"
@@ -1673,6 +1699,7 @@ export function buildOpenMaicKnowledgeLectureRequirement(
   request: QuickDesignRequest,
   aiDurationMin: number,
 ): string {
+  const precedingStages = precedingAiLectureStages(content);
   const sectionMap = new Map<string, { title: string; pointNames: string[] }>();
   for (const point of content.knowledgePoints) {
     const key = point.groupId?.trim() || point.groupName?.trim() || point.id;
@@ -1699,11 +1726,28 @@ export function buildOpenMaicKnowledgeLectureRequirement(
     `课程目标：${(course.learningObjectives ?? []).join("；") || course.summary}。`,
     formatTeachingConstraintsForChinesePrompt(buildCourseTeachingConstraints(course, content)),
     `教师补充要求：${teacherGenerationBrief(request) || "无"}。`,
+    precedingStages.length
+      ? `知识讲授前，教师已经完成以下阶段（只作为学生已有经历，不生成这些页面、图片观察、比较或提问）：${JSON.stringify(precedingStages)}。AI 第一页直接讲授本阶段首个新知识，最多用一句话承接。`
+      : "AI 第一页直接进入首个新知识，不制作只有问候或目标的导入页。",
     sections.length ? `内容按以下小节组织：\n${sections.join("\n")}` : "",
     "以教师提供的课程资料作为事实依据。",
     loadSnippet("slide-title-guidelines"),
     "本步骤只规划知识讲授 slide，以及确有必要且配置完整的通用 interactive；不要生成 quiz 或 PBL。每个页面只承担一个主要认知任务：紧密相关且共用同一视觉焦点的定义与关系可同页；完整例子、反例/边界、操作步骤或学生练习若需独立说明就应拆页。一页预计连续讲授超过约 4 分钟时必须在自然理解转折处继续拆分，也不要把一个完整概念机械拆成多张稀疏页面。每个 slide 的 keyPoints 根据本页职责、学生已有基础与知识难度选择互补且必要的信息单元；保留理解所需的关系和条件，不设条目配额，不用泛化口号凑数，也不要为排版而默认添加 Table。",
   ].filter(Boolean).join("\n\n");
+}
+
+export function precedingAiLectureStages(
+  content: Pick<CourseContent, "stagePlan">,
+): NonNullable<TeachingBlueprintInput["precedingStageActivities"]> {
+  const stages = content.stagePlan?.stages ?? [];
+  const aiStageIndex = stages.findIndex((stage) => stage.key === "ai-learning");
+  if (aiStageIndex <= 0) return [];
+  return stages.slice(0, aiStageIndex).map((stage) => ({
+    stageKey: stage.key,
+    title: stage.title,
+    teacherActions: stage.teacherActions ?? "",
+    studentRequirements: stage.requirements ?? "",
+  }));
 }
 
 export function buildTeachingBlueprintSectionPlans(
@@ -1804,7 +1848,9 @@ export function buildTeachingBlueprintSectionPlans(
     // crowded slide. The upper suggestion still leaves the planner freedom to
     // keep tightly coupled relations together.
     const suggestedMinPages = Math.max(1, Math.ceil(teachingBudgetSec / 180));
-    const timeSupportedPages = Math.max(suggestedMinPages, Math.floor(teachingBudgetSec / 60));
+    // Short, readable slides can advance more quickly than one per minute;
+    // allow the blueprint to separate visual cases from dense definitions.
+    const timeSupportedPages = Math.max(suggestedMinPages, Math.floor(teachingBudgetSec / 45));
     return {
       title,
       knowledgePointIds,
@@ -1821,14 +1867,64 @@ export function buildTeachingBlueprintSectionPlans(
   });
 }
 
+export function collectPriorSourceExamples(
+  previous: TeachingBlueprint | undefined,
+  previousPoints: readonly KnowledgePoint[],
+  currentPoints: readonly KnowledgePoint[],
+  sourceContext: string,
+  imageGenerationEnabled: boolean,
+): NonNullable<TeachingBlueprintInput["priorSourceExamples"]> {
+  if (!previous || !sourceContext.trim()) return [];
+  const comparableSource = sourceContext.replace(/\s+/g, "");
+  const previousPointById = new Map(previousPoints.map((point) => [point.id, point]));
+  const examples: NonNullable<TeachingBlueprintInput["priorSourceExamples"]>[number][] = [];
+  for (const section of previous.sections) {
+    for (const unit of section.units) {
+      if (unit.sourceKind !== "course-source" || !unit.workedExample?.trim()) continue;
+      const sourceQuote = unit.evidenceQuotes.find((quote) => (
+        quote.trim().length >= 16 && comparableSource.includes(quote.replace(/\s+/g, ""))
+      ));
+      if (!sourceQuote) continue;
+      const oldPoints = unit.knowledgePointIds.flatMap((id) => previousPointById.get(id) ?? []);
+      const knowledgePointIds = currentPoints.filter((point) => oldPoints.some((old) => (
+        point.name === old.name || (point.sourceKnowledgePointIds ?? []).some((sourceId) =>
+          (old.sourceKnowledgePointIds ?? []).includes(sourceId))
+      ))).map((point) => point.id);
+      if (!knowledgePointIds.length) continue;
+      const imagePlanned = imageGenerationEnabled && section.pages.some((page) => (
+        page.unitIds.includes(unit.id) && page.caseObservation?.imageWouldHelp === true
+      ));
+      examples.push({ knowledgePointIds, workedExample: unit.workedExample, sourceQuote, imagePlanned });
+    }
+  }
+  return examples;
+}
+
 function buildTeachingBlueprintInput(
   course: Course,
   content: CourseContent,
   request: QuickDesignRequest,
   aiDurationMin: number,
   textbookFigures: readonly TeachingBlueprintTextbookFigure[] = [],
+  priorContent?: CourseContent,
 ): TeachingBlueprintInput {
   const totalDurationSec = aiDurationMin * 60;
+  const sourceContext = [
+    buildCourseTeachingSourceContext(
+      request.resourcePackage,
+      teacherGenerationBrief(request),
+      request.referenceMaterials ?? [],
+    ),
+    textbookTeachingSourceContext(request),
+  ].filter(Boolean).join("\n\n");
+  // A later textbook retrieval may select different excerpts from the same
+  // confirmed revision. Keep previously verified source examples available
+  // when the teacher's textbook selection is unchanged.
+  const priorEvidenceIsCurrent = priorContent
+    && JSON.stringify(priorContent.textbookSelections ?? []) === JSON.stringify(request.textbookSelections ?? []);
+  const verificationSource = priorEvidenceIsCurrent
+    ? `${sourceContext}\n${JSON.stringify(priorContent.courseEvidence ?? "")}`
+    : sourceContext;
   return {
     generationModelFingerprint: request.generationModelString ?? findServerDefaultModelString(),
     courseTitle: course.name,
@@ -1845,14 +1941,15 @@ function buildTeachingBlueprintInput(
     generationMode: request.generationMode ?? "standard",
     teacherBrief: [teacherGenerationBrief(request), blueprintResourceCapabilityBrief(request)].filter(Boolean).join("\n"),
     teachingRequirements: content.teachingRequirements,
-    sourceContext: [
-      buildCourseTeachingSourceContext(
-        request.resourcePackage,
-        teacherGenerationBrief(request),
-        request.referenceMaterials ?? [],
-      ),
-      textbookTeachingSourceContext(request),
-    ].filter(Boolean).join("\n\n"),
+    sourceContext,
+    priorSourceExamples: collectPriorSourceExamples(
+      priorContent?.teachingBlueprint,
+      priorContent?.knowledgePoints ?? [],
+      content.knowledgePoints,
+      verificationSource,
+      request.options?.enableImageGeneration !== false,
+    ),
+    precedingStageActivities: precedingAiLectureStages(content),
     textbookFigures,
     sectionPlans: buildTeachingBlueprintSectionPlans(content, totalDurationSec),
   };
@@ -1864,6 +1961,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
   content: CourseContent,
   request: QuickDesignRequest,
   signal: AbortSignal,
+  priorContent?: CourseContent,
 ): Promise<{
   blueprint: TeachingBlueprint;
   outlines: Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
@@ -1897,7 +1995,7 @@ async function generateNewSystemTeachingBlueprintOutlines(
   });
   const modelFingerprint = resolvedCourseDesignModelFingerprint(resolved);
   const input = {
-    ...buildTeachingBlueprintInput(course, content, request, aiDurationMin, textbookFigures),
+    ...buildTeachingBlueprintInput(course, content, request, aiDurationMin, textbookFigures, priorContent),
     generationModelFingerprint: modelFingerprint,
   };
   const expectedFingerprint = teachingBlueprintInputFingerprint(input);
@@ -2185,6 +2283,7 @@ async function enqueueClassroomGeneration(
   generationContractVersion?: 2 | 3,
   generationScope: ClassroomGenerationScope = "full-course",
   textbookEvidence?: CourseEvidenceSnapshot,
+  testSectionId?: string,
 ): Promise<void> {
   const textbookFigureResources = await resolveCourseTextbookFigures(textbookEvidence, course.content.knowledgePoints);
   assertRequiredTextbookFiguresAvailable(textbookFigureResources);
@@ -2205,7 +2304,7 @@ async function enqueueClassroomGeneration(
     estimatedDuration: scene.estimatedDuration ?? scene.targetDurationSec ?? 300,
     order: scene.order ?? index,
   })) as Array<SceneOutline & OpenMaicSceneOutlineSnapshot>;
-  const selection = selectClassroomGenerationOutlines(confirmedSceneOutlines, generationScope, teacherBrief);
+  const selection = selectClassroomGenerationOutlines(confirmedSceneOutlines, generationScope, teacherBrief, testSectionId);
   const sceneOutlines = confirmedSceneOutlines;
   const generatedLanguageDirective = sceneOutlines.find(
     (scene) => typeof scene.courseLanguageDirective === "string"
@@ -2325,6 +2424,16 @@ export class TestLessonPromotionError extends Error {
   }
 }
 
+export class TestLessonSelectionError extends Error {
+  readonly code = "INVALID_TEST_LESSON_SELECTION";
+  readonly status = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "TestLessonSelectionError";
+  }
+}
+
 /**
  * Promote a completed single-section test run to the already approved full
  * outline. The content job keeps compatible page checkpoints, so the accepted
@@ -2386,6 +2495,7 @@ export async function promoteTestLessonToFullCourse(
   const testOutlineCount = contentRequest.testLesson?.sceneOutlineIds.length ?? 0;
   const fullSceneOutlines = resolveFullCoursePromotionOutlines({
     persistedOutlines: contentRequest.sceneOutlines as Array<SceneOutline & OpenMaicSceneOutlineSnapshot> | undefined,
+    acceptedTestOutlines: course.content._openmaicSceneOutlines as Array<SceneOutline & OpenMaicSceneOutlineSnapshot> | undefined,
     expectedFullSceneCount: contentRequest.fullSceneCount,
     testLesson: contentRequest.testLesson,
   });
@@ -3122,6 +3232,7 @@ async function runNewSystemCourseDesign(
         content,
         request,
         controller.signal,
+        initialCourse.content,
       );
       sceneOutlines = compiled.outlines;
       content = { ...content, teachingBlueprint: compiled.blueprint };
@@ -3173,8 +3284,10 @@ async function runNewSystemCourseDesign(
       step: "outlineReview",
       stepIndex: 2,
       progress: 92,
-      windowMs: NEW_SYSTEM_REVIEW_WINDOW_MS,
-      availableMessage: "课程大纲已生成，可在 20 秒内查看、修改并确认",
+      windowMs: request.generationScope === "test-lesson" ? null : NEW_SYSTEM_REVIEW_WINDOW_MS,
+      availableMessage: request.generationScope === "test-lesson"
+        ? "课程大纲已生成，请选择一个知识小节进行测试生成"
+        : "课程大纲已生成，可在 20 秒内查看、修改并确认",
       autoContinueMessage: "未收到修改，正在按当前课程大纲生成课堂页面",
     });
     const reviewedCourse = await getCourse(request.courseId);
@@ -3268,6 +3381,7 @@ async function runNewSystemCourseDesign(
     request.generationContractVersion,
     request.generationScope ?? "full-course",
     request.textbookEvidence,
+    request.testSectionId,
   );
   const isTestLesson = request.generationScope === "test-lesson";
   await designGenerationJobs.update({
