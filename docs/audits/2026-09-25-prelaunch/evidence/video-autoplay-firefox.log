@@ -1,9 +1,0 @@
-
-Running 1 test using 1 worker
-
-
-(node:1174018) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
-(Use `node --trace-warnings ...` to show where the warning was created)
-
-[1/1] [firefox] › e2e/teacher-classroom-editor.spec.ts:392:5 › video playback shows a retry when the browser denies automatic play
-  1 passed (9.9s)

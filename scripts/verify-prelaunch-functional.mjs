@@ -14,7 +14,7 @@ import JSZip from 'jszip';
 import PptxGenJS from 'pptxgenjs';
 
 const root = path.resolve(import.meta.dirname, '..');
-const output = path.resolve(process.env.PRELAUNCH_OUTPUT_DIR || path.join(root, 'docs/audits/2026-09-25-prelaunch/evidence/functional'));
+const output = path.resolve(process.env.PRELAUNCH_OUTPUT_DIR || path.join(root, 'test-results/prelaunch/functional'));
 mkdirSync(output, { recursive: true });
 const container = `openpbl-prelaunch-${randomUUID()}`;
 const redisContainer = `${container}-redis`;

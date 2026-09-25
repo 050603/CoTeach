@@ -1,5 +1,0 @@
-
-Running 1 test using 1 worker
-
-[1/1] [webkit] › e2e/teacher-classroom-editor.spec.ts:392:5 › video playback shows a retry when the browser denies automatic play
-  1 passed (23.0s)

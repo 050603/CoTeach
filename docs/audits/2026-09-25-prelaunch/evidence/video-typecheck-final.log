@@ -1,6 +1,0 @@
-
-> coteach-app@0.1.0 typecheck /home/lkj/OpenPBL/openPBL
-> node scripts/run-next-production.mjs typegen && tsc -p tsconfig.check.json --noEmit
-
-Generating route types...
-✓ Types generated successfully

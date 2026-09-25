@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
-const output = path.resolve(process.env.PRELAUNCH_OUTPUT_DIR || path.join(root, 'docs/audits/2026-09-25-prelaunch/evidence'));
+const output = path.resolve(process.env.PRELAUNCH_OUTPUT_DIR || path.join(root, 'test-results/prelaunch'));
 mkdirSync(output, { recursive: true });
 const baseURL = process.env.PRELAUNCH_BASE_URL || 'http://127.0.0.1:3000';
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(baseURL).hostname)) throw new Error('Browser audit requires a local instance');

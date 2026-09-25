@@ -1,9 +1,0 @@
-{
-  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final/teaching/firefox/dpr1",
-  "browser": "firefox",
-  "browserVersion": "151.0",
-  "dpr": 1,
-  "checks": 40,
-  "failures": 0,
-  "failedChecks": []
-}

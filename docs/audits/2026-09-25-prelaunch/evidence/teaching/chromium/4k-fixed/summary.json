@@ -1,9 +1,0 @@
-{
-  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/teaching/chromium/4k-fixed",
-  "browser": "chromium",
-  "browserVersion": "149.0.7827.55",
-  "dpr": 1,
-  "checks": 3,
-  "failures": 0,
-  "failedChecks": []
-}

@@ -1,9 +1,0 @@
-
-Running 1 test using 1 worker
-
-
-(node:1077005) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
-(Use `node --trace-warnings ...` to show where the warning was created)
-
-[1/1] [chromium] › e2e/prelaunch-public-discussion-permission.spec.ts:8:5 › student can switch to text after microphone permission is denied
-  1 passed (5.2s)

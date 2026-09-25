@@ -1,9 +1,0 @@
-
- RUN  v4.1.9 /home/lkj/OpenPBL/openPBL
-
-
- Test Files  2 passed (2)
-      Tests  3 passed (3)
-   Start at  12:45:04
-   Duration  18.32s (transform 856ms, setup 773ms, import 1.06s, tests 361ms, environment 33.29s)
-
