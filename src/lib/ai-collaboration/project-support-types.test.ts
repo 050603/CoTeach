@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { normalizeProjectSupportOutput } from "./project-support-types";
+import { normalizeProjectSupportOutput, projectSupportJsonInstruction } from "./project-support-types";
 
 describe("normalizeProjectSupportOutput", () => {
+  it("limits concise reply guidance to document collaboration", () => {
+    expect(projectSupportJsonInstruction()).toContain("复杂问题用 2 至 4 块");
+    expect(projectSupportJsonInstruction("concise-document")).toContain("默认只用一个简洁的 answer 分块");
+  });
+
   it("keeps server-provided sources and bounds model metadata", () => {
     const normalized = normalizeProjectSupportOutput({
       knowledgePointIds: ["kp-1", "kp-1", "kp-2"],

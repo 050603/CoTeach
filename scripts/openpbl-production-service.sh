@@ -62,9 +62,22 @@ apply_database_migrations() {
 }
 
 run_app() {
+  runtime_server=""
   if [ ! -f "$PROJECT_ROOT/.next-build/standalone/server.js" ]; then
-    echo "未找到平台生产构建，请先运行：pnpm build" >&2
-    exit 1
+    # A build may remove .next-build while the immutable release used by the
+    # previous service is still valid. Keep serving that release until the new
+    # build is complete, instead of entering an auto-restart failure loop.
+    for release_dir in $(ls -dt "$PROJECT_ROOT"/.openpbl-runtime/releases/* 2>/dev/null); do
+      if [ -f "$release_dir/.release-ready" ] && [ -f "$release_dir/server.js" ]; then
+        runtime_server="$release_dir/server.js"
+        break
+      fi
+    done
+    if [ -z "$runtime_server" ]; then
+      echo "未找到平台生产构建或可用的历史版本，请先运行：pnpm build" >&2
+      exit 1
+    fi
+    echo "新构建尚未完成，暂时沿用上一可用版本。"
   fi
 
   load_shared_environment
@@ -110,6 +123,9 @@ run_app() {
   cd "$PROJECT_ROOT"
   export PORT="$APP_PORT"
   export HOSTNAME="${OPENPBL_HOSTNAME:-127.0.0.1}"
+  if [ -n "$runtime_server" ]; then
+    exec /usr/bin/node "$runtime_server"
+  fi
   exec /usr/bin/node scripts/run-next-production.mjs start
 }
 

@@ -69,6 +69,8 @@ describe("delegated work policy", () => {
     });
     expect(prompts.system).toContain("同一项工作在不同项目中结论可以不同");
     expect(prompts.system).toContain("搜集资料并汇总");
+    expect(prompts.system).toContain("只接受该部分");
+    expect(prompts.system).toContain("连续布置边缘小任务");
     expect(prompts.user).toContain("自主采集数据");
     expect(prompts.user).not.toContain("证据质量（权重 45）");
     expect(prompts.user).not.toContain("重视学生自主调查与证据分析过程");
@@ -150,6 +152,35 @@ describe("delegated work policy", () => {
       operation: "insert-before",
       targetText: "研究方法",
     });
+  });
+
+  it("keeps delivery as review-only when the model targets a partial or missing paragraph", () => {
+    const assessment = normalizeDelegatedWorkAssessment({
+      decision: "accepted",
+      taskTitle: "整理术语表",
+      proposedScope: "整理已有术语",
+    });
+    const result = normalizeDelegatedWorkDelivery({
+      assessment,
+      researchMode: "model",
+      documentText: "研究方法与对象\n我们记录了八人的意见。",
+      raw: {
+        deliverable: {
+          content: "| 术语 | 说明 |\n|---|---|\n| 样本 | 八人 |",
+          documentActions: [{
+            operation: "replace",
+            targetText: "研究方法",
+            content: "术语表",
+          }],
+        },
+      },
+    });
+    expect(result.deliverable?.documentActions).toEqual([{
+      operation: "none",
+      targetText: "",
+      content: "",
+      description: "本次只提交资料，不修改文档",
+    }]);
   });
 
   it("does not blame an empty model delivery on the student's scope", () => {

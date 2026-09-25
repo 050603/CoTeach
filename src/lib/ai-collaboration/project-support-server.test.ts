@@ -116,4 +116,19 @@ describe("resolveProjectSupportContext", () => {
     }));
     expect(result.sources).toHaveLength(1);
   });
+
+  it("bases help depth on the student's actual request and reported attempt", async () => {
+    const result = await resolveProjectSupportContext({
+      ...input(false),
+      message: "我已经按三天记录了用水量，但周二突然增加；怎样区分异常值和真实变化？",
+      history: [
+        { role: "user", content: "准备比较三天用水量。" },
+        { role: "assistant", content: "先按时间记录。" },
+      ],
+      allowRetrieval: false,
+    });
+    expect(result.promptContext).toContain("周二突然增加");
+    expect(result.promptContext).toContain("解释可能原因及如何验证");
+    expect(result.promptContext).not.toContain("第 1 层");
+  });
 });

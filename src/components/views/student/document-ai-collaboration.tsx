@@ -34,7 +34,9 @@ import type {
 import type {
   DocumentAiCommentReplyResult,
   DocumentAiCommentThread,
+  DocumentBlockCandidate,
 } from "@/lib/ai-collaboration/document-comment-types";
+import { documentAiCommentStatus } from "@/lib/ai-collaboration/document-comment-types";
 import {
   documentParagraphVersionFingerprint,
   DOCUMENT_COMMENT_REVIEW_BATCH_SIZE,
@@ -54,8 +56,37 @@ import {
 } from "@/lib/ai-collaboration/workspace-kind";
 import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
 import { useProjectMemory } from "@/components/views/student/use-project-memory";
+import { documentVersionDigest } from "@/lib/ai-collaboration/document-version";
 
 type CollaborationMessage = AiMemberWorkspaceMessage;
+
+type DocumentRequestSnapshot = {
+  requestId: string;
+  messageId: string;
+  contributionId: string;
+  createdAt: string;
+  conversationId: string;
+  intent: DocumentCollaborationIntent;
+  message: string;
+  documentHtml: string;
+  selection: PlateDocumentSelection | null;
+  revisionOf?: DeliveryRevision | null;
+};
+
+type DocumentRequestPayload = {
+  requestId?: string;
+  status?: "processing" | "completed" | "failed" | "cancelled";
+  retryAfterMs?: number;
+  retryable?: boolean;
+  error?: string;
+  message?: string;
+  result?: DocumentCollaborationResponse;
+  companionId?: AiContribution["companionId"];
+  conversationId?: string;
+  documentVersion?: string;
+  messages?: Array<{ id: string; role: string }>;
+  memories?: ProjectMemoryEntry[];
+};
 
 type PendingSuggestion = {
   id: string;
@@ -99,16 +130,72 @@ type EditNotice = {
 };
 
 const MODIFICATION_INTENTS = new Set<DocumentCollaborationIntent>(["edit"]);
+const WRITING_INTENTS = new Set<DocumentCollaborationIntent>(["edit", "organize", "delegate"]);
 const PROACTIVE_REVIEW_SETTLE_MS = 20_000;
 const PROACTIVE_REVIEW_JITTER_MS = 10_000;
 const PROACTIVE_REVIEW_RETRY_BASE_MS = 30_000;
 const PROACTIVE_REVIEW_RETRY_MAX_MS = 5 * 60_000;
+const REQUEST_RECOVERY_MAX_MS = 120_000;
+
+function pendingRequestStorageKey(scope: string): string {
+  return `openpbl:document-collaboration:requests:${scope}`;
+}
+
+function requestFailureMessage(error?: string, message?: string, originalMessage?: string): string {
+  if (error === "REQUEST_INTERRUPTED") return "这次回答中断了，你的消息已保留。可以重新尝试。";
+  if (error === "REQUEST_ID_CONFLICT") return "这次请求的内容已变化。请编辑后作为新消息发送。";
+  if (message && message !== originalMessage) return message;
+  return "这次回答没能完成，你的消息已保留。可以重新尝试。";
+}
+
+function readPendingRequestSnapshots(scope: string): DocumentRequestSnapshot[] {
+  try {
+    const parsed: unknown = JSON.parse(window.sessionStorage.getItem(pendingRequestStorageKey(scope)) ?? "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is DocumentRequestSnapshot => {
+      if (!item || typeof item !== "object") return false;
+      const snapshot = item as Partial<DocumentRequestSnapshot>;
+      return typeof snapshot.requestId === "string"
+        && typeof snapshot.messageId === "string"
+        && typeof snapshot.contributionId === "string"
+        && typeof snapshot.message === "string"
+        && typeof snapshot.documentHtml === "string"
+        && typeof snapshot.conversationId === "string"
+        && typeof snapshot.createdAt === "string"
+        && Date.now() - Date.parse(snapshot.createdAt) < 24 * 60 * 60_000;
+    }).slice(-8);
+  } catch {
+    return [];
+  }
+}
+
+function writePendingRequestSnapshots(scope: string, snapshots: DocumentRequestSnapshot[]): void {
+  try {
+    if (snapshots.length) {
+      window.sessionStorage.setItem(pendingRequestStorageKey(scope), JSON.stringify(snapshots.slice(-8)));
+    } else {
+      window.sessionStorage.removeItem(pendingRequestStorageKey(scope));
+    }
+  } catch {
+    // The server task remains authoritative if browser storage is unavailable.
+  }
+}
 
 function plainTextLength(html: string): number {
   if (typeof window === "undefined") return html.replace(/<[^>]*>/g, " ").trim().length;
   const node = window.document.createElement("div");
   node.innerHTML = html;
   return (node.textContent ?? "").replace(/\s+/g, "").length;
+}
+
+function isCommentThreadAnchored(thread: DocumentAiCommentThread, candidates: DocumentBlockCandidate[]): boolean {
+  const expected = (thread.blockText ?? thread.targetText).replace(/\s+/g, " ").trim();
+  const matches = (candidate: DocumentBlockCandidate | undefined) => Boolean(candidate
+    && candidate.text.includes(thread.targetText)
+    && (!thread.blockText || candidate.text.replace(/\s+/g, " ").trim() === expected));
+  if (thread.blockId) return matches(candidates.find((candidate) => candidate.blockId === thread.blockId));
+  if (matches(candidates.find((candidate) => candidate.blockIndex === thread.blockIndex))) return true;
+  return Boolean(thread.blockText && candidates.filter(matches).length === 1);
 }
 
 function nowId(prefix: string): string {
@@ -149,6 +236,7 @@ export function DocumentAiCollaboration({
     heartbeat: true,
   });
   const stageKey = stage?.key ?? "";
+  const requestScope = `${resolvedCourseId ?? courseId}:${studentId}:${stageKey}:${workspaceKind}`;
   const isExternalArtifact = workspaceKind === "external-artifact";
   const workspaceNoun = isExternalArtifact ? "成果协作稿" : "文档";
   const supportedStage = stageKey === "make" && course?.status === "teaching";
@@ -161,12 +249,24 @@ export function DocumentAiCollaboration({
   const submissionIdRef = useRef<string | undefined>(undefined);
   const submissionVersionRef = useRef(1);
   const loadedScopeRef = useRef("");
+  const requestSnapshotsRef = useRef<Map<string, DocumentRequestSnapshot>>(new Map());
+  const activeRequestRef = useRef<{ id: string; controller: AbortController } | null>(null);
+  const recoveredRequestIdsRef = useRef<Set<string>>(new Set());
+  const recoverRequestRef = useRef<((requestId: string) => void) | null>(null);
+  const commentReplySnapshotRef = useRef(new Map<string, {
+    requestId: string;
+    contributionId: string;
+    threadId: string;
+    message: string;
+    documentHtml: string;
+  }>());
   const proactiveRequestRef = useRef<Set<string>>(new Set());
   const analyzedParagraphsRef = useRef<Set<string>>(new Set());
   const proactiveRetryTimerRef = useRef<number | null>(null);
   const proactiveRetryAttemptRef = useRef(0);
-  const taskStarterContextRef = useRef<{ signature: string; length: number; at: number } | null>(null);
   const savedContentRef = useRef("");
+  const currentDocumentRef = useRef("");
+  const currentConversationRef = useRef("legacy");
   const [documentHtml, setDocumentHtml] = useState("");
   const [documentReady, setDocumentReady] = useState(false);
   const [selection, setSelection] = useState<PlateDocumentSelection | null>(null);
@@ -175,6 +275,8 @@ export function DocumentAiCollaboration({
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<CollaborationMessage[]>([]);
   const [aiCommentThreads, setAiCommentThreads] = useState<DocumentAiCommentThread[]>([]);
+  const [invalidCommentIds, setInvalidCommentIds] = useState<Set<string>>(new Set());
+  const [commentStatusError, setCommentStatusError] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState("legacy");
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -186,11 +288,10 @@ export function DocumentAiCollaboration({
   const [undoableEdit, setUndoableEdit] = useState<UndoableEdit | null>(null);
   const [editNotice, setEditNotice] = useState<EditNotice | null>(null);
   const [memberOpen, setMemberOpen] = useState(false);
-  const [memberMode, setMemberMode] = useState<"discuss" | "task">("discuss");
-  const [taskStarters, setTaskStarters] = useState<string[]>([]);
-  const [taskStartersBusy, setTaskStartersBusy] = useState(false);
+  const [quickIntent, setQuickIntent] = useState<DocumentCollaborationIntent | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [proactiveReviewRetry, setProactiveReviewRetry] = useState(0);
+  const [proactiveReviewEnabled, setProactiveReviewEnabled] = useState(true);
   const [submittedVersion, setSubmittedVersion] = useState<{
     sequence: number;
     submittedAt?: string;
@@ -279,19 +380,19 @@ export function DocumentAiCollaboration({
     // subsequent refreshes load that submission instead of reinserting it.
     savedContentRef.current = existingDocument ? initialContent : (isExternalArtifact ? "" : initialContent);
     setDocumentHtml(initialContent);
+    currentDocumentRef.current = initialContent;
     setDocumentReady(true);
     setSaveStatus(existingDocument || !isExternalArtifact ? "saved" : "unsaved");
     setSelection(null);
     setPendingSuggestion(null);
     setPendingDelivery(null);
     setDeliveryRevision(null);
-    setTaskStarters([]);
-    taskStarterContextRef.current = null;
     proactiveRequestRef.current = new Set();
     analyzedParagraphsRef.current = new Set();
     proactiveRetryAttemptRef.current = 0;
     setAiCommentThreads([]);
     setUndoableEdit(null);
+    requestSnapshotsRef.current = new Map(readPendingRequestSnapshots(scopeKey).map((snapshot) => [snapshot.requestId, snapshot]));
   }, [course, existingDocument, existingDocument?.content, existingDocument?.id, existingDocument?.version, isExternalArtifact, stageKey, studentId, supportedStage, workspaceKind]);
 
   useEffect(() => {
@@ -327,16 +428,61 @@ export function DocumentAiCollaboration({
         }>;
         commentThreads?: DocumentAiCommentThread[];
         reviewedParagraphFingerprints?: string[];
+        proactiveReviewEnabled?: boolean;
+        requests?: Array<{
+          requestId: string;
+          conversationId?: string;
+          message?: string;
+          intent?: DocumentCollaborationIntent;
+          status: "processing" | "failed" | "cancelled";
+          createdAt?: string;
+          error?: string;
+          retryable?: boolean;
+        }>;
       };
       if (controller.signal.aborted) return;
-      setConversationId(payload.conversationId || "legacy");
-      setMessages((payload.messages ?? []).map((message) => ({
+      setProactiveReviewEnabled(payload.proactiveReviewEnabled !== false);
+      const loadedConversationId = payload.conversationId || "legacy";
+      currentConversationRef.current = loadedConversationId;
+      setConversationId(loadedConversationId);
+      const loadedMessages: CollaborationMessage[] = (payload.messages ?? []).map((message) => ({
         id: message.id,
         role: message.role === "student" ? "user" : "assistant",
         content: message.content,
         createdAt: message.createdAt,
         support: message.projectSupport,
-      })));
+      }));
+      const snapshots = readPendingRequestSnapshots(`${resolvedCourseId}:${studentId}:${stageKey}:${workspaceKind}`);
+      requestSnapshotsRef.current = new Map(snapshots.map((snapshot) => [snapshot.requestId, snapshot]));
+      const pendingById = new Map((payload.requests ?? [])
+        .filter((request) => !request.conversationId || request.conversationId === loadedConversationId)
+        .map((request) => [request.requestId, request]));
+      const requestIds = new Set([...pendingById.keys(), ...snapshots
+        .filter((snapshot) => snapshot.conversationId === loadedConversationId)
+        .map((snapshot) => snapshot.requestId)]);
+      for (const requestId of requestIds) {
+        const request = pendingById.get(requestId);
+        const snapshot = requestSnapshotsRef.current.get(requestId);
+        const content = request?.message ?? snapshot?.message;
+        if (!content) continue;
+        loadedMessages.push({
+          id: snapshot?.messageId ?? `document-request-${requestId}`,
+          role: "user",
+          content,
+          createdAt: request?.createdAt ?? snapshot?.createdAt ?? new Date().toISOString(),
+          requestId,
+          requestStatus: request?.status === "failed" ? "failed" : request?.status === "cancelled" ? "cancelled" : "recovering",
+          requestError: request?.status === "failed" ? requestFailureMessage(request.error, undefined, content) : undefined,
+          retryable: Boolean(snapshot) && request?.retryable !== false,
+        });
+      }
+      setMessages(loadedMessages);
+      for (const requestId of requestIds) {
+        const status = pendingById.get(requestId)?.status;
+        if (status !== "failed" && status !== "cancelled") {
+          window.setTimeout(() => recoverRequestRef.current?.(requestId), 0);
+        }
+      }
       const commentThreads = payload.commentThreads ?? [];
       setAiCommentThreads(commentThreads);
       const reviewedFingerprints = new Set(payload.reviewedParagraphFingerprints ?? []);
@@ -354,47 +500,6 @@ export function DocumentAiCollaboration({
     });
     return () => controller.abort();
   }, [resolvedCourseId, stageKey, studentId, supportedStage, workspaceKind]);
-
-  useEffect(() => {
-    if (!memberOpen || !course || !studentId || !supportedStage) return;
-    const textLength = plainTextLength(documentHtml);
-    const signature = `${course.id}:${stageKey}:${documentHtml.slice(0, 900)}:${documentHtml.slice(-900)}`;
-    const previous = taskStarterContextRef.current;
-    if (previous?.signature === signature) return;
-    if (
-      previous
-      && Math.abs(textLength - previous.length) < 80
-      && Date.now() - previous.at < 60_000
-    ) return;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      setTaskStartersBusy(true);
-      void fetch("/api/ai-collaboration/document", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          action: "suggest-delegated-work",
-          courseId: course.id,
-          studentId,
-          stageKey,
-          workspaceKind,
-          documentHtml,
-        }),
-      }).then(async (response) => {
-        const payload = await response.json().catch(() => ({})) as { starters?: string[] };
-        if (!response.ok || !Array.isArray(payload.starters) || !payload.starters.length) return;
-        taskStarterContextRef.current = { signature, length: textLength, at: Date.now() };
-        setTaskStarters(payload.starters.slice(0, 3));
-      }).catch(() => undefined).finally(() => {
-        if (!controller.signal.aborted) setTaskStartersBusy(false);
-      });
-    }, 700);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [course, documentHtml, memberOpen, stageKey, studentId, supportedStage, workspaceKind]);
 
   const persistDocument = useCallback(async (
     content: string,
@@ -440,7 +545,7 @@ export function DocumentAiCollaboration({
   }, [course, documentHtml, documentReady, persistDocument, stageKey, studentId, supportedStage]);
 
   useEffect(() => {
-    if (!documentReady || !historyLoaded || !course || !studentId || !supportedStage) return;
+    if (!documentReady || !historyLoaded || !course || !studentId || !supportedStage || !proactiveReviewEnabled) return;
     if (saveStatus !== "saved" || busy || pendingSuggestion || pendingDelivery) return;
     const scopeKey = `${course.id}:${studentId}:${stageKey}:${workspaceKind}`;
     const storageKey = `openpbl:ai-collaboration:paragraph-review:v${DOCUMENT_COMMENT_REVIEW_VERSION}:${scopeKey}`;
@@ -506,6 +611,10 @@ export function DocumentAiCollaboration({
         const payload = await response.json().catch(() => ({})) as {
           commentThreads?: DocumentAiCommentThread[];
           reviewedParagraphFingerprints?: string[];
+          reviewedCandidateIds?: string[];
+          complete?: boolean;
+          documentVersion?: string;
+          proactiveReviewEnabled?: boolean;
         };
         if (!response.ok) {
           const retryAfterSeconds = Number(response.headers.get("Retry-After"));
@@ -514,16 +623,31 @@ export function DocumentAiCollaboration({
           );
           return;
         }
+        if (payload.proactiveReviewEnabled === false) {
+          setProactiveReviewEnabled(false);
+          return;
+        }
+        const currentHash = payload.documentVersion
+          ? await documentVersionDigest(currentDocumentRef.current).catch(() => null)
+          : null;
+        if (currentDocumentRef.current !== documentHtml || (payload.documentVersion && currentHash !== null && currentHash !== payload.documentVersion)) {
+          scheduleProactiveReviewWake(1_500);
+          return;
+        }
         const confirmedFingerprints = new Set(payload.reviewedParagraphFingerprints ?? []);
-        const confirmedRequests = requests.filter(({ signature }) =>
+        const confirmedCandidateIds = new Set(payload.reviewedCandidateIds ?? []);
+        const confirmedRequests = requests.filter(({ signature, candidate }) =>
           confirmedFingerprints.has(signature)
+          || confirmedCandidateIds.has(candidate.blockId ? `block:${candidate.blockId}` : `index:${candidate.blockIndex}`)
         );
         confirmedRequests.forEach(({ signature }) => analyzedParagraphsRef.current.add(signature));
-        window.sessionStorage.setItem(
-          storageKey,
-          JSON.stringify([...analyzedParagraphsRef.current].slice(-200)),
-        );
-        if (confirmedRequests.length < requests.length) {
+        try {
+          window.sessionStorage.setItem(
+            storageKey,
+            JSON.stringify([...analyzedParagraphsRef.current].slice(-200)),
+          );
+        } catch { /* Server review checkpoints remain authoritative. */ }
+        if (payload.complete === false || confirmedRequests.length < requests.length) {
           scheduleProactiveReviewRetry();
         } else {
           proactiveRetryAttemptRef.current = 0;
@@ -531,7 +655,17 @@ export function DocumentAiCollaboration({
             scheduleProactiveReviewWake(Math.floor(Math.random() * PROACTIVE_REVIEW_JITTER_MS));
           }
         }
-        const incoming = payload.commentThreads ?? [];
+        const liveCandidates = editorRef.current?.getBlockCandidates() ?? [];
+        const incoming = (payload.commentThreads ?? []).filter((thread) => {
+          const original = requests.find(({ candidate }) =>
+            candidate.blockId ? candidate.blockId === thread.blockId : candidate.blockIndex === thread.blockIndex);
+          if (!original) return false;
+          const live = liveCandidates.find((candidate) =>
+            original.candidate.blockId ? candidate.blockId === original.candidate.blockId : candidate.blockIndex === original.candidate.blockIndex);
+          return Boolean(live
+            && live.text.replace(/\s+/g, " ").trim() === original.candidate.text.replace(/\s+/g, " ").trim()
+            && live.text.includes(thread.targetText));
+        });
         if (!incoming.length) return;
         const incomingIds = new Set(incoming.map((thread) => thread.id));
         setAiCommentThreads((current) => [
@@ -541,9 +675,18 @@ export function DocumentAiCollaboration({
       }).catch(() => scheduleProactiveReviewRetry()).finally(() => {
         requests.forEach(({ signature }) => proactiveRequestRef.current.delete(signature));
       });
-    }, PROACTIVE_REVIEW_SETTLE_MS + stableJitterMs);
+    }, proactiveReviewRetry > 0 ? 1_000 : PROACTIVE_REVIEW_SETTLE_MS + stableJitterMs);
     return () => window.clearTimeout(timer);
-  }, [aiCommentThreads, busy, course, documentHtml, documentReady, historyLoaded, pendingDelivery, pendingSuggestion, proactiveReviewRetry, saveStatus, scheduleProactiveReviewRetry, scheduleProactiveReviewWake, stageKey, studentId, supportedStage, workspaceKind]);
+  }, [aiCommentThreads, busy, course, documentHtml, documentReady, historyLoaded, pendingDelivery, pendingSuggestion, proactiveReviewEnabled, proactiveReviewRetry, saveStatus, scheduleProactiveReviewRetry, scheduleProactiveReviewWake, stageKey, studentId, supportedStage, workspaceKind]);
+
+  useEffect(() => {
+    if (!documentReady) return;
+    const candidates = editorRef.current?.getBlockCandidates();
+    if (!candidates) return;
+    setInvalidCommentIds(new Set(aiCommentThreads
+      .filter((thread) => !isCommentThreadAnchored(thread, candidates))
+      .map((thread) => thread.id)));
+  }, [aiCommentThreads, documentHtml, documentReady]);
 
   const replyToDocumentComment = useCallback(async ({
     threadId,
@@ -555,40 +698,79 @@ export function DocumentAiCollaboration({
     if (!course || !studentId || !supportedStage) {
       throw new Error("当前项目状态已经变化，请刷新页面后重试。");
     }
-    if (pendingSuggestion) {
-      throw new Error("请先接受或拒绝正文中当前标出的修改，再继续回复批注。");
+    if ((pendingSuggestion || pendingDelivery) && /(?:修改|改写|替换|润色|重写|直接改)/.test(message)) {
+      throw new Error("已有修改或交付待审阅。你可以继续讨论这条批注；请先处理现有内容，再请求新的修改。");
     }
     const sourceThread = aiCommentThreads.find((thread) => thread.id === threadId);
     if (!sourceThread) throw new Error("这条批注已经失效，请刷新页面后重试。");
-    const contributionId = nowId("document-comment-ai-contribution");
-    const response = await fetch("/api/ai-collaboration/document", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" },
-      body: JSON.stringify({
-        action: "reply-document-comment",
-        commentThreadId: threadId,
-        courseId: course.id,
-        studentId,
-        stageKey,
-        workspaceKind,
-        documentHtml,
-        message,
-        contributionId,
-      }),
-    });
-    const payload = await response.json().catch(() => ({})) as {
+    const previousReply = commentReplySnapshotRef.current.get(threadId);
+    const replySnapshot = previousReply?.message === message && previousReply.documentHtml === documentHtml
+      ? previousReply
+      : {
+          requestId: nowId("document-comment-ai-request"),
+          contributionId: nowId("document-comment-ai-contribution"),
+          threadId,
+          message,
+          documentHtml,
+        };
+    commentReplySnapshotRef.current.set(threadId, replySnapshot);
+    const { requestId, contributionId } = replySnapshot;
+    const query = new URLSearchParams({ courseId: course.id, studentId, stageKey, workspaceKind, requestId });
+    const readStatus = async () => {
+      const response = await fetch(`/api/ai-collaboration/document?${query.toString()}`, { cache: "no-store" });
+      return { response, payload: await response.json().catch(() => ({})) as {
+        commentThread?: DocumentAiCommentThread;
+        message?: string;
+        result?: DocumentAiCommentReplyResult;
+        status?: string;
+        retryAfterMs?: number;
+      } };
+    };
+    let current: Awaited<ReturnType<typeof readStatus>>;
+    try {
+      const response = await fetch("/api/ai-collaboration/document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student", "X-Request-Id": requestId },
+        body: JSON.stringify({
+          action: "reply-document-comment",
+          commentThreadId: threadId,
+          courseId: course.id,
+          studentId,
+          stageKey,
+          workspaceKind,
+          documentHtml: replySnapshot.documentHtml,
+          message: replySnapshot.message,
+          requestId,
+          contributionId,
+        }),
+      });
+      current = { response, payload: await response.json().catch(() => ({})) };
+      if (response.ok && !current.payload.commentThread && current.payload.status !== "processing") {
+        current = await readStatus();
+      }
+    } catch {
+      current = await readStatus();
+    }
+    const deadline = Date.now() + REQUEST_RECOVERY_MAX_MS;
+    while (current.response.status === 202 || current.payload.status === "processing") {
+      if (Date.now() >= deadline) throw new Error("回复仍在处理中，原文已保留。请稍后再试。");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, Math.min(5_000, Math.max(750, current.payload.retryAfterMs ?? 1_500))));
+      current = await readStatus();
+    }
+    const { response, payload } = current as { response: Response; payload: {
       commentThread?: DocumentAiCommentThread;
       message?: string;
       result?: DocumentAiCommentReplyResult;
-    };
+    } };
     if (!response.ok || !payload.commentThread) {
       throw new Error(payload.message ?? "AI 组员暂时无法回复这条批注，请稍后重试。");
     }
+    commentReplySnapshotRef.current.delete(threadId);
     setAiCommentThreads((current) => [
       ...current.filter((thread) => thread.id !== payload.commentThread!.id),
       payload.commentThread!,
     ]);
-    if (!payload.result?.suggestion) return;
+    if (!payload.result?.suggestion || pendingSuggestion || pendingDelivery) return;
 
     const suggestion = payload.result.suggestion;
     const sourceCommentId = [...payload.commentThread.comments]
@@ -670,7 +852,7 @@ export function DocumentAiCollaboration({
       source: "agent",
       companionId: "critic",
     });
-  }, [aiCommentThreads, course, documentHtml, documentTitle, pendingSuggestion, session, stageKey, studentId, supportedStage, workspaceKind]);
+  }, [aiCommentThreads, course, documentHtml, documentTitle, pendingDelivery, pendingSuggestion, session, stageKey, studentId, supportedStage, workspaceKind]);
 
   const markDocumentCommentRead = useCallback(async ({ threadId }: { threadId: string }) => {
     if (!course || !studentId || !supportedStage) return;
@@ -698,7 +880,44 @@ export function DocumentAiCollaboration({
     }
   }, [course, stageKey, studentId, supportedStage, workspaceKind]);
 
+  const updateDocumentCommentStatus = useCallback(async ({
+    threadId,
+    status,
+  }: {
+    threadId: string;
+    status: "open" | "resolved" | "deferred" | "not-applicable";
+  }) => {
+    if (!course || !studentId || !supportedStage) throw new Error("当前项目状态已变化，请刷新后重试。");
+    const previous = aiCommentThreads.find((thread) => thread.id === threadId);
+    if (!previous) throw new Error("这条批注已失效，请刷新后重试。");
+    setCommentStatusError(null);
+    setAiCommentThreads((current) => current.map((thread) => thread.id === threadId ? { ...thread, status } : thread));
+    try {
+      const response = await fetch("/api/ai-collaboration/document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" },
+        body: JSON.stringify({
+          action: "set-document-comment-status",
+          commentThreadId: threadId,
+          status,
+          courseId: course.id,
+          studentId,
+          stageKey,
+          workspaceKind,
+        }),
+      });
+      const payload = await response.json().catch(() => ({})) as { commentThread?: DocumentAiCommentThread; message?: string };
+      if (!response.ok || !payload.commentThread) throw new Error(payload.message ?? "批注状态未能保存，请稍后重试。");
+      setAiCommentThreads((current) => current.map((thread) => thread.id === threadId ? payload.commentThread! : thread));
+    } catch (statusError) {
+      setAiCommentThreads((current) => current.map((thread) => thread.id === threadId ? previous : thread));
+      setCommentStatusError(statusError instanceof Error ? statusError.message : "批注状态未能保存，请稍后重试。");
+      throw statusError;
+    }
+  }, [aiCommentThreads, course, stageKey, studentId, supportedStage, workspaceKind]);
+
   function handleDocumentChange(html: string) {
+    currentDocumentRef.current = html;
     setDocumentHtml(html);
     setSaveStatus(html === savedContentRef.current ? "saved" : "unsaved");
     if (undoableEdit && html !== undoableEdit.afterHtml) setUndoableEdit(null);
@@ -732,20 +951,18 @@ export function DocumentAiCollaboration({
     requestedIntent = intent,
     preset?: string,
     selectionOverride?: PlateDocumentSelection | null,
+    retrySnapshot?: DocumentRequestSnapshot,
+    statusOnly = false,
   ) {
-    const requestText = (preset ?? draft).trim();
+    const requestText = (retrySnapshot?.message ?? preset ?? draft).trim();
     if (!requestText || !course || !studentId || busy || !supportedStage) return null;
-    if (pendingSuggestion) {
-      setError("请先接受或拒绝正文中当前标出的修改，再继续和 AI 组员协作。");
-      return null;
-    }
-    if (pendingDelivery) {
-      setError("请先审阅、退回或暂不采用当前的组员交付，再安排下一项工作。");
+    if ((pendingSuggestion || pendingDelivery) && WRITING_INTENTS.has(requestedIntent)) {
+      setError("已有一项修改或交付待审阅。你可以继续讨论；请先处理它，再安排新的写入工作。");
       return null;
     }
     // A selection always narrows the operation to that local paragraph. The
     // server applies the same rule even if a stale client sends intent=delegate.
-    const currentSelection = selectionOverride === undefined ? selection : selectionOverride;
+    const currentSelection = retrySnapshot ? retrySnapshot.selection : (selectionOverride === undefined ? selection : selectionOverride);
     const selectionSnapshot = currentSelection
       ? {
           ...currentSelection,
@@ -758,59 +975,121 @@ export function DocumentAiCollaboration({
       setError(`局部修改必须先选中文字。这样 AI 只能处理你指定的范围，不会接管整篇${workspaceNoun}。`);
       return null;
     }
+    const requestId = retrySnapshot?.requestId ?? nowId("document-ai-request");
+    const contributionId = retrySnapshot?.contributionId ?? nowId("document-ai-contribution");
     const optimistic: CollaborationMessage = {
-      id: nowId("student-message"),
+      id: retrySnapshot?.messageId ?? nowId("student-message"),
       role: "user",
       content: requestText,
-      createdAt: new Date().toISOString(),
+      createdAt: retrySnapshot?.createdAt ?? new Date().toISOString(),
+      requestId,
+      requestStatus: statusOnly || retrySnapshot ? "recovering" : "sending",
     };
-    setMessages((current) => [...current, optimistic]);
-    setDraft("");
+    const snapshot: DocumentRequestSnapshot = retrySnapshot ?? {
+      requestId,
+      messageId: optimistic.id,
+      contributionId,
+      createdAt: optimistic.createdAt,
+      conversationId,
+      intent: requestedIntent,
+      message: requestText,
+      documentHtml,
+      selection: selectionSnapshot,
+      revisionOf: requestedIntent === "delegate" ? deliveryRevision : undefined,
+    };
+    requestSnapshotsRef.current.set(requestId, snapshot);
+    writePendingRequestSnapshots(requestScope, [...requestSnapshotsRef.current.values()]);
+    setMessages((current) => {
+      const index = current.findIndex((message) => message.requestId === requestId || message.id === optimistic.id);
+      if (index < 0) return [...current, optimistic];
+      return current.map((message, itemIndex) => itemIndex === index ? { ...message, ...optimistic, id: message.id } : message);
+    });
+    if (!retrySnapshot) setDraft("");
+    setQuickIntent(null);
     setIntent(requestedIntent);
     setBusy(true);
     setError(null);
     setSuggestionError(null);
-    const contributionId = nowId("document-ai-contribution");
-    const requestId = nowId("document-ai-request");
+    const controller = new AbortController();
+    activeRequestRef.current = { id: requestId, controller };
+    let retryable = true;
     try {
-      const response = await fetch("/api/ai-collaboration/document", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-OpenPBL-Role": "student",
-          "X-Request-Id": requestId,
-        },
-        body: JSON.stringify({
-          courseId: course.id,
-          studentId,
-          stageKey,
-          workspaceKind,
-          conversationId,
-          intent: requestedIntent,
-          message: requestText,
-          documentHtml,
-          selectedText: selectionSnapshot?.text,
-          contributionId,
-          revisionOf: requestedIntent === "delegate" ? deliveryRevision : undefined,
-        }),
-      });
-      const payload = await response.json().catch(() => ({})) as {
-        result?: DocumentCollaborationResponse;
-        companionId?: AiContribution["companionId"];
-        message?: string;
-        conversationId?: string;
-        messages?: Array<{ id: string; role: string }>;
-        memories?: ProjectMemoryEntry[];
+      const query = new URLSearchParams({ courseId: course.id, studentId, stageKey, workspaceKind, requestId });
+      const fetchStatus = async (): Promise<{ response: Response; payload: DocumentRequestPayload }> => {
+        const response = await fetch(`/api/ai-collaboration/document?${query.toString()}`, { cache: "no-store", signal: controller.signal });
+        return { response, payload: await response.json().catch(() => ({})) as DocumentRequestPayload };
       };
-      if (payload.conversationId) setConversationId(payload.conversationId);
-      if (!response.ok || !payload.result) {
-        throw new Error(payload.message ?? "AI 组员暂时无法回应，请稍后重试。");
+      let current: { response: Response; payload: DocumentRequestPayload };
+      if (statusOnly) {
+        current = await fetchStatus();
+      } else {
+        try {
+          const response = await fetch("/api/ai-collaboration/document", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-OpenPBL-Role": "student",
+              "X-Request-Id": requestId,
+            },
+            signal: controller.signal,
+            body: JSON.stringify({
+              courseId: course.id,
+              studentId,
+              stageKey,
+              workspaceKind,
+              conversationId: snapshot.conversationId,
+              requestId,
+              intent: snapshot.intent,
+              message: snapshot.message,
+              documentHtml: snapshot.documentHtml,
+              selectedText: snapshot.selection?.text,
+              contributionId: snapshot.contributionId,
+              revisionOf: snapshot.revisionOf,
+            }),
+          });
+          current = { response, payload: await response.json().catch(() => ({})) as DocumentRequestPayload };
+        } catch (requestError) {
+          if (controller.signal.aborted) throw requestError;
+          // The server may have completed the request even if its response was lost.
+          current = await fetchStatus();
+        }
       }
+      const deadline = Date.now() + REQUEST_RECOVERY_MAX_MS;
+      while (current.payload.status === "processing" || current.response.status === 202) {
+        setMessages((messagesNow) => messagesNow.map((message) => message.requestId === requestId
+          ? { ...message, requestStatus: "processing" }
+          : message));
+        if (Date.now() >= deadline) throw new Error("回答仍在处理中，你的消息已保留。请稍后重新尝试。");
+        await new Promise<void>((resolve) => window.setTimeout(resolve, Math.min(5_000, Math.max(750, current.payload.retryAfterMs ?? 1_500))));
+        if (controller.signal.aborted) return null;
+        current = await fetchStatus();
+      }
+      if (activeRequestRef.current?.id !== requestId) return null;
+      const { response, payload } = current;
+      if (snapshot.conversationId !== currentConversationRef.current) return null;
+      const currentVersion = payload.documentVersion
+        ? await documentVersionDigest(currentDocumentRef.current).catch(() => null)
+        : null;
+      const matchesCurrentWorkspace = snapshot.documentHtml === currentDocumentRef.current
+        && snapshot.conversationId === currentConversationRef.current
+        && (!payload.documentVersion || currentVersion === null || currentVersion === payload.documentVersion);
+      if (payload.conversationId) {
+        currentConversationRef.current = payload.conversationId;
+        setConversationId(payload.conversationId);
+      }
+      if (!response.ok || payload.status === "failed" || payload.status === "cancelled" || !payload.result) {
+        retryable = payload.retryable !== false && response.status !== 409 && payload.status !== "cancelled";
+        throw new Error(requestFailureMessage(payload.error, payload.message, snapshot.message));
+      }
+      requestSnapshotsRef.current.delete(requestId);
+      writePendingRequestSnapshots(requestScope, [...requestSnapshotsRef.current.values()]);
       const assistantMessage: CollaborationMessage = {
         id: payload.messages?.find((message) => message.role === "agent")?.id
           ?? nowId("ai-message"),
         role: "assistant",
-        content: payload.result.message,
+        content: matchesCurrentWorkspace || (!payload.result.suggestion && !payload.result.deliverable)
+          ? payload.result.message
+          : `${payload.result.message}\n\n文稿或对话已更新，这次结果仅供参考。若要应用，请基于当前内容重新提出请求。`,
         createdAt: new Date().toISOString(),
         kind: payload.result.kind,
         support: payload.result.support,
@@ -818,10 +1097,11 @@ export function DocumentAiCollaboration({
       const persistedStudentId = payload.messages?.find((message) => message.role === "student")?.id;
       setMessages((current) => [
         ...current
-          .filter((message) => message.id !== optimistic.id),
+          .filter((message) => message.id !== optimistic.id && message.requestId !== requestId && message.id !== assistantMessage.id),
         {
           ...optimistic,
           id: persistedStudentId ?? optimistic.id,
+          requestStatus: undefined,
         },
         assistantMessage,
       ]);
@@ -861,7 +1141,7 @@ export function DocumentAiCollaboration({
         source: "agent",
         companionId: contribution.companionId,
       });
-      if (payload.result.suggestion && selectionSnapshot) {
+      if (matchesCurrentWorkspace && payload.result.suggestion && selectionSnapshot) {
         const preview = editorRef.current?.previewAiSuggestion({
           operation: "replace",
           ...selectionSnapshot,
@@ -897,7 +1177,7 @@ export function DocumentAiCollaboration({
         });
         setSuggestionError(preview?.ok ? null : preview?.reason ?? "未能在正文中生成修改标记，请重新选择目标内容后再试。");
       }
-      if (payload.result.suggestion && !selectionSnapshot && payload.result.suggestion.operation === "insert") {
+      if (matchesCurrentWorkspace && payload.result.suggestion && !selectionSnapshot && payload.result.suggestion.operation === "insert") {
         const preview = editorRef.current?.previewAiSuggestion({
           operation: "insert",
           replacement: payload.result.suggestion.replacement,
@@ -929,7 +1209,7 @@ export function DocumentAiCollaboration({
         });
         setSuggestionError(preview?.ok ? null : preview?.reason ?? "未能在正文中生成新增标记，请把光标放到目标位置后再试。");
       }
-      if (payload.result.deliverable) {
+      if (matchesCurrentWorkspace && payload.result.deliverable) {
         const deliverable = payload.result.deliverable;
         const confirmation = session.upsertCompanionConfirmation({
           courseId: course.id,
@@ -959,21 +1239,148 @@ export function DocumentAiCollaboration({
       }
       return assistantMessage;
     } catch (requestError) {
+      if (controller.signal.aborted) return null;
       recordAiInteraction({
         source: selectionSnapshot ? "selection" : "sidebar",
         eventType: "error",
         content: requestError instanceof Error ? requestError.message : "AI 组员请求失败",
-        payload: { intent: requestedIntent },
+        payload: { intent: requestedIntent, requestId },
       });
-      setError(requestError instanceof Error ? requestError.message : "AI 组员暂时无法回应，请稍后再试。");
+      setMessages((current) => current.map((message) => message.requestId === requestId
+        ? {
+            ...message,
+            requestStatus: "failed",
+            requestError: requestError instanceof Error ? requestError.message : "这次回答没能完成，你的消息已保留。可以重新尝试。",
+            retryable,
+          }
+        : message));
       return null;
     } finally {
+      if (activeRequestRef.current?.id === requestId) {
+        activeRequestRef.current = null;
+        setBusy(false);
+      }
+    }
+  }
+
+  recoverRequestRef.current = (requestId) => {
+    if (recoveredRequestIdsRef.current.has(requestId)) return;
+    if (activeRequestRef.current) {
+      window.setTimeout(() => recoverRequestRef.current?.(requestId), 1_000);
+      return;
+    }
+    recoveredRequestIdsRef.current.add(requestId);
+    const snapshot = requestSnapshotsRef.current.get(requestId);
+    if (snapshot) {
+      void sendRequest(snapshot.intent, snapshot.message, snapshot.selection, snapshot, true);
+      return;
+    }
+    // A request started in another tab has no local editor snapshot. Recover
+    // its answer for reading, but never construct an editable preview from it.
+    void (async () => {
+      if (!course || !studentId) return;
+      const query = new URLSearchParams({ courseId: course.id, studentId, stageKey, workspaceKind, requestId });
+      const deadline = Date.now() + REQUEST_RECOVERY_MAX_MS;
+      try {
+        while (Date.now() < deadline) {
+          const response = await fetch(`/api/ai-collaboration/document?${query.toString()}`, { cache: "no-store" });
+          const payload = await response.json().catch(() => ({})) as DocumentRequestPayload;
+          if (payload.status === "processing" || response.status === 202) {
+            await new Promise<void>((resolve) => window.setTimeout(resolve, Math.min(5_000, Math.max(750, payload.retryAfterMs ?? 1_500))));
+            continue;
+          }
+          if (response.ok && payload.status === "completed" && payload.result) {
+            const studentMessageId = payload.messages?.find((message) => message.role === "student")?.id;
+            const assistantMessageId = payload.messages?.find((message) => message.role === "agent")?.id ?? nowId("ai-message");
+            setMessages((current) => [
+              ...current.filter((message) => message.requestId !== requestId && message.id !== assistantMessageId),
+              ...current.filter((message) => message.requestId === requestId).map((message) => ({ ...message, id: studentMessageId ?? message.id, requestStatus: undefined })),
+              {
+                id: assistantMessageId,
+                role: "assistant" as const,
+                content: payload.result!.suggestion || payload.result!.deliverable
+                  ? `${payload.result!.message}\n\n这次结果已恢复。如需应用修改，请基于当前文稿重新提出请求。`
+                  : payload.result!.message,
+                createdAt: new Date().toISOString(),
+                kind: payload.result!.kind,
+                support: payload.result!.support,
+              },
+            ]);
+          } else {
+            setMessages((current) => current.map((message) => message.requestId === requestId
+              ? { ...message, requestStatus: payload.status === "cancelled" ? "cancelled" : "failed", requestError: requestFailureMessage(payload.error, payload.message, message.content), retryable: false }
+              : message));
+          }
+          return;
+        }
+        setMessages((current) => current.map((message) => message.requestId === requestId
+          ? { ...message, requestStatus: "failed", requestError: "回答仍在处理中，请稍后刷新查看。", retryable: false }
+          : message));
+      } catch {
+        setMessages((current) => current.map((message) => message.requestId === requestId
+          ? { ...message, requestStatus: "failed", requestError: "暂时无法确认这次请求的状态，请稍后刷新。", retryable: false }
+          : message));
+      }
+    })();
+  };
+
+  function retryMessage(requestId: string) {
+    const snapshot = requestSnapshotsRef.current.get(requestId);
+    if (!snapshot) {
+      setError("这次请求的原始内容已不可用，请编辑原消息后重新发送。");
+      return;
+    }
+    recoveredRequestIdsRef.current.delete(requestId);
+    void sendRequest(snapshot.intent, snapshot.message, snapshot.selection, snapshot);
+  }
+
+  function editMessage(messageId: string) {
+    const message = messages.find((item) => item.id === messageId);
+    if (!message) return;
+    setDraft(message.content);
+    setQuickIntent(null);
+    setError(null);
+  }
+
+  async function cancelMessage(requestId: string) {
+    if (!course || !studentId) return;
+    if (activeRequestRef.current?.id === requestId) {
+      activeRequestRef.current.controller.abort();
+      activeRequestRef.current = null;
       setBusy(false);
+    }
+    setMessages((current) => current.map((message) => message.requestId === requestId
+      ? { ...message, requestStatus: "recovering", requestError: undefined }
+      : message));
+    try {
+      const response = await fetch("/api/ai-collaboration/document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" },
+        body: JSON.stringify({ action: "cancel-request", courseId: course.id, studentId, stageKey, workspaceKind, requestId }),
+      });
+      const payload = await response.json().catch(() => ({})) as DocumentRequestPayload;
+      if (response.ok && payload.status === "completed") {
+        // Completion can win the race with cancellation. Recover the saved
+        // answer rather than showing a failure for a successful request.
+        recoveredRequestIdsRef.current.delete(requestId);
+        window.setTimeout(() => recoverRequestRef.current?.(requestId), 0);
+        return;
+      }
+      if (!response.ok || payload.status !== "cancelled") throw new Error(payload.message ?? "取消状态未能确认。");
+      requestSnapshotsRef.current.delete(requestId);
+      writePendingRequestSnapshots(requestScope, [...requestSnapshotsRef.current.values()]);
+      setMessages((current) => current.map((message) => message.requestId === requestId
+        ? { ...message, requestStatus: "cancelled", retryable: false }
+        : message));
+    } catch {
+      setMessages((current) => current.map((message) => message.requestId === requestId
+        ? { ...message, requestStatus: "failed", requestError: "取消状态未能确认。你的原消息已保留，可以重新尝试或刷新查看。", retryable: requestSnapshotsRef.current.has(requestId) }
+        : message));
     }
   }
 
   function submitMemberRequest() {
-    const nextIntent = inferMemberIntent(draft, selection?.text);
+    const nextIntent = quickIntent ?? inferMemberIntent(draft, selection?.text);
     void sendRequest(nextIntent, undefined, selection);
   }
 
@@ -1000,7 +1407,11 @@ export function DocumentAiCollaboration({
       if (!response.ok || !payload.conversationId) {
         throw new Error(payload.message ?? "暂时无法开始新对话，请稍后重试。");
       }
+      currentConversationRef.current = payload.conversationId;
       setConversationId(payload.conversationId);
+      requestSnapshotsRef.current.clear();
+      writePendingRequestSnapshots(requestScope, []);
+      recoveredRequestIdsRef.current.clear();
       setMessages([]);
       setDraft("");
       setDeliveryRevision(null);
@@ -1191,7 +1602,6 @@ export function DocumentAiCollaboration({
       });
       if (decision === "revision") {
         setDeliveryRevision({ title: deliverable.title, content: deliverable.content });
-        setMemberMode("task");
         setIntent("delegate");
         setDraft(`请修改这份交付：${deliverable.title}\n\n需要调整的地方：`);
       }
@@ -1383,6 +1793,9 @@ export function DocumentAiCollaboration({
     );
   }
 
+  const historicalComments = aiCommentThreads.filter((thread) =>
+    documentAiCommentStatus(thread) !== "open" || invalidCommentIds.has(thread.id));
+
   return (
     <main className="flex min-h-dvh flex-col bg-[var(--pbl-bg)] pt-16 text-[var(--pbl-text)]">
       <DashboardTopBar
@@ -1461,11 +1874,12 @@ export function DocumentAiCollaboration({
                 onChange={handleDocumentChange}
                 onAiCommentRead={markDocumentCommentRead}
                 onAiCommentReply={replyToDocumentComment}
+                onAiCommentStatusChange={updateDocumentCommentStatus}
                 onAiSuggestionDecision={(decision) => {
                   resolveSuggestion(decision === "accepted" ? "adopted" : "rejected");
                 }}
                 onImageUpload={uploadDocumentImage}
-                onOpenAiMember={() => { setMemberOpen(true); setMemberMode("discuss"); setError(null); }}
+                onOpenAiMember={() => { setMemberOpen(true); setError(null); }}
                 onSelectionChange={setSelection}
                 pendingAiCommentSuggestion={pendingSuggestion?.sourceThreadId ? {
                   threadId: pendingSuggestion.sourceThreadId,
@@ -1485,6 +1899,25 @@ export function DocumentAiCollaboration({
             <span>{plainTextLength(documentHtml)} 字 · {isExternalArtifact ? "成果协作稿自动保存" : "当前草稿自动保存"}</span>
             {canSubmitFinal && submittedVersion ? <a className="ml-3 font-semibold text-emerald-700 hover:underline" download href={submittedVersion.downloadUrl}>下载第 {submittedVersion.sequence} 版 Word</a> : null}
           </footer>
+          {historicalComments.length ? (
+            <details className="border-t border-stone-100 px-5 py-3 text-xs text-stone-600">
+              <summary className="cursor-pointer font-medium">批注历史 · {historicalComments.length} 条</summary>
+              {commentStatusError ? <p className="mt-2 text-rose-700" role="alert">{commentStatusError}</p> : null}
+              <div className="mt-3 space-y-2">
+                {historicalComments.map((thread) => {
+                  const status = invalidCommentIds.has(thread.id) ? "invalidated" : documentAiCommentStatus(thread);
+                  const label = status === "resolved" ? "已处理" : status === "deferred" ? "暂不处理" : status === "not-applicable" ? "不适用" : "依据已失效";
+                  return <div className="rounded-lg border border-stone-200 bg-stone-50 p-2.5" key={thread.id}>
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="min-w-0 flex-1 line-clamp-2 text-stone-800">{thread.comments.find((comment) => comment.role === "assistant")?.content ?? thread.targetText}</p>
+                      <span className="shrink-0 text-stone-500">{label}</span>
+                    </div>
+                    {status !== "invalidated" ? <button className="mt-2 rounded border border-stone-300 px-2 py-1 text-stone-700 hover:bg-white" onClick={() => void updateDocumentCommentStatus({ threadId: thread.id, status: "open" }).catch(() => undefined)} type="button">重新打开</button> : null}
+                  </div>;
+                })}
+              </div>
+            </details>
+          ) : null}
         </section>
 
         {isExternalArtifact ? (
@@ -1506,19 +1939,19 @@ export function DocumentAiCollaboration({
             messages={messages}
             memories={projectMemory.memories}
             memoryContinuation={projectMemory.continuation}
-            mode={memberMode}
-            taskStarters={taskStarters}
-            taskStartersBusy={taskStartersBusy}
             onAcceptChange={() => resolveSuggestion("adopted")}
-            onChangeDraft={setDraft}
+            onChangeDraft={(value) => { setDraft(value); setQuickIntent(null); }}
             onClose={() => setMemberOpen(false)}
             onDismissError={() => setError(null)}
-            onModeChange={(mode) => {
-              setMemberMode(mode);
-              setIntent(mode === "task" ? "delegate" : "discuss");
+            onDeleteMessage={(messageId) => { void deleteConversationMessage(messageId); }}
+            onRetryMessage={retryMessage}
+            onEditMessage={editMessage}
+            onCancelMessage={(requestId) => { void cancelMessage(requestId); }}
+            onQuickAction={(actionIntent, prompt) => {
+              setQuickIntent(prompt ? actionIntent : null);
+              setDraft(prompt);
               setError(null);
             }}
-            onDeleteMessage={(messageId) => { void deleteConversationMessage(messageId); }}
             onNewConversation={() => { void startNewConversation(); }}
             onRejectChange={() => resolveSuggestion("rejected")}
             onAdoptDelivery={() => resolveDelivery("adopted")}
@@ -1547,7 +1980,6 @@ export function DocumentAiCollaboration({
           <button
             className="fixed bottom-5 right-5 z-[79] inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-xs font-semibold text-stone-900 shadow-[0_16px_48px_-18px_rgba(28,25,23,0.5)] transition hover:-translate-y-0.5 hover:shadow-xl"
             onClick={() => {
-              setMemberMode("task");
               setIntent(pendingDelivery ? "delegate" : "edit");
               setMemberOpen(true);
             }}

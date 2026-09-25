@@ -6,6 +6,7 @@ import type {
   DocumentAiCommentReplyResult,
 } from './document-comment-types';
 
+// Keep existing checkpoints valid so a policy upgrade does not re-review old work.
 export const DOCUMENT_COMMENT_REVIEW_VERSION = 4;
 export const DOCUMENT_COMMENT_REVIEW_BATCH_SIZE = 8;
 export const DOCUMENT_COMMENT_MAX_PARAGRAPH_LENGTH = 2_000;
@@ -53,20 +54,33 @@ function canonicalIssueType(value: string): string {
 }
 
 export function areDocumentCommentIssuesEquivalent(
-  left: { issueType?: string; targetText: string },
-  right: { issueType?: string; targetText: string },
+  left: { issueType?: string; targetText: string; issueKey?: string; evidenceQuote?: string },
+  right: { issueType?: string; targetText: string; issueKey?: string; evidenceQuote?: string },
 ): boolean {
   if (canonicalIssueType(left.issueType ?? '') !== canonicalIssueType(right.issueType ?? '')) {
     return false;
   }
-  const leftTarget = normalizeDocumentParagraphText(left.targetText)
-    .replace(/[\s，,。.!！?？；;：“”‘’'"（）()]/g, '');
-  const rightTarget = normalizeDocumentParagraphText(right.targetText)
-    .replace(/[\s，,。.!！?？；;：“”‘’'"（）()]/g, '');
+  // A shared root cause can span paragraphs. A model-supplied key alone is not
+  // sufficient: the supporting evidence must also be the same.
+  const leftKey = normalizeIssueIdentity(left.issueKey ?? '');
+  const rightKey = normalizeIssueIdentity(right.issueKey ?? '');
+  if (leftKey && rightKey) {
+    if (leftKey !== rightKey) return false;
+    const leftEvidence = normalizeIssueIdentity(left.evidenceQuote ?? '');
+    const rightEvidence = normalizeIssueIdentity(right.evidenceQuote ?? '');
+    if (leftEvidence && rightEvidence) return leftEvidence === rightEvidence;
+  }
+  const leftTarget = normalizeIssueIdentity(left.targetText);
+  const rightTarget = normalizeIssueIdentity(right.targetText);
   if (!leftTarget || !rightTarget) return false;
   return leftTarget === rightTarget
     || (Math.min(leftTarget.length, rightTarget.length) >= 4
       && (leftTarget.includes(rightTarget) || rightTarget.includes(leftTarget)));
+}
+
+function normalizeIssueIdentity(value: string): string {
+  return normalizeDocumentParagraphText(value)
+    .replace(/[\s，,。.!！?？；;：“”‘’'"（）()]/g, '');
 }
 
 function clean(value: unknown, maxLength: number): string {
@@ -75,19 +89,67 @@ function clean(value: unknown, maxLength: number): string {
     : '';
 }
 
-function boundedDocument(value: string): string {
-  const text = clean(value, 40_000);
-  if (text.length <= 10_000) return text;
-  return `${text.slice(0, 5_500)}\n\n……（中间内容省略）……\n\n${text.slice(-4_000)}`;
+function boundedDocument(value: string, focusTexts: string[] = []): string {
+  const text = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim();
+  if (text.length <= 40_000) return text;
+
+  // Keep the project introduction and each changed paragraph's surroundings.
+  // A head-only slice hid the very paragraphs being reviewed in long work.
+  const ranges: Array<{ start: number; end: number }> = [{ start: 0, end: 4_000 }];
+  const windowLength = Math.floor(34_000 / Math.max(1, focusTexts.length));
+  focusTexts.forEach((focus) => {
+    const anchor = focus.trim();
+    if (!anchor) return;
+    const directIndex = text.indexOf(anchor);
+    const index = directIndex >= 0 ? directIndex : text.indexOf(anchor.slice(0, 24));
+    if (index < 0) return;
+    const start = Math.max(0, index - Math.floor((windowLength - anchor.length) / 2));
+    ranges.push({ start, end: Math.min(text.length, start + windowLength) });
+  });
+  ranges.sort((left, right) => left.start - right.start);
+  const merged: typeof ranges = [];
+  ranges.forEach((range) => {
+    const last = merged.at(-1);
+    if (last && range.start <= last.end) last.end = Math.max(last.end, range.end);
+    else merged.push({ ...range });
+  });
+  return merged.map((range) => text.slice(range.start, range.end)).join('\n\n……（其余内容未显示，不能据此推断缺失）……\n\n');
 }
 
-const PROACTIVE_COMMENT_STYLE_RULES = [
+function containsEvidence(haystack: string, quote: string): boolean {
+  return haystack.includes(quote)
+    || normalizeDocumentParagraphText(haystack).includes(normalizeDocumentParagraphText(quote));
+}
+
+function hasIndependentEvidence(
+  issueType: string,
+  quotedText: string,
+  evidenceSource: unknown,
+  evidenceQuote: string,
+): boolean {
+  if (evidenceSource !== 'document') return true;
+  if (!['数据矛盾', '关键推理', '核心事实核验', '关键方案风险', '要求冲突'].includes(issueType)) {
+    return true;
+  }
+  // Repeating the disputed sentence as its own evidence would let a vague
+  // critique pass the structural gate without any external support.
+  const target = normalizeIssueIdentity(quotedText);
+  const evidence = normalizeIssueIdentity(evidenceQuote);
+  return Boolean(evidence && !target.includes(evidence) && !evidence.includes(target));
+}
+
+const DOCUMENT_COMMENT_STYLE_RULES = [
   '你是正在与学生共同制作项目成果的 AI 小组成员。现在不是伴学提醒、课堂主持或通用写作点评，而是一次针对文档具体段落的组内批注。',
-  '只有当目标段落存在明确且值得现在讨论的问题时才发批注，例如：语言错误、表达含混、关键概念含糊、理由与结论脱节、证据缺口、与项目要求不一致、事实需要核验、方案取舍缺少依据。',
-  '不要因为段落不完整就催促学生，不要泛泛表扬，不要重复项目要求，不要直接改写段落，也不要替学生完成核心判断。每条批注只谈一个问题，不能在一条批注里罗列多个问题。',
-  '像真实组员在文档边上留一句话那样自然表达：直接提到段落里的具体词句，说清最值得现在注意的一件事；有必要时自然地追问一句。使用一到两句连贯短句，控制在 140 个汉字以内。',
+  '不要泛泛表扬、重复项目要求、直接改写段落或替学生完成核心判断。每条批注只谈一个问题，不能在一条批注里罗列多个独立问题。',
+  '像真实组员在文档边上留一句话那样自然表达：提到具体原文，说清它为什么影响当前任务，并给一个可行的下一步。一般使用一到三句连贯短句，控制在 180 个汉字以内。',
   '可以用问句激发学生思考，但只能问一个贴着原文、能够帮助小组继续判断的问题。语气应当像“这里的‘最好’是更省时间，还是效果更好？”这样的同伴商量，不要用“你是否考虑过”“请说明”“请论证”等教师审问式措辞。',
   '不得使用“观察：”“影响：”“问题：”“提问：”“建议：”“下一步：”等栏目标签，不要列序号、清单或小标题，也不要把回复写成评价报告。不要自称老师、助手或 AI。',
+];
+
+const PROACTIVE_INTERVENTION_RULES = [
+  '主动介入必须同时满足：有可逐字定位的原文或课程依据；会明显影响项目方向、关键论证、验证结果或硬性交付要求；如果现在不提醒，学生可能沿着错误内容继续推进。任一条件不满足就不介入。',
+  '把问题分为关键问题、值得完善、表达偏好。只有关键问题才主动批注。普通措辞、语法、标点、冗余、文风、例子不够丰富，不要主动介入；只有语言错误改变关键含义（如关键单位错误）时例外。',
+  '“还没写到”不是“遗漏”，“暂定”不是“结论错误”。不要只因本段没有引用就认定全文缺乏证据；先检查完整成果上下文。无法核验的事实不能直接判错，只有它支撑关键决策且需要核验时才提醒。不要依据文风或复制粘贴推测外部 AI 使用。',
   '若没有明显且有价值的问题，必须选择不介入。宁可不介入，也不要制造存在感。',
 ];
 
@@ -100,15 +162,16 @@ export function buildProactiveDocumentCommentPrompts(input: {
 }): { system: string; user: string } {
   return {
     system: [
-      ...PROACTIVE_COMMENT_STYLE_RULES,
-      '只返回严格 JSON：{"shouldComment":true|false,"comment":"给学生看的段落批注；不需要介入时为空字符串"}',
+      ...DOCUMENT_COMMENT_STYLE_RULES,
+      ...PROACTIVE_INTERVENTION_RULES,
+      '只返回严格 JSON：{"shouldComment":true|false,"severity":"critical|improvement|style","issueType":"数据矛盾|要求冲突|关键推理|关键单位|核心事实核验|关键含义|关键方案风险","quotedText":"目标段落中逐字连续、唯一的原文","evidenceSource":"document|course","evidenceQuote":"成果或课程要求中逐字复制的依据","impact":"会怎样影响当前项目","needsInterventionNow":true|false,"comment":"给学生看的批注；不介入时为空字符串"}',
     ].join('\n'),
     user: [
       '【项目与课程要求】',
       buildAuthoritativeCourseContext(input.course, input.studentId, input.stageKey),
       '',
       '【正在制作的完整成果上下文】',
-      boundedDocument(input.documentText),
+      boundedDocument(input.documentText, [input.targetText]),
       '',
       '【本次只评估的具体段落】',
       clean(input.targetText, 3_000),
@@ -131,21 +194,40 @@ export type ProactiveDocumentCommentResult = {
   issueType: string;
   quotedText: string;
   comment: string;
+  severity: 'critical' | 'improvement' | 'style';
+  evidenceSource: 'document' | 'course';
+  evidenceQuote: string;
+  impact: string;
+  issueKey?: string;
+  relatedAnchors?: Array<{ candidateId: string; quotedText: string }>;
 };
 
 export type ProactiveDocumentReviewFocus = 'language' | 'reasoning' | 'comprehensive';
+export type ProactiveDocumentReviewMode = 'proactive' | 'on-demand';
 
 const LANGUAGE_REVIEW_RULES = [
-  '本轮只做中文语言与表达质量审阅，必须逐句检查，不能因为内容大意可理解就跳过基础问题。',
-  '按以下清单在内部静默检查，不要把清单或分类标签写给学生：错别字与标点；标题语序和并列结构；主谓、动宾、定中搭配；成分残缺或赘余；语序错乱；句式杂糅；指代不明；修饰语位置不当；时间表达重复或矛盾；方位词堆叠；重复比较；成语堆砌、误用或语体不合；同义反复；术语、数字、单位和时态不一致。',
-  '只要存在能够引用原文并明确说明的错别字、搭配不当、语序问题、成分残缺等基础语病，就应当介入。“宁可不介入”只适用于没有客观依据的个人风格偏好，不得用来忽略可定位的语言错误。',
-  '也检查虽然不算硬性语法错误、但明显妨碍清楚、准确、简洁表达的句子。仅仅是另一种个人写作偏好时不要介入。',
-  '基础语病与明显表达问题不得让位于项目逻辑点评；能明确指出依据的都应在本轮一次找全。',
+  '本轮关注语言是否改变项目中的关键含义：数字、单位、对象、范围、前后术语或关键条件。一般错别字、搭配、语序、标点和润色偏好仅在学生主动要求语言检查时解释，不作为主动介入。',
 ];
 
+const PROACTIVE_ISSUE_TYPES = new Set([
+  '数据矛盾',
+  '要求冲突',
+  '关键推理',
+  '关键单位',
+  '核心事实核验',
+  '关键含义',
+  '关键方案风险',
+]);
+const ON_DEMAND_ISSUE_TYPES = new Set([
+  ...PROACTIVE_ISSUE_TYPES,
+  '证据完善',
+  '结构建议',
+  '表达建议',
+]);
+
 const REASONING_REVIEW_RULES = [
-  '本轮只做逻辑、证据与项目任务审阅。检查概念是否明确、理由能否支持结论、事实是否需要核验、因果与比较是否成立、是否以偏概全或前后矛盾、方案取舍是否有依据，以及内容是否偏离项目目标和当前任务。',
-  '不要重复语言审阅会处理的纯语法或措辞问题。对于跨句关系，引用支撑判断所必需的连续句子；只有问题确实涉及整段结构时才引用整段。',
+  '本轮关注会误导项目推进的逻辑、证据和任务问题：结论与已有数据矛盾，关键推理不能成立，方案明确违反课程硬性约束，或者支撑核心决策的事实必须核验。',
+  '不要把观点尚未展开、个别段落没有引用、局部可以写得更充分，直接判成关键缺陷；查看全文已有内容。对于跨句关系，引用支撑判断所必需的最短连续句子。',
 ];
 
 export function buildBatchProactiveDocumentCommentPrompts(input: {
@@ -155,37 +237,49 @@ export function buildBatchProactiveDocumentCommentPrompts(input: {
   documentText: string;
   candidates: ProactiveDocumentCommentCandidate[];
   reviewFocus: ProactiveDocumentReviewFocus;
+  reviewMode?: ProactiveDocumentReviewMode;
 }): { system: string; user: string } {
+  const reviewMode = input.reviewMode ?? 'proactive';
   const focusRules = input.reviewFocus === 'language'
     ? LANGUAGE_REVIEW_RULES
     : input.reviewFocus === 'reasoning'
       ? REASONING_REVIEW_RULES
       : [...LANGUAGE_REVIEW_RULES, ...REASONING_REVIEW_RULES];
   const focusLabel = input.reviewFocus === 'language'
-    ? '中文语法与表达准确性'
+    ? '关键含义与语言表达'
     : input.reviewFocus === 'reasoning'
       ? '逻辑、证据与项目任务'
-      : '中文语言、逻辑证据与项目任务；在一次审阅中完成，不要遗漏基础语病';
+      : '关键含义、逻辑证据与项目任务';
   return {
     system: [
-      ...PROACTIVE_COMMENT_STYLE_RULES,
+      ...DOCUMENT_COMMENT_STYLE_RULES,
+      ...(reviewMode === 'proactive' ? PROACTIVE_INTERVENTION_RULES : [
+        '学生主动要求检查文稿时，可以指出值得完善和语言表达问题。请解释具体影响与修改方向；表达偏好须明确说成可选建议。',
+        '不要把尚未写完当作遗漏，也不要只因本段没有引用就认定全文缺少证据；先检查完整成果上下文。',
+      ]),
       ...focusRules,
-      '你会同时收到多个候选段落。必须逐段独立、一次完整地检查，不能只检查最后一段，也不能发现一个问题就停止。一个段落若有多个彼此独立且值得提醒的问题，必须为同一个 candidateId 返回多条记录，每条记录只讨论一个问题，让学生能够分别回复。',
-      '尽量在本轮找全同类和相关问题，避免学生解决一条后才发现下一条。每段最多返回 10 条高置信度批注，不要为了凑数量制造问题。没有明显问题的段落不要返回。',
+      reviewMode === 'on-demand'
+        ? '学生主动要求检查文稿。可以指出值得完善的问题，并按请求解释语言表达；这些结果不可自动当成日常主动批注。'
+        : '本轮是后台主动检查。只返回同时满足依据、重要性和立即提醒必要性的关键问题；值得完善或表达偏好一律不返回。',
+      '你会同时收到多个候选段落。逐段判断，不能只检查最后一段，也不能发现一处问题就停止。同一版本中多个彼此独立的关键问题应全部返回，同一个 candidateId 可有多条记录；不要按数量配额截断。',
+      '同一根本问题出现在多段时，为每个相关候选分别提供锚点记录，并在 issueKey 使用相同的简短根因描述和同一处关键依据；系统会把它们合成一条批注。不同问题必须使用不同 issueKey。',
       '输入中的 existingComments 是该段已有的历史批注，不得重复这些问题；只补充尚未指出的独立问题。',
       '每个问题都必须提供 quotedText：它必须是候选段落中逐字复制、连续且只出现一次的最小必要原文。词语或句法问题通常只引用所在分句或单句；跨句逻辑问题引用必要的连续句子；只有整段结构都有问题时才允许引用整段。不得改字、补字、概括或使用省略号。',
-      'issueType 使用简短准确的中文名称，例如“标题语序”“时间表达冗余”“方位词堆砌”“重复比较”“成语误用”“动宾搭配”“成分残缺”“指代不明”“标点”“事实核验”“证据不足”“逻辑跳跃”“项目一致性”。comment 要直接说明 quotedText 的具体问题及其影响，必要时给一个自然问句或简短修改方向，但不要复述整段原文。',
+      `issueType 只允许：${[...(reviewMode === 'proactive' ? PROACTIVE_ISSUE_TYPES : ON_DEMAND_ISSUE_TYPES)].join('、')}。severity 只允许 critical、improvement、style。needsInterventionNow 说明是否必须此刻提醒。`,
+      'evidenceSource 为 document 或 course；evidenceQuote 必须从完整成果或课程要求逐字复制，不能概括、虚构或用“缺少证据”作为依据。impact 要具体说明继续沿用会怎样影响项目。comment 用同伴语气说清原文、影响和一个可行下一步。',
+      '文档或课程内容过长导致上下文不完整时，不得凭未看到的部分推断内容不存在。请仅依据实际看到且能引用的内容判断。',
+      '每个候选段落完整审阅后，才把其 candidateId 加入 checkedCandidateIds；即使该段没有问题也要加入。只有所有输入候选都已完整审阅时 complete 才为 true。无法完成时返回已经完成的候选，不要把未检查的段落当成无问题。',
       'candidateId 必须逐字复制输入值。只返回严格 JSON，不使用 Markdown 代码块：',
-      '{"comments":[{"candidateId":"候选ID","issueType":"问题类型","quotedText":"逐字原文","comment":"给学生看的自然组员批注"}]}',
+      '{"checkedCandidateIds":["已完整审阅的候选ID"],"complete":true,"comments":[{"candidateId":"候选ID","severity":"critical","needsInterventionNow":true,"issueType":"关键问题类别","issueKey":"同根问题的简短描述","quotedText":"逐字原文","evidenceSource":"document","evidenceQuote":"逐字依据","impact":"对当前项目的具体影响","comment":"给学生看的自然组员批注"}]}',
     ].join('\n'),
     user: [
       '【项目与课程要求】',
       buildAuthoritativeCourseContext(input.course, input.studentId, input.stageKey),
       '',
       '【正在制作的完整成果上下文】',
-      boundedDocument(input.documentText),
+      boundedDocument(input.documentText, input.candidates.map((candidate) => candidate.targetText)),
       '',
-      '【本轮需要逐段独立检查的候选段落】',
+      '【本轮需要检查的候选段落】',
       JSON.stringify(input.candidates.map((candidate) => ({
         candidateId: candidate.candidateId,
         blockIndex: candidate.blockIndex,
@@ -196,7 +290,8 @@ export function buildBatchProactiveDocumentCommentPrompts(input: {
       }))),
       '',
       `【本轮审阅重点】${focusLabel}`,
-      '请一次完成所有候选段落的判断，只返回能够精确引用原文、确有必要显示的批注。',
+      `【检查方式】${reviewMode === 'proactive' ? '后台主动介入，仅返回关键且需要现在提醒的问题' : '学生主动检查，可说明值得完善的问题'}`,
+      '请一次完成所有候选段落的判断，只返回能够精确引用依据、符合本次检查方式的批注。',
     ].join('\n'),
   };
 }
@@ -222,54 +317,190 @@ function naturalizeProactiveComment(value: unknown): string {
   return parts.join('').slice(0, 260);
 }
 
-export function normalizeProactiveDocumentComment(raw: unknown): {
-  shouldComment: boolean;
-  comment: string;
-} {
+export type ProactiveDocumentSingleCommentResult =
+  | { shouldComment: false; comment: '' }
+  | {
+    shouldComment: true;
+    comment: string;
+    issueType: string;
+    quotedText: string;
+    severity: 'critical';
+    evidenceSource: 'document' | 'course';
+    evidenceQuote: string;
+    impact: string;
+    issueKey?: string;
+  };
+
+export function normalizeProactiveDocumentComment(
+  raw: unknown,
+  context: ProactiveDocumentEvidenceContext & { targetText?: string } = {},
+): ProactiveDocumentSingleCommentResult {
   if (!raw || typeof raw !== 'object') return { shouldComment: false, comment: '' };
   const record = raw as Record<string, unknown>;
   const comment = naturalizeProactiveComment(record.comment);
+  const quotedText = clean(record.quotedText, 3_000);
+  const evidenceQuote = clean(record.evidenceQuote, 1_000);
+  const validCriticalIssue = record.severity === 'critical'
+    && record.needsInterventionNow === true
+    && PROACTIVE_ISSUE_TYPES.has(clean(record.issueType, 40))
+    && quotedText.length >= 2
+    && (!context.targetText || uniqueOccurrence(context.targetText, quotedText))
+    && (record.evidenceSource === 'document' || record.evidenceSource === 'course')
+    && evidenceQuote.length >= 2
+    && hasIndependentEvidence(
+      clean(record.issueType, 40), quotedText, record.evidenceSource, evidenceQuote,
+    )
+    && (record.evidenceSource !== 'document'
+      || !context.documentText
+      || (containsEvidence(context.documentText, evidenceQuote)
+        && containsEvidence(boundedDocument(context.documentText, [context.targetText ?? '']), evidenceQuote)))
+    && (record.evidenceSource !== 'course'
+      || Boolean(context.courseText && containsEvidence(context.courseText, evidenceQuote)))
+    && clean(record.impact, 500).length >= 8;
+  const shouldComment = record.shouldComment === true && validCriticalIssue && comment.length >= 8;
+  if (!shouldComment) return { shouldComment: false, comment: '' };
+  const issueKey = clean(record.issueKey, 120);
   return {
-    shouldComment: record.shouldComment === true && comment.length >= 8,
+    shouldComment: true,
     comment,
+    issueType: clean(record.issueType, 40),
+    quotedText,
+    severity: 'critical',
+    evidenceSource: record.evidenceSource as 'document' | 'course',
+    evidenceQuote,
+    impact: clean(record.impact, 500),
+    ...(issueKey ? { issueKey } : {}),
+  };
+}
+
+export type ProactiveDocumentEvidenceContext = {
+  documentText?: string;
+  courseText?: string;
+  reviewMode?: ProactiveDocumentReviewMode;
+};
+
+export type ProactiveDocumentReviewResult = {
+  comments: ProactiveDocumentCommentResult[];
+  reviewedCandidateIds: string[];
+  complete: boolean;
+};
+
+export function normalizeBatchProactiveDocumentReview(
+  raw: unknown,
+  candidates: ProactiveDocumentCommentCandidate[],
+  context: ProactiveDocumentEvidenceContext = {},
+): ProactiveDocumentReviewResult {
+  const record = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const knownIds = new Set(candidates.map((candidate) => candidate.candidateId));
+  const claimedReviewedIds = Array.isArray(record.checkedCandidateIds)
+    ? [...new Set(record.checkedCandidateIds.filter((id): id is string =>
+      typeof id === 'string' && knownIds.has(id)
+    ))]
+    : [];
+  // "Incomplete" while claiming every candidate was checked is ambiguous;
+  // retry the whole batch instead of recording a false all-clear.
+  const reviewedCandidateIds = record.complete === false
+    && claimedReviewedIds.length === knownIds.size
+    ? []
+    : claimedReviewedIds;
+  const complete = record.complete === true
+    && reviewedCandidateIds.length === knownIds.size;
+  const reviewedSet = new Set(reviewedCandidateIds);
+  return {
+    comments: normalizeBatchProactiveDocumentComments(
+      raw,
+      candidates.filter((candidate) => reviewedSet.has(candidate.candidateId)),
+      context,
+    ),
+    reviewedCandidateIds,
+    complete,
   };
 }
 
 export function normalizeBatchProactiveDocumentComments(
   raw: unknown,
   candidates: ProactiveDocumentCommentCandidate[],
+  context: ProactiveDocumentEvidenceContext = {},
 ): ProactiveDocumentCommentResult[] {
   if (!raw || typeof raw !== 'object') return [];
   const comments = (raw as Record<string, unknown>).comments;
   if (!Array.isArray(comments)) return [];
-  const seen = new Set<string>();
-  const counts = new Map<string, number>();
   const candidateById = new Map(candidates.map((candidate) => [
     candidate.candidateId,
     candidate,
   ]));
+  const documentText = context.documentText
+    ? boundedDocument(context.documentText, candidates.map((candidate) => candidate.targetText))
+    : candidates.map((candidate) => candidate.targetText).join('\n');
+  const results: ProactiveDocumentCommentResult[] = [];
 
-  return comments.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
+  comments.forEach((item) => {
+    if (!item || typeof item !== 'object') return;
     const record = item as Record<string, unknown>;
     const candidateId = clean(record.candidateId, 160);
     const candidate = candidateById.get(candidateId);
-    const issueType = clean(record.issueType, 40) || '表达问题';
+    const issueType = clean(record.issueType, 40);
+    const severity = record.severity;
     const quotedText = clean(record.quotedText, 3_000);
+    const evidenceSource = record.evidenceSource;
+    const evidenceQuote = clean(record.evidenceQuote, 1_000);
+    const impact = clean(record.impact, 500);
+    const issueKey = clean(record.issueKey, 120);
     const comment = naturalizeProactiveComment(record.comment);
+    const isOnDemand = context.reviewMode === 'on-demand';
     if (
       !candidate
       || !quotedText
       || !uniqueOccurrence(candidate.targetText, quotedText)
       || comment.length < 8
-    ) return [];
-    const fingerprint = `${candidateId}:${issueType}:${quotedText.replace(/\s+/g, '')}`;
-    const count = counts.get(candidateId) ?? 0;
-    if (seen.has(fingerprint) || count >= 10) return [];
-    seen.add(fingerprint);
-    counts.set(candidateId, count + 1);
-    return [{ candidateId, issueType, quotedText, comment }];
+      || !(isOnDemand ? ON_DEMAND_ISSUE_TYPES : PROACTIVE_ISSUE_TYPES).has(issueType)
+      || (severity !== 'critical' && !(isOnDemand && (severity === 'improvement' || severity === 'style')))
+      || (!isOnDemand && record.needsInterventionNow !== true)
+      || (evidenceSource !== 'document' && evidenceSource !== 'course')
+      || evidenceQuote.length < 2
+      || impact.length < 8
+      || !hasIndependentEvidence(issueType, quotedText, evidenceSource, evidenceQuote)
+      || (evidenceSource === 'document'
+        && (!containsEvidence(documentText, evidenceQuote)
+          || Boolean(context.documentText && !containsEvidence(context.documentText, evidenceQuote))))
+      || (evidenceSource === 'course'
+        && (!context.courseText || !containsEvidence(context.courseText, evidenceQuote)))
+      || candidate.existingComments?.some((existing) =>
+        normalizeDocumentParagraphText(existing) === normalizeDocumentParagraphText(comment)
+      )
+    ) return;
+
+    const duplicate = results.find((existing) => areDocumentCommentIssuesEquivalent(
+      {
+        issueType: existing.issueType,
+        targetText: existing.quotedText,
+        issueKey: existing.issueKey,
+        evidenceQuote: existing.evidenceQuote,
+      },
+      { issueType, targetText: quotedText, issueKey, evidenceQuote },
+    ));
+    if (duplicate) {
+      if (duplicate.candidateId !== candidateId || duplicate.quotedText !== quotedText) {
+        duplicate.relatedAnchors ??= [];
+        if (!duplicate.relatedAnchors.some((anchor) =>
+          anchor.candidateId === candidateId && anchor.quotedText === quotedText
+        )) duplicate.relatedAnchors.push({ candidateId, quotedText });
+      }
+      return;
+    }
+    results.push({
+      candidateId,
+      issueType,
+      quotedText,
+      comment,
+      severity: severity as ProactiveDocumentCommentResult['severity'],
+      evidenceSource,
+      evidenceQuote,
+      impact,
+      ...(issueKey ? { issueKey } : {}),
+    });
   });
+  return results;
 }
 
 export function buildDocumentCommentReplyPrompts(input: {

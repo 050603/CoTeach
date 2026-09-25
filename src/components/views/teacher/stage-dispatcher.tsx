@@ -3,7 +3,7 @@ import type { Course, StageViewKey } from "@/lib/session/types";
 import type { TeacherStageFocus } from "@/lib/classroom/teacher-dashboard-metrics";
 import type { ShowcasePresentationController } from "@/hooks/use-showcase-presentation";
 import { AiLearningTeacherView } from "./ai-learning";
-import { NewReflectionTeacherView } from "./reflection-survey";
+import { NewExperimentPosttestTeacherView } from "./experiment-posttest";
 import { SimplifiedTeacherStageView } from "@/components/classroom/simple-stage-resources";
 import { AiCollaborationTeacherMonitor } from "./ai-collaboration-monitor";
 import { NewShowcaseTeacherView } from "./showcase-reporting";
@@ -39,7 +39,9 @@ export function TeacherStageView({
     ? "showcase-reporting"
     : view === "simple-resource"
       && currentStage?.key === "reflection"
-      ? "reflection-survey"
+      ? "experiment-posttest"
+    : view === "reflection-survey" || view === "reflection"
+      ? "experiment-posttest"
     : view;
   switch (normalizedView) {
     case "ai-learning":
@@ -65,8 +67,8 @@ export function TeacherStageView({
       return <AiCollaborationTeacherMonitor course={course} presentation={presentation} focus={focus?.stageKey === "make" ? focus : undefined} />;
     case "showcase-reporting":
       return <NewShowcaseTeacherView immersive={immersive} course={course} presentation={presentation} focus={focus?.stageKey === "showcase" ? focus : undefined} controller={showcaseController} />;
-    case "reflection-survey":
-      return <NewReflectionTeacherView course={course} presentation={presentation} focus={focus?.stageKey === "reflection" ? focus : undefined} />;
+    case "experiment-posttest":
+      return <NewExperimentPosttestTeacherView course={course} presentation={presentation} focus={focus?.stageKey === "reflection" ? focus : undefined} />;
     default:
       return (
         <SimplifiedTeacherStageView

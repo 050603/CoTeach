@@ -8,6 +8,7 @@ import type {
   ProjectReplyBlock,
   ProjectSupportDetails,
 } from "@/lib/ai-collaboration/project-support-types";
+import { formatDocumentReplyForDisplay } from "@/lib/ai-collaboration/document-reply-format";
 import { AiMemberMarkdown } from "./ai-member-markdown";
 import styles from "./project-citations.module.css";
 
@@ -145,16 +146,19 @@ export function projectReplyBlocksForDisplay(content: string, support?: ProjectS
   return blocks.length ? blocks : undefined;
 }
 
-export function ProjectReplyContent({ content, support, citationScope = "reply" }: {
+export function ProjectReplyContent({ content, support, citationScope = "reply", formatDocumentReply = false }: {
   content: string;
   support?: ProjectSupportDetails;
   citationScope?: string;
+  formatDocumentReply?: boolean;
 }) {
-  const blocks = projectReplyBlocksForDisplay(content, support);
+  const display = formatDocumentReply ? formatDocumentReplyForDisplay : (value: string) => value;
+  const displayContent = display(content);
+  const blocks = projectReplyBlocksForDisplay(displayContent, support);
   const sources = support?.sources ?? [];
   if (!blocks?.length) return <>
-    <ProjectCitedMarkdown citationScope={citationScope} content={content} sources={sources} />
-    <SourceCitationLinks content={content} scope={citationScope} sourceIds={sources.map((source) => source.id)} sources={sources} />
+    <ProjectCitedMarkdown citationScope={citationScope} content={displayContent} sources={sources} />
+    <SourceCitationLinks content={displayContent} scope={citationScope} sourceIds={sources.map((source) => source.id)} sources={sources} />
   </>;
   const blockSourceIds = new Set(blocks.flatMap((block) => block.sourceIds));
   return (
@@ -162,8 +166,8 @@ export function ProjectReplyContent({ content, support, citationScope = "reply" 
       {blocks.map((block, index) => (
         <section className={index ? "border-t border-stone-100 pt-2.5" : ""} key={`${block.type}-${index}`}>
           {BLOCK_LABEL[block.type] ? <h4 className="mb-1 text-[11px] font-semibold text-slate-600">{BLOCK_LABEL[block.type]}</h4> : null}
-          <ProjectCitedMarkdown citationScope={citationScope} content={block.content} sources={sources} />
-          <SourceCitationLinks content={block.content} scope={citationScope} sourceIds={block.sourceIds} sources={sources} />
+          <ProjectCitedMarkdown citationScope={citationScope} content={display(block.content)} sources={sources} />
+          <SourceCitationLinks content={display(block.content)} scope={citationScope} sourceIds={block.sourceIds} sources={sources} />
         </section>
       ))}
       <SourceCitationLinks content={blocks.map((block) => block.content).join("\n")} scope={citationScope} sourceIds={sources.map((source) => source.id).filter((id) => !blockSourceIds.has(id))} sources={sources} />

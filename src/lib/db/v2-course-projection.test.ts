@@ -59,6 +59,16 @@ describe("V2 classroom projection writes", () => {
     expect(delegates.domainEvent.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { idempotencyKey: "classroom:instance:start" }, create: expect.objectContaining({ eventType: "classroom_started" }) }));
     expect(delegates.classroomParticipation.updateMany).not.toHaveBeenCalled();
   });
+  it("records the first visit to stage five and keeps its posttest release when revisiting earlier stages", async () => {
+    const before = normalizeCourse(fixture());
+    await persistInstanceCourse(db, before, { ...before, currentStageIndex: 4 }, teacher);
+    const opened = delegates.classroomInstance.update.mock.calls[0][0].data.runtimeConfig.posttestOpenedAt;
+    expect(Date.parse(opened)).not.toBeNaN();
+    const instance = await db.classroomInstance.findUniqueOrThrow({ where: { id: "instance" } });
+    delegates.classroomInstance.findUniqueOrThrow.mockResolvedValue({ ...instance, runtimeConfig: { posttestOpenedAt: opened } });
+    await persistInstanceCourse(db, { ...before, currentStageIndex: 4 }, { ...before, currentStageIndex: 3 }, teacher);
+    expect(delegates.classroomInstance.update.mock.calls[1][0].data.runtimeConfig.posttestOpenedAt).toBe(opened);
+  });
   it("persists project-practice settings as runtime overrides while keeping other design immutable", async () => {
     const before = normalizeCourse(fixture());
     const after = { ...before, pblConfig: { ...before.pblConfig!, makeArtifactMode: "python" as const, practiceWebSearchEnabled: false } };

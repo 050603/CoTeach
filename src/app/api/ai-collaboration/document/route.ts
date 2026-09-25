@@ -1,12 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import {
   buildDocumentCollaborationPrompts,
+  buildAuthoritativeCourseContext,
   documentHtmlToPlainText,
   evaluateAiWorkPolicy,
   isDocumentCollaborationIntent,
   normalizeDocumentCollaborationResponse,
   protectedBoundaryForPolicy,
+  separableAuxiliaryTask,
   type DocumentCollaborationIntent,
   type DocumentCollaborationResponse,
   type AiWorkPolicyDecision,
@@ -19,7 +21,7 @@ import {
   areDocumentCommentIssuesEquivalent,
   documentParagraphVersionFingerprint,
   isReviewableDocumentParagraph,
-  normalizeBatchProactiveDocumentComments,
+  normalizeBatchProactiveDocumentReview,
   normalizeDocumentCommentReply,
   normalizeProactiveDocumentComment,
   DOCUMENT_COMMENT_REVIEW_BATCH_SIZE,
@@ -90,6 +92,15 @@ import {
   ProactiveReviewCapacityError,
   withProactiveReviewCapacity,
 } from "@/lib/ai-collaboration/proactive-review-capacity";
+import {
+  cancelDocumentRequest,
+  claimDocumentRequest,
+  completeDocumentRequest,
+  failDocumentRequest,
+  getDocumentRequest,
+  listDocumentRequests,
+  type DocumentRequestInput,
+} from "@/lib/ai-collaboration/document-request-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -101,9 +112,60 @@ const THREAD_PREFIX = "ai-collaboration";
 const COMMENT_THREAD_PREFIX = "ai-collaboration-comments";
 const COMMENT_META_PREFIX = "OPENPBL_DOCUMENT_COMMENT_META:";
 const COMMENT_READ_PREFIX = "OPENPBL_DOCUMENT_COMMENT_READ:";
+const COMMENT_STATUS_PREFIX = "OPENPBL_DOCUMENT_COMMENT_STATUS:";
 const COMMENT_SUGGESTION_PREFIX = "OPENPBL_DOCUMENT_COMMENT_SUGGESTION:";
 const COMMENT_REVIEW_PREFIX = "OPENPBL_DOCUMENT_COMMENT_REVIEW:";
 const COLLABORATION_TRANSIENT_RETRIES = 2;
+const activeDocumentRequests = new Map<string, AbortController>();
+
+function proactiveReviewEnabled(): boolean {
+  return process.env.DOCUMENT_AI_PROACTIVE_REVIEW_ENABLED !== "false";
+}
+
+function documentRequestKey(participationId: string, requestId: string): string {
+  return `${participationId}:${requestId}`;
+}
+
+function digest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function validDocumentModelReply(value: Record<string, unknown>): boolean {
+  if (!["discussion", "edit-suggestion", "boundary"].includes(String(value.kind))) return false;
+  if (typeof value.message !== "string" || !value.message.trim()) return false;
+  if (value.kind !== "edit-suggestion") return true;
+  const suggestion = jsonRecord(value.suggestion);
+  return Boolean(suggestion && typeof suggestion.replacement === "string" && suggestion.replacement.trim()
+    && (suggestion.operation === "replace" || suggestion.operation === "insert"));
+}
+
+/** A malformed or incomplete model response gets one repair within the same request deadline. */
+async function callStructuredCollaborationModel(
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  signal: AbortSignal,
+  valid: (value: Record<string, unknown>) => boolean,
+  maxCalls = 2,
+): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < maxCalls; attempt += 1) {
+    const raw = await callCollaborationModel(attempt === 0 ? messages : [
+      ...messages,
+      { role: "user", content: "上一条回答的 JSON 结构不完整。请只返回一个严格 JSON 对象，保留本轮任务和教学边界，完整填写必需字段。" },
+    ], signal);
+    try {
+      const parsed = jsonRecord(parseLLMJson(raw));
+      if (parsed && valid(parsed)) return parsed;
+    } catch {
+      // A single repair is allowed by the shared request deadline.
+    }
+  }
+  throw new Error("AI_RESPONSE_INVALID_STRUCTURE");
+}
 
 async function recordInteractionEvents(
   events: Parameters<typeof appendAiInteractionEvents>[0],
@@ -143,6 +205,8 @@ type DocumentCollaborationRequest = {
   paragraphs?: unknown;
   contributionId?: unknown;
   workspaceKind?: unknown;
+  requestId?: unknown;
+  status?: unknown;
 };
 
 type ProactiveParagraph = {
@@ -213,6 +277,12 @@ type DocumentCommentMeta = {
   blockText?: string;
   targetText: string;
   issueType?: string;
+  issueKey?: string;
+  severity?: "critical" | "improvement" | "style";
+  evidenceSource?: "document" | "course";
+  evidenceQuote?: string;
+  impact?: string;
+  relatedAnchors?: Array<{ blockId?: string; blockIndex: number; targetText: string }>;
   createdAt: string;
   reviewVersion?: number;
 };
@@ -287,6 +357,22 @@ function parseDocumentCommentMeta(message: CompanionMessage): DocumentCommentMet
     const blockText = boundedString(raw.blockText, 3_000) || undefined;
     const targetText = boundedString(raw.targetText, 3_000);
     const issueType = boundedString(raw.issueType, 40) || undefined;
+    const issueKey = boundedString(raw.issueKey, 160) || undefined;
+    const severity = raw.severity === "critical" || raw.severity === "improvement" || raw.severity === "style"
+      ? raw.severity : undefined;
+    const evidenceSource = raw.evidenceSource === "document" || raw.evidenceSource === "course"
+      ? raw.evidenceSource : undefined;
+    const evidenceQuote = boundedString(raw.evidenceQuote, 500) || undefined;
+    const impact = boundedString(raw.impact, 500) || undefined;
+    const relatedAnchors = Array.isArray(raw.relatedAnchors)
+      ? raw.relatedAnchors.slice(0, 16).flatMap((anchor) => {
+          const item = jsonRecord(anchor);
+          const index = Number(item?.blockIndex);
+          const text = boundedString(item?.targetText, 3_000);
+          return Number.isInteger(index) && index >= 0 && text
+            ? [{ blockId: boundedString(item?.blockId, 160) || undefined, blockIndex: index, targetText: text }]
+            : [];
+        }) : undefined;
     const blockIndex = Number(raw.blockIndex);
     const createdAt = boundedString(raw.createdAt, 80) || message.createdAt;
     const reviewVersion = Number(raw.reviewVersion);
@@ -297,6 +383,12 @@ function parseDocumentCommentMeta(message: CompanionMessage): DocumentCommentMet
       blockText,
       targetText,
       issueType,
+      issueKey,
+      severity,
+      evidenceSource,
+      evidenceQuote,
+      impact,
+      relatedAnchors,
       blockIndex,
       createdAt,
       reviewVersion: Number.isInteger(reviewVersion) && reviewVersion > 0
@@ -322,9 +414,28 @@ function parseDocumentCommentRead(message: CompanionMessage): { id: string; read
   }
 }
 
+type CommentStatus = "open" | "resolved" | "deferred" | "not-applicable" | "invalidated";
+
+function parseDocumentCommentStatus(message: CompanionMessage): { id: string; status: CommentStatus } | null {
+  if (message.role !== "system-trigger" || !message.content.startsWith(COMMENT_STATUS_PREFIX)) return null;
+  try {
+    const raw = JSON.parse(message.content.slice(COMMENT_STATUS_PREFIX.length)) as Record<string, unknown>;
+    const id = boundedString(raw.id, 160);
+    const status = raw.status;
+    return id && (status === "open" || status === "resolved" || status === "deferred"
+      || status === "not-applicable" || status === "invalidated")
+      ? { id, status } : null;
+  } catch {
+    return null;
+  }
+}
+
 function documentCommentThreads(messages: CompanionMessage[]): DocumentAiCommentThread[] {
   const metas = messages.map(parseDocumentCommentMeta).filter((meta): meta is DocumentCommentMeta => !!meta);
   const reads = messages.map(parseDocumentCommentRead).filter((read): read is { id: string; readAt: string } => !!read);
+  const statuses = new Map(messages.map(parseDocumentCommentStatus)
+    .filter((status): status is { id: string; status: CommentStatus } => !!status)
+    .map((status) => [status.id, status.status] as const));
   return metas.map((meta) => {
     const readAt = reads
       .filter((read) => read.id === meta.id)
@@ -333,6 +444,7 @@ function documentCommentThreads(messages: CompanionMessage[]): DocumentAiComment
     return {
       ...meta,
       readAt,
+      status: statuses.get(meta.id) ?? "open",
       comments: messages
       .filter((message) =>
         message.conversationId === meta.id
@@ -408,13 +520,12 @@ async function executeDelegatedWork(input: {
     history: input.history,
     revisionOf: input.revisionOf,
   });
-  const assessmentRaw = await callDelegatedWorkModel([
+  const assessment = normalizeDelegatedWorkAssessment(await callStructuredCollaborationModel([
     { role: "system", content: withWorkspaceInstruction(assessmentPrompts.system, input.workspaceKind) },
     { role: "user", content: assessmentPrompts.user },
-  ], input.signal);
-  const assessment = normalizeDelegatedWorkAssessment(
-    parseLLMJson(assessmentRaw) as Record<string, unknown>,
-  );
+  ], input.signal, (value) =>
+    ["accepted", "protected", "clarify"].includes(String(value.decision))
+    && typeof value.reason === "string"));
   if (assessment.decision !== "accepted") {
     return assessmentToBoundaryResponse(assessment);
   }
@@ -445,12 +556,17 @@ async function executeDelegatedWork(input: {
       : deliveryMessages, input.signal),
     input.signal,
   );
-  return normalizeDelegatedWorkDelivery({
+  const result = normalizeDelegatedWorkDelivery({
     raw: delivery,
     assessment,
     sources,
     researchMode: sources.length ? "textbook" : "model",
+    documentText: input.documentText,
   });
+  if (result.kind === "task-clarification" && result.delegation?.decision === "unavailable") {
+    throw new Error("AI_DELEGATED_DELIVERY_INCOMPLETE");
+  }
+  return result;
 }
 
 function collaborationFailureResponse(
@@ -490,10 +606,19 @@ function collaborationFailureResponse(
   }
   if (error instanceof LlmCallFailedError) {
     if (error.status === 400) {
+      const category = upstreamFailureCategory(error);
+      if (category !== "context-limit" && category !== "content-policy") {
+        return Response.json({
+          error: "AI_COLLABORATION_UPSTREAM_FAILED",
+          message: "这次回答没能完成，你的消息已保留。可以重新尝试。",
+        }, { status: 503 });
+      }
       return Response.json(
         {
           error: "AI_COLLABORATION_INPUT_REJECTED",
-          message: intent === "delegate"
+          message: category === "content-policy"
+            ? "这项请求未通过模型服务的内容检查。你可以换一种具体的表述后重试。"
+            : intent === "delegate"
             ? "当前工作范围过大或描述不够明确。请把它缩小为一项可核验的辅助工作后重试；本次没有修改文档。"
             : "当前任务内容未被模型接受。请缩小选区或新建对话后重试；本次没有修改文档。",
         },
@@ -554,18 +679,7 @@ async function callDelegatedWorkModel(
   messages: Array<{ role: "system" | "user"; content: string }>,
   signal: AbortSignal,
 ): Promise<string> {
-  try {
-    return await callCollaborationModel(messages, signal);
-  } catch (error) {
-    if (!(error instanceof LlmCallFailedError) || error.status !== 400) throw error;
-    // Some OpenAI-compatible endpoints report JSON-mode incompatibility as a
-    // generic HTTP 400. Retry the same bounded task once without JSON mode.
-    return callLLM(messages, {
-      jsonMode: false,
-      abortSignal: signal,
-      maxTransientRetries: COLLABORATION_TRANSIENT_RETRIES,
-    });
-  }
+  return callCollaborationModel(messages, signal);
 }
 
 async function authenticateStudent(
@@ -631,6 +745,7 @@ export async function GET(request: NextRequest) {
   const studentId = boundedString(url.searchParams.get("studentId"), 120);
   const stageKey = boundedString(url.searchParams.get("stageKey"), 80);
   const workspaceKind = normalizeCollaborationWorkspaceKind(url.searchParams.get("workspaceKind"));
+  const requestId = boundedString(url.searchParams.get("requestId"), 160);
   if (!courseId || !stageKey) {
     return Response.json({ error: "MISSING_PARAMETERS" }, { status: 400 });
   }
@@ -642,6 +757,29 @@ export async function GET(request: NextRequest) {
     workspaceKind,
   });
   if (scope instanceof Response) return scope;
+  if (requestId) {
+    const state = await getDocumentRequest({
+      requestId,
+      participationId: scope.authentication.participationId,
+      courseId,
+      studentId: scope.student.id,
+      stageKey,
+      workspaceKind,
+      conversationId: "",
+    });
+    if (!state) return Response.json({ error: "REQUEST_NOT_FOUND" }, { status: 404 });
+    if (state.intent !== "comment-reply" && state.status !== "completed") {
+      const current = await getCompanionThread(
+        courseId, scope.student.id, collaborationThreadKey(stageKey, workspaceKind),
+      );
+      if (state.conversationId !== activeConversationId(current?.messages ?? [])) {
+        return Response.json({ error: "CONVERSATION_CHANGED", requestId }, { status: 409 });
+      }
+    }
+    return Response.json(state.status === "completed"
+      ? { ...state.response, requestId, status: state.status, conversationId: state.conversationId, documentVersion: state.documentVersion }
+      : { ...state, retryable: state.status === "failed" });
+  }
   const thread = await getCompanionThread(
     courseId,
     scope.student.id,
@@ -655,10 +793,23 @@ export async function GET(request: NextRequest) {
   const conversationId = activeConversationId(thread?.messages ?? []);
   const messages = visibleConversationMessages(thread?.messages ?? [], conversationId)
     .slice(-40);
-  const memories = await listProjectMemories(scope.authentication.participationId);
+  const memories = await listProjectMemories(scope.authentication.participationId).catch((error) => {
+    console.warn("[ai-collaboration] project memory read unavailable", error);
+    return [];
+  });
+  const requests = await listDocumentRequests({
+    participationId: scope.authentication.participationId,
+    courseId,
+    studentId: scope.student.id,
+    stageKey,
+    workspaceKind,
+    conversationId,
+  });
   return Response.json({
     messages,
+    requests,
     memories,
+    proactiveReviewEnabled: proactiveReviewEnabled(),
     continuation: projectMemoryContinuation(memories),
     conversationId,
     workspaceKind,
@@ -713,13 +864,15 @@ export async function DELETE(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const requestId = request.headers.get("x-request-id") ?? randomUUID();
   let body: DocumentCollaborationRequest;
   try {
     body = await request.json() as DocumentCollaborationRequest;
   } catch {
     return Response.json({ error: "INVALID_JSON" }, { status: 400 });
   }
+  const requestId = boundedString(body.requestId, 160)
+    || boundedString(request.headers.get("x-request-id"), 160)
+    || randomUUID();
 
   const courseId = boundedString(body.courseId, 120);
   const requestedStudentId = boundedString(body.studentId, 120);
@@ -764,12 +917,36 @@ export async function POST(request: NextRequest) {
   });
   if (scope instanceof Response) return scope;
 
+  if (!proactiveReviewEnabled() && action === "proactive-document-comments") {
+    return Response.json({ commentThreads: [], reviewedCandidateIds: [], complete: true, proactiveReviewEnabled: false });
+  }
+  if (!proactiveReviewEnabled() && action === "proactive-document-comment") {
+    return Response.json({ commentThread: null, proactiveReviewEnabled: false });
+  }
+
   const thread = await getCompanionThread(
     courseId,
     scope.student.id,
     collaborationThreadKey(stageKey, workspaceKind),
   );
   const currentConversationId = activeConversationId(thread?.messages ?? []);
+  if (action === "cancel-request") {
+    if (!boundedString(body.requestId, 160)) {
+      return Response.json({ error: "REQUEST_ID_REQUIRED" }, { status: 400 });
+    }
+    const state = await cancelDocumentRequest({
+      requestId,
+      participationId: scope.authentication.participationId,
+      courseId,
+      studentId: scope.student.id,
+      stageKey,
+      workspaceKind,
+      conversationId: commentThreadId || currentConversationId,
+    });
+    if (!state) return Response.json({ error: "REQUEST_NOT_FOUND" }, { status: 404 });
+    activeDocumentRequests.get(documentRequestKey(scope.authentication.participationId, requestId))?.abort();
+    return Response.json({ requestId, status: state.status });
+  }
   if (action === "reset-conversation") {
     const conversationId = `ai-conversation-${randomUUID()}`;
     await appendCompanionMessages({
@@ -836,6 +1013,35 @@ export async function POST(request: NextRequest) {
     });
     return Response.json({ ok: true, readAt });
   }
+  if (action === "set-document-comment-status") {
+    const status = boundedString(body.status, 32);
+    if (!commentThreadId || !["open", "resolved", "deferred", "not-applicable"].includes(status)) {
+      return Response.json({ error: "INVALID_COMMENT_STATUS" }, { status: 400 });
+    }
+    const commentStore = await getCompanionThread(
+      courseId,
+      scope.student.id,
+      documentCommentThreadKey(stageKey, workspaceKind),
+    );
+    const existing = documentCommentThreads(commentStore?.messages ?? [])
+      .find((item) => item.id === commentThreadId);
+    if (!existing) return Response.json({ error: "COMMENT_THREAD_NOT_FOUND" }, { status: 404 });
+    if (existing.status === status) return Response.json({ commentThread: existing });
+    await appendCompanionMessages({
+      courseId,
+      studentId: scope.student.id,
+      stageKey: documentCommentThreadKey(stageKey, workspaceKind),
+      messages: [companionMessage({
+        role: "system-trigger",
+        content: `${COMMENT_STATUS_PREFIX}${JSON.stringify({ id: commentThreadId, status })}`,
+        visibility: "teacher-only",
+        triggerKind: "document-comment-read",
+        conversationId: commentThreadId,
+        authorName: "系统",
+      })],
+    });
+    return Response.json({ commentThread: { ...existing, status } });
+  }
   const userKey = scope.authentication.claims?.sub || getClientIp(request);
   const limit = companionLimiter.check(rateLimitKey(request, userKey));
   if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
@@ -886,34 +1092,46 @@ export async function POST(request: NextRequest) {
     if (!candidates.length) return Response.json({ commentThreads: [] });
 
     try {
+      if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
+      const documentText = documentHtmlToPlainText(documentHtml);
       const prompts = buildBatchProactiveDocumentCommentPrompts({
         course: scope.course,
         studentId: scope.student.id,
         stageKey,
-        documentText: documentHtmlToPlainText(documentHtml),
+        documentText,
         candidates,
         reviewFocus: "comprehensive",
       });
-      const raw = await withProactiveReviewCapacity(() =>
-        callCollaborationModel([
+      const reviewSignal = AbortSignal.any([request.signal, AbortSignal.timeout(40_000)]);
+      const structured = await withProactiveReviewCapacity(() => {
+        if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
+        return callStructuredCollaborationModel([
           { role: "system", content: withWorkspaceInstruction(prompts.system, workspaceKind) },
           { role: "user", content: prompts.user },
-        ], request.signal)
-      );
-      const reviewResults = normalizeBatchProactiveDocumentComments(
-        parseLLMJson(raw),
+        ], reviewSignal, (value) =>
+          Array.isArray(value.checkedCandidateIds)
+          && typeof value.complete === "boolean"
+          && Array.isArray(value.comments));
+      });
+      const review = normalizeBatchProactiveDocumentReview(
+        structured,
         candidates,
+        {
+          documentText,
+          courseText: buildAuthoritativeCourseContext(scope.course, scope.student.id, stageKey),
+        },
       );
+      const reviewResults = review.comments;
 
       const seenResults = new Set<string>();
       const resultsById = new Map<string, typeof reviewResults>();
       reviewResults.forEach((result) => {
         const existingResults = resultsById.get(result.candidateId) ?? [];
         if (existingResults.some((existing) => areDocumentCommentIssuesEquivalent(
-          { issueType: existing.issueType, targetText: existing.quotedText },
-          { issueType: result.issueType, targetText: result.quotedText },
+          { issueType: existing.issueType, targetText: existing.quotedText, issueKey: existing.issueKey, evidenceQuote: existing.evidenceQuote },
+          { issueType: result.issueType, targetText: result.quotedText, issueKey: result.issueKey, evidenceQuote: result.evidenceQuote },
         ))) return;
-        const fingerprint = `${result.candidateId}:${result.issueType}:${result.quotedText.replace(/\s+/g, "")}`;
+        const fingerprint = `${result.candidateId}:${result.issueType}:${result.issueKey ?? ""}:${result.evidenceQuote}:${result.quotedText.replace(/\s+/g, "")}`;
         if (seenResults.has(fingerprint)) return;
         seenResults.add(fingerprint);
         existingResults.push(result);
@@ -926,8 +1144,8 @@ export async function POST(request: NextRequest) {
           const repeatsExistingIssue = existingThreads
             .filter((thread) => threadMatchesCandidate(thread, candidate))
             .some((thread) => areDocumentCommentIssuesEquivalent(
-              { issueType: thread.issueType, targetText: thread.targetText },
-              { issueType: result.issueType, targetText: result.quotedText },
+              { issueType: thread.issueType, targetText: thread.targetText, issueKey: thread.issueKey, evidenceQuote: thread.evidenceQuote },
+              { issueType: result.issueType, targetText: result.quotedText, issueKey: result.issueKey, evidenceQuote: result.evidenceQuote },
             ));
           if (repeatsExistingIssue) return;
           const id = `document-comment-${randomUUID()}`;
@@ -939,6 +1157,19 @@ export async function POST(request: NextRequest) {
             blockText: candidate.targetText,
             targetText: result.quotedText,
             issueType: result.issueType,
+            issueKey: result.issueKey,
+            severity: result.severity,
+            evidenceSource: result.evidenceSource,
+            evidenceQuote: result.evidenceQuote,
+            impact: result.impact,
+            relatedAnchors: result.relatedAnchors?.flatMap((anchor) => {
+              const related = candidates.find((item) => item.candidateId === anchor.candidateId);
+              return related ? [{
+                blockId: related.blockId,
+                blockIndex: related.blockIndex,
+                targetText: anchor.quotedText,
+              }] : [];
+            }),
             createdAt,
             reviewVersion: DOCUMENT_COMMENT_REVIEW_VERSION,
           };
@@ -970,7 +1201,8 @@ export async function POST(request: NextRequest) {
           });
         });
       });
-      candidates.forEach((candidate) => {
+      const confirmedIds = new Set(review.reviewedCandidateIds);
+      candidates.filter((candidate) => confirmedIds.has(candidate.candidateId)).forEach((candidate) => {
         const fingerprint = documentParagraphVersionFingerprint(candidate.targetText);
         messages.push(companionMessage({
           role: "system-trigger",
@@ -1024,6 +1256,9 @@ export async function POST(request: NextRequest) {
       return Response.json({
         commentThreads,
         reviewedParagraphFingerprints: [...reviewedFingerprints],
+        reviewedCandidateIds: review.reviewedCandidateIds,
+        complete: review.complete,
+        documentVersion: digest(documentHtml),
       });
     } catch (error) {
       if (error instanceof ProactiveReviewCapacityError) {
@@ -1041,6 +1276,9 @@ export async function POST(request: NextRequest) {
       }
       if (request.signal.aborted) {
         return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
+      }
+      if (error instanceof DOMException && error.name === "TimeoutError") {
+        return collaborationFailureResponse(new LlmTimeoutError(40_000), "check");
       }
       return collaborationFailureResponse(error, "check");
     }
@@ -1071,16 +1309,37 @@ export async function POST(request: NextRequest) {
       targetText,
     });
     try {
-      const raw = await callCollaborationModel([
+      if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
+      const documentText = documentHtmlToPlainText(documentHtml);
+      const singleReviewSignal = AbortSignal.any([request.signal, AbortSignal.timeout(40_000)]);
+      const raw = await withProactiveReviewCapacity(() => callCollaborationModel([
         { role: "system", content: withWorkspaceInstruction(prompts.system, workspaceKind) },
         { role: "user", content: prompts.user },
-      ], request.signal);
-      const result = normalizeProactiveDocumentComment(parseLLMJson(raw));
+      ], singleReviewSignal));
+      const result = normalizeProactiveDocumentComment(parseLLMJson(raw), {
+        targetText,
+        documentText,
+        courseText: buildAuthoritativeCourseContext(scope.course, scope.student.id, stageKey),
+      });
       if (!result.shouldComment) return Response.json({ commentThread: null });
 
       const id = `document-comment-${randomUUID()}`;
       const createdAt = new Date().toISOString();
-      const meta: DocumentCommentMeta = { id, blockId, blockIndex, targetText, createdAt };
+      const meta: DocumentCommentMeta = {
+        id,
+        blockId,
+        blockIndex,
+        blockText: targetText,
+        targetText: result.quotedText,
+        issueType: result.issueType,
+        issueKey: result.issueKey,
+        severity: result.severity,
+        evidenceSource: result.evidenceSource,
+        evidenceQuote: result.evidenceQuote,
+        impact: result.impact,
+        createdAt,
+        reviewVersion: DOCUMENT_COMMENT_REVIEW_VERSION,
+      };
       const messages = [
         companionMessage({
           role: "system-trigger",
@@ -1129,6 +1388,12 @@ export async function POST(request: NextRequest) {
         } satisfies DocumentAiCommentThread,
       });
     } catch (error) {
+      if (error instanceof ProactiveReviewCapacityError) {
+        return Response.json({ error: "AI_PROACTIVE_REVIEW_BUSY", message: "当前主动求助较多，系统会稍后重新检查。" }, {
+          status: 503,
+          headers: { "Retry-After": String(Math.max(1, Math.ceil(error.retryAfterMs / 1_000))) },
+        });
+      }
       if (request.signal.aborted) {
         return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
       }
@@ -1149,6 +1414,39 @@ export async function POST(request: NextRequest) {
     if (!existing) {
       return Response.json({ error: "COMMENT_THREAD_NOT_FOUND" }, { status: 404 });
     }
+    const documentVersion = digest(documentHtml);
+    const replyTask: DocumentRequestInput = {
+      requestId,
+      participationId: scope.authentication.participationId,
+      courseId,
+      studentId: scope.student.id,
+      stageKey,
+      workspaceKind,
+      threadStageKey: documentCommentThreadKey(stageKey, workspaceKind),
+      conversationId: commentThreadId,
+      documentVersion,
+      message,
+      intent: "comment-reply",
+      history: existing.comments.map((comment) => ({
+        role: comment.role === "student" ? "user" as const : "assistant" as const,
+        content: comment.content,
+      })),
+      fingerprint: digest({ action, commentThreadId, message, documentHtml, targetText, contributionId }),
+    };
+    const replyClaim = await claimDocumentRequest(replyTask);
+    if (replyClaim.kind === "conflict") return Response.json({ error: "REQUEST_ID_CONFLICT", requestId }, { status: 409 });
+    if (replyClaim.kind === "existing") {
+      if (replyClaim.state.status === "completed") {
+        return Response.json({ ...replyClaim.state.response, requestId, status: "completed", documentVersion });
+      }
+      if (replyClaim.state.status === "cancelled") return Response.json({ requestId, status: "cancelled" }, { status: 409 });
+      return Response.json({ requestId, status: "processing", retryAfterMs: 1_000 }, { status: 202 });
+    }
+    const replyController = new AbortController();
+    const replyDeadline = AbortSignal.timeout(85_000);
+    const replySignal = AbortSignal.any([replyController.signal, replyDeadline]);
+    const activeKey = documentRequestKey(scope.authentication.participationId, requestId);
+    activeDocumentRequests.set(activeKey, replyController);
     const commentPolicy = evaluateAiWorkPolicy({
       intent: "check",
       request: message,
@@ -1164,17 +1462,22 @@ export async function POST(request: NextRequest) {
       stageKey,
       documentText: documentHtmlToPlainText(documentHtml),
       targetText: existing.targetText,
-      history: existing.comments,
+      history: replyClaim.history.map((turn, index) => ({
+        id: `request-history-${index}`,
+        role: turn.role === "user" ? "student" as const : "assistant" as const,
+        content: turn.content,
+        createdAt: existing.createdAt,
+      })),
       studentReply: message,
       protectedBoundary: commentBoundary,
     });
     try {
-      const raw = await callCollaborationModel([
+      const parsed = await callStructuredCollaborationModel([
         { role: "system", content: withWorkspaceInstruction(prompts.system, workspaceKind) },
         { role: "user", content: prompts.user },
-      ], request.signal);
+      ], replySignal, (value) => typeof value.message === "string" && Boolean(value.message.trim()));
       const reply = normalizeDocumentCommentReply(
-        parseLLMJson(raw),
+        parsed,
         existing.targetText,
         commentBoundary,
       );
@@ -1207,12 +1510,33 @@ export async function POST(request: NextRequest) {
           conversationId: commentThreadId,
         })] : []),
       ];
-      await appendCompanionMessages({
-        courseId,
-        studentId: scope.student.id,
-        stageKey: documentCommentThreadKey(stageKey, workspaceKind),
-        messages,
-      });
+      replySignal.throwIfAborted();
+      const response = {
+        commentThread: {
+          ...existing,
+          comments: [
+            ...existing.comments,
+            {
+              id: studentMessage.id,
+              role: "student" as const,
+              content: studentMessage.content,
+              createdAt: studentMessage.createdAt,
+            },
+            {
+              id: agentMessage.id,
+              role: "assistant" as const,
+              content: agentMessage.content,
+              createdAt: agentMessage.createdAt,
+            },
+          ],
+        } satisfies DocumentAiCommentThread,
+        result: reply,
+        requestId,
+        status: "completed",
+        documentVersion,
+      };
+      const committed = await completeDocumentRequest({ ...replyTask, token: replyClaim.token, messages, response });
+      if (!committed) return Response.json({ requestId, status: "cancelled" }, { status: 409 });
       await recordInteractionEvents([
         {
           courseId,
@@ -1240,32 +1564,19 @@ export async function POST(request: NextRequest) {
           requestId,
         },
       ], workspaceKind);
-      return Response.json({
-        commentThread: {
-          ...existing,
-          comments: [
-            ...existing.comments,
-            {
-              id: studentMessage.id,
-              role: "student",
-              content: studentMessage.content,
-              createdAt: studentMessage.createdAt,
-            },
-            {
-              id: agentMessage.id,
-              role: "assistant",
-              content: agentMessage.content,
-              createdAt: agentMessage.createdAt,
-            },
-          ],
-        } satisfies DocumentAiCommentThread,
-        result: reply,
-      });
+      return Response.json(response);
     } catch (error) {
-      if (request.signal.aborted) {
-        return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
-      }
-      return collaborationFailureResponse(error, "discuss");
+      if (replyController.signal.aborted) return Response.json({ requestId, status: "cancelled" }, { status: 409 });
+      const failure = collaborationFailureResponse(replyDeadline.aborted ? new LlmTimeoutError(85_000) : error, "discuss");
+      const failureBody = await failure.json() as Record<string, unknown>;
+      await failDocumentRequest({ ...replyTask, token: replyClaim.token, error: String(failureBody.error ?? "AI_COLLABORATION_FAILED") })
+        .catch((taskError) => console.error("[ai-collaboration] comment reply receipt unavailable", taskError));
+      return Response.json({ ...failureBody, requestId, status: "failed", retryable: true, documentVersion }, {
+        status: failure.status,
+        headers: failure.headers,
+      });
+    } finally {
+      if (activeDocumentRequests.get(activeKey) === replyController) activeDocumentRequests.delete(activeKey);
     }
   }
   if (action === "suggest-delegated-work") {
@@ -1276,10 +1587,12 @@ export async function POST(request: NextRequest) {
       documentText: documentHtmlToPlainText(documentHtml),
     });
     try {
-      const raw = await callDelegatedWorkModel([
+      if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
+      const suggestionSignal = AbortSignal.any([request.signal, AbortSignal.timeout(40_000)]);
+      const raw = await withProactiveReviewCapacity(() => callDelegatedWorkModel([
         { role: "system", content: withWorkspaceInstruction(prompts.system, workspaceKind) },
         { role: "user", content: prompts.user },
-      ], request.signal);
+      ], suggestionSignal));
       const candidates = normalizeDelegatedWorkStarters(parseLLMJson(raw));
       if (!candidates.length) return Response.json({ starters: [] });
       const reviewPrompts = buildDelegatedWorkStarterReviewPrompts({
@@ -1289,10 +1602,10 @@ export async function POST(request: NextRequest) {
         documentText: documentHtmlToPlainText(documentHtml),
         candidates,
       });
-      const reviewedRaw = await callDelegatedWorkModel([
+      const reviewedRaw = await withProactiveReviewCapacity(() => callDelegatedWorkModel([
         { role: "system", content: withWorkspaceInstruction(reviewPrompts.system, workspaceKind) },
         { role: "user", content: reviewPrompts.user },
-      ], request.signal);
+      ], suggestionSignal));
       const reviewed = normalizeDelegatedWorkStarters(parseLLMJson(reviewedRaw));
       await recordInteractionEvents([{
         courseId: scope.course.id,
@@ -1307,6 +1620,12 @@ export async function POST(request: NextRequest) {
       }], workspaceKind);
       return Response.json({ starters: reviewed });
     } catch (error) {
+      if (error instanceof ProactiveReviewCapacityError) {
+        return Response.json({ error: "AI_PROACTIVE_REVIEW_BUSY", message: "当前主动求助较多，稍后会重新准备任务建议。" }, {
+          status: 503,
+          headers: { "Retry-After": String(Math.max(1, Math.ceil(error.retryAfterMs / 1_000))) },
+        });
+      }
       if (request.signal.aborted) {
         return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
       }
@@ -1352,6 +1671,55 @@ export async function POST(request: NextRequest) {
     selectedText,
   });
   const protectedBoundary = protectedBoundaryForPolicy(policyDecision, message);
+  const auxiliaryRequest = effectiveIntent === "delegate" && protectedBoundary
+    ? separableAuxiliaryTask(message)
+    : null;
+
+  const documentVersion = digest(documentHtml);
+  const taskInput: DocumentRequestInput = {
+    requestId,
+    participationId: scope.authentication.participationId,
+    courseId,
+    studentId: scope.student.id,
+    stageKey,
+    workspaceKind,
+    threadStageKey: collaborationThreadKey(stageKey, workspaceKind),
+    conversationId: currentConversationId,
+    documentVersion,
+    message,
+    intent: effectiveIntent,
+    history,
+    fingerprint: digest({
+      courseId, stageKey, workspaceKind, currentConversationId, message,
+      documentHtml, selectedText, proactive, intent, effectiveIntent, revisionOf,
+      contributionId,
+    }),
+  };
+  const claim = await claimDocumentRequest(taskInput);
+  if (claim.kind === "conflict") {
+    return Response.json({
+      error: "REQUEST_ID_CONFLICT",
+      message: "这条请求标识已用于另一项内容，请编辑后作为新消息发送。",
+      requestId,
+    }, { status: 409 });
+  }
+  if (claim.kind === "existing") {
+    if (claim.state.status === "completed") {
+      return Response.json({ ...claim.state.response, requestId, status: "completed", documentVersion });
+    }
+    if (claim.state.status === "cancelled") {
+      return Response.json({ requestId, status: "cancelled", documentVersion }, { status: 409 });
+    }
+    return Response.json({ requestId, status: "processing", documentVersion, retryAfterMs: 1_000 }, { status: 202 });
+  }
+  const requestHistory = claim.history;
+
+  const budgetMs = effectiveIntent === "delegate" ? 110_000 : 90_000;
+  const deadlineSignal = AbortSignal.timeout(budgetMs - 5_000);
+  const controller = new AbortController();
+  const taskSignal = AbortSignal.any([deadlineSignal, controller.signal]);
+  const activeKey = documentRequestKey(scope.authentication.participationId, requestId);
+  activeDocumentRequests.set(activeKey, controller);
 
   try {
     const projectSupportContext = await resolveProjectSupportContext({
@@ -1359,21 +1727,21 @@ export async function POST(request: NextRequest) {
       studentId: scope.student.id,
       participationId: scope.authentication.participationId,
       message,
-      history,
+      history: requestHistory,
       allowRetrieval: !proactive && ["discuss", "check", "delegate"].includes(effectiveIntent),
-      signal: request.signal,
+      signal: taskSignal,
     });
     let result: DocumentCollaborationResponse;
     let memoryCandidates: ProjectMemoryCandidate[] = [];
-    if (effectiveIntent === "delegate" && !protectedBoundary) {
+    if (effectiveIntent === "delegate" && (!protectedBoundary || auxiliaryRequest)) {
       result = await executeDelegatedWork({
         course: scope.course,
         student: scope.student,
         stageKey,
-        request: message,
+        request: auxiliaryRequest ?? message,
         documentText,
-        history,
-        signal: request.signal,
+        history: requestHistory,
+        signal: taskSignal,
         revisionOf,
         workspaceKind,
         projectSupportContext,
@@ -1384,6 +1752,9 @@ export async function POST(request: NextRequest) {
         projectSupportContext,
         projectSupportContext.knowledgePointLabels,
       ).details;
+      if (auxiliaryRequest && result.kind === "work-delivery") {
+        result.message = `${result.message} 我只处理了可独立完成的辅助部分；核心判断和最终结论仍由你完成。`;
+      }
     } else {
       const prompts = buildDocumentCollaborationPrompts({
         course: scope.course,
@@ -1394,7 +1765,7 @@ export async function POST(request: NextRequest) {
         request: message,
         documentText,
         selectedText,
-        history,
+        history: requestHistory,
         protectedBoundary,
         proactive,
         projectSupportContext: projectSupportContext.promptContext,
@@ -1405,9 +1776,9 @@ export async function POST(request: NextRequest) {
       ];
       let raw: string;
       try {
-        raw = await callCollaborationModel(llmMessages, request.signal);
+        raw = await callCollaborationModel(llmMessages, taskSignal);
       } catch (error) {
-        if (!(error instanceof LlmCallFailedError) || error.status !== 400) throw error;
+        if (!(error instanceof LlmCallFailedError) || upstreamFailureCategory(error) !== "context-limit") throw error;
         // A compatible endpoint can reject a dense prompt with HTTP 400. Retry
         // once with a smaller, history-light prompt before asking the student to
         // change anything. The current request and project boundary stay intact.
@@ -1420,7 +1791,7 @@ export async function POST(request: NextRequest) {
           request: message,
           documentText,
           selectedText,
-          history,
+          history: requestHistory,
           protectedBoundary,
           proactive,
           compact: true,
@@ -1432,11 +1803,22 @@ export async function POST(request: NextRequest) {
         ];
         raw = await callLLM(llmMessages, {
           jsonMode: false,
-          abortSignal: request.signal,
+          abortSignal: taskSignal,
           maxTransientRetries: COLLABORATION_TRANSIENT_RETRIES,
         });
       }
-      const parsed = parseLLMJson(raw) as Record<string, unknown>;
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = jsonRecord(parseLLMJson(raw)) ?? {};
+        if (!validDocumentModelReply(parsed)) {
+          throw new Error("AI_RESPONSE_INVALID_STRUCTURE");
+        }
+      } catch {
+        parsed = await callStructuredCollaborationModel([
+          ...llmMessages,
+          { role: "user", content: "上一条回答无法解析。请仅返回严格 JSON 对象，至少包含非空的 kind、message 与 focus，并遵守原教学边界。" },
+        ], taskSignal, validDocumentModelReply, 1);
+      }
       result = normalizeDocumentCollaborationResponse(
         parsed,
         selectedText,
@@ -1476,26 +1858,42 @@ export async function POST(request: NextRequest) {
         projectSupport: result.support,
       }),
     ];
-    await appendCompanionMessages({
-      courseId,
-      studentId: scope.student.id,
-      stageKey: collaborationThreadKey(stageKey, workspaceKind),
-      messages: persistedMessages,
+    const memories = await listProjectMemories(scope.authentication.participationId).catch((memoryError) => {
+      console.warn("[ai-collaboration] project memory read unavailable", memoryError);
+      return null;
     });
-    let memories = await listProjectMemories(scope.authentication.participationId);
+    const response = {
+      result,
+      companionId,
+      conversationId: currentConversationId,
+      workspaceKind,
+      messages: persistedMessages,
+      ...(memories ? { memories } : {}),
+      requestId,
+      status: "completed",
+      documentVersion,
+    };
+    taskSignal.throwIfAborted();
+    const committed = await completeDocumentRequest({
+      ...taskInput,
+      token: claim.token,
+      messages: persistedMessages,
+      response,
+    });
+    if (!committed) {
+      return Response.json({ requestId, status: "cancelled", documentVersion }, { status: 409 });
+    }
     if (!proactive && memoryCandidates.length) {
-      try {
-        memories = await saveProjectMemoryCandidates({
-          participationId: scope.authentication.participationId,
-          stageKey,
-          studentId: scope.student.id,
-          studentMessage: message,
-          sourceMessageIds: persistedMessages.map((item) => item.id),
-          candidates: memoryCandidates,
-        });
-      } catch (memoryError) {
-        console.error("[ai-collaboration] project memory write failed", memoryError);
-      }
+      void saveProjectMemoryCandidates({
+        participationId: scope.authentication.participationId,
+        stageKey,
+        studentId: scope.student.id,
+        studentMessage: message,
+        sourceMessageIds: persistedMessages.map((item) => item.id),
+        candidates: memoryCandidates,
+      }).catch((memoryError) => {
+        console.warn("[ai-collaboration] project memory write unavailable", memoryError);
+      });
     }
     const source = selectedText || intent === "edit" ? "selection" : "sidebar";
     await recordInteractionEvents([
@@ -1544,26 +1942,25 @@ export async function POST(request: NextRequest) {
         requestId,
       },
     ], workspaceKind);
-    return Response.json({
-      result,
-      companionId,
-      conversationId: currentConversationId,
-      workspaceKind,
-      messages: persistedMessages,
-      memories,
-    });
+    return Response.json(response);
   } catch (error) {
-    if (request.signal.aborted) {
-      return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
-    }
+    if (controller.signal.aborted) return Response.json({ requestId, status: "cancelled", documentVersion }, { status: 409 });
+    const failure = deadlineSignal.aborted ? new LlmTimeoutError(budgetMs - 5_000) : error;
     console.error(
       "[ai-collaboration/document] generation failed:",
       {
-        name: error instanceof Error ? error.name : "UnknownError",
-        status: error instanceof LlmCallFailedError ? error.status ?? "unknown" : undefined,
-        category: upstreamFailureCategory(error),
+        name: failure instanceof Error ? failure.name : "UnknownError",
+        status: failure instanceof LlmCallFailedError ? failure.status ?? "unknown" : undefined,
+        category: upstreamFailureCategory(failure),
       },
     );
+    const failureResponse = collaborationFailureResponse(failure, effectiveIntent);
+    const failureBody = await failureResponse.json() as Record<string, unknown>;
+    await failDocumentRequest({
+      ...taskInput,
+      token: claim.token,
+      error: String(failureBody.error ?? "AI_COLLABORATION_FAILED"),
+    }).catch((taskError) => console.error("[ai-collaboration] task failure receipt unavailable", taskError));
     void recordInteractionEvents([{
       courseId: scope.course.id,
       studentId: scope.student.id,
@@ -1572,10 +1969,18 @@ export async function POST(request: NextRequest) {
       source: selectedText || intent === "edit" ? "selection" : "sidebar",
       eventType: "error",
       actorRole: "system",
-      content: error instanceof Error ? error.message : "AI 组员请求失败",
+      content: failure instanceof Error ? failure.message : "AI 组员请求失败",
       payload: { intent, effectiveIntent },
       requestId,
     }], workspaceKind);
-    return collaborationFailureResponse(error, effectiveIntent);
+    return Response.json({
+      ...failureBody,
+      requestId,
+      status: "failed",
+      retryable: failureResponse.status !== 422,
+      documentVersion,
+    }, { status: failureResponse.status, headers: failureResponse.headers });
+  } finally {
+    if (activeDocumentRequests.get(activeKey) === controller) activeDocumentRequests.delete(activeKey);
   }
 }

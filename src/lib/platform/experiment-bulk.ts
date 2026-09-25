@@ -224,8 +224,10 @@ export function importExperimentConfigJson(input: string, createId: () => string
   const parsed = ExperimentConfigSchema.safeParse(backup.config);
   if (!parsed.success) return { ok: false, errors: ["实验配置内容无效，请检查题目和答案"] };
   const groupIds = new Map<string, string>();
+  const questionIds = new Map<string, string>();
   const remap = (question: ExperimentQuestion): ExperimentQuestion => {
     const id = createId();
+    questionIds.set(question.id, id);
     const group = question.group;
     if (group && !groupIds.has(group.id)) groupIds.set(group.id, createId());
     return { ...question, id, ...(group ? { group: { ...group, id: groupIds.get(group.id)! } } : {}) };
@@ -237,6 +239,8 @@ export function importExperimentConfigJson(input: string, createId: () => string
     posttest: parsed.data.posttest.map(remap),
     ...(parsed.data.scenarioPair ? { scenarioPair: { a: remap(parsed.data.scenarioPair.a), b: remap(parsed.data.scenarioPair.b) } } : {}),
   };
+  if (config.pretestOrder) config.pretestOrder = config.pretestOrder.map((id) => questionIds.get(id) ?? id);
+  if (config.posttestOrder) config.posttestOrder = config.posttestOrder.map((id) => questionIds.get(id) ?? id);
   const checked = ExperimentConfigSchema.safeParse(config);
   if (!checked.success) return { ok: false, errors: ["导入后的题目编号有重复，请重试"] };
   return { ok: true, config: checked.data, errors: [] };

@@ -34,6 +34,14 @@ function makeCourse(): Course {
     content: { pblOutline: "", knowledgePoints: [], lessonOutline: [], evaluationPlan: {} },
     students: [{ id: "s1", name: "小明" }],
     resources: [{ id: "r1", title: "项目说明", type: "PDF", size: "1 MB", stageKey: "launch", downloadedBy: [] }],
+    experimentPosttestSummary: {
+      enabled: true,
+      openedAt: "2026-09-25T08:00:00.000Z",
+      notStartedCount: 1,
+      inProgressCount: 0,
+      submittedCount: 0,
+      studentRows: [{ studentId: "s1", status: "not-started" }],
+    },
   } as unknown as Course;
 }
 
@@ -63,6 +71,7 @@ describe("TeacherStageDashboard", () => {
     expect(onSelectStage).toHaveBeenCalledWith(1);
     fireEvent.click(screen.getByRole("button", { name: "查看小明的关注证据" }));
     expect(onFocus).toHaveBeenCalledWith(expect.objectContaining({ stageKey: "launch", studentId: "s1", status: "not-opened" }));
+    expect(screen.getByRole("button", { name: "第 5 阶段：后测" })).toBeTruthy();
   });
 
   it("does not start sidebar analysis while the dashboard is inactive", () => {
@@ -75,9 +84,10 @@ describe("TeacherStageDashboard", () => {
   it("changes the decision model by stage and reports degraded sync honestly", () => {
     render(<TeacherStageDashboard course={makeCourse()} degraded onCollapse={vi.fn()} onFocus={vi.fn()} onSelectStage={vi.fn()} stageKey="reflection" />);
     expect(screen.getByText("同步延迟")).toBeTruthy();
-    expect(screen.getByText("反思提交进度")).toBeTruthy();
+    expect(screen.getByText("后测提交进度")).toBeTruthy();
     expect(screen.getByText("需要跟进")).toBeTruthy();
-    expect(screen.getByText("AI 实时教学建议")).toBeTruthy();
+    expect(screen.queryByText("AI 实时教学建议")).toBeNull();
+    expect(screen.queryByText("反思提交进度")).toBeNull();
   });
 
   it("shows knowledge states as clearly labelled count cards", () => {
@@ -96,8 +106,23 @@ describe("TeacherStageDashboard", () => {
     ["reflection", "个别跟进"],
   ])("provides stage-aware teaching actions for %s", (stageKey, attentionTitle) => {
     render(<TeacherStageDashboard course={makeCourse()} degraded={false} onCollapse={vi.fn()} onFocus={vi.fn()} onSelectStage={vi.fn()} stageKey={stageKey} />);
-    expect(screen.getByText("AI 实时教学建议")).toBeTruthy();
+    if (stageKey !== "reflection") expect(screen.getByText("AI 实时教学建议")).toBeTruthy();
     expect(screen.getByText(attentionTitle)).toBeTruthy();
+  });
+
+  it("focuses a student who has not submitted the posttest", () => {
+    const onFocus = vi.fn();
+    render(<TeacherStageDashboard course={makeCourse()} onCollapse={vi.fn()} onFocus={onFocus} onSelectStage={vi.fn()} stageKey="reflection" />);
+    fireEvent.click(screen.getByRole("button", { name: "查看小明的后测状态" }));
+    expect(onFocus).toHaveBeenCalledWith({ stageKey: "reflection", target: "student-list", filter: "pending", studentId: "s1" });
+  });
+
+  it("shows an empty state when the classroom has no experiment", () => {
+    const course = makeCourse();
+    course.experimentPosttestSummary = undefined;
+    render(<TeacherStageDashboard course={course} onCollapse={vi.fn()} onFocus={vi.fn()} onSelectStage={vi.fn()} stageKey="reflection" />);
+    expect(screen.getByText("本课堂未开启后测，请在实验配置中设置后测题目。")).toBeTruthy();
+    expect(screen.queryByText("反思提交进度")).toBeNull();
   });
 
   it("shows whole priority advice and opens the complete set in a centered dialog", async () => {

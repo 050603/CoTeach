@@ -138,6 +138,55 @@ describe("PlateDocumentEditor collaboration edits", () => {
     expect(readMarker.getAttribute("data-unread")).toBe("false");
   });
 
+  it("keeps a read AI comment open until the student changes its status", async () => {
+    const onStatusChange = vi.fn();
+    function Harness() {
+      const [threads, setThreads] = useState<DocumentAiCommentThread[]>([{
+        id: "thread-status",
+        blockIndex: 0,
+        blockText: "结论与数据还需要核对。",
+        targetText: "结论与数据还需要核对。",
+        status: "open",
+        createdAt: "2026-08-27T01:00:00.000Z",
+        comments: [{ id: "comment-status", role: "assistant", content: "请核对这里的数据依据。", createdAt: "2026-08-27T01:00:00.000Z" }],
+      }]);
+      return <PlateDocumentEditor
+        aiCommentThreads={threads}
+        onAiCommentRead={async ({ threadId }) => {
+          setThreads((current) => current.map((thread) => thread.id === threadId ? { ...thread, readAt: "2026-08-27T02:00:00.000Z" } : thread));
+        }}
+        onAiCommentStatusChange={async ({ threadId, status }) => {
+          onStatusChange(threadId, status);
+          setThreads((current) => current.map((thread) => thread.id === threadId ? { ...thread, status } : thread));
+        }}
+        onChange={() => undefined}
+        value="<p>结论与数据还需要核对。</p>"
+      />;
+    }
+    const view = render(<Harness />);
+    fireEvent.click(await view.findByRole("button", { name: "查看未读批注，共 1 条" }));
+    expect(await view.findByRole("button", { name: "查看该段批注，共 1 条" })).toBeTruthy();
+    fireEvent.click(view.getByRole("button", { name: "已处理" }));
+    await waitFor(() => expect(onStatusChange).toHaveBeenCalledWith("thread-status", "resolved"));
+    await waitFor(() => expect(view.queryByRole("button", { name: /查看该段批注/ })).toBeNull());
+  });
+
+  it("does not reattach an old AI comment to a different paragraph with the same phrase", async () => {
+    const view = render(<PlateDocumentEditor
+      aiCommentThreads={[{
+        id: "thread-old",
+        blockIndex: 0,
+        blockText: "原段落中的数据还需要核对。",
+        targetText: "数据还需要核对",
+        createdAt: "2026-08-27T01:00:00.000Z",
+        comments: [{ id: "comment-old", role: "assistant", content: "旧依据", createdAt: "2026-08-27T01:00:00.000Z" }],
+      }]}
+      onChange={() => undefined}
+      value="<p>另一段的数据还需要核对，但依据不同。</p>"
+    />);
+    await waitFor(() => expect(view.queryByRole("button", { name: /查看未读批注/ })).toBeNull());
+  });
+
   it("shows independent AI issue threads together on the same paragraph", async () => {
     const blockText = "这个方案最好，而且一次测试已经足以证明它适合所有同学。";
     const view = render(

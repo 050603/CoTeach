@@ -90,7 +90,7 @@ export function validateExperiment(config: ExperimentConfig): string | null {
 
 export function prepareExperiment(config: ExperimentConfig): ExperimentConfig {
   const prepareQuestion = (question: ExperimentQuestion): ExperimentQuestion => {
-    const prepared: ExperimentQuestion = { id: question.id, type: question.type, prompt: question.prompt.trim(), ...(question.category ? { category: question.category } : {}), ...(question.group ? { group: { id: question.group.id, title: question.group.title.trim(), ...(question.group.instruction?.trim() ? { instruction: question.group.instruction.trim() } : {}) } } : {}) };
+    const prepared: ExperimentQuestion = { id: question.id, type: question.type, prompt: question.prompt.trim(), ...(question.category ? { category: question.category } : {}), ...(question.optional ? { optional: true } : {}), ...(question.skipReasonRequired ? { skipReasonRequired: true } : {}), ...(question.group ? { group: { id: question.group.id, title: question.group.title.trim(), ...(question.group.instruction?.trim() ? { instruction: question.group.instruction.trim() } : {}) } } : {}) };
     if (question.type === "single-choice" || question.type === "multiple-choice") {
       prepared.options = question.options?.map((option) => option.trim()) ?? [];
       const answer = Array.isArray(question.correctAnswer)
@@ -117,6 +117,13 @@ export function prepareExperiment(config: ExperimentConfig): ExperimentConfig {
     posttest: config.posttest.map(prepareQuestion),
     sharedQuestions: (config.sharedQuestions ?? []).map(prepareQuestion),
     ...(config.scenarioPair ? { scenarioPair: { a: prepareQuestion(config.scenarioPair.a), b: prepareQuestion(config.scenarioPair.b) } } : {}),
+    ...(config.pretestOrder ? { pretestOrder: config.pretestOrder } : {}),
+    ...(config.posttestOrder ? { posttestOrder: config.posttestOrder } : {}),
+    ...(config.pretestIntroduction ? { pretestIntroduction: config.pretestIntroduction.trim() } : {}),
+    ...(config.posttestIntroduction ? { posttestIntroduction: config.posttestIntroduction.trim() } : {}),
+    ...(config.pretestMinutes ? { pretestMinutes: config.pretestMinutes } : {}),
+    ...(config.posttestMinutes ? { posttestMinutes: config.posttestMinutes } : {}),
+    ...(config.skipReasonPrompt ? { skipReasonPrompt: config.skipReasonPrompt.trim() } : {}),
     randomizeQuestionOrder: config.randomizeQuestionOrder ?? true,
     randomizeOptionOrder: config.randomizeOptionOrder ?? true,
   };
@@ -208,6 +215,8 @@ export function ExperimentQuestionBuilder({ value, onChange }: {
                     prompt: question.prompt,
                     ...(question.category ? { category: question.category } : {}),
                     ...(question.group ? { group: question.group } : {}),
+                    ...(question.optional ? { optional: true } : {}),
+                    ...(question.skipReasonRequired ? { skipReasonRequired: true } : {}),
                     ...(type === "single-choice" || type === "multiple-choice" ? { options: ["", ""] } : type === "scale" ? { scale: { min: 1, max: 5 } } : {}),
                   });
                 }}>
@@ -232,6 +241,8 @@ export function ExperimentQuestionBuilder({ value, onChange }: {
                 <span>题干 <small>必填</small></span>
                 <textarea aria-label={`${label}题干`} className={`${field} min-h-20`} maxLength={2000} value={question.prompt} onChange={(event) => updateQuestion(bank, index, { ...question, prompt: event.target.value })} placeholder="输入学生看到的问题" />
               </label>
+              <label className="flex items-center gap-2 text-xs text-[var(--pbl-text-strong)]"><input type="checkbox" checked={Boolean(question.optional)} onChange={(event) => updateQuestion(bank, index, { ...question, optional: event.target.checked || undefined })} />允许跳过此题</label>
+              {question.optional ? <label className="flex items-center gap-2 text-xs text-[var(--pbl-text-strong)]"><input type="checkbox" checked={Boolean(question.skipReasonRequired)} onChange={(event) => updateQuestion(bank, index, { ...question, skipReasonRequired: event.target.checked || undefined })} />跳过时填写原因</label> : null}
               {(question.type === "single-choice" || question.type === "multiple-choice") ? (
                 <div className="space-y-2">
                   <p className="text-xs text-[var(--pbl-text-muted)]">选项 <small>参考答案可选；不设置时只记录学生选择，不计分</small></p>
@@ -350,6 +361,10 @@ export function ExperimentQuestionBuilder({ value, onChange }: {
         <span className="space-y-1"><strong className="block text-sm text-[var(--pbl-text-strong)]">开启实验模式</strong><small className="block text-xs text-[var(--pbl-text-muted)]">学生进入课堂前完成前测，学完课堂后完成后测。</small></span>
       </label>
       {value.enabled ? <div className="mt-4 space-y-4">
+        <div className="grid gap-3 rounded-lg border border-[var(--pbl-border)] bg-[var(--pbl-bg)] p-4 sm:grid-cols-2">
+          {(["pretest", "posttest"] as const).map((phase) => <div className="space-y-2" key={phase}><p className="text-sm font-semibold">{phase === "pretest" ? "前测" : "后测"}说明</p><textarea className={`${field} min-h-20`} maxLength={1000} value={value[`${phase}Introduction`] ?? ""} onChange={(event) => onChange({ ...value, [`${phase}Introduction`]: event.target.value })} /><label className="flex items-center gap-2 text-xs">建议时长（分钟）<input className={`${field} w-20`} type="number" min="1" max="120" value={value[`${phase}Minutes`] ?? ""} onChange={(event) => onChange({ ...value, [`${phase}Minutes`]: event.target.value ? Number(event.target.value) : undefined })} /></label></div>)}
+          <label className="space-y-1 text-xs sm:col-span-2"><span>跳题原因提示（仅在存在可跳过题目时显示）</span><input className={field} maxLength={300} value={value.skipReasonPrompt ?? ""} onChange={(event) => onChange({ ...value, skipReasonPrompt: event.target.value })} /></label>
+        </div>
         <div className="flex flex-wrap gap-2" role="tablist" aria-label="实验题组">
           {([
             ["sharedQuestions", `共用题 ${value.sharedQuestions.length}`],

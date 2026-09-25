@@ -377,12 +377,9 @@ async function callChatCompletionsWithoutCourseLimit(
     const text = await res.text().catch(() => "");
     // Identify JSON-mode-unsupported responses and surface them as a
     // dedicated error instead of silently retrying in plain mode.
-    if (
-      opts.jsonMode &&
-      (res.status === 400 ||
-        text.toLowerCase().includes("response_format") ||
-        text.toLowerCase().includes("unsupported"))
-    ) {
+    const jsonModeRejected = /response_format|json[ _-]?mode|json_object/i.test(text)
+      && /unsupported|not supported|invalid|unrecognized|unknown|不支持|无效/i.test(text);
+    if (opts.jsonMode && res.status === 400 && jsonModeRejected) {
       throw new LlmJsonModeUnsupportedError(summarizeUpstream(text));
     }
     if (res.status === 429) throw setRateLimitCooldown(res, text);

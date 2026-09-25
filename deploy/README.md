@@ -12,6 +12,8 @@
 
 `pnpm start` 会从 `.next-build` 创建 `.openpbl-runtime/releases/<BUILD_ID>` 不可变运行目录，避免下一次构建覆盖正在服务的版本。
 
+第三阶段文档项目的后台主动批注默认开启。需要暂停新检查时，在应用服务环境中设置 `DOCUMENT_AI_PROACTIVE_REVIEW_ENABLED=false` 并重启 `openpbl.service`；已有批注及学生主动发起的文稿检查、讨论和辅助任务仍可使用。移除该变量或设为其他值后重启即可恢复。该开关只作用于文档协作，不影响编程工作区。
+
 ## IPv6 主机的模型出站
 
 当前生产宿主机只有可用的公网 IPv6，而 DeepSeek 等端点可能只发布 IPv4 地址。`openpbl-outbound-proxy.service` 是仅监听 `127.0.0.1:19999` 的 HTTPS CONNECT 代理：它通过多组 DNS64 节点解析并并行选择可用 NAT64 路径，连接内容仍由目标站点 TLS 端到端加密。应用服务显式依赖该代理，并在启动、部署和运行健康检查中验证到 `api.deepseek.com:443` 的 TLS 链路；不得再使用 Codex、SSH 会话或桌面进程临时开放的代理端口。

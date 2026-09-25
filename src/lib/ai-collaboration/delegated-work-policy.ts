@@ -197,12 +197,13 @@ export function buildDelegatedWorkAssessmentPrompts(input: {
     "",
     "判断原则：",
     "1. protected：如果 AI 完成后会代替学生展示本项目主要要锻炼的能力，或直接产出核心问题、关键调查/分析、关键方案、核心创作、核心结论、完整成果、最终提交所需的主要证据，必须拒绝接单。",
-    "2. accepted：只有当任务是边缘性、支持性、可核验的子任务，且完成后学生仍需亲自进行核心分析、取舍、创作、验证或结论形成时，才可接单。明确限定 AI 只完成哪一小块，以及学生必须保留什么工作。",
-    "3. clarify：项目上下文或任务范围不足以可靠判断，或任务混合了可委派部分与核心部分时，先要求学生缩小范围或澄清，不执行任务。",
+    "2. accepted：只有当任务是边缘性、支持性、可核验的子任务，且完成后学生仍需亲自进行核心分析、取舍、创作、验证或结论形成时，才可接单。混合任务中如果辅助部分可以独立交付，只接受该部分，说明不会代做的核心部分；不要为了拒绝核心部分而放弃已明确的辅助工作。",
+    "3. clarify：项目上下文或任务范围不足以可靠判断，或可委派部分与核心部分无法可靠分开时，先问一个问题，不执行任务。方法讲解和对学生已有结论的局部表达整理不等于代做结论。",
     "4. 同一项工作在不同项目中结论可以不同。例如：若项目本身训练资料检索与信息汇总，‘搜集资料并汇总’属于 protected；若项目核心是代码设计、实验论证或研究结论，资料检索可能只是 accepted 的辅助子任务，但资料可信度核验与核心综合仍由学生负责。",
     "5. needsWebResearch 是旧版兼容字段，本轮没有联网工具。一般知识可以基于模型知识完成；若任务必须核验实时事实或学生未提供的实测数据，只针对那项事实说明需要可靠材料，仍完成其余可交付部分。教材没有命中不能作为拒绝接单的理由。",
-    "6. studentMessage 是唯一直接展示给学生的话。要像组员本人当面回应组长，使用‘我、你、我们’，不要使用‘学生、用户、评价模型、过程证据、protected、accepted、clarify’等后台或第三人称表达，不要复述内部判定过程。",
+    "6. studentMessage 是唯一直接展示给学生的话。通常用一两句说清可承担的范围或下一步，不重复任务原文和内部判定过程。像组员本人当面回应组长，使用‘我、你、我们’，不要使用‘学生、用户、评价模型、过程证据、protected、accepted、clarify’等后台或第三人称表达。",
     "7. 若需要澄清，只问一个容易回答的具体问题，并提供 2—3 个贴合当前文档的选项；若拒绝核心任务，简短说明‘这部分需要由你完成’，随后提出一项我现在就能承担的辅助工作。",
+    "8. 综合最近对话、当前文稿与已经交付的片段判断累计结果。不要允许通过连续布置边缘小任务拼出整份成果、关键分析或最终结论。",
     "",
     "只返回严格 JSON，不使用 Markdown 代码块：",
     '{"decision":"accepted|protected|clarify","taskTitle":"简短任务名","reason":"供系统留痕的内部判断依据","studentMessage":"直接对学生说的自然回应","protectedLearningWork":"本项目必须由学生保留的核心学习工作","studentResponsibility":"AI 完成后学生仍须亲自完成的内容","proposedScope":"AI 可以承担的精确范围；拒绝时写可替代的辅助范围","needsWebResearch":false,"searchQuery":""}',
@@ -285,7 +286,7 @@ export function buildDelegatedWorkExecutionPrompts(input: {
     "不要在交付内容末尾附加‘学生需核验、加入前核验、学习责任’等说教式模块；某项事实不确定时，只在对应内容旁简短标注‘待确认’。",
     "你还要像能独立工作的真实组员一样决定这份交付如何进入当前文档，而不是要求学生移动光标或帮你寻找位置。用 documentActions 给出最多 4 个可执行操作：append（文末追加）、insert-before/insert-after（在指定段落前后插入）、replace（替换整个指定段落）、delete（删除整个指定段落）、none（本次只交付资料，不改文档）。",
     "除 append 和 none 外，targetText 必须逐字复制当前文档中的一个完整段落，不能概括、截断或自行创造；content 使用 Markdown。replace/delete 只用于任务确实要求且不涉及学生核心判断的内容。找不到可靠位置时使用 append，不得把定位工作交回给学生。",
-    "message 要直接对学生说话，使用‘我、你、我们’，不要出现‘学生需核验、评价模型、过程证据、accepted’等后台措辞。",
+    "message 只用一句简短的话告诉学生完成了什么，具体内容放在交付物中；交付物按任务需要完整呈现，列表与步骤必须逐项换行。直接对学生说话，使用‘我、你、我们’，不要出现‘学生需核验、评价模型、过程证据、accepted’等后台措辞。",
     "只返回严格 JSON，不使用 Markdown 代码块：",
     '{"message":"像组员一样直接向学生说明完成了什么","focus":"本次交付焦点","deliverable":{"title":"交付物标题","summary":"一句话摘要","content":"可独立审阅的 Markdown 内容","sourceIds":["交付物实际使用的教材来源 ID；没有则为空"],"documentActions":[{"operation":"append|insert-before|insert-after|replace|delete|none","targetText":"需要定位时逐字复制完整段落，否则为空","content":"该操作要写入的 Markdown；delete/none 时为空","description":"直接告诉学生将对文档做什么"}]}}',
   ].join("\n");
@@ -320,6 +321,7 @@ export function buildDelegatedWorkExecutionPrompts(input: {
 function normalizeDocumentActions(
   value: unknown,
   fallbackContent: string,
+  documentText?: string,
 ): DelegatedWorkDeliverable["documentActions"] {
   type DocumentAction = DelegatedWorkDeliverable["documentActions"][number];
   const allowedOperations = new Set<DocumentAction["operation"]>([
@@ -331,6 +333,9 @@ function normalizeDocumentActions(
     "none",
   ]);
   const actions: DocumentAction[] = [];
+  const documentParagraphs = documentText === undefined
+    ? null
+    : documentText.split(/\n+/).map((paragraph) => paragraph.trim()).filter(Boolean);
   for (const rawItem of (Array.isArray(value) ? value : []).slice(0, 4)) {
       const item = rawItem && typeof rawItem === "object"
         ? rawItem as RawDocumentAction
@@ -348,6 +353,8 @@ function normalizeDocumentActions(
             ? Boolean(targetText)
             : Boolean(targetText && content);
       if (!valid) continue;
+      if (documentParagraphs && operation !== "append" && operation !== "none"
+        && documentParagraphs.filter((paragraph) => paragraph === targetText).length !== 1) continue;
       const defaultDescription = operation === "append"
         ? "在文档末尾加入本次组员交付"
         : operation === "insert-before"
@@ -367,10 +374,10 @@ function normalizeDocumentActions(
       });
   }
   return actions.length ? actions : [{
-    operation: "append",
+    operation: documentParagraphs ? "none" : "append",
     targetText: "",
-    content: fallbackContent,
-    description: "在文档末尾加入本次组员交付",
+    content: documentParagraphs ? "" : fallbackContent,
+    description: documentParagraphs ? "本次只提交资料，不修改文档" : "在文档末尾加入本次组员交付",
   }];
 }
 
@@ -379,6 +386,7 @@ export function normalizeDelegatedWorkDelivery(input: {
   assessment: DelegatedWorkAssessment;
   sources?: DelegatedWorkSource[];
   researchMode: DelegatedWorkDeliverable["researchMode"];
+  documentText?: string;
 }): DocumentCollaborationResponse {
   const rawDelivery = input.raw.deliverable;
   const content = cleanText(rawDelivery?.content, 8_000);
@@ -401,7 +409,7 @@ export function normalizeDelegatedWorkDelivery(input: {
     ? [...new Set(rawDelivery.sourceIds.filter((id): id is string => typeof id === "string" && allowedSources.has(id)))].slice(0, 5)
     : [];
   const usedSources = usedSourceIds.flatMap((id) => allowedSources.get(id) ?? []);
-  const documentActions = normalizeDocumentActions(rawDelivery?.documentActions, content);
+  const documentActions = normalizeDocumentActions(rawDelivery?.documentActions, content, input.documentText);
   const changesDocument = documentActions.some((action) => action.operation !== "none");
   return {
     kind: "work-delivery",

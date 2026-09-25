@@ -4,7 +4,6 @@ import responsiveStyles from "./collaboration-responsive.module.css";
 
 import { useEffect, useRef, useState } from "react";
 import {
-  Bot,
   CheckCircle2,
   ClipboardCheck,
   ExternalLink,
@@ -13,7 +12,6 @@ import {
   LoaderCircle,
   MessageSquarePlus,
   Send,
-  Sparkles,
   Trash2,
   Undo2,
   X,
@@ -21,6 +19,7 @@ import {
 import type {
   DelegatedWorkDocumentAction,
   DelegatedWorkSource,
+  DocumentCollaborationIntent,
   DocumentCollaborationResponse,
 } from "@/lib/ai-collaboration/document-policy";
 import { cn } from "@/lib/utils";
@@ -34,6 +33,10 @@ export type AiMemberWorkspaceMessage = {
   createdAt: string;
   kind?: DocumentCollaborationResponse["kind"];
   support?: ProjectSupportDetails;
+  requestId?: string;
+  requestStatus?: "sending" | "processing" | "recovering" | "failed" | "cancelled";
+  requestError?: string;
+  retryable?: boolean;
 };
 
 export type AiMemberPendingChange = {
@@ -60,12 +63,9 @@ type AiMemberWorkspaceProps = {
   error: string | null;
   historyLoaded: boolean;
   messages: AiMemberWorkspaceMessage[];
-  mode: "discuss" | "task";
   pendingChange: AiMemberPendingChange | null;
   pendingDelivery: AiMemberPendingDelivery | null;
   projectTitle: string;
-  taskStarters: string[];
-  taskStartersBusy: boolean;
   memories: ProjectMemoryEntry[];
   memoryContinuation?: string;
   onAcceptChange: () => void;
@@ -74,7 +74,10 @@ type AiMemberWorkspaceProps = {
   onClose: () => void;
   onDismissError: () => void;
   onDeleteMessage: (messageId: string) => void;
-  onModeChange: (mode: "discuss" | "task") => void;
+  onRetryMessage: (requestId: string) => void;
+  onEditMessage: (messageId: string) => void;
+  onCancelMessage: (requestId: string) => void;
+  onQuickAction: (intent: DocumentCollaborationIntent, prompt: string) => void;
   onNewConversation: () => void;
   onRejectDelivery: () => void;
   onRejectChange: () => void;
@@ -87,10 +90,10 @@ type AiMemberWorkspaceProps = {
   workspaceLabel?: string;
 };
 
-const DISCUSSION_STARTERS = [
-  "我们现在最需要先验证哪一点？",
-  "对照项目要求，目前还缺什么？",
-  "帮我梳理一下下一步，但先不要改文档。",
+const QUICK_ACTIONS: Array<{ label: string; intent: DocumentCollaborationIntent; prompt: string }> = [
+  { label: "讨论思路", intent: "discuss", prompt: "请结合项目要求和当前文稿，帮我梳理可比较的思路和判断依据。" },
+  { label: "安排辅助工作", intent: "delegate", prompt: "请把当前项目要求整理成一份可核对的清单，保留需要我自己决定的事项。" },
+  { label: "整理当前进展", intent: "summarize", prompt: "请概括当前已经完成的内容、未解决的问题和可以执行的下一步。" },
 ];
 
 function formatMessageTime(value: string): string {
@@ -111,8 +114,6 @@ export function AiMemberWorkspace({
   pendingChange,
   pendingDelivery,
   projectTitle,
-  taskStarters,
-  taskStartersBusy,
   memories,
   memoryContinuation,
   onAcceptChange,
@@ -121,6 +122,10 @@ export function AiMemberWorkspace({
   onClose,
   onDismissError,
   onDeleteMessage,
+  onRetryMessage,
+  onEditMessage,
+  onCancelMessage,
+  onQuickAction,
   onNewConversation,
   onRejectDelivery,
   onRejectChange,
@@ -132,18 +137,41 @@ export function AiMemberWorkspace({
   workspaceLabel = "文档",
 }: AiMemberWorkspaceProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const wasNearBottomRef = useRef(true);
+  const previousMessageCountRef = useRef(0);
   const [confirmNewConversation, setConfirmNewConversation] = useState(false);
-  const starters = taskStarters.length
-    ? taskStarters
-    : DISCUSSION_STARTERS.map((starter) => starter.replace("文档", workspaceLabel));
+  const [showNewMessages, setShowNewMessages] = useState(false);
+  const [showCheckOptions, setShowCheckOptions] = useState(false);
   const deliveryChangesDocument = pendingDelivery?.documentActions
     .some((action) => action.operation !== "none") ?? false;
 
   useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
-    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-  }, [busy, messages.length, pendingChange, pendingDelivery]);
+    if (!historyLoaded) return;
+    if (wasNearBottomRef.current) {
+      container.scrollTop = container.scrollHeight;
+      setShowNewMessages(false);
+    } else if (messages.length > previousMessageCountRef.current) {
+      setShowNewMessages(true);
+    }
+    previousMessageCountRef.current = messages.length;
+  }, [historyLoaded, messages.length, pendingChange, pendingDelivery]);
+
+  function handleScroll() {
+    const container = scrollRef.current;
+    if (!container) return;
+    wasNearBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 72;
+    if (wasNearBottomRef.current) setShowNewMessages(false);
+  }
+
+  function jumpToLatest() {
+    const container = scrollRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+    wasNearBottomRef.current = true;
+    setShowNewMessages(false);
+  }
 
   return (
     <section
@@ -153,10 +181,7 @@ export function AiMemberWorkspace({
       <header className="relative shrink-0 border-b border-stone-200/80 bg-white px-3 py-2">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="relative grid size-8 shrink-0 place-items-center rounded-lg bg-stone-950 text-white">
-              <Bot size={15} />
-              <span className="absolute -bottom-px -right-px size-2.5 rounded-full border-2 border-white bg-emerald-500" />
-            </span>
+            <span aria-hidden="true" className="grid size-8 shrink-0 place-items-center rounded-lg bg-[var(--pbl-ai)] text-[11px] font-semibold text-white">AI</span>
             <div className="flex min-w-0 items-center gap-2">
               <h2 className="shrink-0 text-sm font-semibold">AI 组员</h2>
               <span aria-hidden="true" className="text-stone-300">·</span>
@@ -196,17 +221,19 @@ export function AiMemberWorkspace({
           </div>
         ) : null}
 
-        <ProjectMemoryPanel
-          continuation={memoryContinuation}
-          memories={memories}
-          onClear={onClearMemories}
-          onDelete={onDeleteMemory}
-          onUpdate={onUpdateMemory}
-        />
+        {memories.length > 0 ? (
+          <ProjectMemoryPanel
+            continuation={memoryContinuation}
+            memories={memories}
+            onClear={onClearMemories}
+            onDelete={onDeleteMemory}
+            onUpdate={onUpdateMemory}
+          />
+        ) : null}
 
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-stone-50/60 px-3 py-3" ref={scrollRef} aria-live="polite">
+      <div aria-label="协作消息" className="relative min-h-0 flex-1 overflow-y-auto bg-stone-50/60 px-3 py-3" onScroll={handleScroll} ref={scrollRef} role="log" aria-live="polite">
         {!historyLoaded ? (
           <div className="grid min-h-32 place-items-center text-xs text-stone-500">
             <span className="inline-flex items-center gap-2"><LoaderCircle className="animate-spin" size={14} />加载协作记录…</span>
@@ -216,7 +243,6 @@ export function AiMemberWorkspace({
         {historyLoaded && !messages.length ? (
           <div className="grid min-h-28 place-items-center px-6 text-center">
             <div>
-            <span className="mx-auto grid size-8 place-items-center rounded-full bg-stone-100 text-stone-500"><Sparkles size={15} /></span>
             <h3 className="mt-2 text-sm font-semibold">
               从正在形成的想法开始协作
             </h3>
@@ -263,18 +289,34 @@ export function AiMemberWorkspace({
                 </span>
               </div>
               {message.role === "assistant" ? (
-                <><ProjectReplyContent citationScope={`document-${message.id}`} content={message.content} support={message.support} /><ProjectSupportCard citationScope={`document-${message.id}`} replyContent={message.content} support={message.support} /></>
+                <><ProjectReplyContent citationScope={`document-${message.id}`} content={message.content} formatDocumentReply support={message.support} /><ProjectSupportCard citationScope={`document-${message.id}`} replyContent={message.content} support={message.support} /></>
               ) : (
-                <p className="whitespace-pre-wrap">{message.content}</p>
+                <>
+                  <p className="whitespace-pre-wrap">{message.content}</p>
+                  {message.requestStatus ? (
+                    <div className="mt-2 border-t border-white/20 pt-2 text-[11px] text-stone-200">
+                      {message.requestStatus === "sending" ? "正在发送…" : null}
+                      {message.requestStatus === "processing" ? "正在整理你提供的材料…" : null}
+                      {message.requestStatus === "recovering" ? "正在恢复这次回答…" : null}
+                      {message.requestStatus === "cancelled" ? "已取消" : null}
+                      {message.requestStatus === "failed" ? (
+                        <>
+                          <p role="alert">{message.requestError || "这次回答没能完成，你的消息已保留。可以重新尝试。"}</p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {message.retryable && message.requestId ? <button className="rounded-md border border-white/40 px-2 py-1 font-medium text-white hover:bg-white/15" onClick={() => onRetryMessage(message.requestId!)} type="button">重新尝试</button> : null}
+                            <button className="rounded-md border border-white/40 px-2 py-1 font-medium text-white hover:bg-white/15" onClick={() => onEditMessage(message.id)} type="button">编辑后发送</button>
+                          </div>
+                        </>
+                      ) : null}
+                      {message.requestStatus === "processing" || message.requestStatus === "recovering" ? (
+                        <button className="mt-2 rounded-md border border-white/40 px-2 py-1 font-medium text-white hover:bg-white/15" onClick={() => message.requestId && onCancelMessage(message.requestId)} type="button">取消这次请求</button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </>
               )}
             </article>
           ))}
-
-          {busy ? (
-            <div className="max-w-[94%] rounded-xl rounded-bl-sm border border-stone-200 bg-white px-3 py-2.5 text-xs text-stone-500">
-              <span className="flex items-center gap-2"><LoaderCircle className="animate-spin" size={13} />AI 组员正在思考…</span>
-            </div>
-          ) : null}
 
           {pendingChange ? (
             <section className="rounded-xl border border-stone-200 bg-white p-3" aria-label="待确认的 AI 修改">
@@ -377,6 +419,7 @@ export function AiMemberWorkspace({
             </section>
           ) : null}
         </div>
+        {showNewMessages ? <button className="sticky bottom-2 left-1/2 z-10 -translate-x-1/2 rounded-full bg-stone-900 px-3 py-1.5 text-xs font-medium text-white shadow-md" onClick={jumpToLatest} type="button">查看新消息</button> : null}
       </div>
 
       <form
@@ -393,21 +436,23 @@ export function AiMemberWorkspace({
           </div>
         ) : null}
 
-        {!draft && !pendingChange && !pendingDelivery && starters.length ? (
-          <div className="mb-2 flex gap-1.5 overflow-x-auto pb-0.5">
-            {starters.map((starter) => (
-              <button className="shrink-0 rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-[10px] text-stone-600 transition hover:border-stone-300 hover:bg-stone-50" key={starter} onClick={() => onChangeDraft(starter)} type="button">{starter}</button>
-            ))}
+        <div className="mb-1.5 grid grid-cols-4 gap-1" aria-label="协作入口">
+          {QUICK_ACTIONS.map((action) => (
+            <button className="min-h-9 min-w-0 whitespace-nowrap rounded-md border border-stone-200 px-1 py-1.5 text-[10px] text-stone-700 hover:border-stone-400 hover:bg-stone-50 disabled:opacity-40 sm:text-[11px]" disabled={busy || (action.intent === "delegate" && Boolean(pendingChange || pendingDelivery))} key={action.label} onClick={() => { setShowCheckOptions(false); onQuickAction(action.intent, action.prompt); }} type="button">{action.label}</button>
+          ))}
+          <button className="min-h-9 min-w-0 whitespace-nowrap rounded-md border border-stone-200 px-1 py-1.5 text-[10px] text-stone-700 hover:border-stone-400 hover:bg-stone-50 disabled:opacity-40 sm:text-[11px]" disabled={busy} onClick={() => setShowCheckOptions((current) => !current)} type="button">检查文稿</button>
+        </div>
+        {showCheckOptions ? (
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] text-stone-600">
+            <span>检查侧重：</span>
+            <button className="rounded-md border border-stone-200 px-2 py-1 hover:bg-stone-50" onClick={() => { onQuickAction("check", "请检查当前文稿的项目逻辑、关键证据和前后矛盾，说明具体依据和下一步。暂不处理普通措辞问题。"); setShowCheckOptions(false); }} type="button">项目逻辑</button>
+            <button className="rounded-md border border-stone-200 px-2 py-1 hover:bg-stone-50" onClick={() => { onQuickAction("check", "请按需检查当前文稿的语言表达、结构和可读性。指出具体位置及可操作的修改建议，不直接替我决定项目结论。"); setShowCheckOptions(false); }} type="button">语言表达</button>
           </div>
         ) : null}
-        {taskStartersBusy && !draft && !pendingDelivery ? (
-          <p className="mb-2 inline-flex items-center gap-1.5 px-1 text-[10px] text-stone-500"><LoaderCircle className="animate-spin" size={11} />正在根据当前文稿更新工作建议…</p>
-        ) : null}
-
         <div className="flex items-end gap-2 rounded-xl border border-stone-300 bg-white p-1.5 shadow-sm transition focus-within:border-stone-500 focus-within:ring-2 focus-within:ring-stone-100">
           <textarea
             className="max-h-28 min-h-12 flex-1 resize-none bg-transparent px-1.5 py-1 text-sm leading-5 text-stone-900 outline-none placeholder:text-stone-400"
-            disabled={busy || Boolean(pendingChange) || Boolean(pendingDelivery)}
+            disabled={busy}
             maxLength={1200}
             onChange={(event) => onChangeDraft(event.target.value)}
             placeholder="把你的判断、疑问或希望 AI 组员协助的非核心工作告诉它…"
@@ -416,7 +461,7 @@ export function AiMemberWorkspace({
           <button
             aria-label="发送给 AI 组员"
             className="grid size-8 shrink-0 place-items-center rounded-lg bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={busy || Boolean(pendingChange) || Boolean(pendingDelivery) || !draft.trim()}
+            disabled={busy || !draft.trim()}
             title="发送"
             type="submit"
           >

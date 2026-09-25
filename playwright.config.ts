@@ -37,7 +37,7 @@ export default defineConfig({
     ? [["github"], ["html", { open: "never" }]]
     : "list",
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: process.env.OPENPBL_RESOURCE_E2E_BASE_URL || "http://localhost:3000",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",

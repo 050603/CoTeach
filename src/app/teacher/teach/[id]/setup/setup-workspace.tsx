@@ -155,7 +155,7 @@ export default function TeachSetupWorkspace({ activityId, offeringId, templateVe
               {course.status !== "finished" ? <MakeArtifactModeSetting course={course} /> : null}
             </div>
             <div className="mt-4 space-y-3">
-              <p className="text-sm leading-6 text-stone-600">项目启动、成果汇报与评价、学习反思采用轻量资源授课；知识讲授采用分节学习、小测与助教讲解；项目实践的成果形式由教师在右上角统一设置。</p>
+              <p className="text-sm leading-6 text-stone-600">项目启动、成果汇报与评价采用轻量资源授课；知识讲授采用分节学习、小测与助教讲解；项目实践的成果形式由教师在右上角统一设置。第 5 阶段使用实验模式配置的后测题目。</p>
               <div className="grid gap-2 sm:grid-cols-5">
                 {course.stages.map((stage, index) => <div className="rounded-[8px] border border-blue-100 bg-blue-50/70 p-3" key={stage.key}><span className="text-xs font-black text-blue-700">阶段 {index + 1}</span><p className="mt-1 text-sm font-bold text-stone-900">{stage.label}</p></div>)}
               </div>

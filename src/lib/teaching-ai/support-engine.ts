@@ -943,7 +943,7 @@ export async function buildTeacherDashboardAdvice(
   const makeInteractions = (course.aiInteractionEvents ?? []).filter((event) => event.stageKey === "make");
   const makeMissingStudentIds = course.students.filter((student) => !makeArtifactStudentIds.has(student.id)).map((student) => student.id);
   const showcaseRows = (course.showcasePresentations ?? []).slice(-50);
-  const reflectionStudentIds = new Set((course.reflections ?? []).map((reflection) => reflection.studentId));
+  const posttestSubmittedStudentIds = new Set(course.experimentPosttestSummary?.studentRows.filter((row) => row.status === "submitted").map((row) => row.studentId) ?? []);
   const evidenceByKey = new Map<string, { priority: number; studentIds: Set<string> }>();
   issueGroups.forEach((issue, index) => evidenceByKey.set(issue.evidenceKey, {
     priority: severityRank[issue.severity] * 100 + Math.min(issue.affectedStudentCount, 50),
@@ -960,7 +960,7 @@ export async function buildTeacherDashboardAdvice(
     evidenceByKey.set("make-collaboration", { priority: 120, studentIds: new Set(makeInteractions.map((event) => event.studentId)) });
   }
   if (stageKey === "showcase" && showcaseRows.length) evidenceByKey.set("showcase-status", { priority: 180, studentIds: new Set(showcaseRows.filter((presentation) => presentation.status !== "ended").map((presentation) => presentation.studentId)) });
-  if (stageKey === "reflection" && course.students.length) evidenceByKey.set("reflection-status", { priority: 150, studentIds: new Set(course.students.filter((student) => !reflectionStudentIds.has(student.id)).map((student) => student.id)) });
+  if (stageKey === "reflection" && course.experimentPosttestSummary?.enabled && course.students.length) evidenceByKey.set("posttest-status", { priority: 150, studentIds: new Set(course.students.filter((student) => !posttestSubmittedStudentIds.has(student.id)).map((student) => student.id)) });
   const median = (values: number[]) => {
     const sorted = [...values].sort((left, right) => left - right);
     if (!sorted.length) return undefined;
@@ -987,7 +987,7 @@ export async function buildTeacherDashboardAdvice(
             ? `当前有 ${showcaseRows.length} 份汇报记录，其中 ${showcaseRows.filter((item) => item.status === "ended").length} 份已结束、${showcaseRows.filter((item) => item.status === "active").length} 份正在汇报。`
             : "本阶段尚未开始学生汇报。"
           : stageKey === "reflection"
-            ? `${reflectionStudentIds.size}/${course.students.length} 名学生已提交学习反思。`
+            ? course.experimentPosttestSummary?.enabled ? `${posttestSubmittedStudentIds.size}/${course.students.length} 名学生已提交后测。` : "本课堂未开启后测。"
             : progressRows.some((row) => row.progress !== undefined)
               ? `${progressSummary.completedCount}/${course.students.length} 名学生已完成本阶段。`
               : "本阶段尚未收到可靠的课堂记录。";
@@ -1017,11 +1017,11 @@ export async function buildTeacherDashboardAdvice(
     } : undefined,
     makeCollaboration: stageKey === "make" ? { evidenceKey: "make-collaboration", eventCount: makeInteractions.length, events: makeInteractions.slice(-30).map((event) => ({ studentId: event.studentId, eventType: event.eventType, actorRole: event.actorRole, createdAt: event.createdAt })), aiDecisions: (course.studentAiDecisions ?? []).filter((decision) => decision.stageKey === "make").slice(-20).map((decision) => ({ studentId: decision.studentId, decision: decision.decision })) } : undefined,
     showcase: stageKey === "showcase" ? { evidenceKey: "showcase-status", presentations: showcaseRows.map((presentation) => ({ studentId: presentation.studentId, artifactTitle: presentation.artifactTitle, status: presentation.status, requestedAt: presentation.requestedAt, startedAt: presentation.startedAt, endedAt: presentation.endedAt, evaluatedAt: presentation.evaluatedAt })) } : undefined,
-    reflections: stageKey === "reflection" ? { evidenceKey: "reflection-status", responses: (course.reflections ?? []).slice(-30).map((reflection) => ({ studentId: reflection.studentId, submittedAt: reflection.updatedAt, hasStructuredSurvey: Boolean(reflection.survey) })) } : undefined,
+    posttest: stageKey === "reflection" ? { evidenceKey: "posttest-status", enabled: Boolean(course.experimentPosttestSummary?.enabled), studentRows: course.experimentPosttestSummary?.studentRows ?? [] } : undefined,
     recentOfflineInterventions: { evidenceKey: "recent-interventions", items: (course.offlineInterventions ?? []).filter((item) => item.stageKey === stageKey).slice(-8).map((item) => ({ kind: item.kind, studentIds: item.targetStudentIds, note: item.note, createdAt: item.createdAt })) },
   };
   const issueRevision = issueGroups.map((issue) => `${issue.title}:${issue.severity}:${issue.affectedStudentCount}:${issue.lastDetectedAt ?? "none"}`).join("|");
-  const sourceRevision = [stageEvents[0]?.occurredAt, showcaseRows.at(-1)?.updatedAt, makeInteractions.at(-1)?.createdAt, (course.submissions ?? []).at(-1)?.updatedAt, Object.values(course.aiLearningProgress ?? {}).map((item) => item.lastActiveAt).sort().at(-1), (course.reflections ?? []).at(-1)?.updatedAt].join(":");
+  const sourceRevision = [stageEvents[0]?.occurredAt, showcaseRows.at(-1)?.updatedAt, makeInteractions.at(-1)?.createdAt, (course.submissions ?? []).at(-1)?.updatedAt, Object.values(course.aiLearningProgress ?? {}).map((item) => item.lastActiveAt).sort().at(-1), JSON.stringify(course.experimentPosttestSummary?.studentRows ?? [])].join(":");
   const cacheKey = `${course.id}:${stageKey}:${course.updatedAt}:${sourceRevision}:${issueRevision || "none"}`;
   const cached = teacherDashboardAdviceCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {

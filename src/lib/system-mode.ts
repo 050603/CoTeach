@@ -30,9 +30,9 @@ const SYSTEM_STAGES: readonly Stage[] = [
   },
   {
     key: "reflection",
-    label: "学习反思",
-    view: "reflection-survey",
-    description: "用约 3–5 分钟回顾课程收获与系统使用体验",
+    label: "后测",
+    view: "experiment-posttest",
+    description: "完成教师设置的课堂后测",
   },
 ];
 

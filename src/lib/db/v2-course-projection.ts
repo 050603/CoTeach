@@ -9,6 +9,7 @@ import { loadShowcaseState } from "@/lib/showcase/state";
 import { aggregateCommonIssues } from "@/lib/learning-analytics/analyzer";
 import { listProjectDocumentVersions } from "@/lib/project-practice/versions";
 import { loadCompanionState, persistCompanionState } from "@/lib/companion/server-store";
+import { experimentConfigFromActivity, posttestOpenedAt } from "@/lib/platform/experiment";
 
 export class ClassroomProjectionError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) { super(message); this.name = "ClassroomProjectionError"; }
@@ -94,6 +95,17 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
     db.studentProjectWorkspace.findMany({ where: { participationId: { in: participationIds } } }),
     loadCompanionState(id, db),
   ]);
+  const [experimentAssignments, experimentDrafts, experimentPosttests] = await Promise.all([
+    db.experimentAssessmentAssignment.findMany({ where: { instanceId: id }, select: { enrollmentId: true } }),
+    db.experimentAssessmentDraft.findMany({ where: { assignment: { instanceId: id }, phase: "posttest" }, select: { assignment: { select: { enrollmentId: true } } } }),
+    db.experimentAssessmentSubmission.findMany({ where: { instanceId: id, phase: "posttest" }, select: { enrollmentId: true } }),
+  ]);
+  const draftEnrollments = new Set(experimentDrafts.map(item => item.assignment.enrollmentId));
+  const submittedEnrollments = new Set(experimentPosttests.map(item => item.enrollmentId));
+  const experimentStudentRows = instance.participations.map(item => ({
+    studentId: item.enrollment.userId,
+    status: submittedEnrollments.has(item.enrollmentId) ? "submitted" as const : draftEnrollments.has(item.enrollmentId) ? "in-progress" as const : "not-started" as const,
+  }));
   const findUser = (participationId: string) => instance.participations.find(p => p.id === participationId)?.enrollment.user;
   const collection = <K extends keyof Course>(rows: Array<{ metadata: unknown }>, name: K): Course[K] => Array.from(new Map(rows.filter(r => object(r.metadata).collection === name).map(r => { const item = view<{ id: string }>(r.metadata); return [item.id, item]; })).values()) as Course[K];
   const uploadViews = collection(submissions.filter(submission => submission.status !== "ARCHIVED").map(submission => ({ metadata: submission.payload })), "uploads") ?? [];
@@ -108,6 +120,14 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
     projectDocumentVersions: await listProjectDocumentVersions({ courseId: id }, db),
     activityLog: (await db.domainEvent.findMany({ where: { classroomInstanceId: id, eventType: "CLASSROOM_ACTIVITY" }, orderBy: { createdAt: "desc" }, take: 300 })).map(e => view<NonNullable<Course["activityLog"]>[number]>(e.payload)),
     platformContext: { offeringId, activityId: instance.activityId, templateId: instance.templateVersion.templateId, templateVersionId: instance.templateVersionId },
+    experimentPosttestSummary: {
+      enabled: Boolean(experimentAssignments.length || experimentConfigFromActivity(instance.activity.config)),
+      ...(posttestOpenedAt(instance.runtimeConfig) ? { openedAt: posttestOpenedAt(instance.runtimeConfig)! } : {}),
+      notStartedCount: experimentStudentRows.filter(item => item.status === "not-started").length,
+      inProgressCount: experimentStudentRows.filter(item => item.status === "in-progress").length,
+      submittedCount: experimentStudentRows.filter(item => item.status === "submitted").length,
+      studentRows: experimentStudentRows,
+    },
     name: instance.activity.title, version: Number(runtime.version ?? 1),
     status: instance.status.toUpperCase() === "TEACHING" ? "teaching" : instance.status.toUpperCase() === "FINISHED" ? "finished" : "ready",
     currentStageIndex: Number(runtime.currentStageIndex ?? 0),
@@ -197,7 +217,8 @@ export async function persistInstanceCourse(db: Prisma.TransactionClient, before
   const meta = (collection: string, row: unknown) => json({ instanceId: instance.id, collection, provenance: actor ? { actorId: actor.id, actorRole: actor.role } : { actorRole: "system" }, view: row });
   const current = object(instance.runtimeConfig);
   const transitionAt = new Date();
-  await db.classroomInstance.update({ where: { id: instance.id }, data: { runtimeConfig: json({ ...current, version: (before.version ?? 1) + 1, currentStageIndex: after.currentStageIndex, classConfig: after.classConfig, makeArtifactMode: after.pblConfig?.makeArtifactMode, practiceWebSearchEnabled: after.pblConfig?.practiceWebSearchEnabled, uiState: after.uiState, presentingStudentId: after.presentingStudentId, presentingGroupId: after.presentingGroupId, resolvedInterventionSignalIds: after.resolvedInterventionSignalIds, courseSummaryPresentation: after.content.courseSummaryPresentation }), status: after.status === "teaching" ? "TEACHING" : after.status === "finished" ? "FINISHED" : "SCHEDULED", ...(after.status === "teaching" && !instance.startedAt ? { startedAt: transitionAt } : {}), ...(after.status === "finished" && !instance.endedAt ? { endedAt: transitionAt } : {}) } });
+  const opensPosttest = after.stages[after.currentStageIndex]?.key === "reflection" && after.status === "teaching";
+  await db.classroomInstance.update({ where: { id: instance.id }, data: { runtimeConfig: json({ ...current, ...(opensPosttest && !posttestOpenedAt(current) ? { posttestOpenedAt: transitionAt.toISOString() } : {}), version: (before.version ?? 1) + 1, currentStageIndex: after.currentStageIndex, classConfig: after.classConfig, makeArtifactMode: after.pblConfig?.makeArtifactMode, practiceWebSearchEnabled: after.pblConfig?.practiceWebSearchEnabled, uiState: after.uiState, presentingStudentId: after.presentingStudentId, presentingGroupId: after.presentingGroupId, resolvedInterventionSignalIds: after.resolvedInterventionSignalIds, courseSummaryPresentation: after.content.courseSummaryPresentation }), status: after.status === "teaching" ? "TEACHING" : after.status === "finished" ? "FINISHED" : "SCHEDULED", ...(after.status === "teaching" && !instance.startedAt ? { startedAt: transitionAt } : {}), ...(after.status === "finished" && !instance.endedAt ? { endedAt: transitionAt } : {}) } });
   if (before.status !== after.status) {
     const action = after.status === "teaching" ? "start" : "finish";
     if (action === "finish") await db.classroomParticipation.updateMany({ where: { instanceId: instance.id, completedAt: null }, data: { completedAt: transitionAt } });

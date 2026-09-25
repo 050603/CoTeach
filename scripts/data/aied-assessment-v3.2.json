@@ -1,0 +1,440 @@
+{
+  "format": "coteach-experiment",
+  "version": 1,
+  "config": {
+    "enabled": true,
+    "sharedQuestions": [
+      {
+        "id": "knowledge-1",
+        "type": "single-choice",
+        "prompt": "教师作两处调整：①保留“提出问题—探究制作—展示评价”的整体流程，把其中“教师示范”改为“学生比较方案”；②把“讲解概念—分项练习”的整体流程改为“围绕真实问题调查、制作并修订作品”。①和②分别主要调整了哪个层次？",
+        "options": [
+          "①教学模式；②教学方法",
+          "①教学方法；②教学模式",
+          "①教学方法；②教学理论",
+          "①教学理论；②教学模式",
+          "暂不确定"
+        ],
+        "category": "knowledge",
+        "correctAnswer": "①教学方法；②教学模式",
+        "group": {
+          "id": "knowledge",
+          "title": "教学理解与判断",
+          "instruction": "每题只选一项，确实无法判断可选 E：暂不确定。"
+        }
+      },
+      {
+        "id": "knowledge-2",
+        "type": "single-choice",
+        "prompt": "学生原以为“AI识别就是逐张比对存好的照片”。①认出新角度的物体后，他解释：“它应该也存过这个角度的照片。”②进一步测试后，他改为解释：“它也能利用特征判断，不必存有每张新图片。”①和②分别更接近哪种认知过程？",
+        "options": [
+          "①同化；②同化",
+          "①顺应；②同化",
+          "①同化；②顺应",
+          "①顺应；②顺应",
+          "暂不确定"
+        ],
+        "category": "knowledge",
+        "correctAnswer": "①同化；②顺应",
+        "group": {
+          "id": "knowledge",
+          "title": "教学理解与判断",
+          "instruction": "每题只选一项，确实无法判断可选 E：暂不确定。"
+        }
+      },
+      {
+        "id": "knowledge-3",
+        "type": "single-choice",
+        "prompt": "为理解“分类结果依赖所选特征”，学生按物品的形状、颜色移动到不同区域，并比较更换规则前后的分组。哪项表现最能说明身体活动参与了概念理解？",
+        "options": [
+          "根据位置变化解释分类差异，并修正原有判断",
+          "依照活动口令完成快速分组，并减少走位错误",
+          "复述活动中出现的分类定义，并补全概念笔记",
+          "轮流扮演特征与类别的角色，并复现示范动作",
+          "暂不确定"
+        ],
+        "category": "knowledge",
+        "correctAnswer": "根据位置变化解释分类差异，并修正原有判断",
+        "group": {
+          "id": "knowledge",
+          "title": "教学理解与判断",
+          "instruction": "每题只选一项，确实无法判断可选 E：暂不确定。"
+        }
+      },
+      {
+        "id": "knowledge-4",
+        "type": "single-choice",
+        "prompt": "学生为学校后勤制作垃圾识别方案，制定计划并展示成果。过程中，他们用对照测试检验“背景影响识别”的假设，并据此修订方案。整体以交付改进方案为目标，项目式与探究式的关系最恰当的是：",
+        "options": [
+          "整体属于探究式，项目活动嵌入其中",
+          "开始采用项目式，测试后改成探究式",
+          "开始采用探究式，展示时改成项目式",
+          "整体属于项目式，探究活动嵌入其中",
+          "暂不确定"
+        ],
+        "category": "knowledge",
+        "correctAnswer": "整体属于项目式，探究活动嵌入其中",
+        "group": {
+          "id": "knowledge",
+          "title": "教学理解与判断",
+          "instruction": "每题只选一项，确实无法判断可选 E：暂不确定。"
+        }
+      },
+      {
+        "id": "knowledge-5",
+        "type": "single-choice",
+        "prompt": "活动①：提出“样本背景影响识别”的假设，控制其他条件比较结果，再修正解释。活动②：围绕“校园AI助手怎样兼顾便利与隐私”拆分问题、权衡方案并提出建议。就主要组织特征，①和②分别更接近什么模式？",
+        "options": [
+          "①探究式；②问题式",
+          "①问题式；②探究式",
+          "①项目式；②探究式",
+          "①问题式；②项目式",
+          "暂不确定"
+        ],
+        "category": "knowledge",
+        "correctAnswer": "①探究式；②问题式",
+        "group": {
+          "id": "knowledge",
+          "title": "教学理解与判断",
+          "instruction": "每题只选一项，确实无法判断可选 E：暂不确定。"
+        }
+      },
+      {
+        "id": "knowledge-6",
+        "type": "single-choice",
+        "prompt": "学习目标是理解“训练数据的类别分布与各类识别结果的联系”。哪项任务最能让这一知识成为完成任务所必需的依据？",
+        "options": [
+          "按统一样例训练模型，凭最高识别率选出优胜组",
+          "比较不同数据的分布，凭分项结果选择补充样本",
+          "对照提供的数据报告，凭概念定义填写术语表",
+          "重排训练操作的步骤，凭运行截图说明流程正确",
+          "暂不确定"
+        ],
+        "category": "knowledge",
+        "correctAnswer": "比较不同数据的分布，凭分项结果选择补充样本",
+        "group": {
+          "id": "knowledge",
+          "title": "教学理解与判断",
+          "instruction": "每题只选一项，确实无法判断可选 E：暂不确定。"
+        }
+      },
+      {
+        "id": "knowledge-7",
+        "type": "single-choice",
+        "prompt": "学生已参照完整范例完成两份教案。教师准备将完整范例改为简短提示，继续指导“为教学目标设计评价任务”。哪项新增表现最能支持减少这类帮助？",
+        "options": [
+          "能准确复述评价原则，并解释范例中的对应关系",
+          "能参照范例设计任务，并在更短时间内完成填写",
+          "能根据同伴意见修改，并解释每处修改的理由",
+          "能在新主题中自拟任务，并解释它与目标的对应",
+          "暂不确定"
+        ],
+        "category": "knowledge",
+        "correctAnswer": "能在新主题中自拟任务，并解释它与目标的对应",
+        "group": {
+          "id": "knowledge",
+          "title": "教学理解与判断",
+          "instruction": "每题只选一项，确实无法判断可选 E：暂不确定。"
+        }
+      },
+      {
+        "id": "knowledge-8",
+        "type": "single-choice",
+        "prompt": "教师用“校园配送机器人在雨天误停”的模拟事件作抛锚式教学情境。学生分别调查光线、传感器读数和训练数据。哪项后续安排最符合这种方法？",
+        "options": [
+          "分组介绍三类知识，再分别完成相应的概念测验",
+          "按统一步骤调试机器人，再汇总各组的成功次数",
+          "汇合三条调查证据，解释原事件并提出改进方案",
+          "选择感兴趣的调查线，再制作各自主题的知识海报",
+          "暂不确定"
+        ],
+        "category": "knowledge",
+        "correctAnswer": "汇合三条调查证据，解释原事件并提出改进方案",
+        "group": {
+          "id": "knowledge",
+          "title": "教学理解与判断",
+          "instruction": "每题只选一项，确实无法判断可选 E：暂不确定。"
+        }
+      }
+    ],
+    "pretest": [
+      {
+        "id": "pre-background-1",
+        "type": "single-choice",
+        "prompt": "在本次课之前，你编写教案的经历最接近哪种情况？",
+        "options": [
+          "从未编写过教案",
+          "只写过部分教学环节",
+          "独立或合作完成过1份完整教案",
+          "独立或合作完成过2份及以上完整教案"
+        ],
+        "category": "other",
+        "group": {
+          "id": "background",
+          "title": "学习背景",
+          "instruction": "请按本次课之前的实际经历作答。"
+        }
+      },
+      {
+        "id": "pre-background-2",
+        "type": "single-choice",
+        "prompt": "对建构主义、具身认知及本课涉及的教学模式与方法，你此前的学习经历最接近哪项？",
+        "options": [
+          "尚未学习过",
+          "只有零散了解",
+          "较系统学习过，但尚未据此编写教案",
+          "较系统学习过，并已尝试用于教案设计"
+        ],
+        "category": "other",
+        "group": {
+          "id": "background",
+          "title": "学习背景",
+          "instruction": "请按本次课之前的实际经历作答。"
+        }
+      },
+      {
+        "id": "pre-estimate",
+        "type": "scale",
+        "prompt": "对本次答题表现的估计\n刚才8道知识选择题，你估计自己答对了几道？ 请圈选一个数字。",
+        "scale": {
+          "min": 0,
+          "max": 8,
+          "minLabel": "0 道",
+          "maxLabel": "8 道"
+        },
+        "category": "confidence",
+        "group": {
+          "id": "estimate",
+          "title": "答题判断",
+          "instruction": "按当前判断作答，不查看答案。本题不计入知识成绩。"
+        }
+      }
+    ],
+    "posttest": [
+      {
+        "id": "post-estimate",
+        "type": "scale",
+        "prompt": "对本次答题表现的估计\n刚才8道知识选择题，你估计自己答对了几道？ 请圈选一个数字。",
+        "scale": {
+          "min": 0,
+          "max": 8,
+          "minLabel": "0 道",
+          "maxLabel": "8 道"
+        },
+        "category": "confidence",
+        "group": {
+          "id": "estimate",
+          "title": "答题判断",
+          "instruction": "按当前判断作答，不查看答案。本题不计入知识成绩。"
+        }
+      },
+      {
+        "id": "experience-11",
+        "type": "scale",
+        "prompt": "本次AI学习环节帮助我理解了本章的教学理论与方法。",
+        "scale": {
+          "min": 1,
+          "max": 7,
+          "minLabel": "完全不同意",
+          "maxLabel": "完全同意"
+        },
+        "category": "other",
+        "group": {
+          "id": "ai-experience",
+          "title": "AI学习环节",
+          "instruction": "1＝完全不同意；2＝不同意；3＝比较不同意；4＝中立；5＝比较同意；6＝同意；7＝完全同意。只听了AI讲解也可以评价；确因缺席或技术故障未参加时，请跳过并在提交前注明原因。"
+        },
+        "optional": true,
+        "skipReasonRequired": true
+      },
+      {
+        "id": "experience-12",
+        "type": "scale",
+        "prompt": "本次AI学习环节能够吸引我投入学习。",
+        "scale": {
+          "min": 1,
+          "max": 7,
+          "minLabel": "完全不同意",
+          "maxLabel": "完全同意"
+        },
+        "category": "other",
+        "group": {
+          "id": "ai-experience",
+          "title": "AI学习环节",
+          "instruction": "1＝完全不同意；2＝不同意；3＝比较不同意；4＝中立；5＝比较同意；6＝同意；7＝完全同意。只听了AI讲解也可以评价；确因缺席或技术故障未参加时，请跳过并在提交前注明原因。"
+        },
+        "optional": true,
+        "skipReasonRequired": true
+      },
+      {
+        "id": "experience-13",
+        "type": "scale",
+        "prompt": "我觉得本次AI学习环节是有趣的。",
+        "scale": {
+          "min": 1,
+          "max": 7,
+          "minLabel": "完全不同意",
+          "maxLabel": "完全同意"
+        },
+        "category": "other",
+        "group": {
+          "id": "ai-experience",
+          "title": "AI学习环节",
+          "instruction": "1＝完全不同意；2＝不同意；3＝比较不同意；4＝中立；5＝比较同意；6＝同意；7＝完全同意。只听了AI讲解也可以评价；确因缺席或技术故障未参加时，请跳过并在提交前注明原因。"
+        },
+        "optional": true,
+        "skipReasonRequired": true
+      },
+      {
+        "id": "experience-14",
+        "type": "scale",
+        "prompt": "将本章的理论或方法应用于本次教案设计，对我来说是困难的。",
+        "scale": {
+          "min": 1,
+          "max": 7,
+          "minLabel": "完全不同意",
+          "maxLabel": "完全同意"
+        },
+        "category": "other",
+        "group": {
+          "id": "design-experience",
+          "title": "个人教案设计任务",
+          "instruction": "请评价你自己的设计任务，无论是否使用AI辅助写作。未参加时可跳过；尚未形成可评价作品时，第16—17题可跳过并注明原因。"
+        },
+        "optional": true,
+        "skipReasonRequired": true
+      },
+      {
+        "id": "experience-15",
+        "type": "scale",
+        "prompt": "在编写本次教案的过程中，我感到自己掌握着设计方向。",
+        "scale": {
+          "min": 1,
+          "max": 7,
+          "minLabel": "完全不同意",
+          "maxLabel": "完全同意"
+        },
+        "category": "other",
+        "group": {
+          "id": "design-experience",
+          "title": "个人教案设计任务",
+          "instruction": "请评价你自己的设计任务，无论是否使用AI辅助写作。未参加时可跳过；尚未形成可评价作品时，第16—17题可跳过并注明原因。"
+        },
+        "optional": true,
+        "skipReasonRequired": true
+      },
+      {
+        "id": "experience-16",
+        "type": "scale",
+        "prompt": "我对自己最终完成的教案感到满意。",
+        "scale": {
+          "min": 1,
+          "max": 7,
+          "minLabel": "完全不同意",
+          "maxLabel": "完全同意"
+        },
+        "category": "other",
+        "group": {
+          "id": "design-experience",
+          "title": "个人教案设计任务",
+          "instruction": "请评价你自己的设计任务，无论是否使用AI辅助写作。未参加时可跳过；尚未形成可评价作品时，第16—17题可跳过并注明原因。"
+        },
+        "optional": true,
+        "skipReasonRequired": true
+      },
+      {
+        "id": "experience-17",
+        "type": "scale",
+        "prompt": "我能坦然地将这份教案署上自己的名字，作为自己的作品展示。",
+        "scale": {
+          "min": 1,
+          "max": 7,
+          "minLabel": "完全不同意",
+          "maxLabel": "完全同意"
+        },
+        "category": "other",
+        "group": {
+          "id": "design-experience",
+          "title": "个人教案设计任务",
+          "instruction": "请评价你自己的设计任务，无论是否使用AI辅助写作。未参加时可跳过；尚未形成可评价作品时，第16—17题可跳过并注明原因。"
+        },
+        "optional": true,
+        "skipReasonRequired": true
+      },
+      {
+        "id": "post-feedback",
+        "type": "short-answer",
+        "prompt": "一条课堂反馈（选答）\n请指出本次课堂中一处最有帮助或最需要改进的环节，并简述原因。 可以写AI讲解、个人实践、教师引导、展示或平台操作等；一两句话即可，无补充可留空。",
+        "category": "other",
+        "optional": true
+      }
+    ],
+    "scenarioPair": {
+      "a": {
+        "id": "design-a",
+        "type": "short-answer",
+        "prompt": "为小学六年级改进“校园植物识别”的一段8分钟活动。学生无编程基础，可以使用平板和已有测试记录。目标：学生能依据证据说明，在示范条件下识别成功，不代表换一种条件仍可靠。\n已有测试记录（模拟教学材料）：原背景识别成功4次／4次；换一种背景识别成功2次／4次。\n现有安排：教师展示上述结果并解释，学生照步骤重复成功操作，以交齐“识别成功截图”作为达标依据。请只改进一个关键环节，保持8分钟总时长。\n按下面三点写短句，总计建议90—150字。不要求完整教案；术语记不清可解释原则。\n\n依据：选一种理论、模式或方法，说明它为什么适合你的改进。\n活动：写清学生具体做什么，如何使用测试结果或获得新证据。\n评价：写出一种可观察的学生表现，用来判断学习目标是否达成。",
+        "category": "micro-design",
+        "group": {
+          "id": "design-a",
+          "title": "独立教学设计｜情境A",
+          "instruction": "请独立完成，总计建议90—150字；不要求完整教案。"
+        }
+      },
+      "b": {
+        "id": "design-b",
+        "type": "short-answer",
+        "prompt": "为小学六年级改进“学习用品识别”的一段8分钟活动。学生无编程基础，可以使用平板和已有测试记录。目标：学生能依据证据说明，在示范条件下识别成功，不代表换一种条件仍可靠。\n已有测试记录（模拟教学材料）：正面角度识别成功4次／4次；换一种角度识别成功2次／4次。\n现有安排：教师展示上述结果并解释，学生照步骤重复成功操作，以交齐“识别成功截图”作为达标依据。请只改进一个关键环节，保持8分钟总时长。\n按下面三点写短句，总计建议90—150字。不要求完整教案；术语记不清可解释原则。\n\n依据：选一种理论、模式或方法，说明它为什么适合你的改进。\n活动：写清学生具体做什么，如何使用测试结果或获得新证据。\n评价：写出一种可观察的学生表现，用来判断学习目标是否达成。",
+        "category": "micro-design",
+        "group": {
+          "id": "design-b",
+          "title": "独立教学设计｜情境B",
+          "instruction": "请独立完成，总计建议90—150字；不要求完整教案。"
+        }
+      }
+    },
+    "randomizeQuestionOrder": false,
+    "randomizeOptionOrder": false,
+    "pretestOrder": [
+      "pre-background-1",
+      "pre-background-2",
+      "knowledge-1",
+      "knowledge-2",
+      "knowledge-3",
+      "knowledge-4",
+      "knowledge-5",
+      "knowledge-6",
+      "knowledge-7",
+      "knowledge-8",
+      "pre-estimate",
+      "design-a",
+      "design-b"
+    ],
+    "posttestOrder": [
+      "knowledge-1",
+      "knowledge-2",
+      "knowledge-3",
+      "knowledge-4",
+      "knowledge-5",
+      "knowledge-6",
+      "knowledge-7",
+      "knowledge-8",
+      "post-estimate",
+      "design-a",
+      "design-b",
+      "experience-11",
+      "experience-12",
+      "experience-13",
+      "experience-14",
+      "experience-15",
+      "experience-16",
+      "experience-17",
+      "post-feedback"
+    ],
+    "pretestIntroduction": "请在教师导入前独立完成，不使用AI、课件或同伴帮助。知识题每题只选一项，确实无法判断可选E。建议知识题用5分钟、设计题用3分钟。",
+    "posttestIntroduction": "请在展示反馈与教师总结后完成。前10题独立作答，不使用AI、课件、教案或同伴帮助。体验题没有标准答案，不计入课程成绩，请如实填写。",
+    "pretestMinutes": 10,
+    "posttestMinutes": 15,
+    "skipReasonPrompt": "仅在跳过第11—17题时填写原因（如缺席、技术故障或尚未形成可评价作品）"
+  }
+}

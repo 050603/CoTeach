@@ -1655,14 +1655,12 @@ export function eligibleAdaptiveBranches(
 export type CompanionMicroLessonStageKey =
   | "proposal"
   | "make"
-  | "showcase"
-  | "reflection";
+  | "showcase";
 
 const COMPANION_MICRO_LESSON_STAGE_CONTEXT: Readonly<Record<CompanionMicroLessonStageKey, string>> = {
   proposal: "方案构思",
   make: "项目制作",
   showcase: "成果汇报",
-  reflection: "学习反思",
 };
 
 export function isCompanionMicroLessonStage(

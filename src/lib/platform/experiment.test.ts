@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ExperimentConfigSchema, composeExperimentForms, gradeExperimentAnswers, publicActivityConfig, publicExperimentConfig, publicExperimentQuestions } from "./experiment";
+import assessmentBackup from "../../../scripts/data/aied-assessment-v3.2.json";
 
 const experiment = {
   enabled: true,
@@ -13,6 +14,22 @@ const experiment = {
 } as const;
 
 describe("classroom experiment questions", () => {
+  it("keeps the v3.2 parallel forms in document order and enforces skip reasons", () => {
+    const config = ExperimentConfigSchema.parse(assessmentBackup.config);
+    const a = composeExperimentForms(config, "A_PRE_B_POST", () => 0);
+    const b = composeExperimentForms(config, "B_PRE_A_POST", () => 0);
+    expect(a.pretest).toHaveLength(12);
+    expect(a.posttest).toHaveLength(18);
+    expect(a.pretest.map((question) => question.id).slice(0, 3)).toEqual(["pre-background-1", "pre-background-2", "knowledge-1"]);
+    expect(a.posttest.map((question) => question.id).slice(8, 11)).toEqual(["post-estimate", "design-b", "experience-11"]);
+    expect(b.pretest[11].id).toBe("design-b");
+    expect(b.posttest[9].id).toBe("design-a");
+    const requiredAnswers = Object.fromEntries(a.posttest.filter((question) => !question.optional).map((question) => [question.id, question.type === "scale" ? "4" : question.type === "short-answer" ? "一段设计" : question.correctAnswer]));
+    expect(gradeExperimentAnswers(a.posttest, requiredAnswers)).toBeNull();
+    const graded = gradeExperimentAnswers(a.posttest, { ...requiredAnswers, __skipReason: "设备故障" });
+    expect(graded).toMatchObject({ objectiveScore: 8, objectiveTotal: 8 });
+    expect(graded?.answers).not.toHaveProperty("post-feedback");
+  });
   it("requires separately configured assessments and rejects invalid answer keys", () => {
     expect(ExperimentConfigSchema.safeParse(experiment).success).toBe(true);
     expect(ExperimentConfigSchema.safeParse({ ...experiment, posttest: [] }).success).toBe(false);

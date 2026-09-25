@@ -5,7 +5,6 @@ import {
   deriveKnowledgeDashboardMetrics,
   deriveLaunchDashboardMetrics,
   deriveMakeDashboardMetrics,
-  deriveReflectionDashboardMetrics,
   deriveShowcaseDashboardMetrics,
   type TeacherDashboardMetric,
   type TeacherDashboardTone,
@@ -108,15 +107,30 @@ export function deriveTeacherClassroomPulse(
     return { chartLabel: "当前阶段暂无可用统计", metrics: [], segments: [], total: 0 };
   }
 
-  const data = deriveReflectionDashboardMetrics(course);
+  const data = course.experimentPosttestSummary;
+  if (!data?.enabled) {
+    return {
+      chartLabel: "本课堂未开启后测",
+      metrics: [{ metricId: "posttest-disabled", label: "后测状态", value: "未开启", helper: "请在实验配置中设置后测题目", tone: "neutral" }],
+      segments: [],
+      total: 0,
+    };
+  }
+
+  const total = data.notStartedCount + data.inProgressCount + data.submittedCount;
   return {
-    chartLabel: data.lowScoreRows.length ? `反思提交 · ${data.lowScoreRows.length} 人需关注` : "反思提交状态",
-    metrics: data.headlines.slice(0, 3),
+    chartLabel: "后测作答状态",
+    metrics: [
+      { metricId: "posttest-not-started", label: "未开始", value: String(data.notStartedCount), helper: "尚未开始后测", tone: "neutral" },
+      { metricId: "posttest-in-progress", label: "作答中", value: String(data.inProgressCount), helper: "已保存答题草稿", tone: "info" },
+      { metricId: "posttest-submitted", label: "已提交", value: String(data.submittedCount), helper: "已正式提交后测", tone: "success" },
+    ],
     segments: [
       { label: "已提交", count: data.submittedCount, className: "bg-emerald-600" },
-      { label: "待提交", count: data.pendingStudents.length, className: "bg-stone-300" },
+      { label: "作答中", count: data.inProgressCount, className: "bg-teal-600" },
+      { label: "未开始", count: data.notStartedCount, className: "bg-stone-300" },
     ],
-    total: course.students.length,
+    total,
   };
 }
 
@@ -162,7 +176,7 @@ export function TeacherClassroomPulse({
   degraded?: boolean;
 }) {
   const pulse = deriveTeacherClassroomPulse(course, stageKey, showcaseData);
-  const stageLabel = course.stages.find((stage) => stage.key === stageKey)?.label ?? "当前阶段";
+  const stageLabel = stageKey === "reflection" ? "后测" : course.stages.find((stage) => stage.key === stageKey)?.label ?? "当前阶段";
   return (
     <section
       aria-label={`${stageLabel}课堂数据速览`}

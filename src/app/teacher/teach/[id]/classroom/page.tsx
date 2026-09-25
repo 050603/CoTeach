@@ -439,7 +439,7 @@ export default function TeachClassroomPage() {
           ) : null}
 
 
-          {currentStage && !presentation.active ? (
+          {currentStage && currentStage.key !== "showcase" && !presentation.active ? (
             <TeacherClassroomPulse
               course={course}
               degraded={presence.degraded}

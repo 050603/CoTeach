@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ExperimentConfigSchema, ExperimentQuestionSchema } from "./experiment";
+import assessmentBackup from "../../../scripts/data/aied-assessment-v3.2.json";
 import {
   EXPERIMENT_BULK_EXAMPLE,
   exportExperimentConfigJson,
@@ -13,6 +14,16 @@ function ids() {
 }
 
 describe("experiment question spreadsheet import", () => {
+  it("preserves the v3.2 form order when copying the entire assessment to another course", () => {
+    const source = ExperimentConfigSchema.parse(assessmentBackup.config);
+    const copied = importExperimentConfigJson(exportExperimentConfigJson(source), ids());
+    expect(copied.ok).toBe(true);
+    if (!copied.ok) return;
+    expect(copied.config.pretestOrder?.[0]).toBe(copied.config.pretest[0].id);
+    expect(copied.config.posttestOrder?.[0]).toBe(copied.config.sharedQuestions[0].id);
+    expect(copied.config.scenarioPair?.a.id).not.toBe(source.scenarioPair?.a.id);
+    expect(copied.config.posttestOrder?.[9]).toBe(copied.config.scenarioPair?.a.id);
+  });
   it("accepts a pasted header, ungraded choices, answer keys, scales, and research dimensions", () => {
     const result = parseExperimentQuestionRows([
       "题型\t题干\t选项或量表范围\t参考答案（可空）\t研究维度",

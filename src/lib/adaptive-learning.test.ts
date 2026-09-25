@@ -844,7 +844,8 @@ describe("extractLearningRequestTopic", () => {
   });
 
   it("enables on-demand micro lessons only in the four companion stages", () => {
-    expect(["proposal", "make", "showcase", "reflection"].every(isCompanionMicroLessonStage)).toBe(true);
+    expect(["proposal", "make", "showcase"].every(isCompanionMicroLessonStage)).toBe(true);
+    expect(isCompanionMicroLessonStage("reflection")).toBe(false);
     expect(isCompanionMicroLessonStage("launch")).toBe(false);
     expect(isCompanionMicroLessonStage("ai-learning")).toBe(false);
     expect(companionMicroLessonStageContext("showcase")).toBe("成果汇报");

@@ -77,7 +77,7 @@ async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; 
     } }));
   }
   let assignedStudentId: string | undefined;
-  const pdfBytes = options.pdfResource || options.activeShowcase ? await samplePdf() : undefined;
+  const pdfBytes = options.pdfResource || options.activeShowcase || options.waitingShowcase ? await samplePdf() : undefined;
   if (options.pdfResource) course.resources = [{ id: "presentation-pdf", title: "校园能源观察与改进建议：两页课堂演示资料", stageKey: "launch", type: "PDF", size: "2 KB", url: "/api/uploads/e2e-presentation-pdf", displayMode: "slides", downloadedBy: [] }];
   if (options.empty) course.students = [];
   const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
@@ -119,7 +119,7 @@ async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; 
     const body = request.method() === "GET" ? {} : request.postDataJSON() ?? {};
     if (request.method() !== "GET") writes.push({ path, body });
     const json = (value: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(value) });
-    if (pdfBytes && (path === "/api/uploads/e2e-presentation-pdf" || path === `/api/courses/${courseId}/showcase/artifacts/e2e-artifact`)) return route.fulfill({ status: 200, contentType: "application/pdf", body: pdfBytes });
+    if (pdfBytes && (path === "/api/uploads/e2e-presentation-pdf" || path === `/api/courses/${courseId}/showcase/artifacts/e2e-artifact` || path.startsWith(`/api/courses/${courseId}/showcase/artifacts/artifact-student-`))) return route.fulfill({ status: 200, contentType: "application/pdf", body: pdfBytes });
     if (path === "/api/auth/me") return json({ user: { id: "e2e-presentation-teacher", role: "teacher", name: "大屏验收教师", displayName: "大屏验收教师" } });
     if (path === "/api/courses") return json({ courses: [course], user: { role: "teacher", name: "大屏验收教师" }, hydrated: true, updatedAt: course.updatedAt });
     if (path === `/api/courses/${courseId}/state`) return json({ course, eventCursor: "0" });
@@ -431,9 +431,79 @@ for (const viewport of [{ width: 1024, height: 576 }, { width: 1920, height: 108
       { action: "assign", groupId: "group-student-2", studentId: "student-2" },
     ]);
     await expect(commonActions.getByRole("button", { name: "教师发起投屏", exact: true })).toBeEnabled();
-    await expect(page.getByText("请在下方查看并选择该生材料，然后由教师端发起投屏", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "选择学生汇报材料" })).toBeVisible();
     await expect(page.getByRole("button", { name: "批准并开始", exact: true })).toHaveCount(0);
     await screenshot(page, info, "footer-showcase-called");
+    expect(fixture.unexpected).toEqual([]);
+    expect(fixture.errors).toEqual([]);
+  });
+}
+
+for (const viewport of [{ width: 1024, height: 576 }, { width: 1366, height: 768 }]) {
+  test(`ordinary showcase material controls do not overlap the preview ${viewport.width}x${viewport.height}`, async ({ page }, info) => {
+    await page.setViewportSize(viewport);
+    const fixture = await mockClassroom(page, { waitingShowcase: true });
+    await enterFullscreen(page);
+    await page.getByRole("combobox", { name: "全屏教学阶段" }).selectOption("3");
+    await page.getByRole("dialog").getByRole("button", { name: /进入“/ }).click();
+    const fullscreenRail = page.getByTestId("teacher-showcase-management");
+    await expect(fullscreenRail.getByRole("heading", { name: "汇报队列" })).toBeVisible();
+    const fullscreenLayout = await page.getByRole("button", { name: "选择学生汇报材料" }).evaluate((node) => {
+      const main = node.closest("main")?.getBoundingClientRect();
+      const preview = node.closest("main")?.querySelector('[class*="preview"]')?.getBoundingClientRect();
+      const rail = document.querySelector('[data-testid="teacher-showcase-management"]')?.getBoundingClientRect();
+      const stage = node.closest("section.classroom-stage")?.getBoundingClientRect();
+      return { mainRight: main?.right ?? 0, mainBottom: main?.bottom ?? 0, previewBottom: preview?.bottom ?? 0, railLeft: rail?.left ?? 0, railTop: rail?.top ?? 0, stageBottom: stage?.bottom ?? 0 };
+    });
+    if (viewport.width > 1100) {
+      expect(fullscreenLayout.railLeft).toBeGreaterThan(fullscreenLayout.mainRight);
+      expect(fullscreenLayout.stageBottom - fullscreenLayout.previewBottom).toBeLessThan(4);
+    } else {
+      expect(fullscreenLayout.railTop).toBeGreaterThanOrEqual(fullscreenLayout.mainBottom);
+    }
+    await page.getByRole("button", { name: "退出全屏", exact: true }).click();
+    const selector = page.getByRole("button", { name: "选择学生汇报材料" });
+    await expect(selector).toBeVisible();
+    await expect(page.locator('canvas[aria-label="PDF 第 1 页"]').first()).toBeVisible();
+    const geometry = await selector.evaluate((node) => {
+      const toolbar = node.closest("[class*=toolbar]");
+      const preview = toolbar?.nextElementSibling;
+      const controls = toolbar?.getBoundingClientRect();
+      const body = preview?.getBoundingClientRect();
+      const action = preview?.nextElementSibling?.getBoundingClientRect();
+      const footer = document.querySelector(".pbl-safe-bottom.fixed")?.getBoundingClientRect();
+      const stage = node.closest("section.classroom-stage")?.getBoundingClientRect();
+      return { controlBottom: controls?.bottom ?? 0, previewTop: body?.top ?? 0, previewBottom: body?.bottom ?? 0, previewHeight: body?.height ?? 0, previewRight: body?.right ?? 0, actionBottom: action?.bottom ?? 0, footerTop: footer?.top ?? 0, stageTop: stage?.top ?? 0, viewportWidth: window.innerWidth, scrollWidth: document.documentElement.scrollWidth };
+    });
+    expect(geometry.previewTop).toBeGreaterThanOrEqual(geometry.controlBottom - 1);
+    expect(geometry.previewBottom).toBeLessThanOrEqual(geometry.footerTop + 1);
+    expect(geometry.actionBottom).toBeLessThanOrEqual(geometry.footerTop + 1);
+    expect(geometry.previewHeight / (geometry.footerTop - geometry.stageTop)).toBeGreaterThanOrEqual(.65);
+    expect(geometry.previewRight).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+    await expect(page.getByRole("button", { name: "开始汇报", exact: true })).toBeInViewport({ ratio: 1 });
+    await page.getByRole("combobox", { name: "选择查看材料的学生" }).selectOption("student-0");
+    await page.getByRole("button", { name: "逐页演示" }).click();
+    await page.getByRole("button", { name: "下一页" }).click();
+    await expect(page.getByText("2 / 2", { exact: true })).toBeVisible();
+    await enterFullscreen(page);
+    await expect(page.getByRole("combobox", { name: "选择查看材料的学生" })).toHaveValue("student-0");
+    await expect(page.getByText("2 / 2", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "退出全屏", exact: true }).click();
+    await expect(page.getByText("2 / 2", { exact: true })).toBeVisible();
+    if (viewport.width === 1366) {
+      await page.getByRole("button", { name: "显示班级概览" }).click();
+      await expect(page.getByTestId("teacher-showcase-management").getByRole("heading", { name: "汇报队列" })).toBeVisible();
+      const compactGeometry = await selector.evaluate((node) => {
+        const preview = node.closest("[class*=toolbar]")?.nextElementSibling?.getBoundingClientRect();
+        const footer = document.querySelector(".pbl-safe-bottom.fixed")?.getBoundingClientRect();
+        return { previewBottom: preview?.bottom ?? 0, footerTop: footer?.top ?? 0, scrollWidth: document.documentElement.scrollWidth, viewportWidth: window.innerWidth };
+      });
+      expect(compactGeometry.previewBottom).toBeLessThanOrEqual(compactGeometry.footerTop + 1);
+      expect(compactGeometry.scrollWidth).toBeLessThanOrEqual(compactGeometry.viewportWidth + 1);
+      await page.getByRole("button", { name: "收起班级概览" }).click();
+    }
+    await screenshot(page, info, "showcase-ordinary-workspace");
     expect(fixture.unexpected).toEqual([]);
     expect(fixture.errors).toEqual([]);
   });
@@ -514,9 +584,35 @@ for (const viewport of [{ width: 1024, height: 576 }, { width: 1920, height: 108
     await page.getByRole("combobox", { name: "全屏教学阶段" }).selectOption("3");
     await page.getByRole("dialog").getByRole("button", { name: /进入“/ }).click();
     await assertCanvasFits(page, "PDF 第 2 页");
+    if (viewport.width > 1100) {
+      const rail = page.getByTestId("teacher-showcase-management");
+      await expect(rail.getByRole("heading", { name: "汇报队列" })).toBeVisible();
+      const geometry = await page.getByRole("region", { name: "校园节能项目最终成果", exact: true }).evaluate((node) => {
+        const material = node.getBoundingClientRect();
+        const rail = document.querySelector('[data-testid="teacher-showcase-management"]')?.getBoundingClientRect();
+        const stage = node.closest("section.classroom-stage")?.getBoundingClientRect();
+        return { materialRight: material.right, materialBottom: material.bottom, railLeft: rail?.left ?? 0, railBottom: rail?.bottom ?? 0, stageBottom: stage?.bottom ?? 0 };
+      });
+      expect(geometry.railLeft).toBeGreaterThan(geometry.materialRight);
+      expect(geometry.stageBottom - geometry.materialBottom).toBeLessThan(4);
+      expect(geometry.stageBottom - geometry.railBottom).toBeLessThan(4);
+      const queueSpace = await rail.evaluate((node) => {
+        const body = node.children[1] as HTMLElement;
+        return { bodyBottom: body.getBoundingClientRect().bottom, railBottom: node.getBoundingClientRect().bottom, visibleHeight: body.clientHeight, contentHeight: body.scrollHeight };
+      });
+      expect(queueSpace.railBottom - queueSpace.bodyBottom).toBeLessThan(2);
+      expect(queueSpace.contentHeight).toBeGreaterThan(queueSpace.visibleHeight);
+    }
     await expect(page.getByText("2 / 2", { exact: true })).toBeInViewport({ ratio: 1 });
-    await expect(page.getByRole("region", { name: "校园节能项目最终成果", exact: true }).getByRole("button", { name: "结束汇报", exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole("region", { name: "校园节能项目最终成果", exact: true }).getByRole("button", { name: "结束汇报", exact: true })).toHaveCount(0);
     await expect(page.getByRole("group", { name: "当前阶段常用操作", exact: true }).getByRole("button", { name: "结束汇报", exact: true })).toBeInViewport({ ratio: 1 });
+    await page.getByRole("region", { name: "校园节能项目最终成果", exact: true }).getByRole("button", { name: "上一页" }).click();
+    await expect(page.getByText("1 / 2", { exact: true })).toBeVisible();
+    await page.getByRole("region", { name: "校园节能项目最终成果", exact: true }).getByRole("button", { name: "最小化" }).click();
+    await page.getByRole("button", { name: "恢复汇报投屏" }).click();
+    await expect(page.getByText("1 / 2", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "下一页" }).click();
+    await expect(page.getByText("2 / 2", { exact: true })).toBeVisible();
     await screenshot(page, info, "showcase-approved-pdf");
     await page.getByRole("button", { name: "班级学情", exact: true }).click();
     await expect(page.getByRole("region", { name: "班级学情大屏" })).not.toContainText("私密学生");

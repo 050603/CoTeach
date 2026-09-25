@@ -14,7 +14,7 @@ import { StudentPdfResourceViewer } from "@/components/classroom/simple-stage-re
 import { StudentExperimentAssessment, type ExperimentPhase, type ExperimentQuestion } from "@/components/platform/student-experiment-assessment";
 
 type Experiment = { enabled: boolean; pretest: ExperimentQuestion[]; posttest: ExperimentQuestion[] };
-type ActivityInstance = { id: string; status: string; startedAt: string | null; endedAt: string | null; canWrite?: boolean; coverImageUrl?: string | null; pretestSubmitted?: boolean; posttestSubmitted?: boolean; experiment?: Experiment | null };
+type ActivityInstance = { id: string; status: string; startedAt: string | null; endedAt: string | null; canWrite?: boolean; coverImageUrl?: string | null; pretestSubmitted?: boolean; posttestSubmitted?: boolean; posttestAvailable?: boolean; experiment?: Experiment | null };
 type Activity = { id: string; type: string; title: string; description: string | null; isOpen: boolean; offering: { id: string; name: string; status: string }; chapter: { title: string }; config?: { content?: string; url?: string; resourceKind?: "link" | "file"; fileName?: string; questions?: SurveyQuestion[] }; experiment?: Experiment | null; progress: { status: string; progressData?: { answer?: string; answers?: Record<string, SurveyAnswer> } }; instance: ActivityInstance | null; instances?: ActivityInstance[] };
 
 function experimentForInstance(activity: Activity, instance: ActivityInstance): Experiment | null | undefined {
@@ -124,13 +124,15 @@ export default function StudentActivityPage() {
     if (!questions?.length) return null;
     const submitted = phase === "pretest" ? target.pretestSubmitted : target.posttestSubmitted;
     const label = phase === "pretest" ? "前测" : "后测";
-    if (submitted) return <p role="status" className="mt-3 text-xs font-semibold text-[var(--pbl-student)]">{label}已提交，答案已保存到本次课堂记录。</p>;
-    const available = phase === "pretest" ? ["scheduled", "teaching"].includes(target.status) : target.status === "finished";
+    if (submitted) return activeAssessment?.instanceId === target.id && activeAssessment.phase === phase
+      ? <StudentExperimentAssessment key={`${target.id}-${phase}`} instanceId={target.id} phase={phase} onCancel={() => setActiveAssessment(null)} onSubmitted={() => markAssessmentSubmitted(target.id, phase)} />
+      : <div className="mt-3 flex flex-wrap items-center gap-3"><p role="status" className="text-xs font-semibold text-[var(--pbl-student)]">{label}已提交，答案已保存到本次课堂记录。</p><button className="min-h-11 rounded-[10px] border border-[var(--pbl-border)] bg-white px-3 text-xs font-semibold text-[var(--pbl-student)]" onClick={() => setActiveAssessment({ instanceId: target.id, phase })} type="button">查看{label}答案</button></div>;
+    const available = phase === "pretest" ? ["scheduled", "teaching"].includes(target.status) : Boolean(target.posttestAvailable ?? target.status === "finished");
     if (!available) return phase === "posttest"
-      ? <p className="mt-3 text-xs text-[var(--pbl-text-muted)]">后测将在本次课堂结束后开放。</p> : null;
+      ? <p className="mt-3 text-xs text-[var(--pbl-text-muted)]">后测将在教师进入第 5 阶段后开放。</p> : null;
     if (!activity?.isOpen) return <p className="mt-3 text-xs text-[var(--pbl-text-muted)]">本次课堂活动尚未开放，暂时无法提交{label}。</p>;
     return activeAssessment?.instanceId === target.id && activeAssessment.phase === phase
-      ? <StudentExperimentAssessment key={`${target.id}-${phase}`} instanceId={target.id} phase={phase} questions={questions} onCancel={() => setActiveAssessment(null)} onSubmitted={() => markAssessmentSubmitted(target.id, phase)} />
+      ? <StudentExperimentAssessment key={`${target.id}-${phase}`} instanceId={target.id} phase={phase} onCancel={() => setActiveAssessment(null)} onSubmitted={() => markAssessmentSubmitted(target.id, phase)} />
       : <div className="mt-5 rounded-[14px] border border-[var(--pbl-student-border)] bg-white p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-2"><span className="rounded-full bg-[var(--pbl-student-soft)] px-3 py-1 text-xs font-semibold text-[var(--pbl-student)]">{phase === "pretest" ? "课前前测" : "课后后测"}</span><span className="text-xs font-medium tabular-nums text-[var(--pbl-text-muted)]">共 {questions.length} 题</span></div>
         <p className="mt-3 text-base font-semibold text-[var(--pbl-text-strong)]">{phase === "pretest" ? "开始学习前，请先完成前测" : "课堂已结束，请完成后测"}</p>

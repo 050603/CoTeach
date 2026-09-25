@@ -9,7 +9,7 @@ import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { generateInviteCode, normalizeInviteCode } from "@/lib/session/invite-code";
 import { ActivityConfigSchema, type ActivityType } from "./activity";
 import { SurveyConfigSchema } from "./survey";
-import { ExperimentConfigSchema, ExperimentQuestionSchema, experimentConfigFromActivity, publicActivityConfig, publicExperimentQuestions } from "./experiment";
+import { ExperimentConfigSchema, ExperimentQuestionSchema, experimentConfigFromActivity, isPosttestOpen, publicActivityConfig, publicExperimentQuestions } from "./experiment";
 import { buildSurveyAnalytics } from "./survey-analytics";
 import { classroomCoverImageUrl } from "./classroom-cover";
 import { CourseReferenceLinksSchema, type CourseReferenceLink } from "./course-reference";
@@ -323,7 +323,7 @@ export async function getStudentActivity(claims: AuthClaims, activityId: string)
     const pretest = ExperimentQuestionSchema.array().safeParse(assignment.pretestForm);
     const posttest = ExperimentQuestionSchema.array().safeParse(assignment.posttestForm);
     if (!pretest.success || !posttest.success) return null;
-    return { enabled: true, pretest: publicExperimentQuestions(pretest.data), posttest: normalizedStatus(instance.status) === "finished" && submitted(instance.id, "pretest") ? publicExperimentQuestions(posttest.data) : [] };
+    return { enabled: true, pretest: publicExperimentQuestions(pretest.data), posttest: isPosttestOpen(instance.status, instance.runtimeConfig) && submitted(instance.id, "pretest") ? publicExperimentQuestions(posttest.data) : [] };
   };
   const submitted = (instanceId: string, phase: string) => experimentRows.some((row) => row.instanceId === instanceId && row.phase === phase);
   return {
@@ -338,8 +338,8 @@ export async function getStudentActivity(claims: AuthClaims, activityId: string)
     offering: { id: offering.id, name: offering.name, status: normalizedStatus(offering.status) },
     enrollment: { id: enrollment.id },
     progress: progress ? { status: normalizedStatus(progress.status), startedAt: progress.startedAt, completedAt: progress.completedAt, lastAccessedAt: progress.lastAccessedAt, progressData: progress.progressData } : { status: "not_started", startedAt: null, completedAt: null, lastAccessedAt: null },
-    instances: activity.classroomInstances.map((instance) => ({ id: instance.id, status: normalizedStatus(instance.status), startedAt: instance.startedAt, endedAt: instance.endedAt, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot), experiment: open ? instanceExperiment(instance) : null, pretestSubmitted: submitted(instance.id, "pretest"), posttestSubmitted: submitted(instance.id, "posttest") })),
-    instance: activity.classroomInstances[0] ? { ...activity.classroomInstances[0], templateVersion: { ...activity.classroomInstances[0].templateVersion, snapshot: publicResourcePackageSnapshot(activity.classroomInstances[0].templateVersion.snapshot) }, status: normalizedStatus(activity.classroomInstances[0].status), coverImageUrl: classroomCoverImageUrl(activity.classroomInstances[0].templateVersion.snapshot), canWrite: open && normalizedStatus(offering.status) === "open" && normalizedStatus(enrollment.status) === "active" && normalizedStatus(activity.classroomInstances[0].status) === "teaching", experiment: open ? instanceExperiment(activity.classroomInstances[0]) : null, pretestSubmitted: submitted(activity.classroomInstances[0].id, "pretest"), posttestSubmitted: submitted(activity.classroomInstances[0].id, "posttest") } : null,
+    instances: activity.classroomInstances.map((instance) => ({ id: instance.id, status: normalizedStatus(instance.status), posttestAvailable: isPosttestOpen(instance.status, instance.runtimeConfig), startedAt: instance.startedAt, endedAt: instance.endedAt, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot), experiment: open ? instanceExperiment(instance) : null, pretestSubmitted: submitted(instance.id, "pretest"), posttestSubmitted: submitted(instance.id, "posttest") })),
+    instance: activity.classroomInstances[0] ? { ...activity.classroomInstances[0], templateVersion: { ...activity.classroomInstances[0].templateVersion, snapshot: publicResourcePackageSnapshot(activity.classroomInstances[0].templateVersion.snapshot) }, status: normalizedStatus(activity.classroomInstances[0].status), posttestAvailable: isPosttestOpen(activity.classroomInstances[0].status, activity.classroomInstances[0].runtimeConfig), coverImageUrl: classroomCoverImageUrl(activity.classroomInstances[0].templateVersion.snapshot), canWrite: open && normalizedStatus(offering.status) === "open" && normalizedStatus(enrollment.status) === "active" && normalizedStatus(activity.classroomInstances[0].status) === "teaching", experiment: open ? instanceExperiment(activity.classroomInstances[0]) : null, pretestSubmitted: submitted(activity.classroomInstances[0].id, "pretest"), posttestSubmitted: submitted(activity.classroomInstances[0].id, "posttest") } : null,
   };
 }
 

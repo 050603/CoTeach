@@ -10,7 +10,7 @@ export function StudentClassroomFinishedState({ course }: {
       className="inline-flex min-h-11 items-center justify-center rounded-lg bg-[var(--pbl-student)] px-5 text-sm font-semibold text-white"
       href={`/student/activities/${encodeURIComponent(course.platformContext.activityId)}`}
     >返回课堂活动完成后测</Link> : undefined}
-    description={`《${course.name}》已结束授课。你可以留在这里回看作品、评价证据和反思记录。`}
+    description={`《${course.name}》已结束授课。你可以留在这里回看作品和评价证据，也可以返回课堂活动完成后测。`}
     icon={Clock3}
     title="课堂已结束"
     tone="neutral"

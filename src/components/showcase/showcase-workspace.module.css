@@ -1,0 +1,49 @@
+.workspace { container-type: inline-size; min-width: 0; }
+.immersiveWorkspace { display: flex; height: 100%; min-height: 0; flex-direction: column; }
+.projectedWorkspace { flex: 1; min-height: 0; }
+.header { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem 1rem; min-height: 3.25rem; padding: .25rem 0 .6rem; border-bottom: 1px solid var(--pbl-border); }
+.headerTitle { display: flex; align-items: center; flex: 1; min-width: 0; gap: .7rem; }
+.headerActions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 17.25rem; gap: .75rem; align-items: start; margin-top: .75rem; }
+.teacherLayout { grid-template-columns: minmax(0, 1fr) 18.25rem; }
+.immersiveLayout { flex: 1; min-height: 0; align-items: stretch; }
+.projectedLayout { height: 100%; min-height: 0; margin-top: 0; align-items: stretch; }
+.projectedLayout > :global(.teacher-presentation-showcase) { min-width: 0; }
+.main { display: flex; min-width: 0; flex-direction: column; border: 1px solid var(--pbl-border); border-radius: var(--radius-md); background: var(--pbl-surface); }
+.immersiveMain { min-height: 0; overflow: hidden; }
+.aside { min-width: 0; border: 1px solid var(--pbl-border); border-radius: var(--radius-md); background: var(--pbl-surface); }
+.immersiveAside { display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
+.managementBody { min-height: 0; }
+.immersiveAside .managementBody { flex: 1; overflow-y: auto; }
+.queueList { max-height: min(55dvh, 40rem); overflow-y: auto; }
+.immersiveAside .queueList { max-height: none; overflow: visible; }
+.preview { height: clamp(18rem, calc(100dvh - 16rem), 56rem); min-height: 0; overflow: hidden; background: var(--pbl-surface-soft); }
+.teacherPreview { height: clamp(17rem, calc(100dvh - 22rem), 48rem); }
+.teacherPreview.immersivePreview { height: auto; flex: 1; min-height: 0; }
+.slidesPreview { min-height: 0; }
+.preview :global(.min-h-72) { min-height: 0; }
+.preview :global(.min-h-full) { min-height: 100%; }
+.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem .65rem; min-width: 0; min-height: 3.5rem; padding: .35rem .6rem; border-bottom: 1px solid var(--pbl-border); background: white; }
+.picker { position: relative; flex: 1 1 16rem; min-width: 0; max-width: 33rem; }
+.pickerButton { display: flex; align-items: center; gap: .5rem; width: 100%; min-height: 2.75rem; padding: .45rem .7rem; border: 1px solid var(--pbl-border); border-radius: var(--radius-xs); text-align: left; font-size: .875rem; font-weight: 600; }
+.pickerButton span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pickerMenu { position: absolute; top: calc(100% + .25rem); left: 0; z-index: 40; width: min(30rem, 100%); max-height: min(25rem, 60dvh); overflow-y: auto; border: 1px solid var(--pbl-border); border-radius: var(--radius-sm); background: white; box-shadow: 0 12px 30px #1f293326; }
+.pickerSearch { width: calc(100% - 1rem); min-height: 2.75rem; margin: .5rem; padding: .5rem .7rem; border: 1px solid var(--pbl-border); border-radius: var(--radius-xs); font-size: 1rem; }
+.pickerOption { display: block; width: 100%; min-height: 2.75rem; padding: .5rem .75rem; border-top: 1px solid var(--pbl-border); text-align: left; font-size: .8125rem; overflow-wrap: anywhere; }
+.pickerOption:hover, .pickerOption[aria-selected="true"] { background: var(--pbl-surface-soft); }
+.toolbarActions { display: flex; flex: 0 1 auto; align-items: center; flex-wrap: wrap; gap: .35rem; }
+.toolbarButton { display: inline-flex; align-items: center; justify-content: center; gap: .35rem; min-height: 2.75rem; padding: .35rem .65rem; border: 1px solid var(--pbl-border); border-radius: var(--radius-xs); background: white; color: var(--pbl-text-strong); font-size: .8125rem; font-weight: 600; white-space: nowrap; }
+.toolbarButton[aria-pressed="true"] { border-color: var(--pbl-teacher); background: var(--pbl-teacher-soft); color: var(--pbl-teacher); }
+.student .toolbarButton[aria-pressed="true"] { border-color: var(--pbl-student); background: var(--pbl-student-soft); color: var(--pbl-student); }
+.toolbarButton:focus-visible, .pickerButton:focus-visible, .pickerOption:focus-visible { outline: 2px solid var(--pbl-teacher); outline-offset: -2px; }
+.student .toolbarButton:focus-visible, .student .pickerButton:focus-visible, .student .pickerOption:focus-visible { outline-color: var(--pbl-student); }
+.drawerBackdrop { position: fixed; inset: 0; z-index: 190; background: #1f293399; }
+.drawer { position: absolute; top: 0; right: 0; display: flex; flex-direction: column; width: min(26rem, 100vw); height: 100dvh; overflow: hidden; background: var(--pbl-surface); box-shadow: -8px 0 30px #1f293326; }
+.drawerHeader { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 3.5rem; padding: .5rem 1rem; border-bottom: 1px solid var(--pbl-border); }
+.drawerBody { min-height: 0; flex: 1; overflow-y: auto; padding: 1rem; }
+.flowAction button { display: inline-flex; min-height: 2.75rem; align-items: center; justify-content: center; gap: .4rem; border-radius: var(--radius-xs); background: var(--pbl-teacher); padding: .45rem .9rem; color: white; font-size: .875rem; font-weight: 600; }
+.flowAction button:disabled { opacity: .55; }
+.flowAction button[data-tone="danger"] { border: 1px solid var(--pbl-danger); background: white; color: var(--pbl-danger); }
+@container (max-width: 1099px) { .layout, .teacherLayout { grid-template-columns: minmax(0, 1fr); } .immersiveLayout { height: auto; flex: none; } .immersiveMain { overflow: visible; } .teacherPreview.immersivePreview { height: clamp(17rem, calc(100dvh - 19rem), 48rem); flex: none; } .immersiveAside { max-height: min(34rem, 65dvh); } .projectedLayout { grid-template-columns: minmax(0, 1fr); } .projectedLayout .aside { display: none; } }
+@container (max-width: 767px) { .picker { flex-basis: 100%; max-width: none; } .header { gap: .3rem; } .toolbar { gap: .35rem; } .slidesPreview { height: clamp(19rem, 42dvh, 27rem); } .student .slidesPreview { height: clamp(18rem, calc(100dvh - 19rem), 38rem); } }
+@media (max-height: 650px) { .preview { height: max(15rem, calc(100dvh - 16.5rem)); } .teacherPreview { height: max(15rem, calc(100dvh - 18rem)); } }

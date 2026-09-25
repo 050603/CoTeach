@@ -32,6 +32,7 @@ import type {
   DocumentAiCommentThread,
   DocumentBlockCandidate,
 } from '@/lib/ai-collaboration/document-comment-types';
+import { documentAiCommentStatus } from '@/lib/ai-collaboration/document-comment-types';
 import type { DelegatedWorkDocumentAction } from '@/lib/ai-collaboration/document-policy';
 
 export type PlateSelectionPoint = { path: number[]; offset: number };
@@ -99,6 +100,7 @@ type PlateDocumentEditorProps = {
   onOpenAiMember?: () => void;
   onAiCommentRead?: (input: { threadId: string }) => Promise<void>;
   onAiCommentReply?: (input: { threadId: string; message: string }) => Promise<void>;
+  onAiCommentStatusChange?: (input: { threadId: string; status: 'open' | 'resolved' | 'deferred' | 'not-applicable' }) => Promise<void>;
   onAiSuggestionDecision?: (decision: 'accepted' | 'rejected') => void;
   placeholder?: string;
   minHeight?: number;
@@ -305,6 +307,7 @@ export const PlateDocumentEditor = React.forwardRef<PlateDocumentEditorHandle, P
     onOpenAiMember,
     onAiCommentRead,
     onAiCommentReply,
+    onAiCommentStatusChange,
     onAiSuggestionDecision,
     onSelectionChange,
     pendingAiCommentSuggestion,
@@ -367,6 +370,13 @@ export const PlateDocumentEditor = React.forwardRef<PlateDocumentEditorHandle, P
       );
       editor.setOption(
         discussionPlugin,
+        'onAiStatusChange',
+        onAiCommentStatusChange
+          ? ({ discussionId, status }) => onAiCommentStatusChange({ threadId: discussionId, status })
+          : undefined,
+      );
+      editor.setOption(
+        discussionPlugin,
         'onAiSuggestionDecision',
         onAiSuggestionDecision,
       );
@@ -375,13 +385,39 @@ export const PlateDocumentEditor = React.forwardRef<PlateDocumentEditorHandle, P
         'pendingAiCommentSuggestion',
         pendingAiCommentSuggestion,
       );
-    }, [editor, onAiCommentRead, onAiCommentReply, onAiSuggestionDecision, pendingAiCommentSuggestion]);
+    }, [editor, onAiCommentRead, onAiCommentReply, onAiCommentStatusChange, onAiSuggestionDecision, pendingAiCommentSuggestion]);
 
     React.useEffect(() => {
       const existingDiscussions = editor
         .getOption(discussionPlugin, 'discussions')
         .filter((discussion) => discussion.source !== 'ai-proactive');
-      const aiDiscussions: TDiscussion[] = aiCommentThreads.map((thread) => ({
+      const resolveThreadIndex = (thread: DocumentAiCommentThread): number => {
+        const expectedBlockText = normalizeBlockText(thread.blockText ?? thread.targetText);
+        const matches = (index: number) => {
+          const node = editor.children[index];
+          if (!node) return false;
+          const text = NodeApi.string(node);
+          return text.includes(thread.targetText)
+            && (!thread.blockText || normalizeBlockText(text) === expectedBlockText);
+        };
+        if (thread.blockId) {
+          const index = editor.children.findIndex((node) =>
+            String((node as TElement & { id?: unknown }).id ?? '') === thread.blockId);
+          return index >= 0 && matches(index) ? index : -1;
+        }
+        if (matches(thread.blockIndex)) return thread.blockIndex;
+        // Legacy threads without block IDs may follow an unchanged paragraph
+        // to a new position, but never attach to a different paragraph that
+        // merely repeats a short target phrase.
+        if (!thread.blockText) return -1;
+        const indexes = editor.children.flatMap((_, index) => matches(index) ? [index] : []);
+        return indexes.length === 1 ? indexes[0] : -1;
+      };
+      const activeThreads = aiCommentThreads
+        .filter((thread) => documentAiCommentStatus(thread) === 'open')
+        .map((thread) => ({ thread, index: resolveThreadIndex(thread) }))
+        .filter((entry) => entry.index >= 0);
+      const aiDiscussions: TDiscussion[] = activeThreads.map(({ thread }) => ({
         id: thread.id,
         comments: thread.comments
           .filter((comment) =>
@@ -398,6 +434,7 @@ export const PlateDocumentEditor = React.forwardRef<PlateDocumentEditorHandle, P
         createdAt: new Date(thread.createdAt),
         documentContent: thread.targetText,
         isResolved: false,
+        aiStatus: documentAiCommentStatus(thread),
         isUnread: (() => {
           const latestAssistantAt = thread.comments
             .filter((comment) => comment.role === 'assistant')
@@ -424,37 +461,7 @@ export const PlateDocumentEditor = React.forwardRef<PlateDocumentEditorHandle, P
         });
       }
 
-      for (const thread of aiCommentThreads) {
-        const normalizedBlockText = normalizeBlockText(
-          thread.blockText ?? thread.targetText
-        );
-        let resolvedIndex = thread.blockId
-          ? editor.children.findIndex((node) =>
-              String((node as TElement & { id?: unknown }).id ?? '') === thread.blockId
-            )
-          : -1;
-        if (
-          resolvedIndex < 0
-          && editor.children[thread.blockIndex]
-          && normalizeBlockText(NodeApi.string(editor.children[thread.blockIndex])) === normalizedBlockText
-        ) {
-          resolvedIndex = thread.blockIndex;
-        }
-        if (resolvedIndex < 0) {
-          resolvedIndex = editor.children.findIndex(
-            (node) => normalizeBlockText(NodeApi.string(node)) === normalizedBlockText
-          );
-        }
-        if (resolvedIndex < 0) {
-          resolvedIndex = editor.children.findIndex((node) => {
-            const text = NodeApi.string(node);
-            const start = text.indexOf(thread.targetText);
-            return start >= 0
-              && text.indexOf(thread.targetText, start + thread.targetText.length) < 0;
-          });
-        }
-        if (resolvedIndex < 0) continue;
-
+      for (const { thread, index: resolvedIndex } of activeThreads) {
         const range = findUniqueTextRange(
           editor.children[resolvedIndex],
           resolvedIndex,
@@ -469,7 +476,7 @@ export const PlateDocumentEditor = React.forwardRef<PlateDocumentEditorHandle, P
           },
         );
       }
-      aiCommentIdsRef.current = aiCommentThreads.map((thread) => thread.id);
+      aiCommentIdsRef.current = activeThreads.map(({ thread }) => thread.id);
     }, [aiCommentThreads, editor, value]);
 
     React.useImperativeHandle(ref, () => ({

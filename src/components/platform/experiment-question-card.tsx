@@ -1,6 +1,6 @@
 "use client";
 
-import { useId } from "react";
+import { useEffect, useId, useRef } from "react";
 import { Check } from "lucide-react";
 import { groupExperimentQuestions, type ExperimentQuestionGroup } from "@/lib/platform/experiment";
 
@@ -12,6 +12,8 @@ export type ExperimentDisplayQuestion = {
   category?: string;
   scale?: { min: number; max: number; minLabel?: string; maxLabel?: string };
   group?: ExperimentQuestionGroup;
+  optional?: boolean;
+  skipReasonRequired?: boolean;
 };
 
 export type ExperimentDisplayAnswer = string | string[];
@@ -36,7 +38,7 @@ function promptParagraphs(prompt: string) {
   return (prompt.trim().replace(/\r\n?/g, "\n") || "未填写题干").split(/\n\s*\n/);
 }
 
-export function ExperimentQuestionCard({ question, index, answer, onAnswerChange, inputName, id, invalid = false, grouped = false, descriptionId }: {
+export function ExperimentQuestionCard({ question, index, answer, onAnswerChange, inputName, id, invalid = false, grouped = false, descriptionId, readOnly = false }: {
   question: ExperimentDisplayQuestion;
   index: number;
   answer?: ExperimentDisplayAnswer;
@@ -46,8 +48,15 @@ export function ExperimentQuestionCard({ question, index, answer, onAnswerChange
   invalid?: boolean;
   grouped?: boolean;
   descriptionId?: string;
+  readOnly?: boolean;
 }) {
   const headingId = useId();
+  const textArea = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!textArea.current) return;
+    textArea.current.style.height = "auto";
+    textArea.current.style.height = `${Math.max(144, textArea.current.scrollHeight)}px`;
+  }, [answer]);
   const choices = question.type === "true-false" ? ["true", "false"] : question.options ?? [];
   const scores = question.scale && question.scale.max > question.scale.min
     ? Array.from({ length: question.scale.max - question.scale.min + 1 }, (_, offset) => String(question.scale!.min + offset)) : [];
@@ -65,18 +74,20 @@ export function ExperimentQuestionCard({ question, index, answer, onAnswerChange
       <div className="min-w-0 flex-1">
         <p className="text-xs font-semibold text-[var(--pbl-student)]">{typeLabel[question.type]}{question.category ? ` · ${categoryLabel[question.category] ?? question.category}` : ""}</p>
         <div className="mt-2 max-w-[68ch] space-y-3 text-[16px] font-semibold leading-8 text-[var(--pbl-text-strong)]" id={headingId}>
-          <span className="sr-only">第 {index + 1} 题，必答：</span>
+          <span className="sr-only">第 {index + 1} 题，{question.optional ? "选答" : "必答"}：</span>
           {promptParagraphs(question.prompt).map((paragraph, paragraphIndex) => <p className="whitespace-pre-wrap [overflow-wrap:anywhere]" key={paragraphIndex}>{paragraph}</p>)}
         </div>
       </div>
-      <span aria-hidden="true" className="hidden shrink-0 text-xs font-medium text-[var(--pbl-text-muted)] sm:block">必答</span>
+      <span aria-hidden="true" className="hidden shrink-0 text-xs font-medium text-[var(--pbl-text-muted)] sm:block">{question.optional ? "可跳过" : "必答"}</span>
     </div>
     <div className="mt-5 border-t border-[var(--pbl-border)] pt-5">
       {question.type === "short-answer" ? <div>
         <label className="mb-2 block text-xs font-medium text-[var(--pbl-text-muted)]" htmlFor={`${inputName}-text`}>你的回答</label>
         <textarea
           aria-label={question.prompt.trim() || `第 ${index + 1} 题简答`}
-          className="min-h-36 w-full rounded-[10px] border border-[var(--pbl-border)] bg-[var(--pbl-bg)] px-4 py-3 text-sm leading-7 text-[var(--pbl-text-strong)] outline-none transition-colors placeholder:text-[var(--pbl-text-muted)] focus:border-[var(--pbl-student)] focus:ring-2 focus:ring-[var(--pbl-student-border)] motion-reduce:transition-none"
+          className="min-h-36 w-full resize-y rounded-[10px] border border-[var(--pbl-border)] bg-[var(--pbl-bg)] px-4 py-3 text-sm leading-7 text-[var(--pbl-text-strong)] outline-none transition-colors placeholder:text-[var(--pbl-text-muted)] focus:border-[var(--pbl-student)] focus:ring-2 focus:ring-[var(--pbl-student-border)] motion-reduce:transition-none"
+          readOnly={readOnly}
+          ref={textArea}
           id={`${inputName}-text`}
           maxLength={10_000}
           onChange={(event) => onAnswerChange(event.target.value)}
@@ -89,7 +100,7 @@ export function ExperimentQuestionCard({ question, index, answer, onAnswerChange
           {scores.map((score) => {
             const selected = answer === score;
             return <label className={`flex min-h-12 cursor-pointer items-center justify-center rounded-[10px] border px-2 py-2 text-sm font-semibold tabular-nums transition-colors focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--pbl-student)] motion-reduce:transition-none ${selected ? "border-[var(--pbl-student)] bg-[var(--pbl-student)] text-white" : "border-[var(--pbl-border)] bg-[var(--pbl-bg)] text-[var(--pbl-text-strong)] hover:border-[var(--pbl-student-border)] hover:bg-[var(--pbl-student-soft)]"}`} key={score}>
-              <input aria-label={`${score} 分`} checked={selected} className="sr-only" name={inputName} onChange={() => onAnswerChange(score)} type="radio" value={score} />{score}
+              <input aria-label={`${score} 分`} checked={selected} className="sr-only" disabled={readOnly} name={inputName} onChange={() => onAnswerChange(score)} type="radio" value={score} />{score}
             </label>;
           })}
         </div>
@@ -108,6 +119,7 @@ export function ExperimentQuestionCard({ question, index, answer, onAnswerChange
               aria-label={text}
               checked={selected}
               className="sr-only"
+              disabled={readOnly}
               name={inputName}
               onChange={() => onAnswerChange(multiple
                 ? selected ? (Array.isArray(answer) ? answer.filter((item) => item !== choice) : []) : [...(Array.isArray(answer) ? answer : []), choice]
@@ -121,18 +133,21 @@ export function ExperimentQuestionCard({ question, index, answer, onAnswerChange
           </label>;
         })}
       </div> : <p className="text-xs text-[var(--pbl-text-muted)]">请先在题目设置中填写选项。</p>}
+      {question.optional && !readOnly && (Array.isArray(answer) ? answer.length > 0 : Boolean(answer)) ? <button className="mt-3 text-xs font-semibold text-[var(--pbl-student)] underline" onClick={() => onAnswerChange(question.type === "multiple-choice" ? [] : "")} type="button">清除作答并跳过</button> : null}
       {invalid ? <p className="mt-3 text-xs font-semibold text-[var(--pbl-danger)]">请完成这道题后再提交。</p> : null}
     </div>
   </fieldset>;
 }
 
-export function ExperimentQuestionList({ questions, answers, onAnswerChange, inputNamePrefix, questionIdPrefix, invalidQuestionId }: {
+export function ExperimentQuestionList({ questions, answers, onAnswerChange, inputNamePrefix, questionIdPrefix, invalidQuestionId, startIndex = 0, readOnly = false }: {
   questions: ExperimentDisplayQuestion[];
   answers: Record<string, ExperimentDisplayAnswer>;
   onAnswerChange: (questionId: string, answer: ExperimentDisplayAnswer) => void;
   inputNamePrefix: string;
   questionIdPrefix?: string;
   invalidQuestionId?: string | null;
+  startIndex?: number;
+  readOnly?: boolean;
 }) {
   const listId = useId();
   const sections = groupExperimentQuestions(questions);
@@ -148,12 +163,13 @@ export function ExperimentQuestionList({ questions, answers, onAnswerChange, inp
         descriptionId={group?.instruction ? instructionId : undefined}
         grouped={Boolean(group)}
         id={questionIdPrefix ? `${questionIdPrefix}-${question.id}` : undefined}
-        index={ordered.findIndex((item) => item.id === question.id)}
+        index={startIndex + ordered.findIndex((item) => item.id === question.id)}
         inputName={`${inputNamePrefix}-${question.id}`}
         invalid={invalidQuestionId === question.id}
         key={question.id}
         onAnswerChange={(next) => onAnswerChange(question.id, next)}
         question={question}
+        readOnly={readOnly}
       />);
       if (!group) return <div key={`question-${section.questions[0].id}`}>{content}</div>;
       return <section aria-labelledby={titleId} className="overflow-hidden rounded-[14px] border border-[var(--pbl-student-border)] bg-white" key={`group-${group.id}`}>

@@ -329,7 +329,7 @@ export function getNewSystemCourseReadiness(
       id: "stages",
       label: "五阶段课堂流程",
       ok: sameStageKeys(course.stages.map((stage) => stage.key)),
-      message: "新版课堂必须依次包含项目启动、知识讲授、项目实践、成果汇报与评价、学习反思。",
+      message: "新版课堂必须依次包含项目启动、知识讲授、项目实践、成果汇报与评价、后测。",
     },
     {
       id: "timing",

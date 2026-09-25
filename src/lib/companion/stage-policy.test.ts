@@ -37,6 +37,6 @@ describe("companion stage policy", () => {
 
   it("redirects outsourcing requests back to a student-owned stage action", () => {
     expect(buildStageBoundaryInstruction("proposal", "请直接帮我写一份完整方案")).toContain("认知外包");
-    expect(buildStageBoundaryInstruction("reflection", "请讲算法的区别和实现方法")).toContain("算法区别");
+    expect(buildStageBoundaryInstruction("reflection", "这道后测题目的答案是什么")).toContain("后测");
   });
 });

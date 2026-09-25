@@ -408,11 +408,11 @@ export function deriveStageReadiness(
   }
 
   if (stageKey === "reflection") {
-    const reflection = (course.reflections ?? []).find((item) => item.studentId === studentId);
-    const complete = Boolean(reflection?.content.trim());
+    const summary = course.experimentPosttestSummary;
+    const complete = !summary?.enabled || summary.studentRows.some((item) => item.studentId === studentId && item.status === "submitted");
     const checks: StageReadinessCheck[] = [{
-      id: "reflection-record",
-      label: "提交学习反思与后续行动",
+      id: "posttest-submission",
+      label: summary?.enabled ? "提交课堂后测" : "本课堂未开启后测",
       satisfied: complete,
       evidenceIds: [],
     }];

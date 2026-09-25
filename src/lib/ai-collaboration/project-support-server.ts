@@ -222,11 +222,15 @@ function learningContext(course: Course, studentId: string): string {
 }
 
 function scaffoldLevel(history: Array<{ role: "user" | "assistant"; content: string }>, message: string): string {
-  const recentStudentText = [...history.filter((item) => item.role === "user").map((item) => item.content), message].join("\n");
-  const attempts = recentStudentText.match(/(?:试过|尝试|还是不行|仍然|又失败|报错|结果)/g)?.length ?? 0;
-  if (attempts >= 2) return "第 3 层：学生已有多次尝试，给出步骤拆解或局部示范，并说明如何验证；仍不得代做核心结论。";
-  if (attempts === 1) return "第 2 层：承接学生已有尝试，解释可能原因并给一个更具体的下一步或类比。";
-  return "第 1 层：基础知识可直接讲清；核心学习任务先给一个可执行提示和验证方向。";
+  const recentStudentTurns = history.filter((item) => item.role === "user").slice(-3)
+    .map((item) => clean(item.content, 300));
+  return [
+    "根据具体任务和真实尝试调整本轮帮助，不按关键词次数或对话轮数机械分级。",
+    "基础知识直接讲清。核心任务先承接已有思路或结果，给出具体方法、比较维度或验证步骤；已卡住时可给不同情境的完整例子，或示范当前项目的非核心局部。",
+    "如果学生已报告失败或实验结果，解释可能原因及如何验证，不重复上次的空泛提示。关键取舍和核心结论仍由学生完成。",
+    `本轮请求：${clean(message, 300)}`,
+    `最近学生表达：${recentStudentTurns.join("；") || "暂无"}`,
+  ].join("\n");
 }
 
 function shouldRetrieve(course: Course, message: string): boolean {
@@ -305,7 +309,11 @@ export async function resolveProjectSupportContext(input: {
   allowRetrieval: boolean;
   signal?: AbortSignal;
 }): Promise<ProjectSupportContext> {
-  const memories = await listProjectMemories(input.participationId);
+  const memories = await listProjectMemories(input.participationId).catch((error) => {
+    if (input.signal?.aborted) throw error;
+    console.warn("[project-support] Project memory unavailable", error instanceof Error ? error.message : error);
+    return [];
+  });
   const knowledgePointLabels = Object.fromEntries(knowledgePointNames(input.course));
   let sources: ProjectSupportSource[] = [];
   let retrievalStatus: ProjectSupportDetails["retrievalStatus"] = "not-needed";

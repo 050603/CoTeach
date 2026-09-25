@@ -51,7 +51,7 @@ const CLASSROOM_STAGES = [
   },
   {
     key: "reflection",
-    label: "学习反思",
+    label: "后测",
     icon: RotateCw,
     desc: "回顾学习过程，梳理收获与问题",
     gradient: "from-purple-500 to-fuchsia-500",
@@ -284,7 +284,7 @@ function Workflow() {
         {/* 水平时间线 */}
         <CosmicReveal stagger>
           <div
-            aria-label="课堂教学环节：从课堂导入依次推进至学习反思"
+            aria-label="课堂教学环节：从课堂导入依次推进至后测"
             className="relative"
           >
             {/* 桌面端按顺序连接各教学环节。 */}

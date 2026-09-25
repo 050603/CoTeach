@@ -6,7 +6,7 @@ export const PBL_STAGE_LABELS: Readonly<Record<string, string>> = {
   proposal: "方案构思与校准",
   make: "项目实践",
   showcase: "成果汇报与评价",
-  reflection: "学习反思与迁移",
+  reflection: "后测",
 };
 
 export function promptStageLabel(stageKey?: string, fallback?: string): string {

@@ -1,6 +1,6 @@
 import type { Course, StageViewKey } from "@/lib/session/types";
 import { AiLearningView } from "./ai-learning";
-import { NewReflectionStudentView } from "./reflection-survey";
+import { ExperimentPosttestStudentView } from "./experiment-posttest";
 import { SimplifiedStudentStageView } from "@/components/classroom/simple-stage-resources";
 import { NewShowcaseStudentView } from "./showcase-reporting";
 
@@ -18,7 +18,9 @@ export function StudentStageView({
     ? "showcase-reporting"
     : view === "simple-resource"
       && currentStage?.key === "reflection"
-      ? "reflection-survey"
+      ? "experiment-posttest"
+    : view === "reflection-survey" || view === "reflection"
+      ? "experiment-posttest"
     : view;
   switch (normalizedView) {
     case "ai-learning":
@@ -32,8 +34,8 @@ export function StudentStageView({
       );
     case "showcase-reporting":
       return <NewShowcaseStudentView course={course} />;
-    case "reflection-survey":
-      return <NewReflectionStudentView course={course} />;
+    case "experiment-posttest":
+      return <ExperimentPosttestStudentView course={course} />;
     default:
       return (
         <SimplifiedStudentStageView

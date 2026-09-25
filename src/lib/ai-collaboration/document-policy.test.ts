@@ -7,6 +7,7 @@ import {
   evaluateAiWorkPolicy,
   normalizeDocumentCollaborationResponse,
   protectedBoundaryForPolicy,
+  separableAuxiliaryTask,
 } from "./document-policy";
 
 const course = {
@@ -86,8 +87,10 @@ describe("document AI collaboration policy", () => {
       request: "我们下一步该看什么？",
       documentText: "已经观察了三个课间的用水情况。",
     });
-    expect(discussion.user).toContain("具体观察");
-    expect(discussion.system).toContain("现状分析、原因、建议和下一步");
+    expect(discussion.user).toContain("直接回答学生的问题");
+    expect(discussion.system).toContain("通常不超过约 120 个汉字");
+    expect(discussion.system).toContain("每项单独一行");
+    expect(discussion.system).toContain("学生明确要求详细解释");
     expect(discussion.system).toContain("不得替学生形成核心结论");
 
     const task = buildDocumentCollaborationPrompts({
@@ -171,6 +174,14 @@ describe("document AI collaboration policy", () => {
     expect(result.suggestion).toBeUndefined();
   });
 
+  it("extracts a clearly separate auxiliary task from a mixed core request", () => {
+    expect(separableAuxiliaryTask("帮我写最终结论，同时把已有访谈记录整理成表格"))
+      .toBe("把已有访谈记录整理成表格");
+    expect(separableAuxiliaryTask("请你直接写出我们的核心结论")).toBeNull();
+    expect(separableAuxiliaryTask("帮我整理资料并写出最终结论"))
+      .toBe("帮我整理资料");
+  });
+
   it("keeps core project decisions in guide-only mode", () => {
     const decision = evaluateAiWorkPolicy({
       intent: "discuss",
@@ -203,6 +214,32 @@ describe("document AI collaboration policy", () => {
     });
     expect(protectedBoundaryForPolicy(protectedDecision, "请直接写出我们的核心结论"))
       .toBe("核心结论");
+  });
+
+  it("distinguishes learning about a core conclusion from asking the AI to make it", () => {
+    for (const request of [
+      "核心结论应该怎么写？请解释思路。",
+      "帮我梳理如何得出核心结论，我想先比较两组数据。",
+      "我已经写好核心结论，帮我检查用词是否清楚。",
+      "请帮我整理已有的关键方案，不要替我做选择。",
+      "请你解释如何确定最终方案，并给出比较维度。",
+      "帮我分析怎么选择研究问题，我会自己决定。",
+      "请你解释如何直接确定最终方案，但选择仍由我来做。",
+    ]) {
+      expect(detectProtectedStudentWorkRequest(request)).toBeUndefined();
+      expect(evaluateAiWorkPolicy({
+        intent: "discuss", request, scope: "document", hasStudentArtifact: true,
+      }).protectedCapability).toBeUndefined();
+    }
+    for (const request of [
+      "请直接写出我们的核心结论",
+      "最终方案直接帮我确定",
+      "请你生成整份可提交的报告",
+      "帮我写一份完整报告",
+      "替我选一个最终方案",
+    ]) {
+      expect(detectProtectedStudentWorkRequest(request)).toBeTruthy();
+    }
   });
 
   it("allows only confirmed local work for an existing selection", () => {

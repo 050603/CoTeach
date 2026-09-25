@@ -20,6 +20,7 @@ export function scopeCourseForClaims(course: Course, claims: AuthClaims): Course
 
   return {
     ...course,
+    experimentPosttestSummary: course.experimentPosttestSummary ? { ...course.experimentPosttestSummary, studentRows: course.experimentPosttestSummary.studentRows.filter((row) => row.studentId === studentId) } : undefined,
     content: withoutPrivatePackageContent(course.content),
     stages,
     aiLearningProgress: studentId && course.aiLearningProgress?.[studentId]

@@ -279,6 +279,9 @@ function BlockComment({
   isLast: boolean;
 }) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [statusBusy, setStatusBusy] = React.useState(false);
+  const [statusError, setStatusError] = React.useState<string | null>(null);
+  const onAiStatusChange = usePluginOption(discussionPlugin, 'onAiStatusChange');
   const pendingSuggestion = usePluginOption(
     discussionPlugin,
     'pendingAiCommentSuggestion'
@@ -296,6 +299,19 @@ function BlockComment({
       )
     : discussion.comments;
 
+  async function setAiStatus(status: 'resolved' | 'deferred' | 'not-applicable') {
+    if (!onAiStatusChange || statusBusy) return;
+    setStatusBusy(true);
+    setStatusError(null);
+    try {
+      await onAiStatusChange({ discussionId: discussion.id, status });
+    } catch (error) {
+      setStatusError(error instanceof Error ? error.message : '状态未能保存，请稍后重试。');
+    } finally {
+      setStatusBusy(false);
+    }
+  }
+
   return (
     <React.Fragment key={discussion.id}>
       <div className="p-4">
@@ -312,6 +328,17 @@ function BlockComment({
             showDocumentContent
           />
         ))}
+        {discussion.source === 'ai-proactive' && onAiStatusChange ? (
+          <div className="mt-3 border-t border-stone-100 pt-3">
+            <p className="mb-2 text-[11px] text-stone-500">这条建议由你决定如何处理；已读不表示已解决。</p>
+            <div className="flex flex-wrap gap-1.5">
+              <button className="rounded-md border border-stone-200 px-2 py-1.5 text-[11px] font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-40" disabled={statusBusy} onClick={() => void setAiStatus('resolved')} type="button">已处理</button>
+              <button className="rounded-md border border-stone-200 px-2 py-1.5 text-[11px] font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-40" disabled={statusBusy} onClick={() => void setAiStatus('deferred')} type="button">暂不处理</button>
+              <button className="rounded-md border border-stone-200 px-2 py-1.5 text-[11px] font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-40" disabled={statusBusy} onClick={() => void setAiStatus('not-applicable')} type="button">这条不适用</button>
+            </div>
+            {statusError ? <p className="mt-2 text-[11px] text-rose-700" role="alert">{statusError}</p> : null}
+          </div>
+        ) : null}
         {!threadSuggestion && <CommentCreateForm discussionId={discussion.id} />}
       </div>
 

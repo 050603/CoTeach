@@ -344,6 +344,7 @@ model ExperimentAssessmentAssignment {
   instance    ClassroomInstance                @relation(fields: [instanceId], references: [id], onDelete: Restrict)
   enrollment  Enrollment                       @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
   submissions ExperimentAssessmentSubmission[]
+  drafts ExperimentAssessmentDraft[]
 
   @@unique([instanceId, enrollmentId])
   @@index([instanceId, variant])
@@ -369,6 +370,22 @@ model ExperimentAssessmentSubmission {
   @@unique([instanceId, enrollmentId, phase])
   @@index([instanceId, phase, submittedAt])
   @@index([enrollmentId, submittedAt])
+}
+
+model ExperimentAssessmentDraft {
+  id           String   @id @default(uuid())
+  assignmentId String
+  phase        String
+  answers      Json
+  currentPage  Int      @default(0)
+  version      Int      @default(1)
+  startedAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assignment ExperimentAssessmentAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+
+  @@unique([assignmentId, phase])
+  @@index([phase, updatedAt])
 }
 
 // Whole-class AI discussions are separate from private student tutor chats.

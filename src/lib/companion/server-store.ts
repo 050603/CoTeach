@@ -17,7 +17,7 @@ async function participationFor(db: PlatformDb, instanceId: string, userId: stri
   return row;
 }
 
-async function ensureThread(db: Prisma.TransactionClient, instanceId: string, studentId: string, stageKey: string, openingSentAt?: string) {
+export async function ensureCompanionThreadWithinTransaction(db: Prisma.TransactionClient, instanceId: string, studentId: string, stageKey: string, openingSentAt?: string) {
   const participation = await participationFor(db, instanceId, studentId);
   const id = threadId(instanceId, studentId, stageKey);
   const previous = await db.aiConversation.findUnique({ where: { id } });
@@ -25,6 +25,7 @@ async function ensureThread(db: Prisma.TransactionClient, instanceId: string, st
   const row = await db.aiConversation.upsert({ where: { id }, create: { id, userId: studentId, offeringId: participation.enrollment.offeringId, participationId: participation.id, title: stageKey, metadata: json({ legacyStageKey: stageKey, openingSentAt }) }, update: { metadata: json({ ...metadata, legacyStageKey: stageKey, ...(openingSentAt && !metadata.openingSentAt ? { openingSentAt } : {}) }) } });
   return { row, participation };
 }
+const ensureThread = ensureCompanionThreadWithinTransaction;
 
 function projectMessage(row: { id: string; role: string; content: string; createdAt: Date; metadata: unknown }): CompanionMessage {
   const meta = object(row.metadata);
@@ -87,11 +88,19 @@ async function putMessages(db: Prisma.TransactionClient, conversationId: string,
 
 export async function appendCompanionMessages(input: { courseId: string; studentId: string; stageKey: string; messages: CompanionMessage[]; openingTrigger?: CompanionTriggerKind }): Promise<void> {
   await runMutationTransaction(async tx => {
-    const participation = await participationFor(tx, input.courseId, input.studentId);
-    await tx.$queryRaw`SELECT id FROM "ClassroomParticipation" WHERE id = ${participation.id} FOR UPDATE`;
-    const { row } = await ensureThread(tx, input.courseId, input.studentId, input.stageKey, input.openingTrigger === "stage-opening" ? new Date().toISOString() : undefined);
-    await putMessages(tx, row.id, input.studentId, input.messages);
+    await appendCompanionMessagesWithinTransaction(tx, input);
   });
+}
+
+/** Use with the caller's transaction when a task receipt and its messages must commit together. */
+export async function appendCompanionMessagesWithinTransaction(
+  tx: Prisma.TransactionClient,
+  input: { courseId: string; studentId: string; stageKey: string; messages: CompanionMessage[]; openingTrigger?: CompanionTriggerKind },
+): Promise<void> {
+  const participation = await participationFor(tx, input.courseId, input.studentId);
+  await tx.$queryRaw`SELECT id FROM "ClassroomParticipation" WHERE id = ${participation.id} FOR UPDATE`;
+  const { row } = await ensureThread(tx, input.courseId, input.studentId, input.stageKey, input.openingTrigger === "stage-opening" ? new Date().toISOString() : undefined);
+  await putMessages(tx, row.id, input.studentId, input.messages);
 }
 
 export async function softDeleteCompanionMessage(input: { courseId: string; studentId: string; stageKey: string; messageId: string; conversationId: string }): Promise<boolean> {

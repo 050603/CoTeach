@@ -54,8 +54,8 @@ describe("NewShowcaseTeacherView", () => {
 
   it("starts the default queue from the prominent current-report panel", async () => {
     render(<NewShowcaseTeacherView course={course} />);
-    expect(screen.getByText("尚未点名")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "按提交顺序开始" }));
+    expect(screen.getByText(/当前：尚未点名/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "开始汇报" }));
     await waitFor(() => expect(mocks.runAction).toHaveBeenCalledWith({ action: "assign", groupId: "g1", studentId: "s1" }));
   });
 
@@ -69,7 +69,7 @@ describe("NewShowcaseTeacherView", () => {
     });
     render(<NewShowcaseTeacherView course={course} />);
     fireEvent.change(screen.getByRole("textbox", { name: "课堂点评记录（可选）" }), { target: { value: "表达清楚" } });
-    fireEvent.click(screen.getByRole("button", { name: "结束评价并点名下一位" }));
+    fireEvent.click(screen.getByRole("button", { name: "结束点评并点名下一位" }));
     await waitFor(() => expect(mocks.runAction).toHaveBeenCalledWith({ action: "finish-evaluation", presentationId: "p1", note: "表达清楚" }));
   });
 
@@ -77,10 +77,11 @@ describe("NewShowcaseTeacherView", () => {
     const current = { ...baseState().data.queue[0], status: "called" as const, artifacts: [artifact, pdfArtifact] };
     mocks.state = baseState({ currentQueueItem: current, queue: [current] });
     render(<NewShowcaseTeacherView course={course} />);
-    fireEvent.click(screen.getByRole("tab", { name: /校园节水汇报\.pdf/ }));
+    fireEvent.click(screen.getByRole("button", { name: "选择学生汇报材料" }));
+    fireEvent.click(screen.getByRole("option", { name: /校园节水汇报\.pdf/ }));
     expect(screen.getByTestId("artifact-viewer").getAttribute("data-version-id")).toBe("pdf-1");
     fireEvent.click(screen.getByRole("button", { name: "逐页演示" }));
-    fireEvent.click(screen.getByRole("button", { name: "投屏此材料" }));
+    fireEvent.click(screen.getByRole("button", { name: "教师发起投屏" }));
     await waitFor(() => expect(mocks.runAction).toHaveBeenCalledWith({ action: "start", studentId: "s1", artifactKind: "pdf", artifactVersionId: "pdf-1", displayMode: "slides" }));
   });
 
@@ -91,9 +92,42 @@ describe("NewShowcaseTeacherView", () => {
     ] });
     render(<NewShowcaseTeacherView course={course} />);
     fireEvent.change(screen.getByRole("combobox", { name: "选择查看材料的学生" }), { target: { value: "s2" } });
-    expect(screen.getByRole("heading", { name: "小周" })).toBeTruthy();
+    expect((screen.getByRole("combobox", { name: "选择查看材料的学生" }) as HTMLSelectElement).value).toBe("s2");
     expect(screen.getByTestId("artifact-viewer").getAttribute("data-version-id")).toBe("pdf-1");
     expect(screen.queryByRole("button", { name: "投屏此材料" })).toBeNull();
+  });
+
+  it("keeps the real presenter as the action target while inspecting another student", () => {
+    const called = { ...baseState().data.queue[0], status: "called" as const };
+    mocks.state = baseState({ currentQueueItem: called, queue: [called], students: [
+      { studentId: "s1", name: "小林", groupId: "g1", isAssigned: true, artifacts: [artifact] },
+      { studentId: "s2", name: "小周", groupId: "g2", isAssigned: false, artifacts: [pdfArtifact] },
+    ] });
+    render(<NewShowcaseTeacherView course={course} />);
+    fireEvent.change(screen.getByRole("combobox", { name: "选择查看材料的学生" }), { target: { value: "s2" } });
+    expect(screen.getByText(/当前汇报者：小林；正在查看其他学生的材料/)).toBeTruthy();
+    expect(screen.getByText(/操作对象：小林/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "返回当前汇报" }));
+    expect((screen.getByRole("combobox", { name: "选择查看材料的学生" }) as HTMLSelectElement).value).toBe("s1");
+  });
+
+  it("keeps the inspected material and PDF mode through fullscreen teaching", () => {
+    const called = { ...baseState().data.queue[0], status: "called" as const };
+    mocks.state = baseState({ currentQueueItem: called, queue: [called], students: [
+      { studentId: "s1", name: "小林", groupId: "g1", isAssigned: true, artifacts: [artifact] },
+      { studentId: "s2", name: "小周", groupId: "g2", isAssigned: false, artifacts: [artifact, pdfArtifact] },
+    ] });
+    const { rerender } = render(<NewShowcaseTeacherView course={course} presentation="workspace" />);
+    fireEvent.change(screen.getByRole("combobox", { name: "选择查看材料的学生" }), { target: { value: "s2" } });
+    fireEvent.click(screen.getByRole("button", { name: "选择学生汇报材料" }));
+    fireEvent.click(screen.getByRole("option", { name: /校园节水汇报\.pdf/ }));
+    fireEvent.click(screen.getByRole("button", { name: "逐页演示" }));
+    for (const presentation of ["teaching", "workspace"] as const) {
+      rerender(<NewShowcaseTeacherView course={course} presentation={presentation} immersive={presentation === "teaching"} />);
+      expect((screen.getByRole("combobox", { name: "选择查看材料的学生" }) as HTMLSelectElement).value).toBe("s2");
+      expect(screen.getByTestId("artifact-viewer").getAttribute("data-version-id")).toBe("pdf-1");
+      expect(screen.getByTestId("artifact-viewer").getAttribute("data-display-mode")).toBe("slides");
+    }
   });
 });
 
@@ -105,35 +139,38 @@ describe("showcase projection", () => {
     mocks.runAction.mockResolvedValue(baseState().data);
   });
 
-  it("keeps queue details opt-in while preserving the real start control", async () => {
+  it("keeps the queue in the fullscreen management rail while preserving the start control", async () => {
     const { rerender } = render(<NewShowcaseTeacherView course={course} presentation="teaching" />);
-    expect(screen.queryByRole("heading", { name: "汇报队列" })).toBeNull();
+    expect(within(screen.getByTestId("teacher-showcase-management")).getByRole("heading", { name: "汇报队列" })).toBeTruthy();
     expect(screen.queryByText("成果查看")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "查看汇报队列与成果" }));
-    expect(screen.getByRole("heading", { name: "汇报队列" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "汇报管理" })).toBeNull();
     rerender(<NewShowcaseTeacherView course={course} presentation="analytics" />);
     rerender(<NewShowcaseTeacherView course={course} presentation="teaching" />);
-    expect(screen.queryByRole("heading", { name: "汇报队列" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "开始汇报流程" }));
+    expect(within(screen.getByTestId("teacher-showcase-management")).getByRole("heading", { name: "汇报队列" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "开始汇报" }));
     await waitFor(() => expect(mocks.runAction).toHaveBeenCalledWith({ action: "assign", groupId: "g1", studentId: "s1" }));
   });
 
   it("keeps one active viewer inline across presentation changes and ends through the controller", async () => {
     const active = { id: "p1", courseId: "course-1", groupId: "g1", studentId: "s1", studentName: "小林", artifactKind: "document" as const, artifactVersionId: "a1", artifactTitle: artifact.title, displayMode: "continuous" as const, status: "active" as const, revision: 2, requestedAt: now, updatedAt: now };
     mocks.state = baseState({ activePresentation: active, presentations: [active] });
-    const { rerender } = render(<NewShowcaseTeacherView course={course} presentation="teaching" immersive />);
+    const target = document.createElement("footer");
+    document.body.append(target);
+    const view = (mode: "teaching" | "analytics" | "workspace") => <TeacherPresentationActionsProvider target={target}><NewShowcaseTeacherView course={course} presentation={mode} immersive /></TeacherPresentationActionsProvider>;
+    const { rerender } = render(view("teaching"));
     const projection = screen.getByRole("region", { name: artifact.title });
     const viewer = within(projection).getByTestId("artifact-viewer");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(viewer.closest(".fixed")).toBeNull();
-    rerender(<NewShowcaseTeacherView course={course} presentation="analytics" immersive />);
+    rerender(view("analytics"));
     expect(within(screen.getByRole("region", { name: artifact.title, hidden: true })).getByTestId("artifact-viewer")).toBe(viewer);
     expect(viewer.closest("[hidden]")).toBeTruthy();
-    rerender(<NewShowcaseTeacherView course={course} immersive />);
+    rerender(view("workspace"));
     expect(within(screen.getByRole("region", { name: artifact.title })).getByTestId("artifact-viewer")).toBe(viewer);
     expect(viewer.closest(".fixed")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "结束汇报" }));
+    fireEvent.click(within(target).getByRole("button", { name: "结束汇报" }));
     await waitFor(() => expect(mocks.runAction).toHaveBeenCalledWith({ action: "end", presentationId: "p1" }));
+    target.remove();
   });
 });
 

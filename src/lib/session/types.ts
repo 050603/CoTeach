@@ -59,6 +59,7 @@ export type StageViewKey =
   | "showcase-reporting"
   | "showcase"
   | "reflection-survey"
+  | "experiment-posttest"
   | "reflection";
 
 export type Stage = {
@@ -1383,6 +1384,14 @@ export type StageTransitionRecord = {
 export type Course = {
   /** Navigation context of a projected platform classroom; never part of a template snapshot. */
   platformContext?: { offeringId: string; activityId: string; templateId: string; templateVersionId: string };
+  experimentPosttestSummary?: {
+    enabled: boolean;
+    openedAt?: string;
+    notStartedCount: number;
+    inProgressCount: number;
+    submittedCount: number;
+    studentRows: Array<{ studentId: string; status: "not-started" | "in-progress" | "submitted" }>;
+  };
   id: string;
   version?: number;
   name: string;
@@ -2301,9 +2310,9 @@ export const DEFAULT_STAGES: Stage[] = [
   },
   {
     key: "reflection",
-    label: "学习反思",
-    view: "reflection-survey",
-    description: "用约 3–5 分钟回顾课程收获与系统使用体验",
+    label: "后测",
+    view: "experiment-posttest",
+    description: "完成教师设置的课堂后测",
   },
 ];
 

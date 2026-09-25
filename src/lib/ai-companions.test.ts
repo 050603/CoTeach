@@ -54,25 +54,24 @@ describe("AI companions", () => {
     expect(prompt).toContain("50-110 字");
   });
 
-  it("gives reflection agents a different anti-outsourcing contract", () => {
+  it("keeps posttest companions away from question answers", () => {
     const prompt = buildCompanionSystemPrompt({
       companion: AI_COMPANIONS.find((item) => item.id === "recorder")!,
       courseName: "算法探究",
       drivingQuestion: "如何改进？",
       stageKey: "reflection",
-      stageLabel: "学习反思",
+      stageLabel: "后测",
       teacherContext: "引用过程证据",
       context: {
         ...context,
         stageKey: "reflection",
-        stageLabel: "学习反思",
+        stageLabel: "后测",
         prompt: "前序成果：我比较了两次测试结果。教师评分=82；AI 评价指出证据链不完整。",
       },
     });
 
-    expect(prompt).toContain("学习反思");
-    expect(prompt).toContain("算法教程");
-    expect(prompt).toContain("完整反思");
-    expect(prompt).toContain("当时选择—采取行动—观察结果—现在的认识");
+    expect(prompt).toContain("后测");
+    expect(prompt).toContain("代答后测");
+    expect(prompt).toContain("解释本场测验的具体题目或选项");
   });
 });

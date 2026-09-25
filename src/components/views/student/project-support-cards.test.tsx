@@ -39,6 +39,16 @@ describe("project support cards", () => {
     expect(screen.queryByText(/观察：/)).not.toBeInTheDocument();
   });
 
+  it("formats inline numbered points in document replies, including reply blocks", () => {
+    const { rerender } = render(<ProjectReplyContent content="先这样做：1. 记录。2. 比较。" formatDocumentReply />);
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    rerender(<ProjectReplyContent content="兼容文本" formatDocumentReply support={{
+      sources: [], knowledgePointIds: [], knowledgePoints: [], retrievalStatus: "not-needed",
+      replyBlocks: [{ type: "answer", content: "可分两步：1. 记录。2. 比较。", sourceIds: [] }],
+    }} />);
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
+
   it("links a known textbook ID to its collapsed source and keeps code intact", () => {
     const source = { id: "textbook:item-123", type: "textbook" as const, title: "软件测试基础", locator: "第三章", excerpt: "边界值分析" };
     const support = {

@@ -164,31 +164,24 @@ const POLICIES: Record<string, CompanionStagePolicy> = {
   },
   reflection: {
     stageKey: "reflection",
-    label: "学习反思",
-    objective: "基于前序成果、教师评分、AI 评价和过程证据，回顾学生的选择如何影响结果，并形成可迁移的下一步行动。",
-    studentDeliverable: "有证据的自我反思、AI 使用复盘和一条具体的迁移/改进计划。",
+    label: "后测",
+    objective: "学生独立完成教师配置的后测。",
+    studentDeliverable: "学生独立提交后测答案。",
     allowedCompanionIds: ["reviewer", "recorder"],
     openingCompanionId: "recorder",
     noProgressCompanionId: "recorder",
-    helpTypes: ["定位可引用的过程证据", "比较学生自己的选择与结果变化", "解释评分/反馈反映的优势与不足", "形成一条可执行的迁移行动"],
-    prohibitedActions: ["讲解算法区别、算法实现或新的技术教程", "代写完整反思、总结或改进计划", "替学生判断经历中没有证据支持的原因", "把反思重新变成方案设计或制作辅导"],
-    requiredContext: ["学生从时间线选择的真实学习证据", "教师评分、经教师确认的 AI 评价建议和评价依据", "教师反馈、AI 支架采纳/修改/拒绝记录", "已有因果反思链和迁移回答"],
-    responseProtocol: [
-      "只能围绕学生已经做过的选择、证据、结果和影响提供反思支架。",
-      "每次最多聚焦一个证据链：当时选择—采取行动—观察结果—现在的认识。",
-      "若学生要求算法教程、实现方法、完整答案或代写反思，必须明确暂不提供，并改为要求其从已有项目证据中说明当时的选择与验证。",
-      "结尾只给一个由学生自己写下或验证的反思动作，不替学生生成可直接提交的段落。",
-    ],
-    openingPrompt: "请读取学生前序成果、教师评分、AI 评价和反馈，先指出一条最值得复盘的证据链，再让学生自己写出“当时选择—采取行动—观察结果—现在的认识”中的第一项。严禁讲解算法区别、实现方法或代写反思。",
-    idlePrompt: "学生在反思阶段暂时没有新操作。请提醒其从评分、反馈或前序提交中选一条具体证据，写下它说明了什么，不要补充新的技术知识。",
-    noProgressPrompt: "学生连续讨论但没有形成反思文字。请由记记列出已有的事实证据和一个未解释的变化，让学生亲自补写其中的因果或认识。严禁转为算法教程。",
+    helpTypes: ["说明操作方式", "提醒学生独立作答"],
+    prohibitedActions: ["代答后测", "解释本场测验的具体题目或选项", "透露参考答案"],
+    requiredContext: ["后测的操作说明，不含题目、答案和草稿"],
+    responseProtocol: ["只说明如何作答、保存和提交；具体题目由学生独立完成。"],
+    openingPrompt: "请提醒学生独立完成后测，可以切换题组并在提交前检查答案。不要提供题目答案。",
+    idlePrompt: "请提醒学生保存草稿并检查未答题，不要讨论具体题目。",
+    noProgressPrompt: "请提醒学生核对作答进度或联系教师处理操作问题，不要代答。",
     roleGuidance: {
-      reviewer: "只根据教师评分、AI 评价、反馈和作品变化帮助学生识别优势、差距与证据，不讲解新的算法或实现。",
-      recorder: "只整理学生已经完成的选择、行动、结果和待解释证据；不得扩写成完整反思，不提供技术教程。",
+      reviewer: "只解释测验操作，不讲解具体题目或答案。",
+      recorder: "只提示保存和提交步骤，不读取或讨论题目。",
     },
-    artifactFollowUps: {
-      "document-saved": { preferredCompanionId: "reviewer", prompt: "学生刚保存了反思文字。请只指出一处需要补充证据或因果说明的地方，不要替学生重写反思。" },
-    },
+    artifactFollowUps: {},
   },
 };
 
@@ -248,11 +241,11 @@ export function buildStageBoundaryInstruction(stageKey: string, message: string)
   const normalized = message.trim();
   if (!normalized) return undefined;
   const asksForFinalAnswer = /直接(?:给(?:我)?答案|写|生成|做)|完整(?:答案|方案|代码|报告|反思|讲稿|生成|写出|做出)|代写|帮我(?:写|生成|完成|做)|替我(?:完成|写)|最终答案|直接生成成品|给我最终代码|可直接提交|复制(?:粘贴)?即可/.test(normalized);
-  const asksForTechnicalTutorialDuringReflection = stageKey === "reflection" && /算法|代码|实现方法|怎么实现|技术教程|程序怎么写|区别对比/.test(normalized);
-  if (!asksForFinalAnswer && !asksForTechnicalTutorialDuringReflection) return undefined;
+  const asksForPosttestHelp = stageKey === "reflection" && /题目|选项|答案|怎么答|解析|解释/.test(normalized);
+  if (!asksForFinalAnswer && !asksForPosttestHelp) return undefined;
 
   return stageKey === "reflection"
-    ? "阶段边界提醒：学生本轮请求越过学习反思目标。不要讲解算法区别、实现方法或代写反思；请改为引导学生从已有成果、评分、反馈和过程证据说明当时的选择、行动、结果与现在的认识。"
+    ? "阶段边界提醒：学生正在完成后测。只能解释保存、切页和提交等操作，不得分析题目、选项或生成答案。"
     : "阶段边界提醒：学生本轮请求可能导致认知外包。不要输出可直接提交的最终答案或完整成品；请把任务拆成学生自己可以完成、验证并记录的一个最小动作。";
 }
 

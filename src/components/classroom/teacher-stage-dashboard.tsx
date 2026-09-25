@@ -19,13 +19,11 @@ import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui";
 import type { Course } from "@/lib/session/types";
 import type { ShowcaseData } from "@/lib/showcase/types";
-import { ReflectionSummarySidebar } from "@/components/views/teacher/reflection-summary-sidebar";
 import { buildTeacherDashboardAdvice, type TeacherDashboardAdvice } from "@/lib/teaching-ai/client-api";
 import {
   deriveKnowledgeDashboardMetrics,
   deriveLaunchDashboardMetrics,
   deriveMakeDashboardMetrics,
-  deriveReflectionDashboardMetrics,
   deriveShowcaseDashboardMetrics,
   type TeacherDashboardMetric,
   type TeacherDashboardTone,
@@ -72,7 +70,7 @@ function metricValue(metric: TeacherDashboardMetric): string {
 }
 
 function StageProgress({ course, onSelectStage }: { course: Course; onSelectStage: (index: number) => void }) {
-  const shortLabels: Record<string, string> = { launch: "启动", "ai-learning": "讲授", make: "实践", showcase: "汇报", reflection: "反思" };
+  const shortLabels: Record<string, string> = { launch: "启动", "ai-learning": "讲授", make: "实践", showcase: "汇报", reflection: "后测" };
   return (
     <div className="relative mt-2.5">
       <ol aria-label="课堂阶段进度" className="grid grid-cols-5 gap-1">
@@ -83,13 +81,13 @@ function StageProgress({ course, onSelectStage }: { course: Course; onSelectStag
             <li className="min-w-0" key={stage.key}>
               <button
                 aria-current={current ? "step" : undefined}
-                aria-label={`第 ${index + 1} 阶段：${stage.label}`}
+                aria-label={`第 ${index + 1} 阶段：${stage.key === "reflection" ? "后测" : stage.label}`}
                 className={cn(
                   "flex w-full flex-col items-center gap-1 rounded-lg px-0.5 py-1 transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700",
                   current ? "bg-blue-100 text-blue-800" : done ? "text-emerald-700 hover:bg-emerald-50" : "text-stone-400 hover:bg-stone-100",
                 )}
                 onClick={() => onSelectStage(index)}
-                title={stage.label}
+                title={stage.key === "reflection" ? "后测" : stage.label}
                 type="button"
               >
                 <span className={cn("grid size-5 place-items-center rounded-full text-[9px] font-black", current ? "bg-blue-700 text-white" : done ? "bg-emerald-500 text-white" : "bg-stone-200 text-stone-500")}>{index + 1}</span>
@@ -170,6 +168,7 @@ type PatrolStudent = {
   id: string;
   name: string;
   reason: string;
+  actionLabel?: string;
   onClick?: () => void;
 };
 
@@ -276,7 +275,7 @@ function PatrolQueue({ students, emptyText = "当前无须优先巡场的学生"
           {students.slice(0, 2).map((student) => {
             const content = <><span className="min-w-0 flex-1 break-words"><span className="block text-[10px] font-bold text-stone-800">{student.name}</span><span className="mt-0.5 block text-[9px] leading-3.5 text-amber-700">{student.reason}</span></span>{student.onClick ? <ChevronRight className="shrink-0 text-stone-300" size={12} /> : null}</>;
             const className = "flex items-start gap-2 rounded-lg border border-amber-100 bg-amber-50/55 px-2.5 py-1.5 text-left";
-            return student.onClick ? <button aria-label={`查看${student.name}的关注证据`} className={className} key={student.id} onClick={student.onClick} type="button">{content}</button> : <div className={className} key={student.id}>{content}</div>;
+            return student.onClick ? <button aria-label={student.actionLabel ?? `查看${student.name}的关注证据`} className={className} key={student.id} onClick={student.onClick} type="button">{content}</button> : <div className={className} key={student.id}>{content}</div>;
           })}
           {students.length > 2 ? <p className="text-center text-[9px] leading-4 text-stone-500">还有 {students.length - 2} 名学生需要关注，请在主区域查看</p> : null}
         </div>
@@ -407,36 +406,45 @@ function ShowcaseDashboard({ course, data, onFocus }: { course: Course; data?: S
   );
 }
 
-function ReflectionDashboard({ course, onFocus }: { course: Course; onFocus: (focus: TeacherStageFocus) => void }) {
-  const metrics = deriveReflectionDashboardMetrics(course);
-  const completion = course.students.length ? Math.round(metrics.submittedCount / course.students.length * 100) : 0;
-  const averages = metrics.headlines.filter((metric) => metric.metricId !== "reflection-coverage");
-  const needsAttention = metrics.pendingStudents.length > 0 || metrics.lowScoreRows.length > 0;
-  const patrolStudents: PatrolStudent[] = [
-    ...metrics.pendingStudents.map((student) => ({
-      id: `pending:${student.id}`,
-      name: student.name,
-      reason: "反思尚未提交",
-      onClick: () => onFocus({ stageKey: "reflection", target: "student-list", filter: "pending", studentId: student.id }),
-    })),
-    ...metrics.lowScoreRows.map((row) => ({
-      id: `low:${row.student.id}`,
-      name: row.student.name,
-      reason: row.dimensions[0] ?? "低分体验",
-      onClick: () => onFocus({ stageKey: "reflection", target: "student-list", filter: "low-score", studentId: row.student.id }),
-    })),
-  ];
+function PosttestDashboard({ course, onFocus }: { course: Course; onFocus: (focus: TeacherStageFocus) => void }) {
+  const summary = course.experimentPosttestSummary;
+  if (!summary?.enabled) {
+    return <div className="px-3 py-4"><EmptyState text="本课堂未开启后测，请在实验配置中设置后测题目。" /></div>;
+  }
+
+  const total = summary.notStartedCount + summary.inProgressCount + summary.submittedCount;
+  const completion = total ? Math.round(summary.submittedCount / total * 100) : 0;
+  const pendingCount = summary.notStartedCount + summary.inProgressCount;
+  const patrolStudents: PatrolStudent[] = summary.studentRows
+    .filter((row) => row.status !== "submitted")
+    .sort((left, right) => Number(left.status === "in-progress") - Number(right.status === "in-progress"))
+    .map((row) => {
+      const student = course.students.find((item) => item.id === row.studentId);
+      return {
+        id: row.studentId,
+        name: student?.name ?? "学生",
+        reason: row.status === "in-progress" ? "后测作答中" : "尚未开始后测",
+        actionLabel: `查看${student?.name ?? "学生"}的后测状态`,
+        onClick: () => onFocus({ stageKey: "reflection", target: "student-list", filter: "pending", studentId: row.studentId }),
+      };
+    });
   return (
     <div className="flex h-full flex-col">
-      <section className="mx-3 mt-2.5 flex items-center gap-3 rounded-lg border border-violet-100 bg-violet-50/70 px-2.5 py-2.5">
-        <div className="grid size-11 shrink-0 place-items-center rounded-full" style={{ background: `conic-gradient(#7c3aed ${completion}%, #ede9fe 0)` }}><div className="grid size-8 place-items-center rounded-full bg-violet-50 text-[10px] font-black text-violet-800">{course.students.length ? `${completion}%` : "—"}</div></div>
-        <div><p className="text-[11px] font-black text-violet-950">反思提交进度</p><p className="mt-0.5 text-[9px] text-violet-700">{metrics.submittedCount}/{course.students.length || "—"} 名学生已提交有效问卷</p></div>
+      <section className="mx-3 mt-2.5 flex items-center gap-3 rounded-lg border border-teal-100 bg-teal-50/70 px-2.5 py-2.5">
+        <div className="grid size-11 shrink-0 place-items-center rounded-full" style={{ background: `conic-gradient(#0f766e ${completion}%, #ccfbf1 0)` }}><div className="grid size-8 place-items-center rounded-full bg-teal-50 text-[10px] font-black text-teal-800">{total ? `${completion}%` : "—"}</div></div>
+        <div><p className="text-[11px] font-black text-teal-950">后测提交进度</p><p className="mt-0.5 text-[9px] text-teal-700">{summary.submittedCount}/{total || "—"} 名学生已提交后测</p></div>
       </section>
-      <DashboardMetricStrip metrics={averages} />
-      <CompactSection icon={<MessageSquareText size={13} />} title="需要跟进">
-        {needsAttention ? <AlertBanner ariaLabel="在主区域查看待跟进学生" onClick={() => onFocus({ stageKey: "reflection", target: "student-list", filter: metrics.pendingStudents.length ? "pending" : "low-score" })} tone="warning">待提交 {metrics.pendingStudents.length} 人 · 低分体验 {metrics.lowScoreRows.length} 人，点击查看明细</AlertBanner> : <AlertBanner tone="success">反思已全部提交，暂无低分体验</AlertBanner>}
+      <DashboardMetricStrip metrics={[
+        { metricId: "posttest-not-started", label: "未开始", value: String(summary.notStartedCount), tone: "neutral" },
+        { metricId: "posttest-in-progress", label: "作答中", value: String(summary.inProgressCount), tone: "info" },
+        { metricId: "posttest-submitted", label: "已提交", value: String(summary.submittedCount), tone: "success" },
+      ]} />
+      <CompactSection icon={<FileText size={13} />} title="后测状态">
+        <AlertBanner tone={summary.openedAt ? "success" : "neutral"}>{summary.openedAt ? "后测已开放，学生可继续作答或课后补交" : "进入第 5 阶段后开放后测"}</AlertBanner>
       </CompactSection>
-      <ReflectionSummarySidebar compact course={course} />
+      <CompactSection icon={<MessageSquareText size={13} />} title="需要跟进">
+        {pendingCount ? <AlertBanner ariaLabel="在主区域查看未提交后测学生" onClick={() => onFocus({ stageKey: "reflection", target: "student-list", filter: "pending" })} tone="warning">未开始 {summary.notStartedCount} 人 · 作答中 {summary.inProgressCount} 人，点击查看明细</AlertBanner> : <AlertBanner tone="success">后测已全部提交</AlertBanner>}
+      </CompactSection>
       <PatrolQueue emptyText="当前没有需要单独跟进的学生" students={patrolStudents} title="个别跟进" />
     </div>
   );
@@ -453,7 +461,7 @@ export function TeacherStageDashboard({ active = true, course, stageKey, degrade
         ? <MakeDashboard course={course} onFocus={onFocus} />
         : stageKey === "showcase"
           ? <ShowcaseDashboard course={course} data={showcaseData} onFocus={onFocus} />
-          : <ReflectionDashboard course={course} onFocus={onFocus} />;
+          : <PosttestDashboard course={course} onFocus={onFocus} />;
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="relative shrink-0 overflow-hidden border-b border-blue-100 bg-[linear-gradient(145deg,#eff6ff_0%,#ffffff_60%,#f5f3ff_100%)] px-3 pb-2.5 pt-3">
@@ -461,7 +469,7 @@ export function TeacherStageDashboard({ active = true, course, stageKey, degrade
         <div className="relative flex items-start justify-between gap-2">
           <div className="flex min-w-0 items-start gap-2">
             <button aria-label="收起班级概览" aria-expanded="true" className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border border-blue-200 bg-white/85 text-blue-600 shadow-sm transition hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600" onClick={onCollapse} type="button"><ChevronRight size={15} strokeWidth={2.4} /></button>
-            <div className="min-w-0"><div className="text-[9px] font-bold uppercase tracking-[0.16em] text-blue-600">课堂实时监控</div><h2 className="mt-0.5 break-words text-sm font-black leading-5 text-stone-950">{currentStage?.label ?? "当前阶段"}</h2></div>
+            <div className="min-w-0"><div className="text-[9px] font-bold uppercase tracking-[0.16em] text-blue-600">课堂实时监控</div><h2 className="mt-0.5 break-words text-sm font-black leading-5 text-stone-950">{currentStage?.key === "reflection" ? "后测" : currentStage?.label ?? "当前阶段"}</h2></div>
           </div>
           {degraded ? <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50/90 px-2 py-1 text-[9px] font-bold text-amber-700" title="课堂数据同步延迟"><AlertTriangle size={10} />同步延迟</span> : null}
         </div>

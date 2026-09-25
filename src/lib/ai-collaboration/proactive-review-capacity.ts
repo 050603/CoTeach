@@ -35,7 +35,7 @@ export function createProactiveReviewCapacity(
 
 function resolveProactiveReviewConcurrency(env: NodeJS.ProcessEnv = process.env): number {
   const configured = Number.parseInt(env.PROACTIVE_REVIEW_LLM_CONCURRENCY ?? '', 10);
-  if (!Number.isFinite(configured) || configured <= 0) return 8;
+  if (!Number.isFinite(configured) || configured <= 0) return 2;
   return Math.min(20, Math.max(1, configured));
 }
 

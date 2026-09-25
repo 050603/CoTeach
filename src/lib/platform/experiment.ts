@@ -31,6 +31,8 @@ export const ExperimentQuestionSchema = z.object({
   scale: z.object({ min: z.number().int().min(0).max(9), max: z.number().int().min(1).max(10), minLabel: z.string().max(100).optional(), maxLabel: z.string().max(100).optional() }).strict().optional(),
   category: z.enum(["knowledge", "micro-design", "confidence", "collaboration", "other"]).optional(),
   group: ExperimentQuestionGroupSchema.optional(),
+  optional: z.boolean().optional(),
+  skipReasonRequired: z.boolean().optional(),
 }).strict().superRefine((question, context) => {
   if (question.type === "single-choice" || question.type === "multiple-choice") {
     const options = question.options ?? [];
@@ -59,6 +61,13 @@ export const ExperimentConfigSchema = z.object({
   posttest: z.array(ExperimentQuestionSchema).max(30),
   sharedQuestions: z.array(ExperimentQuestionSchema).max(30).default([]),
   scenarioPair: z.object({ a: ExperimentQuestionSchema, b: ExperimentQuestionSchema }).strict().optional(),
+  pretestOrder: z.array(z.string()).optional(),
+  posttestOrder: z.array(z.string()).optional(),
+  pretestIntroduction: z.string().max(1000).optional(),
+  posttestIntroduction: z.string().max(1000).optional(),
+  pretestMinutes: z.number().int().min(1).max(120).optional(),
+  posttestMinutes: z.number().int().min(1).max(120).optional(),
+  skipReasonPrompt: z.string().max(300).optional(),
   randomizeQuestionOrder: z.boolean().default(true),
   randomizeOptionOrder: z.boolean().default(true),
 }).strict().superRefine((config, context) => {
@@ -127,9 +136,14 @@ export function composeExperimentForms(config: ExperimentConfig, variant: Experi
       .flatMap((section) => config.randomizeQuestionOrder ? shuffle(section.questions) : section.questions);
   };
   const scenario = config.scenarioPair;
+  const order = (questions: ExperimentQuestion[], ids?: string[]) => {
+    if (!ids) return questions;
+    const positions = new Map(ids.map((id, index) => [id, index]));
+    return [...questions].sort((a, b) => (positions.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (positions.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+  };
   return {
-    pretest: prepare([...config.sharedQuestions, ...config.pretest, ...(scenario ? [variant === "B_PRE_A_POST" ? scenario.b : scenario.a] : [])]),
-    posttest: prepare([...config.sharedQuestions, ...config.posttest, ...(scenario ? [variant === "B_PRE_A_POST" ? scenario.a : scenario.b] : [])]),
+    pretest: order(prepare([...config.sharedQuestions, ...config.pretest, ...(scenario ? [variant === "B_PRE_A_POST" ? scenario.b : scenario.a] : [])]), config.pretestOrder),
+    posttest: order(prepare([...config.sharedQuestions, ...config.posttest, ...(scenario ? [variant === "B_PRE_A_POST" ? scenario.a : scenario.b] : [])]), config.posttestOrder),
   };
 }
 
@@ -141,13 +155,55 @@ export function experimentConfigFromActivity(config: unknown): ExperimentConfig 
 
 export function publicExperimentConfig(config: ExperimentConfig | null) {
   if (!config) return null;
-  return { enabled: config.enabled, pretest: publicExperimentQuestions(config.pretest), posttest: publicExperimentQuestions(config.posttest) };
+  return { enabled: config.enabled, pretest: publicExperimentQuestions(config.pretest), posttest: publicExperimentQuestions(config.posttest), pretestIntroduction: config.pretestIntroduction, posttestIntroduction: config.posttestIntroduction, pretestMinutes: config.pretestMinutes, posttestMinutes: config.posttestMinutes, skipReasonPrompt: config.skipReasonPrompt };
 }
 
 export function publicExperimentQuestions(questions: ExperimentQuestion[]) {
-  return questions.map(({ id, type, prompt, options, scale, category, group }) => ({
-    id, type, prompt, ...(options ? { options } : {}), ...(scale ? { scale } : {}), ...(category ? { category } : {}), ...(group ? { group } : {}),
+  return questions.map(({ id, type, prompt, options, scale, category, group, optional, skipReasonRequired }) => ({
+    id, type, prompt, ...(options ? { options } : {}), ...(scale ? { scale } : {}), ...(category ? { category } : {}), ...(group ? { group } : {}), ...(optional ? { optional } : {}), ...(skipReasonRequired ? { skipReasonRequired } : {}),
   }));
+}
+
+export function posttestOpenedAt(runtimeConfig: unknown): string | null {
+  if (!runtimeConfig || typeof runtimeConfig !== "object" || Array.isArray(runtimeConfig)) return null;
+  const value = (runtimeConfig as Record<string, unknown>).posttestOpenedAt;
+  return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+export function isPosttestOpen(status: string, runtimeConfig: unknown): boolean {
+  if (posttestOpenedAt(runtimeConfig)) return true;
+  // Older finished lessons have no release timestamp. Their final stage still
+  // indicates that the teacher reached the posttest before ending the lesson.
+  return status.toLowerCase() === "finished"
+    && Boolean(runtimeConfig && typeof runtimeConfig === "object" && !Array.isArray(runtimeConfig)
+      && Number((runtimeConfig as Record<string, unknown>).currentStageIndex) >= 4);
+}
+
+/** A draft may be incomplete, but every saved value must match its assigned question. */
+export function normalizeExperimentDraftAnswers(questions: ExperimentQuestion[], input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const supplied = input as Record<string, unknown>;
+  const allowed = new Map(questions.map((question) => [question.id, question]));
+  if (Object.keys(supplied).some((id) => !allowed.has(id) && id !== "__skipReason")) return null;
+  const answers: Record<string, ExperimentAnswer> = {};
+  for (const [id, value] of Object.entries(supplied)) {
+    if (id === "__skipReason") {
+      if (typeof value !== "string" || value.length > 1000) return null;
+      answers[id] = value;
+      continue;
+    }
+    const question = allowed.get(id)!;
+    if (question.type === "multiple-choice") {
+      if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !question.options?.includes(item)) || new Set(value).size !== value.length) return null;
+      answers[id] = value;
+    } else if (typeof value === "string" && value.length <= 10_000) {
+      if (question.type === "single-choice" && value && !question.options?.includes(value)) return null;
+      if (question.type === "true-false" && value && value !== "true" && value !== "false") return null;
+      if (question.type === "scale" && value && (!/^\d{1,2}$/.test(value) || !question.scale || Number(value) < question.scale.min || Number(value) > question.scale.max)) return null;
+      answers[id] = value;
+    } else return null;
+  }
+  return answers;
 }
 
 export function publicActivityConfig(config: unknown) {
@@ -160,12 +216,18 @@ export function publicActivityConfig(config: unknown) {
 export function gradeExperimentAnswers(questions: ExperimentQuestion[], input: unknown) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const supplied = input as Record<string, unknown>;
-  if (Object.keys(supplied).length !== questions.length || Object.keys(supplied).some((id) => !questions.some((question) => question.id === id))) return null;
+  if (Object.keys(supplied).some((id) => id !== "__skipReason" && !questions.some((question) => question.id === id))) return null;
+  if (questions.some((question) => question.skipReasonRequired && (supplied[question.id] === undefined || supplied[question.id] === "")) && (typeof supplied.__skipReason !== "string" || !supplied.__skipReason.trim())) return null;
   const answers: Record<string, ExperimentAnswer> = {};
+  if (supplied.__skipReason !== undefined) {
+    if (typeof supplied.__skipReason !== "string" || supplied.__skipReason.length > 1000) return null;
+    answers.__skipReason = supplied.__skipReason.trim();
+  }
   let objectiveScore = 0;
   let objectiveTotal = 0;
   for (const question of questions) {
     const answer = supplied[question.id];
+    if (question.optional && (answer === undefined || answer === "" || Array.isArray(answer) && !answer.length)) continue;
     if (question.type === "multiple-choice") {
       if (!Array.isArray(answer) || !answer.length || answer.some((item) => typeof item !== "string" || !(question.options ?? []).includes(item)) || new Set(answer).size !== answer.length) return null;
       answers[question.id] = answer;

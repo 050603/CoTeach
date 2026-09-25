@@ -16,6 +16,7 @@ export function ShowcaseArtifactViewer({
   displayMode,
   teacherFollowing = true,
   onViewStateChange,
+  initialViewState,
 }: {
   courseId: string;
   artifact: FinalArtifactSummary;
@@ -24,6 +25,7 @@ export function ShowcaseArtifactViewer({
   displayMode?: ShowcaseDisplayMode;
   teacherFollowing?: boolean;
   onViewStateChange?: (patch: ShowcaseViewStatePatch) => void;
+  initialViewState?: ShowcaseViewStatePatch;
 }) {
   const canScroll = mode === "self" || mode === "controller" || (mode === "teacher" && !teacherFollowing);
   const follow = mode === "follower" || (mode === "teacher" && teacherFollowing);
@@ -56,6 +58,7 @@ export function ShowcaseArtifactViewer({
         html={documentHtml.html}
         mode={mode}
         onViewStateChange={onViewStateChange}
+        initialViewState={initialViewState}
         presentation={presentation}
       />
     );
@@ -68,6 +71,7 @@ export function ShowcaseArtifactViewer({
       follow={follow}
       mode={mode}
       onViewStateChange={onViewStateChange}
+      initialViewState={initialViewState}
       presentation={presentation}
     />
   );
@@ -80,6 +84,7 @@ function DocumentArtifactViewer({
   follow,
   canScroll,
   onViewStateChange,
+  initialViewState,
 }: {
   html: string;
   mode: ShowcaseViewerMode;
@@ -87,9 +92,11 @@ function DocumentArtifactViewer({
   follow: boolean;
   canScroll: boolean;
   onViewStateChange?: (patch: ShowcaseViewStatePatch) => void;
+  initialViewState?: ShowcaseViewStatePatch;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<number | undefined>(undefined);
+  const initialRatio = useRef(initialViewState?.scrollRatio ?? 0);
   useEffect(() => () => {
     if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
   }, []);
@@ -110,23 +117,43 @@ function DocumentArtifactViewer({
       observer?.disconnect();
     };
   }, [follow, html, presentation?.viewState?.revision, presentation?.viewState?.scrollRatio]);
+  useEffect(() => {
+    if (follow) return;
+    const applyRatio = () => {
+      const container = scrollRef.current;
+      if (container) container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight) * initialRatio.current;
+    };
+    const frame = window.requestAnimationFrame(applyRatio);
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(applyRatio);
+    if (observer && scrollRef.current) observer.observe(scrollRef.current.firstElementChild ?? scrollRef.current);
+    return () => { window.cancelAnimationFrame(frame); observer?.disconnect(); };
+  }, [follow, html]);
 
   function queueSync() {
-    if (mode !== "controller" || !onViewStateChange || timerRef.current !== undefined) return;
+    if (!(["controller", "self"].includes(mode)) || !onViewStateChange) return;
+    if (mode === "self") {
+      const container = scrollRef.current;
+      if (container) {
+        const ratio = Math.min(1, Math.max(0, container.scrollTop / Math.max(1, container.scrollHeight - container.clientHeight)));
+        initialRatio.current = ratio;
+        onViewStateChange({ scrollRatio: ratio });
+      }
+      return;
+    }
+    if (timerRef.current !== undefined) return;
     timerRef.current = window.setTimeout(() => {
       timerRef.current = undefined;
       const container = scrollRef.current;
       if (!container) return;
       const maxScroll = Math.max(1, container.scrollHeight - container.clientHeight);
-      onViewStateChange({ scrollRatio: Math.min(1, Math.max(0, container.scrollTop / maxScroll)) });
+      const ratio = Math.min(1, Math.max(0, container.scrollTop / maxScroll));
+      initialRatio.current = ratio;
+      onViewStateChange({ scrollRatio: ratio });
     }, 140);
   }
 
   return (
     <div className="relative h-full min-h-72 overflow-hidden rounded-lg bg-stone-100">
-      <div className="absolute right-3 top-3 z-10 rounded-full bg-stone-900/75 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur">
-        富文档 · 连续阅读{follow ? " · 跟随汇报" : ""}
-      </div>
       <div
         aria-label={follow ? "跟随汇报学生的文档" : "最终文档预览"}
         className={`h-full overflow-y-auto p-4 sm:p-7 ${canScroll ? "" : "pointer-events-none overscroll-none"}`}
@@ -149,6 +176,7 @@ function PdfArtifactViewer({
   follow,
   canScroll,
   onViewStateChange,
+  initialViewState,
 }: {
   contentUrl: string;
   mode: ShowcaseViewerMode;
@@ -157,6 +185,7 @@ function PdfArtifactViewer({
   follow: boolean;
   canScroll: boolean;
   onViewStateChange?: (patch: ShowcaseViewStatePatch) => void;
+  initialViewState?: ShowcaseViewStatePatch;
 }) {
   const [pdf, setPdf] = useState<PdfDocument>();
   const [error, setError] = useState<string>();
@@ -194,6 +223,7 @@ function PdfArtifactViewer({
       follow={follow}
       mode={mode}
       onViewStateChange={onViewStateChange}
+      initialViewState={initialViewState}
       pdf={pdf}
       presentation={presentation}
     />
@@ -203,6 +233,7 @@ function PdfArtifactViewer({
       follow={follow}
       mode={mode}
       onViewStateChange={onViewStateChange}
+      initialViewState={initialViewState}
       pdf={pdf}
       presentation={presentation}
     />
@@ -216,6 +247,7 @@ function PdfContinuousViewer({
   follow,
   canScroll,
   onViewStateChange,
+  initialViewState,
 }: {
   pdf: PdfDocument;
   mode: ShowcaseViewerMode;
@@ -223,9 +255,11 @@ function PdfContinuousViewer({
   follow: boolean;
   canScroll: boolean;
   onViewStateChange?: (patch: ShowcaseViewStatePatch) => void;
+  initialViewState?: ShowcaseViewStatePatch;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<number | undefined>(undefined);
+  const initialRatio = useRef(initialViewState?.scrollRatio ?? 0);
   useEffect(() => () => {
     if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
   }, []);
@@ -246,21 +280,41 @@ function PdfContinuousViewer({
       observer?.disconnect();
     };
   }, [follow, pdf, presentation?.viewState?.revision, presentation?.viewState?.scrollRatio]);
+  useEffect(() => {
+    if (follow) return;
+    const applyRatio = () => {
+      const container = scrollRef.current;
+      if (container) container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight) * initialRatio.current;
+    };
+    const frame = window.requestAnimationFrame(applyRatio);
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(applyRatio);
+    if (observer && scrollRef.current) observer.observe(scrollRef.current.firstElementChild ?? scrollRef.current);
+    return () => { window.cancelAnimationFrame(frame); observer?.disconnect(); };
+  }, [follow, pdf]);
   function queueSync() {
-    if (mode !== "controller" || !onViewStateChange || timerRef.current !== undefined) return;
+    if (!(["controller", "self"].includes(mode)) || !onViewStateChange) return;
+    if (mode === "self") {
+      const container = scrollRef.current;
+      if (container) {
+        const ratio = Math.min(1, Math.max(0, container.scrollTop / Math.max(1, container.scrollHeight - container.clientHeight)));
+        initialRatio.current = ratio;
+        onViewStateChange({ scrollRatio: ratio });
+      }
+      return;
+    }
+    if (timerRef.current !== undefined) return;
     timerRef.current = window.setTimeout(() => {
       timerRef.current = undefined;
       const container = scrollRef.current;
       if (!container) return;
       const maxScroll = Math.max(1, container.scrollHeight - container.clientHeight);
-      onViewStateChange({ scrollRatio: Math.min(1, Math.max(0, container.scrollTop / maxScroll)) });
+      const ratio = Math.min(1, Math.max(0, container.scrollTop / maxScroll));
+      initialRatio.current = ratio;
+      onViewStateChange({ scrollRatio: ratio });
     }, 140);
   }
   return (
     <div className="relative h-full min-h-72 overflow-hidden rounded-lg bg-stone-200">
-      <div className="absolute right-3 top-3 z-10 rounded-full bg-stone-900/75 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur">
-        PDF · 连续阅读{follow ? " · 跟随汇报" : ""}
-      </div>
       <div className={`h-full overflow-y-auto p-3 sm:p-5 ${canScroll ? "" : "pointer-events-none overscroll-none"}`} onScroll={queueSync} ref={scrollRef}>
         <div className="mx-auto max-w-5xl space-y-4">
           {Array.from({ length: pdf.numPages }, (_, index) => <PdfPageCanvas key={index + 1} pageNumber={index + 1} pdf={pdf} />)}
@@ -277,6 +331,7 @@ function PdfSlidesViewer({
   follow,
   canScroll,
   onViewStateChange,
+  initialViewState,
 }: {
   pdf: PdfDocument;
   mode: ShowcaseViewerMode;
@@ -284,15 +339,16 @@ function PdfSlidesViewer({
   follow: boolean;
   canScroll: boolean;
   onViewStateChange?: (patch: ShowcaseViewStatePatch) => void;
+  initialViewState?: ShowcaseViewStatePatch;
 }) {
-  const [localPage, setLocalPage] = useState(() => presentation?.viewState?.page ?? 1);
+  const [localPage, setLocalPage] = useState(() => initialViewState?.page ?? presentation?.viewState?.page ?? 1);
   const projectedPage = presentation?.viewState?.page ?? 1;
   const page = follow ? projectedPage : localPage;
   const safePage = Math.min(pdf.numPages, Math.max(1, page));
   function changePage(next: number) {
     const value = Math.min(pdf.numPages, Math.max(1, next));
     setLocalPage(value);
-    if (mode === "controller") onViewStateChange?.({ page: value });
+    if (mode === "controller" || mode === "self") onViewStateChange?.({ page: value });
   }
   return (
     <div className="flex h-full min-h-72 flex-col overflow-hidden rounded-lg bg-stone-950">
@@ -300,9 +356,9 @@ function PdfSlidesViewer({
         <PdfSlideCanvas key={safePage} pageNumber={safePage} pdf={pdf} />
       </div>
       <div className="flex h-14 shrink-0 items-center justify-center gap-4 border-t border-white/10 bg-stone-900 px-4 text-white">
-        {canScroll ? <button aria-label="上一页" className="grid size-9 place-items-center rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-30" disabled={safePage <= 1} onClick={() => changePage(safePage - 1)} type="button"><ChevronLeft size={19} /></button> : null}
+        {canScroll ? <button aria-label="上一页" className="grid size-11 place-items-center rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-30" disabled={safePage <= 1} onClick={() => changePage(safePage - 1)} type="button"><ChevronLeft size={19} /></button> : null}
         <span className="min-w-32 text-center text-sm font-semibold">{safePage} / {pdf.numPages}{follow ? " · 跟随汇报" : ""}</span>
-        {canScroll ? <button aria-label="下一页" className="grid size-9 place-items-center rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-30" disabled={safePage >= pdf.numPages} onClick={() => changePage(safePage + 1)} type="button"><ChevronRight size={19} /></button> : null}
+        {canScroll ? <button aria-label="下一页" className="grid size-11 place-items-center rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-30" disabled={safePage >= pdf.numPages} onClick={() => changePage(safePage + 1)} type="button"><ChevronRight size={19} /></button> : null}
       </div>
     </div>
   );

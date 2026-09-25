@@ -5,6 +5,7 @@ import type { TComment } from '@/components/ui/comment';
 import { createPlatePlugin } from 'platejs/react';
 
 import { BlockDiscussion } from '@/components/ui/block-discussion';
+import type { DocumentAiCommentStatus } from '@/lib/ai-collaboration/document-comment-types';
 
 export type TDiscussion = {
   id: string;
@@ -14,6 +15,7 @@ export type TDiscussion = {
   userId: string;
   documentContent?: string;
   isUnread?: boolean;
+  aiStatus?: DocumentAiCommentStatus;
   source?: 'ai-proactive' | 'student';
 };
 
@@ -24,6 +26,11 @@ export type AiDiscussionReplyHandler = (input: {
 
 export type AiDiscussionReadHandler = (input: {
   discussionId: string;
+}) => Promise<void>;
+
+export type AiDiscussionStatusHandler = (input: {
+  discussionId: string;
+  status: 'resolved' | 'deferred' | 'not-applicable' | 'open';
 }) => Promise<void>;
 
 export type AiSuggestionDecisionHandler = (decision: 'accepted' | 'rejected') => void;
@@ -98,6 +105,7 @@ export const discussionPlugin = createPlatePlugin({
     discussions: [] as TDiscussion[],
     onAiRead: undefined as AiDiscussionReadHandler | undefined,
     onAiReply: undefined as AiDiscussionReplyHandler | undefined,
+    onAiStatusChange: undefined as AiDiscussionStatusHandler | undefined,
     onAiSuggestionDecision: undefined as AiSuggestionDecisionHandler | undefined,
     pendingAiCommentSuggestion: undefined as AiPendingCommentSuggestion | undefined,
     users: usersData,
