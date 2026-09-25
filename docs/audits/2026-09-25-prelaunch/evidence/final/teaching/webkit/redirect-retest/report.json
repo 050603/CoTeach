@@ -1,0 +1,25 @@
+[
+  {
+    "id": "generate-redirect",
+    "device": "desktop-laptop",
+    "browser": "webkit",
+    "dpr": 1,
+    "width": 1024,
+    "height": 576,
+    "sourceCss": false,
+    "errors": [],
+    "missingFixtures": [],
+    "failedResources": [],
+    "interceptedWrites": [],
+    "scrollWidth": 1016,
+    "viewportWidth": 1024,
+    "panels": [],
+    "headingIssues": [],
+    "narrowText": [],
+    "canvasBoxes": [],
+    "controlIssues": [],
+    "brokenImages": [],
+    "failed": false,
+    "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final/teaching/webkit/redirect-retest/webkit-generate-redirect-desktop-laptop-dpr1.png"
+  }
+]

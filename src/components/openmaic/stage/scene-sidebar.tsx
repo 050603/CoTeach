@@ -150,7 +150,12 @@ export function SceneSidebar({
           </button>
           <button
             aria-label="收起页面目录"
-            onClick={() => onCollapseChange(true)}
+            onClick={(event) => { if (event.detail === 0) onCollapseChange(true); }}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onCollapseChange(true);
+            }}
             className="w-11 h-11 shrink-0 rounded-lg flex items-center justify-center bg-gray-100/80 dark:bg-gray-800/80 text-gray-500 dark:text-gray-400 ring-1 ring-black/[0.04] dark:ring-white/[0.06] hover:bg-gray-200/90 dark:hover:bg-gray-700/90 hover:text-gray-700 dark:hover:text-gray-200 active:scale-90 transition-all duration-200"
           >
             <PanelLeftClose className="w-4 h-4" />

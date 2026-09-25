@@ -18,7 +18,7 @@ const PINNED_PROMPT_HASHES = {
   'slide-content/user.md': '6e4fd25ae1428a8d6f45000caa73f6b661044a5f12a6dbdd55fede10802ff77d',
   'slide-actions/user.md': '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
   'requirements-to-outlines/system.md': '344c33e57f72ee86056c12d072c337f609838eab209517a05cc9b57a90b02e32',
-  'requirements-to-outlines/user.md': 'f04381208fe2837b806a910579b43f0433e8e2d6bee5654b03ac5ded0530e16e',
+  'requirements-to-outlines/user.md': '209a80f3bf46d9463f3b639d227187d02e2d2536ce1b21de1cd202ba744ea156',
 } as const;
 
 const outline: SceneOutline = {

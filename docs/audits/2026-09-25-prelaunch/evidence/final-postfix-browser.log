@@ -1,0 +1,5 @@
+
+> coteach-app@0.1.0 verify:prelaunch /home/lkj/OpenPBL/openPBL
+> node scripts/run-prelaunch-audit.mjs --browser-only
+
+checked desktop-768x576: 38 scenarios

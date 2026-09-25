@@ -1,0 +1,11 @@
+{
+  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/layout/webkit/smoke",
+  "browser": "webkit",
+  "browserVersion": "26.5",
+  "dpr": 1,
+  "scenarios": 3,
+  "devices": 1,
+  "checks": 3,
+  "failures": 0,
+  "failedChecks": []
+}

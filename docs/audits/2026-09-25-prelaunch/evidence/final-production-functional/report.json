@@ -1,0 +1,373 @@
+{
+  "date": "2026-09-25T06:22:13.219Z",
+  "commit": "4615a98",
+  "mode": "isolated-production-build-and-disposable-database",
+  "browser": "149.0.7827.55",
+  "results": [
+    {
+      "name": "isolated-database-migration",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "isolated-redis-start",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "isolated-production-build",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "isolated-generated-css-integrity",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "isolated-app-start",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-register-real-login-cookie",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "textbook-docx-upload-parse-search-persistence",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/textbook-reader",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "textbook-real-docx-graph-and-evidence-persisted",
+      "status": "通过",
+      "detail": "2 个知识点与原文证据，浏览器图谱绘制后刷新保持"
+    },
+    {
+      "name": "pdf-upload-download-range-and-isolated-storage",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "audio-video-upload-download-browser-playback",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/resource-package-verified",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "resource-package-real-zip-pptx-parse-pdf-confirm-persistence",
+      "status": "通过",
+      "detail": "1 PPTX 页，5 阶段"
+    },
+    {
+      "name": "teacher-course-chapter-invite-persistence",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-four-activity-types-created",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-invite-register-real-login-cookie",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "legacy-account-api-explicitly-retired",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "role-boundaries-and-invalid-activity",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-assignment-submit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-quiz-submit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-form-submit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-resource-submit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-assignment-browser-edit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-quiz-browser-edit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-form-browser-edit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-resource-browser-edit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-survey-sees-student-submission",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-template-version-published-and-persisted",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-pbl-browser-create-draft-persisted",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-normal-ai-generation-failure-retry-publish-persisted",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-classroom-editor-browser-save-storage-reload",
+      "status": "通过",
+      "detail": "资源修订号 2"
+    },
+    {
+      "name": "teacher/legacy-template-setup",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/live-classroom",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student/live-classroom",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "classroom-create-start-enter-and-workspace-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-ai-real-reply-consumed-and-persisted",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "classroom-artifact-stage-reflection-evaluation-finish",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/classes",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/course-detail",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/students",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/survey",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/templates",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/template-create",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/pbl-create",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/textbook-library",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/experiment",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student/courses",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student/course-detail",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student/profile",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student/assignment",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student/survey",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student/invalid-activity-recovery",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student/participation",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/participation",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/classroom-record",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/legacy-classroom-history",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-deep-link-back-forward-new-tab",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "redirect-/teacher",
+      "status": "通过",
+      "detail": "/teacher/classes"
+    },
+    {
+      "name": "redirect-/teacher/classes/8a80fe18-83ec-40e0-87fd-cc32b8287857/access",
+      "status": "通过",
+      "detail": "/teacher/classes/8a80fe18-83ec-40e0-87fd-cc32b8287857"
+    },
+    {
+      "name": "redirect-/student",
+      "status": "通过",
+      "detail": "/student/courses/8a80fe18-83ec-40e0-87fd-cc32b8287857"
+    },
+    {
+      "name": "anonymous-/teacher/classes-login-return",
+      "status": "通过",
+      "detail": "/teacher/login"
+    },
+    {
+      "name": "anonymous-/student/profile-login-return",
+      "status": "通过",
+      "detail": "/student/login"
+    },
+    {
+      "name": "teacher-and-student-reload-persisted-course",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student/reset-password",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "expired-student-deep-link-redirects-to-login",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-password-reset-invalidates-session-and-relogin",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-new-tab-shares-real-session-and-recovers-offline-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-student-records-real-zip-export",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-invitation-expiry-blocks-preview-and-registration",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-invitation-disable-rejects-new-join",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-finish-and-archive-course-persisted",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-withdraw-student-revokes-course-access",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-logout-invalidates-session",
+      "status": "通过",
+      "detail": ""
+    }
+  ]
+}

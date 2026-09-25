@@ -1422,6 +1422,7 @@
     "videoGenerating": "正在生成影片（預計1-2分鐘）...",
     "videoGenerationWarning": "影片生成通常需要1-2分鐘，請耐心等候",
     "mediaRetry": "重試",
+    "mediaPlaybackBlocked": "瀏覽器阻止了自動播放，請點擊重試。",
     "mediaContentSensitive": "抱歉，此內容觸發了安全檢查",
     "mediaGenerationDisabled": "已在設定中關閉生成",
     "singleAgent": "單智能體模式",

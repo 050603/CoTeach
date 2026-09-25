@@ -1,0 +1,2 @@
+PASS generate-redirect@desktop-laptop
+{"output":"/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final/teaching/webkit/redirect-retest","browser":"webkit","browserVersion":"26.5","dpr":1,"checks":1,"failures":0,"failedChecks":[]}

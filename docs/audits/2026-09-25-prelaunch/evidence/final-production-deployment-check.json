@@ -1,0 +1,90 @@
+{
+  "checks": [
+    {
+      "name": "local-health",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null
+    },
+    {
+      "name": "local-student-login",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null
+    },
+    {
+      "name": "local-teacher-login",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null
+    },
+    {
+      "name": "domain-teacher-login",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null
+    },
+    {
+      "name": "domain-student-login",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null
+    },
+    {
+      "name": "domain-http-redirect",
+      "status": "通过",
+      "httpStatus": 308,
+      "location": "https://coteach.cn/"
+    },
+    {
+      "name": "domain-student-deep-link",
+      "status": "通过",
+      "httpStatus": 307,
+      "location": "/student/login?redirect=%2Fstudent%2Fcourses%2Fprelaunch-invalid"
+    },
+    {
+      "name": "domain-teacher-deep-link",
+      "status": "通过",
+      "httpStatus": 307,
+      "location": "/teacher/login?redirect=%2Fteacher%2Fclasses%2Fprelaunch-invalid"
+    },
+    {
+      "name": "asset-c1d586fd5cc4a5a0.css",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null
+    },
+    {
+      "name": "asset-d5b14304d8cbca40.css",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null
+    },
+    {
+      "name": "asset-4eb017b6280b7c04.css",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null
+    },
+    {
+      "name": "asset-b7a5a9f7646ec885.css",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null
+    },
+    {
+      "name": "asset-c9a18af6fcdea0fb.css",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null
+    },
+    {
+      "name": "asset-webpack-b073bfb3bd7ad13c.js",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null
+    }
+  ],
+  "passed": 14,
+  "total": 14
+}

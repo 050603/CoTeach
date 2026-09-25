@@ -8,6 +8,7 @@ const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useRouter: () => navigation,
   useParams: () => ({ offeringId: "series-1" }),
+  usePathname: () => "/student/courses/series-1",
 }));
 
 const course = {

@@ -285,7 +285,7 @@ function PdfSlidesViewer({
   canScroll: boolean;
   onViewStateChange?: (patch: ShowcaseViewStatePatch) => void;
 }) {
-  const [localPage, setLocalPage] = useState(1);
+  const [localPage, setLocalPage] = useState(() => presentation?.viewState?.page ?? 1);
   const projectedPage = presentation?.viewState?.page ?? 1;
   const page = follow ? projectedPage : localPage;
   const safePage = Math.min(pdf.numPages, Math.max(1, page));

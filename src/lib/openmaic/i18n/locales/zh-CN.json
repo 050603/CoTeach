@@ -1537,6 +1537,7 @@
     "videoGenerating": "正在生成视频（预计1-2分钟）...",
     "videoGenerationWarning": "视频生成通常需要1-2分钟，请耐心等待",
     "mediaRetry": "重试",
+    "mediaPlaybackBlocked": "浏览器阻止了自动播放，请点击重试。",
     "mediaContentSensitive": "抱歉，该内容触发了安全检查",
     "mediaGenerationDisabled": "已在设置中关闭生成",
     "singleAgent": "单智能体模式",

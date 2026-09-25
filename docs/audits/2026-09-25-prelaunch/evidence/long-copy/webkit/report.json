@@ -1,0 +1,3165 @@
+{
+  "baseURL": "http://127.0.0.1:3000",
+  "browser": "webkit",
+  "browserVersion": "26.5",
+  "dpr": 1,
+  "sourceCss": false,
+  "reports": [
+    {
+      "id": "student-course-long-copy",
+      "device": "desktop-768x576",
+      "dpr": 1,
+      "width": 768,
+      "height": 576,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scrollWidth": 760,
+      "boxes": [
+        {
+          "selector": "pbl-student-course-layout",
+          "client": 760,
+          "scroll": 760,
+          "height": 1964,
+          "scrollHeight": 1964,
+          "right": 760,
+          "children": [],
+          "scrollable": false
+        }
+      ],
+      "chapterProgressIssues": [],
+      "inviteHeadingIssues": [],
+      "clippedClouds": 0,
+      "missingTheme": false,
+      "undersizedColumns": false,
+      "invisibleSurveyBars": 0,
+      "clippedDialogs": false,
+      "brokenImages": [],
+      "surveyRailUnexpected": false,
+      "settingsTrailingSpace": 0,
+      "headings": [
+        {
+          "text": "城市生态与社区行动：跨学科项目实践：CommunityResearchAndEvidenceBasedLearning2026",
+          "width": 712,
+          "lines": 2,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程介绍",
+          "width": 714,
+          "lines": 1,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程大纲",
+          "width": 714,
+          "lines": 1,
+          "fontSize": 17,
+          "overflow": false,
+          "unusuallyNarrow": false
+        }
+      ],
+      "textIssues": [],
+      "touch": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+      "imageCount": 2,
+      "resources": [
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/c1d586fd5cc4a5a0.css",
+          "durationMs": 12,
+          "bytes": 647,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/fb9ff99a43161482.css",
+          "durationMs": 60,
+          "bytes": 85370,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-solid.png",
+          "durationMs": 62,
+          "bytes": 397416,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/b7a5a9f7646ec885.css",
+          "durationMs": 15,
+          "bytes": 4596,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+          "durationMs": 16,
+          "bytes": 11944,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/4eb017b6280b7c04.css",
+          "durationMs": 25,
+          "bytes": 16621,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/44a12906-c2f8f7b1097a1154.js",
+          "durationMs": 39,
+          "bytes": 63239,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/25296-7e0acd8839e10791.js",
+          "durationMs": 41,
+          "bytes": 61294,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/main-app-cc7b6a8ab03af24f.js",
+          "durationMs": 17,
+          "bytes": 832,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/43476-07cdc8f3c258a020.js",
+          "durationMs": 25,
+          "bytes": 5542,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/28143-6f14b25b0e47fd3c.js",
+          "durationMs": 25,
+          "bytes": 9600,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/layout-e6cfa617247ad4e4.js",
+          "durationMs": 32,
+          "bytes": 4401,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/64386-ae9d39a0ea876f7c.js",
+          "durationMs": 41,
+          "bytes": 26906,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/36715-8e3b4c4d22209b12.js",
+          "durationMs": 31,
+          "bytes": 3883,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/error-b6de8791f693d80b.js",
+          "durationMs": 35,
+          "bytes": 3599,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/not-found-d7ceae4f6b40cee5.js",
+          "durationMs": 37,
+          "bytes": 2931,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/50156-d22d2c8822914bd0.js",
+          "durationMs": 42,
+          "bytes": 5741,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/61893-eb03e0e9e701b476.js",
+          "durationMs": 47,
+          "bytes": 8872,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/2312-e9537f5fd560b2e5.js",
+          "durationMs": 51,
+          "bytes": 11943,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/55456-e2736aa5abffdbc5.js",
+          "durationMs": 47,
+          "bytes": 4701,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/87454-efa9f8724c64d989.js",
+          "durationMs": 51,
+          "bytes": 19628,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/92239-0a6f8ffd6ad74dc3.js",
+          "durationMs": 47,
+          "bytes": 4084,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/courses/%5BofferingId%5D/page-b1dedbfeeafad9fe.js",
+          "durationMs": 50,
+          "bytes": 8345,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/manifest.webmanifest",
+          "durationMs": 6,
+          "bytes": 618,
+          "type": "other"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-400-normal.e25467c8.woff2",
+          "durationMs": 491,
+          "bytes": 1142852,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-500-normal.d3553b6f.woff2",
+          "durationMs": 364,
+          "bytes": 1159428,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-700-normal.6e0a7691.woff2",
+          "durationMs": 366,
+          "bytes": 1172544,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/auth/student-profile",
+          "durationMs": 16,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/courses",
+          "durationMs": 29,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-600-normal.f23c085c.woff2",
+          "durationMs": 67,
+          "bytes": 1162652,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-color.png",
+          "durationMs": 15,
+          "bytes": 438025,
+          "type": "img"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 12,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 11,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=fIhqXF70Y7IFreV-",
+          "durationMs": 12,
+          "bytes": 1096,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=PmJx_ULyTPPoauVt",
+          "durationMs": 12,
+          "bytes": 1803,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=6TqeMEevJuI6MtUv",
+          "durationMs": 11,
+          "bytes": 540,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=u9EH4ykcT0lVpj3e",
+          "durationMs": 11,
+          "bytes": 845,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/page-5da6bbb8b99e15c6.js",
+          "durationMs": 3,
+          "bytes": 7221,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 10,
+          "bytes": 506,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 10,
+          "bytes": 496,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 10,
+          "bytes": 1308,
+          "type": "fetch"
+        }
+      ],
+      "durationMs": 4274,
+      "failed": false,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/long-copy/webkit/webkit-student-course-long-copy-desktop-768x576-dpr1.png"
+    },
+    {
+      "id": "student-course-long-copy",
+      "device": "desktop-768x768",
+      "dpr": 1,
+      "width": 768,
+      "height": 768,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scrollWidth": 760,
+      "boxes": [
+        {
+          "selector": "pbl-student-course-layout",
+          "client": 760,
+          "scroll": 760,
+          "height": 1964,
+          "scrollHeight": 1964,
+          "right": 760,
+          "children": [],
+          "scrollable": false
+        }
+      ],
+      "chapterProgressIssues": [],
+      "inviteHeadingIssues": [],
+      "clippedClouds": 0,
+      "missingTheme": false,
+      "undersizedColumns": false,
+      "invisibleSurveyBars": 0,
+      "clippedDialogs": false,
+      "brokenImages": [],
+      "surveyRailUnexpected": false,
+      "settingsTrailingSpace": 0,
+      "headings": [
+        {
+          "text": "城市生态与社区行动：跨学科项目实践：CommunityResearchAndEvidenceBasedLearning2026",
+          "width": 712,
+          "lines": 2,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程介绍",
+          "width": 714,
+          "lines": 1,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程大纲",
+          "width": 714,
+          "lines": 1,
+          "fontSize": 17,
+          "overflow": false,
+          "unusuallyNarrow": false
+        }
+      ],
+      "textIssues": [],
+      "touch": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+      "imageCount": 2,
+      "resources": [
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-solid.png",
+          "durationMs": 57,
+          "bytes": 397416,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/c1d586fd5cc4a5a0.css",
+          "durationMs": 10,
+          "bytes": 647,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/b7a5a9f7646ec885.css",
+          "durationMs": 14,
+          "bytes": 4596,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/4eb017b6280b7c04.css",
+          "durationMs": 22,
+          "bytes": 16621,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/fb9ff99a43161482.css",
+          "durationMs": 53,
+          "bytes": 85370,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+          "durationMs": 14,
+          "bytes": 11944,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/main-app-cc7b6a8ab03af24f.js",
+          "durationMs": 18,
+          "bytes": 832,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/44a12906-c2f8f7b1097a1154.js",
+          "durationMs": 39,
+          "bytes": 63239,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/25296-7e0acd8839e10791.js",
+          "durationMs": 39,
+          "bytes": 61294,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/28143-6f14b25b0e47fd3c.js",
+          "durationMs": 22,
+          "bytes": 9600,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/43476-07cdc8f3c258a020.js",
+          "durationMs": 23,
+          "bytes": 5542,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/layout-e6cfa617247ad4e4.js",
+          "durationMs": 29,
+          "bytes": 4401,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/64386-ae9d39a0ea876f7c.js",
+          "durationMs": 37,
+          "bytes": 26906,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/36715-8e3b4c4d22209b12.js",
+          "durationMs": 29,
+          "bytes": 3883,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/error-b6de8791f693d80b.js",
+          "durationMs": 34,
+          "bytes": 3599,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/not-found-d7ceae4f6b40cee5.js",
+          "durationMs": 33,
+          "bytes": 2931,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/50156-d22d2c8822914bd0.js",
+          "durationMs": 38,
+          "bytes": 5741,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/61893-eb03e0e9e701b476.js",
+          "durationMs": 41,
+          "bytes": 8872,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/2312-e9537f5fd560b2e5.js",
+          "durationMs": 43,
+          "bytes": 11943,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/92239-0a6f8ffd6ad74dc3.js",
+          "durationMs": 43,
+          "bytes": 4084,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/55456-e2736aa5abffdbc5.js",
+          "durationMs": 43,
+          "bytes": 4701,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/courses/%5BofferingId%5D/page-b1dedbfeeafad9fe.js",
+          "durationMs": 46,
+          "bytes": 8345,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/87454-efa9f8724c64d989.js",
+          "durationMs": 47,
+          "bytes": 19628,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/manifest.webmanifest",
+          "durationMs": 10,
+          "bytes": 618,
+          "type": "other"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-400-normal.e25467c8.woff2",
+          "durationMs": 19,
+          "bytes": 1142852,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-500-normal.d3553b6f.woff2",
+          "durationMs": 23,
+          "bytes": 1159428,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-700-normal.6e0a7691.woff2",
+          "durationMs": 26,
+          "bytes": 1172544,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/auth/student-profile",
+          "durationMs": 49,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/courses",
+          "durationMs": 53,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-600-normal.f23c085c.woff2",
+          "durationMs": 460,
+          "bytes": 1162652,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-color.png",
+          "durationMs": 20,
+          "bytes": 438025,
+          "type": "img"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 19,
+          "bytes": 496,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 18,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 18,
+          "bytes": 565,
+          "type": "fetch"
+        }
+      ],
+      "durationMs": 3768,
+      "failed": false,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/long-copy/webkit/webkit-student-course-long-copy-desktop-768x768-dpr1.png"
+    },
+    {
+      "id": "student-course-long-copy",
+      "device": "desktop-1024x768",
+      "dpr": 1,
+      "width": 1024,
+      "height": 768,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scrollWidth": 1016,
+      "boxes": [
+        {
+          "selector": "pbl-student-course-layout",
+          "client": 1016,
+          "scroll": 1016,
+          "height": 1135,
+          "scrollHeight": 1135,
+          "right": 1016,
+          "children": [],
+          "scrollable": false
+        }
+      ],
+      "chapterProgressIssues": [],
+      "inviteHeadingIssues": [],
+      "clippedClouds": 0,
+      "missingTheme": false,
+      "undersizedColumns": false,
+      "invisibleSurveyBars": 0,
+      "clippedDialogs": false,
+      "brokenImages": [],
+      "surveyRailUnexpected": false,
+      "settingsTrailingSpace": 0,
+      "headings": [
+        {
+          "text": "城市生态与社区行动：跨学科项目实践：CommunityResearchAndEvidenceBasedLearning2026",
+          "width": 302,
+          "lines": 5,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程介绍",
+          "width": 610,
+          "lines": 1,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程大纲",
+          "width": 610,
+          "lines": 1,
+          "fontSize": 17,
+          "overflow": false,
+          "unusuallyNarrow": false
+        }
+      ],
+      "textIssues": [],
+      "touch": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+      "imageCount": 2,
+      "resources": [
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/c1d586fd5cc4a5a0.css",
+          "durationMs": 9,
+          "bytes": 647,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/fb9ff99a43161482.css",
+          "durationMs": 53,
+          "bytes": 85370,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-solid.png",
+          "durationMs": 57,
+          "bytes": 397416,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/b7a5a9f7646ec885.css",
+          "durationMs": 12,
+          "bytes": 4596,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+          "durationMs": 13,
+          "bytes": 11944,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/4eb017b6280b7c04.css",
+          "durationMs": 25,
+          "bytes": 16621,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/25296-7e0acd8839e10791.js",
+          "durationMs": 35,
+          "bytes": 61294,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/44a12906-c2f8f7b1097a1154.js",
+          "durationMs": 40,
+          "bytes": 63239,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/main-app-cc7b6a8ab03af24f.js",
+          "durationMs": 16,
+          "bytes": 832,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/43476-07cdc8f3c258a020.js",
+          "durationMs": 21,
+          "bytes": 5542,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/28143-6f14b25b0e47fd3c.js",
+          "durationMs": 21,
+          "bytes": 9600,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/layout-e6cfa617247ad4e4.js",
+          "durationMs": 30,
+          "bytes": 4401,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/64386-ae9d39a0ea876f7c.js",
+          "durationMs": 39,
+          "bytes": 26906,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/36715-8e3b4c4d22209b12.js",
+          "durationMs": 30,
+          "bytes": 3883,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/error-b6de8791f693d80b.js",
+          "durationMs": 35,
+          "bytes": 3599,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/not-found-d7ceae4f6b40cee5.js",
+          "durationMs": 34,
+          "bytes": 2931,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/50156-d22d2c8822914bd0.js",
+          "durationMs": 38,
+          "bytes": 5741,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/61893-eb03e0e9e701b476.js",
+          "durationMs": 42,
+          "bytes": 8872,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/2312-e9537f5fd560b2e5.js",
+          "durationMs": 44,
+          "bytes": 11943,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/92239-0a6f8ffd6ad74dc3.js",
+          "durationMs": 42,
+          "bytes": 4084,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/55456-e2736aa5abffdbc5.js",
+          "durationMs": 43,
+          "bytes": 4701,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/courses/%5BofferingId%5D/page-b1dedbfeeafad9fe.js",
+          "durationMs": 47,
+          "bytes": 8345,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/87454-efa9f8724c64d989.js",
+          "durationMs": 47,
+          "bytes": 19628,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/manifest.webmanifest",
+          "durationMs": 8,
+          "bytes": 618,
+          "type": "other"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-400-normal.e25467c8.woff2",
+          "durationMs": 19,
+          "bytes": 1142852,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-500-normal.d3553b6f.woff2",
+          "durationMs": 24,
+          "bytes": 1159428,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-700-normal.6e0a7691.woff2",
+          "durationMs": 26,
+          "bytes": 1172544,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/auth/student-profile",
+          "durationMs": 41,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/courses",
+          "durationMs": 46,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-600-normal.f23c085c.woff2",
+          "durationMs": 159,
+          "bytes": 1162652,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-color.png",
+          "durationMs": 7,
+          "bytes": 438025,
+          "type": "img"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 24,
+          "bytes": 506,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 22,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 23,
+          "bytes": 496,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 22,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=fIhqXF70Y7IFreV-",
+          "durationMs": 24,
+          "bytes": 1096,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=PmJx_ULyTPPoauVt",
+          "durationMs": 25,
+          "bytes": 1803,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 25,
+          "bytes": 1320,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 25,
+          "bytes": 1310,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=6TqeMEevJuI6MtUv",
+          "durationMs": 9,
+          "bytes": 540,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=u9EH4ykcT0lVpj3e",
+          "durationMs": 5,
+          "bytes": 845,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/page-5da6bbb8b99e15c6.js",
+          "durationMs": 4,
+          "bytes": 7221,
+          "type": "script"
+        }
+      ],
+      "durationMs": 5217,
+      "failed": false,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/long-copy/webkit/webkit-student-course-long-copy-desktop-1024x768-dpr1.png"
+    },
+    {
+      "id": "student-course-long-copy",
+      "device": "desktop-1280x720",
+      "dpr": 1,
+      "width": 1280,
+      "height": 720,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scrollWidth": 1272,
+      "boxes": [
+        {
+          "selector": "pbl-student-course-layout",
+          "client": 1178,
+          "scroll": 1178,
+          "height": 1085,
+          "scrollHeight": 1085,
+          "right": 1225,
+          "children": [],
+          "scrollable": false
+        }
+      ],
+      "chapterProgressIssues": [],
+      "inviteHeadingIssues": [],
+      "clippedClouds": 0,
+      "missingTheme": false,
+      "undersizedColumns": false,
+      "invisibleSurveyBars": 0,
+      "clippedDialogs": false,
+      "brokenImages": [],
+      "surveyRailUnexpected": false,
+      "settingsTrailingSpace": 0,
+      "headings": [
+        {
+          "text": "城市生态与社区行动：跨学科项目实践：CommunityResearchAndEvidenceBasedLearning2026",
+          "width": 306,
+          "lines": 5,
+          "fontSize": 28.16,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程介绍",
+          "width": 756,
+          "lines": 1,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程大纲",
+          "width": 756,
+          "lines": 1,
+          "fontSize": 17,
+          "overflow": false,
+          "unusuallyNarrow": false
+        }
+      ],
+      "textIssues": [],
+      "touch": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+      "imageCount": 2,
+      "resources": [
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/c1d586fd5cc4a5a0.css",
+          "durationMs": 8,
+          "bytes": 647,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-solid.png",
+          "durationMs": 50,
+          "bytes": 397416,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/b7a5a9f7646ec885.css",
+          "durationMs": 12,
+          "bytes": 4596,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+          "durationMs": 14,
+          "bytes": 11944,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/4eb017b6280b7c04.css",
+          "durationMs": 16,
+          "bytes": 16621,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/25296-7e0acd8839e10791.js",
+          "durationMs": 30,
+          "bytes": 61294,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/44a12906-c2f8f7b1097a1154.js",
+          "durationMs": 31,
+          "bytes": 63239,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/fb9ff99a43161482.css",
+          "durationMs": 38,
+          "bytes": 85370,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/main-app-cc7b6a8ab03af24f.js",
+          "durationMs": 14,
+          "bytes": 832,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/43476-07cdc8f3c258a020.js",
+          "durationMs": 19,
+          "bytes": 5542,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/28143-6f14b25b0e47fd3c.js",
+          "durationMs": 21,
+          "bytes": 9600,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/layout-e6cfa617247ad4e4.js",
+          "durationMs": 25,
+          "bytes": 4401,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/36715-8e3b4c4d22209b12.js",
+          "durationMs": 27,
+          "bytes": 3883,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/64386-ae9d39a0ea876f7c.js",
+          "durationMs": 30,
+          "bytes": 26906,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/error-b6de8791f693d80b.js",
+          "durationMs": 31,
+          "bytes": 3599,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/not-found-d7ceae4f6b40cee5.js",
+          "durationMs": 40,
+          "bytes": 2931,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/50156-d22d2c8822914bd0.js",
+          "durationMs": 41,
+          "bytes": 5741,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/61893-eb03e0e9e701b476.js",
+          "durationMs": 41,
+          "bytes": 8872,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/2312-e9537f5fd560b2e5.js",
+          "durationMs": 41,
+          "bytes": 11943,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/55456-e2736aa5abffdbc5.js",
+          "durationMs": 41,
+          "bytes": 4701,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/87454-efa9f8724c64d989.js",
+          "durationMs": 42,
+          "bytes": 19628,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/92239-0a6f8ffd6ad74dc3.js",
+          "durationMs": 44,
+          "bytes": 4084,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/courses/%5BofferingId%5D/page-b1dedbfeeafad9fe.js",
+          "durationMs": 45,
+          "bytes": 8345,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/manifest.webmanifest",
+          "durationMs": 5,
+          "bytes": 618,
+          "type": "other"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-400-normal.e25467c8.woff2",
+          "durationMs": 6,
+          "bytes": 1142852,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-500-normal.d3553b6f.woff2",
+          "durationMs": 12,
+          "bytes": 1159428,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-700-normal.6e0a7691.woff2",
+          "durationMs": 13,
+          "bytes": 1172544,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/auth/student-profile",
+          "durationMs": 31,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/courses",
+          "durationMs": 38,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-600-normal.f23c085c.woff2",
+          "durationMs": 78,
+          "bytes": 1162652,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-color.png",
+          "durationMs": 32,
+          "bytes": 438025,
+          "type": "img"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 28,
+          "bytes": 506,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 28,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 28,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 28,
+          "bytes": 496,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 12,
+          "bytes": 1322,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=fIhqXF70Y7IFreV-",
+          "durationMs": 24,
+          "bytes": 1096,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=PmJx_ULyTPPoauVt",
+          "durationMs": 24,
+          "bytes": 1803,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 25,
+          "bytes": 1309,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=6TqeMEevJuI6MtUv",
+          "durationMs": 22,
+          "bytes": 540,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=u9EH4ykcT0lVpj3e",
+          "durationMs": 6,
+          "bytes": 845,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/page-5da6bbb8b99e15c6.js",
+          "durationMs": 4,
+          "bytes": 7221,
+          "type": "script"
+        }
+      ],
+      "durationMs": 4714,
+      "failed": false,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/long-copy/webkit/webkit-student-course-long-copy-desktop-1280x720-dpr1.png"
+    },
+    {
+      "id": "student-course-long-copy",
+      "device": "desktop-1366x768",
+      "dpr": 1,
+      "width": 1366,
+      "height": 768,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scrollWidth": 1358,
+      "boxes": [
+        {
+          "selector": "pbl-student-course-layout",
+          "client": 1257,
+          "scroll": 1257,
+          "height": 1085,
+          "scrollHeight": 1085,
+          "right": 1307,
+          "children": [],
+          "scrollable": false
+        }
+      ],
+      "chapterProgressIssues": [],
+      "inviteHeadingIssues": [],
+      "clippedClouds": 0,
+      "missingTheme": false,
+      "undersizedColumns": false,
+      "invisibleSurveyBars": 0,
+      "clippedDialogs": false,
+      "brokenImages": [],
+      "surveyRailUnexpected": false,
+      "settingsTrailingSpace": 0,
+      "headings": [
+        {
+          "text": "城市生态与社区行动：跨学科项目实践：CommunityResearchAndEvidenceBasedLearning2026",
+          "width": 327,
+          "lines": 5,
+          "fontSize": 30.052,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程介绍",
+          "width": 807,
+          "lines": 1,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程大纲",
+          "width": 807,
+          "lines": 1,
+          "fontSize": 17,
+          "overflow": false,
+          "unusuallyNarrow": false
+        }
+      ],
+      "textIssues": [],
+      "touch": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+      "imageCount": 2,
+      "resources": [
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-solid.png",
+          "durationMs": 66,
+          "bytes": 397416,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/c1d586fd5cc4a5a0.css",
+          "durationMs": 12,
+          "bytes": 647,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/4eb017b6280b7c04.css",
+          "durationMs": 32,
+          "bytes": 16621,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/fb9ff99a43161482.css",
+          "durationMs": 63,
+          "bytes": 85370,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/b7a5a9f7646ec885.css",
+          "durationMs": 17,
+          "bytes": 4596,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+          "durationMs": 22,
+          "bytes": 11944,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/44a12906-c2f8f7b1097a1154.js",
+          "durationMs": 46,
+          "bytes": 63239,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/main-app-cc7b6a8ab03af24f.js",
+          "durationMs": 22,
+          "bytes": 832,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/25296-7e0acd8839e10791.js",
+          "durationMs": 46,
+          "bytes": 61294,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/43476-07cdc8f3c258a020.js",
+          "durationMs": 30,
+          "bytes": 5542,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/28143-6f14b25b0e47fd3c.js",
+          "durationMs": 31,
+          "bytes": 9600,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/64386-ae9d39a0ea876f7c.js",
+          "durationMs": 46,
+          "bytes": 26906,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/layout-e6cfa617247ad4e4.js",
+          "durationMs": 35,
+          "bytes": 4401,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/36715-8e3b4c4d22209b12.js",
+          "durationMs": 36,
+          "bytes": 3883,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/error-b6de8791f693d80b.js",
+          "durationMs": 40,
+          "bytes": 3599,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/not-found-d7ceae4f6b40cee5.js",
+          "durationMs": 40,
+          "bytes": 2931,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/50156-d22d2c8822914bd0.js",
+          "durationMs": 46,
+          "bytes": 5741,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/61893-eb03e0e9e701b476.js",
+          "durationMs": 48,
+          "bytes": 8872,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/2312-e9537f5fd560b2e5.js",
+          "durationMs": 50,
+          "bytes": 11943,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/87454-efa9f8724c64d989.js",
+          "durationMs": 53,
+          "bytes": 19628,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/55456-e2736aa5abffdbc5.js",
+          "durationMs": 49,
+          "bytes": 4701,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/92239-0a6f8ffd6ad74dc3.js",
+          "durationMs": 51,
+          "bytes": 4084,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/courses/%5BofferingId%5D/page-b1dedbfeeafad9fe.js",
+          "durationMs": 51,
+          "bytes": 8345,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/manifest.webmanifest",
+          "durationMs": 6,
+          "bytes": 618,
+          "type": "other"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-400-normal.e25467c8.woff2",
+          "durationMs": 18,
+          "bytes": 1142852,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-500-normal.d3553b6f.woff2",
+          "durationMs": 22,
+          "bytes": 1159428,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-700-normal.6e0a7691.woff2",
+          "durationMs": 24,
+          "bytes": 1172544,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/auth/student-profile",
+          "durationMs": 46,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/courses",
+          "durationMs": 53,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-600-normal.f23c085c.woff2",
+          "durationMs": 9,
+          "bytes": 1162652,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-color.png",
+          "durationMs": 92,
+          "bytes": 438025,
+          "type": "img"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 87,
+          "bytes": 506,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 87,
+          "bytes": 496,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 86,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 86,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=fIhqXF70Y7IFreV-",
+          "durationMs": 15,
+          "bytes": 1096,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 16,
+          "bytes": 1321,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 16,
+          "bytes": 1309,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=PmJx_ULyTPPoauVt",
+          "durationMs": 5,
+          "bytes": 1803,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=6TqeMEevJuI6MtUv",
+          "durationMs": 12,
+          "bytes": 540,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=u9EH4ykcT0lVpj3e",
+          "durationMs": 9,
+          "bytes": 845,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/page-5da6bbb8b99e15c6.js",
+          "durationMs": 5,
+          "bytes": 7221,
+          "type": "script"
+        }
+      ],
+      "durationMs": 4948,
+      "failed": false,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/long-copy/webkit/webkit-student-course-long-copy-desktop-1366x768-dpr1.png"
+    },
+    {
+      "id": "student-course-long-copy",
+      "device": "desktop-1440x900",
+      "dpr": 1,
+      "width": 1440,
+      "height": 900,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scrollWidth": 1432,
+      "boxes": [
+        {
+          "selector": "pbl-student-course-layout",
+          "client": 1325,
+          "scroll": 1325,
+          "height": 1061,
+          "scrollHeight": 1061,
+          "right": 1378,
+          "children": [],
+          "scrollable": false
+        }
+      ],
+      "chapterProgressIssues": [],
+      "inviteHeadingIssues": [],
+      "clippedClouds": 0,
+      "missingTheme": false,
+      "undersizedColumns": false,
+      "invisibleSurveyBars": 0,
+      "clippedDialogs": false,
+      "brokenImages": [],
+      "surveyRailUnexpected": false,
+      "settingsTrailingSpace": 0,
+      "headings": [
+        {
+          "text": "城市生态与社区行动：跨学科项目实践：CommunityResearchAndEvidenceBasedLearning2026",
+          "width": 345,
+          "lines": 5,
+          "fontSize": 31,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程介绍",
+          "width": 850,
+          "lines": 1,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程大纲",
+          "width": 850,
+          "lines": 1,
+          "fontSize": 17,
+          "overflow": false,
+          "unusuallyNarrow": false
+        }
+      ],
+      "textIssues": [],
+      "touch": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+      "imageCount": 2,
+      "resources": [
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/c1d586fd5cc4a5a0.css",
+          "durationMs": 10,
+          "bytes": 647,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-solid.png",
+          "durationMs": 54,
+          "bytes": 397416,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+          "durationMs": 15,
+          "bytes": 11944,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/b7a5a9f7646ec885.css",
+          "durationMs": 15,
+          "bytes": 4596,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/4eb017b6280b7c04.css",
+          "durationMs": 22,
+          "bytes": 16621,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/44a12906-c2f8f7b1097a1154.js",
+          "durationMs": 35,
+          "bytes": 63239,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/fb9ff99a43161482.css",
+          "durationMs": 48,
+          "bytes": 85370,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/main-app-cc7b6a8ab03af24f.js",
+          "durationMs": 19,
+          "bytes": 832,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/28143-6f14b25b0e47fd3c.js",
+          "durationMs": 23,
+          "bytes": 9600,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/43476-07cdc8f3c258a020.js",
+          "durationMs": 24,
+          "bytes": 5542,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/25296-7e0acd8839e10791.js",
+          "durationMs": 36,
+          "bytes": 61294,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/64386-ae9d39a0ea876f7c.js",
+          "durationMs": 38,
+          "bytes": 26906,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/layout-e6cfa617247ad4e4.js",
+          "durationMs": 29,
+          "bytes": 4401,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/36715-8e3b4c4d22209b12.js",
+          "durationMs": 30,
+          "bytes": 3883,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/error-b6de8791f693d80b.js",
+          "durationMs": 35,
+          "bytes": 3599,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/not-found-d7ceae4f6b40cee5.js",
+          "durationMs": 36,
+          "bytes": 2931,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/50156-d22d2c8822914bd0.js",
+          "durationMs": 38,
+          "bytes": 5741,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/61893-eb03e0e9e701b476.js",
+          "durationMs": 43,
+          "bytes": 8872,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/2312-e9537f5fd560b2e5.js",
+          "durationMs": 45,
+          "bytes": 11943,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/92239-0a6f8ffd6ad74dc3.js",
+          "durationMs": 43,
+          "bytes": 4084,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/55456-e2736aa5abffdbc5.js",
+          "durationMs": 43,
+          "bytes": 4701,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/courses/%5BofferingId%5D/page-b1dedbfeeafad9fe.js",
+          "durationMs": 47,
+          "bytes": 8345,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/87454-efa9f8724c64d989.js",
+          "durationMs": 48,
+          "bytes": 19628,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/manifest.webmanifest",
+          "durationMs": 3,
+          "bytes": 618,
+          "type": "other"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-400-normal.e25467c8.woff2",
+          "durationMs": 15,
+          "bytes": 1142852,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-500-normal.d3553b6f.woff2",
+          "durationMs": 18,
+          "bytes": 1159428,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-700-normal.6e0a7691.woff2",
+          "durationMs": 20,
+          "bytes": 1172544,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/auth/student-profile",
+          "durationMs": 43,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/courses",
+          "durationMs": 48,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-600-normal.f23c085c.woff2",
+          "durationMs": 633,
+          "bytes": 1162652,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-color.png",
+          "durationMs": 21,
+          "bytes": 438025,
+          "type": "img"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 21,
+          "bytes": 506,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 21,
+          "bytes": 496,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 20,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 20,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 30,
+          "bytes": 1321,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=fIhqXF70Y7IFreV-",
+          "durationMs": 28,
+          "bytes": 1096,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=PmJx_ULyTPPoauVt",
+          "durationMs": 28,
+          "bytes": 1803,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 29,
+          "bytes": 1308,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=6TqeMEevJuI6MtUv",
+          "durationMs": 8,
+          "bytes": 540,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=u9EH4ykcT0lVpj3e",
+          "durationMs": 5,
+          "bytes": 845,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/page-5da6bbb8b99e15c6.js",
+          "durationMs": 4,
+          "bytes": 7221,
+          "type": "script"
+        }
+      ],
+      "durationMs": 4877,
+      "failed": false,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/long-copy/webkit/webkit-student-course-long-copy-desktop-1440x900-dpr1.png"
+    },
+    {
+      "id": "student-course-long-copy",
+      "device": "desktop-1920x1080",
+      "dpr": 1,
+      "width": 1920,
+      "height": 1080,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scrollWidth": 1912,
+      "boxes": [
+        {
+          "selector": "pbl-student-course-layout",
+          "client": 1766,
+          "scroll": 1766,
+          "height": 1036,
+          "scrollHeight": 1036,
+          "right": 1839,
+          "children": [],
+          "scrollable": false
+        }
+      ],
+      "chapterProgressIssues": [],
+      "inviteHeadingIssues": [],
+      "clippedClouds": 0,
+      "missingTheme": false,
+      "undersizedColumns": false,
+      "invisibleSurveyBars": 0,
+      "clippedDialogs": false,
+      "brokenImages": [],
+      "surveyRailUnexpected": false,
+      "settingsTrailingSpace": 0,
+      "headings": [
+        {
+          "text": "城市生态与社区行动：跨学科项目实践：CommunityResearchAndEvidenceBasedLearning2026",
+          "width": 465,
+          "lines": 4,
+          "fontSize": 31,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程介绍",
+          "width": 1134,
+          "lines": 1,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程大纲",
+          "width": 1134,
+          "lines": 1,
+          "fontSize": 17,
+          "overflow": false,
+          "unusuallyNarrow": false
+        }
+      ],
+      "textIssues": [],
+      "touch": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+      "imageCount": 2,
+      "resources": [
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-solid.png",
+          "durationMs": 42,
+          "bytes": 397416,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/c1d586fd5cc4a5a0.css",
+          "durationMs": 7,
+          "bytes": 647,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/b7a5a9f7646ec885.css",
+          "durationMs": 12,
+          "bytes": 4596,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/4eb017b6280b7c04.css",
+          "durationMs": 17,
+          "bytes": 16621,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/fb9ff99a43161482.css",
+          "durationMs": 32,
+          "bytes": 85370,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+          "durationMs": 12,
+          "bytes": 11944,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/main-app-cc7b6a8ab03af24f.js",
+          "durationMs": 14,
+          "bytes": 832,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/28143-6f14b25b0e47fd3c.js",
+          "durationMs": 19,
+          "bytes": 9600,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/43476-07cdc8f3c258a020.js",
+          "durationMs": 20,
+          "bytes": 5542,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/25296-7e0acd8839e10791.js",
+          "durationMs": 28,
+          "bytes": 61294,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/44a12906-c2f8f7b1097a1154.js",
+          "durationMs": 29,
+          "bytes": 63239,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/layout-e6cfa617247ad4e4.js",
+          "durationMs": 23,
+          "bytes": 4401,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/36715-8e3b4c4d22209b12.js",
+          "durationMs": 24,
+          "bytes": 3883,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/64386-ae9d39a0ea876f7c.js",
+          "durationMs": 27,
+          "bytes": 26906,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/error-b6de8791f693d80b.js",
+          "durationMs": 27,
+          "bytes": 3599,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/not-found-d7ceae4f6b40cee5.js",
+          "durationMs": 27,
+          "bytes": 2931,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/50156-d22d2c8822914bd0.js",
+          "durationMs": 32,
+          "bytes": 5741,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/55456-e2736aa5abffdbc5.js",
+          "durationMs": 34,
+          "bytes": 4701,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/61893-eb03e0e9e701b476.js",
+          "durationMs": 34,
+          "bytes": 8872,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/2312-e9537f5fd560b2e5.js",
+          "durationMs": 34,
+          "bytes": 11943,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/87454-efa9f8724c64d989.js",
+          "durationMs": 36,
+          "bytes": 19628,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/92239-0a6f8ffd6ad74dc3.js",
+          "durationMs": 34,
+          "bytes": 4084,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/courses/%5BofferingId%5D/page-b1dedbfeeafad9fe.js",
+          "durationMs": 37,
+          "bytes": 8345,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/manifest.webmanifest",
+          "durationMs": 4,
+          "bytes": 618,
+          "type": "other"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-400-normal.e25467c8.woff2",
+          "durationMs": 13,
+          "bytes": 1142852,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-500-normal.d3553b6f.woff2",
+          "durationMs": 15,
+          "bytes": 1159428,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-700-normal.6e0a7691.woff2",
+          "durationMs": 17,
+          "bytes": 1172544,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/auth/student-profile",
+          "durationMs": 32,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/courses",
+          "durationMs": 36,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-600-normal.f23c085c.woff2",
+          "durationMs": 231,
+          "bytes": 1162652,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-color.png",
+          "durationMs": 568,
+          "bytes": 438025,
+          "type": "img"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 564,
+          "bytes": 506,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 564,
+          "bytes": 496,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 563,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 563,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=fIhqXF70Y7IFreV-",
+          "durationMs": 7,
+          "bytes": 1096,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=PmJx_ULyTPPoauVt",
+          "durationMs": 7,
+          "bytes": 1803,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 11,
+          "bytes": 1310,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 12,
+          "bytes": 1320,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=6TqeMEevJuI6MtUv",
+          "durationMs": 25,
+          "bytes": 540,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=u9EH4ykcT0lVpj3e",
+          "durationMs": 25,
+          "bytes": 845,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/page-5da6bbb8b99e15c6.js",
+          "durationMs": 3,
+          "bytes": 7221,
+          "type": "script"
+        }
+      ],
+      "durationMs": 4606,
+      "failed": false,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/long-copy/webkit/webkit-student-course-long-copy-desktop-1920x1080-dpr1.png"
+    },
+    {
+      "id": "student-course-long-copy",
+      "device": "desktop-2560x1440",
+      "dpr": 1,
+      "width": 2560,
+      "height": 1440,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scrollWidth": 2552,
+      "boxes": [
+        {
+          "selector": "pbl-student-course-layout",
+          "client": 1840,
+          "scroll": 1840,
+          "height": 1368,
+          "scrollHeight": 1368,
+          "right": 2196,
+          "children": [],
+          "scrollable": false
+        }
+      ],
+      "chapterProgressIssues": [],
+      "inviteHeadingIssues": [],
+      "clippedClouds": 0,
+      "missingTheme": false,
+      "undersizedColumns": false,
+      "invisibleSurveyBars": 0,
+      "clippedDialogs": false,
+      "brokenImages": [],
+      "surveyRailUnexpected": false,
+      "settingsTrailingSpace": 0,
+      "headings": [
+        {
+          "text": "城市生态与社区行动：跨学科项目实践：CommunityResearchAndEvidenceBasedLearning2026",
+          "width": 483,
+          "lines": 4,
+          "fontSize": 31,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程介绍",
+          "width": 1178,
+          "lines": 1,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程大纲",
+          "width": 1178,
+          "lines": 1,
+          "fontSize": 17,
+          "overflow": false,
+          "unusuallyNarrow": false
+        }
+      ],
+      "textIssues": [],
+      "touch": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+      "imageCount": 2,
+      "resources": [
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/c1d586fd5cc4a5a0.css",
+          "durationMs": 7,
+          "bytes": 647,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/4eb017b6280b7c04.css",
+          "durationMs": 18,
+          "bytes": 16621,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/fb9ff99a43161482.css",
+          "durationMs": 44,
+          "bytes": 85370,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-solid.png",
+          "durationMs": 46,
+          "bytes": 397416,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/b7a5a9f7646ec885.css",
+          "durationMs": 9,
+          "bytes": 4596,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+          "durationMs": 10,
+          "bytes": 11944,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/main-app-cc7b6a8ab03af24f.js",
+          "durationMs": 13,
+          "bytes": 832,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/25296-7e0acd8839e10791.js",
+          "durationMs": 26,
+          "bytes": 61294,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/44a12906-c2f8f7b1097a1154.js",
+          "durationMs": 33,
+          "bytes": 63239,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/28143-6f14b25b0e47fd3c.js",
+          "durationMs": 16,
+          "bytes": 9600,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/43476-07cdc8f3c258a020.js",
+          "durationMs": 17,
+          "bytes": 5542,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/layout-e6cfa617247ad4e4.js",
+          "durationMs": 22,
+          "bytes": 4401,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/64386-ae9d39a0ea876f7c.js",
+          "durationMs": 31,
+          "bytes": 26906,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/36715-8e3b4c4d22209b12.js",
+          "durationMs": 23,
+          "bytes": 3883,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/error-b6de8791f693d80b.js",
+          "durationMs": 27,
+          "bytes": 3599,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/not-found-d7ceae4f6b40cee5.js",
+          "durationMs": 28,
+          "bytes": 2931,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/50156-d22d2c8822914bd0.js",
+          "durationMs": 28,
+          "bytes": 5741,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/61893-eb03e0e9e701b476.js",
+          "durationMs": 32,
+          "bytes": 8872,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/2312-e9537f5fd560b2e5.js",
+          "durationMs": 34,
+          "bytes": 11943,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/55456-e2736aa5abffdbc5.js",
+          "durationMs": 34,
+          "bytes": 4701,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/92239-0a6f8ffd6ad74dc3.js",
+          "durationMs": 35,
+          "bytes": 4084,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/courses/%5BofferingId%5D/page-b1dedbfeeafad9fe.js",
+          "durationMs": 37,
+          "bytes": 8345,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/87454-efa9f8724c64d989.js",
+          "durationMs": 37,
+          "bytes": 19628,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/manifest.webmanifest",
+          "durationMs": 7,
+          "bytes": 618,
+          "type": "other"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-400-normal.e25467c8.woff2",
+          "durationMs": 16,
+          "bytes": 1142852,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-500-normal.d3553b6f.woff2",
+          "durationMs": 19,
+          "bytes": 1159428,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-700-normal.6e0a7691.woff2",
+          "durationMs": 21,
+          "bytes": 1172544,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/auth/student-profile",
+          "durationMs": 48,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/courses",
+          "durationMs": 53,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-600-normal.f23c085c.woff2",
+          "durationMs": 137,
+          "bytes": 1162652,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-color.png",
+          "durationMs": 25,
+          "bytes": 438025,
+          "type": "img"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 21,
+          "bytes": 506,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 20,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 21,
+          "bytes": 496,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 19,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 26,
+          "bytes": 1321,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=fIhqXF70Y7IFreV-",
+          "durationMs": 24,
+          "bytes": 1096,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=PmJx_ULyTPPoauVt",
+          "durationMs": 24,
+          "bytes": 1803,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 25,
+          "bytes": 1309,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=6TqeMEevJuI6MtUv",
+          "durationMs": 9,
+          "bytes": 540,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=u9EH4ykcT0lVpj3e",
+          "durationMs": 9,
+          "bytes": 845,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/page-5da6bbb8b99e15c6.js",
+          "durationMs": 3,
+          "bytes": 7221,
+          "type": "script"
+        }
+      ],
+      "durationMs": 5176,
+      "failed": false,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/long-copy/webkit/webkit-student-course-long-copy-desktop-2560x1440-dpr1.png"
+    },
+    {
+      "id": "student-course-long-copy",
+      "device": "desktop-3840x2160",
+      "dpr": 1,
+      "width": 3840,
+      "height": 2160,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scrollWidth": 3832,
+      "boxes": [
+        {
+          "selector": "pbl-student-course-layout",
+          "client": 1840,
+          "scroll": 1840,
+          "height": 2088,
+          "scrollHeight": 2088,
+          "right": 2836,
+          "children": [],
+          "scrollable": false
+        }
+      ],
+      "chapterProgressIssues": [],
+      "inviteHeadingIssues": [],
+      "clippedClouds": 0,
+      "missingTheme": false,
+      "undersizedColumns": false,
+      "invisibleSurveyBars": 0,
+      "clippedDialogs": false,
+      "brokenImages": [],
+      "surveyRailUnexpected": false,
+      "settingsTrailingSpace": 0,
+      "headings": [
+        {
+          "text": "城市生态与社区行动：跨学科项目实践：CommunityResearchAndEvidenceBasedLearning2026",
+          "width": 483,
+          "lines": 4,
+          "fontSize": 31,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程介绍",
+          "width": 1178,
+          "lines": 1,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程大纲",
+          "width": 1178,
+          "lines": 1,
+          "fontSize": 17,
+          "overflow": false,
+          "unusuallyNarrow": false
+        }
+      ],
+      "textIssues": [],
+      "touch": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+      "imageCount": 2,
+      "resources": [
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-solid.png",
+          "durationMs": 56,
+          "bytes": 397416,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/c1d586fd5cc4a5a0.css",
+          "durationMs": 9,
+          "bytes": 647,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/b7a5a9f7646ec885.css",
+          "durationMs": 15,
+          "bytes": 4596,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/4eb017b6280b7c04.css",
+          "durationMs": 25,
+          "bytes": 16621,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/fb9ff99a43161482.css",
+          "durationMs": 50,
+          "bytes": 85370,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+          "durationMs": 14,
+          "bytes": 11944,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/main-app-cc7b6a8ab03af24f.js",
+          "durationMs": 18,
+          "bytes": 832,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/44a12906-c2f8f7b1097a1154.js",
+          "durationMs": 33,
+          "bytes": 63239,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/25296-7e0acd8839e10791.js",
+          "durationMs": 38,
+          "bytes": 61294,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/28143-6f14b25b0e47fd3c.js",
+          "durationMs": 22,
+          "bytes": 9600,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/43476-07cdc8f3c258a020.js",
+          "durationMs": 24,
+          "bytes": 5542,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/36715-8e3b4c4d22209b12.js",
+          "durationMs": 30,
+          "bytes": 3883,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/layout-e6cfa617247ad4e4.js",
+          "durationMs": 30,
+          "bytes": 4401,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/error-b6de8791f693d80b.js",
+          "durationMs": 37,
+          "bytes": 3599,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/not-found-d7ceae4f6b40cee5.js",
+          "durationMs": 37,
+          "bytes": 2931,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/64386-ae9d39a0ea876f7c.js",
+          "durationMs": 38,
+          "bytes": 26906,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/50156-d22d2c8822914bd0.js",
+          "durationMs": 38,
+          "bytes": 5741,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/61893-eb03e0e9e701b476.js",
+          "durationMs": 42,
+          "bytes": 8872,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/2312-e9537f5fd560b2e5.js",
+          "durationMs": 45,
+          "bytes": 11943,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/87454-efa9f8724c64d989.js",
+          "durationMs": 49,
+          "bytes": 19628,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/92239-0a6f8ffd6ad74dc3.js",
+          "durationMs": 43,
+          "bytes": 4084,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/55456-e2736aa5abffdbc5.js",
+          "durationMs": 43,
+          "bytes": 4701,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/courses/%5BofferingId%5D/page-b1dedbfeeafad9fe.js",
+          "durationMs": 48,
+          "bytes": 8345,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/manifest.webmanifest",
+          "durationMs": 6,
+          "bytes": 618,
+          "type": "other"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-400-normal.e25467c8.woff2",
+          "durationMs": 18,
+          "bytes": 1142852,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-500-normal.d3553b6f.woff2",
+          "durationMs": 23,
+          "bytes": 1159428,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-700-normal.6e0a7691.woff2",
+          "durationMs": 24,
+          "bytes": 1172544,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/auth/student-profile",
+          "durationMs": 33,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/courses",
+          "durationMs": 37,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-600-normal.f23c085c.woff2",
+          "durationMs": 8,
+          "bytes": 1162652,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-color.png",
+          "durationMs": 79,
+          "bytes": 438025,
+          "type": "img"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 74,
+          "bytes": 506,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 73,
+          "bytes": 496,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 71,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 71,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=fIhqXF70Y7IFreV-",
+          "durationMs": 22,
+          "bytes": 1096,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=PmJx_ULyTPPoauVt",
+          "durationMs": 23,
+          "bytes": 1803,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 24,
+          "bytes": 1309,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 24,
+          "bytes": 1321,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=6TqeMEevJuI6MtUv",
+          "durationMs": 9,
+          "bytes": 540,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=u9EH4ykcT0lVpj3e",
+          "durationMs": 10,
+          "bytes": 845,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/page-5da6bbb8b99e15c6.js",
+          "durationMs": 159,
+          "bytes": 7221,
+          "type": "script"
+        }
+      ],
+      "durationMs": 6781,
+      "failed": false,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/long-copy/webkit/webkit-student-course-long-copy-desktop-3840x2160-dpr1.png"
+    },
+    {
+      "id": "student-course-long-copy",
+      "device": "desktop-1024x576",
+      "dpr": 1,
+      "width": 1024,
+      "height": 576,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scrollWidth": 1016,
+      "boxes": [
+        {
+          "selector": "pbl-student-course-layout",
+          "client": 1016,
+          "scroll": 1016,
+          "height": 1135,
+          "scrollHeight": 1135,
+          "right": 1016,
+          "children": [],
+          "scrollable": false
+        }
+      ],
+      "chapterProgressIssues": [],
+      "inviteHeadingIssues": [],
+      "clippedClouds": 0,
+      "missingTheme": false,
+      "undersizedColumns": false,
+      "invisibleSurveyBars": 0,
+      "clippedDialogs": false,
+      "brokenImages": [],
+      "surveyRailUnexpected": false,
+      "settingsTrailingSpace": 0,
+      "headings": [
+        {
+          "text": "城市生态与社区行动：跨学科项目实践：CommunityResearchAndEvidenceBasedLearning2026",
+          "width": 302,
+          "lines": 5,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程介绍",
+          "width": 610,
+          "lines": 1,
+          "fontSize": 24,
+          "overflow": false,
+          "unusuallyNarrow": false
+        },
+        {
+          "text": "课程大纲",
+          "width": 610,
+          "lines": 1,
+          "fontSize": 17,
+          "overflow": false,
+          "unusuallyNarrow": false
+        }
+      ],
+      "textIssues": [],
+      "touch": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+      "imageCount": 2,
+      "resources": [
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/c1d586fd5cc4a5a0.css",
+          "durationMs": 13,
+          "bytes": 647,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/4eb017b6280b7c04.css",
+          "durationMs": 25,
+          "bytes": 16621,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/fb9ff99a43161482.css",
+          "durationMs": 54,
+          "bytes": 85370,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-solid.png",
+          "durationMs": 56,
+          "bytes": 397416,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/b7a5a9f7646ec885.css",
+          "durationMs": 14,
+          "bytes": 4596,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+          "durationMs": 16,
+          "bytes": 11944,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/44a12906-c2f8f7b1097a1154.js",
+          "durationMs": 37,
+          "bytes": 63239,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/25296-7e0acd8839e10791.js",
+          "durationMs": 41,
+          "bytes": 61294,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/main-app-cc7b6a8ab03af24f.js",
+          "durationMs": 17,
+          "bytes": 832,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/28143-6f14b25b0e47fd3c.js",
+          "durationMs": 22,
+          "bytes": 9600,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/43476-07cdc8f3c258a020.js",
+          "durationMs": 21,
+          "bytes": 5542,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/layout-e6cfa617247ad4e4.js",
+          "durationMs": 27,
+          "bytes": 4401,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/64386-ae9d39a0ea876f7c.js",
+          "durationMs": 38,
+          "bytes": 26906,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/36715-8e3b4c4d22209b12.js",
+          "durationMs": 27,
+          "bytes": 3883,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/error-b6de8791f693d80b.js",
+          "durationMs": 31,
+          "bytes": 3599,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/not-found-d7ceae4f6b40cee5.js",
+          "durationMs": 32,
+          "bytes": 2931,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/50156-d22d2c8822914bd0.js",
+          "durationMs": 38,
+          "bytes": 5741,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/61893-eb03e0e9e701b476.js",
+          "durationMs": 39,
+          "bytes": 8872,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/2312-e9537f5fd560b2e5.js",
+          "durationMs": 40,
+          "bytes": 11943,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/87454-efa9f8724c64d989.js",
+          "durationMs": 45,
+          "bytes": 19628,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/55456-e2736aa5abffdbc5.js",
+          "durationMs": 42,
+          "bytes": 4701,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/92239-0a6f8ffd6ad74dc3.js",
+          "durationMs": 43,
+          "bytes": 4084,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/courses/%5BofferingId%5D/page-b1dedbfeeafad9fe.js",
+          "durationMs": 45,
+          "bytes": 8345,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/manifest.webmanifest",
+          "durationMs": 6,
+          "bytes": 618,
+          "type": "other"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-400-normal.e25467c8.woff2",
+          "durationMs": 6,
+          "bytes": 1142852,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-500-normal.d3553b6f.woff2",
+          "durationMs": 12,
+          "bytes": 1159428,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-700-normal.6e0a7691.woff2",
+          "durationMs": 12,
+          "bytes": 1172544,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/auth/student-profile",
+          "durationMs": 12,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/courses",
+          "durationMs": 158,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-600-normal.f23c085c.woff2",
+          "durationMs": 6,
+          "bytes": 1162652,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 31,
+          "bytes": 506,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 31,
+          "bytes": 496,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-color.png",
+          "durationMs": 32,
+          "bytes": 438025,
+          "type": "img"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 29,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?_rsc=KnQLknJO2CIOpbRV",
+          "durationMs": 29,
+          "bytes": 565,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/layout-classroom?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 108,
+          "bytes": 1322,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=fIhqXF70Y7IFreV-",
+          "durationMs": 106,
+          "bytes": 1096,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=PmJx_ULyTPPoauVt",
+          "durationMs": 106,
+          "bytes": 1803,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student/activities/a0?_rsc=PlaUXZEdXmYjn3QZ",
+          "durationMs": 107,
+          "bytes": 1311,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=6TqeMEevJuI6MtUv",
+          "durationMs": 6,
+          "bytes": 540,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/student?all=1&_rsc=u9EH4ykcT0lVpj3e",
+          "durationMs": 6,
+          "bytes": 845,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/student/page-5da6bbb8b99e15c6.js",
+          "durationMs": 4,
+          "bytes": 7221,
+          "type": "script"
+        }
+      ],
+      "durationMs": 4447,
+      "failed": false,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/long-copy/webkit/webkit-student-course-long-copy-desktop-1024x576-dpr1.png"
+    }
+  ]
+}

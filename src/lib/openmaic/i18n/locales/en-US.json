@@ -1537,6 +1537,7 @@
     "videoGenerating": "Generating video (est. 1-2 min)...",
     "videoGenerationWarning": "Video generation usually takes 1-2 minutes, please be patient",
     "mediaRetry": "Retry",
+    "mediaPlaybackBlocked": "Your browser blocked automatic playback. Select Retry to play.",
     "mediaContentSensitive": "Sorry, this content triggered a safety check.",
     "mediaGenerationDisabled": "Generation disabled in settings",
     "singleAgent": "Single Agent",

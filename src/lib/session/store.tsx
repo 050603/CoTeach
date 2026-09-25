@@ -534,6 +534,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return;
       }
       lastSeenUpdatedAtRef.current = next.updatedAt;
+      // Realtime course/projection responses can arrive before React commits
+      // this HYDRATE. Keep their merge source in sync with the authenticated
+      // session so a first-load snapshot cannot erase the student identity.
+      stateRef.current = next;
       dispatch({ type: "HYDRATE", payload: next });
     } catch (error) {
       // 401（未登录）在公开页面轮询时属正常情况，静默处理不弹提示。

@@ -84,8 +84,7 @@ for (const viewport of [{ width: 1024, height: 576 }, { width: 1920, height: 108
     await expect(page.getByText("建议改传PDF", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "原始PPT", exact: true })).toHaveAttribute("href", `/api/uploads/${resourceId}`);
     await page.getByRole("button", { name: "全屏授课", exact: true }).filter({ visible: true }).click();
-    const stageActions = page.getByLabel("当前阶段常用操作");
-    await stageActions.getByRole("button", { name: "同步到学生", exact: true }).click();
+    await page.getByRole("button", { name: "同步到学生", exact: true }).click();
     await expect.poll(() => fixture.course().uiState?.resourceProjection?.resourceId).toBe(resourceId);
     const hashes = new Set<string>();
     for (let number = 1; number <= 10; number++) {
@@ -115,7 +114,7 @@ for (const viewport of [{ width: 1024, height: 576 }, { width: 1920, height: 108
     await page.getByRole("button", { name: "班级学情", exact: true }).click();
     await page.getByRole("button", { name: "授课展示", exact: true }).click();
     await expect(page.getByRole("spinbutton", { name: "跳转页码", exact: true })).toHaveValue("10");
-    await stageActions.getByRole("button", { name: "停止同步", exact: true }).click();
+    await page.getByRole("button", { name: "停止同步", exact: true }).click();
     await expect.poll(() => fixture.course().uiState?.resourceProjection).toBeNull();
     expect(fixture.errors).toEqual([]);
     expect(fixture.unexpected).toEqual([]);

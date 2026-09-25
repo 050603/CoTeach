@@ -6,10 +6,15 @@ const baseURL = process.env.OPENPBL_RESOURCE_E2E_BASE_URL || 'http://localhost:3
 test.use({ baseURL });
 test('renders every generated teaching slide with loaded fonts and records page-level measurements', async ({ page }, info) => {
   test.skip(!process.env.OPENPBL_ACCEPTANCE_COURSE || !process.env.OPENPBL_ACCEPTANCE_CLASSROOM, 'Provide actual privately generated acceptance artifacts.');
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const course = JSON.parse(readFileSync(process.env.OPENPBL_ACCEPTANCE_COURSE!, 'utf8'));
   const classroom = JSON.parse(readFileSync(process.env.OPENPBL_ACCEPTANCE_CLASSROOM!, 'utf8'));
-  const signature = 'b'.repeat(64), errors: string[] = [], reports: Array<{ sceneId: string; status: string; issues: unknown[] }> = [];
+  course.aiLearningClassroomId = classroom.id;
+  // Test-lesson mode deliberately omits the publication review. Keep every
+  // generated page intact and use the full-course review UI to measure them.
+  delete course.content.classroomGenerationRun;
+  const signature = 'b'.repeat(64), errors: string[] = [], unexpected: string[] = [], reports: Array<{ sceneId: string; status: string; issues: unknown[] }> = [];
+  let renderReview: Record<string, unknown> | null = null;
   course.content.qualityReviewRequired = true;
   const expected = classroom.scenes.filter((scene: { type: string }) => scene.type === 'slide');
   page.on('pageerror', (error) => errors.push(error.message));
@@ -49,11 +54,19 @@ test('renders every generated teaching slide with loaded fonts and records page-
     if (path.endsWith('/events')) return json({ events: [], nextCursor: '0', hasMore: false, courseVersion: 1 });
     if (path.endsWith('/presence')) return json({ members: [], degraded: false });
     if (path.endsWith('/resource-repair')) return json({ issues: [] });
+    if (path.endsWith('/generation')) return json({ backgroundEnabled: false, job: null });
+    if (path.endsWith('/design-workspace')) return json({ publication: { latestVersion: 1, publishedVersion: null, draftVersion: 1 } });
     if (path.endsWith('/quality-review')) {
       if (request.method() === 'POST') {
         const body = request.postDataJSON();
+        if (body.action === 'render-start') {
+          renderReview = { schemaVersion: 1, reviewPolicyVersion: 'render-visible-content-v2', runId: '123e4567-e89b-42d3-a456-426614174000', signature,
+            classroomId: classroom.id, status: 'pending', pages: [], updatedAt: new Date().toISOString() };
+          return json({ renderReview });
+        }
         expect(body.action).toBe('render-page');
         reports.push(body.page);
+        renderReview = { ...(renderReview ?? {}), status: reports.length === expected.length ? 'completed' : 'running', pages: reports, updatedAt: new Date().toISOString() };
         const node = page.locator(`[data-acceptance-snapshot="${body.page.sceneId}"]`);
         if (body.page.status === 'completed') {
           const file = info.outputPath(`page-${String(reports.length).padStart(2, '0')}.png`);
@@ -63,18 +76,21 @@ test('renders every generated teaching slide with loaded fonts and records page-
         }
         return json({ success: true });
       }
-      return json({ required: true, signature, classroom, quality: { schemaVersion: 1, signature, status: 'pending', issues: [] }, renderReview: reports.length ? { signature, status: reports.length === expected.length ? 'completed' : 'running', pages: reports } : null, teacherReview: null });
+      return json({ required: true, signature, classroom, quality: null, renderReview, teacherReview: null, teacherReviewItems: [], teacherReviewSummary: null });
     }
-    if (path === '/api/openmaic/classroom') return json(classroom);
-    return json({});
+    if (path.includes(classroom.id) || path === '/api/openmaic/classroom') return json(classroom);
+    unexpected.push(`${request.method()} ${path}`);
+    return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
   });
   await page.goto(`/teacher/prepare/${course.id}/preview`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('tab', { name: '检查与终审' }).click();
   await page.getByRole('button', { name: '检查页面', exact: true }).click();
   await expect.poll(() => reports.length, { timeout: 120_000 }).toBe(expected.length);
   expect(expected.length).toBeGreaterThan(0);
   expect(reports.every((report) => report.status === 'completed')).toBe(true);
   expect(new Set(reports.map((report) => report.sceneId)).size).toBe(expected.length);
   expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
   const file = info.outputPath('render-report.json'); writeFileSync(file, JSON.stringify(reports, null, 2));
   await info.attach('render-report', { path: file, contentType: 'application/json' });
 });

@@ -2,6 +2,12 @@ import "@testing-library/jest-dom/vitest";
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 
+// Provider tests mock fetch and opt into proxy settings explicitly. Host proxy
+// variables would route those fixture requests to real external services.
+for (const key of ["OPENPBL_OUTBOUND_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]) {
+  delete process.env[key];
+}
+
 afterEach(() => {
   cleanup();
 });

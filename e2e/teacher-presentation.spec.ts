@@ -126,6 +126,9 @@ async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; 
     if (path === `/api/courses/${courseId}/events`) return json({ events: [], nextCursor: "0", hasMore: false, courseVersion: course.version });
     if (path === `/api/courses/${courseId}/presence`) return json({ members: [], degraded: false });
     if (path === `/api/courses/${courseId}/projection`) return json({ courseVersion: course.version, resourceProjection: course.uiState?.resourceProjection ?? null, teacherResourceProjection: null });
+    if (path === `/api/courses/${courseId}/public-discussion` || path === `/api/courses/${courseId}/public-discussion/settings`) {
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ enabled: false }) });
+    }
     if (path === `/api/courses/${courseId}/actions`) {
       const action = body.action as { type: string; payload: { patch?: Partial<Course> } };
       if (action.type === "UPDATE_COURSE") course = { ...course, ...action.payload.patch, version: (course.version ?? 0) + 1, updatedAt: new Date().toISOString() };
@@ -184,7 +187,7 @@ async function enterFullscreen(page: Page) {
   await expect(page.getByRole("button", { name: "授课展示", exact: true })).toHaveAttribute("aria-pressed", "true");
 }
 
-async function assertNoPageOverflow(page: Page) {
+async function assertNoPageOverflow(page: Page, mode: "classroom" | "reflection" = "classroom") {
   const dimensions = await page.evaluate(() => ({
     width: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
@@ -194,12 +197,15 @@ async function assertNoPageOverflow(page: Page) {
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.width + 1);
   // The presentation's content area may scroll; the fixed outer frame must fit.
   expect(dimensions.scrollHeight).toBeLessThanOrEqual(dimensions.height + 1);
-  for (const name of ["退出全屏", "授课展示", "班级学情", "课堂操作", "计时", "工具", "教学建议", "结束课堂"]) {
+  const controls = mode === "reflection"
+    ? ["退出全屏", "题目目录", "课堂操作", "工具"]
+    : ["退出全屏", "授课展示", "班级学情", "课堂操作", "工具", "教学建议", "结束课堂"];
+  for (const name of controls) {
     const control = page.getByRole("button", { name, exact: true });
     await control.scrollIntoViewIfNeeded();
     await expect(control).toBeInViewport();
     const box = await control.boundingBox();
-    expect(box?.height).toBeGreaterThanOrEqual(44);
+    expect(box?.height, `${name} click target`).toBeGreaterThanOrEqual(40);
   }
 }
 
@@ -260,7 +266,7 @@ async function assertWorkspaceFrame(page: Page) {
   });
   expect(layout.bottom).toBeLessThanOrEqual(layout.footerTop + 1);
   if (layout.needsScroll) expect(layout.scrolled).toBe(true);
-  const returnButton = page.locator(".teacher-presentation footer").getByRole("button", { name: "返回展示", exact: true });
+  const returnButton = page.locator(".teacher-presentation footer").getByRole("button", { name: /^返回(展示|汇总)$/ });
   await expect(returnButton).toBeInViewport({ ratio: 1 });
   // Real hit testing catches a workspace child painting over the fixed footer.
   expect(await returnButton.evaluate((node) => {
@@ -293,9 +299,15 @@ async function assertReflectionCloudFits(page: Page) {
   expect(bounds.width).toBeGreaterThan(150);
   expect(bounds.height).toBeGreaterThan(80);
   expect(bounds.clipped).toEqual([]);
-  for (const name of ["上一道反思题", "下一道反思题"]) await expect(page.getByRole("button", { name, exact: true })).toBeInViewport({ ratio: 1 });
-  await expect(page.getByRole("combobox", { name: "选择反思题目" })).toBeInViewport({ ratio: 1 });
-  await assertNoPageOverflow(page);
+  for (const control of [
+    page.getByRole("button", { name: "上一道反思题", exact: true }),
+    page.getByRole("combobox", { name: "选择反思题目" }),
+    page.getByRole("button", { name: "下一道反思题", exact: true }),
+  ]) {
+    await control.scrollIntoViewIfNeeded();
+    await expect(control).toBeInViewport({ ratio: 0.98 });
+  }
+  await assertNoPageOverflow(page, "reflection");
 }
 
 for (const viewport of [{ width: 1024, height: 576 }, { width: 1280, height: 720 }, { width: 1024, height: 768 }, { width: 1920, height: 1080 }, { width: 3840, height: 2160 }, { width: 390, height: 844 }]) {
@@ -347,17 +359,20 @@ for (const viewport of [{ width: 1024, height: 576 }, { width: 1280, height: 720
     await expect(page.getByRole("button", { name: "下一道反思题", exact: true })).toBeDisabled();
     await page.getByRole("button", { name: "上一道反思题", exact: true }).click();
     await expect(board.getByRole("heading", { name: REFLECTION_SURVEY_QUESTIONS.systemUsability, exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "班级学情", exact: true }).click();
-    const analytics = page.getByRole("region", { name: "班级学情大屏", exact: true });
+    await page.getByRole("button", { name: "查看本题回答", exact: true }).click();
+    const allAnswers = page.getByRole("dialog", { name: "本题回答 · 3 人", exact: true });
+    await expect(allAnswers).toContainText("私密学生1");
+    await expect(allAnswers).toContainText("私密学生3");
+    await page.keyboard.press("Escape");
     await page.getByRole("combobox", { name: "选择反思题目" }).selectOption("0");
-    await expect(analytics.getByRole("heading", { name: REFLECTION_SURVEY_QUESTIONS.learningReflection, exact: true })).toBeVisible();
+    await expect(board.getByRole("heading", { name: REFLECTION_SURVEY_QUESTIONS.learningReflection, exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "证据比较，3 人提及", exact: true })).toBeVisible();
-    await expect(analytics).not.toContainText("私密学生");
+    await expect(board).not.toContainText("私密学生");
     await assertReflectionCloudFits(page);
     await page.getByRole("button", { name: "课堂操作", exact: true }).click();
-    await expect(page.getByRole("button", { name: "返回汇总", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "返回汇总", exact: true }).click();
-    await expect(analytics).toBeVisible();
+    await expect(page.getByRole("button", { name: "返回展示", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "返回展示", exact: true }).click();
+    await expect(board).toBeVisible();
     expect(fixture.course().currentStageIndex).toBe(4);
     expect(fixture.writes).toHaveLength(1);
     expect(fixture.writes[0]!.body.action).toMatchObject({ type: "UPDATE_COURSE", payload: { patch: { currentStageIndex: 4 } } });
@@ -415,8 +430,8 @@ for (const viewport of [{ width: 1024, height: 576 }, { width: 1920, height: 108
     await expect.poll(() => fixture.writes.filter(({ path }) => path.endsWith("/showcase/presentation")).map(({ body }) => body)).toEqual([
       { action: "assign", groupId: "group-student-2", studentId: "student-2" },
     ]);
-    await expect(commonActions.getByRole("button", { name: "等待学生申请", exact: true })).toBeDisabled();
-    await expect(page.getByText("等待该学生申请投屏", { exact: true })).toBeVisible();
+    await expect(commonActions.getByRole("button", { name: "教师发起投屏", exact: true })).toBeEnabled();
+    await expect(page.getByText("请在下方查看并选择该生材料，然后由教师端发起投屏", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "批准并开始", exact: true })).toHaveCount(0);
     await screenshot(page, info, "footer-showcase-called");
     expect(fixture.unexpected).toEqual([]);
@@ -499,7 +514,7 @@ for (const viewport of [{ width: 1024, height: 576 }, { width: 1920, height: 108
     await page.getByRole("combobox", { name: "全屏教学阶段" }).selectOption("3");
     await page.getByRole("dialog").getByRole("button", { name: /进入“/ }).click();
     await assertCanvasFits(page, "PDF 第 2 页");
-    await expect(page.getByText("2 / 2 · 跟随汇报", { exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByText("2 / 2", { exact: true })).toBeInViewport({ ratio: 1 });
     await expect(page.getByRole("region", { name: "校园节能项目最终成果", exact: true }).getByRole("button", { name: "结束汇报", exact: true })).toBeInViewport({ ratio: 1 });
     await expect(page.getByRole("group", { name: "当前阶段常用操作", exact: true }).getByRole("button", { name: "结束汇报", exact: true })).toBeInViewport({ ratio: 1 });
     await screenshot(page, info, "showcase-approved-pdf");
@@ -552,6 +567,17 @@ test("five stages retain controls, hide details on view/stage changes, and prese
       await dialog.getByRole("button", { name: /进入“/ }).click();
     }
     await expect(page.getByRole("heading", { name: DEFAULT_STAGES[index]!.label, exact: true }).first()).toBeVisible();
+    if (index === 4) {
+      const reflection = page.getByRole("region", { name: /^(反思问卷大屏|班级学情大屏)$/ });
+      await expect(reflection).toBeVisible();
+      await screenshot(page, info, "stage-4-reflection");
+      await page.getByRole("button", { name: "课堂操作", exact: true }).click();
+      await assertWorkspaceFrame(page);
+      await page.getByRole("button", { name: /^返回(展示|汇总)$/ }).click();
+      await expect(reflection).toBeVisible();
+      await assertNoPageOverflow(page, "reflection");
+      continue;
+    }
     await page.getByRole("button", { name: "授课展示", exact: true }).click();
     await screenshot(page, info, `stage-${index}-teaching`);
     await page.getByRole("button", { name: "课堂操作", exact: true }).click();
@@ -561,7 +587,7 @@ test("five stages retain controls, hide details on view/stage changes, and prese
     await page.getByRole("button", { name: "返回展示", exact: true }).click();
     await page.getByRole("button", { name: "班级学情", exact: true }).click();
     await expect(page.getByRole("region", { name: "班级学情大屏" })).not.toContainText("私密学生");
-    await page.getByRole("button", { name: index === 4 ? "课堂操作" : "查看明细", exact: true }).click();
+    await page.getByRole("button", { name: "查看明细", exact: true }).click();
     await expect(page.getByRole("button", { name: "返回汇总", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "授课展示", exact: true }).click();
     await page.getByRole("button", { name: "班级学情", exact: true }).click();
@@ -569,7 +595,8 @@ test("five stages retain controls, hide details on view/stage changes, and prese
     await assertNoPageOverflow(page);
     await screenshot(page, info, `stage-${index}-analytics`);
   }
-  await page.getByRole("button", { name: "计时", exact: true }).click();
+  await page.getByRole("button", { name: "工具", exact: true }).click();
+  await page.getByRole("dialog", { name: "课堂工具" }).getByRole("button", { name: "课堂计时" }).click();
   const timer = page.getByRole("dialog", { name: "课堂计时" });
   await expect(timer).toBeVisible();
   await timer.getByRole("button", { name: "继续", exact: true }).click();

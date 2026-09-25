@@ -1,0 +1,30 @@
+{
+  "base": "https://coteach.cn",
+  "checkedAt": "2026-09-25T00:03:17.859Z",
+  "assets": [
+    {
+      "asset": "/_next/static/css/c1d586fd5cc4a5a0.css",
+      "status": 200
+    },
+    {
+      "asset": "/_next/static/css/fb9ff99a43161482.css",
+      "status": 200
+    },
+    {
+      "asset": "/_next/static/css/4eb017b6280b7c04.css",
+      "status": 200
+    },
+    {
+      "asset": "/_next/static/css/b7a5a9f7646ec885.css",
+      "status": 200
+    },
+    {
+      "asset": "/_next/static/css/c9a18af6fcdea0fb.css",
+      "status": 200
+    },
+    {
+      "asset": "/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+      "status": 200
+    }
+  ]
+}

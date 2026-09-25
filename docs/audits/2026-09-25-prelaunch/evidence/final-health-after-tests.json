@@ -1,0 +1,46 @@
+{
+  "checks": [
+    {
+      "name": "local-live",
+      "status": "通过",
+      "responseBytes": 60
+    },
+    {
+      "name": "local-teacher-login",
+      "status": "通过",
+      "responseBytes": 12831
+    },
+    {
+      "name": "local-student-login",
+      "status": "通过",
+      "responseBytes": 23387
+    },
+    {
+      "name": "code-runner-live",
+      "status": "通过",
+      "responseBytes": 11
+    },
+    {
+      "name": "domain-teacher-login",
+      "status": "通过",
+      "responseBytes": 12831
+    },
+    {
+      "name": "openpbl.service",
+      "status": "通过",
+      "state": "active"
+    },
+    {
+      "name": "openpbl-code-runner.service",
+      "status": "通过",
+      "state": "active"
+    },
+    {
+      "name": "current-release-ready",
+      "status": "通过",
+      "buildId": "R15f7NZ_385JXX3-Lz2WP"
+    }
+  ],
+  "passed": 8,
+  "total": 8
+}

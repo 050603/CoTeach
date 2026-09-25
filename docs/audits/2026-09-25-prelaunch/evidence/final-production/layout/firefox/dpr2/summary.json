@@ -1,0 +1,11 @@
+{
+  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/layout/firefox/dpr2",
+  "browser": "firefox",
+  "browserVersion": "151.0",
+  "dpr": 2,
+  "scenarios": 38,
+  "devices": 3,
+  "checks": 114,
+  "failures": 0,
+  "failedChecks": []
+}

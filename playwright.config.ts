@@ -1,6 +1,17 @@
 import { defineConfig, devices } from "@playwright/test";
 import { existsSync } from "node:fs";
 
+const acceptanceBrowser = process.env.PRELAUNCH_E2E_BROWSER;
+const browserDevice = {
+  chromium: "Desktop Chrome",
+  firefox: "Desktop Firefox",
+  webkit: "Desktop Safari",
+} as const;
+if (acceptanceBrowser && !(acceptanceBrowser in browserDevice)) {
+  throw new Error(`Unsupported PRELAUNCH_E2E_BROWSER: ${acceptanceBrowser}`);
+}
+const selectedBrowser = (acceptanceBrowser || "chromium") as keyof typeof browserDevice;
+
 if (existsSync(".env.local")) {
   process.loadEnvFile(".env.local");
 }
@@ -40,8 +51,8 @@ export default defineConfig({
   },
   projects: [
     {
-      name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      name: selectedBrowser,
+      use: { ...devices[browserDevice[selectedBrowser]] },
     },
   ],
 });

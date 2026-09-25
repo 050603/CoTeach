@@ -1,0 +1,13 @@
+
+> @openmaic/importer@0.1.2 test /home/lkj/OpenPBL/openPBL/packages/@openmaic/importer
+> vitest run
+
+
+ RUN  v4.1.9 /home/lkj/OpenPBL/openPBL/packages/@openmaic/importer
+
+
+ Test Files  11 passed (11)
+      Tests  33 passed (33)
+   Start at  08:03:54
+   Duration  1.80s (transform 4.81s, setup 0ms, import 9.98s, tests 238ms, environment 2ms)
+

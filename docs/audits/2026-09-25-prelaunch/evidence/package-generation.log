@@ -1,0 +1,172 @@
+
+Running 4 tests using 1 worker
+
+
+(node:800758) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1/4] [chromium] › e2e/resource-package-generation.spec.ts:137:7 › resource package confirmation and generation 390x844
+  1) [chromium] › e2e/resource-package-generation.spec.ts:137:7 › resource package confirmation and generation 390x844 
+
+    Error: Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('heading', { name: '从教学资源包生成课堂' })
+    Expected: visible
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 30000ms
+      - waiting for getByRole('heading', { name: '从教学资源包生成课堂' })
+
+    Browser errors: ["Failed to load resource: the server responded with a status of 404 (Not Found)"]
+    API requests: ["GET /api/courses","GET /api/textbooks","GET /api/courses/e2e-resource-package/resource-package","GET /api/courses/e2e-resource-package/design-generation","GET /api/courses"]
+    Unexpected API requests: ["GET /api/textbooks"]
+    Page: 待确认的教学资源包课堂
+
+    资
+
+    AI INSIDE PRACTICE.
+
+    课程资料导入
+
+    解析并确认课程资源包
+
+    系统从知识点文档、完整教案和启动课件中提取课程要求。请先核对必填项、时间与证据，再用于课堂生成。
+
+    上传资源包（必填）
+    1
+    导入资料
+    2
+    核对解析
+    3
+    确认使用
+
+    ZIP 最大 50 MiB，需包含 KNOWLEDGE Markdown、LESSON_PLAN Markdown 和项目启动 PPTX。历史课程中已保存的 DOCX 仍可继续使用。
+
+    无法加载教材库
+
+    上传资料
+    !
+    图片
+    语音
+    视频
+    测试一节
+    深度作答
+    深度交互
+
+      116 |   await page.goto(`/teacher/prepare/${courseId}/verify`, { waitUntil: "domcontentloaded" });
+      117 |   await expect(page.getByRole("heading", { name: "从教学资源包生成课堂" })).toBeVisible({ timeout: 30_000 }).catch(async (cause) => {
+    > 118 |     throw new Error(`${String(cause)}\nBrowser errors: ${JSON.stringify(pageErrors)}\nAPI requests: ${JSON.stringify(observedRequests)}\nUnexpected API requests: ${JSON.stringify(unexpected)}\nPage: ${(await page.locator("body").innerText()).slice(0, 3000)}`);
+          |           ^
+      119 |   });
+      120 |   return { writes, unexpected, pageErrors };
+      121 | }
+        at /home/lkj/OpenPBL/openPBL/e2e/resource-package-generation.spec.ts:118:11
+        at mockGeneration (/home/lkj/OpenPBL/openPBL/e2e/resource-package-generation.spec.ts:117:3)
+        at /home/lkj/OpenPBL/openPBL/e2e/resource-package-generation.spec.ts:140:21
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/resource-package-generatio-3cdc1-tion-and-generation-390x844-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/resource-package-generatio-3cdc1-tion-and-generation-390x844-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/resource-package-generatio-3cdc1-tion-and-generation-390x844-chromium/error-context.md
+
+
+
+(node:801662) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[2/4] [chromium] › e2e/resource-package-generation.spec.ts:137:7 › resource package confirmation and generation 1280x720
+  2) [chromium] › e2e/resource-package-generation.spec.ts:137:7 › resource package confirmation and generation 1280x720 
+
+    Error: Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('heading', { name: '从教学资源包生成课堂' })
+    Expected: visible
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 30000ms
+      - waiting for getByRole('heading', { name: '从教学资源包生成课堂' })
+
+    Browser errors: ["Failed to load resource: the server responded with a status of 404 (Not Found)"]
+    API requests: ["GET /api/courses","GET /api/textbooks","GET /api/courses/e2e-resource-package/resource-package","GET /api/courses/e2e-resource-package/design-generation","GET /api/courses"]
+    Unexpected API requests: ["GET /api/textbooks"]
+    Page: CoTeach
+    待确认的教学资源包课堂
+    待确认的教学资源包课堂
+    待确认的教学资源包课堂
+    草稿
+    1
+    一键生成
+    2
+    课程设计
+    3
+    发布中心
+    已就绪
+    AI 设置
+    资
+    资源包验收教师
+
+    AI INSIDE PRACTICE.
+
+    课程资料导入
+
+    解析并确认课程资源包
+
+    系统从知识点文档、完整教案和启动课件中提取课程要求。请先核对必填项、时间与证据，再用于课堂生成。
+
+    上传资源包（必填）
+    1
+    导入资料
+    2
+    核对解析
+    3
+    确认使用
+
+    ZIP 最大 50 MiB，需包含 KNOWLEDGE Markdown、LESSON_PLAN Markdown 和项目启动 PPTX。历史课程中已保存的 DOCX 仍可继续使用。
+
+    无法加载教材库
+
+    上传资料
+    !
+    图片
+    语音
+    视频
+    测试一节
+    深度作答
+    深度交互
+
+      116 |   await page.goto(`/teacher/prepare/${courseId}/verify`, { waitUntil: "domcontentloaded" });
+      117 |   await expect(page.getByRole("heading", { name: "从教学资源包生成课堂" })).toBeVisible({ timeout: 30_000 }).catch(async (cause) => {
+    > 118 |     throw new Error(`${String(cause)}\nBrowser errors: ${JSON.stringify(pageErrors)}\nAPI requests: ${JSON.stringify(observedRequests)}\nUnexpected API requests: ${JSON.stringify(unexpected)}\nPage: ${(await page.locator("body").innerText()).slice(0, 3000)}`);
+          |           ^
+      119 |   });
+      120 |   return { writes, unexpected, pageErrors };
+      121 | }
+        at /home/lkj/OpenPBL/openPBL/e2e/resource-package-generation.spec.ts:118:11
+        at mockGeneration (/home/lkj/OpenPBL/openPBL/e2e/resource-package-generation.spec.ts:117:3)
+        at /home/lkj/OpenPBL/openPBL/e2e/resource-package-generation.spec.ts:140:21
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/resource-package-generatio-39459-ion-and-generation-1280x720-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/resource-package-generatio-39459-ion-and-generation-1280x720-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/resource-package-generatio-39459-ion-and-generation-1280x720-chromium/error-context.md
+
+
+
+(node:802960) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[3/4] [chromium] › e2e/resource-package-generation.spec.ts:137:7 › resource package confirmation and generation 1920x1080

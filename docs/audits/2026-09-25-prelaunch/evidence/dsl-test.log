@@ -1,0 +1,13 @@
+
+> @openmaic/dsl@0.9.0 test /home/lkj/OpenPBL/openPBL/packages/@openmaic/dsl
+> vitest run
+
+
+ RUN  v4.1.9 /home/lkj/OpenPBL/openPBL/packages/@openmaic/dsl
+
+
+ Test Files  7 passed (7)
+      Tests  239 passed (239)
+   Start at  08:03:45
+   Duration  2.90s (transform 1.42s, setup 0ms, import 6.54s, tests 231ms, environment 1ms)
+

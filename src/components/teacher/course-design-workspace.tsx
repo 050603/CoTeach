@@ -27,6 +27,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { CourseCoverSettings } from "@/components/teacher/course-cover-settings";
 import { toast } from "@/components/ui";
 import { useSession } from "@/lib/session/store";
 import type {
@@ -386,7 +387,7 @@ export function CourseDesignWorkspace() {
 
         <section className="overflow-hidden rounded-[14px] border border-stone-200 bg-white">
           <SectionHeader eyebrow={`${current.phase} · ${STATUS_LABEL[statuses[active]]}`} title={current.label} description={current.description} />
-          {active === "materials" ? <MaterialsEditor course={draft} edit={edit} /> : null}
+          {active === "materials" ? <MaterialsEditor course={draft} edit={edit} onCoverUpdated={() => loadWorkspace(true)} /> : null}
           {active === "stage-plan" ? <StagePlanEditor course={draft} edit={edit} /> : null}
           {active === "knowledge" ? <KnowledgeEditor course={draft} edit={edit} /> : null}
           {active === "timing" ? <TimingEditor course={draft} edit={edit} /> : null}
@@ -454,7 +455,7 @@ function ImpactNotice({ pending, onConfirm, onOpen, working }: { pending: Course
   );
 }
 
-function MaterialsEditor({ course, edit }: { course: Course; edit: (fn: (course: Course) => void) => void }) {
+function MaterialsEditor({ course, edit, onCoverUpdated }: { course: Course; edit: (fn: (course: Course) => void) => void; onCoverUpdated: () => Promise<void> }) {
   const pack = course.content.resourcePackage;
   return (
     <div className="grid gap-7 p-5 sm:p-7 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)]">
@@ -481,6 +482,13 @@ function MaterialsEditor({ course, edit }: { course: Course; edit: (fn: (course:
           <p className="mt-3 text-sm text-stone-600">已选择 {course.content.textbookSelections?.length ?? 0} 个教材版本</p>
           <p className="mt-1 text-sm text-stone-600">{course.content.courseEvidence?.mappings?.length ?? 0} 条知识依据映射</p>
         </div>
+        <CourseCoverSettings
+          key={course.id}
+          courseId={course.id}
+          courseName={course.name}
+          coverImageUrl={course.coverImageUrl}
+          onUpdated={onCoverUpdated}
+        />
         {course.content.teachingRequirements?.items.length ? <div className="rounded-[10px] border border-violet-200 bg-violet-50 p-4"><div className="flex items-center gap-2 text-sm font-bold text-violet-950"><ShieldCheck size={17} />统一教学要求</div><ul className="mt-3 space-y-2 text-xs leading-5 text-violet-900">{course.content.teachingRequirements.items.map((item) => <li key={item.id}>• {item.text}</li>)}</ul>{course.content.teachingRequirements.conflicts.length ? <p className="mt-3 border-t border-violet-200 pt-3 text-xs font-bold text-amber-800">还有 {course.content.teachingRequirements.conflicts.length} 项来源冲突需要在资源包中处理。</p> : null}</div> : null}
       </aside>
     </div>

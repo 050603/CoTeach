@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { useAnimate } from 'motion/react';
 import type { PPTVideoElement } from '@openmaic/dsl';
 import { useCanvasStore } from '@openmaic/lib/store/canvas';
@@ -33,6 +33,7 @@ export function BaseVideoElement({ elementInfo }: BaseVideoElementProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const playingVideoElementId = useCanvasStore.use.playingVideoElementId();
   const prevPlayingRef = useRef('');
+  const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const [scope, animate] = useAnimate<HTMLDivElement>();
 
   // Only subscribe to media store when inside a classroom (stageId provided via context).
@@ -85,6 +86,7 @@ export function BaseVideoElement({ elementInfo }: BaseVideoElementProps) {
     prevPlayingRef.current = playingVideoElementId;
 
     if (isMe && !wasMe) {
+      setPlaybackBlocked(false);
       // "Tap" press animation — a deliberate, teacher-paced click feel
       animate(
         scope.current,
@@ -97,9 +99,11 @@ export function BaseVideoElement({ elementInfo }: BaseVideoElementProps) {
       );
       video.play().catch((err) => {
         log.warn('[BaseVideoElement] play() failed:', err);
+        if (err && typeof err === 'object' && 'name' in err && err.name === 'NotAllowedError') setPlaybackBlocked(true);
       });
     } else if (!isMe && wasMe) {
       video.pause();
+      setPlaybackBlocked(false);
     }
   }, [playingVideoElementId, elementInfo.id, animate, scope]);
 
@@ -107,6 +111,14 @@ export function BaseVideoElement({ elementInfo }: BaseVideoElementProps) {
     if (useCanvasStore.getState().playingVideoElementId === elementInfo.id) {
       useCanvasStore.getState().pauseVideo();
     }
+  };
+
+  const retryPlayback = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    void video.play().then(() => setPlaybackBlocked(false)).catch((error) => {
+      log.warn('[BaseVideoElement] retry play() failed:', error);
+    });
   };
 
   return (
@@ -124,7 +136,7 @@ export function BaseVideoElement({ elementInfo }: BaseVideoElementProps) {
     >
       <div
         ref={scope}
-        className="w-full h-full"
+        className="relative w-full h-full"
         style={{ transform: `rotate(${elementInfo.rotate}deg)` }}
       >
         {showDisabled ? (
@@ -187,6 +199,7 @@ export function BaseVideoElement({ elementInfo }: BaseVideoElementProps) {
             poster={task?.poster || elementInfo.poster}
             preload="metadata"
             controls
+            onPlay={() => setPlaybackBlocked(false)}
             onEnded={handleEnded}
           />
         ) : (
@@ -204,6 +217,19 @@ export function BaseVideoElement({ elementInfo }: BaseVideoElementProps) {
             </svg>
           </div>
         )}
+        {isReady && playbackBlocked ? (
+          <div className="absolute inset-0 z-10 flex min-h-0 flex-col items-center justify-center gap-3 overflow-auto rounded-lg bg-black/75 px-4 py-3 text-center text-[22px] leading-snug text-white" role="alert">
+            <span>{t('settings.mediaPlaybackBlocked')}</span>
+            <button className="rounded-md bg-white px-5 py-2 text-[20px] font-semibold text-stone-900" onClick={(event) => {
+              event.stopPropagation();
+              if (event.detail === 0) retryPlayback();
+            }} onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              retryPlayback();
+            }} type="button">{t('settings.mediaRetry')}</button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

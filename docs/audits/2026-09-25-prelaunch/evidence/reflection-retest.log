@@ -1,0 +1,57 @@
+
+Running 6 tests using 1 worker
+
+
+(node:852454) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1/6] [chromium] › e2e/teacher-presentation.spec.ts:308:7 › reflection questions show grounded clouds and per-option distributions 1024x576
+[2/6] [chromium] › e2e/teacher-presentation.spec.ts:308:7 › reflection questions show grounded clouds and per-option distributions 1280x720
+[3/6] [chromium] › e2e/teacher-presentation.spec.ts:308:7 › reflection questions show grounded clouds and per-option distributions 1024x768
+[4/6] [chromium] › e2e/teacher-presentation.spec.ts:308:7 › reflection questions show grounded clouds and per-option distributions 1920x1080
+[5/6] [chromium] › e2e/teacher-presentation.spec.ts:308:7 › reflection questions show grounded clouds and per-option distributions 3840x2160
+[6/6] [chromium] › e2e/teacher-presentation.spec.ts:308:7 › reflection questions show grounded clouds and per-option distributions 390x844
+  1) [chromium] › e2e/teacher-presentation.spec.ts:308:7 › reflection questions show grounded clouds and per-option distributions 390x844 
+
+    Error: expect(locator).toBeInViewport() failed
+
+    Locator:  getByRole('button', { name: '上一道反思题', exact: true })
+    Expected: in viewport
+    Received: viewport ratio 0.988095223903656
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toBeInViewport" with timeout 5000ms
+      - waiting for getByRole('button', { name: '上一道反思题', exact: true })
+        14 × locator resolved to <button type="button" aria-label="上一道反思题">…</button>
+           - unexpected value "viewport ratio 0.988095223903656"
+
+
+      300 |   expect(bounds.height).toBeGreaterThan(80);
+      301 |   expect(bounds.clipped).toEqual([]);
+    > 302 |   for (const name of ["上一道反思题", "下一道反思题"]) await expect(page.getByRole("button", { name, exact: true })).toBeInViewport({ ratio: 1 });
+          |                                                                                                          ^
+      303 |   await expect(page.getByRole("combobox", { name: "选择反思题目" })).toBeInViewport({ ratio: 1 });
+      304 |   await assertNoPageOverflow(page, "reflection");
+      305 | }
+        at assertReflectionCloudFits (/home/lkj/OpenPBL/openPBL/e2e/teacher-presentation.spec.ts:302:106)
+        at /home/lkj/OpenPBL/openPBL/e2e/teacher-presentation.spec.ts:331:5
+
+    attachment #1: reflection-learning-cloud (image/png) ───────────────────────────────────────────
+    docs/audits/2026-09-25-prelaunch/evidence/reflection-retest-artifacts/teacher-presentation-refle-e1a59-ption-distributions-390x844-chromium/attachments/reflection-learning-cloud-95c1e5588a02f06e92d64f685fb767c5a25506d0.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: screenshot (image/png) ──────────────────────────────────────────────────────────
+    docs/audits/2026-09-25-prelaunch/evidence/reflection-retest-artifacts/teacher-presentation-refle-e1a59-ption-distributions-390x844-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #3: video (video/webm) ──────────────────────────────────────────────────────────────
+    docs/audits/2026-09-25-prelaunch/evidence/reflection-retest-artifacts/teacher-presentation-refle-e1a59-ption-distributions-390x844-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: docs/audits/2026-09-25-prelaunch/evidence/reflection-retest-artifacts/teacher-presentation-refle-e1a59-ption-distributions-390x844-chromium/error-context.md
+
+
+  1 failed
+    [chromium] › e2e/teacher-presentation.spec.ts:308:7 › reflection questions show grounded clouds and per-option distributions 390x844 
+  5 passed (58.4s)

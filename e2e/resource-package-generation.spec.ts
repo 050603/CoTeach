@@ -85,6 +85,7 @@ async function mockGeneration(page: Page, withConflicts = false) {
     const body = request.method() === "GET" ? {} : request.postDataJSON() ?? {};
     if (request.method() !== "GET") writes.push({ path, body });
     if (path === "/api/auth/me") return json({ user: { id: "e2e-package-teacher", role: "teacher", name: "资源包验收教师", displayName: "资源包验收教师" } });
+    if (path === "/api/textbooks") return json({ textbooks: [] });
     if (path === "/api/courses") return json({ courses: [course], user: { role: "teacher", name: "资源包验收教师" }, hydrated: true, updatedAt: fixedTime });
     if (path === `/api/courses/${courseId}/state`) return json({ course, eventCursor: "0" });
     if (path === `/api/courses/${courseId}/events`) return json({ events: [], nextCursor: "0", hasMore: false, courseVersion: 1 });
@@ -114,7 +115,7 @@ async function mockGeneration(page: Page, withConflicts = false) {
     return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "No fixture for this endpoint" }) });
   });
   await page.goto(`/teacher/prepare/${courseId}/verify`, { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("heading", { name: "从教学资源包生成课堂" })).toBeVisible({ timeout: 30_000 }).catch(async (cause) => {
+  await expect(page.getByRole("heading", { name: "解析并确认课程资源包" })).toBeVisible({ timeout: 30_000 }).catch(async (cause) => {
     throw new Error(`${String(cause)}\nBrowser errors: ${JSON.stringify(pageErrors)}\nAPI requests: ${JSON.stringify(observedRequests)}\nUnexpected API requests: ${JSON.stringify(unexpected)}\nPage: ${(await page.locator("body").innerText()).slice(0, 3000)}`);
   });
   return { writes, unexpected, pageErrors };
@@ -151,20 +152,20 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 720 
     await page.getByLabel("上传课堂资源包").setInputFiles({ name: packageFixture().source.fileName, mimeType: "application/zip", buffer: await zip.generateAsync({ type: "nodebuffer" }) });
     await expect(page.getByRole("progressbar", { name: "资源包解析进度" })).toBeVisible();
     await expect(page.getByLabel("上传课堂资源包")).toBeDisabled();
-    await expect(page.getByLabel("教学对象 / 学段（必填）")).toHaveValue("本科一年级");
+    await expect(page.getByLabel("授课对象（专业、年级或学段，必填）")).toHaveValue("本科一年级");
     await expect(page.getByLabel("课程总分钟数（必填）")).toHaveValue("135");
-    await expect(page.getByText("必须覆盖的知识点 · 6 类", { exact: true })).toBeVisible();
+    await expect(page.getByText(/知识与证据 · 6 个主题/)).toBeVisible();
     const confirm = page.getByRole("button", { name: "确认并保存教学要求", exact: true });
     await expect(confirm).toBeDisabled();
     await page.getByLabel("项目学习驱动问题（必填）").fill("如何为真实学习者设计一节有证据支持的人工智能课程？");
-    await page.locator("summary").filter({ hasText: "2. 知识讲授" }).click();
+    await page.locator("summary").filter({ hasText: "知识讲授" }).click();
     await page.getByLabel("知识讲授分钟数", { exact: true }).fill("40");
     await expect(page.getByText("五阶段时长之和必须等于课程总分钟数，请修正教案时间。", { exact: true })).toBeVisible();
     await expect(confirm).toBeDisabled();
     await page.getByLabel("知识讲授分钟数", { exact: true }).fill("30");
-    await page.getByLabel("学情补充（可选）").fill("具备基本教学设计经验，需要比较理论适用边界。");
+    await page.getByLabel("学科 / 课程领域").fill("人工智能教育与教学设计");
     await page.reload();
-    await expect(page.getByLabel("学情补充（可选）")).toHaveValue("具备基本教学设计经验，需要比较理论适用边界。");
+    await expect(page.getByLabel("学科 / 课程领域")).toHaveValue("人工智能教育与教学设计");
     await expect(generate).toBeDisabled();
     await confirm.click();
     await expect(page.getByText("教学要求已确认，可开始生成课堂", { exact: true })).toBeVisible();

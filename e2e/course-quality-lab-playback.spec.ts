@@ -209,6 +209,8 @@ test('plays a complete lab lesson through the production teacher preview without
     if (pathname === `/api/courses/${courseId}/events`) return json({ events: [], nextCursor: '0', hasMore: false, courseVersion: 1 });
     if (pathname === `/api/courses/${courseId}/presence`) return json({ members: [], degraded: false });
     if (pathname === `/api/courses/${courseId}/resource-repair`) return json({ issues: [] });
+    if (pathname === `/api/courses/${courseId}/generation`) return json({ backgroundEnabled: false, job: null });
+    if (pathname === `/api/courses/${courseId}/design-workspace`) return json({ publication: { latestVersion: 1, publishedVersion: null, draftVersion: 1 } });
     if (pathname === `/api/courses/${courseId}/quality-review`) return json({ required: false, classroom, quality: null, renderReview: null, teacherReview: null });
     if (pathname === '/api/openmaic/classroom') return json({ success: true, classroom });
     if (pathname === '/api/server-providers') return json({ providers: {}, tts: {}, asr: {}, pdf: {}, image: {}, video: {}, webSearch: {} });
@@ -218,7 +220,7 @@ test('plays a complete lab lesson through the production teacher preview without
 
   try {
     await page.goto(`/teacher/prepare/${courseId}/preview`, { waitUntil: 'domcontentloaded' });
-    await page.getByRole('tab', { name: '学生 AI 课堂实景', exact: true }).click();
+    await page.getByRole('tab', { name: '学生课堂预览', exact: true }).click();
     const resume = page.getByRole('button', { name: '继续讲解', exact: true });
     await expect(resume, 'Exported scenes must survive the production student-scene filter').toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId('scene-title')).toHaveText(classroom.scenes.map((scene) => scene.title));

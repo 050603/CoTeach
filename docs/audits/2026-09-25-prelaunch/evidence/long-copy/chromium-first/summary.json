@@ -1,0 +1,11 @@
+{
+  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/long-copy/chromium-first",
+  "browser": "chromium",
+  "browserVersion": "149.0.7827.55",
+  "dpr": 1,
+  "scenarios": 1,
+  "devices": 1,
+  "checks": 1,
+  "failures": 0,
+  "failedChecks": []
+}

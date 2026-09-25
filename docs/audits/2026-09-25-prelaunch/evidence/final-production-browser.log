@@ -1,0 +1,325 @@
+
+> coteach-app@0.1.0 verify:prelaunch /home/lkj/OpenPBL/openPBL
+> node scripts/run-prelaunch-audit.mjs --browser-only
+
+checked desktop-768x576: 38 scenarios
+checked desktop-768x768: 38 scenarios
+checked desktop-1024x768: 38 scenarios
+checked desktop-1280x720: 38 scenarios
+checked desktop-1366x768: 38 scenarios
+checked desktop-1440x900: 38 scenarios
+checked desktop-1920x1080: 38 scenarios
+checked desktop-2560x1440: 38 scenarios
+checked desktop-3840x2160: 38 scenarios
+checked desktop-1024x576: 38 scenarios
+{
+  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/layout/chromium/dpr1",
+  "browser": "chromium",
+  "browserVersion": "149.0.7827.55",
+  "dpr": 1,
+  "scenarios": 38,
+  "devices": 10,
+  "checks": 380,
+  "failures": 0,
+  "failedChecks": []
+}
+PASS student-player@desktop-split
+PASS student-standalone-player@desktop-split
+PASS teacher-classroom@desktop-split
+PASS quick-preparation@desktop-split
+PASS generate-redirect@desktop-split
+PASS resources-empty@desktop-split
+PASS preparation@desktop-split
+PASS dashboard-popover@desktop-split
+PASS code@desktop-split
+PASS player@desktop-split
+PASS student-player@desktop-laptop
+PASS student-standalone-player@desktop-laptop
+PASS teacher-classroom@desktop-laptop
+PASS quick-preparation@desktop-laptop
+PASS generate-redirect@desktop-laptop
+PASS resources-empty@desktop-laptop
+PASS preparation@desktop-laptop
+PASS dashboard-popover@desktop-laptop
+PASS code@desktop-laptop
+PASS player@desktop-laptop
+PASS student-player@desktop
+PASS student-standalone-player@desktop
+PASS teacher-classroom@desktop
+PASS quick-preparation@desktop
+PASS generate-redirect@desktop
+PASS resources-empty@desktop
+PASS preparation@desktop
+PASS dashboard-popover@desktop
+PASS code@desktop
+PASS player@desktop
+PASS student-player@desktop-4k
+PASS student-standalone-player@desktop-4k
+PASS teacher-classroom@desktop-4k
+PASS quick-preparation@desktop-4k
+PASS generate-redirect@desktop-4k
+PASS resources-empty@desktop-4k
+PASS preparation@desktop-4k
+PASS dashboard-popover@desktop-4k
+PASS code@desktop-4k
+PASS player@desktop-4k
+{"output":"/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/teaching/chromium/dpr1","browser":"chromium","browserVersion":"149.0.7827.55","dpr":1,"checks":40,"failures":0,"failedChecks":[]}
+checked desktop-768x576: 38 scenarios
+checked desktop-1440x900: 38 scenarios
+checked desktop-3840x2160: 38 scenarios
+{
+  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/layout/chromium/dpr2",
+  "browser": "chromium",
+  "browserVersion": "149.0.7827.55",
+  "dpr": 2,
+  "scenarios": 38,
+  "devices": 3,
+  "checks": 114,
+  "failures": 0,
+  "failedChecks": []
+}
+PASS student-player@desktop-split
+PASS student-standalone-player@desktop-split
+PASS teacher-classroom@desktop-split
+PASS quick-preparation@desktop-split
+PASS generate-redirect@desktop-split
+PASS resources-empty@desktop-split
+PASS preparation@desktop-split
+PASS dashboard-popover@desktop-split
+PASS code@desktop-split
+PASS player@desktop-split
+PASS student-player@desktop
+PASS student-standalone-player@desktop
+PASS teacher-classroom@desktop
+PASS quick-preparation@desktop
+PASS generate-redirect@desktop
+PASS resources-empty@desktop
+PASS preparation@desktop
+PASS dashboard-popover@desktop
+PASS code@desktop
+PASS player@desktop
+PASS student-player@desktop-4k
+PASS student-standalone-player@desktop-4k
+PASS teacher-classroom@desktop-4k
+PASS quick-preparation@desktop-4k
+PASS generate-redirect@desktop-4k
+PASS resources-empty@desktop-4k
+PASS preparation@desktop-4k
+PASS dashboard-popover@desktop-4k
+PASS code@desktop-4k
+PASS player@desktop-4k
+{"output":"/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/teaching/chromium/dpr2","browser":"chromium","browserVersion":"149.0.7827.55","dpr":2,"checks":30,"failures":0,"failedChecks":[]}
+checked desktop-768x576: 38 scenarios
+checked desktop-768x768: 38 scenarios
+checked desktop-1024x768: 38 scenarios
+checked desktop-1280x720: 38 scenarios
+checked desktop-1366x768: 38 scenarios
+checked desktop-1440x900: 38 scenarios
+checked desktop-1920x1080: 38 scenarios
+checked desktop-2560x1440: 38 scenarios
+checked desktop-3840x2160: 38 scenarios
+checked desktop-1024x576: 38 scenarios
+{
+  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/layout/firefox/dpr1",
+  "browser": "firefox",
+  "browserVersion": "151.0",
+  "dpr": 1,
+  "scenarios": 38,
+  "devices": 10,
+  "checks": 380,
+  "failures": 0,
+  "failedChecks": []
+}
+PASS student-player@desktop-split
+PASS student-standalone-player@desktop-split
+PASS teacher-classroom@desktop-split
+PASS quick-preparation@desktop-split
+PASS generate-redirect@desktop-split
+PASS resources-empty@desktop-split
+PASS preparation@desktop-split
+PASS dashboard-popover@desktop-split
+PASS code@desktop-split
+PASS player@desktop-split
+PASS student-player@desktop-laptop
+PASS student-standalone-player@desktop-laptop
+PASS teacher-classroom@desktop-laptop
+PASS quick-preparation@desktop-laptop
+PASS generate-redirect@desktop-laptop
+PASS resources-empty@desktop-laptop
+PASS preparation@desktop-laptop
+PASS dashboard-popover@desktop-laptop
+PASS code@desktop-laptop
+PASS player@desktop-laptop
+PASS student-player@desktop
+PASS student-standalone-player@desktop
+PASS teacher-classroom@desktop
+PASS quick-preparation@desktop
+PASS generate-redirect@desktop
+PASS resources-empty@desktop
+PASS preparation@desktop
+PASS dashboard-popover@desktop
+PASS code@desktop
+PASS player@desktop
+PASS student-player@desktop-4k
+PASS student-standalone-player@desktop-4k
+PASS teacher-classroom@desktop-4k
+PASS quick-preparation@desktop-4k
+PASS generate-redirect@desktop-4k
+PASS resources-empty@desktop-4k
+PASS preparation@desktop-4k
+PASS dashboard-popover@desktop-4k
+PASS code@desktop-4k
+PASS player@desktop-4k
+{"output":"/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/teaching/firefox/dpr1","browser":"firefox","browserVersion":"151.0","dpr":1,"checks":40,"failures":0,"failedChecks":[]}
+checked desktop-768x576: 38 scenarios
+checked desktop-1440x900: 38 scenarios
+checked desktop-3840x2160: 38 scenarios
+{
+  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/layout/firefox/dpr2",
+  "browser": "firefox",
+  "browserVersion": "151.0",
+  "dpr": 2,
+  "scenarios": 38,
+  "devices": 3,
+  "checks": 114,
+  "failures": 0,
+  "failedChecks": []
+}
+PASS student-player@desktop-split
+PASS student-standalone-player@desktop-split
+PASS teacher-classroom@desktop-split
+PASS quick-preparation@desktop-split
+PASS generate-redirect@desktop-split
+PASS resources-empty@desktop-split
+PASS preparation@desktop-split
+PASS dashboard-popover@desktop-split
+PASS code@desktop-split
+PASS player@desktop-split
+PASS student-player@desktop
+PASS student-standalone-player@desktop
+PASS teacher-classroom@desktop
+PASS quick-preparation@desktop
+PASS generate-redirect@desktop
+PASS resources-empty@desktop
+PASS preparation@desktop
+PASS dashboard-popover@desktop
+PASS code@desktop
+PASS player@desktop
+PASS student-player@desktop-4k
+PASS student-standalone-player@desktop-4k
+PASS teacher-classroom@desktop-4k
+PASS quick-preparation@desktop-4k
+PASS generate-redirect@desktop-4k
+PASS resources-empty@desktop-4k
+PASS preparation@desktop-4k
+PASS dashboard-popover@desktop-4k
+PASS code@desktop-4k
+PASS player@desktop-4k
+{"output":"/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/teaching/firefox/dpr2","browser":"firefox","browserVersion":"151.0","dpr":2,"checks":30,"failures":0,"failedChecks":[]}
+checked desktop-768x576: 38 scenarios
+checked desktop-768x768: 38 scenarios
+checked desktop-1024x768: 38 scenarios
+checked desktop-1280x720: 38 scenarios
+checked desktop-1366x768: 38 scenarios
+checked desktop-1440x900: 38 scenarios
+checked desktop-1920x1080: 38 scenarios
+checked desktop-2560x1440: 38 scenarios
+checked desktop-3840x2160: 38 scenarios
+checked desktop-1024x576: 38 scenarios
+{
+  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/layout/webkit/dpr1",
+  "browser": "webkit",
+  "browserVersion": "26.5",
+  "dpr": 1,
+  "scenarios": 38,
+  "devices": 10,
+  "checks": 380,
+  "failures": 0,
+  "failedChecks": []
+}
+PASS student-player@desktop-split
+PASS student-standalone-player@desktop-split
+PASS teacher-classroom@desktop-split
+PASS quick-preparation@desktop-split
+PASS generate-redirect@desktop-split
+PASS resources-empty@desktop-split
+PASS preparation@desktop-split
+PASS dashboard-popover@desktop-split
+PASS code@desktop-split
+PASS player@desktop-split
+PASS student-player@desktop-laptop
+PASS student-standalone-player@desktop-laptop
+PASS teacher-classroom@desktop-laptop
+PASS quick-preparation@desktop-laptop
+PASS generate-redirect@desktop-laptop
+PASS resources-empty@desktop-laptop
+PASS preparation@desktop-laptop
+PASS dashboard-popover@desktop-laptop
+PASS code@desktop-laptop
+PASS player@desktop-laptop
+PASS student-player@desktop
+PASS student-standalone-player@desktop
+PASS teacher-classroom@desktop
+PASS quick-preparation@desktop
+PASS generate-redirect@desktop
+PASS resources-empty@desktop
+PASS preparation@desktop
+PASS dashboard-popover@desktop
+PASS code@desktop
+PASS player@desktop
+PASS student-player@desktop-4k
+PASS student-standalone-player@desktop-4k
+PASS teacher-classroom@desktop-4k
+PASS quick-preparation@desktop-4k
+PASS generate-redirect@desktop-4k
+PASS resources-empty@desktop-4k
+PASS preparation@desktop-4k
+PASS dashboard-popover@desktop-4k
+PASS code@desktop-4k
+PASS player@desktop-4k
+{"output":"/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/teaching/webkit/dpr1","browser":"webkit","browserVersion":"26.5","dpr":1,"checks":40,"failures":0,"failedChecks":[]}
+checked desktop-768x576: 38 scenarios
+checked desktop-1440x900: 38 scenarios
+checked desktop-3840x2160: 38 scenarios
+{
+  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/layout/webkit/dpr2",
+  "browser": "webkit",
+  "browserVersion": "26.5",
+  "dpr": 2,
+  "scenarios": 38,
+  "devices": 3,
+  "checks": 114,
+  "failures": 0,
+  "failedChecks": []
+}
+PASS student-player@desktop-split
+PASS student-standalone-player@desktop-split
+PASS teacher-classroom@desktop-split
+PASS quick-preparation@desktop-split
+PASS generate-redirect@desktop-split
+PASS resources-empty@desktop-split
+PASS preparation@desktop-split
+PASS dashboard-popover@desktop-split
+PASS code@desktop-split
+PASS player@desktop-split
+PASS student-player@desktop
+PASS student-standalone-player@desktop
+PASS teacher-classroom@desktop
+PASS quick-preparation@desktop
+PASS generate-redirect@desktop
+PASS resources-empty@desktop
+PASS preparation@desktop
+PASS dashboard-popover@desktop
+PASS code@desktop
+PASS player@desktop
+PASS student-player@desktop-4k
+PASS student-standalone-player@desktop-4k
+PASS teacher-classroom@desktop-4k
+PASS quick-preparation@desktop-4k
+PASS generate-redirect@desktop-4k
+PASS resources-empty@desktop-4k
+PASS preparation@desktop-4k
+PASS dashboard-popover@desktop-4k
+PASS code@desktop-4k
+PASS player@desktop-4k
+{"output":"/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final-production/teaching/webkit/dpr2","browser":"webkit","browserVersion":"26.5","dpr":2,"checks":30,"failures":0,"failedChecks":[]}

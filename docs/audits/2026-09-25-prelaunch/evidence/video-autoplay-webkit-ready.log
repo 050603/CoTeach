@@ -1,0 +1,43 @@
+
+Running 3 tests using 1 worker
+
+[1/3] [webkit] › e2e/teacher-classroom-editor.spec.ts:392:5 › video playback shows a retry when the browser denies automatic play
+[2/3] [webkit] › e2e/teacher-classroom-editor.spec.ts:392:5 › video playback shows a retry when the browser denies automatic play
+[3/3] [webkit] › e2e/teacher-classroom-editor.spec.ts:392:5 › video playback shows a retry when the browser denies automatic play
+  1) [webkit] › e2e/teacher-classroom-editor.spec.ts:392:5 › video playback shows a retry when the browser denies automatic play 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('button', { name: '打开页面目录' })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('button', { name: '打开页面目录' })
+
+
+      437 |     list.parentElement?.parentElement?.getBoundingClientRect().width ?? 0)).toBeGreaterThan(210);
+      438 |   await page.getByRole('button', { name: '收起页面目录' }).click();
+    > 439 |   await expect(page.getByRole('button', { name: '打开页面目录' })).toBeVisible();
+          |                                                              ^
+      440 |   await expect(alert.getByRole('button', { name: '重试' })).toBeVisible();
+      441 |   await alert.scrollIntoViewIfNeeded();
+      442 |   await expect(alert.getByRole('button', { name: '重试' })).toBeInViewport();
+        at /home/lkj/OpenPBL/openPBL/e2e/teacher-classroom-editor.spec.ts:439:62
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/prelaunch-video-webkit-ready/teacher-classroom-editor-v-4c85d-owser-denies-automatic-play-webkit-repeat2/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #3: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/prelaunch-video-webkit-ready/teacher-classroom-editor-v-4c85d-owser-denies-automatic-play-webkit-repeat2/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/prelaunch-video-webkit-ready/teacher-classroom-editor-v-4c85d-owser-denies-automatic-play-webkit-repeat2/error-context.md
+
+
+  1 failed
+    [webkit] › e2e/teacher-classroom-editor.spec.ts:392:5 › video playback shows a retry when the browser denies automatic play 
+  2 passed (1.2m)

@@ -1,0 +1,20 @@
+{
+  "health": "通过",
+  "unauthorized": "通过",
+  "results": [
+    {
+      "language": "python",
+      "status": "通过",
+      "phase": "run",
+      "stdout": "42\n",
+      "durationMs": 54
+    },
+    {
+      "language": "c",
+      "status": "通过",
+      "phase": "run",
+      "stdout": "ok\n",
+      "durationMs": 180
+    }
+  ]
+}

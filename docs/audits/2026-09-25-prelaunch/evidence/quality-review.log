@@ -1,0 +1,83 @@
+
+Running 2 tests using 1 worker
+
+
+(node:811838) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1/2] [chromium] › e2e/course-quality-review.spec.ts:9:46 › teacher publishes without auxiliary reports
+  1) [chromium] › e2e/course-quality-review.spec.ts:9:46 › teacher publishes without auxiliary reports 
+
+    Error: expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 5
+
+    - Array []
+    + Array [
+    +   "GET /api/courses/e2e-quality-review/generation",
+    +   "GET /api/courses/e2e-quality-review/generation",
+    +   "GET /api/courses/e2e-quality-review/generation",
+    + ]
+
+      117 |   await expect.poll(() => writes.some((write) => write.action === 'confirm' && write.signature === signature && write.publish === true)).toBe(true);
+      118 |   expect(errors).toEqual([]);
+    > 119 |   expect(unexpected).toEqual([]);
+          |                      ^
+      120 | });
+      121 |
+        at /home/lkj/OpenPBL/openPBL/e2e/course-quality-review.spec.ts:119:22
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/course-quality-review-teac-49335-s-without-auxiliary-reports-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/course-quality-review-teac-49335-s-without-auxiliary-reports-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/course-quality-review-teac-49335-s-without-auxiliary-reports-chromium/error-context.md
+
+
+
+(node:813058) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[2/2] [chromium] › e2e/course-quality-review.spec.ts:9:46 › teacher publishes after a manual page check
+  2) [chromium] › e2e/course-quality-review.spec.ts:9:46 › teacher publishes after a manual page check 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('tabpanel', { name: '检查与终审' }).getByText('1 / 1 页完成')
+    Expected: visible
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 30000ms
+      - waiting for getByRole('tabpanel', { name: '检查与终审' }).getByText('1 / 1 页完成')
+
+
+      104 |   if (manualCheck) {
+      105 |     await review.getByRole('button', { name: '检查页面', exact: true }).click();
+    > 106 |     await expect(review.getByText('1 / 1 页完成')).toBeVisible({ timeout: 30_000 });
+          |                                                 ^
+      107 |     await expect.poll(() => writes.filter((write) => write.action === 'render-page').length).toBe(1);
+      108 |     const result = writes.find((write) => write.action === 'render-page') as { page: { issues: Array<{ id: string }> } };
+      109 |     expect(result.page.issues.some((issue) => issue.id.includes('top-heavy'))).toBe(true);
+        at /home/lkj/OpenPBL/openPBL/e2e/course-quality-review.spec.ts:106:49
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/course-quality-review-teac-a89ba-s-after-a-manual-page-check-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/course-quality-review-teac-a89ba-s-after-a-manual-page-check-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/course-quality-review-teac-a89ba-s-after-a-manual-page-check-chromium/error-context.md
+
+
+  2 failed
+    [chromium] › e2e/course-quality-review.spec.ts:9:46 › teacher publishes without auxiliary reports 
+    [chromium] › e2e/course-quality-review.spec.ts:9:46 › teacher publishes after a manual page check 

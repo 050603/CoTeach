@@ -1,0 +1,11 @@
+{
+  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final/layout/webkit/dpr2",
+  "browser": "webkit",
+  "browserVersion": "26.5",
+  "dpr": 2,
+  "scenarios": 37,
+  "devices": 3,
+  "checks": 111,
+  "failures": 0,
+  "failedChecks": []
+}

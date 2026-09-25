@@ -1,0 +1,26 @@
+{
+  "baseURL": "http://127.0.0.1:3000",
+  "browser": "chromium",
+  "browserVersion": "149.0.7827.55",
+  "dpr": 1,
+  "sourceCss": false,
+  "reports": [
+    {
+      "id": "student-course",
+      "device": "desktop-3840x2160",
+      "dpr": 1,
+      "width": 3840,
+      "height": 2160,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scenarioError": "Student account menu is outside the viewport: {\"x\":0,\"y\":-465.65625,\"width\":511.984375,\"height\":232.828125}",
+      "visibleText": "返回我的课程\n布\n布局测试学生\n@layout\n2026 秋季学期\n·\n跨学科项目实践教师\n城市生态与社区行动：跨学科项目实践（1班）\n\n观察真实社区，分析证据并形成可以付诸实践的方案。观察真实社区，分析证据并形成可以付诸实践的方案。观察真实社区，分析证据并形成可以付诸实践的方案。观察真实社区，分析证据并形成可以付诸实践的方案。\n\n学习进度\n\n已完成 0 / 5 项任务\n\n0%\n继续学习\n下一项学习任务\n社区观察方法与项目学习反思问卷\n\n问卷 · 第 1 章 第1章：从真实生活中发现值得研究的问题并规划我们的行动\n\n课程学习\n课程介绍\n课程资料\n课程学习\n\n4 个章节 · 5 项学习任务\n\nCHAPTER\n01\n第1章：从真实生活中发现值得研究的问题并规划我们的行动\n观察与实践\n开放学习\n0 / 2\n0%\n1.1 · 问卷\n社区观察方法与项目学习反思问卷\n进行中\n1.2 · 课堂\n城市生态调查课堂\n未开始\nCHAPTER\n02\n第2章：从真实生活中发现值得研究的问题并规划我们的行动\n观察与实践\n开放学习\n0 / 1\n0%\nCHAPTER\n03\n第3章：从真实生活中发现值得研究的问题并规",
+      "durationMs": 4324,
+      "failed": true,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/layout/chromium/course-4k-retest/chromium-student-course-desktop-3840x2160-dpr1.png",
+      "trace": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/layout/chromium/course-4k-retest/chromium-student-course-desktop-3840x2160-dpr1.zip"
+    }
+  ]
+}

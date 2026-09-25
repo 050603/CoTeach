@@ -1511,6 +1511,7 @@
     "videoGenerating": "동영상 생성 중 (약 1~2분 소요)...",
     "videoGenerationWarning": "동영상 생성은 보통 1~2분이 소요됩니다. 잠시 기다려 주세요",
     "mediaRetry": "재시도",
+    "mediaPlaybackBlocked": "브라우저가 자동 재생을 차단했습니다. 재시도를 눌러 재생하세요.",
     "mediaContentSensitive": "죄송합니다. 이 콘텐츠가 안전 검사를 통과하지 못했습니다.",
     "mediaGenerationDisabled": "설정에서 생성이 비활성화되어 있습니다",
     "singleAgent": "단일 에이전트",

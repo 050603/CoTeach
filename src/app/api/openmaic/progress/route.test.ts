@@ -27,6 +27,9 @@ vi.mock('@/lib/session/server-store', () => ({
 vi.mock('@/lib/courses/ai-progress-service', () => ({
   persistStudentAiProgress: courseStore.persistStudentAiProgress,
 }));
+vi.mock('@/lib/platform/access', () => ({
+  canAccessLegacyCourse: vi.fn(async () => true),
+}));
 vi.mock('@openmaic/lib/server/classroom-storage', () => ({
   readClassroom: vi.fn(async () => classroomStore.classroom),
 }));

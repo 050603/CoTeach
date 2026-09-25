@@ -42,6 +42,7 @@ for (const manualCheck of [false, true]) test(`teacher publishes ${manualCheck ?
     if (path.endsWith('/events')) return json({ events: [], nextCursor: '0', hasMore: false, courseVersion: 1 });
     if (path.endsWith('/presence')) return json({ members: [], degraded: false });
     if (path.endsWith('/design-workspace')) return json({ publication: { latestVersion: 1, publishedVersion: null, draftVersion: 1 } });
+    if (path.endsWith('/generation')) return json({ backgroundEnabled: false, job: null });
     if (path.endsWith('/resource-repair')) {
       if (manualCheck) return json({ issues: [] });
       if (request.method() === 'POST') {
@@ -57,7 +58,13 @@ for (const manualCheck of [false, true]) test(`teacher publishes ${manualCheck ?
     if (path.endsWith('/quality-review')) {
       if (request.method() === 'POST') {
         const body = request.postDataJSON(); writes.push(body);
-        if (body.action === 'render-page') renderReview = { schemaVersion: 1, signature, classroomId, status: 'completed', pages: [body.page], updatedAt: new Date().toISOString() };
+        if (body.action === 'render-start') {
+          renderReview = { schemaVersion: 1, reviewPolicyVersion: 'render-visible-content-v2', runId: '123e4567-e89b-42d3-a456-426614174000', signature, classroomId, status: 'pending', pages: [], updatedAt: new Date().toISOString() };
+          return json({ renderReview });
+        }
+        if (body.action === 'render-page') {
+          renderReview = { ...(renderReview as object), status: 'completed', pages: [body.page], updatedAt: new Date().toISOString() };
+        }
         return json({ ok: true });
       }
       return json({ required: true, signature, classroom, quality, renderReview, teacherReview: null, teacherReviewItems: [], teacherReviewSummary: null });

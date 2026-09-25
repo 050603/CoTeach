@@ -1,0 +1,4 @@
+
+> @openmaic/dsl@0.9.0 typecheck /home/lkj/OpenPBL/openPBL/packages/@openmaic/dsl
+> tsc -p tsconfig.json --noEmit
+

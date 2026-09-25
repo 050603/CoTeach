@@ -1511,6 +1511,7 @@
     "videoGenerating": "動画を生成中（目安：1〜2分）...",
     "videoGenerationWarning": "動画の生成には通常1〜2分かかります。しばらくお待ちください",
     "mediaRetry": "やり直す",
+    "mediaPlaybackBlocked": "ブラウザーが自動再生をブロックしました。やり直すを押して再生してください。",
     "mediaContentSensitive": "申し訳ありません。このコンテンツは安全性チェックに該当しました。",
     "mediaGenerationDisabled": "設定で生成が無効になっています",
     "singleAgent": "シングルエージェント",

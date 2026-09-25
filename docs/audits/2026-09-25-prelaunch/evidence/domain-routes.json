@@ -1,0 +1,40 @@
+{
+  "checkedAt": "2026-09-25T00:03:37.566Z",
+  "results": [
+    {
+      "name": "student-login",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null,
+      "tlsVerified": true
+    },
+    {
+      "name": "teacher-login",
+      "status": "通过",
+      "httpStatus": 200,
+      "location": null,
+      "tlsVerified": true
+    },
+    {
+      "name": "http-to-https",
+      "status": "通过",
+      "httpStatus": 308,
+      "location": "https://coteach.cn/student/login",
+      "tlsVerified": false
+    },
+    {
+      "name": "student-deep-link",
+      "status": "通过",
+      "httpStatus": 307,
+      "location": "https://coteach.cn/student/login?redirect=%2Fstudent%2Fcourses%2Fprelaunch-invalid",
+      "tlsVerified": true
+    },
+    {
+      "name": "teacher-deep-link",
+      "status": "通过",
+      "httpStatus": 307,
+      "location": "https://coteach.cn/teacher/login?redirect=%2Fteacher%2Fclasses",
+      "tlsVerified": true
+    }
+  ]
+}

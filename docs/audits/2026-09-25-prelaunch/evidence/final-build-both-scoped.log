@@ -1,0 +1,216 @@
+
+> coteach-app@0.1.0 build /home/lkj/OpenPBL/openPBL
+> node scripts/run-next-production.mjs build --webpack
+
+▲ Next.js 16.2.12 (webpack)
+
+  Creating an optimized production build ...
+⚠ Compiled with warnings in 63s
+
+./node_modules/.pnpm/file-type@22.0.1/node_modules/file-type/source/index.js
+Critical dependency: the request of a dependency is an expression
+
+Import trace for requested module:
+./node_modules/.pnpm/file-type@22.0.1/node_modules/file-type/source/index.js
+./src/app/api/courses/[courseId]/showcase/artifacts/pdf/route.ts
+
+✓ Compiled successfully in 2.0min
+  Running TypeScript ...
+  Finished TypeScript in 93s ...
+  Collecting page data using 55 workers ...
+  Generating static pages using 55 workers (0/47) ...
+  Generating static pages using 55 workers (11/47) 
+  Generating static pages using 55 workers (23/47) 
+  Generating static pages using 55 workers (35/47) 
+✓ Generating static pages using 55 workers (47/47) in 1973ms
+  Finalizing page optimization ...
+  Collecting build traces ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /api/adaptive-learning/micro-lesson
+├ ƒ /api/adaptive-learning/outline
+├ ƒ /api/adaptive-learning/state
+├ ƒ /api/ai-collaboration/code
+├ ƒ /api/ai-collaboration/code/run
+├ ƒ /api/ai-collaboration/document
+├ ƒ /api/ai-collaboration/events
+├ ƒ /api/ai-collaboration/memory
+├ ƒ /api/ai/command
+├ ƒ /api/auth/join
+├ ƒ /api/auth/login
+├ ƒ /api/auth/logout
+├ ƒ /api/auth/me
+├ ƒ /api/auth/register
+├ ƒ /api/chat/student
+├ ƒ /api/course-quality-review/settings
+├ ƒ /api/courses
+├ ƒ /api/courses/[courseId]/actions
+├ ƒ /api/courses/[courseId]/classroom-resource
+├ ƒ /api/courses/[courseId]/cover
+├ ƒ /api/courses/[courseId]/design-generation
+├ ƒ /api/courses/[courseId]/design-workspace
+├ ƒ /api/courses/[courseId]/events
+├ ƒ /api/courses/[courseId]/generation
+├ ƒ /api/courses/[courseId]/presence
+├ ƒ /api/courses/[courseId]/projection
+├ ƒ /api/courses/[courseId]/public-discussion
+├ ƒ /api/courses/[courseId]/public-discussion/settings
+├ ƒ /api/courses/[courseId]/public-discussion/transcription
+├ ƒ /api/courses/[courseId]/quality-review
+├ ƒ /api/courses/[courseId]/reflections/export
+├ ƒ /api/courses/[courseId]/reflections/summary
+├ ƒ /api/courses/[courseId]/resource-download
+├ ƒ /api/courses/[courseId]/resource-package
+├ ƒ /api/courses/[courseId]/resource-repair
+├ ƒ /api/courses/[courseId]/sessions
+├ ƒ /api/courses/[courseId]/sessions/[sessionId]
+├ ƒ /api/courses/[courseId]/showcase/artifacts/[versionId]
+├ ƒ /api/courses/[courseId]/showcase/artifacts/export
+├ ƒ /api/courses/[courseId]/showcase/artifacts/pdf
+├ ƒ /api/courses/[courseId]/showcase/presentation
+├ ƒ /api/courses/[courseId]/state
+├ ƒ /api/health/live
+├ ƒ /api/health/ready
+├ ƒ /api/knowledge-lecture
+├ ƒ /api/knowledge-lecture/settings
+├ ƒ /api/learning-events
+├ ƒ /api/llm
+├ ƒ /api/load-test/runs
+├ ƒ /api/load-test/runs/[runId]
+├ ƒ /api/metrics
+├ ƒ /api/openmaic/agent/edit
+├ ƒ /api/openmaic/azure-voices
+├ ƒ /api/openmaic/chat
+├ ƒ /api/openmaic/classroom
+├ ƒ /api/openmaic/classroom-media/[classroomId]/[...path]
+├ ƒ /api/openmaic/extract-document
+├ ƒ /api/openmaic/generate
+├ ƒ /api/openmaic/generate/agent-profiles
+├ ƒ /api/openmaic/generate/image
+├ ƒ /api/openmaic/generate/scene-outlines-stream
+├ ƒ /api/openmaic/generate/tts
+├ ƒ /api/openmaic/generate/video
+├ ƒ /api/openmaic/generate/voice
+├ ƒ /api/openmaic/health
+├ ƒ /api/openmaic/interactive-runtime/[runtime]/[...path]
+├ ƒ /api/openmaic/parse-pdf
+├ ƒ /api/openmaic/progress
+├ ƒ /api/openmaic/provider-config
+├ ƒ /api/openmaic/proxy-media
+├ ƒ /api/openmaic/quiz-grade
+├ ƒ /api/openmaic/server-providers
+├ ƒ /api/openmaic/test-provider
+├ ƒ /api/openmaic/transcription
+├ ƒ /api/openmaic/tts-calibration
+├ ƒ /api/openmaic/verify-model
+├ ƒ /api/openmaic/web-search
+├ ƒ /api/platform/activities/[activityId]
+├ ƒ /api/platform/activities/[activityId]/instance
+├ ƒ /api/platform/activities/[activityId]/manage
+├ ƒ /api/platform/activities/[activityId]/submit
+├ ƒ /api/platform/activities/[activityId]/survey-export
+├ ƒ /api/platform/activities/[activityId]/survey-results
+├ ƒ /api/platform/auth/invite
+├ ƒ /api/platform/auth/join
+├ ƒ /api/platform/auth/login
+├ ƒ /api/platform/auth/register
+├ ƒ /api/platform/auth/reset-password
+├ ƒ /api/platform/auth/student-profile
+├ ƒ /api/platform/auth/teacher-login
+├ ƒ /api/platform/auth/teacher-profile
+├ ƒ /api/platform/auth/teacher-register
+├ ƒ /api/platform/chapters/[chapterId]
+├ ƒ /api/platform/classroom-instances/[instanceId]/enter
+├ ƒ /api/platform/classroom-instances/[instanceId]/experiment
+├ ƒ /api/platform/classroom-instances/[instanceId]/experiment/results
+├ ƒ /api/platform/classroom-instances/[instanceId]/finish
+├ ƒ /api/platform/classroom-instances/[instanceId]/participants
+├ ƒ /api/platform/classroom-instances/[instanceId]/start
+├ ƒ /api/platform/courses
+├ ƒ /api/platform/events
+├ ƒ /api/platform/offerings
+├ ƒ /api/platform/offerings/[offeringId]
+├ ƒ /api/platform/offerings/[offeringId]/chapters
+├ ƒ /api/platform/offerings/[offeringId]/chapters/[chapterId]/activities
+├ ƒ /api/platform/offerings/[offeringId]/cover
+├ ƒ /api/platform/offerings/[offeringId]/invitation
+├ ƒ /api/platform/offerings/[offeringId]/research-export
+├ ƒ /api/platform/offerings/[offeringId]/reset-password
+├ ƒ /api/platform/offerings/[offeringId]/students
+├ ƒ /api/platform/offerings/[offeringId]/students/[enrollmentId]
+├ ƒ /api/platform/offerings/[offeringId]/students/[enrollmentId]/submissions
+├ ƒ /api/platform/offerings/[offeringId]/students/export
+├ ƒ /api/platform/participations/[participationId]
+├ ƒ /api/platform/participations/[participationId]/ai
+├ ƒ /api/platform/participations/[participationId]/outcomes
+├ ƒ /api/platform/survey-settings
+├ ƒ /api/platform/templates
+├ ƒ /api/platform/templates/[templateId]
+├ ƒ /api/platform/templates/[templateId]/versions
+├ ƒ /api/platform/templates/generate
+├ ƒ /api/platform/templates/pbl
+├ ƒ /api/project-practice/export
+├ ƒ /api/project-practice/submissions/finalize
+├ ƒ /api/project-practice/versions
+├ ƒ /api/server-providers
+├ ƒ /api/teacher-directives
+├ ƒ /api/teaching-ai/facilitation-scaffold
+├ ƒ /api/teaching-ai/support
+├ ƒ /api/textbooks
+├ ƒ /api/textbooks/[id]
+├ ƒ /api/textbooks/[id]/job
+├ ƒ /api/textbooks/[id]/retry
+├ ƒ /api/textbooks/[id]/search
+├ ƒ /api/transcription
+├ ƒ /api/uploads
+├ ƒ /api/uploads/[id]
+├ ○ /icon.png
+├ ○ /internal/slide-layout-audit
+├ ○ /manifest.webmanifest
+├ ○ /student
+├ ƒ /student/activities/[activityId]
+├ ƒ /student/ai-collaboration/[id]
+├ ƒ /student/ai-learning/[id]
+├ ƒ /student/classroom/[id]
+├ ƒ /student/courses/[offeringId]
+├ ○ /student/login
+├ ƒ /student/participations/[participationId]
+├ ○ /student/profile
+├ ○ /student/register
+├ ○ /student/reset-password
+├ ○ /teacher
+├ ○ /teacher/classes
+├ ƒ /teacher/classes/[offeringId]
+├ ƒ /teacher/classes/[offeringId]/access
+├ ƒ /teacher/classes/[offeringId]/activities/[activityId]/experiment
+├ ƒ /teacher/classes/[offeringId]/students
+├ ƒ /teacher/classrooms/[instanceId]
+├ ○ /teacher/login
+├ ƒ /teacher/participations/[participationId]
+├ ƒ /teacher/prepare/[id]/classroom-editor
+├ ƒ /teacher/prepare/[id]/generate
+├ ƒ /teacher/prepare/[id]/preview
+├ ƒ /teacher/prepare/[id]/resources
+├ ƒ /teacher/prepare/[id]/verify
+├ ƒ /teacher/prepare/[id]/verify/edit
+├ ○ /teacher/register
+├ ○ /teacher/settings
+├ ƒ /teacher/surveys/[activityId]
+├ ƒ /teacher/teach/[id]/classroom
+├ ƒ /teacher/teach/[id]/history
+├ ƒ /teacher/teach/[id]/setup
+├ ○ /teacher/templates
+├ ○ /teacher/templates/new
+├ ○ /teacher/templates/pbl/new
+├ ○ /teacher/textbooks
+├ ƒ /teacher/textbooks/[id]
+└ ○ /visual-review-course-publish
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

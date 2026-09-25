@@ -1511,6 +1511,7 @@
     "videoGenerating": "Gerando vídeo (estimativa: 1-2 min)...",
     "videoGenerationWarning": "A geração de vídeo geralmente leva 1-2 minutos. Aguarde com paciência",
     "mediaRetry": "Tentar novamente",
+    "mediaPlaybackBlocked": "O navegador bloqueou a reprodução automática. Clique em Tentar novamente.",
     "mediaContentSensitive": "Desculpe, este conteúdo acionou uma verificação de segurança.",
     "mediaGenerationDisabled": "Geração desabilitada nas configurações",
     "singleAgent": "Agente Único",

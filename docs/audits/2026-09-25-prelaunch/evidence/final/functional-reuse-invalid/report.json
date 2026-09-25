@@ -1,0 +1,153 @@
+{
+  "date": "2026-09-25T01:21:58.010Z",
+  "commit": "4615a98",
+  "mode": "isolated-production-build-and-disposable-database",
+  "browser": "149.0.7827.55",
+  "results": [
+    {
+      "name": "isolated-database-migration",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "isolated-redis-start",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "isolated-production-build",
+      "status": "通过",
+      "detail": "复用本次验收构建"
+    },
+    {
+      "name": "isolated-app-start",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-register-real-login-cookie",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "textbook-docx-upload-parse-search-persistence",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/textbook-reader",
+      "status": "失败",
+      "detail": "locator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('社区生态调查').filter({ visible: true }).first() to be visible\u001b[22m\n"
+    },
+    {
+      "name": "pdf-upload-download-range-and-isolated-storage",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "audio-video-upload-download-browser-playback",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/resource-package-verified",
+      "status": "失败",
+      "detail": "locator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('城市生态调查').filter({ visible: true }).first() to be visible\u001b[22m\n"
+    },
+    {
+      "name": "resource-package-real-zip-pptx-parse-pdf-confirm-persistence",
+      "status": "通过",
+      "detail": "1 PPTX 页，5 阶段"
+    },
+    {
+      "name": "teacher-course-chapter-invite-persistence",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-four-activity-types-created",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-invite-register-real-login-cookie",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "legacy-account-api-explicitly-retired",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "role-boundaries-and-invalid-activity",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-assignment-submit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-quiz-submit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-form-submit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-resource-submit-reload",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-assignment-browser-edit-reload",
+      "status": "失败",
+      "detail": "locator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('heading', { name: 'Assignment 验收' }) to be visible\u001b[22m\n"
+    },
+    {
+      "name": "student-quiz-browser-edit-reload",
+      "status": "失败",
+      "detail": "locator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('heading', { name: 'Quiz 验收' }) to be visible\u001b[22m\n"
+    },
+    {
+      "name": "student-form-browser-edit-reload",
+      "status": "失败",
+      "detail": "locator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('heading', { name: 'Form 验收' }) to be visible\u001b[22m\n"
+    },
+    {
+      "name": "student-resource-browser-edit-reload",
+      "status": "失败",
+      "detail": "locator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('heading', { name: 'Resource 验收' }) to be visible\u001b[22m\n"
+    },
+    {
+      "name": "teacher-survey-sees-student-submission",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-template-version-published-and-persisted",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher/legacy-template-setup",
+      "status": "失败",
+      "detail": "broken static resource\n+ actual - expected\n\n+ [\n+   '404 /_next/static/chunks/main-app-cc7b6a8ab03af24f.js',\n+   '404 /_next/static/chunks/28143-6f14b25b0e47fd3c.js',\n+   '404 /_next/static/chunks/webpack-b073bfb3bd7ad13c.js',\n+   '404 /_next/static/chunks/44a12906-c2f8f7b1097a1154.js',\n+   '404 /_next/static/chunks/25296-7e0acd8839e10791.js',\n+   "
+    },
+    {
+      "name": "teacher/live-classroom",
+      "status": "失败",
+      "detail": "locator.waitFor: Target page, context or browser has been closed\nCall log:\n\u001b[2m  - waiting for getByText('课堂数据速览').filter({ visible: true }).first() to be visible\u001b[22m\n"
+    },
+    {
+      "name": "fatal",
+      "status": "失败",
+      "detail": "browserContext.newPage: Target page, context or browser has been closed\nBrowser logs:\n\n[pid=1025095][err] [0925/092116.115173:INFO:CONSOLE:0] \"Refused to execute script from 'http://127.0.0.1:3198/_next/static/chunks/632f7cdd-0b3de4ce6905b263.js' because its MIME type ('text/plain') is not executable, and strict MIME type checking is enabled.\", source: http://127.0.0.1:3198/student/activities/6a9ac32b-b218-4f99-8ac8-b6e0ed80a36c (0)\n[pid=1025095][err] [0925/092116.115703:INFO:CONSOLE:0] \"Refused"
+    }
+  ]
+}

@@ -1,0 +1,416 @@
+{
+  "baseURL": "http://127.0.0.1:3000",
+  "browser": "webkit",
+  "browserVersion": "26.5",
+  "dpr": 1,
+  "sourceCss": false,
+  "reports": [
+    {
+      "id": "teacher-access-redirect",
+      "device": "desktop-1440x900",
+      "dpr": 1,
+      "width": 1440,
+      "height": 900,
+      "errors": [],
+      "failedResources": [],
+      "missingFixtures": [],
+      "blockedMutations": [],
+      "scrollWidth": 1432,
+      "boxes": [
+        {
+          "selector": "pbl-course-heading pbl-teacher-course-heading",
+          "client": 1261,
+          "scroll": 1261,
+          "height": 213,
+          "scrollHeight": 213,
+          "right": 1347,
+          "children": [],
+          "scrollable": false
+        }
+      ],
+      "chapterProgressIssues": [],
+      "inviteHeadingIssues": [],
+      "clippedClouds": 0,
+      "missingTheme": false,
+      "undersizedColumns": false,
+      "invisibleSurveyBars": 0,
+      "clippedDialogs": false,
+      "brokenImages": [],
+      "surveyRailUnexpected": false,
+      "settingsTrailingSpace": 0,
+      "headings": [
+        {
+          "text": "城市生态与社区行动：跨学科项目实践",
+          "width": 683,
+          "lines": 1,
+          "fontSize": 34,
+          "overflow": false,
+          "unusuallyNarrow": false
+        }
+      ],
+      "textIssues": [],
+      "touch": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+      "imageCount": 1,
+      "resources": [
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/webpack-b073bfb3bd7ad13c.js",
+          "durationMs": 0,
+          "bytes": 0,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/brand/coteach/horizontal-solid.png",
+          "durationMs": 184,
+          "bytes": 397416,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/c1d586fd5cc4a5a0.css",
+          "durationMs": 140,
+          "bytes": 647,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/b7a5a9f7646ec885.css",
+          "durationMs": 142,
+          "bytes": 4596,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/4eb017b6280b7c04.css",
+          "durationMs": 149,
+          "bytes": 16621,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/44a12906-c2f8f7b1097a1154.js",
+          "durationMs": 158,
+          "bytes": 63239,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/0ee0ea3f3e57865e.css",
+          "durationMs": 178,
+          "bytes": 85372,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/main-app-cc7b6a8ab03af24f.js",
+          "durationMs": 143,
+          "bytes": 832,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/43476-07cdc8f3c258a020.js",
+          "durationMs": 148,
+          "bytes": 5542,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/28143-6f14b25b0e47fd3c.js",
+          "durationMs": 150,
+          "bytes": 9600,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/25296-7e0acd8839e10791.js",
+          "durationMs": 157,
+          "bytes": 61294,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/64386-102bf4b585fec0b2.js",
+          "durationMs": 164,
+          "bytes": 26905,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/36715-8e3b4c4d22209b12.js",
+          "durationMs": 154,
+          "bytes": 3883,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/layout-e6cfa617247ad4e4.js",
+          "durationMs": 155,
+          "bytes": 4401,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/error-b6de8791f693d80b.js",
+          "durationMs": 160,
+          "bytes": 3599,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/not-found-d7ceae4f6b40cee5.js",
+          "durationMs": 161,
+          "bytes": 2931,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/50156-d22d2c8822914bd0.js",
+          "durationMs": 164,
+          "bytes": 5741,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/61893-eb03e0e9e701b476.js",
+          "durationMs": 164,
+          "bytes": 8872,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/2312-e9537f5fd560b2e5.js",
+          "durationMs": 167,
+          "bytes": 11943,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/42443-b9458b4484c9c2ed.js",
+          "durationMs": 169,
+          "bytes": 3577,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/87454-efa9f8724c64d989.js",
+          "durationMs": 172,
+          "bytes": 19628,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/88965-8cbb18dc28d41553.js",
+          "durationMs": 168,
+          "bytes": 3348,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/92239-0a6f8ffd6ad74dc3.js",
+          "durationMs": 168,
+          "bytes": 4084,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/teacher/classes/%5BofferingId%5D/page-8980d5c8640a1367.js",
+          "durationMs": 176,
+          "bytes": 19663,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/manifest.webmanifest",
+          "durationMs": 4,
+          "bytes": 618,
+          "type": "other"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-400-normal.e25467c8.woff2",
+          "durationMs": 13,
+          "bytes": 1142852,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-600-normal.f23c085c.woff2",
+          "durationMs": 15,
+          "bytes": 1162652,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/auth/me",
+          "durationMs": 42,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/offerings",
+          "durationMs": 230,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/api/platform/templates",
+          "durationMs": 232,
+          "bytes": 0,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-500-normal.d3553b6f.woff2",
+          "durationMs": 12,
+          "bytes": 1159428,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/media/noto-sans-sc-chinese-simplified-700-normal.6e0a7691.woff2",
+          "durationMs": 14,
+          "bytes": 1172544,
+          "type": "css"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/surveys/a2?_rsc=nYRXH5CXobamtagm",
+          "durationMs": 22,
+          "bytes": 495,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/surveys/a1?_rsc=nYRXH5CXobamtagm",
+          "durationMs": 22,
+          "bytes": 495,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/templates?_rsc=nYRXH5CXobamtagm",
+          "durationMs": 22,
+          "bytes": 573,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/classes/layout-course/activities/layout-classroom/experiment?_rsc=nYRXH5CXobamtagm",
+          "durationMs": 23,
+          "bytes": 537,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/surveys/a0?_rsc=nYRXH5CXobamtagm",
+          "durationMs": 16,
+          "bytes": 495,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/classes/layout-course/students?_rsc=nYRXH5CXobamtagm",
+          "durationMs": 16,
+          "bytes": 510,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/textbooks?_rsc=nYRXH5CXobamtagm",
+          "durationMs": 15,
+          "bytes": 588,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/classes?_rsc=nYRXH5CXobamtagm",
+          "durationMs": 15,
+          "bytes": 573,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/css/1b0dea7c3a1ad99a.css",
+          "durationMs": 6,
+          "bytes": 3061,
+          "type": "link"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/surveys/a1?_rsc=asOurdqKGhMux-E1",
+          "durationMs": 22,
+          "bytes": 1312,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/surveys/a2?_rsc=asOurdqKGhMux-E1",
+          "durationMs": 22,
+          "bytes": 1311,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/templates?_rsc=c-STYgD_3P8sybl_",
+          "durationMs": 21,
+          "bytes": 1093,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/templates?_rsc=WrHk_maDUE9jNCKn",
+          "durationMs": 21,
+          "bytes": 1804,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/templates?_rsc=yzVMHkieqAZUo5t1",
+          "durationMs": 18,
+          "bytes": 539,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/templates?_rsc=-uXIhOB0pVejGLrg",
+          "durationMs": 18,
+          "bytes": 539,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/templates?_rsc=nkzicaJwzP7nXR6e",
+          "durationMs": 17,
+          "bytes": 912,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/classes/layout-course/activities/layout-classroom/experiment?_rsc=asOurdqKGhMux-E1",
+          "durationMs": 17,
+          "bytes": 1347,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/6005-7f7b2648b6a1bdde.js",
+          "durationMs": 24,
+          "bytes": 20789,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/_next/static/chunks/app/teacher/templates/page-8eda1463718b5542.js",
+          "durationMs": 17,
+          "bytes": 14520,
+          "type": "script"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/surveys/a0?_rsc=asOurdqKGhMux-E1",
+          "durationMs": 21,
+          "bytes": 1312,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/textbooks?_rsc=c-STYgD_3P8sybl_",
+          "durationMs": 20,
+          "bytes": 1093,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/classes/layout-course/students?_rsc=asOurdqKGhMux-E1",
+          "durationMs": 20,
+          "bytes": 1327,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/textbooks?_rsc=UdXnKz0YLYtBF05D",
+          "durationMs": 18,
+          "bytes": 539,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/textbooks?_rsc=EmdRgRt-lvrllWWF",
+          "durationMs": 17,
+          "bytes": 967,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/classes?_rsc=c-STYgD_3P8sybl_",
+          "durationMs": 17,
+          "bytes": 1093,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/classes?_rsc=0xOpUx4Rk3hcI4dm",
+          "durationMs": 17,
+          "bytes": 539,
+          "type": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3000/teacher/classes?_rsc=6zwXMG58yOr3KMph",
+          "durationMs": 16,
+          "bytes": 873,
+          "type": "fetch"
+        }
+      ],
+      "durationMs": 4077,
+      "failed": false,
+      "screenshot": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/layout/webkit/redirect-retest/webkit-teacher-access-redirect-desktop-1440x900-dpr1.png"
+    }
+  ]
+}

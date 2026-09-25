@@ -55,15 +55,18 @@ describe("course cover content planning", () => {
   });
 
   it("replans malformed output once instead of abandoning automatic cover generation", async () => {
-    mocks.callLLM.mockResolvedValueOnce({ text: JSON.stringify({ ...plan, sceneDescription: "课堂封面任务：把课程名称印到顶部。" }) });
-    await expect(planCourseCoverImageOnServer({ name: "人工智能教育" })).resolves.toEqual(plan);
+    mocks.callLLM.mockResolvedValueOnce({ text: JSON.stringify({ ...plan, sceneDescription: "课堂封面任务：把课程名称印到顶部。" }) })
+      .mockResolvedValueOnce({ text: plan.sceneDescription });
+    await expect(planCourseCoverImageOnServer({ name: "人工智能教育" })).resolves.toMatchObject({ sceneDescription: plan.sceneDescription });
     expect(mocks.callLLM).toHaveBeenCalledTimes(2);
-    expect(mocks.callLLM.mock.calls[1][0].messages[0].content).toContain("上一轮输出不符合要求");
+    expect(mocks.callLLM.mock.calls[1][0].system).toContain("不要输出JSON");
+    expect(JSON.parse(mocks.callLLM.mock.calls[1][0].messages[0].content)).toMatchObject({ name: "人工智能教育" });
   });
 
-  it("retries an empty final response produced by a reasoning model", async () => {
-    mocks.callLLM.mockResolvedValueOnce({ text: "" });
-    await expect(planCourseCoverImageOnServer({ name: "人工智能教育" })).resolves.toEqual(plan);
+  it.each(["", '{"topicSummary":"人工智能教育","visualAnchor":"尚未写完'])("recovers when the model returns an empty or truncated JSON plan", async (invalid) => {
+    mocks.callLLM.mockResolvedValueOnce({ text: invalid })
+      .mockResolvedValueOnce({ text: plan.sceneDescription });
+    await expect(planCourseCoverImageOnServer({ name: "人工智能教育" })).resolves.toMatchObject({ sceneDescription: plan.sceneDescription });
     expect(mocks.callLLM).toHaveBeenCalledTimes(2);
   });
 

@@ -1,12 +1,14 @@
-@import 'tailwindcss';
+@import 'tailwindcss' source(none);
 @import 'tw-animate-css';
 @import './shadcn-utilities.css';
 
+/* Keep production utility generation within UI sources and explicit dependencies. */
+@source '../../';
 /* Streamdown (AI sidebar markdown) styles itself with Tailwind utilities —
    Tailwind must scan its dist so those classes get generated. */
-@source '../node_modules/streamdown/dist/*.js';
-@source '../node_modules/@streamdown/code/dist/*.js';
-@source "../node_modules/@openmaic/renderer/dist/**/*.{js,cjs}";
+@source '../../../node_modules/streamdown/dist/*.js';
+@source '../../../node_modules/@streamdown/code/dist/*.js';
+@source "../../../packages/@openmaic/renderer/dist/**/*.{js,cjs}";
 /* slide-renderer-demo is gitignored (local sandbox), which makes Tailwind v4's
    auto source detection skip it. Re-include it explicitly so the demo's
    Tailwind classes (e.g. bg-violet-600) still get generated. */

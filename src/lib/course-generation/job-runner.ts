@@ -56,6 +56,7 @@ import {
   COURSE_COVER_GENERATION_SPEC,
 } from "@/lib/course-cover";
 import { generateCourseCoverImageOnServer } from "@/lib/course-cover-server";
+import { TEMPLATE_COVER_MEDIA_PREFIX } from "@/lib/platform/classroom-cover";
 import {
   serializeCourseGenerationFailure,
 } from "@/lib/course-generation/failure-policy";
@@ -682,9 +683,11 @@ async function generateAndPersistCourseCover(
     estimatedRemainingSeconds: 45,
   }));
   try {
-    const classroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;
-    if (!classroomId) throw new Error("课程课堂尚未持久化，无法保存课程封面");
-    const coverImageUrl = await generateCourseCoverImageOnServer(course, classroomId, signal);
+    const coverImageUrl = await generateCourseCoverImageOnServer(
+      course,
+      `${TEMPLATE_COVER_MEDIA_PREFIX}${courseId}`,
+      signal,
+    );
     await updateCourse(courseId, (current) => ({ ...current, coverImageUrl }));
     await serializeWrite(() => persistWorkerPhase(job, {
       step: "course_cover_ready",

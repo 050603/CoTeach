@@ -1,0 +1,67 @@
+{
+  "baseURL": "http://127.0.0.1:3000",
+  "results": [
+    {
+      "name": "platform-chromium-dpr1",
+      "status": "失败",
+      "exitCode": 1,
+      "summary": {
+        "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/layout/chromium/dpr1",
+        "browser": "chromium",
+        "browserVersion": "149.0.7827.55",
+        "dpr": 1,
+        "scenarios": 37,
+        "devices": 10,
+        "checks": 370,
+        "failures": 1,
+        "failedChecks": [
+          "student-course@desktop-3840x2160"
+        ]
+      }
+    },
+    {
+      "name": "teaching-chromium-dpr1",
+      "status": "通过",
+      "exitCode": 0,
+      "summary": {
+        "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/teaching/chromium/dpr1",
+        "browser": "chromium",
+        "browserVersion": "149.0.7827.55",
+        "dpr": 1,
+        "checks": 40,
+        "failures": 0,
+        "failedChecks": []
+      }
+    },
+    {
+      "name": "platform-chromium-dpr2",
+      "status": "通过",
+      "exitCode": 0,
+      "summary": {
+        "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/layout/chromium/dpr2",
+        "browser": "chromium",
+        "browserVersion": "149.0.7827.55",
+        "dpr": 2,
+        "scenarios": 37,
+        "devices": 3,
+        "checks": 111,
+        "failures": 0,
+        "failedChecks": []
+      }
+    },
+    {
+      "name": "teaching-chromium-dpr2",
+      "status": "通过",
+      "exitCode": 0,
+      "summary": {
+        "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/teaching/chromium/dpr2",
+        "browser": "chromium",
+        "browserVersion": "149.0.7827.55",
+        "dpr": 2,
+        "checks": 30,
+        "failures": 0,
+        "failedChecks": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+
+Running 1 test using 1 worker
+
+[1/1] [webkit] › e2e/teacher-classroom-editor.spec.ts:392:5 › video playback shows a retry when the browser denies automatic play
+  1) [webkit] › e2e/teacher-classroom-editor.spec.ts:392:5 › video playback shows a retry when the browser denies automatic play 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('button', { name: '打开页面目录' })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('button', { name: '打开页面目录' })
+
+
+      431 |   await expect(page.getByRole('button', { name: '收起页面目录' })).toBeVisible();
+      432 |   await page.getByRole('button', { name: '收起页面目录' }).click();
+    > 433 |   await expect(page.getByRole('button', { name: '打开页面目录' })).toBeVisible();
+          |                                                              ^
+      434 |   await expect(alert.getByRole('button', { name: '重试' })).toBeVisible();
+      435 |   await alert.scrollIntoViewIfNeeded();
+      436 |   await expect(alert.getByRole('button', { name: '重试' })).toBeInViewport();
+        at /home/lkj/OpenPBL/openPBL/e2e/teacher-classroom-editor.spec.ts:433:62
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/prelaunch-video-webkit/teacher-classroom-editor-v-4c85d-owser-denies-automatic-play-webkit/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #3: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/prelaunch-video-webkit/teacher-classroom-editor-v-4c85d-owser-denies-automatic-play-webkit/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/prelaunch-video-webkit/teacher-classroom-editor-v-4c85d-owser-denies-automatic-play-webkit/error-context.md
+
+
+  1 failed
+    [webkit] › e2e/teacher-classroom-editor.spec.ts:392:5 › video playback shows a retry when the browser denies automatic play 

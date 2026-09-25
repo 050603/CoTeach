@@ -1,0 +1,9 @@
+{
+  "output": "/home/lkj/OpenPBL/openPBL/docs/audits/2026-09-25-prelaunch/evidence/final/teaching/webkit/dpr1-fixed",
+  "browser": "webkit",
+  "browserVersion": "26.5",
+  "dpr": 1,
+  "checks": 40,
+  "failures": 0,
+  "failedChecks": []
+}

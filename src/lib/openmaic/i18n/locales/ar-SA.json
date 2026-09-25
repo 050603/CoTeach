@@ -1511,6 +1511,7 @@
     "videoGenerating": "جارٍ توليد الفيديو (تقريبًا 1-2 دقيقة)...",
     "videoGenerationWarning": "توليد الفيديو يستغرق عادةً 1-2 دقيقة، يرجى الصبر",
     "mediaRetry": "إعادة المحاولة",
+    "mediaPlaybackBlocked": "منع المتصفح التشغيل التلقائي. اضغط على إعادة المحاولة للتشغيل.",
     "mediaContentSensitive": "عذرًا، هذا المحتوى لم يجتز فحص السلامة.",
     "mediaGenerationDisabled": "التوليد معطّل في الإعدادات",
     "singleAgent": "وكيل فردي",

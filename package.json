@@ -6,7 +6,7 @@
   "scripts": {
     "predev": "node scripts/run-prisma.mjs ensure",
     "dev": "next dev",
-    "build": "node scripts/run-next-production.mjs build --webpack",
+    "build": "node scripts/run-next-production.mjs build --webpack && node scripts/check-generated-css.mjs",
     "start": "node scripts/run-next-production.mjs start",
     "code-runner": "node scripts/code-runner-server.mjs",
     "lint": "eslint",
@@ -18,6 +18,7 @@
     "test:coverage": "vitest run --coverage",
     "audit:prod": "pnpm audit --prod --audit-level=high --registry=https://registry.npmjs.org/",
     "test:e2e": "playwright test",
+    "verify:prelaunch": "node scripts/run-prelaunch-audit.mjs",
     "test:classroom-flow": "node scripts/verify-research-database.mjs",
     "test:e2e:ui": "playwright test --ui",
     "test:projection-sync": "node scripts/measure-projection-sync.mjs",

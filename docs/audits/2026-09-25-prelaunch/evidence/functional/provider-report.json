@@ -1,0 +1,68 @@
+{
+  "date": "2026-09-24T23:09:32.262Z",
+  "commit": "4615a98",
+  "mode": "isolated-production-build-and-disposable-database",
+  "browser": "149.0.7827.55",
+  "results": [
+    {
+      "name": "isolated-database-migration",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "isolated-redis-start",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "isolated-production-build",
+      "status": "通过",
+      "detail": "复用本次验收构建"
+    },
+    {
+      "name": "isolated-app-start",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-register-real-login-cookie",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "provider-tts",
+      "status": "通过",
+      "detail": "qwen-tts 实际请求成功"
+    },
+    {
+      "name": "provider-asr",
+      "status": "通过",
+      "detail": "qwen-asr 实际请求成功"
+    },
+    {
+      "name": "pdf-upload-download-range-and-isolated-storage",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-course-chapter-invite-persistence",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "teacher-four-activity-types-created",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "student-invite-register-real-login-cookie",
+      "status": "通过",
+      "detail": ""
+    },
+    {
+      "name": "fatal",
+      "status": "失败",
+      "detail": "GET /api/platform/offerings: 401 {\"code\":\"UNAUTHORIZED\",\"message\":\"登录状态已失效，请重新登录。\",\"requestId\":\"102eb99d-295c-4bca-96d9-1d1ce3936ec5\"}\n\n401 !== 403\n"
+    }
+  ]
+}

@@ -168,14 +168,13 @@ test("home hero replays on refresh and client navigation back to home", async ({
   await hero.evaluate((element) => element.getAnimations({ subtree: true }).filter((animation) => animation.effect!.getTiming().iterations === 1).forEach((animation) => animation.finish()));
   await page.reload();
   await expect(hero).toHaveAttribute("data-running", "true");
-  const entranceTime = () => hero.locator('[data-coteach-part="pages"]').evaluate((element) => Number(element.getAnimations()[0].currentTime));
-  expect(await entranceTime()).toBeLessThan(3000);
+  const entranceTime = () => hero.locator('[data-coteach-part="pages"]').evaluate((element) => Number(element.getAnimations()[0]?.currentTime ?? Infinity));
+  await expect.poll(entranceTime).toBeLessThan(3000);
   await hero.evaluate((element) => element.getAnimations({ subtree: true }).filter((animation) => animation.effect!.getTiming().iterations === 1).forEach((animation) => animation.finish()));
   await page.getByRole("link", { name: "开始学习", exact: true }).first().click();
   await page.getByRole("link", { name: "返回首页", exact: true }).click();
   await expect(hero).toHaveAttribute("data-running", "true");
-  await expect.poll(() => hero.locator('[data-coteach-part="pages"]').evaluate((element) => element.getAnimations().length)).toBe(1);
-  expect(await entranceTime()).toBeLessThan(3000);
+  await expect.poll(entranceTime).toBeLessThan(3000);
 });
 
 test("reduced motion shows the finished logo without animations", async ({ page }) => {

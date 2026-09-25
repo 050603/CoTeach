@@ -1,0 +1,172 @@
+
+Running 4 tests using 1 worker
+
+
+(node:785523) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1/4] [chromium] › e2e/teacher-presentation.spec.ts:475:7 › PDF slides remain visible and retain page across views 1024x576
+  1) [chromium] › e2e/teacher-presentation.spec.ts:475:7 › PDF slides remain visible and retain page across views 1024x576 
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.scrollIntoViewIfNeeded: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for getByRole('button', { name: '计时', exact: true })
+
+
+      203 |   for (const name of controls) {
+      204 |     const control = page.getByRole("button", { name, exact: true });
+    > 205 |     await control.scrollIntoViewIfNeeded();
+          |                   ^
+      206 |     await expect(control).toBeInViewport();
+      207 |     const box = await control.boundingBox();
+      208 |     expect(box?.height, `${name} click target`).toBeGreaterThanOrEqual(40);
+        at assertNoPageOverflow (/home/lkj/OpenPBL/openPBL/e2e/teacher-presentation.spec.ts:205:19)
+        at /home/lkj/OpenPBL/openPBL/e2e/teacher-presentation.spec.ts:495:5
+
+    attachment #1: pdf-first-page (image/png) ──────────────────────────────────────────────────────
+    test-results/teacher-presentation-PDF-s-61d7e--page-across-views-1024x576-chromium/attachments/pdf-first-page-dfbd877a823dfb8f358cfd7c0691e7e9554e19a7.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: pdf-preserved-second-page (image/png) ───────────────────────────────────────────
+    test-results/teacher-presentation-PDF-s-61d7e--page-across-views-1024x576-chromium/attachments/pdf-preserved-second-page-ddecca8d2dbc2d2790527dcb9085d20fd7b7ce3d.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #3: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/teacher-presentation-PDF-s-61d7e--page-across-views-1024x576-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #4: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/teacher-presentation-PDF-s-61d7e--page-across-views-1024x576-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/teacher-presentation-PDF-s-61d7e--page-across-views-1024x576-chromium/error-context.md
+
+
+
+(node:786665) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[2/4] [chromium] › e2e/teacher-presentation.spec.ts:501:7 › approved showcase PDF fits the presentation area 1024x576
+  2) [chromium] › e2e/teacher-presentation.spec.ts:501:7 › approved showcase PDF fits the presentation area 1024x576 
+
+    Error: expect(locator).toBeInViewport() failed
+
+    Locator: getByText('2 / 2 · 跟随汇报', { exact: true })
+    Expected: in viewport
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeInViewport" with timeout 5000ms
+      - waiting for getByText('2 / 2 · 跟随汇报', { exact: true })
+
+
+      506 |     await page.getByRole("dialog").getByRole("button", { name: /进入“/ }).click();
+      507 |     await assertCanvasFits(page, "PDF 第 2 页");
+    > 508 |     await expect(page.getByText("2 / 2 · 跟随汇报", { exact: true })).toBeInViewport({ ratio: 1 });
+          |                                                                   ^
+      509 |     await expect(page.getByRole("region", { name: "校园节能项目最终成果", exact: true }).getByRole("button", { name: "结束汇报", exact: true })).toBeInViewport({ ratio: 1 });
+      510 |     await expect(page.getByRole("group", { name: "当前阶段常用操作", exact: true }).getByRole("button", { name: "结束汇报", exact: true })).toBeInViewport({ ratio: 1 });
+      511 |     await screenshot(page, info, "showcase-approved-pdf");
+        at /home/lkj/OpenPBL/openPBL/e2e/teacher-presentation.spec.ts:508:67
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/teacher-presentation-appro-5c154--presentation-area-1024x576-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/teacher-presentation-appro-5c154--presentation-area-1024x576-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/teacher-presentation-appro-5c154--presentation-area-1024x576-chromium/error-context.md
+
+
+
+(node:787193) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[3/4] [chromium] › e2e/teacher-presentation.spec.ts:475:7 › PDF slides remain visible and retain page across views 1920x1080
+  3) [chromium] › e2e/teacher-presentation.spec.ts:475:7 › PDF slides remain visible and retain page across views 1920x1080 
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.scrollIntoViewIfNeeded: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for getByRole('button', { name: '计时', exact: true })
+
+
+      203 |   for (const name of controls) {
+      204 |     const control = page.getByRole("button", { name, exact: true });
+    > 205 |     await control.scrollIntoViewIfNeeded();
+          |                   ^
+      206 |     await expect(control).toBeInViewport();
+      207 |     const box = await control.boundingBox();
+      208 |     expect(box?.height, `${name} click target`).toBeGreaterThanOrEqual(40);
+        at assertNoPageOverflow (/home/lkj/OpenPBL/openPBL/e2e/teacher-presentation.spec.ts:205:19)
+        at /home/lkj/OpenPBL/openPBL/e2e/teacher-presentation.spec.ts:495:5
+
+    attachment #1: pdf-first-page (image/png) ──────────────────────────────────────────────────────
+    test-results/teacher-presentation-PDF-s-53b43-page-across-views-1920x1080-chromium/attachments/pdf-first-page-0fc6a850af75877e4d5d6dcdbf3bb77163291bee.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: pdf-preserved-second-page (image/png) ───────────────────────────────────────────
+    test-results/teacher-presentation-PDF-s-53b43-page-across-views-1920x1080-chromium/attachments/pdf-preserved-second-page-582feccedc73ad47227a93cae7bc214c63d42ecb.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #3: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/teacher-presentation-PDF-s-53b43-page-across-views-1920x1080-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #4: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/teacher-presentation-PDF-s-53b43-page-across-views-1920x1080-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/teacher-presentation-PDF-s-53b43-page-across-views-1920x1080-chromium/error-context.md
+
+
+
+(node:788469) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[4/4] [chromium] › e2e/teacher-presentation.spec.ts:501:7 › approved showcase PDF fits the presentation area 1920x1080
+  4) [chromium] › e2e/teacher-presentation.spec.ts:501:7 › approved showcase PDF fits the presentation area 1920x1080 
+
+    Error: expect(locator).toBeInViewport() failed
+
+    Locator: getByText('2 / 2 · 跟随汇报', { exact: true })
+    Expected: in viewport
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeInViewport" with timeout 5000ms
+      - waiting for getByText('2 / 2 · 跟随汇报', { exact: true })
+
+
+      506 |     await page.getByRole("dialog").getByRole("button", { name: /进入“/ }).click();
+      507 |     await assertCanvasFits(page, "PDF 第 2 页");
+    > 508 |     await expect(page.getByText("2 / 2", { exact: true })).toBeInViewport({ ratio: 1 });
+          |                                                                   ^
+      509 |     await expect(page.getByRole("region", { name: "校园节能项目最终成果", exact: true }).getByRole("button", { name: "结束汇报", exact: true })).toBeInViewport({ ratio: 1 });
+      510 |     await expect(page.getByRole("group", { name: "当前阶段常用操作", exact: true }).getByRole("button", { name: "结束汇报", exact: true })).toBeInViewport({ ratio: 1 });
+      511 |     await screenshot(page, info, "showcase-approved-pdf");
+        at /home/lkj/OpenPBL/openPBL/e2e/teacher-presentation.spec.ts:508:67
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/teacher-presentation-appro-27090-presentation-area-1920x1080-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/teacher-presentation-appro-27090-presentation-area-1920x1080-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/teacher-presentation-appro-27090-presentation-area-1920x1080-chromium/error-context.md
+
+
+  4 failed
+    [chromium] › e2e/teacher-presentation.spec.ts:475:7 › PDF slides remain visible and retain page across views 1024x576 
+    [chromium] › e2e/teacher-presentation.spec.ts:501:7 › approved showcase PDF fits the presentation area 1024x576 
+    [chromium] › e2e/teacher-presentation.spec.ts:475:7 › PDF slides remain visible and retain page across views 1920x1080 
+    [chromium] › e2e/teacher-presentation.spec.ts:501:7 › approved showcase PDF fits the presentation area 1920x1080 

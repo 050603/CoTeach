@@ -46,7 +46,7 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from '@openmaic/components/ui/alert-dialog';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, PanelLeftOpen } from 'lucide-react';
 import { VisuallyHidden } from 'radix-ui';
 import { getStageExperienceCapabilities } from '@openmaic/components/stage-experience';
 import type { PlaybackSyncState, StageExperience } from '@openmaic/components/stage-experience';
@@ -143,13 +143,24 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     const persistedSidebarCollapsed = useSettingsStore((s) => s.sidebarCollapsed);
     const setPersistedSidebarCollapsed = useSettingsStore((s) => s.setSidebarCollapsed);
     const sidebarCollapsed = controlledSidebarCollapsed ?? persistedSidebarCollapsed;
+    const sidebarIsControlled = controlledSidebarCollapsed !== undefined;
     const setSidebarCollapsed = useCallback((collapsed: boolean) => {
-      if (controlledSidebarCollapsed !== undefined) {
+      if (sidebarIsControlled) {
         onSidebarCollapsedChange?.(collapsed);
         return;
       }
       setPersistedSidebarCollapsed(collapsed);
-    }, [controlledSidebarCollapsed, onSidebarCollapsedChange, setPersistedSidebarCollapsed]);
+    }, [sidebarIsControlled, onSidebarCollapsedChange, setPersistedSidebarCollapsed]);
+    useEffect(() => {
+      if (!isStudentCourse) return;
+      const narrowWindow = window.matchMedia('(max-width: 1023px)');
+      const collapseOverlayOnNarrowWindow = () => {
+        if (narrowWindow.matches) setSidebarCollapsed(true);
+      };
+      collapseOverlayOnNarrowWindow();
+      narrowWindow.addEventListener('change', collapseOverlayOnNarrowWindow);
+      return () => narrowWindow.removeEventListener('change', collapseOverlayOnNarrowWindow);
+    }, [isStudentCourse, setSidebarCollapsed]);
     const chatAreaWidth = useSettingsStore((s) => s.chatAreaWidth);
     const setChatAreaWidth = useSettingsStore((s) => s.setChatAreaWidth);
     const chatAreaCollapsed = useSettingsStore((s) => s.chatAreaCollapsed);
@@ -1343,6 +1354,22 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 <p className="mt-0.5 text-xs opacity-85">{playbackError}</p>
               </div>
             </div>
+          ) : null}
+          {isStudentCourse && sidebarCollapsed && useSideTeachingRail ? (
+            <button
+              aria-label="打开页面目录"
+              className="absolute left-3 top-3 z-30 grid size-11 place-items-center rounded-xl border border-stone-200 bg-white/95 text-stone-700 shadow-sm hover:bg-stone-50"
+              onClick={(event) => { if (event.detail === 0) setSidebarCollapsed(false); }}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setSidebarCollapsed(false);
+              }}
+              title="打开页面目录"
+              type="button"
+            >
+              <PanelLeftOpen size={20} />
+            </button>
           ) : null}
           {/* Canvas Area — playback-only renderer. The parent Stage swaps
             this whole PlaybackChromeRoot out when entering edit mode, so

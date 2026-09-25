@@ -1,0 +1,42 @@
+
+Running 2 tests using 1 worker
+
+
+(node:791787) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1/2] [chromium] › e2e/resource-package-launch.spec.ts:79:7 › package launch preview, ten pages and projection 1024x576
+  1) [chromium] › e2e/resource-package-launch.spec.ts:79:7 › package launch preview, ten pages and projection 1024x576 
+
+    Test timeout of 120000ms exceeded.
+
+    Error: locator.click: Test timeout of 120000ms exceeded.
+    Call log:
+      - waiting for getByLabel('当前阶段常用操作').getByRole('button', { name: '同步到学生', exact: true })
+
+
+      86 |     await page.getByRole("button", { name: "全屏授课", exact: true }).filter({ visible: true }).click();
+      87 |     const stageActions = page.getByLabel("当前阶段常用操作");
+    > 88 |     await stageActions.getByRole("button", { name: "同步到学生", exact: true }).click();
+         |                                                                            ^
+      89 |     await expect.poll(() => fixture.course().uiState?.resourceProjection?.resourceId).toBe(resourceId);
+      90 |     const hashes = new Set<string>();
+      91 |     for (let number = 1; number <= 10; number++) {
+        at /home/lkj/OpenPBL/openPBL/e2e/resource-package-launch.spec.ts:88:76
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/resource-package-launch-pa-ec8ea-ges-and-projection-1024x576-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/resource-package-launch-pa-ec8ea-ges-and-projection-1024x576-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/resource-package-launch-pa-ec8ea-ges-and-projection-1024x576-chromium/error-context.md
+
+
+
+(node:795659) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[2/2] [chromium] › e2e/resource-package-launch.spec.ts:79:7 › package launch preview, ten pages and projection 1920x1080

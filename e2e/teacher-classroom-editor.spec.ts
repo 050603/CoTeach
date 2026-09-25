@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { SignJWT } from 'jose';
 import { readFileSync } from 'node:fs';
+import type { PPTVideoElement } from '@openmaic/dsl';
 import { DEFAULT_STAGES, type Course } from '../src/lib/session/types';
 import type { Action } from '../src/lib/openmaic/types/action';
 import type { Scene, Stage } from '../src/lib/openmaic/types/stage';
@@ -107,8 +108,8 @@ function resource(): ClassroomResource {
   };
 }
 
-async function mockEditor(page: Page, baseURL = 'http://localhost:3000'): Promise<Fixture> {
-  let saved = resource();
+async function mockEditor(page: Page, baseURL = 'http://localhost:3000', initialResource = resource()): Promise<Fixture> {
+  let saved = initialResource;
   const fixture: Fixture = {
     resource: () => saved,
     patches: [],
@@ -153,6 +154,10 @@ async function mockEditor(page: Page, baseURL = 'http://localhost:3000'): Promis
     if (method === 'GET' && path === `/api/courses/${courseId}/state`) return json({ course: course(), eventCursor: '0' });
     if (method === 'GET' && path === `/api/courses/${courseId}/events`) return json({ events: [], nextCursor: '0', hasMore: false, courseVersion: 1 });
     if (method === 'GET' && path === `/api/courses/${courseId}/projection`) return json({ courseVersion: 1, resourceProjection: null, teacherResourceProjection: null });
+    if (method === 'GET' && path === '/api/openmaic/classroom') return json({ success: true, classroom: saved });
+    if (method === 'GET' && path === `/api/courses/${courseId}/generation`) return json({ backgroundEnabled: false, job: null });
+    if (method === 'GET' && path === `/api/courses/${courseId}/design-workspace`) return json({ publication: { latestVersion: 1, publishedVersion: null, draftVersion: 1 } });
+    if (method === 'GET' && path === `/api/courses/${courseId}/resource-repair`) return json({ issues: [] });
     if (method === 'GET' && path === '/api/server-providers') return json({
       providers: { openai: { models: ['gpt-4.1'], defaultModel: 'gpt-4.1' } },
       tts: {}, asr: {}, pdf: {}, image: {}, video: {}, webSearch: {},
@@ -382,6 +387,88 @@ test('whiteboard text, narration, table, image and step history survive saving a
   await assertEditorChrome(page);
   expect(fixture.unexpected).toEqual([]);
   expect(fixture.errors).toEqual([]);
+});
+
+test('video playback shows a retry when the browser denies automatic play', async ({ page, baseURL }, info) => {
+  test.setTimeout(90_000);
+  const mediaWarnings: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'warning' || message.type() === 'error') mediaWarnings.push(message.text());
+  });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.addInitScript(() => {
+    localStorage.setItem('locale', 'zh-CN');
+    const originalPlay = HTMLMediaElement.prototype.play;
+    let denied = false;
+    HTMLMediaElement.prototype.play = function () {
+      if (this instanceof HTMLVideoElement && this.getAttribute('src')?.includes('prelaunch-video.webm') && !denied) {
+        denied = true;
+        return Promise.reject(new DOMException('Autoplay denied', 'NotAllowedError'));
+      }
+      return originalPlay.call(this);
+    };
+  });
+  await page.route('**/prelaunch-video.webm', route => route.fulfill({
+    status: 200, contentType: 'video/webm', body: readFileSync('e2e/fixtures/prelaunch-video.webm'),
+  }));
+  const classroom = resource();
+  const scene = classroom.scenes[0];
+  if (scene.content.type !== 'slide') throw new Error('Video acceptance fixture requires a slide');
+  scene.content.canvas.elements.push({
+    id: 'e2e-video', type: 'video', src: '/prelaunch-video.webm', autoplay: false,
+    left: 180, top: 130, width: 640, height: 360, rotate: 0,
+  } as PPTVideoElement);
+  scene.actions = [{ id: 'e2e-play-video', type: 'play_video', elementId: 'e2e-video' }];
+  const fixture = await mockEditor(page, baseURL, classroom);
+  await page.goto(`/teacher/prepare/${courseId}/preview?view=student`);
+  await expect(page.getByRole('tabpanel', { name: '学生课堂预览' })).toBeVisible();
+  const video = page.locator('#screen-element-e2e-video video');
+  await expect(video).toBeVisible();
+  await page.getByRole('button', { name: '继续讲解' }).click();
+  const alert = page.locator('#screen-element-e2e-video [role="alert"]');
+  await expect(alert).toContainText('浏览器阻止了自动播放');
+  await expect(alert.getByRole('button', { name: '重试' })).toBeVisible();
+  await page.screenshot({ path: `docs/audits/2026-09-25-prelaunch/evidence/video-autoplay-denied-${info.project.name}.png` });
+  await page.setViewportSize({ width: 768, height: 576 });
+  await expect(page.getByRole('button', { name: '收起页面目录' })).toBeHidden();
+  await page.getByRole('button', { name: '打开页面目录' }).click();
+  await expect(page.getByRole('button', { name: '收起页面目录' })).toBeVisible();
+  await expect.poll(() => page.locator('[data-testid="scene-list"]').evaluate((list) =>
+    list.parentElement?.parentElement?.getBoundingClientRect().width ?? 0)).toBeGreaterThan(210);
+  await page.evaluate(() => {
+    const events: string[] = [];
+    const close = document.querySelector('button[aria-label="收起页面目录"]');
+    close?.addEventListener('pointerdown', () => events.push('pointerdown'));
+    close?.addEventListener('click', () => events.push('click'));
+    (window as Window & { __prelaunchCloseEvents?: string[] }).__prelaunchCloseEvents = events;
+  });
+  await page.getByRole('button', { name: '收起页面目录' }).click();
+  try {
+    await expect(page.getByRole('button', { name: '打开页面目录' })).toBeVisible();
+  } catch (error) {
+    const closeEvents = await page.evaluate(() => (window as Window & { __prelaunchCloseEvents?: string[] }).__prelaunchCloseEvents);
+    throw new Error(`${String(error)}\n${JSON.stringify({ closeEvents })}`);
+  }
+  await expect(alert.getByRole('button', { name: '重试' })).toBeVisible();
+  await alert.scrollIntoViewIfNeeded();
+  await expect(alert.getByRole('button', { name: '重试' })).toBeInViewport();
+  await page.screenshot({ path: `docs/audits/2026-09-25-prelaunch/evidence/video-autoplay-denied-split-${info.project.name}.png` });
+  await expect.poll(() => video.evaluate((element) => (element as HTMLVideoElement).readyState), { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
+  await alert.getByRole('button', { name: '重试' }).click();
+  try {
+    await expect(alert).toHaveCount(0, { timeout: 15_000 });
+  } catch (error) {
+    const mediaState = await video.evaluate((element) => {
+      const media = element as HTMLVideoElement;
+      return { paused: media.paused, currentTime: media.currentTime, readyState: media.readyState, networkState: media.networkState,
+        error: media.error ? { code: media.error.code, message: media.error.message } : null };
+    });
+    throw new Error(`${String(error)}\n${JSON.stringify({ mediaState, mediaWarnings })}`);
+  }
+  await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).currentTime)).toBeGreaterThan(0.05);
+  await page.screenshot({ path: `docs/audits/2026-09-25-prelaunch/evidence/video-autoplay-recovered-${info.project.name}.png` });
+  expect(fixture.errors).toEqual([]);
+  expect(fixture.unexpected).toEqual([]);
 });
 
 test('chart values and all chart forms render and survive saving', async ({ page, baseURL }, info) => {

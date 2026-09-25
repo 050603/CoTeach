@@ -44,7 +44,7 @@
 .pbl-platform-theme :where(input:not([type=checkbox]):not([type=radio]),textarea,select):focus { border-color: var(--pbl-accent); }
 .pbl-platform-theme .pbl-workspace { padding: 0; }
 .pbl-platform-theme .pbl-workspace-teacher { padding: 0; }
-.pbl-platform-theme .pbl-platform-topbar { position: sticky; top: 0; z-index: 45; height: 72px; border-bottom: 1px solid #dce5ee; background: #ffffffed; backdrop-filter: blur(16px); }
+.pbl-platform-theme .pbl-platform-topbar { position: sticky; top: 0; z-index: 45; height: 4.5rem; border-bottom: 1px solid #dce5ee; background: #ffffffed; backdrop-filter: blur(16px); }
 .pbl-platform-theme .pbl-platform-topbar-inner { display: flex; width: 100%; height: 100%; max-width: 1540px; margin: auto; padding: 0 42px; align-items: center; justify-content: space-between; gap: 28px; }
 .pbl-platform-theme .pbl-platform-topbar-context { display: flex; min-width: 0; align-items: center; gap: 20px; }
 .pbl-platform-theme .pbl-workspace-brand { display: flex; flex-shrink: 0; align-items: center; }
@@ -335,7 +335,7 @@
 .pbl-platform-theme .pbl-progress-strip { border: 1px solid var(--pbl-student-border); border-radius: 14px; padding: 22px 24px; background: var(--pbl-student-soft); }
 .pbl-platform-theme .pbl-learning-overview { position: relative; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 28px; margin-top: 22px; padding: 22px 0; border: 0; border-top: 1px solid var(--pbl-student-border); border-bottom: 1px solid var(--pbl-student-border); border-radius: 0; background: transparent; }
 .pbl-student-course-workspace { min-width: 1024px; color: var(--pbl-text); background: radial-gradient(ellipse at 8% 0%,#e8f3ef 0,transparent 34%),var(--pbl-bg); }
-.pbl-platform-theme .pbl-student-course-topbar { position: sticky; top: 0; z-index: 45; height: 72px; border-bottom: 1px solid #dce5ee; background: #ffffffed; backdrop-filter: blur(16px); }
+.pbl-platform-theme .pbl-student-course-topbar { position: sticky; top: 0; z-index: 45; height: 4.5rem; border-bottom: 1px solid #dce5ee; background: #ffffffed; backdrop-filter: blur(16px); }
 .pbl-platform-theme .pbl-student-course-topbar-inner { display: flex; width: 100%; height: 100%; max-width: 1600px; margin: auto; padding: 0 34px; align-items: center; justify-content: space-between; }
 .pbl-platform-theme .pbl-course-reminder-trigger { position: relative; display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid var(--pbl-border); border-radius: 11px; background: #fff; color: var(--pbl-text-muted); }
 .pbl-platform-theme .pbl-course-reminder-trigger svg { width: 19px; height: 19px; }

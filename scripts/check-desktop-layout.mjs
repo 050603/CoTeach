@@ -1,21 +1,27 @@
 // Real-page layout audit with browser-only fixtures; no business API reaches the server.
 // Run: node scripts/check-desktop-layout.mjs [--source-css] [--assert]
 // Optional filters: LAYOUT_SCENARIOS=home,student-courses LAYOUT_DEVICES=phone-portrait,pad-landscape
-// Chromium device emulation checks responsive behavior; it does not replace physical Safari/Android testing.
+// Engine and viewport emulation check responsive behavior; they do not replace Windows/macOS hardware testing.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { chromium, webkit, devices } from '@playwright/test';
+import { chromium, firefox, webkit, devices } from '@playwright/test';
 const browserName = process.env.LAYOUT_BROWSER || 'chromium';
-if (!['chromium', 'webkit'].includes(browserName)) throw new Error('LAYOUT_BROWSER must be chromium or webkit');
+if (!['chromium', 'firefox', 'webkit'].includes(browserName)) throw new Error('LAYOUT_BROWSER must be chromium, firefox or webkit');
 const baseURL = process.env.LAYOUT_BASE_URL || 'http://127.0.0.1:3000';
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(baseURL).hostname)) throw new Error('Layout audit only supports a local instance');
-const output = fs.mkdtempSync(path.join(os.tmpdir(), 'openpbl-responsive-'));
+const dpr = Number(process.env.LAYOUT_DPR || 1);
+if (!Number.isFinite(dpr) || dpr < 1 || dpr > 3) throw new Error('LAYOUT_DPR must be between 1 and 3');
+const output = process.env.LAYOUT_OUTPUT_DIR ? path.resolve(process.env.LAYOUT_OUTPUT_DIR) : fs.mkdtempSync(path.join(os.tmpdir(), 'openpbl-responsive-'));
+fs.mkdirSync(output, { recursive: true });
 const name = '城市生态与社区行动：跨学科项目实践';
 const options = Array.from({ length: 9 }, (_, i) => ({ id: `o${i}`, label: `方案 ${i + 1}：通过社区观察与访谈了解真实问题并设计可行方案`, count: 3, percentage: 11, respondents: [{ studentId: 'layout-student', displayName: '布局测试学生' }] }));
 const questions = ['donut', 'bar', 'column', 'text'].map((chartType, i) => ({ id: `q${i}`, title: `${i + 1}. 在这次跨学科项目实践中，你认为哪些学习方式最有助于解决社区中的实际问题？`, type: chartType === 'text' ? 'short-text' : chartType === 'donut' ? 'single-choice' : 'multiple-choice', chartType, required: true, responseCount: 27, options: chartType === 'text' ? [] : options, terms: [{ label: '社区观察', value: 18 }, { label: '团队合作', value: 12 }], responses: Array.from({ length: 16 }, (_, j) => ({ studentId: `s${j}`, displayName: `测试学生${j}`, content: '通过社区观察发现问题，通过团队合作整理资料并提出方案。'.repeat(5) })) }));
-const course = { id: 'layout-course', name, coverImageUrl: '/brand/logo-horizontal.png', term: '2026 秋季学期', status: 'open', description: '观察真实社区，分析证据并形成可以付诸实践的方案。'.repeat(4), outline: '研究目标与教学内容。'.repeat(15), teacher: { displayName: '跨学科项目实践教师' }, startsAt: '2026-09-01', endsAt: '2027-01-10', invitation: { code: 'A7B9C2' }, chapters: Array.from({ length: 4 }, (_, i) => ({ id: `ch${i}`, title: `第${i + 1}章：从真实生活中发现值得研究的问题并规划我们的行动`, description: '观察与实践', isOpen: true, activities: [{ id: `a${i}`, title: '社区观察方法与项目学习反思问卷', type: 'Form', isOpen: true, progress: { status: 'in_progress' }, config: { questions } }] })) };
+const course = { id: 'layout-course', name, coverImageUrl: '/brand/coteach/horizontal-color.png', term: '2026 秋季学期', status: 'open', description: '观察真实社区，分析证据并形成可以付诸实践的方案。'.repeat(4), outline: '研究目标与教学内容。'.repeat(15), teacher: { displayName: '跨学科项目实践教师' }, startsAt: '2026-09-01', endsAt: '2027-01-10', invitation: { code: 'A7B9C2' }, chapters: Array.from({ length: 4 }, (_, i) => ({ id: `ch${i}`, title: `第${i + 1}章：从真实生活中发现值得研究的问题并规划我们的行动`, description: '观察与实践', isOpen: true, activities: [{ id: `a${i}`, title: '社区观察方法与项目学习反思问卷', type: 'Form', isOpen: true, progress: { status: 'in_progress' }, config: { questions } }] })) };
+course.chapters[0].activities.push({ id: 'layout-classroom', title: '城市生态调查课堂', type: 'Classroom', isOpen: true, version: 1, progress: { status: 'not_started' }, config: { schemaVersion: 1 } });
 const courses = Array.from({ length: 6 }, (_, i) => ({ ...course, id: i ? `course-${i}` : course.id, name: `${name}（${i + 1}班）` }));
+const longLink = `https://example.org/evidence/${'mixedChineseEnglishCourseReference2026'.repeat(12)}`;
+const longCopyCourse = { ...course, name: `${name}：CommunityResearchAndEvidenceBasedLearning2026`, description: `课程参考链接：${longLink}`, outline: `项目说明和延伸阅读：${longLink}` };
 const activity = { id: 'layout-survey', title: '项目学习过程与协作体验问卷', type: 'Form', description: null, isOpen: true, offering: course, chapter: { title: '学习反思' }, progress: { status: 'not_started' }, instance: null, config: { content: '请根据本次学习的实际体验作答，选择最符合自己情况的选项。', questions } };
 const survey = { activity, analytics: { submittedCount: 27, totalStudents: 30, completionRate: 90, questions }, updatedAt: '2026-09-11T08:00:00Z' };
 const fixtures = {
@@ -28,6 +34,7 @@ const fixtures = {
   '/api/platform/activities/layout-survey': { activity },
   '/api/platform/activities/layout-survey/survey-results': survey,
   '/api/platform/auth/invite': { invitation: { code: 'A7B9C2', offering: course } },
+  '/api/textbooks': { items: [] },
 };
 
 const student = { id: 'layout-student', enrollmentId: 'layout-enrollment', username: 'community_research_student_2026', displayName: '跨学科项目实践测试学生', status: 'active', joinedAt: '2026-09-01T08:00:00Z', participated: true, completedOpenActivities: 1, openActivityCount: 4, classroomParticipationCount: 1, lastLearningAt: '2026-09-10T08:00:00Z', activityStatuses: { a0: 'completed' }, attentionReasons: ['incomplete_open_activity'] };
@@ -50,9 +57,9 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
     const token = await new SignJWT({ role, sv: 1, username: 'layout', displayName: '布局测试', userId: sub, studentName: '布局测试' }).setProtectedHeader({ alg: 'HS256' }).setSubject(sub).setIssuer('openpbl').setAudience('openpbl-app').setExpirationTime('1h').sign(new TextEncoder().encode(secret));
     cookies.push({ name: `openpbl_${role}`, value: token, url: baseURL });
   }
-  const browser = await ({ chromium, webkit })[browserName].launch();
+  const browser = await ({ chromium, firefox, webkit })[browserName].launch();
   const reports = [];
-  const desktopSizes = [[1024, 768], [1280, 720], [1366, 768], [1440, 900], [1920, 1080], [2560, 1440], [3840, 2160], [1024, 576]];
+  const desktopSizes = [[768, 576], [768, 768], [1024, 768], [1280, 720], [1366, 768], [1440, 900], [1920, 1080], [2560, 1440], [3840, 2160], [1024, 576]];
   const profiles = [
     ...desktopSizes.map(([width, height]) => ({ id: `desktop-${width}x${height}`, viewport: { width, height } })),
     { ...devices['iPad Mini'], defaultBrowserType: undefined, id: 'pad-portrait', viewport: { width: 768, height: 1024 } },
@@ -64,6 +71,8 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
   ];
   const scenarios = [
     ['home', '/', '.pbl-aurora-light'],
+    ['teacher-root', '/teacher', '.pbl-teacher-class-card', async page => { await page.waitForURL('**/teacher/classes'); }],
+    ['student-root', '/student', '.pbl-student-course-card'],
     ['teacher-settings', '/teacher/settings', '.pbl-settings-section-nav'],
     ['teacher-settings-ai', '/teacher/settings', '.pbl-settings-section-nav', async (page) => {
       await page.getByRole('button', { name: /AI 服务/ }).click();
@@ -84,6 +93,7 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
     ['teacher-students', '/teacher/classes/layout-course/students', '[data-enrollment-id]'],
     ['teacher-student-detail', '/teacher/classes/layout-course/students', '[data-enrollment-id]', async (page) => { await page.locator('[data-enrollment-id]').first().click(); await page.getByRole('navigation', { name: '学生档案内容' }).filter({ visible: true }).waitFor(); }],
     ['student-login', '/student/login', '.pbl-auth-input'],
+    ['student-reset-password', '/student/reset-password?token=layout-placeholder-token', '.pbl-auth-input'],
     ['student-login-rotation', '/student/login', '.pbl-auth-input', async (page) => {
       const original = page.viewportSize();
       const username = page.getByPlaceholder('输入你的学号');
@@ -111,8 +121,13 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
       const account = page.getByRole('button', { name: /^学生个人中心/ });
       const viewport = page.viewportSize();
       const assertInViewport = async (locator, label) => {
-        const rect = await locator.boundingBox();
-        if (!rect || rect.x < -1 || rect.y < -1 || rect.x + rect.width > viewport.width + 1 || rect.y + rect.height > viewport.height + 1) throw new Error(`${label} is outside the viewport: ${JSON.stringify(rect)}`);
+        let rect;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          rect = await locator.boundingBox();
+          if (rect && rect.x >= -1 && rect.y >= -1 && rect.x + rect.width <= viewport.width + 1 && rect.y + rect.height <= viewport.height + 1) return;
+          await page.waitForTimeout(100);
+        }
+        throw new Error(`${label} is outside the viewport after layout settled: ${JSON.stringify(rect)}`);
       };
       for (const [control, label] of [[back, 'Course back link'], [reminder, 'Course reminder'], [account, 'Student account']]) {
         await assertInViewport(control, label);
@@ -145,10 +160,19 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
         }
       });
     }],
+    ['student-course-long-copy', '/student/courses/layout-course', '.pbl-student-course-main', async (page) => {
+      await page.getByRole('button', { name: '课程介绍' }).click();
+      await page.locator('.pbl-student-secondary-copy').waitFor();
+    }],
     ['teacher-courses', '/teacher/classes', '.pbl-teacher-class-card'],
     ['teacher-course', '/teacher/classes/layout-course', '.pbl-teacher-course-heading'],
+    ['teacher-access-redirect', '/teacher/classes/layout-course/access', '.pbl-teacher-course-heading', async page => { await page.waitForURL('**/teacher/classes/layout-course'); }],
+    ['teacher-experiment', '/teacher/classes/layout-course/activities/layout-classroom/experiment', 'h1', async page => { await page.getByRole('heading', { name: '前后测配置' }).waitFor(); await page.getByText('城市生态调查课堂').filter({ visible: true }).first().waitFor(); }],
     ['teacher-course-dialog', '/teacher/classes/layout-course', '.pbl-teacher-course-heading', async (page) => { await page.getByRole('button', { name: /课程设置/ }).click(); await page.getByRole('dialog').waitFor(); }],
     ['teacher-library', '/teacher/templates', '.pbl-template-card'],
+    ['teacher-template-new', '/teacher/templates/new', 'h1', async page => { await page.getByRole('heading', { name: '创建课程' }).waitFor(); }],
+    ['teacher-template-pbl-new', '/teacher/templates/pbl/new', 'h1', async page => { await page.getByRole('heading', { name: '创建 PBL 课程' }).waitFor(); }],
+    ['teacher-textbooks', '/teacher/textbooks', 'h1', async page => { await page.getByText('教材库还是空的').waitFor(); }],
     ['student-survey', '/student/activities/layout-survey', '.survey-sheet-question'],
     ['survey-donut', '/teacher/surveys/layout-survey', '.survey-donut'],
     ['survey-bar', '/teacher/surveys/layout-survey', '.survey-donut', async (page) => { await page.locator('.survey-question-tab').nth(1).click(); }],
@@ -170,15 +194,20 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
       delete deviceOptions.defaultBrowserType;
       // Device presets pin screen dimensions; let viewport rotation update screen too,
       // otherwise WebKit keeps its original media-query/layout width after rotating.
-      const context = await browser.newContext({ ...deviceOptions, screen: undefined, reducedMotion: 'reduce', serviceWorkers: 'block' });
+      if (browserName === 'firefox') delete deviceOptions.isMobile;
+      const context = await browser.newContext({ ...deviceOptions, screen: undefined, deviceScaleFactor: dpr, reducedMotion: 'reduce', serviceWorkers: 'block' });
       await context.addCookies(cookies);
       for (const [id, routePath, ready, prepare] of selectedScenarios) {
         const page = await context.newPage();
+        await context.tracing.start({ screenshots: true, snapshots: true });
         page.setDefaultTimeout(12000);
         const errors = [], failedResources = [], missingFixtures = [], blockedMutations = [];
         page.on('pageerror', error => errors.push(error.message));
         page.on('requestfailed', request => {
-          if (request.failure()?.errorText !== 'net::ERR_ABORTED') failedResources.push({ url: request.url(), type: request.resourceType(), error: request.failure()?.errorText });
+          const failure = request.failure()?.errorText;
+          // Browser engines report requests superseded by navigation using
+          // different names. The settled destination is checked separately.
+          if (!['net::ERR_ABORTED', 'NS_BINDING_ABORTED', 'Load request cancelled'].includes(failure)) failedResources.push({ url: request.url(), type: request.resourceType(), error: failure });
         });
         page.on('response', response => {
           if (response.status() >= 400 && !new URL(response.url()).pathname.startsWith('/api/')) failedResources.push({ url: response.url(), type: response.request().resourceType(), status: response.status() });
@@ -191,10 +220,13 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
           const readOnly = ['GET', 'HEAD', 'OPTIONS'].includes(request.method()) || pathname === '/api/platform/auth/invite' && request.method() === 'POST';
           if (!readOnly) blockedMutations.push({ pathname, method: request.method() });
           else if (!fixtures[pathname]) missingFixtures.push(pathname);
-          return intercepted.fulfill({ status: !readOnly ? 405 : fixtures[pathname] ? 200 : 404, contentType: 'application/json', body: JSON.stringify(readOnly && fixtures[pathname] || { message: 'Layout fixture unavailable' }) });
+          const fixture = id === 'student-course-long-copy' && pathname === '/api/platform/courses'
+            ? { ...fixtures[pathname], courses: [longCopyCourse] }
+            : fixtures[pathname];
+          return intercepted.fulfill({ status: !readOnly ? 405 : fixture ? 200 : 404, contentType: 'application/json', body: JSON.stringify(readOnly && fixture || { message: 'Layout fixture unavailable' }) });
         });
         const started = Date.now();
-        let report = { id, device, width: profile.viewport.width, height: profile.viewport.height, errors, failedResources, missingFixtures, blockedMutations };
+        let report = { id, device, dpr, width: profile.viewport.width, height: profile.viewport.height, errors, failedResources, missingFixtures, blockedMutations };
         try {
           await page.goto(baseURL + routePath, { waitUntil: 'load' });
           if (process.argv.includes('--source-css')) {
@@ -277,12 +309,14 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
         }
         report.durationMs = Date.now() - started;
         report.failed = Boolean(isFailure(report));
-        if (report.failed || ['phone-portrait', 'phone-landscape', 'pad-portrait', 'pad-landscape', 'desktop-1440x900'].includes(device)) {
-          report.screenshot = path.join(output, `${id}-${device}.png`);
+        if (process.env.LAYOUT_CAPTURE_ALL === '1' || report.failed || ['phone-portrait', 'phone-landscape', 'pad-portrait', 'pad-landscape', 'desktop-1440x900'].includes(device)) {
+          report.screenshot = path.join(output, `${browserName}-${id}-${device}-dpr${dpr}.png`);
           await page.screenshot({ path: report.screenshot }).catch(error => errors.push(`Screenshot: ${error.message}`));
         }
+        report.trace = report.failed ? path.join(output, `${browserName}-${id}-${device}-dpr${dpr}.zip`) : undefined;
+        await context.tracing.stop(report.trace ? { path: report.trace } : undefined);
         reports.push(report);
-        fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify({ baseURL, browser: browserName, sourceCss: process.argv.includes('--source-css'), reports }, null, 2));
+        fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify({ baseURL, browser: browserName, browserVersion: browser.version(), dpr, sourceCss: process.argv.includes('--source-css'), reports }, null, 2));
         await page.close();
       }
       await context.close();
@@ -292,7 +326,7 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
     await browser.close();
   }
   const failures = reports.filter(isFailure);
-  const summary = { output, browser: browserName, scenarios: selectedScenarios.length, devices: selectedProfiles.length, checks: reports.length, failures: failures.length, failedChecks: failures.map(r => `${r.id}@${r.device}`) };
+  const summary = { output, browser: browserName, browserVersion: browser.version(), dpr, scenarios: selectedScenarios.length, devices: selectedProfiles.length, checks: reports.length, failures: failures.length, failedChecks: failures.map(r => `${r.id}@${r.device}`) };
   fs.writeFileSync(path.join(output, 'summary.json'), JSON.stringify(summary, null, 2));
   console.log(JSON.stringify(summary, null, 2));
   if (process.argv.includes('--assert') && failures.length) process.exitCode = 1;
