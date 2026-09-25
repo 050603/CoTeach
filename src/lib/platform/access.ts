@@ -137,13 +137,34 @@ export async function canReadTemplateCover(
       select: { id: true },
     }));
   }
-  return Boolean(await database.classroomParticipation.findFirst({
+  const participation = await database.classroomParticipation.findFirst({
     where: {
       enrollment: {
         userId: user.id,
         status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] },
       },
       instance: { templateVersion: { templateId } },
+    },
+    select: { id: true },
+  });
+  if (participation) return true;
+  return Boolean(await database.classroomInstance.findFirst({
+    where: {
+      templateVersion: { templateId },
+      activity: {
+        archivedAt: null,
+        chapter: {
+          archivedAt: null,
+          offering: {
+            enrollments: {
+              some: {
+                userId: user.id,
+                status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] },
+              },
+            },
+          },
+        },
+      },
     },
     select: { id: true },
   }));

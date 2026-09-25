@@ -212,6 +212,34 @@ export async function listStudentOfferings(claims: AuthClaims) {
     },
     orderBy: { joinedAt: "asc" },
   });
+  const singleClassroomActivityByOffering = new Map<string, string>();
+  for (const row of rows) {
+    if (row.offering.coverImageUrl) continue;
+    const classroomActivities = row.offering.chapters.flatMap((chapter) =>
+      chapter.activities.filter((activity) => activity.type.toUpperCase() === "CLASSROOM"),
+    );
+    if (classroomActivities.length === 1) {
+      singleClassroomActivityByOffering.set(row.offering.id, classroomActivities[0].id);
+    }
+  }
+  const classroomCovers = new Map<string, string>();
+  if (singleClassroomActivityByOffering.size) {
+    const instances = await prisma.classroomInstance.findMany({
+      where: {
+        activityId: { in: [...singleClassroomActivityByOffering.values()] },
+        status: { in: ["SCHEDULED", "TEACHING", "FINISHED", "scheduled", "teaching", "finished"] },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { activityId: true, templateVersion: { select: { snapshot: true } } },
+    });
+    const seenActivityIds = new Set<string>();
+    for (const instance of instances) {
+      if (seenActivityIds.has(instance.activityId)) continue;
+      seenActivityIds.add(instance.activityId);
+      const coverImageUrl = classroomCoverImageUrl(instance.templateVersion.snapshot);
+      if (coverImageUrl) classroomCovers.set(instance.activityId, coverImageUrl);
+    }
+  }
   const at = new Date();
   return rows.map((row) => {
     const courseReleased = normalizedStatus(row.offering.status) !== "draft";
@@ -219,7 +247,7 @@ export async function listStudentOfferings(claims: AuthClaims) {
       id: row.offering.id,
       name: row.offering.name,
       description: row.offering.description,
-      coverImageUrl: row.offering.coverImageUrl,
+      coverImageUrl: row.offering.coverImageUrl ?? classroomCovers.get(singleClassroomActivityByOffering.get(row.offering.id) ?? "") ?? null,
       ...courseDetails(row.offering.settings),
       courseReferences: courseReferences(row.offering.settings, row.offering.resources),
       term: row.offering.term,

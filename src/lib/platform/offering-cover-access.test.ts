@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   enrollment: vi.fn(),
   template: vi.fn(),
   participation: vi.fn(),
+  instance: vi.fn(),
 }));
 
 import {
@@ -23,6 +24,7 @@ const db = {
   enrollment: { findFirst: mocks.enrollment },
   classroomTemplate: { findFirst: mocks.template },
   classroomParticipation: { findFirst: mocks.participation },
+  classroomInstance: { findFirst: mocks.instance },
 } as unknown as PrismaClient;
 
 beforeEach(() => {
@@ -102,6 +104,47 @@ describe("offering cover media access", () => {
       },
       select: { id: true },
     });
+    expect(mocks.instance).not.toHaveBeenCalled();
+  });
+
+  it("allows an enrolled student to see the template cover before entering the classroom", async () => {
+    mocks.participation.mockResolvedValue(null);
+    mocks.instance.mockResolvedValue({ id: "instance-1" });
+    await expect(canReadTemplateCover(
+      { sub: "student-1", role: "student" } as AuthClaims,
+      "template-1",
+      db,
+    )).resolves.toBe(true);
+    expect(mocks.instance).toHaveBeenCalledWith({
+      where: {
+        templateVersion: { templateId: "template-1" },
+        activity: {
+          archivedAt: null,
+          chapter: {
+            archivedAt: null,
+            offering: {
+              enrollments: {
+                some: {
+                  userId: "student-1",
+                  status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] },
+                },
+              },
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+  });
+
+  it("rejects students who are not enrolled in the template's classroom", async () => {
+    mocks.participation.mockResolvedValue(null);
+    mocks.instance.mockResolvedValue(null);
+    await expect(canReadTemplateCover(
+      { sub: "student-1", role: "student" } as AuthClaims,
+      "template-1",
+      db,
+    )).resolves.toBe(false);
   });
 });
 
