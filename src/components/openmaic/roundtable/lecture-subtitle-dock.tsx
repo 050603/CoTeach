@@ -59,6 +59,7 @@ interface LectureSubtitleDockProps {
   readonly teacherName: string;
   readonly engineMode: EngineMode;
   readonly playbackCompleted?: boolean;
+  readonly autoAdvancePending?: boolean;
   readonly muted: boolean;
   readonly playbackSpeed: number;
   readonly autoPlay: boolean;
@@ -305,6 +306,7 @@ export function LectureSubtitleDock({
   teacherName,
   engineMode,
   playbackCompleted,
+  autoAdvancePending = false,
   muted,
   playbackSpeed,
   autoPlay,
@@ -462,7 +464,7 @@ export function LectureSubtitleDock({
               ) : null}
             </div>
             <p className="mt-0.5 text-[11px] text-slate-400">
-              {isPlaying ? `${teacherName}正在讲解` : playbackCompleted ? '本页讲解完成' : '讲解已暂停'}
+              {autoAdvancePending ? '即将播放下一页' : isPlaying ? `${teacherName}正在讲解` : playbackCompleted ? '本页讲解完成' : '讲解已暂停'}
             </p>
           </div>
           <span className="pt-1 text-[11px] font-semibold tabular-nums text-slate-400">

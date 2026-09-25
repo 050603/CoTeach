@@ -147,6 +147,16 @@ describe('teacher classroom resource route', () => {
     await expect(response.json()).resolves.toMatchObject({ code: 'REVISION_CONFLICT' });
   });
 
+  it('forks a classroom kept by a historical draft before editing it', async () => {
+    mocks.findPublished.mockImplementation(async ({ where }) =>
+      where.status.in.includes('SUPERSEDED') ? { id: 'historical-draft' } : null);
+    const response = await PATCH(editRequest(), context);
+    expect(response.status).toBe(200);
+    expect(mocks.copyMedia).toHaveBeenCalledWith('classroom-1', 'classroom-1-edit-draft123');
+    expect(mocks.persistClassroom).toHaveBeenCalledWith(expect.objectContaining({ id: 'classroom-1-edit-draft123' }));
+    expect(mocks.updateClassroom).not.toHaveBeenCalled();
+  });
+
   it('saves freshly generated audio for edited text as a shared media URL', async () => {
     const editedScene = {
       ...scene,
@@ -177,6 +187,41 @@ describe('teacher classroom resource route', () => {
       },
       classroom: { scenes: [{ actions: [{ text: '新讲稿', audioUrl: expect.stringContaining('/classroom-media/classroom-1/audio/') }] }] },
     });
+  });
+
+  it('saves reordered pages and regenerated audio when a generated page has seven laser targets', async () => {
+    const laserScene = {
+      ...scene,
+      title: '建构主义教学设计的七个步骤',
+      actions: [
+        { id: 'laser-1', type: 'laser', elementId: 'step-1',
+          waypoints: Array.from({ length: 6 }, (_, index) => ({ elementId: `step-${index + 2}` })) },
+        { id: 'speech-1', type: 'speech', text: '讲稿' },
+      ],
+    };
+    mocks.readClassroom.mockResolvedValue({ ...classroom, scenes: [{ ...scene, id: 'scene-2' }, laserScene] });
+    const reordered = [
+      { ...laserScene, order: 0 },
+      { ...scene, id: 'scene-2', order: 1, actions: [{ id: 'speech-2', type: 'speech', text: '新讲稿', audioId: 'local-audio' }] },
+    ];
+    const response = await PATCH(editRequest(4, {
+      scenes: reordered,
+      audioUploads: [{
+        sceneId: 'scene-2', actionId: 'speech-2', text: '新讲稿', audioId: 'local-audio',
+        format: 'wav', base64: Buffer.from('RIFF-audio').toString('base64'),
+      }],
+    }), context);
+    expect(response.status).toBe(200);
+    expect(mocks.updateClassroom).toHaveBeenCalledWith('classroom-1', expect.objectContaining({
+      scenes: [
+        expect.objectContaining({ title: laserScene.title, order: 0,
+          actions: [expect.objectContaining({ waypoints: expect.arrayContaining(
+            Array.from({ length: 6 }, (_, index) => ({ elementId: `step-${index + 2}` })),
+          ) }), expect.anything()] }),
+        expect.objectContaining({ id: 'scene-2', order: 1,
+          actions: [expect.objectContaining({ audioUrl: expect.stringContaining('/classroom-media/classroom-1/audio/') })] }),
+      ],
+    }), 4);
   });
 
   it('updates an unpublished classroom with optimistic concurrency', async () => {
@@ -212,9 +257,15 @@ describe('teacher classroom resource route', () => {
     expect(updater(course)).toMatchObject({
       status: 'preparing',
       aiLearningClassroomId: 'classroom-1-edit-draft123',
-      content: { _openmaicClassroomId: 'classroom-1-edit-draft123' },
+      content: {
+        _openmaicClassroomId: 'classroom-1-edit-draft123',
+        teachingRevisionState: { baseClassroomRevision: 4, classroomRevision: 1 },
+      },
     });
-    await expect(response.json()).resolves.toMatchObject({ forkedDraft: true });
+    await expect(response.json()).resolves.toMatchObject({
+      forkedDraft: true,
+      dependencyInvalidation: { baseClassroomRevision: 4, classroomRevision: 1 },
+    });
   });
 
   it('preserves authorization failures before reading classroom data', async () => {

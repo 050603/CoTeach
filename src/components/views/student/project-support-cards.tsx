@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import { BookOpen, ChevronDown, ExternalLink, Globe2, Pencil, Save, Target, Trash2, X } from "lucide-react";
 import type {
   ProjectMemoryEntry,
@@ -9,6 +9,103 @@ import type {
   ProjectSupportDetails,
 } from "@/lib/ai-collaboration/project-support-types";
 import { AiMemberMarkdown } from "./ai-member-markdown";
+import styles from "./project-citations.module.css";
+
+type CitableSource = { id?: string; title: string };
+
+export function ProjectSourceNumber({ number }: { number: number }) {
+  return <span className={styles.number}>{number}</span>;
+}
+
+export function projectSourceAnchorId(scope: string, index: number): string {
+  return `project-source-${scope.replace(/[^a-zA-Z0-9_-]/g, "-")}-${index + 1}`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Convert only source IDs that the server actually returned into local links. */
+export function linkedProjectSourceIds(content: string, sources: CitableSource[], scope: string): string {
+  const citations = sources.flatMap((source, index) => source.id
+    ? [{ id: source.id, link: `[<sup>${index + 1}</sup>](#${projectSourceAnchorId(scope, index)})` }]
+    : []).sort((left, right) => right.id.length - left.id.length);
+  if (!citations.length) return content;
+  return content.split(/(```[\s\S]*?```|\[[^\]]*\]\([^)]+\))/g).map((part) => {
+    if (part.startsWith("```")) return part;
+    if (/^\[[^\]]*\]\([^)]+\)$/.test(part)) return part;
+    let linked = part;
+    for (const citation of citations) {
+      const id = escapeRegExp(citation.id);
+      linked = linked
+        .replaceAll(`[${citation.id}]`, citation.link)
+        .replaceAll(`\`${citation.id}\``, citation.link)
+        .replace(new RegExp(`${id}(?![\\w:-])`, "g"), citation.link);
+    }
+    return linked;
+  }).join("");
+}
+
+function revealProjectSource(event: MouseEvent<HTMLElement>, scope: string, sources: CitableSource[]) {
+  const element = event.target as HTMLElement;
+  const link = element.closest("a");
+  const href = link?.getAttribute("href");
+  const button = element.closest('button[data-streamdown="link"]');
+  const numberedButton = button?.querySelector("sup")?.textContent?.match(/^\d+$/);
+  const targetId = href?.startsWith("#")
+    ? href.slice(1)
+    : numberedButton ? projectSourceAnchorId(scope, Number(numberedButton[0]) - 1) : undefined;
+  if (!targetId || !sources.some((_, index) => projectSourceAnchorId(scope, index) === targetId)) return;
+  const target = document.getElementById(targetId);
+  const details = target?.closest("details");
+  if (details) details.open = true;
+  if (target) {
+    event.preventDefault();
+    if (button) event.stopPropagation();
+    target.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+    target.focus({ preventScroll: true });
+  }
+}
+
+export function ProjectCitedMarkdown({ content, sources = [], citationScope }: {
+  content: string;
+  sources?: CitableSource[];
+  citationScope: string;
+}) {
+  return (
+    <div className={styles.markdown} onClickCapture={(event) => revealProjectSource(event, citationScope, sources)}>
+      <AiMemberMarkdown content={linkedProjectSourceIds(content, sources, citationScope)} />
+    </div>
+  );
+}
+
+function SourceCitationLinks({ content, sourceIds, sources, scope }: {
+  content: string;
+  sourceIds: string[];
+  sources: CitableSource[];
+  scope: string;
+}) {
+  const ids = sourceIds.filter((id) => !content.includes(id));
+  if (!ids.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-stone-500">
+      <BookOpen aria-hidden="true" className="text-stone-400" size={12} />
+      <span className="mr-0.5">参考来源</span>
+      {ids.flatMap((id) => {
+        const index = sources.findIndex((source) => source.id === id);
+        if (index < 0) return [];
+        return [<a
+          aria-label={`查看参考 ${index + 1}：${sources[index].title}`}
+          className={`${styles.number} ${styles.numberLink}`}
+          href={`#${projectSourceAnchorId(scope, index)}`}
+          key={id}
+          onClick={(event) => revealProjectSource(event, scope, sources)}
+          title={sources[index].title}
+        >{index + 1}</a>];
+      })}
+    </div>
+  );
+}
 
 const MEMORY_LABEL: Record<ProjectMemoryKind, string> = {
   "project-goal": "项目目标",
@@ -48,22 +145,37 @@ export function projectReplyBlocksForDisplay(content: string, support?: ProjectS
   return blocks.length ? blocks : undefined;
 }
 
-export function ProjectReplyContent({ content, support }: { content: string; support?: ProjectSupportDetails }) {
+export function ProjectReplyContent({ content, support, citationScope = "reply" }: {
+  content: string;
+  support?: ProjectSupportDetails;
+  citationScope?: string;
+}) {
   const blocks = projectReplyBlocksForDisplay(content, support);
-  if (!blocks?.length) return <AiMemberMarkdown content={content} />;
+  const sources = support?.sources ?? [];
+  if (!blocks?.length) return <>
+    <ProjectCitedMarkdown citationScope={citationScope} content={content} sources={sources} />
+    <SourceCitationLinks content={content} scope={citationScope} sourceIds={sources.map((source) => source.id)} sources={sources} />
+  </>;
+  const blockSourceIds = new Set(blocks.flatMap((block) => block.sourceIds));
   return (
     <div className="min-w-0 space-y-3">
       {blocks.map((block, index) => (
         <section className={index ? "border-t border-stone-100 pt-2.5" : ""} key={`${block.type}-${index}`}>
           {BLOCK_LABEL[block.type] ? <h4 className="mb-1 text-[11px] font-semibold text-slate-600">{BLOCK_LABEL[block.type]}</h4> : null}
-          <AiMemberMarkdown content={block.content} />
+          <ProjectCitedMarkdown citationScope={citationScope} content={block.content} sources={sources} />
+          <SourceCitationLinks content={block.content} scope={citationScope} sourceIds={block.sourceIds} sources={sources} />
         </section>
       ))}
+      <SourceCitationLinks content={blocks.map((block) => block.content).join("\n")} scope={citationScope} sourceIds={sources.map((source) => source.id).filter((id) => !blockSourceIds.has(id))} sources={sources} />
     </div>
   );
 }
 
-export function ProjectSupportCard({ support, replyContent }: { support?: ProjectSupportDetails; replyContent?: string }) {
+export function ProjectSupportCard({ support, replyContent, citationScope = "reply" }: {
+  support?: ProjectSupportDetails;
+  replyContent?: string;
+  citationScope?: string;
+}) {
   if (!support) return null;
   const knowledgePoints = support.knowledgePoints ?? (support.knowledgePointIds ?? []).map((id) => ({ id, label: id }));
   const hasNextStepBlock = projectReplyBlocksForDisplay(replyContent ?? "", support)?.some((block) => block.type === "next-step") ?? false;
@@ -85,11 +197,12 @@ export function ProjectSupportCard({ support, replyContent }: { support?: Projec
             <ChevronDown className="ml-auto text-stone-400" size={13} />
           </summary>
           <div className="mt-2 space-y-2">
-            {support.sources.map((source) => (
-              <div className="rounded-md bg-white px-2.5 py-2 ring-1 ring-stone-200" key={source.id}>
+            {support.sources.map((source, index) => (
+              <div className="scroll-mt-24 rounded-md bg-white px-2.5 py-2 ring-1 ring-stone-200" id={projectSourceAnchorId(citationScope, index)} key={source.id} tabIndex={-1}>
                 <div className="flex items-start gap-1.5 font-semibold text-stone-800">
                   {source.type === "textbook" ? <BookOpen className="mt-0.5 shrink-0 text-blue-700" size={12} /> : <Globe2 className="mt-0.5 shrink-0 text-emerald-700" size={12} />}
                   <span className="min-w-0 flex-1">
+                    <span className="mr-1.5 inline-flex align-middle"><ProjectSourceNumber number={index + 1} /></span>
                     {source.url ? (
                       <a className="inline-flex items-center gap-1 hover:underline" href={source.url} rel="noreferrer" target="_blank">
                         {source.title}<ExternalLink size={10} />

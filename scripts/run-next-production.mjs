@@ -40,6 +40,10 @@ if (args[0] === "start") {
     await cp(standaloneDir, releaseDir, {
       recursive: true,
       force: true,
+      // Keep pnpm's relative links inside the immutable release. Resolving
+      // them while copying would point the live server back at .next-build,
+      // which the next build removes.
+      verbatimSymlinks: true,
       // Next's standalone trace can include local runtime data. Those files
       // are mutable and already mounted through explicit absolute paths below;
       // copying them into an immutable release races active uploads/audio.

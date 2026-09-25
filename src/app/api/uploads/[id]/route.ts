@@ -36,7 +36,7 @@ export async function GET(
   const owns = file.uploadedById === auth.claims.sub;
   const courseAccess = file.offeringId && await canAccessLegacyCourse(auth.claims, file.offeringId, 'read');
   const templateAccess = !file.offeringId && !owns && auth.claims.role === 'student' && auth.claims.sub
-    && await canReadTemplateAsset(auth.claims.sub, file.id);
+    && await canReadTemplateAsset(auth.claims.sub, file);
   const sharedTextbookFigure = auth.claims.role === "teacher" && Boolean(file.textbookFigures?.length);
   if (!owns && !templateAccess && !sharedTextbookFigure && (!courseAccess || (!file.resource && auth.claims.role !== 'teacher'))) return new Response(null, { status: 404 });
   if (file.offeringId && !courseAccess) return new Response(null, { status: 404 });

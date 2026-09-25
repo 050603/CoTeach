@@ -77,7 +77,7 @@ Briefly point at an element with a laser dot to draw attention, lighter than spo
 
 - `elementId`: ID of element to point at, **must** be from the provided element list
 - Use a stationary laser mainly for an image, diagram region, arrow, or isolated visual detail. Do not leave it over ordinary text.
-- For one explicit order, process, route, or derivation across at least three distinct rendered nodes, add `waypoints` with 2-4 more `{ "elementId": "...", "selector": {...}, "speechAnchor": {"quote":"exact spoken phrase","occurrence":0} }` targets. Every waypoint must bind to the first phrase that discusses that stage.
+- For one explicit order, process, route, or derivation across at least three distinct rendered nodes, add `waypoints` with 2-12 more `{ "elementId": "...", "selector": {...}, "speechAnchor": {"quote":"exact spoken phrase","occurrence":0} }` targets. Every waypoint must bind to the first phrase that discusses that stage.
 - A comparison of prose blocks or table rows is not a laser path; use separately timed spotlights.
 
 ### Visual action metadata

@@ -93,7 +93,8 @@ describe("new-system course contract", () => {
       expect(getNewSystemCourseReadiness(incomplete).find((check) => check.id === "timing")?.ok).toBe(false);
     }
     delete course.content.teachingTimingAudit;
-    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "timing")?.ok).toBe(false);
+    expect(getNewSystemCourseReadiness(course).find((check) => check.id === "timing"))
+      .toMatchObject({ ok: false, message: expect.stringContaining("重新核查全部音频") });
   });
 
   it("preserves the confirmed page budget even when narration duration is only advisory", () => {

@@ -1,13 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Eye, EyeOff, LoaderCircle, ArrowRight, Lock, UserRound } from "lucide-react";
 import { StudentAuthShell } from "@/components/platform/student-auth-shell";
+import { normalizeStudentRedirect } from "./login-navigation";
 
 export default function StudentLoginPage() {
-  const router = useRouter();
   const [username, setUsername] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [password, setPassword] = useState("");
@@ -29,10 +28,11 @@ export default function StudentLoginPage() {
         setError(data.message ?? "登录失败");
         return;
       }
-      if (data.enrollments?.length === 1)
-        router.push(`/student/courses/${data.enrollments[0].offeringId}`);
-      else router.push("/student");
-      router.refresh();
+      const requestedPage = normalizeStudentRedirect(new URLSearchParams(window.location.search).get("redirect"));
+      const defaultPage = data.enrollments?.length === 1
+        ? `/student/courses/${data.enrollments[0].offeringId}`
+        : "/student";
+      window.location.replace(requestedPage ?? defaultPage);
     } catch {
       setError("网络错误，请稍后重试");
     } finally {

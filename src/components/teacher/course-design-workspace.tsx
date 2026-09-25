@@ -18,6 +18,7 @@ import {
   ExternalLink,
   FileStack,
   GitBranch,
+  History,
   Layers3,
   LoaderCircle,
   Plus,
@@ -354,6 +355,7 @@ export function CourseDesignWorkspace() {
                     ? `草稿 · ${payload.pendingUpdates.length} 项待更新`
                     : "未发布草稿"}
             </span>
+            <Link className="inline-flex min-h-11 items-center gap-2 rounded-[8px] border border-stone-300 bg-white px-4 text-sm font-bold text-stone-800 hover:border-[var(--pbl-teacher)]" href={`/teacher/prepare/${encodeURIComponent(draft.id)}/versions`}><History size={16} />版本记录</Link>
             <button className="inline-flex min-h-11 items-center gap-2 rounded-[8px] border border-stone-300 bg-white px-4 text-sm font-bold text-stone-800 hover:border-[var(--pbl-teacher)]" onClick={() => navigateToHref(`/teacher/prepare/${draft.id}/preview`)} type="button"><ShieldCheck size={16} />课程发布中心</button>
           </div>
         </header>

@@ -77,3 +77,32 @@ describe('CanvasArea whiteboard restore entry', () => {
     expect(onWhiteboardClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('CanvasArea automatic page advance', () => {
+  it('hides only the center play hint while a finished slide waits to advance', () => {
+    const onPlayPause = vi.fn();
+    const { rerender, container } = render(
+      <CanvasArea
+        {...baseProps}
+        autoAdvancePending
+        onPlayPause={onPlayPause}
+        whiteboardOpen={false}
+      />,
+    );
+
+    expect(container.querySelector('[data-canvas-play-hint]')).toBeNull();
+    fireEvent.click(screen.getByText('scene'));
+    expect(onPlayPause).not.toHaveBeenCalled();
+
+    rerender(
+      <CanvasArea
+        {...baseProps}
+        autoAdvancePending={false}
+        engineState="paused"
+        onPlayPause={onPlayPause}
+        whiteboardOpen={false}
+      />,
+    );
+    expect(container.querySelector('[data-canvas-play-hint]')).not.toBeNull();
+  });
+});

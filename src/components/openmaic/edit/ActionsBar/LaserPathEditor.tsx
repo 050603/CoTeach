@@ -8,7 +8,7 @@ import { useI18n } from '@openmaic/lib/hooks/use-i18n';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@openmaic/components/ui/dialog';
 import { clearCuePreview, previewCueEffect } from './cue-preview';
 import { elementLabel } from './cue-meta';
-import { laserPathDraft, validateLaserPathDraft, type LaserPathDraft, type LaserStopDraft } from './laser-path';
+import { laserPathDraft, MAX_LASER_STOPS, validateLaserPathDraft, type LaserPathDraft, type LaserStopDraft } from './laser-path';
 import { whiteboardBlocks } from './whiteboard-edit';
 
 type SlideElement = { id: string; type: string; name?: string; content?: string };
@@ -73,7 +73,7 @@ export function LaserPathEditor({
     const element = elements.find((candidate) => !draft.stops.some((stop) => stop.elementId === candidate.id))
       ?? elements.find((candidate) => candidate.id !== previousId)
       ?? elements[0];
-    if (!element || draft.stops.length >= 5) return;
+    if (!element || draft.stops.length >= MAX_LASER_STOPS) return;
     const last = draft.stops[draft.stops.length - 1];
     const latestTimed = [...draft.stops].reverse().find((stop) => stop.mode === 'time');
     setDraft((current) => ({
@@ -191,7 +191,7 @@ export function LaserPathEditor({
               </div>
             ))}
           </div>
-          <button type="button" onClick={addStop} disabled={draft.stops.length >= 5 || elements.length === 0 || speeches.length === 0} className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-[8px] border border-dashed border-[#A9B5BB] px-3 text-sm font-medium text-[#344A6A] hover:border-[#344A6A] hover:bg-[#F0F3F4] disabled:opacity-40"><Plus size={16} />添加途经元素</button>
+          <button type="button" onClick={addStop} disabled={draft.stops.length >= MAX_LASER_STOPS || elements.length === 0 || speeches.length === 0} className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-[8px] border border-dashed border-[#A9B5BB] px-3 text-sm font-medium text-[#344A6A] hover:border-[#344A6A] hover:bg-[#F0F3F4] disabled:opacity-40"><Plus size={16} />添加途经元素</button>
           {speeches.length === 0 && <p className="mt-2 text-xs text-[#8A6422]">请先在讲解流程中添加讲稿，再设置滑动路径。</p>}
           {error && <p role="alert" className="mt-4 rounded-[8px] bg-[#FFF1E5] px-3 py-2 text-sm text-[#8A6422]">{error}</p>}
         </div>

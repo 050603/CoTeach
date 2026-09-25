@@ -56,12 +56,13 @@ describe("simplified stage resources", () => {
   });
 
   it("uses the student title card in the first stage", () => {
-    const emptyCourse = { ...course, resources: [] } as Course;
+    const emptyCourse = { ...course, resources: [], content: { stagePlan: { stages: [{ key: "launch", title: "教师教案", durationMin: 10, requirements: "仅供教师查看的要求" }] } } } as unknown as Course;
     render(<SimplifiedStudentStageView course={emptyCourse} stageKey="launch" />);
 
     expect(screen.getByRole("heading", { name: "了解项目任务，完成资料阅读" }).closest("header")?.className)
       .toContain("classroom-stage-header--student-card");
     expect(screen.getByText(/明确要解决的问题、阶段目标与协作分工/)).toBeTruthy();
+    expect(screen.queryByText(/教案要求|仅供教师查看的要求/)).toBeNull();
   });
 
   it("uses one consistent three-state reading vocabulary", () => {

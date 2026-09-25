@@ -53,7 +53,9 @@ describe("document AI collaboration policy", () => {
     expect(prompts.system).toContain("核心问题定义、关键方案决策、核心结论、最终提交");
     expect(prompts.user).toContain("编辑器中的最新实时草稿");
     expect(prompts.user).toContain("我准备先记录三天用水情况");
-    expect(prompts.user).toContain("证据质量");
+    expect(prompts.user).not.toContain("证据质量");
+    expect(prompts.user).not.toContain("权重 40");
+    expect(prompts.system).toContain("不向学生展示评分规则");
     expect(prompts.user).toContain("教学楼洗手池节水");
     expect(prompts.user).toContain("形成可验证的节水方案");
     expect(prompts.user).toContain("方案报告");

@@ -868,7 +868,6 @@ export function SimplifiedStudentStageView({
         title={stageKey === "launch" ? "了解项目任务，完成资料阅读" : "学习资料"}
         variant={stageKey === "launch" ? "student-card" : "plain"}
       />
-      <CourseStageRequirements course={course} stageKey={stageKey} expanded={stageKey === "make"} />
       {resources.length ? (
         <StageSplitLayout
           aside={(

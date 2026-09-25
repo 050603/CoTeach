@@ -1,8 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CourseStageRequirements } from "@/components/classroom/course-stage-requirements";
-import { getCourseStageRequirements } from "@/lib/resource-package/course-requirements";
 import Editor, {
   DiffEditor,
   loader,
@@ -185,7 +183,7 @@ export function CodeAiCollaboration({
   const session = useSession();
   const studentId = session.studentId ?? "";
   const stage = course?.stages[course.currentStageIndex];
-  const presence = useCoursePresence({
+  useCoursePresence({
     courseId: course?.id,
     role: "student",
     enabled: course?.status === "teaching",
@@ -199,9 +197,6 @@ export function CodeAiCollaboration({
     enabled: Boolean(course && studentId && supportedStage),
   });
   const replaceProjectMemories = projectMemory.replaceMemories;
-  const onlineCount = course
-    ? course.students.filter((student) => presence.onlineStudentIds.has(student.id)).length
-    : 0;
   const loadedScopeRef = useRef("");
   const historyScopeRef = useRef("");
   const submissionIdRef = useRef<string | undefined>(undefined);
@@ -1026,14 +1021,13 @@ export function CodeAiCollaboration({
       <DashboardTopBar
         currentCourse={{ id: course.id, name: course.name, status: course.status }}
         currentStage={{ index: course.currentStageIndex, total: course.stages.length, label: stage?.label ?? "项目实践" }}
-        currentTask={getCourseStageRequirements(course, stage?.key ?? "make")?.requirements || stage?.description}
-        headerSlot={stage ? <StudentClassroomHeaderStatus currentIndex={course.currentStageIndex} onlineCount={onlineCount} stageLabel={stage.label} total={course.stages.length} /> : undefined}
+        currentTask={stage?.description}
+        headerSlot={stage ? <StudentClassroomHeaderStatus course={course} /> : undefined}
         hideCourseSwitcher
         leadRole="学生"
         role="student"
         userName={session.studentName ?? session.user.name}
       />
-      <div className="px-3"><CourseStageRequirements course={course} stageKey={stage?.key ?? "make"} /></div>
       <header className="sticky top-16 z-[60] h-16 border-b border-[var(--pbl-border)] bg-[color-mix(in_srgb,var(--pbl-surface)_96%,transparent)] backdrop-blur-sm">
         <div className="flex h-full w-full items-center justify-between gap-3 px-2 sm:px-3 lg:px-4">
           <div className="min-w-0">

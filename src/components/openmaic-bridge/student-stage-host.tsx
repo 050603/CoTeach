@@ -45,7 +45,7 @@ import { cn } from '@/lib/utils';
 import { isStudentAiLearningScene } from '@openmaic/lib/pbl/scene-routing';
 import { estimateSpeechDurationSec } from '@openmaic/lib/audio/tts-timing';
 import type { PlaybackSyncState } from '@openmaic/components/stage-experience';
-import { isScenePlaybackExhausted } from '@openmaic/lib/playback/scene-completion';
+import { isScenePlaybackExhausted, sceneAutoAdvanceDelayMs } from '@openmaic/lib/playback/scene-completion';
 import { isPlaybackActivityComplete } from '@openmaic/lib/playback/activity-events';
 import { readSubmittedState } from '@openmaic/lib/quiz/persistence';
 import {
@@ -168,8 +168,7 @@ interface StudentStageHostProps {
   instructorIdentity?: InstructorIdentity;
   /** Keeps standalone micro lessons in a loading state until narration audio is durable. */
   requirePreparedAudio?: boolean;
-  /** Optional controlled state for the page thumbnail rail. Teacher preview
-   * uses this to open the rail without changing the student's saved setting. */
+  /** Optional controlled state for the teacher preview page thumbnail rail. */
   sidebarCollapsed?: boolean;
   onSidebarCollapsedChange?: (collapsed: boolean) => void;
   /** Parent job lifecycle changes wake a completed/failed preview without remounting it. */
@@ -389,6 +388,7 @@ export function StudentStageHost({
   const [loadingMessage, setLoadingMessage] = useState('正在加载知识讲授课堂...');
   const [activeMediaClassroomId, setActiveMediaClassroomId] = useState(classroomId);
   const [autoplaySceneId, setAutoplaySceneId] = useState<string>();
+  const adaptiveReturnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [previewStatus, setPreviewStatus] = useState<GenerationPreviewStatus>();
   const [previewSceneId, setPreviewSceneId] = useState<string>();
   const [previewSyncError, setPreviewSyncError] = useState<string>();
@@ -436,7 +436,7 @@ export function StudentStageHost({
     // The fullscreen control already prioritizes the scene canvas. Apply the
     // same default to the in-course player instead of restoring a previously
     // expanded sidebar/chat layout that can squeeze interactive scenes into a
-    // narrow viewport. Students can still reopen either panel from the canvas.
+    // narrow viewport. Students can still reopen the chat panel from the canvas.
     useSettingsStore.setState({
       sidebarCollapsed: true,
       chatAreaCollapsed: true,
@@ -999,6 +999,10 @@ export function StudentStageHost({
   const handlePlaybackStateChange = useCallback(
     (playbackState: Omit<PlaybackSyncState, 'version'>) => {
       previewPlaybackModeRef.current = playbackState.engineMode;
+      if (playbackState.engineMode === 'playing' && adaptiveReturnTimerRef.current !== null) {
+        clearTimeout(adaptiveReturnTimerRef.current);
+        adaptiveReturnTimerRef.current = null;
+      }
       if (mode !== 'student') return;
       const storeState = useStageStore.getState();
       const scene = storeState.scenes.find((item) => item.id === storeState.currentSceneId);
@@ -1012,13 +1016,22 @@ export function StudentStageHost({
           ? storeState.scenes.find((item) => item.id === adaptiveScene.openpblAdaptiveReturnSceneId)
           : storeState.scenes[sceneIndex + 1];
         if (nextScene) {
-          setAutoplaySceneId(nextScene.id);
-          queueMicrotask(() => useStageStore.getState().setCurrentSceneId(nextScene.id));
+          if (adaptiveReturnTimerRef.current !== null) clearTimeout(adaptiveReturnTimerRef.current);
+          adaptiveReturnTimerRef.current = setTimeout(() => {
+            adaptiveReturnTimerRef.current = null;
+            if (useStageStore.getState().currentSceneId !== scene.id) return;
+            setAutoplaySceneId(nextScene.id);
+            useStageStore.getState().setCurrentSceneId(nextScene.id);
+          }, sceneAutoAdvanceDelayMs(scene));
         }
       }
     },
     [mode, settleScene],
   );
+
+  useEffect(() => () => {
+    if (adaptiveReturnTimerRef.current !== null) clearTimeout(adaptiveReturnTimerRef.current);
+  }, []);
 
   // 订阅 useStageStore 的 currentSceneId 变化
   useEffect(() => {
@@ -1029,6 +1042,10 @@ export function StudentStageHost({
     unsubscribeRef.current = useStageStore.subscribe((current, previous) => {
       if (!hydratedRef.current) return;
       if (current.currentSceneId === prevSceneId) return;
+      if (adaptiveReturnTimerRef.current !== null) {
+        clearTimeout(adaptiveReturnTimerRef.current);
+        adaptiveReturnTimerRef.current = null;
+      }
       prevSceneId = current.currentSceneId;
       setPreviewSceneId(current.currentSceneId ?? undefined);
       if (
@@ -1185,6 +1202,7 @@ export function StudentStageHost({
                   <Stage
                     autoplaySceneId={autoplaySceneId}
                     experience="student-course"
+                    allowSceneDirectory={mode === 'teacher-preview'}
                     onPlaybackStateChange={handlePlaybackStateChange}
                     sidebarCollapsed={sidebarCollapsed}
                     onSidebarCollapsedChange={onSidebarCollapsedChange}

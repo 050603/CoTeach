@@ -24,7 +24,11 @@ export function getCourseStageRequirements(course: Course, stageKey: string) {
 }
 
 /** Teaching content only: never expose source files or teacher-private package text. */
-export function buildCourseStageRequirementsContext(course: Course, stageKey: string): string {
+export function buildCourseStageRequirementsContext(
+  course: Course,
+  stageKey: string,
+  options: { includeEvaluation?: boolean } = {},
+): string {
   const value = getCourseStageRequirements(course, stageKey);
   if (!value) return "";
   const bounded = (text: string) => text.trim().slice(0, 2400);
@@ -41,8 +45,8 @@ export function buildCourseStageRequirementsContext(course: Course, stageKey: st
     value.checkpoints.length ? `课次检查点：${bounded(value.checkpoints.join("\n"))}` : "",
     value.observationPoints.length ? `观察与介入：${bounded(value.observationPoints.join("\n"))}` : "",
     value.finalDeliverables.length ? `最终交付物：${value.finalDeliverables.map((item) => `${item.name}（${item.format}）：${bounded(item.requirements)}`).join("\n")}` : "",
-    value.evaluationCriteria ? `课程评价标准：${bounded(value.evaluationCriteria)}` : "",
-    value.evaluationRubric ? `正式评分：教师${value.evaluationRubric.sourceWeights.teacher}%、AI${value.evaluationRubric.sourceWeights.ai}%；维度：${value.evaluationRubric.dimensions.map((item) => `${item.name} ${item.weight}%（${bounded(item.description)}）`).join("；")}` : "",
+    options.includeEvaluation !== false && value.evaluationCriteria ? `课程评价标准：${bounded(value.evaluationCriteria)}` : "",
+    options.includeEvaluation !== false && value.evaluationRubric ? `正式评分：教师${value.evaluationRubric.sourceWeights.teacher}%、AI${value.evaluationRubric.sourceWeights.ai}%；维度：${value.evaluationRubric.dimensions.map((item) => `${item.name} ${item.weight}%（${bounded(item.description)}）`).join("；")}` : "",
     stageKey === "reflection" && value.reflectionQuestions.length ? `反思要点：${bounded(value.reflectionQuestions.join("；"))}` : "",
   ].filter(Boolean).join("\n");
 }

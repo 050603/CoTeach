@@ -31,7 +31,7 @@ describe("resource-package classroom requirements", () => {
     expect(context).toContain("计划时长：60 分钟");
     expect(context).toContain("资源包驱动问题：如何设计课程？");
     expect(context).toContain("交付要求：个人教案和理由说明");
-    expect(context).toContain("课程评价标准：用理论解释设计选择");
+    expect(context).not.toContain("课程评价标准：用理论解释设计选择");
     expect(context).not.toContain("教师私有资料原文");
     expect(context).not.toContain("教师私人提醒");
     expect(context).not.toContain("哪次修改让教学设计更适切");
@@ -42,7 +42,7 @@ describe("resource-package classroom requirements", () => {
     expect(getCourseStageRequirements({ content: {} } as Course, "make")).toBeNull();
     expect(buildCourseStageRequirementsContext({ content: {} } as Course, "make")).toBe("");
   });
-  it("includes confirmed checkpoints, final deliverables and structured grading in the AI context", () => {
+  it("keeps stage context available while omitting provisional grading from AI collaboration", () => {
     const course = resourceCourse(); const plan = course.content.stagePlan!;
     plan.stages.find((stage) => stage.key === "make")!.checkpoints = ["第3课时前完成PPT终稿"];
     plan.stages.find((stage) => stage.key === "make")!.observationPoints = ["检查学生是否核对AI给出的依据"];
@@ -54,5 +54,10 @@ describe("resource-package classroom requirements", () => {
     expect(context).toContain("个人PPT（pptx）：10页终稿");
     expect(context).toContain("教师60%、AI40%");
     expect(context).toContain("教师选取部分学生");
+    const aiContext = buildAuthoritativeCourseContext(course, "student-1", "make");
+    expect(aiContext).toContain("第3课时前完成PPT终稿");
+    expect(aiContext).not.toContain("教师60%、AI40%");
+    expect(aiContext).not.toContain("理论适切性 100%");
+    expect(aiContext).not.toContain("课程评价标准：");
   });
 });

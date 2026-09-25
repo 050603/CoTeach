@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Action, LaserAction } from '@openmaic/lib/types/action';
-import { applyLaserPathDraft, laserPathDraft, setLaserPathById, validateLaserPathDraft } from './laser-path';
+import { applyLaserPathDraft, laserPathDraft, MAX_LASER_STOPS, setLaserPathById, validateLaserPathDraft } from './laser-path';
 
 const elements = ['diagram', 'formula', 'result'];
 const speeches = [{ id: 'speech', text: '先看图示，再看公式，最后得到结果。' }];
@@ -46,6 +46,23 @@ describe('teacher laser route authoring', () => {
       ],
     });
     expect(actions[1]).toEqual({ id: 'path', type: 'laser', elementId: 'diagram' });
+  });
+
+  it('lets teachers preserve all seven steps in a generated laser path', () => {
+    const text = '先看第一步、第二步、第三步、第四步、第五步、第六步，最后看第七步。';
+    const stops = Array.from({ length: 7 }, (_, index) => ({
+      elementId: `step-${index + 1}`,
+      mode: 'time' as const,
+      offsetMs: index * 1200,
+      quote: '',
+    }));
+    const draft = { speechId: 'speech', stops };
+    expect(validateLaserPathDraft(draft, stops.map((stop) => stop.elementId), [{ id: 'speech', text }])).toBeNull();
+    expect(applyLaserPathDraft({ id: 'path', type: 'laser', elementId: 'step-1' }, draft).waypoints).toHaveLength(6);
+    expect(validateLaserPathDraft({
+      ...draft,
+      stops: Array.from({ length: MAX_LASER_STOPS + 1 }, (_, index) => ({ ...stops[0], offsetMs: index * 1200 })),
+    }, ['step-1'], [{ id: 'speech', text }])).toContain(`${MAX_LASER_STOPS}`);
   });
 
   it('rejects missing targets, unbound motion, and out-of-order triggers', () => {

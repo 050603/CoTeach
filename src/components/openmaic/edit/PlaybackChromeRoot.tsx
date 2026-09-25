@@ -59,6 +59,7 @@ import {
   type PlaybackModalBlockDetail,
 } from '@openmaic/lib/playback/activity-events';
 import { continueAfterActivityConfirmation } from '@openmaic/lib/playback/activity-continuation';
+import { sceneAutoAdvanceDelayMs } from '@openmaic/lib/playback/scene-completion';
 
 /**
  * Imperative handle exposed via `ref` so the parent (`Stage`) can tear
@@ -90,6 +91,8 @@ interface PlaybackChromeRootProps {
    * manipulations replayed. No-op for other experiences.
    */
   readonly interactionState?: Record<string, unknown> | null;
+  /** Only teacher preview can open the full directory and jump between scenes. */
+  readonly allowSceneDirectory?: boolean;
   /** When provided, controls the page-thumbnail rail without mutating the
    * persisted player preference. */
   readonly sidebarCollapsed?: boolean;
@@ -110,6 +113,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     playbackState,
     onPlaybackStateChange,
     interactionState,
+    allowSceneDirectory = false,
     sidebarCollapsed: controlledSidebarCollapsed,
     onSidebarCollapsedChange,
   }, ref) {
@@ -132,6 +136,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     const currentScene = getCurrentScene();
     const capabilities = getStageExperienceCapabilities(experience);
     const isStudentCourse = capabilities.isStudentCourse;
+    const showSceneDirectory = isStudentCourse && allowSceneDirectory;
     const isTeacherResource = capabilities.showMinimalControls;
     const isProjectedReadonly = capabilities.readOnly;
     const onPlaybackStateChangeRef = useRef(onPlaybackStateChange);
@@ -142,17 +147,18 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     // Layout state from settings store (persisted via localStorage)
     const persistedSidebarCollapsed = useSettingsStore((s) => s.sidebarCollapsed);
     const setPersistedSidebarCollapsed = useSettingsStore((s) => s.setSidebarCollapsed);
-    const sidebarCollapsed = controlledSidebarCollapsed ?? persistedSidebarCollapsed;
+    const sidebarCollapsed = !showSceneDirectory || (controlledSidebarCollapsed ?? persistedSidebarCollapsed);
     const sidebarIsControlled = controlledSidebarCollapsed !== undefined;
     const setSidebarCollapsed = useCallback((collapsed: boolean) => {
+      if (!showSceneDirectory) return;
       if (sidebarIsControlled) {
         onSidebarCollapsedChange?.(collapsed);
         return;
       }
       setPersistedSidebarCollapsed(collapsed);
-    }, [sidebarIsControlled, onSidebarCollapsedChange, setPersistedSidebarCollapsed]);
+    }, [showSceneDirectory, sidebarIsControlled, onSidebarCollapsedChange, setPersistedSidebarCollapsed]);
     useEffect(() => {
-      if (!isStudentCourse) return;
+      if (!showSceneDirectory) return;
       const narrowWindow = window.matchMedia('(max-width: 1023px)');
       const collapseOverlayOnNarrowWindow = () => {
         if (narrowWindow.matches) setSidebarCollapsed(true);
@@ -160,7 +166,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       collapseOverlayOnNarrowWindow();
       narrowWindow.addEventListener('change', collapseOverlayOnNarrowWindow);
       return () => narrowWindow.removeEventListener('change', collapseOverlayOnNarrowWindow);
-    }, [isStudentCourse, setSidebarCollapsed]);
+    }, [showSceneDirectory, setSidebarCollapsed]);
     const chatAreaWidth = useSettingsStore((s) => s.chatAreaWidth);
     const setChatAreaWidth = useSettingsStore((s) => s.setChatAreaWidth);
     const chatAreaCollapsed = useSettingsStore((s) => s.chatAreaCollapsed);
@@ -171,6 +177,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     // PlaybackEngine state
     const [engineMode, setEngineMode] = useState<EngineMode>('idle');
     const [playbackCompleted, setPlaybackCompleted] = useState(false); // Distinguishes "never played" idle from "finished" idle
+    const [autoAdvancePending, setAutoAdvancePending] = useState(false);
     const [lectureSpeech, setLectureSpeech] = useState<string | null>(null); // From PlaybackEngine (lecture)
     const [lectureCueIndex, setLectureCueIndex] = useState(-1);
     const [lectureSpeechProgress, setLectureSpeechProgress] = useState(0);
@@ -222,6 +229,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     const selectedAgentIds = useSettingsStore((s) => s.selectedAgentIds);
     const ttsMuted = useSettingsStore((s) => s.ttsMuted);
     const ttsEnabled = useSettingsStore((s) => s.ttsEnabled);
+    const autoPlayLecture = useSettingsStore((s) => s.autoPlayLecture);
 
     // Generate participants from selected agents
     const participants = useMemo(
@@ -283,15 +291,35 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     // When true, the next engine init will auto-start playback (for auto-play scene advance)
     const autoStartRef = useRef(false);
     const handledAutoplaySceneIdRef = useRef<string | null>(null);
+    const autoAdvanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const completedActivitySceneIdsRef = useRef(new Set<string>());
     const modalPlaybackBlockedRef = useRef(false);
     // Discussion buffer-level pause state (distinct from soft-pause which aborts SSE)
     const [isDiscussionPaused, setIsDiscussionPaused] = useState(false);
 
+    const clearAutoAdvanceTimer = useCallback(() => {
+      if (autoAdvanceTimerRef.current !== null) {
+        clearTimeout(autoAdvanceTimerRef.current);
+        autoAdvanceTimerRef.current = null;
+      }
+      setAutoAdvancePending(false);
+    }, []);
+
+    useEffect(() => () => {
+      if (autoAdvanceTimerRef.current !== null) clearTimeout(autoAdvanceTimerRef.current);
+    }, []);
+
     const advanceCompletedScene = useCallback((completedSceneId: string, confirmedQuiz = false) => {
-      setTimeout(() => {
+      clearAutoAdvanceTimer();
+      const completedScene = useStageStore.getState().scenes.find((scene) => scene.id === completedSceneId);
+      if (!completedScene) return;
+      setAutoAdvancePending(completedScene.type === 'slide');
+      autoAdvanceTimerRef.current = setTimeout(() => {
+        autoAdvanceTimerRef.current = null;
+        setAutoAdvancePending(false);
         if (modalPlaybackBlockedRef.current) return;
         if (!confirmedQuiz && !useSettingsStore.getState().autoPlayLecture) return;
+        if (engineRef.current && engineRef.current.getMode() !== 'idle') return;
         const stageState = useStageStore.getState();
         if (stageState.currentSceneId !== completedSceneId) return;
         const allScenes = stageState.scenes;
@@ -315,8 +343,8 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           autoStartRef.current = true;
           stageState.setCurrentSceneId(PENDING_SCENE_ID);
         }
-      }, 350);
-    }, []);
+      }, sceneAutoAdvanceDelayMs(completedScene));
+    }, [clearAutoAdvanceTimer]);
 
     useEffect(() => {
       const onComplete = (event: Event) => {
@@ -448,6 +476,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       ref,
       () => ({
         teardown: async () => {
+          clearAutoAdvanceTimer();
           await chatAreaRef.current?.endActiveSession();
           if (discussionAbortRef.current) {
             discussionAbortRef.current.abort();
@@ -458,7 +487,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           resetSceneState();
         },
       }),
-      [discussionTTS, resetSceneState],
+      [clearAutoAdvanceTimer, discussionTTS, resetSceneState],
     );
 
     const clearPresentationIdleTimer = useCallback(() => {
@@ -559,6 +588,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
     // Initialize playback engine when scene changes
     useEffect(() => {
+      clearAutoAdvanceTimer();
       // Bump epoch so any stale SSE callbacks from the previous scene are discarded
       sceneEpochRef.current++;
 
@@ -633,6 +663,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       // Create new PlaybackEngine
       const engine = new PlaybackEngine([currentScene], actionEngine, audioPlayerRef.current, {
         onModeChange: (mode) => {
+          if (mode === 'playing') clearAutoAdvanceTimer();
           setEngineMode(mode);
           queueMicrotask(() => {
             const activeEngine = engineRef.current;
@@ -1233,6 +1264,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             break;
           case 's':
           case 'S':
+            if (!showSceneDirectory) break;
             event.preventDefault();
             setSidebarCollapsed(!sidebarCollapsed);
             break;
@@ -1263,6 +1295,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       setTTSMuted,
       setTTSVolume,
       sidebarCollapsed,
+      showSceneDirectory,
       togglePresentation,
       ttsMuted,
       ttsVolume,
@@ -1326,7 +1359,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           isPresenting && !controlsVisible && 'cursor-none',
         )}
       >
-        {isStudentCourse ? <SceneSidebar
+        {showSceneDirectory ? <SceneSidebar
           collapsed={sidebarCollapsed}
           onCollapseChange={setSidebarCollapsed}
           onSceneSelect={gatedSceneSwitch}
@@ -1355,7 +1388,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
               </div>
             </div>
           ) : null}
-          {isStudentCourse && sidebarCollapsed && useSideTeachingRail ? (
+          {showSceneDirectory && sidebarCollapsed && useSideTeachingRail ? (
             <button
               aria-label="打开页面目录"
               className="absolute left-3 top-3 z-30 grid size-11 place-items-center rounded-xl border border-stone-200 bg-white/95 text-stone-700 shadow-sm hover:bg-stone-50"
@@ -1387,13 +1420,14 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
               scenesCount={totalScenesCount}
               mode={mode}
               engineState={canvasEngineState}
+              autoAdvancePending={autoAdvancePending && autoPlayLecture}
               isLiveSession={
                 chatIsStreaming || isTopicPending || engineMode === 'live' || !!chatSessionType
               }
               whiteboardOpen={whiteboardOpen}
               sidebarCollapsed={sidebarCollapsed}
               chatCollapsed={chatAreaCollapsed}
-              onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
+              onToggleSidebar={showSceneDirectory ? () => setSidebarCollapsed(!sidebarCollapsed) : undefined}
               onToggleChat={capabilities.showChat
                 ? () => setChatAreaCollapsed(!chatAreaCollapsed)
                 : undefined}
@@ -1462,6 +1496,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 activeLectureActionIndex={lectureCueIndex}
                 idleText={firstSpeechText}
                 playbackCompleted={playbackCompleted}
+                autoAdvancePending={autoAdvancePending && autoPlayLecture}
                 discussionRequest={discussionRequest}
                 engineMode={engineMode}
                 isStreaming={chatIsStreaming}
@@ -1577,7 +1612,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 whiteboardOpen={whiteboardOpen}
                 sidebarCollapsed={sidebarCollapsed}
                 chatCollapsed={chatAreaCollapsed}
-                onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
+                onToggleSidebar={showSceneDirectory ? () => setSidebarCollapsed(!sidebarCollapsed) : undefined}
                 onToggleChat={capabilities.showChat
                   ? () => setChatAreaCollapsed(!chatAreaCollapsed)
                   : undefined}

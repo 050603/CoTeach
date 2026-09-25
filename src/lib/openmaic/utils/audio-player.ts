@@ -216,7 +216,7 @@ export class AudioPlayer {
    * Resume playback
    */
   public resume(): void {
-    if (this.audio?.paused) {
+    if (this.audio?.paused && !this.audio.ended) {
       this.audio.playbackRate = this.playbackRate;
       this.audio.play().catch((error) => {
         log.error('Failed to resume audio:', error);
@@ -236,7 +236,7 @@ export class AudioPlayer {
    * Used to decide whether to resume playback or skip to the next line
    */
   public hasActiveAudio(): boolean {
-    return this.audio !== null;
+    return this.audio !== null && !this.audio.ended;
   }
 
   /**

@@ -1,5 +1,6 @@
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
+import { MAX_LASER_WAYPOINTS } from '@openmaic/dsl';
 import { ACTION_DESCRIPTIONS } from './tool-schemas';
 
 const empty = z.object({});
@@ -46,7 +47,7 @@ const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
   laser: z.object({
     elementId,
     selector: visualSelector.optional(),
-    waypoints: z.array(laserWaypoint).min(1).max(4).optional(),
+    waypoints: z.array(laserWaypoint).min(1).max(MAX_LASER_WAYPOINTS).optional(),
     color: z.string().optional(),
     duration: z.number().positive().max(10_000).optional(),
   }),

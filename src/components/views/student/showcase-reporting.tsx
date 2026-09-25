@@ -17,7 +17,6 @@ import type {
 } from "@/lib/session/types";
 import { useShowcasePresentation } from "@/hooks/use-showcase-presentation";
 import type { ShowcaseQueueItemStatus } from "@/lib/showcase/types";
-import { CourseStageRequirements } from "@/components/classroom/course-stage-requirements";
 import { FinalArtifactSubmission } from "./final-artifact-submission";
 
 function artifactLabel(artifact: FinalArtifactSummary): string {
@@ -104,7 +103,6 @@ export function NewShowcaseStudentView({ course }: { course: Course }) {
         title="成果汇报"
         variant="student-card"
       />
-      <CourseStageRequirements course={course} stageKey="showcase" expanded />
       <FinalArtifactSubmission course={course} onSubmitted={reload} variant="showcase" />
 
       {(error || localError) ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700" role="alert"><span>{localError ?? error}</span><button aria-label="重试读取汇报状态" className="inline-flex min-h-11 items-center rounded-[var(--radius-xs)] border border-rose-300 px-3 font-semibold text-rose-800 hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700" onClick={() => { setLocalError(undefined); void reload(); }} type="button">重试</button></div> : null}

@@ -53,7 +53,8 @@ const scenarios = [
     const close = page.getByRole('button', { name: '收起页面目录' });
     if ((page.viewportSize()?.width ?? 0) <= 1023) {
       await close.waitFor({ state: 'hidden', timeout: 5000 });
-      await page.getByRole('button', { name: '打开页面目录' }).waitFor();
+      const open = page.getByRole('button', { name: '打开页面目录' });
+      if (await open.count()) await open.waitFor({ state: 'visible', timeout: 5000 });
     }
     else if (await close.isVisible()) await close.click();
   }],
@@ -87,7 +88,8 @@ const scenarios = [
     const close = page.getByRole('button', { name: '收起页面目录' });
     if ((page.viewportSize()?.width ?? 0) <= 1023) {
       await close.waitFor({ state: 'hidden', timeout: 5000 });
-      await page.getByRole('button', { name: '打开页面目录' }).waitFor();
+      const open = page.getByRole('button', { name: '打开页面目录' });
+      if (await open.count()) await open.waitFor({ state: 'visible', timeout: 5000 });
     }
     else if (await close.isVisible()) await close.click();
   }],

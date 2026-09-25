@@ -115,6 +115,9 @@ export interface SpotlightAction extends ActionBase {
   dimOpacity?: number; // default 0.5
 }
 
+/** Maximum number of stops after the laser's initial target. */
+export const MAX_LASER_WAYPOINTS = 12;
+
 /** Laser — point at an element with a laser effect */
 export interface LaserAction extends ActionBase {
   type: 'laser';

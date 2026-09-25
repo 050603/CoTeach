@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ProjectMemoryPanel, ProjectReplyContent, ProjectSupportCard } from "./project-support-cards";
+import { linkedProjectSourceIds, ProjectMemoryPanel, ProjectReplyContent, ProjectSupportCard, projectSourceAnchorId } from "./project-support-cards";
 
 describe("project support cards", () => {
   it("shows textbook evidence, web evidence, knowledge links, and the next verification step", () => {
@@ -37,6 +37,43 @@ describe("project support cards", () => {
     expect(screen.getByText("现状分析")).toBeInTheDocument();
     expect(screen.getByText("建议做法")).toBeInTheDocument();
     expect(screen.queryByText(/观察：/)).not.toBeInTheDocument();
+  });
+
+  it("links a known textbook ID to its collapsed source and keeps code intact", () => {
+    const source = { id: "textbook:item-123", type: "textbook" as const, title: "软件测试基础", locator: "第三章", excerpt: "边界值分析" };
+    const support = {
+      sources: [source], knowledgePointIds: [], knowledgePoints: [], retrievalStatus: "textbook-supported" as const,
+    };
+    render(<><ProjectReplyContent citationScope="message-1" content="依据 textbook:item-123，先检查边界。" support={support} /><ProjectSupportCard citationScope="message-1" support={support} /></>);
+    expect(screen.queryByText(/textbook:item-123/)).not.toBeInTheDocument();
+    const citation = screen.getByRole("button", { name: "1" });
+    expect(citation.querySelector("sup")).toBeInTheDocument();
+    const sourceCard = document.getElementById(projectSourceAnchorId("message-1", 0));
+    const details = sourceCard?.closest("details");
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(sourceCard, "scrollIntoView", { value: scrollIntoView });
+    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(citation);
+    expect(details).toHaveAttribute("open");
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "nearest" });
+    expect(linkedProjectSourceIds("```text\ntextbook:item-123\n```\ntextbook:invented", [source], "message-1"))
+      .toBe("```text\ntextbook:item-123\n```\ntextbook:invented");
+    expect(linkedProjectSourceIds("textbook:item-1234", [source], "message-1")).toBe("textbook:item-1234");
+    expect(linkedProjectSourceIds("参见 web:0:https://example.com/a?x=1", [{ id: "web:0:https://example.com/a?x=1", title: "网页" }], "message-1"))
+      .toContain(`[<sup>1</sup>](#${projectSourceAnchorId("message-1", 0)})`);
+  });
+
+  it("adds a compact citation link when a reply block uses a source without printing its ID", () => {
+    const support = {
+      sources: [{ id: "textbook:one", type: "textbook" as const, title: "课程教材", excerpt: "教材片段" }],
+      knowledgePointIds: [], knowledgePoints: [], retrievalStatus: "textbook-supported" as const,
+      replyBlocks: [{ type: "answer" as const, content: "先记录两个边界输入。", sourceIds: ["textbook:one"] }],
+    };
+    render(<><ProjectReplyContent citationScope="message-2" content="先记录两个边界输入。" support={support} /><ProjectSupportCard citationScope="message-2" support={support} /></>);
+    const citation = screen.getByRole("link", { name: "查看参考 1：课程教材" });
+    expect(citation).toHaveAttribute("href", `#${projectSourceAnchorId("message-2", 0)}`);
+    fireEvent.click(citation);
+    expect(document.getElementById(projectSourceAnchorId("message-2", 0))?.closest("details")).toHaveAttribute("open");
   });
 
   it("lets the student correct a remembered item", () => {

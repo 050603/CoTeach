@@ -24,9 +24,8 @@ import type {
   DocumentCollaborationResponse,
 } from "@/lib/ai-collaboration/document-policy";
 import { cn } from "@/lib/utils";
-import { AiMemberMarkdown } from "./ai-member-markdown";
 import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
-import { ProjectMemoryPanel, ProjectReplyContent, ProjectSupportCard } from "./project-support-cards";
+import { ProjectCitedMarkdown, ProjectMemoryPanel, ProjectReplyContent, ProjectSourceNumber, ProjectSupportCard, projectSourceAnchorId } from "./project-support-cards";
 
 export type AiMemberWorkspaceMessage = {
   id: string;
@@ -264,7 +263,7 @@ export function AiMemberWorkspace({
                 </span>
               </div>
               {message.role === "assistant" ? (
-                <><ProjectReplyContent content={message.content} support={message.support} /><ProjectSupportCard replyContent={message.content} support={message.support} /></>
+                <><ProjectReplyContent citationScope={`document-${message.id}`} content={message.content} support={message.support} /><ProjectSupportCard citationScope={`document-${message.id}`} replyContent={message.content} support={message.support} /></>
               ) : (
                 <p className="whitespace-pre-wrap">{message.content}</p>
               )}
@@ -327,7 +326,7 @@ export function AiMemberWorkspace({
               <div className="space-y-2.5 p-3">
                 <div className="max-h-72 overflow-y-auto rounded-lg border border-stone-200 bg-stone-50 px-3 py-2.5">
                   <div className="prose prose-sm max-w-none text-stone-800 prose-headings:mb-2 prose-headings:mt-3 prose-p:my-2 prose-li:my-0.5 prose-table:text-xs prose-th:bg-stone-100 prose-th:p-2 prose-td:p-2">
-                    <AiMemberMarkdown content={pendingDelivery.content} />
+                    <ProjectCitedMarkdown citationScope="document-pending-delivery" content={pendingDelivery.content} sources={pendingDelivery.sources} />
                   </div>
                 </div>
 
@@ -342,8 +341,8 @@ export function AiMemberWorkspace({
                           {source.note ? <span className="mt-0.5 block line-clamp-2 text-[10px] leading-4 text-stone-500">{source.note}</span> : null}
                         </>;
                         return source.url
-                          ? <a className="block rounded-lg bg-stone-50 px-2.5 py-2 text-xs text-stone-700 transition hover:bg-stone-100" href={source.url} key={source.id ?? source.url} rel="noreferrer" target="_blank">{sourceContent}</a>
-                          : <div className="rounded-lg bg-stone-50 px-2.5 py-2 text-xs text-stone-700" key={source.id ?? index}>{sourceContent}</div>;
+                          ? <a className="flex scroll-mt-24 items-start gap-2 rounded-lg bg-stone-50 px-2.5 py-2 text-xs text-stone-700 transition hover:bg-stone-100" href={source.url} id={projectSourceAnchorId("document-pending-delivery", index)} key={source.id ?? source.url} rel="noreferrer" target="_blank"><ProjectSourceNumber number={index + 1} /><span className="min-w-0 flex-1">{sourceContent}</span></a>
+                          : <div className="flex scroll-mt-24 items-start gap-2 rounded-lg bg-stone-50 px-2.5 py-2 text-xs text-stone-700" id={projectSourceAnchorId("document-pending-delivery", index)} key={source.id ?? index} tabIndex={-1}><ProjectSourceNumber number={index + 1} /><span className="min-w-0 flex-1">{sourceContent}</span></div>;
                       })}
                     </div>
                   </div>

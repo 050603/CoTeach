@@ -1,4 +1,7 @@
 import type { Action, LaserAction, VisualTargetSelector } from '@openmaic/lib/types/action';
+import { MAX_LASER_WAYPOINTS } from '@openmaic/dsl';
+
+export const MAX_LASER_STOPS = MAX_LASER_WAYPOINTS + 1;
 
 export interface LaserStopDraft {
   elementId: string;
@@ -54,7 +57,7 @@ export function validateLaserPathDraft(
   elementIds: readonly string[],
   speeches: readonly { id: string; text: string }[],
 ): string | null {
-  if (draft.stops.length < 1 || draft.stops.length > 5) return '激光路径需要 1 至 5 个目标。';
+  if (draft.stops.length < 1 || draft.stops.length > MAX_LASER_STOPS) return `激光路径需要 1 至 ${MAX_LASER_STOPS} 个目标。`;
   const validElements = new Set(elementIds);
   if (draft.stops.some((stop) => !validElements.has(stop.elementId))) return '请为每一步选择本页的元素。';
   if (draft.stops.length === 1 && !draft.speechId && draft.stops[0].mode === 'time') return null;

@@ -58,6 +58,7 @@ const renderedStage = vi.hoisted(() => ({
   prepare: undefined as ((sceneId: string) => Promise<boolean>) | undefined,
   props: null as null | {
     autoplaySceneId?: string;
+    allowSceneDirectory?: boolean;
     onPlaybackStateChange?: (state: {
       engineMode: "idle" | "playing" | "paused" | "live";
       snapshot: { sceneIndex: number; actionIndex: number; consumedDiscussions: string[]; sceneId?: string };
@@ -222,6 +223,14 @@ describe("StudentStageHost reporting modes", () => {
     cleanup();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it.each([
+    { mode: "student" as const, allowSceneDirectory: false },
+    { mode: "teacher-preview" as const, allowSceneDirectory: true },
+  ])("sets scene directory access for $mode", async ({ mode, allowSceneDirectory }) => {
+    render(<StudentStageHost backHref="#" classroomId="classroom-1" mode={mode} />);
+    await waitFor(() => expect(renderedStage.props?.allowSceneDirectory).toBe(allowSceneDirectory));
   });
 
   it("updates same-ID assets, preserves the selected page, and stops polling when generation ends", async () => {
@@ -510,6 +519,7 @@ describe("StudentStageHost reporting modes", () => {
       openpblAdaptiveReturnSceneId: "scene-2",
     });
 
+    vi.useFakeTimers();
     await act(async () => {
       renderedStage.props?.onPlaybackStateChange?.({
         engineMode: "idle",
@@ -522,10 +532,11 @@ describe("StudentStageHost reporting modes", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(stageMock.state.currentSceneId).toBe("scene-2");
-      expect(renderedStage.props?.autoplaySceneId).toBe("scene-2");
-    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_999); });
+    expect(stageMock.state.currentSceneId).toBe("adaptive:run-after-quiz:resource-1");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(stageMock.state.currentSceneId).toBe("scene-2");
+    expect(renderedStage.props?.autoplaySceneId).toBe("scene-2");
   });
 
   it("teacher preview never reads or writes student progress or telemetry", async () => {

@@ -66,7 +66,7 @@ describe('V2 FileAsset routes', () => {
     for (const suffix of ['', '?variant=classroom']) {
       expect((await GET(new Request(`http://localhost/api/uploads/${id}${suffix}`), context)).status).toBe(404);
     }
-    expect(mocks.templateAccess).toHaveBeenCalledWith('student-1', id);
+    expect(mocks.templateAccess).toHaveBeenCalledWith('student-1', expect.objectContaining({ id }));
     expect(mocks.access).not.toHaveBeenCalled();
   });
   it('serves the package launch PDF through its explicitly published template resource', async () => {

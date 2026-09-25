@@ -14,6 +14,7 @@ import {
   Eye,
   FlaskConical,
   Gauge,
+  History,
   Layers3,
   MonitorPlay,
   PlayCircle,
@@ -156,6 +157,8 @@ export default function PreviewCoursePage() {
   const [continuingFullCourse, setContinuingFullCourse] = useState(false);
   const [publicationState, setPublicationState] = useState<PublicationState | null>(null);
   const [reviewSummary, setReviewSummary] = useState<CourseQualityReviewSummary | null>(null);
+  const [checkingTiming, setCheckingTiming] = useState(false);
+  const [timingAuditError, setTimingAuditError] = useState("");
 
   useEffect(() => {
     if (!params?.id) return;
@@ -428,6 +431,36 @@ export default function PreviewCoursePage() {
     }
   }
 
+  async function recheckAudioTiming() {
+    if (checkingTiming) return;
+    setCheckingTiming(true);
+    setTimingAuditError("");
+    try {
+      const response = await fetch(`/api/courses/${courseId}/timing-audit`, { method: "POST" });
+      const payload = await response.json() as {
+        audit?: Course["content"]["teachingTimingAudit"];
+        error?: string;
+      };
+      if (!response.ok || !payload.audit) throw new Error(payload.error || "音频时长核查失败");
+      await session.refresh("teacher");
+      if (payload.audit.complete) {
+        toast.success("全部音频时长已重新核查", {
+          description: "请查看实测总时长与教案目标，再决定发布或继续修改。",
+        });
+      } else {
+        toast.warning("仍有音频未完成", {
+          description: `已测量 ${payload.audit.measuredSegmentCount}/${payload.audit.narrationSegmentCount} 段，请补齐后重新核查。`,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "请稍后重试";
+      setTimingAuditError(message);
+      toast.error("音频时长核查失败", { description: message });
+    } finally {
+      setCheckingTiming(false);
+    }
+  }
+
   async function repairSpeechSynchronization() {
     setSpeechSyncStatus({ status: "running", completed: 0, total: 0, failed: 0 });
     try {
@@ -530,6 +563,7 @@ export default function PreviewCoursePage() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 lg:ml-auto lg:justify-end">
+              <Link className={buttonVariants({ variant: "outline", className: "min-h-11" })} href={`/teacher/prepare/${encodeURIComponent(course.id)}/versions`}><History size={15} />版本记录</Link>
               <Link className={buttonVariants({ variant: "outline", className: "min-h-11" })} href={courseDetailedEditHref(course.id)}><Edit3 size={15} />编辑课程设计</Link>
               {classroomId ? <Link className={buttonVariants({ variant: "outline", className: "min-h-11" })} href={`/teacher/prepare/${course.id}/classroom-editor`}><Presentation size={15} />编辑 AI 课堂</Link> : null}
               <Button
@@ -638,12 +672,20 @@ export default function PreviewCoursePage() {
             auditError={resourceAuditError}
             checks={prerequisitePublishChecks}
             course={course}
+            checkingTiming={checkingTiming}
+            timingAuditError={timingAuditError}
+            isPublished={isPublished}
+            isTestLesson={isTestLesson}
             missingResourceIssues={missingResourceIssues}
             onOpenReview={() => selectView("checks")}
+            onPublish={() => void publish()}
+            onRecheckTiming={() => void recheckAudioTiming()}
             onRepairResources={() => void retryMissingResources()}
             onRepairSpeech={() => void repairSpeechSynchronization()}
             onRetryAudit={() => setResourceRepairVersion((value) => value + 1)}
             repairStatus={resourceRepairStatus}
+            publishing={publishing}
+            readyToPublish={readyToPublish}
             reviewRequired={reviewRequired}
             reviewSummary={reviewSummary}
             speechStatus={speechSyncStatus}
@@ -673,7 +715,7 @@ export default function PreviewCoursePage() {
             {continuingFullCourse ? "正在启动完整课程" : "继续生成完整课程"}
           </Button>
         ) : !isPublished ? (
-          <Button disabled={!readyToPublish || publishing} loading={publishing} onClick={() => void publish()}>{reviewRequired ? "确认并发布" : "发布课程"}</Button>
+          <Button disabled={!readyToPublish || publishing} loading={publishing} onClick={() => void publish()}>{course.content.teachingTimingAudit?.complete && course.content.teachingTimingAudit.narrationDurationSource === "actual-audio" ? "按核查时长确认并发布" : reviewRequired ? "确认并发布" : "发布课程"}</Button>
         ) : (
           <Button onClick={() => router.push(`/teacher/teach/${course.id}/setup`)}>开始授课</Button>
         )}
@@ -886,36 +928,62 @@ function PublicationStatusRail({
   auditError,
   auditLoaded,
   checks,
+  checkingTiming,
   course,
+  isPublished,
+  isTestLesson,
   missingResourceIssues,
   onOpenReview,
+  onPublish,
+  onRecheckTiming,
   onRepairResources,
   onRepairSpeech,
   onRetryAudit,
+  publishing,
+  readyToPublish,
   repairStatus,
   reviewRequired,
   reviewSummary,
   speechStatus,
   speechSyncIssues,
+  timingAuditError,
 }: {
   auditError: string;
   auditLoaded: boolean;
   checks: PublishCheck[];
+  checkingTiming: boolean;
   course: Course;
+  isPublished: boolean;
+  isTestLesson: boolean;
   missingResourceIssues: ResourceRepairIssue[];
   onOpenReview: () => void;
+  onPublish: () => void;
+  onRecheckTiming: () => void;
   onRepairResources: () => void;
   onRepairSpeech: () => void;
   onRetryAudit: () => void;
+  publishing: boolean;
+  readyToPublish: boolean;
   repairStatus: ResourceRepairStatus;
   reviewRequired: boolean;
   reviewSummary: CourseQualityReviewSummary | null;
   speechStatus: ResourceRepairStatus;
   speechSyncIssues: ResourceRepairIssue[];
+  timingAuditError: string;
 }) {
   const hasClassroom = Boolean(course.aiLearningClassroomId || course.content._openmaicClassroomId);
   const timing = course.content.moduleTimingPlan;
   const timingAudit = course.content.teachingTimingAudit;
+  const measuredAudioSec = timingAudit
+    ? timingAudit.substantiveTeachingDurationSec + timingAudit.assessmentAudioDurationSec
+    : 0;
+  const missingAudioCount = timingAudit?.narrationDurationSource === "actual-audio"
+    ? Math.max(0, timingAudit.narrationSegmentCount - timingAudit.measuredSegmentCount)
+    : 0;
+  const teachingDifferenceSec = timingAudit
+    ? timingAudit.substantiveTeachingDurationSec - timingAudit.plannedSubstantiveTeachingSec
+    : 0;
+  const plannedTeachingSec = timingAudit?.plannedSubstantiveTeachingSec ?? 0;
   const savedReview = course.content.teacherReview;
   const reviewStatus = savedReview || reviewSummary?.status === "confirmed" ? "confirmed"
     : reviewSummary?.status ?? "loading";
@@ -962,7 +1030,7 @@ function PublicationStatusRail({
         <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-black text-stone-950">还需完成 {incompleteChecks.length} 项</h2><StatusBadge tone="warning">影响发布</StatusBadge></div>
         <ul className="mt-3 divide-y divide-amber-200/70">{incompleteChecks.map((item) => {
           const section = item.id === "design-workspace-freshness" ? course.content.designWorkspaceRevision?.pendingUpdates[0]?.target ?? "classroom" : PUBLISH_SECTION_BY_CHECK[item.id];
-          return <li className="py-2.5 first:pt-0 last:pb-0" key={item.id}><p className="text-xs font-bold text-stone-950">{item.label}</p><p className="mt-0.5 text-[11px] leading-5 text-stone-600">{item.detail}</p>{section ? <Link className="mt-1 inline-flex min-h-8 items-center gap-1 text-[11px] font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=${section}`}>定位并修改 <ArrowRight size={11} /></Link> : null}</li>;
+          return <li className="py-2.5 first:pt-0 last:pb-0" key={item.id}><p className="text-xs font-bold text-stone-950">{item.label}</p><p className="mt-0.5 text-[11px] leading-5 text-stone-600">{item.detail}</p>{item.id === "timing" && hasClassroom && !timingAudit ? <Button className="mt-2 min-h-9 w-full" disabled={checkingTiming} loading={checkingTiming} onClick={onRecheckTiming} variant="outline" type="button"><RotateCcw size={13} />重新核查全部音频</Button> : null}{section ? <Link className="mt-1 inline-flex min-h-8 items-center gap-1 text-[11px] font-bold text-[var(--pbl-teacher)] hover:underline" href={`${courseDetailedEditHref(course.id)}?section=${section}`}>定位并修改 <ArrowRight size={11} /></Link> : null}</li>;
         })}</ul>
       </section> : null}
 
@@ -976,13 +1044,34 @@ function PublicationStatusRail({
         {reviewRequired ? <button className="mt-1 min-h-9 text-xs font-bold text-[var(--pbl-teacher)] hover:underline" onClick={onOpenReview} type="button">打开检查与终审</button> : null}
       </section>}
 
-      <section className="rounded-[12px] border border-stone-200 bg-white px-4 py-3">
-        <h2 className="text-sm font-bold text-stone-900">讲授时长</h2>
-        <dl className="mt-2 grid grid-cols-2 gap-3">
-          <div><dt className="text-[11px] text-stone-500">教案规划</dt><dd className="mt-1 text-sm font-bold text-stone-900">{timing ? `${timing.totalMinutes} 分钟` : "未规划"}</dd></div>
-          <div><dt className="text-[11px] text-stone-500">讲授音频</dt><dd className="mt-1 text-sm font-bold text-stone-900">{timingAudit ? secondsLabel(timingAudit.substantiveTeachingDurationSec) : "待测量"}</dd></div>
+      <section className="rounded-[12px] border border-stone-200 bg-white px-4 py-4" aria-label="课程音频时长核查">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-stone-900">全课音频时长核查</h2>
+          <StatusBadge tone={!timingAudit || !timingAudit.complete ? "warning" : timingAudit.narrationDurationSource === "estimated-script" ? "neutral" : timingAudit.teachingRatioValid ? "success" : "warning"}>
+            {!timingAudit ? "待核查" : !timingAudit.complete ? "音频未齐" : timingAudit.narrationDurationSource === "estimated-script" ? "讲稿估算" : timingAudit.teachingRatioValid ? "已核查" : "时长有偏差"}
+          </StatusBadge>
+        </div>
+        <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-3">
+          <div><dt className="text-[11px] text-stone-500">{missingAudioCount ? "已测音频合计" : "全部音频合计"}</dt><dd className="mt-1 text-sm font-bold text-stone-900">{timingAudit?.narrationDurationSource === "actual-audio" ? secondsLabel(measuredAudioSec) : "待测量"}</dd></div>
+          <div><dt className="text-[11px] text-stone-500">AI 阶段总预算</dt><dd className="mt-1 text-sm font-bold text-stone-900">{timing ? `${timing.totalMinutes} 分钟` : "未规划"}</dd></div>
+          <div><dt className="text-[11px] text-stone-500">讲授音频 / 教案讲授目标</dt><dd className="mt-1 text-sm font-bold text-stone-900">{timingAudit ? `${secondsLabel(timingAudit.substantiveTeachingDurationSec)} / ${plannedTeachingSec > 0 ? secondsLabel(plannedTeachingSec) : "未单列"}` : "待核查"}</dd></div>
+          <div><dt className="text-[11px] text-stone-500">小测音频</dt><dd className="mt-1 text-sm font-bold text-stone-900">{timingAudit?.narrationDurationSource === "actual-audio" ? secondsLabel(timingAudit.assessmentAudioDurationSec) : "待测量"}</dd></div>
         </dl>
-        <p className="mt-1 text-[11px] leading-5 text-stone-500">{timingAudit?.narrationDurationSource === "actual-audio" ? "音频时长来自实际语音。" : timingAudit ? "当前按讲稿估算。" : "生成音频后更新实际时长。"}</p>
+        {timingAudit?.narrationDurationSource === "actual-audio" ? <p className={cn("mt-3 text-[11px] leading-5", missingAudioCount || !timingAudit.teachingRatioValid ? "text-amber-800" : "text-stone-600")}>
+          {missingAudioCount
+            ? `已测量 ${timingAudit.measuredSegmentCount}/${timingAudit.narrationSegmentCount} 段音频，还有 ${missingAudioCount} 段需要补齐。`
+            : plannedTeachingSec > 0
+              ? `已测量全部 ${timingAudit.narrationSegmentCount} 段音频；讲授部分较教案目标${Math.abs(teachingDifferenceSec) < 0.5 ? "相同" : `${teachingDifferenceSec > 0 ? "多" : "少"} ${secondsLabel(Math.abs(teachingDifferenceSec))}`}（偏差 ${Math.round(Math.abs(teachingDifferenceSec) / plannedTeachingSec * 100)}%）。`
+              : `已测量全部 ${timingAudit.narrationSegmentCount} 段音频；教案未单列讲授音频目标。`}
+        </p> : <p className="mt-3 text-[11px] leading-5 text-stone-600">{timingAudit ? "当前未启用语音，讲授时长按教案估算。" : "编辑课堂后，请重新核查最新音频时长。"}</p>}
+        <p className="mt-1 text-[11px] leading-5 text-stone-500">AI 阶段总预算还包含学生阅读、互动和页面切换时间。</p>
+        {timingAuditError ? <p className="mt-2 text-xs text-rose-700" role="alert">{timingAuditError}</p> : null}
+        {hasClassroom ? <Button className="mt-3 min-h-11 w-full" disabled={checkingTiming} loading={checkingTiming} onClick={onRecheckTiming} variant="outline" type="button"><RotateCcw size={14} />{checkingTiming ? "正在核查全部音频" : "重新核查全部音频"}</Button> : null}
+        {timingAudit?.complete && timingAudit.narrationDurationSource === "actual-audio" && !isPublished && !isTestLesson ? <div className="mt-3 grid gap-2">
+          <Button className="min-h-11 w-full" disabled={!readyToPublish || publishing} loading={publishing} onClick={onPublish} type="button">按核查时长确认并发布</Button>
+          {!readyToPublish ? <p className="text-[11px] leading-5 text-stone-500">完成其他发布条件后，即可按本次核查结果发布。</p> : null}
+          <Link className="inline-flex min-h-9 items-center justify-center text-xs font-bold text-[var(--pbl-teacher)] hover:underline" href={`/teacher/prepare/${course.id}/classroom-editor`}>继续修改音频与页面</Link>
+        </div> : hasClassroom ? <Link className="mt-2 inline-flex min-h-9 w-full items-center justify-center text-xs font-bold text-[var(--pbl-teacher)] hover:underline" href={`/teacher/prepare/${course.id}/classroom-editor`}>返回课堂编辑</Link> : null}
       </section>
 
       <PublishReadiness checks={checks} />

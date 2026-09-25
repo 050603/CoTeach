@@ -157,6 +157,49 @@ describe('long subtitle paging', () => {
 });
 
 describe('teaching rail layout', () => {
+  it('keeps the lower playback control available during automatic page advance', () => {
+    const onPlayPause = vi.fn();
+    const props = {
+      activeActionIndex: 0,
+      autoPlay: true,
+      canGoNext: true,
+      canGoNextCue: false,
+      canGoPrevious: false,
+      canGoPreviousCue: false,
+      cues: [{ actionIndex: 0, text: '本页内容。' }],
+      currentText: '本页内容。',
+      engineMode: 'idle' as const,
+      muted: false,
+      onCycleSpeed: vi.fn(),
+      onPlayPause,
+      onToggleAutoPlay: vi.fn(),
+      onToggleMute: vi.fn(),
+      playbackCompleted: true,
+      playbackSpeed: 1,
+      sceneIndex: 0,
+      scenesCount: 2,
+      teacherAvatar: '/teacher.webp',
+      teacherName: '知知',
+    };
+    const { rerender } = render(
+      <TeachingKnowledgeGraphProvider graph={undefined} points={[]}>
+        <LectureSubtitleDock {...props} autoAdvancePending />
+      </TeachingKnowledgeGraphProvider>,
+    );
+
+    expect(screen.getByText('即将播放下一页')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '继续讲解' })).toBeInTheDocument();
+    expect(onPlayPause).not.toHaveBeenCalled();
+
+    rerender(
+      <TeachingKnowledgeGraphProvider graph={undefined} points={[]}>
+        <LectureSubtitleDock {...props} autoAdvancePending={false} engineMode="paused" playbackCompleted={false} />
+      </TeachingKnowledgeGraphProvider>,
+    );
+    expect(screen.getByText('讲解已暂停')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '继续讲解' })).toBeInTheDocument();
+  });
+
   it('moves the subtitle viewport when speech advances to the next sentence', () => {
     const sharedProps = {
       activeActionIndex: 0,

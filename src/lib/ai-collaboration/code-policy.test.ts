@@ -18,7 +18,7 @@ const course = {
   stages: [{ key: "make", label: "项目实践", description: "实现并测试项目成果" }],
   currentStageIndex: 0,
   students: [{ id: "student-1", name: "小林" }],
-  content: {},
+  content: { evaluationPlan: { dimensions: [{ name: "代码质量", weight: 40 }], overallRubric: "满分100分" } },
 } as unknown as Course;
 
 describe("code collaboration policy", () => {
@@ -39,6 +39,9 @@ describe("code collaboration policy", () => {
     expect(prompts.user).toContain("main.py");
     expect(prompts.user).toContain("NameError");
     expect(prompts.system).toContain("不得虚构已经运行");
+    expect(prompts.user).not.toContain("代码质量（权重 40）");
+    expect(prompts.user).not.toContain("满分100分");
+    expect(prompts.system).toContain("不向学生展示评分规则");
   });
 
   it("normalizes a multi-file proposal without losing code indentation", () => {

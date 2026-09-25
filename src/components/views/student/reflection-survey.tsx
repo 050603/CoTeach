@@ -27,7 +27,6 @@ import {
   reflectionToLegacyContent,
 } from "@/lib/reflection-survey";
 import { StagePageHeader } from "@/components/classroom/classroom-ui";
-import { CourseStageRequirements } from "@/components/classroom/course-stage-requirements";
 
 type SurveyFields = {
   learningReflection: string;
@@ -250,7 +249,6 @@ function LegacyReflectionStudentView({ course }: { course: Course }) {
         title="学习反思"
         variant="student-card"
       />
-      <CourseStageRequirements course={course} stageKey="reflection" expanded />
 
       <section className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <Card className="border-[var(--pbl-student-border)] shadow-sm">

@@ -15,7 +15,7 @@
  * each field's value shape. Both describe the same contract. No runtime
  * dependencies.
  */
-import { isActionType } from './action.js';
+import { isActionType, MAX_LASER_WAYPOINTS } from './action.js';
 import type { ActionType } from './action.js';
 import { isWidgetType } from './interactive.js';
 import { isPBLProject } from './pbl.js';
@@ -476,10 +476,10 @@ function checkAction(doc: unknown, path: string, errors: ValidationIssue[]): voi
       });
     }
     if (doc.type === 'laser' && doc.waypoints !== undefined) {
-      if (!Array.isArray(doc.waypoints) || doc.waypoints.length < 1 || doc.waypoints.length > 4) {
+      if (!Array.isArray(doc.waypoints) || doc.waypoints.length < 1 || doc.waypoints.length > MAX_LASER_WAYPOINTS) {
         errors.push({
           path: `${path}/waypoints`,
-          message: 'laser action field `waypoints` must contain 1 to 4 targets',
+          message: `laser action field \`waypoints\` must contain 1 to ${MAX_LASER_WAYPOINTS} targets`,
         });
       } else {
         doc.waypoints.forEach((waypoint, index) => {

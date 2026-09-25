@@ -30,7 +30,7 @@ export default function StudentClassroomPage() {
   useRealtimeSync(params?.id);
   const hydrated = useHydrated();
   const { user, studentName, joinedCourseId } = useSession();
-  const presence = useCoursePresence({
+  useCoursePresence({
     courseId: course?.id,
     role: "student",
     enabled: course?.status === "teaching" && course.id === joinedCourseId,
@@ -89,9 +89,6 @@ export default function StudentClassroomPage() {
   const currentStage = course.stages[course.currentStageIndex];
   const total = course.stages.length;
   const isTeaching = course.status === "teaching";
-  const onlineCount = course.students.filter((student) =>
-    presence.onlineStudentIds.has(student.id)
-  ).length;
   const projectedResource =
     course.uiState?.teacherResourceProjection?.stageKey === currentStage?.key
       ? course.uiState.teacherResourceProjection
@@ -137,12 +134,7 @@ export default function StudentClassroomPage() {
       leadRole={currentStage?.key === "ai-learning" ? "AI" : currentStage?.key === "showcase" ? "教师" : "学生"}
       headerSlot={
         isTeaching && currentStage ? (
-          <StudentClassroomHeaderStatus
-            currentIndex={course.currentStageIndex}
-            onlineCount={onlineCount}
-            stageLabel={currentStage.label}
-            total={total}
-          />
+          <StudentClassroomHeaderStatus course={course} />
         ) : (
           <Pill tone={isTeaching ? "green" : "orange"} className="hidden md:inline-flex">
             {isTeaching ? "课堂同步中" : "等待教师开始"}

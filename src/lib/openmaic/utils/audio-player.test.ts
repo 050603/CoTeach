@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ActionEngine } from '@openmaic/lib/action/engine';
+import { PlaybackEngine } from '@openmaic/lib/playback/engine';
+import type { Scene } from '@openmaic/lib/types/stage';
 import { AudioPlayer } from './audio-player';
 
 class FakeAudio extends EventTarget {
@@ -9,8 +12,10 @@ class FakeAudio extends EventTarget {
   currentTime = 0;
   duration = 10;
   paused = true;
+  ended = false;
   play = vi.fn(async () => {
     this.paused = false;
+    this.ended = false;
   });
   pause = vi.fn(() => {
     this.paused = true;
@@ -18,7 +23,7 @@ class FakeAudio extends EventTarget {
   load = vi.fn();
 }
 
-describe('AudioPlayer playback warmup', () => {
+describe('AudioPlayer playback', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal('Audio', FakeAudio);
@@ -98,6 +103,70 @@ describe('AudioPlayer playback warmup', () => {
 
     secondAudio.dispatchEvent(new Event('ended'));
     expect(onEnded).toHaveBeenCalledOnce();
+  });
+
+  it('does not resume a completed quiz introduction after the tutor modal closes', async () => {
+    const player = new AudioPlayer();
+    const onEnded = vi.fn();
+    player.onEnded(onEnded);
+
+    const playback = player.play('', '/quiz-introduction.mp3');
+    await vi.advanceTimersByTimeAsync(650);
+    await playback;
+    const audio = (player as unknown as { audio: FakeAudio }).audio;
+    expect(player.hasActiveAudio()).toBe(true);
+
+    audio.ended = true;
+    audio.paused = true;
+    audio.dispatchEvent(new Event('ended'));
+    expect(onEnded).toHaveBeenCalledOnce();
+
+    player.pause();
+    expect(player.hasActiveAudio()).toBe(false);
+    player.resume();
+    expect(audio.play).toHaveBeenCalledTimes(2);
+  });
+
+  it('plays quiz feedback after confirmation without repeating the introduction', async () => {
+    const scene = {
+      id: 'quiz-1',
+      type: 'quiz',
+      actions: [
+        { id: 'intro', type: 'speech', text: '请完成答题', audioUrl: '/intro.mp3' },
+        { id: 'gate', type: 'speech', text: '', activityPauseSec: 60, activityPausePurpose: 'quiz' },
+        { id: 'feedback', type: 'speech', text: '继续学习下一部分', audioUrl: '/feedback.mp3' },
+      ],
+    } as Scene;
+    const player = new AudioPlayer();
+    const onSpeechStart = vi.fn();
+    const onActivityStart = vi.fn();
+    const engine = new PlaybackEngine(
+      [scene],
+      { clearEffects: vi.fn(), execute: vi.fn().mockResolvedValue(undefined) } as unknown as ActionEngine,
+      player,
+      { onSpeechStart, onActivityStart },
+    );
+
+    engine.start();
+    await vi.advanceTimersByTimeAsync(650);
+    const intro = (player as unknown as { audio: FakeAudio }).audio;
+    intro.ended = true;
+    intro.paused = true;
+    intro.dispatchEvent(new Event('ended'));
+    expect(onActivityStart).toHaveBeenCalledWith(expect.objectContaining({ purpose: 'quiz' }));
+
+    engine.pause(); // Opening the tutor explanation pauses the course.
+    expect(engine.completeActivity('quiz-1', 'quiz')).toBe(true);
+    engine.resume(); // The learner closed the tutor and confirmed understanding.
+    await Promise.resolve();
+
+    expect(onSpeechStart.mock.calls.map(([text]) => text)).toEqual([
+      '请完成答题',
+      '继续学习下一部分',
+    ]);
+    expect(intro.play).toHaveBeenCalledTimes(2);
+    expect((player as unknown as { audio: FakeAudio }).audio.src).toBe('/feedback.mp3');
+    engine.stop();
   });
 
   it('waits for the quiet pre-roll to seek back to zero before audible playback', async () => {

@@ -6,7 +6,6 @@ import { useSession } from "@/lib/session/store";
 import { COURSE_REFLECTION_MAX_LENGTH, courseQuestionSet, courseReflectionText, latestCourseReflection, latestExperienceSurvey } from "@/lib/course-reflection";
 import { REFLECTION_SURVEY_QUESTIONS, REFLECTION_SURVEY_SCALE, isReflectionSurveyScore } from "@/lib/reflection-survey";
 import { Card, PrimaryButton, TextArea, toast } from "@/components/ui";
-import { CourseStageRequirements } from "@/components/classroom/course-stage-requirements";
 
 export function CourseReflectionForm({ course }: { course: Course }) {
   const session = useSession();
@@ -31,7 +30,6 @@ export function CourseReflectionForm({ course }: { course: Course }) {
     return record;
   };
   return <div className="space-y-5">
-    <CourseStageRequirements course={course} stageKey="reflection" expanded />
     <Card><h2 className="text-xl font-bold">课程学习反思</h2><p className="mt-2 text-sm text-stone-600">按本课程确认的题目回答，结合自己的作品、决策与学习经历。{courseResponse ? " 已有提交，可在本阶段更新。" : ""}</p>
       <div className="mt-5 space-y-5">{set.questions.map((question, index) => <label className="block" key={question.id}>
         <span className="font-semibold">{index + 1}. {question.prompt}{question.required ? " *" : "（选答）"}</span>

@@ -70,8 +70,9 @@ describe("delegated work policy", () => {
     expect(prompts.system).toContain("同一项工作在不同项目中结论可以不同");
     expect(prompts.system).toContain("搜集资料并汇总");
     expect(prompts.user).toContain("自主采集数据");
-    expect(prompts.user).toContain("证据质量（权重 45）");
-    expect(prompts.user).toContain("重视学生自主调查与证据分析过程");
+    expect(prompts.user).not.toContain("证据质量（权重 45）");
+    expect(prompts.user).not.toContain("重视学生自主调查与证据分析过程");
+    expect(prompts.system).not.toContain("评价维度");
   });
 
   it("conservatively normalizes malformed assessments to clarification", () => {

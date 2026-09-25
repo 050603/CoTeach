@@ -38,6 +38,7 @@ export function Stage({
   playbackState,
   onPlaybackStateChange,
   interactionState,
+  allowSceneDirectory = false,
   sidebarCollapsed,
   onSidebarCollapsedChange,
   editorCourseId,
@@ -55,6 +56,8 @@ export function Stage({
    * see the teacher's manipulations replayed on their device.
    */
   interactionState?: Record<string, unknown> | null;
+  /** Teacher preview may browse the full scene directory and jump to a scene. */
+  allowSceneDirectory?: boolean;
   /** Controlled page-thumbnail rail state for embedded preview surfaces. */
   sidebarCollapsed?: boolean;
   onSidebarCollapsedChange?: (collapsed: boolean) => void;
@@ -182,6 +185,7 @@ export function Stage({
               playbackState={playbackState}
               onPlaybackStateChange={onPlaybackStateChange}
               interactionState={interactionState}
+              allowSceneDirectory={allowSceneDirectory}
               sidebarCollapsed={sidebarCollapsed}
               onSidebarCollapsedChange={onSidebarCollapsedChange}
             />

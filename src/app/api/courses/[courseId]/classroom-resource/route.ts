@@ -45,7 +45,7 @@ function classroomIdFor(course: Course): string | undefined {
   return course.aiLearningClassroomId || course.content._openmaicClassroomId;
 }
 
-async function classroomIsPublished(courseId: string, classroomId: string): Promise<boolean> {
+async function classroomHasHistoricalVersion(courseId: string, classroomId: string): Promise<boolean> {
   const classroomPaths: Prisma.ClassroomTemplateVersionWhereInput[] = [
     { snapshot: { path: ['design', 'aiLearningClassroomId'], equals: classroomId } },
     { snapshot: { path: ['design', 'content', '_openmaicClassroomId'], equals: classroomId } },
@@ -53,7 +53,7 @@ async function classroomIsPublished(courseId: string, classroomId: string): Prom
   return Boolean(await prisma.classroomTemplateVersion.findFirst({
     where: {
       templateId: courseId,
-      status: { in: ['PUBLISHED', 'published'] },
+      status: { in: ['PUBLISHED', 'published', 'SUPERSEDED', 'superseded'] },
       OR: classroomPaths,
     },
     select: { id: true },
@@ -216,7 +216,7 @@ export async function PATCH(
   }
 
   try {
-    const forkPublishedClassroom = await classroomIsPublished(courseId, sourceClassroomId);
+    const forkPublishedClassroom = await classroomHasHistoricalVersion(courseId, sourceClassroomId);
     const targetClassroomId = forkPublishedClassroom
       ? `${sourceClassroomId}-edit-${nanoid(8)}`
       : sourceClassroomId;
@@ -266,6 +266,12 @@ export async function PATCH(
         body.revision as number,
       );
     }
+    const persistedRevisionState = {
+      ...revisionState,
+      // A published classroom is forked into a fresh document at revision 1.
+      // Keep the target revision, not the source document's next revision.
+      classroomRevision: classroom.revision ?? revisionState.classroomRevision,
+    };
 
     await updateCourse(courseId, (current) => {
       // This updater runs under the course database lock. Two tabs forking the
@@ -298,9 +304,9 @@ export async function PATCH(
             classroomRevision: classroom.revision,
             generatedAt: new Date().toISOString(),
           },
-          teachingTimingAudit: revisionState.invalidated.includes('timing-audit')
+          teachingTimingAudit: persistedRevisionState.invalidated.includes('timing-audit')
             ? undefined : current.content.teachingTimingAudit,
-          teachingRevisionState: revisionState,
+          teachingRevisionState: persistedRevisionState,
           ...(workspaceRevision ? {
             designWorkspaceRevision: {
               ...workspaceRevision,
@@ -319,7 +325,7 @@ export async function PATCH(
       classroom,
       forkedDraft: forkPublishedClassroom,
       narrationChanged,
-      dependencyInvalidation: revisionState,
+      dependencyInvalidation: persistedRevisionState,
     });
   } catch (error) {
     if (error instanceof ClassroomRevisionConflictError) {

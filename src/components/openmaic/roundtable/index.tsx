@@ -62,6 +62,7 @@ interface RoundtableProps {
   readonly activeLectureActionIndex?: number;
   readonly idleText?: string | null; // Static idle text (first speech action)
   readonly playbackCompleted?: boolean; // True when engine finished all actions (show restart icon)
+  readonly autoAdvancePending?: boolean;
   readonly discussionRequest?: DiscussionAction | null;
   readonly engineMode?: EngineMode;
   readonly isStreaming?: boolean;
@@ -160,6 +161,7 @@ export function Roundtable({
   activeLectureActionIndex = -1,
   idleText,
   playbackCompleted,
+  autoAdvancePending = false,
   discussionRequest,
   engineMode = 'idle',
   isStreaming,
@@ -736,6 +738,7 @@ export function Roundtable({
         onToggleMute={() => ttsEnabled && setTTSMuted(!ttsMuted)}
         onCycleSpeed={handleCycleSpeed}
         playbackCompleted={playbackCompleted}
+        autoAdvancePending={autoAdvancePending}
         playbackSpeed={playbackSpeed}
         sceneIndex={currentSceneIndex}
         scenesCount={scenesCount}

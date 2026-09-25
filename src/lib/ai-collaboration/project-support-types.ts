@@ -135,7 +135,7 @@ export function projectSupportJsonInstruction(): string {
   return [
     "响应 JSON 还必须包含 support 字段：",
     '{"replyBlocks":[{"type":"answer|analysis|reason|suggestion|next-step","content":"给学生看的正文，不要写观察、支架等标签","sourceIds":["本段实际使用的教材来源 ID"]}],"sourceIds":["整条回答实际使用的教材来源 ID"],"knowledgePointIds":["仅填写本轮确实关联的课程知识点 ID"],"nextStep":"仅在 replyBlocks 没有 next-step 时填写；不需要时为空","memoryUpdates":[{"kind":"project-goal|student-decision|attempt-result|open-question","content":"从学生本轮原话中连续摘取、只记录下次仍有用的事实","rationale":"为何值得保留"}]}',
-    "简单问题只需一个 answer 分块；复杂问题用 2 至 4 块，不要为凑格式重复内容。message 保留简短纯文本，分块承载详细内容。只能引用本轮服务端提供的来源 ID；没有用到教材时返回空 sourceIds，不要编造出处。",
+    "简单问题只需一个 answer 分块；复杂问题用 2 至 4 块，不要为凑格式重复内容。message 保留简短纯文本，分块承载详细内容。只能在 sourceIds 字段填写本轮服务端提供且实际使用的来源 ID；正文不要出现 textbook: 等内部 ID，界面会自动显示可点的编号引用。没有用到教材时返回空 sourceIds，不要编造出处。",
     "memoryUpdates 最多 2 条。AI 自己提出的建议、推测和未被学生采纳的方案不得写成学生决定；没有可靠新信息时返回空数组。",
   ].join("\n");
 }

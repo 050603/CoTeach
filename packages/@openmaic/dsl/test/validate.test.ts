@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  MAX_LASER_WAYPOINTS,
   validateStage,
   validateScene,
   validateInteractiveContent,
@@ -185,6 +186,21 @@ describe('validateAction', () => {
       ],
       duration: 2500,
     })).toEqual({ valid: true });
+  });
+  it('accepts generated seven-step laser paths and rejects paths beyond the shared limit', () => {
+    const path = {
+      id: 'seven-steps', type: 'laser', elementId: 'step-1',
+      waypoints: Array.from({ length: 6 }, (_, index) => ({ elementId: `step-${index + 2}` })),
+    };
+    expect(validateAction(path)).toEqual({ valid: true });
+    expect(validateAction({
+      ...path,
+      waypoints: Array.from({ length: MAX_LASER_WAYPOINTS }, (_, index) => ({ elementId: `step-${index + 2}` })),
+    })).toEqual({ valid: true });
+    expect(errors(validateAction({
+      ...path,
+      waypoints: Array.from({ length: MAX_LASER_WAYPOINTS + 1 }, (_, index) => ({ elementId: `step-${index + 2}` })),
+    }))).toContain('/waypoints');
   });
   it('validates fine-grained visual selectors and speech bindings', () => {
     expect(errors(validateAction({

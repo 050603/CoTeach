@@ -25,6 +25,7 @@ interface CanvasAreaProps extends CanvasToolbarProps {
   readonly showCourseComplete?: boolean;
   readonly minimalToolbar?: boolean;
   readonly integrated?: boolean;
+  readonly autoAdvancePending?: boolean;
 }
 
 export function CanvasArea({
@@ -56,6 +57,7 @@ export function CanvasArea({
   showCourseComplete = true,
   minimalToolbar = false,
   integrated = false,
+  autoAdvancePending = false,
 }: CanvasAreaProps) {
   const { t } = useI18n();
   const whiteboardWasOpened = useRef(false);
@@ -73,11 +75,12 @@ export function CanvasArea({
     engineState !== 'playing' &&
     currentScene?.type === 'slide' &&
     !isLiveSession &&
-    !isPendingScene;
+    !isPendingScene &&
+    !autoAdvancePending;
 
   const handleSlideClick = useCallback(
     (e: React.MouseEvent) => {
-      if (!showControls || isLiveSession || currentScene?.type !== 'slide') return;
+      if (!showControls || isLiveSession || autoAdvancePending || currentScene?.type !== 'slide') return;
       // Don't trigger page play/pause when clicking inside a video element's visual area.
       // Video elements may be visually covered by other slide elements (e.g. text),
       // so we check click coordinates against all video element bounding rects.
@@ -96,7 +99,7 @@ export function CanvasArea({
       }
       onPlayPause();
     },
-    [showControls, isLiveSession, onPlayPause, currentScene?.type],
+    [showControls, isLiveSession, autoAdvancePending, onPlayPause, currentScene?.type],
   );
 
   return (
@@ -118,7 +121,7 @@ export function CanvasArea({
           className={cn(
             'relative aspect-[16/9] h-full max-h-full max-w-full overflow-hidden bg-white transition-all duration-700 dark:bg-gray-800',
             integrated ? 'rounded-none shadow-none ring-0' : 'rounded-lg shadow-2xl',
-            showControls && !isLiveSession && currentScene?.type === 'slide' && 'cursor-pointer',
+            showControls && !isLiveSession && !autoAdvancePending && currentScene?.type === 'slide' && 'cursor-pointer',
             readOnly && 'pointer-events-none select-none',
             currentScene?.type === 'interactive'
               ? !integrated && 'shadow-blue-200/50 dark:shadow-blue-900/50 ring-1 ring-blue-900/5 dark:ring-blue-500/10'
@@ -248,6 +251,7 @@ export function CanvasArea({
           <AnimatePresence>
             {showPlayHint && (
               <motion.div
+                data-canvas-play-hint
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
