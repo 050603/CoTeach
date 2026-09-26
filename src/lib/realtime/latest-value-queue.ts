@@ -1,5 +1,6 @@
 export class LatestValueQueue<T> {
   private pending: T | undefined;
+  private disposed = false;
   private inFlight = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private readonly idleWaiters = new Set<() => void>();
@@ -12,6 +13,7 @@ export class LatestValueQueue<T> {
   ) {}
 
   enqueue(value: T, immediate: boolean): void {
+    if (this.disposed) return;
     this.pending = value;
     if (immediate) this.schedule(0, true);
     else if (!this.timer) this.schedule(this.coalesceMs, false);
@@ -31,6 +33,7 @@ export class LatestValueQueue<T> {
   }
 
   dispose(): void {
+    this.disposed = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     this.pending = undefined;
@@ -55,11 +58,11 @@ export class LatestValueQueue<T> {
     try {
       await this.send(value);
     } catch (error) {
-      if (this.pending === undefined) {
+      if (!this.disposed && this.pending === undefined) {
         this.pending = value;
         retryFailedValue = true;
       }
-      this.onError?.(error);
+      if (!this.disposed) this.onError?.(error);
     } finally {
       this.inFlight = false;
       if (this.pending !== undefined) {

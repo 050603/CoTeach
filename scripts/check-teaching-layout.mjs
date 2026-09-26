@@ -48,6 +48,7 @@ const fixtureCourse = {
   aiLearningClassroomId: 'layout-player', pblConfig: { makeArtifactMode: 'python' },
 };
 const profiles = [
+  ['desktop-1280x720', 1280, 720, false], ['desktop-1366x768', 1366, 768, false], ['desktop-1920x1080', 1920, 1080, false],
   ['desktop-split', 768, 576, false], ['desktop-laptop', 1024, 576, false], ['desktop', 1440, 900, false], ['desktop-4k', 3840, 2160, false], ['pad-portrait', 768, 1024, true], ['pad-landscape', 1024, 768, true],
   ['phone-portrait', 390, 844, true], ['phone-landscape', 844, 390, true], ['phone-small', 320, 568, true], ['phone-small-landscape', 568, 320, true],
 ];
@@ -65,6 +66,16 @@ const scenarios = [
   ['teacher-classroom', '/teacher/teach/layout-teaching/classroom', 'button[aria-label="在线学生"]', async page => {
     await page.getByRole('button', { name: '在线学生', exact: true }).filter({ visible: true }).click();
     await page.getByText('0 在线 / 12 总数', { exact: true }).filter({ visible: true }).waitFor();
+  }],
+  ['teacher-knowledge-analytics', '/teacher/teach/layout-teaching/classroom', 'text=全班知识讲授学情', async page => {
+    const chart = page.locator('[aria-labelledby="knowledge-section-chart-title"]');
+    await chart.scrollIntoViewIfNeeded();
+    await chart.locator('.recharts-surface').waitFor({ state: 'visible' });
+    await page.waitForFunction(() => {
+      const curves = [...document.querySelectorAll('[aria-labelledby="knowledge-section-chart-title"] .recharts-line-curve')];
+      return curves.length === 2 && curves.every(curve => /^M/.test(curve.getAttribute('d') || '') && !/NaN|Infinity/.test(curve.getAttribute('d') || ''));
+    });
+    await chart.getByRole('img', { name: /均分60分.*均分80分/ }).waitFor({ state: 'visible' });
   }],
   ['quick-preparation', '/teacher/prepare/layout-teaching/verify', 'text=课程资料导入', async () => {}],
   ['generate-redirect', '/teacher/prepare/layout-teaching/generate', 'text=课程资料导入', async page => { await page.waitForURL('**/teacher/prepare/layout-teaching/verify'); }],
@@ -123,6 +134,11 @@ try {
       if (id === 'teacher-classroom') course.students = Array.from({ length: 12 }, (_, index) => ({ ...course.students[0], id: `layout-student-${index}`, name: `跨学科项目测试学生${index + 1}` }));
       if (id === 'code') course.currentStageIndex = 2;
       if (id === 'student-player' || id === 'student-standalone-player') course.currentStageIndex = 1;
+      if (id === 'teacher-knowledge-analytics') {
+        course.currentStageIndex = 1;
+        course.content.knowledgeLectureSections = [0, 1].map(index => ({ id: `section-${index}`, title: `知识讲授第${index + 1}节`, order: index, knowledgePointIds: [], sceneOutlineIds: [], quizOutlineId: `quiz-${index}` }));
+        course.aiLearningProgress = { 'layout-student': { classroomId: course.aiLearningClassroomId, knowledgeLectureAttempts: [0, 1].map(index => ({ id: `attempt-${index}`, sectionId: `section-${index}`, quizOutlineId: `quiz-${index}`, submittedAt: '2026-09-25T00:00:00Z', gradingSource: 'server', knowledgePointIds: [], questions: [{ questionId: `question-${index}`, prompt: '请选择正确解释', knowledgePointIds: [], gradingStatus: 'graded', points: 10, earned: index ? 8 : 6, correct: false, feedback: '核对证据' }] })) } };
+      }
       const state = { courses: [course], hydrated: true, user: { role, name: '布局测试' }, studentId: 'layout-student', studentName: '布局测试学生', joinedCourseId: course.id };
       await context.route('**/api/**', async intercepted => {
         const request = intercepted.request(), pathname = new URL(request.url()).pathname;

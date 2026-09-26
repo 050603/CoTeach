@@ -1,0 +1,12 @@
+[Unit]
+Description=CoTeach local recovery point every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=1s
+Persistent=true
+Unit=openpbl-local-backup.service
+
+[Install]
+WantedBy=timers.target

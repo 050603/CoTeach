@@ -1,6 +1,8 @@
 'use client';
 
 import * as React from 'react';
+import { toast } from 'sonner';
+import { copyTextToClipboard } from '@/lib/browser/copy-text';
 
 import { formatCodeBlock, isLangSupported } from '@platejs/code-block';
 import { BracesIcon, Check, CheckIcon, CopyIcon } from 'lucide-react';
@@ -298,10 +300,9 @@ function CopyButton({
   return (
     <Button
       onClick={() => {
-        void navigator.clipboard.writeText(
+        void copyTextToClipboard(
           typeof value === 'function' ? value() : value
-        );
-        setHasCopied(true);
+        ).then(() => setHasCopied(true), () => toast.error('复制失败，请选中代码后手动复制。'));
       }}
       {...props}
     >

@@ -29,6 +29,8 @@ import { useSettingsStore } from '@openmaic/lib/store/settings';
 import { migrateScene } from '@openmaic/lib/edit/slide-schema';
 import { createLogger } from '@openmaic/lib/logger';
 import type { Scene, Stage as StageType } from '@openmaic/lib/types/stage';
+import { boundedFetch } from '@/lib/browser/bounded-fetch';
+import { enqueueLearningWrite, drainLearningWrites, readLearningWrites } from '@/lib/browser/learning-outbox';
 import { createLearningEvent, postLearningEvents } from '@/lib/learning-analytics/telemetry';
 import type {
   KnowledgeGraph,
@@ -407,7 +409,6 @@ export function StudentStageHost({
   // Scene changes can happen faster than a network round-trip. Keep progress
   // writes ordered so an older request cannot finish last and move the saved
   // cursor backwards.
-  const progressReportQueueRef = useRef<Promise<void>>(Promise.resolve());
   const classroomLoadControllerRef = useRef<AbortController | null>(null);
   // store 订阅卸载函数
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -429,6 +430,20 @@ export function StudentStageHost({
     adaptiveInsertions.filter((insertion) => insertion.placement === 'before-current'),
   );
   const trackingEnabled = !standalone && shouldTrackStudentLearning(mode) && Boolean(courseId && studentId);
+  const telemetryScope = `events:${courseId}:${studentId}:${classroomId}`;
+  const progressScope = `progress:${courseId}:${studentId}:${classroomId}`;
+  const flushProgress = useCallback(async () => {
+    if (!trackingEnabled) return;
+    await drainLearningWrites<Record<string, unknown>>(progressScope, async (body) => {
+      const response = await boundedFetch('/api/openmaic/progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-OpenPBL-Role': 'student' },
+        body: JSON.stringify(body),
+        keepalive: true,
+      });
+      if (!response.ok) throw new Error(`学习进度尚未同步（HTTP ${response.status}），恢复连接后将自动重试。`);
+    });
+  }, [progressScope, trackingEnabled]);
   const prefetchClassroomKey = prefetchClassroomIds.join('|');
 
   useEffect(() => {
@@ -445,11 +460,16 @@ export function StudentStageHost({
 
   const flushTelemetry = useCallback(async () => {
     if (!trackingEnabled || !courseId || !studentId || telemetryFlushingRef.current) return;
-    const events = telemetryQueueRef.current.splice(0);
-    if (!events.length) return;
     telemetryFlushingRef.current = true;
     try {
-      await postLearningEvents({ courseId, studentId, events });
+      // Storage failures keep an in-memory copy and are surfaced to the learner.
+      while (telemetryQueueRef.current.length) {
+        const event = telemetryQueueRef.current[0];
+        enqueueLearningWrite(telemetryScope, event, event.id);
+        telemetryQueueRef.current.shift();
+      }
+      await drainLearningWrites<LearningEvent>(telemetryScope, (event) =>
+        postLearningEvents({ courseId, studentId, events: [event] }));
       if (telemetryFailureCountRef.current >= 3) {
         toast.success('学习记录同步已恢复', {
           id: `learning-events-sync-${courseId}-${studentId}`,
@@ -457,7 +477,6 @@ export function StudentStageHost({
       }
       telemetryFailureCountRef.current = 0;
     } catch (error) {
-      telemetryQueueRef.current.unshift(...events);
       telemetryFailureCountRef.current += 1;
       log.error('Learning event synchronization failed:', error);
       if (telemetryFailureCountRef.current === 3) {
@@ -469,7 +488,7 @@ export function StudentStageHost({
     } finally {
       telemetryFlushingRef.current = false;
     }
-  }, [courseId, studentId, trackingEnabled]);
+  }, [courseId, studentId, telemetryScope, trackingEnabled]);
 
   const queueTelemetry = useCallback((
     type: LearningEventType,
@@ -481,7 +500,7 @@ export function StudentStageHost({
     const sceneIndex = scenes.findIndex((item) => item.id === sceneId);
     const scene = sceneIndex >= 0 ? scenes[sceneIndex] : undefined;
     const measuredTtsDurationSec = sceneId ? ttsDurationBySceneRef.current.get(sceneId) : undefined;
-    telemetryQueueRef.current.push(createLearningEvent(type, {
+    const event = createLearningEvent(type, {
       courseId,
       studentId,
       stageKey: 'ai-learning',
@@ -507,8 +526,14 @@ export function StudentStageHost({
           ...(patch.metadata ?? {}),
         },
       } : {}),
-    }));
-  }, [courseId, studentId, trackingEnabled]);
+    });
+    try {
+      enqueueLearningWrite(telemetryScope, event, event.id);
+    } catch {
+      telemetryQueueRef.current.push(event);
+      toast.error('浏览器无法暂存学习记录', { id: 'learning-storage-error', description: '请保持本页面打开并联系教师，避免刷新后丢失未同步记录。' });
+    }
+  }, [courseId, studentId, telemetryScope, trackingEnabled]);
 
   const loadClassroom = useCallback(async () => {
     classroomLoadControllerRef.current?.abort();
@@ -521,7 +546,7 @@ export function StudentStageHost({
       // 1. 拉取课堂
       let classroom: ClassroomPayload | undefined;
       for (let attempt = 0; attempt < (requirePreparedAudio ? 100 : 1); attempt += 1) {
-        const res = await fetch(
+        const res = await boundedFetch(
           `/api/openmaic/classroom?id=${encodeURIComponent(classroomId)}`,
           { cache: 'no-store', signal: loadController.signal },
         );
@@ -569,7 +594,7 @@ export function StudentStageHost({
       }
       if (!standalone && mode === 'student' && courseId && studentId) {
         try {
-          const progRes = await fetch(
+          const progRes = await boundedFetch(
             `/api/openmaic/progress?courseId=${encodeURIComponent(courseId)}&studentId=${encodeURIComponent(studentId)}`,
             {
               cache: 'no-store',
@@ -599,6 +624,13 @@ export function StudentStageHost({
           throw new Error(
             error instanceof Error ? error.message : '学习进度恢复失败',
           );
+        }
+      }
+      if (trackingEnabled) {
+        const pending = readLearningWrites<{ currentSceneIndex: number; completedScenes: string[] }>(progressScope);
+        for (const { value } of pending) {
+          restoredCompleted = [...new Set([...restoredCompleted, ...value.completedScenes])];
+          restoredIndex = Math.min(Math.max(0, value.currentSceneIndex), studentScenes.length - 1);
         }
       }
       completedRef.current = new Set(restoredCompleted);
@@ -705,14 +737,14 @@ export function StudentStageHost({
         classroomLoadControllerRef.current = null;
       }
     }
-  }, [classroomId, courseId, flushTelemetry, mode, onActiveSceneChange, queueTelemetry, requirePreparedAudio, standalone, studentId, trackingEnabled]);
+  }, [classroomId, courseId, flushTelemetry, mode, onActiveSceneChange, queueTelemetry, requirePreparedAudio, standalone, studentId, trackingEnabled, progressScope]);
 
   const refreshGenerationPreview = useCallback(async (beforePlaybackSceneId?: string) => {
     const epoch = previewEpochRef.current;
     let request = previewRefreshRef.current;
     if (!request) {
       request = (async () => {
-        const response = await fetch(`/api/openmaic/classroom?id=${encodeURIComponent(classroomId)}`, { cache: 'no-store' });
+        const response = await boundedFetch(`/api/openmaic/classroom?id=${encodeURIComponent(classroomId)}`, { cache: 'no-store' });
         if (!response.ok) throw new Error('课堂更新暂时无法同步，请稍后重试');
         const payload = await response.json() as { success: boolean; classroom?: ClassroomPayload };
         if (!payload.success || !payload.classroom) throw new Error('课堂更新暂时无法同步，请稍后重试');
@@ -895,74 +927,26 @@ export function StudentStageHost({
       // 已上报过完成且状态未变化则跳过
       if (isAllComplete && completionReportedRef.current) return;
 
-      const previousReport = progressReportQueueRef.current;
-      let releaseReport: () => void = () => undefined;
-      progressReportQueueRef.current = new Promise<void>((resolve) => {
-        releaseReport = resolve;
-      });
-      await previousReport;
       try {
-        const requestBody = JSON.stringify({
-          courseId,
-          studentId,
-          studentName,
-          classroomId,
+        enqueueLearningWrite(progressScope, {
+          courseId, studentId, studentName, classroomId,
           currentSceneIndex: currentIdx,
           totalScenes: scenes.length,
           completedScenes,
           completionModelVersion: AI_PROGRESS_COMPLETION_MODEL_VERSION,
           ...(quizScore !== undefined ? { quizScore } : {}),
         });
-        let response: Response | undefined;
-        let lastNetworkError: unknown;
-        for (let attempt = 1; attempt <= 5; attempt += 1) {
-          try {
-            response = await fetch('/api/openmaic/progress', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'X-OpenPBL-Role': 'student',
-              },
-              body: requestBody,
-            });
-          } catch (error) {
-            lastNetworkError = error;
-            if (attempt === 5) throw error;
-            await new Promise((resolve) => window.setTimeout(resolve, attempt * 300));
-            continue;
-          }
-          const retryableStatus = response.status === 408
-            || response.status === 409
-            || response.status === 425
-            || response.status === 429
-            || response.status >= 500;
-          if (response.ok || !retryableStatus || attempt === 5) break;
-          await new Promise((resolve) => window.setTimeout(resolve, attempt * 300));
-        }
-        if (!response && lastNetworkError) throw lastNetworkError;
-        if (!response?.ok) {
-          const payload = await response?.json().catch(() => null) as
-            | { message?: string; error?: string }
-            | null
-            | undefined;
-          throw new Error(
-            payload?.message
-              ?? payload?.error
-              ?? `学习进度上报失败（HTTP ${response?.status ?? 'unknown'}）`,
-          );
-        }
+        await flushProgress();
         if (isAllComplete) completionReportedRef.current = true;
       } catch (error) {
         log.error('AI learning progress synchronization failed:', error);
-        toast.error('学习进度同步失败', {
+        toast.error('学习进度尚未同步', {
           id: `ai-progress-sync-${courseId}-${studentId}`,
-          description: error instanceof Error ? error.message : '请检查服务器连接后重试。',
+          description: error instanceof Error ? error.message : '请保持本页面打开，恢复连接后将自动重试。',
         });
-      } finally {
-        releaseReport();
       }
     },
-    [courseId, studentId, studentName, classroomId, mode, standalone],
+    [courseId, studentId, studentName, classroomId, mode, standalone, progressScope, flushProgress],
   );
 
   const settleScene = useCallback(
@@ -1116,6 +1100,27 @@ export function StudentStageHost({
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [flushTelemetry, queueTelemetry, state, trackingEnabled]);
+
+  useEffect(() => {
+    if (!trackingEnabled) return;
+    const replay = () => {
+      void flushTelemetry();
+      void flushProgress().catch((error) => {
+        log.error('Pending learning progress retry failed:', error);
+      });
+    };
+    replay();
+    const timer = window.setInterval(replay, 10_000);
+    window.addEventListener('online', replay);
+    window.addEventListener('focus', replay);
+    window.addEventListener('pagehide', replay);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('online', replay);
+      window.removeEventListener('focus', replay);
+      window.removeEventListener('pagehide', replay);
+    };
+  }, [flushProgress, flushTelemetry, trackingEnabled]);
 
   // 初次加载
   useEffect(() => {

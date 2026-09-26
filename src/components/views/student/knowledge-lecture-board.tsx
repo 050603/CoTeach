@@ -17,8 +17,38 @@ import type {
   KnowledgeLectureAttempt,
   KnowledgeLectureTutorThread,
 } from "@/lib/session/types";
+import { browserRandomUUID } from "@/lib/browser/random-uuid";
 import { cn } from "@/lib/utils";
 import { dispatchPlaybackModalBlock } from "@openmaic/lib/playback/activity-events";
+
+/** Keep the same receipt across a lost response or a page reload. */
+async function fetchTutor(body: Record<string, unknown>): Promise<Response> {
+  const key = `knowledge-tutor-request:${JSON.stringify([body.courseId, body.studentId, body.attemptId, body.questionId, body.action, body.message ?? ""])}`;
+  let requestId = browserRandomUUID();
+  try { requestId = sessionStorage.getItem(key) || requestId; sessionStorage.setItem(key, requestId); } catch { /* memory-only retry when storage is unavailable */ }
+  const serialized = JSON.stringify({ ...body, requestId });
+  const deadline = Date.now() + 190_000;
+  let networkFailures = 0;
+  while (true) {
+    let response: Response;
+    try {
+      response = await fetch("/api/knowledge-lecture", { method: "POST", headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" }, body: serialized });
+      networkFailures = 0;
+    } catch (error) {
+      if (++networkFailures >= 3 || Date.now() >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      continue;
+    }
+    if (response.status === 202 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      continue;
+    }
+    if ((response.ok && response.status !== 202) || response.status === 409) {
+      try { sessionStorage.removeItem(key); } catch { /* no persistent cache */ }
+    }
+    return response;
+  }
+}
 
 type TutorAudioSettings = {
   ttsProviderId?: string;
@@ -132,10 +162,7 @@ export function KnowledgeLectureBoard({
     if (requestedExplanationRef.current.has(key)) return;
     requestedExplanationRef.current.add(key);
     setInitialExplaining(true);
-    void fetch("/api/knowledge-lecture", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" },
-      body: JSON.stringify({
+    void fetchTutor({
         action: "tutor-explain",
         courseId,
         studentId,
@@ -143,7 +170,6 @@ export function KnowledgeLectureBoard({
         questionId: question.questionId,
         options: question.options,
         matchingOptions: question.matchingOptions,
-      }),
     }).then(async (response) => {
       const payload = await response.json() as { thread?: KnowledgeLectureTutorThread; error?: string };
       if (!response.ok || !payload.thread) throw new Error(payload.error || "助教讲解生成失败");
@@ -308,19 +334,10 @@ export function KnowledgeLectureBoard({
     setSending(true);
     setError(undefined);
     try {
-      const response = await fetch("/api/knowledge-lecture", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" },
-        body: JSON.stringify({
-          action: "tutor-message",
-          courseId,
-          studentId,
-          attemptId: attempt.id,
-          questionId: question.questionId,
-          options: question.options,
-          matchingOptions: question.matchingOptions,
-          message: content,
-        }),
+      const response = await fetchTutor({
+        action: "tutor-message", courseId, studentId, attemptId: attempt.id,
+        questionId: question.questionId, options: question.options,
+        matchingOptions: question.matchingOptions, message: content,
       });
       const payload = await response.json() as { thread?: KnowledgeLectureTutorThread; error?: string };
       if (!response.ok || !payload.thread) throw new Error(payload.error || "助教暂时没有回应");

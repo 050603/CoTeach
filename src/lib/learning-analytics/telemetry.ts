@@ -1,3 +1,4 @@
+import { boundedFetch } from "@/lib/browser/bounded-fetch";
 import type { LearningEvent, LearningEventType } from "@/lib/session/types";
 
 export const RESOURCE_PROGRESS_THRESHOLDS = [25, 50, 75, 100] as const;
@@ -51,7 +52,7 @@ export async function postLearningEvents(input: {
   events: LearningEvent[];
 }): Promise<void> {
   if (!input.events.length) return;
-  const response = await fetch("/api/learning-events", {
+  const response = await boundedFetch("/api/learning-events", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

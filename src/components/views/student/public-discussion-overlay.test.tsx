@@ -48,10 +48,15 @@ function mediaStream(): MediaStream {
 }
 
 class MockMediaRecorder {
-  static isTypeSupported = vi.fn(() => true);
+  static isTypeSupported = vi.fn<(type: string) => boolean>(() => true);
   state: RecordingState = "inactive";
+  mimeType: string;
   ondataavailable: ((event: BlobEvent) => void) | null = null;
   onstop: (() => void) | null = null;
+
+  constructor(_stream: MediaStream, options?: MediaRecorderOptions) {
+    this.mimeType = options?.mimeType ?? "audio/webm";
+  }
 
   start() {
     this.state = "recording";
@@ -59,13 +64,14 @@ class MockMediaRecorder {
 
   stop() {
     this.state = "inactive";
-    this.ondataavailable?.({ data: new Blob(["recorded-audio"], { type: "audio/webm" }) } as BlobEvent);
+    this.ondataavailable?.({ data: new Blob(["recorded-audio"], { type: this.mimeType }) } as BlobEvent);
     this.onstop?.();
   }
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  MockMediaRecorder.isTypeSupported.mockReturnValue(true);
   vi.stubGlobal("fetch", vi.fn(async () => Response.json(snapshot())));
 });
 
@@ -150,7 +156,8 @@ describe("student public discussion overlay", () => {
     expect(getUserMedia).toHaveBeenCalledTimes(1);
   });
 
-  it("uploads the recording and does not require transcript confirmation", async () => {
+  it.each([["audio/webm;codecs=opus", "webm"], ["audio/mp4", "m4a"]])("uploads %s recording with the matching filename", async (mimeType, extension) => {
+    MockMediaRecorder.isTypeSupported.mockImplementation((type) => type === mimeType);
     const getUserMedia = vi.fn().mockResolvedValue(mediaStream());
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
     vi.stubGlobal("MediaRecorder", MockMediaRecorder as unknown as typeof MediaRecorder);
@@ -170,6 +177,10 @@ describe("student public discussion overlay", () => {
       "/api/courses/course-1/public-discussion/transcription",
       expect.objectContaining({ method: "POST", body: expect.any(FormData) }),
     ));
+    const upload = vi.mocked(fetch).mock.calls.find(([input]) => String(input).endsWith("/transcription"));
+    const audio = (upload![1]!.body as FormData).get("audio") as File;
+    expect(audio.name).toBe(`classroom-answer.${extension}`);
+    expect(audio.type).toBe(mimeType);
     expect(screen.queryByRole("button", { name: "提交给 AI" })).toBeNull();
   });
 

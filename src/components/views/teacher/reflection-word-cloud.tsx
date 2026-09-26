@@ -47,7 +47,7 @@ export function ReflectionWordCloud({ terms, onSelect, seed = "reflection" }: Pr
   useEffect(() => {
     const element = containerRef.current;
     if (!element) return;
-    const update = () => setWidth(Math.max(240, Math.floor(element.getBoundingClientRect().width)));
+    const update = () => setWidth(Math.max(1, Math.floor(element.getBoundingClientRect().width)));
     update();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(update);

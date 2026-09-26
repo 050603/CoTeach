@@ -35,11 +35,11 @@ export async function lockProjectedCourse(tx: Prisma.TransactionClient, id: stri
 export async function saveCourse(course: Course): Promise<Course> {
   return runMutationTransaction(async tx => { await lockProjectedCourse(tx, course.id); const before = await loadCourse(course.id, tx); if (!before) throw new CourseNotFoundError(course.id); if (course.version !== undefined && before.version !== course.version) throw new CourseVersionConflictError(course.id, course.version); const instance = await tx.classroomInstance.findUnique({ where: { id: course.id }, select: { id: true } }); if (instance) await persistInstanceCourse(tx, before, course); else return savePblTemplateCourse(course, undefined, tx); return (await loadCourse(course.id, tx))!; });
 }
-export async function mutateProjectedCourse(tx: Prisma.TransactionClient, action: SessionAction, ownerId?: string, actor?: { id: string; role: string }): Promise<Course | undefined> {
+export async function mutateProjectedCourse(tx: Prisma.TransactionClient, action: SessionAction, ownerId?: string, actor?: { id: string; role: string }, loadedBefore?: Course): Promise<Course | undefined> {
   const id = actionCourseId(action); if (!id) return undefined;
   await lockProjectedCourse(tx, id);
   if (action.type === "CREATE_COURSE") return savePblTemplateCourse(action.payload, ownerId, tx);
-  const before = await loadCourse(id, tx); if (!before) throw new CourseNotFoundError(id);
+  const before = loadedBefore ?? await loadCourse(id, tx); if (!before) throw new CourseNotFoundError(id);
   const instance = await tx.classroomInstance.findUnique({ where: { id }, select: { id: true } });
   if (action.type === "DELETE_COURSE") {
     if (instance) throw new Error("归档课堂请结束当前场次，不可删除研究记录");

@@ -1,4 +1,4 @@
-import { randomUUID } from './random-uuid';
+import { browserRandomUUID } from './random-uuid';
 
 const PREFIX = 'openpbl.learning-outbox.v1:';
 export interface OutboxEntry<T> { id: string; createdAt: number; value: T }
@@ -7,8 +7,9 @@ const drains = new Map<string, Promise<void>>();
 function prefix(scope: string): string { return `${PREFIX}${encodeURIComponent(scope)}:`; }
 
 /** Each item has its own key, so another tab cannot overwrite the queue. */
-export function enqueueLearningWrite<T>(scope: string, value: T, id = randomUUID()): OutboxEntry<T> {
-  const entry = { id, createdAt: Date.now(), value };
+export function enqueueLearningWrite<T>(scope: string, value: T, id = browserRandomUUID()): OutboxEntry<T> {
+  const latest = readLearningWrites<T>(scope).at(-1)?.createdAt ?? 0;
+  const entry = { id, createdAt: Math.max(Date.now(), latest + 1), value };
   localStorage.setItem(`${prefix(scope)}${id}`, JSON.stringify(entry));
   return entry;
 }

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ReflectionWordCloud } from "./reflection-word-cloud";
 
 const mocks = vi.hoisted(() => ({
@@ -11,6 +11,7 @@ vi.mock("@visx/wordcloud", () => ({
 }));
 
 describe("ReflectionWordCloud", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     mocks.layout.mockReset();
     mocks.layout.mockImplementation(({ words }) => words.map((word: { text: string }) => ({ ...word, x: 0, y: 0, size: 20, rotate: 0 })));
@@ -46,5 +47,12 @@ describe("ReflectionWordCloud", () => {
     expect(screen.getAllByRole("button")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "过长而无法在狭窄面板排下的关键词，涉及 2 名学生" }));
     expect(onSelect).toHaveBeenCalledWith({ label: "过长而无法在狭窄面板排下的关键词", value: 2 });
+  });
+
+  it("uses the actual available width in a narrow desktop panel", () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 180 } as DOMRect);
+    render(<ReflectionWordCloud onSelect={vi.fn()} terms={[{ label: "证据", value: 3 }]} />);
+    expect(screen.getByLabelText("反思词云画布")).toHaveAttribute("width", "180");
+    expect(mocks.layout.mock.lastCall?.[0].width).toBe(180);
   });
 });

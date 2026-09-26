@@ -3,6 +3,7 @@ import { ASR_PROVIDERS } from '@openmaic/lib/audio/constants';
 import { requestAudioTranscription } from '@openmaic/lib/audio/transcription-client';
 import { normalizeASRUploadAudio } from '@openmaic/lib/audio/wav-utils';
 import { createLogger } from '@openmaic/lib/logger';
+import { createAudioRecorder } from '@/lib/browser/audio-recording';
 
 const log = createLogger('AudioRecorder');
 
@@ -89,6 +90,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
     // Synchronous lock — React state is async so isRecording may be stale
     if (busyRef.current) return;
     busyRef.current = true;
+    let acquiredStream: MediaStream | undefined;
     try {
       // Get current ASR configuration
       if (typeof window !== 'undefined') {
@@ -99,6 +101,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
         if (asrProviderId === 'browser-native') {
           // Check if Speech Recognition is supported
           if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
+            busyRef.current = false;
             onError?.('您的浏览器不支持语音识别功能');
             return;
           }
@@ -203,12 +206,14 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
 
       // Use MediaRecorder for server-side ASR
       // Request microphone permission
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('当前浏览器或连接不支持麦克风，请使用 HTTPS 入口。');
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      acquiredStream = stream;
 
       // Create MediaRecorder
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm',
-      });
+      const mediaRecorder = createAudioRecorder(stream);
 
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
@@ -225,7 +230,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
 
         // Merge audio chunks
         const audioBlob = new Blob(audioChunksRef.current, {
-          type: 'audio/webm',
+          type: mediaRecorder.mimeType || audioChunksRef.current[0]?.type,
         });
 
         // Send to server for transcription
@@ -243,9 +248,10 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
         setRecordingTime((prev) => prev + 1);
       }, 1000);
     } catch (error) {
+      acquiredStream?.getTracks().forEach((track) => track.stop());
       busyRef.current = false;
       log.error('Failed to start recording:', error);
-      onError?.('无法访问麦克风，请检查权限设置');
+      onError?.(error instanceof Error && error.message.includes('HTTPS') ? error.message : '无法访问麦克风，请检查权限设置');
     }
   }, [onTranscription, onError, transcribeAudio, continuous]);
 

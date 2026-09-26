@@ -217,7 +217,7 @@ export async function POST(request: Request) {
         },
       },
     };
-  }, { targetStudentId: body.studentId });
+  }, { targetStudentId: body.studentId, actor: { id: body.studentId, role: "student" } });
 
   if (!nextState) {
     return Response.json({ error: "ADAPTIVE_PLAN_NOT_READY" }, { status: 409 });

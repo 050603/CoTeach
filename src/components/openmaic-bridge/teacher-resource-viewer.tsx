@@ -13,6 +13,8 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Copy, FileText, Monitor } from "lucide-react";
+import { toast } from "sonner";
+import { copyTextToClipboard } from "@/lib/browser/copy-text";
 import type { TeacherResources } from "@/lib/session/types";
 import { teacherResourceTypeLabel } from "@/lib/openmaic-bridge/teacher-resources";
 import { cn } from "@/lib/utils";
@@ -167,7 +169,7 @@ function ScriptTab({
             {scene.script ? (
               <button
                 type="button"
-                onClick={() => void navigator.clipboard?.writeText(scene.script!)}
+                onClick={() => { void copyTextToClipboard(scene.script!).then(() => toast.success("讲稿已复制"), () => toast.error("复制失败，请选中讲稿后手动复制。")); }}
                 className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-xs)] px-2.5 text-xs font-semibold text-stone-500 transition hover:bg-white hover:text-blue-700"
               >
                 <Copy size={13} /> 复制讲稿

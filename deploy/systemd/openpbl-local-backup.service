@@ -1,0 +1,14 @@
+[Unit]
+Description=CoTeach complete local database and file recovery point
+Wants=openpbl-local-wal.service
+After=openpbl-local-wal.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/lkj/OpenPBL/openPBL
+ExecStart=/usr/bin/python3 /home/lkj/OpenPBL/openPBL/deploy/backup/local-backup.py backup
+TimeoutStartSec=15min
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

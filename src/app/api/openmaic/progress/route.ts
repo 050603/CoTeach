@@ -2,6 +2,7 @@
 // GET  读取 course.aiLearningProgress
 // POST 更新某学生在 AI 课堂中的学习进度
 
+import { PlatformError } from "@/lib/platform/repository";
 import { type NextRequest } from 'next/server';
 import {
   apiError,
@@ -243,6 +244,7 @@ export async function POST(request: NextRequest) {
 
     return apiSuccess({ data: { progress: savedProgress } });
   } catch (error) {
+    if (error instanceof PlatformError) return apiError(API_ERROR_CODES.INVALID_REQUEST, error.status, error.message);
     log.error('Progress update failed:', error);
     return apiError(
       API_ERROR_CODES.INTERNAL_ERROR,

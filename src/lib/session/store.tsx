@@ -53,6 +53,8 @@ import type {
   WhiteboardNode,
   WorkPlanItem,
 } from "./types";
+import { projectionClientId } from "@/lib/realtime/projection-controller";
+import { boundedFetch } from "@/lib/browser/bounded-fetch";
 import type { ActionAck } from "@/lib/courses/contracts";
 import { clientUUID } from "@/lib/uuid";
 import { DEFAULT_EVALUATION_FLOWS } from "./types";
@@ -132,7 +134,7 @@ type IdentityState = Pick<
 type SubmissionInput = Omit<
   ClassroomSubmission,
   "id" | "courseId" | "createdAt" | "updatedAt"
-> & { id?: string; courseId?: string };
+> & { id?: string; courseId?: string; expectedVersion?: number };
 
 type QueuedProjectionUpdate = {
   action: SessionAction;
@@ -204,7 +206,7 @@ type SessionApi = SessionState & {
   upsertAiContribution: (contribution: AiContribution) => AiContribution;
   recordStudentAiDecision: (decision: StudentAiDecision) => StudentAiDecision;
   upsertAiAssessmentSuggestion: (suggestion: AiAssessmentSuggestion) => AiAssessmentSuggestion;
-  setUiState: (courseId: string, patch: Partial<CourseUiState>) => void;
+  setUiState: (courseId: string, patch: Partial<CourseUiState>, control?: { takeover?: boolean }) => void;
   addActivity: (courseId: string, action: string, detail?: string, actor?: string) => void;
   setPresentingGroup: (courseId: string, groupId: string) => void;
   getCourse: (id: string) => Course | undefined;
@@ -267,7 +269,7 @@ async function fetchSession(
   const classroomId = typeof window !== "undefined" ? window.location.pathname.match(role === "student"
     ? /^\/student\/(?:classroom|ai-learning|ai-collaboration|micro-lesson)\/([^/]+)/
     : /^\/teacher\/(?:teach|prepare)\/([^/]+)/)?.[1] : undefined;
-  const res = await fetch(classroomId ? `/api/courses?courseId=${encodeURIComponent(classroomId)}` : "/api/courses", {
+  const res = await boundedFetch(classroomId ? `/api/courses?courseId=${encodeURIComponent(classroomId)}` : "/api/courses", {
     cache: "no-store",
     headers: role ? { "X-OpenPBL-Role": role } : undefined,
   });
@@ -290,7 +292,7 @@ async function fetchSession(
 async function hasAuthenticatedSession(
   role: "teacher" | "student",
 ): Promise<boolean> {
-  const response = await fetch("/api/auth/me", {
+  const response = await boundedFetch("/api/auth/me", {
     cache: "no-store",
     headers: { "X-OpenPBL-Role": role },
   });
@@ -320,7 +322,7 @@ async function postSessionAction(
   if (!courseId) throw new Error("ACTION_COURSE_REQUIRED");
   const courseVersion = state.courses.find((course) => course.id === courseId)?.version;
   const expectedVersion = expectedVersionOverride ?? courseVersion;
-  const res = await fetch(`/api/courses/${encodeURIComponent(courseId)}/actions`, {
+  const res = await boundedFetch(`/api/courses/${encodeURIComponent(courseId)}/actions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -412,6 +414,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const courseRefreshTimerRef = useRef<number | null>(null);
   const coursePollTimerRef = useRef<number | null>(null);
   const coursePollInFlightRef = useRef(false);
+  const courseRequestEpochRef = useRef(0);
+  const confirmedSubmissionVersionsRef = useRef(new Map<string, number>());
+  const courseReadControllerRef = useRef(new AbortController());
   const coursePollFailuresRef = useRef(0);
   const wsConnectionTimerRef = useRef<number | null>(null);
   const wsSubscriptionTimerRef = useRef<number | null>(null);
@@ -509,7 +514,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   async function refresh(preferredRole?: "teacher" | "student") {
     if (getSessionRouteMode(pathname) === "identity") {
       const role = preferredRole ?? (pathname.startsWith("/teacher") ? "teacher" : "student");
-      const response = await fetch("/api/auth/me", { cache: "no-store", headers: { "X-OpenPBL-Role": role } });
+      const response = await boundedFetch("/api/auth/me", { cache: "no-store", headers: { "X-OpenPBL-Role": role } });
       const body = response.ok ? await response.json() as { user?: { role?: string; displayName?: string; studentName?: string } } : null;
       const next = makeEmptyHydratedState();
       if (body?.user?.role === role) next.user = { ...next.user, role, name: body.user.displayName || body.user.studentName || (role === "teacher" ? "教师" : "学生") };
@@ -557,6 +562,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     action: SessionAction,
     options?: { localOnly?: boolean },
   ): Promise<boolean> {
+    if (action.type === "UPSERT_SUBMISSION") {
+      const { courseId, submission } = action.payload;
+      const key = `${courseId}:${submission.id}`;
+      if (!confirmedSubmissionVersionsRef.current.has(key)) {
+        const persisted = stateRef.current.courses.find((course) => course.id === courseId)
+          ?.submissions?.find((item) => item.id === submission.id);
+        confirmedSubmissionVersionsRef.current.set(key, persisted?.version ?? 0);
+      }
+    }
     dispatch(action);
     // Identity and hydration are client state, never persisted business
     // actions. Keep this invariant here so a future caller cannot accidentally
@@ -573,7 +587,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     pendingCommitsRef.current++;
     const requestId = clientUUID();
     const run = async () => {
+      if (action.type === "UPSERT_SUBMISSION" && action.payload.expectedSubmissionVersion === undefined) {
+        const key = `${action.payload.courseId}:${action.payload.submission.id}`;
+        action = { ...action, payload: { ...action.payload, expectedSubmissionVersion: confirmedSubmissionVersionsRef.current.get(key) ?? 0 } };
+      }
       const ack = await postSessionActionWithRetry(action, stateRef.current, requestId);
+      if (action.type === "UPSERT_SUBMISSION" && ack.submissionVersion !== undefined) {
+        confirmedSubmissionVersionsRef.current.set(`${action.payload.courseId}:${action.payload.submission.id}`, ack.submissionVersion);
+      }
       const courseId = courseIdForAction(action);
       if (courseId) {
         const versionAction: SessionAction = {
@@ -620,7 +641,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const queue = new LatestValueQueue<QueuedProjectionUpdate>(
       async (update) => {
         const requestStartedAt = Date.now();
-        const ack = await postProjectionActionWithRetry(update, stateRef.current);
+        let ack: ActionAck;
+        try {
+          ack = await postProjectionActionWithRetry(update, stateRef.current);
+        } catch (error) {
+          if (error instanceof SessionActionRequestError && error.status >= 400 && error.status < 500 && ![408, 425, 429].includes(error.status)) {
+            queue.dispose();
+            projectionQueuesRef.current.delete(courseId);
+            void refreshCourse(courseId).catch(recordCourseSyncFailure);
+            toast.error("投屏控制未生效", { description: error.message, id: "projection-sync-error" });
+            return;
+          }
+          throw error;
+        }
         const responseReceivedAt = Date.now();
         if (ack.projection) {
           applyProjectionSnapshot(
@@ -692,6 +725,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         failed.requestId,
       );
       pendingCommitsRef.current--;
+      if (failed.action.type === "UPSERT_SUBMISSION" && ack.submissionVersion !== undefined) {
+        confirmedSubmissionVersionsRef.current.set(`${failed.action.payload.courseId}:${failed.action.payload.submission.id}`, ack.submissionVersion);
+      }
       const courseId = courseIdForAction(failed.action);
       if (courseId) {
         const versionAction: SessionAction = {
@@ -731,6 +767,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // successful connection switches wsModeRef to "websocket" while retaining
   // a lower-frequency durable cursor check for cross-instance correctness.
   function teardownWebSocket() {
+    courseRequestEpochRef.current += 1;
+    courseReadControllerRef.current.abort();
+    courseReadControllerRef.current = new AbortController();
+    coursePollInFlightRef.current = false;
     if (courseRefreshTimerRef.current !== null) {
       window.clearTimeout(courseRefreshTimerRef.current);
       courseRefreshTimerRef.current = null;
@@ -832,6 +872,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       projectionVersion: incomingVersion,
       projectionUpdatedAt: snapshot.projectionUpdatedAt,
       projectionClockOffsetMs: offsetMs,
+      projectionController: snapshot.projectionController,
       ...(preserveOptimisticProjection
         ? {}
         : {
@@ -877,7 +918,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     );
     const requestStartedAt = Date.now();
     try {
-      const response = await fetch(
+      const response = await boundedFetch(
         `/api/courses/${encodeURIComponent(courseId)}/projection`,
         {
           cache: "no-store",
@@ -915,12 +956,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     stopProjectionPolling();
     if (!courseId) return;
     void refreshProjectionState(courseId);
-    projectionPollTimerRef.current = window.setInterval(
-      () => void refreshProjectionState(courseId),
-      wsModeRef.current === "websocket"
-        ? PROJECTION_CONNECTED_CHECK_INTERVAL_MS
-        : PROJECTION_POLL_INTERVAL_MS,
-    );
+    const interval = wsModeRef.current === "websocket"
+      ? PROJECTION_CONNECTED_CHECK_INTERVAL_MS
+      : PROJECTION_POLL_INTERVAL_MS;
+    // Per-client jitter prevents a whole class from polling in lockstep.
+    const tick = () => {
+      void refreshProjectionState(courseId);
+      projectionPollTimerRef.current = window.setTimeout(tick, interval * (0.85 + Math.random() * 0.3));
+    };
+    projectionPollTimerRef.current = window.setTimeout(tick, interval * (0.85 + Math.random() * 0.3));
   }
 
   function startCoursePolling(
@@ -937,6 +981,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         || pendingCommitsRef.current > 0
       ) return;
       coursePollInFlightRef.current = true;
+      const epoch = courseRequestEpochRef.current;
       try {
         // Seed the durable cursor from the current course snapshot. Afterwards
         // only the lightweight event endpoint is polled. This is independent
@@ -951,14 +996,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         recordCourseSyncFailure(error);
       } finally {
-        coursePollInFlightRef.current = false;
+        if (epoch === courseRequestEpochRef.current) coursePollInFlightRef.current = false;
       }
     };
 
     void poll();
     coursePollTimerRef.current = window.setInterval(
       () => void poll(),
-      COURSE_EVENT_POLL_INTERVAL_MS[mode],
+      COURSE_EVENT_POLL_INTERVAL_MS[mode] * (0.85 + Math.random() * 0.3),
     );
   }
 
@@ -973,8 +1018,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
 
   async function refreshCourse(courseId: string, cursor?: string): Promise<boolean> {
+    const epoch = courseRequestEpochRef.current;
     if (pendingCommitsRef.current > 0) return false;
-    const response = await fetch(`/api/courses/${encodeURIComponent(courseId)}/state`, {
+    const response = await boundedFetch(`/api/courses/${encodeURIComponent(courseId)}/state`, {
+      signal: courseReadControllerRef.current.signal,
       cache: "no-store",
       headers: { "X-OpenPBL-Role": getClientRole() ?? "student" },
     });
@@ -983,6 +1030,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       course: Course;
       eventCursor: string;
     };
+    if (epoch !== courseRequestEpochRef.current || wsCourseIdRef.current !== courseId) return false;
     // A local action may have started while the request was in flight. Never
     // overwrite that optimistic state with an older server snapshot.
     if (pendingCommitsRef.current > 0) return false;
@@ -994,6 +1042,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       && currentCourse.version > body.course.version
     ) {
       return false;
+    }
+    for (const submission of body.course.submissions ?? []) {
+      confirmedSubmissionVersionsRef.current.set(`${courseId}:${submission.id}`, submission.version ?? 1);
     }
     const incomingCourse: Course = currentCourse
       ? {
@@ -1043,10 +1094,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
 
   async function catchUpCourseEvents(courseId: string) {
+    const epoch = courseRequestEpochRef.current;
     const after = eventCursorRef.current[courseId] ?? "0";
-    const response = await fetch(
+    const response = await boundedFetch(
       `/api/courses/${encodeURIComponent(courseId)}/events?after=${encodeURIComponent(after)}`,
-      { cache: "no-store", headers: { "X-OpenPBL-Role": getClientRole() ?? "student" } },
+      { cache: "no-store", signal: courseReadControllerRef.current.signal, headers: { "X-OpenPBL-Role": getClientRole() ?? "student" } },
     );
     if (!response.ok) throw new Error(`COURSE_EVENTS_FAILED_${response.status}`);
     const body = (await response.json()) as {
@@ -1061,6 +1113,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       requiresReconciliation?: boolean;
       courseVersion?: number;
     };
+    if (epoch !== courseRequestEpochRef.current || wsCourseIdRef.current !== courseId) return;
     const localVersion = stateRef.current.courses.find(
       (course) => course.id === courseId,
     )?.version ?? 0;
@@ -1128,6 +1181,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       projectionVersion: payload.projectionVersion,
       projectionUpdatedAt: payload.projectionUpdatedAt,
       serverTime: payload.serverTime,
+      projectionController: payload.projectionController as CourseUiState["projectionController"],
       resourceProjection: hasResourceProjection
         ? payload.resourceProjection as CourseUiState["resourceProjection"]
         : null,
@@ -1483,6 +1537,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const prepareSubmission = (input: SubmissionInput): {
       courseId: string;
       submission: ClassroomSubmission;
+      expectedSubmissionVersion?: number;
     } | undefined => {
       const courseId = input.courseId ?? state.joinedCourseId;
       if (!courseId) return undefined;
@@ -1494,6 +1549,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         : undefined;
       return {
         courseId,
+        ...(input.expectedVersion !== undefined ? { expectedSubmissionVersion: input.expectedVersion } : {}),
         submission: {
           id: input.id ?? makeRecordId("sub"),
           courseId,
@@ -2311,10 +2367,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         });
         return suggestion;
       },
-      setUiState(courseId, patch) {
+      setUiState(courseId, patch, control) {
         const action: SessionAction = {
           type: "SET_UI_STATE",
-          payload: { courseId, patch },
+          payload: { courseId, patch, projectionControl: { clientId: projectionClientId(), ...control } },
         };
         if (projectionPatchFromAction(action)) queueProjectionAction(action);
         else void commit(action);

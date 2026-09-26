@@ -113,7 +113,7 @@ export function SurveyWordCloud({ terms, selected, onSelect, large = false, stat
 
   return <div className={`survey-word-cloud survey-word-cloud-enter relative overflow-hidden rounded-[24px] border border-white/80 bg-gradient-to-br from-white via-indigo-50/40 to-cyan-50/70 ${large ? "h-[36vh] min-h-[300px]" : "min-h-[360px]"}`} ref={containerRef}>
     {stableTerms.length && size.width ? <>
-      {fontsReady ? <CloudLayout key={JSON.stringify(stableTerms)} terms={stableTerms} width={size.width} height={size.height} large={large} selected={selected} onSelect={onSelect} /> : <div aria-label="完整关键词列表" className="absolute inset-4 flex flex-wrap content-center items-center justify-center gap-3 overflow-auto">
+      {fontsReady ? <CloudLayout key={JSON.stringify(stableTerms)} terms={stableTerms} width={size.width} height={size.height} large={large} selected={selected} onSelect={onSelect} /> : <div aria-label="完整关键词列表" className="absolute inset-4 flex flex-wrap content-start items-center justify-center gap-3 overflow-auto">
         {stableTerms.map((term, index) => <button
           key={term.label}
           type="button"

@@ -1,6 +1,7 @@
 "use client";
 
 import { browserRandomUUID } from "@/lib/browser/random-uuid";
+import { audioRecordingFileName, createAudioRecorder } from "@/lib/browser/audio-recording";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CircleAlert, Loader2, MessageCircleQuestion, Mic, MicOff, Send } from "lucide-react";
@@ -166,7 +167,7 @@ export function PublicDiscussionStudentOverlay({ courseId }: { courseId: string 
     setError(undefined);
     try {
       const form = new FormData();
-      form.append("audio", blob, "classroom-answer.webm");
+      form.append("audio", blob, audioRecordingFileName(blob.type, "classroom-answer"));
       form.append("requestId", uuid());
       form.append("expectedVersion", String(expectedVersion));
       const response = await fetch(`/api/courses/${encodeURIComponent(courseId)}/public-discussion/transcription`, {
@@ -204,15 +205,12 @@ export function PublicDiscussionStudentOverlay({ courseId }: { courseId: string 
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器或连接不支持麦克风，请使用 HTTPS 入口。");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
       streamRef.current = stream;
+      const recorder = createAudioRecorder(stream);
       const next = await post({ action: "start-recording", requestId: uuid(), expectedVersion: current.version });
       setSnapshot(next);
       recordingVersionRef.current = next.session?.version;
       discardRecordingRef.current = false;
       chunksRef.current = [];
-      const supportedType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
-      const recorder = new MediaRecorder(stream, { mimeType: supportedType });
       recorderRef.current = recorder;
       setRecordingSeconds(0);
       recorder.ondataavailable = (event) => {
@@ -220,7 +218,7 @@ export function PublicDiscussionStudentOverlay({ courseId }: { courseId: string 
       };
       recorder.onstop = () => {
         const discarded = discardRecordingRef.current;
-        const blob = new Blob(chunksRef.current, { type: supportedType });
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || chunksRef.current[0]?.type });
         const version = recordingVersionRef.current;
         stopTracks();
         recorderRef.current = undefined;

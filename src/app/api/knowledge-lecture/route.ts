@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { isDatabaseConfigured } from "@/lib/db/client";
+import { PlatformError } from "@/lib/platform/repository";
+import { claimTutorRequest, finishTutorRequest, failTutorRequest, type TutorRequest } from "@/lib/courses/knowledge-tutor-requests";
 import { callLLM } from "@openmaic/lib/ai/llm";
 import { resolveModel, resolveModelFromRequest } from "@openmaic/lib/server/resolve-model";
 import type { NextRequest } from "next/server";
@@ -36,6 +40,7 @@ type KnowledgeLectureRequest = {
   options?: KnowledgeLectureQuestionReview["options"];
   matchingOptions?: KnowledgeLectureQuestionReview["matchingOptions"];
   message?: string;
+  requestId?: string;
 };
 
 class QuizAlreadySubmittedError extends Error {
@@ -409,7 +414,7 @@ export async function POST(request: NextRequest) {
             },
           },
         };
-      }, { targetStudentId: studentId });
+      }, { targetStudentId: studentId, actor: { id: studentId, role: "student" } });
     } catch (error) {
       if (error instanceof QuizAlreadySubmittedError) {
         return Response.json({ error: error.message, attempt: error.attempt }, { status: 409 });
@@ -449,6 +454,20 @@ export async function POST(request: NextRequest) {
   const knowledgePointNames = question.knowledgePointIds.map((id) =>
     course.content.knowledgePoints.find((point) => point.id === id)?.name ?? id,
   );
+  const durable = isDatabaseConfigured();
+  const requestId = text(body.requestId, 160);
+  if (durable && !requestId) return Response.json({ error: "REQUEST_ID_REQUIRED" }, { status: 400 });
+  const tutorRequest: TutorRequest = { courseId, studentId, classroomId: progress!.classroomId, requestId: requestId || randomUUID(), threadId, attemptId: attempt.id, questionId: question.questionId, message, initial: initialExplanation };
+  let token: string | undefined;
+  try {
+    if (durable) {
+      const claim = await claimTutorRequest(tutorRequest);
+      if (!claim.run) {
+        if (claim.status === "COMPLETED") return Response.json({ thread: claim.thread });
+        return Response.json({ error: claim.status === "RUNNING" ? "TUTOR_REQUEST_RUNNING" : "TUTOR_REQUEST_FAILED", status: claim.status }, { status: claim.status === "RUNNING" ? 202 : 409 });
+      }
+      token = claim.token;
+    }
   const tutorSettings = await getKnowledgeLectureTutorSettings();
   const { model, thinkingConfig } = tutorSettings.modelString
     ? await resolveModel({ modelString: tutorSettings.modelString })
@@ -462,17 +481,25 @@ export async function POST(request: NextRequest) {
   const now = new Date().toISOString();
   const tutorPayload = parseTutorPayload(result.text.trim(), now);
   const studentMessage: KnowledgeLectureTutorMessage = {
-    id: `tutor-message-student-${Date.now()}`,
+    id: `tutor-message-student-${tutorRequest.requestId}`,
     role: "student",
     content: message,
     createdAt: now,
   };
   const assistantMessage: KnowledgeLectureTutorMessage = {
-    id: `tutor-message-assistant-${Date.now()}`,
+    id: `tutor-message-assistant-${tutorRequest.requestId}`,
     role: "assistant",
     content: tutorPayload.answer,
     createdAt: now,
   };
+  if (token) {
+    const thread = await finishTutorRequest(tutorRequest, token, {
+      id: threadId, attemptId: attempt.id, questionId: question.questionId,
+      messages: [...(initialExplanation ? [] : [studentMessage]), assistantMessage],
+      boardNotes: tutorPayload.notes, createdAt: now, updatedAt: now,
+    });
+    return Response.json({ thread });
+  }
   let savedThread: KnowledgeLectureTutorThread | undefined;
   await updateCourse(courseId, (current) => {
     const classroomId = current.aiLearningClassroomId || current.content._openmaicClassroomId || "";
@@ -511,4 +538,10 @@ export async function POST(request: NextRequest) {
     };
   }, { targetStudentId: studentId });
   return Response.json({ thread: savedThread });
+  } catch (error) {
+    if (token) await failTutorRequest(tutorRequest, token, request.signal.aborted);
+    if (error instanceof PlatformError) return Response.json({ error: error.code, message: error.message }, { status: error.status });
+    console.error("[knowledge-tutor] request failed", error);
+    return Response.json({ error: request.signal.aborted ? "TUTOR_REQUEST_CANCELLED" : "TUTOR_REQUEST_FAILED" }, { status: 503 });
+  }
 }

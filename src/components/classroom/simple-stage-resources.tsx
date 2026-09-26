@@ -1208,13 +1208,13 @@ function PdfViewer({
       .then(async (response) => {
         if (!response.ok) throw new Error(`PDF 读取失败（${response.status}）`);
         const data = await response.arrayBuffer();
-        const pdfModuleUrl = "/vendor/pdfjs/pdf.min.mjs";
+        const pdfModuleUrl = "/vendor/pdfjs/pdf.legacy.min.mjs";
         const pdfjs = await import(
           /* webpackIgnore: true */
           /* @vite-ignore */
           pdfModuleUrl
         ) as unknown as PdfJsModule;
-        pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.mjs";
+        pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.legacy.min.mjs";
         loadedPdf = await pdfjs.getDocument({ data }).promise;
         if (!controller.signal.aborted) {
           setPdf(loadedPdf);

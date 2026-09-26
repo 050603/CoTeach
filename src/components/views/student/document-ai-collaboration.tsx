@@ -57,6 +57,7 @@ import {
 import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
 import { useProjectMemory } from "@/components/views/student/use-project-memory";
 import { documentVersionDigest } from "@/lib/ai-collaboration/document-version";
+import { acknowledgeDocumentDraft, documentDraftKey, readDocumentDrafts, writeDocumentDraft, type PendingDocumentDraft } from "@/lib/browser/document-draft";
 
 type CollaborationMessage = AiMemberWorkspaceMessage;
 
@@ -247,7 +248,12 @@ export function DocumentAiCollaboration({
   });
   const editorRef = useRef<PlateDocumentEditorHandle>(null);
   const submissionIdRef = useRef<string | undefined>(undefined);
-  const submissionVersionRef = useRef(1);
+  const submissionVersionRef = useRef(0);
+  const pendingDraftRef = useRef<PendingDocumentDraft | null>(null);
+  const draftKeyRef = useRef("");
+  const saveChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const [saveRetry, setSaveRetry] = useState(0);
+  const [localDraftError, setLocalDraftError] = useState<string | null>(null);
   const loadedScopeRef = useRef("");
   const requestSnapshotsRef = useRef<Map<string, DocumentRequestSnapshot>>(new Map());
   const activeRequestRef = useRef<{ id: string; controller: AbortController } | null>(null);
@@ -371,18 +377,22 @@ export function DocumentAiCollaboration({
     const scopeKey = `${course.id}:${studentId}:${stageKey}:${workspaceKind}`;
     if (loadedScopeRef.current === scopeKey) return;
     loadedScopeRef.current = scopeKey;
-    const initialContent = existingDocument?.content
-      ?? (isExternalArtifact ? EXTERNAL_ARTIFACT_COLLABORATION_TEMPLATE : "");
-    submissionIdRef.current = existingDocument?.id;
-    submissionVersionRef.current = existingDocument?.version ?? 1;
+    const recovered = readDocumentDrafts(scopeKey)[0];
+    const serverContent = existingDocument?.content ?? (isExternalArtifact ? EXTERNAL_ARTIFACT_COLLABORATION_TEMPLATE : "");
+    const initialContent = recovered?.content ?? serverContent;
+    pendingDraftRef.current = recovered ?? null;
+    draftKeyRef.current = documentDraftKey(scopeKey);
+    submissionIdRef.current = recovered?.submissionId ?? existingDocument?.id;
+    submissionVersionRef.current = recovered?.expectedVersion ?? existingDocument?.version ?? 0;
+    setLocalDraftError(null);
     // A new external workspace starts with a real, editable proxy draft.  Mark
     // it unsaved once so the normal autosave persists the template exactly once;
     // subsequent refreshes load that submission instead of reinserting it.
-    savedContentRef.current = existingDocument ? initialContent : (isExternalArtifact ? "" : initialContent);
+    savedContentRef.current = existingDocument ? serverContent : (isExternalArtifact ? "" : serverContent);
     setDocumentHtml(initialContent);
     currentDocumentRef.current = initialContent;
     setDocumentReady(true);
-    setSaveStatus(existingDocument || !isExternalArtifact ? "saved" : "unsaved");
+    setSaveStatus(recovered || (!existingDocument && isExternalArtifact) ? "unsaved" : "saved");
     setSelection(null);
     setPendingSuggestion(null);
     setPendingDelivery(null);
@@ -501,48 +511,82 @@ export function DocumentAiCollaboration({
     return () => controller.abort();
   }, [resolvedCourseId, stageKey, studentId, supportedStage, workspaceKind]);
 
-  const persistDocument = useCallback(async (
+  const keepLocalDraft = useCallback((content: string): PendingDocumentDraft | null => {
+    if (!loadedScopeRef.current) return null;
+    const pending: PendingDocumentDraft = {
+      key: draftKeyRef.current || (draftKeyRef.current = documentDraftKey(loadedScopeRef.current)),
+      scope: loadedScopeRef.current,
+      submissionId: submissionIdRef.current,
+      expectedVersion: submissionVersionRef.current,
+      content,
+      updatedAt: Date.now(),
+    };
+    try {
+      writeDocumentDraft(pending);
+      pendingDraftRef.current = pending;
+      setLocalDraftError(null);
+      return pending;
+    } catch {
+      setLocalDraftError("浏览器未能保存本机草稿，请保持此页打开并尽快保存到服务器。");
+      return null;
+    }
+  }, []);
+
+  const persistDocument = useCallback((
     content: string,
     source: "auto" | "manual" | "ai" | "undo",
   ): Promise<boolean> => {
-    if (!course || !studentId || !supportedStage) {
-      setSaveStatus("error");
-      return false;
-    }
-    if (content === savedContentRef.current && session.saveState !== "error") {
-      setSaveStatus("saved");
-      return true;
-    }
-    setSaveStatus("saving");
-    const submission = await session.persistSubmission({
-      id: submissionIdRef.current,
-      courseId: course.id,
-      studentId,
-      studentName: session.studentName ?? session.user.name,
-      groupId: group?.id,
-      stageKey,
-      type: isExternalArtifact ? "artifact-brief" : "document",
-      title: documentTitle,
-      content,
-    });
-    if (!submission) {
-      setSaveStatus("error");
-      return false;
-    }
-    submissionIdRef.current = submission.id;
-    submissionVersionRef.current = submission.version ?? 1;
-    savedContentRef.current = content;
-    setSaveStatus("saved");
-    void source;
-    return true;
-  }, [course, documentTitle, group, isExternalArtifact, session, stageKey, studentId, supportedStage]);
+    const scope = loadedScopeRef.current;
+    const perform = async (): Promise<boolean> => {
+      if (loadedScopeRef.current !== scope || !course || !studentId || !supportedStage) return false;
+      if (content === savedContentRef.current && session.saveState !== "error") return true;
+      const pending = pendingDraftRef.current?.content === content ? pendingDraftRef.current : keepLocalDraft(content);
+      setSaveStatus("saving");
+      try {
+        const submission = await session.persistSubmission({
+          id: submissionIdRef.current, courseId: course.id, studentId,
+          studentName: session.studentName ?? session.user.name,
+          groupId: group?.id, stageKey,
+          type: isExternalArtifact ? "artifact-brief" : "document",
+          title: documentTitle, content, expectedVersion: submissionVersionRef.current,
+        });
+        if (loadedScopeRef.current !== scope) return false;
+        if (!submission) { setSaveStatus("error"); return false; }
+        submissionIdRef.current = submission.id;
+        submissionVersionRef.current = submission.version ?? 1;
+        savedContentRef.current = content;
+        if (pending) {
+          try { acknowledgeDocumentDraft(pending); } catch { /* Retaining an acknowledged draft is safe. */ }
+        }
+        // A newer edit keeps its content, now based on the acknowledged revision.
+        if (currentDocumentRef.current !== content) keepLocalDraft(currentDocumentRef.current);
+        else pendingDraftRef.current = null;
+        setSaveStatus(currentDocumentRef.current === content ? "saved" : "unsaved");
+        void source;
+        return true;
+      } catch {
+        if (loadedScopeRef.current === scope) setSaveStatus("error");
+        return false;
+      }
+    };
+    const saved = saveChainRef.current.then(perform, perform);
+    saveChainRef.current = saved;
+    return saved;
+  }, [course, documentTitle, group, isExternalArtifact, keepLocalDraft, session, stageKey, studentId, supportedStage]);
+
+  useEffect(() => {
+    const retry = () => setSaveRetry(value => value + 1);
+    window.addEventListener("online", retry);
+    window.addEventListener("focus", retry);
+    return () => { window.removeEventListener("online", retry); window.removeEventListener("focus", retry); };
+  }, []);
 
   useEffect(() => {
     if (!documentReady || !course || !studentId || !supportedStage) return;
     if (documentHtml === savedContentRef.current) return;
     const timer = window.setTimeout(() => void persistDocument(documentHtml, "auto"), 900);
     return () => window.clearTimeout(timer);
-  }, [course, documentHtml, documentReady, persistDocument, stageKey, studentId, supportedStage]);
+  }, [course, documentHtml, documentReady, persistDocument, saveRetry, stageKey, studentId, supportedStage]);
 
   useEffect(() => {
     if (!documentReady || !historyLoaded || !course || !studentId || !supportedStage || !proactiveReviewEnabled) return;
@@ -917,6 +961,7 @@ export function DocumentAiCollaboration({
   }, [aiCommentThreads, course, stageKey, studentId, supportedStage, workspaceKind]);
 
   function handleDocumentChange(html: string) {
+    keepLocalDraft(html);
     currentDocumentRef.current = html;
     setDocumentHtml(html);
     setSaveStatus(html === savedContentRef.current ? "saved" : "unsaved");
@@ -1815,6 +1860,7 @@ export function DocumentAiCollaboration({
             <h1 className="mt-1 truncate text-base font-bold leading-tight text-stone-950 sm:text-lg">{projectTitle}</h1>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            {localDraftError && <span role="alert" className="text-xs text-rose-700">{localDraftError}</span>}
             <span className="hidden sm:inline-flex"><SaveState status={session.saveState === "error" ? "error" : saveStatus} /></span>
             <PrimaryButton
               disabled={saveStatus === "saving"}
@@ -2022,7 +2068,7 @@ export function DocumentAiCollaboration({
 }
 
 function SaveState({ status }: { status: "saved" | "unsaved" | "saving" | "error" }) {
-  const copy = status === "saving" ? "保存中" : status === "unsaved" ? "有未保存修改" : status === "error" ? "保存失败" : "已保存";
+  const copy = status === "saving" ? "保存中" : status === "unsaved" ? "本机待同步" : status === "error" ? "同步失败，草稿已保留" : "服务器已保存";
   return (
     <span className={cn(
       "hidden items-center gap-1.5 text-xs sm:inline-flex",

@@ -8,8 +8,8 @@ import type {
 // Leave enough time inside the one-second classroom SLO for request handling,
 // React rendering and media playback when a WebSocket is unavailable. A
 // healthy subscribed socket uses the slower watchdog interval below.
-export const PROJECTION_POLL_INTERVAL_MS = 150;
-export const PROJECTION_CONNECTED_CHECK_INTERVAL_MS = 400;
+export const PROJECTION_POLL_INTERVAL_MS = 500;
+export const PROJECTION_CONNECTED_CHECK_INTERVAL_MS = 15_000;
 export const PROJECTION_REQUEST_TIMEOUT_MS = 750;
 export const PROJECTION_COALESCE_MS = 100;
 
@@ -24,6 +24,7 @@ export type ProjectionStateSnapshot = ProjectionPatch & {
   projectionVersion: number;
   projectionUpdatedAt: string;
   serverTime: string;
+  projectionController?: CourseUiState["projectionController"];
 };
 
 export function projectionPatchFromAction(
@@ -99,6 +100,7 @@ export function projectionSnapshotFromUiState(input: {
     projectionVersion: validVersion(input.uiState?.projectionVersion),
     projectionUpdatedAt: input.uiState?.projectionUpdatedAt ?? serverTime,
     serverTime,
+    projectionController: input.uiState?.projectionController ?? null,
     resourceProjection: input.uiState?.resourceProjection ?? null,
     teacherResourceProjection: input.uiState?.teacherResourceProjection ?? null,
   };
@@ -166,6 +168,7 @@ export function mergeCourseUiStateWithProjectionGuard(
     projectionVersion: Math.max(currentVersion, incomingVersion),
     projectionUpdatedAt: current?.projectionUpdatedAt,
     projectionClockOffsetMs: current?.projectionClockOffsetMs,
+    projectionController: current?.projectionController,
   };
 }
 

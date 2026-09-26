@@ -16,7 +16,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const srcDir = path.join(root, 'packages/@openmaic/importer/dist');
 const destDir = path.join(root, 'public/vendor/maic-importer');
-const pdfJsSrcDir = path.join(root, 'packages/@openmaic/importer/node_modules/pdfjs-dist/build');
+// The modern bundle requires newer APIs (including Promise.withResolvers)
+// than our desktop browser baseline. Both realms need the legacy polyfills.
+const pdfJsSrcDir = path.join(root, 'packages/@openmaic/importer/node_modules/pdfjs-dist/legacy/build');
 const pdfJsDestDir = path.join(root, 'public/vendor/pdfjs');
 
 try {
@@ -34,8 +36,8 @@ await cp(srcDir, destDir, { recursive: true });
 await rm(pdfJsDestDir, { recursive: true, force: true });
 await mkdir(pdfJsDestDir, { recursive: true });
 await Promise.all([
-  cp(path.join(pdfJsSrcDir, 'pdf.min.mjs'), path.join(pdfJsDestDir, 'pdf.min.mjs')),
-  cp(path.join(pdfJsSrcDir, 'pdf.worker.min.mjs'), path.join(pdfJsDestDir, 'pdf.worker.min.mjs')),
+  cp(path.join(pdfJsSrcDir, 'pdf.min.mjs'), path.join(pdfJsDestDir, 'pdf.legacy.min.mjs')),
+  cp(path.join(pdfJsSrcDir, 'pdf.worker.min.mjs'), path.join(pdfJsDestDir, 'pdf.worker.legacy.min.mjs')),
 ]);
 
 console.log(

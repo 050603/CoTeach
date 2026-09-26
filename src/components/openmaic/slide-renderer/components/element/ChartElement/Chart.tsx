@@ -82,6 +82,8 @@ export function Chart({
 
       if (option) {
         chartInstance.current.setOption(option, true);
+      } else {
+        chartInstance.current.clear();
       }
     };
   }, [type, data, themeColors, textColor, lineColor, options]);

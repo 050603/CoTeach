@@ -12,7 +12,7 @@ export function loadCodeEditorRuntime(): Promise<void> {
   runtime = new Promise<void>((resolve, reject) => {
     let settled = false;
     let localeLoaded = false;
-    let script: HTMLScriptElement | undefined;
+    const script = document.createElement("script");
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
@@ -39,7 +39,6 @@ export function loadCodeEditorRuntime(): Promise<void> {
       loadEditor();
       return;
     }
-    script = document.createElement("script");
     script.src = LOCALE_URL;
     script.dataset.openpblMonacoLocale = "zh-cn";
     script.addEventListener("load", loadEditor);
