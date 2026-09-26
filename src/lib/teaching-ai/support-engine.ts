@@ -1692,11 +1692,11 @@ function formatAiLearningProgress(progress?: NonNullable<Course["aiLearningProgr
     "not-started": "尚未开始",
     "in-progress": "学习中",
     completed: "已完成",
-    mastered: "已掌握",
+    mastered: "已完成（旧评分未核验）",
   }[progress.masteryLevel];
   const total = Math.max(0, progress.totalScenes);
   const completed = Math.min(total, progress.completedScenes.length);
-  return `${mastery}，已完成 ${completed}/${total} 个学习场景${typeof progress.quizScore === "number" ? `，测验得分 ${progress.quizScore}` : ""}`;
+  return `${mastery}，已完成 ${completed}/${total} 个学习场景`;
 }
 
 function evaluationSourceLabel(source: "ai" | "teacher" | "peer" | "self"): string {

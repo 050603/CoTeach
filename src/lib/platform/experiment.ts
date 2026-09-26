@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { completeDesignAnswer, designPromptParts } from "./experiment-design-answer";
 
 export const ExperimentPhaseSchema = z.enum(["pretest", "posttest"]);
 export type ExperimentPhase = z.infer<typeof ExperimentPhaseSchema>;
@@ -239,6 +240,7 @@ export function gradeExperimentAnswers(questions: ExperimentQuestion[], input: u
     }
     if (typeof answer !== "string" || !answer.trim() || answer.length > 10_000) return null;
     const normalized = answer.trim();
+    if (question.type === "short-answer" && designPromptParts(question.prompt) && !completeDesignAnswer(normalized)) return null;
     if (question.type === "single-choice" && !(question.options ?? []).includes(normalized)) return null;
     if (question.type === "true-false" && !["true", "false"].includes(normalized)) return null;
     if (question.type === "scale" && (!question.scale || !/^\d{1,2}$/.test(normalized) || Number(normalized) < question.scale.min || Number(normalized) > question.scale.max)) return null;

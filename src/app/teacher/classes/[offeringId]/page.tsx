@@ -33,6 +33,7 @@ type Activity = {
     isOpen: boolean;
     description?: string;
     version?: number;
+    hasResponses?: boolean;
     templateId?: string | null;
     templateVersionId?: string | null;
     config?: {
@@ -330,7 +331,9 @@ export default function TeacherClassEditorPage() {
                     if (!response.ok || !data.id || !data.url) throw new Error(data.message ?? "PDF 上传失败，请重试");
                     resource = { url: data.url, fileId: data.id, fileName: data.fileName ?? activity.file.name, fileSize: data.size ?? "" };
                 }
-                const config = { ...(activity.type === "Classroom" ? editActivity?.config ?? {} : {}), schemaVersion: activity.type === "Form" ? 2 : 1, content: activity.content, ...(activity.type === "Resource" ? { resourceKind: activity.resourceKind, ...(resource.url ? { url: resource.url } : {}), ...(activity.resourceKind === "file" && resource.fileId ? { fileId: resource.fileId, fileName: resource.fileName, fileSize: resource.fileSize } : {}) } : activity.url ? { url: activity.url } : {}), ...(activity.type === "Form" ? { questions: activity.surveyQuestions } : activity.type === "Quiz" ? { questions: activity.questions.split("\n").map((title) => title.trim()).filter(Boolean).map((title, index) => ({ id: editActivity?.config?.questions?.[index]?.id ?? `q${index + 1}`, title, required: true })) } : {}) };
+                const config = activity.type === "Form" && editActivity?.hasResponses
+                    ? { ...editActivity.config, content: activity.content }
+                    : { ...(activity.type === "Classroom" ? editActivity?.config ?? {} : {}), schemaVersion: activity.type === "Form" ? 2 : 1, content: activity.content, ...(activity.type === "Resource" ? { resourceKind: activity.resourceKind, ...(resource.url ? { url: resource.url } : {}), ...(activity.resourceKind === "file" && resource.fileId ? { fileId: resource.fileId, fileName: resource.fileName, fileSize: resource.fileSize } : {}) } : activity.url ? { url: activity.url } : {}), ...(activity.type === "Form" ? { questions: activity.surveyQuestions } : activity.type === "Quiz" ? { questions: activity.questions.split("\n").map((title) => title.trim()).filter(Boolean).map((title, index) => ({ id: editActivity?.config?.questions?.[index]?.id ?? `q${index + 1}`, title, required: true })) } : {}) };
                 await mutate(editActivity ? `/api/platform/activities/${editActivity.id}/manage` : `/api/platform/offerings/${offeringId}/chapters/${chapterId}/activities`, { title: activity.title.trim(), description: activity.content, config, ...(editActivity ? { version: editActivity.version } : { type: activity.type }), ...(activity.type === "Classroom" ? { templateVersionId: activity.templateVersionId || undefined } : {}) }, editActivity ? "PATCH" : "POST");
             }
             setDialog(null);
@@ -778,7 +781,7 @@ export default function TeacherClassEditorPage() {
                           <input aria-label="上传 PDF 文档" required={!activity.fileId} className="sr-only" type="file" accept="application/pdf,.pdf" onChange={(event) => { const file = event.target.files?.[0] ?? null; setActivity({ ...activity, file, fileId: file ? "" : activity.fileId, fileName: file?.name ?? activity.fileName, fileSize: file ? "" : activity.fileSize, url: file ? "" : activity.url }); }}/>
                         </label>}
                       </div> : null}
-                      {activity.type === "Form" ? <SurveyBuilder questions={activity.surveyQuestions} onChange={(surveyQuestions) => setActivity({ ...activity, surveyQuestions })}/> : activity.type === "Quiz" ? <label className="pbl-dialog-field"><span>测验题目 <small>每行一题</small></span><textarea required className={`${field} min-h-32`} value={activity.questions} onChange={(event) => setActivity({ ...activity, questions: event.target.value })} placeholder="请写出本节课的核心概念。"/></label> : null}
+                      {activity.type === "Form" ? <fieldset disabled={Boolean(editActivity?.hasResponses)}>{editActivity?.hasResponses ? <p className="mb-3 text-sm text-[var(--pbl-text-muted)]">已有学生提交此问卷，题目和选项已锁定；可以修改标题、说明或开放状态。新题目请创建新问卷。</p> : null}<SurveyBuilder questions={activity.surveyQuestions} onChange={(surveyQuestions) => setActivity({ ...activity, surveyQuestions })}/></fieldset> : activity.type === "Quiz" ? <label className="pbl-dialog-field"><span>测验题目 <small>每行一题</small></span><textarea required className={`${field} min-h-32`} value={activity.questions} onChange={(event) => setActivity({ ...activity, questions: event.target.value })} placeholder="请写出本节课的核心概念。"/></label> : null}
                     </>
                   )}
                 </section>

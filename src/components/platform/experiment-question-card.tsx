@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef } from "react";
 import { Check } from "lucide-react";
 import { groupExperimentQuestions, type ExperimentQuestionGroup } from "@/lib/platform/experiment";
+import { designPromptParts, parseDesignAnswer, serializeDesignAnswer } from "@/lib/platform/experiment-design-answer";
 
 export type ExperimentDisplayQuestion = {
   id: string;
@@ -60,6 +61,8 @@ export function ExperimentQuestionCard({ question, index, answer, onAnswerChange
   const choices = question.type === "true-false" ? ["true", "false"] : question.options ?? [];
   const scores = question.scale && question.scale.max > question.scale.min
     ? Array.from({ length: question.scale.max - question.scale.min + 1 }, (_, offset) => String(question.scale!.min + offset)) : [];
+  const design = question.type === "short-answer" ? designPromptParts(question.prompt) : null;
+  const designAnswer = design ? parseDesignAnswer(typeof answer === "string" ? answer : undefined) : null;
 
   return <fieldset
     aria-invalid={invalid || undefined}
@@ -73,15 +76,34 @@ export function ExperimentQuestionCard({ question, index, answer, onAnswerChange
       <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-[10px] bg-[var(--pbl-student-soft)] text-sm font-bold tabular-nums text-[var(--pbl-student)]">{String(index + 1).padStart(2, "0")}</span>
       <div className="min-w-0 flex-1">
         <p className="text-xs font-semibold text-[var(--pbl-student)]">{typeLabel[question.type]}{question.category ? ` · ${categoryLabel[question.category] ?? question.category}` : ""}</p>
-        <div className="mt-2 max-w-[68ch] space-y-3 text-[16px] font-semibold leading-8 text-[var(--pbl-text-strong)]" id={headingId}>
+        <div className={`mt-2 space-y-3 text-[16px] font-semibold leading-8 text-[var(--pbl-text-strong)] ${design ? "" : "max-w-[68ch]"}`} id={headingId}>
           <span className="sr-only">第 {index + 1} 题，{question.optional ? "选答" : "必答"}：</span>
-          {promptParagraphs(question.prompt).map((paragraph, paragraphIndex) => <p className="whitespace-pre-wrap [overflow-wrap:anywhere]" key={paragraphIndex}>{paragraph}</p>)}
+          {design ? <p>情境设计：根据证据改进 8 分钟活动</p> : promptParagraphs(question.prompt).map((paragraph, paragraphIndex) => <p className="whitespace-pre-wrap [overflow-wrap:anywhere]" key={paragraphIndex}>{paragraph}</p>)}
         </div>
       </div>
       <span aria-hidden="true" className="hidden shrink-0 text-xs font-medium text-[var(--pbl-text-muted)] sm:block">{question.optional ? "可跳过" : "必答"}</span>
     </div>
     <div className="mt-5 border-t border-[var(--pbl-border)] pt-5">
-      {question.type === "short-answer" ? <div>
+      {design && designAnswer ? <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:gap-7">
+        <section aria-label="题目情境" className="min-w-0 rounded-xl border border-[var(--pbl-student-border)] bg-[var(--pbl-student-soft)] p-4 sm:p-5">
+          <p className="text-xs font-bold tracking-wider text-[var(--pbl-student)]">阅读情境</p>
+          <div className="mt-4 space-y-3">{design.context.map((line, lineIndex) => <div className="rounded-lg border border-[var(--pbl-border)] bg-white p-3.5 sm:p-4" key={lineIndex}>
+            <p className="text-xs font-bold text-[var(--pbl-student)]">{["任务与目标", "已有测试记录", "现有安排", "作答要求"][lineIndex] ?? "补充说明"}</p>
+            <p className="mt-1 whitespace-pre-wrap text-sm font-normal leading-7 text-[var(--pbl-text-strong)] [overflow-wrap:anywhere]">{line}</p>
+          </div>)}</div>
+        </section>
+        <section aria-label="分项作答" className="min-w-0 space-y-4">
+          <p className="text-xs font-bold tracking-wider text-[var(--pbl-student)]">按三点作答</p>
+          {designAnswer.legacy && readOnly ? <div className="rounded-xl border border-[var(--pbl-border)] bg-[var(--pbl-bg)] p-4"><p className="text-xs font-semibold text-[var(--pbl-text-muted)]">此前提交的完整回答</p><p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-[var(--pbl-text-strong)] [overflow-wrap:anywhere]">{answer}</p></div> : <>
+            {designAnswer.legacy ? <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">已载入旧版草稿。请把原回答拆分到下面三个答题框。</p> : null}
+            {design.sections.map(({ label, guidance }, sectionIndex) => <div className="rounded-xl border border-[var(--pbl-border)] bg-white p-4" key={label}>
+              <label className="flex items-center gap-2 text-sm font-bold text-[var(--pbl-text-strong)]" htmlFor={`${inputName}-${label}`}><span aria-hidden="true" className="grid size-7 place-items-center rounded-full bg-[var(--pbl-student-soft)] text-xs text-[var(--pbl-student)]">{sectionIndex + 1}</span>{label}</label>
+              <p className="mt-2 text-sm leading-6 text-[var(--pbl-text-muted)]">{guidance}</p>
+              <textarea aria-label={`${label}：${guidance}`} className="mt-3 min-h-28 w-full resize-y rounded-lg border border-[var(--pbl-border)] bg-[var(--pbl-bg)] px-4 py-3 text-sm leading-7 text-[var(--pbl-text-strong)] outline-none focus:border-[var(--pbl-student)] focus:ring-2 focus:ring-[var(--pbl-student-border)]" id={`${inputName}-${label}`} maxLength={3000} onChange={(event) => onAnswerChange(serializeDesignAnswer({ ...designAnswer.values, [label]: event.target.value }))} placeholder={`写下${label}部分…`} readOnly={readOnly} value={designAnswer.values[label]} />
+            </div>)}
+          </>}
+        </section>
+      </div> : question.type === "short-answer" ? <div>
         <label className="mb-2 block text-xs font-medium text-[var(--pbl-text-muted)]" htmlFor={`${inputName}-text`}>你的回答</label>
         <textarea
           aria-label={question.prompt.trim() || `第 ${index + 1} 题简答`}

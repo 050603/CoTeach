@@ -371,12 +371,12 @@ export async function listTeacherOfferings(claims: AuthClaims) {
     include: {
       invitations: { where: { status: { in: ["ACTIVE", "active"] } }, orderBy: { createdAt: "desc" }, take: 1 },
       resources: { where: { activityId: null }, orderBy: { createdAt: "asc" }, include: { fileAsset: true } },
-      chapters: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { activities: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { classroomInstances: { orderBy: { runNo: "desc" }, take: 1, include: { templateVersion: { select: { id: true, templateId: true, version: true, status: true, snapshot: true } } } } } } } },
-      _count: { select: { enrollments: true } },
+      chapters: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { activities: { where: { archivedAt: null }, orderBy: { position: "asc" }, include: { classroomInstances: { orderBy: { runNo: "desc" }, take: 1, include: { templateVersion: { select: { id: true, templateId: true, version: true, status: true, snapshot: true } } } }, _count: { select: { submissions: true, progress: { where: { OR: [{ completedAt: { not: null } }, { status: { in: ["COMPLETED", "completed"] } }] } } } } } } } },
+      _count: { select: { enrollments: { where: { status: { in: ACTIVE_ENROLLMENT_STATUSES } } } } },
     },
     orderBy: { updatedAt: "desc" },
   });
-  return offerings.map((offering) => ({ ...offering, ...courseDetails(offering.settings), courseReferences: courseReferences(offering.settings, offering.resources), resources: undefined, status: normalizedStatus(offering.status), invitation: offering.invitations[0] ?? null, invitations: undefined, studentCount: offering._count.enrollments, _count: undefined, chapters: offering.chapters.map((chapter) => ({ ...chapter, activities: chapter.activities.map((activity) => ({ ...activity, type: activityTypeForApi(activity.type), templateId: activity.classroomInstances[0]?.templateVersion.templateId ?? null, templateVersionId: activity.classroomInstances[0]?.templateVersion.id ?? null, instances: activity.classroomInstances.map((instance) => ({ ...instance, status: normalizedStatus(instance.status), templateId: instance.templateVersion.templateId, templateVersionId: instance.templateVersion.id, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) })) })) })) }));
+  return offerings.map((offering) => ({ ...offering, ...courseDetails(offering.settings), courseReferences: courseReferences(offering.settings, offering.resources), resources: undefined, status: normalizedStatus(offering.status), invitation: offering.invitations[0] ?? null, invitations: undefined, studentCount: offering._count.enrollments, _count: undefined, chapters: offering.chapters.map((chapter) => ({ ...chapter, activities: chapter.activities.map((activity) => ({ ...activity, hasResponses: (activity._count?.submissions ?? 0) > 0 || (activity._count?.progress ?? 0) > 0, _count: undefined, type: activityTypeForApi(activity.type), templateId: activity.classroomInstances[0]?.templateVersion.templateId ?? null, templateVersionId: activity.classroomInstances[0]?.templateVersion.id ?? null, instances: activity.classroomInstances.map((instance) => ({ ...instance, status: normalizedStatus(instance.status), templateId: instance.templateVersion.templateId, templateVersionId: instance.templateVersion.id, coverImageUrl: classroomCoverImageUrl(instance.templateVersion.snapshot) })) })) })) }));
 }
 
 export async function createOffering(claims: AuthClaims, input: { name: string; description?: string; term?: string; startsAt?: string; endsAt?: string; coverImageUrl?: string | null; outline?: string; referenceMaterials?: string; referenceLinks?: CourseReferenceLink[] }) {
@@ -476,6 +476,22 @@ export async function updateActivity(claims: AuthClaims, activityId: string, dat
     const activity = await activityForTeacher(claims, activityId, tx);
     if (data.version !== undefined && data.version !== activity.version) throw new PlatformError("VERSION_CONFLICT", "活动已被其他操作更新", 409);
     const config = data.config === undefined ? undefined : parsedActivityConfig(activity.type, data.config);
+    if (activity.type.toUpperCase() === "FORM" && config !== undefined) {
+      const previous = SurveyConfigSchema.safeParse(activity.config);
+      const questionnaireChanged = !previous.success || JSON.stringify(previous.data.questions) !== JSON.stringify(config.questions);
+      if (questionnaireChanged) {
+        const [submittedCount, legacyResponse] = await Promise.all([
+          tx.activitySubmission.count({ where: { activityId } }),
+          tx.activityProgress.findFirst({
+            where: { activityId, OR: [{ completedAt: { not: null } }, { status: { in: ["COMPLETED", "completed"] } }] },
+            select: { id: true },
+          }),
+        ]);
+        if (submittedCount > 0 || legacyResponse) {
+          throw new PlatformError("SURVEY_CONFIG_LOCKED", "已有学生提交此问卷，题目和选项不能修改；请新建问卷活动", 409);
+        }
+      }
+    }
     if (activity.type.toUpperCase() === "CLASSROOM" && config !== undefined) {
       const previousExperiment = activity.config && typeof activity.config === "object" && !Array.isArray(activity.config) ? (activity.config as Record<string, unknown>).experiment : undefined;
       if (JSON.stringify(previousExperiment) !== JSON.stringify(config.experiment)) {

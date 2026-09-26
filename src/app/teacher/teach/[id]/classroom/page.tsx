@@ -59,7 +59,7 @@ import {
   TimerPanel,
 } from "./classroom-page-parts";
 
-type ToolPanel = "timer" | "invite" | "students" | null;
+type ToolPanel = "timer" | "students" | null;
 
 export default function TeachClassroomPage() {
   const params = useParams<{ id: string }>();
@@ -286,17 +286,6 @@ export default function TeachClassroomPage() {
 
   const toolPanelContent = toolPanel === "timer" ? (
     <TimerPanel snapshot={timingSnapshot} onTogglePause={toggleClassroomTimer} onReset={resetActiveStageTimer} onAdjust={adjustActiveStage} />
-  ) : toolPanel === "invite" ? (
-    <InvitePanel
-      code={course.inviteCode}
-      onCopy={() => course.inviteCode
-        ? copyTextToClipboard(normalizeInviteCode(course.inviteCode)).then(
-            () => true,
-            () => false,
-          )
-        : Promise.resolve(false)}
-      accessHref={`/teacher/classes/${course.platformContext?.offeringId ?? ""}/access`}
-    />
   ) : toolPanel === "students" ? (
     <StudentsPanel course={course} currentStageKey={currentStage?.key} onlineStudentIds={presence.onlineStudentIds} />
   ) : null;
@@ -317,9 +306,11 @@ export default function TeachClassroomPage() {
       onSelectStage={requestStage}
       stageOptions={course.stages.map((stage, index) => ({ index, label: stage.label }))}
       wide
+      hideAiSettings
+      hideNotifications
+      headerEndSlot={<button className="hidden min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher)] px-3 text-sm font-semibold text-white md:inline-flex" data-teacher-presentation-trigger onClick={enterPresentation} type="button"><Maximize2 className="shrink-0" size={17} />全屏授课</button>}
       headerSlot={
         <div className="hidden items-center gap-1 md:flex">
-          <button className="inline-flex min-h-11 items-center gap-2 rounded-md border border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher)] px-3 text-sm font-semibold text-white" data-teacher-presentation-trigger onClick={enterPresentation} type="button"><Maximize2 size={17} />全屏授课</button>
           {/* 计时器 */}
           <div className="relative">
             <button
@@ -331,18 +322,6 @@ export default function TeachClassroomPage() {
               <span className="font-mono font-bold text-[var(--pbl-teacher)]">{timerText}</span>
             </button>
             {toolPanel === "timer" ? <ClassroomToolPopover onClose={() => setToolPanel(null)}>{toolPanelContent}</ClassroomToolPopover> : null}
-          </div>
-          {/* 邀请码 */}
-          <div className="relative">
-            <button
-              className="grid h-8 w-8 place-items-center rounded-[var(--radius-xs)] border border-stone-200 bg-white/80 text-stone-600 transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)]"
-              onClick={() => setToolPanel((value) => value === "invite" ? null : "invite")}
-              type="button"
-              aria-label="学生邀请码"
-            >
-              <QrCode size={14} />
-            </button>
-            {toolPanel === "invite" ? <ClassroomToolPopover onClose={() => setToolPanel(null)}>{toolPanelContent}</ClassroomToolPopover> : null}
           </div>
           {/* 在线学生 */}
           <div className="relative">
@@ -358,14 +337,6 @@ export default function TeachClassroomPage() {
             </button>
             {toolPanel === "students" ? <ClassroomToolPopover align="right" onClose={() => setToolPanel(null)}>{toolPanelContent}</ClassroomToolPopover> : null}
           </div>
-          {/* 查看课程 */}
-          <Link
-            className="grid h-8 w-8 place-items-center rounded-[var(--radius-xs)] border border-stone-200 bg-white/80 text-stone-600 transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)]"
-            href={`/teacher/prepare/${course.platformContext?.templateId ?? course.id}/preview`}
-            aria-label="查看课程"
-          >
-            <Eye size={14} />
-          </Link>
           {/* 结束授课 */}
           <button
             className="grid h-8 w-8 place-items-center rounded-[var(--radius-xs)] border border-orange-200 bg-white/80 text-[var(--pbl-danger)] transition hover:bg-[var(--pbl-danger-soft)]"
@@ -382,7 +353,6 @@ export default function TeachClassroomPage() {
       {presentation.active ? <TeacherPresentationHeader course={course} degraded={presence.degraded} onlineCount={onlineCount} onExit={() => void presentation.exit()} saveStatus={<SaveStatus lastSavedAt={session.lastSavedAt} onRetry={() => void session.retrySave()} state={session.saveState} />} /> : null}
       {/* 移动端工具栏：小屏幕上显示精简版 */}
       <div className={cn("mb-3 flex flex-wrap items-center gap-2 md:hidden", presentation.active && "!hidden")}>
-        <button className="inline-flex min-h-11 items-center gap-2 rounded-md bg-[var(--pbl-teacher)] px-3 text-sm font-semibold text-white" data-teacher-presentation-trigger onClick={enterPresentation} type="button"><Maximize2 size={17} />全屏授课</button>
         <label className="order-first w-full"><span className="sr-only">当前教学阶段</span><select aria-label="当前教学阶段" className="h-9 w-full truncate rounded-[var(--radius-sm)] border border-blue-200 bg-blue-50/70 px-2 text-xs font-bold text-blue-800 outline-none focus-visible:ring-2 focus-visible:ring-blue-500" onChange={(event) => requestStage(Number(event.target.value))} value={course.currentStageIndex}>{course.stages.map((stage, index) => <option key={stage.key} value={index}>{index + 1}. {stage.label}</option>)}</select></label>
         <button
           className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-sm)] border border-stone-200 bg-white px-3 text-[13px] font-semibold text-stone-600"
@@ -393,14 +363,6 @@ export default function TeachClassroomPage() {
           <span className="font-mono font-bold text-[var(--pbl-teacher)]">{timerText}</span>
         </button>
         <button
-          className="grid h-9 w-9 place-items-center rounded-[var(--radius-sm)] border border-stone-200 bg-white text-stone-600"
-          onClick={() => setToolPanel("invite")}
-          type="button"
-          aria-label="邀请码"
-        >
-          <QrCode size={15} />
-        </button>
-        <button
           className="inline-flex h-9 items-center gap-1 rounded-[var(--radius-sm)] border border-stone-200 bg-white px-3 text-[13px] font-semibold text-stone-600"
           onClick={() => setToolPanel("students")}
           type="button"
@@ -409,13 +371,6 @@ export default function TeachClassroomPage() {
           <UserRoundCheck size={15} /> {onlineCount}/{course.students.length}
         </button>
         <div className="ml-auto flex items-center gap-2">
-          <Link
-            className="grid h-9 w-9 place-items-center rounded-[var(--radius-sm)] border border-stone-200 bg-white text-stone-600"
-            href={`/teacher/prepare/${course.platformContext?.templateId ?? course.id}/preview`}
-            aria-label="查看课程"
-          >
-            <Eye size={15} />
-          </Link>
           <button
             className="grid h-9 w-9 place-items-center rounded-[var(--radius-sm)] border border-orange-200 bg-white text-[var(--pbl-danger)]"
             onClick={() => setEndDialogOpen(true)}
@@ -424,6 +379,7 @@ export default function TeachClassroomPage() {
           >
             <CircleStop size={15} />
           </button>
+          <button className="inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-md bg-[var(--pbl-teacher)] px-3 text-sm font-semibold text-white" data-teacher-presentation-trigger onClick={enterPresentation} type="button"><Maximize2 className="shrink-0" size={17} />全屏授课</button>
         </div>
       </div>
 
@@ -452,7 +408,7 @@ export default function TeachClassroomPage() {
             <PublicDiscussionTeacherWorkspace course={course} hidden={!presentationDiscussion} />
           ) : null}
 
-          {currentStage && currentStage.key !== "reflection" && presentation.active && !presentationDiscussion && presentationView === "analytics" && !presentationDetails ? <TeacherPresentationAnalytics course={course} stageKey={currentStage.key} showcaseData={showcaseController.data} degraded={presence.degraded} onDetails={() => setPresentationDetails(true)} /> : null}
+          {currentStage && currentStage.key !== "reflection" && presentation.active && !presentationDiscussion && presentationView === "analytics" && !presentationDetails ? <TeacherPresentationAnalytics course={course} stageKey={currentStage.key} showcaseData={showcaseController.data} degraded={presence.degraded} onDetails={() => setPresentationDetails(true)} onStudentDetails={(studentId) => { setDashboardFocus({ stageKey: "ai-learning", target: "student", studentId, tab: "trajectory" }); setPresentationDetails(true); }} /> : null}
 
           {currentStage ? (
             <section

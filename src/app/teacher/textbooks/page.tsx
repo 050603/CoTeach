@@ -37,8 +37,8 @@ function statusView(item: TextbookListItem): StatusView {
 }
 
 function progressPercent(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return null;
-  return Math.max(0, Math.min(100, Math.round(value <= 1 ? value * 100 : value)));
+  if (value == null || !Number.isFinite(value) || value < 0 || value > 100) return null;
+  return Math.round(value);
 }
 
 function displayDate(value: string | undefined) {
@@ -238,10 +238,10 @@ export default function TeacherTextbooksPage() {
               <div className={styles.statusLine}>
                 {status.group === "working" ? <LoaderCircle className="animate-spin" size={15} /> : null}
                 <span className={styles.statusBadge} data-tone={status.tone}>{status.label}</span>
-                {progress != null && status.group !== "ready" ? <span>{progress}%</span> : null}
+                {progress != null && status.group !== "ready" ? <span>约 {progress}%</span> : null}
               </div>
-              {progress != null && status.group !== "ready" ? <div className={styles.progressTrack} aria-label={`解析进度 ${progress}%`}><span style={{ width: `${progress}%` }} /></div> : null}
-              <small>{status.group === "ready" ? "章节、图谱和检索索引已就绪" : status.group === "archived" ? "已有课程仍可读取固定版本" : "页面会自动更新处理进度"}</small>
+              {progress != null && status.group !== "ready" ? <div className={styles.progressTrack} aria-label={`解析阶段预计进度约 ${progress}%`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} role="progressbar"><span style={{ width: `${progress}%` }} /></div> : null}
+              <small>{status.group === "ready" ? "章节、图谱和检索索引已就绪" : status.group === "archived" ? "已有课程仍可读取固定版本" : "页面会自动更新处理进度；百分比为阶段估计"}</small>
             </div>
             <div className={styles.rowActions}>
               <Link aria-label="查看教材" className={styles.openBookButton} href={`/teacher/textbooks/${item.id}`}><span>打开教材</span><ArrowRight size={15} /></Link>

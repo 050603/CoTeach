@@ -32,23 +32,28 @@ import { deriveClassroomTimingSnapshot } from "@/lib/classroom/timing";
 import { isOpaqueInternalId, userFacingName } from "@/lib/user-facing-labels";
 import { ClassInterventionPanel } from "./class-intervention-panel";
 import { KnowledgeLectureAnalytics } from "./knowledge-lecture-analytics";
-import { firstKnowledgeLectureAttempts } from "@/lib/knowledge-lecture";
+import { firstKnowledgeLectureAttempts, isCurrentAiLearningEntry } from "@/lib/knowledge-lecture";
 import { StagePageHeader } from "@/components/classroom/classroom-ui";
 import type { TeacherStageFocus } from "@/lib/classroom/teacher-dashboard-metrics";
 
 export function computeAiLearningProgress(entry?: StudentAiProgress): number {
-  if (!entry || !isReliableAiProgress(entry)) return 0;
-  if (entry.masteryLevel === "completed" || entry.masteryLevel === "mastered") return 100;
+  return Math.round(preciseAiLearningProgress(entry) ?? 0);
+}
+
+/** Completion is evidenced by exhausted scenes, never by the player's cursor. */
+export function preciseAiLearningProgress(entry?: StudentAiProgress): number | undefined {
+  if (!entry) return 0;
+  if (!isReliableAiProgress(entry) || !Number.isSafeInteger(entry.totalScenes) || entry.totalScenes <= 0) return undefined;
   const completedCount = new Set(entry.completedScenes ?? []).size;
-  const reachedCount = Math.max(completedCount, entry.currentSceneIndex);
-  return Math.min(99, Math.round((reachedCount / Math.max(1, entry.totalScenes)) * 100));
+  if (completedCount > entry.totalScenes) return undefined;
+  return completedCount / entry.totalScenes * 100;
 }
 
 export function summarizeAiLearningStudent(course: Course, student: Student) {
   const events = (course.learningEvents ?? [])
     .filter((event) => event.studentId === student.id && event.stageKey === "ai-learning")
     .sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt));
-  const effectiveDurationMs = events.reduce(
+  const eventDurationMs = events.reduce(
     (sum, event) => event.type === "heartbeat" && event.visible !== false
       ? sum + Math.max(0, event.durationMs ?? 0)
       : sum,
@@ -64,7 +69,10 @@ export function summarizeAiLearningStudent(course: Course, student: Student) {
       }) * 1_000);
     }
   }
-  const expectedDurationMs = [...expectedByScene.values()].reduce((sum, value) => sum + value, 0);
+  const eventExpectedDurationMs = [...expectedByScene.values()].reduce((sum, value) => sum + value, 0);
+  const completeTiming = course.aiLearningTimingByStudent?.[student.id];
+  const effectiveDurationMs = completeTiming?.effectiveDurationMs ?? eventDurationMs;
+  const expectedDurationMs = completeTiming?.expectedDurationMs ?? eventExpectedDurationMs;
   const lastEvent = events.at(-1);
   const signals = (course.learningSignals ?? []).filter(
     (signal) => signal.studentId === student.id
@@ -76,19 +84,30 @@ export function summarizeAiLearningStudent(course: Course, student: Student) {
         ["completed", "mastered"].includes(course.aiLearningProgress?.[student.id]?.masteryLevel ?? ""),
       ),
   );
-  const quizAttempts = firstKnowledgeLectureAttempts(course.aiLearningProgress?.[student.id]);
-  const quizEarned = quizAttempts.reduce((sum, attempt) => sum + attempt.score, 0);
-  const quizMaxScore = quizAttempts.reduce((sum, attempt) => sum + attempt.maxScore, 0);
+  const storedEntry = course.aiLearningProgress?.[student.id];
+  const entry = storedEntry && isCurrentAiLearningEntry(course, storedEntry) ? storedEntry : undefined;
+  const quizAttempts = firstKnowledgeLectureAttempts(entry);
+  const scoredQuestions = quizAttempts
+    .filter((attempt) => attempt.gradingSource === "server")
+    .flatMap((attempt) => attempt.questions.filter((question) => question.gradingStatus === "graded"));
+  const quizEarned = scoredQuestions.reduce((sum, question) => sum + question.earned, 0);
+  const quizMaxScore = scoredQuestions.reduce((sum, question) => sum + question.points, 0);
+  const objectiveQuestions = scoredQuestions.filter((question) => question.correct !== null);
+  const preciseProgress = storedEntry && !entry ? undefined : preciseAiLearningProgress(entry);
   return {
     student,
     events,
-    progress: computeAiLearningProgress(course.aiLearningProgress?.[student.id]),
+    progress: Math.round(preciseProgress ?? 0),
+    preciseProgress,
     effectiveDurationMs,
     expectedDurationMs,
     lastEvent,
     signals,
-    hasEvidence: events.length > 0,
-    accuracy: quizMaxScore > 0 ? Math.round(quizEarned / quizMaxScore * 100) : undefined,
+    hasEvidence: Boolean(completeTiming?.hasEvidence) || events.length > 0 || (preciseProgress !== undefined && preciseProgress > 0) || quizAttempts.length > 0,
+    accuracy: objectiveQuestions.length ? Math.round(objectiveQuestions.filter((question) => question.correct === true).length / objectiveQuestions.length * 100) : undefined,
+    scoreRate: quizMaxScore > 0 ? Math.round(quizEarned / quizMaxScore * 100) : undefined,
+    scoreEarned: quizEarned,
+    scoreMax: quizMaxScore,
     answeredQuestions: quizAttempts.reduce((sum, attempt) => sum + attempt.questions.length, 0),
   };
 }
@@ -101,12 +120,16 @@ export function deriveAiLearningClassMetrics(course: Course) {
         sum + ((item.effectiveDurationMs - item.expectedDurationMs) / item.expectedDurationMs) * 100, 0,
       ) / timedStudents.length)
     : undefined;
-  const attempts = Object.values(course.aiLearningProgress ?? {}).flatMap(firstKnowledgeLectureAttempts);
-  const earned = attempts.reduce((sum, attempt) => sum + attempt.score, 0);
-  const maxScore = attempts.reduce((sum, attempt) => sum + attempt.maxScore, 0);
+  const attempts = summaries.flatMap((summary) => {
+    const entry = course.aiLearningProgress?.[summary.student.id];
+    return entry && isCurrentAiLearningEntry(course, entry) ? firstKnowledgeLectureAttempts(entry) : [];
+  });
+  const objective = attempts.filter((attempt) => attempt.gradingSource === "server")
+    .flatMap((attempt) => attempt.questions.filter((question) => question.gradingStatus === "graded" && question.correct !== null));
+  const scored = summaries.filter((summary) => summary.scoreMax > 0);
   return {
-    averageProgress: summaries.length
-      ? Math.round(summaries.reduce((sum, item) => sum + item.progress, 0) / summaries.length)
+    averageProgress: summaries.some((item) => item.preciseProgress !== undefined)
+      ? Math.round(summaries.reduce((sum, item) => sum + (item.preciseProgress ?? 0), 0) / summaries.filter((item) => item.preciseProgress !== undefined).length)
       : undefined,
     averageSpeedText: averageVariance === undefined
       ? "暂无数据"
@@ -118,7 +141,8 @@ export function deriveAiLearningClassMetrics(course: Course) {
     averageSpeedHelper: averageVariance === undefined
       ? "等待学生产生有效学习记录"
       : "按实际用时与课程预计用时比较",
-    classAccuracy: maxScore > 0 ? Math.round(earned / maxScore * 100) : undefined,
+    classAccuracy: objective.length ? Math.round(objective.filter((question) => question.correct === true).length / objective.length * 100) : undefined,
+    classScoreRate: scored.length ? Math.round(scored.reduce((sum, summary) => sum + summary.scoreEarned, 0) / scored.reduce((sum, summary) => sum + summary.scoreMax, 0) * 100) : undefined,
     attemptCount: attempts.length,
     summaries,
   };
@@ -444,7 +468,7 @@ function AdaptiveTriggerAuditDialog({
 
         <div className="overflow-y-auto p-5">
           <section aria-label="学生额外资源学习概况" className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-[10px] border border-stone-200 bg-white px-4 py-3 text-xs text-stone-600">
-            <LearningSummary label="主课" value={`${computeAiLearningProgress(progress)}%`} />
+            <LearningSummary label="主课" value={preciseAiLearningProgress(progress) === undefined ? "待核验" : `${computeAiLearningProgress(progress)}%`} />
             <LearningSummary label="先决证据" value={!pretestRequired ? "无需前测" : typeof adaptive?.pretestScore === "number" ? `${adaptive.pretestScore} 分` : "待前测"} />
             <LearningSummary label="已学资源" value={`${learnedCount} 份`} />
             <LearningSummary label="可用时间" value={`${Math.floor(remainingBudgetSec / 60)}分 ${remainingBudgetSec % 60}秒`} />

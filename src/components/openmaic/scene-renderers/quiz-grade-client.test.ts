@@ -29,6 +29,14 @@ describe('quiz grade client', () => {
 
     expect(QUIZ_GRADE_API_PATH).toBe('/api/openmaic/quiz-grade');
     expect(fetchMock).toHaveBeenCalledWith('/api/openmaic/quiz-grade', expect.objectContaining({ method: 'POST' }));
-    expect(result).toMatchObject({ questionId: 'q4', earned: 4, correct: true });
+    expect(result).toMatchObject({ questionId: 'q4', earned: 4, correct: null, status: 'graded' });
+  });
+
+  it('keeps a failed grading request pending without inventing partial credit', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+    const result = await gradeShortAnswerQuestion({
+      id: 'q4', type: 'short_answer', question: '为什么？', points: 5,
+    } as QuizQuestion, '因为有证据', 'zh-CN');
+    expect(result).toMatchObject({ questionId: 'q4', earned: 0, correct: null, status: 'pending' });
   });
 });

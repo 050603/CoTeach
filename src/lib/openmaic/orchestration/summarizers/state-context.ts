@@ -161,21 +161,22 @@ export function buildStateContext(storeState: StatelessChatRequest['storeState']
               Array.isArray(q.answer) && q.answer.length > 0 ? q.answer.join(', ') : '(open-ended)';
             const verdict = r ? r.status.toUpperCase() : 'UNGRADED';
             const points = q.points ?? 1;
-            const earned = r?.earned ?? 0;
+            const earned = r?.status === 'pending' ? null : r?.earned ?? null;
             const entry: string[] = [
               `  ${i + 1}. [${q.type}] ${q.question}`,
               `     Student answer: ${studentAnswer || '(empty)'}`,
               `     Correct answer: ${correctAnswer}`,
-              `     Verdict: ${verdict} (${earned}/${points} pts)`,
+              `     Verdict: ${verdict}${earned === null ? ' (grading pending)' : ` (${earned}/${points} pts)`}`,
             ];
             if (q.analysis) entry.push(`     Reference analysis: ${q.analysis}`);
             if (r?.aiComment) entry.push(`     AI grader comment: ${r.aiComment}`);
             return entry.join('\n');
           });
-          const score = quizResults.results.reduce((acc, r) => acc + (r.earned ?? 0), 0);
-          const total = questions.reduce((acc, q) => acc + (q.points ?? 1), 0);
+          const pendingIds = new Set(quizResults.results.filter((result) => result.status === 'pending').map((result) => result.questionId));
+          const score = quizResults.results.reduce((acc, result) => acc + (result.status === 'pending' ? 0 : result.earned ?? 0), 0);
+          const total = questions.reduce((acc, question) => acc + (pendingIds.has(question.id) ? 0 : question.points ?? 1), 0);
           lines.push(
-            `Quiz results — the student JUST submitted (${score}/${total} pts). Use these to address THIS student's specific mistakes; do not re-teach what they already got right. Walk through wrong answers, acknowledge correct ones briefly, and tie feedback back to the underlying concept.\n${lineEntries.join('\n')}`,
+            `Quiz results — the student JUST submitted (${pendingIds.size ? `${score}/${total} pts graded so far; ${pendingIds.size} answer(s) pending grading` : `${score}/${total} pts`}). Use only graded answers to address THIS student's specific mistakes; do not infer a score or correctness for pending answers. Walk through wrong answers, acknowledge correct ones briefly, and tie feedback back to the underlying concept.\n${lineEntries.join('\n')}`,
           );
         } else {
           // Student has NOT submitted yet. Surface the questions in full so the

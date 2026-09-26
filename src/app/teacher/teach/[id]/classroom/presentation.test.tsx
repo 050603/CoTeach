@@ -24,7 +24,7 @@ vi.mock("@/hooks/use-realtime-sync", () => ({ useRealtimeSync: vi.fn() }));
 vi.mock("@/hooks/use-course-presence", () => ({ useCoursePresence: () => ({ onlineStudentIds: new Set<string>(), degraded: false }) }));
 vi.mock("@/hooks/use-showcase-presentation", () => ({ useShowcasePresentation: () => ({ data: undefined, loading: false, runAction: vi.fn() }) }));
 vi.mock("@/components/dashboard-shell", () => ({
-  DashboardShell: ({ children, headerSlot, immersive }: { children: ReactNode; headerSlot: ReactNode; immersive: boolean }) => <div data-testid="shell" data-immersive={immersive}>{!immersive ? headerSlot : null}{children}</div>,
+  DashboardShell: ({ children, headerSlot, headerEndSlot, hideAiSettings, hideNotifications, immersive }: { children: ReactNode; headerSlot: ReactNode; headerEndSlot: ReactNode; hideAiSettings: boolean; hideNotifications: boolean; immersive: boolean }) => <div data-testid="shell" data-hide-ai-settings={hideAiSettings} data-hide-notifications={hideNotifications} data-immersive={immersive}>{!immersive ? <><div data-testid="header-start">{headerSlot}</div><div data-testid="header-end">{headerEndSlot}</div></> : null}{children}</div>,
   Avatar: ({ name }: { name: string }) => <span>{name}</span>,
 }));
 vi.mock("@/components/views/teacher/stage-dispatcher", () => ({
@@ -68,6 +68,18 @@ describe("teacher full-screen classroom integration", () => {
     mocks.flushSaves.mockResolvedValue(true);
     Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
     Object.defineProperty(document.documentElement, "requestFullscreen", { configurable: true, value: undefined });
+  });
+
+  it("keeps the normal classroom header compact with a single-line fullscreen action on the right", () => {
+    render(<TeachClassroomPage />);
+
+    expect(screen.getByTestId("shell")).toHaveAttribute("data-hide-ai-settings", "true");
+    expect(screen.getByTestId("shell")).toHaveAttribute("data-hide-notifications", "true");
+    expect(screen.queryByRole("button", { name: "学生邀请码" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "查看课程" })).toBeNull();
+    const fullscreen = within(screen.getByTestId("header-end")).getByRole("button", { name: "全屏授课" });
+    expect(fullscreen.className).toContain("whitespace-nowrap");
+    expect(screen.getByTestId("header-start")).not.toContainElement(fullscreen);
   });
 
   it("opens teaching by default, reveals analytics details in the same immersive stage, and never changes student projection", () => {

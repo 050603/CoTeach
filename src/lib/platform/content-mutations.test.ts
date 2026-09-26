@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthClaims } from "@/lib/auth/session";
 
 const mocks = vi.hoisted(() => {
-  const model = () => ({ findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), aggregate: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), upsert: vi.fn() });
-  const tx = { $queryRaw: vi.fn(), courseTeacher: model(), courseOffering: model(), chapter: model(), activity: model(), resource: model(), classroomTemplate: model(), classroomTemplateVersion: model(), classroomInstance: model(), activityProgress: model(), courseInvitation: model(), generationJob: model() };
+  const model = () => ({ findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), aggregate: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), upsert: vi.fn() });
+  const tx = { $queryRaw: vi.fn(), courseTeacher: model(), courseOffering: model(), chapter: model(), activity: model(), activitySubmission: model(), resource: model(), classroomTemplate: model(), classroomTemplateVersion: model(), classroomInstance: model(), activityProgress: model(), courseInvitation: model(), generationJob: model() };
   return { tx, transaction: vi.fn(), teacher: vi.fn(), student: vi.fn(), activity: vi.fn(), enrollment: vi.fn(), offerings: vi.fn(), experiments: vi.fn(), assignments: vi.fn() };
 });
 vi.mock("@/lib/db/client", () => ({ prisma: { activity: { findUnique: mocks.activity }, enrollment: { findUnique: mocks.enrollment }, courseOffering: { findMany: mocks.offerings }, classroomTemplate: mocks.tx.classroomTemplate, generationJob: mocks.tx.generationJob, experimentAssessmentSubmission: { findMany: mocks.experiments }, experimentAssessmentAssignment: { findMany: mocks.assignments } } }));
@@ -128,6 +128,35 @@ describe("serialized content changes", () => {
       where: { id: "activity" },
       data: expect.objectContaining({ isOpen: true }),
     }));
+  });
+
+  it("keeps an answered survey's questions fixed while allowing metadata changes", async () => {
+    const config = { schemaVersion: 1, content: "", questions: [{ id: "q1", title: "第一题", type: "single-choice", required: true, options: [{ id: "a", label: "甲" }, { id: "b", label: "乙" }] }] };
+    mocks.tx.activity.findUnique.mockResolvedValue({ id: "activity", chapterId: "chapter", type: "FORM", version: 2, config, chapter: { offeringId: "offering", isOpen: true } });
+    mocks.tx.activitySubmission.count.mockResolvedValue(1);
+    mocks.tx.activityProgress.findFirst.mockResolvedValue(null);
+    mocks.tx.activity.update.mockResolvedValue({ id: "activity", version: 3 });
+
+    await expect(updateActivity(teacherClaims, "activity", { version: 2, config: { ...config, questions: [{ ...config.questions[0], options: [{ id: "a", label: "新甲" }, { id: "b", label: "乙" }] }] } })).rejects.toMatchObject({ code: "SURVEY_CONFIG_LOCKED" });
+    expect(mocks.tx.activity.update).not.toHaveBeenCalled();
+    expect(mocks.tx.activitySubmission.count).toHaveBeenCalledWith({ where: { activityId: "activity" } });
+
+    await updateActivity(teacherClaims, "activity", { version: 2, title: "新标题", description: "新说明", isOpen: false, config });
+    expect(mocks.tx.activity.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ title: "新标题", description: "新说明", isOpen: false }) }));
+    expect(mocks.tx.activitySubmission.count).toHaveBeenCalledTimes(1);
+
+    await updateActivity(teacherClaims, "activity", { version: 2, config: { ...config, content: "修改后的问卷说明" } });
+    expect(mocks.tx.activity.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ config: expect.objectContaining({ content: "修改后的问卷说明" }) }) }));
+    expect(mocks.tx.activitySubmission.count).toHaveBeenCalledTimes(1);
+  });
+
+  it("protects legacy survey answers even without immutable submission rows", async () => {
+    const config = { schemaVersion: 1, content: "", questions: [{ id: "q1", title: "第一题", type: "short-text", options: [] }] };
+    mocks.tx.activity.findUnique.mockResolvedValue({ id: "activity", chapterId: "chapter", type: "FORM", version: 1, config, chapter: { offeringId: "offering", isOpen: true } });
+    mocks.tx.activitySubmission.count.mockResolvedValue(0);
+    mocks.tx.activityProgress.findFirst.mockResolvedValue({ id: "legacy-answer" });
+    await expect(updateActivity(teacherClaims, "activity", { version: 1, config: { ...config, questions: [{ ...config.questions[0], title: "改后题干" }] } })).rejects.toMatchObject({ code: "SURVEY_CONFIG_LOCKED" });
+    expect(mocks.tx.activity.update).not.toHaveBeenCalled();
   });
 
   it("allocates template revisions and classroom run numbers under their parent locks", async () => {
@@ -291,6 +320,7 @@ describe("teacher offering classroom covers", () => {
         activities: [{
           id: "activity",
           type: "CLASSROOM",
+          _count: { submissions: 1, progress: 0 },
           classroomInstances: [{ id: "instance", status: "SCHEDULED", templateVersion: { id: "version", templateId: "template", version: 1, status: "PUBLISHED", snapshot } }],
         }],
       }],
@@ -299,6 +329,7 @@ describe("teacher offering classroom covers", () => {
     expect(result[0].chapters[0].activities[0]).toMatchObject({
       templateId: "template",
       templateVersionId: "version",
+      hasResponses: true,
     });
     expect(result[0].chapters[0].activities[0].instances[0]).toMatchObject({
       id: "instance",
@@ -311,6 +342,7 @@ describe("teacher offering classroom covers", () => {
     ]);
     expect(mocks.offerings).toHaveBeenCalledWith(expect.objectContaining({
       include: expect.objectContaining({
+        _count: { select: { enrollments: { where: { status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } } } },
         chapters: expect.objectContaining({
           include: expect.objectContaining({
             activities: expect.objectContaining({

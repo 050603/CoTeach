@@ -54,7 +54,8 @@ function boardItems(
   thread: KnowledgeLectureTutorThread | undefined,
 ): Array<{ id: string; title: string; body: string }> {
   const candidates = [
-    { id: "grading", title: question.correct ? "得分关键" : "问题定位", body: question.feedback },
+    { id: "grading", title: question.gradingStatus === "failed" || question.gradingStatus === "pending"
+      ? "批阅待完成" : question.questionType === "short_answer" ? "评分反馈" : question.correct ? "得分关键" : "问题定位", body: question.feedback },
     ...(question.referenceAnswer
       ? [{ id: "reference", title: "正确思路", body: question.referenceAnswer }]
       : []),
@@ -93,7 +94,7 @@ export function KnowledgeLectureBoard({
 }) {
   const preferredIndex = initialQuestionId
     ? attempt.questions.findIndex((question) => question.questionId === initialQuestionId)
-    : attempt.questions.findIndex((question) => !question.correct);
+    : attempt.questions.findIndex((question) => question.correct === false);
   const [questionIndex, setQuestionIndex] = useState(Math.max(0, preferredIndex));
   const [threads, setThreads] = useState(initialThreads);
   const [message, setMessage] = useState("");
@@ -377,7 +378,7 @@ export function KnowledgeLectureBoard({
           </div>
           <nav className="mx-auto flex min-w-0 flex-1 justify-center gap-1.5 overflow-x-auto px-2" aria-label="小测题目切换">
             {attempt.questions.map((item, index) => (
-              <button className={cn("inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-bold", index === questionIndex ? "border-cyan-900 bg-cyan-950 text-white" : item.correct ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-800")} key={item.questionId} onClick={() => selectQuestion(index)} type="button">
+                  <button className={cn("inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-bold", index === questionIndex ? "border-cyan-900 bg-cyan-950 text-white" : item.gradingStatus === "pending" || item.gradingStatus === "failed" ? "border-sky-200 bg-sky-50 text-sky-800" : item.questionType === "short_answer" ? "border-cyan-200 bg-cyan-50 text-cyan-800" : item.correct ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-800")} key={item.questionId} onClick={() => selectQuestion(index)} type="button">
                 {item.correct ? <CheckCircle2 size={13} /> : <CircleHelp size={13} />}第 {index + 1} 题
               </button>
             ))}

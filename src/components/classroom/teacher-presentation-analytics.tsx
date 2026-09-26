@@ -12,6 +12,7 @@ import {
 } from "@/lib/classroom/teacher-dashboard-metrics";
 import { latestReflectionByStudent, normalizeReflectionSurvey, reflectionSurveyDistribution } from "@/lib/reflection-survey";
 import { deriveTeacherClassroomPulse } from "./teacher-classroom-pulse";
+import { KnowledgeLearningMountain } from "./knowledge-learning-mountain";
 import styles from "./teacher-presentation-analytics.module.css";
 
 type AggregateRow = { label: string; value: string; detail?: string; percent?: number };
@@ -22,41 +23,30 @@ function compactSectionTitle(title: string, index: number): string {
   return trimmed || `第 ${index + 1} 节`;
 }
 
-function knowledgeProgressDistribution(progressValues: number[]) {
-  return [
-    { label: "0–24%", count: progressValues.filter((value) => value < 25).length },
-    { label: "25–49%", count: progressValues.filter((value) => value >= 25 && value < 50).length },
-    { label: "50–74%", count: progressValues.filter((value) => value >= 50 && value < 75).length },
-    { label: "75–99%", count: progressValues.filter((value) => value >= 75 && value < 100).length },
-    { label: "100%", count: progressValues.filter((value) => value >= 100).length },
-  ];
-}
-
-function KnowledgePresentationOverview({ course, degraded, onDetails }: {
+function KnowledgePresentationOverview({ course, degraded, onDetails, onStudentDetails }: {
   course: Course;
   degraded: boolean;
   onDetails: () => void;
+  onStudentDetails?: (studentId: string) => void;
 }) {
   const data = deriveKnowledgeDashboardMetrics(course);
-  const hasProgress = data.studentRows.some((row) => row.hasEvidence || row.progress > 0);
-  const overallProgress = hasProgress && data.studentRows.length
-    ? Math.round(data.studentRows.reduce((sum, row) => sum + row.progress, 0) / data.studentRows.length)
+  const validProgress = data.studentRows.flatMap((row) => row.preciseProgress === undefined ? [] : [row.preciseProgress]);
+  const overallProgress = validProgress.length
+    ? Math.round(validProgress.reduce((sum, progress) => sum + progress, 0) / validProgress.length)
     : undefined;
   const possibleQuizCompletions = data.sectionRows.length * course.students.length;
   const completedQuizzes = data.sectionRows.reduce((sum, row) => sum + row.answeredCount, 0);
-  const quizCompletion = completedQuizzes > 0 && possibleQuizCompletions > 0
+  const quizCompletion = possibleQuizCompletions > 0
     ? Math.round(completedQuizzes / possibleQuizCompletions * 100)
     : undefined;
-  const scoredStudents = data.sectionRows.reduce((sum, row) => sum + (row.averageScore === undefined ? 0 : row.answeredCount), 0);
+  const scoredStudents = data.sectionRows.reduce((sum, row) => sum + row.gradedCount, 0);
   const averageScore = scoredStudents
-    ? Math.round(data.sectionRows.reduce((sum, row) => sum + (row.averageScore ?? 0) * row.answeredCount, 0) / scoredStudents)
+    ? Math.round(data.sectionRows.reduce((sum, row) => sum + (row.averageScoreExact ?? 0) * row.gradedCount, 0) / scoredStudents)
     : undefined;
-  const progressDistribution = knowledgeProgressDistribution(data.studentRows.map((row) => row.progress));
-  const progressDistributionLabel = progressDistribution.map((item) => `${item.label} ${item.count}人`).join("、");
   return (
     <section className={`${styles.root} ${styles.knowledgeRoot}`} aria-label="班级学情大屏">
       <header className={styles.header}>
-        <div><h2>班级学情</h2><p>知识讲授 · 实时概览</p></div>
+        <div><h2>班级学情</h2><p>知识讲授 · 教学班 {course.classroomPopulation?.enrolledCount ?? "—"} 人 · 已进入本场 {course.students.length} 人</p></div>
         <button type="button" className={styles.details} onClick={onDetails}>查看明细</button>
       </header>
       {degraded ? <p role="status" className={styles.notice}>数据同步延迟，当前显示最近收到的课堂记录</p> : null}
@@ -65,12 +55,13 @@ function KnowledgePresentationOverview({ course, degraded, onDetails }: {
           <button className={styles.knowledgePanel} onClick={onDetails} type="button">
             <span className={styles.panelHeading}>班级整体学习进度</span>
             <span className={styles.progressChart} role="img" aria-label={`班级整体学习进度${overallProgress === undefined ? "暂无数据" : `${overallProgress}%`}`} style={{ "--chart-value": `${overallProgress ?? 0}%` } as CSSProperties}>
-              <span><strong>{overallProgress === undefined ? "—" : `${overallProgress}%`}</strong><small>平均进度</small></span>
+              <span><strong>{overallProgress === undefined ? "—" : `${overallProgress}%`}</strong><small>平均进度 · 有效 {validProgress.length} 人</small></span>
             </span>
             <span className={styles.compactLegend}>
               <span><i data-color="0" />已完成 <strong>{data.stateCounts.completed}</strong></span>
               <span><i data-color="1" />学习中 <strong>{data.stateCounts.learning}</strong></span>
               <span><i data-color="2" />未开始 <strong>{data.stateCounts.notStarted}</strong></span>
+              {data.stateCounts.unverified ? <span>待核验 <strong>{data.stateCounts.unverified}</strong></span> : null}
             </span>
           </button>
           <button className={styles.knowledgePanel} onClick={onDetails} type="button">
@@ -89,40 +80,7 @@ function KnowledgePresentationOverview({ course, degraded, onDetails }: {
             </span>
             <span className={styles.scoreScale}><small>0</small><small>班级均分（百分制）</small><small>100</small></span>
           </button>
-          <button aria-label="查看班级学习航线明细" className={styles.knowledgeJourney} onClick={onDetails} type="button">
-            <span className={styles.journeyHeading}>
-              <span><strong>班级学习航线</strong><small>每个光点代表一名学生，位置随学习进度实时前进</small></span>
-              <b>{overallProgress === undefined ? "等待出发" : `全班平均 ${overallProgress}%`}</b>
-            </span>
-            <span aria-label={`班级学习航线：${progressDistributionLabel}`} className={styles.journeyChart} role="img">
-              <span aria-hidden="true" className={styles.journeyTrack}><i style={{ width: `${overallProgress ?? 0}%` }} /></span>
-              {[0, 25, 50, 75, 100].map((progress, index) => (
-                <span aria-hidden="true" className={styles.journeyStation} key={progress} style={{ "--station-progress": `${progress}%` } as CSSProperties}>
-                  <i /><small>{["启程", "热身", "深入", "冲刺", "完成"][index]}<b>{progress}%</b></small>
-                </span>
-              ))}
-              {data.studentRows.map((row, index) => (
-                <i
-                  aria-hidden="true"
-                  className={styles.studentSpark}
-                  data-state={row.progress >= 100 ? "completed" : row.hasEvidence || row.progress > 0 ? "learning" : "not-started"}
-                  key={row.student.id}
-                  style={{
-                    "--student-progress": `${row.progress}%`,
-                    "--student-lane": `${(index % 7 - 3) * 14}px`,
-                    "--student-delay": `${index * -170}ms`,
-                  } as CSSProperties}
-                />
-              ))}
-              {overallProgress !== undefined ? <span aria-hidden="true" className={styles.averageBeacon} style={{ "--average-progress": `${overallProgress}%` } as CSSProperties}><i />平均</span> : null}
-            </span>
-            <span className={styles.journeyLegend} aria-hidden="true">
-              <span><i data-state="not-started" />未开始</span>
-              <span><i data-state="learning" />学习中</span>
-              <span><i data-state="completed" />已完成</span>
-              <small>点击查看学生明细</small>
-            </span>
-          </button>
+          <KnowledgeLearningMountain course={course} data={data} onDetails={onDetails} onStudentDetails={onStudentDetails} />
         </div>
       )}
     </section>
@@ -197,14 +155,15 @@ function stageSummary(course: Course, stageKey: string, showcaseData?: ShowcaseD
   };
 }
 
-export function TeacherPresentationAnalytics({ course, stageKey, showcaseData, degraded = false, onDetails }: {
+export function TeacherPresentationAnalytics({ course, stageKey, showcaseData, degraded = false, onDetails, onStudentDetails }: {
   course: Course;
   stageKey: string;
   showcaseData?: ShowcaseData;
   degraded?: boolean;
   onDetails: () => void;
+  onStudentDetails?: (studentId: string) => void;
 }) {
-  if (stageKey === "ai-learning") return <KnowledgePresentationOverview course={course} degraded={degraded} onDetails={onDetails} />;
+  if (stageKey === "ai-learning") return <KnowledgePresentationOverview course={course} degraded={degraded} onDetails={onDetails} onStudentDetails={onStudentDetails} />;
   const pulse = deriveTeacherClassroomPulse(course, stageKey, showcaseData);
   const summary = pulse.metrics.length ? stageSummary(course, stageKey, showcaseData) : undefined;
   const metrics = summary?.headlines ?? pulse.metrics;

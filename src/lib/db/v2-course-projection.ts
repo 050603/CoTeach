@@ -10,6 +10,7 @@ import { aggregateCommonIssues } from "@/lib/learning-analytics/analyzer";
 import { listProjectDocumentVersions } from "@/lib/project-practice/versions";
 import { loadCompanionState, persistCompanionState } from "@/lib/companion/server-store";
 import { experimentConfigFromActivity, posttestOpenedAt } from "@/lib/platform/experiment";
+import { loadAiLearningTiming } from "./ai-learning-timing";
 
 export class ClassroomProjectionError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) { super(message); this.name = "ClassroomProjectionError"; }
@@ -79,7 +80,7 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
   const groupViewId = (groupId: string) => projectGroupViewId(offeringId, groupId);
   const runtime = object(instance.runtimeConfig);
   const base = createPblTemplateCourse(id, decodePblTemplate(instance.templateVersion.snapshot) ?? { name: instance.activity.title }, { createdAt: instance.createdAt.toISOString(), updatedAt: instance.updatedAt.toISOString() });
-  const [submissions, reflections, evaluations, supports, interventions, groups, announcements, todos, resources, signals, directives, events, workspaces, companions] = await Promise.all([
+  const [submissions, reflections, evaluations, supports, interventions, groups, announcements, todos, resources, signals, directives, events, workspaces, companions, aiLearningTimingByStudent, enrolledCount] = await Promise.all([
     db.classroomSubmission.findMany({ where: { participationId: { in: participationIds } } }),
     db.reflection.findMany({ where: { participationId: { in: participationIds } } }),
     db.evaluation.findMany({ where: { participationId: { in: participationIds } } }),
@@ -94,6 +95,8 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
     db.learningEvent.findMany({ where: { classroomInstanceId: id }, orderBy: { receivedAt: "desc" }, take: 10000 }),
     db.studentProjectWorkspace.findMany({ where: { participationId: { in: participationIds } } }),
     loadCompanionState(id, db),
+    loadAiLearningTiming(id, instance.participations.map(p => p.enrollment.userId), db),
+    db.enrollment.count({ where: { offeringId, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } }),
   ]);
   const [experimentAssignments, experimentDrafts, experimentPosttests] = await Promise.all([
     db.experimentAssessmentAssignment.findMany({ where: { instanceId: id }, select: { enrollmentId: true } }),
@@ -120,6 +123,8 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
     projectDocumentVersions: await listProjectDocumentVersions({ courseId: id }, db),
     activityLog: (await db.domainEvent.findMany({ where: { classroomInstanceId: id, eventType: "CLASSROOM_ACTIVITY" }, orderBy: { createdAt: "desc" }, take: 300 })).map(e => view<NonNullable<Course["activityLog"]>[number]>(e.payload)),
     platformContext: { offeringId, activityId: instance.activityId, templateId: instance.templateVersion.templateId, templateVersionId: instance.templateVersionId },
+    classroomPopulation: { enrolledCount, enteredCount: instance.participations.length },
+    aiLearningTimingByStudent,
     experimentPosttestSummary: {
       enabled: Boolean(experimentAssignments.length || experimentConfigFromActivity(instance.activity.config)),
       ...(posttestOpenedAt(instance.runtimeConfig) ? { openedAt: posttestOpenedAt(instance.runtimeConfig)! } : {}),

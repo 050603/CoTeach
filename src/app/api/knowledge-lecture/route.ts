@@ -8,30 +8,29 @@ import type {
   KnowledgeLectureAttempt,
   KnowledgeLectureBoardNote,
   KnowledgeLectureQuestionReview,
+  KnowledgeLectureSection,
   KnowledgeLectureTutorMessage,
   KnowledgeLectureTutorThread,
   StudentAiProgress,
 } from "@/lib/session/types";
 import { getKnowledgeLectureTutorSettings } from "@/lib/knowledge-lecture-settings";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
+import { readClassroom } from "@openmaic/lib/server/classroom-storage";
+import { gradeChoiceQuestions } from "@openmaic/lib/quiz/grading";
+import { parseQuizGradeResponse } from "@openmaic/lib/quiz/grade-response";
+import type { QuizQuestion, Scene } from "@openmaic/lib/types/stage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type IncomingReview = Partial<KnowledgeLectureQuestionReview> & {
-  questionId?: string;
-  prompt?: string;
-  answer?: string;
-};
-
 type KnowledgeLectureRequest = {
-  action?: "record-attempt" | "tutor-message" | "tutor-explain";
+  action?: "record-attempt" | "retry-grading" | "tutor-message" | "tutor-explain";
   courseId?: string;
   studentId?: string;
   sectionId?: string;
   quizOutlineId?: string;
   runtimeSceneId?: string;
-  questions?: IncomingReview[];
+  answers?: Record<string, unknown>;
   attemptId?: string;
   questionId?: string;
   options?: KnowledgeLectureQuestionReview["options"];
@@ -47,11 +46,6 @@ class QuizAlreadySubmittedError extends Error {
 
 function text(value: unknown, max = 4_000): string {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
-}
-
-function number(value: unknown, fallback = 0): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function sanitizeQuestionOptions(value: unknown): KnowledgeLectureQuestionReview["options"] {
@@ -95,53 +89,201 @@ function emptyProgress(studentId: string, classroomId: string): StudentAiProgres
   };
 }
 
-async function authorized(request: Request, courseId: string, studentId: string): Promise<boolean> {
+async function authorized(request: Request, courseId: string, studentId: string, submitting: boolean): Promise<boolean> {
   if (!isAuthConfigured()) return true;
   const claims = await readAuthFromRequest(request, "student");
   if (!claims) return false;
-  if (claims.role === "teacher") return canAccessLegacyCourse(claims, courseId, "read");
+  if (claims.role === "teacher") return !submitting && canAccessLegacyCourse(claims, courseId, "read");
   return claims.sub === studentId
     && canAccessLegacyCourse(claims, courseId, "write");
 }
 
-function sanitizeAttemptQuestions(
-  questions: IncomingReview[],
-  allowedKnowledgePointIds: ReadonlySet<string>,
-  fallbackKnowledgePointIds: readonly string[],
-  allowedTeachingUnitIds: ReadonlySet<string>,
-  fallbackTeachingUnitIds: readonly string[],
-): KnowledgeLectureQuestionReview[] {
-  return questions.slice(0, 3).flatMap((question, index) => {
-    const prompt = text(question.prompt, 1_500);
-    const questionId = text(question.questionId, 160) || `question-${index + 1}`;
-    if (!prompt) return [];
-    const points = Math.max(1, Math.min(100, number(question.points, 10)));
-    const earned = Math.max(0, Math.min(points, number(question.earned)));
-    const requestedKnowledgePointIds = Array.isArray(question.knowledgePointIds)
-      ? question.knowledgePointIds.map((id) => text(id, 160)).filter((id) => allowedKnowledgePointIds.has(id))
-      : [];
-    const requestedTeachingUnitIds = Array.isArray(question.teachingUnitIds)
-      ? question.teachingUnitIds.map((id) => text(id, 160)).filter((id) => allowedTeachingUnitIds.has(id))
-      : [];
-    return [{
-      questionId,
-      prompt,
+function submittedAnswers(
+  questions: readonly QuizQuestion[],
+  raw: unknown,
+): Record<string, string | string[]> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || !questions.length || questions.length > 12) return null;
+  const input = raw as Record<string, unknown>;
+  const ids = new Set(questions.map((question) => question.id));
+  if (ids.size !== questions.length || Object.keys(input).length !== questions.length
+    || Object.keys(input).some((id) => !ids.has(id))) return null;
+  const answers: Record<string, string | string[]> = {};
+  for (const question of questions) {
+    const value = input[question.id];
+    if (question.type === "multiple" || question.type === "matching") {
+      if (!Array.isArray(value) || value.length > 12
+        || value.some((item) => typeof item !== "string" || item.length > 500)) return null;
+      answers[question.id] = value;
+    } else {
+      if (typeof value !== "string" || value.length > 4_000) return null;
+      answers[question.id] = value;
+    }
+  }
+  return answers;
+}
+
+function attemptedAnswer(question: KnowledgeLectureQuestionReview): string | string[] {
+  return question.rawAnswer ?? question.answer;
+}
+
+function sameSubmittedAnswers(attempt: KnowledgeLectureAttempt, answers: Record<string, string | string[]>): boolean {
+  return attempt.questions.length === Object.keys(answers).length
+    && attempt.questions.every((question) => JSON.stringify(attemptedAnswer(question)) === JSON.stringify(answers[question.questionId]));
+}
+
+function withGradeSummary(attempt: KnowledgeLectureAttempt): KnowledgeLectureAttempt {
+  const graded = attempt.questions.filter((question) => question.gradingStatus === "graded");
+  return {
+    ...attempt,
+    gradingStatus: attempt.questions.some((question) => question.gradingStatus === "failed")
+      ? "failed"
+      : attempt.questions.some((question) => question.gradingStatus !== "graded") ? "pending" : "graded",
+    score: graded.reduce((sum, question) => sum + question.earned, 0),
+    maxScore: graded.reduce((sum, question) => sum + question.points, 0),
+  };
+}
+
+function createAttempt(
+  scene: Scene,
+  section: KnowledgeLectureSection,
+  teachingUnitIds: readonly string[],
+  studentId: string,
+  answers: Record<string, string | string[]>,
+): KnowledgeLectureAttempt {
+  if (scene.content?.type !== "quiz") throw new Error("QUIZ_SCENE_NOT_FOUND");
+  const allowedKnowledgePointIds = new Set(section.knowledgePointIds);
+  const allowedTeachingUnitIds = new Set(teachingUnitIds);
+  const questions = scene.content.questions.map((question): KnowledgeLectureQuestionReview => {
+    const points = question.points ?? 1;
+    if (!Number.isFinite(points) || points <= 0 || points > 100 || !question.question.trim()
+      || (question.type !== "short_answer" && !question.answer?.length)) {
+      throw new Error("QUIZ_QUESTION_INVALID");
+    }
+    const rawAnswer = answers[question.id];
+    const answer = Array.isArray(rawAnswer) ? rawAnswer.join("、") : rawAnswer;
+    const objective = question.type !== "short_answer";
+    const empty = !objective && !answer.trim();
+    const grade = objective ? gradeChoiceQuestions([question], answers)[0] : undefined;
+    const knowledgePointIds = (question.knowledgePointIds ?? []).filter((id) => allowedKnowledgePointIds.has(id));
+    const units = (question.teachingUnitIds ?? []).filter((id) => allowedTeachingUnitIds.has(id));
+    const matchingPairs = question.matchingPairs;
+    return {
+      questionId: question.id,
+      prompt: question.question,
       options: sanitizeQuestionOptions(question.options),
-      matchingOptions: sanitizeMatchingOptions(question.matchingOptions),
-      answer: text(question.answer, 2_000),
+      matchingOptions: matchingPairs ? {
+        left: matchingPairs.map((pair) => pair.left),
+        right: matchingPairs.map((pair) => pair.right),
+      } : undefined,
+      answer,
+      rawAnswer,
+      questionType: question.type,
+      gradingRubric: question.commentPrompt,
       points,
-      earned,
-      correct: typeof question.correct === "boolean" ? question.correct : null,
-      feedback: text(question.feedback, 1_500) || "AI 已完成批阅，可打开助教讲解继续梳理。",
-      referenceAnswer: text(question.referenceAnswer, 2_000) || undefined,
-      knowledgePointIds: requestedKnowledgePointIds.length
-        ? Array.from(new Set(requestedKnowledgePointIds))
-        : [...fallbackKnowledgePointIds],
-      teachingUnitIds: requestedTeachingUnitIds.length
-        ? Array.from(new Set(requestedTeachingUnitIds))
-        : [...fallbackTeachingUnitIds],
-    }];
+      earned: grade?.earned ?? 0,
+      correct: objective ? grade?.correct ?? false : null,
+      gradingStatus: objective || empty ? "graded" : "pending",
+      feedback: objective
+        ? (question.analysis || (grade?.correct ? "回答正确。" : "请对照题目解析复习。"))
+        : empty ? "未作答。" : "答案已提交，等待 AI 批阅。",
+      referenceAnswer: question.analysis,
+      knowledgePointIds: knowledgePointIds.length ? knowledgePointIds : [...section.knowledgePointIds],
+      teachingUnitIds: units.length ? units : [...teachingUnitIds],
+    };
   });
+  return withGradeSummary({
+    id: `lecture-attempt-${studentId}-${section.quizOutlineId}`,
+    sectionId: section.id,
+    quizOutlineId: section.quizOutlineId,
+    runtimeSceneId: scene.id,
+    submittedAt: new Date().toISOString(),
+    gradingSource: "server",
+    gradingStatus: "pending",
+    score: 0,
+    maxScore: 0,
+    knowledgePointIds: section.knowledgePointIds,
+    questions,
+  });
+}
+
+const gradingJobs = new Map<string, Promise<KnowledgeLectureAttempt>>();
+
+async function finishGrading(
+  request: NextRequest,
+  body: KnowledgeLectureRequest,
+  courseId: string,
+  studentId: string,
+  attempt: KnowledgeLectureAttempt,
+): Promise<KnowledgeLectureAttempt> {
+  const ungraded = attempt.questions.filter((question) => question.gradingStatus === "pending" || question.gradingStatus === "failed");
+  if (!ungraded.length) return attempt;
+  const key = `${courseId}:${studentId}:${attempt.id}`;
+  const pending = gradingJobs.get(key);
+  if (pending) return pending;
+  const job = (async () => {
+    const results = new Map<string, KnowledgeLectureQuestionReview>();
+    let model: Awaited<ReturnType<typeof resolveModelFromRequest>> | undefined;
+    try {
+      model = await resolveModelFromRequest(request, body, "quiz-grade");
+    } catch {
+      // Keep submitted answers for a later retry.
+    }
+    for (const question of ungraded) {
+      if (!model) {
+        results.set(question.questionId, { ...question, gradingStatus: "failed", feedback: "批阅服务暂时不可用，请稍后重试。" });
+        continue;
+      }
+      try {
+        const output = await callLLM({
+          model: model.model,
+          abortSignal: request.signal,
+          system: `你是教育评估专家。仅依据题目、评分要点和学生实际答案评分，不推测未写内容。严格输出 JSON：{"score": 0 到题目满分之间的数字, "comment": "简短评语"}。`,
+          prompt: `题目：${question.prompt}\n满分：${question.points}\n评分要点：${question.gradingRubric || "按准确性、相关性、完整性与推理质量评分"}\n学生答案：${question.answer}`,
+        }, "quiz-grade", undefined, model.thinkingConfig);
+        const grade = parseQuizGradeResponse(output.text.trim(), question.points);
+        results.set(question.questionId, {
+          ...question,
+          earned: grade.score,
+          correct: null,
+          gradingStatus: "graded",
+          feedback: grade.comment || "AI 已完成批阅。",
+        });
+      } catch {
+        results.set(question.questionId, { ...question, gradingStatus: "failed", feedback: "批阅服务暂时不可用，请稍后重试。" });
+      }
+    }
+    let saved = attempt;
+    await updateCourse(courseId, (current) => {
+      const progress = current.aiLearningProgress?.[studentId];
+      const attempts = progress?.knowledgeLectureAttempts ?? [];
+      const currentAttempt = attempts.find((item) => item.id === attempt.id);
+      if (!progress || progress.classroomId !== (current.aiLearningClassroomId || current.content._openmaicClassroomId)
+        || !currentAttempt || currentAttempt.gradingSource !== "server") return current;
+      saved = withGradeSummary({
+        ...currentAttempt,
+        questions: currentAttempt.questions.map((question) =>
+          question.gradingStatus === "graded" ? question : results.get(question.questionId) ?? question),
+      });
+      return {
+        ...current,
+        aiLearningProgress: {
+          ...current.aiLearningProgress,
+          [studentId]: {
+            ...progress,
+            knowledgeLectureAttempts: attempts.map((item) => item.id === attempt.id ? saved : item),
+            lastActiveAt: new Date().toISOString(),
+          },
+        },
+      };
+    }, { targetStudentId: studentId });
+    return saved;
+  })();
+  gradingJobs.set(key, job);
+  try {
+    return await job;
+  } finally {
+    gradingJobs.delete(key);
+  }
 }
 
 function parseTutorPayload(raw: string, now: string): { answer: string; notes: KnowledgeLectureBoardNote[] } {
@@ -186,12 +328,24 @@ export async function POST(request: NextRequest) {
   if (!body?.action || !courseId || !studentId) {
     return Response.json({ error: "INVALID_REQUEST" }, { status: 400 });
   }
-  if (!await authorized(request, courseId, studentId)) {
+  if (!await authorized(request, courseId, studentId,
+    body.action === "record-attempt" || body.action === "retry-grading")) {
     return Response.json({ error: "FORBIDDEN" }, { status: 403 });
   }
   const course = await getCourse(courseId);
   if (!course || !course.students.some((student) => student.id === studentId)) {
     return Response.json({ error: "STUDENT_NOT_FOUND" }, { status: 404 });
+  }
+
+  if (body.action === "retry-grading") {
+    const quizOutlineId = text(body.quizOutlineId, 160);
+    const classroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;
+    const currentProgress = course.aiLearningProgress?.[studentId];
+    const attempt = currentProgress && currentProgress.classroomId === classroomId
+      ? currentProgress.knowledgeLectureAttempts?.find((item) => item.quizOutlineId === quizOutlineId && item.gradingSource === "server")
+      : undefined;
+    if (!attempt) return Response.json({ error: "QUIZ_ATTEMPT_NOT_FOUND" }, { status: 404 });
+    return Response.json({ attempt: await finishGrading(request, body, courseId, studentId, attempt) });
   }
 
   if (body.action === "record-attempt") {
@@ -202,39 +356,45 @@ export async function POST(request: NextRequest) {
     if (!section || section.quizOutlineId !== quizOutlineId || !runtimeSceneId) {
       return Response.json({ error: "SECTION_NOT_FOUND" }, { status: 404 });
     }
-    const allowedKnowledgePointIds = new Set(section.knowledgePointIds);
+    const classroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;
+    if (!classroomId) return Response.json({ error: "QUIZ_SCENE_NOT_FOUND" }, { status: 404 });
+    const classroom = await readClassroom(classroomId);
+    const scene = classroom?.scenes.find((item) => item.id === runtimeSceneId);
+    if (!scene || scene.content?.type !== "quiz"
+      || (scene.outlineId || scene.id) !== quizOutlineId
+      || (scene.lectureSectionId && scene.lectureSectionId !== sectionId)) {
+      return Response.json({ error: "QUIZ_SCENE_NOT_FOUND" }, { status: 404 });
+    }
+    const answers = submittedAnswers(scene.content.questions, body.answers);
+    if (!answers) return Response.json({ error: "QUIZ_ANSWERS_INVALID" }, { status: 400 });
     const blueprintSection = course.content.teachingBlueprint?.sections.find((item) => item.id === sectionId);
     const teachingUnitIds = blueprintSection?.units.map((unit) => unit.id) ?? [];
-    const questions = sanitizeAttemptQuestions(
-      Array.isArray(body.questions) ? body.questions : [],
-      allowedKnowledgePointIds,
-      section.knowledgePointIds,
-      new Set(teachingUnitIds),
-      teachingUnitIds,
-    );
-    if (questions.length < 1) {
-      return Response.json({ error: "QUIZ_RESULTS_INCOMPLETE" }, { status: 400 });
+    let attempt: KnowledgeLectureAttempt;
+    try {
+      attempt = createAttempt(scene, section, teachingUnitIds, studentId, answers);
+    } catch {
+      return Response.json({ error: "QUIZ_QUESTION_INVALID" }, { status: 400 });
     }
-    const now = new Date().toISOString();
-    const attempt: KnowledgeLectureAttempt = {
-      id: `lecture-attempt-${studentId}-${quizOutlineId}`,
-      sectionId,
-      quizOutlineId,
-      runtimeSceneId,
-      submittedAt: now,
-      score: questions.reduce((sum, question) => sum + question.earned, 0),
-      maxScore: questions.reduce((sum, question) => sum + question.points, 0),
-      knowledgePointIds: section.knowledgePointIds,
-      questions,
-    };
+    let savedAttempt = attempt;
     try {
       await updateCourse(courseId, (current) => {
-        const currentProgress = current.aiLearningProgress?.[studentId]
-          ?? emptyProgress(studentId, current.aiLearningClassroomId ?? "");
+        if ((current.aiLearningClassroomId || current.content._openmaicClassroomId) !== classroomId) {
+          throw new Error("QUIZ_SCENE_CHANGED");
+        }
+        const storedProgress = current.aiLearningProgress?.[studentId];
+        const currentProgress = storedProgress?.classroomId === classroomId
+          ? storedProgress
+          : emptyProgress(studentId, classroomId);
         const existingAttempt = (currentProgress.knowledgeLectureAttempts ?? [])
           .filter((item) => item.quizOutlineId === quizOutlineId)
           .sort((left, right) => Date.parse(left.submittedAt) - Date.parse(right.submittedAt))[0];
-        if (existingAttempt) throw new QuizAlreadySubmittedError(existingAttempt);
+        if (existingAttempt) {
+          if (existingAttempt.gradingSource !== "server" || !sameSubmittedAnswers(existingAttempt, answers)) {
+            throw new QuizAlreadySubmittedError(existingAttempt);
+          }
+          savedAttempt = existingAttempt;
+          return current;
+        }
         return {
           ...current,
           aiLearningProgress: {
@@ -244,8 +404,8 @@ export async function POST(request: NextRequest) {
               knowledgeLectureAttempts: [
                 ...(currentProgress.knowledgeLectureAttempts ?? []),
                 attempt,
-              ].slice(-40),
-              lastActiveAt: now,
+              ],
+              lastActiveAt: attempt.submittedAt,
             },
           },
         };
@@ -254,9 +414,12 @@ export async function POST(request: NextRequest) {
       if (error instanceof QuizAlreadySubmittedError) {
         return Response.json({ error: error.message, attempt: error.attempt }, { status: 409 });
       }
+      if (error instanceof Error && error.message === "QUIZ_SCENE_CHANGED") {
+        return Response.json({ error: error.message }, { status: 409 });
+      }
       throw error;
     }
-    return Response.json({ attempt });
+    return Response.json({ attempt: await finishGrading(request, body, courseId, studentId, savedAttempt) });
   }
 
   const attemptId = text(body.attemptId, 200);
@@ -265,7 +428,10 @@ export async function POST(request: NextRequest) {
   const message = initialExplanation
     ? "请开始讲解这道题，先指出作答中最关键的问题，再用简短板书给出正确理解路径。"
     : text(body.message, 1_000);
-  const progress = course.aiLearningProgress?.[studentId];
+  const storedProgress = course.aiLearningProgress?.[studentId];
+  const progress = storedProgress?.classroomId === (course.aiLearningClassroomId || course.content._openmaicClassroomId)
+    ? storedProgress
+    : undefined;
   const attempt = progress?.knowledgeLectureAttempts?.find((item) => item.id === attemptId);
   const question = attempt?.questions.find((item) => item.questionId === questionId);
   if (!attempt || !question || !message) {
@@ -291,7 +457,7 @@ export async function POST(request: NextRequest) {
     model,
     abortSignal: request.signal,
     system: `你是知识讲授阶段的伴学助教。学生已经完成节末小测，你需要围绕具体题目进行清楚、短而有层次的讲解，并回应追问。不要长篇讲课；优先指出判断依据、纠正误区、补充一个最小例子。answer 是聊天区中自然完整的口头回答。boardNotes 不是回答全文，而是老师真正会留在黑板上的核心知识、关键判断依据、整体思路或可复用方法；普通问答、寒暄、重复题干和一次性细节不要写入板书。只有确实值得长期保留的内容才生成 boardNotes，可以返回空数组；每次最多2条，每条只写一个要点，并避免与已有板书重复。严格返回 JSON：{"answer":"给学生的回答","boardNotes":[{"title":"简短板书标题","body":"精炼的核心内容","kind":"concept|evidence|correction|example"}]}。`,
-    prompt: `知识点：${knowledgePointNames.join("、")}\n题目：${question.prompt}${choices ? `\n${choices}` : ""}\n学生答案：${question.answer || "未作答"}\nAI批阅：${question.feedback}\n参考讲解：${question.referenceAnswer || "未提供"}\n已有对话：\n${recentConversation || "无"}\n学生追问：${message}`,
+    prompt: `知识点：${knowledgePointNames.join("、")}\n题目：${question.prompt}${choices ? `\n${choices}` : ""}\n学生答案：${question.answer || "未作答"}\n批阅状态：${question.gradingStatus || "历史记录未核验"}\n批阅反馈：${question.feedback}\n参考讲解：${question.referenceAnswer || "未提供"}\n已有对话：\n${recentConversation || "无"}\n学生追问：${message}`,
   }, "quiz-grade", undefined, thinkingConfig);
   const now = new Date().toISOString();
   const tutorPayload = parseTutorPayload(result.text.trim(), now);
@@ -309,8 +475,11 @@ export async function POST(request: NextRequest) {
   };
   let savedThread: KnowledgeLectureTutorThread | undefined;
   await updateCourse(courseId, (current) => {
-    const currentProgress = current.aiLearningProgress?.[studentId]
-      ?? emptyProgress(studentId, current.aiLearningClassroomId ?? "");
+    const classroomId = current.aiLearningClassroomId || current.content._openmaicClassroomId || "";
+    const storedProgress = current.aiLearningProgress?.[studentId];
+    const currentProgress = storedProgress?.classroomId === classroomId
+      ? storedProgress
+      : emptyProgress(studentId, classroomId);
     const threads = currentProgress.knowledgeLectureTutorThreads ?? [];
     const currentThread = threads.find((thread) => thread.id === threadId);
     savedThread = {

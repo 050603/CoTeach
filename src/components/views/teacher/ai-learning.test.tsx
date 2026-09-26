@@ -93,6 +93,8 @@ describe("AiLearningTeacherView", () => {
       submittedAt: "2026-09-01T10:00:00.000Z",
       score: 4,
       maxScore: 10,
+      gradingSource: "server" as const,
+      gradingStatus: "graded" as const,
       knowledgePointIds: ["kp-model"],
       questions: [{
         questionId: "question-model",
@@ -100,6 +102,7 @@ describe("AiLearningTeacherView", () => {
         answer: "直接代入",
         points: 10,
         earned: 4,
+        gradingStatus: "graded" as const,
         correct: false,
         feedback: "没有先说明变量之间的关系",
         knowledgePointIds: ["kp-model"],
@@ -157,7 +160,7 @@ describe("AiLearningTeacherView", () => {
     fireEvent.click(sectionButton);
     expect(screen.getByRole("heading", { name: "本节逐题详情" })).toBeTruthy();
     expect(screen.getByText("如何建立变量关系？")).toBeTruthy();
-    expect(screen.getByText("2 人作答")).toBeTruthy();
+    expect(screen.getByText("2 人已批阅")).toBeTruthy();
     expect(sectionButton.getAttribute("aria-expanded")).toBe("true");
 
     fireEvent.click(sectionButton);
@@ -253,6 +256,8 @@ describe("AiLearningTeacherView", () => {
         submittedAt: "2026-09-01T10:00:00.000Z",
         score: index ? 9 : 3,
         maxScore: 10,
+        gradingSource: "server" as const,
+        gradingStatus: "graded" as const,
         knowledgePointIds: [],
         questions: [{
           questionId: "q-1",
@@ -260,6 +265,7 @@ describe("AiLearningTeacherView", () => {
           answer: "回答",
           points: 10,
           earned: index ? 9 : 3,
+          gradingStatus: "graded" as const,
           correct: Boolean(index),
           feedback: "",
           knowledgePointIds: [],

@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { CourseCoverSettings } from "@/components/teacher/course-cover-settings";
+import { LaunchPresentationReplacement } from "@/components/teacher/launch-presentation-replacement";
 import { toast } from "@/components/ui";
 import { useSession } from "@/lib/session/store";
 import type {
@@ -118,7 +119,7 @@ export function CourseDesignWorkspace() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user } = useSession();
+  const { user, refresh } = useSession();
   const requestedSection = searchParams.get("section") as CourseDesignWorkspaceSectionKey | null;
   const initialSection = COURSE_DESIGN_WORKSPACE_SECTIONS.some((item) => item.key === requestedSection)
     ? requestedSection!
@@ -153,6 +154,10 @@ export function CourseDesignWorkspace() {
     } finally {
       if (!quiet) setLoading(false);
     }
+  }
+
+  async function onLaunchUpdated() {
+    await Promise.all([loadWorkspace(true), refresh("teacher")]);
   }
 
   useEffect(() => { void loadWorkspace(); }, [params?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -389,7 +394,7 @@ export function CourseDesignWorkspace() {
 
         <section className="overflow-hidden rounded-[14px] border border-stone-200 bg-white">
           <SectionHeader eyebrow={`${current.phase} · ${STATUS_LABEL[statuses[active]]}`} title={current.label} description={current.description} />
-          {active === "materials" ? <MaterialsEditor course={draft} edit={edit} onCoverUpdated={() => loadWorkspace(true)} /> : null}
+          {active === "materials" ? <MaterialsEditor course={draft} edit={edit} onCoverUpdated={() => loadWorkspace(true)} onLaunchUpdated={onLaunchUpdated} replaceDisabled={dirty || saving || working} /> : null}
           {active === "stage-plan" ? <StagePlanEditor course={draft} edit={edit} /> : null}
           {active === "knowledge" ? <KnowledgeEditor course={draft} edit={edit} /> : null}
           {active === "timing" ? <TimingEditor course={draft} edit={edit} /> : null}
@@ -457,7 +462,7 @@ function ImpactNotice({ pending, onConfirm, onOpen, working }: { pending: Course
   );
 }
 
-function MaterialsEditor({ course, edit, onCoverUpdated }: { course: Course; edit: (fn: (course: Course) => void) => void; onCoverUpdated: () => Promise<void> }) {
+function MaterialsEditor({ course, edit, onCoverUpdated, onLaunchUpdated, replaceDisabled }: { course: Course; edit: (fn: (course: Course) => void) => void; onCoverUpdated: () => Promise<void>; onLaunchUpdated: () => Promise<void>; replaceDisabled: boolean }) {
   const pack = course.content.resourcePackage;
   return (
     <div className="grid gap-7 p-5 sm:p-7 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)]">
@@ -478,6 +483,7 @@ function MaterialsEditor({ course, edit, onCoverUpdated }: { course: Course; edi
         <div className="rounded-[10px] border border-stone-200 bg-stone-50 p-4">
           <div className="flex items-center gap-2 text-sm font-bold text-stone-900"><FileStack size={17} />资源包来源</div>
           {pack ? <div className="mt-3 space-y-2 text-sm text-stone-600"><p className="font-semibold text-stone-900">{pack.source.fileName}</p><p>资源包修订 v{pack.revision}</p><p>{Object.keys(pack.documents).length} 份已解析文档</p><p className="text-xs leading-5">保存课程定位时会同步资源包中的正式课程字段，原始上传文件和来源记录保持不变。</p></div> : <p className="mt-3 text-sm leading-6 text-stone-500">本课程没有资源包。仍可直接维护课程定位，不强制补传文件。</p>}
+          <LaunchPresentationReplacement course={course} disabled={replaceDisabled} onUpdated={onLaunchUpdated} />
         </div>
         <div className="rounded-[10px] border border-stone-200 p-4">
           <div className="flex items-center gap-2 text-sm font-bold text-stone-900"><BookOpenCheck size={17} />教材与依据</div>

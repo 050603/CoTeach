@@ -58,7 +58,7 @@ describe('progress route integrity', () => {
       content: {},
       students: [{ id: 'student-1' }],
       aiLearningProgress: {
-        'student-1': { completedScenes: ['s1'], completionModelVersion: 2 },
+        'student-1': { classroomId: 'classroom-1', completedScenes: ['s1'], completionModelVersion: 2 },
       },
     };
     classroomStore.classroom = {
@@ -112,6 +112,31 @@ describe('progress route integrity', () => {
       expect.objectContaining({ completedScenes: ['s1', 's2'] }),
       100,
     );
+  });
+
+  it('ignores a player-reported score when deciding completion and stored scoring', async () => {
+    const response = await POST(request({
+      courseId: 'course-1', studentId: 'student-1', classroomId: 'classroom-1',
+      currentSceneIndex: 1, totalScenes: 2, completedScenes: ['s2'], quizScore: 100,
+    }));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.data.progress.masteryLevel).toBe('completed');
+    expect(body.data.progress.quizScore).toBeUndefined();
+  });
+
+  it('does not carry completed scenes or quiz attempts from a previous classroom', async () => {
+    courseStore.course = {
+      ...(courseStore.course ?? {}),
+      aiLearningProgress: { 'student-1': { classroomId: 'old-classroom', completedScenes: ['s1'], completionModelVersion: 2, knowledgeLectureAttempts: [{ id: 'old-quiz' }] } },
+    };
+    const response = await POST(request({
+      courseId: 'course-1', studentId: 'student-1', classroomId: 'classroom-1',
+      currentSceneIndex: 0, totalScenes: 2, completedScenes: [],
+    }));
+    const body = await response.json();
+    expect(body.data.progress).toMatchObject({ completedScenes: [], masteryLevel: 'not-started' });
+    expect(body.data.progress.knowledgeLectureAttempts).toBeUndefined();
   });
 
   it('does not carry forward completion produced by the legacy enter-page model', async () => {

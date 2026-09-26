@@ -73,8 +73,10 @@ describe("teacher dashboard metric selectors", () => {
       submittedAt: `2026-01-0${id.endsWith("1") ? "1" : "2"}T00:00:00.000Z`,
       score,
       maxScore: 10,
+      gradingSource: "server",
+      gradingStatus: "graded",
       knowledgePointIds: ["kp-1"],
-      questions: [{ questionId: "q1", prompt: "问题", answer: "答", points: 10, earned: score, correct: score >= 8, feedback: "", knowledgePointIds: ["kp-1"] }],
+      questions: [{ questionId: "q1", prompt: "问题", answer: "答", points: 10, earned: score, gradingStatus: "graded", correct: score >= 8, feedback: "", knowledgePointIds: ["kp-1"] }],
     });
     const progress = (studentId: string, attempts: KnowledgeLectureAttempt[]): StudentAiProgress => ({ classroomId: "class", studentId, currentSceneIndex: 1, totalScenes: 2, completedScenes: [], lastActiveAt: "2026-01-01T00:00:00.000Z", masteryLevel: "in-progress", knowledgeLectureAttempts: attempts });
     const result = deriveKnowledgeDashboardMetrics(course({
@@ -88,6 +90,25 @@ describe("teacher dashboard metric selectors", () => {
     expect(result.sectionRows[0]).toMatchObject({ answeredCount: 2 });
     expect(result.masteryRows[0]?.answeredStudents).toBe(2);
     expect(result.attentionRows[0]?.student.id).toBe("s2");
+  });
+
+  it("excludes quiz and progress records from a classroom no longer linked to the course", () => {
+    const oldAttempt: KnowledgeLectureAttempt = {
+      id: "old", sectionId: "section-1", quizOutlineId: "quiz-1", runtimeSceneId: "old-scene",
+      submittedAt: "2026-01-01T00:00:00.000Z", score: 10, maxScore: 10,
+      gradingSource: "server", gradingStatus: "graded", knowledgePointIds: ["kp-1"],
+      questions: [{ questionId: "q1", prompt: "问题", answer: "答案", points: 10, earned: 10, correct: true, gradingStatus: "graded", feedback: "", knowledgePointIds: ["kp-1"] }],
+    };
+    const result = deriveKnowledgeDashboardMetrics(course({
+      aiLearningClassroomId: "new-classroom",
+      students: [student("s1")],
+      content: { pblOutline: "", knowledgePoints: [{ id: "kp-1", name: "知识点", description: "" }], knowledgeLectureSections: [{ id: "section-1", title: "第一节", order: 0, knowledgePointIds: ["kp-1"], sceneOutlineIds: [], quizOutlineId: "quiz-1", estimatedMinutes: 5 }], lessonOutline: [], evaluationPlan: { dimensions: [], overallRubric: "" } } as unknown as Course["content"],
+      aiLearningProgress: { s1: { classroomId: "old-classroom", studentId: "s1", currentSceneIndex: 1, totalScenes: 1, completedScenes: ["old-scene"], completionModelVersion: 2, lastActiveAt: "2026-01-01T00:00:00.000Z", masteryLevel: "completed", knowledgeLectureAttempts: [oldAttempt] } },
+    }));
+    expect(result.stateCounts.unverified).toBe(1);
+    expect(result.sectionRows[0]).toMatchObject({ answeredCount: 0, gradedCount: 0, averageScore: undefined });
+    expect(result.masteryRows[0]?.answeredStudents).toBe(0);
+    expect(result.headlines[1]?.value).toBe("—");
   });
 
   it("keeps make decisions and boundaries separate from draft/submission counts", () => {

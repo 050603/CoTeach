@@ -20,7 +20,7 @@ export function TeacherPresentationHeader({ course, degraded, onlineCount, onExi
     </div>
     <div className={styles.status}>
       <div className={styles.save}>{saveStatus}</div>
-      <p><Users size={18} /> 在线 {onlineCount} / {course.students.length}{degraded ? <em>同步延迟</em> : null}</p>
+      <p><Users size={18} /> 教学班 {course.classroomPopulation?.enrolledCount ?? "—"} · 已进入 {course.students.length} · 在线 {onlineCount}{degraded ? <em>同步延迟</em> : null}</p>
     </div>
     <button className={styles.exit} onClick={onExit} type="button"><Minimize2 size={20} /><span>退出全屏</span></button>
   </header>;

@@ -66,6 +66,7 @@ export function deriveTeacherClassroomPulse(
         { label: "已完成", count: data.stateCounts.completed, className: "bg-emerald-600" },
         { label: "学习中", count: data.stateCounts.learning, className: "bg-blue-600" },
         { label: "未开始", count: data.stateCounts.notStarted, className: "bg-stone-300" },
+        { label: "待核验", count: data.stateCounts.unverified, className: "bg-amber-500" },
       ],
       total: course.students.length,
     };

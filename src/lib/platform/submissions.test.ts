@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ activity: vi.fn(), enrollment: vi.fn(), save: vi.fn(), history: vi.fn(), transaction: vi.fn(), student: vi.fn() }));
+const mocks = vi.hoisted(() => ({ activity: vi.fn(), enrollment: vi.fn(), save: vi.fn(), history: vi.fn(), transaction: vi.fn(), student: vi.fn(), lock: vi.fn() }));
 vi.mock("@/lib/db/client", () => ({ prisma: { activity: { findUnique: mocks.activity }, enrollment: { findUnique: mocks.enrollment }, $transaction: mocks.transaction } }));
 vi.mock("./access", () => ({ requireStudentUser: mocks.student }));
 import { submitActivity, submissionSchema } from "./submissions";
@@ -13,7 +13,10 @@ beforeEach(() => {
   mocks.enrollment.mockResolvedValue({ id: "enrollment", status: "ACTIVE", researchKey: "research-key" });
   mocks.save.mockResolvedValue({ status: "COMPLETED" });
   mocks.history.mockResolvedValue({ id: "submission" });
+  mocks.lock.mockResolvedValue([]);
   mocks.transaction.mockImplementation((operation) => operation({
+    $queryRaw: mocks.lock,
+    activity: { findUnique: mocks.activity },
     activitySubmission: { create: mocks.history },
     activityProgress: { upsert: mocks.save },
   }));
@@ -36,6 +39,12 @@ describe("learning task submission", () => {
   it("does not update progress when the submission history cannot be saved", async () => {
     mocks.history.mockRejectedValue(new Error("history unavailable"));
     await expect(submitActivity(claims, "task", { answer: "My project" })).rejects.toThrow("history unavailable");
+    expect(mocks.save).not.toHaveBeenCalled();
+  });
+  it("rejects an answer validated against an older question version", async () => {
+    mocks.activity.mockResolvedValueOnce(activity).mockResolvedValueOnce({ ...activity, version: 3 });
+    await expect(submitActivity(claims, "task", { answer: "My project" })).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
+    expect(mocks.history).not.toHaveBeenCalled();
     expect(mocks.save).not.toHaveBeenCalled();
   });
   it("appends each resubmission with its activity version while updating current progress", async () => {

@@ -303,6 +303,26 @@ describe("teacher course resource upload", () => {
     });
   });
 
+  it("accepts a private replacement PPTX for a course template and generates its classroom preview", async () => {
+    process.env.OPENPBL_PPTX_CLASSROOM_CONVERSION_ENABLED = "false";
+    mocks.fileTypeFromBuffer.mockResolvedValueOnce({ ext: "pptx", mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
+    mocks.uploadScope.mockResolvedValueOnce({ offeringId: null, templateOwnerId: "teacher-1", templateId: courseId });
+    const form = new FormData();
+    form.append("file", new File(["pptx-package"], "新版启动课件.pptx", { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }));
+    form.append("courseId", courseId);
+    form.append("purpose", "launch-presentation-replacement");
+    const response = await POST(new Request("http://localhost:3000/api/uploads", { method: "POST", headers: { Origin: "http://localhost:3000" }, body: form }));
+    const payload = await response.json();
+    expect(response.status).toBe(201);
+    expect(payload).toMatchObject({ convertedToPdf: true, previewType: "PDF", boundToCourse: false });
+    expect(mocks.convertPresentationToPdf).toHaveBeenCalledOnce();
+    expect(mocks.uploadFileCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      id: payload.id,
+      regenerationRecipe: { schemaVersion: 1, operation: "launch-presentation-replacement", courseId },
+    }) });
+    expect(mocks.courseResourceCreate).not.toHaveBeenCalled();
+  });
+
   it("stores slide playback mode for a teacher-exported presentation PDF", async () => {
     mocks.fileTypeFromBuffer.mockResolvedValueOnce({ ext: "pdf", mime: "application/pdf" });
     const form = new FormData();

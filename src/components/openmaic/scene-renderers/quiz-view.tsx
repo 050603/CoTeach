@@ -602,8 +602,7 @@ function ShortAnswerQuestion({
                 </p>
               </div>
               <span className="ml-auto shrink-0 text-xs font-bold text-[var(--pbl-ai)]">
-                {result.earned}/{question.points ?? 1}
-                {t('quiz.pointsSuffix')}
+                {result.status === 'pending' ? '待批阅' : `${result.earned}/${question.points ?? 1}${t('quiz.pointsSuffix')}`}
               </span>
             </div>
           )}
@@ -644,6 +643,7 @@ function QuestionCard({
         isReview &&
           result.status === 'incorrect' &&
           'border-[var(--pbl-danger-border)]',
+        isReview && result.status === 'graded' && 'border-[var(--pbl-ai-border)]',
       )}
     >
       {/* Header */}
@@ -660,6 +660,10 @@ function QuestionCard({
               isReview &&
                 result.status === 'incorrect' &&
                 'bg-[var(--pbl-danger-soft)] text-[var(--pbl-danger)]',
+              isReview && result.status === 'pending' &&
+                'bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]',
+              isReview && result.status === 'graded' &&
+                'bg-[var(--pbl-ai-soft)] text-[var(--pbl-ai)]',
             )}
           >
             {index + 1}
@@ -692,10 +696,14 @@ function QuestionCard({
             'ml-2 inline-flex min-h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold',
             result.status === 'correct'
               ? 'bg-[var(--pbl-success-soft)] text-[var(--pbl-success)]'
-              : 'bg-[var(--pbl-danger-soft)] text-[var(--pbl-danger)]',
+              : result.status === 'pending'
+                ? 'bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]'
+                : result.status === 'graded'
+                  ? 'bg-[var(--pbl-ai-soft)] text-[var(--pbl-ai)]'
+                : 'bg-[var(--pbl-danger-soft)] text-[var(--pbl-danger)]',
           )}>
-            {result.status === 'correct' ? <CheckCircle2 className="size-3.5" aria-hidden="true" /> : <XCircle className="size-3.5" aria-hidden="true" />}
-            {result.status === 'correct' ? '回答正确' : '需要复习'}
+            {result.status === 'correct' ? <CheckCircle2 className="size-3.5" aria-hidden="true" /> : result.status === 'pending' ? <Loader2 className="size-3.5" aria-hidden="true" /> : result.status === 'graded' ? <ClipboardCheck className="size-3.5" aria-hidden="true" /> : <XCircle className="size-3.5" aria-hidden="true" />}
+            {result.status === 'pending' ? '待批阅' : result.status === 'graded' ? '已评分' : result.status === 'correct' ? '回答正确' : '需要复习'}
           </div>
         )}
       </div>
@@ -737,10 +745,11 @@ function ScoreBanner({
 }) {
   const { t } = useI18n();
   const pct = total > 0 ? Math.round((score / total) * 100) : 0;
+  const hasPending = results.some((result) => result.status === 'pending');
   const correctCount = results.filter((r) => r.status === 'correct').length;
   const incorrectCount = results.filter((r) => r.status === 'incorrect').length;
 
-  const summary = pct >= 80 ? t('quiz.excellent') : pct >= 60 ? t('quiz.keepGoing') : t('quiz.needsReview');
+  const summary = hasPending ? '已提交，部分题目待批阅' : pct >= 80 ? t('quiz.excellent') : pct >= 60 ? t('quiz.keepGoing') : t('quiz.needsReview');
 
   return (
     <motion.div
@@ -752,8 +761,8 @@ function ScoreBanner({
         <div>
           <p className="text-sm font-semibold text-[var(--pbl-student)]">{summary}</p>
           <div className="mt-1 flex items-baseline gap-1 text-[var(--pbl-text-strong)]">
-            <span className="text-4xl font-bold">{score}</span>
-            <span className="text-lg text-[var(--pbl-text-muted)]">/ {total}</span>
+            <span className="text-4xl font-bold">{hasPending ? '—' : score}</span>
+            <span className="text-lg text-[var(--pbl-text-muted)]">{hasPending ? '待完成批阅' : `/ ${total}`}</span>
           </div>
           <div className="mt-3 flex flex-wrap gap-3 text-xs">
             <span className="flex items-center gap-1 text-[var(--pbl-success)]">
@@ -766,7 +775,7 @@ function ScoreBanner({
         </div>
 
         {/* Percentage ring */}
-        <div className="relative size-20 shrink-0" aria-label={`${pct}%`} role="img">
+        {!hasPending && <div className="relative size-20 shrink-0" aria-label={`${pct}%`} role="img">
           <svg className="size-20 -rotate-90" viewBox="0 0 80 80" aria-hidden="true">
             <circle
               cx="40"
@@ -793,7 +802,7 @@ function ScoreBanner({
           <div className="absolute inset-0 flex items-center justify-center">
             <span className="text-lg font-bold text-[var(--pbl-text-strong)]">{pct}%</span>
           </div>
-        </div>
+        </div>}
       </div>
     </motion.div>
   );
@@ -821,21 +830,24 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
     if (!lockedAttempt) return null;
     const reviews = new Map(lockedAttempt.questions.map((question) => [question.questionId, question]));
     const restoredAnswers = Object.fromEntries(questions.map((question) => {
-      const answer = reviews.get(question.id)?.answer ?? '';
+      const review = reviews.get(question.id);
+      const answer = review?.rawAnswer ?? review?.answer ?? '';
       return [question.id, question.type === 'multiple' || question.type === 'matching'
-        ? answer.split('、').filter(Boolean)
-        : answer];
+        ? Array.isArray(answer) ? answer : answer.split('、').filter(Boolean)
+        : Array.isArray(answer) ? answer.join('、') : answer];
     }));
     return {
       kind: 'reviewing',
       answers: restoredAnswers,
       results: lockedAttempt.questions.map((question) => {
-        const correct = question.correct ?? (question.points > 0 && question.earned / question.points >= 0.8);
+        const pending = question.gradingStatus === 'pending' || question.gradingStatus === 'failed';
+        const shortAnswer = question.questionType === 'short_answer';
+        const correct = pending || shortAnswer ? null : question.correct ?? (question.points > 0 && question.earned / question.points >= 0.8);
         return {
           questionId: question.questionId,
           correct,
-          status: correct ? 'correct' as const : 'incorrect' as const,
-          earned: question.earned,
+          status: pending ? 'pending' as const : shortAnswer ? 'graded' as const : correct ? 'correct' as const : 'incorrect' as const,
+          earned: pending ? 0 : question.earned,
           aiComment: question.feedback,
         };
       }),
@@ -857,6 +869,17 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
     initialSubmitted?.kind === 'reviewing' ? initialSubmitted.results : [],
   );
   const [reviewReleased, setReviewReleased] = useState(false);
+
+  useEffect(() => {
+    const handleServerGrade = (event: Event) => {
+      const detail = (event as CustomEvent<{ sceneId?: string; results?: QuestionResult[] }>).detail;
+      if (detail?.sceneId !== sceneId || !Array.isArray(detail.results)) return;
+      setResults(detail.results);
+      setPhase('reviewing');
+    };
+    window.addEventListener('openpbl:knowledge-lecture-server-graded', handleServerGrade);
+    return () => window.removeEventListener('openpbl:knowledge-lecture-server-graded', handleServerGrade);
+  }, [sceneId]);
 
   // Draft cache for quiz answers, keyed by sceneId to isolate across classrooms
   const {
@@ -1229,6 +1252,15 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
                     {reviewReleased ? '已确认理解' : '我已经理解，可以继续'}
                     {!reviewReleased ? <ArrowRight className="size-4" aria-hidden="true" /> : null}
                   </button>
+                  {results.some((result) => result.status === 'pending') && (
+                    <button
+                      className="inline-flex min-h-11 items-center justify-center rounded-[10px] border border-[var(--pbl-border)] px-4 text-sm font-semibold text-[var(--pbl-student)]"
+                      onClick={() => setPhase('grading')}
+                      type="button"
+                    >
+                      重试批阅
+                    </button>
+                  )}
                 </div>
               </footer>
             </motion.div>

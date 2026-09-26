@@ -222,18 +222,28 @@ export async function getClassroomExperimentResults(claims: AuthClaims, instance
   if (!instance) throw new PlatformError("NOT_FOUND", "课堂不存在", 404);
   const offeringId = instance.activity.chapter.offeringId;
   if (!await prisma.courseTeacher.findFirst({ where: { offeringId, userId: teacher.id }, select: { id: true } })) throw new PlatformError("FORBIDDEN", "无权查看该课堂", 403);
-  const [submissions, assignments, enrollments, drafts] = await Promise.all([
+  const [submissions, assignments, enrollments, participations, drafts] = await Promise.all([
     prisma.experimentAssessmentSubmission.findMany({
       where: { instanceId, enrollment: { offeringId } }, orderBy: [{ submittedAt: "asc" }, { id: "asc" }],
       include: { enrollment: { select: { user: { select: { id: true, displayName: true, username: true } } } }, assignment: { select: { variant: true } } },
     }),
     prisma.experimentAssessmentAssignment.findMany({ where: { instanceId }, select: { variant: true, enrollmentId: true } }),
     prisma.enrollment.findMany({ where: { offeringId, status: { in: ENROLLED } }, select: { id: true, user: { select: { id: true, displayName: true } } } }),
+    prisma.classroomParticipation.findMany({
+      where: { instanceId, enrollment: { offeringId }, OR: [{ firstEnteredAt: { not: null } }, { lastEnteredAt: { not: null } }] },
+      select: { enrollmentId: true, enrollment: { select: { status: true, user: { select: { id: true, displayName: true } } } } },
+    }),
     prisma.experimentAssessmentDraft.findMany({ where: { phase: "posttest", assignment: { instanceId } }, select: { assignment: { select: { enrollmentId: true } } } }),
   ]);
   const snapshot = submissions[0] ? ExperimentConfigSchema.safeParse(submissions[0].questionnaire) : null;
   const experiment = snapshot?.success ? snapshot.data : assignments.length ? { enabled: true } : experimentConfigFromActivity(instance.activity.config);
-  const submittedIds = new Set(submissions.filter((row) => row.phase === "posttest").map((row) => row.enrollmentId));
+  const activeEnrollmentIds = new Set(enrollments.map((row) => row.id));
+  const participantsByEnrollment = new Map(participations.map((row) => [row.enrollmentId, row]));
+  const participantIds = new Set(participantsByEnrollment.keys());
+  const pretestIds = new Set(submissions.filter((row) => row.phase === "pretest" && activeEnrollmentIds.has(row.enrollmentId)).map((row) => row.enrollmentId));
+  const posttestSubmissions = submissions.filter((row) => row.phase === "posttest" && participantIds.has(row.enrollmentId));
+  const posttestByEnrollment = new Map(posttestSubmissions.map((row) => [row.enrollmentId, row]));
+  const submittedIds = new Set(posttestByEnrollment.keys());
   const draftingIds = new Set(drafts.map((row) => row.assignment.enrollmentId));
   return {
     instanceId,
@@ -243,11 +253,17 @@ export async function getClassroomExperimentResults(claims: AuthClaims, instance
     enabled: Boolean(experiment),
     posttestAvailable: isPosttestOpen(instance.status, instance.runtimeConfig),
     enrollmentCount: enrollments.length,
+    participantCount: participantIds.size,
     posttestOpenedAt: posttestOpenedAt(instance.runtimeConfig),
-    posttestDraftCount: enrollments.filter((row) => draftingIds.has(row.id) && !submittedIds.has(row.id)).length,
-    studentRows: enrollments.map((row) => ({ student: row.user, status: submittedIds.has(row.id) ? "submitted" as const : draftingIds.has(row.id) ? "in-progress" as const : "not-started" as const, ...(submissions.find((item) => item.phase === "posttest" && item.enrollmentId === row.id)?.submittedAt ? { submittedAt: submissions.find((item) => item.phase === "posttest" && item.enrollmentId === row.id)!.submittedAt } : {}) })),
-    pretestCount: submissions.filter((row) => row.phase === "pretest").length,
-    posttestCount: submissions.filter((row) => row.phase === "posttest").length,
+    posttestDraftCount: [...participantIds].filter((id) => draftingIds.has(id) && !submittedIds.has(id)).length,
+    studentRows: [...participantsByEnrollment.values()].map((row) => ({
+      student: row.enrollment.user,
+      enrollmentStatus: row.enrollment.status.toLowerCase(),
+      status: submittedIds.has(row.enrollmentId) ? "submitted" as const : draftingIds.has(row.enrollmentId) ? "in-progress" as const : "not-started" as const,
+      ...(posttestByEnrollment.get(row.enrollmentId)?.submittedAt ? { submittedAt: posttestByEnrollment.get(row.enrollmentId)!.submittedAt } : {}),
+    })),
+    pretestCount: pretestIds.size,
+    posttestCount: submittedIds.size,
     variantCounts: {
       aPreBPost: assignments.filter((row) => row.variant === "A_PRE_B_POST").length,
       bPreAPost: assignments.filter((row) => row.variant === "B_PRE_A_POST").length,

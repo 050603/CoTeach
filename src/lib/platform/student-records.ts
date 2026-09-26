@@ -124,6 +124,7 @@ export async function getOfferingStudentsSummary(
           participations: {
             select: {
               id: true, firstEnteredAt: true, lastEnteredAt: true,
+              instance: { select: { activityId: true } },
               submissions: { select: { status: true, submittedAt: true } },
               artifacts: { select: { versions: { select: { status: true, submittedAt: true } } } },
               reflections: { select: { createdAt: true } },
@@ -153,7 +154,8 @@ export async function getOfferingStudentsSummary(
     const progressByActivity = new Map(enrollment.activityProgress.map((progress) => [progress.activityId, progress]));
     const activityStatuses = Object.fromEntries(activities.map((activity) => {
       const progress = progressByActivity.get(activity.id);
-      const classroomEntered = activity.type.toUpperCase() === "CLASSROOM" && enrollment.participations.some((participation) => participation.firstEnteredAt || participation.lastEnteredAt);
+      const classroomEntered = activity.type.toUpperCase() === "CLASSROOM" && enrollment.participations.some((participation) =>
+        participation.instance.activityId === activity.id && (participation.firstEnteredAt || participation.lastEnteredAt));
       return [activity.id, progress?.status.toLowerCase() === "not_started" && classroomEntered ? "in_progress" : progress?.status.toLowerCase() ?? (classroomEntered ? "in_progress" : "not_started")];
     }));
     const completedOpenActivities = enrollment.activityProgress.filter((progress) => openActivityIds.has(progress.activityId) && progress.status.toUpperCase() === "COMPLETED").length;

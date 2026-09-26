@@ -56,6 +56,11 @@ describe("survey configuration and analytics", () => {
     });
   });
 
+  it("does not invent a completion percentage without a valid active-member denominator", () => {
+    expect(buildSurveyAnalytics(config, [], 0).completionRate).toBeNull();
+    expect(buildSurveyAnalytics(config, [{ respondent: { studentId: "s1", displayName: "学生" }, progressData: { answers: {} } }], 0).completionRate).toBeNull();
+  });
+
   it("counts every selected option in a multi-choice response as a share of total selections", () => {
     const multiConfig = { schemaVersion: 2, content: "", questions: [{ id: "skills", title: "你练习了哪些能力？", type: "multiple-choice", chartType: "bar", required: true, options: [{ id: "research", label: "调研" }, { id: "teamwork", label: "协作" }, { id: "present", label: "表达" }] }] };
     const result = buildSurveyAnalytics(multiConfig, [

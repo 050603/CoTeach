@@ -255,7 +255,7 @@ export interface StatelessChatRequest {
       results: Array<{
         questionId: string;
         correct: boolean | null;
-        status: 'correct' | 'incorrect';
+        status: 'correct' | 'incorrect' | 'graded' | 'pending';
         earned: number;
         aiComment?: string;
       }>;

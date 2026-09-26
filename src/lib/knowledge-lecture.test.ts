@@ -192,6 +192,8 @@ describe("knowledge lecture sections", () => {
       submittedAt,
       score: earned,
       maxScore: 10,
+      gradingSource: "server",
+      gradingStatus: "graded",
       knowledgePointIds: [knowledgePointId],
       questions: [{
         questionId: "q-1",
@@ -199,6 +201,7 @@ describe("knowledge lecture sections", () => {
         answer: "回答",
         points: 10,
         earned,
+        gradingStatus: "graded",
         correct: earned >= 8,
         feedback: "反馈",
         knowledgePointIds: [knowledgePointId],
@@ -257,8 +260,10 @@ describe("knowledge lecture sections", () => {
         submittedAt: "2026-01-01T00:00:00.000Z",
         score: earned,
         maxScore: 10,
+        gradingSource: "server",
+        gradingStatus: "graded",
         knowledgePointIds: ["kp-1"],
-        questions: [{ questionId: "q-1", prompt: "解释概念", answer: "错误理解", points: 10, earned, correct: earned >= 8, feedback: "概念定义混淆", knowledgePointIds: ["kp-1"] }],
+        questions: [{ questionId: "q-1", prompt: "解释概念", answer: "错误理解", points: 10, earned, gradingStatus: "graded", correct: earned >= 8, feedback: "概念定义混淆", knowledgePointIds: ["kp-1"] }],
       }],
     });
     const students = Array.from({ length: 5 }, (_, index) => ({ id: `s-${index}`, name: `学生${index}` }));

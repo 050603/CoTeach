@@ -6,7 +6,7 @@ import type {
   Student,
 } from "@/lib/session/types";
 import { summarizeAiLearningStudent } from "@/components/views/teacher/ai-learning";
-import { aggregateKnowledgePointMastery, firstKnowledgeLectureAttempts } from "@/lib/knowledge-lecture";
+import { aggregateKnowledgePointMastery, firstKnowledgeLectureAttempts, isCurrentAiLearningEntry, verifiedKnowledgeLectureScoreRate } from "@/lib/knowledge-lecture";
 import {
   latestReflectionByStudent,
   normalizeReflectionSurvey,
@@ -27,6 +27,11 @@ export type TeacherDashboardMetric = {
   value: string;
   helper?: string;
   tone?: TeacherDashboardTone;
+  /** The population represented by the denominator. */
+  scope?: "classroom-participants" | "active-enrollments" | "showcase-queue";
+  sampleCount?: number;
+  dataStatus?: "observed" | "missing" | "pending";
+  updatedAt?: string;
 };
 
 export type TeacherStageFocus =
@@ -99,13 +104,15 @@ export type LaunchDashboardMetrics = {
 
 export type KnowledgeDashboardMetrics = {
   headlines: TeacherDashboardMetric[];
-  stateCounts: { notStarted: number; learning: number; completed: number };
+  stateCounts: { notStarted: number; learning: number; completed: number; unverified: number };
   masteryRows: ReturnType<typeof aggregateKnowledgePointMastery>;
   sectionRows: Array<{
     id: string;
     title: string;
     answeredCount: number;
+    gradedCount: number;
     averageScore?: number;
+    averageScoreExact?: number;
     estimatedMinutes: number;
   }>;
   attentionRows: ReturnType<typeof summarizeAiLearningStudent>[];
@@ -260,33 +267,41 @@ export function deriveLaunchDashboardMetrics(course: Course): LaunchDashboardMet
 
 export function deriveKnowledgeDashboardMetrics(course: Course): KnowledgeDashboardMetrics {
   const studentRows = course.students.map((student) => summarizeAiLearningStudent(course, student));
-  const progressEntries = Object.entries(course.aiLearningProgress ?? {});
+  const progressEntries = course.students.flatMap((student) => {
+    const entry = course.aiLearningProgress?.[student.id];
+    return entry && isCurrentAiLearningEntry(course, entry) ? [[student.id, entry] as const] : [];
+  });
   const answeredStudents = new Set(
     progressEntries.flatMap(([studentId, entry]) => firstKnowledgeLectureAttempts(entry).length ? [studentId] : []),
   );
   const highPriorityStudentIds = new Set(studentRows.flatMap((row) => row.signals.some((signal) => signal.severity === "high") ? [row.student.id] : []));
   const stateCounts = {
-    notStarted: studentRows.filter((row) => !row.hasEvidence).length,
-    learning: studentRows.filter((row) => row.hasEvidence && row.progress < 100).length,
-    completed: studentRows.filter((row) => row.progress >= 100).length,
+    notStarted: studentRows.filter((row) => row.preciseProgress === 0 && !row.hasEvidence).length,
+    learning: studentRows.filter((row) => row.preciseProgress !== undefined && row.preciseProgress < 100 && row.hasEvidence).length,
+    completed: studentRows.filter((row) => row.preciseProgress === 100).length,
+    unverified: studentRows.filter((row) => row.preciseProgress === undefined).length,
   };
   const masteryRows = aggregateKnowledgePointMastery(course);
   const sectionRows = (course.content.knowledgeLectureSections ?? []).map((section) => {
     const sectionAttempts = progressEntries.flatMap(([studentId, entry]) => firstKnowledgeLectureAttempts(entry)
       .filter((attempt) => attempt.sectionId === section.id)
       .map((attempt) => ({ studentId, attempt })));
-    const score = sectionAttempts.length
-      ? Math.round(sectionAttempts.reduce((sum, item) => sum + (item.attempt.maxScore > 0 ? item.attempt.score / item.attempt.maxScore : 0), 0) / sectionAttempts.length * 100)
+    const verifiedScores = sectionAttempts.flatMap(({ attempt }) => {
+      const score = verifiedKnowledgeLectureScoreRate(attempt);
+      return score === undefined ? [] : [score];
+    });
+    const averageScoreExact = verifiedScores.length
+      ? verifiedScores.reduce((sum, score) => sum + score, 0) / verifiedScores.length
       : undefined;
-    return { id: section.id, title: section.title, answeredCount: new Set(sectionAttempts.map((item) => item.studentId)).size, averageScore: score, estimatedMinutes: section.estimatedMinutes };
+    return { id: section.id, title: section.title, answeredCount: new Set(sectionAttempts.map((item) => item.studentId)).size, gradedCount: verifiedScores.length, averageScore: averageScoreExact === undefined ? undefined : Math.round(averageScoreExact), averageScoreExact, estimatedMinutes: section.estimatedMinutes };
   });
-  const progressValues = studentRows.map((row) => row.progress);
+  const progressValues = studentRows.flatMap((row) => row.preciseProgress === undefined ? [] : [row.preciseProgress]);
   const hasProgressEvidence = studentRows.some((row) => row.hasEvidence || row.progress > 0 || row.accuracy !== undefined);
   const hasQuizEvidence = answeredStudents.size > 0;
   const hasSignalEvidence = (course.learningSignals ?? []).some((signal) => signal.stageKey === "ai-learning");
   return {
     headlines: [
-      { metricId: "knowledge-median-progress", label: "班级进度中位数", value: hasProgressEvidence ? `${median(progressValues)}%` : "—", helper: hasProgressEvidence ? "按每名学生可靠学习记录计算" : "等待学生产生有效学习记录" },
+      { metricId: "knowledge-median-progress", label: "班级进度中位数", value: hasProgressEvidence && progressValues.length ? `${Math.round(median(progressValues)!)}%` : "—", helper: progressValues.length ? `按 ${progressValues.length}/${course.students.length} 名学生可靠学习记录计算` : "等待学生产生可靠学习进度", scope: "classroom-participants", sampleCount: progressValues.length, dataStatus: progressValues.length ? "observed" : "missing", updatedAt: course.updatedAt },
       { metricId: "knowledge-quiz-coverage", label: "小测覆盖", value: observedRatio(answeredStudents.size, course.students.length, hasQuizEvidence), helper: hasQuizEvidence ? "至少提交一节节末小测" : "等待首份节末小测" },
       { metricId: "knowledge-high-priority", label: "高优先级信号", value: hasSignalEvidence ? `${highPriorityStudentIds.size} 人` : "—", helper: hasSignalEvidence ? "需要教师优先判断的学习信号" : "尚无可排序的学习信号", tone: highPriorityStudentIds.size ? "warning" : "success" },
     ],

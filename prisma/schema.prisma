@@ -1441,6 +1441,7 @@ model LearningEvent {
   participation     ClassroomParticipation? @relation(fields: [participationId], references: [id], onDelete: Restrict)
 
   @@unique([userId, idempotencyKey])
+  @@index([classroomInstanceId, eventType])
   @@index([offeringId, receivedAt, id])
   @@index([researchKey, occurredAt])
   @@index([offeringId, enrollmentId, occurredAt])

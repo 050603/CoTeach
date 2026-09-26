@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Page from "./page";
 
@@ -125,13 +125,7 @@ describe("student reference material", () => {
 });
 
 describe("student classroom experiment", () => {
-  const questions = [
-    { id: "single", type: "single-choice", prompt: "学习前你会先观察什么？", options: ["现象", "结论"] },
-    { id: "multiple", type: "multiple-choice", prompt: "选择可用的研究方法", options: ["访谈", "观察", "猜测"] },
-    { id: "boolean", type: "true-false", prompt: "记录证据有助于研究" },
-    { id: "short", type: "short-answer", prompt: "请说明你的想法" },
-    { id: "confidence", type: "scale", prompt: "你对开展研究有多大信心？", category: "confidence", scale: { min: 1, max: 5, minLabel: "完全没有信心", maxLabel: "非常有信心" } },
-  ];
+  const questions = [{ id: "design", type: "short-answer", prompt: "请说明你的想法" }];
   const baseActivity = {
     id: "activity", type: "Classroom", title: "研究课堂", description: null, isOpen: true,
     offering: { id: "offering", name: "课程", status: "open" }, chapter: { title: "章节" },
@@ -139,137 +133,38 @@ describe("student classroom experiment", () => {
     experiment: { enabled: true, pretest: questions, posttest: [{ id: "after", type: "short-answer", prompt: "课后收获" }] },
   };
 
-  it("requires every pretest answer before entering and refreshes the classroom after submission", async () => {
-    let submitted = false;
-    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
-      if (url === "/api/platform/classroom-instances/run-1/experiment?phase=pretest") return new Response(JSON.stringify({ enabled: true, available: true, questions, draft: null, submission: null, studentKey: "student" }));
-      if (url === "/api/platform/classroom-instances/run-1/experiment" && options?.method === "PUT") return new Response(JSON.stringify({ draft: { answers: JSON.parse(String(options.body)).answers, currentPage: 0, version: 1, updatedAt: "2026-09-24T00:00:00Z" } }));
-      if (url === "/api/platform/classroom-instances/run-1/experiment" && options?.method === "POST") {
-        submitted = true;
-        return new Response(JSON.stringify({ submission: { id: "submission", phase: "pretest", submittedAt: "2026-09-24T00:00:00Z" } }));
-      }
-      return new Response(JSON.stringify({ activity: {
-        ...baseActivity,
-        instance: { id: "run-1", status: submitted ? "teaching" : "scheduled", canWrite: submitted, pretestSubmitted: submitted, posttestSubmitted: false },
-        instances: [],
-      } }));
-    });
-    render(<Page />);
-    expect(await screen.findByRole("button", { name: "开始前测" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "进入课堂" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "开始后测" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "开始前测" }));
-    expect(await screen.findByRole("progressbar", { name: "前测作答进度" })).toHaveAttribute("aria-valuenow", "0");
-    const displayedQuestions = screen.getAllByRole("group");
-    expect(displayedQuestions.map((group) => document.getElementById(group.getAttribute("aria-labelledby") ?? "")?.querySelector("p")?.textContent)).toEqual([
-      "学习前你会先观察什么？", "选择可用的研究方法", "记录证据有助于研究", "请说明你的想法", "你对开展研究有多大信心？",
-    ]);
-    expect(within(displayedQuestions[1]).getAllByRole("checkbox").map((checkbox) => checkbox.getAttribute("aria-label"))).toEqual(["访谈", "观察", "猜测"]);
-    fireEvent.click(screen.getByRole("button", { name: "检查并提交" }));
-    expect(screen.getByText("还有 5 题待完成")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "返回作答" }));
-    fireEvent.click(screen.getByRole("radio", { name: "现象" }));
-    expect(screen.getByRole("progressbar", { name: "前测作答进度" })).toHaveAttribute("aria-valuenow", "1");
-    fireEvent.click(screen.getByRole("checkbox", { name: "访谈" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "观察" }));
-    fireEvent.click(screen.getByRole("radio", { name: "正确" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "请说明你的想法" }), { target: { value: "先收集证据" } });
-    expect(screen.getByText("量表题 · 学习信心")).toBeInTheDocument();
-    expect(screen.getByText(/1 分 · 完全没有信心/)).toBeInTheDocument();
-    expect(screen.getByText(/5 分 · 非常有信心/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: "4 分" }));
-    expect(screen.getByRole("progressbar", { name: "前测作答进度" })).toHaveAttribute("aria-valuenow", "5");
-    fireEvent.click(screen.getByRole("button", { name: "检查并提交" }));
-    fireEvent.click(screen.getByRole("button", { name: "确认提交前测" }));
-    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/classroom-instances/run-1/experiment", expect.objectContaining({
-      method: "POST", body: JSON.stringify({ phase: "pretest", answers: { single: "现象", multiple: ["访谈", "观察"], boolean: "true", short: "先收集证据", confidence: "4" } }),
-    })));
-    expect(await screen.findByRole("button", { name: "进入课堂" })).toBeInTheDocument();
-    expect(screen.getByText(/前测已提交/)).toBeInTheDocument();
-    expect(fetcher).toHaveBeenCalledWith("/api/platform/activities/activity", { cache: "no-store" });
-  });
-
-  it("offers the posttest after the classroom ends and records its completion", async () => {
-    let submitted = false;
-    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
-      if (url === "/api/platform/classroom-instances/finished-run/experiment?phase=posttest") return new Response(JSON.stringify({ enabled: true, available: true, questions: baseActivity.experiment.posttest, draft: null, submission: null, studentKey: "student" }));
-      if (url === "/api/platform/classroom-instances/finished-run/experiment" && options?.method === "POST") {
-        submitted = true;
-        return new Response(JSON.stringify({ submission: { id: "submission", phase: "posttest", submittedAt: "2026-09-24T00:00:00Z" } }));
-      }
-      const finished = { ...instance, pretestSubmitted: true, posttestSubmitted: submitted };
-      return new Response(JSON.stringify({ activity: { ...baseActivity, instance: finished, instances: [finished] } }));
-    });
-    render(<Page />);
-    fireEvent.click(await screen.findByRole("button", { name: "开始后测" }));
-    fireEvent.change(await screen.findByRole("textbox", { name: "课后收获" }), { target: { value: "学会记录证据" } });
-    fireEvent.click(screen.getByRole("button", { name: "检查并提交" }));
-    fireEvent.click(screen.getByRole("button", { name: "确认提交后测" }));
-    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/classroom-instances/finished-run/experiment", expect.objectContaining({
-      method: "POST", body: JSON.stringify({ phase: "posttest", answers: { after: "学会记录证据" } }),
-    })));
-    expect(await screen.findByText(/后测已提交/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "开始后测" })).toBeNull();
-  });
-
-  it("lets a late student finish the pretest before entering a teaching classroom", async () => {
-    fetcher.mockImplementation(async (url: string) => new Response(JSON.stringify(url.includes("?phase=pretest") ? { enabled: true, available: true, questions, draft: null, submission: null, studentKey: "student" } : { activity: {
-      ...baseActivity,
-      instance: { id: "run-1", status: "teaching", canWrite: true, pretestSubmitted: false, posttestSubmitted: false },
-      instances: [],
+  it("opens the pretest in a dedicated page and keeps classroom entry gated", async () => {
+    fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ activity: {
+      ...baseActivity, instance: { id: "run-1", status: "scheduled", canWrite: true, pretestSubmitted: false }, instances: [],
     } })));
     render(<Page />);
-    fireEvent.click(await screen.findByRole("button", { name: "开始前测" }));
-    expect(await screen.findByRole("heading", { name: /前测/ })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "开始前测" })).toHaveAttribute("href", "/student/activities/activity/assessments/run-1/pretest");
     expect(screen.queryByRole("button", { name: "进入课堂" })).toBeNull();
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("progressbar", { name: "前测作答进度" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "开始后测" })).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it("uses each historical run's question snapshot for its posttest", async () => {
+  it("links to saved pretest answers and an available posttest", async () => {
+    fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ activity: {
+      ...baseActivity, instance: { id: "run-1", status: "teaching", canWrite: true, pretestSubmitted: true, posttestAvailable: true }, instances: [],
+    } })));
+    render(<Page />);
+    expect(await screen.findByRole("link", { name: "查看前测答案" })).toHaveAttribute("href", "/student/activities/activity/assessments/run-1/pretest");
+    expect(screen.getByRole("link", { name: "开始后测" })).toHaveAttribute("href", "/student/activities/activity/assessments/run-1/posttest");
+    expect(screen.getByRole("button", { name: "进入课堂" })).toBeInTheDocument();
+  });
+
+  it("uses each historical run's own snapshot and route", async () => {
     const current = { id: "run-2", status: "scheduled", canWrite: false, pretestSubmitted: true, posttestSubmitted: false };
     const historical = { id: "run-1", status: "finished", canWrite: false, pretestSubmitted: true, posttestSubmitted: false, experiment: {
       enabled: true, pretest: [], posttest: [{ id: "old", type: "short-answer", prompt: "第一次课堂的收获" }],
     } };
     const legacy = { id: "run-0", status: "finished", canWrite: false, experiment: null };
-    fetcher.mockImplementation(async (url: string) => new Response(JSON.stringify(url.includes("run-1/experiment?phase=posttest") ? { enabled: true, available: true, questions: historical.experiment.posttest, draft: null, submission: null, studentKey: "student" } : { activity: { ...baseActivity, instance: current, instances: [current, historical, legacy] } })));
+    fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ activity: { ...baseActivity, instance: current, instances: [current, historical, legacy] } })));
     render(<Page />);
-    expect(await screen.findAllByRole("button", { name: "开始后测" })).toHaveLength(1);
-    fireEvent.click(await screen.findByRole("button", { name: "开始后测" }));
-    expect(await screen.findByRole("textbox", { name: "第一次课堂的收获" })).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "课后收获" })).toBeNull();
-  });
-
-  it("shows a shared instruction above grouped ratings and submits each score by question ID", async () => {
-    const group = { id: "confidence-group", title: "任务信心", instruction: "请根据现在的感受，选择最符合自己的一项。" };
-    const groupedQuestions = [
-      { id: "confidence-a", type: "scale", prompt: "我能完成任务", scale: { min: 1, max: 5 }, group },
-      { id: "confidence-b", type: "scale", prompt: "我能解决问题", scale: { min: 1, max: 5 }, group },
-    ];
-    let submitted = false;
-    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
-      if (url === "/api/platform/classroom-instances/run-1/experiment?phase=pretest") return new Response(JSON.stringify({ enabled: true, available: true, questions: groupedQuestions, draft: null, submission: null, studentKey: "student" }));
-      if (url === "/api/platform/classroom-instances/run-1/experiment" && options?.method === "POST") {
-        submitted = true;
-        return new Response(JSON.stringify({ submission: { id: "submission", phase: "pretest", submittedAt: "2026-09-24T00:00:00Z" } }));
-      }
-      return new Response(JSON.stringify({ activity: {
-        ...baseActivity,
-        experiment: { enabled: true, pretest: groupedQuestions, posttest: baseActivity.experiment.posttest },
-        instance: { id: "run-1", status: "scheduled", canWrite: false, pretestSubmitted: submitted, posttestSubmitted: false },
-        instances: [],
-      } }));
-    });
-    render(<Page />);
-    fireEvent.click(await screen.findByRole("button", { name: "开始前测" }));
-    const section = await screen.findByRole("region", { name: "任务信心" });
-    expect(section).toHaveTextContent("请根据现在的感受，选择最符合自己的一项。");
-    expect(within(section).getAllByRole("group")).toHaveLength(2);
-    fireEvent.click(within(screen.getByRole("group", { name: /我能完成任务/ })).getByRole("radio", { name: "4 分" }));
-    fireEvent.click(within(screen.getByRole("group", { name: /我能解决问题/ })).getByRole("radio", { name: "3 分" }));
-    fireEvent.click(screen.getByRole("button", { name: "检查并提交" }));
-    fireEvent.click(screen.getByRole("button", { name: "确认提交前测" }));
-    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/classroom-instances/run-1/experiment", expect.objectContaining({
-      method: "POST", body: JSON.stringify({ phase: "pretest", answers: { "confidence-a": "4", "confidence-b": "3" } }),
-    })));
+    const link = await screen.findByRole("link", { name: "开始后测" });
+    expect(link).toHaveAttribute("href", "/student/activities/activity/assessments/run-1/posttest");
+    expect(screen.getAllByRole("link", { name: "开始后测" })).toHaveLength(1);
   });
 });

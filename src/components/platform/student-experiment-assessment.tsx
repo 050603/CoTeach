@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, Cloud, CloudOff, List, RotateCcw } from "lucide-react";
 import { ExperimentQuestionList, type ExperimentDisplayAnswer, type ExperimentDisplayQuestion } from "./experiment-question-card";
 import type { ExperimentQuestionGroup } from "@/lib/platform/experiment";
+import { completeDesignAnswer, designPromptParts } from "@/lib/platform/experiment-design-answer";
 
 export type ExperimentQuestion = ExperimentDisplayQuestion;
 export type ExperimentPhase = "pretest" | "posttest";
@@ -20,7 +21,7 @@ export function paginateExperimentQuestions(questions: ExperimentQuestion[]): Pa
   for (let index = 0; index < questions.length;) {
     const group = questions[index].group;
     let end = index + 1;
-    if (group) while (end < questions.length && questions[end].group?.id === group.id) end++;
+    if (group) while (end < questions.length && questions[end].group?.id === group.id && end - index < 4) end++;
     else while (end < questions.length && !questions[end].group && end - index < 5) end++;
     pages.push({ questions: questions.slice(index, end), startIndex: index, ...(group ? { group } : {}) });
     index = end;
@@ -30,6 +31,10 @@ export function paginateExperimentQuestions(questions: ExperimentQuestion[]): Pa
 
 function answered(value: ExperimentDisplayAnswer | undefined) {
   return Array.isArray(value) ? value.length > 0 : Boolean(value?.trim());
+}
+function questionAnswered(question: ExperimentQuestion, value: ExperimentDisplayAnswer | undefined) {
+  if (question.type === "short-answer" && designPromptParts(question.prompt)) return typeof value === "string" && completeDesignAnswer(value);
+  return answered(value);
 }
 function readLocal(key: string): LocalDraft | null {
   try {
@@ -42,13 +47,14 @@ async function json(response: Response): Promise<Record<string, unknown>> {
 }
 function message(error: unknown, fallback: string) { return error instanceof Error ? error.message : fallback; }
 
-export function StudentExperimentAssessment({ instanceId, phase, onCancel, onSubmitted }: {
+export function StudentExperimentAssessment({ instanceId, phase, onCancel, onSubmitted, layout = "contained" }: {
   instanceId: string;
   phase: ExperimentPhase;
   /** The assigned question snapshot is loaded through GET. Retained for existing activity callers. */
   questions?: ExperimentQuestion[];
   onCancel?: () => void;
   onSubmitted?: () => void;
+  layout?: "contained" | "full";
 }) {
   const endpoint = `/api/platform/classroom-instances/${encodeURIComponent(instanceId)}/experiment`;
   const [assessment, setAssessment] = useState<Assessment | null>(null);
@@ -73,9 +79,13 @@ export function StudentExperimentAssessment({ instanceId, phase, onCancel, onSub
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pages = useMemo(() => paginateExperimentQuestions(assessment?.questions ?? []), [assessment?.questions]);
   const currentPage = pages[Math.min(pageIndex, Math.max(0, pages.length - 1))];
-  const answeredCount = (assessment?.questions ?? []).filter((question) => answered(answers[question.id])).length;
-  const missing = (assessment?.questions ?? []).filter((question) => !question.optional && !answered(answers[question.id]));
-  const skippedWithReason = (assessment?.questions ?? []).filter((question) => question.skipReasonRequired && !answered(answers[question.id]));
+  const answeredCount = (assessment?.questions ?? []).filter((question) => questionAnswered(question, answers[question.id])).length;
+  const requiredQuestions = (assessment?.questions ?? []).filter((question) => !question.optional);
+  const requiredAnswered = requiredQuestions.filter((question) => questionAnswered(question, answers[question.id])).length;
+  const progressTotal = requiredQuestions.length || assessment?.questions.length || 1;
+  const progressAnswered = requiredQuestions.length ? requiredAnswered : answeredCount;
+  const missing = (assessment?.questions ?? []).filter((question) => !question.optional && !questionAnswered(question, answers[question.id]));
+  const skippedWithReason = (assessment?.questions ?? []).filter((question) => question.skipReasonRequired && !questionAnswered(question, answers[question.id]));
   const reasonMissing = skippedWithReason.length > 0 && !answered(answers.__skipReason);
 
   const persistLocal = useCallback((pending: boolean) => {
@@ -251,7 +261,7 @@ export function StudentExperimentAssessment({ instanceId, phase, onCancel, onSub
       if (inFlightRef.current) await inFlightRef.current;
       if (conflictRef.current) throw new Error("草稿版本冲突，请先选择要保留的版本。");
       const finalAnswers = Object.fromEntries([
-        ...assessment.questions.filter((question) => answered(draftRef.current.answers[question.id])).map((question) => [question.id, draftRef.current.answers[question.id]]),
+        ...assessment.questions.filter((question) => questionAnswered(question, draftRef.current.answers[question.id])).map((question) => [question.id, draftRef.current.answers[question.id]]),
         ...(answered(draftRef.current.answers.__skipReason) ? [["__skipReason", draftRef.current.answers.__skipReason]] : []),
       ]);
       const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phase, answers: finalAnswers }) });
@@ -289,24 +299,24 @@ export function StudentExperimentAssessment({ instanceId, phase, onCancel, onSub
   const StatusIcon = submitted || saveStatus === "saved" ? CheckCircle2 : saveStatus === "conflict" ? AlertCircle : saveStatus === "pending" ? CloudOff : Cloud;
   const title = phaseLabel[phase];
   const scenario = assessment.variant === "none" || !assessment.variant ? null : phase === "pretest" ? assessment.variant === "A_PRE_B_POST" ? "A" : "B" : assessment.variant === "A_PRE_B_POST" ? "B" : "A";
-  const questionButton = (question: ExperimentQuestion, index: number, page: number) => <button aria-label={`前往第 ${index + 1} 题`} className={`grid size-11 place-items-center rounded-lg border text-xs font-semibold ${answered(activeAnswers[question.id]) ? "border-[var(--pbl-student)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]" : "border-[var(--pbl-border)] text-[var(--pbl-text-muted)]"}`} key={question.id} onClick={() => goToPage(page, question.id)} type="button">{answered(activeAnswers[question.id]) ? <Check size={15} aria-hidden="true" /> : index + 1}</button>;
+  const questionButton = (question: ExperimentQuestion, index: number, page: number) => <button aria-label={`前往第 ${index + 1} 题`} className={`grid size-11 place-items-center rounded-lg border text-xs font-semibold ${questionAnswered(question, activeAnswers[question.id]) ? "border-[var(--pbl-student)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]" : "border-[var(--pbl-border)] text-[var(--pbl-text-muted)]"}`} key={question.id} onClick={() => goToPage(page, question.id)} type="button">{questionAnswered(question, activeAnswers[question.id]) ? <Check size={15} aria-hidden="true" /> : index + 1}</button>;
 
-  return <div className="mx-auto mt-6 max-w-6xl pb-24">
+  return <div className={`mx-auto pb-24 ${layout === "full" ? "mt-4 w-full max-w-none" : "mt-6 max-w-6xl"}`}>
     <header className="rounded-2xl border border-[var(--pbl-student-border)] bg-[var(--pbl-student-soft)] p-5 sm:p-7">
       <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-semibold tracking-widest text-[var(--pbl-student)]">课堂实验 · {phase === "pretest" ? "课前" : "第 5 阶段"}</p><h2 className="mt-2 font-serif text-3xl font-bold">{title}{scenario ? `｜情境${scenario}` : ""}</h2><p className="mt-2 text-sm leading-6 text-[var(--pbl-text-muted)]">{submitted ? "已完成提交，下面可以查看你的作答。" : "请根据自己的真实想法作答，进度会自动保存。"}</p>{assessment.minutes ? <p className="mt-2 text-xs font-semibold text-[var(--pbl-student)]">共 {assessment.questions.length} 题 · 建议 {assessment.minutes} 分钟</p> : null}</div><span aria-live="polite" className={`inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-4 text-sm font-semibold ${saveStatus === "conflict" ? "text-[var(--pbl-danger)]" : "text-[var(--pbl-student)]"}`}><StatusIcon size={16} />{status}</span></div>
       {assessment.introduction ? <p className="mt-4 whitespace-pre-wrap rounded-xl bg-white/80 p-4 text-sm leading-6 text-[var(--pbl-text-strong)]">{assessment.introduction}</p> : null}
-      <div className="mt-6 flex items-center justify-between gap-3 text-sm"><span className="font-semibold">{submitted ? "完成作答" : `已完成 ${answeredCount} / ${assessment.questions.length} 题`}</span><span className="tabular-nums text-[var(--pbl-text-muted)]">{submitted ? "100%" : `${Math.round(answeredCount / assessment.questions.length * 100)}%`}</span></div>
-      <div aria-label={`${title}作答进度`} aria-valuemax={assessment.questions.length} aria-valuemin={0} aria-valuenow={submitted ? assessment.questions.length : answeredCount} className="mt-2 h-2 overflow-hidden rounded-full bg-white" role="progressbar"><div className="h-full rounded-full bg-[var(--pbl-student)] transition-[width] motion-reduce:transition-none" style={{ width: `${submitted ? 100 : answeredCount / assessment.questions.length * 100}%` }} /></div>
+      <div className="mt-6 flex items-center justify-between gap-3 text-sm"><span className="font-semibold">{submitted ? "完成作答" : requiredQuestions.length === assessment.questions.length ? `已完成 ${answeredCount} / ${assessment.questions.length} 题` : `必答已完成 ${requiredAnswered} / ${requiredQuestions.length} 题 · 已答选答 ${answeredCount - requiredAnswered} 题`}</span><span className="tabular-nums text-[var(--pbl-text-muted)]">{submitted ? "100%" : `${Math.round(progressAnswered / progressTotal * 100)}%`}</span></div>
+      <div aria-label={`${title}作答进度`} aria-valuemax={progressTotal} aria-valuemin={0} aria-valuenow={submitted ? progressTotal : progressAnswered} className="mt-2 h-2 overflow-hidden rounded-full bg-white" role="progressbar"><div className="h-full rounded-full bg-[var(--pbl-student)] transition-[width] motion-reduce:transition-none" style={{ width: `${submitted ? 100 : progressAnswered / progressTotal * 100}%` }} /></div>
       {submitted ? <p className="mt-3 text-xs text-[var(--pbl-text-muted)]">提交时间：{new Date(assessment.submission!.submittedAt).toLocaleString("zh-CN")}</p> : null}
     </header>
     {conflictDraft ? <div className="mt-5 rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm text-amber-950" role="alert"><p className="font-semibold">另一页面更新了这份草稿</p><p className="mt-1 leading-6">请选择使用服务器上的作答，或保留当前页面的作答并同步。</p><div className="mt-4 flex flex-wrap gap-3"><button className="min-h-11 rounded-lg border border-amber-400 bg-white px-4 font-semibold" onClick={() => resolveConflict(false)} type="button">使用服务器版本</button><button className="min-h-11 rounded-lg bg-[var(--pbl-student)] px-4 font-semibold text-white" onClick={() => resolveConflict(true)} type="button">保留本机作答</button></div></div> : null}
     {error && !conflictDraft ? <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--pbl-danger)] bg-white p-4 text-sm text-[var(--pbl-danger)]" role="alert"><span>{error}</span>{saveStatus === "pending" ? <button className="inline-flex min-h-11 items-center gap-2 font-semibold underline" onClick={() => void saveNow()} type="button"><RotateCcw size={16} />重试同步</button> : null}</div> : null}
     <div className="mt-6 grid gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
       <aside className="hidden self-start rounded-2xl border border-[var(--pbl-border)] bg-white p-4 lg:sticky lg:top-5 lg:block"><p className="mb-3 text-sm font-bold">答题目录</p>{pages.map((page, index) => <div className="mb-3" key={page.startIndex}><button className={`min-h-11 w-full rounded-lg px-3 text-left text-sm font-semibold ${pageIndex === index && !review ? "bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]" : "text-[var(--pbl-text)] hover:bg-[var(--pbl-bg)]"}`} onClick={() => goToPage(index)} type="button">{page.group?.title || `第 ${page.startIndex + 1}–${page.startIndex + page.questions.length} 题`}</button><div className="mt-1 flex flex-wrap gap-1.5 px-1">{page.questions.map((question, offset) => questionButton(question, page.startIndex + offset, index))}</div></div>)}<button className="min-h-11 w-full rounded-lg border border-[var(--pbl-border)] px-3 text-left text-sm font-semibold" onClick={() => setReview(true)} type="button">提交检查</button></aside>
-      <main className="min-w-0">
-        <div className="mb-4 lg:hidden"><button aria-expanded={directoryOpen} className="flex min-h-11 w-full items-center justify-between rounded-xl border border-[var(--pbl-border)] bg-white px-4 text-sm font-semibold" onClick={() => setDirectoryOpen((open) => !open)} type="button"><span className="inline-flex items-center gap-2"><List size={17} />答题目录</span><span>{review ? "提交检查" : `第 ${pageIndex + 1} / ${pages.length} 页`}</span></button>{directoryOpen ? <div className="mt-2 rounded-xl border border-[var(--pbl-border)] bg-white p-3">{pages.map((page, index) => <div key={page.startIndex}><button className="flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-left text-sm hover:bg-[var(--pbl-student-soft)]" onClick={() => goToPage(index)} type="button"><span>{page.group?.title || `第 ${page.startIndex + 1}–${page.startIndex + page.questions.length} 题`}</span><span>{page.questions.filter((question) => answered(activeAnswers[question.id])).length}/{page.questions.length}</span></button><div className="flex flex-wrap gap-1 px-3 pb-2">{page.questions.map((question, offset) => questionButton(question, page.startIndex + offset, index))}</div></div>)}<button className="min-h-11 w-full rounded-lg px-3 text-left text-sm font-semibold" onClick={() => { setReview(true); setDirectoryOpen(false); }} type="button">提交检查</button></div> : null}</div>
+      <div className="min-w-0">
+        <div className="mb-4 lg:hidden"><button aria-expanded={directoryOpen} className="flex min-h-11 w-full items-center justify-between rounded-xl border border-[var(--pbl-border)] bg-white px-4 text-sm font-semibold" onClick={() => setDirectoryOpen((open) => !open)} type="button"><span className="inline-flex items-center gap-2"><List size={17} />答题目录</span><span>{review ? "提交检查" : `第 ${pageIndex + 1} / ${pages.length} 页`}</span></button>{directoryOpen ? <div className="mt-2 rounded-xl border border-[var(--pbl-border)] bg-white p-3">{pages.map((page, index) => <div key={page.startIndex}><button className="flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-left text-sm hover:bg-[var(--pbl-student-soft)]" onClick={() => goToPage(index)} type="button"><span>{page.group?.title || `第 ${page.startIndex + 1}–${page.startIndex + page.questions.length} 题`}</span><span>{page.questions.filter((question) => questionAnswered(question, activeAnswers[question.id])).length}/{page.questions.length}</span></button><div className="flex flex-wrap gap-1 px-3 pb-2">{page.questions.map((question, offset) => questionButton(question, page.startIndex + offset, index))}</div></div>)}<button className="min-h-11 w-full rounded-lg px-3 text-left text-sm font-semibold" onClick={() => { setReview(true); setDirectoryOpen(false); }} type="button">提交检查</button></div> : null}</div>
         {review && !submitted ? <section className="rounded-2xl border border-[var(--pbl-border)] bg-white p-5 sm:p-7"><p className="text-xs font-bold tracking-wider text-[var(--pbl-student)]">提交前检查</p><h3 className="mt-2 text-2xl font-bold">{missing.length ? `还有 ${missing.length} 题待完成` : assessment.questions.some((question) => question.optional) ? "必答题已完成" : "所有题目已完成"}</h3><p className="mt-2 text-sm text-[var(--pbl-text-muted)]">提交后答案将锁定，请确认作答内容。{assessment.questions.some((question) => question.optional) ? "选答题和允许跳过的体验题可以留空。" : ""}</p>{missing.length ? <div className="mt-5 flex flex-wrap gap-2">{missing.map((question) => { const index = assessment.questions.indexOf(question); return <button className="min-h-11 rounded-lg border border-amber-300 bg-amber-50 px-4 text-sm font-semibold text-amber-900" key={question.id} onClick={() => goToPage(pages.findIndex((page) => page.questions.some((item) => item.id === question.id)), question.id)} type="button">第 {index + 1} 题未答</button>; })}</div> : <div className="mt-5 flex items-center gap-2 rounded-xl bg-[var(--pbl-student-soft)] p-4 text-sm font-semibold text-[var(--pbl-student)]"><CheckCircle2 size={18} />可以提交{title}</div>}{skippedWithReason.length ? <label className="mt-5 block text-sm font-semibold">{assessment.skipReasonPrompt || "跳过体验题的原因"}<textarea aria-label="跳题原因" className="mt-2 min-h-20 w-full rounded-lg border border-[var(--pbl-border)] p-3 text-sm" maxLength={1000} value={typeof answers.__skipReason === "string" ? answers.__skipReason : ""} onChange={(event) => updateAnswer("__skipReason", event.target.value)} />{reasonMissing ? <span className="mt-1 block text-xs text-[var(--pbl-danger)]">请填写跳题原因</span> : null}</label> : null}</section> : <><p className="mb-3 text-sm font-semibold text-[var(--pbl-text-muted)]">{currentPage.group?.title || `第 ${currentPage.startIndex + 1}–${currentPage.startIndex + currentPage.questions.length} 题`} · 第 {pageIndex + 1}/{pages.length} 页</p><ExperimentQuestionList answers={activeAnswers} inputNamePrefix={`experiment-${phase}`} invalidQuestionId={invalidQuestionId} onAnswerChange={updateAnswer} questionIdPrefix={`experiment-${phase}`} questions={currentPage.questions} readOnly={submitted} startIndex={currentPage.startIndex} /></>}
-      </main>
+      </div>
     </div>
     <div className="sticky bottom-0 z-10 mt-6 rounded-2xl border border-[var(--pbl-border)] bg-white/95 p-3 shadow-lg backdrop-blur sm:p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div className="text-xs font-medium text-[var(--pbl-text-muted)]">{submitted ? "答案已锁定" : review ? "请检查后提交" : `第 ${pageIndex + 1} / ${pages.length} 页`}</div><div className="flex flex-wrap gap-2">{onCancel ? <button className="min-h-11 rounded-lg border border-[var(--pbl-border)] px-4 text-sm font-semibold" onClick={onCancel} type="button">返回</button> : null}{review ? <button className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-[var(--pbl-border)] px-4 text-sm font-semibold" onClick={() => setReview(false)} type="button"><ChevronLeft size={16} />返回作答</button> : <button className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-[var(--pbl-border)] px-4 text-sm font-semibold disabled:opacity-40" disabled={pageIndex === 0} onClick={() => goToPage(pageIndex - 1)} type="button"><ChevronLeft size={16} />上一步</button>}{submitted ? null : review ? <button className="min-h-11 rounded-lg bg-[var(--pbl-student)] px-5 text-sm font-bold text-white disabled:opacity-50" disabled={Boolean(missing.length) || reasonMissing || submitting || Boolean(conflictDraft)} onClick={() => void submit()} type="button">{submitting ? "提交中…" : `确认提交${title}`}</button> : <button className="inline-flex min-h-11 items-center gap-1 rounded-lg bg-[var(--pbl-student)] px-5 text-sm font-bold text-white" onClick={() => pageIndex === pages.length - 1 ? setReview(true) : goToPage(pageIndex + 1)} type="button">{pageIndex === pages.length - 1 ? "检查并提交" : "下一步"}<ChevronRight size={16} /></button>}</div></div></div>
   </div>;

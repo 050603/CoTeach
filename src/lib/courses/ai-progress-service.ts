@@ -16,29 +16,32 @@ export async function persistStudentAiProgress(
     if (!participation) throw new Error("STUDENT_NOT_FOUND");
     const projectState = (participation.workspace?.projectState ?? {}) as Record<string, unknown>;
     const previous = projectState.aiLearningProgress as StudentAiProgress | undefined;
+    const matchingPrevious = previous?.classroomId === progress.classroomId ? previous : undefined;
     const completedScenes = Array.from(new Set([
-      ...(previous?.completedScenes ?? []),
+      ...(matchingPrevious?.completedScenes ?? []),
       ...progress.completedScenes,
     ]));
     const completedOutlineIds = Array.from(new Set([
-      ...(previous?.completedOutlineIds ?? []),
+      ...(matchingPrevious?.completedOutlineIds ?? []),
       ...(progress.completedOutlineIds ?? []),
     ]));
-    const masteryRank: Record<StudentAiProgress["masteryLevel"], number> = {
-      "not-started": 0,
-      "in-progress": 1,
-      completed: 2,
-      mastered: 3,
-    };
     const mergedProgress: StudentAiProgress = {
-      ...previous,
+      ...matchingPrevious,
       ...progress,
       completedScenes,
       ...(completedOutlineIds.length ? { completedOutlineIds } : {}),
-      masteryLevel:
-        previous && masteryRank[previous.masteryLevel] > masteryRank[progress.masteryLevel]
-          ? previous.masteryLevel
-          : progress.masteryLevel,
+      // The playback update may have been built before a concurrent quiz/tutor
+      // transaction. Keep those independently persisted records from the row
+      // locked above instead of restoring the caller's older snapshot.
+      ...(matchingPrevious?.knowledgeLectureAttempts ? { knowledgeLectureAttempts: matchingPrevious.knowledgeLectureAttempts } : {}),
+      ...(matchingPrevious?.knowledgeLectureTutorThreads ? { knowledgeLectureTutorThreads: matchingPrevious.knowledgeLectureTutorThreads } : {}),
+      ...(matchingPrevious?.adaptiveLearning ? { adaptiveLearning: matchingPrevious.adaptiveLearning } : {}),
+      masteryLevel: completedScenes.length >= progress.totalScenes && progress.totalScenes > 0
+        ? "completed"
+        : completedScenes.length > 0 || progress.currentSceneIndex > 0 || (matchingPrevious?.knowledgeLectureAttempts?.length ?? 0) > 0
+          ? "in-progress"
+          : "not-started",
+      quizScore: undefined,
     };
     await tx.studentProjectWorkspace.upsert({ where: { participationId: participation.id }, create: { participationId: participation.id, projectState: JSON.parse(JSON.stringify({ aiLearningProgress: mergedProgress })) }, update: { projectState: JSON.parse(JSON.stringify({ ...projectState, aiLearningProgress: mergedProgress })), version: { increment: 1 } } });
     const stageState = (participation.stageProgress ?? {}) as Record<string, unknown>;

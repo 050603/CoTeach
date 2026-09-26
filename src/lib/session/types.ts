@@ -1043,6 +1043,11 @@ export type KnowledgeLectureQuestionReview = {
   /** The two candidate columns shown for a matching question. */
   matchingOptions?: { left: string[]; right: string[] };
   answer: string;
+  /** Exact submitted value, retained for retries and multi-select review. */
+  rawAnswer?: string | string[];
+  questionType?: "single" | "multiple" | "matching" | "short_answer";
+  gradingRubric?: string;
+  gradingStatus?: "graded" | "pending" | "failed";
   points: number;
   earned: number;
   correct: boolean | null;
@@ -1059,6 +1064,9 @@ export type KnowledgeLectureAttempt = {
   quizOutlineId: string;
   runtimeSceneId: string;
   submittedAt: string;
+  /** Missing on legacy browser-scored records; only server grades are trusted. */
+  gradingSource?: "server" | "legacy-unverified";
+  gradingStatus?: "graded" | "pending" | "failed";
   score: number;
   maxScore: number;
   knowledgePointIds: string[];
@@ -1453,6 +1461,14 @@ export type Course = {
   teacherClassroomId?: string;
   /** 学生在 AI 课堂中的学习进度，key 为 studentId */
   aiLearningProgress?: Record<string, StudentAiProgress>;
+  /** 当前场次完整事件流的服务端聚合；旧课堂快照可能没有此字段。 */
+  aiLearningTimingByStudent?: Record<string, {
+    effectiveDurationMs: number;
+    expectedDurationMs: number;
+    hasEvidence: boolean;
+  }>;
+  /** 教学班有效选课人数与曾进入本场的人数；两者统计范围不同。 */
+  classroomPopulation?: { enrolledCount: number; enteredCount: number };
   /** 学生学习行为的结构化、幂等事件流。 */
   learningEvents?: LearningEvent[];
   /** 学生与伴学圆桌的后端持久化会话。 */

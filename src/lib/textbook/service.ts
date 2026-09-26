@@ -94,7 +94,22 @@ export async function listTextbooks(input: { query?: string; includeArchived?: b
     orderBy: { updatedAt: "desc" },
     take: 200,
   });
-  return { textbooks: textbooks.map(textbookSummary), total: textbooks.length };
+  const revisionIds = textbooks.flatMap((textbook) => {
+    const current = textbook.currentRevision ?? textbook.revisions[0];
+    return current ? [current.id] : [];
+  });
+  const jobs = revisionIds.length ? await prisma.generationJob.findMany({
+    where: { targetType: "TEXTBOOK_REVISION", targetId: { in: revisionIds }, jobType: "TEXTBOOK_INGEST" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { targetId: true, progress: true },
+  }) : [];
+  const progressByRevision = new Map<string, number>();
+  for (const job of jobs) if (!progressByRevision.has(job.targetId)) progressByRevision.set(job.targetId, job.progress);
+  return { textbooks: textbooks.map((textbook) => {
+    const summary = textbookSummary(textbook);
+    const progress = summary.currentRevision ? progressByRevision.get(summary.currentRevision.id) : undefined;
+    return { ...summary, currentRevision: summary.currentRevision ? { ...summary.currentRevision, progress: progress ?? null } : null };
+  }), total: textbooks.length };
 }
 
 export async function createTextbookFromUpload(input: UploadedTextbookInput) {

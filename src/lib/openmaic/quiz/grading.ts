@@ -3,7 +3,7 @@ import type { QuizQuestion } from '@openmaic/lib/types/stage';
 export interface QuestionResult {
   questionId: string;
   correct: boolean | null;
-  status: 'correct' | 'incorrect';
+  status: 'correct' | 'incorrect' | 'graded' | 'pending';
   earned: number;
   aiComment?: string;
 }

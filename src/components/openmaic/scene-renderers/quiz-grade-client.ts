@@ -36,11 +36,13 @@ export async function gradeShortAnswerQuestion(
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
     const data = (await res.json()) as { score: number; comment: string };
-    const earned = Math.max(0, Math.min(pts, data.score));
+    if (typeof data.score !== 'number' || !Number.isFinite(data.score)
+      || data.score < 0 || data.score > pts) throw new Error('Invalid quiz grade response');
+    const earned = data.score;
     return {
       questionId: q.id,
-      correct: earned >= pts * 0.8,
-      status: earned >= pts * 0.8 ? 'correct' : 'incorrect',
+      correct: null,
+      status: 'graded',
       earned,
       aiComment: data.comment,
     };
@@ -49,11 +51,11 @@ export async function gradeShortAnswerQuestion(
     return {
       questionId: q.id,
       correct: null,
-      status: 'incorrect',
-      earned: Math.round(pts * 0.5),
+      status: 'pending',
+      earned: 0,
       aiComment: language === 'zh-CN'
-        ? '评分服务暂时不可用，已给予基础分。'
-        : 'Grading service unavailable. Base score given.',
+        ? '答案已提交，评分服务暂时不可用，请稍后重试批阅。'
+        : 'Answer submitted. Grading is unavailable; please retry later.',
     };
   }
 }

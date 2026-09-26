@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { Card, Pill } from "@/components/ui";
-import { aggregateKnowledgePointMastery, firstKnowledgeLectureAttempts, knowledgeLectureQuizEstimate } from "@/lib/knowledge-lecture";
+import { aggregateKnowledgePointMastery, firstKnowledgeLectureAttempts, isCurrentAiLearningEntry, knowledgeLectureQuizEstimate, verifiedKnowledgeLectureScoreRate } from "@/lib/knowledge-lecture";
 import type { Course, StudentAiProgress } from "@/lib/session/types";
 import { cn } from "@/lib/utils";
 import { inferStageCollectionMode } from "@/lib/system-mode";
@@ -26,7 +26,8 @@ type QuestionAnalyticsRow = {
   knowledgePointNames: string[];
   answeredStudents: number;
   correctStudents: number;
-  accuracy: number;
+  accuracy?: number;
+  scoreRate?: number;
   commonFeedback?: string;
 };
 
@@ -102,14 +103,18 @@ export function aggregateQuestionAnalytics(
     knowledgePointIds: Set<string>;
     answeredStudents: Set<string>;
     correctStudents: Set<string>;
+    objectiveCount: number;
     earned: number;
     maxScore: number;
     feedback: string[];
   }>();
 
-  Object.entries(progress).forEach(([studentId, entry]) => {
+  const currentStudentIds = new Set(course.students.map((student) => student.id));
+  Object.entries(progress).filter(([studentId, entry]) => currentStudentIds.has(studentId) && isCurrentAiLearningEntry(course, entry)).forEach(([studentId, entry]) => {
     firstKnowledgeLectureAttempts(entry).forEach((attempt) => {
+      if (attempt.gradingSource !== "server") return;
       attempt.questions.forEach((question, questionIndex) => {
+        if (question.gradingStatus !== "graded") return;
         const id = `${attempt.quizOutlineId}:${question.questionId}`;
         const current = accumulators.get(id) ?? {
           sectionId: attempt.sectionId,
@@ -120,6 +125,7 @@ export function aggregateQuestionAnalytics(
           knowledgePointIds: new Set<string>(),
           answeredStudents: new Set<string>(),
           correctStudents: new Set<string>(),
+          objectiveCount: 0,
           earned: 0,
           maxScore: 0,
           feedback: [],
@@ -129,7 +135,8 @@ export function aggregateQuestionAnalytics(
         current.answeredStudents.add(studentId);
         current.earned += question.earned;
         current.maxScore += question.points;
-        if (question.correct === true || (question.points > 0 && question.earned / question.points >= 0.8)) {
+        if (question.correct !== null) current.objectiveCount += 1;
+        if (question.correct === true) {
           current.correctStudents.add(studentId);
         } else if (question.feedback.trim()) {
           current.feedback.push(question.feedback.trim());
@@ -148,7 +155,8 @@ export function aggregateQuestionAnalytics(
     knowledgePointNames: [...item.knowledgePointIds].map((knowledgePointId) => pointNames.get(knowledgePointId) ?? knowledgePointId),
     answeredStudents: item.answeredStudents.size,
     correctStudents: item.correctStudents.size,
-    accuracy: item.maxScore > 0 ? Math.round(item.earned / item.maxScore * 100) : 0,
+    accuracy: item.objectiveCount > 0 ? Math.round(item.correctStudents.size / item.objectiveCount * 100) : undefined,
+    scoreRate: item.maxScore > 0 ? Math.round(item.earned / item.maxScore * 100) : undefined,
     commonFeedback: item.feedback[0],
   })).sort((left, right) => {
     const leftOrder = sections.get(left.sectionId)?.order ?? 0;
@@ -175,25 +183,31 @@ export function KnowledgeLectureAnalytics({
   const sections = course.content.knowledgeLectureSections ?? [];
   const rows = aggregateKnowledgePointMastery(course, progress);
   const questionRows = aggregateQuestionAnalytics(course, progress);
-  const answeredStudentIds = Object.entries(progress).flatMap(([studentId, entry]) =>
+  const currentStudentIds = new Set(course.students.map((student) => student.id));
+  const currentProgress = Object.fromEntries(Object.entries(progress).filter(([studentId, entry]) => currentStudentIds.has(studentId) && isCurrentAiLearningEntry(course, entry)));
+  const answeredStudentIds = Object.entries(currentProgress).flatMap(([studentId, entry]) =>
     firstKnowledgeLectureAttempts(entry).length ? [studentId] : [],
   );
-  const attempts = Object.values(progress).flatMap(firstKnowledgeLectureAttempts);
-  const averageScore = attempts.length
-    ? Math.round(attempts.reduce((sum, attempt) => sum + (attempt.maxScore > 0 ? attempt.score / attempt.maxScore : 0), 0) / attempts.length * 100)
-    : 0;
+  const attempts = Object.values(currentProgress).flatMap(firstKnowledgeLectureAttempts);
+  const scoredRates = attempts.flatMap((attempt) => {
+    const rate = verifiedKnowledgeLectureScoreRate(attempt);
+    return rate === undefined ? [] : [rate];
+  });
+  const averageScore = scoredRates.length ? Math.round(scoredRates.reduce((sum, rate) => sum + rate, 0) / scoredRates.length) : undefined;
   const isNewSystem = inferStageCollectionMode(course.stages) === "new";
   const [selectedSectionId, setSelectedSectionId] = useState<string>();
   const [knowledgePointTooltip, setKnowledgePointTooltip] = useState<{ name: string; x: number; y: number }>();
   const selectedSection = sections.find((section) => section.id === selectedSectionId);
   const selectedQuestionRows = questionRows.filter((question) => question.sectionId === selectedSectionId);
   const sectionChartData: SectionChartDatum[] = sections.map((section) => {
-    const attempts = Object.entries(progress).flatMap(([studentId, entry]) => firstKnowledgeLectureAttempts(entry)
+    const attempts = Object.entries(currentProgress).flatMap(([studentId, entry]) => firstKnowledgeLectureAttempts(entry)
       .filter((attempt) => attempt.sectionId === section.id)
       .map((attempt) => ({ studentId, attempt })));
-    const averageScore = attempts.length
-      ? Math.round(attempts.reduce((sum, item) => sum + (item.attempt.maxScore > 0 ? item.attempt.score / item.attempt.maxScore : 0), 0) / attempts.length * 100)
-      : null;
+    const scores = attempts.flatMap(({ attempt }) => {
+      const rate = verifiedKnowledgeLectureScoreRate(attempt);
+      return rate === undefined ? [] : [rate];
+    });
+    const averageScore = scores.length ? Math.round(scores.reduce((sum, rate) => sum + rate, 0) / scores.length) : null;
     return {
       id: section.id,
       fullName: section.title,
@@ -211,7 +225,7 @@ export function KnowledgeLectureAnalytics({
             <div><h3 className="text-base font-bold text-stone-950">{title}</h3><p className="mt-0.5 text-xs text-stone-500">按 AI 逐题得分归集到对应知识点，学生提交后实时更新</p></div>
           </div>
         </div>
-        {isNewSystem ? <span className="max-w-[12rem] text-right text-[10px] leading-4 text-stone-400">右栏展示班级摘要；此处查看知识点、分节和逐题证据</span> : <div className="flex flex-wrap gap-2 text-xs font-bold"><span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-stone-700 ring-1 ring-stone-200"><Users size={13} />已作答 {new Set(answeredStudentIds).size}/{studentCount}</span><span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[var(--pbl-teacher)] ring-1 ring-[var(--pbl-teacher-border)]"><BookOpenCheck size={13} />班级均分 {attempts.length ? `${averageScore}分` : "—"}</span></div>}
+        {isNewSystem ? <span className="max-w-[12rem] text-right text-[10px] leading-4 text-stone-400">右栏展示班级摘要；此处查看知识点、分节和逐题证据</span> : <div className="flex flex-wrap gap-2 text-xs font-bold"><span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-stone-700 ring-1 ring-stone-200"><Users size={13} />已作答 {new Set(answeredStudentIds).size}/{studentCount}</span><span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[var(--pbl-teacher)] ring-1 ring-[var(--pbl-teacher-border)]"><BookOpenCheck size={13} />班级均分 {averageScore === undefined ? "—" : `${averageScore}分`}</span></div>}
       </header>
 
       {showSectionSummaryChart && isNewSystem && sectionChartData.length ? <section className="border-b border-stone-100 bg-stone-50/40 px-4 py-4" aria-labelledby="knowledge-section-chart-title">
@@ -275,12 +289,14 @@ export function KnowledgeLectureAnalytics({
           <div className="space-y-2.5">
             {sections.map((section) => {
               const quizEstimate = knowledgeLectureQuizEstimate(course, section);
-              const sectionAttempts = Object.values(progress).flatMap((entry) =>
+              const sectionAttempts = Object.values(currentProgress).flatMap((entry) =>
                 firstKnowledgeLectureAttempts(entry).filter((attempt) => attempt.sectionId === section.id),
               );
-              const average = sectionAttempts.length
-                ? Math.round(sectionAttempts.reduce((sum, attempt) => sum + (attempt.maxScore > 0 ? attempt.score / attempt.maxScore : 0), 0) / sectionAttempts.length * 100)
-                : undefined;
+              const scores = sectionAttempts.flatMap((attempt) => {
+                const rate = verifiedKnowledgeLectureScoreRate(attempt);
+                return rate === undefined ? [] : [rate];
+              });
+              const average = scores.length ? Math.round(scores.reduce((sum, rate) => sum + rate, 0) / scores.length) : undefined;
               const selected = section.id === selectedSectionId;
               return (
                 <button aria-expanded={selected} className={cn("w-full rounded-[var(--radius-sm)] border p-3 text-left transition", selected ? "border-[var(--pbl-teacher-border)] bg-[var(--pbl-teacher-soft)] shadow-sm" : "border-stone-200 bg-stone-50/60 hover:border-[var(--pbl-teacher-border)] hover:bg-white")} key={section.id} onClick={() => setSelectedSectionId((current) => current === section.id ? undefined : section.id)} type="button">
@@ -300,9 +316,9 @@ export function KnowledgeLectureAnalytics({
             <div className="space-y-2.5 pr-1">
               {selectedQuestionRows.map((question) => (
                 <article className="rounded-[var(--radius-sm)] border border-stone-200 bg-white p-3" key={question.id}>
-                  <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-bold text-[var(--pbl-teacher)]">第 {question.questionNumber} 题</p><p className="mt-1 text-xs font-bold leading-5 text-stone-800">{question.prompt}</p></div><strong className={cn("shrink-0 text-sm tabular-nums", question.accuracy >= 80 ? "text-emerald-700" : question.accuracy >= 60 ? "text-amber-700" : "text-rose-700")}>{question.accuracy}%</strong></div>
+                  <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-bold text-[var(--pbl-teacher)]">第 {question.questionNumber} 题</p><p className="mt-1 text-xs font-bold leading-5 text-stone-800">{question.prompt}</p></div><strong className={cn("shrink-0 text-sm tabular-nums", question.accuracy === undefined ? "text-stone-600" : question.accuracy >= 80 ? "text-emerald-700" : question.accuracy >= 60 ? "text-amber-700" : "text-rose-700")}>{question.accuracy === undefined ? `得分率 ${question.scoreRate === undefined ? "—" : `${question.scoreRate}%`}` : `正确率 ${question.accuracy}%`}</strong></div>
                   <p className="mt-1.5 text-[10px] leading-4 text-stone-500">对应知识点：{question.knowledgePointNames.join(" · ") || "未关联"}</p>
-                  <div className="mt-2 flex items-center justify-between text-[10px] font-semibold text-stone-500"><span>{question.answeredStudents} 人作答</span><span>{question.correctStudents}/{question.answeredStudents} 人达到 80%</span></div>
+                  <div className="mt-2 flex items-center justify-between text-[10px] font-semibold text-stone-500"><span>{question.answeredStudents} 人已批阅</span><span>{question.accuracy === undefined ? `得分率 ${question.scoreRate === undefined ? "—" : `${question.scoreRate}%`}` : `${question.correctStudents}/${question.answeredStudents} 人答对`}</span></div>
                   {question.commonFeedback ? <p className="mt-2 rounded-md bg-rose-50 px-2 py-1.5 text-[10px] leading-4 text-rose-700">典型问题：{question.commonFeedback}</p> : null}
                 </article>
               ))}

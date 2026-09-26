@@ -89,7 +89,9 @@ export function buildSurveyAnalytics(configInput: unknown, rows: SurveyAnalytics
   return {
     submittedCount,
     totalStudents,
-    completionRate: totalStudents ? Math.round((submittedCount / totalStudents) * 1000) / 10 : 0,
+    completionRate: totalStudents > 0 && submittedCount <= totalStudents
+      ? Math.round((submittedCount / totalStudents) * 1000) / 10
+      : null,
     questions,
   };
 }

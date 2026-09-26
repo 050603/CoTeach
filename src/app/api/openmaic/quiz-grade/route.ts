@@ -11,6 +11,7 @@ import { createLogger } from '@openmaic/lib/logger';
 import { apiError, apiSuccess } from '@openmaic/lib/server/api-response';
 import { resolveModelFromRequest } from '@openmaic/lib/server/resolve-model';
 import { buildPromptQualityContract } from '@/lib/prompt-quality/policy';
+import { parseQuizGradeResponse } from '@openmaic/lib/quiz/grade-response';
 const log = createLogger('Quiz Grade');
 
 interface GradeRequest {
@@ -19,11 +20,6 @@ interface GradeRequest {
   points: number;
   commentPrompt?: string;
   language?: string;
-}
-
-interface GradeResponse {
-  score: number;
-  comment: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -93,29 +89,7 @@ ${commentPrompt ? `Grading guidance: ${commentPrompt}\n` : ''}Student answer: ${
       thinkingConfig,
     );
 
-    // Parse the LLM response as JSON
-    const text = result.text.trim();
-    let gradeResult: GradeResponse;
-
-    try {
-      // Try to extract JSON from the response
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('No JSON found');
-      const parsed = JSON.parse(jsonMatch[0]);
-      gradeResult = {
-        score: Math.max(0, Math.min(points, Math.round(Number(parsed.score)))),
-        comment: String(parsed.comment || ''),
-      };
-    } catch {
-      // Fallback: give partial credit with a generic comment
-      gradeResult = {
-        score: Math.round(points * 0.5),
-        comment: isZh
-          ? '已作答，请参考标准答案。'
-          : 'Answer received. Please refer to the standard answer.',
-      };
-    }
-
+    const gradeResult = parseQuizGradeResponse(result.text.trim(), points);
     return apiSuccess({ ...gradeResult });
   } catch (error) {
     log.error(

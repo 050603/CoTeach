@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StudentExperimentAssessment, paginateExperimentQuestions, type ExperimentQuestion } from "./student-experiment-assessment";
+import { parseDesignAnswer } from "@/lib/platform/experiment-design-answer";
 
 const group = { id: "g", title: "研究情境", instruction: "阅读情境后作答" };
 const questions: ExperimentQuestion[] = [
@@ -27,6 +28,35 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("student experiment assessment", () => {
+  it("shows the design scenario clearly and requires all three separate answers", async () => {
+    const designQuestion: ExperimentQuestion = { id: "design", type: "short-answer", prompt: "为六年级改进8分钟活动。目标：根据证据判断识别结果。\n已有测试记录：原背景4／4，换背景2／4。\n现有安排：教师展示结果。\n按三点写短句。\n\n依据：说明为什么这样改。\n活动：学生具体做什么。\n评价：如何判断目标达成。" };
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_url, options) => options?.method === "POST"
+      ? response({ submission: { id: "s1", answers: JSON.parse(String(options.body)).answers, submittedAt: "2026-01-01T00:01:00Z" } })
+      : options?.method === "PUT"
+        ? response({ draft: { answers: JSON.parse(String(options.body)).answers, currentPage: 0, version: 1, updatedAt: "2026-01-01T00:00:00Z" } })
+        : response({ ...assessment(), questions: [designQuestion] }));
+    render(<StudentExperimentAssessment instanceId="run-1" layout="full" phase="pretest" />);
+    expect(await screen.findByRole("region", { name: "题目情境" })).toHaveTextContent("原背景4／4，换背景2／4");
+    const basis = screen.getByRole("textbox", { name: /^依据：/ });
+    expect(screen.getByRole("textbox", { name: /^活动：/ })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /^评价：/ })).toBeInTheDocument();
+    fireEvent.change(basis, { target: { value: "采用证据探究" } });
+    expect(screen.getByRole("progressbar", { name: "前测作答进度" })).toHaveAttribute("aria-valuenow", "0");
+    fireEvent.click(screen.getByRole("button", { name: "检查并提交" }));
+    expect(screen.getByText("还有 1 题待完成")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "返回作答" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /^活动：/ }), { target: { value: "让学生比较两种背景的识别记录" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /^评价：/ }), { target: { value: "学生能说明条件变化后的差异" } });
+    expect(screen.getByRole("progressbar", { name: "前测作答进度" })).toHaveAttribute("aria-valuenow", "1");
+    fireEvent.click(screen.getByRole("button", { name: "检查并提交" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认提交前测" }));
+    await screen.findByText(/提交时间：/);
+    const post = fetchMock.mock.calls.find(([, options]) => options?.method === "POST");
+    const saved = JSON.parse(String(post?.[1]?.body));
+    expect(parseDesignAnswer(saved.answers.design).values).toEqual({ 依据: "采用证据探究", 活动: "让学生比较两种背景的识别记录", 评价: "学生能说明条件变化后的差异" });
+    expect(screen.getByRole("textbox", { name: /^依据：/ })).toHaveAttribute("readonly");
+  });
   it("lets students skip experience ratings with a reason and leave feedback blank", async () => {
     const optionalQuestions: ExperimentQuestion[] = [
       { id: "knowledge", type: "single-choice", prompt: "知识题", options: ["甲", "乙"] },
@@ -57,6 +87,8 @@ describe("student experiment assessment", () => {
     expect(pages[0].group?.title).toBe("研究情境");
     expect(pages.at(-1)?.startIndex).toBe(32);
     expect(pages.flatMap((page) => page.questions.map((question) => question.id))).toEqual(input.map((question) => question.id));
+    const longGroup = Array.from({ length: 8 }, (_, index) => ({ id: `knowledge-${index}`, type: "single-choice" as const, prompt: `知识题 ${index + 1}`, options: ["甲", "乙"], group }));
+    expect(paginateExperimentQuestions(longGroup).map((page) => page.questions.length)).toEqual([4, 4]);
   });
 
   it("restores the assigned draft and submits all question types through the check page", async () => {

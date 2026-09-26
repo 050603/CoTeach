@@ -36,7 +36,7 @@ const UploadFieldsSchema = z.object({
   bindAsCourseResource: z.literal("true").optional(),
   stageKey: z.string().trim().min(1).max(64).optional(),
   pdfDisplayMode: z.enum(["document", "slides"]).optional(),
-  purpose: z.enum(["generation-reference", "course-resource-package"]).optional(),
+  purpose: z.enum(["generation-reference", "course-resource-package", "launch-presentation-replacement"]).optional(),
 });
 
 type AllowedUploadType = {
@@ -171,11 +171,15 @@ export async function POST(request: Request) {
     const bindAsCourseResource = parsedFields.data.bindAsCourseResource === "true";
     const isGenerationReference = parsedFields.data.purpose === "generation-reference";
     const isResourcePackage = parsedFields.data.purpose === "course-resource-package";
+    const isLaunchReplacement = parsedFields.data.purpose === "launch-presentation-replacement";
     if (isResourcePackage && (auth.claims.role !== "teacher" || !courseId || bindAsCourseResource)) {
       throw new UploadHttpError("INVALID_RESOURCE_PACKAGE_UPLOAD", "资源包必须由教师上传至备课课程，并作为私有生成资料保存。", 400);
     }
     if (isResourcePackage && extension !== ".zip") {
       throw new UploadHttpError("INVALID_RESOURCE_PACKAGE_UPLOAD", "请上传 ZIP 格式的完整资源包。", 415);
+    }
+    if (isLaunchReplacement && (auth.claims.role !== "teacher" || !courseId || bindAsCourseResource || extension !== ".pptx")) {
+      throw new UploadHttpError("INVALID_LAUNCH_PRESENTATION_UPLOAD", "请在备课课程中上传 PPTX 格式的项目启动课件。", 400);
     }
     if (bindAsCourseResource && auth.claims.role !== "teacher") {
       throw new UploadHttpError("FORBIDDEN", "只有教师可以发布课程资源。", 403);
@@ -208,6 +212,9 @@ export async function POST(request: Request) {
     }
     if (isResourcePackage && !storageScope?.templateId) {
       throw new UploadHttpError("RESOURCE_PACKAGE_TEMPLATE_REQUIRED", "请在课程备课页面上传资源包。", 400);
+    }
+    if (isLaunchReplacement && !storageScope?.templateId) {
+      throw new UploadHttpError("LAUNCH_PRESENTATION_TEMPLATE_REQUIRED", "请在课程库的课程编辑页面替换启动课件。", 400);
     }
     const isNewClassroomPptx = extension === ".pptx"
       && bindAsCourseResource
@@ -258,7 +265,7 @@ export async function POST(request: Request) {
     let previewSha256: string | null = null;
     let previewUrl: string | null = null;
     let previewType: string | null = null;
-    const needsClassroomPdf = isNewClassroomPptx && isPresentationConversionEnabled();
+    const needsClassroomPdf = isLaunchReplacement || (isNewClassroomPptx && isPresentationConversionEnabled());
     if (needsClassroomPdf) {
       failureStage = "convert-presentation";
       previewStoredName = `${id}.classroom.pdf`;
@@ -305,7 +312,7 @@ export async function POST(request: Request) {
       size: info.size, mimeType: expected.mime, title, type: fileType, bind: bindAsCourseResource,
       stageKey: parsedFields.data.stageKey, displayMode, previewStorageKey: previewStoredName, previewMimeType, previewSize,
       sha256: sourceSha256, previewSha256,
-      ...(isResourcePackage ? { provenance: { schemaVersion: 1, operation: "course-resource-package-upload", courseId } } : {}),
+      ...(isResourcePackage || isLaunchReplacement ? { provenance: { schemaVersion: 1, operation: isLaunchReplacement ? "launch-presentation-replacement" : "course-resource-package-upload", courseId } } : {}),
     }));
 
     if (durableEvent && courseId) {

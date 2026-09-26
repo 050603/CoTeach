@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ExperimentConfigSchema, composeExperimentForms, gradeExperimentAnswers, publicActivityConfig, publicExperimentConfig, publicExperimentQuestions } from "./experiment";
 import assessmentBackup from "../../../scripts/data/aied-assessment-v3.2.json";
+import { designPromptParts, readableDesignAnswer, serializeDesignAnswer } from "./experiment-design-answer";
 
 const experiment = {
   enabled: true,
@@ -24,11 +25,22 @@ describe("classroom experiment questions", () => {
     expect(a.posttest.map((question) => question.id).slice(8, 11)).toEqual(["post-estimate", "design-b", "experience-11"]);
     expect(b.pretest[11].id).toBe("design-b");
     expect(b.posttest[9].id).toBe("design-a");
-    const requiredAnswers = Object.fromEntries(a.posttest.filter((question) => !question.optional).map((question) => [question.id, question.type === "scale" ? "4" : question.type === "short-answer" ? "一段设计" : question.correctAnswer]));
+    const designAnswer = serializeDesignAnswer({ 依据: "以证据探究为依据", 活动: "比较两种条件的测试记录", 评价: "学生能解释条件变化后的差异" });
+    const requiredAnswers = Object.fromEntries(a.posttest.filter((question) => !question.optional).map((question) => [question.id, question.type === "scale" ? "4" : question.type === "short-answer" ? designAnswer : question.correctAnswer]));
     expect(gradeExperimentAnswers(a.posttest, requiredAnswers)).toBeNull();
     const graded = gradeExperimentAnswers(a.posttest, { ...requiredAnswers, __skipReason: "设备故障" });
     expect(graded).toMatchObject({ objectiveScore: 8, objectiveTotal: 8 });
     expect(graded?.answers).not.toHaveProperty("post-feedback");
+  });
+  it("requires three complete design responses while preserving a readable teacher view", () => {
+    const config = ExperimentConfigSchema.parse(assessmentBackup.config);
+    const questions = composeExperimentForms(config, "A_PRE_B_POST", () => 0).pretest.filter((question) => question.id === "design-a");
+    expect(designPromptParts(questions[0].prompt)?.sections.map((section) => section.label)).toEqual(["依据", "活动", "评价"]);
+    expect(gradeExperimentAnswers(questions, { [questions[0].id]: "一段未分项的回答" })).toBeNull();
+    expect(gradeExperimentAnswers(questions, { [questions[0].id]: serializeDesignAnswer({ 依据: "理论", 活动: "比较记录", 评价: "" }) })).toBeNull();
+    const answer = serializeDesignAnswer({ 依据: "理论", 活动: "比较记录", 评价: "说明差异" });
+    expect(gradeExperimentAnswers(questions, { [questions[0].id]: answer })?.answers[questions[0].id]).toBe(answer);
+    expect(readableDesignAnswer(answer)).toBe("依据：理论\n\n活动：比较记录\n\n评价：说明差异");
   });
   it("requires separately configured assessments and rejects invalid answer keys", () => {
     expect(ExperimentConfigSchema.safeParse(experiment).success).toBe(true);

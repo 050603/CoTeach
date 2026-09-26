@@ -39,27 +39,21 @@ type ProgressRequestBody = {
   totalScenes?: number;
   completedScenes?: string[];
   completionModelVersion?: number;
-  quizScore?: number;
 };
 
 // 计算 masteryLevel：
 // - not-started: index===0 且 completedScenes 为空
-// - mastered: 已完成全部场景 且 quizScore>=80
 // - completed: 已完成全部场景
 // - in-progress: 其它
 function computeMasteryLevel(
   currentSceneIndex: number,
   totalScenes: number,
   completedScenes: string[],
-  quizScore?: number,
 ): StudentAiProgress['masteryLevel'] {
   if (currentSceneIndex === 0 && completedScenes.length === 0) {
     return 'not-started';
   }
   const allDone = completedScenes.length >= totalScenes;
-  if (allDone && quizScore !== undefined && quizScore >= 80) {
-    return 'mastered';
-  }
   if (allDone) {
     return 'completed';
   }
@@ -135,7 +129,6 @@ export async function POST(request: NextRequest) {
       currentSceneIndex,
       totalScenes,
       completedScenes,
-      quizScore,
     } = body;
 
     if (!courseId || typeof courseId !== 'string') {
@@ -199,22 +192,21 @@ export async function POST(request: NextRequest) {
     if (!classroom || classroom.scenes.length === 0) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Classroom scenes not found');
     }
+    const storedProgress = course.aiLearningProgress?.[studentId];
+    const currentProgress = storedProgress?.classroomId === classroomId ? storedProgress : undefined;
 
     const normalized = normalizeProgressUpdate({
       validSceneIds: classroom.scenes.map((scene) => scene.id),
       requestedCurrentSceneIndex: currentSceneIndex,
       requestedCompletedScenes: Array.isArray(completedScenes) ? completedScenes : [],
-      previousCompletedScenes: isReliableAiProgress(course.aiLearningProgress?.[studentId])
-        ? course.aiLearningProgress?.[studentId]?.completedScenes ?? []
+      previousCompletedScenes: isReliableAiProgress(currentProgress)
+        ? currentProgress?.completedScenes ?? []
         : [],
     });
-    const score =
-      typeof quizScore === 'number' && !Number.isNaN(quizScore) ? quizScore : undefined;
     const masteryLevel = computeMasteryLevel(
       normalized.currentSceneIndex,
       normalized.totalScenes,
       normalized.completedScenes,
-      score,
     );
     const completedRuntimeIds = new Set(normalized.completedScenes);
     const completedOutlineIds = Array.from(new Set(
@@ -226,7 +218,7 @@ export async function POST(request: NextRequest) {
     const now = new Date().toISOString();
 
     const updatedEntry: StudentAiProgress = {
-      ...course.aiLearningProgress?.[studentId],
+      ...currentProgress,
       classroomId,
       studentId,
       currentSceneIndex: normalized.currentSceneIndex,
@@ -236,7 +228,8 @@ export async function POST(request: NextRequest) {
       completionModelVersion: AI_PROGRESS_COMPLETION_MODEL_VERSION,
       lastActiveAt: now,
       masteryLevel,
-      ...(score !== undefined ? { quizScore: score } : {}),
+      // A player-reported quiz score is not a verified grading source.
+      quizScore: undefined,
     };
     void studentName;
     const savedProgress = await persistStudentAiProgress(

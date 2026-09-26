@@ -3,6 +3,7 @@
 import { ResilientImage } from "@/components/resilient-image";
 import { StudentShell } from "@/components/platform/student-shell";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { activityTypeLabel, instanceStatusLabel, progressStatusLabel } from "@/lib/platform/labels";
 
@@ -11,7 +12,8 @@ import { SurveyQuestionFields } from "@/components/platform/survey-question-fiel
 import { surveyTextAnswer, type SurveyAnswer, type SurveyQuestion } from "@/lib/platform/survey";
 import { StudentSurveyExperience } from "@/components/platform/student-survey-experience";
 import { StudentPdfResourceViewer } from "@/components/classroom/simple-stage-resources";
-import { StudentExperimentAssessment, type ExperimentPhase, type ExperimentQuestion } from "@/components/platform/student-experiment-assessment";
+import type { ExperimentPhase, ExperimentQuestion } from "@/components/platform/student-experiment-assessment";
+import { studentExperimentHref } from "@/lib/platform/experiment-entry";
 
 type Experiment = { enabled: boolean; pretest: ExperimentQuestion[]; posttest: ExperimentQuestion[] };
 type ActivityInstance = { id: string; status: string; startedAt: string | null; endedAt: string | null; canWrite?: boolean; coverImageUrl?: string | null; pretestSubmitted?: boolean; posttestSubmitted?: boolean; posttestAvailable?: boolean; experiment?: Experiment | null };
@@ -37,7 +39,6 @@ export default function StudentActivityPage() {
   const [answers, setAnswers] = useState<Record<string, SurveyAnswer>>({});
   const [saved, setSaved] = useState(false);
   const [participationId, setParticipationId] = useState<string | null>(null);
-  const [activeAssessment, setActiveAssessment] = useState<{ instanceId: string; phase: ExperimentPhase } | null>(null);
   const recordingResource = useRef<string | null>(null);
 
   useEffect(() => { fetchActivity(params.activityId).then((data) => { setActivity(data); setAnswer(data.progress?.progressData?.answer ?? ""); setAnswers(data.progress?.progressData?.answers ?? {}); }).catch((reason) => setError(reason instanceof Error ? reason.message : "加载失败")); }, [params.activityId]);
@@ -72,18 +73,6 @@ export default function StudentActivityPage() {
       if (data.instance?.status?.toLowerCase() === "teaching") setActivity((current) => current ? { ...current, progress: { ...current.progress, status: "in_progress" } } : current);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "无法进入课堂"); }
     finally { setBusy(false); }
-  }
-
-  function markAssessmentSubmitted(instanceId: string, phase: ExperimentPhase) {
-    const field = phase === "pretest" ? "pretestSubmitted" : "posttestSubmitted";
-    setActivity((current) => current ? {
-      ...current,
-      instance: current.instance?.id === instanceId ? { ...current.instance, [field]: true } : current.instance,
-      instances: current.instances?.map((item) => item.id === instanceId ? { ...item, [field]: true } : item),
-    } : current);
-    setActiveAssessment(null);
-    setError(null);
-    void fetchActivity(params.activityId).then(setActivity).catch(() => setError("测验已提交，但课堂状态刷新失败，请重新加载页面。"));
   }
 
   async function recordResourceOpen(resource: Activity) {
@@ -124,20 +113,17 @@ export default function StudentActivityPage() {
     if (!questions?.length) return null;
     const submitted = phase === "pretest" ? target.pretestSubmitted : target.posttestSubmitted;
     const label = phase === "pretest" ? "前测" : "后测";
-    if (submitted) return activeAssessment?.instanceId === target.id && activeAssessment.phase === phase
-      ? <StudentExperimentAssessment key={`${target.id}-${phase}`} instanceId={target.id} phase={phase} onCancel={() => setActiveAssessment(null)} onSubmitted={() => markAssessmentSubmitted(target.id, phase)} />
-      : <div className="mt-3 flex flex-wrap items-center gap-3"><p role="status" className="text-xs font-semibold text-[var(--pbl-student)]">{label}已提交，答案已保存到本次课堂记录。</p><button className="min-h-11 rounded-[10px] border border-[var(--pbl-border)] bg-white px-3 text-xs font-semibold text-[var(--pbl-student)]" onClick={() => setActiveAssessment({ instanceId: target.id, phase })} type="button">查看{label}答案</button></div>;
+    const href = studentExperimentHref(params.activityId, target.id, phase);
+    if (submitted) return <div className="mt-3 flex flex-wrap items-center gap-3"><p role="status" className="text-xs font-semibold text-[var(--pbl-student)]">{label}已提交，答案已保存到本次课堂记录。</p><Link className="inline-flex min-h-11 items-center rounded-[10px] border border-[var(--pbl-border)] bg-white px-3 text-xs font-semibold text-[var(--pbl-student)]" href={href}>查看{label}答案</Link></div>;
     const available = phase === "pretest" ? ["scheduled", "teaching"].includes(target.status) : Boolean(target.posttestAvailable ?? target.status === "finished");
     if (!available) return phase === "posttest"
       ? <p className="mt-3 text-xs text-[var(--pbl-text-muted)]">后测将在教师进入第 5 阶段后开放。</p> : null;
     if (!activity?.isOpen) return <p className="mt-3 text-xs text-[var(--pbl-text-muted)]">本次课堂活动尚未开放，暂时无法提交{label}。</p>;
-    return activeAssessment?.instanceId === target.id && activeAssessment.phase === phase
-      ? <StudentExperimentAssessment key={`${target.id}-${phase}`} instanceId={target.id} phase={phase} onCancel={() => setActiveAssessment(null)} onSubmitted={() => markAssessmentSubmitted(target.id, phase)} />
-      : <div className="mt-5 rounded-[14px] border border-[var(--pbl-student-border)] bg-white p-4 sm:p-5">
+    return <div className="mt-5 rounded-[14px] border border-[var(--pbl-student-border)] bg-white p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-2"><span className="rounded-full bg-[var(--pbl-student-soft)] px-3 py-1 text-xs font-semibold text-[var(--pbl-student)]">{phase === "pretest" ? "课前前测" : "课后后测"}</span><span className="text-xs font-medium tabular-nums text-[var(--pbl-text-muted)]">共 {questions.length} 题</span></div>
         <p className="mt-3 text-base font-semibold text-[var(--pbl-text-strong)]">{phase === "pretest" ? "开始学习前，请先完成前测" : "课堂已结束，请完成后测"}</p>
         <p className="mt-1 text-sm leading-6 text-[var(--pbl-text-muted)]">按自己的真实想法作答，答案会与本次课堂记录关联。</p>
-        <button className="mt-4 min-h-11 w-full rounded-[10px] bg-[var(--pbl-student)] px-5 text-sm font-bold text-white sm:w-auto" onClick={() => { setActiveAssessment({ instanceId: target.id, phase }); setError(null); }} type="button">{phase === "pretest" ? "开始前测" : "开始后测"}</button>
+        <Link className="mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-[10px] bg-[var(--pbl-student)] px-5 text-sm font-bold text-white sm:w-auto" href={href}>{phase === "pretest" ? "开始前测" : "开始后测"}</Link>
       </div>;
   }
   if (activity.type === "Form") return <StudentSurveyExperience activity={activity} answers={answers} busy={busy} error={error} saved={saved} onAnswersChange={(next) => { setAnswers(next); setSaved(false); }} onSubmit={submit} />;

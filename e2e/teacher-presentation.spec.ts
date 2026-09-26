@@ -43,8 +43,17 @@ async function samplePdf() {
   return Buffer.from(await document.save());
 }
 
-async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; empty?: boolean; pdfResource?: boolean; activeShowcase?: boolean; waitingShowcase?: boolean; reflectionResponses?: boolean; customReflection?: boolean } = {}) {
+async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; empty?: boolean; pdfResource?: boolean; activeShowcase?: boolean; waitingShowcase?: boolean; reflectionResponses?: boolean; customReflection?: boolean; mountain?: boolean } = {}) {
   let course = classroom();
+  if (options.mountain) {
+    course.students = Array.from({ length: 40 }, (_, index) => ({ id: `student-${index}`, name: `私密学生${index + 1}`, joinedAt: fixedTime, stageProgress: {} }));
+    course.currentStageIndex = 1;
+    course.aiLearningProgress = Object.fromEntries(course.students.map((student) => [student.id, {
+      classroomId: courseId, studentId: student.id, currentSceneIndex: 5, totalScenes: 10,
+      completedScenes: ["scene-1", "scene-2", "scene-3", "scene-4", "scene-5"],
+      completionModelVersion: 2, masteryLevel: "in-progress", lastActiveAt: fixedTime,
+    }]));
+  }
   if (options.reflectionResponses || options.customReflection) {
     course.reflections = course.students.slice(0, 3).map((student, index): NonNullable<Course["reflections"]>[number] => ({
       id: `reflection-${student.id}`, courseId, studentId: student.id, studentName: student.name,
@@ -645,6 +654,33 @@ for (const viewport of [
     await page.getByRole("button", { name: "退出全屏", exact: true }).click();
     await expect(page.getByRole("button", { name: "全屏授课", exact: true }).filter({ visible: true })).toBeVisible();
     expect(fixture.writes).toEqual([]);
+    expect(fixture.unexpected).toEqual([]);
+    expect(fixture.errors).toEqual([]);
+  });
+}
+
+for (const viewport of [{ width: 1920, height: 1080 }, { width: 1024, height: 576 }, { width: 390, height: 844 }]) {
+  test(`AI learning mountain keeps 40 nearby students distinct ${viewport.width}x${viewport.height}`, async ({ page }, info) => {
+    await page.setViewportSize(viewport);
+    const fixture = await mockClassroom(page, { mountain: true });
+    await enterFullscreen(page);
+    await page.getByRole("button", { name: "班级学情", exact: true }).click();
+    const mountain = page.getByRole("region", { name: "班级学习山形图" });
+    await expect(mountain).toBeVisible();
+    const leaderNames = mountain.locator("span").filter({ hasText: "领先学生" }).first().locator("strong");
+    await expect(leaderNames).toContainText("私密学生1、私密学生10、私密学生11");
+    expect(await leaderNames.evaluate((element) => getComputedStyle(element).whiteSpace)).toBe("normal");
+    const bin = mountain.getByRole("button", { name: "50–59%，40人，查看名单" });
+    await expect(bin.locator("i")).toHaveCount(40);
+    const boxes = await bin.locator("i").evaluateAll((dots) => dots.map((dot) => {
+      const rect = dot.getBoundingClientRect();
+      return `${rect.x},${rect.y},${rect.width},${rect.height}`;
+    }));
+    expect(new Set(boxes).size).toBe(40);
+    await bin.click();
+    await expect(mountain.getByRole("region", { name: "50–59%学生名单" }).locator("li")).toHaveCount(40);
+    await assertNoPageOverflow(page);
+    await screenshot(page, info, "learning-mountain");
     expect(fixture.unexpected).toEqual([]);
     expect(fixture.errors).toEqual([]);
   });

@@ -31,6 +31,7 @@ export function useCoursePresence({
   const [transportDegraded, setTransportDegraded] = useState(false);
   const readFailuresRef = useRef(0);
   const heartbeatFailuresRef = useRef(0);
+  const readSequenceRef = useRef(0);
 
   const recordSuccess = useCallback((channel: "read" | "heartbeat") => {
     const failures = channel === "read" ? readFailuresRef : heartbeatFailuresRef;
@@ -58,6 +59,7 @@ export function useCoursePresence({
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!courseId || !enabled) return;
+    const sequence = ++readSequenceRef.current;
     const response = await fetch(
       `/api/courses/${encodeURIComponent(courseId)}/presence`,
       {
@@ -67,8 +69,10 @@ export function useCoursePresence({
       },
     );
     if (!response.ok) throw new Error(`Presence request failed: ${response.status}`);
+    const body = (await response.json()) as PresenceSnapshot;
+    if (signal?.aborted || sequence !== readSequenceRef.current) return;
     setSnapshot({
-      ...((await response.json()) as PresenceSnapshot),
+      ...body,
       courseId,
     });
     recordSuccess("read");

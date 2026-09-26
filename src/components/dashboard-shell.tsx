@@ -46,6 +46,9 @@ export type DashboardShellProps = {
   viewportLocked?: boolean;
   variant?: "default" | "bare";
   headerSlot?: ReactNode;
+  headerEndSlot?: ReactNode;
+  hideAiSettings?: boolean;
+  hideNotifications?: boolean;
   classroomBar?: ReactNode;
   hideCourseSwitcher?: boolean;
   currentCourse?: { id: string; name: string; status: CourseStatus };
@@ -67,6 +70,9 @@ export type DashboardTopBarProps = Pick<
   | "title"
   | "course"
   | "headerSlot"
+  | "headerEndSlot"
+  | "hideAiSettings"
+  | "hideNotifications"
   | "classroomBar"
   | "hideCourseSwitcher"
   | "currentCourse"
@@ -109,6 +115,9 @@ export function DashboardTopBar({
   title = "与 AI 一起实践的项目课堂",
   course,
   headerSlot,
+  headerEndSlot,
+  hideAiSettings = false,
+  hideNotifications = false,
   classroomBar,
   hideCourseSwitcher = false,
   currentCourse,
@@ -239,14 +248,15 @@ export function DashboardTopBar({
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5 md:gap-2">
           <div className="hidden lg:block"><SaveStatus lastSavedAt={session.lastSavedAt} onRetry={() => void session.retrySave()} state={session.saveState} /></div>
-          {isTeacher ? <Link className="hidden h-9 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-white/80 px-3 text-[13px] font-semibold text-[var(--pbl-text-muted)] transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)] md:inline-flex" href={teacherSettingsHref(pathname)}><Settings size={14} /> AI 设置</Link> : null}
-          <div className="relative">
+          {isTeacher && !hideAiSettings ? <Link className="hidden h-9 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--pbl-border)] bg-white/80 px-3 text-[13px] font-semibold text-[var(--pbl-text-muted)] transition hover:border-[var(--pbl-teacher-border)] hover:text-[var(--pbl-teacher)] md:inline-flex" href={teacherSettingsHref(pathname)}><Settings size={14} /> AI 设置</Link> : null}
+          {!hideNotifications ? <div className="relative">
             <button aria-label="通知中心" className="relative grid h-11 w-11 place-items-center rounded-[var(--radius-sm)] border border-transparent text-[var(--pbl-text-muted)] transition hover:border-[var(--pbl-border)] hover:bg-[var(--pbl-surface)]" onClick={() => toggle("notifications")} type="button">
               <Bell size={18} strokeWidth={1.8} />
               {unreadCount ? <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[var(--pbl-danger)] px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white">{unreadCount}</span> : null}
             </button>
             {openPanel === "notifications" ? <TopPopover align="right" onClose={() => setOpenPanel(null)}><NotificationMenu items={notifications} /></TopPopover> : null}
-          </div>
+          </div> : null}
+          {headerEndSlot}
           <div className="relative">
             <button aria-label="个人信息" className="flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-1.5 transition hover:bg-white" onClick={() => toggle("profile")} type="button">
               <Avatar name={displayName || (isTeacher ? "教师" : "学生")} />
@@ -283,6 +293,9 @@ export function DashboardShell({
   immersive = false,
   viewportLocked = false,
   headerSlot,
+  headerEndSlot,
+  hideAiSettings = false,
+  hideNotifications = false,
   classroomBar,
   hideCourseSwitcher = false,
   currentCourse,
@@ -308,7 +321,7 @@ export function DashboardShell({
         isTeacher ? "pbl-app-bg-role-teacher" : "pbl-app-bg-role-student",
       )}
     >
-      {!immersive ? <DashboardTopBar backHref={backHref} backLabel={backLabel} classroomBar={classroomBar} course={course} currentCourse={currentCourse} currentStage={currentStage} currentTask={currentTask} headerSlot={headerSlot} hideCourseSwitcher={hideCourseSwitcher} leadRole={leadRole} onSelectStage={onSelectStage} phase={phase} role={role} stageOptions={stageOptions} title={title} userName={userName} /> : null}
+      {!immersive ? <DashboardTopBar backHref={backHref} backLabel={backLabel} classroomBar={classroomBar} course={course} currentCourse={currentCourse} currentStage={currentStage} currentTask={currentTask} headerSlot={headerSlot} headerEndSlot={headerEndSlot} hideAiSettings={hideAiSettings} hideNotifications={hideNotifications} hideCourseSwitcher={hideCourseSwitcher} leadRole={leadRole} onSelectStage={onSelectStage} phase={phase} role={role} stageOptions={stageOptions} title={title} userName={userName} /> : null}
 
       <main className={immersive
         ? "h-full min-h-0 overflow-hidden p-0"

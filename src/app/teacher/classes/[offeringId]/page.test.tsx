@@ -154,6 +154,25 @@ describe("课程章节管理", () => {
       expect.objectContaining({ title: "你有哪些相关经验？", type: "short-text", required: true, options: [] }),
     ]);
   });
+  it("locks answered survey questions while saving a new title and description", async () => {
+    const config = { schemaVersion: 2, content: "旧说明", questions: [{ id: "q1", title: "原题目", type: "short-text", required: true, options: [] }] };
+    const survey = { id: "survey-1", title: "原问卷", type: "Form", isOpen: true, version: 3, hasResponses: true, config };
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (options?.method) return new Response(JSON.stringify({ activity: survey }));
+      return new Response(JSON.stringify(url === "/api/platform/templates" ? { templates: [] } : { offerings: [{ ...offering, chapters: [{ ...offering.chapters[0], activities: [survey] }] }] }));
+    });
+    render(<Page />);
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "原问卷更多操作" }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "编辑名称与内容关联" }));
+    expect(await screen.findByText(/已有学生提交此问卷，题目和选项已锁定/)).toBeInTheDocument();
+    expect(screen.getByLabelText("第 1 题题目内容")).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("标题"), { target: { value: "新问卷标题" } });
+    fireEvent.change(screen.getByLabelText("问卷说明（可选）"), { target: { value: "新说明" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存内容修改" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/platform/activities/survey-1/manage", expect.objectContaining({ method: "PATCH" })));
+    const request = fetcher.mock.calls.find(([url, options]) => url === "/api/platform/activities/survey-1/manage" && options?.method === "PATCH");
+    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ title: "新问卷标题", description: "新说明", config: { ...config, content: "新说明" } });
+  });
   it("keeps lesson creation separate from experimental question editing", async () => {
     fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
       if (options?.method) return new Response(JSON.stringify({ activity: { id: "classroom-1" } }), { status: 201 });

@@ -38,7 +38,7 @@ describe("TeacherTextbooksPage", () => {
               title: "具身智能教学设计",
               author: "李老师",
               status: "ACTIVE",
-              currentRevision: { id: "revision-2", version: 1, status: "PARSING" },
+              currentRevision: { id: "revision-2", version: 1, status: "PARSING", progress: 1 },
               updatedAt: "2026-09-21T00:00:00.000Z",
             },
           ],
@@ -71,6 +71,8 @@ describe("TeacherTextbooksPage", () => {
     const processingRow = screen.getByRole("heading", { name: "具身智能教学设计" }).closest("article");
     expect(processingRow).not.toBeNull();
     expect(within(processingRow!).getByText("正在解析")).toBeInTheDocument();
+    expect(within(processingRow!).getByText("约 1%")).toBeInTheDocument();
+    expect(within(processingRow!).getByRole("progressbar", { name: "解析阶段预计进度约 1%" })).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("textbox", { name: "搜索教材" }), { target: { value: "不匹配" } });
     expect(screen.getByText("没有找到匹配的教材")).toBeInTheDocument();

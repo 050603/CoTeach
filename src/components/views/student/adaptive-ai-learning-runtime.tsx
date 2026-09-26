@@ -23,7 +23,7 @@ import type {
   KnowledgeLectureAttempt,
   StudentAdaptiveLearningState,
 } from "@/lib/session/types";
-import { readSubmittedState } from "@openmaic/lib/quiz/persistence";
+import { readSubmittedState, writeSubmittedResults } from "@openmaic/lib/quiz/persistence";
 import { deriveClassroomTimingSnapshot } from "@/lib/classroom/timing";
 import { KnowledgeLectureBoard } from "@/components/views/student/knowledge-lecture-board";
 import { toast } from "@/components/ui";
@@ -350,7 +350,7 @@ export function AdaptiveAiLearningRuntime({
     const existing = firstKnowledgeLectureAttempts(lectureProgress).find(
       (attempt) => attempt.quizOutlineId === quizOutlineId,
     );
-    if (existing) return Promise.resolve(existing);
+    if (existing?.gradingSource === "server" && existing.gradingStatus === "graded") return Promise.resolve(existing);
     const pending = lectureAttemptRequestsRef.current.get(scene.id);
     if (pending) return pending;
 
@@ -358,39 +358,41 @@ export function AdaptiveAiLearningRuntime({
       if (scene.content?.type !== "quiz") return undefined;
       const section = lectureSections.find((item) => item.quizOutlineId === quizOutlineId);
       const submitted = readSubmittedState(scene.id);
-      if (section && submitted?.kind === "reviewing") {
-        const results = new Map(submitted.results.map((result) => [result.questionId, result]));
+      if (section && (submitted || existing?.gradingSource === "server")) {
         const response = await fetch("/api/knowledge-lecture", {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" },
           body: JSON.stringify({
-            action: "record-attempt",
+            action: existing?.gradingSource === "server" ? "retry-grading" : "record-attempt",
             courseId: course.id,
             studentId,
             sectionId: section.id,
             quizOutlineId,
             runtimeSceneId: scene.id,
-            questions: scene.content.questions.map((question) => {
-              const result = results.get(question.id);
-              const answer = submitted.answers[question.id];
-              return {
-                questionId: question.id,
-                prompt: question.question,
-                ...questionDisplaySnapshot(question),
-                answer: Array.isArray(answer) ? answer.join("、") : answer ?? "",
-                points: question.points ?? 1,
-                earned: result?.earned ?? 0,
-                correct: result?.correct ?? null,
-                feedback: result?.aiComment ?? question.analysis ?? "AI 已完成批阅。",
-                referenceAnswer: question.analysis,
-                knowledgePointIds: question.knowledgePointIds ?? section.knowledgePointIds,
-                teachingUnitIds: question.teachingUnitIds,
-              };
-            }),
+            ...(submitted ? { answers: submitted.answers } : {}),
           }),
         }).catch(() => undefined);
         if (response?.ok || response?.status === 409) {
           const payload = await response.json() as { attempt?: KnowledgeLectureAttempt; error?: string };
+          if (payload.attempt?.gradingStatus === "failed") {
+            toast.error("小测已提交，批阅待重试", { description: "作答已保存，稍后可重试批阅，不会重复提交。" });
+          }
+          if (payload.attempt?.gradingSource === "server") {
+            const authoritativeResults = payload.attempt.questions.map((question) => ({
+              questionId: question.questionId,
+              correct: question.gradingStatus === "graded" ? question.correct : null,
+              status: question.gradingStatus !== "graded"
+                ? "pending" as const
+                : question.correct === null ? "graded" as const
+                  : question.correct ? "correct" as const : "incorrect" as const,
+              earned: question.gradingStatus === "graded" ? question.earned : 0,
+              aiComment: question.feedback,
+            }));
+            writeSubmittedResults(scene.id, authoritativeResults);
+            window.dispatchEvent(new CustomEvent("openpbl:knowledge-lecture-server-graded", {
+              detail: { sceneId: scene.id, results: authoritativeResults },
+            }));
+          }
           return payload.attempt;
         } else {
           toast.error("小测结果同步失败", { description: "批阅结果仍显示在当前页面，请稍后重新进入讲解。" });

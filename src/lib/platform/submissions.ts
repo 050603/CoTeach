@@ -81,6 +81,14 @@ export async function submitActivity(claims: AuthClaims, activityId: string, inp
   const now = new Date();
   const progressData = { answer: input.answer ?? "", answers: input.answers ?? {}, submittedAt: now.toISOString() };
   return runMutationTransaction(async (tx) => {
+    // Serialize submission with teacher edits of this Activity. A changed form
+    // must be reloaded by the student so the validated answers and snapshot
+    // describe the same question version.
+    await tx.$queryRaw`SELECT "id" FROM "Activity" WHERE "id" = ${activityId} FOR UPDATE`;
+    const current = await tx.activity.findUnique({ where: { id: activityId }, select: { version: true } });
+    if (!current || current.version !== activity.version) {
+      throw new PlatformError("VERSION_CONFLICT", "题目已更新，请刷新后重新提交", 409);
+    }
     await tx.activitySubmission.create({
       data: {
         enrollmentId: enrollment.id,

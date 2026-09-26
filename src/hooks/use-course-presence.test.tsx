@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useCoursePresence } from "@/hooks/use-course-presence";
 
@@ -7,6 +7,27 @@ afterEach(() => {
 });
 
 describe("useCoursePresence", () => {
+  it("does not replace a newer presence snapshot with an older response", async () => {
+    const pending: Array<(response: Response) => void> = [];
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => pending.push(resolve))));
+    const { result } = renderHook(() => useCoursePresence({ courseId: "course-1", role: "teacher" }));
+    await waitFor(() => expect(pending).toHaveLength(1));
+    let latest: Promise<void> | undefined;
+    act(() => { latest = result.current.refresh(); });
+    await waitFor(() => expect(pending).toHaveLength(2));
+    await act(async () => {
+      pending[1]!(Response.json({ members: [{ id: "new", role: "student", name: "新状态" }] }));
+      await latest;
+    });
+    expect(result.current.onlineStudentIds.has("new")).toBe(true);
+    await act(async () => {
+      pending[0]!(Response.json({ members: [{ id: "old", role: "student", name: "旧状态" }] }));
+      await Promise.resolve();
+    });
+    expect(result.current.onlineStudentIds.has("new")).toBe(true);
+    expect(result.current.onlineStudentIds.has("old")).toBe(false);
+  });
+
   it("sends a student heartbeat and reads the shared presence snapshot", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PUT") {

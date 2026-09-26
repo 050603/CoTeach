@@ -13,7 +13,7 @@ type ChoiceQuestion = { id: string; title: string; type: "single-choice" | "mult
 type TextQuestion = { id: string; title: string; type: "short-text"; required: boolean; responseCount: number; responses: Array<Respondent & { content: string }>; terms: Array<{ label: string; value: number; studentIds?: string[] }>; keywordStatus?: "processing" | "ready" | "unavailable"; keywordAggregation?: "semantic" | "exact-fallback"; keywordAnalyzedCount?: number; keywordMode?: "local" | "llm"; keywordRepresentedCount?: number; keywordUnrepresentedResponses?: Array<{ studentId: string; reason: "pending" | "analysis-unavailable" | "no-keywords" | "no-theme" }> };
 type SurveyResult = {
   activity: { id: string; title: string; description?: string | null; isOpen: boolean; chapter: { id: string; title: string }; offering: { id: string; name: string } };
-  analytics: { submittedCount: number; totalStudents: number; completionRate: number; questions: Array<ChoiceQuestion | TextQuestion> };
+  analytics: { submittedCount: number; totalStudents: number; completionRate: number | null; questions: Array<ChoiceQuestion | TextQuestion> };
   updatedAt: string;
 };
 
@@ -194,9 +194,10 @@ export default function SurveyDashboardPage() {
           <>
             <section aria-label="问卷概览" className="survey-overview-strip">
               <div className="survey-overview-lead">
-                <span>课堂参与率</span>
-                <strong>{loading ? "—" : result?.analytics.completionRate ?? 0}<small>%</small></strong>
+                <span>问卷提交率</span>
+                <strong>{loading || result?.analytics.completionRate == null ? "—" : result.analytics.completionRate}{!loading && result?.analytics.completionRate != null ? <small>%</small> : null}</strong>
                 <div aria-hidden="true" className="survey-completion-track"><i style={{ width: `${result?.analytics.completionRate ?? 0}%` }} /></div>
+                {!loading && result?.analytics.completionRate == null ? <small>{result?.analytics.totalStudents ? "人数待核验" : "暂无有效学生"}</small> : null}
               </div>
               <div className="survey-overview-item">
                 <UsersRound size={18} />

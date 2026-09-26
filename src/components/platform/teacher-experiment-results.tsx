@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Clock3, Download, RefreshCw } from "lucide-react";
 import type { TeacherPresentationMode } from "@/lib/classroom/presentation";
+import { readableDesignAnswer } from "@/lib/platform/experiment-design-answer";
 
 type Question = { id: string; type: string; prompt: string; options?: string[]; correctAnswer?: string | string[]; group?: { id: string; title: string; instruction?: string } };
 type Submission = {
@@ -13,10 +14,10 @@ type Submission = {
   answers: Record<string, string | string[]>; objectiveScore: number; objectiveTotal: number;
 };
 type Results = {
-  enabled: boolean; status?: string; enrollmentCount: number; pretestCount: number; posttestCount: number;
+  enabled: boolean; status?: string; enrollmentCount: number; participantCount?: number; pretestCount: number; posttestCount: number;
   posttestDraftCount?: number; posttestOpenedAt?: string | null;
   posttestAvailable?: boolean;
-  studentRows?: Array<{ student: { id: string; displayName: string }; status: "not-started" | "in-progress" | "submitted"; submittedAt?: string | null }>;
+  studentRows?: Array<{ student: { id: string; displayName: string }; status: "not-started" | "in-progress" | "submitted"; submittedAt?: string | null; enrollmentStatus?: string }>;
   variantCounts: { aPreBPost: number; bPreAPost: number };
   submissions: Submission[];
 };
@@ -44,7 +45,7 @@ function answerText(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value.join("、");
   if (value === "true") return "正确";
   if (value === "false") return "错误";
-  return value || "未作答";
+  return value ? readableDesignAnswer(value) : "未作答";
 }
 
 function SubmissionDetail({ submission }: { submission: Submission }) {
@@ -59,7 +60,7 @@ function SubmissionDetail({ submission }: { submission: Submission }) {
       <p className="whitespace-pre-wrap font-medium">{index + 1}. {question.prompt}</p>
       <p className="mt-1 whitespace-pre-wrap">学生作答：{answerText(submission.answers[question.id])}</p>
       {question.correctAnswer && (Array.isArray(question.correctAnswer) ? question.correctAnswer.length > 0 : true) ? <p className="mt-1 text-[var(--pbl-text-muted)]">参考答案：{answerText(question.correctAnswer)}</p> : null}
-    </div>)}</div>
+    </div>)}{submission.answers.__skipReason ? <p className="rounded-lg bg-[var(--pbl-bg)] p-3">跳题原因：{submission.answers.__skipReason}</p> : null}</div>
   </section>;
 }
 
@@ -128,10 +129,11 @@ export function TeacherExperimentResults({ instanceId, offeringId, mode = "overv
   }
 
   if (mode === "posttest") {
-    const total = results?.enrollmentCount ?? 0;
+    const total = results?.participantCount ?? results?.enrollmentCount ?? 0;
     const submitted = results?.posttestCount ?? 0;
     const drafting = results?.posttestDraftCount ?? inProgressCount;
     const waiting = results?.studentRows ? notStartedCount : Math.max(0, total - submitted - drafting);
+    const countMismatch = submitted + drafting + waiting !== total;
     const projected = presentation !== "workspace";
     return <section className="classroom-stage space-y-5 text-[var(--pbl-text)]" aria-label="后测进度">
       <header className="flex flex-wrap items-end justify-between gap-4 border-b border-[var(--pbl-border)] pb-5">
@@ -142,12 +144,14 @@ export function TeacherExperimentResults({ instanceId, offeringId, mode = "overv
       {error ? <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-[var(--pbl-danger)]"><span>{error}</span><button type="button" className="min-h-11 font-semibold underline" onClick={() => void load()}>重试</button></div> : null}
       {results && !results.enabled ? <div className="rounded-[14px] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] px-5 py-9 text-center"><h3 className="text-lg font-semibold">本课堂未开启后测</h3><p className="mt-2 text-sm text-[var(--pbl-text-muted)]">可在实验配置中设置前测、后测和题组。</p>{!projected && configHref ? <a href={configHref} className="mt-5 inline-flex min-h-11 items-center rounded-[10px] bg-[var(--pbl-teacher)] px-5 text-sm font-semibold text-white">进入实验配置</a> : null}</div> : null}
       {results?.enabled ? <>
+        <p className="text-sm text-[var(--pbl-text-muted)]">教学班 {results.enrollmentCount} 人 · 已进入本场 {total} 人；后测按已进入本场人数统计。</p>
         <div className="grid gap-3 sm:grid-cols-3" aria-label="后测人数统计">
           <div className="rounded-[10px] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-5"><span className="text-sm text-[var(--pbl-text-muted)]">未开始</span><strong className="mt-2 block text-3xl tabular-nums">{waiting}</strong></div>
           <div className="rounded-[10px] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-5"><span className="text-sm text-[var(--pbl-text-muted)]">作答中</span><strong className="mt-2 block text-3xl tabular-nums text-[var(--pbl-warning)]">{drafting}</strong></div>
           <div className="rounded-[10px] border border-[var(--pbl-border)] bg-[var(--pbl-surface)] p-5"><span className="text-sm text-[var(--pbl-text-muted)]">已提交</span><strong className="mt-2 block text-3xl tabular-nums text-[var(--pbl-student)]">{submitted}</strong></div>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-[var(--pbl-border)]" role="progressbar" aria-label="后测提交进度" aria-valuemin={0} aria-valuemax={total} aria-valuenow={submitted}><div className="h-full rounded-full bg-[var(--pbl-student)]" style={{ width: `${total ? Math.min(100, submitted / total * 100) : 0}%` }} /></div>
+        <div className="h-2 overflow-hidden rounded-full bg-[var(--pbl-border)]" role="progressbar" aria-label="后测提交进度" aria-valuemin={0} aria-valuemax={total} aria-valuenow={countMismatch ? undefined : submitted}><div className="h-full rounded-full bg-[var(--pbl-student)]" style={{ width: `${total > 0 && !countMismatch ? submitted / total * 100 : 0}%` }} /></div>
+        {countMismatch ? <p className="text-sm text-[var(--pbl-danger)]" role="status">后测人数与本场参与人数不一致，进度待核验。</p> : null}
         <p className="text-sm text-[var(--pbl-text-muted)]">{submitted}/{total} 人已提交正式后测。草稿不计入提交人数。</p>
         {!projected ? <>
           <div className="flex flex-wrap items-center justify-between gap-3 pt-2"><div><h3 className="text-lg font-semibold">学生作答状态</h3><p className="mt-1 text-sm text-[var(--pbl-text-muted)]">展开已提交学生，可查看同一场课堂的前测和后测正式答案。</p></div><button type="button" className="inline-flex min-h-11 items-center gap-2 rounded-[10px] border border-[var(--pbl-border)] px-4 text-sm font-medium disabled:opacity-50" onClick={() => void exportResearch()} disabled={exporting}><Download size={16} />{exporting ? "导出中…" : "导出实验数据"}</button></div>
@@ -175,9 +179,9 @@ export function TeacherExperimentResults({ instanceId, offeringId, mode = "overv
     </div>
     {error ? <p role="alert" className="mt-4 text-sm text-[var(--pbl-danger)]">{error}</p> : null}
     {results ? <>
-      <div className="mt-5 grid gap-3 sm:grid-cols-3"><div className="rounded-xl bg-[var(--pbl-bg)] p-4"><small>教学班学生</small><strong className="mt-1 block text-2xl">{results.enrollmentCount}</strong></div><div className="rounded-xl bg-[var(--pbl-bg)] p-4"><small>已交前测</small><strong className="mt-1 block text-2xl">{results.pretestCount}</strong></div><div className="rounded-xl bg-[var(--pbl-bg)] p-4"><small>已交后测</small><strong className="mt-1 block text-2xl">{results.posttestCount}</strong></div></div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-3"><div className="rounded-xl bg-[var(--pbl-bg)] p-4"><small>教学班学生</small><strong className="mt-1 block text-2xl">{results.enrollmentCount}</strong></div><div className="rounded-xl bg-[var(--pbl-bg)] p-4"><small>已交前测 · 教学班</small><strong className="mt-1 block text-2xl">{results.pretestCount}</strong></div><div className="rounded-xl bg-[var(--pbl-bg)] p-4"><small>已交后测 · 本场参与</small><strong className="mt-1 block text-2xl">{results.posttestCount}/{results.participantCount ?? results.enrollmentCount}</strong></div></div>
       {results.variantCounts?.aPreBPost || results.variantCounts?.bPreAPost ? <p className="mt-3 text-xs text-[var(--pbl-text-muted)]">A 前测 / B 后测：{results.variantCounts.aPreBPost} 人 · B 前测 / A 后测：{results.variantCounts.bPreAPost} 人</p> : null}
-      {results.submissions.length ? <div className="mt-5 space-y-3">{results.submissions.map((submission) => <details key={submission.id} className="rounded-xl border border-[var(--pbl-border)]"><summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2 p-4 text-sm"><span><strong>{submission.student.displayName}</strong> · {submission.phase === "pretest" ? "前测" : "后测"}{submission.variant !== "none" ? ` · ${submission.variant === "A_PRE_B_POST" ? "A→B" : "B→A"}` : ""} · {new Date(submission.submittedAt).toLocaleString("zh-CN")}</span><span>{submission.objectiveTotal ? `客观题 ${submission.objectiveScore}/${submission.objectiveTotal}` : "无计分题"}</span></summary><div className="space-y-3 border-t border-[var(--pbl-border)] p-4">{submission.questionnaire[submission.phase]?.map((question, index, questions) => <div key={question.id} className="text-sm">{question.group && questions[index - 1]?.group?.id !== question.group.id ? <div className="mb-3 border-l-2 border-[var(--pbl-teacher)] bg-[var(--pbl-bg)] px-3 py-2"><p className="font-semibold">{question.group.title}</p>{question.group.instruction ? <p className="mt-1 whitespace-pre-wrap text-[var(--pbl-text-muted)]">{question.group.instruction}</p> : null}</div> : null}<p className="whitespace-pre-wrap font-medium">{index + 1}. {question.prompt}</p><p className="mt-1">学生作答：{answerText(submission.answers[question.id])}</p>{question.correctAnswer && (Array.isArray(question.correctAnswer) ? question.correctAnswer.length > 0 : true) ? <p className="mt-1 text-[var(--pbl-text-muted)]">参考答案：{answerText(question.correctAnswer)}</p> : null}</div>)}</div></details>)}</div> : <p className="mt-5 text-sm text-[var(--pbl-text-muted)]">暂无前后测提交记录。</p>}
+      {results.submissions.length ? <div className="mt-5 space-y-3">{results.submissions.map((submission) => <details key={submission.id} className="rounded-xl border border-[var(--pbl-border)]"><summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2 p-4 text-sm"><span><strong>{submission.student.displayName}</strong> · {submission.phase === "pretest" ? "前测" : "后测"}{submission.variant !== "none" ? ` · ${submission.variant === "A_PRE_B_POST" ? "A→B" : "B→A"}` : ""} · {new Date(submission.submittedAt).toLocaleString("zh-CN")}</span><span>{submission.objectiveTotal ? `客观题 ${submission.objectiveScore}/${submission.objectiveTotal}` : "无计分题"}</span></summary><div className="space-y-3 border-t border-[var(--pbl-border)] p-4">{submission.questionnaire[submission.phase]?.map((question, index, questions) => <div key={question.id} className="text-sm">{question.group && questions[index - 1]?.group?.id !== question.group.id ? <div className="mb-3 border-l-2 border-[var(--pbl-teacher)] bg-[var(--pbl-bg)] px-3 py-2"><p className="font-semibold">{question.group.title}</p>{question.group.instruction ? <p className="mt-1 whitespace-pre-wrap text-[var(--pbl-text-muted)]">{question.group.instruction}</p> : null}</div> : null}<p className="whitespace-pre-wrap font-medium">{index + 1}. {question.prompt}</p><p className="mt-1">学生作答：{answerText(submission.answers[question.id])}</p>{question.correctAnswer && (Array.isArray(question.correctAnswer) ? question.correctAnswer.length > 0 : true) ? <p className="mt-1 text-[var(--pbl-text-muted)]">参考答案：{answerText(question.correctAnswer)}</p> : null}</div>)}{submission.answers.__skipReason ? <p className="rounded-lg bg-[var(--pbl-bg)] p-3 text-sm">跳题原因：{submission.answers.__skipReason}</p> : null}</div></details>)}</div> : <p className="mt-5 text-sm text-[var(--pbl-text-muted)]">暂无前后测提交记录。</p>}
     </> : null}
   </section>;
 }

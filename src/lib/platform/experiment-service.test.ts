@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => {
     $queryRaw: vi.fn(),
     classroomInstance: { findUnique: vi.fn() },
     enrollment: { findUnique: vi.fn() },
-    classroomParticipation: { findUnique: vi.fn(), update: vi.fn() },
+    classroomParticipation: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     experimentAssessmentSubmission: { findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn() },
     experimentAssessmentAssignment: { findUnique: vi.fn(), count: vi.fn(), create: vi.fn(), findMany: vi.fn() },
     experimentAssessmentDraft: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
@@ -50,7 +50,9 @@ beforeEach(() => {
   mocks.tx.experimentAssessmentSubmission.findFirst.mockResolvedValue(null);
   mocks.tx.experimentAssessmentSubmission.findUnique.mockResolvedValue(null);
   mocks.tx.experimentAssessmentAssignment.findUnique.mockResolvedValue({ id: "assignment", variant: "none", pretestForm: experiment.pretest, posttestForm: experiment.posttest });
+  mocks.tx.experimentAssessmentAssignment.findMany.mockResolvedValue([]);
   mocks.tx.classroomParticipation.findUnique.mockResolvedValue({ id: "participation" });
+  mocks.tx.classroomParticipation.findMany.mockResolvedValue([]);
   mocks.tx.experimentAssessmentDraft.findMany.mockResolvedValue([]);
   mocks.tx.experimentAssessmentDraft.findUnique.mockResolvedValue(null);
   mocks.enrollments.mockResolvedValue([{ id: "enrollment", user: { id: "student", displayName: "学生甲" } }]);
@@ -105,10 +107,40 @@ describe("classroom experiment submissions", () => {
     mocks.tx.experimentAssessmentAssignment.findMany.mockResolvedValue([{ variant: "A_PRE_B_POST" }, { variant: "B_PRE_A_POST" }]);
     mocks.enrollments.mockResolvedValue([{ id: "enrollment", user: { id: "student", displayName: "学生甲" } }, { id: "other", user: { id: "other", displayName: "学生乙" } }]);
     mocks.count.mockResolvedValue(2);
-    mocks.results.mockResolvedValue([{ id: "submission", phase: "pretest", researchKey: "anonymous", submittedAt: new Date(), questionnaire: experiment, answers: { q1: "乙" }, objectiveScore: 1, objectiveTotal: 1, assignment: { variant: "A_PRE_B_POST" }, enrollment: { user: { displayName: "学生甲", username: "s1" } } }]);
+    mocks.results.mockResolvedValue([{ id: "submission", enrollmentId: "enrollment", phase: "pretest", researchKey: "anonymous", submittedAt: new Date(), questionnaire: experiment, answers: { q1: "乙" }, objectiveScore: 1, objectiveTotal: 1, assignment: { variant: "A_PRE_B_POST" }, enrollment: { user: { displayName: "学生甲", username: "s1" } } }]);
     const result = await getClassroomExperimentResults({ role: "teacher", sub: "teacher" } as AuthClaims, "run");
     expect(result).toMatchObject({ enabled: true, enrollmentCount: 2, pretestCount: 1, posttestCount: 0, variantCounts: { aPreBPost: 1, bPreAPost: 1 }, submissions: [{ variant: "A_PRE_B_POST", student: { displayName: "学生甲" } }] });
     expect(result.submissions[0]).not.toHaveProperty("researchKey");
+  });
+
+  it("counts posttests within this run's entered participants and pretests within active members", async () => {
+    mocks.link.mockResolvedValue({ id: "teacher-link" });
+    mocks.enrollments.mockResolvedValue(["active", "waiting", "drafting"].map((id) => ({ id, user: { id, displayName: id } })));
+    mocks.tx.classroomParticipation.findMany.mockResolvedValue(["active", "withdrawn", "drafting"].map((id) => ({
+      enrollmentId: id, enrollment: { status: id === "withdrawn" ? "WITHDRAWN" : "ACTIVE", user: { id, displayName: id } },
+    })));
+    mocks.tx.experimentAssessmentDraft.findMany.mockResolvedValue([{ assignment: { enrollmentId: "drafting" } }, { assignment: { enrollmentId: "waiting" } }]);
+    const submission = (enrollmentId: string, phase: "pretest" | "posttest", id = `${enrollmentId}-${phase}`) => ({
+      id, enrollmentId, phase, submittedAt: new Date("2026-09-25T08:00:00.000Z"), questionnaire: experiment,
+      answers: {}, objectiveScore: 0, objectiveTotal: 0, assignment: { variant: "none" },
+      enrollment: { user: { id: enrollmentId, displayName: enrollmentId, username: enrollmentId } },
+    });
+    mocks.results.mockResolvedValue([
+      submission("active", "pretest"), submission("active", "pretest", "duplicate-pretest"), submission("waiting", "pretest"),
+      submission("active", "posttest"), submission("active", "posttest", "duplicate-posttest"),
+      submission("withdrawn", "posttest"), submission("waiting", "posttest"),
+    ]);
+    const result = await getClassroomExperimentResults({ role: "teacher", sub: "teacher" } as AuthClaims, "run");
+    expect(result).toMatchObject({ enrollmentCount: 3, participantCount: 3, pretestCount: 2, posttestCount: 2, posttestDraftCount: 1 });
+    expect(result.studentRows.map((row) => ({ id: row.student.id, status: row.status, enrollmentStatus: row.enrollmentStatus }))).toEqual([
+      { id: "active", status: "submitted", enrollmentStatus: "active" },
+      { id: "withdrawn", status: "submitted", enrollmentStatus: "withdrawn" },
+      { id: "drafting", status: "in-progress", enrollmentStatus: "active" },
+    ]);
+    expect(result.submissions).toHaveLength(7);
+    expect(mocks.tx.classroomParticipation.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { instanceId: "run", enrollment: { offeringId: "course" }, OR: [{ firstEnteredAt: { not: null } }, { lastEnteredAt: { not: null } }] },
+    }));
   });
 
   it("balances A/B assignments under parent locks and saves shuffled forms once", async () => {

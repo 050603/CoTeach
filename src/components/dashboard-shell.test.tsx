@@ -90,6 +90,25 @@ describe("DashboardShell immersive mode", () => {
     expect(screen.getByRole("link", { name: "返回课程库" })).toHaveAttribute("href", "/teacher/templates");
   });
 
+  it("places a classroom action on the right while hiding only its extra header entries", () => {
+    render(
+      <DashboardShell
+        headerEndSlot={<button type="button">全屏授课</button>}
+        hideAiSettings
+        hideNotifications
+        role="teacher"
+      >
+        <div>教师课堂</div>
+      </DashboardShell>,
+    );
+
+    expect(screen.queryByRole("link", { name: "AI 设置" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "通知中心" })).toBeNull();
+    expect(screen.getByRole("button", { name: "全屏授课" }).parentElement).toContainElement(
+      screen.getByRole("button", { name: "个人信息" }),
+    );
+  });
+
   it("anchors the notification menu to its button and clears the unread badge when opened", () => {
     sessionMocks.courses = [{
       id: "course-1",

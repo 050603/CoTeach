@@ -314,8 +314,25 @@ export function firstKnowledgeLectureAttempts(
   return [...first.values()];
 }
 
+/** Only the classroom currently linked to this course can supply its learning metrics. */
+export function isCurrentAiLearningEntry(
+  course: Pick<Course, "content" | "aiLearningClassroomId">,
+  entry: StudentAiProgress,
+): boolean {
+  const classroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;
+  return !classroomId || entry.classroomId === classroomId;
+}
+
+/** Percentage from verified, graded questions; pending questions are outside the denominator. */
+export function verifiedKnowledgeLectureScoreRate(attempt: KnowledgeLectureAttempt): number | undefined {
+  if (attempt.gradingSource !== "server") return undefined;
+  const graded = attempt.questions.filter((question) => question.gradingStatus === "graded" && question.points > 0);
+  const maximum = graded.reduce((sum, question) => sum + question.points, 0);
+  return maximum > 0 ? graded.reduce((sum, question) => sum + question.earned, 0) / maximum * 100 : undefined;
+}
+
 export function knowledgeLectureQuizEstimate(
-  course: Pick<Course, "content" | "aiLearningProgress">,
+  course: Pick<Course, "content" | "aiLearningProgress" | "aiLearningClassroomId">,
   section: KnowledgeLectureSection,
 ): { questionCount: number; estimatedMinutes: number } {
   const outline = course.content._openmaicSceneOutlines?.find(
@@ -325,7 +342,7 @@ export function knowledgeLectureQuizEstimate(
     ? outline.quizConfig as Record<string, unknown>
     : undefined;
   const configuredCount = Number(quizConfig?.questionCount);
-  const attemptCounts = Object.values(course.aiLearningProgress ?? {}).flatMap((entry) =>
+  const attemptCounts = Object.values(course.aiLearningProgress ?? {}).filter((entry) => isCurrentAiLearningEntry(course, entry)).flatMap((entry) =>
     firstKnowledgeLectureAttempts(entry)
       .filter((attempt) => attempt.sectionId === section.id)
       .map((attempt) => attempt.questions.length),
@@ -341,10 +358,11 @@ export function knowledgeLectureQuizEstimate(
 }
 
 export function aggregateKnowledgePointMastery(
-  course: Pick<Course, "content" | "aiLearningProgress" | "students">,
+  course: Pick<Course, "content" | "aiLearningProgress" | "students" | "aiLearningClassroomId">,
   progressOverride?: Record<string, StudentAiProgress>,
 ): KnowledgePointMasteryRow[] {
   const progress = progressOverride ?? course.aiLearningProgress ?? {};
+  const currentStudentIds = new Set(course.students.map((student) => student.id));
   const totalStudents = course.students.length;
   const minimumSampleSize = totalStudents > 0
     ? Math.min(totalStudents, Math.max(3, Math.ceil(totalStudents * 0.4)))
@@ -361,8 +379,11 @@ export function aggregateKnowledgePointMastery(
   }]));
 
   for (const [studentId, entry] of Object.entries(progress)) {
+    if (!currentStudentIds.has(studentId) || !isCurrentAiLearningEntry(course, entry)) continue;
     for (const attempt of firstKnowledgeLectureAttempts(entry)) {
+      if (attempt.gradingSource !== "server") continue;
       for (const question of attempt.questions) {
+        if (question.gradingStatus !== "graded" || question.points <= 0) continue;
         const ids = question.knowledgePointIds.length
           ? question.knowledgePointIds
           : attempt.knowledgePointIds;

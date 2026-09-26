@@ -79,6 +79,25 @@ describe("student learning summary", () => {
     expect(evaluated.students[0].attentionReasons).not.toContain("pending_teacher_evaluation");
   });
 
+  it("marks a classroom activity started only after entering one of its own runs", async () => {
+    const activity = (id: string, position: number) => ({ id, title: id, type: "CLASSROOM", position, isOpen: true, opensAt: null, archivedAt: null });
+    const participation = (activityId: string) => ({
+      id: `run-${activityId}`, instance: { activityId }, firstEnteredAt: at, lastEnteredAt: at,
+      submissions: [], artifacts: [], reflections: [], evaluations: [],
+    });
+    const offering = {
+      id: "offering", name: "课程", term: null, status: "OPEN",
+      chapters: [{ id: "chapter", title: "第一章", position: 1, isOpen: true, opensAt: null, archivedAt: null, activities: [activity("target", 1), activity("other", 2)] }],
+      enrollments: [{ id: "enrollment", status: "ACTIVE", joinedAt: at, user: { id: "student", username: "s", displayName: "学生" }, activityProgress: [], submissions: [], participations: [participation("other")] }],
+    };
+    const database = dbWithOffering(offering);
+    const result = await getOfferingStudentsSummary(claims, "offering", database as never, at);
+    expect(result.students[0].activityStatuses).toEqual({ target: "not_started", other: "in_progress" });
+    expect(database.courseOffering.findUnique).toHaveBeenCalledWith(expect.objectContaining({ select: expect.objectContaining({
+      enrollments: expect.objectContaining({ select: expect.objectContaining({ participations: expect.objectContaining({ select: expect.objectContaining({ instance: { select: { activityId: true } } }) }) }) }),
+    }) }));
+  });
+
   it("reports no denominator when the course has no open non-classroom activities", async () => {
     const offering = { id: "offering", name: "课程", term: null, status: "OPEN", chapters: [], enrollments: [{ id: "e", status: "ACTIVE", joinedAt: at, user: { id: "s", username: "s", displayName: "学生" }, activityProgress: [], submissions: [], participations: [] }] };
     const result = await getOfferingStudentsSummary(claims, "offering", dbWithOffering(offering) as never, at);
