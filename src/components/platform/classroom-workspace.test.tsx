@@ -18,6 +18,20 @@ beforeEach(() => { fetcher = vi.fn(); vi.stubGlobal("fetch", fetcher); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("finished classroom records", () => {
+  it("saves student work on HTTP origins without crypto.randomUUID", async () => {
+    const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+    vi.stubGlobal("crypto", { getRandomValues });
+    mockClassroom("teaching");
+    render(<ClassroomWorkspace participationId="p" />);
+    fireEvent.click(await screen.findByRole("button", { name: "项目工作区" }));
+    fireEvent.change(screen.getByLabelText("项目文档"), { target: { value: "新的调查记录" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存工作区" }));
+    expect(await screen.findByText("已保存")).toBeVisible();
+    const saved = fetcher.mock.calls.find(([, options]) => options.method === "PATCH");
+    expect(saved).toBeDefined();
+    expect(JSON.parse(saved![1].body).idempotencyKey).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/);
+  });
+
   it("opens PBL history on actual artifacts, reflections and evaluations without student authoring forms", async () => {
     mockClassroom(); render(<ClassroomWorkspace participationId="p" />);
     expect(await screen.findByRole("img", { name: "河流调查课堂封面" })).toBeVisible();

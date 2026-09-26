@@ -1,5 +1,6 @@
 "use client";
 
+import { browserRandomUUID } from "@/lib/browser/random-uuid";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AudioLines,
@@ -34,7 +35,7 @@ import type {
 import { subscribePublicDiscussionUpdates } from "@/lib/public-discussion/realtime-client";
 
 function uuid(): string {
-  return crypto.randomUUID();
+  return browserRandomUUID();
 }
 
 async function responseJson<T>(response: Response): Promise<T> {

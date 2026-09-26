@@ -1,3 +1,4 @@
+import { PlatformError } from "@/lib/platform/repository";
 import { randomUUID } from "node:crypto";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
 import type { StudentAiProgress } from "@/lib/session/types";
@@ -8,12 +9,14 @@ export async function persistStudentAiProgress(
   courseId: string,
   studentId: string,
   progress: StudentAiProgress,
-  stageProgress: number,
+  _stageProgress: number,
 ): Promise<StudentAiProgress> {
   const result = await runMutationTransaction(async (tx) => {
     await lockProjectedCourse(tx, courseId);
     const participation = await tx.classroomParticipation.findFirst({ where: { instanceId: courseId, enrollment: { userId: studentId, status: "ACTIVE" } }, include: { workspace: true, enrollment: true } });
     if (!participation) throw new Error("STUDENT_NOT_FOUND");
+    const instance = await tx.classroomInstance.findUniqueOrThrow({ where: { id: courseId }, include: { activity: { include: { chapter: { include: { offering: true } } } } } });
+    if (instance.status !== "TEACHING" || instance.activity.chapter.offering.status !== "OPEN") throw new PlatformError("CLASSROOM_READ_ONLY", "课堂已结束，无法更新进度", 409);
     const projectState = (participation.workspace?.projectState ?? {}) as Record<string, unknown>;
     const previous = projectState.aiLearningProgress as StudentAiProgress | undefined;
     const matchingPrevious = previous?.classroomId === progress.classroomId ? previous : undefined;
@@ -44,10 +47,10 @@ export async function persistStudentAiProgress(
       quizScore: undefined,
     };
     await tx.studentProjectWorkspace.upsert({ where: { participationId: participation.id }, create: { participationId: participation.id, projectState: JSON.parse(JSON.stringify({ aiLearningProgress: mergedProgress })) }, update: { projectState: JSON.parse(JSON.stringify({ ...projectState, aiLearningProgress: mergedProgress })), version: { increment: 1 } } });
+    const stageProgress = Math.min(100, Math.round(completedScenes.length / Math.max(1, progress.totalScenes) * 100));
     const stageState = (participation.stageProgress ?? {}) as Record<string, unknown>;
     const values = (stageState.progress ?? {}) as Record<string, number>;
     await tx.classroomParticipation.update({ where: { id: participation.id }, data: { stageProgress: JSON.parse(JSON.stringify({ ...stageState, progress: { ...values, "ai-learning": Math.max(values["ai-learning"] ?? 0, stageProgress) } })) } });
-    const instance = await tx.classroomInstance.findUniqueOrThrow({ where: { id: courseId } });
     const runtime = (instance.runtimeConfig ?? {}) as Record<string, unknown>;
     const version = Number(runtime.version ?? 1) + 1;
     await tx.classroomInstance.update({ where: { id: courseId }, data: { runtimeConfig: JSON.parse(JSON.stringify({ ...runtime, version })) } });

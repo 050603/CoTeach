@@ -8,7 +8,7 @@ const course = {
     { id: "old-ppt", title: "原启动课件", type: "PPTX", stageKey: "launch", size: "1 MB", url: "/api/uploads/old-ppt", downloadedBy: [] },
   ],
   content: { resourcePackage: { launchResourceId: "old-ppt" } },
-} as Course;
+} as unknown as Course;
 
 afterEach(() => vi.unstubAllGlobals());
 

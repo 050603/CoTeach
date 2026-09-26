@@ -8,7 +8,12 @@ vi.mock('@visx/wordcloud', () => ({
 }));
 beforeEach(() => { mocks.layout.mockReset(); mocks.layout.mockReturnValue([]); });
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+const originalFonts = Object.getOwnPropertyDescriptor(document, 'fonts');
+afterEach(() => {
+  cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+  if (originalFonts) Object.defineProperty(document, 'fonts', originalFonts);
+  else Reflect.deleteProperty(document, 'fonts');
+});
 
 function measure(width = 1000, height = 500) {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0, toJSON() {} });
@@ -108,4 +113,20 @@ it('fits the measured container when a short projection window is resized', () =
   expect(screen.getByLabelText('词云画布')).toHaveAttribute('height', '400');
   unmount();
   expect(disconnect).toHaveBeenCalledOnce();
+});
+
+it('keeps every keyword selectable while a font request is stalled, then renders the cloud', async () => {
+  measure();
+  let resolveFont!: () => void;
+  const fonts = { load: vi.fn(() => new Promise<void>((resolve) => { resolveFont = resolve; })) };
+  Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
+  mocks.layout.mockImplementation(({ words }) => words);
+  const onSelect = vi.fn();
+  render(<SurveyWordCloud terms={[{ label: '字体尚未加载', value: 3 }]} onSelect={onSelect} />);
+  expect(screen.getByLabelText('完整关键词列表')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '字体尚未加载，3 人提及' }));
+  expect(onSelect).toHaveBeenCalledWith({ label: '字体尚未加载', value: 3 });
+  await act(async () => resolveFont());
+  expect(screen.getByLabelText('词云画布')).toBeInTheDocument();
+  expect(screen.queryByLabelText('完整关键词列表')).not.toBeInTheDocument();
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Wordcloud } from "@visx/wordcloud";
+import { useWordcloud } from "@visx/wordcloud";
 
 export type ReflectionWordCloudTerm = {
   label: string;
@@ -59,45 +59,7 @@ export function ReflectionWordCloud({ terms, onSelect, seed = "reflection" }: Pr
     <div className="relative min-h-52 overflow-hidden rounded-xl bg-gradient-to-br from-slate-50 via-white to-blue-50/50" ref={containerRef}>
       {stableTerms.length ? (
         width ? (
-          <Wordcloud
-            font="ui-sans-serif, system-ui, sans-serif"
-            fontSize={fontSize}
-            height={208}
-            padding={3}
-            random={random}
-            rotate={0}
-            spiral="archimedean"
-            width={width}
-            words={words}
-          >
-            {(cloudWords) => cloudWords.map((word, index) => {
-              const term = termByLabel.get(word.text ?? "");
-              if (!term) return null;
-              return (
-                <text
-                  aria-label={`${term.label}，涉及 ${term.value} 名学生`}
-                  className="outline-none transition-opacity hover:opacity-70 focus:opacity-70"
-                  fill={COLORS[index % COLORS.length]}
-                  fontSize={word.size}
-                  fontWeight={term.value >= 3 ? 700 : 600}
-                  role="button"
-                  tabIndex={0}
-                  textAnchor="middle"
-                  transform={`translate(${word.x ?? 0}, ${word.y ?? 0}) rotate(${word.rotate ?? 0})`}
-                  onClick={() => onSelect(term)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      onSelect(term);
-                    }
-                  }}
-                  key={`${term.label}-${index}`}
-                >
-                  {word.text}
-                </text>
-              );
-            })}
-          </Wordcloud>
+          <ReflectionCloudLayout width={width} words={words} fontSize={fontSize} random={random} termByLabel={termByLabel} onSelect={onSelect} />
         ) : (
           <div className="grid h-52 place-items-center text-xs text-stone-400">词云排版中…</div>
         )
@@ -106,4 +68,54 @@ export function ReflectionWordCloud({ terms, onSelect, seed = "reflection" }: Pr
       )}
     </div>
   );
+}
+
+function ReflectionCloudLayout({ width, words, fontSize, random, termByLabel, onSelect }: {
+  width: number;
+  words: Array<{ text: string; value: number }>;
+  fontSize: (word: { text: string }) => number;
+  random: () => number;
+  termByLabel: Map<string, ReflectionWordCloudTerm>;
+  onSelect: Props["onSelect"];
+}) {
+  const cloudWords = useWordcloud({
+    font: "ui-sans-serif, system-ui, sans-serif", fontSize, fontWeight: 700,
+    height: 208, padding: 3, random, rotate: 0, spiral: "archimedean", width, words,
+  });
+  // d3-cloud silently omits words that do not fit (especially long labels on
+  // narrow desktop panes). Keep every term usable while it lays out or fails to fit.
+  if (cloudWords.length < words.length) return (
+    <div aria-label="完整反思关键词列表" className="flex h-52 flex-wrap content-start items-center justify-center gap-3 overflow-auto p-4">
+      {words.map((word, index) => {
+        const term = termByLabel.get(word.text)!;
+        return <button
+          key={term.label} type="button" aria-label={`${term.label}，涉及 ${term.value} 名学生`}
+          className="min-h-11 max-w-full break-words text-center text-base font-bold"
+          style={{ color: COLORS[index % COLORS.length] }} onClick={() => onSelect(term)}
+        >{term.label}</button>;
+      })}
+    </div>
+  );
+  return <svg width={width} height={208} aria-label="反思词云画布">
+    <g transform={`translate(${width / 2}, 104)`}>
+      {cloudWords.map((word, index) => {
+        const term = termByLabel.get(word.text ?? "");
+        if (!term) return null;
+        return <text
+          key={term.label} aria-label={`${term.label}，涉及 ${term.value} 名学生`}
+          className="outline-none transition-opacity hover:opacity-70 focus:opacity-70"
+          fill={COLORS[index % COLORS.length]} fontFamily={word.font} fontSize={word.size} fontWeight={700}
+          role="button" tabIndex={0} textAnchor="middle"
+          transform={`translate(${word.x ?? 0}, ${word.y ?? 0}) rotate(${word.rotate ?? 0})`}
+          onClick={() => onSelect(term)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onSelect(term);
+            }
+          }}
+        >{word.text}</text>;
+      })}
+    </g>
+  </svg>;
 }

@@ -113,7 +113,17 @@ export function SurveyWordCloud({ terms, selected, onSelect, large = false, stat
 
   return <div className={`survey-word-cloud survey-word-cloud-enter relative overflow-hidden rounded-[24px] border border-white/80 bg-gradient-to-br from-white via-indigo-50/40 to-cyan-50/70 ${large ? "h-[36vh] min-h-[300px]" : "min-h-[360px]"}`} ref={containerRef}>
     {stableTerms.length && size.width ? <>
-      {fontsReady ? <CloudLayout key={JSON.stringify(stableTerms)} terms={stableTerms} width={size.width} height={size.height} large={large} selected={selected} onSelect={onSelect} /> : <svg aria-label="词云画布" width={size.width} height={size.height} />}
+      {fontsReady ? <CloudLayout key={JSON.stringify(stableTerms)} terms={stableTerms} width={size.width} height={size.height} large={large} selected={selected} onSelect={onSelect} /> : <div aria-label="完整关键词列表" className="absolute inset-4 flex flex-wrap content-center items-center justify-center gap-3 overflow-auto">
+        {stableTerms.map((term, index) => <button
+          key={term.label}
+          type="button"
+          aria-label={`${term.label}，${term.value} 人提及`}
+          aria-pressed={selected === term.label}
+          className="min-h-11 max-w-full break-words px-1 text-center text-lg font-bold"
+          style={{ color: COLORS[index % COLORS.length], opacity: selected && selected !== term.label ? 0.34 : 1 }}
+          onClick={() => onSelect(term)}
+        >{term.label}</button>)}
+      </div>}
     </> : <div className="absolute inset-0 grid place-items-center px-8 text-center"><div><span className="mx-auto block size-12 rounded-full border border-dashed border-indigo-300" /><p className="mt-4 text-sm font-medium text-slate-500">{status === "processing" ? "正在提取回答关键词" : status === "unavailable" ? "关键词分析暂时不可用" : hasResponses ? "暂无可提取的关键词" : "等待学生写下更多想法"}</p><p className="mt-2 text-xs text-slate-400">{status === "processing" ? "分析完成后自动显示，可先查看其他题目" : status === "unavailable" ? "回答已保留，稍后会自动重试" : hasResponses ? "后续回答有新内容时会自动更新" : "收到简答后，关键词会在这里逐渐生长"}</p></div></div>}
   </div>;
 }

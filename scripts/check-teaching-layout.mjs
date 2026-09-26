@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium, firefox, webkit } from '@playwright/test';
 import { SignJWT } from 'jose';
+import katex from 'katex';
 
 const baseURL = process.env.LAYOUT_BASE_URL || 'http://127.0.0.1:3000';
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(baseURL).hostname)) throw new Error('Only local instances are supported');
@@ -30,8 +31,10 @@ const scene = {
   id: 'layout-scene', type: 'slide', title: '如何开展社区生态调查', order: 0, actions: [], stageKey: 'ai-learning', audience: 'student', generationPurpose: 'knowledge-teaching',
   content: { type: 'slide', canvas: { id: 'layout-slide', viewportSize: 1000, viewportRatio: 0.5625, theme: { backgroundColor: '#ffffff', themeColors: ['#344A6A'], fontColor: '#1F2933', fontName: 'Noto Sans SC' }, background: { type: 'solid', color: '#ffffff' }, elements: [
     { id: 'title', type: 'text', left: 48, top: 50, width: 860, height: 80, rotate: 0, defaultFontName: 'Noto Sans SC', defaultColor: '#1F2933', content: '<p style="font-size:36px">如何开展社区生态调查</p>' },
-    { id: 'body', type: 'text', left: 48, top: 155, width: 780, height: 180, rotate: 0, defaultFontName: 'Noto Sans SC', defaultColor: '#1F2933', content: '<p style="font-size:24px">观察真实社区，记录环境变化，分析证据并形成可实践的行动方案。</p>' },
+    { id: 'body', type: 'text', left: 48, top: 155, width: 400, height: 180, rotate: 0, defaultFontName: 'Noto Sans SC', defaultColor: '#1F2933', content: '<p style="font-size:24px">观察真实社区，记录环境变化，分析证据并形成可实践的行动方案。</p>' },
     { id: 'image', type: 'image', src: '/brand/coteach/horizontal-color.png', left: 48, top: 385, width: 240, height: 70, rotate: 0, fixedRatio: true },
+    { id: 'chart', type: 'chart', left: 500, top: 150, width: 440, height: 330, rotate: 0, chartType: 'line', themeColors: ['#2563eb', '#16a34a'], data: { labels: ['调查前', '调查后'], legends: ['观察记录', '分析证据'], series: [[35, 80], [45, 90]] } },
+    { id: 'formula', type: 'latex', left: 48, top: 475, width: 380, height: 45, rotate: 0, color: '#1F2933', latex: '\\bar{x}=\\frac{1}{n}\\sum_{i=1}^{n}x_i', html: katex.renderToString('\\bar{x}=\\frac{1}{n}\\sum_{i=1}^{n}x_i', { throwOnError: true }) },
   ] } },
 };
 const fixtureCourse = {
@@ -212,6 +215,27 @@ try {
           for (const img of document.images) img.loading = 'eager';
           await Promise.all([...document.images].map(img => Promise.race([img.decode().catch(() => {}), new Promise(resolve => setTimeout(resolve, 5000))])));
         });
+        if (['student-player', 'student-standalone-player', 'player'].includes(id)) {
+          // The player shell can load while its lazy slide renderer stays blank.
+          // Check the actual main slide, not the thumbnails in the scene list.
+          const canvas = page.locator('[class~="group/canvas"]').filter({ visible: true }).first();
+          await canvas.locator('[data-slide-element-id="title"]').getByText(scene.title, { exact: true }).waitFor();
+          const chart = canvas.locator('[data-slide-element-id="chart"] .chart svg');
+          await chart.waitFor({ state: 'visible' });
+          await page.waitForFunction(() => {
+            const root = document.querySelector('[class~="group/canvas"] [data-slide-element-id="chart"] .chart svg');
+            return root && root.querySelectorAll('path').length > 0 && root.textContent.includes('调查前') && root.textContent.includes('调查后');
+          });
+          const formula = canvas.locator('[data-slide-element-id="formula"] .katex-html');
+          await formula.waitFor({ state: 'visible' });
+          report.renderedSlide = await canvas.evaluate(root => {
+            const chart = root.querySelector('[data-slide-element-id="chart"] .chart svg');
+            const formula = root.querySelector('[data-slide-element-id="formula"] .katex-html');
+            const image = root.querySelector('[data-slide-element-id="image"] img');
+            return { chartPaths: chart.querySelectorAll('path').length, chartLabels: chart.textContent, formulaWidth: formula.getBoundingClientRect().width, imageLoaded: !!image?.naturalWidth };
+          });
+          if (report.renderedSlide.formulaWidth <= 0 || !report.renderedSlide.imageLoaded) throw new Error('Slide formula or image did not render');
+        }
         await page.waitForTimeout(250);
         Object.assign(report, await page.evaluate(() => {
           const visible = el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';

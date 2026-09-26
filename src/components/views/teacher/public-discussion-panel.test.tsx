@@ -82,6 +82,20 @@ afterEach(() => {
 });
 
 describe("teacher public discussion voice loop", () => {
+  it("renders the discussion panel on HTTP origins without crypto.randomUUID", async () => {
+    const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+    vi.stubGlobal("crypto", { getRandomValues });
+    vi.stubGlobal("fetch", vi.fn(async (input) => {
+      if (String(input).endsWith("/settings")) {
+        return Response.json({ settings: { asrLanguage: "zh", ttsProviderId: "browser-native-tts", ttsSpeed: 1 } });
+      }
+      return Response.json(snapshot("awaiting-student"));
+    }));
+    render(<PublicDiscussionTeacherPanel course={course} immersive recommendedKnowledgePointIds={["kp-1"]} />);
+    expect(await screen.findByText("AI 公开讨论")).toBeVisible();
+    expect(await screen.findByText("证据链")).toBeVisible();
+  });
+
   it("uses the dedicated discussion console layout in immersive mode", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input) => {
       if (String(input).endsWith("/settings")) {
@@ -95,7 +109,7 @@ describe("teacher public discussion voice loop", () => {
     const title = await screen.findByText("AI 公开讨论");
     expect(title).toBeVisible();
     expect(title.closest("header")).not.toHaveClass("bg-stone-950");
-    expect(screen.getByRole("complementary", { name: "教师讨论控制" })).toBeVisible();
+    expect(await screen.findByRole("complementary", { name: "教师讨论控制" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: /语音识别设置/ }));
     expect(screen.getByLabelText("服务端 ASR")).toBeVisible();
   });

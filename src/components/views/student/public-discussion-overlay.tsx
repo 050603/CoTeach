@@ -1,5 +1,6 @@
 "use client";
 
+import { browserRandomUUID } from "@/lib/browser/random-uuid";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CircleAlert, Loader2, MessageCircleQuestion, Mic, MicOff, Send } from "lucide-react";
@@ -29,7 +30,7 @@ const statusLabels: Partial<Record<PublicDiscussionStatus, string>> = {
 };
 
 function uuid(): string {
-  return crypto.randomUUID();
+  return browserRandomUUID();
 }
 
 async function parseResponse(response: Response): Promise<PublicDiscussionSnapshot> {

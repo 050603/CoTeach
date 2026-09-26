@@ -91,7 +91,7 @@ export type SessionAction =
       type: "UPDATE_STUDENT_PROGRESS";
       payload: { courseId: string; studentId: string; stageKey: string; value: number };
     }
-  | { type: "UPSERT_SUBMISSION"; payload: { courseId: string; submission: ClassroomSubmission } }
+  | { type: "UPSERT_SUBMISSION"; payload: { courseId: string; submission: ClassroomSubmission; expectedSubmissionVersion?: number } }
   | { type: "ADD_FEEDBACK"; payload: { courseId: string; feedback: TeacherFeedback } }
   | { type: "UPSERT_RUBRIC_SCORE"; payload: { courseId: string; score: RubricScore } }
   | { type: "UPSERT_REFLECTION"; payload: { courseId: string; reflection: ReflectionRecord } }
@@ -150,7 +150,7 @@ export type SessionAction =
   | { type: "UPSERT_AI_CONTRIBUTION"; payload: { courseId: string; contribution: AiContribution } }
   | { type: "RECORD_STUDENT_AI_DECISION"; payload: { courseId: string; decision: StudentAiDecision } }
   | { type: "UPSERT_AI_ASSESSMENT_SUGGESTION"; payload: { courseId: string; suggestion: AiAssessmentSuggestion } }
-  | { type: "SET_UI_STATE"; payload: { courseId: string; patch: Partial<CourseUiState> } };
+  | { type: "SET_UI_STATE"; payload: { courseId: string; patch: Partial<CourseUiState>; projectionControl?: { clientId: string; takeover?: boolean } } };
 
 export function initialSessionState(): SessionState {
   return {

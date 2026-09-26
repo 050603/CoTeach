@@ -16,12 +16,8 @@ test('repairs a persisted Python interaction that omitted the Pyodide loader', a
       runtimeRequests.push(`FAILED ${request.url()}: ${request.failure()?.errorText ?? 'unknown'}`);
     }
   });
-  // The reused local server can be an older production build whose response
-  // predates the `wasm-unsafe-eval` policy added by this change. Bypass that
-  // response policy here; src/next-config.test.ts verifies the new production
-  // header, while this browser test verifies the actual loader/WASM/stdlib path.
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Page.setBypassCSP', { enabled: true });
+  // Exercise the deployed CSP as well as the loader/WASM/stdlib path in every
+  // browser engine. Bypassing CSP can make a broken production widget pass.
   await page.goto('/');
 
   const generatedHtml = `<!doctype html><html><head></head><body><script>

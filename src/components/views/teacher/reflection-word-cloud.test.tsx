@@ -1,6 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ReflectionWordCloud } from "./reflection-word-cloud";
 
 const mocks = vi.hoisted(() => ({
@@ -8,18 +7,14 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@visx/wordcloud", () => ({
-  Wordcloud: ({ children, fontSize, random, words }: {
-    children: (words: Array<{ text: string; x: number; y: number; size: number; rotate: number }>) => ReactNode;
-    fontSize: (word: { text: string }) => number;
-    random: () => number;
-    words: Array<{ text: string }>;
-  }) => {
-    mocks.layout({ fontSize, random, words });
-    return <svg>{children(words.map((word) => ({ ...word, x: 0, y: 0, size: 20, rotate: 0 })))}</svg>;
-  },
+  useWordcloud: mocks.layout,
 }));
 
 describe("ReflectionWordCloud", () => {
+  beforeEach(() => {
+    mocks.layout.mockReset();
+    mocks.layout.mockImplementation(({ words }) => words.map((word: { text: string }) => ({ ...word, x: 0, y: 0, size: 20, rotate: 0 })));
+  });
   it("opens a term from keyboard activation with its student count", () => {
     const onSelect = vi.fn();
     render(<ReflectionWordCloud onSelect={onSelect} terms={[{ label: "证据", value: 3 }]} />);
@@ -41,5 +36,15 @@ describe("ReflectionWordCloud", () => {
     expect(second.words).toBe(first.words);
     expect(second.fontSize).toBe(first.fontSize);
     expect(second.random).toBe(first.random);
+  });
+
+  it.each([0, 1])("keeps all terms selectable when the layout only fits %s words", (count) => {
+    mocks.layout.mockImplementation(({ words }) => words.slice(0, count));
+    const onSelect = vi.fn();
+    render(<ReflectionWordCloud onSelect={onSelect} terms={[{ label: "证据", value: 3 }, { label: "过长而无法在狭窄面板排下的关键词", value: 2 }]} />);
+    expect(screen.getByLabelText("完整反思关键词列表")).toBeInTheDocument();
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "过长而无法在狭窄面板排下的关键词，涉及 2 名学生" }));
+    expect(onSelect).toHaveBeenCalledWith({ label: "过长而无法在狭窄面板排下的关键词", value: 2 });
   });
 });

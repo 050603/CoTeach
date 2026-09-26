@@ -105,6 +105,7 @@ const SubmissionActionSchema = z.object({
   type: z.literal("UPSERT_SUBMISSION"),
   payload: z.object({
     courseId: z.string().min(1).max(128),
+    expectedSubmissionVersion: z.number().int().nonnegative().optional(),
     submission: z.object({
       id: z.string().min(1).max(128),
       courseId: z.string().min(1).max(128),
@@ -212,10 +213,12 @@ const UiStateActionSchema = z.object({
   type: z.literal("SET_UI_STATE"),
   payload: z.object({
     courseId: z.string().min(1).max(128),
+    projectionControl: z.object({ clientId: z.string().min(1).max(160), takeover: z.boolean().optional() }).strict().optional(),
     patch: z.record(z.string().min(1).max(128), JsonValueSchema),
   }).strict(),
 }).strict().superRefine((action, context) => {
   const keys = Object.keys(action.payload.patch);
+  if (keys.includes("projectionController")) context.addIssue({ code: "custom", path: ["payload", "patch", "projectionController"], message: "Projection ownership is server managed" });
   if (
     keys.length === 0
     || !keys.every((key) => key === "resourceProjection" || key === "teacherResourceProjection")
@@ -274,6 +277,7 @@ export type ActionAck = {
   courseVersion: number;
   eventCursor: string;
   projection?: ProjectionStateSnapshot;
+  submissionVersion?: number;
 };
 
 export function actionCourseId(action: SessionAction): string | null {

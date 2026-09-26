@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor, {
   DiffEditor,
-  loader,
   type Monaco,
   type OnMount,
 } from "@monaco-editor/react";
@@ -61,11 +60,7 @@ import { useCoursePresence } from "@/hooks/use-course-presence";
 import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
 import { useProjectMemory } from "@/components/views/student/use-project-memory";
 
-loader.config({
-  paths: { vs: "/api/openmaic/interactive-runtime/monaco" },
-});
-
-const MONACO_ZH_CN_URL = "/api/openmaic/interactive-runtime/monaco/nls/lang/zh-cn.js";
+import { loadCodeEditorRuntime } from "@/lib/browser/code-editor-runtime";
 const PROACTIVE_REVIEW_IDLE_MS = 9_000;
 const RUNNER_MARKER_OWNER = "openpbl-code-runner";
 
@@ -344,26 +339,12 @@ export function CodeAiCollaboration({
   }, [courseId, hydrated, router, session.joinedCourseId]);
 
   useEffect(() => {
-    const localizedGlobal = globalThis as typeof globalThis & { _VSCODE_NLS_LANGUAGE?: string };
-    if (localizedGlobal._VSCODE_NLS_LANGUAGE === "zh-cn") {
-      const timer = window.setTimeout(() => setMonacoLocaleStatus("ready"), 0);
-      return () => window.clearTimeout(timer);
-    }
-    const existing = document.querySelector<HTMLScriptElement>(`script[src="${MONACO_ZH_CN_URL}"]`);
-    const script = existing ?? document.createElement("script");
-    const handleLoad = () => setMonacoLocaleStatus("ready");
-    const handleError = () => setMonacoLocaleStatus("error");
-    script.addEventListener("load", handleLoad);
-    script.addEventListener("error", handleError);
-    if (!existing) {
-      script.src = MONACO_ZH_CN_URL;
-      script.dataset.openpblMonacoLocale = "zh-cn";
-      document.head.appendChild(script);
-    }
-    return () => {
-      script.removeEventListener("load", handleLoad);
-      script.removeEventListener("error", handleError);
-    };
+    let cancelled = false;
+    void loadCodeEditorRuntime().then(
+      () => { if (!cancelled) setMonacoLocaleStatus("ready"); },
+      () => { if (!cancelled) setMonacoLocaleStatus("error"); },
+    );
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -1129,7 +1110,7 @@ export function CodeAiCollaboration({
 
             <div className="flex min-h-0 flex-1 flex-col" ref={codeWorkspaceStackRef}>
             <div className="relative min-h-48 flex-1 bg-white">
-              {pendingChangeSet && activePreview ? (
+              {pendingChangeSet && activePreview && monacoLocaleStatus === "ready" ? (
                 <DiffEditor
                   height="100%"
                   language={language === "python" ? "python" : "cpp"}
@@ -1193,7 +1174,7 @@ export function CodeAiCollaboration({
                   value={activeFile.content}
                 />
               ) : monacoLocaleStatus === "error" ? (
-                <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-stone-500"><span>代码编辑器中文资源加载失败，请刷新页面重试。</span><PrimaryButton onClick={() => window.location.reload()} size="sm" tone="slate" variant="outline">重新加载</PrimaryButton></div>
+                <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-stone-500"><span>代码编辑器加载失败或超时，请检查网络后重新加载。</span><PrimaryButton onClick={() => window.location.reload()} size="sm" tone="slate" variant="outline">重新加载</PrimaryButton></div>
               ) : (
                 <div className="flex h-full items-center justify-center gap-2 text-sm text-stone-500"><LoaderCircle className="animate-spin" size={18} />正在加载代码编辑器…</div>
               )}

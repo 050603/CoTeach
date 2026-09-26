@@ -1,5 +1,6 @@
 "use client";
 
+import { browserRandomUUID } from "@/lib/browser/random-uuid";
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import Link from "next/link";
@@ -598,7 +599,7 @@ function KnowledgeEditor({ course, edit }: { course: Course; edit: (fn: (course:
     });
   }
   function addPoint() {
-    const id = `knowledge-${crypto.randomUUID()}`;
+    const id = `knowledge-${browserRandomUUID()}`;
     edit((next) => {
       next.content.knowledgePoints.push({ id, name: "新知识点", description: "请补充讲授说明", level: "core" });
       next.content.knowledgeGraph ??= { nodes: [], edges: [] };
@@ -621,7 +622,7 @@ function KnowledgeEditor({ course, edit }: { course: Course; edit: (fn: (course:
     edit((next) => {
       next.content.knowledgeGraph ??= { nodes: [], edges: [] };
       next.content.knowledgeGraph.edges.push({
-        id: `knowledge-edge-${crypto.randomUUID()}`,
+        id: `knowledge-edge-${browserRandomUUID()}`,
         source: next.content.knowledgePoints[0]!.id,
         target: next.content.knowledgePoints[1]!.id,
         label: "支持理解",
@@ -693,7 +694,7 @@ function BlueprintEditor({ course, edit }: { course: Course; edit: (fn: (course:
   const addPage = (sectionIndex: number) => updateSection(sectionIndex, (section) => {
     const unit = section.units[0];
     section.pages.push({
-      id: `blueprint-page-${crypto.randomUUID()}`,
+      id: `blueprint-page-${browserRandomUUID()}`,
       title: "新课堂页面",
       type: "slide",
       unitIds: unit ? [unit.id] : [],

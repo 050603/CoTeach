@@ -1,5 +1,6 @@
 "use client";
 
+import { browserRandomUUID } from "@/lib/browser/random-uuid";
 import { ResilientImage } from "@/components/resilient-image";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { BookOpen, FolderOpen, MessagesSquare, Award } from "lucide-react";
@@ -75,7 +76,7 @@ export function ClassroomWorkspace({ participationId, role = "student", returnHr
     if (busy) return;
     setBusy(true); setError(""); setNotice("");
     const signature = JSON.stringify([path, data]);
-    const receipt = pending?.signature === signature ? pending : { signature, key: crypto.randomUUID() };
+    const receipt = pending?.signature === signature ? pending : { signature, key: browserRandomUUID() };
     setPending(receipt);
     try {
       const result = await request<{ version?: number }>(`${base}${path}`, method, { ...data, idempotencyKey: receipt.key });

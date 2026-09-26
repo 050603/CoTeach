@@ -384,6 +384,7 @@ export type AiSupportRecord = {
 };
 
 export type CourseUiState = {
+  projectionController?: { teacherId: string; clientId: string } | null;
   previewUploadId?: string;
   activeGroupId?: string;
   aiPanelCollapsed?: boolean;

@@ -5,6 +5,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
 import { prisma } from "@/lib/db/client";
+import { lockProjectedCourse } from "@/lib/db/session-repository";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
 import { authorizeLegacyAiScope, legacyAiError } from "@/lib/ai-collaboration/legacy-scope";
 import { buildProjectDocumentDocx, ProjectDocumentArchiveError } from "@/lib/project-practice/document-archive";
@@ -55,6 +56,7 @@ export async function POST(request: Request) {
     await mkdir(DATA_DIR, { recursive: true });
     await writeFile(writtenPath, archive.bytes, { flag: "wx", mode: 0o600 });
     const result = await runMutationTransaction(async tx => {
+      await lockProjectedCourse(tx, body.courseId);
       await tx.$queryRaw`SELECT id FROM "ClassroomInstance" WHERE id = ${body.courseId} FOR UPDATE`;
       await tx.$queryRaw`SELECT id FROM "ClassroomParticipation" WHERE id = ${participation.id} FOR UPDATE`;
       const duplicate = await tx.domainEvent.findUnique({ where: { idempotencyKey: receiptKey } });
