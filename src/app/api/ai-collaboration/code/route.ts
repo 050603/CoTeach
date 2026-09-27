@@ -20,7 +20,7 @@ import {
   parseCodeArtifact,
   type CodeArtifactLanguage,
 } from "@/lib/ai-collaboration/code-artifact";
-import { appendAiInteractionEvents } from "@/lib/ai-collaboration/audit-store";
+import { appendDurableAiInteractionEvents } from "@/lib/ai-collaboration/audit-outbox";
 import {
   activeConversationId,
   modelConversationHistory,
@@ -76,13 +76,9 @@ const MAX_ARTIFACT_LENGTH = 120_000;
 const TRANSIENT_RETRIES = 2;
 
 async function recordInteractionEvents(
-  events: Parameters<typeof appendAiInteractionEvents>[0],
+  events: Parameters<typeof appendDurableAiInteractionEvents>[0],
 ): Promise<void> {
-  try {
-    await appendAiInteractionEvents(events);
-  } catch (error) {
-    console.error("[ai-code-collaboration] audit event write failed", error);
-  }
+  await appendDurableAiInteractionEvents(events);
 }
 
 type CodeCollaborationRequest = {
@@ -275,7 +271,7 @@ async function loadScope(input: {
   }
   const authentication = await authenticateStudent(input.request, input.courseId, input.requestedStudentId);
   if (authentication instanceof Response) return authentication;
-  const course = await getCourse(input.courseId);
+  const course = await getCourse(input.courseId, { studentId: authentication.studentId });
   if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
   const student = course.students.find((item) => item.id === authentication.studentId);
   if (!student) return Response.json({ error: "STUDENT_NOT_IN_COURSE" }, { status: 403 });

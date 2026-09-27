@@ -11,7 +11,7 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 function object(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function projectEvent(row: EventRow, courseId: string): AiInteractionEvent {
   const envelope = object(row.payload); const legacy = object(envelope.legacy);
-  return { id: row.id, courseId, studentId: row.userId, stageKey: String(legacy.stageKey ?? "make"), conversationId: typeof legacy.conversationId === "string" ? legacy.conversationId : row.conversationId ?? undefined, source: (legacy.source ?? "system") as AiInteractionEvent["source"], eventType: row.eventType as AiInteractionEvent["eventType"], actorRole: (row.actor === "assistant" ? "ai" : row.actor) as AiInteractionEvent["actorRole"], actorId: typeof legacy.actorId === "string" ? legacy.actorId : undefined, content: row.content ?? undefined, payload: object(envelope.detail), requestId: row.requestId ?? undefined, createdAt: row.createdAt.toISOString() };
+  return { id: row.id, courseId, studentId: row.userId, stageKey: String(legacy.stageKey ?? "make"), conversationId: typeof legacy.conversationId === "string" ? legacy.conversationId : row.conversationId ?? undefined, source: (legacy.source ?? "system") as AiInteractionEvent["source"], eventType: row.eventType as AiInteractionEvent["eventType"], actorRole: (row.actor === "assistant" ? "ai" : row.actor) as AiInteractionEvent["actorRole"], actorId: typeof legacy.actorId === "string" ? legacy.actorId : undefined, content: row.content ?? undefined, payload: { ...object(envelope.detail), ...(typeof legacy.occurredAt === "string" ? { occurredAt: legacy.occurredAt } : {}) }, requestId: row.requestId ?? undefined, createdAt: row.createdAt.toISOString() };
 }
 
 /** Persist legacy producer events as V2 facts. All IDs are resolved through participation. */
@@ -65,6 +65,26 @@ function decodeCursor(cursor: string | null): { createdAt: Date; id: string } | 
 export function encodeAiInteractionCursor(event: Pick<AiInteractionEvent, "id" | "createdAt">): string {
   return Buffer.from(JSON.stringify({ createdAt: event.createdAt, id: event.id }), "utf8").toString("base64url");
 }
+
+/** Classroom projections need the complete practice history; export uses the
+ * paged reader below. Keep the same stage predicate in both paths so the
+ * companion-message research facts do not duplicate their richer audit facts. */
+export async function loadCourseAiInteractionEvents(
+  courseId: string,
+  db: Prisma.TransactionClient = prisma,
+  studentId?: string,
+): Promise<AiInteractionEvent[]> {
+  const rows = await db.aiInteractionEvent.findMany({
+    where: {
+      participation: { instanceId: courseId },
+      ...(studentId ? { userId: studentId } : {}),
+      payload: { path: ["legacy", "stageKey"], equals: "make" },
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  return rows.map(row => projectEvent(row, courseId));
+}
+
 export async function listAiInteractionEvents(input: { courseId: string; studentId?: string; stageKey?: string; limit?: number; cursor?: string | null }): Promise<{ events: AiInteractionEvent[]; nextCursor?: string }> {
   const limit = Math.min(Math.max(input.limit ?? 100, 1), 500);
   const cursor = decodeCursor(input.cursor ?? null);

@@ -50,7 +50,7 @@ describe("GET /api/courses", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
-    expect(mocks.getCourse).toHaveBeenCalledWith("course-1");
+    expect(mocks.getCourse).toHaveBeenCalledWith("course-1", expect.anything(), { studentId: "student-1" });
     expect(mocks.participations).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ enrollment: expect.objectContaining({ userId: "student-1" }) }) }));
     expect(mocks.readSessionState).not.toHaveBeenCalled();
     expect(mocks.scopeCourseForClaims).toHaveBeenCalledWith(course, claims);

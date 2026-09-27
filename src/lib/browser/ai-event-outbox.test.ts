@@ -15,6 +15,7 @@ it('replays a decision with the same request id after response loss without losi
   await flushAiInteractionEvents('course:student-a');
   const requests = fetcher.mock.calls.map(([, init]) => JSON.parse(init.body));
   expect(requests[0].requestId).toBeTruthy();
+  expect(Number.isFinite(Date.parse(requests[0].createdAt))).toBe(true);
   expect(requests[1]).toEqual(requests[0]);
   expect(readLearningWrites('ai-interactions:course:student-a')).toEqual([]);
   expect(readLearningWrites('ai-interactions:course:student-b')).toHaveLength(1);

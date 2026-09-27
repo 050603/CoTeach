@@ -6,6 +6,7 @@ import { AiLearningTeacherView } from "./ai-learning";
 import { NewExperimentPosttestTeacherView } from "./experiment-posttest";
 import { SimplifiedTeacherStageView } from "@/components/classroom/simple-stage-resources";
 import { AiCollaborationTeacherMonitor } from "./ai-collaboration-monitor";
+import type { ProjectTimerControls } from "./stage-task-presentation";
 import { NewShowcaseTeacherView } from "./showcase-reporting";
 
 /**
@@ -24,6 +25,7 @@ export function TeacherStageView({
   showcaseController,
   presentation = "workspace",
   immersive = false,
+  projectTimerControls,
 }: {
   presentation?: TeacherPresentationMode;
   immersive?: boolean;
@@ -32,6 +34,7 @@ export function TeacherStageView({
   onSelectStudent?: (studentId: string) => void;
   focus?: TeacherStageFocus;
   showcaseController?: ShowcasePresentationController;
+  projectTimerControls?: ProjectTimerControls;
 }) {
   const currentStage = course.stages[course.currentStageIndex];
   const normalizedView = view === "simple-resource"
@@ -64,7 +67,7 @@ export function TeacherStageView({
         />
       );
     case "ai-collaboration":
-      return <AiCollaborationTeacherMonitor course={course} presentation={presentation} focus={focus?.stageKey === "make" ? focus : undefined} />;
+      return <AiCollaborationTeacherMonitor course={course} presentation={presentation} focus={focus?.stageKey === "make" ? focus : undefined} projectTimerControls={projectTimerControls} />;
     case "showcase-reporting":
       return <NewShowcaseTeacherView immersive={immersive} course={course} presentation={presentation} focus={focus?.stageKey === "showcase" ? focus : undefined} controller={showcaseController} />;
     case "experiment-posttest":

@@ -1,11 +1,12 @@
 import JSZip from "jszip";
 import { z } from "zod";
-import { buildStudentAiInteractionTurns } from "@/lib/ai-collaboration/interaction-transcript";
+import { buildStudentAiInteractionTurns, companionPracticeEvents, mergePracticeAiInteractionEvents } from "@/lib/ai-collaboration/interaction-transcript";
 import { authenticateRequest } from "@/lib/auth/request-guards";
 import { prisma } from "@/lib/db/client";
 import { authorizeLegacyAiScope, legacyAiError } from "@/lib/ai-collaboration/legacy-scope";
 import { listAiInteractionEvents } from "@/lib/ai-collaboration/audit-store";
 import { listProjectDocumentVersions } from "@/lib/project-practice/versions";
+import { loadCompanionState } from "@/lib/companion/server-store";
 import type { AiInteractionEvent } from "@/lib/session/types";
 
 export const runtime = "nodejs";
@@ -32,9 +33,10 @@ export async function GET(request: Request) {
   try { scope = await authorizeLegacyAiScope(auth.claims, query.courseId, query.studentId); }
   catch (error) { return legacyAiError(error); }
   const course = { id: query.courseId, name: scope.instance.activity.title };
-  const [participations, versions] = await Promise.all([
+  const [participations, versions, companionState] = await Promise.all([
     prisma.classroomParticipation.findMany({ where: { instanceId: query.courseId, ...(query.studentId ? { enrollment: { userId: query.studentId } } : {}) }, include: { enrollment: { include: { user: { select: { id: true, displayName: true } } } } } }),
     listProjectDocumentVersions({ ...query, stageKey: "make" }),
+    loadCompanionState(query.courseId, prisma, query.studentId),
   ]);
   const students = participations.map(p => ({ id: p.enrollment.user.id, name: p.enrollment.user.displayName, researchKey: p.enrollment.researchKey }));
   const eventRows: AiInteractionEvent[] = [];
@@ -43,10 +45,11 @@ export async function GET(request: Request) {
     const page = await listAiInteractionEvents({ ...query, stageKey: "make", limit: 500, cursor });
     eventRows.push(...page.events); cursor = page.nextCursor;
   } while (cursor);
-  eventRows.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const completeEvents = mergePracticeAiInteractionEvents(eventRows, companionPracticeEvents(companionState.companionThreads ?? []));
   const exportedAt = new Date().toISOString();
   const createStudentArchive = (student: typeof students[number]) => {
-    const interactions = buildStudentAiInteractionTurns(eventRows.filter((event) => event.studentId === student.id));
+    const auditEvents = completeEvents.filter((event) => event.studentId === student.id);
+    const interactions = buildStudentAiInteractionTurns(auditEvents);
     const modifications = interactions.flatMap((turn) =>
       turn.messages.flatMap((message) => message.modification ? [message.modification] : [])
     );
@@ -67,10 +70,12 @@ export async function GET(request: Request) {
         conversationCount: interactions.length,
         interactionTurnCount: interactions.length,
         interactionMessageCount: interactions.reduce((sum, turn) => sum + turn.messages.length, 0),
+        auditEventCount: auditEvents.length,
         aiModificationCount: modifications.length,
         adoptedModificationCount: modifications.filter((item) => item.decision === "adopted" && !item.undoneAt).length,
         writingVersionCount: writingVersions.length,
       },
+      auditEvents,
       interactions,
       writingVersions,
     };

@@ -1,4 +1,4 @@
-import type { AiInteractionEvent } from "@/lib/session/types";
+import type { AiInteractionEvent, CompanionThread } from "@/lib/session/types";
 
 export type InteractionLocation = "sidebar" | "selection" | "paragraph-comment" | "submission";
 
@@ -64,6 +64,11 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function eventTime(event: AiInteractionEvent): string {
+  const occurredAt = text(record(event.payload).occurredAt);
+  return occurredAt && Number.isFinite(Date.parse(occurredAt)) ? occurredAt : event.createdAt;
+}
+
 function locationFor(source: AiInteractionEvent["source"]): InteractionLocation {
   if (source === "selection") return "selection";
   if (source === "proactive-comment") return "paragraph-comment";
@@ -71,12 +76,81 @@ function locationFor(source: AiInteractionEvent["source"]): InteractionLocation 
   return "sidebar";
 }
 
+const PRACTICE_THREAD_KEYS = new Set([
+  "ai-collaboration:make",
+  "ai-collaboration-comments:make",
+  "ai-collaboration:external-artifact:make",
+  "ai-collaboration-comments:external-artifact:make",
+  "ai-code-collaboration:make:python",
+  "ai-code-comments:make:python",
+  "ai-code-collaboration:make:c",
+  "ai-code-comments:make:c",
+]);
+
+/** Messages were saved transactionally before the richer audit facts were
+ * written. They also recover older conversations whose audit write failed. */
+export function companionPracticeEvents(threads: readonly CompanionThread[]): AiInteractionEvent[] {
+  return threads
+    .filter(thread => PRACTICE_THREAD_KEYS.has(thread.stageKey))
+    .flatMap(thread => thread.messages
+      .filter(message => message.role === "student" || message.role === "agent")
+      .map(message => ({
+        id: `thread:${message.id}`,
+        courseId: thread.courseId,
+        studentId: thread.studentId,
+        stageKey: "make",
+        conversationId: message.conversationId || thread.id,
+        source: thread.stageKey.includes("-comments:") ? "proactive-comment" as const : "sidebar" as const,
+        eventType: message.role === "student" ? "request" as const : "response" as const,
+        actorRole: message.role === "student" ? "student" as const : "ai" as const,
+        actorId: message.authorId,
+        content: message.content,
+        payload: {
+          workspaceKind: thread.stageKey.includes(":external-artifact:") ? "external-artifact" : "document",
+          provenance: "companion-message",
+        },
+        createdAt: message.createdAt,
+      })));
+}
+
+/** Prefer detailed audit events, filling only messages absent from that log. */
+export function mergePracticeAiInteractionEvents(
+  audited: readonly AiInteractionEvent[],
+  messages: readonly AiInteractionEvent[],
+): AiInteractionEvent[] {
+  const key = (event: AiInteractionEvent) => JSON.stringify([
+    event.studentId, event.conversationId, event.actorRole, event.content,
+  ]);
+  const auditedCounts = new Map<string, number>();
+  for (const event of audited) {
+    if ((event.actorRole !== "student" && event.actorRole !== "ai") || !event.content) continue;
+    const signature = key(event);
+    auditedCounts.set(signature, (auditedCounts.get(signature) ?? 0) + 1);
+  }
+  const missing = messages.filter(event => {
+    const signature = key(event);
+    const count = auditedCounts.get(signature) ?? 0;
+    if (!count) return true;
+    auditedCounts.set(signature, count - 1);
+    return false;
+  });
+  return [...audited, ...missing]
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+}
+
 export function isVisibleAiInteractionEvent(event: AiInteractionEvent): boolean {
   const payload = record(event.payload);
   if (event.eventType === "policy" || event.source === "system") return false;
+  if (payload.kind === "model-output") return false;
   if (payload.action === "read" || event.content === "学生阅读了段落批注。") return false;
   if (payload.action === "suggest-delegated-work") return false;
   return true;
+}
+
+export function isStudentVisibleAiInteractionEvent(event: AiInteractionEvent): boolean {
+  return (event.actorRole === "student" || event.actorRole === "ai")
+    && record(event.payload).visibility !== "teacher-only"
+    && record(event.payload).kind !== "model-output";
 }
 
 function legacyCommentEvents(event: AiInteractionEvent): AiInteractionEvent[] | null {
@@ -152,7 +226,7 @@ export function buildStudentAiInteractionTurns(
   const events = sourceEvents
     .flatMap((event) => legacyCommentEvents(event) ?? [event])
     .filter(isVisibleAiInteractionEvent)
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    .sort((left, right) => eventTime(left).localeCompare(eventTime(right)) || left.id.localeCompare(right.id));
   const grouped = new Map<string, AiInteractionEvent[]>();
   events.forEach((event) => {
     const conversationId = event.conversationId || `未标记对话:${event.id}`;
@@ -162,7 +236,7 @@ export function buildStudentAiInteractionTurns(
   const turns: StudentAiInteractionTurn[] = [];
   const contributionModifications = new Map<string, StudentAiInteractionModification>();
   const orderedGroups = [...grouped.entries()].sort(([, left], [, right]) =>
-    left[0].createdAt.localeCompare(right[0].createdAt)
+    eventTime(left[0]).localeCompare(eventTime(right[0]))
   );
 
   orderedGroups.forEach(([conversationId, conversationEvents], index) => {
@@ -179,7 +253,7 @@ export function buildStudentAiInteractionTurns(
         if (modification) {
           const decision = text(payload.decision);
           modification.decision = decision === "adopted" || decision === "revision" ? decision : "rejected";
-          modification.decisionAt = event.createdAt;
+          modification.decisionAt = eventTime(event);
           modification.decisionSummary = event.content;
         }
         return;
@@ -187,7 +261,7 @@ export function buildStudentAiInteractionTurns(
       if (event.eventType === "undo") {
         const contributionId = text(payload.contributionId);
         const modification = contributionId ? contributionModifications.get(contributionId) : undefined;
-        if (modification) modification.undoneAt = event.createdAt;
+        if (modification) modification.undoneAt = eventTime(event);
         return;
       }
       if (!event.content) return;
@@ -203,7 +277,7 @@ export function buildStudentAiInteractionTurns(
       }
       messages.push({
         id: event.id,
-        occurredAt: event.createdAt,
+        occurredAt: eventTime(event),
         role,
         content: event.content,
         ...(event.requestId ? { requestId: event.requestId } : {}),
@@ -216,8 +290,8 @@ export function buildStudentAiInteractionTurns(
     if (!messages.length) return;
     turns.push({
       sequence: turns.length + 1,
-      occurredAt: conversationEvents[0].createdAt,
-      updatedAt: conversationEvents[conversationEvents.length - 1].createdAt,
+      occurredAt: eventTime(conversationEvents[0]),
+      updatedAt: eventTime(conversationEvents[conversationEvents.length - 1]),
       conversationId: conversationId.startsWith("未标记对话:") ? "未标记对话" : conversationId,
       turn: index + 1,
       location,

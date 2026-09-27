@@ -13,6 +13,7 @@ import { experimentConfigFromActivity, posttestOpenedAt } from "@/lib/platform/e
 import { loadAiLearningTiming } from "./ai-learning-timing";
 import { readStudentCourseCommon } from "./student-read-coalescing";
 import { loadStudentPrivateRows } from "./student-private-read-bundle";
+import { loadCourseAiInteractionEvents } from "@/lib/ai-collaboration/audit-store";
 
 export class ClassroomProjectionError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) { super(message); this.name = "ClassroomProjectionError"; }
@@ -108,7 +109,7 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
   const privateRows = studentId && db === prisma ? loadStudentPrivateRows(db, {
     courseId: id, offeringId, studentId, participationIds, ownParticipationIds, studentGroupIds,
   }) : null;
-  const [submissions, reflections, evaluations, supports, interventions, announcements, todos, resources, signals, directives, events, workspaces, companions, aiLearningTimingByStudent, enrolledCount, showcase, documentVersions, experimentAssignments, experimentDrafts, experimentPosttests] = await Promise.all([
+  const [submissions, reflections, evaluations, supports, interventions, announcements, todos, resources, signals, directives, events, workspaces, companions, aiInteractionEvents, aiLearningTimingByStudent, enrolledCount, showcase, documentVersions, experimentAssignments, experimentDrafts, experimentPosttests] = await Promise.all([
     privateRows ? privateRows.then(rows => rows.submissions) : db.classroomSubmission.findMany({ where: { participationId: { in: participationIds }, ...submissionScope } }),
     privateRows ? privateRows.then(rows => rows.reflections) : db.reflection.findMany({ where: { participationId: { in: ownParticipationIds } } }),
     common("evaluations", { where: { participationId: { in: participationIds } }, select: { metadata: true } }, args => db.evaluation.findMany(args)),
@@ -123,6 +124,7 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
     privateRows ? privateRows.then(rows => rows.events) : db.learningEvent.findMany({ where: { classroomInstanceId: id, ...(studentId ? { userId: studentId } : {}) }, orderBy: { receivedAt: "desc" }, take: 10000 }),
     privateRows ? privateRows.then(rows => rows.workspaces) : db.studentProjectWorkspace.findMany({ where: { participationId: { in: ownParticipationIds } } }),
     loadCompanionState(id, db, studentId),
+    loadCourseAiInteractionEvents(id, db, studentId),
     loadAiLearningTiming(id, instance.participations.filter(p => !studentId || p.enrollment.userId === studentId).map(p => p.enrollment.userId), db),
     common("enrolledCount", { where: { offeringId, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } }, args => db.enrollment.count(args)),
     loadShowcaseState(id, db, studentId),
@@ -148,6 +150,7 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
   return {
     ...base, ...companions, ...showcase,
     uploads,
+    aiInteractionEvents,
     projectDocumentVersions: documentVersions,
     activityLog: studentId ? [] : (await db.domainEvent.findMany({ where: { classroomInstanceId: id, eventType: "CLASSROOM_ACTIVITY" }, orderBy: { createdAt: "desc" }, take: 300 })).map(e => view<NonNullable<Course["activityLog"]>[number]>(e.payload)),
     platformContext: { offeringId, activityId: instance.activityId, templateId: instance.templateVersion.templateId, templateVersionId: instance.templateVersionId },

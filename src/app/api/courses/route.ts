@@ -20,7 +20,7 @@ export async function GET(request: Request) {
       return noStore({ ...await loadSessionState(claims.sub), user: { role: "teacher", name: claims.displayName } });
     }
     const participations = await prisma.classroomParticipation.findMany({ where: { ...(requested ? { instanceId: requested } : {}), enrollment: { userId: claims.sub, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } }, orderBy: { lastEnteredAt: "desc" }, select: { instanceId: true } });
-    const courses = (await Promise.all(participations.map(p => loadCourse(p.instanceId)))).filter((course): course is Course => Boolean(course)).map(course => scopeCourseForClaims(course, claims));
+    const courses = (await Promise.all(participations.map(p => loadCourse(p.instanceId, prisma, { studentId: claims.sub! })))).filter((course): course is Course => Boolean(course)).map(course => scopeCourseForClaims(course, claims));
     return noStore({ ...stateFor(courses), user: { role: "student", name: claims.studentName }, studentId: claims.sub, studentName: claims.studentName, joinedCourseId: requested ?? courses[0]?.id });
   } catch (error) {
     console.error("[v2-courses] projection read failed", error instanceof Error ? error.message : "unknown");

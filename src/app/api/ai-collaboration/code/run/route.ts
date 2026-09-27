@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
   const auth = await authenticateLegacyAiStudent(request, courseId, requestedStudentId);
   if (auth instanceof Response) return auth;
   const studentId = auth.studentId;
-  const course = await getCourse(courseId);
+  const course = await getCourse(courseId, { studentId });
   if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
   if (!course.students.some((item) => item.id === studentId)) {
     return Response.json({ error: "STUDENT_NOT_IN_COURSE" }, { status: 403 });

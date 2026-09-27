@@ -17,5 +17,5 @@ export async function flushAiInteractionEvents(scope: string): Promise<void> {
 
 export function queueAiInteractionEvent(scope: string, event: Record<string, unknown>): void {
   const requestId = browserRandomUUID();
-  enqueueLearningWrite(`ai-interactions:${scope}`, { ...event, requestId }, requestId);
+  enqueueLearningWrite(`ai-interactions:${scope}`, { ...event, createdAt: new Date().toISOString(), requestId }, requestId);
 }

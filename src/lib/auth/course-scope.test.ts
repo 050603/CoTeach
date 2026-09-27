@@ -52,4 +52,13 @@ describe("scopeCourseForClaims", () => {
     expect(scoped.aiLearningProgress?.["student-2"]).toBeUndefined();
     expect(scoped.stages[0]?.label).toBe("知识讲授");
   });
+  it("keeps student AI research events scoped and hides teacher-only events", () => {
+    const event = { id: "own", courseId: "course", studentId: "student", stageKey: "make", source: "sidebar", eventType: "request", actorRole: "student", content: "我的问题", createdAt: "2026-09-01T00:00:00Z" } as const;
+    const course = {
+      id: "course", stages: [], students: [], content: {},
+      aiInteractionEvents: [event, { ...event, id: "private", payload: { visibility: "teacher-only" } }, { ...event, id: "model-output", actorRole: "system", payload: { kind: "model-output" } }, { ...event, id: "other", studentId: "other" }],
+    } as unknown as Course;
+    expect(scopeCourseForClaims(course, { role: "student", sub: "student" } as StudentClaims).aiInteractionEvents?.map(item => item.id)).toEqual(["own"]);
+    expect(scopeCourseForClaims(course, { role: "teacher", sub: "teacher" } as AuthClaims).aiInteractionEvents).toHaveLength(4);
+  });
 });

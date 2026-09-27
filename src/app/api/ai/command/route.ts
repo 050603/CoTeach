@@ -5,9 +5,7 @@ import { createSlateEditor, nanoid, NodeApi } from 'platejs';
 
 import type { ChatMessage, ToolName } from '@/components/editor/use-chat';
 import { BaseEditorKit } from '@/components/editor/editor-base-kit';
-import {
-  appendAiInteractionEvents,
-} from '@/lib/ai-collaboration/audit-store';
+import { appendDurableAiInteractionEvents } from '@/lib/ai-collaboration/audit-outbox';
 import {
   evaluateAiWorkPolicy,
   type DocumentCollaborationIntent,
@@ -58,7 +56,7 @@ export async function POST(request: NextRequest) {
   const authentication = await authenticateLegacyAiStudent(request, courseId, studentId);
   if (authentication instanceof Response) return authentication;
 
-  const course = await getCourse(courseId);
+  const course = await getCourse(courseId, { studentId: authentication.studentId });
   const student = course?.students.find((item) => item.id === studentId);
   if (!course || !student) {
     return Response.json({ error: 'STUDENT_NOT_IN_COURSE' }, { status: 403 });
@@ -98,8 +96,7 @@ export async function POST(request: NextRequest) {
     content: string,
     payload: Record<string, unknown> = {},
   ) {
-    try {
-      await appendAiInteractionEvents([{
+    await appendDurableAiInteractionEvents([{
         courseId,
         studentId,
         stageKey,
@@ -110,10 +107,7 @@ export async function POST(request: NextRequest) {
         content: content.slice(0, 120_000),
         payload: { toolName, ...payload },
         requestId,
-      }]);
-    } catch (error) {
-      console.error('[ai/command] audit event write failed', error);
-    }
+    }]);
   }
 
   await recordAudit('request', 'student', userInstruction || `${toolName} 请求`, {

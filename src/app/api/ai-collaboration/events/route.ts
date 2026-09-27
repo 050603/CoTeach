@@ -2,6 +2,7 @@ import { z } from "zod";
 import { appendAiInteractionEvents, listAiInteractionEvents } from "@/lib/ai-collaboration/audit-store";
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
 import { authorizeLegacyAiScope, legacyAiError } from "@/lib/ai-collaboration/legacy-scope";
+import { isStudentVisibleAiInteractionEvent } from "@/lib/ai-collaboration/interaction-transcript";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,6 +27,7 @@ const EventSchema = z.object({
   payload: z.record(z.string(), z.unknown()).refine(value => JSON.stringify(value).length <= 32768).optional(),
   workspaceKind: z.enum(["document", "external-artifact"]).optional(),
   requestId: z.string().max(160).optional(),
+  createdAt: z.string().datetime({ offset: true }).optional(),
 }).strict();
 
 export async function GET(request: Request) {
@@ -44,7 +46,7 @@ export async function GET(request: Request) {
     limit: query.limit,
     cursor: query.cursor,
   });
-  if (auth.claims.role === "student") result.events = result.events.filter(event => event.payload?.visibility !== "teacher-only");
+  if (auth.claims.role === "student") result.events = result.events.filter(isStudentVisibleAiInteractionEvent);
   return Response.json(result, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { return legacyAiError(error); }
 }
@@ -68,6 +70,7 @@ export async function POST(request: Request) {
     actorId: auth.claims.sub!,
     payload: { ...(event.payload ?? {}), workspaceKind: workspaceKind ?? "document" },
     requestId: event.requestId ?? request.headers.get("x-request-id") ?? undefined,
+    createdAt: event.createdAt,
   }]);
   return Response.json({ ok: true, event: created });
   } catch (error) { return legacyAiError(error); }

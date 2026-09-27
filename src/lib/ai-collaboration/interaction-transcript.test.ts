@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AiInteractionEvent } from "@/lib/session/types";
-import { buildStudentAiInteractionTurns } from "./interaction-transcript";
+import type { AiInteractionEvent, CompanionThread } from "@/lib/session/types";
+import { buildStudentAiInteractionTurns, companionPracticeEvents, mergePracticeAiInteractionEvents } from "./interaction-transcript";
 
 const base = {
   courseId: "course-1",
@@ -10,6 +10,29 @@ const base = {
 } as const;
 
 describe("student AI interaction transcript", () => {
+  it("recovers unaudited practice messages without duplicating audited turns", () => {
+    const threads = [{
+      id: "stored-thread", courseId: "course-1", studentId: "student-1", stageKey: "ai-code-collaboration:make:python",
+      createdAt: "2026-09-01T01:00:00Z", updatedAt: "2026-09-01T01:00:03Z",
+      messages: [
+        { id: "m1", role: "student", content: "如何调试？", visibility: "student-and-teacher", conversationId: "logical-code", createdAt: "2026-09-01T01:00:00Z" },
+        { id: "m2", role: "agent", content: "先检查输入。", visibility: "student-and-teacher", conversationId: "logical-code", createdAt: "2026-09-01T01:00:01Z" },
+        { id: "m3", role: "student", content: "我该检查什么？", visibility: "student-and-teacher", conversationId: "logical-code", createdAt: "2026-09-01T01:00:02Z" },
+        { id: "m4", role: "agent", content: "检查空值。", visibility: "student-and-teacher", conversationId: "logical-code", createdAt: "2026-09-01T01:00:03Z" },
+      ],
+    }] as CompanionThread[];
+    const audited: AiInteractionEvent[] = [
+      { ...base, conversationId: "logical-code", id: "a1", source: "sidebar", eventType: "request", actorRole: "student", content: "如何调试？", createdAt: "2026-09-01T01:00:00Z" },
+      { ...base, conversationId: "logical-code", id: "a2", source: "sidebar", eventType: "response", actorRole: "ai", content: "先检查输入。", createdAt: "2026-09-01T01:00:01Z" },
+    ];
+
+    const events = mergePracticeAiInteractionEvents(audited, companionPracticeEvents(threads));
+    const [turn] = buildStudentAiInteractionTurns(events);
+
+    expect(turn.messages.map(item => item.content)).toEqual(["如何调试？", "先检查输入。", "我该检查什么？", "检查空值。"]);
+    expect(events.filter(item => item.id.startsWith("thread:"))).toHaveLength(2);
+  });
+
   it("keeps every contextual sidebar exchange in one conversation turn", () => {
     const events: AiInteractionEvent[] = [
       { ...base, id: "1", source: "sidebar", eventType: "request", actorRole: "student", requestId: "request-1", content: "我们的观察还缺什么？", createdAt: "2026-09-01T01:00:00.000Z" },
@@ -31,6 +54,21 @@ describe("student AI interaction transcript", () => {
       ["student", "为什么要固定时段？"],
       ["ai", "这样可以减少时间变量的干扰。"],
     ]);
+  });
+  it("orders a delayed offline decision by when the student made it", () => {
+    const events: AiInteractionEvent[] = [
+      { ...base, id: "question", source: "sidebar", eventType: "request", actorRole: "student", content: "第一问", createdAt: "2026-09-01T01:00:00Z" },
+      { ...base, id: "later", source: "sidebar", eventType: "request", actorRole: "student", content: "第二问", createdAt: "2026-09-01T01:10:00Z" },
+      { ...base, id: "offline", source: "sidebar", eventType: "comment", actorRole: "student", content: "离线记录", payload: { occurredAt: "2026-09-01T01:05:00Z" }, createdAt: "2026-09-01T01:20:00Z" },
+    ];
+    expect(buildStudentAiInteractionTurns(events)[0].messages.map(item => item.content)).toEqual(["第一问", "离线记录", "第二问"]);
+  });
+  it("keeps raw model attempts out of the displayed student conversation", () => {
+    const events: AiInteractionEvent[] = [
+      { ...base, id: "raw", source: "sidebar", eventType: "response", actorRole: "system", content: "{\"message\":\"草稿\"}", payload: { kind: "model-output" }, createdAt: "2026-09-01T01:00:00Z" },
+      { ...base, id: "answer", source: "sidebar", eventType: "response", actorRole: "ai", content: "请先核查数据。", createdAt: "2026-09-01T01:00:01Z" },
+    ];
+    expect(buildStudentAiInteractionTurns(events)[0].messages.map(item => item.content)).toEqual(["请先核查数据。"]);
   });
 
   it("keeps an initial paragraph comment and all replies in its own turn", () => {

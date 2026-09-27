@@ -1,7 +1,7 @@
 "use client";
 
 import type { TeacherPresentationMode } from "@/lib/classroom/presentation";
-import { StageTaskPresentation } from "./stage-task-presentation";
+import { StageTaskPresentation, type ProjectTimerControls } from "./stage-task-presentation";
 import { CourseStageRequirements } from "@/components/classroom/course-stage-requirements";
 import { TeacherPresentationActions } from "@/components/classroom/teacher-presentation-actions";
 import { useEffect, useMemo, useState } from "react";
@@ -10,7 +10,7 @@ import { Card, Pill } from "@/components/ui";
 import { RichDocumentPreview } from "@/components/teacher/rich-document-preview";
 import { AiMemberMarkdown } from "@/components/views/student/ai-member-markdown";
 import { parseCodeArtifact } from "@/lib/ai-collaboration/code-artifact";
-import { buildStudentAiInteractionTurns } from "@/lib/ai-collaboration/interaction-transcript";
+import { buildStudentAiInteractionTurns, companionPracticeEvents, mergePracticeAiInteractionEvents } from "@/lib/ai-collaboration/interaction-transcript";
 import type { ClassroomSubmission, Course, ProjectPdfVersion } from "@/lib/session/types";
 import { cn } from "@/lib/utils";
 import { StageEmptyState, StagePageHeader } from "@/components/classroom/classroom-ui";
@@ -72,35 +72,6 @@ function latestArtifactForStudent(
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
 }
 
-/** JSON-session fallback: the audit table is optional in local/demo mode, but
- * companion threads still retain the complete Markdown conversation. */
-function externalThreadEvents(course: Course, studentId: string): NonNullable<Course["aiInteractionEvents"]> {
-  const threadPrefixes = new Set([
-    "ai-collaboration:external-artifact:make",
-    "ai-collaboration-comments:external-artifact:make",
-  ]);
-  return (course.companionThreads ?? [])
-    .filter((thread) => thread.studentId === studentId && threadPrefixes.has(thread.stageKey))
-    .flatMap((thread) => thread.messages)
-    .filter((message) => message.role === "student" || message.role === "agent")
-    .map((message) => ({
-      id: `thread:${message.id}`,
-      courseId: course.id,
-      studentId,
-      stageKey: "make",
-      conversationId: message.conversationId,
-      source: message.role === "agent" && message.conversationId?.startsWith("document-comment-")
-        ? "proactive-comment" as const
-        : "sidebar" as const,
-      eventType: message.role === "student" ? "request" as const : "response" as const,
-      actorRole: message.role === "student" ? "student" as const : "ai" as const,
-      actorId: message.authorId,
-      content: message.content,
-      payload: { workspaceKind: "external-artifact" },
-      createdAt: message.createdAt,
-    }));
-}
-
 type StudentRow = {
   student: Course["students"][number];
   artifact: ClassroomSubmission | undefined;
@@ -126,20 +97,21 @@ function latestExternalVersion(versions: ProjectPdfVersion[]): ProjectPdfVersion
   }, undefined);
 }
 
-export function AiCollaborationTeacherMonitor({ course, focus, presentation = "workspace" }: { course: Course; presentation?: TeacherPresentationMode; focus?: Extract<TeacherStageFocus, { stageKey: "make" }> }) {
+export function AiCollaborationTeacherMonitor({ course, focus, presentation = "workspace", projectTimerControls }: { course: Course; presentation?: TeacherPresentationMode; focus?: Extract<TeacherStageFocus, { stageKey: "make" }>; projectTimerControls?: ProjectTimerControls }) {
   const artifactMode = normalizePblCourseConfig(course.pblConfig).makeArtifactMode;
   const isNewSystem = inferStageCollectionMode(course.stages) === "new";
+  const practiceEvents = useMemo(() => mergePracticeAiInteractionEvents(
+    course.aiInteractionEvents ?? [],
+    companionPracticeEvents(course.companionThreads ?? []),
+  ), [course.aiInteractionEvents, course.companionThreads]);
   const rows = useMemo<StudentRow[]>(() => course.students.map((student) => {
     const artifact = latestArtifactForStudent(course, student.id, artifactMode === "other", isNewSystem);
-    const persistedAiEvents = (course.aiInteractionEvents ?? []).filter((item) =>
+    const aiEvents = practiceEvents.filter((item) =>
       item.stageKey === "make"
       && item.studentId === student.id
       && (artifactMode === "other"
         ? payloadRecord(item.payload).workspaceKind === "external-artifact"
         : payloadRecord(item.payload).workspaceKind !== "external-artifact"));
-    const aiEvents = artifactMode === "other" && !persistedAiEvents.length
-      ? externalThreadEvents(course, student.id)
-      : persistedAiEvents;
     const documentVersions = (course.projectDocumentVersions ?? []).filter((item) =>
       item.stageKey === "make" && item.studentId === student.id);
     const externalVersions = (course.projectPdfVersions ?? []).filter((item) =>
@@ -169,7 +141,7 @@ export function AiCollaborationTeacherMonitor({ course, focus, presentation = "w
         ...signals.map((item) => item.lastDetectedAt),
       ]),
     };
-  }), [artifactMode, course, isNewSystem]);
+  }), [artifactMode, course, isNewSystem, practiceEvents]);
   const [selectedStudentId, setSelectedStudentId] = useState<string>();
   const [showWorks, setShowWorks] = useState(false);
   const displayContext = `${course.id}:${course.currentStageIndex}:${presentation}`;
@@ -219,7 +191,7 @@ export function AiCollaborationTeacherMonitor({ course, focus, presentation = "w
       {presentation === "teaching" ? <TeacherPresentationActions>
         <button aria-expanded={showWorks} data-tone="primary" onClick={() => { setShowWorks((value) => !value); setSelectedStudentId(undefined); }} type="button"><FileText size={20} />{showWorks ? "收起学生成果" : "选择学生成果"}</button>
       </TeacherPresentationActions> : null}
-      <StageTaskPresentation course={course} />
+      <StageTaskPresentation course={course} timerControls={projectTimerControls} />
       <button aria-expanded={showWorks} className="min-h-11 rounded-lg border border-blue-300 bg-white px-4 py-2 text-xl font-semibold text-blue-800" onClick={() => { setShowWorks((value) => !value); setSelectedStudentId(undefined); }} type="button">{showWorks ? "收起学生成果" : "选择学生成果"}</button>
       {showWorks ? <section aria-label="选择展示成果" className="space-y-4">
         <label className="flex flex-wrap items-center gap-3 text-xl">展示成果

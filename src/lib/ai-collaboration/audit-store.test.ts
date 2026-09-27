@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/db/client", () => ({ prisma: mocks.db }));
 vi.mock("@/lib/db/transaction-retry", () => ({ runMutationTransaction: (operation: (db: unknown) => unknown) => operation(mocks.db) }));
 vi.mock("@/lib/realtime/event-bus", () => ({ publishCourseEvent: vi.fn() }));
-import { appendAiInteractionEvents, listAiInteractionEvents } from "./audit-store";
+import { appendAiInteractionEvents, listAiInteractionEvents, loadCourseAiInteractionEvents } from "./audit-store";
 const event = { courseId: "instance", studentId: "student", stageKey: "make", conversationId: "editor-logical", source: "sidebar" as const, eventType: "response" as const, actorRole: "ai" as const, content: "建议", requestId: "request" };
 beforeEach(() => {
   vi.resetAllMocks();
@@ -19,6 +19,11 @@ describe("legacy AI research fact bridge", () => {
     const [result] = await appendAiInteractionEvents([event]);
     expect(result).toMatchObject({ courseId: "instance", studentId: "student", stageKey: "make", conversationId: "editor-logical", actorRole: "ai", content: "建议" });
     expect(mocks.db.aiInteractionEvent.create).toHaveBeenCalledWith({ data: expect.objectContaining({ researchKey: "research", offeringId: "offering", participationId: "participation", actor: "assistant", conversationId: expect.stringMatching(/^legacy-ai-conversation:/) }) });
+  });
+  it("keeps the original occurrence time of a replayed browser event", async () => {
+    const [result] = await appendAiInteractionEvents([{ ...event, createdAt: "2026-09-01T01:00:00.000Z" }]);
+    expect(mocks.db.aiInteractionEvent.create).toHaveBeenCalledWith({ data: expect.objectContaining({ payload: expect.objectContaining({ legacy: expect.objectContaining({ occurredAt: "2026-09-01T01:00:00.000Z" }) }) }) });
+    expect(result.payload?.occurredAt).toBe("2026-09-01T01:00:00.000Z");
   });
   it("deduplicates retried request events before any foreign-key writes", async () => {
     await appendAiInteractionEvents([event]);
@@ -37,5 +42,22 @@ describe("legacy AI research fact bridge", () => {
     await listAiInteractionEvents({ courseId: "instance", studentId: "student", stageKey: "make" });
     expect(mocks.db.aiInteractionEvent.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { participation: { instanceId: "instance" }, userId: "student", payload: { path: ["legacy", "stageKey"], equals: "make" } } }));
     await expect(listAiInteractionEvents({ courseId: "instance", cursor: "invalid" })).rejects.toMatchObject({ code: "INVALID_CURSOR" });
+  });
+  it("loads all project-practice audit facts into a classroom snapshot in message order", async () => {
+    mocks.db.aiInteractionEvent.findMany.mockResolvedValue([
+      { id: "student-message", userId: "student", conversationId: "stored-conversation", eventType: "request", actor: "student", content: "如何验证假设？", requestId: "turn-1", payload: { legacy: { stageKey: "make", source: "sidebar", conversationId: "logical-conversation" }, detail: { intent: "discuss" } }, createdAt: new Date("2026-09-01T01:00:00Z") },
+      { id: "ai-message", userId: "student", conversationId: "stored-conversation", eventType: "response", actor: "assistant", content: "先列出可测量的指标。", requestId: "turn-1", payload: { legacy: { stageKey: "make", source: "sidebar", conversationId: "logical-conversation" }, detail: { kind: "guidance" } }, createdAt: new Date("2026-09-01T01:00:01Z") },
+    ]);
+
+    const events = await loadCourseAiInteractionEvents("instance", mocks.db as never, "student");
+
+    expect(mocks.db.aiInteractionEvent.findMany).toHaveBeenCalledWith({
+      where: { participation: { instanceId: "instance" }, userId: "student", payload: { path: ["legacy", "stageKey"], equals: "make" } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    expect(events.map(item => [item.conversationId, item.actorRole, item.content])).toEqual([
+      ["logical-conversation", "student", "如何验证假设？"],
+      ["logical-conversation", "ai", "先列出可测量的指标。"],
+    ]);
   });
 });

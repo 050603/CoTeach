@@ -1,6 +1,7 @@
 import { withoutPrivatePackageContent } from "@/lib/resource-package/privacy";
 import type { AuthClaims } from "@/lib/auth/session";
 import type { Course } from "@/lib/session/types";
+import { isStudentVisibleAiInteractionEvent } from "@/lib/ai-collaboration/interaction-transcript";
 
 export function scopeCourseForClaims(course: Course, claims: AuthClaims): Course {
   const stages = (course.stages ?? []).map((stage) =>
@@ -45,7 +46,7 @@ export function scopeCourseForClaims(course: Course, claims: AuthClaims): Course
       item.status === "active" || item.studentId === studentId,
     ),
     aiInteractionEvents: (course.aiInteractionEvents ?? []).filter((item) =>
-      item.studentId === studentId,
+      item.studentId === studentId && isStudentVisibleAiInteractionEvent(item),
     ),
     feedback: (course.feedback ?? []).filter((item) =>
       item.targetType === "course" ||

@@ -65,6 +65,26 @@ describe("AI collaboration teacher monitor", () => {
       .toContain("studentId=student-1");
   });
 
+  it("shows saved student and AI messages when an older conversation has no audit events", () => {
+    render(<AiCollaborationTeacherMonitor course={{
+      ...course,
+      id: "course-1",
+      pblConfig: { makeArtifactMode: "python" },
+      companionThreads: [{
+        id: "stored-thread", courseId: "course-1", studentId: "student-1", stageKey: "ai-code-collaboration:make:python",
+        createdAt: "2026-09-01T01:00:00Z", updatedAt: "2026-09-01T01:00:01Z",
+        messages: [
+          { id: "question", role: "student", content: "代码为什么报错？", conversationId: "logical-code", visibility: "student-and-teacher", createdAt: "2026-09-01T01:00:00Z" },
+          { id: "answer", role: "agent", content: "先检查变量类型。", conversationId: "logical-code", visibility: "student-and-teacher", createdAt: "2026-09-01T01:00:01Z" },
+        ],
+      }],
+    } as Course} />);
+
+    expect(screen.getByText("代码为什么报错？")).toBeTruthy();
+    expect(screen.getByText("先检查变量类型。")).toBeTruthy();
+    expect(screen.getByText("学生对话 1 轮")).toBeTruthy();
+  });
+
   it("derives proactive suggestions, actual request rounds, and boundary hits from audit events", () => {
     const events = [
       { id: "comment", courseId: "course-1", studentId: "student-1", stageKey: "make", conversationId: "comment-1", source: "proactive-comment", eventType: "comment", actorRole: "ai", content: "这里需要补充证据。", createdAt: "2026-09-01T01:00:00.000Z" },

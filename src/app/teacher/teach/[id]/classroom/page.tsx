@@ -430,6 +430,7 @@ export default function TeachClassroomPage() {
                 view={currentStage.view}
                 presentation={!presentation.active || presentationDetails ? "workspace" : presentationView}
                 immersive={presentation.active}
+                projectTimerControls={{ onTogglePause: toggleClassroomTimer, onAdjust: adjustActiveStage, onReset: resetActiveStageTimer }}
               />
             </section>
           ) : null}
