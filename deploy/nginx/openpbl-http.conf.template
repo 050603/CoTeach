@@ -1,3 +1,11 @@
+# Timing only: no cookies, credentials, query strings or request bodies.
+# Docker rotates stdout logs using the existing 50 MiB x 5 policy.
+log_format classroom_action_timing escape=json
+    '{"kind":"classroom-action-timing","at":"$msec","requestId":"$request_id",'
+    '"status":$status,"requestSeconds":$request_time,"upstreamSeconds":"$upstream_response_time",'
+    '"connectSeconds":"$upstream_connect_time","headerSeconds":"$upstream_header_time",'
+    '"serverTiming":"$upstream_http_server_timing"}';
+
 # CoTeach HTTP gateway for the single current host service.
 
 # The application and realtime server run as systemd user services on the host.
@@ -64,6 +72,9 @@ server {
 
     proxy_hide_header X-Powered-By;
     proxy_http_version 1.1;
+    # Reuse the configured upstream keepalive pool for ordinary HTTP.
+    # WebSocket locations explicitly override this with their upgrade header.
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -104,6 +115,7 @@ server {
     }
 
     location ~ ^/api/courses/[^/]+/actions$ {
+        access_log /dev/stdout classroom_action_timing;
         limit_req zone=general burst=1200 nodelay;
         proxy_pass http://openpbl_new_app;
     }

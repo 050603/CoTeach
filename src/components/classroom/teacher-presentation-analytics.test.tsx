@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Course } from "@/lib/session/types";
 import { TeacherPresentationAnalytics } from "./teacher-presentation-analytics";
+import { knowledgeMountainCurve } from "./knowledge-learning-mountain";
 import { deriveTeacherClassroomPulse } from "./teacher-classroom-pulse";
 
 function makeCourse(overrides: Partial<Course> = {}): Course {
@@ -82,15 +83,23 @@ describe("TeacherPresentationAnalytics", () => {
     const onStudentDetails = vi.fn();
     const { container } = render(<TeacherPresentationAnalytics course={makeCourse({ students, aiLearningProgress } as Partial<Course>)} stageKey="ai-learning" onDetails={vi.fn()} onStudentDetails={onStudentDetails} />);
     const bin = screen.getByRole("button", { name: `50–59%，${count}人，查看名单` });
-    expect(bin.querySelectorAll("i")).toHaveLength(Math.min(count, 40));
+    expect(bin.textContent).toContain(`${count} 人`);
     expect(screen.getByText(new RegExp(`有效 ${count}/${count} 人`))).toBeTruthy();
-    if (count > 40) expect(bin.textContent).toContain("另有 40 人");
     fireEvent.click(bin);
     const list = screen.getByRole("region", { name: "50–59%学生名单" });
     expect(list.querySelectorAll("li")).toHaveLength(count);
     fireEvent.click(within(list).getAllByRole("button", { name: "查看明细" })[0]!);
     expect(onStudentDetails).toHaveBeenCalledWith("s0");
     expect(container.textContent).toContain("学生0");
+  });
+
+  it("draws a smooth curve through real counts without exceeding adjacent heights", () => {
+    const { curve, area } = knowledgeMountainCurve([0, 0, 40, 0, 0, 0, 0, 0, 0, 0]);
+    expect(curve).toContain("M 36 134");
+    expect(curve).toContain("180 22");
+    expect(curve).toContain("252 134");
+    expect(area.endsWith("L 720 134 L 0 134 Z")).toBe(true);
+    expect(curve).not.toMatch(/-[0-9]/);
   });
 
   it("shows every tied leader and full names when the whole class finishes", () => {

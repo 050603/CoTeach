@@ -249,10 +249,10 @@ async function loadStudentAndGroupRows(courseId: string) {
   return { students: students as StudentRow[], members: members as GroupMemberRow[] };
 }
 
-async function loadFinalVersions(courseId: string, studentId?: string) {
+async function loadFinalVersions(courseId: string, studentId?: string, includeSourceHtml = true) {
   const where = studentId ? { courseId, studentId } : { courseId };
   const [documents, pdfs] = await Promise.all([
-    store.listDocuments({ where: { ...where, stageKey: "make" }, orderBy: { sequence: "desc" } }),
+    store.listDocuments({ where: { ...where, stageKey: "make" }, orderBy: { sequence: "desc" }, select: { sourceHtml: includeSourceHtml } }),
     store.listFiles({ where: { ...where, stageKey: "make" }, orderBy: { sequence: "desc" } }),
   ]);
   return {
@@ -389,7 +389,7 @@ export async function getShowcaseData(
     ?? members.find((member) => member.groupId === course.presentingGroupId)?.studentId;
   // Load the full roster's readiness timestamps to derive one shared queue.
   // Student-facing responses redact other students' artifact metadata below.
-  const finalVersions = await loadFinalVersions(courseId);
+  const finalVersions = await loadFinalVersions(courseId, undefined, false);
   const artifactsByStudent = latestByStudent(finalVersions.documents, finalVersions.pdfs);
   const firstPresentableByStudent = firstPresentableSubmissionByStudent(finalVersions.documents, finalVersions.pdfs);
 

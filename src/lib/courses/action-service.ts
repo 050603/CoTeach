@@ -7,7 +7,7 @@ import { loadCourse, lockProjectedCourse, mutateProjectedCourse } from "@/lib/db
 import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { assertStudentActionScope, StudentActionScopeError } from "./v2-action-scope";
 import { PlatformError } from "@/lib/platform/repository";
-import { ClassroomProjectionError, json } from "@/lib/db/v2-course-projection";
+import { ClassroomProjectionError } from "@/lib/db/v2-course-projection";
 import type { ActionAck, ActionEnvelope } from "./contracts";
 import { publishCourseEvent, type RealtimeEvent } from "@/lib/realtime/event-bus";
 import {
@@ -42,13 +42,17 @@ async function savePersonalSubmission(
   const groupId = submitted.groupId || null;
   const [participation] = await tx.$queryRaw<Array<{
     id: string; offeringId: string; researchKey: string; enrollmentStatus: string;
-    instanceStatus: string; runtimeConfig: unknown; offeringStatus: string; archivedAt: Date | null;
+    instanceStatus: string; runtimeVersion: unknown; offeringStatus: string; archivedAt: Date | null;
     groupAllowed: boolean; identityConflict: boolean; currentPayload: unknown | null;
     userStatus: string; userRole: string; sessionVersion: number; receipt: unknown | null;
   }>>`SELECT p.id, e."offeringId", e."researchKey", e.status AS "enrollmentStatus",
-      ci.status AS "instanceStatus", ci."runtimeConfig", o.status AS "offeringStatus", a."archivedAt",
-      own.payload AS "currentPayload", u.status AS "userStatus", u.role AS "userRole", u."sessionVersion",
-      (SELECT d.payload FROM "DomainEvent" d WHERE d."idempotencyKey" = ${key}) AS receipt,
+      ci.status AS "instanceStatus", ci."runtimeConfig" -> 'version' AS "runtimeVersion", o.status AS "offeringStatus", a."archivedAt",
+      CASE WHEN own.id IS NOT NULL THEN COALESCE((SELECT jsonb_object_agg(field.key, field.value)
+        FROM jsonb_each(CASE WHEN jsonb_typeof(COALESCE(NULLIF(own.payload -> 'view', 'null'::jsonb), own.payload)) = 'object'
+          THEN COALESCE(NULLIF(own.payload -> 'view', 'null'::jsonb), own.payload) ELSE '{}'::jsonb END) field
+        WHERE field.key IN ('id', 'studentId', 'groupId', 'version', 'createdAt')), '{}'::jsonb) END AS "currentPayload", u.status AS "userStatus", u.role AS "userRole", u."sessionVersion",
+      (SELECT jsonb_build_object('fingerprint', d.payload -> 'fingerprint', 'ack', d.payload -> 'ack')
+        FROM "DomainEvent" d WHERE d."idempotencyKey" = ${key}) AS receipt,
       (${groupId}::text IS NULL OR EXISTS (
         SELECT 1 FROM "GroupMember" gm JOIN "ProjectGroup" g ON g.id = gm."groupId"
         WHERE gm."userId" = e."userId" AND gm."leftAt" IS NULL AND g."offeringId" = o.id
@@ -81,22 +85,34 @@ async function savePersonalSubmission(
   const previousPayload = asRecord(participation.currentPayload);
   const current = participation.currentPayload ? asRecord(previousPayload.view ?? previousPayload) as ClassroomSubmission : undefined;
   if (current && (current.studentId !== submitted.studentId || current.groupId !== submitted.groupId)) throw new CourseActionError("FORBIDDEN_ACTION_SCOPE", "不能变更草稿归属", 403);
+  if (envelope.action.payload.expectedSubmissionVersion !== (current ? current.version ?? 1 : 0)) {
+    // Full document bodies cross the database boundary only for conflict recovery.
+    // Both locks are still held, so this is the same revision as the metadata read.
+    const latest = await tx.classroomSubmission.findUnique({
+      where: { participationId_stageKey: { participationId: participation.id, stageKey } }, select: { payload: true },
+    });
+    const payload = asRecord(latest?.payload);
+    checkedSubmissionVersion(envelope.action.payload.expectedSubmissionVersion, latest ? asRecord(payload.view ?? payload) as ClassroomSubmission : undefined);
+  }
   const submissionVersion = checkedSubmissionVersion(envelope.action.payload.expectedSubmissionVersion, current);
   const now = new Date();
   const submission = { ...submitted, ...(current ? { id: current.id, createdAt: current.createdAt } : {}), version: submissionVersion, updatedAt: now.toISOString() };
-  const data = { status: (submission.status ?? "submitted").toUpperCase(), submittedAt: submission.status === "draft" ? null : new Date(submission.submittedAt ?? submission.updatedAt), payload: json({ instanceId: courseId, collection: "submissions", provenance: { actorId: claims.sub, actorRole: "student" }, view: submission }) };
-  const runtime = asRecord(participation.runtimeConfig);
-  const courseVersion = Number(runtime.version ?? 1) + 1;
+  // Raw SQL consumes JSON text directly. Avoid normalizing the complete document
+  // through stringify/parse only to stringify it again for the same parameter.
+  const data = { status: (submission.status ?? "submitted").toUpperCase(), submittedAt: submission.status === "draft" ? null : new Date(submission.submittedAt ?? submission.updatedAt), payload: JSON.stringify({ instanceId: courseId, collection: "submissions", provenance: { actorId: claims.sub, actorRole: "student" }, view: submission }) };
+  const courseVersion = Number(participation.runtimeVersion ?? 1) + 1;
   const id = crypto.randomUUID();
   const ack: ActionAck = { requestId: envelope.requestId, courseVersion, submissionVersion, eventCursor: `${now.toISOString()}~${id}` };
   const receiptPayload = { fingerprint, ack, action: { ...envelope.action, payload: { ...envelope.action.payload, submission } }, scope: "student", studentId: claims.sub };
   // Keep the lock and fresh reads separate; only the three durable writes share a statement.
   const committed = await tx.$queryRaw<Array<{ id: string }>>`WITH course AS (
-    UPDATE "ClassroomInstance" SET "runtimeConfig" = ${JSON.stringify({ ...runtime, version: courseVersion })}::jsonb,
+    UPDATE "ClassroomInstance" SET "runtimeConfig" = jsonb_set(
+      CASE WHEN jsonb_typeof("runtimeConfig") = 'object' THEN "runtimeConfig" ELSE '{}'::jsonb END,
+      '{version}', ${JSON.stringify(courseVersion)}::jsonb, true),
       "updatedAt" = ${now} WHERE id = ${courseId} RETURNING id
   ), submission AS (
     INSERT INTO "ClassroomSubmission" (id, "participationId", "stageKey", status, "submittedAt", payload, "createdAt", "updatedAt")
-    SELECT ${crypto.randomUUID()}, ${participation.id}, ${stageKey}, ${data.status}, ${data.submittedAt}, ${JSON.stringify(data.payload)}::jsonb, ${now}, ${now} FROM course
+    SELECT ${crypto.randomUUID()}, ${participation.id}, ${stageKey}, ${data.status}, ${data.submittedAt}, ${data.payload}::jsonb, ${now}, ${now} FROM course
     ON CONFLICT ("participationId", "stageKey") DO UPDATE SET status = EXCLUDED.status,
       "submittedAt" = EXCLUDED."submittedAt", payload = EXCLUDED.payload, "updatedAt" = EXCLUDED."updatedAt"
     RETURNING id
@@ -108,7 +124,7 @@ async function savePersonalSubmission(
   if (committed.length !== 1) throw new Error("DRAFT_COMMIT_INCOMPLETE");
   return { ack, event: realtimeEventForAction(courseId, envelope, ack, claims) };
 }
-export async function executeCourseAction(courseId: string, envelope: ActionEnvelope, claims: AuthClaims): Promise<ActionAck> {
+export async function executeCourseAction(courseId: string, envelope: ActionEnvelope, claims: AuthClaims, mark?: (phase: string) => void): Promise<ActionAck> {
   if (!claims.sub || !isActionAllowed(claims.role, envelope.action.type)) throw new CourseActionError("FORBIDDEN_ACTION", "无权执行此操作", 403);
   const personalSubmission = claims.role === "student" && envelope.action.type === "UPSERT_SUBMISSION"
     && envelope.action.payload.submission.studentId === claims.sub;
@@ -121,7 +137,7 @@ export async function executeCourseAction(courseId: string, envelope: ActionEnve
   const projectionPatch = projectionPatchFromAction(envelope.action);
   if (projectionPatch) {
     if (claims.role !== "teacher") throw new CourseActionError("FORBIDDEN_ACTION", "只有教师可以控制课堂投屏", 403);
-    return executeProjectionAction(courseId, envelope, claims, projectionPatch);
+    return executeProjectionAction(courseId, envelope, claims, projectionPatch, mark);
   }
   // Personal drafts and projection controls authorize in their fresh locked scope read.
   if (!personalSubmission && envelope.action.type !== "CREATE_COURSE" && !await canAccessLegacyCourse(claims, courseId, "read")) throw new CourseActionError("FORBIDDEN", "课程无权访问或已关闭", 403);
@@ -173,7 +189,7 @@ export async function executeCourseAction(courseId: string, envelope: ActionEnve
       envelope = { ...envelope, action: { ...envelope.action, payload: { ...envelope.action.payload, submission: { ...submission, version } } } };
     }
     let after;
-    try { after = await mutateProjectedCourse(tx, envelope.action, claims.role === "teacher" ? claims.sub : undefined, { id: claims.sub!, role: claims.role }, before); }
+    try { after = await mutateProjectedCourse(tx, envelope.action, claims.role === "teacher" ? claims.sub : undefined, { id: claims.sub!, role: claims.role }, before, { skipStageReadback: envelope.action.type === "SET_STAGE" }); }
     catch (error) {
       if (error instanceof ClassroomProjectionError || error instanceof PlatformError) throw new CourseActionError(error.code, error.message, error.status);
       if (error instanceof CourseReflectionValidationError) throw new CourseActionError("INVALID_COURSE_REFLECTION", error.message, 422);
@@ -217,9 +233,12 @@ async function executeProjectionAction(
   envelope: ActionEnvelope,
   claims: AuthClaims,
   requestedPatch: NonNullable<ReturnType<typeof projectionPatchFromAction>>,
+  mark?: (phase: string) => void,
 ): Promise<ActionAck> {
   const result = await runMutationTransaction(async tx => {
+    mark?.("transaction");
     await lockProjectedCourse(tx, courseId);
+    mark?.("locks");
     const key = `course-action:${claims.sub}:${envelope.requestId}`;
     const fingerprint = createHash("sha256")
       .update(JSON.stringify([courseId, envelope.action]))
@@ -237,6 +256,7 @@ async function executeProjectionAction(
       FROM "ClassroomInstance" ci JOIN "Activity" a ON a.id = ci."activityId"
       JOIN "Chapter" c ON c.id = a."chapterId" CROSS JOIN "User" u
       WHERE ci.id = ${courseId} AND u.id = ${claims.sub}`;
+    mark?.("scope");
     if (!instance || instance.userStatus.toUpperCase() !== "ACTIVE"
       || instance.userRole.toUpperCase() !== "TEACHER" || instance.sessionVersion !== claims.sv
       || !instance.isTeacher) throw new CourseActionError("FORBIDDEN", "账户或授课权限已变化，请重新登录或检查课堂权限", 403);
@@ -303,34 +323,22 @@ async function executeProjectionAction(
       projection,
     };
 
-    await tx.classroomInstance.update({
-      where: { id: courseId },
-      data: {
-        runtimeConfig: json({ ...runtime, version: courseVersion, uiState }),
-      },
-    });
-    await tx.domainEvent.create({
-      data: {
-        id: eventId,
-        createdAt: now,
-        idempotencyKey: key,
-        actorId: claims.sub,
-        offeringId: instance.offeringId,
-        classroomInstanceId: courseId,
-        eventType: "projection-changed",
-        payload: json({
-          fingerprint,
-          ack,
-          projection,
-          actionType: "SET_UI_STATE",
-          scope: "course",
-          courseVersion,
-        }),
-      },
-    });
+    // Keep the runtime change and its replay receipt in one dependent statement.
+    // The existing advisory/row locks and fresh authorization above remain unchanged.
+    const written = await tx.$executeRaw`WITH updated AS (
+      UPDATE "ClassroomInstance" SET "runtimeConfig" = ${JSON.stringify({ ...runtime, version: courseVersion, uiState })}::jsonb,
+        "updatedAt" = ${now} WHERE id = ${courseId} RETURNING id
+    ) INSERT INTO "DomainEvent" (id, "createdAt", "idempotencyKey", "actorId", "offeringId", "classroomInstanceId", "eventType", payload)
+      SELECT ${eventId}, ${now}, ${key}, ${claims.sub}, ${instance.offeringId}, updated.id,
+        'projection-changed', ${JSON.stringify({ fingerprint, ack, projection, actionType: "SET_UI_STATE", scope: "course", courseVersion })}::jsonb
+      FROM updated`;
+    mark?.("write");
+    if (written !== 1) throw new CourseActionError("COURSE_NOT_FOUND", "课堂不存在", 404);
     return { ack, event: projectionRealtimeEvent(projection, eventCursor) };
   });
+  mark?.("commit");
   await publishRealtimeEvent(result.event);
+  mark?.("notification");
   return result.ack;
 }
 

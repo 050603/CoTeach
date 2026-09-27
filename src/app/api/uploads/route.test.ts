@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   courseCount: vi.fn(),
   transaction: vi.fn(),
   uploadScope: vi.fn(),
+  studentUploadScope: vi.fn(),
   fileTypeFromBuffer: vi.fn(async () => ({ ext: "png", mime: "image/png" }) as { ext: string; mime: string } | null),
   convertPresentationToPdf: vi.fn(async ({ targetPath }: { targetPath: string }) => {
     await (await import("node:fs/promises")).writeFile(targetPath, "%PDF-preview");
@@ -59,7 +60,7 @@ vi.mock("@/lib/realtime/event-bus", () => ({
 
 vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: vi.fn(async () => true) }));
 
-vi.mock("@/lib/uploads/scope", () => ({ resolveUploadScope: mocks.uploadScope }));
+vi.mock("@/lib/uploads/scope", () => ({ resolveUploadScope: mocks.uploadScope, resolveStudentClassroomUploadScope: mocks.studentUploadScope }));
 
 import { POST } from "./route";
 import { authenticateRequest } from '@/lib/auth/request-guards';
@@ -88,6 +89,7 @@ describe("teacher course resource upload", () => {
     vi.clearAllMocks();
     mocks.storedNames.length = 0;
     mocks.courseCount.mockResolvedValue(1);
+    mocks.studentUploadScope.mockResolvedValue(null);
     mocks.uploadScope.mockResolvedValue({ offeringId: "course-1", templateOwnerId: null });
     process.env.NEXT_PUBLIC_OPENPBL_SYSTEM_MODE = "new";
     process.env.OPENPBL_PPTX_CLASSROOM_CONVERSION_ENABLED = "true";
@@ -110,6 +112,41 @@ describe("teacher course resource upload", () => {
       domainEvent: { create: mocks.courseEventCreate, findUnique: mocks.receiptFind },
       $queryRaw: mocks.advisoryLock,
     }));
+  });
+
+  function studentRequest(key = 'student-upload') {
+    const form = new FormData(); form.set('file', new File(['student notes'], 'notes.txt', { type: 'text/plain' }));
+    form.set('courseId', courseId);
+    return new Request('http://localhost:3000/api/uploads', { method: 'POST', headers: { origin: 'http://localhost:3000', 'Idempotency-Key': key }, body: form });
+  }
+  const studentClaims = { sub: 'student-1', role: 'student', username: 'student', displayName: 'Student', studentName: 'Student', sv: 1 } as const;
+  it('uses joined authorization and offering ownership for student multipart uploads and exact receipt replay', async () => {
+    enableReceipts();
+    mocks.studentUploadScope.mockResolvedValue({ allowed: true, scope: { offeringId: 'student-offering', templateOwnerId: null, templateId: null } });
+    vi.mocked(authenticateRequest).mockResolvedValueOnce({ claims: studentClaims }).mockResolvedValueOnce({ claims: studentClaims });
+    const first = await POST(studentRequest()); const replay = await POST(studentRequest());
+    expect(first.status).toBe(201); expect(replay.status).toBe(201);
+    expect(await replay.json()).toEqual(await first.json());
+    expect(mocks.studentUploadScope).toHaveBeenCalledTimes(2);
+    expect(canAccessLegacyCourse).not.toHaveBeenCalled(); expect(mocks.uploadScope).not.toHaveBeenCalled();
+    expect(mocks.uploadFileCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.uploadFileCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ offeringId: 'student-offering', uploadedById: 'student-1' }) }));
+  });
+  it('denies revoked student access before looking at a committed receipt with unchanged forbidden response', async () => {
+    vi.mocked(authenticateRequest).mockResolvedValueOnce({ claims: studentClaims });
+    mocks.studentUploadScope.mockResolvedValue({ allowed: false });
+    const response = await POST(studentRequest());
+    expect(response.status).toBe(403); expect(await response.json()).toMatchObject({ code: 'FORBIDDEN', message: '课程当前不允许上传文件。' });
+    expect(mocks.receiptFind).not.toHaveBeenCalled(); expect(canAccessLegacyCourse).not.toHaveBeenCalled();
+    expect(mocks.uploadScope).not.toHaveBeenCalled(); expect(mocks.uploadFileCreate).not.toHaveBeenCalled();
+  });
+  it('falls back to unchanged namespace authorization when the fast path does not resolve an instance', async () => {
+    vi.mocked(authenticateRequest).mockResolvedValueOnce({ claims: studentClaims });
+    mocks.studentUploadScope.mockResolvedValue(null);
+    vi.mocked(canAccessLegacyCourse).mockResolvedValueOnce(false);
+    expect((await POST(studentRequest())).status).toBe(403);
+    expect(canAccessLegacyCourse).toHaveBeenCalledWith(studentClaims, courseId, 'write');
+    expect(mocks.uploadScope).not.toHaveBeenCalled();
   });
 
   it("accepts a UTF-8 source file as an archived student outcome", async () => {

@@ -1,7 +1,8 @@
+import { capacityEvidenceDirectory, resolveCapacityReportPath } from './capacity-evidence-paths.mjs';
 /** Resume only the document-browser checks on an explicitly selected failed capacity fixture.
  * Original reports remain unchanged; the separate manifest records all subsequent writes. */
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
@@ -9,9 +10,9 @@ import { SignJWT } from 'jose';
 import { configureCapacityNetwork } from './capacity-network.mjs';
 import { verifyCapacityDocumentBrowsers } from './verify-capacity-document-browser.mjs';
 const runId = process.argv[2];
-assert.match(runId ?? '', /^capacity-[0-9a-f-]{36}$/);
-const directory = path.resolve('test-results/capacity', runId);
-const source = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8'));
+const directory = capacityEvidenceDirectory(runId);
+const source = JSON.parse(await readFile(await resolveCapacityReportPath(runId), 'utf8'));
+await mkdir(directory, { recursive: true, mode: 0o700 });
 assert.equal(source.runId, runId); assert.equal(source.outcome, 'failed');
 const output = path.join(directory, `document-resume-${Date.now()}.json`);
 const fixture = source.fixture;

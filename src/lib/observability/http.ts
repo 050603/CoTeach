@@ -1,3 +1,4 @@
+import { actionEntryTimings, isActionTimingRequest } from "./action-entry-timing";
 import {
   httpRequestDurationSeconds,
   httpRequestsTotal,
@@ -11,9 +12,12 @@ export function withHttpMetrics<Args extends [Request, ...unknown[]]>(
 ): (...args: Args) => Promise<Response> {
   return async (...args: Args) => {
     const started = performance.now();
+    const actionTiming = isActionTimingRequest(method, new URL(args[0].url).pathname);
+    const entryTimings = actionTiming ? actionEntryTimings(args[0].headers, Date.now()) : [];
+    let response: Response | undefined;
     let status = 500;
     try {
-      const response = await handler(...args);
+      response = await handler(...args);
       status = response.status;
       return response;
     } finally {
@@ -30,6 +34,12 @@ export function withHttpMetrics<Args extends [Request, ...unknown[]]>(
         },
         "request completed",
       );
+      if (actionTiming && response) {
+        response.headers.append("Server-Timing", [
+          ...entryTimings,
+          `handler;dur=${(performance.now() - started).toFixed(2)}`,
+        ].join(", "));
+      }
     }
   };
 }

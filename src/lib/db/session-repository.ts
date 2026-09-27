@@ -40,7 +40,7 @@ export async function lockProjectedCourse(tx: Prisma.TransactionClient, id: stri
 export async function saveCourse(course: Course): Promise<Course> {
   return runMutationTransaction(async tx => { await lockProjectedCourse(tx, course.id); const before = await loadCourse(course.id, tx); if (!before) throw new CourseNotFoundError(course.id); if (course.version !== undefined && before.version !== course.version) throw new CourseVersionConflictError(course.id, course.version); const instance = await tx.classroomInstance.findUnique({ where: { id: course.id }, select: { id: true } }); if (instance) await persistInstanceCourse(tx, before, course); else return savePblTemplateCourse(course, undefined, tx); return (await loadCourse(course.id, tx))!; });
 }
-export async function mutateProjectedCourse(tx: Prisma.TransactionClient, action: SessionAction, ownerId?: string, actor?: { id: string; role: string }, loadedBefore?: Course): Promise<Course | undefined> {
+export async function mutateProjectedCourse(tx: Prisma.TransactionClient, action: SessionAction, ownerId?: string, actor?: { id: string; role: string }, loadedBefore?: Course, options?: { skipStageReadback?: boolean }): Promise<Course | undefined> {
   const id = actionCourseId(action); if (!id) return undefined;
   await lockProjectedCourse(tx, id);
   if (action.type === "CREATE_COURSE") return savePblTemplateCourse(action.payload, ownerId, tx);
@@ -54,6 +54,12 @@ export async function mutateProjectedCourse(tx: Prisma.TransactionClient, action
   if (instance && action.type === "RESTART_TEACHING") throw new Error("请创建新的课堂场次，原场次历史将保留");
   const after = applySessionAction(stateFor([before]), action).courses.find(c => c.id === id)!;
   if (instance) await persistInstanceCourse(tx, before, after, actor); else await savePblTemplateCourse(after, ownerId, tx);
+  // The action endpoint only needs the committed version for SET_STAGE's receipt.
+  // Keep the full reducer/persistence path (including reflection gates), but avoid
+  // reloading all classroom evidence solely to obtain that known version.
+  if (instance && action.type === "SET_STAGE" && options?.skipStageReadback) {
+    return { ...after, version: (before.version ?? 1) + 1 };
+  }
   return (await loadCourse(id, tx))!;
 }
 export async function dispatchAction(action: SessionAction): Promise<SessionState> {

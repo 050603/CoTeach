@@ -1,12 +1,12 @@
 // @vitest-environment node
 import { beforeEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ offering: vi.fn(), instance: vi.fn(), template: vi.fn(), participations: vi.fn(), classroom: vi.fn() }));
-vi.mock('@/lib/db/client', () => ({ prisma: { courseOffering: { findUnique: mocks.offering }, classroomInstance: { findUnique: mocks.instance }, classroomTemplate: { findUnique: mocks.template }, classroomParticipation: { findMany: mocks.participations } } }));
+const mocks = vi.hoisted(() => ({ offering: vi.fn(), instance: vi.fn(), template: vi.fn(), participations: vi.fn(), classroom: vi.fn(), joined: vi.fn() }));
+vi.mock('@/lib/db/client', () => ({ prisma: { $queryRaw: mocks.joined, courseOffering: { findUnique: mocks.offering }, classroomInstance: { findUnique: mocks.instance }, classroomTemplate: { findUnique: mocks.template }, classroomParticipation: { findMany: mocks.participations } } }));
 vi.mock('@openmaic/lib/server/classroom-storage', () => ({
   isValidClassroomId: (id: string) => /^[a-zA-Z0-9_-]+$/.test(id),
   readClassroom: mocks.classroom,
 }));
-import { canReadTemplateAsset, resolveUploadScope } from './scope';
+import { canReadTemplateAsset, resolveStudentClassroomUploadScope, resolveUploadScope } from './scope';
 beforeEach(() => { vi.clearAllMocks(); mocks.offering.mockResolvedValue(null); mocks.instance.mockResolvedValue(null); mocks.template.mockResolvedValue(null); });
 const asset = (id: string, uploadedById = 'teacher', assetRole = 'SOURCE', mimeType = 'application/pdf') => ({ id, uploadedById, assetRole, mimeType });
 it('resolves offering, classroom instance and private template IDs explicitly', async () => {
@@ -46,4 +46,28 @@ it('serves only teacher-owned figures embedded in the enrolled student classroom
   expect(await canReadTemplateAsset('student', asset('teacher-only', 'teacher', 'TEXTBOOK_FIGURE', 'image/jpeg'))).toBe(false);
   expect(await canReadTemplateAsset('student', asset('unreferenced', 'teacher', 'TEXTBOOK_FIGURE', 'image/jpeg'))).toBe(false);
   expect(await canReadTemplateAsset('student', asset('figure', 'teacher', 'SOURCE', 'image/jpeg'))).toBe(false);
+});
+
+const studentClaims = { sub: 'student', role: 'student', username: 'student', displayName: 'Student', studentName: 'Student', sv: 1 } as const;
+it('resolves an authorized student instance with one fresh parameterized read and no ownership fallbacks', async () => {
+  mocks.joined.mockResolvedValue([{ offeringId: 'offering', allowed: true }]);
+  expect(await resolveStudentClassroomUploadScope(studentClaims, 'instance')).toEqual({ allowed: true, scope: { offeringId: 'offering', templateOwnerId: null, templateId: null } });
+  expect(mocks.joined).toHaveBeenCalledTimes(1);
+  expect(mocks.joined.mock.calls[0].slice(1)).toEqual(['student', 'instance', 'instance', 'instance']);
+  expect(mocks.offering).not.toHaveBeenCalled(); expect(mocks.instance).not.toHaveBeenCalled();
+  mocks.joined.mockResolvedValue([{ offeringId: 'offering', allowed: false }]);
+  expect(await resolveStudentClassroomUploadScope(studentClaims, 'instance')).toEqual({ allowed: false });
+  expect(mocks.joined).toHaveBeenCalledTimes(2); // No cached authorization after revocation.
+});
+it('returns null for other namespaces and does not query for teachers or missing actors', async () => {
+  mocks.joined.mockResolvedValue([]);
+  expect(await resolveStudentClassroomUploadScope(studentClaims, 'template-or-offering')).toBeNull();
+  expect(await resolveStudentClassroomUploadScope({ ...studentClaims, role: 'teacher' }, 'instance')).toBeNull();
+  expect(await resolveStudentClassroomUploadScope({ ...studentClaims, sub: undefined }, 'instance')).toBeNull();
+  expect(mocks.joined).toHaveBeenCalledTimes(1);
+});
+it('propagates a database failure instead of falling back to a stale or weaker authorization', async () => {
+  mocks.joined.mockRejectedValue(new Error('database unavailable'));
+  await expect(resolveStudentClassroomUploadScope(studentClaims, 'instance')).rejects.toThrow('database unavailable');
+  expect(mocks.offering).not.toHaveBeenCalled();
 });

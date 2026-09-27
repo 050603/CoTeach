@@ -25,7 +25,7 @@ function progress(overrides: Partial<StudentAiProgress> = {}): StudentAiProgress
 
 function setParticipation(row: { id: string; enrollment?: { offeringId?: string; researchKey?: string }; workspace?: { projectState: unknown }; stageProgress?: unknown }) {
   mocks.tx.$queryRaw.mockResolvedValueOnce([{ ...row, offeringId: row.enrollment?.offeringId, researchKey: row.enrollment?.researchKey,
-    projectState: row.workspace?.projectState, runtimeConfig: { version: 2 }, userStatus: "ACTIVE", userRole: "STUDENT", sessionVersion: 1, enrollmentStatus: "ACTIVE", classroomStatus: "TEACHING", offeringStatus: "OPEN", archivedAt: null }]);
+    projectState: row.workspace?.projectState, runtimeVersion: 2, userStatus: "ACTIVE", userRole: "STUDENT", sessionVersion: 1, enrollmentStatus: "ACTIVE", classroomStatus: "TEACHING", offeringStatus: "OPEN", archivedAt: null }]);
 }
 
 function committedJson() {

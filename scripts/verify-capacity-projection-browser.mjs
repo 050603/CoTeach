@@ -1,3 +1,4 @@
+import { capacityEvidenceDirectory } from './capacity-evidence-paths.mjs';
 import { retainLearningAcknowledgement } from './verify-capacity-learning-records.mjs';
 /** Real browser projection checks against the capacity runner's isolated fixture.
  * No route interception, response mocks, credential files, or production fixture edits.
@@ -220,7 +221,7 @@ export async function verifyCapacityProjectionBrowser({ users, fixture, origin, 
     record('projection-observer-explicit-takeover', '通过', takeover);
     return result;
   } catch (error) {
-    const diagnosticDirectory = path.resolve('test-results/capacity', path.basename(fixture.classroomId.replace(/-lesson$/, '')), 'projection-browser-diagnostics');
+    const diagnosticDirectory = path.join(capacityEvidenceDirectory(fixture.classroomId.replace(/-lesson$/, '')), 'projection-browser-diagnostics');
     await mkdir(diagnosticDirectory, { recursive: true }).catch(() => {});
     const pages = await Promise.all(sessions.map(async ({ user, page }) => {
       try {

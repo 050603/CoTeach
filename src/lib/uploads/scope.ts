@@ -1,7 +1,8 @@
 import { prisma } from '@/lib/db/client';
 import { publicResourcePackageSnapshot } from '@/lib/resource-package/privacy';
 import { isValidClassroomId, readClassroom } from '@openmaic/lib/server/classroom-storage';
-import type { FileAsset } from '@prisma/client';
+import type { AuthClaims } from '@/lib/auth/session';
+import type { FileAsset, Prisma } from '@prisma/client';
 /** Resolve transport course IDs to explicit V2 storage ownership. Authorization remains with caller. */
 export async function resolveUploadScope(courseId: string) {
   const offering = await prisma.courseOffering.findUnique({ where: { id: courseId }, select: { id: true } });
@@ -10,6 +11,36 @@ export async function resolveUploadScope(courseId: string) {
   if (instance) return { offeringId: instance.activity.chapter.offeringId, templateOwnerId: null, templateId: null };
   const template = await prisma.classroomTemplate.findUnique({ where: { id: courseId }, select: { id: true, ownerId: true } });
   return template ? { offeringId: null, templateOwnerId: template.ownerId, templateId: template.id } : null;
+}
+
+/** Fresh student authorization and ownership in one read; null preserves legacy namespace resolution. */
+export async function resolveStudentClassroomUploadScope(
+  claims: AuthClaims,
+  courseId: string,
+  db: Pick<Prisma.TransactionClient, '$queryRaw'> = prisma,
+): Promise<{ allowed: false } | { allowed: true; scope: { offeringId: string; templateOwnerId: null; templateId: null } } | null> {
+  if (claims.role !== 'student' || !claims.sub) return null;
+  const rows = await db.$queryRaw<Array<{ offeringId: string; allowed: boolean }>>`
+    SELECT ch."offeringId", COALESCE(
+      LOWER(u.status) = 'active' AND LOWER(u.role) = 'student'
+      AND p.id IS NOT NULL AND UPPER(e.status) = 'ACTIVE'
+      AND UPPER(i.status) = 'TEACHING' AND UPPER(o.status) = 'OPEN', false
+    ) AS allowed
+    FROM "ClassroomInstance" i
+    JOIN "Activity" a ON a.id = i."activityId"
+    JOIN "Chapter" ch ON ch.id = a."chapterId"
+    JOIN "CourseOffering" o ON o.id = ch."offeringId"
+    LEFT JOIN "User" u ON u.id = ${claims.sub}
+    LEFT JOIN "Enrollment" e ON e."userId" = u.id AND e."offeringId" = ch."offeringId"
+      AND e.status IN ('ACTIVE', 'active', 'COMPLETED', 'completed')
+    LEFT JOIN "ClassroomParticipation" p ON p."instanceId" = i.id AND p."enrollmentId" = e.id
+    WHERE i.id = ${courseId}
+      AND NOT EXISTS (SELECT 1 FROM "ClassroomTemplate" t WHERE t.id = ${courseId})
+      AND NOT EXISTS (SELECT 1 FROM "CourseOffering" direct WHERE direct.id = ${courseId})
+  `;
+  const row = rows[0];
+  if (!row) return null;
+  return row.allowed ? { allowed: true, scope: { offeringId: row.offeringId, templateOwnerId: null, templateId: null } } : { allowed: false };
 }
 
 /** A bound classroom grants access only to its published resources and embedded student figures. */

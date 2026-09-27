@@ -54,6 +54,8 @@ services:
       - -c
       - shared_buffers=1GB
       - -c
+      - track_wal_io_timing=on
+      - -c
       - effective_cache_size=3GB
       - -c
       - maintenance_work_mem=256MB

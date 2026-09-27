@@ -38,6 +38,9 @@ node_modules/
 /build
 /output/
 
+# Generated self-contained Node worker artifacts
+/workers/
+
 # generated browser bundles (rebuilt by postinstall)
 /public/vendor/maic-importer/
 /public/vendor/pdfjs/
@@ -99,3 +102,11 @@ src/middleware-openmaic.ts.bak
 # Python inference runtime bytecode
 __pycache__/
 *.py[cod]
+
+# Local classroom capacity run notes and evidence (keep reusable runbooks)
+/docs/audits/2026-09-26-classroom-capacity/*
+!/docs/audits/2026-09-26-classroom-capacity/cleanup.md
+!/docs/audits/2026-09-26-classroom-capacity/final-backup-restore-runbook.md
+/docs/audits/2026-09-27-classroom-remediation/
+# Browser acceptance screenshots are local execution evidence
+/docs/audits/**/*.png

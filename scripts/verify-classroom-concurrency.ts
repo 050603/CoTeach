@@ -84,6 +84,14 @@ async function main() {
     assert.ok(initialAcks.every(ack => ack.submissionVersion === 1));
     assert.equal(await prisma.classroomSubmission.count({ where: { participation: { instanceId: instance.id } } }), 40);
     console.log(`PASS 40 simultaneous personal-group autosaves (${Math.round(performance.now() - started)} ms total)`);
+    const originalDraft = await prisma.classroomSubmission.findUniqueOrThrow({ where: { participationId_stageKey: { participationId: students[0].participation.id, stageKey: "make:document" } } });
+    await assert.rejects(save(students[0], saveEnvelope(students[0], 0, "stale")), error => {
+      const conflict = error as { code: string; details: { currentSubmission: ClassroomSubmission } };
+      assert.equal(conflict.code, "DRAFT_VERSION_CONFLICT");
+      assert.deepEqual(conflict.details.currentSubmission, (originalDraft.payload as { view: ClassroomSubmission }).view);
+      return true;
+    });
+    console.log("PASS stale CAS returns the complete persisted document, not the narrow successful-read metadata");
 
     const foreignOffering = await prisma.courseOffering.create({ data: { name: "Unrelated draft access fixture", status: "OPEN" } });
     const checkedStudent = students[0];
@@ -166,8 +174,18 @@ async function main() {
     console.log("PASS 40 finalize/autosave races: one winner, immutable file digest/content matches, no duplicate archive on retry");
 
     const progressInput = { studentId: students[0].user.id, classroomId: "verification-classroom", currentSceneIndex: 1, totalScenes: 2, completedScenes: ["scene-a"], completionModelVersion: 2, masteryLevel: "in-progress" as const, lastActiveAt: new Date().toISOString() };
+    const runtimeBeforeProgress = (await prisma.classroomInstance.findUniqueOrThrow({ where: { id: instance.id } })).runtimeConfig as Record<string, unknown>;
+    const preservedRuntime = { ...runtimeBeforeProgress, version: "2147483648", progressRetentionProbe: { text: "完整课堂状态".repeat(2000), nested: [null, { enabled: true }] } };
+    await prisma.classroomInstance.update({ where: { id: instance.id }, data: { runtimeConfig: JSON.parse(JSON.stringify(preservedRuntime)) } });
     await verifyWriteRollback("first progress", () => persistStudentAiProgress(instance.id, students[0].user.id, progressInput), "StudentProjectWorkspace", true);
     await persistStudentAiProgress(instance.id, students[0].user.id, progressInput);
+    assert.deepEqual((await prisma.classroomInstance.findUniqueOrThrow({ where: { id: instance.id } })).runtimeConfig,
+      { ...preservedRuntime, version: 2147483649 }, "progress updates only version, preserving complete runtime and numeric-string versions above int32");
+    await prisma.$executeRaw`UPDATE "ClassroomInstance" SET "runtimeConfig" = 'null'::jsonb WHERE id = ${instance.id}`;
+    await persistStudentAiProgress(instance.id, students[0].user.id, progressInput, undefined, { requestId: randomUUID(), fingerprint: "null-runtime-compatibility" });
+    assert.deepEqual((await prisma.classroomInstance.findUniqueOrThrow({ where: { id: instance.id } })).runtimeConfig,
+      { version: 2 }, "JSON-null runtime retains the previous empty-object default");
+    await prisma.classroomInstance.update({ where: { id: instance.id }, data: { runtimeConfig: JSON.parse(JSON.stringify({ ...preservedRuntime, version: 2147483650 })) } });
     const preservedWorkspace = await prisma.studentProjectWorkspace.update({ where: { participationId: students[0].participation.id }, data: { aiMembers: [{ id: "preserved-companion" }], status: "PAUSED" } });
     const progressUpdate = { ...progressInput, completedScenes: ["scene-b"] };
     await verifyWriteRollback("existing progress", () => persistStudentAiProgress(instance.id, students[0].user.id, progressUpdate), "StudentProjectWorkspace", true);
@@ -353,6 +371,15 @@ async function main() {
     const gradedWorkspace = await prisma.studentProjectWorkspace.findUniqueOrThrow({ where: { participationId: students[0].participation.id } });
     for (const field of ["id", "createdAt", "status", "aiMembers"] as const) assert.deepEqual(gradedWorkspace[field], preservedWorkspace[field]);
     console.log("PASS closed classroom completes all 40 accepted grades, preserves first answers, rejects new attempts, replays completed grades without duplicate notifications; failed durable event rolls back grade and version");
+    const { courseAdmissionPipelineStarted, courseAdmissionPipelineActive, courseAdmissionLocalActive } = await import("../src/lib/observability/course-admission");
+    const startedCandidates = (await courseAdmissionPipelineStarted.get()).values[0].value;
+    const enabled = process.env.OPENPBL_COURSE_MUTATION_PIPELINE === "2";
+    assert.ok(enabled ? startedCandidates > 0 : startedCandidates === 0, "The tested pipeline flag must actually control candidate transactions");
+    assert.equal((await courseAdmissionPipelineActive.get()).values[0].value, 0);
+    assert.equal((await courseAdmissionLocalActive.get()).values[0].value, 0);
+    assert.equal(globalThis.__openPblCourseMutationQueuesV2?.size ?? 0, 0);
+    assert.equal(globalThis.__openPblCourseMutationPipelineV2?.extraActive ?? 0, 0);
+    console.log(`PASS pipeline mode=${enabled ? 2 : 1} actually started ${startedCandidates} candidates; all permits, local queues and active gauges drained`);
   } finally {
     await prisma.$disconnect();
     if (uploads) await rm(uploads, { recursive: true, force: true });

@@ -24,6 +24,7 @@ import type {
 import { cn } from "@/lib/utils";
 import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
 import { ProjectMemoryPanel, ProjectReplyContent, ProjectSupportCard } from "./project-support-cards";
+import { AiMemberProcessingBubble } from "./ai-member-processing-bubble";
 
 export type CodeAiWorkspaceMessage = {
   id: string;
@@ -100,13 +101,37 @@ export function CodeAiMemberWorkspace({
   onClearMemories,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const wasNearBottomRef = useRef(true);
+  const previousMessageCountRef = useRef(0);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [showNewMessages, setShowNewMessages] = useState(false);
 
   useEffect(() => {
     const container = scrollRef.current;
+    if (!container || !historyLoaded) return;
+    if (wasNearBottomRef.current) {
+      container.scrollTop = container.scrollHeight;
+      setShowNewMessages(false);
+    } else if (messages.length > previousMessageCountRef.current || busy || changeSet) {
+      setShowNewMessages(true);
+    }
+    previousMessageCountRef.current = messages.length;
+  }, [busy, changeSet, historyLoaded, messages.length]);
+
+  function handleScroll() {
+    const container = scrollRef.current;
     if (!container) return;
-    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-  }, [busy, changeSet, messages.length]);
+    wasNearBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 72;
+    if (wasNearBottomRef.current) setShowNewMessages(false);
+  }
+
+  function jumpToLatest() {
+    const container = scrollRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+    wasNearBottomRef.current = true;
+    setShowNewMessages(false);
+  }
 
   return (
     <section
@@ -182,7 +207,7 @@ export function CodeAiMemberWorkspace({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-stone-50/60 px-3 py-3" ref={scrollRef} aria-live="polite">
+      <div aria-label="代码协作消息" className="relative min-h-0 flex-1 overflow-y-auto bg-stone-50/60 px-3 py-3" onScroll={handleScroll} ref={scrollRef} role="log" aria-live="polite">
         {!historyLoaded ? (
           <div className="grid min-h-32 place-items-center text-xs text-stone-500"><span className="inline-flex items-center gap-2"><LoaderCircle className="animate-spin" size={14} />加载协作记录…</span></div>
         ) : null}
@@ -225,11 +250,7 @@ export function CodeAiMemberWorkspace({
             </article>
           ))}
 
-          {busy ? (
-            <div className="max-w-[94%] rounded-xl rounded-bl-sm border border-stone-200 bg-white px-3 py-2.5 text-xs text-stone-500">
-              <span className="inline-flex items-center gap-2"><LoaderCircle className="animate-spin" size={13} />AI 组员正在思考…</span>
-            </div>
-          ) : null}
+          {busy ? <AiMemberProcessingBubble /> : null}
 
           {changeSet ? (
             <section className="overflow-hidden rounded-xl border border-sky-200 bg-white" aria-label="待确认的代码修改">
@@ -262,6 +283,7 @@ export function CodeAiMemberWorkspace({
             </section>
           ) : null}
         </div>
+        {showNewMessages ? <button className="sticky bottom-2 left-1/2 z-10 -translate-x-1/2 rounded-full bg-stone-900 px-3 py-1.5 text-xs font-medium text-white shadow-md" onClick={jumpToLatest} type="button">查看新消息</button> : null}
       </div>
 
       <form className="shrink-0 border-t border-stone-200/80 bg-white p-2.5" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>

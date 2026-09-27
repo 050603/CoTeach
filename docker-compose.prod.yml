@@ -31,6 +31,8 @@ services:
       - effective_cache_size=3GB
       - -c
       - maintenance_work_mem=256MB
+      - -c
+      - track_wal_io_timing=on
     volumes:
       - postgres-data:/var/lib/postgresql/data
     expose:

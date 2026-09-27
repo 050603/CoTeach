@@ -661,7 +661,7 @@ for (const viewport of [
 }
 
 for (const viewport of [{ width: 1920, height: 1080 }, { width: 1024, height: 576 }, { width: 390, height: 844 }]) {
-  test(`AI learning mountain keeps 40 nearby students distinct ${viewport.width}x${viewport.height}`, async ({ page }, info) => {
+  test(`AI learning mountain keeps 40 students accessible in the compact chart ${viewport.width}x${viewport.height}`, async ({ page }, info) => {
     await page.setViewportSize(viewport);
     const fixture = await mockClassroom(page, { mountain: true });
     await enterFullscreen(page);
@@ -672,12 +672,10 @@ for (const viewport of [{ width: 1920, height: 1080 }, { width: 1024, height: 57
     await expect(leaderNames).toContainText("私密学生1、私密学生10、私密学生11");
     expect(await leaderNames.evaluate((element) => getComputedStyle(element).whiteSpace)).toBe("normal");
     const bin = mountain.getByRole("button", { name: "50–59%，40人，查看名单" });
-    await expect(bin.locator("i")).toHaveCount(40);
-    const boxes = await bin.locator("i").evaluateAll((dots) => dots.map((dot) => {
-      const rect = dot.getBoundingClientRect();
-      return `${rect.x},${rect.y},${rect.width},${rect.height}`;
-    }));
-    expect(new Set(boxes).size).toBe(40);
+    await expect(bin).toContainText("40 人");
+    await expect(mountain.locator("svg path").last()).toHaveAttribute("d", / C /);
+    await bin.hover();
+    await expect(mountain.locator("svg rect")).toHaveCount(1);
     await bin.click();
     await expect(mountain.getByRole("region", { name: "50–59%学生名单" }).locator("li")).toHaveCount(40);
     await assertNoPageOverflow(page);

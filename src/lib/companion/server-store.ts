@@ -33,8 +33,10 @@ function projectMessage(row: { id: string; role: string; content: string; create
 }
 
 export async function loadCompanionState(instanceId: string, db: PlatformDb = prisma, studentId?: string): Promise<CompanionState> {
+  // Match the existing string-type projection (including empty strings) before
+  // loading messages. Course configuration cannot prove historical threads absent.
   const [conversations, tasks, confirmations, records] = await Promise.all([
-    db.aiConversation.findMany({ where: { participation: { instanceId }, ...(studentId ? { userId: studentId } : {}) }, include: { messages: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] } } }),
+    db.aiConversation.findMany({ where: { participation: { instanceId }, ...(studentId ? { userId: studentId } : {}), metadata: { path: ["legacyStageKey"], string_starts_with: "" } }, include: { messages: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] } } }),
     db.aiTask.findMany({ where: { conversation: { participation: { instanceId } }, ...(studentId ? { createdById: studentId } : {}) } }),
     db.aiActionConfirmation.findMany({ where: { payload: { path: ["legacy", "instanceId"], equals: instanceId }, ...(studentId ? { requestedById: studentId } : {}) } }),
     db.aiSupportRecord.findMany({ where: { participation: { instanceId }, type: "COMPANION_PROCESS", ...(studentId ? { createdById: studentId } : {}) } }),

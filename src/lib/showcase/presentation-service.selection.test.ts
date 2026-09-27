@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthClaims } from "@/lib/auth/session";
 
-const mocks = vi.hoisted(() => ({ course: {} as Record<string, unknown>, rows: [] as Array<Record<string, unknown>>, store: {
+const mocks = vi.hoisted(() => ({ canAccess: vi.fn(), course: {} as Record<string, unknown>, rows: [] as Array<Record<string, unknown>>, store: {
   loadCourse: vi.fn(), listStudents: vi.fn(), listMembers: vi.fn(), listDocuments: vi.fn(), listFiles: vi.fn(), listPresentations: vi.fn(),
   findPresentation: vi.fn(), findGroup: vi.fn(), findMember: vi.fn(), findDocument: vi.fn(), findFile: vi.fn(), findParticipation: vi.fn(),
   createPresentation: vi.fn(), updatePresentation: vi.fn(), updatePresentations: vi.fn(), lock: vi.fn(), updateCourse: vi.fn(), transaction: vi.fn(),
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({ course: {} as Record<string, unknown>, rows: [
 vi.mock("server-only", () => ({}));
 vi.mock("./persistence", () => ({ showcaseStore: mocks.store }));
 vi.mock("./state", () => ({ rowToSnapshot: (row: unknown) => row, loadShowcaseState: vi.fn() }));
-vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: async () => true }));
+vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: mocks.canAccess }));
 vi.mock("@/lib/realtime/event-bus", () => ({ publishCourseEvent: vi.fn(async () => undefined) }));
 
 import { executeShowcaseAction, getShowcaseData } from "./presentation-service";
@@ -22,6 +22,7 @@ describe("selected showcase lifecycle", () => {
   afterEach(() => vi.useRealTimers());
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.canAccess.mockResolvedValue(true);
     mocks.course = { id: "course", status: "teaching", currentStageIndex: 3, stages: ["launch", "ai-learning", "make", "showcase", "reflection"].map((key) => ({ key })),
       presentingStudentId: null, presentingGroupId: null, uiState: {}, content: { stagePlan: { schemaVersion: 2, stages: [{ key: "showcase", durationMin: 3 }] } } };
     mocks.rows = [];
@@ -38,6 +39,23 @@ describe("selected showcase lifecycle", () => {
     mocks.store.findParticipation.mockResolvedValue({ id: "participation-s2" });
     mocks.store.updatePresentations.mockResolvedValue({ count: 0 });
     mocks.store.createPresentation.mockImplementation(async ({ data }) => ({ ...data, revision: 1, requestedAt: new Date(), updatedAt: new Date(), rejectionReason: null, endedAt: null, evaluatedAt: null, evaluatedBy: null, evaluationNote: null }));
+  });
+  it("checks live access once and does not load archives when access was revoked", async () => {
+    mocks.canAccess.mockResolvedValue(false);
+    await expect(getShowcaseData("course", student)).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    expect(mocks.canAccess).toHaveBeenCalledOnce();
+    expect(mocks.store.loadCourse).not.toHaveBeenCalled();
+    expect(mocks.store.listDocuments).not.toHaveBeenCalled();
+  });
+  it("uses summaries while preserving shared queue order and student artifact privacy", async () => {
+    mocks.course.content = { stagePlan: { schemaVersion: 1, stages: [] } };
+    mocks.store.listDocuments.mockResolvedValue(["s1", "s2"].map((studentId, i) => ({ id: `version-${i}`, courseId: "course", submissionId: `submission-${i}`, studentId, stageKey: "make", sequence: 1, sourceVersion: 1, title: `private-${studentId}`, sourceHtml: "", status: "submitted", createdAt: new Date(1_000 + i), submittedAt: new Date(1_000 + i) })));
+    const teacherView = await getShowcaseData("course", teacher);
+    const studentView = await getShowcaseData("course", student);
+    expect(mocks.store.listDocuments).toHaveBeenCalledWith(expect.objectContaining({ where: { courseId: "course", stageKey: "make" }, select: { sourceHtml: false } }));
+    expect(studentView.queue.map(row => row.studentId)).toEqual(teacherView.queue.map(row => row.studentId));
+    expect(JSON.stringify(studentView)).not.toContain("private-s1");
+    expect(JSON.stringify(studentView)).toContain("private-s2");
   });
   it("starts with an empty shortlist, keeps the complete roster and persists selected seconds", async () => {
     expect((await getShowcaseData("course", teacher)).queue).toEqual([]);

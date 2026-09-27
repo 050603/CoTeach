@@ -2,7 +2,7 @@
 
 import responsiveStyles from "./collaboration-responsive.module.css";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
   ClipboardCheck,
@@ -25,6 +25,7 @@ import type {
 import { cn } from "@/lib/utils";
 import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
 import { ProjectCitedMarkdown, ProjectMemoryPanel, ProjectReplyContent, ProjectSourceNumber, ProjectSupportCard, projectSourceAnchorId } from "./project-support-cards";
+import { AiMemberProcessingBubble } from "./ai-member-processing-bubble";
 
 export type AiMemberWorkspaceMessage = {
   id: string;
@@ -255,6 +256,7 @@ export function AiMemberWorkspace({
 
         <div className="space-y-2.5">
           {messages.slice(-30).map((message) => (
+            <Fragment key={message.id}>
             <article
               className={cn(
                 "group max-w-[94%] rounded-xl border px-3 py-2.5 text-[13px] leading-5",
@@ -264,7 +266,6 @@ export function AiMemberWorkspace({
                     ? "rounded-bl-md border-amber-200 bg-amber-50 text-amber-950"
                     : "rounded-bl-md border-stone-200 bg-white text-stone-800",
               )}
-              key={message.id}
               id={message.id}
             >
               <div className={cn(
@@ -293,11 +294,8 @@ export function AiMemberWorkspace({
               ) : (
                 <>
                   <p className="whitespace-pre-wrap">{message.content}</p>
-                  {message.requestStatus ? (
+                  {message.requestStatus === "failed" || message.requestStatus === "cancelled" ? (
                     <div className="mt-2 border-t border-white/20 pt-2 text-[11px] text-stone-200">
-                      {message.requestStatus === "sending" ? "正在发送…" : null}
-                      {message.requestStatus === "processing" ? "正在整理你提供的材料…" : null}
-                      {message.requestStatus === "recovering" ? "正在恢复这次回答…" : null}
                       {message.requestStatus === "cancelled" ? "已取消" : null}
                       {message.requestStatus === "failed" ? (
                         <>
@@ -308,14 +306,16 @@ export function AiMemberWorkspace({
                           </div>
                         </>
                       ) : null}
-                      {message.requestStatus === "processing" || message.requestStatus === "recovering" ? (
-                        <button className="mt-2 rounded-md border border-white/40 px-2 py-1 font-medium text-white hover:bg-white/15" onClick={() => message.requestId && onCancelMessage(message.requestId)} type="button">取消这次请求</button>
-                      ) : null}
                     </div>
                   ) : null}
                 </>
               )}
             </article>
+            {message.role === "user" && (message.requestStatus === "sending" || message.requestStatus === "processing" || message.requestStatus === "recovering") ? <div>
+              <AiMemberProcessingBubble recovering={message.requestStatus === "recovering"} />
+              {message.requestId ? <button className="mt-1 min-h-8 rounded-md px-2 text-[11px] font-medium text-stone-500 hover:bg-stone-100 hover:text-stone-800" onClick={() => onCancelMessage(message.requestId!)} type="button">取消这次请求</button> : null}
+            </div> : null}
+            </Fragment>
           ))}
 
           {pendingChange ? (

@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import JSZip from "jszip";
 import sharp from "sharp";
 import { prisma } from "@/lib/db/client";
+import { convertDocumentInWorker, initializeDocumentConversionPool } from "./document-conversion-pool";
 
 const DATA_DIR = process.env.UPLOAD_DIR?.trim() || path.resolve(".openpbl-data", "uploads");
 const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
@@ -154,6 +153,11 @@ export async function prepareProjectDocumentHtml(input: {
   return { html, uploadIds: [...new Set(uploadIds)], imageCount };
 }
 
+/** Warm both isolated engines before the server accepts classroom traffic. */
+export async function initializeProjectDocumentArchive() {
+  await initializeDocumentConversionPool();
+}
+
 export async function buildProjectDocumentDocx(input: {
   html: string;
   courseId: string;
@@ -161,33 +165,11 @@ export async function buildProjectDocumentDocx(input: {
   title: string;
 }): Promise<{ bytes: Buffer; sourceHtml: string; uploadIds: string[]; imageCount: number; sha256: string }> {
   const prepared = await prepareProjectDocumentHtml(input);
-  // Keep the browser-oriented docx converter out of module initialization so
-  // server routes and pure archive validation remain importable in test/edge
-  // tooling that does not provide virtual-dom's Node export map.
-  const { htmlToDocxBlob } = await import("@platejs/docx-io");
-  const blob = await htmlToDocxBlob(prepared.html, {
-    title: input.title,
-    creator: "CoTeach",
-    description: "项目实践最终成果",
-    allowRemoteImages: false,
-    orientation: "portrait",
-  });
-  const bytes = Buffer.from(await blob.arrayBuffer());
-  const zip = await JSZip.loadAsync(bytes).catch(() => null);
-  if (!zip || !zip.file("word/document.xml")) {
-    throw new ProjectDocumentArchiveError("DOCX_INVALID", "Word 文件生成失败，请稍后重试。" );
+  try {
+    const result = await convertDocumentInWorker({ html: prepared.html, title: input.title, imageCount: prepared.imageCount });
+    return { bytes: Buffer.from(result.bytes), sourceHtml: prepared.html, uploadIds: prepared.uploadIds, imageCount: prepared.imageCount, sha256: result.sha256 };
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "DOCX_INVALID") throw new ProjectDocumentArchiveError("DOCX_INVALID", error.message);
+    throw error;
   }
-  const mediaCount = Object.entries(zip.files).filter(([name, entry]) =>
-    name.startsWith("word/media/") && !entry.dir
-  ).length;
-  if (mediaCount < prepared.imageCount) {
-    throw new ProjectDocumentArchiveError("DOCX_INVALID", "Word 文件未完整包含文档图片，请重新提交。" );
-  }
-  return {
-    bytes,
-    sourceHtml: prepared.html,
-    uploadIds: prepared.uploadIds,
-    imageCount: prepared.imageCount,
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-  };
 }

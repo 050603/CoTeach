@@ -57,7 +57,7 @@ export async function GET(
   if ("response" in auth) return auth.response;
   if (!isDatabaseConfigured()) return Response.json({ code: "DATABASE_REQUIRED", message: "成果汇报需要连接数据库。" }, { status: 503 });
   const { courseId } = await context.params;
-  if (!(await canAccessLegacyCourse(auth.claims, courseId, "read"))) return Response.json({ code: "FORBIDDEN", message: "课程当前不可访问。" }, { status: 403 });
+  // getShowcaseData performs the live read-access check for every caller.
   try {
     return Response.json(await getShowcaseData(courseId, auth.claims), {
       headers: { "Cache-Control": "private, no-store" },

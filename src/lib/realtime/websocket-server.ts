@@ -26,7 +26,7 @@ const CONNECTION_TIMEOUT_MS = 90_000;
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_CONNECTIONS_PER_IP = 150;
 const MAX_CONNECTIONS_PER_IDENTITY = 3;
-let serverInstance: WebSocketServer | null = null;
+import { webSocketLifecycle as lifecycle } from "./websocket-lifecycle";
 const upgradeClaims = new WeakMap<IncomingMessage, AuthClaims>();
 const connectionCounts = new Map<string, number>();
 const identityConnectionCounts = new Map<string, number>();
@@ -216,8 +216,12 @@ function attachClient(ws: WebSocket, claims: AuthClaims, ip: string): void {
 export function startWebSocketServer(
   port = 3001,
   host = "127.0.0.1",
-): WebSocketServer {
-  if (serverInstance) return serverInstance;
+): Promise<WebSocketServer> {
+  if (lifecycle.closing) return lifecycle.closing.then(() => startWebSocketServer(port, host));
+  if (lifecycle.starting) return lifecycle.starting;
+  if (lifecycle.server) return lifecycle.listening
+    ? Promise.resolve(lifecycle.server)
+    : Promise.reject(new Error("WebSocket server is not listening"));
   const server = new WebSocketServer({
     port,
     host,
@@ -245,12 +249,47 @@ export function startWebSocketServer(
     }
     attachClient(ws, claims, clientIp(req));
   });
-  server.on("error", (error) => console.error("[websocket-server] server error:", error));
-  server.on("listening", () =>
-    console.info(`[websocket-server] listening on ${host}:${port}`),
-  );
-  serverInstance = server;
-  return server;
+  lifecycle.server = server;
+  lifecycle.listening = false;
+  server.on("error", (error) => {
+    if (lifecycle.server === server) lifecycle.listening = false;
+    console.error("[websocket-server] server error:", error);
+  });
+  server.on("close", () => {
+    if (lifecycle.server === server) {
+      lifecycle.server = null;
+      lifecycle.listening = false;
+    }
+  });
+  lifecycle.starting = new Promise<WebSocketServer>((resolve, reject) => {
+    const cleanup = () => {
+      server.off("listening", onListening);
+      server.off("error", onError);
+      server.off("close", onClose);
+      lifecycle.starting = null;
+    };
+    const onListening = () => {
+      cleanup();
+      if (lifecycle.closing || lifecycle.server !== server) {
+        reject(new Error("WebSocket server closed during startup"));
+        return;
+      }
+      lifecycle.listening = true;
+      console.info(`[websocket-server] listening on ${host}:${port}`);
+      resolve(server);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      if (lifecycle.server === server) lifecycle.server = null;
+      server.close(() => undefined);
+      reject(error);
+    };
+    const onClose = () => { cleanup(); reject(new Error("WebSocket server closed before listening")); };
+    server.once("listening", onListening);
+    server.once("error", onError);
+    server.once("close", onClose);
+  });
+  return lifecycle.starting;
 }
 
 function hasAllowedOrigin(req: IncomingMessage): boolean {
@@ -277,13 +316,26 @@ function clientIp(req: IncomingMessage): string {
 }
 
 export function getWebSocketServer(): WebSocketServer | null {
-  return serverInstance;
+  return lifecycle.server;
 }
 
-export async function closeWebSocketServer(): Promise<void> {
-  const server = serverInstance;
-  serverInstance = null;
-  if (!server) return;
-  for (const client of server.clients) client.close(1001, "SERVER_SHUTDOWN");
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+export function closeWebSocketServer(): Promise<void> {
+  if (lifecycle.closing) return lifecycle.closing;
+  const server = lifecycle.server;
+  lifecycle.listening = false;
+  if (!server) return Promise.resolve();
+  const starting = lifecycle.starting;
+  const closing = (async () => {
+    // Let a pending bind finish before close: closing an internal HTTP server
+    // before its asynchronous listen can otherwise leave a later listener alive.
+    await starting?.catch(() => undefined);
+    for (const client of server.clients) client.close(1001, "SERVER_SHUTDOWN");
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  })();
+  lifecycle.closing = closing;
+  void closing.then(() => {
+    if (lifecycle.server === server) lifecycle.server = null;
+    if (lifecycle.closing === closing) lifecycle.closing = null;
+  });
+  return closing;
 }

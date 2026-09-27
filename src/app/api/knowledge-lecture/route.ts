@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { isDatabaseConfigured } from "@/lib/db/client";
+import { isDatabaseConfigured, prisma } from "@/lib/db/client";
 import { loadKnowledgeLectureContext, persistKnowledgeLectureAttempt, QuizAlreadySubmittedError, sameSubmittedAnswers, withGradeSummary } from "@/lib/courses/knowledge-lecture-attempts";
 import { legacyAiError } from "@/lib/ai-collaboration/legacy-scope";
 import { PlatformError } from "@/lib/platform/repository";
@@ -7,8 +7,9 @@ import { claimTutorRequest, finishTutorRequest, failTutorRequest, type TutorRequ
 import { callLLM } from "@openmaic/lib/ai/llm";
 import { resolveModel, resolveModelFromRequest } from "@openmaic/lib/server/resolve-model";
 import type { NextRequest } from "next/server";
-import { isAuthConfigured, readAuthFromRequest } from "@/lib/auth/session";
-import { requireSameOrigin } from "@/lib/auth/request-guards";
+import { isAuthConfigured, type AuthClaims } from "@/lib/auth/session";
+import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
+import { resolveStudentStateScope } from "@/lib/courses/student-state-scope";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
 import type {
   KnowledgeLectureAttempt,
@@ -90,13 +91,18 @@ function emptyProgress(studentId: string, classroomId: string): StudentAiProgres
   };
 }
 
-async function authorized(request: Request, courseId: string, studentId: string, submitting: boolean): Promise<boolean> {
-  if (!isAuthConfigured()) return true;
-  const claims = await readAuthFromRequest(request, "student");
-  if (!claims) return false;
-  if (claims.role === "teacher") return !submitting && canAccessLegacyCourse(claims, courseId, "read");
-  return claims.sub === studentId
-    && canAccessLegacyCourse(claims, courseId, submitting && !isDatabaseConfigured() ? "write" : "read");
+async function authorized(request: Request, courseId: string, studentId: string, submitting: boolean): Promise<{ claims: AuthClaims | null } | { response: Response }> {
+  if (!isAuthConfigured()) return { claims: null };
+  const auth = await authenticateRequest(request, submitting ? "student" : undefined);
+  if ("response" in auth) return auth;
+  const { claims } = auth;
+  const forbidden = () => ({ response: Response.json({ error: "FORBIDDEN" }, { status: 403 }) });
+  if (claims.role === "teacher") return !submitting && await canAccessLegacyCourse(claims, courseId, "read") ? { claims } : forbidden();
+  if (claims.sub !== studentId) return forbidden();
+  const studentScope = isDatabaseConfigured() ? await resolveStudentStateScope(prisma, courseId, studentId) : null;
+  const allowed = studentScope ? studentScope.accessible
+    : await canAccessLegacyCourse(claims, courseId, submitting && !isDatabaseConfigured() ? "write" : "read");
+  return allowed ? { claims } : forbidden();
 }
 
 function submittedAnswers(
@@ -286,10 +292,8 @@ export async function POST(request: NextRequest) {
   if (!body?.action || !courseId || !studentId) {
     return Response.json({ error: "INVALID_REQUEST" }, { status: 400 });
   }
-  if (!await authorized(request, courseId, studentId,
-    body.action === "record-attempt")) {
-    return Response.json({ error: "FORBIDDEN" }, { status: 403 });
-  }
+  const authorization = await authorized(request, courseId, studentId, body.action === "record-attempt");
+  if ("response" in authorization) return authorization.response;
   const course = isDatabaseConfigured() ? await loadKnowledgeLectureContext(courseId, studentId) : await getCourse(courseId, { studentId });
   if (!course || !course.students.some((student) => student.id === studentId)) {
     return Response.json({ error: "STUDENT_NOT_FOUND" }, { status: 404 });
@@ -337,7 +341,8 @@ export async function POST(request: NextRequest) {
     let savedAttempt = attempt;
     try {
       if (isDatabaseConfigured()) {
-        savedAttempt = await persistKnowledgeLectureAttempt({ courseId, studentId, classroomId, attempt });
+        savedAttempt = await persistKnowledgeLectureAttempt({ courseId, studentId, classroomId, attempt,
+          ...(authorization.claims?.role === "student" ? { sessionVersion: authorization.claims.sv } : {}) });
       } else await updateCourse(courseId, (current) => {
         if ((current.aiLearningClassroomId || current.content._openmaicClassroomId) !== classroomId) {
           throw new Error("QUIZ_SCENE_CHANGED");

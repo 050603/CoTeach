@@ -67,7 +67,7 @@
 .barRow strong { text-align: right; color: #344a6a; font-size: 13px; font-variant-numeric: tabular-nums; }
 .scoreChart .barRow i { background: #267262; }
 .scoreScale { display: flex; justify-content: space-between; gap: 8px; margin-top: auto; color: #78838e; font-size: 11px; }
-.knowledgeMountain { grid-column: 1 / -1; min-width: 0; border: 1px solid #cad8e6; border-radius: 14px; background: linear-gradient(145deg, #f8fbfc, #f3f8f7); padding: clamp(16px, 1.5vw, 24px); }
+.knowledgeMountain { grid-column: 1 / -1; min-width: 0; border: 1px solid #d5e4e4; border-radius: 14px; background: #fbfdfc; padding: clamp(16px, 1.5vw, 24px); }
 .mountainHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .mountainHeading h3 { margin: 0; color: #1f2933; font-size: clamp(19px, 1.35vw, 26px); font-weight: 650; }
 .mountainHeading p { margin: 4px 0 0; color: #66717d; font-size: 13px; }
@@ -77,20 +77,20 @@
 .mountainStats > span:last-child { flex: 1 1 180px; max-width: 320px; }
 .mountainStats > span:last-child strong { max-width: none; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; }
 .mountainStats small { color: #78838e; font-size: 11px; }
-.mountainScroller { max-width: 100%; overflow-x: auto; margin-top: 18px; }
+.mountainScroller { max-width: 100%; overflow-x: auto; margin-top: 22px; }
 .mountainPlot { min-width: 720px; }
-.mountainShape { display: block; width: 100%; height: 132px; }
+.mountainShape { display: block; width: 100%; height: 150px; }
+.mountainGridline { stroke: #e7eeee; stroke-width: 1; stroke-dasharray: 3 5; }
+.mountainHighlight { fill: #e9f4f1; }
+.mountainArea { fill: #9ed5c8; fill-opacity: .22; }
+.mountainCurve { fill: none; stroke: #337e70; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.mountainAverage { stroke: #51677e; stroke-width: 1.5; stroke-dasharray: 4 4; }
 .mountainColumns { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); }
-.mountainColumn { display: flex; min-width: 0; min-height: 145px; flex-direction: column; align-items: center; gap: 5px; border: 0; border-right: 1px solid #dce7e7; background: transparent; padding: 5px 3px 8px; color: #344a6a; cursor: pointer; }
-.mountainColumn:hover, .mountainColumn[aria-pressed="true"] { background: #e8f3f1; }
+.mountainColumn { display: grid; min-width: 0; min-height: 64px; align-content: center; justify-items: center; gap: 3px; border: 0; border-right: 1px solid #e5eeee; background: transparent; padding: 6px 3px; color: #344a6a; cursor: pointer; }
+.mountainColumn:hover, .mountainColumn:focus-visible, .mountainColumn[aria-pressed="true"] { background: #e9f4f1; }
 .mountainColumn:focus-visible, .unknownButton:focus-visible, .mountainDetails:focus-visible, .mountainList button:focus-visible { outline: 2px solid #344a6a; outline-offset: -2px; }
 .mountainColumn strong { font-size: 12px; font-variant-numeric: tabular-nums; }
-.mountainColumn small { margin-top: auto; color: #52606d; font-size: 10px; white-space: nowrap; }
-.mountainColumn em { color: #365b87; font-size: 10px; font-style: normal; white-space: nowrap; }
-.mountainDots { display: grid; width: 56px; grid-template-columns: repeat(5, 8px); grid-auto-rows: 8px; align-content: start; justify-content: center; gap: 4px; }
-.mountainDots i { width: 8px; height: 8px; border-radius: 50%; background: #a4adb5; }
-.mountainDots i[data-state="learning"] { background: #356d9d; }
-.mountainDots i[data-state="completed"] { background: #218269; }
+.mountainColumn small { color: #52606d; font-size: 10px; white-space: nowrap; }
 .mountainFoot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 14px; color: #66717d; font-size: 11px; }
 .unknownButton, .mountainDetails, .mountainList button { min-height: 36px; border: 1px solid #c9d8df; border-radius: 8px; background: #fff; padding: 5px 10px; color: #344a6a; cursor: pointer; }
 .unknownButton[aria-pressed="true"] { background: #e8f3f1; }

@@ -16,6 +16,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 import { hasValidProxyAuthClaims } from "@/lib/auth/proxy-claims";
 import { contentSecurityPolicy, requestCspOrigin } from "@/lib/security/content-security-policy";
+import { ACTION_PROXY_STARTED_HEADER, ACTION_PROXY_ENDED_HEADER, isActionTimingRequest } from "@/lib/observability/action-entry-timing";
 
 export const config = {
   matcher: [
@@ -75,7 +76,12 @@ function readCookie(req: NextRequest, name: string): string | undefined {
   return cookie?.value;
 }
 
-async function authProxy(req: NextRequest) {
+async function authProxy(req: NextRequest, diagnosticHeaders?: Headers) {
+  const next = () => {
+    if (!diagnosticHeaders) return NextResponse.next();
+    diagnosticHeaders.set(ACTION_PROXY_ENDED_HEADER, String(Date.now()));
+    return NextResponse.next({ request: { headers: diagnosticHeaders } });
+  };
   // Authentication moved to V2. Teaching APIs retain their URLs with V2 persistence.
   const retiredAuth = ["/api/auth/login", "/api/auth/register", "/api/auth/join"];
   if (retiredAuth.includes(req.nextUrl.pathname)) {
@@ -83,7 +89,7 @@ async function authProxy(req: NextRequest) {
   }
   const secret = getSecret();
   // Demo mode: skip auth
-  if (!secret) return NextResponse.next();
+  if (!secret) return next();
 
   const { pathname } = req.nextUrl;
 
@@ -128,7 +134,7 @@ async function authProxy(req: NextRequest) {
       pathname === "/student/login" ||
       pathname === "/student/reset-password"
     ) {
-      return NextResponse.next();
+      return next();
     }
     const token = readCookie(req, STUDENT_COOKIE);
     const claims = await verifyCookie(token ?? "", secret);
@@ -222,11 +228,20 @@ async function authProxy(req: NextRequest) {
     }
   }
 
-  return NextResponse.next();
+  return next();
 }
 
 export async function proxy(req: NextRequest) {
-  const response = await authProxy(req);
+  const diagnosticHeaders = isActionTimingRequest(req.method, req.nextUrl.pathname)
+    ? new Headers(req.headers)
+    : undefined;
+  if (diagnosticHeaders) {
+    // Never trust a client-supplied clock: even an unauthenticated request's
+    // fields are overwritten before the unchanged optimistic auth gate runs.
+    diagnosticHeaders.set(ACTION_PROXY_STARTED_HEADER, String(Date.now()));
+    diagnosticHeaders.delete(ACTION_PROXY_ENDED_HEADER);
+  }
+  const response = await authProxy(req, diagnosticHeaders);
   const origin = requestCspOrigin(req.url, req.headers.get("host"), req.headers.get("x-forwarded-proto"));
   response.headers.set("Content-Security-Policy", contentSecurityPolicy(origin));
   return response;

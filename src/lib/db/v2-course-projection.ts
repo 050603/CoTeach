@@ -11,6 +11,8 @@ import { listProjectDocumentVersions } from "@/lib/project-practice/versions";
 import { loadCompanionState, persistCompanionState } from "@/lib/companion/server-store";
 import { experimentConfigFromActivity, posttestOpenedAt } from "@/lib/platform/experiment";
 import { loadAiLearningTiming } from "./ai-learning-timing";
+import { readStudentCourseCommon } from "./student-read-coalescing";
+import { loadStudentPrivateRows } from "./student-private-read-bundle";
 
 export class ClassroomProjectionError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) { super(message); this.name = "ClassroomProjectionError"; }
@@ -81,14 +83,16 @@ export type CourseReadScope = { studentId: string };
 
 /** Old UI Course is a read projection, never a stored aggregate or a legacy table. */
 export async function loadInstanceCourse(id: string, db: Prisma.TransactionClient = prisma, readScope?: CourseReadScope): Promise<Course | undefined> {
-  const instance = await db.classroomInstance.findUnique({ where: { id }, include: selectReadInstance });
+  const studentId = readScope?.studentId;
+  const common = <A, T>(operation: string, parameters: A, query: (parameters: A) => PromiseLike<T>) =>
+    readStudentCourseCommon(db, studentId, id, operation, parameters, () => query(parameters));
+  const instance = await common("instance", { where: { id }, include: selectReadInstance }, args => db.classroomInstance.findUnique(args));
   if (!instance) return undefined;
   const offeringId = instance.activity.chapter.offeringId;
   const participationIds = instance.participations.map(p => p.id);
   const groupViewId = (groupId: string) => projectGroupViewId(offeringId, groupId);
-  const studentId = readScope?.studentId;
   const ownParticipationIds = studentId ? instance.participations.filter(p => p.enrollment.userId === studentId).map(p => p.id) : participationIds;
-  const groups = await db.projectGroup.findMany({ where: { offeringId }, include: { members: { where: { leftAt: null }, include: { user: { select: { displayName: true } } } }, board: true, workPlanItems: { where: { activityId: instance.activityId } } } });
+  const groups = await common("groups", { where: { offeringId }, include: { members: { where: { leftAt: null }, include: { user: { select: { displayName: true } } } }, board: true, workPlanItems: { where: { activityId: instance.activityId } } } }, args => db.projectGroup.findMany(args));
   const studentGroupIds = groups.filter(group => group.members.some(member => member.userId === studentId)).map(group => groupViewId(group.id));
   // Some submission-backed collections are classroom-visible under the existing
   // claims scope. Keep those, as well as the student's own and group records.
@@ -101,28 +105,31 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
   ] } : {};
   const runtime = object(instance.runtimeConfig);
   const base = createPblTemplateCourse(id, decodePblTemplate(instance.templateVersion.snapshot) ?? { name: instance.activity.title }, { createdAt: instance.createdAt.toISOString(), updatedAt: instance.updatedAt.toISOString() });
+  const privateRows = studentId && db === prisma ? loadStudentPrivateRows(db, {
+    courseId: id, offeringId, studentId, participationIds, ownParticipationIds, studentGroupIds,
+  }) : null;
   const [submissions, reflections, evaluations, supports, interventions, announcements, todos, resources, signals, directives, events, workspaces, companions, aiLearningTimingByStudent, enrolledCount, showcase, documentVersions, experimentAssignments, experimentDrafts, experimentPosttests] = await Promise.all([
-    db.classroomSubmission.findMany({ where: { participationId: { in: participationIds }, ...submissionScope } }),
-    db.reflection.findMany({ where: { participationId: { in: ownParticipationIds } } }),
-    db.evaluation.findMany({ where: { participationId: { in: participationIds } } }),
-    db.aiSupportRecord.findMany({ where: { offeringId, OR: [{ participationId: { in: participationIds } }, { structuredPayload: { path: ["instanceId"], equals: id } }],
+    privateRows ? privateRows.then(rows => rows.submissions) : db.classroomSubmission.findMany({ where: { participationId: { in: participationIds }, ...submissionScope } }),
+    privateRows ? privateRows.then(rows => rows.reflections) : db.reflection.findMany({ where: { participationId: { in: ownParticipationIds } } }),
+    common("evaluations", { where: { participationId: { in: participationIds } }, select: { metadata: true } }, args => db.evaluation.findMany(args)),
+    privateRows ? privateRows.then(rows => rows.supports) : db.aiSupportRecord.findMany({ where: { offeringId, OR: [{ participationId: { in: participationIds } }, { structuredPayload: { path: ["instanceId"], equals: id } }],
       ...(studentId ? { AND: [{ OR: ["aiAssessmentSuggestions", "aiSupports", "aiContributions", "studentAiDecisions"].map(collection => ({ structuredPayload: { path: ["collection"], equals: collection } })) }] } : {}) } }),
-    db.intervention.findMany({ where: { offeringId, metadata: { path: ["instanceId"], equals: id } } }),
-    db.announcement.findMany({ where: { classroomInstanceId: id, archivedAt: null }, include: { replies: true, createdBy: { select: { displayName: true } } } }),
-    db.todo.findMany({ where: { offeringId, activityId: instance.activityId, status: "ACTIVE" }, include: { completions: true } }),
-    db.resource.findMany({ where: { offeringId, OR: [{ activityId: instance.activityId }, { activityId: null }] }, include: { fileAsset: true } }),
-    db.learningSignal.findMany({ where: { participationId: { in: ownParticipationIds } } }),
-    db.teacherAgentDirective.findMany({ where: { offeringId, OR: [{ participationId: { in: participationIds } }, { payload: { path: ["instanceId"], equals: id } }] } }),
-    db.learningEvent.findMany({ where: { classroomInstanceId: id, ...(studentId ? { userId: studentId } : {}) }, orderBy: { receivedAt: "desc" }, take: 10000 }),
-    db.studentProjectWorkspace.findMany({ where: { participationId: { in: ownParticipationIds } } }),
+    common("interventions", { where: { offeringId, metadata: { path: ["instanceId"], equals: id } } }, args => db.intervention.findMany(args)),
+    common("announcements", { where: { classroomInstanceId: id, archivedAt: null }, include: { replies: true, createdBy: { select: { displayName: true } } } }, args => db.announcement.findMany(args)),
+    common("todos", { where: { offeringId, activityId: instance.activityId, status: "ACTIVE" }, include: { completions: true } }, args => db.todo.findMany(args)),
+    common("resources", { where: { offeringId, OR: [{ activityId: instance.activityId }, { activityId: null }] }, include: { fileAsset: true } }, args => db.resource.findMany(args)),
+    privateRows ? privateRows.then(rows => rows.signals) : db.learningSignal.findMany({ where: { participationId: { in: ownParticipationIds } } }),
+    common("directives", { where: { offeringId, OR: [{ participationId: { in: participationIds } }, { payload: { path: ["instanceId"], equals: id } }] } }, args => db.teacherAgentDirective.findMany(args)),
+    privateRows ? privateRows.then(rows => rows.events) : db.learningEvent.findMany({ where: { classroomInstanceId: id, ...(studentId ? { userId: studentId } : {}) }, orderBy: { receivedAt: "desc" }, take: 10000 }),
+    privateRows ? privateRows.then(rows => rows.workspaces) : db.studentProjectWorkspace.findMany({ where: { participationId: { in: ownParticipationIds } } }),
     loadCompanionState(id, db, studentId),
     loadAiLearningTiming(id, instance.participations.filter(p => !studentId || p.enrollment.userId === studentId).map(p => p.enrollment.userId), db),
-    db.enrollment.count({ where: { offeringId, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } }),
+    common("enrolledCount", { where: { offeringId, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } }, args => db.enrollment.count(args)),
     loadShowcaseState(id, db, studentId),
     listProjectDocumentVersions({ courseId: id, ...(studentId ? { studentId } : {}) }, db),
-    db.experimentAssessmentAssignment.findMany({ where: { instanceId: id }, select: { enrollmentId: true } }),
-    db.experimentAssessmentDraft.findMany({ where: { assignment: { instanceId: id }, phase: "posttest" }, select: { assignment: { select: { enrollmentId: true } } } }),
-    db.experimentAssessmentSubmission.findMany({ where: { instanceId: id, phase: "posttest" }, select: { enrollmentId: true } }),
+    common("experimentAssignments", { where: { instanceId: id }, select: { enrollmentId: true } }, args => db.experimentAssessmentAssignment.findMany(args)),
+    common("experimentDrafts", { where: { assignment: { instanceId: id }, phase: "posttest" }, select: { assignment: { select: { enrollmentId: true } } } }, args => db.experimentAssessmentDraft.findMany(args)),
+    common("experimentSubmissions", { where: { instanceId: id, phase: "posttest" }, select: { enrollmentId: true } }, args => db.experimentAssessmentSubmission.findMany(args)),
   ]);
   const draftEnrollments = new Set(experimentDrafts.map(item => item.assignment.enrollmentId));
   const submittedEnrollments = new Set(experimentPosttests.map(item => item.enrollmentId));

@@ -8,8 +8,7 @@ import { checkDistributedRateLimit } from "@/lib/auth/distributed-rate-limit";
 import { rateLimitedResponse } from "@/lib/auth/rate-limit";
 import { isDatabaseConfigured, prisma } from "@/lib/db/client";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
-import { canAccessLegacyCourse } from "@/lib/platform/access";
-import { ArtifactUploadError, persistArtifactUpload, readArtifactUploadReceipt } from "@/lib/showcase/artifact-upload";
+import { ArtifactUploadError, canReadArtifactCourse, persistArtifactUpload, readArtifactUploadReceipt } from "@/lib/showcase/artifact-upload";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,20 +69,27 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ courseId: string }> },
 ) {
+  const timings: string[] = [];
+  let phaseStart = performance.now();
+  const mark = (name: string) => { const now = performance.now(); timings.push(`${name};dur=${(now - phaseStart).toFixed(2)}`); phaseStart = now; };
+  const success = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Server-Timing': timings.join(', ') } });
   const csrfError = requireSameOrigin(request);
   if (csrfError) return csrfError;
   const auth = await authenticateRequest(request, "student");
   if ("response" in auth) return auth.response;
+  mark('authentication');
   if (auth.claims.role !== "student") return errorResponse("FORBIDDEN", "只有学生可以提交本地成果。", 403);
   const studentId = auth.claims.sub!;
   if (!isDatabaseConfigured()) return errorResponse("DATABASE_REQUIRED", "本地成果提交需要连接数据库。", 503);
   const { courseId } = await context.params;
-  if (!(await canAccessLegacyCourse(auth.claims, courseId, "read"))) return errorResponse("COURSE_LOCKED", "课程当前不允许提交成果。", 403);
+  if (!(await canReadArtifactCourse(studentId, courseId))) return errorResponse("COURSE_LOCKED", "课程当前不允许提交成果。", 403);
+  mark('authorization');
   let targetPath: string | undefined;
   let databaseCommitAttempted = false;
   let committed = false;
   try {
     const form = await request.formData();
+    mark('form');
     const files = form.getAll("file");
     if (files.length !== 1 || !(files[0] instanceof File)) return errorResponse("FILE_REQUIRED", "请选择一个成果文件。", 400);
     const file = files[0];
@@ -114,11 +120,14 @@ export async function POST(
     const requestId = metadata.data.requestId ?? headerRequestId
       ?? (legacyTraceId && legacyTraceId.length <= 160 ? legacyTraceId : undefined) ?? randomUUID();
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const input = { courseId, studentId, requestId, title, originalName, mimeType: allowed.mimeType, size: bytes.length, sha256, kind: allowed.kind };
+    const input = { courseId, studentId, sessionVersion: auth.claims.sv, requestId, title, originalName, mimeType: allowed.mimeType, size: bytes.length, sha256, kind: allowed.kind };
+    mark('validation');
     const previous = await readArtifactUploadReceipt(input);
-    if (previous) return Response.json(previous);
+    mark('receipt');
+    if (previous) return success(previous);
     const limit = await checkDistributedRateLimit({ namespace: 'showcase-artifact-submit', key: `${studentId}:${courseId}`, limit: 10, windowSeconds: 60 * 60 });
     if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
+    mark('rate_limit');
     const uploadId = randomUUID();
     const versionId = randomUUID();
     const storedName = `${uploadId}${extension}`;
@@ -127,13 +136,16 @@ export async function POST(
     await writeFile(targetPath, bytes, { flag: "wx", mode: 0o600 });
     const info = await stat(targetPath);
     if (info.size !== bytes.length) throw new Error('Incomplete artifact file write');
+    mark('file');
     databaseCommitAttempted = true;
     const durable = await persistArtifactUpload({ ...input, uploadId, versionId, storageKey: storedName });
+    mark('commit');
     committed = !durable.duplicate;
     if (durable.duplicate) {
       await unlink(targetPath).catch(() => undefined);
       targetPath = undefined;
-      return Response.json(durable.response);
+      mark('file_cleanup');
+      return success(durable.response);
     }
     await publishCourseEvent(courseId, {
       type: "course-updated",
@@ -147,7 +159,8 @@ export async function POST(
         studentId,
       },
     }).catch(() => undefined);
-    return Response.json(durable.response, { status: 201 });
+    mark('notification');
+    return success(durable.response, 201);
   } catch (error) {
     if (databaseCommitAttempted && !committed && targetPath) {
       try { committed = Boolean(await prisma.fileAsset.findUnique({ where: { storageKey: path.basename(targetPath) }, select: { id: true } })); }

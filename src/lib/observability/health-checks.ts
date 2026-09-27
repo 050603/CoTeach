@@ -5,6 +5,8 @@
 
 import { prisma, isDatabaseConfigured } from "@/lib/db/client";
 import { getRedisClient } from "@/lib/redis/client";
+import { webSocketReadiness } from "@/lib/realtime/websocket-lifecycle";
+import { documentConversionHealth } from "@/lib/project-practice/document-conversion-pool";
 import { randomUUID } from "node:crypto";
 import {
   getServerProviders,
@@ -140,10 +142,13 @@ export async function runReadinessChecks(): Promise<ReadinessResult> {
   ]);
 
   const dependencies: Record<string, CheckResult> = { db, llm, fs };
+  if (process.env.NODE_ENV === "production") dependencies.documentConversion = documentConversionHealth();
   // Surface `redis` only when it was actually checked (configured). The
   // legacy openmaic/health route doesn't expect a `redis` field, so callers
   // that want it should use /api/health/ready.
   if (process.env.REDIS_URL) dependencies.redis = redisResult;
+
+  if (process.env.ENABLE_WEBSOCKET === "true") dependencies.websocket = webSocketReadiness();
 
   const ok = Object.values(dependencies).every((d) => d.ok);
   return { ok, dependencies };

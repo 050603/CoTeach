@@ -15,18 +15,22 @@ const store = vi.hoisted(() => ({
   persistAttempt: vi.fn(),
   finishTutor: vi.fn(),
   failTutor: vi.fn(),
+  authenticate: vi.fn(),
+  scope: vi.fn(),
+  access: vi.fn(),
   claims: null as { role: string; sub: string } | null,
 }));
 vi.mock("@/lib/ai-collaboration/audit-outbox", () => ({ appendDurableAiInteractionEvents: vi.fn(async () => {}) }));
 vi.mock("@/lib/db/client", () => ({ isDatabaseConfigured: () => store.durable, prisma: {} }));
 vi.mock("@/lib/courses/knowledge-lecture-attempts", async (importOriginal) => ({ ...await importOriginal<typeof import("@/lib/courses/knowledge-lecture-attempts")>(), persistKnowledgeLectureAttempt: store.persistAttempt, loadKnowledgeLectureContext: async () => store.course }));
 vi.mock("@/lib/courses/knowledge-tutor-requests", () => ({ claimTutorRequest: store.claimTutor, finishTutorRequest: store.finishTutor, failTutorRequest: store.failTutor }));
-vi.mock("@/lib/auth/request-guards", () => ({ requireSameOrigin: () => null }));
+vi.mock("@/lib/auth/request-guards", () => ({ requireSameOrigin: () => null, authenticateRequest: store.authenticate }));
+vi.mock("@/lib/courses/student-state-scope", () => ({ resolveStudentStateScope: store.scope }));
 vi.mock("@/lib/auth/session", () => ({
   isAuthConfigured: () => store.authConfigured,
   readAuthFromRequest: vi.fn(async () => store.claims),
 }));
-vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: () => true }));
+vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: store.access }));
 vi.mock("@/lib/session/server-store", () => ({
   getCourse: vi.fn(async () => store.course),
   updateCourse: vi.fn(async (_courseId: string, updater: (course: Course) => Course) => {
@@ -56,6 +60,9 @@ describe("knowledge lecture server-authoritative grading", () => {
     store.authConfigured = false;
     store.durable = false;
     store.claims = null;
+    store.authenticate.mockImplementation(async () => store.claims ? { claims: { ...store.claims, sv: 1 } } : { response: Response.json({ code: "UNAUTHORIZED" }, { status: 401 }) });
+    store.scope.mockResolvedValue({ accessible: true });
+    store.access.mockResolvedValue(true);
     vi.mocked(resolveModelFromRequest).mockResolvedValue({ model: {}, thinkingConfig: undefined } as never);
     vi.mocked(getKnowledgeLectureTutorSettings).mockResolvedValue({ modelString: "" } as never);
     vi.mocked(callLLM).mockResolvedValue({ text: '{"score":5,"comment":"理解了核心概念"}' } as never);
@@ -179,6 +186,45 @@ describe("knowledge lecture server-authoritative grading", () => {
     store.claims = { role: "student", sub: "another-student" };
     expect((await POST(request({ "choice-1": "A", "short-1": "作答" }))).status).toBe(403);
     expect(attempts()).toHaveLength(0);
+  });
+
+  it("rejects a revoked session before new submission or accepted-answer replay", async () => {
+    store.authConfigured = true; store.durable = true;
+    store.claims = { role: "student", sub: "student-1" };
+    store.persistAttempt.mockImplementation(async input => input.attempt);
+    const answers = { "choice-1": "A", "short-1": "" };
+    expect((await POST(request(answers))).status).toBe(200);
+    expect(store.persistAttempt).toHaveBeenCalledWith(expect.objectContaining({ sessionVersion: 1 }));
+    store.authenticate.mockResolvedValue({ response: Response.json({ code: "UNAUTHORIZED" }, { status: 401 }) });
+    expect((await POST(request(answers))).status).toBe(401);
+    expect((await POST(request(answers, { quizOutlineId: "new-quiz" }))).status).toBe(401);
+    expect(store.persistAttempt).toHaveBeenCalledTimes(1);
+    expect(store.scope).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses narrow instance authorization, falls back only for null namespaces and never overrides a denial", async () => {
+    store.authConfigured = true; store.durable = true; store.claims = { role: "student", sub: "student-1" };
+    store.persistAttempt.mockImplementation(async input => input.attempt);
+    const answers = { "choice-1": "A", "short-1": "" };
+    expect((await POST(request(answers))).status).toBe(200);
+    expect(store.scope).toHaveBeenCalledWith(expect.anything(), "course-1", "student-1");
+    expect(store.access).not.toHaveBeenCalled();
+    store.scope.mockResolvedValue({ accessible: false });
+    expect((await POST(request(answers))).status).toBe(403);
+    expect(store.access).not.toHaveBeenCalled();
+    store.scope.mockResolvedValue(null);
+    expect((await POST(request(answers))).status).toBe(200);
+    expect(store.access).toHaveBeenCalledWith(expect.objectContaining({ sub: "student-1" }), "course-1", "read");
+  });
+
+  it("allows an authorized teacher to retry accepted grading without submitting a student's answer", async () => {
+    await POST(request({ "choice-1": "A", "short-1": "" }));
+    store.authConfigured = true; store.claims = { role: "teacher", sub: "teacher-1" };
+    expect((await POST(request({}, { action: "retry-grading" }))).status).toBe(200);
+    expect(store.authenticate).toHaveBeenCalledWith(expect.anything(), undefined);
+    expect(store.scope).not.toHaveBeenCalled();
+    expect(store.access).toHaveBeenCalledWith(expect.objectContaining({ role: "teacher" }), "course-1", "read");
+    expect((await POST(request({ "choice-1": "A", "short-1": "" }))).status).toBe(403);
   });
 
   it("keeps source choices for tutoring", async () => {

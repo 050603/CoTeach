@@ -48,7 +48,11 @@ function assertRawAttempts(rawFacts, outputs, token, context, completed) {
   for (const [index, output] of outputs.entries()) {
     assert.equal(output.attempt, index + 1);
     assert.ok(['valid', 'invalid-json', 'invalid-schema'].includes(output.validation));
-    if (completed) assert.equal(output.validation, index === outputs.length - 1 ? 'valid' : 'invalid-schema');
+    if (completed && index === outputs.length - 1) assert.equal(output.validation, 'valid');
+    if (output.validation === 'valid') {
+      assert.ok(Array.isArray(output.policyReasonCodes), 'Every complete proposal must retain its strict policy reasons');
+      if (index < outputs.length - 1) assert.deepEqual(output.policyReasonCodes, ['EVIDENCE_NOT_INDEPENDENT'], 'Only overlapping evidence can trigger a semantic repair');
+    }
     const matches = rawFacts.filter(fact => fact.payload.detail.modelAttempt === output.attempt);
     assert.equal(matches.length, 1, 'Each model attempt requires one immutable raw fact');
     const raw = matches[0];
@@ -56,6 +60,7 @@ function assertRawAttempts(rawFacts, outputs, token, context, completed) {
     assert.equal(raw.actor, 'system'); assert.ok(typeof raw.content === 'string');
     assert.equal(createHash('sha256').update(raw.content).digest('hex'), output.sha256);
     assert.equal(raw.payload.detail.rawSha256, output.sha256); assert.equal(raw.payload.detail.rawLength, raw.content.length);
+    assert.deepEqual(raw.payload.detail.policyReasonCodes, output.policyReasonCodes, 'Policy reason manifest differs from the immutable raw fact');
     assert.equal(raw.payload.detail.validation, output.validation); assert.equal(raw.payload.detail.requestAttemptId, token);
     assert.equal(raw.payload.detail.documentVersion, digest(body.documentHtml)); assert.equal(raw.payload.detail.action, body.action);
     assert.equal(raw.payload.detail.workspaceKind, body.workspaceKind);
@@ -109,7 +114,7 @@ export async function verifyCapacityDocumentComments({ users, fixture, request, 
         const task = await db.aiTask.findUniqueOrThrow({ where: { id: taskId }, include: { conversation: true } });
         assertTaskIdentity(task, context);
         assert.equal(task.status, 'FAILED', 'Unknown/running/completed task after HTTP failure must stop acceptance');
-        assert.ok(['AI_RESPONSE_INVALID_STRUCTURE', 'AI_REVIEW_INVALID_STRUCTURE', 'AI_REVIEW_FAILED', 'AI_PROACTIVE_REVIEW_BUSY'].includes(task.error));
+        assert.ok(['AI_RESPONSE_INVALID_STRUCTURE', 'AI_REVIEW_INVALID_STRUCTURE', 'AI_REVIEW_FAILED', 'AI_PROACTIVE_REVIEW_BUSY', 'AI_COLLABORATION_TIMEOUT'].includes(task.error));
         assert.equal(task.output, null);
         assert.ok(!failedSnapshots.some(item => item.token === task.input.token), 'A retry must have its own attempt token');
         const facts = await db.aiInteractionEvent.findMany({ where: { requestId: body.requestId }, include: { conversation: true } });
@@ -122,6 +127,12 @@ export async function verifyCapacityDocumentComments({ users, fixture, request, 
         assert.equal(terminal.actor, 'system'); assert.equal(terminal.content, task.error);
         assert.equal(detail.action, body.action); assert.equal(detail.workspaceKind, body.workspaceKind);
         assert.equal(detail.documentVersion, digest(body.documentHtml));
+        if (task.error === 'AI_COLLABORATION_TIMEOUT') {
+          assert.equal(error.status, 504);
+          assert.equal(detail.failureKind, 'timeout');
+          assert.equal(detail.deadlineMs, 40000);
+          assert.ok(Number.isFinite(detail.elapsedMs) && detail.elapsedMs >= 0);
+        }
         const raws = current.filter(fact => fact.eventType === 'response' && fact.payload?.detail?.kind === 'model-output');
         assertRawAttempts(raws, detail.rawOutputs, task.input.token, context, false);
         if (['AI_RESPONSE_INVALID_STRUCTURE', 'AI_REVIEW_INVALID_STRUCTURE'].includes(task.error)) {
@@ -176,6 +187,7 @@ export async function verifyCapacityDocumentComments({ users, fixture, request, 
     const policy = policyFacts[0];
     assertRawAttempts(rawFacts, decision.rawOutputs, task.input.token, context, true);
     assert.equal(decision.rawSha256, decision.rawOutputs.at(-1).sha256, 'Decision must use the final recorded output');
+    assert.deepEqual(decision.reasonCodes, decision.rawOutputs.at(-1).policyReasonCodes, 'Final decision must match the final raw policy assessment');
     assert.equal(policy.actor, 'system'); assert.equal(policy.taskId, taskId);
     assert.equal(policy.conversationId, task.conversationId);
     assert.equal(policy.idempotencyKey, `document-review-decision:${participation.id}:${body.requestId}`);

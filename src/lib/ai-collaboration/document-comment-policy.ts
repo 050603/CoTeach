@@ -168,6 +168,9 @@ export function buildProactiveDocumentCommentPrompts(input: {
       '确有必要时示例：{"shouldComment":true,"severity":"critical","issueType":"数据矛盾","quotedText":"目标段落中逐字连续、唯一的原文","evidenceSource":"document","evidenceQuote":"成果中逐字复制的独立依据","impact":"会怎样影响当前项目","needsInterventionNow":true,"comment":"给学生看的批注"}。',
       'shouldComment、needsInterventionNow 必须是布尔值。severity 只可选择 critical、improvement、style 中一个；evidenceSource 只可选择 document 或 course。issueType 只可选择 数据矛盾、要求冲突、关键推理、关键单位、核心事实核验、关键含义、关键方案风险 中一个，不得把多个值用竖线连接。',
       '判断数据或推理矛盾时，quotedText 引用被质疑的具体断言，evidenceQuote 引用支持判断的另一处依据；两者可以在同一段落中，但不能把争议断言原样当作它自己的依据。',
+      'quotedText 只引用最小的被质疑断言，不要引用同时包含断言与依据的整段；quotedText 与 evidenceQuote 不能相互包含。例如原文是「8 人中 5 人支持，因此所有同学都支持」，quotedText 可为「所有同学都支持」，evidenceQuote 可为「8 人中 5 人支持」。仅当实际原文存在这些内容时才能这样引用，不要复制示例充当本次证据。',
+      '输出前逐项检查必需字段，尤其 evidenceSource；所有字符串内的双引号必须按 JSON 规则转义，正文引用可用中文引号「」，不要让未转义的双引号截断 impact 或 comment 字符串。',
+
     ].join('\n'),
     user: [
       '【项目与课程要求】',

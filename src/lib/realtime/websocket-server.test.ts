@@ -1,6 +1,8 @@
 // @vitest-environment node
 
 import WebSocket from "ws";
+import { createServer } from "node:net";
+import { webSocketReadiness } from "./websocket-lifecycle";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signStudentToken } from "@/lib/auth/session";
@@ -10,6 +12,7 @@ import {
 } from "./event-bus";
 import {
   closeWebSocketServer,
+  getWebSocketServer,
   startWebSocketServer,
 } from "./websocket-server";
 
@@ -34,9 +37,56 @@ describe("realtime WebSocket authorization", () => {
     delete process.env.JWT_SECRET;
   });
 
+  it("awaits the listening event, shares concurrent startup and clears readiness on close", async () => {
+    const first = startWebSocketServer(0);
+    expect(webSocketReadiness().ok).toBe(false);
+    expect(startWebSocketServer(0)).toBe(first);
+    const server = await first;
+    expect(server.address()).toBeTruthy();
+    expect(webSocketReadiness().ok).toBe(true);
+    expect(await startWebSocketServer(0)).toBe(server);
+    const closing = closeWebSocketServer();
+    expect(webSocketReadiness().ok).toBe(false);
+    await closing;
+    expect(getWebSocketServer()).toBeNull();
+  });
+
+  it("rejects an occupied port instead of advertising readiness and permits retry", async () => {
+    const occupied = createServer();
+    await new Promise<void>(resolve => occupied.listen(0, "127.0.0.1", resolve));
+    const address = occupied.address();
+    if (!address || typeof address === "string") throw Error("Missing port");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(startWebSocketServer(address.port)).rejects.toMatchObject({ code: "EADDRINUSE" });
+      expect(webSocketReadiness().ok).toBe(false);
+      expect(getWebSocketServer()).toBeNull();
+    } finally { log.mockRestore(); await new Promise<void>(resolve => occupied.close(() => resolve())); }
+    const server = await startWebSocketServer(0);
+    expect(server.address()).toBeTruthy(); expect(webSocketReadiness().ok).toBe(true);
+  });
+
+  it("can close during bind without publishing ready or leaving a listener behind", async () => {
+    const starting = startWebSocketServer(0);
+    const result = starting.catch(error => error);
+    await closeWebSocketServer();
+    expect(await result).toBeInstanceOf(Error);
+    expect(getWebSocketServer()).toBeNull(); expect(webSocketReadiness().ok).toBe(false);
+    expect((await startWebSocketServer(0)).address()).toBeTruthy();
+  });
+
+  it("shares readiness across separately evaluated server entry modules", async () => {
+    const server = await startWebSocketServer(0);
+    vi.resetModules();
+    const reloaded = await import("./websocket-lifecycle");
+    const another = await import("./websocket-server");
+    expect(reloaded.webSocketReadiness().ok).toBe(true);
+    expect(await another.startWebSocketServer(0)).toBe(server);
+    await another.closeWebSocketServer(); expect(webSocketReadiness().ok).toBe(false);
+  });
+
   it("delivers invalidations for the signed student course and rejects another course", async () => {
-    const server = startWebSocketServer(0);
-    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const server = await startWebSocketServer(0);
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Missing WebSocket port");
 
@@ -91,8 +141,7 @@ describe("realtime WebSocket authorization", () => {
   });
 
   it("closes cleanly when the V2 permission database is unavailable", async () => {
-    const server = startWebSocketServer(0);
-    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const server = await startWebSocketServer(0);
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Missing WebSocket port");
     const { token, cookieName } = await signStudentToken({ userId: "student-1", studentName: "Student", sessionVersion: 1 });
@@ -107,8 +156,7 @@ describe("realtime WebSocket authorization", () => {
   });
 
   it("fans one projection control event out to more than 30 students within two seconds", async () => {
-    const server = startWebSocketServer(0);
-    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const server = await startWebSocketServer(0);
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Missing WebSocket port");
 

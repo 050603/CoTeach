@@ -38,7 +38,7 @@ function setup(count = 4, noComment = false) {
     const documentVersion = digest(body.documentHtml);
     const decision = { outcome: noComment ? 'no-comment' : 'comment', reasonCodes: noComment === 'filtered' ? ['EVIDENCE_NOT_INDEPENDENT'] : noComment ? ['MODEL_NO_COMMENT'] : [], modelShouldComment,
       reviewVersion: 4, action: body.action, documentVersion, blockId: body.blockId, blockIndex: body.blockIndex,
-      targetText: body.targetText, rawSha256, rawOutputs: [{ attempt: 1, sha256: rawSha256, validation: 'valid' }], commentThreadId: noComment ? null : logical };
+      targetText: body.targetText, rawSha256, rawOutputs: [{ attempt: 1, sha256: rawSha256, validation: 'valid', policyReasonCodes: noComment === 'filtered' ? ['EVIDENCE_NOT_INDEPENDENT'] : noComment ? ['MODEL_NO_COMMENT'] : [] }], commentThreadId: noComment ? null : logical };
     const response = { commentThread: noComment ? null : thread, requestId: body.requestId, status: 'completed', documentVersion, reviewDecision: decision };
     const taskId = `document-ai-${digest([conversation.participationId, body.requestId])}`;
     const token = `token-${user.id}`;
@@ -48,7 +48,7 @@ function setup(count = 4, noComment = false) {
         fingerprint: digest({ action: body.action, courseId: body.courseId, stageKey: body.stageKey, workspaceKind: body.workspaceKind, documentHtml: body.documentHtml,
           targetText: body.targetText, blockId: body.blockId, blockIndex: body.blockIndex }) }, output: { schemaVersion: 1, response } };
     const rawFact = { ...ownership, idempotencyKey: `legacy-ai:${digest([conversation.participationId, user.id, `document-review-model:${token}:1`])}`, requestId: body.requestId, eventType: 'response', actor: 'system', content: raw, conversation,
-      payload: { legacy: { source: 'proactive-comment' }, detail: { kind: 'model-output', action: body.action, requestAttemptId: token, modelAttempt: 1, validation: 'valid', rawSha256, rawLength: raw.length, documentVersion, workspaceKind: body.workspaceKind } } };
+      payload: { legacy: { source: 'proactive-comment' }, detail: { kind: 'model-output', action: body.action, requestAttemptId: token, modelAttempt: 1, validation: 'valid', policyReasonCodes: decision.reasonCodes, rawSha256, rawLength: raw.length, documentVersion, workspaceKind: body.workspaceKind } } };
     const policyFact = { ...ownership, requestId: body.requestId, eventType: 'policy', actor: 'system', taskId, conversation, conversationId: physical,
       idempotencyKey: `document-review-decision:${conversation.participationId}:${body.requestId}`,
       payload: { legacy: { source: 'proactive-comment' }, detail: { kind: 'document-comment-review', ...decision, requestAttemptId: token, workspaceKind: body.workspaceKind } } };
@@ -165,11 +165,11 @@ function withRepair(args, corrupt) {
       const row = args.rows.get('student-0'); const final = row.requestFacts[0];
       const prior = structuredClone(final); prior.content = '{"shouldComment":true,"comment":"missing source"}';
       prior.payload.detail.rawSha256 = createHash('sha256').update(prior.content).digest('hex');
-      prior.payload.detail.rawLength = prior.content.length; prior.payload.detail.validation = 'invalid-schema';
+      prior.payload.detail.rawLength = prior.content.length; prior.payload.detail.validation = 'invalid-schema'; delete prior.payload.detail.policyReasonCodes;
       final.payload.detail.modelAttempt = 2;
       final.idempotencyKey = `legacy-ai:${digest([final.participationId, final.userId, `document-review-model:${row.task.input.token}:2`])}`;
       const rawOutputs = [{ attempt: 1, sha256: prior.payload.detail.rawSha256, validation: 'invalid-schema' },
-        { attempt: 2, sha256: final.payload.detail.rawSha256, validation: 'valid' }];
+        { attempt: 2, sha256: final.payload.detail.rawSha256, validation: 'valid', policyReasonCodes: final.payload.detail.policyReasonCodes }];
       response.reviewDecision.rawOutputs = rawOutputs;
       row.requestFacts.find(fact => fact.eventType === 'policy').payload.detail.rawOutputs = rawOutputs;
       row.requestFacts.unshift(prior);
@@ -189,7 +189,7 @@ for (const corrupt of ['missing', 'overwritten', 'wrong-final']) test(`rejects r
   await assert.rejects(verifyCapacityDocumentComments(withRepair(setup(1), corrupt)), AggregateError);
 });
 
-function withHttpFailure(args, { twice = false, corrupt, noRaw = false } = {}) {
+function withHttpFailure(args, { twice = false, corrupt, noRaw = false, timeout = false } = {}) {
   const request = args.request; let calls = 0; let successful; const historical = [];
   args.retryDelayMs = 0;
   args.request = async (...input) => {
@@ -205,13 +205,15 @@ function withHttpFailure(args, { twice = false, corrupt, noRaw = false } = {}) {
       raw.content = '{"shouldComment":true,"comment":"missing fields"}';
       const sha256 = createHash('sha256').update(raw.content).digest('hex');
       raw.idempotencyKey = `legacy-ai:${digest([raw.participationId, raw.userId, `document-review-model:${token}:1`])}`;
+      delete raw.payload.detail.policyReasonCodes;
       Object.assign(raw.payload.detail, { requestAttemptId: token, validation: 'invalid-schema', rawSha256: sha256, rawLength: raw.content.length });
       const terminal = structuredClone(raw);
-      terminal.eventType = 'error'; terminal.content = noRaw ? 'AI_REVIEW_FAILED' : 'AI_REVIEW_INVALID_STRUCTURE';
+      terminal.eventType = 'error'; terminal.content = timeout ? 'AI_COLLABORATION_TIMEOUT' : noRaw ? 'AI_REVIEW_FAILED' : 'AI_REVIEW_INVALID_STRUCTURE';
       terminal.idempotencyKey = `legacy-ai:${digest([raw.participationId, raw.userId, `document-review-error:${token}`])}`;
       terminal.payload.detail = { action: 'proactive-document-comment', requestAttemptId: token,
         documentVersion: row.task.input.documentVersion, workspaceKind: 'document',
-        rawOutputs: noRaw ? [] : [{ attempt: 1, sha256, validation: 'invalid-schema' }] };
+        rawOutputs: noRaw ? [] : [{ attempt: 1, sha256, validation: 'invalid-schema' }],
+        ...(timeout ? { failureKind: 'timeout', deadlineMs: 40000, elapsedMs: 40031 } : {}) };
       row.task.status = 'FAILED'; row.task.input.token = token; row.task.error = terminal.content; row.task.output = null;
       row.messages = []; row.messageFacts = [];
       historical.push(...(noRaw ? [] : [raw]), terminal); row.requestFacts = historical;
@@ -224,7 +226,8 @@ function withHttpFailure(args, { twice = false, corrupt, noRaw = false } = {}) {
       if (corrupt === 'empty-structure') { row.requestFacts = [terminal]; terminal.payload.detail.rawOutputs = []; }
       if (corrupt === 'missing-second-repair') row.task.error = terminal.content = 'AI_RESPONSE_INVALID_STRUCTURE';
       if (corrupt === 'fake-messages') row.messages = successful.messages;
-      throw Object.assign(new Error('injected HTTP service failure'), { status: corrupt === 'conflict' ? 409 : 503 });
+      if (corrupt === 'missing-timeout-detail') delete terminal.payload.detail.failureKind;
+      throw Object.assign(new Error('injected HTTP service failure'), { status: corrupt === 'conflict' ? 409 : timeout ? 504 : 503 });
     }
     if (calls === 2) {
       const restored = structuredClone(successful); restored.task.input.token = 'recovered-token';
@@ -269,6 +272,17 @@ test('provider failure before a raw output is accepted only with an explicit emp
   const summary = await verifyCapacityDocumentComments(args);
   assert.equal(summary.requestAuditFacts, 4); assert.equal(summary.qualityFailures[0].errorCode, 'AI_REVIEW_FAILED');
 });
+test('retains an explicitly classified 504 timeout despite a successful retry', async () => {
+  const { args } = withHttpFailure(setup(1), { noRaw: true, timeout: true });
+  const summary = await verifyCapacityDocumentComments(args);
+  assert.equal(summary.qualityFailures[0].errorCode, 'AI_COLLABORATION_TIMEOUT');
+  assert.equal(summary.firstAttemptFailureRate, 1);
+  assert.equal(summary.qualityFailures[0].recovered, true);
+});
+test('rejects a timeout without its durable classified deadline evidence', async () => {
+  const { args } = withHttpFailure(setup(1), { noRaw: true, timeout: true, corrupt: 'missing-timeout-detail' });
+  await assert.rejects(verifyCapacityDocumentComments(args), AggregateError);
+});
 test('does not begin a retry when its delay would exhaust the 60 second total budget', async () => {
   const { args, calls } = withHttpFailure(setup(1)); args.retryDelayMs = 60000;
   const summary = await verifyCapacityDocumentComments(args);
@@ -287,4 +301,32 @@ test('ordinary conversation timestamp changes do not mutate immutable failure fa
   const { args } = withHttpFailure(setup(1), { corrupt: 'conversation-updated' });
   const summary = await verifyCapacityDocumentComments(args);
   assert.equal(summary.qualityFailures[0].recovered, true);
+});
+
+for (const initial of ['invalid-json', 'overlap']) test(`reconciles retained ${initial} and final strict decision after bounded repair`, async () => {
+  const args = withRepair(setup(1)); const request = args.request;
+  args.request = async (...input) => {
+    const response = await request(...input); const row = args.rows.get('student-0');
+    const first = response.reviewDecision.rawOutputs[0]; const raw = row.requestFacts[0];
+    first.validation = raw.payload.detail.validation = initial === 'overlap' ? 'valid' : 'invalid-json';
+    if (initial === 'overlap') first.policyReasonCodes = raw.payload.detail.policyReasonCodes = ['EVIDENCE_NOT_INDEPENDENT'];
+    return response;
+  };
+  const summary = await verifyCapacityDocumentComments(args);
+  assert.equal(summary.messages, 2); assert.equal(summary.requestAuditFacts, 4);
+});
+for (const defect of ['missing-policy', 'changed-policy', 'unsupported-repair']) test(`rejects ${defect} in a repaired raw manifest`, async () => {
+  const args = withRepair(setup(1)); const request = args.request;
+  args.request = async (...input) => {
+    const response = await request(...input); const row = args.rows.get('student-0');
+    const raw = row.requestFacts.find(item => item.payload.detail.modelAttempt === 2);
+    if (defect === 'missing-policy') delete raw.payload.detail.policyReasonCodes;
+    if (defect === 'changed-policy') raw.payload.detail.policyReasonCodes = ['MODEL_NO_COMMENT'];
+    if (defect === 'unsupported-repair') {
+      const first = response.reviewDecision.rawOutputs[0]; first.validation = row.requestFacts[0].payload.detail.validation = 'valid';
+      first.policyReasonCodes = row.requestFacts[0].payload.detail.policyReasonCodes = ['EVIDENCE_NOT_IN_COURSE'];
+    }
+    return response;
+  };
+  await assert.rejects(verifyCapacityDocumentComments(args), AggregateError);
 });

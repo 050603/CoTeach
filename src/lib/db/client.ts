@@ -1,6 +1,6 @@
 // Prisma client singleton.
-// Avoids exhausting DB connections in dev (Next.js hot reload would otherwise
-// create a new PrismaClient on every reload).
+// Share across hot reloads and production entry bundles. Next can compile this
+// source into distinct module IDs for instrumentation and request handlers.
 
 import { PrismaClient } from "@prisma/client";
 
@@ -18,9 +18,7 @@ export const prisma: PrismaClient =
         : ["error"],
   });
 
-if (process.env.NODE_ENV !== "production") {
-  globalThis.__openPblPrisma = prisma;
-}
+globalThis.__openPblPrisma = prisma;
 
 const providerDatabaseUrl = process.env.PROVIDER_CONFIG_DATABASE_URL?.trim();
 

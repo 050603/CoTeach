@@ -9,7 +9,7 @@ import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guard
 import { checkDistributedRateLimit } from "@/lib/auth/distributed-rate-limit";
 import { rateLimitedResponse } from "@/lib/auth/rate-limit";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
-import { resolveUploadScope } from "@/lib/uploads/scope";
+import { resolveStudentClassroomUploadScope, resolveUploadScope } from "@/lib/uploads/scope";
 import { persistUpload } from "@/lib/uploads/assets";
 import { persistUploadOnce, readUploadReceipt, uploadFingerprint, UploadRequestConflict } from "@/lib/uploads/idempotency";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
@@ -207,10 +207,12 @@ export async function POST(request: Request) {
     if (auth.claims.role === "student" && !courseId) {
       throw new UploadHttpError("FORBIDDEN", "学生只能向当前课程上传文件。", 403);
     }
-    if (courseId && !(await canAccessLegacyCourse(auth.claims, courseId, "write"))) {
+    const studentClassroom = courseId && auth.claims.role === "student"
+      ? await resolveStudentClassroomUploadScope(auth.claims, courseId) : null;
+    if (courseId && (studentClassroom ? !studentClassroom.allowed : !(await canAccessLegacyCourse(auth.claims, courseId, "write")))) {
       throw new UploadHttpError("FORBIDDEN", "课程当前不允许上传文件。", 403);
     }
-    const storageScope = courseId ? await resolveUploadScope(courseId) : null;
+    const storageScope = studentClassroom?.allowed ? studentClassroom.scope : courseId ? await resolveUploadScope(courseId) : null;
     if (courseId && (!storageScope || (storageScope.templateOwnerId && storageScope.templateOwnerId !== auth.claims.sub))) {
       throw new UploadHttpError('COURSE_NOT_FOUND', '课程不存在或无权上传。', 404);
     }

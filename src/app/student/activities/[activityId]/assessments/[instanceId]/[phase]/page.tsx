@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { StudentShell } from "@/components/platform/student-shell";
-import { StudentExperimentAssessment } from "@/components/platform/student-experiment-assessment";
+import { StudentExperimentAssessmentEntry } from "@/components/platform/student-experiment-assessment-entry";
 
 export default async function StudentAssessmentPage({ params }: {
   params: Promise<{ activityId: string; instanceId: string; phase: string }>;
@@ -15,7 +15,7 @@ export default async function StudentAssessmentPage({ params }: {
         <Link className="inline-flex min-h-11 items-center rounded-lg px-3 text-sm font-semibold text-[var(--pbl-student)] hover:bg-[var(--pbl-student-soft)]" href={activityHref}>← 返回课堂活动</Link>
         <span className="text-sm font-semibold text-[var(--pbl-text-muted)]">课堂{phase === "pretest" ? "前测" : "后测"}</span>
       </nav>
-      <StudentExperimentAssessment instanceId={instanceId} layout="full" phase={phase} />
+      <StudentExperimentAssessmentEntry activityId={activityId} instanceId={instanceId} phase={phase} />
     </div>
   </StudentShell>;
 }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -24,6 +25,10 @@ if (args[0] === "start" || args[0] === "prepare") {
     console.error(`Production build not found in ${distDir}; run pnpm build first.`);
     process.exit(1);
   }
+
+  const workerManifest = JSON.parse(await readFile(path.join(standaloneDir, "workers/docx-converter-manifest.json"), "utf8"));
+  const workerBytes = await readFile(path.join(standaloneDir, "workers/docx-converter.cjs"));
+  if (workerManifest.protocol !== 1 || workerManifest.sha256 !== createHash("sha256").update(workerBytes).digest("hex")) throw new Error("Incomplete DOCX worker release artifact");
 
   const buildId = (await readFile(path.resolve(distDir, "BUILD_ID"), "utf8")).trim();
   const releaseDir = path.resolve(".openpbl-runtime", "releases", buildId);
@@ -61,6 +66,10 @@ if (args[0] === "start" || args[0] === "prepare") {
     });
     await writeFile(releaseReadyFile, `${buildId}\n`, "utf8");
   }
+
+  const releasedManifest = JSON.parse(await readFile(path.join(releaseDir, "workers/docx-converter-manifest.json"), "utf8"));
+  const releasedWorker = await readFile(path.join(releaseDir, "workers/docx-converter.cjs"));
+  if (releasedManifest.sha256 !== workerManifest.sha256 || releasedManifest.sha256 !== createHash("sha256").update(releasedWorker).digest("hex")) throw new Error("Immutable release DOCX worker does not match its build");
 
   // Prepare the immutable release before restarting the service. Its startup
   // probes can take long enough for another build to clear the staging folder.

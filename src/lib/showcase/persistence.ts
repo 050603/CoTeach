@@ -45,22 +45,22 @@ export function createShowcaseStore(db: Prisma.TransactionClient = prisma) {
       presentingGroupId: typeof config.presentingGroupId === "string" ? config.presentingGroupId : null, presentingStudentId: typeof config.presentingStudentId === "string" ? config.presentingStudentId : null };
   };
   const listStudents = async (query: Query) => {
-    const rows = await db.classroomParticipation.findMany({ where: { instanceId: str(query.where?.courseId) }, include: { enrollment: { include: { user: true } } } });
+    const rows = await db.classroomParticipation.findMany({ where: { instanceId: str(query.where?.courseId) }, select: { instanceId: true, enrollment: { select: { userId: true, joinedAt: true, user: { select: { displayName: true } } } } } });
     return selectRows(rows.map((row) => ({ id: row.enrollment.userId, name: row.enrollment.user.displayName, courseId: row.instanceId, createdAt: row.enrollment.joinedAt })), query);
   };
   const listMembers = async (query: Query) => {
     const instance = await db.classroomInstance.findUnique({ where: { id: str(query.where?.courseId) }, select: { activity: { select: { chapter: { select: { offeringId: true } } } } } });
     if (!instance) return [];
     const rows = await db.groupMember.findMany({ where: { group: { offeringId: instance.activity.chapter.offeringId }, leftAt: null,
-      user: { enrollments: { some: { participations: { some: { instanceId: str(query.where?.courseId) } } } } } }, include: { user: true } });
+      user: { enrollments: { some: { participations: { some: { instanceId: str(query.where?.courseId) } } } } } }, select: { id: true, groupId: true, userId: true, joinedAt: true, user: { select: { displayName: true } } } });
     return selectRows(rows.map((row) => ({ id: row.id, courseId: query.where?.courseId, groupId: projectGroupViewId(instance.activity.chapter.offeringId, row.groupId), studentId: row.userId, studentName: row.user.displayName, joinedAt: row.joinedAt })), query);
   };
   const listDocuments = async (query: Query) => {
-    const rows = await listProjectDocumentVersions({ courseId: str(query.where?.courseId), studentId: typeof query.where?.studentId === 'string' ? query.where.studentId : undefined }, db);
+    const rows = await listProjectDocumentVersions({ courseId: str(query.where?.courseId), studentId: typeof query.where?.studentId === 'string' ? query.where.studentId : undefined, includeSourceHtml: query.select?.sourceHtml !== false }, db);
     return selectRows(rows.map((row) => ({ ...row, submittedAt: row.submittedAt ? new Date(row.submittedAt) : null, createdAt: new Date(row.createdAt) })), query);
   };
   const listFiles = async (query: Query) => {
-    const rows = await db.artifactVersion.findMany({ where: { fileAssetId: { not: null }, artifact: { type: { in: ['PDF_ARCHIVE', 'FILE_ARCHIVE'] }, participation: { instanceId: str(query.where?.courseId), ...(typeof query.where?.studentId === 'string' ? { enrollment: { userId: query.where.studentId } } : {}) } } }, include: { artifact: { include: { participation: { include: { enrollment: true } } } }, fileAsset: true } });
+    const rows = await db.artifactVersion.findMany({ where: { fileAssetId: { not: null }, artifact: { type: { in: ['PDF_ARCHIVE', 'FILE_ARCHIVE'] }, participation: { instanceId: str(query.where?.courseId), ...(typeof query.where?.studentId === 'string' ? { enrollment: { userId: query.where.studentId } } : {}) } } }, include: { artifact: { include: { participation: { include: { enrollment: true } } } }, fileAsset: { select: { mimeType: true } } } });
     return selectRows(rows.map((row) => ({ id: row.id, courseId: row.artifact.participation.instanceId, studentId: row.artifact.participation.enrollment.userId,
       groupId: row.artifact.groupId ? projectGroupViewId(row.artifact.participation.enrollment.offeringId, row.artifact.groupId) : null, stageKey: 'make', sequence: row.sequence, title: row.artifact.title, uploadId: row.fileAssetId!,
       kind: row.artifact.type === 'PDF_ARCHIVE' ? 'pdf' : 'file', mimeType: row.mimeType ?? row.fileAsset?.mimeType ?? "application/octet-stream", requestId: undefined as string | undefined,

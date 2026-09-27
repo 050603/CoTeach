@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AuthClaims } from "@/lib/auth/session";
-import { runMutationTransaction, tryCourseMutationAdmission, tryPersonalMutationAdmission } from "@/lib/db/transaction-retry";
+import { runMutationTransaction, tryPersonalCourseMutationAdmission } from "@/lib/db/transaction-retry";
 import { prisma } from "@/lib/db/client";
 import { lockProjectedCourse } from "@/lib/db/session-repository";
 import { PlatformError } from "@/lib/platform/repository";
@@ -47,30 +47,41 @@ export async function ingestClassroomLearningEvents(claims: AuthClaims, input: u
   const { courseId, studentId, events } = parsed.data;
   if (claims.role !== "student" || studentId !== claims.sub) throw new PlatformError("STUDENT_SCOPE_MISMATCH", "无权写入其他学生的记录", 403);
   if (events.some(event => event.courseId !== courseId || event.studentId !== studentId || Date.parse(event.occurredAt) > Date.now() + 300_000)) throw new PlatformError("INVALID_EVENTS", "学习事件归属或时间无效", 400);
+  // Stage completion affects every scene in that stage. Other events need only
+  // their own scene plus stage-wide completion evidence; retain received order.
+  const historyScopes = [...new Map(events.map(event => [scope(event), {
+    stageKey: event.stageKey, sceneId: event.sceneId ?? "",
+  }])).values()];
+  const completedStages = [...new Set(events.filter(event => event.type === "stage-goal-complete").map(event => event.stageKey))];
+  const historySelection = historyScopes.map(item => ({ ...item, wholeStage: completedStages.includes(item.stageKey) }));
   const result = await runMutationTransaction(async tx => {
     // Keep the established personal -> course order for all deployed writers.
-    await tryPersonalMutationAdmission(tx, `learning-events:${courseId}:${studentId}`);
-    await tryCourseMutationAdmission(tx, courseId);
+    await tryPersonalCourseMutationAdmission(tx, `learning-events:${courseId}:${studentId}`, courseId);
     await lockProjectedCourse(tx, courseId);
     // A separate statement after BOTH locks obtains fresh state, including
     // changes from row-only close/archive writers. Scope all large reads to
     // this participant; none of this preparation performs external I/O.
     const [context] = await tx.$queryRaw<Array<{
-      id: string | null; status: string; runtimeConfig: unknown; templateVersionId: string;
+      id: string | null; status: string; runtimeVersion: unknown; templateVersionId: string;
       activityId: string; chapterId: string; offeringId: string; offeringStatus: string; archivedAt: Date | null;
       participationId: string | null; enrollmentId: string | null; enrollmentStatus: string | null; researchKey: string;
       actorRole: string; actorStatus: string; actorSessionVersion: number;
       existing: Array<{ idempotencyKey: string; metadata: unknown }>;
       history: Array<{ metadata: unknown }>; ownSignalRows: Array<{ id: string; payload: unknown }>;
       content: Partial<CourseContent> | null;
-    }>>`SELECT ci.id, ci.status, ci."runtimeConfig", ci."templateVersionId", ci."activityId", a."chapterId",
+    }>>`SELECT ci.id, ci.status, ci."runtimeConfig" -> 'version' AS "runtimeVersion", ci."templateVersionId", ci."activityId", a."chapterId",
         c."offeringId", o.status AS "offeringStatus", a."archivedAt", p.id AS "participationId",
         e.id AS "enrollmentId", e.status AS "enrollmentStatus", e."researchKey",
         u.role AS "actorRole", u.status AS "actorStatus", u."sessionVersion" AS "actorSessionVersion",
         COALESCE((SELECT jsonb_agg(jsonb_build_object('idempotencyKey', le."idempotencyKey", 'metadata', le.metadata))
           FROM "LearningEvent" le WHERE le."userId" = u.id AND le."idempotencyKey" = ANY(${events.map(event => key(courseId, event))}::text[])), '[]'::jsonb) AS existing,
         COALESCE((SELECT jsonb_agg(jsonb_build_object('metadata', le.metadata) ORDER BY le."receivedAt")
-          FROM "LearningEvent" le WHERE le."userId" = u.id AND le."classroomInstanceId" = ci.id AND le."participationId" = p.id), '[]'::jsonb) AS history,
+          FROM "LearningEvent" le WHERE le."userId" = u.id AND le."classroomInstanceId" = ci.id AND le."participationId" = p.id
+          AND EXISTS (SELECT 1 FROM jsonb_to_recordset(${JSON.stringify(historySelection)}::jsonb)
+            AS affected("stageKey" text, "sceneId" text, "wholeStage" boolean)
+            WHERE le.metadata #>> '{legacy,stageKey}' = affected."stageKey"
+              AND (affected."wholeStage" OR COALESCE(le.metadata #>> '{legacy,sceneId}', '') = affected."sceneId"
+                OR le.metadata #>> '{legacy,type}' = 'stage-goal-complete'))), '[]'::jsonb) AS history,
         COALESCE((SELECT jsonb_agg(jsonb_build_object('id', ls.id, 'payload', ls.payload))
           FROM "LearningSignal" ls WHERE ls."participationId" = p.id), '[]'::jsonb) AS "ownSignalRows",
         CASE WHEN ${events.some(event => event.content)} THEN
@@ -134,8 +145,7 @@ export async function ingestClassroomLearningEvents(claims: AuthClaims, input: u
         payload: { instanceId: courseId, collection: "learningSignals", provenance: { actorId: studentId, actorRole: "student" }, view: signal },
       }));
       ownSignals = [...ownSignals.filter(signal => !affected.has(scope(signal))), ...nextSignals];
-      const runtime = object(context.runtimeConfig);
-      const courseVersion = Number(runtime.version ?? 1) + 1;
+      const courseVersion = Number(context.runtimeVersion ?? 1) + 1;
       const now = new Date();
       // One atomic statement records all evidence and derived facts. The
       // notice depends on the course update; any constraint/trigger failure
@@ -152,7 +162,9 @@ export async function ingestClassroomLearningEvents(claims: AuthClaims, input: u
         FROM jsonb_to_recordset(${JSON.stringify(newSignals)}::jsonb) AS s(id text, type text, severity text, status text, payload jsonb)
         ON CONFLICT (id) DO UPDATE SET type = EXCLUDED.type, severity = EXCLUDED.severity, status = EXCLUDED.status, payload = EXCLUDED.payload, "updatedAt" = EXCLUDED."updatedAt" RETURNING id
       ), course AS (
-        UPDATE "ClassroomInstance" SET "runtimeConfig" = ${JSON.stringify({ ...runtime, version: courseVersion })}::jsonb,
+        UPDATE "ClassroomInstance" SET "runtimeConfig" = jsonb_set(
+          CASE WHEN jsonb_typeof("runtimeConfig") = 'object' THEN "runtimeConfig" ELSE '{}'::jsonb END,
+          '{version}', ${JSON.stringify(courseVersion)}::jsonb, true),
           "updatedAt" = ${now} WHERE id = ${courseId} AND (SELECT count(*) FROM facts) = ${incoming.length} RETURNING id
       ) INSERT INTO "DomainEvent" (id, "createdAt", "idempotencyKey", "actorId", "offeringId", "classroomInstanceId", "participationId", "researchKey", "eventType", payload)
         SELECT ${randomUUID()}, ${now}, ${randomUUID()}, ${studentId}, ${context.offeringId}, course.id,

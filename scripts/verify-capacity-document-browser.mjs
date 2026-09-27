@@ -1,3 +1,4 @@
+import { capacityEvidenceDirectory } from './capacity-evidence-paths.mjs';
 /** Real document editor checks on fixture-owned students. No response interception. */
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -206,7 +207,7 @@ export async function verifyCapacityDocumentBrowsers({ users, fixture, origin, r
     assert.ok(expected.get(user.id)?.submissionId);
   }
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const output = path.join(root, 'test-results/capacity', runId, 'document-browsers');
+  const output = path.join(capacityEvidenceDirectory(runId, root), 'document-browsers');
   await mkdir(output, { recursive: true, mode: 0o700 });
   const browser = await chromium.launch({ headless: true, args: browserArgs, env: capacityBrowserEnvironment() });
   const verifyStudent = async user => {

@@ -74,7 +74,8 @@ import {
   LlmRateLimitError,
   LlmTimeoutError,
 } from "@/lib/llm/errors";
-import { getCourse } from "@/lib/session/server-store";
+import { getDocumentCourseContext } from "@/lib/ai-collaboration/document-course-context";
+import { documentReviewFailure } from "@/lib/ai-collaboration/document-review-failure";
 import { authenticateLegacyAiStudent } from "@/lib/ai-collaboration/legacy-scope";
 import type { AiCompanionId } from "@/lib/ai-companions";
 import { normalizePblCourseConfig } from "@/lib/pbl-course-config";
@@ -706,7 +707,7 @@ async function loadCollaborationScope(input: {
     input.requestedStudentId,
   );
   if (authentication instanceof Response) return authentication;
-  const course = await getCourse(input.courseId, { studentId: authentication.studentId });
+  const course = await getDocumentCourseContext(input.courseId, authentication.studentId);
   if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
   const configuredMode = normalizePblCourseConfig(course.pblConfig).makeArtifactMode;
   if (input.workspaceKind === "external-artifact") {
@@ -1085,6 +1086,8 @@ export async function POST(request: NextRequest) {
       const committed = await completeDocumentRequest({ ...reviewTask, token: reviewClaim.token, messages, response: receipt, auditEvents });
       return committed ? Response.json(receipt) : persistedDocumentRequestResponse(reviewTask);
     };
+    const reviewStartedAt = performance.now();
+    let reviewDeadline: AbortSignal | undefined;
     try {
       const commentStore = await getCompanionThread(
         courseId,
@@ -1139,7 +1142,8 @@ export async function POST(request: NextRequest) {
         candidates,
         reviewFocus: "comprehensive",
       });
-      const reviewSignal = AbortSignal.any([request.signal, AbortSignal.timeout(40_000)]);
+      reviewDeadline = AbortSignal.timeout(40_000);
+      const reviewSignal = AbortSignal.any([request.signal, reviewDeadline]);
       const structured = await withProactiveReviewCapacity(() => {
         if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
         return callStructuredCollaborationModel([
@@ -1285,16 +1289,16 @@ export async function POST(request: NextRequest) {
         complete: review.complete,
       }, commentThreads);
     } catch (error) {
-      const errorCode = error instanceof ProactiveReviewCapacityError ? "AI_PROACTIVE_REVIEW_BUSY"
-        : error instanceof Error && error.message === "AI_RESPONSE_INVALID_STRUCTURE" ? error.message : "AI_REVIEW_FAILED";
+      const failure = documentReviewFailure(error, request.signal.aborted, reviewDeadline?.aborted ?? false);
+      const errorCode = failure.code;
       await failDocumentRequest({ ...reviewTask, token: reviewClaim.token, error: errorCode });
       await recordInteractionEvents([{
         id: `document-review-error:${reviewClaim.token}`, courseId, studentId: scope.student.id, stageKey,
         participationId: scope.authentication.participationId, conversationId: "proactive-document-comments",
         source: "proactive-comment", eventType: "error", actorRole: "system", requestId, content: errorCode,
-        payload: { action, requestAttemptId: reviewClaim.token, documentVersion: reviewTask.documentVersion, rawOutputs },
+        payload: { action, requestAttemptId: reviewClaim.token, documentVersion: reviewTask.documentVersion, rawOutputs, failureKind: failure.kind, elapsedMs: Math.round(performance.now() - reviewStartedAt), deadlineMs: 40_000 },
       }], workspaceKind);
-      if (error instanceof ProactiveReviewCapacityError) {
+      if (failure.kind === "capacity" && error instanceof ProactiveReviewCapacityError) {
         const retryAfterSeconds = Math.max(1, Math.ceil(error.retryAfterMs / 1_000));
         return Response.json(
           {
@@ -1310,10 +1314,7 @@ export async function POST(request: NextRequest) {
       if (request.signal.aborted) {
         return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
       }
-      if (error instanceof DOMException && error.name === "TimeoutError") {
-        return collaborationFailureResponse(new LlmTimeoutError(40_000), "check");
-      }
-      return collaborationFailureResponse(error, "check");
+      return collaborationFailureResponse(failure.error, "check");
     }
   }
 
@@ -1333,7 +1334,7 @@ export async function POST(request: NextRequest) {
       if (reviewClaim.state.status === "completed") return Response.json(reviewClaim.state.response);
       return Response.json({ requestId, status: reviewClaim.state.status, retryAfterMs: 1_000 }, { status: reviewClaim.state.status === "processing" ? 202 : 409 });
     }
-    const rawOutputs: Array<{ attempt: number; sha256: string; validation: string }> = [];
+    const rawOutputs: Array<{ attempt: number; sha256: string; validation: string; policyReasonCodes?: string[] }> = [];
     const completeReview = async (input: {
       response: Record<string, unknown>; messages: CompanionMessage[];
       decision: { outcome: string; reasonCodes: string[]; modelShouldComment: boolean | null; reviewVersion: number };
@@ -1355,6 +1356,8 @@ export async function POST(request: NextRequest) {
       const committed = await completeDocumentRequest({ ...reviewTask, token: reviewClaim.token, response, messages: input.messages, auditEvents });
       return committed ? Response.json(response) : persistedDocumentRequestResponse(reviewTask);
     };
+    const reviewStartedAt = performance.now();
+    let reviewDeadline: AbortSignal | undefined;
     try {
       const commentStore = await getCompanionThread(
         courseId,
@@ -1379,9 +1382,11 @@ export async function POST(request: NextRequest) {
       });
       if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
       const documentText = documentHtmlToPlainText(documentHtml);
-      const singleReviewSignal = AbortSignal.any([request.signal, AbortSignal.timeout(40_000)]);
+      const evidenceContext = { targetText, documentText, courseText: buildAuthoritativeCourseContext(scope.course, scope.student.id, stageKey) };
+      reviewDeadline = AbortSignal.timeout(40_000);
+      const singleReviewSignal = AbortSignal.any([request.signal, reviewDeadline]);
       const parsed = await withProactiveReviewCapacity(() => singleReviewResponse({
-        signal: singleReviewSignal, parse: parseLLMJson,
+        signal: singleReviewSignal, parse: parseLLMJson, evidenceContext,
         generate: repairInstruction => callCollaborationModel([
           { role: "system", content: withWorkspaceInstruction(prompts.system, workspaceKind) },
           { role: "user", content: prompts.user },
@@ -1393,15 +1398,14 @@ export async function POST(request: NextRequest) {
             participationId: scope.authentication.participationId, stageKey, conversationId: "proactive-document-comment",
             source: "proactive-comment", eventType: "response", actorRole: "system", requestId, content: attempt.raw,
             payload: { kind: "model-output", action, requestAttemptId: reviewClaim.token, modelAttempt: attempt.attempt,
-              validation: attempt.validation, rawSha256: attempt.sha256, rawLength: attempt.raw.length, documentVersion: reviewTask.documentVersion },
+              validation: attempt.validation, ...(attempt.policyReasonCodes ? { policyReasonCodes: attempt.policyReasonCodes } : {}), rawSha256: attempt.sha256, rawLength: attempt.raw.length, documentVersion: reviewTask.documentVersion },
           }], workspaceKind);
-          rawOutputs.push({ attempt: attempt.attempt, sha256: attempt.sha256, validation: attempt.validation });
+          rawOutputs.push({ attempt: attempt.attempt, sha256: attempt.sha256, validation: attempt.validation,
+            ...(attempt.policyReasonCodes ? { policyReasonCodes: attempt.policyReasonCodes } : {}) });
         },
       }));
       const rawSha256 = rawOutputs.at(-1)!.sha256;
-      const { result, decision } = assessProactiveDocumentComment(parsed, {
-        targetText, documentText, courseText: buildAuthoritativeCourseContext(scope.course, scope.student.id, stageKey),
-      });
+      const { result, decision } = assessProactiveDocumentComment(parsed, evidenceContext);
       if (!result.shouldComment) return await completeReview({ response: { commentThread: null }, messages: [], decision, rawSha256 });
 
       const id = `document-comment-${randomUUID()}`;
@@ -1451,16 +1455,16 @@ export async function POST(request: NextRequest) {
         } satisfies DocumentAiCommentThread,
       } });
     } catch (error) {
-      const errorCode = error instanceof ProactiveReviewCapacityError ? "AI_PROACTIVE_REVIEW_BUSY"
-        : error instanceof Error && ["AI_REVIEW_INVALID_STRUCTURE", "AI_RESPONSE_INVALID_STRUCTURE"].includes(error.message) ? error.message : "AI_REVIEW_FAILED";
+      const failure = documentReviewFailure(error, request.signal.aborted, reviewDeadline?.aborted ?? false);
+      const errorCode = failure.code;
       await failDocumentRequest({ ...reviewTask, token: reviewClaim.token, error: errorCode });
       await recordInteractionEvents([{
         id: `document-review-error:${reviewClaim.token}`, courseId, studentId: scope.student.id, stageKey,
         participationId: scope.authentication.participationId, conversationId: "proactive-document-comment",
         source: "proactive-comment", eventType: "error", actorRole: "system", requestId, content: errorCode,
-        payload: { action, requestAttemptId: reviewClaim.token, documentVersion: reviewTask.documentVersion, rawOutputs },
+        payload: { action, requestAttemptId: reviewClaim.token, documentVersion: reviewTask.documentVersion, rawOutputs, failureKind: failure.kind, elapsedMs: Math.round(performance.now() - reviewStartedAt), deadlineMs: 40_000 },
       }], workspaceKind);
-      if (error instanceof ProactiveReviewCapacityError) {
+      if (failure.kind === "capacity" && error instanceof ProactiveReviewCapacityError) {
         return Response.json({ error: "AI_PROACTIVE_REVIEW_BUSY", message: "当前主动求助较多，系统会稍后重新检查。" }, {
           status: 503,
           headers: { "Retry-After": String(Math.max(1, Math.ceil(error.retryAfterMs / 1_000))) },
@@ -1469,7 +1473,7 @@ export async function POST(request: NextRequest) {
       if (request.signal.aborted) {
         return Response.json({ error: "REQUEST_ABORTED" }, { status: 499 });
       }
-      return collaborationFailureResponse(error, "check");
+      return collaborationFailureResponse(failure.error, "check");
     }
   }
   if (action === "reply-document-comment") {

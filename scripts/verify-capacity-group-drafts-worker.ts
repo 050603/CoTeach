@@ -18,7 +18,7 @@ async function main() {
   const { POST: finalize } = await import('../src/app/api/project-practice/submissions/finalize/route');
   const { signStudentToken } = await import('../src/lib/auth/session');
   await prisma.courseOffering.update({ where: { id: 'fault-offering' }, data: { status: 'OPEN' } });
-  await prisma.classroomInstance.update({ where: { id: 'fault-course' }, data: { status: 'TEACHING', runtimeConfig: { version: 1, currentStageIndex: 2 } } });
+  await prisma.classroomInstance.update({ where: { id: 'fault-course' }, data: { status: 'TEACHING', runtimeConfig: { version: 1, currentStageIndex: 2, sentinel: { projection: "must-survive" } } } });
   const students = await all(Array.from({ length: 40 }, async (_, index) => {
     const userId = `fault-student-${index}`; const groupId = `grp-${userId}`;
     const participation = await prisma.classroomParticipation.findFirstOrThrow({ where: { instanceId: 'fault-course', enrollment: { userId } } });
@@ -47,6 +47,9 @@ async function main() {
     const results = await Promise.allSettled([save(student, envelope(student, 1, '<p>Left update</p>')), save(student, envelope(student, 1, '<p>Right update</p>'))]);
     assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
     const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult; assert.equal(rejected.reason.code, 'DRAFT_VERSION_CONFLICT');
+    const persisted = await prisma.classroomSubmission.findUniqueOrThrow({ where: { participationId_stageKey: { participationId: student.participation.id, stageKey: 'make:document' } } });
+    assert.deepEqual(rejected.reason.details.currentSubmission, (persisted.payload as { view: ClassroomSubmission }).view);
+    assert.equal(rejected.reason.details.currentSubmission.createdAt, student.draft.createdAt);
   }));
   console.log('PASS personal-group save receipts replay exactly once; 80 competing CAS writes produce exactly 40 successes and 40 conflicts');
   const submit = (student: typeof students[number], expectedVersion: number, requestId: string) => finalize(new Request('http://localhost/api/project-practice/submissions/finalize', { method: 'POST', headers: { origin: 'http://localhost', cookie: student.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ courseId: 'fault-course', studentId: student.userId, submissionId: student.draft.id, stageKey: 'make', expectedVersion, requestId }) }));
@@ -60,6 +63,7 @@ async function main() {
     const draft = await prisma.classroomSubmission.findUniqueOrThrow({ where: { participationId_stageKey: { participationId: student.participation.id, stageKey: 'make:document' } } });
     assert.equal((draft.payload as { view: ClassroomSubmission }).view.groupId, student.draft.groupId);
   }));
+  assert.deepEqual(((await prisma.classroomInstance.findUniqueOrThrow({ where: { id: 'fault-course' } })).runtimeConfig as { sentinel: unknown }).sentinel, { projection: 'must-survive' });
   assert.equal(await prisma.artifactVersion.count(), 40); assert.equal(await prisma.fileAsset.count(), 40);
   await prisma.classroomInstance.update({ where: { id: 'fault-course' }, data: { status: 'FINISHED' } });
   await all(students.map(async student => { await assert.rejects(save(student, envelope(student, 3)), error => (error as { code: string }).code === 'CLASSROOM_READ_ONLY'); }));

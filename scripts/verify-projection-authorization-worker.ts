@@ -86,6 +86,39 @@ async function main() {
     assert.equal(final.courseVersion, 4);
     assert.equal(((await db.classroomInstance.findUniqueOrThrow({ where: { id: instance.id } })).runtimeConfig as { preserved: string }).preserved, "runtime-marker");
     console.log("PASS explicit takeover, monotonic versions, receipt failure atomic rollback, unrelated runtime retained");
+    const { loadCourse } = await import("../src/lib/db/session-repository");
+    const beforeStage = await loadCourse(instance.id, db); assert.ok(beforeStage);
+    const reflectionIndex = beforeStage.stages.findIndex(stage => stage.key === "reflection");
+    assert.ok(reflectionIndex >= 0);
+    const stageRequest: ActionEnvelope = { requestId: randomUUID(), expectedVersion: beforeStage.version,
+      action: { type: "SET_STAGE", payload: { id: instance.id, index: reflectionIndex } } };
+    const stageAck = await executeCourseAction(instance.id, stageRequest, claims[0]);
+    const afterStage = await loadCourse(instance.id, db); assert.ok(afterStage);
+    assert.equal(stageAck.courseVersion, (beforeStage.version ?? 1) + 1);
+    assert.equal(stageAck.courseVersion, afterStage.version);
+    assert.equal(afterStage.currentStageIndex, reflectionIndex);
+    assert.equal(afterStage.uiState?.resourceProjection, null);
+    assert.equal(afterStage.uiState?.projectionController, null);
+    const stageRuntime = (await db.classroomInstance.findUniqueOrThrow({ where: { id: instance.id } })).runtimeConfig as Record<string, unknown>;
+    assert.equal(typeof stageRuntime.posttestOpenedAt, "string");
+    const stageReceiptCount = await db.domainEvent.count();
+    assert.deepEqual(await executeCourseAction(instance.id, stageRequest, claims[0]), stageAck);
+    assert.equal(await db.domainEvent.count(), stageReceiptCount);
+    assert.deepEqual((await db.classroomInstance.findUniqueOrThrow({ where: { id: instance.id } })).runtimeConfig, stageRuntime);
+    await assert.rejects(executeCourseAction(instance.id, { ...stageRequest, requestId: randomUUID() }, claims[0]), { code: "VERSION_CONFLICT", status: 409 });
+    await db.$executeRawUnsafe(`CREATE TRIGGER reject_projection_receipt BEFORE INSERT ON "DomainEvent" FOR EACH ROW EXECUTE FUNCTION reject_projection_receipt()`);
+    await assert.rejects(executeCourseAction(instance.id, { requestId: randomUUID(), action: { type: "SET_STAGE", payload: { id: instance.id, index: 0 } } }, claims[0]), /projection-receipt-fault/);
+    assert.deepEqual((await db.classroomInstance.findUniqueOrThrow({ where: { id: instance.id } })).runtimeConfig, stageRuntime);
+    assert.equal(await db.domainEvent.count(), stageReceiptCount);
+    await db.$executeRawUnsafe(`DROP TRIGGER reject_projection_receipt ON "DomainEvent"`);
+    await db.classroomInstance.update({ where: { id: instance.id }, data: { status: "FINISHED", endedAt: new Date() } });
+    const closedAck = await executeCourseAction(instance.id, { requestId: randomUUID(), action: { type: "SET_STAGE", payload: { id: instance.id, index: 100 } } }, claims[0]);
+    const closed = await db.classroomInstance.findUniqueOrThrow({ where: { id: instance.id } });
+    assert.equal(closed.status, "FINISHED");
+    assert.equal(closedAck.courseVersion, Number(stageRuntime.version) + 1);
+    assert.equal((closed.runtimeConfig as Record<string, unknown>).posttestOpenedAt, stageRuntime.posttestOpenedAt);
+    console.log("PASS SET_STAGE receipt version equals persisted/full-read version; reflection gate retained, replay and stale-version semantics unchanged, receipt fault rolls back, ended classroom never reopens");
+
   } finally { await db.$disconnect(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

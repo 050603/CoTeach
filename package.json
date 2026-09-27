@@ -4,9 +4,9 @@
   "private": true,
   "packageManager": "pnpm@10.4.1",
   "scripts": {
-    "predev": "node scripts/run-prisma.mjs ensure",
+    "predev": "node scripts/build-document-converter-worker.mjs && node scripts/run-prisma.mjs ensure",
     "dev": "next dev",
-    "build": "node scripts/run-next-production.mjs build --webpack && node scripts/check-generated-css.mjs && node scripts/check-runtime-build-isolation.mjs",
+    "build": "node scripts/build-document-converter-worker.mjs && node scripts/run-next-production.mjs build --webpack && node scripts/check-generated-css.mjs && node scripts/check-runtime-build-isolation.mjs",
     "start": "node scripts/run-next-production.mjs start",
     "code-runner": "node scripts/code-runner-server.mjs",
     "lint": "eslint",

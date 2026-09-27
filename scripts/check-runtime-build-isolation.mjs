@@ -1,4 +1,5 @@
-import { access } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const standalone = path.resolve(process.env.NEXT_DIST_DIR || '.next-build', 'standalone');
@@ -13,3 +14,8 @@ if (included.length) {
 } else {
   console.log('Production build excludes classroom data, backups and deployment credentials.');
 }
+
+const workerPath = path.join(standalone, 'workers/docx-converter.cjs');
+const manifest = JSON.parse(await readFile(path.join(standalone, 'workers/docx-converter-manifest.json'), 'utf8'));
+if (manifest.protocol !== 1 || manifest.externalDependencies !== 'node-builtins-only' || manifest.sha256 !== createHash('sha256').update(await readFile(workerPath)).digest('hex')) throw new Error('Standalone DOCX worker artifact is missing or mismatched');
+console.log('Standalone DOCX worker integrity and build manifest verified.');

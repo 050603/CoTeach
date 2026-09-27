@@ -45,6 +45,9 @@ describe('document comment collaboration policy', () => {
     expect(prompts.system).not.toContain('true|false');
     expect(prompts.system).not.toContain('critical|improvement|style');
     expect(prompts.system).toContain('不得为了生成批注而虚构问题');
+    expect(prompts.system).toContain('不能相互包含');
+    expect(prompts.system).toContain('不要复制示例充当本次证据');
+    expect(prompts.system).toContain('双引号必须按 JSON 规则转义');
   });
   it('uses content rather than transient Plate IDs to identify a reviewed paragraph version', () => {
     expect(documentParagraphVersionFingerprint('  我们选择这个方案。\n因为成本更低。  '))

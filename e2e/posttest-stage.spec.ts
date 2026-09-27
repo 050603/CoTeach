@@ -30,7 +30,7 @@ function course(): Course {
   } as Course;
 }
 
-async function mockClassroom(page: Page, role: "student" | "teacher") {
+async function mockClassroom(page: Page, role: "student" | "teacher", assessmentPhase?: "pretest" | "posttest", assessmentQuestions = questions) {
   const baseURL = process.env.OPENPBL_RESOURCE_E2E_BASE_URL || "http://localhost:3000";
   const secret = process.env.OPENPBL_E2E_JWT_SECRET_FILE
     ? readFileSync(process.env.OPENPBL_E2E_JWT_SECRET_FILE, "utf8").trim()
@@ -45,6 +45,7 @@ async function mockClassroom(page: Page, role: "student" | "teacher") {
   await page.context().addCookies([{ name: role === "student" ? "openpbl_student" : "openpbl_teacher", value: token, domain: new URL(baseURL).hostname, path: "/", httpOnly: true, sameSite: "Lax" }]);
 
   const state = course();
+  if (role === "student" && !assessmentPhase) state.platformContext = undefined;
   let draft = { answers: {} as Record<string, string | string[]>, currentPage: 0, version: 0, updatedAt: fixedTime };
   let submission: { id: string; answers: typeof draft.answers; submittedAt: string } | null = null;
   await page.routeWebSocket(/.*/, (socket) => {
@@ -65,9 +66,18 @@ async function mockClassroom(page: Page, role: "student" | "teacher") {
     if (path === `/api/courses/${courseId}/actions`) return json({ ok: true, requestId: route.request().postDataJSON()?.requestId, courseVersion: state.version, updatedAt: state.updatedAt });
     if (path === `/api/courses/${courseId}/projection`) return json({ courseVersion: 1, resourceProjection: null, teacherResourceProjection: null });
     if (path === `/api/courses/${courseId}/presence`) return json({ members: [] });
+    if (path === "/api/platform/activities/activity") return json({ activity: {
+      id: "activity", type: "Classroom", title: "校园节能项目", description: null, isOpen: true,
+      offering: { id: "offering", name: "科学课", status: "open" }, chapter: { title: "校园观察" },
+      progress: { status: "in_progress" },
+      instance: { id: courseId, status: "teaching", startedAt: fixedTime, endedAt: null, canWrite: true, posttestAvailable: true,
+        pretestSubmitted: assessmentPhase === "pretest" ? Boolean(submission) : true,
+        posttestSubmitted: assessmentPhase === "posttest" ? Boolean(submission) : false,
+        experiment: { enabled: true, pretest: assessmentQuestions, posttest: assessmentQuestions } },
+    } });
     if (path === `/api/platform/classroom-instances/${courseId}/experiment/results`) return json({ enabled: true, status: "teaching", enrollmentCount: 1, pretestCount: 1, posttestCount: 0, posttestDraftCount: 1, posttestOpenedAt: fixedTime, studentRows: [{ student: { id: studentId, displayName: "测试学生" }, status: "in-progress" }], variantCounts: { aPreBPost: 0, bPreAPost: 0 }, submissions: [] });
     if (path === `/api/platform/classroom-instances/${courseId}/experiment`) {
-      if (method === "GET") return json({ enabled: true, available: true, studentKey: studentId, questions, draft: draft.version ? draft : null, submission });
+      if (method === "GET") return json({ enabled: true, available: true, studentKey: studentId, questions: assessmentQuestions, draft: draft.version ? draft : null, submission });
       if (method === "PUT") {
         const input = route.request().postDataJSON() as { answers: typeof draft.answers; currentPage: number; version: number };
         if (input.version !== draft.version) return json({ message: "版本冲突" }, 409);
@@ -83,6 +93,52 @@ async function mockClassroom(page: Page, role: "student" | "teacher") {
     return json({ message: `Missing fixture: ${path}` }, 404);
   });
   return baseURL;
+}
+
+for (const { phase, viewport, short } of [
+  { phase: "pretest" as const, viewport: { width: 390, height: 568 }, short: false },
+  { phase: "posttest" as const, viewport: { width: 1024, height: 576 }, short: true },
+]) {
+  test(`standalone ${phase} keeps actions fixed and returns to the activity`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const activeQuestions = short ? questions.slice(0, 1) : questions;
+    const baseURL = await mockClassroom(page, "student", phase, activeQuestions);
+    await page.goto(`${baseURL}/student/activities/activity/assessments/${courseId}/${phase}`);
+    const footer = page.getByRole("contentinfo", { name: `${phase === "pretest" ? "前测" : "后测"}操作栏` });
+    await expect(footer).toBeVisible();
+    const before = await footer.boundingBox();
+    await page.evaluate(() => {
+      document.documentElement.style.scrollBehavior = "auto";
+      window.scrollTo(0, document.documentElement.scrollHeight);
+    });
+    const after = await footer.boundingBox();
+    expect(before && after && Math.abs(before.y - after.y) < 2).toBe(true);
+    expect(after && after.y + after.height <= viewport.height + 1).toBe(true);
+    if (!short) {
+      await page.getByRole("radio", { name: "甲：记录数据" }).locator("..").click();
+      await page.getByRole("checkbox", { name: "用电量" }).locator("..").click();
+      await page.getByRole("button", { name: /下一步/ }).click();
+      await page.getByRole("radio", { name: "正确" }).locator("..").click();
+      await page.getByRole("radio", { name: "3 分" }).locator("..").click();
+      await page.getByRole("textbox", { name: "请写下你的主要发现。" }).fill("用电高峰集中在下午。");
+      await page.getByRole("textbox", { name: "下一步你会怎样验证方案？" }).fill("对比下周同一时段的数据。");
+      await page.evaluate(() => {
+        document.documentElement.style.scrollBehavior = "auto";
+        window.scrollTo(0, document.documentElement.scrollHeight);
+      });
+      await expect.poll(() => page.evaluate(() => window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2)).toBe(true);
+      const lastQuestion = await page.getByRole("textbox", { name: "下一步你会怎样验证方案？" }).boundingBox();
+      const currentFooter = await footer.boundingBox();
+      expect(lastQuestion && currentFooter && lastQuestion.y + lastQuestion.height < currentFooter.y).toBe(true);
+    } else {
+      await page.getByRole("radio", { name: "甲：记录数据" }).locator("..").click();
+    }
+    await page.getByRole("button", { name: "检查并提交" }).click();
+    await page.getByRole("button", { name: `确认提交${phase === "pretest" ? "前测" : "后测"}` }).click();
+    await expect(page).toHaveURL(`${baseURL}/student/activities/activity`);
+    if (phase === "pretest") await expect(page.getByRole("button", { name: "进入课堂" })).toBeVisible();
+    else await expect(page.getByText("后测已提交，答案已保存到本次课堂记录。")).toBeVisible();
+  });
 }
 
 for (const viewport of [{ width: 390, height: 844 }, { width: 820, height: 1180 }, { width: 1366, height: 768 }]) {

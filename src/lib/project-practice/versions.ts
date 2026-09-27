@@ -4,10 +4,14 @@ import type { ProjectDocumentVersion } from "@/lib/session/types";
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
 /** Immutable V2 artifact versions projected to the editor's historical response shape. */
-export async function listProjectDocumentVersions(input: { courseId: string; studentId?: string; submissionId?: string; stageKey?: string }, db: Prisma.TransactionClient = prisma): Promise<ProjectDocumentVersion[]> {
+export async function listProjectDocumentVersions(input: { courseId: string; studentId?: string; submissionId?: string; stageKey?: string; includeSourceHtml?: boolean }, db: Prisma.TransactionClient = prisma): Promise<ProjectDocumentVersion[]> {
   const [versions, receipts] = await Promise.all([
-    db.artifactVersion.findMany({ where: { artifact: { type: "DOCUMENT_ARCHIVE", participation: { instanceId: input.courseId, ...(input.studentId ? { enrollment: { userId: input.studentId } } : {}) } } }, include: { artifact: { include: { participation: { include: { enrollment: true } } } } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] }),
-    db.domainEvent.findMany({ where: { classroomInstanceId: input.courseId, eventType: "document_version_submitted" } }),
+    db.artifactVersion.findMany({ where: { artifact: { type: "DOCUMENT_ARCHIVE", participation: { instanceId: input.courseId, ...(input.studentId ? { enrollment: { userId: input.studentId } } : {}) } } }, select: {
+      id: true, sequence: true, sourceHtml: input.includeSourceHtml !== false,
+      fileAssetId: true, sha256: true, size: true, status: true, submittedAt: true, createdAt: true,
+      artifact: { select: { id: true, title: true, participation: { select: { enrollment: { select: { userId: true } } } } } },
+    }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] }),
+    db.domainEvent.findMany({ where: { classroomInstanceId: input.courseId, eventType: "document_version_submitted" }, select: { payload: true } }),
   ]);
   const metadata = new Map(receipts.map(row => { const payload = object(row.payload); return [String(payload.versionId), payload]; }));
   return versions.flatMap((row): ProjectDocumentVersion[] => {

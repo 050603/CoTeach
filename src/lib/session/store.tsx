@@ -83,6 +83,7 @@ import {
   latestEventCursor,
   type RealtimeTransportMode,
 } from "@/lib/realtime/sync-policy";
+import { createCourseRefreshScheduler } from "@/lib/realtime/course-refresh-scheduler";
 import {
   PROJECTION_COALESCE_MS,
   PROJECTION_CONNECTED_CHECK_INTERVAL_MS,
@@ -411,7 +412,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const wsCourseIdRef = useRef<string | undefined>(undefined);
   const wsModeRef = useRef<"websocket" | "polling">("polling");
   const eventCursorRef = useRef<Record<string, string>>({});
-  const courseRefreshTimerRef = useRef<number | null>(null);
+  const courseRefreshSchedulerRef = useRef<ReturnType<typeof createCourseRefreshScheduler> | null>(null);
   const coursePollTimerRef = useRef<number | null>(null);
   const coursePollInFlightRef = useRef(false);
   const courseRequestEpochRef = useRef(0);
@@ -785,10 +786,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     courseReadControllerRef.current.abort();
     courseReadControllerRef.current = new AbortController();
     coursePollInFlightRef.current = false;
-    if (courseRefreshTimerRef.current !== null) {
-      window.clearTimeout(courseRefreshTimerRef.current);
-      courseRefreshTimerRef.current = null;
-    }
+    courseRefreshSchedulerRef.current?.dispose();
+    courseRefreshSchedulerRef.current = null;
     if (wsRetryTimerRef.current !== null) {
       window.clearTimeout(wsRetryTimerRef.current);
       wsRetryTimerRef.current = null;
@@ -1031,7 +1030,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     startProjectionPolling(wsCourseIdRef.current);
   }
 
-  async function refreshCourse(courseId: string, cursor?: string): Promise<boolean> {
+  function refreshCourse(
+    courseId: string,
+    cursor?: string,
+    priority: "classroom-control" | "standard" = "standard",
+    delayMs = 0,
+  ): Promise<boolean> {
+    if (wsCourseIdRef.current !== courseId) return Promise.resolve(false);
+    if (!courseRefreshSchedulerRef.current) {
+      courseRefreshSchedulerRef.current = createCourseRefreshScheduler({
+        read: (capturedCursor) => readCourseSnapshot(courseId, capturedCursor),
+        minimumIntervalMs: getClientRole() === "teacher" ? 750 : 0,
+        onRefreshed: recordCourseSyncSuccess,
+        onError: recordCourseSyncFailure,
+      });
+    }
+    return courseRefreshSchedulerRef.current.request(cursor, priority, delayMs);
+  }
+
+  async function readCourseSnapshot(courseId: string, cursor?: string): Promise<boolean> {
     const epoch = courseRequestEpochRef.current;
     if (pendingCommitsRef.current > 0) return false;
     const response = await boundedFetch(`/api/courses/${encodeURIComponent(courseId)}/state`, {
@@ -1094,17 +1111,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     cursor?: string,
     priority: "classroom-control" | "standard" = "standard",
   ) {
-    if (courseRefreshTimerRef.current !== null) {
-      window.clearTimeout(courseRefreshTimerRef.current);
-    }
-    courseRefreshTimerRef.current = window.setTimeout(() => {
-      courseRefreshTimerRef.current = null;
-      void refreshCourse(courseId, cursor)
-        .then((refreshed) => {
-          if (refreshed) recordCourseSyncSuccess();
-        })
-        .catch(recordCourseSyncFailure);
-    }, courseRefreshDelay(Math.random(), priority));
+    const delay = priority === "standard" && getClientRole() === "teacher"
+      ? 750
+      : courseRefreshDelay(Math.random(), priority);
+    void refreshCourse(courseId, cursor, priority, delay).catch(recordCourseSyncFailure);
   }
 
   async function catchUpCourseEvents(courseId: string) {

@@ -82,6 +82,22 @@ describe("document AI member workspace", () => {
     expect(props.onEditMessage).toHaveBeenCalledWith("message-1");
   });
 
+  it("shows the request as an AI bubble after the student message and keeps cancellation", () => {
+    const request = { id: "message-1", role: "user" as const, content: "帮我整理资料", createdAt: "2026-09-25T10:00:00.000Z", requestId: "request-1", requestStatus: "sending" as const };
+    const props = workspaceProps({ messages: [request] });
+    const { rerender } = render(<AiMemberWorkspace {...props} />);
+    expect(screen.getByText("帮我整理资料")).toBeInTheDocument();
+    expect(screen.queryByText("正在发送…")).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "AI 组员正在处理" })).toHaveTextContent("思考中");
+    fireEvent.click(screen.getByRole("button", { name: "取消这次请求" }));
+    expect(props.onCancelMessage).toHaveBeenCalledWith("request-1");
+    rerender(<AiMemberWorkspace {...props} messages={[{ ...request, requestStatus: "recovering" }]} />);
+    expect(screen.getByRole("status", { name: "AI 组员正在处理" })).toHaveTextContent("正在恢复回答");
+    rerender(<AiMemberWorkspace {...props} messages={[{ ...request, requestStatus: "cancelled" }]} />);
+    expect(screen.queryByRole("status", { name: "AI 组员正在处理" })).not.toBeInTheDocument();
+    expect(screen.getByText("已取消")).toBeInTheDocument();
+  });
+
   it("does not scroll away from history when a new message arrives", () => {
     const first = { id: "one", role: "assistant" as const, content: "第一条", createdAt: "2026-09-25T10:00:00.000Z" };
     const props = workspaceProps({ messages: [first] });

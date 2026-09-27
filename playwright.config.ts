@@ -29,6 +29,9 @@ if (existsSync(".env.local")) {
  */
 export default defineConfig({
   testDir: "./e2e",
+  // Playwright clears outputDir before a run. Keep unrelated audit evidence
+  // outside that cleanup boundary.
+  outputDir: "./test-results/playwright",
   timeout: 30_000,
   expect: {
     timeout: 5_000,

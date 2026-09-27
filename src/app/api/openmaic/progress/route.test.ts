@@ -11,7 +11,10 @@ const classroomStore = vi.hoisted(() => ({
 const auth = vi.hoisted(() => ({
   authenticateRequest: vi.fn(),
   requireSameOrigin: vi.fn(),
+  scope: vi.fn(),
 }));
+vi.mock('@/lib/db/client', () => ({ isDatabaseConfigured: () => true, prisma: {} }));
+vi.mock('@/lib/courses/student-state-scope', () => ({ resolveStudentStateScope: auth.scope }));
 
 vi.mock('@/lib/auth/request-guards', () => ({
   authenticateRequest: auth.authenticateRequest,
@@ -36,6 +39,7 @@ vi.mock('@openmaic/lib/server/classroom-storage', () => ({
 
 import { GET, POST } from './route';
 import { loadAiProgressContext } from '@/lib/courses/ai-progress-context';
+import { canAccessLegacyCourse } from '@/lib/platform/access';
 
 function request(body: Record<string, unknown>) {
   return new NextRequest('http://localhost/api/openmaic/progress', {
@@ -70,6 +74,8 @@ describe('progress route integrity', () => {
       ],
     };
     auth.requireSameOrigin.mockReturnValue(null);
+    auth.scope.mockReset(); auth.scope.mockResolvedValue({ accessible: true });
+    vi.mocked(canAccessLegacyCourse).mockReset(); vi.mocked(canAccessLegacyCourse).mockResolvedValue(true);
     auth.authenticateRequest.mockResolvedValue({
       claims: {
         sub: 'student-1',
@@ -93,6 +99,27 @@ describe('progress route integrity', () => {
     expect(response.status).toBe(200);
     expect(loadAiProgressContext).toHaveBeenCalledWith('course-1', 'student-1');
     expect(Object.keys((await response.json()).data.progress)).toEqual(['student-1']);
+    expect(auth.scope).toHaveBeenCalledWith(expect.anything(), 'course-1', 'student-1');
+    expect(canAccessLegacyCourse).not.toHaveBeenCalled();
+  });
+
+  it('does not override a denied instance scope, but preserves namespace fallback for null', async () => {
+    const body = { courseId: 'course-1', studentId: 'student-1', classroomId: 'classroom-1', currentSceneIndex: 0, totalScenes: 2, completedScenes: [] };
+    auth.scope.mockResolvedValue({ accessible: false });
+    expect((await POST(request(body))).status).toBe(403);
+    expect(canAccessLegacyCourse).not.toHaveBeenCalled();
+    expect(loadAiProgressContext).not.toHaveBeenCalled();
+    auth.scope.mockResolvedValue(null);
+    expect((await POST(request(body))).status).toBe(200);
+    expect(canAccessLegacyCourse).toHaveBeenCalledWith(expect.objectContaining({ sub: 'student-1' }), 'course-1', 'read');
+  });
+
+  it('keeps teacher aggregate reads on their established authorization path', async () => {
+    auth.authenticateRequest.mockResolvedValue({ claims: { sub: 'teacher', role: 'teacher', sv: 1 } });
+    expect((await GET(new NextRequest('http://localhost/api/openmaic/progress?courseId=course-1'))).status).toBe(200);
+    expect(auth.scope).not.toHaveBeenCalled();
+    expect(canAccessLegacyCourse).toHaveBeenCalledWith(expect.objectContaining({ role: 'teacher' }), 'course-1', 'read');
+    expect(loadAiProgressContext).toHaveBeenCalledWith('course-1', undefined);
   });
 
   it('rejects progress written to a classroom not linked to the course', async () => {

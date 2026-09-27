@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  canAccess: vi.fn(async () => true),
   executeShowcaseAction: vi.fn(),
   getShowcaseData: vi.fn(),
   isDatabaseConfigured: vi.fn(),
@@ -18,12 +19,14 @@ vi.mock("@/lib/auth/distributed-rate-limit", () => ({ checkDistributedRateLimit:
 vi.mock("@/lib/showcase/presentation-service", () => ({
   executeShowcaseAction: mocks.executeShowcaseAction,
   getShowcaseData: mocks.getShowcaseData,
-  ShowcasePresentationError: class ShowcasePresentationError extends Error {},
+  ShowcasePresentationError: class ShowcasePresentationError extends Error { constructor(public code: string, message: string, public status: number) { super(message); } },
 }));
 
-vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: async () => true }));
+vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: mocks.canAccess }));
 
-import { POST } from "./route";
+import { GET, POST } from "./route";
+
+import { ShowcasePresentationError } from "@/lib/showcase/presentation-service";
 
 const courseId = "course-1";
 const context = { params: Promise.resolve({ courseId }) };
@@ -42,6 +45,16 @@ describe("showcase presentation route", () => {
     mocks.isDatabaseConfigured.mockReturnValue(true);
     mocks.checkDistributedRateLimit.mockResolvedValue({ allowed: true });
     mocks.executeShowcaseAction.mockResolvedValue({ ok: true });
+  });
+
+  it("delegates GET live authorization to the service and propagates revocation", async () => {
+    mocks.getShowcaseData.mockResolvedValueOnce({ queue: [] });
+    const response = await GET(new Request("http://localhost/showcase"), context);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(mocks.canAccess).not.toHaveBeenCalled();
+    mocks.getShowcaseData.mockRejectedValueOnce(new ShowcasePresentationError("FORBIDDEN", "revoked", 403));
+    expect((await GET(new Request("http://localhost/showcase"), context)).status).toBe(403);
   });
 
   it("accepts the optional empty evaluation note and dispatches the action", async () => {

@@ -1,3 +1,13 @@
+import { writeCapacityReport } from './capacity-atomic-report.mjs';
+import { readCapacityBuildId, assertCapacityBuildUnchanged, readCapacityMigrationIdentity, assertCapacityMigrationsUnchanged, withCapacityRestartIdentityGuard } from './capacity-build-guard.mjs';
+import { capacityEvidenceDirectory } from './capacity-evidence-paths.mjs';
+import { createCapacityJournal, createCapacityLearningOutbox } from './capacity-learning-outbox.mjs';
+import { capacityLocalReadiness } from './capacity-local-readiness.mjs';
+import { markCapacityFailure, finalizeCapacityRun, completeCapacityPhase } from './capacity-finalization.mjs';
+import { captureCapacityWalStats, capacityWalDelta } from './capacity-wal-stats.mjs';
+import { recoverCapacityConnections } from './capacity-restart-recovery.mjs';
+import { subscribeCapacitySocket } from './capacity-websocket-connect.mjs';
+import { capacityPerformanceFailures } from './capacity-performance-gates.mjs';
 /** Real V2 classroom workload. Run with pnpm exec tsx; fixtures are UUID owned.
  * Credentials are read locally and never written to the public report.
  * The retired HTTP fixture API remains disabled. */
@@ -41,7 +51,8 @@ const documentRepeats = Number(process.env.CAPACITY_DOCUMENT_REPEATS || 120);
 assert.ok(Number.isFinite(durationMinutes) && durationMinutes >= 0 && durationMinutes <= 240);
 assert.ok(Number.isInteger(studentCount) && studentCount >= 2 && studentCount <= 40);
 assert.ok(Number.isInteger(documentRepeats) && documentRepeats >= 30 && documentRepeats <= 1000);
-const output = path.resolve(process.env.CAPACITY_OUTPUT_DIR || `test-results/capacity/${runId}`);
+const output = capacityEvidenceDirectory(runId, root);
+assert.ok(!process.env.CAPACITY_OUTPUT_DIR || path.resolve(process.env.CAPACITY_OUTPUT_DIR) === output, 'CAPACITY_OUTPUT_DIR must match the canonical capacity evidence directory');
 await mkdir(output, { recursive: true, mode: 0o700 });
 const databaseUrl = process.env.CAPACITY_DATABASE_URL || (await readFile(path.join(root, 'deploy/secrets/database_url.txt'), 'utf8')).trim();
 const db = new PrismaClient({ datasourceUrl: databaseUrl });
@@ -51,17 +62,23 @@ const users = [];
 const sockets = [];
 const checks = [];
 const metrics = new Map();
+const metricsByPhase = new Map();
+const projectionByPhase = new Map();
+const projectionPhases = new Map();
+let workloadPhase = "preparation";
 const expected = new Map();
 const sentProjection = new Map();
 const projectionLatencies = [];
 const projectionReceivers = new Map();
 let fixture;
 let browser;
+let learningJournal;
+let learningOutbox;
 let stopped = false;
 let failedRequests = 0;
 let totalRequests = 0;
 const report = { runId, origin, startedAt: startedAt.toISOString(), durationMinutes, studentCount,
-  workload: 'real-v2-http-websocket', documentRepeats, network: { scope: 'internal', connectAddress: network.address }, checks, outcome: 'running', metrics: {}, fixture: null };
+  workload: 'real-v2-http-websocket', documentRepeats, network: { scope: 'internal', connectAddress: network.address, transportMode: network.transportMode }, checks, outcome: 'running', metrics: {}, fixture: null };
 const record = (name, status, detail) => {
   checks.push({ name, status, ...(detail ? { detail } : {}) });
   console.log(`${status} ${name}${detail ? ` ${JSON.stringify(detail)}` : ''}`);
@@ -73,26 +90,40 @@ async function allCompleted(work) {
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), String(failures[0].reason));
   return results.map(result => result.value);
 }
-async function flushReport() {
+async function flushReport({ forceMonitoring = false } = {}) {
   let monitoringFailure;
+  try {
+    await assertCapacityBuildUnchanged(path.join(root, '.next-build/BUILD_ID'), report.buildId);
+    await assertCapacityMigrationsUnchanged(path.join(root, 'prisma/migrations'), report.migrationIdentity);
+    report.buildIdentityCheckedAt = new Date().toISOString();
+  } catch (error) {
+    monitoringFailure = String(error.message);
+    stopped = true;
+    markCapacityFailure(report, monitoringFailure);
+    report.buildIdentityFailure ??= { at: new Date().toISOString(), reason: monitoringFailure, ...(error.migrationDiff ? { migrationDiff: error.migrationDiff } : {}) };
+  }
+  if (learningOutbox) report.learningEventRecovery = learningOutbox.snapshot();
   report.metrics = Object.fromEntries([...metrics].map(([key, value]) => [key, {
     count: value.times.length, errors: value.errors, p95Ms: percentile(value.times, .95), p99Ms: percentile(value.times, .99), firstResponseP95Ms: percentile(value.operationTimes ?? value.firstResponseTimes ?? [], .95),
     ...(value.operationTimes ? { operationP95Ms: percentile(value.operationTimes, .95), operationCount: value.operationTimes.length, attemptFirstResponseP95Ms: percentile(value.firstResponseTimes ?? [], .95) } : {}),
   }]));
+  report.metricsByPhase = Object.fromEntries([...metricsByPhase].map(([phase, entries]) => [phase, Object.fromEntries([...entries].map(([key, value]) => [key, { count: value.times.length, errors: value.errors, p95Ms: percentile(value.times, .95), p99Ms: percentile(value.times, .99) }]))]));
+  report.projectionByPhase = Object.fromEntries([...projectionByPhase].map(([phase, times]) => [phase, { samples: times.length, p95Ms: percentile(times, .95), p99Ms: percentile(times, .99) }]));
+  report.serverTimings = Object.fromEntries([...metrics].filter(([,value])=>value.serverTimings).map(([key,value])=>[key,Object.fromEntries(Object.entries(value.serverTimings).map(([name,times])=>[name,{count:times.length,p95Ms:percentile(times,.95)}]))]));
   report.projection = { samples: projectionLatencies.length, p95Ms: percentile(projectionLatencies, .95), p99Ms: percentile(projectionLatencies, .99) };
   report.expected = Object.fromEntries(expected);
   report.projectionDelivery = [...projectionReceivers].map(([marker, receivers]) => ({ marker, delivered: receivers.size, expected: users.length }));
   report.totalRequests = totalRequests;
   report.failedRequests = failedRequests;
   report.updatedAt = new Date().toISOString();
-  if (!report.healthSnapshots?.length || Date.now() - Date.parse(report.healthSnapshots.at(-1).at) >= 55000) {
+  if (forceMonitoring || !report.healthSnapshots?.length || Date.now() - Date.parse(report.healthSnapshots.at(-1).at) >= 55000) {
     const disk = await statfs(root);
     const snapshot = { at: report.updatedAt, availableMemoryBytes: freemem(), availableDiskBytes: disk.bavail * disk.bsize, loadAverage: loadavg() };
     try {
       const token = (await readFile(path.join(root, 'deploy/secrets/monitor_token.txt'), 'utf8')).trim();
       const response = await fetch('http://127.0.0.1:3000/api/metrics', { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) });
       assert.equal(response.status, 200);
-      snapshot.application = Object.fromEntries((await response.text()).split('\n').filter(line => /^(process_resident_memory_bytes|nodejs_eventloop_lag_p99_seconds|openpbl_(postgres_|course_admission_|classroom_ai_|ai_audit_outbox_|local_backup_))/.test(line)).map(line => { const [key, value] = line.split(' '); return [key, Number(value)]; }));
+      snapshot.application = Object.fromEntries((await response.text()).split('\n').filter(line => /^(process_resident_memory_bytes|nodejs_eventloop_lag_p99_seconds|openpbl_(postgres_|course_admission_|classroom_ai_|mutation_|course_mutation_|ai_audit_outbox_|local_backup_))/.test(line)).map(line => { const [key, value] = line.split(' '); return [key, Number(value)]; }));
     } catch (error) { snapshot.metricsError = String(error); }
     report.healthSnapshots ??= []; report.healthSnapshots.push(snapshot);
     const required = ['openpbl_postgres_connections', 'openpbl_postgres_connection_limit', 'openpbl_postgres_lock_waiters', 'openpbl_classroom_ai_active', 'openpbl_classroom_ai_pending', 'openpbl_ai_audit_outbox_pending', 'openpbl_ai_audit_outbox_quarantined', 'openpbl_local_backup_checkpoint_timestamp_seconds'];
@@ -102,22 +133,29 @@ async function flushReport() {
     else if (Date.now()/1000 - checkpoint > 900) monitoringFailure = 'Local backup checkpoint is older than the 15-minute recovery target';
     else if (snapshot.application.openpbl_ai_audit_outbox_quarantined > 0) monitoringFailure = 'Quarantined audit records require investigation before continuing the workload';
     if (snapshot.availableMemoryBytes < 1024 ** 3 || snapshot.availableDiskBytes < 5 * 1024 ** 3) monitoringFailure = 'Host memory or disk safety threshold reached';
-    if (monitoringFailure) { stopped = true; snapshot.stopReason = monitoringFailure; }
+    if (monitoringFailure) { stopped = true; snapshot.stopReason = monitoringFailure; markCapacityFailure(report, monitoringFailure); }
   }
-  await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
-  if (monitoringFailure && report.outcome === 'running') throw new Error(`Stopping workload: ${monitoringFailure}`);
+  await writeCapacityReport(path.join(output, 'report.json'), report);
+  if (monitoringFailure) throw new Error(`Stopping workload: ${monitoringFailure}`);
 }
-async function request(actor, method, endpoint, body, { expectedStatus = 200, category = method === 'GET' ? 'read' : 'write', raw = false, timeout = 30000, headers = {} } = {}) {
+async function request(actor, method, endpoint, body, { expectedStatus = 200, category = method === 'GET' ? 'read' : 'write', raw = false, timeout = 30000, headers = {}, phase: requestPhase } = {}) {
   const started = performance.now();
+  const phase = requestPhase ?? workloadPhase;
+  let requestFailed = false;
   const metric = metrics.get(category) ?? { times: [], errors: 0 };
   metrics.set(category, metric);
   totalRequests++;
   try {
     const response = await fetch(`${origin}${endpoint}`, {
+      dispatcher: network.dispatcherForActor(actor),
       method, headers: { Origin: origin, ...(actor?.cookie ? { Cookie: actor.cookie } : {}), ...(body && !(body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), 'X-OpenPBL-Role': actor?.role ?? 'student', ...headers },
       ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }),
       signal: AbortSignal.timeout(timeout),
     });
+    for (const entry of (response.headers.get('server-timing') ?? '').split(', ')) {
+      const match = /^([a-z_-]+);dur=([0-9.]+)$/.exec(entry);
+      if (match && Number.isFinite(Number(match[2]))) { metric.serverTimings ??= {}; (metric.serverTimings[match[1]] ??= []).push(Number(match[2])); }
+    }
     const cookies = response.headers.getSetCookie();
     if (actor && cookies.length) actor.cookie = cookies.map(item => item.split(';')[0]).join('; ');
     metric.firstResponseTimes ??= []; metric.firstResponseTimes.push(performance.now() - started);
@@ -125,11 +163,15 @@ async function request(actor, method, endpoint, body, { expectedStatus = 200, ca
     if (response.status !== expectedStatus) throw Object.assign(new Error(`${method} ${endpoint}: ${response.status} ${JSON.stringify(payload).slice(0, 400)}`), { status: response.status, payload });
     return payload;
   } catch (error) {
-    metric.errors++; failedRequests++;
+    metric.errors++; failedRequests++; requestFailed = true;
     throw error;
   } finally {
     const elapsed = performance.now() - started;
     metric.times.push(elapsed);
+    const phaseMetrics = metricsByPhase.get(phase) ?? new Map();
+    const phaseMetric = phaseMetrics.get(category) ?? { times: [], errors: 0 };
+    phaseMetric.times.push(elapsed); if (requestFailed) phaseMetric.errors++;
+    phaseMetrics.set(category, phaseMetric); metricsByPhase.set(phase, phaseMetrics);
     if (method === 'GET' && !raw) {
       const reads = metrics.get('ordinary-reads') ?? { times: [], errors: 0 };
       reads.times.push(elapsed); metrics.set('ordinary-reads', reads);
@@ -210,29 +252,20 @@ async function loginAndEnter() {
   }));
   record('concurrent-login-entry-survey', '通过');
 }
-async function connect(actor) {
+async function connect(actor, timeoutMs = 10000) {
   const url = new URL(`/ws?role=${actor.role}`, origin); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(url, { headers: { Cookie: actor.cookie, Origin: origin }, handshakeTimeout: 10000, lookup: network.lookup });
+  const socket = new WebSocket(url, { headers: { Cookie: actor.cookie, Origin: origin }, handshakeTimeout: timeoutMs, lookup: network.lookup });
   sockets.push(socket); actor.socket = socket;
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('WebSocket subscribe timeout')), 10000);
-    socket.once('error', reject);
-    socket.once('open', () => {
-      const address = socket._socket?.remoteAddress?.replace(/^::ffff:/, '');
-      if (address !== network.address) { clearTimeout(timer); reject(new Error(`WebSocket used unexpected address: ${address}`)); socket.close(); return; }
-      socket.send(JSON.stringify({ type: 'subscribe', courseId: fixture.instanceId }));
-    });
-    socket.on('message', data => {
-      let item; try { item = JSON.parse(data.toString()); } catch { return; }
-      if (item.type === 'subscribed') { clearTimeout(timer); resolve(); }
-      const marker = item.event?.payload?.teacherResourceProjection?.title;
-      if (marker && sentProjection.has(marker) && !projectionReceivers.get(marker).has(actor.id)) { projectionReceivers.get(marker).add(actor.id); projectionLatencies.push(performance.now() - sentProjection.get(marker)); }
-    });
-  });
+  await subscribeCapacitySocket(socket, { courseId: fixture.instanceId, address: network.address, timeoutMs, onMessage: item => {
+    const marker = item.event?.payload?.teacherResourceProjection?.title;
+    if (marker && sentProjection.has(marker) && !projectionReceivers.get(marker).has(actor.id)) { projectionReceivers.get(marker).add(actor.id); const elapsed = performance.now() - sentProjection.get(marker); projectionLatencies.push(elapsed);
+      const phase = projectionPhases.get(marker); const samples = projectionByPhase.get(phase) ?? []; samples.push(elapsed); projectionByPhase.set(phase, samples); }
+  } });
 }
 async function project(stageKey = 'ai-learning') {
   const marker = `${runId}-${randomUUID()}`;
   sentProjection.set(marker, performance.now());
+  projectionPhases.set(marker, workloadPhase);
   projectionReceivers.set(marker, new Set());
   return action(users[0], { type: 'SET_UI_STATE', payload: { courseId: fixture.instanceId,
     projectionControl: { clientId: runId }, patch: { teacherResourceProjection: { classroomId: fixture.classroomId, sceneId: fixture.quizId, sceneType: 'quiz', stageKey, title: marker, startedAt: new Date().toISOString() } } } }, { category: 'projection-write' });
@@ -468,6 +501,23 @@ async function browserSmoke() {
   record('three-real-browser-roles', '通过');
 }
 async function soak() {
+  learningJournal = await createCapacityJournal(path.join(output, 'learning-event-journal.jsonl'));
+  learningOutbox = createCapacityLearningOutbox({ journal: learningJournal,
+    send: (user, body, timeout, phase) => request(user, 'POST', '/api/learning-events', body, { category: 'learning-events', timeout, phase }),
+    acknowledged: async (user, event, ack, operation) => {
+      const state = expected.get(user.id);
+      retainLearningAcknowledgement(state, event, ack); state.events.push(event.id);
+      const metric = metrics.get('learning-event-save') ?? { times: [], errors: 0 };
+      metric.times.push(operation.elapsedMs); metrics.set('learning-event-save', metric);
+      const phaseMetrics = metricsByPhase.get(operation.phase) ?? new Map();
+      const phaseMetric = phaseMetrics.get('learning-event-save') ?? { times: [], errors: 0 };
+      phaseMetric.times.push(operation.elapsedMs); phaseMetrics.set('learning-event-save', phaseMetric); metricsByPhase.set(operation.phase, phaseMetrics);
+      // Keep the original own-ACK invalidation read, in the background scope.
+      const refreshed = await request(user, 'GET', coursePath('state'), undefined, { category: 'classroom-state', phase: operation.phase });
+      user.cursor = refreshed.eventCursor ?? user.cursor;
+    },
+  });
+  workloadPhase = "ai-learning";
   const start = Date.now();
   const end = start + durationMinutes * 60000;
   assert.ok(users.every(user => user.socket?.readyState === WebSocket.OPEN));
@@ -477,16 +527,19 @@ async function soak() {
   report.phases = phaseMetrics;
   let round = 0;
   while (!stopped && Date.now() < end) {
+    learningOutbox.check();
     const tick = Date.now();
     if (!practiceStarted && tick >= start + durationMinutes * 30000) {
-      await setStage(2); practiceStarted = true;
-      phaseMetrics.aiLearning.completedAt = new Date().toISOString();
+      await setStage(2); practiceStarted = true; workloadPhase = "document-ai-burst";
+      completeCapacityPhase(phaseMetrics.aiLearning);
       phaseMetrics.documentPractice.startedAt = new Date().toISOString();
       record('sustained-workload-switch-to-document-practice', '通过', { students: studentCount });
       if (process.env.CAPACITY_REAL_AI === '1') await realDocumentAi(true);
+      workloadPhase = 'document-practice';
     }
     phaseMetrics[practiceStarted ? 'documentPractice' : 'aiLearning'].ticks++;
     const requests = users.map(async user => {
+      let learningQueued = false;
       const events = await request(user, 'GET', coursePath(`events?after=${encodeURIComponent(user.cursor)}`), undefined, { category: 'event-poll' });
       user.cursor = events.nextCursor ?? events.cursor ?? user.cursor;
       if (round % 3 === 0) await request(user, 'GET', coursePath('projection'), undefined, { category: 'projection-read' });
@@ -507,20 +560,18 @@ async function soak() {
         if (practiceStarted) await saveStudent(user);
         else if (round % 3 === 0) await request(user, 'GET', `/api/openmaic/progress?courseId=${fixture.instanceId}&studentId=${user.id}`, undefined, { category: 'ai-lesson-read' });
         if (round % (practiceStarted ? 12 : 2) === 0) {
-          const state = expected.get(user.id);
           const id = randomUUID();
           const event = { id, idempotencyKey: id, courseId: fixture.instanceId, studentId: user.id,
             stageKey: practiceStarted ? 'make' : 'ai-learning', type: practiceStarted ? 'artifact-change' : round === 0 ? 'scene-enter' : 'heartbeat',
             ...(!practiceStarted ? { sceneId: fixture.lectureSceneId ?? fixture.quizId } : {}), durationMs: practiceStarted ? 60000 : 10000,
             visible: true, occurredAt: new Date().toISOString() };
-          const ack = await request(user, 'POST', '/api/learning-events', { courseId: fixture.instanceId, studentId: user.id, events: [event] }, { category: 'learning-events' });
-          retainLearningAcknowledgement(state, event, ack);
-          state.events.push(id);
+          await learningOutbox.enqueue(user, fixture.instanceId, event, workloadPhase);
+          learningQueued = true;
         }
       }
       // Real pages refresh after their own save/telemetry invalidation; teachers
       // coalesce the class burst. A once-per-minute snapshot undercounts that load.
-      if (practiceStarted || round % 2 === 0) {
+      if ((practiceStarted || round % 2 === 0) && !learningQueued) {
         const state = await request(user, 'GET', coursePath('state'), undefined, { category: 'classroom-state' });
         user.cursor = state.eventCursor ?? user.cursor;
       }
@@ -537,10 +588,12 @@ async function soak() {
     round++;
     await delay(Math.max(0, 5000 - (Date.now()-tick)));
   }
+  await learningOutbox.drain();
   await delay(1000);
   for (const [marker, receivers] of projectionReceivers) assert.equal(receivers.size, users.length, `Projection ${marker} did not reach every signed-in user`);
   report.actualSoakSeconds = (Date.now() - start)/1000;
-  phaseMetrics.documentPractice.completedAt = new Date().toISOString();
+  completeCapacityPhase(phaseMetrics.aiLearning);
+  completeCapacityPhase(phaseMetrics.documentPractice);
   if (!practiceStarted) await setStage(2);
   record('sustained-target-workload', stopped ? '未通过' : '通过', { seconds: report.actualSoakSeconds });
   assert.equal(stopped, false, 'Workload was interrupted; preserve the fixture for investigation');
@@ -549,16 +602,25 @@ async function soak() {
 async function restartRecovery() {
   if (process.env.CAPACITY_RESTART_SERVICE !== '1') { record('application-restart-recovery', '未验证', 'Enable CAPACITY_RESTART_SERVICE=1 during the maintenance window'); return; }
   sockets.forEach(socket => socket.terminate());
-  const start = performance.now();
-  await promisify(execFile)('systemctl', ['--user', 'restart', 'openpbl.service'], { timeout: 60000 });
-  let healthy = false;
-  while (performance.now() - start < 60000) {
-    try { const response = await fetch(`${origin}/api/health/live`, { signal: AbortSignal.timeout(1000) }); if (response.ok) { healthy = true; break; } } catch { /* planned fault window */ }
-    await delay(500);
-  }
-  assert.ok(healthy, 'Application did not recover within 60 seconds');
-  const downtimeMs = performance.now() - start;
-  await allCompleted(users.map(user => connect(user)));
+  const token = (await readFile(path.join(root, 'deploy/secrets/monitor_token.txt'), 'utf8')).trim();
+  const recovery = await recoverCapacityConnections({ actors: users,
+    restart: timeout => withCapacityRestartIdentityGuard({
+      buildFile: path.join(root, '.next-build/BUILD_ID'), buildId: report.buildId,
+      migrationsDirectory: path.join(root, 'prisma/migrations'), migrationIdentity: report.migrationIdentity,
+    }, () => promisify(execFile)('systemctl', ['--user', 'restart', 'openpbl.service'], { timeout })).catch(error => {
+      if (!String(error.message).startsWith('Acceptance')) throw error;
+      stopped = true;
+      markCapacityFailure(report, error.message);
+      report.buildIdentityFailure ??= { at: new Date().toISOString(), reason: error.message,
+        ...(error.migrationDiff ? { migrationDiff: error.migrationDiff } : {}) };
+      throw error;
+    }),
+    readiness: timeout => capacityLocalReadiness(token, timeout),
+    connect,
+    onProgress: evidence => { report.restartRecovery = evidence; },
+  });
+  const downtimeMs = recovery.latestConnectedAtMs;
+  assert.ok(users.every(user => user.socket?.readyState === WebSocket.OPEN), 'Every recovered subscriber must still be connected');
   await allCompleted(users.slice(2).map(async user => {
     const state = expected.get(user.id);
     const replay = await action(user, state.lastAction, { requestId: state.lastRequestId, category: 'restart-replay' });
@@ -572,7 +634,7 @@ async function restartRecovery() {
   assert.deepEqual(await progressReplaySnapshot({ db, fixture, users: users.slice(2) }), beforeProgressReplay, 'Restart receipt replay must not mutate any learner workspace, course version or progress fact count');
   await reconcile();
   await allCompleted(users.slice(2).map(saveStudent));
-  record('application-restart-recovery', '通过', { downtimeMs, reconnectedUsers: users.length });
+  record('application-restart-recovery', '通过', { downtimeMs, readyAtMs: recovery.readyAtMs, latestConnectedAtMs: recovery.latestConnectedAtMs, connectionAttempts: recovery.connections.reduce((sum, row) => sum + row.attempts.length, 0), reconnectedUsers: users.length });
 }
 async function reconcile() {
   for (const user of users.slice(2)) {
@@ -644,8 +706,11 @@ process.on('SIGTERM', () => { stopped = true; });
 process.on('SIGINT', () => { stopped = true; });
 try {
   report.commit = execFileSync('git', ['rev-parse','HEAD'], { cwd: root, encoding: 'utf8' }).trim();
-  report.buildId = await readFile(path.join(root, '.next-build/BUILD_ID'), 'utf8').then(value=>value.trim()).catch(()=> 'build-in-progress');
-  await seed(); await loginAndEnter();
+  report.buildId = await readCapacityBuildId(path.join(root, '.next-build/BUILD_ID'));
+  report.migrationIdentity = await readCapacityMigrationIdentity(path.join(root, 'prisma/migrations'));
+  await seed();
+  report.walStats = { before: await captureCapacityWalStats(db) };
+  await loginAndEnter();
   await allCompleted(users.map(user => connect(user)));
   record('all-websockets-subscribed-before-learning', '通过', users.length);
   await setStage(1);
@@ -664,6 +729,7 @@ try {
   await browserSmoke();
   await verifyCapacityProjectionBrowser({ users, fixture, origin, request, record, expected, browserArgs: network.browserArgs, connectAddress: network.address });
   await soak();
+  workloadPhase = 'final-submission-and-recovery';
   await allCompleted(users.slice(2).map(saveStudent)); await archiveAndUpload(2);
   await uploadCapacityExternalArtifacts({ users, fixture, request, record, expected, round: 2 });
   await reconcile();
@@ -687,23 +753,10 @@ try {
   record('closed-classroom-rejects-writes-and-restores-history', '通过');
   await reconcile();
   const failures = [];
-  for (const category of ['ordinary-reads', 'draft-save', 'progress', 'pretest', 'posttest-draft', 'posttest-submit', 'archive', 'quiz']) {
-    const p95 = percentile(metrics.get(category)?.times ?? [], .95);
-    const budget = category === 'ordinary-reads' ? 1000 : 2000;
-    if (p95 === null || p95 > budget) failures.push(`${category} P95=${p95} exceeds ${budget}ms`);
-  }
-  if (durationMinutes > 0) for (const category of ['event-poll', 'projection-read', 'classroom-state', 'ai-lesson-read', 'ai-classroom-read']) {
-    const p95 = percentile(metrics.get(category)?.times ?? [], .95);
-    if (p95 === null || p95 > 1000) failures.push(`${category} P95=${p95} exceeds 1000ms`);
-  }
-  if (durationMinutes > 0) {
-    const eventP95 = percentile(metrics.get('learning-events')?.times ?? [], .95);
-    if (eventP95 === null || eventP95 > 2000) failures.push(`learning-events P95=${eventP95} exceeds 2000ms`);
-    if (process.env.CAPACITY_REAL_AI === '1') {
-      const mediaP95 = percentile(metrics.get('lecture-media-stream')?.times ?? [], .95);
-      if (mediaP95 === null || mediaP95 > 1000) failures.push(`lecture-media-stream P95=${mediaP95} exceeds 1000ms`);
-    }
-  }
+  const gateOptions = { soak: durationMinutes > 0, realAi: process.env.CAPACITY_REAL_AI === '1' };
+  failures.push(...capacityPerformanceFailures(metrics, gateOptions));
+  for (const [phase, samples] of metricsByPhase) failures.push(...capacityPerformanceFailures(samples, { ...gateOptions, requireAll: false }).map(failure => `${phase}: ${failure}`));
+  for (const [phase, samples] of projectionByPhase) if (percentile(samples, .95) > 500) failures.push(`${phase}: projection receipt P95 exceeds 500ms`);
   if (durationMinutes > 0 && (!projectionLatencies.length || percentile(projectionLatencies, .95) > 500)) failures.push('Projection receipt P95 is missing or exceeds 500ms');
   const gradingBusinessFailures = [...expected.values()].reduce((sum, state) => sum + (state.subjectiveGradingAttempts ?? []).filter(attempt => attempt.status !== 'graded').length, 0);
   report.businessFailures = { subjectiveGrading: gradingBusinessFailures };
@@ -718,7 +771,7 @@ try {
     const aiGate = evaluateCapacityAiGates({ expected, studentCount, afterLearning: durationMinutes > 0 });
     report.aiOperationReliability = aiGate.summary; failures.push(...aiGate.failures);
   }
-  record('performance-gates', failures.length ? '未通过' : '通过', failures);
+  record('performance-gates', failures.length ? '未通过' : '通过', [...failures]);
   const qualityFailures = report.documentCommentReview?.qualityFailures ?? [];
   record('document-comment-quality-gate', qualityFailures.length ? '未通过' : '通过', qualityFailures);
   failures.push(...qualityFailures.map(item => `Document review quality: ${JSON.stringify(item)}`));
@@ -727,11 +780,25 @@ try {
 } catch (error) {
   report.outcome = 'failed'; record('fatal', '未通过', String(error?.stack ?? error).slice(0,1500)); process.exitCode = 1;
 } finally {
-  sockets.forEach(socket => socket.terminate());
-  await browser?.close().catch(()=>{});
-  await flushReport();
-  // Preserve UUID-owned evidence on failure. A separate explicit cleanup command
-  // verifies the manifest and reports before deleting only this run's records.
-  await db.$disconnect();
+  for (const phase of Object.values(report.phases ?? {})) completeCapacityPhase(phase);
+  await finalizeCapacityRun({ report,
+    steps: [
+      ['learning event outbox drain', async () => { await learningOutbox?.drain({ close: true }); }],
+      ['learning event journal cleanup', async () => { await learningJournal?.close(); }],
+      ['socket cleanup', async () => { for (const socket of sockets) socket.terminate(); }],
+      ['browser cleanup', async () => { await browser?.close(); }],
+      ['WAL evidence', async () => {
+        const walAfter = await captureCapacityWalStats(db);
+        report.walStats = { ...report.walStats, after: walAfter, delta: capacityWalDelta(report.walStats?.before, walAfter) };
+      }],
+      ['final monitoring and report', () => flushReport({ forceMonitoring: true })],
+      ['database cleanup', () => db.$disconnect()],
+      ['network cleanup', () => network.close()],
+    ],
+    // Retry persistence after cleanup without rerunning network monitoring. This
+    // records final monitoring/cleanup failures and preserves original fatal checks.
+    persist: () => writeCapacityReport(path.join(output, 'report.json'), report),
+    onError: reason => { process.exitCode = 1; console.error(reason); },
+  });
   console.log(`Report: ${path.join(output, 'report.json')}`);
 }

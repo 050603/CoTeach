@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthClaims } from "@/lib/auth/session";
 import type { LearningEvent } from "@/lib/session/types";
-const mocks = vi.hoisted(() => ({ personal: vi.fn(), admission: vi.fn(), options: vi.fn(), lock: vi.fn(), user: vi.fn(), instance: vi.fn(), participation: vi.fn(), events: vi.fn(), insert: vi.fn(), signals: vi.fn(), remove: vi.fn(), upsert: vi.fn(), version: vi.fn(), notification: vi.fn(), count: vi.fn(), query: vi.fn(), publish: vi.fn() }));
+const mocks = vi.hoisted(() => ({ admission: vi.fn(), options: vi.fn(), lock: vi.fn(), user: vi.fn(), instance: vi.fn(), participation: vi.fn(), events: vi.fn(), insert: vi.fn(), signals: vi.fn(), remove: vi.fn(), upsert: vi.fn(), version: vi.fn(), notification: vi.fn(), count: vi.fn(), query: vi.fn(), publish: vi.fn() }));
 vi.mock("@/lib/db/session-repository", () => ({ lockProjectedCourse: mocks.lock }));
 vi.mock("@/lib/realtime/event-bus", () => ({ publishCourseEvent: mocks.publish }));
 vi.mock("@/lib/db/client", () => ({ prisma: { $queryRaw: mocks.query, classroomParticipation: { count: mocks.count } } }));
-vi.mock("@/lib/db/transaction-retry", () => ({ tryPersonalMutationAdmission: mocks.personal, tryCourseMutationAdmission: mocks.admission, runMutationTransaction: (operation: (tx: unknown) => unknown, options: unknown) => { mocks.options(options); return operation({
+vi.mock("@/lib/db/transaction-retry", () => ({ tryPersonalCourseMutationAdmission: mocks.admission, runMutationTransaction: (operation: (tx: unknown) => unknown, options: unknown) => { mocks.options(options); return operation({
   classroomInstance: { findUnique: mocks.instance, update: mocks.version }, classroomParticipation: { findFirst: mocks.participation, count: mocks.count },
   learningEvent: { findMany: mocks.events, createMany: mocks.insert }, learningSignal: { findMany: mocks.signals, deleteMany: mocks.remove, upsert: mocks.upsert },
   domainEvent: { create: mocks.notification }, $queryRaw: mocks.query,
@@ -25,15 +25,20 @@ beforeEach(() => {
       await mocks.insert({ data: JSON.parse(values[8]).map((row: object) => ({ ...row, userId: values[0], researchKey: values[1], offeringId: values[2], enrollmentId: values[3], chapterId: values[4], activityId: values[5], classroomInstanceId: values[6], participationId: values[7] })) });
       if (values[10].length) await mocks.remove({ where: { participationId: values[9], id: { in: values[10] } } });
       for (const row of JSON.parse(values[16])) await mocks.upsert(row);
-      await mocks.version({ where: { id: values[19] }, data: { runtimeConfig: JSON.parse(values[17]) } });
+      await mocks.version({ where: { id: values[19] }, data: { runtimeConfig: { ...(await mocks.instance()).runtimeConfig, version: JSON.parse(values[17]) } } });
       return [await mocks.notification()];
     }
     if (query.join("").includes('FROM "LearningSignal" s')) return [];
     if (query.join("").includes('FROM "User"')) {
       const current = await mocks.instance(); const participant = await mocks.participation();
       const existing = await mocks.events({ where: { idempotencyKey: true } });
-      const history = await mocks.events({ where: { classroomInstanceId: "course", userId: "student", participationId: "participation" } });
-      return [{ ...current, actorStatus: "ACTIVE", actorRole: "student", actorSessionVersion: 1, chapterId: current.activity.chapterId, offeringId: current.activity.chapter.offeringId, offeringStatus: current.activity.chapter.offering.status, archivedAt: current.activity.archivedAt, participationId: participant?.id, enrollmentId: participant?.enrollmentId, enrollmentStatus: participant?.enrollment.status, researchKey: participant?.enrollment.researchKey, existing, history, ownSignalRows: await mocks.signals(), content: {} }];
+      const allHistory = await mocks.events({ where: { classroomInstanceId: "course", userId: "student", participationId: "participation" } });
+      const selection = JSON.parse(values[1]);
+      const history = allHistory.filter((row: { metadata: { legacy: LearningEvent } }) => selection.some((item: { stageKey: string; sceneId: string; wholeStage: boolean }) => {
+        const previous = row.metadata.legacy;
+        return previous.stageKey === item.stageKey && (item.wholeStage || (previous.sceneId ?? "") === item.sceneId || previous.type === "stage-goal-complete");
+      }));
+      return [{ ...current, runtimeVersion: current.runtimeConfig?.version, actorStatus: "ACTIVE", actorRole: "student", actorSessionVersion: 1, chapterId: current.activity.chapterId, offeringId: current.activity.chapter.offeringId, offeringStatus: current.activity.chapter.offering.status, archivedAt: current.activity.archivedAt, participationId: participant?.id, enrollmentId: participant?.enrollmentId, enrollmentStatus: participant?.enrollment.status, researchKey: participant?.enrollment.researchKey, existing, history, ownSignalRows: await mocks.signals(), content: {} }];
     }
     return [{ content: {} }];
   });
@@ -43,8 +48,7 @@ describe("narrow classroom telemetry transaction", () => {
   it("keeps personal→course admission→row lock→fresh scope reads and writes in that order", async () => {
     await ingestClassroomLearningEvents(claims, input());
     expect(mocks.options).toHaveBeenCalledWith(expect.objectContaining({ lowPriorityCourseId: "course", deferCourseAdmission: true }));
-    expect(mocks.personal).toHaveBeenCalledWith(expect.anything(), "learning-events:course:student");
-    expect(mocks.personal.mock.invocationCallOrder[0]).toBeLessThan(mocks.admission.mock.invocationCallOrder[0]);
+    expect(mocks.admission).toHaveBeenCalledWith(expect.anything(), "learning-events:course:student", "course");
     expect(mocks.admission.mock.invocationCallOrder[0]).toBeLessThan(mocks.lock.mock.invocationCallOrder[0]);
     expect(mocks.lock.mock.invocationCallOrder[0]).toBeLessThan(mocks.query.mock.invocationCallOrder[0]);
     expect(mocks.query.mock.calls[0][0].join("")).toContain('le."userId" = u.id AND le."classroomInstanceId" = ci.id AND le."participationId" = p.id');
@@ -96,6 +100,28 @@ describe("narrow classroom telemetry transaction", () => {
     const result = await ingestClassroomLearningEvents(claims, input([finish]));
     expect(mocks.remove).toHaveBeenCalledWith({ where: { participationId: "participation", id: { in: ["db-stale"] } } });
     expect(result.signals).toEqual([unrelated]);
+  });
+  it("keeps stage completion evidence when a later heartbeat revisits just one scene", async () => {
+    const finish = { ...event, id: "done", idempotencyKey: "done", sceneId: undefined, type: "stage-goal-complete" };
+    mocks.events.mockImplementation(({ where }) => Promise.resolve(where.idempotencyKey ? [] : [
+      { metadata: { legacy: { ...event, type: "scene-enter", occurredAt: new Date(Date.now() - 600000).toISOString() } } },
+      { metadata: { legacy: finish } },
+      { metadata: { legacy: { ...event, stageKey: "unrelated", type: "scene-enter" } } },
+    ]));
+    const result = await ingestClassroomLearningEvents(claims, input([{ ...event, expectedDurationSec: 1 }]));
+    expect(result.signals).toEqual([]);
+    expect(JSON.parse(mocks.query.mock.calls[0][2])).toEqual([{ stageKey: "learn", sceneId: "scene", wholeStage: false }]);
+  });
+  it("includes every affected scene in mixed batches and all scenes only for completed stages", async () => {
+    await ingestClassroomLearningEvents(claims, input([
+      event, { ...event, id: "next", idempotencyKey: "next", sceneId: "second" },
+      { ...event, id: "done", idempotencyKey: "done", stageKey: "make", type: "stage-goal-complete", sceneId: undefined },
+    ]));
+    expect(JSON.parse(mocks.query.mock.calls[0][2])).toEqual([
+      { stageKey: "learn", sceneId: "scene", wholeStage: false },
+      { stageKey: "learn", sceneId: "second", wholeStage: false },
+      { stageKey: "make", sceneId: "", wholeStage: true },
+    ]);
   });
   it("does not publish or return success when the transaction fails", async () => {
     mocks.notification.mockRejectedValue(new Error("DB write failure"));

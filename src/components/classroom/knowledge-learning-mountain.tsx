@@ -25,6 +25,20 @@ export function knowledgeMountainBins(rows: StudentRow[]) {
   return { bins, unknown };
 }
 
+/** Horizontal control handles keep every segment between its two observed counts. */
+export function knowledgeMountainCurve(counts: number[]) {
+  const baseline = 134;
+  const max = Math.max(1, ...counts);
+  const points = counts.map((count, index) => ({ x: 36 + index * 72, y: baseline - count / max * 112 }));
+  const curve = points.reduce((path, point, index) => {
+    if (index === 0) return `M ${point.x} ${point.y}`;
+    const before = points[index - 1]!;
+    const handle = (point.x - before.x) / 3;
+    return `${path} C ${before.x + handle} ${before.y}, ${point.x - handle} ${point.y}, ${point.x} ${point.y}`;
+  }, "");
+  return { curve, area: `${curve} L 720 ${baseline} L 0 ${baseline} Z` };
+}
+
 function currentSection(course: Course, row: StudentRow): string {
   if (row.preciseProgress === undefined) return "进度待核验";
   if (row.preciseProgress >= 100) return "主课已完成";
@@ -50,6 +64,7 @@ export function KnowledgeLearningMountain({ course, data, onDetails, onStudentDe
   onStudentDetails?: (studentId: string) => void;
 }) {
   const [selected, setSelected] = useState<number | "unknown" | null>(null);
+  const [hovered, setHovered] = useState<number | null>(null);
   const { bins, unknown } = knowledgeMountainBins(data.studentRows);
   const valid = data.studentRows.filter((row) => row.preciseProgress !== undefined);
   const average = valid.length
@@ -60,14 +75,14 @@ export function KnowledgeLearningMountain({ course, data, onDetails, onStudentDe
   const leaders = highest === undefined ? [] : started.filter((row) => row.preciseProgress === highest)
     .sort((left, right) => left.student.name.localeCompare(right.student.name, "zh-CN"));
   const leaderNames = leaders.slice(0, 3).map((row) => row.student.name).join("、");
-  const maxCount = Math.max(1, ...bins.map((bin) => bin.students.length));
-  const topPoints = bins.map((bin) => `${36 + bin.index * 72},${112 - bin.students.length / maxCount * 94}`).join(" ");
+  const { curve, area } = knowledgeMountainCurve(bins.map((bin) => bin.students.length));
+  const highlighted = hovered ?? (typeof selected === "number" ? selected : null);
   const selectedRows = selected === "unknown" ? unknown : selected === null ? [] : bins[selected]?.students ?? [];
   const selectedLabel = selected === "unknown" ? "待核验" : selected === null ? "" : bins[selected]?.label ?? "";
 
   return <section aria-label="班级学习山形图" className={styles.knowledgeMountain}>
     <div className={styles.mountainHeading}>
-      <div><h3>班级学习山形图</h3><p>山形高度代表人数；每个点代表一名学生</p></div>
+      <div><h3>班级学习山形图</h3><p>曲线高度代表各进度区间的人数，点击区间查看名单</p></div>
       <div className={styles.mountainStats}>
         <span>平均进度 <strong>{average === undefined ? "—" : `${Math.round(average)}%`}</strong><small>有效 {valid.length}/{data.studentRows.length} 人</small></span>
         <span>已完成 <strong>{data.stateCounts.completed}</strong><small>本场参与学生</small></span>
@@ -76,18 +91,16 @@ export function KnowledgeLearningMountain({ course, data, onDetails, onStudentDe
     </div>
     <div className={styles.mountainScroller}>
       <div className={styles.mountainPlot}>
-        <svg aria-label={`学习进度分布：${bins.map((bin) => `${bin.label} ${bin.students.length}人`).join("、")}；待核验${unknown.length}人`} className={styles.mountainShape} role="img" viewBox="0 0 720 132" preserveAspectRatio="none">
-          {[0, 0.5, 1].map((fraction) => <line key={fraction} x1="0" x2="720" y1={112 - fraction * 94} y2={112 - fraction * 94} stroke="#e2e9ee" strokeDasharray="3 4" />)}
-          <polygon points={`0,112 ${topPoints} 720,112`} fill="#cce7e1" fillOpacity="0.78" stroke="#358274" strokeWidth="2" strokeLinejoin="round" />
-          {average !== undefined ? <line aria-hidden="true" x1={Math.max(0, Math.min(720, average / 100 * 720))} x2={Math.max(0, Math.min(720, average / 100 * 720))} y1="3" y2="116" stroke="#344a6a" strokeDasharray="4 3" strokeWidth="2" /> : null}
+        <svg aria-label={`学习进度分布：${bins.map((bin) => `${bin.label} ${bin.students.length}人`).join("、")}；待核验${unknown.length}人`} className={styles.mountainShape} role="img" viewBox="0 0 720 150" preserveAspectRatio="none">
+          {highlighted !== null ? <rect className={styles.mountainHighlight} height="134" width="72" x={highlighted * 72} y="0" /> : null}
+          {[0, 0.5, 1].map((fraction) => <line className={styles.mountainGridline} key={fraction} x1="0" x2="720" y1={134 - fraction * 112} y2={134 - fraction * 112} />)}
+          <path className={styles.mountainArea} d={area} />
+          <path className={styles.mountainCurve} d={curve} />
+          {average !== undefined ? <line aria-hidden="true" className={styles.mountainAverage} x1={Math.max(0, Math.min(720, average / 100 * 720))} x2={Math.max(0, Math.min(720, average / 100 * 720))} y1="3" y2="140" /> : null}
         </svg>
         <div className={styles.mountainColumns}>
-          {bins.map((bin) => <button aria-label={`${bin.label}，${bin.students.length}人，查看名单`} aria-pressed={selected === bin.index} className={styles.mountainColumn} key={bin.index} onClick={() => setSelected((value) => value === bin.index ? null : bin.index)} type="button">
+          {bins.map((bin) => <button aria-label={`${bin.label}，${bin.students.length}人，查看名单`} aria-pressed={selected === bin.index} className={styles.mountainColumn} key={bin.index} onBlur={() => setHovered(null)} onClick={() => setSelected((value) => value === bin.index ? null : bin.index)} onFocus={() => setHovered(bin.index)} onMouseEnter={() => setHovered(bin.index)} onMouseLeave={(event) => { if (event.currentTarget !== document.activeElement) setHovered(null); }} type="button">
             <strong>{bin.students.length} 人</strong>
-            <span className={styles.mountainDots}>
-              {bin.students.slice(0, 40).map((row) => <i aria-hidden="true" data-state={row.preciseProgress === 100 ? "completed" : row.hasEvidence ? "learning" : "not-started"} key={row.student.id} />)}
-            </span>
-            {bin.students.length > 40 ? <em>另有 {bin.students.length - 40} 人</em> : null}
             <small>{bin.label}</small>
           </button>)}
         </div>

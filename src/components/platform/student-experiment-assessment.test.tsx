@@ -28,6 +28,38 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("student experiment assessment", () => {
+  it.each(["confirmed", "recovered"] as const)("calls onSubmitted only after a %s server submission", async (mode) => {
+    const onSubmitted = vi.fn();
+    let posted = false;
+    vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      if (options?.method === "POST") { posted = true; return mode === "confirmed" ? response({ submission: { id: "submitted", submittedAt: "2026-01-01T00:01:00Z" } }) : response({ message: "连接中断" }, 503); }
+      return response({ ...assessment({ answers: { q1: "甲" }, currentPage: 0, version: 1, updatedAt: "2026-01-01T00:00:00Z" }, posted && mode === "recovered" ? { id: "submitted", answers: { q1: "甲" }, submittedAt: "2026-01-01T00:01:00Z" } : null), questions: questions.slice(0, 1) });
+    });
+    render(<StudentExperimentAssessment instanceId="run-1" onSubmitted={onSubmitted} phase="pretest" />);
+    await screen.findByText("第一题");
+    fireEvent.click(screen.getByRole("button", { name: "检查并提交" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认提交前测" }));
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps a failed attempt and historical submission on the page", async () => {
+    const onSubmitted = vi.fn();
+    vi.mocked(fetch).mockImplementation(async (_url, options) => options?.method === "POST"
+      ? response({ message: "暂时无法提交" }, 503)
+      : response({ ...assessment({ answers: { q1: "甲" }, currentPage: 0, version: 1, updatedAt: "2026-01-01T00:00:00Z" }), questions: questions.slice(0, 1) }));
+    const { unmount } = render(<StudentExperimentAssessment instanceId="run-1" onSubmitted={onSubmitted} phase="pretest" />);
+    await screen.findByText("第一题");
+    fireEvent.click(screen.getByRole("button", { name: "检查并提交" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认提交前测" }));
+    await screen.findByText("暂时无法提交");
+    expect(onSubmitted).not.toHaveBeenCalled();
+    unmount();
+    vi.mocked(fetch).mockResolvedValue(response({ ...assessment(null, { id: "previous", answers: { q1: "甲" }, submittedAt: "2026-01-01T00:01:00Z" }), questions: questions.slice(0, 1) }));
+    render(<StudentExperimentAssessment instanceId="run-1" onSubmitted={onSubmitted} phase="pretest" />);
+    await screen.findByText(/提交时间：/);
+    expect(onSubmitted).not.toHaveBeenCalled();
+  });
+
   it("shows the design scenario clearly and requires all three separate answers", async () => {
     const designQuestion: ExperimentQuestion = { id: "design", type: "short-answer", prompt: "为六年级改进8分钟活动。目标：根据证据判断识别结果。\n已有测试记录：原背景4／4，换背景2／4。\n现有安排：教师展示结果。\n按三点写短句。\n\n依据：说明为什么这样改。\n活动：学生具体做什么。\n评价：如何判断目标达成。" };
     const fetchMock = vi.mocked(fetch);

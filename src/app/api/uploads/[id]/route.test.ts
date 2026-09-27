@@ -4,7 +4,7 @@ import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const mocks = vi.hoisted(() => ({ file: vi.fn(), resource: vi.fn(), update: vi.fn(), remove: vi.fn(), count: vi.fn(),
-  access: vi.fn(), templateAccess: vi.fn(), query: vi.fn(), claims: { sub: 'teacher-1', role: 'teacher' }, event: vi.fn(), resourceUpdate: vi.fn() }));
+  access: vi.fn(), downloadScope: vi.fn(), templateAccess: vi.fn(), query: vi.fn(), claims: { sub: 'teacher-1', role: 'teacher' }, event: vi.fn(), resourceUpdate: vi.fn() }));
 vi.mock('@/lib/auth/request-guards', () => ({ authenticateRequest: async () => ({ claims: mocks.claims }), requireSameOrigin: () => null }));
 vi.mock('@/lib/platform/access', () => ({ canAccessLegacyCourse: mocks.access }));
 vi.mock('@/lib/db/client', () => {
@@ -13,15 +13,35 @@ vi.mock('@/lib/db/client', () => {
   return { prisma: { ...tx, $transaction: async (fn: (db: typeof tx) => unknown) => fn(tx) } };
 });
 vi.mock("@/lib/uploads/scope", () => ({ canReadTemplateAsset: mocks.templateAccess }));
+vi.mock('@/lib/uploads/download-scope', () => ({ readStudentOfferingDownload: mocks.downloadScope }));
 import { DELETE, GET, PATCH } from './route';
 const id = '11111111-1111-4111-8111-111111111111';
 const context = { params: Promise.resolve({ id }) };
 const resource = { id, offeringId: 'offering-1', type: 'PDF', metadata: { stageKey: 'practice' }, fileAsset: { deletedAt: null } };
 const file = { id, offeringId: 'offering-1', uploadedById: 'teacher-1', originalName: 'lesson.pdf', storageKey: `${id}.pdf`, mimeType: 'application/pdf', resource, artifactVersions: [] };
 const target = path.resolve('.openpbl-data/uploads', file.storageKey);
-beforeEach(() => { vi.clearAllMocks(); mocks.claims = { sub: 'teacher-1', role: 'teacher' }; mocks.access.mockResolvedValue(true); mocks.templateAccess.mockResolvedValue(false); mocks.file.mockResolvedValue(file); mocks.resource.mockResolvedValue(resource); mocks.count.mockResolvedValue(0); mocks.event.mockResolvedValue({ id: 'event' }); mocks.query.mockResolvedValue([{ referenced: false }]); });
+beforeEach(() => { vi.clearAllMocks(); mocks.claims = { sub: 'teacher-1', role: 'teacher' }; mocks.downloadScope.mockResolvedValue({ kind: 'legacy' }); mocks.access.mockResolvedValue(true); mocks.templateAccess.mockResolvedValue(false); mocks.file.mockResolvedValue(file); mocks.resource.mockResolvedValue(resource); mocks.count.mockResolvedValue(0); mocks.event.mockResolvedValue({ id: 'event' }); mocks.query.mockResolvedValue([{ referenced: false }]); });
 afterEach(async () => { await rm(target, { force: true }); });
 describe('V2 FileAsset routes', () => {
+  it('uses the verified student offering scope without another authorization graph and retains ranges and ETags', async () => {
+    mocks.claims = { sub: 'student-1', role: 'student' };
+    mocks.downloadScope.mockResolvedValue({ kind: 'allowed', file });
+    await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, '%PDF-1.7 content');
+    const full = await GET(new Request(`http://localhost/api/uploads/${id}`), context);
+    expect(full.status).toBe(200); expect(await full.text()).toBe('%PDF-1.7 content');
+    expect((await GET(new Request(`http://localhost/api/uploads/${id}`, { headers: { 'if-none-match': full.headers.get('etag')! } }), context)).status).toBe(304);
+    const range = await GET(new Request(`http://localhost/api/uploads/${id}`, { headers: { Range: 'bytes=0-3' } }), context);
+    expect(range.status).toBe(206); expect(await range.text()).toBe('%PDF');
+    expect((await GET(new Request(`http://localhost/api/uploads/${id}`, { headers: { Range: 'bytes=100-200' } }), context)).status).toBe(416);
+    expect(mocks.downloadScope).toHaveBeenCalledWith('student-1', id);
+    expect(mocks.file).not.toHaveBeenCalled(); expect(mocks.access).not.toHaveBeenCalled();
+  });
+  it('never falls through an explicit student offering denial to legacy or template authorization', async () => {
+    mocks.claims = { sub: 'student-1', role: 'student' };
+    mocks.downloadScope.mockResolvedValue({ kind: 'denied' });
+    expect((await GET(new Request(`http://localhost/api/uploads/${id}`), context)).status).toBe(404);
+    expect(mocks.file).not.toHaveBeenCalled(); expect(mocks.access).not.toHaveBeenCalled(); expect(mocks.templateAccess).not.toHaveBeenCalled();
+  });
   it('serves offering resources with byte ranges to enrolled students without legacy course claims', async () => {
     mocks.claims = { sub: 'student-1', role: 'student' };
     await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, '%PDF-1.7 content');

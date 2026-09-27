@@ -12,6 +12,8 @@ import {
 } from '@openmaic/lib/server/api-response';
 import { createLogger } from '@openmaic/lib/logger';
 import { loadAiProgressContext } from '@/lib/courses/ai-progress-context';
+import { resolveStudentStateScope } from '@/lib/courses/student-state-scope';
+import { isDatabaseConfigured, prisma } from '@/lib/db/client';
 import type { StudentAiProgress } from '@/lib/session/types';
 import { persistStudentAiProgress } from '@/lib/courses/ai-progress-service';
 import { readClassroom } from '@openmaic/lib/server/classroom-storage';
@@ -25,13 +27,19 @@ import {
   authenticateRequest,
   requireSameOrigin,
 } from '@/lib/auth/request-guards';
-import { isAuthConfigured } from '@/lib/auth/session';
+import { isAuthConfigured, type AuthClaims } from '@/lib/auth/session';
 import { canAccessLegacyCourse } from '@/lib/platform/access';
 
 const log = createLogger('ProgressAPI');
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+async function canReadProgressCourse(claims: AuthClaims, courseId: string): Promise<boolean> {
+  const studentScope = isDatabaseConfigured() && claims.role === 'student' && claims.sub
+    ? await resolveStudentStateScope(prisma, courseId, claims.sub) : null;
+  return studentScope ? studentScope.accessible : canAccessLegacyCourse(claims, courseId, 'read');
+}
 
 type ProgressRequestBody = {
   requestId?: string;
@@ -88,7 +96,7 @@ export async function GET(request: NextRequest) {
     ) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Progress is outside the signed-in student scope');
     }
-    if (auth && !('response' in auth) && !(await canAccessLegacyCourse(auth.claims, courseId, 'read'))) {
+    if (auth && !('response' in auth) && !(await canReadProgressCourse(auth.claims, courseId))) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Course is not accessible');
     }
 
@@ -160,7 +168,7 @@ export async function POST(request: NextRequest) {
     ) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Progress updates require the matching student identity');
     }
-    if (auth && !('response' in auth) && !(await canAccessLegacyCourse(auth.claims, courseId, 'read'))) {
+    if (auth && !('response' in auth) && !(await canReadProgressCourse(auth.claims, courseId))) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Course is locked');
     }
     if (!classroomId || typeof classroomId !== 'string') {

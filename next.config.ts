@@ -100,6 +100,8 @@ const nextConfig: NextConfig = {
     // NFT 追踪不到这些 .so(只带上了 .node 本体),导致 standalone 镜像里
     // 图像处理报 ERR_DLOPEN_FAILED。显式包含整个 @img 目录。
     "/**": [
+      "./workers/docx-converter.cjs",
+      "./workers/docx-converter-manifest.json",
       "./node_modules/@img/**",
       // PromptLoader reads the Markdown prompt templates with fs at runtime.
       // Keep them in every standalone production build.

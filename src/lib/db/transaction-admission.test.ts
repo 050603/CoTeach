@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({ transaction: vi.fn(), query: vi.fn(), execute: vi.fn(), active: 0, commits: 0 }));
 vi.mock('@/lib/db/client', () => ({ prisma: { $transaction: mock.transaction } }));
-import { CourseAdmissionTimeoutError, hasCourseMutationAdmission, runMutationTransaction, tryCourseMutationAdmission, tryPersonalMutationAdmission } from './transaction-retry';
+import { CourseAdmissionTimeoutError, hasCourseMutationAdmission, runMutationTransaction, tryCourseMutationAdmission, tryPersonalMutationAdmission, tryPersonalCourseMutationAdmission } from './transaction-retry';
 import { lockProjectedCourse } from './session-repository';
 import { courseAdmissionAttempts, courseAdmissionBusy, courseAdmissionWaiting, courseAdmissionQueued, courseAdmissionLocalActive, courseAdmissionQueueRejected } from '../observability/course-admission';
 
@@ -17,7 +17,7 @@ beforeEach(() => {
     finally { mock.active--; }
   });
 });
-afterEach(() => { expect(globalThis.__openPblCourseMutationQueues?.size ?? 0).toBe(0); vi.useRealTimers(); });
+afterEach(() => { expect(globalThis.__openPblCourseMutationQueuesV2?.size ?? 0).toBe(0); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 it('leaves teacher and ordinary transactions on the original blocking-lock path', async () => {
   const operation = vi.fn().mockResolvedValue('teacher');
@@ -57,13 +57,18 @@ it('does not consume deadlock retries while waiting for admission', async () => 
   expect(writes).toBe(5);
 });
 
-it('bounds continuous contention with one overall deadline and never invokes the writer', async () => {
+it.each([0, 0.5, 0.9999])('bounds continuous contention within the deadline (jitter=%s) without invoking the writer', async jitter => {
+  vi.spyOn(Math, 'random').mockReturnValue(jitter);
   mock.query.mockResolvedValue([{ acquired: false }]);
   const operation = vi.fn();
   const task = runMutationTransaction(operation, { lowPriorityCourseId: 'course' }).catch(error => error);
   await vi.runAllTimersAsync();
   expect(await task).toBeInstanceOf(CourseAdmissionTimeoutError);
-  expect(performance.now()).toBe(10000);
+  // The production guard refuses another transaction with <3ms remaining.
+  // Jitter can therefore exhaust usable budget 0–2ms before the deadline;
+  // assert the strict upper bound, not an exact wake-up at 10000ms.
+  expect(performance.now()).toBeGreaterThanOrEqual(9998);
+  expect(performance.now()).toBeLessThanOrEqual(10000);
   expect(operation).not.toHaveBeenCalled();
   expect(mock.commits).toBe(0);
   const budgets = mock.transaction.mock.calls.map(call => call[1].timeout);
@@ -240,7 +245,7 @@ it('counts local queue time in the same 10s deadline and removes expired waiters
   expect(mock.transaction).toHaveBeenCalledTimes(1);
   expect((await courseAdmissionQueued.get()).values[0].value).toBe(0);
   release(); expect(await first).toBeInstanceOf(CourseAdmissionTimeoutError);
-  expect(globalThis.__openPblCourseMutationQueues?.size).toBe(0);
+  expect(globalThis.__openPblCourseMutationQueuesV2?.size).toBe(0);
   expect(await runMutationTransaction(async () => 'recovered', { lowPriorityCourseId: 'course' })).toBe('recovered');
 });
 
@@ -270,4 +275,54 @@ it('releases a local permit after a nonretryable business failure so the next wr
   expect(await first).toMatchObject({ message: 'CAS_CONFLICT' });
   expect(await second).toBe('second');
   expect(mock.commits).toBe(1);
+});
+
+
+it('combines heartbeat personal→course admission in one query before the separate row lock and fresh read', async () => {
+  mock.query.mockResolvedValue([{ personal_acquired: true, acquired: true }]);
+  await runMutationTransaction(async tx => {
+    await tryPersonalCourseMutationAdmission(tx, 'learning-events:course:student', 'course');
+    expect(hasCourseMutationAdmission(tx, 'course')).toBe(true);
+    await lockProjectedCourse(tx, 'course');
+    await tx.$queryRaw`SELECT 'fresh context'`;
+  }, { lowPriorityCourseId: 'course', deferCourseAdmission: true });
+  const calls = mock.query.mock.calls;
+  expect(calls).toHaveLength(3);
+  expect(calls[0].slice(1)).toEqual(['learning-events:course:student', 'v2-course:course', '1000']);
+  expect(calls[0][0].join('')).toContain('WITH personal AS MATERIALIZED');
+  expect(calls[0][0].join('')).toContain('CASE WHEN personal.acquired THEN pg_try_advisory_xact_lock');
+  expect(calls[1][0].join('')).toContain('FOR UPDATE');
+  expect(calls[2][0].join('')).toContain('fresh context');
+  expect((await courseAdmissionAttempts.get()).values[0].value).toBe(2);
+});
+
+it.each([false, true])('rolls back combined busy admission (personal acquired=%s) before retrying', async personal_acquired => {
+  mock.query.mockResolvedValueOnce([{ personal_acquired, acquired: false }]).mockResolvedValue([{ personal_acquired: true, acquired: true }]);
+  const write = vi.fn();
+  const task = runMutationTransaction(async tx => {
+    expect(hasCourseMutationAdmission(tx, 'course')).toBe(false);
+    await tryPersonalCourseMutationAdmission(tx, 'learning-events:course:student', 'course');
+    write();
+  }, { lowPriorityCourseId: 'course', deferCourseAdmission: true });
+  await vi.runAllTimersAsync(); await task;
+  expect(mock.transaction).toHaveBeenCalledTimes(2); expect(mock.query).toHaveBeenCalledTimes(2);
+  expect(write).toHaveBeenCalledTimes(1); expect(mock.commits).toBe(1); expect(mock.active).toBe(0);
+  expect((await courseAdmissionAttempts.get()).values[0].value).toBe(personal_acquired ? 4 : 3);
+});
+
+it.each([0, 0.5, 0.9999])('bounds combined heartbeat contention within the original 10s budget (jitter=%s) with no writes', async jitter => {
+  vi.spyOn(Math, 'random').mockReturnValue(jitter);
+  mock.query.mockResolvedValue([{ personal_acquired: true, acquired: false }]);
+  const write = vi.fn();
+  const task = runMutationTransaction(async tx => {
+    await tryPersonalCourseMutationAdmission(tx, 'learning-events:course:student', 'course'); write();
+  }, { lowPriorityCourseId: 'course', deferCourseAdmission: true }).catch(error => error);
+  await vi.runAllTimersAsync();
+  expect(await task).toBeInstanceOf(CourseAdmissionTimeoutError);
+  // The production guard refuses another transaction with <3ms remaining.
+  // Jitter can therefore exhaust usable budget 0–2ms before the deadline;
+  // assert the strict upper bound, not an exact wake-up at 10000ms.
+  expect(performance.now()).toBeGreaterThanOrEqual(9998);
+  expect(performance.now()).toBeLessThanOrEqual(10000); expect(write).not.toHaveBeenCalled(); expect(mock.commits).toBe(0);
+  expect(Number(mock.query.mock.calls.at(-1)?.[3])).toBeLessThan(1000);
 });

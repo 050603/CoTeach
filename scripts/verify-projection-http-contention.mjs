@@ -11,6 +11,7 @@ import { PrismaClient } from '@prisma/client';
 import { SignJWT } from 'jose';
 import { WebSocket } from 'ws';
 import { configureCapacityNetwork } from './capacity-network.mjs';
+import { pairCapacityRequestTiming } from './capacity-request-timing.mjs';
 import templateModule from '../src/lib/platform/pbl-template.ts';
 const { createPblTemplateCourse, encodePblTemplate } = templateModule;
 
@@ -30,11 +31,14 @@ url.searchParams.set('connection_limit', '2');
 const db = new PrismaClient({ datasourceUrl: url.href });
 const secret = new TextEncoder().encode((await readFile('deploy/secrets/jwt_secret.txt', 'utf8')).trim());
 const report = { runId, origin, connectAddress: network.address, startedAt: new Date().toISOString(), rounds, heartbeats, includeState, modes,
+  network: { scope: 'internal', connectAddress: network.address, transportMode: network.transportMode },
   deploymentId: process.env.PROJECTION_DEPLOYMENT_ID || null,
   workload: `real HTTP/42 WebSocket receivers; no mocked API; practice=40 draft${includeState ? '+40 state' : ''}${heartbeats ? '+40 heartbeat' : ''}; extra cross-stage stress=those plus40 quiz+40 progress`,
   fixture: null, batches: [], databaseWaitSamples: [], errors: [], outcome: 'running' };
 const users = [], sockets = [], pendingProjection = new Map();
 const metrics = new Map();
+const serverTimings = new Map();
+const pairedTimings = [];
 let instanceId, classroomId, monitorRunning = false;
 const percentile = (list, p) => list.length ? list.toSorted((a, b) => a - b)[Math.ceil(list.length * p) - 1] : null;
 const stats = list => ({ count: list.length, p95Ms: percentile(list, .95), maxMs: list.length ? Math.max(...list) : null });
@@ -43,8 +47,17 @@ async function request(actor, method, endpoint, body, category) {
   try {
     const response = await fetch(`${origin}${endpoint}`, { method, headers: { Origin: origin,
       Cookie: actor.cookie, 'X-OpenPBL-Role': actor.role, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-    ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30_000) });
+    ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30_000), dispatcher: network.dispatcherForActor(actor) });
     const payload = await response.json().catch(() => null);
+    const paired = pairCapacityRequestTiming({ category, requestId: body?.requestId,
+      elapsedMs: performance.now() - start, serverTiming: response.headers.get('server-timing') });
+    if (category) for (const [phase, duration] of Object.entries(paired.phases)) {
+      const key = `${category}:${phase}`;
+      const values = serverTimings.get(key) ?? []; values.push(duration); serverTimings.set(key, values);
+    }
+    if (category && Object.keys(paired.phases).length) {
+      pairedTimings.push({ ...paired, status: response.status });
+    }
     assert.equal(response.status, 200, `${method} ${endpoint}: ${response.status} ${JSON.stringify(payload)?.slice(0, 500)}`);
     return payload;
   } finally {
@@ -201,20 +214,24 @@ try {
 } catch (error) {
   report.outcome = 'failed'; report.errors.push(String(error)); process.exitCode = 1;
 } finally {
-  monitorRunning = false;
-  for (const socket of sockets) socket.close();
-  await delay(100);
-  for (const socket of sockets) if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
-  await db.$disconnect();
-  report.metrics = Object.fromEntries([...metrics].map(([key, values]) => [key, stats(values)]));
-  report.finishedAt = new Date().toISOString();
-  report.maxAdvisoryWaiters = Math.max(0, ...report.databaseWaitSamples.map(value => value.advisoryWaiters));
-  report.projectionRequests = stats(report.batches.map(value => value.projection.httpMs));
-  report.projectionLastReceivers = stats(report.batches.map(value => value.projection.websocket.maxMs));
-  report.byMode = Object.fromEntries(modes.map(mode => [mode, { projection: stats(report.batches.filter(value => value.mode === mode).map(value => value.projection.httpMs)), lastReceiver: stats(report.batches.filter(value => value.mode === mode).map(value => value.projection.websocket.maxMs)) }]));
-  report.acceptance = { projectionP95Under500ms: report.projectionRequests.p95Ms <= 500, lastReceiverP95Under500ms: report.projectionLastReceivers.p95Ms <= 500, practiceSaveP95Under2000ms: report.metrics['draft-draft']?.p95Ms <= 2000 };
-  if (includeState && modes.includes('draft')) report.acceptance.practiceReadP95Under1000ms = report.metrics['draft-state']?.p95Ms <= 1000;
-  if (report.outcome === 'measured' && Object.values(report.acceptance).some(value => !value)) { report.outcome = 'latency-failed'; process.exitCode = 1; }
-  await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
-  console.log(JSON.stringify({ output, outcome: report.outcome, projection: report.projectionRequests, delivery: report.projectionLastReceivers, maxAdvisoryWaiters: report.maxAdvisoryWaiters, errors: report.errors }));
+  try {
+    monitorRunning = false;
+    for (const socket of sockets) socket.close();
+    await delay(100);
+    for (const socket of sockets) if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+    await db.$disconnect();
+    report.metrics = Object.fromEntries([...metrics].map(([key, values]) => [key, stats(values)]));
+    report.serverTimings = Object.fromEntries([...serverTimings].map(([key, values]) => [key, stats(values)]));
+    report.pairedTimings = pairedTimings;
+    report.finishedAt = new Date().toISOString();
+    report.maxAdvisoryWaiters = Math.max(0, ...report.databaseWaitSamples.map(value => value.advisoryWaiters));
+    report.projectionRequests = stats(report.batches.map(value => value.projection.httpMs));
+    report.projectionLastReceivers = stats(report.batches.map(value => value.projection.websocket.maxMs));
+    report.byMode = Object.fromEntries(modes.map(mode => [mode, { projection: stats(report.batches.filter(value => value.mode === mode).map(value => value.projection.httpMs)), lastReceiver: stats(report.batches.filter(value => value.mode === mode).map(value => value.projection.websocket.maxMs)) }]));
+    report.acceptance = { projectionP95Under500ms: report.projectionRequests.p95Ms <= 500, lastReceiverP95Under500ms: report.projectionLastReceivers.p95Ms <= 500, practiceSaveP95Under2000ms: report.metrics['draft-draft']?.p95Ms <= 2000 };
+    if (includeState && modes.includes('draft')) report.acceptance.practiceReadP95Under1000ms = report.metrics['draft-state']?.p95Ms <= 1000;
+    if (report.outcome === 'measured' && Object.values(report.acceptance).some(value => !value)) { report.outcome = 'latency-failed'; process.exitCode = 1; }
+    await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
+    console.log(JSON.stringify({ output, outcome: report.outcome, projection: report.projectionRequests, delivery: report.projectionLastReceivers, maxAdvisoryWaiters: report.maxAdvisoryWaiters, errors: report.errors }));
+  } finally { await network.close(); }
 }

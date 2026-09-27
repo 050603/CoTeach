@@ -26,6 +26,10 @@ export async function persistStudentAiProgress(
   const fingerprint = request?.fingerprint ?? createHash("sha256").update(JSON.stringify({ ...fallback, lastActiveAt: undefined })).digest("hex");
   const requestId = request?.requestId ?? `legacy-${fingerprint}`;
   const receiptKey = `ai-progress:${courseId}:${studentId}:${requestId}`;
+  // These allowlists belong to the immutable request context. Prepare them
+  // before joining the course write queue; merge only against locked data.
+  const validIds = allowedScenes && new Set(allowedScenes.map(scene => scene.id));
+  const validOutlines = allowedScenes && new Set(allowedScenes.map(scene => scene.outlineId?.trim() || scene.id));
   const result = await runMutationTransaction(async (tx) => {
     await lockProjectedCourse(tx, courseId);
     // Read the current learner and classroom in one round trip while holding
@@ -33,11 +37,11 @@ export async function persistStudentAiProgress(
     const [participation] = await tx.$queryRaw<Array<{
       id: string; offeringId: string; researchKey: string; projectState: unknown;
       userStatus: string; userRole: string; sessionVersion: number; enrollmentStatus: string; receipt: unknown;
-      stageProgress: unknown; runtimeConfig: unknown; classroomStatus: string; offeringStatus: string; archivedAt: Date | null;
+      stageProgress: unknown; runtimeVersion: unknown; classroomStatus: string; offeringStatus: string; archivedAt: Date | null;
     }>>`SELECT p.id, e."offeringId", e."researchKey", w."projectState", p."stageProgress",
       u.status AS "userStatus", u.role AS "userRole", u."sessionVersion", e.status AS "enrollmentStatus",
       (SELECT payload FROM "DomainEvent" WHERE "idempotencyKey" = ${receiptKey}) AS receipt,
-      ci."runtimeConfig", ci.status AS "classroomStatus", o.status AS "offeringStatus", a."archivedAt"
+      ci."runtimeConfig"->'version' AS "runtimeVersion", ci.status AS "classroomStatus", o.status AS "offeringStatus", a."archivedAt"
       FROM "ClassroomParticipation" p JOIN "Enrollment" e ON e.id = p."enrollmentId" JOIN "User" u ON u.id = e."userId"
       JOIN "ClassroomInstance" ci ON ci.id = p."instanceId"
       JOIN "Activity" a ON a.id = ci."activityId" JOIN "Chapter" c ON c.id = a."chapterId"
@@ -59,8 +63,6 @@ export async function persistStudentAiProgress(
     const projectState = (participation.projectState ?? {}) as Record<string, unknown>;
     const previous = projectState.aiLearningProgress as StudentAiProgress | undefined;
     const matchingPrevious = previous?.classroomId === progress.classroomId ? previous : undefined;
-    const validIds = allowedScenes && new Set(allowedScenes.map(scene => scene.id));
-    const validOutlines = allowedScenes && new Set(allowedScenes.map(scene => scene.outlineId?.trim() || scene.id));
     const completedScenes = Array.from(new Set([
       ...(matchingPrevious?.completedScenes ?? []),
       ...progress.completedScenes,
@@ -91,14 +93,15 @@ export async function persistStudentAiProgress(
     const stageProgress = Math.min(100, Math.round(completedScenes.length / Math.max(1, progress.totalScenes) * 100));
     const stageState = (participation.stageProgress ?? {}) as Record<string, unknown>;
     const values = (stageState.progress ?? {}) as Record<string, number>;
-    const runtime = (participation.runtimeConfig ?? {}) as Record<string, unknown>;
-    const version = Number(runtime.version ?? 1) + 1;
+    const version = Number(participation.runtimeVersion ?? 1) + 1;
     const now = new Date();
     // Keep lock acquisition and its fresh read in separate statements above.
     // Only the already validated writes share a statement: every receipt is
     // committed atomically with the workspace, percentage and course version.
     const rows = await tx.$queryRaw<Array<{ id: string; createdAt: Date }>>`WITH course AS (
-      UPDATE "ClassroomInstance" SET "runtimeConfig" = ${JSON.stringify({ ...runtime, version })}::jsonb, "updatedAt" = ${now}
+      UPDATE "ClassroomInstance" SET "runtimeConfig" = jsonb_set(
+        CASE WHEN jsonb_typeof("runtimeConfig") = 'object' THEN "runtimeConfig" ELSE '{}'::jsonb END,
+        '{version}', ${JSON.stringify(version)}::jsonb), "updatedAt" = ${now}
       WHERE id = ${courseId} RETURNING id
     ), workspace AS (
       INSERT INTO "StudentProjectWorkspace" (id, "participationId", "projectState", "updatedAt")

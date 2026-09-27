@@ -1,86 +1,16 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
-import { courseAdmissionAttempts, courseAdmissionBackoff, courseAdmissionBusy, courseAdmissionTimeouts, courseAdmissionWaiting, courseAdmissionQueued, courseAdmissionLocalActive, courseAdmissionQueueRejected, courseAdmissionQueueWait } from "@/lib/observability/course-admission";
+import { courseAdmissionAttempts, courseAdmissionBackoff, courseAdmissionBusy, courseAdmissionTimeouts, courseAdmissionWaiting, courseAdmissionPipelineLockWaits } from "@/lib/observability/course-admission";
+
+import { acquireLocalCourseSlot } from "./course-mutation-queue";
+import { observeMutationPhase } from "@/lib/observability/mutation-timing";
 
 const MAX_ATTEMPTS = 5;
 const ADMISSION_BUDGET_MS = 10_000;
-const MAX_LOCAL_WAITERS_PER_COURSE = 256;
-const MAX_LOCAL_COURSES = 1_024;
-
-type LocalWaiter = {
-  deadline: number;
-  started: number;
-  timer: ReturnType<typeof setTimeout>;
-  resolve: (release: () => void) => void;
-  reject: (error: Error) => void;
-  timeoutError: () => Error;
-};
-type CourseMutationQueue = { active: boolean; waiters: LocalWaiter[] };
-declare global {
-  // Next server entry bundles must share one queue for the same course. This
-  // is pressure control only: PostgreSQL remains the cross-process authority.
-  var __openPblCourseMutationQueues: Map<string, CourseMutationQueue> | undefined;
-}
-const localCourseQueues = globalThis.__openPblCourseMutationQueues ??= new Map<string, CourseMutationQueue>();
-
-function acquireLocalCourseSlot(courseId: string, deadline: number, timeoutError: () => Error, busyError: () => Error): Promise<() => void> {
-  let queue = localCourseQueues.get(courseId);
-  if ((!queue && localCourseQueues.size >= MAX_LOCAL_COURSES) || (queue && queue.waiters.length >= MAX_LOCAL_WAITERS_PER_COURSE)) {
-    courseAdmissionQueueRejected.inc();
-    return Promise.reject(busyError());
-  }
-  if (!queue) {
-    queue = { active: false, waiters: [] };
-    localCourseQueues.set(courseId, queue);
-  }
-  const current = queue;
-  return new Promise((resolve, reject) => {
-    const started = performance.now();
-    const waiter: LocalWaiter = {
-      deadline, started, resolve, reject, timeoutError,
-      timer: setTimeout(() => {
-        const index = current.waiters.indexOf(waiter);
-        if (index === -1) return;
-        current.waiters.splice(index, 1);
-        finishLocalWait(waiter);
-        reject(timeoutError());
-        drainLocalCourseQueue(courseId, current);
-      }, Math.max(0, deadline - started)),
-    };
-    current.waiters.push(waiter);
-    courseAdmissionQueued.inc();
-    drainLocalCourseQueue(courseId, current);
-  });
-}
-
-function finishLocalWait(waiter: LocalWaiter) {
-  clearTimeout(waiter.timer);
-  courseAdmissionQueued.dec();
-  courseAdmissionQueueWait.observe((performance.now() - waiter.started) / 1000);
-}
-
-function drainLocalCourseQueue(courseId: string, queue: CourseMutationQueue) {
-  if (queue.active) return;
-  for (let waiter = queue.waiters.shift(); waiter; waiter = queue.waiters.shift()) {
-    finishLocalWait(waiter);
-    if (performance.now() >= waiter.deadline) { waiter.reject(waiter.timeoutError()); continue; }
-    queue.active = true;
-    courseAdmissionLocalActive.inc();
-    let released = false;
-    waiter.resolve(() => {
-      if (released) return;
-      released = true;
-      queue.active = false;
-      courseAdmissionLocalActive.dec();
-      drainLocalCourseQueue(courseId, queue);
-    });
-    return;
-  }
-  if (localCourseQueues.get(courseId) === queue) localCourseQueues.delete(courseId);
-}
-
 class CourseAdmissionContended extends Error {}
 const admittedStatementBudgets = new WeakMap<Prisma.TransactionClient, () => number>();
+const blockingCourseAdmissions = new WeakMap<Prisma.TransactionClient, string>();
+const admissionNotifiers = new WeakMap<Prisma.TransactionClient, () => void>();
 const admittedCourseLocks = new WeakMap<Prisma.TransactionClient, Set<string>>();
 
 /** Only this exact transaction's successfully acquired xact locks qualify. */
@@ -117,7 +47,28 @@ export async function tryPersonalMutationAdmission(tx: Prisma.TransactionClient,
   if (!lock.acquired) { courseAdmissionBusy.inc(); throw new CourseAdmissionContended(); }
 }
 
+/** Heartbeat-only combination: MATERIALIZED evaluates the personal lock once;
+ * CASE prevents acquiring course when personal is busy. Any busy result throws
+ * out of the callback, rolling back BOTH xact locks and the LOCAL setting. */
+export async function tryPersonalCourseMutationAdmission(tx: Prisma.TransactionClient, key: string, courseId: string) {
+  const milliseconds = admittedStatementBudgets.get(tx)?.() ?? 1_000;
+  courseAdmissionAttempts.inc();
+  const [lock] = await tx.$queryRaw<Array<{ personal_acquired: boolean; acquired: boolean }>>`
+    WITH personal AS MATERIALIZED (
+      SELECT pg_try_advisory_xact_lock(hashtextextended(${key}, 0)) AS acquired
+    ) SELECT personal.acquired AS personal_acquired,
+      CASE WHEN personal.acquired THEN pg_try_advisory_xact_lock(hashtextextended(${`v2-course:${courseId}`}, 0)) ELSE false END AS acquired,
+      set_config('statement_timeout', ${String(milliseconds)}, true) AS statement_budget
+    FROM personal`;
+  if (lock.personal_acquired) courseAdmissionAttempts.inc();
+  if (!lock.personal_acquired || !lock.acquired) { courseAdmissionBusy.inc(); throw new CourseAdmissionContended(); }
+  const locks = admittedCourseLocks.get(tx) ?? new Set<string>();
+  locks.add(courseId);
+  admittedCourseLocks.set(tx, locks);
+}
+
 export async function tryCourseMutationAdmission(tx: Prisma.TransactionClient, courseId: string) {
+  if (blockingCourseAdmissions.get(tx) === courseId) return waitCourseMutationAdmission(tx, courseId);
   // Acquire the nonblocking lock and set its local query budget in one trip.
   // A busy result immediately rolls back; LOCAL cannot leak into the pool.
   const milliseconds = admittedStatementBudgets.get(tx)?.() ?? 1_000;
@@ -129,6 +80,39 @@ export async function tryCourseMutationAdmission(tx: Prisma.TransactionClient, c
   const locks = admittedCourseLocks.get(tx) ?? new Set<string>();
   locks.add(courseId);
   admittedCourseLocks.set(tx, locks);
+  admissionNotifiers.get(tx)?.();
+}
+
+/** Experimental candidate only: lock_timeout starts when PostgreSQL waits for
+ * the advisory lock. Ordered MATERIALIZED CTEs install it before lock acquisition
+ * and restore the previous setting afterward. statement_timeout remains LOCAL
+ * for later business statements; its current-statement behavior is not assumed.
+ */
+async function waitCourseMutationAdmission(tx: Prisma.TransactionClient, courseId: string) {
+  const milliseconds = admittedStatementBudgets.get(tx)?.() ?? 1000;
+  courseAdmissionAttempts.inc(); courseAdmissionPipelineLockWaits.inc();
+  try {
+    await tx.$queryRaw`WITH previous AS MATERIALIZED (
+        SELECT current_setting('lock_timeout') AS lock_timeout
+      ), settings AS MATERIALIZED (
+        SELECT previous.lock_timeout,
+          set_config('lock_timeout', ${String(milliseconds)}, true) AS lock_budget,
+          set_config('statement_timeout', ${String(milliseconds)}, true) AS statement_budget
+        FROM previous
+      ), admitted AS MATERIALIZED (
+        SELECT settings.lock_timeout, pg_advisory_xact_lock(hashtextextended(${`v2-course:${courseId}`}, 0))::text AS acquired
+        FROM settings
+      ) SELECT set_config('lock_timeout', admitted.lock_timeout, true) AS restored FROM admitted`;
+  } catch (error) {
+    // Only this lock admission statement can turn 55P03 into retryable busy.
+    // A lock error raised by business SQL is propagated without replaying it.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2010" && String(error.meta?.code) === "55P03") {
+      courseAdmissionBusy.inc(); throw new CourseAdmissionContended();
+    }
+    throw error;
+  }
+  const locks = admittedCourseLocks.get(tx) ?? new Set<string>();
+  locks.add(courseId); admittedCourseLocks.set(tx, locks); admissionNotifiers.get(tx)?.();
 }
 
 /**
@@ -147,12 +131,13 @@ export async function runMutationTransaction<T>(
   const deadline = options.lowPriorityCourseId ? performance.now() + ADMISSION_BUDGET_MS : undefined;
   const timeoutError = () => { courseAdmissionTimeouts.inc(); return options.admissionTimeoutError?.() ?? new CourseAdmissionTimeoutError(); };
   const remaining = () => deadline === undefined ? ADMISSION_BUDGET_MS : Math.max(0, Math.ceil(deadline - performance.now()));
-  // The deadline starts BEFORE queueing. At most one local student writer
-  // enters/retries for a course; queued requests use no transaction or pool
-  // connection. Teachers bypass this optimization and keep the original lock.
-  const release = options.lowPriorityCourseId
+  // The deadline starts BEFORE queueing. Default: one local writer per course.
+  // Opt-in pipeline permits one bounded nondeferred candidate only after its
+  // predecessor holds admission. Queued requests consume no DB connection.
+  // Teachers bypass the local queue and retain the same PostgreSQL lock.
+  const permit = options.lowPriorityCourseId
     ? await acquireLocalCourseSlot(options.lowPriorityCourseId, deadline!, timeoutError,
-      () => options.admissionTimeoutError?.() ?? new CourseAdmissionTimeoutError())
+      () => options.admissionTimeoutError?.() ?? new CourseAdmissionTimeoutError(), !options.deferCourseAdmission)
     : undefined;
   try {
     let failures = 0;
@@ -168,27 +153,42 @@ export async function runMutationTransaction<T>(
       // Prisma expires the transaction but does not cancel an ongoing query.
       // Reserve a final statement window; PostgreSQL cancels it server-side.
       const transactionTimeout = deadline === undefined ? budget : Math.max(1, budget - maxWait - statementAllowance);
+      const transactionStarted = performance.now();
+      let transactionFinished: number | undefined;
+      let callbackStarted: number | undefined;
+      let callbackFinished: number | undefined;
+      let transactionOutcome: "success" | "error" = "error";
       try {
-        return await prisma.$transaction(async tx => {
-          if (options.lowPriorityCourseId) {
-            admittedStatementBudgets.set(tx, () => Math.max(1, Math.min(statementAllowance, remaining())));
-            if (!remaining()) throw timeoutError();
-            // A failed admission does no domain reads/writes and releases its
-            // connection before sleeping. Teachers continue to queue on the
-            // exact same PostgreSQL lock, across processes and connection pools.
-            if (!options.deferCourseAdmission) await tryCourseMutationAdmission(tx, options.lowPriorityCourseId);
-            if (!remaining()) throw timeoutError();
-          }
-          const result = await operation(tx);
-          // A request admitted near its deadline must not commit a late write.
-          if (deadline !== undefined && !remaining()) throw timeoutError();
-          return result;
+        const transactionResult = await prisma.$transaction(async tx => {
+          callbackStarted = performance.now();
+          try {
+            if (options.lowPriorityCourseId) {
+              if (permit?.blockingAdmission) blockingCourseAdmissions.set(tx, options.lowPriorityCourseId);
+              if (permit) admissionNotifiers.set(tx, permit.admitted);
+              admittedStatementBudgets.set(tx, () => Math.max(1, Math.min(statementAllowance, remaining())));
+              if (!remaining()) throw timeoutError();
+              // A failed admission does no domain reads/writes and releases its
+              // connection before sleeping. Teachers continue to queue on the
+              // exact same PostgreSQL lock, across processes and connection pools.
+              if (!options.deferCourseAdmission) await tryCourseMutationAdmission(tx, options.lowPriorityCourseId);
+              if (!remaining()) throw timeoutError();
+            }
+            const result = await operation(tx);
+            // A request admitted near its deadline must not commit a late write.
+            if (deadline !== undefined && !remaining()) throw timeoutError();
+            return result;
+          } finally { callbackFinished = performance.now(); }
         }, {
           isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
           maxWait,
           timeout: transactionTimeout,
         });
+        transactionFinished = performance.now();
+        transactionOutcome = "success";
+        return transactionResult;
       } catch (error) {
+        transactionFinished = performance.now();
+        permit?.attemptFinished();
         if (error instanceof CourseAdmissionContended) {
           if (!remaining()) throw timeoutError();
           contention++;
@@ -206,12 +206,29 @@ export async function runMutationTransaction<T>(
           throw error;
         }
         await delay(Math.min(remaining(), retryDelayMs(failures)));
+      } finally {
+        permit?.attemptFinished();
+        const finished = transactionFinished ?? performance.now();
+        const kind = options.lowPriorityCourseId ? "student" : "regular";
+        observeMutationPhase(kind, "startup", transactionOutcome, (callbackStarted ?? finished) - transactionStarted);
+        if (callbackStarted !== undefined && callbackFinished !== undefined) {
+          observeMutationPhase(kind, "callback", transactionOutcome, callbackFinished - callbackStarted);
+          observeMutationPhase(kind, "completion", transactionOutcome, finished - callbackFinished);
+        }
       }
     }
-  } finally { release?.(); }
+  } finally { permit?.release(); }
 }
 
 export function isRetryableTransactionError(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientUnknownRequestError) {
+    // Prisma 6.19.3 delegates can wrap a real PostgreSQL deadlock in this Rust
+    // ConnectorError diagnostic instead of P2034. Match only the outer first
+    // server code at its complete diagnostic boundary, never arbitrary message
+    // or user-controlled detail text. A changed format deliberately fails closed.
+    const diagnostic = /(?:^|\n)Error occurred during query execution:\nConnectorError\(ConnectorError \{ user_facing_error: None, kind: QueryError\(PostgresError \{ code: "([0-9A-Z]{5})", message: [^\r\n]*\}\), transient: (?:false|true) \}\)(?:\n)?$/.exec(error.message);
+    return diagnostic?.[1] === "40001" || diagnostic?.[1] === "40P01";
+  }
   if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
   if (error.code === "P2034") return true;
   if (error.code !== "P2010") return false;

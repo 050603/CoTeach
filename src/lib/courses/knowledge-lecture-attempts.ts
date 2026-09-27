@@ -20,7 +20,7 @@ export function withGradeSummary(attempt: KnowledgeLectureAttempt): KnowledgeLec
   return { ...attempt, gradingStatus: attempt.questions.some(question => question.gradingStatus === "failed") ? "failed" : attempt.questions.some(question => question.gradingStatus !== "graded") ? "pending" : "graded", score: graded.reduce((sum, question) => sum + question.earned, 0), maxScore: graded.reduce((sum, question) => sum + question.points, 0) };
 }
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-type Input = { courseId: string; studentId: string; classroomId: string; attempt: KnowledgeLectureAttempt };
+type Input = { courseId: string; studentId: string; classroomId: string; attempt: KnowledgeLectureAttempt; sessionVersion?: number };
 
 /** Authorized quiz/tutor reads need authored context and one learner's progress only. */
 export async function loadKnowledgeLectureContext(courseId: string, studentId: string) {
@@ -43,16 +43,27 @@ export async function persistKnowledgeLectureAttempt(input: Input, grades?: Read
   const result = await runMutationTransaction(async tx => {
     await lockProjectedCourse(tx, input.courseId);
     // One current, owned snapshot under the same lock as progress and closure.
-    const [row] = await tx.$queryRaw<Array<{ participationId: string; offeringId: string; researchKey: string; status: string; enrollmentStatus: string; offeringStatus: string; archivedAt: Date | null; runtimeConfig: unknown; projectState: unknown; classroomId: string | null }>>`
+    const [row] = await tx.$queryRaw<Array<{ participationId: string; offeringId: string; researchKey: string; status: string; enrollmentStatus: string; offeringStatus: string; archivedAt: Date | null; runtimeConfig: unknown; projectState: unknown; classroomId: string | null;
+      userStatus: string; userRole: string; sessionVersion: number }>>`
       SELECT p.id AS "participationId", e."offeringId", e."researchKey", ci.status, e.status AS "enrollmentStatus",
+        u.status AS "userStatus", u.role AS "userRole", u."sessionVersion",
         o.status AS "offeringStatus", a."archivedAt", ci."runtimeConfig", w."projectState",
         COALESCE(NULLIF(v.snapshot #>> '{design,aiLearningClassroomId}', ''), v.snapshot #>> '{design,content,_openmaicClassroomId}') AS "classroomId"
       FROM "ClassroomParticipation" p JOIN "Enrollment" e ON e.id = p."enrollmentId"
+      JOIN "User" u ON u.id = e."userId"
       JOIN "ClassroomInstance" ci ON ci.id = p."instanceId" JOIN "ClassroomTemplateVersion" v ON v.id = ci."templateVersionId"
       JOIN "Activity" a ON a.id = ci."activityId" JOIN "Chapter" c ON c.id = a."chapterId" JOIN "CourseOffering" o ON o.id = c."offeringId"
       LEFT JOIN "StudentProjectWorkspace" w ON w."participationId" = p.id
       WHERE p."instanceId" = ${input.courseId} AND e."userId" = ${input.studentId} AND e."offeringId" = o.id`;
     if (!row) throw new PlatformError("STUDENT_NOT_FOUND", "未加入该课堂", 403);
+    // Recheck new submissions and their replays after waiting for the lock.
+    // An already accepted grading job may still finish after classroom closure;
+    // it can only update grading fields of the immutable original answer below.
+    if (!grades && (row.userStatus.toUpperCase() !== "ACTIVE" || row.userRole.toUpperCase() !== "STUDENT"
+      || (input.sessionVersion !== undefined && row.sessionVersion !== input.sessionVersion)
+      || !["ACTIVE", "COMPLETED"].includes(row.enrollmentStatus.toUpperCase()))) {
+      throw new PlatformError("FORBIDDEN", "账户、会话或选课权限已变化", 403);
+    }
     if (row.classroomId !== input.classroomId) throw new PlatformError("QUIZ_SCENE_CHANGED", "课堂学习内容已变化", 409);
     const state = object(row.projectState);
     const stored = state.aiLearningProgress as StudentAiProgress | undefined;

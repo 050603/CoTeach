@@ -8,6 +8,9 @@
 - `openpbl-local-wal.service` 持续同步接收 WAL；专用复制槽保留 WAL，上限 4 GiB，接收器长期离线时避免无限占用生产磁盘。超限丢失 WAL 后必须重新建立基础备份，状态检查不会继续报告健康。
 - 每 5 分钟生成完整逻辑数据库快照（包括账号、所有学习过程、AI 对话、原始答案与实践版本），在同一 MVCC 快照记录每张表的行数和内容摘要。目录格式按表压缩，未变化的表数据复用前一快照的硬链接，避免重复保存大型教材与向量表。
 - 同时保存全部 uploads、classrooms、whiteboards、AI 审计待补写队列和运行所需配置/密钥，使用硬链接复用未变化的文件；SQLite 使用在线备份 API。待补写队列在数据库快照之前复制，确保消费中的事件至少存在于队列副本或后续数据库快照。为所有文件生成 SHA-256，并按数据库的 `FileAsset` 引用检查上传内容，任何缺失或摘要不符均不得确认成功。
+- 若 `.openpbl-data/capacity-evidence/` 存在，额外保存容量验收原始证据至 `files/capacity-evidence/`，包含逐运行报告与附件，沿用增量硬链接、完整文件 SHA-256、隔离恢复逐文件校验及 30 天保留策略；没有该目录的旧部署与旧恢复点仍可验证业务数据。uploads/classrooms/whiteboards 仍为必需目录。验收目录和内部符号链接会拒绝备份，避免读取目录外数据。此副本只保留当时原始字节，不重建已丢失报告，也不把进行中或失败的验收结论改为通过。
+- `source/` 独立保存当前工作树的应用/工作区包源码、静态资源、脚本、依赖锁文件与补丁、Prisma schema/全部迁移、Next/TypeScript 构建配置及部署工具，包含已跟踪文件的未提交修改和未忽略的新文件。`source-manifest.json` 记录各文件 SHA-256、字节数和权限，以及整树摘要、Git HEAD 和 dirty 标记；外层 manifest 另外记录源码清单的 SHA-256。Git HEAD 只是基准提交，**不代表备份源码等于该提交或当前运行的 immutable release**。发现复制期间源码变化或必要构建输入缺失时，不确认该恢复点。
+- 源码只从明确的源码目录/根配置白名单选择；排除 `.git`、Git/SSH/registry 凭据、`node_modules`、运行数据库文件、测试报告/大产物、生成的 `dist`/`workers`/Next 构建与 runtime 目录，并拒绝源码符号链接。密钥仍只走原有私有 `configuration/` 范围。DOCX worker 的 engine/pool/入口、`build-document-converter-worker.mjs`、锁定依赖与 DOCX 补丁必须齐全；生成 bundle 可以重建，不重复备份依赖目录。所有内容继续在权限 `0700` 的本机备份根目录内，未修改 30 天策略。
 - 只清理超过 30 天的备份，保留覆盖最早恢复点所需的前一个基础备份及 WAL；不会删除业务原始数据。配置和凭据只存在私有备份目录，不写入报告。
 
 主机需要 Docker、Python 3 和 rsync，无需安装额外 Python 包。默认连接本机 `openpbl-postgres-1` 容器的 PostgreSQL 16、端口 15432、数据库 `openpbl`，使用现有 localhost trust 规则。非此部署需通过 `OPENPBL_BACKUP_POSTGRES_CONTAINER`、`OPENPBL_BACKUP_POSTGRES_PORT`、`OPENPBL_BACKUP_DATABASE` 和 `OPENPBL_BACKUP_DATABASE_USER` 指定目标，并检查数据库访问规则。
@@ -41,9 +44,11 @@ python3 -m unittest discover -s tests/deploy -p test_local_backup.py -v
 
 `drill` 首先检查所有备份文件与数据库引用的 SHA-256，然后将基础备份复制到唯一的隔离目录，在 **无网络、无宿主机端口、无生产卷挂载** 的容器中回放 WAL 到备份的命名恢复点；再将逻辑快照恢复到隔离容器的新数据库，并逐表对比全部行的内容摘要。报告只含时间、计数和校验结果。结束后删除该次演练容器与临时数据库副本，保留备份和报告。物理恢复点略晚于逻辑快照；精确表对账以逻辑快照为准，文件与逻辑快照是完整配套恢复点。
 
+新恢复点还将 `source/` 和源码清单复制到隔离目录，独立核验准确文件集合、全部内容与权限、锁文件/迁移/依赖补丁和 DOCX worker 构建输入；结果记入 `sourceRecovery`。旧恢复点保持可读，但明确报告没有源码快照。此项**不安装依赖或执行应用构建**，报告固定 `applicationRebuilt: false`；因此不能据此声称从备份重新构建整站已通过或把既有 DB/文件 RTO 当成包含重建的 RTO。实际源码丢失时，需在新的空目录恢复源码与配置，再按 Node 22、pnpm 10.4.1 执行锁文件安装（保留 postinstall）和 `pnpm build`，验证生成 worker 的 SHA、standalone trace 与页面后才切换；安装可能需要可用的依赖缓存或 registry，此前不覆盖正式实例。
+
 SQLite 在线备份必须在计算文件清单前显式关闭源、目的连接；Python 连接的 `with` 仅提交事务，不代表关闭。否则临时 WAL/SHM 会进入清单并在垃圾回收后消失。非空 WAL-mode 隔离回归同时检查连接回收后的清单稳定性及独立只读恢复内容。
 
-实际恢复时先运行演练验证所选备份，再在维护窗口停止应用写入；将所选逻辑快照恢复到新的数据库实例并还原同一快照下的 `files/`、`configuration/`，验证后切换应用连接。不要直接覆盖仍在运行的生产目录。若只进行物理 PITR，必须另检查命名恢复点与文件之间的新引用差异；持续 WAL 本身不能替代配套文件快照。配置目录含敏感信息，不能上传到代码仓库或附在工单中。
+实际恢复时先运行演练验证所选备份，再在维护窗口停止应用写入；将所选逻辑快照恢复到新的数据库实例并还原同一快照下的 `files/`、`configuration/`；需要重建应用时还原 `source/`，验证后切换应用连接。不要直接覆盖仍在运行的生产目录。若只进行物理 PITR，必须另检查命名恢复点与文件之间的新引用差异；持续 WAL 本身不能替代配套文件快照。配置目录含敏感信息，不能上传到代码仓库或附在工单中。
 
 本次 42 人容量验收结束后的准确执行顺序、锁冲突判断、证据位置和 RPO/RTO 核对见 [最终备份与恢复操作单](../../docs/audits/2026-09-26-classroom-capacity/final-backup-restore-runbook.md)。该操作单需等待持续负载、最终归档、重启与对账全部结束后再执行，不代表最终恢复已通过。测试自建数据只在新恢复证据确认后清理；投屏探针须显式指定 `--kind=projection-contention`，详见 [清理说明](../../docs/audits/2026-09-26-classroom-capacity/cleanup.md)。
 

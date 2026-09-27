@@ -1,7 +1,11 @@
 import JSZip from "jszip";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildProjectDocumentDocx, prepareProjectDocumentHtml } from "./document-archive";
 
+vi.mock("./document-conversion-pool", async () => {
+  const { convertDocument } = await import("./document-conversion-engine");
+  return { convertDocumentInWorker: convertDocument, initializeDocumentConversionPool: vi.fn() };
+});
 const ONE_PIXEL_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lM3pWQAAAABJRU5ErkJggg==";
 
 describe("project practice document archive", () => {

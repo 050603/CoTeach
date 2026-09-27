@@ -11,9 +11,18 @@
 //     翻转关闭标志 → 运行清理钩子 → 关闭 WebSocket → 断开 Prisma → exit 0。
 
 let registered = false;
+let registration: Promise<void> | null = null;
 
-export async function register(): Promise<void> {
-  if (registered) return;
+export function register(): Promise<void> {
+  if (registered) return Promise.resolve();
+  if (!registration) registration = initialize().then(() => { registered = true; }, error => {
+    registration = null;
+    throw error;
+  });
+  return registration;
+}
+
+async function initialize(): Promise<void> {
   const { assertProductionEnvironment } = await import("@/lib/config/env");
   assertProductionEnvironment();
   const { installEnvironmentHttpProxy } = await import(
@@ -24,7 +33,14 @@ export async function register(): Promise<void> {
     "@/lib/openmaic/server/provider-config"
   );
   await initializeServerProviderConfig();
-  registered = true;
+  // A first class-wide submission must not pay the browser-oriented DOCX
+  // module's cold parsing cost on the request/event loop. A failed engine load
+  // fails startup rather than advertising an unusable submission feature.
+  const { initializeProjectDocumentArchive } = await import("@/lib/project-practice/document-archive");
+  await initializeProjectDocumentArchive();
+  const { registerShutdownHook } = await import("@/lib/runtime/lifecycle");
+  const { stopDocumentConversionPool } = await import("@/lib/project-practice/document-conversion-pool");
+  registerShutdownHook("document-converters", stopDocumentConversionPool, { timeout: 10_000 });
   // Side-effect import: triggers collectDefaultMetrics() exactly once.
   await import("@/lib/observability/metrics");
 
@@ -48,7 +64,7 @@ export async function register(): Promise<void> {
     await initializeEventBus();
     const wsPort = Number(process.env.WEBSOCKET_PORT ?? "3001");
     const wsHost = process.env.WEBSOCKET_HOST?.trim() || "127.0.0.1";
-    startWebSocketServer(wsPort, wsHost);
+    await startWebSocketServer(wsPort, wsHost);
   }
   if (process.env.ENABLE_TLDRAW_SYNC === "true") {
     const { startTldrawSyncServer } = await import(

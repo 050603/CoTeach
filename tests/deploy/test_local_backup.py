@@ -1,11 +1,14 @@
 """Local recovery safeguards, file integrity and 30-day WAL retention."""
 
 import importlib.util
+import contextlib
 import gc
 import json
 import os
 from pathlib import Path
 import sqlite3
+import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -30,6 +33,9 @@ class LocalBackupTest(unittest.TestCase):
         project_patch = patch.object(backup, "PROJECT", self.root)
         project_patch.start()
         self.addCleanup(project_patch.stop)
+        home_patch = patch.object(Path, "home", return_value=self.root)
+        home_patch.start()
+        self.addCleanup(home_patch.stop)
         backup.initialize_dirs()
 
     def test_only_completed_snapshots_are_eligible(self):
@@ -102,6 +108,7 @@ class LocalBackupTest(unittest.TestCase):
         backup.write_json(self.root / "status/last-success.json", previous)
         with patch.object(backup, "take_base", return_value=self.root / "bases/previous"), \
                 patch.object(backup, "dump_consistent", return_value=({}, [])), \
+                patch.object(backup, "snapshot_source", return_value={"gitHead": "test"}), \
                 patch.object(backup, "snapshot_files", side_effect=OSError("No space left on device")):
             with self.assertRaises(OSError):
                 backup.backup()
@@ -124,13 +131,58 @@ class LocalBackupTest(unittest.TestCase):
         self.assertEqual(json.loads((target / "files/ai-audit-outbox/pending.json").read_text())["requestId"], "stable-request")
         self.assertEqual((target / "files/ai-audit-outbox/quarantine/malformed.json").read_bytes(), b"{invalid original bytes")
 
+    def evidence_snapshot(self, name, previous=None):
+        for category in ("uploads", "classrooms", "whiteboards"):
+            (self.root / ".openpbl-data" / category).mkdir(parents=True, exist_ok=True)
+        target = self.root / "snapshots" / name
+        target.mkdir()
+        files = backup.snapshot_files(target, previous)
+        backup.write_json(target / "manifest.json", {"files": files, "assets": []})
+        backup.verify_files(target)
+        return target, files
+
+    def test_optional_evidence_absent_keeps_older_deployment_backup_valid(self):
+        _, files = self.evidence_snapshot("without-evidence")
+        self.assertFalse(any(key.startswith("files/capacity-evidence/") for key in files))
+        shutil.rmtree(self.root / ".openpbl-data/uploads")
+        target = self.root / "snapshots/missing-business"; target.mkdir()
+        with self.assertRaisesRegex(RuntimeError, "Required data directory"):
+            backup.snapshot_files(target, None)
+
+    def test_evidence_original_bytes_incremental_hashes_and_restore_corruption(self):
+        directory = self.root / ".openpbl-data/capacity-evidence/capacity-00000000-0000-4000-8000-000000000001"
+        directory.mkdir(parents=True)
+        original = b'{"outcome":"failed","expected":{"original":"unmodified"}}\n'
+        (directory / "report.json").write_bytes(original)
+        first, files = self.evidence_snapshot("evidence-first")
+        relative = "files/" + str(directory.relative_to(self.root / ".openpbl-data")) + "/report.json"
+        self.assertEqual((first / relative).read_bytes(), original)
+        self.assertEqual(files[relative]["sha256"], backup.sha256(directory / "report.json"))
+        second, _ = self.evidence_snapshot("evidence-second", first)
+        self.assertEqual((first / relative).stat().st_ino, (second / relative).stat().st_ino)
+        (directory / "report.json").write_bytes(b'{"outcome":"partial"}\n')
+        third, _ = self.evidence_snapshot("evidence-third", second)
+        self.assertEqual((first / relative).read_bytes(), original)
+        self.assertNotEqual((first / relative).stat().st_ino, (third / relative).stat().st_ino)
+        (third / relative).write_bytes(b'corrupted')
+        with self.assertRaisesRegex(RuntimeError, "checksum mismatch"):
+            backup.verify_files(third)
+
+    def test_optional_evidence_rejects_symlink_instead_of_reading_outside_root(self):
+        directory = self.root / ".openpbl-data/capacity-evidence"
+        directory.mkdir(parents=True)
+        outside = self.root / "outside-secret"; outside.write_bytes(b'private')
+        (directory / "linked.json").symlink_to(outside)
+        with self.assertRaisesRegex(RuntimeError, "symlinks"):
+            self.evidence_snapshot("evidence-symlink")
+
     def test_nonempty_live_sqlite_wal_snapshot_is_complete_and_readable(self):
         for name in ("uploads", "classrooms", "whiteboards"):
             (self.root / ".openpbl-data" / name).mkdir(parents=True)
         source = self.root / ".openpbl-data/whiteboards/synthetic.sqlite"
         target = self.root / "snapshots/sqlite-check"
         target.mkdir()
-        with sqlite3.connect(source) as live:
+        with contextlib.closing(sqlite3.connect(source)) as live:
             live.execute("PRAGMA journal_mode=WAL")
             live.execute("CREATE TABLE documents (id TEXT PRIMARY KEY, content TEXT NOT NULL)")
             expected = [("first", '{"shape":"rect"}'), ("second", '{"text":"complete evidence"}')]
@@ -143,7 +195,7 @@ class LocalBackupTest(unittest.TestCase):
         self.assertTrue(all((target / relative).is_file() for relative in checksums))
         self.assertFalse(any(relative.endswith(("-wal", "-shm")) for relative in checksums))
         restored = target / "files/whiteboards/synthetic.sqlite"
-        with sqlite3.connect(f"file:{restored}?mode=ro&immutable=1", uri=True) as recovered:
+        with contextlib.closing(sqlite3.connect(f"file:{restored}?mode=ro&immutable=1", uri=True)) as recovered:
             self.assertEqual(recovered.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(recovered.execute("SELECT id, content FROM documents ORDER BY id").fetchall(), expected)
         self.assertEqual(checksums["files/whiteboards/synthetic.sqlite"]["sha256"], backup.sha256(restored))
@@ -195,6 +247,169 @@ class LocalBackupTest(unittest.TestCase):
             self.assertEqual(backup.monitor(), 1)
         state = json.loads((self.root / "status/health.json").read_text())
         self.assertEqual(len(state["reasons"]), 3)
+
+    def prepare_source_fixture(self):
+        files = set(backup.SOURCE_REQUIRED_FILES) | {"patches/docx.patch", "prisma/migrations/20260101_initial/migration.sql",
+                                                   "src/deleted.ts", "public/font.woff2", ".gitignore"}
+        for relative in files:
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original source\n")
+        (self.root / ".gitignore").write_text("node_modules/\n.env.local\ndeploy/secrets/\n")
+        (self.root / "package.json").write_text(json.dumps({"scripts": {"build": "node scripts/build-document-converter-worker.mjs"},
+            "pnpm": {"patchedDependencies": {"@platejs/docx-io@53.3.2": "patches/docx.patch"}}}))
+        subprocess.run(["git", "init", "--quiet", self.root], check=True, capture_output=True)
+        subprocess.run(["git", "-C", self.root, "add", "--", *sorted(files)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", self.root, "-c", "user.name=Backup Test", "-c", "user.email=backup-test@invalid",
+                        "commit", "--quiet", "-m", "isolated source fixture"], check=True, capture_output=True)
+
+    def source_target(self, name="source-check"):
+        target = self.root / "snapshots" / name
+        target.mkdir()
+        return target
+
+    def test_source_snapshot_preserves_working_tree_and_excludes_credentials_and_generated_data(self):
+        self.prepare_source_fixture()
+        engine = "src/lib/project-practice/document-conversion-engine.ts"
+        (self.root / engine).write_text("uncommitted engine change\n")
+        (self.root / "src/new-worker-helper.ts").write_text("untracked build input\n")
+        artifact_route = self.root / "src/app/api/showcase/artifacts/route.ts"
+        artifact_route.parent.mkdir(parents=True)
+        artifact_route.write_text("authored artifact route\n")
+        (self.root / "src/deleted.ts").unlink()
+        forbidden = ("src/credentials/credential.json", "public/node_modules/package.js", "prisma/production.db",
+                     "scripts/.npmrc", "deploy/secrets/token.txt", ".git-credentials", "test-results/huge.bin",
+                     "workers/docx-converter.cjs", ".openpbl-data/database.dump", "packages/component/dist/generated.js",
+                     "tests/load/reports/large.json")
+        for relative in forbidden:
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("private or generated fixture")
+            # Even force-tracked forbidden paths may not leak into source.
+            subprocess.run(["git", "-C", self.root, "add", "-f", "--", relative], check=True, capture_output=True)
+        target = self.source_target()
+        metadata = backup.snapshot_source(target)
+        report = backup.verify_source(target, metadata)
+        self.assertTrue(metadata["gitDirty"])
+        self.assertTrue(report["workerBuildInputsVerified"])
+        self.assertFalse(report["applicationRebuilt"])
+        self.assertEqual((target / "source" / engine).read_text(), "uncommitted engine change\n")
+        self.assertTrue((target / "source/src/new-worker-helper.ts").is_file())
+        self.assertTrue((target / "source/src/app/api/showcase/artifacts/route.ts").is_file())
+        self.assertFalse((target / "source/src/deleted.ts").exists())
+        self.assertTrue((target / "source/public/font.woff2").is_file())
+        self.assertTrue(all(not (target / "source" / path).exists() for path in forbidden))
+        self.assertFalse((target / "source/.git").exists())
+
+    def test_source_snapshot_fails_if_worker_or_pinned_patch_or_migration_is_missing(self):
+        self.prepare_source_fixture()
+        for index, relative in enumerate(("scripts/build-document-converter-worker.mjs", "patches/docx.patch",
+                                          "prisma/migrations/20260101_initial/migration.sql")):
+            path = self.root / relative
+            content = path.read_bytes()
+            path.unlink()
+            with self.assertRaisesRegex(RuntimeError, "build inputs|patch|migrations"):
+                backup.snapshot_source(self.source_target(f"missing-{index}"))
+            path.write_bytes(content)
+
+    def test_source_snapshot_rejects_symlink_instead_of_copying_external_bytes(self):
+        self.prepare_source_fixture()
+        outside = self.root / "outside-secret"
+        outside.write_text("private fixture")
+        (self.root / "src/link.ts").symlink_to(outside)
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
+            backup.snapshot_source(self.source_target())
+
+    def test_isolated_source_restore_is_independent_and_detects_corruption_and_mode_changes(self):
+        self.prepare_source_fixture()
+        script = "scripts/build-document-converter-worker.mjs"
+        (self.root / script).chmod(0o750)
+        target = self.source_target()
+        metadata = backup.snapshot_source(target)
+        recovered = self.root / "isolated-recovered-source"
+        shutil.copytree(target, recovered)
+        (self.root / script).write_text("later production edit\n")
+        self.assertTrue(backup.verify_source(recovered, metadata)["verified"])
+        path = recovered / "source" / script
+        path.chmod(0o700)
+        with self.assertRaisesRegex(RuntimeError, "mode mismatch"):
+            backup.verify_source(recovered, metadata)
+        path.chmod(0o750)
+        path.write_text("modified source\n")
+        with self.assertRaisesRegex(RuntimeError, "checksum or mode mismatch"):
+            backup.verify_source(recovered, metadata)
+
+    def test_source_manifest_and_inventory_cannot_silently_drop_or_add_inputs(self):
+        self.prepare_source_fixture()
+        target = self.source_target()
+        metadata = backup.snapshot_source(target)
+        extra = target / "source/src/unlisted.ts"
+        extra.write_text("unlisted")
+        with self.assertRaisesRegex(RuntimeError, "inventory mismatch"):
+            backup.verify_source(target, metadata)
+        extra.unlink()
+        manifest = target / "source-manifest.json"
+        manifest.write_text(manifest.read_text() + " ")
+        with self.assertRaisesRegex(RuntimeError, "manifest checksum mismatch"):
+            backup.verify_source(target, metadata)
+        self.assertFalse(backup.source_path_allowed("src/../private.ts"))
+        self.assertFalse(backup.source_path_allowed("/src/private.ts"))
+        self.assertFalse(backup.source_path_allowed("src\\private.ts"))
+
+    def test_source_changes_while_copying_are_not_acknowledged(self):
+        self.prepare_source_fixture()
+        original_copy = shutil.copy2
+        def changing_copy(source, destination, **kwargs):
+            result = original_copy(source, destination, **kwargs)
+            if Path(source).name == "document-conversion-engine.ts":
+                Path(source).write_text("changed during snapshot")
+            return result
+        with patch.object(backup.shutil, "copy2", side_effect=changing_copy):
+            with self.assertRaisesRegex(RuntimeError, "changed during snapshot"):
+                backup.snapshot_source(self.source_target())
+
+    def test_source_failure_preserves_last_acknowledged_checkpoint(self):
+        previous = {"snapshot": "previous", "startedEpoch": time.time()}
+        backup.write_json(self.root / "status/last-success.json", previous)
+        with patch.object(backup, "take_base", return_value=self.root / "bases/previous"), \
+                patch.object(backup, "dump_consistent", return_value=({}, [])), \
+                patch.object(backup, "snapshot_source", side_effect=RuntimeError("source incomplete")):
+            with self.assertRaisesRegex(RuntimeError, "source incomplete"):
+                backup.backup()
+        self.assertEqual(json.loads((self.root / "status/last-success.json").read_text()), previous)
+        self.assertEqual(backup.snapshots(), [])
+
+    def test_incremental_dedup_preserves_changed_source_and_configuration_modes(self):
+        for name in ("uploads", "classrooms", "whiteboards"):
+            (self.root / ".openpbl-data" / name).mkdir(parents=True)
+        config = self.root / ".env.local"
+        config.write_text("nonsecret fixture")
+        config.chmod(0o600)
+        first = self.source_target("first")
+        first_source = first / "source/src/executable.ts"
+        first_source.parent.mkdir(parents=True)
+        first_source.write_text("same source bytes")
+        first_source.chmod(0o600)
+        first_files = backup.snapshot_files(first, None)
+        backup.write_json(first / "manifest.json", {"files": first_files, "assets": []})
+        config.chmod(0o640)
+        second = self.source_target("second")
+        second_source = second / "source/src/executable.ts"
+        second_source.parent.mkdir(parents=True)
+        second_source.write_text("same source bytes")
+        second_source.chmod(0o700)
+        second_files = backup.snapshot_files(second, first)
+        backup.write_json(second / "manifest.json", {"files": second_files, "assets": []})
+        backup.verify_files(second)
+        self.assertEqual(second_source.stat().st_mode & 0o777, 0o700)
+        self.assertNotEqual(second_source.stat().st_ino, first_source.stat().st_ino)
+        self.assertEqual((second / "configuration/.env.local").stat().st_mode & 0o777, 0o640)
+        third = self.source_target("third")
+        third_source = third / "source/src/executable.ts"
+        third_source.parent.mkdir(parents=True)
+        shutil.copy2(second_source, third_source)
+        backup.snapshot_files(third, second)
+        self.assertEqual(third_source.stat().st_ino, second_source.stat().st_ino)
 
 
 if __name__ == "__main__":

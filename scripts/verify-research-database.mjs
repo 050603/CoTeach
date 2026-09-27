@@ -162,10 +162,12 @@ try {
   if (process.env.OPENPBL_VERIFY_REVIEW_ONLY === "1") {
     console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-capacity-document-review-worker.ts"], { cwd: root, env: { ...environment, DATABASE_URL: `${databaseUrl}&connection_limit=12&pool_timeout=20`, OPENPBL_VERIFICATION_MARKER: container }, timeout: 180_000 }));
   } else if (process.env.OPENPBL_VERIFY_ARCHIVE_ONLY === "1") {
+    console.log(command("node", ["scripts/build-document-converter-worker.mjs"], { cwd: root, timeout: 120_000 }));
     console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-capacity-document-archive-worker.ts"], { cwd: root, env: { ...environment, DATABASE_URL: `${databaseUrl}&connection_limit=12&pool_timeout=20`, OPENPBL_VERIFICATION_MARKER: container }, timeout: 180_000 }));
   } else if (process.env.OPENPBL_VERIFY_ENTRY_ONLY === "1") {
     console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-platform-entry-concurrency.ts"], { cwd: root, env: { ...environment, DATABASE_URL: `${databaseUrl}&connection_limit=12&pool_timeout=20`, OPENPBL_VERIFICATION_MARKER: container }, timeout: 180_000 }));
   } else if (process.env.OPENPBL_VERIFY_CONCURRENCY_ONLY === "1") {
+    console.log(command("node", ["scripts/build-document-converter-worker.mjs"], { cwd: root, timeout: 120_000 }));
     console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-classroom-concurrency.ts"], { cwd: root, env: { ...environment, DATABASE_URL: `${databaseUrl}&connection_limit=12&pool_timeout=20`, OPENPBL_VERIFICATION_MARKER: container }, timeout: 180_000 }));
   } else {
   const persistenceOutput = command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-platform-persistence.ts"], {

@@ -17,10 +17,14 @@ async function postCourseAction(
   request: Request,
   context: { params: Promise<{ courseId: string }> },
 ) {
+  const timings: string[] = [];
+  let phaseStart = performance.now();
+  const mark = (phase: string) => { const now = performance.now(); timings.push(`${phase};dur=${(now - phaseStart).toFixed(2)}`); phaseStart = now; };
   const csrfError = requireSameOrigin(request);
   if (csrfError) return csrfError;
   const auth = await authenticateRequest(request);
   if ("response" in auth) return auth.response;
+  mark("authentication");
   const { courseId } = await context.params;
 
   const parsed = ActionEnvelopeSchema.safeParse(await request.json().catch(() => null));
@@ -42,9 +46,12 @@ async function postCourseAction(
     windowSeconds: projectionControl ? 2 : 60,
   });
   if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
+  mark("validation");
 
   try {
-    return Response.json(await executeCourseAction(courseId, envelope, auth.claims));
+    const ack = await executeCourseAction(courseId, envelope, auth.claims, projectionControl ? mark : undefined);
+    if (!projectionControl) mark("action");
+    return Response.json(ack, { headers: { "Server-Timing": timings.join(", ") } });
   } catch (error) {
     if (error instanceof CourseActionError) {
       return apiError(request, error.code, error.message, error.status, error.details);

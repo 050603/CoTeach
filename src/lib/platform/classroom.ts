@@ -38,8 +38,17 @@ export async function saveWorkspace(claims: AuthClaims, participationId: string,
   if (!parsed.success) throw new PlatformError("INVALID_INPUT", "工作区内容或版本无效", 400);
   const data = parsed.data;
   return runMutationTransaction(async (tx) => {
+    // Closing a classroom locks its instance before its participations. Match
+    // that order before inserting the receipt (whose FK also locks the instance).
+    const [lockedInstance] = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT ci.id FROM "ClassroomInstance" ci
+      JOIN "ClassroomParticipation" p ON p."instanceId" = ci.id
+      WHERE p.id = ${participationId} FOR UPDATE OF ci`;
     await tx.$queryRaw`SELECT "id" FROM "ClassroomParticipation" WHERE "id" = ${participationId} FOR UPDATE`;
     const context = await requireParticipation(claims, participationId, tx);
+    if (context.participation.instanceId !== lockedInstance?.id) {
+      throw new PlatformError("SCOPE_MISMATCH", "课堂参与归属已变化，请重新加载", 409);
+    }
     requireParticipationWrite(context);
     const { participation, user } = context;
     const key = `workspace:${participationId}:${user.id}:${data.idempotencyKey}`;

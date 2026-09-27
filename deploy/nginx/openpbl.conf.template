@@ -1,3 +1,11 @@
+# Timing only: no cookies, credentials, query strings or request bodies.
+# Docker rotates stdout logs using the existing 50 MiB x 5 policy.
+log_format classroom_action_timing escape=json
+    '{"kind":"classroom-action-timing","at":"$msec","requestId":"$request_id",'
+    '"status":$status,"requestSeconds":$request_time,"upstreamSeconds":"$upstream_response_time",'
+    '"connectSeconds":"$upstream_connect_time","headerSeconds":"$upstream_header_time",'
+    '"serverTiming":"$upstream_http_server_timing"}';
+
 upstream openpbl_app {
     server ${OPENPBL_UPSTREAM_HOST}:3000;
     keepalive 64;
@@ -117,6 +125,9 @@ server {
     proxy_hide_header X-Powered-By;
     # Do not hide or replace the application's script/connect source policy.
     proxy_http_version 1.1;
+    # Reuse the configured upstream keepalive pool for ordinary HTTP.
+    # WebSocket locations explicitly override this with their upgrade header.
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $remote_addr;
@@ -152,6 +163,7 @@ server {
     }
 
     location ~ ^/api/courses/[^/]+/actions$ {
+        access_log /dev/stdout classroom_action_timing;
         limit_req zone=general burst=1200 nodelay;
         proxy_pass http://openpbl_app;
     }

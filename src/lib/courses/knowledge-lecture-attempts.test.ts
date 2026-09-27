@@ -7,10 +7,10 @@ vi.mock("@/lib/realtime/event-bus", () => ({ publishCourseEvent: mocks.publish }
 import { persistKnowledgeLectureAttempt } from "./knowledge-lecture-attempts";
 const attempt: KnowledgeLectureAttempt = { id: "attempt", sectionId: "section", quizOutlineId: "quiz", runtimeSceneId: "scene", submittedAt: "2026-09-26T00:00:00.000Z", gradingSource: "server", gradingStatus: "pending", score: 0, maxScore: 0, knowledgePointIds: [], questions: [{ questionId: "question", prompt: "Why?", answer: "Original answer", rawAnswer: "Original answer", questionType: "short_answer", points: 5, earned: 0, correct: null, gradingStatus: "pending", feedback: "pending", knowledgePointIds: [], teachingUnitIds: [] }] };
 const input = { courseId: "course", studentId: "student", classroomId: "classroom", attempt };
-let row: { participationId: string; offeringId: string; researchKey: string; status: string; enrollmentStatus: string; offeringStatus: string; archivedAt: null; runtimeConfig: object; projectState: Record<string, unknown>; classroomId: string };
+let row: { participationId: string; offeringId: string; researchKey: string; status: string; enrollmentStatus: string; offeringStatus: string; archivedAt: null; runtimeConfig: object; projectState: Record<string, unknown>; classroomId: string; userStatus: string; userRole: string; sessionVersion: number };
 beforeEach(() => {
   vi.resetAllMocks();
-  row = { participationId: "participation", offeringId: "offering", researchKey: "research", status: "TEACHING", enrollmentStatus: "ACTIVE", offeringStatus: "OPEN", archivedAt: null, runtimeConfig: { version: 9, uiState: { controller: "teacher" } }, projectState: { savedDocument: "must survive", aiLearningProgress: { studentId: "student", classroomId: "classroom", completedScenes: ["earlier"], knowledgeLectureAttempts: [] } }, classroomId: "classroom" };
+  row = { participationId: "participation", offeringId: "offering", researchKey: "research", status: "TEACHING", enrollmentStatus: "ACTIVE", offeringStatus: "OPEN", archivedAt: null, runtimeConfig: { version: 9, uiState: { controller: "teacher" } }, projectState: { savedDocument: "must survive", aiLearningProgress: { studentId: "student", classroomId: "classroom", completedScenes: ["earlier"], knowledgeLectureAttempts: [] } }, classroomId: "classroom", userStatus: "ACTIVE", userRole: "STUDENT", sessionVersion: 1 };
   mocks.query.mockImplementation(async (sql: TemplateStringsArray, ...values: unknown[]) => {
     if (!sql.join("").includes("WITH course AS")) return [row];
     // Model the returned durable facts; PostgreSQL rollback is covered by the isolated worker.
@@ -35,6 +35,14 @@ describe("knowledge lecture narrow persistence", () => {
     await persistKnowledgeLectureAttempt(input); await persistKnowledgeLectureAttempt({ ...input, attempt: { ...attempt, submittedAt: "2026-09-26T01:00:00.000Z" } });
     expect(mocks.workspace).toHaveBeenCalledTimes(1);
     await expect(persistKnowledgeLectureAttempt({ ...input, attempt: { ...attempt, questions: [{ ...attempt.questions[0], rawAnswer: "Changed" }] } })).rejects.toMatchObject({ message: "QUIZ_ALREADY_SUBMITTED", attempt });
+  });
+  it.each([{ userStatus: 'DISABLED' }, { userRole: 'TEACHER' }, { sessionVersion: 2 }, { enrollmentStatus: 'WITHDRAWN' }])('rejects identity revocation after waiting for the lock, including a replay: %j', async changed => {
+    await persistKnowledgeLectureAttempt({ ...input, sessionVersion: 1 });
+    mocks.lock.mockImplementationOnce(async () => { Object.assign(row, changed); });
+    await expect(persistKnowledgeLectureAttempt({ ...input, sessionVersion: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(persistKnowledgeLectureAttempt({ ...input, sessionVersion: 1, attempt: { ...attempt, id: 'new', quizOutlineId: 'new' } })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.workspace).toHaveBeenCalledTimes(1);
+    expect(mocks.event).toHaveBeenCalledTimes(1);
   });
   it("preserves more than forty previous attempts", async () => {
     const progress = row.projectState.aiLearningProgress as Record<string, unknown>;

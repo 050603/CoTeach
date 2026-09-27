@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, Cloud, CloudOff, List, RotateCcw } from "lucide-react";
 import { ExperimentQuestionList, type ExperimentDisplayAnswer, type ExperimentDisplayQuestion } from "./experiment-question-card";
 import type { ExperimentQuestionGroup } from "@/lib/platform/experiment";
@@ -15,6 +16,7 @@ type Assessment = { enabled: boolean; available: boolean; questions: ExperimentQ
 type LocalDraft = Draft & { pending: boolean };
 type Page = { questions: ExperimentQuestion[]; startIndex: number; group?: ExperimentQuestionGroup };
 const phaseLabel = { pretest: "前测", posttest: "后测" } as const;
+const subscribeToDocument = () => () => {};
 
 export function paginateExperimentQuestions(questions: ExperimentQuestion[]): Page[] {
   const pages: Page[] = [];
@@ -64,6 +66,9 @@ export function StudentExperimentAssessment({ instanceId, phase, onCancel, onSub
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const footerMounted = useSyncExternalStore(subscribeToDocument, () => true, () => false);
+  const [footerHeight, setFooterHeight] = useState(96);
+  const footerRef = useRef<HTMLElement | null>(null);
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "pending" | "conflict">("saved");
   const [saveTick, setSaveTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -186,6 +191,16 @@ export function StudentExperimentAssessment({ instanceId, phase, onCancel, onSub
   }, [load]);
 
   useEffect(() => {
+    if (!footerMounted || !footerRef.current) return;
+    const footer = footerRef.current;
+    const updateHeight = () => setFooterHeight(footer.getBoundingClientRect().height || 96);
+    updateHeight();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateHeight) : null;
+    observer?.observe(footer);
+    return () => observer?.disconnect();
+  }, [footerMounted, assessment, review, pageIndex, submitting, onCancel]);
+
+  useEffect(() => {
     const retry = () => { if (dirtyRef.current && !conflictRef.current) void saveNow(); };
     window.addEventListener("online", retry);
     window.addEventListener("visibilitychange", retry);
@@ -301,7 +316,7 @@ export function StudentExperimentAssessment({ instanceId, phase, onCancel, onSub
   const scenario = assessment.variant === "none" || !assessment.variant ? null : phase === "pretest" ? assessment.variant === "A_PRE_B_POST" ? "A" : "B" : assessment.variant === "A_PRE_B_POST" ? "B" : "A";
   const questionButton = (question: ExperimentQuestion, index: number, page: number) => <button aria-label={`前往第 ${index + 1} 题`} className={`grid size-11 place-items-center rounded-lg border text-xs font-semibold ${questionAnswered(question, activeAnswers[question.id]) ? "border-[var(--pbl-student)] bg-[var(--pbl-student-soft)] text-[var(--pbl-student)]" : "border-[var(--pbl-border)] text-[var(--pbl-text-muted)]"}`} key={question.id} onClick={() => goToPage(page, question.id)} type="button">{questionAnswered(question, activeAnswers[question.id]) ? <Check size={15} aria-hidden="true" /> : index + 1}</button>;
 
-  return <div className={`mx-auto pb-24 ${layout === "full" ? "mt-4 w-full max-w-none" : "mt-6 max-w-6xl"}`}>
+  return <div className={`mx-auto ${layout === "full" ? "mt-4 w-full max-w-none" : "mt-6 max-w-6xl"}`} style={{ paddingBottom: footerHeight + 24 }}>
     <header className="rounded-2xl border border-[var(--pbl-student-border)] bg-[var(--pbl-student-soft)] p-5 sm:p-7">
       <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-semibold tracking-widest text-[var(--pbl-student)]">课堂实验 · {phase === "pretest" ? "课前" : "第 5 阶段"}</p><h2 className="mt-2 font-serif text-3xl font-bold">{title}{scenario ? `｜情境${scenario}` : ""}</h2><p className="mt-2 text-sm leading-6 text-[var(--pbl-text-muted)]">{submitted ? "已完成提交，下面可以查看你的作答。" : "请根据自己的真实想法作答，进度会自动保存。"}</p>{assessment.minutes ? <p className="mt-2 text-xs font-semibold text-[var(--pbl-student)]">共 {assessment.questions.length} 题 · 建议 {assessment.minutes} 分钟</p> : null}</div><span aria-live="polite" className={`inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-4 text-sm font-semibold ${saveStatus === "conflict" ? "text-[var(--pbl-danger)]" : "text-[var(--pbl-student)]"}`}><StatusIcon size={16} />{status}</span></div>
       {assessment.introduction ? <p className="mt-4 whitespace-pre-wrap rounded-xl bg-white/80 p-4 text-sm leading-6 text-[var(--pbl-text-strong)]">{assessment.introduction}</p> : null}
@@ -318,6 +333,6 @@ export function StudentExperimentAssessment({ instanceId, phase, onCancel, onSub
         {review && !submitted ? <section className="rounded-2xl border border-[var(--pbl-border)] bg-white p-5 sm:p-7"><p className="text-xs font-bold tracking-wider text-[var(--pbl-student)]">提交前检查</p><h3 className="mt-2 text-2xl font-bold">{missing.length ? `还有 ${missing.length} 题待完成` : assessment.questions.some((question) => question.optional) ? "必答题已完成" : "所有题目已完成"}</h3><p className="mt-2 text-sm text-[var(--pbl-text-muted)]">提交后答案将锁定，请确认作答内容。{assessment.questions.some((question) => question.optional) ? "选答题和允许跳过的体验题可以留空。" : ""}</p>{missing.length ? <div className="mt-5 flex flex-wrap gap-2">{missing.map((question) => { const index = assessment.questions.indexOf(question); return <button className="min-h-11 rounded-lg border border-amber-300 bg-amber-50 px-4 text-sm font-semibold text-amber-900" key={question.id} onClick={() => goToPage(pages.findIndex((page) => page.questions.some((item) => item.id === question.id)), question.id)} type="button">第 {index + 1} 题未答</button>; })}</div> : <div className="mt-5 flex items-center gap-2 rounded-xl bg-[var(--pbl-student-soft)] p-4 text-sm font-semibold text-[var(--pbl-student)]"><CheckCircle2 size={18} />可以提交{title}</div>}{skippedWithReason.length ? <label className="mt-5 block text-sm font-semibold">{assessment.skipReasonPrompt || "跳过体验题的原因"}<textarea aria-label="跳题原因" className="mt-2 min-h-20 w-full rounded-lg border border-[var(--pbl-border)] p-3 text-sm" maxLength={1000} value={typeof answers.__skipReason === "string" ? answers.__skipReason : ""} onChange={(event) => updateAnswer("__skipReason", event.target.value)} />{reasonMissing ? <span className="mt-1 block text-xs text-[var(--pbl-danger)]">请填写跳题原因</span> : null}</label> : null}</section> : <><p className="mb-3 text-sm font-semibold text-[var(--pbl-text-muted)]">{currentPage.group?.title || `第 ${currentPage.startIndex + 1}–${currentPage.startIndex + currentPage.questions.length} 题`} · 第 {pageIndex + 1}/{pages.length} 页</p><ExperimentQuestionList answers={activeAnswers} inputNamePrefix={`experiment-${phase}`} invalidQuestionId={invalidQuestionId} onAnswerChange={updateAnswer} questionIdPrefix={`experiment-${phase}`} questions={currentPage.questions} readOnly={submitted} startIndex={currentPage.startIndex} /></>}
       </div>
     </div>
-    <div className="sticky bottom-0 z-10 mt-6 rounded-2xl border border-[var(--pbl-border)] bg-white/95 p-3 shadow-lg backdrop-blur sm:p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div className="text-xs font-medium text-[var(--pbl-text-muted)]">{submitted ? "答案已锁定" : review ? "请检查后提交" : `第 ${pageIndex + 1} / ${pages.length} 页`}</div><div className="flex flex-wrap gap-2">{onCancel ? <button className="min-h-11 rounded-lg border border-[var(--pbl-border)] px-4 text-sm font-semibold" onClick={onCancel} type="button">返回</button> : null}{review ? <button className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-[var(--pbl-border)] px-4 text-sm font-semibold" onClick={() => setReview(false)} type="button"><ChevronLeft size={16} />返回作答</button> : <button className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-[var(--pbl-border)] px-4 text-sm font-semibold disabled:opacity-40" disabled={pageIndex === 0} onClick={() => goToPage(pageIndex - 1)} type="button"><ChevronLeft size={16} />上一步</button>}{submitted ? null : review ? <button className="min-h-11 rounded-lg bg-[var(--pbl-student)] px-5 text-sm font-bold text-white disabled:opacity-50" disabled={Boolean(missing.length) || reasonMissing || submitting || Boolean(conflictDraft)} onClick={() => void submit()} type="button">{submitting ? "提交中…" : `确认提交${title}`}</button> : <button className="inline-flex min-h-11 items-center gap-1 rounded-lg bg-[var(--pbl-student)] px-5 text-sm font-bold text-white" onClick={() => pageIndex === pages.length - 1 ? setReview(true) : goToPage(pageIndex + 1)} type="button">{pageIndex === pages.length - 1 ? "检查并提交" : "下一步"}<ChevronRight size={16} /></button>}</div></div></div>
+    {footerMounted ? createPortal(<footer ref={footerRef} className={`${layout === "full" ? "pbl-platform-theme " : ""}pointer-events-none fixed inset-x-0 bottom-0 z-[90] px-3 pb-[max(12px,env(safe-area-inset-bottom))] sm:px-6`} aria-label={`${title}操作栏`}><div className="pointer-events-auto mx-auto max-w-6xl rounded-2xl border border-[var(--pbl-border)] bg-white/95 p-3 shadow-lg backdrop-blur sm:p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div className="text-xs font-medium text-[var(--pbl-text-muted)]">{submitted ? "答案已锁定" : review ? "请检查后提交" : `第 ${pageIndex + 1} / ${pages.length} 页`}</div><div className="flex flex-wrap gap-2">{onCancel ? <button className="min-h-11 rounded-lg border border-[var(--pbl-border)] px-4 text-sm font-semibold" onClick={onCancel} type="button">返回</button> : null}{review ? <button className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-[var(--pbl-border)] px-4 text-sm font-semibold" onClick={() => setReview(false)} type="button"><ChevronLeft size={16} />返回作答</button> : <button className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-[var(--pbl-border)] px-4 text-sm font-semibold disabled:opacity-40" disabled={pageIndex === 0} onClick={() => goToPage(pageIndex - 1)} type="button"><ChevronLeft size={16} />上一步</button>}{submitted ? null : review ? <button className="min-h-11 rounded-lg bg-[var(--pbl-student)] px-5 text-sm font-bold text-white disabled:opacity-50" disabled={Boolean(missing.length) || reasonMissing || submitting || Boolean(conflictDraft)} onClick={() => void submit()} type="button">{submitting ? "提交中…" : `确认提交${title}`}</button> : <button className="inline-flex min-h-11 items-center gap-1 rounded-lg bg-[var(--pbl-student)] px-5 text-sm font-bold text-white" onClick={() => pageIndex === pages.length - 1 ? setReview(true) : goToPage(pageIndex + 1)} type="button">{pageIndex === pages.length - 1 ? "检查并提交" : "下一步"}<ChevronRight size={16} /></button>}</div></div></div></footer>, document.body) : null}
   </div>;
 }

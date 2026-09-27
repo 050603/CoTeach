@@ -33,7 +33,7 @@ beforeEach(() => {
     const row = await mocks.tx.classroomParticipation.findFirst();
     const previous = await mocks.tx.classroomSubmission.findUnique();
     const sameId = await mocks.tx.classroomSubmission.findFirst();
-    return row ? [{ userStatus: "ACTIVE", userRole: "STUDENT", sessionVersion: 1, receipt: (await mocks.tx.domainEvent.findUnique())?.payload ?? null, id: row.id, offeringId: row.enrollment.offeringId, researchKey: row.enrollment.researchKey, enrollmentStatus: row.enrollment.status, instanceStatus: row.instance.status, runtimeConfig: row.instance.runtimeConfig, offeringStatus: row.instance.activity.chapter.offering.status, archivedAt: null, groupAllowed: true, identityConflict: sameId && sameId.participationId !== row.id, currentPayload: previous?.payload ?? null }] : [];
+    return row ? [{ userStatus: "ACTIVE", userRole: "STUDENT", sessionVersion: 1, receipt: (await mocks.tx.domainEvent.findUnique())?.payload ?? null, id: row.id, offeringId: row.enrollment.offeringId, researchKey: row.enrollment.researchKey, enrollmentStatus: row.enrollment.status, instanceStatus: row.instance.status, runtimeVersion: row.instance.runtimeConfig?.version, offeringStatus: row.instance.activity.chapter.offering.status, archivedAt: null, groupAllowed: true, identityConflict: sameId && sameId.participationId !== row.id, currentPayload: previous ? Object.fromEntries(Object.entries(previous.payload.view ?? previous.payload).filter(([name]) => ["id", "studentId", "groupId", "version", "createdAt"].includes(name))) : null }] : [];
   });
   mocks.tx.classroomSubmission.findUnique.mockResolvedValue(null);
 });
@@ -44,6 +44,49 @@ describe("student draft receipts and versions", () => {
     expect(mocks.load).not.toHaveBeenCalled();
     expect(mocks.access).not.toHaveBeenCalled();
     expect(mocks.tx.classroomSubmission.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ participationId: "participation", submittedAt: null, payload: expect.objectContaining({ view: expect.objectContaining({ version: 1, content: "新内容" }) }) }) }));
+  });
+  it("preserves immutable draft metadata without loading the previous document on successful CAS", async () => {
+    const previous = { ...submission, id: "original", createdAt: "2025-01-01T00:00:00.000Z", content: "old".repeat(10000), version: 2 };
+    mocks.tx.classroomSubmission.findUnique.mockResolvedValue({ payload: { view: previous } });
+    expect(await executeCourseAction("course", envelope(2), claims)).toMatchObject({ submissionVersion: 3 });
+    // One call belongs to the joined-read mock; no conflict-only follow-up read.
+    expect(mocks.tx.classroomSubmission.findUnique).toHaveBeenCalledTimes(1);
+    expect(mocks.tx.classroomSubmission.upsert.mock.calls[0][0].create.payload.view).toMatchObject({ id: "original", createdAt: previous.createdAt, content: "新内容" });
+    const read = mocks.tx.$queryRaw.mock.calls[0][0].join("");
+    expect(read).not.toContain('own.payload AS "currentPayload"');
+    expect(read).toContain("jsonb_build_object('fingerprint'");
+    expect(mocks.tx.$queryRaw.mock.calls[1][0].join("")).toContain("jsonb_set(");
+  });
+  it("retains JSON version semantics beyond the PostgreSQL int32 range", async () => {
+    const row = await mocks.tx.classroomParticipation.findFirst();
+    row.instance.runtimeConfig.version = 2 ** 31;
+    expect(await executeCourseAction("course", envelope(), claims)).toMatchObject({ courseVersion: 2 ** 31 + 1 });
+    expect(mocks.tx.$queryRaw.mock.calls[1][1]).toBe(JSON.stringify(2 ** 31 + 1));
+  });
+  it.each([0, 3])("preserves normalized JSON and matching receipt content at draft version %s", async (version) => {
+    const request = envelope(version);
+    const metadata = {
+      omitted: undefined, nullable: null, date: new Date("2026-02-03T04:05:06.000Z"),
+      invalidDate: new Date(NaN), nan: NaN, positive: Infinity, negative: -Infinity, zero: -0,
+      items: [undefined, , null, NaN],
+      custom: { toJSON: (key: string) => ({ key, omitted: undefined, value: "保留" }) },
+    };
+    if (request.action.type !== "UPSERT_SUBMISSION") throw new Error("fixture action");
+    request.action.payload.submission = { ...submission, content: '完整正文\n"引号"及\\路径😀', ...{ metadata } };
+    if (version) mocks.tx.classroomSubmission.findUnique.mockResolvedValue({ payload: { view: { ...submission, id: "original", createdAt: "2025-01-01T00:00:00.000Z", version } } });
+    const ack = await executeCourseAction("course", request, claims);
+    const stored = mocks.tx.classroomSubmission.upsert.mock.calls[0][0].create.payload;
+    const receipt = mocks.tx.domainEvent.create.mock.calls[0][0].data.payload;
+    expect(stored.view.metadata).toEqual({ nullable: null, date: "2026-02-03T04:05:06.000Z", invalidDate: null, nan: null, positive: null, negative: null, zero: 0, items: [null, null, null, null], custom: { key: "custom", value: "保留" } });
+    expect(stored.view.content).toBe(request.action.payload.submission.content);
+    expect(receipt.action.payload.submission).toEqual(stored.view);
+    expect(receipt.ack).toEqual(ack);
+    const originalPayload = { instanceId: "course", collection: "submissions", provenance: { actorId: "student", actorRole: "student" }, view: { ...request.action.payload.submission, ...(version ? { id: "original", createdAt: "2025-01-01T00:00:00.000Z" } : {}), version: version + 1, updatedAt: stored.view.updatedAt } };
+    // Compare the actual SQL parameter with the former JSON-normalize + encode contract.
+    expect(mocks.tx.$queryRaw.mock.calls[1][9]).toBe(JSON.stringify(JSON.parse(JSON.stringify(originalPayload))));
+    expect(request.action.payload.submission.version).toBe(500);
+    expect(metadata.date).toBeInstanceOf(Date);
+    expect(Number.isNaN(metadata.nan)).toBe(true);
   });
   it("keeps personal group drafts on the narrow path and verifies active scoped membership", async () => {
     mocks.tx.groupMember.findFirst.mockResolvedValue({ id: "membership" });
@@ -86,7 +129,7 @@ describe("student draft receipts and versions", () => {
   });
   it("rejects a delayed autosave after a newer edit or finalize", async () => {
     mocks.tx.classroomSubmission.findUnique.mockResolvedValue({ payload: { view: { ...submission, version: 3, status: "submitted" } } });
-    await expect(executeCourseAction("course", envelope(2), claims)).rejects.toMatchObject({ code: "DRAFT_VERSION_CONFLICT", details: { currentVersion: 3, currentSubmission: { status: "submitted" } } });
+    await expect(executeCourseAction("course", envelope(2), claims)).rejects.toMatchObject({ code: "DRAFT_VERSION_CONFLICT", details: { currentVersion: 3, currentSubmission: { ...submission, version: 3, status: "submitted" } } });
     expect(mocks.tx.classroomSubmission.upsert).not.toHaveBeenCalled();
   });
   it("does not save a queued draft after classroom closure", async () => {

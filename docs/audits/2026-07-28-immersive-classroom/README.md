@@ -20,10 +20,10 @@
 
 ## 截图
 
-- [产品首页](./00-landing.png)
-- [学生入口阻塞状态](./01-student-entry.png)
-- [学生入口修复状态](./02-student-entry-ready.png)
-- [教师登录边界](./03-teacher-login-blocker.png)
+- 产品首页（本机测试截图：`./00-landing.png`，不纳入 Git）
+- 学生入口阻塞状态（本机测试截图：`./01-student-entry.png`，不纳入 Git）
+- 学生入口修复状态（本机测试截图：`./02-student-entry-ready.png`，不纳入 Git）
+- 教师登录边界（本机测试截图：`./03-teacher-login-blocker.png`，不纳入 Git）
 
 ## 验收结论
 

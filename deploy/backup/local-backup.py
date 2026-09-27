@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -29,6 +30,31 @@ WAL_CONTAINER = "openpbl-local-wal"
 RETENTION_DAYS = 30
 RECOVERY_SETTINGS = ("max_connections", "max_worker_processes", "max_wal_senders",
                      "max_prepared_transactions", "max_locks_per_transaction")
+# Authored build inputs only. Runtime data/configuration have separate, private
+# snapshots; Git's credential/config directory and generated dependencies never
+# enter the source tree, even if someone accidentally adds them to the index.
+SOURCE_DIRECTORIES = frozenset(("src", "packages", "scripts", "prisma", "public", "patches",
+                                "deploy", "config", "tools", "img", "tests"))
+SOURCE_ROOT_FILES = frozenset(("package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "next.config.ts",
+    "tsconfig.json", "tsconfig.check.json", "postcss.config.mjs", "components.json", "eslint.config.mjs",
+    "vitest.config.mts", "vitest.setup.ts", "playwright.config.ts", "Dockerfile", ".dockerignore",
+    ".gitignore", ".env.example", "server-providers.example.yml", "docker-compose.yml",
+    "docker-compose.prod.yml", "docker-compose.ip.yml"))
+SOURCE_EXCLUDED_PARTS = frozenset(("node_modules", ".git", ".ssh", ".aws", ".openpbl-data", ".openpbl-runtime",
+    "secrets", "credentials", "dist", "coverage", "__pycache__", ".cache", ".pnpm-store",
+    "test-results", "playwright-report", "backups", "pgdata"))
+SOURCE_EXCLUDED_PREFIXES = ("deploy/reports/", "tests/load/reports/", "tests/load/results/",
+                            "public/vendor/maic-importer/", "public/vendor/pdfjs/")
+SOURCE_REQUIRED_FILES = frozenset(("package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "next.config.ts",
+    "tsconfig.json", "postcss.config.mjs", "prisma/schema.prisma", "prisma/migrations/migration_lock.toml",
+    "scripts/build-document-converter-worker.mjs", "scripts/run-next-production.mjs", "scripts/run-prisma.mjs",
+    "scripts/check-generated-css.mjs", "scripts/check-runtime-build-isolation.mjs", "scripts/sync-maic-importer.mjs",
+    "scripts/openpbl-production-service.sh", "deploy/backup/local-backup.py", "src/instrumentation-node.ts",
+    "src/lib/project-practice/document-conversion-worker.ts", "src/lib/project-practice/document-conversion-engine.ts",
+    "src/lib/project-practice/document-conversion-pool.ts", "src/lib/project-practice/document-conversion-queue.ts",
+    "src/lib/project-practice/document-archive.ts", "packages/mathml2omml/package.json", "packages/pptxgenjs/package.json",
+    "packages/@openmaic/dsl/package.json", "packages/@openmaic/generation/package.json",
+    "packages/@openmaic/importer/package.json", "packages/@openmaic/renderer/package.json"))
 
 
 def run(args, **kwargs):
@@ -204,6 +230,128 @@ def sha256(path):
     return result.hexdigest()
 
 
+def source_path_allowed(relative):
+    parts = relative.split("/")
+    if not relative or any(part in ("", ".", "..") for part in parts) or "\\" in relative:
+        return False
+    if parts[0] not in SOURCE_DIRECTORIES and relative not in SOURCE_ROOT_FILES:
+        return False
+    if any(part in SOURCE_EXCLUDED_PARTS or part.startswith(".next") for part in parts):
+        return False
+    # "artifacts"/"reports" can also name authored application API directories.
+    # Exclude known output locations, never every occurrence of those words.
+    if relative.startswith(SOURCE_EXCLUDED_PREFIXES):
+        return False
+    name = parts[-1].lower()
+    if name.startswith(".env") and relative != ".env.example":
+        return False
+    if name in (".deploy.env", ".npmrc", ".netrc", ".git-credentials", "id_rsa", "id_ed25519"):
+        return False
+    return not name.endswith((".sqlite", ".sqlite-wal", ".sqlite-shm", ".sqlite3", ".sqlite3-wal", ".sqlite3-shm",
+                              ".db", ".db-wal", ".db-shm", ".dump", ".rdb", ".wal",
+                              ".pem", ".key", ".p12", ".pfx", ".log", ".cpuprofile", ".heapprofile", ".heapsnapshot", ".tsbuildinfo"))
+
+
+def source_candidates():
+    # NUL delimiters preserve spaces/newlines. Read the working-tree bytes, not
+    # git show/HEAD: uncommitted edits and new, nonignored files are recoverable.
+    value = run(["git", "-C", PROJECT, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+                capture_output=True).stdout
+    return sorted({path for path in value.split("\0") if source_path_allowed(path)
+                   and (PROJECT / path).exists()})
+
+
+def check_source_inputs(root, files):
+    missing = SOURCE_REQUIRED_FILES - files.keys()
+    if missing:
+        raise RuntimeError("Source snapshot missing build inputs: " + ", ".join(sorted(missing)))
+    if not any(name.startswith("prisma/migrations/") and name.endswith("/migration.sql") for name in files):
+        raise RuntimeError("Source snapshot has no database migrations")
+    package = json.loads((root / "package.json").read_text())
+    if "scripts/build-document-converter-worker.mjs" not in package.get("scripts", {}).get("build", ""):
+        raise RuntimeError("Source snapshot build does not generate the DOCX worker")
+    for patch_file in package.get("pnpm", {}).get("patchedDependencies", {}).values():
+        if not isinstance(patch_file, str) or patch_file not in files or not source_path_allowed(patch_file):
+            raise RuntimeError("Source snapshot is missing a pinned dependency patch")
+
+
+def source_tree_digest(files):
+    encoded = json.dumps(files, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def snapshot_source(target):
+    destination = target / "source"
+    destination.mkdir(mode=0o700)
+    paths = source_candidates()
+    head = output(["git", "-C", PROJECT, "rev-parse", "HEAD"])
+    files = {}
+    for relative in paths:
+        source = PROJECT / relative
+        # Never dereference a symlink into secrets, dependencies or runtime data.
+        if source.is_symlink() or any(parent.is_symlink() for parent in source.parents if parent != PROJECT.parent):
+            raise RuntimeError("Source snapshot refuses symlink: " + relative)
+        before = source.stat()
+        if not stat.S_ISREG(before.st_mode):
+            raise RuntimeError("Source snapshot requires regular files: " + relative)
+        copied = destination / relative
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, copied)
+        digest = sha256(copied)
+        after = source.stat()
+        if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+            raise RuntimeError("Source changed during snapshot: " + relative)
+        files[relative] = {"sha256": digest, "size": copied.stat().st_size, "mode": stat.S_IMODE(copied.stat().st_mode)}
+    check_source_inputs(destination, files)
+    # Detect edits/additions/deletions during the copy; acknowledge no mixed
+    # build input set. This is not a Git commit or an atomic filesystem snapshot.
+    if paths != source_candidates() or head != output(["git", "-C", PROJECT, "rev-parse", "HEAD"]):
+        raise RuntimeError("Source tree changed during snapshot")
+    for relative, expected in files.items():
+        source = PROJECT / relative
+        if source.is_symlink() or sha256(source) != expected["sha256"] or stat.S_IMODE(source.stat().st_mode) != expected["mode"]:
+            raise RuntimeError("Source changed during snapshot: " + relative)
+    dirty = bool(output(["git", "-C", PROJECT, "status", "--porcelain=v1", "--untracked-files=all"]))
+    manifest = {"format": 1, "kind": "working-tree", "gitHead": head, "gitDirty": dirty,
+                "treeSha256": source_tree_digest(files), "files": files}
+    write_json(target / "source-manifest.json", manifest)
+    return {"format": 1, "manifestSha256": sha256(target / "source-manifest.json"),
+            "treeSha256": manifest["treeSha256"], "files": len(files), "gitHead": head, "gitDirty": dirty}
+
+
+def verify_source(snapshot, expected):
+    manifest_path = snapshot / "source-manifest.json"
+    if manifest_path.is_symlink() or sha256(manifest_path) != expected["manifestSha256"]:
+        raise RuntimeError("Source manifest checksum mismatch")
+    manifest = json.loads(manifest_path.read_text())
+    files = manifest["files"]
+    if manifest.get("format") != 1 or manifest.get("kind") != "working-tree" or len(files) != expected["files"] \
+            or manifest.get("gitHead") != expected["gitHead"] or manifest.get("gitDirty") != expected["gitDirty"] \
+            or manifest.get("treeSha256") != source_tree_digest(files) or manifest["treeSha256"] != expected["treeSha256"]:
+        raise RuntimeError("Source tree manifest mismatch")
+    root = snapshot / "source"
+    if root.is_symlink() or not root.is_dir():
+        raise RuntimeError("Restored source must be a real directory")
+    actual = set()
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise RuntimeError("Restored source contains a symlink")
+        if path.is_file():
+            actual.add(path.relative_to(root).as_posix())
+    if actual != set(files):
+        raise RuntimeError("Source tree file inventory mismatch")
+    for relative, record in files.items():
+        if not source_path_allowed(relative):
+            raise RuntimeError("Unsafe source manifest path")
+        path = root / relative
+        if path.stat().st_size != record["size"] or sha256(path) != record["sha256"] or stat.S_IMODE(path.stat().st_mode) != record["mode"]:
+            raise RuntimeError("Source file checksum or mode mismatch: " + relative)
+    check_source_inputs(root, files)
+    return {"verified": True, "files": len(files), "manifestSha256": expected["manifestSha256"], "treeSha256": manifest["treeSha256"],
+            "gitHead": manifest["gitHead"], "gitDirty": manifest["gitDirty"], "workerBuildInputsVerified": True,
+            "applicationRebuilt": False}
+
+
 def snapshot_files(target, previous):
     data = target / "files"
     data.mkdir(exist_ok=True)
@@ -229,6 +377,22 @@ def snapshot_files(target, previous):
                 src.backup(dst)
                 if dst.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                     raise RuntimeError("Whiteboard backup integrity failed")
+    # Capacity evidence is optional on older deployments. Preserve its original
+    # bytes outside disposable Playwright output, including interrupted reports;
+    # a file checksum never upgrades the report's original business outcome.
+    evidence = PROJECT / ".openpbl-data/capacity-evidence"
+    if evidence.exists() or evidence.is_symlink():
+        if evidence.is_symlink() or not evidence.is_dir():
+            raise RuntimeError("Capacity evidence root must be a real directory")
+        if any(item.is_symlink() for item in evidence.rglob("*")):
+            raise RuntimeError("Capacity evidence cannot contain symlinks")
+        destination = data / "capacity-evidence"
+        args = ["rsync", "-a", "--no-owner", "--no-group"]
+        if previous and (previous / "files/capacity-evidence").is_dir():
+            args += ["--link-dest", str(previous / "files/capacity-evidence")]
+        run([*args, str(evidence) + "/", str(destination) + "/"], capture_output=True)
+        if any(item.is_symlink() for item in destination.rglob("*")):
+            raise RuntimeError("Capacity evidence changed to a symlink during snapshot")
     config = target / "configuration"
     config.mkdir()
     for relative in (".env.local", "server-providers.yml", "deploy/.deploy.env", "deploy/secrets",
@@ -246,7 +410,8 @@ def snapshot_files(target, previous):
         destination = config / "installed-user-units" / source.name
         destination.parent.mkdir(exist_ok=True)
         shutil.copy2(source, destination)
-    checksums = {str(path.relative_to(target)): {"sha256": sha256(path), "size": path.stat().st_size}
+    checksums = {str(path.relative_to(target)): {"sha256": sha256(path), "size": path.stat().st_size,
+                                                "mode": stat.S_IMODE(path.stat().st_mode)}
                  for path in sorted(target.rglob("*")) if path.is_file()}
     # Directory-format dumps permit per-table deduplication. Large unchanged
     # textbook/vector tables should not consume a full extra copy every 5 min.
@@ -335,6 +500,7 @@ def backup():
         started = time.time()
         snapshot_audit_outbox(target)
         records, assets = dump_consistent(target)
+        source = snapshot_source(target)
         files = snapshot_files(target, previous[-1] if previous else None)
         validate_assets(target, assets)
         restore_point = "openpbl_local_" + target.name
@@ -344,7 +510,7 @@ def backup():
         manifest = {"startedEpoch": started, "completedEpoch": time.time(), "base": base.name,
                     "restorePoint": restore_point, "lsn": lsn, "tables": records, "assets": assets,
                     "files": files, "recoverySettings": recovery_settings(),
-                    "gitSha": output(["git", "-C", PROJECT, "rev-parse", "HEAD"])}
+                    "gitSha": source["gitHead"], "source": source}
         write_json(target / "manifest.json", manifest)
         # Flush the filesystem before acknowledging the recovery point.
         os.sync()
@@ -407,9 +573,12 @@ def verify_files(snapshot):
     manifest = json.loads((snapshot / "manifest.json").read_text())
     for relative, expected in manifest["files"].items():
         file = snapshot / relative
-        if not file.is_file() or file.stat().st_size != expected["size"] or sha256(file) != expected["sha256"]:
+        if not file.is_file() or file.stat().st_size != expected["size"] or sha256(file) != expected["sha256"] \
+                or ("mode" in expected and stat.S_IMODE(file.stat().st_mode) != expected["mode"]):
             raise RuntimeError(f"Snapshot file checksum mismatch: {relative}")
     validate_assets(snapshot, manifest["assets"])
+    if manifest.get("source"):
+        verify_source(snapshot, manifest["source"])
     return manifest
 
 
@@ -421,6 +590,11 @@ def drill(verify_recovered=None):
         work = ROOT / "drills" / stamp()
         work.mkdir()
         shutil.copytree(snapshot / "files", work / "files")
+        source_verification = {"verified": False, "reason": "historical snapshot has no source tree", "applicationRebuilt": False}
+        if manifest.get("source"):
+            shutil.copytree(snapshot / "source", work / "source")
+            shutil.copy2(snapshot / "source-manifest.json", work / "source-manifest.json")
+            source_verification = verify_source(work, manifest["source"])
         for relative, expected in manifest["files"].items():
             if relative.startswith("files/") and sha256(work / relative) != expected["sha256"]:
                 raise RuntimeError("Restored application file checksum mismatch")
@@ -490,7 +664,7 @@ def drill(verify_recovered=None):
                       "recoveryPointAgeAtStartSeconds": round(started - manifest["startedEpoch"], 2),
                       "tablesVerified": len(manifest["tables"]), "rowsVerified": sum(row["count"] for row in manifest["tables"].values()),
                       "filesVerified": len(manifest["files"]), "assetsVerified": len(manifest["assets"]),
-                      "physicalWalRecovery": True, "physicalTableCounts": physical_counts,
+                      "physicalWalRecovery": True, "physicalTableCounts": physical_counts, "sourceRecovery": source_verification,
                       "rtoWithin60Minutes": time.time() - started <= 3600}
             if verification is not None:
                 report["capacityVerification"] = verification

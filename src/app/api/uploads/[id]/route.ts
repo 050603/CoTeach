@@ -8,6 +8,8 @@ import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guard
 import { assetMetadata, hasSnapshotReference, recordOfferingMutation } from "@/lib/uploads/assets";
 import { canReadTemplateAsset } from "@/lib/uploads/scope";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
+import type { AuthClaims } from "@/lib/auth/session";
+import { readStudentOfferingDownload, type DownloadFile } from "@/lib/uploads/download-scope";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,19 +31,11 @@ export async function GET(
   const parsed = ParamsSchema.safeParse(await context.params);
   if (!parsed.success) return new Response(null, { status: 404 });
 
-  const file = await prisma.fileAsset.findFirst({
-    where: { id: parsed.data.id, deletedAt: null }, include: { resource: true, textbookFigures: { select: { id: true } }, artifactVersions: { select: { artifact: { select: { participation: { select: { enrollment: { select: { userId: true } } } } } } } } },
-  });
+  const scope = auth.claims.role === 'student' && auth.claims.sub
+    ? await readStudentOfferingDownload(auth.claims.sub, parsed.data.id) : { kind: 'legacy' as const };
+  if (scope.kind === 'denied') return new Response(null, { status: 404 });
+  const file = scope.kind === 'allowed' ? scope.file : await readLegacyDownloadFile(auth.claims, parsed.data.id);
   if (!file) return new Response(null, { status: 404 });
-  const owns = file.uploadedById === auth.claims.sub;
-  const courseAccess = file.offeringId && await canAccessLegacyCourse(auth.claims, file.offeringId, 'read');
-  const templateAccess = !file.offeringId && !owns && auth.claims.role === 'student' && auth.claims.sub
-    && await canReadTemplateAsset(auth.claims.sub, file);
-  const sharedTextbookFigure = auth.claims.role === "teacher" && Boolean(file.textbookFigures?.length);
-  if (!owns && !templateAccess && !sharedTextbookFigure && (!courseAccess || (!file.resource && auth.claims.role !== 'teacher'))) return new Response(null, { status: 404 });
-  if (file.offeringId && !courseAccess) return new Response(null, { status: 404 });
-  // Student outcomes remain private; teachers with offering access may review them.
-  if (auth.claims.role === 'student' && file.artifactVersions.some((version) => version.artifact.participation.enrollment.userId !== auth.claims.sub)) return new Response(null, { status: 404 });
   const classroomVariant = new URL(request.url).searchParams.get('variant') === 'classroom';
   const metadata = assetMetadata(file.resource?.metadata);
   const preview = classroomVariant
@@ -120,6 +114,22 @@ export async function GET(
       ...(range ? { "Content-Range": `bytes ${start}-${end}/${info.size}` } : {}),
     },
   });
+}
+
+async function readLegacyDownloadFile(claims: AuthClaims, id: string): Promise<DownloadFile | null> {
+  const file = await prisma.fileAsset.findFirst({
+    where: { id, deletedAt: null }, include: { resource: true, textbookFigures: { select: { id: true } }, artifactVersions: { select: { artifact: { select: { participation: { select: { enrollment: { select: { userId: true } } } } } } } } },
+  });
+  if (!file) return null;
+  const owns = file.uploadedById === claims.sub;
+  const courseAccess = file.offeringId && await canAccessLegacyCourse(claims, file.offeringId, 'read');
+  const templateAccess = !file.offeringId && !owns && claims.role === 'student' && claims.sub
+    && await canReadTemplateAsset(claims.sub, file);
+  const sharedTextbookFigure = claims.role === 'teacher' && Boolean(file.textbookFigures?.length);
+  if (!owns && !templateAccess && !sharedTextbookFigure && (!courseAccess || (!file.resource && claims.role !== 'teacher'))) return null;
+  if (file.offeringId && !courseAccess) return null;
+  if (claims.role === 'student' && file.artifactVersions.some(version => version.artifact.participation.enrollment.userId !== claims.sub)) return null;
+  return file;
 }
 
 export async function PATCH(
