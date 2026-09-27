@@ -8,10 +8,17 @@ import path from 'node:path';
 import { chromium, firefox, webkit, devices } from '@playwright/test';
 const browserName = process.env.LAYOUT_BROWSER || 'chromium';
 if (!['chromium', 'firefox', 'webkit'].includes(browserName)) throw new Error('LAYOUT_BROWSER must be chromium, firefox or webkit');
+const browserLabel = process.env.LAYOUT_BROWSER_LABEL || browserName;
+const executablePath = process.env.LAYOUT_EXECUTABLE_PATH;
+if (executablePath && browserName !== 'chromium') throw new Error('Branded Chrome/Edge paths require the Chromium engine');
 const baseURL = process.env.LAYOUT_BASE_URL || 'http://127.0.0.1:3000';
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(baseURL).hostname)) throw new Error('Layout audit only supports a local instance');
-const dpr = Number(process.env.LAYOUT_DPR || 1);
-if (!Number.isFinite(dpr) || dpr < 1 || dpr > 3) throw new Error('LAYOUT_DPR must be between 1 and 3');
+// Equivalent layout viewport coverage; native browser zoom is tested separately
+// by e2e/native-browser-zoom.spec.ts. DPR alone is not page zoom.
+const zoom = Number(process.env.LAYOUT_ZOOM || 1);
+if (!Number.isFinite(zoom) || zoom < 0.8 || zoom > 2) throw new Error('LAYOUT_ZOOM must be between 0.8 and 2');
+const dpr = Number(process.env.LAYOUT_DPR || zoom);
+if (!Number.isFinite(dpr) || dpr < 0.8 || dpr > 3) throw new Error('LAYOUT_DPR must be between 0.8 and 3');
 const output = process.env.LAYOUT_OUTPUT_DIR ? path.resolve(process.env.LAYOUT_OUTPUT_DIR) : fs.mkdtempSync(path.join(os.tmpdir(), 'openpbl-responsive-'));
 fs.mkdirSync(output, { recursive: true });
 const name = '城市生态与社区行动：跨学科项目实践';
@@ -57,7 +64,7 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
     const token = await new SignJWT({ role, sv: 1, username: 'layout', displayName: '布局测试', userId: sub, studentName: '布局测试' }).setProtectedHeader({ alg: 'HS256' }).setSubject(sub).setIssuer('openpbl').setAudience('openpbl-app').setExpirationTime('1h').sign(new TextEncoder().encode(secret));
     cookies.push({ name: `openpbl_${role}`, value: token, url: baseURL });
   }
-  const browser = await ({ chromium, firefox, webkit })[browserName].launch();
+  const browser = await ({ chromium, firefox, webkit })[browserName].launch(executablePath ? { executablePath } : {});
   const reports = [];
   const desktopSizes = [[768, 576], [768, 768], [1024, 768], [1280, 720], [1366, 768], [1440, 900], [1920, 1080], [2560, 1440], [3840, 2160], [1024, 576]];
   const profiles = [
@@ -187,10 +194,11 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
   const selectedScenarios = scenarios.filter(([id]) => select(process.env.LAYOUT_SCENARIOS, id));
   const selectedProfiles = profiles.filter(({ id }) => select(process.env.LAYOUT_DEVICES, id));
   if (!selectedScenarios.length || !selectedProfiles.length) throw new Error('No matching layout scenarios/devices');
-  const isFailure = r => r.scenarioError || r.errors.length || r.failedResources.length || r.missingFixtures.length || r.blockedMutations.length || r.brokenImages?.length || r.chapterProgressIssues?.length || r.inviteHeadingIssues?.length || r.clippedClouds || r.missingTheme || r.undersizedColumns || r.invisibleSurveyBars || r.clippedDialogs || r.surveyRailUnexpected || r.settingsTrailingSpace > 32 || r.textIssues?.length || r.scrollWidth > r.width + 1 || r.boxes?.some(b => b.scroll > b.client + 2 && !b.scrollable);
+  const isFailure = r => r.scenarioError || r.errors.length || r.failedResources.length || r.missingFixtures.length || r.blockedMutations.length || r.brokenImages?.length || r.chapterProgressIssues?.length || r.inviteHeadingIssues?.length || r.dialogIconIssues?.length || r.clippedClouds || r.missingTheme || r.undersizedColumns || r.invisibleSurveyBars || r.clippedDialogs || r.surveyRailUnexpected || r.settingsTrailingSpace > 32 || r.textIssues?.length || r.scrollWidth > r.width + 1 || r.boxes?.some(b => b.scroll > b.client + 2 && !b.scrollable);
   try {
     for (const profile of selectedProfiles) {
       const { id: device, ...deviceOptions } = profile;
+      deviceOptions.viewport = { width: Math.round(profile.viewport.width / zoom), height: Math.round(profile.viewport.height / zoom) };
       delete deviceOptions.defaultBrowserType;
       // Device presets pin screen dimensions; let viewport rotation update screen too,
       // otherwise WebKit keeps its original media-query/layout width after rotating.
@@ -226,7 +234,7 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
           return intercepted.fulfill({ status: !readOnly ? 405 : fixture ? 200 : 404, contentType: 'application/json', body: JSON.stringify(readOnly && fixture || { message: 'Layout fixture unavailable' }) });
         });
         const started = Date.now();
-        let report = { id, device, dpr, width: profile.viewport.width, height: profile.viewport.height, errors, failedResources, missingFixtures, blockedMutations };
+        let report = { id, device, dpr, zoom, zoomMode: 'equivalent-css-viewport', physicalWidth: profile.viewport.width, physicalHeight: profile.viewport.height, width: deviceOptions.viewport.width, height: deviceOptions.viewport.height, errors, failedResources, missingFixtures, blockedMutations };
         try {
           await page.goto(baseURL + routePath, { waitUntil: 'load' });
           if (process.argv.includes('--source-css')) {
@@ -263,6 +271,12 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
               return column ? rect.height < 3 : rect.width < 3;
             }).length;
             const clippedDialogs = [...document.querySelectorAll('[role=dialog]')].some(el => { if (!visible(el)) return false; const rect = el.getBoundingClientRect(); return rect.top < -1 || rect.bottom > innerHeight + 1 || rect.left < -1 || rect.right > innerWidth + 1; });
+            const dialogIconIssues = [...document.querySelectorAll('[role=dialog] .pbl-dialog-header-icon')].filter(visible).flatMap(icon => {
+              const copy = icon.nextElementSibling;
+              if (!copy || !visible(copy)) return [];
+              const gap = copy.getBoundingClientRect().left - icon.getBoundingClientRect().right;
+              return gap < 8 ? [{ gap, text: copy.textContent.trim().slice(0, 100) }] : [];
+            });
             const brokenImages = [...document.images].filter(el => visible(el) && (!el.complete || !el.naturalWidth)).map(el => el.currentSrc || el.src);
             const surveyRail = document.querySelector('.survey-student-rail');
             const compactSurvey = innerWidth <= 1180 && innerHeight > innerWidth || innerWidth <= 1023 && innerHeight <= 600;
@@ -300,7 +314,7 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
               const intentionalTruncation = css.textOverflow === 'ellipsis' || Number(css.webkitLineClamp) > 0;
               return { text: el.textContent.trim().slice(0, 160), width: Math.round(rect.width), lines, fontSize: parseFloat(css.fontSize), overflow: !intentionalTruncation && el.scrollWidth > el.clientWidth + 2, unusuallyNarrow: el.textContent.trim().length >= 8 && rect.width < parseFloat(css.fontSize) * 4 && lines >= 3 };
             });
-            return { scrollWidth: document.documentElement.scrollWidth, width: innerWidth, boxes, chapterProgressIssues, inviteHeadingIssues, clippedClouds, missingTheme, undersizedColumns, invisibleSurveyBars, clippedDialogs, brokenImages, surveyRailUnexpected, settingsTrailingSpace, headings, textIssues: headings.filter(h => h.overflow || h.unusuallyNarrow), touch: navigator.maxTouchPoints, userAgent: navigator.userAgent, imageCount: document.images.length, resources: performance.getEntriesByType('resource').map(r => ({ url: r.name, durationMs: Math.round(r.duration), bytes: r.transferSize, type: r.initiatorType })) };
+            return { scrollWidth: document.documentElement.scrollWidth, width: innerWidth, boxes, chapterProgressIssues, inviteHeadingIssues, dialogIconIssues, clippedClouds, missingTheme, undersizedColumns, invisibleSurveyBars, clippedDialogs, brokenImages, surveyRailUnexpected, settingsTrailingSpace, headings, textIssues: headings.filter(h => h.overflow || h.unusuallyNarrow), touch: navigator.maxTouchPoints, userAgent: navigator.userAgent, imageCount: document.images.length, resources: performance.getEntriesByType('resource').map(r => ({ url: r.name, durationMs: Math.round(r.duration), bytes: r.transferSize, type: r.initiatorType })) };
           }, { isHome: id === 'home', isStudentSurvey: id === 'student-survey' });
           report = { ...report, ...metrics };
         } catch (error) {
@@ -310,13 +324,13 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
         report.durationMs = Date.now() - started;
         report.failed = Boolean(isFailure(report));
         if (process.env.LAYOUT_CAPTURE_ALL === '1' || report.failed || ['phone-portrait', 'phone-landscape', 'pad-portrait', 'pad-landscape', 'desktop-1440x900'].includes(device)) {
-          report.screenshot = path.join(output, `${browserName}-${id}-${device}-dpr${dpr}.png`);
+          report.screenshot = path.join(output, `${browserName}-${id}-${device}-zoom${zoom}-dpr${dpr}.png`);
           await page.screenshot({ path: report.screenshot }).catch(error => errors.push(`Screenshot: ${error.message}`));
         }
-        report.trace = report.failed ? path.join(output, `${browserName}-${id}-${device}-dpr${dpr}.zip`) : undefined;
+        report.trace = report.failed ? path.join(output, `${browserName}-${id}-${device}-zoom${zoom}-dpr${dpr}.zip`) : undefined;
         await context.tracing.stop(report.trace ? { path: report.trace } : undefined);
         reports.push(report);
-        fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify({ baseURL, browser: browserName, browserVersion: browser.version(), dpr, sourceCss: process.argv.includes('--source-css'), reports }, null, 2));
+        fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify({ baseURL, browser: browserLabel, engine: browserName, browserVersion: browser.version(), dpr, zoom, sourceCss: process.argv.includes('--source-css'), reports }, null, 2));
         await page.close();
       }
       await context.close();
@@ -326,7 +340,7 @@ fixtures['/api/course-quality-review/settings'] = { settings: {} };
     await browser.close();
   }
   const failures = reports.filter(isFailure);
-  const summary = { output, browser: browserName, browserVersion: browser.version(), dpr, scenarios: selectedScenarios.length, devices: selectedProfiles.length, checks: reports.length, failures: failures.length, failedChecks: failures.map(r => `${r.id}@${r.device}`) };
+  const summary = { output, browser: browserLabel, engine: browserName, browserVersion: browser.version(), dpr, zoom, scenarios: selectedScenarios.length, devices: selectedProfiles.length, checks: reports.length, failures: failures.length, failedChecks: failures.map(r => `${r.id}@${r.device}`) };
   fs.writeFileSync(path.join(output, 'summary.json'), JSON.stringify(summary, null, 2));
   console.log(JSON.stringify(summary, null, 2));
   if (process.argv.includes('--assert') && failures.length) process.exitCode = 1;

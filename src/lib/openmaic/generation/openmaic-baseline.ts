@@ -51,7 +51,7 @@ export const OPENMAIC_GENERATION_BASELINE = {
     slideContentSystem: 'd55f5967f839d1b072eadd674814d09565f57cac1e3bc2453738aa66042a5a6f',
     slideContentUser: '6e4fd25ae1428a8d6f45000caa73f6b661044a5f12a6dbdd55fede10802ff77d',
     upstreamSlideActionsSystem: '219e8da1eb3c854dbe6ee6fdedda1936e0092fff6c8984b9277c5c6cef2443b6',
-    slideActionsSystem: 'dab3ca7bce6c96c3bb6542e601c1fdbcd9e6a663a0c58ffd7ffb2dff7e5a65b4',
+    slideActionsSystem: 'b1fd18bcaeea294fa204bab84dc16c81946d0c7a0abb2408b4a44eaa8007f058',
     slideActionsUser: '71a95329793ba0fae6030b6b9eb562bed62e9460bd26c2fcbd92d7c53f549512',
   },
 } as const;

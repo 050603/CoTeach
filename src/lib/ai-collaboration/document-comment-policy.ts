@@ -164,7 +164,10 @@ export function buildProactiveDocumentCommentPrompts(input: {
     system: [
       ...DOCUMENT_COMMENT_STYLE_RULES,
       ...PROACTIVE_INTERVENTION_RULES,
-      '只返回严格 JSON：{"shouldComment":true|false,"severity":"critical|improvement|style","issueType":"数据矛盾|要求冲突|关键推理|关键单位|核心事实核验|关键含义|关键方案风险","quotedText":"目标段落中逐字连续、唯一的原文","evidenceSource":"document|course","evidenceQuote":"成果或课程要求中逐字复制的依据","impact":"会怎样影响当前项目","needsInterventionNow":true|false,"comment":"给学生看的批注；不介入时为空字符串"}',
+      '只返回严格 JSON。无须介入时示例：{"shouldComment":false,"reason":"说明为何当前不需要介入","comment":""}。不得为了生成批注而虚构问题。',
+      '确有必要时示例：{"shouldComment":true,"severity":"critical","issueType":"数据矛盾","quotedText":"目标段落中逐字连续、唯一的原文","evidenceSource":"document","evidenceQuote":"成果中逐字复制的独立依据","impact":"会怎样影响当前项目","needsInterventionNow":true,"comment":"给学生看的批注"}。',
+      'shouldComment、needsInterventionNow 必须是布尔值。severity 只可选择 critical、improvement、style 中一个；evidenceSource 只可选择 document 或 course。issueType 只可选择 数据矛盾、要求冲突、关键推理、关键单位、核心事实核验、关键含义、关键方案风险 中一个，不得把多个值用竖线连接。',
+      '判断数据或推理矛盾时，quotedText 引用被质疑的具体断言，evidenceQuote 引用支持判断的另一处依据；两者可以在同一段落中，但不能把争议断言原样当作它自己的依据。',
     ].join('\n'),
     user: [
       '【项目与课程要求】',
@@ -335,33 +338,46 @@ export function normalizeProactiveDocumentComment(
   raw: unknown,
   context: ProactiveDocumentEvidenceContext & { targetText?: string } = {},
 ): ProactiveDocumentSingleCommentResult {
-  if (!raw || typeof raw !== 'object') return { shouldComment: false, comment: '' };
+  return assessProactiveDocumentComment(raw, context).result;
+}
+
+/** Preserve why a review did not create a comment, without weakening any evidence gate. */
+export function assessProactiveDocumentComment(
+  raw: unknown,
+  context: ProactiveDocumentEvidenceContext & { targetText?: string } = {},
+): { result: ProactiveDocumentSingleCommentResult; decision: {
+  outcome: 'comment' | 'no-comment'; reasonCodes: string[]; modelShouldComment: boolean | null; reviewVersion: number;
+} } {
+  const rejected = (reasonCodes: string[], modelShouldComment: boolean | null) => ({
+    result: { shouldComment: false, comment: '' } as ProactiveDocumentSingleCommentResult,
+    decision: { outcome: 'no-comment' as const, reasonCodes, modelShouldComment, reviewVersion: DOCUMENT_COMMENT_REVIEW_VERSION },
+  });
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return rejected(['INVALID_RESPONSE'], null);
   const record = raw as Record<string, unknown>;
+  if (record.shouldComment === false) return rejected(['MODEL_NO_COMMENT'], false);
+  if (record.shouldComment !== true) return rejected(['INVALID_DECISION'], null);
   const comment = naturalizeProactiveComment(record.comment);
   const quotedText = clean(record.quotedText, 3_000);
   const evidenceQuote = clean(record.evidenceQuote, 1_000);
-  const validCriticalIssue = record.severity === 'critical'
-    && record.needsInterventionNow === true
-    && PROACTIVE_ISSUE_TYPES.has(clean(record.issueType, 40))
-    && quotedText.length >= 2
-    && (!context.targetText || uniqueOccurrence(context.targetText, quotedText))
-    && (record.evidenceSource === 'document' || record.evidenceSource === 'course')
-    && evidenceQuote.length >= 2
-    && hasIndependentEvidence(
-      clean(record.issueType, 40), quotedText, record.evidenceSource, evidenceQuote,
-    )
-    && (record.evidenceSource !== 'document'
-      || !context.documentText
-      || (containsEvidence(context.documentText, evidenceQuote)
-        && containsEvidence(boundedDocument(context.documentText, [context.targetText ?? '']), evidenceQuote)))
-    && (record.evidenceSource !== 'course'
-      || Boolean(context.courseText && containsEvidence(context.courseText, evidenceQuote)))
-    && clean(record.impact, 500).length >= 8;
-  const shouldComment = record.shouldComment === true && validCriticalIssue && comment.length >= 8;
-  if (!shouldComment) return { shouldComment: false, comment: '' };
+  const reasonCodes: string[] = [];
+  if (record.severity !== 'critical') reasonCodes.push('NOT_CRITICAL');
+  if (record.needsInterventionNow !== true) reasonCodes.push('INTERVENTION_NOT_REQUIRED');
+  if (!PROACTIVE_ISSUE_TYPES.has(clean(record.issueType, 40))) reasonCodes.push('UNSUPPORTED_ISSUE_TYPE');
+  if (quotedText.length < 2 || (context.targetText && !uniqueOccurrence(context.targetText, quotedText))) reasonCodes.push('INVALID_TARGET_QUOTE');
+  if (record.evidenceSource !== 'document' && record.evidenceSource !== 'course') reasonCodes.push('INVALID_EVIDENCE_SOURCE');
+  if (evidenceQuote.length < 2) reasonCodes.push('MISSING_EVIDENCE');
+  if (!hasIndependentEvidence(clean(record.issueType, 40), quotedText, record.evidenceSource, evidenceQuote)) reasonCodes.push('EVIDENCE_NOT_INDEPENDENT');
+  if (record.evidenceSource === 'document' && context.documentText
+    && (!containsEvidence(context.documentText, evidenceQuote)
+      || !containsEvidence(boundedDocument(context.documentText, [context.targetText ?? '']), evidenceQuote))) reasonCodes.push('EVIDENCE_NOT_IN_DOCUMENT_CONTEXT');
+  if (record.evidenceSource === 'course' && !(context.courseText && containsEvidence(context.courseText, evidenceQuote))) reasonCodes.push('EVIDENCE_NOT_IN_COURSE');
+  if (clean(record.impact, 500).length < 8) reasonCodes.push('MISSING_IMPACT');
+  if (comment.length < 8) reasonCodes.push('EMPTY_COMMENT');
+  if (reasonCodes.length) return rejected(reasonCodes, true);
   const issueKey = clean(record.issueKey, 120);
   return {
-    shouldComment: true,
+    decision: { outcome: 'comment', reasonCodes: [], modelShouldComment: true, reviewVersion: DOCUMENT_COMMENT_REVIEW_VERSION },
+    result: { shouldComment: true,
     comment,
     issueType: clean(record.issueType, 40),
     quotedText,
@@ -369,7 +385,7 @@ export function normalizeProactiveDocumentComment(
     evidenceSource: record.evidenceSource as 'document' | 'course',
     evidenceQuote,
     impact: clean(record.impact, 500),
-    ...(issueKey ? { issueKey } : {}),
+    ...(issueKey ? { issueKey } : {}) },
   };
 }
 
@@ -527,7 +543,8 @@ export function buildDocumentCommentReplyPrompts(input: {
       '若学生要求在这段中新增内容，选择相邻的唯一原文作为 targetText：在其后新增时 replacement 必须为“targetText原文 + 新增内容”，在其前新增时为“新增内容 + targetText原文”。不要把新增误写成整段重写。',
       '若学生只是讨论、解释想法或询问原因，返回 discussion，不要擅自生成修改。若请求需要你替学生发明或决定核心问题、关键方案、核心结论，返回 boundary，并提供帮助学生自己判断的支架。',
       '只返回严格 JSON，不使用 Markdown 代码块：',
-      '{"kind":"discussion|edit-suggestion|boundary","message":"给学生看的简洁回复","suggestion":null}',
+      '{"kind":"discussion","message":"给学生看的简洁回复","suggestion":null}',
+      'kind 必须从 "discussion"、"edit-suggestion"、"boundary" 中选择一个值，不得使用竖线连接多个值。',
       'kind=edit-suggestion 时 suggestion 必须为：',
       '{"operation":"replace","title":"修改标题","targetText":"逐字复制锚定段落中的唯一原文","replacement":"建议替换文字；删除时为空","reason":"为什么这样修改"}',
     ].join('\n'),

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { uploadMultipartWithReceipt } from '@/lib/browser/upload-request';
 import { getCourseStageRequirements } from "@/lib/resource-package/course-requirements";
 import {
   ArrowLeft,
@@ -56,6 +57,10 @@ import {
 } from "@/lib/ai-collaboration/workspace-kind";
 import type { ProjectMemoryEntry, ProjectSupportDetails } from "@/lib/ai-collaboration/project-support-types";
 import { useProjectMemory } from "@/components/views/student/use-project-memory";
+import { clientUUID } from "@/lib/uuid";
+import { boundedFetch } from "@/lib/browser/bounded-fetch";
+import { flushAiInteractionEvents, queueAiInteractionEvent } from "@/lib/browser/ai-event-outbox";
+import { acknowledgeDocumentReview, queueDocumentReview, readPendingDocumentReviews, type DocumentReviewBody, type PendingDocumentReview } from "@/lib/browser/document-review";
 import { documentVersionDigest } from "@/lib/ai-collaboration/document-version";
 import { acknowledgeDocumentDraft, documentDraftKey, readDocumentDrafts, writeDocumentDraft, type PendingDocumentDraft } from "@/lib/browser/document-draft";
 
@@ -252,8 +257,10 @@ export function DocumentAiCollaboration({
   const pendingDraftRef = useRef<PendingDocumentDraft | null>(null);
   const draftKeyRef = useRef("");
   const saveChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const finalizeInFlightRef = useRef(false);
   const [saveRetry, setSaveRetry] = useState(0);
   const [localDraftError, setLocalDraftError] = useState<string | null>(null);
+  const [interactionSyncError, setInteractionSyncError] = useState<string | null>(null);
   const loadedScopeRef = useRef("");
   const requestSnapshotsRef = useRef<Map<string, DocumentRequestSnapshot>>(new Map());
   const activeRequestRef = useRef<{ id: string; controller: AbortController } | null>(null);
@@ -267,6 +274,8 @@ export function DocumentAiCollaboration({
     documentHtml: string;
   }>());
   const proactiveRequestRef = useRef<Set<string>>(new Set());
+  const proactiveBatchRef = useRef(new Map<string, string>());
+  const [proactiveReviewSyncError, setProactiveReviewSyncError] = useState<string | null>(null);
   const analyzedParagraphsRef = useRef<Set<string>>(new Set());
   const proactiveRetryTimerRef = useRef<number | null>(null);
   const proactiveRetryAttemptRef = useRef(0);
@@ -359,6 +368,19 @@ export function DocumentAiCollaboration({
     );
   }, [scheduleProactiveReviewWake]);
 
+  useEffect(() => {
+    const replay = () => {
+      if (proactiveRetryTimerRef.current !== null) {
+        window.clearTimeout(proactiveRetryTimerRef.current);
+        proactiveRetryTimerRef.current = null;
+      }
+      scheduleProactiveReviewWake(0);
+    };
+    window.addEventListener("online", replay);
+    window.addEventListener("focus", replay);
+    return () => { window.removeEventListener("online", replay); window.removeEventListener("focus", replay); };
+  }, [scheduleProactiveReviewWake]);
+
   useEffect(() => () => {
     if (proactiveRetryTimerRef.current !== null) {
       window.clearTimeout(proactiveRetryTimerRef.current);
@@ -377,14 +399,24 @@ export function DocumentAiCollaboration({
     const scopeKey = `${course.id}:${studentId}:${stageKey}:${workspaceKind}`;
     if (loadedScopeRef.current === scopeKey) return;
     loadedScopeRef.current = scopeKey;
-    const recovered = readDocumentDrafts(scopeKey)[0];
+    setProactiveReviewSyncError(null);
+    const localDrafts = readDocumentDrafts(scopeKey);
+    const confirmedVersion = existingDocument?.version ?? 0;
+    for (const draft of localDrafts) {
+      if (existingDocument && draft.content === existingDocument.content && draft.expectedVersion <= confirmedVersion) {
+        try { acknowledgeDocumentDraft(draft); } catch { /* Keep if local storage is unavailable. */ }
+      }
+    }
+    const recoverable = localDrafts.filter(draft => draft.expectedVersion >= confirmedVersion && draft.content !== existingDocument?.content);
+    const recovered = recoverable[0];
+    const conflicting = localDrafts.filter(draft => draft.expectedVersion < confirmedVersion && draft.content !== existingDocument?.content);
     const serverContent = existingDocument?.content ?? (isExternalArtifact ? EXTERNAL_ARTIFACT_COLLABORATION_TEMPLATE : "");
     const initialContent = recovered?.content ?? serverContent;
     pendingDraftRef.current = recovered ?? null;
     draftKeyRef.current = documentDraftKey(scopeKey);
-    submissionIdRef.current = recovered?.submissionId ?? existingDocument?.id;
+    submissionIdRef.current = recovered?.submissionId ?? existingDocument?.id ?? clientUUID();
     submissionVersionRef.current = recovered?.expectedVersion ?? existingDocument?.version ?? 0;
-    setLocalDraftError(null);
+    setLocalDraftError(conflicting.length ? `本机保留了 ${conflicting.length} 份与服务器版本冲突的草稿，请下载核对。` : null);
     // A new external workspace starts with a real, editable proxy draft.  Mark
     // it unsaved once so the normal autosave persists the template exactly once;
     // subsequent refreshes load that submission instead of reinserting it.
@@ -538,7 +570,7 @@ export function DocumentAiCollaboration({
   ): Promise<boolean> => {
     const scope = loadedScopeRef.current;
     const perform = async (): Promise<boolean> => {
-      if (loadedScopeRef.current !== scope || !course || !studentId || !supportedStage) return false;
+      if (loadedScopeRef.current !== scope || !course || !studentId || !supportedStage || finalizeInFlightRef.current) return false;
       if (content === savedContentRef.current && session.saveState !== "error") return true;
       const pending = pendingDraftRef.current?.content === content ? pendingDraftRef.current : keepLocalDraft(content);
       setSaveStatus("saving");
@@ -575,18 +607,21 @@ export function DocumentAiCollaboration({
   }, [course, documentTitle, group, isExternalArtifact, keepLocalDraft, session, stageKey, studentId, supportedStage]);
 
   useEffect(() => {
-    const retry = () => setSaveRetry(value => value + 1);
+    const retry = () => {
+      setSaveStatus((status) => status === "error" ? "unsaved" : status);
+      setSaveRetry(value => value + 1);
+    };
     window.addEventListener("online", retry);
     window.addEventListener("focus", retry);
     return () => { window.removeEventListener("online", retry); window.removeEventListener("focus", retry); };
   }, []);
 
   useEffect(() => {
-    if (!documentReady || !course || !studentId || !supportedStage) return;
+    if (!documentReady || !course || !studentId || !supportedStage || saveStatus !== "unsaved") return;
     if (documentHtml === savedContentRef.current) return;
     const timer = window.setTimeout(() => void persistDocument(documentHtml, "auto"), 900);
     return () => window.clearTimeout(timer);
-  }, [course, documentHtml, documentReady, persistDocument, saveRetry, stageKey, studentId, supportedStage]);
+  }, [course, documentHtml, documentReady, persistDocument, saveRetry, saveStatus, stageKey, studentId, supportedStage]);
 
   useEffect(() => {
     if (!documentReady || !historyLoaded || !course || !studentId || !supportedStage || !proactiveReviewEnabled) return;
@@ -597,7 +632,14 @@ export function DocumentAiCollaboration({
       (hash, character) => (hash * 31 + character.charCodeAt(0)) % PROACTIVE_REVIEW_JITTER_MS,
       0,
     );
+    let hasPending = false;
+    try { hasPending = readPendingDocumentReviews(scopeKey).length > 0; }
+    catch (error) { setProactiveReviewSyncError(error instanceof Error ? error.message : "本机批注请求无法读取，请保留当前浏览器。"); return; }
     const timer = window.setTimeout(() => {
+      if (proactiveBatchRef.current.has(scopeKey)) return;
+      let pending: PendingDocumentReview | undefined;
+      try { pending = readPendingDocumentReviews(scopeKey)[0]; }
+      catch (error) { setProactiveReviewSyncError(error instanceof Error ? error.message : "本机批注请求无法读取，请保留当前浏览器。"); return; }
       const candidates = editorRef.current?.getBlockCandidates() ?? [];
 
       try {
@@ -624,35 +666,39 @@ export function DocumentAiCollaboration({
           && !hasCompletedReview
           && !proactiveRequestRef.current.has(signature);
       });
-      if (!candidatesToReview.length) return;
-
-      const requests = candidatesToReview.slice(0, DOCUMENT_COMMENT_REVIEW_BATCH_SIZE).map((candidate) => ({
-        candidate,
-        signature: documentParagraphVersionFingerprint(candidate.text),
+      if (!pending && !candidatesToReview.length) return;
+      const newCandidates = candidatesToReview.slice(0, DOCUMENT_COMMENT_REVIEW_BATCH_SIZE);
+      const hasMoreCandidates = Boolean(pending) || candidatesToReview.length > newCandidates.length;
+      try {
+        pending ??= queueDocumentReview({
+          action: "proactive-document-comments", courseId: course.id, studentId, stageKey, workspaceKind,
+          paragraphs: newCandidates.map(candidate => ({
+            candidateId: candidate.blockId ? `block:${candidate.blockId}` : `index:${candidate.blockIndex}`,
+            blockId: candidate.blockId, blockIndex: candidate.blockIndex, targetText: candidate.text,
+          })), documentHtml,
+        });
+      } catch (error) {
+        setProactiveReviewSyncError(error instanceof Error ? error.message : "本机无法保留批注请求，恢复浏览器存储后将重试。");
+        return;
+      }
+      const review = pending;
+      const reviewBody = JSON.parse(review.body) as DocumentReviewBody;
+      const requests = reviewBody.paragraphs.map(paragraph => ({
+        candidate: { blockId: paragraph.blockId, blockIndex: paragraph.blockIndex, text: paragraph.targetText },
+        signature: documentParagraphVersionFingerprint(paragraph.targetText),
       }));
-      const hasMoreCandidates = candidatesToReview.length > requests.length;
       requests.forEach(({ signature }) => proactiveRequestRef.current.add(signature));
-      void fetch("/api/ai-collaboration/document", {
+      proactiveBatchRef.current.set(scopeKey, review.requestId);
+      void boundedFetch("/api/ai-collaboration/document", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" },
-        body: JSON.stringify({
-          action: "proactive-document-comments",
-          courseId: course.id,
-          studentId,
-          stageKey,
-          workspaceKind,
-          paragraphs: requests.map(({ candidate }) => ({
-            candidateId: candidate.blockId
-              ? `block:${candidate.blockId}`
-              : `index:${candidate.blockIndex}`,
-            blockId: candidate.blockId,
-            blockIndex: candidate.blockIndex,
-            targetText: candidate.text,
-          })),
-          documentHtml,
-        }),
-      }).then(async (response) => {
+        body: review.body,
+      }, 50_000).then(async (response) => {
         const payload = await response.json().catch(() => ({})) as {
+          requestId?: string;
+          status?: "processing" | "completed" | "failed" | "cancelled";
+          retryAfterMs?: number;
+          reviewDecision?: { action?: string; documentVersion?: string };
           commentThreads?: DocumentAiCommentThread[];
           reviewedParagraphFingerprints?: string[];
           reviewedCandidateIds?: string[];
@@ -660,21 +706,31 @@ export function DocumentAiCollaboration({
           documentVersion?: string;
           proactiveReviewEnabled?: boolean;
         };
-        if (!response.ok) {
+        if (!response.ok && payload.status !== "cancelled") {
           const retryAfterSeconds = Number(response.headers.get("Retry-After"));
-          scheduleProactiveReviewRetry(
+          if (loadedScopeRef.current === scopeKey) scheduleProactiveReviewRetry(
             Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1_000 : 0,
           );
           return;
         }
         if (payload.proactiveReviewEnabled === false) {
-          setProactiveReviewEnabled(false);
+          if (loadedScopeRef.current === scopeKey) setProactiveReviewEnabled(false);
           return;
         }
+        const acknowledged = await acknowledgeDocumentReview(review, payload);
+        // Clearing is bound to this persisted request. A late reply from another
+        // course or an earlier document must not update the current editor.
+        if (loadedScopeRef.current !== scopeKey) return;
+        if (!acknowledged) {
+          scheduleProactiveReviewWake(Math.min(10_000, Math.max(1_000, payload.retryAfterMs ?? 5_000)));
+          return;
+        }
+        setProactiveReviewSyncError(null);
+        if (payload.status === "cancelled") { scheduleProactiveReviewRetry(); return; }
         const currentHash = payload.documentVersion
           ? await documentVersionDigest(currentDocumentRef.current).catch(() => null)
           : null;
-        if (currentDocumentRef.current !== documentHtml || (payload.documentVersion && currentHash !== null && currentHash !== payload.documentVersion)) {
+        if (currentDocumentRef.current !== reviewBody.documentHtml || (payload.documentVersion && currentHash !== null && currentHash !== payload.documentVersion)) {
           scheduleProactiveReviewWake(1_500);
           return;
         }
@@ -716,10 +772,15 @@ export function DocumentAiCollaboration({
           ...current.filter((thread) => !incomingIds.has(thread.id)),
           ...incoming,
         ]);
-      }).catch(() => scheduleProactiveReviewRetry()).finally(() => {
-        requests.forEach(({ signature }) => proactiveRequestRef.current.delete(signature));
+      }).catch((error) => {
+        if (loadedScopeRef.current !== scopeKey) return;
+        setProactiveReviewSyncError(error instanceof Error ? error.message : "后台审阅尚未同步，恢复连接后将重试。");
+        scheduleProactiveReviewRetry();
+      }).finally(() => {
+        if (proactiveBatchRef.current.get(scopeKey) === review.requestId) proactiveBatchRef.current.delete(scopeKey);
+        if (loadedScopeRef.current === scopeKey) requests.forEach(({ signature }) => proactiveRequestRef.current.delete(signature));
       });
-    }, proactiveReviewRetry > 0 ? 1_000 : PROACTIVE_REVIEW_SETTLE_MS + stableJitterMs);
+    }, hasPending || proactiveReviewRetry > 0 ? 1_000 : PROACTIVE_REVIEW_SETTLE_MS + stableJitterMs);
     return () => window.clearTimeout(timer);
   }, [aiCommentThreads, busy, course, documentHtml, documentReady, historyLoaded, pendingDelivery, pendingSuggestion, proactiveReviewEnabled, proactiveReviewRetry, saveStatus, scheduleProactiveReviewRetry, scheduleProactiveReviewWake, stageKey, studentId, supportedStage, workspaceKind]);
 
@@ -968,6 +1029,30 @@ export function DocumentAiCollaboration({
     if (undoableEdit && html !== undoableEdit.afterHtml) setUndoableEdit(null);
   }
 
+  useEffect(() => {
+    if (!studentId || !supportedStage) return;
+    let active = true;
+    const replay = () => {
+      void flushAiInteractionEvents(requestScope).then(() => {
+        if (active) setInteractionSyncError(null);
+      }).catch(() => {
+        if (active) setInteractionSyncError("协作过程记录尚未同步，请保持此页打开，恢复连接后将重试。");
+      });
+    };
+    replay();
+    const timer = window.setInterval(replay, 10_000);
+    window.addEventListener("online", replay);
+    window.addEventListener("focus", replay);
+    window.addEventListener("pagehide", replay);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("online", replay);
+      window.removeEventListener("focus", replay);
+      window.removeEventListener("pagehide", replay);
+    };
+  }, [requestScope, studentId, supportedStage]);
+
   function recordAiInteraction(input: {
     conversationId?: string;
     source: "sidebar" | "selection" | "proactive-comment" | "system";
@@ -977,19 +1062,18 @@ export function DocumentAiCollaboration({
   }) {
     if (!course || !studentId || !supportedStage) return;
     const { conversationId: targetConversationId, ...event } = input;
-    void fetch("/api/ai-collaboration/events", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-OpenPBL-Role": "student" },
-      body: JSON.stringify({
-        courseId: course.id,
-        studentId,
-        stageKey,
-        workspaceKind,
+    try {
+      queueAiInteractionEvent(requestScope, {
+        courseId: course.id, studentId, stageKey, workspaceKind,
         conversationId: targetConversationId ?? conversationId,
-        actorRole: "student",
-        ...event,
-      }),
-    }).catch(() => undefined);
+        actorRole: "student", ...event,
+      });
+      void flushAiInteractionEvents(requestScope).then(() => setInteractionSyncError(null)).catch(() => {
+        setInteractionSyncError("协作过程记录已暂存本机，恢复连接后将重试同步。");
+      });
+    } catch {
+      setInteractionSyncError("浏览器未能暂存协作过程记录，请保持此页打开并联系教师。");
+    }
   }
 
   async function sendRequest(
@@ -1496,7 +1580,7 @@ export function DocumentAiCollaboration({
     form.set("file", file);
     form.set("title", file.name || `${workspaceNoun}图片`);
     form.set("courseId", course.id);
-    const response = await fetch("/api/uploads", { method: "POST", body: form });
+    const response = await uploadMultipartWithReceipt(`document-image:${studentId}:${course.id}:${stageKey}`, file, form);
     const payload = await response.json().catch(() => ({})) as { url?: string; message?: string };
     if (!response.ok || !payload.url) throw new Error(payload.message ?? "图片上传失败，请稍后再试。");
     return payload.url;
@@ -1760,7 +1844,7 @@ export function DocumentAiCollaboration({
   }
 
   async function submitFinalDocument() {
-    if (!course || !studentId || !supportedStage || !canSubmitFinal || submitting) return;
+    if (!course || !studentId || !supportedStage || !canSubmitFinal || submitting || finalizeInFlightRef.current) return;
     if (pendingSuggestion || pendingDelivery) {
       setError("请先接受或拒绝当前待确认的 AI 修改或组员交付，再提交最终版。");
       return;
@@ -1769,7 +1853,12 @@ export function DocumentAiCollaboration({
       setError("文档还没有可提交的内容，请先完成自己的方案编写。");
       return;
     }
-    if (documentHtml !== savedContentRef.current) await persistDocument(documentHtml, "manual");
+    if (documentHtml !== savedContentRef.current && !await persistDocument(documentHtml, "manual")) {
+      setError("文档尚未保存成功，请先处理保存错误后再提交。");
+      return;
+    }
+    const finalizeScope = loadedScopeRef.current;
+    finalizeInFlightRef.current = true;
     setSubmitting(true);
     setError(null);
     try {
@@ -1777,8 +1866,8 @@ export function DocumentAiCollaboration({
       if (!flushed || !submissionIdRef.current) {
         throw new Error("文档尚未保存成功，请稍后重试。");
       }
-      const requestId = nowId("project-submit");
-      const response = await fetch("/api/project-practice/submissions/finalize", {
+      const requestId = `finalize:${submissionIdRef.current}:${submissionVersionRef.current}`;
+      const response = await boundedFetch("/api/project-practice/submissions/finalize", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1793,9 +1882,9 @@ export function DocumentAiCollaboration({
           expectedVersion: submissionVersionRef.current,
           requestId,
         }),
-      });
+      }, 60_000);
       const payload = await response.json().catch(() => ({})) as {
-        sequence?: number;
+        sequence?: number; submissionVersion?: number;
         submittedAt?: string;
         downloadUrl?: string;
         message?: string;
@@ -1803,6 +1892,9 @@ export function DocumentAiCollaboration({
       if (!response.ok || !payload.sequence || !payload.downloadUrl) {
         throw new Error(payload.message ?? "最终 Word 文档生成失败，请稍后重试。");
       }
+      if (loadedScopeRef.current !== finalizeScope) return;
+      if (payload.submissionVersion) submissionVersionRef.current = payload.submissionVersion;
+      if (currentDocumentRef.current !== savedContentRef.current) keepLocalDraft(currentDocumentRef.current);
       setSubmittedVersion({
         sequence: payload.sequence,
         submittedAt: payload.submittedAt,
@@ -1811,7 +1903,9 @@ export function DocumentAiCollaboration({
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "最终 Word 文档生成失败，请稍后重试。");
     } finally {
+      finalizeInFlightRef.current = false;
       setSubmitting(false);
+      setSaveRetry((value) => value + 1);
     }
   }
 
@@ -1860,10 +1954,16 @@ export function DocumentAiCollaboration({
             <h1 className="mt-1 truncate text-base font-bold leading-tight text-stone-950 sm:text-lg">{projectTitle}</h1>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            {localDraftError && <span role="alert" className="text-xs text-rose-700">{localDraftError}</span>}
+            {localDraftError && <span role="alert" className="text-xs text-rose-700">{localDraftError}<button type="button" className="ml-2 underline" onClick={() => {
+              const drafts = readDocumentDrafts(loadedScopeRef.current);
+              const url = URL.createObjectURL(new Blob([JSON.stringify(drafts, null, 2)], { type: "application/json" }));
+              const anchor = document.createElement("a"); anchor.href = url; anchor.download = "本机文档草稿.json"; anchor.click(); URL.revokeObjectURL(url);
+            }}>下载本机草稿</button></span>}
+            {interactionSyncError && <span role="alert" className="text-xs text-rose-700">{interactionSyncError}</span>}
+            {proactiveReviewSyncError && <span role="alert" className="text-xs text-rose-700">{proactiveReviewSyncError}</span>}
             <span className="hidden sm:inline-flex"><SaveState status={session.saveState === "error" ? "error" : saveStatus} /></span>
             <PrimaryButton
-              disabled={saveStatus === "saving"}
+              disabled={saveStatus === "saving" || submitting}
               onClick={() => void persistDocument(documentHtml, "manual")}
               size="sm"
               tone="slate"
@@ -2068,7 +2168,7 @@ export function DocumentAiCollaboration({
 }
 
 function SaveState({ status }: { status: "saved" | "unsaved" | "saving" | "error" }) {
-  const copy = status === "saving" ? "保存中" : status === "unsaved" ? "本机待同步" : status === "error" ? "同步失败，草稿已保留" : "服务器已保存";
+  const copy = status === "saving" ? "保存中" : status === "unsaved" ? "待同步" : status === "error" ? "同步失败，请检查保存状态" : "服务器已保存";
   return (
     <span className={cn(
       "hidden items-center gap-1.5 text-xs sm:inline-flex",

@@ -15,14 +15,17 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 import { hasValidProxyAuthClaims } from "@/lib/auth/proxy-claims";
+import { contentSecurityPolicy, requestCspOrigin } from "@/lib/security/content-security-policy";
 
 export const config = {
   matcher: [
+    // Public entry pages need the request-specific CSP as well.
+    "/",
+    "/student",
     // 裸路径必须单独列出——Next.js 16 中 `:path*` 不匹配无子路径的裸路径
     "/teacher",
     "/teacher/:path*",
-    // /student 裸路径是公开入口页（输入邀请码），不经过 middleware；
-    // 仅 /student/* 子路径（classroom、ai-learning）需要认证。
+    // /student 裸路径仍公开；仅受保护的子路径需要认证。
     "/student/:path*",
     // Upload route handlers perform their own same-origin and role checks.
     // Keep them out of Proxy: Next.js buffers matched request bodies and
@@ -72,7 +75,7 @@ function readCookie(req: NextRequest, name: string): string | undefined {
   return cookie?.value;
 }
 
-export async function proxy(req: NextRequest) {
+async function authProxy(req: NextRequest) {
   // Authentication moved to V2. Teaching APIs retain their URLs with V2 persistence.
   const retiredAuth = ["/api/auth/login", "/api/auth/register", "/api/auth/join"];
   if (retiredAuth.includes(req.nextUrl.pathname)) {
@@ -220,4 +223,11 @@ export async function proxy(req: NextRequest) {
   }
 
   return NextResponse.next();
+}
+
+export async function proxy(req: NextRequest) {
+  const response = await authProxy(req);
+  const origin = requestCspOrigin(req.url, req.headers.get("host"), req.headers.get("x-forwarded-proto"));
+  response.headers.set("Content-Security-Policy", contentSecurityPolicy(origin));
+  return response;
 }

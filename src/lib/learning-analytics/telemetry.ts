@@ -52,14 +52,15 @@ export async function postLearningEvents(input: {
   events: LearningEvent[];
 }): Promise<void> {
   if (!input.events.length) return;
+  const body = JSON.stringify(input);
   const response = await boundedFetch("/api/learning-events", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-OpenPBL-Role": "student",
     },
-    body: JSON.stringify(input),
-    keepalive: true,
+    body,
+    keepalive: new TextEncoder().encode(body).byteLength < 60_000,
   });
   if (!response.ok) throw new Error(`学习事件上报失败（HTTP ${response.status}）`);
 }

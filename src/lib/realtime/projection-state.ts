@@ -5,9 +5,8 @@ import type {
   TeacherResourceProjection,
 } from "@/lib/session/types";
 
-// Leave enough time inside the one-second classroom SLO for request handling,
-// React rendering and media playback when a WebSocket is unavailable. A
-// healthy subscribed socket uses the slower watchdog interval below.
+// WebSocket delivers controls immediately. The slow watchdog heals missed
+// events; the bounded, jittered fallback polls twice per second during outages.
 export const PROJECTION_POLL_INTERVAL_MS = 500;
 export const PROJECTION_CONNECTED_CHECK_INTERVAL_MS = 15_000;
 export const PROJECTION_REQUEST_TIMEOUT_MS = 750;

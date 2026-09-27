@@ -37,43 +37,81 @@ async function savePersonalSubmission(
   key: string, fingerprint: string,
 ) {
   if (envelope.action.type !== "UPSERT_SUBMISSION") throw new Error("INVALID_SUBMISSION_ACTION");
-  const participation = await tx.classroomParticipation.findFirst({
-    where: { instanceId: courseId, enrollment: { userId: claims.sub } },
-    include: { enrollment: true, instance: { include: { activity: { include: { chapter: { include: { offering: true } } } } } } },
-  });
+  const submitted = envelope.action.payload.submission;
+  const stageKey = `${submitted.stageKey}:${submitted.type}`;
+  const groupId = submitted.groupId || null;
+  const [participation] = await tx.$queryRaw<Array<{
+    id: string; offeringId: string; researchKey: string; enrollmentStatus: string;
+    instanceStatus: string; runtimeConfig: unknown; offeringStatus: string; archivedAt: Date | null;
+    groupAllowed: boolean; identityConflict: boolean; currentPayload: unknown | null;
+    userStatus: string; userRole: string; sessionVersion: number; receipt: unknown | null;
+  }>>`SELECT p.id, e."offeringId", e."researchKey", e.status AS "enrollmentStatus",
+      ci.status AS "instanceStatus", ci."runtimeConfig", o.status AS "offeringStatus", a."archivedAt",
+      own.payload AS "currentPayload", u.status AS "userStatus", u.role AS "userRole", u."sessionVersion",
+      (SELECT d.payload FROM "DomainEvent" d WHERE d."idempotencyKey" = ${key}) AS receipt,
+      (${groupId}::text IS NULL OR EXISTS (
+        SELECT 1 FROM "GroupMember" gm JOIN "ProjectGroup" g ON g.id = gm."groupId"
+        WHERE gm."userId" = e."userId" AND gm."leftAt" IS NULL AND g."offeringId" = o.id
+          AND (g.id = ${groupId} OR (starts_with(${groupId}::text, 'grp-') AND g.id = o.id || ':' || ${groupId}))
+      )) AS "groupAllowed",
+      EXISTS (SELECT 1 FROM "ClassroomSubmission" other JOIN "ClassroomParticipation" op ON op.id = other."participationId"
+        WHERE op."instanceId" = ci.id AND other.payload #>> '{view,id}' = ${submitted.id}
+          AND (other."participationId" <> p.id OR other."stageKey" <> ${stageKey})) AS "identityConflict"
+    FROM "ClassroomParticipation" p JOIN "Enrollment" e ON e.id = p."enrollmentId"
+    JOIN "User" u ON u.id = e."userId"
+    JOIN "ClassroomInstance" ci ON ci.id = p."instanceId" JOIN "Activity" a ON a.id = ci."activityId"
+    JOIN "Chapter" c ON c.id = a."chapterId" JOIN "CourseOffering" o ON o.id = c."offeringId"
+    LEFT JOIN "ClassroomSubmission" own ON own."participationId" = p.id AND own."stageKey" = ${stageKey}
+    WHERE p."instanceId" = ${courseId} AND e."userId" = ${claims.sub} AND e."offeringId" = o.id`;
   if (!participation) throw new CourseActionError("FORBIDDEN_ACTION_SCOPE", "学生未加入课堂", 403);
-  const instance = participation.instance;
-  if (instance.status !== "TEACHING" || participation.enrollment.status !== "ACTIVE" || instance.activity.chapter.offering.status !== "OPEN") {
+  // Authorize even receipt replays against current identity and owned enrollment.
+  if (participation.userStatus.toUpperCase() !== "ACTIVE" || participation.userRole.toUpperCase() !== "STUDENT"
+    || participation.sessionVersion !== claims.sv || !["ACTIVE", "COMPLETED"].includes(participation.enrollmentStatus.toUpperCase())) {
+    throw new CourseActionError("FORBIDDEN", "账户或选课状态已变化，请重新登录或检查课堂权限", 403);
+  }
+  if (participation.receipt) {
+    const payload = participation.receipt as { fingerprint: string; ack: ActionAck };
+    if (payload.fingerprint !== fingerprint) throw new CourseActionError("IDEMPOTENCY_CONFLICT", "请求标识已用于其他内容", 409);
+    return { ack: payload.ack, event: realtimeEventForAction(courseId, envelope, payload.ack, claims) };
+  }
+  if (participation.instanceStatus.toUpperCase() !== "TEACHING" || participation.enrollmentStatus.toUpperCase() !== "ACTIVE" || participation.offeringStatus.toUpperCase() !== "OPEN" || participation.archivedAt) {
     throw new CourseActionError("CLASSROOM_READ_ONLY", "课堂或选课状态已改变，当前仅可查看记录", 409);
   }
-  const submitted = envelope.action.payload.submission;
-  // Reject reusing another record's logical ID, including group records.
-  const sameId = await tx.classroomSubmission.findFirst({ where: {
-    participation: { instanceId: courseId }, payload: { path: ["view", "id"], equals: submitted.id },
-  } });
-  if (sameId && (sameId.participationId !== participation.id || sameId.stageKey !== `${submitted.stageKey}:${submitted.type}`)) {
-    throw new CourseActionError("FORBIDDEN_ACTION_SCOPE", "不能覆盖其他课堂记录", 403);
-  }
-  const where = { participationId_stageKey: { participationId: participation.id, stageKey: `${submitted.stageKey}:${submitted.type}` } };
-  const previous = await tx.classroomSubmission.findUnique({ where });
-  const previousPayload = asRecord(previous?.payload);
-  const current = previous ? asRecord(previousPayload.view ?? previousPayload) as ClassroomSubmission : undefined;
+  if (!participation.groupAllowed || participation.identityConflict) throw new CourseActionError("FORBIDDEN_ACTION_SCOPE", "草稿小组或记录不属于当前学生", 403);
+  const previousPayload = asRecord(participation.currentPayload);
+  const current = participation.currentPayload ? asRecord(previousPayload.view ?? previousPayload) as ClassroomSubmission : undefined;
+  if (current && (current.studentId !== submitted.studentId || current.groupId !== submitted.groupId)) throw new CourseActionError("FORBIDDEN_ACTION_SCOPE", "不能变更草稿归属", 403);
   const submissionVersion = checkedSubmissionVersion(envelope.action.payload.expectedSubmissionVersion, current);
   const now = new Date();
   const submission = { ...submitted, ...(current ? { id: current.id, createdAt: current.createdAt } : {}), version: submissionVersion, updatedAt: now.toISOString() };
   const data = { status: (submission.status ?? "submitted").toUpperCase(), submittedAt: submission.status === "draft" ? null : new Date(submission.submittedAt ?? submission.updatedAt), payload: json({ instanceId: courseId, collection: "submissions", provenance: { actorId: claims.sub, actorRole: "student" }, view: submission }) };
-  await tx.classroomSubmission.upsert({ where, create: { participationId: participation.id, stageKey: `${submission.stageKey}:${submission.type}`, ...data }, update: data });
-  const runtime = asRecord(instance.runtimeConfig);
+  const runtime = asRecord(participation.runtimeConfig);
   const courseVersion = Number(runtime.version ?? 1) + 1;
-  await tx.classroomInstance.update({ where: { id: courseId }, data: { runtimeConfig: json({ ...runtime, version: courseVersion }) } });
   const id = crypto.randomUUID();
   const ack: ActionAck = { requestId: envelope.requestId, courseVersion, submissionVersion, eventCursor: `${now.toISOString()}~${id}` };
-  await tx.domainEvent.create({ data: { id, createdAt: now, idempotencyKey: key, actorId: claims.sub, offeringId: participation.enrollment.offeringId, classroomInstanceId: courseId, participationId: participation.id, researchKey: participation.enrollment.researchKey, eventType: "COURSE_ACTION", payload: json({ fingerprint, ack, action: { ...envelope.action, payload: { ...envelope.action.payload, submission } }, scope: "student", studentId: claims.sub }) } });
+  const receiptPayload = { fingerprint, ack, action: { ...envelope.action, payload: { ...envelope.action.payload, submission } }, scope: "student", studentId: claims.sub };
+  // Keep the lock and fresh reads separate; only the three durable writes share a statement.
+  const committed = await tx.$queryRaw<Array<{ id: string }>>`WITH course AS (
+    UPDATE "ClassroomInstance" SET "runtimeConfig" = ${JSON.stringify({ ...runtime, version: courseVersion })}::jsonb,
+      "updatedAt" = ${now} WHERE id = ${courseId} RETURNING id
+  ), submission AS (
+    INSERT INTO "ClassroomSubmission" (id, "participationId", "stageKey", status, "submittedAt", payload, "createdAt", "updatedAt")
+    SELECT ${crypto.randomUUID()}, ${participation.id}, ${stageKey}, ${data.status}, ${data.submittedAt}, ${JSON.stringify(data.payload)}::jsonb, ${now}, ${now} FROM course
+    ON CONFLICT ("participationId", "stageKey") DO UPDATE SET status = EXCLUDED.status,
+      "submittedAt" = EXCLUDED."submittedAt", payload = EXCLUDED.payload, "updatedAt" = EXCLUDED."updatedAt"
+    RETURNING id
+  ), receipt AS (
+    INSERT INTO "DomainEvent" (id, "createdAt", "idempotencyKey", "actorId", "offeringId", "classroomInstanceId", "participationId", "researchKey", "eventType", payload)
+    SELECT ${id}, ${now}, ${key}, ${claims.sub}, ${participation.offeringId}, ${courseId}, ${participation.id}, ${participation.researchKey}, 'COURSE_ACTION', ${JSON.stringify(receiptPayload)}::jsonb FROM submission
+    RETURNING id
+  ) SELECT id FROM receipt`;
+  if (committed.length !== 1) throw new Error("DRAFT_COMMIT_INCOMPLETE");
   return { ack, event: realtimeEventForAction(courseId, envelope, ack, claims) };
 }
 export async function executeCourseAction(courseId: string, envelope: ActionEnvelope, claims: AuthClaims): Promise<ActionAck> {
   if (!claims.sub || !isActionAllowed(claims.role, envelope.action.type)) throw new CourseActionError("FORBIDDEN_ACTION", "无权执行此操作", 403);
-  if (envelope.action.type !== "CREATE_COURSE" && !await canAccessLegacyCourse(claims, courseId, claims.role === "student" ? "write" : "read")) throw new CourseActionError("FORBIDDEN", "课程无权访问或已关闭", 403);
+  const personalSubmission = claims.role === "student" && envelope.action.type === "UPSERT_SUBMISSION"
+    && envelope.action.payload.submission.studentId === claims.sub;
   if (claims.role === "student" && !isStudentActionForSelf(envelope.action, claims.sub, courseId)) throw new CourseActionError("FORBIDDEN", "不能代替其他学生提交", 403);
   if (envelope.action.type === "SET_UI_STATE") {
     const keys = Object.keys(envelope.action.payload.patch);
@@ -85,21 +123,29 @@ export async function executeCourseAction(courseId: string, envelope: ActionEnve
     if (claims.role !== "teacher") throw new CourseActionError("FORBIDDEN_ACTION", "只有教师可以控制课堂投屏", 403);
     return executeProjectionAction(courseId, envelope, claims, projectionPatch);
   }
+  // Personal drafts and projection controls authorize in their fresh locked scope read.
+  if (!personalSubmission && envelope.action.type !== "CREATE_COURSE" && !await canAccessLegacyCourse(claims, courseId, "read")) throw new CourseActionError("FORBIDDEN", "课程无权访问或已关闭", 403);
 
+  const key = `course-action:${claims.sub}:${envelope.requestId}`;
+  const fingerprint = createHash("sha256").update(JSON.stringify([courseId, envelope.action])).digest("hex");
   const result = await runMutationTransaction(async tx => {
     await lockProjectedCourse(tx, courseId);
-    const key = `course-action:${claims.sub}:${envelope.requestId}`;
-    const fingerprint = createHash("sha256").update(JSON.stringify([courseId, envelope.action])).digest("hex");
+    if (personalSubmission) return savePersonalSubmission(tx, courseId, envelope, claims, key, fingerprint);
     const previous = await tx.domainEvent.findUnique({ where: { idempotencyKey: key } });
     if (previous) {
       const payload = previous.payload as { fingerprint: string; ack: ActionAck };
       if (payload.fingerprint !== fingerprint) throw new CourseActionError("IDEMPOTENCY_CONFLICT", "请求标识已用于其他内容", 409);
       return { ack: payload.ack, event: realtimeEventForAction(courseId, envelope, payload.ack, claims) };
     }
-    if (claims.role === "student" && envelope.action.type === "UPSERT_SUBMISSION" && envelope.action.payload.submission.studentId === claims.sub && !envelope.action.payload.submission.groupId) {
-      return savePersonalSubmission(tx, courseId, envelope, claims, key, fingerprint);
-    }
     const before = await loadCourse(courseId, tx);
+    if (before && envelope.action.type === "UPDATE_COURSE" && envelope.action.payload.patch.uiState) {
+      const patch = envelope.action.payload.patch;
+      const transition = (patch.currentStageIndex !== undefined && patch.currentStageIndex !== before.currentStageIndex) || (patch.status !== undefined && patch.status !== before.status);
+      for (const field of ["resourceProjection", "teacherResourceProjection", "projectionController", "projectionVersion", "projectionUpdatedAt"] as const) {
+        if (!transition && Object.hasOwn(patch.uiState!, field) && JSON.stringify(patch.uiState?.[field] ?? null) !== JSON.stringify(before.uiState?.[field] ?? null)) throw new CourseActionError("INVALID_PROJECTION_PATCH", "请通过投屏控制通道更新投屏", 400);
+      }
+      if (!transition) envelope = { ...envelope, action: { ...envelope.action, payload: { ...envelope.action.payload, patch: { ...patch, uiState: { ...before.uiState, ...patch.uiState } } } } };
+    }
     if (claims.role === "student") {
       if (!before) throw new CourseActionError("NOT_FOUND", "课堂不存在", 404);
       try { assertStudentActionScope(before, envelope.action, claims.sub!); }
@@ -140,7 +186,10 @@ export async function executeCourseAction(courseId: string, envelope: ActionEnve
     const ack = { requestId: envelope.requestId, courseVersion: after?.version ?? (before?.version ?? 0) + 1, eventCursor: `${now.toISOString()}~${id}`, ...(envelope.action.type === "UPSERT_SUBMISSION" ? { submissionVersion: envelope.action.payload.submission.version } : {}) };
     await tx.domainEvent.create({ data: { id, createdAt: now, idempotencyKey: key, actorId: claims.sub, offeringId: instance?.activity.chapter.offeringId, classroomInstanceId: instance?.id, participationId: participation?.id, researchKey: participation?.enrollment.researchKey, eventType: "COURSE_ACTION", payload: JSON.parse(JSON.stringify({ fingerprint, ack, action: envelope.action, ...(!instance ? { templateId: courseId } : {}), scope: claims.role === "student" ? "student" : "course", studentId: participation?.enrollment.userId })) } });
     return { ack, event: realtimeEventForAction(courseId, envelope, ack, claims) };
-  });
+  }, personalSubmission ? {
+    lowPriorityCourseId: courseId,
+    admissionTimeoutError: () => new CourseActionError("COURSE_BUSY", "课堂保存繁忙，请稍后重试", 503),
+  } : undefined);
   await publishRealtimeEvent(result.event);
   return result.ack;
 }
@@ -175,9 +224,24 @@ async function executeProjectionAction(
     const fingerprint = createHash("sha256")
       .update(JSON.stringify([courseId, envelope.action]))
       .digest("hex");
-    const previous = await tx.domainEvent.findUnique({ where: { idempotencyKey: key } });
-    if (previous) {
-      const payload = asRecord(previous.payload) as {
+    // A separate statement after both locks observes the latest runtime and authorization.
+    // Receipt replay must also honor revoked membership, account and session state.
+    const [instance] = await tx.$queryRaw<Array<{
+      runtimeConfig: unknown; offeringId: string; userStatus: string; userRole: string;
+      sessionVersion: number; isTeacher: boolean; receipt: unknown | null;
+    }>>`SELECT ci."runtimeConfig", c."offeringId", u.status AS "userStatus",
+        u.role AS "userRole", u."sessionVersion",
+        EXISTS (SELECT 1 FROM "CourseTeacher" ct WHERE ct."offeringId" = c."offeringId"
+          AND ct."userId" = u.id) AS "isTeacher",
+        (SELECT d.payload FROM "DomainEvent" d WHERE d."idempotencyKey" = ${key}) AS receipt
+      FROM "ClassroomInstance" ci JOIN "Activity" a ON a.id = ci."activityId"
+      JOIN "Chapter" c ON c.id = a."chapterId" CROSS JOIN "User" u
+      WHERE ci.id = ${courseId} AND u.id = ${claims.sub}`;
+    if (!instance || instance.userStatus.toUpperCase() !== "ACTIVE"
+      || instance.userRole.toUpperCase() !== "TEACHER" || instance.sessionVersion !== claims.sv
+      || !instance.isTeacher) throw new CourseActionError("FORBIDDEN", "账户或授课权限已变化，请重新登录或检查课堂权限", 403);
+    if (instance.receipt) {
+      const payload = asRecord(instance.receipt) as {
         fingerprint?: string;
         ack?: ActionAck;
         projection?: ProjectionStateSnapshot;
@@ -190,15 +254,6 @@ async function executeProjectionAction(
         event: projectionRealtimeEvent(payload.projection, payload.ack.eventCursor),
       };
     }
-
-    const instance = await tx.classroomInstance.findUnique({
-      where: { id: courseId },
-      select: {
-        runtimeConfig: true,
-        activity: { select: { chapter: { select: { offeringId: true } } } },
-      },
-    });
-    if (!instance) throw new CourseActionError("NOT_FOUND", "课堂不存在", 404);
 
     const runtime = asRecord(instance.runtimeConfig);
     const currentUiState = asRecord(runtime.uiState) as CourseUiState;
@@ -232,6 +287,7 @@ async function executeProjectionAction(
       projectionVersion,
       projectionUpdatedAt: serverTime,
     };
+    if (!uiState.resourceProjection && !uiState.teacherResourceProjection) uiState.projectionController = null;
     const projection = projectionSnapshotFromUiState({
       courseId,
       courseVersion,
@@ -259,7 +315,7 @@ async function executeProjectionAction(
         createdAt: now,
         idempotencyKey: key,
         actorId: claims.sub,
-        offeringId: instance.activity.chapter.offeringId,
+        offeringId: instance.offeringId,
         classroomInstanceId: courseId,
         eventType: "projection-changed",
         payload: json({

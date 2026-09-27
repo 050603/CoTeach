@@ -32,16 +32,20 @@ export function readLearningWrites<T>(scope: string): OutboxEntry<T>[] {
 }
 
 /** Remove only acknowledged items. Failed/unmounted/reloaded requests remain durable. */
-export function drainLearningWrites<T>(scope: string, send: (value: T) => Promise<void>): Promise<void> {
+export function drainLearningWrites<T>(scope: string, send: (value: T, id: string) => Promise<void>): Promise<void> {
+  return drainLearningWriteBatches<T>(scope, async (values, ids) => send(values[0], ids[0]), 1);
+}
+
+export function drainLearningWriteBatches<T>(scope: string, send: (values: T[], ids: string[]) => Promise<void>, batchSize = 20): Promise<void> {
   const existing = drains.get(scope);
   if (existing) return existing;
   const drain = (async () => {
     // Re-read after every acknowledgement to include writes made during send.
     for (;;) {
-      const entry = readLearningWrites<T>(scope)[0];
-      if (!entry) return;
-      await send(entry.value);
-      localStorage.removeItem(`${prefix(scope)}${entry.id}`);
+      const entries = readLearningWrites<T>(scope).slice(0, batchSize);
+      if (!entries.length) return;
+      await send(entries.map((entry) => entry.value), entries.map((entry) => entry.id));
+      for (const entry of entries) localStorage.removeItem(`${prefix(scope)}${entry.id}`);
     }
   })();
   drains.set(scope, drain);

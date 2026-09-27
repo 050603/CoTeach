@@ -1,10 +1,11 @@
 import { expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ load: vi.fn(), latest: vi.fn(), scope: vi.fn() }));
+const mocks = vi.hoisted(() => ({ load: vi.fn(), latest: vi.fn(), scope: vi.fn(), studentScope: vi.fn().mockResolvedValue(null), access: vi.fn().mockResolvedValue(true), role: 'student' }));
 vi.mock('@/lib/db/client', () => ({ prisma: { domainEvent: { findFirst: mocks.latest } } }));
 vi.mock('@/lib/db/session-repository', () => ({ loadCourse: mocks.load }));
-vi.mock('@/lib/auth/request-guards', () => ({ authenticateRequest: async () => ({ claims: { sub: 'user', role: 'student' } }) }));
+vi.mock('@/lib/auth/request-guards', () => ({ authenticateRequest: async () => ({ claims: { sub: 'user', role: mocks.role } }) }));
 vi.mock('@/lib/auth/course-scope', () => ({ scopeCourseForClaims: (course: unknown) => course }));
-vi.mock('@/lib/platform/access', () => ({ canAccessLegacyCourse: async () => true }));
+vi.mock('@/lib/platform/access', () => ({ canAccessLegacyCourse: mocks.access }));
+vi.mock('@/lib/courses/student-state-scope', () => ({ resolveStudentStateScope: mocks.studentScope }));
 vi.mock('@/lib/realtime/course-event-scope', () => ({ resolveCourseEventScope: mocks.scope }));
 vi.mock('@/lib/observability/http', () => ({ withHttpMetrics: (_a: string, _b: string, handler: unknown) => handler }));
 import { GET } from './route';
@@ -17,4 +18,34 @@ it('captures the event watermark before the canonical snapshot and uses V2 strin
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ courseVersion: 5, eventCursor: `2026-09-08T00:00:00.000Z~${id}` });
   expect(mocks.latest.mock.invocationCallOrder[0]).toBeLessThan(mocks.load.mock.invocationCallOrder[0]);
+  expect(mocks.load).toHaveBeenLastCalledWith('instance', expect.anything(), { studentId: 'user' });
+});
+it('retains the complete teacher snapshot rather than applying a student read scope', async () => {
+  mocks.role = 'teacher';
+  mocks.scope.mockResolvedValue({ where: { classroomInstanceId: 'instance' } });
+  mocks.latest.mockResolvedValue(null);
+  mocks.load.mockResolvedValue({ id: 'instance', version: 5 });
+  const response = await GET(new Request('http://localhost/api/courses/instance/state'), { params: Promise.resolve({ courseId: 'instance' }) });
+  expect(response.status).toBe(200);
+  expect(mocks.load).toHaveBeenLastCalledWith('instance', expect.anything(), undefined);
+  mocks.role = 'student';
+});
+it('uses the authorized instance scope without repeating the legacy access and event-scope joins', async () => {
+  vi.clearAllMocks();
+  mocks.studentScope.mockResolvedValue({ accessible: true });
+  mocks.latest.mockResolvedValue(null);
+  mocks.load.mockResolvedValue({ id: 'instance', version: 5 });
+  const response = await GET(new Request('http://localhost/api/courses/instance/state'), { params: Promise.resolve({ courseId: 'instance' }) });
+  expect(response.status).toBe(200);
+  expect(mocks.access).not.toHaveBeenCalled();
+  expect(mocks.scope).not.toHaveBeenCalled();
+  expect(mocks.latest).toHaveBeenCalledWith(expect.objectContaining({ where: { classroomInstanceId: 'instance' } }));
+});
+it('does not load course data for a student whose instance membership is denied', async () => {
+  vi.clearAllMocks();
+  mocks.studentScope.mockResolvedValue({ accessible: false });
+  const response = await GET(new Request('http://localhost/api/courses/instance/state'), { params: Promise.resolve({ courseId: 'instance' }) });
+  expect(response.status).toBe(403);
+  expect(mocks.load).not.toHaveBeenCalled();
+  expect(mocks.latest).not.toHaveBeenCalled();
 });

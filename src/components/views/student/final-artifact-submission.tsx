@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { uploadMultipartWithReceipt } from '@/lib/browser/upload-request';
 import { FileCheck2, LoaderCircle, Upload } from "lucide-react";
 import { Card, Pill } from "@/components/ui";
 import type { Course } from "@/lib/session/types";
@@ -37,10 +38,9 @@ export function FinalArtifactSubmission({
       const body = new FormData();
       body.append("file", file);
       body.append("title", file.name);
-      if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-        body.append("requestId", crypto.randomUUID());
-      }
-      const response = await fetch(`/api/courses/${encodeURIComponent(course.id)}/showcase/artifacts/pdf`, { method: "POST", body });
+      const response = await uploadMultipartWithReceipt(`local-artifact:${course.id}`, file, body, {
+        endpoint: `/api/courses/${encodeURIComponent(course.id)}/showcase/artifacts/pdf`, requestIdField: 'requestId', receiptShape: 'artifact',
+      });
       const payload = await response.json().catch(() => null) as { message?: string; sequence?: number } | null;
       if (!response.ok) throw new Error(payload?.message ?? `提交失败（${response.status}）`);
       setMessage({ tone: "ok", text: `项目材料已上传为第 ${payload?.sequence ?? "最新"} 份，教师可查看或下载。` });

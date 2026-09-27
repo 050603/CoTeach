@@ -11,6 +11,7 @@ import { rateLimitedResponse } from "@/lib/auth/rate-limit";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
 import { resolveUploadScope } from "@/lib/uploads/scope";
 import { persistUpload } from "@/lib/uploads/assets";
+import { persistUploadOnce, readUploadReceipt, uploadFingerprint, UploadRequestConflict } from "@/lib/uploads/idempotency";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
 import type { AuthClaims } from "@/lib/auth/session";
 import {
@@ -107,16 +108,17 @@ export async function POST(request: Request) {
     return apiError(requestId, "DATABASE_REQUIRED", "上传功能需要连接数据库。", 503);
   }
 
-  const limit = await checkDistributedRateLimit({
+  const checkUploadLimit = async () => checkDistributedRateLimit({
     namespace: "upload",
     key: auth.claims.sub ?? "unknown",
     limit: 20,
     windowSeconds: 60 * 60,
   });
-  if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
 
   const contentLength = Number(request.headers.get("content-length") ?? "");
   if (request.headers.get("x-openpbl-upload-mode") === "stream") {
+    const limit = await checkUploadLimit();
+    if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
     return uploadStreamedVideo(request, auth.claims, requestId, contentLength);
   }
   if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BYTES) {
@@ -129,6 +131,8 @@ export async function POST(request: Request) {
 
   let targetPath: string | null = null;
   let previewTargetPath: string | null = null;
+  let databaseCommitAttempted = false;
+  let uploadCommitted = false;
   let failureStage = "parse-form-data";
   try {
     const form = await request.formData().catch(() => {
@@ -230,6 +234,18 @@ export async function POST(request: Request) {
     failureStage = "inspect-file";
     const bytes = Buffer.from(await file.arrayBuffer());
     const sourceSha256 = createHash("sha256").update(bytes).digest("hex");
+    // Nginx rewrites X-Request-Id for tracing; the logical upload key must be separate.
+    const suppliedKey = request.headers.get('idempotency-key');
+    if (suppliedKey !== null && !/^[a-zA-Z0-9_-]{1,128}$/.test(suppliedKey)) {
+      throw new UploadHttpError('INVALID_UPLOAD_REQUEST_ID', '上传请求编号无效。', 400);
+    }
+    const uploadRequestId = suppliedKey ?? randomUUID();
+    const receiptInput = { userId: auth.claims.sub!, requestId: uploadRequestId,
+      fingerprint: uploadFingerprint({ originalName, mimeType: file.type, size: file.size, sha256: sourceSha256, ...parsedFields.data }) };
+    const previous = await readUploadReceipt(receiptInput);
+    if (previous) return Response.json(previous, { status: 201, headers: { 'x-request-id': requestId, 'idempotency-key': uploadRequestId } });
+    const limit = await checkUploadLimit();
+    if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
     const detected = await fileTypeFromBuffer(bytes).catch(() => null);
     const isValidPlainText = expected.plainText
       ? !detected && isUtf8PlainText(bytes)
@@ -307,13 +323,29 @@ export async function POST(request: Request) {
         ? parsedFields.data.pdfDisplayMode ?? null
         : null;
     failureStage = "bind-database";
-    const durableEvent = await prisma.$transaction((tx) => persistUpload(tx, {
+    const responsePayload = {
+      id, title, fileName: originalName, fileType, size: formattedSize, sizeBytes: info.size, url,
+      previewUrl: previewUrl ?? undefined, previewType: previewType ?? undefined,
+      convertedToPdf: Boolean(previewUrl), displayMode: displayMode ?? undefined,
+      stageKey: parsedFields.data.stageKey, boundToCourse: bindAsCourseResource && Boolean(storageScope?.offeringId),
+      purpose: parsedFields.data.purpose, requestId: uploadRequestId,
+    };
+    databaseCommitAttempted = true;
+    const saved = await persistUploadOnce({ ...receiptInput, offeringId: storageScope?.offeringId ?? null, response: responsePayload }, (tx) => persistUpload(tx, {
       id, originalName, storageKey: storedName, offeringId: storageScope?.offeringId ?? null, uploadedById: auth.claims.sub!,
       size: info.size, mimeType: expected.mime, title, type: fileType, bind: bindAsCourseResource,
       stageKey: parsedFields.data.stageKey, displayMode, previewStorageKey: previewStoredName, previewMimeType, previewSize,
       sha256: sourceSha256, previewSha256,
       ...(isResourcePackage || isLaunchReplacement ? { provenance: { schemaVersion: 1, operation: isLaunchReplacement ? "launch-presentation-replacement" : "course-resource-package-upload", courseId } } : {}),
     }));
+    uploadCommitted = !saved.replayed;
+    if (saved.replayed) {
+      // Each attempt stages a distinct UUID; only this losing attempt's files are removed.
+      await unlink(/* turbopackIgnore: true */ targetPath).catch(() => undefined);
+      if (previewTargetPath) await unlink(/* turbopackIgnore: true */ previewTargetPath).catch(() => undefined);
+      targetPath = null; previewTargetPath = null;
+    }
+    const durableEvent = saved.mutation;
 
     if (durableEvent && courseId) {
       try {
@@ -336,35 +368,24 @@ export async function POST(request: Request) {
       }
     }
 
-    return Response.json(
-      {
-        id,
-        title,
-        fileName: originalName,
-        fileType,
-        size: formattedSize,
-        sizeBytes: info.size,
-        url,
-        previewUrl: previewUrl ?? undefined,
-        previewType: previewType ?? undefined,
-        convertedToPdf: Boolean(previewUrl),
-        displayMode: displayMode ?? undefined,
-        stageKey: parsedFields.data.stageKey,
-        boundToCourse: bindAsCourseResource && Boolean(storageScope?.offeringId),
-        purpose: parsedFields.data.purpose,
-      },
-      { status: 201, headers: { "x-request-id": requestId } },
-    );
+    return Response.json(saved.response, { status: 201, headers: { "x-request-id": requestId, 'idempotency-key': uploadRequestId } });
   } catch (error) {
-    if (targetPath) {
+    if (databaseCommitAttempted && !uploadCommitted && targetPath) {
+      // A lost COMMIT acknowledgement is ambiguous. Never remove a referenced file;
+      // if PostgreSQL is unavailable, leave it for the existing orphan-file cleanup.
+      try { uploadCommitted = Boolean(await prisma.fileAsset.findUnique({ where: { storageKey: path.basename(targetPath) }, select: { id: true } })); }
+      catch { uploadCommitted = true; }
+    }
+    if (targetPath && !uploadCommitted) {
       await unlink(/* turbopackIgnore: true */ targetPath).catch(() => undefined);
     }
-    if (previewTargetPath) {
+    if (previewTargetPath && !uploadCommitted) {
       await unlink(/* turbopackIgnore: true */ previewTargetPath).catch(() => undefined);
     }
     if (error instanceof UploadHttpError) {
       return apiError(requestId, error.code, error.message, error.status);
     }
+    if (error instanceof UploadRequestConflict) return apiError(requestId, error.code, error.message, 409);
     const detail = serializeUploadError(error);
     console.error(`[uploads] Unexpected upload failure ${JSON.stringify({ requestId, failureStage, ...detail })}`);
     return apiError(requestId, "UPLOAD_SERVICE_ERROR", "上传服务暂时不可用，请稍后重试。", 500);

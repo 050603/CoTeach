@@ -1,9 +1,26 @@
 import { describe, expect, it } from "vitest";
-import type { StudentClaims } from "@/lib/auth/session";
+import type { AuthClaims, StudentClaims } from "@/lib/auth/session";
 import type { Course } from "@/lib/session/types";
 import { scopeCourseForClaims } from "./course-scope";
 
 describe("scopeCourseForClaims", () => {
+  it("keeps learning-time statistics private to each student and preserves the teacher's complete view", () => {
+    const timing = {
+      "student-a": { effectiveDurationMs: 10000, expectedDurationMs: 60000, hasEvidence: true },
+      "student-b": { effectiveDurationMs: 20000, expectedDurationMs: 60000, hasEvidence: true },
+    };
+    const course = { id: "course", stages: [], students: [], content: {}, aiLearningTimingByStudent: timing } as unknown as Course;
+    for (const studentId of Object.keys(timing)) {
+      const result = scopeCourseForClaims(course, { role: "student", sub: studentId } as AuthClaims);
+      expect(Object.keys(result.aiLearningTimingByStudent ?? {})).toEqual([studentId]);
+      expect(result.aiLearningTimingByStudent?.[studentId]).toEqual(timing[studentId as keyof typeof timing]);
+    }
+    expect(scopeCourseForClaims(course, { role: "teacher", sub: "teacher" } as AuthClaims).aiLearningTimingByStudent).toEqual(timing);
+    expect(scopeCourseForClaims(course, { role: "student", sub: "absent" } as AuthClaims).aiLearningTimingByStudent).toEqual({});
+    expect(scopeCourseForClaims(course, { role: "student" } as AuthClaims).aiLearningTimingByStudent).toEqual({});
+    expect(course.aiLearningTimingByStudent).toEqual(timing);
+  });
+
   it("removes private package authoring data while retaining classroom stage requirements", () => {
     const course = { id: "course", stages: [], students: [], content: { resourcePackage: { secret: "teacher source" }, stagePlan: { totalMinutes: 135 } } } as unknown as Course;
     const scoped = scopeCourseForClaims(course, { role: "student", sub: "student" } as StudentClaims);

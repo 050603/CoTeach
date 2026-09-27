@@ -110,7 +110,7 @@ async function main() {
     const retry = await finalize(request("document-first"));
     assert.equal(retry.status, 200); assert.equal((await retry.json()).versionId, result.versionId);
     assert.equal((await finalize(request("document-first", 2))).status, 409);
-    assert.equal((await finalize(request("document-stale", 2))).status, 409);
+    assert.equal((await finalize(request("document-stale", 1))).status, 409);
     assert.equal(await prisma.artifactVersion.count({ where: { artifactId: version.artifactId } }), 1);
     assert.equal((await readdir(outputDirectory)).length, 2);
     const archiveVersions = await listProjectDocumentVersions({ courseId: instance.id, studentId: alice.id, submissionId: logicalSubmissionId, stageKey: "make" });

@@ -25,6 +25,7 @@ import {
   type LectureCue,
   type LectureCueAlignment,
 } from '@openmaic/components/roundtable/lecture-subtitle-dock';
+import { shouldApplyProjectedPlayback, type AppliedProjectedPlayback } from '@openmaic/lib/playback/projection-sync';
 import { PlaybackEngine, computePlaybackView } from '@openmaic/lib/playback';
 import type { ActivityGate, EngineMode, TriggerEvent, Effect } from '@openmaic/lib/playback';
 import { ActionEngine } from '@openmaic/lib/action/engine';
@@ -277,6 +278,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     }, [selectedAgentIds]);
 
     const engineRef = useRef<PlaybackEngine | null>(null);
+    const appliedProjectionRef = useRef<AppliedProjectedPlayback | null>(null);
     const audioPlayerRef = useRef(createAudioPlayer());
     const chatAreaRef = useRef<ChatAreaRef>(null);
     const lectureSessionIdRef = useRef<string | null>(null);
@@ -867,7 +869,9 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     useEffect(() => {
       if (!isProjectedReadonly || !playbackState || !engineRef.current) return;
       const engine = engineRef.current;
+      if (!shouldApplyProjectedPlayback(appliedProjectionRef.current, engine, playbackState.version)) return;
       engine.restoreFromSnapshot(playbackState.snapshot);
+      appliedProjectionRef.current = { engine, version: playbackState.version };
       if (playbackState.engineMode === 'playing') {
         if (engine.getMode() === 'paused') engine.resume();
         else if (engine.getMode() === 'idle') engine.continuePlayback();
@@ -877,7 +881,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       } else if (engine.getMode() !== 'idle') {
         engine.stop();
       }
-    }, [isProjectedReadonly, playbackState]);
+    }, [isProjectedReadonly, playbackState, currentScene]);
 
     // Apply teacher-side interaction state to the student's interactive iframe.
     // The bridge script injected by patchHtmlForIframe listens for these

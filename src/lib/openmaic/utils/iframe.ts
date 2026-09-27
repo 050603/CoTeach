@@ -36,6 +36,7 @@ const STORAGE_SHIM = `<script data-iframe-storage-shim>
 const INTERACTIVE_RUNTIME_BASE = '/api/openmaic/interactive-runtime';
 const PYODIDE_RUNTIME_BASE = `${INTERACTIVE_RUNTIME_BASE}/pyodide/`;
 const PYODIDE_LOADER_URL = `${PYODIDE_RUNTIME_BASE}pyodide.js`;
+const THREE_RUNTIME_BASE = `${INTERACTIVE_RUNTIME_BASE}/three/0.160.0/`;
 
 /**
  * Generated classrooms historically referenced public CDNs directly. The app's
@@ -47,6 +48,10 @@ const PYODIDE_LOADER_URL = `${PYODIDE_RUNTIME_BASE}pyodide.js`;
  */
 function rewriteInteractiveRuntimeUrls(html: string): string {
   const rewritten = html
+    .replace(
+      /(?:https?:)?\/\/(?:unpkg\.com\/three|cdn\.jsdelivr\.net\/npm\/three)(?:@[^/"'\s<>]+)?\/(build\/|examples\/jsm\/|addons\/)/gi,
+      (_match, assetPath: string) => `${THREE_RUNTIME_BASE}${assetPath.toLowerCase() === 'addons/' ? 'examples/jsm/' : assetPath}`,
+    )
     .replace(
       /https?:\/\/cdn\.jsdelivr\.net\/pyodide\/v[^/"'\s<>]+\/full\//gi,
       PYODIDE_RUNTIME_BASE,

@@ -1,6 +1,34 @@
 import type { NextConfig } from "next";
+import { contentSecurityPolicy } from "./src/lib/security/content-security-policy";
 
 const nextConfig: NextConfig = {
+  experimental: {
+    webpackBuildWorker: true,
+    webpackMemoryOptimizations: true,
+  },
+  webpack(config, { dev, nextRuntime }) {
+    if (!dev && nextRuntime === "nodejs") {
+      // Next 16 applies outputFileTracingExcludes after compilation. Its
+      // entry trace must also avoid traversing mutable data and old releases.
+      // Keep this version-sensitive integration explicit on framework upgrades.
+      const tracePlugin = config.plugins?.find(
+        (plugin: { constructor?: { name?: string } }) =>
+          plugin?.constructor?.name === "TraceEntryPointsPlugin",
+      );
+      if (!tracePlugin || !Array.isArray(tracePlugin.traceIgnores)) {
+        throw new Error("Next.js entry tracing changed; review runtime-data exclusions before building.");
+      }
+      tracePlugin.traceIgnores.push(
+        "**/.openpbl-data/**",
+        "**/.openpbl-runtime/**",
+        "**/.next*/**",
+        "**/test-results/**",
+        "**/core.*",
+        "**/deploy/secrets/**",
+      );
+    }
+    return config;
+  },
   // Turbopack chunk names can remain stable across releases. Stamp asset URLs
   // with the build's deployment id so immutable browser caches cannot keep an
   // older application bundle after a server update.
@@ -13,6 +41,16 @@ const nextConfig: NextConfig = {
   // standalone image. Node file tracing cannot infer this from a dynamic
   // stored filename, so keep project/runtime data out of these route traces.
   outputFileTracingExcludes: {
+    // All routes use runtime volumes, including adaptive lessons and audit
+    // recovery. Never package classroom records, backups or deployment keys.
+    "/**": [
+      "./.openpbl-data/**/*",
+      "./.openpbl-runtime/**/*",
+      "./data/classrooms/**/*",
+      "./deploy/secrets/**/*",
+      "./deploy/.deploy.env",
+      "./test-results/**/*",
+    ],
     "/api/uploads": [
       "./.openpbl-data/**/*",
       "./coverage/**/*",
@@ -55,6 +93,8 @@ const nextConfig: NextConfig = {
       "./node_modules/katex/dist/**/*",
       "./node_modules/monaco-editor/min/vs/**/*",
       "./node_modules/pyodide/**/*",
+      "./node_modules/three/build/*.js",
+      "./node_modules/three/examples/jsm/**/*.js",
     ],
     // sharp 的 prebuilt 二进制在运行时 dlopen vendored libvips 共享库,
     // NFT 追踪不到这些 .so(只带上了 .node 本体),导致 standalone 镜像里
@@ -182,25 +222,7 @@ const nextConfig: NextConfig = {
           // generated media and interactive classroom workers.
           {
             key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              process.env.NODE_ENV === "development"
-                ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'"
-                : "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
-              "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' data: blob: https:",
-              "media-src 'self' data: blob: https:",
-              "font-src 'self' data:",
-              process.env.NODE_ENV === "development"
-                ? "connect-src 'self' data: https: ws: wss:"
-                : "connect-src 'self' data: wss:",
-              "frame-src 'self' blob: data:",
-              "worker-src 'self' blob:",
-              "object-src 'none'",
-              "base-uri 'self'",
-              "form-action 'self'",
-              "frame-ancestors 'none'",
-            ].join("; "),
+            value: contentSecurityPolicy(),
           },
         ],
       },

@@ -5,7 +5,7 @@ import path from "node:path";
 
 const args = process.argv.slice(2);
 if (args.length === 0) {
-  console.error("Usage: node scripts/run-next-production.mjs <build|start|typegen> [...args]");
+  console.error("Usage: node scripts/run-next-production.mjs <build|prepare|start|typegen> [...args]");
   process.exit(1);
 }
 
@@ -15,7 +15,7 @@ const distDir = process.env.NEXT_DIST_DIR?.trim() || ".next-build";
 let executableArgs = [nextBin, ...args];
 const childEnv = { ...process.env, NEXT_DIST_DIR: distDir };
 
-if (args[0] === "start") {
+if (args[0] === "start" || args[0] === "prepare") {
   const standaloneDir = path.resolve(distDir, "standalone");
   const sourceServerFile = path.join(standaloneDir, "server.js");
   try {
@@ -60,6 +60,14 @@ if (args[0] === "start") {
       force: true,
     });
     await writeFile(releaseReadyFile, `${buildId}\n`, "utf8");
+  }
+
+  // Prepare the immutable release before restarting the service. Its startup
+  // probes can take long enough for another build to clear the staging folder.
+  // The service can then recover the new completed release, not an older one.
+  if (args[0] === "prepare") {
+    console.log(`Prepared production release: ${buildId}`);
+    process.exit(0);
   }
 
   childEnv.PORT ||= "3000";

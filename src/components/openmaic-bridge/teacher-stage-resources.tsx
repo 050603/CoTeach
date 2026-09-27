@@ -13,6 +13,7 @@ import {
   Square,
 } from "lucide-react";
 import { OpenMaicResourcePlayer } from "./openmaic-resource-player";
+import { ownsProjection } from "@/lib/realtime/projection-controller";
 import { useSession } from "@/lib/session/store";
 import type { Course, TeacherResourceScene, TeacherResourceProjection } from "@/lib/session/types";
 import type { ProjectionMode } from "@/lib/session/types";
@@ -50,6 +51,8 @@ export function TeacherStageResources({
   const [expanded, setExpanded] = useState(true);
   const classroomId = course.teacherClassroomId ?? course.content.teacherClassroomId;
   const projection = course.uiState?.teacherResourceProjection;
+  const controlsProjection = ownsProjection(course.uiState);
+  const needsTakeover = Boolean(course.uiState?.projectionController && !controlsProjection);
 
   const selectedId = resources.some((resource) => resource.id === requestedId)
     ? requestedId
@@ -87,7 +90,7 @@ export function TeacherStageResources({
 
   function selectResource(resource: TeacherResourceScene) {
     setRequestedId(resource.id);
-    if (projection?.stageKey === stageKey) {
+    if (controlsProjection && projection?.stageKey === stageKey) {
       const nextProjection = buildProjection(resource);
       if (nextProjection) {
         setUiState(course.id, { teacherResourceProjection: nextProjection });
@@ -105,17 +108,18 @@ export function TeacherStageResources({
       toast.error("授课资源课堂未关联", { description: "请重新生成课程资源后再投屏。" });
       return;
     }
-    setUiState(course.id, { teacherResourceProjection: nextProjection });
+    setUiState(course.id, { teacherResourceProjection: nextProjection }, ...(needsTakeover ? [{ takeover: true }] : []));
     addActivity(course.id, "投屏授课资源", selected.title);
   }
 
   function stopProjection() {
+    if (!controlsProjection) return;
     setUiState(course.id, { teacherResourceProjection: null });
     addActivity(course.id, "停止资源投屏", projection?.title);
   }
 
   function syncProjection(state: Omit<PlaybackSyncState, "version">) {
-    if (!selected || !projection || projection.sceneId !== selected.id) return;
+    if (!controlsProjection || !selected || !projection || projection.sceneId !== selected.id) return;
     setUiState(course.id, {
       teacherResourceProjection: {
         ...projection,
@@ -142,7 +146,7 @@ export function TeacherStageResources({
   );
 
   useEffect(() => {
-    if (!projection || !selected) return;
+    if (!controlsProjection || !projection || !selected) return;
     if (projection.sceneId !== selected.id) return;
     if (selected.type !== "interactive") return;
     // Avoid redundant updates: skip if state hasn't meaningfully changed
@@ -159,7 +163,7 @@ export function TeacherStageResources({
         interactionState: interactionState ?? null,
       },
     });
-  }, [interactionVersion, interactionState, projection, selected, course.id, setUiState]);
+  }, [controlsProjection, interactionVersion, interactionState, projection, selected, course.id, setUiState]);
 
   async function fillScaffold() {
     if (!selectedScaffold) return;
@@ -213,6 +217,7 @@ export function TeacherStageResources({
             </span>
             <button
               className="inline-flex h-9 items-center gap-1.5 rounded-[6px] border border-rose-200 bg-white px-3 text-xs font-bold text-rose-600 hover:bg-rose-50"
+              disabled={!controlsProjection}
               onClick={stopProjection}
               type="button"
             >
@@ -302,7 +307,7 @@ export function TeacherStageResources({
                   onClick={projectResource}
                   type="button"
                 >
-                  <MonitorUp size={15} /> {isSelectedProjected ? "重新同步投屏" : projection ? "切换投屏" : "投屏给学生"}
+                  <MonitorUp size={15} /> {needsTakeover ? "接管并投屏" : isSelectedProjected ? "重新同步投屏" : projection ? "切换投屏" : "投屏给学生"}
                 </button>
               </div>
             </div>
@@ -311,7 +316,11 @@ export function TeacherStageResources({
                 className="h-[420px] rounded-[6px] border border-stone-200 xl:min-h-0 xl:flex-1"
                 classroomId={classroomId}
                 sceneId={selected.id}
-                experience="teacher-resource"
+                experience={isSelectedProjected && !controlsProjection ? "projected-readonly" : "teacher-resource"}
+                playbackState={isSelectedProjected && !controlsProjection && projection?.playback && projection.engineMode ? {
+                  version: course.uiState?.projectionVersion ?? projection.version ?? 0, engineMode: projection.engineMode, snapshot: projection.playback,
+                } : undefined}
+                interactionState={isSelectedProjected && !controlsProjection ? projection?.interactionState : undefined}
                 onPlaybackStateChange={syncProjection}
               />
             ) : (
@@ -386,7 +395,7 @@ export function StudentProjectedTeacherResource({
         sceneId={projection.sceneId}
         experience="projected-readonly"
         playbackState={projection.playback && projection.engineMode ? {
-          version: projection.version ?? 0,
+          version: projectionVersion ?? projection.version ?? 0,
           engineMode: projection.engineMode,
           snapshot: projection.playback,
         } : undefined}

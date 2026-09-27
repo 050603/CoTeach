@@ -6,6 +6,7 @@ import { authenticateRequest } from "@/lib/auth/request-guards";
 import { scopeCourseForClaims } from "@/lib/auth/course-scope";
 import { withHttpMetrics } from "@/lib/observability/http";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
+import { resolveStudentStateScope } from "@/lib/courses/student-state-scope";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,14 +18,17 @@ async function getCourseState(
   const auth = await authenticateRequest(request);
   if ("response" in auth) return auth.response;
   const { courseId } = await context.params;
-  if (!(await canAccessLegacyCourse(auth.claims, courseId, "read"))) {
+  const studentScope = auth.claims.role === "student" && auth.claims.sub
+    ? await resolveStudentStateScope(prisma, courseId, auth.claims.sub)
+    : null;
+  if (studentScope ? !studentScope.accessible : !(await canAccessLegacyCourse(auth.claims, courseId, "read"))) {
     return new Response(null, { status: 403 });
   }
-  const scope = await resolveCourseEventScope(courseId);
+  const scope = studentScope ? { where: { classroomInstanceId: courseId } } : await resolveCourseEventScope(courseId);
   if (!scope) return new Response(null, { status: 404 });
   const latestEvent = await prisma.domainEvent.findFirst({ where: scope.where,
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: { id: true, createdAt: true } });
-  const course = await loadCourse(courseId);
+  const course = await loadCourse(courseId, prisma, auth.claims.role === "student" && auth.claims.sub ? { studentId: auth.claims.sub } : undefined);
   if (!course) return new Response(null, { status: 404 });
   const scoped = scopeCourseForClaims(course, auth.claims);
   const etag = `W/"course-${courseId}-${course.version ?? 0}-${auth.claims.role}-${auth.claims.sub}"`;

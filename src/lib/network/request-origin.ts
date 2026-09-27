@@ -9,8 +9,9 @@ function firstHeaderValue(value: string | null | undefined): string {
   return value?.split(",", 1)[0]?.trim() ?? "";
 }
 
-function originFromHost(host: string, protocol: string): string | null {
-  if (!host) return null;
+export function originFromHost(host: string, protocol: string): string | null {
+  if (protocol !== "http" && protocol !== "https") return null;
+  if (!/^(?:\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::\d+)?$/i.test(host)) return null;
   try {
     return new URL(`${protocol}://${host}`).origin;
   } catch {
@@ -56,4 +57,3 @@ export function isAllowedBrowserOrigin(headers: OriginHeaders): boolean {
 
   return allowed.has(actual);
 }
-

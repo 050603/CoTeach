@@ -1,13 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guards";
 import { prisma } from "@/lib/db/client";
-import { lockProjectedCourse } from "@/lib/db/session-repository";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
-import { authorizeLegacyAiScope, legacyAiError } from "@/lib/ai-collaboration/legacy-scope";
+import { authorizeDocumentArchiveScope, commitDocumentArchive } from "@/lib/project-practice/document-finalize";
+import { legacyAiError } from "@/lib/ai-collaboration/legacy-scope";
 import { buildProjectDocumentDocx, ProjectDocumentArchiveError } from "@/lib/project-practice/document-archive";
 import { PlatformError } from "@/lib/platform/repository";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
@@ -17,7 +16,7 @@ export const maxDuration = 120;
 const BodySchema = z.object({ courseId: z.string().min(1).max(128), submissionId: z.string().min(1).max(128), studentId: z.string().min(1).max(128).optional(), stageKey: z.literal("make"), expectedVersion: z.number().int().positive(), requestId: z.string().min(1).max(160).optional() }).strict();
 const DATA_DIR = process.env.UPLOAD_DIR?.trim() || path.resolve(".openpbl-data", "uploads");
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-function response(payload: Record<string, unknown>) { return Response.json({ ok: true, versionId: payload.versionId, sequence: payload.sequence, submittedAt: payload.submittedAt, docxUploadId: payload.docxUploadId, downloadUrl: `/api/uploads/${payload.docxUploadId}?download=1`, sha256: payload.sha256 }); }
+function response(payload: Record<string, unknown>) { return Response.json({ ok: true, versionId: payload.versionId, sequence: payload.sequence, submittedAt: payload.submittedAt, docxUploadId: payload.docxUploadId, submissionVersion: payload.submissionVersion, downloadUrl: `/api/uploads/${payload.docxUploadId}?download=1`, sha256: payload.sha256 }); }
 export async function POST(request: Request) {
   const csrf = requireSameOrigin(request); if (csrf) return csrf;
   const auth = await authenticateRequest(request, "student"); if ("response" in auth) return auth.response;
@@ -28,8 +27,8 @@ export async function POST(request: Request) {
   let writtenAssetId: string | undefined;
   let committed = false;
   try {
-    const scope = await authorizeLegacyAiScope(auth.claims, body.courseId, body.studentId, true);
-    const participation = scope.participation!;
+    const scope = await authorizeDocumentArchiveScope(auth.claims, body.courseId, body.studentId);
+    const participation = scope.participation;
     const requestId = body.requestId ?? request.headers.get("x-request-id") ?? randomUUID();
     const receiptKey = `document-finalize:${createHash("sha256").update(JSON.stringify([participation.id, scope.user.id, requestId])).digest("hex")}`;
     const fingerprint = createHash("sha256").update(JSON.stringify([body.submissionId, body.expectedVersion, body.stageKey])).digest("hex");
@@ -55,36 +54,12 @@ export async function POST(request: Request) {
     writtenPath = path.join(DATA_DIR, storageKey);
     await mkdir(DATA_DIR, { recursive: true });
     await writeFile(writtenPath, archive.bytes, { flag: "wx", mode: 0o600 });
-    const result = await runMutationTransaction(async tx => {
-      await lockProjectedCourse(tx, body.courseId);
-      await tx.$queryRaw`SELECT id FROM "ClassroomInstance" WHERE id = ${body.courseId} FOR UPDATE`;
-      await tx.$queryRaw`SELECT id FROM "ClassroomParticipation" WHERE id = ${participation.id} FOR UPDATE`;
-      const duplicate = await tx.domainEvent.findUnique({ where: { idempotencyKey: receiptKey } });
-      if (duplicate) {
-        const payload = object(duplicate.payload);
-        if (payload.fingerprint !== fingerprint) throw new PlatformError("IDEMPOTENCY_CONFLICT", "请求标识已用于其他提交", 409);
-        return { payload, reused: true };
-      }
-      const current = await tx.classroomSubmission.findUniqueOrThrow({ where: { id: submission.id } });
-      if (JSON.stringify(current.payload) !== JSON.stringify(submission.payload)) throw new PlatformError("DRAFT_VERSION_CONFLICT", "归档期间文档已变化，请重新提交", 409);
-      const instance = await tx.classroomInstance.findUniqueOrThrow({ where: { id: body.courseId }, include: { activity: { include: { chapter: { include: { offering: true } } } } } });
-      const enrollment = await tx.enrollment.findUniqueOrThrow({ where: { id: participation.enrollmentId } });
-      if (instance.status.toUpperCase() !== "TEACHING" || instance.activity.chapter.offering.status.toUpperCase() !== "OPEN" || enrollment.status.toUpperCase() !== "ACTIVE") throw new PlatformError("COURSE_LOCKED", "课堂已结束，无法提交", 409);
-      const artifactId = `document:${submission.id}`;
-      await tx.artifact.upsert({ where: { id: artifactId }, create: { id: artifactId, participationId: participation.id, title, type: "DOCUMENT_ARCHIVE", status: "SUBMITTED" }, update: { title, status: "SUBMITTED" } });
-      const last = await tx.artifactVersion.findFirst({ where: { artifactId }, orderBy: { sequence: "desc" }, select: { sequence: true } });
-      const submittedAt = new Date();
-      await tx.fileAsset.create({ data: { id: uploadId, originalName: `${title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 96)}.docx`, storageKey, offeringId: scope.offering.id, uploadedById: scope.user.id, size: BigInt(archive.bytes.length), mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", sha256: archive.sha256 } });
-      const version = await tx.artifactVersion.create({ data: { artifactId, sequence: (last?.sequence ?? 0) + 1, sourceHtml: archive.sourceHtml, fileAssetId: uploadId, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", sha256: archive.sha256, size: BigInt(archive.bytes.length), status: "SUBMITTED", submittedAt } });
-      const payload = { fingerprint, requestId, submissionId: body.submissionId, sourceVersion: body.expectedVersion, title, versionId: version.id, sequence: version.sequence, docxUploadId: uploadId, sha256: archive.sha256, size: archive.bytes.length, submittedAt: submittedAt.toISOString(), stageKey: "make" };
-      const nextDraft = { ...draft, status: "submitted", submittedAt: submittedAt.toISOString() };
-      await tx.classroomSubmission.update({ where: { id: submission.id }, data: { status: "SUBMITTED", submittedAt, payload: JSON.parse(JSON.stringify(originalPayload.view ? { ...originalPayload, view: nextDraft } : nextDraft)) as Prisma.InputJsonValue } });
-      await tx.domainEvent.create({ data: { idempotencyKey: receiptKey, actorId: scope.user.id, offeringId: scope.offering.id, classroomInstanceId: body.courseId, participationId: participation.id, researchKey: enrollment.researchKey, eventType: "document_version_submitted", payload } });
-      await tx.aiInteractionEvent.create({ data: { idempotencyKey: `ai:${receiptKey}`, userId: scope.user.id, offeringId: scope.offering.id, participationId: participation.id, researchKey: enrollment.researchKey, eventType: "submit", actor: "student", requestId, content: `提交项目实践文档第 ${version.sequence} 版`, payload: { legacy: { stageKey: "make", source: "submission", actorId: scope.user.id }, detail: payload, schemaVersion: 1 } } });
-      const runtimeConfig = object(instance.runtimeConfig);
-      await tx.classroomInstance.update({ where: { id: body.courseId }, data: { runtimeConfig: JSON.parse(JSON.stringify({ ...runtimeConfig, version: Number(runtimeConfig.version ?? 1) + 1 })) as Prisma.InputJsonValue } });
-      return { payload, reused: false };
-    });
+    const result = await runMutationTransaction(tx => commitDocumentArchive(tx, {
+      courseId: body.courseId, studentId: scope.user.id, participationId: participation.id, offeringId: scope.offering.id,
+      submissionId: submission.id, submissionViewId: body.submissionId, originalPayload: submission.payload,
+      expectedVersion: body.expectedVersion, receiptKey, fingerprint, requestId, title, uploadId, storageKey,
+      size: archive.bytes.length, sha256: archive.sha256, sourceHtml: archive.sourceHtml,
+    }));
     committed = !result.reused;
     if (result.reused) await unlink(writtenPath).catch(() => undefined);
     try { await publishCourseEvent(body.courseId, { type: "course-updated", courseId: body.courseId, at: new Date().toISOString(), payload: { source: "document-finalized", studentId: scope.user.id } }); }

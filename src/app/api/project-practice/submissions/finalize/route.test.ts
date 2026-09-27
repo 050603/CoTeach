@@ -9,7 +9,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...overridden, default: overridden };
 });
 vi.mock("@/lib/auth/request-guards", () => ({ authenticateRequest: mocks.auth, requireSameOrigin: () => null }));
-vi.mock("@/lib/ai-collaboration/legacy-scope", () => ({ authorizeLegacyAiScope: mocks.scope, legacyAiError: (error: { code: string; status: number }) => Response.json({ error: error.code }, { status: error.status ?? 503 }) }));
+vi.mock("@/lib/ai-collaboration/legacy-scope", () => ({ legacyAiError: (error: { code: string; status: number }) => Response.json({ error: error.code }, { status: error.status ?? 503 }) }));
+vi.mock("@/lib/project-practice/document-finalize", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/project-practice/document-finalize")>(), authorizeDocumentArchiveScope: mocks.scope }));
 vi.mock("@/lib/db/client", () => ({ prisma: mocks.db }));
 vi.mock("@/lib/db/transaction-retry", () => ({ runMutationTransaction: (operation: (db: unknown) => unknown) => operation(mocks.db) }));
 vi.mock("@/lib/project-practice/document-archive", () => ({ buildProjectDocumentDocx: mocks.archive, ProjectDocumentArchiveError: class extends Error {} }));
@@ -23,17 +24,30 @@ beforeEach(() => {
   mocks.db.classroomSubmission.findFirst.mockResolvedValue(draft()); mocks.db.classroomSubmission.findUniqueOrThrow.mockResolvedValue(draft());
   mocks.db.classroomInstance.findUniqueOrThrow.mockResolvedValue({ status: "TEACHING", runtimeConfig: { version: 5 }, activity: { chapter: { offering: { status: "OPEN" } } } });
   mocks.db.enrollment.findUniqueOrThrow.mockResolvedValue({ status: "ACTIVE", researchKey: "research" });
-  mocks.db.artifactVersion.create.mockResolvedValue({ id: "version", sequence: 1 });
+  mocks.db.$queryRaw.mockImplementation((sql: TemplateStringsArray) => sql.join("?").includes('FOR UPDATE OF p') ? [{ researchKey: "research", instanceStatus: "TEACHING", offeringStatus: "OPEN", enrollmentStatus: "ACTIVE", archivedAt: null, unchanged: true, receipt: null, sequence: 1 }] : []);
   mocks.archive.mockResolvedValue({ bytes: Buffer.from("docx"), sourceHtml: "<p>内容</p>", sha256: "hash", uploadIds: [], imageCount: 0 });
   mocks.unlink.mockResolvedValue(undefined);
 });
 describe("V2 document finalize", () => {
   it("atomically binds a real file, immutable version and research receipts", async () => {
     const result = await POST(request());
-    expect(result.status).toBe(200); expect(await result.json()).toMatchObject({ ok: true, versionId: "version", sequence: 1 });
-    expect(mocks.db.artifactVersion.create).toHaveBeenCalledWith({ data: expect.objectContaining({ artifactId: "document:db-submission", sourceHtml: "<p>内容</p>", status: "SUBMITTED", fileAssetId: expect.any(String) }) });
-    expect(mocks.db.domainEvent.create).toHaveBeenCalledWith({ data: expect.objectContaining({ researchKey: "research", participationId: "participation", payload: expect.objectContaining({ submissionId: "ui-submission", sourceVersion: 2, versionId: "version" }) }) });
-    expect(mocks.db.aiInteractionEvent.create).toHaveBeenCalledWith({ data: expect.objectContaining({ researchKey: "research", eventType: "submit" }) });
+    expect(result.status).toBe(200); const receipt = await result.json();
+    expect(receipt).toMatchObject({ ok: true, versionId: expect.any(String), sequence: 1, submissionVersion: 3, sha256: "hash" });
+    expect(mocks.db.$queryRaw).toHaveBeenCalledTimes(4);
+    const statements = mocks.db.$queryRaw.mock.calls.map(call => call[0].join("?"));
+    expect(statements[0]).toContain("pg_advisory_xact_lock");
+    expect(statements[1]).toContain('"ClassroomInstance"');
+    expect(statements[2]).toContain('FOR UPDATE OF p');
+    expect(statements[3]).toContain('INSERT INTO "ArtifactVersion"');
+    expect(statements[3]).toContain('INSERT INTO "DomainEvent"');
+    expect(statements[3]).toContain('INSERT INTO "AiInteractionEvent"');
+    const values = mocks.db.$queryRaw.mock.calls[3].slice(1);
+    expect(values).toContain("research");
+    expect(values).toContain("participation");
+    const payloads = values.filter((value): value is string => typeof value === "string" && value.startsWith("{")) .map(value => JSON.parse(value));
+    expect(payloads).toContainEqual({ view: expect.objectContaining({ version: 3, status: "submitted" }) });
+    expect(payloads).toContainEqual(expect.objectContaining({ submissionId: "ui-submission", sourceVersion: 2, versionId: receipt.versionId }));
+    expect(mocks.db.classroomInstance.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(mocks.unlink).not.toHaveBeenCalled();
   });
   it("rejects stale editor versions before generating an archive", async () => {
@@ -41,12 +55,14 @@ describe("V2 document finalize", () => {
     const result = await POST(request()); expect(result.status).toBe(409); expect(mocks.archive).not.toHaveBeenCalled();
   });
   it("cleans the temporary file if the draft changes during Word generation", async () => {
-    const row = draft(); row.payload.view.content = "new text"; mocks.db.classroomSubmission.findUniqueOrThrow.mockResolvedValue(row);
+    const implementation = mocks.db.$queryRaw.getMockImplementation()!;
+    mocks.db.$queryRaw.mockImplementation(async (...args) => (await implementation(...args)).map((row: object) => ({ ...row, unchanged: false })));
     const result = await POST(request()); expect(result.status).toBe(409);
     expect(mocks.unlink).toHaveBeenCalledOnce(); expect(mocks.db.fileAsset.create).not.toHaveBeenCalled(); expect(mocks.db.artifactVersion.create).not.toHaveBeenCalled();
   });
   it("does not delete an archive when a commit acknowledgement is uncertain", async () => {
-    const row = draft(); row.payload.view.content = "changed"; mocks.db.classroomSubmission.findUniqueOrThrow.mockResolvedValue(row);
+    const implementation = mocks.db.$queryRaw.getMockImplementation()!;
+    mocks.db.$queryRaw.mockImplementation(async (...args) => (await implementation(...args)).map((row: object) => ({ ...row, unchanged: false })));
     mocks.db.fileAsset.findUnique.mockRejectedValue(new Error("database temporarily unreachable"));
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try { await POST(request()); expect(mocks.unlink).not.toHaveBeenCalled(); }
@@ -54,9 +70,38 @@ describe("V2 document finalize", () => {
   });
   it("reuses the durable receipt on a retried request", async () => {
     await POST(request());
-    const receipt = mocks.db.domainEvent.create.mock.calls[0][0].data;
+    const payload = mocks.db.$queryRaw.mock.calls[3].slice(1).find(value => typeof value === "string" && value.startsWith('{"fingerprint"'));
+    const receipt = { payload: JSON.parse(payload) };
     mocks.db.domainEvent.findUnique.mockResolvedValue(receipt); mocks.archive.mockClear(); mocks.write.mockClear();
     const result = await POST(request()); expect(result.status).toBe(200); expect(mocks.archive).not.toHaveBeenCalled(); expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it("returns the complete committed receipt when another same-ID request wins during rendering", async () => {
+    const first = await POST(request()); const saved = await first.json();
+    const payload = mocks.db.$queryRaw.mock.calls[3].slice(1).find(value => typeof value === "string" && value.startsWith('{"fingerprint"'));
+    const implementation = mocks.db.$queryRaw.getMockImplementation()!;
+    mocks.db.$queryRaw.mockClear(); mocks.unlink.mockClear();
+    mocks.db.$queryRaw.mockImplementation(async (...args) => (await implementation(...args)).map((row: object) => ({ ...row, unchanged: false, instanceStatus: "FINISHED", receipt: JSON.parse(payload) })));
+    const result = await POST(request());
+    expect(result.status).toBe(200); expect(await result.json()).toEqual(saved);
+    expect(mocks.db.$queryRaw).toHaveBeenCalledTimes(3); expect(mocks.unlink).toHaveBeenCalledOnce();
+  });
+  it.each([
+    { instanceStatus: "FINISHED" }, { offeringStatus: "CLOSED" },
+    { enrollmentStatus: "COMPLETED" }, { archivedAt: new Date() },
+  ])("checks current classroom/enrollment state after acquiring locks: %j", async change => {
+    const implementation = mocks.db.$queryRaw.getMockImplementation()!;
+    mocks.db.$queryRaw.mockImplementation(async (...args) => (await implementation(...args)).map((row: object) => ({ ...row, ...change })));
+    const result = await POST(request()); expect(result.status).toBe(409);
+    expect(mocks.db.$queryRaw).toHaveBeenCalledTimes(3); expect(mocks.unlink).toHaveBeenCalledOnce();
+  });
+  it("keeps the physical archive if the database proves the uncertain commit succeeded", async () => {
+    const implementation = mocks.db.$queryRaw.getMockImplementation()!;
+    mocks.db.$queryRaw.mockImplementation(async (...args) => {
+      if (args[0].join("?").includes('INSERT INTO "ArtifactVersion"')) throw new Error("lost database commit acknowledgement");
+      return implementation(...args);
+    });
+    mocks.db.fileAsset.findUnique.mockResolvedValue({ id: "durable" });
+    expect((await POST(request())).status).toBe(503); expect(mocks.unlink).not.toHaveBeenCalled();
   });
   it("requires authentication before resolving student work", async () => {
     mocks.auth.mockResolvedValue({ response: new Response(null, { status: 401 }) });

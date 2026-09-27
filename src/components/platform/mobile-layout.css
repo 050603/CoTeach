@@ -138,7 +138,7 @@
   /* One form column; the footer remains available in portrait and landscape. */
   .pbl-platform-theme :is(.pbl-dialog-field-grid, .pbl-activity-identity-grid) { grid-template-columns: minmax(0, 1fr); }
   .pbl-platform-theme:is(.pbl-platform-form-dialog, .pbl-course-editor-dialog) { max-width: calc(100% - 24px); }
-  .pbl-platform-theme:is(.pbl-platform-form-dialog, .pbl-course-editor-dialog) > [data-slot=dialog-header] { padding: 18px 58px 16px 16px; gap: 10px !important; grid-template-columns: 32px minmax(0, 1fr); flex-shrink: 0; }
+  .pbl-platform-theme:is(.pbl-platform-form-dialog, .pbl-course-editor-dialog) > [data-slot=dialog-header] { padding: 18px 58px 16px 16px; gap: 10px !important; grid-template-columns: 42px minmax(0, 1fr); flex-shrink: 0; }
   .pbl-platform-theme :is(.pbl-platform-dialog-body, .pbl-course-dialog-body) { padding: 18px 16px; }
   .pbl-platform-theme :is(.pbl-platform-dialog-footer, .pbl-course-dialog-footer) { padding: 12px 16px; }
   .pbl-platform-theme :is(.pbl-platform-dialog-footer > div, .pbl-course-dialog-footer > div) { flex-wrap: wrap; max-width: 100%; }

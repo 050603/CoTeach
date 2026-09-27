@@ -27,7 +27,8 @@ REPLICATION_USER = "openpbl_local_backup"
 SLOT = "openpbl_local_backup"
 WAL_CONTAINER = "openpbl-local-wal"
 RETENTION_DAYS = 30
-IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
+RECOVERY_SETTINGS = ("max_connections", "max_worker_processes", "max_wal_senders",
+                     "max_prepared_transactions", "max_locks_per_transaction")
 
 
 def run(args, **kwargs):
@@ -49,7 +50,7 @@ def pg_args(container=CONTAINER):
 
 
 def sql(statement, container=CONTAINER):
-    return run(pg_args(container), input=statement, capture_output=True).stdout.strip()
+    return run(pg_args(container), input=statement, capture_output=True, timeout=20).stdout.strip()
 
 
 def client(command, *args):
@@ -73,6 +74,11 @@ def write_json(path, value):
         handle.flush()
         os.fsync(handle.fileno())
     temporary.replace(path)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def stamp():
@@ -124,8 +130,13 @@ def snapshots():
 
 def take_base():
     available = bases()
-    if available and time.time() - json.loads((available[-1] / "complete.json").read_text())["completedEpoch"] < 86400:
-        return available[-1]
+    if available:
+        completed = json.loads((available[-1] / "complete.json").read_text())
+        if time.time() - completed["completedEpoch"] < 86400:
+            if "recoverySettings" not in completed:
+                completed["recoverySettings"] = recovery_settings()
+                write_json(available[-1] / "complete.json", completed)
+            return available[-1]
     target = ROOT / "bases" / stamp()
     target.mkdir()
     run(client("pg_basebackup", "-h", "127.0.0.1", "-p", PORT, "-U", REPLICATION_USER,
@@ -134,7 +145,8 @@ def take_base():
     manifest = json.loads((target / "data/backup_manifest").read_text())
     wal_range = manifest["WAL-Ranges"][0]
     first_wal = sql(f"SELECT pg_walfile_name('{wal_range['Start-LSN']}')")
-    write_json(target / "complete.json", {"completedEpoch": time.time(), "image": image(), "firstWal": first_wal})
+    write_json(target / "complete.json", {"completedEpoch": time.time(), "image": image(),
+                "firstWal": first_wal, "recoverySettings": recovery_settings()})
     print(f"Verified PostgreSQL base: {target.name}", flush=True)
     return target
 
@@ -146,6 +158,11 @@ def table_fingerprint_sql(table):
     return ("SELECT json_build_object('count', count(*), 'digest', "
             "md5(coalesce(string_agg(h, '' ORDER BY h), ''))) "
             f"FROM (SELECT md5(to_jsonb(t)::text) h FROM public.{quoted} t) rows;")
+
+
+def recovery_settings():
+    names = ",".join("'" + name + "'" for name in RECOVERY_SETTINGS)
+    return json.loads(sql(f"SELECT json_object_agg(name, setting) FROM pg_settings WHERE name IN ({names})"))
 
 
 def dump_consistent(target):
@@ -166,7 +183,7 @@ def dump_consistent(target):
         records = {table: json.loads(query(table_fingerprint_sql(table))) for table in tables}
         assets = json.loads(query('SELECT coalesce(json_agg(json_build_object(\'id\', id, \'storageKey\', "storageKey", \'sha256\', sha256)), \'[]\'::json) FROM "FileAsset" WHERE "deletedAt" IS NULL;'))
         run(client("pg_dump", "-h", "127.0.0.1", "-p", PORT, "-U", DB_USER, "-d", DATABASE,
-                   "--snapshot", snapshot_id, "--format=custom", "--file", target / "database.dump"))
+                   "--snapshot", snapshot_id, "--lock-wait-timeout=30s", "--format=directory", "--jobs=2", "--file", target / "database"))
         process.stdin.write("ROLLBACK;\n\\q\n")
         process.stdin.flush()
         process.wait(timeout=10)
@@ -189,7 +206,7 @@ def sha256(path):
 
 def snapshot_files(target, previous):
     data = target / "files"
-    data.mkdir()
+    data.mkdir(exist_ok=True)
     for name in ("uploads", "classrooms", "whiteboards"):
         source = PROJECT / ".openpbl-data" / name
         if not source.is_dir():
@@ -204,14 +221,19 @@ def snapshot_files(target, previous):
         for source_db in source.rglob("*.sqlite"):
             destination_db = destination / source_db.relative_to(source)
             destination_db.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(f"file:{source_db}?mode=ro", uri=True) as src, sqlite3.connect(destination_db) as dst:
+            # Connection.__exit__ commits but does not close. Close both before
+            # enumerating hashes so temporary WAL/SHM files cannot enter the
+            # manifest and disappear later when Python collects connections.
+            with contextlib.closing(sqlite3.connect(f"file:{source_db}?mode=ro", uri=True)) as src, \
+                    contextlib.closing(sqlite3.connect(destination_db)) as dst:
                 src.backup(dst)
                 if dst.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                     raise RuntimeError("Whiteboard backup integrity failed")
     config = target / "configuration"
     config.mkdir()
     for relative in (".env.local", "server-providers.yml", "deploy/.deploy.env", "deploy/secrets",
-                     "docker-compose.prod.yml", "docker-compose.ip.yml", "deploy/systemd", "deploy/nginx"):
+                     "docker-compose.prod.yml", "docker-compose.ip.yml", "deploy/systemd", "deploy/nginx",
+                     "scripts/openpbl-production-service.sh", "scripts/run-next-production.mjs", "prisma/schema.prisma"):
         source = PROJECT / relative
         destination = config / relative
         if source.is_dir():
@@ -219,8 +241,38 @@ def snapshot_files(target, previous):
         elif source.is_file():
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
-    return {str(path.relative_to(target)): {"sha256": sha256(path), "size": path.stat().st_size}
-            for path in sorted(target.rglob("*")) if path.is_file()}
+    installed_units = Path.home() / ".config/systemd/user"
+    for source in installed_units.glob("openpbl*.service"):
+        destination = config / "installed-user-units" / source.name
+        destination.parent.mkdir(exist_ok=True)
+        shutil.copy2(source, destination)
+    checksums = {str(path.relative_to(target)): {"sha256": sha256(path), "size": path.stat().st_size}
+                 for path in sorted(target.rglob("*")) if path.is_file()}
+    # Directory-format dumps permit per-table deduplication. Large unchanged
+    # textbook/vector tables should not consume a full extra copy every 5 min.
+    if previous:
+        previous_files = json.loads((previous / "manifest.json").read_text())["files"]
+        for relative, checksum in checksums.items():
+            existing = previous / relative
+            current = target / relative
+            if previous_files.get(relative) == checksum and existing.is_file() and current.stat().st_ino != existing.stat().st_ino:
+                current.unlink()
+                os.link(existing, current)
+    return checksums
+
+
+def snapshot_audit_outbox(target):
+    # Copy before opening the database snapshot. A queued audit event removed
+    # during this copy has already committed to the later DB snapshot; copying
+    # after pg_dump could miss both the removed file and its newly inserted row.
+    destination = target / "files/ai-audit-outbox"
+    destination.mkdir(parents=True)
+    source = PROJECT / ".openpbl-data/ai-audit-outbox"
+    if source.is_dir():
+        result = subprocess.run(["rsync", "-a", "--no-owner", "--no-group", str(source) + "/", str(destination) + "/"],
+                                capture_output=True, check=False)
+        if result.returncode not in (0, 24):
+            raise RuntimeError("Could not snapshot the durable AI audit outbox")
 
 
 def validate_assets(target, assets):
@@ -238,7 +290,7 @@ def validate_assets(target, assets):
 def ensure_wal_received(lsn, timeout=30):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        active = sql(f"SELECT EXISTS (SELECT FROM pg_stat_replication WHERE application_name='pg_receivewal' AND flush_lsn >= '{lsn}'::pg_lsn)")
+        active = sql(f"SELECT EXISTS (SELECT FROM pg_stat_replication r JOIN pg_replication_slots s ON s.active_pid=r.pid WHERE s.slot_name='{SLOT}' AND r.flush_lsn >= '{lsn}'::pg_lsn)")
         if active == "t":
             return
         time.sleep(1)
@@ -267,6 +319,13 @@ def prune():
 
 def backup():
     with lock():
+        # A failed/interrupted attempt never becomes a recovery point. Remove
+        # only unfinished backup-owned directories, so repeated failures cannot
+        # accumulate a full data copy every five minutes.
+        for parent, marker in ((ROOT / "bases", "complete.json"), (ROOT / "snapshots", "manifest.json")):
+            for path in parent.iterdir():
+                if re.fullmatch(r"\d{8}T\d{12}Z", path.name) and path.is_dir() and not (path / marker).exists():
+                    shutil.rmtree(path)
         if shutil.disk_usage(ROOT).free < 10 * 1024**3:
             raise RuntimeError("Less than 10 GiB free; refusing a new snapshot")
         base = take_base()
@@ -274,6 +333,7 @@ def backup():
         target = ROOT / "snapshots" / stamp()
         target.mkdir()
         started = time.time()
+        snapshot_audit_outbox(target)
         records, assets = dump_consistent(target)
         files = snapshot_files(target, previous[-1] if previous else None)
         validate_assets(target, assets)
@@ -283,7 +343,8 @@ def backup():
         ensure_wal_received(lsn)
         manifest = {"startedEpoch": started, "completedEpoch": time.time(), "base": base.name,
                     "restorePoint": restore_point, "lsn": lsn, "tables": records, "assets": assets,
-                    "files": files, "gitSha": output(["git", "-C", PROJECT, "rev-parse", "HEAD"])}
+                    "files": files, "recoverySettings": recovery_settings(),
+                    "gitSha": output(["git", "-C", PROJECT, "rev-parse", "HEAD"])}
         write_json(target / "manifest.json", manifest)
         # Flush the filesystem before acknowledging the recovery point.
         os.sync()
@@ -294,13 +355,52 @@ def backup():
                           "tables": len(records), "files": len(files), "assets": len(assets)}), flush=True)
 
 
-def status():
+def health_snapshot():
     value = json.loads((ROOT / "status/last-success.json").read_text())
     value["recoveryPointAgeSeconds"] = round(time.time() - value["startedEpoch"], 1)
     value["wal"] = json.loads(sql("SELECT coalesce(json_agg(json_build_object('active', active, 'status', wal_status, 'lagBytes', pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn))), '[]') FROM pg_replication_slots WHERE slot_name='openpbl_local_backup'"))
     value["healthy"] = value["recoveryPointAgeSeconds"] <= 900 and bool(value["wal"]) and value["wal"][0]["active"] and value["wal"][0]["status"] != "lost"
+    return value
+
+
+def status():
+    value = health_snapshot()
     print(json.dumps(value))
     return 0 if value["healthy"] else 1
+
+
+def unit_property(unit, property_name):
+    return output(["systemctl", "--user", "show", unit, "--property", property_name, "--value"])
+
+
+def monitor():
+    reasons = []
+    details = {}
+    try:
+        details = health_snapshot()
+        if not details["healthy"]:
+            reasons.append("recovery point older than 900 seconds or WAL receiver unavailable")
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        reasons.append("complete recovery point or database check unavailable")
+    try:
+        result = unit_property("openpbl-local-backup.service", "Result")
+        if result != "success":
+            reasons.append("last backup service result: " + result)
+        for unit in ("openpbl-local-wal.service", "openpbl-local-backup.timer"):
+            if unit_property(unit, "ActiveState") != "active":
+                reasons.append(unit + " is not active")
+    except (OSError, subprocess.SubprocessError):
+        reasons.append("backup systemd service state unavailable")
+    state = "alert" if reasons else "ok"
+    path = ROOT / "status/health.json"
+    try:
+        previous = json.loads(path.read_text())
+    except (OSError, ValueError):
+        previous = {}
+    write_json(path, {"checkedEpoch": time.time(), "state": state, "reasons": reasons, "backup": details})
+    if previous.get("state") != state or previous.get("reasons") != reasons:
+        print(json.dumps({"event": "local-backup-health-change", "state": state, "reasons": reasons}), flush=True)
+    return 1 if reasons else 0
 
 
 def verify_files(snapshot):
@@ -313,13 +413,18 @@ def verify_files(snapshot):
     return manifest
 
 
-def drill():
+def drill(verify_recovered=None):
     with lock():
         started = time.time()
         snapshot = snapshots()[-1]
         manifest = verify_files(snapshot)
         work = ROOT / "drills" / stamp()
         work.mkdir()
+        shutil.copytree(snapshot / "files", work / "files")
+        for relative, expected in manifest["files"].items():
+            if relative.startswith("files/") and sha256(work / relative) != expected["sha256"]:
+                raise RuntimeError("Restored application file checksum mismatch")
+        validate_assets(work, manifest["assets"])
         name = "openpbl-local-drill-" + str(os.getpid())
         base = ROOT / "bases" / manifest["base"]
         # Copy, never hard-link, the PostgreSQL data directory. The drill has no
@@ -332,15 +437,26 @@ def drill():
             handle.write("\nrestore_command = 'cp /wal/%f %p'\n")
             handle.write(f"recovery_target_name = '{manifest['restorePoint']}'\n")
             handle.write("recovery_target_action = 'promote'\n")
+        # Command-line production settings are not captured in PGDATA. WAL
+        # recovery requires these settings to be at least the primary values.
+        base_settings = json.loads((base / "complete.json").read_text()).get("recoverySettings", {})
+        settings = manifest.get("recoverySettings") or base_settings or recovery_settings()
+        recovery_args = []
+        for key in RECOVERY_SETTINGS:
+            recovery_args += ["-c", f"{key}={max(int(settings[key]), int(base_settings.get(key, 0)))}"]
         try:
-            run(["docker", "run", "--rm", "-d", "--name", name, "--network=none",
+            run(["docker", "run", "-d", "--name", name, "--network=none",
                  "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{data}:/data",
                  "-v", f"{ROOT / 'wal'}:/wal:ro", "-v", f"{snapshot}:/snapshot:ro",
                  "--entrypoint", "postgres", json.loads((base / "complete.json").read_text())["image"],
-                 "-D", "/data", "-p", PORT, "-k", "/tmp", "-h", "", "-c", "shared_buffers=128MB"], capture_output=True)
+                 "-D", "/data", "-p", PORT, "-k", "/tmp", "-h", "", "-c", "shared_buffers=128MB",
+                 *recovery_args], capture_output=True)
 
-            def drill_sql(statement, database=DATABASE):
-                return output(["docker", "exec", name, "psql", "-X", "-qAt", "-v", "ON_ERROR_STOP=1",
+            def drill_sql(statement, database=DATABASE, readonly=False):
+                prefix = ["docker", "exec"]
+                if readonly:
+                    prefix += ["-e", "PGOPTIONS=-c default_transaction_read_only=on"]
+                return output([*prefix, name, "psql", "-X", "-qAt", "-v", "ON_ERROR_STOP=1",
                                "-h", "/tmp", "-p", PORT, "-U", DB_USER, "-d", database, "-c", statement])
 
             deadline = time.monotonic() + 180
@@ -349,7 +465,8 @@ def drill():
                     if drill_sql("SELECT NOT pg_is_in_recovery()") == "t":
                         break
                 except subprocess.CalledProcessError:
-                    pass
+                    if output(["docker", "inspect", "--format", "{{.State.Running}}", name]) != "true":
+                        raise RuntimeError("Isolated PostgreSQL exited before completing WAL recovery")
                 time.sleep(1)
             else:
                 raise RuntimeError("Isolated physical recovery did not reach its named WAL restore point")
@@ -359,37 +476,48 @@ def drill():
             # table's complete canonical row digest, not just a few counters.
             drill_sql('CREATE DATABASE openpbl_logical_drill TEMPLATE template0')
             run(["docker", "exec", name, "pg_restore", "--exit-on-error", "--no-owner", "--no-privileges",
-                 "-h", "/tmp", "-p", PORT, "-U", DB_USER, "-d", "openpbl_logical_drill", "/snapshot/database.dump"], capture_output=True)
+                 "-h", "/tmp", "-p", PORT, "-U", DB_USER, "-d", "openpbl_logical_drill",
+                 "/snapshot/database" if (snapshot / "database").is_dir() else "/snapshot/database.dump"], capture_output=True)
             for table, expected in manifest["tables"].items():
                 if json.loads(drill_sql(table_fingerprint_sql(table), "openpbl_logical_drill")) != expected:
                     raise RuntimeError(f"Restored table does not match the acknowledged snapshot: {table}")
+            # Optional acceptance assertions run only against this newly restored
+            # database and copied files, before finally removes the isolated copy.
+            verification = verify_recovered(
+                lambda statement: drill_sql(statement, "openpbl_logical_drill", readonly=True), work, snapshot
+            ) if verify_recovered else None
             report = {"snapshot": snapshot.name, "completedEpoch": time.time(), "durationSeconds": round(time.time() - started, 2),
                       "recoveryPointAgeAtStartSeconds": round(started - manifest["startedEpoch"], 2),
                       "tablesVerified": len(manifest["tables"]), "rowsVerified": sum(row["count"] for row in manifest["tables"].values()),
                       "filesVerified": len(manifest["files"]), "assetsVerified": len(manifest["assets"]),
                       "physicalWalRecovery": True, "physicalTableCounts": physical_counts,
                       "rtoWithin60Minutes": time.time() - started <= 3600}
+            if verification is not None:
+                report["capacityVerification"] = verification
             write_json(ROOT / "status/last-drill.json", report)
             print(json.dumps({key: value for key, value in report.items() if key != "physicalTableCounts"}))
         finally:
-            run(["docker", "rm", "-f", name], capture_output=True)
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
             # Only this unique, newly allocated isolated copy is removed.
             shutil.rmtree(work)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("setup", "wal", "backup", "status", "drill"))
+    parser.add_argument("command", choices=("setup", "wal", "backup", "status", "monitor", "drill"))
     args = parser.parse_args()
     initialize_dirs()
-    actions = {"setup": setup, "wal": receive_wal, "backup": backup, "status": status, "drill": drill}
+    actions = {"setup": setup, "wal": receive_wal, "backup": backup, "status": status, "monitor": monitor, "drill": drill}
     return actions[args.command]() or 0
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+    except BlockingIOError:
+        print("A local backup or restore drill already holds the backup lock; no duplicate job started.")
+        sys.exit(0 if len(sys.argv) > 1 and sys.argv[1] == "backup" else 1)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         # Do not print database stderr, config contents, credentials or SQL data.
         print(f"Local backup failed: {type(error).__name__}: {error}", file=sys.stderr)
         sys.exit(1)

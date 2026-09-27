@@ -279,9 +279,11 @@ export function buildDocumentCollaborationPrompts(input: {
     "- 不使用空泛鼓励，不罗列无依据的问题。讨论一次聚焦当前最需要推进的任务；学生主动要求检查时，可以一次列出多个独立且有依据的问题；总结应区分已确定内容与未决事项。",
     "",
     "只返回严格 JSON，不使用 Markdown 代码块。结构必须是：",
-    '{"kind":"discussion|edit-suggestion|boundary","message":"给学生看的简洁回应","focus":"本轮唯一焦点","suggestion":null}',
+    '{"kind":"discussion","message":"给学生看的简洁回应","focus":"本轮唯一焦点","suggestion":null}',
+    'kind 必须从 "discussion"、"edit-suggestion"、"boundary" 中选择一个值，不得使用竖线连接多个值。',
     "如果 kind=edit-suggestion，suggestion 必须是：",
-    '{"operation":"replace|insert","title":"局部修改或辅助任务标题","targetText":"replace 时逐字复制学生选中文字；insert 时为空字符串","replacement":"建议替换或插入的文字","reason":"修改理由及需要学生核验的点"}',
+    '{"operation":"replace","title":"局部修改或辅助任务标题","targetText":"replace 时逐字复制学生选中文字；insert 时为空字符串","replacement":"建议替换或插入的文字","reason":"修改理由及需要学生核验的点"}',
+    'operation 必须选择 "replace" 或 "insert" 中的一个值，不得使用竖线连接多个值。',
     projectSupportJsonInstruction("concise-document"),
   ].join("\n");
   const user = [

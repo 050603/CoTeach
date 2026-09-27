@@ -6,11 +6,11 @@
 
 1. 备份 PostgreSQL、上传文件、课堂数据和 `deploy/.deploy.env`。保留原 `PROVIDER_ENCRYPTION_KEY` 与 `JWT_SECRET`。
 2. 在仓库根目录运行 `python3 scripts/setup-survey-nlp.py` 和 `python3 scripts/setup-speech-alignment.py` 准备本地模型环境，再运行 `pnpm install --frozen-lockfile && pnpm build`。
-3. 运行 `pnpm exec prisma migrate deploy`。
+3. 构建成功后运行 `node scripts/run-next-production.mjs prepare`，先生成不可变运行目录，再运行 `pnpm exec prisma migrate deploy`。
 4. 安装或更新 `deploy/systemd/` 下的应用、代码运行器、`openpbl-survey-nlp.service`、`openpbl-speech-alignment.service` 和 `openpbl-outbound-proxy.service`，执行 `systemctl --user daemon-reload` 后重启服务。
 5. 检查应用 `/api/health/live`、分词服务 `http://127.0.0.1:3003/health/live`、语音对齐服务 `http://127.0.0.1:3004/health/live` 和出站代理 `http://127.0.0.1:19999/health/ready`，并完成教师登录、学生加入与五阶段课堂冒烟测试。
 
-`pnpm start` 会从 `.next-build` 创建 `.openpbl-runtime/releases/<BUILD_ID>` 不可变运行目录，避免下一次构建覆盖正在服务的版本。
+`pnpm start` 会从 `.next-build` 创建 `.openpbl-runtime/releases/<BUILD_ID>` 不可变运行目录，避免下一次构建覆盖正在服务的版本。重启前先执行 `prepare`，可避免服务启动探测期间另一个构建清空暂存目录、导致服务继续使用旧版本。健康检查通过后，还应核对实际运行目录的 `BUILD_ID` 与本次准备的版本一致。
 
 第三阶段文档项目的后台主动批注默认开启。需要暂停新检查时，在应用服务环境中设置 `DOCUMENT_AI_PROACTIVE_REVIEW_ENABLED=false` 并重启 `openpbl.service`；已有批注及学生主动发起的文稿检查、讨论和辅助任务仍可使用。移除该变量或设为其他值后重启即可恢复。该开关只作用于文档协作，不影响编程工作区。
 

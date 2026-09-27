@@ -1,4 +1,5 @@
 'use client';
+import { browserRandomUUID } from '@/lib/browser/random-uuid';
 
 /**
  * StudentStageHost — 学生端 OpenMAIC Stage 宿主组件
@@ -30,7 +31,7 @@ import { migrateScene } from '@openmaic/lib/edit/slide-schema';
 import { createLogger } from '@openmaic/lib/logger';
 import type { Scene, Stage as StageType } from '@openmaic/lib/types/stage';
 import { boundedFetch } from '@/lib/browser/bounded-fetch';
-import { enqueueLearningWrite, drainLearningWrites, readLearningWrites } from '@/lib/browser/learning-outbox';
+import { enqueueLearningWrite, drainLearningWrites, drainLearningWriteBatches, readLearningWrites } from '@/lib/browser/learning-outbox';
 import { createLearningEvent, postLearningEvents } from '@/lib/learning-analytics/telemetry';
 import type {
   KnowledgeGraph,
@@ -44,7 +45,7 @@ import {
   type InstructorIdentity,
 } from '@/components/openmaic-bridge/instructor-identity-context';
 import { cn } from '@/lib/utils';
-import { isStudentAiLearningScene } from '@openmaic/lib/pbl/scene-routing';
+import { selectStudentLearningScenes } from '@openmaic/lib/pbl/scene-routing';
 import { estimateSpeechDurationSec } from '@openmaic/lib/audio/tts-timing';
 import type { PlaybackSyncState } from '@openmaic/components/stage-experience';
 import { isScenePlaybackExhausted, sceneAutoAdvanceDelayMs } from '@openmaic/lib/playback/scene-completion';
@@ -206,23 +207,7 @@ export function quizScoreForScene(scene: Scene): number | undefined {
   return Math.round((correct / submitted.results.length) * 100);
 }
 
-/**
- * The student player is a hard audience boundary. A split classroom normally
- * already contains only student scenes, but filtering here protects the
- * playback UI when a classroom is opened before the split finishes or when a
- * malformed scene is returned by storage.
- */
-export function selectStudentLearningScenes(scenes: Scene[]): Scene[] {
-  const hasPblRoutingMetadata = scenes.some(
-    (scene) =>
-      Boolean(scene.stageKey) ||
-      Boolean(scene.audience) ||
-      Boolean(scene.generationPurpose),
-  );
-  if (!hasPblRoutingMetadata) return scenes;
-
-  return scenes.filter(isStudentAiLearningScene);
-}
+export { selectStudentLearningScenes } from '@openmaic/lib/pbl/scene-routing';
 
 export function prepareAdaptiveInsertionScenes(
   insertionId: string,
@@ -434,11 +419,11 @@ export function StudentStageHost({
   const progressScope = `progress:${courseId}:${studentId}:${classroomId}`;
   const flushProgress = useCallback(async () => {
     if (!trackingEnabled) return;
-    await drainLearningWrites<Record<string, unknown>>(progressScope, async (body) => {
+    await drainLearningWrites<Record<string, unknown>>(progressScope, async (body, entryId) => {
       const response = await boundedFetch('/api/openmaic/progress', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-OpenPBL-Role': 'student' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, requestId: body.requestId ?? entryId }),
         keepalive: true,
       });
       if (!response.ok) throw new Error(`学习进度尚未同步（HTTP ${response.status}），恢复连接后将自动重试。`);
@@ -468,8 +453,8 @@ export function StudentStageHost({
         enqueueLearningWrite(telemetryScope, event, event.id);
         telemetryQueueRef.current.shift();
       }
-      await drainLearningWrites<LearningEvent>(telemetryScope, (event) =>
-        postLearningEvents({ courseId, studentId, events: [event] }));
+      await drainLearningWriteBatches<LearningEvent>(telemetryScope, (events) =>
+        postLearningEvents({ courseId, studentId, events }));
       if (telemetryFailureCountRef.current >= 3) {
         toast.success('学习记录同步已恢复', {
           id: `learning-events-sync-${courseId}-${studentId}`,
@@ -928,14 +913,16 @@ export function StudentStageHost({
       if (isAllComplete && completionReportedRef.current) return;
 
       try {
+        const requestId = browserRandomUUID();
         enqueueLearningWrite(progressScope, {
+          requestId,
           courseId, studentId, studentName, classroomId,
           currentSceneIndex: currentIdx,
           totalScenes: scenes.length,
           completedScenes,
           completionModelVersion: AI_PROGRESS_COMPLETION_MODEL_VERSION,
           ...(quizScore !== undefined ? { quizScore } : {}),
-        });
+        }, requestId);
         await flushProgress();
         if (isAllComplete) completionReportedRef.current = true;
       } catch (error) {

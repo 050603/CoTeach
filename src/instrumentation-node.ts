@@ -57,6 +57,9 @@ export async function register(): Promise<void> {
     startTldrawSyncServer(Number(process.env.TLDRAW_SYNC_PORT ?? "3002"));
   }
 
+  const { startAiAuditOutbox } = await import("@/lib/ai-collaboration/audit-outbox");
+  startAiAuditOutbox();
+
   // Register graceful-shutdown signal handlers (Stage 7).
   await installShutdownHandlers();
 }

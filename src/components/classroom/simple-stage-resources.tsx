@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Image from "next/image";
+import { uploadMultipartWithReceipt } from '@/lib/browser/upload-request';
 import { Avatar } from "@/components/dashboard-shell";
 import {
   BookOpen,
@@ -35,13 +36,15 @@ import type {
   Course,
   CourseResource,
 } from "@/lib/session/types";
+import { ownsProjection } from "@/lib/realtime/projection-controller";
 import { useSession } from "@/lib/session/store";
 import { courseResourceTypeLabel } from "@/lib/user-facing-labels";
 import { cn } from "@/lib/utils";
 import { StageEmptyState, StagePageHeader, StageSplitLayout } from "@/components/classroom/classroom-ui";
 import type { LaunchResourceStatus, TeacherStageFocus } from "@/lib/classroom/teacher-dashboard-metrics";
 import { deriveLaunchDashboardMetrics } from "@/lib/classroom/teacher-dashboard-metrics";
-import { crossedResourceProgressThresholds, createLearningEvent, postLearningEvents, resourceEventIdempotencyKey } from "@/lib/learning-analytics/telemetry";
+import { crossedResourceProgressThresholds } from "@/lib/learning-analytics/telemetry";
+import { createResourceLearningReporter } from "@/lib/browser/resource-learning-events";
 
 const UPLOAD_ACCEPT = [
   ".pdf", ".mp4", ".mov", ".webm", ".docx", ".xlsx",
@@ -345,6 +348,8 @@ export function SimplifiedTeacherStageView({
   const [readingProgressByResource, setReadingProgressByResource] = useState<Record<string, PdfReadingProgress>>({});
   const [teacherTab, setTeacherTab] = useState<"resources" | "follow-up">("resources");
   const projection = course.uiState?.resourceProjection;
+  const controlsProjection = ownsProjection(course.uiState);
+  const needsTakeover = Boolean(course.uiState?.projectionController && !controlsProjection);
   const activeResource = resources.find((resource) => projectionIsActive(course, resource));
   const selected = resources.find((resource) => resource.id === selectedId)
     ?? activeResource
@@ -381,7 +386,7 @@ export function SimplifiedTeacherStageView({
         form.append("stageKey", stageKey);
         form.append("bindAsCourseResource", "true");
         if (pdfDisplayMode) form.append("pdfDisplayMode", pdfDisplayMode);
-        const response = await fetch("/api/uploads", { method: "POST", body: form });
+        const response = await uploadMultipartWithReceipt(`course-resource:${course.id}:${stageKey}`, file, form);
         payload = await response.json().catch(() => null) as UploadResponse | null;
         if (!response.ok) {
           const requestHint = payload?.requestId ? `（请求编号：${payload.requestId}）` : "";
@@ -408,7 +413,7 @@ export function SimplifiedTeacherStageView({
   async function deleteResource(resource: CourseResource) {
     if (!window.confirm(`确定删除“${resource.title}”吗？`)) return;
     setDeletingId(resource.id);
-    if (projectionIsActive(course, resource)) {
+    if (controlsProjection && projectionIsActive(course, resource)) {
       session.setUiState(course.id, { resourceProjection: null });
     }
     try {
@@ -451,7 +456,7 @@ export function SimplifiedTeacherStageView({
         throw new Error(payload?.message || `切换失败（${response.status}）`);
       }
       await session.refresh("teacher");
-      if (projectionIsActive(course, resource) && projection) {
+      if (controlsProjection && projectionIsActive(course, resource) && projection) {
         session.setUiState(course.id, {
           resourceProjection: {
             ...projection,
@@ -499,15 +504,16 @@ export function SimplifiedTeacherStageView({
           revision: Date.now(),
         },
       },
-    });
-  }, [course.id, session, stageKey]);
+    }, ...(needsTakeover ? [{ takeover: true }] : []));
+  }, [course.id, session, stageKey, needsTakeover]);
 
   function stopProjection() {
+    if (!controlsProjection) return;
     session.setUiState(course.id, { resourceProjection: null });
   }
 
   function syncProjection(patch: ViewStatePatch) {
-    if (!projection || projection.resourceId !== selected?.id) return;
+    if (!controlsProjection || !projection || projection.resourceId !== selected?.id) return;
     session.setUiState(course.id, {
       resourceProjection: {
         ...projection,
@@ -612,10 +618,10 @@ export function SimplifiedTeacherStageView({
                   <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
                     {!teaching && !previewExpanded ? <PrimaryButton onClick={() => setDialogResource(selected)} size="sm" tone="slate" variant="outline"><Maximize2 size={14} />全屏预览</PrimaryButton> : null}
                     {previewExpanded ? <><span className="text-sm">{resourceKind(selected) === "video" ? "全屏播放" : "学习资料预览"}</span><button aria-label={resourceKind(selected) === "video" ? "退出全屏播放" : "退出全屏阅读"} className="grid size-11 place-items-center rounded-[6px] border border-stone-300" onClick={() => setDialogResource(undefined)} type="button"><X size={20} /></button></> : null}
-                    {projectionIsActive(course, selected) ? (
+                    {projectionIsActive(course, selected) && controlsProjection ? (
                       <PrimaryButton onClick={stopProjection} size="sm" tone="red" variant="outline"><MonitorOff size={14} />{teaching ? "停止同步" : "停止投屏"}</PrimaryButton>
                     ) : (
-                      <PrimaryButton onClick={() => startProjection(selected)} size="sm"><MonitorUp size={14} />{teaching ? "同步到学生" : "投屏"}</PrimaryButton>
+                      <PrimaryButton onClick={() => startProjection(selected)} size="sm"><MonitorUp size={14} />{needsTakeover ? "接管并投屏" : teaching ? "同步到学生" : "投屏"}</PrimaryButton>
                     )}
                   </div>
                 </div>
@@ -659,7 +665,7 @@ export function SimplifiedTeacherStageView({
                     fullscreen={teaching || previewExpanded}
                     initialReadingProgress={readingProgressByResource[selected.id]}
                     key={selected.id}
-                    mode={projectionIsActive(course, selected) ? "controller" : "self"}
+                    mode={projectionIsActive(course, selected) ? controlsProjection ? "controller" : "follower" : "self"}
                     onReadingProgressChange={(progress) => setReadingProgressByResource((current) => ({ ...current, [selected.id]: progress }))}
                     onViewStateChange={syncProjection}
                     progressKey={`teacher:${course.id}:${selected.id}`}
@@ -677,7 +683,8 @@ export function SimplifiedTeacherStageView({
   return (
     <div className={cn("classroom-stage", teaching ? "teacher-stage-resources flex h-full min-h-0 flex-col gap-3" : "space-y-4")}>
       <TeacherPresentationActions>
-        {activeResource ? <button data-tone="danger" onClick={stopProjection} type="button"><MonitorOff size={20} />结束投屏</button> : null}
+        {needsTakeover && selected ? <button onClick={() => startProjection(selected)} type="button"><MonitorUp size={20} />接管并投屏</button> : null}
+        {activeResource && controlsProjection ? <button data-tone="danger" onClick={stopProjection} type="button"><MonitorOff size={20} />结束投屏</button> : null}
       </TeacherPresentationActions>
       <div hidden={teaching}><StagePageHeader
         action={uploadControl}
@@ -809,40 +816,40 @@ export function SimplifiedStudentStageView({
   const [dialogResource, setDialogResource] = useState<CourseResource>();
   const [viewerRevision, setViewerRevision] = useState(0);
   const [readingProgressByResource, setReadingProgressByResource] = useState<Record<string, PdfReadingProgress>>({});
-  const sentResourceEventKeys = useRef<Set<string>>(new Set());
+  const resourceReporter = useMemo(() => session.studentId ? createResourceLearningReporter({
+    courseId: course.id, studentId: session.studentId, stageKey,
+  }) : undefined, [course.id, session.studentId, stageKey]);
   const reportedProgressByResource = useRef<Record<string, number>>({});
   const selected = resources.find((resource) => resource.id === selectedId) ?? resources[0];
 
   const sendResourceEvent = useCallback((resource: CourseResource, type: "open" | "progress" | "complete", progressPercent?: number, milestone?: number, source: "student" | "teacher-projection" = "student") => {
-    const studentId = session.studentId;
-    if (!studentId) return;
-    const idempotencyKey = resourceEventIdempotencyKey(course.id, studentId, resource.id, type, milestone, source);
-    if (sentResourceEventKeys.current.has(idempotencyKey)) return;
-    sentResourceEventKeys.current.add(idempotencyKey);
-    const progress = progressPercent === undefined ? undefined : Math.max(0, Math.min(100, Math.round(progressPercent)));
-    const event = createLearningEvent(type === "open" ? "resource-open" : type === "complete" ? "resource-complete" : "resource-progress", {
-      courseId: course.id,
-      studentId,
-      stageKey,
-      sceneId: resource.id,
-      progressMarker: type === "complete" ? "completed" : "in-progress",
-      metadata: {
-        resourceId: resource.id,
-        ...(progress === undefined ? {} : { progressPercent: progress }),
-        source,
-      },
-      idempotencyKey,
-    });
-    void postLearningEvents({ courseId: course.id, studentId, events: [event] }).catch(() => {
-      // Telemetry must never interrupt reading. The next coarse milestone can retry.
-      sentResourceEventKeys.current.delete(idempotencyKey);
-    });
-  }, [course.id, session.studentId, stageKey]);
+    try {
+      resourceReporter?.record(resource.id, type, progressPercent, milestone, source);
+      void resourceReporter?.flush().catch(() => { /* The persisted event is replayed on reconnect or remount. */ });
+    } catch {
+      toast.error("学习记录尚未保存", { id: "resource-telemetry-storage", description: "浏览器无法保存阅读记录，请保留此页面并检查本地存储。" });
+    }
+  }, [resourceReporter]);
+
+  useEffect(() => {
+    if (!resourceReporter) return;
+    const replay = () => { void resourceReporter.flush().catch(() => { /* Keep the original event until acknowledged. */ }); };
+    replay();
+    const timer = window.setInterval(replay, 10000);
+    window.addEventListener("online", replay);
+    window.addEventListener("pagehide", replay);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("online", replay);
+      window.removeEventListener("pagehide", replay);
+    };
+  }, [resourceReporter]);
 
   function recordResourceProgress(resource: CourseResource, progressPercent: number) {
     const current = Math.max(0, Math.min(100, progressPercent));
     sendResourceEvent(resource, "open");
-    const previous = reportedProgressByResource.current[resource.id] ?? 0;
+    const progressKey = JSON.stringify([course.id, session.studentId, stageKey, resource.id]);
+    const previous = reportedProgressByResource.current[progressKey] ?? 0;
     for (const threshold of crossedResourceProgressThresholds(previous, current)) {
       sendResourceEvent(resource, "progress", threshold, threshold);
     }
@@ -850,10 +857,12 @@ export function SimplifiedStudentStageView({
     // completion event separate from the 100% progress milestone so a viewer
     // that ends at 90% still appears as completed without fabricating reading.
     if (current >= 90) sendResourceEvent(resource, "complete", current, 90);
-    reportedProgressByResource.current[resource.id] = Math.max(previous, current);
+    reportedProgressByResource.current[progressKey] = Math.max(previous, current);
   }
 
   function openResource(resource: CourseResource) {
+    resourceReporter?.beginVisit(resource.id);
+    reportedProgressByResource.current[JSON.stringify([course.id, session.studentId, stageKey, resource.id])] = 0;
     sendResourceEvent(resource, "open");
     session.markResourceDownloaded(course.id, resource.id);
     setSelectedId(resource.id);

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { projectionClientId } from "@/lib/realtime/projection-controller";
 import type { Course } from "@/lib/session/types";
 import { TeacherPresentationActionsProvider } from "./teacher-presentation-actions";
 import { SimplifiedStudentStageView, SimplifiedTeacherStageView, StudentProjectionPrecache, StudentResourceProjection, videoPrecacheRanges } from "./simple-stage-resources";
@@ -37,7 +38,7 @@ describe("simplified stage resources", () => {
     const patch = session.setUiState.mock.calls[0][1];
     expect(patch.resourceProjection).toMatchObject({ resourceId: "launch-file", stageKey: "launch" });
     view.rerender(<TeacherPresentationActionsProvider target={target}>
-      <SimplifiedTeacherStageView course={{ ...course, uiState: patch }} stageKey="launch" presentation="analytics" />
+      <SimplifiedTeacherStageView course={{ ...course, uiState: { ...patch, projectionController: { teacherId: "teacher-1", clientId: projectionClientId() } } }} stageKey="launch" presentation="analytics" />
     </TeacherPresentationActionsProvider>);
     expect(session.setUiState).toHaveBeenCalledTimes(1);
     fireEvent.click(within(target).getByRole("button", { name: "结束投屏" }));
@@ -49,6 +50,7 @@ describe("simplified stage resources", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
+    window.localStorage.clear();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -220,6 +222,7 @@ describe("simplified stage resources", () => {
     const projectedCourse = {
       ...videoCourse,
       uiState: {
+        projectionController: { teacherId: "teacher-1", clientId: projectionClientId() },
         resourceProjection: {
           resourceId: "lesson-video",
           stageKey: "launch",

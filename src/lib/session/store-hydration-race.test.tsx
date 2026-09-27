@@ -28,7 +28,7 @@ function StudentProbe() {
     // The provider owns transport callbacks; only mount/unmount matters here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  return <span>{session.studentId ?? 'missing-student'}</span>;
+  return <><span>{session.studentId ?? 'missing-student'}</span><span data-testid="course-version">{session.courses.find(item => item.id === 'course-1')?.version ?? 0}</span></>;
 }
 
 afterEach(() => { vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
@@ -73,5 +73,30 @@ it('keeps authenticated student identity when the first course snapshot races se
     state.resolve(Response.json({ course, eventCursor: '0' }));
     await Promise.resolve();
   });
+  expect(screen.getByText('student-1')).toBeTruthy();
+});
+
+
+it('preserves the newer realtime course when initial authenticated hydration arrives late', async () => {
+  window.history.replaceState({}, '', '/student/classroom/course-1');
+  const session = deferred<Response>();
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith('/api/courses?')) return session.promise;
+    if (url.endsWith('/state')) return Promise.resolve(Response.json({ course: { ...course, version: 3 }, eventCursor: '0' }));
+    if (url.endsWith('/projection')) return Promise.resolve(Response.json({ courseId: course.id, courseVersion: 3, projectionVersion: 0, projectionUpdatedAt: course.updatedAt, serverTime: course.updatedAt }));
+    if (url.includes('/events?')) return Promise.resolve(Response.json({ events: [], nextCursor: '0' }));
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+  vi.stubGlobal('WebSocket', class {
+    static CONNECTING = 0; static OPEN = 1; readyState = 0;
+    close() { this.readyState = 3; }
+  });
+  render(<SessionProvider><StudentProbe /></SessionProvider>);
+  await waitFor(() => expect(screen.getByTestId('course-version').textContent).toBe('3'));
+  await act(async () => {
+    session.resolve(Response.json({ courses: [{ ...course, version: 1 }], user: { role: 'student', name: '学生' }, studentId: 'student-1', studentName: '学生', joinedCourseId: course.id, updatedAt: course.updatedAt }));
+  });
+  expect(screen.getByTestId('course-version').textContent).toBe('3');
   expect(screen.getByText('student-1')).toBeTruthy();
 });

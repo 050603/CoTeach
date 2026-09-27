@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { cpSync, mkdtempSync, readdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -15,6 +16,9 @@ const container = `openpbl-research-check-${randomUUID()}`;
 const temporary = mkdtempSync(path.join(tmpdir(), "openpbl-research-check-"));
 let db;
 let started = false;
+const restartable = process.env.OPENPBL_VERIFY_CONCURRENCY_ONLY === "1";
+const volume = `${container}-data`;
+let volumeCreated = false;
 
 function command(executable, args, options = {}) {
   const result = spawnSync(executable, args, { encoding: "utf8", timeout: 60_000, ...options });
@@ -36,9 +40,22 @@ async function rejectsCheck(operation, constraint) {
 }
 
 try {
+  let publication = "127.0.0.1::5432";
+  let storage = ["--tmpfs", "/var/lib/postgresql/data:rw"];
+  if (restartable) {
+    // A fixed ephemeral port and private named volume survive the worker's real PG restart.
+    const probe = createServer();
+    await new Promise((resolve, reject) => { probe.once("error", reject); probe.listen(0, "127.0.0.1", resolve); });
+    const port = probe.address().port;
+    await new Promise((resolve, reject) => probe.close(error => error ? reject(error) : resolve()));
+    publication = `127.0.0.1:${port}:5432`;
+    command("docker", ["volume", "create", "--label", `openpbl.verification=${container}`, volume]);
+    volumeCreated = true;
+    storage = ["--mount", `type=volume,source=${volume},target=/var/lib/postgresql/data`];
+  }
   command("docker", ["run", "--detach", "--rm", "--name", container,
-    "--publish", "127.0.0.1::5432", "--tmpfs", "/var/lib/postgresql/data:rw",
-    "--env", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:16.9-alpine"]);
+    "--publish", publication, ...storage,
+    "--env", "POSTGRES_HOST_AUTH_METHOD=trust", "pgvector/pgvector:0.8.6-pg16"]);
   started = true;
   let ready = false;
   for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -141,6 +158,16 @@ try {
     ...Object.fromEntries(Object.entries(compilerOptions.paths).map(([key, values]) => [key, values.map((value) => path.resolve(root, value))])),
     'server-only': [path.join(root, 'node_modules/next/dist/compiled/server-only/empty.js')],
   } } }));
+  environment.NODE_OPTIONS = [environment.NODE_OPTIONS, "--conditions=import"].filter(Boolean).join(" ");
+  if (process.env.OPENPBL_VERIFY_REVIEW_ONLY === "1") {
+    console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-capacity-document-review-worker.ts"], { cwd: root, env: { ...environment, DATABASE_URL: `${databaseUrl}&connection_limit=12&pool_timeout=20`, OPENPBL_VERIFICATION_MARKER: container }, timeout: 180_000 }));
+  } else if (process.env.OPENPBL_VERIFY_ARCHIVE_ONLY === "1") {
+    console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-capacity-document-archive-worker.ts"], { cwd: root, env: { ...environment, DATABASE_URL: `${databaseUrl}&connection_limit=12&pool_timeout=20`, OPENPBL_VERIFICATION_MARKER: container }, timeout: 180_000 }));
+  } else if (process.env.OPENPBL_VERIFY_ENTRY_ONLY === "1") {
+    console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-platform-entry-concurrency.ts"], { cwd: root, env: { ...environment, DATABASE_URL: `${databaseUrl}&connection_limit=12&pool_timeout=20`, OPENPBL_VERIFICATION_MARKER: container }, timeout: 180_000 }));
+  } else if (process.env.OPENPBL_VERIFY_CONCURRENCY_ONLY === "1") {
+    console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-classroom-concurrency.ts"], { cwd: root, env: { ...environment, DATABASE_URL: `${databaseUrl}&connection_limit=12&pool_timeout=20`, OPENPBL_VERIFICATION_MARKER: container }, timeout: 180_000 }));
+  } else {
   const persistenceOutput = command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-platform-persistence.ts"], {
     cwd: root, env: { ...environment, OPENPBL_VERIFICATION_MARKER: container },
   });
@@ -152,10 +179,14 @@ try {
   }
   console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-v2-teaching.ts"], { cwd: root, env: { ...environment, OPENPBL_VERIFICATION_MARKER: container }, timeout: 120_000 }));
   console.log(command("pnpm", ["exec", "tsx", "--tsconfig", verificationConfig, "scripts/verify-v2-collaboration.ts"], { cwd: root, env: { ...environment, OPENPBL_VERIFICATION_MARKER: container }, timeout: 120_000 }));
+  }
 } finally {
   try { await db?.$disconnect(); } finally {
     try {
       if (started) command("docker", ["rm", "--force", container]);
-    } finally { rmSync(temporary, { recursive: true, force: true }); }
+    } finally {
+      try { if (volumeCreated) command("docker", ["volume", "rm", volume]); }
+      finally { rmSync(temporary, { recursive: true, force: true }); }
+    }
   }
 }

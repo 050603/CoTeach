@@ -33,7 +33,7 @@
 - 认证相关 31 项、问卷相关 76 项测试通过；修改文件 ESLint、应用类型检查、生产构建通过。
 - Nginx 配置检查及热重载通过；`openpbl.service` 已重启，3000 端口存活检查通过。
 
-完整聚合结果：[最终并发验收](2026-09-15-survey-readiness.json)、[网关修复前失败证据](2026-09-15-survey-readiness-before-nginx-fix.json)。浏览器冷启动耗时包含单机运行 40 个浏览器上下文的成本；表中浏览器提交包含点击到响应的时间，其余为 HTTP 响应时间。
+完整聚合结果：最终并发验收（本机证据：`2026-09-15-survey-readiness.json`）、网关修复前失败证据（本机证据：`2026-09-15-survey-readiness-before-nginx-fix.json`）。浏览器冷启动耗时包含单机运行 40 个浏览器上下文的成本；表中浏览器提交包含点击到响应的时间，其余为 HTTP 响应时间。
 
 ## 数据清理
 
@@ -47,10 +47,10 @@
 - 删除 OSS 中 159 份旧 Restic 快照；`prune --max-unused 0` 后未使用数据为 0 B，`check --read-data` 完整校验通过。
 - 已建立清理后的干净快照 `9ea75680`，本地 staging 中的旧数据库导出被替换；周期备份已恢复。
 
-清理计数及校验：[清理结果](2026-09-15-student-cleanup.json)。
+清理计数及校验：清理结果（本机证据：`2026-09-15-student-cleanup.json`）。
 
 ## 未完成的 OSS 历史版本核验
 
 补充的 AccessKey ID 与当前备份账号相同。对两种 OSS endpoint 重新使用有效签名核验，普通对象列表返回 200，但版本配置和历史版本列表仍返回 403 AccessDenied。因此只能确认当前可访问的旧快照及未使用数据已删除，无法确认 OSS 是否启用了版本控制、是否另有非当前对象版本。
 
-要完成这一项，需要管理员为该账号补充 `oss:GetBucketVersioning`、`oss:ListObjectVersions`、`oss:DeleteObjectVersion` 权限，或由管理员检查并清理备份前缀内对应的历史版本。权限证据：[OSS 版本访问结果](2026-09-15-oss-version-access.json)。文档和验收结果不包含访问密钥、学生姓名或原始回答。
+要完成这一项，需要管理员为该账号补充 `oss:GetBucketVersioning`、`oss:ListObjectVersions`、`oss:DeleteObjectVersion` 权限，或由管理员检查并清理备份前缀内对应的历史版本。权限证据：OSS 版本访问结果（本机证据：`2026-09-15-oss-version-access.json`）。文档和验收结果不包含访问密钥、学生姓名或原始回答。

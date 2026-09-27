@@ -2,6 +2,8 @@
 // WebSocket reaches the server; only compiled pages and static runtime assets do.
 // Run after building: node scripts/check-teaching-layout.mjs [--assert]
 // Filters: TEACHING_SCENARIOS=preparation,code,player TEACHING_DEVICES=phone-portrait
+// Browser zoom equivalent: TEACHING_ZOOM=1.5 divides physical profile dimensions
+// by 1.5 and uses deviceScaleFactor=1.5 (DPR alone does not model browser zoom).
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,7 +15,13 @@ const baseURL = process.env.LAYOUT_BASE_URL || 'http://127.0.0.1:3000';
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(baseURL).hostname)) throw new Error('Only local instances are supported');
 const browserName = process.env.TEACHING_BROWSER || 'chromium';
 if (!['chromium', 'firefox', 'webkit'].includes(browserName)) throw new Error('TEACHING_BROWSER must be chromium, firefox or webkit');
-const dpr = Number(process.env.TEACHING_DPR || 1);
+const executablePath = process.env.TEACHING_EXECUTABLE_PATH;
+const browserLabel = process.env.TEACHING_BROWSER_LABEL || browserName;
+if (executablePath && browserName !== 'chromium') throw new Error('TEACHING_EXECUTABLE_PATH is supported only for chromium');
+if (!/^[a-z0-9-]+$/i.test(browserLabel)) throw new Error('TEACHING_BROWSER_LABEL must contain only letters, numbers or hyphens');
+const zoom = Number(process.env.TEACHING_ZOOM || 1);
+if (!Number.isFinite(zoom) || zoom < 1 || zoom > 2) throw new Error('TEACHING_ZOOM must be between 1 and 2');
+const dpr = Number(process.env.TEACHING_DPR || zoom);
 if (!Number.isFinite(dpr) || dpr < 1 || dpr > 3) throw new Error('TEACHING_DPR must be between 1 and 3');
 const health = await fetch(`${baseURL}/api/health/live`, { signal: AbortSignal.timeout(5000) });
 if (!health.ok) throw new Error(`Local service is not ready (${health.status})`);
@@ -48,6 +56,7 @@ const fixtureCourse = {
   aiLearningClassroomId: 'layout-player', pblConfig: { makeArtifactMode: 'python' },
 };
 const profiles = [
+  ['desktop-1024x768', 1024, 768, false],
   ['desktop-1280x720', 1280, 720, false], ['desktop-1366x768', 1366, 768, false], ['desktop-1920x1080', 1920, 1080, false],
   ['desktop-split', 768, 576, false], ['desktop-laptop', 1024, 576, false], ['desktop', 1440, 900, false], ['desktop-4k', 3840, 2160, false], ['pad-portrait', 768, 1024, true], ['pad-landscape', 1024, 768, true],
   ['phone-portrait', 390, 844, true], ['phone-landscape', 844, 390, true], ['phone-small', 320, 568, true], ['phone-small-landscape', 568, 320, true],
@@ -69,13 +78,27 @@ const scenarios = [
   }],
   ['teacher-knowledge-analytics', '/teacher/teach/layout-teaching/classroom', 'text=全班知识讲授学情', async page => {
     const chart = page.locator('[aria-labelledby="knowledge-section-chart-title"]');
-    await chart.scrollIntoViewIfNeeded();
+    await chart.evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
     await chart.locator('.recharts-surface').waitFor({ state: 'visible' });
     await page.waitForFunction(() => {
       const curves = [...document.querySelectorAll('[aria-labelledby="knowledge-section-chart-title"] .recharts-line-curve')];
-      return curves.length === 2 && curves.every(curve => /^M/.test(curve.getAttribute('d') || '') && !/NaN|Infinity/.test(curve.getAttribute('d') || ''));
+      return curves.length === 2 && curves.every(curve => {
+        if (!/^M/.test(curve.getAttribute('d') || '') || /NaN|Infinity/.test(curve.getAttribute('d') || '')) return false;
+        // Recharts draws the entire path before revealing it with animated
+        // stroke-dasharray. Geometry alone therefore accepts half-drawn lines.
+        // Wait for the final solid/dashed strokes, after the reveal finishes.
+        const dash = curve.getAttribute('stroke-dasharray');
+        return curve.getAttribute('stroke') === '#10b981' ? dash === null : dash === '4 5';
+      });
     });
     await chart.getByRole('img', { name: /均分60分.*均分80分/ }).waitFor({ state: 'visible' });
+    const overflow = await chart.getByRole('img').evaluate(element => element.scrollWidth - element.clientWidth);
+    if (overflow > 2) throw new Error(`The two-section learning chart requires horizontal scrolling (${overflow}px)`);
+    const tickBounds = await chart.locator('.recharts-surface .cursor-help text').evaluateAll(labels => labels.map(label => {
+      const text = label.getBoundingClientRect(), surface = label.closest('svg').getBoundingClientRect();
+      return { name: label.closest('g').querySelector('title')?.textContent, clipped: text.left < surface.left - 1 || text.right > surface.right + 1 || text.top < surface.top - 1 || text.bottom > surface.bottom + 1 };
+    }));
+    if (tickBounds.length !== 2 || tickBounds.some(tick => tick.clipped)) throw new Error(`Learning chart labels are missing or clipped: ${JSON.stringify(tickBounds)}`);
   }],
   ['quick-preparation', '/teacher/prepare/layout-teaching/verify', 'text=课程资料导入', async () => {}],
   ['generate-redirect', '/teacher/prepare/layout-teaching/generate', 'text=课程资料导入', async page => { await page.waitForURL('**/teacher/prepare/layout-teaching/verify'); }],
@@ -115,10 +138,11 @@ const cookies = await Promise.all(['teacher', 'student'].map(async role => ({
   value: await new SignJWT({ role, sv: 1, username: 'layout', displayName: '布局测试', userId: `layout-${role}`, studentName: '布局测试' })
     .setProtectedHeader({ alg: 'HS256' }).setSubject(`layout-${role}`).setIssuer('openpbl').setAudience('openpbl-app').setExpirationTime('1h').sign(new TextEncoder().encode(secret)),
 })));
-const browser = await ({ chromium, firefox, webkit })[browserName].launch();
+const browser = await ({ chromium, firefox, webkit })[browserName].launch(executablePath ? { executablePath } : {});
 const reports = [];
 try {
-  for (const [device, width, height, touch] of select(profiles, process.env.TEACHING_DEVICES)) {
+  for (const [device, physicalWidth, physicalHeight, touch] of select(profiles, process.env.TEACHING_DEVICES)) {
+    const width = Math.floor(physicalWidth / zoom), height = Math.floor(physicalHeight / zoom);
     for (const [id, route, ready, exercise] of select(scenarios, process.env.TEACHING_SCENARIOS)) {
       const context = await browser.newContext({ viewport: { width, height }, ...(browserName === 'firefox' ? {} : { isMobile: touch && width < 1024 }), hasTouch: touch, deviceScaleFactor: dpr });
       await context.addCookies(cookies);
@@ -168,11 +192,19 @@ try {
         if (!['GET', 'HEAD'].includes(request.method())) interceptedWrites.push(pathname);
         await intercepted.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
       });
-      const report = { id, device, browser: browserName, dpr, width, height, sourceCss: process.argv.includes('--source-css'), errors, missingFixtures, failedResources, interceptedWrites };
+      const report = { id, device, browser: browserLabel, engine: browserName, dpr, zoom, physicalWidth, physicalHeight, width, height, sourceCss: process.argv.includes('--source-css'), errors, missingFixtures, failedResources, interceptedWrites };
+      report.userAgent = await page.evaluate(() => navigator.userAgent);
       try {
         await page.goto(baseURL + route, { waitUntil: 'load' });
         await page.locator(ready).filter({ visible: true }).first().waitFor();
         await exercise(page);
+        if (id === 'teacher-knowledge-analytics') {
+          report.renderedSectionChart = await page.locator('[aria-labelledby="knowledge-section-chart-title"]').evaluate(root => ({
+            width: root.querySelector('.recharts-surface').getBoundingClientRect().width,
+            curves: root.querySelectorAll('.recharts-line-curve').length,
+            scores: root.querySelector('[role="img"]').getAttribute('aria-label'),
+          }));
+        }
         if (process.argv.includes('--source-css')) {
           await page.evaluate(() => {
             document.querySelector('main > .pbl-wide-container')?.classList.add('teaching-audit-viewport');
@@ -251,6 +283,14 @@ try {
             return { chartPaths: chart.querySelectorAll('path').length, chartLabels: chart.textContent, formulaWidth: formula.getBoundingClientRect().width, imageLoaded: !!image?.naturalWidth };
           });
           if (report.renderedSlide.formulaWidth <= 0 || !report.renderedSlide.imageLoaded) throw new Error('Slide formula or image did not render');
+          const dock = page.locator('[aria-label="AI 授课字幕与播放控制"]');
+          const speed = dock.getByRole('button', { name: '切换播放倍速', exact: true });
+          const initialSpeed = await speed.innerText();
+          await speed.click();
+          if (await speed.innerText() === initialSpeed) throw new Error('Playback speed control did not respond');
+          await dock.getByRole('button', { name: '静音', exact: true }).click();
+          await dock.getByRole('button', { name: '打开声音', exact: true }).click();
+          report.playbackControls = { speedChanged: true, muteToggled: true };
         }
         await page.waitForTimeout(250);
         Object.assign(report, await page.evaluate(() => {
@@ -278,9 +318,9 @@ try {
         }));
       } catch (error) { report.scenarioError = error.message; report.body = (await page.locator('body').innerText({ timeout: 3000 }).catch(() => 'Page text unavailable')).slice(0, 800); }
       report.failed = !!(report.scenarioError || errors.length || missingFixtures.length || failedResources.length || report.scrollWidth > width + 2 || report.panels?.some(panel => panel.clipped) || report.headingIssues?.length || report.narrowText?.length || report.controlIssues?.length || report.canvasBoxes?.some(box => box.height < 120 || box.width < 200) || report.brokenImages?.length);
-      report.screenshot = path.join(output, `${browserName}-${id}-${device}-dpr${dpr}.png`);
+      report.screenshot = path.join(output, `${browserLabel}-${id}-${device}-dpr${dpr}-zoom${zoom}.png`);
       await page.screenshot({ path: report.screenshot });
-      report.trace = report.failed ? path.join(output, `${browserName}-${id}-${device}-dpr${dpr}.zip`) : undefined;
+      report.trace = report.failed ? path.join(output, `${browserLabel}-${id}-${device}-dpr${dpr}-zoom${zoom}.zip`) : undefined;
       await context.tracing.stop(report.trace ? { path: report.trace } : undefined);
       reports.push(report);
       fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(reports, null, 2));
@@ -289,7 +329,7 @@ try {
     }
   }
 } finally { await browser.close(); }
-const summary = { output, browser: browserName, browserVersion: browser.version(), dpr, checks: reports.length, failures: reports.filter(r => r.failed).length, failedChecks: reports.filter(r => r.failed).map(r => `${r.id}@${r.device}`) };
+const summary = { output, browser: browserLabel, engine: browserName, browserVersion: browser.version(), executablePath, userAgent: reports[0]?.userAgent, dpr, zoom, checks: reports.length, failures: reports.filter(r => r.failed).length, failedChecks: reports.filter(r => r.failed).map(r => `${r.id}@${r.device}`) };
 fs.writeFileSync(path.join(output, 'summary.json'), JSON.stringify(summary, null, 2));
 console.log(JSON.stringify(summary));
 if (process.argv.includes('--assert') && reports.some(report => report.failed)) process.exitCode = 1;

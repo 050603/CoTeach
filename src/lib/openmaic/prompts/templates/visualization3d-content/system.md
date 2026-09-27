@@ -355,8 +355,8 @@ const earth = new THREE.Mesh(earthGeometry, earthMaterial);
   <script type="importmap">
   {
     "imports": {
-      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      "three": "/api/openmaic/interactive-runtime/three/0.160.0/build/three.module.js",
+      "three/addons/": "/api/openmaic/interactive-runtime/three/0.160.0/examples/jsm/"
     }
   }
   </script>

@@ -1,9 +1,9 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import type { Course } from "@/lib/session/types";
 import { calculateToleratedDurationSec } from "@/lib/learning-analytics/analyzer";
 
 type Timing = NonNullable<Course["aiLearningTimingByStudent"]>[string];
-type DurationRow = { studentId: string; effectiveDurationMs: bigint; eventCount: bigint };
+type DurationRow = { studentId: string; effectiveDurationMs: string; eventCount: string };
 type SceneRow = {
   studentId: string;
   expectedDurationSec: string;
@@ -34,37 +34,31 @@ export async function loadAiLearningTiming(
   }]));
   if (!studentIds.length) return timing;
 
-  const [durationRows, sceneRows] = await Promise.all([
-    db.$queryRaw<DurationRow[]>`
-      WITH scoped AS (
-        SELECT e."id", e."userId", e."idempotencyKey", e."eventType", e."durationMs", e."receivedAt",
+  const [aggregate] = await db.$queryRaw<Array<{ durationRows: DurationRow[]; sceneRows: SceneRow[] }>>`
+      WITH scoped AS MATERIALIZED (
+        SELECT e."id", e."userId", e."idempotencyKey", e."eventType", e."durationMs", e."occurredAt", e."receivedAt",
           COALESCE(e."metadata"->'legacy', e."metadata"->'view') AS payload,
           COALESCE(NULLIF(e."metadata"#>>'{legacy,idempotencyKey}', ''),
             NULLIF(e."metadata"#>>'{view,idempotencyKey}', ''), e."idempotencyKey") AS "logicalKey"
         FROM "LearningEvent" e
         WHERE e."classroomInstanceId" = ${instanceId}
+          AND e."userId" IN (${Prisma.join(studentIds)})
       ), unique_events AS (
         SELECT DISTINCT ON ("userId", "logicalKey") "userId", "eventType", "durationMs", payload
         FROM scoped
         WHERE payload->>'stageKey' = 'ai-learning'
         ORDER BY "userId", "logicalKey", "receivedAt", "id"
       )
-      SELECT "userId" AS "studentId", COUNT(*)::bigint AS "eventCount",
+      , durations AS (
+      SELECT "userId" AS "studentId", COUNT(*)::text AS "eventCount",
         COALESCE(SUM("durationMs") FILTER (
           WHERE "eventType" = 'heartbeat'
             AND "durationMs" BETWEEN 1 AND 300000
             AND payload->>'visible' IS DISTINCT FROM 'false'
-        ), 0)::bigint AS "effectiveDurationMs"
+        ), 0)::text AS "effectiveDurationMs"
       FROM unique_events
       GROUP BY "userId"
-    `,
-    db.$queryRaw<SceneRow[]>`
-      WITH scoped AS (
-        SELECT e."id", e."userId", e."occurredAt", e."receivedAt",
-          COALESCE(e."metadata"->'legacy', e."metadata"->'view') AS payload
-        FROM "LearningEvent" e
-        WHERE e."classroomInstanceId" = ${instanceId}
-      )
+      ), scenes AS (
       SELECT DISTINCT ON ("userId", payload->>'sceneId')
         "userId" AS "studentId",
         payload->>'expectedDurationSec' AS "expectedDurationSec",
@@ -75,10 +69,12 @@ export async function loadAiLearningTiming(
         AND NULLIF(payload->>'sceneId', '') IS NOT NULL
         AND jsonb_typeof(payload->'expectedDurationSec') = 'number'
       ORDER BY "userId", payload->>'sceneId', "occurredAt" DESC, "receivedAt" DESC, "id" DESC
-    `,
-  ]);
+      )
+      SELECT COALESCE((SELECT jsonb_agg(to_jsonb(d)) FROM durations d), '[]'::jsonb) AS "durationRows",
+        COALESCE((SELECT jsonb_agg(to_jsonb(s)) FROM scenes s), '[]'::jsonb) AS "sceneRows"
+    `;
 
-  for (const row of durationRows) {
+  for (const row of aggregate.durationRows) {
     const target = timing[row.studentId];
     if (!target) continue;
     const duration = Number(row.effectiveDurationMs);
@@ -86,7 +82,7 @@ export async function loadAiLearningTiming(
     target.effectiveDurationMs = duration;
     target.hasEvidence = Number(row.eventCount) > 0;
   }
-  for (const row of sceneRows) {
+  for (const row of aggregate.sceneRows) {
     const target = timing[row.studentId];
     if (!target) continue;
     const expected = safeSeconds(row.expectedDurationSec);

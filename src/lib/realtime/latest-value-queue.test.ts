@@ -4,6 +4,19 @@ import { LatestValueQueue } from "./latest-value-queue";
 afterEach(() => vi.useRealTimers());
 
 describe("LatestValueQueue", () => {
+  it("does not resurrect retries after navigation disposes an in-flight queue", async () => {
+    vi.useFakeTimers();
+    let reject!: (error: Error) => void;
+    const send = vi.fn(() => new Promise<void>((_, fail) => { reject = fail; }));
+    const queue = new LatestValueQueue(send, 10, 10);
+    queue.enqueue("old-course", true);
+    await vi.advanceTimersByTimeAsync(0);
+    queue.dispose();
+    reject(new Error("offline"));
+    await vi.advanceTimersByTimeAsync(100);
+    await queue.whenIdle();
+    expect(send).toHaveBeenCalledOnce();
+  });
   it("coalesces rapid updates into the latest state", async () => {
     vi.useFakeTimers();
     const sent: number[] = [];

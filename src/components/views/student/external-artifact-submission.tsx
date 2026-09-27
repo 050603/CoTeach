@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { uploadMultipartWithReceipt } from '@/lib/browser/upload-request';
 import { CheckCircle2, Download, FileArchive, FileAudio2, FileImage, FileText, FileUp, FileVideo2, LoaderCircle, UploadCloud } from "lucide-react";
 import { Card, Pill } from "@/components/ui";
 import type { Course, ProjectPdfVersion } from "@/lib/session/types";
@@ -89,10 +90,8 @@ export function ExternalArtifactSubmission({ course, studentId }: { course: Cour
       const body = new FormData();
       body.set("file", file);
       body.set("title", file.name);
-      if (typeof crypto !== "undefined" && "randomUUID" in crypto) body.set("requestId", crypto.randomUUID());
-      const response = await fetch(`/api/courses/${encodeURIComponent(course.id)}/showcase/artifacts/pdf`, {
-        method: "POST",
-        body,
+      const response = await uploadMultipartWithReceipt(`local-artifact:${course.id}`, file, body, {
+        endpoint: `/api/courses/${encodeURIComponent(course.id)}/showcase/artifacts/pdf`, requestIdField: 'requestId', receiptShape: 'artifact',
       });
       const payload = await response.json().catch(() => ({})) as {
         message?: string;

@@ -71,3 +71,27 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: CoTeach TLS certificate expires within 48 hours
+      - alert: OpenPblLocalBackupStale
+        expr: time() - openpbl_local_backup_checkpoint_timestamp_seconds > 900
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: Local recovery checkpoint is older than the 15 minute target
+      - alert: OpenPblDatabaseLockBacklog
+        expr: openpbl_postgres_lock_waiters > 10
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: Classroom writes are waiting on database locks
+      - alert: OpenPblClassroomAiQueue
+        expr: openpbl_classroom_ai_pending > 20
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: Interactive classroom AI requests are queued
+      - alert: OpenPblAiAuditQuarantined
+        expr: openpbl_ai_audit_outbox_quarantined > 0
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: Invalid AI audit batches are retained in quarantine and need repair

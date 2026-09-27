@@ -4,6 +4,7 @@ import type { ActionEnvelope } from "./contracts";
 
 const mocks = vi.hoisted(() => {
   const tx = {
+    $queryRaw: vi.fn(),
     classroomInstance: {
       findUnique: vi.fn(),
       update: vi.fn(),
@@ -53,6 +54,7 @@ function projectionEnvelope(requestId = "018f47a2-89d4-7c12-a4f4-18f244f6ec0b"):
       type: "SET_UI_STATE",
       payload: {
         courseId: "course-1",
+        projectionControl: { clientId: "tab-1" },
         patch: {
           resourceProjection: {
             resourceId: "resource-1",
@@ -78,10 +80,11 @@ describe("projection course action", () => {
     mocks.canAccessLegacyCourse.mockResolvedValue(true);
     mocks.tx.domainEvent.findUnique.mockResolvedValue(null);
     mocks.tx.domainEvent.create.mockResolvedValue({});
-    mocks.tx.classroomInstance.findUnique.mockResolvedValue({
+    mocks.tx.$queryRaw.mockResolvedValue([{
       runtimeConfig: { version: 5, uiState: { projectionVersion: 7 } },
-      activity: { chapter: { offeringId: "offering-1" } },
-    });
+      offeringId: "offering-1", userStatus: "ACTIVE", userRole: "TEACHER",
+      sessionVersion: 1, isTeacher: true, receipt: null,
+    }]);
     mocks.tx.classroomInstance.update.mockResolvedValue({});
     mocks.publishCourseEvent.mockResolvedValue(undefined);
   });
@@ -89,6 +92,9 @@ describe("projection course action", () => {
   it("commits a monotonic snapshot before broadcasting it", async () => {
     const ack = await executeCourseAction("course-1", projectionEnvelope(), claims);
 
+    expect(mocks.canAccessLegacyCourse).not.toHaveBeenCalled();
+    expect(mocks.tx.$queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.lockProjectedCourse.mock.invocationCallOrder[0]).toBeLessThan(mocks.tx.$queryRaw.mock.invocationCallOrder[0]);
     expect(ack.courseVersion).toBe(6);
     expect(ack.projection).toMatchObject({
       projectionVersion: 8,
@@ -120,7 +126,8 @@ describe("projection course action", () => {
   it("returns an idempotent receipt without writing the projection twice", async () => {
     const first = await executeCourseAction("course-1", projectionEnvelope(), claims);
     const storedPayload = mocks.tx.domainEvent.create.mock.calls[0][0].data.payload;
-    mocks.tx.domainEvent.findUnique.mockResolvedValue({ payload: storedPayload });
+    const [scope] = await mocks.tx.$queryRaw();
+    scope.receipt = storedPayload;
 
     const second = await executeCourseAction("course-1", projectionEnvelope(), claims);
 
@@ -147,4 +154,57 @@ describe("projection course action", () => {
       .rejects.toMatchObject({ code: "FORBIDDEN_ACTION", status: 403 });
     expect(mocks.lockProjectedCourse).not.toHaveBeenCalled();
   });
+
+  it("requires explicit takeover for another teacher or browser tab", async () => {
+    const [instance] = await mocks.tx.$queryRaw();
+    instance.runtimeConfig.uiState.projectionController = { teacherId: "teacher-2", clientId: "tab-2" };
+    await expect(executeCourseAction("course-1", projectionEnvelope(), claims))
+      .rejects.toMatchObject({ code: "PROJECTION_CONTROL_CONFLICT", status: 409 });
+    expect(mocks.tx.classroomInstance.update).not.toHaveBeenCalled();
+    const envelope = projectionEnvelope();
+    if (envelope.action.type === "SET_UI_STATE") envelope.action.payload.projectionControl = { clientId: "tab-1", takeover: true };
+    await executeCourseAction("course-1", envelope, claims);
+    expect(mocks.tx.classroomInstance.update).toHaveBeenCalledWith(expect.objectContaining({ data: { runtimeConfig: expect.objectContaining({ uiState: expect.objectContaining({ projectionController: { teacherId: "teacher-1", clientId: "tab-1" } }) }) } }));
+  });
+
+  it("releases ownership when the controller stops projecting", async () => {
+    const [instance] = await mocks.tx.$queryRaw();
+    instance.runtimeConfig.uiState.projectionController = { teacherId: "teacher-1", clientId: "tab-1" };
+    const envelope = projectionEnvelope();
+    if (envelope.action.type === "SET_UI_STATE") envelope.action.payload.patch = { resourceProjection: null, teacherResourceProjection: null };
+    await executeCourseAction("course-1", envelope, claims);
+    expect(mocks.tx.classroomInstance.update).toHaveBeenCalledWith(expect.objectContaining({ data: { runtimeConfig: expect.objectContaining({ uiState: expect.objectContaining({ projectionController: null }) }) } }));
+  });
+
+  it("rejects forged control ownership and mixed projection patches", async () => {
+    const forged = projectionEnvelope();
+    if (forged.action.type === "SET_UI_STATE") forged.action.payload.patch.projectionController = { teacherId: "teacher-1", clientId: "tab-1" };
+    await expect(executeCourseAction("course-1", forged, claims)).rejects.toMatchObject({ code: "FORBIDDEN_ACTION" });
+    const mixed = projectionEnvelope();
+    if (mixed.action.type === "SET_UI_STATE") mixed.action.payload.patch.projectionVersion = 100;
+    await expect(executeCourseAction("course-1", mixed, claims)).rejects.toMatchObject({ code: "INVALID_PROJECTION_PATCH" });
+  });
+  it.each([
+    { userStatus: "DISABLED" }, { userRole: "STUDENT" },
+    { sessionVersion: 2 }, { isTeacher: false },
+  ])("rejects changed authorization before new writes and old receipt replay: %j", async change => {
+    const envelope = projectionEnvelope();
+    await executeCourseAction("course-1", envelope, claims);
+    const [scope] = await mocks.tx.$queryRaw();
+    Object.assign(scope, change, { receipt: mocks.tx.domainEvent.create.mock.calls[0][0].data.payload });
+    await expect(executeCourseAction("course-1", envelope, claims)).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    scope.receipt = null;
+    await expect(executeCourseAction("course-1", projectionEnvelope("new-request"), claims)).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    expect(mocks.tx.classroomInstance.update).toHaveBeenCalledTimes(1);
+    expect(mocks.tx.domainEvent.create).toHaveBeenCalledTimes(1);
+    expect(mocks.publishCourseEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("denies missing course or current actor without publishing a stored receipt", async () => {
+    mocks.tx.$queryRaw.mockResolvedValue([]);
+    await expect(executeCourseAction("foreign-course", projectionEnvelope(), claims)).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    expect(mocks.tx.classroomInstance.update).not.toHaveBeenCalled();
+    expect(mocks.publishCourseEvent).not.toHaveBeenCalled();
+  });
+
 });

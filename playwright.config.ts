@@ -11,6 +11,10 @@ if (acceptanceBrowser && !(acceptanceBrowser in browserDevice)) {
   throw new Error(`Unsupported PRELAUNCH_E2E_BROWSER: ${acceptanceBrowser}`);
 }
 const selectedBrowser = (acceptanceBrowser || "chromium") as keyof typeof browserDevice;
+const acceptanceExecutable = process.env.PRELAUNCH_E2E_EXECUTABLE_PATH;
+if (acceptanceExecutable && selectedBrowser !== "chromium") {
+  throw new Error("A branded Chrome/Edge executable requires PRELAUNCH_E2E_BROWSER=chromium");
+}
 
 if (existsSync(".env.local")) {
   process.loadEnvFile(".env.local");
@@ -51,8 +55,13 @@ export default defineConfig({
   },
   projects: [
     {
-      name: selectedBrowser,
-      use: { ...devices[browserDevice[selectedBrowser]] },
+      name: process.env.PRELAUNCH_E2E_BROWSER_LABEL || selectedBrowser,
+      use: {
+        ...devices[browserDevice[selectedBrowser]],
+        // Device presets include a frozen Chromium UA. A real branded binary
+        // must keep its own Chrome/Edge identity and version during acceptance.
+        ...(acceptanceExecutable ? { userAgent: undefined, launchOptions: { executablePath: acceptanceExecutable } } : {}),
+      },
     },
   ],
 });

@@ -63,12 +63,64 @@ function matches(row: CourseGenerationJob, where: JobWhere): boolean {
     return true;
   });
 }
-function sqlWhere(kind: JobKind, where: JobWhere): Prisma.GenerationJobWhereInput {
-  return { targetType: "CLASSROOM_TEMPLATE", jobType: kind,
-    ...(typeof where.id === "string" ? { id: where.id } : {}),
-    ...(typeof where.courseId === "string" ? { targetId: where.courseId } : {}),
-    ...(typeof where.status === "string" ? { status: where.status.toUpperCase() } : {}),
+/** SQL candidates are a superset of the projected predicate; matches remains authoritative.
+ * Never apply a database take before residual JSON/default-value predicates are checked.
+ */
+function candidateWhere(where: JobWhere): Prisma.GenerationJobWhereInput {
+  const fields: Record<string, { column: string; kind: "string" | "number" | "date"; nullable?: boolean }> = {
+    id: { column: "id", kind: "string" }, courseId: { column: "targetId", kind: "string" },
+    status: { column: "status", kind: "string" }, progress: { column: "progress", kind: "number" },
+    attempt: { column: "attempt", kind: "number" }, error: { column: "error", kind: "string", nullable: true },
+    startedAt: { column: "startedAt", kind: "date", nullable: true },
+    completedAt: { column: "completedAt", kind: "date", nullable: true },
+    lastHeartbeatAt: { column: "heartbeatAt", kind: "date", nullable: true },
+    retryAt: { column: "retryAt", kind: "date", nullable: true },
+    createdAt: { column: "createdAt", kind: "date" }, updatedAt: { column: "updatedAt", kind: "date" },
   };
+  const terms: Prisma.GenerationJobWhereInput[] = [];
+  for (const [key, filter] of Object.entries(where)) {
+    if (key === "OR" || key === "AND") {
+      const children = (filter as JobWhere[]).map(candidateWhere);
+      // Prisma's empty OR objects are not logical TRUE: explicitly retain the
+      // whole OR as residual if any branch has no safe SQL restriction.
+      if (key === "OR") {
+        if (!children.length) terms.push({ id: { in: [] } });
+        else if (children.every(child => Object.keys(child).length)) terms.push({ OR: children });
+      } else terms.push(...children.filter(child => Object.keys(child).length));
+      continue;
+    }
+    const field = fields[key];
+    if (!field) continue; // JSON projections and step's default remain residual.
+    const normalized = (value: string) => key === "status" ? value.toUpperCase() : value;
+    const condition = (value: unknown) => ({ [field.column]: value }) as Prisma.GenerationJobWhereInput;
+    if (filter === null) {
+      terms.push(field.nullable ? condition(null) : { id: { in: [] } });
+    } else if (filter instanceof Date) {
+      if (field.kind === "date" && Number.isFinite(filter.getTime())) terms.push(condition(filter));
+    } else if (typeof filter === "string" && field.kind === "string") {
+      terms.push(condition(normalized(filter)));
+    } else if (typeof filter === "number" && field.kind === "number" && Number.isFinite(filter)) {
+      terms.push(condition(filter));
+    } else if (filter && typeof filter === "object" && !Array.isArray(filter)) {
+      const native: Record<string, unknown> = {};
+      if (field.kind === "string" && filter.in) native.in = filter.in.map(normalized);
+      if (field.kind === "date") for (const operator of ["lt", "lte", "gt"] as const) {
+        const date = filter[operator];
+        if (date instanceof Date && Number.isFinite(date.getTime())) native[operator] = date;
+      }
+      if (Object.keys(native).length) terms.push(condition(native));
+      if (field.kind === "string" && typeof filter.not === "string"
+        && (key !== "status" || filter.not === filter.not.toLowerCase())) {
+        const different = condition({ not: normalized(filter.not) });
+        terms.push(field.nullable ? { OR: [condition(null), different] } : different);
+      }
+    }
+  }
+  if (!terms.length) return {};
+  return terms.length === 1 ? terms[0] : { AND: terms };
+}
+function sqlWhere(kind: JobKind, where: JobWhere): Prisma.GenerationJobWhereInput {
+  return { targetType: "CLASSROOM_TEMPLATE", jobType: kind, ...candidateWhere(where) };
 }
 function updateData(row: CourseGenerationJob, patch: Patch): Prisma.GenerationJobUpdateInput {
   const values = { ...row } as Record<string, unknown>;

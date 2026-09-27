@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   areDocumentCommentIssuesEquivalent,
+  assessProactiveDocumentComment,
   buildBatchProactiveDocumentCommentPrompts,
   buildProactiveDocumentCommentPrompts,
   documentParagraphVersionFingerprint,
@@ -24,6 +25,27 @@ const course = {
 } as never;
 
 describe('document comment collaboration policy', () => {
+  it('distinguishes an explicit no-comment decision from an evidence-filtered model proposal', () => {
+    expect(assessProactiveDocumentComment({ shouldComment: false, reason: '内容尚未形成结论' })).toMatchObject({
+      result: { shouldComment: false, comment: '' }, decision: { outcome: 'no-comment', modelShouldComment: false, reasonCodes: ['MODEL_NO_COMMENT'] },
+    });
+    const target = '改造前用电10度，改造后用电12度，所以节省2度电。';
+    const proposal = { shouldComment: true, severity: 'critical', needsInterventionNow: true, issueType: '数据矛盾',
+      quotedText: target, evidenceSource: 'document', evidenceQuote: target, impact: '这会导致错误评价项目的节能效果', comment: '可以先核对改造前后的数值，再计算节能量。' };
+    expect(assessProactiveDocumentComment(proposal, { targetText: target, documentText: target })).toMatchObject({
+      result: { shouldComment: false, comment: '' }, decision: { outcome: 'no-comment', modelShouldComment: true, reasonCodes: ['EVIDENCE_NOT_INDEPENDENT'] },
+    });
+    expect(assessProactiveDocumentComment({ ...proposal, quotedText: '所以节省2度电', evidenceQuote: '改造前用电10度，改造后用电12度' }, { targetText: target, documentText: target })).toMatchObject({
+      result: { shouldComment: true }, decision: { outcome: 'comment', modelShouldComment: true, reasonCodes: [] },
+    });
+  });
+  it('uses valid single-valued JSON examples while allowing a genuine no-comment outcome', () => {
+    const prompts = buildProactiveDocumentCommentPrompts({ course, studentId: 'student', stageKey: 'make', documentText: '文档', targetText: '段落' });
+    expect(prompts.system).toContain('"shouldComment":false');
+    expect(prompts.system).not.toContain('true|false');
+    expect(prompts.system).not.toContain('critical|improvement|style');
+    expect(prompts.system).toContain('不得为了生成批注而虚构问题');
+  });
   it('uses content rather than transient Plate IDs to identify a reviewed paragraph version', () => {
     expect(documentParagraphVersionFingerprint('  我们选择这个方案。\n因为成本更低。  '))
       .toBe(documentParagraphVersionFingerprint('我们选择这个方案。 因为成本更低。'));

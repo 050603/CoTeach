@@ -31,6 +31,7 @@ import type {
 } from "../session/types";
 import { DEFAULT_EVALUATION_FLOWS } from "../session/types";
 import { getActiveAiSettings } from "./settings";
+import { withClassroomAiCapacity } from "./classroom-capacity";
 import { proxyFetch } from "@openmaic/lib/server/proxy-fetch";
 import { validatePblKnowledgeAlignment } from "@/lib/pbl-outline-validation";
 import {
@@ -138,12 +139,12 @@ export async function callLLM(
   messages: ChatMessage[],
   opts: LlmCallOptions = {},
 ): Promise<string> {
-  return callChatCompletions(messages, {
+  return withClassroomAiCapacity(() => callChatCompletions(messages, {
     jsonMode: opts.jsonMode ?? false,
     abortSignal: opts.abortSignal,
     requestClass: opts.requestClass ?? "standard",
     maxTransientRetries: opts.maxTransientRetries ?? 0,
-  });
+  }), opts.abortSignal);
 }
 
 /**

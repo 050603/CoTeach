@@ -8,7 +8,7 @@
  * error. By serving it as a static asset and importing it via a runtime URL,
  * we bypass the bundler entirely while keeping types via the workspace package.
  */
-import { cp, mkdir, rm, stat } from 'node:fs/promises';
+import { cp, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,6 +32,16 @@ try {
 await rm(destDir, { recursive: true, force: true });
 await mkdir(destDir, { recursive: true });
 await cp(srcDir, destDir, { recursive: true });
+
+// Configure only the hosted browser entry. The published package and its Node
+// entry retain their defaults; embedded EMF/PDF images need no external CDN.
+await rename(path.join(destDir, 'index.js'), path.join(destDir, 'index.runtime.js'));
+await writeFile(path.join(destDir, 'index.js'), [
+  "import { configurePdfWorker } from './index.runtime.js';",
+  "configurePdfWorker(new URL('../pdfjs/pdf.worker.legacy.min.mjs', import.meta.url).href);",
+  "export * from './index.runtime.js';",
+  '',
+].join('\n'));
 
 await rm(pdfJsDestDir, { recursive: true, force: true });
 await mkdir(pdfJsDestDir, { recursive: true });

@@ -29,8 +29,16 @@ import { isAllowedBrowserOrigin } from "@/lib/network/request-origin";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
 
 type SessionMeta = { userId: string; role: AuthRole; roomKey: string };
+// sync-core's runtime throttle is marked internal and omitted from its .d.ts.
+// Keep the workaround bounded to this installed storage implementation.
+function cancelStorageCleanup(storage: SQLiteSyncStorage<TLRecord>) {
+  const internal = storage as unknown as { pruneTombstones?: { cancel(): void } };
+  internal.pruneTombstones?.cancel();
+}
+
 type RoomEntry = {
   database: DatabaseSync;
+  storage: SQLiteSyncStorage<TLRecord>;
   room: TLSocketRoom<TLRecord, SessionMeta>;
   closeTimer?: NodeJS.Timeout;
 };
@@ -181,6 +189,7 @@ function getRoom(roomKey: string): RoomEntry {
   });
   const entry: RoomEntry = {
     database,
+    storage,
     room: new TLSocketRoom<TLRecord, SessionMeta>({
       schema: createTLSchema(),
       storage,
@@ -193,6 +202,9 @@ function getRoom(roomKey: string): RoomEntry {
         current.closeTimer = setTimeout(() => {
           if (room.getNumActiveSessions() !== 0) return;
           room.close();
+          // The storage schedules tombstone pruning after deletions. A closed
+          // room does not cancel that timer, so stop it before SQLite closes.
+          cancelStorageCleanup(current.storage);
           current.database.close();
           rooms.delete(roomKey);
         }, 5 * 60_000);
@@ -252,6 +264,7 @@ export async function closeTldrawSyncServer(): Promise<void> {
   for (const entry of rooms.values()) {
     if (entry.closeTimer) clearTimeout(entry.closeTimer);
     entry.room.close();
+    cancelStorageCleanup(entry.storage);
     entry.database.close();
   }
   rooms.clear();

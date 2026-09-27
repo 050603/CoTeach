@@ -1,0 +1,11 @@
+[Unit]
+Description=Check CoTeach local recovery health every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=1s
+Unit=openpbl-local-backup-health.service
+
+[Install]
+WantedBy=timers.target

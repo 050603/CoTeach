@@ -36,7 +36,7 @@
 
 ## 缓存、证据与复现
 
-[机器可读报告](2026-09-14-teaching-stage-first-pass.json) 包含逐页与逐段文本、预测和实际时长、总量误差、精确校准身份、运行源码指纹与冻结脚本指纹。原始模型请求/响应、动作、准备大纲、固定 DSL 和音频保存在 `.openpbl-runtime/teaching-stage-first-pass/`。
+机器可读报告（本机证据：`2026-09-14-teaching-stage-first-pass.json`）包含逐页与逐段文本、预测和实际时长、总量误差、精确校准身份、运行源码指纹与冻结脚本指纹。原始模型请求/响应、动作、准备大纲、固定 DSL 和音频保存在 `.openpbl-runtime/teaching-stage-first-pass/`。
 
 通过 `AudioContext.decodeAudioData` 读取真实音频长度，未采用模型自报时长。模型请求成功后立即缓存原响应，音频按配置、适配器指纹与文本缓存；质量问题不触发重跑，网络故障最多重试两次。恢复使用首次冻结的 ESM 运行包，输入或源码身份变化时明确失败，避免悄然混入另一套算法。
 

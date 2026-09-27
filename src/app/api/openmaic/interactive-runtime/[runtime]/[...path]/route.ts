@@ -20,6 +20,8 @@ const CODEMIRROR_ROOT = path.join(process.cwd(), 'node_modules', 'codemirror');
 const KATEX_ROOT = path.join(process.cwd(), 'node_modules', 'katex', 'dist');
 const MONACO_ROOT = path.join(process.cwd(), 'node_modules', 'monaco-editor', 'min', 'vs');
 const PYODIDE_ROOT = path.join(process.cwd(), 'node_modules', 'pyodide');
+const THREE_VERSION = '0.160.0';
+const THREE_ROOT = path.join(process.cwd(), 'node_modules', 'three');
 let pyodidePackageFilesPromise: Promise<Set<string>> | null = null;
 
 const MIME_TYPES: Record<string, string> = {
@@ -126,6 +128,15 @@ export async function GET(
       bytes = await readLocalAsset(KATEX_ROOT, pathParts);
     } else if (runtimeName === 'monaco') {
       bytes = await readLocalAsset(MONACO_ROOT, pathParts);
+    } else if (runtimeName === 'three') {
+      const [version, ...assetParts] = pathParts;
+      const assetPath = assetParts.join('/');
+      // Serve only executable browser assets from the pinned package. Never
+      // expose package metadata, server entry points, or arbitrary CDN fetches.
+      const allowed = /^build\/three(?:\.module)?(?:\.min)?\.js$/.test(assetPath)
+        || /^examples\/jsm\/.+\.js$/.test(assetPath);
+      if (version !== THREE_VERSION || !allowed) return new Response('Unknown Three.js runtime asset', { status: 404 });
+      bytes = await readLocalAsset(THREE_ROOT, assetParts);
     } else if (runtimeName === 'pyodide') {
       bytes = await readLocalAsset(PYODIDE_ROOT, pathParts);
       bytes ??= await fetchAndCachePyodideAsset(pathParts);

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
+import { publishCourseEvent } from "@/lib/realtime/event-bus";
 import {
   appendCompanionMessagesWithinTransaction,
   ensureCompanionThreadWithinTransaction,
@@ -95,6 +96,22 @@ export async function getDocumentRequest(input: DocumentRequestIdentity): Promis
   if (saved.stageKey !== input.stageKey || saved.workspaceKind !== input.workspaceKind) return null;
   if (input.conversationId && saved.conversationId !== input.conversationId) return null;
   return projectTask(task);
+}
+
+/** A rejected worker lease is not evidence that the durable task was cancelled. */
+export async function readDocumentRequestReceipt(input: DocumentRequestIdentity): Promise<{
+  status: number; body: Record<string, unknown>;
+}> {
+  const state = await getDocumentRequest(input);
+  if (!state) return { status: 503, body: { requestId: input.requestId, status: "failed", error: "REQUEST_STATE_UNAVAILABLE", retryable: true } };
+  if (state.status === "completed") {
+    return state.response ? { status: 200, body: state.response }
+      : { status: 503, body: { requestId: input.requestId, status: "failed", error: "REQUEST_RECEIPT_MISSING", retryable: true } };
+  }
+  const body = { requestId: input.requestId, status: state.status, documentVersion: state.documentVersion };
+  if (state.status === "cancelled") return { status: 409, body };
+  if (state.status === "processing") return { status: 202, body: { ...body, retryAfterMs: 1_000 } };
+  return { status: 503, body: { ...body, error: state.error ?? "AI_COLLABORATION_FAILED", retryable: true } };
 }
 
 export async function listDocumentRequests(input: Omit<DocumentRequestIdentity, "requestId">): Promise<DocumentRequestState[]> {
@@ -194,8 +211,10 @@ export async function completeDocumentRequest(input: DocumentRequestInput & {
   token: string;
   messages: CompanionMessage[];
   response: Record<string, unknown>;
+  auditEvents?: Array<{ idempotencyKey: string; eventType: string; actor: "system" | "assistant";
+    content: string; payload: Record<string, unknown> }>;
 }): Promise<boolean> {
-  return runMutationTransaction(async (tx) => {
+  const committed = await runMutationTransaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "ClassroomParticipation" WHERE id = ${input.participationId} FOR UPDATE`;
     const id = taskId(input.participationId, input.requestId);
     const task = await tx.aiTask.findUnique({ where: { id } });
@@ -206,6 +225,17 @@ export async function completeDocumentRequest(input: DocumentRequestInput & {
       stageKey: input.threadStageKey,
       messages: input.messages,
     });
+    if (input.auditEvents?.length) {
+      const participation = await tx.classroomParticipation.findUniqueOrThrow({ where: { id: input.participationId },
+        select: { instanceId: true, enrollment: { select: { userId: true, offeringId: true, researchKey: true } } } });
+      if (participation.instanceId !== input.courseId || participation.enrollment.userId !== input.studentId) throw new Error("REVIEW_EVENT_SCOPE_MISMATCH");
+      await tx.aiInteractionEvent.createMany({ data: input.auditEvents.map(event => ({
+        ...event, payload: JSON.parse(JSON.stringify(event.payload)) as Prisma.InputJsonValue,
+        userId: input.studentId, participationId: input.participationId, offeringId: participation.enrollment.offeringId,
+        researchKey: participation.enrollment.researchKey, taskId: id, conversationId: task.conversationId,
+        requestId: input.requestId,
+      })) });
+    }
     await tx.aiTask.update({
       where: { id },
       data: {
@@ -216,6 +246,14 @@ export async function completeDocumentRequest(input: DocumentRequestInput & {
     });
     return true;
   });
+  if (committed && input.auditEvents?.length) {
+    try {
+      await publishCourseEvent(input.courseId, { type: "companion-message", courseId: input.courseId,
+        at: new Date().toISOString(), payload: { source: "ai-interaction-event", scope: "student",
+          studentId: input.studentId, stageKey: input.stageKey, requestId: input.requestId } });
+    } catch { console.error("[document-ai] review saved; realtime notification failed"); }
+  }
+  return committed;
 }
 
 export async function failDocumentRequest(input: DocumentRequestIdentity & { token: string; error: string }): Promise<boolean> {

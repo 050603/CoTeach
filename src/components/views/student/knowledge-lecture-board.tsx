@@ -43,7 +43,9 @@ async function fetchTutor(body: Record<string, unknown>): Promise<Response> {
       await new Promise(resolve => setTimeout(resolve, 1500));
       continue;
     }
-    if ((response.ok && response.status !== 202) || response.status === 409) {
+    const terminalFailure = response.status === 503
+      && ["TUTOR_REQUEST_FAILED", "TUTOR_REQUEST_CANCELLED"].includes((await response.clone().json().catch(() => ({}))).error);
+    if ((response.ok && response.status !== 202) || response.status === 409 || terminalFailure) {
       try { sessionStorage.removeItem(key); } catch { /* no persistent cache */ }
     }
     return response;

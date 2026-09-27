@@ -36,6 +36,11 @@ const pdfjs = pdfjsLib as unknown as PdfjsLib;
 const PDFJS_CDN_VERSION = pdfjs.version || '4.8.69';
 pdfjs.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_CDN_VERSION}/legacy/build/pdf.worker.min.mjs`;
 
+/** Configure a deployment's matching PDF.js worker without changing package defaults. */
+export function configurePdfWorker(workerSrc: string): void {
+  pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+}
+
 type UtifPage = {
   width: number;
   height: number;

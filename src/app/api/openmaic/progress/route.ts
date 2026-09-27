@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // AI 课堂学习进度端点
 // GET  读取 course.aiLearningProgress
 // POST 更新某学生在 AI 课堂中的学习进度
@@ -10,10 +11,11 @@ import {
   API_ERROR_CODES,
 } from '@openmaic/lib/server/api-response';
 import { createLogger } from '@openmaic/lib/logger';
-import { getCourse } from '@/lib/session/server-store';
+import { loadAiProgressContext } from '@/lib/courses/ai-progress-context';
 import type { StudentAiProgress } from '@/lib/session/types';
 import { persistStudentAiProgress } from '@/lib/courses/ai-progress-service';
 import { readClassroom } from '@openmaic/lib/server/classroom-storage';
+import { selectStudentLearningScenes } from '@openmaic/lib/pbl/scene-routing';
 import { normalizeProgressUpdate } from '@openmaic/lib/progress/normalize-progress';
 import {
   AI_PROGRESS_COMPLETION_MODEL_VERSION,
@@ -32,6 +34,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 type ProgressRequestBody = {
+  requestId?: string;
+  quizScore?: unknown;
   courseId?: string;
   studentId?: string;
   studentName?: string;
@@ -76,11 +80,6 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const course = await getCourse(courseId);
-    if (!course) {
-      return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Course not found');
-    }
-
     if (
       auth
       && !('response' in auth)
@@ -91,6 +90,11 @@ export async function GET(request: NextRequest) {
     }
     if (auth && !('response' in auth) && !(await canAccessLegacyCourse(auth.claims, courseId, 'read'))) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Course is not accessible');
+    }
+
+    const course = await loadAiProgressContext(courseId, studentId ?? undefined);
+    if (!course) {
+      return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Course not found');
     }
 
     const progress = course.aiLearningProgress ?? {};
@@ -156,7 +160,7 @@ export async function POST(request: NextRequest) {
     ) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Progress updates require the matching student identity');
     }
-    if (auth && !('response' in auth) && !(await canAccessLegacyCourse(auth.claims, courseId, 'write'))) {
+    if (auth && !('response' in auth) && !(await canAccessLegacyCourse(auth.claims, courseId, 'read'))) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'Course is locked');
     }
     if (!classroomId || typeof classroomId !== 'string') {
@@ -174,7 +178,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const course = await getCourse(courseId);
+    if (body.requestId !== undefined && (typeof body.requestId !== 'string' || !/^[A-Za-z0-9:_-]{1,160}$/.test(body.requestId))) {
+      return apiError(API_ERROR_CODES.INVALID_REQUEST, 400, 'Invalid progress requestId');
+    }
+    // Fixed field order hashes the original accepted body, not mutable merged state or server time.
+    const fingerprint = createHash('sha256').update(JSON.stringify({ courseId, studentId, classroomId,
+      currentSceneIndex, totalScenes, completedScenes, completionModelVersion: body.completionModelVersion,
+      studentName, quizScore: body.quizScore })).digest('hex');
+    const requestId = body.requestId ?? `legacy-${fingerprint}`;
+    const course = await loadAiProgressContext(courseId, studentId ?? undefined);
     if (!course) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Course not found');
     }
@@ -193,11 +205,13 @@ export async function POST(request: NextRequest) {
     if (!classroom || classroom.scenes.length === 0) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Classroom scenes not found');
     }
+    const learningScenes = selectStudentLearningScenes(classroom.scenes);
+    if (!learningScenes.length) return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Student learning scenes not found');
     const storedProgress = course.aiLearningProgress?.[studentId];
     const currentProgress = storedProgress?.classroomId === classroomId ? storedProgress : undefined;
 
     const normalized = normalizeProgressUpdate({
-      validSceneIds: classroom.scenes.map((scene) => scene.id),
+      validSceneIds: learningScenes.map((scene) => scene.id),
       requestedCurrentSceneIndex: currentSceneIndex,
       requestedCompletedScenes: Array.isArray(completedScenes) ? completedScenes : [],
       previousCompletedScenes: isReliableAiProgress(currentProgress)
@@ -211,7 +225,7 @@ export async function POST(request: NextRequest) {
     );
     const completedRuntimeIds = new Set(normalized.completedScenes);
     const completedOutlineIds = Array.from(new Set(
-      classroom.scenes
+      learningScenes
         .filter((scene) => completedRuntimeIds.has(scene.id))
         .map((scene) => scene.outlineId?.trim() || scene.id),
     ));
@@ -237,12 +251,17 @@ export async function POST(request: NextRequest) {
       courseId,
       studentId,
       updatedEntry,
-      Math.round(
-        (normalized.completedScenes.length / Math.max(1, normalized.totalScenes)) * 100,
-      ),
+      learningScenes,
+      { requestId, fingerprint, sessionVersion: auth && !('response' in auth) ? auth.claims.sv : undefined },
     );
 
-    return apiSuccess({ data: { progress: savedProgress } });
+    return apiSuccess({ data: { progress: {
+      classroomId: savedProgress.classroomId, studentId: savedProgress.studentId,
+      currentSceneIndex: savedProgress.currentSceneIndex, totalScenes: savedProgress.totalScenes,
+      completedScenes: savedProgress.completedScenes, completedOutlineIds: savedProgress.completedOutlineIds,
+      completionModelVersion: savedProgress.completionModelVersion, masteryLevel: savedProgress.masteryLevel,
+      lastActiveAt: savedProgress.lastActiveAt,
+    } } });
   } catch (error) {
     if (error instanceof PlatformError) return apiError(API_ERROR_CODES.INVALID_REQUEST, error.status, error.message);
     log.error('Progress update failed:', error);

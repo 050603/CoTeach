@@ -1,0 +1,9 @@
+[Unit]
+Description=CoTeach local backup freshness and service health monitor
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/lkj/OpenPBL/openPBL
+ExecStart=/usr/bin/python3 /home/lkj/OpenPBL/openPBL/deploy/backup/local-backup.py monitor
+TimeoutStartSec=45s
+UMask=0077

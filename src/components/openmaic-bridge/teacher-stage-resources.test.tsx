@@ -1,23 +1,21 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import type { Course } from "@/lib/session/types";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Course, TeacherResourceScene } from "@/lib/session/types";
 import { DEFAULT_STAGES } from "@/lib/session/types";
 
-vi.mock("@/lib/session/store", () => ({
-  useSession: () => ({
-    addActivity: vi.fn(),
-    refresh: vi.fn(),
-    setUiState: vi.fn(),
-  }),
+const mocks = vi.hoisted(() => ({
+  setUiState: vi.fn(), resources: [] as TeacherResourceScene[],
+  playerProps: undefined as undefined | { onPlaybackStateChange?: (state: unknown) => void; experience: string },
 }));
-
+vi.mock("@/lib/session/store", () => ({
+  useSession: () => ({ addActivity: vi.fn(), refresh: vi.fn(), setUiState: mocks.setUiState }),
+}));
 vi.mock("@/lib/openmaic-bridge/teacher-resources", () => ({
-  getTeacherResourcesForStage: () => [],
+  getTeacherResourcesForStage: () => mocks.resources,
   teacherResourceTypeLabel: () => "演示",
 }));
-
 vi.mock("./openmaic-resource-player", () => ({
-  OpenMaicResourcePlayer: () => <div>资源播放器</div>,
+  OpenMaicResourcePlayer: (props: typeof mocks.playerProps) => { mocks.playerProps = props; return <div>资源播放器</div>; },
 }));
 
 vi.mock("@openmaic/lib/store/interaction-sync", () => ({
@@ -44,6 +42,22 @@ const course: Course = {
 };
 
 describe("TeacherStageResources", () => {
+  beforeEach(() => { mocks.resources = []; mocks.setUiState.mockClear(); mocks.playerProps = undefined; });
+
+  it("observes another teacher without writing local empty interaction or idle playback, and offers explicit takeover", () => {
+    mocks.resources = [{ id: "interactive-1", type: "interactive", role: "teaching-aid", title: "互动", description: "", keyPoints: [] }];
+    const projection = { classroomId: "room-1", sceneId: "interactive-1", stageKey: "launch", title: "互动", sceneType: "interactive" as const, startedAt: "now", interactionState: { value: "teacher-a" } };
+    const projected = { ...course, teacherClassroomId: "room-1", uiState: { teacherResourceProjection: projection, projectionController: { teacherId: "teacher-a", clientId: "other-tab" } } };
+    const view = render(<TeacherStageResources course={projected} stageKey="launch" />);
+    expect(mocks.setUiState).not.toHaveBeenCalled();
+    expect(mocks.playerProps?.experience).toBe("projected-readonly");
+    mocks.playerProps?.onPlaybackStateChange?.({ engineMode: "idle", snapshot: { sceneIndex: 0, actionIndex: 0, consumedDiscussions: [] } });
+    view.rerender(<TeacherStageResources course={{ ...projected, uiState: { ...projected.uiState, teacherResourceProjection: { ...projection, interactionState: { value: "new" } } } }} stageKey="launch" />);
+    expect(mocks.setUiState).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: /停止投屏/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "接管并投屏" }));
+    expect(mocks.setUiState).toHaveBeenCalledWith("course-1", expect.objectContaining({ teacherResourceProjection: expect.objectContaining({ sceneId: "interactive-1" }) }), { takeover: true });
+  });
   it("collapses and expands the whole stage resource area", () => {
     render(<TeacherStageResources course={course} stageKey="launch" />);
 

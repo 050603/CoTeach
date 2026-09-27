@@ -70,35 +70,56 @@ export function projectStoredCourseResource(resource: StoredCourseResource): Non
   } as NonNullable<Course["resources"]>[number];
 }
 const selectInstance = { templateVersion: true, activity: { include: { chapter: { include: { offering: { include: { teachers: true, invitations: { where: { status: "ACTIVE" }, take: 1 } } } } } } }, participations: { include: { enrollment: { include: { user: true } } } } } satisfies Prisma.ClassroomInstanceInclude;
+const selectReadInstance = {
+  templateVersion: { select: { snapshot: true, templateId: true } },
+  activity: { include: { chapter: { include: { offering: { select: { invitations: { where: { status: "ACTIVE" }, take: 1 } } } } } } },
+  participations: { include: { enrollment: { select: { userId: true, joinedAt: true, user: { select: { id: true, displayName: true } } } } } },
+} satisfies Prisma.ClassroomInstanceInclude;
+
+/** Only opt in on authenticated read paths; mutation snapshots must remain complete. */
+export type CourseReadScope = { studentId: string };
 
 /** Old UI Course is a read projection, never a stored aggregate or a legacy table. */
-export async function loadInstanceCourse(id: string, db: Prisma.TransactionClient = prisma): Promise<Course | undefined> {
-  const instance = await db.classroomInstance.findUnique({ where: { id }, include: selectInstance });
+export async function loadInstanceCourse(id: string, db: Prisma.TransactionClient = prisma, readScope?: CourseReadScope): Promise<Course | undefined> {
+  const instance = await db.classroomInstance.findUnique({ where: { id }, include: selectReadInstance });
   if (!instance) return undefined;
   const offeringId = instance.activity.chapter.offeringId;
   const participationIds = instance.participations.map(p => p.id);
   const groupViewId = (groupId: string) => projectGroupViewId(offeringId, groupId);
+  const studentId = readScope?.studentId;
+  const ownParticipationIds = studentId ? instance.participations.filter(p => p.enrollment.userId === studentId).map(p => p.id) : participationIds;
+  const groups = await db.projectGroup.findMany({ where: { offeringId }, include: { members: { where: { leftAt: null }, include: { user: { select: { displayName: true } } } }, board: true, workPlanItems: { where: { activityId: instance.activityId } } } });
+  const studentGroupIds = groups.filter(group => group.members.some(member => member.userId === studentId)).map(group => groupViewId(group.id));
+  // Some submission-backed collections are classroom-visible under the existing
+  // claims scope. Keep those, as well as the student's own and group records.
+  const submissionScope: Prisma.ClassroomSubmissionWhereInput = studentId ? { OR: [
+    { participationId: { in: ownParticipationIds } },
+    { payload: { path: ["view", "studentId"], equals: studentId } },
+    ...studentGroupIds.map(groupId => ({ payload: { path: ["view", "groupId"], equals: groupId } })),
+    { payload: { path: ["collection"], equals: "learningEvidence" } },
+    { payload: { path: ["collection"], equals: "artifactSnapshots" } },
+  ] } : {};
   const runtime = object(instance.runtimeConfig);
   const base = createPblTemplateCourse(id, decodePblTemplate(instance.templateVersion.snapshot) ?? { name: instance.activity.title }, { createdAt: instance.createdAt.toISOString(), updatedAt: instance.updatedAt.toISOString() });
-  const [submissions, reflections, evaluations, supports, interventions, groups, announcements, todos, resources, signals, directives, events, workspaces, companions, aiLearningTimingByStudent, enrolledCount] = await Promise.all([
-    db.classroomSubmission.findMany({ where: { participationId: { in: participationIds } } }),
-    db.reflection.findMany({ where: { participationId: { in: participationIds } } }),
+  const [submissions, reflections, evaluations, supports, interventions, announcements, todos, resources, signals, directives, events, workspaces, companions, aiLearningTimingByStudent, enrolledCount, showcase, documentVersions, experimentAssignments, experimentDrafts, experimentPosttests] = await Promise.all([
+    db.classroomSubmission.findMany({ where: { participationId: { in: participationIds }, ...submissionScope } }),
+    db.reflection.findMany({ where: { participationId: { in: ownParticipationIds } } }),
     db.evaluation.findMany({ where: { participationId: { in: participationIds } } }),
-    db.aiSupportRecord.findMany({ where: { offeringId, OR: [{ participationId: { in: participationIds } }, { structuredPayload: { path: ["instanceId"], equals: id } }] } }),
+    db.aiSupportRecord.findMany({ where: { offeringId, OR: [{ participationId: { in: participationIds } }, { structuredPayload: { path: ["instanceId"], equals: id } }],
+      ...(studentId ? { AND: [{ OR: ["aiAssessmentSuggestions", "aiSupports", "aiContributions", "studentAiDecisions"].map(collection => ({ structuredPayload: { path: ["collection"], equals: collection } })) }] } : {}) } }),
     db.intervention.findMany({ where: { offeringId, metadata: { path: ["instanceId"], equals: id } } }),
-    db.projectGroup.findMany({ where: { offeringId }, include: { members: { where: { leftAt: null }, include: { user: true } }, board: true, workPlanItems: { where: { activityId: instance.activityId } } } }),
     db.announcement.findMany({ where: { classroomInstanceId: id, archivedAt: null }, include: { replies: true, createdBy: { select: { displayName: true } } } }),
     db.todo.findMany({ where: { offeringId, activityId: instance.activityId, status: "ACTIVE" }, include: { completions: true } }),
     db.resource.findMany({ where: { offeringId, OR: [{ activityId: instance.activityId }, { activityId: null }] }, include: { fileAsset: true } }),
-    db.learningSignal.findMany({ where: { participationId: { in: participationIds } } }),
+    db.learningSignal.findMany({ where: { participationId: { in: ownParticipationIds } } }),
     db.teacherAgentDirective.findMany({ where: { offeringId, OR: [{ participationId: { in: participationIds } }, { payload: { path: ["instanceId"], equals: id } }] } }),
-    db.learningEvent.findMany({ where: { classroomInstanceId: id }, orderBy: { receivedAt: "desc" }, take: 10000 }),
-    db.studentProjectWorkspace.findMany({ where: { participationId: { in: participationIds } } }),
-    loadCompanionState(id, db),
-    loadAiLearningTiming(id, instance.participations.map(p => p.enrollment.userId), db),
+    db.learningEvent.findMany({ where: { classroomInstanceId: id, ...(studentId ? { userId: studentId } : {}) }, orderBy: { receivedAt: "desc" }, take: 10000 }),
+    db.studentProjectWorkspace.findMany({ where: { participationId: { in: ownParticipationIds } } }),
+    loadCompanionState(id, db, studentId),
+    loadAiLearningTiming(id, instance.participations.filter(p => !studentId || p.enrollment.userId === studentId).map(p => p.enrollment.userId), db),
     db.enrollment.count({ where: { offeringId, status: { in: ["ACTIVE", "active", "COMPLETED", "completed"] } } }),
-  ]);
-  const [experimentAssignments, experimentDrafts, experimentPosttests] = await Promise.all([
+    loadShowcaseState(id, db, studentId),
+    listProjectDocumentVersions({ courseId: id, ...(studentId ? { studentId } : {}) }, db),
     db.experimentAssessmentAssignment.findMany({ where: { instanceId: id }, select: { enrollmentId: true } }),
     db.experimentAssessmentDraft.findMany({ where: { assignment: { instanceId: id }, phase: "posttest" }, select: { assignment: { select: { enrollmentId: true } } } }),
     db.experimentAssessmentSubmission.findMany({ where: { instanceId: id, phase: "posttest" }, select: { enrollmentId: true } }),
@@ -118,10 +139,10 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
     return asset ? [{ ...upload, fileName: asset.originalName, fileType: asset.mimeType, size: String(asset.size), url: `/api/uploads/${asset.id}` }] : [];
   });
   return {
-    ...base, ...companions, ...await loadShowcaseState(id, db),
+    ...base, ...companions, ...showcase,
     uploads,
-    projectDocumentVersions: await listProjectDocumentVersions({ courseId: id }, db),
-    activityLog: (await db.domainEvent.findMany({ where: { classroomInstanceId: id, eventType: "CLASSROOM_ACTIVITY" }, orderBy: { createdAt: "desc" }, take: 300 })).map(e => view<NonNullable<Course["activityLog"]>[number]>(e.payload)),
+    projectDocumentVersions: documentVersions,
+    activityLog: studentId ? [] : (await db.domainEvent.findMany({ where: { classroomInstanceId: id, eventType: "CLASSROOM_ACTIVITY" }, orderBy: { createdAt: "desc" }, take: 300 })).map(e => view<NonNullable<Course["activityLog"]>[number]>(e.payload)),
     platformContext: { offeringId, activityId: instance.activityId, templateId: instance.templateVersion.templateId, templateVersionId: instance.templateVersionId },
     classroomPopulation: { enrolledCount, enteredCount: instance.participations.length },
     aiLearningTimingByStudent,
@@ -166,7 +187,7 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
       ...resources.map(projectStoredCourseResource),
     ] as Course["resources"],
     teamContributions: collection(submissions.map(s => ({ metadata: s.payload })), "teamContributions"),
-    classCommonIssues: aggregateCommonIssues(signals.map(s => view<LearningSignal>(s.payload)).filter(Boolean), instance.participations.length),
+    classCommonIssues: studentId ? [] : aggregateCommonIssues(signals.map(s => view<LearningSignal>(s.payload)).filter(Boolean), instance.participations.length),
     resolvedInterventionSignalIds: runtime.resolvedInterventionSignalIds as string[] ?? [],
     learningSignals: signals.map(s => view<LearningSignal>(s.payload)).filter(Boolean),
     teacherAgentDirectives: directives.map(d => view<TeacherAgentDirective>(d.payload)).filter(Boolean),
@@ -176,6 +197,9 @@ export async function loadInstanceCourse(id: string, db: Prisma.TransactionClien
 
 /** Persist changed domain entities in their V2 tables; never replace unrelated participants. */
 export async function persistInstanceCourse(db: Prisma.TransactionClient, before: Course, after: Course, actor?: { id: string; role: string }) {
+  if (before.currentStageIndex !== after.currentStageIndex || before.status !== after.status) {
+    after = { ...after, uiState: { ...after.uiState, resourceProjection: null, teacherResourceProjection: null, projectionController: null } };
+  }
   const instance = await db.classroomInstance.findUniqueOrThrow({ where: { id: before.id }, include: selectInstance });
   const offeringId = instance.activity.chapter.offeringId;
   // Recheck after the transaction lock: a student request may have waited behind classroom closure.

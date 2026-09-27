@@ -8,6 +8,25 @@ function request(runtime: string, path: string[]) {
 }
 
 describe('interactive runtime assets', () => {
+  it('serves pinned Three.js and addon dependencies to opaque-origin sandbox frames', async () => {
+    for (const file of ['build/three.module.js', 'examples/jsm/controls/OrbitControls.js', 'examples/jsm/renderers/SVGRenderer.js', 'examples/jsm/renderers/Projector.js']) {
+      const response = await request('three', ['0.160.0', ...file.split('/')]);
+      expect(response.status, file).toBe(200);
+      expect(response.headers.get('content-type')).toContain('text/javascript');
+      expect(response.headers.get('access-control-allow-origin')).toBe('*');
+      expect(response.headers.get('cross-origin-resource-policy')).toBe('cross-origin');
+      expect(response.headers.get('cache-control')).toContain('immutable');
+      expect((await response.text()).length).toBeGreaterThan(1_000);
+    }
+  });
+
+  it('rejects unsupported Three.js versions and non-browser assets', async () => {
+    expect((await request('three', ['0.161.0', 'build', 'three.module.js'])).status).toBe(404);
+    expect((await request('three', ['0.160.0', 'package.json'])).status).toBe(404);
+    expect((await request('three', ['0.160.0', 'build', 'three.cjs'])).status).toBe(404);
+    expect((await request('three', ['0.160.0', '..', 'package.json'])).status).toBe(400);
+  });
+
   it('serves the real same-origin CodeMirror runtime with immutable caching', async () => {
     const response = await request('codemirror', ['lib', 'codemirror.js']);
 

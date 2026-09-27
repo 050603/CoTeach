@@ -13,7 +13,11 @@ import {
   type DocumentCollaborationResponse,
   type AiWorkPolicyDecision,
 } from "@/lib/ai-collaboration/document-policy";
-import { appendAiInteractionEvents } from "@/lib/ai-collaboration/audit-store";
+import { appendDurableAiInteractionEvents } from "@/lib/ai-collaboration/audit-outbox";
+import { DocumentModelStructureError, repairDocumentModelResponse, type DocumentModelMessage } from "@/lib/ai-collaboration/document-model-response";
+import { singleReviewResponse } from "@/lib/ai-collaboration/single-review-response";
+import { recordedStructuredResponse, type StructuredModelAttempt } from "@/lib/ai-collaboration/recorded-structured-response";
+import { readDocumentRequestHtml, readDocumentRequestMessage } from "@/lib/ai-collaboration/document-request-input";
 import {
   buildBatchProactiveDocumentCommentPrompts,
   buildDocumentCommentReplyPrompts,
@@ -23,7 +27,7 @@ import {
   isReviewableDocumentParagraph,
   normalizeBatchProactiveDocumentReview,
   normalizeDocumentCommentReply,
-  normalizeProactiveDocumentComment,
+  assessProactiveDocumentComment,
   DOCUMENT_COMMENT_REVIEW_BATCH_SIZE,
   DOCUMENT_COMMENT_REVIEW_VERSION,
 } from "@/lib/ai-collaboration/document-comment-policy";
@@ -98,6 +102,7 @@ import {
   completeDocumentRequest,
   failDocumentRequest,
   getDocumentRequest,
+  readDocumentRequestReceipt,
   listDocumentRequests,
   type DocumentRequestInput,
 } from "@/lib/ai-collaboration/document-request-store";
@@ -107,7 +112,6 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 const COLLABORATION_STAGE_KEYS = new Set(["proposal", "make"]);
-const MAX_DOCUMENT_HTML_LENGTH = 120_000;
 const THREAD_PREFIX = "ai-collaboration";
 const COMMENT_THREAD_PREFIX = "ai-collaboration-comments";
 const COMMENT_META_PREFIX = "OPENPBL_DOCUMENT_COMMENT_META:";
@@ -126,6 +130,11 @@ function documentRequestKey(participationId: string, requestId: string): string 
   return `${participationId}:${requestId}`;
 }
 
+async function persistedDocumentRequestResponse(input: DocumentRequestInput): Promise<Response> {
+  const receipt = await readDocumentRequestReceipt(input);
+  return Response.json(receipt.body, { status: receipt.status });
+}
+
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -136,53 +145,28 @@ function jsonRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function validDocumentModelReply(value: Record<string, unknown>): boolean {
-  if (!["discussion", "edit-suggestion", "boundary"].includes(String(value.kind))) return false;
-  if (typeof value.message !== "string" || !value.message.trim()) return false;
-  if (value.kind !== "edit-suggestion") return true;
-  const suggestion = jsonRecord(value.suggestion);
-  return Boolean(suggestion && typeof suggestion.replacement === "string" && suggestion.replacement.trim()
-    && (suggestion.operation === "replace" || suggestion.operation === "insert"));
-}
-
-/** A malformed or incomplete model response gets one repair within the same request deadline. */
+/** A malformed response gets one recorded repair within the same deadline. */
 async function callStructuredCollaborationModel(
   messages: Array<{ role: "system" | "user"; content: string }>,
   signal: AbortSignal,
   valid: (value: Record<string, unknown>) => boolean,
-  maxCalls = 2,
+  record: (attempt: StructuredModelAttempt) => Promise<void>,
 ): Promise<Record<string, unknown>> {
-  for (let attempt = 0; attempt < maxCalls; attempt += 1) {
-    const raw = await callCollaborationModel(attempt === 0 ? messages : [
+  return recordedStructuredResponse({ signal, valid, record, parse: parseLLMJson,
+    generate: attempt => callCollaborationModel(attempt === 1 ? messages : [
       ...messages,
       { role: "user", content: "上一条回答的 JSON 结构不完整。请只返回一个严格 JSON 对象，保留本轮任务和教学边界，完整填写必需字段。" },
-    ], signal);
-    try {
-      const parsed = jsonRecord(parseLLMJson(raw));
-      if (parsed && valid(parsed)) return parsed;
-    } catch {
-      // A single repair is allowed by the shared request deadline.
-    }
-  }
-  throw new Error("AI_RESPONSE_INVALID_STRUCTURE");
+    ], signal),
+  });
 }
 
 async function recordInteractionEvents(
-  events: Parameters<typeof appendAiInteractionEvents>[0],
+  events: Parameters<typeof appendDurableAiInteractionEvents>[0],
   workspaceKind?: CollaborationWorkspaceKind,
 ): Promise<void> {
-  try {
-    await appendAiInteractionEvents(workspaceKind
-      ? events.map((event) => ({
-          ...event,
-          payload: { ...(event.payload ?? {}), workspaceKind },
-        }))
-      : events);
-  } catch (error) {
-    // Collaboration remains usable if an audit replica is temporarily down;
-    // the error is visible in server logs and can be retried by reconciliation.
-    console.error("[ai-collaboration] audit event write failed", error);
-  }
+  await appendDurableAiInteractionEvents(workspaceKind
+    ? events.map(event => ({ ...event, payload: { ...(event.payload ?? {}), workspaceKind } }))
+    : events);
 }
 
 type DocumentCollaborationRequest = {
@@ -509,6 +493,7 @@ async function executeDelegatedWork(input: {
   revisionOf?: DelegatedWorkRevision;
   workspaceKind: CollaborationWorkspaceKind;
   projectSupportContext: Awaited<ReturnType<typeof resolveProjectSupportContext>>;
+  recordModel: (step: string, attempt: StructuredModelAttempt) => Promise<void>;
 }): Promise<DocumentCollaborationResponse> {
   const assessmentPrompts = buildDelegatedWorkAssessmentPrompts({
     course: input.course,
@@ -525,7 +510,7 @@ async function executeDelegatedWork(input: {
     { role: "user", content: assessmentPrompts.user },
   ], input.signal, (value) =>
     ["accepted", "protected", "clarify"].includes(String(value.decision))
-    && typeof value.reason === "string"));
+    && typeof value.reason === "string", attempt => input.recordModel("delegation-assessment", attempt)));
   if (assessment.decision !== "accepted") {
     return assessmentToBoundaryResponse(assessment);
   }
@@ -550,10 +535,16 @@ async function executeDelegatedWork(input: {
     { role: "system", content: withWorkspaceInstruction(executionPrompts.system, input.workspaceKind) },
     { role: "user", content: executionPrompts.user },
   ];
+  let deliveryAttempt = 0;
   const delivery = await generateDelegatedDeliveryWithRepair(
-    (repair) => callDelegatedWorkModel(repair
+    async (repair) => {
+      const raw = await callDelegatedWorkModel(repair
       ? [...deliveryMessages, { role: "user", content: "上次没有返回完整的 deliverable.content。请保持已批准的任务范围，重新返回完整严格 JSON，并实际完成可交付内容；不要因缺少教材依据而放弃。" }]
-      : deliveryMessages, input.signal),
+      : deliveryMessages, input.signal);
+      await input.recordModel("delegation-delivery", { raw, sha256: createHash("sha256").update(raw).digest("hex"),
+        attempt: ++deliveryAttempt, validation: "received" });
+      return raw;
+    },
     input.signal,
   );
   const result = normalizeDelegatedWorkDelivery({
@@ -573,6 +564,12 @@ function collaborationFailureResponse(
   error: unknown,
   intent?: DocumentCollaborationIntent,
 ): Response {
+  if (error instanceof DocumentModelStructureError) {
+    return Response.json({
+      error: error.code,
+      message: "AI 回答格式暂时不完整，你的消息已保留。请重试这条消息。",
+    }, { status: 503 });
+  }
   if (error instanceof LlmRateLimitError) {
     const retryAfterSeconds = Math.max(1, Math.ceil(error.retryAfterMs / 1_000));
     return Response.json(
@@ -656,7 +653,7 @@ function upstreamFailureCategory(error: unknown): string | undefined {
 }
 
 async function callCollaborationModel(
-  messages: Array<{ role: "system" | "user"; content: string }>,
+  messages: DocumentModelMessage[],
   signal: AbortSignal,
 ): Promise<string> {
   try {
@@ -709,7 +706,7 @@ async function loadCollaborationScope(input: {
     input.requestedStudentId,
   );
   if (authentication instanceof Response) return authentication;
-  const course = await getCourse(input.courseId);
+  const course = await getCourse(input.courseId, { studentId: authentication.studentId });
   if (!course) return Response.json({ error: "COURSE_NOT_FOUND" }, { status: 404 });
   const configuredMode = normalizePblCourseConfig(course.pblConfig).makeArtifactMode;
   if (input.workspaceKind === "external-artifact") {
@@ -768,7 +765,7 @@ export async function GET(request: NextRequest) {
       conversationId: "",
     });
     if (!state) return Response.json({ error: "REQUEST_NOT_FOUND" }, { status: 404 });
-    if (state.intent !== "comment-reply" && state.status !== "completed") {
+    if (!["comment-reply", "proactive-document-comment", "proactive-document-comments"].includes(state.intent) && state.status !== "completed") {
       const current = await getCompanionThread(
         courseId, scope.student.id, collaborationThreadKey(stageKey, workspaceKind),
       );
@@ -879,8 +876,12 @@ export async function POST(request: NextRequest) {
   const stageKey = boundedString(body.stageKey, 80);
   const workspaceKind = normalizeCollaborationWorkspaceKind(body.workspaceKind);
   const action = boundedString(body.action, 80);
-  const message = boundedString(body.message, 1_200);
-  const documentHtml = boundedString(body.documentHtml, MAX_DOCUMENT_HTML_LENGTH);
+  const messageInput = readDocumentRequestMessage(body.message);
+  if (!messageInput.ok) return Response.json({ error: "AI_MESSAGE_TOO_LONG", message: "一次最多发送 1200 字，请缩短后作为新消息发送。" }, { status: 400 });
+  const message = messageInput.message;
+  const documentInput = readDocumentRequestHtml(body.documentHtml);
+  if (!documentInput.ok) return Response.json({ error: "DOCUMENT_CONTEXT_TOO_LONG", message: "文档超过本次 AI 协作的 120000 字符上限，请缩短提供给 AI 的内容后重试。" }, { status: 413 });
+  const documentHtml = documentInput.documentHtml;
   const selectedText = boundedString(body.selectedText, 12_000);
   const proactive = body.proactive === true;
   const commentThreadId = boundedString(body.commentThreadId, 160);
@@ -1050,48 +1051,84 @@ export async function POST(request: NextRequest) {
     if (!proactiveParagraphs.length) {
       return Response.json({ error: "INVALID_COMMENT_TARGETS" }, { status: 400 });
     }
-    const commentStore = await getCompanionThread(
-      courseId,
-      scope.student.id,
-      documentCommentThreadKey(stageKey, workspaceKind),
-    );
-    const existingMessages = commentStore?.messages ?? [];
-    const existingThreads = documentCommentThreads(existingMessages);
-    const reviewedFingerprints = new Set(
-      documentReviewedParagraphFingerprints(existingMessages),
-    );
-    const threadMatchesCandidate = (
-      thread: DocumentAiCommentThread,
-      candidate: ProactiveParagraph,
-    ) => {
-      if (candidate.blockId && thread.blockId && candidate.blockId === thread.blockId) return true;
-      if (candidate.blockIndex === thread.blockIndex) return true;
-      const previousBlockText = thread.blockText?.replace(/\s+/g, " ").trim();
-      const currentBlockText = candidate.targetText.replace(/\s+/g, " ").trim();
-      return Boolean(
-        previousBlockText
-        && currentBlockText
-        && (
-          previousBlockText.includes(thread.targetText)
-          && currentBlockText.includes(thread.targetText)
-        )
-      );
+    const reviewTask: DocumentRequestInput = {
+      requestId, participationId: scope.authentication.participationId, courseId, studentId: scope.student.id,
+      stageKey, workspaceKind, threadStageKey: documentCommentThreadKey(stageKey, workspaceKind),
+      conversationId: "proactive-document-comments", documentVersion: digest(documentHtml), message: JSON.stringify(proactiveParagraphs),
+      intent: action, history: [], fingerprint: digest({ action, courseId, stageKey, workspaceKind, documentHtml, proactiveParagraphs }),
     };
-    const candidates = proactiveParagraphs
-      .filter((candidate) =>
-        !reviewedFingerprints.has(documentParagraphVersionFingerprint(candidate.targetText))
-      )
-      .map((candidate) => ({
-        ...candidate,
-        existingComments: existingThreads
-          .filter((thread) => threadMatchesCandidate(thread, candidate))
-          .flatMap((thread) => thread.comments
-            .filter((comment) => comment.role === "assistant")
-            .map((comment) => comment.content)),
-      }));
-    if (!candidates.length) return Response.json({ commentThreads: [] });
-
+    const reviewClaim = await claimDocumentRequest(reviewTask);
+    if (reviewClaim.kind === "conflict") return Response.json({ error: "REQUEST_ID_CONFLICT", requestId }, { status: 409 });
+    if (reviewClaim.kind === "existing") {
+      if (reviewClaim.state.status === "completed") return Response.json(reviewClaim.state.response);
+      return Response.json({ requestId, status: reviewClaim.state.status, retryAfterMs: 1_000 }, { status: reviewClaim.state.status === "processing" ? 202 : 409 });
+    }
+    const rawOutputs: Array<{ attempt: number; sha256: string; validation: string }> = [];
+    const completeReview = async (response: Record<string, unknown>, messages: CompanionMessage[],
+      reviewDecision: Record<string, unknown>, commentThreads: DocumentAiCommentThread[] = []) => {
+      const decision = { ...reviewDecision, action, reviewVersion: DOCUMENT_COMMENT_REVIEW_VERSION,
+        documentVersion: reviewTask.documentVersion, rawOutputs, requestedCandidates: proactiveParagraphs };
+      const receipt = { ...response, requestId, status: "completed", documentVersion: reviewTask.documentVersion, reviewDecision: decision };
+      const auditEvents: NonNullable<Parameters<typeof completeDocumentRequest>[0]["auditEvents"]> = [{
+        idempotencyKey: `document-review-decision:${reviewTask.participationId}:${requestId}`,
+        eventType: "policy", actor: "system", content: "本次批量段落审阅决定。",
+        payload: { schemaVersion: 1, legacy: { stageKey, source: "proactive-comment", conversationId: "proactive-document-comments" },
+          detail: { kind: "document-comment-review", ...decision, requestAttemptId: reviewClaim.token, workspaceKind } },
+      }, ...commentThreads.map(thread => ({
+        idempotencyKey: `document-review-comment:${reviewTask.participationId}:${requestId}:${thread.id}`,
+        eventType: "comment", actor: "assistant" as const,
+        content: thread.comments.find(comment => comment.role === "assistant")!.content,
+        payload: { schemaVersion: 1, legacy: { stageKey, source: "proactive-comment", conversationId: thread.id },
+          detail: { commentThreadId: thread.id, blockId: thread.blockId, blockIndex: thread.blockIndex,
+            issueType: thread.issueType, targetText: thread.targetText, initialComment: true, workspaceKind } },
+      }))];
+      const committed = await completeDocumentRequest({ ...reviewTask, token: reviewClaim.token, messages, response: receipt, auditEvents });
+      return committed ? Response.json(receipt) : persistedDocumentRequestResponse(reviewTask);
+    };
     try {
+      const commentStore = await getCompanionThread(
+        courseId,
+        scope.student.id,
+        documentCommentThreadKey(stageKey, workspaceKind),
+      );
+      const existingMessages = commentStore?.messages ?? [];
+      const existingThreads = documentCommentThreads(existingMessages);
+      const reviewedFingerprints = new Set(
+        documentReviewedParagraphFingerprints(existingMessages),
+      );
+      const threadMatchesCandidate = (
+        thread: DocumentAiCommentThread,
+        candidate: ProactiveParagraph,
+      ) => {
+        if (candidate.blockId && thread.blockId && candidate.blockId === thread.blockId) return true;
+        if (candidate.blockIndex === thread.blockIndex) return true;
+        const previousBlockText = thread.blockText?.replace(/\s+/g, " ").trim();
+        const currentBlockText = candidate.targetText.replace(/\s+/g, " ").trim();
+        return Boolean(
+          previousBlockText
+          && currentBlockText
+          && (
+            previousBlockText.includes(thread.targetText)
+            && currentBlockText.includes(thread.targetText)
+          )
+        );
+      };
+      const candidates = proactiveParagraphs
+        .filter((candidate) =>
+          !reviewedFingerprints.has(documentParagraphVersionFingerprint(candidate.targetText))
+        )
+        .map((candidate) => ({
+          ...candidate,
+          existingComments: existingThreads
+            .filter((thread) => threadMatchesCandidate(thread, candidate))
+            .flatMap((thread) => thread.comments
+              .filter((comment) => comment.role === "assistant")
+              .map((comment) => comment.content)),
+        }));
+      if (!candidates.length) return await completeReview({ commentThreads: [], reviewedCandidateIds: [],
+        reviewedParagraphFingerprints: [...reviewedFingerprints], complete: true }, [],
+        { outcome: "no-comment", reasonCodes: ["ALL_ALREADY_REVIEWED"], reviewedCandidateIds: [], complete: true });
+
       if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
       const documentText = documentHtmlToPlainText(documentHtml);
       const prompts = buildBatchProactiveDocumentCommentPrompts({
@@ -1111,7 +1148,16 @@ export async function POST(request: NextRequest) {
         ], reviewSignal, (value) =>
           Array.isArray(value.checkedCandidateIds)
           && typeof value.complete === "boolean"
-          && Array.isArray(value.comments));
+          && Array.isArray(value.comments), async attempt => {
+            await recordInteractionEvents([{
+              id: `document-review-model:${reviewClaim.token}:${attempt.attempt}`, courseId, studentId: scope.student.id,
+              participationId: scope.authentication.participationId, stageKey, conversationId: "proactive-document-comments",
+              source: "proactive-comment", eventType: "response", actorRole: "system", requestId, content: attempt.raw,
+              payload: { kind: "model-output", action, requestAttemptId: reviewClaim.token, modelAttempt: attempt.attempt,
+                validation: attempt.validation, rawSha256: attempt.sha256, rawLength: attempt.raw.length, documentVersion: reviewTask.documentVersion },
+            }], workspaceKind);
+            rawOutputs.push({ attempt: attempt.attempt, sha256: attempt.sha256, validation: attempt.validation });
+          });
       });
       const review = normalizeBatchProactiveDocumentReview(
         structured,
@@ -1220,47 +1266,34 @@ export async function POST(request: NextRequest) {
         }));
         reviewedFingerprints.add(fingerprint);
       });
-      if (messages.length) {
-        await appendCompanionMessages({
-          courseId,
-          studentId: scope.student.id,
-          stageKey: documentCommentThreadKey(stageKey, workspaceKind),
-          messages,
-        });
-        // Every paragraph comment is an independent contextual conversation.
-        // Persist its opening AI message under the comment thread id so later
-        // student replies continue the same audit turn instead of starting at
-        // the student's first reply or merging unrelated comments together.
-        await recordInteractionEvents(commentThreads.map((thread) => ({
-          courseId,
-          studentId: scope.student.id,
-          stageKey,
-          conversationId: thread.id,
-          source: "proactive-comment" as const,
-          eventType: "comment" as const,
-          actorRole: "ai" as const,
-          content: thread.comments.find((comment) => comment.role === "assistant")?.content
-            ?? "AI 组员发起了段落批注。",
-          payload: {
-            commentThreadId: thread.id,
-            blockId: thread.blockId,
-            blockIndex: thread.blockIndex,
-            issueType: thread.issueType,
-            targetText: thread.targetText,
-            initialComment: true,
-            candidateCount: candidates.length,
-          },
-          requestId,
-        })), workspaceKind);
-      }
-      return Response.json({
-        commentThreads,
-        reviewedParagraphFingerprints: [...reviewedFingerprints],
+      const proposedCount = (structured.comments as unknown[]).length;
+      const reasonCodes = [
+        ...(!review.complete ? ["INCOMPLETE_REVIEW"] : []),
+        ...(proposedCount === 0 ? ["MODEL_NO_COMMENT"] : []),
+        ...(reviewResults.length < proposedCount ? ["NORMALIZATION_FILTERED"] : []),
+        ...(commentThreads.length < reviewResults.length ? ["DUPLICATE_ISSUES"] : []),
+      ];
+      return await completeReview({
+        commentThreads, reviewedParagraphFingerprints: [...reviewedFingerprints],
+        reviewedCandidateIds: review.reviewedCandidateIds, complete: review.complete,
+      }, messages, {
+        outcome: !review.complete ? "incomplete" : commentThreads.length ? "comment" : "no-comment",
+        reasonCodes, modelProposedCommentCount: proposedCount, normalizedCommentCount: reviewResults.length,
+        createdCommentThreadIds: commentThreads.map(thread => thread.id),
         reviewedCandidateIds: review.reviewedCandidateIds,
+        unreviewedCandidateIds: candidates.map(candidate => candidate.candidateId).filter(id => !confirmedIds.has(id)),
         complete: review.complete,
-        documentVersion: digest(documentHtml),
-      });
+      }, commentThreads);
     } catch (error) {
+      const errorCode = error instanceof ProactiveReviewCapacityError ? "AI_PROACTIVE_REVIEW_BUSY"
+        : error instanceof Error && error.message === "AI_RESPONSE_INVALID_STRUCTURE" ? error.message : "AI_REVIEW_FAILED";
+      await failDocumentRequest({ ...reviewTask, token: reviewClaim.token, error: errorCode });
+      await recordInteractionEvents([{
+        id: `document-review-error:${reviewClaim.token}`, courseId, studentId: scope.student.id, stageKey,
+        participationId: scope.authentication.participationId, conversationId: "proactive-document-comments",
+        source: "proactive-comment", eventType: "error", actorRole: "system", requestId, content: errorCode,
+        payload: { action, requestAttemptId: reviewClaim.token, documentVersion: reviewTask.documentVersion, rawOutputs },
+      }], workspaceKind);
       if (error instanceof ProactiveReviewCapacityError) {
         const retryAfterSeconds = Math.max(1, Math.ceil(error.retryAfterMs / 1_000));
         return Response.json(
@@ -1288,40 +1321,88 @@ export async function POST(request: NextRequest) {
     if (!targetText || !Number.isInteger(blockIndex) || blockIndex < 0) {
       return Response.json({ error: "INVALID_COMMENT_TARGET" }, { status: 400 });
     }
-    const commentStore = await getCompanionThread(
-      courseId,
-      scope.student.id,
-      documentCommentThreadKey(stageKey, workspaceKind),
-    );
-    const existing = documentCommentThreads(commentStore?.messages ?? [])
-      .find((item) => {
-        if (blockId && item.blockId) return item.blockId === blockId;
-        return item.blockIndex === blockIndex
-          && item.targetText.replace(/\s+/g, " ").trim() === targetText.replace(/\s+/g, " ").trim();
+    const reviewTask: DocumentRequestInput = {
+      requestId, participationId: scope.authentication.participationId, courseId, studentId: scope.student.id,
+      stageKey, workspaceKind, threadStageKey: documentCommentThreadKey(stageKey, workspaceKind),
+      conversationId: "proactive-document-comment", documentVersion: digest(documentHtml), message: targetText,
+      intent: action, history: [], fingerprint: digest({ action, courseId, stageKey, workspaceKind, documentHtml, targetText, blockId, blockIndex }),
+    };
+    const reviewClaim = await claimDocumentRequest(reviewTask);
+    if (reviewClaim.kind === "conflict") return Response.json({ error: "REQUEST_ID_CONFLICT", requestId }, { status: 409 });
+    if (reviewClaim.kind === "existing") {
+      if (reviewClaim.state.status === "completed") return Response.json(reviewClaim.state.response);
+      return Response.json({ requestId, status: reviewClaim.state.status, retryAfterMs: 1_000 }, { status: reviewClaim.state.status === "processing" ? 202 : 409 });
+    }
+    const rawOutputs: Array<{ attempt: number; sha256: string; validation: string }> = [];
+    const completeReview = async (input: {
+      response: Record<string, unknown>; messages: CompanionMessage[];
+      decision: { outcome: string; reasonCodes: string[]; modelShouldComment: boolean | null; reviewVersion: number };
+      rawSha256?: string; commentThreadId?: string; comment?: string;
+    }) => {
+      const reviewDecision = { ...input.decision, action, documentVersion: reviewTask.documentVersion, blockId: blockId ?? null,
+        blockIndex, targetText, rawOutputs, rawSha256: input.rawSha256 ?? null, commentThreadId: input.commentThreadId ?? null };
+      const response = { ...input.response, requestId, status: "completed", documentVersion: reviewTask.documentVersion, reviewDecision };
+      const legacy = { stageKey, source: "proactive-comment", conversationId: input.commentThreadId ?? "proactive-document-comment" };
+      const auditEvents: NonNullable<Parameters<typeof completeDocumentRequest>[0]["auditEvents"]> = [{
+        idempotencyKey: `document-review-decision:${reviewTask.participationId}:${requestId}`, eventType: "policy", actor: "system",
+        content: input.decision.outcome === "comment" ? "本次审阅保留段落批注。" : "本次审阅未生成段落批注。",
+        payload: { schemaVersion: 1, legacy, detail: { kind: "document-comment-review", ...reviewDecision, requestAttemptId: reviewClaim.token, workspaceKind } },
+      }];
+      if (input.comment && input.commentThreadId) auditEvents.push({
+        idempotencyKey: `document-review-comment:${reviewTask.participationId}:${requestId}`, eventType: "comment", actor: "assistant", content: input.comment,
+        payload: { schemaVersion: 1, legacy, detail: { commentThreadId: input.commentThreadId, blockIndex, blockId, targetText, initialComment: true, workspaceKind } },
       });
-    if (existing) return Response.json({ commentThread: existing, existing: true });
-
-    const prompts = buildProactiveDocumentCommentPrompts({
-      course: scope.course,
-      studentId: scope.student.id,
-      stageKey,
-      documentText: documentHtmlToPlainText(documentHtml),
-      targetText,
-    });
+      const committed = await completeDocumentRequest({ ...reviewTask, token: reviewClaim.token, response, messages: input.messages, auditEvents });
+      return committed ? Response.json(response) : persistedDocumentRequestResponse(reviewTask);
+    };
     try {
+      const commentStore = await getCompanionThread(
+        courseId,
+        scope.student.id,
+        documentCommentThreadKey(stageKey, workspaceKind),
+      );
+      const existing = documentCommentThreads(commentStore?.messages ?? [])
+        .find((item) => {
+          if (blockId && item.blockId) return item.blockId === blockId;
+          return item.blockIndex === blockIndex
+            && item.targetText.replace(/\s+/g, " ").trim() === targetText.replace(/\s+/g, " ").trim();
+        });
+      if (existing) return await completeReview({ response: { commentThread: existing, existing: true }, messages: [], commentThreadId: existing.id,
+        decision: { outcome: "comment", reasonCodes: ["EXISTING_COMMENT"], modelShouldComment: null, reviewVersion: DOCUMENT_COMMENT_REVIEW_VERSION } });
+
+      const prompts = buildProactiveDocumentCommentPrompts({
+        course: scope.course,
+        studentId: scope.student.id,
+        stageKey,
+        documentText: documentHtmlToPlainText(documentHtml),
+        targetText,
+      });
       if (activeDocumentRequests.size > 0) throw new ProactiveReviewCapacityError(5_000);
       const documentText = documentHtmlToPlainText(documentHtml);
       const singleReviewSignal = AbortSignal.any([request.signal, AbortSignal.timeout(40_000)]);
-      const raw = await withProactiveReviewCapacity(() => callCollaborationModel([
-        { role: "system", content: withWorkspaceInstruction(prompts.system, workspaceKind) },
-        { role: "user", content: prompts.user },
-      ], singleReviewSignal));
-      const result = normalizeProactiveDocumentComment(parseLLMJson(raw), {
-        targetText,
-        documentText,
-        courseText: buildAuthoritativeCourseContext(scope.course, scope.student.id, stageKey),
+      const parsed = await withProactiveReviewCapacity(() => singleReviewResponse({
+        signal: singleReviewSignal, parse: parseLLMJson,
+        generate: repairInstruction => callCollaborationModel([
+          { role: "system", content: withWorkspaceInstruction(prompts.system, workspaceKind) },
+          { role: "user", content: prompts.user },
+          ...(repairInstruction ? [{ role: "user" as const, content: repairInstruction }] : []),
+        ], singleReviewSignal),
+        record: async attempt => {
+          await recordInteractionEvents([{
+            id: `document-review-model:${reviewClaim.token}:${attempt.attempt}`, courseId, studentId: scope.student.id,
+            participationId: scope.authentication.participationId, stageKey, conversationId: "proactive-document-comment",
+            source: "proactive-comment", eventType: "response", actorRole: "system", requestId, content: attempt.raw,
+            payload: { kind: "model-output", action, requestAttemptId: reviewClaim.token, modelAttempt: attempt.attempt,
+              validation: attempt.validation, rawSha256: attempt.sha256, rawLength: attempt.raw.length, documentVersion: reviewTask.documentVersion },
+          }], workspaceKind);
+          rawOutputs.push({ attempt: attempt.attempt, sha256: attempt.sha256, validation: attempt.validation });
+        },
+      }));
+      const rawSha256 = rawOutputs.at(-1)!.sha256;
+      const { result, decision } = assessProactiveDocumentComment(parsed, {
+        targetText, documentText, courseText: buildAuthoritativeCourseContext(scope.course, scope.student.id, stageKey),
       });
-      if (!result.shouldComment) return Response.json({ commentThread: null });
+      if (!result.shouldComment) return await completeReview({ response: { commentThread: null }, messages: [], decision, rawSha256 });
 
       const id = `document-comment-${randomUUID()}`;
       const createdAt = new Date().toISOString();
@@ -1358,25 +1439,7 @@ export async function POST(request: NextRequest) {
           authorName: "AI 组员",
         }),
       ];
-      await appendCompanionMessages({
-        courseId,
-        studentId: scope.student.id,
-        stageKey: documentCommentThreadKey(stageKey, workspaceKind),
-        messages,
-      });
-      await recordInteractionEvents([{
-        courseId,
-        studentId: scope.student.id,
-        stageKey,
-        conversationId: id,
-        source: "proactive-comment",
-        eventType: "comment",
-        actorRole: "ai",
-        content: result.comment,
-        payload: { commentThreadId: id, blockIndex, blockId, targetText, initialComment: true },
-        requestId,
-      }], workspaceKind);
-      return Response.json({
+      return await completeReview({ messages, decision, rawSha256, commentThreadId: id, comment: result.comment, response: {
         commentThread: {
           ...meta,
           comments: [{
@@ -1386,8 +1449,17 @@ export async function POST(request: NextRequest) {
             createdAt: messages[1].createdAt,
           }],
         } satisfies DocumentAiCommentThread,
-      });
+      } });
     } catch (error) {
+      const errorCode = error instanceof ProactiveReviewCapacityError ? "AI_PROACTIVE_REVIEW_BUSY"
+        : error instanceof Error && ["AI_REVIEW_INVALID_STRUCTURE", "AI_RESPONSE_INVALID_STRUCTURE"].includes(error.message) ? error.message : "AI_REVIEW_FAILED";
+      await failDocumentRequest({ ...reviewTask, token: reviewClaim.token, error: errorCode });
+      await recordInteractionEvents([{
+        id: `document-review-error:${reviewClaim.token}`, courseId, studentId: scope.student.id, stageKey,
+        participationId: scope.authentication.participationId, conversationId: "proactive-document-comment",
+        source: "proactive-comment", eventType: "error", actorRole: "system", requestId, content: errorCode,
+        payload: { action, requestAttemptId: reviewClaim.token, documentVersion: reviewTask.documentVersion, rawOutputs },
+      }], workspaceKind);
       if (error instanceof ProactiveReviewCapacityError) {
         return Response.json({ error: "AI_PROACTIVE_REVIEW_BUSY", message: "当前主动求助较多，系统会稍后重新检查。" }, {
           status: 503,
@@ -1475,7 +1547,14 @@ export async function POST(request: NextRequest) {
       const parsed = await callStructuredCollaborationModel([
         { role: "system", content: withWorkspaceInstruction(prompts.system, workspaceKind) },
         { role: "user", content: prompts.user },
-      ], replySignal, (value) => typeof value.message === "string" && Boolean(value.message.trim()));
+      ], replySignal, (value) => typeof value.message === "string" && Boolean(value.message.trim()),
+      attempt => recordInteractionEvents([{
+        id: `document-reply-model:${replyClaim.token}:${attempt.attempt}`, courseId, studentId: scope.student.id,
+        participationId: scope.authentication.participationId, stageKey, conversationId: commentThreadId,
+        source: "proactive-comment", eventType: "response", actorRole: "system", requestId, content: attempt.raw,
+        payload: { kind: "model-output", action, requestAttemptId: replyClaim.token, modelAttempt: attempt.attempt,
+          validation: attempt.validation, rawSha256: attempt.sha256, rawLength: attempt.raw.length, documentVersion },
+      }], workspaceKind));
       const reply = normalizeDocumentCommentReply(
         parsed,
         existing.targetText,
@@ -1536,7 +1615,7 @@ export async function POST(request: NextRequest) {
         documentVersion,
       };
       const committed = await completeDocumentRequest({ ...replyTask, token: replyClaim.token, messages, response });
-      if (!committed) return Response.json({ requestId, status: "cancelled" }, { status: 409 });
+      if (!committed) return persistedDocumentRequestResponse(replyTask);
       await recordInteractionEvents([
         {
           courseId,
@@ -1566,7 +1645,7 @@ export async function POST(request: NextRequest) {
       ], workspaceKind);
       return Response.json(response);
     } catch (error) {
-      if (replyController.signal.aborted) return Response.json({ requestId, status: "cancelled" }, { status: 409 });
+      if (replyController.signal.aborted) return persistedDocumentRequestResponse(replyTask);
       const failure = collaborationFailureResponse(replyDeadline.aborted ? new LlmTimeoutError(85_000) : error, "discuss");
       const failureBody = await failure.json() as Record<string, unknown>;
       await failDocumentRequest({ ...replyTask, token: replyClaim.token, error: String(failureBody.error ?? "AI_COLLABORATION_FAILED") })
@@ -1745,6 +1824,13 @@ export async function POST(request: NextRequest) {
         revisionOf,
         workspaceKind,
         projectSupportContext,
+        recordModel: (step, attempt) => recordInteractionEvents([{
+          id: `document-delegation-model:${claim.token}:${step}:${attempt.attempt}`, courseId, studentId: scope.student.id,
+          participationId: scope.authentication.participationId, stageKey, conversationId: currentConversationId,
+          source: "sidebar", eventType: "response", actorRole: "system", requestId, content: attempt.raw,
+          payload: { kind: "model-output", modelStep: step, requestAttemptId: claim.token, modelAttempt: attempt.attempt,
+            validation: attempt.validation, rawSha256: attempt.sha256, rawLength: attempt.raw.length, documentVersion },
+        }], workspaceKind),
       });
       result.support = normalizeProjectSupportOutput(
         { sourceIds: result.deliverable?.sources.map((source) => source.id).filter(Boolean) ?? [] },
@@ -1807,18 +1893,27 @@ export async function POST(request: NextRequest) {
           maxTransientRetries: COLLABORATION_TRANSIENT_RETRIES,
         });
       }
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = jsonRecord(parseLLMJson(raw)) ?? {};
-        if (!validDocumentModelReply(parsed)) {
-          throw new Error("AI_RESPONSE_INVALID_STRUCTURE");
-        }
-      } catch {
-        parsed = await callStructuredCollaborationModel([
-          ...llmMessages,
-          { role: "user", content: "上一条回答无法解析。请仅返回严格 JSON 对象，至少包含非空的 kind、message 与 focus，并遵守原教学边界。" },
-        ], taskSignal, validDocumentModelReply, 1);
-      }
+      const parsed = await repairDocumentModelResponse({ raw, messages: llmMessages, signal: taskSignal,
+        generate: callCollaborationModel,
+        recordSuccess: output => recordInteractionEvents([{
+          id: `document-model-success:${claim.token}:${output.attempt}`,
+          courseId: scope.course.id, studentId: scope.student.id, participationId: scope.authentication.participationId,
+          stageKey, conversationId: currentConversationId, source: selectedText || intent === "edit" ? "selection" : "sidebar",
+          eventType: "response", actorRole: "system", requestId, content: output.raw,
+          payload: { kind: "model-output", requestAttemptId: claim.token, modelAttempt: output.attempt,
+            rawSha256: output.sha256, rawLength: output.raw.length, intent, effectiveIntent, documentVersion,
+            ...(output.recovery ? { recovery: output.recovery } : {}) },
+        }], workspaceKind),
+        recordInvalid: attempt => recordInteractionEvents([{
+          id: `document-model:${claim.token}:${attempt.attempt}`,
+          courseId: scope.course.id, studentId: scope.student.id, participationId: scope.authentication.participationId,
+          stageKey, conversationId: currentConversationId, source: selectedText || intent === "edit" ? "selection" : "sidebar",
+          eventType: "error", actorRole: "system", requestId, content: attempt.raw,
+          payload: { kind: "invalid-model-response", code: "AI_RESPONSE_INVALID_STRUCTURE", requestAttemptId: claim.token,
+            modelAttempt: attempt.attempt, reason: attempt.reason, rawSha256: attempt.sha256, rawLength: attempt.raw.length,
+            intent, effectiveIntent, documentVersion },
+        }], workspaceKind),
+      });
       result = normalizeDocumentCollaborationResponse(
         parsed,
         selectedText,
@@ -1881,7 +1976,7 @@ export async function POST(request: NextRequest) {
       response,
     });
     if (!committed) {
-      return Response.json({ requestId, status: "cancelled", documentVersion }, { status: 409 });
+      return persistedDocumentRequestResponse(taskInput);
     }
     if (!proactive && memoryCandidates.length) {
       void saveProjectMemoryCandidates({
@@ -1944,14 +2039,16 @@ export async function POST(request: NextRequest) {
     ], workspaceKind);
     return Response.json(response);
   } catch (error) {
-    if (controller.signal.aborted) return Response.json({ requestId, status: "cancelled", documentVersion }, { status: 409 });
+    if (controller.signal.aborted) return persistedDocumentRequestResponse(taskInput);
     const failure = deadlineSignal.aborted ? new LlmTimeoutError(budgetMs - 5_000) : error;
     console.error(
       "[ai-collaboration/document] generation failed:",
       {
+        requestId,
         name: failure instanceof Error ? failure.name : "UnknownError",
         status: failure instanceof LlmCallFailedError ? failure.status ?? "unknown" : undefined,
-        category: upstreamFailureCategory(failure),
+        category: failure instanceof DocumentModelStructureError ? failure.reason : upstreamFailureCategory(failure),
+        modelAttempts: failure instanceof DocumentModelStructureError ? failure.attempts : undefined,
       },
     );
     const failureResponse = collaborationFailureResponse(failure, effectiveIntent);
@@ -1961,7 +2058,8 @@ export async function POST(request: NextRequest) {
       token: claim.token,
       error: String(failureBody.error ?? "AI_COLLABORATION_FAILED"),
     }).catch((taskError) => console.error("[ai-collaboration] task failure receipt unavailable", taskError));
-    void recordInteractionEvents([{
+    await recordInteractionEvents([{
+      id: `document-failure:${claim.token}`,
       courseId: scope.course.id,
       studentId: scope.student.id,
       stageKey,
@@ -1970,7 +2068,8 @@ export async function POST(request: NextRequest) {
       eventType: "error",
       actorRole: "system",
       content: failure instanceof Error ? failure.message : "AI 组员请求失败",
-      payload: { intent, effectiveIntent },
+      payload: { intent, effectiveIntent, requestAttemptId: claim.token,
+        ...(failure instanceof DocumentModelStructureError ? { code: failure.code, reason: failure.reason, modelAttempts: failure.attempts } : {}) },
       requestId,
     }], workspaceKind);
     return Response.json({

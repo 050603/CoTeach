@@ -42,19 +42,25 @@ function SectionAxisTick({
   x = 0,
   y = 0,
   payload,
+  sectionCount,
 }: {
   x?: number;
   y?: number;
   payload?: { index?: number; value?: string };
+  sectionCount: number;
 }) {
   const fullName = payload?.value ?? "";
   const displayName = fullName.length > 8 ? `${fullName.slice(0, 8)}…` : fullName;
+  const index = payload?.index ?? 0;
+  // Endpoint labels grow into the plot so SVG bounds cannot crop their text.
+  const textAnchor = sectionCount > 1 && index === 0 ? "start"
+    : sectionCount > 1 && index === sectionCount - 1 ? "end" : "middle";
 
   return (
     <g className="cursor-help" transform={`translate(${x},${y})`}>
       <title>{fullName}</title>
-      <text fill="#78716c" fontSize="10" textAnchor="middle">
-        <tspan fontWeight="700" x="0" y="13">第 {(payload?.index ?? 0) + 1} 节</tspan>
+      <text fill="#78716c" fontSize="10" textAnchor={textAnchor}>
+        <tspan fontWeight="700" x="0" y="13">第 {index + 1} 节</tspan>
         <tspan fill="#a8a29e" x="0" y="28">{displayName}</tspan>
       </text>
     </g>
@@ -231,11 +237,11 @@ export function KnowledgeLectureAnalytics({
       {showSectionSummaryChart && isNewSystem && sectionChartData.length ? <section className="border-b border-stone-100 bg-stone-50/40 px-4 py-4" aria-labelledby="knowledge-section-chart-title">
         <div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="text-sm font-bold text-stone-900" id="knowledge-section-chart-title">各小节完成率与均分</h4><p className="mt-0.5 text-[10px] text-stone-500">用轻量趋势线对比完成率和得分；悬浮数据点或标题可查看完整信息。</p></div><div className="flex items-center gap-3 rounded-full border border-stone-200 bg-white px-3 py-1.5 text-[10px] font-semibold text-stone-600 shadow-sm"><span className="inline-flex items-center gap-1.5"><span className="relative h-2 w-4 border-t border-dashed border-blue-500"><span className="absolute -top-1 left-1.5 size-2 rounded-full border-2 border-blue-500 bg-white" /></span>完成率</span><span className="inline-flex items-center gap-1.5"><span className="relative h-2 w-4 border-t-2 border-emerald-500"><span className="absolute -top-1 left-1.5 size-2 rounded-full bg-emerald-500 ring-2 ring-white" /></span>平均得分</span></div></div>
         <div className="mt-3 overflow-x-auto rounded-2xl border border-stone-200/80 bg-white shadow-[0_8px_24px_rgba(28,25,23,0.04)]" role="img" aria-label={sectionChartData.map((item) => `${item.fullName}：完成率${item.completionRate === null ? "暂无" : `${item.completionRate}%`}，均分${item.averageScore === null ? "暂无" : `${item.averageScore}分`}`).join("；")}>
-          <div className="h-60 px-2 pb-1 pt-3" style={{ minWidth: `${Math.max(680, sectionChartData.length * 112)}px` }}>
+          <div className="h-60 px-2 pb-1 pt-3" style={{ minWidth: `${Math.max(280, sectionChartData.length * 112)}px` }}>
             <ResponsiveContainer height="100%" width="100%">
               <ComposedChart data={sectionChartData} margin={{ top: 8, right: 16, left: -10, bottom: 0 }}>
                 <CartesianGrid stroke="#e7e5e4" strokeDasharray="2 6" vertical={false} />
-                <XAxis axisLine={false} dataKey="fullName" height={48} interval={0} tick={<SectionAxisTick />} tickLine={false} />
+                <XAxis axisLine={false} dataKey="fullName" height={48} interval={0} tick={<SectionAxisTick sectionCount={sectionChartData.length} />} tickLine={false} />
                 <YAxis axisLine={false} domain={[0, 100]} fontSize={10} tick={{ fill: "#a8a29e" }} tickFormatter={(value) => `${value}%`} tickLine={false} ticks={[0, 25, 50, 75, 100]} width={42} />
                 <Tooltip content={<SectionChartTooltip />} cursor={{ stroke: "#cbd5e1", strokeDasharray: "4 5", strokeWidth: 1 }} />
                 <Line activeDot={{ fill: "#ffffff", r: 6, stroke: "#3b82f6", strokeWidth: 3 }} connectNulls={false} dataKey="completionRate" dot={{ fill: "#ffffff", r: 4, stroke: "#3b82f6", strokeWidth: 2 }} name="完成率" stroke="#60a5fa" strokeDasharray="4 5" strokeWidth={1.75} type="monotone" />

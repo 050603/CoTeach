@@ -1,3 +1,4 @@
+import { enqueueLearningWrite, readLearningWrites } from "@/lib/browser/learning-outbox";
 import { useContext } from "react";
 import { PlaybackPreparationContext } from "@openmaic/lib/contexts/playback-preparation-context";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
@@ -188,17 +189,13 @@ describe("adaptive scene preparation", () => {
 });
 
 function classroomResponse() {
-  return {
-    ok: true,
-    status: 200,
-    json: async () => ({
+  return Response.json({
       success: true,
       classroom: {
         stage: { id: "classroom-1", title: "AI 课堂" },
         scenes: [{ id: "scene-1", title: "第一课", actions: [] }],
       },
-    }),
-  } as Response;
+    }, { status: 200 });
 }
 
 describe("StudentStageHost reporting modes", () => {
@@ -213,7 +210,7 @@ describe("StudentStageHost reporting modes", () => {
       const url = String(input);
       if (url.includes("/api/openmaic/classroom")) return classroomResponse();
       if (url.includes("/api/openmaic/progress")) {
-        return { ok: true, status: 200, json: async () => ({ data: { progress: {} } }) } as Response;
+        return Response.json({ data: { progress: {} } }, { status: 200 });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }));
@@ -245,8 +242,8 @@ describe("StudentStageHost reporting modes", () => {
         scenes: { "scene-1": { status: ready ? "ready" : "preparing" }, "scene-2": { status: ready ? "ready" : "preparing" } } },
     });
     const fetchMock = vi.mocked(fetch);
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ success: true, classroom: makePayload(false) }) } as Response);
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ success: true, classroom: makePayload(true) }) } as Response);
+    fetchMock.mockResolvedValueOnce(Response.json({ success: true, classroom: makePayload(false) }));
+    fetchMock.mockImplementation(async () => Response.json({ success: true, classroom: makePayload(true) }));
     await act(async () => { render(<StudentStageHost backHref="/teacher" classroomId="preview" mode="teacher-preview" />); });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(stageMock.state.scenes).toHaveLength(2);
@@ -268,11 +265,11 @@ describe("StudentStageHost reporting modes", () => {
   ])("preserves only the same-course teacher cursor when replacing a classroom: $mode / $nextCourse / $includePrevious", async ({ mode, nextCourse, keepScene, includePrevious }) => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const replacement = String(input).includes("classroom-new");
-      return { ok: true, json: async () => ({ success: true, classroom: {
+      return Response.json({ success: true, classroom: {
         stage: { id: replacement ? "classroom-new" : "classroom-old" },
         scenes: [{ id: "scene-1", title: "首页", actions: [] },
           ...(!replacement || includePrevious ? [{ id: "scene-2", title: "当前页", actions: [] }] : [])],
-      } }) } as Response;
+      } });
     });
     const view = render(<StudentStageHost backHref="/teacher" classroomId="classroom-old" courseId="course-1" mode={mode} />);
     await waitFor(() => expect(stageMock.state.scenes).toHaveLength(2));
@@ -286,11 +283,11 @@ describe("StudentStageHost reporting modes", () => {
     vi.useFakeTimers();
     let active = false;
     let ready = true;
-    vi.mocked(fetch).mockImplementation(async () => ({ ok: true, json: async () => ({ success: true, classroom: {
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ success: true, classroom: {
       stage: { id: "preview" }, scenes: [{ id: "scene-1", title: "预览", actions: [] }],
       generationPreview: { active, contentVersion: String(active), jobStatus: active ? "running" : "completed",
         scenes: { "scene-1": { status: ready ? "ready" : "preparing" } } },
-    } }) }) as Response);
+    } }));
     let view!: ReturnType<typeof render>;
     await act(async () => { view = render(<StudentStageHost backHref="/teacher" classroomId="preview" mode="teacher-preview" previewRefreshKey="job:completed" />); });
     await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
@@ -309,11 +306,11 @@ describe("StudentStageHost reporting modes", () => {
   it("refreshes a failed standalone preview on window focus and resumes only active polling", async () => {
     vi.useFakeTimers();
     let active = false;
-    vi.mocked(fetch).mockImplementation(async () => ({ ok: true, json: async () => ({ success: true, classroom: {
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ success: true, classroom: {
       stage: { id: "preview" }, scenes: [{ id: "scene-1", title: "预览", actions: [] }],
       generationPreview: { active, contentVersion: String(active), jobStatus: active ? "running" : "failed",
         scenes: { "scene-1": { status: active ? "preparing" : "failed" } } },
-    } }) }) as Response);
+    } }));
     await act(async () => { render(<StudentStageHost backHref="/teacher" classroomId="preview" mode="teacher-preview" />); });
     await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -328,12 +325,12 @@ describe("StudentStageHost reporting modes", () => {
   it("keeps the active scene engine stable during playback and applies new assets before the next start", async () => {
     vi.useFakeTimers();
     let ready = false;
-    vi.mocked(fetch).mockImplementation(async () => ({ ok: true, json: async () => ({ success: true, classroom: {
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ success: true, classroom: {
       stage: { id: "preview" }, scenes: [{ id: "scene-1", title: "预览", actions: [{ id: "speech", type: "speech", text: "讲解",
         audioUrl: ready ? "/audio/updated.mp3" : "/audio/original.mp3", audioDurationSec: 1 }] }],
       generationPreview: { active: !ready, contentVersion: ready ? "2" : "1", jobStatus: ready ? "completed" : "running",
         scenes: { "scene-1": { status: "ready" } } },
-    } }) }) as Response);
+    } }));
     await act(async () => { render(<StudentStageHost backHref="/teacher" classroomId="preview" mode="teacher-preview" />); });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     const playingScene = stageMock.state.scenes[0];
@@ -350,7 +347,7 @@ describe("StudentStageHost reporting modes", () => {
   it("refreshes before playback and refuses unfinished narration without replacing the classroom", async () => {
     const classroom = { stage: { id: "preview" }, scenes: [{ id: "scene-1", title: "预览", actions: [{ id: "speech", type: "speech", text: "讲解" }] }],
       generationPreview: { contentVersion: "1", active: false, jobStatus: "failed", scenes: { "scene-1": { status: "failed" } } } };
-    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => ({ success: true, classroom }) } as Response);
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ success: true, classroom }));
     const view = render(<StudentStageHost backHref="/teacher" classroomId="preview" mode="teacher-preview" />);
     await waitFor(() => expect(renderedStage.prepare).toBeTypeOf("function"));
     let allowed: boolean | undefined;
@@ -400,25 +397,17 @@ describe("StudentStageHost reporting modes", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("resource-classroom")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
+        return Response.json({
             success: true,
             classroom: {
               stage: { id: "resource-classroom", title: "拓展资源" },
               scenes: [{ id: "resource-1", title: "应用拓展", actions: [] }],
             },
-          }),
-        } as Response;
+          }, { status: 200 });
       }
       if (url.includes("/api/openmaic/classroom")) return classroomResponse();
       if (url.includes("/api/openmaic/progress")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ data: { progress: {} } }),
-        } as Response;
+        return Response.json({ data: { progress: {} } }, { status: 200 });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }));
@@ -453,23 +442,16 @@ describe("StudentStageHost reporting modes", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("resource-classroom")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
+        return Response.json({
             success: true,
             classroom: {
               stage: { id: "resource-classroom", title: "Adaptive resource" },
               scenes: [{ id: "resource-1", title: "Extension", actions: [] }],
             },
-          }),
-        } as Response;
+          }, { status: 200 });
       }
       if (url.includes("/api/openmaic/classroom")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
+        return Response.json({
             success: true,
             classroom: {
               stage: { id: "classroom-1", title: "AI classroom" },
@@ -478,15 +460,10 @@ describe("StudentStageHost reporting modes", () => {
                 { id: "scene-2", title: "Original successor", actions: [] },
               ],
             },
-          }),
-        } as Response;
+          }, { status: 200 });
       }
       if (url.includes("/api/openmaic/progress")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ data: { progress: {} } }),
-        } as Response;
+        return Response.json({ data: { progress: {} } }, { status: 200 });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }));
@@ -578,6 +555,46 @@ describe("StudentStageHost reporting modes", () => {
       type: "interactive",
       title: "节点小测",
     } as import("@openmaic/lib/types/stage").Scene)).toBe(50);
+  });
+
+  it("replays an unacknowledged final progress write after the player remounts", async () => {
+    let offline = true;
+    const sent: unknown[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes('/api/openmaic/classroom')) return classroomResponse();
+      if (init?.method === 'POST') {
+        sent.push(JSON.parse(String(init.body)));
+        if (offline) throw new TypeError('offline');
+      }
+      return Response.json({ data: { progress: {} } });
+    });
+    const props = { backHref: '/student', classroomId: 'classroom-1', courseId: 'course-1', studentId: 'student-1' };
+    const view = render(<StudentStageHost {...props} />);
+    await waitFor(() => expect(renderedStage.props?.onPlaybackStateChange).toBeTypeOf('function'));
+    await act(async () => {
+      renderedStage.props?.onPlaybackStateChange?.({ engineMode: 'idle', snapshot: { sceneIndex: 0, actionIndex: 1, consumedDiscussions: [], sceneId: 'scene-1' } });
+    });
+    expect(readLearningWrites('progress:course-1:student-1:classroom-1')).toMatchObject([{ value: { completedScenes: ['scene-1'] } }]);
+    view.unmount();
+    offline = false;
+    render(<StudentStageHost {...props} />);
+    await waitFor(() => expect(readLearningWrites('progress:course-1:student-1:classroom-1')).toEqual([]));
+    expect(sent.at(-1)).toMatchObject({ completedScenes: ['scene-1'], studentId: 'student-1', requestId: expect.any(String) });
+    expect(sent.at(-1)).toEqual(sent[0]);
+  });
+
+  it("upgrades a previously persisted queue entry with its stable entry ID", async () => {
+    const body = { courseId: 'course-1', studentId: 'student-1', classroomId: 'classroom-1', currentSceneIndex: 0, totalScenes: 1, completedScenes: ['scene-1'] };
+    enqueueLearningWrite('progress:course-1:student-1:classroom-1', body, 'old-entry-id');
+    const sent: unknown[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes('/api/openmaic/classroom')) return classroomResponse();
+      if (String(input).includes('/api/openmaic/progress') && init?.method === 'POST') sent.push(JSON.parse(String(init.body)));
+      return Response.json({ data: { progress: {} } });
+    });
+    render(<StudentStageHost backHref="/student" classroomId="classroom-1" courseId="course-1" studentId="student-1" />);
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toEqual({ ...body, requestId: 'old-entry-id' });
   });
 
   it("reports completion only after the playback cursor exhausts the scene", async () => {

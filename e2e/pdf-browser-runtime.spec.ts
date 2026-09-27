@@ -27,6 +27,8 @@ test("PDF renders with a real worker when newer Promise and typed-array APIs are
     const missingBeforeLoad = typeof Promise.withResolvers === "undefined";
     const moduleUrl = "/vendor/pdfjs/pdf.legacy.min.mjs";
     const pdfjs = await import(/* webpackIgnore: true */ moduleUrl);
+    const importerUrl = "/vendor/maic-importer/index.js";
+    const importer = await import(/* webpackIgnore: true */ importerUrl);
     pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.legacy.min.mjs";
     const document = await pdfjs.getDocument({ data: new Uint8Array(data) }).promise;
     try {
@@ -40,6 +42,7 @@ test("PDF renders with a real worker when newer Promise and typed-array APIs are
       const content = await firstPage.getTextContent();
       return {
         missingBeforeLoad,
+        importerReady: typeof importer.parse === "function" && typeof importer.importPptx === "function",
         pages: document.numPages,
         text: content.items.map((item: { str?: string }) => item.str || "").join(" "),
         pixel: Array.from(context.getImageData(80, 200, 1, 1).data),
@@ -49,6 +52,7 @@ test("PDF renders with a real worker when newer Promise and typed-array APIs are
     }
   }, bytes);
   expect(result.missingBeforeLoad).toBe(true);
+  expect(result.importerReady).toBe(true);
   expect(result.pages).toBe(1);
   expect(result.text).toContain("DESKTOP PDF COMPATIBILITY");
   expect(result.pixel).toEqual([255, 0, 0, 255]);

@@ -1,3 +1,4 @@
+import { withBackgroundAiPriority } from "@/lib/llm/classroom-capacity";
 export class ProactiveReviewCapacityError extends Error {
   readonly retryAfterMs: number;
 
@@ -24,7 +25,7 @@ export function createProactiveReviewCapacity(
       if (active >= limit) throw new ProactiveReviewCapacityError(retryAfterMs);
       active += 1;
       try {
-        return await operation();
+        return await withBackgroundAiPriority(operation);
       } finally {
         active -= 1;
       }

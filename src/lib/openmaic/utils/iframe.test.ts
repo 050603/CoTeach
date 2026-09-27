@@ -33,6 +33,15 @@ describe('patchHtmlForIframe activity bridge', () => {
 });
 
 describe('patchHtmlForIframe interactive runtimes', () => {
+  it.each(['https://unpkg.com/three@0.160.0/', 'https://cdn.jsdelivr.net/npm/three@0.160.0/', '//unpkg.com/three/'])('self-hosts Three.js import maps and addons from %s', (cdn) => {
+    const html = `<script type="importmap">{"imports":{"three":"${cdn}build/three.module.js","three/addons/":"${cdn}examples/jsm/"}}</script><script type="module">import { OrbitControls } from '${cdn}addons/controls/OrbitControls.js';</script>`;
+    const patched = patchHtmlForIframe(html);
+    expect(patched).toContain('"three":"/api/openmaic/interactive-runtime/three/0.160.0/build/three.module.js"');
+    expect(patched).toContain('"three/addons/":"/api/openmaic/interactive-runtime/three/0.160.0/examples/jsm/"');
+    expect(patched).toContain("import { OrbitControls } from '/api/openmaic/interactive-runtime/three/0.160.0/examples/jsm/controls/OrbitControls.js'");
+    expect(patched).not.toContain(cdn);
+  });
+
   it('routes generated Pyodide and CodeMirror assets through the same-origin runtime service', () => {
     const html = `<!doctype html><html><head>
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">

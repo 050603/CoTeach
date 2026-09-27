@@ -6,7 +6,7 @@ const courseStore = vi.hoisted(() => ({
   persistStudentAiProgress: vi.fn(),
 }));
 const classroomStore = vi.hoisted(() => ({
-  classroom: null as null | { scenes: Array<{ id: string; outlineId?: string }> },
+  classroom: null as null | { scenes: Array<{ id: string; outlineId?: string; stageKey?: string; audience?: string; generationPurpose?: string }> },
 }));
 const auth = vi.hoisted(() => ({
   authenticateRequest: vi.fn(),
@@ -21,8 +21,8 @@ vi.mock('@/lib/auth/session', () => ({
   isAuthConfigured: () => true,
 }));
 
-vi.mock('@/lib/session/server-store', () => ({
-  getCourse: vi.fn(async () => courseStore.course),
+vi.mock('@/lib/courses/ai-progress-context', () => ({
+  loadAiProgressContext: vi.fn(async () => courseStore.course),
 }));
 vi.mock('@/lib/courses/ai-progress-service', () => ({
   persistStudentAiProgress: courseStore.persistStudentAiProgress,
@@ -34,7 +34,8 @@ vi.mock('@openmaic/lib/server/classroom-storage', () => ({
   readClassroom: vi.fn(async () => classroomStore.classroom),
 }));
 
-import { POST } from './route';
+import { GET, POST } from './route';
+import { loadAiProgressContext } from '@/lib/courses/ai-progress-context';
 
 function request(body: Record<string, unknown>) {
   return new NextRequest('http://localhost/api/openmaic/progress', {
@@ -50,6 +51,7 @@ function request(body: Record<string, unknown>) {
 
 describe('progress route integrity', () => {
   beforeEach(() => {
+    vi.mocked(loadAiProgressContext).mockClear();
     courseStore.persistStudentAiProgress.mockReset();
     courseStore.persistStudentAiProgress.mockImplementation(async (_courseId, _studentId, progress) => progress);
     courseStore.course = {
@@ -78,6 +80,19 @@ describe('progress route integrity', () => {
         sv: 1,
       },
     });
+  });
+
+  it('rejects another student before querying progress data', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/openmaic/progress?courseId=course-1&studentId=other'));
+    expect(response.status).toBe(403);
+    expect(loadAiProgressContext).not.toHaveBeenCalled();
+  });
+
+  it('reads only the authenticated learner progress context', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/openmaic/progress?courseId=course-1&studentId=student-1'));
+    expect(response.status).toBe(200);
+    expect(loadAiProgressContext).toHaveBeenCalledWith('course-1', 'student-1');
+    expect(Object.keys((await response.json()).data.progress)).toEqual(['student-1']);
   });
 
   it('rejects progress written to a classroom not linked to the course', async () => {
@@ -110,8 +125,20 @@ describe('progress route integrity', () => {
       'course-1',
       'student-1',
       expect.objectContaining({ completedScenes: ['s1', 's2'] }),
-      100,
+      classroomStore.classroom!.scenes,
+      expect.objectContaining({ requestId: expect.stringMatching(/^legacy-/), fingerprint: expect.any(String), sessionVersion: 1 }),
     );
+  });
+
+  it('excludes teacher-only scenes from completion exactly as the student player does', async () => {
+    classroomStore.classroom!.scenes = [
+      { id: 's1', audience: 'student', stageKey: 'ai-learning', generationPurpose: 'knowledge-teaching' },
+      { id: 'teacher', audience: 'teacher', stageKey: 'ai-learning', generationPurpose: 'teacher-resource' },
+    ];
+    const response = await POST(request({ courseId: 'course-1', studentId: 'student-1', classroomId: 'classroom-1',
+      currentSceneIndex: 1, totalScenes: 2, completedScenes: ['s1', 'teacher'] }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).data.progress).toMatchObject({ totalScenes: 1, completedScenes: ['s1'], masteryLevel: 'completed' });
   });
 
   it('ignores a player-reported score when deciding completion and stored scoring', async () => {
@@ -160,6 +187,20 @@ describe('progress route integrity', () => {
     });
   });
 
+  it('fingerprints the stable original body rather than mutable progress and supports old clients', async () => {
+    const body = { courseId: 'course-1', studentId: 'student-1', classroomId: 'classroom-1', requestId: 'stable-id', currentSceneIndex: 0, totalScenes: 2, completedScenes: ['s1'] };
+    expect((await POST(request(body))).status).toBe(200);
+    const first = courseStore.persistStudentAiProgress.mock.calls.at(-1)?.[4];
+    courseStore.course!.aiLearningProgress = { 'student-1': { classroomId: 'classroom-1', completedScenes: ['s1', 's2'], completionModelVersion: 2 } };
+    expect((await POST(request(Object.fromEntries(Object.entries(body).reverse())))).status).toBe(200);
+    expect(courseStore.persistStudentAiProgress.mock.calls.at(-1)?.[4]).toEqual(first);
+    await POST(request({ ...body, completedScenes: ['s2'] }));
+    expect(courseStore.persistStudentAiProgress.mock.calls.at(-1)?.[4].fingerprint).not.toBe(first.fingerprint);
+  });
+  it('rejects malformed request identifiers without persisting progress', async () => {
+    expect((await POST(request({ courseId: 'course-1', studentId: 'student-1', classroomId: 'classroom-1', requestId: 'bad id', currentSceneIndex: 0, totalScenes: 1, completedScenes: [] }))).status).toBe(400);
+    expect(courseStore.persistStudentAiProgress).not.toHaveBeenCalled();
+  });
   it('rejects progress updates for another student identity', async () => {
     const response = await POST(request({
       courseId: 'course-1', studentId: 'student-2', classroomId: 'classroom-1',

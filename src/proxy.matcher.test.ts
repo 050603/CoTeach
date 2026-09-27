@@ -14,6 +14,16 @@ afterEach(() => {
 });
 
 describe("proxy matcher", () => {
+  it("sets an explicit same-origin connection source on public entry pages", async () => {
+    delete process.env.JWT_SECRET;
+    for (const pathname of ["/", "/student", "/teacher/login"]) {
+      const url = `http://127.0.0.1:3000${pathname}`;
+      expect(unstable_doesMiddlewareMatch({ config, url })).toBe(true);
+      const response = await proxy(new NextRequest(url, { headers: { host: "127.0.0.1:3000" } }));
+      expect(response.headers.get("Content-Security-Policy")).toContain("connect-src 'self' data: wss: http://127.0.0.1:3000");
+    }
+  });
+
   it("keeps upload bodies out of Proxy buffering", () => {
     expect(unstable_doesMiddlewareMatch({
       config,

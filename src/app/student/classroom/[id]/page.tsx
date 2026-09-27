@@ -95,6 +95,10 @@ export default function StudentClassroomPage() {
       : null;
   const forcedProjection = projectedResource && projectedResource.mode !== "optional" ? projectedResource : null;
   const optionalProjection = projectedResource?.mode === "optional" ? projectedResource : null;
+  // Both OpenMAIC players share the stage store. Mount only the visible player;
+  // otherwise personal progress hydration replaces the teacher's projected scene.
+  // Remounting personal learning restores its persisted progress after projection.
+  const teacherPlayerOpen = Boolean(forcedProjection || (optionalProjection && optionalProjectionOpen));
   const uploadedProjection =
     course.uiState?.resourceProjection?.stageKey === currentStage?.key
       ? course.uiState.resourceProjection
@@ -183,7 +187,7 @@ export default function StudentClassroomPage() {
               <section className={activeStageKey === "ai-learning"
                 ? "min-h-0 flex-1 overflow-hidden rounded-[var(--radius-lg)] border border-blue-100 bg-[linear-gradient(180deg,#f8fbff_0%,#ffffff_42%)] shadow-[0_16px_42px_rgba(30,64,175,0.08)]"
                 : "overflow-hidden rounded-[var(--radius-lg)]"}>
-                {uploadedProjection ? null : (
+                {uploadedProjection || teacherPlayerOpen ? null : (
                   <StudentStageView
                     course={course}
                     view={currentStage.view}

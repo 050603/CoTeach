@@ -28,6 +28,7 @@ export async function parse(buffer: ArrayBuffer, options?: ParseOptions): Promis
 }
 
 export { parseZip, buildPresentation, toPptxtojsonFormat };
+export { configurePdfWorker } from './utils/mediaWebConvert';
 export type { Output, Slide, Element } from './adapter/types';
 export type { PptxFiles } from './parser/ZipParser';
 export type { PresentationData } from './model/Presentation';

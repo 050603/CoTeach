@@ -1,3 +1,4 @@
+import { withClassroomAiCapacity } from "@/lib/llm/classroom-capacity";
 /**
  * Unified LLM Call Layer
  *
@@ -295,9 +296,9 @@ export async function callLLM<T extends GenerateTextParams>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<GenerateTextResult<any, any, any>> {
   const run = () => callLLMWithoutCourseLimit(params, source, retryOptions, thinking);
-  return execution.bypassCourseGenerationLimit
+  return withClassroomAiCapacity(() => execution.bypassCourseGenerationLimit
     ? run()
-    : withCourseGenerationLlmSlot(run, { signal: params.abortSignal });
+    : withCourseGenerationLlmSlot(run, { signal: params.abortSignal }), params.abortSignal);
 }
 
 async function callLLMWithoutCourseLimit<T extends GenerateTextParams>(

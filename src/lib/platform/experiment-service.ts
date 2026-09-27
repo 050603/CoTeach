@@ -79,7 +79,9 @@ export async function getStudentExperimentAssessment(claims: AuthClaims, instanc
 export async function saveExperimentAssessmentDraft(claims: AuthClaims, instanceId: string, input: { phase: "pretest" | "posttest"; answers: unknown; currentPage: number; version: number }) {
   if (!Number.isInteger(input.currentPage) || input.currentPage < 0 || input.currentPage > 100 || !Number.isInteger(input.version) || input.version < 0) throw new PlatformError("INVALID_INPUT", "草稿页码或版本无效", 400);
   const result = await runMutationTransaction(async (tx) => {
-    await tx.$queryRaw`SELECT "id" FROM "ClassroomInstance" WHERE "id" = ${instanceId} FOR UPDATE`;
+    // Students share the classroom lifecycle guard. Their own assignment row
+    // below serializes draft/submit races without queuing the entire class.
+    await tx.$queryRaw`SELECT "id" FROM "ClassroomInstance" WHERE "id" = ${instanceId} FOR SHARE`;
     const student = await requireStudentUser(claims, tx);
     const instance = await tx.classroomInstance.findUnique({ where: { id: instanceId }, include: { activity: { include: { chapter: { include: { offering: true } } } } } });
     if (!instance) throw new PlatformError("NOT_FOUND", "课堂不存在", 404);
@@ -87,6 +89,7 @@ export async function saveExperimentAssessmentDraft(claims: AuthClaims, instance
     if (!enrollment || !ENROLLED.includes(enrollment.status)) throw new PlatformError("ENROLLMENT_REQUIRED", "请先加入教学班", 403);
     const available = input.phase === "posttest" ? isPosttestOpen(instance.status, instance.runtimeConfig) : isPretestAvailable(instance);
     if (!available) throw new PlatformError("ASSESSMENT_UNAVAILABLE", "当前无法保存测验草稿", 409);
+    await tx.$queryRaw`SELECT "id" FROM "ExperimentAssessmentAssignment" WHERE "instanceId" = ${instanceId} AND "enrollmentId" = ${enrollment.id} FOR UPDATE`;
     const assignment = await tx.experimentAssessmentAssignment.findUnique({ where: { instanceId_enrollmentId: { instanceId, enrollmentId: enrollment.id } } });
     if (!assignment) throw new PlatformError("ASSESSMENT_ASSIGNMENT_REQUIRED", "请重新打开课堂活动，获取本人的测验题目", 409);
     if (input.phase === "posttest") {
@@ -113,14 +116,16 @@ export async function saveExperimentAssessmentDraft(claims: AuthClaims, instance
   return result;
 }
 
-/** Assign on first student access. Parent locks serialize this with teacher edits. */
+/** Shared parent guards exclude teacher edits while distinct students proceed. */
 export async function ensureExperimentAssignment(instanceId: string, enrollmentId: string) {
   return runMutationTransaction(async (tx) => {
+    // Duplicate requests for one student serialize before taking parent guards.
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`experiment-assignment:${instanceId}:${enrollmentId}`}, 0))::text`;
     const ref = await tx.classroomInstance.findUnique({ where: { id: instanceId }, select: { activityId: true, activity: { select: { chapterId: true } } } });
     if (!ref) return null;
-    await tx.$queryRaw`SELECT "id" FROM "Chapter" WHERE "id" = ${ref.activity.chapterId} FOR UPDATE`;
-    await tx.$queryRaw`SELECT "id" FROM "Activity" WHERE "id" = ${ref.activityId} FOR UPDATE`;
-    await tx.$queryRaw`SELECT "id" FROM "ClassroomInstance" WHERE "id" = ${instanceId} FOR UPDATE`;
+    await tx.$queryRaw`SELECT "id" FROM "Chapter" WHERE "id" = ${ref.activity.chapterId} FOR SHARE`;
+    await tx.$queryRaw`SELECT "id" FROM "Activity" WHERE "id" = ${ref.activityId} FOR SHARE`;
+    await tx.$queryRaw`SELECT "id" FROM "ClassroomInstance" WHERE "id" = ${instanceId} FOR SHARE`;
     const instance = await tx.classroomInstance.findUnique({ where: { id: instanceId }, include: { activity: { include: { chapter: { include: { offering: true } } } } } });
     const now = new Date();
     if (!instance || !["scheduled", "teaching"].includes(instance.status.toLowerCase()) || instance.activity.archivedAt || instance.activity.chapter.archivedAt || !instance.activity.isOpen || !instance.activity.chapter.isOpen || instance.activity.opensAt && instance.activity.opensAt > now || instance.activity.chapter.opensAt && instance.activity.chapter.opensAt > now || instance.activity.chapter.offering.status.toLowerCase() !== "open") return null;
@@ -132,6 +137,9 @@ export async function ensureExperimentAssignment(instanceId: string, enrollmentI
     if (existing) return existing;
     let variant: ExperimentVariant = "none";
     if (experiment.scenarioPair) {
+      // Only balanced A/B allocation needs a class-wide critical section.
+      // The assignment uniqueness lock and parent guards are otherwise shared.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`experiment-counterbalance:${instanceId}`}, 0))::text`;
       const [aCount, bCount] = await Promise.all([
         tx.experimentAssessmentAssignment.count({ where: { instanceId, variant: "A_PRE_B_POST" } }),
         tx.experimentAssessmentAssignment.count({ where: { instanceId, variant: "B_PRE_A_POST" } }),
@@ -155,7 +163,7 @@ export async function submitExperimentAssessment(
   const phase = ExperimentPhaseSchema.safeParse(input.phase);
   if (!phase.success) throw new PlatformError("INVALID_INPUT", "请选择前测或后测", 400);
   const result = await runMutationTransaction(async (tx) => {
-    await tx.$queryRaw`SELECT "id" FROM "ClassroomInstance" WHERE "id" = ${instanceId} FOR UPDATE`;
+    await tx.$queryRaw`SELECT "id" FROM "ClassroomInstance" WHERE "id" = ${instanceId} FOR SHARE`;
     const student = await requireStudentUser(claims, tx);
     const instance = await tx.classroomInstance.findUnique({
       where: { id: instanceId },
@@ -175,6 +183,7 @@ export async function submitExperimentAssessment(
     } else if (!isPosttestOpen(instance.status, instance.runtimeConfig)) {
       throw new PlatformError("POSTTEST_UNAVAILABLE", "教师进入后测阶段后才可提交", 409);
     }
+    await tx.$queryRaw`SELECT "id" FROM "ExperimentAssessmentAssignment" WHERE "instanceId" = ${instanceId} AND "enrollmentId" = ${enrollment.id} FOR UPDATE`;
     const assignment = await tx.experimentAssessmentAssignment.findUnique({ where: { instanceId_enrollmentId: { instanceId, enrollmentId: enrollment.id } } });
     if (!assignment) throw new PlatformError("ASSESSMENT_ASSIGNMENT_REQUIRED", "请重新打开课堂活动，获取本人的测验题目", 409);
     const questionnaire = { enabled: true, pretest: assignedQuestions(assignment, "pretest"), posttest: assignedQuestions(assignment, "posttest") };

@@ -103,7 +103,8 @@ async function mockClassroom(page: Page, options: { rejectFullscreen?: boolean; 
       .setProtectedHeader({ alg: "HS256" }).setSubject("e2e-presentation-teacher")
       .setIssuer("openpbl").setAudience("openpbl-app").setIssuedAt().setExpirationTime("1h")
       .sign(new TextEncoder().encode(secret));
-    await page.context().addCookies([{ name: "openpbl_teacher", value: token, domain: "localhost", path: "/", httpOnly: true, sameSite: "Lax" }]);
+    const baseURL = process.env.OPENPBL_RESOURCE_E2E_BASE_URL || "http://localhost:3000";
+    await page.context().addCookies([{ name: "openpbl_teacher", value: token, domain: new URL(baseURL).hostname, path: "/", httpOnly: true, sameSite: "Lax" }]);
   }
   await page.routeWebSocket(/.*/, (socket) => {
     if (new URL(socket.url()).pathname.startsWith("/_next/")) {

@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { unlink } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   courseResourceCreate: vi.fn(),
   courseUpdate: vi.fn(),
   courseEventCreate: vi.fn(),
+  receiptFind: vi.fn(),
+  fileFind: vi.fn(),
+  advisoryLock: vi.fn(),
   publishCourseEvent: vi.fn(),
   courseCount: vi.fn(),
   transaction: vi.fn(),
@@ -46,6 +49,8 @@ vi.mock("@/lib/db/client", () => ({
   prisma: {
     courseOffering: { count: mocks.courseCount },
     $transaction: mocks.transaction,
+    domainEvent: { findUnique: mocks.receiptFind },
+    fileAsset: { findUnique: mocks.fileFind },
   },
 }));
 vi.mock("@/lib/realtime/event-bus", () => ({
@@ -57,8 +62,26 @@ vi.mock("@/lib/platform/access", () => ({ canAccessLegacyCourse: vi.fn(async () 
 vi.mock("@/lib/uploads/scope", () => ({ resolveUploadScope: mocks.uploadScope }));
 
 import { POST } from "./route";
+import { authenticateRequest } from '@/lib/auth/request-guards';
+import { canAccessLegacyCourse } from '@/lib/platform/access';
 
 const courseId = "course-1";
+function uploadRequest(key: string, content = 'first contents', trace = 'trace-1') {
+  const form = new FormData();
+  form.set('file', new File([content], 'notes.txt', { type: 'text/plain' }));
+  form.set('courseId', courseId);
+  form.set('bindAsCourseResource', 'true');
+  return new Request('http://localhost:3000/api/uploads', { method: 'POST', headers: { origin: 'http://localhost:3000', 'Idempotency-Key': key, 'x-request-id': trace }, body: form });
+}
+function enableReceipts() {
+  const receipts = new Map<string, unknown>();
+  mocks.receiptFind.mockImplementation(async ({ where }: { where: { idempotencyKey: string } }) => receipts.get(where.idempotencyKey) ?? null);
+  mocks.courseEventCreate.mockImplementation(async ({ data }: { data: { eventType: string; idempotencyKey: string } }) => {
+    if (data.eventType === 'UPLOAD_RECEIPT') receipts.set(data.idempotencyKey, { id: 'receipt', ...data });
+    return { id: 'event-41', ...data };
+  });
+  mocks.fileTypeFromBuffer.mockResolvedValue(null);
+}
 
 describe("teacher course resource upload", () => {
   beforeEach(() => {
@@ -76,12 +99,16 @@ describe("teacher course resource upload", () => {
     mocks.courseResourceCreate.mockResolvedValue({});
     mocks.courseUpdate.mockResolvedValue({ version: 7 });
     mocks.courseEventCreate.mockResolvedValue({ id: "event-41" });
+    mocks.receiptFind.mockResolvedValue(null);
+    mocks.fileFind.mockResolvedValue(null);
+    mocks.advisoryLock.mockResolvedValue([]);
     mocks.publishCourseEvent.mockResolvedValue(undefined);
     mocks.transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback({
       fileAsset: { create: mocks.uploadFileCreate },
       resource: { create: mocks.courseResourceCreate },
       courseOffering: { update: mocks.courseUpdate },
-      domainEvent: { create: mocks.courseEventCreate },
+      domainEvent: { create: mocks.courseEventCreate, findUnique: mocks.receiptFind },
+      $queryRaw: mocks.advisoryLock,
     }));
   });
 
@@ -401,5 +428,56 @@ describe("teacher course resource upload", () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('"requestId":"upload-test-500"'));
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('"failureStage":"bind-database"'));
     errorSpy.mockRestore();
+  });
+  it('replays the same file and resource after response loss even with a new tracing request ID', async () => {
+    enableReceipts();
+    const first = await POST(uploadRequest('logical-upload', 'first contents', 'nginx-trace-a'));
+    const replay = await POST(uploadRequest('logical-upload', 'first contents', 'nginx-trace-b'));
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    const original = await first.json();
+    expect(await replay.json()).toEqual(original);
+    expect(original.requestId).toBe('logical-upload');
+    expect(replay.headers.get('x-request-id')).toBe('nginx-trace-b');
+    expect(mocks.uploadFileCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.courseResourceCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.transaction).toHaveBeenCalledTimes(1);
+  });
+  it('rejects changed input for a committed operation but allows an intentional new upload', async () => {
+    enableReceipts();
+    const first = await POST(uploadRequest('logical-upload'));
+    const changed = await POST(uploadRequest('logical-upload', 'different contents'));
+    expect(changed.status).toBe(409);
+    expect(await changed.json()).toMatchObject({ code: 'UPLOAD_REQUEST_CONFLICT' });
+    const fresh = await POST(uploadRequest('new-operation'));
+    expect((await fresh.json()).id).not.toBe((await first.json()).id);
+    expect(mocks.uploadFileCreate).toHaveBeenCalledTimes(2);
+  });
+  it('authorizes before reading a receipt and scopes identical keys to the authenticated user', async () => {
+    enableReceipts();
+    await POST(uploadRequest('logical-upload'));
+    mocks.receiptFind.mockClear();
+    vi.mocked(canAccessLegacyCourse).mockResolvedValueOnce(false);
+    expect((await POST(uploadRequest('logical-upload'))).status).toBe(403);
+    expect(mocks.receiptFind).not.toHaveBeenCalled();
+    vi.mocked(authenticateRequest).mockResolvedValueOnce({ claims: { sub: 'teacher-2', role: 'teacher', username: 'teacher-2', displayName: 'Teacher 2', sv: 1 } });
+    expect((await POST(uploadRequest('logical-upload'))).status).toBe(201);
+    expect(mocks.uploadFileCreate).toHaveBeenCalledTimes(2);
+  });
+  it('never unlinks a committed file when the transaction acknowledgement is lost', async () => {
+    enableReceipts();
+    const normalTransaction = mocks.transaction.getMockImplementation()!;
+    mocks.transaction.mockImplementationOnce(async (...args: unknown[]) => {
+      await normalTransaction(...args);
+      throw new Error('connection lost after commit');
+    });
+    mocks.fileFind.mockResolvedValue({ id: 'committed-file' });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      expect((await POST(uploadRequest('lost-commit-ack'))).status).toBe(500);
+      expect(await readFile(path.resolve('.openpbl-data/uploads', mocks.storedNames[0]), 'utf8')).toBe('first contents');
+      expect((await POST(uploadRequest('lost-commit-ack'))).status).toBe(201);
+      expect(mocks.uploadFileCreate).toHaveBeenCalledTimes(1);
+    } finally { errorSpy.mockRestore(); }
   });
 });

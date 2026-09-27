@@ -512,10 +512,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
 
   async function refresh(preferredRole?: "teacher" | "student") {
+    const requestPath = window.location.pathname;
     if (getSessionRouteMode(pathname) === "identity") {
       const role = preferredRole ?? (pathname.startsWith("/teacher") ? "teacher" : "student");
       const response = await boundedFetch("/api/auth/me", { cache: "no-store", headers: { "X-OpenPBL-Role": role } });
       const body = response.ok ? await response.json() as { user?: { role?: string; displayName?: string; studentName?: string } } : null;
+      if (window.location.pathname !== requestPath) return;
       const next = makeEmptyHydratedState();
       if (body?.user?.role === role) next.user = { ...next.user, role, name: body.user.displayName || body.user.studentName || (role === "teacher" ? "教师" : "学生") };
       dispatch({ type: "HYDRATE", payload: next });
@@ -528,6 +530,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (pendingCommitsRef.current > 0) return;
     try {
       const next = applyIdentity(await fetchSession(preferredRole));
+      if (window.location.pathname !== requestPath || pendingCommitsRef.current > 0) return;
+      // Initial session hydration can arrive after a newer per-course snapshot.
+      next.courses = next.courses.map((incoming) => {
+        const current = stateRef.current.courses.find((course) => course.id === incoming.id);
+        if (!current) return incoming;
+        if ((current.version ?? 0) > (incoming.version ?? 0)) return current;
+        return { ...incoming, uiState: mergeCourseUiStateWithProjectionGuard(current.uiState, incoming.uiState, hasProjectionWork(incoming.id)) };
+      });
       // Long-polling optimisation (Stage 4): skip HYDRATE if nothing changed.
       // When WebSocket is connected, we rely on patch-driven refreshes; the
       // 5s long-poll is only a fallback and shouldn't churn the UI.
@@ -545,6 +555,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       stateRef.current = next;
       dispatch({ type: "HYDRATE", payload: next });
     } catch (error) {
+      if (window.location.pathname !== requestPath) return;
       // 401（未登录）在公开页面轮询时属正常情况，静默处理不弹提示。
       // 仅对真正的服务器错误（500 等）弹出错误提示。
       const isUnauthorized = error instanceof Error && error.message === "SESSION_UNAUTHORIZED";
@@ -693,6 +704,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const previous = stateRef.current.courses.find(
       (course) => course.id === courseId,
     )?.uiState;
+    if (previous?.projectionController
+      && previous.projectionController.clientId !== projectionClientId()
+      && !(action.type === "SET_UI_STATE" && action.payload.projectionControl?.takeover)) return;
     const immediate = isImmediateProjectionPatch(previous, patch);
     const next = applySessionAction(stateRef.current, action);
     stateRef.current = next;
@@ -1881,7 +1895,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const prepared = prepareSubmission(input);
         if (!prepared) return undefined;
         const persisted = await commit({ type: "UPSERT_SUBMISSION", payload: prepared });
-        return persisted ? prepared.submission : undefined;
+        return persisted ? { ...prepared.submission, version: confirmedSubmissionVersionsRef.current.get(`${prepared.courseId}:${prepared.submission.id}`) ?? prepared.submission.version } : undefined;
       },
       addFeedback(input) {
         const courseId = input.courseId;

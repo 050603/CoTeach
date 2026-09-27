@@ -107,7 +107,7 @@ describe("NewShowcaseStudentView", () => {
     initial.data = { ...initial.data, ownArtifacts: [artifact, pdfArtifact] };
     initial.reload = async () => { mocks.state = { ...initial, data: { ...initial.data, ownArtifacts: [added, artifact, pdfArtifact] } }; };
     mocks.state = initial;
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ sequence: 3 }) }));
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => Response.json({ sequence: 3, versionId: "new-pdf", uploadId: "uploaded-pdf" }, { status: 201 })));
     const view = render(<NewShowcaseStudentView course={course} />);
     fireEvent.click(screen.getByRole("button", { name: "选择主汇报资料" }));
     fireEvent.click(screen.getByRole("option", { name: /节水成果汇报演示稿/ }));

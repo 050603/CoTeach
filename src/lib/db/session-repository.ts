@@ -1,8 +1,8 @@
 // V2 persistence boundary. Course is an application projection of template/instance entities.
 import { Prisma } from "@prisma/client";
 import { prisma } from "./client";
-import { runMutationTransaction } from "./transaction-retry";
-import { loadInstanceCourse, persistInstanceCourse, json } from "./v2-course-projection";
+import { hasCourseMutationAdmission, runMutationTransaction } from "./transaction-retry";
+import { loadInstanceCourse, persistInstanceCourse, json, type CourseReadScope } from "./v2-course-projection";
 import { loadPblTemplateCourse, savePblTemplateCourse } from "@/lib/platform/pbl-template-repository";
 import { applySessionAction, initialSessionState, type SessionAction, type SessionState } from "@/lib/session/actions";
 import type { Course } from "@/lib/session/types";
@@ -13,7 +13,7 @@ export class CourseVersionConflictError extends Error { constructor(public reado
 export async function retryCourseVersionConflict<T>(operation: () => Promise<T>, attempts = 5, delayMs = 10): Promise<T> {
   for (let attempt = 1; ; attempt++) { try { return await operation(); } catch (error) { if (!(error instanceof CourseVersionConflictError) || attempt >= attempts) throw error; if (delayMs) await new Promise(resolve => setTimeout(resolve, delayMs)); } }
 }
-export async function loadCourse(courseId: string, db: Prisma.TransactionClient = prisma): Promise<Course | undefined> { return await loadInstanceCourse(courseId, db) ?? await loadPblTemplateCourse(courseId, db) ?? undefined; }
+export async function loadCourse(courseId: string, db: Prisma.TransactionClient = prisma, readScope?: CourseReadScope): Promise<Course | undefined> { return await loadInstanceCourse(courseId, db, readScope) ?? await loadPblTemplateCourse(courseId, db) ?? undefined; }
 export function stateFor(courses: Course[]): SessionState { return { ...initialSessionState(), courses, hydrated: true, updatedAt: new Date().toISOString() }; }
 export async function loadSessionState(ownerId?: string): Promise<SessionState> {
   const [templates, instances] = await Promise.all([
@@ -30,7 +30,12 @@ export async function loadCourseByInviteCode(inviteCode: string): Promise<Course
   return instance ? loadCourse(instance.id) : undefined;
 }
 export async function lockProjectedCourse(tx: Prisma.TransactionClient, id: string) {
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`v2-course:${id}`}, 0))::text`;
+  if (!hasCourseMutationAdmission(tx, id)) {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`v2-course:${id}`}, 0))::text`;
+  }
+  // Row-only domain writers (finalization, classroom closure, experiments) must
+  // also exclude a projection read/modify/write. Always acquire advisory first.
+  await tx.$queryRaw`SELECT id FROM "ClassroomInstance" WHERE id = ${id} FOR UPDATE`;
 }
 export async function saveCourse(course: Course): Promise<Course> {
   return runMutationTransaction(async tx => { await lockProjectedCourse(tx, course.id); const before = await loadCourse(course.id, tx); if (!before) throw new CourseNotFoundError(course.id); if (course.version !== undefined && before.version !== course.version) throw new CourseVersionConflictError(course.id, course.version); const instance = await tx.classroomInstance.findUnique({ where: { id: course.id }, select: { id: true } }); if (instance) await persistInstanceCourse(tx, before, course); else return savePblTemplateCourse(course, undefined, tx); return (await loadCourse(course.id, tx))!; });

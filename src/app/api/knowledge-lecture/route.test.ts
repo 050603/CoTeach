@@ -10,8 +10,17 @@ const store = vi.hoisted(() => ({
   course: null as Course | null,
   classroom: null as PersistedClassroomData | null,
   authConfigured: false,
+  durable: false,
+  claimTutor: vi.fn(),
+  persistAttempt: vi.fn(),
+  finishTutor: vi.fn(),
+  failTutor: vi.fn(),
   claims: null as { role: string; sub: string } | null,
 }));
+vi.mock("@/lib/ai-collaboration/audit-outbox", () => ({ appendDurableAiInteractionEvents: vi.fn(async () => {}) }));
+vi.mock("@/lib/db/client", () => ({ isDatabaseConfigured: () => store.durable, prisma: {} }));
+vi.mock("@/lib/courses/knowledge-lecture-attempts", async (importOriginal) => ({ ...await importOriginal<typeof import("@/lib/courses/knowledge-lecture-attempts")>(), persistKnowledgeLectureAttempt: store.persistAttempt, loadKnowledgeLectureContext: async () => store.course }));
+vi.mock("@/lib/courses/knowledge-tutor-requests", () => ({ claimTutorRequest: store.claimTutor, finishTutorRequest: store.finishTutor, failTutorRequest: store.failTutor }));
 vi.mock("@/lib/auth/request-guards", () => ({ requireSameOrigin: () => null }));
 vi.mock("@/lib/auth/session", () => ({
   isAuthConfigured: () => store.authConfigured,
@@ -45,6 +54,7 @@ describe("knowledge lecture server-authoritative grading", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     store.authConfigured = false;
+    store.durable = false;
     store.claims = null;
     vi.mocked(resolveModelFromRequest).mockResolvedValue({ model: {}, thinkingConfig: undefined } as never);
     vi.mocked(getKnowledgeLectureTutorSettings).mockResolvedValue({ modelString: "" } as never);
@@ -67,6 +77,25 @@ describe("knowledge lecture server-authoritative grading", () => {
             commentPrompt: "说明变量关系", knowledgePointIds: ["kp-1"] },
         ] } }],
     } as PersistedClassroomData;
+  });
+
+  it("uses the narrow service for durable quiz submissions without updating a complete Course", async () => {
+    store.durable = true;
+    store.persistAttempt.mockImplementation(async (input) => input.attempt);
+    const response = await POST(request({ "choice-1": "A", "short-1": "" }));
+    expect(response.status).toBe(200);
+    expect(store.persistAttempt).toHaveBeenCalledWith(expect.objectContaining({ courseId: "course-1", studentId: "student-1", classroomId: "classroom-1", attempt: expect.objectContaining({ gradingSource: "server", id: "lecture-attempt-student-1-quiz-1" }) }));
+    const { updateCourse } = await import("@/lib/session/server-store"); expect(updateCourse).not.toHaveBeenCalled();
+  });
+  it("does not acknowledge a grade if raw/terminal retention fails after model completion", async () => {
+    const { appendDurableAiInteractionEvents } = await import("@/lib/ai-collaboration/audit-outbox");
+    store.durable = true;
+    store.persistAttempt.mockImplementation(async input => input.attempt);
+    vi.mocked(appendDurableAiInteractionEvents).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("isolated disk failure"));
+    const response = await POST(request({ "choice-1": "A", "short-1": "保留的答案" }));
+    expect(response.status).toBe(503);
+    expect(store.persistAttempt).toHaveBeenCalledTimes(1); // Accepted answer only, no unretained grade commit.
+    expect(vi.mocked(callLLM)).toHaveBeenCalledWith(expect.objectContaining({ maxRetries: 0 }), "quiz-grade", undefined, undefined);
   });
 
   it("ignores forged browser scores and uses the linked scene's question/rubric", async () => {
@@ -164,4 +193,62 @@ describe("knowledge lecture server-authoritative grading", () => {
     expect(tutorResponse.status).toBe(200);
     expect(vi.mocked(callLLM).mock.calls.at(-1)?.[0].prompt).toContain("选项：\nA. 变量增加\nB. 变量减少");
   });
+  it("replays a durable tutor receipt without another AI call", async () => {
+    const response = await POST(request({ "choice-1": "B", "short-1": "因为" }));
+    const { attempt } = await response.json() as { attempt: KnowledgeLectureAttempt };
+    store.durable = true;
+    const thread = { id: "existing-thread", messages: [] };
+    store.claimTutor.mockResolvedValue({ run: false, status: "COMPLETED", thread });
+    vi.mocked(callLLM).mockClear();
+    const tutor = await POST(request({}, { action: "tutor-message", attemptId: attempt.id, questionId: "choice-1", message: "为什么", requestId: "stable-request" }));
+    expect(tutor.status).toBe(200);
+    expect(await tutor.json()).toEqual({ thread });
+    expect(callLLM).not.toHaveBeenCalled();
+  });
+
+  it("returns answers beyond 3000 characters and passes exact raw JSON to durable storage", async () => {
+    const response = await POST(request({ "choice-1": "B", "short-1": "因为" }));
+    const { attempt } = await response.json() as { attempt: KnowledgeLectureAttempt };
+    store.durable = true;
+    store.claimTutor.mockResolvedValue({ run: true, token: "token" });
+    store.finishTutor.mockImplementation(async (_input, _token, thread) => thread);
+    const answer = "  完整回答".repeat(700) + "\n";
+    const raw = "\n " + JSON.stringify({ answer, boardNotes: [{ title: "重要依据", body: "完整板书".repeat(300) }] }) + " ";
+    vi.mocked(callLLM).mockResolvedValue({ text: raw } as never);
+    const message = " " + "问".repeat(998) + " ";
+    const args = { action: "tutor-message", attemptId: attempt.id, questionId: "choice-1", message, requestId: "long-stable-request" };
+    const tutor = await POST(request({}, args));
+    expect(tutor.status).toBe(200);
+    const { thread } = await tutor.json();
+    expect(thread.messages[0].content).toBe(message);
+    expect(thread.messages[1].content).toBe(answer);
+    expect(thread.boardNotes[0].body).toHaveLength(500);
+    expect(store.claimTutor).toHaveBeenCalledWith(expect.objectContaining({ message }));
+    expect(store.finishTutor.mock.calls.at(-1)?.[3]).toBe(raw);
+    store.claimTutor.mockResolvedValue({ run: false, status: "COMPLETED", thread });
+    vi.mocked(callLLM).mockClear();
+    expect(await (await POST(request({}, args))).json()).toEqual({ thread });
+    expect(callLLM).not.toHaveBeenCalled();
+  });
+  it.each(["问".repeat(1001), " ".repeat(1000) + "问"])("rejects oversized input instead of silently truncating it", async (message) => {
+    const response = await POST(request({ "choice-1": "B", "short-1": "因为" }));
+    const { attempt } = await response.json() as { attempt: KnowledgeLectureAttempt };
+    store.durable = true;
+    vi.mocked(callLLM).mockClear();
+    const tutor = await POST(request({}, { action: "tutor-message", attemptId: attempt.id, questionId: "choice-1", message, requestId: "oversize" }));
+    expect(tutor.status).toBe(400);
+    expect(await tutor.json()).toMatchObject({ error: "TUTOR_MESSAGE_TOO_LONG", maxLength: 1000 });
+    expect(store.claimTutor).not.toHaveBeenCalled();
+    expect(callLLM).not.toHaveBeenCalled();
+  });
+
+  it("requires a stable request id before starting durable tutoring", async () => {
+    const response = await POST(request({ "choice-1": "B", "short-1": "因为" }));
+    const { attempt } = await response.json() as { attempt: KnowledgeLectureAttempt };
+    store.durable = true;
+    const tutor = await POST(request({}, { action: "tutor-message", attemptId: attempt.id, questionId: "choice-1", message: "为什么" }));
+    expect(tutor.status).toBe(400);
+    expect(store.claimTutor).not.toHaveBeenCalled();
+  });
+
 });

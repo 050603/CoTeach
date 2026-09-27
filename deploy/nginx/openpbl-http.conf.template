@@ -26,6 +26,8 @@ map $uri $application_connection_key {
     ~^/(_next/static|brand)/ "";
 }
 limit_conn_zone $application_connection_key zone=per_ip_application:10m;
+# A WebSocket must not consume the HTTP request budget for every campus user.
+limit_conn_zone $binary_remote_addr zone=per_ip_websocket:10m;
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -57,10 +59,10 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(self), geolocation=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' data: ws: wss:; frame-src 'self' blob: data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+    # Pass through the application's request-specific Content-Security-Policy.
+    # A static edge copy can block the self-hosted WASM and sandboxed runtimes.
 
     proxy_hide_header X-Powered-By;
-    proxy_hide_header Content-Security-Policy;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -69,7 +71,8 @@ server {
     proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Request-Id $request_id;
     proxy_connect_timeout 10s;
-    limit_conn per_ip_application 200;
+    # 42 cold browsers issue multiple concurrent API/RSC requests per page.
+    limit_conn per_ip_application 1024;
 
     location = /healthz {
         access_log off;
@@ -86,6 +89,7 @@ server {
     }
 
     location /ws {
+        limit_conn per_ip_websocket 150;
         proxy_pass http://openpbl_new_ws;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
@@ -123,7 +127,7 @@ server {
     }
 
     location = /api/uploads {
-        limit_req zone=uploads burst=20 nodelay;
+        limit_req zone=uploads burst=80 nodelay;
         client_max_body_size 501m;
         client_body_timeout 600s;
         proxy_request_buffering off;

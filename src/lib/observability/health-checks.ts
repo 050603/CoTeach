@@ -4,6 +4,8 @@
 // the same dependency checks.
 
 import { prisma, isDatabaseConfigured } from "@/lib/db/client";
+import { getRedisClient } from "@/lib/redis/client";
+import { randomUUID } from "node:crypto";
 import {
   getServerProviders,
   resolveBaseUrl,
@@ -28,14 +30,12 @@ async function withTimeout(
   fn: () => Promise<CheckResult>,
 ): Promise<CheckResult> {
   const start = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await Promise.race([
       fn(),
       new Promise<CheckResult>((resolve) =>
-        setTimeout(
-          () => resolve({ ok: false, error: `${label} timeout` }),
-          DEPENDENCY_TIMEOUT_MS,
-        ),
+        { timer = setTimeout(() => resolve({ ok: false, error: `${label} timeout` }), DEPENDENCY_TIMEOUT_MS); timer.unref?.(); },
       ),
     ]);
     return { ...result, latencyMs: Date.now() - start };
@@ -45,12 +45,12 @@ async function withTimeout(
       latencyMs: Date.now() - start,
       error: err instanceof Error ? err.message : String(err),
     };
-  }
+  } finally { if (timer) clearTimeout(timer); }
 }
 
 async function checkDb(): Promise<CheckResult> {
   if (!isDatabaseConfigured()) {
-    return { ok: true, latencyMs: 0, error: "not_configured" };
+    return { ok: process.env.NODE_ENV !== "production", latencyMs: 0, error: "not_configured" };
   }
   try {
     await prisma.$queryRaw`SELECT 1`;
@@ -91,59 +91,34 @@ async function checkLlm(): Promise<CheckResult> {
   return { ok: true };
 }
 
-/** Filesystem: write + delete a temp file under the OS temp dir. */
+/** Probe the directories that actually hold durable classroom data. */
 async function checkFs(): Promise<CheckResult> {
   const fs = await import("node:fs/promises");
-  const os = await import("node:os");
   const path = await import("node:path");
-  const probe = path.join(os.tmpdir(), `openpbl-health-${Date.now()}.tmp`);
-  try {
-    await fs.writeFile(probe, "ok");
-    await fs.unlink(probe);
-    return { ok: true };
-  } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
+  const directories = [
+    process.env.UPLOAD_DIR || path.resolve(".openpbl-data/uploads"),
+    process.env.CLASSROOM_DATA_DIR || path.resolve("data/classrooms"),
+    process.env.WHITEBOARD_DATA_DIR || path.resolve(".openpbl-data/whiteboards"),
+  ];
+  for (const directory of directories) {
+    const probe = path.join(directory, `.health-${randomUUID()}`);
+    let handle;
+    try {
+      handle = await fs.open(probe, "wx", 0o600);
+      await handle.writeFile("ok");
+      await handle.sync();
+    } catch { return { ok: false, error: "persistent_storage_unwritable" }; }
+    finally { await handle?.close().catch(() => undefined); await fs.unlink(probe).catch(() => undefined); }
   }
+  return { ok: true };
 }
 
-/**
- * Redis: only checked when REDIS_URL is set. We use a raw TCP connection
- * (connect event) rather than adding `ioredis` as a dependency.
- */
+/** A TCP handshake alone cannot prove that authenticated Redis commands work. */
 async function checkRedis(): Promise<CheckResult | undefined> {
-  const url = process.env.REDIS_URL;
-  if (!url) return undefined;
-  try {
-    const parsed = new URL(url);
-    const port = Number(parsed.port || 6379);
-    const host = parsed.hostname;
-    const net = await import("node:net");
-    return await new Promise<CheckResult>((resolve) => {
-      const socket = net.createConnection({ host, port });
-      const timer = setTimeout(() => {
-        socket.destroy();
-        resolve({ ok: false, error: "redis timeout" });
-      }, DEPENDENCY_TIMEOUT_MS);
-      socket.once("connect", () => {
-        clearTimeout(timer);
-        socket.destroy();
-        resolve({ ok: true });
-      });
-      socket.once("error", (err) => {
-        clearTimeout(timer);
-        socket.destroy();
-        resolve({ ok: false, error: err.message });
-      });
-    });
-  } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
+  if (!process.env.REDIS_URL) return undefined;
+  const client = await getRedisClient();
+  if (!client) return { ok: false, error: "redis_unavailable" };
+  return { ok: await client.ping() === "PONG" };
 }
 
 /**

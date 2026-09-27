@@ -44,7 +44,7 @@ async function main() {
       const stageKey = course.stages[index].key;
       await executeCourseAction(instance.id, { requestId: randomUUID(), action: { type: "UPDATE_STUDENT_PROGRESS", payload: { courseId: instance.id, studentId: student.user.id, stageKey, value: 100 } } }, claims);
       const now = new Date().toISOString();
-      await executeCourseAction(instance.id, { requestId: randomUUID(), action: { type: "UPSERT_SUBMISSION", payload: { courseId: instance.id, submission: { id: randomUUID(), courseId: instance.id, studentId: student.user.id, studentName: "Student", stageKey, type: "document", title: stageKey, content: `Evidence for ${stageKey}`, createdAt: now, updatedAt: now, status: "submitted" } } } }, claims);
+      await executeCourseAction(instance.id, { requestId: randomUUID(), action: { type: "UPSERT_SUBMISSION", payload: { courseId: instance.id, expectedSubmissionVersion: 0, submission: { id: randomUUID(), courseId: instance.id, studentId: student.user.id, studentName: "Student", stageKey, type: "document", title: stageKey, content: `Evidence for ${stageKey}`, createdAt: now, updatedAt: now, status: "submitted" } } } }, claims);
       const after = await loadCourse(instance.id);
       assert.equal(after?.currentStageIndex, index); assert.equal(after?.students[0].stageProgress[stageKey], 100);
       assert.ok(after?.submissions?.some(s => s.stageKey === stageKey && s.content === `Evidence for ${stageKey}`));

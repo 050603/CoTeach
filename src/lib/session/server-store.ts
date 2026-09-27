@@ -224,9 +224,9 @@ export async function dispatchSessionAction(
   return result;
 }
 
-export async function getCourse(courseId: string): Promise<Course | undefined> {
+export async function getCourse(courseId: string, readScope?: { studentId: string }): Promise<Course | undefined> {
   if (isDatabaseConfigured()) {
-    return dbLoadCourse(courseId);
+    return dbLoadCourse(courseId, undefined, readScope);
   }
   warnIfDemoMode();
   const state = await readJsonState();

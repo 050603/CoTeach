@@ -34,11 +34,12 @@ export async function claimTutorRequest(input: TutorRequest): Promise<{ run: tru
     const token = randomUUID();
     await tx.aiTask.create({ data: { id, conversationId, offeringId: participation.enrollment.offeringId, createdById: input.studentId, taskType: "KNOWLEDGE_LECTURE_TUTOR", status: "RUNNING", input: json({ ...input, fingerprint, token }), startedAt: new Date() } });
     await tx.aiMessage.create({ data: { id: `${id}:student`, conversationId, userId: input.studentId, role: "user", content: input.message, metadata: { requestId: input.requestId, initial: input.initial } } });
+    await tx.aiInteractionEvent.create({ data: { idempotencyKey: `${id}:question`, userId: input.studentId, participationId: participation.id, offeringId: participation.enrollment.offeringId, researchKey: participation.enrollment.researchKey, conversationId, taskId: id, requestId: input.requestId, eventType: "message", actor: "student", content: input.message, payload: { schemaVersion: 1, legacy: { stageKey: "ai-learning", source: "knowledge-tutor", conversationId: input.threadId }, detail: { attemptId: input.attemptId, questionId: input.questionId, initial: input.initial } } } });
     return { run: true, token };
   });
 }
 
-export async function finishTutorRequest(input: TutorRequest, token: string, additions: KnowledgeLectureTutorThread): Promise<KnowledgeLectureTutorThread> {
+export async function finishTutorRequest(input: TutorRequest, token: string, additions: KnowledgeLectureTutorThread, rawModelOutput?: string): Promise<KnowledgeLectureTutorThread> {
   const result = await runMutationTransaction(async tx => {
     await lockProjectedCourse(tx, input.courseId);
     const id = taskId(input);
@@ -52,11 +53,12 @@ export async function finishTutorRequest(input: TutorRequest, token: string, add
     const threads = progress.knowledgeLectureTutorThreads ?? [];
     const current = threads.find(thread => thread.id === input.threadId);
     const thread = { ...additions, messages: [...(current?.messages ?? []), ...additions.messages].slice(-30), boardNotes: [...(current?.boardNotes ?? []), ...additions.boardNotes].slice(-12), createdAt: current?.createdAt ?? additions.createdAt };
-    // The UI cache is bounded; all messages and board notes remain in immutable AiMessage rows.
+    // Messages remain complete; display-limited notes also retain their original model JSON in the task.
     const assistant = additions.messages.find(message => message.role === "assistant")!;
     await tx.aiMessage.create({ data: { id: `${id}:assistant`, conversationId: task.conversationId!, role: "assistant", content: assistant.content, metadata: json({ requestId: input.requestId, boardNotes: additions.boardNotes }) } });
+    await tx.aiInteractionEvent.create({ data: { idempotencyKey: `${id}:answer`, userId: input.studentId, participationId: participation.id, offeringId: participation.enrollment.offeringId, researchKey: participation.enrollment.researchKey, conversationId: task.conversationId, taskId: id, requestId: input.requestId, eventType: "response", actor: "assistant", content: assistant.content, payload: json({ schemaVersion: 1, legacy: { stageKey: "ai-learning", source: "knowledge-tutor", conversationId: input.threadId }, detail: { boardNotes: additions.boardNotes, attemptId: input.attemptId, questionId: input.questionId } }) } });
     await tx.studentProjectWorkspace.update({ where: { participationId: participation.id }, data: { version: { increment: 1 }, projectState: json({ ...state, aiLearningProgress: { ...progress, knowledgeLectureTutorThreads: [...threads.filter(item => item.id !== thread.id), thread].slice(-60), lastActiveAt: thread.updatedAt } }) } });
-    await tx.aiTask.update({ where: { id }, data: { status: "COMPLETED", output: json({ thread }), completedAt: new Date() } });
+    await tx.aiTask.update({ where: { id }, data: { status: "COMPLETED", output: json({ thread, ...(rawModelOutput === undefined ? {} : { modelOutput: { raw: rawModelOutput, sha256: createHash("sha256").update(rawModelOutput).digest("hex") } }) }), completedAt: new Date() } });
     const runtime = object(participation.instance.runtimeConfig);
     const version = Number(runtime.version ?? 1) + 1;
     await tx.classroomInstance.update({ where: { id: input.courseId }, data: { runtimeConfig: json({ ...runtime, version }) } });

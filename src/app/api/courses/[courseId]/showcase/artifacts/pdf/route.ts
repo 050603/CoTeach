@@ -1,5 +1,3 @@
-import { createShowcaseStore, showcaseStore } from "@/lib/showcase/persistence";
-import { encodeEventCursor } from "@/lib/realtime/event-cursor";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -9,11 +7,9 @@ import { authenticateRequest, requireSameOrigin } from "@/lib/auth/request-guard
 import { checkDistributedRateLimit } from "@/lib/auth/distributed-rate-limit";
 import { rateLimitedResponse } from "@/lib/auth/rate-limit";
 import { isDatabaseConfigured, prisma } from "@/lib/db/client";
-import { lockCourseMutation } from "@/lib/db/course-mutation-lock";
 import { publishCourseEvent } from "@/lib/realtime/event-bus";
-import { ShowcasePresentationError } from "@/lib/showcase/presentation-service";
 import { canAccessLegacyCourse } from "@/lib/platform/access";
-import { resolveProjectGroupId } from "@/lib/platform/group-identity";
+import { ArtifactUploadError, persistArtifactUpload, readArtifactUploadReceipt } from "@/lib/showcase/artifact-upload";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,38 +78,10 @@ export async function POST(
   const studentId = auth.claims.sub!;
   if (!isDatabaseConfigured()) return errorResponse("DATABASE_REQUIRED", "本地成果提交需要连接数据库。", 503);
   const { courseId } = await context.params;
-  if (!(await canAccessLegacyCourse(auth.claims, courseId, "write"))) return errorResponse("COURSE_LOCKED", "课程当前不允许提交成果。", 403);
-  const limit = await checkDistributedRateLimit({
-    namespace: "showcase-artifact-submit",
-    key: `${auth.claims.sub}:${courseId}`,
-    limit: 10,
-    windowSeconds: 60 * 60,
-  });
-  if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
-
-  const course = await showcaseStore.loadCourse({
-    where: { id: courseId },
-    select: { status: true, currentStageIndex: true, stages: true },
-  });
-  if (!course) return errorResponse("COURSE_NOT_FOUND", "课程不存在。", 404);
-  const stages = Array.isArray(course.stages) ? course.stages : [];
-  const stage = stages[course.currentStageIndex];
-  const newFiveStageCourse = stages.length === 5
-    && ["launch", "ai-learning", "make", "showcase", "reflection"].every((key, index) => {
-      const candidate = stages[index];
-      return Boolean(candidate && typeof candidate === "object" && (candidate as { key?: unknown }).key === key);
-    });
-  const activeStageKey = stage && typeof stage === "object" ? (stage as { key?: unknown }).key : undefined;
-  if (course.status !== "teaching" || !newFiveStageCourse || !["make", "showcase"].includes(String(activeStageKey))) {
-    return errorResponse("ARTIFACT_SUBMISSION_INACTIVE", "只能在项目实践或成果汇报阶段上传项目材料。", 409);
-  }
-  const member = await showcaseStore.findMember({
-    where: { courseId, studentId },
-    select: { groupId: true },
-  });
-  if (!member) return errorResponse("STUDENT_NOT_FOUND", "学生尚未加入项目空间。", 404);
-
+  if (!(await canAccessLegacyCourse(auth.claims, courseId, "read"))) return errorResponse("COURSE_LOCKED", "课程当前不允许提交成果。", 403);
   let targetPath: string | undefined;
+  let databaseCommitAttempted = false;
+  let committed = false;
   try {
     const form = await request.formData();
     const files = form.getAll("file");
@@ -139,10 +107,18 @@ export async function POST(
       return errorResponse("FILE_SIGNATURE_MISMATCH", "文件内容与扩展名不一致。", 415);
     }
 
-    const headerRequestId = request.headers.get("x-request-id");
-    const requestId = metadata.data.requestId
-      ?? (headerRequestId && headerRequestId.length <= 160 ? headerRequestId : undefined)
-      ?? randomUUID();
+    const headerRequestId = request.headers.get('idempotency-key');
+    if (headerRequestId && !z.string().uuid().safeParse(headerRequestId).success) return errorResponse('INVALID_METADATA', '成果提交编号无效。', 400);
+    if (headerRequestId && metadata.data.requestId && headerRequestId !== metadata.data.requestId) return errorResponse('INVALID_METADATA', '成果提交编号不一致。', 400);
+    const legacyTraceId = request.headers.get('x-request-id');
+    const requestId = metadata.data.requestId ?? headerRequestId
+      ?? (legacyTraceId && legacyTraceId.length <= 160 ? legacyTraceId : undefined) ?? randomUUID();
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const input = { courseId, studentId, requestId, title, originalName, mimeType: allowed.mimeType, size: bytes.length, sha256, kind: allowed.kind };
+    const previous = await readArtifactUploadReceipt(input);
+    if (previous) return Response.json(previous);
+    const limit = await checkDistributedRateLimit({ namespace: 'showcase-artifact-submit', key: `${studentId}:${courseId}`, limit: 10, windowSeconds: 60 * 60 });
+    if (!limit.allowed) return rateLimitedResponse(limit.retryAfterMs);
     const uploadId = randomUUID();
     const versionId = randomUUID();
     const storedName = `${uploadId}${extension}`;
@@ -150,44 +126,14 @@ export async function POST(
     await mkdir(dataDir, { recursive: true });
     await writeFile(targetPath, bytes, { flag: "wx", mode: 0o600 });
     const info = await stat(targetPath);
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
-    const durable = await prisma.$transaction(async (tx) => {
-      await lockCourseMutation(tx, courseId);
-      const idempotencyKey = `file-artifact:${courseId}:${studentId}:${requestId}`;
-      const receipt = await tx.domainEvent.findUnique({ where: { idempotencyKey } });
-      if (receipt) {
-        const detail = receipt.payload && typeof receipt.payload === 'object' && !Array.isArray(receipt.payload) ? receipt.payload : {};
-        const duplicate = await tx.artifactVersion.findUniqueOrThrow({ where: { id: String(detail.versionId) } });
-        return { duplicate: { id: duplicate.id, sequence: duplicate.sequence, submittedAt: duplicate.submittedAt ?? duplicate.createdAt, uploadId: duplicate.fileAssetId } };
-      }
-      const view = createShowcaseStore(tx);
-      const lockedCourse = await view.loadCourse({ where: { id: courseId } });
-      const lockedStages = Array.isArray(lockedCourse?.stages) ? lockedCourse.stages : [];
-      if (lockedCourse?.status !== 'teaching' || !['make', 'showcase'].includes(String(lockedStages[lockedCourse.currentStageIndex]?.key))) {
-        throw new ShowcasePresentationError('ARTIFACT_SUBMISSION_INACTIVE', '只能在项目实践或成果汇报阶段上传项目材料。', 409);
-      }
-      const participation = await tx.classroomParticipation.findFirst({ where: { instanceId: courseId, enrollment: { userId: studentId } }, include: { enrollment: true } });
-      const lockedMember = await view.findMember({ where: { courseId, studentId } });
-      if (!participation || !lockedMember) throw new ShowcasePresentationError('STUDENT_NOT_FOUND', '学生尚未加入项目空间。', 404);
-      const groupId = await resolveProjectGroupId(tx, participation.enrollment.offeringId, lockedMember.groupId);
-      if (!groupId) throw new ShowcasePresentationError('GROUP_NOT_FOUND', '项目空间所属小组不存在。', 409);
-      const latest = await tx.artifactVersion.aggregate({ where: { artifact: { participationId: participation.id, type: { in: ['PDF_ARCHIVE', 'FILE_ARCHIVE'] } } }, _max: { sequence: true } });
-      await tx.fileAsset.create({ data: { id: uploadId, originalName, storageKey: storedName, offeringId: participation.enrollment.offeringId,
-        uploadedById: studentId, size: BigInt(info.size), mimeType: allowed.mimeType, sha256 } });
-      const artifact = await tx.artifact.create({ data: { participationId: participation.id, groupId, title,
-        type: allowed.kind === 'pdf' ? 'PDF_ARCHIVE' : 'FILE_ARCHIVE', status: 'SUBMITTED' } });
-      const submittedAt = new Date();
-      const saved = await tx.artifactVersion.create({ data: { id: versionId, artifactId: artifact.id, sequence: (latest._max.sequence ?? 0) + 1,
-        fileAssetId: uploadId, mimeType: allowed.mimeType, sha256, size: BigInt(info.size), status: 'SUBMITTED', submittedAt } });
-      const updatedCourse = await view.updateCourse({ where: { id: courseId }, data: { version: { increment: 1 } } });
-      const event = await tx.domainEvent.create({ data: { classroomInstanceId: courseId, offeringId: participation.enrollment.offeringId,
-        participationId: participation.id, actorId: studentId, researchKey: participation.enrollment.researchKey, idempotencyKey,
-        eventType: 'file_artifact_submitted', payload: { versionId, requestId, studentId, scope: 'student', kind: allowed.kind, title, courseVersion: updatedCourse?.version ?? 1 } } });
-      return { version: { ...saved, submittedAt, kind: allowed.kind }, courseVersion: updatedCourse?.version ?? 1, eventCursor: encodeEventCursor(event) };
-    });
-    if ("duplicate" in durable && durable.duplicate) {
+    if (info.size !== bytes.length) throw new Error('Incomplete artifact file write');
+    databaseCommitAttempted = true;
+    const durable = await persistArtifactUpload({ ...input, uploadId, versionId, storageKey: storedName });
+    committed = !durable.duplicate;
+    if (durable.duplicate) {
       await unlink(targetPath).catch(() => undefined);
-      return Response.json({ ok: true, versionId: durable.duplicate.id, sequence: durable.duplicate.sequence, submittedAt: durable.duplicate.submittedAt.toISOString(), uploadId: durable.duplicate.uploadId, requestId });
+      targetPath = undefined;
+      return Response.json(durable.response);
     }
     await publishCourseEvent(courseId, {
       type: "course-updated",
@@ -201,19 +147,14 @@ export async function POST(
         studentId,
       },
     }).catch(() => undefined);
-    return Response.json({
-      ok: true,
-      versionId: durable.version!.id,
-      sequence: durable.version!.sequence,
-      submittedAt: durable.version!.submittedAt.toISOString(),
-      uploadId,
-      kind: durable.version!.kind,
-      mimeType: durable.version!.mimeType,
-      requestId,
-    }, { status: 201 });
+    return Response.json(durable.response, { status: 201 });
   } catch (error) {
-    if (targetPath) await unlink(targetPath).catch(() => undefined);
-    if (error instanceof ShowcasePresentationError) return errorResponse(error.code, error.message, error.status);
+    if (databaseCommitAttempted && !committed && targetPath) {
+      try { committed = Boolean(await prisma.fileAsset.findUnique({ where: { storageKey: path.basename(targetPath) }, select: { id: true } })); }
+      catch { committed = true; } // Ambiguous COMMIT: preserve bytes until the database can confirm ownership.
+    }
+    if (targetPath && !committed) await unlink(targetPath).catch(() => undefined);
+    if (error instanceof ArtifactUploadError) return errorResponse(error.code, error.message, error.status);
     console.error("[showcase/artifact] upload failed", error);
     return errorResponse("ARTIFACT_SUBMIT_FAILED", "成果文件提交失败，请稍后重试。", 500);
   }

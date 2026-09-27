@@ -23,3 +23,9 @@ export function hasPblRoutingMetadata(
     scene.stageKey || scene.stageLabel || scene.audience || scene.generationPurpose,
   );
 }
+
+/** Shared playback/progress boundary, including classrooms predating routing metadata. */
+export function selectStudentLearningScenes<T extends Pick<Scene, "stageKey" | "audience" | "generationPurpose">>(scenes: T[]): T[] {
+  const routed = scenes.some(scene => Boolean(scene.stageKey || scene.audience || scene.generationPurpose));
+  return routed ? scenes.filter(isStudentAiLearningScene) : scenes;
+}

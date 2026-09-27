@@ -45,7 +45,7 @@ Generate a complete, interactive 3D visualization using Three.js with these MAND
 3. Do not signal completion for orbiting, zooming once, selecting one object, or decorative interaction. Completion is a playback milestone, not a grade or mastery claim.
 
 ### Scene Setup
-1. **Three.js from CDN** using importmap for ES modules
+1. **Self-hosted Three.js 0.160.0** using importmap for ES modules: map `three` to `/api/openmaic/interactive-runtime/three/0.160.0/build/three.module.js` and `three/addons/` to `/api/openmaic/interactive-runtime/three/0.160.0/examples/jsm/`. Do not use external CDN URLs.
 2. **Proper lighting** (ambient + directional/point lights)
 3. **OrbitControls** for camera manipulation
 4. **Responsive canvas** that fills the container

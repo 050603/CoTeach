@@ -133,4 +133,43 @@ describe("V2 generation job persistence", () => {
       },
     });
   });
+  it("pushes worker OR statuses and nested native retry deadlines into SQL", async () => {
+    mocks.find.mockResolvedValue([]);
+    await designGenerationJobs.findFirst({ where: { OR: [
+      { status: "queued", OR: [{ retryAt: null }, { retryAt: { lte: now } }] },
+      { status: "running", OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] },
+    ] }, orderBy: { createdAt: "asc" } });
+    expect(mocks.find).toHaveBeenCalledWith({ where: { targetType: "CLASSROOM_TEMPLATE", jobType: "COURSE_DESIGN", OR: [
+      { AND: [{ status: "QUEUED" }, { OR: [{ retryAt: null }, { retryAt: { lte: now } }] }] },
+      { status: "RUNNING" },
+    ] }, orderBy: { createdAt: "asc" } });
+  });
+
+  it("retains unrestricted OR branches for residual JSON predicates and preserves first eligible order", async () => {
+    mocks.find.mockResolvedValue([
+      { ...row(), id: "leased", status: "RUNNING", trace: { state: { leaseExpiresAt: "2099-01-01T00:00:00.000Z" } } },
+      { ...row(), id: "eligible", status: "RUNNING", trace: { state: { leaseExpiresAt: null } } },
+    ]);
+    const found = await contentGenerationJobs.findFirst({ where: { status: "running", OR: [{ leaseExpiresAt: null }, { retryAt: { lt: now } }] }, orderBy: { createdAt: "asc" } });
+    expect(found?.id).toBe("eligible");
+    mocks.find.mockClear();
+    const eligible = await contentGenerationJobs.findFirst({ where: { status: "running", leaseExpiresAt: null }, orderBy: { createdAt: "asc" } });
+    expect(eligible?.id).toBe("eligible");
+    expect(mocks.find).toHaveBeenCalledWith({ where: { targetType: "CLASSROOM_TEMPLATE", jobType: "COURSE_CONTENT", status: "RUNNING" }, orderBy: { createdAt: "asc" } });
+    expect(mocks.find.mock.calls[0][0]).not.toHaveProperty("take");
+  });
+
+  it("pushes AND/in and preserves nullable not semantics", async () => {
+    mocks.find.mockResolvedValue([]);
+    await contentGenerationJobs.findFirst({ where: { AND: [{ status: { in: ["queued", "running"] } }, { error: { not: "failed" } }] } });
+    expect(mocks.find.mock.calls[0][0].where).toEqual({ targetType: "CLASSROOM_TEMPLATE", jobType: "COURSE_CONTENT", AND: [
+      { status: { in: ["QUEUED", "RUNNING"] } }, { OR: [{ error: null }, { error: { not: "failed" } }] },
+    ] });
+  });
+
+  it("keeps uppercase negative projected status as residual instead of excluding valid lowercase values", async () => {
+    await contentGenerationJobs.findFirst({ where: { status: { not: "QUEUED" } } });
+    expect(mocks.find.mock.calls[0][0].where).toEqual({ targetType: "CLASSROOM_TEMPLATE", jobType: "COURSE_CONTENT" });
+  });
+
 });

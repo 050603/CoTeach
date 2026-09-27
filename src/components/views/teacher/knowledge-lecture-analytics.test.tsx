@@ -40,11 +40,11 @@ it("renders both real Recharts series and recovers when a hidden chart becomes v
     unobserve() { observers.delete(this.callback); }
     disconnect() { observers.delete(this.callback); }
   });
-  const { container, unmount } = render(<KnowledgeLectureAnalytics course={course} />);
+  const { container, rerender, unmount } = render(<KnowledgeLectureAnalytics course={course} />);
   expect(screen.getByRole("heading", { name: "各小节完成率与均分" })).toBeInTheDocument();
   expect(container.querySelector(".recharts-surface")).toBeNull();
 
-  for (const nextWidth of [680, 1280, 860]) {
+  for (const nextWidth of [280, 680, 1280, 860, 320]) {
     act(() => { width = nextWidth; observers.forEach((notify) => notify()); });
     await waitFor(() => expect(container.querySelectorAll(".recharts-line-curve")).toHaveLength(2));
     expect(container.querySelector(".recharts-surface")).toHaveAttribute("width", String(nextWidth));
@@ -52,9 +52,21 @@ it("renders both real Recharts series and recovers when a hidden chart becomes v
       expect(curve.getAttribute("d")).toMatch(/^M/);
       expect(curve.getAttribute("d")).not.toMatch(/NaN|Infinity/);
     }
+    await waitFor(() => expect([...container.querySelectorAll(".recharts-surface .cursor-help text")].map((tick) => tick.getAttribute("text-anchor"))).toEqual(["start", "end"]));
   }
   expect(screen.getByRole("img")).toHaveAttribute("aria-label", expect.stringContaining("均分60分"));
   expect(screen.getByRole("img")).toHaveAttribute("aria-label", expect.stringContaining("均分80分"));
+  const sections = course.content.knowledgeLectureSections!;
+  const longTitle = "社区生态调查证据分析与实践方案评价";
+  rerender(<KnowledgeLectureAnalytics course={{ ...course, content: { ...course.content, knowledgeLectureSections: [...sections, { ...sections[1], id: "section-2", title: longTitle, order: 2 }] } }} />);
+  await waitFor(() => expect(container.querySelectorAll(".recharts-surface .cursor-help text")).toHaveLength(3));
+  expect([...container.querySelectorAll(".recharts-surface .cursor-help text")].map((tick) => tick.getAttribute("text-anchor"))).toEqual(["start", "middle", "end"]);
+  const lastTick = [...container.querySelectorAll(".recharts-surface .cursor-help")].at(-1)!;
+  expect(lastTick.querySelector("title")).toHaveTextContent(longTitle);
+  expect(lastTick.querySelector("text")).toHaveTextContent(`${longTitle.slice(0, 8)}…`);
+  rerender(<KnowledgeLectureAnalytics course={{ ...course, content: { ...course.content, knowledgeLectureSections: [sections[0]] } }} />);
+  await waitFor(() => expect(container.querySelectorAll(".recharts-surface .cursor-help text")).toHaveLength(1));
+  expect(container.querySelector(".recharts-surface .cursor-help text")).toHaveAttribute("text-anchor", "middle");
   unmount();
   expect(observers.size).toBe(0);
 });

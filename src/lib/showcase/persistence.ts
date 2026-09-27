@@ -60,7 +60,7 @@ export function createShowcaseStore(db: Prisma.TransactionClient = prisma) {
     return selectRows(rows.map((row) => ({ ...row, submittedAt: row.submittedAt ? new Date(row.submittedAt) : null, createdAt: new Date(row.createdAt) })), query);
   };
   const listFiles = async (query: Query) => {
-    const rows = await db.artifactVersion.findMany({ where: { fileAssetId: { not: null }, artifact: { type: { in: ['PDF_ARCHIVE', 'FILE_ARCHIVE'] }, participation: { instanceId: str(query.where?.courseId) } } }, include: { artifact: { include: { participation: { include: { enrollment: true } } } }, fileAsset: true } });
+    const rows = await db.artifactVersion.findMany({ where: { fileAssetId: { not: null }, artifact: { type: { in: ['PDF_ARCHIVE', 'FILE_ARCHIVE'] }, participation: { instanceId: str(query.where?.courseId), ...(typeof query.where?.studentId === 'string' ? { enrollment: { userId: query.where.studentId } } : {}) } } }, include: { artifact: { include: { participation: { include: { enrollment: true } } } }, fileAsset: true } });
     return selectRows(rows.map((row) => ({ id: row.id, courseId: row.artifact.participation.instanceId, studentId: row.artifact.participation.enrollment.userId,
       groupId: row.artifact.groupId ? projectGroupViewId(row.artifact.participation.enrollment.offeringId, row.artifact.groupId) : null, stageKey: 'make', sequence: row.sequence, title: row.artifact.title, uploadId: row.fileAssetId!,
       kind: row.artifact.type === 'PDF_ARCHIVE' ? 'pdf' : 'file', mimeType: row.mimeType ?? row.fileAsset?.mimeType ?? "application/octet-stream", requestId: undefined as string | undefined,

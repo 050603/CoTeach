@@ -23,6 +23,7 @@ import type {
   OpenMaicSceneOutlineSnapshot,
   TeacherResourceProjection,
 } from "@/lib/session/types";
+import { ownsProjection } from "@/lib/realtime/projection-controller";
 import { useSession } from "@/lib/session/store";
 import { cn } from "@/lib/utils";
 
@@ -121,6 +122,8 @@ export function ClassInterventionPanel({
   const [selectionSource, setSelectionSource] = useState<"teacher" | "recommendation">("teacher");
   const [selectedRecommendationId, setSelectedRecommendationId] = useState("");
   const projection = course.uiState?.teacherResourceProjection;
+  const controlsProjection = ownsProjection(course.uiState);
+  const needsTakeover = Boolean(course.uiState?.projectionController && !controlsProjection);
   const selectedOutline = outlines.find((outline) => outline.id === selectedOutlineId);
   const selectedPageNumber = selectedOutline
     ? outlines.findIndex((outline) => outline.id === selectedOutline.id) + 1
@@ -190,7 +193,7 @@ export function ClassInterventionPanel({
     if (course.status !== "teaching") return;
     const scene = await resolveScene(outline, source);
     if (!scene) return;
-    setUiState(course.id, { teacherResourceProjection: projectionFor(scene) });
+    setUiState(course.id, { teacherResourceProjection: projectionFor(scene) }, ...(needsTakeover ? [{ takeover: true }] : []));
     addActivity(course.id, "投屏全班补讲页面", scene.title);
     toast.success("已投屏给全班");
   }
@@ -231,12 +234,13 @@ export function ClassInterventionPanel({
   }, [recommendations, rows, outlines]);
 
   function stopProjection() {
+    if (!controlsProjection) return;
     setUiState(course.id, { teacherResourceProjection: null });
     addActivity(course.id, "停止全班补讲页面投屏", projection?.title);
   }
 
   function syncProjection(state: Omit<PlaybackSyncState, "version">) {
-    if (!selectedScene || !projection || projection.sceneId !== selectedScene.id) return;
+    if (!controlsProjection || !selectedScene || !projection || projection.sceneId !== selectedScene.id) return;
     setUiState(course.id, {
       teacherResourceProjection: {
         ...projection,
@@ -293,7 +297,7 @@ export function ClassInterventionPanel({
                             <button className="inline-flex h-8 min-w-0 max-w-full items-center gap-1.5 px-2.5 text-[11px] font-bold text-[var(--pbl-teacher-hover)] hover:bg-[var(--pbl-teacher-soft)]" onClick={() => void resolveScene(outline, "recommendation")} type="button">
                               {loadingOutlineId === outline.id ? <Loader2 className="shrink-0 animate-spin" size={12} /> : <Presentation className="shrink-0" size={12} />}<span className="max-w-[220px] truncate">第 {pageNumber} 页 · {outline.title}</span><ChevronRight className="shrink-0" size={12} />
                             </button>
-                            <button className="border-l border-stone-200 px-2.5 text-[11px] font-bold text-[var(--pbl-teacher-hover)] hover:bg-[var(--pbl-teacher-soft)] disabled:opacity-40" disabled={course.status !== "teaching"} onClick={() => void projectOutline(outline, "recommendation")} type="button">一键投屏</button>
+                            <button className="border-l border-stone-200 px-2.5 text-[11px] font-bold text-[var(--pbl-teacher-hover)] hover:bg-[var(--pbl-teacher-soft)] disabled:opacity-40" disabled={course.status !== "teaching"} onClick={() => void projectOutline(outline, "recommendation")} type="button">{needsTakeover ? "接管并投屏" : "一键投屏"}</button>
                           </span>
                         )) : <span className="text-[11px] text-stone-400">暂无可索引页面</span>}
                       </div>
@@ -344,8 +348,8 @@ export function ClassInterventionPanel({
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[var(--pbl-teacher)]">{selectedOutline ? `${selectionSource === "recommendation" ? "平台推荐" : "教师自主选择"} · 第 ${selectedPageNumber} 页` : "教师自主选择 PPT"}</p><h4 className="mt-1 truncate text-sm font-bold text-stone-900">{selectedOutline?.title ?? "选择需要补充讲解的知识讲授页面"}</h4></div>
               <div className="flex items-center gap-2">
-                {projection ? <button className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-rose-200 bg-white px-3 text-xs font-bold text-rose-700 hover:bg-rose-50" onClick={stopProjection} type="button"><Square size={13} />停止投屏</button> : null}
-                <button className={cn("inline-flex h-9 items-center gap-1.5 rounded-[8px] px-3 text-xs font-bold text-white disabled:opacity-40", isProjected ? "bg-emerald-600" : "bg-[var(--pbl-teacher)] hover:bg-[var(--pbl-teacher-hover)]")} disabled={!selectedScene || !selectedOutline || course.status !== "teaching"} onClick={() => selectedOutline && selectedScene && void projectOutline(selectedOutline, selectionSource)} type="button"><MonitorUp size={14} />{isProjected ? "正在投屏" : "投屏给全班"}</button>
+                {projection && controlsProjection ? <button className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-rose-200 bg-white px-3 text-xs font-bold text-rose-700 hover:bg-rose-50" onClick={stopProjection} type="button"><Square size={13} />停止投屏</button> : null}
+                <button className={cn("inline-flex h-9 items-center gap-1.5 rounded-[8px] px-3 text-xs font-bold text-white disabled:opacity-40", isProjected ? "bg-emerald-600" : "bg-[var(--pbl-teacher)] hover:bg-[var(--pbl-teacher-hover)]")} disabled={!selectedScene || !selectedOutline || course.status !== "teaching"} onClick={() => selectedOutline && selectedScene && void projectOutline(selectedOutline, selectionSource)} type="button"><MonitorUp size={14} />{needsTakeover ? "接管并投屏" : isProjected ? "正在投屏" : "投屏给全班"}</button>
               </div>
             </div>
             {selectedKnowledgePoint ? (

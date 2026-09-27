@@ -73,14 +73,14 @@ export function rowToSnapshot(
   };
 }
 
-export async function loadShowcaseState(instanceId: string, db?: Prisma.TransactionClient): Promise<{
+export async function loadShowcaseState(instanceId: string, db?: Prisma.TransactionClient, studentId?: string): Promise<{
   showcasePresentations: ShowcasePresentationSnapshot[];
   projectPdfVersions: ProjectPdfVersion[];
 }> {
   const source = db ? createShowcaseStore(db) : store;
   const [presentations, files] = await Promise.all([
     source.listPresentations({ where: { courseId: instanceId }, orderBy: { updatedAt: 'desc' } }),
-    source.listFiles({ where: { courseId: instanceId }, orderBy: { sequence: 'desc' } }),
+    source.listFiles({ where: { courseId: instanceId, ...(studentId ? { studentId } : {}) }, orderBy: { sequence: 'desc' } }),
   ]);
   return {
     showcasePresentations: presentations.map((row) => rowToSnapshot(row)),

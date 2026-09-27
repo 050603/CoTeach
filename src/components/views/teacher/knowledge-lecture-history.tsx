@@ -7,6 +7,7 @@ import type { Scene } from "@openmaic/lib/types/stage";
 import { OpenMaicResourcePlayer } from "@/components/openmaic-bridge/openmaic-resource-player";
 import { toast } from "@/components/ui";
 import { useCourse, useSession } from "@/lib/session/store";
+import { ownsProjection } from "@/lib/realtime/projection-controller";
 import type {
   Course,
   KnowledgeLectureSection,
@@ -85,6 +86,8 @@ export function KnowledgeLectureHistory({
     ?? scenes.find((scene) => scene.title === selectedOutline?.title);
   const selectedIndex = selectedOutline ? outlines.findIndex((outline) => outline.id === selectedOutline.id) : -1;
   const projection = liveCourse.uiState?.teacherResourceProjection;
+  const controlsProjection = ownsProjection(liveCourse.uiState);
+  const needsTakeover = Boolean(liveCourse.uiState?.projectionController && !controlsProjection);
   const isProjected = Boolean(selectedScene && projection?.sceneId === selectedScene.id);
 
   function projectionFor(scene: Scene): TeacherResourceProjection {
@@ -107,18 +110,19 @@ export function KnowledgeLectureHistory({
 
   function projectSelected() {
     if (!selectedScene || !classroomId || liveCourse.status !== "teaching") return;
-    setUiState(liveCourse.id, { teacherResourceProjection: projectionFor(selectedScene) });
+    setUiState(liveCourse.id, { teacherResourceProjection: projectionFor(selectedScene) }, ...(needsTakeover ? [{ takeover: true }] : []));
     addActivity(liveCourse.id, "投屏知识讲授历史页面", selectedScene.title);
     toast.success("已将该页投屏给当前课堂");
   }
 
   function stopProjection() {
+    if (!controlsProjection) return;
     setUiState(liveCourse.id, { teacherResourceProjection: null });
     addActivity(liveCourse.id, "停止知识讲授历史页面投屏", projection?.title);
   }
 
   function syncProjection(state: Omit<PlaybackSyncState, "version">) {
-    if (!selectedScene || !projection || projection.sceneId !== selectedScene.id) return;
+    if (!controlsProjection || !selectedScene || !projection || projection.sceneId !== selectedScene.id) return;
     setUiState(liveCourse.id, {
       teacherResourceProjection: {
         ...projection,
@@ -137,7 +141,7 @@ export function KnowledgeLectureHistory({
       <section className="overflow-hidden rounded-[var(--radius-lg)] border border-stone-200 bg-white">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 bg-[linear-gradient(120deg,#f0fdfa,#fff_55%,#f5f3ff)] px-4 py-3">
           <div className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-[10px] bg-cyan-950 text-white"><BookOpenText size={17} /></span><div><h3 className="text-sm font-black text-stone-950">知识讲授页面回看与投屏</h3><p className="mt-0.5 text-xs text-stone-500">选择任一历史页面，重新讲解难点并投屏给当前课堂</p></div></div>
-          {projection ? <button className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-rose-200 bg-white px-3 text-xs font-bold text-rose-700 hover:bg-rose-50" onClick={stopProjection} type="button"><Square size={13} />停止当前投屏</button> : null}
+          {projection && controlsProjection ? <button className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border border-rose-200 bg-white px-3 text-xs font-bold text-rose-700 hover:bg-rose-50" onClick={stopProjection} type="button"><Square size={13} />停止当前投屏</button> : null}
         </header>
         <div className="grid lg:grid-cols-[230px_minmax(0,1fr)]">
           <nav className="max-h-[560px] overflow-y-auto border-b border-stone-200 bg-stone-50/70 p-3 lg:border-b-0 lg:border-r" aria-label="知识讲授历史页面">
@@ -157,7 +161,7 @@ export function KnowledgeLectureHistory({
               <div className="flex items-center gap-1.5">
                 <button aria-label="上一页" className="grid size-9 place-items-center rounded-[8px] border border-stone-200 text-stone-600 disabled:opacity-35" disabled={selectedIndex <= 0} onClick={() => setSelectedOutlineId(outlines[selectedIndex - 1]?.id ?? "")} type="button"><ChevronLeft size={16} /></button>
                 <button aria-label="下一页" className="grid size-9 place-items-center rounded-[8px] border border-stone-200 text-stone-600 disabled:opacity-35" disabled={selectedIndex < 0 || selectedIndex >= outlines.length - 1} onClick={() => setSelectedOutlineId(outlines[selectedIndex + 1]?.id ?? "")} type="button"><ChevronRight size={16} /></button>
-                <button className={cn("inline-flex h-9 items-center gap-1.5 rounded-[8px] px-3 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-40", isProjected ? "bg-emerald-600" : "bg-cyan-950 hover:bg-cyan-900")} disabled={!selectedScene || liveCourse.status !== "teaching"} onClick={projectSelected} title={liveCourse.status === "teaching" ? "投屏给当前课堂学生" : "课程授课中才可投屏"} type="button"><MonitorUp size={14} />{isProjected ? "重新同步" : "投屏给学生"}</button>
+                <button className={cn("inline-flex h-9 items-center gap-1.5 rounded-[8px] px-3 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-40", isProjected ? "bg-emerald-600" : "bg-cyan-950 hover:bg-cyan-900")} disabled={!selectedScene || liveCourse.status !== "teaching"} onClick={projectSelected} title={liveCourse.status === "teaching" ? "投屏给当前课堂学生" : "课程授课中才可投屏"} type="button"><MonitorUp size={14} />{needsTakeover ? "接管并投屏" : isProjected ? "重新同步" : "投屏给学生"}</button>
               </div>
             </div>
             {loading ? <div className="grid h-[480px] place-items-center rounded-xl border border-stone-200 bg-stone-50 text-sm text-stone-500"><span><Loader2 className="mx-auto mb-2 animate-spin text-cyan-800" size={22} />正在加载课堂页面</span></div> : classroomId && selectedScene ? (

@@ -41,7 +41,7 @@
 
 按校准留一误差选定“相对误差加权”，保留原四个特征、先验和参数边界，用全部 18 段校准冻结参数，再评估缓存测试音频。没有针对 30 段结果继续调参。每条观测的残差权重为 `(校准时长中位数 / 该条时长)^2`，避免长校准段仅因秒数较大主导拟合；中位数缩放保留先验量纲与强度。
 
-留一结果见 [机器数据](2026-09-14-tts-calibration-loocv.json)，所选模型形式见 [缓存诊断比较](2026-09-14-tts-calibration-selected-heldout.json)。精确运行算法的汇总与逐条预测见 [验收数据](2026-09-14-tts-first-pass.json) 的 `replaySummary` 和 `results`。
+留一结果见机器数据（本机证据：`2026-09-14-tts-calibration-loocv.json`），所选模型形式见缓存诊断比较（本机证据：`2026-09-14-tts-calibration-selected-heldout.json`）。精确运行算法的汇总与逐条预测见验收数据（本机证据：`2026-09-14-tts-first-pass.json`）的 `replaySummary` 和 `results`。
 
 ## 计量、前置预算与兼容
 
