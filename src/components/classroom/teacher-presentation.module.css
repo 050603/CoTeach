@@ -46,8 +46,11 @@
 .stage[data-details="true"] :global(.teacher-resource-video-container) { height: clamp(16rem, calc(100dvh - 20rem), 32rem); }
 .stage :global(.teacher-presentation-task) { padding: clamp(24px, 3vw, 64px); font-size: var(--presentation-font); line-height: 1.7; }
 .stage :global(.teacher-presentation-task) :is(h2,h3) { font-size: clamp(26px, 2vw, 40px); line-height: 1.35; font-weight: 600; margin-bottom: 18px; }
+.stage :global(.teacher-presentation-task) :global(.project-driving-question) h3 { font-size: clamp(16px, 1.1vw, 20px); line-height: 1.35; font-weight: 700; margin-bottom: 0; }
 .stage :global(.teacher-presentation-task) p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .stage :global(.teacher-presentation-task) button { min-height: 44px; font-size: 18px; }
+.stage :global(.teacher-presentation-task) :global(.project-timer-trigger) { font-size: clamp(13px, .85vw, 16px); }
+.stage :global(.teacher-presentation-task) :global(.project-timer-controls) button { font-size: clamp(12px, .8vw, 14px); }
 .controls { display: flex; align-items: center; flex-wrap: nowrap; gap: clamp(16px, 2vw, 32px); flex: none; max-height: none; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; padding: 8px clamp(16px, 2vw, 48px); border-top: 1px solid #d8d6d0; background: #fcfbf8; box-shadow: 0 -4px 18px #1f29330a; scrollbar-width: thin; }
 .controlsLeft,
 .controlsRight { display: flex; flex: 0 0 auto; align-items: center; flex-wrap: nowrap; gap: 6px; }

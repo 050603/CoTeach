@@ -1,0 +1,75 @@
+.clock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(2px, .25vw, 4px);
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.tile {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: clamp(30px, 2.8vw, 42px);
+  height: clamp(56px, 5vw, 72px);
+  overflow: hidden;
+  border-radius: 6px;
+  background: linear-gradient(to bottom, #344a6a 0 49.5%, #263b55 49.5% 100%);
+  color: #fff;
+  perspective: 320px;
+}
+
+.tile::after {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  right: 0;
+  left: 0;
+  border-top: 1px solid #172a43;
+  content: "";
+}
+
+.digit {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: clamp(38px, 3.6vw, 52px);
+  font-weight: 700;
+  line-height: 1;
+  transform-origin: center;
+  backface-visibility: hidden;
+  animation: flip-in .45s cubic-bezier(.2, .7, .2, 1) both;
+}
+
+.separator {
+  flex: none;
+  min-width: 12px;
+  color: #344a6a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: clamp(38px, 3.6vw, 52px);
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+
+.overtime .tile {
+  background: linear-gradient(to bottom, #9f4c4c 0 49.5%, #823a3a 49.5% 100%);
+}
+
+.overtime .tile::after {
+  border-color: #6d2b2b;
+}
+
+.overtime .separator {
+  color: #9f4c4c;
+}
+
+@keyframes flip-in {
+  from { opacity: .5; transform: rotateX(-85deg); }
+  to { opacity: 1; transform: rotateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .digit { animation: none; }
+}

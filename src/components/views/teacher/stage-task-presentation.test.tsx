@@ -18,6 +18,7 @@ describe("StageTaskPresentation", () => {
       ] },
     } as unknown as Course;
     render(<StageTaskPresentation course={course} />);
+    expect(screen.getByRole("heading", { name: "方案设计" })).toBeTruthy();
     expect(screen.getByText("比较两种方案")).toBeTruthy();
     expect(screen.getByText("学习目标：用证据比较方案")).toBeTruthy();
     expect(screen.getByText("任务与交付：提交比较表")).toBeTruthy();
@@ -39,6 +40,7 @@ describe("StageTaskPresentation", () => {
       content: { teachingOutline: [] },
     } as unknown as Course;
     render(<StageTaskPresentation course={course} />);
+    expect(screen.queryByRole("heading", { name: "项目实践" })).toBeNull();
     expect(screen.getByRole("heading", { name: "任务驱动问题" })).toBeTruthy();
     expect(screen.getByText("如何改善校园环境？")).toBeTruthy();
     expect(screen.getByText("如何改善校园环境？").className).toContain("font-bold");
@@ -55,9 +57,14 @@ describe("StageTaskPresentation", () => {
       evaluationCriteria: "用理论解释设计选择",
     } } } as unknown as Course;
     render(<StageTaskPresentation course={course} />);
+    expect(screen.queryByRole("heading", { name: "项目实践" })).toBeNull();
     expect(screen.getByRole("heading", { name: "任务驱动问题" })).toBeTruthy();
     expect(screen.getByText("如何设计一堂有趣的 AI 体验课？")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "项目任务" })).toBeTruthy();
+    const details = screen.getByRole("region", { name: "项目任务说明" });
+    const timer = screen.getByRole("complementary", { name: "项目制作计时" });
+    expect(timer.parentElement).toBe(details.parentElement);
+    expect(timer.parentElement?.className).toContain("lg:grid-cols-");
     expect(screen.getByText("设计一堂面向六年级的 AI 体验课")).toBeTruthy();
     expect(screen.getByText(/任务要求：每位学生与自己的 AI 伙伴协作/)).toBeTruthy();
     expect(screen.getByText("交付要求：提交个人教案")).toBeTruthy();
@@ -67,7 +74,7 @@ describe("StageTaskPresentation", () => {
     expect(screen.queryByText("教师私人提示")).toBeNull();
   });
 
-  it("shows the shared project-making time limit, pause, and overtime reminder", () => {
+  it("shows a flip countdown with one control entry and keeps pause and overtime in sync", () => {
     vi.useFakeTimers();
     vi.setSystemTime("2026-09-27T10:00:00.000Z");
     const timing: ClassroomTimingState = {
@@ -85,9 +92,10 @@ describe("StageTaskPresentation", () => {
     } as unknown as Course;
     const controls = { onTogglePause: vi.fn(), onAdjust: vi.fn(), onReset: vi.fn() };
     const { rerender } = render(<StageTaskPresentation course={course} timerControls={controls} />);
-    expect(screen.getByText("限定制作时间：1 分钟")).toBeTruthy();
     expect(screen.getByRole("timer").textContent).toBe("01:00");
-    expect(screen.getByText("请在限定制作时间内完成并提交项目成果。")).toBeTruthy();
+    expect(screen.queryByText(/限定制作时间|请在限定制作时间内完成/)).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "计时控制" }));
     fireEvent.click(screen.getByRole("button", { name: "暂停" }));
     fireEvent.click(screen.getByRole("button", { name: "-2 分" }));
     fireEvent.click(screen.getByRole("button", { name: "+2 分" }));
@@ -101,7 +109,7 @@ describe("StageTaskPresentation", () => {
     const paused = pauseClassroomTiming(timing, new Date().toISOString());
     rerender(<StageTaskPresentation course={{ ...course, uiState: { classroomTiming: paused } }} timerControls={controls} />);
     act(() => vi.advanceTimersByTime(30_000));
-    expect(screen.getByText("已暂停")).toBeTruthy();
+    expect(screen.getByText(/已暂停/)).toBeTruthy();
     expect(screen.getByRole("timer").textContent).toBe("00:30");
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
     expect(controls.onTogglePause).toHaveBeenCalledTimes(2);
@@ -110,6 +118,6 @@ describe("StageTaskPresentation", () => {
     rerender(<StageTaskPresentation course={{ ...course, uiState: { classroomTiming: resumed } }} timerControls={controls} />);
     act(() => vi.advanceTimersByTime(35_000));
     expect(screen.getByRole("timer").textContent).toBe("+00:05");
-    expect(screen.getByText("制作时间已到，请尽快保存并提交项目成果。")).toBeTruthy();
+    expect(screen.getByText(/已超时/)).toBeTruthy();
   });
 });
