@@ -61,6 +61,38 @@ describe('narration continuity', () => {
     expect(context.pageIndex).toBe(3);
   });
 
+  it('grounds a new section after a quiz in prior teaching and the first actual slide', () => {
+    const prior: SceneOutline = {
+      ...outlines[0]!, lectureSectionId: 'section-a',
+      teachingBrief: { teachingPlan: { takeaway: '先区分变量与固定值' } } as SceneOutline['teachingBrief'],
+    };
+    const quiz: SceneOutline = {
+      id: 'quiz-a', type: 'quiz', title: '第 1 节 · 节末小测', description: '检验变量判断',
+      keyPoints: [], order: 1, stageKey: 'ai-learning', lectureSectionId: 'section-a',
+      assessmentTargets: [{ unitId: 'unit-a', knowledgePointId: 'kp-a', unitTitle: '变量', learningOutcome: '根据变化条件解释变量' }],
+    };
+    const current: SceneOutline = {
+      ...outlines[1]!, order: 2, lectureSectionId: 'section-b',
+      teachingBrief: { teachingPlan: { newContent: '解释两个变量怎样共同变化' } } as SceneOutline['teachingBrief'],
+    };
+    const context = buildNarrationContext([prior, quiz, current], 2, {
+      previousSectionActualNarration: ['变量会随条件改变。'],
+      currentPageActualVisibleEvidence: ['表格展示两列变量的对应值'],
+    });
+
+    expect(context).toMatchObject({
+      sectionPosition: 'section-first',
+      previousSectionTakeaways: ['先区分变量与固定值'],
+      previousSectionQuizFocus: ['根据变化条件解释变量'],
+      previousSectionActualNarration: ['变量会随条件改变。'],
+      currentPageNewContent: '解释两个变量怎样共同变化',
+      currentPageActualVisibleEvidence: ['表格展示两列变量的对应值'],
+    });
+    expect(context.previousPageTitle).toBeUndefined();
+    expect(context.previousPageSummary).toBeUndefined();
+    expect(context.allTitles).not.toContain(quiz.title);
+  });
+
   it('greets when the AI lecture begins after a teacher-led launch page', () => {
     const progression: SceneOutline[] = [
       { ...outlines[0], id: 'launch', order: 0, stageKey: 'launch', audience: 'teacher' },

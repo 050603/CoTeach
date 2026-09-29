@@ -33,7 +33,7 @@ export type EngineMode = 'idle' | 'playing' | 'paused' | 'live';
 /** Discussion topic state */
 export type TopicState = 'active' | 'pending' | 'closed';
 
-export type ActivityPurpose = 'quiz' | 'interaction';
+export type ActivityPurpose = 'quiz-submit' | 'quiz' | 'interaction';
 export type ActivityCompletionReason = 'timeout' | 'user';
 
 export interface ActivityGate {

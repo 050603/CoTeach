@@ -15,13 +15,15 @@ export function continueAfterActivityConfirmation(
   modalBlocked: boolean,
   advanceCompletedQuiz: (sceneId: string) => void,
 ): void {
-  engine?.completeActivity(detail.sceneId, detail.purpose);
-  if (detail.purpose !== 'quiz' || detail.sceneId !== currentSceneId || modalBlocked) return;
+  if (detail.sceneId !== currentSceneId) return;
+  const released = engine?.completeActivity(detail.sceneId, detail.purpose) ?? false;
+  if (detail.purpose !== 'quiz' && detail.purpose !== 'quiz-submit') return;
+  if (modalBlocked) return;
 
   const mode = engine?.getMode();
-  if (mode === 'paused') {
+  if (mode === 'paused' && released) {
     engine?.resume();
-  } else if (!engine || mode === 'idle') {
+  } else if (detail.purpose === 'quiz' && (!engine || mode === 'idle')) {
     advanceCompletedQuiz(detail.sceneId);
   }
 }

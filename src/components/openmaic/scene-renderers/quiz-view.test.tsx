@@ -5,8 +5,86 @@ import type { KnowledgeLectureAttempt } from "@/lib/session/types";
 import { KnowledgeLectureQuizLockProvider } from "@/components/openmaic-bridge/knowledge-lecture-quiz-lock";
 import { I18nProvider } from "@openmaic/lib/hooks/use-i18n";
 import { QuizView } from "./quiz-view";
+import { gradeShortAnswerQuestion } from "./quiz-grade-client";
+
+vi.mock("./quiz-grade-client", () => ({ gradeShortAnswerQuestion: vi.fn() }));
 
 describe("QuizView single-attempt review", () => {
+  it("releases submission before delayed grading and waits for review confirmation", async () => {
+    const sceneId = "staged-delay-quiz";
+    const questions: QuizQuestion[] = [{
+      id: "short-1",
+      type: "short_answer",
+      format: "fill_blank",
+      question: "实验中需要控制什么？",
+      points: 10,
+      analysis: "需要控制其他可能影响结果的条件。",
+    }];
+    let finishGrading!: (result: Awaited<ReturnType<typeof gradeShortAnswerQuestion>>) => void;
+    vi.mocked(gradeShortAnswerQuestion).mockImplementationOnce(() => new Promise((resolve) => {
+      finishGrading = resolve;
+    }));
+    const events: string[] = [];
+    const listener = (event: Event) => events.push((event as CustomEvent<{ purpose: string }>).detail.purpose);
+    window.addEventListener("openmaic:playback-activity-complete", listener);
+
+    render(
+      <I18nProvider>
+        <KnowledgeLectureQuizLockProvider attemptsBySceneId={new Map()}>
+          <QuizView questions={questions} quizOutlineId="staged-delay" sceneId={sceneId} stagedPlayback />
+        </KnowledgeLectureQuizLockProvider>
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /开始答题|Start Quiz/ }));
+    fireEvent.change(await screen.findByRole("textbox"), { target: { value: "其他变量" } });
+    fireEvent.click(screen.getByRole("button", { name: /提交答案|Submit Answers/ }));
+    expect(events).toEqual(["quiz-submit"]);
+    expect(await screen.findByText("正在批阅")).toBeTruthy();
+
+    finishGrading({ questionId: "short-1", correct: null, status: "graded", earned: 10, aiComment: "正确" });
+    await waitFor(() => expect(screen.getByText("Quiz Report")).toBeTruthy());
+    expect(events).toEqual(["quiz-submit"]);
+    fireEvent.click(screen.getByRole("button", { name: "我已经理解，可以继续" }));
+    expect(events).toEqual(["quiz-submit", "quiz"]);
+
+    window.removeEventListener("openmaic:playback-activity-complete", listener);
+    localStorage.removeItem(`quizAnswers:${sceneId}`);
+    localStorage.removeItem(`quizResults:${sceneId}`);
+  });
+
+  it("restores an already submitted staged quiz at the review gate", async () => {
+    const sceneId = "staged-restored-quiz";
+    const questions: QuizQuestion[] = [{
+      id: "choice-1", type: "single", format: "single_choice", question: "哪项是前提？",
+      options: [{ value: "A", label: "观察证据" }, { value: "B", label: "猜测" }],
+      answer: ["A"], analysis: "观察证据是前提。", points: 1,
+    }];
+    localStorage.setItem(`quizAnswers:${sceneId}`, JSON.stringify({ "choice-1": "A" }));
+    localStorage.setItem(`quizResults:${sceneId}`, JSON.stringify([{
+      questionId: "choice-1", correct: true, status: "correct", earned: 1,
+    }]));
+    const events: string[] = [];
+    const listener = (event: Event) => events.push((event as CustomEvent<{ purpose: string }>).detail.purpose);
+    window.addEventListener("openmaic:playback-activity-complete", listener);
+
+    render(
+      <I18nProvider>
+        <KnowledgeLectureQuizLockProvider attemptsBySceneId={new Map()}>
+          <QuizView questions={questions} quizOutlineId="staged-restored" sceneId={sceneId} stagedPlayback />
+        </KnowledgeLectureQuizLockProvider>
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Quiz Report")).toBeTruthy();
+    expect(events).toEqual(["quiz-submit"]);
+    fireEvent.click(screen.getByRole("button", { name: "我已经理解，可以继续" }));
+    expect(events).toEqual(["quiz-submit", "quiz"]);
+
+    window.removeEventListener("openmaic:playback-activity-complete", listener);
+    localStorage.removeItem(`quizAnswers:${sceneId}`);
+    localStorage.removeItem(`quizResults:${sceneId}`);
+  });
   it("renders ordinary checks as direct choices and a one-line fill input", async () => {
     const questions: QuizQuestion[] = [
       {

@@ -10,15 +10,44 @@ export interface NarrationContinuityContext extends SceneGenerationContext {
   nextPageType?: SceneOutline['type'];
   nextStageKey?: string;
   nextStageLabel?: string;
+  previousSectionTakeaways?: string[];
+  previousSectionQuizFocus?: string[];
+  previousSectionActualNarration?: string[];
+  currentPageNewContent?: string;
+  currentPageActualVisibleEvidence?: string[];
   endingDisposition: CourseEndingDisposition;
   outgoingHandoff?: string;
 }
 
 function sectionIdentity(outline: SceneOutline): string {
-  return outline.parentActivityId
+  return outline.lectureSectionId
+    || outline.parentActivityId
+    || outline.activityId
     || outline.stageKey
     || outline.segmentGroupId
     || '__course__';
+}
+
+function nonemptyUnique(values: ReadonlyArray<string | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+}
+
+function previousSectionEvidence(outlines: ReadonlyArray<SceneOutline>, beforeIndex: number) {
+  const previousTeaching = outlines.slice(0, beforeIndex).findLast((outline) => (
+    outline.type !== 'quiz' && isAiLecturePage(outline)
+  ));
+  if (!previousTeaching) return { takeaways: [], quizFocus: [] };
+  const section = sectionIdentity(previousTeaching);
+  const priorPages = outlines.slice(0, beforeIndex).filter((outline) => sectionIdentity(outline) === section);
+  return {
+    takeaways: nonemptyUnique(priorPages.filter((outline) => outline.type !== 'quiz')
+      .map((outline) => outline.teachingBrief?.teachingPlan?.takeaway)),
+    quizFocus: nonemptyUnique(priorPages.filter((outline) => outline.type === 'quiz').flatMap((outline) => [
+      ...(outline.assessmentTargets ?? []).map((target) => target.learningOutcome),
+      ...(outline.teachingBrief?.understandingCriteria?.goals ?? []),
+      outline.teachingBrief?.assessmentFocus,
+    ])),
+  };
 }
 
 function summarizeOutline(outline: SceneOutline | undefined): string | undefined {
@@ -107,7 +136,11 @@ function nextStepHandoff(current: SceneOutline | undefined, next: SceneOutline |
 export function buildNarrationContext(
   outlines: ReadonlyArray<SceneOutline>,
   index: number,
-  options?: { courseTitle?: string },
+  options?: {
+    courseTitle?: string;
+    previousSectionActualNarration?: readonly string[];
+    currentPageActualVisibleEvidence?: readonly string[];
+  },
 ): NarrationContinuityContext {
   const safeIndex = Math.max(0, Math.min(index, Math.max(0, outlines.length - 1)));
   const current = outlines[safeIndex];
@@ -125,6 +158,9 @@ export function buildNarrationContext(
   const endingDisposition = looksLikePartialPreview
     ? 'partial-preview'
     : nextStep.disposition;
+  const priorSection = sectionPosition === 'section-first'
+    ? previousSectionEvidence(outlines, safeIndex)
+    : undefined;
 
   return {
     pageIndex: safeIndex + 1,
@@ -135,9 +171,17 @@ export function buildNarrationContext(
     previousSpeeches: [],
     ...(options?.courseTitle?.trim() ? { courseTitle: options.courseTitle.trim() } : {}),
     sectionPosition,
-    previousPageTitle: previous?.title,
-    previousPageSummary: summarizeOutline(previous),
+    ...(previous && previous.type !== 'quiz'
+      ? { previousPageTitle: previous.title, previousPageSummary: summarizeOutline(previous) } : {}),
     currentTeachingObjective: summarizeOutline(current),
+    ...(priorSection?.takeaways.length ? { previousSectionTakeaways: priorSection.takeaways } : {}),
+    ...(priorSection?.quizFocus.length ? { previousSectionQuizFocus: priorSection.quizFocus } : {}),
+    ...(priorSection && options?.previousSectionActualNarration?.length
+      ? { previousSectionActualNarration: nonemptyUnique(options.previousSectionActualNarration) } : {}),
+    ...(current?.teachingBrief?.teachingPlan?.newContent
+      ? { currentPageNewContent: current.teachingBrief.teachingPlan.newContent } : {}),
+    ...(options?.currentPageActualVisibleEvidence?.length
+      ? { currentPageActualVisibleEvidence: nonemptyUnique(options.currentPageActualVisibleEvidence) } : {}),
     narrationMode: current?.narrationMode ?? 'standalone-course',
     ...(next?.title && next.type !== 'quiz' ? { nextPageTitle: next.title } : {}),
     ...(next ? { nextPageType: next.type } : {}),

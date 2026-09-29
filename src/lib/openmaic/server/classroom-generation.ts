@@ -1,4 +1,4 @@
-import { buildAssessmentContext, ASSESSMENT_DEPENDENCY_VERSION } from '@openmaic/lib/generation/assessment-dependencies';
+import { buildAssessmentContext, buildQuizNarrationContext, ASSESSMENT_DEPENDENCY_VERSION } from '@openmaic/lib/generation/assessment-dependencies';
 import { nanoid } from 'nanoid';
 import { reusePersistedSceneAssets } from './classroom-asset-recovery';
 import { calibrateGeneratedVisualCues } from '../generation/semantic-visual-cues';
@@ -1503,7 +1503,7 @@ async function generateClassroomInternal(
     { id: page.spatialParentId ?? page.id, sectionId: page.lectureSectionId,
       title: page.title, description: page.spatialSourceContext?.description ?? page.description },
   ])).values()];
-  const pageFingerprint = (safeOutline: SceneOutline, actualTaughtContext = '') => fingerprintGenerationValue({
+  const pageFingerprint = (safeOutline: SceneOutline, actualTaughtContext = '', quizNarrationContext = '') => fingerprintGenerationValue({
         courseTitle: courseTitle ?? null,
         courseLanguage,
         languageDirective,
@@ -1511,6 +1511,7 @@ async function generateClassroomInternal(
         agents,
         progression: stableCourseProgression(outlineContext),
         actualTaughtContext,
+        quizNarrationContext,
         assessmentPolicy: ASSESSMENT_DEPENDENCY_VERSION,
         quizPolicy: safeOutline.type === 'quiz' ? QUIZ_GENERATION_POLICY_VERSION : null,
         generationVision,
@@ -1526,6 +1527,7 @@ async function generateClassroomInternal(
     content?: GeneratedSceneContent;
     narration?: NarrationModuleOutput;
     contentOnly?: boolean;
+    quizNarrationContext?: string;
   };
   // Ordinary teaching slides are prepared in two phases below: all visuals in
   // a section first, then one continuous narration call. Specialized resource
@@ -1543,7 +1545,7 @@ async function generateClassroomInternal(
       });
       const independentNarration = canUseIndependentTeachingNarration(safeOutline);
       const usesFirstPassNarration = safeOutline.generationPurpose === 'knowledge-teaching';
-      const pageInputFingerprint = pageFingerprint(safeOutline, actualTaughtContext);
+      const pageInputFingerprint = pageFingerprint(safeOutline, actualTaughtContext, prepared.quizNarrationContext);
       let pageHeartbeat: ReturnType<typeof setInterval> | undefined;
       try {
       await reportPageStage(index, safeOutline.title, 'restoring');
@@ -1791,12 +1793,14 @@ async function generateClassroomInternal(
         pblProfile: requirements.pblProfile,
         teachingConstraints: requirements.teachingConstraints,
         teachingSourceContext: requirements.teachingSourceContext,
+        quizNarrationContext: prepared.quizNarrationContext,
       };
       const actionInputFingerprint = fingerprintGenerationValue({
         content,
         pageInputFingerprint,
         actionPolicy: COURSE_GENERATION_POLICY_VERSION,
         teachingNarration,
+        quizNarrationContext: prepared.quizNarrationContext,
       });
       const contextualActionAiCall = withCourseGenerationAiCallContext(
         actionAiCall,
@@ -2038,6 +2042,7 @@ async function generateClassroomInternal(
     const sectionId = outline.lectureSectionId || outline.parentActivityId || outline.activityId || outline.stageKey || '__course__';
     sectionGroups.set(sectionId, [...(sectionGroups.get(sectionId) ?? []), { outline, index, content: prepared }]);
   }
+  let previousSectionActualNarration: string[] = [];
   for (const [sectionId, pages] of sectionGroups) {
     const orderedPages = [...pages].sort((left, right) => left.index - right.index);
     const sectionFingerprint = fingerprintGenerationValue({
@@ -2048,6 +2053,7 @@ async function generateClassroomInternal(
       sectionId,
       pages: orderedPages.map(({ outline, content }) => ({ outline, content })),
       progression: stableCourseProgression(outlineContext),
+      previousSectionActualNarration,
       languageDirective,
       requirements,
     });
@@ -2108,6 +2114,7 @@ async function generateClassroomInternal(
           courseTitle,
           languageDirective,
           courseProgression: outlineContext,
+          previousSectionActualNarration,
           agents,
           aiCall: narrationCall,
         });
@@ -2152,6 +2159,8 @@ async function generateClassroomInternal(
       completePageStage(index, 'narration');
       preparedByIndex.set(index, { ...preparedByIndex.get(index), narration: narrations[pageIndex] });
     });
+    previousSectionActualNarration = narrations.flatMap((page) => page.segments)
+      .map((segment) => segment.text.trim()).filter(Boolean).slice(-3);
   }
   const teachingDrafts = await mapWithConcurrencySettledOnError(
     indexed.filter(({ outline }) => outline.type !== 'quiz'), sceneConcurrency,
@@ -2164,7 +2173,12 @@ async function generateClassroomInternal(
   }] : []);
   const quizDrafts = await mapWithConcurrencySettledOnError(
     indexed.filter(({ outline }) => outline.type === 'quiz'), sceneConcurrency,
-    ({ outline, index }) => generateSceneDraft(outline, index, buildAssessmentContext(outline, completedTeaching)),
+    ({ outline, index }) => generateSceneDraft(
+      outline,
+      index,
+      buildAssessmentContext(outline, completedTeaching),
+      { quizNarrationContext: buildQuizNarrationContext(outline, completedTeaching, outlineContext) },
+    ),
     { shouldContinue: () => !options.signal?.aborted },
   );
   const draftsByIndex = new Map([...teachingDrafts, ...quizDrafts].flatMap((draft) => draft?.scene ? [[draft.index, draft] as const] : []));

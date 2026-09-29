@@ -29,6 +29,24 @@ function activityScene(
   } as unknown as Scene;
 }
 
+function stagedQuizScene(): Scene {
+  return {
+    id: 'staged-quiz',
+    stageId: 'stage-1',
+    order: 0,
+    title: 'Quiz',
+    type: 'quiz',
+    content: { type: 'quiz', questions: [] },
+    actions: [
+      { id: 'intro', type: 'speech', text: '请先独立作答' },
+      { id: 'submit-gate', type: 'speech', text: '', activityPauseSec: 30, activityPausePurpose: 'quiz-submit' },
+      { id: 'review', type: 'speech', text: '请对照解析检查依据' },
+      { id: 'review-gate', type: 'speech', text: '', activityPauseSec: 30, activityPausePurpose: 'quiz' },
+      { id: 'handoff', type: 'speech', text: '接下来学习新的方法' },
+    ] as Action[],
+  } as unknown as Scene;
+}
+
 function discussionScene(): Scene {
   return {
     id: 'discussion-scene',
@@ -158,6 +176,33 @@ describe('PlaybackEngine activity gates', () => {
       'user',
     );
     expect(actionEngine.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('plays review guidance after submission and the next-section handoff after review confirmation', async () => {
+    const onSpeechStart = vi.fn();
+    const onActivityStart = vi.fn();
+    const { engine } = createEngine({ onSpeechStart, onActivityStart }, stagedQuizScene());
+
+    engine.start();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onActivityStart).toHaveBeenLastCalledWith(expect.objectContaining({ purpose: 'quiz-submit' }));
+    expect(engine.completeActivity('staged-quiz', 'quiz')).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onSpeechStart.mock.calls.map(([speech]) => speech)).toEqual(['请先独立作答']);
+
+    expect(engine.completeActivity('staged-quiz', 'quiz-submit')).toBe(true);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onSpeechStart.mock.calls.map(([speech]) => speech)).toEqual(['请先独立作答', '请对照解析检查依据']);
+    expect(onActivityStart).toHaveBeenLastCalledWith(expect.objectContaining({ purpose: 'quiz' }));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onSpeechStart).toHaveBeenCalledTimes(2);
+
+    expect(engine.completeActivity('staged-quiz', 'quiz')).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onSpeechStart.mock.calls.map(([speech]) => speech)).toEqual([
+      '请先独立作答', '请对照解析检查依据', '接下来学习新的方法',
+    ]);
+    engine.stop();
   });
 
   it('retains the timeout fallback for interactive activities', async () => {

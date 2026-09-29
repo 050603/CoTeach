@@ -277,6 +277,55 @@ describe('independent first-pass teaching narration', () => {
     expect(prompt).not.toContain('"title":"小节检测"');
   });
 
+  it('authors a post-quiz section opening from prior spoken knowledge and its actual first slide', async () => {
+    const prior: SceneOutline = {
+      ...outline(), id: 'prior', lectureSectionId: 'section-a', order: 0, generationPurpose: 'knowledge-teaching',
+    };
+    const quiz: SceneOutline = {
+      id: 'quiz-a', type: 'quiz', title: '第 1 节 · 节末小测', description: '检验核验依据',
+      keyPoints: [], order: 1, lectureSectionId: 'section-a', stageKey: 'ai-learning',
+      assessmentTargets: [{ unitId: 'unit-a', knowledgePointId: 'kp-a', unitTitle: '核验', learningOutcome: '说明记录为什么支持说法' }],
+    };
+    const first: SceneOutline = {
+      ...outline(), id: 'page-a', order: 2, lectureSectionId: 'section-b', generationPurpose: 'knowledge-teaching',
+      teachingBrief: {
+        ...outline().teachingBrief!,
+        teachingPlan: {
+          ...outline().teachingBrief!.teachingPlan!,
+          newContent: '比较记录之间是否相互独立',
+          visibleContent: ['两条独立记录与一条重复转载'],
+        },
+      },
+    };
+    const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{
+      pageId: first.id,
+      segments: [{ text: '刚才已经知道记录要与说法相关。接下来比较两条记录是否相互独立。', semanticIds: ['page-a:teaching'] }],
+    }] }));
+    await generateTeachingSectionNarration({
+      sectionId: 'section-b', pages: [{ outline: first, content: content('两条独立记录与一条重复转载') }],
+      requirements: { requirement: '讲清核验方法' },
+      courseProgression: [prior, quiz, first],
+      previousSectionActualNarration: ['先明确说法，再查与说法直接相关的记录。'],
+      aiCall,
+    });
+
+    const system = aiCall.mock.calls[0][0] as string;
+    const prompt = JSON.parse(aiCall.mock.calls[0][1]);
+    expect(system).toContain('previousSectionQuizFocus only as the skill checked');
+    expect(system).toContain('let the current page end with the concrete reason the next idea is needed');
+    expect(prompt.pages[0].deliveryContext).toMatchObject({ sectionPosition: 'section-first' });
+    expect(prompt.pages[0].continuityContract).toMatchObject({
+      position: 'section-opening',
+      previousSectionTakeaways: ['有相关依据再采用'],
+      previousSectionQuizFocus: ['说明记录为什么支持说法'],
+      previousSectionActualNarration: ['先明确说法，再查与说法直接相关的记录。'],
+      currentNewContent: '比较记录之间是否相互独立',
+      firstActualVisibleEvidence: ['两条独立记录与一条重复转载'],
+    });
+    expect(prompt).not.toContain('第 1 节 · 节末小测');
+    expect(aiCall).toHaveBeenCalledOnce();
+  });
+
   it('keeps only one farewell when the draft closes in consecutive segments', async () => {
     const aiCall = vi.fn().mockResolvedValue(JSON.stringify({ pages: [{
       pageId: 'page-a',

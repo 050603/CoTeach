@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid';
 
 type ActivityPauseSpeechAction = Extract<Action, { type: 'speech' }> & {
   activityPauseSec: number;
-  activityPausePurpose: 'interaction' | 'quiz';
+  activityPausePurpose: 'interaction' | 'quiz-submit' | 'quiz';
   activityPauseSource?: 'page-timing';
 };
 
@@ -34,6 +34,42 @@ function isTimelinePause(action: Action): action is TimelinePauseSpeechAction {
 
 function isPageTimingActivityPause(action: Action): action is ActivityPauseSpeechAction {
   return isActivityPause(action) && action.activityPauseSource === 'page-timing';
+}
+
+function hasThreeQuizNarrationPhases(actions: Action[]): boolean {
+  const phases = actions.flatMap((action) => action.type === 'speech' && action.quizNarrationPhase
+    ? [action.quizNarrationPhase] : []);
+  const ordered = phases.filter((phase, index) => phase !== phases[index - 1]);
+  return ordered.length === 3
+    && ordered[0] === 'intro'
+    && ordered[1] === 'review-guidance'
+    && ordered[2] === 'handoff';
+}
+
+function normalizeThreePhaseQuizPauses(actions: Action[]): Action[] {
+  const submit = actions.find((action): action is ActivityPauseSpeechAction =>
+    isActivityPause(action) && action.activityPausePurpose === 'quiz-submit');
+  const review = actions.find((action): action is ActivityPauseSpeechAction =>
+    isActivityPause(action) && action.activityPausePurpose === 'quiz');
+  if (!submit || !review) return actions;
+  const withoutGates = actions.filter((action) => action !== submit && action !== review);
+  const normalizeGate = (gate: ActivityPauseSpeechAction): ActivityPauseSpeechAction => ({
+    ...gate,
+    activityPauseSec: gate.activityPauseSource === 'page-timing'
+      ? normalizePlannedStudentActivitySec(gate.activityPauseSec)
+      : clampStudentActivitySec(gate.activityPauseSec),
+  });
+  const result: Action[] = [];
+  const lastIntro = withoutGates.findLastIndex((action) => action.type === 'speech'
+    && action.quizNarrationPhase === 'intro');
+  const lastReview = withoutGates.findLastIndex((action) => action.type === 'speech'
+    && action.quizNarrationPhase === 'review-guidance');
+  for (const [index, action] of withoutGates.entries()) {
+    result.push(action);
+    if (index === lastIntro) result.push(normalizeGate(submit));
+    if (index === lastReview) result.push(normalizeGate(review));
+  }
+  return result;
 }
 
 function createSlideReflectionPause(
@@ -120,6 +156,7 @@ export function normalizeStudentActivityPause(actions: undefined): undefined;
 export function normalizeStudentActivityPause(actions: Action[] | undefined): Action[] | undefined;
 export function normalizeStudentActivityPause(actions: Action[] | undefined): Action[] | undefined {
   if (!actions) return actions;
+  if (hasThreeQuizNarrationPhases(actions)) return normalizeThreePhaseQuizPauses(actions);
   const gateIndex = actions.findIndex(isActivityPause);
   if (gateIndex < 0) return actions;
 
@@ -153,6 +190,32 @@ export function normalizeStudentActivityPause(actions: Action[] | undefined): Ac
  */
 export function addStudentActivityPause(outline: SceneOutline, actions: Action[]): Action[] {
   const configuredActivitySec = Math.round(outline.timingPlan?.studentActivitySec ?? 0);
+  if (outline.type === 'quiz' && hasThreeQuizNarrationPhases(actions)) {
+    // Both waits share the existing activity allocation. Their durations are
+    // planning metadata; the learner's submit and confirmation complete them.
+    const totalSec = Math.max(2, configuredActivitySec || 60);
+    const reviewSec = Math.max(1, Math.floor(totalSec / 4));
+    const submitSec = totalSec - reviewSec;
+    const submitGate: ActivityPauseSpeechAction = {
+      id: `quiz_submit_pause_${nanoid(8)}`,
+      type: 'speech',
+      title: '学生读题、思考与作答',
+      text: '',
+      activityPauseSec: submitSec,
+      activityPausePurpose: 'quiz-submit',
+      activityPauseSource: 'page-timing',
+    };
+    const reviewGate: ActivityPauseSpeechAction = {
+      id: `quiz_review_pause_${nanoid(8)}`,
+      type: 'speech',
+      title: '学生阅读解析并确认理解',
+      text: '',
+      activityPauseSec: reviewSec,
+      activityPausePurpose: 'quiz',
+      activityPauseSource: 'page-timing',
+    };
+    return normalizeThreePhaseQuizPauses([...actions, submitGate, reviewGate]);
+  }
   if (configuredActivitySec <= 0) return actions;
   const activityPauseSec = normalizePlannedStudentActivitySec(configuredActivitySec);
 

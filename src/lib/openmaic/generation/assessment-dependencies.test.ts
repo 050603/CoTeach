@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
-import { buildAssessmentContext, type CompletedTeachingEvidence } from './assessment-dependencies';
+import { buildAssessmentContext, buildQuizNarrationContext, type CompletedTeachingEvidence } from './assessment-dependencies';
 
 function page(id: string, patch: Partial<SceneOutline> = {}): SceneOutline {
   return { id, type: 'slide', title: id, description: 'planned but not taught', keyPoints: [], order: 0, ...patch };
@@ -91,5 +91,34 @@ describe('assessment teaching dependencies', () => {
     expect(() => buildAssessmentContext(assessed, [
       taught(page('a', { lectureSectionId: 'section-a', teachingUnitIds: ['unit-a'] })),
     ])).toThrow('不能降低题目标准');
+  });
+
+  it('supplies the same-section actual speech and the immediate next teaching opening to quiz narration', () => {
+    const current = taught(page('current', { lectureSectionId: 'section-a', order: 2 }), '抽样方式决定谁有机会进入样本。');
+    const previous = taught(page('old', { lectureSectionId: 'section-before', order: 1 }), '另一节的讲稿');
+    const next = taught(page('next', { lectureSectionId: 'section-b', order: 4,
+      teachingBrief: { teachingPlan: { newContent: '用对照条件判断因果' } } as SceneOutline['teachingBrief'],
+    }), '接下来先看怎样控制其他因素。');
+    const later = taught(page('later', { lectureSectionId: 'section-b', order: 5 }), '不能代替第一屏');
+    const context = JSON.parse(buildQuizNarrationContext(quiz, [later, current, previous, next], [
+      previous.outline, current.outline, quiz, next.outline, later.outline,
+    ]));
+
+    expect(context.precedingSection.map((item: { pageId: string }) => item.pageId)).toEqual(['current']);
+    expect(context.precedingSection[0].actualNarration).toEqual(['抽样方式决定谁有机会进入样本。']);
+    expect(context.nextPage).toMatchObject({
+      title: 'next', newContent: '用对照条件判断因果', actualOpening: '接下来先看怎样控制其他因素。',
+    });
+    expect(JSON.stringify(context)).not.toContain('不能代替第一屏');
+  });
+
+  it('grounds the final AI-learning quiz in the project-practice destination', () => {
+    const final = page('final-check', { type: 'quiz', order: 3, stageKey: 'ai-learning' });
+    const context = JSON.parse(buildQuizNarrationContext(final, [], [final]));
+    expect(context).toMatchObject({ continuation: 'project-practice', nextPage: { stageLabel: '项目实践' } });
+    const project = page('make', { type: 'pbl', order: 4, stageKey: 'make', title: '项目动手环节' });
+    const explicit = JSON.parse(buildQuizNarrationContext(final, [], [final, project]));
+    expect(explicit).toMatchObject({ continuation: 'project-practice', nextPage: { type: 'pbl', stageLabel: '项目实践' } });
+    expect(explicit.nextPage).not.toHaveProperty('actualOpening');
   });
 });

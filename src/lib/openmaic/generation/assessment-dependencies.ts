@@ -91,3 +91,50 @@ export function buildAssessmentContext(
     pages,
   });
 }
+
+/** Give the quiz narration the actual teaching on either side of its page. */
+export function buildQuizNarrationContext(
+  assessment: SceneOutline,
+  completed: readonly CompletedTeachingEvidence[],
+  progression: readonly SceneOutline[],
+): string {
+  if (assessment.type !== 'quiz') return '';
+  const precedingSection = completed
+    .filter(({ outline, speech }) => outline.type !== 'quiz'
+      && outline.audience !== 'teacher'
+      && outline.generationPurpose !== 'teacher-resource'
+      && outline.order < assessment.order
+      && sectionIdentity(outline) === sectionIdentity(assessment)
+      && speech.some(({ text }) => text.trim()))
+    .sort((left, right) => left.outline.order - right.outline.order)
+    .map(({ outline, speech }) => ({
+      pageId: outline.id,
+      coreUnderstanding: outline.teachingBrief?.teachingPlan?.takeaway,
+      actualNarration: speech.map(({ text }) => text.trim()).filter(Boolean),
+    }));
+  const position = progression.findIndex((outline) => outline.id === assessment.id);
+  const nextOutline = position >= 0 ? progression.slice(position + 1).find((outline) =>
+    outline.audience !== 'teacher' && outline.generationPurpose !== 'teacher-resource') : undefined;
+  const nextTeaching = nextOutline && nextOutline.type === 'slide'
+    ? completed.find(({ outline }) => outline.id === nextOutline.id)
+    : undefined;
+  const continuesIntoProject = nextOutline?.type === 'pbl'
+    || nextOutline?.stageKey === 'make'
+    || nextOutline?.stageKey === 'project-practice'
+    || (!nextOutline && assessment.stageKey === 'ai-learning' && assessment.narrationMode !== 'embedded-segment');
+  return JSON.stringify({
+    precedingSection,
+    continuation: nextOutline
+      ? continuesIntoProject ? 'project-practice' : 'next-page'
+      : continuesIntoProject ? 'project-practice' : 'verified-course-end',
+    nextPage: nextOutline ? {
+      type: nextOutline.type,
+      stageLabel: nextOutline.stageLabel || (continuesIntoProject ? '项目实践' : undefined),
+      title: nextOutline.type === 'quiz' ? undefined : nextOutline.title,
+      newContent: nextOutline.teachingBrief?.teachingPlan?.newContent,
+      actualOpening: nextTeaching?.speech.find(({ text }) => text.trim())?.text.trim(),
+    } : continuesIntoProject
+      ? { type: 'pbl', stageLabel: '项目实践' }
+      : null,
+  });
+}

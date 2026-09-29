@@ -1195,16 +1195,15 @@ export class PlaybackEngine {
           }).activityPausePurpose;
           const sceneType = this.scenes[this.sceneIndex]?.type;
           const purpose: ActivityPurpose =
-            configuredPurpose === 'quiz' || configuredPurpose === 'interaction'
+            configuredPurpose === 'quiz-submit' || configuredPurpose === 'quiz' || configuredPurpose === 'interaction'
               ? configuredPurpose
               : sceneType === 'quiz'
                 ? 'quiz'
                 : 'interaction';
           this.activeActivity = { sceneId, purpose, durationSec: activityPauseSec };
-          // A quiz duration is planning/UI metadata, not a submission deadline.
-          // Never let its timer release the playback gate: the quiz view emits
-          // an explicit completion event only after the learner submits and
-          // confirms the review. Interactive widgets retain their timeout
+          // Quiz durations are planning/UI metadata, not deadlines. The quiz
+          // view releases submission and review gates separately. Interactive
+          // widgets retain their timeout
           // fallback because legacy/generated widgets may not emit completion.
           const pauseMs = activityPauseSec * 1000;
           const shouldTimeout = purpose === 'interaction';

@@ -169,6 +169,58 @@ describe('AudioPlayer playback', () => {
     engine.stop();
   });
 
+  it('plays staged quiz audio in submission, review, and handoff order', async () => {
+    const scene = {
+      id: 'staged-quiz-audio',
+      type: 'quiz',
+      actions: [
+        { id: 'intro', type: 'speech', text: '请独立作答', audioUrl: '/intro.mp3' },
+        { id: 'submit', type: 'speech', text: '', activityPauseSec: 60, activityPausePurpose: 'quiz-submit' },
+        { id: 'review', type: 'speech', text: '提交后请看解析', audioUrl: '/review.mp3' },
+        { id: 'confirm', type: 'speech', text: '', activityPauseSec: 20, activityPausePurpose: 'quiz' },
+        { id: 'handoff', type: 'speech', text: '接下来进入下一节', audioUrl: '/handoff.mp3' },
+      ],
+    } as Scene;
+    const player = new AudioPlayer();
+    const onSpeechStart = vi.fn();
+    const onActivityStart = vi.fn();
+    const engine = new PlaybackEngine(
+      [scene],
+      { clearEffects: vi.fn(), execute: vi.fn().mockResolvedValue(undefined) } as unknown as ActionEngine,
+      player,
+      { onSpeechStart, onActivityStart },
+    );
+
+    engine.start();
+    await vi.advanceTimersByTimeAsync(650);
+    const intro = (player as unknown as { audio: FakeAudio }).audio;
+    intro.ended = true;
+    intro.paused = true;
+    intro.dispatchEvent(new Event('ended'));
+    expect(onActivityStart).toHaveBeenLastCalledWith(expect.objectContaining({ purpose: 'quiz-submit' }));
+
+    expect(engine.completeActivity(scene.id, 'quiz-submit')).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    const review = (player as unknown as { audio: FakeAudio }).audio;
+    expect(review.src).toBe('/review.mp3');
+    expect(onSpeechStart.mock.calls.map(([speech]) => speech)).toEqual(['请独立作答', '提交后请看解析']);
+
+    // The learner can confirm quickly, but the current guidance must finish.
+    expect(engine.completeActivity(scene.id, 'quiz')).toBe(false);
+    expect(review.paused).toBe(false);
+    review.ended = true;
+    review.paused = true;
+    review.dispatchEvent(new Event('ended'));
+    expect(onActivityStart).toHaveBeenLastCalledWith(expect.objectContaining({ purpose: 'quiz' }));
+    expect(engine.completeActivity(scene.id, 'quiz')).toBe(true);
+    await Promise.resolve();
+    expect((player as unknown as { audio: FakeAudio }).audio.src).toBe('/handoff.mp3');
+    expect(onSpeechStart.mock.calls.map(([speech]) => speech)).toEqual([
+      '请独立作答', '提交后请看解析', '接下来进入下一节',
+    ]);
+    engine.stop();
+  });
+
   it('waits for the quiet pre-roll to seek back to zero before audible playback', async () => {
     const player = new AudioPlayer();
     const playback = player.play('', '/narration.mp3');

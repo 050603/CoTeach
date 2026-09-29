@@ -48,6 +48,63 @@ describe('addStudentActivityPause', () => {
     expect(result[2]).toMatchObject({ type: 'speech', title: '测验反馈与过渡' });
   });
 
+  it('places two waits around three authored quiz phases within one activity budget', () => {
+    const outline = {
+      type: 'quiz',
+      timingPlan: { studentActivitySec: 80, transitionSec: 3 },
+    } as SceneOutline;
+    const actions = [
+      { id: 'intro', type: 'speech', text: '请独立作答。', quizNarrationPhase: 'intro' },
+      { id: 'review', type: 'speech', text: '解析显示后再核对。', quizNarrationPhase: 'review-guidance' },
+      { id: 'handoff', type: 'speech', text: '接下来学习新的判断方法。', quizNarrationPhase: 'handoff' },
+    ] as Action[];
+
+    const result = addPageTimingPauses(outline, actions);
+
+    expect(result.map((action) => action.id)).toEqual([
+      'intro', expect.stringMatching(/^quiz_submit_pause_/), 'review',
+      expect.stringMatching(/^quiz_review_pause_/), 'handoff',
+      expect.stringMatching(/^page_transition_/),
+    ]);
+    expect(result[1]).toMatchObject({ activityPausePurpose: 'quiz-submit', activityPauseSec: 60 });
+    expect(result[3]).toMatchObject({ activityPausePurpose: 'quiz', activityPauseSec: 20 });
+    expect(result.filter((action) => action.type === 'speech' && action.text.trim())).toHaveLength(3);
+  });
+
+  it('normalizes both modern quiz waits independently without moving either past its phase', () => {
+    const actions = [
+      { id: 'intro', type: 'speech', text: '开始答题', quizNarrationPhase: 'intro' },
+      { id: 'review', type: 'speech', text: '查看解析', quizNarrationPhase: 'review-guidance' },
+      { id: 'handoff', type: 'speech', text: '继续学习', quizNarrationPhase: 'handoff' },
+      { id: 'review-gate', type: 'speech', text: '', activityPausePurpose: 'quiz', activityPauseSec: 10 },
+      { id: 'submit-gate', type: 'speech', text: '', activityPausePurpose: 'quiz-submit', activityPauseSec: 20 },
+    ] as Action[];
+
+    const result = normalizeStudentActivityPause(actions);
+
+    expect(result?.map((action) => action.id)).toEqual([
+      'intro', 'submit-gate', 'review', 'review-gate', 'handoff',
+    ]);
+    expect(result?.[1]).toMatchObject({ activityPauseSec: 30 });
+    expect(result?.[3]).toMatchObject({ activityPauseSec: 30 });
+  });
+
+  it('keeps the two quiz waits after the final audio chunk of each phase', () => {
+    const actions = [
+      { id: 'intro-1', type: 'speech', text: '先听说明', quizNarrationPhase: 'intro' },
+      { id: 'intro-2', type: 'speech', text: '再开始作答', quizNarrationPhase: 'intro' },
+      { id: 'review-1', type: 'speech', text: '对照解析', quizNarrationPhase: 'review-guidance' },
+      { id: 'review-2', type: 'speech', text: '读完再确认', quizNarrationPhase: 'review-guidance' },
+      { id: 'handoff', type: 'speech', text: '进入下一节', quizNarrationPhase: 'handoff' },
+      { id: 'submit-gate', type: 'speech', text: '', activityPausePurpose: 'quiz-submit', activityPauseSec: 60 },
+      { id: 'review-gate', type: 'speech', text: '', activityPausePurpose: 'quiz', activityPauseSec: 20 },
+    ] as Action[];
+
+    expect(normalizeStudentActivityPause(actions).map((action) => action.id)).toEqual([
+      'intro-1', 'intro-2', 'submit-gate', 'review-1', 'review-2', 'review-gate', 'handoff',
+    ]);
+  });
+
   it('migrates an existing late gate ahead of state-changing widget actions', () => {
     const legacyActions = [
       { id: 'intro', type: 'speech', text: '先观察' },

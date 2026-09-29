@@ -15,10 +15,11 @@ import {
   rewriteFalseFutureSessionReferences,
   stripPrematureCourseClosing,
   stripRepeatedNarrationOpening,
+  type NarrationContinuityContext,
 } from './narration-continuity';
 import { normalizeNarrationPunctuation } from './narration-punctuation';
 
-export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v29-addressable-table-rows';
+export const TEACHING_NARRATION_VERSION = 'section-continuous-narration-v30-grounded-section-entry';
 /**
  * Changes to local normalization invalidate narration attempt checkpoints
  * without invalidating the already generated slide-content checkpoints.
@@ -42,13 +43,17 @@ function pageNarrationContext(
   sectionOutlines: readonly SceneOutline[],
   courseProgression?: readonly SceneOutline[],
   courseTitle?: string,
-): SceneGenerationContext {
+  evidence?: {
+    previousSectionActualNarration?: readonly string[];
+    currentPageActualVisibleEvidence?: readonly string[];
+  },
+): NarrationContinuityContext {
   const progression = courseProgression?.length ? courseProgression : sectionOutlines;
   const courseIndex = progression.findIndex((candidate) => candidate.id === outline.id);
   return buildNarrationContext(
     progression,
     courseIndex >= 0 ? courseIndex : sectionIndex,
-    { courseTitle },
+    { courseTitle, ...evidence },
   );
 }
 
@@ -534,8 +539,16 @@ function actualSlideVisibleEvidence(content: GeneratedSlideContent): string[] {
 function pageContinuityContract(
   pages: ReadonlyArray<{ outline: SceneOutline; content: GeneratedSlideContent }>,
   index: number,
+  context: NarrationContinuityContext,
 ) {
-  if (index === 0) return { position: 'section-opening' as const };
+  if (index === 0) return {
+    position: 'section-opening' as const,
+    previousSectionTakeaways: context.previousSectionTakeaways ?? [],
+    previousSectionQuizFocus: context.previousSectionQuizFocus ?? [],
+    previousSectionActualNarration: context.previousSectionActualNarration ?? [],
+    currentNewContent: pages[0]!.outline.teachingBrief?.teachingPlan?.newContent,
+    firstActualVisibleEvidence: actualSlideVisibleEvidence(pages[0]!.content),
+  };
   const previous = pages[index - 1]!;
   const current = pages[index]!;
   return {
@@ -569,6 +582,8 @@ export async function generateTeachingSectionNarration(input: {
   courseTitle?: string;
   languageDirective?: string;
   courseProgression?: readonly SceneOutline[];
+  /** Spoken evidence from the preceding section, already generated in course order. */
+  previousSectionActualNarration?: readonly string[];
   agents?: readonly AgentInfo[];
   aiCall: AICallFn;
 }): Promise<TeachingSectionNarrationOutput> {
@@ -580,6 +595,13 @@ export async function generateTeachingSectionNarration(input: {
   const sharedCriteria = outlines.find((outline) => outline.teachingBrief?.understandingCriteria)
     ?.teachingBrief?.understandingCriteria;
   const teacher = teachingAgent(input.agents);
+  const deliveryContexts = input.pages.map(({ outline, content }, index) => pageNarrationContext(
+    outline, index, outlines, input.courseProgression, input.courseTitle,
+    index === 0 ? {
+      previousSectionActualNarration: input.previousSectionActualNarration,
+      currentPageActualVisibleEvidence: actualSlideVisibleEvidence(content),
+    } : undefined,
+  ));
   const system = [
     'Write one continuous classroom micro-lecture for the complete section, then return it as page-scoped segments. Every segment text is the teacher’s complete spoken utterance, read verbatim by TTS to learners. Return only valid JSON.',
     loadSnippet('adaptive-narration-policy'),
@@ -588,7 +610,9 @@ export async function generateTeachingSectionNarration(input: {
     'Explain the section at the depth this learner and time budget require. Define unfamiliar terms on first use, make intermediate causal or inferential links explicit, and explain how a result follows instead of repeating conclusions.',
     'Advance one line of understanding across pages. Use introduces, deepens, and references as page ownership: teach new nodes where introduced, add the planned relation or application where deepened, and use only a short bridge where referenced.',
     'Treat every page learningBoundary as authoritative learner state. You may rely on prerequisiteKnowledge and previouslyTaughtKnowledge. Establish currentKnowledge before using it in an example, comparison, judgment, or exercise. futureKnowledge may be named only in an agenda or goal; never use it as an explanation premise, example, option, task, or assumed student knowledge.',
-    'Treat each page continuityContract as a closed-world handoff. A later page may say the previous page established only a proposition present in establishedVisibleStatements, establishedTakeaway, or previousActualVisibleEvidence. Never claim that the previous page raised, showed, discussed, or left a question, example, term, project or conclusion that is absent from that evidence. Material listed under currentNewContent or notYetEstablishedOnPreviousPage must be introduced as new at its own page. Follow transitionContract with at most one or two short linking sentences; do not paste or restate the full establishedTakeaway at the start of the next page. When no retrospective wording adds value, continue directly from the adopted bridge or current content instead of saying “上一页”.',
+    'Treat each page continuityContract as a closed-world handoff. Within a section, a later page may say the previous page established only a proposition present in establishedVisibleStatements, establishedTakeaway, or previousActualVisibleEvidence. Never claim that the previous page raised, showed, discussed, or left a question, example, term, project or conclusion that is absent from that evidence. Material listed under currentNewContent or notYetEstablishedOnPreviousPage must be introduced as new at its own page. Follow transitionContract with at most one or two short linking sentences; do not paste or restate the full establishedTakeaway at the start of the next page. When no retrospective wording adds value, continue directly from the adopted bridge or current content instead of saying “上一页”.',
+    'For a section-opening page after another section, use previousSectionTakeaways and previousSectionActualNarration as evidence of what was taught, and previousSectionQuizFocus only as the skill checked, not as proof of any student answer or mastery. Where the adopted entryPoint identifies a next reasoning need, connect that need to currentNewContent; otherwise enter currentNewContent directly. Use firstActualVisibleEvidence to explain this section’s first idea. A quiz title is an internal label, not prior knowledge. Do not invent a prior claim, score, class response, or a transition unsupported by these fields.',
+    'At adjacent teaching-page boundaries, let the current page end with the concrete reason the next idea is needed, when the adopted plan supports that reason. Let the next page pick up that reason in one or two natural sentences and immediately develop its own new content. Avoid repeating a complete takeaway, reopening the lesson, or adding a separate transition paragraph to every page. Before a quiz, finish with a brief invitation to check understanding; the next section resumes after students have submitted and reviewed it.',
     'Use each page entryPoint as the real way into its reasoning. The standalone AI resource must feel complete even when a teacher-led phase may have introduced the wider lesson earlier. On the first course page, give a brief natural greeting, identify the course or immediate learning focus when useful, and establish the entryPoint through a concrete familiar experience, observable contrast, question, or direct proposition. Let learners notice the relevant feature before explicitly bridging from it to the first new idea. Do not merely prepend a greeting to a definition, recite objectives, announce an abstract agenda, or claim that learners answered. On later pages, connect from the exact idea already established instead of restarting the lesson.',
     'When an abstract or unfamiliar term has a familiar example or visible contrast, establish that object first, let the learner notice the relevant feature, and only then name and define the concept. A direct definition is still appropriate when the term is already familiar or the content calls for it.',
     'Use actual slide content for concrete visual references. Name the referent in speech. If a required visible item is absent or conflicts with the adopted design, do not invent that it is visible and do not silently weaken the explanation. Keep the correct explanation self-contained so the resource gap can be reported separately.',
@@ -643,8 +667,8 @@ export async function generateTeachingSectionNarration(input: {
       targetDurationSec: outline.targetDurationSec,
       timingPlan: outline.timingPlan,
       semanticUnits: buildTeachingNarrationSemantics(outline),
-      deliveryContext: pageNarrationContext(outline, index, outlines, input.courseProgression, input.courseTitle),
-      continuityContract: pageContinuityContract(input.pages, index),
+      deliveryContext: deliveryContexts[index],
+      continuityContract: pageContinuityContract(input.pages, index, deliveryContexts[index]!),
     })),
     courseProgression: input.courseProgression?.map((outline) => ({
       id: outline.id,

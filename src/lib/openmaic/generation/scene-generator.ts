@@ -174,6 +174,8 @@ export interface SceneActionsOptions {
   languageDirective?: string;
   pblProfile?: PblCourseConfig;
   pblContext?: string;
+  /** Actual narration on both sides of a quiz, supplied after teaching pages exist. */
+  quizNarrationContext?: string;
   teachingConstraints?: UserRequirements['teachingConstraints'];
   /** @deprecated Timing budgets are supplied before the first generation. */
   timingCorrection?: string;
@@ -238,7 +240,9 @@ function formatTimingPlanForPrompt(outline: SceneOutline): string {
     '- 讲稿要通过增加与当前场景知识点直接相关的有效概念、依据、例子、反例或分步解释达到时长，不得用重复套话、图谱之外的知识或故意放慢语速凑时长。',
     `- 逐页分解：自然语速讲解 ${plan.narrationSec ?? plan.targetDurationSec} 秒；视频播放 ${plan.videoSec ?? 0} 秒（已从讲稿预算扣除，播放期间停止朗读，不得再次分配给讲解或学生活动）；学生阅读/理解 ${plan.readingThinkingSec ?? 0} 秒；学生实际操作/作答 ${plan.operationSec ?? 0} 秒；页面切换 ${plan.transitionSec ?? 0} 秒。反馈/解析 ${plan.feedbackSec ?? 0} 秒已包含在讲解中，不得重复计时。`,
     taskFitInstruction,
-    '- 互动、代码和测验页必须在学生阅读、思考、作答、编码或操作期间停止朗读。动作顺序必须是：简短任务引导讲稿 → 学生活动 → 独立反馈/答案解析讲稿；至少生成两条 speech action。',
+    outline.type === 'quiz'
+      ? '- 小测页必须生成且只生成三段讲稿，共用上面的讲解预算：答题前引导 → 等待学生提交 → 提交后解析引导 → 等待学生确认理解 → 下一部分引入。两个等待共用学生阅读、作答和看解析的活动预算，等待期间停止朗读。'
+      : '- 互动与代码页必须在学生阅读、思考、编码或操作期间停止朗读。动作顺序是：简短任务引导讲稿 → 学生活动 → 独立反馈讲稿；至少生成两条 speech action。',
     '- PPT 页只执行末尾几秒的页面切换，不得人为加入长空白。所有页面切换期间都不得继续朗读。',
     '- TTS 必须使用自然稳定的 1.0 语速。只能通过调整相关内容量、内容深度和任务复杂度匹配时间，禁止拉伸、压缩或变速音频。',
   ].filter(Boolean).join('\n');
@@ -1063,7 +1067,7 @@ export async function generateLegacyCustomizedSlideContent(
  */
 type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['questionTypes'][number];
 
-export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v8-diagnostic-choices';
+export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v10-budgeted-three-phase-narration';
 
 const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
   single: 'single_choice',
@@ -1741,24 +1745,17 @@ export async function generateSceneActions(
       languageDirective: languageDirective || '',
       pblContext,
       timingBudget: formatCombinedTimingBudget(outline),
+      quizNarrationContext: options.quizNarrationContext ?? '',
     });
 
     if (!prompts) {
-      const fallback = generateDefaultQuizActions(outline);
-
-      return finalizeSlideActions(fallback);
+      throw Object.assign(new Error(`Missing quiz narration prompt for ${outline.id}`), { isRetryable: false });
     }
 
     const response = await aiCall(prompts.system, prompts.user);
-    const actions = parseActionsFromStructuredOutput(response, outline.type);
-
-    if (actions.length > 0) {
-      const processed = processActions(actions, [], agents);
-
-      return finalizeSlideActions(processed);
-    }
-
-    throw Object.assign(new Error(`Invalid or empty teaching actions for ${outline.id}`), { isRetryable: false });
+    const actions = parseQuizNarrationActions(response);
+    if (!actions) throw Object.assign(new Error(`Invalid or empty teaching actions for ${outline.id}: expected intro, review-guidance, handoff`), { isRetryable: false });
+    return finalizeActions(actions);
   }
 
   if (outline.type === 'interactive' && 'html' in content) {
@@ -1875,9 +1872,34 @@ function formatQuestionsForPrompt(questions: QuizQuestion[]): string {
         : q.matchingPairs
           ? `Pairs: ${q.matchingPairs.map((pair) => `${pair.left} ↔ ${pair.right}`).join(', ')}`
           : '';
-      return `Q${i + 1} (${q.type}): ${q.question}\n${optionsText}`;
+      return `Q${i + 1} (${q.type}): ${q.question}\n${optionsText}\nExplanation shown after submission: ${q.analysis || '(none)'}`;
     })
     .join('\n\n');
+}
+
+const QUIZ_NARRATION_PHASES = ['intro', 'review-guidance', 'handoff'] as const;
+
+/** Preserve the authored phase instead of allowing a generic action parser to erase it. */
+function parseQuizNarrationActions(response: string): Action[] | null {
+  const parsed = parseJsonResponse<unknown>(response);
+  if (!Array.isArray(parsed) || parsed.length !== QUIZ_NARRATION_PHASES.length) return null;
+  const actions: Action[] = [];
+  for (const [index, item] of parsed.entries()) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const segment = item as Record<string, unknown>;
+    if (segment.type !== 'text'
+      || segment.phase !== QUIZ_NARRATION_PHASES[index]
+      || typeof segment.content !== 'string'
+      || !segment.content.trim()) return null;
+    actions.push({
+      id: `quiz_narration_${nanoid(8)}`,
+      type: 'speech',
+      title: ({ intro: '测验作答引导', 'review-guidance': '测验解析引导', handoff: '后续学习衔接' })[QUIZ_NARRATION_PHASES[index]],
+      text: segment.content.trim(),
+      quizNarrationPhase: QUIZ_NARRATION_PHASES[index],
+    });
+  }
+  return actions;
 }
 
 /**
@@ -1961,20 +1983,6 @@ export function generateLegacyDefaultSlideActions(outline: SceneOutline, element
   });
 
   return actions;
-}
-
-/**
- * Generate default quiz Actions (fallback)
- */
-function generateDefaultQuizActions(_outline: SceneOutline): Action[] {
-  return [
-    {
-      id: `action_${nanoid(8)}`,
-      type: 'speech',
-      title: '测验引导',
-      text: '现在让我们来做一个小测验，检验一下学习成果。',
-    },
-  ];
 }
 
 /**

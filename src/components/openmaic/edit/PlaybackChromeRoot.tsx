@@ -352,13 +352,19 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       const onComplete = (event: Event) => {
         const detail = (event as CustomEvent<PlaybackActivityEventDetail>).detail;
         if (!detail?.sceneId) return;
-        completedActivitySceneIdsRef.current.add(detail.sceneId);
+        if (detail.purpose !== 'quiz-submit') completedActivitySceneIdsRef.current.add(detail.sceneId);
+        const matchingScene = useStageStore.getState().scenes.find((scene) => scene.id === detail.sceneId);
+        const isStagedQuiz = matchingScene?.type === 'quiz' && matchingScene.actions?.some((action) =>
+          action.type === 'speech'
+          && (action as typeof action & { activityPausePurpose?: string }).activityPausePurpose === 'quiz-submit');
         continueAfterActivityConfirmation(
           engineRef.current,
           detail,
           useStageStore.getState().currentSceneId,
           modalPlaybackBlockedRef.current,
-          (sceneId) => advanceCompletedScene(sceneId, true),
+          (sceneId) => {
+            if (!isStagedQuiz) advanceCompletedScene(sceneId, true);
+          },
         );
       };
       const onReset = (event: Event) => {
@@ -733,16 +739,17 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
         },
         onActivityStart: (activity) => {
           setActiveActivity(activity);
-          if (
-            completedActivitySceneIdsRef.current.has(activity.sceneId) ||
-            isPlaybackActivityComplete(activity)
-          ) {
-            completedActivitySceneIdsRef.current.add(activity.sceneId);
+          const stagedQuiz = currentScene?.type === 'quiz' && currentScene.actions?.some((action) =>
+            action.type === 'speech'
+            && (action as typeof action & { activityPausePurpose?: string }).activityPausePurpose === 'quiz-submit');
+          if (isPlaybackActivityComplete(activity)
+            || (!stagedQuiz && completedActivitySceneIdsRef.current.has(activity.sceneId))) {
+            if (activity.purpose !== 'quiz-submit') completedActivitySceneIdsRef.current.add(activity.sceneId);
             queueMicrotask(() => engine.completeActivity(activity.sceneId, activity.purpose));
           }
         },
         onActivityComplete: (activity) => {
-          completedActivitySceneIdsRef.current.add(activity.sceneId);
+          if (activity.purpose !== 'quiz-submit') completedActivitySceneIdsRef.current.add(activity.sceneId);
           setActiveActivity((current) => (
             current?.sceneId === activity.sceneId ? null : current
           ));

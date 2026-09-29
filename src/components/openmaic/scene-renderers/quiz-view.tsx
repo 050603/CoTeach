@@ -41,6 +41,7 @@ interface QuizViewProps {
   readonly questions: QuizQuestion[];
   readonly sceneId: string;
   readonly quizOutlineId?: string;
+  readonly stagedPlayback?: boolean;
 }
 
 export const KNOWLEDGE_LECTURE_QUIZ_REVIEWED_EVENT = 'openpbl:knowledge-lecture-quiz-reviewed';
@@ -822,7 +823,7 @@ function isQuestionAnswered(question: QuizQuestion, answer: string | string[] | 
     && [...expectedLeftIds].every((id) => answeredLeftIds.has(id));
 }
 
-export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
+export function QuizView({ questions, sceneId, quizOutlineId, stagedPlayback = false }: QuizViewProps) {
   const { t, locale } = useI18n();
   const prefersReducedMotion = useReducedMotion();
   const lockedAttempt = useLockedKnowledgeLectureAttempt(sceneId, quizOutlineId);
@@ -859,7 +860,7 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
 
   const [phase, setPhase] = useState<Phase>(() => {
     if (initialSubmitted?.kind === 'reviewing') return 'reviewing';
-    if (initialSubmitted?.kind === 'answering') return 'answering';
+    if (initialSubmitted?.kind === 'answering') return stagedPlayback ? 'grading' : 'answering';
     return 'not_started';
   });
   const [answers, setAnswers] = useState<Record<string, string | string[]>>(
@@ -869,6 +870,14 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
     initialSubmitted?.kind === 'reviewing' ? initialSubmitted.results : [],
   );
   const [reviewReleased, setReviewReleased] = useState(false);
+
+  // A restored submission may mount before the playback engine. The activity
+  // event cache lets the submission gate open when that engine reaches it.
+  useEffect(() => {
+    if (stagedPlayback && initialSubmitted) {
+      dispatchPlaybackActivityComplete({ sceneId, purpose: 'quiz-submit' });
+    }
+  }, [initialSubmitted, sceneId, stagedPlayback]);
 
   useEffect(() => {
     const handleServerGrade = (event: Event) => {
@@ -932,7 +941,8 @@ export function QuizView({ questions, sceneId, quizOutlineId }: QuizViewProps) {
     setPhase('grading');
     clearAnswersCache();
     writeSubmittedAnswers(sceneId, answers);
-  }, [clearAnswersCache, answers, sceneId]);
+    if (stagedPlayback) dispatchPlaybackActivityComplete({ sceneId, purpose: 'quiz-submit' });
+  }, [clearAnswersCache, answers, sceneId, stagedPlayback]);
 
   // When entering grading phase, grade choice questions locally + call API for short-answer
   useEffect(() => {

@@ -1,7 +1,7 @@
-Questions: {{questions}}
-Title: {{title}}
-Key Points: {{keyPoints}}
+Questions and explanations (the explanations are shown only after submission): {{questions}}
+Assessment focus: {{keyPoints}}
 Description: {{description}}
+Actual narration around this quiz: {{quizNarrationContext}}
 {{courseContext}}
 {{agents}}
 {{pblContext}}
@@ -9,5 +9,4 @@ Description: {{description}}
 
 **Language Directive**: {{languageDirective}}
 
-Output exactly two short text segments as a JSON array. The runtime inserts the quiz activity gate between them. Segment 1 must not reveal or hint at answers; segment 2 is post-submission concept-level feedback and transition. No discussion or action objects:
-[{"type":"text","content":"Try the questions independently, then submit."},{"type":"text","content":"Now compare your reasoning with the explanation and note the step to review before we continue."}]
+Return exactly three short teacher text segments as a JSON array, with phases `intro`, `review-guidance`, and `handoff` in that order. The runtime places a submit wait before review-guidance and an understood/continue wait before handoff.

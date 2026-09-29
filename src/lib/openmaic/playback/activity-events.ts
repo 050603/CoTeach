@@ -1,4 +1,4 @@
-export type PlaybackActivityPurpose = 'quiz' | 'interaction';
+export type PlaybackActivityPurpose = 'quiz-submit' | 'quiz' | 'interaction';
 
 export interface PlaybackActivityEventDetail {
   sceneId: string;

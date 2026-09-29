@@ -25,7 +25,14 @@ export function SceneRenderer({ scene, mode }: SceneRendererProps) {
         return <SlideRenderer mode={mode} />;
       case 'quiz':
         if (scene.content.type !== 'quiz') return <div>Invalid quiz content</div>;
-        return <QuizView key={scene.id} questions={scene.content.questions} quizOutlineId={scene.outlineId} sceneId={scene.id} />;
+        return <QuizView
+          key={scene.id}
+          questions={scene.content.questions}
+          quizOutlineId={scene.outlineId}
+          sceneId={scene.id}
+          stagedPlayback={scene.actions?.some((action) => action.type === 'speech'
+            && (action as typeof action & { activityPausePurpose?: string }).activityPausePurpose === 'quiz-submit') ?? false}
+        />;
       case 'interactive':
         if (scene.content.type !== 'interactive') return <div>Invalid interactive content</div>;
         return <InteractiveRenderer content={scene.content} sceneId={scene.id} />;

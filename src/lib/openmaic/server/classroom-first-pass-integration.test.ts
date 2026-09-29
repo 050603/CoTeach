@@ -200,6 +200,53 @@ describe('classroom first-pass orchestration and checkpoint integration', () => 
     expect(mocks.persist).toHaveBeenCalledOnce();
   });
 
+  it('authors a section quiz against the next section first slide and assembles two ordered waits', async () => {
+    const first: SceneOutline = { ...outline, id: 'first-teaching', title: '抽样与偏差',
+      order: 0, spatialParentId: 'first-teaching', lectureSectionId: 'section-a' };
+    const check: SceneOutline = { id: 'section-a-check', type: 'quiz', title: '第一节 · 节末小测',
+      description: '检验抽样依据', keyPoints: ['识别抽样偏差'], order: 1,
+      lectureSectionId: 'section-a', timingPlan: { studentActivitySec: 80, transitionSec: 3 } as SceneOutline['timingPlan'] };
+    const next: SceneOutline = { ...outline, id: 'next-teaching', title: '实验中的对照条件',
+      order: 2, spatialParentId: 'next-teaching', lectureSectionId: 'section-b' };
+    const savedSlide = (saved: SceneOutline, stageId: string): Scene => ({
+      id: `completed-${saved.id}`, stageId, outlineId: saved.id,
+      type: 'slide', title: saved.title, order: saved.order,
+      content: { type: 'slide', canvas: { id: `canvas-${saved.id}`, viewportSize: 1000,
+        viewportRatio: 0.5625, elements: content.elements } },
+      actions: [{ id: `speech-${saved.id}`, type: 'speech', text: saved.id === first.id
+        ? '抽样方式决定谁有机会进入样本。' : '实验设计首先要控制其他因素。' }],
+      createdAt: 1, updatedAt: 1,
+    } as unknown as Scene);
+    mocks.ai.mockImplementation(async (system: string) => {
+      if (system.includes('# Quiz Narration Generator')) return JSON.stringify([
+        { type: 'text', phase: 'intro', content: '刚才讨论了入样机会，现在独立完成几道题。' },
+        { type: 'text', phase: 'review-guidance', content: '解析显示后，请核对推理依据，读完再确认理解。' },
+        { type: 'text', phase: 'handoff', content: '入样判断之后，还要看怎样排除其他因素。' },
+      ]);
+      throw new Error(`Unexpected generation prompt: ${system.slice(0, 80)}`);
+    });
+
+    const result = await generateClassroom(input, {
+      preparedOutlines: [first, check, next],
+      loadSceneCheckpoint: (saved, _index, stageId) => saved.type === 'slide' ? savedSlide(saved, stageId) : null,
+      loadSceneStageCheckpoint: (saved, stage) => saved.id === check.id && stage === 'content'
+        ? { content: { questions: [{ id: 'q1', type: 'single', question: '怎样降低抽样偏差？',
+          analysis: '随机抽取让总体成员获得入样机会。' }] } } : null,
+    });
+
+    const quizPrompt = mocks.ai.mock.calls.find(([system]) => system.includes('# Quiz Narration Generator'))?.[1] as string;
+    expect(quizPrompt).toContain('抽样方式决定谁有机会进入样本。');
+    expect(quizPrompt).toContain('随机抽取让总体成员获得入样机会。');
+    expect(quizPrompt).toContain('实验设计首先要控制其他因素。');
+    const quizActions = result.scenes.find((scene) => scene.outlineId === check.id)?.actions ?? [];
+    expect(quizActions.map((action) => action.type === 'speech'
+      ? action.quizNarrationPhase || ('activityPausePurpose' in action ? action.activityPausePurpose : 'transition')
+      : action.type)).toEqual([
+      'intro', 'quiz-submit', 'review-guidance', 'quiz', 'handoff', 'transition',
+    ]);
+    expect(mocks.ai).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the full formal outline as page input while generating only the requested test lesson pages', async () => {
     const second = { ...outline, id: 'saved-page--spatial-2', title: '第二个正式页面', order: 1 };
     const prepared = [outline, second];

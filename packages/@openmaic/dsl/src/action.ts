@@ -148,6 +148,8 @@ export interface LaserAction extends ActionBase {
 export interface SpeechAction extends ActionBase {
   type: 'speech';
   text: string;
+  /** Authored quiz narration phase, retained for the two learner-controlled waits. */
+  quizNarrationPhase?: 'intro' | 'review-guidance' | 'handoff';
   /**
    * An asset reference for narration audio. Documents converted by the app-side
    * reference converter (#1007 part 2, step c) hold allocated asset ids here.
