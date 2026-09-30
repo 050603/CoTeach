@@ -23,9 +23,11 @@ export type {
 } from './scene-generator.js';
 export { compileTextComponents, TextLayoutError } from './text-layout-compiler.js';
 export type { TextMeasure, TextMeasureInput, TextMeasureResult, TextBoxComponent, LabelGridComponent } from './text-layout-compiler.js';
+export { AuthoringContentError, resolveAuthoringContent, assertAuthoringContentCoverage, validateAuthoringContent } from './authoring-content.js';
+export type { AuthoringContentItem, AuthoringContentReference } from './authoring-content.js';
 export { compileDiagramComponent, isDiagramComponent } from './diagram-compiler.js';
 export type { DiagramComponent, DiagramCompilerOptions } from './diagram-compiler.js';
-export type { DiagramPlan } from './outline-types.js';
+export type { DiagramPlan, DiagramSequenceGroup } from './outline-types.js';
 export { buildCompleteScene } from './scene-builder.js';
 export type { BuildCompleteSceneOptions } from './scene-builder.js';
 export {
@@ -123,4 +125,5 @@ export * from './prompts/index.js';
 
 export { compileFlowLayout } from './flow-layout-compiler.js';
 export type { FlowLayout, FlowBlock, FlowGroup, FlowLeaf, CompiledFlowPage } from './flow-layout-compiler.js';
-export { compileMeasuredDiagramComponent } from './diagram-compiler.js';
+export { compileMeasuredDiagramComponent, measureDiagramAllocations, resolveDiagramSequenceGroups, DiagramAllocationError } from './diagram-compiler.js';
+export type { DiagramAllocation, DiagramAllocationBounds, MeasuredDiagramCompilerOptions } from './diagram-compiler.js';

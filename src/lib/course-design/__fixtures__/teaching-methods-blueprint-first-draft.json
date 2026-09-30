@@ -1,0 +1,451 @@
+{
+  "section": {
+    "title": "支架式与抛锚式教学法",
+    "learningObjective": "学生能够区分支架式与抛锚式的异同，并能选择一种方法设计一节AI教学的初步环节。",
+    "sharedContext": {
+      "learningPurpose": "掌握两种重要教学方法，理解支架的临时性与渐消性，以及抛锚式如何基于真实情境展开探究。",
+      "stableTerms": [
+        "支架式教学法",
+        "抛锚式教学法",
+        "最近发展区",
+        "锚点"
+      ],
+      "conceptBoundaries": [
+        "支架式强调教师提供临时支架，逐渐撤除；抛锚式强调真实“锚”问题驱动。",
+        "支架式适合技能习得初期，抛锚式适合综合应用阶段。"
+      ]
+    },
+    "units": [
+      {
+        "id": "unit-kp6",
+        "title": "支架式与抛锚式教学法",
+        "knowledgePointIds": [
+          "kp-6"
+        ],
+        "learningOutcome": "学生能说出两种方法的定义、流程和适用场景，并做选择。",
+        "sourceKind": "course-source",
+        "evidenceQuotes": [
+          "支架式教学法是一种以学生为中心的教学模式,支架式教学法的核心在于教师为学生提供适当的、小步调的线索或提示,这些“支架”随着学生能力的提高而逐渐减少,直至学生能够独立完成任务。",
+          "抛锚式教学法,又称情境教学法,它强调在真实或模拟的现实生活情境中,利用情境化的教学手段提升学生解决复杂问题的能力和迁移能力。"
+        ],
+        "estimatedTeachingWeight": 1,
+        "requirementIds": [
+          "requirement-highlight-03e0cb868688",
+          "requirement-difficulty-522c3ba6e5d8",
+          "requirement-stage-requirement-0db7fc9f81ef"
+        ],
+        "difficultyStrategies": [
+          {
+            "requirementId": "requirement-difficulty-522c3ba6e5d8",
+            "learnerObstacle": "学生容易设计出形式化的支架或抛锚，与核心AI知识脱节。",
+            "teachingApproach": "通过对比案例：在AI编程课中，设计支架如“提供半完成的代码”帮助学生逐步理解，抛锚如“自动驾驶事故分析”案例激发探究。讲解如何确保支架和锚点紧扣AI知识点。",
+            "understandingEvidence": "学生设计的支架或抛锚活动，能明确指出每个支架支撑哪个AI知识点的理解。"
+          }
+        ],
+        "explanationNodes": [
+          {
+            "id": "u6-node1",
+            "kind": "concept",
+            "content": "支架式教学法：基于最近发展区理论，以学生为中心，教师提供适当的、小步调的线索或提示（支架），随着学生能力提高逐渐撤除，直至学生能独立完成任务。支架类型包括认知支架、情感支架、能力支架等。",
+            "knowledgePointIds": [
+              "kp-6"
+            ],
+            "provenance": "course-source"
+          },
+          {
+            "id": "u6-node2",
+            "kind": "concept",
+            "content": "支架式教学法的实施流程：1.搭脚手架（明确任务）；2.进入情境（分析问题）；3.独立探索（解决问题）；4.协作学习（集思广益）；5.效果评价（完成建构）。支架具有可调节性、暂时性和渐消性。",
+            "knowledgePointIds": [
+              "kp-6"
+            ],
+            "prerequisiteNodeIds": [
+              "u6-node1"
+            ],
+            "provenance": "course-source"
+          },
+          {
+            "id": "u6-node3",
+            "kind": "concept",
+            "content": "抛锚式教学法：以真实、复杂的“锚”问题为核心，围绕锚点展开调查和学习。具有教学情境真实性、教师角色辅助性、学生合作重要性、教学实施灵活性、学习空间延展性等特征。",
+            "knowledgePointIds": [
+              "kp-6"
+            ],
+            "provenance": "course-source"
+          },
+          {
+            "id": "u6-node4",
+            "kind": "concept",
+            "content": "抛锚式教学法的实施流程：1.创设情境；2.进行“抛锚”；3.自主探索；4.拓展延伸；5.讨论交流；6.效果评价。抛锚后教学方向随之确定。",
+            "knowledgePointIds": [
+              "kp-6"
+            ],
+            "prerequisiteNodeIds": [
+              "u6-node3"
+            ],
+            "provenance": "course-source"
+          },
+          {
+            "id": "u6-node5",
+            "kind": "relation",
+            "content": "支架式与抛锚式的适用场景对比：支架式更适合技能习得初期，通过细化步骤降低认知负荷；抛锚式更适合综合应用阶段，通过完整情境培养解决复杂问题的能力。可以结合使用。",
+            "knowledgePointIds": [
+              "kp-6"
+            ],
+            "prerequisiteNodeIds": [
+              "u6-node1",
+              "u6-node3"
+            ],
+            "provenance": "course-source"
+          }
+        ],
+        "reviewItems": []
+      }
+    ],
+    "pages": [
+      {
+        "id": "p6-1",
+        "title": "支架式教学法",
+        "type": "slide",
+        "unitIds": [
+          "unit-kp6"
+        ],
+        "introducesNodeIds": [
+          "u6-node1",
+          "u6-node2"
+        ],
+        "deepensNodeIds": [],
+        "referencesNodeIds": [
+          "u1-node3",
+          "u2-node2"
+        ],
+        "estimatedTeachingWeight": 1,
+        "description": "介绍支架式教学法的核心概念、流程和支架特性。",
+        "keyPoints": [
+          "支架式：教师提供临时支架，逐渐撤除。",
+          "过程：搭脚手架→进入情境→独立探索→协作学习→效果评价。",
+          "支架类型：认知、情感、能力支架。",
+          "特性：可调节、暂时性、渐消性。"
+        ],
+        "teachingObjective": "学生能说出支架式教学法的核心和五步流程。",
+        "taskConnection": {
+          "mode": "direct-application",
+          "rationale": "支架式方法可直接用于教案设计中的支持策略。"
+        },
+        "entryPoint": {
+          "kind": "analogy",
+          "object": "想象你学骑自行车时，别人扶着车把，慢慢放手的过程。",
+          "bridge": "支架式教学法就像这样，教师先提供支持，等学生熟练了再撤除。"
+        },
+        "caseObservation": {
+          "kind": "none",
+          "reason": "比喻和流程不需要图片。"
+        },
+        "visualRelationship": {
+          "kind": "process",
+          "description": "用顺序图展示五步流程，并标注支架的渐消性。",
+          "readingOrder": [
+            "搭脚手架",
+            "进入情境",
+            "独立探索",
+            "协作学习",
+            "效果评价"
+          ],
+          "preferredForm": "diagram",
+          "rationale": "流程图示帮助理解顺序和支架渐消。"
+        }
+      },
+      {
+        "id": "p6-2",
+        "title": "抛锚式教学法",
+        "type": "slide",
+        "unitIds": [
+          "unit-kp6"
+        ],
+        "introducesNodeIds": [
+          "u6-node3",
+          "u6-node4"
+        ],
+        "deepensNodeIds": [],
+        "referencesNodeIds": [
+          "u1-node3",
+          "u4-node3"
+        ],
+        "estimatedTeachingWeight": 1,
+        "description": "介绍抛锚式教学法的核心概念、特征和六步流程。",
+        "keyPoints": [
+          "抛锚式：基于真实情境的“锚”问题驱动。",
+          "特征：真实性、辅助性、合作性、灵活性、延展性。",
+          "流程：创设情境→进行抛锚→自主探索→拓展延伸→讨论交流→效果评价。",
+          "AI案例：“自动驾驶事故分析”作为锚，探究传感器决策逻辑。"
+        ],
+        "teachingObjective": "学生能说出抛锚式教学法的核心和六步流程。",
+        "taskConnection": {
+          "mode": "direct-application",
+          "rationale": "抛锚式方法可直接用于教案设计。"
+        },
+        "entryPoint": {
+          "kind": "concrete-observation",
+          "object": "想象你是一个侦探，接到一个谜案，所有线索都在案发现场。",
+          "bridge": "抛锚式教学法就是先给学生一个真实的问题场景（锚），然后让他们自主探索解决。"
+        },
+        "caseObservation": {
+          "kind": "none",
+          "reason": "案例在讲授中。"
+        },
+        "visualRelationship": {
+          "kind": "process",
+          "description": "用顺序图展示六步流程，突出“抛锚”环节。",
+          "readingOrder": [
+            "创设情境",
+            "进行抛锚",
+            "自主探索",
+            "拓展延伸",
+            "讨论交流",
+            "效果评价"
+          ],
+          "preferredForm": "diagram",
+          "rationale": "流程图示帮助记忆。"
+        }
+      },
+      {
+        "id": "p6-3",
+        "title": "支架式与抛锚式的对比与选择",
+        "type": "slide",
+        "unitIds": [
+          "unit-kp6"
+        ],
+        "introducesNodeIds": [
+          "u6-node5"
+        ],
+        "deepensNodeIds": [],
+        "referencesNodeIds": [
+          "u6-node1",
+          "u6-node2",
+          "u6-node3",
+          "u6-node4"
+        ],
+        "estimatedTeachingWeight": 1,
+        "description": "对比两种方法的异同，给出选择建议。",
+        "keyPoints": [
+          "相似点：都以学生为中心，强调教师引导。",
+          "不同点：支架式聚焦技能分解和渐撤，抛锚式聚焦真实情境。",
+          "选择建议：初学AI技能用支架式，综合项目用抛锚式。",
+          "可以结合：先用抛锚式引入大问题，再用支架式分解子任务。"
+        ],
+        "teachingObjective": "学生能说出两种方法的区别，并判断适用场景。",
+        "taskConnection": {
+          "mode": "direct-application",
+          "rationale": "对比直接服务于教案选择。"
+        },
+        "entryPoint": {
+          "kind": "direct-explanation",
+          "object": "学完两种方法，我们来看看它们有什么不同，什么时候该用哪种。",
+          "bridge": "做对比能让你在未来设计教案时更清楚选择。"
+        },
+        "caseObservation": {
+          "kind": "none",
+          "reason": "对比表格不需要图片。"
+        },
+        "visualRelationship": {
+          "kind": "comparison",
+          "description": "用双栏表格对比支架式和抛锚式在核心、流程、适用场景上的差异。",
+          "readingOrder": [
+            "维度",
+            "支架式",
+            "抛锚式"
+          ],
+          "preferredForm": "table",
+          "rationale": "表格对比清晰直观。"
+        }
+      },
+      {
+        "id": "p6-quiz",
+        "title": "支架式与抛锚式小测",
+        "type": "interactive",
+        "unitIds": [
+          "unit-kp6"
+        ],
+        "introducesNodeIds": [],
+        "deepensNodeIds": [],
+        "referencesNodeIds": [
+          "u6-node1",
+          "u6-node2",
+          "u6-node3",
+          "u6-node4",
+          "u6-node5"
+        ],
+        "estimatedTeachingWeight": 1,
+        "description": "检验两种方法的区别和选择。",
+        "keyPoints": [],
+        "teachingObjective": "检验能否区分并选择。",
+        "taskConnection": {
+          "mode": "none",
+          "rationale": "小测。"
+        },
+        "entryPoint": {
+          "kind": "direct-explanation",
+          "object": "学完两种方法，来测试你的掌握情况。",
+          "bridge": "请完成题目。"
+        },
+        "caseObservation": {
+          "kind": "none",
+          "reason": "小测不需要图片。"
+        },
+        "widgetType": "quiz",
+        "widgetOutline": {}
+      }
+    ],
+    "assessmentFocus": [
+      "能说出支架式和抛锚式的定义和流程。",
+      "能对比两者的异同。",
+      "能根据AI教学场景选择合适的方法并说明理由。"
+    ],
+    "understandingCriteria": {
+      "goals": [
+        "学生能设计一个简单的支架式或抛锚式教学环节。"
+      ],
+      "answerEssentials": [
+        "支架式有支架渐撤，抛锚式有锚问题。"
+      ],
+      "misconceptions": [
+        "混淆支架式和抛锚式，把支架的“进入情境”当成抛锚。"
+      ],
+      "supportingUnitIds": [
+        "unit-kp6"
+      ]
+    }
+  },
+  "point": {
+    "id": "kp-6",
+    "name": "支架式与抛锚式教学法",
+    "description": "对比讲解支架式与抛锚式两种教学方法：支架式以学生为中心，教师提供临时性支架，随着能力提升逐渐撤除；抛锚式基于宏观真实情境（锚点），围绕锚点展开问题解决。介绍两者的核心要素、实施流程和适用场景。",
+    "keyInfo": "支架式适合技能习得初期，通过小步调降低难度；抛锚式适合综合应用，通过完整情境培养复杂问题解决能力。两者都强调情境与支持，但支架式侧重教师控制进度，抛锚式侧重学生自主探索。",
+    "masteryBoundary": "学生能够区分支架式与抛锚式的异同，并能选择一种方法设计一节AI教学的初步环节。",
+    "objectiveIndexes": [
+      2,
+      3
+    ],
+    "relatedIds": [
+      "kp-1",
+      "kp-4",
+      "kp-5"
+    ],
+    "level": "core",
+    "teachingDepth": "detailed",
+    "evidenceItemIds": [
+      "e4d66882-499f-5889-8eb2-b7cffaf7e671",
+      "9739d695-0bc8-50f0-aa00-44430c6cdd01",
+      "07d64579-b564-5f1a-9ba5-a000990058dc",
+      "858ac4b4-30c9-5f40-b056-69f49c1c69cd"
+    ],
+    "groupId": "section-6",
+    "groupName": "支架式与抛锚式教学法",
+    "sourceKnowledgePointIds": [
+      "topic-支架式与抛锚式教学法",
+      "topic-6-item-支架式教学法的核心",
+      "topic-6-item-抛锚式教学法的特征",
+      "topic-6-item-两种方法的适用场景对比"
+    ],
+    "sourceKnowledgePointNames": [
+      "支架式与抛锚式教学法",
+      "支架式教学法的核心",
+      "抛锚式教学法的特征",
+      "两种方法的适用场景对比"
+    ],
+    "teachingRole": "core-concept",
+    "parentKnowledgePointIds": [
+      "kp-1"
+    ],
+    "sourceSequenceReferences": [
+      {
+        "resourceId": "source-sequence:1097af8f-4de0-54ea-962d-2a72ff744ac0",
+        "sourceEvidenceFingerprint": "38e80ba7359a3191f08d2f2bd17d2744aab7e115797a9753f2e7f03d7361b762",
+        "sourceEvidenceVersion": 2,
+        "evidenceItemIds": [
+          "07d64579-b564-5f1a-9ba5-a000990058dc"
+        ],
+        "sequenceSemantics": "ordered-steps",
+        "orderedSteps": [
+          {
+            "label": "搭脚手架",
+            "excerpt": "明确任务",
+            "sourceBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0",
+            "excerptBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0"
+          },
+          {
+            "label": "进入情境",
+            "excerpt": "分析问题",
+            "sourceBlockId": "32cf5476-d6f7-5ac6-90ed-999364864e26",
+            "excerptBlockId": "32cf5476-d6f7-5ac6-90ed-999364864e26"
+          },
+          {
+            "label": "独立探索",
+            "excerpt": "解决问题",
+            "sourceBlockId": "cdb3067c-43fc-5818-93b2-bc2bcf176686",
+            "excerptBlockId": "cdb3067c-43fc-5818-93b2-bc2bcf176686"
+          },
+          {
+            "label": "协作学习",
+            "excerpt": "集思广益",
+            "sourceBlockId": "81c30135-f1e4-5265-99cb-8ae57054a7ae",
+            "excerptBlockId": "81c30135-f1e4-5265-99cb-8ae57054a7ae"
+          },
+          {
+            "label": "效果评价",
+            "excerpt": "完成建构",
+            "sourceBlockId": "2a7e9aef-a183-5386-9bd6-ff5d2f7c9cc9",
+            "excerptBlockId": "2a7e9aef-a183-5386-9bd6-ff5d2f7c9cc9"
+          }
+        ]
+      },
+      {
+        "resourceId": "source-sequence:99a7fcbe-0263-52ba-a3f4-f6b86a6a9940",
+        "sourceEvidenceFingerprint": "38e80ba7359a3191f08d2f2bd17d2744aab7e115797a9753f2e7f03d7361b762",
+        "sourceEvidenceVersion": 2,
+        "evidenceItemIds": [
+          "858ac4b4-30c9-5f40-b056-69f49c1c69cd"
+        ],
+        "sequenceSemantics": "ordered-steps",
+        "orderedSteps": [
+          {
+            "label": "创设情境",
+            "excerpt": "教师在这一环节中要利用信息技术等手段设计出与现实生活相似的学习情境,或一段故事和经历,将学习内容和问题自然融入其中,为学生提供一个接近真实的学习背景,帮助他们更好地理解和掌握知识。",
+            "sourceBlockId": "99a7fcbe-0263-52ba-a3f4-f6b86a6a9940",
+            "excerptBlockId": "0206d9c6-d5d1-543d-b4ea-cabf73a3fd64"
+          },
+          {
+            "label": "进行“抛锚”",
+            "excerpt": "在创设的情境中,教师要精心选择与学习主题紧密相关的事件或问题,作为学习的中心,即“锚”。这个问题应当是真实且具有挑战性的,能为学生探究不同的问题求解方法提供一定的自由空间,激发学生的好奇心和紧迫感,促使他们积极地寻求解决方案。",
+            "sourceBlockId": "f242ecc8-0d13-5096-91da-b2c167798bad",
+            "excerptBlockId": "07e91166-c5ac-5b66-812c-01874f9774fb"
+          },
+          {
+            "label": "自主探索",
+            "excerpt": "在这一环节中,学生独立或小组形式进行探究,利用情境中的信息和外部资源,制定解决问题的策略,提出解决方案。而教师则需要根据学生探究的情况,为他们提供解决问题的线索和资源,而不是直接给出问题的答案,以此培养学生自主搜集资料、分析信息和解决问题的能力。",
+            "sourceBlockId": "2d41fa20-d5f8-5304-9866-1878a3e9fe5e",
+            "excerptBlockId": "667fefd5-761d-5215-b028-53c80cf6749b"
+          },
+          {
+            "label": "拓展延伸",
+            "excerpt": "为了深化学生的理解,教师可以在“锚”问题的基础上设计一系列与之相关的拓展性问题。这些问题可以在情境、学科知识范围上进行适当的延伸,有助于学生从不同角度和层次探索现实主题,促进他们对知识的深入思考和真正应用。",
+            "sourceBlockId": "7e40afd7-cd28-5ae5-9948-b086c32126bd",
+            "excerptBlockId": "3bad499a-4369-57d1-bf07-ec9f46eb41a8"
+          },
+          {
+            "label": "讨论交流",
+            "excerpt": "教师组织学生针对“锚”问题的解答展开讨论。通过讨论和交流可以让学生共享观点,相互启发,在思维的碰撞中深化对问题的理解。教师要鼓励学生从不同角度思考问题和提出解决方案,促进学生的深层次学习和集体智慧的形成。",
+            "sourceBlockId": "fb79befc-1aa0-5a49-b71e-5f8842505540",
+            "excerptBlockId": "03d42238-dd61-53be-9b14-eb6e6d20d788"
+          },
+          {
+            "label": "效果评价",
+            "excerpt": "抛锚式教学法的教学过程也就是解决问题的过程。因此。这种教学方法的学习效果可以通过学生在过程中的表现来进行评价。教师可以通过多种办法记录和反馈学生的进步和挑战,以便于及时调整教学策略,满足学生的个性化学习需求。",
+            "sourceBlockId": "a1c960a4-d522-537f-9ae4-2e9801ab47dc",
+            "excerptBlockId": "881d0f75-87be-52fc-b445-ab5eaf317234"
+          }
+        ]
+      }
+    ]
+  }
+}

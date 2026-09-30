@@ -275,6 +275,14 @@ export interface SceneOutline {
   spatialBudget?: import("@openmaic/lib/generation/slide-spatial-types").SlideSpatialBudget;
   /** Original confirmed page when spatial preparation splits it. */
   spatialParentId?: string;
+  /** Confirmed page IDs whose teaching units are carried by this page. */
+  sourcePageIds?: string[];
+  /** Shared revision for a measured redistribution within one lecture section. */
+  sectionPlanVersion?: string;
+  /** Provenance for explicitly enumerated source claims distributed across
+   * execution pages. Parts must reproduce the full source text in order;
+   * this metadata never substitutes for actually visible teaching content. */
+  semanticSourceClaims?: Array<{ id: string; sourcePageId: string; text: string; parts: string[] }>;
   /** Parent scope is evidence; each split page only renders its own region content. */
   spatialSourceContext?: { description: string; teachingObjective?: string; coreMessage: string };
   id: string;
@@ -358,6 +366,12 @@ export interface SceneOutline {
   mediaGenerations?: MediaGenerationRequest[]; // e.g., [{ type: 'image', prompt: '...', elementId: 'gen_img_1' }]
   // Quiz-specific config
   quizConfig?: {
+    /** Optional generation bounds. Older outlines without bounds keep an exact count. */
+    questionCountRange?: { min: number; max: number };
+    /** Actual question count after scene generation; absent in a review-stage outline. */
+    generatedQuestionCount?: number;
+    /** Require per-item authoring evidence in new section assessments. */
+    qualityContract?: 'grounded-v1';
     questionCount: number;
     difficulty: 'easy' | 'medium' | 'hard';
     questionTypes: ('single' | 'multiple' | 'matching' | 'short_answer' | 'true_false' | 'fill_blank' | 'scenario_task')[];
@@ -408,6 +422,19 @@ export interface GeneratedSlideContent {
   continuationPages?: GeneratedSlideContent[];
   sourceGroupIds?: string[];
   teachingText?: string[];
+  paginationVersion?: 'balanced-v1';
+  occupiedHeight?: number;
+  layoutDecision?: 'original' | 'optimized' | 'paginated';
+  layoutMeasurement?: {
+    strategyVersion?: 'adaptive-v2';
+    bodyCapacity: number;
+    occupiedHeight: number;
+    contentLoad: number;
+    pageIndex: number;
+    pageCount: number;
+    sourceGroupIds: string[];
+    groups?: Array<{ sourceGroupId: string; occupiedHeight: number; contentLoad: number }>;
+  };
   elements: PPTElement[];
   background?: SlideBackground;
   theme?: SlideTheme;
@@ -419,6 +446,8 @@ export interface GeneratedSlideContent {
  */
 export interface GeneratedQuizContent {
   questions: QuizQuestion[];
+  /** Authored with the questions; the assembler owns learner-controlled gates. */
+  phaseNarration?: Array<{ type: 'text'; phase: 'intro' | 'review-guidance' | 'handoff'; content: string }>;
 }
 
 // ==================== PBL Generation Types ====================

@@ -50,6 +50,12 @@ import {
   buildPblCourseRequirement,
 } from "@/lib/openmaic/pbl/course-request";
 import { buildCourseTeachingRequirements } from "@/lib/course-design/teaching-requirements";
+import { hydrateCourseEvidenceFigureReferences, resolveCourseTextbookFigures } from "@/lib/textbook/course-evidence";
+import type { CourseTextbookFigureResource, CourseSourceSequenceContract } from "@/lib/textbook/course-evidence-types";
+import { resolveCourseSourceSequenceContracts } from "@/lib/textbook/course-evidence-types";
+import { assertRequiredTextbookFiguresAvailable, bindRequiredTextbookFiguresToBlueprint,
+  findBlueprintFigureSequenceIssues, assertSourceSequencesInOutlines } from "@/lib/textbook/course-visual-binding";
+import { auditCourseGeneratedResources } from "@/lib/course-generation/resource-audit-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -189,7 +195,9 @@ function timingFrom(value: unknown, course: Course): PblModuleTimingPlan {
   return { ...plan, status: "confirmed", recommendationSource: "teacher", confirmedAt: new Date().toISOString() };
 }
 
-function blueprintFrom(value: unknown, course: Course): { blueprint: TeachingBlueprint; outlines: ReturnType<typeof teachingBlueprintToOutlines> } {
+function blueprintFrom(value: unknown, course: Course, figures: readonly CourseTextbookFigureResource[],
+  sourceSequences: readonly CourseSourceSequenceContract[] = resolveCourseSourceSequenceContracts(course.content.courseEvidence,
+    course.content.knowledgePoints)): { blueprint: TeachingBlueprint; outlines: ReturnType<typeof teachingBlueprintToOutlines> } {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new WorkspaceInputError("教学蓝图格式无效。");
   const blueprint = structuredClone(value) as TeachingBlueprint;
   if (![1, 2, 3].includes(blueprint.schemaVersion) || !Array.isArray(blueprint.sections) || !blueprint.sections.length) {
@@ -210,10 +218,27 @@ function blueprintFrom(value: unknown, course: Course): { blueprint: TeachingBlu
       throw new WorkspaceInputError(`小节“${section.title}”的页面引用了不存在的讲授单元。`);
     }
   }
-  const outlines = teachingBlueprintToOutlines(blueprint, ZH_CN_COURSE_LANGUAGE_DIRECTIVE);
-  const issues = validateTeachingBlueprintBudget(blueprint, outlines);
+  let boundBlueprint: TeachingBlueprint;
+  try {
+    boundBlueprint = bindRequiredTextbookFiguresToBlueprint(blueprint, figures, sourceSequences);
+  } catch (error) {
+    throw new WorkspaceInputError(error instanceof Error ? error.message : "教材完整步骤校验失败");
+  }
+  const sequenceIssues = findBlueprintFigureSequenceIssues(boundBlueprint, [
+    ...figures.map((figure) => ({ resourceId: figure.id, required: figure.required,
+      knowledgePointIds: figure.knowledgePointIds, orderedSteps: figure.orderedSteps })), ...sourceSequences,
+  ]);
+  if (sequenceIssues.length) throw new WorkspaceInputError(sequenceIssues.slice(0, 5)
+    .map((issue) => `教材步骤不完整：${issue.detail}`).join("；"));
+  const outlines = teachingBlueprintToOutlines(boundBlueprint, ZH_CN_COURSE_LANGUAGE_DIRECTIVE);
+  try {
+    assertSourceSequencesInOutlines(outlines, sourceSequences, figures);
+  } catch (error) {
+    throw new WorkspaceInputError(error instanceof Error ? error.message : "教材完整步骤校验失败");
+  }
+  const issues = validateTeachingBlueprintBudget(boundBlueprint, outlines);
   if (issues.length) throw new WorkspaceInputError(issues.slice(0, 5).join("；"));
-  return { blueprint, outlines };
+  return { blueprint: boundBlueprint, outlines };
 }
 
 function syncResourcePackage(course: Course, patch: Partial<{
@@ -261,7 +286,8 @@ function invalidateReview(course: Course): Course {
   };
 }
 
-function applySectionSave(course: Course, section: CourseDesignWorkspaceSectionKey, value: unknown): Course {
+function applySectionSave(course: Course, section: CourseDesignWorkspaceSectionKey, value: unknown,
+  figures: readonly CourseTextbookFigureResource[] = [], sourceSequences?: readonly CourseSourceSequenceContract[]): Course {
   let next = invalidateReview(course);
   let changedKnowledgePointIds: string[] = [];
   let impactTargets: CourseDesignWorkspaceSectionKey[] | undefined;
@@ -305,7 +331,7 @@ function applySectionSave(course: Course, section: CourseDesignWorkspaceSectionK
       },
     };
   } else if (section === "blueprint") {
-    const { blueprint, outlines } = blueprintFrom(value, next);
+    const { blueprint, outlines } = blueprintFrom(value, next, figures, sourceSequences);
     next = {
       ...next,
       content: {
@@ -490,6 +516,16 @@ async function adoptClassroomCandidate(
   if (!mergedScenes) {
     throw new WorkspaceInputError("候选页面不完整，原课堂保持不变，请重新生成。", "CANDIDATE_INCOMPLETE", 409);
   }
+  const audit = await auditCourseGeneratedResources(course.id, {
+    course: { ...course, aiLearningClassroomId: candidate.classroomId,
+      content: { ...course.content, _openmaicClassroomId: candidate.classroomId } },
+    classroom: { ...generated, stage: base.stage, scenes: mergedScenes },
+  });
+  const missingOriginals = audit.issues.filter((issue) =>
+    issue.id.startsWith("media:source-image:") || issue.id.startsWith("content:source-sequence:"));
+  if (missingOriginals.length) {
+    throw new WorkspaceInputError("候选课堂缺少必用教材原图，原课堂保持不变，请重新生成。", "CANDIDATE_SOURCE_IMAGE_MISSING", 409);
+  }
   const persisted = await updatePersistedClassroomForEditing(
     candidate.classroomId,
     { stage: base.stage, scenes: mergedScenes },
@@ -583,9 +619,20 @@ export async function PATCH(request: Request, context: Context) {
       const updated = await adoptClassroomCandidate(course, operation.candidateId, requestedBy);
       return Response.json(await responsePayload(updated));
     }
+    const sourceContracts = operation.action === "save" && operation.section === "blueprint"
+      ? await (async () => {
+        const course = await loadPblTemplateCourse(courseId);
+        if (!course) throw new WorkspaceInputError("课程不存在。", "COURSE_NOT_FOUND", 404);
+        const evidence = course.content.courseEvidence ? { ...course.content.courseEvidence,
+          items: await hydrateCourseEvidenceFigureReferences(course.content.courseEvidence.items) } : undefined;
+        const resources = await resolveCourseTextbookFigures(evidence, course.content.knowledgePoints);
+        assertRequiredTextbookFiguresAvailable(resources);
+        return { figures: resources, sequences: resolveCourseSourceSequenceContracts(evidence, course.content.knowledgePoints) };
+      })() : { figures: [], sequences: [] };
     const state = await updateCourse(courseId, (current) => {
       assertExpectedVersion(current, operation.expectedVersion);
-      if (operation.action === "save") return applySectionSave(current, operation.section, operation.data);
+      if (operation.action === "save") return applySectionSave(current, operation.section, operation.data,
+        sourceContracts.figures, sourceContracts.sequences);
       if (operation.action === "discard-classroom-candidate") {
         const workspace = current.content.designWorkspaceRevision;
         if (!workspace?.candidateUpdates?.some((item) => item.id === operation.candidateId)) {

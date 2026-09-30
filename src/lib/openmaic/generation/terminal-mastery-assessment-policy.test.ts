@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SceneOutline } from "@openmaic/lib/types/generation";
-import { ensureTerminalMasteryAssessment } from "./terminal-mastery-assessment-policy";
+import { ensureTerminalMasteryAssessment, refreshSectionQuizForGeneration } from "./terminal-mastery-assessment-policy";
 
 function scene(id: string, type: SceneOutline["type"], knowledgePointIds: string[]): SceneOutline {
   return {
@@ -13,7 +13,44 @@ function scene(id: string, type: SceneOutline["type"], knowledgePointIds: string
 }
 
 describe("ensureTerminalMasteryAssessment", () => {
-  it("keeps one lightweight objective assessment after every knowledge section by default", () => {
+  it("upgrades an old section only when explicitly preparing it for regeneration", () => {
+    const old = {
+      ...scene("old-check", "quiz", ["kp-1"]),
+      keyPoints: ["第 1 题综合考查：辨认概念", "第 2 题综合考查：说明条件"],
+      teachingBrief: { schemaVersion: 1 as const, explanation: '', examples: [], conditions: [], evidence: [],
+        assessmentFocus: '辨认概念；说明条件' },
+      quizConfig: { questionCount: 2, difficulty: 'medium' as const,
+        questionTypes: ['single' as const, 'multiple' as const], coveragePolicy: 'section-synthesis' as const },
+    };
+    const upgraded = refreshSectionQuizForGeneration(old);
+    expect(upgraded.quizConfig).toMatchObject({
+      questionCountRange: { min: 2, max: 4 }, qualityContract: 'grounded-v1',
+      maxShortAnswerQuestions: 0,
+    });
+    expect(upgraded.keyPoints).toEqual(['辨认概念', '说明条件']);
+    expect(old.quizConfig).not.toHaveProperty('qualityContract');
+    expect(refreshSectionQuizForGeneration(upgraded)).toEqual(upgraded);
+  });
+  it("removes written-response formats from a previously grounded ordinary quiz on explicit regeneration", () => {
+    const stale: SceneOutline = {
+      ...scene("stale-check", "quiz", ["kp-1"]),
+      quizConfig: {
+        questionCount: 3, questionCountRange: { min: 2, max: 4 },
+        difficulty: "medium", coveragePolicy: "section-synthesis", qualityContract: "grounded-v1",
+        questionTypes: ["single", "short_answer", "scenario_task"],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 4,
+      },
+    };
+    expect(stale.quizConfig?.questionTypes).toContain("short_answer");
+    const refreshed = refreshSectionQuizForGeneration(stale, "adaptive");
+    expect(refreshed.quizConfig).toMatchObject({
+      questionCountRange: { min: 2, max: 4 },
+      questionTypes: ["single", "multiple", "true_false", "matching", "fill_blank"],
+      minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+    });
+    expect(stale.quizConfig?.questionTypes).toContain("short_answer");
+  });
+  it("keeps one flexible assessment after every knowledge section by default", () => {
     const result = ensureTerminalMasteryAssessment([
       scene("explain-1", "slide", ["kp-1"]),
       scene("check-1", "quiz", ["kp-1"]),
@@ -29,8 +66,9 @@ describe("ensureTerminalMasteryAssessment", () => {
         targetDurationSec: 180,
         quizConfig: expect.objectContaining({
           questionCount: 2,
-          questionTypes: ["single", "multiple", "true_false"],
+          questionTypes: ["single", "multiple", "true_false", "matching", "fill_blank"],
           maxShortAnswerQuestions: 0,
+          questionCountRange: { min: 2, max: 4 },
         }),
       }),
       expect.objectContaining({
@@ -40,8 +78,9 @@ describe("ensureTerminalMasteryAssessment", () => {
         targetDurationSec: 180,
         quizConfig: expect.objectContaining({
           questionCount: 2,
-          questionTypes: ["single", "multiple", "true_false"],
+          questionTypes: ["single", "multiple", "true_false", "matching", "fill_blank"],
           maxShortAnswerQuestions: 0,
+          questionCountRange: { min: 2, max: 4 },
         }),
       }),
     ]);

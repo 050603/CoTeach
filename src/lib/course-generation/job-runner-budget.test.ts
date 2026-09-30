@@ -34,6 +34,21 @@ describe("partial classroom update budget", () => {
       ["section-a-slide", "section-a-slide"],
     )).toBe(false);
   });
+
+  it("accepts a versioned redistribution only within all selected source pages", () => {
+    const before = [confirmed[0]!, { ...confirmed[0]!, id: 'section-a-slide-2', targetDurationSec: 120 }]
+      .map((outline) => ({ ...outline, lectureSectionId: 'section-a' }));
+    const after = [
+      { ...before[0]!, id: 'replanned-a', sourcePageIds: before.map((page) => page.id), sectionPlanVersion: 'v2', targetDurationSec: 300 },
+      { ...before[1]!, id: 'replanned-b', sourcePageIds: before.map((page) => page.id), sectionPlanVersion: 'v2', targetDurationSec: 300 },
+    ];
+    expect(hasExactUpdateTargetBudget(after, before, before.map((page) => page.id))).toBe(true);
+    expect(hasExactUpdateTargetBudget(after, before, [before[0]!.id])).toBe(false);
+    expect(hasExactTestLessonBudget([...after, confirmed[2]!],
+      { sceneOutlineIds: before.map((page) => page.id), durationSeconds: 600 }, 3)).toBe(true);
+    expect(hasExactTestLessonBudget([...after, confirmed[2]!],
+      { sceneOutlineIds: [before[0]!.id], durationSeconds: 600 }, 3)).toBe(false);
+  });
 });
 
 describe("test lesson continuation budget", () => {

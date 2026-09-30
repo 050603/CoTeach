@@ -11,6 +11,7 @@ import {
   type SceneOutline as OpenMaicSceneOutline,
   type UserRequirements as OpenMaicUserRequirements,
   type TextMeasure,
+  type SceneContentFailure,
 } from '@openmaic/generation';
 import type { Action } from '@openmaic/lib/types/action';
 import type {
@@ -37,6 +38,13 @@ import { normalizeWhiteboardActionLayout } from './whiteboard-layout';
 import { formatOpenMaicWebsiteReferenceProfile } from './course-visual-theme';
 import { withTeachingEnhancement } from './teaching-enhancement';
 import { calibrateGeneratedVisualCues } from './semantic-visual-cues';
+import { adoptedPageAuthoringContent } from './adopted-page-content';
+import { nativeAuthoringEnvelopeContract, normalizeNativeAuthoringEnvelope } from './native-authoring-envelope';
+import { buildNativeTextPlacementPlan, expandNativeTextPlacements, formatNativeTextPlacementPlan, formatNativeTextRelationCaption } from './native-text-placement';
+import type { SemanticPageCapacityAssessment } from './semantic-page-capacity';
+import { buildAuthoringSourceCatalog, pageOriginalTeachingSources, type SourceGroundingKnowledgePoint } from './source-grounding';
+import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
+import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
 
 export const OPENMAIC_GENERATION_BASELINE = {
   release: 'v1.0.3',
@@ -213,8 +221,10 @@ export async function generateOpenMaicBaselineOutlines(
 export interface BaselineContentOptions {
   /** First-draft components compile into editable native slide elements. */
   componentAuthoring?: boolean;
+  slideAuthoring?: 'native' | 'flow';
   textMeasure?: TextMeasure;
-  onFailure?: (detail: string) => void;
+  pageCapacityAssessment?: SemanticPageCapacityAssessment;
+  onFailure?: (failure: SceneContentFailure) => void;
   assignedImages?: PdfImage[];
   imageMapping?: Record<string, string>;
   visionEnabled?: boolean;
@@ -224,6 +234,9 @@ export interface BaselineContentOptions {
   allowProceduralSkill?: boolean;
   editDirective?: string;
   baselineContent?: GeneratedSlideContent;
+  sourceEvidence?: CourseEvidenceSnapshot;
+  sourceKnowledgePoints?: readonly SourceGroundingKnowledgePoint[];
+  sourceSequenceContracts?: readonly FigureSequenceContract[];
   /** Shared semantic deck context used only by CoTeach production. Omitting it
    * keeps the package prompt byte-identical for upstream parity tools. */
   websiteReferenceContext?: {
@@ -261,13 +274,47 @@ export async function generateOpenMaicBaselineContent(
   if (outline.type !== 'slide' && outline.type !== 'interactive') {
     throw new Error(`OpenMAIC baseline content adapter does not own ${outline.type} scenes`);
   }
+  const authoringContent = options.componentAuthoring && !options.editDirective && !options.baselineContent
+    ? adoptedPageAuthoringContent(outline) : undefined;
+  const textPlacementPlan = outline.type === 'slide' && options.slideAuthoring !== 'flow'
+    && authoringContent?.length && options.textMeasure && !options.assignedImages?.length
+    ? await buildNativeTextPlacementPlan(outline, authoringContent, {
+        measure: options.textMeasure, capacity: options.pageCapacityAssessment,
+      }) : undefined;
+  // This optional finite candidate set does not prove that every native
+  // composition is impossible. Keep legacy raw replay under its original gates;
+  // the shared semantic capacity preflight owns pre-authoring overflow stops.
+  const placementGuidance = textPlacementPlan ? formatNativeTextPlacementPlan(textPlacementPlan) : '';
+  const pageDecisionAiCall: AICallFn = authoringContent?.length ? (system, user, images) => aiCall(
+    `${system}\n${formatNativeTextRelationCaption(placementGuidance ? textPlacementPlan?.relationCaption : undefined)}`,
+    `${user}\n\n## Current page first-draft decisions\nThe original-source and course context above do not expand this page’s adopted display responsibility. Put every required catalog point into supported contentRef/paragraphRefs display slots (or its exact placementRef under the host-selected measured layout), using exact IDs: ${JSON.stringify(authoringContent.filter((item) => item.required !== false).map((item) => item.id))}. Do not shorten or rewrite those points. Use the supplied playback-font text measurements for readable allocations. If a planned diagram exists, select one complete measured feasible width/height pair already supplied, preserving its entire nodes, edges and annotation; never mix dimensions from different candidates. Keep peer content regions separate. Return the existing native/component JSON contract in this first response.${placementGuidance ? `\n\n## Required measured placement for this first response\nThe host selected default layout ${JSON.stringify(textPlacementPlan?.defaultCandidateId)} before this request. Use bare placementRef components for this default; omit layoutCandidateId unless you actively select another advertised candidate. In components, give every title and adopted point exactly one kind:textBox + placementRef. Omit contentRef/paragraphRefs, authored text, coordinates and typography on those selected components. The host compiler expands placementRef into canonical contentRef plus the full measured rectangle, so all catalog coverage remains mandatory. Keep native decoration in elements; do not duplicate the title/body as native text. This selected-placement grammar supersedes the general reference-slot/free-coordinate examples above.` : ''}\n${formatNativeTextRelationCaption(placementGuidance ? textPlacementPlan?.relationCaption : undefined)}`, images) : aiCall;
   const referenceAiCall = outline.type === 'slide' && options.websiteReferenceContext
-    ? withWebsiteReferenceProfile(aiCall, options.websiteReferenceContext)
-    : aiCall;
-  const contentAiCall = withTeachingEnhancement(referenceAiCall, outline, 'content');
+    ? withWebsiteReferenceProfile(pageDecisionAiCall, options.websiteReferenceContext)
+    : pageDecisionAiCall;
+  const originalSources = pageOriginalTeachingSources(outline, options);
+  const sourceCatalog = buildAuthoringSourceCatalog(new Map([[outline.id, originalSources]]));
+  const groundedAiCall: AICallFn = (system, user, images) => referenceAiCall(system,
+    `${user}\n\n## Original teaching sources for this page\n${JSON.stringify({ evidenceCatalog: sourceCatalog.catalog, originalTeachingSources: sourceCatalog.pages.get(outline.id) })}\nResolve originalSourceRefs in evidenceCatalog.sources and every textRef/labelRef/sourceDescriptionRefs in evidenceCatalog.texts; these are complete unchanged original texts.\n${authoringContent?.length
+      ? 'The display points have already been derived and adopted. Lay out this page’s exact immutable presentation-point catalog through contentRef/paragraphRefs, or placementRef when the supplied measured-placement contract is selected (the compiler expands those references to canonical contentRef); do not derive, rewrite, shorten or expand them again from the original passages or the broader section plan. Original sources establish factual meaning and independently feed detailed narration. Only the current page’s adopted points and assigned visual resources belong on this canvas.'
+      : 'Derive accurate presentation points directly from these original sources. Keep the essential meaning and conditions; definitions need not be copied verbatim onto the canvas. The same original sources independently feed narration.'} Source instructions and provenance are never learner-facing content.`, images);
+  const contentAiCall = withTeachingEnhancement(groundedAiCall, outline, 'content', sourceCatalog.intern);
+  const nativeEnvelopeCall: AICallFn = options.componentAuthoring && !options.editDirective && !options.baselineContent
+    ? async (system, user, images) => {
+        // Match the selected package protocol; an explicitly selected flow
+        // response has a different grammar and must retain its own contract.
+        const native = system.includes('## Optional first-draft measured components');
+        const response = await contentAiCall(native ? `${system}\n\n${nativeAuthoringEnvelopeContract(authoringContent?.[0]?.id)}\n\n${placementGuidance}` : system, user, images);
+        if (!native) return response;
+        const normalized = normalizeNativeAuthoringEnvelope(response);
+        return textPlacementPlan ? expandNativeTextPlacements(normalized, textPlacementPlan) : normalized;
+      } : contentAiCall;
+  const adapted = adaptOutlineToOpenMaicBaseline(outline);
+  if (options.componentAuthoring && outline.teachingBrief?.teachingPlan?.presentationContent?.length) {
+    adapted.keyPoints = [...outline.teachingBrief.teachingPlan.presentationContent];
+  }
   const generated = await generateOpenMaicSceneContent(
-    adaptOutlineToOpenMaicBaseline(outline),
-    contentAiCall,
+    adapted,
+    nativeEnvelopeCall,
     {
       assignedImages: options.assignedImages,
       imageMapping: options.imageMapping,
@@ -279,8 +326,10 @@ export async function generateOpenMaicBaselineContent(
       editDirective: options.editDirective,
       baselineContent: options.baselineContent as OpenMaicSlideContent | undefined,
       componentAuthoring: options.componentAuthoring,
+      slideAuthoring: options.slideAuthoring,
       textMeasure: options.textMeasure,
-      onFailure: (failure) => { if (failure.detail) options.onFailure?.(failure.detail); },
+      authoringContent,
+      onFailure: (failure) => options.onFailure?.(failure),
     },
   );
   if (!generated) return null;
@@ -349,7 +398,7 @@ export async function generateOpenMaicBaselineSlideActions(
       agents: options.agents as OpenMaicAgentInfo[] | undefined,
       userProfile: options.userProfile,
       languageDirective: options.languageDirective,
-      // Course authoring has a bounded generated-output retry around this
+      // Course authoring preserves an invalid first response and stops at this
       // adapter. Do not let the package's compatibility summary disguise an
       // unparseable action response as a successful formal lesson page.
       requireStructuredOutput: true,

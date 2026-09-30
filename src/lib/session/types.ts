@@ -815,6 +815,8 @@ export type OpenMaicSceneOutlineSnapshot = {
   parentActivityId?: string;
   lectureSectionId?: string;
   lectureSectionTitle?: string;
+  sourcePageIds?: string[];
+  sectionPlanVersion?: string;
   detailKind?: PblDetailKind;
   knowledgePointIds?: string[];
   teachingUnitIds?: string[];
@@ -930,6 +932,14 @@ export type TeachingBlueprintUnit = {
 
 export type TeachingBlueprintPage = {
   id: string;
+  /** Stable confirmed source pages when measured section planning redistributes units. */
+  sourcePageIds?: string[];
+  sectionPlanVersion?: string;
+  /** Exact accepted page timing; older pages continue to use section weights. */
+  plannedTiming?: import("@/lib/openmaic/types/generation").SceneOutline["plannedTiming"];
+  targetDurationSec?: number;
+  /** Final page-local teaching responsibilities after measured redistribution. */
+  teachingBrief?: import("@/lib/course-quality-review/types").TeachingBrief;
   title: string;
   type: "slide" | "interactive";
   unitIds: string[];
@@ -988,6 +998,9 @@ export type TeachingBlueprintSection = {
   learnerActivityDurationSec: number;
   assessmentDurationSec: number;
   quizOutlineId?: string;
+  /** Teacher-confirmed quiz settings, retained when reviewed outlines are recompiled. */
+  reviewedQuizConfig?: Pick<NonNullable<import("@/lib/openmaic/types/generation").SceneOutline["quizConfig"]>,
+    "questionCount" | "questionCountRange" | "difficulty" | "questionTypes">;
 };
 
 /** Teacher-private, versioned intermediate artifact used to make classroom pages. */
@@ -1827,6 +1840,8 @@ export type KnowledgePoint = {
   sourceKnowledgePointNames?: string[];
   /** Textbook evidence selected for this lesson node; details live in CourseContent.courseEvidence. */
   evidenceItemIds?: string[];
+  /** Immutable source-list identities, not proof that the lists were taught. */
+  sourceSequenceReferences?: import("@/lib/textbook/course-evidence-types").KnowledgeSourceSequenceReference[];
   teachingDepth?: "detailed" | "brief" | "extension";
   /** A core concept needs an explicit definition before its detail concepts. */
   teachingRole?: "core-concept" | "detail-concept";
@@ -1851,6 +1866,8 @@ export type CourseTeachingRequirement = {
   kind: "teacher-directive" | "highlight" | "difficulty" | "stage-requirement";
   source: "teacher" | "resource-package";
   text: string;
+  /** Whether a lecture unit must teach this, or the learner completes it within its stage. */
+  responsibility?: "instruction" | "learner-activity";
   /** Whether this requirement belongs in AI knowledge teaching or a later PBL stage. */
   appliesTo?: "ai-learning" | "other-stage" | "course-wide";
   /** Source-package responsibilities named or scoped by this requirement. */
@@ -1858,6 +1875,22 @@ export type CourseTeachingRequirement = {
   /** Original resource-package location retained for teacher traceability. */
   sourceEvidence?: import("@/lib/resource-package/types").ResourcePackageSource[];
 };
+
+/** Recover pre-responsibility stage records from the original package wording. */
+export function teachingRequirementResponsibility(
+  requirement: CourseTeachingRequirement,
+  resourcePackage?: import("@/lib/resource-package/types").CourseResourcePackage,
+): NonNullable<CourseTeachingRequirement["responsibility"]> {
+  if (requirement.responsibility) return requirement.responsibility;
+  if (requirement.kind !== "stage-requirement" || requirement.source !== "resource-package") return "instruction";
+  const stage = resourcePackage?.draft.stages.find((item) => item.key === "ai-learning");
+  if (!stage) return "instruction";
+  const normalize = (value: string) => value.normalize("NFC").replace(/\s+/gu, "").trim().toLocaleLowerCase("zh-CN");
+  const original = normalize(requirement.text);
+  return original && original === normalize(stage.requirements) && original !== normalize(stage.aiActions)
+    ? "learner-activity"
+    : "instruction";
+}
 
 export type CourseTeachingRequirements = {
   schemaVersion: 1;

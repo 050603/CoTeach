@@ -320,8 +320,8 @@ describe("buildTeachingOutlinePrompt", () => {
     expect(prompt).toContain("完全相同的 name");
     expect(prompt).toContain("教师指定项必须以完全相同的 name 分别保留");
     expect(prompt).toContain("不得自环、重复或形成有向循环");
-    expect(prompt).toContain("一组紧密相关知识学完后立即小测");
-    expect(prompt).toContain("不得默认把整门课或整个 AI 授知阶段放进一组");
+    expect(prompt).toContain("组内知识点按可教学顺序连续排列");
+    expect(prompt).toContain("只有后续内容具有可独立学习和检验的目标，才另开小节");
     expect(prompt).toContain('"groupId": "section-1"');
   });
 
@@ -334,8 +334,8 @@ describe("buildTeachingOutlinePrompt", () => {
       learningObjectives: ["理解自然语言处理的基本任务", "完成文本分类项目"],
     }).user;
 
-    expect(prompt).toContain("本课目标节点");
-    expect(prompt).toContain("课前先修节点");
+    expect(prompt).toContain("本课节点由系统从 knowledgePoints 派生");
+    expect(prompt).toContain("knowledgeGraph.nodes 只输出 instructionalRole=prerequisite 的真实课前先修节点");
     expect(prompt).toContain("required-prerequisite");
     expect(prompt).toContain("required|helpful");
     expect(prompt).toContain("训练集、验证集、测试集");

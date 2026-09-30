@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowRight,
   Blocks,
   FileText,
   FlaskConical,
@@ -122,6 +123,8 @@ type ResponsePayload = {
 
 type ClassroomGenerationResponse = {
   backgroundEnabled: boolean;
+  recoveryPhase?: "design";
+  detail?: string;
   job: (QuickClassroomGenerationSnapshot & {
     id: string;
     estimatedRemainingSeconds: number | null;
@@ -377,10 +380,9 @@ export function FastCourseGenerator({
     if (payload.knowledgePreview) setKnowledgePreview(payload.knowledgePreview);
     if (payload.outlinePreview) setOutlinePreview(payload.outlinePreview);
     if (payload.job?.status === "failed") {
-      setError(`${payload.job.error || "快速生成遇到系统或网络错误，请稍后重试。"} 教师要求和已完成内容均已保存，可直接重试或修改要求后继续。`);
+      setError(`${payload.job.error || "快速生成遇到系统或网络错误，请稍后重试。"} 首稿、教师要求和已完成内容均已保存。可继续已保存首稿，或修改要求后主动重生成失败阶段。`);
     } else if (payload.job && ["queued", "running", "review_available", "paused", "completed"].includes(payload.job.status)) {
-      // Correctable quality issues remain inside the managed Agent loop. Clear
-      // stale transport errors as soon as the durable task resumes.
+      // Clear the previous failure only after the durable task has resumed.
       setError(undefined);
     }
     if (payload.job?.status === "cancelled") setError("本次快速生成已中断，可以修改要求后重新开始。");
@@ -449,9 +451,9 @@ export function FastCourseGenerator({
     return () => { cancelled = true; };
   }, [fetchClassroomJob, job?.status]);
 
-  const classroomRunning = classroomJob?.status === "queued"
+  const classroomRunning = job?.status === "completed" && (classroomJob?.status === "queued"
     || classroomJob?.status === "running"
-    || classroomJob?.status === "cancelling";
+    || classroomJob?.status === "cancelling");
   useEffect(() => {
     if (!classroomRunning) return;
     const timer = window.setInterval(() => void fetchClassroomJob(false).catch(() => undefined), 2_000);
@@ -498,6 +500,25 @@ export function FastCourseGenerator({
       applyPayload(payload);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法启动快速生成");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function resumeSavedFirstDraft() {
+    setSubmitting(true);
+    setError(undefined);
+    try {
+      const response = await fetch(`/api/courses/${course.id}/design-generation`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "resume-saved-first-draft" }),
+      });
+      const payload = await readJsonResponse<ResponsePayload>(response, "未收到继续生成的响应，请稍后查看任务状态。");
+      if (!response.ok) throw new Error(payload.detail || payload.error || "已保存首稿暂时无法继续生成");
+      applyPayload(payload);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "已保存首稿暂时无法继续生成");
     } finally {
       setSubmitting(false);
     }
@@ -581,10 +602,10 @@ export function FastCourseGenerator({
       const response = await fetch(`/api/courses/${course.id}/generation`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "resume-from-checkpoints" }),
+        body: JSON.stringify({ action: "regenerate-failed-stages" }),
       });
       const payload = await readJsonResponse<ClassroomGenerationResponse>(response, "续生成请求没有得到响应，请稍后重试。");
-      if (!response.ok) throw new Error(payload.error || "无法从已完成页面继续生成");
+      if (!response.ok) throw new Error(payload.detail || payload.error || "无法从已完成页面继续生成");
       setBackgroundEnabled(payload.backgroundEnabled);
       setClassroomJob(payload.job);
     } catch (cause) {
@@ -698,7 +719,7 @@ export function FastCourseGenerator({
   );
 
   const classroomCompleted = classroomJob?.status === "completed" && Boolean(classroomJob.result?.id);
-  const classroomFailed = classroomJob?.status === "failed";
+  const classroomFailed = job?.status === "completed" && classroomJob?.status === "failed";
   const designRecovering = isGenerationHeartbeatStale(job);
   const classroomRecovering = isGenerationHeartbeatStale(classroomJob);
   const recovering = job?.status === "completed" ? classroomRecovering : designRecovering;
@@ -778,7 +799,7 @@ export function FastCourseGenerator({
           ? generationScope === "test-lesson"
             ? "测试小节已经由正式课堂链路生成并自动保存；发布前仍需生成完整课程"
             : "全部内容已经生成并自动保存"
-          : classroomFailed ? "已完成页面均已保存，可从断点继续" : recovering ? "正在重新连接后台生成任务" : formatDuration(activeRemaining)}
+          : classroomFailed ? "首稿及已完成页面均已保存，可主动重生成失败阶段" : recovering ? "正在重新连接后台生成任务" : formatDuration(activeRemaining)}
         retrying={classroomRetrying}
         reviewAvailable={job?.status === "review_available" || job?.status === "paused"}
         reviewAvailableUntil={job?.reviewAvailableUntil ?? null}
@@ -991,7 +1012,7 @@ export function FastCourseGenerator({
               <div className="flex flex-wrap items-center gap-1.5">
                 <OptionToggle
                   active={assessmentMode === "constructed-response"}
-                  description="开启后每小节设置 1 道综合简答题；关闭时每小节设置 2–4 道选择、判断、填空或拖拽配对题"
+                  description="开启后每小节仅设置 1 道综合简答题；关闭时动态设置 2–4 道单选、多选、判断、填空或拖拽配对题，不出简答题"
                   icon={PenLine}
                   label="深度作答"
                   onClick={() => setAssessmentMode((current) => current === "constructed-response" ? "adaptive" : "constructed-response")}
@@ -1002,7 +1023,7 @@ export function FastCourseGenerator({
               </div>
             </div>}
 
-            <div className="flex shrink-0 items-center justify-end gap-1">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
               {simplified ? (
                 <>
                   <button
@@ -1031,7 +1052,7 @@ export function FastCourseGenerator({
                         : "text-stone-500 hover:bg-white hover:text-blue-700",
                     )}
                     onClick={() => setAssessmentMode((current) => current === "constructed-response" ? "adaptive" : "constructed-response")}
-                    title="开启后每小节设置 1 道综合简答题；默认每小节使用 2–4 道选择、判断、填空或拖拽配对题"
+                    title="开启后每小节仅设置 1 道综合简答题；默认每小节动态设置 2–4 道单选、多选、判断、填空或拖拽配对题，不出简答题"
                     type="button"
                   >
                     <PenLine className="size-3.5" />
@@ -1055,13 +1076,23 @@ export function FastCourseGenerator({
                   </button>
                 </>
               ) : null}
+              {job?.status === "failed" && job.stepIndex === 2 ? (
+                <button
+                  className="inline-flex h-11 shrink-0 items-center gap-2 rounded-[9px] border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-wait disabled:opacity-45"
+                  disabled={submitting || uploadingReference}
+                  onClick={() => void resumeSavedFirstDraft()}
+                  type="button"
+                >
+                  <ArrowRight className="size-4" />继续已保存首稿
+                </button>
+              ) : null}
               <button
-                aria-label={job?.status === "failed" ? "从已保存内容继续生成" : "开始生成课程"}
+                aria-label={job?.status === "failed" ? "重生成失败阶段" : "开始生成课程"}
                 className="grid size-11 shrink-0 place-items-center rounded-[9px] bg-stone-950 text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-45"
                 disabled={submitting || uploadingReference || (!confirmedPackage?.confirmedAt && !legacyResumeAvailable)}
                 onClick={() => void start()}
                 type="button"
-                title={job?.status === "failed" ? "从已保存内容继续生成" : "开始生成课程"}
+                title={job?.status === "failed" ? "重生成失败阶段" : "开始生成课程"}
               >
                 {submitting ? <CourseGenerationGlyph className="size-5" /> : <Send className="size-4.5" />}
               </button>

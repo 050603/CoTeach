@@ -187,6 +187,9 @@ export type TeachingBrief = {
     reasoningSteps: string[];
     takeaway: string;
     visibleContent: string[];
+    /** Accurate presentation points derived from original teaching sources.
+     * Detailed source wording remains in explanation/evidence for narration. */
+    presentationContent?: string[];
     narrationFocus: string[];
     /** Actual learner-facing entry and the reasoning bridge into new content. */
     entryPoint?: {

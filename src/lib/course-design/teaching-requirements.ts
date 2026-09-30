@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CourseTeachingRequirement, CourseTeachingRequirements } from "@/lib/session/types";
+import { teachingRequirementResponsibility, type CourseTeachingRequirement, type CourseTeachingRequirements } from "@/lib/session/types";
 import type { CourseResourcePackage } from "@/lib/resource-package/types";
 import { resourcePackageTeachingPoints } from "./resource-package-knowledge";
 
@@ -78,14 +78,12 @@ export function buildCourseTeachingRequirements(input: {
   const aiStage = draft?.stages.find((stage) => stage.key === "ai-learning");
   const teacherBrief = input.teacherBrief?.trim() ?? "";
   const teacherDirectives = teacherBrief.split(/\r?\n/u).map((text) => text.trim()).filter(Boolean);
-  const records: Array<Pick<CourseTeachingRequirement, "kind" | "source" | "text" | "sourceEvidence" | "appliesTo">> = [
-    ...teacherDirectives.map((text) => ({ kind: "teacher-directive" as const, source: "teacher" as const, text, appliesTo: teacherDirectiveApplicability(text) })),
-    ...(draft?.teachingHighlights ?? []).map((text) => ({ kind: "highlight" as const, source: "resource-package" as const, text, appliesTo: "ai-learning" as const, sourceEvidence: draft?.sourceEvidence?.teachingHighlights })),
-    ...(draft?.teachingDifficulties ?? []).map((text) => ({ kind: "difficulty" as const, source: "resource-package" as const, text, appliesTo: "ai-learning" as const, sourceEvidence: draft?.sourceEvidence?.teachingDifficulties })),
-    ...[aiStage?.aiActions, aiStage?.requirements]
-      .map((text) => text?.trim() ?? "")
-      .filter(Boolean)
-      .map((text) => ({ kind: "stage-requirement" as const, source: "resource-package" as const, text, appliesTo: "ai-learning" as const })),
+  const records: Array<Pick<CourseTeachingRequirement, "kind" | "source" | "text" | "sourceEvidence" | "appliesTo" | "responsibility">> = [
+    ...teacherDirectives.map((text) => ({ kind: "teacher-directive" as const, source: "teacher" as const, text, appliesTo: teacherDirectiveApplicability(text), responsibility: "instruction" as const })),
+    ...(draft?.teachingHighlights ?? []).map((text) => ({ kind: "highlight" as const, source: "resource-package" as const, text, appliesTo: "ai-learning" as const, responsibility: "instruction" as const, sourceEvidence: draft?.sourceEvidence?.teachingHighlights })),
+    ...(draft?.teachingDifficulties ?? []).map((text) => ({ kind: "difficulty" as const, source: "resource-package" as const, text, appliesTo: "ai-learning" as const, responsibility: "instruction" as const, sourceEvidence: draft?.sourceEvidence?.teachingDifficulties })),
+    ...(aiStage?.requirements?.trim() ? [{ kind: "stage-requirement" as const, source: "resource-package" as const, text: aiStage.requirements.trim(), appliesTo: "ai-learning" as const, responsibility: "learner-activity" as const }] : []),
+    ...(aiStage?.aiActions?.trim() ? [{ kind: "stage-requirement" as const, source: "resource-package" as const, text: aiStage.aiActions.trim(), appliesTo: "ai-learning" as const, responsibility: "instruction" as const }] : []),
   ];
   const items = [...new Map(records.map((item) => {
     const id = stableId(item.kind, item.text);
@@ -110,10 +108,27 @@ export function buildCourseTeachingRequirements(input: {
   };
 }
 
+/** Recover identifiable learner tasks without locking uncertain historical records. */
+export function recoverCourseTeachingRequirements(
+  requirements: CourseTeachingRequirements | undefined,
+  resourcePackage?: CourseResourcePackage,
+): CourseTeachingRequirements | undefined {
+  if (!requirements) return undefined;
+  let changed = false;
+  const items = requirements.items.map((item) => {
+    if (item.responsibility) return item;
+    const responsibility = teachingRequirementResponsibility(item, resourcePackage);
+    if (responsibility !== "learner-activity") return item;
+    changed = true;
+    return { ...item, responsibility };
+  });
+  return changed ? { ...requirements, items } : requirements;
+}
+
 export function formatCourseTeachingRequirements(requirements?: CourseTeachingRequirements): string {
   if (!requirements?.items.length && !requirements?.conflicts.length) return "";
   return [
-    "统一教学要求（教师补充、资源包重点难点和知识讲授阶段要求共同遵守；不得静默忽略）：",
+    "统一要求：responsibility=instruction 的讲授责任须落实到相关单元；responsibility=learner-activity 的学生阶段任务保留在阶段计划，不要求映射讲授单元。不得静默忽略任何要求：",
     JSON.stringify(requirements),
   ].join("\n");
 }

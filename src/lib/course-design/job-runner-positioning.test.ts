@@ -75,17 +75,101 @@ describe("quick positioning generation", () => {
       .toBe(completedResponse.rawResponse);
     expect(restoreCourseDesignStageResponse(completedResponse, "input-b", "model-a")).toBeNull();
     expect(restoreCourseDesignStageResponse(completedResponse, "input-a", "model-b")).toBeNull();
-    expect(restoreCourseDesignStageResponse({ ...completedResponse, rawResponse: '{"knowledgePoints":[' }, "input-a", "model-a")).toBeNull();
+    expect(restoreCourseDesignStageResponse({ ...completedResponse, rawResponse: '{"knowledgePoints":[' }, "input-a", "model-a"))
+      .toBe('{"knowledgePoints":[');
     const repairable = '{"knowledgePoints":[],"knowledgeGraph":{"nodes":[],"edges":[],}}';
     const { parseKnowledgeStructureJson } = await import("@/lib/knowledge-structure-generation");
     expect(restoreCourseDesignStageResponse(
       { ...completedResponse, rawResponse: repairable }, "input-a", "model-a", parseKnowledgeStructureJson,
     )).toBe(repairable);
     expect(restoreCourseDesignStageResponse({ ...completedResponse, status: "validated" }, "input-a", "model-a"))
-      .toBeNull();
+      .toBe(completedResponse.rawResponse);
   }, 15_000);
 
-  it("derives section teaching budgets and page suggestions from the actual duration", async () => {
+  it("resumes the last accepted blueprint candidate after a completed but unaudited patch", async () => {
+    const { restoreTeachingBlueprintRepairSource } = await import("./job-runner");
+    const candidate = { sections: [{ title: "已保留的小节" }] };
+    const checkpoint = {
+      schemaVersion: 1, status: "response-complete", inputFingerprint: "old-policy",
+      contentFingerprint: "same-content", modelFingerprint: "model-a",
+      rawResponse: '{"baseFingerprint":"stale-patch"}', bestCandidate: candidate,
+      validationIssues: ["第 1 节图示容量不足"], repairAttempts: 1,
+    };
+    expect(restoreTeachingBlueprintRepairSource(checkpoint, "new-policy", "same-content", "old-policy", "model-a"))
+      .toEqual({ candidate, issues: checkpoint.validationIssues, repairAttempts: 1 });
+    expect(restoreTeachingBlueprintRepairSource({ ...checkpoint, validationIssues: [] },
+      "new-policy", "same-content", "old-policy", "model-a"))
+      .toEqual({ candidate, issues: [], repairAttempts: 1 });
+    expect(restoreTeachingBlueprintRepairSource(checkpoint, "new-policy", "changed-content", "unrelated", "model-a"))
+      .toBeUndefined();
+    expect(restoreTeachingBlueprintRepairSource(checkpoint, "new-policy", "same-content", "old-policy", "model-b"))
+      .toBeUndefined();
+    expect(restoreTeachingBlueprintRepairSource(checkpoint, "new-policy", "corrected-source-contracts", "unrelated", "model-a", ["same-content"]))
+      .toEqual({ candidate, issues: checkpoint.validationIssues, repairAttempts: 1 });
+    expect(restoreTeachingBlueprintRepairSource(checkpoint, "new-policy", "corrected-source-contracts", "unrelated", "model-b", ["same-content"]))
+      .toBeUndefined();
+    const repairFailure = { message: "本轮补丁新增图示容量问题，未被采用", validationIssues: ["第 1 节第 1 页无法在单页排下"] };
+    expect(restoreTeachingBlueprintRepairSource({ ...checkpoint, repairFailure },
+      "new-policy", "same-content", "old-policy", "model-a"))
+      .toEqual({ candidate, issues: checkpoint.validationIssues, repairAttempts: 1, repairFailure });
+    expect(restoreTeachingBlueprintRepairSource({ ...checkpoint, preserveAcceptedPagePlans: true },
+      "new-policy", "same-content", "old-policy", "model-a"))
+      .toMatchObject({ candidate, preserveAcceptedPagePlans: true });
+  }, 15_000);
+
+  it("rechecks completed blueprints and preserves an incomplete executable draft for bounded repair", async () => {
+    const { restoreTeachingBlueprintRepairSource } = await import("./job-runner");
+    const { generateTeachingBlueprint, teachingBlueprintContentFingerprint } = await import("./teaching-blueprint");
+    const labels = ["分析问题", "建立模型", "形成结论"];
+    const input: import("./teaching-blueprint").TeachingBlueprintInput = {
+      courseTitle: "探究学习", subject: "信息科技", grade: "初中",
+      learningObjectives: ["解释探究过程"], projectContext: "校园观察",
+      knowledgePoints: [{ id: "kp", name: "探究过程", description: "三个环节", level: "core" }],
+      knowledgeGraph: { nodes: [], edges: [] }, totalDurationSec: 900,
+      assessmentMode: "adaptive", generationMode: "standard", sourceContext: labels.join("、"),
+      sourceSequences: [{ resourceId: "source-sequence:inquiry", required: true,
+        scope: "knowledge-point", knowledgePointIds: ["kp"], sequenceSemantics: "ordered-steps",
+        orderedSteps: labels.map((label, index) => ({ label, sourceBlockId: `block-${index}` })) }],
+    };
+    const blueprint = await generateTeachingBlueprint(input, async () => JSON.stringify({ sections: [{
+      id: "section", title: "探究过程", learningObjective: "解释三个环节的作用", knowledgePointIds: ["kp"],
+      sharedContext: { learningPurpose: "理解探究过程", caseId: "campus", caseFacts: ["观察校园植物"],
+        fixedWording: [], stableTerms: labels, conceptBoundaries: [] },
+      units: [{ id: "unit", title: "探究过程", knowledgePointIds: ["kp"],
+        learningOutcome: "说明三个环节", explanation: `探究过程包括${labels.join("、")}，证据用于支持最终判断。`, mechanism: "先明确问题再分析证据并得出结论",
+        sourceKind: "course-source", evidenceQuotes: [labels.join("、")],
+        explanationNodes: [{ id: "node", kind: "concept", content: `探究过程包括${labels.join("、")}，证据用于支持最终判断。`,
+          knowledgePointIds: ["kp"], prerequisiteNodeIds: [], provenance: "course-source" }] }],
+      pages: [{ id: "page", type: "slide", title: "探究过程", unitIds: ["unit"], knowledgePointIds: ["kp"],
+        description: "解释各环节如何承接", keyPoints: labels, teachingObjective: "理解各环节的作用",
+        introducesNodeIds: ["node"], deepensNodeIds: [], referencesNodeIds: [],
+        taskConnection: { mode: "helpful-context", rationale: "校园观察提供具体证据" },
+        caseObservation: { imageWouldHelp: false, observableDifference: "", reason: "用文本解释过程" } }],
+      assessmentFocus: ["环节职责"], understandingCriteria: { goals: ["解释环节职责"],
+        answerEssentials: labels, misconceptions: ["未分析证据就直接下结论"], supportingUnitIds: ["unit"] },
+    }] }));
+    const checkpoint = { schemaVersion: 1, status: "validated", blueprint,
+      inputFingerprint: blueprint.inputFingerprint, contentFingerprint: teachingBlueprintContentFingerprint(input),
+      modelFingerprint: "model-a" };
+    const restore = (value: typeof checkpoint, model = "model-a", fingerprint = checkpoint.contentFingerprint) =>
+      restoreTeachingBlueprintRepairSource(value, blueprint.inputFingerprint, fingerprint, "legacy", model, [], input);
+    expect(restore(checkpoint)).toBeUndefined();
+
+    const incomplete = structuredClone(blueprint);
+    incomplete.sections[0]!.units[0]!.explanationNodes![0]!.content = `探究过程先${labels.slice(0, 2).join("再")}，证据决定判断的依据。`;
+    incomplete.sections[0]!.pages[0]!.keyPoints = labels.slice(0, 2);
+    const repairedSource = restore({ ...checkpoint, blueprint: incomplete });
+    expect(repairedSource?.candidate).toBe(incomplete);
+    expect(repairedSource?.preserveAcceptedPagePlans).toBe(true);
+    expect(repairedSource?.issues.join("；")).toContain("形成结论");
+    expect(incomplete.sections[0]!.units[0]!.explanation).toContain("形成结论");
+    expect(restore({ ...checkpoint, blueprint: incomplete }, "changed-model")).toBeUndefined();
+    expect(restoreTeachingBlueprintRepairSource({ ...checkpoint, blueprint: incomplete,
+      inputFingerprint: "other-input", contentFingerprint: "other-content" }, blueprint.inputFingerprint,
+    checkpoint.contentFingerprint, "legacy", "model-a", [], input)).toBeUndefined();
+  }, 15_000);
+
+  it("derives section teaching budgets without changing semantic boundaries with duration", async () => {
     const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
     const groupSizes = [3, 5, 3, 3, 3, 3];
     const knowledgePoints = groupSizes.flatMap((size, groupIndex) =>
@@ -102,20 +186,17 @@ describe("quick positioning generation", () => {
     const shorterPlans = buildTeachingBlueprintSectionPlans({ knowledgePoints }, 15 * 60);
 
     expect(plans).toHaveLength(6);
+    expect(shorterPlans).toHaveLength(6);
     expect(plans.reduce((sum, plan) => sum + (plan.teachingBudgetSec ?? 0), 0)).toBe(1_584);
     expect(shorterPlans.reduce((sum, plan) => sum + (plan.teachingBudgetSec ?? 0), 0)).toBe(792);
-    expect(shorterPlans.reduce((sum, plan) => sum + (plan.suggestedMaxPages ?? 0), 0))
-      .toBeLessThan(plans.reduce((sum, plan) => sum + (plan.suggestedMaxPages ?? 0), 0));
-    expect(plans.every((plan) => (
-      (plan.teachingBudgetSec ?? 0) / Math.max(1, plan.suggestedMinPages ?? 1) <= 180
-    ))).toBe(true);
+    expect(shorterPlans.map((plan) => plan.knowledgePointIds)).toEqual(plans.map((plan) => plan.knowledgePointIds));
     expect(plans.flatMap((plan) => plan.knowledgePointIds)).toEqual(
       knowledgePoints.map((point) => point.id),
     );
     expect(new Set(plans.flatMap((plan) => plan.knowledgePointIds)).size).toBe(20);
   }, 15_000);
 
-  it("keeps resource knowledge count separate from page count", async () => {
+  it("keeps related source concepts in one section at different durations", async () => {
     const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
     const knowledgePoints = Array.from({ length: 6 }, (_, index) => ({
       id: `source-${index + 1}`,
@@ -134,15 +215,11 @@ describe("quick positioning generation", () => {
     );
     expect(plans).toHaveLength(1);
     const [plan] = plans;
-    // Related source concepts share one teaching budget; page capacity follows
-    // explanation time rather than imposing one page per knowledge point.
+    // Related source concepts share one teaching budget.
     expect(plan!.teachingBudgetSec).toBe(317);
-    expect(plan!.suggestedMinPages).toBeGreaterThan(0);
-    expect(plan!.suggestedMaxPages).toBeGreaterThanOrEqual(plan!.suggestedMinPages!);
-    expect(plan!.teachingBudgetSec! / plan!.suggestedMaxPages!).toBeGreaterThanOrEqual(45);
     const shorter = buildTeachingBlueprintSectionPlans({ knowledgePoints }, 3 * 60);
     expect(shorter[0]!.knowledgePointIds).toEqual(plan!.knowledgePointIds);
-    expect(shorter[0]!.suggestedMaxPages).toBeLessThan(plan!.suggestedMaxPages!);
+    expect(shorter).toHaveLength(1);
   }, 15_000);
 
   it("splits an interleaved knowledge group without changing textbook order", async () => {
@@ -191,7 +268,7 @@ describe("quick positioning generation", () => {
     expect(ratio).toBeLessThan(1.6);
   }, 15_000);
 
-  it("keeps missing groups separate and splits an overlong group at knowledge boundaries", async () => {
+  it("keeps an ungrouped run together and never splits an overlong semantic group", async () => {
     const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
     const ungrouped = buildTeachingBlueprintSectionPlans({
       knowledgePoints: [
@@ -199,7 +276,7 @@ describe("quick positioning generation", () => {
         { id: "b", name: "概念 B", description: "", level: "core" as const },
       ],
     }, 20 * 60);
-    expect(ungrouped.map((plan) => plan.knowledgePointIds)).toEqual([["a"], ["b"]]);
+    expect(ungrouped.map((plan) => plan.knowledgePointIds)).toEqual([["a", "b"]]);
 
     const grouped = buildTeachingBlueprintSectionPlans({
       knowledgePoints: ["a", "b", "c", "d"].map((id) => ({
@@ -211,9 +288,27 @@ describe("quick positioning generation", () => {
         groupName: "整节课",
       })),
     }, 30 * 60);
-    expect(grouped).toHaveLength(4);
+    expect(grouped).toHaveLength(1);
     expect(grouped.flatMap((plan) => plan.knowledgePointIds)).toEqual(["a", "b", "c", "d"]);
-    expect(grouped.every((plan) => (plan.suggestedMinPages ?? 0) >= 2)).toBe(true);
+    expect(grouped[0]?.title).toBe("整节课");
+  }, 15_000);
+
+  it("keeps constructivist principles and steps together in a 45-minute lesson", async () => {
+    const { buildTeachingBlueprintSectionPlans } = await import("./job-runner");
+    const knowledgePoints = [
+      ...["基本含义", "基本原理", "学习机制", "实施步骤", "必要应用"].map((name, index) => ({
+        id: `theory-${index}`, name: `建构主义${name}`, description: name,
+        groupId: "constructivism", groupName: "建构主义",
+      })),
+      ...["方法比较", "方案设计", "实践评价"].map((name, index) => ({
+        id: `practice-${index}`, name, description: name,
+        groupId: "teaching-practice", groupName: "教学实践",
+      })),
+    ];
+    const plans = buildTeachingBlueprintSectionPlans({ knowledgePoints }, 45 * 60);
+    expect(plans.map((plan) => plan.title)).toEqual(["建构主义", "教学实践"]);
+    expect(plans.map((plan) => plan.knowledgePointIds.length)).toEqual([5, 3]);
+    expect(plans.reduce((sum, plan) => sum + (plan.teachingBudgetSec ?? 0), 0)).toBe(2_376);
   }, 15_000);
 
   it("restores every full-course outline field after a one-section test preview", async () => {
@@ -567,10 +662,9 @@ describe("quick positioning generation", () => {
     expect(requirement).not.toContain("制作成果");
   });
 
-  it("repairs a blank target grade instead of letting unknown learner context flow downstream", async () => {
-    callLLM
-      .mockResolvedValueOnce(JSON.stringify({ name: "计算机视觉", subject: "人工智能", grade: "", hours: 2 }))
-      .mockResolvedValueOnce(JSON.stringify({ grade: "高中" }));
+  it("saves a first draft missing its target grade and stops after one model call", async () => {
+    const rawResponse = JSON.stringify({ name: "计算机视觉", subject: "人工智能", grade: "", hours: 2 });
+    callLLM.mockResolvedValueOnce(rawResponse);
     const { inferCourseSeed } = await import("./job-runner");
     const course = {
       name: "计算机视觉",
@@ -579,15 +673,99 @@ describe("quick positioning generation", () => {
       hours: 2,
     } as Course;
 
-    const seed = await inferCourseSeed(
+    const onResponse = vi.fn(async () => {});
+    await expect(inferCourseSeed(
       course,
       { courseId: "course-cv", teacherBrief: "讲解图像分类、物体检测与计算机视觉工作流程" },
       new AbortController().signal,
-    );
+      { onResponse },
+    )).rejects.toThrow("课程定位首稿缺少学段");
 
+    expect(onResponse).toHaveBeenCalledExactlyOnceWith(rawResponse);
+    expect(callLLM).toHaveBeenCalledOnce();
+    expect(callLLM.mock.calls[0][1]).toMatchObject({ maxTransientRetries: 0 });
+    expect(callLLM.mock.calls[0][0][0].content).toContain("grade 不得为空");
+  }, 15_000);
+
+  it.each([
+    { name: "an incomplete grade", rawResponse: JSON.stringify({ grade: "" }), issue: "课程定位首稿缺少学段" },
+    { name: "malformed JSON", rawResponse: '{"grade":', issue: "JSON" },
+  ])("revalidates saved course positioning with $name without a model request", async ({ rawResponse, issue }) => {
+    const { inferCourseSeed } = await import("./job-runner");
+    const onResponse = vi.fn(async () => {});
+    await expect(inferCourseSeed(
+      { name: "计算机视觉", subject: "人工智能", grade: "", hours: 2 } as Course,
+      { courseId: "course-cv", teacherBrief: "讲解图像分类" }, new AbortController().signal,
+      { initialResponse: rawResponse, onResponse },
+    )).rejects.toThrow(issue);
+    expect(onResponse).toHaveBeenCalledExactlyOnceWith(rawResponse);
+    expect(callLLM).not.toHaveBeenCalled();
+  }, 15_000);
+
+  it("restores valid course positioning without a model request", async () => {
+    const { inferCourseSeed } = await import("./job-runner");
+    const rawResponse = JSON.stringify({ name: "计算机视觉", subject: "人工智能", grade: "高中", hours: 2,
+      learningObjectives: ["解释图像分类", "比较检测任务"], learnerProfile: { priorKnowledge: "图像表示" } });
+    const seed = await inferCourseSeed(
+      { name: "计算机视觉", subject: "人工智能", grade: "", hours: 2 } as Course,
+      { courseId: "course-cv", teacherBrief: "讲解图像分类" }, new AbortController().signal,
+      { initialResponse: rawResponse },
+    );
     expect(seed.grade).toBe("高中");
-    expect(callLLM).toHaveBeenCalledTimes(2);
-    expect(callLLM.mock.calls[1][0][0].content).toContain("grade 必须是非空字符串");
+    expect(seed.learningObjectives).toEqual(["解释图像分类", "比较检测任务"]);
+    expect(seed.learnerProfile?.priorKnowledge).toBe("图像表示");
+    expect(callLLM).not.toHaveBeenCalled();
+  }, 15_000);
+
+  it("propagates a positioning persistence failure without spending a second model request", async () => {
+    const { inferCourseSeed } = await import("./job-runner");
+    const rawResponse = JSON.stringify({ grade: "高中" });
+    callLLM.mockResolvedValueOnce(rawResponse);
+    await expect(inferCourseSeed(
+      { name: "计算机视觉", subject: "人工智能", grade: "", hours: 2 } as Course,
+      { courseId: "course-cv", teacherBrief: "讲解图像分类" }, new AbortController().signal,
+      { onResponse: vi.fn().mockRejectedValue(new Error("checkpoint unavailable")) },
+    )).rejects.toMatchObject({ code: "LLM_RESPONSE_PERSISTENCE_FAILED", isRetryable: false, rawResponse,
+      cause: expect.objectContaining({ message: "checkpoint unavailable" }) });
+    expect(callLLM).toHaveBeenCalledOnce();
+  }, 15_000);
+
+  it("saves a truncated positioning response separately even when its JSON is valid", async () => {
+    const { inferCourseSeed, restoreCourseDesignStageResponse } = await import("./job-runner");
+    const rawResponse = JSON.stringify({ grade: "高中", hours: 2 });
+    const error = Object.assign(new Error("response truncated"), {
+      code: "LLM_STREAM_INCOMPLETE", complete: false, isRetryable: false,
+    });
+    Object.defineProperty(error, "rawResponse", { value: rawResponse });
+    callLLM.mockRejectedValueOnce(error);
+    const onResponse = vi.fn(async () => {});
+    const onIncompleteResponse = vi.fn(async () => {});
+    await expect(inferCourseSeed(
+      { name: "计算机视觉", subject: "人工智能", grade: "", hours: 2 } as Course,
+      { courseId: "course-cv", teacherBrief: "讲解图像分类" }, new AbortController().signal,
+      { onResponse, onIncompleteResponse },
+    )).rejects.toBe(error);
+    expect(onIncompleteResponse).toHaveBeenCalledExactlyOnceWith(rawResponse);
+    expect(onResponse).not.toHaveBeenCalled();
+    expect(callLLM).toHaveBeenCalledOnce();
+    expect(() => restoreCourseDesignStageResponse({ schemaVersion: 1, status: "response-incomplete",
+      inputFingerprint: "seed", modelFingerprint: "model", rawResponse, complete: false }, "seed", "model"))
+      .toThrow("截断请求");
+    expect(callLLM).toHaveBeenCalledOnce();
+  }, 15_000);
+
+  it("keeps the raw response when saving an incomplete positioning draft fails", async () => {
+    const { inferCourseSeed } = await import("./job-runner");
+    const rawResponse = '{"grade":';
+    const error = new Error("response truncated");
+    Object.defineProperty(error, "rawResponse", { value: rawResponse });
+    callLLM.mockRejectedValueOnce(error);
+    await expect(inferCourseSeed(
+      { name: "计算机视觉", subject: "人工智能", grade: "", hours: 2 } as Course,
+      { courseId: "course-cv", teacherBrief: "讲解图像分类" }, new AbortController().signal,
+      { onIncompleteResponse: vi.fn().mockRejectedValue(new Error("checkpoint unavailable")) },
+    )).rejects.toMatchObject({ code: "LLM_RESPONSE_PERSISTENCE_FAILED", isRetryable: false, rawResponse });
+    expect(callLLM).toHaveBeenCalledOnce();
   }, 15_000);
 
   it("falls back to one directly adoptable draft when skeleton candidates are incomplete", async () => {

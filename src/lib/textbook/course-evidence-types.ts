@@ -26,6 +26,18 @@ export type CourseEvidenceFigureReference = {
   groupKey?: string;
 };
 
+export type CourseEvidenceFigureSequence = {
+  figureId: string;
+  kind: "ordered-steps";
+  steps: Array<{ label: string; sourceBlockId: string; excerpt?: string; excerptBlockId?: string }>;
+};
+
+export type CourseEvidenceSourceSequence = {
+  anchorSourceBlockId: string;
+  kind: "ordered-steps";
+  steps: CourseEvidenceFigureSequence["steps"];
+};
+
 export type CourseEvidenceSource = {
   textbookId: string;
   textbookTitle: string;
@@ -33,9 +45,13 @@ export type CourseEvidenceSource = {
   revisionVersion: number;
   sectionId?: string;
   sectionPath: string[];
+  /** Parsed directory ancestry, including this section. Older snapshots may only have sectionPath. */
+  sectionHierarchy?: Array<{ id: string; title: string; kind: string; level: number }>;
   /** Immutable positions in the selected revision, not retrieval ranks. */
   sectionPosition?: number;
   sourceBlockId?: string;
+  /** Retrieval blocks plus complete source units linked to that bounded search chunk. */
+  sourceBlockIds?: string[];
   sourceBlockPosition?: number;
   quoteStart?: number;
   quote?: string;
@@ -48,8 +64,19 @@ export type CourseEvidenceItem = {
   content: string;
   aliases?: string[];
   source: CourseEvidenceSource;
+  /** Whole immutable source blocks omitted or cut by the bounded retrieval excerpt. */
+  completeSourceBlocks?: Array<{ sourceBlockId: string; content: string }>;
   /** Relation-aware references used for visual planning. */
   figureRefs?: CourseEvidenceFigureReference[];
+  /** Complete ordered source facts, including paragraphs beyond the retrieved chunk boundary. */
+  figureSequences?: CourseEvidenceFigureSequence[];
+  /** Avoid rescanning immutable sections after complete sequence hydration. */
+  figureSequencesResolved?: boolean;
+  /** Numbered source sequence recovered from the adopted immutable section. */
+  sourceSequences?: CourseEvidenceSourceSequence[];
+  sourceSequencesResolved?: boolean;
+  /** Version of the immutable numbered-list extraction, separate from retrieval metadata. */
+  sourceSequencePolicyVersion?: number;
   /** Compatibility projection for older snapshots and readers. */
   figureIds?: string[];
   /** RRF score is retrieval evidence only. It is never treated as proof that the source supports a lesson target. */
@@ -91,12 +118,132 @@ export type CourseTextbookFigureResource = {
   relation: "direct" | "candidate";
   required: boolean;
   groupKey?: string;
+  orderedSteps?: CourseEvidenceFigureSequence["steps"];
   evidenceItemIds: string[];
   knowledgePointIds: string[];
   sourceTitle: string;
   status: "available" | "unavailable";
   failureReason?: string;
 };
+
+export type CourseSourceSequenceContract = {
+  resourceId: string;
+  required: true;
+  knowledgePointIds: string[];
+  orderedSteps: CourseEvidenceSourceSequence['steps'];
+  scope: 'knowledge-point';
+  /** A numbered checklist preserves every item without inventing a process order. */
+  sequenceSemantics?: 'ordered-steps' | 'enumerated-items';
+};
+
+export type KnowledgeSourceSequenceReference = {
+  resourceId: string;
+  sourceEvidenceFingerprint: string;
+  sourceEvidenceVersion: number;
+  evidenceItemIds: string[];
+  sequenceSemantics: 'ordered-steps' | 'enumerated-items';
+  orderedSteps: CourseEvidenceSourceSequence['steps'];
+};
+
+export function sourceSequenceSemantics(
+  item: Pick<CourseEvidenceItem, 'source' | 'content'>,
+  steps: readonly { label: string }[],
+): 'ordered-steps' | 'enumerated-items' {
+  // Explicit phases and the adopted section heading take precedence over a
+  // broader chapter that happens to discuss teaching principles or advice.
+  if (steps.every((step) => /阶段$/u.test(step.label))) return 'ordered-steps';
+  const heading = item.source?.sectionPath?.at(-1) ?? '';
+  const content = typeof item.content === 'string' ? item.content : '';
+  if (/流程|步骤|过程|框架/u.test(heading)) return 'ordered-steps';
+  if (/原则|建议|策略|要点|特征|特点|反思/u.test(heading)
+    || /(?:需|要)注意(?:以下|如下)几点/u.test(content)
+    || /(?:以下|如下|具有|包括|提出).{0,20}(?:原则|建议|策略|要点|特征|特点)/u
+      .test(content.split(/\n\s*[(（]?1[.．、)）]/u)[0] ?? '')) return 'enumerated-items';
+  return 'ordered-steps';
+}
+
+/** Keep a source list attached to the lesson nodes that adopted its evidence. */
+export function resolveCourseSourceSequenceContracts(
+  snapshot: Pick<CourseEvidenceSnapshot, 'items' | 'mappings'> | undefined,
+  points: readonly { id: string; evidenceItemIds?: readonly string[];
+    sourceId?: string; sourceKnowledgePointIds?: readonly string[] }[],
+): CourseSourceSequenceContract[] {
+  if (!snapshot) return [];
+  const byAnchor = new Map<string, CourseSourceSequenceContract>();
+  for (const item of snapshot.items) for (const sequence of item.sourceSequences ?? []) {
+    const mappingIds = snapshot.mappings.filter((mapping) => mapping.evidenceItemIds.includes(item.id))
+      .map((mapping) => mapping.sourceKnowledgePointId);
+    const pointIds = points.filter((point) => point.evidenceItemIds !== undefined
+      ? point.evidenceItemIds.includes(item.id)
+      : [point.id, point.sourceId, ...(point.sourceKnowledgePointIds ?? [])]
+        .some((id) => id && mappingIds.includes(id))).map((point) => point.id);
+    if (!pointIds.length) continue;
+    const current = byAnchor.get(sequence.anchorSourceBlockId);
+    if (current) {
+      current.knowledgePointIds = [...new Set([...current.knowledgePointIds, ...pointIds])];
+    } else byAnchor.set(sequence.anchorSourceBlockId, {
+      resourceId: `source-sequence:${sequence.anchorSourceBlockId}`, required: true,
+      knowledgePointIds: pointIds, orderedSteps: sequence.steps,
+      scope: 'knowledge-point',
+      sequenceSemantics: sourceSequenceSemantics(item, sequence.steps),
+    });
+  }
+  return [...byAnchor.values()];
+}
+
+/** Bind complete source facts mechanically after evidence adoption. Summary
+ * wording remains separate from both these identities and executed teaching. */
+export function bindKnowledgeSourceSequenceReferences(
+  points: readonly import('@/lib/session/types').KnowledgePoint[],
+  snapshot?: CourseEvidenceSnapshot,
+): import('@/lib/session/types').KnowledgePoint[] {
+  const contracts = resolveCourseSourceSequenceContracts(snapshot
+    ? { items: snapshot.items ?? [], mappings: snapshot.mappings ?? [] } : undefined, points);
+  const itemById = new Map((snapshot?.items ?? []).map((item) => [item.id, item]));
+  return points.map((point) => {
+    // Never trust a model-provided reference or retain a stale adoption.
+    const bound = { ...point };
+    delete bound.sourceSequenceReferences;
+    if (!snapshot) return bound;
+    const references = contracts.filter((contract) => contract.knowledgePointIds.includes(point.id))
+      .map((contract): KnowledgeSourceSequenceReference => ({
+        resourceId: contract.resourceId,
+        sourceEvidenceFingerprint: snapshot.fingerprint,
+        sourceEvidenceVersion: snapshot.version,
+        evidenceItemIds: snapshot.items.filter((item) => item.sourceSequences?.some((sequence) =>
+          `source-sequence:${sequence.anchorSourceBlockId}` === contract.resourceId))
+          .filter((item) => point.evidenceItemIds !== undefined ? point.evidenceItemIds.includes(item.id)
+            : (snapshot.mappings ?? []).some((mapping) => mapping.evidenceItemIds.includes(item.id)
+              && [point.id, point.sourceId, ...(point.sourceKnowledgePointIds ?? [])]
+                .includes(mapping.sourceKnowledgePointId)))
+          .map((item) => item.id),
+        sequenceSemantics: contract.sequenceSemantics ?? 'ordered-steps',
+        orderedSteps: contract.orderedSteps.map((step) => ({ ...step })),
+      }));
+    // Legacy figure-only snapshots still retain the complete original graph
+    // identity. They must not depend on summary labels to reconstruct it.
+    for (const evidenceId of point.evidenceItemIds ?? []) {
+      for (const sequence of itemById.get(evidenceId)?.figureSequences ?? []) {
+        const resourceId = `figure-sequence:${sequence.figureId}`;
+        const existing = references.find((reference) => reference.resourceId === resourceId);
+        if (existing) {
+          if (!existing.evidenceItemIds.includes(evidenceId)) existing.evidenceItemIds.push(evidenceId);
+          continue;
+        }
+        references.push({
+          resourceId,
+          sourceEvidenceFingerprint: snapshot.fingerprint,
+          sourceEvidenceVersion: snapshot.version,
+          evidenceItemIds: [evidenceId],
+          sequenceSemantics: 'ordered-steps',
+          orderedSteps: sequence.steps.map((step) => ({ ...step })),
+        });
+      }
+    }
+    if (references.length) bound.sourceSequenceReferences = references;
+    return bound;
+  });
+}
 
 export type TextbookListItem = {
   id: string;
@@ -122,6 +269,7 @@ export function formatCourseEvidenceContext(
     return [
       "已选教材的本课证据。先按上游要求查看映射，再按 evidenceItemIds 查看证据正文；同一证据只列一次。检索相似度本身不代表支持。",
       JSON.stringify({
+        primaryRevisionId: snapshot.selections?.find((selection) => selection.primary)?.revisionId,
         mappings: snapshot.mappings.map((mapping) => ({
           sourceKnowledgePointId: mapping.sourceKnowledgePointId,
           sourceKnowledgePointName: mapping.sourceKnowledgePointName,
@@ -135,8 +283,12 @@ export function formatCourseEvidenceContext(
           kind: item.kind,
           title: item.title,
           content: item.content,
+          completeSourceBlocks: item.completeSourceBlocks ?? [],
           source: item.source,
           figureRefs: item.figureRefs ?? [],
+          figureSequences: item.figureSequences ?? [],
+          sourceSequences: item.sourceSequences ?? [],
+          figureIds: item.figureIds ?? [],
         })),
       }),
       snapshot.retrievalMode === "lexical-degraded"
@@ -156,8 +308,11 @@ export function formatCourseEvidenceContext(
           kind: item.kind,
           title: item.title,
           content: item.content,
+          completeSourceBlocks: item.completeSourceBlocks ?? [],
           source: item.source,
           figureRefs: item.figureRefs ?? [],
+          figureSequences: item.figureSequences ?? [],
+          sourceSequences: item.sourceSequences ?? [],
           figureIds: item.figureIds ?? [],
         }));
       return JSON.stringify({

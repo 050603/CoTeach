@@ -1,6 +1,8 @@
 import type { AssessmentMode, SceneOutline } from "@openmaic/lib/types/generation";
 import { allocateLectureBudget } from "@/lib/classroom/knowledge-lecture-budget";
+import { groupKnowledgePointsBySection } from "@/lib/course-design/learning-boundary";
 import { normalizeTeachingBrief } from "@/lib/openmaic/generation/teaching-brief";
+import { SECTION_QUIZ_FORMATS, SECTION_QUIZ_COUNT_RANGE } from "@/lib/openmaic/generation/terminal-mastery-assessment-policy";
 import type {
   Course,
   KnowledgeGraph,
@@ -15,55 +17,6 @@ type LectureOutline = SceneOutline & OpenMaicSceneOutlineSnapshot;
 
 function unique(values: readonly string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
-}
-
-function connectedKnowledgeGroups(
-  knowledgePoints: readonly KnowledgePoint[],
-  knowledgeGraph?: KnowledgeGraph,
-): string[][] {
-  const orderedIds = unique(knowledgePoints.map((point) => point.id));
-  if (!orderedIds.length) return [];
-  if (knowledgePoints.some((point) => point.groupId)) {
-    const groups = new Map<string, string[]>();
-    for (const point of knowledgePoints) {
-      const key = point.groupId || point.id;
-      groups.set(key, [...(groups.get(key) ?? []), point.id]);
-    }
-    return [...groups.values()];
-  }
-  const allowed = new Set(orderedIds);
-  const neighbors = new Map(orderedIds.map((id) => [id, new Set<string>()]));
-  for (const edge of knowledgeGraph?.edges ?? []) {
-    if (!allowed.has(edge.source) || !allowed.has(edge.target)) continue;
-    neighbors.get(edge.source)?.add(edge.target);
-    neighbors.get(edge.target)?.add(edge.source);
-  }
-  for (const point of knowledgePoints) {
-    for (const relatedId of point.relatedIds ?? []) {
-      if (!allowed.has(relatedId)) continue;
-      neighbors.get(point.id)?.add(relatedId);
-      neighbors.get(relatedId)?.add(point.id);
-    }
-  }
-
-  const remaining = new Set(orderedIds);
-  const groups: string[][] = [];
-  while (remaining.size) {
-    const seed = orderedIds.find((id) => remaining.has(id));
-    if (!seed) break;
-    const group = [seed];
-    remaining.delete(seed);
-    while (group.length < 3) {
-      const next = orderedIds.find((id) =>
-        remaining.has(id) && group.some((member) => neighbors.get(member)?.has(id)),
-      );
-      if (!next) break;
-      group.push(next);
-      remaining.delete(next);
-    }
-    groups.push(group);
-  }
-  return groups;
 }
 
 function sectionTitle(
@@ -95,7 +48,8 @@ export function organizeKnowledgeLectureOutlines(
   if (!teaching.length) return { outlines: [...outlines], sections: [] };
 
   const pointNames = new Map(input.knowledgePoints.map((point) => [point.id, point.name]));
-  const groups = connectedKnowledgeGroups(input.knowledgePoints, input.knowledgeGraph);
+  const plannedGroups = groupKnowledgePointsBySection(input.knowledgePoints);
+  const groups = plannedGroups.map((group) => [...group.knowledgePointIds]);
   const effectiveGroups = groups.length ? groups : [unique(teaching.flatMap((item) => item.knowledgePointIds ?? []))];
   const assigned = effectiveGroups.map(() => [] as LectureOutline[]);
 
@@ -114,7 +68,7 @@ export function organizeKnowledgeLectureOutlines(
   });
 
   const nonEmpty = assigned
-    .map((scenes, index) => ({ scenes, knowledgePointIds: effectiveGroups[index] ?? [] }))
+    .map((scenes, index) => ({ scenes, knowledgePointIds: effectiveGroups[index] ?? [], title: plannedGroups[index]?.title }))
     .filter((entry) => entry.scenes.length > 0);
   // Keep semantic knowledge groups intact even when a concise group needs
   // only one teaching page. The quiz belongs immediately after that group;
@@ -151,7 +105,9 @@ export function organizeKnowledgeLectureOutlines(
       ...entry.scenes.flatMap((scene) => scene.knowledgePointIds ?? []),
     ]).filter((id) => pointNames.has(id));
     const sourceGroupNames = unique(input.knowledgePoints.filter((point) => knowledgePointIds.includes(point.id)).map((point) => point.groupName ?? ""));
-    const title = sourceGroupNames.length ? `第 ${sectionIndex + 1} 节 · ${sourceGroupNames.join("与")}` : sectionTitle(sectionIndex, knowledgePointIds, pointNames);
+    const title = sourceGroupNames.length ? `第 ${sectionIndex + 1} 节 · ${sourceGroupNames.join("与")}`
+      : entry.title ? `第 ${sectionIndex + 1} 节 · ${entry.title}`
+        : sectionTitle(sectionIndex, knowledgePointIds, pointNames);
     const sectionScenes = entry.scenes.map((outline) => {
       const targetDurationSec = teachingDurations[teachingIndex++]!;
       return {
@@ -189,7 +145,7 @@ export function organizeKnowledgeLectureOutlines(
       title: `${title} · 节末小测`,
       description: constructedResponse
         ? `围绕本小节的${keyPoints.join("、") || "核心知识"}设置 1 道综合简答题，要求给出结论与理由，预计 ${Math.round(quizDurationSec / 60)} 分钟完成；由 AI 自动批阅并进入助教讲解。`
-        : `围绕本小节的${keyPoints.join("、") || "核心知识"}设置 ${questionCount} 道单选、多选或判断题，用可信的错误选项辨别常见误解。全部题目合计覆盖本小节所有知识点，预计 ${Math.round(quizDurationSec / 60)} 分钟完成。`,
+        : `围绕本小节的${keyPoints.join("、") || "核心知识"}动态设置 2–4 道单选、多选、判断、填空或拖拽配对题，不出简答题。全部题目合计覆盖本小节所有知识点，预计 ${Math.round(quizDurationSec / 60)} 分钟完成。`,
       keyPoints,
       teachingObjective: constructedResponse
         ? "用综合简答检查学生能否整合本小节知识给出结论与理由，并为逐题讲解形成证据。"
@@ -209,8 +165,10 @@ export function organizeKnowledgeLectureOutlines(
         difficulty: "medium",
         questionTypes: constructedResponse
           ? ["short_answer"]
-          : ["single", "multiple", "true_false"],
+          : [...SECTION_QUIZ_FORMATS],
         questionCount,
+        ...(constructedResponse ? {} : { questionCountRange: { ...SECTION_QUIZ_COUNT_RANGE } }),
+        qualityContract: 'grounded-v1',
         coveragePolicy: "section-synthesis",
         minShortAnswerQuestions: constructedResponse ? 1 : 0,
         maxShortAnswerQuestions: constructedResponse ? 1 : 0,
@@ -347,9 +305,10 @@ export function knowledgeLectureQuizEstimate(
       .filter((attempt) => attempt.sectionId === section.id)
       .map((attempt) => attempt.questions.length),
   );
-  const questionCount = Number.isSafeInteger(configuredCount) && configuredCount > 0
-    ? configuredCount
-    : attemptCounts[0] ?? (section.knowledgePointIds.length >= 3 ? 3 : 2);
+  const questionCount = attemptCounts[0]
+    ?? (Number.isSafeInteger(configuredCount) && configuredCount > 0
+      ? configuredCount
+      : section.knowledgePointIds.length >= 3 ? 3 : 2);
   const durationSeconds = Number(outline?.targetDurationSec ?? outline?.estimatedDuration);
   const estimatedMinutes = Number.isFinite(durationSeconds) && durationSeconds > 0
     ? Math.max(1, Math.round(durationSeconds / 60))

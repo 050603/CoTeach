@@ -57,4 +57,27 @@ describe("textbook teaching baseline", () => {
     expect(result.baselineKnowledgePointIds).toEqual(["foundation", "application"]);
     expect(result.anchors[0]?.evidenceItemId).toBe("later");
   });
+
+  it("anchors an umbrella concept at its cited chapter introduction before later subtype concepts", () => {
+    const withIntroduction: CourseEvidenceSnapshot = { ...snapshot, items: [
+      { id: "chapter-intro", kind: "source-block", title: "教学理论与方法",
+        content: "教学理论解释学习如何发生；教学模式组织教学过程；教学方法落实具体活动。",
+        source: { ...snapshot.items[0]!.source, sectionPosition: 0, sourceBlockPosition: 1 } },
+      { id: "later-method", kind: "concept", title: "任务驱动式教学法", content: "任务驱动式教学法的具体做法。",
+        source: { ...snapshot.items[0]!.source, sectionPosition: 3, sourceBlockPosition: 40 } },
+      { id: "theory", kind: "concept", title: "建构主义学习理论", content: "理论的主要观点。",
+        source: { ...snapshot.items[0]!.source, sectionPosition: 1, sourceBlockPosition: 10 } },
+      { id: "mode", kind: "concept", title: "项目式教学模式", content: "模式的基本流程。",
+        source: { ...snapshot.items[0]!.source, sectionPosition: 2, sourceBlockPosition: 20 } },
+    ] };
+    const result = textbookTeachingBaseline([
+      { id: "theory-point", evidenceItemIds: ["theory"] },
+      { id: "mode-point", evidenceItemIds: ["mode"] },
+      { id: "overview", name: "教学理论、教学模式与教学方法的概念界定",
+        evidenceItemIds: ["later-method", "chapter-intro"] },
+    ], withIntroduction);
+    expect(result.baselineKnowledgePointIds).toEqual(["overview", "theory-point", "mode-point"]);
+    expect(result.anchors.find((anchor) => anchor.knowledgePointId === "overview"))
+      .toMatchObject({ evidenceItemId: "chapter-intro", sectionPosition: 0 });
+  });
 });

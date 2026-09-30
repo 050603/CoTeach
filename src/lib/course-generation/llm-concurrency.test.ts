@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createFifoConcurrencyLimiter,
   estimateCourseGenerationTokens,
   isCourseGenerationLlmContext,
   reportCourseGenerationTokenUsage,
   runWithCourseGenerationLlmContext,
+  runWithCourseGenerationLlmCallContext,
 } from "./llm-concurrency";
 
 function deferred() {
@@ -71,5 +72,56 @@ describe("course-generation LLM concurrency", () => {
     expect(totals).toEqual([1_240, 100]);
     expect(sources).toEqual(["provider", "estimated"]);
     expect(estimateCourseGenerationTokens(0)).toBe(0);
+  });
+
+  it("records input/output and cache/reasoning subsets without counting them twice", async () => {
+    const onCallUsage = vi.fn();
+    const onTokenUsage = vi.fn();
+    await runWithCourseGenerationLlmContext(() => runWithCourseGenerationLlmCallContext(async () => {
+      await reportCourseGenerationTokenUsage(700, 100_000, {
+        inputTokens: 500, outputTokens: 200, cacheReadTokens: 300, cacheWriteTokens: 20, reasoningTokens: 70,
+      });
+      await reportCourseGenerationTokenUsage(undefined, 100_000, {
+        inputTokens: 500, outputTokens: 200, reasoningTokens: 70, outcome: "failed",
+      });
+    }, { callId: "page-call", source: "slide-content", attempt: 2, transportRetry: true }), {
+      onCallUsage, onTokenUsage,
+    });
+    expect(onTokenUsage.mock.calls.map(([tokens]) => tokens)).toEqual([700, 700]);
+    expect(onCallUsage).toHaveBeenCalledWith(expect.objectContaining({
+      callId: "page-call", source: "slide-content", attempt: 2, transportRetry: true,
+      totalTokens: 700, inputTokens: 500, outputTokens: 200, cacheReadTokens: 300,
+      cacheWriteTokens: 20, reasoningTokens: 70, usageSource: "provider", outcome: "response",
+    }));
+    expect(onCallUsage.mock.calls[1]![0].outcome).toBe("failed");
+  });
+
+  it("preserves zero-token refusals in the call ledger and marks estimates honestly", async () => {
+    const onCallUsage = vi.fn();
+    const onTokenUsage = vi.fn();
+    await runWithCourseGenerationLlmContext(async () => {
+      await reportCourseGenerationTokenUsage(0, 500, {
+        source: "knowledge-structure", outcome: "failed", inputTokens: 0, outputTokens: 0, usageSource: "estimated",
+      });
+      await reportCourseGenerationTokenUsage(undefined, 500, {
+        inputCharacters: 250, outputCharacters: 125, reasoningCharacters: 125,
+      });
+    }, { onCallUsage, onTokenUsage });
+    expect(onCallUsage.mock.calls[0]![0]).toMatchObject({ totalTokens: 0, usageSource: "estimated", outcome: "failed" });
+    expect(onCallUsage.mock.calls[1]![0]).toMatchObject({
+      totalTokens: 200, inputTokens: 100, outputTokens: 100, reasoningTokens: 50, usageSource: "estimated",
+    });
+    expect(onTokenUsage).toHaveBeenCalledExactlyOnceWith(200, "estimated");
+  });
+
+  it("keeps aggregate accounting on ledger failure and makes storage failures terminal", async () => {
+    const onTokenUsage = vi.fn();
+    const cause = Object.assign(new Error("database unavailable"), { statusCode: 503 });
+    await expect(runWithCourseGenerationLlmContext(() => reportCourseGenerationTokenUsage(100), {
+      onCallUsage: () => { throw cause; }, onTokenUsage,
+    })).rejects.toMatchObject({
+      code: "COURSE_TOKEN_USAGE_PERSISTENCE_FAILED", isRetryable: false, cause,
+    });
+    expect(onTokenUsage).toHaveBeenCalledExactlyOnceWith(100, "provider");
   });
 });

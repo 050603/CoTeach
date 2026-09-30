@@ -31,7 +31,7 @@ export function splitLongStudentSlides(
       return {
         ...outline,
         id: `${outline.id}-part-${index + 1}`,
-        title: `${outline.title}（${index + 1}/${count}）`,
+        title: outline.title,
         description: `${outline.description} 本页聚焦：${pagePoints.join("、")}。`,
         keyPoints: pagePoints,
         targetDurationSec: pageSeconds,
@@ -44,4 +44,3 @@ export function splitLongStudentSlides(
     });
   }).map((outline, index) => ({ ...outline, order: index }));
 }
-

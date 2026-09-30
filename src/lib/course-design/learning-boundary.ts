@@ -12,6 +12,24 @@ export type KnowledgeBoundaryGroup = {
   knowledgePointIds: readonly string[];
 };
 
+/** Honor confirmed section metadata and keep legacy ungrouped runs together. */
+export function groupKnowledgePointsBySection(
+  knowledgePoints: readonly KnowledgePoint[],
+): Array<KnowledgeBoundaryGroup & { key: string; title: string }> {
+  const groups: Array<{ key: string; title: string; knowledgePointIds: string[] }> = [];
+  for (const point of knowledgePoints) {
+    const key = point.groupId?.trim() || point.groupName?.trim() || "__ungrouped__";
+    const last = groups.at(-1);
+    if (last?.key === key) last.knowledgePointIds.push(point.id);
+    else groups.push({ key, title: point.groupName?.trim() || point.name.trim() || "核心知识", knowledgePointIds: [point.id] });
+  }
+  return groups.map((group) => ({
+    ...group,
+    title: group.key === "__ungrouped__" && group.knowledgePointIds.length > 1
+      ? `${group.title}等相关知识` : group.title,
+  }));
+}
+
 function lessonReference(
   point: KnowledgePoint | undefined,
 ): TeachingKnowledgeReference | undefined {

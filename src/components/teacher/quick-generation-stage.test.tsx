@@ -549,7 +549,7 @@ describe("QuickGenerationStage", () => {
 
     expect(screen.getAllByText("课程生成未完成").length).toBeGreaterThan(0);
     expect(screen.getByText(/已完成 15 \/ 16/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /从已完成页面继续/ }));
+    fireEvent.click(screen.getByRole("button", { name: /重生成失败阶段/ }));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 

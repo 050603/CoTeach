@@ -66,6 +66,15 @@ describe("course design failure policy", () => {
     expect(formatFatalCourseDesignError(error)).toContain("JSON 无法解析");
   });
 
+  it("identifies blueprint failure categories and keeps the formatted message stable", () => {
+    const error = Object.assign(new Error("教学蓝图缺少可用结构：教学要求未覆盖；先备解释节点不存在；图示容量不足；局部修复已用 2 次"), {
+      generationFailureKind: "invalid-generated-output", isRetryable: true,
+    });
+    const formatted = formatFatalCourseDesignError(error);
+    expect(formatted).toContain("问题类型：教学内容或要求、先备引用、图示容量、局部修复耗尽");
+    expect(formatFatalCourseDesignError(new Error(formatted))).toBe(formatted);
+  });
+
   it("reports an unbound mandatory textbook figure as a concrete design failure", () => {
     const error = new Error("必用教材原图 figure-1 没有可绑定的首次知识讲解页。");
     expect(classifyCourseDesignFailure(error)).toBe("terminal-quality");
@@ -83,13 +92,13 @@ describe("course design failure policy", () => {
     expect(formatFatalCourseDesignError(error)).not.toContain("系统错误");
   });
 
-  it("recovers transient network failures without treating credential errors as retryable", () => {
+  it("classifies network failures without automatically replaying a paid stage", () => {
     const network = new Error("fetch failed: ECONNRESET");
     expect(classifyCourseDesignFailure(network)).toBe("transient-infrastructure");
     expect(createTransientInfrastructureRecoveryRequest({
       courseId: "c",
       teacherBrief: "b",
-    }, network)).toMatchObject({ transientRecoveryCount: 1 });
+    }, network)).toBeNull();
     expect(classifyCourseDesignFailure(new Error("LLM 调用失败：401 unauthorized")))
       .toBe("fatal-infrastructure");
     expect(formatFatalCourseDesignError(network)).toContain("网络或 AI 模型服务");
@@ -110,8 +119,8 @@ describe("course design failure policy", () => {
   it("uses bounded durable backoff and stops after the infrastructure retry budget", () => {
     const network = new Error("fetch failed: ECONNREFUSED");
     expect(transientInfrastructureRetryDelayMs(1)).toBe(15_000);
-    expect(transientInfrastructureRetryDelayMs(2)).toBe(45_000);
-    expect(transientInfrastructureRetryDelayMs(3)).toBe(120_000);
+    expect(transientInfrastructureRetryDelayMs(2)).toBe(15_000);
+    expect(transientInfrastructureRetryDelayMs(3)).toBe(15_000);
     expect(createTransientInfrastructureRecoveryRequest({
       courseId: "c",
       teacherBrief: "b",

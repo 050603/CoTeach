@@ -12,6 +12,8 @@ vi.mock("./settings", () => ({
   }),
 }));
 vi.mock("@/lib/course-generation/llm-concurrency", () => ({
+  isCourseGenerationLlmContext: () => false,
+  runWithCourseGenerationLlmCallContext: (run: () => unknown) => run(),
   withCourseGenerationLlmSlot: (run: () => unknown) => run(),
   reportCourseGenerationTokenUsage: vi.fn(),
 }));

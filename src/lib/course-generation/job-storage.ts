@@ -150,7 +150,11 @@ async function deleteCheckpoints(
   policy: GenerationCheckpointPolicy,
 ): Promise<void> {
   if (policy === "all") {
-    await tx.generationCheckpoint.deleteMany({ where: { jobId, NOT: { step: { startsWith: CLASSROOM_MEDIA_ORIGIN_PREFIX } } } });
+    await tx.generationCheckpoint.deleteMany({ where: { jobId, NOT: [
+      { step: { startsWith: CLASSROOM_MEDIA_ORIGIN_PREFIX } },
+      { step: { startsWith: 'model-usage:' } },
+      { step: { startsWith: 'authoring-history:' } },
+    ] } });
     return;
   }
   if (policy === "prepared-outlines") {
@@ -163,6 +167,7 @@ async function deleteCheckpoints(
   await tx.generationCheckpoint.deleteMany({
     where: {
       jobId,
+      NOT: [{ step: { startsWith: 'model-usage:' } }, { step: { startsWith: 'authoring-history:' } }],
       OR: [
         ...(steps.length ? [{ step: { in: steps } }] : []),
         ...prefixes.map((prefix) => ({ step: { startsWith: prefix } })),
@@ -215,6 +220,29 @@ function storage(kind: JobKind) {
         if (kind === 'COURSE_CONTENT' && input.data.result !== undefined) {
           await preserveClassroomMediaOrigins(tx, row);
         }
+        // Explicit new authoring requests preserve raw drafts and their spent
+        // attempts before replacing active checkpoints. Usage receipts survive
+        // every checkpoint reset and are never folded into token totals twice.
+        const oldDrafts = await tx.generationCheckpoint.findMany({ where: { jobId: row.id,
+          OR: [{ step: { startsWith: 'authoring-response:' } },
+            { step: { startsWith: 'aux-authoring:' } },
+            { step: { startsWith: 'authoring-acceptance:' } },
+            { step: { startsWith: 'stage-attempt:' } },
+            { step: { startsWith: 'stage:' } }, { step: { startsWith: 'page:' } },
+            { step: { startsWith: 'design-authoring:' } },
+            { step: { startsWith: 'design-page-capacity' } },
+            { step: { startsWith: 'course-design' } }, { step: 'teaching-blueprint' }] } });
+        for (const draft of oldDrafts) await tx.generationCheckpoint.upsert({
+          where: { jobId_step: { jobId: row.id, step: `authoring-history:v${row.version}:${draft.step}` } },
+          create: { jobId: row.id, step: `authoring-history:v${row.version}:${draft.step}`, state: json(draft.state) },
+          update: {},
+        });
+        await tx.generationCheckpoint.upsert({
+          where: { jobId_step: { jobId: row.id, step: `authoring-history:v${row.version}:usage-summary` } },
+          create: { jobId: row.id, step: `authoring-history:v${row.version}:usage-summary`,
+            state: json({ tokenUsage: row.tokenUsage, tokenUsageCalls: row.tokenUsageCalls, request: row.request }) },
+          update: {},
+        });
         await deleteCheckpoints(tx, row.id, input.checkpointPolicy);
         return projectGenerationJob(await tx.generationJob.update({
           where: { id: row.id },

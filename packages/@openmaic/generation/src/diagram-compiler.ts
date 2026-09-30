@@ -1,5 +1,5 @@
 import type { PPTElement, PPTLineElement, PPTShapeElement, PPTTextElement } from '@openmaic/dsl';
-import type { DiagramPlan } from './outline-types.js';
+import type { DiagramPlan, DiagramSequenceGroup } from './outline-types.js';
 import { TextLayoutError } from './text-layout-compiler.js';
 
 /** A planned relationship with a slide-local container chosen during first-pass authoring. */
@@ -27,6 +27,66 @@ interface Point { x: number; y: number }
 interface Rect { left: number; top: number; width: number; height: number }
 interface PositionedNode { id: string; label: string; rect: Rect; lines: string[] }
 interface DirectedEdge { from: string; to: string; label?: string; feedback: boolean }
+interface SequencePosition {
+  nodes: PositionedNode[];
+  vertical: boolean;
+  wrapped?: boolean;
+  feedbackX?: number;
+  feedbackSide?: 'left' | 'right';
+  cycleGeometry?: { middle: Point; radiusX: number; radiusY: number };
+  cyclePerimeter?: boolean;
+  groupLabels?: Array<{ id: string; text: string; rect: Rect }>;
+}
+
+export interface DiagramAllocation { width: number; height: number }
+
+/** The unoccupied slide rectangle in which the whole diagram must fit. */
+export interface DiagramAllocationBounds {
+  left?: number;
+  top?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+}
+
+export interface MeasuredDiagramCompilerOptions {
+  /** Previously measured choices for this complete plan, including annotation. */
+  feasibleAllocations?: readonly DiagramAllocation[];
+}
+
+/** A failed authored rectangle needs repositioning, not omitted graph content. */
+export class DiagramAllocationError extends Error {
+  readonly code = 'diagram-allocation';
+  readonly authoredAllocation?: Readonly<Rect>;
+  readonly availableArea?: Readonly<Rect>;
+  readonly feasibleAllocations: readonly DiagramAllocation[];
+
+  constructor(message: string, details: {
+    authoredAllocation?: Rect;
+    availableArea?: Rect;
+    feasibleAllocations?: readonly DiagramAllocation[];
+  } = {}) {
+    const authored = details.authoredAllocation;
+    const choices = details.feasibleAllocations ?? [];
+    const allocation = authored
+      ? ` (authored diagram allocation ${authored.width}×${authored.height}px at ${authored.left},${authored.top})` : '';
+    const hint = choices.length
+      ? `. Measured feasible allocations for all nodes, edges and annotation: ${choices.map((choice) => `${choice.width}×${choice.height}px`).join(', ')}. Reposition into the safe slide area and allocate a fitting rectangle without overlapping other content.` : '';
+    super(`${message}${allocation}${hint}`);
+    this.name = 'DiagramAllocationError';
+    this.authoredAllocation = authored;
+    this.availableArea = details.availableArea;
+    this.feasibleAllocations = choices.map((choice) => ({ ...choice }));
+  }
+}
+
+function isDiagramFitError(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false;
+  // Dynamic ESM and CJS hosts may load separate copies of TextLayoutError.
+  // Retain the stable error contract rather than depending on class identity.
+  return error instanceof TextLayoutError
+    || (error.name === 'TextLayoutError' && error.message.startsWith('Text layout:'))
+    || error.message.startsWith('Invalid diagram component:');
+}
 
 const NODE_FONT_SIZE = 20;
 const ANNOTATION_FONT_SIZE = 18;
@@ -41,6 +101,18 @@ const SHAPE_PATH = 'M 12 0 H 88 Q 100 0 100 12 V 88 Q 100 100 88 100 H 12 Q 0 10
 
 export function isDiagramComponent(value: unknown): value is DiagramComponent {
   return typeof value === 'object' && value !== null && 'type' in value && value.type === 'diagram';
+}
+
+/** Normalize the local-component vocabulary before counting or compiling diagrams. */
+export function normalizeDiagramComponent(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const component = value as Record<string, unknown>;
+  if (component.type !== 'diagram' && component.kind !== 'diagram') return value;
+  if ((component.type !== undefined && component.type !== 'diagram')
+    || (component.kind !== undefined && component.kind !== 'diagram')) {
+    fail('diagram component type and kind must not conflict');
+  }
+  return component.type === 'diagram' ? value : { ...component, type: 'diagram' };
 }
 
 function fail(message: string): never {
@@ -170,10 +242,58 @@ function makeLine(id: string, start: Point, end: Point, color: string, controls?
   };
 }
 
+/** Recognize complete explicit chains without turning partial label metadata
+ * into missing steps. Legacy sequences with feedback retain adjacency rules. */
+export function resolveDiagramSequenceGroups(plan: DiagramPlan): DiagramSequenceGroup[] | undefined {
+  if (plan.sequenceGroups !== undefined) {
+    if (plan.topology !== 'sequence' || !Array.isArray(plan.sequenceGroups) || !plan.sequenceGroups.length) fail('sequenceGroups require a sequence with nonempty independent groups');
+    const known = new Set(plan.nodes.map((node) => node.id));
+    const assigned = new Set<string>();
+    const groupIds = new Set<string>();
+    const groups = plan.sequenceGroups.map((group) => {
+      if (!group || typeof group.id !== 'string' || !group.id.trim() || groupIds.has(group.id)) fail('each sequence group needs a unique nonempty id');
+      groupIds.add(group.id);
+      if (group.label !== undefined && (typeof group.label !== 'string' || !group.label.trim())) fail('sequence group labels must be nonempty strings');
+      if (!Array.isArray(group.nodeIds) || group.nodeIds.length < 2) fail('each sequence group needs at least two ordered nodes');
+      let previous = -1;
+      for (const id of group.nodeIds) {
+        const index = plan.nodes.findIndex((node) => node.id === id);
+        if (!known.has(id) || assigned.has(id) || index <= previous) fail('sequence groups must preserve node order and assign each node exactly once');
+        assigned.add(id);
+        previous = index;
+      }
+      return { ...group, nodeIds: [...group.nodeIds] };
+    });
+    if (assigned.size !== known.size) fail('sequence groups must cover every diagram node');
+    return groups;
+  }
+  if (plan.topology !== 'sequence' || !plan.edges?.length) return undefined;
+  const indices = new Map(plan.nodes.map((node, index) => [node.id, index]));
+  const incoming = new Map<string, string>();
+  const outgoing = new Map<string, string>();
+  for (const edge of plan.edges) {
+    const from = indices.get(edge.from);
+    const to = indices.get(edge.to);
+    if (from === undefined || to === undefined || from >= to || incoming.has(edge.to) || outgoing.has(edge.from)) return undefined;
+    incoming.set(edge.to, edge.from);
+    outgoing.set(edge.from, edge.to);
+  }
+  // An uncovered node means these may be labels for only some edges of a
+  // single sequence, whose unlabelled adjacent edges must still be inferred.
+  if (plan.nodes.some((node) => !incoming.has(node.id) && !outgoing.has(node.id))) return undefined;
+  const roots = plan.nodes.filter((node) => !incoming.has(node.id));
+  if (roots.length < 2) return undefined;
+  return roots.map((root, index) => {
+    const nodeIds = [root.id];
+    while (outgoing.has(nodeIds.at(-1)!)) nodeIds.push(outgoing.get(nodeIds.at(-1)!)!);
+    return { id: `sequence-group-${index + 1}`, nodeIds };
+  });
+}
+
 function parseEdges(component: DiagramComponent): DirectedEdge[] {
   const nodes = component.nodes;
   if (!Array.isArray(nodes) || nodes.length < (component.topology === 'cycle' ? 3 : 2) || nodes.length > 12) {
-    fail('the topology requires 2–12 sequence nodes or 3–12 cycle nodes');
+    fail('the topology requires 2–12 sequence/branch nodes or 3–12 cycle nodes');
   }
   const ids = new Set<string>();
   for (const node of nodes) {
@@ -190,6 +310,28 @@ function parseEdges(component: DiagramComponent): DirectedEdge[] {
     const key = `${edge.from}\u0000${edge.to}`;
     if (supplied.has(key)) fail('duplicate directed edge');
     supplied.set(key, edge.label);
+  }
+  if (component.topology === 'branch') {
+    if (!supplied.size) fail('a branch requires explicit directed edges');
+    const edges = [...supplied].map(([key, label]) => {
+      const [from, to] = key.split('\u0000');
+      return { from: from!, to: to!, label, feedback: false };
+    });
+    branchLevels(component, edges);
+    return edges;
+  }
+  const groups = resolveDiagramSequenceGroups(component);
+  if (groups) {
+    const required: DirectedEdge[] = groups.flatMap((group) => group.nodeIds.slice(0, -1).map((from, index) => {
+      const to = group.nodeIds[index + 1]!;
+      const key = `${from}\u0000${to}`;
+      if (component.edges !== undefined && !supplied.has(key)) fail('parallel sequence groups require every consecutive edge');
+      const label = supplied.get(key);
+      supplied.delete(key);
+      return { from, to, label, feedback: false };
+    }));
+    if (supplied.size) fail('parallel sequence edges must stay within their ordered group; cross-group edges are not allowed');
+    return required;
   }
   const required: DirectedEdge[] = [];
   const count = component.topology === 'cycle' ? nodes.length : nodes.length - 1;
@@ -210,45 +352,138 @@ function parseEdges(component: DiagramComponent): DirectedEdge[] {
   return [...required, ...extra];
 }
 
-function nodeSize(component: DiagramComponent, options: DiagramCompilerOptions): { width: number; height: number; lines: string[][] } {
-  const maxWidth = Math.min(NODE_MAX_WIDTH, Math.max(NODE_MIN_WIDTH, component.width * 0.24));
+/** Longest-path levels preserve every fork and merge without inventing a
+ * transition between siblings. Node order only breaks ties within a level. */
+function branchLevels(component: DiagramComponent, edges: readonly DirectedEdge[]): string[][] {
+  const incoming = new Map(component.nodes.map((node) => [node.id, 0]));
+  const outgoing = new Map(component.nodes.map((node) => [node.id, [] as string[]]));
+  for (const edge of edges) {
+    incoming.set(edge.to, incoming.get(edge.to)! + 1);
+    outgoing.get(edge.from)!.push(edge.to);
+  }
+  const roots = component.nodes.filter((node) => incoming.get(node.id) === 0);
+  if (roots.length !== 1) fail('a branch must have exactly one root');
+  const queue = [roots[0]!.id];
+  const depth = new Map([[queue[0]!, 0]]);
+  for (let index = 0; index < queue.length; index += 1) {
+    const from = queue[index]!;
+    for (const to of outgoing.get(from)!) {
+      depth.set(to, Math.max(depth.get(to) ?? 0, depth.get(from)! + 1));
+      incoming.set(to, incoming.get(to)! - 1);
+      if (incoming.get(to) === 0) queue.push(to);
+    }
+  }
+  if (queue.length !== component.nodes.length) fail('a branch must be acyclic and every node must be reachable from its root');
+  return Array.from({ length: Math.max(...depth.values()) + 1 }, (_, level) =>
+    component.nodes.filter((node) => depth.get(node.id) === level).map((node) => node.id));
+}
+
+function nodeSize(component: DiagramComponent, options: DiagramCompilerOptions, widthLimit?: number, maxNodeWidth = NODE_MAX_WIDTH): { width: number; height: number; lines: string[][] } {
+  if (widthLimit !== undefined && widthLimit < NODE_MIN_WIDTH) fail('readable diagram nodes do not fit inside the container');
+  const maxWidth = Math.min(maxNodeWidth, Math.max(NODE_MIN_WIDTH, component.width * 0.24), widthLimit ?? Infinity);
   const width = Math.min(maxWidth, Math.max(NODE_MIN_WIDTH, Math.max(...component.nodes.map((node) => measure(node.label.replace(/\n/g, ''), NODE_FONT_SIZE, options))) + NODE_PADDING_X * 2));
   const lines = component.nodes.map((node) => wrapLabel(node.label, width - NODE_PADDING_X * 2, options));
   const height = Math.max(...lines.map((parts) => parts.length)) * NODE_LINE_HEIGHT + NODE_PADDING_Y * 2;
   return { width, height, lines };
 }
 
-function positionCycle(component: DiagramComponent, options: DiagramCompilerOptions): PositionedNode[] {
+function* positionCycleCandidates(component: DiagramComponent, options: DiagramCompilerOptions, edges: DirectedEdge[]): Generator<SequencePosition> {
   const size = nodeSize(component, options);
-  const radiusX = component.width / 2 - size.width / 2 - NODE_MARGIN;
-  const radiusY = component.height / 2 - size.height / 2 - NODE_MARGIN;
-  if (radiusX <= 0 || radiusY <= 0) fail('cycle nodes do not fit inside the container');
-  const middle = { x: component.left + component.width / 2, y: component.top + component.height / 2 };
-  const positioned = component.nodes.map((node, index) => {
-    const angle = -Math.PI / 2 + index * (2 * Math.PI / component.nodes.length);
-    return {
-      ...node, lines: size.lines[index]!,
-      rect: {
-        left: middle.x + radiusX * Math.cos(angle) - size.width / 2,
-        top: middle.y + radiusY * Math.sin(angle) - size.height / 2,
-        width: size.width, height: size.height,
+  const angles = component.nodes.map((_, index) => -Math.PI / 2 + index * (2 * Math.PI / component.nodes.length));
+  const minSin = Math.min(...angles.map(Math.sin));
+  const maxSin = Math.max(...angles.map(Math.sin));
+  const maxCos = Math.max(...angles.map((angle) => Math.abs(Math.cos(angle))));
+  const step = 2 * Math.PI / component.nodes.length;
+  const controlAngles = angles.flatMap((angle) => [angle + step / 3, angle + step * 2 / 3]);
+  const controlCos = Math.max(...controlAngles.map((angle) => Math.abs(Math.cos(angle))));
+  const controlSin = Math.max(...controlAngles.map(Math.sin));
+  // Try measured widths before rejecting a ring, including wider single-line
+  // labels that leave more vertical space. Odd rings have no
+  // bottom-centre node: fit their actual extent, rather than wasting the gap
+  // between the lowest pair and an imaginary node at the bottom of the ellipse.
+  const widths = [...new Set([size.width, Math.min(260, component.width * 0.24), ...Array.from({ length: Math.ceil((size.width - NODE_MIN_WIDTH) / 8) },
+    (_, index) => Math.max(NODE_MIN_WIDTH, size.width - (index + 1) * 8))])];
+  for (const width of widths) {
+    let ringSize = size;
+    try {
+      if (width !== size.width) ringSize = nodeSize(component, options, width, 260);
+    } catch (error) {
+      if (!isDiagramFitError(error)) throw error;
+      continue;
+    }
+    const radiusX = Math.min((component.width - ringSize.width - NODE_MARGIN * 2) / (maxCos * 2),
+      component.width / (controlCos * 2));
+    const radiusY = Math.min((component.height - ringSize.height - NODE_MARGIN * 2) / (maxSin - minSin),
+      (component.height - NODE_MARGIN - ringSize.height / 2) / (controlSin - minSin));
+    const middle = { x: component.left + component.width / 2,
+      y: component.top + NODE_MARGIN + ringSize.height / 2 - radiusY * minSin };
+    const positioned = component.nodes.map((node, index) => ({
+      ...node, lines: ringSize.lines[index]!, rect: {
+        left: middle.x + radiusX * Math.cos(angles[index]!) - ringSize.width / 2,
+        top: middle.y + radiusY * Math.sin(angles[index]!) - ringSize.height / 2,
+        width: ringSize.width, height: ringSize.height,
       },
-    };
-  });
-  for (let index = 0; index < positioned.length; index += 1) {
-    for (let next = index + 1; next < positioned.length; next += 1) {
-      if (overlap(positioned[index]!.rect, positioned[next]!.rect, 10)) fail('cycle nodes overlap; enlarge the diagram container');
+    }));
+    if (radiusX > 0 && radiusY > 0 && positioned.every((node, index) => positioned.slice(index + 1)
+      .every((next) => !overlap(node.rect, next.rect, 8)))) {
+      yield { nodes: positioned, vertical: false, cycleGeometry: { middle, radiusX, radiusY } };
     }
   }
-  return positioned;
+  // A shallow ellipse crowds long two-line nodes near its upper/lower arcs.
+  // A clockwise perimeter keeps the same ordered ring and closing edge while
+  // giving those nodes two separated, readable rows inside the same rectangle.
+  // An odd ring must remain a ring, not an uneven pair of rectangular rows.
+  if (component.nodes.length < 4 || component.nodes.length % 2 !== 0) return;
+  const topCount = Math.ceil(component.nodes.length / 2);
+  const bottomCount = component.nodes.length - topCount;
+  const turnIndices = new Set([topCount - 1, component.nodes.length - 1]);
+  const turnLabels = edges.filter((_, index) => turnIndices.has(index)).map((edge) => edge.label);
+  const horizontalLabels = edges.filter((_, index) => !turnIndices.has(index)).map((edge) => edge.label);
+  const turnWidth = Math.max(0, ...turnLabels.map((label) => label ? edgeLabelWidth(label, options) : 0));
+  const horizontalGap = Math.max(24, ...horizontalLabels.map((label) => label ? edgeLabelWidth(label, options) + 8 : 24));
+  const rowGap = turnLabels.some(Boolean) ? 48 : 24;
+  const widthLimit = Math.min(
+    (component.width - NODE_MARGIN * 2 - (topCount - 1) * horizontalGap) / topCount,
+    (component.width - turnWidth - 8) / (topCount - 1) - horizontalGap,
+  );
+  if (widthLimit < NODE_MIN_WIDTH) return;
+  let perimeterSize = size;
+  try {
+    if (widthLimit < size.width) perimeterSize = nodeSize(component, options, widthLimit);
+  } catch (error) {
+    if (!isDiagramFitError(error)) throw error;
+    return;
+  }
+  const sideMargin = Math.max(NODE_MARGIN, (turnWidth - perimeterSize.width) / 2 + 4);
+  const minimumWidth = topCount * perimeterSize.width + (topCount - 1) * horizontalGap;
+  const minimumHeight = perimeterSize.height * 2 + rowGap;
+  const availableWidth = component.width - sideMargin * 2;
+  const availableHeight = component.height - NODE_MARGIN * 2;
+  if (minimumWidth > availableWidth || minimumHeight > availableHeight) return;
+  const span = minimumWidth + Math.min((topCount - 1) * 38, availableWidth - minimumWidth);
+  const height = minimumHeight + Math.min(38, availableHeight - minimumHeight);
+  const left = component.left + (component.width - span) / 2;
+  const top = component.top + (component.height - height) / 2;
+  const nodes = component.nodes.map((node, index) => {
+    const inTop = index < topCount;
+    const rowCount = inTop ? topCount : bottomCount;
+    const localIndex = inTop ? index : index - topCount;
+    const column = inTop ? localIndex : rowCount - 1 - localIndex;
+    return { ...node, lines: perimeterSize.lines[index]!, rect: {
+      left: left + column * (span - perimeterSize.width) / (rowCount - 1),
+      top: inTop ? top : top + height - perimeterSize.height,
+      width: perimeterSize.width, height: perimeterSize.height,
+    } };
+  });
+  yield { nodes, vertical: false, wrapped: true, cyclePerimeter: true };
 }
 
 function edgeLabelWidth(label: string, options: DiagramCompilerOptions): number {
   return Math.max(52, measure(label, EDGE_FONT_SIZE, options, 500) + 24);
 }
 
-function positionSequence(component: DiagramComponent, options: DiagramCompilerOptions, edges: DirectedEdge[]): { nodes: PositionedNode[]; vertical: boolean } {
-  const size = nodeSize(component, options);
+function positionSequence(component: DiagramComponent, options: DiagramCompilerOptions, edges: DirectedEdge[], widthLimit?: number): SequencePosition {
+  const size = nodeSize(component, options, widthLimit);
   const feedback = edges.some((edge) => edge.feedback);
   const labels = component.nodes.slice(0, -1).map((node, index) => edges.find((edge) => !edge.feedback
     && edge.from === node.id && edge.to === component.nodes[index + 1]!.id)?.label);
@@ -286,7 +521,258 @@ function positionSequence(component: DiagramComponent, options: DiagramCompilerO
       }),
     };
   }
+  // A long sequence can still fit as a readable path when neither a single
+  // horizontal nor a single vertical line fits. Balance row lengths, centre
+  // each row and reserve a clear gap for the turn between successive rows.
+  if (component.nodes.length < 4) fail('sequence nodes and edge labels do not fit inside the container');
+  const feedbackEdge = edges.find((edge) => edge.feedback);
+  const bounds: Rect = { left: component.left, top: component.top, width: component.width, height: component.height };
+  for (let requestedRows = 2; requestedRows < component.nodes.length; requestedRows += 1) {
+    const columns = Math.ceil(component.nodes.length / requestedRows);
+    if (columns < 2) continue;
+    const rowOffsets: number[] = [];
+    let assigned = 0;
+    const rows = Array.from({ length: requestedRows }, (_, row) => {
+      rowOffsets.push(assigned);
+      const count = Math.floor(component.nodes.length / requestedRows) + (row < component.nodes.length % requestedRows ? 1 : 0);
+      const nodes = component.nodes.slice(assigned, assigned + count);
+      assigned += count;
+      return nodes;
+    });
+    const outerSide = (nodeId: string, side: 'left' | 'right'): boolean => {
+      const nodeIndex = component.nodes.findIndex((node) => node.id === nodeId);
+      const rowIndex = rowOffsets.findIndex((offset, index) => nodeIndex >= offset
+        && (index === rowOffsets.length - 1 || nodeIndex < rowOffsets[index + 1]!));
+      const localIndex = nodeIndex - rowOffsets[rowIndex]!;
+      const lastIndex = rows[rowIndex]!.length - 1;
+      return rowIndex % 2 === 0
+        ? localIndex === (side === 'left' ? 0 : lastIndex)
+        : localIndex === (side === 'left' ? lastIndex : 0);
+    };
+    const feedbackSide = feedbackEdge
+      ? (outerSide(feedbackEdge.from, 'left') && outerSide(feedbackEdge.to, 'left') ? 'left'
+        : outerSide(feedbackEdge.from, 'right') && outerSide(feedbackEdge.to, 'right') ? 'right' : undefined)
+      : undefined;
+    // A feedback line must leave from the outside of both endpoint rows;
+    // otherwise it would run through intervening nodes on its way to the lane.
+    if (feedbackEdge && !feedbackSide) continue;
+    const turnIndices = new Set(rowOffsets.slice(1).map((offset) => offset - 1));
+    const turnLabels = rowOffsets.slice(1).map((offset) => labels[offset - 1]);
+    const largestTurnLabel = Math.max(0, ...turnLabels.map((label) => label ? edgeLabelWidth(label, options) : 0));
+    const turnOverhang = Math.max(0, (largestTurnLabel - size.width) / 2);
+    const sideMargin = Math.max(NODE_MARGIN, turnOverhang + 4);
+    const feedbackLane = feedbackEdge
+      ? Math.max(58, (feedbackEdge.label ? edgeLabelWidth(feedbackEdge.label, options) : 0) + turnOverhang * 2 + 8)
+      : 0;
+    const main: Rect = {
+      left: component.left + sideMargin + (feedbackSide === 'left' ? feedbackLane : 0),
+      top: component.top + NODE_MARGIN,
+      width: component.width - sideMargin * 2 - feedbackLane,
+      height: component.height - NODE_MARGIN * 2,
+    };
+    if (main.width < size.width || main.height < size.height) continue;
+    const horizontalLabels = labels.filter((_, index) => !turnIndices.has(index));
+    const horizontalGap = Math.max(24, ...horizontalLabels.map((label) => label ? edgeLabelWidth(label, options) + 8 : 24));
+    const minimumWidth = columns * size.width + (columns - 1) * horizontalGap;
+    if (minimumWidth > main.width) continue;
+    const rowGaps = turnLabels.map((label) => label ? 48 : 24);
+    const minimumHeight = requestedRows * size.height + rowGaps.reduce((sum, gap) => sum + gap, 0);
+    if (minimumHeight > main.height) continue;
+    const columnGap = horizontalGap + Math.min(38, (main.width - minimumWidth) / (columns - 1));
+    const totalWidth = columns * size.width + (columns - 1) * columnGap;
+    const left = main.left + (main.width - totalWidth) / 2;
+    const rowExtra = Math.min(38, (main.height - minimumHeight) / (requestedRows - 1));
+    const rowHeight = minimumHeight + rowExtra * (requestedRows - 1);
+    let top = main.top + (main.height - rowHeight) / 2;
+    const positioned: PositionedNode[] = [];
+    for (const [rowIndex, row] of rows.entries()) {
+      const rightward = rowIndex % 2 === 0;
+      const rowWidth = row.length * size.width + (row.length - 1) * columnGap;
+      const rowLeft = left + (totalWidth - rowWidth) / 2;
+      for (const [index, node] of row.entries()) {
+        const column = rightward ? index : row.length - 1 - index;
+        positioned.push({ ...node, lines: size.lines[rowOffsets[rowIndex]! + index]!, rect: {
+          left: rowLeft + column * (size.width + columnGap), top,
+          width: size.width, height: size.height,
+        } });
+      }
+      top += size.height + (rowGaps[rowIndex] ?? 0) + rowExtra;
+    }
+    // Turning labels must have their full measured width within the slide.
+    if (turnLabels.some((label, index) => {
+      if (!label) return false;
+      const from = positioned[rowOffsets[index + 1]! - 1]!;
+      const to = positioned[rowOffsets[index + 1]!]!;
+      const width = edgeLabelWidth(label, options);
+      const x = (center(from.rect).x + center(to.rect).x) / 2;
+      return x - width / 2 < bounds.left
+        || x + width / 2 > bounds.left + bounds.width;
+    })) continue;
+    return { nodes: positioned, vertical: false, wrapped: true,
+      ...(feedbackSide ? { feedbackSide,
+        feedbackX: feedbackSide === 'left'
+          ? component.left + sideMargin + feedbackLane / 2
+          : component.left + component.width - sideMargin - feedbackLane / 2 } : {}),
+    };
+  }
   fail('sequence nodes and edge labels do not fit inside the container');
+}
+
+function positionParallelSequences(
+  component: DiagramComponent,
+  options: DiagramCompilerOptions,
+  edges: DirectedEdge[],
+  groups: readonly DiagramSequenceGroup[],
+): SequencePosition {
+  const groupGap = 20;
+  const maximumBand = component.height - (groups.length - 1) * groupGap;
+  const bands = groups.map((group) => {
+    const nodes = group.nodeIds.map((id) => component.nodes.find((node) => node.id === id)!);
+    const memberIds = new Set(group.nodeIds);
+    const groupEdges = edges.filter((edge) => memberIds.has(edge.from));
+    const labelHeight = group.label ? 42 : 0;
+    if (group.label && measure(group.label, ANNOTATION_FONT_SIZE, options, 700) > component.width - 20) fail('sequence group label does not fit without clipping');
+    const horizontalGaps = groupEdges.reduce((sum, edge) => sum + (edge.label ? edgeLabelWidth(edge.label, options) + 8 : 24), 0);
+    const compactWidth = (component.width - NODE_MARGIN * 2 - horizontalGaps) / nodes.length;
+    const heights = [...new Set([85, 110, 120, 160, 200, 240, 280, 320, maximumBand]
+      .filter((height) => height > labelHeight && height <= maximumBand))].sort((a, b) => a - b);
+    for (const height of heights) {
+      // Try ordinary nodes first, then balanced two-line labels at the same
+      // readable font size. This keeps independent chains out of false folds.
+      for (const widthLimit of [undefined, compactWidth]) {
+        try {
+          const position = positionSequence({ ...component, annotation: undefined, sequenceGroups: undefined,
+            nodes, edges: groupEdges, top: component.top + labelHeight, height: height - labelHeight }, options, groupEdges, widthLimit);
+          return { group, height, labelHeight, position };
+        } catch (error) {
+          if (!isDiagramFitError(error)) throw error;
+        }
+      }
+    }
+    fail('parallel sequence nodes and edge labels do not fit inside the container');
+  });
+  const totalHeight = bands.reduce((sum, band) => sum + band.height, 0) + (bands.length - 1) * groupGap;
+  if (totalHeight > component.height) fail('parallel sequence groups do not fit together inside the container');
+  let top = component.top + (component.height - totalHeight) / 2;
+  const positioned = new Map<string, PositionedNode>();
+  const groupLabels: NonNullable<SequencePosition['groupLabels']> = [];
+  for (const band of bands) {
+    const offset = top - component.top;
+    for (const node of band.position.nodes) positioned.set(node.id, { ...node, rect: { ...node.rect, top: node.rect.top + offset } });
+    if (band.group.label) groupLabels.push({ id: band.group.id, text: band.group.label,
+      rect: { left: component.left, top, width: component.width, height: band.labelHeight } });
+    top += band.height + groupGap;
+  }
+  return { nodes: component.nodes.map((node) => positioned.get(node.id)!), vertical: false, wrapped: true, groupLabels };
+}
+
+function positionBranch(component: DiagramComponent, options: DiagramCompilerOptions, edges: DirectedEdge[]): SequencePosition {
+  const levels = branchLevels(component, edges);
+  const size = nodeSize(component, options);
+  const widestLabel = Math.max(0, ...edges.map((edge) => edge.label ? edgeLabelWidth(edge.label, options) : 0));
+  for (const vertical of [true, false]) {
+    const main = { left: component.left + NODE_MARGIN, top: component.top + NODE_MARGIN,
+      width: component.width - NODE_MARGIN * 2, height: component.height - NODE_MARGIN * 2 };
+    const along = vertical ? size.height : size.width;
+    const across = vertical ? size.width : size.height;
+    const alongSpace = vertical ? main.height : main.width;
+    const acrossSpace = vertical ? main.width : main.height;
+    const levelGap = widestLabel ? (vertical ? 56 : widestLabel + 12) : 32;
+    // Fork labels sit between the parent and each child. Keep enough space
+    // between sibling branches for those labels at their measured font size.
+    const siblingGap = vertical ? Math.max(28, widestLabel * 2 + 12 - across) : 28;
+    const minimumAlong = levels.length * along + (levels.length - 1) * levelGap;
+    const maximumAcross = Math.max(...levels.map((level) => level.length * across + (level.length - 1) * siblingGap));
+    if (minimumAlong > alongSpace || maximumAcross > acrossSpace) continue;
+    const gap = levelGap + Math.min(40, (alongSpace - minimumAlong) / (levels.length - 1));
+    const totalAlong = levels.length * along + (levels.length - 1) * gap;
+    const origin = (vertical ? main.top : main.left) + (alongSpace - totalAlong) / 2;
+    const rects = new Map<string, Rect>();
+    for (const [levelIndex, level] of levels.entries()) {
+      const totalAcross = level.length * across + (level.length - 1) * siblingGap;
+      const crossOrigin = (vertical ? main.left : main.top) + (acrossSpace - totalAcross) / 2;
+      for (const [index, id] of level.entries()) rects.set(id, {
+        left: vertical ? crossOrigin + index * (across + siblingGap) : origin + levelIndex * (along + gap),
+        top: vertical ? origin + levelIndex * (along + gap) : crossOrigin + index * (across + siblingGap),
+        width: size.width, height: size.height,
+      });
+    }
+    return { vertical, nodes: component.nodes.map((node, index) => ({ ...node,
+      lines: size.lines[index]!, rect: rects.get(node.id)! })) };
+  }
+  fail('branch nodes and edge labels do not fit inside the container');
+}
+
+function segmentIntersectsRect(start: Point, end: Point, rect: Rect): boolean {
+  let low = 0;
+  let high = 1;
+  for (const [origin, destination, minimum, maximum] of [
+    [start.x, end.x, rect.left - 4, rect.left + rect.width + 4],
+    [start.y, end.y, rect.top - 4, rect.top + rect.height + 4],
+  ]) {
+    const delta = destination! - origin!;
+    if (Math.abs(delta) < 0.0001) {
+      if (origin! < minimum! || origin! > maximum!) return false;
+    } else {
+      const first = (minimum! - origin!) / delta;
+      const last = (maximum! - origin!) / delta;
+      low = Math.max(low, Math.min(first, last));
+      high = Math.min(high, Math.max(first, last));
+      if (low > high) return false;
+    }
+  }
+  return high >= 0 && low <= 1;
+}
+
+function curvePoint(start: Point, end: Point, controls: [Point, Point], t: number): Point {
+  const reverse = 1 - t;
+  return { x: reverse ** 3 * start.x + 3 * reverse ** 2 * t * controls[0].x
+    + 3 * reverse * t ** 2 * controls[1].x + t ** 3 * end.x,
+  y: reverse ** 3 * start.y + 3 * reverse ** 2 * t * controls[0].y
+    + 3 * reverse * t ** 2 * controls[1].y + t ** 3 * end.y };
+}
+
+function edgeIntersectsRect(start: Point, end: Point, controls: [Point, Point] | undefined, rect: Rect): boolean {
+  let previous = start;
+  for (let step = 1; step <= (controls ? 64 : 1); step += 1) {
+    const next = controls ? curvePoint(start, end, controls, step / 64) : end;
+    if (segmentIntersectsRect(previous, next, rect)) return true;
+    previous = next;
+  }
+  return false;
+}
+
+function routeBranchEdge(component: DiagramComponent, position: SequencePosition, from: PositionedNode, to: PositionedNode): {
+  start: Point; end: Point; controls?: [Point, Point]; labelAt: Point;
+} {
+  const obstacles = position.nodes.filter((node) => node.id !== from.id && node.id !== to.id);
+  const clear = (start: Point, end: Point, controls?: [Point, Point]): boolean => {
+    let previous = start;
+    for (let step = 1; step <= (controls ? 64 : 1); step += 1) {
+      const next = controls ? curvePoint(start, end, controls, step / 64) : end;
+      if (obstacles.some((node) => segmentIntersectsRect(previous, next, node.rect))) return false;
+      previous = next;
+    }
+    return true;
+  };
+  const start = boundaryPoint(from.rect, center(to.rect));
+  const end = boundaryPoint(to.rect, center(from.rect));
+  if (clear(start, end)) return { start, end, labelAt: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 } };
+  // An edge may skip a level in a valid DAG. Route it outside the intervening
+  // nodes instead of hiding it or synthesizing a chain through those nodes.
+  for (const side of [-1, 1]) {
+    const lane = position.vertical
+      ? component.left + (side < 0 ? 8 : component.width - 8)
+      : component.top + (side < 0 ? 8 : component.height - 8);
+    const controls: [Point, Point] = position.vertical
+      ? [{ x: lane, y: center(from.rect).y }, { x: lane, y: center(to.rect).y }]
+      : [{ x: center(from.rect).x, y: lane }, { x: center(to.rect).x, y: lane }];
+    const routedStart = boundaryPoint(from.rect, controls[0]);
+    const routedEnd = boundaryPoint(to.rect, controls[1]);
+    if (clear(routedStart, routedEnd, controls)) return { start: routedStart, end: routedEnd, controls,
+      labelAt: curvePoint(routedStart, routedEnd, controls, 0.5) };
+  }
+  fail('a branch edge crosses an unrelated node; enlarge the diagram container');
 }
 
 function edgeLabel(id: string, label: string, at: Point, bounds: Rect, component: DiagramComponent, options: DiagramCompilerOptions): PPTTextElement {
@@ -329,7 +815,7 @@ function outsideAnnotation(component: DiagramComponent, options: DiagramCompiler
 /** Compile one first-pass diagram into editable DSL shapes, text, and directed lines. */
 export function compileDiagramComponent(component: DiagramComponent, options: DiagramCompilerOptions = {}): PPTElement[] {
   if (!isDiagramComponent(component) || typeof component.id !== 'string' || !component.id.trim()) fail('type must be diagram and id must be nonempty');
-  if (component.topology !== 'sequence' && component.topology !== 'cycle') fail('topology must be sequence or cycle');
+  if (component.topology !== 'sequence' && component.topology !== 'cycle' && component.topology !== 'branch') fail('topology must be sequence, cycle or branch');
   if (![component.left, component.top].every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)
     || !finitePositive(component.width) || !finitePositive(component.height)) fail('container coordinates must be finite and positive');
   const bounds: Rect = { left: component.left, top: component.top, width: component.width, height: component.height };
@@ -342,12 +828,32 @@ export function compileDiagramComponent(component: DiagramComponent, options: Di
     return [...diagram, annotation];
   }
   const edges = parseEdges(component);
-  const position = component.topology === 'cycle'
-    ? { nodes: positionCycle(component, options), vertical: false }
-    : positionSequence(component, options, edges);
+  const sequenceGroups = resolveDiagramSequenceGroups(component);
+  const positions = component.topology === 'cycle'
+    ? positionCycleCandidates(component, options, edges)
+    : [component.topology === 'branch' ? positionBranch(component, options, edges)
+    : sequenceGroups ? positionParallelSequences(component, options, edges, sequenceGroups)
+    : positionSequence(component, options, edges)];
+  let lastError: Error | undefined;
+  for (const position of positions) {
+    try {
+      return renderDiagramPosition(component, options, edges, position, bounds);
+    } catch (error) {
+      if (component.topology !== 'cycle' || !isDiagramFitError(error)) throw error;
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
+  fail('cycle nodes and edge labels do not fit inside the container');
+}
+
+function renderDiagramPosition(component: DiagramComponent, options: DiagramCompilerOptions,
+  edges: DirectedEdge[], position: SequencePosition, bounds: Rect): PPTElement[] {
   const byId = new Map(position.nodes.map((node) => [node.id, node]));
   const lines: PPTLineElement[] = [];
   const labels: PPTTextElement[] = [];
+  const routes: Array<{ start: Point; end: Point; controls?: [Point, Point] }> = [];
+  const pendingLabels: Array<{ text: string; edgeIndex: number; points: Point[] }> = [];
   const color = component.accentColor ?? '#D97706';
 
   for (const [index, edge] of edges.entries()) {
@@ -357,13 +863,14 @@ export function compileDiagramComponent(component: DiagramComponent, options: Di
     let end: Point;
     let controls: [Point, Point] | undefined;
     let labelAt: Point;
-    if (component.topology === 'cycle') {
+    let alternateLabelPoints: Point[] = [];
+    if (component.topology === 'branch') {
+      ({ start, end, controls, labelAt } = routeBranchEdge(component, position, from, to));
+    } else if (component.topology === 'cycle' && !position.cyclePerimeter) {
       const fromIndex = component.nodes.findIndex((node) => node.id === edge.from);
       const step = 2 * Math.PI / component.nodes.length;
       const angle = -Math.PI / 2 + fromIndex * step;
-      const middle = { x: component.left + component.width / 2, y: component.top + component.height / 2 };
-      const radiusX = component.width / 2 - from.rect.width / 2 - NODE_MARGIN;
-      const radiusY = component.height / 2 - from.rect.height / 2 - NODE_MARGIN;
+      const { middle, radiusX, radiusY } = position.cycleGeometry!;
       const atAngle = (value: number): Point => ({ x: middle.x + radiusX * Math.cos(value), y: middle.y + radiusY * Math.sin(value) });
       controls = [atAngle(angle + step / 3), atAngle(angle + step * 2 / 3)];
       start = boundaryPoint(from.rect, controls[0]);
@@ -373,8 +880,19 @@ export function compileDiagramComponent(component: DiagramComponent, options: Di
       const dy = labelPoint.y - middle.y;
       const distance = Math.hypot(dx, dy) || 1;
       labelAt = { x: labelPoint.x + dx / distance * 22, y: labelPoint.y + dy / distance * 22 };
+      // The interior of a shallow ring often has more label space than its
+      // narrow outside rim. Try both sides of this edge without moving nodes.
+      alternateLabelPoints = [22, 56, 96, 136, 176].map((inset) => ({
+        x: labelPoint.x - dx / distance * inset, y: labelPoint.y - dy / distance * inset,
+      }));
     } else if (edge.feedback) {
-      if (position.vertical) {
+      if (position.wrapped) {
+        const side = position.feedbackX!;
+        start = { x: position.feedbackSide === 'left' ? from.rect.left : from.rect.left + from.rect.width, y: center(from.rect).y };
+        end = { x: position.feedbackSide === 'left' ? to.rect.left : to.rect.left + to.rect.width, y: center(to.rect).y };
+        controls = [{ x: side, y: start.y }, { x: side, y: end.y }];
+        labelAt = { x: side, y: (start.y + end.y) / 2 };
+      } else if (position.vertical) {
         start = { x: from.rect.left + from.rect.width, y: center(from.rect).y };
         end = { x: to.rect.left + to.rect.width, y: center(to.rect).y };
         const side = component.left + component.width - 18;
@@ -387,27 +905,72 @@ export function compileDiagramComponent(component: DiagramComponent, options: Di
         controls = [{ x: start.x, y: bottom }, { x: end.x, y: bottom }];
         labelAt = { x: (start.x + end.x) / 2, y: bottom - 20 };
       }
+    } else if (position.wrapped && !position.cyclePerimeter && from.rect.top !== to.rect.top) {
+      // Use the clear band between centred rows. A diagonal between their
+      // centres can enter the last node or a neighbour in the shorter row.
+      start = { x: center(from.rect).x, y: from.rect.top + from.rect.height };
+      end = { x: center(to.rect).x, y: to.rect.top };
+      const turnY = (start.y + end.y) / 2;
+      controls = [{ x: start.x, y: turnY }, { x: end.x, y: turnY }];
+      labelAt = { x: (start.x + end.x) / 2, y: turnY };
     } else {
       start = boundaryPoint(from.rect, center(to.rect));
       end = boundaryPoint(to.rect, center(from.rect));
-      labelAt = position.vertical
+      labelAt = position.vertical || (position.wrapped && from.rect.top !== to.rect.top)
         ? { x: start.x, y: (start.y + end.y) / 2 }
         : { x: (start.x + end.x) / 2, y: start.y - 20 };
     }
     if (controls?.some((point) => !within({ left: point.x, top: point.y, width: 0, height: 0 }, bounds))) fail('diagram edge exceeds the container');
+    if (position.nodes.some((node) => node.id !== from.id && node.id !== to.id
+        && edgeIntersectsRect(start, end, controls, node.rect))) fail('diagram edge crosses an unrelated node; enlarge the diagram container');
+    routes.push({ start, end, controls });
     lines.push(makeLine(`${component.id}-edge-${index}`, start, end, color, controls, edge.feedback));
-    if (edge.label) {
-      const label = edgeLabel(`${component.id}-edge-label-${index}`, edge.label, labelAt, bounds, component, options);
-      if (position.nodes.some((node) => overlap(label, node.rect))) fail('edge label overlaps a diagram node');
-      labels.push(label);
+    if (edge.label) pendingLabels.push({ text: edge.label, edgeIndex: index, points: [labelAt, ...alternateLabelPoints] });
+  }
+  for (const pending of pendingLabels) {
+    let accepted: PPTTextElement | undefined;
+    let lastError: Error | undefined;
+    for (const point of pending.points) {
+      try {
+        const label = edgeLabel(`${component.id}-edge-label-${pending.edgeIndex}`, pending.text, point, bounds, component, options);
+        if (position.nodes.some((node) => overlap(label, node.rect))) fail('edge label overlaps a diagram node');
+        if (labels.some((existing) => overlap(label, existing, 4))) fail(`${component.topology} edge labels overlap; enlarge the diagram container`);
+        if (routes.some((route, index) => index !== pending.edgeIndex
+          && edgeIntersectsRect(route.start, route.end, route.controls, label))) fail('edge label overlaps an unrelated connector; enlarge the diagram container');
+        accepted = label;
+        break;
+      } catch (error) {
+        if (!isDiagramFitError(error)) throw error;
+        lastError = error;
+      }
     }
+    if (!accepted) throw lastError!;
+    labels.push(accepted);
   }
 
-  return [...lines, ...position.nodes.map((node) => makeNode(node, component, options.fontName ?? 'Noto Sans SC')), ...labels];
+  return [...lines, ...position.nodes.map((node) => makeNode(node, component, options.fontName ?? 'Noto Sans SC')), ...labels,
+    ...(position.groupLabels ?? []).map((label) => makeText(`${component.id}-group-${label.id}`, label.text, label.rect,
+      ANNOTATION_FONT_SIZE, component.textColor ?? '#30343A', options.fontName ?? 'Noto Sans SC', { weight: 700 }))];
 }
 
 /** Use the host's renderer font measurements for every candidate node/annotation wrap. */
 export async function compileMeasuredDiagramComponent(
+  component: DiagramComponent,
+  textMeasure: import('./text-layout-compiler.js').TextMeasure,
+  options: MeasuredDiagramCompilerOptions = {},
+): Promise<PPTElement[]> {
+  try {
+    return await compileMeasuredDiagram(component, textMeasure);
+  } catch (error) {
+    if (!isDiagramFitError(error)) throw error;
+    throw new DiagramAllocationError(error.message, {
+      authoredAllocation: { left: component.left, top: component.top, width: component.width, height: component.height },
+      feasibleAllocations: options.feasibleAllocations,
+    });
+  }
+}
+
+async function compileMeasuredDiagram(
   component: DiagramComponent,
   textMeasure: import('./text-layout-compiler.js').TextMeasure,
 ): Promise<PPTElement[]> {
@@ -420,7 +983,7 @@ export async function compileMeasuredDiagramComponent(
     }], textMeasure);
     if (annotation.type !== 'text') fail('annotation must compile to editable text');
     const reserve = annotation.height + 12;
-    const diagram = await compileMeasuredDiagramComponent({ ...component, annotation: undefined,
+    const diagram = await compileMeasuredDiagram({ ...component, annotation: undefined,
       top: component.top + reserve, height: component.height - reserve }, textMeasure);
     return [...diagram, annotation];
   }
@@ -437,6 +1000,7 @@ export async function compileMeasuredDiagramComponent(
     }
   };
   for (const node of component.nodes) collect(node.label, NODE_FONT_SIZE, 700);
+  for (const group of component.sequenceGroups ?? []) if (group.label) collect(group.label, ANNOTATION_FONT_SIZE, 700);
   if (component.annotation) collect(component.annotation, ANNOTATION_FONT_SIZE, 700);
   for (const edge of component.edges ?? []) if (edge.label) collect(edge.label, EDGE_FONT_SIZE, 400);
   await Promise.all([...requests.entries()].map(async ([key, request]) => {
@@ -452,31 +1016,40 @@ export async function compileMeasuredDiagramComponent(
   } });
 }
 
-export interface DiagramAllocation { width: number; height: number }
-
 /** Give the page author measured local choices before its single content call. */
 export async function measureDiagramAllocations(
   plan: DiagramPlan,
   textMeasure: import('./text-layout-compiler.js').TextMeasure,
+  bounds: DiagramAllocationBounds = {},
 ): Promise<DiagramAllocation[]> {
+  const left = bounds.left ?? 50;
+  const top = bounds.top ?? 140;
+  const maxWidth = Math.min(bounds.maxWidth ?? 900, 950 - left);
+  const maxHeight = Math.min(bounds.maxHeight ?? 512.5 - top, 512.5 - top);
+  const availableArea = { left, top, width: maxWidth, height: maxHeight };
+  if (!within(availableArea, { left: 50, top: 50, width: 900, height: 462.5 })
+    || !finitePositive(maxWidth) || !finitePositive(maxHeight)) fail('diagram allocation bounds must lie inside the safe slide area');
   const allocations: DiagramAllocation[] = [];
-  const heights = plan.topology === 'cycle' ? [220, 240, 260, 280, 300, 320, 340, 360] : [120, 160, 200, 240, 280, 320, 360];
+  const preferredHeights = plan.topology === 'cycle' ? [220, 240, 260, 280, 300, 320, 340, 360] : [120, 160, 200, 240, 280, 320, 360];
+  // The exact remaining height is a candidate too: the old 360px ceiling
+  // incorrectly rejected plans that fit between 360px and the safe bottom.
+  const heights = [...new Set([...preferredHeights.filter((height) => height <= maxHeight), maxHeight])].sort((a, b) => a - b);
   // Include full-width and side-by-side choices when the actual plan permits.
-  for (const width of [900, 700, 600, 440]) {
+  const widths = [...new Set([maxWidth, 900, 700, 600, 440, 360, 320, 280].filter((width) => width <= maxWidth))];
+  for (const width of widths) {
     for (const height of heights) {
       try {
-        await compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'planned-allocation', left: 50, top: 140, width, height }, textMeasure);
+        await compileMeasuredDiagram({ ...plan, type: 'diagram', id: 'planned-allocation', left, top, width, height }, textMeasure);
         allocations.push({ width, height });
         break;
       } catch (error) {
         // The first candidate can be shorter than the outside annotation's
         // measured text. That makes this rectangle infeasible, not the whole
         // teaching plan invalid; continue through the larger candidates.
-        if (!(error instanceof TextLayoutError)
-          && (!(error instanceof Error) || !error.message.startsWith('Invalid diagram component:'))) throw error;
+        if (!isDiagramFitError(error)) throw error;
       }
     }
   }
-  if (!allocations.length) fail('planned diagram has no feasible measured allocation below the page heading');
+  if (!allocations.length) throw new DiagramAllocationError('Invalid diagram component: planned diagram has no feasible measured allocation below the page heading', { availableArea });
   return allocations;
 }

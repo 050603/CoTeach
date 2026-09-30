@@ -181,6 +181,7 @@ describe('formal course teaching enhancement', () => {
     });
     expect(ai).toHaveBeenCalledOnce();
     expect(outlines.slice(0, 2).every(hasCompleteTeachingBrief)).toBe(true);
+    expect(outlines[0]?.keyPoints).toEqual(outlines[0]?.teachingBrief?.teachingPlan?.visibleContent);
     expect(outlines[2]?.teachingBrief?.examples).toEqual(['p1 的完整示例', 'p2 的完整示例']);
     expect(outlines[2]?.teachingBrief?.assessmentFocus).toContain('p1 的解释与应用');
   });
@@ -322,7 +323,7 @@ describe('formal course teaching enhancement', () => {
     })).rejects.toThrow('教学增强未完整生成');
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('页面2');
-    expect(ai).toHaveBeenCalledTimes(3);
+    expect(ai).toHaveBeenCalledTimes(2);
     expect(progress[0]).toBe('0/2');
     expect(progress.at(-1)).toBe('2/2');
   });
@@ -482,7 +483,9 @@ describe('adopted historical teaching contracts', () => {
     expect(prompt.user).toContain('examples、explanation、visibleContent 和 narrationFocus 直接写实际课堂内容');
     expect(prompt.user).toContain('不得出现“教材原例”“教学改编”“AI 补充”');
     expect(prompt.user).toContain('每页新增认识是否有充分解释支撑');
-    expect(prompt.user).toContain('完整基本定义');
+    expect(prompt.user).toContain('presentationContent');
+    expect(prompt.user).toContain('讲稿直接依据原始资料展开');
+    expect(prompt.user).toContain('不照读整段教材');
     expect(prompt.system).toContain('概念与区别可从熟悉对象');
     expect(prompt.system).not.toContain('相对稳定');
     expect(prompt.system).not.toContain('具体化');
@@ -520,6 +523,87 @@ describe('adopted historical teaching contracts', () => {
     expect(result[0]?.teachingBrief).toEqual(completed.teachingBrief);
     expect(result[1]?.teachingBrief?.sharedContext).toEqual(sharedContext);
     expect(result[1]?.teachingBrief?.pageTask).toBeUndefined();
+  });
+
+  it('prepares only the requested legacy display projection without replacing confirmed teaching facts', async () => {
+    const sourceDefinition = '只有来源彼此独立且直接涉及待查说法，多份记录才可构成交叉核验的依据。';
+    const brief = { schemaVersion: 1 as const, designVersion: TEACHING_ENHANCEMENT_VERSION,
+      sharedContext, teachingPlan: { ...teachingPlan, visibleContent: [sourceDefinition] },
+      explanation: sourceDefinition, examples: ['原先采用的完整案例'], conditions: ['直接涉及同一说法'],
+      evidence: [{ sourceId: 'book', quote: sourceDefinition }], assessmentFocus: '判断来源独立性与相关性' };
+    const completed = { ...page('p1', 0), keyPoints: [sourceDefinition], teachingBrief: brief };
+    const unstarted = { ...page('p2', 1), keyPoints: [sourceDefinition], teachingBrief: brief };
+    const presentationContent = ['独立且相关的记录支持交叉核验'];
+    const aiCall = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({ sharedContext,
+      pages: [{ outlineId: 'p2', explanation: '新草稿试图改写已确认解释', examples: ['另一个例子'],
+        conditions: [], assessmentFocus: '降低后的标准', evidenceQuotes: [],
+        teachingPlan: { ...teachingPlan, presentationContent } }] }));
+    const checkpoints: Array<Array<[string, unknown]>> = [];
+    const result = await enhanceTeachingBriefs({ outlines: [completed, unstarted],
+      presentationOutlineIds: ['p2'], requirement: '准确讲清核验', sourceContext: sourceDefinition, aiCall,
+      onSectionCompleted: (_section, _input, _model, entries) => { checkpoints.push(entries); } });
+    expect(aiCall).toHaveBeenCalledOnce();
+    expect(aiCall.mock.calls[0]?.[0]).toContain('本次只提炼实际展示的核心要点');
+    expect(aiCall.mock.calls[0]?.[0]).toContain('不要再把这些详细内容复制到 PPT');
+    expect(JSON.parse(aiCall.mock.calls[0]![1]).requiredOutputShape.pages[0])
+      .toEqual({ outlineId: 'p2', presentationContent: ['准确且可独立理解的核心短句'] });
+    expect(result[0]).toEqual(completed);
+    expect(result[1]?.keyPoints).toEqual(presentationContent);
+    expect(result[1]?.teachingBrief).toEqual({ ...brief,
+      teachingPlan: { ...brief.teachingPlan, presentationContent } });
+    expect(checkpoints[0]?.[0]?.[1]).toEqual(result[1]?.teachingBrief);
+    const restoredCall = vi.fn<AICallFn>();
+    const restored = await enhanceTeachingBriefs({ outlines: [completed, unstarted],
+      presentationOutlineIds: ['p2'], requirement: '准确讲清核验', sourceContext: sourceDefinition,
+      aiCall: restoredCall, loadSectionCheckpoint: () => checkpoints[0]! });
+    expect(restoredCall).not.toHaveBeenCalled();
+    expect(restored).toEqual(result);
+  });
+
+  it('accepts a display-only response while keeping the complete original teaching design', async () => {
+    const adopted = { ...page('p1', 0), teachingBrief: {
+      schemaVersion: 1 as const, designVersion: TEACHING_ENHANCEMENT_VERSION, sharedContext, teachingPlan,
+      explanation: '必须说明同源转载无法独立证实主张。', examples: ['两个网站转载同一条校史记录'],
+      conditions: ['记录需直接涉及同一说法'], evidence: [], assessmentFocus: '解释来源关系',
+    } };
+    const presentationContent = ['同源转载不能相互证实'];
+    const aiCall = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({
+      pages: [{ outlineId: 'p1', presentationContent }],
+    }));
+    const result = await enhanceTeachingBriefs({ outlines: [adopted], presentationOutlineIds: ['p1'],
+      requirement: '来源核验', aiCall });
+    expect(aiCall).toHaveBeenCalledOnce();
+    expect(result[0]?.teachingBrief).toEqual({ ...adopted.teachingBrief,
+      teachingPlan: { ...teachingPlan, presentationContent } });
+  });
+
+  it('uses the first wrapped display projection without asking for a replacement draft', async () => {
+    const adopted = { ...page('p1', 0), teachingBrief: {
+      schemaVersion: 1 as const, designVersion: TEACHING_ENHANCEMENT_VERSION, sharedContext, teachingPlan,
+      explanation: '多份独立且相关的记录支持交叉核验。', examples: ['已确认的校史对照案例'],
+      conditions: ['记录必须直接涉及主张'], evidence: [], assessmentFocus: '判断记录关系',
+    } };
+    const presentationContent = ['独立且相关的记录支持交叉核验', '同源转载无法构成独立证据'];
+    const aiCall = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({ output: {
+      pages: [{ outlineId: 'p1', presentationContent }],
+    } }));
+    const result = await enhanceTeachingBriefs({ outlines: [adopted], presentationOutlineIds: ['p1'],
+      requirement: '保持核验含义', aiCall });
+    expect(aiCall).toHaveBeenCalledOnce();
+    expect(result[0]?.teachingBrief).toEqual({ ...adopted.teachingBrief,
+      teachingPlan: { ...teachingPlan, presentationContent } });
+  });
+
+  it('rejects a foreign page projection rather than adopting it through the single-page fallback', async () => {
+    const adopted = { ...page('p1', 0), teachingBrief: {
+      schemaVersion: 1 as const, designVersion: TEACHING_ENHANCEMENT_VERSION, sharedContext, teachingPlan,
+      explanation: '已有说明', examples: [], conditions: [], evidence: [], assessmentFocus: '判断记录关系',
+    } };
+    const aiCall = vi.fn<AICallFn>().mockResolvedValue(JSON.stringify({
+      pages: [{ outlineId: 'another-real-page', presentationContent: ['别页的概念'] }],
+    }));
+    await expect(enhanceTeachingBriefs({ outlines: [adopted], presentationOutlineIds: ['p1'],
+      requirement: '保持页面归属', aiCall, retrySleep: async () => undefined })).rejects.toThrow('教学增强未完整生成');
   });
 
   it('adds supported missing case facts while preserving adopted wording and terms', () => {

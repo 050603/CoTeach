@@ -22,6 +22,51 @@ const outline: SceneOutline = {
 };
 
 describe('OutlinesEditor lesson script workspace', () => {
+  it('labels a flexible quiz as a range and keeps its generation contract when the teacher fixes the count', () => {
+    const onChange = vi.fn();
+    const quiz: SceneOutline = {
+      ...outline, id: 'section-check', type: 'quiz', title: '节末小测',
+      quizConfig: {
+        questionCount: 2, questionCountRange: { min: 2, max: 4 },
+        qualityContract: 'grounded-v1', coveragePolicy: 'section-synthesis',
+        difficulty: 'medium', questionTypes: ['single', 'multiple', 'matching'],
+        minShortAnswerQuestions: 0, maxShortAnswerQuestions: 0,
+      },
+    };
+    const props = {
+      onChange, onConfirm: vi.fn(), onBack: vi.fn(), hideHeader: true,
+      hideFooter: true, scriptWorkspace: true,
+    };
+    const { rerender } = render(
+      <I18nProvider locale="zh-CN"><OutlinesEditor {...props} outlines={[quiz]} /></I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /2–4 道题 · 动态/ }));
+    expect(screen.getByText('2–4 道题，生成时确定')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '配对题' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: '简答' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '情境任务' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '改为指定题数' }));
+    const changed = (onChange.mock.lastCall?.[0] as SceneOutline[])[0]!;
+    expect(changed.quizConfig).toMatchObject({
+      questionCount: 2, questionCountRange: { min: 2, max: 2 },
+      qualityContract: 'grounded-v1', coveragePolicy: 'section-synthesis',
+      questionTypes: ['single', 'multiple', 'matching'],
+    });
+
+    rerender(<I18nProvider locale="zh-CN"><OutlinesEditor {...props} outlines={[changed]} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Increase' }));
+    expect((onChange.mock.lastCall?.[0] as SceneOutline[])[0]?.quizConfig).toMatchObject({
+      questionCount: 3, questionCountRange: { min: 3, max: 3 },
+    });
+
+    rerender(
+      <I18nProvider locale="zh-CN"><OutlinesEditor {...props} outlines={[{
+        ...quiz, quizConfig: { ...quiz.quizConfig!, questionCount: 3, generatedQuestionCount: 3 },
+      }]} /></I18nProvider>,
+    );
+    expect(screen.getByRole('button', { name: /实际 3 道题/ })).toBeTruthy();
+  });
+
   it('numbers knowledge sections in outline order and uses their topics as headings', () => {
     const page = { type: 'slide' as const, description: '', keyPoints: [], order: 1, stageLabel: '知识讲授' };
     const sectionOutlines = [

@@ -5,7 +5,7 @@ import {
 } from './generated-output-retry';
 
 describe('generated output retry policy', () => {
-  it('retries malformed completed output and then returns the usable artifact', async () => {
+  it('keeps malformed first output as a failure without a second authoring call', async () => {
     const operation = vi.fn()
       .mockRejectedValueOnce(invalidGeneratedOutput(new Error('invalid JSON'), 'outline'))
       .mockResolvedValueOnce({ sections: [] });
@@ -15,8 +15,8 @@ describe('generated output retry policy', () => {
       maxRetries: 2,
       sleep: async () => undefined,
       onRetry: () => undefined,
-    })).resolves.toEqual({ sections: [] });
-    expect(operation).toHaveBeenCalledTimes(2);
+    })).rejects.toThrow('invalid JSON');
+    expect(operation).toHaveBeenCalledTimes(1);
   });
 
   it('does not retry semantic or quality findings', async () => {

@@ -22,11 +22,16 @@ import {
 import { findUnresolvedClassroomMedia } from "@/lib/openmaic/server/classroom-media-generation";
 import { isMediaPlaceholder } from "@/lib/openmaic/store/media-generation";
 import { resolveDurableCourseSceneOutlines } from "@/lib/course-generation/course-resource-outlines";
+import { resolveCourseTextbookFigures, hydrateCourseEvidenceFigureReferences } from "@/lib/textbook/course-evidence";
+import { resolveCourseSourceSequenceContracts } from "@/lib/textbook/course-evidence-types";
+import { findBlueprintFigureSequenceIssues, findKnowledgeSourceSequenceIssues,
+  inspectFigureSequence, type FigureSequenceContract } from "@/lib/textbook/course-visual-binding";
+import { sourceSequenceSlideContent } from "./source-content-acceptance";
 import { userFacingName } from "@/lib/user-facing-labels";
 
 export type CourseResourceIssue = {
   id: string;
-  type: "classroom" | "adaptive-resource" | "teaching-tool" | "tts" | "media" | "speech-sync";
+  type: "classroom" | "adaptive-resource" | "teaching-tool" | "tts" | "media" | "speech-sync" | "source-consistency";
   title: string;
   detail: string;
 };
@@ -255,22 +260,93 @@ async function auditClassroomFiles(
   return { tts, media };
 }
 
+type ResourceAuditOutline = NonNullable<Course["content"]["_openmaicSceneOutlines"]>[number];
+type SequenceContentGroup = NonNullable<Parameters<typeof inspectFigureSequence>[0]["contentGroups"]>[number];
+
+function outlineSequenceContent(outline: ResourceAuditOutline): SequenceContentGroup[] {
+  return [{
+    statements: [outline.description, outline.teachingObjective, ...(outline.keyPoints ?? []),
+      outline.visualIntent?.observationGoal, outline.visualIntent?.rationale,
+      outline.visualIntent?.diagram?.annotation].filter((value): value is string => Boolean(value)),
+    diagramLabels: outline.visualIntent?.diagram?.nodes.map((node) => node.label),
+  }, {
+    statements: [outline.teachingBrief?.explanation, ...(outline.teachingBrief?.teachingPlan?.visibleContent ?? [])]
+      .filter((value): value is string => Boolean(value)),
+  }];
+}
+
+function sceneSequenceContent(
+  scene: PersistedClassroomData["scenes"][number],
+  includeDiagramLabels = false,
+): SequenceContentGroup {
+  const elements = scene.content?.type === "slide" ? scene.content.canvas.elements : [];
+  const visible = sourceSequenceSlideContent({ elements }, includeDiagramLabels);
+  return {
+    ...visible,
+    statements: [
+      ...visible.statements,
+      ...(scene.actions ?? []).flatMap((action) => action.type === "speech" ? [action.text] : []),
+    ],
+  };
+}
+
+function sceneMatchesOutlineIds(scene: PersistedClassroomData["scenes"][number], ids: ReadonlySet<string>): boolean {
+  const sceneOutlineId = scene.outlineId ?? scene.id;
+  return [...ids].some((id) => sceneOutlineId === id
+    || (sceneOutlineId.startsWith(`${id}--continuation-`)
+      && /^\d+$/.test(sceneOutlineId.slice(`${id}--continuation-`.length))));
+}
+
 async function auditRequiredTextbookImages(
   course: Course,
   outlines: NonNullable<Course["content"]["_openmaicSceneOutlines"]>,
   classroom: PersistedClassroomData,
 ): Promise<CourseResourceIssue[]> {
   const pages = course.content.teachingBlueprint?.sections.flatMap((section) => section.pages) ?? [];
-  const required = pages.flatMap((page) => (page.resourceNeeds ?? []).flatMap((need) => (
+  const completeEvidence = course.content.courseEvidence
+    ? { ...course.content.courseEvidence,
+      items: await hydrateCourseEvidenceFigureReferences(course.content.courseEvidence.items) }
+    : undefined;
+  const resources = completeEvidence?.items?.some((item) => item.source?.revisionId)
+    ? await resolveCourseTextbookFigures(completeEvidence, course.content.knowledgePoints)
+    : [];
+  const sourceContracts = resolveCourseSourceSequenceContracts(completeEvidence,
+    course.content.knowledgePoints ?? []);
+  const sequenceContracts: FigureSequenceContract[] = [...resources.map((resource) => ({
+    resourceId: resource.id, required: resource.required, knowledgePointIds: resource.knowledgePointIds,
+    orderedSteps: resource.orderedSteps,
+  })), ...sourceContracts];
+  const declared = pages.flatMap((page) => (page.resourceNeeds ?? []).flatMap((need) => (
     need.required && need.kind === "source-image" && need.assetId
-      ? [{ page, need }]
+      ? [{ pageId: page.outlineId ?? page.id, assetId: need.assetId }]
       : []
   )));
-  if (!required.length) return [];
-
-  const figureIds = [...new Set(course.content.courseEvidence?.items.flatMap((item) => (
+  const required = [...declared];
+  const evidenceRequiredIds = new Set(resources.filter((item) => item.required).map((item) => item.id));
+  const missingPlacementIssues: CourseResourceIssue[] = [];
+  for (const resource of resources.filter((item) => item.required)) {
+    // The source evidence chooses the teaching page. A stale or misplaced
+    // resourceNeed cannot redefine that responsibility during the final audit.
+    const blueprintTarget = pages.find((page) => page.type === "slide"
+      && page.knowledgePointIds.some((id) => resource.knowledgePointIds.includes(id)));
+    const outlineTarget = outlines.find((outline) => outline.type === "slide"
+      && outline.knowledgePointIds?.some((id) => resource.knowledgePointIds.includes(id)));
+    const pageId = blueprintTarget?.outlineId ?? blueprintTarget?.id
+      ?? (outlineTarget ? (typeof outlineTarget.spatialParentId === "string"
+        ? outlineTarget.spatialParentId : outlineTarget.id) : undefined);
+    for (let index = required.length - 1; index >= 0; index -= 1) {
+      if (required[index]?.assetId === resource.id) required.splice(index, 1);
+    }
+    if (pageId) required.push({ pageId, assetId: resource.id });
+    else missingPlacementIssues.push({
+      id: `media:source-image:unassigned:${resource.id}`,
+      type: "media", title: "指定教材图片",
+      detail: "教材证据要求使用原图，但教学蓝图和大纲均缺少对应知识讲解页",
+    });
+  }
+  const figureIds = [...new Set([...resources.map((resource) => resource.figureId), ...(course.content.courseEvidence?.items.flatMap((item) => (
     item.figureRefs?.map((reference) => reference.figureId) ?? item.figureIds ?? []
-  )) ?? [])];
+  )) ?? [])])];
   const figures = figureIds.length ? await prisma.textbookFigure.findMany({
     where: { id: { in: figureIds } },
     select: { id: true, fileAssetId: true, status: true },
@@ -281,35 +357,116 @@ async function auditRequiredTextbookImages(
   ]));
   const outlineIdsByParent = new Map<string, Set<string>>();
   for (const outline of outlines) {
-    const parentId = typeof outline.spatialParentId === "string" && outline.spatialParentId
-      ? outline.spatialParentId : outline.id;
-    const ids = outlineIdsByParent.get(parentId) ?? new Set<string>();
-    ids.add(outline.id);
-    outlineIdsByParent.set(parentId, ids);
+    for (const parentId of new Set([outline.id, outline.spatialParentId, ...(outline.sourcePageIds ?? [])]
+      .filter((id): id is string => typeof id === "string" && Boolean(id)))) {
+      const ids = outlineIdsByParent.get(parentId) ?? new Set<string>();
+      ids.add(outline.id);
+      outlineIdsByParent.set(parentId, ids);
+    }
   }
 
-  return required.flatMap(({ page, need }): CourseResourceIssue[] => {
-    const outlineIds = outlineIdsByParent.get(page.outlineId ?? page.id);
-    // Missing pages are handled by the content review. This also keeps a
-    // single-section test from auditing resource plans outside its scope.
-    if (!outlineIds?.size) return [];
-    const pageScenes = classroom.scenes.filter((scene) => outlineIds.has(scene.outlineId ?? scene.id));
-    if (!pageScenes.length) return [];
-    const figure = figureByResourceId.get(need.assetId!);
+  const imageIssues = (await Promise.all(required.map(async ({ pageId, assetId }): Promise<CourseResourceIssue | null> => {
+    const outlineIds = outlineIdsByParent.get(pageId);
+    // A source-derived requirement must fail independently when its target
+    // page disappears; older declaration-only plans retain their prior scope.
+    if (!outlineIds?.size) return evidenceRequiredIds.has(assetId) ? {
+      id: `media:source-image:${pageId}:${assetId}`, type: "media", title: "指定教材图片",
+      detail: "指定教材原图的讲解页不在当前课程大纲中",
+    } : null;
+    const pageScenes = classroom.scenes.filter((scene) => sceneMatchesOutlineIds(scene, outlineIds));
+    if (!pageScenes.length) return {
+      id: `media:source-image:${pageId}:${assetId}`, type: "media", title: "指定教材图片",
+      detail: "指定教材原图的课堂页面尚未生成",
+    };
+    const figure = figureByResourceId.get(assetId);
     const expectedSrc = figure ? `${UPLOAD_MEDIA_PREFIX}${figure.fileAssetId}` : undefined;
     const present = expectedSrc && pageScenes.some((scene) => scene.content?.type === "slide"
       && scene.content.canvas.elements.some((element) => element.type === "image"
         && element.src === expectedSrc));
-    if (present && figure?.status === "AVAILABLE") return [];
-    return [{
-      id: `media:source-image:${page.id}:${need.assetId}`,
+    if (present && figure?.status === "AVAILABLE" && (await checkResourceIntegrity(expectedSrc!, "image")).ok) return null;
+    return {
+      id: `media:source-image:${pageId}:${assetId}`,
       type: "media",
       title: "指定教材图片",
       detail: !figure || figure.status !== "AVAILABLE"
         ? "绑定的教材原图记录不可用"
         : "指定的教材原图未进入对应课堂页面",
-    }];
+    };
+  }))).filter((issue): issue is CourseResourceIssue => Boolean(issue));
+  const sequenceIssues: CourseResourceIssue[] = [];
+  const blueprintIssues = course.content.teachingBlueprint
+    ? findBlueprintFigureSequenceIssues(course.content.teachingBlueprint, sequenceContracts)
+    : [];
+  const sourceContractIds = new Set(sourceContracts.map((contract) => contract.resourceId));
+  for (const issue of blueprintIssues) {
+    const isSourceList = sourceContractIds.has(issue.resourceId);
+    sequenceIssues.push({
+      id: `content:source-sequence:${issue.pageId}:${issue.resourceId}:blueprint`,
+      type: "source-consistency", title: isSourceList ? "教材完整步骤" : "教材流程步骤",
+      detail: `教学蓝图与${isSourceList ? "教材原文" : "教材原图"}不一致：${issue.detail}`,
+    });
+  }
+  for (const resource of resources.filter((item) => item.required && item.orderedSteps?.length)) {
+    const target = outlines.find((outline) => outline.type === "slide"
+      && outline.generationPurpose === "knowledge-teaching"
+      && outline.knowledgePointIds?.some((id) => resource.knowledgePointIds.includes(id)));
+    if (!target) continue;
+    const relatedSequences = sequenceContracts.filter((contract) => contract.required
+      && target.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
+    const outlineProblems = inspectFigureSequence({ orderedSteps: resource.orderedSteps!,
+      statements: [], contentGroups: outlineSequenceContent(target),
+      relatedSequences, requireCompleteText: true });
+    if (outlineProblems.length) sequenceIssues.push({
+      id: `content:source-sequence:${target.id}:${resource.id}:outline`,
+      type: "source-consistency", title: "教材流程步骤",
+      detail: `课程大纲与教材原图不一致：${outlineProblems.join("；")}`,
+    });
+    const parentId = typeof target.spatialParentId === "string" ? target.spatialParentId : target.id;
+    const pageIds = outlineIdsByParent.get(parentId) ?? new Set([target.id]);
+    const scenes = classroom.scenes.filter((scene) => sceneMatchesOutlineIds(scene, pageIds));
+    const sceneProblems = inspectFigureSequence({ orderedSteps: resource.orderedSteps!,
+      statements: [], contentGroups: scenes.map((scene) => sceneSequenceContent(scene, true)), relatedSequences });
+    if (sceneProblems.length) sequenceIssues.push({
+      id: `content:source-sequence:${target.id}:${resource.id}:classroom`,
+      type: "source-consistency", title: "教材流程步骤",
+      detail: `课堂页面或讲解与教材原图不一致：${sceneProblems.join("；")}`,
+    });
+  }
+  for (const [index, issue] of findKnowledgeSourceSequenceIssues(course.content.knowledgePoints ?? [],
+    completeEvidence).entries()) sequenceIssues.push({
+    id: `content:source-sequence:knowledge:${index}`,
+    type: "source-consistency", title: "教材完整步骤", detail: issue,
   });
+  for (const contract of sourceContracts) {
+    const targets = outlines.filter((outline) => outline.type === "slide"
+      && outline.generationPurpose === "knowledge-teaching"
+      && outline.knowledgePointIds?.some((id) => contract.knowledgePointIds.includes(id)));
+    if (!targets.length) continue;
+    const relatedSequences = sequenceContracts.filter((related) => related.required
+      && targets.some((target) => target.knowledgePointIds?.some((id) => related.knowledgePointIds.includes(id))));
+    const outlineProblems = inspectFigureSequence({ orderedSteps: contract.orderedSteps,
+      statements: [], contentGroups: targets.flatMap(outlineSequenceContent), relatedSequences,
+      sequenceSemantics: contract.sequenceSemantics, requireCompleteText: true });
+    if (outlineProblems.length) sequenceIssues.push({
+      id: `content:source-sequence:${targets[0]!.id}:${contract.resourceId}:outline`,
+      type: "source-consistency", title: "教材完整步骤",
+      detail: `课程大纲与教材原文不一致：${outlineProblems.join("；")}`,
+    });
+    const sceneIds = new Set(targets.flatMap((target) => [
+      ...(outlineIdsByParent.get(typeof target.spatialParentId === "string"
+        ? target.spatialParentId : target.id) ?? []), target.id,
+    ]));
+    const scenes = classroom.scenes.filter((scene) => sceneMatchesOutlineIds(scene, sceneIds));
+    const sceneProblems = inspectFigureSequence({ orderedSteps: contract.orderedSteps,
+      statements: [], contentGroups: scenes.map((scene) => sceneSequenceContent(scene)), relatedSequences,
+      sequenceSemantics: contract.sequenceSemantics, requireCompleteText: true });
+    if (sceneProblems.length) sequenceIssues.push({
+      id: `content:source-sequence:${targets[0]!.id}:${contract.resourceId}:classroom`,
+      type: "source-consistency", title: "教材完整步骤",
+      detail: `课堂页面或讲解与教材原文不一致：${sceneProblems.join("；")}`,
+    });
+  }
+  return [...missingPlacementIssues, ...imageIssues, ...sequenceIssues];
 }
 
 export async function auditCourseGeneratedResources(

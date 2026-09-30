@@ -96,8 +96,16 @@ describe('assessment teaching dependencies', () => {
   it('supplies the same-section actual speech and the immediate next teaching opening to quiz narration', () => {
     const current = taught(page('current', { lectureSectionId: 'section-a', order: 2 }), '抽样方式决定谁有机会进入样本。');
     const previous = taught(page('old', { lectureSectionId: 'section-before', order: 1 }), '另一节的讲稿');
-    const next = taught(page('next', { lectureSectionId: 'section-b', order: 4,
-      teachingBrief: { teachingPlan: { newContent: '用对照条件判断因果' } } as SceneOutline['teachingBrief'],
+    const next = taught(page('next', { lectureSectionId: 'section-b', lectureSectionTitle: '设计可靠的实验', order: 4,
+      teachingObjective: '说明对照条件如何排除其他解释',
+      teachingBrief: {
+        schemaVersion: 1,
+        sharedContext: { learningPurpose: '用实验设计判断因果', caseId: '', caseFacts: [], fixedWording: [], stableTerms: [], conceptBoundaries: [] },
+        teachingPlan: { purpose: '', priorKnowledge: '', newContent: '用对照条件判断因果', learnerQuestion: '',
+          reasoningSteps: [], takeaway: '', visibleContent: [], narrationFocus: [],
+          entryPoint: { kind: 'continuation', object: '相关不等于因果', bridge: '需要排除同时变化的其他条件' } },
+        explanation: '', examples: [], conditions: [], evidence: [], assessmentFocus: '',
+      },
     }), '接下来先看怎样控制其他因素。');
     const later = taught(page('later', { lectureSectionId: 'section-b', order: 5 }), '不能代替第一屏');
     const context = JSON.parse(buildQuizNarrationContext(quiz, [later, current, previous, next], [
@@ -107,8 +115,12 @@ describe('assessment teaching dependencies', () => {
     expect(context.precedingSection.map((item: { pageId: string }) => item.pageId)).toEqual(['current']);
     expect(context.precedingSection[0].actualNarration).toEqual(['抽样方式决定谁有机会进入样本。']);
     expect(context.nextPage).toMatchObject({
-      title: 'next', newContent: '用对照条件判断因果', actualOpening: '接下来先看怎样控制其他因素。',
+      title: 'next', sectionTitle: '设计可靠的实验', learningPurpose: '用实验设计判断因果',
+      teachingObjective: '说明对照条件如何排除其他解释',
+      entryPoint: { object: '相关不等于因果', bridge: '需要排除同时变化的其他条件' },
+      newContent: '用对照条件判断因果', actualOpening: '接下来先看怎样控制其他因素。',
     });
+    expect(context.currentSection).toMatchObject({ learningPurpose: '判断一条说法能否采用', assessmentFocus: '说明判断理由' });
     expect(JSON.stringify(context)).not.toContain('不能代替第一屏');
   });
 

@@ -1,4 +1,5 @@
 import type { PPTElement, PPTShapeElement, PPTTextElement } from '@openmaic/dsl';
+import { resolveAuthoringContent, type AuthoringContentItem, type AuthoringContentReference } from './authoring-content.js';
 
 /** The layout compiler uses the same typography as BaseTextElement. */
 export const TEXT_LAYOUT_FONT = 'Noto Sans SC' as const;
@@ -53,7 +54,7 @@ interface ComponentBox {
   height?: number;
 }
 
-export interface TextBoxComponent extends ComponentBox {
+export interface TextBoxComponent extends ComponentBox, AuthoringContentReference {
   kind: 'textBox';
   /** Explicit hard vertical limit, when a neighboring visual reserves the space below. */
   maxHeight?: number;
@@ -496,12 +497,14 @@ export async function measureLabelGrid(component: LabelGridComponent, textMeasur
 export async function compileTextComponents(
   components: readonly TextLayoutComponent[],
   textMeasure: TextMeasure,
+  options: { authoringContent?: readonly AuthoringContentItem[] } = {},
 ): Promise<PPTElement[]> {
   if (!Array.isArray(components)) throw new TextLayoutError('components must be an array');
   if (typeof textMeasure !== 'function') throw new TextLayoutError('textMeasure is required');
   const measure = createMeasurer(textMeasure);
   const elements: PPTElement[] = [];
-  for (const [index, rawComponent] of components.entries()) {
+  const resolved = options.authoringContent ? resolveAuthoringContent(components, options.authoringContent) : components;
+  for (const [index, rawComponent] of resolved.entries()) {
     const component = { ...rawComponent, id: rawComponent.id ?? `component-${index}` };
     if (component?.kind === 'textBox') {
       elements.push(...(await compileTextBox(component, measure)));
@@ -584,9 +587,47 @@ export async function compileNativeTextLayout(elements: PPTElement[], measure: T
       // Browser glyph bounds can exceed a model's box by a fraction of one
       // line. Grow that box in its available space before rejecting the page.
       const maxHeightGrowth = element.type === 'text' ? Math.min(16, Math.ceil(spec.fontSize / 2)) : 0;
-      const result = await measureNativeHtml(html, element, spec, measure, maxHeightGrowth);
+      let resolvedWidth = element.width;
+      let result: Awaited<ReturnType<typeof measureNativeHtml>>;
+      try {
+        result = await measureNativeHtml(html, element, spec, measure, maxHeightGrowth);
+      } catch (error) {
+        if (element.type !== 'text' || element.rotate !== 0 || !(error instanceof TextLayoutError)
+          || !/single-character wrapped line/.test(error.message)) throw error;
+        let repaired: Awaited<ReturnType<typeof measureNativeHtml>> | undefined;
+        const overlapsForeground = (width: number, height: number) => elements.some((other) => {
+          if (other === element || other.type === 'line') return false;
+          const whollyContains = other.left <= element.left && other.top <= element.top
+            && other.left + other.width >= element.left + width
+            && other.top + other.height >= element.top + height;
+          if (whollyContains) return false;
+          return element.left < other.left + other.width - 0.5
+            && element.left + width > other.left + 0.5
+            && element.top < other.top + other.height - 0.5
+            && element.top + height > other.top + 0.5;
+        });
+        for (let width = element.width + 16; element.left + width <= 950; width += 16) {
+          const candidate = { ...element, width };
+          // Width collisions cannot improve as the box grows. Height
+          // collisions may improve if widening removes a wrapped line.
+          if (overlapsForeground(width, element.height)) break;
+          try {
+            const measured = await measureNativeHtml(html, candidate, spec, measure, maxHeightGrowth);
+            const height = Math.max(element.height, Math.ceil(measured.requiredHeight));
+            if (element.top + height > 562.5 || overlapsForeground(width, height)) continue;
+            repaired = measured;
+            resolvedWidth = width;
+            break;
+          } catch (candidateError) {
+            if (!(candidateError instanceof TextLayoutError)) throw candidateError;
+          }
+        }
+        if (!repaired) throw error;
+        result = repaired;
+      }
       if (element.type === 'text') return {
         ...element,
+        width: resolvedWidth,
         content: result.content,
         height: Math.max(element.height, Math.ceil(result.requiredHeight)),
       };

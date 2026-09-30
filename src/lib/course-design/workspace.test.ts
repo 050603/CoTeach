@@ -77,4 +77,22 @@ describe("course design workspace dependencies", () => {
       candidateScenes: [],
     })).toBeNull();
   });
+
+  it("keeps continuation pages and their resources when merging a bounded update", () => {
+    const merged = mergeCourseDesignClassroomScenes({
+      outlineIds: ["project", "other"], affectedOutlineIds: ["project"],
+      baseScenes: [
+        { id: "old-project", outlineId: "project" },
+        { id: "old-other", outlineId: "other" },
+        { id: "old-other-continuation", outlineId: "other--continuation-2" },
+      ],
+      candidateScenes: [
+        { id: "new-project", outlineId: "project" },
+        { id: "new-figure", outlineId: "project--continuation-2" },
+      ],
+    });
+    expect(merged?.map((scene) => scene.id)).toEqual([
+      "new-project", "new-figure", "old-other", "old-other-continuation",
+    ]);
+  });
 });

@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { buildOutlinePrompt as buildUpstreamOutlinePrompt } from '@openmaic/generation';
 import type { SceneOutline } from '@openmaic/lib/types/generation';
+import { closeSpatialMeasurementBrowser, measureAuthoredSlideText } from './slide-spatial-measurement';
+import { adoptedPageAuthoringContent } from './adopted-page-content';
 import {
   adaptOutlineToOpenMaicBaseline,
   adaptOutlineToOpenMaicWorkbenchContent,
@@ -45,6 +47,8 @@ const outline: SceneOutline = {
     assessmentFocus: '判断抽样过程是否存在选择偏差。',
   },
 };
+
+afterAll(async () => { await closeSpatialMeasurementBrowser(); });
 
 describe('pinned OpenMAIC generation baseline', () => {
   it('pins the adaptive content prompts and records the in-place action-prompt improvement', async () => {
@@ -195,6 +199,96 @@ describe('pinned OpenMAIC generation baseline', () => {
     expect(`${system}\n${user}`).not.toContain('targetDurationSec');
     expect(`${system}\n${user}`).not.toContain('spatial budget');
   });
+
+  it.each(['text', 'table', 'chart', 'illustration'] as const)(
+    'keeps a %s preference free of diagram requirements when the continuation owns no diagram', async (preferredForm) => {
+      const point = '随机抽样用于减少选择偏差。';
+      const page: SceneOutline = {
+        ...outline, id: 'diagram-source--capacity-2', sourcePageIds: ['diagram-source'], spatialParentId: 'diagram-source',
+        audience: 'student', generationPurpose: 'knowledge-teaching',
+        visualIntent: { representation: 'text', observationGoal: point },
+        teachingBrief: { ...outline.teachingBrief!, teachingPlan: {
+          purpose: '解释随机抽样的意义', priorKnowledge: '知道总体和样本', newContent: point,
+          learnerQuestion: '怎样减少选择偏差', reasoningSteps: ['明确总体', '说明随机抽样'], takeaway: point,
+          visibleContent: [point], presentationContent: [point], narrationFocus: ['解释为何随机选择有助于减少偏差'],
+          visualRelationship: { kind: 'statement', description: point, readingOrder: [point], preferredForm,
+            rationale: '依据本页实际内容选择清晰的表达方式' },
+        } },
+      };
+      const failure = vi.fn();
+      const ai = vi.fn().mockResolvedValue(JSON.stringify({ components: [
+        { kind: 'textBox', left: 60, top: 140, width: 880, fontSize: 24, paragraphRefs: ['adopted-content-1'] },
+      ] }));
+      const slide = await generateOpenMaicBaselineContent(page, ai, {
+        componentAuthoring: true, onFailure: failure,
+        textMeasure: ({ text, fontSize, padding, lineHeight }) => ({ naturalWidth: [...text].length * fontSize,
+          height: padding * 2 + fontSize * lineHeight, lines: [text] }),
+      });
+      expect(ai).toHaveBeenCalledOnce();
+      expect(failure).not.toHaveBeenCalled();
+      expect(slide && 'elements' in slide ? slide.elements.filter((element) => element.type === 'line') : []).toHaveLength(0);
+      expect(slide && 'elements' in slide ? slide.elements.some((element) => element.type === 'text' && element.content.includes(point)) : false).toBe(true);
+      const [system, user] = ai.mock.calls[0];
+      expect(user).toContain(`"preferredForm":"${preferredForm}"`);
+      expect(system).toContain('There is no requirement to use a certain number of formats');
+      expect(user).not.toContain('exactly one local diagram component for this authoritative relationship');
+      expect(user).not.toContain('Measured feasible diagram rectangles');
+      expect(adaptOutlineToOpenMaicBaseline(page).visualIntent?.diagram).toBeUndefined();
+    });
+
+  it('compiles concise adopted points in the first call while keeping the original source independent', async () => {
+    const clauses = [
+      '选择探究材料时，需要同时保留正例、反例和适用条件。',
+      '设计实验任务时，要依据学生的认知能力调整难度与复杂程度。',
+      '开展实践活动时，需要引导学生同步分析安全与伦理问题。',
+    ];
+    const points = ['保留正例、反例与适用条件', '依据认知能力调整任务难度与复杂程度', '实践中同步分析安全与伦理'];
+    const page: SceneOutline = {
+      ...outline,
+      keyPoints: ['探究材料、实验任务和实践活动的设计'],
+      generationPurpose: 'knowledge-teaching',
+      teachingBrief: {
+        ...outline.teachingBrief!,
+        designVersion: 'teaching-blueprint-v3-compiled-v12-learning-boundary',
+        teachingPlan: {
+          purpose: '完整执行三个设计要求', priorKnowledge: '已知探究活动的目的',
+          newContent: '材料、任务与实践的约束', learnerQuestion: '怎样保留完整条件',
+          reasoningSteps: [], takeaway: '依据条件设计活动', visibleContent: clauses,
+          presentationContent: points,
+          narrationFocus: ['用具体实例解释每条约束的作用'],
+        },
+      },
+    };
+    // The original passage is not canvas copy. The first response compiles
+    // only the already adopted, accurate presentation points.
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [], components: [{
+      kind: 'textBox', id: 'adopted-source-text', role: 'body', left: 60, top: 140,
+      width: 880, height: 240, fontSize: 22,
+      paragraphRefs: adoptedPageAuthoringContent(page).map((item) => item.id),
+    }] }));
+    const { generateSceneContent } = await import('./scene-generator');
+    const generated = await generateSceneContent(page, ai, {
+      componentAuthoring: true, textMeasure: measureAuthoredSlideText,
+    });
+
+    expect(generated && 'elements' in generated).toBe(true);
+    expect(ai).toHaveBeenCalledOnce();
+    const [system, user] = ai.mock.calls[0];
+    for (const clause of clauses) expect(user).toContain(clause);
+    expect(user).toContain('it need not reproduce the book sentence');
+    expect(user).toContain('original-source channel for narration');
+    expect(user).toContain('do not derive, rewrite, shorten or expand them again');
+    expect(user).not.toContain('Derive accurate presentation points directly from these original sources');
+    expect(user.lastIndexOf('Current page first-draft decisions')).toBeGreaterThan(user.lastIndexOf('Original teaching sources for this page'));
+    expect(system).toContain('# Slide Content Generator');
+    expect(system).toContain('definitions need not appear verbatim on the slide');
+    expect(`${system}\n${user}`).not.toContain('kp-private-id');
+    const visible = generated && 'elements' in generated ? generated.elements.flatMap((element) =>
+      element.type === 'text' ? [element.content.replace(/<[^>]+>/g, '')] : []).join('\n') : '';
+    for (const point of points) expect(visible).toContain(point);
+    for (const clause of clauses) expect(visible).not.toContain(clause);
+    expect(visible).not.toContain('adopted-content-');
+  }, 20_000);
 
   it('keeps stale local visual directions out of the official first-draft boundary', async () => {
     const adapted = adaptOutlineToOpenMaicWorkbenchContent({

@@ -102,12 +102,23 @@ export interface VisualResourceReference {
 }
 
 /** A semantic relationship selected during instructional planning. Geometry is added at slide authoring time. */
+export interface DiagramSequenceGroup {
+  id: string;
+  label?: string;
+  /** An independent ordered chain. Every diagram node belongs to exactly one group. */
+  nodeIds: string[];
+}
+
 export interface DiagramPlan {
-  topology: 'sequence' | 'cycle';
-  /** Reading order; a cycle also closes from the last node to the first. */
+  topology: 'sequence' | 'cycle' | 'branch';
+  /** Reading order; a cycle also closes from the last node to the first.
+   * Branch placement follows explicit connections while retaining these IDs and labels. */
   nodes: Array<{ id: string; label: string }>;
-  /** Directed relationships. Adjacent edges may be omitted and are then inferred. */
+  /** Directed relationships. Sequence/cycle adjacency may be inferred.
+   * A branch requires explicit edges forming one rooted, connected DAG; no edges are inferred. */
   edges?: Array<{ from: string; to: string; label?: string }>;
+  /** Parallel ordered chains in one diagram. Never infer a transition between groups. */
+  sequenceGroups?: DiagramSequenceGroup[];
   /** Explains the whole diagram; it is never a step or an edge. */
   annotation?: string;
 }

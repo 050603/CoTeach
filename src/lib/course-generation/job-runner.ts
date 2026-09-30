@@ -4,8 +4,11 @@ import { readFile } from "node:fs/promises";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import type { CourseGenerationJob } from "@/lib/course-generation/job-storage";
-import { COURSE_FINALIZATION_STEP, loadGenerationCheckpoints, saveGenerationCheckpoint, resetGenerationCheckpoints, resetPreparedOutlinesCheckpoint, countGenerationPageCheckpoints } from "./checkpoint-storage";
+import { COURSE_FINALIZATION_STEP, loadGenerationCheckpoints, saveGenerationCheckpoint, saveSourceNarrationBaselineCheckpoint, resetGenerationCheckpoints, resetPreparedOutlinesCheckpoint, countGenerationPageCheckpoints } from "./checkpoint-storage";
 import { contentGenerationJobs } from "@/lib/course-generation/job-storage";
+import { AUTHORING_RESPONSE_PREFIX, restoreAuthoringResponse, type AuthoringResponseCheckpoint } from './authoring-checkpoints';
+import { COURSE_FIRST_PASS_CONTRACT_VERSION } from './first-pass-policy';
+import { planFailedStageRegeneration } from './failed-stage-regeneration';
 import { createLogger } from "@openmaic/lib/logger";
 import {
   generateClassroom,
@@ -24,20 +27,26 @@ import {
   isAbortError,
 } from "@openmaic/lib/generation/generation-retry";
 import { getCourse, updateCourse } from "@/lib/session/server-store";
+import { resolveCourseTextbookFigures, hydrateCourseEvidenceFigureReferences } from "@/lib/textbook/course-evidence";
+import { assertRequiredTextbookFiguresAvailable, bindRequiredTextbookFiguresToOutlines,
+  assertSourceSequencesInOutlines, type FigureSequenceContract } from "@/lib/textbook/course-visual-binding";
+import { resolveCourseSourceSequenceContracts } from "@/lib/textbook/course-evidence-types";
 import { hasExactKnowledgeLecturePageBudget, isNewSystemAiTimingPlan } from "@/lib/classroom/new-system-course";
 import {
   adaptiveBranchGenerationSignature,
   selectAdaptiveBranchesForGeneration,
 } from "@/lib/teacher/adaptive-resource-generation";
-import type { SceneOutline } from "@/lib/openmaic/types/generation";
+import type { GeneratedSlideContent, SceneOutline } from "@/lib/openmaic/types/generation";
 import type { AssessmentMode } from "@/lib/openmaic/types/generation";
 import { runWithCourseGenerationLlmContext } from "@/lib/course-generation/llm-concurrency";
 import type { Scene } from "@openmaic/lib/types/stage";
 import {
+  canReplayInterruptedSceneStageAttempt,
   fingerprintSceneOutline,
   fingerprintGenerationValue,
   restoreSceneCheckpoint,
   restoreSceneStageAttemptCount,
+  migrateSceneStageAttemptInputFingerprint,
   restoreSceneStageCheckpoint,
   SCENE_STAGE_CHECKPOINT_VERSION,
   type PageCheckpointSnapshot,
@@ -46,10 +55,19 @@ import {
   type SceneStageCheckpointSnapshot,
 } from "@/lib/course-generation/page-checkpoints";
 import {
+  SECTION_CAPACITY_CHECKPOINT_PREFIX, restoreSectionCapacityCheckpoint,
+  type SectionCapacityRecoveryCheckpoint,
+} from "./section-capacity-checkpoints";
+import {
+  SOURCE_CONTENT_CHECKPOINT_PREFIX, SourceContentRecoveryError, findFinalizedSourceContentIssues,
+  SOURCE_NARRATION_BASELINE_POLICY, fingerprintSourceContent, findSectionSourceContentIssues, sourceTeachingSectionId,
+  restoreSourceContentCheckpoint, type SourceContentRecoveryCheckpoint,
+} from "./source-content-acceptance";
+import {
   ADAPTIVE_RESOURCE_CONCURRENCY,
   runAdaptiveResourcePool,
 } from "@/lib/course-generation/adaptive-resource-pool";
-import type { AdaptivePreparedBranchResource } from "@/lib/session/types";
+import type { AdaptivePreparedBranchResource, CourseContent, LessonOutlineSection, OpenMaicSceneOutlineSnapshot, TeachingBlueprintPage } from "@/lib/session/types";
 import { buildAdaptiveBranchTeachingContext } from "./adaptive-teaching-context";
 import { ensureTeachingToolPlans } from "@/lib/openmaic/generation/teaching-tool-plan";
 import {
@@ -67,10 +85,13 @@ import {
 import { summarizeGeneratedMediaReadiness } from "@/lib/course-generation/resource-readiness";
 import { estimateRemainingSeconds } from "@/lib/course-generation/progress-estimate";
 import { deriveKnowledgeLectureSectionsFromOutlines } from "@/lib/knowledge-lecture";
-import { COURSE_DESIGN_WORKSPACE_SECTIONS } from "@/lib/course-design/workspace";
-import type {
-  ClassroomGenerationScope,
-  TestLessonGenerationTarget,
+import { COURSE_DESIGN_WORKSPACE_SECTIONS, mergeCourseDesignClassroomScenes } from "@/lib/course-design/workspace";
+import {
+  getOutlineSourcePageIds,
+  hasCompatibleOutlinePlan,
+  isOutlineWithinSourceSelection,
+  type ClassroomGenerationScope,
+  type TestLessonGenerationTarget,
 } from "@/lib/course-generation/generation-scope";
 
 const log = createLogger("CourseGenerationWorker");
@@ -138,8 +159,15 @@ type StoredCheckpointState = {
   checkpoints: Map<string, PageCheckpointSnapshot>;
   stageCheckpoints: Map<string, SceneStageCheckpointSnapshot>;
   stageAttemptCheckpoints: Map<string, SceneStageAttemptSnapshot>;
+  authoringResponses: Map<string, AuthoringResponseCheckpoint>;
+  auxiliaryAuthoringStates: Map<string, {
+    modelFingerprint: string; inputFingerprint: string; attemptsStarted: number; rawResponse?: string; complete?: boolean;
+  }>;
   teachingSectionCheckpoints: Map<string, TeachingSectionCheckpointSnapshot>;
+  sectionCapacityCheckpoints: Map<string, SectionCapacityRecoveryCheckpoint>;
+  sourceContentCheckpoints: Map<string, SourceContentRecoveryCheckpoint>;
   courseFinalization: unknown;
+  sourceNarrationBaseline: unknown;
 };
 
 type TeachingSectionCheckpointSnapshot = {
@@ -162,6 +190,178 @@ type CourseFinalizationCheckpoint = {
   teachingTimingAudit?: Awaited<ReturnType<typeof generateClassroomAssets>>;
 };
 
+export type SourceNarrationBaselineCheckpoint = {
+  schemaVersion: 1;
+  planningPolicy: typeof SOURCE_NARRATION_BASELINE_POLICY;
+  requestFingerprint: string;
+  sourceContextFingerprint: string;
+  modelFingerprint: string;
+  finalization: CourseFinalizationCheckpoint;
+  narrationStages: SceneStageCheckpointSnapshot[];
+  bodyStages: SceneStageCheckpointSnapshot[];
+};
+
+function stageSlideContent(checkpoint: SceneStageCheckpointSnapshot | undefined): GeneratedSlideContent | null {
+  const payload = checkpoint?.payload;
+  if (!payload || typeof payload !== 'object' || !('content' in payload) || !payload.content
+    || typeof payload.content !== 'object' || !('elements' in payload.content)
+    || !Array.isArray(payload.content.elements)) return null;
+  return payload.content as GeneratedSlideContent;
+}
+
+/** A baseline is original authoring evidence, not another finalized result.
+ * Verify the full submitted scope and exact current page plan, then bind each
+ * original narration to its actual page/body/model rather than a linked class. */
+export function restoreSourceNarrationBaselineCheckpoint(
+  value: unknown,
+  request: PersistedCourseGenerationRequest,
+  preparedOutlines: readonly SceneOutline[],
+  sourceContextFingerprint: string,
+): SourceNarrationBaselineCheckpoint | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const baseline = value as Partial<SourceNarrationBaselineCheckpoint>;
+  if (baseline.schemaVersion !== 1 || baseline.planningPolicy !== SOURCE_NARRATION_BASELINE_POLICY
+    || baseline.requestFingerprint !== fingerprintCourseFinalizationRequest(request)
+    || typeof sourceContextFingerprint !== 'string' || !sourceContextFingerprint
+    || baseline.sourceContextFingerprint !== sourceContextFingerprint
+    || typeof baseline.modelFingerprint !== 'string' || !baseline.modelFingerprint
+    || !Array.isArray(baseline.narrationStages) || !Array.isArray(baseline.bodyStages)) return null;
+  const finalization = restoreCourseFinalizationCheckpoint(baseline.finalization, request, preparedOutlines);
+  if (!finalization) return null;
+  const actual = finalization.generated.assetContext.outlines;
+  const expected = (preparedOutlines.length ? preparedOutlines : actual).filter((outline) =>
+    request.generationScope !== 'test-lesson' || getOutlineSourcePageIds(outline)
+      .some((id) => request.testLesson?.sceneOutlineIds.includes(id)));
+  const expectedById = new Map(expected.map((outline) => [outline.id, fingerprintSceneOutline(outline)]));
+  if (expectedById.size !== expected.length || actual.length !== expected.length
+    || actual.some((outline) => expectedById.get(outline.id) !== fingerprintSceneOutline(outline))) return null;
+  const pages = actual.filter((outline) => outline.type === 'slide' && outline.generationPurpose === 'knowledge-teaching');
+  if (!pages.length || baseline.narrationStages.length !== pages.length || baseline.bodyStages.length !== pages.length
+    || new Set(baseline.narrationStages.map((stage) => stage?.pageKey)).size !== pages.length
+    || new Set(baseline.bodyStages.map((stage) => stage?.pageKey)).size !== pages.length) return null;
+  const scenes = new Map(finalization.generated.scenes.map((scene) => [scene.outlineId, scene]));
+  for (const outline of pages) {
+    const narration = baseline.narrationStages.find((stage) => stage?.pageKey === outline.id);
+    const body = baseline.bodyStages.find((stage) => stage?.pageKey === outline.id);
+    if (typeof narration?.inputFingerprint !== 'string' || !narration.inputFingerprint
+      || typeof body?.inputFingerprint !== 'string' || !body.inputFingerprint) return null;
+    const narrationPayload = restoreSceneStageCheckpoint({ outline, stage: 'narration', checkpoint: narration,
+      modelFingerprint: baseline.modelFingerprint, inputFingerprint: narration.inputFingerprint });
+    const bodyPayload = restoreSceneStageCheckpoint({ outline, stage: 'content', checkpoint: body,
+      modelFingerprint: baseline.modelFingerprint, inputFingerprint: body.inputFingerprint });
+    const bodyContent = stageSlideContent(body);
+    const scene = scenes.get(outline.id);
+    if (!bodyPayload || !bodyContent || scene?.content?.type !== 'slide' || !narrationPayload
+      || typeof narrationPayload !== 'object' || !('teachingNarration' in narrationPayload)
+      || !narrationPayload.teachingNarration || typeof narrationPayload.teachingNarration !== 'object'
+      || !('pageId' in narrationPayload.teachingNarration) || narrationPayload.teachingNarration.pageId !== outline.id
+      || !('segments' in narrationPayload.teachingNarration) || !Array.isArray(narrationPayload.teachingNarration.segments)) return null;
+    const segments = narrationPayload.teachingNarration.segments;
+    if (!segments.length || segments.some((segment) => !segment || typeof segment.id !== 'string'
+      || typeof segment.text !== 'string' || !segment.text.trim())) return null;
+    const originalSpeech = (scene.actions ?? []).flatMap((action) => action.type === 'speech'
+      ? [{ id: action.id, text: action.text }] : []);
+    if (fingerprintGenerationValue(segments.map((segment) => ({ id: segment.id, text: segment.text })))
+      !== fingerprintGenerationValue(originalSpeech)) return null;
+    // The finalization may have attached accepted image/video bytes. Only the
+    // existing same-resource media promotion can explain a body difference.
+    const authoredScene = { ...scene, content: { ...scene.content, canvas: { ...scene.content.canvas,
+      elements: bodyContent.elements, background: bodyContent.background } } } as Scene;
+    const promoted = reusePersistedSceneAssets(authoredScene, scene);
+    if (promoted.content.type !== 'slide' || fingerprintSourceContent({ elements: promoted.content.canvas.elements,
+      background: promoted.content.canvas.background } as GeneratedSlideContent)
+      !== fingerprintSourceContent({ elements: scene.content.canvas.elements,
+        background: scene.content.canvas.background } as GeneratedSlideContent)) return null;
+  }
+  return baseline as SourceNarrationBaselineCheckpoint;
+}
+
+export function createSourceNarrationBaselineCheckpoint(input: {
+  finalization: unknown;
+  request: PersistedCourseGenerationRequest;
+  preparedOutlines: readonly SceneOutline[];
+  stageCheckpoints: readonly SceneStageCheckpointSnapshot[];
+  sourceContextFingerprint: string;
+}): SourceNarrationBaselineCheckpoint | null {
+  const finalization = restoreCourseFinalizationCheckpoint(input.finalization, input.request, input.preparedOutlines);
+  if (!finalization) return null;
+  const ids = new Set(finalization.generated.assetContext.outlines.filter((outline) => outline.type === 'slide'
+    && outline.generationPurpose === 'knowledge-teaching').map((outline) => outline.id));
+  const narrationStages = input.stageCheckpoints.filter((stage) => stage.stage === 'narration' && ids.has(stage.pageKey));
+  const bodyStages = input.stageCheckpoints.filter((stage) => stage.stage === 'content' && ids.has(stage.pageKey));
+  const candidate = { schemaVersion: 1, planningPolicy: SOURCE_NARRATION_BASELINE_POLICY,
+    requestFingerprint: fingerprintCourseFinalizationRequest(input.request),
+    sourceContextFingerprint: input.sourceContextFingerprint,
+    modelFingerprint: narrationStages[0]?.modelFingerprint, finalization, narrationStages, bodyStages };
+  const restored = restoreSourceNarrationBaselineCheckpoint(candidate, input.request, input.preparedOutlines,
+    input.sourceContextFingerprint);
+  return restored ? structuredClone(restored) : null;
+}
+
+/** A complete source-valid section can reconstruct its one original context
+ * hash without guessing historical normalization-policy combinations. Source
+ * problem sections keep their original evidence but are never marked taught. */
+export function sourceNarrationBaselineInputFingerprints(
+  baseline: SourceNarrationBaselineCheckpoint,
+  contracts: readonly FigureSequenceContract[],
+): Readonly<Record<string, readonly string[]>> {
+  const outlines = baseline.finalization.generated.assetContext.outlines;
+  const scenes = new Map(baseline.finalization.generated.scenes.map((scene) => [scene.outlineId, scene]));
+  const bySection = new Map<string, SceneOutline[]>();
+  for (const page of outlines.filter((outline) => outline.type === 'slide' && outline.generationPurpose === 'knowledge-teaching')) {
+    const sectionId = sourceTeachingSectionId(page);
+    bySection.set(sectionId, [...(bySection.get(sectionId) ?? []), page]);
+  }
+  const result: Record<string, readonly string[]> = {};
+  for (const [sectionId, pages] of bySection) {
+    const stages = pages.map((page) => baseline.narrationStages.find((stage) => stage.pageKey === page.id));
+    const fingerprints = new Set(stages.map((stage) => stage?.inputFingerprint));
+    if (stages.some((stage) => !stage) || fingerprints.size !== 1 || !stages[0]?.inputFingerprint) continue;
+    const contentPages = pages.flatMap((outline) => {
+      const scene = scenes.get(outline.id);
+      return scene?.content?.type === 'slide' ? [{ outline,
+        content: { elements: scene.content.canvas.elements, background: scene.content.canvas.background } as GeneratedSlideContent,
+        speech: (scene.actions ?? []).flatMap((action) => action.type === 'speech' ? [action.text] : []) }] : [];
+    });
+    if (contentPages.length !== pages.length || findSectionSourceContentIssues(outlines, contentPages, contracts).length) continue;
+    result[sectionId] = [stages[0].inputFingerprint];
+  }
+  return result;
+}
+
+/** The caller already audited the complete immutable envelope. Reuse only an
+ * exact old narration input and identical current body; accepted insertion
+ * output for this current source identity always wins over the old baseline. */
+export function restoreSourceNarrationBaselineStage(input: {
+  baseline: SourceNarrationBaselineCheckpoint | null | undefined;
+  outline: SceneOutline;
+  stage: SceneGenerationCheckpointStage;
+  modelFingerprint: string;
+  inputFingerprint?: string;
+  bodyCheckpoint: SceneStageCheckpointSnapshot | undefined;
+  sourceCheckpoint?: unknown;
+  sourceIdentity?: Parameters<typeof restoreSourceContentCheckpoint>[1];
+}): unknown | null {
+  const { baseline, outline, sourceIdentity } = input;
+  if (!baseline || input.stage !== 'narration' || baseline.modelFingerprint !== input.modelFingerprint
+    || !sourceIdentity || sourceIdentity.sectionId !== sourceTeachingSectionId(outline)
+    || sourceIdentity.modelFingerprint !== input.modelFingerprint) return null;
+  const sourceCheckpoint = restoreSourceContentCheckpoint(input.sourceCheckpoint, sourceIdentity);
+  if (sourceCheckpoint?.authoringMode === 'insertion-v1' && sourceCheckpoint.status === 'accepted') return null;
+  const body = baseline.bodyStages.find((stage) => stage.pageKey === outline.id);
+  const currentBody = input.bodyCheckpoint;
+  if (!restoreSceneStageCheckpoint({ outline, stage: 'content', checkpoint: body,
+    modelFingerprint: input.modelFingerprint, inputFingerprint: body?.inputFingerprint })
+    || !restoreSceneStageCheckpoint({ outline, stage: 'content', checkpoint: currentBody,
+      modelFingerprint: input.modelFingerprint, inputFingerprint: currentBody?.inputFingerprint })) return null;
+  const oldContent = stageSlideContent(body);
+  const currentContent = stageSlideContent(currentBody);
+  if (!oldContent || !currentContent || fingerprintSourceContent(oldContent) !== fingerprintSourceContent(currentContent)) return null;
+  return restoreSceneStageCheckpoint({ outline, stage: 'narration',
+    checkpoint: baseline.narrationStages.find((stage) => stage.pageKey === outline.id),
+    modelFingerprint: input.modelFingerprint, inputFingerprint: input.inputFingerprint });
+}
+
 /** Finalized output belongs to the submitted teaching input, not its expanded pages. */
 export function fingerprintCourseFinalizationRequest(request: PersistedCourseGenerationRequest): string {
   const teachingRequest = { ...request };
@@ -182,9 +382,7 @@ export function restoreCourseFinalizationCheckpoint(
   if (checkpoint.split && (typeof checkpoint.split.studentClassroomId !== "string"
     || !Array.isArray(checkpoint.split.studentScenes)
     || !Array.isArray(checkpoint.split.teacherScenes))) return null;
-  if (checkpoint.inputFingerprint === fingerprintCourseFinalizationRequest(request)) {
-    return checkpoint as CourseFinalizationCheckpoint;
-  }
+  const matchesCurrentRequest = checkpoint.inputFingerprint === fingerprintCourseFinalizationRequest(request);
 
   // Legacy hashes included mutable recovery bookkeeping and the current
   // preparation result. Accept only a reconstructable hash of this request,
@@ -196,23 +394,32 @@ export function restoreCourseFinalizationCheckpoint(
   const matchingInput = variants.some((candidate) => outlineVariants.some((outlines) =>
     checkpoint.inputFingerprint === fingerprintGenerationValue({ request: candidate, outlines }),
   ));
-  if (!matchingInput) return null;
-  const roots = (outline: SceneOutline) => outline.spatialParentId ?? outline.id;
+  if (!matchesCurrentRequest && !matchingInput) return null;
   const selected = request.generationScope === "test-lesson"
     ? new Set(request.testLesson?.sceneOutlineIds ?? []) : null;
-  const expected = (request.sceneOutlines ?? []).filter((outline) => !selected || selected.has(roots(outline)));
+  const select = (pages: readonly SceneOutline[]) => pages.filter((outline) => !selected
+    || getOutlineSourcePageIds(outline).some((id) => selected.has(id)));
   const actual = checkpoint.generated.assetContext?.outlines;
-  if (!expected.length || !Array.isArray(actual) || !actual.length) return null;
-  const expectedRoots = new Set(expected.map(roots));
-  if (new Set(actual.map(roots)).size !== expectedRoots.size
-    || actual.some((outline) => !expectedRoots.has(roots(outline)))
-    || new Set(actual.map((outline) => outline.id)).size !== actual.length) return null;
-  const duration = (pages: readonly SceneOutline[]) => pages.reduce(
-    (sum, outline) => sum + (outline.targetDurationSec ?? outline.estimatedDuration ?? 0), 0,
-  );
-  for (const parent of expectedRoots) {
-    if (Math.abs(duration(expected.filter((outline) => roots(outline) === parent))
-      - duration(actual.filter((outline) => roots(outline) === parent))) > 0.001) return null;
+  if (!Array.isArray(actual) || !actual.length) return null;
+  // Free-form generation has no submitted outlines; its unchanged request hash
+  // and latest preparation are the canonical recovery boundary instead.
+  const expected = select(request.sceneOutlines?.length ? request.sceneOutlines
+    : preparedOutlines.length ? preparedOutlines : matchesCurrentRequest ? actual : []);
+  if (!expected.length) return null;
+  if (selected && [...expected, ...actual].some((outline) => !isOutlineWithinSourceSelection(outline, selected))) return null;
+  if (!hasCompatibleOutlinePlan(expected, actual)) return null;
+  // The request remains stable while a section is replanned. Its old hash alone
+  // must not revive content or narration authored for an earlier section plan.
+  const prepared = select(preparedOutlines.length ? preparedOutlines : expected);
+  const versionedSections = new Set([...prepared, ...actual]
+    .filter((outline) => outline.sectionPlanVersion !== undefined)
+    .map((outline) => outline.lectureSectionId));
+  if (versionedSections.size) {
+    const current = prepared.filter((outline) => versionedSections.has(outline.lectureSectionId));
+    const restored = actual.filter((outline) => versionedSections.has(outline.lectureSectionId));
+    const currentById = new Map(current.map((outline) => [outline.id, fingerprintSceneOutline(outline)]));
+    if (current.length !== restored.length || restored.some((outline) =>
+      currentById.get(outline.id) !== fingerprintSceneOutline(outline))) return null;
   }
   const sceneOutlines = new Set(checkpoint.generated.scenes.map((scene) => scene.outlineId));
   if (sceneOutlines.size !== actual.length || actual.some((outline) => !sceneOutlines.has(outline.id))) return null;
@@ -224,12 +431,59 @@ export async function restoreOrGenerateFinalizedClassroom(input: {
   checkpoint: unknown;
   request: PersistedCourseGenerationRequest;
   preparedOutlines: readonly SceneOutline[];
-  generate: () => Promise<GeneratedClassroomSnapshot>;
+  generate: (rejectedSourceOutput?: GeneratedClassroomSnapshot,
+    sourceNarrationBaseline?: SourceNarrationBaselineCheckpoint) => Promise<GeneratedClassroomSnapshot>;
+  sourceNarrationBaseline?: unknown;
+  sourceContextFingerprint?: string;
+  stageCheckpoints?: readonly SceneStageCheckpointSnapshot[];
+  onSourceNarrationBaseline?: (baseline: SourceNarrationBaselineCheckpoint) => Promise<unknown> | unknown;
   previousScenes?: ReadonlyMap<string, Scene>;
+  sourceSequenceContracts?: readonly FigureSequenceContract[];
 }) {
   const inputFingerprint = fingerprintCourseFinalizationRequest(input.request);
-  const restoredFinalization = restoreCourseFinalizationCheckpoint(input.checkpoint, input.request, input.preparedOutlines);
-  const authored = restoredFinalization?.generated ?? await input.generate();
+  const candidate = restoreCourseFinalizationCheckpoint(input.checkpoint, input.request, input.preparedOutlines);
+  const sourceProblems = candidate ? findFinalizedSourceContentIssues(candidate.generated.assetContext.outlines,
+    candidate.generated.scenes, input.sourceSequenceContracts ?? []) : [];
+  const restoredFinalization = sourceProblems.length ? null : candidate;
+  // A durable source/capacity plan may supersede the original preparation.
+  // Verify the prior artefact against its own saved outline revision solely
+  // to recover old narration bridges; never revive that stale finalization.
+  const envelope = input.checkpoint && typeof input.checkpoint === 'object' && !Array.isArray(input.checkpoint)
+    ? input.checkpoint as Partial<CourseFinalizationCheckpoint> : null;
+  const previous = !candidate && Array.isArray(envelope?.generated?.assetContext?.outlines)
+    ? restoreCourseFinalizationCheckpoint(input.checkpoint, input.request, envelope.generated.assetContext.outlines) : candidate;
+  const rejectedSourceOutput = previous && findFinalizedSourceContentIssues(previous.generated.assetContext.outlines,
+    previous.generated.scenes, input.sourceSequenceContracts ?? []).length ? previous.generated : undefined;
+  let sourceNarrationBaseline: SourceNarrationBaselineCheckpoint | null = null;
+  // A source-valid finalization keeps the existing fast path. Capture original
+  // authoring only when this exact failed finalization needs source recovery.
+  if (!restoredFinalization && rejectedSourceOutput) {
+    sourceNarrationBaseline = restoreSourceNarrationBaselineCheckpoint(input.sourceNarrationBaseline,
+      input.request, input.preparedOutlines, input.sourceContextFingerprint ?? '');
+    if (!sourceNarrationBaseline && candidate && input.stageCheckpoints) {
+      const proposed = createSourceNarrationBaselineCheckpoint({ finalization: candidate, request: input.request,
+        preparedOutlines: input.preparedOutlines, stageCheckpoints: input.stageCheckpoints,
+        sourceContextFingerprint: input.sourceContextFingerprint ?? '' });
+      if (!proposed || !input.onSourceNarrationBaseline) {
+        throw new SourceContentRecoveryError(sourceProblems, '原讲稿基线身份不完整或尚未持久化，保留已完成阶段');
+      }
+      const stored = await input.onSourceNarrationBaseline(proposed);
+      sourceNarrationBaseline = restoreSourceNarrationBaselineCheckpoint(stored, input.request, input.preparedOutlines,
+        input.sourceContextFingerprint ?? '');
+      if (!sourceNarrationBaseline) {
+        throw new SourceContentRecoveryError(sourceProblems, '已保存的原讲稿基线身份不匹配，不能覆盖或采用旧稿');
+      }
+    }
+    throw new SourceContentRecoveryError(sourceProblems.length ? sourceProblems
+      : findFinalizedSourceContentIssues(rejectedSourceOutput.assetContext.outlines,
+        rejectedSourceOutput.scenes, input.sourceSequenceContracts ?? []),
+      '已保存课程首稿未通过来源验收，保留原稿与具体问题，停止自动改稿');
+  }
+  const authored = restoredFinalization?.generated ?? await (sourceNarrationBaseline
+    ? input.generate(rejectedSourceOutput, sourceNarrationBaseline) : input.generate(rejectedSourceOutput));
+  const remainingSourceProblems = findFinalizedSourceContentIssues(authored.assetContext.outlines,
+    authored.scenes, input.sourceSequenceContracts ?? []);
+  if (remainingSourceProblems.length) throw new SourceContentRecoveryError(remainingSourceProblems);
   // A grouped page can be rebuilt from stage checkpoints without passing through
   // loadSceneCheckpoint. Promote its accepted assets at the common finalization
   // boundary, before the new classroom is split and its media is generated.
@@ -251,13 +505,13 @@ export function hasExactTestLessonBudget(
 ): boolean {
   if (!testLesson) return false;
   const requested = new Set(testLesson.sceneOutlineIds);
-  const parentId = (outline: SceneOutline) => outline.spatialParentId ?? outline.id;
-  const fullParents = new Set(outlines.map(parentId));
-  const selected = outlines.filter((outline) => requested.has(parentId(outline)));
-  const selectedParents = new Set(selected.map(parentId));
+  const fullParents = new Set(outlines.flatMap((outline) => [...getOutlineSourcePageIds(outline)]));
+  const selected = outlines.filter((outline) => getOutlineSourcePageIds(outline).some((id) => requested.has(id)));
+  const selectedParents = new Set(selected.flatMap((outline) => [...getOutlineSourcePageIds(outline)]));
   return requested.size > 0
     && requested.size === testLesson.sceneOutlineIds.length
     && selectedParents.size === requested.size
+    && selected.every((outline) => isOutlineWithinSourceSelection(outline, requested))
     && fullParents.size === fullSceneCount
     && new Set(selected.map((outline) => outline.id)).size === selected.length
     && hasExactKnowledgeLecturePageBudget(selected, testLesson.durationSeconds / 60);
@@ -270,12 +524,11 @@ export function hasExactUpdateTargetBudget(
 ): boolean {
   const affected = new Set(affectedOutlineIds);
   const expected = confirmedOutlines.filter((outline) => affected.has(outline.id));
-  const actualIds = new Set(outlines.map((outline) => outline.id));
+  const selectedSources = new Set(expected.flatMap((outline) => [...getOutlineSourcePageIds(outline)]));
   return affected.size === affectedOutlineIds.length
     && expected.length === affected.size
-    && outlines.length === affected.size
-    && actualIds.size === outlines.length
-    && affectedOutlineIds.every((id) => actualIds.has(id))
+    && outlines.every((outline) => isOutlineWithinSourceSelection(outline, selectedSources))
+    && hasCompatibleOutlinePlan(expected, outlines)
     && hasExactKnowledgeLecturePageBudget(
       outlines,
       expected.reduce(
@@ -313,22 +566,195 @@ async function loadCheckpointState(jobId: string): Promise<StoredCheckpointState
     stageAttemptCheckpoints.set(stageCheckpointKey(row.pageKey, row.stage), row);
   }
   const teachingSectionCheckpoints = new Map<string, TeachingSectionCheckpointSnapshot>();
+  const authoringResponses = new Map<string, AuthoringResponseCheckpoint>();
+  const auxiliaryAuthoringStates: StoredCheckpointState['auxiliaryAuthoringStates'] = new Map();
+  for (const row of stored.auxiliaryAuthoringStates ?? []) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const saved = row as Record<string, unknown>;
+    if (saved.schemaVersion === 1 && typeof saved.key === 'string' && typeof saved.modelFingerprint === 'string'
+      && typeof saved.inputFingerprint === 'string' && typeof saved.attemptsStarted === 'number') {
+      auxiliaryAuthoringStates.set(saved.key, { modelFingerprint: saved.modelFingerprint,
+        inputFingerprint: saved.inputFingerprint, attemptsStarted: saved.attemptsStarted,
+        ...(typeof saved.complete === 'boolean' ? { complete: saved.complete } : {}),
+        ...(typeof saved.rawResponse === 'string' ? { rawResponse: saved.rawResponse } : {}) });
+    }
+  }
+  for (const row of stored.authoringResponses ?? []) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const saved = row as unknown as AuthoringResponseCheckpoint;
+    if (saved.schemaVersion === 1 && typeof saved.pageKey === 'string' && typeof saved.stage === 'string') {
+      authoringResponses.set(stageCheckpointKey(saved.pageKey, saved.stage), saved);
+    }
+  }
   for (const row of stored.teachingSections as unknown as TeachingSectionCheckpointSnapshot[]) {
     if (!row || row.schemaVersion !== 1 || typeof row.sectionKey !== "string") continue;
     teachingSectionCheckpoints.set(row.sectionKey, row);
+  }
+  const sectionCapacityCheckpoints = new Map<string, SectionCapacityRecoveryCheckpoint>();
+  for (const row of stored.sectionCapacities ?? []) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const checkpoint = row as unknown as SectionCapacityRecoveryCheckpoint;
+    if (typeof checkpoint.sectionId !== "string") continue;
+    const restored = restoreSectionCapacityCheckpoint(checkpoint, checkpoint);
+    if (restored) sectionCapacityCheckpoints.set(restored.sectionId, restored);
+  }
+  const sourceContentCheckpoints = new Map<string, SourceContentRecoveryCheckpoint>();
+  for (const row of stored.sourceContents ?? []) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const checkpoint = row as unknown as SourceContentRecoveryCheckpoint;
+    if (typeof checkpoint.sectionId !== "string") continue;
+    const restored = restoreSourceContentCheckpoint(checkpoint, checkpoint);
+    if (restored) sourceContentCheckpoints.set(restored.sectionId, restored);
   }
   return {
     preparedOutlines,
     checkpoints,
     stageCheckpoints,
     stageAttemptCheckpoints,
+    authoringResponses,
+    auxiliaryAuthoringStates,
     teachingSectionCheckpoints,
+    sectionCapacityCheckpoints,
+    sourceContentCheckpoints,
     courseFinalization: stored.courseFinalization,
+    sourceNarrationBaseline: stored.sourceNarrationBaseline,
   };
 }
 
-async function persistPreparedOutlines(jobId: string, executionId: string, outlines: SceneOutline[]): Promise<void> {
+/** Adopt only explicitly revised sections; unrelated teacher edits stay untouched. */
+export function applyVersionedOutlinePlanToCourseContent(
+  content: CourseContent,
+  outlines: readonly SceneOutline[],
+): CourseContent {
+  const revisedSections = new Set(outlines.filter((outline) => outline.sectionPlanVersion)
+    .map((outline) => outline.lectureSectionId));
+  if (!revisedSections.size) return content;
+  if (revisedSections.has(undefined)) throw new Error("重规划页面缺少所属小节，不能同步课程大纲。");
+  if (content.teachingBlueprint && [...revisedSections].some((id) =>
+    !content.teachingBlueprint!.sections.some((section) => section.id === id))) {
+    throw new Error("重规划页面不属于已确认的教学蓝图小节，不能同步课程大纲。");
+  }
+  const existing = content._openmaicSceneOutlines ?? [];
+  const revised = outlines.filter((outline) => revisedSections.has(outline.lectureSectionId));
+  const storedRevised = revised.map((outline): OpenMaicSceneOutlineSnapshot => ({ ...outline }));
+  for (const sectionId of revisedSections) {
+    const current = existing.filter((outline) => outline.lectureSectionId === sectionId);
+    const incoming = revised.filter((outline) => outline.lectureSectionId === sectionId);
+    if (!hasCompatibleOutlinePlan(current.length ? current : incoming, incoming)) {
+      throw new Error(`小节 ${sectionId} 的重规划来源或时长不完整，不能同步课程大纲。`);
+    }
+  }
+  const emitted = new Set<string | undefined>();
+  const merged = existing.flatMap<OpenMaicSceneOutlineSnapshot>((outline) => {
+    const sectionId = outline.lectureSectionId;
+    if (!revisedSections.has(sectionId)) return [outline];
+    if (emitted.has(sectionId)) return [];
+    emitted.add(sectionId);
+    return storedRevised.filter((page) => page.lectureSectionId === sectionId);
+  });
+  for (const sectionId of revisedSections) {
+    if (!emitted.has(sectionId)) merged.push(...storedRevised.filter((page) => page.lectureSectionId === sectionId));
+  }
+  const ordered = merged.map((outline, order) => outline.order === order ? outline : { ...outline, order });
+  const sourceIds = new Set([...existing, ...revised]
+    .filter((outline) => revisedSections.has(outline.lectureSectionId))
+    .flatMap((outline) => [outline.id, ...getOutlineSourcePageIds(outline)]));
+  const previousLessons = new Map(content.lessonOutline.map((lesson) => [lesson.id, lesson]));
+  const lessonFor = (outline: typeof merged[number]): LessonOutlineSection => {
+    const targetDurationSec = outline.targetDurationSec ?? outline.estimatedDuration ?? 60;
+    return {
+      id: outline.id, title: outline.title, stageKey: outline.stageKey ?? "ai-learning",
+      objectives: outline.keyPoints ?? [], activities: [outline.description || outline.title],
+      durationMin: Math.max(1, Math.round(targetDurationSec / 60)), targetDurationSec,
+      parentActivityId: outline.parentActivityId, detailKind: outline.detailKind,
+      knowledgePointIds: outline.knowledgePointIds, resourceTypes: outline.resourceTypes,
+      segmentIndex: outline.segmentIndex, segmentCount: outline.segmentCount,
+      segmentRole: outline.segmentRole, segmentGroupId: outline.segmentGroupId,
+      ttsPolicy: outline.ttsPolicy, timingPlan: outline.timingPlan,
+      narrationMode: outline.narrationMode, teachingToolPlan: outline.teachingToolPlan,
+    };
+  };
+  const teachingBlueprint = content.teachingBlueprint ? {
+    ...content.teachingBlueprint,
+    sections: content.teachingBlueprint.sections.map((section) => {
+      if (!revisedSections.has(section.id)) return section;
+      const incoming = revised.filter((outline) => outline.lectureSectionId === section.id);
+      const pages = incoming.filter((outline) => outline.type === "slide" || outline.type === "interactive")
+        .map((outline): TeachingBlueprintPage => {
+          const ids = new Set(getOutlineSourcePageIds(outline));
+          const sources = section.pages.filter((page) => ids.has(page.outlineId ?? page.id)
+            || (page as TeachingBlueprintPage & { sourcePageIds?: string[] }).sourcePageIds?.some((id) => ids.has(id)));
+          if (!sources.length) throw new Error(`页面 ${outline.id} 缺少同小节的蓝图来源，不能同步教学责任。`);
+          const plan = outline.teachingBrief?.teachingPlan;
+          const sourceObservation = sources.find((source) => source.caseObservation)?.caseObservation;
+          const imageIds = (outline.visualIntent?.resourceRefs ?? [])
+            .filter((resource) => resource.kind.includes('image')).map((resource) => resource.resourceId);
+          let caseObservation = sourceObservation;
+          if (sourceObservation?.imageWouldHelp && !imageIds.length) {
+            const originalImageIds = new Set(sources.flatMap((source) => [
+              ...(source.caseObservation?.resourceIds ?? []),
+              ...existing.filter((original) => original.id === (source.outlineId ?? source.id))
+                .flatMap((original) => (original.visualIntent?.resourceRefs ?? [])
+                  .filter((resource) => resource.kind.includes('image')).map((resource) => resource.resourceId)),
+            ]));
+            const observationPages = incoming.filter((candidate) => (candidate.visualIntent?.resourceRefs ?? [])
+              .some((resource) => resource.kind.includes('image') && originalImageIds.has(resource.resourceId)));
+            const retainedImages = new Set(observationPages.flatMap((candidate) => (candidate.visualIntent?.resourceRefs ?? [])
+              .filter((resource) => resource.kind.includes('image')).map((resource) => resource.resourceId)));
+            if (!originalImageIds.size || [...originalImageIds].some((id) => !retainedImages.has(id))) {
+              throw new Error(`页面 ${outline.id} 的案例观察配图未完整保留，不能同步分页。`);
+            }
+            // The original observation remains on the page that owns its image.
+            // A text-only continuation explicitly references that decision.
+            caseObservation = { kind: 'none', imageWouldHelp: false, observableDifference: '',
+              reason: `本页承担文字讲解；原案例观察配图及判定完整保留于同小节页面：${observationPages.map((page) => page.title).join('、')}。` };
+          }
+          const page: TeachingBlueprintPage & {
+            sourcePageIds: string[]; sectionPlanVersion?: string;
+            plannedTiming?: SceneOutline["plannedTiming"]; targetDurationSec?: number;
+            teachingBrief?: SceneOutline["teachingBrief"];
+          } = {
+            ...sources[0]!, id: outline.id, outlineId: outline.id, title: outline.title,
+            type: outline.type as "slide" | "interactive", description: outline.description,
+            keyPoints: [...outline.keyPoints], teachingObjective: outline.teachingObjective ?? plan?.purpose ?? sources[0]!.teachingObjective,
+            unitIds: outline.teachingUnitIds ?? [...new Set(sources.flatMap((source) => source.unitIds))],
+            knowledgePointIds: outline.knowledgePointIds ?? [...new Set(sources.flatMap((source) => source.knowledgePointIds))],
+            introducesNodeIds: plan?.introduces ?? [], deepensNodeIds: plan?.deepens ?? [], referencesNodeIds: plan?.references ?? [],
+            entryPoint: plan?.entryPoint, visualRelationship: plan?.visualRelationship, taskConnection: plan?.taskConnection,
+            resourceNeeds: outline.teachingBrief?.resourceNeeds, learningTask: outline.teachingBrief?.pageTask,
+            widgetType: outline.widgetType, widgetOutline: outline.widgetOutline,
+            reviewItems: outline.teachingBrief?.reviewItems,
+            caseObservation,
+            estimatedTeachingWeight: outline.plannedTiming?.narrationSec ?? sources[0]!.estimatedTeachingWeight,
+            sourcePageIds: [...ids], sectionPlanVersion: outline.sectionPlanVersion,
+            plannedTiming: outline.plannedTiming, targetDurationSec: outline.targetDurationSec,
+            teachingBrief: outline.teachingBrief,
+          };
+          return page;
+        });
+      return { ...section, pages, quizOutlineId: incoming.find((outline) => outline.type === "quiz")?.id ?? section.quizOutlineId };
+    }),
+  } : undefined;
+  return {
+    ...content,
+    _openmaicSceneOutlines: ordered,
+    _openmaicScenesCount: ordered.length,
+    lessonOutline: [
+      ...ordered.map((outline) => !revisedSections.has(outline.lectureSectionId) && previousLessons.has(outline.id)
+        ? previousLessons.get(outline.id)! : lessonFor(outline)),
+      ...content.lessonOutline.filter((lesson) => !sourceIds.has(lesson.id) && !merged.some((outline) => outline.id === lesson.id)),
+    ],
+    knowledgeLectureSections: deriveKnowledgeLectureSectionsFromOutlines(ordered),
+    ...(teachingBlueprint ? { teachingBlueprint } : {}),
+  };
+}
+
+async function persistPreparedOutlines(jobId: string, executionId: string, outlines: SceneOutline[], courseId?: string): Promise<void> {
   await saveGenerationCheckpoint(jobId, "prepared-outlines", outlines, { executionId });
+  if (courseId && outlines.some((outline) => outline.sectionPlanVersion)) {
+    await updateCourse(courseId, (course) => ({ ...course,
+      content: applyVersionedOutlinePlanToCourseContent(course.content, outlines) }));
+  }
 }
 
 async function persistSceneCheckpoint(
@@ -385,6 +811,8 @@ async function persistSceneStageAttempt(input: {
   modelFingerprint: string;
   inputFingerprint?: string;
   executionId: string;
+  status: NonNullable<SceneStageAttemptSnapshot["status"]>;
+  interruptedReplays: number;
 }): Promise<SceneStageAttemptSnapshot> {
   const checkpoint: SceneStageAttemptSnapshot = {
     schemaVersion: SCENE_STAGE_CHECKPOINT_VERSION,
@@ -394,6 +822,9 @@ async function persistSceneStageAttempt(input: {
     modelFingerprint: input.modelFingerprint,
     inputFingerprint: input.inputFingerprint,
     attemptsStarted: input.attemptsStarted,
+    status: input.status,
+    executionId: input.executionId,
+    interruptedReplays: input.interruptedReplays,
   };
   await saveGenerationCheckpoint(
     input.jobId,
@@ -413,6 +844,7 @@ export async function prepareCourseGenerationCheckpointsForFullPromotion(jobId: 
 }
 
 export type PersistedCourseGenerationRequest = GenerateClassroomInput & {
+  authoringRequestId?: string;
   courseId: string;
   generationScope?: ClassroomGenerationScope;
   /** Count of pages in the confirmed full outline before a test selection. */
@@ -956,28 +1388,48 @@ export async function resumeRecoverableCourseGenerationJob(courseId: string): Pr
 }
 
 /**
- * Explicitly continues a failed classroom job from its durable page
- * checkpoints. Unlike submitting a new generation request, this intentionally
- * preserves prepared outlines and completed pages. The managed recovery budget
- * is reset because this is a teacher-confirmed continuation after the service
- * configuration or provider availability may have changed.
+ * Continue saved work without replaying a paid request. A teacher can instead
+ * explicitly authorize a new draft of unaccepted stages; transaction history
+ * preserves the original response and cost before only those stages reset.
  */
 export async function requeueCourseGenerationFromCheckpoints(
   courseId: string,
+  options: { regenerateFailedStages?: boolean } = {},
 ): Promise<CourseGenerationJob | null> {
   const job = await contentGenerationJobs.findUnique({ where: { courseId } });
   if (!job || job.status !== "failed") return job;
   const completedPageCount = await countGenerationPageCheckpoints(job.id);
-  // 早期失败(如大纲校验)可能没有任何已完成页面或 checkpoint;此时仍需
-  // 重新入队并保留原请求,否则"从已完成页面继续"会静默无效果。
-  // 若之前已持久化过大纲(preparedOutlines),续跑会自动复用它们。
-  const message = completedPageCount > 0
-    ? `正在从 ${completedPageCount} 个已完成页面继续生成`
-    : "正在重新开始课程内容生成（此前尚无已完成的页面）";
+  const message = options.regenerateFailedStages
+    ? `正在重生成失败阶段，保留 ${completedPageCount} 个已完成页面`
+    : `正在复用已保存首稿与 ${completedPageCount} 个已完成页面`;
   const request = job.request as unknown as PersistedCourseGenerationRequest;
+  const resetSteps: string[] = [];
+  if (options.regenerateFailedStages) {
+    const saved = await loadGenerationCheckpoints(job.id);
+    for (const value of saved.auxiliaryAuthoringStates ?? []) {
+      const state = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+      if (typeof state?.key !== 'string' || !['freeform-outlines', 'agent-profiles', 'search-query'].includes(state.key)) continue;
+      if ((typeof state.attemptsStarted === 'number' && state.attemptsStarted > 0 && typeof state.rawResponse !== 'string')
+        || job.error?.includes(`辅助阶段 ${state.key}`)) resetSteps.push(`aux-authoring:${state.key}`);
+    }
+    const course = await getCourse(courseId);
+    const evidence = course?.content.courseEvidence;
+    const resources = await resolveCourseTextbookFigures(evidence, course?.content.knowledgePoints);
+    const sourceContracts: FigureSequenceContract[] = [
+      ...(evidence ? resolveCourseSourceSequenceContracts(evidence, course!.content.knowledgePoints) : []),
+      ...resources.filter((resource) => resource.required && resource.orderedSteps?.length).map((resource) => ({
+        resourceId: resource.id, required: true, knowledgePointIds: resource.knowledgePointIds,
+        orderedSteps: resource.orderedSteps, scope: 'single-page' as const, sequenceSemantics: 'ordered-steps' as const,
+      })),
+    ];
+    const replacement = planFailedStageRegeneration({ saved, request, sourceContracts });
+    if (replacement.needsExplicitSourceEdit) throw Object.assign(new Error(replacement.issues.join('；')),
+      { code: 'COURSE_SOURCE_EDIT_REQUIRED', isRetryable: false });
+    resetSteps.push(...replacement.resetSteps);
+  }
   const queued = await contentGenerationJobs.replace({
     where: { id: job.id, status: "failed", version: job.version },
-    checkpointPolicy: { prefixes: ["stage-attempt:"] },
+    checkpointPolicy: { steps: resetSteps },
     data: {
       status: "queued",
       step: "recovering_scenes",
@@ -991,6 +1443,7 @@ export async function requeueCourseGenerationFromCheckpoints(
       request: {
         ...request,
         managedRecoveryCount: 0,
+        ...(options.regenerateFailedStages ? { authoringRequestId: randomUUID() } : {}),
       } as unknown as Prisma.InputJsonValue,
       error: null,
       completedAt: null,
@@ -1027,6 +1480,14 @@ function runJob(job: CourseGenerationJob): Promise<void> {
           log.warn("Unable to persist classroom-generation token estimate", error);
         }
       },
+      onCallUsage: async (usage) => {
+        try {
+          await saveGenerationCheckpoint(job.id, `model-usage:${usage.callId}`, usage,
+            { executionId: job.executionId ?? undefined });
+        } catch (error) {
+          log.warn('Unable to persist classroom-generation call usage', error);
+        }
+      },
     },
   );
   activeRuns.add(execution);
@@ -1045,6 +1506,7 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).testLesson;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).systemMode;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).generationContractVersion;
+  delete (generationInput as Partial<PersistedCourseGenerationRequest>).authoringRequestId;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).assessmentMode;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).moduleTimingPlan;
   delete (generationInput as Partial<PersistedCourseGenerationRequest>).resourcePackageIdentity;
@@ -1076,9 +1538,47 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
   heartbeatTimer.unref?.();
 
   try {
-    generationInput.textbookImages = await hydrateTextbookFigureBytes(generationInput.textbookImages);
     const checkpointState = await loadCheckpointState(job.id);
     const course = await getCourse(courseId);
+    const textbookResources = await resolveCourseTextbookFigures(course?.content.courseEvidence, course?.content.knowledgePoints);
+    assertRequiredTextbookFiguresAvailable(textbookResources);
+    const sourceEvidence = course?.content.courseEvidence ? { ...course.content.courseEvidence,
+      items: await hydrateCourseEvidenceFigureReferences(course.content.courseEvidence.items) } : undefined;
+    const sourceKnowledgePoints = course?.content.knowledgePoints.map((point) => ({ id: point.id,
+      ...(point.evidenceItemIds !== undefined ? { evidenceItemIds: [...point.evidenceItemIds] } : {}) }));
+    const sourceSequenceContracts = sourceEvidence
+      ? resolveCourseSourceSequenceContracts(sourceEvidence, course!.content.knowledgePoints)
+      : [];
+    const sourceContentContracts: FigureSequenceContract[] = [...sourceSequenceContracts,
+      ...textbookResources.filter((resource) => resource.required && resource.orderedSteps?.length).map((resource) => ({
+        resourceId: resource.id, required: true, knowledgePointIds: resource.knowledgePointIds,
+        orderedSteps: resource.orderedSteps, scope: 'single-page' as const, sequenceSemantics: 'ordered-steps' as const,
+      }))];
+    const availableImages = textbookResources.flatMap((resource) => resource.status === "available" && resource.assetId && resource.src
+      ? [{ ...resource, assetId: resource.assetId, src: resource.src, textbookRelation: resource.relation }]
+      : []);
+    generationInput.textbookImages = await hydrateTextbookFigureBytes(availableImages);
+    if (generationInput.sceneOutlines?.length) {
+      const selectedPoints = new Set(generationInput.sceneOutlines.flatMap((outline) => outline.knowledgePointIds ?? []));
+      generationInput.sceneOutlines = bindRequiredTextbookFiguresToOutlines(generationInput.sceneOutlines,
+        textbookResources.filter((resource) => !resource.required
+          || resource.knowledgePointIds.some((id) => selectedPoints.has(id))),
+        sourceSequenceContracts.filter((contract) => contract.knowledgePointIds.some((id) => selectedPoints.has(id))));
+      assertSourceSequencesInOutlines(generationInput.sceneOutlines,
+        sourceSequenceContracts.filter((contract) => contract.knowledgePointIds.some((id) => selectedPoints.has(id))), textbookResources);
+    }
+    if (checkpointState.preparedOutlines.length) {
+      const selectedPoints = new Set(checkpointState.preparedOutlines.flatMap((outline) => outline.knowledgePointIds ?? []));
+      checkpointState.preparedOutlines = bindRequiredTextbookFiguresToOutlines(checkpointState.preparedOutlines,
+        textbookResources.filter((resource) => !resource.required
+          || resource.knowledgePointIds.some((id) => selectedPoints.has(id))),
+        sourceSequenceContracts.filter((contract) => contract.knowledgePointIds.some((id) => selectedPoints.has(id))));
+      assertSourceSequencesInOutlines(checkpointState.preparedOutlines,
+        sourceSequenceContracts.filter((contract) => contract.knowledgePointIds.some((id) => selectedPoints.has(id))), textbookResources);
+    }
+    const effectiveRequest = { ...request,
+      sceneOutlines: generationInput.sceneOutlines,
+      textbookImages: availableImages };
     const currentPackage = course?.content.resourcePackage;
     if (request.resourcePackageIdentity
       ? !currentPackage?.confirmedAt || currentPackage.id !== request.resourcePackageIdentity.id || currentPackage.revision !== request.resourcePackageIdentity.revision
@@ -1105,19 +1605,92 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
     const previousClassroomId = course.aiLearningClassroomId || course.content._openmaicClassroomId;
     const previousClassroom = previousClassroomId ? await readClassroom(previousClassroomId) : null;
     const previousScenes = new Map(previousClassroom?.scenes.map((scene) => [scene.id, scene]) ?? []);
+    const sourceCheckpointIdentities = new Map<string, Parameters<typeof restoreSourceContentCheckpoint>[1]>();
     const { inputFingerprint: finalizationFingerprint, restoredFinalization, generated } = await restoreOrGenerateFinalizedClassroom({
       checkpoint: checkpointState.courseFinalization,
-      request,
+      sourceNarrationBaseline: checkpointState.sourceNarrationBaseline,
+      sourceContextFingerprint: fingerprintGenerationValue({ sourceEvidence, sourceKnowledgePoints, sourceContentContracts }),
+      stageCheckpoints: [...checkpointState.stageCheckpoints.values()],
+      onSourceNarrationBaseline: async (baseline) => {
+        const stored = await saveSourceNarrationBaselineCheckpoint(job.id, baseline, { executionId });
+        checkpointState.sourceNarrationBaseline = stored;
+        return stored;
+      },
+      request: effectiveRequest,
       preparedOutlines: outlines,
       previousScenes,
-      generate: () => generateClassroom(generationInput, {
+      sourceSequenceContracts: sourceContentContracts,
+      generate: (rejectedSourceOutput, baseline) => generateClassroom(generationInput, {
       signal: controller.signal,
+      sourceSequenceContracts: sourceContentContracts,
+      sourceEvidence,
+      sourceKnowledgePoints,
+      sourceRecoveryScenes: rejectedSourceOutput?.scenes,
+      sourceNarrationBaseline: baseline ? { scenes: baseline.finalization.generated.scenes,
+        outlines: baseline.finalization.generated.assetContext.outlines,
+        narrationInputFingerprints: sourceNarrationBaselineInputFingerprints(baseline, sourceContentContracts) } : undefined,
+      hasSceneContentCheckpoint: (outline, modelFingerprint) => {
+        const body = checkpointState.stageCheckpoints.get(stageCheckpointKey(outline.id, "content"));
+        const payload = restoreSceneStageCheckpoint({ outline, stage: "content", checkpoint: body,
+          modelFingerprint, inputFingerprint: body?.inputFingerprint });
+        if (payload && typeof payload === "object" && "content" in payload && payload.content
+          && typeof payload.content === "object" && "elements" in payload.content
+          && Array.isArray(payload.content.elements)) return true;
+        const page = checkpointState.checkpoints.get(outline.id);
+        return Boolean(page && restoreSceneCheckpoint(outline, page, page.scene.stageId, modelFingerprint, page.inputFingerprint));
+      },
       initialStageProgress: Array.isArray(job.stageProgress)
         ? job.stageProgress as unknown as NonNullable<ClassroomGenerationProgress["stageProgress"]>
         : undefined,
       generationOutlineIds: isTestLesson ? request.testLesson?.sceneOutlineIds : undefined,
       preparedOutlines: checkpointState.preparedOutlines,
-      onOutlinesPrepared: (outlines) => persistPreparedOutlines(job.id, executionId, outlines),
+      validateReplannedOutlines: async (candidate) => {
+        const latestCourse = await getCourse(courseId);
+        const latestPackage = latestCourse?.content.resourcePackage;
+        if (!latestCourse || (request.resourcePackageIdentity
+          ? !latestPackage?.confirmedAt || latestPackage.id !== request.resourcePackageIdentity.id
+            || latestPackage.revision !== request.resourcePackageIdentity.revision
+          : Boolean(latestPackage))
+          || latestCourse.content.courseEvidence?.fingerprint !== course.content.courseEvidence?.fingerprint
+          || fingerprintGenerationValue(latestCourse.content.textbookSelections ?? [])
+            !== fingerprintGenerationValue(course.content.textbookSelections ?? [])
+          || fingerprintGenerationValue(latestCourse.content.knowledgePoints)
+            !== fingerprintGenerationValue(course.content.knowledgePoints)) {
+          throw new Error("课程来源已更新，容量修复不会覆盖新确认的教材或资源包。");
+        }
+        const selectedPoints = new Set(candidate.flatMap((outline) => outline.knowledgePointIds ?? []));
+        assertSourceSequencesInOutlines(candidate, sourceSequenceContracts.filter((contract) =>
+          contract.knowledgePointIds.some((id) => selectedPoints.has(id))), textbookResources);
+        if (!hasCompatibleOutlinePlan(generationInput.sceneOutlines ?? [], candidate)
+          || (isTestLesson && !hasExactTestLessonBudget(candidate, request.testLesson, request.fullSceneCount))
+          || (request.updateTarget && !hasExactUpdateTargetBudget(candidate,
+            latestCourse.content._openmaicSceneOutlines as SceneOutline[] ?? [], request.updateTarget.affectedOutlineIds))
+          || (!request.updateTarget && !hasExactKnowledgeLecturePageBudget(candidate, timing.totalMinutes))) {
+          throw new Error("容量修复没有保持已确认的来源、生成范围或课程时长。");
+        }
+      },
+      loadSectionCapacityCheckpoint: (sectionId, sourceFingerprint, inputFingerprint, modelFingerprint) =>
+        restoreSectionCapacityCheckpoint(checkpointState.sectionCapacityCheckpoints.get(sectionId),
+          { sectionId, sourceFingerprint, inputFingerprint, modelFingerprint }),
+      onSectionCapacityCheckpoint: async (checkpoint) => {
+        await saveGenerationCheckpoint(job.id, `${SECTION_CAPACITY_CHECKPOINT_PREFIX}${checkpoint.sectionId}`,
+          checkpoint, { executionId });
+        checkpointState.sectionCapacityCheckpoints.set(checkpoint.sectionId, checkpoint);
+      },
+      loadSourceContentCheckpoint: (sectionId, sourceFingerprint, inputFingerprint, modelFingerprint) => {
+        const identity = { sectionId, sourceFingerprint, inputFingerprint, modelFingerprint };
+        sourceCheckpointIdentities.set(sectionId, identity);
+        return restoreSourceContentCheckpoint(checkpointState.sourceContentCheckpoints.get(sectionId), identity);
+      },
+      onSourceContentCheckpoint: async (checkpoint) => {
+        await saveGenerationCheckpoint(job.id, `${SOURCE_CONTENT_CHECKPOINT_PREFIX}${checkpoint.sectionId}`,
+          checkpoint, { executionId });
+        checkpointState.sourceContentCheckpoints.set(checkpoint.sectionId, checkpoint);
+      },
+      onOutlinesPrepared: async (outlines) => {
+        await persistPreparedOutlines(job.id, executionId, outlines, request.updateTarget ? undefined : courseId);
+        checkpointState.preparedOutlines = outlines;
+      },
       loadTeachingSectionCheckpoint: (sectionKey, inputFingerprint, modelFingerprint) => {
         const checkpoint = checkpointState.teachingSectionCheckpoints.get(sectionKey);
         if (
@@ -1146,7 +1719,11 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         return restored ? reusePersistedSceneAssets(restored, previousScenes.get(restored.id)) : null;
       },
       loadSceneStageCheckpoint: (outline, stage, modelFingerprint, inputFingerprint) =>
-        restoreSceneStageCheckpoint({
+        (request.authoringRequestId ? null : restoreSourceNarrationBaselineStage({ baseline, outline, stage, modelFingerprint, inputFingerprint,
+          bodyCheckpoint: checkpointState.stageCheckpoints.get(stageCheckpointKey(outline.id, 'content')),
+          sourceCheckpoint: checkpointState.sourceContentCheckpoints.get(sourceTeachingSectionId(outline)),
+          sourceIdentity: sourceCheckpointIdentities.get(sourceTeachingSectionId(outline)) }))
+        ?? restoreSceneStageCheckpoint({
           outline,
           checkpoint: checkpointState.stageCheckpoints.get(stageCheckpointKey(outline.id, stage)),
           stage,
@@ -1165,15 +1742,70 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         });
         checkpointState.stageCheckpoints.set(stageCheckpointKey(outline.id, stage), checkpoint);
       },
-      loadSceneStageAttemptCount: (outline, stage, modelFingerprint, inputFingerprint) =>
-        restoreSceneStageAttemptCount({
+      loadStageAuthoringResponse: async (outline, stage, modelFingerprint, inputFingerprint) =>
+        restoreAuthoringResponse({ outline, stage, modelFingerprint, inputFingerprint,
+          checkpoint: checkpointState.authoringResponses.get(stageCheckpointKey(outline.id, stage)) }),
+      onStageAuthoringResponse: async ({ outline, stage, modelFingerprint, inputFingerprint, source, system, prompt, text, complete }) => {
+        const checkpoint: AuthoringResponseCheckpoint = { schemaVersion: 1,
+          contractVersion: COURSE_FIRST_PASS_CONTRACT_VERSION, pageKey: outline.id, stage,
+          outlineFingerprint: fingerprintSceneOutline(outline), modelFingerprint, inputFingerprint,
+          source, text, complete, systemCharacters: system.length, promptCharacters: prompt.length };
+        await saveGenerationCheckpoint(job.id, `${AUTHORING_RESPONSE_PREFIX}${outline.id}:${stage}`,
+          checkpoint, { executionId });
+        checkpointState.authoringResponses.set(stageCheckpointKey(outline.id, stage), checkpoint);
+      },
+      onStageAuthoringValidated: async ({ outline, stage, modelFingerprint, inputFingerprint, accepted, issues }) => {
+        await saveGenerationCheckpoint(job.id, `authoring-acceptance:${outline.id}:${stage}`, {
+          schemaVersion: 1, contractVersion: COURSE_FIRST_PASS_CONTRACT_VERSION, pageKey: outline.id, stage,
+          outlineFingerprint: fingerprintSceneOutline(outline), modelFingerprint, inputFingerprint,
+          accepted, issues: issues ?? [],
+        }, { executionId });
+      },
+      loadAuxiliaryAuthoringState: ({ key }) => checkpointState.auxiliaryAuthoringStates.get(key) ?? null,
+      onAuxiliaryAuthoringAttempt: async ({ key, modelFingerprint, inputFingerprint, attemptsStarted }) => {
+        const checkpoint = { schemaVersion: 1, contractVersion: COURSE_FIRST_PASS_CONTRACT_VERSION,
+          key, modelFingerprint, inputFingerprint, attemptsStarted };
+        await saveGenerationCheckpoint(job.id, `aux-authoring:${key}`, checkpoint, { executionId });
+        checkpointState.auxiliaryAuthoringStates.set(key, checkpoint);
+      },
+      onAuxiliaryAuthoringResponse: async ({ key, modelFingerprint, inputFingerprint, source, system, prompt, text, complete }) => {
+        const checkpoint = { schemaVersion: 1, contractVersion: COURSE_FIRST_PASS_CONTRACT_VERSION,
+          key, modelFingerprint, inputFingerprint,
+          attemptsStarted: checkpointState.auxiliaryAuthoringStates.get(key)?.attemptsStarted ?? 1,
+          rawResponse: text, complete, source, systemCharacters: system.length, promptCharacters: prompt.length };
+        await saveGenerationCheckpoint(job.id, `aux-authoring:${key}`, checkpoint, { executionId });
+        checkpointState.auxiliaryAuthoringStates.set(key, checkpoint);
+      },
+      loadSceneStageAttemptCount: async (outline, stage, modelFingerprint, inputFingerprint, legacyInputFingerprint) => {
+        const key = stageCheckpointKey(outline.id, stage);
+        const migrated = migrateSceneStageAttemptInputFingerprint({ outline, stage, modelFingerprint,
+          inputFingerprint, legacyInputFingerprint, checkpoint: checkpointState.stageAttemptCheckpoints.get(key) });
+        if (migrated) {
+          await saveGenerationCheckpoint(job.id, `stage-attempt:${outline.id}:${stage}`, migrated, { executionId });
+          checkpointState.stageAttemptCheckpoints.set(key, migrated);
+        }
+        const attempts = restoreSceneStageAttemptCount({
           outline,
           checkpoint: checkpointState.stageAttemptCheckpoints.get(stageCheckpointKey(outline.id, stage)),
           stage,
           modelFingerprint,
           inputFingerprint,
-        }),
+          executionId,
+        });
+        const preserved = checkpointState.stageAttemptCheckpoints.get(key);
+        // Input/source hashes can change after an upgrade or a bridge is
+        // recompiled. Only an explicitly cleared stage can buy another draft.
+        return Math.max(attempts, preserved?.pageKey === outline.id && preserved.stage === stage
+          && Number.isInteger(preserved.attemptsStarted) ? preserved.attemptsStarted : 0);
+      },
       onSceneStageAttempt: async (outline, stage, attemptsStarted, modelFingerprint, inputFingerprint) => {
+        const key = stageCheckpointKey(outline.id, stage);
+        const prior = checkpointState.stageAttemptCheckpoints.get(key);
+        const previous = prior?.outlineFingerprint === fingerprintSceneOutline(outline)
+          && prior.modelFingerprint === modelFingerprint
+          && prior.inputFingerprint === inputFingerprint ? prior : undefined;
+        const interruptedReplay = canReplayInterruptedSceneStageAttempt(previous, executionId)
+          && attemptsStarted <= previous!.attemptsStarted;
         const checkpoint = await persistSceneStageAttempt({
           jobId: job.id,
           outline,
@@ -1182,8 +1814,29 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
           modelFingerprint,
           inputFingerprint,
           executionId,
+          status: "started",
+          interruptedReplays: (previous?.interruptedReplays ?? 0) + (interruptedReplay ? 1 : 0),
         });
-        checkpointState.stageAttemptCheckpoints.set(stageCheckpointKey(outline.id, stage), checkpoint);
+        checkpointState.stageAttemptCheckpoints.set(key, checkpoint);
+      },
+      onSceneStageAttemptSettled: async (outline, stage, attemptsStarted, outcome, modelFingerprint, inputFingerprint) => {
+        const key = stageCheckpointKey(outline.id, stage);
+        const previous = checkpointState.stageAttemptCheckpoints.get(key);
+        if (!previous || previous.executionId !== executionId || previous.attemptsStarted !== attemptsStarted
+          || previous.outlineFingerprint !== fingerprintSceneOutline(outline)
+          || previous.modelFingerprint !== modelFingerprint || previous.inputFingerprint !== inputFingerprint) return;
+        const checkpoint = await persistSceneStageAttempt({
+          jobId: job.id,
+          outline,
+          stage,
+          attemptsStarted,
+          modelFingerprint,
+          inputFingerprint,
+          executionId,
+          status: outcome,
+          interruptedReplays: previous.interruptedReplays ?? 0,
+        });
+        checkpointState.stageAttemptCheckpoints.set(key, checkpoint);
       },
       onSceneCompleted: async (outline, scene, _index, modelFingerprint, inputFingerprint) => {
         const checkpoint = await persistSceneCheckpoint(
@@ -1270,6 +1923,27 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         })),
       };
       await generateClassroomAssets(assetInput);
+      const candidateClassroom = await readClassroom(split.studentClassroomId);
+      if (!previousClassroom || !candidateClassroom) {
+        throw new Error("局部更新课堂文件缺失，不能验收候选页面。");
+      }
+      const mergedScenes = mergeCourseDesignClassroomScenes({
+        outlineIds: course.content._openmaicSceneOutlines?.map((outline) => outline.id) ?? [],
+        affectedOutlineIds: request.updateTarget.affectedOutlineIds,
+        baseScenes: previousClassroom.scenes,
+        candidateScenes: candidateClassroom.scenes,
+      });
+      if (!mergedScenes) throw new Error("局部更新候选页面不完整，不能验收课堂。");
+      const candidateAudit = await auditCourseGeneratedResources(courseId, {
+        course: { ...course, aiLearningClassroomId: candidateClassroom.id,
+          content: { ...course.content, _openmaicClassroomId: candidateClassroom.id } },
+        classroom: { ...candidateClassroom, stage: previousClassroom.stage, scenes: mergedScenes },
+      });
+      const missingOriginals = candidateAudit.issues.filter((issue) =>
+        issue.id.startsWith("media:source-image:") || issue.id.startsWith("content:source-sequence:"));
+      if (missingOriginals.length) {
+        throw new Error(`局部更新缺少必用教材原图：${missingOriginals.map((issue) => issue.detail).join("；")}`);
+      }
       const candidateId = `candidate-${job.id}-${Date.now()}`;
       await updateCourse(courseId, (current) => {
         const revision = current.content.designWorkspaceRevision;
@@ -1351,12 +2025,18 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       estimatedRemainingSeconds: 150,
     }));
     await assertCourseGenerationExecution(job);
+    const versionedOutlines = checkpointState.preparedOutlines.some((outline) => outline.sectionPlanVersion)
+      ? checkpointState.preparedOutlines
+      : generated.assetContext.outlines.some((outline) => outline.sectionPlanVersion)
+        ? generated.assetContext.outlines : undefined;
     await linkClassroomToCourse(courseId, split.studentClassroomId, {
       scenesCount: split.studentSceneCount,
       stageName: generated.stage.name,
       teacherClassroomId: split.teacherClassroomId,
       teacherResourceScenes: split.teacherResourceScenes,
-      sceneOutlines: generated.assetContext.outlines,
+      // Versioned sections are merged below against current course content;
+      // the linker must not replace unrelated teacher-confirmed sections.
+      sceneOutlines: versionedOutlines ? undefined : generated.assetContext.outlines,
       systemMode: "new",
     }, { signal: controller.signal });
     const generatedOutlineIds = generated.assetContext.outlines.map((outline) => outline.id);
@@ -1369,15 +2049,19 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
         && current.content.classroomGenerationRun.generatedOutlineIds.every(
           (id, index) => id === generatedOutlineIds[index],
         );
-      if (alreadyApplied) return current;
+      const content = versionedOutlines
+        ? applyVersionedOutlinePlanToCourseContent(current.content, versionedOutlines) : current.content;
+      if (alreadyApplied) return content === current.content ? current : { ...current, content };
       return {
         ...current,
         content: {
-        ...current.content,
-        lessonOutline: current.content.lessonOutline.filter((outline) => generatedOutlineIdSet.has(outline.id)),
-        knowledgeLectureSections: deriveKnowledgeLectureSectionsFromOutlines(
-          generated.assetContext.outlines as unknown as import("@/lib/session/types").OpenMaicSceneOutlineSnapshot[],
-        ),
+        ...content,
+        lessonOutline: versionedOutlines ? content.lessonOutline
+          : content.lessonOutline.filter((outline) => generatedOutlineIdSet.has(outline.id)),
+        knowledgeLectureSections: versionedOutlines ? content.knowledgeLectureSections
+          : deriveKnowledgeLectureSectionsFromOutlines(
+            generated.assetContext.outlines as unknown as import("@/lib/session/types").OpenMaicSceneOutlineSnapshot[],
+          ),
         classroomGenerationRun: {
           scope: request.generationScope ?? "full-course",
           status: "completed",
@@ -1494,6 +2178,11 @@ async function runJobWithCourseGenerationContext(job: CourseGenerationJob): Prom
       estimatedRemainingSeconds: 15,
     }));
     const resourceAudit = await auditCourseGeneratedResources(courseId);
+    const missingTextbookImages = resourceAudit.issues.filter((issue) =>
+      issue.id.startsWith("media:source-image:") || issue.id.startsWith("content:source-sequence:"));
+    if (missingTextbookImages.length) {
+      throw new Error(`必用教材原图未通过课堂验收：${missingTextbookImages.map((issue) => issue.detail).join("；")}`);
+    }
     const requiredMediaFailures = mediaFailuresFromAudit(resourceAudit.issues).filter((failure) =>
       failure.type === "image"
         ? generationInput.enableImageGeneration !== false

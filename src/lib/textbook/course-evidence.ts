@@ -5,6 +5,12 @@ import type { ResourcePackageTeachingPoint } from "@/lib/course-design/resource-
 import type { KnowledgePoint } from "@/lib/session/types";
 import { searchTextbookEvidence } from "@/lib/textbook/service";
 import {
+  SOURCE_SEQUENCE_POLICY_VERSION,
+  extractFigureSequence,
+  extractOrderedSourceSequences,
+} from "@/lib/textbook/figure-sequence";
+import { normalizeTextbookText } from "@/lib/textbook/text";
+import {
   COURSE_EVIDENCE_SCHEMA_VERSION,
   type CourseEvidenceItem,
   type CourseEvidenceFigureReference,
@@ -32,6 +38,151 @@ function stableFingerprint(value: unknown): string {
 function sectionPath(path: string, title: string): string[] {
   const values = path.split(/[/>]/u).map((part) => part.trim()).filter(Boolean);
   return values.length ? values : [title];
+}
+
+function retrievalBlockIds(metadata: unknown, firstId?: string): string[] {
+  const value = metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? (metadata as { sourceBlockIds?: unknown }).sourceBlockIds : undefined;
+  return [...new Set([
+    ...(Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && Boolean(id)) : []),
+    ...(firstId ? [firstId] : []),
+  ])];
+}
+
+/** Recover figure links from all blocks of the adopted retrieval chunks. */
+export async function hydrateCourseEvidenceFigureReferences(
+  items: readonly CourseEvidenceItem[],
+): Promise<CourseEvidenceItem[]> {
+  const missingChunkIds = items.filter((item) => !item.source?.sourceBlockIds?.length && item.source?.revisionId && item.id)
+    .map((item) => item.id);
+  const retrievals = missingChunkIds.length ? await prisma.textbookRetrievalItem.findMany({
+    where: { id: { in: missingChunkIds } },
+    select: { id: true, revisionId: true, sourceBlockId: true, metadata: true },
+  }) : [];
+  const retrievalById = new Map(retrievals.map((item) => [item.id, item]));
+  const idsByItem = new Map(items.map((item) => {
+    const retrieval = retrievalById.get(item.id);
+    const ids = item.source?.sourceBlockIds?.length
+      ? item.source.sourceBlockIds
+      : retrieval && retrieval.revisionId === item.source?.revisionId
+        ? retrievalBlockIds(retrieval.metadata, retrieval.sourceBlockId ?? item.source?.sourceBlockId)
+        : item.source?.sourceBlockId ? [item.source.sourceBlockId] : [];
+    return [item.id, ids] as const;
+  }));
+  const allIds = [...new Set([...idsByItem.values()].flat())];
+  const blocks = allIds.length ? await prisma.textbookSourceBlock.findMany({
+    where: { id: { in: allIds } },
+    select: { id: true, revisionId: true, sectionId: true, position: true, content: true,
+      figures: { select: { id: true } } },
+  }) : [];
+  const blockById = new Map(blocks.map((block) => [block.id, block]));
+  const linked = items.map((item) => {
+    const blockIds = idsByItem.get(item.id) ?? [];
+    const refs = new Map((item.figureRefs ?? []).map((ref) => [ref.figureId, ref]));
+    for (const id of blockIds) {
+      const block = blockById.get(id);
+      if (!block || block.revisionId !== item.source?.revisionId) continue;
+      for (const figure of block.figures) {
+        refs.set(figure.id, { figureId: figure.id, relation: "source-block-direct",
+          direct: true, groupKey: `source-block:${id}` });
+      }
+    }
+    const figureRefs = [...refs.values()];
+    const sectionIds = [...new Set(blockIds.map((id) => blockById.get(id))
+      .filter((block) => block?.revisionId === item.source?.revisionId)
+      .map((block) => block?.sectionId).filter((id): id is string => typeof id === "string"))];
+    const completeSourceBlocks = item.kind === "source-block"
+      ? blockIds.map((id) => blockById.get(id))
+        .filter((block): block is NonNullable<typeof block> => block !== undefined
+          && block.revisionId === item.source?.revisionId
+          && typeof block.content === "string" && typeof block.position === "number")
+        .sort((left, right) => left.position - right.position)
+        .filter((block) => !normalizeTextbookText(item.content)
+          .includes(normalizeTextbookText(block.content)))
+        .map((block) => ({ sourceBlockId: block.id, content: block.content }))
+      : [];
+    return {
+      ...item,
+      source: { ...item.source, ...(blockIds.length ? { sourceBlockIds: blockIds } : {}),
+        ...(!item.source?.sectionId && sectionIds.length === 1 ? { sectionId: sectionIds[0] } : {}) } as CourseEvidenceItem['source'],
+      figureRefs,
+      figureIds: figureRefs.map((ref) => ref.figureId),
+      ...(completeSourceBlocks.length ? { completeSourceBlocks } : {}),
+    };
+  });
+  const missingSequenceIds = [...new Set(linked.flatMap((item) => (item.figureRefs ?? [])
+    .filter((reference) => reference.direct && !item.figureSequencesResolved
+      && !item.figureSequences?.some((sequence) => sequence.figureId === reference.figureId))
+    .map((reference) => reference.figureId)))];
+  const figures = missingSequenceIds.length ? await prisma.textbookFigure.findMany({
+    where: { id: { in: missingSequenceIds } },
+    select: { id: true, revisionId: true, sectionId: true, caption: true,
+      sourceBlock: { select: { position: true } } },
+  }) : [];
+  const sequences = new Map(await Promise.all(figures.flatMap((figure) => {
+    const sectionId = figure.sectionId;
+    const anchorPosition = figure.sourceBlock?.position;
+    if (!sectionId || anchorPosition === undefined
+      || !/流程|步骤|阶段|环节|过程/u.test(figure.caption ?? "")) return [];
+    return [(async () => {
+      const following = await prisma.textbookSourceBlock.findMany({
+        where: { revisionId: figure.revisionId, sectionId,
+          position: { gt: anchorPosition } },
+        orderBy: { position: "asc" }, take: 60,
+        select: { id: true, position: true, blockType: true, content: true },
+      });
+      return [figure.id, extractFigureSequence(following)] as const;
+    })()];
+  })));
+  const withFigureSequences = linked.map((item) => {
+    const additions = (item.figureRefs ?? []).filter((reference) => reference.direct)
+      .flatMap((reference) => {
+        const steps = sequences.get(reference.figureId);
+        return steps?.length ? [{ figureId: reference.figureId,
+          kind: "ordered-steps" as const, steps }] : [];
+      });
+    return { ...item, figureSequences: [...(item.figureSequences ?? []), ...additions],
+      figureSequencesResolved: true };
+  });
+  // Search excerpts are intentionally small. Resolve complete numbered units
+  // from the adopted immutable section, including old indexes whose metadata
+  // ends mid-list. This is independent of whether a figure is present.
+  const needsSourceSequences = (item: CourseEvidenceItem) => !item.sourceSequencesResolved
+    || item.sourceSequencePolicyVersion !== SOURCE_SEQUENCE_POLICY_VERSION;
+  const scopes = [...new Map(withFigureSequences.filter((item) => needsSourceSequences(item) && item.source?.sectionId
+    && (idsByItem.get(item.id)?.length ?? 0) > 0).map((item) => [
+    `${item.source.revisionId}:${item.source.sectionId}`,
+    { revisionId: item.source.revisionId, sectionId: item.source.sectionId! },
+  ])).values()];
+  const sectionBlocks = scopes.length ? await prisma.textbookSourceBlock.findMany({
+    where: { OR: scopes }, orderBy: { position: "asc" },
+    select: { id: true, revisionId: true, sectionId: true, position: true, blockType: true, content: true },
+  }) : [];
+  const sequencesByScope = new Map(scopes.flatMap((scope) => {
+    const key = `${scope.revisionId}:${scope.sectionId}`;
+    const blocks = sectionBlocks.filter((block) =>
+      block.revisionId === scope.revisionId && block.sectionId === scope.sectionId);
+    // Missing source data is not proof that a frozen source list disappeared.
+    // Keep its previous evidence and leave it eligible for a later hydration.
+    return blocks.length ? [[key, extractOrderedSourceSequences(blocks)] as const] : [];
+  }));
+  return withFigureSequences.map((item) => {
+    const key = `${item.source.revisionId}:${item.source.sectionId ?? ""}`;
+    if (!needsSourceSequences(item) || !sequencesByScope.has(key)) return item;
+    const adoptedIds = new Set(idsByItem.get(item.id) ?? []);
+    const linkedSequences = (sequencesByScope.get(key) ?? []).filter((sequence) =>
+      sequence.steps.some((step) => adoptedIds.has(step.sourceBlockId)
+        || (step.excerptBlockId ? adoptedIds.has(step.excerptBlockId) : false)));
+    const sourceSequences = linkedSequences.filter((sequence) =>
+      !(item.figureSequences ?? []).some((figure) => figure.steps.map((step) => step.sourceBlockId).join("|")
+        === sequence.steps.map((step) => step.sourceBlockId).join("|")))
+      .map((sequence) => ({ ...sequence, kind: "ordered-steps" as const }));
+    // These lists are derived from immutable source blocks. Replace stale
+    // derivations rather than retaining an old list merely because its anchor
+    // still exists; an older parser may have merged two numbering levels.
+    return { ...item, sourceSequences, sourceSequencesResolved: true,
+      sourceSequencePolicyVersion: SOURCE_SEQUENCE_POLICY_VERSION };
+  });
 }
 
 function supportStatus(point: ResourcePackageTeachingPoint, item: CourseEvidenceItem | undefined): CourseEvidenceMapping["status"] {
@@ -62,12 +213,28 @@ export async function resolveCourseEvidenceSnapshot(input: {
   const revisionIds = input.selections.map((selection) => selection.revisionId);
   const revisions = await prisma.textbookRevision.findMany({
     where: { id: { in: revisionIds } },
-    include: { textbook: true, sections: { select: { id: true, title: true, path: true, kind: true, position: true } } },
+    include: { textbook: true, sections: { select: { id: true, parentId: true, title: true, path: true, kind: true, level: true, position: true } } },
   });
   if (revisions.length !== revisionIds.length) {
     throw new CourseEvidenceError("TEXTBOOK_REVISION_NOT_FOUND", "部分教材版本不存在，请重新选择。", 404);
   }
   const revisionById = new Map(revisions.map((revision) => [revision.id, revision]));
+  const sectionByRevision = new Map(revisions.map((revision) => [
+    revision.id,
+    new Map(revision.sections.map((section) => [section.id, section])),
+  ] as const));
+  const sectionHierarchy = (revisionId: string, sectionId: string | null) => {
+    const byId = sectionByRevision.get(revisionId);
+    const result: NonNullable<CourseEvidenceItem["source"]["sectionHierarchy"]> = [];
+    const visited = new Set<string>();
+    let current = sectionId ? byId?.get(sectionId) : undefined;
+    while (current && !visited.has(current.id)) {
+      visited.add(current.id);
+      result.unshift({ id: current.id, title: current.title, kind: current.kind, level: current.level });
+      current = current.parentId ? byId?.get(current.parentId) : undefined;
+    }
+    return result;
+  };
   for (const selection of input.selections) {
     const revision = revisionById.get(selection.revisionId)!;
     if (revision.textbook.status === "ARCHIVED") {
@@ -121,7 +288,7 @@ export async function resolveCourseEvidenceSnapshot(input: {
       revision: { include: { textbook: true } },
       section: { include: { figures: { select: { id: true } } } },
       sourceBlock: { include: { figures: { select: { id: true } } } },
-      concept: { include: { evidence: { include: { sourceBlock: { include: { figures: { select: { id: true } } } } }, orderBy: { sourceBlock: { position: "asc" } }, take: 1 }, figures: true } },
+      concept: { include: { evidence: { include: { sourceBlock: { include: { figures: { select: { id: true } } } } }, orderBy: { sourceBlock: { position: "asc" } } }, figures: true } },
       example: { include: { concepts: { include: { concept: { include: { figures: true } } } } } },
     },
   }) : [];
@@ -179,6 +346,7 @@ export async function resolveCourseEvidenceSnapshot(input: {
         revisionVersion: record.revision.revision,
         sectionId: record.sectionId ?? undefined,
         sectionPath: record.section ? sectionPath(record.section.path, record.section.title) : [],
+        sectionHierarchy: sectionHierarchy(record.revisionId, record.sectionId),
         sectionPosition: record.section?.position,
         sourceBlockId: evidenceBlock?.id,
         sourceBlockPosition: evidenceBlock?.position,
@@ -190,7 +358,8 @@ export async function resolveCourseEvidenceSnapshot(input: {
       retrievalScore: scoreById.get(record.id),
     } satisfies CourseEvidenceItem];
   });
-  const itemById = new Map(items.map((item) => [item.id, item]));
+  const completeItems = await hydrateCourseEvidenceFigureReferences(items);
+  const itemById = new Map(completeItems.map((item) => [item.id, item]));
   const mappings: CourseEvidenceMapping[] = retrievals.map(({ point, result }) => {
     const evidenceItemIds = result.hits.slice(0, 5).map((hit) => hit.retrievalItemId).filter((id) => itemById.has(id));
     const strongest = itemById.get(evidenceItemIds[0] ?? "");
@@ -212,7 +381,7 @@ export async function resolveCourseEvidenceSnapshot(input: {
   const payload = {
     schemaVersion: COURSE_EVIDENCE_SCHEMA_VERSION,
     selections: input.selections,
-    items,
+    items: completeItems,
     mappings,
     retrievalMode: degradedReasons.length ? "lexical-degraded" as const : "hybrid" as const,
     warnings: degradedReasons.length
@@ -275,7 +444,7 @@ export async function resolveCourseTextbookFigures(
   snapshot?: CourseEvidenceSnapshot,
   lessonKnowledgePoints?: readonly Pick<KnowledgePoint, "id" | "sourceId" | "sourceKnowledgePointIds" | "evidenceItemIds">[],
 ): Promise<CourseTextbookFigureResource[]> {
-  const items = snapshot?.items ?? [];
+  const items = await hydrateCourseEvidenceFigureReferences(snapshot?.items ?? []);
   const referencesByFigure = new Map<string, Array<{
     item: CourseEvidenceItem;
     reference: CourseEvidenceFigureReference;
@@ -295,21 +464,21 @@ export async function resolveCourseTextbookFigures(
   const figureIds = [...referencesByFigure.keys()];
   if (!figureIds.length) return [];
 
-  const requiredFigureIds = new Set<string>();
-  for (const mapping of snapshot?.mappings ?? []) {
-    if (mapping.status !== "direct") continue;
-    const firstDirectItem = mapping.evidenceItemIds
-      .map((evidenceId) => items.find((item) => item.id === evidenceId))
-      .find((item) => item?.figureRefs?.some((reference) => reference.direct));
-    const direct = firstDirectItem?.figureRefs?.filter((reference) => reference.direct) ?? [];
-    if (!direct.length) continue;
-    const groupKey = direct[0]?.groupKey;
-    for (const reference of groupKey
-      ? direct.filter((candidate) => candidate.groupKey === groupKey)
-      : direct.slice(0, 1)) {
-      requiredFigureIds.add(reference.figureId);
-    }
-  }
+  const supportingMappings = (snapshot?.mappings ?? []).filter((mapping) => mapping.status !== "none");
+  const adoptedEvidenceByPoint = new Map((lessonKnowledgePoints ?? []).map((point) => [point.id,
+    new Set(point.evidenceItemIds !== undefined ? point.evidenceItemIds : supportingMappings
+      .filter((mapping) => [point.id, point.sourceId, ...(point.sourceKnowledgePointIds ?? [])]
+        .includes(mapping.sourceKnowledgePointId)).flatMap((mapping) => mapping.evidenceItemIds)),
+  ] as const));
+  // A lesson point's explicit selection is authoritative, including [].
+  // Upstream mappings are retrieval candidates and only recover older points
+  // that did not persist an evidence selection.
+  const adoptedEvidenceIds = new Set(lessonKnowledgePoints
+    ? [...adoptedEvidenceByPoint.values()].flatMap((ids) => [...ids])
+    : supportingMappings.flatMap((mapping) => mapping.evidenceItemIds));
+  const requiredFigureIds = new Set(items.filter((item) => adoptedEvidenceIds.has(item.id))
+    .flatMap((item) => (item.figureRefs ?? []).filter((reference) => reference.direct)
+      .map((reference) => reference.figureId)));
   const figures = await prisma.textbookFigure.findMany({
     where: { id: { in: figureIds } },
     include: { fileAsset: true, revision: { include: { textbook: true } }, section: true },
@@ -319,32 +488,25 @@ export async function resolveCourseTextbookFigures(
     const figure = byId.get(figureId);
     const references = referencesByFigure.get(figureId) ?? [];
     const direct = references.some(({ reference }) => reference.direct);
-    const required = requiredFigureIds.has(figureId);
+    const adopted = references.some(({ item, reference }) => reference.direct && adoptedEvidenceIds.has(item.id));
     const evidenceItemIds = [...new Set(references.map(({ item }) => item.id))];
     const sourceKnowledgePointIds = [...new Set((snapshot?.mappings ?? []).flatMap((mapping) => (
       mapping.evidenceItemIds.some((evidenceId) => evidenceItemIds.includes(evidenceId))
         ? [mapping.sourceKnowledgePointId]
         : []
     )))];
-    const sourceIds = new Set(sourceKnowledgePointIds);
-    const sourceTargets = lessonKnowledgePoints?.filter((point) => (
-      [point.id, point.sourceId, ...(point.sourceKnowledgePointIds ?? [])]
-        .some((id) => id && sourceIds.has(id))
-    )) ?? [];
-    const evidenceTargets = lessonKnowledgePoints?.filter((point) => (
-      point.evidenceItemIds?.some((id) => evidenceItemIds.includes(id))
-    )) ?? [];
-    const evidenceTargetIds = new Set(evidenceTargets.map((point) => point.id));
-    const preciseTargets = sourceTargets.filter((point) => evidenceTargetIds.has(point.id));
     const knowledgePointIds = lessonKnowledgePoints
-      ? (preciseTargets.length ? preciseTargets : sourceTargets.length ? sourceTargets : evidenceTargets)
-          .map((point) => point.id)
+      ? lessonKnowledgePoints.filter((point) => evidenceItemIds
+        .some((id) => adoptedEvidenceByPoint.get(point.id)?.has(id))).map((point) => point.id)
       : sourceKnowledgePointIds;
     const sourceTitle = figure?.revision.textbook.title
       ?? references[0]?.item.source.textbookTitle
       ?? "教材";
     const relation = direct ? "direct" as const : "candidate" as const;
+    const required = requiredFigureIds.has(figureId) && adopted && knowledgePointIds.length > 0;
     const groupKey = references.find(({ reference }) => reference.direct && reference.groupKey)?.reference.groupKey;
+    const orderedSteps = references.flatMap(({ item }) => item.figureSequences ?? [])
+      .find((sequence) => sequence.figureId === figureId)?.steps;
     const base = {
       id: `textbook_fig_${createHash("sha256").update(figureId).digest("hex").slice(0, 12)}`,
       figureId,
@@ -352,6 +514,7 @@ export async function resolveCourseTextbookFigures(
       relation,
       required,
       ...(groupKey ? { groupKey } : {}),
+      ...(orderedSteps?.length ? { orderedSteps } : {}),
       evidenceItemIds,
       knowledgePointIds,
       sourceTitle,

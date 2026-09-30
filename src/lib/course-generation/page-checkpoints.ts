@@ -36,7 +36,24 @@ export type SceneStageAttemptSnapshot = {
   modelFingerprint: string;
   inputFingerprint?: string;
   attemptsStarted: number;
+  /** A response is not committed until the stage checkpoint has been saved. */
+  status?: "started" | "response" | "failed" | "aborted";
+  executionId?: string;
+  /** At most one model call can be replayed after a process interruption. */
+  interruptedReplays?: number;
 };
+
+export function canReplayInterruptedSceneStageAttempt(
+  checkpoint: SceneStageAttemptSnapshot | undefined,
+  executionId: string | undefined,
+): boolean {
+  // A lost process cannot prove that an already-started request was rejected.
+  // Completed raw responses can be validated locally; unknown requests require
+  // an explicit teacher regeneration instead of opening a hidden paid replay.
+  void checkpoint;
+  void executionId;
+  return false;
+}
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -52,6 +69,8 @@ function canonicalize(value: unknown): unknown {
 export function fingerprintSceneOutline(outline: SceneOutline): string {
   // Display order changes when an earlier page is split. It does not change
   // this page's content, narration or resources; restore uses the new order.
+  // Keep sourcePageIds and sectionPlanVersion in this hash: even an unchanged
+  // page needs new narration when the teaching responsibility of its section moves.
   const semanticOutline = { ...outline } as Partial<SceneOutline>;
   delete semanticOutline.order;
   return fingerprintGenerationValue(semanticOutline);
@@ -85,6 +104,7 @@ export function restoreSceneStageAttemptCount(input: {
   stage: SceneGenerationCheckpointStage;
   modelFingerprint: string;
   inputFingerprint?: string;
+  executionId?: string;
 }): number {
   const { checkpoint } = input;
   if (!checkpoint || checkpoint.schemaVersion !== SCENE_STAGE_CHECKPOINT_VERSION) return 0;
@@ -92,9 +112,31 @@ export function restoreSceneStageAttemptCount(input: {
   if (checkpoint.outlineFingerprint !== fingerprintSceneOutline(input.outline)) return 0;
   if (checkpoint.modelFingerprint !== input.modelFingerprint) return 0;
   if (checkpoint.inputFingerprint !== input.inputFingerprint) return 0;
-  return Number.isInteger(checkpoint.attemptsStarted) && checkpoint.attemptsStarted > 0
-    ? checkpoint.attemptsStarted
-    : 0;
+  const attemptsStarted = Number.isInteger(checkpoint.attemptsStarted) && checkpoint.attemptsStarted > 0
+    ? checkpoint.attemptsStarted : 0;
+  return canReplayInterruptedSceneStageAttempt(checkpoint, input.executionId)
+    ? Math.max(0, attemptsStarted - 1) : attemptsStarted;
+}
+
+/** Migrate only a reconstructed legacy input hash for the exact unchanged
+ * page/model/stage. Keep spent calls and interruption bookkeeping intact. */
+export function migrateSceneStageAttemptInputFingerprint(input: {
+  outline: SceneOutline;
+  checkpoint: SceneStageAttemptSnapshot | undefined;
+  stage: SceneGenerationCheckpointStage;
+  modelFingerprint: string;
+  inputFingerprint?: string;
+  legacyInputFingerprint?: string;
+}): SceneStageAttemptSnapshot | null {
+  const { checkpoint } = input;
+  if (!checkpoint || checkpoint.schemaVersion !== SCENE_STAGE_CHECKPOINT_VERSION
+    || !input.inputFingerprint || !input.legacyInputFingerprint
+    || input.legacyInputFingerprint === input.inputFingerprint
+    || checkpoint.pageKey !== input.outline.id || checkpoint.stage !== input.stage
+    || checkpoint.outlineFingerprint !== fingerprintSceneOutline(input.outline)
+    || checkpoint.modelFingerprint !== input.modelFingerprint
+    || checkpoint.inputFingerprint !== input.legacyInputFingerprint) return null;
+  return { ...checkpoint, inputFingerprint: input.inputFingerprint };
 }
 
 function isScene(value: unknown): value is Scene {

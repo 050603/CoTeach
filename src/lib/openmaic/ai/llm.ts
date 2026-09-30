@@ -6,7 +6,7 @@ import { withClassroomAiCapacity } from "@/lib/llm/classroom-capacity";
  */
 
 import { generateText, streamText } from 'ai';
-import type { GenerateTextResult, JSONValue, LanguageModel, StreamTextResult } from 'ai';
+import type { GenerateTextResult, JSONValue, LanguageModel, LanguageModelUsage, StreamTextResult } from 'ai';
 import { createLogger } from '@openmaic/lib/logger';
 import { PROVIDERS } from './providers';
 import { thinkingContext } from './thinking-context';
@@ -24,9 +24,11 @@ import {
   throwIfAborted,
 } from '@openmaic/lib/generation/generation-retry';
 import {
+  isCourseGenerationLlmContext,
   reportCourseGenerationTokenUsage,
   withCourseGenerationLlmSlot,
 } from '@/lib/course-generation/llm-concurrency';
+import { isFirstPassProviderRejection } from '@/lib/course-generation/first-pass-policy';
 const log = createLogger('LLM');
 
 // Re-export for external use
@@ -54,6 +56,44 @@ function getModelId(params: GenerateTextParams | StreamTextParams): string {
   if (typeof m === 'string') return m;
   if (m && typeof m === 'object' && 'modelId' in m) return (m as { modelId: string }).modelId;
   return 'unknown';
+}
+
+function usageDetails(
+  params: GenerateTextParams | StreamTextParams,
+  source: string,
+  usage?: Partial<LanguageModelUsage>,
+) {
+  const model = params.model as unknown as { provider?: string };
+  return {
+    source,
+    modelId: getModelId(params),
+    provider: typeof params.model === 'string' ? 'registry' : model?.provider,
+    inputTokens: usage?.inputTokens,
+    outputTokens: usage?.outputTokens,
+    cacheReadTokens: usage?.inputTokenDetails?.cacheReadTokens,
+    cacheWriteTokens: usage?.inputTokenDetails?.cacheWriteTokens,
+    reasoningTokens: usage?.outputTokenDetails?.reasoningTokens,
+    inputCharacters: JSON.stringify(_extractRequestInfo(params)).length,
+  };
+}
+
+/** Preserve the draft for diagnostics while preventing a caller from replaying it. */
+function retainModelOutput(error: unknown, text: string, reasoningCharacters = 0): Error {
+  const record = error && typeof error === 'object' ? error as Record<string, unknown> : undefined;
+  const wrapped = new Error(typeof record?.message === 'string' ? record.message : String(error), { cause: error });
+  wrapped.name = typeof record?.name === 'string' ? record.name : 'Error';
+  for (const key of ['code', 'status', 'statusCode', 'status_code', 'isRetryable'] as const) {
+    if (record?.[key] !== undefined) Object.assign(wrapped, { [key]: record[key] });
+  }
+  Object.assign(wrapped, {
+    textCharacters: text.length,
+    reasoningCharacters,
+    outputStarted: text.length > 0 || reasoningCharacters > 0,
+    ...(text.length > 0 || reasoningCharacters > 0 ? { isRetryable: false } : {}),
+  });
+  // Avoid dumping a complete textbook/draft into an ordinary error log.
+  Object.defineProperty(wrapped, 'rawResponse', { value: text });
+  return wrapped;
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +348,8 @@ async function callLLMWithoutCourseLimit<T extends GenerateTextParams>(
   thinking?: ThinkingConfig,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<GenerateTextResult<any, any, any>> {
-  const maxAttempts = (retryOptions?.retries ?? 0) + 1;
+  const courseGeneration = isCourseGenerationLlmContext();
+  const maxAttempts = courseGeneration ? 1 : (retryOptions?.retries ?? 0) + 1;
   const validate = retryOptions?.validate ?? (maxAttempts > 1 ? DEFAULT_VALIDATE : undefined);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -316,11 +357,13 @@ async function callLLMWithoutCourseLimit<T extends GenerateTextParams>(
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let receivedResult: GenerateTextResult<any, any, any> | undefined; // eslint-disable-line @typescript-eslint/no-explicit-any
+    let usageRecorded = false;
     try {
       throwIfAborted(params.abortSignal);
       // Resolve effective thinking config: per-call > global env > undefined
       const effectiveThinking = thinking ?? getGlobalThinkingConfig();
-      const injectedParams = injectProviderOptions(params, effectiveThinking);
+      const injectedParams = injectProviderOptions(courseGeneration ? { ...params, maxRetries: 0 } : params, effectiveThinking);
 
       // Wrap in thinkingContext so the custom fetch wrapper in providers.ts
       // can read the config and inject vendor-specific body params for
@@ -328,11 +371,24 @@ async function callLLMWithoutCourseLimit<T extends GenerateTextParams>(
       const result = await thinkingContext.run(effectiveThinking, () =>
         generateText(injectedParams),
       );
-      throwIfAborted(params.abortSignal);
+      receivedResult = result;
+      const usage = result.totalUsage ?? result.usage;
+      usageRecorded = true;
+      const details = usageDetails(params, source, usage);
+      const reasoningCharacters = result.reasoningText?.length ?? 0;
+      const incomplete = ['length', 'content-filter', 'error'].includes(result.finishReason);
       await reportCourseGenerationTokenUsage(
-        result.usage.totalTokens,
-        JSON.stringify(_extractRequestInfo(params)).length + result.text.length,
+        usage?.totalTokens,
+        details.inputCharacters + result.text.length + reasoningCharacters,
+        { ...details, outputCharacters: result.text.length, reasoningCharacters,
+          outcome: params.abortSignal?.aborted ? 'aborted' : incomplete ? 'failed' : 'response' },
       );
+      throwIfAborted(params.abortSignal);
+      if (courseGeneration && incomplete) {
+        throw Object.assign(new Error(`Model response ended before completion (finishReason=${result.finishReason})`), {
+          code: 'LLM_STREAM_INCOMPLETE', isRetryable: false,
+        });
+      }
 
       // Validate result (only when retries are configured)
       if (validate && !validate(result.text)) {
@@ -346,6 +402,23 @@ async function callLLMWithoutCourseLimit<T extends GenerateTextParams>(
       return result;
     } catch (error) {
       lastError = error;
+      if (courseGeneration && !usageRecorded) {
+        usageRecorded = true;
+        const details = usageDetails(params, source);
+        const rejected = isFirstPassProviderRejection(error);
+        await reportCourseGenerationTokenUsage(rejected ? 0 : undefined,
+          rejected ? 0 : details.inputCharacters, {
+            ...details, outcome: params.abortSignal?.aborted ? 'aborted' : 'failed',
+            ...(rejected ? { inputTokens: 0, outputTokens: 0, usageSource: 'estimated' as const } : {}),
+          });
+      }
+
+      if (receivedResult) {
+        // Storage, validation and cancellation happen after the response; they
+        // cannot turn it into an eligible provider refusal.
+        lastError = retainModelOutput(error, receivedResult.text);
+        if (courseGeneration) throw lastError;
+      }
 
       // A disconnected request must never spend another retry attempt. Some
       // providers wrap AbortError, so check both the error and the signal.
@@ -383,7 +456,8 @@ export function streamLLM<T extends StreamTextParams>(
   throwIfAborted(params.abortSignal);
   // Resolve effective thinking config and wrap in thinkingContext
   const effectiveThinking = thinking ?? getGlobalThinkingConfig();
-  const injectedParams = injectProviderOptions(params, effectiveThinking);
+  const injectedParams = injectProviderOptions(isCourseGenerationLlmContext()
+    ? { ...params, maxRetries: 0 } : params, effectiveThinking);
   const result = thinkingContext.run(effectiveThinking, () => streamText(injectedParams));
 
   return result;
@@ -414,7 +488,6 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
   } = {},
 ): Promise<string> {
   const run = async () => {
-    const result = streamLLM(params, source, thinking);
     const modelMetadata = typeof params.model === 'string'
       ? { provider: 'registry', modelId: params.model }
       : params.model as unknown as { provider?: string; modelId?: string };
@@ -423,7 +496,7 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
     let reasoningCharacters = 0;
     let activityEvents = 0;
     let finishReason: string | undefined;
-    let reportedTotalTokens: number | undefined;
+    let reportedUsage: Partial<LanguageModelUsage> | undefined;
     let usageRecorded = false;
     let firstOutputAt: number | undefined;
     const startedAt = Date.now();
@@ -439,6 +512,7 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
       });
     };
     try {
+      const result = streamLLM(params, source, thinking);
       // Consume the complete event stream instead of awaiting `result.text` so
       // reasoning deltas count as useful transport activity too. Deep-reasoning
       // models can spend several minutes emitting reasoning before the first
@@ -458,28 +532,31 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
           if (params.abortSignal?.aborted) {
             throw new DOMException(part.reason || 'Model stream aborted', 'AbortError');
           }
-          // The SDK also emits `abort` when an upstream stream ends without
-          // the caller cancelling it. Preserve the transport retry budget for
-          // that case instead of classifying it as a user cancellation.
+          // An upstream abort leaves the request state unknown, even before
+          // the first visible token. Replaying it can charge for the work twice.
           throw Object.assign(new Error(part.reason || 'Model stream aborted unexpectedly'), {
             code: 'LLM_STREAM_TRUNCATED',
-            isRetryable: true,
+            isRetryable: false,
           });
         } else if (part.type === 'finish') {
           finishReason = part.finishReason;
-          reportedTotalTokens = part.totalUsage.totalTokens;
+          reportedUsage = part.totalUsage;
         }
       }
-      throwIfAborted(params.abortSignal);
-      await reportCourseGenerationTokenUsage(
-        reportedTotalTokens,
-        JSON.stringify(_extractRequestInfo(params)).length + reasoningCharacters + textCharacters,
-      );
+      const details = usageDetails(params, source, reportedUsage);
       usageRecorded = true;
+      await reportCourseGenerationTokenUsage(
+        reportedUsage?.totalTokens,
+        details.inputCharacters + reasoningCharacters + textCharacters,
+        { ...details, outputCharacters: textCharacters, reasoningCharacters,
+          outcome: params.abortSignal?.aborted ? 'aborted'
+            : !finishReason || ['length', 'content-filter', 'error'].includes(finishReason) ? 'failed' : 'response' },
+      );
+      throwIfAborted(params.abortSignal);
       if (!finishReason) {
         throw Object.assign(
           new Error('Model stream disconnected before a finish event'),
-          { code: 'LLM_STREAM_TRUNCATED', isRetryable: true },
+          { code: 'LLM_STREAM_TRUNCATED', isRetryable: false },
         );
       }
       if (finishReason === 'length' || finishReason === 'content-filter' || finishReason === 'error') {
@@ -496,11 +573,23 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
       );
       return text;
     } catch (error) {
-      if (!usageRecorded && firstOutputAt) {
+      let failure = error;
+      if (!usageRecorded) {
+        usageRecorded = true;
+        const details = usageDetails(params, source, reportedUsage);
+        const rejected = isFirstPassProviderRejection(error, firstOutputAt !== undefined);
+        try {
         await reportCourseGenerationTokenUsage(
-          reportedTotalTokens,
-          JSON.stringify(_extractRequestInfo(params)).length + reasoningCharacters + textCharacters,
+          rejected ? 0 : reportedUsage?.totalTokens,
+          rejected ? 0 : details.inputCharacters + reasoningCharacters + textCharacters,
+          { ...details, outputCharacters: textCharacters, reasoningCharacters,
+            outcome: params.abortSignal?.aborted ? 'aborted' : 'failed',
+            ...(rejected ? { inputTokens: 0, outputTokens: 0, usageSource: 'estimated' as const } : {}),
+          },
         );
+        } catch (usageError) {
+          failure = usageError;
+        }
       }
       log.warn(
         `[${source}] Stream interrupted after ${Date.now() - startedAt}ms `
@@ -508,7 +597,7 @@ export async function callStreamingLLMText<T extends StreamTextParams>(
         + `firstOutputMs=${firstOutputAt ? firstOutputAt - startedAt : 'none'}, finishReason=${finishReason ?? 'missing'}, `
         + `events=${activityEvents}, reasoningChars=${reasoningCharacters}, textChars=${textCharacters})`,
       );
-      throw error;
+      throw retainModelOutput(failure, text, reasoningCharacters);
     }
   };
   return lifecycle.bypassCourseGenerationLimit

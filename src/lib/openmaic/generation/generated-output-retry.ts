@@ -4,7 +4,7 @@ const INVALID_GENERATED_OUTPUT = 'invalid-generated-output';
 
 type InvalidGeneratedOutputError = Error & {
   generationFailureKind: typeof INVALID_GENERATED_OUTPUT;
-  isRetryable: true;
+  isRetryable: false;
 };
 
 export function invalidGeneratedOutput(error: unknown, context: string): InvalidGeneratedOutputError {
@@ -15,7 +15,7 @@ export function invalidGeneratedOutput(error: unknown, context: string): Invalid
   // a completed but unusable response.
   return Object.assign(new Error(`${context}: ${detail}`), {
     generationFailureKind: 'invalid-generated-output' as const,
-    isRetryable: true as const,
+    isRetryable: false as const,
   });
 }
 
@@ -42,6 +42,7 @@ export function withGeneratedOutputRetry<T>(
 ): Promise<T> {
   return withGenerationRetry(operation, {
     ...options,
-    shouldRetryError: isInvalidGeneratedOutput,
+    maxRetries: 0,
+    shouldRetryError: () => false,
   });
 }

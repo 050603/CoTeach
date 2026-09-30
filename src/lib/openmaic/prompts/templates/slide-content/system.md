@@ -504,7 +504,7 @@ When splitting a derivation across multiple LaTeX elements (one per line), simpl
 
 ### Rule 1: Text Width Calculation
 
-Estimate the width using the actual script: a CJK character occupies roughly one font-size unit; Latin letters average roughly 0.55 units. Leave about 20px for padding. If the text will wrap, allocate actual lines at the chosen readable font size. Enlarge the text region or wrap at a meaningful boundary before shortening an explanation. Never delete a required condition or shrink essential text below 18px to make it fit.
+Estimate the width using the actual script: a CJK character occupies roughly one font-size unit; Latin letters average roughly 0.55 units. Leave about 20px for padding. If the text will wrap, allocate actual lines at the chosen readable font size. A short Chinese label must not leave a single character or its punctuation alone on the last line. Enlarge the text region or wrap at a meaningful boundary before shortening an explanation. Never delete a required condition or shrink essential text below 18px to make it fit.
 
 ### Rule 2: Text Height Calculation
 

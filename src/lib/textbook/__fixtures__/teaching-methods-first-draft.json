@@ -1,0 +1,435 @@
+{
+  "point": {
+    "id": "kp-scaffolding-anchored",
+    "name": "支架式与抛锚式教学法",
+    "description": "对比两种教学法：支架式侧重教师提供临时支持以促独立能力；抛锚式侧重基于宏观情境的问题解决。",
+    "keyInfo": "支架式教学法：基于最近发展区，教师提供可调节、渐消的支架，流程包括搭脚手架→进入情境→独立探索→协作学习→效果评价。抛锚式教学法：以真实复杂问题为“锚”，强调情境真实、教师辅助、合作学习，流程包括创设情境→抛锚→自主探索→拓展延伸→讨论交流→效果评价。适用场景：支架式适合技能习得初期，抛锚式适合综合应用阶段。",
+    "masteryBoundary": "能区分支架式与抛锚式教学法的核心和实施流程，并能针对不同AI教学内容选择合适的方法。",
+    "objectiveIndexes": [
+      2
+    ],
+    "level": "application",
+    "teachingDepth": "detailed",
+    "evidenceItemIds": [
+      "e4d66882-499f-5889-8eb2-b7cffaf7e671",
+      "07d64579-b564-5f1a-9ba5-a000990058dc",
+      "858ac4b4-30c9-5f40-b056-69f49c1c69cd",
+      "efd3188b-3b40-5b61-bc90-c82cd296c56e"
+    ],
+    "relatedIds": [
+      "kp-concept-differentiation",
+      "kp-teaching-mode"
+    ],
+    "parentKnowledgePointIds": [],
+    "sourceKnowledgePointIds": [
+      "topic-支架式与抛锚式教学法",
+      "topic-6-item-支架式教学法的核心",
+      "topic-6-item-抛锚式教学法的特征",
+      "topic-6-item-两种方法的适用场景对比"
+    ],
+    "groupId": "section-method",
+    "groupName": "具体教学法"
+  },
+  "evidence": {
+    "version": 2,
+    "warnings": [],
+    "createdAt": "2026-09-30T02:42:49.005Z",
+    "selections": [
+      {
+        "primary": true,
+        "revisionId": "b0f10612-a5eb-40d7-a00f-bbb448392972",
+        "sectionIds": []
+      }
+    ],
+    "fingerprint": "38e80ba7359a3191f08d2f2bd17d2744aab7e115797a9753f2e7f03d7361b762",
+    "retrievalMode": "hybrid",
+    "schemaVersion": 2,
+    "mappings": [],
+    "items": [
+      {
+        "id": "07d64579-b564-5f1a-9ba5-a000990058dc",
+        "kind": "source-block",
+        "title": "中小学人工智能教育的教学理论与方法 / 人工智能教育的教学方法 / 支架式教学法 / 支架式教学法的教学过程",
+        "source": {
+          "quote": "1. 搭脚手架:明确任务",
+          "sectionId": "2561b216-8dac-5293-94f3-6952d62eb5e2",
+          "revisionId": "b0f10612-a5eb-40d7-a00f-bbb448392972",
+          "textbookId": "41497b8b-32f0-48af-9ec5-9cf814743ff0",
+          "sectionPath": [
+            "中小学人工智能教育的教学理论与方法",
+            "人工智能教育的教学方法",
+            "支架式教学法",
+            "支架式教学法的教学过程"
+          ],
+          "sourceBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0",
+          "textbookTitle": "人工智能学科教师素养提升（第三章）",
+          "sourceBlockIds": [
+            "1097af8f-4de0-54ea-962d-2a72ff744ac0",
+            "7e56a72e-111f-5b7a-aec2-9f4264f0c49f",
+            "32cf5476-d6f7-5ac6-90ed-999364864e26",
+            "78b66b83-cd18-525a-92a3-9ead13dc9dc3",
+            "cdb3067c-43fc-5818-93b2-bc2bcf176686",
+            "63ae7dd8-86cc-5c26-8453-203efa29c071",
+            "81c30135-f1e4-5265-99cb-8ae57054a7ae",
+            "896198a6-a072-5fa8-8c59-0a86ecc7790b",
+            "2a7e9aef-a183-5386-9bd6-ff5d2f7c9cc9",
+            "af528357-c5ea-5f45-9752-ea5b18ddbd9b",
+            "4cf742c2-858c-5a1d-8dec-da223ac893ff"
+          ],
+          "revisionVersion": 1,
+          "sectionPosition": 349,
+          "sectionHierarchy": [
+            {
+              "id": "27fb9e10-aeac-5e6a-a0f1-1001cd7864f6",
+              "kind": "CHAPTER",
+              "level": 0,
+              "title": "中小学人工智能教育的教学理论与方法"
+            },
+            {
+              "id": "02cdc1f6-bd3b-52ae-9c56-177d65bc3c35",
+              "kind": "SECTION",
+              "level": 1,
+              "title": "人工智能教育的教学方法"
+            },
+            {
+              "id": "b4eb7c00-5c73-5ef5-ae6d-82a6b868794c",
+              "kind": "SUBSECTION",
+              "level": 2,
+              "title": "支架式教学法"
+            },
+            {
+              "id": "2561b216-8dac-5293-94f3-6952d62eb5e2",
+              "kind": "SUBSECTION",
+              "level": 3,
+              "title": "支架式教学法的教学过程"
+            }
+          ],
+          "sourceBlockPosition": 350
+        },
+        "content": "1. 搭脚手架:明确任务\n在教学之初,教师需根据学生的认知水平、教学目标和学习主题,制定符合学生“最近发展区”的概念框架。这一环节要求教师在课前做好充分的准备,通过分析学生的现有知识,设计具有层次性的教学支架,帮助学生逐步构建对新知识的理解。\n2. 进入情境:分析问题\n教师应设计贴近学生生活的问题情境,并将学生引入其中,也就是概念框架中的特定节点,通过让学生体验需要解决的实际问题,激发他们的探究兴趣。在此环节,教师可以为学生提供范例支架,并引导学生明确学习目标,将复杂问题分解,让学生在问题分析中逐步深入理解知识背景。\n3. 独立探索:解决问题\n在探索环节的初期,教师要为学生提供启发式的引导,并通过演示、指导等形式提供基础概念原理的知识铺垫。在此之后给予学生充足的时间和空间进行自主探索,允许他们自主选择探索方向和方法。在探索中,教师要根据学生的不同学习水平和学习阶段,提供个性化的支架辅助,鼓励他们自主分析和解决问题,帮助他们沿着概念框架不断进步,并随着学生能力的提升而逐渐减少、撤出支架。\n4. 协作学习:集思广益\n教师要组织学生进行讨论,促进学生之间的交流理解。通过小组讨论和协作,学生能够共享观点,相互启发,在交流过程中不断调整和完善对概念的理解,实现群体观点的整合,从而形成一个更加全面和准确的知识结构,帮助他们解决实际问题,拓展思考。\n5. 效果评价:完成建构\n支架式教学法的最后阶段是对学生学习效果的评价,包括了学生的自我评价、小组的互相评价和教师评价,评价内容围绕着学生的自主学习能力、对小组协作的贡献以及知识意义建构的完成情况开展,旨在帮助学生反思学习过程,明确自己的学习成就和需要改进的地方。\n教学支架是学生进行自主学习、解决复杂问题时不可或缺的助力。支架式教学法为问题式、项目式教学模式过程中的教学支持设计提供了很好的参考,也是教师在开展人工智能教学中需要掌握的重要方法。",
+        "figureIds": [],
+        "figureRefs": [],
+        "retrievalScore": 0.031100324975892,
+        "figureSequences": [],
+        "sourceSequences": [
+          {
+            "kind": "ordered-steps",
+            "steps": [
+              {
+                "label": "搭脚手架",
+                "excerpt": "明确任务",
+                "sourceBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0",
+                "excerptBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0"
+              },
+              {
+                "label": "进入情境",
+                "excerpt": "分析问题",
+                "sourceBlockId": "32cf5476-d6f7-5ac6-90ed-999364864e26",
+                "excerptBlockId": "32cf5476-d6f7-5ac6-90ed-999364864e26"
+              },
+              {
+                "label": "独立探索",
+                "excerpt": "解决问题",
+                "sourceBlockId": "cdb3067c-43fc-5818-93b2-bc2bcf176686",
+                "excerptBlockId": "cdb3067c-43fc-5818-93b2-bc2bcf176686"
+              },
+              {
+                "label": "协作学习",
+                "excerpt": "集思广益",
+                "sourceBlockId": "81c30135-f1e4-5265-99cb-8ae57054a7ae",
+                "excerptBlockId": "81c30135-f1e4-5265-99cb-8ae57054a7ae"
+              },
+              {
+                "label": "效果评价",
+                "excerpt": "完成建构",
+                "sourceBlockId": "2a7e9aef-a183-5386-9bd6-ff5d2f7c9cc9",
+                "excerptBlockId": "2a7e9aef-a183-5386-9bd6-ff5d2f7c9cc9"
+              }
+            ],
+            "anchorSourceBlockId": "1097af8f-4de0-54ea-962d-2a72ff744ac0"
+          }
+        ],
+        "figureSequencesResolved": true,
+        "sourceSequencesResolved": true,
+        "sourceSequencePolicyVersion": 2
+      },
+      {
+        "id": "858ac4b4-30c9-5f40-b056-69f49c1c69cd",
+        "kind": "source-block",
+        "title": "中小学人工智能教育的教学理论与方法 / 人工智能教育的教学方法 / 抛锚式教学法 / 抛锚式教学法的教学过程",
+        "source": {
+          "quote": "1. 创设情境",
+          "sectionId": "eda6b3e1-9328-5fe6-8ea4-53344783701a",
+          "revisionId": "b0f10612-a5eb-40d7-a00f-bbb448392972",
+          "textbookId": "41497b8b-32f0-48af-9ec5-9cf814743ff0",
+          "sectionPath": [
+            "中小学人工智能教育的教学理论与方法",
+            "人工智能教育的教学方法",
+            "抛锚式教学法",
+            "抛锚式教学法的教学过程"
+          ],
+          "sourceBlockId": "99a7fcbe-0263-52ba-a3f4-f6b86a6a9940",
+          "textbookTitle": "人工智能学科教师素养提升（第三章）",
+          "sourceBlockIds": [
+            "99a7fcbe-0263-52ba-a3f4-f6b86a6a9940",
+            "0206d9c6-d5d1-543d-b4ea-cabf73a3fd64",
+            "f242ecc8-0d13-5096-91da-b2c167798bad",
+            "07e91166-c5ac-5b66-812c-01874f9774fb",
+            "2d41fa20-d5f8-5304-9866-1878a3e9fe5e",
+            "667fefd5-761d-5215-b028-53c80cf6749b",
+            "7e40afd7-cd28-5ae5-9948-b086c32126bd",
+            "3bad499a-4369-57d1-bf07-ec9f46eb41a8",
+            "fb79befc-1aa0-5a49-b71e-5f8842505540",
+            "03d42238-dd61-53be-9b14-eb6e6d20d788",
+            "a1c960a4-d522-537f-9ae4-2e9801ab47dc",
+            "881d0f75-87be-52fc-b445-ab5eaf317234",
+            "fac1a5b2-df38-57de-a16f-97e5d565df88"
+          ],
+          "revisionVersion": 1,
+          "sectionPosition": 375,
+          "sectionHierarchy": [
+            {
+              "id": "27fb9e10-aeac-5e6a-a0f1-1001cd7864f6",
+              "kind": "CHAPTER",
+              "level": 0,
+              "title": "中小学人工智能教育的教学理论与方法"
+            },
+            {
+              "id": "02cdc1f6-bd3b-52ae-9c56-177d65bc3c35",
+              "kind": "SECTION",
+              "level": 1,
+              "title": "人工智能教育的教学方法"
+            },
+            {
+              "id": "f2ba68b1-2d31-5b8a-8255-e12fb4eda8ae",
+              "kind": "SUBSECTION",
+              "level": 2,
+              "title": "抛锚式教学法"
+            },
+            {
+              "id": "eda6b3e1-9328-5fe6-8ea4-53344783701a",
+              "kind": "SUBSECTION",
+              "level": 3,
+              "title": "抛锚式教学法的教学过程"
+            }
+          ],
+          "sourceBlockPosition": 376
+        },
+        "content": "1. 创设情境\n教师在这一环节中要利用信息技术等手段设计出与现实生活相似的学习情境,或一段故事和经历,将学习内容和问题自然融入其中,为学生提供一个接近真实的学习背景,帮助他们更好地理解和掌握知识。\n2. 进行“抛锚”\n在创设的情境中,教师要精心选择与学习主题紧密相关的事件或问题,作为学习的中心,即“锚”。这个问题应当是真实且具有挑战性的,能为学生探究不同的问题求解方法提供一定的自由空间,激发学生的好奇心和紧迫感,促使他们积极地寻求解决方案。\n3. 自主探索\n在这一环节中,学生独立或小组形式进行探究,利用情境中的信息和外部资源,制定解决问题的策略,提出解决方案。而教师则需要根据学生探究的情况,为他们提供解决问题的线索和资源,而不是直接给出问题的答案,以此培养学生自主搜集资料、分析信息和解决问题的能力。\n4. 拓展延伸\n为了深化学生的理解,教师可以在“锚”问题的基础上设计一系列与之相关的拓展性问题。这些问题可以在情境、学科知识范围上进行适当的延伸,有助于学生从不同角度和层次探索现实主题,促进他们对知识的深入思考和真正应用。\n5. 讨论交流\n教师组织学生针对“锚”问题的解答展开讨论。通过讨论和交流可以让学生共享观点,相互启发,在思维的碰撞中深化对问题的理解。教师要鼓励学生从不同角度思考问题和提出解决方案,促进学生的深层次学习和集体智慧的形成。\n6. 效果评价\n抛锚式教学法的教学过程也就是解决问题的过程。因此。这种教学方法的学习效果可以通过学生在过程中的表现来进行评价。教师可以通过多种办法记录和反馈学生的进步和挑战,以便于及时调整教学策略,满足学生的个性化学习需求。\n抛锚式教学法为人工智能教学设计开辟了新路径,它通过创设真实的宏观背景,强调情境对学生学习和技术应用的重要性。在教学设计中,采用抛锚式思路来构建问题情境和设定课程主线,有助于更有效地推进人工智能学科的教学活动。",
+        "figureIds": [],
+        "figureRefs": [],
+        "retrievalScore": 0.02899259663865546,
+        "figureSequences": [],
+        "sourceSequences": [
+          {
+            "kind": "ordered-steps",
+            "steps": [
+              {
+                "label": "创设情境",
+                "excerpt": "教师在这一环节中要利用信息技术等手段设计出与现实生活相似的学习情境,或一段故事和经历,将学习内容和问题自然融入其中,为学生提供一个接近真实的学习背景,帮助他们更好地理解和掌握知识。",
+                "sourceBlockId": "99a7fcbe-0263-52ba-a3f4-f6b86a6a9940",
+                "excerptBlockId": "0206d9c6-d5d1-543d-b4ea-cabf73a3fd64"
+              },
+              {
+                "label": "进行“抛锚”",
+                "excerpt": "在创设的情境中,教师要精心选择与学习主题紧密相关的事件或问题,作为学习的中心,即“锚”。这个问题应当是真实且具有挑战性的,能为学生探究不同的问题求解方法提供一定的自由空间,激发学生的好奇心和紧迫感,促使他们积极地寻求解决方案。",
+                "sourceBlockId": "f242ecc8-0d13-5096-91da-b2c167798bad",
+                "excerptBlockId": "07e91166-c5ac-5b66-812c-01874f9774fb"
+              },
+              {
+                "label": "自主探索",
+                "excerpt": "在这一环节中,学生独立或小组形式进行探究,利用情境中的信息和外部资源,制定解决问题的策略,提出解决方案。而教师则需要根据学生探究的情况,为他们提供解决问题的线索和资源,而不是直接给出问题的答案,以此培养学生自主搜集资料、分析信息和解决问题的能力。",
+                "sourceBlockId": "2d41fa20-d5f8-5304-9866-1878a3e9fe5e",
+                "excerptBlockId": "667fefd5-761d-5215-b028-53c80cf6749b"
+              },
+              {
+                "label": "拓展延伸",
+                "excerpt": "为了深化学生的理解,教师可以在“锚”问题的基础上设计一系列与之相关的拓展性问题。这些问题可以在情境、学科知识范围上进行适当的延伸,有助于学生从不同角度和层次探索现实主题,促进他们对知识的深入思考和真正应用。",
+                "sourceBlockId": "7e40afd7-cd28-5ae5-9948-b086c32126bd",
+                "excerptBlockId": "3bad499a-4369-57d1-bf07-ec9f46eb41a8"
+              },
+              {
+                "label": "讨论交流",
+                "excerpt": "教师组织学生针对“锚”问题的解答展开讨论。通过讨论和交流可以让学生共享观点,相互启发,在思维的碰撞中深化对问题的理解。教师要鼓励学生从不同角度思考问题和提出解决方案,促进学生的深层次学习和集体智慧的形成。",
+                "sourceBlockId": "fb79befc-1aa0-5a49-b71e-5f8842505540",
+                "excerptBlockId": "03d42238-dd61-53be-9b14-eb6e6d20d788"
+              },
+              {
+                "label": "效果评价",
+                "excerpt": "抛锚式教学法的教学过程也就是解决问题的过程。因此。这种教学方法的学习效果可以通过学生在过程中的表现来进行评价。教师可以通过多种办法记录和反馈学生的进步和挑战,以便于及时调整教学策略,满足学生的个性化学习需求。",
+                "sourceBlockId": "a1c960a4-d522-537f-9ae4-2e9801ab47dc",
+                "excerptBlockId": "881d0f75-87be-52fc-b445-ab5eaf317234"
+              }
+            ],
+            "anchorSourceBlockId": "99a7fcbe-0263-52ba-a3f4-f6b86a6a9940"
+          }
+        ],
+        "figureSequencesResolved": true,
+        "sourceSequencesResolved": true,
+        "sourceSequencePolicyVersion": 2
+      },
+      {
+        "id": "efd3188b-3b40-5b61-bc90-c82cd296c56e",
+        "kind": "source-block",
+        "title": "中小学人工智能教育的教学理论与方法 / 人工智能教育的教学方法 / 抛锚式教学法 / 抛锚式教学法的概念",
+        "source": {
+          "quote": "在抛锚式教学法中,“锚”指的是教师为学生构建的真实而复杂的问题情境,通常是一个故事或情景,它通过技术手段来创设和展示。这个“锚”是抛锚式教学法的核心,它决定了教学的内容和流程,一旦宏观环境设定,即“抛锚”完成,教学的方向和结构也随之确定(刘洋和钟志贤,2005)。抛锚式教学法有以下一些特征。",
+          "sectionId": "0fdba18c-a0b3-5d0f-9eb9-3f110274e471",
+          "revisionId": "b0f10612-a5eb-40d7-a00f-bbb448392972",
+          "textbookId": "41497b8b-32f0-48af-9ec5-9cf814743ff0",
+          "sectionPath": [
+            "中小学人工智能教育的教学理论与方法",
+            "人工智能教育的教学方法",
+            "抛锚式教学法",
+            "抛锚式教学法的概念"
+          ],
+          "sourceBlockId": "21520802-34b6-53f5-b7a6-d097679ce6ff",
+          "textbookTitle": "人工智能学科教师素养提升（第三章）",
+          "sourceBlockIds": [
+            "21520802-34b6-53f5-b7a6-d097679ce6ff",
+            "2ea12a09-6d59-51c8-98df-5bde2adf8b13",
+            "53838f2f-bf87-52fc-bfb4-4e48a4b5b32f",
+            "bda079b6-0141-51c9-9b7d-ada8511ca871",
+            "fe03b8f3-dd62-5d3c-af24-7ecf116b5c71",
+            "074686b1-6f3d-59b8-a28e-88d7a17ae082",
+            "63a618f9-135a-5a9d-bdc7-f4c4a71f47d6",
+            "5bfff73d-8d78-5049-b8b5-903d7845270b",
+            "f511a772-5f2d-508d-8e90-513361722d4f",
+            "311f7b5b-774a-5828-b55d-6f822a0fc94d",
+            "eb9eedf1-9aa1-58a7-add7-3accc43d3a9f"
+          ],
+          "revisionVersion": 1,
+          "sectionPosition": 363,
+          "sectionHierarchy": [
+            {
+              "id": "27fb9e10-aeac-5e6a-a0f1-1001cd7864f6",
+              "kind": "CHAPTER",
+              "level": 0,
+              "title": "中小学人工智能教育的教学理论与方法"
+            },
+            {
+              "id": "02cdc1f6-bd3b-52ae-9c56-177d65bc3c35",
+              "kind": "SECTION",
+              "level": 1,
+              "title": "人工智能教育的教学方法"
+            },
+            {
+              "id": "f2ba68b1-2d31-5b8a-8255-e12fb4eda8ae",
+              "kind": "SUBSECTION",
+              "level": 2,
+              "title": "抛锚式教学法"
+            },
+            {
+              "id": "0fdba18c-a0b3-5d0f-9eb9-3f110274e471",
+              "kind": "SUBSECTION",
+              "level": 3,
+              "title": "抛锚式教学法的概念"
+            }
+          ],
+          "sourceBlockPosition": 364
+        },
+        "content": "在抛锚式教学法中,“锚”指的是教师为学生构建的真实而复杂的问题情境,通常是一个故事或情景,它通过技术手段来创设和展示。这个“锚”是抛锚式教学法的核心,它决定了教学的内容和流程,一旦宏观环境设定,即“抛锚”完成,教学的方向和结构也随之确定(刘洋和钟志贤,2005)。抛锚式教学法有以下一些特征。\n1. 教学情境的真实性\n抛锚式教学法强调在真实或接近真实的情境中进行学习,这样的环境能够增强学生对知识的实际应用能力。教师通过将生活中的问题融入课堂,使学生能够在解决实际问题的过程中学习和提升。\n2. 教师角色的辅助性\n在抛锚式教学法中,教师不再是单向的知识传递者,而是成为学生的引导者、支持者和学习伙伴。教师要灵活调整教学策略,以适应学生的个性化学习需求,鼓励学生主动探索和学习。\n3. 学生合作的重要性\n由于真实世界的问题往往复杂,需要学生之间的协作来共同解决。抛锚式教学法鼓励学生通过小组合作,利用集体智慧来解决问题,这有助于培养学生的团队协作能力和社交技能。\n4. 教学实施的灵活性\n抛锚式教学法倡导教学过程的灵活性和无序性,以适应不同学生的学习节奏和风格。教学目标要具有开放性,鼓励学生在问题解决中探索多种可能的路径。同时,教师需要在教学评价中融入情境,将评价与学习过程相结合,促进学生的自我反思和自我调整。\n5. 学习空间的延展性\n抛锚式教学法以“锚”作为教学核心,教师利用拓展性教学资源为学生创造支持自主探索的学习空间,学生在其中通过解决问题获得知识和技能,并能将这些知识和技能迁移应用到新的情境中,形成具有弹性的学习活动空间,从而实现知识能力的升华应用,促进深层次学习和理解。",
+        "figureIds": [],
+        "figureRefs": [],
+        "retrievalScore": 0.02985174626865672,
+        "figureSequences": [],
+        "sourceSequences": [
+          {
+            "kind": "ordered-steps",
+            "steps": [
+              {
+                "label": "教学情境的真实性",
+                "excerpt": "抛锚式教学法强调在真实或接近真实的情境中进行学习,这样的环境能够增强学生对知识的实际应用能力。教师通过将生活中的问题融入课堂,使学生能够在解决实际问题的过程中学习和提升。",
+                "sourceBlockId": "2ea12a09-6d59-51c8-98df-5bde2adf8b13",
+                "excerptBlockId": "53838f2f-bf87-52fc-bfb4-4e48a4b5b32f"
+              },
+              {
+                "label": "教师角色的辅助性",
+                "excerpt": "在抛锚式教学法中,教师不再是单向的知识传递者,而是成为学生的引导者、支持者和学习伙伴。教师要灵活调整教学策略,以适应学生的个性化学习需求,鼓励学生主动探索和学习。",
+                "sourceBlockId": "bda079b6-0141-51c9-9b7d-ada8511ca871",
+                "excerptBlockId": "fe03b8f3-dd62-5d3c-af24-7ecf116b5c71"
+              },
+              {
+                "label": "学生合作的重要性",
+                "excerpt": "由于真实世界的问题往往复杂,需要学生之间的协作来共同解决。抛锚式教学法鼓励学生通过小组合作,利用集体智慧来解决问题,这有助于培养学生的团队协作能力和社交技能。",
+                "sourceBlockId": "074686b1-6f3d-59b8-a28e-88d7a17ae082",
+                "excerptBlockId": "63a618f9-135a-5a9d-bdc7-f4c4a71f47d6"
+              },
+              {
+                "label": "教学实施的灵活性",
+                "excerpt": "抛锚式教学法倡导教学过程的灵活性和无序性,以适应不同学生的学习节奏和风格。教学目标要具有开放性,鼓励学生在问题解决中探索多种可能的路径。同时,教师需要在教学评价中融入情境,将评价与学习过程相结合,促进学生的自我反思和自我调整。",
+                "sourceBlockId": "5bfff73d-8d78-5049-b8b5-903d7845270b",
+                "excerptBlockId": "f511a772-5f2d-508d-8e90-513361722d4f"
+              },
+              {
+                "label": "学习空间的延展性",
+                "excerpt": "抛锚式教学法以“锚”作为教学核心,教师利用拓展性教学资源为学生创造支持自主探索的学习空间,学生在其中通过解决问题获得知识和技能,并能将这些知识和技能迁移应用到新的情境中,形成具有弹性的学习活动空间,从而实现知识能力的升华应用,促进深层次学习和理解。",
+                "sourceBlockId": "311f7b5b-774a-5828-b55d-6f822a0fc94d",
+                "excerptBlockId": "eb9eedf1-9aa1-58a7-add7-3accc43d3a9f"
+              }
+            ],
+            "anchorSourceBlockId": "2ea12a09-6d59-51c8-98df-5bde2adf8b13"
+          }
+        ],
+        "figureSequencesResolved": true,
+        "sourceSequencesResolved": true,
+        "sourceSequencePolicyVersion": 2
+      },
+      {
+        "id": "e4d66882-499f-5889-8eb2-b7cffaf7e671",
+        "kind": "concept",
+        "title": "支架式教学法",
+        "source": {
+          "quote": "支架式教学法是一种以学生为中心的教学模式,支架式教学法的核心在于教师为学生提供适当的、小步调的线索或提示,这些“支架”随着学生能力的提高而逐渐减少,直至学生能够独立完成任务。",
+          "sectionId": "b4eb7c00-5c73-5ef5-ae6d-82a6b868794c",
+          "quoteStart": 0,
+          "revisionId": "b0f10612-a5eb-40d7-a00f-bbb448392972",
+          "textbookId": "41497b8b-32f0-48af-9ec5-9cf814743ff0",
+          "sectionPath": [
+            "中小学人工智能教育的教学理论与方法",
+            "人工智能教育的教学方法",
+            "支架式教学法"
+          ],
+          "sourceBlockId": "de9f320c-8ff7-58d6-ba85-284f9a421dcc",
+          "textbookTitle": "人工智能学科教师素养提升（第三章）",
+          "sourceBlockIds": [
+            "de9f320c-8ff7-58d6-ba85-284f9a421dcc"
+          ],
+          "revisionVersion": 1,
+          "sectionPosition": 338,
+          "sectionHierarchy": [
+            {
+              "id": "27fb9e10-aeac-5e6a-a0f1-1001cd7864f6",
+              "kind": "CHAPTER",
+              "level": 0,
+              "title": "中小学人工智能教育的教学理论与方法"
+            },
+            {
+              "id": "02cdc1f6-bd3b-52ae-9c56-177d65bc3c35",
+              "kind": "SECTION",
+              "level": 1,
+              "title": "人工智能教育的教学方法"
+            },
+            {
+              "id": "b4eb7c00-5c73-5ef5-ae6d-82a6b868794c",
+              "kind": "SUBSECTION",
+              "level": 2,
+              "title": "支架式教学法"
+            }
+          ],
+          "sourceBlockPosition": 339
+        },
+        "aliases": [],
+        "content": "支架式教学法是一种以学生为中心的教学模式,支架式教学法的核心在于教师为学生提供适当的、小步调的线索或提示,这些“支架”随着学生能力的提高而逐渐减少,直至学生能够独立完成任务。",
+        "figureIds": [],
+        "figureRefs": [],
+        "retrievalScore": 0.03278788524590164,
+        "figureSequences": [],
+        "sourceSequences": [],
+        "figureSequencesResolved": true,
+        "sourceSequencesResolved": true,
+        "sourceSequencePolicyVersion": 2
+      }
+    ]
+  }
+}

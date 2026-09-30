@@ -106,12 +106,23 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
   const requestedBy = await authorizeTemplateRequest(request, courseId);
   if (requestedBy instanceof Response) return requestedBy;
   const body = await request.json().catch(() => null) as { action?: unknown } | null;
-  if (body?.action !== "start-persisted-job" && body?.action !== "resume-from-checkpoints") {
+  if (body?.action !== "start-persisted-job" && body?.action !== "resume-from-checkpoints"
+    && body?.action !== 'regenerate-failed-stages') {
     return Response.json({ error: "INVALID_GENERATION_ACTION" }, { status: 400 });
   }
   const backgroundEnabled = isBackgroundCourseGenerationEnabled();
-  if (body.action === "resume-from-checkpoints") {
-    const resumed = await requeueCourseGenerationFromCheckpoints(courseId);
+  if (body.action === "resume-from-checkpoints" || body.action === 'regenerate-failed-stages') {
+    let resumed;
+    try {
+      resumed = await requeueCourseGenerationFromCheckpoints(courseId,
+        { regenerateFailedStages: body.action === 'regenerate-failed-stages' });
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'COURSE_SOURCE_EDIT_REQUIRED') {
+        return Response.json({ error: 'COURSE_SOURCE_EDIT_REQUIRED', detail: error.message }, { status: 409 });
+      }
+      if (!(error instanceof Error) || error.message !== 'GENERATION_JOB_NOT_FOUND') throw error;
+      return Response.json({ error: 'GENERATION_JOB_CONFLICT' }, { status: 409 });
+    }
     if (!resumed) return Response.json({ error: "GENERATION_JOB_NOT_FOUND" }, { status: 404 });
     if (!backgroundEnabled) retainRequestBoundGeneration(courseId);
     return Response.json({ backgroundEnabled, job: responseJob(resumed) }, { status: 202 });

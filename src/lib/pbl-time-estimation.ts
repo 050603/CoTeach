@@ -298,17 +298,14 @@ function quizTaskDemand(
   };
 }
 
-/** Planning estimate for brief directions and concept-level feedback. It
- * grows with the questions' reasoning demand, never the page's spare time.
- * These seconds are allowances, not required sentence counts or speech length. */
+/** Planning estimate for the pre-answer direction, post-submit review guide,
+ * and substantive handoff after confirmation. It grows with reasoning demand,
+ * never the page's spare time. These are allowances, not sentence counts. */
 function quizNarrationDemand(quiz: NonNullable<PblActivityTimingInput['quiz']>): { narrationSec: number; feedbackSec: number } {
   const count = clamp(Math.round(quiz.questionCount), 0, 100);
-  const types = quiz.questionTypes?.length ? quiz.questionTypes : ['single'] as PblQuizQuestionType[];
   const factor = difficultyFactor(quiz.difficulty);
-  const feedbackSec = roundSeconds(Array.from({ length: count }, (_, index) =>
-    QUIZ_READING_THINKING_SECONDS[types[index % types.length] ?? 'single'] * 0.45,
-  ).reduce((sum, seconds) => sum + seconds, 0) * factor);
-  return { narrationSec: Math.max(1, roundSeconds(10 * factor) + feedbackSec), feedbackSec };
+  const feedbackSec = roundSeconds((8 + Math.min(count, 4) * 2) * factor);
+  return { narrationSec: Math.max(1, roundSeconds(30 * factor) + feedbackSec), feedbackSec };
 }
 
 /** A missing quiz duration is derived from its work, not a five-minute

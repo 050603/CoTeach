@@ -12,6 +12,7 @@ import type {
   WidgetConfigBase,
   WidgetType,
 } from '@openmaic/dsl';
+import type { FlowLayoutDecision, FlowPageMeasurement } from './flow-layout-compiler.js';
 
 /** AI-generated slide payload before it is assembled into a scene. */
 export interface GeneratedSlideContent {
@@ -20,6 +21,11 @@ export interface GeneratedSlideContent {
   remark?: string;
   sourceGroupIds?: string[];
   teachingText?: string[];
+  paginationVersion?: 'balanced-v1';
+  occupiedHeight?: number;
+  /** Deterministic measured decision after trying a single-page layout. */
+  layoutDecision?: FlowLayoutDecision;
+  layoutMeasurement?: FlowPageMeasurement;
   /** Host expands these pages before generating per-page actions and media. */
   continuationPages?: GeneratedSlideContent[];
 }

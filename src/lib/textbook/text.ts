@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ParsedTextbookBlock, ParsedTextbookSection, TextbookRetrievalChunk } from "./types";
+import { extractOrderedSourceSequences } from "./figure-sequence";
 
 export function normalizeTextbookText(value: string): string {
   return value.normalize("NFKC").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").replace(/\s+/g, " ").trim();
@@ -56,6 +57,18 @@ export function buildRetrievalChunks(
   const target = options.targetCharacters ?? 1_000;
   const maximum = Math.max(target, options.maximumCharacters ?? 1_200);
   const sectionTitles = new Map(sections.map((section) => [section.key, section.path]));
+  const semanticKeys = new Map<string, string[]>();
+  const blocksBySection = Map.groupBy(blocks.filter((block) => !block.metadata.isDirectory),
+    (block) => block.sectionKey ?? "");
+  for (const sectionBlocks of blocksBySection.values()) {
+    for (const sequence of extractOrderedSourceSequences(sectionBlocks.map((block) => ({
+      id: block.key, position: block.position, blockType: block.type, content: block.content,
+    })))) {
+      const keys = [...new Set(sequence.steps.flatMap((step) =>
+        [step.sourceBlockId, step.excerptBlockId].filter((key): key is string => Boolean(key))))];
+      for (const key of keys) semanticKeys.set(key, keys);
+    }
+  }
   const chunks: TextbookRetrievalChunk[] = [];
   let current: { sectionKey: string | null; contents: string[]; keys: string[]; position: number } | null = null;
   const flush = () => {
@@ -65,7 +78,9 @@ export function buildRetrievalChunks(
     chunks.push({
       key: `chunk-${position}-${createHash("sha256").update(content).digest("hex").slice(0, 12)}`,
       sectionKey: current.sectionKey,
-      sourceBlockKeys: current.keys,
+      // The searchable excerpt stays bounded, while its source references
+      // always point to the complete numbered unit across chunk boundaries.
+      sourceBlockKeys: [...new Set(current.keys.flatMap((key) => semanticKeys.get(key) ?? [key]))],
       kind: "SOURCE_BLOCK",
       title: current.sectionKey ? sectionTitles.get(current.sectionKey) ?? null : null,
       content,

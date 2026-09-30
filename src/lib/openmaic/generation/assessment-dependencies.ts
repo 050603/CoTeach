@@ -81,7 +81,7 @@ export function buildAssessmentContext(
     }));
   return JSON.stringify({
     kind: 'completed-student-teaching',
-    instruction: '以下讲稿只限定学生已经获得的学习机会。答案是否正确和怎样算理解由已采用的资料、概念边界与预定理解标准决定。不得把简化线索或案例特征升级为定义，也不得因讲稿解释不足而降低标准或只考名称识别；发现缺口应保留为教学覆盖不足。至少一道题要求学生简短说明理由，讲评不能承担未讲核心内容的补课职责。',
+    instruction: '以下讲稿只限定学生已经获得的学习机会。答案是否正确和怎样算理解由已采用的资料、概念边界与预定理解标准决定。不得把简化线索或案例特征升级为定义，也不得因讲稿解释不足而降低标准或只考名称识别；发现缺口应保留为教学覆盖不足。按知识目标选择需要的作答形式；讲评不能承担未讲核心内容的补课职责。',
     answerAuthority: {
       evidence: assessment.teachingBrief?.evidence ?? [],
       conditions: assessment.teachingBrief?.conditions ?? [],
@@ -115,7 +115,7 @@ export function buildQuizNarrationContext(
   const position = progression.findIndex((outline) => outline.id === assessment.id);
   const nextOutline = position >= 0 ? progression.slice(position + 1).find((outline) =>
     outline.audience !== 'teacher' && outline.generationPurpose !== 'teacher-resource') : undefined;
-  const nextTeaching = nextOutline && nextOutline.type === 'slide'
+  const nextTeaching = nextOutline && nextOutline.type !== 'quiz'
     ? completed.find(({ outline }) => outline.id === nextOutline.id)
     : undefined;
   const continuesIntoProject = nextOutline?.type === 'pbl'
@@ -123,6 +123,11 @@ export function buildQuizNarrationContext(
     || nextOutline?.stageKey === 'project-practice'
     || (!nextOutline && assessment.stageKey === 'ai-learning' && assessment.narrationMode !== 'embedded-segment');
   return JSON.stringify({
+    currentSection: {
+      learningPurpose: assessment.teachingBrief?.sharedContext?.learningPurpose,
+      understandingGoals: assessment.teachingBrief?.understandingCriteria?.goals,
+      assessmentFocus: assessment.teachingBrief?.assessmentFocus,
+    },
     precedingSection,
     continuation: nextOutline
       ? continuesIntoProject ? 'project-practice' : 'next-page'
@@ -131,6 +136,10 @@ export function buildQuizNarrationContext(
       type: nextOutline.type,
       stageLabel: nextOutline.stageLabel || (continuesIntoProject ? '项目实践' : undefined),
       title: nextOutline.type === 'quiz' ? undefined : nextOutline.title,
+      sectionTitle: nextOutline.lectureSectionTitle,
+      learningPurpose: nextOutline.teachingBrief?.sharedContext?.learningPurpose,
+      teachingObjective: nextOutline.teachingObjective,
+      entryPoint: nextOutline.teachingBrief?.teachingPlan?.entryPoint,
       newContent: nextOutline.teachingBrief?.teachingPlan?.newContent,
       actualOpening: nextTeaching?.speech.find(({ text }) => text.trim())?.text.trim(),
     } : continuesIntoProject

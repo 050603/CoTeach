@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import katex from 'katex';
 import type { PPTElement } from '@openmaic/dsl';
 import type { GeneratedSlideContent, SceneOutline } from '@openmaic/lib/types/generation';
 import {
@@ -643,6 +644,14 @@ describe('slide layout audit repair policy', () => {
         expect(audited.status).toBe('checked');
         expect(audited.issues.length).toBeGreaterThan(0);
       }
+      const latex = '\\bar{x}=\\frac{1}{n}\\sum_{i=1}^{n}x_i';
+      const formula = await auditSlideLayout({ elements: [{
+        id: 'readable-formula', type: 'latex', left: 50, top: 225, width: 900, height: 90, rotate: 0,
+        latex, html: katex.renderToString(latex, { displayMode: true, output: 'html' }),
+      }] }, 'browser-formula');
+      expect(formula.status).toBe('checked');
+      expect(formula.findings?.some((finding) => finding.id.includes('small-type'))).toBe(false);
+      expect(formula.measurements?.find((item) => item.id === 'readable-formula')?.fontSize).toBeGreaterThanOrEqual(16);
     },
     60_000,
   );

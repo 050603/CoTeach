@@ -1,0 +1,138 @@
+type RecordValue = Record<string, unknown>;
+
+function record(value: unknown): value is RecordValue {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function narrationSegmentOwner(raw: RecordValue): RecordValue | undefined {
+  // Match normalizeTeachingNarration's root.segments ?? response.segments.
+  // A present invalid root must not authorize references from the wrapper.
+  return raw.segments != null ? raw : record(raw.response) ? raw.response : undefined;
+}
+
+export type NarrationSourceAuthoringDuty = {
+  text: string;
+  availableReferences: readonly { pageId: string; sourceRef: string }[];
+};
+
+/** Check only newly authored responses, before source slots are expanded.
+ * Existing text-only narration and cached output keep the resolver contract.
+ * Each finite duty needs its own allowed page/reference identity; a heading,
+ * paraphrase, or reference on another page cannot replace that authored slot. */
+export function assertNarrationSourceDuties(
+  value: unknown,
+  duties: readonly NarrationSourceAuthoringDuty[],
+  fallbackPageId?: string,
+  anchorsByPage?: ReadonlyMap<string, ReadonlyMap<string, string>>,
+): void {
+  if (!duties.length) return;
+  const usedReferences = new Set<string>();
+  const key = (pageId: string, sourceRef: string) => JSON.stringify([pageId, sourceRef]);
+  const collect = (raw: unknown, fallback?: string) => {
+    if (!record(raw)) return;
+    const owner = narrationSegmentOwner(raw);
+    const pageId = typeof raw.pageId === 'string' ? raw.pageId : fallback;
+    if (!pageId || !Array.isArray(owner?.segments)) return;
+    for (const segment of owner.segments) {
+      if (!record(segment) || !Array.isArray(segment.textParts)) continue;
+      if (segment.text !== undefined && (typeof segment.text !== 'string' || segment.text.trim())) {
+        // Some providers serialize both representations. Only the exact
+        // expanded source-backed speech can authorize this redundant field.
+        if (!anchorsByPage) continue;
+        resolveNarrationSourceParts({ pageId, segments: [segment] }, anchorsByPage);
+      }
+      for (const part of segment.textParts) {
+        if (!record(part) || !Object.hasOwn(part, 'sourceRef') || Object.hasOwn(part, 'text') || typeof part.sourceRef !== 'string' || !part.sourceRef.trim()
+          || Object.keys(part).some((field) => field !== 'sourceRef' && field !== 'quote')
+          || (Object.hasOwn(part, 'quote') && (typeof part.quote !== 'string' || !part.quote.trim()))) continue;
+        usedReferences.add(key(pageId, part.sourceRef));
+      }
+    }
+  };
+  if (record(value) && Array.isArray(value.pages)) {
+    for (const page of value.pages) collect(page);
+  } else collect(value, fallbackPageId);
+  const missing = duties.flatMap((duty, index) => duty.availableReferences
+    .some(({ pageId, sourceRef }) => usedReferences.has(key(pageId, sourceRef))) ? [] : [{
+      dutyIndex: index + 1,
+      text: duty.text,
+      availableReferences: duty.availableReferences.map(({ pageId, sourceRef }) => ({ pageId, sourceRef })),
+    }]);
+  if (missing.length) {
+    throw new Error(`Source narration: missing adopted source references ${JSON.stringify(missing)}`);
+  }
+}
+
+/** Expand only authored source slots. Missing source duties remain missing for
+ * acceptance to detect; neither source text nor narration order is invented. */
+export function resolveNarrationSourceParts(
+  value: unknown,
+  anchorsByPage: ReadonlyMap<string, ReadonlyMap<string, string>>,
+  fallbackPageId?: string,
+): unknown {
+  const page = (raw: unknown, fallback?: string): unknown => {
+    if (!record(raw)) return raw;
+    // Match the existing normalizer's root.segments ?? response.segments
+    // selection. The outer page identity remains authoritative in both forms.
+    const nested = record(raw.response) ? raw.response : undefined;
+    const segmentOwner = narrationSegmentOwner(raw);
+    if (!segmentOwner || !Array.isArray(segmentOwner.segments)) return raw;
+    const pageId = typeof raw.pageId === 'string' ? raw.pageId : fallback;
+    let changed = false;
+    const segments = segmentOwner.segments.map((segment: unknown) => {
+      if (!record(segment) || !Object.hasOwn(segment, 'textParts')) return segment;
+      if (segment.text !== undefined && typeof segment.text !== 'string') {
+        throw new Error('Source narration: textParts cannot be combined with nonempty text');
+      }
+      if (!Array.isArray(segment.textParts) || !segment.textParts.length) {
+        throw new Error('Source narration: textParts must be a nonempty array');
+      }
+      const text = segment.textParts.map((part: unknown) => {
+        if (!record(part)) throw new Error('Source narration: each text part must be an object');
+        const hasText = Object.hasOwn(part, 'text');
+        const hasRef = Object.hasOwn(part, 'sourceRef');
+        if (hasText === hasRef || Object.keys(part).some((key) => key !== 'text' && key !== 'sourceRef' && key !== 'quote')
+          || (hasText && Object.hasOwn(part, 'quote'))) {
+          throw new Error('Source narration: each text part must contain exactly text or sourceRef');
+        }
+        if (hasText) {
+          if (typeof part.text !== 'string') throw new Error('Source narration: authored text must be a string');
+          return part.text;
+        }
+        if (typeof part.sourceRef !== 'string' || !part.sourceRef.trim()) {
+          throw new Error('Source narration: sourceRef must be a nonempty source id');
+        }
+        const source = pageId ? anchorsByPage.get(pageId)?.get(part.sourceRef) : undefined;
+        if (source === undefined) {
+          throw new Error(`Source narration: unknown source reference ${part.sourceRef} for page ${pageId ?? '(missing)'}`);
+        }
+        if (typeof source !== 'string' || !source.trim()) {
+          throw new Error(`Source narration: source reference ${part.sourceRef} has no authoritative text`);
+        }
+        if (Object.hasOwn(part, 'quote')) {
+          if (typeof part.quote !== 'string' || !part.quote.trim() || !source.includes(part.quote)) {
+            throw new Error('Source narration: a selected quote must occur unchanged in its authoritative source');
+          }
+          if (/^(?:source-list-\d+-item-\d+|source-definition-\d+)$/u.test(part.sourceRef) && part.quote !== source) {
+            throw new Error(`Source narration: a canonical source ${part.sourceRef.startsWith('source-definition-') ? 'definition' : 'condition'} cannot be shortened`);
+          }
+          return part.quote;
+        }
+        return source;
+      }).reduce((joined, part) => /。[ \t]*$/u.test(joined) && /^[ \t]*。/u.test(part)
+        ? joined + part.replace(/^([ \t]*)。/u, '$1') : joined + part, '');
+      if (typeof segment.text === 'string' && segment.text.trim() && segment.text !== text) {
+        throw new Error('Source narration: textParts cannot be combined with nonempty text that differs from its authoritative expansion');
+      }
+      changed = true;
+      const { textParts: _parts, ...rest } = segment;
+      return { ...rest, text };
+    });
+    if (!changed) return raw;
+    return segmentOwner === raw ? { ...raw, segments } : { ...raw, response: { ...nested, segments } };
+  };
+  if (!record(value) || !Array.isArray(value.pages)) return page(value, fallbackPageId);
+  const rawPages = value.pages;
+  const pages = rawPages.map((raw: unknown) => page(raw));
+  return pages.some((resolved, index) => resolved !== rawPages[index]) ? { ...value, pages } : value;
+}

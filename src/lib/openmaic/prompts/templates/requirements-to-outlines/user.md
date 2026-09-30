@@ -88,7 +88,7 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
    "quizConfig": {
      "questionCount": 2,
      "difficulty": "easy" | "medium" | "hard",
-     "questionTypes": ["single", "multiple", "matching", "true_false", "fill_blank", "short_answer", "scenario_task"]
+     "questionTypes": ["single", "multiple", "matching", "true_false", "fill_blank"]
    }
    ```
 {{#if hasSourceImages}}
@@ -98,8 +98,8 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
    - Select widgetType based on concept: simulation (physics/chem), diagram (processes), code (programming), game (practice), visualization3d (3D models)
    - Provide appropriate widgetOutline for the widget type
 - **Scene count**: Fit the inferred duration and the semantic teaching steps. Prefer a smaller number of complete, coherent scenes over a fixed scenes-per-minute formula.
-- **Quiz placement**: Group related knowledge into coherent sections. Teach and practise each section first, then end it with one concise mastery quiz covering only that section's taught `knowledgePointIds`. In adaptive mode allocate at least one brief objective item per taught knowledge point; in constructed-response mode use 1–2 comprehensive short answers. Never interrupt an unfinished section with a quiz or append a redundant all-course final quiz.
-- **Quiz design**: for an ordinary mastery quiz, plan `single`, `multiple`, and `true_false` as the available formats, with plausible incorrect alternatives to reveal misconceptions. Choose among them by the knowledge decision; do not automatically request `matching` for correspondences. Reserve `matching` for a caller-provided exact ordered format plan. Other supported formats remain available when explicitly required by the assessment mode. Do not request ordering, sorting, or line-connection questions.
+- **Quiz placement**: Group related knowledge into coherent sections. Teach and practise each section first, then end it with one concise mastery quiz covering every taught `knowledgePointId` across the full set. In adaptive mode dynamically use 2–4 questions from `single`, `multiple`, `true_false`, `fill_blank`, and `matching`, with no `short_answer` or `scenario_task`; one question may assess several related points. In constructed-response mode use exactly one comprehensive short answer. Never interrupt an unfinished section with a quiz or append a redundant all-course final quiz.
+- **Quiz design**: choose from the supported formats according to the knowledge decision and available answer time, without requiring any fixed type mix. Choice distractors should represent plausible misconceptions. Do not request ordering, sorting, or line-connection questions.
 - **Teaching progression**: activate prerequisites before introducing new terminology; explain each unfamiliar term before using it in examples or assessment; move from concrete familiar contexts to mechanism and then application.
 - **Teaching tools**: use `teachingToolPlan` for a purposeful whiteboard/canvas/widget moment, not as a quota. A long or abstract oral explanation is a strong signal to externalize steps, relationships, examples, formulae, or code on the whiteboard. The plan must tell the teacher which page triggers it and what students will actually see.
 - **Language**: Infer from the user's requirement text and context, then output all content in the inferred language

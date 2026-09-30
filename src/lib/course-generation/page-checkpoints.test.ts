@@ -5,6 +5,7 @@ import {
   fingerprintSceneOutline,
   fingerprintGenerationValue,
   restoreSceneStageAttemptCount,
+  migrateSceneStageAttemptInputFingerprint,
   restoreSceneStageCheckpoint,
   SCENE_STAGE_CHECKPOINT_VERSION,
   restoreSceneCheckpoint,
@@ -64,6 +65,26 @@ describe("course-generation page checkpoints", () => {
       stageKey: outline.stageKey,
     } as SceneOutline;
     expect(fingerprintSceneOutline(reordered)).toBe(fingerprintSceneOutline(outline));
+  });
+
+  it("invalidates all page stages when its section plan or assigned sources change", () => {
+    const revised = { ...outline, sectionPlanVersion: "section-v1", sourcePageIds: [outline.id] };
+    const oldFingerprint = fingerprintSceneOutline(revised);
+    const pageCheckpoint = { pageKey: outline.id, outlineFingerprint: oldFingerprint, scene };
+    for (const changed of [
+      { ...revised, sectionPlanVersion: "section-v2" },
+      { ...revised, sourcePageIds: [outline.id, "page-2"] },
+    ]) {
+      expect(restoreSceneCheckpoint(changed, pageCheckpoint, "stage")).toBeNull();
+      for (const stage of ["content", "actions", "narration"] as const) {
+        const checkpoint: SceneStageCheckpointSnapshot & SceneStageAttemptSnapshot = { schemaVersion: SCENE_STAGE_CHECKPOINT_VERSION, pageKey: outline.id,
+          outlineFingerprint: oldFingerprint, stage, modelFingerprint: "model", payload: {}, attemptsStarted: 2 };
+        expect(restoreSceneStageCheckpoint({ outline: changed, checkpoint, stage, modelFingerprint: "model" })).toBeNull();
+        expect(restoreSceneStageAttemptCount({ outline: changed, checkpoint, stage, modelFingerprint: "model" })).toBe(0);
+      }
+    }
+    expect(fingerprintSceneOutline({ ...outline, sourcePageIds: undefined, sectionPlanVersion: undefined }))
+      .toBe(fingerprintSceneOutline(outline));
   });
 
   it("restores only an exact outline match and rebinds it to the current stage", () => {
@@ -190,5 +211,56 @@ describe("course-generation page checkpoints", () => {
       modelFingerprint: "model-a",
       inputFingerprint: "actions-b",
     })).toBe(0);
+  });
+
+  it("never restores a spent request allowance after a process restart", () => {
+    const checkpoint: SceneStageAttemptSnapshot = {
+      schemaVersion: SCENE_STAGE_CHECKPOINT_VERSION,
+      pageKey: outline.id,
+      stage: "content",
+      outlineFingerprint: fingerprintSceneOutline(outline),
+      modelFingerprint: "model-a",
+      inputFingerprint: "content-a",
+      attemptsStarted: 2,
+      status: "response",
+      executionId: "old-execution",
+      interruptedReplays: 0,
+    };
+    const restore = (candidate: SceneStageAttemptSnapshot, executionId: string) => restoreSceneStageAttemptCount({
+      outline,
+      checkpoint: candidate,
+      stage: "content",
+      modelFingerprint: "model-a",
+      inputFingerprint: "content-a",
+      executionId,
+    });
+    expect(restore(checkpoint, "old-execution")).toBe(2);
+    expect(restore(checkpoint, "new-execution")).toBe(2);
+    expect(restore({ ...checkpoint, status: "started" }, "new-execution")).toBe(2);
+    expect(restore({ ...checkpoint, status: "aborted" }, "new-execution")).toBe(2);
+    expect(restore({ ...checkpoint, status: "failed" }, "new-execution")).toBe(2);
+    expect(restore({ ...checkpoint, interruptedReplays: 1 }, "new-execution")).toBe(2);
+    expect(restore({ ...checkpoint, inputFingerprint: "different-content" }, "new-execution")).toBe(0);
+  });
+
+  it('migrates exact old prepared-progression attempts without resetting failures or interruption consumption', () => {
+    const old: SceneStageAttemptSnapshot = { schemaVersion: 1, pageKey: outline.id, stage: 'content',
+      outlineFingerprint: fingerprintSceneOutline(outline), modelFingerprint: 'model-a',
+      inputFingerprint: 'old-prepared-progression', attemptsStarted: 3, status: 'failed',
+      executionId: 'old-worker', interruptedReplays: 1 };
+    const identity = { outline, checkpoint: old, stage: 'content' as const, modelFingerprint: 'model-a',
+      inputFingerprint: 'confirmed-request-progression', legacyInputFingerprint: 'old-prepared-progression' };
+    const migrated = migrateSceneStageAttemptInputFingerprint(identity)!;
+    expect(migrated).toEqual({ ...old, inputFingerprint: identity.inputFingerprint });
+    expect(restoreSceneStageAttemptCount({ ...identity, checkpoint: migrated, executionId: 'new-worker' })).toBe(3);
+    const second = migrateSceneStageAttemptInputFingerprint({ ...identity, checkpoint: { ...old, attemptsStarted: 2 } })!;
+    expect(restoreSceneStageAttemptCount({ ...identity, checkpoint: second, executionId: 'new-worker' })).toBe(2);
+    expect(migrateSceneStageAttemptInputFingerprint({ ...identity, legacyInputFingerprint: 'unrelated' })).toBeNull();
+    expect(migrateSceneStageAttemptInputFingerprint({ ...identity, modelFingerprint: 'another-model' })).toBeNull();
+    expect(migrateSceneStageAttemptInputFingerprint({ ...identity, outline: { ...outline, keyPoints: ['new-responsibility'] } })).toBeNull();
+    // A truly recompiled responsibility gets a new outline hash, rather than
+    // taking an exhausted unchanged page's calls under a different input hash.
+    expect(restoreSceneStageAttemptCount({ ...identity, outline: { ...outline, sectionPlanVersion: 'new-plan' },
+      checkpoint: migrated, executionId: 'new-worker' })).toBe(0);
   });
 });

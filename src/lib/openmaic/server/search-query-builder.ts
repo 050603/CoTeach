@@ -1,6 +1,7 @@
 import { parseJsonResponse } from '@openmaic/lib/generation/json-repair';
 import { PROMPT_IDS, buildPrompt } from '@openmaic/lib/prompts';
 import type { AICallFn } from '@openmaic/lib/generation/pipeline-types';
+import { AuxiliaryAuthoringError } from './auxiliary-authoring';
 import { createLogger } from '@openmaic/lib/logger';
 
 const log = createLogger('SearchQueryBuilder');
@@ -83,8 +84,7 @@ export async function buildSearchQuery(
       TAVILY_SOFT_MAX_QUERY_LENGTH,
     );
     if (!rewrittenQuery) {
-      log.warn('Query rewrite returned empty output, falling back to raw requirement');
-      return fallback;
+      throw new AuxiliaryAuthoringError('搜索查询首稿为空，保留响应供复核');
     }
 
     return {
@@ -93,7 +93,6 @@ export async function buildSearchQuery(
       finalQueryLength: rewrittenQuery.length,
     };
   } catch (error) {
-    log.warn('Query rewrite failed, falling back to raw requirement:', error);
-    return fallback;
+    throw new AuxiliaryAuthoringError('搜索查询首稿未通过验收，保留响应供复核', error);
   }
 }

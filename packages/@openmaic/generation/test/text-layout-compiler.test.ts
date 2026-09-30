@@ -271,6 +271,18 @@ describe('native slide typography preservation', () => {
     expect(compiled.content.replace(/<br>/g, '')).toBe(element.content.replace(/<br>/g, ''));
   });
 
+  it('widens a short orphaned label only when measured free space is available', async () => {
+    const element = native('<p style="font-size:16px">建构主义的原理</p>', 70, 75);
+    const [repaired] = await compileNativeTextLayout([element], measure);
+    expect(repaired).toMatchObject({ id: element.id, content: element.content });
+    expect(repaired.width).toBeGreaterThan(element.width);
+
+    const neighbor = { ...native('<p style="font-size:16px">旁边</p>', 100, 75),
+      id: 'neighbor', left: 152 };
+    await expect(compileNativeTextLayout([element, neighbor], measure))
+      .rejects.toThrow(/single-character wrapped line/);
+  });
+
   it('measures every native text but preserves fitting paragraphs and intentional preformatted breaks', async () => {
     const inputs: TextMeasureInput[] = [];
     const element = native('<p style="font-size:16px">先观察可见证据。</p><p style="font-size:16px">再解释推理依据。</p>', 400);

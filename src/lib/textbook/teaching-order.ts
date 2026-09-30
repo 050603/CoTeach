@@ -53,8 +53,10 @@ export function textbookTeachingBaseline(
     const usableCited = cited.filter((item) => item.kind !== "example"
       && item.source.revisionId === primaryRevisionId
       && position(item.source.sectionPosition) !== Number.MAX_SAFE_INTEGER);
-    const citedConcepts = usableCited.filter((item) => item.kind === "concept");
-    const candidates = citedConcepts.length ? citedConcepts : usableCited.length ? usableCited : snapshot.items.filter((item) => item.kind === "concept"
+    // A chapter-opening source block can establish an umbrella concept before
+    // later concept records revisit one of its examples or subtypes. The first
+    // cited explanation, not the evidence kind, determines textbook order.
+    const candidates = usableCited.length ? usableCited : snapshot.items.filter((item) => item.kind === "concept"
       && pointName.length > 0
       && [item.title, ...(item.aliases ?? [])].some((name) => name.replace(/\s+/gu, "").toLocaleLowerCase() === pointName));
     const adopted = candidates

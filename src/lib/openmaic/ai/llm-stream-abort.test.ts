@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 describe('streamed model abort classification', () => {
-  it('retries an unexpected upstream abort within the course request budget', async () => {
+  it('stops an unexpected upstream abort without replaying an unknown request', async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
     mocks.streamText
@@ -44,21 +44,18 @@ describe('streamed model abort classification', () => {
       maxRetries: 1,
     }), { onRetry });
 
-    const result = expect(call('system', 'page')).resolves.toBe('complete page');
+    const result = expect(call('system', 'page')).rejects.toMatchObject({
+      code: 'LLM_STREAM_TRUNCATED', isRetryable: false,
+    });
     await vi.runAllTimersAsync();
     await result;
 
-    expect(mocks.streamText).toHaveBeenCalledTimes(2);
+    expect(mocks.streamText).toHaveBeenCalledOnce();
     expect(controller.signal.aborted).toBe(false);
-    expect(onRetry).toHaveBeenCalledOnce();
-    expect(onRetry).toHaveBeenCalledWith(expect.objectContaining({
-      attempt: 1,
-      maxAttempts: 2,
-      reason: 'terminated',
-    }));
+    expect(onRetry).not.toHaveBeenCalled();
   });
 
-  it('marks an unexpected upstream abort as a retryable truncated stream', async () => {
+  it('marks an unexpected upstream abort as a terminal truncated stream', async () => {
     mocks.streamText.mockReturnValue({ stream: streamWith([{ type: 'abort', reason: 'terminated' }]) });
 
     await expect(callStreamingLLMText({
@@ -68,7 +65,7 @@ describe('streamed model abort classification', () => {
       name: 'Error',
       message: 'terminated',
       code: 'LLM_STREAM_TRUNCATED',
-      isRetryable: true,
+      isRetryable: false,
     });
   });
 

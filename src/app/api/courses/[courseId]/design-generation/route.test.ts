@@ -10,12 +10,19 @@ const mocks = vi.hoisted(() => {
     readonly code = "INVALID_TEST_LESSON_SELECTION";
     readonly status = 400;
   }
-  return { find: vi.fn(), packageJob: vi.fn(), create: vi.fn(), update: vi.fn(), replace: vi.fn(), resolve: vi.fn(), references: vi.fn(), promote: vi.fn(), resume: vi.fn(), TestLessonPromotionError, TestLessonSelectionError };
+  class SavedCourseDesignFirstDraftResumeError extends Error {
+    constructor(readonly code: string, message: string, readonly status = 409) { super(message); }
+  }
+  return { find: vi.fn(), packageJob: vi.fn(), create: vi.fn(), update: vi.fn(), replace: vi.fn(), resolve: vi.fn(), references: vi.fn(), promote: vi.fn(), resume: vi.fn(), savedResume: vi.fn(), checkpoints: vi.fn(), TestLessonPromotionError, TestLessonSelectionError, SavedCourseDesignFirstDraftResumeError };
 });
 vi.mock("@/lib/platform/template-access", () => ({ authorizeTemplateRequest: vi.fn().mockResolvedValue("teacher-1") }));
 vi.mock("@/lib/platform/pbl-template-repository", () => ({ loadPblTemplateCourse: vi.fn().mockResolvedValue({ id: "course-1" }) }));
 vi.mock("@/lib/course-generation/job-storage", () => ({ designGenerationJobs: { findUnique: mocks.find, create: mocks.create, update: mocks.update, replace: mocks.replace }, resourcePackageJobs: { findUnique: mocks.packageJob } }));
 vi.mock("@/lib/course-generation/capability", () => ({ isBackgroundCourseGenerationEnabled: () => true }));
+vi.mock('@/lib/course-generation/checkpoint-storage', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/course-generation/checkpoint-storage')>(),
+  loadGenerationCheckpoints: mocks.checkpoints,
+}));
 vi.mock("@/lib/course-design/job-runner", () => ({
   initialQuickGenerationEstimateSeconds: () => 60,
   cancelCourseDesignJob: vi.fn(),
@@ -26,6 +33,10 @@ vi.mock("@/lib/course-design/job-runner", () => ({
   resumeRecoverableCourseDesignJob: vi.fn(),
   TestLessonPromotionError: mocks.TestLessonPromotionError,
   TestLessonSelectionError: mocks.TestLessonSelectionError,
+}));
+vi.mock("@/lib/course-design/saved-first-draft-resume", () => ({
+  resumeSavedCourseDesignFirstDraft: mocks.savedResume,
+  SavedCourseDesignFirstDraftResumeError: mocks.SavedCourseDesignFirstDraftResumeError,
 }));
 vi.mock("@/lib/session/server-store", () => ({ getCourse: vi.fn() }));
 vi.mock("@/lib/course-design/generation-references", () => ({ GenerationReferenceError: class extends Error {}, resolveGenerationReferenceMaterials: mocks.references }));
@@ -49,7 +60,35 @@ function storedJob(request: unknown, status = "completed") {
 }
 
 describe("resource-package design generation admission", () => {
-  beforeEach(() => { vi.clearAllMocks(); mocks.find.mockResolvedValue(null); mocks.packageJob.mockResolvedValue(null); mocks.references.mockResolvedValue([]); });
+  beforeEach(() => { vi.clearAllMocks(); mocks.find.mockResolvedValue(null); mocks.packageJob.mockResolvedValue(null); mocks.references.mockResolvedValue([]); mocks.checkpoints.mockResolvedValue({}); });
+
+  it("continues a saved first draft without replacing the task or creating an authoring request", async () => {
+    mocks.savedResume.mockResolvedValue({
+      ...storedJob({ courseId: "course-1", authoringRequestId: "original-request" }, "queued"),
+      tokenUsage: 326863, tokenUsageCalls: 3,
+    });
+    const response = await PATCH(patchRequest({ action: "resume-saved-first-draft" }), context);
+    expect(response.status).toBe(200);
+    expect(mocks.savedResume).toHaveBeenCalledWith("course-1", "teacher-1");
+    expect(await response.json()).toMatchObject({ job: { id: "job-1", status: "queued",
+      tokenUsage: { totalTokens: 326863, calls: 3 } } });
+    expect(mocks.resume).not.toHaveBeenCalled();
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it.each([409, 422])("reports saved-draft rejection without starting a replacement request (%s)", async (status) => {
+    mocks.savedResume.mockRejectedValue(new mocks.SavedCourseDesignFirstDraftResumeError(
+      "SAVED_FIRST_DRAFT_INVALID", "首稿仍有缺失内容，原稿和已完成成果已保留。", status,
+    ));
+    const response = await PATCH(patchRequest({ action: "resume-saved-first-draft" }), context);
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ error: "SAVED_FIRST_DRAFT_INVALID",
+      detail: "首稿仍有缺失内容，原稿和已完成成果已保留。" });
+    expect(mocks.resume).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.replace).not.toHaveBeenCalled();
+  });
 
   it("passes the teacher-selected test section to the durable design task", async () => {
     mocks.resume.mockResolvedValue({
@@ -176,7 +215,7 @@ describe("resource-package design generation admission", () => {
     expect(await response.json()).toMatchObject({ job: { requestPreview: { assessmentMode: "adaptive" } } });
   });
 
-  it("atomically resets unfinished-stage attempts and unvalidated responses for an explicit same-request retry", async () => {
+  it("archives and replaces only the rejected design stage for an explicit submission", async () => {
     const resourcePackage = { schemaVersion: 1, id: "package-1", revision: 3, source: { id: "zip-1", fileName: "教学.zip", url: "/private/zip" }, documents: {}, draft: emptyResourcePackageDraft(), confirmedAt: "2026-09-12T00:00:00Z" };
     const previous = {
       courseId: "course-1",
@@ -194,6 +233,12 @@ describe("resource-package design generation admission", () => {
     const failed = { ...storedJob(previous, "failed"), version: 9, tokenUsage: 12_345, tokenUsageCalls: 2 };
     mocks.find.mockResolvedValue(failed);
     mocks.resolve.mockResolvedValue({ resourcePackage, referenceMaterials: [] });
+    mocks.checkpoints.mockResolvedValue({
+      knowledgeStructure: { status: 'validated', rawResponse: 'accepted knowledge' },
+      knowledgeStructureAttempt: { attemptsStarted: 1 },
+      aiDuration: { status: 'invalid-output', rawResponse: 'rejected duration' },
+      aiDurationAttempt: { attemptsStarted: 1 },
+    });
     mocks.replace.mockImplementation(({ data }: { data: { request: unknown } }) => Promise.resolve({ ...failed, ...data, status: "queued" }));
 
     const response = await POST(request({ resourcePackageId: "package-1", resourcePackageRevision: 3 }), context);
@@ -201,13 +246,14 @@ describe("resource-package design generation admission", () => {
     expect(response.status).toBe(202);
     expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: "job-1", status: "failed", version: 9 },
-      checkpointPolicy: { prefixes: ["course-design-attempt:"], unvalidatedResponses: true },
+      checkpointPolicy: { steps: ['course-design:ai-duration', 'course-design-attempt:ai-duration', 'design-authoring:aiDurationPlanning'] },
       data: expect.objectContaining({
         tokenUsage: 12_345,
         tokenUsageCalls: 2,
         executionId: null,
         executionOwner: null,
         leaseExpiresAt: null,
+        request: expect.objectContaining({ authoringRequestId: expect.stringMatching(/^[\da-f-]{36}$/u) }),
       }),
     }));
   });

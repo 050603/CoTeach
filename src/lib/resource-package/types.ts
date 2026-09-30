@@ -10,17 +10,17 @@ export type ResourcePackageFile = { id: string; fileName: string; url: string; s
 export type ResourcePackageSource = { documentRole: ResourcePackageRole; locator: string; quote: string; archivePath?: string };
 export type HandoffDocumentMetadata = {
   handoffFormatVersion: 1;
-  projectId: string;
+  projectId?: string;
   resourceType: "KNOWLEDGE" | "LESSON_PLAN";
-  resourceVersion: number;
-  packageId: string;
-  presentationVersion: number;
+  resourceVersion?: number;
+  packageId?: string;
+  presentationVersion?: number;
 };
 export type ResourcePackageHandoffMetadata = {
   handoffFormatVersion: 1;
-  projectId: string;
-  packageId: string;
-  presentationVersion: number;
+  projectId?: string;
+  packageId?: string;
+  presentationVersion?: number;
   documents: { knowledge: HandoffDocumentMetadata; lessonPlan: HandoffDocumentMetadata };
 };
 export type ResourcePackageEvaluationRubric = {
@@ -54,7 +54,7 @@ export type ResourcePackageKnowledge = { id?: string; name: string; description:
   children?: { id: string; name: string; description: string; taskAssociation?: string; sources?: string[]; source?: ResourcePackageSource }[] };
 export type ResourcePackagePlanningIssue = {
   id: string;
-  kind: "duration" | "organization" | "evidence";
+  kind: "duration" | "organization" | "evidence" | "metadata";
   severity: "info" | "warning";
   requiresAcknowledgement: boolean;
   summary: string;

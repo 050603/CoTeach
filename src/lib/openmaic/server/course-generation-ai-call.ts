@@ -1,4 +1,5 @@
 import type { LanguageModel, UserModelMessage } from 'ai';
+import { randomUUID } from 'node:crypto';
 import { callLLM, callStreamingLLMText } from '@openmaic/lib/ai/llm';
 import type { ThinkingConfig } from '@openmaic/lib/types/provider';
 import type { AICallFn } from '@openmaic/lib/generation/pipeline-types';
@@ -6,7 +7,14 @@ import {
   withGenerationRetry,
   type GenerationRetryEvent,
 } from '@openmaic/lib/generation/generation-retry';
-import { withCourseGenerationLlmSlot } from '@/lib/course-generation/llm-concurrency';
+import {
+  runWithCourseGenerationLlmCallContext,
+  withCourseGenerationLlmSlot,
+} from '@/lib/course-generation/llm-concurrency';
+import {
+  isFirstPassProviderRejection,
+  MAX_FIRST_PASS_TRANSPORT_RETRIES,
+} from '@/lib/course-generation/first-pass-policy';
 import { createLogger } from '@openmaic/lib/logger';
 
 import {
@@ -17,8 +25,16 @@ import {
 
 const log = createLogger('CourseGenerationAI');
 
+export type CourseGenerationAuthoringResponse = {
+  source: string; system: string; prompt: string; text: string;
+  /** An interrupted/truncated response is never eligible for saved-draft acceptance. */
+  complete?: boolean;
+};
+
 export type CourseGenerationAiCallContext = {
   attemptsStarted?: number;
+  /** Request identity owns complete and partial raw drafts before parsing. */
+  onResponse?: (input: CourseGenerationAuthoringResponse) => Promise<void> | void;
   onQueued?: (input: { attempt: number; totalAttempt: number; queuedAt: number }) => Promise<void> | void;
   onAttemptStarting?: (input: {
     attempt: number;
@@ -46,7 +62,10 @@ export type CourseGenerationAiCallContext = {
     firstOutputAt: number;
   }) => void;
   onRetry?: (event: GenerationRetryEvent) => Promise<void> | void;
-  onSettled?: (input: { attempt: number; totalAttempt: number; durationMs: number }) => void;
+  onSettled?: (input: {
+    attempt: number; totalAttempt: number; durationMs: number;
+    outcome: 'response' | 'failed' | 'aborted';
+  }) => Promise<void> | void;
 };
 
 type ContextualAICallFn = AICallFn & {
@@ -96,7 +115,9 @@ function createStreamDeadline(input: {
       : controller.signal,
     markActivity: armIdleTimer,
     timeoutError: () => timeoutKind === 'idle'
-      ? new DOMException('Course model stream timed out after no reasoning or text activity', 'TimeoutError')
+      ? Object.assign(new Error('Course model stream timed out after no reasoning or text activity'), {
+          name: 'TimeoutError', code: 'LLM_STREAM_IDLE_TIMEOUT', isRetryable: false,
+        })
       : timeoutKind === 'maximum-duration'
         ? Object.assign(new Error('Course model stream exceeded its maximum duration'), {
             code: 'LLM_EXECUTION_BUDGET_EXCEEDED',
@@ -128,6 +149,10 @@ export function createCourseGenerationAiCall(options: {
   streamMaxDurationMs?: number;
   /** Opt in to a work-based deadline. An explicit streamMaxDurationMs still wins. */
   executionBudget?: CourseExecutionBudgetOptions;
+  /** Observe completed text before parsing; diagnostic failures never replay a request. */
+  onResponse?: (input: CourseGenerationAuthoringResponse) => Promise<void> | void;
+  /** Production checkpoints must save the raw draft before any parsing/acceptance. */
+  requireResponsePersistence?: boolean;
 }): AICallFn {
   const execute = async (
     system: string,
@@ -139,20 +164,46 @@ export function createCourseGenerationAiCall(options: {
     const maxDurationMs = options.streamMaxDurationMs ?? (options.executionBudget
       ? calculateCourseExecutionDurationMs(maxOutputTokens, options.timeoutMs ?? 0, options.executionBudget)
       : options.timeoutMs);
-    const configuredMaxRetries = Math.max(0, Math.min(2, options.maxRetries ?? 2));
+    const configuredMaxRetries = Math.max(0, Math.min(MAX_FIRST_PASS_TRANSPORT_RETRIES,
+      Math.floor(options.maxRetries ?? MAX_FIRST_PASS_TRANSPORT_RETRIES)));
     const attemptsStarted = Math.max(0, Math.floor(context.attemptsStarted ?? 0));
     const maximumAttempts = configuredMaxRetries + 1;
-    if (attemptsStarted >= maximumAttempts) {
+    // Another invocation is another authoring, even if a transport allowance
+    // remains. Only the retry loop of this original request can use that slot.
+    if (attemptsStarted > 0) {
       throw Object.assign(
-        new Error(`[${options.source}] persisted transport attempt budget is exhausted`),
+        new Error(`[${options.source}] this authoring request has already started; reuse its saved draft`),
         { code: 'LLM_RETRY_BUDGET_EXHAUSTED', isRetryable: false },
       );
     }
-    return withGenerationRetry(async (attempt) => {
+    let providerCallStarted = false;
+    let outputStarted = false;
+    let cancelledRawResponse: string | undefined;
+    const persistResponse = async (text: string, complete: boolean) => {
+      try {
+        const response = { source: options.source, system, prompt, text, complete };
+        await context.onResponse?.(response);
+        await options.onResponse?.(response);
+      } catch (error) {
+        if (options.requireResponsePersistence) {
+          const failure = Object.assign(new Error(`[${options.source}] could not persist the model draft`, { cause: error }), {
+            code: 'LLM_RESPONSE_PERSISTENCE_FAILED', isRetryable: false,
+          });
+          Object.defineProperty(failure, 'rawResponse', { value: text });
+          throw failure;
+        }
+        log.warn('Could not record course model response');
+      }
+    };
+    let response: string;
+    try {
+    response = await withGenerationRetry(async (attempt) => {
+    providerCallStarted = false;
+    outputStarted = false;
     const totalAttempt = attemptsStarted + attempt;
     const queuedAt = Date.now();
     await context.onQueued?.({ attempt, totalAttempt, queuedAt });
-    return withCourseGenerationLlmSlot(async () => {
+    return withCourseGenerationLlmSlot(() => runWithCourseGenerationLlmCallContext(async () => {
       const slotAcquiredAt = Date.now();
       const queueMs = slotAcquiredAt - queuedAt;
       // Persist the attempt after the global slot is acquired but before any
@@ -165,8 +216,8 @@ export function createCourseGenerationAiCall(options: {
         slotAcquiredAt,
         queueMs,
       });
-      // Technical corrections using this same stage context consume the same
-      // budget as transport retries; they must not restart numbering at one.
+      // Keep the marker after completion and on every failure. It prevents
+      // parser/storage failures or task recovery from starting another draft.
       context.attemptsStarted = totalAttempt;
       const startedAt = Date.now();
       const requestPolicy = {
@@ -198,45 +249,73 @@ export function createCourseGenerationAiCall(options: {
             { type: 'image' as const, image: image.src },
           ])]
         : prompt;
+      let outcome: 'response' | 'failed' | 'aborted' = 'failed';
       try {
+        providerCallStarted = true;
         if (options.streamResponse) {
-          return await callStreamingLLMText({
+          const response = await callStreamingLLMText({
             model: options.model, system, messages: [{ role: 'user', content }],
             abortSignal: signal, maxOutputTokens, maxRetries: 0,
             temperature: options.temperature,
           }, options.source, options.thinking, {
             onActivity: (activity) => {
+              outputStarted ||= activity.reasoningCharacters > 0 || activity.textCharacters > 0;
               streamDeadline?.markActivity();
               context.onActivity?.({ attempt, at: Date.now(), ...activity });
             },
             bypassCourseGenerationLimit: true,
           });
+          outcome = 'response';
+          return response;
         }
         const result = await callLLM({
           model: options.model, system, messages: [{ role: 'user', content }],
           abortSignal: signal, maxOutputTokens, maxRetries: 0,
           temperature: options.temperature,
         }, options.source, undefined, options.thinking, { bypassCourseGenerationLimit: true });
+        outcome = 'response';
         return result.text;
       } catch (error) {
         // User cancellation wins even when it races a local deadline or the
         // provider wraps the abort in a transport error.
-        if (options.signal?.aborted) throw options.signal.reason;
+        if (options.signal?.aborted) {
+          outcome = 'aborted';
+          if (error && typeof error === 'object' && 'rawResponse' in error
+            && typeof error.rawResponse === 'string') cancelledRawResponse = error.rawResponse;
+          throw options.signal.reason;
+        }
         const streamTimeoutError = streamDeadline?.timeoutError();
         // An active request exhausting our execution budget is not a broken
         // connection. Replaying it would consume the same budget again.
-        if (streamTimeoutError) throw streamTimeoutError;
-        if (timeout?.aborted) throw new DOMException('Course model request timed out', 'TimeoutError');
+        const timeoutError = streamTimeoutError ?? (timeout?.aborted
+          ? Object.assign(new Error('Course model request timed out'), {
+              name: 'TimeoutError', code: 'LLM_REQUEST_TIMEOUT', isRetryable: false,
+            }) : undefined);
+        if (timeoutError) {
+          if (error && typeof error === 'object' && 'rawResponse' in error) {
+            Object.defineProperty(timeoutError, 'rawResponse', { value: error.rawResponse });
+          }
+          throw timeoutError;
+        }
         throw error;
       } finally {
         streamDeadline?.dispose();
-        context.onSettled?.({ attempt, totalAttempt, durationMs: Date.now() - startedAt });
+        try {
+          await context.onSettled?.({ attempt, totalAttempt, durationMs: Date.now() - startedAt, outcome });
+        } catch (error) {
+          // A lost job lease or database write must not turn a usable model
+          // response into a transport failure. The started marker remains
+          // recoverable if the stage result was not committed.
+          log.warn(`[${options.source}] could not persist model-attempt settlement`, error);
+        }
       }
-    }, { signal: options.signal });
+    }, { source: options.source, callId: randomUUID(), attempt: totalAttempt,
+      transportRetry: attempt > 1 }), { signal: options.signal });
   }, {
     label: options.source,
     maxRetries: Math.max(0, configuredMaxRetries - attemptsStarted),
     signal: options.signal,
+    shouldRetryError: (error) => providerCallStarted && isFirstPassProviderRejection(error, outputStarted),
     onRetry: async (event) => {
       const totalFailedAttempts = attemptsStarted + event.attempt;
       log.warn(
@@ -250,6 +329,18 @@ export function createCourseGenerationAiCall(options: {
       });
     },
   });
+    } catch (error) {
+      const retainedResponse = error && typeof error === 'object' && 'rawResponse' in error
+        ? (error as { rawResponse?: unknown }).rawResponse : undefined;
+      const rawResponse = typeof retainedResponse === 'string' ? retainedResponse : cancelledRawResponse;
+      // Stream interruption and usage persistence failures retain the partial
+      // response. Save it without reclassifying it as an accepted stage result.
+      if (typeof rawResponse === 'string') await persistResponse(rawResponse, false);
+      throw error;
+    }
+    // Raw-response storage is outside the retry/deadline/slot boundary.
+    await persistResponse(response, true);
+    return response;
   };
   const aiCall = ((system, prompt, images) => execute(system, prompt, images)) as ContextualAICallFn;
   aiCall.withExecutionContext = (context) => (

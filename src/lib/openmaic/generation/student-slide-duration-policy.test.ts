@@ -16,6 +16,7 @@ describe("student slide duration policy", () => {
     }]);
 
     expect(result).toHaveLength(4);
+    expect(result.map((item) => item.title)).toEqual(Array(4).fill("核心知识"));
     expect(Math.max(...result.map((item) => item.targetDurationSec ?? 0))).toBeLessThanOrEqual(6 * 60);
     expect(result.reduce((sum, item) => sum + (item.targetDurationSec ?? 0), 0)).toBe(22 * 60);
   });

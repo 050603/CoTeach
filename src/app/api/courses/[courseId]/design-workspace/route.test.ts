@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPblTemplateCourse } from "@/lib/platform/pbl-template";
-import type { Course } from "@/lib/session/types";
+import type { Course, TeachingBlueprint } from "@/lib/session/types";
+import type { CourseTextbookFigureResource } from "@/lib/textbook/course-evidence-types";
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
@@ -9,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   designJob: vi.fn(),
   contentJob: vi.fn(),
   publication: vi.fn(),
+  figures: vi.fn(),
+  hydrate: vi.fn(),
 }));
 
 vi.mock("@/lib/platform/template-access", () => ({ authorizeTemplateRequest: mocks.authorize }));
@@ -29,6 +32,10 @@ vi.mock("@/lib/course-generation/capability", () => ({ isBackgroundCourseGenerat
 vi.mock("@/lib/openmaic/server/classroom-storage", () => ({ readClassroom: vi.fn(), updatePersistedClassroomForEditing: vi.fn() }));
 vi.mock("@/lib/course-generation/teacher-review-items", () => ({ collectGeneratedTeacherReviewItems: vi.fn(() => []), teacherReviewSummary: vi.fn(() => "") }));
 vi.mock("@/lib/openmaic/server/classroom-asset-generation", () => ({ summarizeTeachingTimingAudit: vi.fn() }));
+vi.mock("@/lib/textbook/course-evidence", () => ({
+  resolveCourseTextbookFigures: mocks.figures,
+  hydrateCourseEvidenceFigureReferences: mocks.hydrate,
+}));
 
 import { PATCH } from "./route";
 
@@ -58,10 +65,51 @@ describe("course design workspace route", () => {
     mocks.designJob.mockResolvedValue(null);
     mocks.contentJob.mockResolvedValue(null);
     mocks.publication.mockResolvedValue({ latestVersion: 2, publishedVersion: 1, draftVersion: 2 });
+    mocks.figures.mockResolvedValue([]);
+    mocks.hydrate.mockImplementation(async (items) => items);
     mocks.updateCourse.mockImplementation(async (_id: string, updater: (value: Course) => Course) => {
       course = { ...updater(course), version: (course.version ?? 0) + 1 };
       return { courses: [course] };
     });
+  });
+
+  it.each([false, true])("saves independent textbook lists and rejects a missing adopted item (missing=%s)", async (missing) => {
+    const figureLabels = ["图流程甲", "图流程乙", "图流程丙", "图流程丁", "图流程戊", "图流程己"];
+    const sourceLabels = ["正文步骤甲", "正文步骤乙", "正文步骤丙", "正文步骤丁", "正文步骤戊"];
+    const visible = [`图流程有6个环节：${figureLabels.join("、")}`, `正文流程有5个环节：${(missing ? sourceLabels.slice(0, -1) : sourceLabels).join("、")}`];
+    course.content.courseEvidence = { items: [{ id: "e-source", content: "正文流程", source: { sectionPath: ["操作步骤"] },
+      sourceSequences: [{ anchorSourceBlockId: "source-first", kind: "ordered-steps",
+        steps: sourceLabels.map((label, index) => ({ label, sourceBlockId: `source-${index}` })) }] }], mappings: [] } as unknown as NonNullable<Course["content"]["courseEvidence"]>;
+    course.content.knowledgePoints[0]!.evidenceItemIds = ["e-source"];
+    const figure: CourseTextbookFigureResource = {
+      id: "figure-resource", figureId: "figure-id", assetId: "figure-asset", src: "/api/uploads/figure-asset",
+      status: "available", relation: "direct", required: true, pageNumber: 1, evidenceItemIds: [],
+      knowledgePointIds: ["kp-1"], sourceTitle: "教材",
+      orderedSteps: figureLabels.map((label, index) => ({ label, sourceBlockId: `figure-${index}` })),
+    };
+    mocks.figures.mockResolvedValue([figure]);
+    const blueprint: TeachingBlueprint = {
+      schemaVersion: 3, inputFingerprint: "accepted", assessmentMode: "adaptive", createdAt: "2026-09-30",
+      budget: { totalDurationSec: 600, teachingDurationSec: 480, learnerActivityDurationSec: 0, assessmentDurationSec: 120, teachingRatio: 0.8, assessmentRatio: 0.2 },
+      sections: [{ id: "section-1", title: "两类流程", order: 0, knowledgePointIds: ["kp-1"],
+        learningObjective: "分别说明两类流程", assessmentFocus: ["分别说明两类流程"],
+        sharedContext: { learningPurpose: "分别说明流程", caseId: "", caseFacts: [], stableTerms: [], fixedWording: [], conceptBoundaries: [] },
+        understandingCriteria: { goals: ["分别说明流程"], answerEssentials: ["各自步骤完整"], misconceptions: ["混合数量"], supportingUnitIds: ["unit-1"] },
+        teachingDurationSec: 480, learnerActivityDurationSec: 0, assessmentDurationSec: 120,
+        units: [{ id: "unit-1", title: "两类流程", knowledgePointIds: ["kp-1"], learningOutcome: "分别说明流程",
+          explanation: visible.join("。"), mechanism: "两类流程各有独立步骤。", workedExample: "分别执行两类流程。",
+          conditions: [], misconceptions: [], sourceKind: "course-source", evidenceQuotes: [] }],
+        pages: [{ id: "page-1", title: "两类流程", type: "slide", unitIds: ["unit-1"], knowledgePointIds: ["kp-1"],
+          description: visible.join("。"), keyPoints: visible, teachingObjective: "分别说明两类流程" }],
+      }],
+    };
+    const response = await PATCH(new Request("http://localhost/api/courses/course-1/design-workspace", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save", section: "blueprint", expectedVersion: 10, data: blueprint }),
+    }), { params: Promise.resolve({ courseId: "course-1" }) });
+    expect(response.status).toBe(missing ? 400 : 200);
+    if (missing) expect((await response.json()).message).toContain("正文步骤戊");
+    else expect(course.content.teachingBlueprint?.sections[0]?.pages[0]?.keyPoints).toEqual(visible);
   });
 
   it("saves teacher edits as a draft while preserving generated classroom data", async () => {

@@ -20,6 +20,7 @@ type _SceneContentKeys = Assert<
     | 'slideAuthoring'
     | 'allowLegacyComponents'
     | 'textMeasure'
+    | 'authoringContent'
     | 'assignedImages'
     | 'imageMapping'
     | 'visionEnabled'

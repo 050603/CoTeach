@@ -2,6 +2,8 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import { runMutationTransaction } from "@/lib/db/transaction-retry";
 import { CLASSROOM_MEDIA_ORIGIN_PREFIX } from './classroom-media-origin';
+import { SECTION_CAPACITY_CHECKPOINT_PREFIX } from './section-capacity-checkpoints';
+import { SOURCE_CONTENT_CHECKPOINT_PREFIX, SOURCE_NARRATION_BASELINE_STEP } from './source-content-acceptance';
 
 export const PREPARED_OUTLINES_STEP = "prepared-outlines";
 export const TEACHING_BLUEPRINT_STEP = "teaching-blueprint";
@@ -21,11 +23,20 @@ export async function loadGenerationCheckpoints(jobId: string) {
     knowledgeStructureAttempt: rows.find((row) => row.step === KNOWLEDGE_STRUCTURE_ATTEMPT_STEP)?.state ?? null,
     aiDuration: rows.find((row) => row.step === AI_DURATION_STEP)?.state ?? null,
     aiDurationAttempt: rows.find((row) => row.step === AI_DURATION_ATTEMPT_STEP)?.state ?? null,
+    courseSeed: rows.find((row) => row.step === 'design-authoring:courseSeed')?.state ?? null,
+    courseSeedAttempt: rows.find((row) => row.step === 'course-design-attempt:course-seed')?.state ?? null,
+    classicOutline: rows.find((row) => row.step === 'design-authoring:classicOutline')?.state ?? null,
+    classicOutlineAttempt: rows.find((row) => row.step === 'course-design-attempt:classic-outline')?.state ?? null,
     courseFinalization: rows.find((row) => row.step === COURSE_FINALIZATION_STEP)?.state ?? null,
+    sourceNarrationBaseline: rows.find((row) => row.step === SOURCE_NARRATION_BASELINE_STEP)?.state ?? null,
     pages: rows.filter((row) => row.step.startsWith("page:")).map((row) => row.state),
     stages: rows.filter((row) => row.step.startsWith("stage:")).map((row) => row.state),
     stageAttempts: rows.filter((row) => row.step.startsWith("stage-attempt:")).map((row) => row.state),
+    authoringResponses: rows.filter((row) => row.step.startsWith("authoring-response:")).map((row) => row.state),
+    auxiliaryAuthoringStates: rows.filter((row) => row.step.startsWith('aux-authoring:')).map((row) => row.state),
     teachingSections: rows.filter((row) => row.step.startsWith("teaching-section:")).map((row) => row.state),
+    sectionCapacities: rows.filter((row) => row.step.startsWith(SECTION_CAPACITY_CHECKPOINT_PREFIX)).map((row) => row.state),
+    sourceContents: rows.filter((row) => row.step.startsWith(SOURCE_CONTENT_CHECKPOINT_PREFIX)).map((row) => row.state),
   };
 }
 export async function saveGenerationCheckpoint(
@@ -34,6 +45,10 @@ export async function saveGenerationCheckpoint(
   state: unknown,
   options: { executionId?: string } = {},
 ) {
+  if (step === SOURCE_NARRATION_BASELINE_STEP) {
+    await saveSourceNarrationBaselineCheckpoint(jobId, state, options);
+    return;
+  }
   const value = JSON.parse(JSON.stringify(state)) as Prisma.InputJsonValue;
   if (!options.executionId) {
     await prisma.generationCheckpoint.upsert({ where: { jobId_step: { jobId, step } }, create: { jobId, step, state: value }, update: { state: value } });
@@ -58,8 +73,44 @@ export async function saveGenerationCheckpoint(
     });
   });
 }
+
+/** Preserve the first identity-checked failed finalization and its original
+ * stages. A later attempt cannot overwrite this evidence, including through
+ * the generic checkpoint writer. Return the actual stored value on races. */
+export async function saveSourceNarrationBaselineCheckpoint(
+  jobId: string,
+  state: unknown,
+  options: { executionId?: string } = {},
+): Promise<Prisma.JsonValue> {
+  const value = JSON.parse(JSON.stringify(state)) as Prisma.InputJsonValue;
+  const args = {
+    where: { jobId_step: { jobId, step: SOURCE_NARRATION_BASELINE_STEP } },
+    create: { jobId, step: SOURCE_NARRATION_BASELINE_STEP, state: value },
+    update: {},
+  };
+  if (!options.executionId) {
+    return (await prisma.generationCheckpoint.upsert(args)).state;
+  }
+  return runMutationTransaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "GenerationJob" WHERE id = ${jobId} FOR UPDATE`;
+    const row = await tx.generationJob.findUnique({ where: { id: jobId }, select: { status: true, trace: true } });
+    const trace = row?.trace && typeof row.trace === 'object' && !Array.isArray(row.trace)
+      ? row.trace as Record<string, unknown> : {};
+    const envelope = trace.state && typeof trace.state === 'object' && !Array.isArray(trace.state)
+      ? trace.state as Record<string, unknown> : {};
+    if (row?.status !== 'RUNNING' || envelope.executionId !== options.executionId) {
+      throw new Error('GENERATION_JOB_EXECUTION_LOST');
+    }
+    return (await tx.generationCheckpoint.upsert(args)).state;
+  });
+}
 export async function resetGenerationCheckpoints(jobId: string) {
-  await prisma.generationCheckpoint.deleteMany({ where: { jobId, NOT: { step: { startsWith: CLASSROOM_MEDIA_ORIGIN_PREFIX } } } });
+  // A projection reset cannot erase a paid request or its draft. Explicit
+  // authoring replacement uses job-storage's transactional history archive.
+  await prisma.generationCheckpoint.deleteMany({ where: { jobId, NOT: [
+    CLASSROOM_MEDIA_ORIGIN_PREFIX, 'model-usage:', 'authoring-history:',
+    'authoring-response:', 'aux-authoring:', 'stage-attempt:', 'course-design:', 'course-design-attempt:', 'design-authoring:',
+  ].map((prefix) => ({ step: { startsWith: prefix } })).concat([{ step: { startsWith: TEACHING_BLUEPRINT_STEP } }]) } });
 }
 /**
  * A test lesson and its later full-course promotion share page checkpoints.
@@ -69,17 +120,6 @@ export async function resetGenerationCheckpoints(jobId: string) {
  */
 export async function resetPreparedOutlinesCheckpoint(jobId: string) {
   await prisma.generationCheckpoint.deleteMany({ where: { jobId, step: PREPARED_OUTLINES_STEP } });
-}
-export async function resetGenerationAttemptCheckpoints(jobId: string) {
-  await prisma.generationCheckpoint.deleteMany({
-    where: {
-      jobId,
-      OR: [
-        { step: { startsWith: "stage-attempt:" } },
-        { step: { startsWith: "course-design-attempt:" } },
-      ],
-    },
-  });
 }
 export async function countGenerationPageCheckpoints(jobId: string) {
   return prisma.generationCheckpoint.count({ where: { jobId, step: { startsWith: "page:" } } });

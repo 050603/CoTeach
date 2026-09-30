@@ -1422,19 +1422,27 @@ function QuizConfigDisclosure({
   settingsStyle?: boolean;
 }) {
   const { t } = useI18n();
-  const config = outline.quizConfig ?? {
+  const config: NonNullable<SceneOutline['quizConfig']> = outline.quizConfig ?? {
     questionCount: 3,
     difficulty: 'medium' as const,
     questionTypes: ['single' as const],
   };
+  const range = config.questionCountRange;
+  const isSectionQuiz = config.qualityContract === 'grounded-v1'
+    && config.coveragePolicy === 'section-synthesis';
+  const isDynamic = isSectionQuiz && config.generatedQuestionCount === undefined
+    && Boolean(range && range.min < range.max);
+  const isFixedDeepResponse = isSectionQuiz && !range
+    && config.minShortAnswerQuestions === 1 && config.maxShortAnswerQuestions === 1;
+  const displayedCount = config.generatedQuestionCount
+    ?? (isDynamic ? `${range!.min}–${range!.max}` : config.questionCount ?? 3);
 
   const updateConfig = (updates: Partial<typeof config>) => {
     onUpdate({
       quizConfig: {
-        questionCount: config.questionCount ?? 3,
-        difficulty: config.difficulty ?? 'medium',
-        questionTypes: config.questionTypes ?? ['single'],
+        ...config,
         ...updates,
+        generatedQuestionCount: undefined,
       },
     });
   };
@@ -1443,8 +1451,10 @@ function QuizConfigDisclosure({
     <Popover>
       <PopoverTrigger asChild>
         <button type="button" className={cascadeSegmentClass(theme, settingsStyle)}>
-          <span className="max-w-[8rem] truncate">
-            {t('generation.quizConfigSummary', { count: config.questionCount ?? 3 })}
+          <span className="max-w-[11rem] truncate">
+            {config.generatedQuestionCount !== undefined ? '实际 ' : ''}
+            {t('generation.quizConfigSummary', { count: displayedCount })}
+            {isDynamic ? ' · 动态' : ''}
           </span>
           <ChevronDown className="size-3 opacity-70" />
         </button>
@@ -1454,18 +1464,38 @@ function QuizConfigDisclosure({
           <p className="text-sm font-bold text-stone-900">测验设置</p>
         </div>
         <div className="space-y-4 p-4">
-        {/* Count: label left, stepper right */}
+        {/* A range is a generation policy, while a teacher-selected count is exact. */}
         <div className="flex items-center justify-between gap-3">
           <span className="text-xs font-medium text-stone-500">
             {t('generation.quizQuestionCount')}
           </span>
-          <Stepper
-            value={config.questionCount ?? 3}
-            min={1}
-            max={10}
-            onChange={(next) => updateConfig({ questionCount: next, questionTypePlan: undefined })}
-          />
+          {isDynamic ? <span className="text-xs font-semibold text-stone-800">{range!.min}–{range!.max} 道题，生成时确定</span>
+            : isFixedDeepResponse ? <span className="text-xs font-semibold text-stone-800">1 道综合简答题</span>
+              : <Stepper
+                value={config.questionCount ?? 3}
+                min={isSectionQuiz ? 2 : 1}
+                max={isSectionQuiz ? 4 : 10}
+                onChange={(next) => updateConfig({
+                  questionCount: next,
+                  ...(isSectionQuiz ? { questionCountRange: { min: next, max: next } } : {}),
+                  questionTypePlan: undefined,
+                })}
+              />}
         </div>
+        {isSectionQuiz && !isFixedDeepResponse ? (
+          <button
+            className="text-left text-xs font-semibold text-[var(--pbl-teacher)] underline underline-offset-2"
+            onClick={() => updateConfig({
+              questionCountRange: isDynamic
+                ? { min: config.questionCount ?? 2, max: config.questionCount ?? 2 }
+                : { min: 2, max: 4 },
+              questionTypePlan: undefined,
+            })}
+            type="button"
+          >
+            {isDynamic ? '改为指定题数' : '恢复按目标动态确定题数'}
+          </button>
+        ) : null}
         {/* Difficulty: label left, segmented right */}
         <div className="flex items-center justify-between gap-3">
           <span className="text-xs font-medium text-stone-500">
@@ -1486,14 +1516,18 @@ function QuizConfigDisclosure({
           <span className="text-xs font-medium text-stone-500">
             {t('generation.quizType')}
           </span>
-          <div className="flex gap-1">
+          {isFixedDeepResponse ? <span className="block text-xs font-semibold text-stone-800">综合简答题</span> : <div className="flex flex-wrap gap-1">
             {(
               [
                 ['single', 'generation.quizTypeSingle'],
                 ['multiple', 'generation.quizTypeMultiple'],
                 ['short_answer', 'generation.quizTypeText'],
+                ['true_false', '判断题'],
+                ['matching', '配对题'],
+                ['fill_blank', '填空题'],
+                ['scenario_task', '情境任务'],
               ] as const
-            ).map(([type, labelKey]) => {
+            ).filter(([type]) => !isSectionQuiz || (type !== 'short_answer' && type !== 'scenario_task')).map(([type, label]) => {
               const current = config.questionTypes ?? ['single'];
               const selected = current.includes(type);
               const isOnlySelected = selected && current.length === 1;
@@ -1511,7 +1545,7 @@ function QuizConfigDisclosure({
                     updateConfig({ questionTypes: next, questionTypePlan: undefined });
                   }}
                   className={cn(
-                    'min-h-9 flex-1 rounded-[6px] px-2 py-1.5 text-xs font-medium transition-all',
+                    'min-h-9 min-w-[4.5rem] flex-1 rounded-[6px] px-2 py-1.5 text-xs font-medium transition-all',
                     'border',
                     selected
                       ? 'border-[var(--pbl-ai-border)] bg-[var(--pbl-ai-soft)] text-[var(--pbl-ai)]'
@@ -1519,11 +1553,12 @@ function QuizConfigDisclosure({
                     isOnlySelected && 'cursor-not-allowed opacity-90',
                   )}
                 >
-                  {t(labelKey)}
+                  {label.startsWith('generation.') ? t(label) : label}
                 </button>
               );
             })}
           </div>
+          }
         </div>
         </div>
       </PopoverContent>

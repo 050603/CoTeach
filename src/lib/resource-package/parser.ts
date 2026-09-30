@@ -62,8 +62,8 @@ export function identifyResourcePackage(entries: ArchiveEntry[], selections: Res
 }
 
 const handoffMetadataSchema = z.object({
-  handoffFormatVersion: z.literal(1), projectId: z.string().min(1).max(200), resourceType: z.enum(["KNOWLEDGE", "LESSON_PLAN"]),
-  resourceVersion: z.number().int().positive(), packageId: z.string().min(1).max(200), presentationVersion: z.number().int().positive(),
+  handoffFormatVersion: z.coerce.number().pipe(z.literal(1)), projectId: z.string().min(1).max(200).optional(), resourceType: z.enum(["KNOWLEDGE", "LESSON_PLAN"]),
+  resourceVersion: z.coerce.number().int().positive().optional(), packageId: z.string().min(1).max(200).optional(), presentationVersion: z.coerce.number().int().positive().optional(),
 }).strict();
 export type MarkdownResourceDocument = { text: string; body: string; lines: string[]; blocks: string[][]; metadata: HandoffDocumentMetadata; archivePath?: string };
 
@@ -89,7 +89,7 @@ export function readMarkdown(bytes: Buffer, archivePath?: string): MarkdownResou
     raw[match[1]] = parseFrontmatterScalar(match[2]);
   }
   const parsed = handoffMetadataSchema.safeParse(raw);
-  if (!parsed.success) throw new ResourcePackageError("Markdown 交接元数据无效：仅支持 handoffFormatVersion 1，且项目、资源、交接包与演示版本字段必须完整。", "HANDOFF_METADATA_INVALID", 422);
+  if (!parsed.success) throw new ResourcePackageError("Markdown 交接元数据无效：需标明 handoffFormatVersion 1 和资源类型，已填写的版本字段必须有效。", "HANDOFF_METADATA_INVALID", 422);
   const body = text.slice(frontmatter[0].length);
   const lines = body.split("\n");
   return { text, body, lines, blocks: lines.filter((line) => line.trim()).map((line) => [line.trim()]), metadata: parsed.data, archivePath };
@@ -97,11 +97,59 @@ export function readMarkdown(bytes: Buffer, archivePath?: string): MarkdownResou
 
 export function validateHandoffMetadata(knowledge: MarkdownResourceDocument, lessonPlan: MarkdownResourceDocument): ResourcePackageHandoffMetadata {
   if (knowledge.metadata.resourceType !== "KNOWLEDGE" || lessonPlan.metadata.resourceType !== "LESSON_PLAN") throw new ResourcePackageError("Markdown 的 resourceType 与资料用途不匹配。", "HANDOFF_METADATA_MISMATCH", 422);
-  for (const field of ["handoffFormatVersion", "projectId", "packageId", "presentationVersion"] as const) {
-    if (knowledge.metadata[field] !== lessonPlan.metadata[field]) throw new ResourcePackageError(`知识点与教案的 ${field} 不一致，请上游重新导出同一交接包。`, "HANDOFF_METADATA_MISMATCH", 422);
+  const fields = ["projectId", "packageId", "presentationVersion"] as const;
+  const mismatches = fields.filter((field) => knowledge.metadata[field] !== undefined && lessonPlan.metadata[field] !== undefined
+    && knowledge.metadata[field] !== lessonPlan.metadata[field]);
+  const missing = fields.some((field) => knowledge.metadata[field] === undefined || lessonPlan.metadata[field] === undefined)
+    || knowledge.metadata.resourceVersion === undefined || lessonPlan.metadata.resourceVersion === undefined;
+  if (mismatches.length || missing) {
+    const context = (document: MarkdownResourceDocument) => {
+      const value = (label: string) => document.lines.find((line) => new RegExp(`^[-*]?\\s*${label}[：:]`).test(line.trim()))?.replace(new RegExp(`^[-*]?\\s*${label}[：:]\\s*`), "") ?? "";
+      const title = document.lines.find((line) => /^#\s+/.test(line))?.replace(/^#\s+/, "") ?? "";
+      return { title, question: value("驱动问题"), course: value("课程"), audience: value("授课对象") };
+    };
+    const left = context(knowledge), right = context(lessonPlan);
+    const normalize = (value: string) => value.normalize("NFKC").replace(/[\s\p{P}\p{S}]/gu, "").toLowerCase();
+    const same = (first: string, second: string) => Boolean(first && second && normalize(first) === normalize(second));
+    const firstTitle = normalize(left.title).replace(/(?:初步)?教案设计$/, "");
+    const secondTitle = normalize(right.title).replace(/(?:初步)?教案设计$/, "");
+    const titleMatches = Math.min(firstTitle.length, secondTitle.length) >= 8
+      && (firstTitle === secondTitle || firstTitle.startsWith(secondTitle) || secondTitle.startsWith(firstTitle));
+    const questionMatches = same(left.question, right.question);
+    const courseMatches = same(left.course, right.course);
+    const audienceMatches = same(left.audience, right.audience);
+    const questionConflicts = Boolean(left.question && right.question && !questionMatches);
+    const aligned = !questionConflicts && (mismatches.length
+      ? (titleMatches && (questionMatches || courseMatches || audienceMatches)) || (questionMatches && (courseMatches || audienceMatches))
+      : titleMatches || (questionMatches && (courseMatches || audienceMatches)));
+    if (!aligned) throw new ResourcePackageError("知识点与教案的交接标识缺失或不一致，且正文无法确认属于同一课程；请核对后重新导出资源包。", "HANDOFF_METADATA_MISMATCH", 422);
   }
-  return { handoffFormatVersion: 1, projectId: knowledge.metadata.projectId, packageId: knowledge.metadata.packageId,
-    presentationVersion: knowledge.metadata.presentationVersion, documents: { knowledge: knowledge.metadata, lessonPlan: lessonPlan.metadata } };
+  const shared = <T>(first: T | undefined, second: T | undefined): T | undefined => first !== undefined && second !== undefined && first !== second ? undefined : first ?? second;
+  return { handoffFormatVersion: 1, projectId: shared(knowledge.metadata.projectId, lessonPlan.metadata.projectId),
+    packageId: shared(knowledge.metadata.packageId, lessonPlan.metadata.packageId),
+    presentationVersion: shared(knowledge.metadata.presentationVersion, lessonPlan.metadata.presentationVersion),
+    documents: { knowledge: knowledge.metadata, lessonPlan: lessonPlan.metadata } };
+}
+
+function handoffMetadataIssue(knowledge: MarkdownResourceDocument, lesson: MarkdownResourceDocument): ResourcePackagePlanningIssue | undefined {
+  const fields = ["projectId", "resourceVersion", "packageId", "presentationVersion"] as const;
+  const missing = fields.flatMap((field) => [
+    ...(knowledge.metadata[field] === undefined ? [`知识点 ${field}`] : []),
+    ...(lesson.metadata[field] === undefined ? [`教案 ${field}`] : []),
+  ]);
+  const mismatched = (["projectId", "packageId", "presentationVersion"] as const).filter((field) =>
+    knowledge.metadata[field] !== undefined && lesson.metadata[field] !== undefined && knowledge.metadata[field] !== lesson.metadata[field]);
+  if (!missing.length && !mismatched.length) return undefined;
+  return {
+    id: "handoff-metadata-review", kind: "metadata", severity: "info", requiresAcknowledgement: false,
+    summary: "交接标识不完整或不一致，已核对正文并继续导入",
+    detail: [...(missing.length ? [`缺少：${missing.join("、")}`] : []), ...(mismatched.length ? [`不一致：${mismatched.join("、")}`] : [])].join("；"),
+    suggestion: "请确认知识点、教案与启动课件属于同一课程；下次导出时统一交接标识。",
+    evidence: [
+      { documentRole: "knowledge", locator: "交接元数据", archivePath: knowledge.archivePath, quote: knowledge.text.match(/^---\n[\s\S]*?\n---/)?.[0] ?? "" },
+      { documentRole: "lessonPlan", locator: "交接元数据", archivePath: lesson.archivePath, quote: lesson.text.match(/^---\n[\s\S]*?\n---/)?.[0] ?? "" },
+    ],
+  };
 }
 
 function xmlText(xml: string): string {
@@ -503,7 +551,8 @@ export function parseMarkdownResourcePackageDraft(knowledge: MarkdownResourceDoc
       ? [markdownSource("lessonPlan", lesson, index)] : []);
   }
   const normalized = normalizePackageStructure(draft);
-  return { draft: normalized, handoff, planningIssues: parsePlanningIssues(lesson, normalized) };
+  const metadataIssue = handoffMetadataIssue(knowledge, lesson);
+  return { draft: normalized, handoff, planningIssues: [...(metadataIssue ? [metadataIssue] : []), ...parsePlanningIssues(lesson, normalized)] };
 }
 
 export function stablePackageId(prefix: string, value: string): string {

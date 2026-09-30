@@ -143,7 +143,38 @@ describe("resource package document parsing", () => {
   it("rejects mismatched handoff metadata", () => {
     const fixture = markdownHandoffFixture();
     const otherProject = fixture.lesson.replace('projectId: "project-1"', 'projectId: "project-2"');
-    expect(() => parseMarkdownResourcePackageDraft(readMarkdown(Buffer.from(fixture.knowledge)), readMarkdown(Buffer.from(otherProject)))).toThrow("projectId 不一致");
+    expect(() => parseMarkdownResourcePackageDraft(readMarkdown(Buffer.from(fixture.knowledge)), readMarkdown(Buffer.from(otherProject)))).toThrow("正文无法确认属于同一课程");
+  });
+  it("accepts incomplete and conflicting identifiers when both documents describe the same course", () => {
+    const fixture = markdownHandoffFixture();
+    const knowledge = fixture.knowledge
+      .replace('projectId: "project-1"', 'projectId: "legacy-project"')
+      .replace('packageId: "package-1"\n', "")
+      .replace("presentationVersion: 1\n", "")
+      .replace("## 学习范围", "## 教学条件\n\n- 课程：人工智能教育导论\n- 驱动问题：如何设计一节人工智能课？\n\n## 学习范围");
+    const result = parseMarkdownResourcePackageDraft(readMarkdown(Buffer.from(knowledge)), readMarkdown(Buffer.from(fixture.lesson)));
+    expect(result.handoff).toMatchObject({ handoffFormatVersion: 1, packageId: "package-1", presentationVersion: 1 });
+    expect(result.handoff.projectId).toBeUndefined();
+    expect(result.handoff.documents.knowledge).toMatchObject({ projectId: "legacy-project", resourceType: "KNOWLEDGE" });
+    expect(result.handoff.documents.knowledge.packageId).toBeUndefined();
+    expect(result.draft.knowledgePoints).toHaveLength(6);
+    expect(result.planningIssues).toContainEqual(expect.objectContaining({ kind: "metadata", severity: "info", requiresAcknowledgement: false }));
+  });
+  it("still rejects conflicting identifiers when the teaching content differs", () => {
+    const fixture = markdownHandoffFixture();
+    const knowledge = fixture.knowledge
+      .replace('projectId: "project-1"', 'projectId: "other-project"')
+      .replace("## 学习范围", "## 教学条件\n\n- 课程：人工智能教育导论\n- 驱动问题：另一个项目的问题\n\n## 学习范围");
+    expect(() => parseMarkdownResourcePackageDraft(readMarkdown(Buffer.from(knowledge)), readMarkdown(Buffer.from(fixture.lesson)))).toThrow("正文无法确认属于同一课程");
+  });
+  it("rejects an explicitly unsupported handoff version", () => {
+    const fixture = markdownHandoffFixture();
+    expect(() => readMarkdown(Buffer.from(fixture.knowledge.replace("handoffFormatVersion: 1", "handoffFormatVersion: 2")))).toThrow("handoffFormatVersion 1");
+  });
+  it("accepts quoted numeric handoff versions", () => {
+    const fixture = markdownHandoffFixture();
+    const quoted = fixture.knowledge.replace("handoffFormatVersion: 1", 'handoffFormatVersion: "1"').replace("resourceVersion: 1", 'resourceVersion: "1"');
+    expect(readMarkdown(Buffer.from(quoted)).metadata).toMatchObject({ handoffFormatVersion: 1, resourceVersion: 1 });
   });
   it("requires UTF-8 Markdown with complete frontmatter", () => {
     expect(() => readMarkdown(Buffer.from([0xff, 0xfe, 0x00]))).toThrow("UTF-8");
@@ -206,6 +237,18 @@ describe("bounded ZIP reader", () => {
   it("reads stored and deflated entries including UTF-8 filenames", async () => {
     const zip = await new JSZip().file("课程/知识点.docx", "content").generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
     expect(readBoundedZip(zip).map((file) => [file.name, file.read().toString()])).toEqual([["课程/知识点.docx", "content"]]);
+  });
+  it("reads a GBK filename from its CRC-verified Unicode path extra field", async () => {
+    const zip = await new JSZip().file("知识点.md", "content").generateAsync({
+      type: "nodebuffer", compression: "DEFLATE",
+      encodeFileName: () => Buffer.from("d6aacab6b5e32e6d64", "hex").toString("latin1"),
+    });
+    expect(readBoundedZip(zip).map((file) => [file.name, file.read().toString()])).toEqual([["知识点.md", "content"]]);
+
+    const directory = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    const unicodeExtra = directory + 46 + zip.readUInt16LE(directory + 28);
+    zip[unicodeExtra + 5] ^= 1; // Break the Unicode path's CRC without changing the file data.
+    expect(() => readBoundedZip(zip)).toThrow("ZIP 已损坏");
   });
   it("rejects traversal before any file is inflated", async () => {
     const zip = await new JSZip().file("../escape.docx", "content").generateAsync({ type: "nodebuffer" });

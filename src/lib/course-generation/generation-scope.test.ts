@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   resolveFullCoursePromotionOutlines,
   selectClassroomGenerationOutlines,
+  hasCompatibleOutlinePlan,
+  isOutlineWithinSourceSelection,
 } from './generation-scope';
 
 type TestOutline = { id: string; type: 'slide' | 'quiz'; title: string; description: string; keyPoints: readonly string[]; lectureSectionId: string; lectureSectionTitle: string; targetDurationSec: number; spatialParentId?: string };
@@ -65,6 +67,51 @@ describe('test lesson promotion scope', () => {
     expect(selected.outlines.map((outline) => outline.id)).toEqual(['s1-p1', 's1-check']);
     expect(() => selectClassroomGenerationOutlines(fullOutline, 'test-lesson', '', 'missing'))
       .toThrow('所选测试小节不在当前大纲中');
+  });
+});
+
+describe('versioned section replanning', () => {
+  const original = [fullOutline[0]!, { ...fullOutline[0]!, id: 's1-p2', targetDurationSec: 80 }, ...fullOutline.slice(1)];
+  const revised = [
+    { ...original[0]!, id: 's1-reflow-1', sourcePageIds: ['s1-p1', 's1-p2'], sectionPlanVersion: 'plan-v2', targetDurationSec: 100 },
+    { ...original[1]!, id: 's1-reflow-2', sourcePageIds: ['s1-p1', 's1-p2'], sectionPlanVersion: 'plan-v2', targetDurationSec: 100 },
+    fullOutline[1]!,
+  ];
+  const testLesson = selectClassroomGenerationOutlines(original, 'test-lesson').testLesson;
+
+  it('promotes redistributed pages without changing source count or other sections', () => {
+    const promoted = resolveFullCoursePromotionOutlines({ persistedOutlines: original,
+      acceptedTestOutlines: revised, expectedFullSceneCount: 5, testLesson });
+    expect(promoted).toEqual([...revised, ...fullOutline.slice(2)]);
+    expect(selectClassroomGenerationOutlines(promoted!, 'test-lesson').testLesson).toEqual(testLesson);
+    expect(selectClassroomGenerationOutlines(promoted!, 'full-course').fullSceneCount).toBe(5);
+  });
+
+  it('locks selected sources and refuses cross-section, unversioned or inconsistent reallocation', () => {
+    expect(isOutlineWithinSourceSelection(revised[0]!, new Set(['s1-p1']))).toBe(false);
+    for (const replacement of [
+      { ...revised[0]!, lectureSectionId: 's2' },
+      { ...revised[0]!, sourcePageIds: ['s1-p1', 's2-p1'] },
+      { ...revised[0]!, sectionPlanVersion: undefined },
+      { ...revised[0]!, sectionPlanVersion: 'plan-v3' },
+      { ...revised[0]!, targetDurationSec: 101 },
+    ]) {
+      expect(resolveFullCoursePromotionOutlines({ persistedOutlines: original,
+        acceptedTestOutlines: [replacement, ...revised.slice(1)], expectedFullSceneCount: 5, testLesson })).toBeNull();
+    }
+    expect(() => selectClassroomGenerationOutlines([
+      { ...revised[0]!, sourcePageIds: ['s1-p1', 's2-p1'] }, ...revised.slice(1), ...fullOutline.slice(2),
+    ], 'test-lesson')).toThrow('页面来源或小节规划版本不一致');
+  });
+
+  it('keeps narration, learner activity and transition totals separately', () => {
+    const before = original.slice(0, 2).map((page) => ({ ...page,
+      plannedTiming: { narrationSec: page.targetDurationSec - 10, learnerActivitySec: 5, transitionSec: 5 } }));
+    const after = revised.slice(0, 2).map((page) => ({ ...page,
+      plannedTiming: { narrationSec: 90, learnerActivitySec: 5, transitionSec: 5 } }));
+    expect(hasCompatibleOutlinePlan(before, after)).toBe(true);
+    expect(hasCompatibleOutlinePlan(before, [{ ...after[0]!,
+      plannedTiming: { narrationSec: 89, learnerActivitySec: 6, transitionSec: 5 } }, after[1]!])).toBe(false);
   });
 });
 

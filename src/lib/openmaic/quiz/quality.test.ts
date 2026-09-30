@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeQuizQuestions, selectQuizFormats } from './quality';
+import type { SceneOutline } from '@openmaic/lib/types/generation';
+import { normalizeQuizQuestions, selectQuizFormats, withGeneratedQuizQuestionCounts } from './quality';
 
 describe('quiz quality normalization', () => {
+  it('publishes the actual quiz count without changing the planning estimate source', () => {
+    const outline: SceneOutline = {
+      id: 'check', type: 'quiz' as const, title: '测验', description: '', keyPoints: [], order: 1,
+      quizConfig: { questionCount: 3, questionCountRange: { min: 2, max: 4 }, difficulty: 'medium' as const, questionTypes: ['single' as const] },
+    };
+    const updated = withGeneratedQuizQuestionCounts([outline], [{
+      outlineId: 'check', content: { type: 'quiz', questions: [
+        { id: 'q1', type: 'single' as const, question: '第一题' },
+        { id: 'q2', type: 'single' as const, question: '第二题' },
+      ] },
+    }]);
+    expect(updated[0]?.quizConfig?.questionCount).toBe(2);
+    expect(updated[0]?.quizConfig?.generatedQuestionCount).toBe(2);
+    expect(outline.quizConfig?.questionCount).toBe(3);
+  });
   it('normalizes a true-false alias into a renderable single choice', () => {
     const result = normalizeQuizQuestions([{ type: 'judgment', question: '文本分类只能处理英文。', answer: false, analysis: '文本分类可以处理多种语言，关键在于数据和处理方法。' }]);
     expect(result.questions[0]).toMatchObject({ type: 'single', format: 'true_false', answer: ['false'] });

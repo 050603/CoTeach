@@ -23,6 +23,24 @@ function crc32(bytes: Buffer): number {
   return (value ^ 0xffffffff) >>> 0;
 }
 
+function decodeEntryName(nameBytes: Buffer, extra: Buffer, flags: number): string {
+  const utf8 = new TextDecoder("utf-8", { fatal: true });
+  if (!(flags & 0x800)) {
+    for (let offset = 0; offset + 4 <= extra.length;) {
+      const type = extra.readUInt16LE(offset);
+      const length = extra.readUInt16LE(offset + 2);
+      offset += 4;
+      if (offset + length > extra.length) throw new Error("Invalid ZIP extra field");
+      if (type === 0x7075 && length >= 5 && extra[offset] === 1
+        && extra.readUInt32LE(offset + 1) === crc32(nameBytes)) {
+        return utf8.decode(extra.subarray(offset + 5, offset + length)).normalize("NFC");
+      }
+      offset += length;
+    }
+  }
+  return utf8.decode(nameBytes).normalize("NFC");
+}
+
 /** Inspect the central directory before any inflation; never extract paths to disk. */
 export function readBoundedZip(bytes: Buffer, limits = RESOURCE_PACKAGE_ARCHIVE_LIMITS): ArchiveEntry[] {
   const invalid = (message = "资源包 ZIP 已损坏，或使用了不支持的压缩格式。") => new ResourcePackageError(message);
@@ -54,10 +72,13 @@ export function readBoundedZip(bytes: Buffer, limits = RESOURCE_PACKAGE_ARCHIVE_
       const commentLength = bytes.readUInt16LE(offset + 32);
       const attributes = bytes.readUInt32LE(offset + 38);
       const localOffset = bytes.readUInt32LE(offset + 42);
+      const entryEnd = offset + 46 + nameLength + extraLength + commentLength;
+      if (entryEnd > end) throw invalid();
       const nameBytes = bytes.subarray(offset + 46, offset + 46 + nameLength);
-      const name = new TextDecoder("utf-8", { fatal: true }).decode(nameBytes).normalize("NFC");
-      offset += 46 + nameLength + extraLength + commentLength;
-      if (offset > end || !name || name.includes("\0") || name.includes("\\") || name.startsWith("/") || /^[A-Za-z]:/.test(name)
+      const extra = bytes.subarray(offset + 46 + nameLength, offset + 46 + nameLength + extraLength);
+      const name = decodeEntryName(nameBytes, extra, flags);
+      offset = entryEnd;
+      if (!name || name.includes("\0") || name.includes("\\") || name.startsWith("/") || /^[A-Za-z]:/.test(name)
         || name.split("/").some((part) => part === ".." || part === ".") || names.has(name)) throw invalid("资源包包含不安全或重复的文件路径。");
       names.add(name);
       if ((flags & 1) || ![0, 8].includes(method) || ((attributes >>> 16) & 0xf000) === 0xa000) throw invalid("资源包不能包含加密文件或符号链接。");

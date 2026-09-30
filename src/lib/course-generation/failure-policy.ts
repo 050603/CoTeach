@@ -166,12 +166,24 @@ export function formatCourseGenerationErrorForTeacher(error: unknown): string {
     ? error.name
     : stringValue(record?.name);
   const message = errorMessage(error);
+  const status = numberValue(record?.statusCode ?? record?.status ?? record?.status_code);
+  if (status === 402 || /Insufficient Balance/iu.test(message)) {
+    return "当前模型服务账户余额不足，课程生成已停止；已完成的页面和阶段均已保留，请补充模型服务余额后从断点继续。";
+  }
   if (
     code === "IMAGE_PROVIDER_NOT_CONFIGURED"
     || code === "VIDEO_PROVIDER_NOT_CONFIGURED"
     || code === COURSE_MEDIA_GENERATION_INCOMPLETE
   ) {
     return message;
+  }
+  if (code === "LLM_RETRY_BUDGET_EXHAUSTED") {
+    return "当前阶段已有一次生成请求，系统已停止自动重发；首稿及已完成页面均已保留，可主动重生成失败阶段。";
+  }
+  if (record?.generationFailureKind === 'invalid-generated-output'
+    || /FIRST_PASS|LEGACY_QUIZ|SourceContentRecovery|SectionCapacityRecovery/u.test(`${code ?? ''} ${name ?? ''}`)
+    || /首稿|未通过.*(?:验收|校验)|来源.*缺|容量.*不可行/u.test(message)) {
+    return `当前阶段首稿未通过质量验收，已停止自动改稿；首稿及已完成页面均已保留。具体原因：${message.slice(0, 1_000)}`;
   }
   if (/教学增强未完整生成|教学增强小节生成失败|分小节教学设计/.test(message)) {
     return isRetryableGenerationError(error)

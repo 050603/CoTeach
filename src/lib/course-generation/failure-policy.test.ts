@@ -13,6 +13,21 @@ const inferenceAbort = new Error(
 );
 
 describe("managed classroom-generation recovery", () => {
+  it.each([
+    Object.assign(new Error('Payment required'), { statusCode: 402, isRetryable: false }),
+    new Error('教学增强未完整生成：Insufficient Balance (request_id: provider-private-trace)'),
+    new Error('Scene 6/8 failed: Insufficient Balance'),
+  ])('explains provider balance failures across saved and wrapped stages', (error) => {
+    const persisted = serializeCourseGenerationFailure(error);
+    const message = formatPersistedCourseGenerationErrorForTeacher(persisted);
+    expect(message).toContain('模型服务账户余额不足');
+    expect(message).toContain('已完成的页面和阶段均已保留');
+    expect(message).toContain('补充模型服务余额后从断点继续');
+    expect(message).not.toContain('无法继续的系统错误');
+    expect(message).not.toContain('provider-private-trace');
+    expect(createManagedCourseGenerationRecoveryRequest({}, deserializeCourseGenerationFailure(persisted))).toBeNull();
+  });
+
   it.each([true, false])('explains persisted socket disconnections with retryable=%s', (retryable) => {
     const persisted = 'OPENPBL_COURSE_GENERATION_FAILURE_V1:' + JSON.stringify({
       version: 1, retryable, name: 'Error',
@@ -41,6 +56,19 @@ describe("managed classroom-generation recovery", () => {
       { courseId: "course-1" },
       inferenceAbort,
     )).toBeNull();
+  });
+
+  it("explains an exhausted page request budget without exposing transport internals", () => {
+    const error = Object.assign(new Error("[scene-content] persisted transport attempt budget is exhausted"), {
+      code: "LLM_RETRY_BUDGET_EXHAUSTED", isRetryable: false,
+    });
+    const message = formatPersistedCourseGenerationErrorForTeacher(
+      serializeCourseGenerationFailure(error),
+    );
+    expect(message).toContain("系统已停止自动重发");
+    expect(message).toContain("首稿及已完成页面均已保留");
+    expect(message).toContain("主动重生成失败阶段");
+    expect(message).not.toContain("transport");
   });
 
   it("keeps old whiteboard quality failures terminal", () => {

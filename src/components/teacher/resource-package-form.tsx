@@ -268,8 +268,8 @@ export function ResourcePackageForm({ courseId, disabled, onConfirmed, onPackage
     {snapshot?.package?.adaptation ? <details className="rounded-[10px] border border-emerald-200 bg-emerald-50 p-4"><summary className="cursor-pointer font-medium text-emerald-950">已按教师授权统一适配 · 查看变更</summary><ul className="mt-3 space-y-2 text-sm text-emerald-900">{snapshot.package.adaptation.changes.map((item) => <li key={item}>{item}</li>)}</ul>{snapshot.package.classroomPresentation ? <a className={`${BUTTON} mt-3`} href={snapshot.package.classroomPresentation.url}>下载适配授课版 PPT</a> : null}</details> : null}
     {snapshot?.package?.handoff ? <section aria-label="上游交接版本" className="rounded-[10px] border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-700">
       <h2 className="font-semibold text-stone-900">上游交接版本</h2>
-      <p>格式 v{snapshot.package.handoff.handoffFormatVersion} · 项目 {snapshot.package.handoff.projectId} · 交接包 {snapshot.package.handoff.packageId} · 演示版本 {snapshot.package.handoff.presentationVersion}</p>
-      <p>知识点资源 v{snapshot.package.handoff.documents.knowledge.resourceVersion} · 教案资源 v{snapshot.package.handoff.documents.lessonPlan.resourceVersion}</p>
+      <p>格式 v{snapshot.package.handoff.handoffFormatVersion} · 项目 {snapshot.package.handoff.projectId ?? "未提供或不一致"} · 交接包 {snapshot.package.handoff.packageId ?? "未提供或不一致"} · 演示版本 {snapshot.package.handoff.presentationVersion ?? "未提供或不一致"}</p>
+      <p>知识点资源 {snapshot.package.handoff.documents.knowledge.resourceVersion === undefined ? "版本未提供" : `v${snapshot.package.handoff.documents.knowledge.resourceVersion}`} · 教案资源 {snapshot.package.handoff.documents.lessonPlan.resourceVersion === undefined ? "版本未提供" : `v${snapshot.package.handoff.documents.lessonPlan.resourceVersion}`}</p>
     </section> : null}
     {draft && snapshot && ["ready", "blocked"].includes(snapshot.status) ? <section aria-label="解析概览" className="space-y-4 border-y border-stone-200 py-5">
       <div className="flex flex-wrap items-start justify-between gap-3">

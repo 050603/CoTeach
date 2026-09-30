@@ -1,4 +1,4 @@
-export const MAX_TRANSIENT_INFRASTRUCTURE_RECOVERIES = 3;
+export const MAX_TRANSIENT_INFRASTRUCTURE_RECOVERIES = 0;
 
 type RecoverableRequest = {
   courseId: string;
@@ -68,13 +68,11 @@ export function createTransientInfrastructureRecoveryRequest<T extends Recoverab
   request: T,
   error: unknown,
 ): T | null {
-  if (classifyCourseDesignFailure(error) !== "transient-infrastructure") return null;
-  const recoveryCount = request.transientRecoveryCount ?? 0;
-  if (recoveryCount >= MAX_TRANSIENT_INFRASTRUCTURE_RECOVERIES) return null;
-  return {
-    ...request,
-    transientRecoveryCount: recoveryCount + 1,
-  };
+  // The request boundary alone may retry a confirmed service rejection.
+  // A worker-level replay cannot prove that the previous request was unbilled.
+  void request;
+  void error;
+  return null;
 }
 
 export function transientInfrastructureRetryDelayMs(recoveryCount: number): number {
@@ -88,7 +86,8 @@ export function createManagedRecoveryRequest<T extends RecoverableRequest>(
 ): T | null {
   // Kept as a compatibility export for older callers and persisted tasks.
   // Completed course artifacts are never fed back into an automatic whole-job
-  // rewrite. Invalid output is retried only inside its originating stage.
+  // rewrite. Invalid output stays available for local validation and explicit
+  // teacher replacement; no authoring stage repairs its own first draft.
   void request;
   void error;
   return null;
@@ -98,17 +97,25 @@ export function formatFatalCourseDesignError(error: unknown): string {
   const chain = errorChain(error);
   const chainMessages = chain.map(messageOf).filter(Boolean);
   const messages = chainMessages.join(" ");
+  const alreadyFormatted = chainMessages.find((message) => message.startsWith("当前课程阶段") && message.includes("具体原因："));
+  if (alreadyFormatted) return alreadyFormatted;
   if (chainMessages.includes(FATAL_CONFIG_MESSAGE)) return FATAL_CONFIG_MESSAGE;
   if (chainMessages.includes(INTERRUPTED_STREAM_MESSAGE)) return INTERRUPTED_STREAM_MESSAGE;
   if (chain.some(isInvalidGeneratedOutput)) {
     const detail = [...chainMessages].reverse().find(Boolean) ?? "本阶段输出结构不完整";
-    return `当前课程阶段连续返回无法保存的结构，生成已停止且不会整项重跑；此前已经完成的内容仍会保留。具体原因：${detail.slice(0, 1_000)}`;
+    const categories = messages.includes("教学蓝图") ? [
+      /未落实教学要求|教学要求未覆盖|未给教学难点/u.test(detail) ? "教学内容或要求" : "",
+      /先备解释|上位概念/u.test(detail) ? "先备引用" : "",
+      /图示|diagram/u.test(detail) ? "图示容量" : "",
+      /局部修复已用/u.test(detail) ? "局部修复耗尽" : "",
+    ].filter(Boolean) : [];
+    return `当前课程阶段首稿未通过质量验收，生成已停止且不会整项重跑；首稿和此前已经完成的内容均已保留。${categories.length ? `问题类型：${categories.join("、")}。` : ""}具体原因：${detail.slice(0, 1_000)}`;
   }
   if (FATAL_INFRASTRUCTURE_ERROR.test(messages)) {
     return FATAL_CONFIG_MESSAGE;
   }
   if (TRANSIENT_INFRASTRUCTURE_ERROR.test(messages)) {
-    return "网络或 AI 模型服务连接在多轮自动恢复后仍不可用，快速生成已安全停止；已完成的课程设计阶段均已保留，可在服务恢复后直接重试。";
+    return "网络或 AI 模型服务连接未能完成，快速生成已安全停止；已有首稿和已完成的设计阶段均已保留，请在服务恢复后主动重生成失败阶段。";
   }
   if (chainMessages.some((message) => /^terminated$/i.test(message.trim())
     || /other side closed|UND_ERR_SOCKET/i.test(message))) {

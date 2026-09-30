@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { randomUUID } from 'node:crypto';
 import { after, type NextRequest } from "next/server";
 import { designGenerationJobs, resourcePackageJobs } from "@/lib/course-generation/job-storage";
 import { isBackgroundCourseGenerationEnabled } from "@/lib/course-generation/capability";
@@ -39,6 +40,12 @@ import { findServerDefaultModelString } from "@/lib/openmaic/server/provider-con
 import { CourseEvidenceError, resolveCourseEvidenceSnapshot } from "@/lib/textbook/course-evidence";
 import type { CourseTextbookSelection } from "@/lib/textbook/course-evidence-types";
 import { resourcePackageTeachingPoints } from "@/lib/course-design/resource-package-knowledge";
+import { loadGenerationCheckpoints } from '@/lib/course-generation/checkpoint-storage';
+import { failedCourseDesignAuthoringSteps } from '@/lib/course-design/failed-stage-regeneration';
+import {
+  resumeSavedCourseDesignFirstDraft,
+  SavedCourseDesignFirstDraftResumeError,
+} from '@/lib/course-design/saved-first-draft-resume';
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,9 +80,8 @@ function responseJob(job: Awaited<ReturnType<typeof designGenerationJobs.findUni
     currentCall: job.currentCall,
     trace: job.trace,
     qualityReport: job.qualityReport,
-    // Never expose model review diagnostics or historical raw worker errors to
-    // teachers. Correctable failures are resumed by GET; terminal failures use
-    // a safe, actionable system-level message only.
+    // Failed first drafts remain available until the teacher explicitly
+    // replaces them. Polling never opens another authoring request.
     error: job.status === "failed" && job.error
       ? formatFatalCourseDesignError(new Error(job.error))
       : null,
@@ -150,7 +156,8 @@ async function structuredResponse(work: () => Promise<Response>): Promise<Respon
   try {
     return await work();
   } catch (error) {
-    if (error instanceof TestLessonPromotionError || error instanceof TestLessonSelectionError) {
+    if (error instanceof TestLessonPromotionError || error instanceof TestLessonSelectionError
+      || error instanceof SavedCourseDesignFirstDraftResumeError) {
       return Response.json({ error: error.code, detail: error.message }, { status: error.status });
     }
     if (error instanceof CourseEvidenceError) {
@@ -274,6 +281,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
     }
     const quickRequest: QuickDesignRequest = {
       courseId,
+      authoringRequestId: job && !['failed', 'cancelled', 'completed'].includes(job.status)
+        ? previousRequest?.authoringRequestId : randomUUID(),
       generationModelString: findServerDefaultModelString(),
       systemMode: getOpenPblSystemMode(),
       teacherBrief,
@@ -355,11 +364,13 @@ export async function POST(request: NextRequest, context: { params: Promise<{ co
       || (job.status === "completed" && !isSameCourseDesignRequest(job.request, quickRequest))
     ) {
       const preserveValidatedStages = isSameCourseDesignRequest(job.request, quickRequest);
+      const failedSteps = preserveValidatedStages
+        ? failedCourseDesignAuthoringSteps(await loadGenerationCheckpoints(job.id), job.trace) : [];
       try {
         job = await designGenerationJobs.replace({
           where: { id: job.id, status: job.status, version: job.version },
           checkpointPolicy: preserveValidatedStages
-            ? { prefixes: ["course-design-attempt:"], unvalidatedResponses: true }
+            ? { steps: failedSteps }
             : "all",
           data: {
             status: "queued",
@@ -432,7 +443,8 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
       sceneOutlines?: unknown;
       testSectionId?: unknown;
     } | null;
-    if (body?.action !== "pause" && body?.action !== "resume" && body?.action !== "promote-test-lesson") {
+    if (body?.action !== "pause" && body?.action !== "resume"
+      && body?.action !== "resume-saved-first-draft" && body?.action !== "promote-test-lesson") {
       return Response.json({ error: "INVALID_REVIEW_ACTION" }, { status: 400 });
     }
 
@@ -444,7 +456,9 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
       }, { status: 202 });
     }
 
-    let job = body.action === "pause"
+    let job = body.action === "resume-saved-first-draft"
+      ? await resumeSavedCourseDesignFirstDraft(courseId, requestedBy)
+      : body.action === "pause"
       ? await pauseCourseDesignForOutlineReview(courseId)
         : await resumeCourseDesignAfterOutlineReview(courseId, {
           actorId: requestedBy,
@@ -470,13 +484,16 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
     if (!job) return Response.json({ error: "FAST_GENERATION_NOT_FOUND" }, { status: 404 });
 
     const backgroundEnabled = isBackgroundCourseGenerationEnabled();
-    if (body.action === "resume" && !backgroundEnabled && job.status === "queued") {
+    if ((body.action === "resume" || body.action === "resume-saved-first-draft")
+      && !backgroundEnabled && job.status === "queued") {
       const startedAt = new Date();
       job = await designGenerationJobs.update({
         where: { id: job.id },
         data: {
           status: "running",
-          message: body.reviewKind === "capacity"
+          message: body.action === "resume-saved-first-draft"
+            ? "正在从已保存首稿继续生成"
+            : body.reviewKind === "capacity"
             ? "正在按教师决定的范围与时长继续生成"
             : body.reviewKind === "knowledge"
               ? "正在按教师确认的知识图谱继续生成"

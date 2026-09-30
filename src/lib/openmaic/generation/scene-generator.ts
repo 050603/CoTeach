@@ -3,6 +3,7 @@ import { slideReviewEvidence } from "./slide-content-review";
 import { formatSlideSpatialBudget } from "./slide-spatial-types";
 import { formatTtsParagraphBudgets } from "@openmaic/lib/audio/tts-timing";
 import {
+  adaptOutlineToOpenMaicBaseline,
   generateOpenMaicBaselineContent,
   generateOpenMaicBaselineSlideActions,
 } from './openmaic-baseline';
@@ -34,12 +35,15 @@ import type { PblCourseConfig } from '@/lib/pbl-course-config';
 import { formatPblSceneContext } from '@/lib/openmaic/pbl/course-template';
 import type { LanguageModel } from 'ai';
 import type { TextMeasure } from '@openmaic/generation';
+import type { CourseEvidenceSnapshot } from '@/lib/textbook/course-evidence-types';
+import type { FigureSequenceContract } from '@/lib/textbook/course-visual-binding';
+import type { SourceGroundingKnowledgePoint } from './source-grounding';
 import type { StageStore } from '@openmaic/lib/api/stage-api';
 import { createStageAPI } from '@openmaic/lib/api/stage-api';
-import { generatePBLContent } from '@openmaic/lib/pbl/generate-pbl';
-import { generatePBLV2ProjectSingleCall } from '@openmaic/lib/pbl/v2/agents/planner-single-call';
+import { generatePBLV2ProjectSingleCall } from '@openmaic/generation';
 import { projectV2ToLegacyProjectConfig } from '@openmaic/lib/pbl/v2/compat';
-import type { PBLPlannerV2Input } from '@openmaic/lib/pbl/v2/types';
+import type { PBLPlannerV2Input } from '@openmaic/generation';
+import type { PBLRuntimeEvent } from '../pbl/v2/types';
 import { buildPrompt, PROMPT_IDS } from '@openmaic/lib/prompts';
 import { DEFAULT_LANGUAGE_DIRECTIVE } from './outline-generator';
 import { postProcessInteractiveHtml } from './interactive-post-processor';
@@ -106,6 +110,8 @@ function withInteractiveActivityContract(aiCall: AICallFn): AICallFn {
   return (system, user, images) => aiCall(system, `${user}\n\n${contract}`, images);
 }
 import { normalizeQuizQuestions, selectQuizFormats } from '@openmaic/lib/quiz/quality';
+import { validateQuizQuestionDrafts, type QuizQuestionDraft } from '@openmaic/lib/quiz/authoring-evidence';
+import { SECTION_QUIZ_FORMATS } from './terminal-mastery-assessment-policy';
 import { normalizeWhiteboardActionLifecycle } from './whiteboard-action-lifecycle';
 import { normalizeWhiteboardActionLayout } from './whiteboard-layout';
 import {
@@ -123,9 +129,18 @@ const INTERACTIVE_WIDGET_ACTIONS = [
 // ── Options interfaces for scene generation functions ──
 
 export interface SceneContentOptions {
+  /** Production authors questions and their three spoken phases in one response. */
+  singlePassQuiz?: boolean;
+  quizNarrationContext?: string;
+
   componentAuthoring?: boolean;
+  slideAuthoring?: 'native' | 'flow';
   textMeasure?: TextMeasure;
-  onFailure?: (detail: string) => void;
+  pageCapacityAssessment?: import('./semantic-page-capacity').SemanticPageCapacityAssessment;
+  sourceEvidence?: CourseEvidenceSnapshot;
+  sourceKnowledgePoints?: readonly SourceGroundingKnowledgePoint[];
+  sourceSequenceContracts?: readonly FigureSequenceContract[];
+  onFailure?: (failure: { code: string; detail?: string; category?: 'layout-conflict' | 'page-capacity' | 'section-overload'; requestedPageCount?: number }) => void;
   /** @deprecated Content checks are now explicitly requested in teacher preview. */
   reviewSlideContent?: boolean;
   /** Program-drawn spatial plan, never a generated teaching image. */
@@ -208,10 +223,16 @@ function formatPageBudgetInstruction(outline: SceneOutline): string {
     : '- This scene must remain one coherent PPT page; do not pack multiple independent semantic pages or a whole module into this page.';
   return [
     '## Semantic page and narration budget (must follow)',
-    `- This semantic page has an approximate TTS/content target of ${targetSeconds} seconds. The target is a planning budget, not a fixed page-break threshold.`,
-    segmentInstruction,
-    '- Explain only this outline\'s title, description, key points, and assigned knowledge-point IDs. Use a clear visual structure and add depth only through valid explanations, evidence, examples, counterexamples, steps, or guided practice directly tied to those points and the course grade.',
-    '- Never fill time with repeated wording, unrelated knowledge, advanced content outside the confirmed graph, or invented facts. If a separate concept needs its own visual focus, it must be represented as a separate outline detail rather than squeezed into this page.',
+    outline.type === 'quiz'
+      ? `- This quiz page has approximately ${targetSeconds} seconds in total, including answering, checking explanations and page transition. The spoken part is the separate narrationSec budget below, not this total.`
+      : `- This semantic page has an approximate TTS/content target of ${targetSeconds} seconds. The target is a planning budget, not a fixed page-break threshold.`,
+    ...(outline.type === 'quiz' ? [] : [segmentInstruction]),
+    outline.type === 'quiz'
+      ? '- The internal quiz title is not teacher speech. Use the actual prior teaching, assessment focus, and next page opening for the three spoken moments; leave question solutions to the page explanations and the next concept explanation to its own teaching slide.'
+      : '- Explain only this outline\'s title, description, key points, and assigned knowledge-point IDs. Use a clear visual structure and add depth only through valid explanations, evidence, examples, counterexamples, steps, or guided practice directly tied to those points and the course grade.',
+    outline.type === 'quiz'
+      ? '- Use speech time for necessary guidance and the reason for the next learning step. Do not pad by repeating the quiz questions, answer analysis, or the next page narration.'
+      : '- Never fill time with repeated wording, unrelated knowledge, advanced content outside the confirmed graph, or invented facts. If a separate concept needs its own visual focus, it must be represented as a separate outline detail rather than squeezed into this page.',
   ].join('\n');
 }
 
@@ -237,7 +258,9 @@ function formatTimingPlanForPrompt(outline: SceneOutline): string {
     `- 页面类型：${plan.pageKind ?? 'slide'}；内容类型：${plan.contentType}；任务复杂度：${plan.taskComplexity ?? 'low'}`,
     `- 总活动目标：约 ${activityTarget} 秒；本场景 AI 朗读目标：约 ${plan.targetDurationSec} 秒`,
     `- 本页讲稿量参考：约 ${plan.targetUnits} ${unitLabel}；${plan.minUnits}-${plan.maxUnits} 是规划参考范围，不是逐页验收条件`,
-    '- 讲稿要通过增加与当前场景知识点直接相关的有效概念、依据、例子、反例或分步解释达到时长，不得用重复套话、图谱之外的知识或故意放慢语速凑时长。',
+    outline.type === 'quiz'
+      ? '- 小测口播的讲解时长用于必要的三次引导与跨节理由；不要通过复述答案解析或提前讲解下一页来填满预算。'
+      : '- 讲稿要通过增加与当前场景知识点直接相关的有效概念、依据、例子、反例或分步解释达到时长，不得用重复套话、图谱之外的知识或故意放慢语速凑时长。',
     `- 逐页分解：自然语速讲解 ${plan.narrationSec ?? plan.targetDurationSec} 秒；视频播放 ${plan.videoSec ?? 0} 秒（已从讲稿预算扣除，播放期间停止朗读，不得再次分配给讲解或学生活动）；学生阅读/理解 ${plan.readingThinkingSec ?? 0} 秒；学生实际操作/作答 ${plan.operationSec ?? 0} 秒；页面切换 ${plan.transitionSec ?? 0} 秒。反馈/解析 ${plan.feedbackSec ?? 0} 秒已包含在讲解中，不得重复计时。`,
     taskFitInstruction,
     outline.type === 'quiz'
@@ -472,12 +495,10 @@ export async function generateSceneContent(
   const {
     assignedImages,
     imageMapping,
-    languageModel,
     visionEnabled,
     generatedMediaMapping,
     agents,
     languageDirective,
-    thinkingConfig,
     targetLanguage,
     userRequirements,
     pblProfile,
@@ -486,6 +507,7 @@ export async function generateSceneContent(
     baselineContent,
     websiteReferenceContext,
     componentAuthoring,
+    slideAuthoring,
     textMeasure,
     signal,
   } = options;
@@ -535,17 +557,21 @@ export async function generateSceneContent(
         baselineContent,
         websiteReferenceContext,
         componentAuthoring,
+        slideAuthoring,
         textMeasure,
+        pageCapacityAssessment: options.pageCapacityAssessment,
+        sourceEvidence: options.sourceEvidence,
+        sourceKnowledgePoints: options.sourceKnowledgePoints,
+        sourceSequenceContracts: options.sourceSequenceContracts,
         onFailure: options.onFailure,
       });
     case 'quiz':
-      return generateQuizContent(outline, aiCall, languageDirective, pblContext);
+      return generateQuizContent(outline, aiCall, languageDirective, pblContext, options);
     case 'pbl':
       return generatePBLSceneContent(
         outline,
-        languageModel,
+        aiCall,
         languageDirective,
-        thinkingConfig,
         targetLanguage,
         userRequirements,
         signal,
@@ -1067,7 +1093,7 @@ export async function generateLegacyCustomizedSlideContent(
  */
 type PlannedQuizQuestionType = NonNullable<SceneOutline['quizConfig']>['questionTypes'][number];
 
-export const QUIZ_GENERATION_POLICY_VERSION = 'objective-section-quiz-v10-budgeted-three-phase-narration';
+export const QUIZ_GENERATION_POLICY_VERSION = 'grounded-section-quiz-v14-mode-specific-first-pass';
 
 const QUIZ_FORMAT_BY_PLANNED_TYPE: Record<PlannedQuizQuestionType, string> = {
   single: 'single_choice',
@@ -1195,17 +1221,27 @@ async function generateQuizContent(
   aiCall: AICallFn,
   languageDirective?: string,
   pblContext?: string,
+  options: Pick<SceneContentOptions, 'singlePassQuiz' | 'quizNarrationContext'> = {},
 ): Promise<GeneratedQuizContent | null> {
   const quizConfig: NonNullable<SceneOutline['quizConfig']> = outline.quizConfig || {
     questionCount: 3,
     difficulty: 'medium',
     questionTypes: ['single'],
   };
-  const shortAnswerOnly = quizConfig.questionTypes.length === 1
+  const ordinarySectionQuiz = quizConfig.qualityContract === 'grounded-v1'
+    && quizConfig.questionCountRange !== undefined;
+  const shortAnswerOnly = !ordinarySectionQuiz && quizConfig.questionTypes.length === 1
     && quizConfig.questionTypes[0] === 'short_answer';
+  const groundedContract = quizConfig.qualityContract === 'grounded-v1';
+  const countRange = quizConfig.questionCountRange;
+  const minQuestions = countRange?.min ?? quizConfig.questionCount;
+  const maxQuestions = countRange?.max ?? quizConfig.questionCount;
   const exactQuestionTypePlan = quizConfig.questionTypePlan?.length === quizConfig.questionCount
     ? [...quizConfig.questionTypePlan]
     : undefined;
+  if (ordinarySectionQuiz && exactQuestionTypePlan?.some((type) => !(SECTION_QUIZ_FORMATS as readonly string[]).includes(type))) {
+    throw new Error(`Quiz "${outline.title}" has a written-response format in ordinary mode`);
+  }
   const requestedFormats = quizConfig.questionTypes.length > 0
     ? [...quizConfig.questionTypes]
     : selectQuizFormats({
@@ -1213,12 +1249,16 @@ async function generateQuizContent(
         difficulty: quizConfig.difficulty,
         questionCount: quizConfig.questionCount,
       });
-  // Matching has no spare distractors. Keep explicitly planned legacy items
-  // readable, but do not select it automatically for new diagnostic quizzes.
-  const unplannedFormats = requestedFormats.filter((type) => type !== 'matching');
+  // Legacy quizzes still reserve matching for an explicit plan; new section
+  // assessments may select it when correspondence is the actual target.
+  const unplannedFormats = groundedContract
+    ? ordinarySectionQuiz
+      ? requestedFormats.filter((type) => (SECTION_QUIZ_FORMATS as readonly string[]).includes(type))
+      : requestedFormats
+    : requestedFormats.filter((type) => type !== 'matching');
   const questionFormats = exactQuestionTypePlan ?? (shortAnswerOnly
     ? ['short_answer']
-    : unplannedFormats.length > 0 ? unplannedFormats : ['single', 'multiple', 'true_false']);
+    : unplannedFormats.length > 0 ? unplannedFormats : [...SECTION_QUIZ_FORMATS]);
   const coverageInstruction = shortAnswerOnly
     ? quizConfig.questionCount === 1
       ? 'the single comprehensive short-answer question must require and carry every allowed knowledgePointId for this section'
@@ -1226,24 +1266,44 @@ async function generateQuizContent(
     : 'across the complete question set, cover every allowed knowledgePointId at least once; a question may carry multiple IDs when it genuinely combines them';
 
   const prompts = buildPrompt(PROMPT_IDS.QUIZ_CONTENT, {
+    ordinarySectionQuiz,
+    deepResponse: shortAnswerOnly,
+    objectiveQuiz: !shortAnswerOnly,
+    openResponseAllowed: !ordinarySectionQuiz,
+    legacyScenarioAllowed: !ordinarySectionQuiz && !shortAnswerOnly,
+    legacyQuiz: !ordinarySectionQuiz && !shortAnswerOnly,
     title: outline.title,
     description: outline.description,
-    keyPoints: formatQuizTestPoints(
-      outline.keyPoints || [],
-      exactQuestionTypePlan,
-    ),
-    questionCount: quizConfig.questionCount,
+    keyPoints: groundedContract && !exactQuestionTypePlan
+      ? (outline.keyPoints ?? []).map((point, index) => `${index + 1}. ${point}`).join('\n')
+      : formatQuizTestPoints(outline.keyPoints || [], exactQuestionTypePlan),
+    questionCount: minQuestions === maxQuestions ? String(minQuestions)
+      : `${minQuestions}–${maxQuestions} (select the final count in this response)`,
     difficulty: quizConfig.difficulty,
     learnerAnswerTime: outline.plannedTiming?.role === 'assessment'
-      ? `${outline.plannedTiming.learnerActivitySec} seconds for reading, thinking, and answering all ${quizConfig.questionCount} questions; narration and transition time are excluded`
+      ? `${outline.plannedTiming.learnerActivitySec} seconds for reading, thinking, and answering ${countRange ? 'the final question set' : `all ${quizConfig.questionCount} questions`}; narration and transition time are excluded`
       : 'not specified; do not treat the total page duration as available answer time',
-    questionTypes: shortAnswerOnly
+    questionTypes: groundedContract && !shortAnswerOnly && !exactQuestionTypePlan
+      ? `${questionFormats.join(', ')} only; choose ${minQuestions}–${maxQuestions} questions and any combination of allowed formats based on the independent assessment decisions and answer-time budget. Use more than ${minQuestions} when ${minQuestions} questions cannot reveal all distinct understanding goals; use ${minQuestions} when they can, without padding. No type quota or forced variety. The listed assessment responsibilities are not mapped by position to questions. Combine only intrinsically related responsibilities. Every allowed knowledgePointId must require an observable learner decision or explanation in at least one question. For selection-only formats never request a written reason; put reasoning in analysis.`
+      : shortAnswerOnly
       ? `short_answer only; every generated question must use type="short_answer" and have no options; ${coverageInstruction}`
       : exactQuestionTypePlan
         ? `follow this exact ordered question plan: ${exactQuestionTypePlan.map((type, index) => `question ${index + 1} must use type="${type}"`).join('; ')}. Each numbered Test Point maps to the same-numbered question. Return exactly ${quizConfig.questionCount} questions; ${coverageInstruction}; do not replace one planned format with another. For single, multiple, matching, and true_false, responseMode is selection_only: the question stem must end after asking for the selection and must not request a written reason; put all reasoning feedback in analysis`
         : `${questionFormats.join(', ')} only; return exactly ${quizConfig.questionCount} questions; ${quizConfig.coveragePolicy === 'each-target' ? 'generate one question for each ordered assessment target' : coverageInstruction}; use at least ${quizConfig.minShortAnswerQuestions ?? 0} and at most ${quizConfig.maxShortAnswerQuestions ?? 0} explanation-style short_answer/scenario_task questions; explanation questions must require a conclusion and a brief reason. For single, multiple, matching, and true_false, responseMode is selection_only: the question stem must end after asking for the selection and must not request a written reason; put all reasoning feedback in analysis`,
     knowledgePointIds: (outline.knowledgePointIds ?? []).join(', '),
     assessmentTargets: JSON.stringify(outline.assessmentTargets ?? []),
+    assessmentDesign: JSON.stringify({
+      learningObjective: outline.teachingObjective,
+      assessmentFocus: outline.teachingBrief?.assessmentFocus,
+      conditions: outline.teachingBrief?.conditions,
+      conceptBoundaries: outline.teachingBrief?.sharedContext?.conceptBoundaries,
+      understandingCriteria: outline.teachingBrief?.understandingCriteria,
+    }),
+    authoringEvidence: groundedContract
+      ? shortAnswerOnly
+        ? 'For the ONE comprehensive short_answer: provide assessmentEvidence [{knowledgePointId, observableResponse}] for every allowed knowledge point, a concrete referenceAnswer, and a commentPrompt with explicit scoring criteria and accepted equivalent reasoning. These internal fields are removed or incorporated into the rubric before student delivery.'
+        : 'For EVERY ordinary item: provide assessmentEvidence [{knowledgePointId, observableResponse}] for each attributed knowledge point. Choice and true/false items also require optionReasoning [{value, correct, reason}] for every option, including each misconception. Fill blank requires a concise referenceAnswer and specific commentPrompt accepting equivalent terms. These internal fields are removed or incorporated into the rubric before student delivery.'
+      : '',
     languageDirective: languageDirective || '',
     pblContext: pblContext || '',
   });
@@ -1253,19 +1313,30 @@ async function generateQuizContent(
   }
 
   const validateResponse = (generatedQuestions: unknown[]): GeneratedQuizContent => {
-    if (generatedQuestions.length !== quizConfig.questionCount) {
-      throw new Error(`Quiz "${outline.title}" returned ${generatedQuestions.length}/${quizConfig.questionCount} questions`);
+    if (generatedQuestions.length < minQuestions || generatedQuestions.length > maxQuestions) {
+      throw new Error(countRange
+        ? `Quiz "${outline.title}" returned ${generatedQuestions.length} questions; expected ${minQuestions}–${maxQuestions}`
+        : `Quiz "${outline.title}" returned ${generatedQuestions.length}/${quizConfig.questionCount} questions`);
+    }
+    if (groundedContract) {
+      const issues = validateQuizQuestionDrafts(generatedQuestions, outline.knowledgePointIds ?? []);
+      if (issues.length) throw new Error(`Quiz "${outline.title}" has invalid authoring evidence: ${issues.join('; ')}`);
     }
     validateGeneratedQuizQuality(generatedQuestions, outline.title, !exactQuestionTypePlan && !shortAnswerOnly);
-    const normalized = normalizeQuizQuestions(generatedQuestions, outline.knowledgePointIds?.length
+    const preparedQuestions = groundedContract ? generatedQuestions.map((raw) => {
+      const item = raw as QuizQuestionDraft;
+      if (!['fill_blank', 'short_answer', 'scenario_task'].includes(String(item.format ?? item.type))) return item;
+      return { ...item, commentPrompt: `${String(item.commentPrompt).trim()}\n参考答案：${String(item.referenceAnswer).trim()}` };
+    }) : generatedQuestions;
+    const normalized = normalizeQuizQuestions(preparedQuestions, outline.knowledgePointIds?.length
       ? { allowedKnowledgePointIds: outline.knowledgePointIds }
       : {});
     const attributionIssues = normalized.issues.filter((issue) => issue.includes('knowledgePointIds'));
-    if (attributionIssues.length > 0 || (!shortAnswerOnly && normalized.issues.length > 0)) {
+    if (attributionIssues.length > 0 || ((groundedContract || !shortAnswerOnly) && normalized.issues.length > 0)) {
       throw new Error(`Quiz "${outline.title}" returned invalid questions: ${normalized.issues.join('; ')}`);
     }
-    if (normalized.questions.length !== quizConfig.questionCount) {
-      throw new Error(`Quiz "${outline.title}" returned ${normalized.questions.length}/${quizConfig.questionCount} usable questions`);
+    if (normalized.questions.length !== generatedQuestions.length) {
+      throw new Error(`Quiz "${outline.title}" returned ${normalized.questions.length}/${generatedQuestions.length} usable questions`);
     }
     if (normalized.questions.some((question) => !question.knowledgePointIds?.length)) {
       throw new Error(`Quiz "${outline.title}" returned a question without explicit knowledgePointIds`);
@@ -1274,8 +1345,8 @@ async function generateQuizContent(
     const withTeachingUnitIds = quizConfig.coveragePolicy === 'each-target'
       ? (() => {
           const targets = outline.assessmentTargets ?? [];
-          if (targets.length !== quizConfig.questionCount) {
-            throw new Error(`Quiz "${outline.title}" has ${targets.length}/${quizConfig.questionCount} explicit assessment targets`);
+          if (targets.length !== generatedQuestions.length) {
+            throw new Error(`Quiz "${outline.title}" has ${targets.length}/${generatedQuestions.length} explicit assessment targets`);
           }
           const unused = new Set(normalized.questions.map((_, index) => index));
           return targets.map((target): QuizQuestion => {
@@ -1302,7 +1373,7 @@ async function generateQuizContent(
               : [...(outline.assessmentUnitIds ?? [])],
           };
         });
-    const withRequiredShortAnswers = shortAnswerOnly ? withTeachingUnitIds : (() => {
+    const withRequiredShortAnswers = shortAnswerOnly || groundedContract ? withTeachingUnitIds : (() => {
       let needed = Math.max(0, Math.min(
         Math.floor(quizConfig.minShortAnswerQuestions ?? 0),
         Math.floor(quizConfig.maxShortAnswerQuestions ?? 0),
@@ -1325,7 +1396,7 @@ async function generateQuizContent(
         };
       });
     })();
-    const questions = shortAnswerOnly
+    const questions = shortAnswerOnly && !groundedContract
       ? withRequiredShortAnswers.map((question): QuizQuestion => {
           if (question.type === 'short_answer') return question;
           const choiceContext = question.options?.map((option) => option.label).filter(Boolean).join('；');
@@ -1346,7 +1417,7 @@ async function generateQuizContent(
 
     const explanationQuestions = questions.filter((question) => question.type === 'short_answer'
       && (question.format === 'short_answer' || question.format === 'scenario_task'));
-    const maxShortAnswers = Math.max(0, Math.floor(quizConfig.maxShortAnswerQuestions ?? 0));
+    const maxShortAnswers = ordinarySectionQuiz ? 0 : Math.max(0, Math.floor(quizConfig.maxShortAnswerQuestions ?? 0));
     if (!shortAnswerOnly && explanationQuestions.length > maxShortAnswers) {
       throw new Error(`Quiz "${outline.title}" returned ${explanationQuestions.length} open-response questions; maximum is ${maxShortAnswers}`);
     }
@@ -1378,108 +1449,82 @@ async function generateQuizContent(
   };
 
   log.debug(`Generating quiz content in one pass for: ${outline.title}`);
-  const response = await aiCall(prompts.system, prompts.user);
-  const generatedQuestions = parseJsonResponse<unknown[]>(response);
-  if (!generatedQuestions || !Array.isArray(generatedQuestions)) {
-    throw new Error(`Quiz "${outline.title}" returned invalid JSON instead of a question array`);
+  const narrationPrompt = options.singlePassQuiz ? buildPrompt(PROMPT_IDS.QUIZ_ACTIONS, {
+    title: outline.title, keyPoints: (outline.keyPoints ?? []).join('\n'), description: outline.description,
+    questions: 'Use the questions and explanations authored in this same response.',
+    courseContext: '', agents: '', languageDirective: languageDirective ?? '', pblContext: '',
+    timingBudget: formatCombinedTimingBudget(outline),
+    phaseBudget: outline.timingPlan?.targetUnits
+      ? `三段口播合计约 ${outline.timingPlan.targetUnits} ${outline.timingPlan.unit === 'latin-word' ? '英文参考词' : '中文字符/混合文本单位'}，答题前和解析引导各约20%，衔接约60%；数字是上限参考，不要求写满。`
+      : '',
+    quizNarrationContext: options.quizNarrationContext ?? '',
+  }) : null;
+  if (options.singlePassQuiz && !narrationPrompt) throw new Error('Missing combined quiz narration contract');
+  const questionSystem = prompts.system
+    .replace('generate quiz questions as a JSON array.', 'generate the questions field of the combined classroom quiz JSON.')
+    .replace('Output a JSON array of question objects.', 'The questions field is an array of question objects.');
+  const questionUser = prompts.user.replace('Output a JSON array directly (no explanation, code blocks, or LaTeX).',
+    'Return the combined JSON object directly (no explanation, code blocks, or LaTeX).');
+  const response = await aiCall(options.singlePassQuiz
+    ? `${questionSystem}\n\n${narrationPrompt!.system.split('## Output format')[0]}\n\nCombined output schema: return exactly {"questions":[question objects following the question schema above],"phaseNarration":[{"type":"text","phase":"intro","content":"..."},{"type":"text","phase":"review-guidance","content":"..."},{"type":"text","phase":"handoff","content":"..."}]}. All three spoken texts must be nonempty and use this order. Author each once. Never output runtime gates.`
+    : prompts.system, options.singlePassQuiz
+      ? `${questionUser}\n\n${narrationPrompt!.user.replace(/\nReturn exactly three[\s\S]*$/u, '')}\nReturn the combined object.`
+      : prompts.user);
+  const parsed = parseJsonResponse<unknown>(response);
+  const combined = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown> : null;
+  const generatedQuestions = options.singlePassQuiz ? combined?.questions : parsed;
+  if (!Array.isArray(generatedQuestions)) throw new Error(`Quiz "${outline.title}" returned invalid questions`);
+  const content = validateResponse(generatedQuestions);
+  if (options.singlePassQuiz) {
+    if (!parseQuizNarrationActions(JSON.stringify(combined?.phaseNarration))) {
+      throw new Error(`Quiz "${outline.title}" returned invalid phase narration; expected intro, review-guidance, handoff`);
+    }
+    content.phaseNarration = combined!.phaseNarration as NonNullable<GeneratedQuizContent['phaseNarration']>;
   }
-  log.debug(`Got ${generatedQuestions.length} questions for: ${outline.title}`);
-  return validateResponse(generatedQuestions);
+  return content;
 }
 
-/**
- * Generate PBL project content.
- *
- * Routes to v2 by default. Ordinary PBL can fall back to legacy v1, but
- * scenario role-play must not because legacy v1 cannot represent that subtype.
- */
+/** PBL uses the same durable stage call as slides and quizzes. The package
+ * owns schema validation/hydration; its optional second-draft request is refused
+ * before provider I/O, and no legacy agentic fallback is commissioned. */
 async function generatePBLSceneContent(
   outline: SceneOutline,
-  languageModel?: LanguageModel,
+  aiCall: AICallFn,
   languageDirective?: string,
-  thinkingConfig?: ThinkingConfig,
   targetLanguage?: string,
   userRequirements?: UserRequirements,
   signal?: AbortSignal,
 ): Promise<GeneratedPBLContent | null> {
   throwIfAborted(signal);
-  if (!languageModel) {
-    log.error('LanguageModel required for PBL generation');
-    return null;
-  }
-
-  const pblConfig = outline.pblConfig;
-  if (!pblConfig) {
-    log.error(`PBL outline "${outline.title}" missing pblConfig`);
-    return null;
-  }
-
-  log.info(`Generating PBL content for: ${outline.title}`);
-
-  const v2Disabled = process.env.PBL_V2_DISABLED === 'true';
-  const scenarioRoleplay = pblConfig.scenarioRoleplay === true;
-
-  if (v2Disabled && scenarioRoleplay) {
-    log.error(
-      `PBL scenario role-play requested for "${outline.title}" but PBL v2 is disabled; refusing to generate legacy ordinary PBL.`,
-    );
-    return null;
-  }
-
-  if (!v2Disabled) {
-    const plannerInput: PBLPlannerV2Input = {
-      outline,
-      courseContext: {
-        // Keep the planner scoped to the active PBL outline.
-        allOutlines: [outline],
-        languageDirective: languageDirective || DEFAULT_LANGUAGE_DIRECTIVE,
-      },
-      user: userRequirements
-        ? {
-            nickname: userRequirements.userNickname,
-            bio: userRequirements.userBio,
-            requirement: userRequirements.requirement,
-          }
-        : undefined,
-      targetLanguage,
-    };
-    const onProgress = (event: unknown) => {
-      throwIfAborted(signal);
-      log.info(`PBL v2 progress: ${JSON.stringify(event)}`);
-    };
-
+  if (!outline.pblConfig) throw new Error(`PBL outline "${outline.title}" missing pblConfig`);
+  if (process.env.PBL_V2_DISABLED === 'true') throw Object.assign(new Error(
+    'PBL v2 is disabled; first-pass course generation cannot fall back to an agentic authoring loop'), { isRetryable: false });
+  const adaptedOutline = { ...adaptOutlineToOpenMaicBaseline(outline), pblConfig: outline.pblConfig };
+  const plannerInput: PBLPlannerV2Input = {
+    outline: adaptedOutline,
+    courseContext: { allOutlines: [adaptedOutline], languageDirective: languageDirective || DEFAULT_LANGUAGE_DIRECTIVE },
+    user: userRequirements ? { nickname: userRequirements.userNickname, bio: userRequirements.userBio,
+      requirement: userRequirements.requirement } : undefined,
+    targetLanguage,
+  };
+  let authored = false;
+  const singleAuthorCall: AICallFn = async (system, prompt, images) => {
     throwIfAborted(signal);
-    const projectV2 = await generatePBLV2ProjectSingleCall(plannerInput, languageModel, { onProgress, signal }, thinkingConfig);
-    throwIfAborted(signal);
-    return { projectConfig: projectV2ToLegacyProjectConfig(projectV2), projectV2 };
-  }
-
-  try {
-    const projectConfig = await generatePBLContent(
-      {
-        projectTopic: pblConfig.projectTopic,
-        projectDescription: pblConfig.projectDescription,
-        targetSkills: pblConfig.targetSkills,
-        issueCount: pblConfig.issueCount,
-        languageDirective: languageDirective || DEFAULT_LANGUAGE_DIRECTIVE,
-      },
-      languageModel,
-      {
-        onProgress: (msg) => log.info(`${msg}`),
-        signal,
-      },
-      thinkingConfig,
-    );
-    log.info(
-      `PBL v1 generated: ${projectConfig.agents.length} agents, ${projectConfig.issueboard.issues.length} issues`,
-    );
-
-    return { projectConfig };
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    log.error(`PBL v1 generation also failed:`, error);
-    return null;
-  }
+    if (authored) throw Object.assign(new Error('PBL首稿未通过结构或教学验收，保留首稿，不自动重写'), {
+      code: 'PBL_FIRST_PASS_VALIDATION_FAILED', isRetryable: false,
+    });
+    authored = true;
+    return aiCall(system, prompt, images);
+  };
+  const authoredProject = await generatePBLV2ProjectSingleCall(plannerInput, singleAuthorCall, { logger: log });
+  // The application stores uiPhase on the project itself; its older event
+  // union has no ui_phase transition event. Other runtime events are retained.
+  const projectV2 = { ...authoredProject, runtimeEvents: authoredProject.runtimeEvents?.filter(
+    (event): event is PBLRuntimeEvent => event.kind !== 'status_changed' || event.entityType !== 'ui_phase',
+  ) };
+  throwIfAborted(signal);
+  return { projectConfig: projectV2ToLegacyProjectConfig(projectV2), projectV2 };
 }
 
 /**
@@ -1732,8 +1777,22 @@ export async function generateSceneActions(
   }
 
   if (outline.type === 'quiz' && 'questions' in content) {
+    if (content.phaseNarration) {
+      const actions = parseQuizNarrationActions(JSON.stringify(content.phaseNarration));
+      if (!actions) throw new Error(`Quiz "${outline.title}" has invalid saved phase narration`);
+      return finalizeActions(actions);
+    }
     // Format question list for AI reference
     const questionsText = formatQuestionsForPrompt(content.questions);
+    const speechUnits = outline.timingPlan?.targetUnits;
+    const phaseBudget = speechUnits && speechUnits > 0
+      ? (() => {
+          const intro = Math.round(speechUnits * 0.2);
+          const review = Math.round(speechUnits * 0.2);
+          const unit = outline.timingPlan?.unit === 'latin-word' ? '英文参考词' : '中文字符/混合文本单位';
+          return `三段口播总量控制在约 ${speechUnits} ${unit}：答题前约 ${intro}、提交后约 ${review}、确认理解后约 ${speechUnits - intro - review}。各段数字是篇幅上限参考，不是必须写满的下限。一个逻辑环节只说一次，先删重复或页面播报，为完整的跨节理由留出空间。`;
+        })()
+      : '';
 
     const prompts = buildPrompt(PROMPT_IDS.QUIZ_ACTIONS, {
       title: outline.title,
@@ -1745,6 +1804,7 @@ export async function generateSceneActions(
       languageDirective: languageDirective || '',
       pblContext,
       timingBudget: formatCombinedTimingBudget(outline),
+      phaseBudget,
       quizNarrationContext: options.quizNarrationContext ?? '',
     });
 

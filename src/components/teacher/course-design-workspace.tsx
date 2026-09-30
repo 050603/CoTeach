@@ -43,6 +43,7 @@ import type {
   TeachingBlueprintSection,
   TeachingBlueprintUnit,
 } from "@/lib/session/types";
+import { teachingRequirementResponsibility } from "@/lib/session/types";
 import type { CourseStagePlan, ResourcePackageStage } from "@/lib/resource-package/types";
 import { COURSE_DESIGN_WORKSPACE_SECTIONS } from "@/lib/course-design/workspace";
 import { cn } from "@/lib/utils";
@@ -498,7 +499,7 @@ function MaterialsEditor({ course, edit, onCoverUpdated, onLaunchUpdated, replac
           coverImageUrl={course.coverImageUrl}
           onUpdated={onCoverUpdated}
         />
-        {course.content.teachingRequirements?.items.length ? <div className="rounded-[10px] border border-violet-200 bg-violet-50 p-4"><div className="flex items-center gap-2 text-sm font-bold text-violet-950"><ShieldCheck size={17} />统一教学要求</div><ul className="mt-3 space-y-2 text-xs leading-5 text-violet-900">{course.content.teachingRequirements.items.map((item) => <li key={item.id}>• {item.text}</li>)}</ul>{course.content.teachingRequirements.conflicts.length ? <p className="mt-3 border-t border-violet-200 pt-3 text-xs font-bold text-amber-800">还有 {course.content.teachingRequirements.conflicts.length} 项来源冲突需要在资源包中处理。</p> : null}</div> : null}
+        {course.content.teachingRequirements?.items.length ? <div className="rounded-[10px] border border-violet-200 bg-violet-50 p-4"><div className="flex items-center gap-2 text-sm font-bold text-violet-950"><ShieldCheck size={17} />教学要求与阶段任务</div><ul className="mt-3 space-y-2 text-xs leading-5 text-violet-900">{course.content.teachingRequirements.items.map((item) => <li key={item.id}>• {teachingRequirementResponsibility(item, pack) === "learner-activity" ? "学生阶段任务" : "讲授责任"}：{item.text}</li>)}</ul>{course.content.teachingRequirements.conflicts.length ? <p className="mt-3 border-t border-violet-200 pt-3 text-xs font-bold text-amber-800">还有 {course.content.teachingRequirements.conflicts.length} 项来源冲突需要在资源包中处理。</p> : null}</div> : null}
       </aside>
     </div>
   );
@@ -550,11 +551,14 @@ function RequirementTracePanel({ course }: { course: Course }) {
   const requirements = course.content.teachingRequirements;
   if (!requirements?.items.length && !requirements?.conflicts.length) return null;
   const blueprintSections = course.content.teachingBlueprint?.sections ?? [];
+  const learningStage = course.content.stagePlan?.stages.find((stage) => stage.key === "ai-learning")
+    ?? course.content.resourcePackage?.draft.stages.find((stage) => stage.key === "ai-learning");
   return (
     <div className="rounded-[10px] border border-violet-200 bg-violet-50 p-4">
       <div className="flex items-center gap-2 text-sm font-black text-violet-950"><ShieldCheck size={17} />教学要求落实位置</div>
       <div className="mt-3 space-y-3">
         {requirements.items.map((requirement) => {
+          const learnerActivity = teachingRequirementResponsibility(requirement, course.content.resourcePackage) === "learner-activity";
           const mappedPoints = course.content.knowledgePoints.filter((point) => {
             const sourceIds = new Set([point.id, ...(point.sourceKnowledgePointIds ?? [])]);
             return requirement.sourceKnowledgePointIds.some((id) => sourceIds.has(id));
@@ -566,10 +570,19 @@ function RequirementTracePanel({ course }: { course: Course }) {
             .filter((page) => page.unitIds.includes(unit.id)).map((page) => page.title)))];
           return (
             <article className="rounded-[8px] border border-violet-200 bg-white p-3 text-xs leading-5" key={requirement.id}>
-              <div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-violet-100 px-2 py-0.5 font-bold text-violet-800">{requirement.kind === "highlight" ? "教学重点" : requirement.kind === "difficulty" ? "教学难点" : requirement.kind === "teacher-directive" ? "教师补充" : "阶段要求"}</span><b className="text-stone-900">{requirement.text}</b></div>
-              <p className="mt-1 text-stone-600">知识：{mappedPoints.map((point) => point.name).join("、") || "全局要求"}</p>
-              <p className={matchedUnits.length || requirement.appliesTo === "other-stage" ? "text-emerald-700" : "font-bold text-amber-800"}>小节 / 单元：{matchedUnits.map(({ section, unit }) => `${section.title} / ${unit.title}`).join("、") || (requirement.appliesTo === "other-stage" ? "适用于项目实践、展示或反思阶段" : "尚未落实")}</p>
-              <p className="text-stone-600">页面：{pageNames.join("、") || (requirement.appliesTo === "other-stage" ? "不进入 AI 知识讲授页面" : "尚未定位")}</p>
+              <div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-violet-100 px-2 py-0.5 font-bold text-violet-800">{learnerActivity ? "学生阶段任务" : requirement.kind === "highlight" ? "教学重点" : requirement.kind === "difficulty" ? "教学难点" : requirement.kind === "teacher-directive" ? "教师补充" : "阶段讲授要求"}</span><b className="text-stone-900">{requirement.text}</b></div>
+              {learnerActivity ? (
+                <>
+                  <p className="mt-1 text-emerald-700">阶段：{learningStage?.title || "知识讲授"} / 学习任务与要求</p>
+                  <p className="text-stone-600">由学生在该阶段完成，无需映射讲授单元或页面。</p>
+                </>
+              ) : (
+                <>
+                  <p className="mt-1 text-stone-600">知识：{mappedPoints.map((point) => point.name).join("、") || "全局要求"}</p>
+                  <p className={matchedUnits.length || requirement.appliesTo === "other-stage" ? "text-emerald-700" : "font-bold text-amber-800"}>小节 / 单元：{matchedUnits.map(({ section, unit }) => `${section.title} / ${unit.title}`).join("、") || (requirement.appliesTo === "other-stage" ? "适用于项目实践、展示或反思阶段" : "尚未落实")}</p>
+                  <p className="text-stone-600">页面：{pageNames.join("、") || (requirement.appliesTo === "other-stage" ? "不进入 AI 知识讲授页面" : "尚未定位")}</p>
+                </>
+              )}
             </article>
           );
         })}

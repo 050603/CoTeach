@@ -2,16 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Course } from '@/lib/session/types';
 import { requeueCourseGenerationFromCheckpoints } from './job-runner';
 
-const mocks = vi.hoisted(() => ({ findUnique: vi.fn(), replace: vi.fn(), count: vi.fn(), updateCourse: vi.fn() }));
+const mocks = vi.hoisted(() => ({ findUnique: vi.fn(), replace: vi.fn(), count: vi.fn(), updateCourse: vi.fn(),
+  checkpoints: vi.fn(), getCourse: vi.fn() }));
 vi.mock('./job-storage', async (importOriginal) => ({
   ...await importOriginal<typeof import('./job-storage')>(),
   contentGenerationJobs: { findUnique: mocks.findUnique, replace: mocks.replace },
 }));
 vi.mock('./checkpoint-storage', async (importOriginal) => ({
   ...await importOriginal<typeof import('./checkpoint-storage')>(), countGenerationPageCheckpoints: mocks.count,
+  loadGenerationCheckpoints: mocks.checkpoints,
 }));
 vi.mock('@/lib/session/server-store', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@/lib/session/server-store')>(), updateCourse: mocks.updateCourse,
+  ...await importOriginal<typeof import('@/lib/session/server-store')>(), updateCourse: mocks.updateCourse, getCourse: mocks.getCourse,
 }));
 
 const failed = { id: 'job', courseId: 'course', status: 'failed', version: 7, request: { courseId: 'course', managedRecoveryCount: 2, requirement: 'Adopted plan' } };
@@ -20,6 +22,8 @@ describe('explicit checkpoint recovery lifecycle notification', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.count.mockResolvedValue(3);
+    mocks.getCourse.mockResolvedValue({ content: { knowledgePoints: [] } });
+    mocks.checkpoints.mockResolvedValue({ pages: [], stages: [], stageAttempts: [], sourceContents: [] });
   });
 
   it('publishes the existing course invalidation only after the guarded queue write succeeds, preserving teaching references', async () => {
@@ -41,7 +45,7 @@ describe('explicit checkpoint recovery lifecycle notification', () => {
     expect(mocks.updateCourse).toHaveBeenCalledTimes(1);
     expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'job', status: 'failed', version: 7 },
-      checkpointPolicy: { prefixes: ['stage-attempt:'] },
+      checkpointPolicy: { steps: [] },
       data: expect.objectContaining({ status: 'queued', activePages: [], stageProgress: [], currentStage: null,
         request: { ...failed.request, managedRecoveryCount: 0 } }),
     }));
@@ -51,6 +55,37 @@ describe('explicit checkpoint recovery lifecycle notification', () => {
     mocks.findUnique.mockResolvedValue(failed);
     mocks.replace.mockRejectedValue(new Error('GENERATION_JOB_NOT_FOUND'));
     await expect(requeueCourseGenerationFromCheckpoints('course')).rejects.toThrow('GENERATION_JOB_NOT_FOUND');
+    expect(mocks.updateCourse).not.toHaveBeenCalled();
+  });
+
+  it('gives an explicitly regenerated failed stage a new identity while retaining accepted work and token totals', async () => {
+    const queued = { ...failed, status: 'queued', version: 8 };
+    mocks.findUnique.mockResolvedValueOnce(failed).mockResolvedValueOnce(queued);
+    mocks.replace.mockResolvedValue(queued);
+    const identity = { schemaVersion: 1, outlineFingerprint: 'outline', modelFingerprint: 'model', inputFingerprint: 'input' };
+    mocks.checkpoints.mockResolvedValue({ pages: [], sourceContents: [], stages: [
+      { ...identity, pageKey: 'good', stage: 'content', payload: { content: {} } },
+    ], stageAttempts: [
+      { ...identity, pageKey: 'good', stage: 'content', attemptsStarted: 1 },
+      { ...identity, pageKey: 'failed', stage: 'content', attemptsStarted: 1 },
+    ] });
+    await requeueCourseGenerationFromCheckpoints('course', { regenerateFailedStages: true });
+    const patch = mocks.replace.mock.calls[0][0];
+    expect(patch.checkpointPolicy.steps).toEqual([
+      'authoring-acceptance:failed:content', 'authoring-response:failed:content', 'stage-attempt:failed:content',
+    ]);
+    expect(patch.data.request.authoringRequestId).toMatch(/^[\da-f-]{36}$/u);
+    expect(patch.data).not.toHaveProperty('tokenUsage');
+    expect(patch.data).not.toHaveProperty('tokenUsageCalls');
+  });
+
+  it('stops before spending when an old source failure cannot be attributed to a current page contract', async () => {
+    mocks.findUnique.mockResolvedValue(failed);
+    mocks.checkpoints.mockResolvedValue({ pages: [], stages: [], stageAttempts: [],
+      sourceContents: [{ status: 'infeasible', sectionId: 'old-section', issues: [] }] });
+    await expect(requeueCourseGenerationFromCheckpoints('course', { regenerateFailedStages: true }))
+      .rejects.toMatchObject({ code: 'COURSE_SOURCE_EDIT_REQUIRED' });
+    expect(mocks.replace).not.toHaveBeenCalled();
     expect(mocks.updateCourse).not.toHaveBeenCalled();
   });
 

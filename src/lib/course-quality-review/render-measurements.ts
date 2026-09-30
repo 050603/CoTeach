@@ -153,7 +153,18 @@ export function measureSlideElements(root: HTMLElement, elements: readonly PPTEl
     }
     const images = Array.from(wrapper.querySelectorAll('img'));
     const opaque = element.type === 'image' || (element.type === 'shape' && Boolean(element.fill && element.fill !== 'none' && element.fill !== 'transparent'));
-    return { id: element.id, type: element.type, box, textRects, text: textRoot?.textContent ?? '', fontSize: sizes.length ? Math.min(...sizes) : undefined,
+    const formula = element.type === 'latex' ? wrapper.querySelector<HTMLElement>('.katex') : null;
+    const formulaSize = formula ? Number.parseFloat(getComputedStyle(formula).fontSize) : NaN;
+    const transformNode = formula?.closest<HTMLElement>('[style*="scale("]');
+    const transform = transformNode ? getComputedStyle(transformNode).transform : 'none';
+    const formulaScale = transform && transform !== 'none'
+      ? Math.hypot(new DOMMatrixReadOnly(transform).a, new DOMMatrixReadOnly(transform).b) : 1;
+    // KaTeX scripts and fractions are intentionally smaller than the main
+    // symbols. Judge readability by the displayed formula's base type, after
+    // the renderer scales it into its editable frame.
+    const fontSize = Number.isFinite(formulaSize) ? formulaSize * formulaScale
+      : sizes.length ? Math.min(...sizes) : undefined;
+    return { id: element.id, type: element.type, box, textRects, text: textRoot?.textContent ?? '', fontSize,
       opacity: 'opacity' in element ? element.opacity : 1, opaque,
       imageType: element.type === 'image' ? element.imageType : undefined,
       imageLoaded: element.type === 'image' ? images.length > 0 && images.every((img) => img.complete && img.naturalWidth > 0) : undefined };

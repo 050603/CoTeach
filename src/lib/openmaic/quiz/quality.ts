@@ -1,4 +1,21 @@
 import type { QuizMatchingPair, QuizOption, QuizQuestion } from '@openmaic/lib/types/stage';
+import type { SceneOutline } from '@openmaic/lib/types/generation';
+
+/** Publish the actual generated count; the outline count is only a planning estimate. */
+export function withGeneratedQuizQuestionCounts<T extends SceneOutline>(
+  outlines: readonly T[],
+  scenes: readonly { outlineId?: string; content: { type: string; questions?: QuizQuestion[] } }[],
+): T[] {
+  const counts = new Map(scenes.flatMap((scene) => scene.content.type === 'quiz'
+    && scene.outlineId && Array.isArray(scene.content.questions)
+    ? [[scene.outlineId, scene.content.questions.length] as const] : []));
+  return outlines.map((outline) => {
+    const actual = counts.get(outline.id);
+    return outline.type === 'quiz' && outline.quizConfig && actual !== undefined
+      ? { ...outline, quizConfig: { ...outline.quizConfig, questionCount: actual, generatedQuestionCount: actual } }
+      : outline;
+  });
+}
 
 export const SUPPORTED_QUIZ_FORMATS = [
   'single_choice',

@@ -18,6 +18,10 @@ vi.mock("@/lib/course-generation/job-runner", () => ({
   estimatePersistedCourseGenerationSeconds: () => 120,
   runQueuedCourseGenerationToCompletion: vi.fn(),
 }));
+vi.mock("@/lib/course-design/job-runner", () => ({
+  requeueCourseDesignForSourceRepair: vi.fn(),
+  runQueuedCourseDesignSourceRepair: vi.fn(),
+}));
 vi.mock("@openmaic/lib/server/classroom-media-readiness", () => ({
   assertRequestedClassroomMediaProviders: vi.fn(),
   classroomMediaConfigurationErrorResponse: () => null,

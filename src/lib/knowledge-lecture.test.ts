@@ -72,7 +72,7 @@ describe("knowledge lecture sections", () => {
     })).toThrow("时间预算");
   });
 
-  it("keeps a concise one-page knowledge group and tests it immediately", () => {
+  it("keeps an ungrouped teaching run together without splitting at graph edges", () => {
     const result = organizeKnowledgeLectureOutlines([
       outline("page-1", ["kp-1"]),
       outline("page-2", ["kp-2"]),
@@ -90,12 +90,11 @@ describe("knowledge lecture sections", () => {
       },
     });
 
-    expect(result.sections).toHaveLength(2);
+    expect(result.sections).toHaveLength(1);
     expect(result.sections.map((section) => section.knowledgePointIds)).toEqual([
-      ["kp-1", "kp-2"],
-      ["kp-3"],
+      ["kp-1", "kp-2", "kp-3"],
     ]);
-    expect(result.outlines.filter((item) => item.type === "quiz")).toHaveLength(2);
+    expect(result.outlines.filter((item) => item.type === "quiz")).toHaveLength(1);
     expect(result.outlines.filter((item) => item.type !== "quiz").map((item) => item.id)).toEqual([
       "page-1",
       "page-2",
@@ -106,9 +105,10 @@ describe("knowledge lecture sections", () => {
       expect(quiz.targetDurationSec).toBeLessThanOrEqual(300);
       expect(quiz.quizConfig?.questionCount).toBeGreaterThanOrEqual(2);
       expect(quiz.quizConfig?.questionCount).toBeLessThanOrEqual(4);
-      expect(quiz.quizConfig?.questionTypes).toEqual(["single", "multiple", "true_false"]);
+      expect(quiz.quizConfig?.questionTypes).toEqual(["single", "multiple", "true_false", "matching", "fill_blank"]);
       expect(quiz.quizConfig?.minShortAnswerQuestions).toBe(0);
       expect(quiz.quizConfig?.maxShortAnswerQuestions).toBe(0);
+      expect(quiz.quizConfig?.questionCountRange).toEqual({ min: 2, max: 4 });
     }
     expect(deriveKnowledgeLectureSectionsFromOutlines(result.outlines)).toEqual(result.sections);
   });
@@ -149,6 +149,22 @@ describe("knowledge lecture sections", () => {
     ]);
   });
 
+  it("adds one quiz after a long coherent section even when it teaches five points", () => {
+    const points = ["含义", "原理", "机制", "步骤", "应用"].map((name, index) => ({
+      id: `constructivism-${index}`, name: `建构主义${name}`, description: name,
+      groupId: "constructivism", groupName: "建构主义",
+    }));
+    const result = organizeKnowledgeLectureOutlines(
+      points.map((point) => outline(`page-${point.id}`, [point.id])),
+      { totalDurationSec: 45 * 60, knowledgePoints: points },
+    );
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0]?.knowledgePointIds).toEqual(points.map((point) => point.id));
+    expect(result.outlines.at(-1)?.type).toBe("quiz");
+    expect(result.outlines.filter((item) => item.type === "quiz")).toHaveLength(1);
+    expect(result.outlines.reduce((sum, item) => sum + (item.targetDurationSec ?? 0), 0)).toBe(45 * 60);
+  });
+
   it("reports the exact generated quiz question count and duration", () => {
     const section = {
       id: "knowledge-section-1",
@@ -177,6 +193,12 @@ describe("knowledge lecture sections", () => {
       questionCount: 3,
       estimatedMinutes: 4,
     });
+    course.aiLearningClassroomId = "classroom";
+    course.aiLearningProgress = { student: {
+      classroomId: "classroom",
+      knowledgeLectureAttempts: [{ sectionId: section.id, submittedAt: "2026-01-01T00:00:00.000Z", questions: [{}, {}] }],
+    } } as unknown as Course["aiLearningProgress"];
+    expect(knowledgeLectureQuizEstimate(course, section).questionCount).toBe(2);
   });
 
   it("uses the first submission and reports unmet rate, score loss, coverage, and evidence state", () => {

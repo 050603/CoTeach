@@ -1,4 +1,32 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+
+export type CourseGenerationCallUsage = {
+  callId: string;
+  source: string;
+  modelId?: string;
+  provider?: string;
+  attempt: number;
+  transportRetry: boolean;
+  outcome: "response" | "failed" | "aborted";
+  totalTokens: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  /** Cache and reasoning counts are subsets, never added to totalTokens. */
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  usageSource: "provider" | "estimated";
+};
+
+export type CourseGenerationTokenUsageDetails = Partial<CourseGenerationCallUsage> & {
+  inputCharacters?: number;
+  outputCharacters?: number;
+  reasoningCharacters?: number;
+};
+
+type CallMetadata = Pick<CourseGenerationCallUsage,
+  "callId" | "source" | "modelId" | "provider" | "attempt" | "transportRetry">;
 
 type CourseGenerationLlmContext = {
   workload: "course-generation";
@@ -6,6 +34,8 @@ type CourseGenerationLlmContext = {
     totalTokens: number,
     source: "provider" | "estimated",
   ) => Promise<void> | void;
+  onCallUsage?: (usage: CourseGenerationCallUsage) => Promise<void> | void;
+  call?: Partial<CallMetadata>;
 };
 
 export function estimateCourseGenerationTokens(characterCount: number): number {
@@ -19,14 +49,60 @@ export function estimateCourseGenerationTokens(characterCount: number): number {
 export async function reportCourseGenerationTokenUsage(
   reportedTotal: number | null | undefined,
   fallbackCharacterCount = 0,
+  details: CourseGenerationTokenUsageDetails = {},
 ): Promise<void> {
-  const callback = context.getStore()?.onTokenUsage;
-  if (!callback) return;
-  const providerTotal = typeof reportedTotal === "number" && Number.isFinite(reportedTotal)
-    ? Math.max(0, Math.round(reportedTotal))
-    : 0;
-  const totalTokens = providerTotal || estimateCourseGenerationTokens(fallbackCharacterCount);
-  if (totalTokens > 0) await callback(totalTokens, providerTotal > 0 ? "provider" : "estimated");
+  const store = context.getStore();
+  if (!store?.onTokenUsage && !store?.onCallUsage) return;
+  const tokens = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.round(value)) : undefined;
+  const reported = tokens(reportedTotal);
+  const inputTokens = tokens(details.inputTokens);
+  const outputTokens = tokens(details.outputTokens);
+  const derivedTotal = inputTokens !== undefined && outputTokens !== undefined
+    ? inputTokens + outputTokens : undefined;
+  const providerTotal = reported ?? derivedTotal;
+  const totalTokens = providerTotal ?? estimateCourseGenerationTokens(fallbackCharacterCount);
+  const usageSource = details.usageSource ?? (providerTotal !== undefined ? "provider" : "estimated");
+  const metadata = { ...details, ...store?.call };
+  const usage: CourseGenerationCallUsage = {
+    callId: metadata.callId ?? randomUUID(),
+    source: metadata.source ?? "unknown",
+    ...(metadata.provider ? { provider: metadata.provider } : {}),
+    ...(metadata.modelId ? { modelId: metadata.modelId } : {}),
+    attempt: metadata.attempt ?? 1,
+    transportRetry: metadata.transportRetry ?? false,
+    outcome: details.outcome ?? "response",
+    totalTokens,
+    usageSource,
+    inputTokens: inputTokens ?? (providerTotal === undefined && details.inputCharacters !== undefined
+      ? estimateCourseGenerationTokens(details.inputCharacters) : undefined),
+    outputTokens: outputTokens ?? (providerTotal === undefined && details.outputCharacters !== undefined
+      ? estimateCourseGenerationTokens(details.outputCharacters + (details.reasoningCharacters ?? 0)) : undefined),
+    cacheReadTokens: tokens(details.cacheReadTokens),
+    cacheWriteTokens: tokens(details.cacheWriteTokens),
+    reasoningTokens: tokens(details.reasoningTokens) ?? (providerTotal === undefined && details.reasoningCharacters !== undefined
+      ? estimateCourseGenerationTokens(details.reasoningCharacters) : undefined),
+  };
+  let callbackFailure: unknown;
+  let callbackFailed = false;
+  try {
+    // Record a zero-token refusal as a call too, so retry costs remain visible.
+    await store?.onCallUsage?.(usage);
+  } catch (error) {
+    callbackFailure = error;
+    callbackFailed = true;
+  }
+  try {
+    if (totalTokens > 0) await store?.onTokenUsage?.(totalTokens, usageSource);
+  } catch (error) {
+    callbackFailure ??= error;
+    callbackFailed = true;
+  }
+  if (callbackFailed) {
+    throw Object.assign(new Error("Could not persist course model usage", { cause: callbackFailure }), {
+      code: "COURSE_TOKEN_USAGE_PERSISTENCE_FAILED", isRetryable: false,
+    });
+  }
 }
 
 type QueuedTask<T> = {
@@ -123,9 +199,18 @@ export function isCourseGenerationLlmContext(): boolean {
 
 export function runWithCourseGenerationLlmContext<T>(
   fn: () => T,
-  options: Pick<CourseGenerationLlmContext, "onTokenUsage"> = {},
+  options: Pick<CourseGenerationLlmContext, "onTokenUsage" | "onCallUsage"> = {},
 ): T {
   return context.run({ workload: "course-generation", ...options }, fn);
+}
+
+/** Attribute usage to one provider request without replacing the job callbacks. */
+export function runWithCourseGenerationLlmCallContext<T>(
+  fn: () => T,
+  metadata: Partial<CallMetadata>,
+): T {
+  const store = context.getStore();
+  return store ? context.run({ ...store, call: { ...store.call, ...metadata } }, fn) : fn();
 }
 
 export function withCourseGenerationLlmSlot<T>(

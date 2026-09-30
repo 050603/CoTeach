@@ -56,6 +56,7 @@ describe('instructional presentation prompt contract', () => {
 
   it('keeps quiz scope separate from answer authority and discourages worked-example replay', () => {
     const prompt = buildPrompt(PROMPT_IDS.QUIZ_CONTENT, {
+      objectiveQuiz: true, ordinarySectionQuiz: true,
       title: '概念辨析', description: '独立判断', keyPoints: '判断主要功能',
       knowledgePointIds: 'kp-1', questionCount: 1, difficulty: 'medium', questionTypes: 'single',
       assessmentTargets: '[]', pblContext: 'completed narration and source boundaries', languageDirective: '使用简体中文',

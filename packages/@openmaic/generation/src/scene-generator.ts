@@ -58,9 +58,12 @@ import { isAbortError } from './generation-retry.js';
 import { generatePBLV2ProjectSingleCall } from './pbl/planner-single-call.js';
 import { PlannerV2Error } from './pbl/planner-core.js';
 import { componentAuthoringContract, flowAuthoringContract } from './component-authoring-contract.js';
-import { compileTextComponents, compileNativeTextLayout, type LabelGridComponent, type TextBoxComponent, type TextMeasure } from './text-layout-compiler.js';
-import { compileMeasuredDiagramComponent, measureDiagramAllocations, isDiagramComponent } from './diagram-compiler.js';
-import { compileFlowLayout, type CompiledFlowPage } from './flow-layout-compiler.js';
+import { compileTextComponents, compileNativeTextLayout, isOrphanTextLine, TEXT_LAYOUT_FONT, TEXT_LAYOUT_PADDING,
+  TEXT_LAYOUT_LINE_HEIGHT, TEXT_LAYOUT_PARAGRAPH_SPACE, type LabelGridComponent, type TextBoxComponent, type TextMeasure } from './text-layout-compiler.js';
+import { resolveAuthoringContent, assertAuthoringContentCoverage, validateAuthoringContent, type AuthoringContentItem, type AuthoringTextAllocation } from './authoring-content.js';
+import { nativeSlideCollisions } from './native-slide-collision.js';
+import { compileMeasuredDiagramComponent, measureDiagramAllocations, isDiagramComponent, normalizeDiagramComponent, type DiagramAllocation } from './diagram-compiler.js';
+import { compileFlowLayout, FlowLayoutFailure, type CompiledFlowPage } from './flow-layout-compiler.js';
 import type { PBLPlannerV2Input } from './pbl/types.js';
 
 function isGeneratedMediaPlaceholder(value: string | undefined): value is string {
@@ -77,21 +80,62 @@ const INTERACTIVE_WIDGET_ACTIONS = [
 // ── Options interfaces for scene generation functions ──
 
 export type SceneContentFailureCode = 'prompt-unavailable' | 'invalid-model-output';
+export type SceneContentFailureCategory = 'layout-conflict' | 'page-capacity' | 'section-overload';
 
 export interface SceneContentFailure {
   code: SceneContentFailureCode;
   detail?: string;
+  category?: SceneContentFailureCategory;
+  requestedPageCount?: number;
+}
+
+function layoutFailureCategory(error: unknown, detail: string): SceneContentFailureCategory | undefined {
+  if (error instanceof FlowLayoutFailure) return error.category;
+  if (/(?:textBox content needs .*maximum allocation|labelGrid needs .*container is .* high|native text .* (?:exceeds|needs|would overlap|cannot fit)|component allocations overlap|authored diagram allocation|native layout collision)/i.test(detail)) return 'layout-conflict';
+  if (/(?:Semantic .* needs .*page provides|Semantic table row .*page provides|Balanced page .*exceeds|Measured teaching groups cannot fit)/i.test(detail)) return 'page-capacity';
+  return undefined;
+}
+
+async function measureAdoptedTextAllocations(content: readonly AuthoringContentItem[], measure: TextMeasure,
+  log: GenerationLogger): Promise<AuthoringTextAllocation[]> {
+  const choices = content.flatMap((item) => [22, 24].flatMap((fontSize) => [440, 880].map((width) => ({ item, fontSize, width }))));
+  const results = await Promise.all(choices.map(async ({ item, fontSize, width }): Promise<AuthoringTextAllocation | undefined> => {
+    try {
+      const resolved = resolveAuthoringContent({ elements: [{ type: 'text', contentRef: item.id,
+        content: `<p style="font-size:${fontSize}px"></p>` }] }, content);
+      const result = await measure({ text: item.text, html: resolved.elements[0]!.content!, width, fontSize,
+        fontWeight: 400, fontFamily: TEXT_LAYOUT_FONT, padding: TEXT_LAYOUT_PADDING, preserveRichText: true,
+        lineHeight: TEXT_LAYOUT_LINE_HEIGHT, paragraphSpace: TEXT_LAYOUT_PARAGRAPH_SPACE, align: 'left' });
+      if (!Number.isFinite(result.height) || result.height <= 0 || !Number.isFinite(result.naturalWidth)
+        || result.naturalWidth <= 0 || !Array.isArray(result.lines) || !result.lines.length
+        || result.lines.some((line) => typeof line !== 'string') || !result.lines.some((line) => line.trim())
+        || (result.lines.length > 1 && result.lines.some(isOrphanTextLine))
+        || result.lines.join('').normalize('NFKC').replace(/\s+/gu, '') !== item.text.normalize('NFKC').replace(/\s+/gu, '')
+        || (result.inkBottom !== undefined && (!Number.isFinite(result.inkBottom) || result.inkBottom < 0))
+        || (result.inkRight !== undefined && (!Number.isFinite(result.inkRight) || result.inkRight < 0 || result.inkRight > width + 1))
+        || (result.inkRight === undefined && result.lines.length === 1 && result.naturalWidth + TEXT_LAYOUT_PADDING * 2 > width + 1)) return undefined;
+      const height = Math.ceil(Math.max(result.height, result.inkBottom ?? 0));
+      if (height > 372.5) return undefined;
+      return { contentRef: item.id, fontSize, width, height };
+    } catch (error) {
+      log.warn(`Adopted point measurement unavailable for ${item.id} at ${fontSize}px/${width}px: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
+  }));
+  return results.filter((result): result is AuthoringTextAllocation => Boolean(result));
 }
 
 export interface SceneContentOptions {
   /** Compile first-draft components before native slide normalization. */
   componentAuthoring?: boolean;
-  /** Explicit experimental alternative. Native editable elements remain the default. */
+  /** Explicit alternative; an oversized planned diagram can also select flow before authoring. */
   slideAuthoring?: 'native' | 'flow';
   /** @deprecated Native components are supported by default. */
   allowLegacyComponents?: boolean;
   /** Host browser measurement using the same fonts and CSS as playback. */
   textMeasure?: TextMeasure;
+  /** Immutable adopted display points; full source evidence remains a separate narration input. */
+  authoringContent?: readonly AuthoringContentItem[];
   assignedImages?: PdfImage[];
   imageMapping?: ImageMapping;
   visionEnabled?: boolean;
@@ -279,6 +323,7 @@ export async function generateSceneContent(
     componentAuthoring,
     slideAuthoring,
     textMeasure,
+    authoringContent,
   } = options;
 
   // Unified path for interactive scenes (both normal and ultra mode)
@@ -328,6 +373,7 @@ export async function generateSceneContent(
         slideAuthoring,
         log,
         options.onFailure,
+        authoringContent,
       );
     case 'quiz':
       return generateQuizContent(outline, aiCall, languageDirective, log, options.onFailure);
@@ -660,7 +706,15 @@ async function generateSlideContent(
   slideAuthoring: 'native' | 'flow' = 'native',
   log: GenerationLogger = noopGenerationLogger,
   onFailure?: (failure: SceneContentFailure) => void,
+  authoringContent?: readonly AuthoringContentItem[],
 ): Promise<GeneratedSlideContent | null> {
+  if (authoringContent) {
+    try { validateAuthoringContent(authoringContent); }
+    catch (error) {
+      onFailure?.({ code: 'invalid-model-output', detail: error instanceof Error ? error.message : String(error) });
+      return null;
+    }
+  }
   const visualResourceRefs = outline.visualIntent?.resourceRefs ?? [];
   const requiredResourceRefs = visualResourceRefs.filter((reference) => reference.required);
   const assignedImageIds = new Set((assignedImages ?? []).map((image) => image.id));
@@ -889,13 +943,33 @@ async function generateSlideContent(
   }
 
   const useComponents = componentAuthoring && !editDirective && !baselineContent;
-  const useFlow = useComponents && slideAuthoring === 'flow';
-  const diagramAllocations = useComponents && !useFlow && outline.visualIntent?.diagram && textMeasure
-    ? await measureDiagramAllocations(outline.visualIntent.diagram, textMeasure) : [];
-  const authoring = useComponents ? (useFlow ? flowAuthoringContract(outline) : componentAuthoringContract(outline, diagramAllocations)) : undefined;
+  let useFlow = useComponents && slideAuthoring === 'flow';
+  let diagramAllocations: DiagramAllocation[] = [];
+  if (useComponents && !useFlow && outline.visualIntent?.diagram && textMeasure) {
+    try {
+      diagramAllocations = await measureDiagramAllocations(outline.visualIntent.diagram, textMeasure);
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('planned diagram has no feasible measured allocation')) throw error;
+      // Decide the page layout before the first content call. Flow preserves
+      // the planned relationship and can place its explanation on a continuation
+      // page when a local native rectangle cannot hold the measured diagram.
+      useFlow = true;
+    }
+  }
+  const textAllocations = useComponents && !useFlow && authoringContent?.length && textMeasure
+    ? await measureAdoptedTextAllocations(authoringContent, textMeasure, log) : undefined;
+  const authoring = useComponents ? (useFlow ? flowAuthoringContract(outline, authoringContent)
+    : componentAuthoringContract(outline, diagramAllocations, authoringContent, textAllocations)) : undefined;
   if (authoring) userPrompt += `\n\n${authoring.user}`;
   const response = await aiCall(authoring ? `${prompts.system}\n\n${authoring.system}` : prompts.system, userPrompt, visionImages);
-  const generatedData = parseJsonResponse<GeneratedSlideData>(response);
+  let generatedData = parseJsonResponse<GeneratedSlideData>(response);
+  if (generatedData && authoringContent) {
+    try { generatedData = resolveAuthoringContent(generatedData, authoringContent); }
+    catch (error) {
+      onFailure?.({ code: 'invalid-model-output', detail: error instanceof Error ? error.message : String(error) });
+      return null;
+    }
+  }
   if (useComponents && ((useFlow && !generatedData?.layout) || (!useFlow && generatedData?.layout))) {
     onFailure?.({ code: 'invalid-model-output', detail: useFlow ? 'Explicit flow authoring requires layout.groups' : 'Native slide authoring requires editable elements; flow layout is opt-in' });
     return null;
@@ -927,7 +1001,10 @@ async function generateSlideContent(
       });
       generatedData.elements = flowPages.flatMap((page) => page.elements) as unknown as GeneratedSlideData['elements'];
     } catch (error) {
-      onFailure?.({ code: 'invalid-model-output', detail: error instanceof Error ? error.message : String(error) });
+      const detail = error instanceof Error ? error.message : String(error);
+      const category = layoutFailureCategory(error, detail);
+      onFailure?.({ code: 'invalid-model-output', detail, ...(category ? { category } : {}),
+        ...(error instanceof FlowLayoutFailure && error.requestedPageCount ? { requestedPageCount: error.requestedPageCount } : {}) });
       return null;
     }
   } else if (useComponents) {
@@ -936,23 +1013,28 @@ async function generateSlideContent(
       return null;
     }
     try {
+      // Local text/label and flow blocks use kind. Accept that same diagram
+      // discriminator at the native entrance before the strict owner gate.
+      const components = (generatedData.components ?? []).map(normalizeDiagramComponent);
+      const requestedDiagramCount = components.filter(isDiagramComponent).length;
+      if (outline.visualIntent?.diagram && requestedDiagramCount !== 1) {
+        throw new Error(`Structured teaching diagram is missing or duplicated (received ${requestedDiagramCount}). Return exactly one components entry with kind:"diagram" (type:"diagram" is also accepted) and a fitting rectangle. Independent sequenceGroups belong inside that one component; do not replace it with native shapes or multiple diagram components.`);
+      }
       const compiled: GeneratedSlideData['elements'] = [];
       const allocated: Array<{ left: number; top: number; width: number; height: number }> = generatedData.elements
         .filter((element) => element && element.type !== 'line' && (element.type !== 'shape' || Boolean(element.text)))
         .map(({ left, top, width, height }) => ({ left, top, width, height }));
       let diagrams = 0;
-      for (const [componentIndex, rawComponent] of (generatedData.components ?? []).entries()) {
+      for (const [componentIndex, rawComponent] of components.entries()) {
         const component = rawComponent && typeof rawComponent === 'object' ? { ...rawComponent, id: `${outline.id}-component-${componentIndex}` } : rawComponent;
         if (isDiagramComponent(component)) {
           diagrams += 1;
           const planned = outline.visualIntent?.diagram;
           // The teaching plan owns meaning; the page author chooses only its rectangle and styling.
           const diagram = planned ? { ...component, ...planned } : component;
-          try {
-            compiled.push(...await compileMeasuredDiagramComponent(diagram, textMeasure) as unknown as GeneratedSlideData['elements']);
-          } catch (error) {
-            throw new Error(`${error instanceof Error ? error.message : String(error)} (authored diagram allocation ${diagram.width}×${diagram.height}px at ${diagram.left},${diagram.top})`);
-          }
+          compiled.push(...await compileMeasuredDiagramComponent(diagram, textMeasure, {
+            feasibleAllocations: planned ? diagramAllocations : undefined,
+          }) as unknown as GeneratedSlideData['elements']);
           allocated.push({ left: diagram.left, top: diagram.top, width: diagram.width, height: diagram.height });
         } else if (component && typeof component === 'object'
           && ('kind' in component)
@@ -992,7 +1074,8 @@ async function generateSlideContent(
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       log.error(`First-draft component compilation failed for ${outline.title}: ${detail}`);
-      onFailure?.({ code: 'invalid-model-output', detail });
+      const category = layoutFailureCategory(error, detail);
+      onFailure?.({ code: 'invalid-model-output', detail, ...(category ? { category } : {}) });
       return null;
     }
   }
@@ -1011,6 +1094,16 @@ async function generateSlideContent(
 
   if (useComponents && !useFlow && textMeasure) {
     try { fixedElements = await compileNativeTextLayout(fixedElements as unknown as PPTElement[], textMeasure) as unknown as GeneratedSlideData['elements']; }
+    catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const category = layoutFailureCategory(error, detail);
+      onFailure?.({ code: 'invalid-model-output', detail, ...(category ? { category } : {}) });
+      return null;
+    }
+  }
+
+  if (authoringContent) {
+    try { assertAuthoringContentCoverage(fixedElements, authoringContent); }
     catch (error) {
       onFailure?.({ code: 'invalid-model-output', detail: error instanceof Error ? error.message : String(error) });
       return null;
@@ -1097,6 +1190,14 @@ async function generateSlideContent(
     return null;
   }
 
+  if (useComponents && !useFlow) {
+    const collisions = nativeSlideCollisions(processedElements);
+    if (collisions.length) {
+      onFailure?.({ code: 'invalid-model-output', category: 'layout-conflict', detail: `First-draft native layout collision: ${collisions.join('; ')}` });
+      return null;
+    }
+  }
+
   // Process background
   let background: SlideBackground | undefined;
   if (generatedData.background) {
@@ -1116,6 +1217,8 @@ async function generateSlideContent(
       elements: page.elements.flatMap((element) => byId.has(element.id) ? [byId.get(element.id)!] : []),
       background, remark: generatedData.remark || outline.description,
       sourceGroupIds: page.sourceGroupIds, teachingText: page.teachingText,
+      paginationVersion: page.paginationVersion, occupiedHeight: page.occupiedHeight,
+      layoutDecision: page.layoutDecision, layoutMeasurement: page.layoutMeasurement,
     }));
     return { ...pages[0], ...(pages.length > 1 ? { continuationPages: pages.slice(1) } : {}) };
   }

@@ -204,12 +204,18 @@ export function mergeCourseDesignClassroomScenes<T extends { id: string; outline
 }): T[] | null {
   const affected = new Set(options.affectedOutlineIds);
   const sceneOutlineId = (scene: T) => scene.outlineId || scene.id;
-  const baseByOutline = new Map(options.baseScenes.map((scene) => [sceneOutlineId(scene), scene]));
-  const candidateByOutline = new Map(options.candidateScenes.map((scene) => [sceneOutlineId(scene), scene]));
-  if (options.affectedOutlineIds.some((outlineId) => !candidateByOutline.has(outlineId))) return null;
-  const merged = options.outlineIds.flatMap((outlineId) => {
-    const scene = affected.has(outlineId) ? candidateByOutline.get(outlineId) : baseByOutline.get(outlineId);
-    return scene ? [scene] : [];
+  const scenesForOutline = (scenes: readonly T[], outlineId: string) => scenes.filter((scene) => {
+    const id = sceneOutlineId(scene);
+    if (id === outlineId) return true;
+    const continuationPrefix = `${outlineId}--continuation-`;
+    return id.startsWith(continuationPrefix) && /^\d+$/.test(id.slice(continuationPrefix.length));
   });
-  return merged.length === options.outlineIds.length ? merged : null;
+  if (options.affectedOutlineIds.some((outlineId) =>
+    !options.candidateScenes.some((scene) => sceneOutlineId(scene) === outlineId))) return null;
+  const merged = options.outlineIds.flatMap((outlineId) => {
+    const scenes = affected.has(outlineId) ? options.candidateScenes : options.baseScenes;
+    return scenesForOutline(scenes, outlineId);
+  });
+  return options.outlineIds.every((outlineId) =>
+    merged.some((scene) => sceneOutlineId(scene) === outlineId)) ? merged : null;
 }

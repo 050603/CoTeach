@@ -1,5 +1,90 @@
 import type { OpenMaicSceneOutlineSnapshot } from "@/lib/session/types";
 
+export type GenerationPlanIdentity = {
+  id: string;
+  type?: string;
+  spatialParentId?: string;
+  sourcePageIds?: readonly string[];
+  sectionPlanVersion?: string;
+  lectureSectionId?: string;
+  targetDurationSec?: number;
+  estimatedDuration?: number;
+  plannedTiming?: { narrationSec: number; learnerActivitySec: number; transitionSec: number };
+};
+
+/** Source IDs remain stable when a section redistributes content across pages. */
+export function getOutlineSourcePageIds(outline: GenerationPlanIdentity): readonly string[] {
+  return outline.sourcePageIds ?? [outline.spatialParentId ?? outline.id];
+}
+
+export function isOutlineWithinSourceSelection(
+  outline: GenerationPlanIdentity,
+  selectedIds: ReadonlySet<string>,
+): boolean {
+  const sources = getOutlineSourcePageIds(outline);
+  return sources.length > 0 && sources.every((id) => selectedIds.has(id));
+}
+
+/** Replanning may redistribute time only inside one explicitly versioned section. */
+export function hasCompatibleOutlinePlan(
+  expected: readonly GenerationPlanIdentity[],
+  actual: readonly GenerationPlanIdentity[],
+): boolean {
+  if (!expected.length || !actual.length
+    || new Set(actual.map((page) => page.id)).size !== actual.length) return false;
+  const sources = (pages: readonly GenerationPlanIdentity[]) => new Set(pages.flatMap((page) => [...getOutlineSourcePageIds(page)]));
+  const expectedSources = sources(expected);
+  const actualSources = sources(actual);
+  if (actualSources.size !== expectedSources.size || [...actualSources].some((id) => !expectedSources.has(id))) return false;
+  const sourceSections = new Map<string, string | undefined>();
+  const sourceTypes = new Map<string, string | undefined>();
+  for (const page of expected) {
+    for (const id of getOutlineSourcePageIds(page)) {
+      if (sourceSections.has(id) && sourceSections.get(id) !== page.lectureSectionId) return false;
+      sourceSections.set(id, page.lectureSectionId);
+      sourceTypes.set(id, page.type);
+    }
+  }
+  const versions = new Map<string, string>();
+  for (const page of actual) {
+    const ids = getOutlineSourcePageIds(page);
+    if (!ids.length || new Set(ids).size !== ids.length || ids.some((id) => !id.trim()
+      || sourceSections.get(id) !== page.lectureSectionId
+      || sourceTypes.get(id) !== page.type)) return false;
+    if (page.sectionPlanVersion !== undefined) {
+      if (!page.sectionPlanVersion.trim() || !page.lectureSectionId) return false;
+      const version = versions.get(page.lectureSectionId);
+      if (version && version !== page.sectionPlanVersion) return false;
+      versions.set(page.lectureSectionId, page.sectionPlanVersion);
+    } else if (ids.length > 1) return false;
+  }
+  // Unversioned assessment pages can coexist with a revised teaching plan.
+  const group = (page: GenerationPlanIdentity) => page.type !== 'quiz'
+    && page.lectureSectionId && versions.has(page.lectureSectionId)
+    ? `section:${page.lectureSectionId}` : `page:${getOutlineSourcePageIds(page)[0]}`;
+  const totals = (pages: readonly GenerationPlanIdentity[]) => {
+    const result = new Map<string, number[]>();
+    for (const page of pages) {
+      const key = group(page);
+      const previous = result.get(key) ?? [0, 0, 0, 0];
+      const timing = page.plannedTiming;
+      result.set(key, [
+        previous[0]! + (page.targetDurationSec ?? page.estimatedDuration ?? 0),
+        previous[1]! + (timing?.narrationSec ?? 0),
+        previous[2]! + (timing?.learnerActivitySec ?? 0),
+        previous[3]! + (timing?.transitionSec ?? 0),
+      ]);
+    }
+    return result;
+  };
+  const expectedTotals = totals(expected);
+  const actualTotals = totals(actual);
+  return expectedTotals.size === actualTotals.size && [...expectedTotals].every(([key, values]) => {
+    const other = actualTotals.get(key);
+    return other && values.every((value, index) => Math.abs(value - other[index]!) <= 0.001);
+  });
+}
+
 export type ClassroomGenerationScope = "full-course" | "test-lesson";
 
 export type TestLessonGenerationTarget = {
@@ -29,9 +114,7 @@ export function isTestLessonPromotion(
  * course preview, so the preview snapshot cannot be used as the promotion
  * source of truth.
  */
-export function resolveFullCoursePromotionOutlines<T extends {
-  id: string; spatialParentId?: string; targetDurationSec?: number; estimatedDuration?: number;
-}>(input: {
+export function resolveFullCoursePromotionOutlines<T extends GenerationPlanIdentity>(input: {
   persistedOutlines: readonly T[] | undefined;
   acceptedTestOutlines?: readonly T[];
   expectedFullSceneCount: number | undefined;
@@ -39,32 +122,26 @@ export function resolveFullCoursePromotionOutlines<T extends {
 }): T[] | null {
   const outlines = input.persistedOutlines ?? [];
   const testIds = input.testLesson?.sceneOutlineIds ?? [];
-  const parentId = (outline: T) => outline.spatialParentId ?? outline.id;
-  const fullIds = new Set(outlines.map(parentId));
+  const fullIds = new Set(outlines.flatMap((outline) => [...getOutlineSourcePageIds(outline)]));
   if (!Number.isInteger(input.expectedFullSceneCount)
     || (input.expectedFullSceneCount ?? 0) <= testIds.length
     || fullIds.size !== input.expectedFullSceneCount
     || new Set(outlines.map((outline) => outline.id)).size !== outlines.length
     || testIds.length === 0) return null;
   if (new Set(testIds).size !== testIds.length || testIds.some((id) => !fullIds.has(id))) return null;
+  const selectedIds = new Set(testIds);
+  const overlapsSelection = (page: T) => getOutlineSourcePageIds(page).some((id) => selectedIds.has(id));
+  if (outlines.some((page) => overlapsSelection(page) && !isOutlineWithinSourceSelection(page, selectedIds))) return null;
   if (!input.acceptedTestOutlines?.length) return [...outlines];
   const accepted = input.acceptedTestOutlines;
-  const acceptedParents = new Set(accepted.map(parentId));
-  if (acceptedParents.size !== testIds.length || testIds.some((id) => !acceptedParents.has(id))
-    || new Set(accepted.map((outline) => outline.id)).size !== accepted.length) return null;
-  const duration = (pages: readonly T[]) => pages.reduce((sum, page) => sum + (page.targetDurationSec ?? page.estimatedDuration ?? 0), 0);
-  for (const id of testIds) {
-    const expected = duration(outlines.filter((outline) => parentId(outline) === id));
-    const actual = duration(accepted.filter((outline) => parentId(outline) === id));
-    if (Math.abs(actual - expected) > 0.001) return null;
-  }
-  const emitted = new Set<string>();
+  if (!accepted.every((page) => isOutlineWithinSourceSelection(page, selectedIds))
+    || !hasCompatibleOutlinePlan(outlines.filter(overlapsSelection), accepted)) return null;
+  let emitted = false;
   const promoted = outlines.flatMap((outline) => {
-    const parent = parentId(outline);
-    if (!acceptedParents.has(parent)) return [outline];
-    if (emitted.has(parent)) return [];
-    emitted.add(parent);
-    return accepted.filter((page) => parentId(page) === parent);
+    if (!overlapsSelection(outline)) return [outline];
+    if (emitted) return [];
+    emitted = true;
+    return [...accepted];
   });
   return new Set(promoted.map((outline) => outline.id)).size === promoted.length ? promoted : null;
 }
@@ -76,7 +153,7 @@ export function resolveFullCoursePromotionOutlines<T extends {
  * a full course.
  */
 export function selectClassroomGenerationOutlines<
-  T extends {
+  T extends GenerationPlanIdentity & {
     id: string;
     spatialParentId?: string;
     type?: OpenMaicSceneOutlineSnapshot["type"];
@@ -95,8 +172,11 @@ export function selectClassroomGenerationOutlines<
   preferredFocus = "",
   selectedSectionId?: string,
 ): ClassroomGenerationSelection<T> {
+  if (outlines.length && !hasCompatibleOutlinePlan(outlines, outlines)) {
+    throw new Error("页面来源或小节规划版本不一致，不能确定安全的生成范围，请重新检查课程大纲。");
+  }
   if (scope === "full-course") {
-    return { scope, outlines: [...outlines], fullSceneCount: new Set(outlines.map((outline) => outline.spatialParentId ?? outline.id)).size };
+    return { scope, outlines: [...outlines], fullSceneCount: new Set(outlines.flatMap((outline) => [...getOutlineSourcePageIds(outline)])).size };
   }
 
   const sections = new Map<string, T[]>();
@@ -152,11 +232,11 @@ export function selectClassroomGenerationOutlines<
   return {
     scope,
     outlines: [...scenes],
-    fullSceneCount: new Set(outlines.map((outline) => outline.spatialParentId ?? outline.id)).size,
+    fullSceneCount: new Set(outlines.flatMap((outline) => [...getOutlineSourcePageIds(outline)])).size,
     testLesson: {
       sectionId,
       sectionTitle: scenes[0]?.lectureSectionTitle?.trim() || scenes[0]?.title?.trim() || "第一知识小节",
-      sceneOutlineIds: [...new Set(scenes.map((scene) => scene.spatialParentId ?? scene.id))],
+      sceneOutlineIds: [...new Set(scenes.flatMap((scene) => [...getOutlineSourcePageIds(scene)]))],
       durationSeconds,
     },
   };

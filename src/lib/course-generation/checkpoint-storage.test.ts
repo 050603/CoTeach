@@ -15,7 +15,8 @@ vi.mock("@/lib/db/client", () => ({
   },
 }));
 
-import { resetGenerationCheckpoints, saveGenerationCheckpoint } from "./checkpoint-storage";
+import { resetGenerationCheckpoints, saveGenerationCheckpoint, saveSourceNarrationBaselineCheckpoint } from "./checkpoint-storage";
+import { SOURCE_NARRATION_BASELINE_STEP } from './source-content-acceptance';
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -31,10 +32,37 @@ beforeEach(() => {
 });
 
 describe("generation checkpoint execution ownership", () => {
-  it("retains trusted media ownership when generation checkpoints are reset", async () => {
+  it('creates the immutable original once and returns it when a later recovery races to save another draft', async () => {
+    let stored: unknown;
+    mocks.upsert.mockImplementation(async (input) => {
+      if (!stored) stored = input.create.state;
+      return { state: stored };
+    });
+    const original = { original: '正确案例和因果解释' };
+    expect(await saveSourceNarrationBaselineCheckpoint('job-1', original, { executionId: 'execution-current' }))
+      .toEqual(original);
+    expect(await saveSourceNarrationBaselineCheckpoint('job-1', { original: '后来缩写的稿子' },
+      { executionId: 'execution-current' })).toEqual(original);
+    await saveGenerationCheckpoint('job-1', SOURCE_NARRATION_BASELINE_STEP, { original: 'generic writer cannot replace it' });
+    expect(stored).toEqual(original);
+    for (const [input] of mocks.upsert.mock.calls) {
+      expect(input).toMatchObject({ where: { jobId_step: { jobId: 'job-1', step: SOURCE_NARRATION_BASELINE_STEP } }, update: {} });
+    }
+  });
+
+  it('does not create or change the original baseline after the execution lease is lost', async () => {
+    await expect(saveSourceNarrationBaselineCheckpoint('job-1', { original: 'saved' },
+      { executionId: 'execution-expired' })).rejects.toThrow('GENERATION_JOB_EXECUTION_LOST');
+    expect(mocks.upsert).not.toHaveBeenCalled();
+  });
+
+  it("retains paid responses, spent requests, usage and trusted media when projections are reset", async () => {
     await resetGenerationCheckpoints('job-1');
     expect(mocks.deleteMany).toHaveBeenCalledWith({
-      where: { jobId: 'job-1', NOT: { step: { startsWith: 'classroom-media-origin:' } } },
+      where: { jobId: 'job-1', NOT: [
+        'classroom-media-origin:', 'model-usage:', 'authoring-history:', 'authoring-response:',
+        'aux-authoring:', 'stage-attempt:', 'course-design:', 'course-design-attempt:', 'design-authoring:', 'teaching-blueprint',
+      ].map((prefix) => ({ step: { startsWith: prefix } })) },
     });
   });
 

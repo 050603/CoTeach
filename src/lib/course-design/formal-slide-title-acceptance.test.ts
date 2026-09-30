@@ -119,9 +119,6 @@ it.skipIf(process.env.OPENPBL_RUN_SLIDE_TITLE_ACCEPTANCE !== '1')(
         sectionPlans: [{
           title: current.courseTitle,
           knowledgePointIds,
-          maxPages: current.pageCount + 1,
-          suggestedMinPages: current.pageCount,
-          suggestedMaxPages: current.pageCount,
           teachingBudgetSec: current.pageCount * 100,
         }],
       }, createCourseGenerationAiCall({

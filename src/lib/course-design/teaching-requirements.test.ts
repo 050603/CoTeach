@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { emptyResourcePackageDraft, type CourseResourcePackage } from "@/lib/resource-package/types";
-import { buildCourseTeachingRequirements, mergeTeacherRequirementBriefs } from "./teaching-requirements";
+import { teachingRequirementResponsibility } from "@/lib/session/types";
+import { buildCourseTeachingRequirements, mergeTeacherRequirementBriefs, recoverCourseTeachingRequirements } from "./teaching-requirements";
 
 function resourcePackage(): CourseResourcePackage {
   return {
@@ -39,9 +40,47 @@ describe("course teaching requirements", () => {
     });
     expect(requirements.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "teacher-directive", source: "teacher" }),
-      expect.objectContaining({ kind: "highlight", appliesTo: "ai-learning", sourceKnowledgePointIds: ["constructivism"] }),
-      expect.objectContaining({ kind: "difficulty", appliesTo: "ai-learning", sourceKnowledgePointIds: ["assimilation"] }),
+      expect.objectContaining({ kind: "highlight", responsibility: "instruction", appliesTo: "ai-learning", sourceKnowledgePointIds: ["constructivism"] }),
+      expect.objectContaining({ kind: "difficulty", responsibility: "instruction", appliesTo: "ai-learning", sourceKnowledgePointIds: ["assimilation"] }),
     ]));
+  });
+
+  it("classifies original AI actions as instruction and student requirements as learner activity", () => {
+    const pack = resourcePackage();
+    const stage = pack.draft.stages.find((item) => item.key === "ai-learning")!;
+    stage.aiActions = "解释建构主义学习理论，再给出课堂案例。";
+    stage.requirements = "向 AI 提问，记录关键概念，构思教案框架。";
+    const requirements = buildCourseTeachingRequirements({ resourcePackage: pack });
+    const actions = requirements.items.find((item) => item.text === stage.aiActions)!;
+    const studentTask = requirements.items.find((item) => item.text === stage.requirements)!;
+    expect(actions).toMatchObject({ kind: "stage-requirement", responsibility: "instruction", appliesTo: "ai-learning" });
+    expect(studentTask).toMatchObject({ kind: "stage-requirement", responsibility: "learner-activity", appliesTo: "ai-learning" });
+    expect(actions.id).toMatch(/^requirement-stage-requirement-/u);
+    expect(studentTask.id).toMatch(/^requirement-stage-requirement-/u);
+
+    const historical = structuredClone(requirements);
+    historical.items.forEach((item) => { delete item.responsibility; });
+    const recovered = recoverCourseTeachingRequirements(historical, pack)!;
+    expect(recovered.items.map((item) => [item.id, item.text, teachingRequirementResponsibility(item, pack)])).toEqual(
+      requirements.items.map((item) => [item.id, item.text, item.responsibility]),
+    );
+    expect(recovered.items.find((item) => item.id === studentTask.id)?.responsibility).toBe("learner-activity");
+    expect(historical.items.every((item) => !("responsibility" in item))).toBe(true);
+  });
+
+  it("keeps uncertain historical responsibilities instructional", () => {
+    const pack = resourcePackage();
+    const stage = pack.draft.stages.find((item) => item.key === "ai-learning")!;
+    stage.requirements = "共同复盘学习成果。";
+    stage.aiActions = stage.requirements;
+    const stored = {
+      id: "saved-stage-id", kind: "stage-requirement" as const, source: "resource-package" as const,
+      text: stage.requirements, sourceKnowledgePointIds: [],
+    };
+    expect(teachingRequirementResponsibility(stored, pack)).toBe("instruction");
+    expect(teachingRequirementResponsibility({ ...stored, text: "已修改的历史文本" }, pack)).toBe("instruction");
+    expect(teachingRequirementResponsibility(stored)).toBe("instruction");
+    expect(buildCourseTeachingRequirements({ resourcePackage: pack }).items.find((item) => item.kind === "stage-requirement")?.responsibility).toBe("instruction");
   });
 
   it("keeps later-stage supplements out of AI teaching and exposes substantive conflicts", () => {

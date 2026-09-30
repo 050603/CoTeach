@@ -75,7 +75,7 @@ type PublishCheck = {
 
 type ResourceRepairIssue = {
   id: string;
-  type: "classroom" | "adaptive-resource" | "teaching-tool" | "tts" | "media" | "speech-sync";
+  type: "classroom" | "adaptive-resource" | "teaching-tool" | "tts" | "media" | "speech-sync" | "source-consistency";
   title: string;
   detail: string;
 };

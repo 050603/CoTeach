@@ -1,0 +1,265 @@
+{
+  "provenance": "20260930-first-page-caption-probe/raw-content.json; unchanged first response with complete bare placement references",
+  "outline": {
+    "id": "teaching-section-1-page-1",
+    "type": "slide",
+    "title": "教学概念体系辨析",
+    "description": "从教师导入的课堂形态对比出发，引出三种概念的定义，建立基本理解。",
+    "keyPoints": [
+      "教学理论：系统阐述教学原则与规律，回答“为什么教”。",
+      "教学模式：理论的具体化，相对固定的教学结构，如项目式、探究式。",
+      "教学方法：灵活的具体技巧，如任务驱动、支架式、抛锚式。",
+      "三者关系：理论 → 模式 → 方法，从抽象到具体。"
+    ],
+    "teachingObjective": "学生能说出三者的定义和先后关系。",
+    "teachingBrief": {
+      "schemaVersion": 1,
+      "designVersion": "teaching-blueprint-v3-compiled-v21-observation-evidence",
+      "sharedContext": {
+        "learningPurpose": "理解这三个概念的层级与边界，为后续选择和应用教学理论、模式、方法提供清晰的思考框架。",
+        "caseId": "",
+        "caseFacts": [],
+        "fixedWording": [],
+        "stableTerms": [
+          "教学理论",
+          "教学模式",
+          "教学方法"
+        ],
+        "conceptBoundaries": [
+          "教学理论是系统的原理和规律，教学模式是理论的具体化固定结构，教学方法是灵活可调整的具体技巧。",
+          "三者不是互斥关系，而是从抽象到具体、从理论到实践的层级关系。"
+        ]
+      },
+      "learningBoundary": {
+        "prerequisiteKnowledge": [
+          {
+            "id": "prereq-1",
+            "name": "教学场景辨别",
+            "priorKnowledgeEvidence": "基于学生日常学习经验，常见于中小学课堂。",
+            "diagnosticBoundary": "能够从两张图片（讲授式、探究式）中正确指出哪张是以教师为中心，哪张是以学生为中心，并简单说明理由。"
+          }
+        ],
+        "previouslyTaughtKnowledge": [],
+        "currentKnowledge": [
+          {
+            "id": "kp-1",
+            "name": "教学概念体系辨析"
+          }
+        ],
+        "futureKnowledge": [
+          {
+            "id": "kp-2",
+            "name": "建构主义学习理论"
+          },
+          {
+            "id": "kp-3",
+            "name": "具身认知理论"
+          },
+          {
+            "id": "kp-4",
+            "name": "人工智能教育的典型教学模式"
+          },
+          {
+            "id": "kp-5",
+            "name": "任务驱动式教学法"
+          },
+          {
+            "id": "kp-6",
+            "name": "支架式与抛锚式教学法"
+          }
+        ]
+      },
+      "requirementIds": [
+        "requirement-highlight-80d4aa5e6ce5",
+        "requirement-difficulty-bf51b40357d3",
+        "requirement-stage-requirement-0db7fc9f81ef"
+      ],
+      "difficultyStrategies": [
+        {
+          "requirementId": "requirement-difficulty-bf51b40357d3",
+          "learnerObstacle": "学生容易把理论、模式、方法混用，例如把“探究式”既当作模式又当作方法。",
+          "teachingApproach": "通过层级关系图（金字塔）和具体案例（如“教AI图像识别”）展示三者如何分别起作用：建构主义理论指导→探究式教学模式→任务驱动法具体实施。",
+          "understandingEvidence": "学生能举出自己设计的案例，指出哪个是理论、哪个是模式、哪个是方法。"
+        }
+      ],
+      "teachingPlan": {
+        "purpose": "学生能说出三者的定义和先后关系。",
+        "priorKnowledge": "理解这三个概念的层级与边界，为后续选择和应用教学理论、模式、方法提供清晰的思考框架。",
+        "newContent": "教学概念体系辨析：教学理论是对教学过程中的基本原则、规律和概念的系统阐述，基于教育学、生物学、心理学等学科的研究成果，为教师提供了关于如何教学和学习的理论支持。教学理论是教学设计的底层逻辑，回答“为什么这样教”。\n教学模式：教学模式是教学理论的具体化，形成了一套相对固定的教学结构或流程，用以指导教师如何组织和实施教学。它具有稳定性和可操作性，例如项目式学习、探究式学习等。\n教学方法：教学方法是教师在课堂上实际应用的具体技巧和手段，相较于教学模式更加灵活，可以根据学生的需要和教学情境进行调整，直接作用于师生互动。例如任务驱动法、抛锚式法、支架式法等。",
+        "learnerQuestion": "",
+        "reasoningSteps": [],
+        "takeaway": "教学理论：系统阐述教学原则与规律，回答“为什么教”。；教学模式：理论的具体化，相对固定的教学结构，如项目式、探究式。；教学方法：灵活的具体技巧，如任务驱动、支架式、抛锚式。；三者关系：理论 → 模式 → 方法，从抽象到具体。",
+        "visibleContent": [
+          "教学概念体系辨析：教学理论是对教学过程中的基本原则、规律和概念的系统阐述，基于教育学、生物学、心理学等学科的研究成果，为教师提供了关于如何教学和学习的理论支持。教学理论是教学设计的底层逻辑，回答“为什么这样教”。",
+          "教学模式：教学模式是教学理论的具体化，形成了一套相对固定的教学结构或流程，用以指导教师如何组织和实施教学。它具有稳定性和可操作性，例如项目式学习、探究式学习等。",
+          "教学方法：教学方法是教师在课堂上实际应用的具体技巧和手段，相较于教学模式更加灵活，可以根据学生的需要和教学情境进行调整，直接作用于师生互动。例如任务驱动法、抛锚式法、支架式法等。",
+          "教学理论：系统阐述教学原则与规律，回答“为什么教”。",
+          "教学模式：理论的具体化，相对固定的教学结构，如项目式、探究式。",
+          "教学方法：灵活的具体技巧，如任务驱动、支架式、抛锚式。",
+          "三者关系：理论 → 模式 → 方法，从抽象到具体。"
+        ],
+        "presentationContent": [
+          "教学理论：系统阐述教学原则与规律，回答“为什么教”。",
+          "教学模式：理论的具体化，相对固定的教学结构，如项目式、探究式。",
+          "教学方法：灵活的具体技巧，如任务驱动、支架式、抛锚式。",
+          "三者关系：理论 → 模式 → 方法，从抽象到具体。"
+        ],
+        "narrationFocus": [
+          "教学概念体系辨析：教学理论是对教学过程中的基本原则、规律和概念的系统阐述，基于教育学、生物学、心理学等学科的研究成果，为教师提供了关于如何教学和学习的理论支持。教学理论是教学设计的底层逻辑，回答“为什么这样教”。",
+          "教学模式：教学模式是教学理论的具体化，形成了一套相对固定的教学结构或流程，用以指导教师如何组织和实施教学。它具有稳定性和可操作性，例如项目式学习、探究式学习等。",
+          "教学方法：教学方法是教师在课堂上实际应用的具体技巧和手段，相较于教学模式更加灵活，可以根据学生的需要和教学情境进行调整，直接作用于师生互动。例如任务驱动法、抛锚式法、支架式法等。"
+        ],
+        "entryPoint": {
+          "kind": "familiar-experience",
+          "object": "前面教师展示的两张图片：左图教师讲授，右图学生动手操作机器人。",
+          "bridge": "这两种场景背后有根本不同的教学理念。今天我们要搞清楚教学理论、教学模式和教学方法到底是什么关系，才能为自己设计AI课找到正确的依据。"
+        },
+        "introduces": [
+          "teaching-section-1-unit-1-node-1",
+          "teaching-section-1-unit-1-node-2",
+          "teaching-section-1-unit-1-node-3"
+        ],
+        "deepens": [],
+        "references": [],
+        "visualRelationship": {
+          "kind": "statement",
+          "description": "用文字分组列出三个概念的定义，并用箭头表示从理论到模式到方法的关系。",
+          "readingOrder": [
+            "理论学习",
+            "模式",
+            "方法"
+          ],
+          "preferredForm": "text",
+          "rationale": "概念清楚，用简短文字加箭头即可，无需复杂图表。"
+        },
+        "taskConnection": {
+          "mode": "none",
+          "rationale": "本页建立基础概念，不需要连接最终任务。"
+        }
+      },
+      "explanation": "教学概念体系辨析：教学理论是对教学过程中的基本原则、规律和概念的系统阐述，基于教育学、生物学、心理学等学科的研究成果，为教师提供了关于如何教学和学习的理论支持。教学理论是教学设计的底层逻辑，回答“为什么这样教”。\n教学模式：教学模式是教学理论的具体化，形成了一套相对固定的教学结构或流程，用以指导教师如何组织和实施教学。它具有稳定性和可操作性，例如项目式学习、探究式学习等。\n教学方法：教学方法是教师在课堂上实际应用的具体技巧和手段，相较于教学模式更加灵活，可以根据学生的需要和教学情境进行调整，直接作用于师生互动。例如任务驱动法、抛锚式法、支架式法等。",
+      "examples": [],
+      "conditions": [],
+      "evidence": [],
+      "assessmentFocus": "能解释教学理论、教学模式、教学方法的定义。；能按从抽象到具体排列三者顺序。；能辨别给定教学案例中属于理论、模式还是方法。；能识别常见混淆（如把方法当模式）。；概念体系小测；节末小测，检验学生对三概念的理解和区分。；检验是否达成学习目标。",
+      "understandingCriteria": {
+        "goals": [
+          "学生能用自己的语言说出三者的区别和联系。",
+          "学生能在AI教学情境中正确归类和举例。"
+        ],
+        "answerEssentials": [
+          "理论是原理规律，模式是固定结构，方法是技巧。",
+          "顺序是理论→模式→方法。",
+          "例子中能正确标记。"
+        ],
+        "misconceptions": [
+          "将教学方法当作教学模式（如把任务驱动叫模式）。"
+        ],
+        "supportingUnitIds": [
+          "teaching-section-1-unit-1"
+        ]
+      },
+      "reviewItems": []
+    },
+    "order": 0,
+    "stageKey": "ai-learning",
+    "stageLabel": "知识讲授",
+    "audience": "student",
+    "generationPurpose": "knowledge-teaching",
+    "activityId": "teaching-section-1",
+    "parentActivityId": "teaching-section-1",
+    "lectureSectionId": "teaching-section-1",
+    "lectureSectionTitle": "教学概念体系辨析",
+    "detailKind": "knowledge-explanation",
+    "knowledgePointIds": [
+      "kp-1"
+    ],
+    "teachingUnitIds": [
+      "teaching-section-1-unit-1"
+    ],
+    "targetDurationSec": 128,
+    "estimatedDuration": 128,
+    "plannedTiming": {
+      "narrationSec": 128,
+      "learnerActivitySec": 0,
+      "transitionSec": 0,
+      "role": "teaching"
+    },
+    "ttsPolicy": "target-duration",
+    "narrationMode": "standalone-course",
+    "resourceTypes": [
+      "ppt"
+    ],
+    "visualIntent": {
+      "observationGoal": "用文字分组列出三个概念的定义，并用箭头表示从理论到模式到方法的关系。",
+      "representation": "text",
+      "rationale": "概念清楚，用简短文字加箭头即可，无需复杂图表。"
+    },
+    "courseLanguageDirective": "使用简体中文",
+    "timingPlan": {
+      "algorithmVersion": 4,
+      "paragraphBudgets": [
+        {
+          "role": "introduction",
+          "unit": "cjk-char",
+          "targetDurationSec": 18,
+          "targetUnits": 84,
+          "minUnits": 75,
+          "maxUnits": 93
+        },
+        {
+          "role": "explanation",
+          "unit": "cjk-char",
+          "targetDurationSec": 110,
+          "targetUnits": 512,
+          "minUnits": 460,
+          "maxUnits": 564
+        }
+      ],
+      "providerId": "qwen-tts",
+      "modelId": "qwen-audio-3.0-tts-plus",
+      "voiceId": "longanlingxin",
+      "profileId": "4::qwen-tts::qwen-audio-3.0-tts-plus::longanlingxin::zh-cn::1",
+      "language": "zh-CN",
+      "speed": 1,
+      "contentType": "theory",
+      "pageKind": "slide",
+      "naturalSpeedLocked": true,
+      "calibrationSource": "configured",
+      "effectiveUnitsPerMinute": 279.4,
+      "narrationSec": 128,
+      "readingThinkingSec": 0,
+      "operationSec": 0,
+      "studentActivitySec": 0,
+      "feedbackSec": 0,
+      "transitionSec": 0,
+      "videoSec": 0,
+      "activityTargetDurationSec": 128,
+      "targetDurationSec": 128,
+      "unit": "cjk-char",
+      "targetUnits": 596,
+      "minUnits": 536,
+      "maxUnits": 656,
+      "taskComplexity": "low",
+      "recommendedStudentActivitySec": 0,
+      "taskFitsBudget": true,
+      "timingRationale": [
+        "Slide pages reserve only a short page-change interval; the remaining budget is natural-speed narration.",
+        "Preserve the approved teaching-blueprint narration, learner-activity, and transition budget."
+      ]
+    },
+    "teachingStageTiming": {
+      "schemaVersion": 1,
+      "stageKey": "ai-learning",
+      "targetDurationSec": 1800,
+      "minDurationSec": 1620,
+      "maxDurationSec": 1980,
+      "narrationTargetDurationSec": 1602,
+      "reservedDurationSec": 198,
+      "pageCount": 19,
+      "allocation": "content-weighted",
+      "acceptance": "stage-total-only"
+    }
+  },
+  "response": "{\n  \"background\": {\n    \"type\": \"solid\",\n    \"color\": \"#ffffff\"\n  },\n  \"elements\": [\n    {\n      \"id\": \"title-underline\",\n      \"type\": \"shape\",\n      \"left\": 50,\n      \"top\": 126,\n      \"width\": 900,\n      \"height\": 3,\n      \"path\": \"M 0 0 L 1 0 L 1 1 L 0 1 Z\",\n      \"viewBox\": [1, 1],\n      \"fill\": \"#1E3A8A\",\n      \"fixedRatio\": false\n    }\n  ],\n  \"components\": [\n    {\n      \"kind\": \"textBox\",\n      \"placementRef\": \"page-title\"\n    },\n    {\n      \"kind\": \"textBox\",\n      \"placementRef\": \"adopted-content-1\"\n    },\n    {\n      \"kind\": \"textBox\",\n      \"placementRef\": \"adopted-content-2\"\n    },\n    {\n      \"kind\": \"textBox\",\n      \"placementRef\": \"adopted-content-3\"\n    },\n    {\n      \"kind\": \"textBox\",\n      \"placementRef\": \"adopted-content-4\"\n    }\n  ]\n}"
+}

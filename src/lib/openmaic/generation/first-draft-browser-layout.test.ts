@@ -1,7 +1,9 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { compileTextComponents, compileNativeTextLayout } from '../../../../packages/@openmaic/generation/src/text-layout-compiler';
 import { compileMeasuredDiagramComponent, measureDiagramAllocations } from '../../../../packages/@openmaic/generation/src/diagram-compiler';
 import { compileFlowLayout } from '../../../../packages/@openmaic/generation/src/flow-layout-compiler';
+import { generateSceneContent } from '../../../../packages/@openmaic/generation/src/scene-generator';
+import type { SceneOutline } from '../../../../packages/@openmaic/generation/src/outline-types';
 import { closeSpatialMeasurementBrowser, measureAuthoredSlideText } from './slide-spatial-measurement';
 
 afterAll(async () => { await closeSpatialMeasurementBrowser(); });
@@ -168,7 +170,8 @@ describe('flow layout in the actual playback font', () => {
       { kind: 'textBox', text: '三层之间是抽象程度与作用范围的区别。' },
     ] }] }] }, { title: '三层关系', id: 'browser-three-levels', textMeasure: measureAuthoredSlideText });
     const all = pages.flatMap((page) => page.elements);
-    const nodes = all.filter((element) => element.type === 'shape');
+    const nodes = all.filter((element): element is Extract<typeof element, { type: 'shape' }> =>
+      element.type === 'shape' && element.id.includes('-node-'));
     const labels = all.filter((element) => element.id.includes('edge-label'));
     expect(all.filter((element) => element.type === 'line')).toHaveLength(2);
     expect(labels).toHaveLength(2);
@@ -242,6 +245,119 @@ describe('native slide authoring with actual renderer typography', () => {
 
 
 describe('planned local diagram capacity with the actual font', () => {
+  it('fits the failed seven-step sequence in the actual slide font without clipping', async () => {
+    const diagram = { type: 'diagram' as const, id: 'constructivist-sequence', topology: 'sequence' as const,
+      left: 50, top: 112, width: 900, height: 394,
+      nodes: ['目标分析', '情境创设', '资源设计', '自主学习', '协作环境', '效果评价', '强化练习']
+        .map((label, index) => ({ id: `s${index + 1}`, label })) };
+    const elements = await compileMeasuredDiagramComponent(diagram, measureAuthoredSlideText);
+    const nodes = elements.filter((element) => element.type === 'shape');
+    expect(nodes).toHaveLength(7);
+    expect(elements.filter((element) => element.type === 'line')).toHaveLength(6);
+    expect(new Set(nodes.map((node) => node.top)).size).toBe(2);
+    expect(nodes.every((node) => node.left >= 50 && node.left + node.width <= 950
+      && node.top >= 112 && node.top + node.height <= 506)).toBe(true);
+  });
+
+  it('fits the full seven-step symmetric ring without changing labels, font or ring closure', async () => {
+    const labels = ['教学目标分析', '情境创设', '信息资源设计', '自主学习设计',
+      '协作学习环境设计', '学习效果评价设计', '强化练习设计'];
+    const diagram = { topology: 'cycle' as const,
+      nodes: labels.map((label, index) => ({ id: `s${index + 1}`, label })),
+      annotation: '七个步骤构成闭环：可正向开发课程，也可反向查漏补缺、用于教学反思与迭代。' };
+    const choices = await measureDiagramAllocations(diagram, measureAuthoredSlideText);
+    const choice = choices.find((allocation) => allocation.width === 900)!;
+    expect(choice).toBeDefined();
+    const outline: SceneOutline = { id: 'constructivist-seven-steps', type: 'slide', order: 0,
+      title: '建构主义教学设计的七个步骤', description: '说明七步顺序及反馈闭环。',
+      keyPoints: labels, visualIntent: { representation: 'native-diagram', observationGoal: '七步闭环', diagram } };
+    const ai = vi.fn().mockResolvedValue(JSON.stringify({ elements: [], components: [
+      { kind: 'textBox', role: 'title', text: outline.title, left: 50, top: 50, width: 900 },
+      { type: 'diagram', ...diagram, ...choice, left: 50, top: 140 },
+    ] }));
+    const slide = await generateSceneContent(outline, ai, { componentAuthoring: true, textMeasure: measureAuthoredSlideText });
+    expect(ai).toHaveBeenCalledTimes(1);
+    expect(ai.mock.calls[0][1]).toContain('Measured feasible diagram rectangles');
+    expect(slide && 'elements' in slide ? slide.elements.filter((element) => element.type === 'line') : []).toHaveLength(7);
+    const nodes = slide && 'elements' in slide ? slide.elements.filter((element) => element.type === 'shape') : [];
+    expect(nodes.map((node) => node.text?.content.replace(/<[^>]+>/gu, ''))).toEqual(labels);
+    expect(nodes.every((node) => node.text?.content.includes('font-size:20px'))).toBe(true);
+    expect(new Set(nodes.map((node) => Math.round(node.top))).size).toBe(4);
+    expect(nodes[0]!.left + nodes[0]!.width / 2).toBeCloseTo(500);
+    for (let index = 1; index < nodes.length; index += 1) {
+      const reflected = nodes[nodes.length - index]!;
+      expect(nodes[index]!.top).toBeCloseTo(reflected.top);
+      expect(nodes[index]!.left + nodes[index]!.width / 2 + reflected.left + reflected.width / 2).toBeCloseTo(1000);
+    }
+    expect(slide).not.toHaveProperty('continuationPages');
+  });
+
+  it('requires a larger symmetric allocation for the actual seventh page and retains every original label and note', async () => {
+    const labels = ['教学目标分析', '情境创设', '信息资源设计', '自主学习设计',
+      '协作学习环境设计', '学习效果评价设计', '强化练习设计'];
+    const plan = { topology: 'cycle' as const,
+      nodes: labels.map((label, index) => ({ id: `S${index + 1}`, label })),
+      annotation: '七个步骤首尾相接构成闭环，可以按这个顺序开发课程，也可以通过每一步的要求查缺补漏、进行教学反思和迭代。' };
+    const choices = await measureDiagramAllocations(plan, measureAuthoredSlideText);
+    await expect(compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'seventh-page',
+      left: 350, top: 116, width: 600, height: 300 }, measureAuthoredSlideText, { feasibleAllocations: choices }))
+      .rejects.toMatchObject({ name: 'DiagramAllocationError', feasibleAllocations: choices });
+    const choice = choices.find((allocation) => allocation.width === 900)!;
+    expect(choice).toBeDefined();
+    const elements = await compileMeasuredDiagramComponent({ ...plan, ...choice, type: 'diagram',
+      id: 'seventh-page', left: 50, top: 140 }, measureAuthoredSlideText);
+    const nodes = elements.filter((element) => element.type === 'shape');
+    expect(nodes.map((node) => node.text?.content.replace(/<[^>]+>/gu, ''))).toEqual(labels);
+    expect(elements.filter((element) => element.type === 'line')).toHaveLength(7);
+    expect(new Set(nodes.map((node) => Math.round(node.top))).size).toBe(4);
+    const note = elements.find((element) => element.type === 'text')!;
+    expect(note.type === 'text' && note.content.replace(/<[^>]+>/gu, '')).toBe(plan.annotation);
+    for (const node of nodes) {
+      const actual = await measureAuthoredSlideText({ html: node.text!.content, text: node.text!.content.replace(/<[^>]+>/gu, ''),
+        width: node.width, fontSize: 20, fontWeight: 700, fontFamily: 'Noto Sans SC', padding: 15,
+        lineHeight: 1.25, paragraphSpace: 0, align: 'center' });
+      expect(actual.lines.length).toBeLessThanOrEqual(2);
+      expect(actual.height - 6).toBeLessThanOrEqual(node.height);
+    }
+  });
+
+  it('rejects the original shallow rectangle and measures a complete seven-step diagram with its mapping annotation', async () => {
+    const plan = { topology: 'sequence' as const,
+      nodes: ['教学目标分析', '情境创设', '信息资源设计', '自主学习设计', '协作学习环境设计', '学习效果评价设计', '强化练习设计']
+        .map((label, index) => ({ id: `s${index}`, label })),
+      annotation: '第一步教学目标分析对应目标要素；第二、三步情境创设和信息资源设计对应内容要素；第四、五步自主学习设计和协作学习环境设计对应实施要素；第六步学习效果评价设计对应评价要素；第七步强化练习设计是评价之后的补充环节。',
+    };
+    const choices = await measureDiagramAllocations(plan, measureAuthoredSlideText);
+    expect(choices).toContainEqual({ width: 900, height: 360 });
+    await expect(compileMeasuredDiagramComponent({ ...plan, type: 'diagram', id: 'shallow', left: 50, top: 272, width: 900, height: 240 }, measureAuthoredSlideText,
+      { feasibleAllocations: choices })).rejects.toMatchObject({ code: 'diagram-allocation', message: expect.stringContaining('900×360px') });
+    const elements = await compileMeasuredDiagramComponent({ ...plan, ...choices[0]!, type: 'diagram', id: 'complete', left: 50, top: 140 }, measureAuthoredSlideText);
+    expect(elements.filter((element) => element.type === 'shape')).toHaveLength(7);
+    expect(elements.filter((element) => element.type === 'line')).toHaveLength(6);
+    expect(elements.find((element) => element.id.endsWith('-annotation'))).toMatchObject({ type: 'text', width: 900 });
+  });
+
+  it('fits two independent full-wording flows in one measured region without adding a link between them', async () => {
+    const plan = { topology: 'sequence' as const,
+      nodes: [
+        ...['回顾旧知', '提问与讨论', '实践与探究', '辩证思考与讨论', '课堂小结'].map((label, i) => ({ id: `a${i + 1}`, label })),
+        ...['提出问题', '任务分析', '任务分解与程序搭建', '反思总结'].map((label, i) => ({ id: `b${i + 1}`, label })),
+      ],
+      edges: [{ from: 'a1', to: 'a2' }, { from: 'a2', to: 'a3' }, { from: 'a3', to: 'a4' }, { from: 'a4', to: 'a5' },
+        { from: 'b1', to: 'b2' }, { from: 'b2', to: 'b3' }, { from: 'b3', to: 'b4' }],
+      annotation: '第一类流程用于介绍新概念，共五个步骤；第二类流程用于综合项目实现，共四个步骤。两类流程的步骤顺序对应学生认知的自然过程。',
+    };
+    const choices = await measureDiagramAllocations(plan, measureAuthoredSlideText);
+    const choice = choices.find((allocation) => allocation.width === 900)!;
+    expect(choice).toBeDefined();
+    const elements = await compileMeasuredDiagramComponent({ ...plan, ...choice, type: 'diagram', id: 'parallel', left: 50, top: 140 }, measureAuthoredSlideText);
+    const nodes = elements.filter((element) => element.type === 'shape');
+    expect(nodes.map((node) => node.text?.content.replace(/<[^>]+>/gu, ''))).toEqual(plan.nodes.map((node) => node.label));
+    expect(elements.filter((element) => element.type === 'line')).toHaveLength(7);
+    expect(Math.max(...nodes.slice(0, 5).map((node) => node.top + node.height)))
+      .toBeLessThan(Math.min(...nodes.slice(5).map((node) => node.top)));
+  });
+
   it('gives seven-node native authoring feasible full-width and side-by-side allocations', async () => {
     const plan = { topology: 'cycle' as const, nodes: ['目标分析', '情境创设', '资源设计', '自主学习', '协作环境', '效果评价', '强化练习'].map((label, i) => ({ id: String(i), label })),
       annotation: '强化练习的新问题回到目标分析，形成闭环。' };

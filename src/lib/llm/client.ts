@@ -53,9 +53,13 @@ import {
 } from "@/lib/pbl-time-model";
 import { localizeGeneratedNarrative } from "./generated-language";
 import {
+  isCourseGenerationLlmContext,
   reportCourseGenerationTokenUsage,
+  runWithCourseGenerationLlmCallContext,
   withCourseGenerationLlmSlot,
 } from "@/lib/course-generation/llm-concurrency";
+import { randomUUID } from "node:crypto";
+import { isFirstPassProviderRejection, MAX_FIRST_PASS_TRANSPORT_RETRIES } from "@/lib/course-generation/first-pass-policy";
 import { withGenerationRetry } from "@openmaic/lib/generation/generation-retry";
 import {
   requestClassForCourseContentAction,
@@ -294,24 +298,26 @@ async function callChatCompletions(
   },
 ): Promise<string> {
   const timeoutMs = resolveLlmRequestTimeoutMs(opts.requestClass);
+  const courseGeneration = isCourseGenerationLlmContext();
   return withGenerationRetry(
-    () => withCourseGenerationLlmSlot(
-      () => callChatCompletionsWithoutCourseLimit(messages, {
+    (attempt) => withCourseGenerationLlmSlot(
+      () => runWithCourseGenerationLlmCallContext(() => callChatCompletionsWithoutCourseLimit(messages, {
         jsonMode: opts.jsonMode,
         abortSignal: opts.abortSignal,
         timeoutMs,
-      }),
+      }), { callId: randomUUID(), source: "legacy-course-authoring", attempt, transportRetry: attempt > 1 }),
       { signal: opts.abortSignal },
     ),
     {
       label: `LLM ${opts.requestClass} request`,
       maxRetries: Math.max(
         0,
-        Math.min(DURABLE_GENERATION_TRANSIENT_RETRIES, opts.maxTransientRetries),
+        Math.min(courseGeneration ? MAX_FIRST_PASS_TRANSPORT_RETRIES : DURABLE_GENERATION_TRANSIENT_RETRIES, opts.maxTransientRetries),
       ),
       baseDelayMs: 2_000,
       maxDelayMs: 10_000,
       signal: opts.abortSignal,
+      ...(courseGeneration ? { shouldRetryError: isFirstPassProviderRejection } : {}),
       onRetry: (event) => {
         console.warn(
           `[LLM] ${event.label} transient failure (${event.attempt}/${event.maxAttempts}); retrying in ${event.nextDelayMs}ms: ${event.reason}`,
@@ -319,6 +325,31 @@ async function callChatCompletions(
       },
     },
   );
+}
+
+type LegacyChatCompletion = {
+  choices?: Array<{ finish_reason?: string | null; message?: { content?: unknown; reasoning_content?: unknown } }>;
+  usage?: {
+    prompt_tokens?: number; completion_tokens?: number; total_tokens?: number;
+    prompt_cache_hit_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+    completion_tokens_details?: { reasoning_tokens?: number };
+  };
+};
+
+function retainLegacyCourseResponse(error: unknown, rawResponse: string | undefined,
+  content: string | undefined, reasoningCharacters: number): Error {
+  const record = error && typeof error === "object" ? error as Record<string, unknown> : undefined;
+  const retained = new Error(typeof record?.message === "string" ? record.message : String(error), { cause: error });
+  retained.name = typeof record?.name === "string" ? record.name : "Error";
+  for (const key of ["code", "status", "statusCode", "retryAfterMs", "timeoutMs"] as const) {
+    if (record?.[key] !== undefined) Object.assign(retained, { [key]: record[key] });
+  }
+  Object.assign(retained, { complete: false, textCharacters: content?.length ?? 0, reasoningCharacters,
+    outputStarted: Boolean(content?.length || reasoningCharacters),
+    isRetryable: isFirstPassProviderRejection(error, Boolean(content?.length || reasoningCharacters)) });
+  if (rawResponse !== undefined) Object.defineProperty(retained, "rawResponse", { value: rawResponse });
+  return retained;
 }
 
 async function callChatCompletionsWithoutCourseLimit(
@@ -338,6 +369,60 @@ async function callChatCompletionsWithoutCourseLimit(
 
   const url = endpoint.replace(/\/+$/, "") + "/chat/completions";
   const { signal, timeoutSignal } = withTimeout(opts.abortSignal, opts.timeoutMs);
+  const courseGeneration = isCourseGenerationLlmContext();
+  const inputCharacters = messages.reduce((sum, message) => sum + message.content.length, 0);
+  let data: LegacyChatCompletion | undefined;
+  let content: string | undefined;
+  let rawResponse: string | undefined;
+  let reasoningCharacters = 0;
+  let usageRecorded = false;
+  const recordUsage = async (outcome: "response" | "failed" | "aborted", rejected = false) => {
+    // Mark before persistence: callback failures must never record the call
+    // twice or turn a completed response into a second network request.
+    usageRecorded = true;
+    const hasProviderCounts = data?.usage?.total_tokens !== undefined
+      || data?.usage?.prompt_tokens !== undefined || data?.usage?.completion_tokens !== undefined;
+    const outputCharacters = content?.length ?? rawResponse?.length ?? 0;
+    await reportCourseGenerationTokenUsage(data?.usage?.total_tokens ?? (rejected && !hasProviderCounts ? 0 : undefined),
+      rejected ? 0 : inputCharacters + outputCharacters + reasoningCharacters,
+      { source: "legacy-course-authoring", modelId: model, provider: "openai.chat", outcome,
+        inputTokens: data?.usage?.prompt_tokens, outputTokens: data?.usage?.completion_tokens,
+        cacheReadTokens: data?.usage?.prompt_tokens_details?.cached_tokens ?? data?.usage?.prompt_cache_hit_tokens,
+        cacheWriteTokens: data?.usage?.prompt_tokens_details?.cache_write_tokens ?? data?.usage?.cache_write_tokens,
+        reasoningTokens: data?.usage?.completion_tokens_details?.reasoning_tokens ?? data?.usage?.reasoning_tokens,
+        inputCharacters, outputCharacters, reasoningCharacters,
+        ...(rejected && !hasProviderCounts ? { inputTokens: 0, outputTokens: 0, usageSource: "estimated" as const } : {}) });
+  };
+  const adoptResponse = (payload: LegacyChatCompletion) => {
+    data = payload;
+    const message = data?.choices?.[0]?.message;
+    content = typeof message?.content === "string" ? message.content : undefined;
+    reasoningCharacters = typeof message?.reasoning_content === "string" ? message.reasoning_content.length : 0;
+    if (content !== undefined) rawResponse = content;
+  };
+  const readCourseResponse = async (response: Response): Promise<string> => {
+    const reader = response.body?.getReader();
+    if (!reader) return "";
+    const decoder = new TextDecoder();
+    let wireResponse = "";
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        wireResponse += done ? decoder.decode() : decoder.decode(value, { stream: true });
+        if (done) return wireResponse;
+      }
+    } catch (error) {
+      rawResponse = wireResponse + decoder.decode();
+      // A complete-looking JSON body can still have an interrupted transport.
+      // Read its usage for accounting only; it remains an incomplete draft.
+      try { adoptResponse(JSON.parse(rawResponse) as LegacyChatCompletion); } catch { /* Keep the exact partial wire text. */ }
+      throw Object.assign(new LlmCallFailedError("LLM 响应连接提前结束，首稿未完成", { status: response.status, cause: error }),
+        { code: "LLM_STREAM_TRUNCATED", isRetryable: false });
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  };
 
   async function doFetch(useJsonMode: boolean): Promise<Response> {
     return proxyFetch(url, {
@@ -356,62 +441,61 @@ async function callChatCompletionsWithoutCourseLimit(
     }, settings.proxy);
   }
 
-  let res: Response;
   try {
-    res = await doFetch(opts.jsonMode);
-  } catch (err) {
-    if (timeoutSignal.aborted) throw new LlmTimeoutError(opts.timeoutMs);
-    const cause = err instanceof Error
-      ? (err as Error & { cause?: unknown }).cause
-      : undefined;
-    const causeCode = cause && typeof cause === "object" && "code" in cause
-      ? String((cause as { code?: unknown }).code ?? "")
-      : "";
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `LLM request failed [host=${new URL(url).hostname}]: ${reason}${causeCode ? ` (${causeCode})` : ""}`,
-      { cause: err },
-    );
-  }
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    // Identify JSON-mode-unsupported responses and surface them as a
-    // dedicated error instead of silently retrying in plain mode.
-    const jsonModeRejected = /response_format|json[ _-]?mode|json_object/i.test(text)
-      && /unsupported|not supported|invalid|unrecognized|unknown|不支持|无效/i.test(text);
-    if (opts.jsonMode && res.status === 400 && jsonModeRejected) {
-      throw new LlmJsonModeUnsupportedError(summarizeUpstream(text));
+    let res: Response;
+    try {
+      res = await doFetch(opts.jsonMode);
+    } catch (err) {
+      opts.abortSignal?.throwIfAborted();
+      if (timeoutSignal.aborted) throw new LlmTimeoutError(opts.timeoutMs);
+      const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+      const causeCode = cause && typeof cause === "object" && "code" in cause
+        ? String((cause as { code?: unknown }).code ?? "") : "";
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(`LLM request failed [host=${new URL(url).hostname}]: ${reason}${causeCode ? ` (${causeCode})` : ""}`,
+        { cause: err });
     }
-    if (res.status === 429) throw setRateLimitCooldown(res, text);
-    throw new LlmCallFailedError(`LLM 调用失败：${res.status}`, {
-      status: res.status,
-      upstreamSummary: summarizeUpstream(text),
-    });
-  }
-
-  let data: {
-    choices?: { message?: { content?: string } }[];
-    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-  };
-  try {
-    data = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-    };
+    if (!res.ok) {
+      const text = courseGeneration ? await readCourseResponse(res) : await res.text().catch(() => "");
+      // A non-2xx payload that contains actual model output must not be
+      // classified as a pre-authoring provider refusal.
+      if (courseGeneration) {
+        try {
+          adoptResponse(JSON.parse(text) as LegacyChatCompletion);
+          if (content === undefined && reasoningCharacters > 0) rawResponse = text;
+        } catch { /* Keep only the safe error summary. */ }
+      }
+      const jsonModeRejected = /response_format|json[ _-]?mode|json_object/i.test(text)
+        && /unsupported|not supported|invalid|unrecognized|unknown|不支持|无效/i.test(text);
+      if (opts.jsonMode && res.status === 400 && jsonModeRejected) throw new LlmJsonModeUnsupportedError(summarizeUpstream(text));
+      if (res.status === 429) throw Object.assign(setRateLimitCooldown(res, text), { status: 429 });
+      throw new LlmCallFailedError(`LLM 调用失败：${res.status}`, { status: res.status, upstreamSummary: summarizeUpstream(text) });
+    }
+    if (courseGeneration) {
+      rawResponse = await readCourseResponse(res);
+      adoptResponse(JSON.parse(rawResponse) as LegacyChatCompletion);
+    } else {
+      adoptResponse(await res.json() as LegacyChatCompletion);
+    }
+    const finishReason = data?.choices?.[0]?.finish_reason;
+    const incomplete = courseGeneration && finishReason !== "stop";
+    await recordUsage(opts.abortSignal?.aborted ? "aborted" : incomplete || !content ? "failed" : "response");
+    opts.abortSignal?.throwIfAborted();
+    if (incomplete) {
+      throw Object.assign(new LlmCallFailedError(`LLM 回答未完成（${finishReason ?? "unknown finish_reason"}）`),
+        { code: "LLM_STREAM_INCOMPLETE", isRetryable: false });
+    }
+    if (!content) throw new LlmEmptyResponseError();
+    return content;
   } catch (error) {
-    if (timeoutSignal.aborted) throw new LlmTimeoutError(opts.timeoutMs);
-    throw error;
+    let failure: unknown = timeoutSignal.aborted && !opts.abortSignal?.aborted ? new LlmTimeoutError(opts.timeoutMs) : error;
+    if (courseGeneration && !usageRecorded) {
+      const rejected = !content?.length && reasoningCharacters === 0 && isFirstPassProviderRejection(failure);
+      try { await recordUsage(opts.abortSignal?.aborted ? "aborted" : "failed", rejected); }
+      catch (usageError) { failure = usageError; }
+    }
+    throw courseGeneration ? retainLegacyCourseResponse(failure, rawResponse, content, reasoningCharacters) : failure;
   }
-  const content = data.choices?.[0]?.message?.content;
-  const reportedTotal = data.usage?.total_tokens
-    ?? ((data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0) || undefined);
-  await reportCourseGenerationTokenUsage(
-    reportedTotal,
-    messages.reduce((sum, message) => sum + message.content.length, 0) + (content?.length ?? 0),
-  );
-  if (!content) throw new LlmEmptyResponseError();
-  return content;
 }
 
 function extractJson(text: string): unknown {

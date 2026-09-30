@@ -16,14 +16,18 @@ import { deriveCourseEntryPolicy, formatCourseEntryPolicy } from "@/lib/course-e
 import { DURABLE_GENERATION_TRANSIENT_RETRIES } from "@/lib/llm/request-policy";
 import type { GenerationReferenceMaterial } from "@/lib/course-design/generation-references";
 import type { CourseEvidenceSnapshot } from "@/lib/textbook/course-evidence-types";
+import { bindKnowledgeSourceSequenceReferences } from "@/lib/textbook/course-evidence-types";
+import { findKnowledgeSourceSequenceIssues } from "@/lib/textbook/course-visual-binding";
+export { findKnowledgeSourceSequenceIssues } from "@/lib/textbook/course-visual-binding";
 import { textbookTeachingBaseline, type TeachingOrderAdjustment } from "@/lib/textbook/teaching-order";
 import type { AICallFn } from "@/lib/openmaic/generation/pipeline-types";
-import { invalidGeneratedOutput, withGeneratedOutputRetry } from "@/lib/openmaic/generation/generated-output-retry";
+import { invalidGeneratedOutput, isInvalidGeneratedOutput } from "@/lib/openmaic/generation/generated-output-retry";
 import { jsonrepair } from "jsonrepair";
 
 type ModelCall = typeof callLLM;
 
-export const KNOWLEDGE_STRUCTURE_POLICY_VERSION = "textbook-evidence-mapping-v5-source-sequence";
+export const KNOWLEDGE_STRUCTURE_POLICY_VERSION = "textbook-evidence-mapping-v9-single-authoring";
+
 
 export type KnowledgeStructureGenerationContext = {
   /** Upstream teacher requirements; textbook-driven courses may map, split, or merge them into lesson-owned nodes. */
@@ -148,7 +152,7 @@ type OrderedKnowledgeStructure = Pick<CourseContent, "knowledgePoints"> & {
 };
 
 function teachingGroupKey(point: CourseContent["knowledgePoints"][number]): string {
-  return point.groupId?.trim() || point.groupName?.trim() || point.id;
+  return point.groupId?.trim() || point.groupName?.trim() || "__ungrouped__";
 }
 
 function stableTopologicalOrder(
@@ -329,6 +333,10 @@ function prepareKnowledgeStructureForTeacherReview(
     ...(input.learningObjectives ?? []),
   ].map((item) => item.trim()).filter(Boolean);
   const fallbackNames = instructedNames.length > 0 ? instructedNames : [input.name];
+  const singleAuthoring = parsed.authoringContract === "knowledge-v1";
+  if (!rawPoints.length) {
+    throw invalidGeneratedOutput(new Error("缺少模型实际生成的知识点"), "知识结构字段不完整");
+  }
   const pointSources: JsonRecord[] = rawPoints.length > 0
     ? rawPoints
     : fallbackNames.map((name) => ({ name } satisfies JsonRecord));
@@ -341,23 +349,105 @@ function prepareKnowledgeStructureForTeacherReview(
   const sourcePointById = new Map((context.teacherKnowledgePoints ?? []).map((point) => [point.id, point]));
   const sourcePointByName = new Map((context.teacherKnowledgePoints ?? []).map((point) => [normalizeKnowledgePointName(point.name), point]));
   const validEvidenceIds = new Set(context.textbookEvidence?.items.map((item) => item.id) ?? []);
+  const rawScopePlan = record(firstValue(nested, ["knowledgeScopePlan", "scopePlan", "scope"]));
+  const rawDecisions = !singleAuthoring && Array.isArray(rawScopePlan.decisions) ? rawScopePlan.decisions.map(record) : [];
+  const rawDecisionById = new Map<string, JsonRecord>();
+  const modelTargetCounts = new Map<string, number>();
+  pointSources.forEach((point) => {
+    const id = firstText(point, ["id", "key"]);
+    if (id) modelTargetCounts.set(id, (modelTargetCounts.get(id) ?? 0) + 1);
+  });
+  if (singleAuthoring && [...modelTargetCounts.values()].some((count) => count !== 1)) {
+    throw invalidGeneratedOutput(new Error("本课知识点 ID 重复"), "知识结构字段不完整");
+  }
+  const scopedTargetsBySource = new Map<string, Set<string>>();
+  const scopedSourcesByTarget = new Map<string, string[]>();
+  const normalizedTargetIds = new Map<string, string>();
+  const originalTargetIds = new Map<string, string>();
+  const mappingError = (detail: string): never => {
+    throw invalidGeneratedOutput(new Error(detail), "教材来源映射字段不一致");
+  };
+  const mappingIds = (value: unknown, field: string): string[] => {
+    if (!Array.isArray(value)) mappingError(`${field} 必须是 ID 数组`);
+    const ids = (value as unknown[]).map((id) => {
+      if (typeof id !== "string" || !id.trim()) mappingError(`${field} 包含无效 ID`);
+      return (id as string).trim();
+    });
+    if (new Set(ids).size !== ids.length) mappingError(`${field} 包含重复 ID`);
+    return ids;
+  };
+  for (const decision of rawDecisions) {
+    const sourceId = firstText(decision, ["sourceKnowledgePointId", "sourceId"]);
+    if (!textbookDriven) {
+      if (sourceId) rawDecisionById.set(sourceId, decision);
+      continue;
+    }
+    if (!sourcePointById.has(sourceId)) mappingError(`knowledgeScopePlan 引用了未知来源 ${sourceId || "（空）"}`);
+    if (rawDecisionById.has(sourceId)) mappingError(`knowledgeScopePlan 对来源 ${sourceId} 重复给出决策`);
+    rawDecisionById.set(sourceId, decision);
+    const disposition = firstText(decision, ["disposition"]);
+    if (disposition && disposition !== "mapped") mappingError(`来源 ${sourceId} 的 ${disposition} 决策不能替代必授映射`);
+    const targetValues = firstValue(decision, ["targetKnowledgePointIds", "targetIds"]);
+    const primaryValue = firstValue(decision, ["targetKnowledgePointId", "targetId"]);
+    // Earlier drafts supplied only a decision rationale. That metadata does
+    // not assert adoption; complete point-level mappings remain authoritative.
+    if (targetValues === undefined && primaryValue === undefined && !disposition) continue;
+    const primary = primaryValue === undefined ? undefined : mappingIds([primaryValue], `来源 ${sourceId} 的主要目标`)[0];
+    const targets = targetValues === undefined
+      ? (primary ? [primary] : []) : mappingIds(targetValues, `来源 ${sourceId} 的目标`);
+    if (!targets.length) mappingError(`来源 ${sourceId} 缺少实际课程目标`);
+    if (primary && !targets.includes(primary)) mappingError(`来源 ${sourceId} 的主要目标 ${primary} 不在其目标列表中`);
+    for (const targetId of targets) {
+      const count = modelTargetCounts.get(targetId) ?? 0;
+      if (count !== 1) mappingError(`来源 ${sourceId} 引用了${count ? "身份重复" : "未知"}的课程目标 ${targetId}`);
+      scopedSourcesByTarget.set(targetId, [...(scopedSourcesByTarget.get(targetId) ?? []), sourceId]);
+    }
+    scopedTargetsBySource.set(sourceId, new Set(targets));
+  }
   const addPoint = (source: JsonRecord, fallbackIndex: number) => {
     const name = firstText(source, ["name", "label", "title", "knowledgePoint"])
       || fallbackNames[fallbackIndex]
       || `${input.name}核心知识 ${fallbackIndex + 1}`;
     const normalizedName = normalizeKnowledgePointName(name);
     const confirmed = sourcePointByName.get(normalizedName);
+    if (singleAuthoring && (!normalizedName || usedPointNames.has(normalizedName))) {
+      throw invalidGeneratedOutput(new Error("知识点名称缺失或重复"), "知识结构字段不完整");
+    }
     if (!normalizedName || usedPointNames.has(normalizedName)) return;
-    const suppliedSourceIds = Array.isArray(firstValue(source, ["sourceKnowledgePointIds", "sourceIds"]))
-      ? (firstValue(source, ["sourceKnowledgePointIds", "sourceIds"]) as unknown[])
+    const modelTargetId = firstText(source, ["id", "key"]);
+    const sourceIdsValue = firstValue(source, ["sourceKnowledgePointIds", "sourceIds"]);
+    if (singleAuthoring && sourcePointById.size && !Array.isArray(sourceIdsValue)) {
+      mappingError(`课程目标 ${modelTargetId || name} 缺少显式 sourceKnowledgePointIds`);
+    }
+    if (singleAuthoring && Array.isArray(source.evidenceItemIds)
+      && source.evidenceItemIds.some((id) => typeof id !== "string" || !validEvidenceIds.has(id))) {
+      mappingError(`课程目标 ${modelTargetId || name} 引用了未知教材证据`);
+    }
+    const suppliedSourceIds = textbookDriven && sourceIdsValue !== undefined
+      ? mappingIds(sourceIdsValue, `课程目标 ${modelTargetId || name} 的来源`)
+      : Array.isArray(sourceIdsValue)
+        ? (sourceIdsValue as unknown[])
           .filter((value): value is string => typeof value === "string" && sourcePointById.has(value))
-      : [];
+        : [];
+    const scopedSourceIds = textbookDriven ? scopedSourcesByTarget.get(modelTargetId) ?? [] : [];
+    if (textbookDriven) {
+      for (const sourceId of suppliedSourceIds) {
+        if (!sourcePointById.has(sourceId)) mappingError(`课程目标 ${modelTargetId || name} 引用了未知来源 ${sourceId}`);
+        const targets = scopedTargetsBySource.get(sourceId);
+        if (targets && !targets.has(modelTargetId)) mappingError(`课程目标 ${modelTargetId || name} 的来源 ${sourceId} 与 knowledgeScopePlan 目标冲突`);
+      }
+      if (sourceIdsValue !== undefined) for (const sourceId of scopedSourceIds) {
+        if (!suppliedSourceIds.includes(sourceId)) mappingError(`knowledgeScopePlan 将来源 ${sourceId} 绑定到 ${modelTargetId}，但该目标显式来源不包含它`);
+      }
+    }
     const sourceKnowledgePointIds = [...new Set([
       ...suppliedSourceIds,
-      ...(confirmed ? [confirmed.id] : []),
+      ...scopedSourceIds,
+      ...(confirmed && (!textbookDriven || sourceIdsValue === undefined && !scopedSourceIds.length
+        && !scopedTargetsBySource.has(confirmed.id)) ? [confirmed.id] : []),
     ])].filter((id) => textbookDriven || !usedSourcePointIds.has(id));
     const sourceKnowledgePoints = sourceKnowledgePointIds.map((id) => sourcePointById.get(id)!).filter(Boolean);
-    const requestedId = (confirmed && sourceKnowledgePointIds.length === 1)
+    const requestedId = (confirmed && sourceKnowledgePointIds.length === 1 && sourceKnowledgePointIds[0] === confirmed.id)
       ? confirmed.id
       : firstText(source, ["id", "key"]);
     let id = requestedId && !usedPointIds.has(requestedId)
@@ -377,10 +467,10 @@ function prepareKnowledgeStructureForTeacherReview(
     const requestedGroupName = firstText(source, ["groupName", "group_name", "sectionTitle", "section_title"]);
     const groupName = requestedGroupName
       || inheritedGroup?.groupName
-      || name;
+      || "本课核心知识";
     const groupId = firstText(source, ["groupId", "group_id", "sectionId", "section_id"])
       || inheritedGroup?.groupId
-      || (requestedGroupName ? `section-${normalizeKnowledgePointName(requestedGroupName)}` : `section-${id}`);
+      || (requestedGroupName ? `section-${normalizeKnowledgePointName(requestedGroupName)}` : "section-unplanned");
     const objectiveIndexes = Array.isArray(source.objectiveIndexes)
       ? [...new Set(source.objectiveIndexes.filter((value): value is number =>
           typeof value === "number"
@@ -391,6 +481,10 @@ function prepareKnowledgeStructureForTeacherReview(
       : [];
     usedPointIds.add(id);
     usedPointNames.add(normalizedName);
+    if (modelTargetId && modelTargetCounts.get(modelTargetId) === 1) {
+      normalizedTargetIds.set(modelTargetId, id);
+      originalTargetIds.set(id, modelTargetId);
+    }
     sourceKnowledgePointIds.forEach((sourceId) => usedSourcePointIds.add(sourceId));
     knowledgePoints.push({
       id,
@@ -436,6 +530,11 @@ function prepareKnowledgeStructureForTeacherReview(
         "教材化知识结构缺少上游要求映射",
       );
     }
+  } else if (singleAuthoring && sourcePointById.size > 0) {
+    pointSources.forEach(addPoint);
+    const missing = [...sourcePointById.keys()].filter((id) => !knowledgePoints.some((point) =>
+      point.id === id && point.sourceKnowledgePointIds?.includes(id)));
+    if (missing.length) throw invalidGeneratedOutput(new Error(missing.join("、")), "知识结构缺少必授来源节点");
   } else if (sourcePointById.size > 0) {
     // Resource-package leaves are the teacher-confirmed content floor. A model
     // may enrich them or recommend that related leaves share one explanation,
@@ -475,8 +574,6 @@ function prepareKnowledgeStructureForTeacherReview(
         description: sourcePoint.description
           || firstText(candidate, ["description", "summary", "explanation"]),
         sourceKnowledgePointIds: [sourcePoint.id],
-        groupId: sourcePoint.groupId,
-        groupName: sourcePoint.groupName,
       }, knowledgePoints.length);
     }
     pointSources.forEach((source, index) => {
@@ -525,11 +622,11 @@ function prepareKnowledgeStructureForTeacherReview(
   const rawNodeById = new Map(rawNodes.map((node) => [firstText(node, ["id", "key"]), node]));
   for (const point of knowledgePoints) {
     const pointSource = pointSources.find((source) => (
-      firstText(source, ["id", "key"]) === point.id
+      firstText(source, ["id", "key"]) === (originalTargetIds.get(point.id) ?? point.id)
       || normalizeKnowledgePointName(firstText(source, ["name", "label", "title", "knowledgePoint"]))
         === normalizeKnowledgePointName(point.name)
     ));
-    const graphSource = rawNodeById.get(point.id);
+    const graphSource = rawNodeById.get(originalTargetIds.get(point.id) ?? point.id);
     const requestedParents = [pointSource, graphSource].flatMap((source) => {
       if (!source) return [];
       const values = firstValue(source, ["parentKnowledgePointIds", "parentIds"]);
@@ -538,6 +635,8 @@ function prepareKnowledgeStructureForTeacherReview(
     const resolvedParents = requestedParents.flatMap((value) => {
       if (typeof value !== "string") return [];
       const trimmed = value.trim();
+      const normalizedId = normalizedTargetIds.get(trimmed);
+      if (normalizedId) return [normalizedId];
       if (pointById.has(trimmed)) return [trimmed];
       const id = pointIdByName.get(normalizeKnowledgePointName(trimmed));
       return id ? [id] : [];
@@ -549,7 +648,7 @@ function prepareKnowledgeStructureForTeacherReview(
     if (parentKnowledgePointIds.length) point.parentKnowledgePointIds = parentKnowledgePointIds;
   }
   const lessonNodes: KnowledgeGraph["nodes"] = knowledgePoints.map((point) => {
-    const source = rawNodeById.get(point.id) ?? {};
+    const source = rawNodeById.get(originalTargetIds.get(point.id) ?? point.id) ?? {};
     return {
       id: point.id,
       label: point.name,
@@ -572,7 +671,7 @@ function prepareKnowledgeStructureForTeacherReview(
   });
   const usedNodeIds = new Set(knowledgePoints.map((point) => point.id));
   const usedNodeNames = new Set(knowledgePoints.map((point) => normalizeKnowledgePointName(point.name)));
-  const endpointAliases = new Map(knowledgePoints.map((point) => [point.id, point.id]));
+  const endpointAliases = new Map([...knowledgePoints.map((point) => [point.id, point.id] as const), ...normalizedTargetIds]);
   [...rawNodes, ...rawPoints].forEach((source) => {
     const rawId = firstText(source, ["id", "key"]);
     const label = firstText(source, ["label", "name", "title"]);
@@ -708,17 +807,11 @@ function prepareKnowledgeStructureForTeacherReview(
   knowledgePoints.forEach((point) => point.sourceKnowledgePointIds?.forEach((sourceId) => {
     sourceTargets.set(sourceId, [...(sourceTargets.get(sourceId) ?? []), point]);
   }));
-  const rawScopePlan = record(firstValue(nested, ["knowledgeScopePlan", "scopePlan", "scope"]));
-  const rawDecisions = Array.isArray(rawScopePlan.decisions) ? rawScopePlan.decisions.map(record) : [];
-  const rawDecisionById = new Map(rawDecisions.flatMap((decision) => {
-    const sourceId = firstText(decision, ["sourceKnowledgePointId", "sourceId"]);
-    return sourceId ? [[sourceId, decision] as const] : [];
-  }));
   const sourcePoints = context.teacherKnowledgePoints ?? [];
   const rawScopePreservesEverySource = sourcePoints.every((sourcePoint) => {
     const decision = rawDecisionById.get(sourcePoint.id);
     return textbookDriven
-      ? Boolean(decision && sourceTargets.get(sourcePoint.id)?.length)
+      ? Boolean((singleAuthoring || decision) && sourceTargets.get(sourcePoint.id)?.length)
       : firstText(decision ?? {}, ["disposition"]) === "standalone"
         && firstText(decision ?? {}, ["targetKnowledgePointId", "targetId"]) === sourcePoint.id;
   });
@@ -743,7 +836,7 @@ function prepareKnowledgeStructureForTeacherReview(
           const targets = sourceTargets.get(sourcePoint.id) ?? [];
           const rawDecision = rawDecisionById.get(sourcePoint.id);
           const rawDecisionPreservesSource = textbookDriven
-            ? Boolean(rawDecision && targets.length)
+            ? Boolean((singleAuthoring || rawDecision) && targets.length)
             : firstText(rawDecision ?? {}, ["disposition"]) === "standalone"
               && firstText(rawDecision ?? {}, ["targetKnowledgePointId", "targetId"]) === sourcePoint.id;
           const disposition = textbookDriven ? "mapped" as const : "standalone" as const;
@@ -810,7 +903,9 @@ function prepareKnowledgeStructureForTeacherReview(
       && (finalIndex.get(adjustment.knowledgePointId) ?? -1) < (finalIndex.get(adjustment.beforeKnowledgePointId) ?? -1)
     ))],
   } : undefined;
-  return { ...ordered, ...(knowledgeScopePlan ? { knowledgeScopePlan: {
+  return { ...ordered,
+    knowledgePoints: bindKnowledgeSourceSequenceReferences(ordered.knowledgePoints, context.textbookEvidence),
+    ...(knowledgeScopePlan ? { knowledgeScopePlan: {
     ...knowledgeScopePlan, ...(teachingOrder ? { teachingOrder } : {}),
   } } : {}) };
 }
@@ -828,23 +923,34 @@ export async function generateKnowledgeStructureOnce(
     modelCall?: ModelCall;
     aiCall?: AICallFn;
     retrySleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+    /** Identity-checked saved response; validating it does not make another request. */
+    initialResponse?: string;
+    /** Persist complete visible text before parsing, including malformed drafts. */
+    onCandidate?: (candidate: { rawResponse: string; attempt: number }) => Promise<void> | void;
+    onRejected?: (candidate: { rawResponse: string; attempt: number; issues: string[] }) => Promise<void> | void;
   } = {},
 ): Promise<ReviewedKnowledgeStructure> {
   const prompt = buildKnowledgeGraphPrompt(input, context);
   const messages = [
     { role: "system", content: `${prompt.system}\n上游节点中的 teachingRole=core-concept 表示该父概念自身具有教学含义，必须作为基本含义、核心主张及其与下位知识关系的解释责任保留，不能降为分组标签。parentKnowledgePointId 指出的下位机制、原则或应用必须在上位概念建立之后或同页展开。纯目录不会带 core-concept 标记，不得为目录机械新增课程节点。masteryBoundary 表示学生完成本课后应达到的可观察表现，不代表学生在课程开始前已经掌握。目录和学习目标可以预告后续概念名称，但前段讲解、例子、比较和练习不得把尚未讲授的概念当作已知；跨概念综合判断只能安排在相关概念均已建立之后。` },
     { role: "user", content: [prompt.user,
-      "缺乏明确依据的先修关系保留待核对，不能按节点顺序或为了连通图谱编造必要关系。课程目标映射也必须有实质依据。"].join("\n\n") },
+      "缺乏明确依据的先修关系保留待核对，不能按节点顺序或为了连通图谱编造必要关系。课程目标映射也必须有实质依据。",
+      "description 和 keyInfo 是准确的课程知识摘要，完整教材列表由所采用 evidenceItemIds 的原始步骤合同传给后续教学设计，不要把摘要当作已讲授全文。摘要中的数量和流程顺序必须与对应来源一致；若宣称列出完整流程或全部条目，须逐项保留该列表，不得用‘等’隐藏遗漏。sourceSequenceReferences 由系统按当前来源身份、版本和完整原文机械绑定，不由模型编造或改写。"].join("\n\n") },
   ] as const;
-  return withGeneratedOutputRetry(async () => {
-    const raw = options.aiCall
+  const attempt = 1;
+  const restoring = options.initialResponse !== undefined;
+  const raw = restoring ? options.initialResponse!
+    : options.aiCall
       ? await options.aiCall(messages[0].content, messages[1].content)
       : await (options.modelCall ?? callLLM)([...messages], {
           jsonMode: true,
           abortSignal: options.abortSignal,
           requestClass: "long-generation",
-          maxTransientRetries: DURABLE_GENERATION_TRANSIENT_RETRIES,
+          maxTransientRetries: 0,
         });
+  // Persist before validation; a storage failure never replays the completed call.
+  if (!restoring) await options.onCandidate?.({ rawResponse: raw, attempt });
+  try {
     if (!raw.trim()) {
       throw invalidGeneratedOutput(new Error("模型仅返回推理过程，没有可用正文"), "知识结构模型输出为空");
     }
@@ -858,14 +964,18 @@ export async function generateKnowledgeStructureOnce(
     if (!prepared.knowledgePoints.length || !prepared.knowledgeGraph.nodes.length) {
       throw invalidGeneratedOutput(new Error("缺少可用知识点或图谱节点"), "知识结构字段不完整");
     }
+    const sourceSequenceIssues = findKnowledgeSourceSequenceIssues(prepared.knowledgePoints, context.textbookEvidence);
+    if (sourceSequenceIssues.length) {
+      throw invalidGeneratedOutput(new Error(sourceSequenceIssues.join("；")), "知识结构教材列表声明不一致");
+    }
     delete prepared.knowledgeGraph.semanticReview;
     return { ...prepared, revisionCount: 0 };
-  }, {
-    label: "knowledge-structure-output",
-    signal: options.abortSignal,
-    maxRetries: 2,
-    sleep: options.retrySleep,
-  });
+  } catch (error) {
+    if (!isInvalidGeneratedOutput(error)) throw error;
+    await options.onRejected?.({ rawResponse: raw, attempt, issues: [error.message] });
+    throw error;
+  }
+
 }
 
 export function buildKnowledgeStructureAuditMessages(
@@ -1186,6 +1296,9 @@ export async function generateReviewedKnowledgeStructure(
         continue;
       }
     }
+    normalized = { ...normalized,
+      knowledgePoints: bindKnowledgeSourceSequenceReferences(normalized.knowledgePoints, context.textbookEvidence),
+    };
     const entryPolicy = deriveCourseEntryPolicy({
       hours: input.hours,
       grade: input.grade,
@@ -1204,8 +1317,10 @@ export async function generateReviewedKnowledgeStructure(
         maximumPrerequisites: entryPolicy.maximumPrerequisites,
       },
     );
-    if (!structural.ok) {
-      latestIssues = structural.issues;
+    const sourceSequenceIssues = findKnowledgeSourceSequenceIssues(normalized.knowledgePoints,
+      context.textbookEvidence);
+    if (!structural.ok || sourceSequenceIssues.length) {
+      latestIssues = [...structural.issues, ...sourceSequenceIssues];
       correction = latestIssues.join("；");
       if (attempt < maxAttempts - 1) {
         const structuralReview: KnowledgeStructureSemanticReview = {

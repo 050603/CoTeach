@@ -4,6 +4,9 @@ import type { PPTElement } from '@openmaic/dsl';
 import type { GeneratedSlideContent, SceneOutline } from '@openmaic/lib/types/generation';
 import type { RenderedElement, VisibleRect } from '@/lib/course-quality-review/render-measurements';
 import { auditGeneratedSlide } from './slide-quality';
+import { canonicalVisibleContent } from './semantic-page-capacity';
+import { adoptedPageAuthoringContent } from './adopted-page-content';
+import { nativeTextRelationCaption } from './native-text-placement';
 
 export type SlideLayoutAuditStatus = 'checked' | 'unavailable';
 
@@ -306,18 +309,58 @@ export function slideKnowledgeCoverage(
   return represented / meaningful.length;
 }
 
-/**
- * The PPT contract is broader than the concise outline key points. In
- * particular, first-introduced concept definitions compiled into
- * teachingPlan.visibleContent must stay visible even when the key point uses a
- * short label. Keep one combined set for first generation scoring and the
- * existing single repair opportunity.
- */
+/** Adopted presentation points own the display contract. Original source prose
+ * and narration remain under their independent source/teaching acceptance gates.
+ * Historical drafts without that projection retain their existing obligations. */
 export function slideRequiredVisibleStatements(outline: SceneOutline): string[] {
+  const adopted = canonicalVisibleContent({ proposed: outline.teachingBrief?.teachingPlan?.presentationContent });
+  if (adopted.length) return adopted;
   return [...new Set([
     ...outline.keyPoints,
     ...(outline.teachingBrief?.teachingPlan?.visibleContent ?? []),
   ].map((statement) => statement.trim()).filter(Boolean))];
+}
+
+function exactVisibleText(value: string): string {
+  return value.replace(/<[^>]+>/gu, '')
+    .replace(/&(nbsp|amp|lt|gt|quot|apos|#39);/giu, (_, entity: string) => ({
+      nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'",
+    } as Record<string, string>)[entity.toLowerCase()] ?? '')
+    .replace(/&#(x[\da-f]+|\d+);/giu, (_, number: string) => {
+      const code = number[0]?.toLowerCase() === 'x' ? parseInt(number.slice(1), 16) : Number(number);
+      return code <= 0x10ffff ? String.fromCodePoint(code) : '';
+    }).normalize('NFKC').replace(/\s+/gu, '').toLocaleLowerCase();
+}
+
+function displayedContentElements(elements: readonly PPTElement[]): PPTElement[] {
+  return elements.filter((element) => 'height' in element && element.width > 0 && element.height > 0
+    && element.left >= 0 && element.top >= 0 && element.left + element.width <= 1000.5
+    && element.top + element.height <= 563
+    && (!('opacity' in element) || element.opacity === undefined || element.opacity > 0)
+    && !/(?:display\s*:\s*none|visibility\s*:\s*hidden|(?:opacity|font-size)\s*:\s*0(?:px|[;"\s])|color\s*:\s*transparent)/iu.test(elementVisibleTextHtml(element)));
+}
+
+function elementVisibleTextHtml(element: PPTElement): string {
+  return element.type === 'text' ? element.content : element.type === 'shape' ? element.text?.content ?? '' : '';
+}
+
+function completeVisibleStatement(statement: string, elements: readonly PPTElement[]): boolean {
+  const expected = exactVisibleText(statement);
+  return expected.length > 0 && elements.some((element) => exactVisibleText(elementVisibleText(element)).includes(expected));
+}
+
+/** The complete literal relationship caption is native semantic evidence only
+ * when it and every separate adopted definition are actually present/readable.
+ * Metadata, narration, partial chains and hidden objects never earn this credit. */
+function hasCompleteVisibleRelationCaption(outline: SceneOutline, elements: readonly PPTElement[]): boolean {
+  const adopted = adoptedPageAuthoringContent(outline);
+  if (outline.visualIntent?.resourceRefs?.some((ref) => ref.required) || outline.suggestedImageIds?.length
+    || outline.mediaGenerations?.length || !nativeTextRelationCaption(outline, adopted)) return false;
+  const texts = displayedContentElements(elements).filter((element) => element.type === 'text'
+    && [...element.content.matchAll(/font-size\s*:\s*([\d.]+)px/giu)].length > 0
+    && [...element.content.matchAll(/font-size\s*:\s*([\d.]+)px/giu)].every((match) => Number(match[1]) >= 22));
+  const matches = adopted.map((point) => texts.find((element) => completeVisibleStatement(point.text, [element])));
+  return adopted.length > 1 && matches.every(Boolean) && new Set(matches).size === adopted.length;
 }
 
 function keyPointCoverage(keyPoint: string, elements: readonly PPTElement[]): number {
@@ -560,6 +603,23 @@ function missingComparisonLabels(outline: SceneOutline, elements: readonly PPTEl
 
 
 function requiredSemanticKind(outline: SceneOutline): string | undefined {
+  const relationship = outline.teachingBrief?.teachingPlan?.visualRelationship;
+  if (outline.visualIntent?.diagram || relationship?.diagram || outline.visualIntent?.representation === 'native-diagram') return 'relationship';
+  if (outline.visualIntent?.representation === 'table' || relationship?.preferredForm === 'table') return 'comparison';
+  if (outline.visualIntent?.representation === 'native-chart' || relationship?.preferredForm === 'chart') return 'data';
+  if (relationship) {
+    if (relationship.kind === 'comparison') return 'comparison';
+    if (relationship.kind === 'quantitative') return 'data';
+    if (relationship.kind === 'process' || relationship.kind === 'sequence') return 'process';
+    if (['causal', 'system', 'spatial'].includes(relationship.kind) || relationship.preferredForm === 'diagram') return 'relationship';
+    // The confirmed page's statement/text duty takes precedence over incidental
+    // comparison words in its introduction/title. Explicit visual topology above
+    // remains authoritative; this does not reclassify real comparisons.
+    if (relationship.kind === 'statement' && relationship.preferredForm === 'text') {
+      if (/箭头|连线|连接线|分支|循环|反馈|回路|arrow|connector|branch|cycle|feedback/iu.test(`${relationship.description} ${outline.visualIntent?.observationGoal ?? ''}`)) return 'relationship';
+      return undefined;
+    }
+  }
   const text = `${outline.title}\n${outline.description}\n${outline.keyPoints.join('\n')}`.toLocaleLowerCase();
   if (/\[table\]|比较|对比|异同|区别|矩阵|表格|compare|versus|\bvs\b/.test(text)) return 'comparison';
   // A classic outline sometimes marks a flow illustration as `[Chart]`.
@@ -629,7 +689,8 @@ function satisfiesSemanticKind(kind: string | undefined, structures: readonly st
   if (kind === 'comparison') {
     return structures.some((value) => value === 'table' || value === 'connector' || value === 'grouped-shapes');
   }
-  return structures.some((value) => value === 'connector' || value === 'grouped-shapes' || value === 'table');
+  return structures.some((value) => value === 'connector' || value === 'grouped-shapes' || value === 'table'
+    || kind === 'relationship' && value === 'text-relation-caption');
 }
 
 type Interval = { start: number; end: number };
@@ -740,9 +801,15 @@ export function auditSlideDensity(
   const visibleCharacters = visibleTextCharacters(content.elements);
   const verticalSpan = instructionalVerticalSpan(content.elements);
   const requiredVisibleStatements = slideRequiredVisibleStatements(outline);
-  const knowledgeCoverage = slideKnowledgeCoverage(requiredVisibleStatements, content.elements);
+  const hasAdoptedProjection = Boolean(outline.teachingBrief?.teachingPlan?.presentationContent?.some((point) => point.trim()));
+  const displayElements = displayedContentElements(content.elements);
+  const pointCoverage = (point: string) => hasAdoptedProjection
+    ? Number(completeVisibleStatement(point, displayElements)) : keyPointCoverage(point, content.elements);
+  const knowledgeCoverage = hasAdoptedProjection
+    ? requiredVisibleStatements.filter((point) => pointCoverage(point) === 1).length / Math.max(1, requiredVisibleStatements.length)
+    : slideKnowledgeCoverage(requiredVisibleStatements, content.elements);
   const underrepresentedKeyPoints = requiredVisibleStatements
-    .map((keyPoint) => ({ keyPoint, coverage: keyPointCoverage(keyPoint, content.elements) }))
+    .map((keyPoint) => ({ keyPoint, coverage: pointCoverage(keyPoint) }))
     .filter((item) => item.coverage < 0.3)
     .sort((a, b) => a.coverage - b.coverage);
   const area = contentAreaMetrics(content.elements);
@@ -750,10 +817,12 @@ export function auditSlideDensity(
   const subtitle = hasIndependentSubtitle(outline, content.elements);
   const requiredStructure = requiredSemanticKind(outline);
   const structures = semanticStructures(content.elements);
+  const completeRelationCaption = hasCompleteVisibleRelationCaption(outline, content.elements);
+  if (completeRelationCaption) structures.push('text-relation-caption');
   const structureSatisfied = satisfiesSemanticKind(requiredStructure, structures);
-  const hasSemanticEvidence = content.elements.some((element) =>
+  const hasSemanticEvidence = displayElements.some((element) =>
     ['image', 'video', 'chart', 'latex', 'code'].includes(element.type),
-  ) || structures.includes('connector');
+  ) || structures.includes('connector') || completeRelationCaption;
   const paletteDeviationCount = paletteDeviations(content);
   const absentComparisonLabels = missingComparisonLabels(outline, content.elements);
   const hasMedia = content.elements.some((element) => element.type === 'image' || element.type === 'video');
@@ -827,7 +896,9 @@ export function buildLayoutRepairDirective(
   return [
     audit.issues.length
       ? '只修复下面由实际浏览器渲染确认的排版问题。保留原有事实、教学要点、媒体和未被点名的对象；不得增加或删除知识内容。'
-      : '浏览器未发现溢出，但静态内容测量确认页面过疏。不得编造新事实；只把现有 description、keyPoints 与媒体所承载的知识组织得更完整。',
+      : densityIssues.length
+        ? '浏览器未发现溢出，但静态内容测量确认页面过疏。不得编造新事实；只把现有 description、keyPoints 与媒体所承载的知识组织得更完整。'
+        : '浏览器与共享内容验收均未发现需要修改的问题。保留已通过的原稿，不补充文字或重写内容。',
     ...audit.issues.map((issue, index) => `排版 ${index + 1}. ${issue}`),
     ...densityIssues.map((issue, index) => `密度 ${index + 1}. ${issue}`),
     ...(wholeBodyRepair ? [
@@ -841,7 +912,7 @@ export function buildLayoutRepairDirective(
       ),
       '返回前逐项核对上述要点是否都能被学生直接看到。用两栏、2×2 分组、原生表格或带连线的流程分散承载，避免挤成一个长段落；不得删除现有正确内容。',
     ] : []),
-    ...(density && density.visibleTextCharacters < 150 ? [
+    ...(density?.issues.some((issue) => issue.includes('低于 150')) ? [
       `当前普通讲授页只有 ${density.visibleTextCharacters} 个有效可见字符。最终页面至少呈现 150 个有效中英文字符：逐条展开现有 description/keyPoints，每条用标题或关系标签加一至两句可扫读说明；只能重组和显化已有事实，不得补充外部常识或新事实。`,
     ] : []),
     ...(hasBlockCollision ? [

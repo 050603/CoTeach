@@ -258,7 +258,7 @@ export function QuickGenerationStage({
                   onClick={onRetry}
                   type="button"
                 >
-                  <RotateCcw className="size-3.5" />{retrying ? "正在继续" : "从已完成页面继续"}
+                  <RotateCcw className="size-3.5" />{retrying ? "正在启动" : "重生成失败阶段"}
                 </button>
               ) : completed ? (
                 <button className="inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-md)] bg-[var(--pbl-teacher)] px-3.5 text-[11px] font-semibold text-white shadow-sm transition hover:bg-[var(--pbl-teacher-hover)]" onClick={onOpenCourse} type="button">

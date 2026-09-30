@@ -207,7 +207,7 @@ describe("new-system AI duration judgment", () => {
     expect(modelCall).not.toHaveBeenCalled();
   });
 
-  it("retries only when the duration response cannot be parsed", async () => {
+  it("stops only when the duration response cannot be parsed", async () => {
     const aiCall = vi.fn()
       .mockResolvedValueOnce('{"durationMin":')
       .mockResolvedValueOnce(JSON.stringify({
@@ -220,13 +220,11 @@ describe("new-system AI duration judgment", () => {
         ],
       }));
 
-    const result = await generateNewSystemAiDurationRecommendation(durationInput(), {
+    await expect(generateNewSystemAiDurationRecommendation(durationInput(), {
       aiCall,
       retrySleep: async () => undefined,
-    });
-
-    expect(result.durationMin).toBe(36);
-    expect(aiCall).toHaveBeenCalledTimes(2);
+    })).rejects.toThrow();
+    expect(aiCall).toHaveBeenCalledTimes(1);
   });
 
   it.each([79, 150])("caps an overlong %i minute judgment at 40 percent", (durationMin) => {
@@ -372,7 +370,45 @@ describe("new-system AI duration judgment", () => {
         { clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 16, rationale: "概念" },
         { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 20, rationale: "应用" },
       ],
-    }, input)).toThrow("未落实教学重点");
+    }, input)).toThrow("未进入任何知识簇预算");
+  });
+
+  it("assigns shared-source priorities to one cluster while requiring every distinct source topic", () => {
+    const input = durationInput();
+    input.knowledgePoints[0]!.sourceKnowledgePointIds = ["source-theory"];
+    input.knowledgePoints[1]!.sourceKnowledgePointIds = ["source-theory"];
+    input.teachingRequirements = {
+      schemaVersion: 1,
+      items: [
+        { id: "highlight-theory", kind: "highlight", source: "resource-package", text: "解释共同理论。", responsibility: "instruction", sourceKnowledgePointIds: ["source-theory"] },
+        { id: "difficulty-theory", kind: "difficulty", source: "resource-package", text: "抽象机制难以理解。", responsibility: "instruction", sourceKnowledgePointIds: ["source-theory"] },
+        { id: "student-task", kind: "stage-requirement", source: "resource-package", text: "向 AI 提问并记录定义。", responsibility: "learner-activity", sourceKnowledgePointIds: [] },
+      ],
+      conflicts: [],
+    };
+    const raw = {
+      durationMin: 36,
+      rationale: "两个知识簇共享理论介绍，后续知识簇用于练习。",
+      teachingClusterBudgets: [
+        { clusterId: "teaching-cluster-1", knowledgePointIds: ["kp-1"], durationMin: 16, rationale: "讲解共同理论和具体障碍", requirementIds: ["highlight-theory", "difficulty-theory"], difficultyStrategies: [{ requirementId: "difficulty-theory", learnerObstacle: "将变化误当成静态定义", teachingApproach: "比较同一场景的两轮判断并解释差异", understandingEvidence: "能指出变化发生在哪一步" }] },
+        { clusterId: "teaching-cluster-2", knowledgePointIds: ["kp-2"], durationMin: 20, rationale: "用已建立的概念作练习" },
+      ],
+    };
+    expect(normalizeNewSystemAiDurationRecommendation(raw, input).teachingClusterBudgets[1]?.requirementIds).toBeUndefined();
+    const messages = buildNewSystemAiDurationMessages(input);
+    expect(messages[0].content).toContain("不要求每个相关簇重复落实");
+    expect(messages[1].content).not.toContain('"id":"student-task"');
+
+    input.knowledgePoints[1]!.sourceKnowledgePointIds = ["source-activity"];
+    input.teachingRequirements.items[0]!.sourceKnowledgePointIds = ["source-theory", "source-activity"];
+    expect(() => normalizeNewSystemAiDurationRecommendation(raw, input)).toThrow('知识主题“source-activity”未进入任何知识簇预算');
+    const bothTopics = {
+      ...raw,
+      teachingClusterBudgets: [raw.teachingClusterBudgets[0], { ...raw.teachingClusterBudgets[1], requirementIds: ["highlight-theory"] }],
+    };
+    expect(normalizeNewSystemAiDurationRecommendation(bothTopics, input).teachingClusterBudgets[1]?.requirementIds).toEqual(["highlight-theory"]);
+    input.knowledgePoints[1]!.sourceKnowledgePointIds = ["unrelated-topic"];
+    expect(() => normalizeNewSystemAiDurationRecommendation(raw, input)).toThrow('知识主题“source-activity”未纳入本次知识讲授范围');
   });
 
   it("assigns a global priority requirement to exactly one relevant cluster", () => {
@@ -407,4 +443,49 @@ describe("new-system AI duration judgment", () => {
       })),
     }, input)).toThrow("必须只安排到一个最相关的知识簇");
   });
+});
+
+it("authors only relative effort once and does not add a second difficulty multiplier", async () => {
+  const input = durationInput();
+  input.knowledgePoints[0]!.sourceKnowledgePointIds = ["source-energy"];
+  input.teachingRequirements = { schemaVersion: 1, conflicts: [], items: [
+    { id: "difficulty-energy", kind: "difficulty", source: "resource-package", responsibility: "instruction",
+      text: "区分功率与能耗。", sourceKnowledgePointIds: ["source-energy"] },
+  ] };
+  const raw = { authoringContract: "duration-v1", durationMin: 36, rationale: "投入已经考虑概念难点和判断练习。",
+    teachingClusterBudgets: [
+      { clusterId: "teaching-cluster-1", relativeWeight: 1, rationale: "区分功率和累计能耗需要具体比较。", requirementIds: ["difficulty-energy"] },
+      { clusterId: "teaching-cluster-2", relativeWeight: 1, rationale: "用相同投入完成方案判断。" },
+    ] };
+  const aiCall = vi.fn().mockResolvedValue(JSON.stringify(raw));
+  const result = await generateNewSystemAiDurationRecommendation(input, { aiCall });
+  expect(aiCall).toHaveBeenCalledOnce();
+  expect(result.teachingClusterBudgets.map((budget) => budget.durationMin)).toEqual([18, 18]);
+  expect(result.teachingClusterBudgets[0]?.difficultyStrategies).toBeUndefined();
+  expect(normalizeNewSystemAiDurationRecommendation(JSON.parse(JSON.stringify(result)), input)).toEqual(result);
+  const historicalNormalized = JSON.parse(JSON.stringify(result));
+  delete historicalNormalized.normalizationVersion;
+  expect(normalizeNewSystemAiDurationRecommendation(historicalNormalized, input, { normalized: true })).toEqual(result);
+  const withConflict = normalizeNewSystemAiDurationRecommendation({ ...raw, capacityConflict: {
+    unresolvedClusterIds: ["teaching-cluster-2"], reason: "还需一次完整反馈", compressionTried: "已合并重复引入",
+  } }, input);
+  expect(normalizeNewSystemAiDurationRecommendation(JSON.parse(JSON.stringify(withConflict)), input)).toEqual(withConflict);
+  const withoutMarker = { ...raw, authoringContract: undefined };
+  expect(normalizeNewSystemAiDurationRecommendation(withoutMarker, input)).toEqual(result);
+  const fixedInput: NewSystemAiDurationInput = { ...input, stagePlan: {
+    schemaVersion: 2, source: "resource-package", totalMinutes: 120, lessonCount: 2, minutesPerLesson: 60,
+    evaluationCriteria: "", reflectionQuestions: [],
+    stages: (["launch", "ai-learning", "make", "showcase", "reflection"] as const).map((key) => ({
+      key, title: key, durationMin: key === "ai-learning" ? 36 : 21,
+      requirements: "", outputs: "", teacherActions: "", aiActions: "",
+    })),
+  } };
+  const fixedResult = normalizeNewSystemAiDurationRecommendation({ ...raw, durationMin: undefined }, fixedInput);
+  expect(fixedResult.durationMin).toBe(36);
+  expect(fixedResult.teachingClusterBudgets.map((budget) => budget.durationMin)).toEqual([18, 18]);
+  expect(buildNewSystemAiDurationMessages(fixedInput)[0].content.split("只返回 JSON：")[1]).not.toContain('"durationMin":');
+  expect(result.teachingClusterBudgets.map((budget) => budget.knowledgePointIds)).toEqual([["kp-1"], ["kp-2"]]);
+  expect(buildNewSystemAiDurationMessages(input)[1].content).not.toContain('"applicableRequirements"');
+  expect(() => normalizeNewSystemAiDurationRecommendation({ ...raw, teachingClusterBudgets: raw.teachingClusterBudgets.slice(1) }, input)).toThrow("缺少知识簇投入");
+  expect(() => normalizeNewSystemAiDurationRecommendation({ ...raw, teachingClusterBudgets: raw.teachingClusterBudgets.map((budget) => ({ ...budget, requirementIds: [] })) }, input)).toThrow("未进入任何知识簇预算");
 });
